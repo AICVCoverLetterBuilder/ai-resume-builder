@@ -1,0 +1,11 @@
+{
+  "projectId": "0e37c40e-ec45-4074-b57c-6da3d7fc2179",
+  "createdAt": 1771331924096,
+  "version": "1.0",
+  "startupCommands": [
+    "npm install; npm run dev -- --hostname 0.0.0.0 --port 3000"
+  ],
+  "templateId": "nextjs",
+  "lastRefresh": 1742234400000,
+  "deploymentMarker": "rebuild-2026-03-16-19h15m"
+}

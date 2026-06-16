@@ -1,0 +1,24 @@
+{
+  "name": "CV Pro AI",
+  "short_name": "CV Pro AI",
+  "description": "Professional resumes. AI-powered. AI & Smart Resume Builder – Build a Job-Winning CV in Minutes",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a1628",
+  "theme_color": "#1a56db",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

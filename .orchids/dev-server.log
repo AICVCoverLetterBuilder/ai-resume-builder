@@ -1,0 +1,12 @@
+
+> nextjs-new@0.1.0 dev
+> node node_modules/next/dist/bin/next dev --turbopack --hostname 0.0.0.0 --port 3000
+
+ ⚠ Found lockfile missing swc dependencies, run next locally to automatically patch
+   ▲ Next.js 15.5.9 (Turbopack)
+   - Local:        http://localhost:3000
+   - Network:      http://0.0.0.0:3000
+
+ ✓ Starting...
+ ⚠ Found lockfile missing swc dependencies, run next locally to automatically patch
+ ✓ Ready in 827ms
