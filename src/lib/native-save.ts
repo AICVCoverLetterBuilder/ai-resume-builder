@@ -28,6 +28,18 @@ export class SaveCancelledError extends Error {
   }
 }
 
+/**
+ * Thrown when a native file save operation fails unexpectedly.
+ * Unlike SaveCancelledError, this represents a technical failure
+ * that should be surfaced to the user.
+ */
+export class SaveFailedError extends Error {
+  constructor(message?: string) {
+    super(message || 'File save failed');
+    this.name = 'SaveFailedError';
+  }
+}
+
 // ─── Plugin interface ─────────────────────────────────────────────────────────
 
 interface SaveFilePluginDefinition {
@@ -105,15 +117,16 @@ export async function saveFileViaPlatform(
 
       if (result.result === 'failed') {
         console.error('[native-save] Save failed:', result.message);
-        return result;
+        throw new SaveFailedError(result.message || 'File save failed on native device');
       }
 
       return result; // 'saved'
     } catch (err: unknown) {
       if (err instanceof SaveCancelledError) throw err;
+      if (err instanceof SaveFailedError) throw err;
       const msg = err instanceof Error ? err.message : 'Unknown plugin error';
       console.error('[native-save] Plugin error:', msg);
-      return { result: 'failed', message: msg };
+      throw new SaveFailedError(msg);
     }
   }
 

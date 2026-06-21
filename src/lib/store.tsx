@@ -120,6 +120,20 @@ const FREE_AI_RECOMMEND_LIMIT = 1; // 1 AI template recommend for free users
 // Normal users never reach this. No UI exposure.
 const PRO_AI_SAFETY_CAP = 20;
 const PRO_AI_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // 30 days in ms
+// ─── Shared Pro gating helper ──────────────────────────────────────────────
+// Returns one of:
+//   'upgrade'    -> Free user: show Pro upgrade modal
+//   'safety_cap' -> Pro user at hidden safety cap: show toast
+//   'allowed'    -> Pro user below cap: proceed
+
+export type AccessResult = 'upgrade' | 'safety_cap' | 'allowed';
+
+export function checkProAccess(isPro: boolean, usageCount: number): AccessResult {
+  if (!isPro) return 'upgrade';
+  if (usageCount >= PRO_AI_SAFETY_CAP) return 'safety_cap';
+  return 'allowed';
+}
+
 
 interface ProAiRecord {
   count: number;
@@ -283,7 +297,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Pro safety cap helpers — only active for Pro users; free users are never checked here.
   const canUseProAi = useCallback((): boolean => {
-    if (!isPro) return true; // free-user gate is handled separately
+    if (!isPro) return false; // Free users are blocked here too
     // Re-read from storage to ensure freshness across re-renders
     const fresh = loadProAiRecord();
     if (fresh.windowStart !== proAiRecord.windowStart || fresh.count !== proAiRecord.count) {

@@ -43,12 +43,13 @@ async function callGenerateAI(params: {
   gender?: string;
   proToken?: string | null;
   freeUserId?: string;
+  action?: string;
 }): Promise<{ content: string; status: number }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
     const { data, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
-      body: { action: 'cover-letter', ...params },
+      body: { action: params.action || 'cover-letter-gen', ...params },
       signal: controller.signal,
     });
     if (!res.ok || data.error) {
@@ -254,6 +255,7 @@ export default function CoverLetterPage() {
     try {
       const fullName = getFullName();
       const { content } = await callGenerateAI({
+        action: 'cover-letter-regen',
         jobTitle: cl.jobTitle,
         companyName: cl.companyName,
         tone: cl.tone,

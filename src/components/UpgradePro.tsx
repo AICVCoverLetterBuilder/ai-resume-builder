@@ -41,8 +41,8 @@ function UpgradeButton({ label, className, onClose }: UpgradeButtonProps) {
 
   const handleClick = async () => {
     if (!isNativeApp) return; // web: Link handles navigation
-    onClose?.();
     const result = await purchase();
+    onClose?.();
     if (result.success && result.isPro) {
       setIsPro(true);
       toast.success(t.pricing.proActive);

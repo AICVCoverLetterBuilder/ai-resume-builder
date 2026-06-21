@@ -61,17 +61,18 @@ const PRO_SIGNING_KEY = process.env.PRO_SIGNING_KEY || '';
 //   Vercel KV, or a database). Until then, treat this as an approximate throttle
 //   for internal testing, NOT a hard enforcement boundary.
 const FREE_ACTION_LIMITS: Record<string, number> = {
-  'summary': 1,            // 1 professional summary per free user
-  'cover-letter': 1,       // 1 cover letter generation per free user
-  'bullets': 5,            // 5 bullet-suggestion rounds per free user
+  'cover-letter-gen': 1,   // 1 cover letter generation per free user
+  'cover-letter-regen': 1, // 1 cover letter regeneration per free user
 };
+
+const FREE_ALLOWED_ACTIONS = new Set(['cover-letter-gen', 'cover-letter-regen']);
 const FREE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24-hour sliding window per user
 
 const freeUsageMap = new Map<string, { counts: Record<string, number>; windowStart: number }>();
 
 function canUseFreeAction(userId: string, action: string): { allowed: boolean; remaining: number } {
-  // actions not in FREE_ACTION_LIMITS are Pro-only (e.g. 'rewrite')
-  if (!(action in FREE_ACTION_LIMITS)) {
+  // Only cover-letter-gen and cover-letter-regen are free-allowed
+  if (!FREE_ALLOWED_ACTIONS.has(action)) {
     return { allowed: false, remaining: 0 };
   }
   const now = Date.now();
@@ -94,7 +95,7 @@ function canUseFreeAction(userId: string, action: string): { allowed: boolean; r
  * Must ONLY be called after the AI call succeeds.
  */
 function recordFreeAction(userId: string, action: string): void {
-  if (!(action in FREE_ACTION_LIMITS)) return;
+  if (!FREE_ALLOWED_ACTIONS.has(action)) return;
   const now = Date.now();
   let entry = freeUsageMap.get(userId);
   if (!entry || now - entry.windowStart >= FREE_WINDOW_MS) {
@@ -351,11 +352,14 @@ export async function POST(req: NextRequest) {
     // Free users are allowed limited AI actions tracked server-side.
     // Actions not in FREE_ACTION_LIMITS (e.g. 'rewrite') are Pro-only.
     // Abuse protection: rate limiting (above) still applies.
+    // Map legacy action names to canonical action keys
+    const resolvedAction = action === 'cover-letter' ? 'cover-letter-gen' : action;
+
     let _freeUserId: string | null = null;
     if (!isPro && PRO_SIGNING_KEY) {
       _freeUserId = freeUserId || req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
       // Check how many free uses this user has left for this action (NO increment)
-      const { allowed } = canUseFreeAction(_freeUserId!, action);
+      const { allowed } = canUseFreeAction(_freeUserId!, resolvedAction);
       if (!allowed) {
         return jsonResponse(
           { error: 'Pro subscription required for AI features.' },
@@ -374,7 +378,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (action === 'cover-letter') {
+    if (action === 'cover-letter' || action === 'cover-letter-gen' || action === 'cover-letter-regen') {
       const { tone, locale, variant, gender } = params;
       const jobTitle = sanitizeField(params.jobTitle, 500);
       const companyName = sanitizeField(params.companyName, 500);
@@ -437,7 +441,7 @@ Plain text only. Under 280 words. Output the letter only. Do not wrap in quotati
       const headerBlock = headerLines.length > 0 ? headerLines.join('\n') + '\n\n' : '';
       const fullLetter = `${headerBlock}${dateStr}\n\n${letterBody}`;
 
-      if (_freeUserId) recordFreeAction(_freeUserId, 'cover-letter');
+      if (_freeUserId) recordFreeAction(_freeUserId, action === 'cover-letter' ? 'cover-letter-gen' : action);
       return jsonResponse({ result: fullLetter });
     }
 

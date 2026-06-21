@@ -584,6 +584,26 @@ export async function checkProEntitlement(): Promise<boolean> {
   }
 }
 
+// ─── Safe purchasing helper ────────────────────────────────────────────────────
+//
+// safeSetPurchasing wraps a purchasing state transition so that the purchasing
+// flag is always reset, even if the wrapped promise resolves or rejects outside
+// the normal React lifecycle. This prevents the "purchasing" state from getting
+// stuck at true.
+//
+// The RevenueCat SDK manages the dialog lifecycle. The purchasing flag resets
+// reliably via the finally block.
+
+export function safeSetPurchasing(
+  setter: (val: boolean) => void,
+  fn: () => Promise<void>,
+): () => Promise<void> {
+  return async () => {
+    setter(true);
+    try { await fn(); } finally { setter(false); }
+  };
+}
+
 // ─── React hook ───────────────────────────────────────────────────────────────
 
 export interface UseIAPReturn {

@@ -5,6 +5,7 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob } from './native-save';
+import { printNativePdf } from './native-print';
 
 // ─── Clipboard Export ────────────────────────────────────────────────────────
 
@@ -3275,6 +3276,12 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
 // correctly (č ć š đ ž, Cyrillic, Arabic, Hindi, Japanese).
 
 export function openPrintFallback(elementId: string, fileName: string): void {
+  // Native Android must NOT call window.open — route through printNativePdf instead
+  if (isNative()) {
+    const element = document.getElementById(elementId);
+    if (element) printNativePdf(element, fileName);
+    return;
+  }
   const element = document.getElementById(elementId);
   if (!element) return;
 

@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useI18n } from '@/lib/i18n/context';
-import { useApp } from '@/lib/store';
+import { useApp, checkProAccess } from '@/lib/store';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
@@ -70,7 +70,7 @@ const emptyEdu = (): Education => ({
 
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
-  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, canUseAiRecommend, markAiRecommendUsed, canUseProAi, recordProAiSuccess, lastCvSavedAt, persistCurrentDraft, getProToken } = useApp();
+  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, lastCvSavedAt, persistCurrentDraft, getProToken } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const [step, setStep] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
@@ -426,7 +426,9 @@ export default function CVBuilderPage() {
   };
 
   const handleGenSummary = async () => {
-    if (!canUseProAi()) {
+    const gateAccess = checkProAccess(isPro, 0);
+    if (gateAccess !== 'allowed') {
+      if (gateAccess === 'upgrade') { setSummaryAiModal(true); return; }
       toast.error('AI service is temporarily unavailable. Please try again later.');
       return;
     }
@@ -507,8 +509,9 @@ export default function CVBuilderPage() {
   };
 
   const handleGenBullets = async (expId: string) => {
-    if (!canUseProAi()) {
-      if (process.env.NODE_ENV !== 'production') console.warn('[AI Improvements] canUseProAi returned false');
+    const gateAccess = checkProAccess(isPro, 0);
+    if (gateAccess !== 'allowed') {
+      if (gateAccess === 'upgrade') { setAiImprovementsModal(true); return; }
       toast.error('AI service is temporarily unavailable. Please try again later.');
       return;
     }
@@ -564,11 +567,9 @@ export default function CVBuilderPage() {
   };
 
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
-    if (!isPro) {
-      setSummaryAiModal(true);
-      return;
-    }
-    if (!canUseProAi()) {
+    const gateAccess = checkProAccess(isPro, 0);
+    if (gateAccess !== 'allowed') {
+      if (gateAccess === 'upgrade') { setSummaryAiModal(true); return; }
       toast.error('AI service is temporarily unavailable. Please try again later.');
       return;
     }
@@ -595,7 +596,9 @@ export default function CVBuilderPage() {
 
   const handleAnalyzeJob = () => {
     if (!jobDesc.trim()) return;
-    if (isPro && !canUseProAi()) {
+    const gateAccess = checkProAccess(isPro, 0);
+    if (gateAccess !== 'allowed') {
+      if (gateAccess === 'upgrade') { setJobAnalyzerModal(true); return; }
       toast.error('AI service is temporarily unavailable. Please try again later.');
       return;
     }
@@ -694,11 +697,9 @@ export default function CVBuilderPage() {
     };
 
     const handleTemplateRecommend = () => {
-      if (!canUseAiRecommend()) {
-        setAiRecommendModal(true);
-        return;
-      }
-      if (isPro && !canUseProAi()) {
+      const gateAccess = checkProAccess(isPro, 0);
+      if (gateAccess !== 'allowed') {
+        if (gateAccess === 'upgrade') { setAiRecommendModal(true); return; }
         toast.error('AI service is temporarily unavailable. Please try again later.');
         return;
       }

@@ -44,8 +44,8 @@ export function OnboardingModal() {
 
   const handleUpgrade = async () => {
     if (!isNativeApp) return; // web: Link handles navigation
-    dismiss();
     const result = await purchase();
+    dismiss();
     if (result.success && result.isPro) {
       setIsPro(true);
       toast.success(t.pricing.proActive);
