@@ -12,7 +12,8 @@ const compat = new FlatCompat({
 const eslintConfig = [
   {
     ignores: [
-      ".next/",
+      ".next/**",
+      "out/**",
       "next-env.d.ts",
       "android/",
       "ios/",

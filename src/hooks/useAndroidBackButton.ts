@@ -14,22 +14,21 @@ import { App } from '@capacitor/app';
  * 2. If there is a previous page (not on root) → navigate back via history.back().
  * 3. If already on root/home → exit/minimize the app via App.exitApp().
  *
- * The listener is registered exactly once and cleaned up on unmount.
+ * The listener is registered exactly once and cleaned up on unmount,
+ * with a navigation guard to prevent duplicate rapid back events.
  */
 export function useAndroidBackButton() {
   const pathname = usePathname();
   const isOnRootRef = useRef(pathname === '/');
   const isBackNavRef = useRef(false);
 
-  // Track pathname changes without creating duplicate history entries.
-  // When we call history.back(), the pathname changes reactively — we have
-  // already popped the stack, so we skip re-pushing it.
+  // Track pathname changes. When we call history.back(), the pathname
+  // changes reactively — we re-sync isOnRootRef on every pathname change.
   useEffect(() => {
     if (isBackNavRef.current) {
       // This pathname change was caused by our own history.back() call.
       // Reset the flag and do not treat this as a forward navigation.
       isBackNavRef.current = false;
-      return;
     }
     isOnRootRef.current = pathname === '/';
   }, [pathname]);
@@ -41,10 +40,15 @@ export function useAndroidBackButton() {
     if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== 'android') return;
 
     let handler: PluginListenerHandle | null = null;
+    let navigating = false;
 
     (async () => {
       handler = await App.addListener('backButton', () => {
         if (!handler) return;
+
+        // Guard against rapid duplicate back events (some devices fire
+        // the gesture multiple times for a single back swipe).
+        if (navigating) return;
 
         // 1. Check for open modals, dialogs, sheets, or menus.
         // Radix / shadcn components use data-state="open".
@@ -69,7 +73,11 @@ export function useAndroidBackButton() {
         // 2. If not on the root page, navigate back one step.
         if (!isOnRootRef.current) {
           isBackNavRef.current = true;
+          navigating = true;
           window.history.back();
+          // Release the navigation guard after 300 ms — enough time for
+          // any subsequent duplicate back events to be ignored.
+          setTimeout(() => { navigating = false; }, 300);
           return;
         }
 
