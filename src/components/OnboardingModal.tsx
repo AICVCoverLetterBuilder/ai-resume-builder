@@ -16,6 +16,7 @@ export function OnboardingModal() {
   const { purchase, purchasing, isNativeApp } = useIAP();
   const { setIsPro } = useApp();
   const [open, setOpen] = useState(false);
+  const [localLoading, setLocalLoading] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -44,15 +45,29 @@ export function OnboardingModal() {
 
   const handleUpgrade = async () => {
     if (!isNativeApp) return; // web: Link handles navigation
-    const result = await purchase();
-    dismiss();
-    if (result.success && result.isPro) {
-      setIsPro(true);
-      toast.success(t.pricing.proActive);
-    } else if (!result.success && !result.cancelled) {
-      toast.error(result.message);
+    setLocalLoading(true);
+    try {
+      const result = await purchase();
+      if (result.success && result.isPro) {
+        setIsPro(true);
+        toast.success(t.pricing.proActive);
+        dismiss();
+      } else if (result.success && !result.isPro) {
+        // Purchase went through but server verification failed
+        toast.error('Server verification failed. If charged, contact support to restore your purchase.');
+        // Modal stays open so user can see the message
+      } else if (!result.success) {
+        if (!result.cancelled) {
+          toast.error(result.message);
+        }
+        // Cancelled or failed: modal stays open, button resets
+      }
+    } finally {
+      setLocalLoading(false);
     }
   };
+
+  const isBusy = localLoading || purchasing;
 
   return (
     <AnimatePresence>
@@ -169,12 +184,12 @@ export function OnboardingModal() {
                   {isNativeApp ? (
                     <button
                       onClick={handleUpgrade}
-                      disabled={purchasing}
+                      disabled={isBusy}
                       className="flex h-10 flex-1 items-center justify-center gap-2 rounded-lg bg-foreground text-sm font-semibold text-background transition-all hover:opacity-85 disabled:opacity-50"
                     >
                       <Crown className="h-4 w-4" />
-                      {purchasing ? '...' : t.onboarding.upgradeToPro}
-                      {!purchasing && <ArrowRight className="h-4 w-4" />}
+                      {isBusy ? '...' : t.onboarding.upgradeToPro}
+                      {!isBusy && <ArrowRight className="h-4 w-4" />}
                     </button>
                   ) : (
                     <Link

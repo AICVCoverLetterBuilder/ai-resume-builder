@@ -414,7 +414,7 @@ function HeroSection() {
             </motion.h1>
 
             <motion.p variants={fadeUp} className="mt-3 text-sm font-medium text-primary/80 tracking-wide uppercase sm:text-base">
-              {t.hero.tagline}
+              {t.hero.professionalResumesAiPowered}
             </motion.p>
 
             <motion.p variants={fadeUp} className="mt-4 text-lg text-muted-foreground sm:text-xl max-w-2xl mx-auto leading-relaxed">

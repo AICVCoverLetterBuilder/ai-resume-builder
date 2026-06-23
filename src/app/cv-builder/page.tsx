@@ -100,6 +100,7 @@ export default function CVBuilderPage() {
   const [recommendedTemplateId, setRecommendedTemplateId] = useState<TemplateId | null>(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [isPdfExporting, setIsPdfExporting] = useState(false);
+  const [isWordExporting, setIsWordExporting] = useState(false);
   const stepButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const skillInputRef = useRef<HTMLInputElement | null>(null);
   const skillAutocompleteRef = useRef<HTMLDivElement | null>(null);
@@ -624,7 +625,9 @@ export default function CVBuilderPage() {
         setLimitModal({ open: true, type: 'cv' });
         return;
       }
+      if (isWordExporting) return;
       setShowDownloadMenu(false);
+      setIsWordExporting(true);
       try {
         if (cv.templateId === 'rirekisho') {
           await exportRirekishoToDOCX(cv, cv.personal.fullName || '履歴書');
@@ -644,7 +647,9 @@ export default function CVBuilderPage() {
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV DOCX export] failed:', err);
-        toast.error(t.cv.pdfExportFailed);
+        toast.error(t.cv.wordExportFailed);
+      } finally {
+        setIsWordExporting(false);
       }
     };
 
@@ -653,6 +658,7 @@ export default function CVBuilderPage() {
         setLimitModal({ open: true, type: 'cv' });
         return;
       }
+      if (isPdfExporting) return;
       setShowDownloadMenu(false);
       setIsPdfExporting(true);
       try {
@@ -678,16 +684,19 @@ export default function CVBuilderPage() {
         await exportToPDF(previewId, exportFilename);
         incrementDownloads('cv');
       } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'SaveCancelledError') {
-          setIsPdfExporting(false);
-          return;
-        }
+        if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
-        // Fallback: open print-ready window so user can Save as PDF via browser.
+        // Fallback: attempt print-ready window once so user can Save as PDF via browser.
         // Do NOT increment downloads here — we cannot confirm the user actually saves the file.
         try {
-          openPrintFallback(previewId, cv.personal.fullName || 'CV');
+          await openPrintFallback(previewId, cv.personal.fullName || 'CV');
         } catch (fallbackErr) {
+          // Cancellation by user is silent — no error toast
+          if (fallbackErr instanceof Error &&
+              (fallbackErr.name === 'PrintCancelledError' || fallbackErr.name === 'SaveCancelledError')) {
+            if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] fallback was cancelled:', fallbackErr.message);
+            return;
+          }
           if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] print fallback also failed:', fallbackErr);
           toast.error(t.cv.pdfExportFailed);
         }
@@ -807,10 +816,10 @@ export default function CVBuilderPage() {
                             <button
                               onClick={() => setShowDownloadMenu(v => !v)}
                               className={btnPrimary + ' flex items-center gap-1'}
-                              disabled={isPdfExporting}
+                              disabled={isPdfExporting || isWordExporting}
                             >
                               <Download className="h-4 w-4" />
-                              {isPdfExporting ? '...' : t.cv.downloadCv}
+                              {isPdfExporting || isWordExporting ? '...' : t.cv.downloadCv}
                               <ChevronDown className="h-3 w-3 ml-0.5" />
                             </button>
                             {showDownloadMenu && (
@@ -818,6 +827,7 @@ export default function CVBuilderPage() {
                                 <button
                                   onClick={() => handlePDFDownload('cv-preview')}
                                   className="w-full flex items-start gap-3 px-4 py-3 hover:bg-accent transition-colors text-left"
+                                  disabled={isPdfExporting}
                                 >
                                   <File className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                                   <div>
@@ -828,6 +838,7 @@ export default function CVBuilderPage() {
                                 <button
                                   onClick={handleDOCXDownload}
                                   className="w-full flex items-start gap-3 px-4 py-3 hover:bg-accent transition-colors text-left border-t border-border"
+                                  disabled={isWordExporting}
                                 >
                                   <FileText className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
                                   <div>
@@ -1501,10 +1512,10 @@ export default function CVBuilderPage() {
                                     <button
                                       onClick={() => setShowDownloadMenu(v => !v)}
                                       className={btnPrimary + ' flex items-center gap-1'}
-                                      disabled={isPdfExporting}
+                                      disabled={isPdfExporting || isWordExporting}
                                     >
                                       <Download className="h-4 w-4" />
-                                      {isPdfExporting ? '...' : t.cv.downloadCv}
+                                      {isPdfExporting || isWordExporting ? '...' : t.cv.downloadCv}
                                       <ChevronDown className="h-3 w-3 ml-0.5" />
                                     </button>
                                     {showDownloadMenu && (
@@ -1512,6 +1523,7 @@ export default function CVBuilderPage() {
                                         <button
                                           onClick={() => handlePDFDownload('cv-inline-preview')}
                                           className="w-full flex items-start gap-3 px-4 py-3 hover:bg-accent transition-colors text-left"
+                                          disabled={isPdfExporting}
                                         >
                                           <File className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                                           <div>
@@ -1522,6 +1534,7 @@ export default function CVBuilderPage() {
                                         <button
                                           onClick={handleDOCXDownload}
                                           className="w-full flex items-start gap-3 px-4 py-3 hover:bg-accent transition-colors text-left border-t border-border"
+                                          disabled={isWordExporting}
                                         >
                                           <FileText className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
                                           <div>

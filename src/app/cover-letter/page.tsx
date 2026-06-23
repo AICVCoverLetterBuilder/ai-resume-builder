@@ -75,6 +75,7 @@ export default function CoverLetterPage() {
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [isPdfExporting, setIsPdfExporting] = useState(false);
+  const [isWordExporting, setIsWordExporting] = useState(false);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-fill identity fields from CV personal info on mount or when CV changes
@@ -152,6 +153,7 @@ export default function CoverLetterPage() {
       setDownloadLimitModal(true);
       return;
     }
+    if (isPdfExporting) return;
     setShowDownloadMenu(false);
     setIsPdfExporting(true);
     const filename = cl.companyName
@@ -161,10 +163,7 @@ export default function CoverLetterPage() {
       await exportCoverLetterToPDF(getFullName(), cl.content, filename, locale);
       incrementDownloads('cl');
     } catch (err: unknown) {
-      if (err instanceof Error && err.name === 'SaveCancelledError') {
-        setIsPdfExporting(false);
-        return;
-      }
+      if (err instanceof Error && err.name === 'SaveCancelledError') return;
       if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter PDF export] failed:', err);
       toast.error(t.cv.pdfExportFailed);
     } finally {
@@ -178,14 +177,18 @@ export default function CoverLetterPage() {
       setDownloadLimitModal(true);
       return;
     }
+    if (isWordExporting) return;
     setShowDownloadMenu(false);
+    setIsWordExporting(true);
     try {
       await exportCoverLetterToDOCX(cl.content, `${t.coverLetter.filename} - ${cl.companyName}`, getFullName(), locale);
       incrementDownloads('cl');
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'SaveCancelledError') return;
       if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter DOCX export] failed:', err);
-      toast.error(t.cv.pdfExportFailed);
+      toast.error(t.cv.wordExportFailed);
+    } finally {
+      setIsWordExporting(false);
     }
   };
 
@@ -516,10 +519,10 @@ export default function CoverLetterPage() {
                         <button
                           onClick={() => setShowDownloadMenu(v => !v)}
                           className={btnPrimary + ' flex items-center gap-1'}
-                          disabled={isPdfExporting}
+                          disabled={isPdfExporting || isWordExporting}
                         >
                           <Download className="h-4 w-4" />
-                          {isPdfExporting ? '...' : t.coverLetter.downloadCl}
+                          {isPdfExporting || isWordExporting ? '...' : t.coverLetter.downloadCl}
                           <ChevronDown className="h-3 w-3 ml-0.5" />
                         </button>
                         {showDownloadMenu && (
@@ -527,6 +530,7 @@ export default function CoverLetterPage() {
                             <button
                               onClick={handleClPDFDownload}
                               className="w-full flex items-start gap-3 px-4 py-3 hover:bg-accent transition-colors text-left"
+                              disabled={isPdfExporting}
                             >
                               <File className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                               <div>
@@ -537,6 +541,7 @@ export default function CoverLetterPage() {
                             <button
                               onClick={handleClDOCXDownload}
                               className="w-full flex items-start gap-3 px-4 py-3 hover:bg-accent transition-colors text-left border-t border-border"
+                              disabled={isWordExporting}
                             >
                               <FileText className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
                               <div>

@@ -4,7 +4,7 @@ import { translations, type Locale } from './i18n/translations';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { isNative } from './iap';
-import { saveFileViaPlatform, pdfToBlob } from './native-save';
+import { saveFileViaPlatform, pdfToBlob, SaveFailedError } from './native-save';
 import { printNativePdf } from './native-print';
 
 // ─── Clipboard Export ────────────────────────────────────────────────────────
@@ -3251,18 +3251,14 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
       }
     }
 
-    // On Android: use native save dialog. On web: use blob download.
-    if (isNative()) {
-      const pdfBlob = pdfToBlob(pdf);
-      if (pdfBlob) {
-        await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
-      } else {
-        // Fallback: save directly if blob extraction fails
-        pdf.save(`${fileName}.pdf`);
-      }
-    } else {
-      pdf.save(`${fileName}.pdf`);
+    // Unified flow: use Blob/object URL/anchor download on all platforms.
+    // For web, this creates a browser-compatible download. For Android native,
+    // it delegates to the ACTION_CREATE_DOCUMENT SAK picker via saveFileViaPlatform.
+    const pdfBlob = pdfToBlob(pdf);
+    if (!pdfBlob || pdfBlob.size === 0) {
+      throw new Error('PDF generation produced an empty or invalid Blob');
     }
+    await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
   } catch (pdfErr) {
     console.error('[exportToPDF] jsPDF generation failed:', pdfErr);
     throw pdfErr;
@@ -3275,15 +3271,23 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
 // Noto Sans @font-face rules are injected so all Unicode characters render
 // correctly (č ć š đ ž, Cyrillic, Arabic, Hindi, Japanese).
 
-export function openPrintFallback(elementId: string, fileName: string): void {
+export async function openPrintFallback(elementId: string, fileName: string): Promise<void> {
   // Native Android must NOT call window.open — route through printNativePdf instead
   if (isNative()) {
     const element = document.getElementById(elementId);
-    if (element) printNativePdf(element, fileName);
+    if (!element) {
+      throw new SaveFailedError(`Print fallback: element #${elementId} not found in DOM`);
+    }
+    const result = await printNativePdf(element, fileName);
+    if (result && result.result === 'failed') {
+      throw new Error(result.message || 'Print failed on native device');
+    }
     return;
   }
   const element = document.getElementById(elementId);
-  if (!element) return;
+  if (!element) {
+    throw new SaveFailedError(`Print fallback: element #${elementId} not found in DOM`);
+  }
 
   // Collect all <style> and <link rel="stylesheet"> tags from the current page
   const pageStyles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
@@ -3291,7 +3295,7 @@ export function openPrintFallback(elementId: string, fileName: string): void {
     .join('\n');
 
   const printWindow = window.open('', '_blank', 'width=900,height=1200');
-  if (!printWindow) return;
+  if (!printWindow) throw new Error('Popup blocked. Please allow popups for this site to use the print fallback.');
 
   const fontBase = `${window.location.origin}/fonts`;
   const notoFontCSS = `

@@ -23,30 +23,25 @@
  *   issues an HMAC-signed Pro token that the app uses to gate features.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { apiFetch } from './api';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// --- Constants ------------------------------------------------------------------
 
 export const PRO_PRODUCT_ID = 'cv_pro_lifetime';
 export const PRO_ENTITLEMENT = 'CV Pro AI Pro';
 export const PACKAGE_IDENTIFIER = '$rc_lifetime';
 export const OFFERING_IDENTIFIER = 'default';
 
-// ─── App User ID ──────────────────────────────────────────────────────────────
+// --- App User ID -----------------------------------------------------------------
 
 const APP_USER_ID_KEY = 'cvpro_rc_user_id';
 
-/**
- * Generates a random UUID v4 string.
- */
 function generateUUID(): string {
-  // Use crypto.randomUUID if available (modern browsers), fallback to Math.random
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-  // Fallback for older environments
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
@@ -54,34 +49,21 @@ function generateUUID(): string {
   });
 }
 
-/**
- * Returns a stable anonymous RevenueCat appUserID.
- * The ID is generated once on first call and persisted in localStorage.
- * This ensures the same user identity across app restarts.
- */
 export function getAppUserId(): string {
   if (typeof window === 'undefined') return 'web-anonymous';
   try {
     const stored = localStorage.getItem(APP_USER_ID_KEY);
     if (stored) return stored;
-  } catch {
-    // localStorage unavailable
-  }
+  } catch {}
   const id = generateUUID();
   try {
     localStorage.setItem(APP_USER_ID_KEY, id);
-  } catch {
-    // localStorage unavailable
-  }
+  } catch {}
   return id;
 }
 
-// ─── Platform detection ───────────────────────────────────────────────────────
+// --- Platform detection ----------------------------------------------------------
 
-/**
- * Returns true when running inside a Capacitor native shell (Android or iOS).
- * Returns false when running as a plain web page (browser / SSR).
- */
 export function isNative(): boolean {
   if (typeof window === 'undefined') return false;
   return Capacitor.isNativePlatform();
@@ -95,11 +77,9 @@ function getPlatform(): 'ios' | 'android' | 'web' {
   return 'web';
 }
 
-// ─── RevenueCat lazy-loader ───────────────────────────────────────────────────
-// We import dynamically so the SDK bundle is not loaded in SSR or plain-web builds.
+// --- RevenueCat lazy-loader ------------------------------------------------------
 
-let _purchasesModule: typeof import('@revenuecat/purchases-capacitor') | null =
-  null;
+let _purchasesModule: typeof import('@revenuecat/purchases-capacitor') | null = null;
 
 async function getPurchases() {
   if (!_purchasesModule) {
@@ -108,157 +88,147 @@ async function getPurchases() {
   return _purchasesModule.Purchases;
 }
 
-// ─── SDK initializer (call once at app startup) ───────────────────────────────
+// --- SDK initializer --------------------------------------------------------------
 
 let _initialized = false;
+let _initializePromise: Promise<void> | null = null;
 let _storePrice: string | null = null;
 
-// Development-only logging helper — stripped in production builds.
-function devLog(...args: unknown[]) {
-  if (process.env.NODE_ENV !== 'production') {
-    console.log(...args);
-  }
+function diagLog(...args: unknown[]) {
+  console.log('[IAP-DIAG]', ...args);
 }
 
-/**
- * Returns the last-fetched RevenueCat product price string (localized currency).
- * Returns null if not yet fetched or if RevenueCat is unavailable.
- */
+function diagError(...args: unknown[]) {
+  console.error('[IAP-DIAG]', ...args);
+}
+
 export function getStorePrice(): string | null {
   return _storePrice;
 }
 
-/**
- * Fetches the lifetime package price from RevenueCat offerings and stores it.
- * Safe to call even before init — will attempt to fetch after init.
- * Returns the price string, or null if unavailable.
- */
 export async function refreshStorePrice(): Promise<string | null> {
   const platform = getPlatform();
   if (platform === 'web') return null;
 
   try {
     const Purchases = await getPurchases();
+    diagLog('refreshStorePrice: fetching offerings...');
     const offerings = await withTimeout(
       Purchases.getOfferings(),
       PURCHASE_TIMEOUT_MS,
-      'getOfferings',
+      'getOfferings (refreshStorePrice)',
     );
     const current = offerings.current;
-    if (!current) return null;
+    if (!current) {
+      diagLog('refreshStorePrice: no current offering');
+      return null;
+    }
+    diagLog('refreshStorePrice: current offering identifier:', current?.identifier ?? 'null');
+    diagLog('refreshStorePrice: available packages:', current?.availablePackages?.map((p) => '(' + p.identifier + ', product=' + p.product.identifier + ', price=' + p.product.priceString + ')') ?? []);
 
     const lifetimePackage =
-      current.availablePackages.find(
-        (pkg) => pkg.identifier === PACKAGE_IDENTIFIER,
-      ) ??
-      current.availablePackages.find(
-        (pkg) => pkg.product.identifier === PRO_PRODUCT_ID,
-      ) ??
+      current.availablePackages.find((pkg) => pkg.identifier === PACKAGE_IDENTIFIER) ??
+      current.availablePackages.find((pkg) => pkg.product.identifier === PRO_PRODUCT_ID) ??
       null;
 
     if (lifetimePackage) {
       _storePrice = lifetimePackage.product.priceString ?? null;
-      devLog('[IAP] store price:', _storePrice);
+      diagLog('refreshStorePrice: found price:', _storePrice);
       return _storePrice;
     }
 
-    // Fallback: search all offerings
     for (const offeringKey of Object.keys(offerings.all)) {
       const offering = offerings.all[offeringKey];
       const found = offering.availablePackages.find(
-        (pkg) =>
-          pkg.identifier === PACKAGE_IDENTIFIER ||
-          pkg.product.identifier === PRO_PRODUCT_ID,
+        (pkg) => pkg.identifier === PACKAGE_IDENTIFIER || pkg.product.identifier === PRO_PRODUCT_ID,
       );
       if (found) {
         _storePrice = found.product.priceString ?? null;
-        devLog('[IAP] store price (from all offerings):', _storePrice);
+        diagLog('refreshStorePrice: found price in fallback offering:', offeringKey, _storePrice);
         return _storePrice;
       }
     }
+    diagLog('refreshStorePrice: lifetime package not found in any offering');
   } catch (e) {
-    if (process.env.NODE_ENV !== 'production') console.warn('[IAP] refreshStorePrice failed:', e);
+    diagError('refreshStorePrice failed:', e);
   }
   return null;
 }
 
-/**
- * Initialises the RevenueCat SDK.
- * Safe to call multiple times — subsequent calls are no-ops.
- * Must be called before any purchase or restore operation.
- *
- * On native: configures RevenueCat with the platform-specific API key
- *            and the stable anonymous appUserID.
- * On web:    no-op.
- *
- * Throws if the SDK fails to initialise (caller should catch).
- */
 export async function initIAP(): Promise<void> {
   if (_initialized) return;
-  const platform = getPlatform();
-  if (platform === 'web') return; // Nothing to initialise on web
+  if (_initializePromise) return _initializePromise;
 
-  // Use the public Android API key from env var
+  const platform = getPlatform();
+  if (platform === 'web') {
+    diagLog('initIAP: web platform, skipping');
+    return;
+  }
+
+  _initializePromise = _initIAPImpl(platform);
+  try {
+    await _initializePromise;
+  } finally {
+    _initializePromise = null;
+  }
+}
+
+async function _initIAPImpl(platform: 'ios' | 'android' | 'web'): Promise<void> {
+  diagLog('initIAP: platform =', platform);
+  diagLog('initIAP: RevenueCat API key configured =', !!process.env.NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY);
+
   const apiKey =
     platform === 'ios'
       ? (process.env.NEXT_PUBLIC_REVENUECAT_IOS_KEY ?? '')
       : (process.env.NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY ?? '');
 
   if (!apiKey) {
-    console.warn(
-      '[IAP] RevenueCat API key not configured. ' +
-        'Set NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY / NEXT_PUBLIC_REVENUECAT_IOS_KEY.',
-    );
+    diagError('initIAP: RevenueCat API key not configured.');
     throw new Error('RevenueCat API key not configured. Check NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY.');
   }
 
   const Purchases = await getPurchases();
 
   try {
-    // Use stable appUserID so RevenueCat remembers the user across launches
     const appUserId = getAppUserId();
+    diagLog('initIAP: configuring SDK...');
     await withTimeout(
       Purchases.configure({ apiKey, appUserID: appUserId }),
       PURCHASE_TIMEOUT_MS,
       'Purchases.configure',
     );
     _initialized = true;
-    devLog('[IAP] SDK initialised successfully');
+    diagLog('initIAP: SDK initialised successfully');
   } catch (e) {
-    if (process.env.NODE_ENV !== 'production') console.error('[IAP] configure() failed:', e);
+    diagError('initIAP: configure() failed:', e);
     _initialized = false;
-    throw e; // Re-throw so the caller can surface the error
+    throw e;
   }
 }
 
-// ─── Browser-safe base64url decoder ───────────────────────────────────────────
+// --- Browser-safe base64url decoder ------------------------------------------------
 
 function base64UrlDecode(str: string): string {
-  // Convert base64url (RFC 4648 §5) to standard base64
   let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-  // Add padding
   while (base64.length % 4 !== 0) base64 += '=';
   return atob(base64);
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers -----------------------------------------------------------------------
 
 const PURCHASE_TIMEOUT_MS = 30_000;
-const GLOBAL_PURCHASE_TIMEOUT_MS = 60_000; // 60s global timeout for the entire flow
+const INIT_TIMEOUT_MS = 15_000;
 
-/**
- * Wraps a promise with a timeout rejection.
- */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`[IAP] ${label} timed out after ${ms}ms`)), ms),
+      setTimeout(() => reject(new Error('[IAP] ' + label + ' timed out after ' + ms + 'ms')), ms),
     ),
   ]);
 }
 
-// ─── Core operations ──────────────────────────────────────────────────────────
+// --- Core operations ----------------------------------------------------------------
 
 export type IAPResult =
   | { success: true; isPro: boolean; token?: string }
@@ -266,40 +236,25 @@ export type IAPResult =
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
 
-/**
- * Calls /api/verify-pro with the current RevenueCat appUserID.
- * The server validates the entitlement via RevenueCat REST API and
- * returns an HMAC-signed Pro token. The token is the authoritative
- * source of Pro status — the client never trusts its local state.
- */
 async function verifyProWithServer(): Promise<IAPResult> {
   const appUserId = getAppUserId();
+  diagLog('verifyProWithServer: calling /api/verify-pro');
   try {
-    const { data, response: res } = await apiFetch<{
-      token?: string;
-      error?: string;
-    }>('/api/verify-pro', {
-      method: 'POST',
-      body: { revenueCatAppUserId: appUserId },
-    });
+    const { data, response: res } = await apiFetch<{ token?: string; error?: string }>(
+      '/api/verify-pro',
+      { method: 'POST', body: { revenueCatAppUserId: appUserId } },
+    );
 
     if (!res.ok || !data.token) {
-      return {
-        success: false,
-        cancelled: false,
-        message: data.error || 'Server verification failed.',
-      };
+      diagError('verifyProWithServer: server returned', res.status, data?.error ?? 'no token');
+      return { success: false, cancelled: false, message: data?.error || 'Server verification failed.' };
     }
 
-    // Store the signed token
+    diagLog('verifyProWithServer: token received');
     try {
       localStorage.setItem(PRO_TOKEN_KEY, data.token);
-    } catch {
-      // localStorage unavailable
-    }
+    } catch {}
 
-    // The token encodes isPro — we decode it here to return a quick result
-    // but the authoritative check always happens server-side via verifyProToken
     let isPro = false;
     try {
       const payloadPart = data.token.split('.')[0];
@@ -307,86 +262,52 @@ async function verifyProWithServer(): Promise<IAPResult> {
         const decoded = JSON.parse(base64UrlDecode(payloadPart));
         isPro = decoded.isPro === true;
       }
-    } catch {
-      // Malformed token — treat as non-Pro
-    }
+    } catch {}
 
+    diagLog('verifyProWithServer: isPro =', isPro);
     return { success: true, isPro, token: data.token };
   } catch (err) {
-    return {
-      success: false,
-      cancelled: false,
-      message:
-        err instanceof Error ? err.message : 'Verification failed. Please try again.',
-    };
+    diagError('verifyProWithServer: fetch threw:', err);
+    return { success: false, cancelled: false, message: err instanceof Error ? err.message : 'Verification failed.' };
   }
 }
 
-/**
- * Triggers the native in-app purchase flow for the `cv_pro_lifetime` product.
- *
- * After a successful purchase, calls /api/verify-pro for server-side
- * entitlement validation and returns the signed Pro token.
- *
- * Returns:
- *   { success: true, isPro: true, token }  — purchase verified & Pro token issued
- *   { success: false, cancelled }           — user cancelled or purchase failed
- */
 export async function purchasePro(): Promise<IAPResult> {
+  diagLog('purchasePro: started');
+
   if (!isNative()) {
-    return {
-      success: false,
-      cancelled: false,
-      message:
-        'Native purchases are only available in the Android or iPhone app.',
-    };
+    diagLog('purchasePro: not native');
+    return { success: false, cancelled: false, message: 'Native purchases are only available in the Android or iPhone app.' };
   }
 
-  // Ensure the SDK is initialised before proceeding.
-  // If initIAP() has not been called (or failed), try once more.
   if (!_initialized) {
-    devLog('[IAP] purchasePro: SDK not initialised — attempting init...');
+    diagLog('purchasePro: SDK not initialised — attempting init...');
     try {
-      await initIAP();
+      await withTimeout(initIAP(), INIT_TIMEOUT_MS, 'initIAP (from purchasePro)');
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : 'Purchase system init failed.';
-      if (process.env.NODE_ENV !== 'production') console.error('[IAP] purchasePro: init failed:', msg);
+      const msg = err instanceof Error ? err.message : 'Purchase system init failed.';
+      diagError('purchasePro: init failed:', msg);
       return { success: false, cancelled: false, message: msg };
     }
     if (!_initialized) {
-      return {
-        success: false,
-        cancelled: false,
-        message: 'Purchase system is not ready. Please try again later.',
-      };
+      diagError('purchasePro: SDK still not initialised after initIAP call');
+      return { success: false, cancelled: false, message: 'Purchase system is not ready. Please try again later.' };
     }
   }
 
+  // No timeout around the active purchase sheet (requirement #8).
+  // Timeout is allowed only for initialization and offerings retrieval.
   try {
-    // Wrap the entire purchase flow in a global timeout
-    return await withTimeout(corePurchaseFlow(), GLOBAL_PURCHASE_TIMEOUT_MS, 'purchasePro');
+    return await corePurchaseFlow();
   } catch (err: unknown) {
-    // Timeout errors (includes global timeout)
-    if (err instanceof Error && err.message.startsWith('[IAP]')) {
-      if (process.env.NODE_ENV !== 'production') console.error('[IAP] purchasePro error:', err.message);
-      return {
-        success: false,
-        cancelled: false,
-        message: 'The purchase timed out. Please try again.',
-      };
-    }
-    // RevenueCat throws an object with `userCancelled` when the user dismisses
+    // RevenueCat SDK throws structured errors with userCancelled.
     const rcErr = err as Record<string, unknown> | null;
     if (rcErr && rcErr['userCancelled'] === true) {
-      devLog('[IAP] purchasePro: user cancelled');
+      diagLog('purchasePro: user cancelled');
       return { success: false, cancelled: true, message: 'Purchase cancelled.' };
     }
-    const msg =
-      rcErr && typeof rcErr['message'] === 'string'
-        ? rcErr['message']
-        : 'Purchase failed. Please try again.';
-    if (process.env.NODE_ENV !== 'production') console.error('[IAP] purchasePro error:', msg);
+    const msg = rcErr && typeof rcErr['message'] === 'string' ? rcErr['message'] : 'Purchase failed. Please try again.';
+    diagError('purchasePro: error:', msg);
     return { success: false, cancelled: false, message: msg };
   }
 }
@@ -394,165 +315,111 @@ export async function purchasePro(): Promise<IAPResult> {
 async function corePurchaseFlow(): Promise<IAPResult> {
   const Purchases = await getPurchases();
 
-  devLog('[IAP] purchasePro: fetching offerings...');
-  const offerings = await withTimeout(
-    Purchases.getOfferings(),
-    PURCHASE_TIMEOUT_MS,
-    'getOfferings',
-  );
+  diagLog('corePurchaseFlow: fetching offerings (with timeout)...');
+  let offerings;
+  try {
+    offerings = await withTimeout(Purchases.getOfferings(), PURCHASE_TIMEOUT_MS, 'getOfferings');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to fetch offerings.';
+    diagError('corePurchaseFlow: getOfferings failed:', msg);
+    return { success: false, cancelled: false, message: msg };
+  }
   const current = offerings.current;
 
   if (!current) {
-    if (process.env.NODE_ENV !== 'production') console.warn('[IAP] purchasePro: no current offering found');
-    return {
-      success: false,
-      cancelled: false,
-      message: 'No offerings available. Please try again later.',
-    };
+    diagError('corePurchaseFlow: no current offering found');
+    diagLog('corePurchaseFlow: offering identifiers:', Object.keys(offerings.all));
+    return { success: false, cancelled: false, message: 'No offerings available. Please try again later.' };
   }
 
-  // Find the $rc_lifetime package in the default offering
+  diagLog('corePurchaseFlow: current offering id:', current.identifier);
+  diagLog('corePurchaseFlow: available package ids:', current.availablePackages.map((p) => p.identifier));
+  diagLog('corePurchaseFlow: available product ids:', current.availablePackages.map((p) => p.product.identifier));
+
   const lifetimePackage =
-    current.availablePackages.find(
-      (pkg) => pkg.identifier === PACKAGE_IDENTIFIER,
-    ) ??
-    current.availablePackages.find(
-      (pkg) => pkg.product.identifier === PRO_PRODUCT_ID,
-    ) ??
+    current.availablePackages.find((pkg) => pkg.identifier === PACKAGE_IDENTIFIER) ??
+    current.availablePackages.find((pkg) => pkg.product.identifier === PRO_PRODUCT_ID) ??
     null;
 
-  let purchasePackage = lifetimePackage;
+  let purchasePackageObj = lifetimePackage;
 
-  if (!purchasePackage) {
-    // Fallback: search all offerings
-    devLog('[IAP] purchasePro: searching all offerings for lifetime package...');
+  if (!purchasePackageObj) {
+    diagLog('corePurchaseFlow: searching all offerings...');
     for (const offeringKey of Object.keys(offerings.all)) {
       const offering = offerings.all[offeringKey];
       const found = offering.availablePackages.find(
-        (pkg) =>
-          pkg.identifier === PACKAGE_IDENTIFIER ||
-          pkg.product.identifier === PRO_PRODUCT_ID,
+        (pkg) => pkg.identifier === PACKAGE_IDENTIFIER || pkg.product.identifier === PRO_PRODUCT_ID,
       );
       if (found) {
-        purchasePackage = found;
+        purchasePackageObj = found;
+        diagLog('corePurchaseFlow: found in offering:', offeringKey);
         break;
       }
     }
-    if (!purchasePackage) {
-      if (process.env.NODE_ENV !== 'production') console.warn('[IAP] purchasePro: lifetime package not found in any offering');
-      return {
-        success: false,
-        cancelled: false,
-        message: `Lifetime package not found in store. Check RevenueCat dashboard.`,
-      };
+    if (!purchasePackageObj) {
+      diagError('corePurchaseFlow: lifetime package not found');
+      return { success: false, cancelled: false, message: 'Lifetime package not found in store. Check RevenueCat dashboard.' };
     }
   }
 
-  // Store the price for display
-  _storePrice = purchasePackage.product.priceString ?? null;
-  devLog('[IAP] purchasePro: product price:', _storePrice);
+  _storePrice = purchasePackageObj.product.priceString ?? null;
+  diagLog('corePurchaseFlow: price:', _storePrice);
+  diagLog('corePurchaseFlow: selected package:', purchasePackageObj.identifier);
+  diagLog('corePurchaseFlow: selected product:', purchasePackageObj.product.identifier);
 
-  devLog('[IAP] purchasePro: launching purchase sheet...');
-  const result = await withTimeout(
-    Purchases.purchasePackage({ aPackage: purchasePackage }),
-    PURCHASE_TIMEOUT_MS,
-    'purchasePackage',
-  );
+  diagLog('corePurchaseFlow: launching purchase sheet...');
+  // No timeout around the active Google Play purchase sheet.
+  // The user controls how long the purchase sheet stays open.
+  const result = await Purchases.purchasePackage({ aPackage: purchasePackageObj });
 
-  // Check local entitlement as a quick confirmation
-  const hasEntitlement =
-    result.customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
+  const hasEntitlement = result.customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
+  diagLog('corePurchaseFlow: purchase completed, entitlement found:', hasEntitlement);
 
   if (!hasEntitlement) {
-    if (process.env.NODE_ENV !== 'production') console.warn('[IAP] purchasePro: entitlement not found after purchase');
+    diagError('corePurchaseFlow: entitlement not found after purchase');
+    diagLog('corePurchaseFlow: active entitlements:', Object.keys(result.customerInfo.entitlements.active));
     return {
-      success: false,
-      cancelled: false,
-      message:
-        'Purchase completed but entitlement not found. Please try Restore or contact support.',
+      success: false, cancelled: false,
+      message: 'Purchase completed but entitlement not found. Please try Restore or contact support.',
     };
   }
 
-  devLog('[IAP] purchasePro: purchase succeeded, verifying with server...');
-
-  // ═══════════════════════════════════════════════════════════════
-  // Server-side verification — the authoritative Pro status check
-  // ═══════════════════════════════════════════════════════════════
+  diagLog('corePurchaseFlow: verifying with server...');
   const serverResult = await verifyProWithServer();
   const serverToken = 'token' in serverResult ? serverResult.token : undefined;
 
   if (!serverResult.success || !serverResult.isPro) {
-    if (process.env.NODE_ENV !== 'production') console.warn('[IAP] purchasePro: server verification failed after client success');
-    return {
-      success: true,
-      isPro: false,
-      token: serverToken,
-    };
+    diagError('corePurchaseFlow: server verification failed');
+    return { success: true, isPro: false, token: serverToken };
   }
 
-  devLog('[IAP] purchasePro: fully verified — Pro active');
+  diagLog('corePurchaseFlow: fully verified - Pro active');
   return { success: true, isPro: true, token: serverToken };
 }
 
-/**
- * Restores previous purchases and validates Pro entitlement via the server.
- *
- * Returns:
- *   { success: true, isPro: true, token }  — entitlement restored and verified
- *   { success: true, isPro: false }        — restore succeeded but no active Pro
- *   { success: false, ... }                — restore failed
- */
 export async function restorePro(): Promise<IAPResult> {
+  diagLog('restorePro: started');
   if (!isNative()) {
-    // Web fallback
-    const hadPro =
-      typeof window !== 'undefined' &&
-      localStorage.getItem('cvpro-plan') === 'pro';
+    const hadPro = typeof window !== 'undefined' && localStorage.getItem('cvpro-plan') === 'pro';
     return { success: true, isPro: hadPro };
   }
-
   try {
     const Purchases = await getPurchases();
+    diagLog('restorePro: calling restorePurchases...');
     const { customerInfo } = await Purchases.restorePurchases();
-
-    // Quick local check
-    const hasEntitlement =
-      customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
-
-    if (!hasEntitlement) {
-      return {
-        success: true,
-        isPro: false,
-      };
-    }
-
-    // Server-side verification
-    const serverResult = await verifyProWithServer();
-
-    if (!serverResult.success) {
-      return {
-        success: true,
-        isPro: false,
-      };
-    }
-
-    return serverResult;
+    const hasEntitlement = customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
+    diagLog('restorePro: entitlement found:', hasEntitlement);
+    if (!hasEntitlement) return { success: true, isPro: false };
+    return await verifyProWithServer();
   } catch (err: unknown) {
-    const msg =
-      err instanceof Error ? err.message : 'Restore failed. Please try again.';
+    const msg = err instanceof Error ? err.message : 'Restore failed. Please try again.';
+    diagError('restorePro: failed:', msg);
     return { success: false, cancelled: false, message: msg };
   }
 }
 
-/**
- * Checks the current customer's entitlements without making a purchase.
- * On native: refreshes customer info from RevenueCat and calls the server
- *            for authoritative verification.
- * On web:    checks the cached Pro token in localStorage.
- */
 export async function checkProEntitlement(): Promise<boolean> {
   if (!isNative()) {
-    // On web, check if a valid Pro token exists in localStorage
     try {
       const token = localStorage.getItem(PRO_TOKEN_KEY);
       if (!token) return false;
@@ -562,7 +429,6 @@ export async function checkProEntitlement(): Promise<boolean> {
       const { isPro, exp } = decoded as { isPro?: boolean; exp?: number };
       if (isPro !== true) return false;
       if (exp && Date.now() >= exp) {
-        // Token expired — clear it
         localStorage.removeItem(PRO_TOKEN_KEY);
         return false;
       }
@@ -571,12 +437,9 @@ export async function checkProEntitlement(): Promise<boolean> {
       return false;
     }
   }
-
   try {
     const Purchases = await getPurchases();
     await Purchases.getCustomerInfo();
-
-    // Call server for authoritative check
     const result = await verifyProWithServer();
     return result.success && result.isPro;
   } catch {
@@ -584,56 +447,21 @@ export async function checkProEntitlement(): Promise<boolean> {
   }
 }
 
-// ─── Safe purchasing helper ────────────────────────────────────────────────────
-//
-// safeSetPurchasing wraps a purchasing state transition so that the purchasing
-// flag is always reset, even if the wrapped promise resolves or rejects outside
-// the normal React lifecycle. This prevents the "purchasing" state from getting
-// stuck at true.
-//
-// The RevenueCat SDK manages the dialog lifecycle. The purchasing flag resets
-// reliably via the finally block.
-
-export function safeSetPurchasing(
-  setter: (val: boolean) => void,
-  fn: () => Promise<void>,
-): () => Promise<void> {
-  return async () => {
-    setter(true);
-    try { await fn(); } finally { setter(false); }
-  };
-}
-
-// ─── React hook ───────────────────────────────────────────────────────────────
+// --- React hook -------------------------------------------------------------------
 
 export interface UseIAPReturn {
-  /** True when running inside a native Capacitor shell */
   isNativeApp: boolean;
-  /** True while a purchase or restore is in progress */
   purchasing: boolean;
-  /** Initiate purchase of cv_pro_lifetime */
   purchase: () => Promise<IAPResult>;
-  /** Restore previous purchase */
   restore: () => Promise<IAPResult>;
-  /** Localized store price string from RevenueCat (e.g. "$3.99"), or null */
   productPrice: string | null;
 }
 
-/**
- * React hook that exposes the IAP purchase and restore actions.
- *
- * Usage:
- *   const { purchase, restore, purchasing, productPrice } = useIAP();
- *   const result = await purchase();
- *   if (result.success && result.isPro) {
- *     // Pro unlocked — token is stored; set isPro in app state
- *   }
- */
 export function useIAP(): UseIAPReturn {
   const [purchasing, setPurchasing] = useState(false);
   const [productPrice, setProductPrice] = useState<string | null>(null);
+  const purchaseLockRef = useRef(false);
 
-  // Initialise SDK once on mount (native only)
   useEffect(() => {
     (async () => {
       try {
@@ -643,34 +471,46 @@ export function useIAP(): UseIAPReturn {
           if (price) setProductPrice(price);
         }
       } catch (e) {
-        // initIAP already logs the error; nothing more to surface here.
-        // purchasePro() will attempt re-init and return a user-facing error.
         console.warn('[useIAP] initIAP failed (will retry on purchase):', e);
       }
     })();
   }, []);
 
   const purchase = useCallback(async (): Promise<IAPResult> => {
+    if (purchaseLockRef.current) {
+      diagLog('useIAP.purchase: duplicate tap ignored');
+      return { success: false, cancelled: true, message: 'Purchase already in progress.' };
+    }
+    purchaseLockRef.current = true;
     setPurchasing(true);
     try {
       const result = await purchasePro();
-      // Refresh price after purchase in case product info changed
       if (result.success && isNative()) {
-        const price = await refreshStorePrice();
-        if (price) setProductPrice(price);
+        try {
+          const price = await refreshStorePrice();
+          if (price) setProductPrice(price);
+        } catch {}
       }
       return result;
     } finally {
-      setPurchasing(false);
+      // Always clear loading state. try/catch prevents React state updates
+      // from throwing if the component has truly unmounted.
+      try { setPurchasing(false); } catch {}
+      purchaseLockRef.current = false;
     }
   }, []);
 
   const restore = useCallback(async (): Promise<IAPResult> => {
+    if (purchaseLockRef.current) {
+      return { success: false, cancelled: true, message: 'Purchase already in progress.' };
+    }
+    purchaseLockRef.current = true;
     setPurchasing(true);
     try {
       return await restorePro();
     } finally {
-      setPurchasing(false);
+      try { setPurchasing(false); } catch {}
+      purchaseLockRef.current = false;
     }
   }, []);
 

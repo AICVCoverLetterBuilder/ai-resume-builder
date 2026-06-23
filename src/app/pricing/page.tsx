@@ -25,16 +25,24 @@ export default function PricingPage() {
   const [showComingSoon, setShowComingSoon] = useState(false);
 
   // ── Purchase handler (native IAP / web fallback) ──────────────────────────
+  const [localPurchasing, setLocalPurchasing] = useState(false);
+
   const handleUpgrade = async () => {
-    const result = await purchase();
-    if (result.success && result.isPro) {
-      setIsPro(true);
-      toast.success(t.pricing.proActive);
-    } else if (!result.success) {
-      if (!result.cancelled) {
-        toast.error(result.message);
+    setLocalPurchasing(true);
+    try {
+      const result = await purchase();
+      if (result.success && result.isPro) {
+        setIsPro(true);
+        toast.success(t.pricing.proActive);
+      } else if (result.success && !result.isPro) {
+        toast.error('Server verification failed. If charged, contact support to restore your purchase.');
+      } else if (!result.success) {
+        if (!result.cancelled) {
+          toast.error(result.message);
+        }
       }
-      // User cancelled — silent
+    } finally {
+      setLocalPurchasing(false);
     }
   };
 
@@ -148,11 +156,11 @@ export default function PricingPage() {
               ) : isNativeApp ? (
                 <button
                   onClick={handleUpgrade}
-                  disabled={purchasing}
+                  disabled={localPurchasing || purchasing}
                   className="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-foreground text-sm font-semibold text-background transition-all hover:opacity-85 shadow-sm disabled:opacity-50"
                 >
-                  {purchasing ? '...' : t.pricing.pro.cta}
-                  {!purchasing && <ArrowRight className="h-4 w-4" />}
+                  {(localPurchasing || purchasing) ? '...' : t.pricing.pro.cta}
+                  {!(localPurchasing || purchasing) && <ArrowRight className="h-4 w-4" />}
                 </button>
               ) : (
                 /* Web: purchase coming soon — show modal */
