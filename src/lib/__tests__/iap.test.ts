@@ -13,10 +13,16 @@ import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 // Module-level mock controls
 const mockPurchases = vi.hoisted(() => ({
   configure: vi.fn().mockResolvedValue(undefined),
+  setLogLevel: vi.fn().mockResolvedValue(undefined),
+  canMakePayments: vi.fn().mockResolvedValue({ canMakePayments: true }),
   getOfferings: vi.fn(),
   purchasePackage: vi.fn(),
   restorePurchases: vi.fn(),
   getCustomerInfo: vi.fn(),
+}));
+
+const mockApp = vi.hoisted(() => ({
+  addListener: vi.fn().mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) }),
 }));
 
 vi.mock('@capacitor/core', () => ({
@@ -26,8 +32,13 @@ vi.mock('@capacitor/core', () => ({
   },
 }));
 
+vi.mock('@capacitor/app', () => ({
+  App: mockApp,
+}));
+
 vi.mock('@revenuecat/purchases-capacitor', () => ({
   Purchases: mockPurchases,
+  LOG_LEVEL: { DEBUG: 'DEBUG' },
 }));
 
 
@@ -125,7 +136,12 @@ function makeCustomerInfo(
 }
 
 function resetMockPurchases() {
+  mockPurchases.configure.mockReset();
   mockPurchases.configure.mockResolvedValue(undefined);
+  mockPurchases.setLogLevel.mockReset();
+  mockPurchases.setLogLevel.mockResolvedValue(undefined);
+  mockPurchases.canMakePayments.mockReset();
+  mockPurchases.canMakePayments.mockResolvedValue({ canMakePayments: true });
   mockPurchases.getOfferings.mockResolvedValue(makeOfferings());
   mockPurchases.purchasePackage.mockResolvedValue({
     customerInfo: makeCustomerInfo(),
@@ -136,6 +152,8 @@ function resetMockPurchases() {
   mockPurchases.getCustomerInfo.mockResolvedValue({
     customerInfo: makeCustomerInfo(),
   });
+  mockApp.addListener.mockReset();
+  mockApp.addListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) });
 }
 
 vi.stubEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY', 'test_mock_android_key_none_real');

@@ -11,14 +11,17 @@ import { describe, expect, test, vi, beforeEach } from 'vitest';
 const mockCapacitor = vi.hoisted(() => ({
   isNativePlatform: vi.fn(() => false),
   getPlatform: vi.fn(() => 'web'),
+  isPluginAvailable: vi.fn(() => true),
 }));
 
 const pluginInstances = vi.hoisted(() => ({
+  healthCheck: vi.fn().mockResolvedValue({ pluginAvailable: true, cacheWritable: true, pluginVersion: '1.1.0' }),
   saveFile: vi.fn().mockResolvedValue({ result: 'saved', message: 'OK' }),
   print: vi.fn().mockResolvedValue({ result: 'saved', message: 'OK' }),
 }));
 
 const mockRegisterPlugin = vi.hoisted(() => vi.fn(() => ({
+  healthCheck: pluginInstances.healthCheck,
   saveFile: pluginInstances.saveFile,
   print: pluginInstances.print,
 })));
@@ -41,6 +44,9 @@ function setWeb() {
 }
 
 function resetPluginMocks() {
+  mockCapacitor.isPluginAvailable.mockReturnValue(true);
+  pluginInstances.healthCheck.mockReset();
+  pluginInstances.healthCheck.mockResolvedValue({ pluginAvailable: true, cacheWritable: true, pluginVersion: '1.1.0' });
   pluginInstances.saveFile.mockReset();
   pluginInstances.saveFile.mockResolvedValue({ result: 'saved', message: 'OK' });
   pluginInstances.print.mockReset();

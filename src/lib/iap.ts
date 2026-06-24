@@ -24,7 +24,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
+import { App } from '@capacitor/app';
 import { apiFetch } from './api';
 
 // --- Constants ------------------------------------------------------------------
@@ -81,11 +82,15 @@ function getPlatform(): 'ios' | 'android' | 'web' {
 
 let _purchasesModule: typeof import('@revenuecat/purchases-capacitor') | null = null;
 
-async function getPurchases() {
+async function getPurchasesModule() {
   if (!_purchasesModule) {
     _purchasesModule = await import('@revenuecat/purchases-capacitor');
   }
-  return _purchasesModule.Purchases;
+  return _purchasesModule;
+}
+
+async function getPurchases() {
+  return (await getPurchasesModule()).Purchases;
 }
 
 // --- SDK initializer --------------------------------------------------------------
@@ -187,9 +192,13 @@ async function _initIAPImpl(platform: 'ios' | 'android' | 'web'): Promise<void> 
     throw new Error('RevenueCat API key not configured. Check NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY.');
   }
 
-  const Purchases = await getPurchases();
+  const purchasesModule = await getPurchasesModule();
+  const Purchases = purchasesModule.Purchases;
 
   try {
+    if (process.env.NODE_ENV !== 'production') {
+      await Purchases.setLogLevel({ level: purchasesModule.LOG_LEVEL.DEBUG });
+    }
     const appUserId = getAppUserId();
     diagLog('initIAP: configuring SDK...');
     await withTimeout(
@@ -218,6 +227,7 @@ function base64UrlDecode(str: string): string {
 
 const PURCHASE_TIMEOUT_MS = 30_000;
 const INIT_TIMEOUT_MS = 15_000;
+const PRE_SHEET_WATCHDOG_MS = 15_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -226,6 +236,83 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       setTimeout(() => reject(new Error('[IAP] ' + label + ' timed out after ' + ms + 'ms')), ms),
     ),
   ]);
+}
+
+async function purchaseWithStoreOpeningWatchdog<T>(startPurchase: () => Promise<T>): Promise<T> {
+  let listener: PluginListenerHandle | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let settled = false;
+
+  const cleanup = async () => {
+    settled = true;
+    if (timeoutId !== null) clearTimeout(timeoutId);
+    if (listener) {
+      try {
+        await listener.remove();
+      } catch {}
+      listener = null;
+    }
+  };
+
+  let resolveStoreOpened: (() => void) | null = null;
+  const storeOpenedPromise = new Promise<void>((resolve) => {
+    resolveStoreOpened = resolve;
+  });
+
+  try {
+    listener = await withTimeout(
+      App.addListener('appStateChange', ({ isActive }) => {
+        if (!isActive && !settled) {
+          diagLog('purchase: native store activity opened');
+          resolveStoreOpened?.();
+        }
+      }),
+      2_000,
+      'App.addListener(appStateChange)',
+    );
+  } catch (err) {
+    diagError('purchase: appStateChange listener unavailable:', err);
+  }
+
+  // Start the native purchase only after the app-state listener is installed,
+  // so a fast transition to the Google Play Activity cannot be missed.
+  const purchasePromise = startPurchase();
+
+  const timeoutPromise = new Promise<'timeout'>((resolve) => {
+    timeoutId = setTimeout(() => resolve('timeout'), PRE_SHEET_WATCHDOG_MS);
+  });
+
+  const wrappedPurchase = purchasePromise.then(
+    (result) => ({ kind: 'result' as const, result }),
+    (error: unknown) => ({ kind: 'error' as const, error }),
+  );
+
+  const first = await Promise.race([
+    wrappedPurchase,
+    storeOpenedPromise.then(() => ({ kind: 'store-opened' as const })),
+    timeoutPromise.then(() => ({ kind: 'timeout' as const })),
+  ]);
+
+  if (first.kind === 'result') {
+    await cleanup();
+    return first.result;
+  }
+  if (first.kind === 'error') {
+    await cleanup();
+    throw first.error;
+  }
+  if (first.kind === 'store-opened') {
+    await cleanup();
+    return await purchasePromise;
+  }
+
+  await cleanup();
+  // The native promise may eventually reject after the UI has already reset.
+  // Attach a handler so that a late rejection never becomes unhandled.
+  void purchasePromise.catch((error) => {
+    diagError('purchase: late rejection after STORE_DID_NOT_OPEN:', error);
+  });
+  throw new Error('[IAP] STORE_DID_NOT_OPEN: Google Play purchase screen did not open.');
 }
 
 // --- Core operations ----------------------------------------------------------------
@@ -315,6 +402,26 @@ export async function purchasePro(): Promise<IAPResult> {
 async function corePurchaseFlow(): Promise<IAPResult> {
   const Purchases = await getPurchases();
 
+  diagLog('corePurchaseFlow: checking billing availability...');
+  try {
+    const billing = await withTimeout(
+      Purchases.canMakePayments(),
+      INIT_TIMEOUT_MS,
+      'canMakePayments',
+    );
+    if (!billing.canMakePayments) {
+      return {
+        success: false,
+        cancelled: false,
+        message: 'Google Play billing is unavailable on this device or account.',
+      };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unable to check Google Play billing.';
+    diagError('corePurchaseFlow: billing preflight failed:', message);
+    return { success: false, cancelled: false, message };
+  }
+
   diagLog('corePurchaseFlow: fetching offerings (with timeout)...');
   let offerings;
   try {
@@ -362,15 +469,31 @@ async function corePurchaseFlow(): Promise<IAPResult> {
     }
   }
 
+  if (purchasePackageObj.product.identifier !== PRO_PRODUCT_ID) {
+    return {
+      success: false,
+      cancelled: false,
+      message: 'Configured Google Play product does not match the Pro product.',
+    };
+  }
+
   _storePrice = purchasePackageObj.product.priceString ?? null;
+  if (!_storePrice) {
+    return {
+      success: false,
+      cancelled: false,
+      message: 'Google Play product price is unavailable. Please try again later.',
+    };
+  }
+
   diagLog('corePurchaseFlow: price:', _storePrice);
   diagLog('corePurchaseFlow: selected package:', purchasePackageObj.identifier);
   diagLog('corePurchaseFlow: selected product:', purchasePackageObj.product.identifier);
 
   diagLog('corePurchaseFlow: launching purchase sheet...');
-  // No timeout around the active Google Play purchase sheet.
-  // The user controls how long the purchase sheet stays open.
-  const result = await Purchases.purchasePackage({ aPackage: purchasePackageObj });
+  const result = await purchaseWithStoreOpeningWatchdog(() =>
+    Purchases.purchasePackage({ aPackage: purchasePackageObj }),
+  );
 
   const hasEntitlement = result.customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
   diagLog('corePurchaseFlow: purchase completed, entitlement found:', hasEntitlement);
