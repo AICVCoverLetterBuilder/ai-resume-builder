@@ -19,29 +19,9 @@ import {
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
 
-export interface ProDiagnostics {
-  clientIsPro: boolean;
-  storedTokenPresent: boolean;
-  memoryTokenPresent: boolean;
-  tokenSyncLastResult: TokenSyncResult | 'not-run';
-  tokenSyncLastError: string;
-  startupEntitlementResult: EntitlementSyncResult | 'not-run';
-  restoreEntitlementResult: EntitlementSyncResult | 'not-run';
-  aiGateStatus: AiGateResult['status'];
-  aiGateTokenPresent: boolean;
-  aiGateIsPro: boolean;
-  aiGateBlockingReason: AiGateBlockingReason;
-}
-
-export type AiGateBlockingReason =
-  | 'none'
-  | 'free-user'
-  | 'missing-token'
-  | 'token-sync-failed';
-
 export type AiGateResult =
   | { status: 'ready'; token: string }
-  | { status: 'syncing'; reason: Exclude<AiGateBlockingReason, 'none' | 'free-user'> }
+  | { status: 'syncing'; reason: 'missing-token' | 'token-sync-failed' }
   | { status: 'free' };
 
 interface SetIsProOptions {
@@ -58,7 +38,6 @@ interface AppContextType {
   getProToken: () => string | null;
   /** Current AI authorization gate, read at click time from canonical Pro state. */
   getAiGate: () => AiGateResult;
-  proDiagnostics: ProDiagnostics;
   saveCv: (cv: CVData) => void;
   deleteCv: (id: string) => void;
   saveCoverLetter: (cl: CoverLetterData) => void;
@@ -230,9 +209,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [lastCvSavedAt, setLastCvSavedAt] = useState<number>(() => (currentCv ? Date.now() : 0));
   const [lastClSavedAt, setLastClSavedAt] = useState<number>(() => (currentCoverLetter ? Date.now() : 0));
   const [tokenSyncLastResult, setTokenSyncLastResult] = useState<TokenSyncResult | 'not-run'>('not-run');
-  const [tokenSyncLastError, setTokenSyncLastError] = useState('');
-  const [startupEntitlementResult, setStartupEntitlementResult] = useState<EntitlementSyncResult | 'not-run'>('not-run');
-  const [restoreEntitlementResult, setRestoreEntitlementResult] = useState<EntitlementSyncResult | 'not-run'>('not-run');
   const isProRef = useRef(isPro);
   const proTokenRef = useRef(proToken);
   const tokenSyncLastResultRef = useRef<TokenSyncResult | 'not-run'>(tokenSyncLastResult);
@@ -242,18 +218,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   tokenSyncLastResultRef.current = tokenSyncLastResult;
 
   const setIsPro = useCallback((val: boolean, token?: string | null, options?: SetIsProOptions) => {
-    if (options?.source === 'startup' && options.entitlementResult) {
-      setStartupEntitlementResult(options.entitlementResult);
-    }
-    if (options?.source === 'restore' && options.entitlementResult) {
-      setRestoreEntitlementResult(options.entitlementResult);
-    }
     if (options?.tokenSyncLastResult) {
       tokenSyncLastResultRef.current = options.tokenSyncLastResult;
       setTokenSyncLastResult(options.tokenSyncLastResult);
-    }
-    if (options?.tokenSyncLastError !== undefined) {
-      setTokenSyncLastError(options.tokenSyncLastError);
     }
 
     if (val) {
@@ -267,7 +234,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         persistProToken(null);
         setProToken(null);
         setTokenSyncLastResult('failed');
-        setTokenSyncLastError(options?.tokenSyncLastError || 'Signed Pro authorization token is missing.');
         return;
       }
       isProRef.current = true;
@@ -278,7 +244,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       persistProToken(nextToken);
       setProToken(nextToken);
       setTokenSyncLastResult(options?.tokenSyncLastResult || 'success');
-      setTokenSyncLastError('');
       return;
     }
 
@@ -312,7 +277,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             tokenSyncLastError: syncResult.tokenSyncLastError || '',
           });
         }
-      } catch (err) {
+      } catch {
         isProRef.current = false;
         proTokenRef.current = null;
         tokenSyncLastResultRef.current = 'failed';
@@ -320,9 +285,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         persistIsPro(false);
         persistProToken(null);
         setProToken(null);
-        setStartupEntitlementResult('failed');
         setTokenSyncLastResult('failed');
-        setTokenSyncLastError(err instanceof Error ? err.message : 'Startup entitlement sync failed.');
       }
     })();
   }, [setIsPro]);
@@ -360,68 +323,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [isPro]);
 
-  const readAiGateState = useCallback((): {
-    result: AiGateResult;
-    tokenPresent: boolean;
-    currentIsPro: boolean;
-    blockingReason: AiGateBlockingReason;
-  } => {
+  const readAiGateState = useCallback((): AiGateResult => {
     const currentIsPro = isProRef.current;
     const currentToken = proTokenRef.current || loadProToken();
-    const tokenPresent = Boolean(currentToken);
 
     if (!currentIsPro) {
-      return {
-        result: { status: 'free' },
-        tokenPresent,
-        currentIsPro,
-        blockingReason: 'free-user',
-      };
+      return { status: 'free' };
     }
 
     if (currentToken) {
-      return {
-        result: { status: 'ready', token: currentToken },
-        tokenPresent,
-        currentIsPro,
-        blockingReason: 'none',
-      };
+      return { status: 'ready', token: currentToken };
     }
 
-    const reason: Exclude<AiGateBlockingReason, 'none' | 'free-user'> =
+    const reason: 'missing-token' | 'token-sync-failed' =
       tokenSyncLastResultRef.current === 'failed' ? 'token-sync-failed' : 'missing-token';
 
-    return {
-      result: { status: 'syncing', reason },
-      tokenPresent,
-      currentIsPro,
-      blockingReason: reason,
-    };
+    return { status: 'syncing', reason };
   }, []);
 
-  const getAiGate = useCallback((): AiGateResult => readAiGateState().result, [readAiGateState]);
+  const getAiGate = useCallback((): AiGateResult => readAiGateState(), [readAiGateState]);
 
   // Expose token synchronously from the same click-time gate used by AI callers.
   const getProToken = useCallback((): string | null => {
-    const gate = readAiGateState().result;
+    const gate = readAiGateState();
     return gate.status === 'ready' ? gate.token : null;
   }, [readAiGateState]);
-
-  const aiGateState = readAiGateState();
-
-  const proDiagnostics: ProDiagnostics = {
-    clientIsPro: isPro,
-    storedTokenPresent: Boolean(loadProToken()),
-    memoryTokenPresent: Boolean(proToken),
-    tokenSyncLastResult,
-    tokenSyncLastError,
-    startupEntitlementResult,
-    restoreEntitlementResult,
-    aiGateStatus: aiGateState.result.status,
-    aiGateTokenPresent: aiGateState.tokenPresent,
-    aiGateIsPro: aiGateState.currentIsPro,
-    aiGateBlockingReason: aiGateState.blockingReason,
-  };
 
   const canDownload = useCallback((type: 'cv' | 'cl') => {
     if (isProRef.current) return true;
@@ -485,7 +411,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Pro safety cap helpers — only active for Pro users; free users are never checked here.
   const canUseProAi = useCallback((): boolean => {
-    if (readAiGateState().result.status !== 'ready') return false;
+    if (readAiGateState().status !== 'ready') return false;
     // Re-read from storage to ensure freshness across re-renders
     const fresh = loadProAiRecord();
     if (fresh.windowStart !== proAiRecord.windowStart || fresh.count !== proAiRecord.count) {
@@ -495,7 +421,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [proAiRecord, readAiGateState]);
 
   const recordProAiSuccess = useCallback(() => {
-    if (readAiGateState().result.status !== 'ready') return; // only track for Pro users
+    if (readAiGateState().status !== 'ready') return; // only track for Pro users
     setProAiRecord(prev => {
       const now = Date.now();
       // Reset window if expired
@@ -584,7 +510,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   void FREE_AI_RECOMMEND_LIMIT; // used via canUseAiRecommend logic above
   return (
     <AppContext.Provider value={{
-      isPro, setIsPro, getProToken, getAiGate, proDiagnostics,
+      isPro, setIsPro, getProToken, getAiGate,
       saveCv, deleteCv, saveCoverLetter, deleteCoverLetter,
       currentCv, setCurrentCv, currentCoverLetter, setCurrentCoverLetter,
       canDownload, incrementDownloads,

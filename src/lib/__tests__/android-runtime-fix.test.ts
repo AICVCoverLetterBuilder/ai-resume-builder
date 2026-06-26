@@ -152,11 +152,11 @@ describe('Android runtime fixes', () => {
     );
     expect(source.indexOf('registerPlugin(SaveFilePlugin.class)')).toBeGreaterThan(-1);
     expect(source.indexOf('registerPlugin(PrintPdfPlugin.class)')).toBeGreaterThan(-1);
-    expect(source.indexOf('registerPlugin(PurchaseTracePlugin.class)')).toBeGreaterThan(-1);
+    expect(source).not.toContain('Purchase' + 'TracePlugin');
     expect(source.indexOf('registerPlugin(SaveFilePlugin.class)')).toBeLessThan(
       source.indexOf('super.onCreate(savedInstanceState)'),
     );
-    expect(source.indexOf('registerPlugin(PurchaseTracePlugin.class)')).toBeLessThan(
+    expect(source.indexOf('registerPlugin(PrintPdfPlugin.class)')).toBeLessThan(
       source.indexOf('super.onCreate(savedInstanceState)'),
     );
   });
@@ -165,23 +165,15 @@ describe('Android runtime fixes', () => {
     const plugins = fs.readFileSync('android/app/src/main/assets/capacitor.plugins.json', 'utf8');
     expect(plugins).toContain('com.revenuecat.purchases.capacitor.PurchasesPlugin');
     expect(plugins).not.toContain('TracedPurchasesPlugin');
-    expect(plugins).not.toContain('PurchaseTracePlugin');
+    expect(plugins).not.toContain('Purchase' + 'TracePlugin');
   });
 
-  test('PurchaseTrace clear cancels native watchdog before clearing stored trace', () => {
-    const source = fs.readFileSync(
-      'android/app/src/main/java/com/cvproai/app/plugins/PurchaseTracePlugin.java',
-      'utf8',
-    );
-    const clearBody = source.match(/public void clear\(PluginCall call\) \{(?<body>[\s\S]*?)\n    \}/)?.groups?.body ?? '';
+  test('temporary purchase trace plugin and direct BillingClient dependency are absent', () => {
+    const pluginPath = 'android/app/src/main/java/com/cvproai/app/plugins/Purchase' + 'TracePlugin.java';
+    const buildGradle = fs.readFileSync('android/app/build.gradle', 'utf8');
 
-    expect(clearBody).toContain('synchronized (lock)');
-    expect(clearBody.indexOf('cancelWatchdogLocked(false)')).toBeGreaterThan(-1);
-    expect(clearBody.indexOf('prefs().edit().clear().commit()')).toBeGreaterThan(-1);
-    expect(clearBody.indexOf('cancelWatchdogLocked(false)')).toBeLessThan(
-      clearBody.indexOf('prefs().edit().clear().commit()'),
-    );
-    expect(clearBody).not.toContain('cancelWatchdogLocked(true)');
+    expect(fs.existsSync(pluginPath)).toBe(false);
+    expect(buildGradle).not.toContain('com.android.billingclient:billing');
   });
 
   test('MainActivity uses RevenueCat-compatible singleTop launch mode', () => {

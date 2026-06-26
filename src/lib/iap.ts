@@ -28,13 +28,6 @@ import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import { LOG_LEVEL, Purchases as RevenueCatPurchases } from '@revenuecat/purchases-capacitor';
 import { apiFetch } from './api';
-import {
-  armPurchaseTraceWatchdog,
-  cancelPurchaseTraceWatchdog,
-  clearPurchaseTrace,
-  markPurchaseTrace,
-  probePurchaseBilling,
-} from './purchase-trace';
 
 // --- Constants ------------------------------------------------------------------
 
@@ -301,9 +294,6 @@ const PURCHASE_TIMEOUT_MS = 30_000;
 const INIT_TIMEOUT_MS = 15_000;
 const PRE_SHEET_WATCHDOG_MS = 15_000;
 const PURCHASE_CALLBACK_TIMEOUT_MS = 8_000;
-const NATIVE_PURCHASE_TRACE_WATCHDOG_MS = 20_000;
-const PURCHASE_TRACE_CALL_TIMEOUT_MS = 1_500;
-const BILLING_PROBE_TIMEOUT_MS = 12_500;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -312,110 +302,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       setTimeout(() => reject(new Error('[IAP] ' + label + ' timed out after ' + ms + 'ms')), ms),
     ),
   ]);
-}
-
-function isAndroidNative(): boolean {
-  return isNative() && getPlatform() === 'android';
-}
-
-function traceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
-  return new Promise((resolve) => {
-    const timeoutId = setTimeout(() => resolve(undefined), ms);
-    promise
-      .then((value) => {
-        clearTimeout(timeoutId);
-        resolve(value);
-      })
-      .catch(() => {
-        clearTimeout(timeoutId);
-        resolve(undefined);
-      });
-  });
-}
-
-async function traceClear(): Promise<void> {
-  if (!isAndroidNative()) return;
-  try {
-    await traceTimeout(clearPurchaseTrace(PURCHASE_TRACE_CALL_TIMEOUT_MS), PURCHASE_TRACE_CALL_TIMEOUT_MS);
-  } catch {}
-}
-
-async function traceMark(phase: string, detail?: string): Promise<void> {
-  if (!isAndroidNative()) return;
-  try {
-    await traceTimeout(markPurchaseTrace(phase, detail, PURCHASE_TRACE_CALL_TIMEOUT_MS), PURCHASE_TRACE_CALL_TIMEOUT_MS);
-  } catch {}
-}
-
-async function traceProbeBilling(): Promise<Awaited<ReturnType<typeof probePurchaseBilling>> | undefined> {
-  if (!isAndroidNative()) return undefined;
-  try {
-    return await traceTimeout(probePurchaseBilling(PRO_PRODUCT_ID, BILLING_PROBE_TIMEOUT_MS), BILLING_PROBE_TIMEOUT_MS);
-  } catch {
-    return undefined;
-  }
-}
-
-async function traceArmWatchdog(): Promise<void> {
-  if (!isAndroidNative()) return;
-  try {
-    await traceTimeout(
-      armPurchaseTraceWatchdog(NATIVE_PURCHASE_TRACE_WATCHDOG_MS, PURCHASE_TRACE_CALL_TIMEOUT_MS),
-      PURCHASE_TRACE_CALL_TIMEOUT_MS,
-    );
-  } catch {}
-}
-
-async function traceCancelWatchdog(): Promise<void> {
-  if (!isAndroidNative()) return;
-  try {
-    await traceTimeout(cancelPurchaseTraceWatchdog(PURCHASE_TRACE_CALL_TIMEOUT_MS), PURCHASE_TRACE_CALL_TIMEOUT_MS);
-  } catch {}
-}
-
-async function initializeAndroidPurchaseTrace(): Promise<void> {
-  if (!isAndroidNative()) return;
-  await traceClear();
-  await traceMark('JS_PURCHASE_PRO_ENTERED');
-}
-
-async function runAndroidPurchaseTracePreflight(): Promise<void> {
-  if (!isAndroidNative()) return;
-
-  await traceMark('JS_BEFORE_BILLING_PROBE');
-  try {
-    const probe = await traceProbeBilling();
-    await traceMark(
-      probe ? 'JS_BILLING_PROBE_COMPLETED' : 'JS_BILLING_PROBE_FAILED',
-      probe ? `responseCode=${probe.responseCode};productFound=${probe.productFound === true}` : undefined,
-    );
-  } catch {
-    await traceMark('JS_BILLING_PROBE_FAILED');
-  }
-}
-
-async function runTracedRevenueCatPurchase<T>(purchase: () => Promise<T>): Promise<T> {
-  const shouldTrace = isAndroidNative();
-
-  if (shouldTrace) {
-    await traceArmWatchdog();
-    await traceMark('JS_PURCHASE_CALL');
-  }
-
-  try {
-    const result = await purchase();
-    if (shouldTrace) {
-      await traceMark('JS_PURCHASE_RESOLVED');
-      await traceCancelWatchdog();
-    }
-    return result;
-  } catch (error) {
-    if (shouldTrace) {
-      await traceMark('JS_PURCHASE_REJECTED');
-      await traceCancelWatchdog();
-    }
-    throw error;
-  }
 }
 
 async function purchaseWithStoreOpeningWatchdog<T>(startPurchase: () => Promise<T>): Promise<T> {
@@ -712,7 +598,6 @@ export async function purchasePro(): Promise<IAPResult> {
   _revenueCatHint = 'NONE';
   setPurchasePhase('IDLE');
   diagLog('purchasePro: started');
-  await initializeAndroidPurchaseTrace();
 
   if (!isNative()) {
     diagLog('purchasePro: not native');
@@ -722,17 +607,13 @@ export async function purchasePro(): Promise<IAPResult> {
   if (!_initialized) {
     diagLog('purchasePro: SDK not initialised — attempting init...');
     try {
-      await traceMark('JS_BEFORE_INIT_IAP');
       await withTimeout(initIAP(), INIT_TIMEOUT_MS, 'initIAP (from purchasePro)');
-      await traceMark('JS_AFTER_INIT_IAP');
     } catch (err) {
-      await traceMark('JS_INIT_IAP_FAILED');
       const msg = err instanceof Error ? err.message : 'Purchase system init failed.';
       diagError('purchasePro: init failed:', msg);
       return { success: false, cancelled: false, message: msg };
     }
     if (!_initialized) {
-      await traceMark('JS_INIT_IAP_FAILED');
       diagError('purchasePro: SDK still not initialised after initIAP call');
       return { success: false, cancelled: false, message: 'Purchase system is not ready. Please try again later.' };
     }
@@ -759,24 +640,19 @@ export async function purchasePro(): Promise<IAPResult> {
 async function corePurchaseFlow(): Promise<IAPResult> {
   let Purchases: ReturnType<typeof getPurchases>;
   try {
-    await traceMark('JS_BEFORE_GET_PURCHASES');
     Purchases = getPurchases();
-    await traceMark('JS_AFTER_GET_PURCHASES');
   } catch (err) {
-    await traceMark('JS_GET_PURCHASES_FAILED');
     throw err;
   }
 
   setPurchasePhase('BILLING_CHECK');
   diagLog('corePurchaseFlow: checking billing availability...');
   try {
-    await traceMark('JS_BEFORE_CAN_MAKE_PAYMENTS');
     const billing = await withTimeout(
       Purchases.canMakePayments(),
       INIT_TIMEOUT_MS,
       'canMakePayments',
     );
-    await traceMark('JS_AFTER_CAN_MAKE_PAYMENTS', `canMakePayments=${billing.canMakePayments === true}`);
     if (!billing.canMakePayments) {
       return {
         success: false,
@@ -785,7 +661,6 @@ async function corePurchaseFlow(): Promise<IAPResult> {
       };
     }
   } catch (err) {
-    await traceMark('JS_CAN_MAKE_PAYMENTS_FAILED');
     const message = err instanceof Error ? err.message : 'Unable to check Google Play billing.';
     diagError('corePurchaseFlow: billing preflight failed:', message);
     return { success: false, cancelled: false, message };
@@ -795,13 +670,8 @@ async function corePurchaseFlow(): Promise<IAPResult> {
   diagLog('corePurchaseFlow: fetching offerings (with timeout)...');
   let offerings;
   try {
-    await traceMark('JS_BEFORE_GET_OFFERINGS');
     offerings = await withTimeout(Purchases.getOfferings(), PURCHASE_TIMEOUT_MS, 'getOfferings');
-    const currentOffering = offerings.current !== null && offerings.current !== undefined;
-    const packageCount = offerings.current?.availablePackages?.length ?? 0;
-    await traceMark('JS_AFTER_GET_OFFERINGS', `currentOffering=${currentOffering};packageCount=${packageCount}`);
   } catch (err) {
-    await traceMark('JS_GET_OFFERINGS_FAILED');
     const msg = err instanceof Error ? err.message : 'Failed to fetch offerings.';
     diagError('corePurchaseFlow: getOfferings failed:', msg);
     return { success: false, cancelled: false, message: msg };
@@ -809,7 +679,6 @@ async function corePurchaseFlow(): Promise<IAPResult> {
   const current = offerings.current;
 
   if (!current) {
-    await traceMark('JS_CURRENT_OFFERING_MISSING');
     diagError('corePurchaseFlow: no current offering found');
     diagLog('corePurchaseFlow: offering identifiers:', Object.keys(offerings.all));
     return { success: false, cancelled: false, message: 'No offerings available. Please try again later.' };
@@ -840,16 +709,10 @@ async function corePurchaseFlow(): Promise<IAPResult> {
       }
     }
     if (!purchasePackageObj) {
-      await traceMark('JS_PACKAGE_NOT_FOUND');
       diagError('corePurchaseFlow: lifetime package not found');
       return { success: false, cancelled: false, message: 'Lifetime package not found in store. Check RevenueCat dashboard.' };
     }
   }
-
-  await traceMark(
-    'JS_PACKAGE_SELECTED',
-    `packageIdentifier=${purchasePackageObj.identifier};productIdentifier=${purchasePackageObj.product.identifier}`,
-  );
 
   if (purchasePackageObj.product.identifier !== PRO_PRODUCT_ID) {
     return {
@@ -861,7 +724,6 @@ async function corePurchaseFlow(): Promise<IAPResult> {
 
   _storePrice = purchasePackageObj.product.priceString ?? null;
   if (!_storePrice) {
-    await traceMark('JS_PRICE_MISSING');
     return {
       success: false,
       cancelled: false,
@@ -875,12 +737,11 @@ async function corePurchaseFlow(): Promise<IAPResult> {
   diagLog('corePurchaseFlow: selected product:', purchasePackageObj.product.identifier);
 
   diagLog('corePurchaseFlow: launching purchase sheet...');
-  await runAndroidPurchaseTracePreflight();
   // The selected item came from RevenueCat Offerings, so purchase the
   // PurchasesPackage itself on every platform. RevenueCat documents
   // purchaseStoreProduct for products fetched directly with getProducts().
   const result = await purchaseWithStoreOpeningWatchdog(() =>
-    runTracedRevenueCatPurchase(() => Purchases.purchasePackage({ aPackage: purchasePackageObj })),
+    Purchases.purchasePackage({ aPackage: purchasePackageObj }),
   );
 
   const hasEntitlement = result.customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;

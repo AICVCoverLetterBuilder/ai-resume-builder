@@ -60,10 +60,6 @@ describe('canonical Pro entitlement state', () => {
     expect(localStorage.getItem('cvpro-pro-token')).toBe('purchase-token');
     expect(latestApp?.getProToken()).toBe('purchase-token');
     expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'purchase-token' });
-    expect(latestApp?.proDiagnostics.aiGateStatus).toBe('ready');
-    expect(latestApp?.proDiagnostics.aiGateTokenPresent).toBe(true);
-    expect(latestApp?.proDiagnostics.aiGateIsPro).toBe(true);
-    expect(latestApp?.proDiagnostics.aiGateBlockingReason).toBe('none');
   });
 
   test('fresh install starts without a token or Pro state', () => {
@@ -88,10 +84,9 @@ describe('canonical Pro entitlement state', () => {
     expect(latestApp?.getAiGate()).toEqual({ status: 'free' });
     expect(localStorage.getItem('cvpro-plan')).toBeNull();
     expect(localStorage.getItem('cvpro-pro-token')).toBeNull();
-    expect(latestApp?.proDiagnostics.tokenSyncLastResult).toBe('failed');
   });
 
-  test('diagnostics evidence with active Pro and token produces an AI-ready gate', async () => {
+  test('restore activation with active Pro and token produces an AI-ready gate', async () => {
     renderProvider();
 
     await act(async () => {
@@ -104,14 +99,10 @@ describe('canonical Pro entitlement state', () => {
     });
 
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
-    expect(latestApp?.proDiagnostics.clientIsPro).toBe(true);
-    expect(latestApp?.proDiagnostics.storedTokenPresent).toBe(true);
-    expect(latestApp?.proDiagnostics.memoryTokenPresent).toBe(true);
-    expect(latestApp?.proDiagnostics.tokenSyncLastResult).toBe('success');
-    expect(latestApp?.proDiagnostics.restoreEntitlementResult).toBe('active');
+    expect(localStorage.getItem('cvpro-plan')).toBe('pro');
+    expect(localStorage.getItem('cvpro-pro-token')).toBe('synced-token');
+    expect(latestApp?.getProToken()).toBe('synced-token');
     expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'synced-token' });
-    expect(latestApp?.proDiagnostics.aiGateStatus).toBe('ready');
-    expect(latestApp?.proDiagnostics.aiGateBlockingReason).toBe('none');
   });
 
   test('old null-token closures read a token added after initial render', async () => {
@@ -146,10 +137,7 @@ describe('canonical Pro entitlement state', () => {
     });
 
     await waitFor(() => expect(latestApp?.isPro).toBe(true));
-    expect(latestApp?.proDiagnostics.tokenSyncLastResult).toBe('failed');
     expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'valid-token' });
-    expect(latestApp?.proDiagnostics.aiGateStatus).toBe('ready');
-    expect(latestApp?.proDiagnostics.aiGateBlockingReason).toBe('none');
   });
 
   test('startup active entitlement refreshes a missing token into canonical state', async () => {
@@ -166,8 +154,6 @@ describe('canonical Pro entitlement state', () => {
     expect(localStorage.getItem('cvpro-plan')).toBe('pro');
     expect(latestApp?.getProToken()).toBe('startup-token');
     expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'startup-token' });
-    expect(latestApp?.proDiagnostics.startupEntitlementResult).toBe('active');
-    expect(latestApp?.proDiagnostics.tokenSyncLastResult).toBe('success');
   });
 
   test('startup inactive entitlement clears Pro state and token', async () => {
@@ -181,7 +167,7 @@ describe('canonical Pro entitlement state', () => {
 
     renderProvider();
 
-    await waitFor(() => expect(latestApp?.proDiagnostics.startupEntitlementResult).toBe('inactive'));
+    await waitFor(() => expect(latestApp?.isPro).toBe(false));
     expect(latestApp?.isPro).toBe(false);
     expect(latestApp?.getAiGate()).toEqual({ status: 'free' });
     expect(localStorage.getItem('cvpro-plan')).toBeNull();
@@ -197,7 +183,6 @@ describe('canonical Pro entitlement state', () => {
     expect(latestApp?.isPro).toBe(true);
     expect(latestApp?.getProToken()).toBe('persisted-token');
     expect(latestApp?.getAiGate()).toEqual({ status: 'ready', token: 'persisted-token' });
-    expect(latestApp?.proDiagnostics.memoryTokenPresent).toBe(true);
   });
 
   test('confirmed Pro users bypass Free counters without incrementing or resetting them', async () => {
