@@ -4,25 +4,77 @@ import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Check, X, Shield, ArrowRight, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
+import { Check, X, Shield, ArrowRight, ChevronDown, ChevronUp, RotateCcw, Copy, Trash2 } from 'lucide-react';
 import { useI18n } from '@/lib/i18n/context';
 import { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { useIAP } from '@/lib/iap';
+import {
+  clearPurchaseTrace,
+  getPurchaseTrace,
+  runPurchaseTraceBridgeSelfTest,
+  type PurchaseTraceBridgeSelfTestResult,
+  type PurchaseTraceSnapshot,
+} from '@/lib/purchase-trace';
 import { toast } from 'sonner';
+import { Capacitor } from '@capacitor/core';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 18 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: 'easeOut' as const } },
 };
 const stagger = { visible: { transition: { staggerChildren: 0.09 } } };
+const TRACE_READ_TIMEOUT_MS = 1_000;
+const BRIDGE_SELF_TEST_TIMEOUT_MS = 2_000;
+
+function isAndroidNativeApp(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    Capacitor.isNativePlatform() &&
+    Capacitor.getPlatform() === 'android'
+  );
+}
+
+function formatTraceTime(timestamp?: number): string {
+  if (!timestamp) return 'Unknown time';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return 'Unknown time';
+  return date.toLocaleString();
+}
+
+function sanitizeTraceDetail(detail?: string): string {
+  if (!detail) return '';
+  return detail
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
+    .replace(/\b(api[_-]?key|app[_-]?user[_-]?id|purchase[_-]?token|token|email)\s*[:=]\s*[^,\s}]+/gi, '$1=[redacted]')
+    .replace(/\b[A-Za-z0-9_-]{28,}\b/g, '[redacted]')
+    .slice(0, 140);
+}
+
+function traceToText(trace: PurchaseTraceSnapshot | null): string {
+  if (!trace) return 'PurchaseTrace unavailable';
+  const lines = [`last phase: ${trace.lastPhase || 'None'}`];
+  for (const event of trace.events) {
+    const responseCode = typeof event.responseCode === 'number' ? ` responseCode=${event.responseCode}` : '';
+    const detail = sanitizeTraceDetail(event.detail);
+    lines.push(`${formatTraceTime(event.timestamp)} ${event.phase}${responseCode}${detail ? ` detail=${detail}` : ''}`);
+  }
+  return lines.join('\n');
+}
 
 export default function PricingPage() {
   const { t } = useI18n();
-  const { isPro, setIsPro } = useApp();
+  const { isPro, setIsPro, proDiagnostics } = useApp();
   const { purchase, restore, purchasing, isNativeApp } = useIAP();
   const [restoring, setRestoring] = useState(false);
   const [showComingSoon, setShowComingSoon] = useState(false);
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [traceSnapshot, setTraceSnapshot] = useState<PurchaseTraceSnapshot | null>(null);
+  const [traceError, setTraceError] = useState('');
+  const [bridgeSelfTestLoading, setBridgeSelfTestLoading] = useState(false);
+  const [bridgeSelfTestResult, setBridgeSelfTestResult] = useState<PurchaseTraceBridgeSelfTestResult | null>(null);
+  const showPurchaseDiagnostics = isAndroidNativeApp();
 
   // ── Purchase handler (native IAP / web fallback) ──────────────────────────
   const [localPurchasing, setLocalPurchasing] = useState(false);
@@ -32,11 +84,33 @@ export default function PricingPage() {
     try {
       const result = await purchase();
       if (result.success && result.isPro) {
-        setIsPro(true);
-        toast.success(t.pricing.proActive);
+        if (result.token) {
+          setIsPro(true, result.token, {
+            source: 'purchase',
+            entitlementResult: 'active',
+            tokenSyncLastResult: 'success',
+          });
+          toast.success(t.pricing.proActive);
+        } else {
+          setIsPro(false, null, {
+            source: 'purchase',
+            entitlementResult: 'active',
+            tokenSyncLastResult: 'failed',
+            tokenSyncLastError: 'Signed Pro authorization token was not returned.',
+          });
+          toast.error(t.common.proAuthorizationUnavailable);
+        }
       } else if (result.success && !result.isPro) {
         toast.error('Server verification failed. If charged, contact support to restore your purchase.');
       } else if (!result.success) {
+        if (result.entitlementActive) {
+          setIsPro(false, null, {
+            source: 'purchase',
+            entitlementResult: 'active',
+            tokenSyncLastResult: 'failed',
+            tokenSyncLastError: result.message,
+          });
+        }
         if (!result.cancelled) {
           toast.error(result.message);
         }
@@ -52,17 +126,107 @@ export default function PricingPage() {
     try {
       const result = await restore();
       if (result.success && result.isPro) {
-        setIsPro(true);
-        toast.success(t.pricing.proActive);
+        if (result.token) {
+          setIsPro(true, result.token, {
+            source: 'restore',
+            entitlementResult: 'active',
+            tokenSyncLastResult: 'success',
+          });
+          toast.success(t.pricing.proActive);
+        } else {
+          setIsPro(false, null, {
+            source: 'restore',
+            entitlementResult: 'active',
+            tokenSyncLastResult: 'failed',
+            tokenSyncLastError: 'Signed Pro authorization token was not returned.',
+          });
+          toast.error(t.common.proAuthorizationUnavailable);
+        }
       } else if (result.success && !result.isPro) {
+        setIsPro(false, null, {
+          source: 'restore',
+          entitlementResult: 'inactive',
+          tokenSyncLastResult: 'not-run',
+        });
         toast.error(
           'No previous purchase found. If you believe this is an error, contact help.cvappai@gmail.com',
         );
       } else if (!result.success) {
+        setIsPro(false, null, {
+          source: 'restore',
+          entitlementResult: result.entitlementActive ? 'active' : 'failed',
+          tokenSyncLastResult: result.entitlementActive ? 'failed' : 'not-run',
+          tokenSyncLastError: result.message,
+        });
         toast.error(result.message);
       }
     } finally {
       setRestoring(false);
+    }
+  };
+
+  const loadPurchaseTrace = async () => {
+    setTraceLoading(true);
+    setTraceError('');
+    try {
+      const trace = await getPurchaseTrace(TRACE_READ_TIMEOUT_MS);
+      setTraceSnapshot(trace);
+      if (!trace) setTraceError('Trace unavailable or timed out.');
+    } catch {
+      setTraceSnapshot(null);
+      setTraceError('Trace read failed.');
+    } finally {
+      setTraceLoading(false);
+    }
+  };
+
+  const openPurchaseDiagnostics = async () => {
+    setTraceOpen(true);
+    setBridgeSelfTestResult(null);
+    await loadPurchaseTrace();
+  };
+
+  const runBridgeSelfTest = async () => {
+    setBridgeSelfTestLoading(true);
+    try {
+      const result = await runPurchaseTraceBridgeSelfTest(BRIDGE_SELF_TEST_TIMEOUT_MS);
+      setBridgeSelfTestResult(result);
+      if (result.trace) setTraceSnapshot(result.trace);
+    } catch (error) {
+      setBridgeSelfTestResult({
+        nativePlatform: false,
+        platform: 'unknown',
+        pluginAvailable: false,
+        ping: 'failed',
+        mark: 'failed',
+        getTrace: 'failed',
+        errorStage: 'ping',
+        errorMessage: sanitizeTraceDetail(error instanceof Error ? error.message : String(error)) || 'Bridge self-test failed.',
+      });
+    } finally {
+      setBridgeSelfTestLoading(false);
+    }
+  };
+
+  const copyPurchaseTrace = async () => {
+    try {
+      await navigator.clipboard?.writeText(traceToText(traceSnapshot));
+      toast.success('Purchase trace copied.');
+    } catch {
+      toast.error('Could not copy purchase trace.');
+    }
+  };
+
+  const clearPurchaseDiagnostics = async () => {
+    setTraceLoading(true);
+    setTraceError('');
+    try {
+      await clearPurchaseTrace(TRACE_READ_TIMEOUT_MS);
+      setTraceSnapshot({ lastPhase: '', lastAt: 0, events: [] });
+    } catch {
+      setTraceError('Trace clear failed.');
+    } finally {
+      setTraceLoading(false);
     }
   };
 
@@ -193,6 +357,15 @@ export default function PricingPage() {
               <RotateCcw className={`h-4 w-4 ${restoring ? 'animate-spin' : ''}`} />
               {isPro ? t.pricing.proActive : restoring ? t.pricing.restoringText : t.pricing.restoreButton}
             </button>
+            {showPurchaseDiagnostics && (
+              <button
+                type="button"
+                onClick={openPurchaseDiagnostics}
+                className="inline-flex items-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                Purchase diagnostics (test build)
+              </button>
+            )}
             <p className="text-xs text-muted-foreground">
               {t.pricing.needHelp} <a href="mailto:help.cvappai@gmail.com" className="text-primary hover:underline">help.cvappai@gmail.com</a>
             </p>
@@ -317,6 +490,179 @@ export default function PricingPage() {
                 >
                   {t.common?.cancel || 'Close'}
                 </button>
+              </motion.div>
+            </div>
+          </>
+        )}
+        {traceOpen && (
+          <>
+            <div
+              className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+              onClick={() => setTraceOpen(false)}
+            />
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.97, y: 16 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' as const }}
+                className="relative flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card p-5 shadow-2xl"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="mb-4 flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-bold leading-tight text-foreground">
+                      Purchase diagnostics (test build)
+                    </h2>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Read-only persisted PurchaseTrace snapshot.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTraceOpen(false)}
+                    className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    aria-label="Close purchase diagnostics"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="mb-3 rounded-lg border border-border bg-muted/10 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase text-muted-foreground">Bridge self-test</p>
+                    <button
+                      type="button"
+                      onClick={runBridgeSelfTest}
+                      disabled={bridgeSelfTestLoading}
+                      className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+                    >
+                      <RotateCcw className={`h-3.5 w-3.5 ${bridgeSelfTestLoading ? 'animate-spin' : ''}`} />
+                      Run bridge self-test
+                    </button>
+                  </div>
+                  {bridgeSelfTestResult && (
+                    <div className="mt-3 grid gap-1.5 text-xs text-muted-foreground sm:grid-cols-2">
+                      <p>Native platform: {String(bridgeSelfTestResult.nativePlatform)}</p>
+                      <p>Platform: {bridgeSelfTestResult.platform}</p>
+                      <p>Plugin available: {String(bridgeSelfTestResult.pluginAvailable)}</p>
+                      <p>Ping: {bridgeSelfTestResult.ping}</p>
+                      <p>Mark: {bridgeSelfTestResult.mark}</p>
+                      <p>Get trace: {bridgeSelfTestResult.getTrace}</p>
+                      {bridgeSelfTestResult.lastPhase && (
+                        <p>Self-test last phase: {bridgeSelfTestResult.lastPhase}</p>
+                      )}
+                      {typeof bridgeSelfTestResult.eventCount === 'number' && (
+                        <p>Self-test event count: {bridgeSelfTestResult.eventCount}</p>
+                      )}
+                      {bridgeSelfTestResult.errorStage && (
+                        <p>Failed stage: {bridgeSelfTestResult.errorStage}</p>
+                      )}
+                      {bridgeSelfTestResult.errorMessage && (
+                        <p className="break-words sm:col-span-2">Error: {bridgeSelfTestResult.errorMessage}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="mb-3 rounded-lg border border-border bg-muted/10 p-3">
+                  <p className="text-xs font-semibold uppercase text-muted-foreground">Pro token state</p>
+                  <div className="mt-3 grid gap-1.5 text-xs text-muted-foreground sm:grid-cols-2">
+                    <p>clientIsPro: {String(proDiagnostics.clientIsPro)}</p>
+                    <p>storedTokenPresent: {String(proDiagnostics.storedTokenPresent)}</p>
+                    <p>memoryTokenPresent: {String(proDiagnostics.memoryTokenPresent)}</p>
+                    <p>tokenSyncLastResult: {proDiagnostics.tokenSyncLastResult}</p>
+                    <p>startupEntitlementResult: {proDiagnostics.startupEntitlementResult}</p>
+                    <p>restoreEntitlementResult: {proDiagnostics.restoreEntitlementResult}</p>
+                    <p>aiGateStatus: {proDiagnostics.aiGateStatus}</p>
+                    <p>aiGateTokenPresent: {String(proDiagnostics.aiGateTokenPresent)}</p>
+                    <p>aiGateIsPro: {String(proDiagnostics.aiGateIsPro)}</p>
+                    <p>aiGateBlockingReason: {proDiagnostics.aiGateBlockingReason}</p>
+                    {proDiagnostics.tokenSyncLastError && (
+                      <p className="break-words sm:col-span-2">
+                        tokenSyncLastError: {sanitizeTraceDetail(proDiagnostics.tokenSyncLastError)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {traceError && (
+                  <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {traceError}
+                  </div>
+                )}
+
+                <div className="mb-3 rounded-lg border border-border bg-muted/20 px-3 py-2">
+                  <p className="text-xs font-semibold uppercase text-muted-foreground">Last phase</p>
+                  <p className="mt-1 break-words text-sm text-foreground">{traceSnapshot?.lastPhase || 'None'}</p>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border">
+                  <div className="border-b border-border bg-muted/30 px-3 py-2 text-xs font-semibold uppercase text-muted-foreground">
+                    Events
+                  </div>
+                  {traceLoading ? (
+                    <div className="px-3 py-6 text-center text-sm text-muted-foreground">Loading trace...</div>
+                  ) : traceSnapshot?.events.length ? (
+                    <ol className="divide-y divide-border">
+                      {traceSnapshot.events.map((event, index) => (
+                        <li key={`${event.timestamp}-${event.phase}-${index}`} className="space-y-1 px-3 py-3 text-sm">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <span className="font-medium text-foreground">{event.phase}</span>
+                            <span className="text-xs text-muted-foreground">{formatTraceTime(event.timestamp)}</span>
+                            {typeof event.responseCode === 'number' && (
+                              <span className="rounded border border-border bg-background px-1.5 py-0.5 text-xs text-muted-foreground">
+                                responseCode {event.responseCode}
+                              </span>
+                            )}
+                          </div>
+                          {sanitizeTraceDetail(event.detail) && (
+                            <p className="break-words text-xs text-muted-foreground">
+                              {sanitizeTraceDetail(event.detail)}
+                            </p>
+                          )}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <div className="px-3 py-6 text-center text-sm text-muted-foreground">No trace events found.</div>
+                  )}
+                </div>
+
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={loadPurchaseTrace}
+                    disabled={traceLoading}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+                  >
+                    <RotateCcw className={`h-3.5 w-3.5 ${traceLoading ? 'animate-spin' : ''}`} />
+                    Refresh trace
+                  </button>
+                  <button
+                    type="button"
+                    onClick={copyPurchaseTrace}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-medium transition-colors hover:bg-accent"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    Copy trace
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearPurchaseDiagnostics}
+                    disabled={traceLoading}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Clear trace
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTraceOpen(false)}
+                    className="rounded-lg bg-foreground px-4 py-2 text-xs font-semibold text-background transition-opacity hover:opacity-85"
+                  >
+                    Close
+                  </button>
+                </div>
               </motion.div>
             </div>
           </>

@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import crypto from 'crypto';
 import { generateBulletsOffline, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
 import { DEFAULT_LOCALE, type Locale, resolveLocaleCandidate } from '@/lib/i18n/translations';
 import { sanitizeField, sanitizeText } from '@/lib/input-sanitizer';
 import { resolveCorsOrigin, buildCorsHeaders, handleOptions } from '@/lib/cors';
+import { verifyProToken } from '@/lib/pro-token';
 
 // ─── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -115,40 +115,6 @@ if (typeof setInterval !== 'undefined') {
       }
     }
   }, 30 * 60 * 1000);
-}
-
-/**
- * Verify that an HMAC-signed Pro token is valid.
- * Returns true if the token matches the expected signature and has not expired.
- */
-function verifyProToken(token: string | undefined | null): boolean {
-  if (!token) return false;
-  if (!PRO_SIGNING_KEY) return false; // no key configured → treat all as non-Pro
-
-  try {
-    const [payload, signature] = token.split('.');
-    if (!payload || !signature) return false;
-
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
-    const { exp, isPro } = decoded as { exp?: number; isPro?: boolean };
-
-    // Explicitly verify isPro is exactly true — do not grant access if missing,
-    // false, or malformed
-    if (isPro !== true) return false;
-
-    // Check expiration
-    if (exp && Date.now() >= exp) return false;
-
-    // Verify signature
-    const expectedSig = crypto
-      .createHmac('sha256', PRO_SIGNING_KEY)
-      .update(payload)
-      .digest('base64url');
-
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig));
-  } catch {
-    return false;
-  }
 }
 
 // ─── Input sanitizer ──────────────────────────────────────────────────────────
@@ -346,7 +312,7 @@ export async function POST(req: NextRequest) {
     const { action, proToken, freeUserId, ...params } = body;
 
     // ── Pro token verification ──────────────────────────────────────────────
-    const isPro = verifyProToken(proToken);
+    const isPro = (await verifyProToken(proToken)) !== null;
 
     // ── Free tier handling ────────────────────────────────────────────
     // Free users are allowed limited AI actions tracked server-side.
@@ -362,7 +328,7 @@ export async function POST(req: NextRequest) {
       const { allowed } = canUseFreeAction(_freeUserId!, resolvedAction);
       if (!allowed) {
         return jsonResponse(
-          { error: 'Pro subscription required for AI features.' },
+          { error: 'Pro access required for AI features.' },
           { status: 403 },
         );
       }

@@ -1,6 +1,9 @@
 /**
  * @vitest-environment jsdom
  */
+import fs from 'node:fs';
+import path from 'node:path';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 
 /**
@@ -14,8 +17,10 @@ import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 const mockPurchases = vi.hoisted(() => ({
   configure: vi.fn().mockResolvedValue(undefined),
   setLogLevel: vi.fn().mockResolvedValue(undefined),
+  setLogHandler: vi.fn().mockResolvedValue(undefined),
   canMakePayments: vi.fn().mockResolvedValue({ canMakePayments: true }),
   getOfferings: vi.fn(),
+  purchaseStoreProduct: vi.fn(),
   purchasePackage: vi.fn(),
   restorePurchases: vi.fn(),
   getCustomerInfo: vi.fn(),
@@ -23,13 +28,35 @@ const mockPurchases = vi.hoisted(() => ({
 
 const mockApp = vi.hoisted(() => ({
   addListener: vi.fn().mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) }),
+  getState: vi.fn().mockResolvedValue({ isActive: true }),
+}));
+
+const mockCapacitor = vi.hoisted(() => ({
+  isNativePlatform: vi.fn(() => true),
+  getPlatform: vi.fn(() => 'android'),
+}));
+
+const mockPurchaseTrace = vi.hoisted(() => ({
+  clearPurchaseTrace: vi.fn().mockResolvedValue(undefined),
+  markPurchaseTrace: vi.fn().mockResolvedValue(undefined),
+  probePurchaseBilling: vi.fn().mockResolvedValue({
+    connected: true,
+    responseCode: 0,
+    productFound: true,
+    productId: 'cv_pro_lifetime',
+    productType: 'inapp',
+  }),
+  armPurchaseTraceWatchdog: vi.fn().mockResolvedValue(undefined),
+  cancelPurchaseTraceWatchdog: vi.fn().mockResolvedValue(undefined),
+}));
+
+const mockRevenueCatModule = vi.hoisted((): { Purchases: unknown; LOG_LEVEL: { DEBUG: string } } => ({
+  Purchases: undefined,
+  LOG_LEVEL: { DEBUG: 'DEBUG' },
 }));
 
 vi.mock('@capacitor/core', () => ({
-  Capacitor: {
-    isNativePlatform: () => true,
-    getPlatform: () => 'android',
-  },
+  Capacitor: mockCapacitor,
 }));
 
 vi.mock('@capacitor/app', () => ({
@@ -37,10 +64,15 @@ vi.mock('@capacitor/app', () => ({
 }));
 
 vi.mock('@revenuecat/purchases-capacitor', () => ({
-  Purchases: mockPurchases,
-  LOG_LEVEL: { DEBUG: 'DEBUG' },
+  get Purchases() {
+    return mockRevenueCatModule.Purchases;
+  },
+  get LOG_LEVEL() {
+    return mockRevenueCatModule.LOG_LEVEL;
+  },
 }));
 
+vi.mock('../purchase-trace', () => mockPurchaseTrace);
 
 // --- Constants ------------------------------------------------------------------
 
@@ -135,7 +167,47 @@ function makeCustomerInfo(
   };
 }
 
+function traceCallIndex(phase: string): number {
+  const index = mockPurchaseTrace.markPurchaseTrace.mock.calls.findIndex(([markedPhase]) => markedPhase === phase);
+  if (index < 0) throw new Error(`Missing trace phase: ${phase}`);
+  return index;
+}
+
+function traceCallOrder(phase: string): number {
+  return mockPurchaseTrace.markPurchaseTrace.mock.invocationCallOrder[traceCallIndex(phase)];
+}
+
+function latestTracePhase(): string | undefined {
+  const calls = mockPurchaseTrace.markPurchaseTrace.mock.calls;
+  return calls[calls.length - 1]?.[0];
+}
+
+async function flushMicrotasks(times = 25): Promise<void> {
+  for (let i = 0; i < times; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+function makeThenablePurchasesProxy(thenAccess: ReturnType<typeof vi.fn>, thenCall: ReturnType<typeof vi.fn>) {
+  return new Proxy(mockPurchases, {
+    get(target, prop, receiver) {
+      if (prop === 'then') {
+        thenAccess();
+        return thenCall;
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
+
 function resetMockPurchases() {
+  mockCapacitor.isNativePlatform.mockReset();
+  mockCapacitor.isNativePlatform.mockReturnValue(true);
+  mockCapacitor.getPlatform.mockReset();
+  mockCapacitor.getPlatform.mockReturnValue('android');
+  mockRevenueCatModule.Purchases = mockPurchases;
+  mockRevenueCatModule.LOG_LEVEL = { DEBUG: 'DEBUG' };
+
   mockPurchases.configure.mockReset();
   mockPurchases.configure.mockResolvedValue(undefined);
   mockPurchases.setLogLevel.mockReset();
@@ -143,6 +215,11 @@ function resetMockPurchases() {
   mockPurchases.canMakePayments.mockReset();
   mockPurchases.canMakePayments.mockResolvedValue({ canMakePayments: true });
   mockPurchases.getOfferings.mockResolvedValue(makeOfferings());
+  mockPurchases.purchaseStoreProduct.mockReset();
+  mockPurchases.purchaseStoreProduct.mockResolvedValue({
+    customerInfo: makeCustomerInfo(),
+  });
+  mockPurchases.purchasePackage.mockReset();
   mockPurchases.purchasePackage.mockResolvedValue({
     customerInfo: makeCustomerInfo(),
   });
@@ -154,6 +231,25 @@ function resetMockPurchases() {
   });
   mockApp.addListener.mockReset();
   mockApp.addListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) });
+  mockApp.getState.mockReset();
+  mockApp.getState.mockResolvedValue({ isActive: true });
+
+  mockPurchaseTrace.clearPurchaseTrace.mockReset();
+  mockPurchaseTrace.clearPurchaseTrace.mockResolvedValue(undefined);
+  mockPurchaseTrace.markPurchaseTrace.mockReset();
+  mockPurchaseTrace.markPurchaseTrace.mockResolvedValue(undefined);
+  mockPurchaseTrace.probePurchaseBilling.mockReset();
+  mockPurchaseTrace.probePurchaseBilling.mockResolvedValue({
+    connected: true,
+    responseCode: 0,
+    productFound: true,
+    productId: PRO_PRODUCT_ID,
+    productType: 'inapp',
+  });
+  mockPurchaseTrace.armPurchaseTraceWatchdog.mockReset();
+  mockPurchaseTrace.armPurchaseTraceWatchdog.mockResolvedValue(undefined);
+  mockPurchaseTrace.cancelPurchaseTraceWatchdog.mockReset();
+  mockPurchaseTrace.cancelPurchaseTraceWatchdog.mockResolvedValue(undefined);
 }
 
 vi.stubEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY', 'test_mock_android_key_none_real');
@@ -161,10 +257,27 @@ vi.stubEnv('NEXT_PUBLIC_REVENUECAT_IOS_KEY', 'test_mock_ios_key_none_real');
 
 // --- Tests -----------------------------------------------------------------------
 
+describe('RevenueCat plugin acquisition', () => {
+  test('uses synchronous static Purchases acquisition instead of a runtime dynamic import in iap.ts', () => {
+    const source = fs.readFileSync(path.resolve('src/lib/iap.ts'), 'utf8');
+
+    expect(source).toContain("import { LOG_LEVEL, Purchases as RevenueCatPurchases } from '@revenuecat/purchases-capacitor';");
+    expect(source).toContain('function getPurchases() {');
+    expect(source).toContain('Purchases = getPurchases();');
+    expect(source).not.toContain("import('@revenuecat/purchases-capacitor')");
+    expect(source).not.toContain("await import('@revenuecat/purchases-capacitor')");
+    expect(source).not.toContain('async function getPurchases');
+    expect(source).not.toContain('await getPurchases()');
+    expect(source).not.toContain('Awaited<ReturnType<typeof getPurchases>>');
+    expect(source).not.toMatch(/Promise\.resolve\(\s*getPurchases\(/);
+  });
+});
+
 describe('in-app purchase flow', () => {
   beforeEach(async () => {
     vi.resetModules();
     resetMockPurchases();
+    localStorage.clear();
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -189,6 +302,68 @@ describe('in-app purchase flow', () => {
       });
       const result = await purchasePro();
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('platform guards', () => {
+    test('web purchase path does not call RevenueCat native methods', async () => {
+      mockCapacitor.isNativePlatform.mockReturnValue(false);
+      mockCapacitor.getPlatform.mockReturnValue('web');
+      const { checkProEntitlement, initIAP, purchasePro, refreshStorePrice, restorePro } = await import('../iap');
+
+      await initIAP();
+      await expect(refreshStorePrice()).resolves.toBeNull();
+      const purchaseResult = await purchasePro();
+      const restoreResult = await restorePro();
+      const hasPro = await checkProEntitlement();
+
+      expect(purchaseResult.success).toBe(false);
+      expect(purchaseResult.success === false && purchaseResult.message).toContain('Native purchases');
+      expect(restoreResult.success).toBe(true);
+      expect(hasPro).toBe(false);
+      expect(mockPurchases.configure).not.toHaveBeenCalled();
+      expect(mockPurchases.canMakePayments).not.toHaveBeenCalled();
+      expect(mockPurchases.getOfferings).not.toHaveBeenCalled();
+      expect(mockPurchases.purchasePackage).not.toHaveBeenCalled();
+      expect(mockPurchases.restorePurchases).not.toHaveBeenCalled();
+      expect(mockPurchases.getCustomerInfo).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Pro token synchronization', () => {
+    test('successful restore obtains and persists a Pro token', async () => {
+      const { initIAP, restorePro } = await import('../iap');
+      await initIAP();
+
+      const result = await restorePro();
+
+      expect(result.success).toBe(true);
+      expect(result.success && result.isPro).toBe(true);
+      expect(result.success && result.token).toBe('eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5fQ');
+      expect(localStorage.getItem('cvpro-pro-token')).toBe('eyJpc1BybyI6dHJ1ZSwiZXhwIjo5OTk5OTk5OTk5fQ');
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/verify-pro'),
+        expect.objectContaining({
+          method: 'POST',
+        }),
+      );
+    });
+
+    test('active entitlement with failed token sync returns recoverable auth failure', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: () => Promise.resolve({ error: 'Temporary verification failure' }),
+      });
+      const { initIAP, restorePro } = await import('../iap');
+      await initIAP();
+
+      const result = await restorePro();
+
+      expect(result.success).toBe(false);
+      expect(result.success === false && result.entitlementActive).toBe(true);
+      expect(result.success === false && result.message).toContain('Temporary verification failure');
+      expect(localStorage.getItem('cvpro-pro-token')).toBeNull();
     });
   });
 
@@ -294,9 +469,307 @@ describe('in-app purchase flow', () => {
       await purchasePro();
       expect(mockPurchases.purchasePackage).toHaveBeenCalledWith(
         expect.objectContaining({
-          aPackage: expect.objectContaining({ identifier: PACKAGE_IDENTIFIER }),
+          aPackage: expect.objectContaining({
+            identifier: PACKAGE_IDENTIFIER,
+            offeringIdentifier: OFFERING_IDENTIFIER,
+            product: expect.objectContaining({ identifier: PRO_PRODUCT_ID }),
+          }),
         }),
       );
+    });
+
+    test('runs diagnostic probe and arms native watchdog before purchasePackage', async () => {
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+      await purchasePro();
+
+      expect(mockPurchaseTrace.clearPurchaseTrace).toHaveBeenCalledTimes(1);
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_PURCHASE_PRO_ENTERED', undefined, expect.any(Number));
+      expect(mockPurchaseTrace.markPurchaseTrace).not.toHaveBeenCalledWith('JS_PURCHASE_FLOW_STARTED', undefined, expect.any(Number));
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_BEFORE_BILLING_PROBE', undefined, expect.any(Number));
+      expect(mockPurchaseTrace.probePurchaseBilling).toHaveBeenCalledWith(PRO_PRODUCT_ID, expect.any(Number));
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith(
+        'JS_BILLING_PROBE_COMPLETED',
+        expect.stringContaining('productFound=true'),
+        expect.any(Number),
+      );
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_PURCHASE_CALL', undefined, expect.any(Number));
+      expect(mockPurchaseTrace.armPurchaseTraceWatchdog).toHaveBeenCalledWith(20_000, expect.any(Number));
+
+      expect(mockPurchaseTrace.probePurchaseBilling.mock.invocationCallOrder[0]).toBeLessThan(
+        mockPurchases.purchasePackage.mock.invocationCallOrder[0],
+      );
+      expect(traceCallOrder('JS_PACKAGE_SELECTED')).toBeLessThan(
+        mockPurchaseTrace.probePurchaseBilling.mock.invocationCallOrder[0],
+      );
+      expect(traceCallOrder('JS_PURCHASE_CALL')).toBeLessThan(
+        mockPurchases.purchasePackage.mock.invocationCallOrder[0],
+      );
+      expect(mockPurchases.purchasePackage.mock.invocationCallOrder[0]).toBeLessThan(
+        traceCallOrder('JS_PURCHASE_RESOLVED'),
+      );
+      expect(mockPurchaseTrace.armPurchaseTraceWatchdog.mock.invocationCallOrder[0]).toBeLessThan(
+        mockPurchases.purchasePackage.mock.invocationCallOrder[0],
+      );
+    });
+
+    test('diagnostic rejection does not prevent purchasePackage', async () => {
+      mockPurchaseTrace.probePurchaseBilling.mockRejectedValueOnce(new Error('probe failed'));
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+      const result = await purchasePro();
+
+      expect(result.success).toBe(true);
+      expect(mockPurchases.purchasePackage).toHaveBeenCalledTimes(1);
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_BILLING_PROBE_FAILED', undefined, expect.any(Number));
+    });
+
+    test('diagnostic timeout fallback does not prevent purchasePackage', async () => {
+      mockPurchaseTrace.probePurchaseBilling.mockResolvedValueOnce(null);
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+      const result = await purchasePro();
+
+      expect(result.success).toBe(true);
+      expect(mockPurchases.purchasePackage).toHaveBeenCalledTimes(1);
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_BILLING_PROBE_FAILED', undefined, expect.any(Number));
+    });
+
+    test('successful purchase records resolution and cancels native watchdog', async () => {
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+      const result = await purchasePro();
+
+      expect(result.success).toBe(true);
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_PURCHASE_RESOLVED', undefined, expect.any(Number));
+      expect(mockPurchaseTrace.cancelPurchaseTraceWatchdog).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejected purchase records rejection and cancels native watchdog', async () => {
+      mockPurchases.purchasePackage.mockRejectedValueOnce(new Error('Billing error'));
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+      const result = await purchasePro();
+
+      expect(result.success).toBe(false);
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_PURCHASE_REJECTED', undefined, expect.any(Number));
+      expect(mockPurchaseTrace.cancelPurchaseTraceWatchdog).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('purchase trace boundaries', () => {
+    test('does not assimilate a thenable Purchases plugin proxy during acquisition', async () => {
+      const thenAccess = vi.fn();
+      const thenCall = vi.fn(() => new Promise(() => {}));
+      mockRevenueCatModule.Purchases = makeThenablePurchasesProxy(thenAccess, thenCall);
+
+      const { purchasePro } = await import('../iap');
+      const result = await purchasePro();
+
+      expect(result.success).toBe(true);
+      expect(thenAccess).not.toHaveBeenCalled();
+      expect(thenCall).not.toHaveBeenCalled();
+      expect(traceCallOrder('JS_BEFORE_GET_PURCHASES')).toBeLessThan(traceCallOrder('JS_AFTER_GET_PURCHASES'));
+      expect(traceCallOrder('JS_AFTER_GET_PURCHASES')).toBeLessThan(traceCallOrder('JS_BEFORE_CAN_MAKE_PAYMENTS'));
+      expect(mockPurchases.canMakePayments).toHaveBeenCalledTimes(1);
+      expect(mockPurchases.purchasePackage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          aPackage: expect.objectContaining({
+            identifier: PACKAGE_IDENTIFIER,
+            offeringIdentifier: OFFERING_IDENTIFIER,
+            product: expect.objectContaining({ identifier: PRO_PRODUCT_ID }),
+          }),
+        }),
+      );
+    });
+
+    test('clears and marks purchase entry before initIAP or core purchase flow', async () => {
+      const { purchasePro } = await import('../iap');
+      const result = await purchasePro();
+
+      expect(result.success).toBe(true);
+      expect(mockPurchaseTrace.clearPurchaseTrace).toHaveBeenCalledTimes(1);
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_PURCHASE_PRO_ENTERED', undefined, expect.any(Number));
+      expect(mockPurchaseTrace.clearPurchaseTrace.mock.invocationCallOrder[0]).toBeLessThan(
+        traceCallOrder('JS_PURCHASE_PRO_ENTERED'),
+      );
+      expect(traceCallOrder('JS_PURCHASE_PRO_ENTERED')).toBeLessThan(traceCallOrder('JS_BEFORE_INIT_IAP'));
+      expect(traceCallOrder('JS_BEFORE_INIT_IAP')).toBeLessThan(mockPurchases.configure.mock.invocationCallOrder[0]);
+      expect(traceCallOrder('JS_AFTER_INIT_IAP')).toBeLessThan(traceCallOrder('JS_BEFORE_GET_PURCHASES'));
+      expect(traceCallOrder('JS_BEFORE_GET_PURCHASES')).toBeLessThan(
+        mockPurchases.canMakePayments.mock.invocationCallOrder[0],
+      );
+    });
+
+    test('preflight no longer clears earlier trace events', async () => {
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+      await purchasePro();
+
+      expect(mockPurchaseTrace.clearPurchaseTrace).toHaveBeenCalledTimes(1);
+      expect(traceCallOrder('JS_PURCHASE_PRO_ENTERED')).toBeLessThan(traceCallOrder('JS_BEFORE_BILLING_PROBE'));
+      expect(traceCallOrder('JS_BEFORE_BILLING_PROBE')).toBeLessThan(
+        mockPurchaseTrace.probePurchaseBilling.mock.invocationCallOrder[0],
+      );
+    });
+
+    test('records BEFORE and AFTER markers around RevenueCat pre-purchase boundaries', async () => {
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+      await purchasePro();
+
+      expect(traceCallOrder('JS_BEFORE_GET_PURCHASES')).toBeLessThan(
+        traceCallOrder('JS_AFTER_GET_PURCHASES'),
+      );
+      expect(traceCallOrder('JS_AFTER_GET_PURCHASES')).toBeLessThan(
+        traceCallOrder('JS_BEFORE_CAN_MAKE_PAYMENTS'),
+      );
+      expect(traceCallOrder('JS_BEFORE_GET_PURCHASES')).toBeLessThan(
+        mockPurchases.canMakePayments.mock.invocationCallOrder[0],
+      );
+      expect(traceCallOrder('JS_BEFORE_CAN_MAKE_PAYMENTS')).toBeLessThan(
+        mockPurchases.canMakePayments.mock.invocationCallOrder[0],
+      );
+      expect(mockPurchases.canMakePayments.mock.invocationCallOrder[0]).toBeLessThan(
+        traceCallOrder('JS_AFTER_CAN_MAKE_PAYMENTS'),
+      );
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith(
+        'JS_AFTER_CAN_MAKE_PAYMENTS',
+        'canMakePayments=true',
+        expect.any(Number),
+      );
+      expect(traceCallOrder('JS_BEFORE_GET_OFFERINGS')).toBeLessThan(
+        mockPurchases.getOfferings.mock.invocationCallOrder[0],
+      );
+      expect(mockPurchases.getOfferings.mock.invocationCallOrder[0]).toBeLessThan(
+        traceCallOrder('JS_AFTER_GET_OFFERINGS'),
+      );
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith(
+        'JS_AFTER_GET_OFFERINGS',
+        'currentOffering=true;packageCount=1',
+        expect.any(Number),
+      );
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith(
+        'JS_PACKAGE_SELECTED',
+        `packageIdentifier=${PACKAGE_IDENTIFIER};productIdentifier=${PRO_PRODUCT_ID}`,
+        expect.any(Number),
+      );
+      expect(traceCallOrder('JS_PACKAGE_SELECTED')).toBeLessThan(
+        mockPurchaseTrace.probePurchaseBilling.mock.invocationCallOrder[0],
+      );
+      expect(traceCallOrder('JS_PURCHASE_CALL')).toBeLessThan(
+        mockPurchases.purchasePackage.mock.invocationCallOrder[0],
+      );
+    });
+
+    test('failure and early-return paths record matching trace phases', async () => {
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+
+      mockPurchases.canMakePayments.mockResolvedValueOnce({ canMakePayments: false });
+      await purchasePro();
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith(
+        'JS_AFTER_CAN_MAKE_PAYMENTS',
+        'canMakePayments=false',
+        expect.any(Number),
+      );
+
+      resetMockPurchases();
+      await initIAP();
+      mockPurchases.canMakePayments.mockRejectedValueOnce(new Error('billing check failed'));
+      await purchasePro();
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_CAN_MAKE_PAYMENTS_FAILED', undefined, expect.any(Number));
+
+      resetMockPurchases();
+      await initIAP();
+      mockPurchases.getOfferings.mockRejectedValueOnce(new Error('offerings failed'));
+      await purchasePro();
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_GET_OFFERINGS_FAILED', undefined, expect.any(Number));
+
+      resetMockPurchases();
+      await initIAP();
+      mockPurchases.getOfferings.mockResolvedValueOnce(makeOfferings(null, {}));
+      await purchasePro();
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_CURRENT_OFFERING_MISSING', undefined, expect.any(Number));
+
+      resetMockPurchases();
+      await initIAP();
+      mockPurchases.getOfferings.mockResolvedValueOnce(makeOfferings(makeOffering([])));
+      await purchasePro();
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_PACKAGE_NOT_FOUND', undefined, expect.any(Number));
+
+      resetMockPurchases();
+      await initIAP();
+      mockPurchases.getOfferings.mockResolvedValueOnce(makeOfferings(makeOffering([makePackage({ product: makeProduct({ priceString: '' }) })])));
+      await purchasePro();
+      expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_PRICE_MISSING', undefined, expect.any(Number));
+    });
+
+    test('a never-resolving canMakePayments leaves BEFORE_CAN_MAKE_PAYMENTS as the latest persisted stage', async () => {
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+
+      vi.useFakeTimers();
+      mockPurchases.canMakePayments.mockReturnValueOnce(new Promise(() => {}));
+      const resultPromise = purchasePro();
+      await flushMicrotasks();
+
+      expect(mockPurchases.canMakePayments).toHaveBeenCalledTimes(1);
+      expect(traceCallOrder('JS_BEFORE_GET_PURCHASES')).toBeLessThan(traceCallOrder('JS_AFTER_GET_PURCHASES'));
+      expect(traceCallOrder('JS_AFTER_GET_PURCHASES')).toBeLessThan(traceCallOrder('JS_BEFORE_CAN_MAKE_PAYMENTS'));
+      expect(latestTracePhase()).toBe('JS_BEFORE_CAN_MAKE_PAYMENTS');
+
+      await vi.advanceTimersByTimeAsync(15_001);
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      vi.useRealTimers();
+    });
+
+    test('a never-resolving getOfferings leaves BEFORE_GET_OFFERINGS as the latest persisted stage', async () => {
+      const { initIAP, purchasePro } = await import('../iap');
+      await initIAP();
+
+      vi.useFakeTimers();
+      mockPurchases.getOfferings.mockReturnValueOnce(new Promise(() => {}));
+      const resultPromise = purchasePro();
+      await flushMicrotasks();
+
+      expect(mockPurchases.getOfferings).toHaveBeenCalledTimes(1);
+      expect(latestTracePhase()).toBe('JS_BEFORE_GET_OFFERINGS');
+
+      await vi.advanceTimersByTimeAsync(30_001);
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      vi.useRealTimers();
+    });
+
+    test('diagnostic rejection never prevents the normal purchase flow', async () => {
+      mockPurchaseTrace.clearPurchaseTrace.mockRejectedValue(new Error('trace clear failed'));
+      mockPurchaseTrace.markPurchaseTrace.mockRejectedValue(new Error('trace mark failed'));
+      mockPurchaseTrace.probePurchaseBilling.mockRejectedValue(new Error('trace probe failed'));
+      mockPurchaseTrace.armPurchaseTraceWatchdog.mockRejectedValue(new Error('trace arm failed'));
+      mockPurchaseTrace.cancelPurchaseTraceWatchdog.mockRejectedValue(new Error('trace cancel failed'));
+
+      const { purchasePro } = await import('../iap');
+      const result = await purchasePro();
+
+      expect(result.success).toBe(true);
+      expect(mockPurchases.purchasePackage).toHaveBeenCalledTimes(1);
+    });
+
+    test('diagnostic timeout never prevents the normal purchase flow', async () => {
+      vi.useFakeTimers();
+      mockPurchaseTrace.clearPurchaseTrace.mockReturnValueOnce(new Promise(() => {}));
+      const { purchasePro } = await import('../iap');
+
+      const resultPromise = purchasePro();
+      await vi.advanceTimersByTimeAsync(1_501);
+      await flushMicrotasks();
+      const result = await resultPromise;
+
+      expect(result.success).toBe(true);
+      expect(mockPurchases.purchasePackage).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
     });
   });
 
@@ -448,8 +921,9 @@ describe('in-app purchase flow', () => {
         json: () => Promise.resolve({ error: 'Server error' }),
       });
       const result = await purchasePro();
-      expect(result.success).toBe(true);
-      expect(result.isPro).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.cancelled).toBe(false);
+      expect(result.entitlementActive).toBe(true);
     });
   });
 
@@ -570,6 +1044,49 @@ describe('purchasing state reset', () => {
     vi.clearAllMocks();
   });
 
+  test('useIAP resets purchasing state when the Purchases plugin reference is unavailable', async () => {
+    mockRevenueCatModule.Purchases = undefined;
+    const { useIAP } = await import('../iap');
+    const { result, unmount } = renderHook(() => useIAP());
+
+    let purchaseResult: Awaited<ReturnType<typeof result.current.purchase>> | undefined;
+    await act(async () => {
+      purchaseResult = await result.current.purchase();
+    });
+
+    expect(purchaseResult?.success).toBe(false);
+    expect(purchaseResult?.success === false && purchaseResult.message).toContain('RevenueCat Purchases plugin unavailable');
+    await waitFor(() => expect(result.current.purchasing).toBe(false));
+    expect(mockPurchases.configure).not.toHaveBeenCalled();
+    expect(mockPurchases.canMakePayments).not.toHaveBeenCalled();
+    expect(mockPurchases.getOfferings).not.toHaveBeenCalled();
+    expect(mockPurchases.purchasePackage).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  test('useIAP resets purchasing state when core plugin acquisition fails synchronously', async () => {
+    const { initIAP, useIAP } = await import('../iap');
+    await initIAP();
+    mockRevenueCatModule.Purchases = undefined;
+    const { result, unmount } = renderHook(() => useIAP());
+
+    let purchaseResult: Awaited<ReturnType<typeof result.current.purchase>> | undefined;
+    await act(async () => {
+      purchaseResult = await result.current.purchase();
+    });
+
+    expect(purchaseResult?.success).toBe(false);
+    expect(purchaseResult?.success === false && purchaseResult.message).toContain('RevenueCat Purchases plugin unavailable');
+    expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_BEFORE_GET_PURCHASES', undefined, expect.any(Number));
+    expect(mockPurchaseTrace.markPurchaseTrace).toHaveBeenCalledWith('JS_GET_PURCHASES_FAILED', undefined, expect.any(Number));
+    expect(mockPurchaseTrace.markPurchaseTrace).not.toHaveBeenCalledWith('JS_AFTER_GET_PURCHASES', undefined, expect.any(Number));
+    await waitFor(() => expect(result.current.purchasing).toBe(false));
+    expect(mockPurchases.canMakePayments).not.toHaveBeenCalled();
+    expect(mockPurchases.getOfferings).not.toHaveBeenCalled();
+    expect(mockPurchases.purchasePackage).not.toHaveBeenCalled();
+    unmount();
+  });
+
   test('purchasePro resolves on configure failure (never hangs)', async () => {
     mockPurchases.configure.mockRejectedValue(new Error('configure fail'));
     const { purchasePro } = await import('../iap');
@@ -657,8 +1174,9 @@ describe('purchasing state reset', () => {
       json: () => Promise.resolve({ error: 'Server error' }),
     });
     const result = await purchasePro();
-    expect(result.success).toBe(true);
-    expect(result.isPro).toBe(false);
+    expect(result.success).toBe(false);
+    expect(result.cancelled).toBe(false);
+    expect(result.entitlementActive).toBe(true);
   });
 
   test('purchasePro resolves on successful purchase (never hangs)', async () => {

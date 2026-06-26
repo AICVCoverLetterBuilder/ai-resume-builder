@@ -280,7 +280,11 @@ describe('caller-level component behavior', () => {
       clickAndSettle(findUpgradeBtn());
       await waitFor(() => {
         expect(mockPurchase).toHaveBeenCalledTimes(1);
-        expect(mockSetIsPro).toHaveBeenCalledWith(true);
+        expect(mockSetIsPro).toHaveBeenCalledWith(
+          true,
+          'abc',
+          expect.objectContaining({ source: 'purchase', entitlementResult: 'active', tokenSyncLastResult: 'success' }),
+        );
         expect(mockToast.success).toHaveBeenCalled();
       });
     });

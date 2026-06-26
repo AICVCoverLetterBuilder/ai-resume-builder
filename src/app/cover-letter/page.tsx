@@ -63,7 +63,7 @@ async function callGenerateAI(params: {
 
 export default function CoverLetterPage() {
   const { t, locale } = useI18n();
-  const { currentCoverLetter, setCurrentCoverLetter, isPro, canGenerateCoverLetter, incrementClGeneration, canDownload, incrementDownloads, canRegenerateCoverLetter, incrementClRegen, resetClRegen, currentCv, canUseProAi, recordProAiSuccess, lastClSavedAt, getProToken } = useApp();
+  const { currentCoverLetter, setCurrentCoverLetter, isPro, canGenerateCoverLetter, incrementClGeneration, canDownload, incrementDownloads, canRegenerateCoverLetter, incrementClRegen, resetClRegen, currentCv, canUseProAi, recordProAiSuccess, lastClSavedAt, getAiGate } = useApp();
   const [cl, setCl] = useState<CoverLetterData>(currentCoverLetter || emptyCL());
   const [editing, setEditing] = useState(false);
   const [proModal, setProModal] = useState(false);
@@ -193,15 +193,22 @@ export default function CoverLetterPage() {
   };
 
   const handleGenerate = async () => {
-    if (!isPro && !canGenerateCoverLetter()) {
+    const aiGate = getAiGate();
+    const isCurrentPro = aiGate.status !== 'free';
+    if (!isCurrentPro && !canGenerateCoverLetter()) {
       setPaywallReason('generate');
       setProModal(true);
       return;
     }
-    if (isPro && !canUseProAi()) {
+    if (aiGate.status === 'syncing') {
+      toast.error(t.common.proAuthorizationUnavailable);
+      return;
+    }
+    if (isCurrentPro && !canUseProAi()) {
       toast.error('AI service is temporarily unavailable. Please try again later.');
       return;
     }
+    const proToken = aiGate.status === 'ready' ? aiGate.token : null;
     if (isGenerating) return;
 
     setIsGenerating(true);
@@ -217,13 +224,13 @@ export default function CoverLetterPage() {
         personalName: fullName || currentCv?.personal?.fullName || '',
         personalEmail: currentCv?.personal?.email || '',
         personalPhone: currentCv?.personal?.phone || '',
-        proToken: getProToken(),
-        freeUserId: !isPro ? getAppUserId() : undefined,
+        proToken,
+        freeUserId: isCurrentPro ? undefined : getAppUserId(),
       });
       setCl(prev => ({ ...prev, content, updatedAt: new Date().toISOString() }));
-      resetClRegen();
       setHasGenerated(true);
-      if (!isPro) {
+      if (!isCurrentPro) {
+        resetClRegen();
         incrementClGeneration();
       } else {
         recordProAiSuccess();
@@ -231,8 +238,12 @@ export default function CoverLetterPage() {
       toast.success(t.coverLetter.genSuccess);
     } catch (err: unknown) {
       if ((err as { status?: number }).status === 403) {
-        setPaywallReason('generate');
-        setProModal(true);
+        if (getAiGate().status !== 'free') {
+          toast.error(t.common.proAuthorizationUnavailable);
+        } else {
+          setPaywallReason('generate');
+          setProModal(true);
+        }
       } else {
         if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Generate error:', err);
         toast.error('AI service is temporarily unavailable. Please try again later.');
@@ -243,15 +254,22 @@ export default function CoverLetterPage() {
   };
 
   const handleRegenerate = async () => {
-    if (!canRegenerateCoverLetter()) {
+    const aiGate = getAiGate();
+    const isCurrentPro = aiGate.status !== 'free';
+    if (!isCurrentPro && !canRegenerateCoverLetter()) {
       setPaywallReason('regenerate');
       setProModal(true);
       return;
     }
-    if (isPro && !canUseProAi()) {
+    if (aiGate.status === 'syncing') {
+      toast.error(t.common.proAuthorizationUnavailable);
+      return;
+    }
+    if (isCurrentPro && !canUseProAi()) {
       toast.error('AI service is temporarily unavailable. Please try again later.');
       return;
     }
+    const proToken = aiGate.status === 'ready' ? aiGate.token : null;
     if (isRegenerating) return;
 
     setIsRegenerating(true);
@@ -268,11 +286,11 @@ export default function CoverLetterPage() {
         personalName: fullName || currentCv?.personal?.fullName || '',
         personalEmail: currentCv?.personal?.email || '',
         personalPhone: currentCv?.personal?.phone || '',
-        proToken: getProToken(),
-        freeUserId: !isPro ? getAppUserId() : undefined,
+        proToken,
+        freeUserId: isCurrentPro ? undefined : getAppUserId(),
       });
       setCl(prev => ({ ...prev, content, updatedAt: new Date().toISOString() }));
-      if (!isPro) {
+      if (!isCurrentPro) {
         incrementClRegen();
       } else {
         recordProAiSuccess();
@@ -280,8 +298,12 @@ export default function CoverLetterPage() {
       toast.success(t.coverLetter.genSuccess);
     } catch (err: unknown) {
       if ((err as { status?: number }).status === 403) {
-        setPaywallReason('regenerate');
-        setProModal(true);
+        if (getAiGate().status !== 'free') {
+          toast.error(t.common.proAuthorizationUnavailable);
+        } else {
+          setPaywallReason('regenerate');
+          setProModal(true);
+        }
       } else {
         if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Regenerate error:', err);
         toast.error('AI service is temporarily unavailable. Please try again later.');

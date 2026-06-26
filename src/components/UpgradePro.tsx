@@ -46,7 +46,7 @@ function UpgradeButton({ label, className, onClose }: UpgradeButtonProps) {
     try {
       const result = await purchase();
       if (result.success && result.isPro) {
-        setIsPro(true);
+        setIsPro(true, result.token, { source: 'purchase', entitlementResult: 'active', tokenSyncLastResult: 'success' });
         toast.success(t.pricing.proActive);
         onClose?.();
       } else if (result.success && !result.isPro) {
@@ -284,7 +284,7 @@ export function FreeLimitModal({ open, onClose, type: _type }: FreeLimitModalPro
     try {
       const result = await purchase();
       if (result.success && result.isPro) {
-        setIsPro(true);
+        setIsPro(true, result.token, { source: 'purchase', entitlementResult: 'active', tokenSyncLastResult: 'success' });
         toast.success(t.pricing.proActive);
         onClose();
       } else if (result.success && !result.isPro) {
@@ -390,7 +390,7 @@ export function CoverLetterProModal({ open, onClose, reason }: CoverLetterProMod
     try {
       const result = await purchase();
       if (result.success && result.isPro) {
-        setIsPro(true);
+        setIsPro(true, result.token, { source: 'purchase', entitlementResult: 'active', tokenSyncLastResult: 'success' });
         toast.success(t.pricing.proActive);
         onClose();
       } else if (result.success && !result.isPro) {
@@ -490,7 +490,7 @@ export function UpgradeBuilderBanner() {
     try {
       const result = await purchase();
       if (result.success && result.isPro) {
-        setIsPro(true);
+        setIsPro(true, result.token, { source: 'purchase', entitlementResult: 'active', tokenSyncLastResult: 'success' });
         toast.success(t.pricing.proActive);
       } else if (result.success && !result.isPro) {
         toast.error('Server verification failed. If charged, contact support to restore your purchase.');

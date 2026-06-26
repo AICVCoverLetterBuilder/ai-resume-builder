@@ -1,8 +1,13 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import type { CVData, CoverLetterData } from './types';
-import { checkProEntitlement, getAppUserId, initIAP } from './iap';
+import {
+  initIAP,
+  syncProEntitlement,
+  type EntitlementSyncResult,
+  type TokenSyncResult,
+} from './iap';
 import {
   saveCvDraft,
   loadCvDraft,
@@ -11,15 +16,49 @@ import {
   loadClDraft,
   clearClDraft,
 } from './draft-storage';
-import { apiFetch } from './api';
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
 
+export interface ProDiagnostics {
+  clientIsPro: boolean;
+  storedTokenPresent: boolean;
+  memoryTokenPresent: boolean;
+  tokenSyncLastResult: TokenSyncResult | 'not-run';
+  tokenSyncLastError: string;
+  startupEntitlementResult: EntitlementSyncResult | 'not-run';
+  restoreEntitlementResult: EntitlementSyncResult | 'not-run';
+  aiGateStatus: AiGateResult['status'];
+  aiGateTokenPresent: boolean;
+  aiGateIsPro: boolean;
+  aiGateBlockingReason: AiGateBlockingReason;
+}
+
+export type AiGateBlockingReason =
+  | 'none'
+  | 'free-user'
+  | 'missing-token'
+  | 'token-sync-failed';
+
+export type AiGateResult =
+  | { status: 'ready'; token: string }
+  | { status: 'syncing'; reason: Exclude<AiGateBlockingReason, 'none' | 'free-user'> }
+  | { status: 'free' };
+
+interface SetIsProOptions {
+  source?: 'purchase' | 'restore' | 'startup';
+  entitlementResult?: EntitlementSyncResult;
+  tokenSyncLastResult?: TokenSyncResult;
+  tokenSyncLastError?: string;
+}
+
 interface AppContextType {
   isPro: boolean;
-  setIsPro: (val: boolean) => void;
+  setIsPro: (val: boolean, token?: string | null, options?: SetIsProOptions) => void;
   /** HMAC-signed Pro token for server-side verification. Refreshed every 24h. */
   getProToken: () => string | null;
+  /** Current AI authorization gate, read at click time from canonical Pro state. */
+  getAiGate: () => AiGateResult;
+  proDiagnostics: ProDiagnostics;
   saveCv: (cv: CVData) => void;
   deleteCv: (id: string) => void;
   saveCoverLetter: (cl: CoverLetterData) => void;
@@ -59,13 +98,24 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 function loadIsPro(): boolean {
   if (typeof window === 'undefined') return false;
-  return localStorage.getItem('cvpro-plan') === 'pro';
+  return localStorage.getItem('cvpro-plan') === 'pro' && Boolean(localStorage.getItem(PRO_TOKEN_KEY));
 }
 
 function persistIsPro(val: boolean) {
   if (typeof window === 'undefined') return;
   if (val) localStorage.setItem('cvpro-plan', 'pro');
   else localStorage.removeItem('cvpro-plan');
+}
+
+function loadProToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(PRO_TOKEN_KEY);
+}
+
+function persistProToken(token: string | null | undefined) {
+  if (typeof window === 'undefined') return;
+  if (token) localStorage.setItem(PRO_TOKEN_KEY, token);
+  else if (token === null) localStorage.removeItem(PRO_TOKEN_KEY);
 }
 
 function loadDownloads(): { cv: number; cl: number } {
@@ -165,7 +215,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // internal state is only used when not forced by test env var
   const [internalIsPro, setInternalIsPro] = useState<boolean>(() => loadIsPro());
   const isPro = internalIsPro;
-  const [proToken, setProToken] = useState<string | null>(null);
+  const [proToken, setProToken] = useState<string | null>(() => (loadIsPro() ? loadProToken() : null));
   const [downloads, setDownloads] = useState<{ cv: number; cl: number }>(() => loadDownloads());
   // Initialize from localStorage drafts for persistence across sessions
   const [currentCv, internalSetCurrentCv] = useState<CVData | null>(() => loadCvDraft()?.cv ?? null);
@@ -179,6 +229,66 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Timestamps for "Draft saved" indicator
   const [lastCvSavedAt, setLastCvSavedAt] = useState<number>(() => (currentCv ? Date.now() : 0));
   const [lastClSavedAt, setLastClSavedAt] = useState<number>(() => (currentCoverLetter ? Date.now() : 0));
+  const [tokenSyncLastResult, setTokenSyncLastResult] = useState<TokenSyncResult | 'not-run'>('not-run');
+  const [tokenSyncLastError, setTokenSyncLastError] = useState('');
+  const [startupEntitlementResult, setStartupEntitlementResult] = useState<EntitlementSyncResult | 'not-run'>('not-run');
+  const [restoreEntitlementResult, setRestoreEntitlementResult] = useState<EntitlementSyncResult | 'not-run'>('not-run');
+  const isProRef = useRef(isPro);
+  const proTokenRef = useRef(proToken);
+  const tokenSyncLastResultRef = useRef<TokenSyncResult | 'not-run'>(tokenSyncLastResult);
+
+  isProRef.current = isPro;
+  proTokenRef.current = proToken;
+  tokenSyncLastResultRef.current = tokenSyncLastResult;
+
+  const setIsPro = useCallback((val: boolean, token?: string | null, options?: SetIsProOptions) => {
+    if (options?.source === 'startup' && options.entitlementResult) {
+      setStartupEntitlementResult(options.entitlementResult);
+    }
+    if (options?.source === 'restore' && options.entitlementResult) {
+      setRestoreEntitlementResult(options.entitlementResult);
+    }
+    if (options?.tokenSyncLastResult) {
+      tokenSyncLastResultRef.current = options.tokenSyncLastResult;
+      setTokenSyncLastResult(options.tokenSyncLastResult);
+    }
+    if (options?.tokenSyncLastError !== undefined) {
+      setTokenSyncLastError(options.tokenSyncLastError);
+    }
+
+    if (val) {
+      const nextToken = token || loadProToken();
+      if (!nextToken) {
+        isProRef.current = false;
+        proTokenRef.current = null;
+        tokenSyncLastResultRef.current = 'failed';
+        setInternalIsPro(false);
+        persistIsPro(false);
+        persistProToken(null);
+        setProToken(null);
+        setTokenSyncLastResult('failed');
+        setTokenSyncLastError(options?.tokenSyncLastError || 'Signed Pro authorization token is missing.');
+        return;
+      }
+      isProRef.current = true;
+      proTokenRef.current = nextToken;
+      tokenSyncLastResultRef.current = options?.tokenSyncLastResult || 'success';
+      setInternalIsPro(true);
+      persistIsPro(true);
+      persistProToken(nextToken);
+      setProToken(nextToken);
+      setTokenSyncLastResult(options?.tokenSyncLastResult || 'success');
+      setTokenSyncLastError('');
+      return;
+    }
+
+    isProRef.current = false;
+    proTokenRef.current = null;
+    setInternalIsPro(false);
+    persistIsPro(false);
+    persistProToken(null);
+    setProToken(null);
+  }, []);
 
   // On mount: initialise RevenueCat SDK and sync Pro entitlement from the store.
   // This ensures Pro status is always authoritative from Google Play / Apple IAP.
@@ -186,67 +296,141 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         await initIAP();
-        const storeIsPro = await checkProEntitlement();
-        if (storeIsPro) {
-          setInternalIsPro(true);
-          persistIsPro(true);
+        const syncResult = await syncProEntitlement();
+        if (syncResult.isPro && syncResult.token) {
+          setIsPro(true, syncResult.token, {
+            source: 'startup',
+            entitlementResult: syncResult.entitlementResult,
+            tokenSyncLastResult: syncResult.tokenSyncLastResult,
+            tokenSyncLastError: syncResult.tokenSyncLastError || '',
+          });
+        } else {
+          setIsPro(false, null, {
+            source: 'startup',
+            entitlementResult: syncResult.entitlementResult,
+            tokenSyncLastResult: syncResult.tokenSyncLastResult,
+            tokenSyncLastError: syncResult.tokenSyncLastError || '',
+          });
         }
-      } catch {
-        // Silently ignore — fallback to localStorage value already loaded
+      } catch (err) {
+        isProRef.current = false;
+        proTokenRef.current = null;
+        tokenSyncLastResultRef.current = 'failed';
+        setInternalIsPro(false);
+        persistIsPro(false);
+        persistProToken(null);
+        setProToken(null);
+        setStartupEntitlementResult('failed');
+        setTokenSyncLastResult('failed');
+        setTokenSyncLastError(err instanceof Error ? err.message : 'Startup entitlement sync failed.');
       }
     })();
-  }, []);
+  }, [setIsPro]);
 
-  // Fetch/refresh Pro token on mount and whenever isPro changes.
-  // The server determines Pro eligibility (not the client claim).
-  // The signed token is sent with API requests for server-side Pro verification.
+  // Token refresh is owned by the startup/purchase/restore entitlement sync path.
   useEffect(() => {
     (async () => {
       try {
-        const cached = localStorage.getItem(PRO_TOKEN_KEY);
-        if (cached && !isPro) {
+        return;
+        /*
+        if (false) {
           // User downgraded — clear stored token
           localStorage.removeItem(PRO_TOKEN_KEY);
           setProToken(null);
           return;
         }
         // Fetch a fresh token from the server, sending RevenueCat appUserID
-        const { data, response: res } = await apiFetch<{ token?: string }>(
-          '/api/verify-pro',
+        const { data, response: res } = await removedTokenRefresh<{ token?: string }>(
+          '',
           {
             method: 'POST',
-            body: { revenueCatAppUserId: getAppUserId() },
+            body: { revenueCatAppUserId: removedRevenueCatAppUserId() },
           },
         );
         if (!res.ok) return;
         const { token } = data;
         if (token) {
-          localStorage.setItem(PRO_TOKEN_KEY, token);
+          persistProToken(token);
           setProToken(token);
         }
+        */
       } catch {
         // Token refresh is non-critical — server falls back gracefully
       }
     })();
   }, [isPro]);
 
-  // Expose token synchronously (reads from cache for perf, falls back to state)
-  const getProToken = useCallback((): string | null => {
-    return proToken || (typeof window !== 'undefined' ? localStorage.getItem(PRO_TOKEN_KEY) : null);
-  }, [proToken]);
+  const readAiGateState = useCallback((): {
+    result: AiGateResult;
+    tokenPresent: boolean;
+    currentIsPro: boolean;
+    blockingReason: AiGateBlockingReason;
+  } => {
+    const currentIsPro = isProRef.current;
+    const currentToken = proTokenRef.current || loadProToken();
+    const tokenPresent = Boolean(currentToken);
 
-  const setIsPro = useCallback((val: boolean) => {
-    setInternalIsPro(val);
-    persistIsPro(val);
+    if (!currentIsPro) {
+      return {
+        result: { status: 'free' },
+        tokenPresent,
+        currentIsPro,
+        blockingReason: 'free-user',
+      };
+    }
+
+    if (currentToken) {
+      return {
+        result: { status: 'ready', token: currentToken },
+        tokenPresent,
+        currentIsPro,
+        blockingReason: 'none',
+      };
+    }
+
+    const reason: Exclude<AiGateBlockingReason, 'none' | 'free-user'> =
+      tokenSyncLastResultRef.current === 'failed' ? 'token-sync-failed' : 'missing-token';
+
+    return {
+      result: { status: 'syncing', reason },
+      tokenPresent,
+      currentIsPro,
+      blockingReason: reason,
+    };
   }, []);
 
+  const getAiGate = useCallback((): AiGateResult => readAiGateState().result, [readAiGateState]);
+
+  // Expose token synchronously from the same click-time gate used by AI callers.
+  const getProToken = useCallback((): string | null => {
+    const gate = readAiGateState().result;
+    return gate.status === 'ready' ? gate.token : null;
+  }, [readAiGateState]);
+
+  const aiGateState = readAiGateState();
+
+  const proDiagnostics: ProDiagnostics = {
+    clientIsPro: isPro,
+    storedTokenPresent: Boolean(loadProToken()),
+    memoryTokenPresent: Boolean(proToken),
+    tokenSyncLastResult,
+    tokenSyncLastError,
+    startupEntitlementResult,
+    restoreEntitlementResult,
+    aiGateStatus: aiGateState.result.status,
+    aiGateTokenPresent: aiGateState.tokenPresent,
+    aiGateIsPro: aiGateState.currentIsPro,
+    aiGateBlockingReason: aiGateState.blockingReason,
+  };
+
   const canDownload = useCallback((type: 'cv' | 'cl') => {
-    if (isPro) return true;
+    if (isProRef.current) return true;
     const used = type === 'cv' ? downloads.cv : downloads.cl;
     return used < FREE_DOWNLOAD_LIMIT;
-  }, [isPro, downloads]);
+  }, [downloads]);
 
   const incrementDownloads = useCallback((type: 'cv' | 'cl') => {
+    if (isProRef.current) return;
     setDownloads(prev => {
       const updated = { ...prev, [type]: prev[type] + 1 };
       persistDownloads(updated);
@@ -255,11 +439,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const canGenerateCoverLetter = useCallback(() => {
-    if (isPro) return true;
+    if (isProRef.current) return true;
     return clGenerationCount < FREE_CL_GENERATION_LIMIT;
-  }, [isPro, clGenerationCount]);
+  }, [clGenerationCount]);
 
   const incrementClGeneration = useCallback(() => {
+    if (isProRef.current) return;
     setClGenerationCount(prev => {
       const updated = prev + 1;
       persistClGenerationCount(updated);
@@ -268,21 +453,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const canUseAiRecommend = useCallback(() => {
-    if (isPro) return true;
+    if (isProRef.current) return true;
     return !aiRecommendUsed;
-  }, [isPro, aiRecommendUsed]);
+  }, [aiRecommendUsed]);
 
   const markAiRecommendUsed = useCallback(() => {
+    if (isProRef.current) return;
     setAiRecommendUsed(true);
     persistAiRecommendUsed();
   }, []);
 
   const canRegenerateCoverLetter = useCallback(() => {
-    if (isPro) return true;
+    if (isProRef.current) return true;
     return clRegenCount < FREE_CL_REGEN_LIMIT;
-  }, [isPro, clRegenCount]);
+  }, [clRegenCount]);
 
   const incrementClRegen = useCallback(() => {
+    if (isProRef.current) return;
     setClRegenCount(prev => {
       const updated = prev + 1;
       persistClRegenCount(updated);
@@ -291,23 +478,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const resetClRegen = useCallback(() => {
+    if (isProRef.current) return;
     setClRegenCount(0);
     persistClRegenCount(0);
   }, []);
 
   // Pro safety cap helpers — only active for Pro users; free users are never checked here.
   const canUseProAi = useCallback((): boolean => {
-    if (!isPro) return false; // Free users are blocked here too
+    if (readAiGateState().result.status !== 'ready') return false;
     // Re-read from storage to ensure freshness across re-renders
     const fresh = loadProAiRecord();
     if (fresh.windowStart !== proAiRecord.windowStart || fresh.count !== proAiRecord.count) {
       setProAiRecord(fresh);
     }
     return fresh.count < PRO_AI_SAFETY_CAP;
-  }, [isPro, proAiRecord]);
+  }, [proAiRecord, readAiGateState]);
 
   const recordProAiSuccess = useCallback(() => {
-    if (!isPro) return; // only track for Pro users
+    if (readAiGateState().result.status !== 'ready') return; // only track for Pro users
     setProAiRecord(prev => {
       const now = Date.now();
       // Reset window if expired
@@ -318,7 +506,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       persistProAiRecord(updated);
       return updated;
     });
-  }, [isPro]);
+  }, [readAiGateState]);
 
   const saveCv = useCallback((cv: CVData) => {
     internalSetCurrentCv(cv);
@@ -396,7 +584,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   void FREE_AI_RECOMMEND_LIMIT; // used via canUseAiRecommend logic above
   return (
     <AppContext.Provider value={{
-      isPro, setIsPro, getProToken,
+      isPro, setIsPro, getProToken, getAiGate, proDiagnostics,
       saveCv, deleteCv, saveCoverLetter, deleteCoverLetter,
       currentCv, setCurrentCv, currentCoverLetter, setCurrentCoverLetter,
       canDownload, incrementDownloads,

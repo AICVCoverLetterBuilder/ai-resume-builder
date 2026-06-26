@@ -30,13 +30,16 @@ const mockApp = vi.hoisted(() => ({
     appListeners.callback = callback;
     return { remove: appListeners.remove };
   }),
+  getState: vi.fn().mockResolvedValue({ isActive: true }),
 }));
 
 const mockPurchases = vi.hoisted(() => ({
   configure: vi.fn().mockResolvedValue(undefined),
   setLogLevel: vi.fn().mockResolvedValue(undefined),
+  setLogHandler: vi.fn().mockResolvedValue(undefined),
   canMakePayments: vi.fn().mockResolvedValue({ canMakePayments: true }),
   getOfferings: vi.fn(),
+  purchaseStoreProduct: vi.fn(),
   purchasePackage: vi.fn(),
   getCustomerInfo: vi.fn(),
   restorePurchases: vi.fn(),
@@ -85,16 +88,6 @@ function makePurchaseResult() {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 describe('Android runtime fixes', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -119,6 +112,11 @@ describe('Android runtime fixes', () => {
     appListeners.remove.mockReset();
     appListeners.remove.mockResolvedValue(undefined);
     mockApp.addListener.mockClear();
+    mockApp.getState.mockReset();
+    mockApp.getState.mockResolvedValue({ isActive: true });
+
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
 
     mockPurchases.configure.mockReset();
     mockPurchases.configure.mockResolvedValue(undefined);
@@ -128,6 +126,8 @@ describe('Android runtime fixes', () => {
     mockPurchases.canMakePayments.mockResolvedValue({ canMakePayments: true });
     mockPurchases.getOfferings.mockReset();
     mockPurchases.getOfferings.mockResolvedValue(makeOfferings());
+    mockPurchases.purchaseStoreProduct.mockReset();
+    mockPurchases.purchaseStoreProduct.mockResolvedValue(makePurchaseResult());
     mockPurchases.purchasePackage.mockReset();
     mockPurchases.purchasePackage.mockResolvedValue(makePurchaseResult());
 
@@ -152,9 +152,36 @@ describe('Android runtime fixes', () => {
     );
     expect(source.indexOf('registerPlugin(SaveFilePlugin.class)')).toBeGreaterThan(-1);
     expect(source.indexOf('registerPlugin(PrintPdfPlugin.class)')).toBeGreaterThan(-1);
+    expect(source.indexOf('registerPlugin(PurchaseTracePlugin.class)')).toBeGreaterThan(-1);
     expect(source.indexOf('registerPlugin(SaveFilePlugin.class)')).toBeLessThan(
       source.indexOf('super.onCreate(savedInstanceState)'),
     );
+    expect(source.indexOf('registerPlugin(PurchaseTracePlugin.class)')).toBeLessThan(
+      source.indexOf('super.onCreate(savedInstanceState)'),
+    );
+  });
+
+  test('generated Capacitor plugin registration still uses RevenueCat PurchasesPlugin', () => {
+    const plugins = fs.readFileSync('android/app/src/main/assets/capacitor.plugins.json', 'utf8');
+    expect(plugins).toContain('com.revenuecat.purchases.capacitor.PurchasesPlugin');
+    expect(plugins).not.toContain('TracedPurchasesPlugin');
+    expect(plugins).not.toContain('PurchaseTracePlugin');
+  });
+
+  test('PurchaseTrace clear cancels native watchdog before clearing stored trace', () => {
+    const source = fs.readFileSync(
+      'android/app/src/main/java/com/cvproai/app/plugins/PurchaseTracePlugin.java',
+      'utf8',
+    );
+    const clearBody = source.match(/public void clear\(PluginCall call\) \{(?<body>[\s\S]*?)\n    \}/)?.groups?.body ?? '';
+
+    expect(clearBody).toContain('synchronized (lock)');
+    expect(clearBody.indexOf('cancelWatchdogLocked(false)')).toBeGreaterThan(-1);
+    expect(clearBody.indexOf('prefs().edit().clear().commit()')).toBeGreaterThan(-1);
+    expect(clearBody.indexOf('cancelWatchdogLocked(false)')).toBeLessThan(
+      clearBody.indexOf('prefs().edit().clear().commit()'),
+    );
+    expect(clearBody).not.toContain('cancelWatchdogLocked(true)');
   });
 
   test('MainActivity uses RevenueCat-compatible singleTop launch mode', () => {
@@ -191,12 +218,37 @@ describe('Android runtime fixes', () => {
     expect(result.success).toBe(false);
     expect(result.success === false && result.message).toContain('billing is unavailable');
     expect(mockPurchases.getOfferings).not.toHaveBeenCalled();
+    expect(mockPurchases.purchaseStoreProduct).not.toHaveBeenCalled();
     expect(mockPurchases.purchasePackage).not.toHaveBeenCalled();
+  });
+
+  test('Android purchases the selected RevenueCat Offering package', async () => {
+    const { purchasePro } = await import('../iap');
+    const result = await purchasePro();
+
+    expect(result.success).toBe(true);
+    expect(mockPurchases.purchasePackage).toHaveBeenCalledWith({
+      aPackage: expect.objectContaining({ identifier: '$rc_lifetime' }),
+    });
+    expect(mockPurchases.purchaseStoreProduct).not.toHaveBeenCalled();
+  });
+
+  test('iOS keeps the package purchase path', async () => {
+    mockCapacitor.getPlatform.mockReturnValue('ios');
+    const { purchasePro } = await import('../iap');
+    const result = await purchasePro();
+
+    expect(result.success).toBe(true);
+    expect(mockPurchases.purchasePackage).toHaveBeenCalledWith({
+      aPackage: expect.objectContaining({ identifier: '$rc_lifetime' }),
+    });
+    expect(mockPurchases.purchaseStoreProduct).not.toHaveBeenCalled();
   });
 
   test('pre-sheet watchdog returns instead of leaving purchase stuck forever', async () => {
     vi.useFakeTimers();
     mockPurchases.purchasePackage.mockReturnValue(new Promise(() => {}));
+    mockApp.getState.mockResolvedValue({ isActive: true });
     const { purchasePro } = await import('../iap');
 
     const resultPromise = purchasePro();
@@ -208,21 +260,90 @@ describe('Android runtime fixes', () => {
     expect(appListeners.remove).toHaveBeenCalled();
   });
 
-  test('watchdog is removed when native store activity opens and does not time out purchase', async () => {
+  test('a transient inactive event does not disable the 15-second watchdog', async () => {
     vi.useFakeTimers();
-    const pending = deferred<ReturnType<typeof makePurchaseResult>>();
-    mockPurchases.purchasePackage.mockReturnValue(pending.promise);
+    mockPurchases.purchasePackage.mockReturnValue(new Promise(() => {}));
+    mockApp.getState.mockResolvedValue({ isActive: true });
     const { purchasePro } = await import('../iap');
 
     const resultPromise = purchasePro();
     await vi.advanceTimersByTimeAsync(1);
-    expect(appListeners.callback).not.toBeNull();
     appListeners.callback?.({ isActive: false });
-    await vi.advanceTimersByTimeAsync(20_000);
-
-    pending.resolve(makePurchaseResult());
+    appListeners.callback?.({ isActive: true });
+    await vi.advanceTimersByTimeAsync(15_000);
     const result = await resultPromise;
-    expect(result.success).toBe(true);
+
+    expect(result.success).toBe(false);
+    expect(result.success === false && result.message).toContain('STORE_DID_NOT_OPEN');
     expect(appListeners.remove).toHaveBeenCalled();
   });
+
+  test('visible WebView wins over a stale inactive app state', async () => {
+    vi.useFakeTimers();
+    mockPurchases.purchasePackage.mockReturnValue(new Promise(() => {}));
+    mockApp.getState.mockResolvedValue({ isActive: false });
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    const { purchasePro } = await import('../iap');
+
+    const resultPromise = purchasePro();
+    await vi.advanceTimersByTimeAsync(15_001);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.success === false && result.message).toContain('STORE_DID_NOT_OPEN');
+    expect(appListeners.remove).toHaveBeenCalled();
+  });
+
+  test('returning from a confirmed store screen times out a missing RevenueCat callback', async () => {
+    vi.useFakeTimers();
+    mockPurchases.purchasePackage.mockReturnValue(new Promise(() => {}));
+    mockApp.getState.mockResolvedValue({ isActive: false });
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    const { purchasePro } = await import('../iap');
+
+    const resultPromise = purchasePro();
+    await vi.advanceTimersByTimeAsync(15_001);
+
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    appListeners.callback?.({ isActive: true });
+    await vi.advanceTimersByTimeAsync(8_001);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.success === false && result.message).toContain('PURCHASE_CALLBACK_TIMEOUT');
+    expect(appListeners.remove).toHaveBeenCalled();
+  });
+
+
+  test('listener cleanup can never keep the purchase UI stuck', async () => {
+    vi.useFakeTimers();
+    mockPurchases.purchasePackage.mockReturnValue(new Promise(() => {}));
+    mockApp.getState.mockResolvedValue({ isActive: true });
+    appListeners.remove.mockReturnValue(new Promise(() => {}));
+    const { purchasePro } = await import('../iap');
+
+    const resultPromise = purchasePro();
+    await vi.advanceTimersByTimeAsync(15_001);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.success === false && result.message).toContain('STORE_DID_NOT_OPEN');
+    expect(result.success === false && result.message).toContain('phase=PURCHASE_CALLED');
+    expect(appListeners.remove).toHaveBeenCalled();
+  });
+
+  test('diagnostic log handler failure does not block SDK configuration', async () => {
+    mockPurchases.setLogHandler.mockRejectedValueOnce(new Error('handler unavailable'));
+    const { initIAP, purchasePro } = await import('../iap');
+
+    await initIAP();
+    const result = await purchasePro();
+
+    expect(result.success).toBe(true);
+    expect(mockPurchases.configure).toHaveBeenCalled();
+  });
+
 });

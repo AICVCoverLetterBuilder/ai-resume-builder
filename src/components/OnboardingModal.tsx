@@ -49,7 +49,7 @@ export function OnboardingModal() {
     try {
       const result = await purchase();
       if (result.success && result.isPro) {
-        setIsPro(true);
+        setIsPro(true, result.token, { source: 'purchase', entitlementResult: 'active', tokenSyncLastResult: 'success' });
         toast.success(t.pricing.proActive);
         dismiss();
       } else if (result.success && !result.isPro) {

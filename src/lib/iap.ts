@@ -26,7 +26,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { App } from '@capacitor/app';
+import { LOG_LEVEL, Purchases as RevenueCatPurchases } from '@revenuecat/purchases-capacitor';
 import { apiFetch } from './api';
+import {
+  armPurchaseTraceWatchdog,
+  cancelPurchaseTraceWatchdog,
+  clearPurchaseTrace,
+  markPurchaseTrace,
+  probePurchaseBilling,
+} from './purchase-trace';
 
 // --- Constants ------------------------------------------------------------------
 
@@ -78,19 +86,13 @@ function getPlatform(): 'ios' | 'android' | 'web' {
   return 'web';
 }
 
-// --- RevenueCat lazy-loader ------------------------------------------------------
+// --- RevenueCat plugin reference -------------------------------------------------
 
-let _purchasesModule: typeof import('@revenuecat/purchases-capacitor') | null = null;
-
-async function getPurchasesModule() {
-  if (!_purchasesModule) {
-    _purchasesModule = await import('@revenuecat/purchases-capacitor');
+function getPurchases() {
+  if (!RevenueCatPurchases) {
+    throw new Error('RevenueCat Purchases plugin unavailable.');
   }
-  return _purchasesModule;
-}
-
-async function getPurchases() {
-  return (await getPurchasesModule()).Purchases;
+  return RevenueCatPurchases;
 }
 
 // --- SDK initializer --------------------------------------------------------------
@@ -107,6 +109,53 @@ function diagError(...args: unknown[]) {
   console.error('[IAP-DIAG]', ...args);
 }
 
+type PurchasePhase =
+  | 'IDLE'
+  | 'INITIALIZING'
+  | 'BILLING_CHECK'
+  | 'OFFERINGS_FETCH'
+  | 'PACKAGE_SELECTED'
+  | 'PURCHASE_CALLED'
+  | 'STORE_CONFIRMED_OPEN'
+  | 'RETURNED_FROM_STORE'
+  | 'PURCHASE_CALLBACK'
+  | 'SERVER_VERIFY'
+  | 'COMPLETE';
+
+type RevenueCatHint =
+  | 'NONE'
+  | 'NO_CORE_LIBRARY_DESUGARING'
+  | 'ITEM_ALREADY_OWNED'
+  | 'DEVELOPER_ERROR'
+  | 'BILLING_UNAVAILABLE'
+  | 'SERVICE_DISCONNECTED'
+  | 'NETWORK_ERROR';
+
+let _purchasePhase: PurchasePhase = 'IDLE';
+let _revenueCatHint: RevenueCatHint = 'NONE';
+
+function setPurchasePhase(phase: PurchasePhase) {
+  _purchasePhase = phase;
+  diagLog('phase =', phase);
+}
+
+function classifyRevenueCatLog(message: string): RevenueCatHint {
+  const text = message.toLowerCase();
+  if (text.includes('nocorelibrarydesugaring') || text.includes('error building billingflowparams')) {
+    return 'NO_CORE_LIBRARY_DESUGARING';
+  }
+  if (text.includes('item_already_owned') || text.includes('already owned')) return 'ITEM_ALREADY_OWNED';
+  if (text.includes('developer_error') || text.includes('developer error')) return 'DEVELOPER_ERROR';
+  if (text.includes('billing unavailable') || text.includes('billing_unavailable')) return 'BILLING_UNAVAILABLE';
+  if (text.includes('service_disconnected') || text.includes('service disconnected')) return 'SERVICE_DISCONNECTED';
+  if (text.includes('network_error') || text.includes('network error')) return 'NETWORK_ERROR';
+  return 'NONE';
+}
+
+function diagnosticSuffix(): string {
+  return ` [phase=${_purchasePhase}; hint=${_revenueCatHint}]`;
+}
+
 export function getStorePrice(): string | null {
   return _storePrice;
 }
@@ -116,7 +165,7 @@ export async function refreshStorePrice(): Promise<string | null> {
   if (platform === 'web') return null;
 
   try {
-    const Purchases = await getPurchases();
+    const Purchases = getPurchases();
     diagLog('refreshStorePrice: fetching offerings...');
     const offerings = await withTimeout(
       Purchases.getOfferings(),
@@ -192,17 +241,40 @@ async function _initIAPImpl(platform: 'ios' | 'android' | 'web'): Promise<void> 
     throw new Error('RevenueCat API key not configured. Check NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY.');
   }
 
-  const purchasesModule = await getPurchasesModule();
-  const Purchases = purchasesModule.Purchases;
+  const Purchases = getPurchases();
 
   try {
-    if (process.env.NODE_ENV !== 'production') {
-      await Purchases.setLogLevel({ level: purchasesModule.LOG_LEVEL.DEBUG });
+    setPurchasePhase('INITIALIZING');
+
+    // Internal diagnostic capture. Only short, pre-classified hints are retained;
+    // raw RevenueCat log text is never shown to the user.
+    try {
+      await withTimeout(
+        Purchases.setLogHandler((_level, message) => {
+          const hint = classifyRevenueCatLog(message);
+          if (hint !== 'NONE') _revenueCatHint = hint;
+        }),
+        2_000,
+        'Purchases.setLogHandler',
+      );
+    } catch (e) {
+      diagError('initIAP: custom log handler unavailable:', e);
     }
+
+    try {
+      await withTimeout(
+        Purchases.setLogLevel({ level: LOG_LEVEL.DEBUG }),
+        2_000,
+        'Purchases.setLogLevel',
+      );
+    } catch (e) {
+      diagError('initIAP: debug log level unavailable:', e);
+    }
+
     const appUserId = getAppUserId();
     diagLog('initIAP: configuring SDK...');
     await withTimeout(
-      Purchases.configure({ apiKey, appUserID: appUserId }),
+      Purchases.configure({ apiKey, appUserID: appUserId, diagnosticsEnabled: true }),
       PURCHASE_TIMEOUT_MS,
       'Purchases.configure',
     );
@@ -228,6 +300,10 @@ function base64UrlDecode(str: string): string {
 const PURCHASE_TIMEOUT_MS = 30_000;
 const INIT_TIMEOUT_MS = 15_000;
 const PRE_SHEET_WATCHDOG_MS = 15_000;
+const PURCHASE_CALLBACK_TIMEOUT_MS = 8_000;
+const NATIVE_PURCHASE_TRACE_WATCHDOG_MS = 20_000;
+const PURCHASE_TRACE_CALL_TIMEOUT_MS = 1_500;
+const BILLING_PROBE_TIMEOUT_MS = 12_500;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -238,33 +314,150 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
+function isAndroidNative(): boolean {
+  return isNative() && getPlatform() === 'android';
+}
+
+function traceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => resolve(undefined), ms);
+    promise
+      .then((value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      })
+      .catch(() => {
+        clearTimeout(timeoutId);
+        resolve(undefined);
+      });
+  });
+}
+
+async function traceClear(): Promise<void> {
+  if (!isAndroidNative()) return;
+  try {
+    await traceTimeout(clearPurchaseTrace(PURCHASE_TRACE_CALL_TIMEOUT_MS), PURCHASE_TRACE_CALL_TIMEOUT_MS);
+  } catch {}
+}
+
+async function traceMark(phase: string, detail?: string): Promise<void> {
+  if (!isAndroidNative()) return;
+  try {
+    await traceTimeout(markPurchaseTrace(phase, detail, PURCHASE_TRACE_CALL_TIMEOUT_MS), PURCHASE_TRACE_CALL_TIMEOUT_MS);
+  } catch {}
+}
+
+async function traceProbeBilling(): Promise<Awaited<ReturnType<typeof probePurchaseBilling>> | undefined> {
+  if (!isAndroidNative()) return undefined;
+  try {
+    return await traceTimeout(probePurchaseBilling(PRO_PRODUCT_ID, BILLING_PROBE_TIMEOUT_MS), BILLING_PROBE_TIMEOUT_MS);
+  } catch {
+    return undefined;
+  }
+}
+
+async function traceArmWatchdog(): Promise<void> {
+  if (!isAndroidNative()) return;
+  try {
+    await traceTimeout(
+      armPurchaseTraceWatchdog(NATIVE_PURCHASE_TRACE_WATCHDOG_MS, PURCHASE_TRACE_CALL_TIMEOUT_MS),
+      PURCHASE_TRACE_CALL_TIMEOUT_MS,
+    );
+  } catch {}
+}
+
+async function traceCancelWatchdog(): Promise<void> {
+  if (!isAndroidNative()) return;
+  try {
+    await traceTimeout(cancelPurchaseTraceWatchdog(PURCHASE_TRACE_CALL_TIMEOUT_MS), PURCHASE_TRACE_CALL_TIMEOUT_MS);
+  } catch {}
+}
+
+async function initializeAndroidPurchaseTrace(): Promise<void> {
+  if (!isAndroidNative()) return;
+  await traceClear();
+  await traceMark('JS_PURCHASE_PRO_ENTERED');
+}
+
+async function runAndroidPurchaseTracePreflight(): Promise<void> {
+  if (!isAndroidNative()) return;
+
+  await traceMark('JS_BEFORE_BILLING_PROBE');
+  try {
+    const probe = await traceProbeBilling();
+    await traceMark(
+      probe ? 'JS_BILLING_PROBE_COMPLETED' : 'JS_BILLING_PROBE_FAILED',
+      probe ? `responseCode=${probe.responseCode};productFound=${probe.productFound === true}` : undefined,
+    );
+  } catch {
+    await traceMark('JS_BILLING_PROBE_FAILED');
+  }
+}
+
+async function runTracedRevenueCatPurchase<T>(purchase: () => Promise<T>): Promise<T> {
+  const shouldTrace = isAndroidNative();
+
+  if (shouldTrace) {
+    await traceArmWatchdog();
+    await traceMark('JS_PURCHASE_CALL');
+  }
+
+  try {
+    const result = await purchase();
+    if (shouldTrace) {
+      await traceMark('JS_PURCHASE_RESOLVED');
+      await traceCancelWatchdog();
+    }
+    return result;
+  } catch (error) {
+    if (shouldTrace) {
+      await traceMark('JS_PURCHASE_REJECTED');
+      await traceCancelWatchdog();
+    }
+    throw error;
+  }
+}
+
 async function purchaseWithStoreOpeningWatchdog<T>(startPurchase: () => Promise<T>): Promise<T> {
   let listener: PluginListenerHandle | null = null;
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let preSheetTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  let callbackTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let settled = false;
+  let storeConfirmedOpen = false;
+  let lastKnownActive = true;
+  let resolveReturnedFromStore: (() => void) | null = null;
 
-  const cleanup = async () => {
+  const returnedFromStorePromise = new Promise<void>((resolve) => {
+    resolveReturnedFromStore = resolve;
+  });
+
+  const cleanup = () => {
     settled = true;
-    if (timeoutId !== null) clearTimeout(timeoutId);
-    if (listener) {
-      try {
-        await listener.remove();
-      } catch {}
-      listener = null;
+    if (preSheetTimeoutId !== null) clearTimeout(preSheetTimeoutId);
+    if (callbackTimeoutId !== null) clearTimeout(callbackTimeoutId);
+
+    // Never await native listener cleanup on the purchase result path. A stuck
+    // Capacitor bridge cleanup must not keep the UI in the purchasing state.
+    const handle = listener;
+    listener = null;
+    if (handle) {
+      void handle.remove().catch((err) => {
+        diagError('purchase: listener cleanup failed:', err);
+      });
     }
   };
-
-  let resolveStoreOpened: (() => void) | null = null;
-  const storeOpenedPromise = new Promise<void>((resolve) => {
-    resolveStoreOpened = resolve;
-  });
 
   try {
     listener = await withTimeout(
       App.addListener('appStateChange', ({ isActive }) => {
-        if (!isActive && !settled) {
-          diagLog('purchase: native store activity opened');
-          resolveStoreOpened?.();
+        lastKnownActive = isActive;
+
+        // A single false event is not enough to prove that Google Play opened.
+        // We confirm the real state after PRE_SHEET_WATCHDOG_MS below.
+        if (isActive && storeConfirmedOpen && !settled) {
+          setPurchasePhase('RETURNED_FROM_STORE');
+          diagLog('purchase: app returned from native store');
+          resolveReturnedFromStore?.();
         }
       }),
       2_000,
@@ -274,54 +467,147 @@ async function purchaseWithStoreOpeningWatchdog<T>(startPurchase: () => Promise<
     diagError('purchase: appStateChange listener unavailable:', err);
   }
 
-  // Start the native purchase only after the app-state listener is installed,
-  // so a fast transition to the Google Play Activity cannot be missed.
+  // Install the listener before invoking the native SDK so fast Activity changes
+  // cannot be missed.
+  setPurchasePhase('PURCHASE_CALLED');
   const purchasePromise = startPurchase();
-
-  const timeoutPromise = new Promise<'timeout'>((resolve) => {
-    timeoutId = setTimeout(() => resolve('timeout'), PRE_SHEET_WATCHDOG_MS);
-  });
-
   const wrappedPurchase = purchasePromise.then(
     (result) => ({ kind: 'result' as const, result }),
     (error: unknown) => ({ kind: 'error' as const, error }),
   );
 
-  const first = await Promise.race([
-    wrappedPurchase,
-    storeOpenedPromise.then(() => ({ kind: 'store-opened' as const })),
-    timeoutPromise.then(() => ({ kind: 'timeout' as const })),
-  ]);
+  const preSheetCheck = new Promise<
+    { kind: 'store-confirmed' } | { kind: 'store-did-not-open' }
+  >((resolve) => {
+    preSheetTimeoutId = setTimeout(() => {
+      void (async () => {
+        let appIsActive = lastKnownActive;
+        try {
+          const state = await withTimeout(App.getState(), 2_000, 'App.getState');
+          appIsActive = state.isActive;
+          lastKnownActive = state.isActive;
+        } catch (err) {
+          diagError('purchase: unable to read current app state:', err);
+        }
+
+        const webViewVisible =
+          typeof document === 'undefined' ||
+          (document.visibilityState === 'visible' && document.hidden === false);
+
+        // Treat the app as still visible when either lifecycle signal says it is.
+        // Some Android devices can temporarily report App.getState().isActive=false
+        // while the Capacitor WebView remains visible. Requiring both signals to be
+        // visible would incorrectly confirm that Google Play opened and could leave
+        // the purchase promise waiting forever.
+        if (appIsActive || webViewVisible) {
+          resolve({ kind: 'store-did-not-open' });
+          return;
+        }
+
+        storeConfirmedOpen = true;
+        setPurchasePhase('STORE_CONFIRMED_OPEN');
+        diagLog('purchase: native store confirmed open after watchdog check');
+
+        // The app may have returned between App.getState() and this assignment.
+        if (lastKnownActive) resolveReturnedFromStore?.();
+        resolve({ kind: 'store-confirmed' });
+      })();
+    }, PRE_SHEET_WATCHDOG_MS);
+  });
+
+  const first = await Promise.race([wrappedPurchase, preSheetCheck]);
 
   if (first.kind === 'result') {
-    await cleanup();
+    setPurchasePhase('PURCHASE_CALLBACK');
+    cleanup();
     return first.result;
   }
   if (first.kind === 'error') {
-    await cleanup();
+    cleanup();
     throw first.error;
   }
-  if (first.kind === 'store-opened') {
-    await cleanup();
-    return await purchasePromise;
+  if (first.kind === 'store-did-not-open') {
+    cleanup();
+    throw new Error('[IAP] STORE_DID_NOT_OPEN: Google Play purchase screen did not open.' + diagnosticSuffix());
   }
 
-  await cleanup();
-  // The native promise may eventually reject after the UI has already reset.
-  // Attach a handler so that a late rejection never becomes unhandled.
-  void purchasePromise.catch((error) => {
-    diagError('purchase: late rejection after STORE_DID_NOT_OPEN:', error);
-  });
-  throw new Error('[IAP] STORE_DID_NOT_OPEN: Google Play purchase screen did not open.');
+  // Google Play was genuinely outside the visible app at the 15-second check.
+  // Wait without a limit while the store UI is open. Once the app returns, the
+  // native SDK gets 8 seconds to deliver its callback.
+  const callbackTimeout = returnedFromStorePromise.then(
+    () =>
+      new Promise<{ kind: 'callback-timeout' }>((resolve) => {
+        callbackTimeoutId = setTimeout(
+          () => resolve({ kind: 'callback-timeout' }),
+          PURCHASE_CALLBACK_TIMEOUT_MS,
+        );
+      }),
+  );
+
+  const afterStore = await Promise.race([wrappedPurchase, callbackTimeout]);
+
+  if (afterStore.kind === 'result') {
+    setPurchasePhase('PURCHASE_CALLBACK');
+    cleanup();
+    return afterStore.result;
+  }
+  if (afterStore.kind === 'error') {
+    cleanup();
+    throw afterStore.error;
+  }
+
+  cleanup();
+  // A late native rejection is already observed by wrappedPurchase, so it cannot
+  // become an unhandled promise rejection after the UI has reset.
+  throw new Error('[IAP] PURCHASE_CALLBACK_TIMEOUT: Store closed but RevenueCat did not return a result.' + diagnosticSuffix());
 }
 
 // --- Core operations ----------------------------------------------------------------
 
 export type IAPResult =
   | { success: true; isPro: boolean; token?: string }
-  | { success: false; cancelled: boolean; message: string };
+  | { success: false; cancelled: boolean; message: string; entitlementActive?: boolean };
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
+const PRO_AUTHORIZATION_SYNC_ERROR =
+  'Pro entitlement is active, but AI authorization is temporarily unavailable. Please try again in a moment.';
+
+export type EntitlementSyncResult = 'active' | 'inactive' | 'failed';
+export type TokenSyncResult = 'success' | 'failed' | 'not-run';
+
+export interface ProEntitlementSyncResult {
+  entitlementResult: EntitlementSyncResult;
+  tokenSyncLastResult: TokenSyncResult;
+  tokenSyncLastError?: string;
+  isPro: boolean;
+  token?: string;
+}
+
+function clearStoredProToken() {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(PRO_TOKEN_KEY);
+  } catch {}
+}
+
+function persistStoredProToken(token: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(PRO_TOKEN_KEY, token);
+  } catch {}
+}
+
+function decodeTokenIsPro(token: string | undefined | null): boolean {
+  if (!token) return false;
+  try {
+    const payloadPart = token.split('.')[0];
+    if (!payloadPart) return false;
+    const decoded = JSON.parse(base64UrlDecode(payloadPart));
+    return decoded.isPro === true;
+  } catch {
+    return false;
+  }
+}
 
 async function verifyProWithServer(): Promise<IAPResult> {
   const appUserId = getAppUserId();
@@ -338,29 +624,95 @@ async function verifyProWithServer(): Promise<IAPResult> {
     }
 
     diagLog('verifyProWithServer: token received');
-    try {
-      localStorage.setItem(PRO_TOKEN_KEY, data.token);
-    } catch {}
+    const isPro = decodeTokenIsPro(data.token);
 
-    let isPro = false;
-    try {
-      const payloadPart = data.token.split('.')[0];
-      if (payloadPart) {
-        const decoded = JSON.parse(base64UrlDecode(payloadPart));
-        isPro = decoded.isPro === true;
-      }
-    } catch {}
+    if (isPro) {
+      persistStoredProToken(data.token);
+    } else {
+      clearStoredProToken();
+    }
 
     diagLog('verifyProWithServer: isPro =', isPro);
-    return { success: true, isPro, token: data.token };
+    return { success: true, isPro, token: isPro ? data.token : undefined };
   } catch (err) {
     diagError('verifyProWithServer: fetch threw:', err);
     return { success: false, cancelled: false, message: err instanceof Error ? err.message : 'Verification failed.' };
   }
 }
 
+async function syncTokenForEntitlement(hasEntitlement: boolean): Promise<ProEntitlementSyncResult> {
+  if (!hasEntitlement) {
+    clearStoredProToken();
+    return {
+      entitlementResult: 'inactive',
+      tokenSyncLastResult: 'not-run',
+      isPro: false,
+    };
+  }
+
+  const serverResult = await verifyProWithServer();
+  if (serverResult.success && serverResult.isPro && serverResult.token) {
+    return {
+      entitlementResult: 'active',
+      tokenSyncLastResult: 'success',
+      isPro: true,
+      token: serverResult.token,
+    };
+  }
+
+  clearStoredProToken();
+  const tokenSyncLastError = serverResult.success
+    ? 'Server verification did not return a Pro token for the active entitlement.'
+    : serverResult.message;
+  return {
+    entitlementResult: 'active',
+    tokenSyncLastResult: 'failed',
+    tokenSyncLastError,
+    isPro: false,
+  };
+}
+
+export async function syncProEntitlement(): Promise<ProEntitlementSyncResult> {
+  if (!isNative()) {
+    const token = typeof window !== 'undefined' ? localStorage.getItem(PRO_TOKEN_KEY) : null;
+    if (decodeTokenIsPro(token)) {
+      return {
+        entitlementResult: 'active',
+        tokenSyncLastResult: 'success',
+        isPro: true,
+        token: token ?? undefined,
+      };
+    }
+    clearStoredProToken();
+    return {
+      entitlementResult: 'inactive',
+      tokenSyncLastResult: 'not-run',
+      isPro: false,
+    };
+  }
+
+  try {
+    const Purchases = getPurchases();
+    const { customerInfo } = await Purchases.getCustomerInfo();
+    const hasEntitlement = customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
+    return await syncTokenForEntitlement(hasEntitlement);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Entitlement check failed.';
+    diagError('syncProEntitlement: failed:', message);
+    return {
+      entitlementResult: 'failed',
+      tokenSyncLastResult: 'not-run',
+      tokenSyncLastError: message,
+      isPro: false,
+    };
+  }
+}
+
 export async function purchasePro(): Promise<IAPResult> {
+  _revenueCatHint = 'NONE';
+  setPurchasePhase('IDLE');
   diagLog('purchasePro: started');
+  await initializeAndroidPurchaseTrace();
 
   if (!isNative()) {
     diagLog('purchasePro: not native');
@@ -370,13 +722,17 @@ export async function purchasePro(): Promise<IAPResult> {
   if (!_initialized) {
     diagLog('purchasePro: SDK not initialised — attempting init...');
     try {
+      await traceMark('JS_BEFORE_INIT_IAP');
       await withTimeout(initIAP(), INIT_TIMEOUT_MS, 'initIAP (from purchasePro)');
+      await traceMark('JS_AFTER_INIT_IAP');
     } catch (err) {
+      await traceMark('JS_INIT_IAP_FAILED');
       const msg = err instanceof Error ? err.message : 'Purchase system init failed.';
       diagError('purchasePro: init failed:', msg);
       return { success: false, cancelled: false, message: msg };
     }
     if (!_initialized) {
+      await traceMark('JS_INIT_IAP_FAILED');
       diagError('purchasePro: SDK still not initialised after initIAP call');
       return { success: false, cancelled: false, message: 'Purchase system is not ready. Please try again later.' };
     }
@@ -393,22 +749,34 @@ export async function purchasePro(): Promise<IAPResult> {
       diagLog('purchasePro: user cancelled');
       return { success: false, cancelled: true, message: 'Purchase cancelled.' };
     }
-    const msg = rcErr && typeof rcErr['message'] === 'string' ? rcErr['message'] : 'Purchase failed. Please try again.';
+    const baseMessage = rcErr && typeof rcErr['message'] === 'string' ? rcErr['message'] : 'Purchase failed. Please try again.';
+    const msg = baseMessage.includes('[phase=') ? baseMessage : baseMessage + diagnosticSuffix();
     diagError('purchasePro: error:', msg);
     return { success: false, cancelled: false, message: msg };
   }
 }
 
 async function corePurchaseFlow(): Promise<IAPResult> {
-  const Purchases = await getPurchases();
+  let Purchases: ReturnType<typeof getPurchases>;
+  try {
+    await traceMark('JS_BEFORE_GET_PURCHASES');
+    Purchases = getPurchases();
+    await traceMark('JS_AFTER_GET_PURCHASES');
+  } catch (err) {
+    await traceMark('JS_GET_PURCHASES_FAILED');
+    throw err;
+  }
 
+  setPurchasePhase('BILLING_CHECK');
   diagLog('corePurchaseFlow: checking billing availability...');
   try {
+    await traceMark('JS_BEFORE_CAN_MAKE_PAYMENTS');
     const billing = await withTimeout(
       Purchases.canMakePayments(),
       INIT_TIMEOUT_MS,
       'canMakePayments',
     );
+    await traceMark('JS_AFTER_CAN_MAKE_PAYMENTS', `canMakePayments=${billing.canMakePayments === true}`);
     if (!billing.canMakePayments) {
       return {
         success: false,
@@ -417,16 +785,23 @@ async function corePurchaseFlow(): Promise<IAPResult> {
       };
     }
   } catch (err) {
+    await traceMark('JS_CAN_MAKE_PAYMENTS_FAILED');
     const message = err instanceof Error ? err.message : 'Unable to check Google Play billing.';
     diagError('corePurchaseFlow: billing preflight failed:', message);
     return { success: false, cancelled: false, message };
   }
 
+  setPurchasePhase('OFFERINGS_FETCH');
   diagLog('corePurchaseFlow: fetching offerings (with timeout)...');
   let offerings;
   try {
+    await traceMark('JS_BEFORE_GET_OFFERINGS');
     offerings = await withTimeout(Purchases.getOfferings(), PURCHASE_TIMEOUT_MS, 'getOfferings');
+    const currentOffering = offerings.current !== null && offerings.current !== undefined;
+    const packageCount = offerings.current?.availablePackages?.length ?? 0;
+    await traceMark('JS_AFTER_GET_OFFERINGS', `currentOffering=${currentOffering};packageCount=${packageCount}`);
   } catch (err) {
+    await traceMark('JS_GET_OFFERINGS_FAILED');
     const msg = err instanceof Error ? err.message : 'Failed to fetch offerings.';
     diagError('corePurchaseFlow: getOfferings failed:', msg);
     return { success: false, cancelled: false, message: msg };
@@ -434,6 +809,7 @@ async function corePurchaseFlow(): Promise<IAPResult> {
   const current = offerings.current;
 
   if (!current) {
+    await traceMark('JS_CURRENT_OFFERING_MISSING');
     diagError('corePurchaseFlow: no current offering found');
     diagLog('corePurchaseFlow: offering identifiers:', Object.keys(offerings.all));
     return { success: false, cancelled: false, message: 'No offerings available. Please try again later.' };
@@ -464,10 +840,16 @@ async function corePurchaseFlow(): Promise<IAPResult> {
       }
     }
     if (!purchasePackageObj) {
+      await traceMark('JS_PACKAGE_NOT_FOUND');
       diagError('corePurchaseFlow: lifetime package not found');
       return { success: false, cancelled: false, message: 'Lifetime package not found in store. Check RevenueCat dashboard.' };
     }
   }
+
+  await traceMark(
+    'JS_PACKAGE_SELECTED',
+    `packageIdentifier=${purchasePackageObj.identifier};productIdentifier=${purchasePackageObj.product.identifier}`,
+  );
 
   if (purchasePackageObj.product.identifier !== PRO_PRODUCT_ID) {
     return {
@@ -479,6 +861,7 @@ async function corePurchaseFlow(): Promise<IAPResult> {
 
   _storePrice = purchasePackageObj.product.priceString ?? null;
   if (!_storePrice) {
+    await traceMark('JS_PRICE_MISSING');
     return {
       success: false,
       cancelled: false,
@@ -487,12 +870,17 @@ async function corePurchaseFlow(): Promise<IAPResult> {
   }
 
   diagLog('corePurchaseFlow: price:', _storePrice);
+  setPurchasePhase('PACKAGE_SELECTED');
   diagLog('corePurchaseFlow: selected package:', purchasePackageObj.identifier);
   diagLog('corePurchaseFlow: selected product:', purchasePackageObj.product.identifier);
 
   diagLog('corePurchaseFlow: launching purchase sheet...');
+  await runAndroidPurchaseTracePreflight();
+  // The selected item came from RevenueCat Offerings, so purchase the
+  // PurchasesPackage itself on every platform. RevenueCat documents
+  // purchaseStoreProduct for products fetched directly with getProducts().
   const result = await purchaseWithStoreOpeningWatchdog(() =>
-    Purchases.purchasePackage({ aPackage: purchasePackageObj }),
+    runTracedRevenueCatPurchase(() => Purchases.purchasePackage({ aPackage: purchasePackageObj })),
   );
 
   const hasEntitlement = result.customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
@@ -507,33 +895,48 @@ async function corePurchaseFlow(): Promise<IAPResult> {
     };
   }
 
+  setPurchasePhase('SERVER_VERIFY');
   diagLog('corePurchaseFlow: verifying with server...');
-  const serverResult = await verifyProWithServer();
-  const serverToken = 'token' in serverResult ? serverResult.token : undefined;
+  const syncResult = await syncTokenForEntitlement(true);
 
-  if (!serverResult.success || !serverResult.isPro) {
+  if (!syncResult.isPro || !syncResult.token) {
     diagError('corePurchaseFlow: server verification failed');
-    return { success: true, isPro: false, token: serverToken };
+    return {
+      success: false,
+      cancelled: false,
+      entitlementActive: true,
+      message: syncResult.tokenSyncLastError || PRO_AUTHORIZATION_SYNC_ERROR,
+    };
   }
 
+  setPurchasePhase('COMPLETE');
   diagLog('corePurchaseFlow: fully verified - Pro active');
-  return { success: true, isPro: true, token: serverToken };
+  return { success: true, isPro: true, token: syncResult.token };
 }
 
 export async function restorePro(): Promise<IAPResult> {
   diagLog('restorePro: started');
   if (!isNative()) {
-    const hadPro = typeof window !== 'undefined' && localStorage.getItem('cvpro-plan') === 'pro';
-    return { success: true, isPro: hadPro };
+    const token = typeof window !== 'undefined' ? localStorage.getItem(PRO_TOKEN_KEY) : null;
+    return { success: true, isPro: decodeTokenIsPro(token), token: decodeTokenIsPro(token) ? token ?? undefined : undefined };
   }
   try {
-    const Purchases = await getPurchases();
+    const Purchases = getPurchases();
     diagLog('restorePro: calling restorePurchases...');
     const { customerInfo } = await Purchases.restorePurchases();
     const hasEntitlement = customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
     diagLog('restorePro: entitlement found:', hasEntitlement);
+    const syncResult = await syncTokenForEntitlement(hasEntitlement);
     if (!hasEntitlement) return { success: true, isPro: false };
-    return await verifyProWithServer();
+    if (!syncResult.isPro || !syncResult.token) {
+      return {
+        success: false,
+        cancelled: false,
+        entitlementActive: true,
+        message: syncResult.tokenSyncLastError || PRO_AUTHORIZATION_SYNC_ERROR,
+      };
+    }
+    return { success: true, isPro: true, token: syncResult.token };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Restore failed. Please try again.';
     diagError('restorePro: failed:', msg);
@@ -542,32 +945,8 @@ export async function restorePro(): Promise<IAPResult> {
 }
 
 export async function checkProEntitlement(): Promise<boolean> {
-  if (!isNative()) {
-    try {
-      const token = localStorage.getItem(PRO_TOKEN_KEY);
-      if (!token) return false;
-      const payloadPart = token.split('.')[0];
-      if (!payloadPart) return false;
-      const decoded = JSON.parse(base64UrlDecode(payloadPart));
-      const { isPro, exp } = decoded as { isPro?: boolean; exp?: number };
-      if (isPro !== true) return false;
-      if (exp && Date.now() >= exp) {
-        localStorage.removeItem(PRO_TOKEN_KEY);
-        return false;
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  try {
-    const Purchases = await getPurchases();
-    await Purchases.getCustomerInfo();
-    const result = await verifyProWithServer();
-    return result.success && result.isPro;
-  } catch {
-    return false;
-  }
+  const result = await syncProEntitlement();
+  return result.isPro === true && result.tokenSyncLastResult === 'success';
 }
 
 // --- React hook -------------------------------------------------------------------

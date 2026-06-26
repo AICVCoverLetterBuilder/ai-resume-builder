@@ -2,6 +2,8 @@
  * @vitest-environment jsdom
  */
 import { describe, expect, test } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /**
  * Tests for Pro gating in CV Builder.
@@ -185,13 +187,15 @@ describe('Job Description Analyzer (handleAnalyzeJob)', () => {
 
 describe('isPro-aware caller audit', () => {
   test('all three CV Builder features use the shared gate', () => {
-    // These three callers now call checkProAccess() first
+    // These callers now enter through the shared click-time AI gate.
     const callers = [
       'handleGenBullets',
       'handleGenSummary',
+      'handleRewrite',
+      'handleAnalyzeJob',
       'handleTemplateRecommend',
     ];
-    expect(callers.length).toBe(3);
+    expect(callers.length).toBe(5);
   });
 
   test('canUseProAi returns false for Free users (defense in depth)', () => {
@@ -204,5 +208,40 @@ describe('isPro-aware caller audit', () => {
     expect(canUseProAi(false, 5)).toBe(false);
     expect(canUseProAi(true, 5)).toBe(true);
     expect(canUseProAi(true, 20)).toBe(false);
+  });
+
+  test('AI feature callers read the shared current-token AI gate at click time', () => {
+    const cvBuilder = fs.readFileSync(path.resolve('src/app/cv-builder/page.tsx'), 'utf8');
+    const coverLetter = fs.readFileSync(path.resolve('src/app/cover-letter/page.tsx'), 'utf8');
+    const store = fs.readFileSync(path.resolve('src/lib/store.tsx'), 'utf8');
+
+    expect(store).toContain('export type AiGateResult');
+    expect(store).toContain('const getAiGate = useCallback');
+    expect(store).toContain('const currentToken = proTokenRef.current || loadProToken();');
+    expect(cvBuilder).toContain('useApp()');
+    expect(cvBuilder).toContain('isPro');
+    expect(cvBuilder).toContain('getAiGate');
+    expect(cvBuilder).not.toContain('getProToken');
+    expect(cvBuilder).toContain("checkProAccess(aiGate.status !== 'free', 0)");
+    expect(cvBuilder).toContain('getCurrentProTokenOrToast');
+    expect(cvBuilder).toContain('t.common.proAuthorizationUnavailable');
+    expect(coverLetter).toContain('useApp()');
+    expect(coverLetter).toContain('isPro');
+    expect(coverLetter).toContain('getAiGate');
+    expect(coverLetter).not.toContain('getProToken');
+    expect(coverLetter).toContain("const isCurrentPro = aiGate.status !== 'free';");
+    expect(coverLetter).toContain('t.common.proAuthorizationUnavailable');
+    expect(coverLetter).toContain('freeUserId: isCurrentPro ? undefined : getAppUserId()');
+  });
+
+  test('server AI gate uses the shared Pro token verifier and keeps lifetime wording', () => {
+    const generateRoute = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
+    const translations = fs.readFileSync(path.resolve('src/lib/i18n/translations.ts'), 'utf8');
+
+    expect(generateRoute).toContain("import { verifyProToken } from '@/lib/pro-token';");
+    expect(generateRoute).toContain('(await verifyProToken(proToken)) !== null');
+    expect(generateRoute).not.toContain('function verifyProToken(');
+    expect(generateRoute).toContain('Pro access required for AI features.');
+    expect(`${generateRoute}\n${translations}`).not.toContain('Pro subscription required');
   });
 });

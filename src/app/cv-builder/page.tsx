@@ -29,7 +29,6 @@ import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/li
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
-import { getAppUserId } from '@/lib/iap';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
@@ -70,7 +69,7 @@ const emptyEdu = (): Education => ({
 
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
-  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, lastCvSavedAt, persistCurrentDraft, getProToken } = useApp();
+  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, lastCvSavedAt, persistCurrentDraft, getAiGate } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const [step, setStep] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
@@ -426,13 +425,27 @@ export default function CVBuilderPage() {
     persistCurrentDraft({ originalPhoto: orig, circularPhoto: circ, rectangularPhoto: rect });
   };
 
-  const handleGenSummary = async () => {
-    const gateAccess = checkProAccess(isPro, 0);
+  const getCurrentProTokenOrToast = (openUpgradeModal: () => void) => {
+    const aiGate = getAiGate();
+    const gateAccess = checkProAccess(aiGate.status !== 'free', 0);
     if (gateAccess !== 'allowed') {
-      if (gateAccess === 'upgrade') { setSummaryAiModal(true); return; }
+      if (gateAccess === 'upgrade') {
+        openUpgradeModal();
+        return null;
+      }
       toast.error('AI service is temporarily unavailable. Please try again later.');
-      return;
+      return null;
     }
+    if (aiGate.status === 'syncing') {
+      toast.error(t.common.proAuthorizationUnavailable);
+      return null;
+    }
+    return aiGate.status === 'ready' ? aiGate.token : null;
+  };
+
+  const handleGenSummary = async () => {
+    const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
+    if (!proToken) return;
     if (isSummaryGenerating) return;
     setIsSummaryGenerating(true);
     const controller = new AbortController();
@@ -477,8 +490,7 @@ export default function CVBuilderPage() {
       const { data: summaryData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
         body: {
           action: 'summary',
-          proToken: getProToken(),
-          freeUserId: !isPro ? getAppUserId() : undefined,
+          proToken,
           jobTitle: cv.personal.jobTitle,
           experienceDuration,
           experienceEntries,
@@ -492,7 +504,8 @@ export default function CVBuilderPage() {
       });
       if (!res.ok || summaryData.error) {
         if (res.status === 403) {
-          setSummaryAiModal(true);
+          if (getAiGate().status !== 'free') toast.error(t.common.proAuthorizationUnavailable);
+          else setSummaryAiModal(true);
           return;
         }
         throw new Error(summaryData.error || 'AI error');
@@ -510,15 +523,12 @@ export default function CVBuilderPage() {
   };
 
   const handleGenBullets = async (expId: string) => {
-    const gateAccess = checkProAccess(isPro, 0);
-    if (gateAccess !== 'allowed') {
-      if (gateAccess === 'upgrade') { setAiImprovementsModal(true); return; }
-      toast.error('AI service is temporarily unavailable. Please try again later.');
-      return;
-    }
     const exp = cv.experience.find(e => e.id === expId);
     if (!exp) return;
     if (generatingBulletsId) return; // Prevent multiple concurrent requests
+
+    const proToken = getCurrentProTokenOrToast(() => setAiImprovementsModal(true));
+    if (!proToken) return;
 
     const industry = expIndustry[expId] ?? 'general';
     const level = expLevel[expId] ?? 'mid';
@@ -530,8 +540,7 @@ export default function CVBuilderPage() {
     try {
       const requestBody = {
         action: 'bullets',
-        proToken: getProToken(),
-        freeUserId: !isPro ? getAppUserId() : undefined,
+        proToken,
         position: exp.position,
         company: exp.company,
         industry,
@@ -547,7 +556,7 @@ export default function CVBuilderPage() {
 
       if (!res.ok || bulletsData.error) {
         if (res.status === 403) {
-          toast.error('Pro subscription required. Please upgrade to continue.');
+          toast.error(getAiGate().status !== 'free' ? t.common.proAuthorizationUnavailable : t.common.proAccessRequired);
           return;
         }
         throw new Error(bulletsData.error || 'AI error');
@@ -568,19 +577,15 @@ export default function CVBuilderPage() {
   };
 
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
-    const gateAccess = checkProAccess(isPro, 0);
-    if (gateAccess !== 'allowed') {
-      if (gateAccess === 'upgrade') { setSummaryAiModal(true); return; }
-      toast.error('AI service is temporarily unavailable. Please try again later.');
-      return;
-    }
     if (rewritingStyle || !cv.summary.trim()) return;
+    const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
+    if (!proToken) return;
     setRewritingStyle(style);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
     try {
       const { data: rewriteData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
-        body: { action: 'rewrite', proToken: getProToken(), text: cv.summary, style, locale, gender: cv.personal.gender || '' },
+        body: { action: 'rewrite', proToken, text: cv.summary, style, locale, gender: cv.personal.gender || '' },
         signal: controller.signal,
       });
       if (!res.ok || rewriteData.error) throw new Error(rewriteData.error || 'AI error');
@@ -597,12 +602,7 @@ export default function CVBuilderPage() {
 
   const handleAnalyzeJob = () => {
     if (!jobDesc.trim()) return;
-    const gateAccess = checkProAccess(isPro, 0);
-    if (gateAccess !== 'allowed') {
-      if (gateAccess === 'upgrade') { setJobAnalyzerModal(true); return; }
-      toast.error('AI service is temporarily unavailable. Please try again later.');
-      return;
-    }
+    if (!getCurrentProTokenOrToast(() => setJobAnalyzerModal(true))) return;
     setShowAnalysis(false);
     setAnalysis(null);
     setIsAnalyzing(true);
@@ -611,7 +611,7 @@ export default function CVBuilderPage() {
       setAnalysis(result);
       setIsAnalyzing(false);
       setShowAnalysis(true);
-      if (isPro) recordProAiSuccess();
+      recordProAiSuccess();
     }, 1300);
   };
 
@@ -706,18 +706,13 @@ export default function CVBuilderPage() {
     };
 
     const handleTemplateRecommend = () => {
-      const gateAccess = checkProAccess(isPro, 0);
-      if (gateAccess !== 'allowed') {
-        if (gateAccess === 'upgrade') { setAiRecommendModal(true); return; }
-        toast.error('AI service is temporarily unavailable. Please try again later.');
-        return;
-      }
+      if (!getCurrentProTokenOrToast(() => setAiRecommendModal(true))) return;
       if (cv.personal.jobTitle) {
         const recommended = recommendTemplate(cv.personal.jobTitle);
         setCv(prev => ({ ...prev, templateId: recommended }));
         setRecommendedTemplateId(recommended);
         markAiRecommendUsed();
-        if (isPro) recordProAiSuccess();
+        recordProAiSuccess();
         toast.success(`${t.cv.recommendedToast}: ${t.templates.items[recommended].name}`);
       }
     };
