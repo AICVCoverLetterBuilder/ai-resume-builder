@@ -707,14 +707,12 @@ export default function CVBuilderPage() {
 
     const handleTemplateRecommend = () => {
       if (!getCurrentProTokenOrToast(() => setAiRecommendModal(true))) return;
-      if (cv.personal.jobTitle) {
-        const recommended = recommendTemplate(cv.personal.jobTitle);
-        setCv(prev => ({ ...prev, templateId: recommended }));
-        setRecommendedTemplateId(recommended);
-        markAiRecommendUsed();
-        recordProAiSuccess();
-        toast.success(`${t.cv.recommendedToast}: ${t.templates.items[recommended].name}`);
-      }
+      const recommended = recommendTemplate(cv);
+      setCv(prev => ({ ...prev, templateId: recommended }));
+      setRecommendedTemplateId(recommended);
+      markAiRecommendUsed();
+      recordProAiSuccess();
+      toast.success(`${t.cv.recommendedToast}: ${t.templates.items[recommended].name}`);
     };
 
 

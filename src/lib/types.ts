@@ -119,41 +119,229 @@ export const templateInfo: Record<TemplateId, {
       'rirekisho': { name: '履歴書 (Rirekisho)', category: 'Japanese', professions: ['general', 'tech', 'executive'], description: 'The authentic Japanese CV format — built to meet local hiring standards perfectly.', isPro: true },
     };
 
-export function recommendTemplate(jobTitle: string, experienceLevel?: 'entry' | 'mid' | 'senior'): TemplateId {
-  const lower = jobTitle.toLowerCase();
-  const isEntryLevel = experienceLevel === 'entry' || /student|intern|junior|entry|graduate|trainee|apprentice/.test(lower);
+export type RecommendationConfidence = 'insufficient-data' | 'rules-based';
 
-  // Entry-level fallback → free template
-  if (isEntryLevel) return 'clean-simple';
+export interface TemplateRecommendation {
+  templateId: TemplateId;
+  confidence: RecommendationConfidence;
+  reason: string;
+}
 
-  // Tech roles → prioritize Pro tech templates
-  if (/software|developer|engineer|devops|data scientist|machine learning|ai engineer|programmer|web|frontend|backend|fullstack|qa|cyber|cloud|sre|platform|mobile|android|ios/.test(lower)) {
-    if (/senior|lead|principal|staff|architect/.test(lower)) return 'tech-sidebar';
-    return 'ats-standard';
+export const TEMPLATE_TIE_BREAK_ORDER: TemplateId[] = [
+  'modern-minimal',
+  'clean-simple',
+  'professional-classic',
+  'ats-standard',
+  'tech-sidebar',
+  'nordic-clean',
+  'contemporary-bold',
+  'creative-bold',
+  'creative-artistic',
+  'corporate-navy',
+  'elegant-formal',
+  'executive-premium',
+  'rirekisho',
+];
+
+export const PREMIUM_RECOMMENDATION_TIE_BREAK_ORDER: TemplateId[] = TEMPLATE_TIE_BREAK_ORDER.filter(
+  (id) => templateInfo[id].isPro,
+);
+
+const PREMIUM_FALLBACK_TEMPLATE: TemplateId = PREMIUM_RECOMMENDATION_TIE_BREAK_ORDER[0];
+
+function isTemplateId(value: string): value is TemplateId {
+  return Object.prototype.hasOwnProperty.call(templateInfo, value);
+}
+
+function isPremiumTemplateId(value: string): value is TemplateId {
+  return isTemplateId(value) && templateInfo[value].isPro;
+}
+
+export function getPremiumRecommendationFallback(): TemplateId {
+  return PREMIUM_FALLBACK_TEMPLATE;
+}
+
+export function validatePremiumRecommendationTemplateId(templateId: TemplateId): TemplateId {
+  return templateInfo[templateId]?.isPro ? templateId : PREMIUM_FALLBACK_TEMPLATE;
+}
+
+export function normalizeRecommendedTemplateId(result: unknown, fallback: TemplateId = PREMIUM_FALLBACK_TEMPLATE): TemplateId {
+  const safeFallback = validatePremiumRecommendationTemplateId(fallback);
+
+  if (typeof result === 'string') {
+    const normalized = result.trim().toLowerCase().replace(/_/g, '-');
+    return isPremiumTemplateId(normalized) ? normalized : safeFallback;
   }
 
-  // IT / general tech → Pro nordic
-  if (/it |information technology|systems|network|database|devops|cloud|infrastructure/.test(lower)) return 'nordic-clean';
+  if (result && typeof result === 'object') {
+    const candidate = (result as { templateId?: unknown; id?: unknown; slug?: unknown }).templateId
+      ?? (result as { id?: unknown }).id
+      ?? (result as { slug?: unknown }).slug;
+    return normalizeRecommendedTemplateId(candidate, fallback);
+  }
 
-  // Marketing / Creative → Pro creative templates
-  if (/market|brand|content|social|growth|seo|sem|ppc|email market|product market/.test(lower)) return 'contemporary-bold';
-  if (/design|creative|ux|ui|graphic|art|photo|video|media|animator|illustrator/.test(lower)) return 'creative-bold';
+  return safeFallback;
+}
 
-  // Executive / Leadership → Pro executive templates
-  if (/ceo|cto|cfo|coo|cmo|cpo|chief|founder|co-founder/.test(lower)) return 'executive-premium';
-  if (/director|vp|vice president|head of|managing|president/.test(lower)) return 'corporate-navy';
-  if (/manager|lead|principal|senior manager|project manager|product manager|program manager/.test(lower)) return 'elegant-formal';
+function cvRecommendationText(cv: CVData): string {
+  return [
+    cv.personal.jobTitle,
+    cv.summary,
+    ...cv.experience.flatMap((exp) => [exp.position, exp.company, exp.description]),
+    ...cv.education.flatMap((edu) => [edu.degree, edu.school, edu.description]),
+    ...cv.skills,
+    ...cv.certifications,
+  ].join(' ').toLowerCase();
+}
 
-  // Finance / Legal / Consulting → Pro executive feel
-  if (/finance|financial|banking|investment|analyst|consultant|accountant|auditor|legal|attorney|lawyer/.test(lower)) return 'corporate-navy';
+function hasMeaningfulRecommendationInput(cv: CVData): boolean {
+  return Boolean(
+    cv.personal.jobTitle.trim()
+    || cv.summary.trim()
+    || cv.experience.some((exp) => exp.position.trim() || exp.company.trim() || exp.description.trim())
+    || cv.education.some((edu) => edu.degree.trim() || edu.school.trim() || edu.description.trim())
+    || cv.skills.some((skill) => skill.trim())
+    || cv.certifications.some((certification) => certification.trim())
+  );
+}
 
-  // Healthcare / Education → modern clean Pro
-  if (/doctor|physician|nurse|healthcare|medical|therapist|pharmacist|dentist/.test(lower)) return 'nordic-clean';
-  if (/teacher|professor|lecturer|educator|researcher|academic/.test(lower)) return 'ats-standard';
+function inferRecommendationLevel(cv: CVData, explicitLevel?: 'entry' | 'mid' | 'senior'): 'entry' | 'mid' | 'senior' {
+  if (explicitLevel) return explicitLevel;
 
-  // Startup / Product / Operations
-  if (/startup|entrepreneur|product|operations|ops|scrum|agile|delivery/.test(lower)) return 'contemporary-bold';
+  const text = cvRecommendationText(cv);
+  if (/chief|founder|co-founder|director|vp|vice president|head of|principal|staff|architect|senior manager/.test(text)) return 'senior';
+  if (/senior|lead|manager|consultant|specialist/.test(text)) return 'senior';
+  if (/student|intern|junior|entry|graduate|trainee|apprentice/.test(text)) return 'entry';
 
-  // Default → Pro professional classic feel
-  return 'nordic-clean';
+  const filledExperience = cv.experience.filter((exp) => exp.position || exp.company || exp.description).length;
+  const filledEducation = cv.education.filter((edu) => edu.degree || edu.school || edu.description).length;
+  if (filledExperience >= 3) return 'senior';
+  if (filledExperience >= 1) return 'mid';
+  if (filledEducation > 0) return 'entry';
+  return 'mid';
+}
+
+function addTemplateScore(scores: Record<TemplateId, number>, ids: TemplateId[], amount: number) {
+  ids.forEach((id) => {
+    if (!templateInfo[id].isPro) return;
+    scores[id] += amount;
+  });
+}
+
+function cvFromJobTitle(jobTitle: string): CVData {
+  return {
+    id: 'recommendation-input',
+    name: '',
+    personal: { fullName: '', email: '', phone: '', address: '', jobTitle },
+    summary: '',
+    experience: [],
+    education: [],
+    skills: [],
+    certifications: [],
+    languages: [],
+    templateId: PREMIUM_FALLBACK_TEMPLATE,
+    region: 'US',
+    createdAt: '',
+    updatedAt: '',
+  };
+}
+
+export interface TemplateRecommendationScoreBreakdown {
+  scores: Record<TemplateId, number>;
+  level: 'entry' | 'mid' | 'senior';
+  hasPhoto: boolean;
+  wordCount: number;
+  filledExperience: number;
+  premiumCandidates: TemplateId[];
+}
+
+export function getTemplateRecommendationScoreBreakdown(input: CVData | string, experienceLevel?: 'entry' | 'mid' | 'senior'): TemplateRecommendationScoreBreakdown {
+  const cv = typeof input === 'string' ? cvFromJobTitle(input) : input;
+  const text = cvRecommendationText(cv);
+  const level = inferRecommendationLevel(cv, experienceLevel);
+  const hasPhoto = Boolean(cv.personal.photo && cv.personal.photoEnabled !== false);
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  const filledExperience = cv.experience.filter((exp) => exp.position || exp.company || exp.description).length;
+  const scores = Object.fromEntries((Object.keys(templateInfo) as TemplateId[]).map((id) => [id, 0])) as Record<TemplateId, number>;
+
+  if (cv.region === 'US' || !hasPhoto || wordCount > 180 || /ats|applicant tracking|resume parser|keywords?/.test(text)) {
+    addTemplateScore(scores, ['modern-minimal', 'ats-standard', 'professional-classic', 'clean-simple'], 3);
+  }
+
+  if (hasPhoto) addTemplateScore(scores, ['nordic-clean', 'creative-bold', 'creative-artistic', 'elegant-formal', 'executive-premium'], 2);
+  if (wordCount > 260 || filledExperience >= 4) addTemplateScore(scores, ['tech-sidebar', 'corporate-navy', 'ats-standard', 'professional-classic'], 2);
+  if (wordCount < 80 || level === 'entry') addTemplateScore(scores, ['clean-simple', 'modern-minimal', 'ats-standard', 'nordic-clean'], 5);
+
+  if (/software|developer|engineer|devops|data scientist|machine learning|ai engineer|programmer|web|frontend|backend|fullstack|qa|cyber|cloud|sre|platform|mobile|android|ios|typescript|react|python|kubernetes/.test(text)) {
+    addTemplateScore(scores, ['tech-sidebar', 'ats-standard', 'modern-minimal', 'contemporary-bold'], level === 'senior' ? 5 : 4);
+  }
+
+  if (/sales|account executive|business development|revenue|market|brand|content|social|growth|seo|sem|ppc|email market|product market|campaign|copywriter/.test(text)) {
+    addTemplateScore(scores, ['contemporary-bold', 'creative-bold', 'creative-artistic'], 5);
+  }
+
+  if (/design|creative|ux|ui|graphic|\bart\b|photo|video|media|animator|illustrator|portfolio|figma/.test(text)) {
+    addTemplateScore(scores, ['creative-bold', 'creative-artistic', 'contemporary-bold'], 6);
+  }
+
+  if (/ceo|cto|cfo|coo|cmo|cpo|chief|founder|co-founder|director|vp|vice president|head of|managing|president|board/.test(text) || level === 'senior') {
+    addTemplateScore(scores, ['executive-premium', 'corporate-navy', 'elegant-formal'], 4);
+  }
+
+  if (/finance|financial|banking|investment|analyst|consultant|accountant|auditor|legal|attorney|lawyer|compliance|risk/.test(text)) {
+    addTemplateScore(scores, ['corporate-navy', 'professional-classic', 'elegant-formal'], 5);
+  }
+
+  if (/doctor|physician|nurse|healthcare|medical|therapist|pharmacist|dentist|clinical/.test(text)) {
+    addTemplateScore(scores, ['professional-classic', 'nordic-clean', 'ats-standard'], 4);
+  }
+
+  if (/teacher|professor|lecturer|educator|researcher|academic|university|school/.test(text)) {
+    addTemplateScore(scores, ['professional-classic', 'ats-standard', 'clean-simple'], 4);
+  }
+
+  if (/startup|entrepreneur|product|operations|ops|scrum|agile|delivery/.test(text)) {
+    addTemplateScore(scores, ['contemporary-bold', 'tech-sidebar', 'modern-minimal'], 4);
+  }
+
+  return {
+    scores,
+    level,
+    hasPhoto,
+    wordCount,
+    filledExperience,
+    premiumCandidates: PREMIUM_RECOMMENDATION_TIE_BREAK_ORDER,
+  };
+}
+
+export function recommendTemplateDetails(input: CVData | string, experienceLevel?: 'entry' | 'mid' | 'senior'): TemplateRecommendation {
+  const cv = typeof input === 'string' ? cvFromJobTitle(input) : input;
+
+  if (cv.region === 'Japan') {
+    return { templateId: validatePremiumRecommendationTemplateId('rirekisho'), confidence: 'rules-based', reason: 'Japanese-region CVs use the local Rirekisho format.' };
+  }
+
+  if (!hasMeaningfulRecommendationInput(cv)) {
+    return {
+      templateId: PREMIUM_FALLBACK_TEMPLATE,
+      confidence: 'insufficient-data',
+      reason: `Not enough CV content to personalize a template recommendation; using the first premium template in the deterministic tie-break order (${PREMIUM_FALLBACK_TEMPLATE}).`,
+    };
+  }
+
+  const { scores } = getTemplateRecommendationScoreBreakdown(cv, experienceLevel);
+
+  const templateId = PREMIUM_RECOMMENDATION_TIE_BREAK_ORDER.reduce((best, current) => (
+    scores[current] > scores[best] ? current : best
+  ), PREMIUM_FALLBACK_TEMPLATE);
+
+  return {
+    templateId: validatePremiumRecommendationTemplateId(templateId),
+    confidence: 'rules-based',
+    reason: `Deterministic premium-only score from CV industry signals, experience level, photo presence, content length, and ATS preference; ties use ${PREMIUM_RECOMMENDATION_TIE_BREAK_ORDER.join(' > ')}.`,
+  };
+}
+
+export function recommendTemplate(input: CVData | string, experienceLevel?: 'entry' | 'mid' | 'senior'): TemplateId {
+  return recommendTemplateDetails(input, experienceLevel).templateId;
 }
