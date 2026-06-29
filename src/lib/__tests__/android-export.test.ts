@@ -16,13 +16,22 @@ const mockCapacitor = vi.hoisted(() => ({
 
 const pluginInstances = vi.hoisted(() => ({
   healthCheck: vi.fn().mockResolvedValue({ pluginAvailable: true, cacheWritable: true, pluginVersion: '1.1.0' }),
-  saveFile: vi.fn().mockResolvedValue({ result: 'saved', message: 'OK' }),
+  saveFile: vi.fn(async (options?: { expectedBytes?: number }) => ({
+    result: 'saved',
+    message: 'OK',
+    bytesWritten: options?.expectedBytes ?? 1,
+    verifiedSize: options?.expectedBytes ?? 1,
+  })),
+  getDiagnostics: vi.fn().mockResolvedValue({ events: [] }),
+  clearDiagnostics: vi.fn().mockResolvedValue({ cleared: true }),
   print: vi.fn().mockResolvedValue({ result: 'saved', message: 'OK' }),
 }));
 
 const mockRegisterPlugin = vi.hoisted(() => vi.fn(() => ({
   healthCheck: pluginInstances.healthCheck,
   saveFile: pluginInstances.saveFile,
+  getDiagnostics: pluginInstances.getDiagnostics,
+  clearDiagnostics: pluginInstances.clearDiagnostics,
   print: pluginInstances.print,
 })));
 
@@ -48,9 +57,18 @@ function resetPluginMocks() {
   pluginInstances.healthCheck.mockReset();
   pluginInstances.healthCheck.mockResolvedValue({ pluginAvailable: true, cacheWritable: true, pluginVersion: '1.1.0' });
   pluginInstances.saveFile.mockReset();
-  pluginInstances.saveFile.mockResolvedValue({ result: 'saved', message: 'OK' });
+  pluginInstances.saveFile.mockImplementation(async (options?: { expectedBytes?: number }) => ({
+    result: 'saved',
+    message: 'OK',
+    bytesWritten: options?.expectedBytes ?? 1,
+    verifiedSize: options?.expectedBytes ?? 1,
+  }));
   pluginInstances.print.mockReset();
   pluginInstances.print.mockResolvedValue({ result: 'saved', message: 'OK' });
+  pluginInstances.getDiagnostics.mockReset();
+  pluginInstances.getDiagnostics.mockResolvedValue({ events: [] });
+  pluginInstances.clearDiagnostics.mockReset();
+  pluginInstances.clearDiagnostics.mockResolvedValue({ cleared: true });
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -62,6 +80,7 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
   beforeEach(() => {
     setWeb();
     resetPluginMocks();
+    window.localStorage.clear();
     // jsdom does not implement URL.createObjectURL
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (URL as any).createObjectURL = vi.fn(() => 'blob:http://test/mock');
@@ -98,6 +117,14 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
     expect(args.fileName).toBe('cv-test.pdf');
     expect(args.mimeType).toBe('application/pdf');
     expect(args.base64Data.length).toBeGreaterThan(0);
+    expect(args.expectedBytes).toBe(blob.size);
+  });
+
+  test('JS plugin name matches the registered native SaveFile plugin', async () => {
+    setNativeAndroid();
+    await import('../native-save');
+
+    expect(mockRegisterPlugin).toHaveBeenCalledWith('SaveFile');
   });
 
   test('Android exportToPDF does NOT call PrintPdfPlugin during save path', async () => {
@@ -122,6 +149,28 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
     const args = pluginInstances.saveFile.mock.calls[0][0];
     expect(args.fileName).toBe('cv-test.docx');
     expect(args.mimeType).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    expect(args.expectedBytes).toBe(blob.size);
+  });
+
+  test('PDF and DOCX both use the same verified native save boundary', async () => {
+    setNativeAndroid();
+    const { saveFileViaPlatform } = await import('../native-save');
+
+    const pdf = new Blob(['%PDF-1.7'], { type: 'application/pdf' });
+    const docx = new Blob([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    await saveFileViaPlatform(pdf, 'test.pdf', 'application/pdf');
+    await saveFileViaPlatform(docx, 'test.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+
+    expect(pluginInstances.saveFile.mock.calls[0][0]).toEqual(expect.objectContaining({
+      mimeType: 'application/pdf',
+      expectedBytes: pdf.size,
+    }));
+    expect(pluginInstances.saveFile.mock.calls[1][0]).toEqual(expect.objectContaining({
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      expectedBytes: docx.size,
+    }));
   });
 
   test('Android DOCX save does NOT call PrintPdfPlugin', async () => {
@@ -166,6 +215,150 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
 
     await saveFileViaPlatform(blob, 'test.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     expect(pluginInstances.print).not.toHaveBeenCalled();
+  });
+
+  test('Android save converts binary PDF bytes to Base64 without dropping bytes', async () => {
+    setNativeAndroid();
+    const { blobToBase64Payload } = await import('../native-save');
+    const bytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x00, 0xff]);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+
+    const payload = await blobToBase64Payload(blob);
+    const decoded = Uint8Array.from(atob(payload.base64Data), char => char.charCodeAt(0));
+
+    expect(payload.byteLength).toBe(bytes.byteLength);
+    expect(Array.from(decoded)).toEqual(Array.from(bytes));
+  });
+
+  test('Android save converts DOCX ZIP bytes and preserves PK signature', async () => {
+    setNativeAndroid();
+    const { blobToBase64Payload } = await import('../native-save');
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x08, 0x00]);
+    const blob = new Blob([bytes], {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+
+    const payload = await blobToBase64Payload(blob);
+    const decoded = Uint8Array.from(atob(payload.base64Data), char => char.charCodeAt(0));
+
+    expect(payload.byteLength).toBe(bytes.byteLength);
+    expect(decoded[0]).toBe(0x50);
+    expect(decoded[1]).toBe(0x4b);
+    expect(Array.from(decoded)).toEqual(Array.from(bytes));
+  });
+
+  test('Android save rejects a native success result that verifies as zero bytes', async () => {
+    setNativeAndroid();
+    pluginInstances.saveFile.mockResolvedValueOnce({
+      result: 'saved',
+      message: 'OK',
+      bytesWritten: 0,
+      verifiedSize: 0,
+    });
+    const { saveFileViaPlatform, SaveFailedError } = await import('../native-save');
+
+    await expect(
+      saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf'),
+    ).rejects.toBeInstanceOf(SaveFailedError);
+  });
+
+  test('Android save rejects a native byte-count mismatch', async () => {
+    setNativeAndroid();
+    pluginInstances.saveFile.mockResolvedValueOnce({
+      result: 'saved',
+      message: 'OK',
+      bytesWritten: 3,
+      verifiedSize: 3,
+    });
+    const { saveFileViaPlatform, SaveFailedError } = await import('../native-save');
+
+    await expect(
+      saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf'),
+    ).rejects.toBeInstanceOf(SaveFailedError);
+  });
+
+  test('Android save fully awaits the native result before resolving', async () => {
+    setNativeAndroid();
+    const order: string[] = [];
+    let finishNative!: () => void;
+    pluginInstances.saveFile.mockImplementationOnce((async (options: { expectedBytes: number }) => {
+      order.push('native-started');
+      await new Promise<void>(resolve => {
+        finishNative = resolve;
+      });
+      order.push('native-finished');
+      return {
+        result: 'saved',
+        message: 'OK',
+        bytesWritten: options.expectedBytes,
+        verifiedSize: options.expectedBytes,
+      };
+    }) as typeof pluginInstances.saveFile);
+    const { saveFileViaPlatform } = await import('../native-save');
+
+    const savePromise = saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf')
+      .then(() => order.push('js-resolved'));
+    for (let i = 0; i < 10 && order.length === 0; i++) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    expect(order).toEqual(['native-started']);
+    finishNative();
+    await savePromise;
+    expect(order).toEqual(['native-started', 'native-finished', 'js-resolved']);
+  });
+
+  test('native rejection reaches the user-facing export error path', async () => {
+    setNativeAndroid();
+    pluginInstances.saveFile.mockRejectedValueOnce(new Error('Error writing file'));
+    const { saveFileViaPlatform, SaveFailedError } = await import('../native-save');
+
+    await expect(
+      saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf'),
+    ).rejects.toBeInstanceOf(SaveFailedError);
+  });
+
+  test('Cancel does not report success', async () => {
+    setNativeAndroid();
+    pluginInstances.saveFile.mockResolvedValueOnce({
+      result: 'cancelled',
+      message: 'User cancelled the save dialog',
+      bytesWritten: 0,
+      verifiedSize: 0,
+    });
+    const { saveFileViaPlatform, SaveCancelledError } = await import('../native-save');
+
+    await expect(
+      saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf'),
+    ).rejects.toBeInstanceOf(SaveCancelledError);
+  });
+
+  test('persisted JS diagnostics record save phases and sanitized rejection code', async () => {
+    setNativeAndroid();
+    pluginInstances.saveFile.mockRejectedValueOnce(new Error('Native bridge failure'));
+    const { saveFileViaPlatform } = await import('../native-save');
+    const { getSaveDiagnostics } = await import('../save-diagnostics');
+
+    await expect(
+      saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf'),
+    ).rejects.toThrow();
+    const phases = (await getSaveDiagnostics()).map(event => event.phase);
+
+    expect(phases).toContain('JS_SAVE_ENTERED');
+    expect(phases).toContain('JS_BLOB_READY');
+    expect(phases).toContain('JS_ARRAYBUFFER_READY');
+    expect(phases).toContain('JS_BASE64_READY');
+    expect(phases).toContain('JS_NATIVE_SAVE_CALL');
+    expect(phases).toContain('JS_NATIVE_SAVE_REJECTED');
+  });
+
+  test('CV export filenames are friendly and sanitized without timestamps', async () => {
+    const { makeCvExportBaseName, makeCvExportFileName } = await import('../export-filename');
+
+    expect(makeCvExportBaseName('Dragan Obradović')).toBe('Dragan Obradović - CV');
+    expect(makeCvExportFileName('Dragan Obradović', 'pdf')).toBe('Dragan Obradović - CV.pdf');
+    expect(makeCvExportFileName('  ', 'docx')).toBe('My CV.docx');
+    expect(makeCvExportFileName('Ana / QA:Lead', 'pdf')).toBe('Ana QA Lead - CV.pdf');
+    expect(makeCvExportFileName('Modern Minimal', 'pdf')).not.toContain('modern-minimal');
   });
 });
 

@@ -3,13 +3,15 @@
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Check, X, Shield, ArrowRight, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
+import { Check, X, Shield, ArrowRight, ChevronDown, ChevronUp, RotateCcw, Bug } from 'lucide-react';
 import { useI18n } from '@/lib/i18n/context';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { useIAP } from '@/lib/iap';
 import { toast } from 'sonner';
+import { Capacitor } from '@capacitor/core';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 18 },
@@ -19,13 +21,21 @@ const stagger = { visible: { transition: { staggerChildren: 0.09 } } };
 
 export default function PricingPage() {
   const { t } = useI18n();
+  const router = useRouter();
   const { isPro, setIsPro } = useApp();
   const { purchase, restore, purchasing, isNativeApp } = useIAP();
   const [restoring, setRestoring] = useState(false);
   const [showComingSoon, setShowComingSoon] = useState(false);
+  const [showAndroidSaveDiagnostics, setShowAndroidSaveDiagnostics] = useState(false);
 
   // ── Purchase handler (native IAP / web fallback) ──────────────────────────
   const [localPurchasing, setLocalPurchasing] = useState(false);
+
+  useEffect(() => {
+    setShowAndroidSaveDiagnostics(
+      Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android',
+    );
+  }, []);
 
   const handleUpgrade = async () => {
     setLocalPurchasing(true);
@@ -240,6 +250,16 @@ export default function PricingPage() {
               <RotateCcw className={`h-4 w-4 ${restoring ? 'animate-spin' : ''}`} />
               {isPro ? t.pricing.proActive : restoring ? t.pricing.restoringText : t.pricing.restoreButton}
             </button>
+            {showAndroidSaveDiagnostics && (
+              <button
+                type="button"
+                onClick={() => router.push('/save-diagnostics')}
+                className="inline-flex items-center gap-2 rounded-lg border border-dashed border-border bg-background px-5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Bug className="h-4 w-4" />
+                Save diagnostics (test build)
+              </button>
+            )}
             <p className="text-xs text-muted-foreground">
               {t.pricing.needHelp} <a href="mailto:help.cvappai@gmail.com" className="text-primary hover:underline">help.cvappai@gmail.com</a>
             </p>

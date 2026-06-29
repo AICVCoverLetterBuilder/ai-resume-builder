@@ -20,6 +20,11 @@ export function exportToClipboard(elementId: string): Promise<void> {
 
 type DocxLayout = 'single' | 'sidebar-left' | 'dark-header' | 'centered-dark-header';
 
+export const CV_PDF_A4_WIDTH_MM = 210;
+export const CV_PDF_A4_HEIGHT_MM = 297;
+const PDF_TRAILING_SLICE_TOLERANCE_MM = 4;
+const EXPORT_IMAGE_TIMEOUT_MS = 4000;
+
 interface DocxTemplateConfig {
   /** Primary accent color (hex, no #) */
   accent: string;
@@ -62,7 +67,7 @@ interface DocxTemplateConfig {
   /** FIX-10: Divider rule color (hex, no #); defaults to CCCCCC */
   dividerColor?: string;
   /** Dedicated named layout for templates that need custom rendering beyond the 4 generic layouts */
-  customLayout?: 'professional-classic' | 'creative-artistic' | 'elegant-formal' | 'executive-premium' | 'nordic-clean' | 'tech-sidebar' | 'corporate-navy' | 'modern-minimal-executive' | 'contemporary-bold';
+  customLayout?: 'modern-minimal' | 'professional-classic' | 'creative-artistic' | 'elegant-formal' | 'executive-premium' | 'nordic-clean' | 'tech-sidebar' | 'corporate-navy' | 'modern-minimal-executive' | 'contemporary-bold';
 }
 
 const DOCX_TEMPLATE_CONFIGS: Record<string, DocxTemplateConfig> = {
@@ -71,6 +76,7 @@ const DOCX_TEMPLATE_CONFIGS: Record<string, DocxTemplateConfig> = {
     titleColor: '4F46E5', headingColor: '4F46E5', headingBorder: '4F46E5',
     layout: 'single', sidebarPct: 0, photoShape: 'circle', photoSize: 110, font: 'Calibri',
     photoSide: 'right', headerAlignment: 'left', showHeadingBorder: true, uppercaseHeadings: true,
+    customLayout: 'modern-minimal',
   },
   'ats-standard': {
     // FIX-02: centered header; FIX-03: gray headings, not indigo
@@ -181,6 +187,205 @@ function getDocxConfig(templateId?: string): DocxTemplateConfig {
   return DOCX_TEMPLATE_CONFIGS[templateId] ?? DEFAULT_DOCX_CONFIG;
 }
 
+function stripUrlFragment(src: string): string {
+  if (src.startsWith('data:')) return src.split('#')[0];
+  return src;
+}
+
+function isDataImageUrl(src: string): boolean {
+  return /^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(stripUrlFragment(src));
+}
+
+function getImageMimeFromDataUrl(dataUrl: string): string | null {
+  const match = stripUrlFragment(dataUrl).match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,/);
+  return match?.[1] ?? null;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read image blob'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function canFetchExportImageSource(src: string): boolean {
+  if (src.startsWith('blob:') || src.startsWith('file:') || src.startsWith('capacitor:')) return true;
+  if (src.startsWith('http://') || src.startsWith('https://')) {
+    try {
+      return new URL(src).origin === window.location.origin;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export async function resolveExportImageDataUrl(src: string, timeoutMs = EXPORT_IMAGE_TIMEOUT_MS): Promise<string | null> {
+  const cleanSrc = stripUrlFragment(src.trim());
+  if (!cleanSrc) return null;
+  if (isDataImageUrl(cleanSrc)) return cleanSrc;
+  if (typeof window === 'undefined' || typeof fetch !== 'function' || !canFetchExportImageSource(cleanSrc)) return null;
+
+  try {
+    const response = await withTimeout(fetch(cleanSrc), timeoutMs, 'Timed out fetching export image');
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    if (!blob.type.startsWith('image/')) return null;
+    return await withTimeout(blobToDataUrl(blob), timeoutMs, 'Timed out converting export image');
+  } catch {
+    return null;
+  }
+}
+
+export function decodeImageForExport(src: string, timeoutMs = EXPORT_IMAGE_TIMEOUT_MS): Promise<boolean> {
+  return withTimeout(new Promise<boolean>((resolve) => {
+    const img = new Image();
+    img.onload = async () => {
+      try {
+        if (typeof img.decode === 'function') await img.decode();
+        resolve(true);
+      } catch {
+        resolve(true);
+      }
+    };
+    img.onerror = () => resolve(false);
+    img.src = src;
+  }), timeoutMs, 'Timed out decoding export image').catch(() => false);
+}
+
+type PreparedExportImage = {
+  img: HTMLImageElement;
+  frame: HTMLElement;
+  previousSrc: string | null;
+  previousAlt: string | null;
+  previousFrameDisplay: string;
+};
+
+function isModernMinimalCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'modern-minimal'
+    || Boolean(target.querySelector('[data-template-id="modern-minimal"]'));
+}
+
+function fallbackModernMinimalColor(element: Element, property: string): string {
+  const classes = Array.from(element.classList);
+  if (property === 'background-color') {
+    if (classes.includes('bg-white')) return '#ffffff';
+    if (classes.includes('bg-indigo-50')) return '#eef2ff';
+    return 'rgba(0, 0, 0, 0)';
+  }
+  if (property.startsWith('border')) {
+    if (classes.includes('border-indigo-600')) return '#4f46e5';
+    if (classes.includes('border-gray-200')) return '#e5e7eb';
+    return '#e5e7eb';
+  }
+  if (classes.includes('text-indigo-600')) return '#4f46e5';
+  if (classes.includes('text-indigo-700')) return '#4338ca';
+  if (classes.includes('text-gray-900')) return '#111827';
+  if (classes.includes('text-gray-700')) return '#374151';
+  if (classes.includes('text-gray-600')) return '#4b5563';
+  if (classes.includes('text-gray-500')) return '#6b7280';
+  if (classes.includes('text-gray-400')) return '#9ca3af';
+  return '#111827';
+}
+
+function copyModernMinimalComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElement): void {
+  const sourceElements = [sourceRoot, ...Array.from(sourceRoot.querySelectorAll('*'))];
+  const cloneElements = [cloneRoot, ...Array.from(cloneRoot.querySelectorAll('*'))] as HTMLElement[];
+
+  sourceElements.forEach((sourceEl, index) => {
+    const cloneEl = cloneElements[index];
+    if (!cloneEl) return;
+
+    const computed = window.getComputedStyle(sourceEl);
+    for (const property of computed) {
+      let value = computed.getPropertyValue(property);
+      if (/\b(?:lab|lch|oklab|oklch)\(/i.test(value)) {
+        value = fallbackModernMinimalColor(sourceEl, property);
+      }
+      cloneEl.style.setProperty(property, value, computed.getPropertyPriority(property));
+    }
+
+    if (sourceEl instanceof HTMLImageElement && cloneEl instanceof HTMLImageElement) {
+      cloneEl.alt = '';
+      cloneEl.style.width = '100%';
+      cloneEl.style.height = '100%';
+      cloneEl.style.objectFit = 'cover';
+      cloneEl.style.display = 'block';
+    }
+  });
+}
+
+function removeCloneStylesheets(clonedDocument: Document): void {
+  clonedDocument
+    .querySelectorAll('style, link[rel="stylesheet"]')
+    .forEach(node => node.parentNode?.removeChild(node));
+}
+
+export async function prepareModernMinimalImagesForExport(target: HTMLElement): Promise<PreparedExportImage[]> {
+  if (!isModernMinimalCaptureTarget(target)) return [];
+
+  const root = target.dataset.templateId === 'modern-minimal'
+    ? target
+    : (target.querySelector('[data-template-id="modern-minimal"]') as HTMLElement | null);
+  if (!root) return [];
+
+  const prepared: PreparedExportImage[] = [];
+  const images = Array.from(root.querySelectorAll('img'));
+
+  await Promise.all(images.map(async (img) => {
+    const frame = img.parentElement as HTMLElement | null;
+    if (!frame) return;
+
+    const previousSrc = img.getAttribute('src');
+    const previousAlt = img.getAttribute('alt');
+    const previousFrameDisplay = frame.style.display;
+    prepared.push({ img, frame, previousSrc, previousAlt, previousFrameDisplay });
+
+    const dataUrl = previousSrc ? await resolveExportImageDataUrl(previousSrc) : null;
+    const decoded = dataUrl ? await decodeImageForExport(dataUrl) : false;
+
+    if (dataUrl && decoded) {
+      img.src = dataUrl;
+      img.alt = '';
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.objectFit = 'cover';
+      img.style.display = 'block';
+      return;
+    }
+
+    img.removeAttribute('src');
+    img.alt = '';
+    frame.style.display = 'none';
+  }));
+
+  return prepared;
+}
+
+function restorePreparedExportImages(prepared: PreparedExportImage[]): void {
+  for (const entry of prepared) {
+    if (entry.previousSrc === null) entry.img.removeAttribute('src');
+    else entry.img.setAttribute('src', entry.previousSrc);
+    if (entry.previousAlt === null) entry.img.removeAttribute('alt');
+    else entry.img.setAttribute('alt', entry.previousAlt);
+    entry.frame.style.display = entry.previousFrameDisplay;
+  }
+}
+
 // ─── DOCX Export ─────────────────────────────────────────────────────────────────────────────
 
 export async function exportToDOCX(cvData: CVData, fileName: string, locale: Locale = 'en', templateId?: string): Promise<void> {
@@ -209,7 +414,11 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
       : cvData.region !== 'US';
 
   function dataUrlToBytes(dataUrl: string): Uint8Array {
-    const base64 = dataUrl.split(',')[1];
+    const base64 = stripUrlFragment(dataUrl).split(',')[1];
+    if (!base64) throw new Error('Invalid DOCX photo data URL');
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(base64, 'base64') as unknown as Uint8Array;
+    }
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -308,7 +517,12 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
 
   // ── Pre-process photo ────────────────────────────────────────────────────────────────────────
   // cfg.noPhoto: template does not support photos at all — skip regardless of user setting
-  const rawPhotoDataUrl = !cfg.noPhoto && showPhoto && cvData.personal.photo ? cvData.personal.photo : null;
+  const rawPhotoSource = !cfg.noPhoto && showPhoto && cvData.personal.photo ? cvData.personal.photo : null;
+  const rawPhotoDataUrl = rawPhotoSource
+    ? (cfg.customLayout === 'modern-minimal'
+      ? await resolveExportImageDataUrl(rawPhotoSource)
+      : stripUrlFragment(rawPhotoSource))
+    : null;
   const ps = cfg.photoSize;
   let photoBytes: Uint8Array | null = null;
   let photoW = ps;
@@ -319,7 +533,14 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
   let photoType: 'png' | 'jpg' = 'png';
 
   if (rawPhotoDataUrl) {
-    if (cfg.photoShape === 'portrait') {
+    try {
+      photoBytes = dataUrlToBytes(rawPhotoDataUrl);
+      photoType = getImageMimeFromDataUrl(rawPhotoDataUrl) === 'image/jpeg' ? 'jpg' : 'png';
+    } catch {
+      photoBytes = null;
+    }
+    try {
+      if (cfg.photoShape === 'portrait') {
       photoW = Math.round(ps * 0.75);
       photoH = ps;
       const cropped = await portraitCropDataUrl(rawPhotoDataUrl, photoW * 3, photoH * 3);
@@ -333,7 +554,10 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
       photoBytes = dataUrlToBytes(cropped);
       photoW = ps;
       photoH = ps;
-      photoType = 'png';
+      photoType = getImageMimeFromDataUrl(cropped) === 'image/jpeg' ? 'jpg' : 'png';
+    }
+    } catch {
+      // Keep the pre-converted original bytes if the cosmetic crop fails.
     }
   }
 
@@ -1250,6 +1474,180 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
   }
 
   // ════ LAYOUT: single ═══════════════════════════════════════════════════════════════════════════
+  else if (cfg.customLayout === 'modern-minimal') {
+    const isRTL = locale === 'ar';
+    const bodyAlign = isRTL ? AlignmentType.RIGHT : AlignmentType.LEFT;
+    const endCell = isRTL ? AlignmentType.LEFT : AlignmentType.RIGHT;
+    const chipShade = { fill: 'EEF2FF', type: ShadingType.SOLID, color: 'EEF2FF' };
+
+    function mmHeading(text: string) {
+      return new Paragraph({
+        alignment: bodyAlign,
+        children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 20, color: cfg.headingColor })],
+        spacing: { before: 220, after: 100 },
+        border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: cfg.headingBorder } },
+      });
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function mmDateRow(leftRuns: any[], dateText: string) {
+      const textCell = new TableCell({
+        width: { size: 73, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.TOP,
+        borders: noBorders,
+        children: [new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: leftRuns, spacing: { after: 20 } })],
+      });
+      const dateCell = new TableCell({
+        width: { size: 27, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.TOP,
+        borders: noBorders,
+        children: [new Paragraph({ alignment: endCell, children: [new TextRun({ text: dateText, size: 18, color: '9CA3AF' })], spacing: { after: 20 } })],
+      });
+      return new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({ children: isRTL ? [dateCell, textCell] : [textCell, dateCell] })],
+      });
+    }
+
+    function mmDescription(text: string) {
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const isBullet = /^[-•*]|^\d+\./.test(trimmed);
+        const bulletText = isBullet ? trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '') : trimmed;
+        children.push(new Paragraph({
+          alignment: bodyAlign,
+          bidirectional: isRTL,
+          children: [
+            ...(isBullet ? [new TextRun({ text: '•  ', size: 20, color: cfg.accent })] : []),
+            new TextRun({ text: bulletText, size: 20, color: '374151' }),
+          ],
+          indent: isBullet ? { left: 220, hanging: 220 } : undefined,
+          spacing: { after: 42, line: 276, lineRule: 'auto' },
+        }));
+      }
+    }
+
+    // Modern Minimal DOCX mirrors the app preview: compact header, circular photo
+    // at the visual end, indigo rules, right-aligned dates, and wrapped skill chips.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const headerInfo: any[] = [
+      new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 48, color: '111827' })], spacing: { after: 36 } }),
+    ];
+    if (cvData.personal.jobTitle) {
+      headerInfo.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: cvData.personal.jobTitle, size: 24, color: cfg.titleColor })], spacing: { after: 60 } }));
+    }
+    if (contacts.length > 0) {
+      headerInfo.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: contacts.join('  |  '), size: 18, color: '6B7280' })], spacing: { after: 0 } }));
+    }
+    if (cvData.personal.fathersName) {
+      headerInfo.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 18, color: '6B7280' }), new TextRun({ text: cvData.personal.fathersName, size: 18, color: '6B7280' })], spacing: { after: 0 } }));
+    }
+
+    if (photoBytes) {
+      const infoCell = new TableCell({ width: { size: 80, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, children: headerInfo });
+      const photoCell = new TableCell({
+        width: { size: 20, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.TOP,
+        borders: noBorders,
+        children: [new Paragraph({ alignment: endCell, children: [new ImageRun({ data: photoBytes, transformation: { width: photoW, height: photoH }, type: photoType })], spacing: { after: 0 } })],
+      });
+      children.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({ children: isRTL ? [photoCell, infoCell] : [infoCell, photoCell] })],
+      }));
+    } else {
+      children.push(...headerInfo);
+    }
+
+    children.push(new Paragraph({
+      border: { bottom: { style: BorderStyle.SINGLE, size: 10, color: cfg.headingBorder } },
+      spacing: { before: 120, after: 160 },
+    }));
+
+    if (cvData.summary) {
+      children.push(mmHeading(t.cv.summary));
+      children.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: cvData.summary, size: 20, color: '374151' })], spacing: { after: 120, line: 276, lineRule: 'auto' } }));
+    }
+
+    if (cvData.experience.length > 0) {
+      children.push(mmHeading(t.cv.experience));
+      for (const exp of cvData.experience) {
+        const dateText = `${exp.startDate} - ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        children.push(mmDateRow([
+          new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' }),
+          ...(exp.company ? [new TextRun({ text: `  |  ${exp.company}`, size: 20, color: '6B7280' })] : []),
+        ], dateText));
+        if (exp.description) mmDescription(exp.description);
+        children.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+      }
+    }
+
+    if (cvData.education.length > 0) {
+      children.push(mmHeading(t.cv.education));
+      for (const edu of cvData.education) {
+        const dateText = edu.startDate || edu.endDate ? `${edu.startDate} - ${edu.endDate}` : '';
+        if (dateText) {
+          children.push(mmDateRow([
+            new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' }),
+            ...(edu.school ? [new TextRun({ text: `  |  ${edu.school}`, size: 20, color: '6B7280' })] : []),
+          ], dateText));
+        } else {
+          children.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' }), ...(edu.school ? [new TextRun({ text: `  |  ${edu.school}`, size: 20, color: '6B7280' })] : [])], spacing: { after: 40 } }));
+        }
+        if (edu.description) {
+          children.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: edu.description, size: 20, color: '374151' })], spacing: { after: 80 } }));
+        }
+      }
+    }
+
+    if (cvData.skills.length > 0) {
+      children.push(mmHeading(t.cv.skills));
+      const localizedSkills = cvData.skills.map((s) => getLocalizedCvSkillName(s, locale));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rows: any[] = [];
+      for (let i = 0; i < localizedSkills.length; i += 3) {
+        const slice = localizedSkills.slice(i, i + 3);
+        while (slice.length < 3) slice.push('');
+        rows.push(new TableRow({
+          children: slice.map((skill) => new TableCell({
+            width: { size: 33, type: WidthType.PERCENTAGE },
+            borders: noBorders,
+            shading: skill ? chipShade : undefined,
+            margins: { top: 55, bottom: 55, left: 90, right: 90 },
+            children: [new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: skill, size: 18, color: '4338CA' })], spacing: { after: 0 } })],
+          })),
+        }));
+      }
+      children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows }));
+      children.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+    }
+
+    if (cvData.languages.length > 0) {
+      children.push(mmHeading(t.cv.languages));
+      for (const lang of cvData.languages) {
+        children.push(new Paragraph({
+          alignment: bodyAlign,
+          bidirectional: isRTL,
+          children: [
+            new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 20, color: '111827' }),
+            new TextRun({ text: ` - ${lang.level}`, size: 20, color: '6B7280' }),
+          ],
+          spacing: { after: 50 },
+        }));
+      }
+    }
+
+    if (cvData.certifications.length > 0) {
+      children.push(mmHeading(t.cv.certifications));
+      for (const cert of cvData.certifications) {
+        children.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: '•  ', size: 20, color: cfg.accent }), new TextRun({ text: cert, size: 20, color: '374151' })], spacing: { after: 50 } }));
+      }
+    }
+  }
+
   else if (cfg.layout === 'single') {
     const hAlign = cfg.headerAlignment === 'center' ? AlignmentType.CENTER : AlignmentType.LEFT;
     if (photoBytes) {
@@ -3081,9 +3479,6 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
     firstChild.style.fontFamily = "'NotoSans', 'NotoSansArabic', 'NotoSansDevanagari', 'NotoSansJP', sans-serif";
   }
 
-  // A4 dimensions in mm
-  const PDF_WIDTH_MM = 210;
-  const PDF_HEIGHT_MM = 297;
   const scale = 2;
 
   // ── Step 4c: flush two animation frames so any pending React state updates
@@ -3097,8 +3492,8 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
   //    node is being used before the PDF is generated.
   const debugOverlays: Array<{ el: HTMLImageElement; prevOutline: string; prevPosition: string }> = [];
   const debugLabels: HTMLElement[] = [];
-  if (process.env.NODE_ENV !== 'production') {
-    const allImgs = element.querySelectorAll('img');
+  if (false && process.env.NODE_ENV !== 'production') {
+    const allImgs = (element as HTMLElement).querySelectorAll('img');
     allImgs.forEach((imgEl, _i) => {
       const src = imgEl.getAttribute('src') ?? '';
       const isDataUrl = src.startsWith('data:');
@@ -3141,6 +3536,9 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
   }
 
   let canvas: HTMLCanvasElement;
+  let preparedImages: PreparedExportImage[] = [];
+  const exportCaptureId = `modern-minimal-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  let taggedCaptureTarget: HTMLElement | null = null;
   try {
     // ── HARD VERIFICATION: capture the actual template child directly, not the
     //    scroll wrapper. The #cv-preview / #cv-inline-preview div is an
@@ -3151,6 +3549,16 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
     const captureTarget = (firstChild as HTMLElement | null) ?? element;
     const captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
     const captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
+    preparedImages = await prepareModernMinimalImagesForExport(captureTarget);
+    if (isModernMinimalCaptureTarget(captureTarget)) {
+      const sourceRootForTag = captureTarget.dataset.templateId === 'modern-minimal'
+        ? captureTarget
+        : (captureTarget.querySelector('[data-template-id="modern-minimal"]') as HTMLElement | null);
+      if (sourceRootForTag) {
+        taggedCaptureTarget = sourceRootForTag;
+        taggedCaptureTarget.setAttribute('data-export-capture-id', exportCaptureId);
+      }
+    }
 
     if (process.env.NODE_ENV !== 'production') {
       console.log('[exportToPDF] captureTarget:', captureTarget.tagName, captureTarget.className.slice(0, 80));
@@ -3171,6 +3579,17 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
       height: captureHeight,
       windowWidth: captureWidth,
       windowHeight: captureHeight,
+      onclone: (clonedDocument) => {
+        if (!isModernMinimalCaptureTarget(captureTarget)) return;
+        const sourceRoot = captureTarget.dataset.templateId === 'modern-minimal'
+          ? captureTarget
+          : (captureTarget.querySelector('[data-template-id="modern-minimal"]') as HTMLElement | null);
+        const cloneRoot = clonedDocument.querySelector(`[data-export-capture-id="${exportCaptureId}"]`) as HTMLElement | null;
+        if (!sourceRoot || !cloneRoot) return;
+        copyModernMinimalComputedStyles(sourceRoot, cloneRoot);
+        cloneRoot.removeAttribute('data-export-capture-id');
+        removeCloneStylesheets(clonedDocument);
+      },
     });
   } catch (captureErr) {
     console.error('[exportToPDF] html2canvas capture failed:', captureErr);
@@ -3189,6 +3608,8 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
       firstChild.style.fontFamily = childPrevFontFamily;
     }
     removeNotoFonts();
+    taggedCaptureTarget?.removeAttribute('data-export-capture-id');
+    restorePreparedExportImages(preparedImages);
     // ── Clean up debug overlays ──────────────────────────────────────────────
     debugOverlays.forEach(({ el, prevOutline, prevPosition }) => {
       el.style.outline = prevOutline;
@@ -3213,25 +3634,26 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
   const canvasWidthPx = canvas.width;
   const canvasHeightPx = canvas.height;
 
-  const contentHeightMM = (canvasHeightPx / canvasWidthPx) * PDF_WIDTH_MM;
-  const useSinglePage = contentHeightMM <= PDF_HEIGHT_MM * 1.05;
+  const contentHeightMM = (canvasHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
+  const useSinglePage = contentHeightMM <= CV_PDF_A4_HEIGHT_MM + PDF_TRAILING_SLICE_TOLERANCE_MM;
 
   // ── Step 6: build PDF ─────────────────────────────────────────────────────
   try {
     const pdf = new jsPDFCtor({
       orientation: 'portrait',
       unit: 'mm',
-      format: useSinglePage ? [PDF_WIDTH_MM, Math.min(contentHeightMM, PDF_HEIGHT_MM)] : 'a4',
+      format: 'a4',
     });
 
     if (useSinglePage) {
-      pdf.addImage(imgData, 'JPEG', 0, 0, PDF_WIDTH_MM, contentHeightMM);
+      pdf.addImage(imgData, 'JPEG', 0, 0, CV_PDF_A4_WIDTH_MM, Math.min(contentHeightMM, CV_PDF_A4_HEIGHT_MM));
     } else {
-      const pageHeightPx = (PDF_HEIGHT_MM / PDF_WIDTH_MM) * canvasWidthPx;
+      const pageHeightPx = (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM) * canvasWidthPx;
+      const trailingTolerancePx = (PDF_TRAILING_SLICE_TOLERANCE_MM / CV_PDF_A4_WIDTH_MM) * canvasWidthPx;
       let offsetY = 0;
       let firstPage = true;
 
-      while (offsetY < canvasHeightPx) {
+      while (offsetY < canvasHeightPx - trailingTolerancePx) {
         if (!firstPage) pdf.addPage();
         firstPage = false;
 
@@ -3244,8 +3666,8 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
           ctx.drawImage(canvas, 0, offsetY, canvasWidthPx, sliceHeight, 0, 0, canvasWidthPx, sliceHeight);
         }
         const sliceImg = sliceCanvas.toDataURL('image/jpeg', 0.95);
-        const sliceHeightMM = (sliceHeight / canvasWidthPx) * PDF_WIDTH_MM;
-        pdf.addImage(sliceImg, 'JPEG', 0, 0, PDF_WIDTH_MM, sliceHeightMM);
+        const sliceHeightMM = (sliceHeight / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
+        pdf.addImage(sliceImg, 'JPEG', 0, 0, CV_PDF_A4_WIDTH_MM, Math.min(sliceHeightMM, CV_PDF_A4_HEIGHT_MM));
 
         offsetY += pageHeightPx;
       }

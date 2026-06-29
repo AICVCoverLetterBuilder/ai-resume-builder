@@ -43,3 +43,5 @@ next-env.d.ts
 android/app/release.keystore
 android/keystore.properties
 android/.idea/
+
+.artifacts/

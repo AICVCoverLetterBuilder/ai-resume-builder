@@ -5,12 +5,19 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import * as React from 'react';
+import fs from 'node:fs';
 
 const mocks = vi.hoisted(() => ({
   purchase: vi.fn(),
   restore: vi.fn(),
   setIsPro: vi.fn(),
+  routerPush: vi.fn(),
+  nativeSave: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn() },
+  capacitor: {
+    isNativePlatform: vi.fn(() => true),
+    getPlatform: vi.fn(() => 'android'),
+  },
   iapState: {
     isNativeApp: true,
     purchasing: false,
@@ -28,6 +35,20 @@ vi.mock('@/lib/iap', () => ({
     restore: mocks.restore,
     productPrice: '$3.99',
   }),
+}));
+
+vi.mock('@capacitor/core', () => ({
+  Capacitor: mocks.capacitor,
+}));
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: mocks.routerPush,
+  }),
+}));
+
+vi.mock('@/lib/native-save', () => ({
+  saveBlobNatively: mocks.nativeSave,
 }));
 
 vi.mock('@/lib/store', () => ({
@@ -75,6 +96,7 @@ vi.mock('lucide-react', () => {
     ChevronDown: icon('chevron-down'),
     ChevronUp: icon('chevron-up'),
     RotateCcw: icon('rotate-ccw'),
+    Bug: icon('bug'),
   };
 });
 
@@ -143,6 +165,8 @@ describe('Pricing page production purchase surface', () => {
     vi.clearAllMocks();
     mocks.purchase.mockResolvedValue({ success: true, isPro: true, token: 'purchase-token' });
     mocks.restore.mockResolvedValue({ success: true, isPro: true, token: 'restore-token' });
+    mocks.capacitor.isNativePlatform.mockReturnValue(true);
+    mocks.capacitor.getPlatform.mockReturnValue('android');
     mocks.iapState.isNativeApp = true;
     mocks.iapState.purchasing = false;
     mocks.appState.isPro = false;
@@ -206,6 +230,7 @@ describe('Pricing page production purchase surface', () => {
   });
 
   test('temporary purchase diagnostics are absent from the production pricing page', async () => {
+    mocks.capacitor.isNativePlatform.mockReturnValue(false);
     await renderPricingPage();
 
     expect(screen.getByRole('button', { name: /Upgrade/ })).toBeInTheDocument();
@@ -222,6 +247,47 @@ describe('Pricing page production purchase surface', () => {
     expect(screen.queryByText(/clientIsPro/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/tokenSyncLastResult/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/aiGate/i)).not.toBeInTheDocument();
+  });
+
+  test('temporary save diagnostics link is visible only in the native Android app', async () => {
+    await renderPricingPage();
+
+    expect(await screen.findByRole('button', { name: 'Save diagnostics (test build)' })).toBeInTheDocument();
+
+    cleanup();
+    mocks.capacitor.getPlatform.mockReturnValue('ios');
+    await renderPricingPage();
+    expect(screen.queryByRole('button', { name: 'Save diagnostics (test build)' })).not.toBeInTheDocument();
+
+    cleanup();
+    mocks.capacitor.isNativePlatform.mockReturnValue(false);
+    mocks.capacitor.getPlatform.mockReturnValue('web');
+    await renderPricingPage();
+    expect(screen.queryByRole('button', { name: 'Save diagnostics (test build)' })).not.toBeInTheDocument();
+  });
+
+  test('opening save diagnostics only navigates and does not trigger save or purchase operations', async () => {
+    await renderPricingPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save diagnostics (test build)' }));
+
+    expect(mocks.routerPush).toHaveBeenCalledWith('/save-diagnostics');
+    expect(mocks.purchase).not.toHaveBeenCalled();
+    expect(mocks.restore).not.toHaveBeenCalled();
+    expect(mocks.nativeSave).not.toHaveBeenCalled();
+    expect(mocks.setIsPro).not.toHaveBeenCalled();
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  test('pricing diagnostics entry point does not import export or native save modules', () => {
+    const source = fs.readFileSync('src/app/pricing/page.tsx', 'utf8');
+
+    expect(source).not.toContain('@/lib/export');
+    expect(source).not.toContain('@/lib/native-save');
+    expect(source).not.toContain('exportToPDF');
+    expect(source).not.toContain('exportToDOCX');
+    expect(source).not.toContain('saveBlobNatively');
   });
 
   test('Pro Active state still disables Restore Purchase', async () => {

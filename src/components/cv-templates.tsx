@@ -72,7 +72,11 @@ export function ModernMinimalTemplate({ data, locale }: TemplateProps) {
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
-    <div className="bg-white text-gray-900 p-8 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
+    <div
+      data-template-id="modern-minimal"
+      className="box-border w-[210mm] bg-white text-gray-900 p-8 mx-auto font-sans text-sm leading-relaxed"
+      style={{ minHeight: '297mm' }}
+    >
       <header className="border-b-2 border-indigo-600 pb-4 mb-6">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">

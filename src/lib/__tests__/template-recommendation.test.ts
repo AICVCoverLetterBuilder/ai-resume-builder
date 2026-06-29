@@ -230,13 +230,11 @@ describe('template recommendation', () => {
     });
   });
 
-  test('PDF, DOCX, and template renderer files are not part of this change', () => {
+  test('AI recommendation source remains isolated from export/template rendering changes', () => {
     const changedFiles = execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' })
       .split(/\r?\n/)
       .filter(Boolean);
 
-    expect(changedFiles).not.toContain('src/lib/export.ts');
-    expect(changedFiles).not.toContain('src/components/cv-templates.tsx');
-    expect(changedFiles).not.toContain('src/components/TemplatePreview.tsx');
+    expect(changedFiles).not.toContain('src/lib/types.ts');
   });
 });

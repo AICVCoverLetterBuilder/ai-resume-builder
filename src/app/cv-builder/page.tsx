@@ -9,6 +9,7 @@ import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
 import { exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
+import { makeCvExportBaseName } from '@/lib/export-filename';
 import {
   filterCvLanguageOptions,
   getLocalizedCvLanguageName,
@@ -641,7 +642,7 @@ export default function CVBuilderPage() {
             photoForExport = circularPhotoDataUrl ?? cv.personal.photo;
           }
           const cvForExport = { ...cv, personal: { ...cv.personal, photo: photoForExport } };
-          await exportToDOCX(cvForExport, cv.personal.fullName || 'CV', locale, cv.templateId);
+          await exportToDOCX(cvForExport, makeCvExportBaseName(cv.personal.fullName), locale, cv.templateId);
         }
         incrementDownloads('cv');
       } catch (err: unknown) {
@@ -679,8 +680,7 @@ export default function CVBuilderPage() {
           await new Promise(requestAnimationFrame);
         }
 
-        // Unique filename per export: cv-<templateId>-<timestamp>.pdf
-        const exportFilename = `cv-${cv.templateId}-${Date.now()}`;
+        const exportFilename = makeCvExportBaseName(cv.personal.fullName);
         await exportToPDF(previewId, exportFilename);
         incrementDownloads('cv');
       } catch (err: unknown) {

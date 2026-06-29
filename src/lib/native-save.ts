@@ -1,11 +1,14 @@
 /**
  * Platform-aware file saving.
  *
- * Android uses the custom SaveFile Capacitor plugin and Storage Access
- * Framework ACTION_CREATE_DOCUMENT picker. Web uses a Blob download.
+ * Android uses the custom SaveFile Capacitor plugin. Android 10+ saves
+ * directly to MediaStore Downloads; older Android versions use the native
+ * fallback provided by the plugin. Web uses a Blob download.
  */
 
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
+import { recordJsSaveDiagnostic, type SaveDiagnosticFormat } from './save-diagnostics';
+import { SaveFileNative, type SaveFileHealthResult } from './save-file-plugin';
 
 export class SaveCancelledError extends Error {
   constructor() {
@@ -21,26 +24,13 @@ export class SaveFailedError extends Error {
   }
 }
 
-interface SaveFileHealthResult {
-  pluginAvailable: boolean;
-  cacheWritable: boolean;
-  pluginVersion: string;
-}
-
-interface SaveFilePluginDefinition {
-  healthCheck(): Promise<SaveFileHealthResult>;
-  saveFile(options: {
-    base64Data: string;
-    fileName: string;
-    mimeType: string;
-  }): Promise<{ result: 'saved' | 'cancelled' | 'failed'; message: string }>;
-}
-
-const SaveFileNative = registerPlugin<SaveFilePluginDefinition>('SaveFile');
-
 export interface SaveFileResult {
   result: 'saved' | 'cancelled' | 'failed';
   message: string;
+  bytesWritten?: number;
+  verifiedSize?: number;
+  uriAuthority?: string;
+  displayName?: string;
 }
 
 function isNativeAndroid(): boolean {
@@ -48,25 +38,58 @@ function isNativeAndroid(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result !== 'string') {
-        reject(new Error('Failed to read blob'));
-        return;
-      }
-      const comma = reader.result.indexOf(',');
-      const raw = comma >= 0 ? reader.result.slice(comma + 1) : reader.result;
-      if (!raw) {
-        reject(new Error('Generated file is empty'));
-        return;
-      }
-      resolve(raw);
-    };
-    reader.onerror = () => reject(new Error('Failed to read blob'));
-    reader.readAsDataURL(blob);
-  });
+function getFormatForDiagnostics(mimeType: string): SaveDiagnosticFormat {
+  if (mimeType === 'application/pdf') return 'pdf';
+  if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'docx';
+  return 'other';
+}
+
+function logSaveBoundary(
+  stage: string,
+  details: Record<string, string | number | boolean | undefined>,
+): void {
+  if (process.env.NODE_ENV === 'test') return;
+  console.info('[native-save]', { stage, ...details });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64');
+  }
+
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+export async function blobToBase64Payload(blob: Blob, format: SaveDiagnosticFormat = 'other'): Promise<{
+  base64Data: string;
+  byteLength: number;
+}> {
+  if (!(blob instanceof Blob) || blob.size <= 0) {
+    throw new SaveFailedError('Generated file is empty');
+  }
+
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  recordJsSaveDiagnostic('JS_ARRAYBUFFER_READY', { format, byteLength: bytes.byteLength });
+  if (bytes.byteLength <= 0) {
+    recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'arraybuffer', code: 'EMPTY_ARRAYBUFFER' });
+    throw new SaveFailedError('Generated file is empty');
+  }
+
+  const base64Data = bytesToBase64(bytes);
+  recordJsSaveDiagnostic('JS_BASE64_READY', { format, base64Length: base64Data.length });
+  if (!base64Data) {
+    recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'base64', code: 'EMPTY_BASE64' });
+    throw new SaveFailedError('Generated file could not be encoded');
+  }
+
+  return { base64Data, byteLength: bytes.byteLength };
 }
 
 export async function ensureNativeSaveAvailable(): Promise<SaveFileHealthResult> {
@@ -102,29 +125,77 @@ export async function saveFileViaPlatform(
   fileName: string,
   mimeType: string,
 ): Promise<SaveFileResult> {
+  const format = getFormatForDiagnostics(mimeType);
+  recordJsSaveDiagnostic('JS_SAVE_ENTERED', { format });
   if (!(blob instanceof Blob) || blob.size <= 0) {
+    recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'blob', code: 'EMPTY_BLOB' });
     throw new SaveFailedError('Generated file is empty');
   }
+  recordJsSaveDiagnostic('JS_BLOB_READY', { format, blobSize: blob.size });
   if (!fileName.trim() || !mimeType.trim()) {
+    recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'input', code: 'INVALID_INPUT' });
     throw new SaveFailedError('Invalid file name or MIME type');
   }
 
   if (isNativeAndroid()) {
     try {
+      logSaveBoundary('android_prepare', {
+        format,
+        sourceBlobSize: blob.size,
+      });
       await ensureNativeSaveAvailable();
-      const base64Data = await blobToBase64(blob);
-      const result = await SaveFileNative.saveFile({ base64Data, fileName, mimeType });
+      const { base64Data, byteLength } = await blobToBase64Payload(blob, format);
+      logSaveBoundary('android_encoded', {
+        format,
+        sourceByteLength: byteLength,
+        base64Length: base64Data.length,
+      });
+      recordJsSaveDiagnostic('JS_NATIVE_SAVE_CALL', { format, expectedBytes: byteLength });
+      const result = await SaveFileNative.saveFile({
+        base64Data,
+        fileName,
+        mimeType,
+        expectedBytes: byteLength,
+      });
+      recordJsSaveDiagnostic('JS_NATIVE_SAVE_RESOLVED', {
+        format,
+        bytesWritten: result.bytesWritten,
+        verifiedSize: result.verifiedSize,
+      });
+      logSaveBoundary('android_result', {
+        format,
+        sourceByteLength: byteLength,
+        bytesWritten: result.bytesWritten,
+        verifiedSize: result.verifiedSize,
+        saved: result.result === 'saved',
+      });
 
       if (result.result === 'cancelled') {
+        recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'cancelled', code: 'CANCELLED' });
         throw new SaveCancelledError();
       }
       if (result.result !== 'saved') {
+        recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'native_result', code: 'FAILED_RESULT' });
         throw new SaveFailedError(result.message || 'File save failed on native device');
+      }
+      if (
+        typeof result.bytesWritten !== 'number' ||
+        typeof result.verifiedSize !== 'number' ||
+        result.bytesWritten <= 0 ||
+        result.verifiedSize <= 0
+      ) {
+        recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'native_verify', code: 'ZERO_OR_MISSING_NATIVE_SIZE' });
+        throw new SaveFailedError('Native file save did not verify non-empty output');
+      }
+      if (result.bytesWritten !== byteLength || result.verifiedSize !== byteLength) {
+        recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'native_verify', code: 'NATIVE_SIZE_MISMATCH' });
+        throw new SaveFailedError('Native file save byte count did not match generated file');
       }
       return result;
     } catch (err: unknown) {
       if (err instanceof SaveCancelledError || err instanceof SaveFailedError) throw err;
       const message = err instanceof Error ? err.message : 'Unknown native file-save error';
+      recordJsSaveDiagnostic('JS_NATIVE_SAVE_REJECTED', { format, failedStage: 'native_exception', code: err instanceof Error ? err.name : 'UNKNOWN' });
       console.error('[native-save] Plugin error:', message);
       throw new SaveFailedError(message);
     }
