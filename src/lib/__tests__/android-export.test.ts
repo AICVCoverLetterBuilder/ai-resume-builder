@@ -22,16 +22,12 @@ const pluginInstances = vi.hoisted(() => ({
     bytesWritten: options?.expectedBytes ?? 1,
     verifiedSize: options?.expectedBytes ?? 1,
   })),
-  getDiagnostics: vi.fn().mockResolvedValue({ events: [] }),
-  clearDiagnostics: vi.fn().mockResolvedValue({ cleared: true }),
   print: vi.fn().mockResolvedValue({ result: 'saved', message: 'OK' }),
 }));
 
 const mockRegisterPlugin = vi.hoisted(() => vi.fn(() => ({
   healthCheck: pluginInstances.healthCheck,
   saveFile: pluginInstances.saveFile,
-  getDiagnostics: pluginInstances.getDiagnostics,
-  clearDiagnostics: pluginInstances.clearDiagnostics,
   print: pluginInstances.print,
 })));
 
@@ -65,10 +61,6 @@ function resetPluginMocks() {
   }));
   pluginInstances.print.mockReset();
   pluginInstances.print.mockResolvedValue({ result: 'saved', message: 'OK' });
-  pluginInstances.getDiagnostics.mockReset();
-  pluginInstances.getDiagnostics.mockResolvedValue({ events: [] });
-  pluginInstances.clearDiagnostics.mockReset();
-  pluginInstances.clearDiagnostics.mockResolvedValue({ cleared: true });
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -330,25 +322,6 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
     await expect(
       saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf'),
     ).rejects.toBeInstanceOf(SaveCancelledError);
-  });
-
-  test('persisted JS diagnostics record save phases and sanitized rejection code', async () => {
-    setNativeAndroid();
-    pluginInstances.saveFile.mockRejectedValueOnce(new Error('Native bridge failure'));
-    const { saveFileViaPlatform } = await import('../native-save');
-    const { getSaveDiagnostics } = await import('../save-diagnostics');
-
-    await expect(
-      saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf'),
-    ).rejects.toThrow();
-    const phases = (await getSaveDiagnostics()).map(event => event.phase);
-
-    expect(phases).toContain('JS_SAVE_ENTERED');
-    expect(phases).toContain('JS_BLOB_READY');
-    expect(phases).toContain('JS_ARRAYBUFFER_READY');
-    expect(phases).toContain('JS_BASE64_READY');
-    expect(phases).toContain('JS_NATIVE_SAVE_CALL');
-    expect(phases).toContain('JS_NATIVE_SAVE_REJECTED');
   });
 
   test('CV export filenames are friendly and sanitized without timestamps', async () => {

@@ -11,13 +11,7 @@ const mocks = vi.hoisted(() => ({
   purchase: vi.fn(),
   restore: vi.fn(),
   setIsPro: vi.fn(),
-  routerPush: vi.fn(),
-  nativeSave: vi.fn(),
   toast: { success: vi.fn(), error: vi.fn() },
-  capacitor: {
-    isNativePlatform: vi.fn(() => true),
-    getPlatform: vi.fn(() => 'android'),
-  },
   iapState: {
     isNativeApp: true,
     purchasing: false,
@@ -35,20 +29,6 @@ vi.mock('@/lib/iap', () => ({
     restore: mocks.restore,
     productPrice: '$3.99',
   }),
-}));
-
-vi.mock('@capacitor/core', () => ({
-  Capacitor: mocks.capacitor,
-}));
-
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mocks.routerPush,
-  }),
-}));
-
-vi.mock('@/lib/native-save', () => ({
-  saveBlobNatively: mocks.nativeSave,
 }));
 
 vi.mock('@/lib/store', () => ({
@@ -96,7 +76,6 @@ vi.mock('lucide-react', () => {
     ChevronDown: icon('chevron-down'),
     ChevronUp: icon('chevron-up'),
     RotateCcw: icon('rotate-ccw'),
-    Bug: icon('bug'),
   };
 });
 
@@ -165,8 +144,6 @@ describe('Pricing page production purchase surface', () => {
     vi.clearAllMocks();
     mocks.purchase.mockResolvedValue({ success: true, isPro: true, token: 'purchase-token' });
     mocks.restore.mockResolvedValue({ success: true, isPro: true, token: 'restore-token' });
-    mocks.capacitor.isNativePlatform.mockReturnValue(true);
-    mocks.capacitor.getPlatform.mockReturnValue('android');
     mocks.iapState.isNativeApp = true;
     mocks.iapState.purchasing = false;
     mocks.appState.isPro = false;
@@ -230,7 +207,6 @@ describe('Pricing page production purchase surface', () => {
   });
 
   test('temporary purchase diagnostics are absent from the production pricing page', async () => {
-    mocks.capacitor.isNativePlatform.mockReturnValue(false);
     await renderPricingPage();
 
     expect(screen.getByRole('button', { name: /Upgrade/ })).toBeInTheDocument();
@@ -249,32 +225,31 @@ describe('Pricing page production purchase surface', () => {
     expect(screen.queryByText(/aiGate/i)).not.toBeInTheDocument();
   });
 
-  test('temporary save diagnostics link is visible only in the native Android app', async () => {
+  test('temporary save diagnostics link is absent from native Android pricing', async () => {
     await renderPricingPage();
 
-    expect(await screen.findByRole('button', { name: 'Save diagnostics (test build)' })).toBeInTheDocument();
-
-    cleanup();
-    mocks.capacitor.getPlatform.mockReturnValue('ios');
-    await renderPricingPage();
     expect(screen.queryByRole('button', { name: 'Save diagnostics (test build)' })).not.toBeInTheDocument();
-
-    cleanup();
-    mocks.capacitor.isNativePlatform.mockReturnValue(false);
-    mocks.capacitor.getPlatform.mockReturnValue('web');
-    await renderPricingPage();
-    expect(screen.queryByRole('button', { name: 'Save diagnostics (test build)' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/save diagnostics/i)).not.toBeInTheDocument();
   });
 
-  test('opening save diagnostics only navigates and does not trigger save or purchase operations', async () => {
+  test('pricing source no longer contains the temporary save diagnostics route', () => {
+    const source = fs.readFileSync('src/app/pricing/page.tsx', 'utf8');
+
+    expect(source).not.toContain('Save diagnostics');
+    expect(source).not.toContain('save-diagnostics');
+  });
+
+  test('temporary save diagnostics route source is removed', () => {
+    expect(fs.existsSync('src/app/save-diagnostics/page.tsx')).toBe(false);
+    expect(fs.existsSync('src/app/save-diagnostics/page.test.tsx')).toBe(false);
+    expect(fs.existsSync('src/lib/save-diagnostics.ts')).toBe(false);
+  });
+
+  test('pricing page does not trigger save operations during normal render', async () => {
     await renderPricingPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Save diagnostics (test build)' }));
-
-    expect(mocks.routerPush).toHaveBeenCalledWith('/save-diagnostics');
     expect(mocks.purchase).not.toHaveBeenCalled();
     expect(mocks.restore).not.toHaveBeenCalled();
-    expect(mocks.nativeSave).not.toHaveBeenCalled();
     expect(mocks.setIsPro).not.toHaveBeenCalled();
     expect(mocks.toast.success).not.toHaveBeenCalled();
     expect(mocks.toast.error).not.toHaveBeenCalled();

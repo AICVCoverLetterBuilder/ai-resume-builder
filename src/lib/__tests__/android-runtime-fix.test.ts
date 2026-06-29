@@ -23,8 +23,6 @@ const savePlugin = vi.hoisted(() => ({
     bytesWritten: options?.expectedBytes ?? 1,
     verifiedSize: options?.expectedBytes ?? 1,
   })),
-  getDiagnostics: vi.fn().mockResolvedValue({ events: [] }),
-  clearDiagnostics: vi.fn().mockResolvedValue({ cleared: true }),
 }));
 
 const appListeners = vi.hoisted(() => ({
@@ -119,11 +117,6 @@ describe('Android runtime fixes', () => {
       bytesWritten: options?.expectedBytes ?? 1,
       verifiedSize: options?.expectedBytes ?? 1,
     }));
-    savePlugin.getDiagnostics.mockReset();
-    savePlugin.getDiagnostics.mockResolvedValue({ events: [] });
-    savePlugin.clearDiagnostics.mockReset();
-    savePlugin.clearDiagnostics.mockResolvedValue({ cleared: true });
-
     appListeners.callback = null;
     appListeners.remove.mockReset();
     appListeners.remove.mockResolvedValue(undefined);
@@ -247,7 +240,6 @@ describe('Android runtime fixes', () => {
 
     expect(source).toContain('pendingFiles.put(callbackId, tempFile)');
     expect(source).toContain('pendingExpectedBytes.put(callbackId');
-    expect(source).toContain('pendingFormats.put(callbackId, format)');
     expect(source).toContain('persistPendingSave(callbackId, tempFile');
     expect(source).toContain('PENDING_PREFS');
     expect(source).toContain('PENDING_TEMP_PATH_KEY');
@@ -300,16 +292,16 @@ describe('Android runtime fixes', () => {
     const mediaStoreMethod = source.indexOf('private void saveToMediaStoreDownloads');
     const writeIndex = source.indexOf('output.write(decodedBytes)', mediaStoreMethod);
     const syncIndex = source.indexOf('output.getFD().sync()', mediaStoreMethod);
-    const readbackIndex = source.indexOf('MEDIASTORE_READBACK_STARTED', mediaStoreMethod);
+    const readbackIndex = source.indexOf('long verifiedSize = readBackByteCount(destination)', mediaStoreMethod);
     const verifyIndex = source.indexOf('bytesWritten != expectedBytes || verifiedSize != expectedBytes', mediaStoreMethod);
     const publishIndex = source.indexOf('publishValues.put(MediaStore.MediaColumns.IS_PENDING, 0)', mediaStoreMethod);
-    const successIndex = source.indexOf('MEDIASTORE_SAVE_SUCCESS', mediaStoreMethod);
+    const successIndex = source.indexOf('resolve(call, "saved", "Saved to Downloads/CV Pro AI"', mediaStoreMethod);
 
     expect(writeIndex).toBeGreaterThan(mediaStoreMethod);
     expect(source).toContain('bytesWritten = decodedBytes.length');
     expect(syncIndex).toBeGreaterThan(writeIndex);
     expect(readbackIndex).toBeGreaterThan(syncIndex);
-    expect(source).toContain('long verifiedSize = readBackByteCount(destination)');
+    expect(readbackIndex).toBeGreaterThan(syncIndex);
     expect(source).toContain('bytesWritten <= 0 || verifiedSize <= 0');
     expect(verifyIndex).toBeGreaterThan(readbackIndex);
     expect(publishIndex).toBeGreaterThan(verifyIndex);
@@ -326,8 +318,6 @@ describe('Android runtime fixes', () => {
     const mismatchGuard = source.indexOf('bytesWritten != expectedBytes || verifiedSize != expectedBytes', mediaStoreMethod);
     const publishIndex = source.indexOf('publishValues.put(MediaStore.MediaColumns.IS_PENDING, 0)', mediaStoreMethod);
 
-    expect(source).toContain('MEDIASTORE_FAILED_ROW_DELETED');
-    expect(source).toContain('recordMediaStoreFailure');
     expect(source).toContain('deleteDestinationQuietly(destination)');
     expect(zeroGuard).toBeGreaterThan(mediaStoreMethod);
     expect(mismatchGuard).toBeGreaterThan(zeroGuard);
@@ -347,26 +337,36 @@ describe('Android runtime fixes', () => {
     expect(source).toContain('normalizeRelativePath(DOWNLOAD_RELATIVE_PATH)');
   });
 
-  test('SaveFile callback records entry, call presence and data presence before processing result', () => {
+  test('temporary save diagnostics source and native event names are absent', () => {
     const source = fs.readFileSync(
       path.resolve('android/app/src/main/java/com/cvproai/app/plugins/SaveFilePlugin.java'),
       'utf8',
     );
-    const callbackIndex = source.indexOf('private void saveFileResult');
-    const enteredIndex = source.indexOf('SAF_CALLBACK_ENTERED', callbackIndex);
-    const callPresentIndex = source.indexOf('SAF_CALLBACK_CALL_PRESENT', callbackIndex);
-    const dataPresentIndex = source.indexOf('SAF_CALLBACK_DATA_PRESENT', callbackIndex);
-    const uriReturnedIndex = source.indexOf('SAF_URI_RETURNED', callbackIndex);
-    const cancelledIndex = source.indexOf('SAF_RESULT_CANCELLED', callbackIndex);
+    const nativeSaveSource = fs.readFileSync(path.resolve('src/lib/native-save.ts'), 'utf8');
+    const pluginTypesSource = fs.readFileSync(path.resolve('src/lib/save-file-plugin.ts'), 'utf8');
+    const pricingSource = fs.readFileSync(path.resolve('src/app/pricing/page.tsx'), 'utf8');
+    const combined = [source, nativeSaveSource, pluginTypesSource, pricingSource].join('\n');
 
-    expect(enteredIndex).toBeGreaterThan(callbackIndex);
-    expect(callPresentIndex).toBeGreaterThan(enteredIndex);
-    expect(dataPresentIndex).toBeGreaterThan(callPresentIndex);
-    expect(uriReturnedIndex).toBeGreaterThan(dataPresentIndex);
-    expect(cancelledIndex).toBeGreaterThan(dataPresentIndex);
-    expect(source).toContain('event.put("resultCode", resultCode)');
-    expect(source).toContain('event.put("callPresent", callPresent)');
-    expect(source).toContain('event.put("dataPresent", dataPresent)');
+    for (const marker of [
+      'Save diagnostics',
+      'save-diagnostics',
+      'JS_SAVE_ENTERED',
+      'JS_BLOB_READY',
+      'JS_BASE64_READY',
+      'JS_NATIVE_SAVE_CALL',
+      'NATIVE_PLUGIN_ENTERED',
+      'MEDIASTORE_SAVE_ENTERED',
+      'MEDIASTORE_WRITE_STARTED',
+      'MEDIASTORE_SAVE_SUCCESS',
+      'SAF_CALLBACK_ENTERED',
+      'PENDING_SAVE_RECOVERED',
+      'getDiagnostics',
+      'clearDiagnostics',
+      'cvpro_save_diagnostics',
+      'recordDiagnostic',
+    ]) {
+      expect(combined).not.toContain(marker);
+    }
   });
 
   test('SaveFile callback handles RESULT_OK, cancellation and missing pending data safely', () => {
@@ -376,13 +376,9 @@ describe('Android runtime fixes', () => {
     );
 
     expect(source).toContain('activityResult.getResultCode() == Activity.RESULT_CANCELED');
-    expect(source).toContain('recordDiagnostic("SAF_RESULT_CANCELLED"');
     expect(source).toContain('activityResult.getResultCode() != Activity.RESULT_OK || destination == null');
-    expect(source).toContain('recordDiagnostic("SAF_URI_RETURNED"');
-    expect(source).toContain('recordDiagnostic("PENDING_SAVE_MISSING"');
-    expect(source).toContain('recordDiagnostic("PENDING_SAVE_RECOVERED"');
     expect(source).toContain('call.reject("Prepared file data is unavailable")');
-    expect(source).toContain('FAILED_DESTINATION_DELETE_RESULT');
+    expect(source).toContain('deleteDestinationQuietly(destination)');
   });
 
   test('SaveFile source rejects decoded byte mismatch before launching picker', () => {
@@ -391,7 +387,7 @@ describe('Android runtime fixes', () => {
       'utf8',
     );
     const mismatchIndex = source.indexOf('decodedBytes.length != expectedBytes');
-    const pickerIndex = source.indexOf('SAF_PICKER_LAUNCHED');
+    const pickerIndex = source.indexOf('new Intent(Intent.ACTION_CREATE_DOCUMENT)');
 
     expect(mismatchIndex).toBeGreaterThan(-1);
     expect(pickerIndex).toBeGreaterThan(-1);
@@ -404,9 +400,10 @@ describe('Android runtime fixes', () => {
       path.resolve('android/app/src/main/java/com/cvproai/app/plugins/SaveFilePlugin.java'),
       'utf8',
     );
-    const closeIndex = source.indexOf('DESTINATION_STREAM_CLOSED');
-    const readbackIndex = source.indexOf('DESTINATION_READBACK_COMPLETED');
-    const successIndex = source.indexOf('NATIVE_SAVE_SUCCESS');
+    const callbackIndex = source.indexOf('private void saveFileResult');
+    const syncIndex = source.indexOf('output.getFD().sync()', callbackIndex);
+    const readbackIndex = source.indexOf('long verifiedSize = readBackByteCount(destination)', callbackIndex);
+    const successIndex = source.indexOf('resolve(call, "saved", "File saved successfully"', callbackIndex);
 
     expect(source).toContain('ParcelFileDescriptor descriptor');
     expect(source).toContain('new FileOutputStream(descriptor.getFileDescriptor())');
@@ -414,58 +411,25 @@ describe('Android runtime fixes', () => {
     expect(source).toContain('readBackByteCount(destination)');
     expect(source).toContain('bytesWritten <= 0 || verifiedSize <= 0');
     expect(source).toContain('bytesWritten != expectedBytes || verifiedSize != expectedBytes');
-    expect(closeIndex).toBeGreaterThan(-1);
-    expect(readbackIndex).toBeGreaterThan(closeIndex);
+    expect(syncIndex).toBeGreaterThan(-1);
+    expect(readbackIndex).toBeGreaterThan(syncIndex);
     expect(successIndex).toBeGreaterThan(readbackIndex);
   });
 
-  test('SaveFile source persists sanitized native diagnostic phases', () => {
+  test('production save source preserves verification fields without diagnostics-only result fields', () => {
     const source = fs.readFileSync(
       path.resolve('android/app/src/main/java/com/cvproai/app/plugins/SaveFilePlugin.java'),
       'utf8',
     );
-    for (const phase of [
-      'NATIVE_PLUGIN_ENTERED',
-      'NATIVE_EXPECTED_BYTES',
-      'NATIVE_BASE64_RECEIVED',
-      'NATIVE_BASE64_DECODED',
-      'MEDIASTORE_SAVE_ENTERED',
-      'MEDIASTORE_VALUES_READY',
-      'MEDIASTORE_INSERT_STARTED',
-      'MEDIASTORE_INSERT_COMPLETED',
-      'MEDIASTORE_WRITE_STARTED',
-      'MEDIASTORE_WRITE_COMPLETED',
-      'MEDIASTORE_SYNC_COMPLETED',
-      'MEDIASTORE_READBACK_STARTED',
-      'MEDIASTORE_READBACK_COMPLETED',
-      'MEDIASTORE_PUBLISHED',
-      'MEDIASTORE_SAVE_SUCCESS',
-      'MEDIASTORE_SAVE_FAILED',
-      'MEDIASTORE_FAILED_ROW_DELETED',
-      'SAF_PICKER_LAUNCHED',
-      'SAF_CALLBACK_ENTERED',
-      'SAF_CALLBACK_CALL_PRESENT',
-      'SAF_CALLBACK_DATA_PRESENT',
-      'SAF_RESULT_CANCELLED',
-      'SAF_URI_RETURNED',
-      'PENDING_SAVE_RECOVERED',
-      'PENDING_SAVE_MISSING',
-      'TEMP_FILE_WRITTEN',
-      'DESTINATION_OPEN_STARTED',
-      'DESTINATION_OPENED',
-      'DESTINATION_COPY_STARTED',
-      'DESTINATION_COPY_COMPLETED',
-      'DESTINATION_FLUSH_COMPLETED',
-      'DESTINATION_STREAM_CLOSED',
-      'DESTINATION_READBACK_STARTED',
-      'DESTINATION_READBACK_COMPLETED',
-      'NATIVE_SAVE_SUCCESS',
-      'NATIVE_SAVE_FAILED',
-      'FAILED_DESTINATION_DELETE_RESULT',
-    ]) {
-      expect(source).toContain(phase);
-    }
-    expect(source).toContain('destination.getAuthority()');
+    const nativeSaveSource = fs.readFileSync(path.resolve('src/lib/native-save.ts'), 'utf8');
+
+    expect(source).toContain('expectedBytes');
+    expect(source).toContain('bytesWritten');
+    expect(source).toContain('verifiedSize');
+    expect(nativeSaveSource).toContain('typeof result.bytesWritten !== \'number\'');
+    expect(nativeSaveSource).toContain('typeof result.verifiedSize !== \'number\'');
+    expect(nativeSaveSource).not.toContain('uriAuthority');
+    expect(nativeSaveSource).not.toContain('displayName');
     expect(source).not.toContain('destination.toString()');
   });
 

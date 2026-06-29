@@ -18,11 +18,7 @@ export interface SaveFilePluginDefinition {
     message: string;
     bytesWritten?: number;
     verifiedSize?: number;
-    uriAuthority?: string;
-    displayName?: string;
   }>;
-  getDiagnostics(): Promise<{ events: unknown[] }>;
-  clearDiagnostics(): Promise<{ cleared: boolean }>;
 }
 
 export const SaveFileNative = registerPlugin<SaveFilePluginDefinition>('SaveFile');
