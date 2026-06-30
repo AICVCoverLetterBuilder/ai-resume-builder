@@ -706,7 +706,7 @@ export default function CVBuilderPage() {
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
-        if (cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic') {
+        if (cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold') {
           toast.error(t.cv.pdfExportFailed);
           return;
         }

@@ -309,7 +309,7 @@ type PreparedExportImage = {
   previousFrameDisplay: string;
 };
 
-type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic';
+type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic' | 'creative-bold';
 
 function isModernMinimalCaptureTarget(target: HTMLElement): boolean {
   return target.dataset.templateId === 'modern-minimal'
@@ -326,6 +326,11 @@ function isProfessionalClassicCaptureTarget(target: HTMLElement): boolean {
     || Boolean(target.querySelector('[data-template-id="professional-classic"]'));
 }
 
+function isCreativeBoldCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'creative-bold'
+    || Boolean(target.querySelector('[data-template-id="creative-bold"]'));
+}
+
 function getTemplateCaptureRoot(target: HTMLElement, templateId: StyledPdfTemplateId): HTMLElement | null {
   return target.dataset.templateId === templateId
     ? target
@@ -336,6 +341,7 @@ function getExportStyleTemplateId(target: HTMLElement): StyledPdfTemplateId | nu
   if (isModernMinimalCaptureTarget(target)) return 'modern-minimal';
   if (isCleanSimpleCaptureTarget(target)) return 'clean-simple';
   if (isProfessionalClassicCaptureTarget(target)) return 'professional-classic';
+  if (isCreativeBoldCaptureTarget(target)) return 'creative-bold';
   return null;
 }
 
@@ -408,9 +414,39 @@ function fallbackProfessionalClassicColor(element: Element, property: string): s
   return '#111827';
 }
 
+function fallbackCreativeBoldColor(element: Element, property: string): string {
+  const classes = Array.from(element.classList);
+  if (property === 'background-image') return 'none';
+  if (property === 'background-color' || property === 'background') {
+    if (classes.includes('bg-white')) return '#ffffff';
+    if (classes.includes('bg-white/10')) return 'rgba(255, 255, 255, 0.1)';
+    if (classes.includes('bg-white/20')) return 'rgba(255, 255, 255, 0.2)';
+    if (classes.includes('from-rose-600') || classes.includes('to-pink-700')) return '#be123c';
+    return 'rgba(0, 0, 0, 0)';
+  }
+  if (property.startsWith('border')) {
+    if (classes.includes('border-rose-200')) return '#fecdd3';
+    if (classes.includes('border-white/50')) return 'rgba(255, 255, 255, 0.5)';
+    return '#fecdd3';
+  }
+  if (property === 'color' && element.closest('.text-rose-100')) return '#ffe4e6';
+  if (property === 'color' && element.closest('.text-rose-200')) return '#fecdd3';
+  if (classes.includes('text-white')) return '#ffffff';
+  if (classes.includes('text-rose-100')) return '#ffe4e6';
+  if (classes.includes('text-rose-200')) return '#fecdd3';
+  if (classes.includes('text-rose-600')) return '#e11d48';
+  if (classes.includes('text-gray-900')) return '#111827';
+  if (classes.includes('text-gray-700')) return '#374151';
+  if (classes.includes('text-gray-600')) return '#4b5563';
+  if (classes.includes('text-gray-500')) return '#6b7280';
+  if (property === 'color' && element.closest('aside')) return '#ffffff';
+  return '#111827';
+}
+
 function fallbackExportColor(element: Element, property: string, templateId: StyledPdfTemplateId): string {
   if (templateId === 'clean-simple') return fallbackCleanSimpleColor(element, property);
   if (templateId === 'professional-classic') return fallbackProfessionalClassicColor(element, property);
+  if (templateId === 'creative-bold') return fallbackCreativeBoldColor(element, property);
   return fallbackModernMinimalColor(element, property);
 }
 
@@ -428,6 +464,9 @@ function copyTemplateComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElem
       if (/\b(?:lab|lch|oklab|oklch)\(/i.test(value)) {
         value = fallbackExportColor(sourceEl, property, templateId);
       }
+      if (templateId === 'creative-bold' && property === 'background-image' && /\b(?:lab|lch|oklab|oklch)\(/i.test(value)) {
+        value = 'none';
+      }
       cloneEl.style.setProperty(property, value, computed.getPropertyPriority(property));
     }
 
@@ -442,11 +481,151 @@ function copyTemplateComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElem
 }
 
 const PROFESSIONAL_CLASSIC_PDF_FONT_STACK = 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif';
+const CREATIVE_BOLD_PDF_FONT_STACK = 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif';
+const CREATIVE_BOLD_PDF_SIDEBAR_PERCENT = 28;
+const CREATIVE_BOLD_PDF_MAIN_PERCENT = 100 - CREATIVE_BOLD_PDF_SIDEBAR_PERCENT;
+const CREATIVE_BOLD_PAGE_INTERSECTION_EPSILON_PX = 0.5;
+
+type MeaningfulContentIntervalCss = {
+  topCssPx: number;
+  bottomCssPx: number;
+};
+
+type MeaningfulContentBounds = {
+  rootWidthCssPx: number;
+  rootHeightCssPx: number;
+  maxBottomCssPx: number;
+  intervals: MeaningfulContentIntervalCss[];
+};
+
+type MeaningfulContentPagePlan = {
+  scalePxPerCssPx: number;
+  maxBottomCanvasPx: number;
+  intervals: Array<{ topPx: number; bottomPx: number }>;
+};
 
 function normalizeProfessionalClassicPdfTextStyles(root: HTMLElement): void {
+  normalizePdfTextStyles(root, PROFESSIONAL_CLASSIC_PDF_FONT_STACK);
+}
+
+function normalizeCreativeBoldPdfTextStyles(root: HTMLElement): void {
+  normalizePdfTextStyles(root, CREATIVE_BOLD_PDF_FONT_STACK);
+}
+
+function applyCreativeBoldPdfLayout(root: HTMLElement): void {
+  const layout = root.firstElementChild as HTMLElement | null;
+  const sidebar = root.querySelector('aside') as HTMLElement | null;
+  const main = root.querySelector('main') as HTMLElement | null;
+  if (!layout || !sidebar || !main) return;
+
+  root.style.setProperty('width', '210mm');
+  root.style.setProperty('min-width', '210mm');
+  root.style.setProperty('max-width', '210mm');
+  root.style.setProperty('box-sizing', 'border-box');
+  root.style.setProperty('overflow', 'hidden');
+  root.style.setProperty('background-color', '#ffffff');
+
+  layout.style.setProperty('display', 'grid');
+  layout.style.setProperty('grid-template-columns', `${CREATIVE_BOLD_PDF_SIDEBAR_PERCENT}% ${CREATIVE_BOLD_PDF_MAIN_PERCENT}%`);
+  layout.style.setProperty('width', '100%');
+  layout.style.setProperty('max-width', '100%');
+  layout.style.setProperty('box-sizing', 'border-box');
+  layout.style.setProperty('gap', '0');
+  layout.style.setProperty('align-items', 'stretch');
+  layout.style.setProperty('overflow', 'hidden');
+
+  sidebar.style.setProperty('grid-column', '1');
+  sidebar.style.setProperty('width', '100%');
+  sidebar.style.setProperty('min-width', '0');
+  sidebar.style.setProperty('max-width', 'none');
+  sidebar.style.setProperty('flex', '0 0 auto');
+  sidebar.style.setProperty('box-sizing', 'border-box');
+  sidebar.style.setProperty('overflow', 'hidden');
+  sidebar.style.setProperty('background', 'linear-gradient(180deg, #e11d48 0%, #be123c 100%)');
+  sidebar.style.setProperty('background-color', '#be123c');
+
+  main.style.setProperty('grid-column', '2');
+  main.style.setProperty('width', '100%');
+  main.style.setProperty('min-width', '0');
+  main.style.setProperty('max-width', 'none');
+  main.style.setProperty('box-sizing', 'border-box');
+  main.style.setProperty('overflow-x', 'hidden');
+  main.style.setProperty('background-color', '#ffffff');
+}
+
+function hasMeaningfulExportPayload(element: HTMLElement): boolean {
+  if (element instanceof HTMLImageElement) return true;
+  if (element.querySelector('img')) return true;
+  return Boolean(element.textContent?.trim());
+}
+
+function getPositiveRect(rect: DOMRect, element: HTMLElement): { top: number; bottom: number; width: number; height: number } | null {
+  const width = rect.width || element.offsetWidth || element.scrollWidth;
+  const height = rect.height || element.offsetHeight || element.scrollHeight;
+  const top = rect.top || element.offsetTop || 0;
+  const bottom = rect.bottom || (top + height);
+  if (width <= 0 || height <= 0 || bottom <= top) return null;
+  return { top, bottom, width, height };
+}
+
+export function measureExportMeaningfulContentBounds(root: HTMLElement): MeaningfulContentBounds | null {
+  const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
+  if (!rootBox) return null;
+
+  const intervals: MeaningfulContentIntervalCss[] = [];
+  const meaningfulElements = Array.from(root.querySelectorAll<HTMLElement>('[data-export-meaningful="true"]'));
+  meaningfulElements.forEach((element) => {
+    if (!hasMeaningfulExportPayload(element)) return;
+    const rect = getPositiveRect(element.getBoundingClientRect(), element);
+    if (!rect) return;
+    const topCssPx = Math.max(0, rect.top - rootBox.top);
+    const bottomCssPx = Math.max(topCssPx, rect.bottom - rootBox.top);
+    if (bottomCssPx <= topCssPx) return;
+    intervals.push({ topCssPx, bottomCssPx });
+  });
+
+  if (intervals.length === 0) return null;
+  return {
+    rootWidthCssPx: rootBox.width,
+    rootHeightCssPx: rootBox.height,
+    maxBottomCssPx: Math.max(...intervals.map(interval => interval.bottomCssPx)),
+    intervals,
+  };
+}
+
+export function createMeaningfulContentPagePlan(
+  bounds: MeaningfulContentBounds,
+  canvasWidthPx: number,
+  fallbackCssWidthPx: number,
+): MeaningfulContentPagePlan | null {
+  const cssWidth = bounds.rootWidthCssPx || fallbackCssWidthPx;
+  if (cssWidth <= 0 || canvasWidthPx <= 0) return null;
+  const scalePxPerCssPx = canvasWidthPx / cssWidth;
+  return {
+    scalePxPerCssPx,
+    maxBottomCanvasPx: bounds.maxBottomCssPx * scalePxPerCssPx,
+    intervals: bounds.intervals.map(interval => ({
+      topPx: interval.topCssPx * scalePxPerCssPx,
+      bottomPx: interval.bottomCssPx * scalePxPerCssPx,
+    })),
+  };
+}
+
+function pageHasMeaningfulContent(plan: MeaningfulContentPagePlan, pageTopPx: number, pageBottomPx: number): boolean {
+  return plan.intervals.some(interval =>
+    interval.bottomPx > pageTopPx + CREATIVE_BOLD_PAGE_INTERSECTION_EPSILON_PX
+    && interval.topPx < pageBottomPx - CREATIVE_BOLD_PAGE_INTERSECTION_EPSILON_PX,
+  );
+}
+
+function hasFutureMeaningfulContent(plan: MeaningfulContentPagePlan, pageBottomPx: number): boolean {
+  return plan.maxBottomCanvasPx > pageBottomPx + CREATIVE_BOLD_PAGE_INTERSECTION_EPSILON_PX;
+}
+
+function normalizePdfTextStyles(root: HTMLElement, fontStack: string): void {
   const elements = [root, ...Array.from(root.querySelectorAll('*'))] as HTMLElement[];
   elements.forEach((element) => {
-    element.style.setProperty('font-family', PROFESSIONAL_CLASSIC_PDF_FONT_STACK);
+    element.style.setProperty('font-family', fontStack);
     element.style.setProperty('word-spacing', 'normal');
     element.style.setProperty('letter-spacing', 'normal');
     element.style.setProperty('white-space', 'normal');
@@ -521,7 +700,7 @@ async function prepareTemplateImagesForExport(target: HTMLElement): Promise<Prep
     const previousFrameDisplay = frame.style.display;
     prepared.push({ img, frame, previousSrc, previousAlt, previousFrameDisplay });
 
-    const sourceSrc = templateId === 'professional-classic'
+    const sourceSrc = templateId === 'professional-classic' || templateId === 'creative-bold'
       ? resolveProfessionalClassicImageSource(previousSrc ?? img.currentSrc ?? img.src)
       : previousSrc;
     const dataUrl = sourceSrc ? await resolveExportImageDataUrl(sourceSrc) : null;
@@ -537,7 +716,7 @@ async function prepareTemplateImagesForExport(target: HTMLElement): Promise<Prep
       return;
     }
 
-    if (templateId === 'professional-classic' && previousSrc) {
+    if ((templateId === 'professional-classic' || templateId === 'creative-bold') && previousSrc) {
       img.alt = '';
       img.style.width = '100%';
       img.style.height = '100%';
@@ -3786,12 +3965,13 @@ async function injectAndAwaitNotoFonts(): Promise<() => void> {
 
 export function isCanvasSliceEffectivelyBlank(canvas: HTMLCanvasElement, offsetY: number, sliceHeight: number): boolean {
   const width = canvas.width;
-  const height = Math.max(0, Math.min(sliceHeight, canvas.height - offsetY));
+  const sourceY = Math.max(0, Math.ceil(offsetY));
+  const height = Math.max(0, Math.min(Math.ceil(sliceHeight), canvas.height - sourceY));
   if (width <= 0 || height <= 0) return true;
   const ctx = canvas.getContext('2d');
   if (!ctx) return false;
   const sampleStep = Math.max(4, Math.floor(width / 80));
-  const data = ctx.getImageData(0, offsetY, width, height).data;
+  const data = ctx.getImageData(0, sourceY, width, height).data;
   for (let y = 0; y < height; y += sampleStep) {
     for (let x = 0; x < width; x += sampleStep) {
       const index = (y * width + x) * 4;
@@ -3804,6 +3984,96 @@ export function isCanvasSliceEffectivelyBlank(canvas: HTMLCanvasElement, offsetY
     }
   }
   return true;
+}
+
+function isCreativeBoldSidebarBackground(red: number, green: number, blue: number): boolean {
+  return red >= 150 && red <= 235 && green <= 85 && blue >= 45 && blue <= 145;
+}
+
+function isNearWhite(red: number, green: number, blue: number): boolean {
+  return red >= 248 && green >= 248 && blue >= 248;
+}
+
+function isCloseColor(
+  red: number,
+  green: number,
+  blue: number,
+  baseRed: number,
+  baseGreen: number,
+  baseBlue: number,
+  tolerance: number,
+): boolean {
+  return Math.abs(red - baseRed) <= tolerance
+    && Math.abs(green - baseGreen) <= tolerance
+    && Math.abs(blue - baseBlue) <= tolerance;
+}
+
+function isMeaningfulCreativeBoldPixel(
+  red: number,
+  green: number,
+  blue: number,
+  x: number,
+  sidebarWidth: number,
+  sidebarRowBackground: [number, number, number] | null,
+): boolean {
+  if (x < sidebarWidth) {
+    if (
+      sidebarRowBackground
+      && isCloseColor(red, green, blue, sidebarRowBackground[0], sidebarRowBackground[1], sidebarRowBackground[2], 12)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  if (x <= sidebarWidth + 2 && isCreativeBoldSidebarBackground(red, green, blue)) return false;
+  if (isNearWhite(red, green, blue)) return false;
+  return true;
+}
+
+export function isCreativeBoldCanvasSliceEffectivelyBlank(canvas: HTMLCanvasElement, offsetY: number, sliceHeight: number): boolean {
+  const width = canvas.width;
+  const sourceY = Math.max(0, Math.ceil(offsetY));
+  const height = Math.max(0, Math.min(Math.ceil(sliceHeight), canvas.height - sourceY));
+  if (width <= 0 || height <= 0) return true;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return false;
+
+  const sidebarWidth = Math.round(width * (CREATIVE_BOLD_PDF_SIDEBAR_PERCENT / 100));
+  const data = ctx.getImageData(0, sourceY, width, height).data;
+  for (let y = 0; y < height; y += 1) {
+    let sidebarRowBackground: [number, number, number] | null = null;
+    for (let bgX = 0; bgX < sidebarWidth; bgX += 1) {
+      const bgIndex = (y * width + bgX) * 4;
+      if (data[bgIndex + 3] === 0) continue;
+      if (isCreativeBoldSidebarBackground(data[bgIndex], data[bgIndex + 1], data[bgIndex + 2])) {
+        sidebarRowBackground = [data[bgIndex], data[bgIndex + 1], data[bgIndex + 2]];
+        break;
+      }
+    }
+
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      const alpha = data[index + 3];
+      if (alpha === 0) continue;
+      if (isMeaningfulCreativeBoldPixel(data[index], data[index + 1], data[index + 2], x, sidebarWidth, sidebarRowBackground)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function isTemplateCanvasSliceEffectivelyBlank(
+  canvas: HTMLCanvasElement,
+  offsetY: number,
+  sliceHeight: number,
+  templateId: StyledPdfTemplateId | null,
+): boolean {
+  if (templateId === 'creative-bold') {
+    return isCreativeBoldCanvasSliceEffectivelyBlank(canvas, offsetY, sliceHeight);
+  }
+  return isCanvasSliceEffectivelyBlank(canvas, offsetY, sliceHeight);
 }
 
 export function findVisibleCanvasBottom(canvas: HTMLCanvasElement): number {
@@ -3959,6 +4229,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   const exportCaptureId = `cv-template-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let taggedCaptureTarget: HTMLElement | null = null;
   let captureTemplateId: StyledPdfTemplateId | null = null;
+  let creativeBoldMeaningfulBounds: MeaningfulContentBounds | null = null;
+  let captureWidth = 0;
+  let captureHeight = 0;
   try {
     // ── HARD VERIFICATION: capture the actual template child directly, not the
     //    scroll wrapper. The #cv-preview / #cv-inline-preview div is an
@@ -3967,8 +4240,8 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     //    By targeting the template child directly we guarantee we capture exactly
     //    what is rendered, including any background-color changes.
     const captureTarget = (firstChild as HTMLElement | null) ?? element;
-    const captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
-    const captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
+    captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
+    captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
     preparedImages = await prepareTemplateImagesForExport(captureTarget);
     captureTemplateId = getExportStyleTemplateId(captureTarget);
     if (captureTemplateId) {
@@ -4006,6 +4279,11 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         copyTemplateComputedStyles(sourceRoot, cloneRoot, captureTemplateId);
         if (captureTemplateId === 'professional-classic') {
           normalizeProfessionalClassicPdfTextStyles(cloneRoot);
+        }
+        if (captureTemplateId === 'creative-bold') {
+          applyCreativeBoldPdfLayout(cloneRoot);
+          normalizeCreativeBoldPdfTextStyles(cloneRoot);
+          creativeBoldMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
         }
         cloneRoot.removeAttribute('data-export-capture-id');
         removeCloneStylesheets(clonedDocument);
@@ -4051,7 +4329,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   }
 
   let pdfCanvas = canvas;
-  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic';
+  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold';
   if (shouldTrimBlankPdfSlices) {
     const visibleBottom = findVisibleCanvasBottom(canvas);
     if (visibleBottom > 0 && visibleBottom < canvas.height) {
@@ -4069,6 +4347,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   const imgData = pdfCanvas.toDataURL('image/jpeg', 0.95);
   const canvasWidthPx = pdfCanvas.width;
   const canvasHeightPx = pdfCanvas.height;
+  const creativeBoldPagePlan = captureTemplateId === 'creative-bold' && creativeBoldMeaningfulBounds
+    ? createMeaningfulContentPagePlan(creativeBoldMeaningfulBounds, canvasWidthPx, captureWidth)
+    : null;
 
   const contentHeightMM = (canvasHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
   const useSinglePage = contentHeightMM <= CV_PDF_A4_HEIGHT_MM + PDF_TRAILING_SLICE_TOLERANCE_MM;
@@ -4091,7 +4372,20 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
 
       while (offsetY < canvasHeightPx - trailingTolerancePx) {
         const sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
-        if (shouldTrimBlankPdfSlices && isCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight)) {
+        if (creativeBoldPagePlan && !firstPage) {
+          const pageBottomPx = offsetY + sliceHeight;
+          if (!pageHasMeaningfulContent(creativeBoldPagePlan, offsetY, pageBottomPx)) {
+            if (!hasFutureMeaningfulContent(creativeBoldPagePlan, pageBottomPx)) break;
+            offsetY += pageHeightPx;
+            continue;
+          }
+        }
+        if (
+          shouldTrimBlankPdfSlices
+          && !creativeBoldPagePlan
+          && !firstPage
+          && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
+        ) {
           break;
         }
         if (!firstPage) pdf.addPage();

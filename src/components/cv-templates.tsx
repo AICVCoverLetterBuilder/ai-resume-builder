@@ -11,6 +11,10 @@ interface TemplateProps {
   locale?: Locale;
 }
 
+type PhotoFillImgProps = React.ImgHTMLAttributes<HTMLImageElement> & {
+  [key: `data-${string}`]: string | undefined;
+};
+
 function getLabels(locale?: Locale) {
   const t = translations[locale ?? 'en'] ?? translations['en'];
   return {
@@ -24,7 +28,17 @@ function getLabels(locale?: Locale) {
   };
 }
 
-function PhotoFill({ photo, alt = '', shape = 'circle' }: { photo: string; alt?: string; shape?: 'circle' | 'rectangle' }) {
+function PhotoFill({
+  photo,
+  alt = '',
+  shape = 'circle',
+  imgProps,
+}: {
+  photo: string;
+  alt?: string;
+  shape?: 'circle' | 'rectangle';
+  imgProps?: PhotoFillImgProps;
+}) {
   const imgRef = useRef<HTMLImageElement>(null);
 
   // For circle templates: the image source may be the full original or a circular PNG.
@@ -45,6 +59,7 @@ function PhotoFill({ photo, alt = '', shape = 'circle' }: { photo: string; alt?:
 
   return (
     <img
+      {...imgProps}
       ref={imgRef}
       src={photo}
       alt={alt}
@@ -172,56 +187,112 @@ export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
-    <div className="bg-white text-gray-900 max-w-[210mm] mx-auto font-sans text-sm" style={{ minHeight: '297mm' }}>
-      <div className="flex min-h-[297mm]">
-        <aside className="w-1/3 bg-gradient-to-b from-rose-600 to-pink-700 text-white p-6">
+    <div
+      data-template-id="creative-bold"
+      className="box-border w-[210mm] bg-white text-gray-900 mx-auto font-sans text-sm"
+      style={{
+        minHeight: '297mm',
+        backgroundColor: '#ffffff',
+        color: '#111827',
+        fontFamily: 'Arial, Helvetica, sans-serif',
+        wordSpacing: 'normal',
+        letterSpacing: 'normal',
+        whiteSpace: 'normal',
+        fontKerning: 'normal',
+      }}
+    >
+      <div
+        className="flex min-h-[297mm]"
+        style={{ minHeight: '297mm', display: 'flex', alignItems: 'stretch' }}
+      >
+        <aside
+          className="w-1/3 text-white p-6"
+          style={{
+            width: '33.333333%',
+            flex: '0 0 33.333333%',
+            background: 'linear-gradient(180deg, #e11d48 0%, #be123c 100%)',
+            backgroundColor: '#be123c',
+            color: '#ffffff',
+            padding: 24,
+            boxSizing: 'border-box',
+          }}
+        >
           {showPhoto && (
-            <div className="mx-auto mb-4 rounded-full overflow-hidden border-2 border-white/50 shadow-lg" style={{ width: 110, height: 110 }}>
+            <div
+              data-creative-bold-photo="frame"
+              className="mx-auto mb-4 rounded-full overflow-hidden border-2 border-white/50 shadow-lg"
+              style={{
+                width: 110,
+                height: 110,
+                borderRadius: 9999,
+                overflow: 'hidden',
+                border: '2px solid rgba(255, 255, 255, 0.5)',
+                marginLeft: 'auto',
+                marginRight: 'auto',
+                marginBottom: 16,
+              }}
+            >
               {data.personal.photo ? (
-                <PhotoFill photo={data.personal.photo} />
+                <PhotoFill photo={data.personal.photo} imgProps={{ 'data-export-meaningful': 'true' }} />
               ) : (
-                <div className="h-full w-full bg-white/20" />
+                <div className="h-full w-full bg-white/20" style={{ width: '100%', height: '100%', backgroundColor: 'rgba(255, 255, 255, 0.2)' }} />
               )}
             </div>
           )}
-          <h1 className="text-xl font-bold">{data.personal.fullName || 'Your Name'}</h1>
-          <p className="text-rose-200 text-sm mt-1">{data.personal.jobTitle}</p>
+          <h1 data-export-meaningful="true" className="text-xl font-bold">{data.personal.fullName || 'Your Name'}</h1>
+          <p data-export-meaningful="true" className="text-rose-200 text-sm mt-1">{data.personal.jobTitle}</p>
           <div className="mt-6 space-y-2 text-xs text-rose-100">
-            {data.personal.email && <p>{data.personal.email}</p>}
-            {data.personal.phone && <p>{data.personal.phone}</p>}
-            {rs.showAddress && data.personal.address && <p>{data.personal.address}</p>}
+            {data.personal.email && <p data-export-meaningful="true">{data.personal.email}</p>}
+            {data.personal.phone && <p data-export-meaningful="true">{data.personal.phone}</p>}
+            {rs.showAddress && data.personal.address && <p data-export-meaningful="true">{data.personal.address}</p>}
           </div>
           {data.skills.length > 0 && (
             <div className="mt-6">
-              <h2 className="font-bold text-xs uppercase tracking-wider mb-2">{L.skills}</h2>
+              <h2 data-export-meaningful="true" className="font-bold text-xs uppercase tracking-wider mb-2">{L.skills}</h2>
               <div className="space-y-1.5">
                 {data.skills.map((s, i) => (
-                  <div key={i} className="rounded bg-white/10 px-2 py-1 text-xs">{s}</div>
+                  <div
+                    key={i}
+                    data-export-meaningful="true"
+                    data-creative-bold-skill="item"
+                    className="rounded bg-white/10 px-2 py-1 text-xs"
+                    style={{ backgroundColor: 'rgba(255, 255, 255, 0.1)' }}
+                  >
+                    {s}
+                  </div>
                 ))}
               </div>
             </div>
           )}
           {data.languages.length > 0 && (
             <div className="mt-6">
-              <h2 className="font-bold text-xs uppercase tracking-wider mb-2">{L.languages}</h2>
+              <h2 data-export-meaningful="true" className="font-bold text-xs uppercase tracking-wider mb-2">{L.languages}</h2>
               {data.languages.map((l, i) => (
-                <p key={i} className="text-xs text-rose-100">{l.name} - {l.level}</p>
+                <p key={i} data-export-meaningful="true" className="text-xs text-rose-100">{l.name} - {l.level}</p>
               ))}
             </div>
           )}
         </aside>
-        <main className="flex-1 p-6">
+        <main
+          className="flex-1 p-6"
+          style={{
+            flex: '1 1 0%',
+            backgroundColor: '#ffffff',
+            padding: 24,
+            boxSizing: 'border-box',
+          }}
+        >
           {data.summary && (
             <section className="mb-6">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-2">{L.summary}</h2>
-              <p className="text-gray-700 leading-relaxed">{data.summary}</p>
+              <h2 data-export-meaningful="true" className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-2">{L.summary}</h2>
+              <p data-export-meaningful="true" className="text-gray-700 leading-relaxed">{data.summary}</p>
             </section>
           )}
           {data.experience.length > 0 && (
             <section className="mb-6">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-3">{L.experience}</h2>
+              <h2 data-export-meaningful="true" className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-3">{L.experience}</h2>
               {data.experience.map(exp => (
-                <div key={exp.id} className="mb-4 border-l-2 border-rose-200 pl-3">
+                <div key={exp.id} data-export-meaningful="true" className="mb-4 border-l-2 border-rose-200 pl-3">
                   <h3 className="font-semibold">{exp.position}</h3>
                   <p className="text-xs text-gray-500">{exp.company} | {exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</p>
                   <p className="mt-1 text-gray-600 whitespace-pre-line">{exp.description}</p>
@@ -231,9 +302,9 @@ export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
           )}
           {data.education.length > 0 && (
             <section className="mb-6">
-              <h2 className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-3">{L.education}</h2>
+              <h2 data-export-meaningful="true" className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-3">{L.education}</h2>
               {data.education.map(edu => (
-                <div key={edu.id} className="mb-2">
+                <div key={edu.id} data-export-meaningful="true" className="mb-2">
                   <h3 className="font-semibold">{edu.degree}</h3>
                   <p className="text-xs text-gray-500">{edu.school} | {edu.startDate} - {edu.endDate}</p>
                 </div>
@@ -242,9 +313,9 @@ export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
           )}
           {data.certifications.length > 0 && (
             <section>
-              <h2 className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-2">{L.certifications}</h2>
+              <h2 data-export-meaningful="true" className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-2">{L.certifications}</h2>
               <ul className="list-disc list-inside text-gray-700">
-                {data.certifications.map((c, i) => <li key={i}>{c}</li>)}
+                {data.certifications.map((c, i) => <li key={i} data-export-meaningful="true">{c}</li>)}
               </ul>
             </section>
           )}
