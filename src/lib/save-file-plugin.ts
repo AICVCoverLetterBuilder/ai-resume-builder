@@ -18,6 +18,8 @@ export interface SaveFilePluginDefinition {
     message: string;
     bytesWritten?: number;
     verifiedSize?: number;
+    fileName?: string;
+    destination?: string;
   }>;
 }
 

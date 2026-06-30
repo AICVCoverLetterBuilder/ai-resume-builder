@@ -94,6 +94,9 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
 
     const result = await saveFileViaPlatform(blob, 'test.pdf', 'application/pdf');
     expect(result.result).toBe('saved');
+    expect(result.platform).toBe('web');
+    expect(result.fileName).toBe('test.pdf');
+    expect(result.sourceBytes).toBe(blob.size);
     expect(clickSpy).toHaveBeenCalled();
   });
 
@@ -110,6 +113,32 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
     expect(args.mimeType).toBe('application/pdf');
     expect(args.base64Data.length).toBeGreaterThan(0);
     expect(args.expectedBytes).toBe(blob.size);
+  });
+
+  test('Android verified save result carries final filename and destination metadata only after byte verification', async () => {
+    setNativeAndroid();
+    pluginInstances.saveFile.mockImplementationOnce(async (options?: { expectedBytes?: number }) => ({
+      result: 'saved',
+      message: 'Saved to Downloads/CV Pro AI',
+      fileName: 'Dragan Obradović - CV (1).pdf',
+      destination: 'Downloads/CV Pro AI',
+      bytesWritten: options?.expectedBytes ?? 1,
+      verifiedSize: options?.expectedBytes ?? 1,
+    }));
+    const { saveFileViaPlatform } = await import('../native-save');
+
+    const blob = new Blob(['%PDF-1.7'], { type: 'application/pdf' });
+    const result = await saveFileViaPlatform(blob, 'Dragan Obradović - CV.pdf', 'application/pdf');
+
+    expect(result).toEqual(expect.objectContaining({
+      result: 'saved',
+      platform: 'android',
+      fileName: 'Dragan Obradović - CV (1).pdf',
+      destination: 'Downloads/CV Pro AI',
+      bytesWritten: blob.size,
+      verifiedSize: blob.size,
+      sourceBytes: blob.size,
+    }));
   });
 
   test('JS plugin name matches the registered native SaveFile plugin', async () => {
@@ -299,6 +328,39 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
     expect(order).toEqual(['native-started', 'native-finished', 'js-resolved']);
   });
 
+  test('success toast copy is created only after the native save promise resolves', async () => {
+    setNativeAndroid();
+    const toasts: unknown[] = [];
+    let finishNative!: () => void;
+    pluginInstances.saveFile.mockImplementationOnce((async (options: { expectedBytes: number }) => {
+      await new Promise<void>(resolve => {
+        finishNative = resolve;
+      });
+      return {
+        result: 'saved',
+        message: 'Saved to Downloads/CV Pro AI',
+        fileName: 'Dragan Obradović - CV.pdf',
+        destination: 'Downloads/CV Pro AI',
+        bytesWritten: options.expectedBytes,
+        verifiedSize: options.expectedBytes,
+      };
+    }) as typeof pluginInstances.saveFile);
+    const { saveFileViaPlatform } = await import('../native-save');
+    const { getCvExportSuccessToast } = await import('../export-success-toast');
+    const { translations } = await import('../i18n/translations');
+
+    const savePromise = saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'Dragan Obradović - CV.pdf', 'application/pdf')
+      .then(result => {
+        const copy = getCvExportSuccessToast(result, 'pdf', 'fallback.pdf', translations.en.cv);
+        if (copy) toasts.push(copy);
+      });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(toasts).toHaveLength(0);
+    finishNative();
+    await savePromise;
+    expect(toasts).toHaveLength(1);
+  });
+
   test('native rejection reaches the user-facing export error path', async () => {
     setNativeAndroid();
     pluginInstances.saveFile.mockRejectedValueOnce(new Error('Error writing file'));
@@ -322,6 +384,84 @@ describe('exportToPDF production path (via saveFileViaPlatform)', () => {
     await expect(
       saveFileViaPlatform(new Blob(['%PDF-1.7'], { type: 'application/pdf' }), 'test.pdf', 'application/pdf'),
     ).rejects.toBeInstanceOf(SaveCancelledError);
+  });
+
+  test('success toast helper formats Android PDF and DOCX saves with verified filename and destination', async () => {
+    const { getCvExportSuccessToast } = await import('../export-success-toast');
+    const { translations } = await import('../i18n/translations');
+
+    const pdfCopy = getCvExportSuccessToast({
+      result: 'saved',
+      message: 'OK',
+      platform: 'android',
+      fileName: 'Dragan Obradović - CV (1).pdf',
+      destination: 'Downloads/CV Pro AI',
+      bytesWritten: 12,
+      verifiedSize: 12,
+      sourceBytes: 12,
+    }, 'pdf', 'fallback.pdf', translations.en.cv);
+
+    expect(pdfCopy?.title).toBe('CV saved successfully');
+    expect(pdfCopy?.description).toContain('PDF saved successfully');
+    expect(pdfCopy?.description).toContain('Dragan Obradović - CV (1).pdf');
+    expect(pdfCopy?.description).toContain('Downloads/CV Pro AI');
+
+    const docxCopy = getCvExportSuccessToast({
+      result: 'saved',
+      message: 'OK',
+      platform: 'android',
+      fileName: 'Dragan Obradović - CV.docx',
+      bytesWritten: 14,
+      verifiedSize: 14,
+      sourceBytes: 14,
+    }, 'docx', 'fallback.docx', translations.en.cv);
+
+    expect(docxCopy?.title).toBe('CV saved successfully');
+    expect(docxCopy?.description).toContain('DOCX saved successfully');
+    expect(docxCopy?.description).toContain('Dragan Obradović - CV.docx');
+    expect(docxCopy?.description).not.toContain('Downloads/CV Pro AI');
+  });
+
+  test('success toast helper uses web wording without Android destination', async () => {
+    const { getCvExportSuccessToast } = await import('../export-success-toast');
+    const { translations } = await import('../i18n/translations');
+
+    const copy = getCvExportSuccessToast({
+      result: 'saved',
+      message: 'Download started',
+      platform: 'web',
+      fileName: 'Dragan Obradović - CV.pdf',
+      sourceBytes: 12,
+    }, 'pdf', 'fallback.pdf', translations.en.cv);
+
+    expect(copy?.title).toBe('Download started');
+    expect(copy?.description).toBe('Dragan Obradović - CV.pdf');
+    expect(copy?.description).not.toContain('Downloads');
+  });
+
+  test('success toast helper returns nothing for cancel, failure, zero-byte, and byte mismatch results', async () => {
+    const { getCvExportSuccessToast } = await import('../export-success-toast');
+    const { translations } = await import('../i18n/translations');
+    const t = translations.en.cv;
+
+    expect(getCvExportSuccessToast({ result: 'cancelled', message: 'cancelled', platform: 'android' }, 'pdf', 'test.pdf', t)).toBeNull();
+    expect(getCvExportSuccessToast({ result: 'failed', message: 'failed', platform: 'android' }, 'pdf', 'test.pdf', t)).toBeNull();
+    expect(getCvExportSuccessToast({
+      result: 'saved',
+      message: 'OK',
+      platform: 'android',
+      bytesWritten: 0,
+      verifiedSize: 0,
+      sourceBytes: 12,
+    }, 'pdf', 'test.pdf', t)).toBeNull();
+    expect(getCvExportSuccessToast({
+      result: 'saved',
+      message: 'OK',
+      platform: 'android',
+      bytesWritten: 11,
+      verifiedSize: 11,
+      sourceBytes: 12,
+    }, 'pdf', 'test.pdf', t)).toBeNull();
   });
 
   test('CV export filenames are friendly and sanitized without timestamps', async () => {
@@ -771,6 +911,25 @@ describe('Translation keys', () => {
     const mod = await import('../i18n/translations');
     for (const locale of Object.values(mod.translations)) {
       expect((locale as Record<string, unknown>).cv).toHaveProperty('wordExportFailed');
+    }
+  });
+
+  test('all locales have CV export success toast strings', async () => {
+    const mod = await import('../i18n/translations');
+    const keys = [
+      'cvSavedSuccessfully',
+      'downloadStarted',
+      'savedToDownloadsFolder',
+      'pdfSavedSuccessfully',
+      'docxSavedSuccessfully',
+    ];
+
+    for (const locale of Object.values(mod.translations)) {
+      const cv = (locale as Record<string, Record<string, unknown>>).cv;
+      for (const key of keys) {
+        expect(cv[key], key).toEqual(expect.any(String));
+        expect((cv[key] as string).trim().length).toBeGreaterThan(0);
+      }
     }
   });
 });

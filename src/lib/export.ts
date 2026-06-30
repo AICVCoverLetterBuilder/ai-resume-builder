@@ -4,7 +4,7 @@ import { translations, type Locale } from './i18n/translations';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { isNative } from './iap';
-import { saveFileViaPlatform, pdfToBlob, SaveFailedError } from './native-save';
+import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
 
 // ─── Clipboard Export ────────────────────────────────────────────────────────
@@ -227,7 +227,10 @@ function canFetchExportImageSource(src: string): boolean {
   if (src.startsWith('blob:') || src.startsWith('file:') || src.startsWith('capacitor:')) return true;
   if (src.startsWith('http://') || src.startsWith('https://')) {
     try {
-      return new URL(src).origin === window.location.origin;
+      const runtimeOrigin = window.location.origin !== 'null'
+        ? window.location.origin
+        : new URL(document.baseURI).origin;
+      return new URL(src).origin === runtimeOrigin;
     } catch {
       return false;
     }
@@ -235,20 +238,50 @@ function canFetchExportImageSource(src: string): boolean {
   return false;
 }
 
-export async function resolveExportImageDataUrl(src: string, timeoutMs = EXPORT_IMAGE_TIMEOUT_MS): Promise<string | null> {
-  const cleanSrc = stripUrlFragment(src.trim());
-  if (!cleanSrc) return null;
-  if (isDataImageUrl(cleanSrc)) return cleanSrc;
-  if (typeof window === 'undefined' || typeof fetch !== 'function' || !canFetchExportImageSource(cleanSrc)) return null;
+function resolveBrowserImageSource(src: string): string {
+  if (/^(?:data:|blob:|file:|capacitor:|https?:)/i.test(src)) return src;
+  if (typeof window === 'undefined') return src;
 
   try {
-    const response = await withTimeout(fetch(cleanSrc), timeoutMs, 'Timed out fetching export image');
+    const baseUrl = typeof document !== 'undefined' && document.baseURI && document.baseURI !== 'about:blank'
+      ? document.baseURI
+      : window.location.href;
+    return new URL(src, baseUrl).href;
+  } catch {
+    return src;
+  }
+}
+
+export async function resolveExportImageDataUrl(src: string, timeoutMs = EXPORT_IMAGE_TIMEOUT_MS): Promise<string | null> {
+  const cleanSrc = resolveBrowserImageSource(stripUrlFragment(src.trim()));
+  if (!cleanSrc) return null;
+  if (isDataImageUrl(cleanSrc)) return cleanSrc;
+  if (typeof window === 'undefined' || typeof window.fetch !== 'function' || !canFetchExportImageSource(cleanSrc)) return null;
+
+  try {
+    const response = await withTimeout(window.fetch(cleanSrc), timeoutMs, 'Timed out fetching export image');
     if (!response.ok) return null;
     const blob = await response.blob();
     if (!blob.type.startsWith('image/')) return null;
     return await withTimeout(blobToDataUrl(blob), timeoutMs, 'Timed out converting export image');
   } catch {
     return null;
+  }
+}
+
+function resolveProfessionalClassicImageSource(src: string | null): string | null {
+  const cleanSrc = src?.trim();
+  if (!cleanSrc) return null;
+  if (/^(?:data:|blob:|file:|capacitor:|https?:)/i.test(cleanSrc)) return cleanSrc;
+  if (typeof window === 'undefined') return cleanSrc;
+
+  try {
+    const baseUrl = typeof document !== 'undefined' && document.baseURI && document.baseURI !== 'about:blank'
+      ? document.baseURI
+      : window.location.href;
+    return new URL(cleanSrc, baseUrl).href;
+  } catch {
+    return cleanSrc;
   }
 }
 
@@ -276,6 +309,8 @@ type PreparedExportImage = {
   previousFrameDisplay: string;
 };
 
+type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic';
+
 function isModernMinimalCaptureTarget(target: HTMLElement): boolean {
   return target.dataset.templateId === 'modern-minimal'
     || Boolean(target.querySelector('[data-template-id="modern-minimal"]'));
@@ -286,15 +321,21 @@ function isCleanSimpleCaptureTarget(target: HTMLElement): boolean {
     || Boolean(target.querySelector('[data-template-id="clean-simple"]'));
 }
 
-function getTemplateCaptureRoot(target: HTMLElement, templateId: 'modern-minimal' | 'clean-simple'): HTMLElement | null {
+function isProfessionalClassicCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'professional-classic'
+    || Boolean(target.querySelector('[data-template-id="professional-classic"]'));
+}
+
+function getTemplateCaptureRoot(target: HTMLElement, templateId: StyledPdfTemplateId): HTMLElement | null {
   return target.dataset.templateId === templateId
     ? target
     : (target.querySelector(`[data-template-id="${templateId}"]`) as HTMLElement | null);
 }
 
-function getExportStyleTemplateId(target: HTMLElement): 'modern-minimal' | 'clean-simple' | null {
+function getExportStyleTemplateId(target: HTMLElement): StyledPdfTemplateId | null {
   if (isModernMinimalCaptureTarget(target)) return 'modern-minimal';
   if (isCleanSimpleCaptureTarget(target)) return 'clean-simple';
+  if (isProfessionalClassicCaptureTarget(target)) return 'professional-classic';
   return null;
 }
 
@@ -341,13 +382,39 @@ function fallbackCleanSimpleColor(element: Element, property: string): string {
   return '#111827';
 }
 
-function fallbackExportColor(element: Element, property: string, templateId: 'modern-minimal' | 'clean-simple'): string {
-  return templateId === 'clean-simple'
-    ? fallbackCleanSimpleColor(element, property)
-    : fallbackModernMinimalColor(element, property);
+function fallbackProfessionalClassicColor(element: Element, property: string): string {
+  const classes = Array.from(element.classList);
+  if (property === 'background-color') {
+    if (classes.includes('bg-white')) return '#ffffff';
+    if (classes.includes('bg-slate-800')) return '#1f2937';
+    if (classes.includes('bg-slate-100')) return '#f1f5f9';
+    return 'rgba(0, 0, 0, 0)';
+  }
+  if (property.startsWith('border')) {
+    if (classes.includes('border-slate-600')) return '#475569';
+    if (classes.includes('border-slate-200')) return '#e2e8f0';
+    return '#e2e8f0';
+  }
+  if (classes.includes('text-white')) return '#ffffff';
+  if (classes.includes('text-slate-300')) return '#cbd5e1';
+  if (classes.includes('text-slate-400')) return '#94a3b8';
+  if (classes.includes('text-slate-500')) return '#64748b';
+  if (classes.includes('text-slate-800')) return '#1e293b';
+  if (classes.includes('text-gray-900')) return '#111827';
+  if (classes.includes('text-gray-700')) return '#374151';
+  if (classes.includes('text-gray-600')) return '#4b5563';
+  if (classes.includes('text-gray-500')) return '#6b7280';
+  if (classes.includes('text-gray-400')) return '#9ca3af';
+  return '#111827';
 }
 
-function copyTemplateComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElement, templateId: 'modern-minimal' | 'clean-simple'): void {
+function fallbackExportColor(element: Element, property: string, templateId: StyledPdfTemplateId): string {
+  if (templateId === 'clean-simple') return fallbackCleanSimpleColor(element, property);
+  if (templateId === 'professional-classic') return fallbackProfessionalClassicColor(element, property);
+  return fallbackModernMinimalColor(element, property);
+}
+
+function copyTemplateComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElement, templateId: StyledPdfTemplateId): void {
   const sourceElements = [sourceRoot, ...Array.from(sourceRoot.querySelectorAll('*'))];
   const cloneElements = [cloneRoot, ...Array.from(cloneRoot.querySelectorAll('*'))] as HTMLElement[];
 
@@ -371,6 +438,22 @@ function copyTemplateComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElem
       cloneEl.style.objectFit = 'cover';
       cloneEl.style.display = 'block';
     }
+  });
+}
+
+const PROFESSIONAL_CLASSIC_PDF_FONT_STACK = 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif';
+
+function normalizeProfessionalClassicPdfTextStyles(root: HTMLElement): void {
+  const elements = [root, ...Array.from(root.querySelectorAll('*'))] as HTMLElement[];
+  elements.forEach((element) => {
+    element.style.setProperty('font-family', PROFESSIONAL_CLASSIC_PDF_FONT_STACK);
+    element.style.setProperty('word-spacing', 'normal');
+    element.style.setProperty('letter-spacing', 'normal');
+    element.style.setProperty('white-space', 'normal');
+    element.style.setProperty('font-kerning', 'normal');
+    element.style.setProperty('text-rendering', 'geometricPrecision');
+    element.style.setProperty('font-variant-ligatures', 'normal');
+    element.style.setProperty('font-feature-settings', 'normal');
   });
 }
 
@@ -438,11 +521,23 @@ async function prepareTemplateImagesForExport(target: HTMLElement): Promise<Prep
     const previousFrameDisplay = frame.style.display;
     prepared.push({ img, frame, previousSrc, previousAlt, previousFrameDisplay });
 
-    const dataUrl = previousSrc ? await resolveExportImageDataUrl(previousSrc) : null;
+    const sourceSrc = templateId === 'professional-classic'
+      ? resolveProfessionalClassicImageSource(previousSrc ?? img.currentSrc ?? img.src)
+      : previousSrc;
+    const dataUrl = sourceSrc ? await resolveExportImageDataUrl(sourceSrc) : null;
     const decoded = dataUrl ? await decodeImageForExport(dataUrl) : false;
 
     if (dataUrl && decoded) {
       img.src = dataUrl;
+      img.alt = '';
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.objectFit = 'cover';
+      img.style.display = 'block';
+      return;
+    }
+
+    if (templateId === 'professional-classic' && previousSrc) {
       img.alt = '';
       img.style.width = '100%';
       img.style.height = '100%';
@@ -471,7 +566,7 @@ function restorePreparedExportImages(prepared: PreparedExportImage[]): void {
 
 // ─── DOCX Export ─────────────────────────────────────────────────────────────────────────────
 
-export async function exportToDOCX(cvData: CVData, fileName: string, locale: Locale = 'en', templateId?: string): Promise<void> {
+export async function exportToDOCX(cvData: CVData, fileName: string, locale: Locale = 'en', templateId?: string): Promise<SaveFileResult> {
   const {
     Document,
     Packer,
@@ -810,7 +905,7 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
       new Paragraph({ children: [new TextRun({ text: cvData.personal.jobTitle || '', size: 22, color: 'CBD5E1' })], spacing: { after: 50 } }),
     ];
     if (contacts.length > 0) {
-      headerInfoCells.push(new Paragraph({ children: contacts.map((c, i) => new TextRun({ text: (i > 0 ? '   ' : '') + c, size: 18, color: '94A3B8' })), spacing: { after: 0 } }));
+      headerInfoCells.push(new Paragraph({ children: contacts.map((c, i) => new TextRun({ text: (i > 0 ? '  |  ' : '') + c, size: 18, color: '94A3B8' })), spacing: { after: 0 } }));
     }
     if (cvData.personal.fathersName) {
       headerInfoCells.push(new Paragraph({ children: [new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 18, color: '94A3B8' }), new TextRun({ text: cvData.personal.fathersName, size: 18, color: '94A3B8' })], spacing: { after: 0 } }));
@@ -843,6 +938,23 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
       });
     }
 
+    function pcDescriptionParagraphs(text: string) {
+      return text.split('\n').flatMap((rawLine) => {
+        const line = rawLine.trim();
+        if (!line) return [];
+        const bulletText = line.replace(/^(?:[-*]|\u2022|\d+\.)\s+/, '');
+        const isBullet = bulletText !== line;
+        return [new Paragraph({
+          children: [
+            ...(isBullet ? [new TextRun({ text: '\u2022  ', size: 22, color: '475569' })] : []),
+            new TextRun({ text: bulletText, size: 22, color: '4B5563' }),
+          ],
+          indent: isBullet ? { left: 360, hanging: 180 } : undefined,
+          spacing: { after: 40 },
+        })];
+      });
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────
     if (cvData.summary) {
       children.push(pcHeading(t.cv.summary));
@@ -866,9 +978,7 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
         // Company on next line in gray
         children.push(new Paragraph({ children: [new TextRun({ text: exp.company, size: 20, color: '6B7280' })], spacing: { after: 50 } }));
         if (exp.description) {
-          for (const line of exp.description.split('\n')) {
-            if (line.trim()) children.push(new Paragraph({ children: [new TextRun({ text: line, size: 22, color: '4B5563' })], spacing: { after: 40 } }));
-          }
+          children.push(...pcDescriptionParagraphs(exp.description));
         }
         children.push(new Paragraph({ text: '', spacing: { after: 80 } }));
       }
@@ -886,7 +996,7 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
     }
 
     // ── Skills + Languages: side-by-side 2-column (matching grid-cols-2) ────
-    const localizedSkills = cvData.skills.map((s) => getLocalizedCvSkillName(s, locale));
+    const localizedSkills = cvData.skills.map((s) => s.trim()).filter(Boolean);
     const hasSkills = localizedSkills.length > 0;
     const hasLangs = cvData.languages.length > 0;
     if (hasSkills || hasLangs) {
@@ -3012,12 +3122,12 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
   });
 
   const blob = await Packer.toBlob(doc);
-  await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  return await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 }
 
 // ─── Rirekisho (Japanese CV) DOCX Export ─────────────────────────────────────
 
-export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): Promise<void> {
+export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): Promise<SaveFileResult> {
   const {
     Document,
     Packer,
@@ -3570,7 +3680,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
   });
 
   const blob = await Packer.toBlob(doc);
-  await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  return await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 }
 
 // ─── Noto Sans @font-face injection helpers ───────────────────────────────────
@@ -3792,6 +3902,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   // ── Step 4c: flush two animation frames so any pending React state updates
   //    (e.g. rectPhotoUrl injection into localizedPreviewCv) have painted to the DOM
   //    before html2canvas reads the <img src> attributes.
+  await document.fonts.ready;
   await new Promise(requestAnimationFrame);
   await new Promise(requestAnimationFrame);
 
@@ -3847,7 +3958,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   let preparedImages: PreparedExportImage[] = [];
   const exportCaptureId = `cv-template-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let taggedCaptureTarget: HTMLElement | null = null;
-  let captureTemplateId: 'modern-minimal' | 'clean-simple' | null = null;
+  let captureTemplateId: StyledPdfTemplateId | null = null;
   try {
     // ── HARD VERIFICATION: capture the actual template child directly, not the
     //    scroll wrapper. The #cv-preview / #cv-inline-preview div is an
@@ -3893,6 +4004,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         const cloneRoot = clonedDocument.querySelector(`[data-export-capture-id="${exportCaptureId}"]`) as HTMLElement | null;
         if (!sourceRoot || !cloneRoot) return;
         copyTemplateComputedStyles(sourceRoot, cloneRoot, captureTemplateId);
+        if (captureTemplateId === 'professional-classic') {
+          normalizeProfessionalClassicPdfTextStyles(cloneRoot);
+        }
         cloneRoot.removeAttribute('data-export-capture-id');
         removeCloneStylesheets(clonedDocument);
       },
@@ -3937,7 +4051,8 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   }
 
   let pdfCanvas = canvas;
-  if (captureTemplateId === 'clean-simple') {
+  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic';
+  if (shouldTrimBlankPdfSlices) {
     const visibleBottom = findVisibleCanvasBottom(canvas);
     if (visibleBottom > 0 && visibleBottom < canvas.height) {
       const croppedCanvas = document.createElement('canvas');
@@ -3976,7 +4091,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
 
       while (offsetY < canvasHeightPx - trailingTolerancePx) {
         const sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
-        if (captureTemplateId === 'clean-simple' && isCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight)) {
+        if (shouldTrimBlankPdfSlices && isCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight)) {
           break;
         }
         if (!firstPage) pdf.addPage();
@@ -4010,9 +4125,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   }
 }
 
-export async function exportToPDF(elementId: string, fileName: string): Promise<void> {
+export async function exportToPDF(elementId: string, fileName: string): Promise<SaveFileResult> {
   const pdfBlob = await buildCvPdfBlob(elementId);
-  await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
 // ─── PDF Print Fallback ───────────────────────────────────────────────────────
@@ -4098,7 +4213,7 @@ export async function exportCoverLetterToPDF(
   content: string,
   fileName: string,
   locale: string,
-): Promise<void> {
+): Promise<SaveFileResult> {
   // Dynamic import so the heavy @react-pdf/renderer bundle is only loaded on demand
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let pdfFn: any, createElementFn: any, CoverLetterPDFDocumentComp: any;
@@ -4129,7 +4244,7 @@ export async function exportCoverLetterToPDF(
     throw renderErr;
   }
 
-  await saveFileViaPlatform(blob, `${fileName}.pdf`, 'application/pdf');
+  return await saveFileViaPlatform(blob, `${fileName}.pdf`, 'application/pdf');
 }
 
 // ─── Cover Letter DOCX Export (plain text) ───────────────────────────────────
@@ -4169,7 +4284,7 @@ export function stripLeadingDateForDocx(text: string): string {
   return lines.join('\n');
 }
 
-export async function exportCoverLetterToDOCX(content: string, fileName: string, candidateName = '', locale: Locale = 'en'): Promise<void> {
+export async function exportCoverLetterToDOCX(content: string, fileName: string, candidateName = '', locale: Locale = 'en'): Promise<SaveFileResult> {
   // Apply same stripping logic as PDF: remove leading name header, then leading date
   const afterName = stripLeadingNameForDocx(content, candidateName);
   const text = stripLeadingDateForDocx(afterName);
@@ -4265,5 +4380,5 @@ export async function exportCoverLetterToDOCX(content: string, fileName: string,
   });
 
   const blob = await Packer.toBlob(doc);
-  await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  return await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 }

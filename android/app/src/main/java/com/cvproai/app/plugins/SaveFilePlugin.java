@@ -201,7 +201,7 @@ public class SaveFilePlugin extends Plugin {
             ContentValues publishValues = new ContentValues();
             publishValues.put(MediaStore.MediaColumns.IS_PENDING, 0);
             resolver.update(destination, publishValues, null, null);
-            resolve(call, "saved", "Saved to Downloads/CV Pro AI", bytesWritten, verifiedSize);
+            resolve(call, "saved", "Saved to Downloads/CV Pro AI", bytesWritten, verifiedSize, finalDisplayName, DOWNLOAD_RELATIVE_PATH);
         } catch (IOException | SecurityException e) {
             if (destination != null) {
                 deleteDestinationQuietly(destination);
@@ -235,7 +235,7 @@ public class SaveFilePlugin extends Plugin {
 
             if (activityResult.getResultCode() == Activity.RESULT_CANCELED) {
                 if (callPresent) {
-                    resolve(call, "cancelled", "User cancelled the save dialog", 0, 0);
+                    resolve(call, "cancelled", "User cancelled the save dialog", 0, 0, null, null);
                 }
                 return;
             }
@@ -294,7 +294,7 @@ public class SaveFilePlugin extends Plugin {
                 return;
             }
 
-            resolve(call, "saved", "File saved successfully", bytesWritten, verifiedSize);
+            resolve(call, "saved", "File saved successfully", bytesWritten, verifiedSize, null, null);
         } catch (IOException | SecurityException e) {
             if (destination != null) {
                 deleteDestinationQuietly(destination);
@@ -427,12 +427,18 @@ public class SaveFilePlugin extends Plugin {
         }
     }
 
-    private void resolve(PluginCall call, String resultValue, String message, long bytesWritten, long verifiedSize) {
+    private void resolve(PluginCall call, String resultValue, String message, long bytesWritten, long verifiedSize, String fileName, String destination) {
         JSObject result = new JSObject();
         result.put("result", resultValue);
         result.put("message", message);
         result.put("bytesWritten", bytesWritten);
         result.put("verifiedSize", verifiedSize);
+        if (fileName != null && !fileName.isEmpty()) {
+            result.put("fileName", fileName);
+        }
+        if (destination != null && !destination.isEmpty()) {
+            result.put("destination", destination);
+        }
         call.resolve(result);
     }
 

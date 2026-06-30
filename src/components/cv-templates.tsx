@@ -454,33 +454,73 @@ export function ProfessionalClassicTemplate({ data, locale }: TemplateProps) {
   const rs = regionSettings[data.region];
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
+  const contacts = [
+    data.personal.email,
+    data.personal.phone,
+    rs.showAddress ? data.personal.address : '',
+  ].filter(Boolean);
+
   return (
-    <div className="bg-white text-gray-900 p-8 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
-      <header className="bg-slate-800 text-white p-6 -m-8 mb-6">
-        <div className="flex items-center gap-4">
+    <div
+      data-template-id="professional-classic"
+      className="box-border w-[210mm] bg-white text-gray-900 p-8 mx-auto font-sans text-sm leading-relaxed"
+      style={{
+        minHeight: '297mm',
+        boxSizing: 'border-box',
+        backgroundColor: '#ffffff',
+        color: '#111827',
+        fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        wordSpacing: 'normal',
+        letterSpacing: 'normal',
+        whiteSpace: 'normal',
+        fontKerning: 'normal',
+        textRendering: 'geometricPrecision',
+      }}
+    >
+      <header
+        data-professional-classic-header="true"
+        className="bg-slate-800 text-white p-6 -m-8 mb-6"
+        style={{ backgroundColor: '#1f2937', color: '#ffffff' }}
+      >
+        <div className="flex items-center gap-4" style={{ alignItems: 'center', gap: '1rem' }}>
           {showPhoto && data.personal.photo && (
-            <div className="flex-shrink-0 rounded-full overflow-hidden border-2 border-slate-600" style={{ width: 90, height: 90 }}>
+            <div
+              data-professional-classic-photo="frame"
+              className="flex-shrink-0 rounded-full overflow-hidden border-2 border-slate-600"
+              style={{
+                width: 90,
+                height: 90,
+                borderRadius: '9999px',
+                overflow: 'hidden',
+                borderColor: '#475569',
+                backgroundColor: '#334155',
+                flexShrink: 0,
+              }}
+            >
               <PhotoFill photo={data.personal.photo} />
             </div>
           )}
-          <div>
-            <h1 className="text-2xl font-bold">{data.personal.fullName || 'Your Name'}</h1>
-            <p className="text-slate-300">{data.personal.jobTitle}</p>
-            <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-400">
-              {data.personal.email && <span>{data.personal.email}</span>}
-              {data.personal.phone && <span>{data.personal.phone}</span>}
-              {rs.showAddress && data.personal.address && <span>{data.personal.address}</span>}
+          <div style={{ minWidth: 0 }}>
+            <h1 className="text-2xl font-bold" style={{ fontSize: '1.5rem', lineHeight: '2rem', fontWeight: 700, color: '#ffffff' }}>{data.personal.fullName || 'Your Name'}</h1>
+            <p className="text-slate-300" style={{ color: '#cbd5e1' }}>{data.personal.jobTitle}</p>
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400" style={{ color: '#94a3b8', fontSize: '0.75rem', lineHeight: '1rem', columnGap: '0.75rem', rowGap: '0.25rem' }}>
+              {contacts.map((contact, i) => (
+                <React.Fragment key={`${contact}-${i}`}>
+                  {i > 0 && <span aria-hidden="true" className="text-slate-500" style={{ color: '#64748b' }}>|</span>}
+                  <span style={{ wordBreak: 'break-word' }}>{contact}</span>
+                </React.Fragment>
+              ))}
             </div>
           </div>
         </div>
       </header>
       <div className="pt-6">
-        {data.summary && <section className="mb-6"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2">{L.summary.toUpperCase()}</h2><p className="text-gray-700">{data.summary}</p></section>}
-        {data.experience.length > 0 && <section className="mb-6"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-3">{L.experience.toUpperCase()}</h2>{data.experience.map(exp => (<div key={exp.id} className="mb-4"><div className="flex justify-between"><h3 className="font-semibold">{exp.position}</h3><span className="text-xs text-gray-400">{exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</span></div><p className="text-gray-500">{exp.company}</p><p className="mt-1 text-gray-600 whitespace-pre-line">{exp.description}</p></div>))}</section>}
-        {data.education.length > 0 && <section className="mb-6"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-3">{L.education.toUpperCase()}</h2>{data.education.map(edu => (<div key={edu.id} className="mb-2"><h3 className="font-semibold">{edu.degree}</h3><p className="text-xs text-gray-500">{edu.school} | {edu.startDate} - {edu.endDate}</p></div>))}</section>}
+        {data.summary && <section data-professional-classic-section="summary" className="mb-6"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2" style={{ color: '#1e293b', borderColor: '#e2e8f0' }}>{L.summary.toUpperCase()}</h2><p className="text-gray-700" style={{ color: '#374151', whiteSpace: 'break-spaces' }}>{data.summary}</p></section>}
+        {data.experience.length > 0 && <section data-professional-classic-section="experience" className="mb-6"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-3" style={{ color: '#1e293b', borderColor: '#e2e8f0' }}>{L.experience.toUpperCase()}</h2>{data.experience.map(exp => (<div key={exp.id} className="mb-4"><div className="flex justify-between gap-4" style={{ justifyContent: 'space-between', gap: '1rem' }}><h3 className="font-semibold" style={{ color: '#111827', fontWeight: 600 }}>{exp.position}</h3><span className="text-xs text-gray-400" style={{ color: '#9ca3af', fontSize: '0.75rem', flexShrink: 0 }}>{exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</span></div><p className="text-gray-500" style={{ color: '#6b7280' }}>{exp.company}</p><p className="mt-1 text-gray-600 whitespace-pre-line" style={{ color: '#4b5563', whiteSpace: 'break-spaces' }}>{exp.description}</p></div>))}</section>}
+        {data.education.length > 0 && <section data-professional-classic-section="education" className="mb-6"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-3" style={{ color: '#1e293b', borderColor: '#e2e8f0' }}>{L.education.toUpperCase()}</h2>{data.education.map(edu => (<div key={edu.id} className="mb-2"><h3 className="font-semibold" style={{ color: '#111827', fontWeight: 600 }}>{edu.degree}</h3><p className="text-xs text-gray-500" style={{ color: '#6b7280' }}>{edu.school} | {edu.startDate} - {edu.endDate}</p></div>))}</section>}
         <div className="grid grid-cols-2 gap-6">
-          {data.skills.length > 0 && <section><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2">{L.skills.toUpperCase()}</h2><div className="flex flex-wrap gap-1">{data.skills.map((s, i) => <span key={i} className="rounded bg-slate-100 px-2 py-0.5 text-xs">{s}</span>)}</div></section>}
-          {data.languages.length > 0 && <section><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2">{L.languages.toUpperCase()}</h2>{data.languages.map((l, i) => <p key={i} className="text-xs">{l.name} - {l.level}</p>)}</section>}
+          {data.skills.length > 0 && <section data-professional-classic-section="skills"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2" style={{ color: '#1e293b', borderColor: '#e2e8f0' }}>{L.skills.toUpperCase()}</h2><div className="flex flex-wrap gap-1" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>{data.skills.map((s, i) => <span data-professional-classic-skill="item" key={i} className="rounded bg-slate-100 px-2 py-0.5 text-xs" style={{ backgroundColor: '#f1f5f9', color: '#374151', fontSize: '0.75rem', lineHeight: '1rem', padding: '0.125rem 0.5rem', borderRadius: '0.25rem', whiteSpace: 'break-spaces' }}>{s}</span>)}</div></section>}
+          {data.languages.length > 0 && <section data-professional-classic-section="languages"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2" style={{ color: '#1e293b', borderColor: '#e2e8f0' }}>{L.languages.toUpperCase()}</h2>{data.languages.map((l, i) => <p key={i} className="text-xs" style={{ fontSize: '0.75rem', color: '#374151' }}>{l.name} - {l.level}</p>)}</section>}
         </div>
       </div>
     </div>

@@ -10,6 +10,8 @@ import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
 import { exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
+import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
+import type { SaveFileResult } from '@/lib/native-save';
 import {
   filterCvLanguageOptions,
   getLocalizedCvLanguageName,
@@ -621,6 +623,16 @@ export default function CVBuilderPage() {
     toast.success(t.cv.saved);
   };
 
+    const showCvExportSuccessToast = (
+      saveResult: SaveFileResult,
+      format: ExportFileFormat,
+      fallbackFileName: string,
+    ) => {
+      const copy = getCvExportSuccessToast(saveResult, format, fallbackFileName, t.cv);
+      if (!copy) return;
+      toast.success(copy.title, { description: copy.description });
+    };
+
     const handleDOCXDownload = async () => {
       if (!canDownload('cv')) {
         setLimitModal({ open: true, type: 'cv' });
@@ -630,8 +642,12 @@ export default function CVBuilderPage() {
       setShowDownloadMenu(false);
       setIsWordExporting(true);
       try {
+        let saveResult: SaveFileResult;
+        let fallbackFileName: string;
         if (cv.templateId === 'rirekisho') {
-          await exportRirekishoToDOCX(cv, cv.personal.fullName || '履歴書');
+          const exportBaseName = cv.personal.fullName || '履歴書';
+          saveResult = await exportRirekishoToDOCX(cv, exportBaseName);
+          fallbackFileName = `${exportBaseName}.docx`;
         } else {
           // For rect-photo templates, use rectangularPhotoDataUrl (derived from original upload).
           // For circle templates, use circularPhotoDataUrl or cv.personal.photo.
@@ -642,8 +658,11 @@ export default function CVBuilderPage() {
             photoForExport = circularPhotoDataUrl ?? cv.personal.photo;
           }
           const cvForExport = { ...cv, personal: { ...cv.personal, photo: photoForExport } };
-          await exportToDOCX(cvForExport, makeCvExportBaseName(cv.personal.fullName), locale, cv.templateId);
+          const exportBaseName = makeCvExportBaseName(cv.personal.fullName);
+          saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cv.templateId);
+          fallbackFileName = `${exportBaseName}.docx`;
         }
+        showCvExportSuccessToast(saveResult, 'docx', fallbackFileName);
         incrementDownloads('cv');
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
@@ -681,12 +700,13 @@ export default function CVBuilderPage() {
         }
 
         const exportFilename = makeCvExportBaseName(cv.personal.fullName);
-        await exportToPDF(previewId, exportFilename);
+        const saveResult = await exportToPDF(previewId, exportFilename);
+        showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
         incrementDownloads('cv');
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
-        if (cv.templateId === 'clean-simple') {
+        if (cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic') {
           toast.error(t.cv.pdfExportFailed);
           return;
         }

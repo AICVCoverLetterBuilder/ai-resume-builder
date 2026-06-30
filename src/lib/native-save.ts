@@ -26,8 +26,12 @@ export class SaveFailedError extends Error {
 export interface SaveFileResult {
   result: 'saved' | 'cancelled' | 'failed';
   message: string;
+  platform?: 'android' | 'ios' | 'web' | 'other';
+  fileName?: string;
+  destination?: string;
   bytesWritten?: number;
   verifiedSize?: number;
+  sourceBytes?: number;
 }
 
 type SaveFileFormat = 'pdf' | 'docx' | 'other';
@@ -35,6 +39,13 @@ type SaveFileFormat = 'pdf' | 'docx' | 'other';
 function isNativeAndroid(): boolean {
   if (typeof window === 'undefined') return false;
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+}
+
+function getCurrentPlatform(): SaveFileResult['platform'] {
+  if (typeof window === 'undefined') return 'web';
+  const platform = Capacitor.getPlatform();
+  if (platform === 'android' || platform === 'ios' || platform === 'web') return platform;
+  return 'other';
 }
 
 function getFormatLabel(mimeType: string): SaveFileFormat {
@@ -172,7 +183,12 @@ export async function saveFileViaPlatform(
       if (result.bytesWritten !== byteLength || result.verifiedSize !== byteLength) {
         throw new SaveFailedError('Native file save byte count did not match generated file');
       }
-      return result;
+      return {
+        ...result,
+        platform: 'android',
+        fileName: result.fileName || fileName,
+        sourceBytes: byteLength,
+      };
     } catch (err: unknown) {
       if (err instanceof SaveCancelledError || err instanceof SaveFailedError) throw err;
       const message = err instanceof Error ? err.message : 'Unknown native file-save error';
@@ -190,11 +206,17 @@ export async function saveFileViaPlatform(
     anchor.click();
     document.body.removeChild(anchor);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-    return { result: 'saved', message: 'Download started' };
+    return {
+      result: 'saved',
+      message: 'Download started',
+      platform: getCurrentPlatform(),
+      fileName,
+      sourceBytes: blob.size,
+    };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Download failed';
     console.error('[native-save] Web download error:', message);
-    return { result: 'failed', message };
+    return { result: 'failed', message, platform: getCurrentPlatform(), fileName };
   }
 }
 
