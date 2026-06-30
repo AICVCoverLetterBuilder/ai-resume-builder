@@ -67,7 +67,7 @@ interface DocxTemplateConfig {
   /** FIX-10: Divider rule color (hex, no #); defaults to CCCCCC */
   dividerColor?: string;
   /** Dedicated named layout for templates that need custom rendering beyond the 4 generic layouts */
-  customLayout?: 'modern-minimal' | 'professional-classic' | 'creative-artistic' | 'elegant-formal' | 'executive-premium' | 'nordic-clean' | 'tech-sidebar' | 'corporate-navy' | 'modern-minimal-executive' | 'contemporary-bold';
+  customLayout?: 'modern-minimal' | 'clean-simple' | 'professional-classic' | 'creative-artistic' | 'elegant-formal' | 'executive-premium' | 'nordic-clean' | 'tech-sidebar' | 'corporate-navy' | 'modern-minimal-executive' | 'contemporary-bold';
 }
 
 const DOCX_TEMPLATE_CONFIGS: Record<string, DocxTemplateConfig> = {
@@ -101,6 +101,7 @@ const DOCX_TEMPLATE_CONFIGS: Record<string, DocxTemplateConfig> = {
     layout: 'single', sidebarPct: 0, photoShape: 'circle', photoSize: 80, font: 'Calibri',
     photoSide: 'left', headerAlignment: 'left', showHeadingBorder: true, uppercaseHeadings: true,
     dividerColor: 'D1D5DB',
+    customLayout: 'clean-simple',
   },
   'professional-classic': {
     // Dedicated layout: slate-800 header, photo left, position/date right-aligned, 2-col skills+langs
@@ -280,6 +281,23 @@ function isModernMinimalCaptureTarget(target: HTMLElement): boolean {
     || Boolean(target.querySelector('[data-template-id="modern-minimal"]'));
 }
 
+function isCleanSimpleCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'clean-simple'
+    || Boolean(target.querySelector('[data-template-id="clean-simple"]'));
+}
+
+function getTemplateCaptureRoot(target: HTMLElement, templateId: 'modern-minimal' | 'clean-simple'): HTMLElement | null {
+  return target.dataset.templateId === templateId
+    ? target
+    : (target.querySelector(`[data-template-id="${templateId}"]`) as HTMLElement | null);
+}
+
+function getExportStyleTemplateId(target: HTMLElement): 'modern-minimal' | 'clean-simple' | null {
+  if (isModernMinimalCaptureTarget(target)) return 'modern-minimal';
+  if (isCleanSimpleCaptureTarget(target)) return 'clean-simple';
+  return null;
+}
+
 function fallbackModernMinimalColor(element: Element, property: string): string {
   const classes = Array.from(element.classList);
   if (property === 'background-color') {
@@ -302,7 +320,34 @@ function fallbackModernMinimalColor(element: Element, property: string): string 
   return '#111827';
 }
 
-function copyModernMinimalComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElement): void {
+function fallbackCleanSimpleColor(element: Element, property: string): string {
+  const classes = Array.from(element.classList);
+  if (property === 'background-color') {
+    if (classes.includes('bg-white')) return '#ffffff';
+    if (classes.includes('bg-gray-50')) return '#f9fafb';
+    return 'rgba(0, 0, 0, 0)';
+  }
+  if (property.startsWith('border')) {
+    if (classes.includes('border-gray-200')) return '#e5e7eb';
+    return '#e5e7eb';
+  }
+  if (classes.includes('text-emerald-600')) return '#059669';
+  if (classes.includes('text-gray-900')) return '#111827';
+  if (classes.includes('text-gray-700')) return '#374151';
+  if (classes.includes('text-gray-600')) return '#4b5563';
+  if (classes.includes('text-gray-500')) return '#6b7280';
+  if (classes.includes('text-gray-400')) return '#9ca3af';
+  if (classes.includes('text-gray-300')) return '#d1d5db';
+  return '#111827';
+}
+
+function fallbackExportColor(element: Element, property: string, templateId: 'modern-minimal' | 'clean-simple'): string {
+  return templateId === 'clean-simple'
+    ? fallbackCleanSimpleColor(element, property)
+    : fallbackModernMinimalColor(element, property);
+}
+
+function copyTemplateComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElement, templateId: 'modern-minimal' | 'clean-simple'): void {
   const sourceElements = [sourceRoot, ...Array.from(sourceRoot.querySelectorAll('*'))];
   const cloneElements = [cloneRoot, ...Array.from(cloneRoot.querySelectorAll('*'))] as HTMLElement[];
 
@@ -314,7 +359,7 @@ function copyModernMinimalComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTM
     for (const property of computed) {
       let value = computed.getPropertyValue(property);
       if (/\b(?:lab|lch|oklab|oklch)\(/i.test(value)) {
-        value = fallbackModernMinimalColor(sourceEl, property);
+        value = fallbackExportColor(sourceEl, property, templateId);
       }
       cloneEl.style.setProperty(property, value, computed.getPropertyPriority(property));
     }
@@ -338,9 +383,47 @@ function removeCloneStylesheets(clonedDocument: Document): void {
 export async function prepareModernMinimalImagesForExport(target: HTMLElement): Promise<PreparedExportImage[]> {
   if (!isModernMinimalCaptureTarget(target)) return [];
 
-  const root = target.dataset.templateId === 'modern-minimal'
-    ? target
-    : (target.querySelector('[data-template-id="modern-minimal"]') as HTMLElement | null);
+  const root = getTemplateCaptureRoot(target, 'modern-minimal');
+  if (!root) return [];
+
+  const prepared: PreparedExportImage[] = [];
+  const images = Array.from(root.querySelectorAll('img'));
+
+  await Promise.all(images.map(async (img) => {
+    const frame = img.parentElement as HTMLElement | null;
+    if (!frame) return;
+
+    const previousSrc = img.getAttribute('src');
+    const previousAlt = img.getAttribute('alt');
+    const previousFrameDisplay = frame.style.display;
+    prepared.push({ img, frame, previousSrc, previousAlt, previousFrameDisplay });
+
+    const dataUrl = previousSrc ? await resolveExportImageDataUrl(previousSrc) : null;
+    const decoded = dataUrl ? await decodeImageForExport(dataUrl) : false;
+
+    if (dataUrl && decoded) {
+      img.src = dataUrl;
+      img.alt = '';
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.objectFit = 'cover';
+      img.style.display = 'block';
+      return;
+    }
+
+    img.removeAttribute('src');
+    img.alt = '';
+    frame.style.display = 'none';
+  }));
+
+  return prepared;
+}
+
+async function prepareTemplateImagesForExport(target: HTMLElement): Promise<PreparedExportImage[]> {
+  const templateId = getExportStyleTemplateId(target);
+  if (!templateId) return [];
+
+  const root = getTemplateCaptureRoot(target, templateId);
   if (!root) return [];
 
   const prepared: PreparedExportImage[] = [];
@@ -1474,6 +1557,183 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
   }
 
   // ════ LAYOUT: single ═══════════════════════════════════════════════════════════════════════════
+  else if (cfg.customLayout === 'clean-simple') {
+    const isRTL = locale === 'ar';
+    const bodyAlign = isRTL ? AlignmentType.RIGHT : AlignmentType.LEFT;
+    const endCell = isRTL ? AlignmentType.LEFT : AlignmentType.RIGHT;
+
+    function csHeading(text: string) {
+      return new Paragraph({
+        alignment: bodyAlign,
+        bidirectional: isRTL,
+        children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 20, color: cfg.headingColor })],
+        spacing: { before: 200, after: 90 },
+        border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: cfg.headingBorder } },
+      });
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function csDateRow(leftRuns: any[], dateText: string) {
+      const textCell = new TableCell({
+        width: { size: 74, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.TOP,
+        borders: noBorders,
+        children: [new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: leftRuns, spacing: { after: 20 } })],
+      });
+      const dateCell = new TableCell({
+        width: { size: 26, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.TOP,
+        borders: noBorders,
+        children: [new Paragraph({ alignment: endCell, children: [new TextRun({ text: dateText, size: 18, color: '9CA3AF' })], spacing: { after: 20 } })],
+      });
+      return new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({ children: isRTL ? [dateCell, textCell] : [textCell, dateCell] })],
+      });
+    }
+
+    function csDescription(text: string) {
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const isBullet = /^[-•*]|^\d+\./.test(trimmed);
+        const bulletText = isBullet ? trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '') : trimmed;
+        children.push(new Paragraph({
+          alignment: bodyAlign,
+          bidirectional: isRTL,
+          children: [
+            ...(isBullet ? [new TextRun({ text: '•  ', size: 20, color: cfg.accent })] : []),
+            new TextRun({ text: bulletText, size: 20, color: '4B5563' }),
+          ],
+          indent: isBullet ? { left: 220, hanging: 220 } : undefined,
+          spacing: { after: 38, line: 264, lineRule: 'auto' },
+        }));
+      }
+    }
+
+    // Clean Simple DOCX mirrors the live preview: compact photo/name header,
+    // green hierarchy, simple rules, aligned dates, and separated skills.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const headerInfo: any[] = [
+      new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 44, color: '111827' })], spacing: { after: 24 } }),
+    ];
+    if (cvData.personal.jobTitle) {
+      headerInfo.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: cvData.personal.jobTitle, size: 22, color: cfg.titleColor })], spacing: { after: 45 } }));
+    }
+    if (contacts.length > 0) {
+      headerInfo.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: contacts.join('  |  '), size: 18, color: '6B7280' })], spacing: { after: 0 } }));
+    }
+
+    if (photoBytes) {
+      const photoCell = new TableCell({
+        width: { size: 15, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.CENTER,
+        borders: noBorders,
+        margins: { top: 0, bottom: 0, left: 0, right: 160 },
+        children: [new Paragraph({ alignment: isRTL ? AlignmentType.RIGHT : AlignmentType.LEFT, children: [new ImageRun({ data: photoBytes, transformation: { width: photoW, height: photoH }, type: photoType })], spacing: { after: 0 } })],
+      });
+      const infoCell = new TableCell({
+        width: { size: 85, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.CENTER,
+        borders: noBorders,
+        margins: { top: 0, bottom: 0, left: 120, right: 0 },
+        children: headerInfo,
+      });
+      children.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({ children: isRTL ? [infoCell, photoCell] : [photoCell, infoCell] })],
+      }));
+    } else {
+      children.push(...headerInfo);
+    }
+
+    children.push(new Paragraph({
+      border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: cfg.dividerColor ?? 'D1D5DB' } },
+      spacing: { before: 100, after: 150 },
+    }));
+
+    if (cvData.summary) {
+      children.push(csHeading(t.cv.summary));
+      children.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: cvData.summary, size: 20, color: '374151' })], spacing: { after: 115, line: 264, lineRule: 'auto' } }));
+    }
+
+    if (cvData.experience.length > 0) {
+      children.push(csHeading(t.cv.experience));
+      for (const exp of cvData.experience) {
+        const dateText = `${exp.startDate} - ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        children.push(csDateRow([
+          new TextRun({ text: exp.position, bold: true, size: 21, color: '111827' }),
+          ...(exp.company ? [new TextRun({ text: ` at ${exp.company}`, size: 20, color: '374151' })] : []),
+        ], dateText));
+        if (exp.description) csDescription(exp.description);
+        children.push(new Paragraph({ text: '', spacing: { after: 70 } }));
+      }
+    }
+
+    if (cvData.education.length > 0) {
+      children.push(csHeading(t.cv.education));
+      for (const edu of cvData.education) {
+        const dateText = edu.startDate || edu.endDate ? `${edu.startDate} - ${edu.endDate}` : '';
+        if (dateText) {
+          children.push(csDateRow([
+            new TextRun({ text: edu.degree, bold: true, size: 21, color: '111827' }),
+            ...(edu.school ? [new TextRun({ text: `  |  ${edu.school}`, size: 19, color: '6B7280' })] : []),
+          ], dateText));
+        } else {
+          children.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: edu.degree, bold: true, size: 21, color: '111827' }), ...(edu.school ? [new TextRun({ text: `  |  ${edu.school}`, size: 19, color: '6B7280' })] : [])], spacing: { after: 40 } }));
+        }
+        if (edu.description) {
+          children.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: edu.description, size: 20, color: '374151' })], spacing: { after: 70 } }));
+        }
+      }
+    }
+
+    if (cvData.skills.length > 0) {
+      children.push(csHeading(t.cv.skills));
+      const localizedSkills = cvData.skills.map((s) => getLocalizedCvSkillName(s, locale));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const skillRows: any[] = [];
+      for (let i = 0; i < localizedSkills.length; i += 3) {
+        const rowSkills = localizedSkills.slice(i, i + 3);
+        while (rowSkills.length < 3) rowSkills.push('');
+        skillRows.push(new TableRow({
+          children: rowSkills.map((skill) => new TableCell({
+            width: { size: 33, type: WidthType.PERCENTAGE },
+            borders: noBorders,
+            margins: { top: 35, bottom: 35, left: 60, right: 60 },
+            children: [new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: skill, size: 19, color: '374151' })], spacing: { after: 0 } })],
+          })),
+        }));
+      }
+      children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorders, rows: skillRows }));
+      children.push(new Paragraph({ text: '', spacing: { after: 70 } }));
+    }
+
+    if (cvData.languages.length > 0) {
+      children.push(csHeading(t.cv.languages));
+      for (const lang of cvData.languages) {
+        children.push(new Paragraph({
+          alignment: bodyAlign,
+          bidirectional: isRTL,
+          children: [
+            new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 20, color: '111827' }),
+            new TextRun({ text: ` (${lang.level})`, size: 20, color: '6B7280' }),
+          ],
+          spacing: { after: 45 },
+        }));
+      }
+    }
+
+    if (cvData.certifications.length > 0) {
+      children.push(csHeading(t.cv.certifications));
+      for (const cert of cvData.certifications) {
+        children.push(new Paragraph({ alignment: bodyAlign, bidirectional: isRTL, children: [new TextRun({ text: '•  ', size: 20, color: cfg.accent }), new TextRun({ text: cert, size: 20, color: '374151' })], spacing: { after: 45 } }));
+      }
+    }
+  }
+
   else if (cfg.customLayout === 'modern-minimal') {
     const isRTL = locale === 'ar';
     const bodyAlign = isRTL ? AlignmentType.RIGHT : AlignmentType.LEFT;
@@ -2729,6 +2989,10 @@ export async function exportToDOCX(cvData: CVData, fileName: string, locale: Loc
   }
 
   // ── Build and download document ──────────────────────────────────────────────────────────────
+  if (children.length === 0) {
+    throw new SaveFailedError('DOCX export produced no content');
+  }
+
   const doc = new Document({
     styles: {
       default: {
@@ -3410,7 +3674,51 @@ async function injectAndAwaitNotoFonts(): Promise<() => void> {
 
 // ─── PDF Export ──────────────────────────────────────────────────────────────
 
-export async function exportToPDF(elementId: string, fileName: string): Promise<void> {
+export function isCanvasSliceEffectivelyBlank(canvas: HTMLCanvasElement, offsetY: number, sliceHeight: number): boolean {
+  const width = canvas.width;
+  const height = Math.max(0, Math.min(sliceHeight, canvas.height - offsetY));
+  if (width <= 0 || height <= 0) return true;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return false;
+  const sampleStep = Math.max(4, Math.floor(width / 80));
+  const data = ctx.getImageData(0, offsetY, width, height).data;
+  for (let y = 0; y < height; y += sampleStep) {
+    for (let x = 0; x < width; x += sampleStep) {
+      const index = (y * width + x) * 4;
+      const alpha = data[index + 3];
+      if (alpha === 0) continue;
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      if (red < 248 || green < 248 || blue < 248) return false;
+    }
+  }
+  return true;
+}
+
+export function findVisibleCanvasBottom(canvas: HTMLCanvasElement): number {
+  const width = canvas.width;
+  const height = canvas.height;
+  if (width <= 0 || height <= 0) return height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return height;
+  const sampleStep = Math.max(3, Math.floor(width / 100));
+  const data = ctx.getImageData(0, 0, width, height).data;
+  for (let y = height - 1; y >= 0; y -= sampleStep) {
+    for (let x = 0; x < width; x += sampleStep) {
+      const index = (y * width + x) * 4;
+      const alpha = data[index + 3];
+      if (alpha === 0) continue;
+      const red = data[index];
+      const green = data[index + 1];
+      const blue = data[index + 2];
+      if (red < 248 || green < 248 || blue < 248) return Math.min(height, y + sampleStep);
+    }
+  }
+  return height;
+}
+
+export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   const element = document.getElementById(elementId);
   if (!element) throw new Error(`PDF export: element #${elementId} not found in DOM`);
 
@@ -3537,8 +3845,9 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
 
   let canvas: HTMLCanvasElement;
   let preparedImages: PreparedExportImage[] = [];
-  const exportCaptureId = `modern-minimal-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const exportCaptureId = `cv-template-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let taggedCaptureTarget: HTMLElement | null = null;
+  let captureTemplateId: 'modern-minimal' | 'clean-simple' | null = null;
   try {
     // ── HARD VERIFICATION: capture the actual template child directly, not the
     //    scroll wrapper. The #cv-preview / #cv-inline-preview div is an
@@ -3549,11 +3858,10 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
     const captureTarget = (firstChild as HTMLElement | null) ?? element;
     const captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
     const captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
-    preparedImages = await prepareModernMinimalImagesForExport(captureTarget);
-    if (isModernMinimalCaptureTarget(captureTarget)) {
-      const sourceRootForTag = captureTarget.dataset.templateId === 'modern-minimal'
-        ? captureTarget
-        : (captureTarget.querySelector('[data-template-id="modern-minimal"]') as HTMLElement | null);
+    preparedImages = await prepareTemplateImagesForExport(captureTarget);
+    captureTemplateId = getExportStyleTemplateId(captureTarget);
+    if (captureTemplateId) {
+      const sourceRootForTag = getTemplateCaptureRoot(captureTarget, captureTemplateId);
       if (sourceRootForTag) {
         taggedCaptureTarget = sourceRootForTag;
         taggedCaptureTarget.setAttribute('data-export-capture-id', exportCaptureId);
@@ -3580,13 +3888,11 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
       windowWidth: captureWidth,
       windowHeight: captureHeight,
       onclone: (clonedDocument) => {
-        if (!isModernMinimalCaptureTarget(captureTarget)) return;
-        const sourceRoot = captureTarget.dataset.templateId === 'modern-minimal'
-          ? captureTarget
-          : (captureTarget.querySelector('[data-template-id="modern-minimal"]') as HTMLElement | null);
+        if (!captureTemplateId) return;
+        const sourceRoot = getTemplateCaptureRoot(captureTarget, captureTemplateId);
         const cloneRoot = clonedDocument.querySelector(`[data-export-capture-id="${exportCaptureId}"]`) as HTMLElement | null;
         if (!sourceRoot || !cloneRoot) return;
-        copyModernMinimalComputedStyles(sourceRoot, cloneRoot);
+        copyTemplateComputedStyles(sourceRoot, cloneRoot, captureTemplateId);
         cloneRoot.removeAttribute('data-export-capture-id');
         removeCloneStylesheets(clonedDocument);
       },
@@ -3630,9 +3936,24 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
     throw new Error('[exportToPDF] html2canvas produced an empty canvas (0×0). Element may be hidden or zero-sized.');
   }
 
-  const imgData = canvas.toDataURL('image/jpeg', 0.95);
-  const canvasWidthPx = canvas.width;
-  const canvasHeightPx = canvas.height;
+  let pdfCanvas = canvas;
+  if (captureTemplateId === 'clean-simple') {
+    const visibleBottom = findVisibleCanvasBottom(canvas);
+    if (visibleBottom > 0 && visibleBottom < canvas.height) {
+      const croppedCanvas = document.createElement('canvas');
+      croppedCanvas.width = canvas.width;
+      croppedCanvas.height = visibleBottom;
+      const croppedCtx = croppedCanvas.getContext('2d');
+      if (croppedCtx) {
+        croppedCtx.drawImage(canvas, 0, 0, canvas.width, visibleBottom, 0, 0, canvas.width, visibleBottom);
+        pdfCanvas = croppedCanvas;
+      }
+    }
+  }
+
+  const imgData = pdfCanvas.toDataURL('image/jpeg', 0.95);
+  const canvasWidthPx = pdfCanvas.width;
+  const canvasHeightPx = pdfCanvas.height;
 
   const contentHeightMM = (canvasHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
   const useSinglePage = contentHeightMM <= CV_PDF_A4_HEIGHT_MM + PDF_TRAILING_SLICE_TOLERANCE_MM;
@@ -3654,16 +3975,19 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
       let firstPage = true;
 
       while (offsetY < canvasHeightPx - trailingTolerancePx) {
+        const sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
+        if (captureTemplateId === 'clean-simple' && isCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight)) {
+          break;
+        }
         if (!firstPage) pdf.addPage();
         firstPage = false;
 
-        const sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
         const sliceCanvas = document.createElement('canvas');
         sliceCanvas.width = canvasWidthPx;
         sliceCanvas.height = sliceHeight;
         const ctx = sliceCanvas.getContext('2d');
         if (ctx) {
-          ctx.drawImage(canvas, 0, offsetY, canvasWidthPx, sliceHeight, 0, 0, canvasWidthPx, sliceHeight);
+          ctx.drawImage(pdfCanvas, 0, offsetY, canvasWidthPx, sliceHeight, 0, 0, canvasWidthPx, sliceHeight);
         }
         const sliceImg = sliceCanvas.toDataURL('image/jpeg', 0.95);
         const sliceHeightMM = (sliceHeight / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
@@ -3673,18 +3997,22 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
       }
     }
 
-    // Unified flow: use Blob/object URL/anchor download on all platforms.
-    // For web, this creates a browser-compatible download. For Android native,
-    // it delegates to the ACTION_CREATE_DOCUMENT SAK picker via saveFileViaPlatform.
+    // Unified flow: create a PDF Blob first, then hand it to the platform save
+    // boundary. Android API 29+ saves through MediaStore in saveFileViaPlatform.
     const pdfBlob = pdfToBlob(pdf);
     if (!pdfBlob || pdfBlob.size === 0) {
       throw new Error('PDF generation produced an empty or invalid Blob');
     }
-    await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+    return pdfBlob;
   } catch (pdfErr) {
     console.error('[exportToPDF] jsPDF generation failed:', pdfErr);
     throw pdfErr;
   }
+}
+
+export async function exportToPDF(elementId: string, fileName: string): Promise<void> {
+  const pdfBlob = await buildCvPdfBlob(elementId);
+  await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
 // ─── PDF Print Fallback ───────────────────────────────────────────────────────

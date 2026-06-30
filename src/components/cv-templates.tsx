@@ -341,57 +341,108 @@ export function CleanSimpleTemplate({ data, locale }: TemplateProps) {
   const rs = regionSettings[data.region];
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
+  const contacts = [
+    data.personal.email,
+    data.personal.phone,
+    rs.showAddress ? data.personal.address : '',
+  ].filter(Boolean);
   return (
-    <div className="bg-white text-gray-900 p-8 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
+    <div
+      data-template-id="clean-simple"
+      className="box-border w-[210mm] bg-white text-gray-900 p-8 mx-auto font-sans text-sm leading-relaxed"
+      style={{
+        minHeight: '297mm',
+        boxSizing: 'border-box',
+        fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        color: '#111827',
+        backgroundColor: '#ffffff',
+        wordSpacing: '0.08em',
+      }}
+    >
       <header className="mb-6">
         <div className="flex items-center gap-3">
           {showPhoto && data.personal.photo && (
-            <div className="flex-shrink-0 rounded-full overflow-hidden border border-gray-200" style={{ width: 80, height: 80 }}>
+            <div
+              data-clean-simple-photo="frame"
+              className="flex-shrink-0 rounded-full overflow-hidden border border-gray-200"
+              style={{ width: 80, height: 80, borderRadius: 9999, borderColor: '#e5e7eb', backgroundColor: '#f9fafb' }}
+            >
               <PhotoFill photo={data.personal.photo} />
             </div>
           )}
-          <div>
-            <h1 className="text-2xl font-bold">{data.personal.fullName || 'Your Name'}</h1>
-            <p className="text-emerald-600 font-medium">{data.personal.jobTitle}</p>
-            <div className="mt-1 flex flex-wrap gap-3 text-xs text-gray-500">
-              {data.personal.email && <span>{data.personal.email}</span>}
-              {data.personal.phone && <span>{data.personal.phone}</span>}
-              {rs.showAddress && data.personal.address && <span>{data.personal.address}</span>}
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold leading-tight" style={{ fontSize: 24, lineHeight: 1.15, fontWeight: 700 }}>{data.personal.fullName || 'Your Name'}</h1>
+            <p className="text-emerald-600 font-medium" style={{ color: '#059669', fontWeight: 500 }}>{data.personal.jobTitle}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500" style={{ fontSize: 12, color: '#6b7280' }}>
+              {contacts.map((contact, index) => (
+                <React.Fragment key={`${contact}-${index}`}>
+                  {index > 0 && <span aria-hidden="true" className="text-gray-300">|</span>}
+                  <span className="break-all">{contact}</span>
+                </React.Fragment>
+              ))}
             </div>
           </div>
         </div>
       </header>
-      <hr className="border-gray-200 mb-6" />
-      {data.summary && <section className="mb-6"><p className="text-gray-700">{data.summary}</p></section>}
+      <hr className="border-gray-200 mb-6" style={{ borderColor: '#e5e7eb' }} />
+      {data.summary && (
+        <section data-clean-simple-section="summary" className="mb-6">
+          <h2 className="font-bold text-emerald-600 mb-2" style={{ color: '#059669', fontWeight: 700 }}>{L.summary.toUpperCase()}</h2>
+          <p className="text-gray-700" style={{ color: '#374151', whiteSpace: 'break-spaces' }}>{data.summary}</p>
+        </section>
+      )}
       {data.experience.length > 0 && (
-        <section className="mb-6">
-          <h2 className="font-bold text-emerald-600 mb-3">{L.experience.toUpperCase()}</h2>
+        <section data-clean-simple-section="experience" className="mb-6">
+          <h2 className="font-bold text-emerald-600 mb-3" style={{ color: '#059669', fontWeight: 700 }}>{L.experience.toUpperCase()}</h2>
           {data.experience.map(exp => (
             <div key={exp.id} className="mb-3">
-              <div className="flex justify-between"><h3 className="font-semibold">{exp.position} at {exp.company}</h3><span className="text-xs text-gray-400">{exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</span></div>
-              <p className="mt-1 text-gray-600 whitespace-pre-line">{exp.description}</p>
+              <div className="flex justify-between gap-4">
+                <h3 className="font-semibold" style={{ fontWeight: 600 }}>{exp.position}{exp.company ? ` at ${exp.company}` : ''}</h3>
+                <span className="shrink-0 text-xs text-gray-400" style={{ fontSize: 12, color: '#9ca3af' }}>{exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</span>
+              </div>
+              <p className="mt-1 text-gray-600 whitespace-pre-line" style={{ color: '#4b5563', whiteSpace: 'break-spaces' }}>{exp.description}</p>
             </div>
           ))}
         </section>
       )}
       {data.education.length > 0 && (
-        <section className="mb-6">
-          <h2 className="font-bold text-emerald-600 mb-3">{L.education.toUpperCase()}</h2>
+        <section data-clean-simple-section="education" className="mb-6">
+          <h2 className="font-bold text-emerald-600 mb-3" style={{ color: '#059669', fontWeight: 700 }}>{L.education.toUpperCase()}</h2>
           {data.education.map(edu => (
-            <div key={edu.id} className="mb-2"><h3 className="font-semibold">{edu.degree}</h3><p className="text-xs text-gray-500">{edu.school} | {edu.startDate} - {edu.endDate}</p></div>
+            <div key={edu.id} className="mb-2">
+              <div className="flex justify-between gap-4">
+                <h3 className="font-semibold" style={{ fontWeight: 600 }}>{edu.degree}</h3>
+                <span className="shrink-0 text-xs text-gray-400" style={{ fontSize: 12, color: '#9ca3af' }}>{edu.startDate} - {edu.endDate}</span>
+              </div>
+              <p className="text-xs text-gray-500" style={{ fontSize: 12, color: '#6b7280' }}>{edu.school}</p>
+            </div>
           ))}
         </section>
       )}
       {data.skills.length > 0 && (
-        <section className="mb-6">
-          <h2 className="font-bold text-emerald-600 mb-2">{L.skills.toUpperCase()}</h2>
-          <p className="text-gray-700">{data.skills.join(' | ')}</p>
+        <section data-clean-simple-section="skills" className="mb-6">
+          <h2 className="font-bold text-emerald-600 mb-2" style={{ color: '#059669', fontWeight: 700 }}>{L.skills.toUpperCase()}</h2>
+          <div className="flex flex-wrap gap-x-2 gap-y-1 text-gray-700" style={{ color: '#374151' }}>
+            {data.skills.map((skill, index) => (
+              <React.Fragment key={`${skill}-${index}`}>
+                {index > 0 && <span aria-hidden="true" className="text-gray-300">|</span>}
+                <span data-clean-simple-skill="item" className="break-words" style={{ whiteSpace: 'break-spaces' }}>{skill}</span>
+              </React.Fragment>
+            ))}
+          </div>
         </section>
       )}
       {data.languages.length > 0 && (
-        <section className="mb-6">
-          <h2 className="font-bold text-emerald-600 mb-2">{L.languages.toUpperCase()}</h2>
-          {data.languages.map((l, i) => <span key={i} className="text-gray-700">{l.name} ({l.level}){i < data.languages.length - 1 ? ' | ' : ''}</span>)}
+        <section data-clean-simple-section="languages" className="mb-6">
+          <h2 className="font-bold text-emerald-600 mb-2" style={{ color: '#059669', fontWeight: 700 }}>{L.languages.toUpperCase()}</h2>
+          <div className="flex flex-wrap gap-x-2 gap-y-1 text-gray-700" style={{ color: '#374151' }}>
+            {data.languages.map((l, i) => (
+              <React.Fragment key={`${l.name}-${i}`}>
+                {i > 0 && <span aria-hidden="true" className="text-gray-300">|</span>}
+                <span style={{ whiteSpace: 'break-spaces' }}>{l.name} ({l.level})</span>
+              </React.Fragment>
+            ))}
+          </div>
         </section>
       )}
     </div>

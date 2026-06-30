@@ -686,6 +686,10 @@ export default function CVBuilderPage() {
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
+        if (cv.templateId === 'clean-simple') {
+          toast.error(t.cv.pdfExportFailed);
+          return;
+        }
         // Fallback: attempt print-ready window once so user can Save as PDF via browser.
         // Do NOT increment downloads here — we cannot confirm the user actually saves the file.
         try {
