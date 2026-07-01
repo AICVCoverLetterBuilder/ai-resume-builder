@@ -624,38 +624,109 @@ export function ATSStandardTemplate({ data, locale }: TemplateProps) {
 // --- Creative Artistic: round photo in colorful header ---
 export function CreativeArtisticTemplate({ data, locale }: TemplateProps) {
   const showPhoto = shouldShowPhoto(data);
+  const rs = regionSettings[data.region];
   const L = getLabels(locale);
+  const contactItems = [
+    data.personal.email,
+    data.personal.phone,
+    rs.showAddress ? data.personal.address : '',
+  ].filter(Boolean);
+  const exportSafeTextStyle: React.CSSProperties = {
+    wordSpacing: 'normal',
+    letterSpacing: 'normal',
+    whiteSpace: 'normal',
+    fontKerning: 'normal',
+  };
   return (
-    <div className="bg-white text-gray-900 max-w-[210mm] mx-auto font-sans text-sm" style={{ minHeight: '297mm' }}>
-      <header className="bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white p-8">
-        <div className="flex items-center gap-4">
+    <div
+      data-template-id="creative-artistic"
+      className="box-border w-[210mm] bg-white text-gray-900 mx-auto font-sans text-sm"
+      style={{
+        minHeight: '297mm',
+        width: '210mm',
+        boxSizing: 'border-box',
+        backgroundColor: '#ffffff',
+        color: '#111827',
+        fontFamily: 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif',
+        ...exportSafeTextStyle,
+      }}
+    >
+      <header
+        className="text-white p-8"
+        style={{
+          background: 'linear-gradient(90deg, #7c3aed 0%, #c026d3 100%)',
+          backgroundColor: '#7c3aed',
+          color: '#ffffff',
+          boxSizing: 'border-box',
+        }}
+      >
+        <div className="flex items-center gap-4" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           {showPhoto && (
-            <div className="flex-shrink-0 rounded-full overflow-hidden border-2 border-white/40 shadow-md" style={{ width: 100, height: 100 }}>
+            <div
+              className="flex-shrink-0 rounded-full overflow-hidden border-2 border-white/40 shadow-md"
+              style={{
+                width: 100,
+                height: 100,
+                flex: '0 0 100px',
+                borderRadius: '9999px',
+                overflow: 'hidden',
+                border: '2px solid rgba(255, 255, 255, 0.4)',
+                backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                boxSizing: 'border-box',
+              }}
+            >
               {data.personal.photo ? (
-                <PhotoFill photo={data.personal.photo} />
+                <PhotoFill photo={data.personal.photo} imgProps={{ 'data-export-meaningful': 'true' }} />
               ) : (
-                <div className="h-full w-full bg-white/20" />
+                <div className="h-full w-full" style={{ backgroundColor: 'rgba(255, 255, 255, 0.2)' }} />
               )}
             </div>
           )}
-          <div>
-            <h1 className="text-3xl font-bold">{data.personal.fullName || 'Your Name'}</h1>
-            <p className="text-violet-200 text-lg mt-1">{data.personal.jobTitle}</p>
-            <div className="mt-3 flex flex-wrap gap-4 text-xs text-violet-200">
-              {data.personal.email && <span>{data.personal.email}</span>}
-              {data.personal.phone && <span>{data.personal.phone}</span>}
+          <div style={{ minWidth: 0 }}>
+            <h1 data-export-meaningful="true" className="text-3xl font-bold" style={{ color: '#ffffff', fontSize: 30, fontWeight: 700, lineHeight: 1.18, margin: 0, ...exportSafeTextStyle }}>{data.personal.fullName || 'Your Name'}</h1>
+            {data.personal.jobTitle && <p data-export-meaningful="true" className="text-violet-200 text-lg mt-1" style={{ color: '#ddd6fe', fontSize: 18, lineHeight: 1.35, marginTop: 4, ...exportSafeTextStyle }}>{data.personal.jobTitle}</p>}
+            <div
+              data-export-contact-row="creative-artistic"
+              className="mt-3 flex flex-wrap gap-4 text-xs text-violet-200"
+              style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', marginTop: 12, color: '#ddd6fe', fontSize: 12, lineHeight: 1.45 }}
+            >
+              {contactItems.map((item, index) => (
+                <span
+                  key={`${item}-${index}`}
+                  data-export-meaningful="true"
+                  data-export-contact-item="true"
+                  style={{
+                    ...exportSafeTextStyle,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                    wordBreak: 'keep-all',
+                    overflowWrap: 'normal',
+                  }}
+                >
+                  {index > 0 && <span aria-hidden="true" data-export-contact-separator="true" style={{ color: '#f5d0fe', flexShrink: 0 }}>•</span>}
+                  <span style={{ display: 'inline-block', whiteSpace: 'nowrap', flexShrink: 0, wordBreak: 'keep-all', overflowWrap: 'normal' }}>{item}</span>
+                </span>
+              ))}
             </div>
           </div>
         </div>
       </header>
-      <div className="p-8">
-        {data.summary && <section className="mb-6"><p className="text-gray-700 text-base leading-relaxed">{data.summary}</p></section>}
-        {data.experience.length > 0 && <section className="mb-6"><h2 className="text-violet-600 font-bold mb-3">{L.experience}</h2>{data.experience.map(exp => (<div key={exp.id} className="mb-4 pl-4 border-l-2 border-violet-200"><h3 className="font-semibold">{exp.position}</h3><p className="text-xs text-violet-500">{exp.company} | {exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</p><p className="mt-1 text-gray-600 whitespace-pre-line">{exp.description}</p></div>))}</section>}
-        {data.education.length > 0 && <section className="mb-6"><h2 className="text-violet-600 font-bold mb-3">{L.education}</h2>{data.education.map(edu => (<div key={edu.id} className="mb-2"><h3 className="font-semibold">{edu.degree}</h3><p className="text-xs text-gray-500">{edu.school}</p></div>))}</section>}
-        <div className="grid grid-cols-2 gap-6">
-          {data.skills.length > 0 && <section><h2 className="text-violet-600 font-bold mb-2">{L.skills}</h2><div className="flex flex-wrap gap-1">{data.skills.map((s, i) => <span key={i} className="rounded-full bg-violet-50 px-2 py-0.5 text-xs text-violet-700">{s}</span>)}</div></section>}
-          {data.languages.length > 0 && <section><h2 className="text-violet-600 font-bold mb-2">{L.languages}</h2>{data.languages.map((l, i) => <p key={i} className="text-xs">{l.name} - {l.level}</p>)}</section>}
+      <div className="p-8" style={{ padding: 32, backgroundColor: '#ffffff', boxSizing: 'border-box' }}>
+        {data.summary && <section className="mb-6" style={{ marginBottom: 24 }}><p data-export-meaningful="true" className="text-gray-700 text-base leading-relaxed" style={{ color: '#374151', fontSize: 16, lineHeight: 1.625, margin: 0, ...exportSafeTextStyle }}>{data.summary}</p></section>}
+        {data.experience.length > 0 && <section className="mb-6" style={{ marginBottom: 24 }}><h2 data-export-meaningful="true" className="text-violet-600 font-bold mb-3" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 12, ...exportSafeTextStyle }}>{L.experience}</h2>{data.experience.map(exp => (<div key={exp.id} data-export-meaningful="true" className="mb-4 pl-4 border-l-2 border-violet-200" style={{ marginBottom: 16, paddingLeft: 16, borderLeft: '2px solid #ddd6fe', boxSizing: 'border-box' }}><h3 className="font-semibold" style={{ fontWeight: 600, margin: 0, ...exportSafeTextStyle }}>{exp.position}</h3><p className="text-xs text-violet-500" style={{ color: '#8b5cf6', fontSize: 12, margin: '2px 0 0', ...exportSafeTextStyle }}>{exp.company} | {exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</p>{exp.description && <p className="mt-1 text-gray-600 whitespace-pre-line" style={{ ...exportSafeTextStyle, color: '#4b5563', marginTop: 4, whiteSpace: 'pre-line' }}>{exp.description}</p>}</div>))}</section>}
+        {data.education.length > 0 && <section data-export-group="education-section" className="mb-6" style={{ marginBottom: 24 }}><h2 data-export-meaningful="true" data-export-keep-with-next="true" className="text-violet-600 font-bold mb-3" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 12, ...exportSafeTextStyle }}>{L.education}</h2>{data.education.map(edu => {
+          const educationDates = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+          const educationMeta = [edu.school, educationDates].filter(Boolean).join(' | ');
+          return (<div key={edu.id} data-export-meaningful="true" data-export-group="education-entry" className="mb-2" style={{ marginBottom: 8 }}><h3 className="font-semibold" style={{ fontWeight: 600, margin: 0, ...exportSafeTextStyle }}>{edu.degree}</h3><p className="text-xs text-gray-500" style={{ color: '#6b7280', fontSize: 12, margin: '2px 0 0', ...exportSafeTextStyle }}>{educationMeta}</p></div>);
+        })}</section>}
+        <div data-export-group="skills-block" className="grid grid-cols-2 gap-6" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+          {data.skills.length > 0 && <section data-export-group="skills-section"><h2 data-export-meaningful="true" data-export-keep-with-next="true" className="text-violet-600 font-bold mb-2" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 8, ...exportSafeTextStyle }}>{L.skills}</h2><div data-export-group="skills-row" className="flex flex-wrap gap-1" style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{data.skills.map((s, i) => <span key={i} data-export-meaningful="true" data-export-skill-chip="true" className="rounded-full bg-violet-50 px-2 py-0.5 text-xs text-violet-700" style={{ ...exportSafeTextStyle, display: 'inline-flex', alignItems: 'center', flex: '0 0 auto', flexShrink: 0, width: 'max-content', maxWidth: '100%', whiteSpace: 'nowrap', wordBreak: 'keep-all', overflowWrap: 'normal', borderRadius: 9999, backgroundColor: '#f5f3ff', color: '#6d28d9', padding: '2px 8px', fontSize: 12, lineHeight: 1.4 }}>{s}</span>)}</div></section>}
+          {data.languages.length > 0 && <section><h2 data-export-meaningful="true" className="text-violet-600 font-bold mb-2" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 8, ...exportSafeTextStyle }}>{L.languages}</h2>{data.languages.map((l, i) => <p key={i} data-export-meaningful="true" className="text-xs" style={{ fontSize: 12, margin: '0 0 4px', color: '#111827', ...exportSafeTextStyle }}>{l.name} - {l.level}</p>)}</section>}
         </div>
+        {data.certifications.length > 0 && <section className="mt-6" style={{ marginTop: 24 }}><h2 data-export-meaningful="true" className="text-violet-600 font-bold mb-2" style={{ color: '#7c3aed', fontWeight: 700, marginBottom: 8, ...exportSafeTextStyle }}>{L.certifications}</h2>{data.certifications.map((c, i) => <p key={i} data-export-meaningful="true" className="text-xs text-gray-600" style={{ color: '#4b5563', fontSize: 12, margin: '0 0 4px', ...exportSafeTextStyle }}>{c}</p>)}</section>}
       </div>
     </div>
   );

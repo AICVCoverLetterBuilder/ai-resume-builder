@@ -309,7 +309,7 @@ type PreparedExportImage = {
   previousFrameDisplay: string;
 };
 
-type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic' | 'creative-bold';
+type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic' | 'creative-bold' | 'creative-artistic';
 
 function isModernMinimalCaptureTarget(target: HTMLElement): boolean {
   return target.dataset.templateId === 'modern-minimal'
@@ -331,6 +331,11 @@ function isCreativeBoldCaptureTarget(target: HTMLElement): boolean {
     || Boolean(target.querySelector('[data-template-id="creative-bold"]'));
 }
 
+function isCreativeArtisticCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'creative-artistic'
+    || Boolean(target.querySelector('[data-template-id="creative-artistic"]'));
+}
+
 function getTemplateCaptureRoot(target: HTMLElement, templateId: StyledPdfTemplateId): HTMLElement | null {
   return target.dataset.templateId === templateId
     ? target
@@ -342,6 +347,7 @@ function getExportStyleTemplateId(target: HTMLElement): StyledPdfTemplateId | nu
   if (isCleanSimpleCaptureTarget(target)) return 'clean-simple';
   if (isProfessionalClassicCaptureTarget(target)) return 'professional-classic';
   if (isCreativeBoldCaptureTarget(target)) return 'creative-bold';
+  if (isCreativeArtisticCaptureTarget(target)) return 'creative-artistic';
   return null;
 }
 
@@ -443,10 +449,44 @@ function fallbackCreativeBoldColor(element: Element, property: string): string {
   return '#111827';
 }
 
+function fallbackCreativeArtisticColor(element: Element, property: string): string {
+  const classes = Array.from(element.classList);
+  if (property === 'background-image') {
+    if (classes.includes('bg-gradient-to-r') || classes.includes('from-violet-600') || classes.includes('to-fuchsia-600')) {
+      return 'linear-gradient(90deg, #7c3aed 0%, #c026d3 100%)';
+    }
+    return 'none';
+  }
+  if (property === 'background-color' || property === 'background') {
+    if (classes.includes('bg-white')) return '#ffffff';
+    if (classes.includes('bg-violet-50')) return '#f5f3ff';
+    if (classes.includes('bg-white/20')) return 'rgba(255, 255, 255, 0.2)';
+    if (classes.includes('from-violet-600') || classes.includes('to-fuchsia-600')) return '#7c3aed';
+    return 'rgba(0, 0, 0, 0)';
+  }
+  if (property.startsWith('border')) {
+    if (classes.includes('border-violet-200')) return '#ddd6fe';
+    if (classes.includes('border-white/40')) return 'rgba(255, 255, 255, 0.4)';
+    return '#ddd6fe';
+  }
+  if (classes.includes('text-white')) return '#ffffff';
+  if (classes.includes('text-violet-200')) return '#ddd6fe';
+  if (classes.includes('text-violet-500')) return '#8b5cf6';
+  if (classes.includes('text-violet-600')) return '#7c3aed';
+  if (classes.includes('text-violet-700')) return '#6d28d9';
+  if (classes.includes('text-gray-900')) return '#111827';
+  if (classes.includes('text-gray-700')) return '#374151';
+  if (classes.includes('text-gray-600')) return '#4b5563';
+  if (classes.includes('text-gray-500')) return '#6b7280';
+  if (property === 'color' && element.closest('header')) return '#ffffff';
+  return '#111827';
+}
+
 function fallbackExportColor(element: Element, property: string, templateId: StyledPdfTemplateId): string {
   if (templateId === 'clean-simple') return fallbackCleanSimpleColor(element, property);
   if (templateId === 'professional-classic') return fallbackProfessionalClassicColor(element, property);
   if (templateId === 'creative-bold') return fallbackCreativeBoldColor(element, property);
+  if (templateId === 'creative-artistic') return fallbackCreativeArtisticColor(element, property);
   return fallbackModernMinimalColor(element, property);
 }
 
@@ -464,8 +504,12 @@ function copyTemplateComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElem
       if (/\b(?:lab|lch|oklab|oklch)\(/i.test(value)) {
         value = fallbackExportColor(sourceEl, property, templateId);
       }
-      if (templateId === 'creative-bold' && property === 'background-image' && /\b(?:lab|lch|oklab|oklch)\(/i.test(value)) {
-        value = 'none';
+      if (
+        (templateId === 'creative-bold' || templateId === 'creative-artistic')
+        && property === 'background-image'
+        && /\b(?:lab|lch|oklab|oklch)\(/i.test(value)
+      ) {
+        value = fallbackExportColor(sourceEl, property, templateId);
       }
       cloneEl.style.setProperty(property, value, computed.getPropertyPriority(property));
     }
@@ -482,9 +526,12 @@ function copyTemplateComputedStyles(sourceRoot: HTMLElement, cloneRoot: HTMLElem
 
 const PROFESSIONAL_CLASSIC_PDF_FONT_STACK = 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif';
 const CREATIVE_BOLD_PDF_FONT_STACK = 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif';
+const CREATIVE_ARTISTIC_PDF_FONT_STACK = 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif';
 const CREATIVE_BOLD_PDF_SIDEBAR_PERCENT = 28;
 const CREATIVE_BOLD_PDF_MAIN_PERCENT = 100 - CREATIVE_BOLD_PDF_SIDEBAR_PERCENT;
-const CREATIVE_BOLD_PAGE_INTERSECTION_EPSILON_PX = 0.5;
+const PDF_PAGE_INTERSECTION_EPSILON_PX = 0.5;
+const CREATIVE_ARTISTIC_GROUP_PAGE_PADDING_PX = 0.5;
+const CREATIVE_ARTISTIC_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
 
 type MeaningfulContentIntervalCss = {
   topCssPx: number;
@@ -504,12 +551,64 @@ type MeaningfulContentPagePlan = {
   intervals: Array<{ topPx: number; bottomPx: number }>;
 };
 
+const SEMANTIC_CANVAS_BOTTOM_PADDING_PX = 16;
+
 function normalizeProfessionalClassicPdfTextStyles(root: HTMLElement): void {
   normalizePdfTextStyles(root, PROFESSIONAL_CLASSIC_PDF_FONT_STACK);
 }
 
 function normalizeCreativeBoldPdfTextStyles(root: HTMLElement): void {
   normalizePdfTextStyles(root, CREATIVE_BOLD_PDF_FONT_STACK);
+}
+
+function normalizeCreativeArtisticPdfTextStyles(root: HTMLElement): void {
+  normalizePdfTextStyles(root, CREATIVE_ARTISTIC_PDF_FONT_STACK);
+}
+
+function applyCreativeArtisticPdfNoWrapItems(root: HTMLElement): void {
+  root.querySelectorAll<HTMLElement>('[data-export-contact-row="creative-artistic"]').forEach((row) => {
+    row.style.setProperty('display', 'flex');
+    row.style.setProperty('flex-wrap', 'wrap');
+    row.style.setProperty('align-items', 'center');
+  });
+
+  root.querySelectorAll<HTMLElement>('[data-export-contact-item="true"]').forEach((item) => {
+    item.style.setProperty('display', 'inline-flex');
+    item.style.setProperty('align-items', 'center');
+    item.style.setProperty('white-space', 'nowrap');
+    item.style.setProperty('flex', '0 0 auto');
+    item.style.setProperty('flex-shrink', '0');
+    item.style.setProperty('width', 'max-content');
+    item.style.setProperty('max-width', '100%');
+    item.style.setProperty('word-break', 'keep-all');
+    item.style.setProperty('overflow-wrap', 'normal');
+  });
+
+  root.querySelectorAll<HTMLElement>('[data-export-contact-item="true"] span, [data-export-contact-separator="true"]').forEach((itemPart) => {
+    itemPart.style.setProperty('display', 'inline-block');
+    itemPart.style.setProperty('white-space', 'nowrap');
+    itemPart.style.setProperty('flex-shrink', '0');
+    itemPart.style.setProperty('word-break', 'keep-all');
+    itemPart.style.setProperty('overflow-wrap', 'normal');
+  });
+
+  root.querySelectorAll<HTMLElement>('[data-export-group="skills-row"]').forEach((row) => {
+    row.style.setProperty('display', 'flex');
+    row.style.setProperty('flex-wrap', 'wrap');
+    row.style.setProperty('align-items', 'flex-start');
+  });
+
+  root.querySelectorAll<HTMLElement>('[data-export-skill-chip="true"]').forEach((chip) => {
+    chip.style.setProperty('display', 'inline-flex');
+    chip.style.setProperty('align-items', 'center');
+    chip.style.setProperty('white-space', 'nowrap');
+    chip.style.setProperty('flex', '0 0 auto');
+    chip.style.setProperty('flex-shrink', '0');
+    chip.style.setProperty('width', 'max-content');
+    chip.style.setProperty('max-width', '100%');
+    chip.style.setProperty('word-break', 'keep-all');
+    chip.style.setProperty('overflow-wrap', 'normal');
+  });
 }
 
 function applyCreativeBoldPdfLayout(root: HTMLElement): void {
@@ -551,6 +650,100 @@ function applyCreativeBoldPdfLayout(root: HTMLElement): void {
   main.style.setProperty('box-sizing', 'border-box');
   main.style.setProperty('overflow-x', 'hidden');
   main.style.setProperty('background-color', '#ffffff');
+}
+
+function applyCreativeArtisticPdfLayout(root: HTMLElement): void {
+  const header = root.querySelector('header') as HTMLElement | null;
+  const body = header?.nextElementSibling as HTMLElement | null;
+  const photoFrame = header?.querySelector('img')?.parentElement as HTMLElement | null;
+  if (!header || !body) return;
+
+  root.style.setProperty('width', '210mm');
+  root.style.setProperty('min-width', '210mm');
+  root.style.setProperty('max-width', '210mm');
+  root.style.setProperty('box-sizing', 'border-box');
+  root.style.setProperty('overflow-x', 'hidden');
+  root.style.setProperty('overflow-y', 'visible');
+  root.style.setProperty('background-color', '#ffffff');
+  root.style.setProperty('color', '#111827');
+
+  header.style.setProperty('box-sizing', 'border-box');
+  header.style.setProperty('padding', '32px');
+  header.style.setProperty('background', 'linear-gradient(90deg, #7c3aed 0%, #c026d3 100%)');
+  header.style.setProperty('background-color', '#7c3aed');
+  header.style.setProperty('color', '#ffffff');
+
+  body.style.setProperty('box-sizing', 'border-box');
+  body.style.setProperty('padding', '32px');
+  body.style.setProperty('background-color', '#ffffff');
+  body.style.setProperty('color', '#111827');
+
+  if (photoFrame) {
+    photoFrame.style.setProperty('width', '100px');
+    photoFrame.style.setProperty('height', '100px');
+    photoFrame.style.setProperty('min-width', '100px');
+    photoFrame.style.setProperty('flex', '0 0 100px');
+    photoFrame.style.setProperty('border-radius', '9999px');
+    photoFrame.style.setProperty('overflow', 'hidden');
+    photoFrame.style.setProperty('border', '2px solid rgba(255, 255, 255, 0.4)');
+    photoFrame.style.setProperty('background-color', 'rgba(255, 255, 255, 0.2)');
+    photoFrame.style.setProperty('box-sizing', 'border-box');
+  }
+}
+
+function getRelativeExportRect(rootBox: { top: number }, element: HTMLElement): { top: number; bottom: number; height: number } | null {
+  const rect = getPositiveRect(element.getBoundingClientRect(), element);
+  if (!rect) return null;
+  const top = rect.top - rootBox.top;
+  const bottom = rect.bottom - rootBox.top;
+  if (bottom <= top) return null;
+  return { top, bottom, height: bottom - top };
+}
+
+function parseCssPx(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function shiftGroupToNextPage(group: HTMLElement, shiftPx: number): void {
+  const currentInlineMargin = parseCssPx(group.style.marginTop);
+  group.style.setProperty('margin-top', `${currentInlineMargin + shiftPx}px`);
+}
+
+export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): void {
+  const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
+  if (!rootBox || rootBox.width <= 0) return;
+
+  const pageHeightCssPx = rootBox.width * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return;
+
+  const groupSelectors = [
+    '[data-export-group="education-section"]',
+    '[data-export-group="skills-block"]',
+  ].join(',');
+
+  const maxShortGroupHeight = pageHeightCssPx * CREATIVE_ARTISTIC_MAX_KEEP_GROUP_PAGE_RATIO;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    let movedAnyGroup = false;
+    const groups = Array.from(root.querySelectorAll<HTMLElement>(groupSelectors));
+    for (const group of groups) {
+      const rect = getRelativeExportRect(rootBox, group);
+      if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) continue;
+
+      const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+      const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+      if (startsOnPage === endsOnPage) continue;
+
+      const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+      const shiftPx = Math.max(0, nextPageTop - rect.top + CREATIVE_ARTISTIC_GROUP_PAGE_PADDING_PX);
+      if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
+
+      shiftGroupToNextPage(group, shiftPx);
+      movedAnyGroup = true;
+    }
+    if (!movedAnyGroup) break;
+  }
 }
 
 function hasMeaningfulExportPayload(element: HTMLElement): boolean {
@@ -613,13 +806,21 @@ export function createMeaningfulContentPagePlan(
 
 function pageHasMeaningfulContent(plan: MeaningfulContentPagePlan, pageTopPx: number, pageBottomPx: number): boolean {
   return plan.intervals.some(interval =>
-    interval.bottomPx > pageTopPx + CREATIVE_BOLD_PAGE_INTERSECTION_EPSILON_PX
-    && interval.topPx < pageBottomPx - CREATIVE_BOLD_PAGE_INTERSECTION_EPSILON_PX,
+    interval.bottomPx > pageTopPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+    && interval.topPx < pageBottomPx - PDF_PAGE_INTERSECTION_EPSILON_PX,
   );
 }
 
+function expandRootToMeaningfulContentHeight(root: HTMLElement, bounds: MeaningfulContentBounds | null): void {
+  if (!bounds) return;
+  const requiredHeightCssPx = Math.ceil(Math.max(bounds.rootHeightCssPx, bounds.maxBottomCssPx + 32));
+  if (requiredHeightCssPx <= 0) return;
+  root.style.setProperty('height', `${requiredHeightCssPx}px`);
+  root.style.setProperty('min-height', `${requiredHeightCssPx}px`);
+}
+
 function hasFutureMeaningfulContent(plan: MeaningfulContentPagePlan, pageBottomPx: number): boolean {
-  return plan.maxBottomCanvasPx > pageBottomPx + CREATIVE_BOLD_PAGE_INTERSECTION_EPSILON_PX;
+  return plan.maxBottomCanvasPx > pageBottomPx + PDF_PAGE_INTERSECTION_EPSILON_PX;
 }
 
 function normalizePdfTextStyles(root: HTMLElement, fontStack: string): void {
@@ -4098,6 +4299,18 @@ export function findVisibleCanvasBottom(canvas: HTMLCanvasElement): number {
   return height;
 }
 
+function getSemanticCanvasBottom(
+  bounds: MeaningfulContentBounds | null,
+  canvasWidthPx: number,
+  fallbackCssWidthPx: number,
+): number | null {
+  if (!bounds || canvasWidthPx <= 0) return null;
+  const cssWidth = bounds.rootWidthCssPx || fallbackCssWidthPx;
+  if (cssWidth <= 0) return null;
+  const scalePxPerCssPx = canvasWidthPx / cssWidth;
+  return Math.ceil(bounds.maxBottomCssPx * scalePxPerCssPx + SEMANTIC_CANVAS_BOTTOM_PADDING_PX);
+}
+
 export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   const element = document.getElementById(elementId);
   if (!element) throw new Error(`PDF export: element #${elementId} not found in DOM`);
@@ -4229,7 +4442,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   const exportCaptureId = `cv-template-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let taggedCaptureTarget: HTMLElement | null = null;
   let captureTemplateId: StyledPdfTemplateId | null = null;
-  let creativeBoldMeaningfulBounds: MeaningfulContentBounds | null = null;
+  let semanticMeaningfulBounds: MeaningfulContentBounds | null = null;
   let captureWidth = 0;
   let captureHeight = 0;
   try {
@@ -4244,6 +4457,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
     preparedImages = await prepareTemplateImagesForExport(captureTarget);
     captureTemplateId = getExportStyleTemplateId(captureTarget);
+    if (captureTemplateId === 'creative-artistic' && captureWidth > 0) {
+      captureHeight += Math.ceil(captureWidth * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM) * 2);
+    }
     if (captureTemplateId) {
       const sourceRootForTag = getTemplateCaptureRoot(captureTarget, captureTemplateId);
       if (sourceRootForTag) {
@@ -4283,7 +4499,16 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         if (captureTemplateId === 'creative-bold') {
           applyCreativeBoldPdfLayout(cloneRoot);
           normalizeCreativeBoldPdfTextStyles(cloneRoot);
-          creativeBoldMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
+        if (captureTemplateId === 'creative-artistic') {
+          applyCreativeArtisticPdfLayout(cloneRoot);
+          normalizeCreativeArtisticPdfTextStyles(cloneRoot);
+          applyCreativeArtisticPdfNoWrapItems(cloneRoot);
+          applyCreativeArtisticKeepTogetherPagination(cloneRoot);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
         }
         cloneRoot.removeAttribute('data-export-capture-id');
         removeCloneStylesheets(clonedDocument);
@@ -4329,9 +4554,14 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   }
 
   let pdfCanvas = canvas;
-  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold';
-  if (shouldTrimBlankPdfSlices) {
-    const visibleBottom = findVisibleCanvasBottom(canvas);
+  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic';
+  const shouldUseFullSemanticCanvas = captureTemplateId === 'creative-artistic' && Boolean(semanticMeaningfulBounds);
+  if (shouldTrimBlankPdfSlices && !shouldUseFullSemanticCanvas) {
+    const semanticCanvasBottom = getSemanticCanvasBottom(semanticMeaningfulBounds, canvas.width, captureWidth);
+    const visibleBottom = Math.min(
+      canvas.height,
+      Math.max(findVisibleCanvasBottom(canvas), semanticCanvasBottom ?? 0),
+    );
     if (visibleBottom > 0 && visibleBottom < canvas.height) {
       const croppedCanvas = document.createElement('canvas');
       croppedCanvas.width = canvas.width;
@@ -4347,8 +4577,8 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   const imgData = pdfCanvas.toDataURL('image/jpeg', 0.95);
   const canvasWidthPx = pdfCanvas.width;
   const canvasHeightPx = pdfCanvas.height;
-  const creativeBoldPagePlan = captureTemplateId === 'creative-bold' && creativeBoldMeaningfulBounds
-    ? createMeaningfulContentPagePlan(creativeBoldMeaningfulBounds, canvasWidthPx, captureWidth)
+  const semanticPagePlan = semanticMeaningfulBounds
+    ? createMeaningfulContentPagePlan(semanticMeaningfulBounds, canvasWidthPx, captureWidth)
     : null;
 
   const contentHeightMM = (canvasHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
@@ -4372,17 +4602,17 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
 
       while (offsetY < canvasHeightPx - trailingTolerancePx) {
         const sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
-        if (creativeBoldPagePlan && !firstPage) {
+        if (semanticPagePlan && !firstPage) {
           const pageBottomPx = offsetY + sliceHeight;
-          if (!pageHasMeaningfulContent(creativeBoldPagePlan, offsetY, pageBottomPx)) {
-            if (!hasFutureMeaningfulContent(creativeBoldPagePlan, pageBottomPx)) break;
+          if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
+            if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
             offsetY += pageHeightPx;
             continue;
           }
         }
         if (
           shouldTrimBlankPdfSlices
-          && !creativeBoldPagePlan
+          && !semanticPagePlan
           && !firstPage
           && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
         ) {
