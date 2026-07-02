@@ -5,6 +5,11 @@ import { Upload, X, Crop, ZoomIn, ZoomOut, RotateCcw, Sparkles, Camera, Eye, Eye
 import type { Region } from '@/lib/types';
 import { useI18n } from '@/lib/i18n/context';
 import { PremiumAIButton, ProBadge } from '@/components/PremiumAIButton';
+import {
+  ELEGANT_FORMAL_PHOTO_EXPORT_HEIGHT,
+  ELEGANT_FORMAL_PHOTO_EXPORT_WIDTH,
+  getElegantFormalCoverCropMetrics,
+} from '@/lib/elegant-formal-photo';
 
 interface PhotoUploadProps {
   photo?: string;
@@ -123,7 +128,12 @@ export function PhotoUpload({ photo, photoEnabled, region, isPro = false, photoS
     const scaledH = img.naturalHeight * zoom;
     const dx = (cropW - scaledW) / 2 + offset.x;
     const dy = (cropH - scaledH) / 2 + offset.y;
-    ctx.drawImage(img, dx, dy, scaledW, scaledH);
+    if (photoShape === 'rectangle') {
+      const metrics = getElegantFormalCoverCropMetrics(img.naturalWidth, img.naturalHeight, cropW, cropH);
+      ctx.drawImage(img, metrics.offsetX, metrics.offsetY, img.naturalWidth * metrics.scale, img.naturalHeight * metrics.scale);
+    } else {
+      ctx.drawImage(img, dx, dy, scaledW, scaledH);
+    }
     ctx.restore();
   }, [zoom, offset, photoShape, cropW, cropH]);
 
@@ -179,8 +189,8 @@ export function PhotoUpload({ photo, photoEnabled, region, isPro = false, photoS
   const renderCrop = useCallback((outShape: 'circle' | 'rectangle'): string => {
     const img = imgRef.current;
     if (!img) return '';
-    const outW = 300;
-    const outH = outShape === 'rectangle' ? 400 : 300;
+    const outW = outShape === 'rectangle' ? ELEGANT_FORMAL_PHOTO_EXPORT_WIDTH : 300;
+    const outH = outShape === 'rectangle' ? ELEGANT_FORMAL_PHOTO_EXPORT_HEIGHT : 300;
     const canvas = document.createElement('canvas');
     canvas.width = outW;
     canvas.height = outH;

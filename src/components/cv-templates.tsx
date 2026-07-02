@@ -4,6 +4,7 @@ import React, { useRef } from 'react';
 import type { CVData } from '@/lib/types';
 import { regionSettings } from '@/lib/types';
 import { translations, type Locale } from '@/lib/i18n/translations';
+import { ELEGANT_FORMAL_PHOTO_HEIGHT, ELEGANT_FORMAL_PHOTO_WIDTH } from '@/lib/elegant-formal-photo';
 
 
 interface TemplateProps {
@@ -71,6 +72,7 @@ function PhotoFill({
         // Rect: default to center 35% (upper-center) until load; circle: top center
         objectPosition: shape === 'rectangle' ? '50% 35%' : 'top center',
         display: 'block',
+        borderRadius: shape === 'rectangle' ? 2 : undefined,
       }}
     />
   );
@@ -331,75 +333,152 @@ export function ElegantFormalTemplate({ data, locale }: TemplateProps) {
   const rs = regionSettings[data.region];
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
+  const contacts = [
+    data.personal.email,
+    data.personal.phone,
+    rs.showAddress ? data.personal.address : '',
+  ].filter(Boolean);
+  const rootStyle: React.CSSProperties = {
+    minHeight: '297mm',
+    boxSizing: 'border-box',
+    backgroundColor: '#ffffff',
+    padding: 34,
+    color: '#111827',
+    fontFamily: 'Georgia, "Times New Roman", Times, serif',
+    fontSize: 13,
+    lineHeight: 1.42,
+    wordSpacing: 'normal',
+    letterSpacing: 'normal',
+    whiteSpace: 'normal',
+    fontKerning: 'normal',
+  };
+  const descriptionLines = (text: string) => text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.replace(/^(?:[-*]|\u2022|\d+\.)\s+/, ''));
   return (
-    <div className="bg-white text-gray-900 p-10 max-w-[210mm] mx-auto font-serif text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
-      <header className="border-b border-gray-300 pb-6 mb-6">
-        <div className="flex items-start gap-5">
+    <div
+      data-template-id="elegant-formal"
+      className="box-border w-[210mm] bg-white text-gray-900 mx-auto font-serif text-sm leading-relaxed"
+      style={rootStyle}
+    >
+      <header data-export-meaningful="true" className="border-b border-gray-300" style={{ borderBottom: '1px solid #d1d5db', paddingBottom: 16, marginBottom: 16 }}>
+        <div className="flex items-start gap-5" style={{ display: 'flex', alignItems: 'flex-start', gap: 18 }}>
           {showPhoto && data.personal.photo && (
-            <div className="flex-shrink-0 overflow-hidden rounded-sm border border-gray-200 shadow-sm" style={{ width: 82, aspectRatio: '3/4', backgroundColor: '#ffffff' }}>
+            <div
+              data-elegant-formal-photo="frame"
+              className="flex-shrink-0 overflow-hidden rounded-sm"
+              style={{ width: ELEGANT_FORMAL_PHOTO_WIDTH, height: ELEGANT_FORMAL_PHOTO_HEIGHT, flexShrink: 0, overflow: 'hidden', borderRadius: 2, border: '0 solid transparent', backgroundColor: 'transparent', boxSizing: 'border-box' }}
+            >
               <PhotoFill photo={data.personal.photo} shape="rectangle" />
             </div>
           )}
-          <div className="flex-1 text-center">
-            <h1 className="text-3xl font-light tracking-wide text-gray-800">{data.personal.fullName || 'Your Name'}</h1>
-            <p className="text-amber-700 mt-1 tracking-wider uppercase text-xs">{data.personal.jobTitle}</p>
-            <div className="mt-3 flex justify-center gap-6 text-xs text-gray-400">
-              {data.personal.email && <span>{data.personal.email}</span>}
-              {data.personal.phone && <span>{data.personal.phone}</span>}
-              {rs.showAddress && data.personal.address && <span>{data.personal.address}</span>}
+          <div className="flex-1 text-center" style={{ flex: '1 1 0%', minWidth: 0, textAlign: 'center' }}>
+            <h1 data-export-meaningful="true" className="text-3xl font-light tracking-wide text-gray-800" style={{ margin: 0, color: '#1f2937', fontSize: 29, lineHeight: 1.15, fontWeight: 300, letterSpacing: '0.025em' }}>{data.personal.fullName || 'Your Name'}</h1>
+            <p data-export-meaningful="true" className="text-amber-700 mt-1 tracking-wider uppercase text-xs" style={{ marginTop: 4, color: '#b45309', fontSize: 12, lineHeight: 1.35, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{data.personal.jobTitle}</p>
+            <div data-export-contact-row="elegant-formal" className="mt-3 flex justify-center gap-6 text-xs text-gray-400" style={{ marginTop: 10, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 0, flexWrap: 'wrap', color: '#9ca3af', fontSize: 12, lineHeight: 1.3 }}>
+              {contacts.map((contact, index) => (
+                <span
+                  key={`${contact}-${index}`}
+                  data-export-contact-item="elegant-formal"
+                  data-export-meaningful="true"
+                  style={{ display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  {index > 0 && <span aria-hidden="true" data-export-contact-separator="elegant-formal" style={{ color: '#d1d5db', paddingLeft: 12, paddingRight: 12 }}>|</span>}
+                  <span>{contact}</span>
+                </span>
+              ))}
             </div>
           </div>
         </div>
       </header>
       {data.summary && (
-        <section className="mb-6">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-2 text-center">{L.summary}</h2>
-          <p className="text-gray-700 text-center italic">{data.summary}</p>
+        <section data-export-group="summary-section" className="mb-6" style={{ marginBottom: 16 }}>
+          <h2 data-export-meaningful="true" className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-2 text-center" style={{ margin: '0 0 6px', textAlign: 'center', color: '#b45309', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.2em' }}>{L.summary}</h2>
+          <p data-export-meaningful="true" className="text-gray-700 text-center italic" style={{ margin: 0, color: '#374151', textAlign: 'center', fontStyle: 'italic', whiteSpace: 'break-spaces' }}>{data.summary}</p>
         </section>
       )}
       {data.experience.length > 0 && (
-        <section className="mb-6">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-4 text-center border-b border-gray-200 pb-1">{L.experience}</h2>
+        <section data-export-group="experience-section" className="mb-6" style={{ marginBottom: 16 }}>
+          <h2 data-export-meaningful="true" className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-4 text-center border-b border-gray-200 pb-1" style={{ margin: '0 0 10px', paddingBottom: 3, textAlign: 'center', color: '#b45309', borderBottom: '1px solid #e5e7eb', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.2em' }}>{L.experience}</h2>
           {data.experience.map(exp => (
-            <div key={exp.id} className="mb-4">
-              <div className="flex justify-between items-baseline">
-                <h3 className="font-semibold">{exp.position}</h3>
-                <span className="text-xs text-gray-400 italic">{exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</span>
+            <div key={exp.id} data-export-group="experience-entry" data-export-meaningful="true" className="mb-4" style={{ marginBottom: 11 }}>
+              <div data-elegant-formal-entry-row="true" className="flex justify-between items-baseline" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', alignItems: 'baseline', columnGap: 16 }}>
+                <h3 className="font-semibold" style={{ margin: 0, minWidth: 0, fontWeight: 600, color: '#111827', lineHeight: 1.25 }}>{exp.position}</h3>
+                <span className="text-xs text-gray-400 italic" style={{ flexShrink: 0, color: '#9ca3af', fontSize: 12, fontStyle: 'italic', whiteSpace: 'nowrap' }}>{exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</span>
               </div>
-              <p className="text-amber-700 text-xs">{exp.company}</p>
-              <p className="mt-1 text-gray-600 whitespace-pre-line">{exp.description}</p>
+              <p className="text-amber-700 text-xs" style={{ margin: '4px 0 0', color: '#b45309', fontSize: 12, lineHeight: 1.25 }}>{exp.company}</p>
+              {exp.description && (
+                <ul
+                  data-export-bullet-list="elegant-formal"
+                  className="mt-1 text-gray-600"
+                  style={{ margin: '4px 0 0', paddingLeft: 18, color: '#4b5563', listStyleType: 'disc', listStylePosition: 'outside' }}
+                >
+                  {descriptionLines(exp.description).map((line, index) => (
+                    <li
+                      key={`${exp.id}-desc-${index}`}
+                      data-export-meaningful="true"
+                      data-export-bullet-item="elegant-formal"
+                      style={{ margin: '0 0 2px', paddingLeft: 2, whiteSpace: 'normal', lineHeight: 1.24 }}
+                    >
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           ))}
         </section>
       )}
       {data.education.length > 0 && (
-        <section className="mb-6">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-4 text-center border-b border-gray-200 pb-1">{L.education}</h2>
+        <section data-export-group="education-section" className="mb-6" style={{ marginBottom: 14 }}>
+          <h2 data-export-meaningful="true" className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-4 text-center border-b border-gray-200 pb-1" style={{ margin: '0 0 10px', paddingBottom: 3, textAlign: 'center', color: '#b45309', borderBottom: '1px solid #e5e7eb', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.2em' }}>{L.education}</h2>
           {data.education.map(edu => (
-            <div key={edu.id} className="mb-2 text-center">
-              <h3 className="font-semibold">{edu.degree}</h3>
-              <p className="text-xs text-gray-500">{edu.school} | {edu.startDate} - {edu.endDate}</p>
+            <div key={edu.id} data-export-group="education-entry" data-export-meaningful="true" className="mb-2 text-center" style={{ marginBottom: 8, textAlign: 'center' }}>
+              <h3 className="font-semibold" style={{ margin: 0, fontWeight: 600, color: '#111827' }}>{edu.degree}</h3>
+              <p className="text-xs text-gray-500" style={{ margin: 0, color: '#6b7280', fontSize: 12 }}>{edu.school} | {edu.startDate} - {edu.endDate}</p>
             </div>
           ))}
         </section>
       )}
-      <div className="grid grid-cols-3 gap-6 text-center">
+      <div data-export-group="skills-languages-block" className="grid grid-cols-3 gap-6 text-center" style={{ display: 'grid', gridTemplateColumns: '1.65fr 0.7fr 0.8fr', gap: 14, textAlign: 'center', borderTop: '1px solid #e5e7eb', paddingTop: 9 }}>
         {data.skills.length > 0 && (
-          <section>
-            <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-2">{L.skills}</h2>
-            {data.skills.map((s, i) => <p key={i} className="text-xs text-gray-600">{s}</p>)}
+          <section data-export-group="skills-section">
+            <h2 data-export-meaningful="true" className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-2" style={{ margin: '0 0 8px', color: '#b45309', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.2em' }}>{L.skills}</h2>
+            <div data-export-skill-row="elegant-formal" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '4px 10px', lineHeight: 1.3 }}>
+              {data.skills.map((s, i) => (
+                <span
+                  key={i}
+                  data-export-meaningful="true"
+                  data-export-skill-chip="elegant-formal"
+                  className="text-xs text-gray-600"
+                  style={{ display: 'inline-flex', whiteSpace: 'nowrap', flexShrink: 0, color: '#4b5563', fontSize: 12 }}
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
           </section>
         )}
         {data.languages.length > 0 && (
-          <section>
-            <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-2">{L.languages}</h2>
-            {data.languages.map((l, i) => <p key={i} className="text-xs text-gray-600">{l.name} ({l.level})</p>)}
+          <section data-export-group="languages-section">
+            <h2 data-export-meaningful="true" className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-2" style={{ margin: '0 0 8px', color: '#b45309', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.2em' }}>{L.languages}</h2>
+            <div data-export-language-row="elegant-formal" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '4px 10px', lineHeight: 1.3 }}>
+              {data.languages.map((l, i) => (
+                <span key={i} data-export-meaningful="true" className="text-xs text-gray-600" style={{ display: 'inline-flex', whiteSpace: 'nowrap', flexShrink: 0, color: '#4b5563', fontSize: 12 }}>{l.name} ({l.level})</span>
+              ))}
+            </div>
           </section>
         )}
         {data.certifications.length > 0 && (
-          <section>
-            <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-2">{L.certifications}</h2>
-            {data.certifications.map((c, i) => <p key={i} className="text-xs text-gray-600">{c}</p>)}
+          <section data-export-group="certifications-section">
+            <h2 data-export-meaningful="true" className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-700 mb-2" style={{ margin: '0 0 8px', color: '#b45309', fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.2em' }}>{L.certifications}</h2>
+            <div data-export-certification-row="elegant-formal" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '4px 10px', lineHeight: 1.3 }}>
+              {data.certifications.map((c, i) => (
+                <span key={i} data-export-meaningful="true" className="text-xs text-gray-600" style={{ display: 'inline-flex', whiteSpace: 'nowrap', flexShrink: 0, color: '#4b5563', fontSize: 12 }}>{c}</span>
+              ))}
+            </div>
           </section>
         )}
       </div>

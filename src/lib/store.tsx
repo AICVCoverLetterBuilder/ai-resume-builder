@@ -19,6 +19,21 @@ import {
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
 
+type PersonalPhotoFields = {
+  originalPhoto?: string;
+  circularPhoto?: string;
+  rectangularPhoto?: string;
+};
+
+function cvPhotoDraftFields(cv: CVData, fallback?: { originalPhoto?: string; circularPhoto?: string; rectangularPhoto?: string }) {
+  const personal = cv.personal as typeof cv.personal & PersonalPhotoFields;
+  return {
+    originalPhoto: personal.originalPhoto ?? fallback?.originalPhoto,
+    circularPhoto: personal.circularPhoto ?? fallback?.circularPhoto,
+    rectangularPhoto: personal.rectangularPhoto ?? fallback?.rectangularPhoto,
+  };
+}
+
 export type AiGateResult =
   | { status: 'ready'; token: string }
   | { status: 'syncing'; reason: 'missing-token' | 'token-sync-failed' }
@@ -435,8 +450,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [readAiGateState]);
 
   const saveCv = useCallback((cv: CVData) => {
+    const existingDraft = loadCvDraft();
+    const photoFields = cvPhotoDraftFields(cv, existingDraft ?? undefined);
     internalSetCurrentCv(cv);
-    saveCvDraft({ cv, savedAt: new Date().toISOString() });
+    saveCvDraft({
+      cv,
+      ...photoFields,
+      savedAt: new Date().toISOString(),
+    });
     setLastCvSavedAt(Date.now());
   }, []);
 
@@ -464,7 +485,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const setCurrentCv = useCallback((cv: CVData | null) => {
     internalSetCurrentCv(cv);
     if (cv) {
-      saveCvDraft({ cv, savedAt: new Date().toISOString() });
+      const existingDraft = loadCvDraft();
+      const photoFields = cvPhotoDraftFields(cv, existingDraft ?? undefined);
+      saveCvDraft({
+        cv,
+        ...photoFields,
+        savedAt: new Date().toISOString(),
+      });
     } else {
       clearCvDraft();
     }
@@ -485,11 +512,31 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const persistCurrentDraft = useCallback(
     (extra?: { originalPhoto?: string; circularPhoto?: string; rectangularPhoto?: string }) => {
       if (!currentCv) return;
+      const existingDraft = loadCvDraft();
+      const clearPhotos = Boolean(
+        extra
+        && extra.originalPhoto === undefined
+        && extra.circularPhoto === undefined
+        && extra.rectangularPhoto === undefined,
+      );
+      const currentPersonal = currentCv.personal as typeof currentCv.personal & PersonalPhotoFields;
+      const originalPhoto = clearPhotos ? undefined : (extra?.originalPhoto ?? currentPersonal.originalPhoto ?? existingDraft?.originalPhoto);
+      const circularPhoto = clearPhotos ? undefined : (extra?.circularPhoto ?? currentPersonal.circularPhoto ?? existingDraft?.circularPhoto);
+      const rectangularPhoto = clearPhotos ? undefined : (extra?.rectangularPhoto ?? currentPersonal.rectangularPhoto ?? existingDraft?.rectangularPhoto);
+      const cvWithPhotoFields: CVData = {
+        ...currentCv,
+        personal: {
+          ...currentCv.personal,
+          originalPhoto,
+          circularPhoto,
+          rectangularPhoto,
+        } as CVData['personal'] & PersonalPhotoFields,
+      };
       saveCvDraft({
-        cv: currentCv,
-        originalPhoto: extra?.originalPhoto,
-        circularPhoto: extra?.circularPhoto,
-        rectangularPhoto: extra?.rectangularPhoto,
+        cv: cvWithPhotoFields,
+        originalPhoto,
+        circularPhoto,
+        rectangularPhoto,
         savedAt: new Date().toISOString(),
       });
       setLastCvSavedAt(Date.now());

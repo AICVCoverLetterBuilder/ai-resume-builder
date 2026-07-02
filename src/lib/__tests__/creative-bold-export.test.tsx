@@ -313,12 +313,12 @@ describe('Creative Bold export routing and rendering', () => {
 
   test('Creative Bold is included in styled html2canvas clone and image paths', () => {
     const src = exportSource();
-    expect(src).toContain("type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic' | 'creative-bold' | 'creative-artistic'");
+    expect(src).toContain("type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic' | 'creative-bold' | 'creative-artistic' | 'elegant-formal'");
     expect(src).toContain('function isCreativeBoldCaptureTarget');
     expect(src).toContain("if (isCreativeBoldCaptureTarget(target)) return 'creative-bold'");
     expect(src).toContain('normalizeCreativeBoldPdfTextStyles');
     expect(src).toContain("captureTemplateId === 'creative-bold'");
-    expect(src).toContain("captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic'");
+    expect(src).toContain("captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal'");
   });
 
   test('Creative Bold PDF errors do not route to Android/browser print fallback', () => {

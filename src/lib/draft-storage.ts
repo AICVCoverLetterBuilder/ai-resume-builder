@@ -19,6 +19,35 @@ export interface CvDraftData {
   savedAt: string;
 }
 
+type PersonalPhotoFields = {
+  originalPhoto?: string;
+  circularPhoto?: string;
+  rectangularPhoto?: string;
+};
+
+function withPersonalPhotoFields(data: CvDraftData): CvDraftData {
+  const personal = data.cv.personal as typeof data.cv.personal & PersonalPhotoFields;
+  const originalPhoto = personal.originalPhoto ?? data.originalPhoto;
+  const circularPhoto = personal.circularPhoto ?? data.circularPhoto;
+  const rectangularPhoto = personal.rectangularPhoto ?? data.rectangularPhoto;
+
+  return {
+    ...data,
+    cv: {
+      ...data.cv,
+      personal: {
+        ...personal,
+        ...(originalPhoto !== undefined ? { originalPhoto } : {}),
+        ...(circularPhoto !== undefined ? { circularPhoto } : {}),
+        ...(rectangularPhoto !== undefined ? { rectangularPhoto } : {}),
+      },
+    },
+    originalPhoto,
+    circularPhoto,
+    rectangularPhoto,
+  };
+}
+
 function isBrowser(): boolean {
   return typeof window !== 'undefined';
 }
@@ -26,7 +55,7 @@ function isBrowser(): boolean {
 export function saveCvDraft(data: CvDraftData): void {
   if (!isBrowser()) return;
   try {
-    localStorage.setItem(CV_DRAFT_KEY, JSON.stringify(data));
+    localStorage.setItem(CV_DRAFT_KEY, JSON.stringify(withPersonalPhotoFields(data)));
   } catch (err) {
     // localStorage quota exceeded — silently ignore; data survives in RAM
     console.warn('[draft] Failed to save CV draft:', err);
@@ -41,7 +70,7 @@ export function loadCvDraft(): CvDraftData | null {
     const parsed = JSON.parse(stored) as CvDraftData;
     // Basic validation
     if (!parsed.cv || typeof parsed.cv !== 'object') return null;
-    return parsed;
+    return withPersonalPhotoFields(parsed);
   } catch {
     return null;
   }

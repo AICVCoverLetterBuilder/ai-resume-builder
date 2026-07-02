@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useI18n } from '@/lib/i18n/context';
@@ -8,7 +8,7 @@ import { useApp, checkProAccess } from '@/lib/store';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
-import { exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
+import { exportElegantFormalPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
 import type { SaveFileResult } from '@/lib/native-save';
@@ -45,6 +45,12 @@ import { UpgradeBuilderBanner, FreeLimitModal, JobAnalyzerProModal, AiImprovemen
 import { PremiumAIButton, ProBadge } from '@/components/PremiumAIButton';
 import { JobAnalysisResultScreen, JobAnalysisLoadingState } from '@/components/JobAnalysisResultScreen';
 import { TemplatePreview } from '@/components/TemplatePreview';
+import {
+  createElegantFormalPortraitPhoto,
+  isCleanElegantFormalPortraitPhoto,
+  prepareElegantFormalCanonicalPhoto,
+  type ElegantFormalCanonicalPhotoResult,
+} from '@/lib/elegant-formal-photo';
 
 const emptyCV = (): CVData => ({
   id: crypto.randomUUID(),
@@ -70,10 +76,38 @@ const emptyEdu = (): Education => ({
   id: crypto.randomUUID(), school: '', degree: '', startDate: '', endDate: '', description: '',
 });
 
+const RECT_PHOTO_TEMPLATES: TemplateId[] = ['elegant-formal', 'executive-premium'];
+
+type PersonalPhotoVariants = {
+  originalPhoto?: string;
+  rectangularPhoto?: string;
+  circularPhoto?: string;
+};
+
+function getPersonalPhotoVariants(cvData: CVData): PersonalPhotoVariants {
+  const personal = cvData.personal as typeof cvData.personal & PersonalPhotoVariants;
+  return {
+    originalPhoto: personal.originalPhoto,
+    rectangularPhoto: personal.rectangularPhoto,
+    circularPhoto: personal.circularPhoto,
+  };
+}
+
+function describeElegantFormalPhotoField(fieldName: string, value?: string): string {
+  if (!value) return `${fieldName}=missing`;
+  const mime = value.match(/^data:([^;,]+)/i)?.[1] ?? 'unknown';
+  return `${fieldName}=present mime=${mime} length=${value.length}`;
+}
+
+function stripPhotoCacheFragment(value?: string): string | undefined {
+  return value?.split('#')[0];
+}
+
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
-  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, lastCvSavedAt, persistCurrentDraft, getAiGate } = useApp();
+  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, lastCvSavedAt, getAiGate } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
+  const cvRef = useRef<CVData>(cv);
   const [step, setStep] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const [skillInput, setSkillInput] = useState('');
@@ -301,26 +335,259 @@ export default function CVBuilderPage() {
     [cv.languages, langName, locale],
   );
 
-  // Templates that need a rectangular photo (no circular mask/transparency artifacts).
-  const RECT_PHOTO_TEMPLATES: TemplateId[] = ['elegant-formal', 'executive-premium'];
-
   // ── Three-source photo state ─────────────────────────────────────────────────
   // originalPhotoDataUrl: raw file from disk — NEVER circular/rect cropped.
   //   Set when PhotoUpload calls onChange with the third argument.
   // circularPhotoDataUrl: circular-clip PNG, used by circle-shaped templates.
   // rectangularPhotoDataUrl: 3:4 JPEG derived from originalPhotoDataUrl (not from the circular crop).
   const [originalPhotoDataUrl, setOriginalPhotoDataUrl] = useState<string | undefined>(
-    () => loadCvDraft()?.originalPhoto ?? undefined,
+    () => {
+      const draft = loadCvDraft();
+      return getPersonalPhotoVariants(draft?.cv ?? cv).originalPhoto ?? draft?.originalPhoto;
+    },
   );
   const [circularPhotoDataUrl, setCircularPhotoDataUrl] = useState<string | undefined>(
-    () => loadCvDraft()?.circularPhoto ?? undefined,
+    () => {
+      const draft = loadCvDraft();
+      return getPersonalPhotoVariants(draft?.cv ?? cv).circularPhoto ?? draft?.circularPhoto;
+    },
   );
   const [rectangularPhotoDataUrl, setRectangularPhotoDataUrl] = useState<string | undefined>(
-    () => loadCvDraft()?.rectangularPhoto ?? undefined,
+    () => {
+      const draft = loadCvDraft();
+      return getPersonalPhotoVariants(draft?.cv ?? cv).rectangularPhoto ?? draft?.rectangularPhoto;
+    },
   );
+  const [validatedElegantFormalFallbackPhoto, setValidatedElegantFormalFallbackPhoto] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    cvRef.current = cv;
+  }, [cv]);
 
   // rectangularPhotoDataUrl is set directly by handlePhotoChange from the crop modal output.
   // No useEffect re-generation — the crop modal produces it with the user's exact framing.
+  useEffect(() => {
+    const variants = getPersonalPhotoVariants(cv);
+    const sourceOriginal = variants.originalPhoto;
+    if (cv.templateId !== 'elegant-formal' || !sourceOriginal || variants.rectangularPhoto) return;
+    let cancelled = false;
+    createElegantFormalPortraitPhoto(sourceOriginal)
+      .then(({ dataUrl }) => {
+        if (cancelled) return;
+        setRectangularPhotoDataUrl(prev => (prev === dataUrl ? prev : dataUrl));
+        setCv(prev => {
+          if (getPersonalPhotoVariants(prev).rectangularPhoto === dataUrl) return prev;
+          const next = { ...prev, personal: { ...prev.personal, rectangularPhoto: dataUrl }, updatedAt: new Date().toISOString() };
+          cvRef.current = next;
+          setCurrentCv(next);
+          return next;
+        });
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [cv, cv.templateId, setCurrentCv]);
+
+  useEffect(() => {
+    const variants = getPersonalPhotoVariants(cv);
+    const rectPhoto = variants.rectangularPhoto;
+    if (cv.templateId !== 'elegant-formal' || variants.originalPhoto || !rectPhoto) {
+      setValidatedElegantFormalFallbackPhoto(undefined);
+      return;
+    }
+    let cancelled = false;
+    isCleanElegantFormalPortraitPhoto(rectPhoto)
+      .then((isClean) => {
+        if (!cancelled) setValidatedElegantFormalFallbackPhoto(isClean ? rectPhoto : undefined);
+      })
+      .catch(() => {
+        if (!cancelled) setValidatedElegantFormalFallbackPhoto(undefined);
+      });
+    return () => { cancelled = true; };
+  }, [cv, cv.templateId]);
+
+  const photoForCurrentTemplate = useMemo(() => (
+    cv.templateId === 'elegant-formal'
+      ? (getPersonalPhotoVariants(cv).originalPhoto ? getPersonalPhotoVariants(cv).rectangularPhoto : validatedElegantFormalFallbackPhoto)
+      : RECT_PHOTO_TEMPLATES.includes(cv.templateId)
+      ? (getPersonalPhotoVariants(cv).rectangularPhoto ?? rectangularPhotoDataUrl ?? cv.personal.photo)
+      : (getPersonalPhotoVariants(cv).circularPhoto ?? circularPhotoDataUrl ?? cv.personal.photo)
+  ), [circularPhotoDataUrl, cv, rectangularPhotoDataUrl, validatedElegantFormalFallbackPhoto]);
+
+  const hasLoadedElegantFormalPreviewPhoto = useCallback((preferredPreviewId?: string): boolean => {
+    if (typeof document === 'undefined') return false;
+    const roots = [
+      preferredPreviewId ? document.getElementById(preferredPreviewId) : null,
+      document.getElementById('cv-preview'),
+      document.getElementById('cv-inline-preview'),
+    ].filter(Boolean) as HTMLElement[];
+    return roots.some((root) => {
+      const img = root.querySelector<HTMLImageElement>('[data-template-id="elegant-formal"] img');
+      return Boolean(img?.src && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0);
+    });
+  }, []);
+
+  const getElegantFormalPreviewPhotoSrc = useCallback((preferredPreviewId?: string): string | undefined => {
+    if (typeof document === 'undefined') return undefined;
+    const roots = [
+      preferredPreviewId ? document.getElementById(preferredPreviewId) : null,
+      document.getElementById('cv-preview'),
+      document.getElementById('cv-inline-preview'),
+    ].filter(Boolean) as HTMLElement[];
+    for (const root of roots) {
+      const img = root.querySelector<HTMLImageElement>('[data-template-id="elegant-formal"] img');
+      const src = stripPhotoCacheFragment(img?.currentSrc || img?.src || img?.getAttribute('src') || undefined);
+      if (src) return src;
+    }
+    return undefined;
+  }, []);
+
+  const ensureElegantFormalPhotoForExport = useCallback(async (preferredPreviewId?: string): Promise<ElegantFormalCanonicalPhotoResult | null> => {
+    const liveCv = cvRef.current;
+    if (liveCv.templateId !== 'elegant-formal') return null;
+    const draft = loadCvDraft();
+    const personalVariants = getPersonalPhotoVariants(liveCv);
+    const draftVariants = draft ? getPersonalPhotoVariants(draft.cv) : {};
+    const originalPhoto = personalVariants.originalPhoto ?? draftVariants.originalPhoto ?? draft?.originalPhoto;
+    const rectangularPhoto = personalVariants.rectangularPhoto ?? draftVariants.rectangularPhoto ?? draft?.rectangularPhoto;
+    const previewPhoto = getElegantFormalPreviewPhotoSrc(preferredPreviewId);
+    const currentPhoto = stripPhotoCacheFragment(liveCv.personal.photo);
+
+    const metadata = [
+      describeElegantFormalPhotoField('cv.personal.originalPhoto', personalVariants.originalPhoto),
+      describeElegantFormalPhotoField('cv.personal.rectangularPhoto', personalVariants.rectangularPhoto),
+      describeElegantFormalPhotoField('cv.personal.circularPhoto', personalVariants.circularPhoto),
+      describeElegantFormalPhotoField('cv.personal.photo', liveCv.personal.photo),
+      describeElegantFormalPhotoField('local.originalPhotoDataUrl', originalPhotoDataUrl),
+      describeElegantFormalPhotoField('local.rectangularPhotoDataUrl', rectangularPhotoDataUrl),
+      describeElegantFormalPhotoField('preview.img.src', previewPhoto),
+    ];
+
+    const tryPrepare = async (
+      input: Parameters<typeof prepareElegantFormalCanonicalPhoto>[0],
+      sourceField: string,
+    ): Promise<ElegantFormalCanonicalPhotoResult | null> => {
+      try {
+        const result = await prepareElegantFormalCanonicalPhoto(input);
+        if (result) {
+          if (process.env.NODE_ENV !== 'production') {
+            console.info('[Elegant Formal export photo]', [...metadata, `selectedSource=${sourceField}`, 'code=ELEGANT_FORMAL_PHOTO_READY'].join(' | '));
+          }
+          return result;
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[Elegant Formal export photo]', [...metadata, `selectedSource=${sourceField}`, `code=ELEGANT_FORMAL_PHOTO_PREPARE_FAILED`, `detail=${err instanceof Error ? err.message : 'unknown'}`].join(' | '));
+        }
+      }
+      return null;
+    };
+
+    const preparedPhoto =
+      await tryPrepare({ originalPhoto, rectangularPhoto }, originalPhoto ? 'cv.personal.originalPhoto' : rectangularPhoto ? 'cv.personal.rectangularPhoto' : 'none')
+      ?? await tryPrepare({ rectangularPhoto: previewPhoto }, 'preview.img.src')
+      ?? await tryPrepare({ rectangularPhoto: currentPhoto }, 'cv.personal.photo');
+
+    if (preparedPhoto) {
+      const { dataUrl } = preparedPhoto;
+      setRectangularPhotoDataUrl(prev => (prev === dataUrl ? prev : dataUrl));
+      setCv(prev => {
+        const next = {
+          ...prev,
+          personal: {
+            ...prev.personal,
+            originalPhoto: originalPhoto ?? getPersonalPhotoVariants(prev).originalPhoto,
+            rectangularPhoto: dataUrl,
+            photo: dataUrl,
+            photoEnabled: prev.personal.photoEnabled ?? true,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        cvRef.current = next;
+        setCurrentCv(next);
+        return next;
+      });
+      return preparedPhoto;
+    }
+
+    const variants = getPersonalPhotoVariants(liveCv);
+    const hasPersistedPhotoField = Boolean(
+      variants.originalPhoto
+      || variants.rectangularPhoto
+      || variants.circularPhoto
+      || liveCv.personal.photo
+    );
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[Elegant Formal export photo]', [
+        ...metadata,
+        `selectedSource=${hasPersistedPhotoField || hasLoadedElegantFormalPreviewPhoto(preferredPreviewId) ? 'recoverable-source-rejected' : 'none'}`,
+        `code=${hasPersistedPhotoField || previewPhoto ? 'ELEGANT_FORMAL_PHOTO_STATE_MISMATCH' : 'ELEGANT_FORMAL_NO_PHOTO'}`,
+      ].join(' | '));
+    }
+    return null;
+  }, [getElegantFormalPreviewPhotoSrc, hasLoadedElegantFormalPreviewPhoto, originalPhotoDataUrl, rectangularPhotoDataUrl, setCurrentCv]);
+
+  const prepareElegantFormalPdfPhotoDataUrl = useCallback(async (): Promise<string | null> => {
+    const liveCv = cvRef.current;
+    if (liveCv.templateId !== 'elegant-formal') return null;
+    const personalVariants = getPersonalPhotoVariants(liveCv);
+    const originalPhoto = personalVariants.originalPhoto;
+    const rectangularPhoto = originalPhoto ? undefined : personalVariants.rectangularPhoto;
+    const selectedSource = originalPhoto
+      ? 'cv.personal.originalPhoto'
+      : rectangularPhoto
+        ? 'cv.personal.rectangularPhoto'
+        : 'none';
+
+    try {
+      const prepared = await prepareElegantFormalCanonicalPhoto({ originalPhoto, rectangularPhoto });
+      if (!prepared) {
+        if (originalPhoto) throw new Error('ELEGANT_FORMAL_PDF_PHOTO_PROP_MISSING');
+        if (process.env.NODE_ENV !== 'production') {
+          console.info('[Elegant Formal PDF photo]', `selectedSource=${selectedSource} | code=ELEGANT_FORMAL_PDF_NO_VALID_SOURCE`);
+        }
+        return null;
+      }
+
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('[Elegant Formal PDF photo]', [
+          `selectedSource=${selectedSource}`,
+          `sourceType=${prepared.source}`,
+          `sourceDimensions=${prepared.metrics?.sourceWidth ?? 'unknown'}x${prepared.metrics?.sourceHeight ?? 'unknown'}`,
+          `canonicalDimensions=${prepared.width}x${prepared.height}`,
+          `mime=${prepared.mimeType}`,
+          'code=ELEGANT_FORMAL_PDF_PHOTO_READY',
+        ].join(' | '));
+      }
+
+      setRectangularPhotoDataUrl(prev => (prev === prepared.dataUrl ? prev : prepared.dataUrl));
+      setCv(prev => {
+        const next = {
+          ...prev,
+          personal: {
+            ...prev.personal,
+            originalPhoto: originalPhoto ?? getPersonalPhotoVariants(prev).originalPhoto,
+            rectangularPhoto: prepared.dataUrl,
+            photoEnabled: prev.personal.photoEnabled ?? true,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        cvRef.current = next;
+        setCurrentCv(next);
+        return next;
+      });
+      return prepared.dataUrl;
+    } catch (err) {
+      if (originalPhoto) throw new Error('ELEGANT_FORMAL_PDF_PHOTO_PROP_MISSING');
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[Elegant Formal PDF photo]', [
+          `selectedSource=${selectedSource}`,
+          'code=ELEGANT_FORMAL_PDF_PHOTO_PREPARE_FAILED',
+          `detail=${err instanceof Error ? err.message : 'unknown'}`,
+        ].join(' | '));
+      }
+      return null;
+    }
+  }, [setCurrentCv]);
 
   const localizedPreviewCv = useMemo<CVData>(
     () => {
@@ -335,7 +602,9 @@ export default function CVBuilderPage() {
       if (RECT_PHOTO_TEMPLATES.includes(cv.templateId)) {
         // Rectangle templates: use rectangular photo derived from the original upload.
         // Append '#rect' cache-buster so the browser never reuses a stale circular decode.
-        const rectUrl = rectangularPhotoDataUrl;
+        const rectUrl = cv.templateId === 'elegant-formal'
+          ? (getPersonalPhotoVariants(cv).originalPhoto ? getPersonalPhotoVariants(cv).rectangularPhoto : validatedElegantFormalFallbackPhoto)
+          : (getPersonalPhotoVariants(cv).rectangularPhoto ?? rectangularPhotoDataUrl ?? cv.personal.photo);
         if (rectUrl) {
           const cacheBustedUrl = rectUrl.includes('#') ? rectUrl : rectUrl + '#rect';
           return { ...base, personal: { ...base.personal, photo: cacheBustedUrl } };
@@ -345,13 +614,13 @@ export default function CVBuilderPage() {
       }
       // Circle templates: use the circular crop stored in circularPhotoDataUrl.
       // Fall back to cv.personal.photo for any existing data loaded from storage.
-      if (circularPhotoDataUrl) {
-        return { ...base, personal: { ...base.personal, photo: circularPhotoDataUrl } };
+      const circleUrl = getPersonalPhotoVariants(cv).circularPhoto ?? circularPhotoDataUrl;
+      if (circleUrl) {
+        return { ...base, personal: { ...base.personal, photo: circleUrl } };
       }
       return base;
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [cv, locale, circularPhotoDataUrl, rectangularPhotoDataUrl],
+    [cv, locale, circularPhotoDataUrl, rectangularPhotoDataUrl, validatedElegantFormalFallbackPhoto],
   );
 
   useEffect(() => {
@@ -404,28 +673,54 @@ export default function CVBuilderPage() {
     // photo        = circle PNG (or rect JPEG when photoShape='rectangle' during the crop session)
     // originalPhoto = raw file data URL — kept for reference / re-crop
     // rectPhoto    = 300×400 JPEG generated with the exact same zoom/offset the user chose
-    setCv(prev => ({ ...prev, personal: { ...prev.personal, photo, photoEnabled: enabled } }));
-    let orig: string | undefined;
-    let circ: string | undefined;
-    let rect: string | undefined;
     if (photo === undefined) {
       setOriginalPhotoDataUrl(undefined);
       setCircularPhotoDataUrl(undefined);
       setRectangularPhotoDataUrl(undefined);
-    } else {
-      if (originalPhoto) {
-        setOriginalPhotoDataUrl(originalPhoto);
-        orig = originalPhoto;
-      }
-      setCircularPhotoDataUrl(photo);
-      circ = photo;
-      if (rectPhoto) {
-        setRectangularPhotoDataUrl(rectPhoto);
-        rect = rectPhoto;
-      }
+      setCv(prev => {
+        const next = {
+          ...prev,
+          personal: {
+            ...prev.personal,
+            photo: undefined,
+            photoEnabled: enabled,
+            originalPhoto: undefined,
+            circularPhoto: undefined,
+            rectangularPhoto: undefined,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        cvRef.current = next;
+        setCurrentCv(next);
+        return next;
+      });
+      return;
     }
-    // Persist photo data URLs to the draft immediately
-    persistCurrentDraft({ originalPhoto: orig, circularPhoto: circ, rectangularPhoto: rect });
+
+    const nextOriginal = originalPhoto;
+    const nextCircular = photo;
+    const nextRectangular = rectPhoto;
+    if (nextOriginal) setOriginalPhotoDataUrl(nextOriginal);
+    setCircularPhotoDataUrl(nextCircular);
+    if (nextRectangular) setRectangularPhotoDataUrl(nextRectangular);
+
+    setCv(prev => {
+      const next = {
+        ...prev,
+        personal: {
+          ...prev.personal,
+          photo,
+          photoEnabled: enabled,
+          originalPhoto: nextOriginal ?? getPersonalPhotoVariants(prev).originalPhoto,
+          circularPhoto: nextCircular ?? getPersonalPhotoVariants(prev).circularPhoto,
+          rectangularPhoto: nextRectangular ?? getPersonalPhotoVariants(prev).rectangularPhoto,
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      cvRef.current = next;
+      setCurrentCv(next);
+      return next;
+    });
   };
 
   const getCurrentProTokenOrToast = (openUpgradeModal: () => void) => {
@@ -642,24 +937,30 @@ export default function CVBuilderPage() {
       setShowDownloadMenu(false);
       setIsWordExporting(true);
       try {
+        const liveCv = cvRef.current;
         let saveResult: SaveFileResult;
         let fallbackFileName: string;
-        if (cv.templateId === 'rirekisho') {
-          const exportBaseName = cv.personal.fullName || '履歴書';
-          saveResult = await exportRirekishoToDOCX(cv, exportBaseName);
+        if (liveCv.templateId === 'rirekisho') {
+          const exportBaseName = liveCv.personal.fullName || '履歴書';
+          saveResult = await exportRirekishoToDOCX(liveCv, exportBaseName);
           fallbackFileName = `${exportBaseName}.docx`;
         } else {
           // For rect-photo templates, use rectangularPhotoDataUrl (derived from original upload).
           // For circle templates, use circularPhotoDataUrl or cv.personal.photo.
           let photoForExport: string | undefined;
-          if (RECT_PHOTO_TEMPLATES.includes(cv.templateId)) {
-            photoForExport = rectangularPhotoDataUrl; // clean JPEG from original, no circular clip
+          let elegantFormalPhoto: ElegantFormalCanonicalPhotoResult | null = null;
+          if (liveCv.templateId === 'elegant-formal') {
+            elegantFormalPhoto = await ensureElegantFormalPhotoForExport();
+            photoForExport = elegantFormalPhoto?.dataUrl;
+          } else if (RECT_PHOTO_TEMPLATES.includes(liveCv.templateId)) {
+            photoForExport = rectangularPhotoDataUrl ?? liveCv.personal.photo; // clean JPEG from original when available
           } else {
-            photoForExport = circularPhotoDataUrl ?? cv.personal.photo;
+            photoForExport = circularPhotoDataUrl ?? liveCv.personal.photo;
           }
-          const cvForExport = { ...cv, personal: { ...cv.personal, photo: photoForExport } };
-          const exportBaseName = makeCvExportBaseName(cv.personal.fullName);
-          saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cv.templateId);
+          const latestCv = cvRef.current;
+          const cvForExport = { ...latestCv, personal: { ...latestCv.personal, photo: photoForExport } };
+          const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
+          saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cvForExport.templateId, { elegantFormalPhoto });
           fallbackFileName = `${exportBaseName}.docx`;
         }
         showCvExportSuccessToast(saveResult, 'docx', fallbackFileName);
@@ -682,16 +983,26 @@ export default function CVBuilderPage() {
       setShowDownloadMenu(false);
       setIsPdfExporting(true);
       try {
+        const liveCv = cvRef.current;
+        const exportFilename = makeCvExportBaseName(liveCv.personal.fullName);
+        if (liveCv.templateId === 'elegant-formal') {
+          const photoDataUrl = await prepareElegantFormalPdfPhotoDataUrl();
+          const latestCv = cvRef.current;
+          const saveResult = await exportElegantFormalPdf(latestCv, exportFilename, locale, { photoDataUrl });
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
         // ── Guard: for rect-photo templates, wait until rectangularPhotoDataUrl has been
         //    computed AND React has committed it to the DOM <img src> attribute.
         //    Poll for up to 3 s in 50 ms increments, then proceed regardless.
-        if (RECT_PHOTO_TEMPLATES.includes(cv.templateId) && originalPhotoDataUrl) {
+        if (RECT_PHOTO_TEMPLATES.includes(liveCv.templateId) && photoForCurrentTemplate) {
           const expectedFragment = '#rect';
           const deadline = Date.now() + 3000;
           while (Date.now() < deadline) {
             const exportNode = document.getElementById(previewId);
             const firstImg = exportNode?.querySelector('img');
-            if (firstImg && firstImg.src.includes(expectedFragment)) break;
+            if (firstImg && (firstImg.src.includes(expectedFragment) || firstImg.complete)) break;
             await new Promise(r => setTimeout(r, 50));
           }
           // Extra two rAFs to let the browser finish painting the new src
@@ -699,14 +1010,14 @@ export default function CVBuilderPage() {
           await new Promise(requestAnimationFrame);
         }
 
-        const exportFilename = makeCvExportBaseName(cv.personal.fullName);
         const saveResult = await exportToPDF(previewId, exportFilename);
         showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
         incrementDownloads('cv');
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
-        if (cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic') {
+        const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
+        if (cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal') {
           toast.error(t.cv.pdfExportFailed);
           return;
         }
@@ -874,7 +1185,7 @@ export default function CVBuilderPage() {
                   <div id="cv-preview" className="overflow-auto rounded-xl border border-border shadow-lg">
                     {TemplateComponent && (
                       <TemplateComponent
-                        key={`${cv.templateId}-${RECT_PHOTO_TEMPLATES.includes(cv.templateId) ? (rectangularPhotoDataUrl?.slice(-20) ?? 'no-rect') : (circularPhotoDataUrl?.slice(-20) ?? 'no-photo')}`}
+                        key={`${cv.templateId}-${photoForCurrentTemplate?.slice(-20) ?? 'no-photo'}`}
                         data={localizedPreviewCv}
                         locale={locale}
                       />
@@ -909,7 +1220,7 @@ export default function CVBuilderPage() {
                         photoEnabled={cv.personal.photoEnabled}
                         region={cv.region}
                         isPro={isPro}
-                        photoShape={(['elegant-formal', 'executive-premium'] as TemplateId[]).includes(cv.templateId) ? 'rectangle' : 'circle'}
+                        photoShape={RECT_PHOTO_TEMPLATES.includes(cv.templateId) ? 'rectangle' : 'circle'}
                         onChange={handlePhotoChange}
                       />
                       <div className="grid gap-4 sm:grid-cols-2">
@@ -1569,7 +1880,7 @@ export default function CVBuilderPage() {
                         <div id="cv-inline-preview" className="overflow-auto rounded-xl border border-border shadow-lg">
                           {TemplateComponent && (
                             <TemplateComponent
-                              key={`${cv.templateId}-${RECT_PHOTO_TEMPLATES.includes(cv.templateId) ? (rectangularPhotoDataUrl?.slice(-20) ?? 'no-rect') : (circularPhotoDataUrl?.slice(-20) ?? 'no-photo')}`}
+                              key={`${cv.templateId}-${photoForCurrentTemplate?.slice(-20) ?? 'no-photo'}`}
                               data={localizedPreviewCv}
                               locale={locale}
                             />
