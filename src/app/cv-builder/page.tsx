@@ -8,7 +8,7 @@ import { useApp, checkProAccess } from '@/lib/store';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
-import { exportAtsStandardPdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
+import { exportAtsStandardPdf, exportCleanSimplePdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
 import type { SaveFileResult } from '@/lib/native-save';
@@ -992,6 +992,13 @@ export default function CVBuilderPage() {
         if (liveCv.templateId === 'modern-minimal') {
           const latestCv = cvRef.current;
           const saveResult = await exportModernMinimalPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'clean-simple') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportCleanSimplePdf(latestCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
