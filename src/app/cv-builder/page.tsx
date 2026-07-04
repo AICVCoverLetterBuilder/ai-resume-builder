@@ -8,7 +8,7 @@ import { useApp, checkProAccess } from '@/lib/store';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
-import { exportElegantFormalPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
+import { exportAtsStandardPdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
 import type { SaveFileResult } from '@/lib/native-save';
@@ -954,6 +954,10 @@ export default function CVBuilderPage() {
             photoForExport = elegantFormalPhoto?.dataUrl;
           } else if (RECT_PHOTO_TEMPLATES.includes(liveCv.templateId)) {
             photoForExport = rectangularPhotoDataUrl ?? liveCv.personal.photo; // clean JPEG from original when available
+          } else if (liveCv.templateId === 'corporate-navy' || liveCv.templateId === 'contemporary-bold') {
+            photoForExport = (liveCv.personal as typeof liveCv.personal & { originalPhoto?: string }).originalPhoto
+              ?? circularPhotoDataUrl
+              ?? liveCv.personal.photo;
           } else {
             photoForExport = circularPhotoDataUrl ?? liveCv.personal.photo;
           }
@@ -985,10 +989,66 @@ export default function CVBuilderPage() {
       try {
         const liveCv = cvRef.current;
         const exportFilename = makeCvExportBaseName(liveCv.personal.fullName);
+        if (liveCv.templateId === 'modern-minimal') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportModernMinimalPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
         if (liveCv.templateId === 'elegant-formal') {
           const photoDataUrl = await prepareElegantFormalPdfPhotoDataUrl();
           const latestCv = cvRef.current;
           const saveResult = await exportElegantFormalPdf(latestCv, exportFilename, locale, { photoDataUrl });
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'ats-standard') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportAtsStandardPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'executive-premium') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportExecutivePremiumPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'nordic-clean') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportNordicCleanPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'tech-sidebar') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportTechSidebarPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'corporate-navy') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportCorporateNavyPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'contemporary-bold') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportContemporaryBoldPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'rirekisho') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportRirekishoPdf(latestCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -1017,7 +1077,7 @@ export default function CVBuilderPage() {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
         const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
-        if (cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal') {
+        if (cv.templateId === 'modern-minimal' || cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal' || cv.templateId === 'ats-standard' || cv.templateId === 'executive-premium' || cv.templateId === 'nordic-clean' || cv.templateId === 'tech-sidebar' || cv.templateId === 'corporate-navy' || cv.templateId === 'contemporary-bold' || cv.templateId === 'rirekisho') {
           toast.error(t.cv.pdfExportFailed);
           return;
         }

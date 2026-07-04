@@ -3,7 +3,15 @@ import { regionSettings } from './types';
 import { translations, type Locale } from './i18n/translations';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
+import { createAtsStandardPdfTemplate } from './ats-standard-pdf-template';
+import { createContemporaryBoldPdfTemplate } from './contemporary-bold-pdf-template';
+import { createCorporateNavyPdfTemplate } from './corporate-navy-pdf-template';
 import { createElegantFormalPdfTemplate } from './elegant-formal-pdf-template';
+import { createExecutivePremiumPdfTemplate } from './executive-premium-pdf-template';
+import { createModernMinimalPdfTemplate } from './modern-minimal-pdf-template';
+import { createNordicCleanPdfTemplate } from './nordic-clean-pdf-template';
+import { createRirekishoPdfTemplate } from './rirekisho-pdf-template';
+import { createTechSidebarPdfTemplate } from './tech-sidebar-pdf-template';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -149,7 +157,7 @@ const DOCX_TEMPLATE_CONFIGS: Record<string, DocxTemplateConfig> = {
     // centered uppercase section headings, italic centered summary, 2-col skills+langs
     accent: 'D97706', headerBg: '111827', headerText: 'FFFFFF',
     titleColor: 'FCD34D', headingColor: '9CA3AF', headingBorder: 'E5E7EB',
-    layout: 'centered-dark-header', sidebarPct: 0, photoShape: 'portrait', photoSize: 80, font: 'Georgia',
+    layout: 'centered-dark-header', sidebarPct: 0, photoShape: 'portrait', photoSize: 66, font: 'Georgia',
     showHeadingBorder: true, uppercaseHeadings: true, amberDivider: true,
     customLayout: 'executive-premium',
   },
@@ -186,7 +194,7 @@ const DOCX_TEMPLATE_CONFIGS: Record<string, DocxTemplateConfig> = {
     titleColor: '94A3B8', headingColor: '0F172A', headingBorder: 'E5E7EB',
     layout: 'dark-header', sidebarPct: 0, photoShape: 'circle', photoSize: 100, font: 'Calibri',
     showHeadingBorder: true, uppercaseHeadings: true, accentBar: true, rightAlignDates: true,
-    customLayout: 'contemporary-bold',
+    customLayout: 'corporate-navy',
   },
 };
 
@@ -428,6 +436,227 @@ type PreparedExportImage = {
   previousFrameDisplay: string;
 };
 
+type ExecutivePremiumCanonicalPhotoResult = {
+  dataUrl: string;
+  bytes: Uint8Array;
+  mimeType: 'image/jpeg';
+  width: 180;
+  height: 240;
+  source: 'original-photo' | 'validated-rectangular';
+};
+
+type NordicCleanCanonicalPhotoResult = {
+  dataUrl: string;
+  bytes: Uint8Array;
+  mimeType: 'image/jpeg';
+  width: 164;
+  height: 164;
+  source: 'original-photo';
+};
+
+type TechSidebarCanonicalPhotoResult = {
+  dataUrl: string;
+  bytes: Uint8Array;
+  mimeType: 'image/jpeg';
+  width: 164;
+  height: 164;
+  source: 'original-photo' | 'selected-photo';
+};
+
+type CorporateNavyCanonicalPhotoResult = {
+  dataUrl: string;
+  bytes: Uint8Array;
+  mimeType: 'image/jpeg';
+  width: 164;
+  height: 164;
+  source: 'original-photo' | 'selected-photo';
+};
+
+type ContemporaryBoldCanonicalPhotoResult = CorporateNavyCanonicalPhotoResult;
+
+type RirekishoCanonicalPhotoResult = {
+  dataUrl: string;
+  bytes: Uint8Array;
+  mimeType: 'image/jpeg';
+  width: 270;
+  height: 360;
+  source: 'original-photo' | 'selected-photo';
+};
+
+function inspectRectangularPhotoDataUrl(dataUrl: string): Promise<{
+  width: number;
+  height: number;
+  hasAlpha: boolean;
+  hasTransparentCorner: boolean;
+  hasArtificialBlackCorners: boolean;
+  hasArtificialWhiteCorners: boolean;
+}> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Could not inspect Executive Premium photo'));
+        return;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const read = (x: number, y: number) => {
+        const index = (y * canvas.width + x) * 4;
+        return {
+          r: imageData.data[index] ?? 0,
+          g: imageData.data[index + 1] ?? 0,
+          b: imageData.data[index + 2] ?? 0,
+          a: imageData.data[index + 3] ?? 0,
+        };
+      };
+      const corners = [
+        read(0, 0),
+        read(canvas.width - 1, 0),
+        read(0, canvas.height - 1),
+        read(canvas.width - 1, canvas.height - 1),
+      ];
+      const hasAlpha = imageData.data.some((value, index) => index % 4 === 3 && value < 255);
+      const transparent = corners.some(pixel => pixel.a < 255);
+      const black = corners.every(pixel => pixel.r <= 12 && pixel.g <= 12 && pixel.b <= 12);
+      const white = corners.every(pixel => pixel.r >= 245 && pixel.g >= 245 && pixel.b >= 245);
+      resolve({
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+        hasAlpha,
+        hasTransparentCorner: transparent,
+        hasArtificialBlackCorners: black,
+        hasArtificialWhiteCorners: white,
+      });
+    };
+    img.onerror = () => reject(new Error('Could not load Executive Premium photo'));
+    img.src = dataUrl;
+  });
+}
+
+function createExecutivePremiumPortraitPhoto(sourceDataUrl: string, targetWidth = 180, targetHeight = 240): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Could not create Executive Premium photo canvas'));
+        return;
+      }
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, targetWidth, targetHeight);
+      const scale = Math.max(targetWidth / img.naturalWidth, targetHeight / img.naturalHeight);
+      const scaledW = img.naturalWidth * scale;
+      const scaledH = img.naturalHeight * scale;
+      ctx.drawImage(img, (targetWidth - scaledW) / 2, (targetHeight - scaledH) / 2, scaledW, scaledH);
+      resolve(canvas.toDataURL('image/jpeg', 0.92));
+    };
+    img.onerror = () => reject(new Error('Could not load Executive Premium photo source'));
+    img.src = sourceDataUrl;
+  });
+}
+
+function createNordicCleanSquarePhoto(sourceDataUrl: string, targetSize = 164): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const sourceWidth = img.naturalWidth || img.width;
+      const sourceHeight = img.naturalHeight || img.height;
+      if (sourceWidth <= 0 || sourceHeight <= 0) {
+        reject(new Error('Could not read Nordic Clean photo dimensions'));
+        return;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = targetSize;
+      canvas.height = targetSize;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Could not create Nordic Clean photo canvas'));
+        return;
+      }
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, targetSize, targetSize);
+      const scale = Math.max(targetSize / sourceWidth, targetSize / sourceHeight);
+      const scaledWidth = sourceWidth * scale;
+      const scaledHeight = sourceHeight * scale;
+      const dx = (targetSize - scaledWidth) / 2;
+      const dy = (targetSize - scaledHeight) / 2;
+      ctx.drawImage(img, dx, dy, scaledWidth, scaledHeight);
+      resolve(canvas.toDataURL('image/jpeg', 0.92));
+    };
+    img.onerror = () => reject(new Error('Could not load Nordic Clean photo source'));
+    img.src = sourceDataUrl;
+  });
+}
+
+async function prepareExecutivePremiumCanonicalPhoto(cvData: CVData): Promise<ExecutivePremiumCanonicalPhotoResult | null> {
+  const showPhoto = cvData.personal.photoEnabled !== undefined
+    ? cvData.personal.photoEnabled
+    : cvData.region !== 'US';
+  if (!showPhoto) return null;
+
+  const personalPhotos = cvData.personal as CVData['personal'] & {
+    originalPhoto?: string;
+    rectangularPhoto?: string;
+  };
+  const original = personalPhotos.originalPhoto?.trim();
+  if (original) {
+    const prepared = await prepareCvPhotoForExport(original);
+    if (prepared) {
+      const dataUrl = await createExecutivePremiumPortraitPhoto(prepared.dataUrl);
+      return {
+        dataUrl,
+        bytes: dataUrlToBytes(dataUrl),
+        mimeType: 'image/jpeg',
+        width: 180,
+        height: 240,
+        source: 'original-photo',
+      };
+    }
+  }
+
+  const rectangular = personalPhotos.rectangularPhoto?.trim();
+  if (rectangular) {
+    const prepared = await prepareCvPhotoForExport(rectangular);
+    if (prepared) {
+      try {
+        const inspection = await inspectRectangularPhotoDataUrl(prepared.dataUrl);
+        if (
+          inspection.width > 0
+          && inspection.height > 0
+          && !inspection.hasAlpha
+          && !inspection.hasTransparentCorner
+          && !inspection.hasArtificialBlackCorners
+          && !inspection.hasArtificialWhiteCorners
+        ) {
+          const dataUrl = await createExecutivePremiumPortraitPhoto(prepared.dataUrl);
+          return {
+            dataUrl,
+            bytes: dataUrlToBytes(dataUrl),
+            mimeType: 'image/jpeg',
+            width: 180,
+            height: 240,
+            source: 'validated-rectangular',
+          };
+        }
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return null;
+}
+
 type InlineStyleSnapshot = {
   element: HTMLElement;
   style: string | null;
@@ -445,7 +674,7 @@ function restoreInlineStyles(snapshots: InlineStyleSnapshot[]): void {
   }
 }
 
-type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic' | 'creative-bold' | 'creative-artistic' | 'elegant-formal';
+type StyledPdfTemplateId = 'modern-minimal' | 'clean-simple' | 'professional-classic' | 'creative-bold' | 'creative-artistic' | 'elegant-formal' | 'ats-standard' | 'executive-premium' | 'nordic-clean' | 'tech-sidebar' | 'corporate-navy' | 'contemporary-bold' | 'rirekisho';
 
 function isModernMinimalCaptureTarget(target: HTMLElement): boolean {
   return target.dataset.templateId === 'modern-minimal'
@@ -477,6 +706,41 @@ function isElegantFormalCaptureTarget(target: HTMLElement): boolean {
     || Boolean(target.querySelector('[data-template-id="elegant-formal"]'));
 }
 
+function isAtsStandardCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'ats-standard'
+    || Boolean(target.querySelector('[data-template-id="ats-standard"]'));
+}
+
+function isExecutivePremiumCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'executive-premium'
+    || Boolean(target.querySelector('[data-template-id="executive-premium"]'));
+}
+
+function isNordicCleanCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'nordic-clean'
+    || Boolean(target.querySelector('[data-template-id="nordic-clean"]'));
+}
+
+function isTechSidebarCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'tech-sidebar'
+    || Boolean(target.querySelector('[data-template-id="tech-sidebar"]'));
+}
+
+function isCorporateNavyCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'corporate-navy'
+    || Boolean(target.querySelector('[data-template-id="corporate-navy"]'));
+}
+
+function isContemporaryBoldCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'contemporary-bold'
+    || Boolean(target.querySelector('[data-template-id="contemporary-bold"]'));
+}
+
+function isRirekishoCaptureTarget(target: HTMLElement): boolean {
+  return target.dataset.templateId === 'rirekisho'
+    || Boolean(target.querySelector('[data-template-id="rirekisho"]'));
+}
+
 function getTemplateCaptureRoot(target: HTMLElement, templateId: StyledPdfTemplateId): HTMLElement | null {
   return target.dataset.templateId === templateId
     ? target
@@ -490,6 +754,13 @@ function getExportStyleTemplateId(target: HTMLElement): StyledPdfTemplateId | nu
   if (isCreativeBoldCaptureTarget(target)) return 'creative-bold';
   if (isCreativeArtisticCaptureTarget(target)) return 'creative-artistic';
   if (isElegantFormalCaptureTarget(target)) return 'elegant-formal';
+  if (isAtsStandardCaptureTarget(target)) return 'ats-standard';
+  if (isExecutivePremiumCaptureTarget(target)) return 'executive-premium';
+  if (isNordicCleanCaptureTarget(target)) return 'nordic-clean';
+  if (isTechSidebarCaptureTarget(target)) return 'tech-sidebar';
+  if (isCorporateNavyCaptureTarget(target)) return 'corporate-navy';
+  if (isContemporaryBoldCaptureTarget(target)) return 'contemporary-bold';
+  if (isRirekishoCaptureTarget(target)) return 'rirekisho';
   return null;
 }
 
@@ -651,6 +922,13 @@ function fallbackExportColor(element: Element, property: string, templateId: Sty
   if (templateId === 'creative-bold') return fallbackCreativeBoldColor(element, property);
   if (templateId === 'creative-artistic') return fallbackCreativeArtisticColor(element, property);
   if (templateId === 'elegant-formal') return fallbackElegantFormalColor(element, property);
+  if (templateId === 'ats-standard') return fallbackProfessionalClassicColor(element, property);
+  if (templateId === 'executive-premium') return fallbackProfessionalClassicColor(element, property);
+  if (templateId === 'nordic-clean') return fallbackCleanSimpleColor(element, property);
+  if (templateId === 'tech-sidebar') return fallbackProfessionalClassicColor(element, property);
+  if (templateId === 'corporate-navy') return fallbackProfessionalClassicColor(element, property);
+  if (templateId === 'contemporary-bold') return fallbackProfessionalClassicColor(element, property);
+  if (templateId === 'rirekisho') return fallbackProfessionalClassicColor(element, property);
   return fallbackModernMinimalColor(element, property);
 }
 
@@ -1305,6 +1583,56 @@ function restorePreparedExportImages(prepared: PreparedExportImage[]): void {
 
 // ─── DOCX Export ─────────────────────────────────────────────────────────────────────────────
 
+export function createCorporateNavyCircularDocxPhotoDataUrl(dataUrl: string, outputSize = 512): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const sourceWidth = img.naturalWidth || img.width;
+      const sourceHeight = img.naturalHeight || img.height;
+      if (!sourceWidth || !sourceHeight) {
+        reject(new Error('CORPORATE_NAVY_DOCX_PHOTO_DIMENSIONS_MISSING'));
+        return;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = outputSize;
+      canvas.height = outputSize;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('CORPORATE_NAVY_DOCX_PHOTO_CANVAS_MISSING'));
+        return;
+      }
+
+      ctx.clearRect(0, 0, outputSize, outputSize);
+      const scale = Math.max(outputSize / sourceWidth, outputSize / sourceHeight);
+      const scaledW = sourceWidth * scale;
+      const scaledH = sourceHeight * scale;
+      const dx = (outputSize - scaledW) / 2;
+      const dy = (outputSize - scaledH) / 2;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(outputSize / 2, outputSize / 2, outputSize / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(img, dx, dy, scaledW, scaledH);
+      ctx.restore();
+
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.beginPath();
+      ctx.arc(outputSize / 2, outputSize / 2, outputSize / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('CORPORATE_NAVY_DOCX_PHOTO_LOAD_FAILED'));
+    img.src = dataUrl;
+  });
+}
+
 export async function exportToDOCX(
   cvData: CVData,
   fileName: string,
@@ -1387,7 +1715,7 @@ export async function exportToDOCX(
         const scaledW = img.naturalWidth * scale;
         const scaledH = img.naturalHeight * scale;
         const sx = (outW - scaledW) / 2;
-        const sy = isPortrait ? -(scaledH - outH) * 0.20 : (outH - scaledH) / 2;
+        const sy = isPortrait ? -(scaledH - outH) * 0.38 : (outH - scaledH) / 2;
         ctx.drawImage(img, sx, sy, scaledW, scaledH);
         resolve(canvas.toDataURL('image/jpeg', 0.92));
       };
@@ -1429,7 +1757,10 @@ export async function exportToDOCX(
   // ── Pre-process photo ────────────────────────────────────────────────────────────────────────
   // cfg.noPhoto: template does not support photos at all — skip regardless of user setting
   const directElegantFormalPhoto = cfg.customLayout === 'elegant-formal' ? options?.elegantFormalPhoto ?? null : null;
-  const rawPhotoSource = !directElegantFormalPhoto && !cfg.noPhoto && showPhoto && cvData.personal.photo ? cvData.personal.photo : null;
+  const directExecutivePremiumPhoto = cfg.customLayout === 'executive-premium'
+    ? await prepareExecutivePremiumCanonicalPhoto(cvData)
+    : null;
+  const rawPhotoSource = !directElegantFormalPhoto && !directExecutivePremiumPhoto && !cfg.noPhoto && showPhoto && cvData.personal.photo ? cvData.personal.photo : null;
   const preparedRawPhoto = rawPhotoSource
     ? await prepareCvPhotoForExport(rawPhotoSource)
     : null;
@@ -1446,6 +1777,11 @@ export async function exportToDOCX(
   if (directElegantFormalPhoto) {
     photoBytes = directElegantFormalPhoto.bytes;
     photoW = ps * (directElegantFormalPhoto.width / directElegantFormalPhoto.height);
+    photoH = ps;
+    photoType = 'jpg';
+  } else if (directExecutivePremiumPhoto) {
+    photoBytes = directExecutivePremiumPhoto.bytes;
+    photoW = Math.round(ps * (directExecutivePremiumPhoto.width / directExecutivePremiumPhoto.height));
     photoH = ps;
     photoType = 'jpg';
   } else if (rawPhotoDataUrl) {
@@ -1477,14 +1813,20 @@ export async function exportToDOCX(
       // 'circle': circular PNG crop with transparent corners — works correctly in DOCX/PDF.
       // Canvas clips to a circle path before drawing, then exports as PNG (not JPEG)
       // so corners are truly transparent, not white or black.
-      const cropped = await circularCropDataUrl(rawPhotoDataUrl, 512);
+      const cropped = cfg.customLayout === 'corporate-navy' || cfg.customLayout === 'contemporary-bold'
+        ? await createCorporateNavyCircularDocxPhotoDataUrl(rawPhotoDataUrl, 512)
+        : await circularCropDataUrl(rawPhotoDataUrl, 512);
       photoBytes = dataUrlToBytes(cropped);
       photoW = ps;
       photoH = ps;
-      photoType = getImageMimeFromDataUrl(cropped) === 'image/jpeg' ? 'jpg' : 'png';
+      photoType = cfg.customLayout === 'corporate-navy' || cfg.customLayout === 'contemporary-bold'
+        ? 'png'
+        : getImageMimeFromDataUrl(cropped) === 'image/jpeg' ? 'jpg' : 'png';
     }
     } catch {
       // Keep the pre-converted original bytes if the cosmetic crop fails.
+      // Corporate Navy must not embed a square fallback into its circular slot.
+      if (cfg.customLayout === 'corporate-navy' || cfg.customLayout === 'contemporary-bold') photoBytes = null;
     }
   }
 
@@ -1569,7 +1911,7 @@ export async function exportToDOCX(
         } else if (rightDates && (edu.startDate || edu.endDate)) {
           // FIX-08: degree + school on left, date on right
           target.push(dateRow([
-            new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' }),
+            new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' }),
             new TextRun({ text: '  —  ' + edu.school, size: 20, color: '6B7280' }),
           ], `${edu.startDate} – ${edu.endDate}`));
           if (edu.description) {
@@ -1578,10 +1920,10 @@ export async function exportToDOCX(
         } else {
           target.push(new Paragraph({
             children: [
-              new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' }),
+              new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' }),
               new TextRun({ text: '  —  ' + edu.school, size: 20, color: '6B7280' }),
             ],
-            spacing: { after: 40 },
+            spacing: { after: 12 },
           }));
           if (edu.startDate || edu.endDate) {
             target.push(new Paragraph({ children: [new TextRun({ text: `${edu.startDate} – ${edu.endDate}`, size: 18, color: '9CA3AF', italics: true })], spacing: { after: 60 } }));
@@ -2275,107 +2617,101 @@ export async function exportToDOCX(
   //     amber company meta, education centered, skills + languages in 2-column grid
   else if (cfg.customLayout === 'executive-premium') {
     const navyBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
+    const epNilHeaderBorder = { style: BorderStyle.NIL, size: 0, color: cfg.headerBg };
+    const epHeaderBorders = {
+      top: epNilHeaderBorder,
+      bottom: epNilHeaderBorder,
+      left: epNilHeaderBorder,
+      right: epNilHeaderBorder,
+      insideHorizontal: epNilHeaderBorder,
+      insideVertical: epNilHeaderBorder,
+    };
+    const epContacts = [
+      cvData.personal.email,
+      cvData.personal.phone,
+      cvData.personal.address,
+    ].filter(Boolean);
 
     // ── Build header cell content (all centered, dark background) ───────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const epHeaderRows: any[] = [];
+    const epHeaderParagraphs: any[] = [];
 
-    // Photo row (if present)
     if (photoBytes) {
-      epHeaderRows.push(new TableRow({
-        children: [new TableCell({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          borders: noBorders,
-          shading: navyBg,
-          margins: { top: 280, bottom: 0, left: 280, right: 280 },
-          children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: photoBytes, transformation: { width: photoW, height: photoH }, type: photoType })], spacing: { after: 80 } })],
-        })],
+      epHeaderParagraphs.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [new ImageRun({ data: photoBytes, transformation: { width: photoW, height: photoH }, type: photoType })],
+        spacing: { after: 32 },
       }));
     }
 
-    // Name row
-    epHeaderRows.push(new TableRow({
-      children: [new TableCell({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: noBorders,
-        shading: navyBg,
-        margins: photoBytes ? { top: 0, bottom: 0, left: 280, right: 280 } : { top: 280, bottom: 0, left: 280, right: 280 },
-        children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: (cvData.personal.fullName || 'YOUR NAME').toUpperCase(), size: 56, color: 'FFFFFF', font: 'Georgia' })], spacing: { after: 40 } })],
-      })],
+    epHeaderParagraphs.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: (cvData.personal.fullName || 'YOUR NAME').toUpperCase(), size: 34, color: 'FFFFFF', font: 'Georgia' })],
+      spacing: { after: 16 },
     }));
 
-    // Amber divider row
-    epHeaderRows.push(new TableRow({
-      children: [new TableCell({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: noBorders,
-        shading: navyBg,
-        margins: { top: 0, bottom: 0, left: 280, right: 280 },
-        children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: '─────────────────────', size: 18, color: 'D97706' })], spacing: { after: 40 } })],
-      })],
+    epHeaderParagraphs.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: '────────', size: 12, color: 'D97706' })],
+      spacing: { after: 16 },
     }));
 
-    // Job title row (amber/gold)
-    epHeaderRows.push(new TableRow({
-      children: [new TableCell({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: noBorders,
-        shading: navyBg,
-        margins: { top: 0, bottom: 0, left: 280, right: 280 },
-        children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: cvData.personal.jobTitle || '', size: 22, color: 'FCD34D', font: 'Georgia' })], spacing: { after: 60 } })],
-      })],
+    epHeaderParagraphs.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ text: cvData.personal.jobTitle || '', size: 18, color: 'FCD34D', font: 'Georgia' })],
+      spacing: { after: epContacts.length > 0 || cvData.personal.fathersName ? 28 : 0 },
     }));
 
-    // Contacts row (gray)
-    if (contacts.length > 0) {
-      epHeaderRows.push(new TableRow({
-        children: [new TableCell({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          borders: noBorders,
-          shading: navyBg,
-          margins: { top: 0, bottom: 280, left: 280, right: 280 },
-          children: [new Paragraph({ alignment: AlignmentType.CENTER, children: contacts.map((c, i) => new TextRun({ text: (i > 0 ? '   |   ' : '') + c, size: 18, color: '9CA3AF', font: 'Georgia' })), spacing: { after: 0 } })],
-        })],
+    if (epContacts.length > 0) {
+      epHeaderParagraphs.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: epContacts.map((c, i) => new TextRun({ text: (i > 0 ? '  |  ' : '') + c, size: 15, color: 'D1D5DB', font: 'Georgia' })),
+        spacing: { after: cvData.personal.fathersName ? 18 : 0 },
       }));
     }
 
     if (cvData.personal.fathersName) {
-      epHeaderRows.push(new TableRow({
-        children: [new TableCell({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          borders: noBorders,
-          shading: navyBg,
-          margins: { top: 0, bottom: 280, left: 280, right: 280 },
-          children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 18, color: '9CA3AF' }), new TextRun({ text: cvData.personal.fathersName, size: 18, color: '9CA3AF' })], spacing: { after: 0 } })],
-        })],
+      epHeaderParagraphs.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 16, color: '9CA3AF' }), new TextRun({ text: cvData.personal.fathersName, size: 16, color: '9CA3AF' })],
+        spacing: { after: 0 },
       }));
     }
 
     // Push full-width navy header table
     children.push(new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: noBorders,
-      rows: epHeaderRows,
+      width: { size: 76, type: WidthType.PERCENTAGE },
+      alignment: AlignmentType.CENTER,
+      borders: epHeaderBorders,
+      rows: [new TableRow({
+        children: [new TableCell({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: epHeaderBorders,
+          shading: navyBg,
+          margins: { top: photoBytes ? 130 : 150, bottom: 140, left: 220, right: 220 },
+          children: epHeaderParagraphs,
+        })],
+      })],
     }));
-    children.push(new Paragraph({ text: '', spacing: { after: 160 } }));
+    children.push(new Paragraph({ text: '', spacing: { after: 70 } }));
 
     // ── Section heading helper: gray, UPPERCASE, tracked, centered, bottom border ─
-    function epHeading(text: string) {
+    function epHeading(text: string, options: { compact?: boolean; keepNext?: boolean } = {}) {
       return new Paragraph({
         alignment: AlignmentType.CENTER,
-        children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 18, color: '9CA3AF', font: 'Georgia' })],
-        spacing: { before: 240, after: 100 },
+        children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 16, color: '9CA3AF', font: 'Georgia' })],
+        spacing: { before: options.compact ? 80 : 115, after: options.compact ? 45 : 60 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'E5E7EB' } },
+        keepNext: options.keepNext ?? true,
       });
     }
 
     // ── Summary: centered italic ───────────────────────────────────────────
     if (cvData.summary) {
-      children.push(epHeading(t.cv.summary));
       children.push(new Paragraph({
         alignment: AlignmentType.CENTER,
-        children: [new TextRun({ text: cvData.summary, size: 22, color: '374151', italics: true, font: 'Georgia' })],
-        spacing: { after: 200 },
+        children: [new TextRun({ text: cvData.summary, size: 18, color: '374151', italics: true, font: 'Georgia' })],
+        spacing: { after: 80, line: 236, lineRule: 'auto' },
       }));
     }
 
@@ -2389,28 +2725,40 @@ export async function exportToDOCX(
           width: { size: 100, type: WidthType.PERCENTAGE },
           borders: noBorders,
           rows: [new TableRow({ children: [
-            new TableCell({ width: { size: 75, type: WidthType.PERCENTAGE }, borders: noBorders, children: [new Paragraph({ children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827', font: 'Georgia' })], spacing: { after: 0 } })] }),
-            new TableCell({ width: { size: 25, type: WidthType.PERCENTAGE }, borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: dateText, size: 18, color: '9CA3AF', italics: true })], spacing: { after: 0 } })] }),
+            new TableCell({ width: { size: 75, type: WidthType.PERCENTAGE }, borders: noBorders, children: [new Paragraph({ keepNext: true, children: [new TextRun({ text: exp.position, bold: true, size: 20, color: '111827', font: 'Georgia' })], spacing: { after: 0 } })] }),
+            new TableCell({ width: { size: 25, type: WidthType.PERCENTAGE }, borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: dateText, size: 16, color: '9CA3AF', italics: true })], spacing: { after: 0 } })] }),
           ]})],
         }));
         // Company in amber below
-        children.push(new Paragraph({ children: [new TextRun({ text: exp.company, size: 18, color: 'B45309' })], spacing: { after: 50 } }));
+        children.push(new Paragraph({ keepNext: Boolean(exp.description), children: [new TextRun({ text: exp.company, size: 16, color: 'B45309' })], spacing: { after: 18 } }));
         if (exp.description) {
           for (const line of exp.description.split('\n')) {
-            if (line.trim()) children.push(new Paragraph({ children: [new TextRun({ text: line, size: 20, color: '374151' })], spacing: { after: 40 } }));
+            const trimmed = line.trim();
+            if (trimmed) {
+              const bulletText = trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '');
+              children.push(new Paragraph({
+                children: [
+                  new TextRun({ text: '-  ', size: 17, color: '6B7280', font: 'Calibri' }),
+                  new TextRun({ text: bulletText, size: 17, color: '374151', font: 'Calibri' }),
+                ],
+                indent: { left: 170, hanging: 170 },
+                spacing: { after: 16, line: 224, lineRule: 'auto' },
+              }));
+            }
           }
         }
-        children.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+        children.push(new Paragraph({ text: '', spacing: { after: 24 } }));
       }
     }
 
     // ── Education: centered degree + school ───────────────────────────────
     if (cvData.education.length > 0) {
-      children.push(epHeading(t.cv.education));
+      children.push(epHeading(t.cv.education, { compact: true }));
       for (const edu of cvData.education) {
-        children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827', font: 'Georgia' })], spacing: { after: 20 } }));
-        children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: edu.school, size: 18, color: '6B7280' })], spacing: { after: edu.description ? 30 : 80 } }));
-        if (edu.description) children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: edu.description, size: 18, color: '4B5563' })], spacing: { after: 80 } }));
+        const eduDates = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+        children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: edu.degree, bold: true, size: 18, color: '111827', font: 'Georgia' })], spacing: { after: 8 } }));
+        children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: [edu.school, eduDates].filter(Boolean).join(' | '), size: 15, color: '6B7280' })], spacing: { after: edu.description ? 16 : 34 } }));
+        if (edu.description) children.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: edu.description, size: 15, color: '4B5563' })], spacing: { after: 34 } }));
       }
     }
 
@@ -2427,32 +2775,39 @@ export async function exportToDOCX(
       function epColHeading(text: string) {
         return new Paragraph({
           alignment: AlignmentType.CENTER,
-          children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 16, color: '9CA3AF', font: 'Georgia' })],
-          spacing: { before: 160, after: 80 },
+          children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 15, color: '9CA3AF', font: 'Georgia' })],
+          spacing: { before: 80, after: 45 },
         });
       }
 
       if (epHasSkills) {
         epSkillsCol.push(epColHeading(t.cv.skills));
-        for (const s of epLocalizedSkills) {
-          epSkillsCol.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: s, size: 18, color: '374151' })], spacing: { after: 40 } }));
-        }
+        epSkillsCol.push(new Paragraph({
+          alignment: AlignmentType.LEFT,
+          children: epLocalizedSkills.map((s, i) => new TextRun({ text: (i > 0 ? ' | ' : '') + s, size: 16, color: '374151' })),
+          spacing: { after: 0, line: 220, lineRule: 'auto' },
+        }));
       }
       if (epHasLangs) {
         epLangsCol.push(epColHeading(t.cv.languages));
         for (const lang of cvData.languages) {
-          epLangsCol.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 18, color: '111827' }), new TextRun({ text: `  –  ${lang.level}`, size: 18, color: '6B7280' })], spacing: { after: 40 } }));
+          epLangsCol.push(new Paragraph({ alignment: AlignmentType.LEFT, children: [new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 16, color: '111827' }), new TextRun({ text: ` - ${lang.level}`, size: 16, color: '6B7280' })], spacing: { after: 14, line: 220, lineRule: 'auto' } }));
         }
       }
 
-      children.push(new Paragraph({ border: { top: { style: BorderStyle.SINGLE, size: 4, color: 'E5E7EB' } }, text: '', spacing: { before: 120, after: 0 } }));
+      children.push(new Paragraph({ border: { top: { style: BorderStyle.SINGLE, size: 4, color: 'E5E7EB' } }, text: '', spacing: { before: 36, after: 0 } }));
+      const lowerCells = epHasLangs
+        ? [
+            new TableCell({ width: { size: 58, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 130 }, children: epSkillsCol.length ? epSkillsCol : [new Paragraph({ text: '' })] }),
+            new TableCell({ width: { size: 42, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 130, right: 0 }, children: epLangsCol }),
+          ]
+        : [
+            new TableCell({ width: { size: 100, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 0 }, children: epSkillsCol.length ? epSkillsCol : epLangsCol }),
+          ];
       children.push(new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
         borders: noBorders,
-        rows: [new TableRow({ children: [
-          new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 140 }, children: epSkillsCol.length ? epSkillsCol : [new Paragraph({ text: '' })] }),
-          new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 140, right: 0 }, children: epLangsCol.length ? epLangsCol : [new Paragraph({ text: '' })] }),
-        ]})],
+        rows: [new TableRow({ children: lowerCells })],
       }));
     }
 
@@ -2746,7 +3101,7 @@ export async function exportToDOCX(
       for (const exp of cvData.experience) {
         const dateText = `${exp.startDate} - ${exp.isPresent ? t.cv.present : exp.endDate}`;
         children.push(mmDateRow([
-          new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' }),
+          new TextRun({ text: exp.position, bold: true, size: 20, color: '111827' }),
           ...(exp.company ? [new TextRun({ text: `  |  ${exp.company}`, size: 20, color: '6B7280' })] : []),
         ], dateText));
         if (exp.description) mmDescription(exp.description);
@@ -3022,6 +3377,251 @@ export async function exportToDOCX(
   else if (cfg.customLayout === 'corporate-navy') {
     const cnBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
 
+    function cnSpaced(text: string): string {
+      return text.toUpperCase().split('').join(' ');
+    }
+
+    function cnHeading(text: string) {
+      return new Paragraph({
+        alignment: AlignmentType.LEFT,
+        children: [new TextRun({ text: cnSpaced(text), bold: true, size: 17, color: cfg.headingColor })],
+        spacing: { before: 150, after: 72 },
+        border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: cfg.headingBorder } },
+      });
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function cnDateRow(leftRuns: any[], dateText: string) {
+      return new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({ children: [
+          new TableCell({
+            width: { size: 73, type: WidthType.PERCENTAGE },
+            borders: noBorders,
+            margins: { top: 0, bottom: 0, left: 0, right: 80 },
+            children: [new Paragraph({ children: leftRuns, spacing: { after: 8 } })],
+          }),
+          new TableCell({
+            width: { size: 27, type: WidthType.PERCENTAGE },
+            borders: noBorders,
+            margins: { top: 0, bottom: 0, left: 80, right: 0 },
+            children: [new Paragraph({
+              alignment: AlignmentType.RIGHT,
+              children: [new TextRun({ text: dateText, size: 16, color: '9CA3AF', italics: true })],
+              spacing: { after: 8 },
+            })],
+          }),
+        ]})],
+      });
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cnHeaderTextChildren: any[] = [
+      new Paragraph({
+        children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 38, color: 'FFFFFF' })],
+        spacing: { after: 24 },
+      }),
+    ];
+    if (cvData.personal.jobTitle) {
+      cnHeaderTextChildren.push(new Paragraph({
+        children: [new TextRun({ text: cvData.personal.jobTitle, size: 20, color: '93C5FD' })],
+        spacing: { after: 42 },
+      }));
+    }
+    const cnContacts: string[] = [];
+    if (cvData.personal.email) cnContacts.push(cvData.personal.email);
+    if (cvData.personal.phone) cnContacts.push(cvData.personal.phone);
+    if (rs.showAddress && cvData.personal.address) cnContacts.push(cvData.personal.address);
+    if (cvData.personal.dateOfBirth) cnContacts.push(cvData.personal.dateOfBirth!);
+    if (cvData.personal.nationality) cnContacts.push(cvData.personal.nationality!);
+    if (cnContacts.length > 0) {
+      cnHeaderTextChildren.push(new Paragraph({
+        children: [new TextRun({ text: cnContacts.join('  |  '), size: 16, color: 'CBD5E1' })],
+        spacing: { after: 0 },
+      }));
+    }
+    if (cvData.personal.fathersName) {
+      cnHeaderTextChildren.push(new Paragraph({
+        children: [
+          new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 16, color: 'CBD5E1' }),
+          new TextRun({ text: cvData.personal.fathersName, size: 16, color: 'CBD5E1' }),
+        ],
+        spacing: { after: 0 },
+      }));
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cnHeaderCells: any[] = [
+      new TableCell({
+        width: { size: photoBytes ? 80 : 100, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.CENTER,
+        borders: noBorders,
+        shading: cnBg,
+        margins: { top: 190, bottom: 170, left: 340, right: 160 },
+        children: cnHeaderTextChildren,
+      }),
+    ];
+    if (photoBytes) {
+      cnHeaderCells.push(new TableCell({
+        width: { size: 20, type: WidthType.PERCENTAGE },
+        verticalAlign: VerticalAlign.CENTER,
+        borders: noBorders,
+        shading: cnBg,
+        margins: { top: 160, bottom: 150, left: 100, right: 320 },
+        children: [new Paragraph({
+          alignment: AlignmentType.RIGHT,
+          children: [new ImageRun({ data: photoBytes, transformation: { width: 76, height: 76 }, type: photoType })],
+          spacing: { after: 0 },
+        })],
+      }));
+    }
+
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: noBorders,
+      rows: [new TableRow({ children: cnHeaderCells })],
+    }));
+
+    const cnAccentBg = { fill: cfg.accent, type: ShadingType.SOLID, color: cfg.accent };
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: noBorders,
+      rows: [new TableRow({ children: [new TableCell({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        shading: cnAccentBg,
+        margins: { top: 4, bottom: 4, left: 0, right: 0 },
+        children: [new Paragraph({ text: '', spacing: { after: 0 } })],
+      })] })],
+    }));
+    children.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+
+    if (cvData.summary) {
+      children.push(cnHeading(t.cv.summary));
+      children.push(new Paragraph({
+        children: [new TextRun({ text: cvData.summary, size: 19, color: '374151' })],
+        spacing: { after: 70, line: 230, lineRule: 'auto' },
+      }));
+    }
+
+    if (cvData.experience.length > 0) {
+      children.push(cnHeading(t.cv.experience));
+      for (const exp of cvData.experience) {
+        const dateText = `${exp.startDate} - ${exp.isPresent ? t.cv.present : exp.endDate}`;
+        children.push(cnDateRow([
+          new TextRun({ text: exp.position, bold: true, size: 20, color: '111827' }),
+        ], dateText));
+        children.push(new Paragraph({
+          children: [new TextRun({ text: exp.company, size: 17, color: cfg.accent })],
+          spacing: { after: 24 },
+        }));
+        if (exp.description) {
+          for (const line of exp.description.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const isBullet = /^[-•*]|^\d+\./.test(trimmed);
+            const bulletText = isBullet ? trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '') : trimmed;
+            children.push(new Paragraph({
+              children: [
+                new TextRun({ text: isBullet ? '-  ' : '', size: 17, color: cfg.accent }),
+                new TextRun({ text: bulletText, size: 17, color: '374151' }),
+              ],
+              indent: isBullet ? { left: 160, hanging: 160 } : undefined,
+              spacing: { after: 12, line: 218, lineRule: 'auto' },
+            }));
+          }
+        }
+        children.push(new Paragraph({ text: '', spacing: { after: 28 } }));
+      }
+    }
+
+    if (cvData.education.length > 0) {
+      children.push(cnHeading(t.cv.education));
+      for (const edu of cvData.education) {
+        const dateText = edu.startDate || edu.endDate ? `${edu.startDate} - ${edu.endDate}` : '';
+        if (dateText) {
+          children.push(cnDateRow([
+            new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' }),
+          ], dateText));
+        } else {
+          children.push(new Paragraph({
+            children: [new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' })],
+            spacing: { after: 8 },
+          }));
+        }
+        children.push(new Paragraph({
+          children: [new TextRun({ text: edu.school, size: 17, color: '6B7280' })],
+          spacing: { after: edu.description ? 18 : 34 },
+        }));
+        if (edu.description) {
+          children.push(new Paragraph({
+            children: [new TextRun({ text: edu.description, size: 17, color: '374151' })],
+            spacing: { after: 34, line: 218, lineRule: 'auto' },
+          }));
+        }
+      }
+    }
+
+    const hasSkills = cvData.skills.length > 0;
+    const hasLanguages = cvData.languages.length > 0;
+    const hasCerts = cvData.certifications.length > 0;
+    if (hasSkills || hasLanguages || hasCerts) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const skillsChildren: any[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const metaChildren: any[] = [];
+
+      if (hasSkills) {
+        skillsChildren.push(cnHeading(t.cv.skills));
+        const cnSkills = cvData.skills.map((s) => getLocalizedCvSkillName(s, locale));
+        skillsChildren.push(new Paragraph({
+          children: [new TextRun({ text: cnSkills.join('  |  '), size: 17, color: '374151' })],
+          spacing: { after: 12, line: 218, lineRule: 'auto' },
+        }));
+      }
+      if (hasLanguages) {
+        metaChildren.push(cnHeading(t.cv.languages));
+        for (const lang of cvData.languages) {
+          metaChildren.push(new Paragraph({
+            children: [
+              new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 17, color: '111827' }),
+              new TextRun({ text: ' / ' + lang.level, size: 17, color: '6B7280' }),
+            ],
+            spacing: { after: 14 },
+          }));
+        }
+      }
+      if (hasCerts) {
+        metaChildren.push(cnHeading(t.cv.certifications));
+        for (const cert of cvData.certifications) {
+          metaChildren.push(new Paragraph({
+            children: [new TextRun({ text: cert, size: 17, color: '374151' })],
+            spacing: { after: 14 },
+          }));
+        }
+      }
+
+      if (hasSkills && (hasLanguages || hasCerts)) {
+        if (skillsChildren.length === 0) skillsChildren.push(new Paragraph({ text: '' }));
+        if (metaChildren.length === 0) metaChildren.push(new Paragraph({ text: '' }));
+        children.push(new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: noBorders,
+          rows: [new TableRow({ children: [
+            new TableCell({ width: { size: 62, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 160 }, children: skillsChildren }),
+            new TableCell({ width: { size: 38, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 160, right: 0 }, children: metaChildren }),
+          ]})],
+        }));
+      } else {
+        children.push(...skillsChildren, ...metaChildren);
+      }
+    }
+  }
+
+  else if (false && cfg.customLayout === 'corporate-navy') {
+    const cnBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
+
     // ── Helper: simulate letter-spacing by inserting spaces between chars ──
     function spaced(text: string): string {
       return text.toUpperCase().split('').join(' ');
@@ -3055,7 +3655,7 @@ export async function exportToDOCX(
     const cnHeaderChildren: any[] = [];
 
     if (photoBytes) {
-      cnHeaderChildren.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: photoBytes, transformation: { width: photoW, height: photoH }, type: photoType })], spacing: { after: 100 } }));
+      cnHeaderChildren.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: photoBytes!, transformation: { width: photoW, height: photoH }, type: photoType })], spacing: { after: 100 } }));
     }
     cnHeaderChildren.push(
       new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 52, color: 'FFFFFF' })], spacing: { after: 40 } }),
@@ -3070,8 +3670,8 @@ export async function exportToDOCX(
     if (cvData.personal.email) cnContacts.push(cvData.personal.email);
     if (cvData.personal.phone) cnContacts.push(cvData.personal.phone);
     if (rs.showAddress && cvData.personal.address) cnContacts.push(cvData.personal.address);
-    if (cvData.personal.dateOfBirth) cnContacts.push(cvData.personal.dateOfBirth);
-    if (cvData.personal.nationality) cnContacts.push(cvData.personal.nationality);
+    if (cvData.personal.dateOfBirth) cnContacts.push(cvData.personal.dateOfBirth!);
+    if (cvData.personal.nationality) cnContacts.push(cvData.personal.nationality!);
     if (cnContacts.length > 0) {
       cnHeaderChildren.push(
         new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: cnContacts.join('  |  '), size: 18, color: '94A3B8' })], spacing: { after: 0 } }),
@@ -3112,7 +3712,7 @@ export async function exportToDOCX(
         const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
         // Position (bold) left | date right
         children.push(cnDateRow([
-          new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' }),
+          new TextRun({ text: exp.position, bold: true, size: 20, color: '111827' }),
         ], dateText));
         // Company on its own line in gray
         children.push(new Paragraph({ children: [new TextRun({ text: exp.company, size: 20, color: '6B7280' })], spacing: { after: 50 } }));
@@ -3144,7 +3744,7 @@ export async function exportToDOCX(
         const dateText = edu.startDate || edu.endDate ? `${edu.startDate} – ${edu.endDate}` : '';
         if (dateText) {
           children.push(cnDateRow([
-            new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' }),
+            new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' }),
           ], dateText));
         } else {
           children.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' })], spacing: { after: 20 } }));
@@ -3525,46 +4125,46 @@ export async function exportToDOCX(
       sidebarChildren.push(new Paragraph({
         alignment: AlignmentType.CENTER,
         children: [new ImageRun({ data: photoBytes, transformation: { width: photoW, height: photoH }, type: photoType })],
-        spacing: { before: 0, after: 140 },
+        spacing: { before: 0, after: 100 },
       }));
     }
 
     // Name
     sidebarChildren.push(new Paragraph({
-      children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 28, color: 'FFFFFF' })],
-      spacing: { after: 50 },
+      children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 26, color: 'FFFFFF' })],
+      spacing: { after: 36 },
     }));
 
     // Job title
     if (cvData.personal.jobTitle) {
       sidebarChildren.push(new Paragraph({
-        children: [new TextRun({ text: cvData.personal.jobTitle, size: 20, color: cfg.accent })],
-        spacing: { after: 120 },
+        children: [new TextRun({ text: cvData.personal.jobTitle, size: 18, color: cfg.accent })],
+        spacing: { after: 80 },
       }));
     }
 
     // Contacts — each on its own line, white
     for (const c of contacts) {
       sidebarChildren.push(new Paragraph({
-        children: [new TextRun({ text: c, size: 17, color: 'CBD5E1' })],
-        spacing: { after: 40 },
+        children: [new TextRun({ text: c, size: 16, color: 'CBD5E1' })],
+        spacing: { after: 30 },
       }));
     }
     if (cvData.personal.fathersName) {
       sidebarChildren.push(new Paragraph({
         children: [
-          new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 17, color: 'CBD5E1' }),
-          new TextRun({ text: cvData.personal.fathersName, size: 17, color: 'CBD5E1' }),
+          new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 16, color: 'CBD5E1' }),
+          new TextRun({ text: cvData.personal.fathersName, size: 16, color: 'CBD5E1' }),
         ],
-        spacing: { after: 40 },
+        spacing: { after: 30 },
       }));
     }
 
     // Skills in sidebar
     if (cvData.skills.length > 0) {
       sidebarChildren.push(new Paragraph({
-        children: [new TextRun({ text: t.cv.skills.toUpperCase(), bold: true, size: 16, color: cfg.accent })],
-        spacing: { before: 160, after: 70 },
+        children: [new TextRun({ text: t.cv.skills.toUpperCase(), bold: true, size: 15, color: cfg.accent })],
+        spacing: { before: 110, after: 50 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: '334155' } },
       }));
       const localizedSkills = cvData.skills.map((s) => getLocalizedCvSkillName(s, locale));
@@ -3579,8 +4179,8 @@ export async function exportToDOCX(
     // Languages in sidebar
     if (cvData.languages.length > 0) {
       sidebarChildren.push(new Paragraph({
-        children: [new TextRun({ text: t.cv.languages.toUpperCase(), bold: true, size: 16, color: cfg.accent })],
-        spacing: { before: 160, after: 70 },
+        children: [new TextRun({ text: t.cv.languages.toUpperCase(), bold: true, size: 15, color: cfg.accent })],
+        spacing: { before: 110, after: 50 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: '334155' } },
       }));
       for (const lang of cvData.languages) {
@@ -3597,8 +4197,8 @@ export async function exportToDOCX(
     // Certifications in sidebar
     if (cvData.certifications.length > 0) {
       sidebarChildren.push(new Paragraph({
-        children: [new TextRun({ text: t.cv.certifications.toUpperCase(), bold: true, size: 16, color: cfg.accent })],
-        spacing: { before: 160, after: 70 },
+        children: [new TextRun({ text: t.cv.certifications.toUpperCase(), bold: true, size: 15, color: cfg.accent })],
+        spacing: { before: 110, after: 50 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: '334155' } },
       }));
       for (const cert of cvData.certifications) {
@@ -3617,9 +4217,9 @@ export async function exportToDOCX(
     function techMainHeading(text: string) {
       const label = text.toUpperCase();
       return new Paragraph({
-        children: [new TextRun({ text: label, bold: true, size: 18, color: cfg.headingColor })],
-        spacing: { before: 200, after: 80 },
-        border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: cfg.headingBorder } },
+        children: [new TextRun({ text: label, bold: true, size: 16, color: cfg.headingColor })],
+        spacing: { before: 120, after: 55 },
+        border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: cfg.headingBorder } },
       });
     }
 
@@ -3631,17 +4231,17 @@ export async function exportToDOCX(
         borders: noBorders,
         rows: [new TableRow({ children: [
           new TableCell({
-            width: { size: 72, type: WidthType.PERCENTAGE },
+            width: { size: 70, type: WidthType.PERCENTAGE },
             borders: noBorders,
-            children: [new Paragraph({ children: leftRuns, spacing: { after: 20 } })],
+            children: [new Paragraph({ children: leftRuns.slice(0, 1), spacing: { after: 8 } })],
           }),
           new TableCell({
-            width: { size: 28, type: WidthType.PERCENTAGE },
+            width: { size: 30, type: WidthType.PERCENTAGE },
             borders: noBorders,
             children: [new Paragraph({
               alignment: AlignmentType.RIGHT,
-              children: [new TextRun({ text: dateText, size: 18, color: '94A3B8', italics: true })],
-              spacing: { after: 20 },
+              children: [new TextRun({ text: dateText, size: 16, color: '94A3B8', italics: true })],
+              spacing: { after: 8 },
             })],
           }),
         ]})],
@@ -3652,8 +4252,8 @@ export async function exportToDOCX(
     if (cvData.summary) {
       mainChildren.push(techMainHeading(t.cv.summary));
       mainChildren.push(new Paragraph({
-        children: [new TextRun({ text: cvData.summary, size: 20, color: '374151' })],
-        spacing: { after: 120 },
+        children: [new TextRun({ text: cvData.summary, size: 18, color: '374151' })],
+        spacing: { after: 70, line: 230, lineRule: 'auto' },
       }));
     }
 
@@ -3666,17 +4266,29 @@ export async function exportToDOCX(
           new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' }),
           new TextRun({ text: '  —  ' + exp.company, size: 20, color: '6B7280' }),
         ], dateText));
+        if (exp.company) {
+          mainChildren.push(new Paragraph({
+            children: [new TextRun({ text: exp.company, size: 17, color: cfg.headingColor })],
+            spacing: { after: exp.description ? 20 : 40 },
+          }));
+        }
         if (exp.description) {
           for (const line of exp.description.split('\n')) {
-            if (line.trim()) {
+            const trimmed = line.trim();
+            if (trimmed) {
+              const bulletText = trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '');
               mainChildren.push(new Paragraph({
-                children: [new TextRun({ text: line, size: 20, color: '374151' })],
-                spacing: { after: 36 },
+                children: [
+                  new TextRun({ text: '-  ', size: 17, color: '6B7280' }),
+                  new TextRun({ text: bulletText, size: 17, color: '374151' }),
+                ],
+                indent: { left: 170, hanging: 170 },
+                spacing: { after: 14, line: 220, lineRule: 'auto' },
               }));
             }
           }
         }
-        mainChildren.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+        mainChildren.push(new Paragraph({ text: '', spacing: { after: 32 } }));
       }
     }
 
@@ -3692,23 +4304,29 @@ export async function exportToDOCX(
         } else {
           mainChildren.push(new Paragraph({
             children: [
-              new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' }),
+              new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' }),
               new TextRun({ text: '  —  ' + edu.school, size: 20, color: '6B7280' }),
             ],
-            spacing: { after: 40 },
+            spacing: { after: 12 },
+          }));
+        }
+        if (edu.school) {
+          mainChildren.push(new Paragraph({
+            children: [new TextRun({ text: edu.school, size: 16, color: '6B7280' })],
+            spacing: { after: edu.description ? 18 : 34 },
           }));
         }
         if (edu.description) {
           mainChildren.push(new Paragraph({
-            children: [new TextRun({ text: edu.description, size: 20, color: '374151' })],
-            spacing: { after: 80 },
+            children: [new TextRun({ text: edu.description, size: 17, color: '374151' })],
+            spacing: { after: 34, line: 220, lineRule: 'auto' },
           }));
         }
       }
     }
 
     // ── SKILLS + LANGUAGES: nested 2-column table at the bottom of main panel ──
-    const hasSkillsOrLangs = cvData.skills.length > 0 || cvData.languages.length > 0;
+    const hasSkillsOrLangs = false;
     if (hasSkillsOrLangs) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const skillsCellChildren: any[] = [];
@@ -3780,14 +4398,14 @@ export async function exportToDOCX(
           verticalAlign: VerticalAlign.TOP,
           borders: noBorders,
           shading: sidebarBg,
-          margins: { top: 240, bottom: 240, left: 220, right: 200 },
+          margins: { top: 210, bottom: 0, left: 200, right: 180 },
           children: sidebarChildren,
         }),
         new TableCell({
           width: { size: mainPct, type: WidthType.PERCENTAGE },
           verticalAlign: VerticalAlign.TOP,
           borders: noBorders,
-          margins: { top: 200, bottom: 240, left: 240, right: 200 },
+          margins: { top: 170, bottom: 0, left: 220, right: 180 },
           children: mainChildren,
         }),
       ]})],
@@ -3913,7 +4531,11 @@ export async function exportToDOCX(
     sections: [
       {
         properties: {
-          page: { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
+          page: cfg.customLayout === 'executive-premium'
+            ? { size: { width: 11906, height: 16838 }, margin: { top: 520, right: 620, bottom: 520, left: 620 } }
+            : cfg.customLayout === 'corporate-navy' || cfg.customLayout === 'contemporary-bold'
+              ? { size: { width: 11906, height: 16838 }, margin: { top: 520, right: 620, bottom: 520, left: 620 } }
+              : { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
         },
         children,
       },
@@ -3938,6 +4560,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
     TableRow,
     TableCell,
     Table,
+    TableLayoutType,
     WidthType,
     VerticalAlign,
     ShadingType,
@@ -3968,7 +4591,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
         const scaledW = img.naturalWidth * scale;
         const scaledH = img.naturalHeight * scale;
         const sx = (outW - scaledW) / 2;
-        const sy = isPortrait ? -(scaledH - outH) * 0.20 : (outH - scaledH) / 2;
+        const sy = isPortrait ? -(scaledH - outH) * 0.38 : (outH - scaledH) / 2;
         ctx.drawImage(img, sx, sy, scaledW, scaledH);
         resolve(canvas.toDataURL('image/jpeg', 0.92));
       };
@@ -3994,6 +4617,43 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
 
   const headerBg = { fill: 'E5E7EB', type: ShadingType.SOLID, color: 'E5E7EB' };
   const sectionBg = { fill: '1F2937', type: ShadingType.SOLID, color: '1F2937' };
+  const rirekishoTableWidthDxa = 9360;
+  const rirekishoPeriodColDxa = 2520;
+  const rirekishoDetailColDxa = rirekishoTableWidthDxa - rirekishoPeriodColDxa;
+  const rirekishoPersonalColWidths = [1200, 2600, 1000, 2640];
+  const rirekishoPersonalWidthDxa = rirekishoPersonalColWidths.reduce((sum, width) => sum + width, 0);
+  const rirekishoPhotoColDxa = rirekishoTableWidthDxa - rirekishoPersonalWidthDxa;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function fixedTable(rows: any[], columnWidths: number[], borders = noBorder) {
+    return new Table({
+      width: { size: columnWidths.reduce((sum, width) => sum + width, 0), type: WidthType.DXA },
+      layout: TableLayoutType.FIXED,
+      columnWidths,
+      borders,
+      rows,
+    });
+  }
+
+  function createPlaceholderPhotoDataUrl(width = 240, height = 320): string | null {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#f9fafb';
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = '#cccccc';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, width - 4, height - 4);
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '36px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('写真', width / 2, height / 2);
+    return canvas.toDataURL('image/png');
+  }
 
   // FIX-12: MS Mincho east-Asia font wrapper
   function jpRun(text: string, opts: Record<string, unknown> = {}) {
@@ -4006,9 +4666,9 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
   }
 
   // ── Label cell (gray bg, left-aligned) ───────────────────────────────────
-  function labelCell(text: string, widthPct: number, colSpan?: number) {
+  function labelCell(text: string, widthDxa: number, colSpan?: number) {
     return new TableCell({
-      width: { size: widthPct, type: WidthType.PERCENTAGE },
+      width: { size: widthDxa, type: WidthType.DXA },
       borders: thinBorder,
       shading: headerBg,
       verticalAlign: VerticalAlign.CENTER,
@@ -4023,15 +4683,15 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
   }
 
   // ── Value cell (white bg) ─────────────────────────────────────────────────
-  function valueCell(text: string, widthPct: number, colSpan?: number) {
+  function valueCell(text: string, widthDxa: number, colSpan?: number, size = 20) {
     return new TableCell({
-      width: { size: widthPct, type: WidthType.PERCENTAGE },
+      width: { size: widthDxa, type: WidthType.DXA },
       borders: thinBorder,
       verticalAlign: VerticalAlign.CENTER,
       ...(colSpan ? { columnSpan: colSpan } : {}),
       children: [
         new Paragraph({
-          children: [jpRun(text || '　', { size: 20, bold: !!text })],
+          children: [jpRun(text || '　', { size, bold: !!text })],
           spacing: { before: 40, after: 40 },
         }),
       ],
@@ -4040,14 +4700,12 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
 
   // ── Section heading row (full-width dark bar) ─────────────────────────────
   function sectionHeadingRow(kanji: string) {
-    return new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: noBorder,
-      rows: [
+    return fixedTable(
+      [
         new TableRow({
           children: [
             new TableCell({
-              width: { size: 100, type: WidthType.PERCENTAGE },
+              width: { size: rirekishoTableWidthDxa, type: WidthType.DXA },
               borders: thinBorder,
               shading: sectionBg,
               children: [
@@ -4061,7 +4719,9 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
           ],
         }),
       ],
-    });
+      [rirekishoTableWidthDxa],
+      noBorder,
+    );
   }
 
   // ── Content table row (期間 | details) ───────────────────────────────────
@@ -4069,13 +4729,13 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
     return new TableRow({
       children: [
         new TableCell({
-          width: { size: 28, type: WidthType.PERCENTAGE },
+          width: { size: rirekishoPeriodColDxa, type: WidthType.DXA },
           borders: thinBorder,
           shading: headerBg,
           children: [new Paragraph({ children: [jpRun(col1, { bold: true, size: 18, color: '374151' })], spacing: { before: 40, after: 40 } })],
         }),
         new TableCell({
-          width: { size: 72, type: WidthType.PERCENTAGE },
+          width: { size: rirekishoDetailColDxa, type: WidthType.DXA },
           borders: thinBorder,
           shading: headerBg,
           children: [new Paragraph({ children: [jpRun(col2, { bold: true, size: 18, color: '374151' })], spacing: { before: 40, after: 40 } })],
@@ -4090,14 +4750,12 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
 
   // ── 1. TITLE ROW ─────────────────────────────────────────────────────────
   children.push(
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: noBorder,
-      rows: [
+    fixedTable(
+      [
         new TableRow({
           children: [
             new TableCell({
-              width: { size: 100, type: WidthType.PERCENTAGE },
+              width: { size: rirekishoTableWidthDxa, type: WidthType.DXA },
               borders: {
                 top: { style: BorderStyle.SINGLE, size: 8, color: '111827' },
                 bottom: { style: BorderStyle.SINGLE, size: 8, color: '111827' },
@@ -4115,16 +4773,22 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
           ],
         }),
       ],
-    })
+      [rirekishoTableWidthDxa],
+      noBorder,
+    )
   );
 
   children.push(spacer(80));
 
   // ── 2. PHOTO + PERSONAL INFO ──────────────────────────────────────────────
   const showPhoto = cvData.personal.photoEnabled !== undefined ? cvData.personal.photoEnabled : true;
-  const rawPhoto = showPhoto && cvData.personal.photo ? cvData.personal.photo : null;
+  const personalPhotos = cvData.personal as CVData['personal'] & { originalPhoto?: string };
+  const rawPhoto = showPhoto ? (personalPhotos.originalPhoto || cvData.personal.photo || null) : null;
   const croppedPhoto = rawPhoto ? await smartCropDataUrl(rawPhoto, 240, 320) : null;
-  const photoBytes = croppedPhoto ? dataUrlToBytes(croppedPhoto) : null;
+  const placeholderPhoto = !croppedPhoto ? createPlaceholderPhotoDataUrl(240, 320) : null;
+  const photoDataUrl = croppedPhoto || placeholderPhoto;
+  const photoBytes = photoDataUrl ? dataUrlToBytes(photoDataUrl) : null;
+  const photoType: 'png' | 'jpg' = photoDataUrl?.startsWith('data:image/png') ? 'png' : 'jpg';
 
   // Photo cell: image if present, else placeholder box with 写真 label
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -4134,7 +4798,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
       new Paragraph({
         alignment: AlignmentType.CENTER,
         children: [
-          new ImageRun({ data: photoBytes, transformation: { width: 85, height: 113 }, type: 'jpg' }),
+          new ImageRun({ data: photoBytes, transformation: { width: 85, height: 113 }, type: photoType }),
         ],
         spacing: { before: 20, after: 20 },
       })
@@ -4179,59 +4843,53 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
     // 氏名 full-width
     new TableRow({
       children: [
-        labelCell('氏名', 28),
-        valueCell(cvData.personal.fullName || '', 72),
+        labelCell('氏名', rirekishoPersonalColWidths[0]),
+        valueCell(cvData.personal.fullName || '', rirekishoPersonalColWidths[1] + rirekishoPersonalColWidths[2] + rirekishoPersonalColWidths[3], 3),
       ],
     }),
     // 生年月日 | 性別
     new TableRow({
       children: [
-        labelCell('生年月日', 28),
-        valueCell(cvData.personal.dateOfBirth || '', 22),
-        labelCell('性別', 22),
-        valueCell(cvData.personal.gender || '', 28),
+        labelCell('生年月日', rirekishoPersonalColWidths[0]),
+        valueCell(cvData.personal.dateOfBirth || '', rirekishoPersonalColWidths[1]),
+        labelCell('性別', rirekishoPersonalColWidths[2]),
+        valueCell(cvData.personal.gender || '', rirekishoPersonalColWidths[3]),
       ],
     }),
     // 住所 full-width
     new TableRow({
       children: [
-        labelCell('住所', 28),
-        valueCell(cvData.personal.address || '', 72),
+        labelCell('住所', rirekishoPersonalColWidths[0]),
+        valueCell(cvData.personal.address || '', rirekishoPersonalColWidths[1] + rirekishoPersonalColWidths[2] + rirekishoPersonalColWidths[3], 3),
       ],
     }),
     // 電話番号 | メール
     new TableRow({
       children: [
-        labelCell('電話番号', 28),
-        valueCell(cvData.personal.phone || '', 22),
-        labelCell('メール', 22),
-        valueCell(cvData.personal.email || '', 28),
+        labelCell('電話番号', rirekishoPersonalColWidths[0]),
+        valueCell(cvData.personal.phone || '', rirekishoPersonalColWidths[1], undefined, 18),
+        labelCell('メール', rirekishoPersonalColWidths[2]),
+        valueCell(cvData.personal.email || '', rirekishoPersonalColWidths[3], undefined, 17),
       ],
     }),
   ];
 
-  const personalTable = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: noBorder,
-    rows: personalRows,
-  });
+  const personalTable = fixedTable(personalRows, rirekishoPersonalColWidths, noBorder);
 
   // Outer layout: [personal info (75%) | photo (25%)]
   children.push(
-    new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: noBorder,
-      rows: [
+    fixedTable(
+      [
         new TableRow({
           children: [
             new TableCell({
-              width: { size: 75, type: WidthType.PERCENTAGE },
+              width: { size: rirekishoPersonalWidthDxa, type: WidthType.DXA },
               verticalAlign: VerticalAlign.TOP,
               borders: noBorder,
               children: [personalTable],
             }),
             new TableCell({
-              width: { size: 25, type: WidthType.PERCENTAGE },
+              width: { size: rirekishoPhotoColDxa, type: WidthType.DXA },
               verticalAlign: VerticalAlign.TOP,
               borders: thinBorder,
               children: photoCellChildren,
@@ -4239,7 +4897,9 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
           ],
         }),
       ],
-    })
+      [rirekishoPersonalWidthDxa, rirekishoPhotoColDxa],
+      noBorder,
+    )
   );
 
   children.push(spacer(100));
@@ -4271,13 +4931,13 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
         new TableRow({
           children: [
             new TableCell({
-              width: { size: 28, type: WidthType.PERCENTAGE },
+              width: { size: rirekishoPeriodColDxa, type: WidthType.DXA },
               borders: thinBorder,
               verticalAlign: VerticalAlign.TOP,
               children: [new Paragraph({ children: [jpRun(period, { size: 18, color: '6B7280' })], spacing: { before: 40, after: 40 } })],
             }),
             new TableCell({
-              width: { size: 72, type: WidthType.PERCENTAGE },
+              width: { size: rirekishoDetailColDxa, type: WidthType.DXA },
               borders: thinBorder,
               verticalAlign: VerticalAlign.TOP,
               children: detailParas,
@@ -4286,7 +4946,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
         })
       );
     }
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorder, rows: eduRows }));
+    children.push(fixedTable(eduRows, [rirekishoPeriodColDxa, rirekishoDetailColDxa], noBorder));
     children.push(spacer(80));
   }
 
@@ -4323,13 +4983,13 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
         new TableRow({
           children: [
             new TableCell({
-              width: { size: 28, type: WidthType.PERCENTAGE },
+              width: { size: rirekishoPeriodColDxa, type: WidthType.DXA },
               borders: thinBorder,
               verticalAlign: VerticalAlign.TOP,
               children: [new Paragraph({ children: [jpRun(period, { size: 18, color: '6B7280' })], spacing: { before: 40, after: 40 } })],
             }),
             new TableCell({
-              width: { size: 72, type: WidthType.PERCENTAGE },
+              width: { size: rirekishoDetailColDxa, type: WidthType.DXA },
               borders: thinBorder,
               verticalAlign: VerticalAlign.TOP,
               children: detailParas,
@@ -4338,7 +4998,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
         })
       );
     }
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorder, rows: expRows }));
+    children.push(fixedTable(expRows, [rirekishoPeriodColDxa, rirekishoDetailColDxa], noBorder));
     children.push(spacer(80));
   }
 
@@ -4366,7 +5026,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
         ],
       })
     );
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorder, rows: skillRows }));
+    children.push(fixedTable(skillRows, [4680, 4680], noBorder));
     children.push(spacer(80));
   }
 
@@ -4405,7 +5065,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
         ],
       })
     )];
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorder, rows: langRows }));
+    children.push(fixedTable(langRows, [4680, 4680], noBorder));
     children.push(spacer(80));
   }
 
@@ -4413,14 +5073,12 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
   if (cvData.summary) {
     children.push(sectionHeadingRow('自己PR'));
     children.push(
-      new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: noBorder,
-        rows: [
+      fixedTable(
+        [
           new TableRow({
             children: [
               new TableCell({
-                width: { size: 100, type: WidthType.PERCENTAGE },
+                width: { size: rirekishoTableWidthDxa, type: WidthType.DXA },
                 borders: thinBorder,
                 children: [
                   new Paragraph({
@@ -4432,7 +5090,9 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
             ],
           }),
         ],
-      })
+        [rirekishoTableWidthDxa],
+        noBorder,
+      )
     );
     children.push(spacer(80));
   }
@@ -4456,7 +5116,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
         ],
       })
     );
-    children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorder, rows: certRows }));
+    children.push(fixedTable(certRows, [rirekishoTableWidthDxa], noBorder));
   }
 
   // ── Build and download document ───────────────────────────────────────────
@@ -4752,6 +5412,16 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     throw new Error('[exportToPDF] html2canvas is not a function after import');
   }
 
+  const initialCaptureTarget = (element.firstElementChild as HTMLElement | null) ?? element;
+  const initialCaptureTemplateId = getExportStyleTemplateId(initialCaptureTarget);
+  const captureFontFamily = initialCaptureTemplateId === 'ats-standard'
+    ? 'Arial, Helvetica, sans-serif'
+    : initialCaptureTemplateId === 'executive-premium'
+      ? 'Georgia, "Times New Roman", serif'
+      : initialCaptureTemplateId === 'nordic-clean' || initialCaptureTemplateId === 'tech-sidebar' || initialCaptureTemplateId === 'corporate-navy' || initialCaptureTemplateId === 'contemporary-bold'
+        ? 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif'
+        : "'NotoSans', 'NotoSansArabic', 'NotoSansDevanagari', 'NotoSansJP', sans-serif";
+
   // ── Step 2: inject Noto Sans fonts so html2canvas renders Unicode correctly ─
   // This ensures characters like č ć š đ ž (Latin Ext), Cyrillic, Arabic,
   // Hindi, and Japanese are rendered from a known TTF instead of a system
@@ -4764,7 +5434,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   // the system font may not have the required glyphs, causing broken characters.
   // We temporarily force NotoSans (which we just loaded) so all Unicode renders.
   const prevFontFamily = element.style.fontFamily;
-  element.style.fontFamily = "'NotoSans', 'NotoSansArabic', 'NotoSansDevanagari', 'NotoSansJP', sans-serif";
+  element.style.fontFamily = captureFontFamily;
 
   // ── Step 4: temporarily remove overflow clipping so html2canvas captures  ─
   //    the full scrollable content, not just the visible viewport slice.
@@ -4796,7 +5466,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     firstChild.style.overflow = 'visible';
     firstChild.style.maxHeight = 'none';
     firstChild.scrollTop = 0;
-    firstChild.style.fontFamily = "'NotoSans', 'NotoSansArabic', 'NotoSansDevanagari', 'NotoSansJP', sans-serif";
+    firstChild.style.fontFamily = captureFontFamily;
   }
 
   const scale = 2;
@@ -4944,6 +5614,41 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
         }
+        if (captureTemplateId === 'ats-standard') {
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
+        if (captureTemplateId === 'executive-premium') {
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
+        if (captureTemplateId === 'nordic-clean') {
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
+        if (captureTemplateId === 'tech-sidebar') {
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
+        if (captureTemplateId === 'corporate-navy') {
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
+        if (captureTemplateId === 'contemporary-bold') {
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
+        if (captureTemplateId === 'rirekisho') {
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
         cloneRoot.removeAttribute('data-export-capture-id');
         removeCloneStylesheets(clonedDocument);
       },
@@ -4989,8 +5694,8 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   }
 
   let pdfCanvas = canvas;
-  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal';
-  const shouldUseFullSemanticCanvas = (captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal') && Boolean(semanticMeaningfulBounds);
+  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho';
+  const shouldUseFullSemanticCanvas = (captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho') && Boolean(semanticMeaningfulBounds);
   if (shouldTrimBlankPdfSlices && !shouldUseFullSemanticCanvas) {
     const semanticCanvasBottom = getSemanticCanvasBottom(semanticMeaningfulBounds, canvas.width, captureWidth);
     const visibleBottom = Math.min(
@@ -5090,6 +5795,412 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
+async function prepareModernMinimalPdfPhotoDataUrl(cv: CVData): Promise<string | null> {
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  if (!showPhoto) return null;
+
+  const personalPhotos = cv.personal as CVData['personal'] & {
+    originalPhoto?: string;
+  };
+  const source = personalPhotos.originalPhoto?.trim() || cv.personal.photo?.trim();
+  if (!source) return null;
+
+  const prepared = await prepareCvPhotoForExport(source);
+  if (!prepared?.dataUrl) return null;
+  const decoded = await decodeImageForExport(prepared.dataUrl);
+  return decoded ? prepared.dataUrl : null;
+}
+
+export async function buildModernMinimalPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('Modern Minimal PDF export requires a browser DOM');
+  }
+
+  const photoDataUrl = await prepareModernMinimalPdfPhotoDataUrl(cv);
+  const container = document.createElement('div');
+  container.id = `modern-minimal-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-modern-minimal-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createModernMinimalPdfTemplate(cv, {
+    locale,
+    photoDataUrl,
+  }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('Modern Minimal PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportModernMinimalPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildModernMinimalPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+function createRirekishoPortraitPhoto(dataUrl: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = async () => {
+      try {
+        if (typeof img.decode === 'function') await img.decode().catch(() => undefined);
+        const sourceWidth = img.naturalWidth || img.width;
+        const sourceHeight = img.naturalHeight || img.height;
+        if (sourceWidth <= 0 || sourceHeight <= 0) {
+          resolve(null);
+          return;
+        }
+
+        const targetWidth = 270;
+        const targetHeight = 360;
+        const canvas = document.createElement('canvas');
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+        const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight);
+        const scaledWidth = sourceWidth * scale;
+        const scaledHeight = sourceHeight * scale;
+        const dx = (targetWidth - scaledWidth) / 2;
+        const dy = (targetHeight - scaledHeight) / 2;
+        ctx.drawImage(img, dx, dy, scaledWidth, scaledHeight);
+        resolve(canvas.toDataURL('image/jpeg', 0.92));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
+async function prepareRirekishoPdfPhotoDataUrl(cv: CVData): Promise<RirekishoCanonicalPhotoResult | null> {
+  const showPhoto = cv.personal.photoEnabled !== undefined ? cv.personal.photoEnabled : true;
+  if (!showPhoto) return null;
+
+  const personalPhotos = cv.personal as CVData['personal'] & {
+    originalPhoto?: string;
+  };
+  const original = personalPhotos.originalPhoto?.trim();
+  const selected = cv.personal.photo?.trim();
+  const source = original || selected || '';
+  if (!source) return null;
+
+  const prepared = await prepareCvPhotoForExport(source);
+  if (!prepared?.dataUrl) return null;
+  const portraitDataUrl = await createRirekishoPortraitPhoto(prepared.dataUrl);
+  if (!portraitDataUrl) return null;
+  const decoded = await decodeImageForExport(portraitDataUrl);
+  if (!decoded) return null;
+
+  return {
+    dataUrl: portraitDataUrl,
+    bytes: dataUrlToBytes(portraitDataUrl),
+    mimeType: 'image/jpeg',
+    width: 270,
+    height: 360,
+    source: original ? 'original-photo' : 'selected-photo',
+  };
+}
+
+export async function buildRirekishoPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('Rirekisho PDF export requires a browser DOM');
+  }
+
+  const canonicalPhoto = await prepareRirekishoPdfPhotoDataUrl(cv);
+  const container = document.createElement('div');
+  container.id = `rirekisho-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-rirekisho-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createRirekishoPdfTemplate(cv, {
+    locale,
+    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
+  }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('Rirekisho PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportRirekishoPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildRirekishoPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+async function prepareTechSidebarPdfPhotoDataUrl(cv: CVData): Promise<TechSidebarCanonicalPhotoResult | null> {
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  if (!showPhoto) return null;
+
+  const personalPhotos = cv.personal as CVData['personal'] & {
+    originalPhoto?: string;
+  };
+  const original = personalPhotos.originalPhoto?.trim();
+  const selected = cv.personal.photo?.trim();
+  const source = original || selected || '';
+  if (!source) return null;
+
+  const prepared = await prepareCvPhotoForExport(source);
+  if (!prepared?.dataUrl) return null;
+  const squareDataUrl = await createNordicCleanSquarePhoto(prepared.dataUrl);
+  const decoded = await decodeImageForExport(squareDataUrl);
+  if (!decoded) return null;
+  return {
+    dataUrl: squareDataUrl,
+    bytes: dataUrlToBytes(squareDataUrl),
+    mimeType: 'image/jpeg',
+    width: 164,
+    height: 164,
+    source: original ? 'original-photo' : 'selected-photo',
+  };
+}
+
+export async function buildTechSidebarPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('Tech Sidebar PDF export requires a browser DOM');
+  }
+
+  const canonicalPhoto = await prepareTechSidebarPdfPhotoDataUrl(cv);
+  const container = document.createElement('div');
+  container.id = `tech-sidebar-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-tech-sidebar-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createTechSidebarPdfTemplate(cv, {
+    locale,
+    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
+  }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('Tech Sidebar PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportTechSidebarPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildTechSidebarPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+async function prepareCorporateNavyPdfPhotoDataUrl(cv: CVData): Promise<CorporateNavyCanonicalPhotoResult | null> {
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  if (!showPhoto) return null;
+
+  const personalPhotos = cv.personal as CVData['personal'] & {
+    originalPhoto?: string;
+  };
+  const original = personalPhotos.originalPhoto?.trim();
+  const selected = cv.personal.photo?.trim();
+  const source = original || selected || '';
+  if (!source) return null;
+
+  const prepared = await prepareCvPhotoForExport(source);
+  if (!prepared?.dataUrl) return null;
+  const squareDataUrl = await createNordicCleanSquarePhoto(prepared.dataUrl);
+  const decoded = await decodeImageForExport(squareDataUrl);
+  if (!decoded) return null;
+  return {
+    dataUrl: squareDataUrl,
+    bytes: dataUrlToBytes(squareDataUrl),
+    mimeType: 'image/jpeg',
+    width: 164,
+    height: 164,
+    source: original ? 'original-photo' : 'selected-photo',
+  };
+}
+
+export async function buildCorporateNavyPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('Corporate Navy PDF export requires a browser DOM');
+  }
+
+  const canonicalPhoto = await prepareCorporateNavyPdfPhotoDataUrl(cv);
+  const container = document.createElement('div');
+  container.id = `corporate-navy-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-corporate-navy-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createCorporateNavyPdfTemplate(cv, {
+    locale,
+    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
+  }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('Corporate Navy PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportCorporateNavyPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildCorporateNavyPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+async function prepareContemporaryBoldPdfPhotoDataUrl(cv: CVData): Promise<ContemporaryBoldCanonicalPhotoResult | null> {
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  if (!showPhoto) return null;
+
+  const personalPhotos = cv.personal as CVData['personal'] & {
+    originalPhoto?: string;
+  };
+  const original = personalPhotos.originalPhoto?.trim();
+  const selected = cv.personal.photo?.trim();
+  const source = original || selected || '';
+  if (!source) return null;
+
+  const prepared = await prepareCvPhotoForExport(source);
+  if (!prepared?.dataUrl) return null;
+  const squareDataUrl = await createNordicCleanSquarePhoto(prepared.dataUrl);
+  const decoded = await decodeImageForExport(squareDataUrl);
+  if (!decoded) return null;
+  return {
+    dataUrl: squareDataUrl,
+    bytes: dataUrlToBytes(squareDataUrl),
+    mimeType: 'image/jpeg',
+    width: 164,
+    height: 164,
+    source: original ? 'original-photo' : 'selected-photo',
+  };
+}
+
+export async function buildContemporaryBoldPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('Contemporary Bold PDF export requires a browser DOM');
+  }
+
+  const canonicalPhoto = await prepareContemporaryBoldPdfPhotoDataUrl(cv);
+  const container = document.createElement('div');
+  container.id = `contemporary-bold-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-contemporary-bold-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createContemporaryBoldPdfTemplate(cv, {
+    locale,
+    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
+  }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('Contemporary Bold PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportContemporaryBoldPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildContemporaryBoldPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
 async function awaitExportTemplateImages(root: HTMLElement): Promise<void> {
   const images = Array.from(root.querySelectorAll<HTMLImageElement>('img'));
   await Promise.all(images.map(async (img) => {
@@ -5156,6 +6267,167 @@ export async function exportElegantFormalPdf(
   options: { photoDataUrl?: string | null } = {},
 ): Promise<SaveFileResult> {
   const pdfBlob = await buildElegantFormalPdfBlob(cv, locale, options);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+export async function buildAtsStandardPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('ATS Standard PDF export requires a browser DOM');
+  }
+
+  const container = document.createElement('div');
+  container.id = `ats-standard-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-ats-standard-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createAtsStandardPdfTemplate(cv, { locale }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('ATS Standard PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportAtsStandardPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildAtsStandardPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+export async function buildExecutivePremiumPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('Executive Premium PDF export requires a browser DOM');
+  }
+
+  const canonicalPhoto = await prepareExecutivePremiumCanonicalPhoto(cv);
+  const container = document.createElement('div');
+  container.id = `executive-premium-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-executive-premium-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createExecutivePremiumPdfTemplate(cv, {
+    locale,
+    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
+  }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('Executive Premium PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportExecutivePremiumPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildExecutivePremiumPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+async function prepareNordicCleanPdfPhotoDataUrl(cv: CVData): Promise<NordicCleanCanonicalPhotoResult | null> {
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  if (!showPhoto) return null;
+
+  const personalPhotos = cv.personal as CVData['personal'] & {
+    originalPhoto?: string;
+  };
+  const source = personalPhotos.originalPhoto?.trim() || '';
+  if (!source) return null;
+
+  const prepared = await prepareCvPhotoForExport(source);
+  if (!prepared?.dataUrl) return null;
+  const squareDataUrl = await createNordicCleanSquarePhoto(prepared.dataUrl);
+  const decoded = await decodeImageForExport(squareDataUrl);
+  if (!decoded) return null;
+  return {
+    dataUrl: squareDataUrl,
+    bytes: dataUrlToBytes(squareDataUrl),
+    mimeType: 'image/jpeg',
+    width: 164,
+    height: 164,
+    source: 'original-photo',
+  };
+}
+
+export async function buildNordicCleanPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('Nordic Clean PDF export requires a browser DOM');
+  }
+
+  const canonicalPhoto = await prepareNordicCleanPdfPhotoDataUrl(cv);
+  const container = document.createElement('div');
+  container.id = `nordic-clean-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-nordic-clean-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createNordicCleanPdfTemplate(cv, {
+    locale,
+    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
+  }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('Nordic Clean PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportNordicCleanPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildNordicCleanPdfBlob(cv, locale);
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 

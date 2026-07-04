@@ -677,12 +677,12 @@ export function ProfessionalClassicTemplate({ data, locale }: TemplateProps) {
   );
 }
 
-// --- ATS Standard: no photo (ATS-friendly, keeps layout clean) ---
+// --- ATS Standard: PDF export uses a dedicated renderer; this is the live preview. ---
 export function ATSStandardTemplate({ data, locale }: TemplateProps) {
   const rs = regionSettings[data.region];
   const L = getLabels(locale);
   return (
-    <div className="bg-white text-gray-900 p-8 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
+    <div data-template-id="ats-standard" className="bg-white text-gray-900 p-8 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
       <header className="text-center mb-6">
         <h1 className="text-xl font-bold">{data.personal.fullName || 'Your Name'}</h1>
         <p className="text-gray-600">{data.personal.jobTitle}</p>
@@ -818,7 +818,7 @@ export function ExecutivePremiumTemplate({ data, locale }: TemplateProps) {
   const L = getLabels(locale);
   const colCount = [data.skills.length > 0, data.languages.length > 0, data.certifications.length > 0].filter(Boolean).length || 1;
   return (
-    <div className="bg-white text-gray-900 max-w-[210mm] mx-auto font-serif text-sm" style={{ minHeight: '297mm' }}>
+    <div data-template-id="executive-premium" className="bg-white text-gray-900 max-w-[210mm] mx-auto font-serif text-sm" style={{ minHeight: '297mm' }}>
       {/* Dark navy header — inline backgroundColor ensures html2canvas captures background correctly */}
       <header
         className="text-white px-10 py-8"
@@ -906,7 +906,7 @@ export function NordicCleanTemplate({ data, locale }: TemplateProps) {
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
-    <div className="bg-white text-gray-800 p-10 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
+    <div data-template-id="nordic-clean" className="bg-white text-gray-800 p-10 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
       <header className="mb-8">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -990,7 +990,7 @@ export function TechSidebarTemplate({ data, locale }: TemplateProps) {
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
-    <div className="bg-white text-gray-900 max-w-[210mm] mx-auto font-sans text-sm" style={{ minHeight: '297mm' }}>
+    <div data-template-id="tech-sidebar" className="bg-white text-gray-900 max-w-[210mm] mx-auto font-sans text-sm" style={{ minHeight: '297mm' }}>
       <div className="flex min-h-[297mm]">
         <aside className="w-[38%] bg-slate-900 text-white p-7 flex flex-col gap-6">
           {showPhoto && (
@@ -1083,7 +1083,7 @@ export function CorporateNavyTemplate({ data, locale }: TemplateProps) {
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
-    <div className="bg-white text-gray-900 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
+    <div data-template-id="corporate-navy" className="bg-white text-gray-900 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
       <header className="bg-[#0F172A] text-white px-10 py-8">
         <div className="flex items-center justify-between gap-6">
           <div>
@@ -1173,6 +1173,7 @@ export function RirekishoTemplate({ data }: TemplateProps) {
 
   return (
     <div
+      data-template-id="rirekisho"
       className="bg-white text-gray-900 p-8 max-w-[210mm] mx-auto text-sm leading-relaxed"
       style={{ minHeight: '297mm', fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic Pro', Meiryo, sans-serif" }}
     >

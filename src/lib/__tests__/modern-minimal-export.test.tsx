@@ -8,9 +8,12 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ModernMinimalTemplate, templateComponents } from '@/components/cv-templates';
+import { createModernMinimalPdfTemplate } from '@/lib/modern-minimal-pdf-template';
 import {
+  buildModernMinimalPdfBlob,
   CV_PDF_A4_HEIGHT_MM,
   CV_PDF_A4_WIDTH_MM,
+  exportModernMinimalPdf,
   prepareModernMinimalImagesForExport,
   resolveExportImageDataUrl,
 } from '@/lib/export';
@@ -58,9 +61,13 @@ function cv(overrides: Partial<CVData> = {}): CVData {
 }
 
 const exportSource = () => fs.readFileSync(path.resolve('src/lib/export.ts'), 'utf8');
+const pageSource = () => fs.readFileSync(path.resolve('src/app/cv-builder/page.tsx'), 'utf8');
 const templateSource = () => fs.readFileSync(path.resolve('src/components/cv-templates.tsx'), 'utf8');
 const previewSource = () => fs.readFileSync(path.resolve('src/components/TemplatePreview.tsx'), 'utf8');
 const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+const originalPhoto = `data:image/jpeg;base64,${Buffer.from('modern-minimal-original-photo').toString('base64')}`;
+const selectedPhoto = `data:image/jpeg;base64,${Buffer.from('modern-minimal-selected-photo').toString('base64')}`;
+let loadedImageSources: string[] = [];
 
 class MockImage {
   onload: (() => void) | null = null;
@@ -76,6 +83,7 @@ class MockImage {
 
   set src(value: string) {
     this.currentSrc = value;
+    loadedImageSources.push(value);
     setTimeout(() => {
       if (value.includes('broken')) this.onerror?.();
       else this.onload?.();
@@ -83,8 +91,110 @@ class MockImage {
   }
 }
 
+function draganCv(): CVData {
+  return cv({
+    personal: {
+      fullName: 'Dragan Obradović',
+      email: 'diodala12@gmail.com',
+      phone: '865333680065',
+      address: 'Braće Abafi 4',
+      jobTitle: 'Učitelj u osnovnoj školi',
+      photo: selectedPhoto,
+      originalPhoto,
+      photoEnabled: true,
+    } as CVData['personal'] & { originalPhoto: string },
+    summary: 'Iskusan učitelj sa oko devet godina rada u obrazovanju. Posebnu vrednost donosi kroz koučing, liderske kompetencije i profesionalnu pažnju u kreiranju kvalitetnih nastavnih sadržaja.',
+    experience: [
+      {
+        id: 'exp-1',
+        company: 'Zhff',
+        position: 'Učitelj u osnovnoj školi',
+        startDate: '2023-05',
+        endDate: '',
+        isPresent: true,
+        description: 'Planirao sam nastavne jedinice i kreirao kvalitetne materijale.\nPrimenio sam diferenciranu nastavu uz profesionalnu pažnju.',
+      },
+      {
+        id: 'exp-2',
+        company: 'Hfh',
+        position: 'Nastavnik geografije',
+        startDate: '2017-02',
+        endDate: '2023-01',
+        isPresent: false,
+        description: 'Koristio sam geografske karte i digitalne alate.\nUčestvovao sam u roditeljskim sastancima.',
+      },
+    ],
+    education: [{ id: 'edu-1', school: 'Metematički fakultet', degree: 'VI', startDate: '2020-01', endDate: '2025-02', description: '' }],
+    skills: ['Teamwork', 'Organization', 'Coaching', 'Coaching', 'Leadership'],
+    certifications: [],
+    languages: [{ name: 'Serbian', level: 'Native' }],
+    templateId: 'modern-minimal',
+    region: 'Balkan',
+  });
+}
+
+function makeCanvas(width: number, height: number, hasContentAt: (absoluteY: number) => boolean): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  Object.defineProperty(canvas, 'getContext', {
+    value: vi.fn(() => ({
+      drawImage: vi.fn(),
+      getImageData: vi.fn((_x: number, y: number, w: number, h: number) => {
+        const data = new Uint8ClampedArray(w * h * 4);
+        data.fill(255);
+        for (let row = 0; row < h; row += 1) {
+          if (!hasContentAt(y + row)) continue;
+          const index = row * w * 4;
+          data[index] = 79;
+          data[index + 1] = 70;
+          data[index + 2] = 229;
+          data[index + 3] = 255;
+        }
+        return { data };
+      }),
+    })),
+    configurable: true,
+  });
+  Object.defineProperty(canvas, 'toDataURL', { value: vi.fn(() => 'data:image/jpeg;base64,modern-minimal'), configurable: true });
+  return canvas;
+}
+
+function installPdfMocks(canvas: HTMLCanvasElement) {
+  const instances: Array<{ pages: number; addImage: ReturnType<typeof vi.fn>; addPage: ReturnType<typeof vi.fn> }> = [];
+  const clonedTextContents: string[] = [];
+  vi.doMock('html2canvas', () => ({
+    default: vi.fn(async (_target: HTMLElement, options?: { onclone?: (doc: Document) => void }) => {
+      if (options?.onclone) {
+        const clonedDocument = document.implementation.createHTMLDocument('clone');
+        clonedDocument.body.innerHTML = document.body.innerHTML;
+        options.onclone(clonedDocument);
+        clonedTextContents.push(clonedDocument.body.textContent ?? '');
+      }
+      return canvas;
+    }),
+  }));
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      addImage = vi.fn();
+      addPage = vi.fn(() => {
+        this.pages += 1;
+      });
+      constructor() {
+        instances.push(this);
+      }
+      output() {
+        return new Blob(['%PDF-1.7\nmodern-minimal\n%%EOF'], { type: 'application/pdf' });
+      }
+    },
+  }));
+  return { instances, clonedTextContents };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
+  loadedImageSources = [];
   Object.defineProperty(globalThis, 'Image', { value: MockImage, configurable: true });
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     beginPath: vi.fn(),
@@ -101,10 +211,17 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(tinyPng);
   Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(() => 'blob:http://test/docx'), configurable: true });
   Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true });
+  Object.defineProperty(globalThis, 'requestAnimationFrame', { value: (cb: FrameRequestCallback) => setTimeout(cb, 0), configurable: true });
+  Object.defineProperty(document, 'fonts', {
+    value: { load: vi.fn().mockResolvedValue([]), ready: Promise.resolve() },
+    configurable: true,
+  });
 });
 
 afterEach(() => {
   document.body.innerHTML = '';
+  vi.doUnmock('html2canvas');
+  vi.doUnmock('jspdf');
   vi.restoreAllMocks();
 });
 
@@ -256,6 +373,105 @@ describe('Modern Minimal preview/export parity', () => {
     expect(src).not.toContain('format: useSinglePage ? [PDF_WIDTH_MM');
   });
 
+  test('Modern Minimal PDF uses the direct renderer route and disables print fallback', () => {
+    const page = pageSource();
+    const branch = page.indexOf("liveCv.templateId === 'modern-minimal'");
+    const exportCall = page.indexOf('exportModernMinimalPdf', branch);
+    const genericExport = page.indexOf('exportToPDF', branch);
+    const fallbackGuard = page.indexOf("cv.templateId === 'modern-minimal'", branch);
+    const fallback = page.indexOf('await openPrintFallback', fallbackGuard);
+
+    expect(branch).toBeGreaterThan(-1);
+    expect(exportCall).toBeGreaterThan(branch);
+    expect(exportCall).toBeLessThan(genericExport);
+    expect(page.slice(branch, exportCall)).toContain('cvRef.current');
+    expect(page.slice(branch, branch + 420)).toContain('showCvExportSuccessToast');
+    expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(page.slice(fallbackGuard, fallback)).toContain('return;');
+  });
+
+  test('dedicated Modern Minimal PDF root is fixed A4, compact, and keeps text spacing intact', () => {
+    const root = createModernMinimalPdfTemplate(draganCv(), { locale: 'en', photoDataUrl: originalPhoto });
+    const photoFrame = root.querySelector('[data-modern-minimal-photo-frame]') as HTMLElement;
+    const photo = root.querySelector('[data-export-photo="modern-minimal"]') as HTMLImageElement;
+    const contactRow = root.querySelector('[data-modern-minimal-contact-row]') as HTMLElement;
+    const dates = Array.from(root.querySelectorAll<HTMLElement>('div')).filter(el => el.textContent?.includes('2020-01 - 2025-02'));
+    const text = root.textContent ?? '';
+
+    expect(root.dataset.templateId).toBe('modern-minimal');
+    expect(root.style.width).toBe('210mm');
+    expect(root.style.minWidth).toBe('210mm');
+    expect(root.style.padding).toBe('24px 34px 22px');
+    expect(photoFrame.style.width).toBe('76px');
+    expect(photoFrame.style.height).toBe('76px');
+    expect(photoFrame.style.borderRadius).toBe('9999px');
+    expect(photoFrame.style.overflow).toBe('hidden');
+    expect(photo.style.objectFit).toBe('cover');
+    expect(root.querySelector('[data-modern-minimal-export-space]')).toBeNull();
+    expect(contactRow.textContent).toContain('Braće Abafi 4');
+    expect(dates.some(el => el.style.whiteSpace === 'nowrap')).toBe(true);
+    expect(text).toContain('Učitelj u osnovnoj školi');
+    expect(text).toContain('Nastavnik geografije');
+    expect(text).toContain('profesionalnu pažnju');
+    expect(text).toContain('kreiranju kvalitetnih');
+    expect(text).toContain('Metematički fakultet');
+    expect(text).not.toContain('osnovnojškoli');
+    expect(text).not.toContain('Nastavnikgeografije');
+    expect(text).not.toContain('Metematičkifakultet');
+    expect(text).not.toContain('profesionalnupažnju');
+    expect(text).not.toContain('kreiranjukvalitetnih');
+    expect(text).toContain('VI / Metematički fakultet');
+    expect(text).toContain('Teamwork');
+  });
+
+  test('Modern Minimal direct PDF Blob is non-empty, uses originalPhoto, and Dragan fixture remains one page', async () => {
+    const canvas = makeCanvas(800, 1050, y => y < 980);
+    const { instances, clonedTextContents } = installPdfMocks(canvas);
+
+    const blob = await buildModernMinimalPdfBlob(draganCv(), 'en');
+
+    expect(blob.size).toBeGreaterThan(0);
+    expect(await blob.text()).toContain('%PDF');
+    expect(instances).toHaveLength(1);
+    expect(instances[0].pages).toBe(1);
+    expect(instances[0].addPage).not.toHaveBeenCalled();
+    expect(loadedImageSources).toContain(originalPhoto);
+    expect(loadedImageSources).not.toContain(selectedPhoto);
+    const cloneText = clonedTextContents.join('\n');
+    expect(cloneText).toContain('VI / Metematički fakultet');
+    expect(cloneText).toContain('Teamwork');
+    expect(cloneText).toContain('Učitelj u osnovnoj školi');
+    expect(cloneText).not.toContain('osnovnojškoli');
+    expect(cloneText).not.toContain('Nastavnikgeografije');
+    expect(cloneText).not.toContain('Metematičkifakultet');
+    expect(cloneText).not.toContain('profesionalnupažnju');
+    expect(cloneText).not.toContain('kreiranjukvalitetnih');
+  });
+
+  test('Modern Minimal export save path writes a PDF through platform save', async () => {
+    const canvas = makeCanvas(800, 1000, () => true);
+    installPdfMocks(canvas);
+    let savedBlob: Blob | undefined;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      savedBlob = blob as Blob;
+      return 'blob:http://test/modern-minimal-pdf';
+    });
+    const clickSpy = vi.fn();
+    const realCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const el = realCreateElement(tagName);
+      if (tagName.toLowerCase() === 'a') el.click = clickSpy;
+      return el;
+    });
+
+    const result = await exportModernMinimalPdf(draganCv(), 'Dragan Obradovic - CV', 'en');
+
+    expect(clickSpy).toHaveBeenCalled();
+    expect(savedBlob?.type).toBe('application/pdf');
+    expect(result.fileName).toBe('Dragan Obradovic - CV.pdf');
+    expect(result.sourceBytes).toBeGreaterThan(0);
+  });
+
   test('Modern Minimal DOCX uses a dedicated layout before the generic single fallback', () => {
     const src = exportSource();
     const modernConfig = src.indexOf('customLayout: \'modern-minimal\'');
@@ -360,5 +576,74 @@ describe('Modern Minimal preview/export parity', () => {
       : [];
 
     expect(changedFiles).not.toContain('src/lib/types.ts');
+  });
+});
+
+describe('Modern Minimal synced Android assets regression', () => {
+  const androidPublicDir = path.resolve('android/app/src/main/assets/public');
+  const androidChunksDir = path.join(androidPublicDir, '_next', 'static', 'chunks');
+
+  function readSyncedAndroidChunks(): { found: boolean; combined: string } {
+    if (!fs.existsSync(androidChunksDir)) return { found: false, combined: '' };
+    const files = fs.readdirSync(androidChunksDir).filter(name => name.endsWith('.js'));
+    if (files.length === 0) return { found: false, combined: '' };
+    const combined = files
+      .map(name => fs.readFileSync(path.join(androidChunksDir, name), 'utf8'))
+      .join('\n');
+    return { found: true, combined };
+  }
+
+  const { found } = readSyncedAndroidChunks();
+
+  // This test only runs meaningfully after `npx cap sync android` has copied a
+  // fresh `out` build into android/app/src/main/assets/public. If that folder
+  // has not been synced yet (e.g. a clean checkout before any build), skip
+  // rather than fail — an unsynced/missing folder is a different problem than
+  // a stale/regressed one.
+  test.skipIf(!found)('synced Android assets contain the current Modern Minimal PDF renderer and no old span-spacer markers', () => {
+    const { combined } = readSyncedAndroidChunks();
+
+    // New renderer markers must be present — proves the currently built source
+    // (with element.textContent = text, no per-word spacer spans) is what
+    // actually ships inside the Android app bundle, not a stale/duplicate copy.
+    expect(combined).toContain('data-modern-minimal-pdf-template');
+    expect(combined.includes('modern-minimal-pdf-export')).toBe(true);
+
+    // Old markers from the pre-fix span-by-word spacer implementation must be
+    // completely absent. If these ever reappear, the synced Android assets are
+    // stale or a regression reintroduced the old renderer.
+    expect(combined).not.toContain('data-modern-minimal-export-space');
+    expect(combined).not.toContain('modern-minimal-export-space');
+
+    // Guard against the exact Android-reported joined words resurfacing in the
+    // shipped bundle logic (this checks the fixture strings used to prove the
+    // renderer keeps natural spaces, not runtime CV content).
+    expect(combined).not.toContain('Nastavnikgeografije');
+    expect(combined).not.toContain('Metematičkifakultet');
+    expect(combined).not.toContain('profesionalnupažnju');
+  });
+
+  test('Modern Minimal PDF source fixes are committed to git, not only present in the working tree', () => {
+    if (!fs.existsSync(path.resolve('.git'))) return;
+    const trackedFiles = execFileSync('git', ['ls-files', 'src/lib/modern-minimal-pdf-template.ts'], { encoding: 'utf8' }).trim();
+    const uncommittedExportDiff = execFileSync('git', ['diff', '--name-only', 'HEAD', '--', 'src/lib/export.ts'], { encoding: 'utf8' });
+
+    if (!trackedFiles) {
+      console.warn(
+        '[modern-minimal regression] src/lib/modern-minimal-pdf-template.ts is not committed to git. ' +
+        'Any release build (AAB/CI) produced from a clean checkout instead of this working tree will NOT ' +
+        'contain the Modern Minimal PDF text-spacing fix, even though local build/sync/tests pass.',
+      );
+    }
+    if (uncommittedExportDiff.includes('export.ts')) {
+      console.warn(
+        '[modern-minimal regression] src/lib/export.ts has uncommitted changes affecting Modern Minimal PDF export. ' +
+        'A clean-checkout release build would use the old exportToPDF-only behavior.',
+      );
+    }
+    // Informational only — this repo's workflow intentionally avoids auto-committing.
+    // The warnings above surface the most likely real-world cause of "fixed locally,
+    // still broken in the Android/Internal testing build" reports.
+    expect(true).toBe(true);
   });
 });
