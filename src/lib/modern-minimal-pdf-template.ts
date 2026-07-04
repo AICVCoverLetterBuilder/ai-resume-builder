@@ -37,6 +37,37 @@ function append(parent: HTMLElement, tag: string, styles?: StyleMap, text?: stri
   return element;
 }
 
+// Bold, single-line, highly-visible fields (work position titles, education
+// degree/school lines) render each whitespace-separated segment as its own
+// element inside a wrapping flex row with an explicit CSS `gap`. The gap
+// between segments is then guaranteed by real element box layout (the same
+// well-tested flexbox positioning html2canvas already relies on elsewhere in
+// this template, e.g. the contact row and skill chips), instead of depending
+// on a single text node's internal space-glyph width — which is what could
+// still visually collapse on some WebView/html2canvas font/text-shaping
+// combinations even with extra word-spacing. A real space character is kept
+// between segments too (as a suppressed whitespace-only flex child) so
+// textContent/copy semantics stay natural.
+function appendSafeWords(parent: HTMLElement, tag: string, text: string, styles: StyleMap): HTMLElement {
+  const container = append(parent, tag, {
+    ...styles,
+    display: 'flex',
+    flexWrap: 'wrap',
+    columnGap: '0.32em',
+    rowGap: '1px',
+    alignItems: 'baseline',
+  });
+  const words = text.split(/\s+/).filter(Boolean);
+  words.forEach((word, index) => {
+    const span = document.createElement('span');
+    span.textContent = word;
+    container.appendChild(span);
+    if (index < words.length - 1) container.appendChild(document.createTextNode(' '));
+  });
+  container.setAttribute('data-modern-minimal-safe-words', 'true');
+  return container;
+}
+
 function labels(locale?: Locale) {
   const t = translations[locale ?? 'en'] ?? translations.en;
   return {
@@ -217,7 +248,7 @@ export function createModernMinimalPdfTemplate(
         columnGap: '12px',
         alignItems: 'baseline',
       });
-      append(row, 'div', { color: TEXT, fontSize: '11px', fontWeight: '700', lineHeight: '1.22', minWidth: '0', wordSpacing: '1.2px' }, exp.position).setAttribute('data-export-meaningful', 'true');
+      appendSafeWords(row, 'div', exp.position, { color: TEXT, fontSize: '11px', fontWeight: '700', lineHeight: '1.22', minWidth: '0', wordSpacing: '1.2px' }).setAttribute('data-export-meaningful', 'true');
       append(row, 'div', { color: '#6b7280', fontSize: '9.5px', lineHeight: '1.2', textAlign: 'right', whiteSpace: 'nowrap' }, dateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)).setAttribute('data-export-meaningful', 'true');
       if (exp.company) append(entry, 'p', { margin: '1px 0 2px', color: '#6b7280', fontSize: '10px', lineHeight: '1.2', wordSpacing: '1.2px' }, exp.company).setAttribute('data-export-meaningful', 'true');
       lines(exp.description).forEach((line) => {
@@ -250,7 +281,7 @@ export function createModernMinimalPdfTemplate(
         pageBreakInside: 'avoid',
       });
       row.setAttribute('data-export-group', 'modern-minimal-education');
-      append(row, 'div', { color: TEXT, fontSize: '10.5px', fontWeight: '700', lineHeight: '1.22', minWidth: '0', wordSpacing: '1.2px' }, [edu.degree, edu.school].filter(Boolean).join(' / ')).setAttribute('data-export-meaningful', 'true');
+      appendSafeWords(row, 'div', [edu.degree, edu.school].filter(Boolean).join(' / '), { color: TEXT, fontSize: '10.5px', fontWeight: '700', lineHeight: '1.22', minWidth: '0', wordSpacing: '1.2px' }).setAttribute('data-export-meaningful', 'true');
       append(row, 'div', { color: '#6b7280', fontSize: '9.5px', lineHeight: '1.2', textAlign: 'right', whiteSpace: 'nowrap' }, [edu.startDate, edu.endDate].filter(Boolean).join(' - ')).setAttribute('data-export-meaningful', 'true');
     });
   }

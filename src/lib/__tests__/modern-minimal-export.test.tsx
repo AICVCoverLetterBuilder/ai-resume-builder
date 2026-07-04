@@ -471,6 +471,26 @@ describe('Modern Minimal preview/export parity', () => {
     expect(text).not.toContain('kreiranjukvalitetnih');
     expect(text).toContain('VI / Metematički fakultet');
     expect(text).toContain('Teamwork');
+
+    // Bold single-line fields (position titles, education degree/school line) must
+    // render each word as its own element inside a flex row with a real CSS `gap`,
+    // so the inter-word gap is guaranteed by element box layout rather than by a
+    // single text node's space-glyph width (which is what could still visually
+    // collapse on some WebView/html2canvas font combinations).
+    const safeWordContainers = Array.from(root.querySelectorAll<HTMLElement>('[data-modern-minimal-safe-words]'));
+    expect(safeWordContainers.length).toBeGreaterThanOrEqual(3); // 2 experience positions + 1 education line
+    safeWordContainers.forEach((container) => {
+      expect(container.style.display).toBe('flex');
+      expect(container.style.flexWrap).toBe('wrap');
+      expect(container.style.columnGap).toBe('0.32em');
+      expect(container.querySelectorAll('span').length).toBeGreaterThanOrEqual(2);
+    });
+    const positionContainer = safeWordContainers.find(el => el.textContent === 'Nastavnik geografije');
+    expect(positionContainer).toBeDefined();
+    expect(Array.from(positionContainer!.querySelectorAll('span')).map(s => s.textContent)).toEqual(['Nastavnik', 'geografije']);
+    const educationContainer = safeWordContainers.find(el => el.textContent === 'VI / Metematički fakultet');
+    expect(educationContainer).toBeDefined();
+    expect(Array.from(educationContainer!.querySelectorAll('span')).map(s => s.textContent)).toEqual(['VI', '/', 'Metematički', 'fakultet']);
   });
 
   test('Modern Minimal direct PDF Blob is non-empty, uses the user-framed selected photo (matching DOCX), and Dragan fixture remains one page', async () => {
