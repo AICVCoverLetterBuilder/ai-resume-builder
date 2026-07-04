@@ -1743,7 +1743,10 @@ export async function exportToDOCX(
   function sidebarSectionHeading(text: string) {
     return new Paragraph({
       children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 15, color: cfg.accent })],
-      spacing: { before: 140, after: 60 },
+      // Tightened from before:140/after:60 — this heading is only used by Creative
+      // Bold's sidebar (skills/languages/certifications) and the extra spacing was
+      // part of what pushed Education onto a near-empty page 2.
+      spacing: { before: 100, after: 40 },
     });
   }
 
@@ -4428,7 +4431,13 @@ export async function exportToDOCX(
     }));
   }
 
-  // ════ LAYOUT: sidebar-left ═══════════════════════════════════════════════════════════════════
+  // ════ LAYOUT: sidebar-left (Creative Bold — the only template on this generic
+  //   path; every other template has its own dedicated customLayout branch above) ═══
+  // Spacing below is intentionally compact: this is the tallest sidebar layout
+  // (photo + name + title + contacts + skills + languages + certifications all
+  // stacked in one column, alongside a 2-entry experience + education main column),
+  // and the previous, more generous spacing routinely pushed Education onto an
+  // otherwise nearly-empty page 2 for realistic CV content.
   else {
     const sidebarBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
     const sidebarPct = cfg.sidebarPct || 33;
@@ -4436,25 +4445,25 @@ export async function exportToDOCX(
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const sidebarChildren: any[] = [];
-    if (photoBytes) sidebarChildren.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: photoBytes, transformation: { width: photoW, height: photoH }, type: photoType })], spacing: { after: 120 } }));
+    if (photoBytes) sidebarChildren.push(new Paragraph({ alignment: AlignmentType.CENTER, children: [new ImageRun({ data: photoBytes, transformation: { width: photoW, height: photoH }, type: photoType })], spacing: { after: 90 } }));
     sidebarChildren.push(
-      new Paragraph({ children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 26, color: cfg.headerText })], spacing: { after: 40 } }),
-      new Paragraph({ children: [new TextRun({ text: cvData.personal.jobTitle || '', size: 19, color: cfg.titleColor })], spacing: { after: 100 } }),
+      new Paragraph({ children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 26, color: cfg.headerText })], spacing: { after: 30 } }),
+      new Paragraph({ children: [new TextRun({ text: cvData.personal.jobTitle || '', size: 19, color: cfg.titleColor })], spacing: { after: 70 } }),
     );
-    for (const c of contacts) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: c, size: 17, color: cfg.titleColor })], spacing: { after: 40 } }));
-    if (cvData.personal.fathersName) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 17, color: cfg.titleColor }), new TextRun({ text: cvData.personal.fathersName, size: 17, color: cfg.titleColor })], spacing: { after: 40 } }));
+    for (const c of contacts) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: c, size: 17, color: cfg.titleColor })], spacing: { after: 30 } }));
+    if (cvData.personal.fathersName) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 17, color: cfg.titleColor }), new TextRun({ text: cvData.personal.fathersName, size: 17, color: cfg.titleColor })], spacing: { after: 30 } }));
     if (cvData.skills.length > 0) {
       sidebarChildren.push(sidebarSectionHeading(t.cv.skills));
       const localizedSkills = cvData.skills.map((s) => getLocalizedCvSkillName(s, locale));
-      for (const sk of localizedSkills) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: sk, size: 17, color: cfg.headerText })], spacing: { after: 40 } }));
+      for (const sk of localizedSkills) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: sk, size: 17, color: cfg.headerText })], spacing: { after: 28 } }));
     }
     if (cvData.languages.length > 0) {
       sidebarChildren.push(sidebarSectionHeading(t.cv.languages));
-      for (const lang of cvData.languages) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 17, color: cfg.headerText }), new TextRun({ text: `  ${lang.level}`, size: 16, color: cfg.titleColor })], spacing: { after: 40 } }));
+      for (const lang of cvData.languages) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 17, color: cfg.headerText }), new TextRun({ text: `  ${lang.level}`, size: 16, color: cfg.titleColor })], spacing: { after: 28 } }));
     }
     if (cvData.certifications.length > 0) {
       sidebarChildren.push(sidebarSectionHeading(t.cv.certifications));
-      for (const cert of cvData.certifications) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: '• ' + cert, size: 17, color: cfg.headerText })], spacing: { after: 40 } }));
+      for (const cert of cvData.certifications) sidebarChildren.push(new Paragraph({ children: [new TextRun({ text: '• ' + cert, size: 17, color: cfg.headerText })], spacing: { after: 28 } }));
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -4465,7 +4474,7 @@ export async function exportToDOCX(
       const borderConfig = cfg.showHeadingBorder !== false
         ? { bottom: { style: BorderStyle.SINGLE, size: 6, color: cfg.headingBorder } }
         : {};
-      return new Paragraph({ children: [new TextRun({ text: label, bold: true, size: 17, color: cfg.headingColor })], spacing: { before: 0, after: 80 }, border: borderConfig });
+      return new Paragraph({ children: [new TextRun({ text: label, bold: true, size: 17, color: cfg.headingColor })], spacing: { before: 0, after: 55 }, border: borderConfig });
     }
     // FIX-08: right-aligned date row for sidebar main panel
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -4482,7 +4491,7 @@ export async function exportToDOCX(
     const rightDates = cfg.rightAlignDates === true;
     if (cvData.summary) {
       mainChildren.push(mainHeading(t.cv.summary));
-      mainChildren.push(new Paragraph({ children: [new TextRun({ text: cvData.summary, size: 20, color: '374151' })], spacing: { after: 120 } }));
+      mainChildren.push(new Paragraph({ children: [new TextRun({ text: cvData.summary, size: 20, color: '374151' })], spacing: { after: 90 } }));
     }
     if (cvData.experience.length > 0) {
       mainChildren.push(mainHeading(t.cv.experience));
@@ -4494,15 +4503,15 @@ export async function exportToDOCX(
             new TextRun({ text: '  —  ' + exp.company, size: 20, color: '6B7280' }),
           ], dateText));
         } else {
-          mainChildren.push(new Paragraph({ children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' }), new TextRun({ text: '  —  ' + exp.company, size: 20, color: '6B7280' })], spacing: { after: 40 } }));
-          mainChildren.push(new Paragraph({ children: [new TextRun({ text: dateText, size: 18, color: '9CA3AF', italics: true })], spacing: { after: 60 } }));
+          mainChildren.push(new Paragraph({ children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' }), new TextRun({ text: '  —  ' + exp.company, size: 20, color: '6B7280' })], spacing: { after: 30 } }));
+          mainChildren.push(new Paragraph({ children: [new TextRun({ text: dateText, size: 18, color: '9CA3AF', italics: true })], spacing: { after: 40 } }));
         }
         if (exp.description) {
           for (const line of exp.description.split('\n')) {
-            if (line.trim()) mainChildren.push(new Paragraph({ children: [new TextRun({ text: line, size: 20, color: '374151' })], spacing: { after: 40 } }));
+            if (line.trim()) mainChildren.push(new Paragraph({ children: [new TextRun({ text: line, size: 20, color: '374151' })], spacing: { after: 28 } }));
           }
         }
-        mainChildren.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+        mainChildren.push(new Paragraph({ text: '', spacing: { after: 50 } }));
       }
     }
     if (cvData.education.length > 0) {
@@ -4514,18 +4523,18 @@ export async function exportToDOCX(
             new TextRun({ text: '  —  ' + edu.school, size: 20, color: '6B7280' }),
           ], `${edu.startDate} – ${edu.endDate}`));
         } else {
-          mainChildren.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' }), new TextRun({ text: '  —  ' + edu.school, size: 20, color: '6B7280' })], spacing: { after: 40 } }));
-          if (edu.startDate || edu.endDate) mainChildren.push(new Paragraph({ children: [new TextRun({ text: `${edu.startDate} – ${edu.endDate}`, size: 18, color: '9CA3AF', italics: true })], spacing: { after: 60 } }));
+          mainChildren.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' }), new TextRun({ text: '  —  ' + edu.school, size: 20, color: '6B7280' })], spacing: { after: 30 } }));
+          if (edu.startDate || edu.endDate) mainChildren.push(new Paragraph({ children: [new TextRun({ text: `${edu.startDate} – ${edu.endDate}`, size: 18, color: '9CA3AF', italics: true })], spacing: { after: 40 } }));
         }
-        if (edu.description) mainChildren.push(new Paragraph({ children: [new TextRun({ text: edu.description, size: 20, color: '374151' })], spacing: { after: 80 } }));
+        if (edu.description) mainChildren.push(new Paragraph({ children: [new TextRun({ text: edu.description, size: 20, color: '374151' })], spacing: { after: 55 } }));
       }
     }
 
     children.push(new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [new TableRow({ children: [
-        new TableCell({ width: { size: sidebarPct, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, shading: sidebarBg, margins: { top: 240, bottom: 240, left: 240, right: 200 }, children: sidebarChildren }),
-        new TableCell({ width: { size: mainPct, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 240, bottom: 240, left: 200, right: 240 }, children: mainChildren }),
+        new TableCell({ width: { size: sidebarPct, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, shading: sidebarBg, margins: { top: 180, bottom: 180, left: 240, right: 200 }, children: sidebarChildren }),
+        new TableCell({ width: { size: mainPct, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 170, bottom: 170, left: 200, right: 240 }, children: mainChildren }),
       ]})],
       borders: noBorders,
     }));
@@ -4551,7 +4560,15 @@ export async function exportToDOCX(
             ? { size: { width: 11906, height: 16838 }, margin: { top: 520, right: 620, bottom: 520, left: 620 } }
             : cfg.customLayout === 'corporate-navy' || cfg.customLayout === 'contemporary-bold'
               ? { size: { width: 11906, height: 16838 }, margin: { top: 520, right: 620, bottom: 520, left: 620 } }
-              : { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
+              // Creative Bold's sidebar-left layout is the tallest generic layout (photo +
+              // name + title + contacts + skills + languages + certifications all stacked in
+              // one column) and previously used the wide 720-twip default margin, which was
+              // the single biggest cause of Education overflowing onto an otherwise
+              // nearly-empty page 2. Match the tighter margin already used by the other
+              // dedicated dark-header layouts.
+              : (templateId ?? cvData.templateId) === 'creative-bold'
+                ? { margin: { top: 560, right: 620, bottom: 560, left: 620 } }
+                : { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
         },
         children,
       },

@@ -830,3 +830,184 @@ describe('Creative Bold export routing and rendering', () => {
     expect(documentXml).toContain('Creative leadership and campaign planning.');
   });
 });
+
+// ─── Creative Bold DOCX pagination/compaction fix ───────────────────────────────
+// Regression coverage for: Dragan fixture DOCX rendered as 2 pages with page 2
+// containing only "VI — Metematički fakultet / 2020-01 – 2025-02" (Education
+// isolated on an otherwise nearly-empty second page). Root cause: the shared
+// sidebar-left DOCX branch (used only by Creative Bold — every other template has
+// its own dedicated customLayout branch) combined the wide default 720-twip page
+// margin with generous paragraph/heading spacing, leaving too little vertical
+// room for the full sidebar + 2-experience main column to fit on one A4 page.
+// Fix: tightened the Creative-Bold-only page margin (720 -> 560/620, matching the
+// tighter margin already used by other dedicated dark-header layouts) and reduced
+// paragraph/heading spacing throughout the sidebar-left branch. No manual page
+// break was ever present; none was added. Word-rendered page count for this exact
+// fixture was verified as 1 via Word COM automation (.artifacts/check-cb-docx-pages.ps1)
+// outside this suite, since Word automation is Windows-only and not appropriate to
+// run inside the portable vitest suite — the tests below assert the structural
+// conditions (tightened spacing constants, tightened margin, no manual page break,
+// full content, stable table sizing) that make the 1-page result possible.
+describe('Creative Bold DOCX pagination/compaction fix (Dragan fixture)', () => {
+  function draganCv(): CVData {
+    return cv({
+      personal: {
+        fullName: 'Dragan Obradović',
+        email: 'diodala12@gmail.com',
+        phone: '865333680065',
+        address: 'Braće Abafi 4',
+        jobTitle: 'Учитељ',
+        photo: tinyPng,
+        photoEnabled: true,
+      },
+      summary: 'Iskusan učitelj sa oko devet godina rada u obrazovanju, koji je svoju karijeru gradio kroz neposredan rad sa učenicima. Posvećen je individualnom pristupu i razvijanju kritičkog mišljenja kod dece.',
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zhff',
+          position: 'Učitelj u osnovnoj školi',
+          startDate: '2023-05',
+          endDate: '',
+          isPresent: true,
+          description: 'Planirao sam i realizovao nastavne jedinice iz srpskog jezika i matematike.\nPosvećivao sam profesionalnu pažnju svakom detetu ponaosob.',
+        },
+        {
+          id: 'exp-2',
+          company: 'Hfh',
+          position: 'Nastavnik geografije',
+          startDate: '2017-02',
+          endDate: '2023-01',
+          isPresent: false,
+          description: 'Koristio sam geografske karte i digitalne alate kako bih učenicima približio nastavne teme.\nSarađivao sam sa kolegama na organizaciji ekskurzija.',
+        },
+      ],
+      education: [
+        { id: 'edu-1', school: 'Metematički fakultet', degree: 'VI', startDate: '2020-01', endDate: '2025-02', description: '' },
+      ],
+      skills: ['Timski rad', 'Organizacija', 'Coaching', 'Coaching', 'Liderstvo'],
+      certifications: ['Sertifikat za rad sa decom sa smetnjama u razvoju'],
+      languages: [{ name: 'Serbian', level: 'Native' }],
+      region: 'EU',
+    });
+  }
+
+  async function exportDraganDocx(): Promise<Blob> {
+    let savedBlob: Blob | undefined;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      savedBlob = blob as Blob;
+      return 'blob:http://test/docx';
+    });
+    const realCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const el = realCreateElement(tagName);
+      if (tagName.toLowerCase() === 'a') el.click = vi.fn();
+      return el;
+    });
+    await exportToDOCX(draganCv(), 'creative-bold-dragan', 'en', 'creative-bold');
+    return savedBlob!;
+  }
+
+  test('sidebar-left branch no longer inserts a manual page break', () => {
+    const src = exportSource();
+    const sidebarBranch = src.indexOf('LAYOUT: sidebar-left');
+    const branch = src.slice(sidebarBranch, src.indexOf('// ─── Build and download document', sidebarBranch));
+
+    expect(branch).not.toContain('PageBreakBefore');
+    expect(branch).not.toContain('pageBreakBefore');
+    expect(branch).not.toContain("type: 'page'");
+    expect(branch).not.toMatch(/new\s+PageBreak/);
+  });
+
+  test('page margin is tightened specifically for creative-bold, other templates are untouched', () => {
+    const src = exportSource();
+    expect(src).toContain("(templateId ?? cvData.templateId) === 'creative-bold'");
+    expect(src).toContain('{ margin: { top: 560, right: 620, bottom: 560, left: 620 } }');
+    // The generic 720-twip default (used by ats-standard, elegant-formal, etc.) must remain intact.
+    expect(src).toContain('{ margin: { top: 720, right: 720, bottom: 720, left: 720 } }');
+  });
+
+  test('sidebar-left spacing constants were tightened from their original generous values', () => {
+    const src = exportSource();
+    const sidebarBranch = src.indexOf('LAYOUT: sidebar-left');
+    const branch = src.slice(sidebarBranch, src.indexOf('// ─── Build and download document', sidebarBranch));
+
+    // Photo/name/title/contact spacing compacted.
+    expect(branch).toContain('spacing: { after: 90 }');
+    expect(branch).toContain('spacing: { after: 30 }');
+    expect(branch).toContain('spacing: { after: 70 }');
+    // Section heading + summary + experience/education body spacing compacted.
+    expect(branch).toContain('spacing: { before: 0, after: 55 }');
+    expect(branch).toContain('spacing: { after: 40 }');
+    expect(branch).toContain('spacing: { after: 28 }');
+    expect(branch).toContain('spacing: { after: 50 }');
+    // Outer table cell margins compacted from the old 240/240.
+    expect(branch).toContain('margins: { top: 180, bottom: 180, left: 240, right: 200 }');
+    expect(branch).toContain('margins: { top: 170, bottom: 170, left: 200, right: 240 }');
+  });
+
+  test('sidebarSectionHeading spacing was tightened (skills/languages/certifications headings)', () => {
+    const src = exportSource();
+    const fnStart = src.indexOf('function sidebarSectionHeading');
+    const fn = src.slice(fnStart, fnStart + 500);
+
+    expect(fn).toContain('spacing: { before: 100, after: 40 }');
+    expect(fn).not.toContain('spacing: { before: 140, after: 60 }');
+  });
+
+  test('Dragan fixture DOCX preserves full content, sidebar/main sizing, and duplicate Coaching', async () => {
+    const blob = await exportDraganDocx();
+    expect(blob).toBeDefined();
+
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    const documentXml = await zip.file('word/document.xml')!.async('text');
+
+    // Identity preserved: bold red sidebar shading + circular photo drawing.
+    expect(documentXml).toContain('E11D48');
+    expect(documentXml).toContain('BE123C');
+    expect(documentXml).toContain('<w:drawing>');
+
+    // Sidebar/main sizing stable: 33% sidebar, 67% main.
+    expect(documentXml).toContain('<w:tcW w:type="pct" w:w="33%"/>');
+    expect(documentXml).toContain('<w:tcW w:type="pct" w:w="67%"/>');
+
+    // Full content present, nothing hidden/truncated.
+    expect(documentXml).toContain('Dragan Obradovi');
+    expect(documentXml).toContain('Braće Abafi 4');
+    expect(documentXml).toContain('Iskusan učitelj');
+    expect(documentXml).toContain('Zhff');
+    expect(documentXml).toContain('Hfh');
+    expect(documentXml).toContain('Posvećivao sam profesionalnu pažnju svakom detetu ponaosob');
+    expect(documentXml).toContain('Sarađivao sam sa kolegama na organizaciji ekskurzija');
+    expect(documentXml).toContain('Metematički fakultet');
+    expect(documentXml).toContain('2020-01');
+    expect(documentXml).toContain('2025-02');
+    expect(documentXml).toContain('Sertifikat za rad sa decom sa smetnjama u razvoju');
+
+    // Duplicate Coaching preserved exactly (2x), not collapsed or multiplied further.
+    expect((documentXml.match(/Coaching/g) ?? [])).toHaveLength(2);
+
+    // No manual/explicit page break was inserted into the generated document.
+    expect(documentXml).not.toContain('<w:br w:type="page"/>');
+  });
+
+  test('Dragan fixture Serbian diacritics survive DOCX generation unescaped/unmangled', async () => {
+    const blob = await exportDraganDocx();
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    const documentXml = await zip.file('word/document.xml')!.async('text');
+
+    for (const word of ['Obradović', 'Učitelj', 'osnovnoj školi', 'Nastavnik geografije', 'približio', 'Sarađivao']) {
+      expect(documentXml).toContain(word);
+    }
+  });
+
+  test('Creative Bold PDF export path/behavior is unaffected by the DOCX compaction fix', () => {
+    const src = exportSource();
+    // The PDF capture/normalization helpers used by Creative Bold PDF are untouched
+    // and remain scoped to the html2canvas capture pipeline, not the DOCX builder.
+    expect(src).toContain('function applyCreativeBoldPdfLayout');
+    expect(src).toContain('function normalizeCreativeBoldPdfTextStyles');
+    const pdfLayoutStart = src.indexOf('function applyCreativeBoldPdfLayout');
+    const pdfLayoutFn = src.slice(pdfLayoutStart, pdfLayoutStart + 4000);
+    expect(pdfLayoutFn).not.toContain("(templateId ?? cvData.templateId) === 'creative-bold'");
+  });
+});
