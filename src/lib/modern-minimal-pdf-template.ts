@@ -115,7 +115,7 @@ export function createModernMinimalPdfTemplate(
 
   const header = append(root, 'header', {
     display: 'grid',
-    gridTemplateColumns: options.photoDataUrl ? 'minmax(0, 1fr) 76px' : '1fr',
+    gridTemplateColumns: options.photoDataUrl ? 'minmax(0, 1fr) 100px' : '1fr',
     columnGap: '18px',
     alignItems: 'start',
     paddingBottom: '10px',
@@ -161,8 +161,8 @@ export function createModernMinimalPdfTemplate(
 
   if (options.photoDataUrl) {
     const frame = append(header, 'div', {
-      width: '76px',
-      height: '76px',
+      width: '100px',
+      height: '100px',
       borderRadius: '9999px',
       overflow: 'hidden',
       border: '1px solid #e5e7eb',
@@ -176,8 +176,12 @@ export function createModernMinimalPdfTemplate(
     style(img, {
       width: '100%',
       height: '100%',
+      // The photo is already canonically square + circularly cropped
+      // (see cropModernMinimalPdfPhoto in export.ts, same crop math as the
+      // Modern Minimal DOCX export), so no extra object-position offset is
+      // needed here — the crop/zoom already matches DOCX framing.
       objectFit: 'cover',
-      objectPosition: '50% 22%',
+      objectPosition: '50% 50%',
       display: 'block',
     });
     frame.appendChild(img);

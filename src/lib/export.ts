@@ -5795,6 +5795,37 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
+// Canonical square + circular crop for the Modern Minimal PDF header photo.
+// Mirrors the crop math used by the Modern Minimal DOCX export (circularCropDataUrl)
+// so the PDF photo matches DOCX in framing/zoom instead of relying on CSS
+// object-fit/object-position guesses applied to the raw (uncropped) photo.
+function cropModernMinimalPdfPhoto(dataUrl: string, outputSize: number): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = outputSize;
+      canvas.height = outputSize;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(dataUrl); return; }
+      const isPortrait = img.naturalHeight > img.naturalWidth;
+      const scale = outputSize / Math.min(img.naturalWidth, img.naturalHeight);
+      const scaledW = img.naturalWidth * scale;
+      const scaledH = img.naturalHeight * scale;
+      const sx = (outputSize - scaledW) / 2;
+      const sy = isPortrait ? -(scaledH - outputSize) * 0.20 : (outputSize - scaledH) / 2;
+      ctx.beginPath();
+      ctx.arc(outputSize / 2, outputSize / 2, outputSize / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(img, sx, sy, scaledW, scaledH);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 async function prepareModernMinimalPdfPhotoDataUrl(cv: CVData): Promise<string | null> {
   const showPhoto = cv.personal.photoEnabled !== undefined
     ? cv.personal.photoEnabled
@@ -5810,7 +5841,13 @@ async function prepareModernMinimalPdfPhotoDataUrl(cv: CVData): Promise<string |
   const prepared = await prepareCvPhotoForExport(source);
   if (!prepared?.dataUrl) return null;
   const decoded = await decodeImageForExport(prepared.dataUrl);
-  return decoded ? prepared.dataUrl : null;
+  if (!decoded) return null;
+
+  try {
+    return await cropModernMinimalPdfPhoto(prepared.dataUrl, 512);
+  } catch {
+    return prepared.dataUrl;
+  }
 }
 
 export async function buildModernMinimalPdfBlob(

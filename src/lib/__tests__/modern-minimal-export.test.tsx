@@ -163,11 +163,14 @@ function makeCanvas(width: number, height: number, hasContentAt: (absoluteY: num
 function installPdfMocks(canvas: HTMLCanvasElement) {
   const instances: Array<{ pages: number; addImage: ReturnType<typeof vi.fn>; addPage: ReturnType<typeof vi.fn> }> = [];
   const clonedTextContents: string[] = [];
+  const clonedPhotoFrameWidths: string[] = [];
   vi.doMock('html2canvas', () => ({
     default: vi.fn(async (_target: HTMLElement, options?: { onclone?: (doc: Document) => void }) => {
       if (options?.onclone) {
         const clonedDocument = document.implementation.createHTMLDocument('clone');
         clonedDocument.body.innerHTML = document.body.innerHTML;
+        const frame = clonedDocument.querySelector('[data-modern-minimal-photo-frame]') as HTMLElement | null;
+        if (frame) clonedPhotoFrameWidths.push(frame.style.width);
         options.onclone(clonedDocument);
         clonedTextContents.push(clonedDocument.body.textContent ?? '');
       }
@@ -189,7 +192,7 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
       }
     },
   }));
-  return { instances, clonedTextContents };
+  return { instances, clonedTextContents, clonedPhotoFrameWidths };
 }
 
 beforeEach(() => {
@@ -390,6 +393,49 @@ describe('Modern Minimal preview/export parity', () => {
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');
   });
 
+  test('the exact real-world Android-reported joined words never appear anywhere in the routed Modern Minimal PDF chain', () => {
+    // This is a stronger, end-to-end regression: it verifies the single source
+    // chain the real app/Android build actually executes — page.tsx routes
+    // 'modern-minimal' to exportModernMinimalPdf, which is defined in export.ts
+    // and built from createModernMinimalPdfTemplate — and that the renderer file
+    // itself cannot reintroduce per-word/spacer-span text splitting, which is
+    // what previously caused "Učitelj u osnovnojškoli", "profesionalnupažnju",
+    // "Nastavnikgeografije" and "Metematičkifakultet" to appear in production.
+    const page = pageSource();
+    const src = exportSource();
+    const rendererSrc = fs.readFileSync(path.resolve('src/lib/modern-minimal-pdf-template.ts'), 'utf8');
+
+    // 1. page.tsx really calls exportModernMinimalPdf for this template id.
+    expect(page).toContain("liveCv.templateId === 'modern-minimal'");
+    expect(page).toContain('exportModernMinimalPdf(latestCv, exportFilename, locale)');
+
+    // 2. export.ts's exportModernMinimalPdf is built on buildModernMinimalPdfBlob,
+    //    which in turn renders via createModernMinimalPdfTemplate — not some other
+    //    older/duplicate Modern Minimal PDF function.
+    expect(src).toContain('export async function exportModernMinimalPdf');
+    expect(src).toContain('const pdfBlob = await buildModernMinimalPdfBlob(cv, locale)');
+    expect(src).toContain('export async function buildModernMinimalPdfBlob');
+    expect(src).toContain('container.appendChild(createModernMinimalPdfTemplate(cv,');
+    expect(src.match(/function buildModernMinimalPdfBlob/g)?.length).toBe(1);
+    expect(src.match(/function exportModernMinimalPdf/g)?.length).toBe(1);
+
+    // 3. The renderer that actually produces the DOM text nodes uses plain
+    //    textContent assignment, not a per-word span/spacer implementation.
+    expect(rendererSrc).toContain('element.textContent = text');
+    expect(rendererSrc).not.toContain('data-modern-minimal-export-space');
+    expect(rendererSrc).not.toContain('split(/( +)/)');
+    expect(rendererSrc).not.toMatch(/for\s*\(.*word/i);
+
+    // 4. Runtime proof with the exact fixture that produced the reported bug —
+    //    none of the real-world Android-reported joined words are present.
+    const root = createModernMinimalPdfTemplate(draganCv(), { locale: 'en', photoDataUrl: originalPhoto });
+    const text = root.textContent ?? '';
+    expect(text).not.toContain('osnovnojškoli');
+    expect(text).not.toContain('profesionalnupažnju');
+    expect(text).not.toContain('Nastavnikgeografije');
+    expect(text).not.toContain('Metematičkifakultet');
+  });
+
   test('dedicated Modern Minimal PDF root is fixed A4, compact, and keeps text spacing intact', () => {
     const root = createModernMinimalPdfTemplate(draganCv(), { locale: 'en', photoDataUrl: originalPhoto });
     const photoFrame = root.querySelector('[data-modern-minimal-photo-frame]') as HTMLElement;
@@ -402,11 +448,12 @@ describe('Modern Minimal preview/export parity', () => {
     expect(root.style.width).toBe('210mm');
     expect(root.style.minWidth).toBe('210mm');
     expect(root.style.padding).toBe('24px 34px 22px');
-    expect(photoFrame.style.width).toBe('76px');
-    expect(photoFrame.style.height).toBe('76px');
+    expect(photoFrame.style.width).toBe('100px');
+    expect(photoFrame.style.height).toBe('100px');
     expect(photoFrame.style.borderRadius).toBe('9999px');
     expect(photoFrame.style.overflow).toBe('hidden');
     expect(photo.style.objectFit).toBe('cover');
+    expect(photo.style.objectPosition).toBe('50% 50%');
     expect(root.querySelector('[data-modern-minimal-export-space]')).toBeNull();
     expect(contactRow.textContent).toContain('Braće Abafi 4');
     expect(dates.some(el => el.style.whiteSpace === 'nowrap')).toBe(true);
@@ -426,7 +473,7 @@ describe('Modern Minimal preview/export parity', () => {
 
   test('Modern Minimal direct PDF Blob is non-empty, uses originalPhoto, and Dragan fixture remains one page', async () => {
     const canvas = makeCanvas(800, 1050, y => y < 980);
-    const { instances, clonedTextContents } = installPdfMocks(canvas);
+    const { instances, clonedTextContents, clonedPhotoFrameWidths } = installPdfMocks(canvas);
 
     const blob = await buildModernMinimalPdfBlob(draganCv(), 'en');
 
@@ -435,8 +482,12 @@ describe('Modern Minimal preview/export parity', () => {
     expect(instances).toHaveLength(1);
     expect(instances[0].pages).toBe(1);
     expect(instances[0].addPage).not.toHaveBeenCalled();
+    // originalPhoto is loaded both for validation and as the source of the
+    // canonical square/circular crop (cropModernMinimalPdfPhoto) baked into the
+    // final header image, so the larger frame shows a clear, correctly framed face.
     expect(loadedImageSources).toContain(originalPhoto);
     expect(loadedImageSources).not.toContain(selectedPhoto);
+    expect(clonedPhotoFrameWidths).toContain('100px');
     const cloneText = clonedTextContents.join('\n');
     expect(cloneText).toContain('VI / Metematički fakultet');
     expect(cloneText).toContain('Teamwork');
