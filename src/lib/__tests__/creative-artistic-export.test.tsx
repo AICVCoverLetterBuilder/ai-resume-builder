@@ -7,10 +7,13 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CreativeArtisticTemplate, templateComponents } from '@/components/cv-templates';
+import { createCreativeArtisticPdfTemplate } from '@/lib/creative-artistic-pdf-template';
 import {
   applyCreativeArtisticKeepTogetherPagination,
+  buildCreativeArtisticPdfBlob,
   buildCvPdfBlob,
   createMeaningfulContentPagePlan,
+  exportCreativeArtisticPdf,
   exportToDOCX,
   exportToPDF,
   measureExportMeaningfulContentBounds,
@@ -19,6 +22,9 @@ import { getCvExportSuccessToast } from '@/lib/export-success-toast';
 import type { CVData } from '@/lib/types';
 
 const realPhotoPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR42mP8z8DwnwEJMDGgAcQGALpCAwPXYZaSAAAAAElFTkSuQmCC';
+const draganOriginalPhoto = `data:image/jpeg;base64,${Buffer.from('creative-artistic-original-photo').toString('base64')}`;
+const draganSelectedPhoto = `data:image/jpeg;base64,${Buffer.from('creative-artistic-selected-photo').toString('base64')}`;
+let loadedImageSources: string[] = [];
 
 function cv(overrides: Partial<CVData> = {}): CVData {
   const { personal, ...rest } = overrides;
@@ -77,6 +83,8 @@ const cvBuilderSource = () => fs.readFileSync(path.resolve('src/app/cv-builder/p
 class MockImage {
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  naturalWidth = 300;
+  naturalHeight = 300;
   decode = vi.fn().mockResolvedValue(undefined);
   private currentSrc = '';
 
@@ -86,8 +94,55 @@ class MockImage {
 
   set src(value: string) {
     this.currentSrc = value;
+    loadedImageSources.push(value);
     setTimeout(() => this.onload?.(), 0);
   }
+}
+
+// Real-world fixture matching the reported Creative Artistic PDF pagination bug:
+// two full experience entries (each with two description bullets), education, and
+// a 5-item skills list — content that must fit on one A4 page with Education and
+// Skills visible on that same page, exactly as the DOCX already renders it.
+function draganCv(): CVData {
+  return cv({
+    personal: {
+      fullName: 'Dragan Obradović',
+      email: 'diodala12@gmail.com',
+      phone: '865333680065',
+      address: 'Braće Abafi 4',
+      jobTitle: 'Учитељ',
+      photo: draganSelectedPhoto,
+      originalPhoto: draganOriginalPhoto,
+      photoEnabled: true,
+    } as CVData['personal'] & { originalPhoto: string },
+    summary: 'Iskusan učitelj sa oko devet godina rada u obrazovanju, koji je svoju karijeru gradio kroz neposredan rad sa učenicima.',
+    experience: [
+      {
+        id: 'exp-1',
+        company: 'Zhff',
+        position: 'Učitelj u osnovnoj školi',
+        startDate: '2023-05',
+        endDate: '',
+        isPresent: true,
+        description: 'Planirao sam i realizovao nastavne jedinice iz srpskog jezika i matematike.\nPosvećivao sam profesionalnu pažnju svakom učeniku.',
+      },
+      {
+        id: 'exp-2',
+        company: 'Hfh',
+        position: 'Nastavnik geografije',
+        startDate: '2017-02',
+        endDate: '2023-01',
+        isPresent: false,
+        description: 'Koristio sam geografske karte i digitalne alate.\nOrganizovao sam terenske nastave za učenike.',
+      },
+    ],
+    education: [{ id: 'edu-1', school: 'Metematički fakultet', degree: 'VI', startDate: '2020-01', endDate: '2025-02', description: '' }],
+    skills: ['Teamwork', 'Organization', 'Coaching', 'Coaching', 'Leadership'],
+    certifications: [],
+    languages: [{ name: 'Serbian', level: 'Native' }],
+    templateId: 'creative-artistic',
+    region: 'Balkan',
+  });
 }
 
 type TestCanvas = HTMLCanvasElement & {
@@ -217,6 +272,7 @@ function semanticCreativeArtisticHtml(options: {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  loadedImageSources = [];
   Object.defineProperty(globalThis, 'Image', { value: MockImage, configurable: true });
   Object.defineProperty(globalThis, 'requestAnimationFrame', { value: (cb: FrameRequestCallback) => setTimeout(cb, 0), configurable: true });
   Object.defineProperty(document, 'fonts', {
@@ -716,5 +772,173 @@ describe('Creative Artistic export routing and rendering', () => {
     expect(documentXml).toContain('Brand Strategy');
     expect(documentXml).not.toContain('<w:drawing>');
     expect(mediaFiles).toHaveLength(0);
+  });
+});
+
+describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)', () => {
+  test('Creative Artistic PDF uses the dedicated direct renderer route, not generic exportToPDF/print fallback', () => {
+    const page = cvBuilderSource();
+    const branch = page.indexOf("liveCv.templateId === 'creative-artistic'");
+    const exportCall = page.indexOf('exportCreativeArtisticPdf', branch);
+    const genericExport = page.indexOf('exportToPDF(previewId', branch);
+    const fallbackGuard = page.indexOf("cv.templateId === 'creative-artistic'", branch);
+    const fallback = page.indexOf('await openPrintFallback', fallbackGuard);
+
+    expect(branch).toBeGreaterThan(-1);
+    expect(exportCall).toBeGreaterThan(branch);
+    expect(exportCall).toBeLessThan(genericExport);
+    expect(page.slice(branch, exportCall)).toContain('cvRef.current');
+    expect(page.slice(branch, branch + 300)).toContain('showCvExportSuccessToast');
+    expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(page.slice(fallbackGuard, fallback)).toContain('return;');
+
+    const src = exportSource();
+    expect(src).toContain('export async function exportCreativeArtisticPdf');
+    expect(src).toContain('const pdfBlob = await buildCreativeArtisticPdfBlob(cv, locale)');
+    expect(src).toContain('export async function buildCreativeArtisticPdfBlob');
+    expect(src.slice(src.indexOf('export async function exportCreativeArtisticPdf'))).toContain("await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf')");
+  });
+
+  test('dedicated Creative Artistic PDF root is fixed A4, gradient header, and reuses the pagination/no-wrap markers', () => {
+    const root = createCreativeArtisticPdfTemplate(draganCv(), { locale: 'en', photoDataUrl: draganOriginalPhoto });
+    const header = root.querySelector('header') as HTMLElement;
+    const body = header.nextElementSibling as HTMLElement;
+    const photoFrame = root.querySelector('[data-creative-artistic-photo="frame"]') as HTMLElement;
+    const photo = root.querySelector('[data-export-photo="creative-artistic"]') as HTMLImageElement;
+    const contactRow = root.querySelector('[data-export-contact-row="creative-artistic"]') as HTMLElement;
+    const text = root.textContent ?? '';
+
+    expect(root.dataset.templateId).toBe('creative-artistic');
+    expect(root.style.width).toBe('210mm');
+    expect(root.style.minWidth).toBe('210mm');
+    expect(header.tagName).toBe('HEADER');
+    expect(body).not.toBeNull();
+    expect(header.style.background || header.style.backgroundImage).toMatch(/linear-gradient/i);
+    expect(photoFrame.style.borderRadius).toBe('9999px');
+    expect(photoFrame.style.overflow).toBe('hidden');
+    expect(photo.style.objectFit).toBe('cover');
+    expect(contactRow.textContent).toContain('Braće Abafi 4');
+    expect(root.querySelector('[data-export-group="education-section"]')).not.toBeNull();
+    expect(root.querySelector('[data-export-group="skills-block"]')).not.toBeNull();
+    expect(root.querySelector('[data-export-group="skills-row"]')).not.toBeNull();
+
+    expect(text).toContain('Učitelj u osnovnoj školi');
+    expect(text).toContain('Nastavnik geografije');
+    expect(text).toContain('Metematički fakultet');
+    expect(text).not.toContain('osnovnojškoli');
+    expect(text).not.toContain('Nastavnikgeografije');
+    expect(text).not.toContain('Metematičkifakultet');
+
+    // Skills rendered verbatim: same values, same order, duplicates preserved, no dedup/localization.
+    const skillChips = Array.from(root.querySelectorAll<HTMLElement>('[data-export-skill-chip="true"]'));
+    expect(skillChips.map(el => el.textContent)).toEqual(['Teamwork', 'Organization', 'Coaching', 'Coaching', 'Leadership']);
+    skillChips.forEach((el) => expect(el.style.whiteSpace).toBe('nowrap'));
+  });
+
+  test('Creative Artistic PDF renders each Work Experience description line as its own readable paragraph, not one compressed block', () => {
+    const root = createCreativeArtisticPdfTemplate(draganCv(), { locale: 'en' });
+    const entries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience"]'));
+
+    expect(entries).toHaveLength(2);
+    entries.forEach((entry) => {
+      // Each entry has a meta line (company | dates) plus 2 description bullet
+      // lines as 3 separate <p> elements — not one <p style="white-space:pre-line">
+      // block holding all lines joined together.
+      const paragraphs = Array.from(entry.querySelectorAll('p'));
+      expect(paragraphs.length).toBeGreaterThanOrEqual(3);
+      expect(entry.style.borderLeft).toContain('2px');
+    });
+    const firstEntryText = entries[0].textContent ?? '';
+    expect(firstEntryText).toContain('Planirao sam i realizovao nastavne jedinice');
+    expect(firstEntryText).toContain('Posvećivao sam profesionalnu pažnju');
+  });
+
+  test('Creative Artistic PDF Blob prefers the user-framed selected photo over originalPhoto (matching DOCX)', async () => {
+    const canvas = makeCanvas(800, 1050, () => true);
+    installPdfMocks(canvas);
+
+    const blob = await buildCreativeArtisticPdfBlob(draganCv(), 'en');
+
+    expect(blob.size).toBeGreaterThan(0);
+    expect(loadedImageSources).toContain(draganSelectedPhoto);
+    expect(loadedImageSources).not.toContain(draganOriginalPhoto);
+  });
+
+  test('Creative Artistic PDF Blob falls back to originalPhoto only when no selected photo exists', async () => {
+    const canvas = makeCanvas(800, 1050, () => true);
+    installPdfMocks(canvas);
+    const cvWithoutSelectedPhoto = draganCv();
+    (cvWithoutSelectedPhoto.personal as CVData['personal'] & { photo?: string }).photo = undefined;
+
+    await buildCreativeArtisticPdfBlob(cvWithoutSelectedPhoto, 'en');
+
+    expect(loadedImageSources).toContain(draganOriginalPhoto);
+    expect(loadedImageSources).not.toContain(draganSelectedPhoto);
+  });
+
+  test('Creative Artistic PDF direct Blob is non-empty, one page for the Dragan fixture, and preserves duplicate Coaching', async () => {
+    const canvas = makeCanvas(800, 1050, y => y < 980);
+    const { instances, cloneDocuments } = installPdfMocks(canvas);
+
+    const blob = await buildCreativeArtisticPdfBlob(draganCv(), 'en');
+
+    expect(blob.size).toBeGreaterThan(0);
+    expect(await blob.text()).toContain('%PDF');
+    expect(instances).toHaveLength(1);
+    expect(instances[0].pages).toBe(1);
+    expect(instances[0].addPage).not.toHaveBeenCalled();
+
+    const cloneRoot = cloneDocuments[0]?.querySelector('[data-template-id="creative-artistic"]') as HTMLElement;
+    const cloneText = cloneRoot?.textContent ?? '';
+    expect(cloneText).toContain('Učitelj u osnovnoj školi');
+    expect(cloneText).toContain('Metematički fakultet');
+    expect(cloneText).not.toContain('Metematičkifakultet');
+    expect((cloneText.match(/Coaching/g) ?? [])).toHaveLength(2);
+  });
+
+  test('Creative Artistic PDF export save path writes a non-empty PDF through platform save using cvRef-equivalent latest data', async () => {
+    const canvas = makeCanvas(800, 1050, () => true);
+    installPdfMocks(canvas);
+    let savedBlob: Blob | undefined;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      savedBlob = blob as Blob;
+      return 'blob:http://test/creative-artistic-pdf';
+    });
+    const clickSpy = vi.fn();
+    const realCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const el = realCreateElement(tagName);
+      if (tagName.toLowerCase() === 'a') el.click = clickSpy;
+      return el;
+    });
+
+    const result = await exportCreativeArtisticPdf(draganCv(), 'Dragan Obradovic - CV', 'en');
+
+    expect(clickSpy).toHaveBeenCalled();
+    expect(savedBlob?.type).toBe('application/pdf');
+    expect(result.fileName).toBe('Dragan Obradovic - CV.pdf');
+    expect(result.sourceBytes).toBeGreaterThan(0);
+  });
+
+  test('Creative Artistic PDF no-photo Blob remains valid with no broken image frame', async () => {
+    const canvas = makeCanvas(800, 1050, () => true);
+    const { instances } = installPdfMocks(canvas);
+
+    const blob = await buildCreativeArtisticPdfBlob(cv({ personal: { photo: undefined, photoEnabled: false } }), 'en');
+
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0].pages).toBe(1);
+  });
+
+  test('Creative Artistic DOCX behavior is unchanged: still uses its existing dedicated OOXML branch untouched by the PDF fix', () => {
+    const src = exportSource();
+    const branch = src.slice(src.indexOf("cfg.customLayout === 'creative-artistic'"), src.indexOf("else if (cfg.customLayout === 'elegant-formal'"));
+
+    expect(branch).toContain('ImageRun');
+    expect(branch).toContain('caHeading');
+    expect(branch).toContain('left purple border accent');
+    // The new dedicated PDF renderer lives in its own module and does not touch
+    // the DOCX `customLayout === 'creative-artistic'` branch above.
+    expect(src).toContain("import { createCreativeArtisticPdfTemplate } from './creative-artistic-pdf-template'");
   });
 });

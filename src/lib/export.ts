@@ -11,6 +11,7 @@ import { createExecutivePremiumPdfTemplate } from './executive-premium-pdf-templ
 import { createModernMinimalPdfTemplate } from './modern-minimal-pdf-template';
 import { createCleanSimplePdfTemplate } from './clean-simple-pdf-template';
 import { createProfessionalClassicPdfTemplate } from './professional-classic-pdf-template';
+import { createCreativeArtisticPdfTemplate } from './creative-artistic-pdf-template';
 import { createNordicCleanPdfTemplate } from './nordic-clean-pdf-template';
 import { createRirekishoPdfTemplate } from './rirekisho-pdf-template';
 import { createTechSidebarPdfTemplate } from './tech-sidebar-pdf-template';
@@ -6143,6 +6144,110 @@ export async function exportProfessionalClassicPdf(
   locale: Locale,
 ): Promise<SaveFileResult> {
   const pdfBlob = await buildProfessionalClassicPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+// Canonical square + circular crop for the Creative Artistic PDF header photo.
+// Used only as a fallback when cv.personal.photo (the user's own framed crop) is
+// unavailable and we must derive a square crop from the raw originalPhoto instead.
+function cropCreativeArtisticPdfPhoto(dataUrl: string, outputSize: number): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = outputSize;
+      canvas.height = outputSize;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(dataUrl); return; }
+      const isPortrait = img.naturalHeight > img.naturalWidth;
+      const scale = outputSize / Math.min(img.naturalWidth, img.naturalHeight);
+      const scaledW = img.naturalWidth * scale;
+      const scaledH = img.naturalHeight * scale;
+      const sx = (outputSize - scaledW) / 2;
+      const sy = isPortrait ? -(scaledH - outputSize) * 0.32 : (outputSize - scaledH) / 2;
+      ctx.beginPath();
+      ctx.arc(outputSize / 2, outputSize / 2, outputSize / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(img, sx, sy, scaledW, scaledH);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function prepareCreativeArtisticPdfPhotoDataUrl(cv: CVData): Promise<string | null> {
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  if (!showPhoto) return null;
+
+  const personalPhotos = cv.personal as CVData['personal'] & {
+    originalPhoto?: string;
+  };
+  // Prefer cv.personal.photo — the circular crop the user already framed themselves
+  // in the in-app photo cropper — matching the Creative Artistic DOCX export.
+  // originalPhoto is only used as a fallback for the rare case a selected photo is
+  // missing.
+  const source = cv.personal.photo?.trim() || personalPhotos.originalPhoto?.trim();
+  if (!source) return null;
+
+  const prepared = await prepareCvPhotoForExport(source);
+  if (!prepared?.dataUrl) return null;
+  const decoded = await decodeImageForExport(prepared.dataUrl);
+  if (!decoded) return null;
+
+  try {
+    return await cropCreativeArtisticPdfPhoto(prepared.dataUrl, 512);
+  } catch {
+    return prepared.dataUrl;
+  }
+}
+
+export async function buildCreativeArtisticPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  if (typeof document === 'undefined') {
+    throw new Error('Creative Artistic PDF export requires a browser DOM');
+  }
+
+  const photoDataUrl = await prepareCreativeArtisticPdfPhotoDataUrl(cv);
+  const container = document.createElement('div');
+  container.id = `creative-artistic-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  container.setAttribute('data-creative-artistic-pdf-export-container', 'true');
+  container.style.position = 'fixed';
+  container.style.left = '-10000px';
+  container.style.top = '0';
+  container.style.width = '210mm';
+  container.style.minWidth = '210mm';
+  container.style.backgroundColor = '#ffffff';
+  container.style.pointerEvents = 'none';
+  container.style.zIndex = '-1';
+  container.style.opacity = '1';
+  container.appendChild(createCreativeArtisticPdfTemplate(cv, {
+    locale,
+    photoDataUrl,
+  }));
+  document.body.appendChild(container);
+
+  try {
+    await awaitExportTemplateImages(container);
+    const blob = await buildCvPdfBlob(container.id);
+    if (!blob || blob.size === 0) throw new Error('Creative Artistic PDF generation produced an empty Blob');
+    return blob;
+  } finally {
+    container.remove();
+  }
+}
+
+export async function exportCreativeArtisticPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildCreativeArtisticPdfBlob(cv, locale);
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
