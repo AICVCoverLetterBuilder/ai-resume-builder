@@ -5796,9 +5796,10 @@ export async function exportToPDF(elementId: string, fileName: string): Promise<
 }
 
 // Canonical square + circular crop for the Modern Minimal PDF header photo.
-// Mirrors the crop math used by the Modern Minimal DOCX export (circularCropDataUrl)
-// so the PDF photo matches DOCX in framing/zoom instead of relying on CSS
-// object-fit/object-position guesses applied to the raw (uncropped) photo.
+// Used only as a fallback when cv.personal.photo (the user's own framed crop) is
+// unavailable and we must derive a square crop from the raw originalPhoto instead.
+// Uses a gentler top bias than the DOCX helper (0.32 vs 0.20) so a raw, un-framed
+// portrait photo keeps the chin/neck visible instead of cropping tight under the eyes.
 function cropModernMinimalPdfPhoto(dataUrl: string, outputSize: number): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -5813,7 +5814,7 @@ function cropModernMinimalPdfPhoto(dataUrl: string, outputSize: number): Promise
       const scaledW = img.naturalWidth * scale;
       const scaledH = img.naturalHeight * scale;
       const sx = (outputSize - scaledW) / 2;
-      const sy = isPortrait ? -(scaledH - outputSize) * 0.20 : (outputSize - scaledH) / 2;
+      const sy = isPortrait ? -(scaledH - outputSize) * 0.32 : (outputSize - scaledH) / 2;
       ctx.beginPath();
       ctx.arc(outputSize / 2, outputSize / 2, outputSize / 2, 0, Math.PI * 2);
       ctx.closePath();
@@ -5835,7 +5836,15 @@ async function prepareModernMinimalPdfPhotoDataUrl(cv: CVData): Promise<string |
   const personalPhotos = cv.personal as CVData['personal'] & {
     originalPhoto?: string;
   };
-  const source = personalPhotos.originalPhoto?.trim() || cv.personal.photo?.trim();
+  // Prefer cv.personal.photo — the circular crop the user already framed themselves
+  // in the in-app photo cropper (zoom/offset). This is the SAME source the Modern
+  // Minimal DOCX export embeds, so the PDF face framing matches DOCX exactly instead
+  // of re-guessing a generic crop on the raw, un-framed originalPhoto (which may be
+  // any aspect ratio/composition and was the actual cause of "cropped too high/chin
+  // missing" — a blind square crop cannot know where the user's face actually is in
+  // the untouched original). originalPhoto is only used as a fallback for the rare
+  // case a selected photo is missing.
+  const source = cv.personal.photo?.trim() || personalPhotos.originalPhoto?.trim();
   if (!source) return null;
 
   const prepared = await prepareCvPhotoForExport(source);

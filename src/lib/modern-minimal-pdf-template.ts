@@ -107,9 +107,15 @@ export function createModernMinimalPdfTemplate(
     fontSize: '10.8px',
     lineHeight: '1.28',
     whiteSpace: 'normal',
-    wordSpacing: 'normal',
-    letterSpacing: 'normal',
-    fontKerning: 'normal',
+    // Explicit numeric values (not the 'normal' keyword) everywhere below: some
+    // WebView/html2canvas combinations serialize/measure the 'normal' keyword for
+    // word-spacing and letter-spacing inconsistently, which can visibly shrink or
+    // collapse inter-word gaps during PDF rasterization even though the underlying
+    // text nodes are correct. A small positive word-spacing also adds a safety
+    // margin so spaces stay visible after html2canvas's capture scaling.
+    wordSpacing: '0.6px',
+    letterSpacing: '0px',
+    fontKerning: 'none',
     textRendering: 'auto',
   });
 
@@ -139,6 +145,8 @@ export function createModernMinimalPdfTemplate(
       fontSize: '12px',
       lineHeight: '1.2',
       fontWeight: '600',
+      // Extra safety margin on this short, highly-visible one-line label.
+      wordSpacing: '1.2px',
     }, cv.personal.jobTitle).setAttribute('data-export-meaningful', 'true');
   }
   const contacts = [cv.personal.email, cv.personal.phone, region.showAddress ? cv.personal.address : ''].filter(Boolean);
@@ -194,6 +202,7 @@ export function createModernMinimalPdfTemplate(
       color: '#374151',
       fontSize: '10.7px',
       lineHeight: '1.32',
+      wordSpacing: '0.9px',
     }, cv.summary).setAttribute('data-export-meaningful', 'true');
   }
 
@@ -208,9 +217,9 @@ export function createModernMinimalPdfTemplate(
         columnGap: '12px',
         alignItems: 'baseline',
       });
-      append(row, 'div', { color: TEXT, fontSize: '11px', fontWeight: '700', lineHeight: '1.22', minWidth: '0' }, exp.position).setAttribute('data-export-meaningful', 'true');
+      append(row, 'div', { color: TEXT, fontSize: '11px', fontWeight: '700', lineHeight: '1.22', minWidth: '0', wordSpacing: '1.2px' }, exp.position).setAttribute('data-export-meaningful', 'true');
       append(row, 'div', { color: '#6b7280', fontSize: '9.5px', lineHeight: '1.2', textAlign: 'right', whiteSpace: 'nowrap' }, dateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)).setAttribute('data-export-meaningful', 'true');
-      if (exp.company) append(entry, 'p', { margin: '1px 0 2px', color: '#6b7280', fontSize: '10px', lineHeight: '1.2' }, exp.company).setAttribute('data-export-meaningful', 'true');
+      if (exp.company) append(entry, 'p', { margin: '1px 0 2px', color: '#6b7280', fontSize: '10px', lineHeight: '1.2', wordSpacing: '1.2px' }, exp.company).setAttribute('data-export-meaningful', 'true');
       lines(exp.description).forEach((line) => {
         const bullet = append(entry, 'div', {
           display: 'grid',
@@ -219,6 +228,7 @@ export function createModernMinimalPdfTemplate(
           color: '#374151',
           fontSize: '10.2px',
           lineHeight: '1.28',
+          wordSpacing: '0.9px',
         });
         bullet.setAttribute('data-export-meaningful', 'true');
         append(bullet, 'span', undefined, '-');
@@ -240,7 +250,7 @@ export function createModernMinimalPdfTemplate(
         pageBreakInside: 'avoid',
       });
       row.setAttribute('data-export-group', 'modern-minimal-education');
-      append(row, 'div', { color: TEXT, fontSize: '10.5px', fontWeight: '700', lineHeight: '1.22', minWidth: '0' }, [edu.degree, edu.school].filter(Boolean).join(' / ')).setAttribute('data-export-meaningful', 'true');
+      append(row, 'div', { color: TEXT, fontSize: '10.5px', fontWeight: '700', lineHeight: '1.22', minWidth: '0', wordSpacing: '1.2px' }, [edu.degree, edu.school].filter(Boolean).join(' / ')).setAttribute('data-export-meaningful', 'true');
       append(row, 'div', { color: '#6b7280', fontSize: '9.5px', lineHeight: '1.2', textAlign: 'right', whiteSpace: 'nowrap' }, [edu.startDate, edu.endDate].filter(Boolean).join(' - ')).setAttribute('data-export-meaningful', 'true');
     });
   }

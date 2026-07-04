@@ -454,6 +454,8 @@ describe('Modern Minimal preview/export parity', () => {
     expect(photoFrame.style.overflow).toBe('hidden');
     expect(photo.style.objectFit).toBe('cover');
     expect(photo.style.objectPosition).toBe('50% 50%');
+    expect(root.style.wordSpacing).toBe('0.6px');
+    expect(root.style.letterSpacing).toBe('0px');
     expect(root.querySelector('[data-modern-minimal-export-space]')).toBeNull();
     expect(contactRow.textContent).toContain('Braće Abafi 4');
     expect(dates.some(el => el.style.whiteSpace === 'nowrap')).toBe(true);
@@ -471,7 +473,7 @@ describe('Modern Minimal preview/export parity', () => {
     expect(text).toContain('Teamwork');
   });
 
-  test('Modern Minimal direct PDF Blob is non-empty, uses originalPhoto, and Dragan fixture remains one page', async () => {
+  test('Modern Minimal direct PDF Blob is non-empty, uses the user-framed selected photo (matching DOCX), and Dragan fixture remains one page', async () => {
     const canvas = makeCanvas(800, 1050, y => y < 980);
     const { instances, clonedTextContents, clonedPhotoFrameWidths } = installPdfMocks(canvas);
 
@@ -482,11 +484,14 @@ describe('Modern Minimal preview/export parity', () => {
     expect(instances).toHaveLength(1);
     expect(instances[0].pages).toBe(1);
     expect(instances[0].addPage).not.toHaveBeenCalled();
-    // originalPhoto is loaded both for validation and as the source of the
-    // canonical square/circular crop (cropModernMinimalPdfPhoto) baked into the
-    // final header image, so the larger frame shows a clear, correctly framed face.
-    expect(loadedImageSources).toContain(originalPhoto);
-    expect(loadedImageSources).not.toContain(selectedPhoto);
+    // The PDF must use cv.personal.photo (selectedPhoto) — the circular crop the user
+    // already framed themselves in the in-app cropper — exactly like the DOCX export
+    // does. Using the raw, un-framed originalPhoto here would re-guess a crop with no
+    // knowledge of where the user's face actually is, which was the real cause of the
+    // reported "cropped too high / chin missing" bug. originalPhoto is only consulted
+    // as a fallback when no selected photo exists (not exercised by this fixture).
+    expect(loadedImageSources).toContain(selectedPhoto);
+    expect(loadedImageSources).not.toContain(originalPhoto);
     expect(clonedPhotoFrameWidths).toContain('100px');
     const cloneText = clonedTextContents.join('\n');
     expect(cloneText).toContain('VI / Metematički fakultet');
@@ -497,6 +502,19 @@ describe('Modern Minimal preview/export parity', () => {
     expect(cloneText).not.toContain('Metematičkifakultet');
     expect(cloneText).not.toContain('profesionalnupažnju');
     expect(cloneText).not.toContain('kreiranjukvalitetnih');
+  });
+
+  test('Modern Minimal PDF falls back to originalPhoto only when no selected photo exists', async () => {
+    const canvas = makeCanvas(800, 1050, y => y < 980);
+    installPdfMocks(canvas);
+    const cvWithoutSelectedPhoto = draganCv();
+    (cvWithoutSelectedPhoto.personal as CVData['personal'] & { photo?: string }).photo = undefined;
+
+    const blob = await buildModernMinimalPdfBlob(cvWithoutSelectedPhoto, 'en');
+
+    expect(blob.size).toBeGreaterThan(0);
+    expect(loadedImageSources).toContain(originalPhoto);
+    expect(loadedImageSources).not.toContain(selectedPhoto);
   });
 
   test('Modern Minimal export save path writes a PDF through platform save', async () => {
