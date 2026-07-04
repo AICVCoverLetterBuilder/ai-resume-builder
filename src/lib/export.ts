@@ -116,7 +116,7 @@ const DOCX_TEMPLATE_CONFIGS: Record<string, DocxTemplateConfig> = {
     // FIX-01: photo on left side to match HTML template
     accent: '059669', headerBg: 'FFFFFF', headerText: '111827',
     titleColor: '059669', headingColor: '059669', headingBorder: 'D1D5DB',
-    layout: 'single', sidebarPct: 0, photoShape: 'circle', photoSize: 80, font: 'Calibri',
+    layout: 'single', sidebarPct: 0, photoShape: 'circle', photoSize: 84, font: 'Calibri',
     photoSide: 'left', headerAlignment: 'left', showHeadingBorder: true, uppercaseHeadings: true,
     dividerColor: 'D1D5DB',
     customLayout: 'clean-simple',
@@ -1761,7 +1761,14 @@ export async function exportToDOCX(
   const directExecutivePremiumPhoto = cfg.customLayout === 'executive-premium'
     ? await prepareExecutivePremiumCanonicalPhoto(cvData)
     : null;
-  const rawPhotoSource = !directElegantFormalPhoto && !directExecutivePremiumPhoto && !cfg.noPhoto && showPhoto && cvData.personal.photo ? cvData.personal.photo : null;
+  // Clean Simple DOCX reuses the exact same photo selection + circular crop already
+  // validated for the Clean Simple PDF (prefers cv.personal.photo, falls back to
+  // originalPhoto, crops with the less top-biased offset that keeps chin/neck visible).
+  // This is a read-only call into PDF-only code — it does not modify the PDF path.
+  const directCleanSimplePhoto = cfg.customLayout === 'clean-simple'
+    ? await prepareCleanSimplePdfPhotoDataUrl(cvData)
+    : null;
+  const rawPhotoSource = !directElegantFormalPhoto && !directExecutivePremiumPhoto && !directCleanSimplePhoto && !cfg.noPhoto && showPhoto && cvData.personal.photo ? cvData.personal.photo : null;
   const preparedRawPhoto = rawPhotoSource
     ? await prepareCvPhotoForExport(rawPhotoSource)
     : null;
@@ -1785,6 +1792,11 @@ export async function exportToDOCX(
     photoW = Math.round(ps * (directExecutivePremiumPhoto.width / directExecutivePremiumPhoto.height));
     photoH = ps;
     photoType = 'jpg';
+  } else if (directCleanSimplePhoto) {
+    photoBytes = dataUrlToBytes(directCleanSimplePhoto);
+    photoW = ps;
+    photoH = ps;
+    photoType = 'png';
   } else if (rawPhotoDataUrl) {
     try {
       photoBytes = dataUrlToBytes(rawPhotoDataUrl);
@@ -2915,8 +2927,10 @@ export async function exportToDOCX(
     }
 
     children.push(new Paragraph({
+      // Tiny safe trim (was before:100/after:150) offsetting the slightly taller
+      // circular photo box so the header block does not grow the page overall.
       border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: cfg.dividerColor ?? 'D1D5DB' } },
-      spacing: { before: 100, after: 150 },
+      spacing: { before: photoBytes ? 70 : 100, after: photoBytes ? 110 : 150 },
     }));
 
     if (cvData.summary) {

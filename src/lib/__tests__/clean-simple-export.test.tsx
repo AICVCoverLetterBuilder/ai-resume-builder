@@ -402,6 +402,65 @@ describe('Clean Simple preview/export parity', () => {
     expect(branch).toContain('bidirectional: isRTL');
   });
 
+  test('Clean Simple DOCX reuses the PDF-validated photo selection/crop with a larger circular photo box', async () => {
+    const src = exportSource();
+    expect(src).toContain("const directCleanSimplePhoto = cfg.customLayout === 'clean-simple'");
+    expect(src).toContain('await prepareCleanSimplePdfPhotoDataUrl(cvData)');
+    expect(src).toContain("photoShape: 'circle', photoSize: 84");
+    expect(src).toContain('} else if (directCleanSimplePhoto) {');
+    // The dedicated PDF renderer/route must remain completely untouched by this fix.
+    expect(src).toContain("export async function exportCleanSimplePdf");
+    expect(src).toContain('export async function buildCleanSimplePdfBlob');
+
+    let savedBlob: Blob | undefined;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      savedBlob = blob as Blob;
+      return 'blob:http://test/clean-simple-docx-photo';
+    });
+    const realCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const el = realCreateElement(tagName);
+      if (tagName.toLowerCase() === 'a') el.click = vi.fn();
+      return el;
+    });
+
+    await exportToDOCX(draganCv(), 'clean-simple-dragan-docx-photo-test', 'en', 'clean-simple');
+
+    expect(savedBlob).toBeDefined();
+    // Same selected/cropped photo priority as the PDF: prefer cv.personal.photo,
+    // never fall back to originalPhoto when a selected photo already exists.
+    expect(loadedImageSources).toContain(selectedPhoto);
+    expect(loadedImageSources).not.toContain(originalPhoto);
+
+    const zip = await JSZip.loadAsync(await savedBlob!.arrayBuffer());
+    const documentXml = await zip.file('word/document.xml')!.async('text');
+    const mediaFiles = Object.keys(zip.files).filter(name => name.startsWith('word/media/'));
+    expect(mediaFiles.length).toBeGreaterThan(0);
+    expect(documentXml).toContain('Dragan Obradović');
+  });
+
+  test('Clean Simple DOCX falls back to originalPhoto only when no selected photo exists', async () => {
+    let savedBlob: Blob | undefined;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      savedBlob = blob as Blob;
+      return 'blob:http://test/clean-simple-docx-fallback';
+    });
+    const realCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const el = realCreateElement(tagName);
+      if (tagName.toLowerCase() === 'a') el.click = vi.fn();
+      return el;
+    });
+    const cvWithoutSelectedPhoto = draganCv();
+    (cvWithoutSelectedPhoto.personal as CVData['personal'] & { photo?: string }).photo = undefined;
+
+    await exportToDOCX(cvWithoutSelectedPhoto, 'clean-simple-dragan-docx-fallback-test', 'en', 'clean-simple');
+
+    expect(savedBlob).toBeDefined();
+    expect(loadedImageSources).toContain(originalPhoto);
+    expect(loadedImageSources).not.toContain(selectedPhoto);
+  });
+
   test('Clean Simple DOCX with photo contains non-empty body text, media, and relationship', async () => {
     let savedBlob: Blob | undefined;
     vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
