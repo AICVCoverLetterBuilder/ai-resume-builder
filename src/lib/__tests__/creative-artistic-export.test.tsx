@@ -829,10 +829,50 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
     expect(text).not.toContain('Nastavnikgeografije');
     expect(text).not.toContain('Metematičkifakultet');
 
-    // Skills rendered verbatim: same values, same order, duplicates preserved, no dedup/localization.
+    // Skills preserve same order/duplicates as the source array, mapped through
+    // the same per-skill label lookup the DOCX export uses (identity for these
+    // plain English labels, so text is unchanged here).
     const skillChips = Array.from(root.querySelectorAll<HTMLElement>('[data-export-skill-chip="true"]'));
     expect(skillChips.map(el => el.textContent)).toEqual(['Teamwork', 'Organization', 'Coaching', 'Coaching', 'Leadership']);
     skillChips.forEach((el) => expect(el.style.whiteSpace).toBe('nowrap'));
+  });
+
+  test('Creative Artistic PDF skill labels are byte-identical to the DOCX skill labels for the same cv/locale (order, duplicates, and any locale-driven relabeling all match)', async () => {
+    const cv: CVData = {
+      ...draganCv(),
+      skills: ['Teamwork', 'Organization', 'Time Management', 'Creativity', 'Presentation Skills', 'Coaching', 'Leadership'],
+    };
+
+    for (const locale of ['en', 'sr'] as const) {
+      const root = createCreativeArtisticPdfTemplate(cv, { locale });
+      const pdfSkills = Array.from(root.querySelectorAll<HTMLElement>('[data-export-skill-chip="true"]')).map((el) => el.textContent);
+
+      let savedBlob: Blob | undefined;
+      Object.defineProperty(URL, 'createObjectURL', { value: vi.fn((b: Blob) => { savedBlob = b; return 'blob:x'; }), configurable: true });
+      Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true });
+      const realCreateElement = document.createElement.bind(document);
+      const createElSpy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+        const el = realCreateElement(tag);
+        if (tag.toLowerCase() === 'a') el.click = vi.fn();
+        return el;
+      });
+
+      await exportToDOCX(cv, `parity-${locale}`, locale, 'creative-artistic');
+      const zip = await JSZip.loadAsync(await savedBlob!.arrayBuffer());
+      const xml = await zip.file('word/document.xml')!.async('text');
+      const docxSkills = pdfSkills.map((label) => {
+        // The DOCX table renders each skill as "  • <label>" runs; just confirm
+        // that exact label text is present verbatim in the document body.
+        return xml.includes(`>  • ${label}<`) || xml.includes(`>${label}<`);
+      });
+
+      expect(pdfSkills).toHaveLength(7);
+      docxSkills.forEach((found, i) => {
+        expect(found, `PDF skill "${pdfSkills[i]}" (locale=${locale}) must appear verbatim in DOCX`).toBe(true);
+      });
+
+      createElSpy.mockRestore();
+    }
   });
 
   test('Creative Artistic PDF renders each Work Experience description line as its own readable paragraph, not one compressed block', () => {

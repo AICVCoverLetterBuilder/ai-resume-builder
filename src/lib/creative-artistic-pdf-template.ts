@@ -1,6 +1,7 @@
 'use client';
 
 import { getLocalizedCvLanguageName } from './cv-language-options';
+import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
 import { regionSettings, type CVData } from './types';
 
@@ -305,15 +306,17 @@ export function createCreativeArtisticPdfTemplate(
         gap: '4px',
       });
       list.setAttribute('data-export-group', 'skills-row');
-      // Render cv.skills completely verbatim — same array, same order, same
-      // labels as the DOCX export and the live preview. No canonicalization,
-      // localization, or dedup lookup is applied here on purpose: running a
-      // skill label through the shared skill-alias resolver can silently
-      // coerce one label into a different one (see professional-classic's
-      // fix for the "Mentoring" → duplicate "Coaching" regression). Keeping
-      // this verbatim guarantees PDF and DOCX always show the exact same
-      // skill labels, order, and duplicates from the same source.
-      cv.skills.forEach((skill) => {
+      // The Creative Artistic DOCX branch (export.ts, customLayout ===
+      // 'creative-artistic') renders skills as
+      // `cvData.skills.map((s) => getLocalizedCvSkillName(s, locale))` — a
+      // straight positional map with no dedup/reordering. To guarantee the
+      // PDF and DOCX always show byte-identical skill text for the same
+      // input (same labels, same order, same duplicates), the PDF applies
+      // the exact same per-item transform here instead of inventing a
+      // different (verbatim) one that could diverge from DOCX for any skill
+      // whose raw text resolves through the shared alias table.
+      const caLocalizedSkills = cv.skills.map((s) => getLocalizedCvSkillName(s, options.locale ?? 'en'));
+      caLocalizedSkills.forEach((skill) => {
         const chip = append(list, 'span', {
           display: 'inline-flex',
           alignItems: 'center',
