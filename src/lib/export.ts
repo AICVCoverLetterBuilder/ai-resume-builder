@@ -989,6 +989,15 @@ const ELEGANT_FORMAL_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
 // relocating a big multi-entry block.
 const PROFESSIONAL_CLASSIC_GROUP_PAGE_PADDING_PX = 0.5;
 const PROFESSIONAL_CLASSIC_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
+// Visual-polish-only tuning for a trailing page that ends up containing nothing but the
+// closing Education/Skills+Languages/Certifications blocks (see
+// applyProfessionalClassicFinalPageBalance below). None of these affect a page that has
+// other content on it, and none of them fire at all for a single-page document.
+const PROFESSIONAL_CLASSIC_FINAL_PAGE_SPARSE_RATIO = 0.55;
+const PROFESSIONAL_CLASSIC_FINAL_PAGE_MAX_LEAD_PX = 24;
+const PROFESSIONAL_CLASSIC_FINAL_PAGE_TOP_BREATHING_PX = 40;
+const PROFESSIONAL_CLASSIC_FINAL_SECTION_GAP_EXTRA_PX = 7;
+const PROFESSIONAL_CLASSIC_FINAL_CHIP_GAP_EXTRA_PX = 3;
 
 type MeaningfulContentIntervalCss = {
   topCssPx: number;
@@ -1425,6 +1434,74 @@ export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement
       movedAnyGroup = true;
     }
     if (!movedAnyGroup) break;
+  }
+}
+
+// Visual-polish pass for the case where, after keep-together pagination, the very last
+// page ends up containing nothing but the closing Education / Skills+Languages /
+// Certifications blocks with a lot of empty space below them — reads as an orphan tail
+// rather than an intentional final page. This only ever *adds* modest breathing-room
+// margins (never removes/shortens content, never touches page 1..N-1, never fires on a
+// single-page document), so it is purely cosmetic:
+//  - a small top offset so the block isn't glued to the page-cut seam;
+//  - a little extra gap between Education / Skills+Languages / Certifications so the
+//    closing page reads as a deliberately laid-out summary instead of cramped leftovers;
+//  - a touch more gap between skill chips on that same trailing block.
+export function applyProfessionalClassicFinalPageBalance(root: HTMLElement): void {
+  const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
+  if (!rootBox || rootBox.width <= 0) return;
+
+  const pageHeightCssPx = rootBox.width * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return;
+
+  const totalHeight = rootBox.height;
+  const pageCount = Math.ceil((totalHeight - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+  if (pageCount <= 1) return; // never touch a single-page (short-fixture) document
+
+  const closingBlocks = [
+    root.querySelector<HTMLElement>('[data-export-group="professional-classic-education-section"]'),
+    root.querySelector<HTMLElement>('[data-export-group="professional-classic-skills-languages"]'),
+    root.querySelector<HTMLElement>('[data-export-group="professional-classic-certifications"]'),
+  ].filter((el): el is HTMLElement => Boolean(el));
+  if (closingBlocks.length === 0) return;
+
+  const lastPageIndex = pageCount - 1;
+  const lastPageTop = lastPageIndex * pageHeightCssPx;
+
+  // Whichever subset of the closing blocks (Education / Skills+Languages / Certifications)
+  // actually landed on the final page — could be all three, or just the last one or two if
+  // the earlier ones fit at the bottom of the previous page instead.
+  const blocksOnLastPage = closingBlocks
+    .map((el) => ({ el, rect: getRelativeExportRect(rootBox, el) }))
+    .filter((entry): entry is { el: HTMLElement; rect: NonNullable<ReturnType<typeof getRelativeExportRect>> } =>
+      Boolean(entry.rect) && entry.rect!.top >= lastPageTop - PDF_PAGE_INTERSECTION_EPSILON_PX);
+  if (blocksOnLastPage.length === 0) return;
+
+  const firstOnLastPage = blocksOnLastPage[0];
+  const lastOnLastPage = blocksOnLastPage[blocksOnLastPage.length - 1];
+
+  // Must be the very first thing on that page (nothing — e.g. a trailing Work Experience
+  // entry — precedes it there); otherwise this isn't an isolated orphan tail.
+  const isFirstOnPage = firstOnLastPage.rect.top - lastPageTop <= PROFESSIONAL_CLASSIC_FINAL_PAGE_MAX_LEAD_PX;
+  if (!isFirstOnPage) return;
+
+  const fillRatio = (lastOnLastPage.rect.bottom - lastPageTop) / pageHeightCssPx;
+  if (fillRatio <= 0 || fillRatio >= PROFESSIONAL_CLASSIC_FINAL_PAGE_SPARSE_RATIO) return;
+
+  const topBlock = firstOnLastPage.el;
+  const currentMarginTop = parseCssPx(topBlock.style.marginTop);
+  topBlock.style.setProperty('margin-top', `${currentMarginTop + PROFESSIONAL_CLASSIC_FINAL_PAGE_TOP_BREATHING_PX}px`);
+
+  for (let i = 0; i < blocksOnLastPage.length - 1; i += 1) {
+    const block = blocksOnLastPage[i].el;
+    const currentMarginBottom = parseCssPx(block.style.marginBottom);
+    block.style.setProperty('margin-bottom', `${currentMarginBottom + PROFESSIONAL_CLASSIC_FINAL_SECTION_GAP_EXTRA_PX}px`);
+  }
+
+  const skillsList = root.querySelector<HTMLElement>('[data-professional-classic-skills-list="true"]');
+  if (skillsList) {
+    const currentGap = parseCssPx(skillsList.style.gap) || 4;
+    skillsList.style.setProperty('gap', `${currentGap + PROFESSIONAL_CLASSIC_FINAL_CHIP_GAP_EXTRA_PX}px`);
   }
 }
 
@@ -5653,6 +5730,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       // canvas size — measuring them before this pass ran previously left the canvas too
       // short, silently clipping whatever the shift pushed past the original bottom edge.
       applyProfessionalClassicKeepTogetherPagination(sourceRootForTag);
+      applyProfessionalClassicFinalPageBalance(sourceRootForTag);
     }
     captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
     captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
@@ -5693,6 +5771,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         if (captureTemplateId === 'professional-classic') {
           normalizeProfessionalClassicPdfTextStyles(cloneRoot);
           applyProfessionalClassicKeepTogetherPagination(cloneRoot);
+          applyProfessionalClassicFinalPageBalance(cloneRoot);
           // Professional Classic previously relied on pure fixed-height canvas
           // slicing with no page-break awareness at all, which for multipage
           // content produced a nearly-empty trailing page (e.g. Education +

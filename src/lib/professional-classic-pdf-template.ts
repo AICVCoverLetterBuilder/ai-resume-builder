@@ -323,6 +323,7 @@ export function createProfessionalClassicPdfTemplate(
         alignItems: 'center',
         gap: '4px',
       });
+      list.setAttribute('data-professional-classic-skills-list', 'true');
       // Render cv.skills completely verbatim — same array, same order, same
       // labels as the DOCX export and the live preview. No canonicalization,
       // localization, or dedup lookup is applied here on purpose: running a
