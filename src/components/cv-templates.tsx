@@ -294,7 +294,7 @@ export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
             <section className="mb-6">
               <h2 data-export-meaningful="true" className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-3">{L.experience}</h2>
               {data.experience.map(exp => (
-                <div key={exp.id} data-export-meaningful="true" className="mb-4 border-l-2 border-rose-200 pl-3">
+                <div key={exp.id} data-export-meaningful="true" data-export-group="creative-bold-experience-entry" className="mb-4 border-l-2 border-rose-200 pl-3">
                   <h3 className="font-semibold">{exp.position}</h3>
                   <p className="text-xs text-gray-500">{exp.company} | {exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</p>
                   <p className="mt-1 text-gray-600 whitespace-pre-line">{exp.description}</p>
@@ -303,7 +303,7 @@ export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
             </section>
           )}
           {data.education.length > 0 && (
-            <section className="mb-6">
+            <section data-export-group="creative-bold-education-section" className="mb-6">
               <h2 data-export-meaningful="true" className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-3">{L.education}</h2>
               {data.education.map(edu => (
                 <div key={edu.id} data-export-meaningful="true" className="mb-2">
@@ -314,7 +314,7 @@ export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
             </section>
           )}
           {data.certifications.length > 0 && (
-            <section>
+            <section data-export-group="creative-bold-certifications">
               <h2 data-export-meaningful="true" className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-2">{L.certifications}</h2>
               <ul className="list-disc list-inside text-gray-700">
                 {data.certifications.map((c, i) => <li key={i} data-export-meaningful="true">{c}</li>)}

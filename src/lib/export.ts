@@ -989,6 +989,8 @@ const ELEGANT_FORMAL_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
 // relocating a big multi-entry block.
 const PROFESSIONAL_CLASSIC_GROUP_PAGE_PADDING_PX = 0.5;
 const PROFESSIONAL_CLASSIC_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
+const CREATIVE_BOLD_GROUP_PAGE_PADDING_PX = 0.5;
+const CREATIVE_BOLD_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
 // Visual-polish-only tuning for a trailing page that ends up containing nothing but the
 // closing Education/Skills+Languages/Certifications blocks (see
 // applyProfessionalClassicFinalPageBalance below). None of these affect a page that has
@@ -1428,6 +1430,55 @@ export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement
 
       const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
       const shiftPx = Math.max(0, nextPageTop - rect.top + PROFESSIONAL_CLASSIC_GROUP_PAGE_PADDING_PX);
+      if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
+
+      shiftGroupToNextPage(group, shiftPx);
+      movedAnyGroup = true;
+    }
+    if (!movedAnyGroup) break;
+  }
+}
+
+// Creative Bold's two-column (red sidebar + white main) layout previously had no
+// keep-together pagination at all for its `main`-column Work Experience/Education/
+// Certifications content, unlike every other multipage template (professional-classic,
+// elegant-formal, creative-artistic). Naive pixel-slicing could therefore cut a short
+// group (e.g. a single experience entry, or the Education section) right after its
+// heading, stranding most of it at the very top of the next page while leaving a large
+// unused gap at the bottom of the previous page — or, symmetrically, start a page with
+// a big blank lead-in above a heading that only just missed fitting on the prior page.
+// This mirrors applyProfessionalClassicKeepTogetherPagination: any group shorter than
+// ~62% of a page height that would straddle a page boundary is shifted whole onto the
+// next page via margin-top. Only `main`-column content is targeted; the red sidebar
+// column keeps flowing independently from the top, unaffected by these shifts.
+export function applyCreativeBoldKeepTogetherPagination(root: HTMLElement): void {
+  const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
+  if (!rootBox || rootBox.width <= 0) return;
+
+  const pageHeightCssPx = rootBox.width * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return;
+
+  const groupSelectors = [
+    '[data-export-group="creative-bold-experience-entry"]',
+    '[data-export-group="creative-bold-education-section"]',
+    '[data-export-group="creative-bold-certifications"]',
+  ].join(',');
+
+  const maxShortGroupHeight = pageHeightCssPx * CREATIVE_BOLD_MAX_KEEP_GROUP_PAGE_RATIO;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    let movedAnyGroup = false;
+    const groups = Array.from(root.querySelectorAll<HTMLElement>(groupSelectors));
+    for (const group of groups) {
+      const rect = getRelativeExportRect(rootBox, group);
+      if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) continue;
+
+      const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+      const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+      if (startsOnPage === endsOnPage) continue;
+
+      const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+      const shiftPx = Math.max(0, nextPageTop - rect.top + CREATIVE_BOLD_GROUP_PAGE_PADDING_PX);
       if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
 
       shiftGroupToNextPage(group, shiftPx);
@@ -5732,6 +5783,13 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       applyProfessionalClassicKeepTogetherPagination(sourceRootForTag);
       applyProfessionalClassicFinalPageBalance(sourceRootForTag);
     }
+    if (captureTemplateId === 'creative-bold' && sourceRootForTag) {
+      // Same reasoning as professional-classic above: run keep-together on the real
+      // (pre-clone) source root so captureWidth/captureHeight below already reflect any
+      // margin-top shift, instead of sizing the canvas before the shift is applied and
+      // clipping whatever content the shift pushed past the original bottom edge.
+      applyCreativeBoldKeepTogetherPagination(sourceRootForTag);
+    }
     captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
     captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
     preparedImages = await prepareTemplateImagesForExport(captureTarget);
@@ -5789,6 +5847,13 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         if (captureTemplateId === 'creative-bold') {
           applyCreativeBoldPdfLayout(cloneRoot);
           normalizeCreativeBoldPdfTextStyles(cloneRoot);
+          applyCreativeBoldKeepTogetherPagination(cloneRoot);
+          // Bring creative-bold in line with every other multipage template: expand the
+          // captured root to the true measured bottom of meaningful content so the
+          // semantic page-plan (skip/merge blank trailing page ranges) has accurate
+          // bounds, instead of only measuring bounds without ever expanding to them.
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
         }
         if (captureTemplateId === 'creative-artistic') {
