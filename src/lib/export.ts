@@ -1441,16 +1441,28 @@ export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement
 
 // Creative Bold's two-column (red sidebar + white main) layout previously had no
 // keep-together pagination at all for its `main`-column Work Experience/Education/
-// Certifications content, unlike every other multipage template (professional-classic,
-// elegant-formal, creative-artistic). Naive pixel-slicing could therefore cut a short
-// group (e.g. a single experience entry, or the Education section) right after its
-// heading, stranding most of it at the very top of the next page while leaving a large
-// unused gap at the bottom of the previous page — or, symmetrically, start a page with
-// a big blank lead-in above a heading that only just missed fitting on the prior page.
-// This mirrors applyProfessionalClassicKeepTogetherPagination: any group shorter than
-// ~62% of a page height that would straddle a page boundary is shifted whole onto the
-// next page via margin-top. Only `main`-column content is targeted; the red sidebar
-// column keeps flowing independently from the top, unaffected by these shifts.
+// Certifications content, unlike every other multipage template. The first fix treated
+// every Work Experience entry as one indivisible block (like Education/Certifications),
+// which stopped headings/lines being sliced mid-glyph, but for a long entry that starts
+// near a page boundary it also relocated the ENTIRE entry (heading + every description
+// line) to the next page — leaving most of the previous page blank underneath the prior
+// entry, purely because that entry's *later* lines happened to cross the boundary.
+//
+// This revision keeps Education/Certifications as whole indivisible blocks (they're
+// always short), but makes Work Experience entries split-friendly after a safe minimum:
+//  - the header (title + company/date, `creative-bold-experience-header`) is only ever
+//    pushed to the next page if it would itself be sliced by the boundary, OR if there
+//    is not enough room left on the current page for at least one real description line
+//    to follow it (avoiding a heading stranded alone at the very bottom of a page);
+//  - each description line (`creative-bold-experience-line`, one per literal `\n` in the
+//    source text) is its own atomic "never slice this" unit — if a later line would
+//    itself be cut mid-glyph by a page boundary, only that one line (and whatever
+//    follows it) is nudged onto the next page, never the whole entry.
+// Net effect: a long entry can start on the current page with its heading plus at least
+// one content line, and its remaining lines flow naturally onto later pages exactly
+// where they land, instead of the whole entry jumping wholesale and stranding a big
+// blank gap. Only `main`-column content is targeted; the red sidebar column keeps
+// flowing independently from the top, unaffected by these shifts.
 export function applyCreativeBoldKeepTogetherPagination(root: HTMLElement): void {
   const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
   if (!rootBox || rootBox.width <= 0) return;
@@ -1458,32 +1470,70 @@ export function applyCreativeBoldKeepTogetherPagination(root: HTMLElement): void
   const pageHeightCssPx = rootBox.width * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
   if (pageHeightCssPx <= 0) return;
 
-  const groupSelectors = [
-    '[data-export-group="creative-bold-experience-entry"]',
-    '[data-export-group="creative-bold-education-section"]',
-    '[data-export-group="creative-bold-certifications"]',
-  ].join(',');
-
   const maxShortGroupHeight = pageHeightCssPx * CREATIVE_BOLD_MAX_KEEP_GROUP_PAGE_RATIO;
 
-  for (let pass = 0; pass < 4; pass += 1) {
+  const shiftIfStraddling = (el: HTMLElement): boolean => {
+    const rect = getRelativeExportRect(rootBox, el);
+    if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    if (startsOnPage === endsOnPage) return false;
+
+    const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+    const shiftPx = Math.max(0, nextPageTop - rect.top + CREATIVE_BOLD_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(el, shiftPx);
+    return true;
+  };
+
+  const shiftHeaderIfNeeded = (header: HTMLElement, firstLineHeight: number | null): boolean => {
+    const rect = getRelativeExportRect(rootBox, header);
+    if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const headerItselfStraddles = startsOnPage !== endsOnPage;
+
+    const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
+    const roomAfterHeader = pageBottom - rect.bottom;
+    const wouldOrphanHeading = firstLineHeight !== null && roomAfterHeader < firstLineHeight;
+
+    if (!headerItselfStraddles && !wouldOrphanHeading) return false;
+
+    const shiftPx = Math.max(0, pageBottom - rect.top + CREATIVE_BOLD_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(header, shiftPx);
+    return true;
+  };
+
+  for (let pass = 0; pass < 8; pass += 1) {
     let movedAnyGroup = false;
-    const groups = Array.from(root.querySelectorAll<HTMLElement>(groupSelectors));
-    for (const group of groups) {
-      const rect = getRelativeExportRect(rootBox, group);
-      if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) continue;
 
-      const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
-      const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
-      if (startsOnPage === endsOnPage) continue;
+    const entries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="creative-bold-experience-entry"]'));
+    for (const entry of entries) {
+      const header = entry.querySelector<HTMLElement>('[data-export-group="creative-bold-experience-header"]');
+      const lines = Array.from(entry.querySelectorAll<HTMLElement>('[data-export-group="creative-bold-experience-line"]'));
 
-      const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
-      const shiftPx = Math.max(0, nextPageTop - rect.top + CREATIVE_BOLD_GROUP_PAGE_PADDING_PX);
-      if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
+      if (header) {
+        const firstLineRect = lines.length > 0 ? getRelativeExportRect(rootBox, lines[0]) : null;
+        if (shiftHeaderIfNeeded(header, firstLineRect ? firstLineRect.height : null)) movedAnyGroup = true;
+      }
 
-      shiftGroupToNextPage(group, shiftPx);
-      movedAnyGroup = true;
+      for (const line of lines) {
+        if (shiftIfStraddling(line)) movedAnyGroup = true;
+      }
     }
+
+    const wholeGroups = Array.from(root.querySelectorAll<HTMLElement>(
+      '[data-export-group="creative-bold-education-section"],[data-export-group="creative-bold-certifications"]',
+    ));
+    for (const group of wholeGroups) {
+      if (shiftIfStraddling(group)) movedAnyGroup = true;
+    }
+
     if (!movedAnyGroup) break;
   }
 }

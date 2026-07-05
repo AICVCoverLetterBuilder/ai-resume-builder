@@ -295,9 +295,19 @@ export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
               <h2 data-export-meaningful="true" className="text-sm font-bold uppercase tracking-wider text-rose-600 mb-3">{L.experience}</h2>
               {data.experience.map(exp => (
                 <div key={exp.id} data-export-meaningful="true" data-export-group="creative-bold-experience-entry" className="mb-4 border-l-2 border-rose-200 pl-3">
-                  <h3 className="font-semibold">{exp.position}</h3>
-                  <p className="text-xs text-gray-500">{exp.company} | {exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</p>
-                  <p className="mt-1 text-gray-600 whitespace-pre-line">{exp.description}</p>
+                  <div data-export-group="creative-bold-experience-header">
+                    <h3 className="font-semibold">{exp.position}</h3>
+                    <p className="text-xs text-gray-500">{exp.company} | {exp.startDate} - {exp.isPresent ? L.present : exp.endDate}</p>
+                  </div>
+                  {exp.description && exp.description.split('\n').map((line, lineIndex) => (
+                    <p
+                      key={lineIndex}
+                      data-export-group="creative-bold-experience-line"
+                      className={`m-0 text-gray-600${lineIndex === 0 ? ' mt-1' : ''}`}
+                    >
+                      {line.length > 0 ? line : '\u00A0'}
+                    </p>
+                  ))}
                 </div>
               ))}
             </section>
