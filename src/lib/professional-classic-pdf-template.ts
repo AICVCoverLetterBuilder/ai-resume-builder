@@ -214,10 +214,14 @@ export function createProfessionalClassicPdfTemplate(
   }
 
   // ── Body ─────────────────────────────────────────────────────────────────
-  const body = append(root, 'div', { padding: '18px 32px 26px', boxSizing: 'border-box' });
+  // Padding/margins below are tightened from the original 18/26px + 14px section
+  // gaps: for multipage CVs the wider spacing was the main reason Education/Skills
+  // spilled onto an otherwise near-empty trailing page. Font sizes, line-heights,
+  // and colors are untouched so the design and short-CV 1-page layout are unaffected.
+  const body = append(root, 'div', { padding: '14px 32px 20px', boxSizing: 'border-box' });
 
   if (cv.summary) {
-    const sectionEl = append(body, 'section', { margin: '0 0 14px', breakInside: 'avoid', pageBreakInside: 'avoid' });
+    const sectionEl = append(body, 'section', { margin: '0 0 11px', breakInside: 'avoid', pageBreakInside: 'avoid' });
     sectionEl.setAttribute('data-professional-classic-section', 'summary');
     sectionHeading(sectionEl, L.summary);
     append(sectionEl, 'p', {
@@ -231,11 +235,11 @@ export function createProfessionalClassicPdfTemplate(
   }
 
   if (cv.experience.length > 0) {
-    const sectionEl = append(body, 'section', { margin: '0 0 14px' });
+    const sectionEl = append(body, 'section', { margin: '0 0 11px' });
     sectionEl.setAttribute('data-professional-classic-section', 'experience');
     sectionHeading(sectionEl, L.experience);
     cv.experience.forEach((exp) => {
-      const entry = append(sectionEl, 'div', { margin: '0 0 10px', breakInside: 'avoid', pageBreakInside: 'avoid' });
+      const entry = append(sectionEl, 'div', { margin: '0 0 7px', breakInside: 'avoid', pageBreakInside: 'avoid' });
       entry.setAttribute('data-export-group', 'professional-classic-experience');
       const row = append(entry, 'div', {
         display: 'grid',
@@ -263,14 +267,18 @@ export function createProfessionalClassicPdfTemplate(
           });
           if (isBullet) append(p, 'span', { color: '#475569' }, '\u2022 ');
           append(p, 'span', {}, bulletText);
+          p.setAttribute('data-export-meaningful', 'true');
         });
       }
     });
   }
 
   if (cv.education.length > 0) {
-    const sectionEl = append(body, 'section', { margin: '0 0 14px' });
+    const sectionEl = append(body, 'section', { margin: '0 0 11px' });
     sectionEl.setAttribute('data-professional-classic-section', 'education');
+    // Kept together as one export-pagination group (heading + all entries) so a
+    // page boundary never lands mid-heading — see applyProfessionalClassicKeepTogetherPagination.
+    sectionEl.setAttribute('data-export-group', 'professional-classic-education-section');
     sectionHeading(sectionEl, L.education);
     cv.education.forEach((edu) => {
       const entry = append(sectionEl, 'div', { margin: '0 0 6px', breakInside: 'avoid', pageBreakInside: 'avoid' });
@@ -301,8 +309,9 @@ export function createProfessionalClassicPdfTemplate(
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
       columnGap: '24px',
-      margin: '0 0 14px',
+      margin: '0 0 11px',
     });
+    grid.setAttribute('data-export-group', 'professional-classic-skills-languages');
 
     if (hasSkills) {
       const skillsCol = append(grid, 'section', { minWidth: '0' });
@@ -325,7 +334,7 @@ export function createProfessionalClassicPdfTemplate(
       // of "Coaching" + "Mentoring". Keeping this verbatim guarantees PDF and
       // DOCX always show the exact same skill labels from the same source.
       cv.skills.forEach((skill) => {
-        append(list, 'span', {
+        const chip = append(list, 'span', {
           backgroundColor: CHIP_BG,
           color: CHIP_TEXT,
           fontSize: '9.6px',
@@ -333,7 +342,9 @@ export function createProfessionalClassicPdfTemplate(
           padding: '2px 7px',
           borderRadius: '4px',
           whiteSpace: 'nowrap',
-        }, skill).setAttribute('data-professional-classic-skill', 'item');
+        }, skill);
+        chip.setAttribute('data-professional-classic-skill', 'item');
+        chip.setAttribute('data-export-meaningful', 'true');
       });
     }
 
@@ -350,6 +361,7 @@ export function createProfessionalClassicPdfTemplate(
   if (cv.certifications.length > 0) {
     const sectionEl = append(body, 'section', { margin: '0', breakInside: 'avoid', pageBreakInside: 'avoid' });
     sectionEl.setAttribute('data-professional-classic-section', 'certifications');
+    sectionEl.setAttribute('data-export-group', 'professional-classic-certifications');
     sectionHeading(sectionEl, L.certifications);
     cv.certifications.forEach((cert) => {
       const p = append(sectionEl, 'p', { margin: '0 0 3px', color: CHIP_TEXT, fontSize: '10.1px', lineHeight: '1.3' });

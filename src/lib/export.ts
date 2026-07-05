@@ -980,6 +980,15 @@ const CREATIVE_ARTISTIC_GROUP_PAGE_PADDING_PX = 0.5;
 const CREATIVE_ARTISTIC_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
 const ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX = 0.5;
 const ELEGANT_FORMAL_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
+// Professional Classic previously had zero keep-together logic (pure fixed-height
+// canvas slicing), which could cut a section heading or a single experience/education
+// entry in half at a page boundary. A deliberately lower ratio than the 0.9 used by
+// elegant-formal/creative-artistic is used here — only genuinely short blocks (a single
+// entry, or a heading + short section) are ever pushed to the next page, so this can
+// only ever close a small gap at the bottom of a page, never manufacture a large one by
+// relocating a big multi-entry block.
+const PROFESSIONAL_CLASSIC_GROUP_PAGE_PADDING_PX = 0.5;
+const PROFESSIONAL_CLASSIC_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
 
 type MeaningfulContentIntervalCss = {
   topCssPx: number;
@@ -1372,6 +1381,44 @@ export function applyElegantFormalKeepTogetherPagination(root: HTMLElement): voi
 
       const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
       const shiftPx = Math.max(0, nextPageTop - rect.top + ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX);
+      if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
+
+      shiftGroupToNextPage(group, shiftPx);
+      movedAnyGroup = true;
+    }
+    if (!movedAnyGroup) break;
+  }
+}
+
+export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement): void {
+  const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
+  if (!rootBox || rootBox.width <= 0) return;
+
+  const pageHeightCssPx = rootBox.width * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return;
+
+  const groupSelectors = [
+    '[data-export-group="professional-classic-experience"]',
+    '[data-export-group="professional-classic-education-section"]',
+    '[data-export-group="professional-classic-skills-languages"]',
+    '[data-export-group="professional-classic-certifications"]',
+  ].join(',');
+
+  const maxShortGroupHeight = pageHeightCssPx * PROFESSIONAL_CLASSIC_MAX_KEEP_GROUP_PAGE_RATIO;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    let movedAnyGroup = false;
+    const groups = Array.from(root.querySelectorAll<HTMLElement>(groupSelectors));
+    for (const group of groups) {
+      const rect = getRelativeExportRect(rootBox, group);
+      if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) continue;
+
+      const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+      const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+      if (startsOnPage === endsOnPage) continue;
+
+      const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+      const shiftPx = Math.max(0, nextPageTop - rect.top + PROFESSIONAL_CLASSIC_GROUP_PAGE_PADDING_PX);
       if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
 
       shiftGroupToNextPage(group, shiftPx);
@@ -2036,13 +2083,17 @@ export async function exportToDOCX(
         rows: [new TableRow({ children: [new TableCell({ width: { size: 100, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.CENTER, borders: noBorders, shading: headerBg, margins: { top: 220, bottom: 220, left: 280, right: 280 }, children: headerInfoCells })] })],
       }));
     }
-    children.push(new Paragraph({ text: '', spacing: { after: 200 } }));
+    children.push(new Paragraph({ text: '', spacing: { after: 110 } }));
 
     // ── Section heading helper (slate-800 color, gray underline border) ─────
+    // Spacing tightened from the original {before:240, after:100} — long CVs with many
+    // sections were the single biggest contributor to Education/Skills spilling onto an
+    // otherwise near-empty trailing page. Tighter heading spacing reclaims that room on
+    // every section without changing font size, color, or the underline design.
     function pcHeading(text: string) {
       return new Paragraph({
         children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 18, color: '1E293B' })],
-        spacing: { before: 240, after: 100 },
+        spacing: { before: 130, after: 70 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'E2E8F0' } },
       });
     }
@@ -2067,7 +2118,7 @@ export async function exportToDOCX(
     // ── Summary ──────────────────────────────────────────────────────────────
     if (cvData.summary) {
       children.push(pcHeading(t.cv.summary));
-      children.push(new Paragraph({ children: [new TextRun({ text: cvData.summary, size: 22, color: '374151' })], spacing: { after: 160 } }));
+      children.push(new Paragraph({ children: [new TextRun({ text: cvData.summary, size: 22, color: '374151' })], spacing: { after: 120 } }));
     }
 
     // ── Experience: position left / date right / company on next line ────────
@@ -2085,11 +2136,11 @@ export async function exportToDOCX(
           ]})],
         }));
         // Company on next line in gray
-        children.push(new Paragraph({ children: [new TextRun({ text: exp.company, size: 20, color: '6B7280' })], spacing: { after: 50 } }));
+        children.push(new Paragraph({ children: [new TextRun({ text: exp.company, size: 20, color: '6B7280' })], spacing: { after: 40 } }));
         if (exp.description) {
           children.push(...pcDescriptionParagraphs(exp.description));
         }
-        children.push(new Paragraph({ text: '', spacing: { after: 80 } }));
+        children.push(new Paragraph({ text: '', spacing: { after: 50 } }));
       }
     }
 
@@ -2099,8 +2150,8 @@ export async function exportToDOCX(
       for (const edu of cvData.education) {
         children.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' })], spacing: { after: 20 } }));
         const eduMeta = [edu.school, edu.startDate && edu.endDate ? `${edu.startDate} – ${edu.endDate}` : ''].filter(Boolean).join('  |  ');
-        children.push(new Paragraph({ children: [new TextRun({ text: eduMeta, size: 18, color: '6B7280' })], spacing: { after: edu.description ? 40 : 80 } }));
-        if (edu.description) children.push(new Paragraph({ children: [new TextRun({ text: edu.description, size: 22, color: '374151' })], spacing: { after: 80 } }));
+        children.push(new Paragraph({ children: [new TextRun({ text: eduMeta, size: 18, color: '6B7280' })], spacing: { after: edu.description ? 30 : 50 } }));
+        if (edu.description) children.push(new Paragraph({ children: [new TextRun({ text: edu.description, size: 22, color: '374151' })], spacing: { after: 50 } }));
       }
     }
 
@@ -2116,12 +2167,12 @@ export async function exportToDOCX(
 
       if (hasSkills) {
         skillsColChildren.push(pcHeading(t.cv.skills));
-        skillsColChildren.push(new Paragraph({ children: [new TextRun({ text: localizedSkills.join('  •  '), size: 20, color: '374151' })], spacing: { after: 80 } }));
+        skillsColChildren.push(new Paragraph({ children: [new TextRun({ text: localizedSkills.join('  •  '), size: 20, color: '374151' })], spacing: { after: 50 } }));
       }
       if (hasLangs) {
         langsColChildren.push(pcHeading(t.cv.languages));
         for (const lang of cvData.languages) {
-          langsColChildren.push(new Paragraph({ children: [new TextRun({ text: `${getLocalizedCvLanguageName(lang.name, locale)}`, bold: true, size: 20, color: '111827' }), new TextRun({ text: `  –  ${lang.level}`, size: 20, color: '6B7280' })], spacing: { after: 40 } }));
+          langsColChildren.push(new Paragraph({ children: [new TextRun({ text: `${getLocalizedCvLanguageName(lang.name, locale)}`, bold: true, size: 20, color: '111827' }), new TextRun({ text: `  –  ${lang.level}`, size: 20, color: '6B7280' })], spacing: { after: 30 } }));
         }
       }
 
@@ -2139,7 +2190,7 @@ export async function exportToDOCX(
     if (cvData.certifications.length > 0) {
       children.push(pcHeading(t.cv.certifications));
       for (const cert of cvData.certifications) {
-        children.push(new Paragraph({ children: [new TextRun({ text: '• ', size: 22, color: '475569' }), new TextRun({ text: cert, size: 22, color: '374151' })], spacing: { after: 60 } }));
+        children.push(new Paragraph({ children: [new TextRun({ text: '• ', size: 22, color: '475569' }), new TextRun({ text: cert, size: 22, color: '374151' })], spacing: { after: 30 } }));
       }
     }
   }
@@ -4569,7 +4620,15 @@ export async function exportToDOCX(
               // dedicated dark-header layouts.
               : (templateId ?? cvData.templateId) === 'creative-bold'
                 ? { margin: { top: 560, right: 620, bottom: 560, left: 620 } }
-                : { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
+                // Professional Classic's default 720-twip margin (0.5in) was the widest of
+                // any dedicated dark-header layout and was the main reason a long CV's
+                // trailing Education/Skills/Certifications content spilled onto its own
+                // near-empty final page. Tightening to the same 620-twip margin already
+                // proven safe for creative-bold reclaims real content room on every page
+                // without touching the header design, font sizes, or short-CV 1-page fit.
+                : (templateId ?? cvData.templateId) === 'professional-classic'
+                  ? { margin: { top: 620, right: 620, bottom: 620, left: 620 } }
+                  : { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
         },
         children,
       },
@@ -5586,6 +5645,15 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       applyElegantFormalPdfNoWrapItems(sourceRootForTag);
       applyElegantFormalKeepTogetherPagination(sourceRootForTag);
     }
+    if (captureTemplateId === 'professional-classic' && sourceRootForTag) {
+      // Must run on the real (pre-clone) source root, not only inside onclone: the
+      // keep-together pass can push a short trailing group (e.g. Certifications) down
+      // with extra margin to avoid a mid-heading split, which *increases* total document
+      // height. captureWidth/captureHeight below are what fixes the html2canvas output
+      // canvas size — measuring them before this pass ran previously left the canvas too
+      // short, silently clipping whatever the shift pushed past the original bottom edge.
+      applyProfessionalClassicKeepTogetherPagination(sourceRootForTag);
+    }
     captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
     captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
     preparedImages = await prepareTemplateImagesForExport(captureTarget);
@@ -5624,6 +5692,20 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         copyTemplateComputedStyles(sourceRoot, cloneRoot, captureTemplateId);
         if (captureTemplateId === 'professional-classic') {
           normalizeProfessionalClassicPdfTextStyles(cloneRoot);
+          applyProfessionalClassicKeepTogetherPagination(cloneRoot);
+          // Professional Classic previously relied on pure fixed-height canvas
+          // slicing with no page-break awareness at all, which for multipage
+          // content produced a nearly-empty trailing page (e.g. Education +
+          // Skills alone) whenever their small combined height spilled just
+          // past a page boundary. Measuring real content bounds and building a
+          // page plan lets the paginator skip/merge page ranges with no
+          // meaningful content instead of always emitting one blank-ish page
+          // per leftover sliver — the same fix already applied to
+          // executive-premium/nordic-clean/tech-sidebar/corporate-navy/
+          // contemporary-bold/rirekisho/ats-standard.
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
         }
         if (captureTemplateId === 'creative-bold') {
           applyCreativeBoldPdfLayout(cloneRoot);
@@ -5729,7 +5811,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
 
   let pdfCanvas = canvas;
   const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho';
-  const shouldUseFullSemanticCanvas = (captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho') && Boolean(semanticMeaningfulBounds);
+  const shouldUseFullSemanticCanvas = (captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho' || captureTemplateId === 'professional-classic') && Boolean(semanticMeaningfulBounds);
   if (shouldTrimBlankPdfSlices && !shouldUseFullSemanticCanvas) {
     const semanticCanvasBottom = getSemanticCanvasBottom(semanticMeaningfulBounds, canvas.width, captureWidth);
     const visibleBottom = Math.min(
