@@ -410,6 +410,59 @@ describe('Creative Artistic export routing and rendering', () => {
     expect(education.style.marginTop).toBe('');
   });
 
+  test('Creative Artistic pushes an experience entry header down only to avoid an orphan heading, not to move the whole entry', () => {
+    document.body.innerHTML = `
+      <div data-template-id="creative-artistic" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <div data-export-group="creative-artistic-experience" data-test-rect="${rectAttr(1000, 32, 720, 200)}">
+          <div data-export-group="creative-artistic-experience-header" data-test-rect="${rectAttr(1000, 32, 720, 80)}">
+            <h3>Nastavnik geografije</h3>
+            <p>OS Hfh | 2017-02 - 2023-01</p>
+          </div>
+          <p data-export-group="creative-artistic-experience-line" data-test-rect="${rectAttr(1084, 32, 720, 60)}">First bullet line that needs real room to follow the header.</p>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="creative-artistic"]') as HTMLElement;
+    const header = document.querySelector('[data-export-group="creative-artistic-experience-header"]') as HTMLElement;
+
+    applyCreativeArtisticKeepTogetherPagination(root);
+
+    // Header itself does not straddle the boundary (1000-1080 is fully on page 0), but
+    // there is not enough room left on page 0 (43.9px) for the 60px first line to
+    // follow it, so only the header gets nudged down — never the whole entry.
+    expect(Number.parseFloat(header.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Nastavnik geografije');
+    expect(document.body.textContent).toContain('First bullet line');
+  });
+
+  test('Creative Artistic shifts only a straddling description line, leaving the header and earlier lines of the same entry untouched', () => {
+    document.body.innerHTML = `
+      <div data-template-id="creative-artistic" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <div data-export-group="creative-artistic-experience" data-test-rect="${rectAttr(100, 32, 720, 1100)}">
+          <div data-export-group="creative-artistic-experience-header" data-test-rect="${rectAttr(100, 32, 720, 80)}">
+            <h3>Učitelj u osnovnoj školi</h3>
+            <p>Zhff | 2023-05 - Present</p>
+          </div>
+          <p data-export-group="creative-artistic-experience-line" data-test-rect="${rectAttr(184, 32, 720, 40)}">Early line safely on page one.</p>
+          <p data-export-group="creative-artistic-experience-line" data-test-rect="${rectAttr(1100, 32, 720, 60)}">Later line that straddles the page boundary.</p>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="creative-artistic"]') as HTMLElement;
+    const header = document.querySelector('[data-export-group="creative-artistic-experience-header"]') as HTMLElement;
+    const lines = Array.from(document.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience-line"]'));
+
+    applyCreativeArtisticKeepTogetherPagination(root);
+
+    expect(header.style.marginTop).toBe('');
+    expect(lines[0].style.marginTop).toBe('');
+    expect(Number.parseFloat(lines[1].style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Early line safely on page one');
+    expect(document.body.textContent).toContain('Later line that straddles the page boundary');
+  });
+
   test('Creative Artistic keeps Skills heading with the skills block', () => {
     const pageHeight = (297 / 210) * 800;
     document.body.innerHTML = `

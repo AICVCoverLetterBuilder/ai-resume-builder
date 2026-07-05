@@ -246,22 +246,31 @@ export function createCreativeArtisticPdfTemplate(
         pageBreakInside: 'avoid',
       });
       entry.setAttribute('data-export-group', 'creative-artistic-experience');
-      appendSafeWords(entry, 'h3', exp.position, { color: TEXT, fontSize: '11px', fontWeight: '600', lineHeight: '1.25', margin: '0' }).setAttribute('data-export-meaningful', 'true');
+      // The header (title + meta) and each description line are their own atomic
+      // keep-together units (see applyCreativeArtisticKeepTogetherPagination): a long
+      // entry can start on the current page as soon as its header plus at least one
+      // description line fit, instead of the whole entry being forced onto the next
+      // page and stranding a blank gap under the previous entry.
+      const header = append(entry, 'div', {});
+      header.setAttribute('data-export-group', 'creative-artistic-experience-header');
+      appendSafeWords(header, 'h3', exp.position, { color: TEXT, fontSize: '11px', fontWeight: '600', lineHeight: '1.25', margin: '0' }).setAttribute('data-export-meaningful', 'true');
       const metaLine = [exp.company, dateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)].filter(Boolean).join(' | ');
       if (metaLine) {
-        append(entry, 'p', { margin: '2px 0 0', color: ACCENT, fontSize: '9.6px', lineHeight: '1.25' }, metaLine).setAttribute('data-export-meaningful', 'true');
+        append(header, 'p', { margin: '2px 0 0', color: ACCENT, fontSize: '9.6px', lineHeight: '1.25' }, metaLine).setAttribute('data-export-meaningful', 'true');
       }
       if (exp.description) {
         exp.description.split('\n').forEach((rawLine) => {
           const line = rawLine.trim();
           if (!line) return;
-          append(entry, 'p', {
+          const lineEl = append(entry, 'p', {
             margin: '4px 0 0',
             color: MUTED2,
             fontSize: '10.1px',
             lineHeight: '1.32',
             wordSpacing: '0.9px',
-          }, line).setAttribute('data-export-meaningful', 'true');
+          }, line);
+          lineEl.setAttribute('data-export-meaningful', 'true');
+          lineEl.setAttribute('data-export-group', 'creative-artistic-experience-line');
         });
       }
     });

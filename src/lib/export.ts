@@ -978,6 +978,12 @@ const CREATIVE_BOLD_PDF_MAIN_PERCENT = 100 - CREATIVE_BOLD_PDF_SIDEBAR_PERCENT;
 const PDF_PAGE_INTERSECTION_EPSILON_PX = 0.5;
 const CREATIVE_ARTISTIC_GROUP_PAGE_PADDING_PX = 0.5;
 const CREATIVE_ARTISTIC_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
+// Work Experience entries are handled separately from the whole-block education-section/
+// skills-block groups above: a long entry (title + many description lines) must stay
+// split-friendly, so a much lower ratio is used here — see the header/line comment on
+// applyCreativeArtisticKeepTogetherPagination for the full rationale (same reasoning
+// already proven for creative-bold's CREATIVE_BOLD_MAX_KEEP_GROUP_PAGE_RATIO).
+const CREATIVE_ARTISTIC_EXPERIENCE_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
 const ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX = 0.5;
 const ELEGANT_FORMAL_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
 // Professional Classic previously had zero keep-together logic (pure fixed-height
@@ -1329,6 +1335,22 @@ function shiftGroupToNextPage(group: HTMLElement, shiftPx: number): void {
   group.style.setProperty('margin-top', `${currentInlineMargin + shiftPx}px`);
 }
 
+// Work Experience previously had no keep-together protection at all in Creative
+// Artistic's dedicated PDF template — only education-section/skills-block (both always
+// short, whole-block-safe) were ever shifted. That left each experience entry's header
+// and description lines free to be sliced mid-glyph by a page boundary, and — worse —
+// gave no way to stop a long entry that starts near a page boundary from looking broken.
+// This mirrors the exact fix already proven for creative-bold: the header (title +
+// company/date, `creative-artistic-experience-header`) is only pushed to the next page
+// if it would itself be sliced by the boundary, OR if there is no room left on the
+// current page for at least one real description line to follow it (avoiding an orphan
+// heading alone at the bottom of a page); each description line
+// (`creative-artistic-experience-line`) is its own atomic "never slice this" unit, so a
+// later line straddling a boundary nudges only that line (and whatever follows), never
+// the whole entry. Net effect: a long entry can start on the current page with its
+// header plus at least one content line instead of the entire entry jumping wholesale to
+// the next page and stranding a blank gap under the previous section — the same problem
+// pattern a whole-block ratio would otherwise reproduce for entries under that ratio.
 export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): void {
   const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
   if (!rootBox || rootBox.width <= 0) return;
@@ -1342,11 +1364,65 @@ export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): 
   ].join(',');
 
   const maxShortGroupHeight = pageHeightCssPx * CREATIVE_ARTISTIC_MAX_KEEP_GROUP_PAGE_RATIO;
+  const maxShortExperienceHeight = pageHeightCssPx * CREATIVE_ARTISTIC_EXPERIENCE_MAX_KEEP_GROUP_PAGE_RATIO;
 
-  for (let pass = 0; pass < 4; pass += 1) {
+  const shiftIfStraddling = (el: HTMLElement): boolean => {
+    const rect = getRelativeExportRect(rootBox, el);
+    if (!rect || rect.height <= 0 || rect.height >= maxShortExperienceHeight) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    if (startsOnPage === endsOnPage) return false;
+
+    const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+    const shiftPx = Math.max(0, nextPageTop - rect.top + CREATIVE_ARTISTIC_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(el, shiftPx);
+    return true;
+  };
+
+  const shiftHeaderIfNeeded = (header: HTMLElement, firstLineHeight: number | null): boolean => {
+    const rect = getRelativeExportRect(rootBox, header);
+    if (!rect || rect.height <= 0 || rect.height >= maxShortExperienceHeight) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const headerItselfStraddles = startsOnPage !== endsOnPage;
+
+    const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
+    const roomAfterHeader = pageBottom - rect.bottom;
+    const wouldOrphanHeading = firstLineHeight !== null && roomAfterHeader < firstLineHeight;
+
+    if (!headerItselfStraddles && !wouldOrphanHeading) return false;
+
+    const shiftPx = Math.max(0, pageBottom - rect.top + CREATIVE_ARTISTIC_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(header, shiftPx);
+    return true;
+  };
+
+  for (let pass = 0; pass < 8; pass += 1) {
     let movedAnyGroup = false;
-    const groups = Array.from(root.querySelectorAll<HTMLElement>(groupSelectors));
-    for (const group of groups) {
+
+    const entries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience"]'));
+    for (const entry of entries) {
+      const header = entry.querySelector<HTMLElement>('[data-export-group="creative-artistic-experience-header"]');
+      const lines = Array.from(entry.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience-line"]'));
+
+      if (header) {
+        const firstLineRect = lines.length > 0 ? getRelativeExportRect(rootBox, lines[0]) : null;
+        if (shiftHeaderIfNeeded(header, firstLineRect ? firstLineRect.height : null)) movedAnyGroup = true;
+      }
+
+      for (const line of lines) {
+        if (shiftIfStraddling(line)) movedAnyGroup = true;
+      }
+    }
+
+    const wholeGroups = Array.from(root.querySelectorAll<HTMLElement>(groupSelectors));
+    for (const group of wholeGroups) {
       const rect = getRelativeExportRect(rootBox, group);
       if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) continue;
 
@@ -2414,13 +2490,22 @@ export async function exportToDOCX(
         rows: [new TableRow({ children: [new TableCell({ width: { size: 100, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.CENTER, borders: noBorders, shading: headerBg, margins: { top: 240, bottom: 240, left: 300, right: 300 }, children: caHeaderInfo })] })],
       }));
     }
-    children.push(new Paragraph({ text: '', spacing: { after: 200 } }));
+    // Trimmed from 200 -> 140 twips: same fixed-cost tightening applied to the wide
+    // page margin below, reclaiming a bit more room on every page without visibly
+    // changing the header's look.
+    children.push(new Paragraph({ text: '', spacing: { after: 140 } }));
 
     // ── Section heading helper: violet, no underline border, not uppercase ──
+    // Spacing trimmed from before:240/after:100 -> before:180/after:80. This is the
+    // same "compact only what's necessary" tightening already applied to
+    // professional-classic/creative-bold: a long CV's trailing Education+Skills
+    // previously spilled onto their own near-empty final page (Skills isolated below
+    // a split Education entry) purely from small spacing/margin costs compounding
+    // across many sections/entries. No section is removed or redesigned.
     function caHeading(text: string) {
       return new Paragraph({
         children: [new TextRun({ text, bold: true, size: 22, color: '7C3AED' })],
-        spacing: { before: 240, after: 100 },
+        spacing: { before: 180, after: 80 },
       });
     }
 
@@ -2461,7 +2546,11 @@ export async function exportToDOCX(
             }
           }
         }
-        children.push(new Paragraph({ text: '', spacing: { after: 100 } }));
+        // Trimmed from 100 -> 60 twips: a small per-entry saving that compounds across
+        // every Work Experience entry, reclaiming enough room for a long CV's trailing
+        // Education/Skills to land together instead of Skills spilling onto its own
+        // near-empty final page.
+        children.push(new Paragraph({ text: '', spacing: { after: 60 } }));
       }
     }
 
@@ -2470,7 +2559,7 @@ export async function exportToDOCX(
       children.push(caHeading(t.cv.education));
       for (const edu of cvData.education) {
         children.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' })], spacing: { after: 20 } }));
-        children.push(new Paragraph({ children: [new TextRun({ text: edu.school, size: 20, color: '6B7280' })], spacing: { after: edu.description ? 30 : 80 } }));
+        children.push(new Paragraph({ children: [new TextRun({ text: edu.school, size: 20, color: '6B7280' })], spacing: { after: edu.description ? 30 : 60 } }));
         if (edu.description) children.push(new Paragraph({ children: [new TextRun({ text: edu.description, size: 20, color: '374151' })], spacing: { after: 80 } }));
       }
     }
@@ -2520,7 +2609,7 @@ export async function exportToDOCX(
     if (cvData.certifications.length > 0) {
       children.push(caHeading(t.cv.certifications));
       for (const cert of cvData.certifications) {
-        children.push(new Paragraph({ children: [new TextRun({ text: '• ', size: 22, color: '7C3AED' }), new TextRun({ text: cert, size: 22, color: '374151' })], spacing: { after: 60 } }));
+        children.push(new Paragraph({ children: [new TextRun({ text: '• ', size: 22, color: '7C3AED' }), new TextRun({ text: cert, size: 22, color: '374151' })], spacing: { after: 40 } }));
       }
     }
   }
@@ -4806,7 +4895,15 @@ export async function exportToDOCX(
                 // without touching the header design, font sizes, or short-CV 1-page fit.
                 : (templateId ?? cvData.templateId) === 'professional-classic'
                   ? { margin: { top: 620, right: 620, bottom: 620, left: 620 } }
-                  : { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
+                  // Creative Artistic's dedicated header table + left-border experience
+                  // entries are similarly tall to professional-classic/creative-bold, and the
+                  // same wide 720-twip default margin was the main reason a long CV's trailing
+                  // Education/Skills spilled onto its own near-empty final page (Skills
+                  // isolated below a split Education entry, mostly blank underneath). Reuse
+                  // the same 620-twip margin already proven safe for professional-classic.
+                  : (templateId ?? cvData.templateId) === 'creative-artistic'
+                    ? { margin: { top: 620, right: 620, bottom: 620, left: 620 } }
+                    : { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
         },
         children,
       },
@@ -5839,6 +5936,17 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       // margin-top shift, instead of sizing the canvas before the shift is applied and
       // clipping whatever content the shift pushed past the original bottom edge.
       applyCreativeBoldKeepTogetherPagination(sourceRootForTag);
+    }
+    if (captureTemplateId === 'creative-artistic' && sourceRootForTag) {
+      // Same reasoning as professional-classic/creative-bold above: the new Work
+      // Experience header/line keep-together shifts (added alongside the existing
+      // education-section/skills-block whole-block shifts) must run before
+      // captureWidth/captureHeight are measured below, so the canvas is sized to fit
+      // whatever those shifts pushed past the original bottom edge instead of clipping
+      // it. Safe to mutate directly: this source root is always a disposable,
+      // off-screen export-only container (buildCreativeArtisticPdfBlob), never the live
+      // preview DOM.
+      applyCreativeArtisticKeepTogetherPagination(sourceRootForTag);
     }
     captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
     captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
