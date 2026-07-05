@@ -1407,6 +1407,30 @@ export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): 
     let movedAnyGroup = false;
 
     const entries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience"]'));
+
+    // The "Work Experience" section heading (h2, marked data-export-keep-with-next by
+    // creative-artistic-pdf-template.ts) previously had zero pagination protection at
+    // all — only the whole-block education-section/skills-block groups and each entry's
+    // own header/lines were ever considered. That let the heading land alone at the
+    // bottom of a page while the first entry (title + meta + bullet) started on the
+    // next page: a section heading orphaned exactly like the per-entry headers already
+    // guard against. Checked first in every pass so the shift (and the normal document
+    // flow it pushes the first entry into) is already reflected before that entry's own
+    // header/line checks below run in this same pass.
+    const firstEntry = entries[0] ?? null;
+    if (firstEntry) {
+      const sectionEl = firstEntry.parentElement;
+      const heading = sectionEl?.querySelector<HTMLElement>('h2') ?? null;
+      const firstHeader = firstEntry.querySelector<HTMLElement>('[data-export-group="creative-artistic-experience-header"]');
+      if (heading && firstHeader && sectionEl?.firstElementChild === heading) {
+        const firstHeaderRect = getRelativeExportRect(rootBox, firstHeader);
+        const firstLines = Array.from(firstEntry.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience-line"]'));
+        const firstLineRect = firstLines.length > 0 ? getRelativeExportRect(rootBox, firstLines[0]) : null;
+        const requiredTrailingHeight = (firstHeaderRect ? firstHeaderRect.height : 0) + (firstLineRect ? firstLineRect.height : 0);
+        if (shiftHeaderIfNeeded(heading, requiredTrailingHeight)) movedAnyGroup = true;
+      }
+    }
+
     for (const entry of entries) {
       const header = entry.querySelector<HTMLElement>('[data-export-group="creative-artistic-experience-header"]');
       const lines = Array.from(entry.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience-line"]'));
@@ -2502,10 +2526,11 @@ export async function exportToDOCX(
     // previously spilled onto their own near-empty final page (Skills isolated below
     // a split Education entry) purely from small spacing/margin costs compounding
     // across many sections/entries. No section is removed or redesigned.
-    function caHeading(text: string) {
+    function caHeading(text: string, options: { keepNext?: boolean } = {}) {
       return new Paragraph({
         children: [new TextRun({ text, bold: true, size: 22, color: '7C3AED' })],
         spacing: { before: 180, after: 80 },
+        keepNext: options.keepNext ?? false,
       });
     }
 
@@ -2516,16 +2541,28 @@ export async function exportToDOCX(
 
     // ── Experience: left purple border accent per entry ──────────────────────
     if (cvData.experience.length > 0) {
-      children.push(caHeading(t.cv.experience));
+      // keepNext: true — Word must not strand "Work Experience" alone at the bottom
+      // of a page with the first entry pushed to the next one. Word's real pagination
+      // engine honors w:keepNext (unlike the PDF route's manual pixel-shift approach),
+      // so tagging the heading to stay with the very next paragraph (the first entry's
+      // position line, which itself keeps with its meta/first bullet below) is enough
+      // to keep the whole "heading + first entry start" chain together.
+      children.push(caHeading(t.cv.experience, { keepNext: true }));
       for (const exp of cvData.experience) {
         const dateText = exp.isPresent ? t.cv.present : exp.endDate;
         const metaLine = [exp.company, `${exp.startDate} – ${dateText}`].filter(Boolean).join('  |  ');
+        const hasDescription = Boolean(exp.description && exp.description.split('\n').some((line) => line.trim()));
         // Position title with left violet border
         children.push(new Paragraph({
           children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' })],
           spacing: { before: 60, after: 20 },
           border: { left: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } },
           indent: { left: 160 },
+          // Every entry's title keeps with its own meta/date line — not just the
+          // first entry — so no entry header can be orphaned from its own meta line
+          // at a page break either, matching the PDF route's per-entry header
+          // protection.
+          keepNext: true,
         }));
         // Company | date in violet-500
         children.push(new Paragraph({
@@ -2533,18 +2570,21 @@ export async function exportToDOCX(
           spacing: { after: 40 },
           border: { left: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } },
           indent: { left: 160 },
+          // Keep with the first bullet line (if any) so "title + meta" is never
+          // separated from at least one meaningful description line by a page break.
+          keepNext: hasDescription,
         }));
         if (exp.description) {
-          for (const line of exp.description.split('\n')) {
-            if (line.trim()) {
-              children.push(new Paragraph({
-                children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
-                spacing: { after: 30 },
-                border: { left: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } },
-                indent: { left: 160 },
-              }));
-            }
-          }
+          const lines = exp.description.split('\n').filter((line) => line.trim());
+          lines.forEach((line, lineIndex) => {
+            children.push(new Paragraph({
+              children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
+              spacing: { after: 30 },
+              border: { left: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } },
+              indent: { left: 160 },
+              keepNext: lineIndex === 0 && lines.length > 1,
+            }));
+          });
         }
         // Trimmed from 100 -> 60 twips: a small per-entry saving that compounds across
         // every Work Experience entry, reclaiming enough room for a long CV's trailing
@@ -2558,8 +2598,14 @@ export async function exportToDOCX(
     if (cvData.education.length > 0) {
       children.push(caHeading(t.cv.education));
       for (const edu of cvData.education) {
+        const eduDates = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+        // The school/date line previously dropped edu.startDate/edu.endDate entirely
+        // (only edu.school was ever rendered), so DOCX Education silently lost the
+        // dates that the PDF route already shows via the same [school, dates] meta
+        // line pattern (see creative-artistic-pdf-template.ts's `dateRange`/metaLine).
+        const metaLine = [edu.school, eduDates].filter(Boolean).join('  |  ');
         children.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' })], spacing: { after: 20 } }));
-        children.push(new Paragraph({ children: [new TextRun({ text: edu.school, size: 20, color: '6B7280' })], spacing: { after: edu.description ? 30 : 60 } }));
+        children.push(new Paragraph({ children: [new TextRun({ text: metaLine, size: 20, color: '6B7280' })], spacing: { after: edu.description ? 30 : 60 } }));
         if (edu.description) children.push(new Paragraph({ children: [new TextRun({ text: edu.description, size: 20, color: '374151' })], spacing: { after: 80 } }));
       }
     }
@@ -5946,6 +5992,27 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       // it. Safe to mutate directly: this source root is always a disposable,
       // off-screen export-only container (buildCreativeArtisticPdfBlob), never the live
       // preview DOM.
+      //
+      // Layout/text-style normalization must run here too, in the exact same order as
+      // the onclone block below, BEFORE the keep-together pass. Previously
+      // applyCreativeArtisticPdfLayout/normalizeCreativeArtisticPdfTextStyles/
+      // applyCreativeArtisticPdfNoWrapItems only ran inside onclone, so the pre-clone
+      // keep-together pass computed its shifts against the template's raw (un-
+      // normalized) geometry — e.g. the template's own `body` padding ('22px 28px
+      // 26px') — while onclone's own layout pass then forcibly overwrote that same
+      // padding to a flat 32px and reset word-spacing/letter-spacing to `normal`
+      // before re-running keep-together a second time against the now-different
+      // geometry. That mismatch is exactly why captureHeight (measured below, from the
+      // pre-clone pass) didn't match what onclone's second pass actually produced:
+      // a page could end up with extra blank space (pre-clone shift computed against
+      // shorter boxes than what onclone rendered) or a colliding entry (pre-clone
+      // shift computed against taller boxes than onclone rendered, leaving too little
+      // margin). Running the identical normalization here first makes both passes
+      // operate on identical geometry, so onclone's repeat of these same calls below
+      // is a no-op and its keep-together pass reproduces this one exactly.
+      applyCreativeArtisticPdfLayout(sourceRootForTag);
+      normalizeCreativeArtisticPdfTextStyles(sourceRootForTag);
+      applyCreativeArtisticPdfNoWrapItems(sourceRootForTag);
       applyCreativeArtisticKeepTogetherPagination(sourceRootForTag);
     }
     captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
