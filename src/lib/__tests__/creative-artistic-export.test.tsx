@@ -12,6 +12,7 @@ import {
   applyCreativeArtisticKeepTogetherPagination,
   buildCreativeArtisticPdfBlob,
   buildCvPdfBlob,
+  chooseCreativeArtisticTailBalancePull,
   createMeaningfulContentPagePlan,
   exportCreativeArtisticPdf,
   exportToDOCX,
@@ -361,7 +362,8 @@ describe('Creative Artistic export routing and rendering', () => {
     expect(professionalBranch).not.toContain('applyCreativeArtistic');
     expect(boldBranch).not.toContain('applyCreativeArtistic');
     expect(artisticBranch).toContain('applyCreativeArtisticPdfLayout');
-    expect(artisticBranch).toContain('applyCreativeArtisticKeepTogetherPagination');
+    expect(artisticBranch).not.toContain('applyCreativeArtisticKeepTogetherPagination(cloneRoot)');
+    expect(artisticBranch).toContain('measureExportMeaningfulContentBounds(cloneRoot)');
   });
 
   test('Creative Artistic keeps short education groups together across page boundaries', () => {
@@ -484,6 +486,151 @@ describe('Creative Artistic export routing and rendering', () => {
     expect(Number.parseFloat(skillsBlock.style.marginTop)).toBeGreaterThan(5);
     expect(document.body.textContent).toContain('Skills');
     expect(document.body.textContent).toContain('Teamwork');
+  });
+
+  test('Creative Artistic trailing pull compares previous-page and trailing-page damage before relocating the last entry', () => {
+    const src = exportSource();
+    expect(src).toContain('chooseCreativeArtisticTailBalancePull');
+    expect(src).toContain('collectCreativeArtisticTailBalanceAnchors');
+    expect(src).toContain('getRelativeOffsetRect');
+    expect(src).toContain('data-ca-tail-balance-applied');
+    expect(src).toContain('totalDamageWithPull');
+    expect(src).toContain('CREATIVE_ARTISTIC_TRAILING_PAGE_MAX_PULL_GAP_RATIO');
+    expect(src).toContain('pullImprovesLayout');
+    expect(src).toContain('pullWithinGapCap');
+  });
+
+  test('Creative Artistic pulls a trailing bullet-line anchor when the whole last entry would leave a huge previous-page gap', () => {
+    document.body.innerHTML = `
+      <div data-template-id="creative-artistic" data-test-rect="${rectAttr(0, 0, 800, 2600)}">
+        <div data-export-group="creative-artistic-experience" data-test-rect="${rectAttr(1700, 32, 720, 180)}">
+          <div data-export-group="creative-artistic-experience-header" data-test-rect="${rectAttr(1700, 32, 720, 40)}">
+            <h3>Previous role</h3>
+          </div>
+        </div>
+        <div data-export-group="creative-artistic-experience" data-test-rect="${rectAttr(1900, 32, 720, 200)}">
+          <div data-export-group="creative-artistic-experience-header" data-test-rect="${rectAttr(1900, 32, 720, 40)}">
+            <h3>Last role</h3>
+          </div>
+          <p data-export-group="creative-artistic-experience-line" data-test-rect="${rectAttr(1980, 32, 720, 40)}">Bullet one stays on the prior page.</p>
+          <p data-export-group="creative-artistic-experience-line" data-test-rect="${rectAttr(2020, 32, 720, 40)}">Bullet two stays on the prior page.</p>
+          <p data-export-group="creative-artistic-experience-line" data-test-rect="${rectAttr(2060, 32, 720, 40)}">Bullet three balances the sparse trailing page.</p>
+        </div>
+        <section data-export-group="education-section" data-test-rect="${rectAttr(2300, 32, 720, 90)}">
+          <h2 data-export-meaningful="true">Education</h2>
+          <div data-export-group="education-entry"><h3>VI</h3><p>Metematicki fakultet | 2020-01 - 2025-02</p></div>
+        </section>
+        <div data-export-group="skills-block" data-test-rect="${rectAttr(2400, 32, 720, 80)}">
+          <section data-export-group="skills-section">
+            <h2 data-export-meaningful="true">Skills</h2>
+            <div data-export-group="skills-row"><span data-export-meaningful="true">Teamwork</span></div>
+          </section>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="creative-artistic"]') as HTMLElement;
+    const lastEntry = document.querySelectorAll('[data-export-group="creative-artistic-experience"]')[1] as HTMLElement;
+    const secondLine = document.querySelectorAll('[data-export-group="creative-artistic-experience-line"]')[1] as HTMLElement;
+    const education = document.querySelector('[data-export-group="education-section"]') as HTMLElement;
+    const pageHeight = (297 / 210) * 800;
+    const entries = Array.from(document.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience"]'));
+
+    const pullChoice = chooseCreativeArtisticTailBalancePull(
+      entries,
+      root,
+      { top: 0 },
+      pageHeight,
+      pageHeight * 0.9,
+      { top: 2300, bottom: 2390 },
+      { bottom: 2480 },
+      1 - (180 / pageHeight),
+    );
+    expect(pullChoice?.anchor.element.textContent).toContain('Bullet two stays on the prior page.');
+    expect(pullChoice?.shiftPx ?? 0).toBeGreaterThan(100);
+
+    applyCreativeArtisticKeepTogetherPagination(root);
+
+    expect(lastEntry.style.marginTop).toBe('');
+    expect(Number.parseFloat(secondLine.style.marginTop)).toBeGreaterThan(100);
+    expect(education.style.marginTop).toBe('');
+    expect(root.getAttribute('data-ca-tail-balance-applied')).toBe('true');
+    expect(document.body.textContent).toContain('Bullet three balances the sparse trailing page');
+    expect(document.body.textContent).toContain('Metematicki fakultet | 2020-01 - 2025-02');
+  });
+
+  test('Creative Artistic does not pull the last Work Experience entry when it would create a worse blank gap on the previous page', () => {
+    const pageHeight = (297 / 210) * 800;
+    document.body.innerHTML = `
+      <div data-template-id="creative-artistic" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <div data-export-group="creative-artistic-experience" data-test-rect="${rectAttr(950, 32, 720, 90)}">
+          <div data-export-group="creative-artistic-experience-header" data-test-rect="${rectAttr(950, 32, 720, 90)}">
+            <h3>Nastavnik informatike</h3>
+          </div>
+        </div>
+        <section data-export-group="education-section" data-test-rect="${rectAttr(1050, 32, 720, 90)}">
+          <h2 data-export-meaningful="true">Education</h2>
+          <div data-export-group="education-entry"><h3>VI</h3><p>Metematicki fakultet | 2020-01 - 2025-02</p></div>
+        </section>
+        <div data-export-group="skills-block" data-test-rect="${rectAttr(1150, 32, 720, 60)}">
+          <section data-export-group="skills-section">
+            <h2 data-export-meaningful="true">Skills</h2>
+            <div data-export-group="skills-row"><span data-export-meaningful="true">Teamwork</span></div>
+          </section>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="creative-artistic"]') as HTMLElement;
+    const entry = document.querySelector('[data-export-group="creative-artistic-experience"]') as HTMLElement;
+    const education = document.querySelector('[data-export-group="education-section"]') as HTMLElement;
+
+    applyCreativeArtisticKeepTogetherPagination(root);
+
+    // Sole entry starts at y=950 with no predecessor — pulling it would leave ~15% of
+    // the page blank while only modestly improving the trailing page, so Education is
+    // shifted alone instead.
+    expect(entry.style.marginTop).toBe('');
+    expect(Number.parseFloat(education.style.marginTop)).toBeGreaterThan(pageHeight - 1050 - 10);
+    expect(document.body.textContent).toContain('Nastavnik informatike');
+    expect(document.body.textContent).toContain('VI');
+    expect(document.body.textContent).toContain('Teamwork');
+  });
+
+  test('Creative Artistic does not pull the last Work Experience entry when it truly cannot fit alongside Education+Skills, and falls back to moving Education+Skills alone', () => {
+    document.body.innerHTML = `
+      <div data-template-id="creative-artistic" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <div data-export-group="creative-artistic-experience" data-test-rect="${rectAttr(0, 32, 720, 950)}">
+          <div data-export-group="creative-artistic-experience-header" data-test-rect="${rectAttr(0, 32, 720, 60)}">
+            <h3>Very Long Entry</h3>
+          </div>
+        </div>
+        <section data-export-group="education-section" data-test-rect="${rectAttr(1050, 32, 720, 90)}">
+          <h2 data-export-meaningful="true">Education</h2>
+          <div data-export-group="education-entry"><h3>VI</h3><p>Metematicki fakultet | 2020-01 - 2025-02</p></div>
+        </section>
+        <div data-export-group="skills-block" data-test-rect="${rectAttr(1150, 32, 720, 60)}">
+          <section data-export-group="skills-section">
+            <h2 data-export-meaningful="true">Skills</h2>
+            <div data-export-group="skills-row"><span data-export-meaningful="true">Teamwork</span></div>
+          </section>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="creative-artistic"]') as HTMLElement;
+    const entry = document.querySelector('[data-export-group="creative-artistic-experience"]') as HTMLElement;
+    const education = document.querySelector('[data-export-group="education-section"]') as HTMLElement;
+
+    applyCreativeArtisticKeepTogetherPagination(root);
+
+    // Entry + Education + Skills combined (950 + 90 + 60 = ~1100px+) does not fit one
+    // page, so the entry is left alone and Education (with Skills following it in
+    // normal flow) is shifted to the next page instead — the pre-existing fallback.
+    expect(entry.style.marginTop).toBe('');
+    expect(Number.parseFloat(education.style.marginTop)).toBeGreaterThan(20);
+    expect(document.body.textContent).toContain('Very Long Entry');
+    expect(document.body.textContent).toContain('VI');
   });
 
   test('Creative Artistic contact items are unbroken units with attached separators', () => {
@@ -798,6 +945,30 @@ describe('Creative Artistic export routing and rendering', () => {
     expect(documentXml).toContain('<w:drawing>');
     expect(relsXml).toContain('image');
     expect(mediaFiles.length).toBeGreaterThan(0);
+  });
+
+  test('Creative Artistic DOCX Work Experience uses cantSplit anchor table and cell-level timeline border', async () => {
+    let savedBlob: Blob | undefined;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      savedBlob = blob as Blob;
+      return 'blob:http://test/docx';
+    });
+    const realCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const el = realCreateElement(tagName);
+      if (tagName.toLowerCase() === 'a') el.click = vi.fn();
+      return el;
+    });
+
+    await exportToDOCX(cv(), 'creative-artistic-anchor-test', 'en', 'creative-artistic');
+
+    const zip = await JSZip.loadAsync(await savedBlob!.arrayBuffer());
+    const documentXml = await zip.file('word/document.xml')!.async('text');
+
+    expect(documentXml).toContain('w:keepNext');
+    expect(documentXml).toContain('w:cantSplit');
+    expect(documentXml).toContain('Studio Visiva');
+    expect(documentXml).toContain('Creative Director');
   });
 
   test('Creative Artistic DOCX without photo remains valid and does not lose text', async () => {

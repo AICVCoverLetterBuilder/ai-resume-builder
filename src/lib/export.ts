@@ -984,8 +984,47 @@ const CREATIVE_ARTISTIC_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
 // applyCreativeArtisticKeepTogetherPagination for the full rationale (same reasoning
 // already proven for creative-bold's CREATIVE_BOLD_MAX_KEEP_GROUP_PAGE_RATIO).
 const CREATIVE_ARTISTIC_EXPERIENCE_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
+// If Education+Skills alone would land on a fresh trailing page filling less than this
+// fraction of the page, that page reads as "mostly empty" — pull the immediately
+// preceding Work Experience entry onto the same page instead (see the trailing-balance
+// check in applyCreativeArtisticKeepTogetherPagination) so the final page looks
+// intentional rather than like a near-blank afterthought.
+const CREATIVE_ARTISTIC_TRAILING_PAGE_MIN_FILL_RATIO = 0.55;
+// Pulling the last Work Experience entry forward always relocates exactly that entry's
+// own height from the bottom of the *previous* page to the trailing page — the previous
+// page's blank space grows by precisely the amount the trailing page's fill improves
+// (moving content never destroys or creates blank space, it only redistributes it). So
+// "pull the entry" must never be applied unconditionally: it is only a genuine
+// improvement when the blank space it *creates* on the previous page is smaller than the
+// blank space it *removes* from the trailing page, and even then only up to a hard cap —
+// beyond this fraction of a page, a "huge blank gap" on the previous page is worse than a
+// sparse trailing page, so natural pagination (Education+Skills moved alone, without the
+// entry) is preferred instead.
+const CREATIVE_ARTISTIC_TRAILING_PAGE_MAX_PULL_GAP_RATIO = 0.3;
 const ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX = 0.5;
 const ELEGANT_FORMAL_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
+// Break-selection guard: keep page cuts out of glyph bands without aggressively
+// shortening every page (large values here caused extra PDF pages on Android).
+const ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX = 16;
+// Visual insets for PDF slice placement — separate from break-selection guard.
+// Baked into continuation-page slice bitmaps so Android PDF viewers show real top
+// breathing room (jsPDF y-offset alone is unreliable when slices are scaled).
+const ELEGANT_FORMAL_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const ELEGANT_FORMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+// If the final PDF page would be mostly empty tail (Education/Skills/Languages only),
+// merge it with the previous page instead of emitting a sparse trailing page.
+const ELEGANT_FORMAL_TRAILING_TAIL_SPARSE_RATIO = 0.35;
+// How far above a nominal page cut to search for whitespace between text rows when
+// choosing a safe canvas slice boundary (line-level, not block-level).
+const ELEGANT_FORMAL_PAGE_BREAK_SEARCH_RANGE_PX = 48;
+// Canvas-pixel fallback search band for Android WebView where DOM line boxes are often
+// block-level or missing — inspect the rendered html2canvas bitmap directly.
+const ELEGANT_FORMAL_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX = 96;
+const ELEGANT_FORMAL_CANVAS_INK_MAX_CHANNEL = 248;
+const ELEGANT_FORMAL_DOM_LINE_MAX_HEIGHT_CSS_PX = 40;
+// Experience entries can be long; only short atomic units (header row, bullet line) or
+// genuinely short whole entries should ever be pushed wholesale — same ratio as creative-bold.
+const ELEGANT_FORMAL_EXPERIENCE_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
 // Professional Classic previously had zero keep-together logic (pure fixed-height
 // canvas slicing), which could cut a section heading or a single experience/education
 // entry in half at a page boundary. A deliberately lower ratio than the 0.9 used by
@@ -1316,13 +1355,46 @@ function applyCreativeArtisticPdfLayout(root: HTMLElement): void {
   }
 }
 
-function getRelativeExportRect(rootBox: { top: number }, element: HTMLElement): { top: number; bottom: number; height: number } | null {
-  const rect = getPositiveRect(element.getBoundingClientRect(), element);
-  if (!rect) return null;
-  const top = rect.top - rootBox.top;
-  const bottom = rect.bottom - rootBox.top;
+function getRelativeOffsetRect(root: HTMLElement, element: HTMLElement): { top: number; bottom: number; height: number } | null {
+  if (!root.contains(element)) return null;
+  const height = element.offsetHeight;
+  if (height <= 0) return null;
+
+  let top = 0;
+  let current: HTMLElement | null = element;
+  while (current && current !== root) {
+    top += current.offsetTop;
+    current = current.offsetParent as HTMLElement | null;
+  }
+  if (current !== root) {
+    top = 0;
+    current = element;
+    while (current && current !== root) {
+      top += current.offsetTop;
+      current = current.parentElement;
+    }
+    if (current !== root) return null;
+  }
+
+  const bottom = top + height;
   if (bottom <= top) return null;
   return { top, bottom, height: bottom - top };
+}
+
+function getRelativeExportRect(
+  rootBox: { top: number },
+  element: HTMLElement,
+  rootElement: HTMLElement | null = null,
+): { top: number; bottom: number; height: number } | null {
+  const rect = getPositiveRect(element.getBoundingClientRect(), element);
+  if (rect && rect.height > PDF_PAGE_INTERSECTION_EPSILON_PX) {
+    const top = rect.top - rootBox.top;
+    const bottom = rect.bottom - rootBox.top;
+    if (bottom > top) return { top, bottom, height: bottom - top };
+  }
+
+  if (!rootElement) return null;
+  return getRelativeOffsetRect(rootElement, element);
 }
 
 function parseCssPx(value: string): number {
@@ -1333,6 +1405,116 @@ function parseCssPx(value: string): number {
 function shiftGroupToNextPage(group: HTMLElement, shiftPx: number): void {
   const currentInlineMargin = parseCssPx(group.style.marginTop);
   group.style.setProperty('margin-top', `${currentInlineMargin + shiftPx}px`);
+}
+
+type CreativeArtisticTailBalanceAnchor = {
+  element: HTMLElement;
+  contentEndBeforePx: number;
+};
+
+// Collect Work Experience break anchors near the document tail: whole entries (last
+// and previous) plus individual description lines on those entries. Each anchor is a
+// safe bullet/paragraph boundary — never mid-line.
+function collectCreativeArtisticTailBalanceAnchors(
+  entries: HTMLElement[],
+  root: HTMLElement,
+  rootBox: { top: number },
+): CreativeArtisticTailBalanceAnchor[] {
+  const anchors: CreativeArtisticTailBalanceAnchor[] = [];
+  const firstEntryIndex = Math.max(0, entries.length - 3);
+
+  for (let entryIndex = entries.length - 1; entryIndex >= firstEntryIndex; entryIndex -= 1) {
+    const entry = entries[entryIndex];
+    const entryRect = getRelativeExportRect(rootBox, entry, root);
+    if (!entryRect) continue;
+
+    const previousEntry = entryIndex > 0 ? entries[entryIndex - 1] : null;
+    const previousEntryRect = previousEntry ? getRelativeExportRect(rootBox, previousEntry, root) : null;
+    anchors.push({
+      element: entry,
+      contentEndBeforePx: previousEntryRect ? previousEntryRect.bottom : entryRect.top,
+    });
+
+    const lines = Array.from(entry.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience-line"]'));
+    for (let lineIndex = lines.length - 1; lineIndex >= 0; lineIndex -= 1) {
+      const line = lines[lineIndex];
+      const lineRect = getRelativeExportRect(rootBox, line, root);
+      if (!lineRect) continue;
+
+      let contentEndBeforePx = lineRect.top;
+      if (lineIndex > 0) {
+        const previousLineRect = getRelativeExportRect(rootBox, lines[lineIndex - 1], root);
+        if (previousLineRect) contentEndBeforePx = previousLineRect.bottom;
+      } else {
+        const header = entry.querySelector<HTMLElement>('[data-export-group="creative-artistic-experience-header"]');
+        const headerRect = header ? getRelativeExportRect(rootBox, header, root) : null;
+        if (headerRect) contentEndBeforePx = headerRect.bottom;
+      }
+
+      anchors.push({ element: line, contentEndBeforePx });
+    }
+  }
+
+  return anchors;
+}
+
+type CreativeArtisticTailBalanceChoice = {
+  anchor: CreativeArtisticTailBalanceAnchor;
+  shiftPx: number;
+  totalDamage: number;
+};
+
+// When Education+Skills alone would occupy a sparse trailing page, evaluate every tail
+// anchor and relocate only the candidate that minimizes combined previous-page and
+// trailing-page blank damage while keeping the pulled span plus Education+Skills on
+// one page.
+export function chooseCreativeArtisticTailBalancePull(
+  entries: HTMLElement[],
+  root: HTMLElement,
+  rootBox: { top: number },
+  pageHeightCssPx: number,
+  maxShortGroupHeight: number,
+  eduRect: { top: number; bottom: number },
+  skillsRect: { bottom: number },
+  trailingBlankWithoutPull: number,
+): CreativeArtisticTailBalanceChoice | null {
+  if (entries.length === 0) return null;
+
+  const targetPageTop = Math.floor((eduRect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx) * pageHeightCssPx;
+  let best: CreativeArtisticTailBalanceChoice | null = null;
+
+  for (const anchor of collectCreativeArtisticTailBalanceAnchors(entries, root, rootBox)) {
+    const anchorRect = getRelativeExportRect(rootBox, anchor.element, root);
+    if (!anchorRect) continue;
+
+    const combinedWithAnchorHeight = skillsRect.bottom - anchorRect.top;
+    const shiftPx = Math.max(0, targetPageTop - anchorRect.top + CREATIVE_ARTISTIC_GROUP_PAGE_PADDING_PX);
+    if (
+      combinedWithAnchorHeight <= 0
+      || combinedWithAnchorHeight >= maxShortGroupHeight
+      || shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX
+    ) {
+      continue;
+    }
+
+    const pullAffectsPageIndex = Math.floor((anchor.contentEndBeforePx + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const pullAffectsPageBottom = (pullAffectsPageIndex + 1) * pageHeightCssPx;
+    const previousBlankAfterPull = Math.max(0, pullAffectsPageBottom - anchor.contentEndBeforePx);
+    const previousBlankRatio = previousBlankAfterPull / pageHeightCssPx;
+    const finalFillWithPull = combinedWithAnchorHeight / pageHeightCssPx;
+    const trailingBlankWithPull = Math.max(0, 1 - finalFillWithPull);
+    const totalDamageWithPull = previousBlankRatio + trailingBlankWithPull;
+    const pullWithinGapCap = previousBlankRatio <= CREATIVE_ARTISTIC_TRAILING_PAGE_MAX_PULL_GAP_RATIO;
+    const pullImprovesLayout = totalDamageWithPull < trailingBlankWithoutPull;
+
+    if (!pullWithinGapCap || !pullImprovesLayout) continue;
+
+    if (!best || totalDamageWithPull < best.totalDamage) {
+      best = { anchor, shiftPx, totalDamage: totalDamageWithPull };
+    }
+  }
+
+  return best;
 }
 
 // Work Experience previously had no keep-together protection at all in Creative
@@ -1352,10 +1534,14 @@ function shiftGroupToNextPage(group: HTMLElement, shiftPx: number): void {
 // the next page and stranding a blank gap under the previous section — the same problem
 // pattern a whole-block ratio would otherwise reproduce for entries under that ratio.
 export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): void {
-  const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
-  if (!rootBox || rootBox.width <= 0) return;
+  // Android WebView can defer layout for the off-screen export root until forced.
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
+  if (rootWidth <= 0) return;
 
-  const pageHeightCssPx = rootBox.width * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  const rootBox = { top: rootRect?.top ?? 0 };
+  const pageHeightCssPx = rootWidth * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
   if (pageHeightCssPx <= 0) return;
 
   const groupSelectors = [
@@ -1367,7 +1553,7 @@ export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): 
   const maxShortExperienceHeight = pageHeightCssPx * CREATIVE_ARTISTIC_EXPERIENCE_MAX_KEEP_GROUP_PAGE_RATIO;
 
   const shiftIfStraddling = (el: HTMLElement): boolean => {
-    const rect = getRelativeExportRect(rootBox, el);
+    const rect = getRelativeExportRect(rootBox, el, root);
     if (!rect || rect.height <= 0 || rect.height >= maxShortExperienceHeight) return false;
 
     const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
@@ -1383,7 +1569,7 @@ export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): 
   };
 
   const shiftHeaderIfNeeded = (header: HTMLElement, firstLineHeight: number | null): boolean => {
-    const rect = getRelativeExportRect(rootBox, header);
+    const rect = getRelativeExportRect(rootBox, header, root);
     if (!rect || rect.height <= 0 || rect.height >= maxShortExperienceHeight) return false;
 
     const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
@@ -1423,9 +1609,9 @@ export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): 
       const heading = sectionEl?.querySelector<HTMLElement>('h2') ?? null;
       const firstHeader = firstEntry.querySelector<HTMLElement>('[data-export-group="creative-artistic-experience-header"]');
       if (heading && firstHeader && sectionEl?.firstElementChild === heading) {
-        const firstHeaderRect = getRelativeExportRect(rootBox, firstHeader);
+        const firstHeaderRect = getRelativeExportRect(rootBox, firstHeader, root);
         const firstLines = Array.from(firstEntry.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience-line"]'));
-        const firstLineRect = firstLines.length > 0 ? getRelativeExportRect(rootBox, firstLines[0]) : null;
+        const firstLineRect = firstLines.length > 0 ? getRelativeExportRect(rootBox, firstLines[0], root) : null;
         const requiredTrailingHeight = (firstHeaderRect ? firstHeaderRect.height : 0) + (firstLineRect ? firstLineRect.height : 0);
         if (shiftHeaderIfNeeded(heading, requiredTrailingHeight)) movedAnyGroup = true;
       }
@@ -1436,7 +1622,7 @@ export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): 
       const lines = Array.from(entry.querySelectorAll<HTMLElement>('[data-export-group="creative-artistic-experience-line"]'));
 
       if (header) {
-        const firstLineRect = lines.length > 0 ? getRelativeExportRect(rootBox, lines[0]) : null;
+        const firstLineRect = lines.length > 0 ? getRelativeExportRect(rootBox, lines[0], root) : null;
         if (shiftHeaderIfNeeded(header, firstLineRect ? firstLineRect.height : null)) movedAnyGroup = true;
       }
 
@@ -1445,9 +1631,72 @@ export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): 
       }
     }
 
+    // Education and Skills were previously evaluated as two independent whole-groups
+    // below: if Education already fit at the bottom of a page but the Skills block
+    // that immediately follows it did not, only Skills got pushed to the very top of
+    // the next page — stranding it alone there with a large blank area beneath while
+    // Education stayed behind on the earlier page. Checking the combined
+    // Education-start -> Skills-end span first means both move together whenever they
+    // don't both fit on the current page (and neither moves when they already do), so
+    // the final page is never "Skills only". That alone can still leave a *mostly
+    // empty* trailing page (Education+Skills together, but only filling a small
+    // fraction of the page) whenever Work Experience happens to end almost exactly at
+    // a page boundary — especially when Languages/Certifications are absent and the
+    // trailing tail is even shorter. The old fix only tried pulling the *whole* last
+    // Work Experience entry, which either failed the fit/damage checks or left a huge
+    // blank gap on the previous page. Instead, evaluate several safe tail anchors
+    // (last entry, previous entry, individual bullet lines near the end) and pull only
+    // the candidate that genuinely improves total layout damage.
+    const educationSection = root.querySelector<HTMLElement>('[data-export-group="education-section"]');
+    const skillsBlockEl = root.querySelector<HTMLElement>('[data-export-group="skills-block"]');
+    if (educationSection && skillsBlockEl) {
+      const eduRect = getRelativeExportRect(rootBox, educationSection, root);
+      const skillsRect = getRelativeExportRect(rootBox, skillsBlockEl, root);
+      if (eduRect && skillsRect && skillsRect.bottom > eduRect.top) {
+        const combinedHeight = skillsRect.bottom - eduRect.top;
+        if (combinedHeight > 0 && combinedHeight < maxShortGroupHeight) {
+          const startsOnPage = Math.floor((eduRect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+          const endsOnPage = Math.floor((skillsRect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+          const fillRatio = combinedHeight / pageHeightCssPx;
+          const trailingBlankWithoutPull = Math.max(0, 1 - fillRatio);
+          const isSparseTrailingPage = fillRatio < CREATIVE_ARTISTIC_TRAILING_PAGE_MIN_FILL_RATIO;
+          const isStraddling = startsOnPage !== endsOnPage;
+          let pulledTailAnchor = false;
+
+          if (isSparseTrailingPage && entries.length > 0) {
+            const pullChoice = chooseCreativeArtisticTailBalancePull(
+              entries,
+              root,
+              rootBox,
+              pageHeightCssPx,
+              maxShortGroupHeight,
+              eduRect,
+              skillsRect,
+              trailingBlankWithoutPull,
+            );
+            if (pullChoice) {
+              shiftGroupToNextPage(pullChoice.anchor.element, pullChoice.shiftPx);
+              root.setAttribute('data-ca-tail-balance-applied', 'true');
+              movedAnyGroup = true;
+              pulledTailAnchor = true;
+            }
+          }
+
+          if (isStraddling && !pulledTailAnchor) {
+            const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+            const shiftPx = Math.max(0, nextPageTop - eduRect.top + CREATIVE_ARTISTIC_GROUP_PAGE_PADDING_PX);
+            if (shiftPx > PDF_PAGE_INTERSECTION_EPSILON_PX) {
+              shiftGroupToNextPage(educationSection, shiftPx);
+              movedAnyGroup = true;
+            }
+          }
+        }
+      }
+    }
+
     const wholeGroups = Array.from(root.querySelectorAll<HTMLElement>(groupSelectors));
     for (const group of wholeGroups) {
-      const rect = getRelativeExportRect(rootBox, group);
+      const rect = getRelativeExportRect(rootBox, group, root);
       if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) continue;
 
       const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
@@ -1465,11 +1714,47 @@ export function applyCreativeArtisticKeepTogetherPagination(root: HTMLElement): 
   }
 }
 
-export function applyElegantFormalKeepTogetherPagination(root: HTMLElement): void {
-  const rootBox = getPositiveRect(root.getBoundingClientRect(), root);
-  if (!rootBox || rootBox.width <= 0) return;
+// Elegant Formal previously only shifted whole short blocks when they straddled a page
+// boundary (experience-entry, education-section). Section h2 headings (Work Experience,
+// Education, Skills) had no orphan protection at all, so a heading could land alone at
+// the bottom of a page while its first entry/chip row started on the next page. Skills
+// was not even in the whole-block list, so the Skills heading could orphan with chips
+// clipped or stranded on the following page. This mirrors creative-bold/creative-artistic:
+// shift section headings only when there is insufficient room for the first content block,
+// shift entry title rows when the first bullet would orphan, and treat each bullet as an
+// atomic unit — never relocate a long entry wholesale.
+function computeElegantFormalPageBoundaryShiftPx(
+  rect: { top: number; bottom: number },
+  pageHeightCssPx: number,
+): number | null {
+  const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+  const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+  const pageTop = startsOnPage * pageHeightCssPx;
+  const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
 
-  const pageHeightCssPx = rootBox.width * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  const straddles = startsOnPage !== endsOnPage;
+  const tooCloseToBottom = startsOnPage === endsOnPage
+    && (pageBottom - rect.bottom) < ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX;
+  const tooCloseToTop = startsOnPage > 0
+    && (rect.top - pageTop) < ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX;
+
+  if (!straddles && !tooCloseToBottom && !tooCloseToTop) return null;
+
+  const targetTop = (straddles || tooCloseToBottom)
+    ? pageBottom + ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX
+    : pageTop + ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX;
+  const shiftPx = targetTop - rect.top + ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX;
+  return shiftPx > PDF_PAGE_INTERSECTION_EPSILON_PX ? shiftPx : null;
+}
+
+export function applyElegantFormalKeepTogetherPagination(root: HTMLElement): void {
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
+  if (rootWidth <= 0) return;
+
+  const rootBox = { top: rootRect?.top ?? 0 };
+  const pageHeightCssPx = rootWidth * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
   if (pageHeightCssPx <= 0) return;
 
   const groupSelectors = [
@@ -1478,27 +1763,736 @@ export function applyElegantFormalKeepTogetherPagination(root: HTMLElement): voi
   ].join(',');
 
   const maxShortGroupHeight = pageHeightCssPx * ELEGANT_FORMAL_MAX_KEEP_GROUP_PAGE_RATIO;
+  const maxShortExperienceHeight = pageHeightCssPx * ELEGANT_FORMAL_EXPERIENCE_MAX_KEEP_GROUP_PAGE_RATIO;
 
-  for (let pass = 0; pass < 4; pass += 1) {
+  const shiftAtomicBlockForPageBoundary = (
+    el: HTMLElement,
+    maxHeight = maxShortExperienceHeight,
+  ): boolean => {
+    const rect = getRelativeExportRect(rootBox, el, root);
+    if (!rect || rect.height <= 0 || rect.height >= maxHeight) return false;
+
+    const shiftPx = computeElegantFormalPageBoundaryShiftPx(rect, pageHeightCssPx);
+    if (shiftPx === null) return false;
+
+    shiftGroupToNextPage(el, shiftPx);
+    return true;
+  };
+
+  const shiftWholeGroupIfStraddling = (el: HTMLElement, maxHeight: number): boolean => {
+    const rect = getRelativeExportRect(rootBox, el, root);
+    if (!rect || rect.height <= 0 || rect.height >= maxHeight) return false;
+
+    const shiftPx = computeElegantFormalPageBoundaryShiftPx(rect, pageHeightCssPx);
+    if (shiftPx === null) return false;
+
+    shiftGroupToNextPage(el, shiftPx);
+    return true;
+  };
+
+  const shiftHeaderIfNeeded = (
+    header: HTMLElement,
+    firstLineHeight: number | null,
+    maxHeight = maxShortExperienceHeight,
+  ): boolean => {
+    const rect = getRelativeExportRect(rootBox, header, root);
+    if (!rect || rect.height <= 0 || rect.height >= maxHeight) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const headerItselfStraddles = startsOnPage !== endsOnPage;
+
+    const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
+    const roomAfterHeader = pageBottom - rect.bottom;
+    const requiredTrailingHeight = (firstLineHeight ?? 0) + ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX;
+    const wouldOrphanHeading = firstLineHeight !== null && roomAfterHeader < requiredTrailingHeight;
+
+    if (!headerItselfStraddles && !wouldOrphanHeading) return false;
+
+    const shiftPx = Math.max(
+      0,
+      pageBottom + ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX - rect.top + ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX,
+    );
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(header, shiftPx);
+    return true;
+  };
+
+  const lowerSectionRowSelectors = [
+    '[data-export-skill-row="elegant-formal"]',
+    '[data-export-language-row="elegant-formal"]',
+    '[data-export-certification-row="elegant-formal"]',
+  ].join(',');
+
+  const atomicBoundarySelectors = [
+    '[data-export-bullet-item="elegant-formal"]',
+    '[data-export-group="summary-section"] p[data-export-meaningful="true"]',
+    '[data-export-group="experience-entry"] [data-elegant-formal-entry-row="true"]',
+    '[data-export-group="experience-entry"] > p',
+    '[data-export-group="education-entry"]',
+    '[data-export-skill-row="elegant-formal"]',
+    '[data-export-language-row="elegant-formal"]',
+    '[data-export-certification-row="elegant-formal"]',
+  ].join(',');
+
+  for (let pass = 0; pass < 8; pass += 1) {
     let movedAnyGroup = false;
+
+    const expEntries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="experience-entry"]'));
+    const firstExpEntry = expEntries[0] ?? null;
+    if (firstExpEntry) {
+      const expSection = firstExpEntry.closest<HTMLElement>('[data-export-group="experience-section"]');
+      const heading = expSection?.querySelector<HTMLElement>('h2') ?? null;
+      if (heading && expSection?.firstElementChild === heading) {
+        const entryRow = firstExpEntry.querySelector<HTMLElement>('[data-elegant-formal-entry-row="true"]');
+        const company = firstExpEntry.querySelector<HTMLElement>('p');
+        const firstBullet = firstExpEntry.querySelector<HTMLElement>('[data-export-bullet-item="elegant-formal"]');
+        const entryRowRect = entryRow ? getRelativeExportRect(rootBox, entryRow, root) : null;
+        const companyRect = company ? getRelativeExportRect(rootBox, company, root) : null;
+        const bulletRect = firstBullet ? getRelativeExportRect(rootBox, firstBullet, root) : null;
+        const requiredTrailingHeight =
+          (entryRowRect?.height ?? 0) + (companyRect?.height ?? 0) + (bulletRect?.height ?? 0);
+        if (
+          requiredTrailingHeight > 0
+          && shiftHeaderIfNeeded(heading, requiredTrailingHeight, maxShortGroupHeight)
+        ) {
+          movedAnyGroup = true;
+        }
+      }
+    }
+
+    for (const entry of expEntries) {
+      const entryRow = entry.querySelector<HTMLElement>('[data-elegant-formal-entry-row="true"]');
+      const company = entry.querySelector<HTMLElement>('p');
+      const bullets = Array.from(entry.querySelectorAll<HTMLElement>('[data-export-bullet-item="elegant-formal"]'));
+
+      if (entryRow && bullets.length > 0) {
+        const companyRect = company ? getRelativeExportRect(rootBox, company, root) : null;
+        const firstBulletRect = getRelativeExportRect(rootBox, bullets[0], root);
+        const requiredAfterRow = (companyRect?.height ?? 0) + (firstBulletRect?.height ?? 0);
+        if (shiftHeaderIfNeeded(entryRow, requiredAfterRow)) movedAnyGroup = true;
+      } else if (entryRow && company) {
+        const companyRect = getRelativeExportRect(rootBox, company, root);
+        if (shiftHeaderIfNeeded(entryRow, companyRect?.height ?? null)) movedAnyGroup = true;
+      }
+    }
+
+    const eduSection = root.querySelector<HTMLElement>('[data-export-group="education-section"]');
+    if (eduSection) {
+      const heading = eduSection.querySelector<HTMLElement>('h2');
+      const firstEduEntry = eduSection.querySelector<HTMLElement>('[data-export-group="education-entry"]');
+      if (heading && firstEduEntry && eduSection.firstElementChild === heading) {
+        const entryRect = getRelativeExportRect(rootBox, firstEduEntry, root);
+        if (entryRect && shiftHeaderIfNeeded(heading, entryRect.height, maxShortGroupHeight)) {
+          movedAnyGroup = true;
+        }
+      }
+    }
+
+    for (const section of Array.from(root.querySelectorAll<HTMLElement>(
+      '[data-export-group="skills-section"],[data-export-group="languages-section"],[data-export-group="certifications-section"]',
+    ))) {
+      const heading = section.querySelector<HTMLElement>('h2');
+      const row = section.querySelector<HTMLElement>(lowerSectionRowSelectors);
+      if (heading && row && section.firstElementChild === heading) {
+        const rowRect = getRelativeExportRect(rootBox, row, root);
+        if (rowRect && shiftHeaderIfNeeded(heading, rowRect.height, maxShortGroupHeight)) {
+          movedAnyGroup = true;
+        }
+      }
+    }
+
+    for (const block of Array.from(root.querySelectorAll<HTMLElement>(atomicBoundarySelectors))) {
+      const maxHeight = block.matches('[data-export-group="education-entry"]')
+        ? maxShortGroupHeight
+        : maxShortExperienceHeight;
+      if (shiftAtomicBlockForPageBoundary(block, maxHeight)) movedAnyGroup = true;
+    }
+
     const groups = Array.from(root.querySelectorAll<HTMLElement>(groupSelectors));
     for (const group of groups) {
-      const rect = getRelativeExportRect(rootBox, group);
-      if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) continue;
-
-      const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
-      const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
-      if (startsOnPage === endsOnPage) continue;
-
-      const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
-      const shiftPx = Math.max(0, nextPageTop - rect.top + ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX);
-      if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
-
-      shiftGroupToNextPage(group, shiftPx);
-      movedAnyGroup = true;
+      const maxHeight = group.getAttribute('data-export-group') === 'education-section'
+        ? maxShortGroupHeight
+        : maxShortExperienceHeight;
+      if (shiftWholeGroupIfStraddling(group, maxHeight)) movedAnyGroup = true;
     }
+
+    const educationSection = root.querySelector<HTMLElement>('[data-export-group="education-section"]');
+    const skillsLanguagesBlock = root.querySelector<HTMLElement>('[data-export-group="skills-languages-block"]');
+    if (educationSection && skillsLanguagesBlock) {
+      const eduRect = getRelativeExportRect(rootBox, educationSection, root);
+      const skillsRect = getRelativeExportRect(rootBox, skillsLanguagesBlock, root);
+      if (eduRect && skillsRect && skillsRect.bottom > eduRect.top) {
+        const combinedHeight = skillsRect.bottom - eduRect.top;
+        if (combinedHeight > 0 && combinedHeight < maxShortGroupHeight) {
+          const startsOnPage = Math.floor((eduRect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+          const endsOnPage = Math.floor((skillsRect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+          if (startsOnPage !== endsOnPage) {
+            const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+            const shiftPx = Math.max(0, nextPageTop - eduRect.top + ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX);
+            if (shiftPx > PDF_PAGE_INTERSECTION_EPSILON_PX) {
+              shiftGroupToNextPage(educationSection, shiftPx);
+              movedAnyGroup = true;
+            }
+          }
+        }
+      }
+    }
+
     if (!movedAnyGroup) break;
   }
+}
+
+export type ElegantFormalTextLineIntervalCss = {
+  topCssPx: number;
+  bottomCssPx: number;
+};
+
+function mergeElegantFormalTextLineIntervals(
+  intervals: ElegantFormalTextLineIntervalCss[],
+): ElegantFormalTextLineIntervalCss[] {
+  if (intervals.length === 0) return [];
+  const sorted = [...intervals].sort((a, b) => a.topCssPx - b.topCssPx || a.bottomCssPx - b.bottomCssPx);
+  const merged: ElegantFormalTextLineIntervalCss[] = [];
+  for (const interval of sorted) {
+    const last = merged[merged.length - 1];
+    if (
+      last
+      && interval.topCssPx - last.bottomCssPx < 4
+      && Math.abs(interval.topCssPx - last.topCssPx) < 4
+    ) {
+      last.topCssPx = Math.min(last.topCssPx, interval.topCssPx);
+      last.bottomCssPx = Math.max(last.bottomCssPx, interval.bottomCssPx);
+    } else {
+      merged.push({ topCssPx: interval.topCssPx, bottomCssPx: interval.bottomCssPx });
+    }
+  }
+  return merged;
+}
+
+// Measure every rendered text line in the Elegant Formal export root using Range/
+// getClientRects so long wrapped paragraphs (e.g. Professional Summary) expose
+// individual line boxes — block-level keep-together alone cannot protect these.
+export function collectElegantFormalTextLineIntervalsCss(root: HTMLElement): ElegantFormalTextLineIntervalCss[] {
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  if (!rootRect) return [];
+
+  const rootTop = rootRect.top;
+  const intervals: ElegantFormalTextLineIntervalCss[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode() as Text | null;
+
+  while (node) {
+    const text = node.textContent ?? '';
+    if (!text.trim()) {
+      node = walker.nextNode() as Text | null;
+      continue;
+    }
+
+    const parentEl = node.parentElement;
+    if (!parentEl) {
+      node = walker.nextNode() as Text | null;
+      continue;
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    let rects: DOMRect[] = [];
+    if (typeof range.getClientRects === 'function') {
+      rects = Array.from(range.getClientRects());
+    }
+    if (rects.length === 0) {
+      const fallbackRect = getRelativeExportRect({ top: rootTop }, parentEl, root);
+      if (fallbackRect && fallbackRect.height > PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        intervals.push({ topCssPx: fallbackRect.top, bottomCssPx: fallbackRect.bottom });
+      }
+    } else {
+      for (const rect of rects) {
+        if (rect.width <= 0 || rect.height <= PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
+        const topCssPx = rect.top - rootTop;
+        const bottomCssPx = rect.bottom - rootTop;
+        if (bottomCssPx > topCssPx) intervals.push({ topCssPx, bottomCssPx });
+      }
+    }
+
+    node = walker.nextNode() as Text | null;
+  }
+
+  return mergeElegantFormalTextLineIntervals(intervals);
+}
+
+export function scaleElegantFormalTextLineIntervalsToCanvas(
+  intervals: ElegantFormalTextLineIntervalCss[],
+  scalePxPerCssPx: number,
+): Array<{ top: number; bottom: number }> {
+  if (scalePxPerCssPx <= 0) return [];
+  return intervals.map(interval => ({
+    top: interval.topCssPx * scalePxPerCssPx,
+    bottom: interval.bottomCssPx * scalePxPerCssPx,
+  }));
+}
+
+export function isUnsafeElegantFormalPageBreakCanvasPx(
+  breakPx: number,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }>,
+  guardPx: number,
+): boolean {
+  const sorted = [...lineIntervalsCanvasPx].sort((a, b) => a.top - b.top || a.bottom - b.bottom);
+
+  for (const line of sorted) {
+    if (breakPx > line.top + PDF_PAGE_INTERSECTION_EPSILON_PX && breakPx < line.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) {
+      return true;
+    }
+  }
+
+  let previousLine: { top: number; bottom: number } | null = null;
+  let nextLine: { top: number; bottom: number } | null = null;
+  for (const line of sorted) {
+    if (line.bottom <= breakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) previousLine = line;
+    if (line.top >= breakPx - PDF_PAGE_INTERSECTION_EPSILON_PX && !nextLine) {
+      nextLine = line;
+      break;
+    }
+  }
+
+  const gapPx = previousLine && nextLine ? nextLine.top - previousLine.bottom : null;
+  const effectiveGuardPx = gapPx !== null && gapPx > 0
+    ? Math.min(guardPx, gapPx / 2)
+    : guardPx;
+
+  if (previousLine && breakPx - previousLine.bottom < effectiveGuardPx) return true;
+  if (nextLine && nextLine.top - breakPx < effectiveGuardPx) return true;
+  return false;
+}
+
+// Pick a canvas Y near the nominal page cut that falls in whitespace between text
+// rows instead of slicing through a glyph band.
+export function findSafeElegantFormalPageBreakCanvasPx(
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }>,
+  targetBreakPx: number,
+  guardPx: number,
+  searchRangePx: number,
+): number {
+  if (lineIntervalsCanvasPx.length === 0) return Math.floor(targetBreakPx);
+
+  const minBreakPx = Math.max(0, targetBreakPx - searchRangePx);
+  const maxBreakPx = targetBreakPx + Math.min(searchRangePx * 0.5, guardPx * 2);
+
+  for (let candidate = Math.floor(targetBreakPx); candidate >= minBreakPx; candidate -= 1) {
+    if (!isUnsafeElegantFormalPageBreakCanvasPx(candidate, lineIntervalsCanvasPx, guardPx)) return candidate;
+  }
+  for (let candidate = Math.floor(targetBreakPx) + 1; candidate <= maxBreakPx; candidate += 1) {
+    if (!isUnsafeElegantFormalPageBreakCanvasPx(candidate, lineIntervalsCanvasPx, guardPx)) return candidate;
+  }
+
+  return Math.floor(targetBreakPx);
+}
+
+export function areElegantFormalDomLineIntervalsReliable(
+  intervalsCss: ElegantFormalTextLineIntervalCss[],
+): boolean {
+  if (intervalsCss.length === 0) return false;
+  const tallLineCount = intervalsCss.filter(
+    interval => (interval.bottomCssPx - interval.topCssPx) > ELEGANT_FORMAL_DOM_LINE_MAX_HEIGHT_CSS_PX,
+  ).length;
+  return tallLineCount / intervalsCss.length < 0.34;
+}
+
+function isElegantFormalCanvasPixelInk(red: number, green: number, blue: number, alpha: number): boolean {
+  if (alpha <= 0) return false;
+  return red < ELEGANT_FORMAL_CANVAS_INK_MAX_CHANNEL
+    || green < ELEGANT_FORMAL_CANVAS_INK_MAX_CHANNEL
+    || blue < ELEGANT_FORMAL_CANVAS_INK_MAX_CHANNEL;
+}
+
+function analyzeElegantFormalCanvasWhitespaceRows(
+  canvas: HTMLCanvasElement,
+  startY: number,
+  endY: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+): boolean[] {
+  const top = Math.max(0, Math.floor(startY));
+  const bottom = Math.min(canvas.height - 1, Math.floor(endY));
+  if (bottom < top) return [];
+
+  const left = Math.max(0, Math.floor(contentLeftPx));
+  const right = Math.min(canvas.width, Math.ceil(contentRightPx));
+  const bandWidth = Math.max(1, right - left);
+  const bandHeight = bottom - top + 1;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return Array.from({ length: bandHeight }, () => true);
+
+  const sampleStep = Math.max(2, Math.floor(bandWidth / 120));
+  const data = ctx.getImageData(left, top, bandWidth, bandHeight).data;
+  const rowIsWhitespace: boolean[] = [];
+
+  for (let row = 0; row < bandHeight; row += 1) {
+    let darkSamples = 0;
+    let sampleCount = 0;
+    for (let x = 0; x < bandWidth; x += sampleStep) {
+      sampleCount += 1;
+      const index = (row * bandWidth + x) * 4;
+      if (isElegantFormalCanvasPixelInk(data[index], data[index + 1], data[index + 2], data[index + 3])) {
+        darkSamples += 1;
+      }
+    }
+    rowIsWhitespace.push(sampleCount === 0 || darkSamples / sampleCount < 0.025);
+  }
+
+  return rowIsWhitespace;
+}
+
+export function isElegantFormalCanvasBreakRowWhitespace(
+  canvas: HTMLCanvasElement,
+  breakPx: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+): boolean {
+  const rows = analyzeElegantFormalCanvasWhitespaceRows(
+    canvas,
+    breakPx,
+    breakPx,
+    contentLeftPx,
+    contentRightPx,
+  );
+  return rows.length === 0 || rows[0] === true;
+}
+
+function distanceToNearestInkRowInBand(
+  rowIsWhitespace: boolean[],
+  rowIndex: number,
+  direction: -1 | 1,
+): number {
+  let distance = 0;
+  for (
+    let index = rowIndex + direction;
+    index >= 0 && index < rowIsWhitespace.length;
+    index += direction
+  ) {
+    distance += 1;
+    if (!rowIsWhitespace[index]) return distance;
+  }
+  return -1;
+}
+
+// Inspect html2canvas pixels around a nominal page cut to find a horizontal whitespace
+// band that avoids slicing through rendered glyph pixels.
+export function findSafeElegantFormalPageBreakFromCanvasPixels(
+  canvas: HTMLCanvasElement,
+  targetBreakPx: number,
+  guardPx: number,
+  searchRangePx: number,
+  minBreakPx: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+): number {
+  const nominalBreakPx = Math.floor(targetBreakPx);
+  const searchStartPx = Math.max(0, Math.floor(minBreakPx + 1));
+  const searchEndPx = Math.min(
+    canvas.height - 1,
+    Math.floor(nominalBreakPx + Math.min(searchRangePx * 0.25, guardPx * 2)),
+  );
+  const bandStartPx = Math.max(searchStartPx, nominalBreakPx - searchRangePx);
+  const rowIsWhitespace = analyzeElegantFormalCanvasWhitespaceRows(
+    canvas,
+    bandStartPx,
+    searchEndPx,
+    contentLeftPx,
+    contentRightPx,
+  );
+  if (rowIsWhitespace.length === 0) return nominalBreakPx;
+
+  let bestBreakPx = nominalBreakPx;
+  let bestDistancePx = Infinity;
+
+  for (let rowIndex = rowIsWhitespace.length - 1; rowIndex >= 0; rowIndex -= 1) {
+    if (!rowIsWhitespace[rowIndex]) continue;
+
+    let runTopIndex = rowIndex;
+    let runBottomIndex = rowIndex;
+    while (runTopIndex > 0 && rowIsWhitespace[runTopIndex - 1]) runTopIndex -= 1;
+    while (runBottomIndex < rowIsWhitespace.length - 1 && rowIsWhitespace[runBottomIndex + 1]) {
+      runBottomIndex += 1;
+    }
+
+    const candidateBreakPx = bandStartPx + rowIndex;
+    if (candidateBreakPx <= minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
+
+    const inkAbovePx = distanceToNearestInkRowInBand(rowIsWhitespace, rowIndex, -1);
+    const inkBelowPx = distanceToNearestInkRowInBand(rowIsWhitespace, rowIndex, 1);
+    const gapPx = runBottomIndex - runTopIndex + 1;
+    const effectiveGuardPx = gapPx > 0 ? Math.min(guardPx, gapPx / 2) : guardPx;
+
+    if (inkAbovePx >= 0 && inkAbovePx < effectiveGuardPx) continue;
+    if (inkBelowPx >= 0 && inkBelowPx < effectiveGuardPx) continue;
+
+    const distanceFromNominalPx = Math.abs(nominalBreakPx - candidateBreakPx);
+    if (
+      distanceFromNominalPx < bestDistancePx
+      || (distanceFromNominalPx === bestDistancePx && candidateBreakPx > bestBreakPx)
+    ) {
+      bestDistancePx = distanceFromNominalPx;
+      bestBreakPx = candidateBreakPx;
+    }
+  }
+
+  if (bestDistancePx < Infinity) return bestBreakPx;
+
+  for (let rowIndex = rowIsWhitespace.length - 1; rowIndex >= 0; rowIndex -= 1) {
+    if (!rowIsWhitespace[rowIndex]) continue;
+    const candidateBreakPx = bandStartPx + rowIndex;
+    if (candidateBreakPx <= minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
+    return candidateBreakPx;
+  }
+
+  return nominalBreakPx;
+}
+
+export type ElegantFormalPageBreakResolution = {
+  breakPx: number;
+  source: 'dom' | 'canvas' | 'nominal';
+};
+
+export function resolveElegantFormalSafePageBreakCanvasPx(
+  canvas: HTMLCanvasElement,
+  domLineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  domIntervalsReliable: boolean,
+  targetBreakPx: number,
+  guardPx: number,
+  domSearchPx: number,
+  canvasSearchPx: number,
+  minBreakPx: number,
+): ElegantFormalPageBreakResolution {
+  const nominalBreakPx = Math.floor(targetBreakPx);
+  const contentLeftPx = Math.floor(canvas.width * 0.1);
+  const contentRightPx = canvas.width - contentLeftPx;
+  let breakPx = nominalBreakPx;
+  let source: ElegantFormalPageBreakResolution['source'] = 'nominal';
+
+  const nominalCutsInk = !isElegantFormalCanvasBreakRowWhitespace(
+    canvas,
+    nominalBreakPx,
+    contentLeftPx,
+    contentRightPx,
+  );
+
+  if (domIntervalsReliable && domLineIntervalsCanvasPx && domLineIntervalsCanvasPx.length > 0) {
+    const domBreakPx = findSafeElegantFormalPageBreakCanvasPx(
+      domLineIntervalsCanvasPx,
+      targetBreakPx,
+      guardPx,
+      domSearchPx,
+    );
+    if (domBreakPx !== nominalBreakPx) {
+      breakPx = domBreakPx;
+      source = 'dom';
+    }
+  }
+
+  const domBreakStillCutsInk = !isElegantFormalCanvasBreakRowWhitespace(
+    canvas,
+    breakPx,
+    contentLeftPx,
+    contentRightPx,
+  );
+  const needsCanvasFallback = source === 'nominal'
+    || nominalCutsInk
+    || !domIntervalsReliable
+    || !domLineIntervalsCanvasPx
+    || domLineIntervalsCanvasPx.length === 0
+    || domBreakStillCutsInk;
+
+  if (needsCanvasFallback) {
+    const canvasBreakPx = findSafeElegantFormalPageBreakFromCanvasPixels(
+      canvas,
+      targetBreakPx,
+      guardPx,
+      canvasSearchPx,
+      minBreakPx,
+      contentLeftPx,
+      contentRightPx,
+    );
+    if (
+      canvasBreakPx !== nominalBreakPx
+      || nominalCutsInk
+      || domBreakStillCutsInk
+      || !isElegantFormalCanvasBreakRowWhitespace(canvas, breakPx, contentLeftPx, contentRightPx)
+    ) {
+      breakPx = canvasBreakPx;
+      source = 'canvas';
+    }
+  }
+
+  if (breakPx <= minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+    breakPx = Math.max(minBreakPx + 1, nominalBreakPx);
+    source = nominalBreakPx === breakPx ? 'nominal' : source;
+  }
+
+  return { breakPx, source };
+}
+
+export type ElegantFormalPdfSliceSegment = {
+  startPx: number;
+  endPx: number;
+  breakSource: ElegantFormalPageBreakResolution['source'];
+};
+
+export function isElegantFormalSparseTrailingTailSegment(
+  segment: ElegantFormalPdfSliceSegment,
+  pageHeightPx: number,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+): boolean {
+  const heightPx = segment.endPx - segment.startPx;
+  if (heightPx <= 0 || heightPx / pageHeightPx >= ELEGANT_FORMAL_TRAILING_TAIL_SPARSE_RATIO) {
+    return false;
+  }
+
+  if (!lineIntervalsCanvasPx || lineIntervalsCanvasPx.length === 0) {
+    return true;
+  }
+
+  const overlapping = lineIntervalsCanvasPx.filter(
+    line => line.bottom > segment.startPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && line.top < segment.endPx - PDF_PAGE_INTERSECTION_EPSILON_PX,
+  );
+  if (overlapping.length === 0) return true;
+
+  const firstContentTopPx = Math.min(
+    ...overlapping.map(line => Math.max(line.top, segment.startPx)),
+  );
+  return firstContentTopPx > segment.startPx + heightPx * 0.4;
+}
+
+export function rebalanceElegantFormalSparseTrailingPdfSliceSegments(
+  segments: ElegantFormalPdfSliceSegment[],
+  pageHeightPx: number,
+  trailingTolerancePx: number,
+  _lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+): ElegantFormalPdfSliceSegment[] {
+  if (segments.length < 2) return segments;
+
+  const last = segments[segments.length - 1];
+  const lastHeightPx = last.endPx - last.startPx;
+  if (lastHeightPx / pageHeightPx >= ELEGANT_FORMAL_TRAILING_TAIL_SPARSE_RATIO) {
+    return segments;
+  }
+
+  const prev = segments[segments.length - 2];
+  const combinedHeightPx = last.endPx - prev.startPx;
+  if (combinedHeightPx <= pageHeightPx + trailingTolerancePx) {
+    prev.endPx = last.endPx;
+    segments.pop();
+  }
+
+  return segments;
+}
+
+export type ElegantFormalPaddedPdfSlice = {
+  dataUrl: string;
+  paddedHeightPx: number;
+  topInsetCanvasPx: number;
+  bottomInsetCanvasPx: number;
+};
+
+export function buildElegantFormalPaddedPdfSlice(
+  pdfCanvas: HTMLCanvasElement,
+  offsetY: number,
+  sliceHeight: number,
+  canvasWidthPx: number,
+  topInsetCanvasPx: number,
+  bottomInsetCanvasPx: number,
+): ElegantFormalPaddedPdfSlice {
+  const safeTopInsetCanvasPx = Math.max(0, Math.round(topInsetCanvasPx));
+  const safeBottomInsetCanvasPx = Math.max(0, Math.round(bottomInsetCanvasPx));
+  const paddedHeightPx = sliceHeight + safeTopInsetCanvasPx + safeBottomInsetCanvasPx;
+  const sliceCanvas = document.createElement('canvas');
+  sliceCanvas.width = canvasWidthPx;
+  sliceCanvas.height = paddedHeightPx;
+  const ctx = sliceCanvas.getContext('2d');
+
+  if (ctx) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvasWidthPx, paddedHeightPx);
+    ctx.drawImage(
+      pdfCanvas,
+      0,
+      offsetY,
+      canvasWidthPx,
+      sliceHeight,
+      0,
+      safeTopInsetCanvasPx,
+      canvasWidthPx,
+      sliceHeight,
+    );
+  }
+
+  return {
+    dataUrl: sliceCanvas.toDataURL('image/jpeg', 0.95),
+    paddedHeightPx,
+    topInsetCanvasPx: safeTopInsetCanvasPx,
+    bottomInsetCanvasPx: safeBottomInsetCanvasPx,
+  };
+}
+
+export function elegantFormalCssPxToPdfMm(cssPx: number, cssWidthPx: number): number {
+  if (cssWidthPx <= 0) return 0;
+  return (cssPx / cssWidthPx) * CV_PDF_A4_WIDTH_MM;
+}
+
+export function planElegantFormalPdfSliceSegments(
+  canvasHeightPx: number,
+  pageHeightPx: number,
+  trailingTolerancePx: number,
+  pdfCanvas: HTMLCanvasElement,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  domIntervalsReliable: boolean,
+  guardCanvasPx: number,
+  domSearchCanvasPx: number,
+  canvasSearchCanvasPx: number,
+  breakSourcesOut: string[],
+): ElegantFormalPdfSliceSegment[] {
+  const segments: ElegantFormalPdfSliceSegment[] = [];
+  let offsetY = 0;
+
+  while (offsetY < canvasHeightPx - trailingTolerancePx) {
+    let sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
+    let breakSource: ElegantFormalPageBreakResolution['source'] = 'nominal';
+
+    if (
+      sliceHeight >= pageHeightPx - PDF_PAGE_INTERSECTION_EPSILON_PX
+      && offsetY + pageHeightPx < canvasHeightPx - trailingTolerancePx
+    ) {
+      const targetBreakPx = offsetY + pageHeightPx;
+      const breakResolution = resolveElegantFormalSafePageBreakCanvasPx(
+        pdfCanvas,
+        lineIntervalsCanvasPx,
+        domIntervalsReliable,
+        targetBreakPx,
+        guardCanvasPx,
+        domSearchCanvasPx,
+        canvasSearchCanvasPx,
+        offsetY,
+      );
+      breakSource = breakResolution.source;
+      breakSourcesOut.push(breakResolution.source);
+      if (breakResolution.breakPx > offsetY + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        sliceHeight = breakResolution.breakPx - offsetY;
+      }
+    }
+
+    segments.push({ startPx: offsetY, endPx: offsetY + sliceHeight, breakSource });
+    offsetY += sliceHeight;
+  }
+
+  return rebalanceElegantFormalSparseTrailingPdfSliceSegments(
+    segments,
+    pageHeightPx,
+    trailingTolerancePx,
+    lineIntervalsCanvasPx,
+  );
 }
 
 export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement): void {
@@ -2477,7 +3471,7 @@ export async function exportToDOCX(
   // Matches the HTML template exactly:
   //   • violet/fuchsia solid header (gradient not possible in DOCX → solid violet-600 #7C3AED)
   //   • circular photo 100×100 on left of header; name, title, contacts to the right
-  //   • summary: no section heading, plain paragraph below header
+  //   • summary: violet heading (same style as every other section), plain paragraph below
   //   • experience: violet heading (no underline), each entry with left purple border accent
   //     + company | date in violet-500 below position title
   //   • education: violet heading, degree bold, school gray
@@ -2534,63 +3528,105 @@ export async function exportToDOCX(
       });
     }
 
-    // ── Summary: no heading, just the paragraph ─────────────────────────────
+    // ── Summary: violet heading (same style/helper as every other section) ──
+    // Previously rendered as a bare paragraph with no title, unlike Experience/
+    // Education/Skills/Languages/Certifications which all use caHeading(). Uses
+    // keepNext so the heading itself can never be stranded alone at the bottom
+    // of a page, separated from its own paragraph.
     if (cvData.summary) {
+      children.push(caHeading(t.cv.summary, { keepNext: true }));
       children.push(new Paragraph({ children: [new TextRun({ text: cvData.summary, size: 22, color: '374151' })], spacing: { after: 200 } }));
     }
 
     // ── Experience: left purple border accent per entry ──────────────────────
+    // Per-paragraph left borders on every title/meta/bullet line let Word page-break
+    // inside an entry, leaving decorative timeline fragments. The section heading
+    // plus the first entry title/meta/first bullet are wrapped in a flat cantSplit
+    // table (no nested tables) so Word keeps that chain together. Remaining entries
+    // stay as compact paragraphs like before — one table per entry was inflating page
+    // count — with keepNext on the title/meta/bullet chain and left border only on
+    // the position line (meta/bullets use indent) to limit orphan line artifacts.
     if (cvData.experience.length > 0) {
-      // keepNext: true — Word must not strand "Work Experience" alone at the bottom
-      // of a page with the first entry pushed to the next one. Word's real pagination
-      // engine honors w:keepNext (unlike the PDF route's manual pixel-shift approach),
-      // so tagging the heading to stay with the very next paragraph (the first entry's
-      // position line, which itself keeps with its meta/first bullet below) is enough
-      // to keep the whole "heading + first entry start" chain together.
-      children.push(caHeading(t.cv.experience, { keepNext: true }));
-      for (const exp of cvData.experience) {
+      const caVioletLeftParagraphBorder = { left: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } };
+      const caExperienceIndent = { left: 160 };
+
+      function caExperienceParagraphs(
+        exp: CVData['experience'][number],
+        options: { isFirst?: boolean; lineSlice?: { start: number; end?: number }; trailingSpacer?: boolean },
+      ) {
         const dateText = exp.isPresent ? t.cv.present : exp.endDate;
         const metaLine = [exp.company, `${exp.startDate} – ${dateText}`].filter(Boolean).join('  |  ');
-        const hasDescription = Boolean(exp.description && exp.description.split('\n').some((line) => line.trim()));
-        // Position title with left violet border
-        children.push(new Paragraph({
-          children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' })],
-          spacing: { before: 60, after: 20 },
-          border: { left: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } },
-          indent: { left: 160 },
-          // Every entry's title keeps with its own meta/date line — not just the
-          // first entry — so no entry header can be orphaned from its own meta line
-          // at a page break either, matching the PDF route's per-entry header
-          // protection.
-          keepNext: true,
-        }));
-        // Company | date in violet-500
-        children.push(new Paragraph({
-          children: [new TextRun({ text: metaLine, size: 18, color: '8B5CF6' })],
-          spacing: { after: 40 },
-          border: { left: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } },
-          indent: { left: 160 },
-          // Keep with the first bullet line (if any) so "title + meta" is never
-          // separated from at least one meaningful description line by a page break.
-          keepNext: hasDescription,
-        }));
-        if (exp.description) {
-          const lines = exp.description.split('\n').filter((line) => line.trim());
-          lines.forEach((line, lineIndex) => {
-            children.push(new Paragraph({
-              children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
-              spacing: { after: 30 },
-              border: { left: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } },
-              indent: { left: 160 },
-              keepNext: lineIndex === 0 && lines.length > 1,
-            }));
-          });
+        const allLines = exp.description ? exp.description.split('\n').filter((line) => line.trim()) : [];
+        const lines = options.lineSlice
+          ? allLines.slice(options.lineSlice.start, options.lineSlice.end)
+          : allLines;
+        const hasDescription = lines.length > 0;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const paras: any[] = [
+          new Paragraph({
+            children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' })],
+            spacing: { before: options.isFirst ? 0 : 60, after: 20 },
+            border: caVioletLeftParagraphBorder,
+            indent: caExperienceIndent,
+            keepNext: true,
+          }),
+          new Paragraph({
+            children: [new TextRun({ text: metaLine, size: 18, color: '8B5CF6' })],
+            spacing: { after: 40 },
+            indent: caExperienceIndent,
+            keepNext: hasDescription,
+          }),
+        ];
+        lines.forEach((line, lineIndex) => {
+          paras.push(new Paragraph({
+            children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
+            spacing: { after: 30 },
+            indent: caExperienceIndent,
+            keepNext: lineIndex === 0 && lines.length > 1,
+          }));
+        });
+        if (options.trailingSpacer ?? true) {
+          paras.push(new Paragraph({ text: '', spacing: { after: 60 } }));
         }
-        // Trimmed from 100 -> 60 twips: a small per-entry saving that compounds across
-        // every Work Experience entry, reclaiming enough room for a long CV's trailing
-        // Education/Skills to land together instead of Skills spilling onto its own
-        // near-empty final page.
+        return paras;
+      }
+
+      const [firstExp, ...restExp] = cvData.experience;
+
+      children.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({
+          cantSplit: true,
+          children: [new TableCell({
+            verticalAlign: VerticalAlign.TOP,
+            borders: noBorders,
+            margins: { top: 0, bottom: 0, left: 0, right: 0 },
+            children: [
+              caHeading(t.cv.experience, { keepNext: true }),
+              ...caExperienceParagraphs(firstExp, { isFirst: true, lineSlice: { start: 0, end: 1 }, trailingSpacer: false }),
+            ],
+          })],
+        })],
+      }));
+
+      const firstRemainderLines = firstExp.description ? firstExp.description.split('\n').filter((line) => line.trim()).slice(1) : [];
+      if (firstRemainderLines.length > 0) {
+        firstRemainderLines.forEach((line, lineIndex) => {
+          children.push(new Paragraph({
+            children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
+            spacing: { after: 30 },
+            indent: caExperienceIndent,
+            keepNext: lineIndex < firstRemainderLines.length - 1,
+          }));
+        });
         children.push(new Paragraph({ text: '', spacing: { after: 60 } }));
+      } else {
+        children.push(new Paragraph({ text: '', spacing: { after: 60 } }));
+      }
+
+      for (const exp of restExp) {
+        children.push(...caExperienceParagraphs(exp, { trailingSpacer: true }));
       }
     }
 
@@ -5949,6 +6985,8 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   let captureWidth = 0;
   let captureHeight = 0;
   let sourceStyleSnapshots: InlineStyleSnapshot[] = [];
+  let elegantFormalTextLineIntervalsCss: ElegantFormalTextLineIntervalCss[] | null = null;
+  const elegantFormalPageBreakSources: string[] = [];
   try {
     // ── HARD VERIFICATION: capture the actual template child directly, not the
     //    scroll wrapper. The #cv-preview / #cv-inline-preview div is an
@@ -5964,7 +7002,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       applyElegantFormalPdfLayout(sourceRootForTag);
       normalizeElegantFormalPdfTextStyles(sourceRootForTag);
       applyElegantFormalPdfNoWrapItems(sourceRootForTag);
+      void sourceRootForTag.offsetHeight;
       applyElegantFormalKeepTogetherPagination(sourceRootForTag);
+      elegantFormalTextLineIntervalsCss = collectElegantFormalTextLineIntervalsCss(sourceRootForTag);
     }
     if (captureTemplateId === 'professional-classic' && sourceRootForTag) {
       // Must run on the real (pre-clone) source root, not only inside onclone: the
@@ -6013,6 +7053,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       applyCreativeArtisticPdfLayout(sourceRootForTag);
       normalizeCreativeArtisticPdfTextStyles(sourceRootForTag);
       applyCreativeArtisticPdfNoWrapItems(sourceRootForTag);
+      void sourceRootForTag.offsetHeight;
       applyCreativeArtisticKeepTogetherPagination(sourceRootForTag);
     }
     captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
@@ -6085,7 +7126,13 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           applyCreativeArtisticPdfLayout(cloneRoot);
           normalizeCreativeArtisticPdfTextStyles(cloneRoot);
           applyCreativeArtisticPdfNoWrapItems(cloneRoot);
-          applyCreativeArtisticKeepTogetherPagination(cloneRoot);
+          // Pagination already ran on the live source root before html2canvas capture,
+          // and copyTemplateComputedStyles above copied the resulting margin-top shifts
+          // onto the clone. Re-running keep-together inside onclone was unreliable on
+          // Android WebView because getBoundingClientRect() on the detached clone often
+          // returns stale/zero geometry, which could skip tail balancing or apply a
+          // conflicting Education-only shift. Measure semantic bounds from the clone as
+          // rendered with the copied shifts instead.
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
           expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
@@ -6094,7 +7141,12 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           applyElegantFormalPdfLayout(cloneRoot);
           normalizeElegantFormalPdfTextStyles(cloneRoot);
           applyElegantFormalPdfNoWrapItems(cloneRoot);
-          applyElegantFormalKeepTogetherPagination(cloneRoot);
+          // Pagination already ran on the live source root before html2canvas capture,
+          // and copyTemplateComputedStyles above copied the resulting margin-top shifts
+          // onto the clone. Re-running keep-together inside onclone was unreliable on
+          // Android WebView because getBoundingClientRect() on the detached clone often
+          // returns stale/zero geometry, which could skip orphan-heading protection or
+          // apply a conflicting second shift that clips trailing content.
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
           expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
@@ -6223,29 +7275,32 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     } else {
       const pageHeightPx = (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM) * canvasWidthPx;
       const trailingTolerancePx = (PDF_TRAILING_SLICE_TOLERANCE_MM / CV_PDF_A4_WIDTH_MM) * canvasWidthPx;
-      let offsetY = 0;
-      let firstPage = true;
+      const cssToCanvasScale = captureWidth > 0 ? canvasWidthPx / captureWidth : 1;
+      const elegantFormalLineIntervalsCanvas = (
+        elegantFormalTextLineIntervalsCss
+        && elegantFormalTextLineIntervalsCss.length > 0
+      )
+        ? scaleElegantFormalTextLineIntervalsToCanvas(elegantFormalTextLineIntervalsCss, cssToCanvasScale)
+        : null;
+      const elegantFormalDomIntervalsReliable = elegantFormalTextLineIntervalsCss
+        ? areElegantFormalDomLineIntervalsReliable(elegantFormalTextLineIntervalsCss)
+        : false;
+      const elegantFormalGuardCanvasPx = ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX * cssToCanvasScale;
+      const elegantFormalDomSearchCanvasPx = ELEGANT_FORMAL_PAGE_BREAK_SEARCH_RANGE_PX * cssToCanvasScale;
+      const elegantFormalCanvasSearchCanvasPx = ELEGANT_FORMAL_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX * cssToCanvasScale;
+      const elegantFormalTopInsetCanvasPx = captureTemplateId === 'elegant-formal'
+        ? Math.round(ELEGANT_FORMAL_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const elegantFormalBottomInsetCanvasPx = captureTemplateId === 'elegant-formal'
+        ? Math.round(ELEGANT_FORMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
 
-      while (offsetY < canvasHeightPx - trailingTolerancePx) {
-        const sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
-        if (semanticPagePlan && !firstPage) {
-          const pageBottomPx = offsetY + sliceHeight;
-          if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
-            if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
-            offsetY += pageHeightPx;
-            continue;
-          }
-        }
-        if (
-          shouldTrimBlankPdfSlices
-          && !semanticPagePlan
-          && !firstPage
-          && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
-        ) {
-          break;
-        }
-        if (!firstPage) pdf.addPage();
-        firstPage = false;
+      const renderPdfSlice = (
+        offsetY: number,
+        sliceHeight: number,
+        pdfPageIndex: number,
+      ): void => {
+        if (pdfPageIndex > 0) pdf.addPage();
 
         const sliceCanvas = document.createElement('canvas');
         sliceCanvas.width = canvasWidthPx;
@@ -6256,9 +7311,113 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         }
         const sliceImg = sliceCanvas.toDataURL('image/jpeg', 0.95);
         const sliceHeightMM = (sliceHeight / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
-        pdf.addImage(sliceImg, 'JPEG', 0, 0, CV_PDF_A4_WIDTH_MM, Math.min(sliceHeightMM, CV_PDF_A4_HEIGHT_MM));
+        pdf.addImage(
+          sliceImg,
+          'JPEG',
+          0,
+          0,
+          CV_PDF_A4_WIDTH_MM,
+          Math.min(sliceHeightMM, CV_PDF_A4_HEIGHT_MM),
+        );
+      };
 
-        offsetY += pageHeightPx;
+      const renderElegantFormalPdfSlice = (
+        offsetY: number,
+        sliceHeight: number,
+        pdfPageIndex: number,
+        isFinalPage: boolean,
+      ): void => {
+        if (pdfPageIndex > 0) pdf.addPage();
+
+        const topInsetCanvasPx = pdfPageIndex > 0 ? elegantFormalTopInsetCanvasPx : 0;
+        const bottomInsetCanvasPx = isFinalPage ? 0 : elegantFormalBottomInsetCanvasPx;
+        const paddedSlice = buildElegantFormalPaddedPdfSlice(
+          pdfCanvas,
+          offsetY,
+          sliceHeight,
+          canvasWidthPx,
+          topInsetCanvasPx,
+          bottomInsetCanvasPx,
+        );
+        const paddedHeightMM = (paddedSlice.paddedHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
+        pdf.addImage(
+          paddedSlice.dataUrl,
+          'JPEG',
+          0,
+          0,
+          CV_PDF_A4_WIDTH_MM,
+          Math.min(paddedHeightMM, CV_PDF_A4_HEIGHT_MM),
+        );
+      };
+
+      if (captureTemplateId === 'elegant-formal') {
+        const segments = planElegantFormalPdfSliceSegments(
+          canvasHeightPx,
+          pageHeightPx,
+          trailingTolerancePx,
+          pdfCanvas,
+          elegantFormalLineIntervalsCanvas,
+          elegantFormalDomIntervalsReliable,
+          elegantFormalGuardCanvasPx,
+          elegantFormalDomSearchCanvasPx,
+          elegantFormalCanvasSearchCanvasPx,
+          elegantFormalPageBreakSources,
+        );
+
+        let renderedPageIndex = 0;
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          const segment = segments[segmentIndex];
+          const offsetY = segment.startPx;
+          const sliceHeight = segment.endPx - segment.startPx;
+          if (semanticPagePlan && segmentIndex > 0) {
+            const pageBottomPx = offsetY + sliceHeight;
+            if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
+              if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
+              continue;
+            }
+          }
+          if (
+            shouldTrimBlankPdfSlices
+            && !semanticPagePlan
+            && segmentIndex > 0
+            && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
+          ) {
+            break;
+          }
+          renderElegantFormalPdfSlice(
+            offsetY,
+            sliceHeight,
+            renderedPageIndex,
+            segmentIndex === segments.length - 1,
+          );
+          renderedPageIndex += 1;
+        }
+      } else {
+        let offsetY = 0;
+        let renderedPageIndex = 0;
+
+        while (offsetY < canvasHeightPx - trailingTolerancePx) {
+          const sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
+          if (semanticPagePlan && renderedPageIndex > 0) {
+            const pageBottomPx = offsetY + sliceHeight;
+            if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
+              if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
+              offsetY += pageHeightPx;
+              continue;
+            }
+          }
+          if (
+            shouldTrimBlankPdfSlices
+            && !semanticPagePlan
+            && renderedPageIndex > 0
+            && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
+          ) {
+            break;
+          }
+          renderPdfSlice(offsetY, sliceHeight, renderedPageIndex);
+          renderedPageIndex += 1;
+          offsetY += sliceHeight;
+        }
       }
     }
 
@@ -6267,6 +7426,16 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     const pdfBlob = pdfToBlob(pdf);
     if (!pdfBlob || pdfBlob.size === 0) {
       throw new Error('PDF generation produced an empty or invalid Blob');
+    }
+    if (captureTemplateId === 'elegant-formal' && taggedCaptureTarget) {
+      taggedCaptureTarget.setAttribute(
+        'data-ef-pdf-break-sources',
+        elegantFormalPageBreakSources.join(',') || 'none',
+      );
+      taggedCaptureTarget.setAttribute(
+        'data-ef-pdf-safe-slice',
+        elegantFormalPageBreakSources.some(source => source === 'canvas' || source === 'dom') ? 'true' : 'false',
+      );
     }
     return pdfBlob;
   } catch (pdfErr) {

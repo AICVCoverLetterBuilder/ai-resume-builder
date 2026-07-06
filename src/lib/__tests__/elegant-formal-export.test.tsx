@@ -22,11 +22,22 @@ import {
 } from '@/lib/elegant-formal-photo';
 import {
   applyElegantFormalKeepTogetherPagination,
-  buildElegantFormalPdfBlob,
+  areElegantFormalDomLineIntervalsReliable,
   buildCvPdfBlob,
+  buildElegantFormalPaddedPdfSlice,
+  buildElegantFormalPdfBlob,
+  collectElegantFormalTextLineIntervalsCss,
   exportElegantFormalPdf,
   exportToDOCX,
+  findSafeElegantFormalPageBreakCanvasPx,
+  findSafeElegantFormalPageBreakFromCanvasPixels,
+  isElegantFormalCanvasBreakRowWhitespace,
+  isElegantFormalSparseTrailingTailSegment,
+  isUnsafeElegantFormalPageBreakCanvasPx,
+  planElegantFormalPdfSliceSegments,
   prepareCvPhotoForExport,
+  rebalanceElegantFormalSparseTrailingPdfSliceSegments,
+  resolveElegantFormalSafePageBreakCanvasPx,
 } from '@/lib/export';
 import { loadCvDraft, saveCvDraft, clearCvDraft } from '@/lib/draft-storage';
 import type { CVData } from '@/lib/types';
@@ -213,6 +224,37 @@ function installRectMock() {
       height,
       toJSON: () => ({}),
     } as DOMRect;
+  });
+}
+
+function installInkRowCanvasContextMock(lineTops: number[], lineHeight = 18) {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function getContext(
+    this: HTMLCanvasElement,
+    type: string,
+  ) {
+    if (type !== '2d') return null;
+    const pixelIsInk = (x: number, y: number) => {
+      if (x < 90 || x > 710) return false;
+      return lineTops.some(top => y >= top && y < top + lineHeight);
+    };
+    return {
+      fillRect: vi.fn(),
+      fillStyle: '',
+      getImageData: (sx: number, sy: number, sw: number, sh: number) => {
+        const data = new Uint8ClampedArray(sw * sh * 4);
+        for (let row = 0; row < sh; row += 1) {
+          for (let col = 0; col < sw; col += 1) {
+            const ink = pixelIsInk(sx + col, sy + row);
+            const index = (row * sw + col) * 4;
+            data[index] = ink ? 55 : 255;
+            data[index + 1] = ink ? 55 : 255;
+            data[index + 2] = ink ? 55 : 255;
+            data[index + 3] = 255;
+          }
+        }
+        return { data, width: sw, height: sh };
+      },
+    } as unknown as CanvasRenderingContext2D;
   });
 }
 
@@ -840,6 +882,321 @@ describe('Elegant Formal export routing and rendering', () => {
     applyElegantFormalKeepTogetherPagination(root);
 
     expect(skills.style.marginTop).toBe('');
+    expect(document.body.textContent).toContain('Team Leadership');
+  });
+
+  test('Elegant Formal shifts a Work Experience section heading when the first entry would start on the next page', () => {
+    const pageHeight = (297 / 210) * 800;
+    document.body.innerHTML = `
+      <div data-template-id="elegant-formal" data-test-rect="${rectAttr(0, 0, 800, 1800)}">
+        <section data-export-group="experience-section" data-test-rect="${rectAttr(pageHeight - 30, 40, 720, 220)}">
+          <h2 data-test-rect="${rectAttr(pageHeight - 30, 40, 720, 20)}">Work Experience</h2>
+          <div data-export-group="experience-entry" data-test-rect="${rectAttr(pageHeight - 6, 40, 720, 196)}">
+            <div data-elegant-formal-entry-row="true" data-test-rect="${rectAttr(pageHeight + 4, 40, 720, 28)}">
+              <h3>Učitelj u osnovnoj školi</h3>
+            </div>
+            <p data-test-rect="${rectAttr(pageHeight + 36, 40, 720, 18)}">Zhff</p>
+            <ul>
+              <li data-export-bullet-item="elegant-formal" data-test-rect="${rectAttr(pageHeight + 58, 40, 720, 22)}">First bullet line.</li>
+            </ul>
+          </div>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="elegant-formal"]') as HTMLElement;
+    const heading = document.querySelector('[data-export-group="experience-section"] h2') as HTMLElement;
+
+    applyElegantFormalKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Work Experience');
+    expect(document.body.textContent).toContain('Učitelj u osnovnoj školi');
+    expect(document.body.textContent).toContain('First bullet line.');
+  });
+
+  test('Elegant Formal shifts a Skills section heading when the first skill row would start on the next page', () => {
+    const pageHeight = (297 / 210) * 800;
+    document.body.innerHTML = `
+      <div data-template-id="elegant-formal" data-test-rect="${rectAttr(0, 0, 800, 1500)}">
+        <div data-export-group="skills-languages-block" data-test-rect="${rectAttr(pageHeight - 40, 40, 720, 90)}">
+          <section data-export-group="skills-section" data-test-rect="${rectAttr(pageHeight - 40, 40, 240, 90)}">
+            <h2 data-test-rect="${rectAttr(pageHeight - 40, 40, 240, 18)}">Skills</h2>
+            <div data-export-skill-row="elegant-formal" data-test-rect="${rectAttr(pageHeight + 4, 40, 240, 28)}">Team Leadership</div>
+          </section>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="elegant-formal"]') as HTMLElement;
+    const heading = document.querySelector('[data-export-group="skills-section"] h2') as HTMLElement;
+    const skillsBlock = document.querySelector('[data-export-group="skills-languages-block"]') as HTMLElement;
+
+    applyElegantFormalKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
+    expect(skillsBlock.style.marginTop).toBe('');
+    expect(document.body.textContent).toContain('Skills');
+    expect(document.body.textContent).toContain('Team Leadership');
+  });
+
+  test('Elegant Formal shifts an Education section heading when the first education entry would start on the next page', () => {
+    const pageHeight = (297 / 210) * 800;
+    document.body.innerHTML = `
+      <div data-template-id="elegant-formal" data-test-rect="${rectAttr(0, 0, 800, 1500)}">
+        <section data-export-group="education-section" data-test-rect="${rectAttr(pageHeight - 28, 40, 720, 120)}">
+          <h2 data-test-rect="${rectAttr(pageHeight - 28, 40, 720, 18)}">Education</h2>
+          <div data-export-group="education-entry" data-test-rect="${rectAttr(pageHeight + 6, 40, 720, 86)}">
+            <h3>Business Administration</h3>
+            <p>Faculty of Economics | 2010 - 2014</p>
+          </div>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="elegant-formal"]') as HTMLElement;
+    const heading = document.querySelector('[data-export-group="education-section"] h2') as HTMLElement;
+
+    applyElegantFormalKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Education');
+    expect(document.body.textContent).toContain('2010 - 2014');
+  });
+
+  test('Elegant Formal shifts a bullet that ends too close to the bottom of a page', () => {
+    const pageHeight = (297 / 210) * 800;
+    document.body.innerHTML = `
+      <div data-template-id="elegant-formal" data-test-rect="${rectAttr(0, 0, 800, 1600)}">
+        <div data-export-group="experience-entry" data-test-rect="${rectAttr(pageHeight - 34, 40, 720, 34)}">
+          <ul>
+            <li data-export-bullet-item="elegant-formal" data-test-rect="${rectAttr(pageHeight - 34, 58, 664, 22)}">
+              Redovno sam komunicirao sa roditeljima.
+            </li>
+          </ul>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="elegant-formal"]') as HTMLElement;
+    const bullet = document.querySelector('[data-export-bullet-item="elegant-formal"]') as HTMLElement;
+
+    applyElegantFormalKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(bullet.style.marginTop)).toBeGreaterThan(10);
+    expect(document.body.textContent).toContain('Redovno sam komunicirao sa roditeljima.');
+  });
+
+  test('Elegant Formal shifts a bullet that starts too close to the top of a page after a cut', () => {
+    const pageHeight = (297 / 210) * 800;
+    document.body.innerHTML = `
+      <div data-template-id="elegant-formal" data-test-rect="${rectAttr(0, 0, 800, 1600)}">
+        <div data-export-group="experience-entry" data-test-rect="${rectAttr(pageHeight + 2, 40, 720, 30)}">
+          <ul>
+            <li data-export-bullet-item="elegant-formal" data-test-rect="${rectAttr(pageHeight + 2, 58, 664, 22)}">
+              Koristio sam geografske karte i digitalne alate.
+            </li>
+          </ul>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="elegant-formal"]') as HTMLElement;
+    const bullet = document.querySelector('[data-export-bullet-item="elegant-formal"]') as HTMLElement;
+
+    applyElegantFormalKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(bullet.style.marginTop)).toBeGreaterThan(10);
+    expect(document.body.textContent).toContain('Koristio sam geografske karte');
+  });
+
+  test('Elegant Formal safe canvas page breaks avoid slicing through measured text lines', () => {
+    const lines = [
+      { top: 1100, bottom: 1124 },
+      { top: 1128, bottom: 1152 },
+      { top: 1156, bottom: 1180 },
+    ];
+    const guardPx = 28;
+    const targetBreakPx = 1131;
+
+    expect(isUnsafeElegantFormalPageBreakCanvasPx(1112, lines, guardPx)).toBe(true);
+    expect(isUnsafeElegantFormalPageBreakCanvasPx(1140, lines, guardPx)).toBe(true);
+
+    const safeBreakPx = findSafeElegantFormalPageBreakCanvasPx(lines, targetBreakPx, guardPx, 48);
+    expect(safeBreakPx).toBeLessThanOrEqual(targetBreakPx);
+    expect(isUnsafeElegantFormalPageBreakCanvasPx(safeBreakPx, lines, guardPx)).toBe(false);
+    expect(safeBreakPx).toBeGreaterThan(lines[0].bottom);
+    expect(safeBreakPx).toBeLessThan(lines[1].top);
+  });
+
+  test('Elegant Formal export collects summary text lines for safe canvas slicing', () => {
+    document.body.innerHTML = `
+      <div data-template-id="elegant-formal" data-test-rect="${rectAttr(0, 0, 800, 1600)}">
+        <section data-export-group="summary-section">
+          <p data-export-meaningful="true" data-test-rect="${rectAttr(120, 40, 720, 22)}">Line one of summary.</p>
+          <p data-test-rect="${rectAttr(160, 40, 720, 22)}">Line two of summary.</p>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="elegant-formal"]') as HTMLElement;
+
+    const intervals = collectElegantFormalTextLineIntervalsCss(root);
+
+    expect(intervals.length).toBeGreaterThanOrEqual(2);
+    expect(exportSource()).toContain('findSafeElegantFormalPageBreakCanvasPx');
+    expect(exportSource()).toContain('findSafeElegantFormalPageBreakFromCanvasPixels');
+    expect(exportSource()).toContain('resolveElegantFormalSafePageBreakCanvasPx');
+    expect(exportSource()).toContain('collectElegantFormalTextLineIntervalsCss');
+    expect(exportSource()).toContain('offsetY += sliceHeight');
+    expect(exportSource()).toContain('data-ef-pdf-break-sources');
+    expect(exportSource()).toContain('ELEGANT_FORMAL_PDF_PAGE_TOP_INSET_CSS_PX');
+    expect(exportSource()).toContain('ELEGANT_FORMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX');
+    expect(exportSource()).toContain('buildElegantFormalPaddedPdfSlice');
+    expect(exportSource()).toContain('renderElegantFormalPdfSlice');
+    expect(exportSource()).toContain('planElegantFormalPdfSliceSegments');
+    expect(exportSource()).toContain('rebalanceElegantFormalSparseTrailingPdfSliceSegments');
+  });
+
+  test('Elegant Formal treats block-level DOM intervals as unreliable on Android-like export roots', () => {
+    const intervals = [
+      { topCssPx: 120, bottomCssPx: 260 },
+      { topCssPx: 300, bottomCssPx: 322 },
+    ];
+
+    expect(areElegantFormalDomLineIntervalsReliable(intervals)).toBe(false);
+    expect(areElegantFormalDomLineIntervalsReliable([
+      { topCssPx: 120, bottomCssPx: 142 },
+      { topCssPx: 146, bottomCssPx: 168 },
+    ])).toBe(true);
+  });
+
+  test('Elegant Formal canvas pixel fallback finds whitespace between rendered summary lines', () => {
+    installInkRowCanvasContextMock([1080, 1104, 1128]);
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 1400;
+
+    const targetBreakPx = 1131;
+    const guardPx = 28;
+    const contentLeftPx = 80;
+    const contentRightPx = 720;
+
+    expect(isElegantFormalCanvasBreakRowWhitespace(canvas, targetBreakPx, contentLeftPx, contentRightPx)).toBe(false);
+
+    const safeBreakPx = findSafeElegantFormalPageBreakFromCanvasPixels(
+      canvas,
+      targetBreakPx,
+      guardPx,
+      96,
+      0,
+      contentLeftPx,
+      contentRightPx,
+    );
+
+    expect(safeBreakPx).toBeLessThan(targetBreakPx);
+    expect(isElegantFormalCanvasBreakRowWhitespace(canvas, safeBreakPx, contentLeftPx, contentRightPx)).toBe(true);
+  });
+
+  test('Elegant Formal resolves page breaks with canvas fallback when DOM intervals are block-level', () => {
+    installInkRowCanvasContextMock([1080, 1104, 1128]);
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 1400;
+
+    const blockDomIntervals = [{ top: 1080, bottom: 1146 }];
+    const resolution = resolveElegantFormalSafePageBreakCanvasPx(
+      canvas,
+      blockDomIntervals,
+      false,
+      1131,
+      28,
+      48,
+      96,
+      0,
+    );
+
+    expect(resolution.source).toBe('canvas');
+    expect(resolution.breakPx).toBeLessThan(1131);
+    expect(isElegantFormalCanvasBreakRowWhitespace(canvas, resolution.breakPx, 80, 720)).toBe(true);
+  });
+
+  test('Elegant Formal padded PDF slices bake white top/bottom breathing room into continuation pages', () => {
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = 800;
+    sourceCanvas.height = 1200;
+    const sourceCtx = sourceCanvas.getContext('2d');
+    if (sourceCtx) {
+      sourceCtx.fillStyle = '#ffffff';
+      sourceCtx.fillRect(0, 0, 800, 1200);
+      sourceCtx.fillStyle = '#111111';
+      sourceCtx.fillRect(40, 200, 720, 18);
+    }
+
+    const sliceHeight = 400;
+    const topInset = 28;
+    const bottomInset = 28;
+    const padded = buildElegantFormalPaddedPdfSlice(
+      sourceCanvas,
+      200,
+      sliceHeight,
+      800,
+      topInset,
+      bottomInset,
+    );
+
+    expect(padded.topInsetCanvasPx).toBe(28);
+    expect(padded.bottomInsetCanvasPx).toBe(28);
+    expect(padded.paddedHeightPx).toBe(sliceHeight + topInset + bottomInset);
+    expect(padded.dataUrl.length).toBeGreaterThan(0);
+  });
+
+  test('Elegant Formal merges a sparse trailing tail slice into the previous PDF page', () => {
+    const pageHeightPx = 1000;
+    const segments = rebalanceElegantFormalSparseTrailingPdfSliceSegments(
+      [
+        { startPx: 120, endPx: 980, breakSource: 'canvas' },
+        { startPx: 980, endPx: 1120, breakSource: 'canvas' },
+      ],
+      pageHeightPx,
+      8,
+      [{ top: 990, bottom: 1010 }, { top: 1040, bottom: 1062 }],
+    );
+
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.startPx).toBe(120);
+    expect(segments[0]?.endPx).toBe(1120);
+    expect(isElegantFormalSparseTrailingTailSegment(
+      { startPx: 980, endPx: 1120, breakSource: 'canvas' },
+      pageHeightPx,
+      [{ top: 1080, bottom: 1102 }, { top: 1106, bottom: 1118 }],
+    )).toBe(true);
+  });
+
+  test('Elegant Formal keeps Education and Skills/Languages together when the combined tail straddles a page', () => {
+    const pageHeight = (297 / 210) * 800;
+    document.body.innerHTML = `
+      <div data-template-id="elegant-formal" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <section data-export-group="education-section" data-test-rect="${rectAttr(pageHeight - 140, 40, 720, 120)}">
+          <h2>Education</h2>
+          <div data-export-group="education-entry" data-test-rect="${rectAttr(pageHeight - 110, 40, 720, 80)}">Business Administration</div>
+        </section>
+        <div data-export-group="skills-languages-block" data-test-rect="${rectAttr(pageHeight + 20, 40, 720, 100)}">
+          <section data-export-group="skills-section" data-test-rect="${rectAttr(pageHeight + 20, 40, 240, 80)}">Team Leadership</section>
+          <section data-export-group="languages-section" data-test-rect="${rectAttr(pageHeight + 20, 520, 240, 80)}">English</section>
+        </div>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="elegant-formal"]') as HTMLElement;
+    const education = document.querySelector('[data-export-group="education-section"]') as HTMLElement;
+    const skillsBlock = document.querySelector('[data-export-group="skills-languages-block"]') as HTMLElement;
+
+    applyElegantFormalKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(education.style.marginTop)).toBeGreaterThan(20);
+    expect(skillsBlock.style.marginTop).toBe('');
+    expect(document.body.textContent).toContain('Business Administration');
     expect(document.body.textContent).toContain('Team Leadership');
   });
 

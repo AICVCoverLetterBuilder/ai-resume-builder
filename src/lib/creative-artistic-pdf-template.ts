@@ -69,6 +69,7 @@ function appendSafeWords(parent: HTMLElement, tag: string, text: string, styles:
 function labels(locale?: Locale) {
   const t = translations[locale ?? 'en'] ?? translations.en;
   return {
+    summary: t.cv.summary,
     experience: t.cv.experience,
     education: t.cv.education,
     skills: t.cv.skills,
@@ -217,8 +218,18 @@ export function createCreativeArtisticPdfTemplate(
   const body = append(root, 'div', { padding: '22px 28px 26px', boxSizing: 'border-box', backgroundColor: '#ffffff' });
 
   if (cv.summary) {
-    append(body, 'p', {
-      margin: '0 0 14px',
+    // Every other section (Experience/Education/Skills/Languages/Certifications)
+    // has a violet section heading via sectionHeading(); Summary was the one
+    // section rendered as a bare paragraph with no title at all. Reuses the
+    // exact same heading helper/style so the accent, size, and weight are
+    // identical to the other sections — only a slightly smaller bottom margin
+    // (7px, same as sectionHeading's own default) since the summary section
+    // has no sub-entries needing extra breathing room below the title.
+    const sectionEl = append(body, 'section', { margin: '0 0 14px' });
+    sectionEl.setAttribute('data-export-group', 'summary-section');
+    sectionHeading(sectionEl, L.summary);
+    append(sectionEl, 'p', {
+      margin: '0',
       color: MUTED2,
       fontSize: '10.8px',
       lineHeight: '1.4',
