@@ -9,6 +9,7 @@ import { NordicCleanTemplate, templateComponents } from '@/components/cv-templat
 import { createNordicCleanPdfTemplate } from '@/lib/nordic-clean-pdf-template';
 import {
   buildNordicCleanPdfBlob,
+  buildPaddedPdfSlice,
   exportNordicCleanPdf,
 } from '@/lib/export';
 import type { CVData } from '@/lib/types';
@@ -258,6 +259,31 @@ describe('Nordic Clean PDF export', () => {
     expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
     expect(instances[0].pages).toBe(1);
+  });
+
+  test('Nordic Clean PDF export bakes continuation-page top padding into slice bitmaps', () => {
+    const exportSource = fs.readFileSync(path.resolve('src/lib/export.ts'), 'utf8');
+    expect(exportSource).toContain('NORDIC_CLEAN_PDF_PAGE_TOP_INSET_CSS_PX');
+    expect(exportSource).toContain('NORDIC_CLEAN_PDF_PAGE_BOTTOM_INSET_CSS_PX');
+    expect(exportSource).toContain('buildPaddedPdfSlice');
+    expect(exportSource).toContain("captureTemplateId === 'nordic-clean'");
+    expect(exportSource).toContain('renderPaddedPdfSlice');
+
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = 800;
+    sourceCanvas.height = 1200;
+    const sourceCtx = sourceCanvas.getContext('2d');
+    if (sourceCtx) {
+      sourceCtx.fillStyle = '#ffffff';
+      sourceCtx.fillRect(0, 0, 800, 1200);
+      sourceCtx.fillStyle = '#111111';
+      sourceCtx.fillRect(40, 200, 720, 18);
+    }
+
+    const padded = buildPaddedPdfSlice(sourceCanvas, 200, 400, 800, 28, 28);
+    expect(padded.topInsetCanvasPx).toBe(28);
+    expect(padded.bottomInsetCanvasPx).toBe(28);
+    expect(padded.paddedHeightPx).toBe(456);
   });
 
   test('Nordic Clean direct export uses shared native save result', async () => {

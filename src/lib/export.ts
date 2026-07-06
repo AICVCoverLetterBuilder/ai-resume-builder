@@ -1011,6 +1011,15 @@ const ELEGANT_FORMAL_PAGE_BREAK_GUARD_PX = 16;
 // breathing room (jsPDF y-offset alone is unreliable when slices are scaled).
 const ELEGANT_FORMAL_PDF_PAGE_TOP_INSET_CSS_PX = 28;
 const ELEGANT_FORMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+// ATS Standard uses the same baked-padding PDF slice model as Elegant Formal.
+const ATS_STANDARD_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const ATS_STANDARD_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+// Executive Premium uses the same baked-padding PDF slice model.
+const EXECUTIVE_PREMIUM_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const EXECUTIVE_PREMIUM_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+// Nordic Clean uses the same baked-padding PDF slice model.
+const NORDIC_CLEAN_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const NORDIC_CLEAN_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
 // If the final PDF page would be mostly empty tail (Education/Skills/Languages only),
 // merge it with the previous page instead of emitting a sparse trailing page.
 const ELEGANT_FORMAL_TRAILING_TAIL_SPARSE_RATIO = 0.35;
@@ -2390,21 +2399,23 @@ export function rebalanceElegantFormalSparseTrailingPdfSliceSegments(
   return segments;
 }
 
-export type ElegantFormalPaddedPdfSlice = {
+export type PaddedPdfSlice = {
   dataUrl: string;
   paddedHeightPx: number;
   topInsetCanvasPx: number;
   bottomInsetCanvasPx: number;
 };
 
-export function buildElegantFormalPaddedPdfSlice(
+export type ElegantFormalPaddedPdfSlice = PaddedPdfSlice;
+
+export function buildPaddedPdfSlice(
   pdfCanvas: HTMLCanvasElement,
   offsetY: number,
   sliceHeight: number,
   canvasWidthPx: number,
   topInsetCanvasPx: number,
   bottomInsetCanvasPx: number,
-): ElegantFormalPaddedPdfSlice {
+): PaddedPdfSlice {
   const safeTopInsetCanvasPx = Math.max(0, Math.round(topInsetCanvasPx));
   const safeBottomInsetCanvasPx = Math.max(0, Math.round(bottomInsetCanvasPx));
   const paddedHeightPx = sliceHeight + safeTopInsetCanvasPx + safeBottomInsetCanvasPx;
@@ -2435,6 +2446,24 @@ export function buildElegantFormalPaddedPdfSlice(
     topInsetCanvasPx: safeTopInsetCanvasPx,
     bottomInsetCanvasPx: safeBottomInsetCanvasPx,
   };
+}
+
+export function buildElegantFormalPaddedPdfSlice(
+  pdfCanvas: HTMLCanvasElement,
+  offsetY: number,
+  sliceHeight: number,
+  canvasWidthPx: number,
+  topInsetCanvasPx: number,
+  bottomInsetCanvasPx: number,
+): ElegantFormalPaddedPdfSlice {
+  return buildPaddedPdfSlice(
+    pdfCanvas,
+    offsetY,
+    sliceHeight,
+    canvasWidthPx,
+    topInsetCanvasPx,
+    bottomInsetCanvasPx,
+  );
 }
 
 export function elegantFormalCssPxToPdfMm(cssPx: number, cssWidthPx: number): number {
@@ -7294,6 +7323,24 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       const elegantFormalBottomInsetCanvasPx = captureTemplateId === 'elegant-formal'
         ? Math.round(ELEGANT_FORMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
         : 0;
+      const atsStandardTopInsetCanvasPx = captureTemplateId === 'ats-standard'
+        ? Math.round(ATS_STANDARD_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const atsStandardBottomInsetCanvasPx = captureTemplateId === 'ats-standard'
+        ? Math.round(ATS_STANDARD_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const executivePremiumTopInsetCanvasPx = captureTemplateId === 'executive-premium'
+        ? Math.round(EXECUTIVE_PREMIUM_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const executivePremiumBottomInsetCanvasPx = captureTemplateId === 'executive-premium'
+        ? Math.round(EXECUTIVE_PREMIUM_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const nordicCleanTopInsetCanvasPx = captureTemplateId === 'nordic-clean'
+        ? Math.round(NORDIC_CLEAN_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const nordicCleanBottomInsetCanvasPx = captureTemplateId === 'nordic-clean'
+        ? Math.round(NORDIC_CLEAN_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
 
       const renderPdfSlice = (
         offsetY: number,
@@ -7321,23 +7368,25 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         );
       };
 
-      const renderElegantFormalPdfSlice = (
+      const renderPaddedPdfSlice = (
         offsetY: number,
         sliceHeight: number,
         pdfPageIndex: number,
         isFinalPage: boolean,
+        topInsetCanvasPx: number,
+        bottomInsetCanvasPx: number,
       ): void => {
         if (pdfPageIndex > 0) pdf.addPage();
 
-        const topInsetCanvasPx = pdfPageIndex > 0 ? elegantFormalTopInsetCanvasPx : 0;
-        const bottomInsetCanvasPx = isFinalPage ? 0 : elegantFormalBottomInsetCanvasPx;
-        const paddedSlice = buildElegantFormalPaddedPdfSlice(
+        const topPadCanvasPx = pdfPageIndex > 0 ? topInsetCanvasPx : 0;
+        const bottomPadCanvasPx = isFinalPage ? 0 : bottomInsetCanvasPx;
+        const paddedSlice = buildPaddedPdfSlice(
           pdfCanvas,
           offsetY,
           sliceHeight,
           canvasWidthPx,
-          topInsetCanvasPx,
-          bottomInsetCanvasPx,
+          topPadCanvasPx,
+          bottomPadCanvasPx,
         );
         const paddedHeightMM = (paddedSlice.paddedHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
         pdf.addImage(
@@ -7347,6 +7396,22 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           0,
           CV_PDF_A4_WIDTH_MM,
           Math.min(paddedHeightMM, CV_PDF_A4_HEIGHT_MM),
+        );
+      };
+
+      const renderElegantFormalPdfSlice = (
+        offsetY: number,
+        sliceHeight: number,
+        pdfPageIndex: number,
+        isFinalPage: boolean,
+      ): void => {
+        renderPaddedPdfSlice(
+          offsetY,
+          sliceHeight,
+          pdfPageIndex,
+          isFinalPage,
+          elegantFormalTopInsetCanvasPx,
+          elegantFormalBottomInsetCanvasPx,
         );
       };
 
@@ -7398,6 +7463,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
 
         while (offsetY < canvasHeightPx - trailingTolerancePx) {
           const sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
+          const isFinalPage = offsetY + sliceHeight >= canvasHeightPx - trailingTolerancePx - PDF_PAGE_INTERSECTION_EPSILON_PX;
           if (semanticPagePlan && renderedPageIndex > 0) {
             const pageBottomPx = offsetY + sliceHeight;
             if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
@@ -7414,7 +7480,36 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           ) {
             break;
           }
-          renderPdfSlice(offsetY, sliceHeight, renderedPageIndex);
+          if (captureTemplateId === 'ats-standard') {
+            renderPaddedPdfSlice(
+              offsetY,
+              sliceHeight,
+              renderedPageIndex,
+              isFinalPage,
+              atsStandardTopInsetCanvasPx,
+              atsStandardBottomInsetCanvasPx,
+            );
+          } else if (captureTemplateId === 'executive-premium') {
+            renderPaddedPdfSlice(
+              offsetY,
+              sliceHeight,
+              renderedPageIndex,
+              isFinalPage,
+              executivePremiumTopInsetCanvasPx,
+              executivePremiumBottomInsetCanvasPx,
+            );
+          } else if (captureTemplateId === 'nordic-clean') {
+            renderPaddedPdfSlice(
+              offsetY,
+              sliceHeight,
+              renderedPageIndex,
+              isFinalPage,
+              nordicCleanTopInsetCanvasPx,
+              nordicCleanBottomInsetCanvasPx,
+            );
+          } else {
+            renderPdfSlice(offsetY, sliceHeight, renderedPageIndex);
+          }
           renderedPageIndex += 1;
           offsetY += sliceHeight;
         }
