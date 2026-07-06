@@ -309,8 +309,7 @@ describe('Corporate Navy export', () => {
     const exportSource = source('src/lib/export.ts');
     expect(exportSource).toContain('applyCorporateNavyKeepTogetherPagination');
     expect(exportSource).toContain("captureTemplateId === 'corporate-navy' && sourceRootForTag");
-    expect(exportSource).toContain('[data-export-group="corporate-navy-section"]');
-    expect(exportSource).toContain('[data-export-group="corporate-navy-experience"]');
+    expect(exportSource).toContain("applyCorporateFamilyKeepTogetherPagination(root, 'corporate-navy')");
   });
 
   test('Corporate Navy keep-together shifts WORK EXPERIENCE heading with first entry when heading would orphan', () => {

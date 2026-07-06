@@ -2959,7 +2959,12 @@ export function planTechSidebarPdfSliceSegments(
   return segments;
 }
 
-export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): void {
+type CorporateFamilyLayoutId = 'corporate-navy' | 'contemporary-bold';
+
+function applyCorporateFamilyKeepTogetherPagination(
+  root: HTMLElement,
+  layoutId: CorporateFamilyLayoutId,
+): void {
   void root.offsetHeight;
   const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
   const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
@@ -2971,6 +2976,9 @@ export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): voi
 
   const maxShortGroupHeight = pageHeightCssPx * CORPORATE_NAVY_MAX_KEEP_GROUP_PAGE_RATIO;
   const maxExperienceUnitHeight = pageHeightCssPx * CORPORATE_NAVY_EXPERIENCE_MAX_KEEP_UNIT_PAGE_RATIO;
+  const sectionGroupSelector = `[data-export-group="${layoutId}-section"]`;
+  const experienceGroupSelector = `[data-export-group="${layoutId}-experience"]`;
+  const bodySelector = `[data-${layoutId}-pdf-body]`;
 
   const shiftHeaderIfNeeded = (header: HTMLElement, requiredTrailingHeight: number | null): boolean => {
     const rect = getRelativeExportRect(rootBox, header, root);
@@ -3011,11 +3019,11 @@ export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): voi
     return true;
   };
 
-  const getRequiredTrailingHeightForSection = (section: HTMLElement, firstContent: HTMLElement): number | null => {
+  const getRequiredTrailingHeightForSection = (firstContent: HTMLElement): number | null => {
     const firstContentRect = getRelativeExportRect(rootBox, firstContent, root);
     if (!firstContentRect) return null;
 
-    if (firstContent.matches('[data-export-group="corporate-navy-experience"]')) {
+    if (firstContent.matches(experienceGroupSelector)) {
       const titleRow = firstContent.querySelector<HTMLElement>(':scope > div');
       const company = firstContent.querySelector<HTMLElement>(':scope > p');
       const firstBullet = Array.from(firstContent.children).find(
@@ -3049,7 +3057,7 @@ export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): voi
   for (let pass = 0; pass < 8; pass += 1) {
     let movedAnyGroup = false;
 
-    const sections = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="corporate-navy-section"]'));
+    const sections = Array.from(root.querySelectorAll<HTMLElement>(sectionGroupSelector));
     for (const section of sections) {
       const heading = section.querySelector<HTMLElement>(':scope > h2');
       if (!heading || section.firstElementChild !== heading) continue;
@@ -3057,11 +3065,11 @@ export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): voi
       const firstContent = heading.nextElementSibling;
       if (!(firstContent instanceof HTMLElement)) continue;
 
-      const requiredTrailingHeight = getRequiredTrailingHeightForSection(section, firstContent);
+      const requiredTrailingHeight = getRequiredTrailingHeightForSection(firstContent);
       if (shiftHeaderIfNeeded(heading, requiredTrailingHeight)) movedAnyGroup = true;
     }
 
-    const experienceEntries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="corporate-navy-experience"]'));
+    const experienceEntries = Array.from(root.querySelectorAll<HTMLElement>(experienceGroupSelector));
     for (const entry of experienceEntries) {
       const bullets = Array.from(entry.children).filter(
         (child): child is HTMLElement => child instanceof HTMLElement
@@ -3075,7 +3083,7 @@ export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): voi
 
     const educationRows = Array.from(
       root.querySelectorAll<HTMLElement>(
-        '[data-corporate-navy-pdf-body] [data-export-group="corporate-navy-section"] > div:not([data-export-group="corporate-navy-experience"])',
+        `${bodySelector} ${sectionGroupSelector} > div:not(${experienceGroupSelector})`,
       ),
     );
     for (const row of educationRows) {
@@ -3086,6 +3094,14 @@ export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): voi
 
     if (!movedAnyGroup) break;
   }
+}
+
+export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): void {
+  applyCorporateFamilyKeepTogetherPagination(root, 'corporate-navy');
+}
+
+export function applyContemporaryBoldKeepTogetherPagination(root: HTMLElement): void {
+  applyCorporateFamilyKeepTogetherPagination(root, 'contemporary-bold');
 }
 
 export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement): void {
@@ -7610,6 +7626,10 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     if (captureTemplateId === 'corporate-navy' && sourceRootForTag) {
       void sourceRootForTag.offsetHeight;
       applyCorporateNavyKeepTogetherPagination(sourceRootForTag);
+    }
+    if (captureTemplateId === 'contemporary-bold' && sourceRootForTag) {
+      void sourceRootForTag.offsetHeight;
+      applyContemporaryBoldKeepTogetherPagination(sourceRootForTag);
     }
     if (captureTemplateId === 'professional-classic' && sourceRootForTag) {
       // Must run on the real (pre-clone) source root, not only inside onclone: the
