@@ -1028,6 +1028,21 @@ const TECH_SIDEBAR_PAGE_BREAK_GUARD_PX = 16;
 const TECH_SIDEBAR_PAGE_BREAK_SEARCH_RANGE_PX = 48;
 const TECH_SIDEBAR_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX = 96;
 const TECH_SIDEBAR_SIDEBAR_WIDTH_MM = 64;
+// Rirekisho uses table-heavy tall-canvas slicing; continuation pages need baked padding and
+// safe source breaks that ignore thin table-border ink at row edges.
+const RIREKISHO_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const RIREKISHO_PDF_PAGE_BOTTOM_INSET_CSS_PX = 0;
+const RIREKISHO_PAGE_BREAK_GUARD_PX = 16;
+const RIREKISHO_PAGE_BREAK_SEARCH_RANGE_PX = 48;
+const RIREKISHO_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX = 96;
+const RIREKISHO_PDF_HORIZONTAL_PADDING_CSS_PX = 34;
+const RIREKISHO_CANVAS_CONTENT_SAMPLE_INSET_RATIO = 0.08;
+const RIREKISHO_GROUP_PAGE_PADDING_PX = 0.5;
+const RIREKISHO_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
+const RIREKISHO_EXPERIENCE_MAX_KEEP_UNIT_PAGE_RATIO = 0.9;
+// Self PR is one tall table cell; keep only the heading plus the first couple of lines
+// together — the body may split across pages via safe canvas slicing.
+const RIREKISHO_SELF_PR_MAX_KEEP_LINES = 2;
 // If the final PDF page would be mostly empty tail (Education/Skills/Languages only),
 // merge it with the previous page instead of emitting a sparse trailing page.
 const ELEGANT_FORMAL_TRAILING_TAIL_SPARSE_RATIO = 0.35;
@@ -2957,6 +2972,534 @@ export function planTechSidebarPdfSliceSegments(
   }
 
   return segments;
+}
+
+function getRirekishoCanvasScanBounds(
+  contentLeftPx: number,
+  contentRightPx: number,
+): { contentLeftPx: number; contentRightPx: number } {
+  const bandWidth = Math.max(0, contentRightPx - contentLeftPx);
+  const innerInsetPx = Math.max(8, Math.floor(bandWidth * RIREKISHO_CANVAS_CONTENT_SAMPLE_INSET_RATIO));
+  return {
+    contentLeftPx: contentLeftPx + innerInsetPx,
+    contentRightPx: Math.max(contentLeftPx + innerInsetPx + 1, contentRightPx - innerInsetPx),
+  };
+}
+
+function isRirekishoCanvasBreakRowWhitespace(
+  canvas: HTMLCanvasElement,
+  breakPx: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+): boolean {
+  const scanBounds = getRirekishoCanvasScanBounds(contentLeftPx, contentRightPx);
+  return isElegantFormalCanvasBreakRowWhitespace(
+    canvas,
+    breakPx,
+    scanBounds.contentLeftPx,
+    scanBounds.contentRightPx,
+  );
+}
+
+function isRirekishoCanvasRowInk(
+  canvas: HTMLCanvasElement,
+  rowY: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+): boolean {
+  return !isRirekishoCanvasBreakRowWhitespace(canvas, rowY, contentLeftPx, contentRightPx);
+}
+
+export function getRirekishoPdfContentBoundsCss(
+  root: HTMLElement,
+): { leftCssPx: number; rightCssPx: number } {
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
+  const pad = RIREKISHO_PDF_HORIZONTAL_PADDING_CSS_PX;
+  if (rootWidth <= 0) {
+    return { leftCssPx: pad + 2, rightCssPx: pad + 4 };
+  }
+  return {
+    leftCssPx: pad + 2,
+    rightCssPx: Math.max(pad + 4, rootWidth - pad - 2),
+  };
+}
+
+export function scaleRirekishoContentBoundsToCanvas(
+  boundsCss: { leftCssPx: number; rightCssPx: number },
+  canvasWidthPx: number,
+  cssWidthPx: number,
+): { contentLeftPx: number; contentRightPx: number } {
+  if (cssWidthPx <= 0 || canvasWidthPx <= 0) {
+    const fallbackPad = Math.floor(canvasWidthPx * (RIREKISHO_PDF_HORIZONTAL_PADDING_CSS_PX / 794));
+    return { contentLeftPx: fallbackPad, contentRightPx: canvasWidthPx - fallbackPad };
+  }
+  const scalePxPerCssPx = canvasWidthPx / cssWidthPx;
+  return {
+    contentLeftPx: Math.max(0, Math.floor(boundsCss.leftCssPx * scalePxPerCssPx)),
+    contentRightPx: Math.min(canvasWidthPx, Math.ceil(boundsCss.rightCssPx * scalePxPerCssPx)),
+  };
+}
+
+export function extractRirekishoInkLineIntervalsFromCanvas(
+  canvas: HTMLCanvasElement,
+  contentLeftPx: number,
+  contentRightPx: number,
+): Array<{ top: number; bottom: number }> {
+  const intervals: Array<{ top: number; bottom: number }> = [];
+  let inkStart: number | null = null;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    const isInk = isRirekishoCanvasRowInk(canvas, y, contentLeftPx, contentRightPx);
+    if (isInk) {
+      if (inkStart === null) inkStart = y;
+    } else if (inkStart !== null) {
+      intervals.push({ top: inkStart, bottom: y });
+      inkStart = null;
+    }
+  }
+  if (inkStart !== null) intervals.push({ top: inkStart, bottom: canvas.height });
+
+  const merged: Array<{ top: number; bottom: number }> = [];
+  for (const interval of intervals) {
+    const last = merged[merged.length - 1];
+    if (last && interval.top - last.bottom <= 3) {
+      last.bottom = Math.max(last.bottom, interval.bottom);
+    } else {
+      merged.push({ top: interval.top, bottom: interval.bottom });
+    }
+  }
+  return merged;
+}
+
+export function selectRirekishoPdfLineIntervalsCanvas(
+  domIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  domIntervalsReliable: boolean,
+  canvasInkIntervalsCanvasPx: Array<{ top: number; bottom: number }>,
+): {
+  intervals: Array<{ top: number; bottom: number }> | null;
+  reliable: boolean;
+  source: 'canvas' | 'dom' | 'none';
+} {
+  if (canvasInkIntervalsCanvasPx.length >= 3) {
+    return {
+      intervals: canvasInkIntervalsCanvasPx,
+      reliable: true,
+      source: 'canvas',
+    };
+  }
+  if (domIntervalsCanvasPx && domIntervalsCanvasPx.length > 0 && domIntervalsReliable) {
+    return {
+      intervals: domIntervalsCanvasPx,
+      reliable: true,
+      source: 'dom',
+    };
+  }
+  if (domIntervalsCanvasPx && domIntervalsCanvasPx.length > 0) {
+    return {
+      intervals: domIntervalsCanvasPx,
+      reliable: false,
+      source: 'dom',
+    };
+  }
+  if (canvasInkIntervalsCanvasPx.length > 0) {
+    return {
+      intervals: canvasInkIntervalsCanvasPx,
+      reliable: true,
+      source: 'canvas',
+    };
+  }
+  return { intervals: null, reliable: false, source: 'none' };
+}
+
+export function resolveRirekishoSafePageBreakCanvasPx(
+  canvas: HTMLCanvasElement,
+  domLineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  domIntervalsReliable: boolean,
+  targetBreakPx: number,
+  guardPx: number,
+  domSearchPx: number,
+  canvasSearchPx: number,
+  minBreakPx: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+): ElegantFormalPageBreakResolution {
+  const scanBounds = getRirekishoCanvasScanBounds(contentLeftPx, contentRightPx);
+  const nominalBreakPx = Math.floor(targetBreakPx);
+  let breakPx = nominalBreakPx;
+  let source: ElegantFormalPageBreakResolution['source'] = 'nominal';
+
+  const nominalCutsInk = !isRirekishoCanvasBreakRowWhitespace(
+    canvas,
+    nominalBreakPx,
+    contentLeftPx,
+    contentRightPx,
+  );
+
+  if (domIntervalsReliable && domLineIntervalsCanvasPx && domLineIntervalsCanvasPx.length > 0) {
+    const domBreakPx = findSafeElegantFormalPageBreakCanvasPx(
+      domLineIntervalsCanvasPx,
+      targetBreakPx,
+      guardPx,
+      domSearchPx,
+    );
+    if (domBreakPx !== nominalBreakPx) {
+      breakPx = domBreakPx;
+      source = 'dom';
+    }
+  }
+
+  const domBreakStillCutsInk = !isRirekishoCanvasBreakRowWhitespace(
+    canvas,
+    breakPx,
+    contentLeftPx,
+    contentRightPx,
+  );
+  const needsCanvasFallback = source === 'nominal'
+    || nominalCutsInk
+    || !domIntervalsReliable
+    || !domLineIntervalsCanvasPx
+    || domLineIntervalsCanvasPx.length === 0
+    || domBreakStillCutsInk;
+
+  if (needsCanvasFallback) {
+    const canvasBreakPx = findSafeElegantFormalPageBreakFromCanvasPixels(
+      canvas,
+      targetBreakPx,
+      guardPx,
+      canvasSearchPx,
+      minBreakPx,
+      scanBounds.contentLeftPx,
+      scanBounds.contentRightPx,
+    );
+    if (
+      canvasBreakPx !== nominalBreakPx
+      || nominalCutsInk
+      || domBreakStillCutsInk
+      || !isRirekishoCanvasBreakRowWhitespace(canvas, breakPx, contentLeftPx, contentRightPx)
+    ) {
+      breakPx = canvasBreakPx;
+      source = 'canvas';
+    }
+  }
+
+  if (breakPx <= minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+    breakPx = Math.max(minBreakPx + 1, nominalBreakPx);
+    source = nominalBreakPx === breakPx ? 'nominal' : source;
+  }
+
+  if (
+    domLineIntervalsCanvasPx
+    && domLineIntervalsCanvasPx.length > 0
+    && isUnsafeElegantFormalPageBreakCanvasPx(breakPx, domLineIntervalsCanvasPx, guardPx)
+  ) {
+    const forcedDomBreakPx = findSafeElegantFormalPageBreakCanvasPx(
+      domLineIntervalsCanvasPx,
+      targetBreakPx,
+      guardPx,
+      domSearchPx,
+    );
+    if (
+      forcedDomBreakPx !== nominalBreakPx
+      && forcedDomBreakPx > minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && !isUnsafeElegantFormalPageBreakCanvasPx(forcedDomBreakPx, domLineIntervalsCanvasPx, guardPx)
+    ) {
+      breakPx = forcedDomBreakPx;
+      source = 'dom';
+    }
+  }
+
+  if (!isRirekishoCanvasBreakRowWhitespace(canvas, breakPx, contentLeftPx, contentRightPx)) {
+    const forcedCanvasBreakPx = findSafeElegantFormalPageBreakFromCanvasPixels(
+      canvas,
+      targetBreakPx,
+      guardPx,
+      canvasSearchPx,
+      minBreakPx,
+      scanBounds.contentLeftPx,
+      scanBounds.contentRightPx,
+    );
+    if (
+      forcedCanvasBreakPx !== nominalBreakPx
+      && forcedCanvasBreakPx > minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && isRirekishoCanvasBreakRowWhitespace(canvas, forcedCanvasBreakPx, contentLeftPx, contentRightPx)
+    ) {
+      breakPx = forcedCanvasBreakPx;
+      source = 'canvas';
+    }
+  }
+
+  return { breakPx, source };
+}
+
+export type RirekishoPdfSliceSegment = ElegantFormalPdfSliceSegment;
+
+export function rebalanceRirekishoSparseTrailingPdfSliceSegments(
+  segments: RirekishoPdfSliceSegment[],
+  pageHeightPx: number,
+  trailingTolerancePx: number,
+): RirekishoPdfSliceSegment[] {
+  return rebalanceElegantFormalSparseTrailingPdfSliceSegments(
+    segments,
+    pageHeightPx,
+    trailingTolerancePx,
+    null,
+  );
+}
+
+function getRirekishoTextLineIntervalsInElement(
+  root: HTMLElement,
+  rootBox: { top: number },
+  element: HTMLElement,
+): ElegantFormalTextLineIntervalCss[] {
+  const elementRect = getRelativeExportRect(rootBox, element, root);
+  if (!elementRect) return [];
+
+  return collectElegantFormalTextLineIntervalsCss(root).filter(
+    interval => interval.bottomCssPx > elementRect.top + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && interval.topCssPx < elementRect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX,
+  );
+}
+
+function getRirekishoRequiredTrailingHeight(
+  root: HTMLElement,
+  rootBox: { top: number },
+  firstContent: HTMLElement,
+): number | null {
+  const firstContentRect = getRelativeExportRect(rootBox, firstContent, root);
+  if (!firstContentRect) return null;
+
+  if (firstContent.matches('[data-rirekisho-summary-row="true"]')) {
+    const lineIntervals = getRirekishoTextLineIntervalsInElement(root, rootBox, firstContent);
+    const reliableLineIntervals = lineIntervals.filter(
+      interval => (interval.bottomCssPx - interval.topCssPx) <= ELEGANT_FORMAL_DOM_LINE_MAX_HEIGHT_CSS_PX,
+    );
+    if (reliableLineIntervals.length > 0) {
+      const keepLines = reliableLineIntervals.slice(0, RIREKISHO_SELF_PR_MAX_KEEP_LINES);
+      const lastLine = keepLines[keepLines.length - 1];
+      return lastLine.bottomCssPx - firstContentRect.top + RIREKISHO_PAGE_BREAK_GUARD_PX;
+    }
+    const estimatedTwoLineHeight = 10.5 * 1.38 * RIREKISHO_SELF_PR_MAX_KEEP_LINES;
+    return Math.min(firstContentRect.height, estimatedTwoLineHeight) + RIREKISHO_PAGE_BREAK_GUARD_PX;
+  }
+
+  const firstBullet = firstContent.querySelector<HTMLElement>('[data-rirekisho-bullet-row="true"]');
+  if (firstBullet) {
+    const bulletRect = getRelativeExportRect(rootBox, firstBullet, root);
+    if (bulletRect && bulletRect.bottom > firstContentRect.top) {
+      return bulletRect.bottom - firstContentRect.top;
+    }
+  }
+
+  const firstMeaningful = firstContent.querySelector<HTMLElement>('[data-export-meaningful="true"]');
+  if (firstMeaningful && firstMeaningful !== firstContent) {
+    const meaningfulRect = getRelativeExportRect(rootBox, firstMeaningful, root);
+    if (meaningfulRect && meaningfulRect.bottom > firstContentRect.top) {
+      return meaningfulRect.bottom - firstContentRect.top;
+    }
+  }
+
+  return firstContentRect.height;
+}
+
+export function planRirekishoPdfSliceSegments(
+  canvasHeightPx: number,
+  pageHeightPx: number,
+  trailingTolerancePx: number,
+  pdfCanvas: HTMLCanvasElement,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  domIntervalsReliable: boolean,
+  guardCanvasPx: number,
+  domSearchCanvasPx: number,
+  canvasSearchCanvasPx: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+  breakSourcesOut: string[],
+): RirekishoPdfSliceSegment[] {
+  const segments: RirekishoPdfSliceSegment[] = [];
+  let offsetY = 0;
+
+  while (offsetY < canvasHeightPx - trailingTolerancePx) {
+    let sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
+    let breakSource: ElegantFormalPageBreakResolution['source'] = 'nominal';
+
+    if (
+      sliceHeight >= pageHeightPx - PDF_PAGE_INTERSECTION_EPSILON_PX
+      && offsetY + pageHeightPx < canvasHeightPx - trailingTolerancePx
+    ) {
+      const targetBreakPx = offsetY + pageHeightPx;
+      const breakResolution = resolveRirekishoSafePageBreakCanvasPx(
+        pdfCanvas,
+        lineIntervalsCanvasPx,
+        domIntervalsReliable,
+        targetBreakPx,
+        guardCanvasPx,
+        domSearchCanvasPx,
+        canvasSearchCanvasPx,
+        offsetY,
+        contentLeftPx,
+        contentRightPx,
+      );
+      breakSource = breakResolution.source;
+      breakSourcesOut.push(breakResolution.source);
+      if (breakResolution.breakPx > offsetY + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        sliceHeight = breakResolution.breakPx - offsetY;
+      }
+    }
+
+    segments.push({ startPx: offsetY, endPx: offsetY + sliceHeight, breakSource });
+    offsetY += sliceHeight;
+  }
+
+  return rebalanceRirekishoSparseTrailingPdfSliceSegments(
+    segments,
+    pageHeightPx,
+    trailingTolerancePx,
+  );
+}
+
+function getRirekishoSectionFirstContentElement(section: HTMLElement): HTMLElement | null {
+  const table = section.querySelector<HTMLElement>(':scope > table');
+  if (!table) return null;
+  const meaningfulRow = table.querySelector<HTMLElement>('tr[data-export-meaningful="true"]');
+  if (meaningfulRow) return meaningfulRow;
+  const rows = Array.from(table.querySelectorAll<HTMLElement>('tr'));
+  return rows[1] ?? rows[0] ?? null;
+}
+
+export function applyRirekishoKeepTogetherPagination(root: HTMLElement): void {
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
+  if (rootWidth <= 0) return;
+
+  const rootBox = { top: rootRect?.top ?? 0 };
+  const pageHeightCssPx = rootWidth * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return;
+
+  const maxShortGroupHeight = pageHeightCssPx * RIREKISHO_MAX_KEEP_GROUP_PAGE_RATIO;
+  const maxExperienceUnitHeight = pageHeightCssPx * RIREKISHO_EXPERIENCE_MAX_KEEP_UNIT_PAGE_RATIO;
+
+  const shiftHeaderIfNeeded = (header: HTMLElement, requiredTrailingHeight: number | null): boolean => {
+    const rect = getRelativeExportRect(rootBox, header, root);
+    if (!rect || rect.height <= 0) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const headerItselfStraddles = startsOnPage !== endsOnPage;
+
+    const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
+    const roomAfterHeader = pageBottom - rect.bottom;
+    const wouldOrphanHeading = requiredTrailingHeight !== null
+      && requiredTrailingHeight > 0
+      && roomAfterHeader + PDF_PAGE_INTERSECTION_EPSILON_PX < requiredTrailingHeight;
+
+    if (!headerItselfStraddles && !wouldOrphanHeading) return false;
+
+    const shiftPx = Math.max(0, pageBottom - rect.top + RIREKISHO_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(header, shiftPx);
+    return true;
+  };
+
+  const shiftIfStraddling = (el: HTMLElement, maxHeight: number): boolean => {
+    if (el.matches('[data-rirekisho-summary-row="true"]')) return false;
+
+    const rect = getRelativeExportRect(rootBox, el, root);
+    if (!rect || rect.height <= 0 || rect.height >= maxHeight) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    if (startsOnPage === endsOnPage) return false;
+
+    const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+    const shiftPx = Math.max(0, nextPageTop - rect.top + RIREKISHO_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(el, shiftPx);
+    return true;
+  };
+
+  for (let pass = 0; pass < 8; pass += 1) {
+    let movedAnyGroup = false;
+
+    const sections = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="rirekisho-section"]'));
+    for (const section of sections) {
+      const heading = section.querySelector<HTMLElement>(':scope > h2');
+      if (!heading || section.firstElementChild !== heading) continue;
+
+      const firstContent = getRirekishoSectionFirstContentElement(section);
+      if (!firstContent) continue;
+
+      const requiredTrailingHeight = getRirekishoRequiredTrailingHeight(root, rootBox, firstContent);
+      if (shiftHeaderIfNeeded(heading, requiredTrailingHeight)) movedAnyGroup = true;
+    }
+
+    const bulletRows = Array.from(root.querySelectorAll<HTMLElement>('[data-rirekisho-bullet-row="true"]'));
+    for (const bullet of bulletRows) {
+      if (shiftIfStraddling(bullet, maxExperienceUnitHeight)) movedAnyGroup = true;
+    }
+
+    const tableRows = Array.from(root.querySelectorAll<HTMLElement>('tr[data-export-meaningful="true"]'));
+    for (const row of tableRows) {
+      if (row.matches('[data-rirekisho-summary-row="true"]')) continue;
+      if (shiftIfStraddling(row, maxShortGroupHeight)) movedAnyGroup = true;
+    }
+
+    if (!movedAnyGroup) break;
+  }
+
+  applyRirekishoSelfPrPageBalance(root);
+}
+
+export function applyRirekishoSelfPrPageBalance(root: HTMLElement): void {
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  if (!rootRect || rootRect.width <= 0) return;
+
+  const rootBox = { top: rootRect.top ?? 0 };
+  const pageHeightCssPx = rootRect.width * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return;
+
+  const selfPrSection = root.querySelector<HTMLElement>('[data-rirekisho-section-kind="self-pr"]');
+  if (!selfPrSection) return;
+
+  const heading = selfPrSection.querySelector<HTMLElement>('h2');
+  const summaryRow = selfPrSection.querySelector<HTMLElement>('[data-rirekisho-summary-row="true"]');
+  if (!heading || !summaryRow) return;
+
+  const headingMargin = parseCssPx(heading.style.marginTop);
+  if (headingMargin <= PDF_PAGE_INTERSECTION_EPSILON_PX) return;
+
+  const headingRect = getRelativeExportRect(rootBox, heading, root);
+  if (!headingRect) return;
+
+  const headingPage = Math.floor((headingRect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+  if (headingPage < 1) return;
+
+  const prevPageBottom = headingPage * pageHeightCssPx;
+  const prevPageTop = (headingPage - 1) * pageHeightCssPx;
+  const requiredTrailingHeight = getRirekishoRequiredTrailingHeight(root, rootBox, summaryRow);
+  if (requiredTrailingHeight === null) return;
+
+  const minBlockHeight = headingRect.height + requiredTrailingHeight;
+  const lastBottomOnPrevPage = Array.from(root.querySelectorAll<HTMLElement>('[data-export-meaningful="true"]'))
+    .filter((el) => !selfPrSection.contains(el))
+    .map((el) => getRelativeExportRect(rootBox, el, root))
+    .filter((rect): rect is NonNullable<ReturnType<typeof getRelativeExportRect>> => Boolean(
+      rect && rect.bottom <= prevPageBottom + PDF_PAGE_INTERSECTION_EPSILON_PX && rect.bottom > prevPageTop,
+    ))
+    .reduce((maxBottom, rect) => Math.max(maxBottom, rect.bottom), prevPageTop);
+
+  const blankOnPrevPage = prevPageBottom - lastBottomOnPrevPage;
+  if (blankOnPrevPage + PDF_PAGE_INTERSECTION_EPSILON_PX < minBlockHeight) return;
+
+  const desiredHeadingTop = prevPageBottom - minBlockHeight;
+  const reduceBy = headingRect.top - desiredHeadingTop;
+  if (reduceBy <= PDF_PAGE_INTERSECTION_EPSILON_PX) return;
+
+  heading.style.setProperty('margin-top', `${Math.max(0, headingMargin - reduceBy)}px`);
 }
 
 type CorporateFamilyLayoutId = 'corporate-navy' | 'contemporary-bold';
@@ -6758,7 +7301,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
   }
 
   // ── Section heading row (full-width dark bar) ─────────────────────────────
-  function sectionHeadingRow(kanji: string) {
+  function sectionHeadingRow(kanji: string, options: { keepNext?: boolean } = {}) {
     return fixedTable(
       [
         new TableRow({
@@ -6770,6 +7313,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
               children: [
                 new Paragraph({
                   alignment: AlignmentType.LEFT,
+                  keepNext: options.keepNext ?? false,
                   children: [jpRun(kanji, { bold: true, size: 24, color: 'FFFFFF' })],
                   spacing: { before: 60, after: 60 },
                 }),
@@ -6781,6 +7325,94 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
       [rirekishoTableWidthDxa],
       noBorder,
     );
+  }
+
+  function rirekishoLanguagesHeadingTableRow() {
+    return new TableRow({
+      cantSplit: true,
+      children: [
+        new TableCell({
+          columnSpan: 2,
+          width: { size: rirekishoTableWidthDxa, type: WidthType.DXA },
+          borders: thinBorder,
+          shading: sectionBg,
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.LEFT,
+              keepNext: true,
+              keepLines: true,
+              children: [jpRun('語学', { bold: true, size: 24, color: 'FFFFFF' })],
+              spacing: { before: 60, after: 60 },
+            }),
+          ],
+        }),
+      ],
+    });
+  }
+
+  function rirekishoLanguagesSectionTable() {
+    const langHeaderRow = new TableRow({
+      cantSplit: true,
+      children: [
+        new TableCell({
+          width: { size: 4680, type: WidthType.DXA },
+          borders: thinBorder,
+          shading: headerBg,
+          children: [new Paragraph({
+            keepNext: true,
+            keepLines: true,
+            children: [jpRun('言語', { bold: true, size: 18, color: '374151' })],
+            spacing: { before: 40, after: 40 },
+          })],
+        }),
+        new TableCell({
+          width: { size: 4680, type: WidthType.DXA },
+          borders: thinBorder,
+          shading: headerBg,
+          children: [new Paragraph({
+            keepNext: true,
+            keepLines: true,
+            children: [jpRun('レベル', { bold: true, size: 18, color: '374151' })],
+            spacing: { before: 40, after: 40 },
+          })],
+        }),
+      ],
+    });
+    const langDataRows = cvData.languages.map((lang, index) =>
+      new TableRow({
+        cantSplit: true,
+        children: [
+          new TableCell({
+            width: { size: 4680, type: WidthType.DXA },
+            borders: thinBorder,
+            children: [new Paragraph({
+              keepNext: index < cvData.languages.length - 1,
+              keepLines: true,
+              children: [jpRun(lang.name, { bold: true, size: 20 })],
+              spacing: { before: 40, after: 40 },
+            })],
+          }),
+          new TableCell({
+            width: { size: 4680, type: WidthType.DXA },
+            borders: thinBorder,
+            children: [new Paragraph({
+              keepNext: index < cvData.languages.length - 1,
+              keepLines: true,
+              children: [jpRun(lang.level || '', { size: 20, color: '4B5563' })],
+              spacing: { before: 40, after: 40 },
+            })],
+          }),
+        ],
+      })
+    );
+
+    return new Table({
+      width: { size: rirekishoTableWidthDxa, type: WidthType.DXA },
+      layout: TableLayoutType.FIXED,
+      columnWidths: [4680, 4680],
+      borders: noBorder,
+      rows: [rirekishoLanguagesHeadingTableRow(), langHeaderRow, ...langDataRows],
+    });
   }
 
   // ── Content table row (期間 | details) ───────────────────────────────────
@@ -7091,40 +7723,7 @@ export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): P
 
   // ── 6. LANGUAGES 語学 (one per row: Language | Level) ─────────────────────
   if (cvData.languages.length > 0) {
-    children.push(sectionHeadingRow('語学'));
-    const langHeaderRow = new TableRow({
-      children: [
-        new TableCell({
-          width: { size: 50, type: WidthType.PERCENTAGE },
-          borders: thinBorder,
-          shading: headerBg,
-          children: [new Paragraph({ children: [jpRun('言語', { bold: true, size: 18, color: '374151' })], spacing: { before: 40, after: 40 } })],
-        }),
-        new TableCell({
-          width: { size: 50, type: WidthType.PERCENTAGE },
-          borders: thinBorder,
-          shading: headerBg,
-          children: [new Paragraph({ children: [jpRun('レベル', { bold: true, size: 18, color: '374151' })], spacing: { before: 40, after: 40 } })],
-        }),
-      ],
-    });
-    const langRows = [langHeaderRow, ...cvData.languages.map(lang =>
-      new TableRow({
-        children: [
-          new TableCell({
-            width: { size: 50, type: WidthType.PERCENTAGE },
-            borders: thinBorder,
-            children: [new Paragraph({ children: [jpRun(lang.name, { bold: true, size: 20 })], spacing: { before: 40, after: 40 } })],
-          }),
-          new TableCell({
-            width: { size: 50, type: WidthType.PERCENTAGE },
-            borders: thinBorder,
-            children: [new Paragraph({ children: [jpRun(lang.level || '', { size: 20, color: '4B5563' })], spacing: { before: 40, after: 40 } })],
-          }),
-        ],
-      })
-    )];
-    children.push(fixedTable(langRows, [4680, 4680], noBorder));
+    children.push(rirekishoLanguagesSectionTable());
     children.push(spacer(80));
   }
 
@@ -7599,6 +8198,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   let techSidebarTextLineIntervalsCss: ElegantFormalTextLineIntervalCss[] | null = null;
   let techSidebarMainColumnBoundsCss: { leftCssPx: number; rightCssPx: number } | null = null;
   const techSidebarPageBreakSources: string[] = [];
+  let rirekishoTextLineIntervalsCss: ElegantFormalTextLineIntervalCss[] | null = null;
+  let rirekishoContentBoundsCss: { leftCssPx: number; rightCssPx: number } | null = null;
+  const rirekishoPageBreakSources: string[] = [];
   try {
     // ── HARD VERIFICATION: capture the actual template child directly, not the
     //    scroll wrapper. The #cv-preview / #cv-inline-preview div is an
@@ -7630,6 +8232,12 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     if (captureTemplateId === 'contemporary-bold' && sourceRootForTag) {
       void sourceRootForTag.offsetHeight;
       applyContemporaryBoldKeepTogetherPagination(sourceRootForTag);
+    }
+    if (captureTemplateId === 'rirekisho' && sourceRootForTag) {
+      void sourceRootForTag.offsetHeight;
+      applyRirekishoKeepTogetherPagination(sourceRootForTag);
+      rirekishoTextLineIntervalsCss = collectElegantFormalTextLineIntervalsCss(sourceRootForTag);
+      rirekishoContentBoundsCss = getRirekishoPdfContentBoundsCss(sourceRootForTag);
     }
     if (captureTemplateId === 'professional-classic' && sourceRootForTag) {
       // Must run on the real (pre-clone) source root, not only inside onclone: the
@@ -7943,6 +8551,12 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       const techSidebarBottomInsetCanvasPx = captureTemplateId === 'tech-sidebar'
         ? Math.round(TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
         : 0;
+      const rirekishoTopInsetCanvasPx = captureTemplateId === 'rirekisho'
+        ? Math.round(RIREKISHO_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const rirekishoBottomInsetCanvasPx = captureTemplateId === 'rirekisho'
+        ? Math.round(RIREKISHO_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
 
       const renderPdfSlice = (
         offsetY: number,
@@ -8131,6 +8745,81 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
             segmentIndex === segments.length - 1,
             techSidebarTopInsetCanvasPx,
             techSidebarBottomInsetCanvasPx,
+          );
+          renderedPageIndex += 1;
+        }
+      } else if (captureTemplateId === 'rirekisho') {
+        const rirekishoDomLineIntervalsCanvas = (
+          rirekishoTextLineIntervalsCss
+          && rirekishoTextLineIntervalsCss.length > 0
+        )
+          ? scaleElegantFormalTextLineIntervalsToCanvas(rirekishoTextLineIntervalsCss, cssToCanvasScale)
+          : null;
+        const rirekishoDomIntervalsReliable = rirekishoTextLineIntervalsCss
+          ? areElegantFormalDomLineIntervalsReliable(rirekishoTextLineIntervalsCss)
+          : false;
+        const rirekishoContentBoundsCanvas = scaleRirekishoContentBoundsToCanvas(
+          rirekishoContentBoundsCss ?? getRirekishoPdfContentBoundsCss(
+            taggedCaptureTarget ?? (firstChild ?? element),
+          ),
+          canvasWidthPx,
+          captureWidth,
+        );
+        const rirekishoCanvasInkLineIntervals = extractRirekishoInkLineIntervalsFromCanvas(
+          pdfCanvas,
+          rirekishoContentBoundsCanvas.contentLeftPx,
+          rirekishoContentBoundsCanvas.contentRightPx,
+        );
+        const rirekishoIntervalSelection = selectRirekishoPdfLineIntervalsCanvas(
+          rirekishoDomLineIntervalsCanvas,
+          rirekishoDomIntervalsReliable,
+          rirekishoCanvasInkLineIntervals,
+        );
+        const rirekishoGuardCanvasPx = RIREKISHO_PAGE_BREAK_GUARD_PX * cssToCanvasScale;
+        const rirekishoDomSearchCanvasPx = RIREKISHO_PAGE_BREAK_SEARCH_RANGE_PX * cssToCanvasScale;
+        const rirekishoCanvasSearchCanvasPx = RIREKISHO_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX * cssToCanvasScale;
+        const segments = planRirekishoPdfSliceSegments(
+          canvasHeightPx,
+          pageHeightPx,
+          trailingTolerancePx,
+          pdfCanvas,
+          rirekishoIntervalSelection.intervals,
+          rirekishoIntervalSelection.reliable,
+          rirekishoGuardCanvasPx,
+          rirekishoDomSearchCanvasPx,
+          rirekishoCanvasSearchCanvasPx,
+          rirekishoContentBoundsCanvas.contentLeftPx,
+          rirekishoContentBoundsCanvas.contentRightPx,
+          rirekishoPageBreakSources,
+        );
+
+        let renderedPageIndex = 0;
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          const segment = segments[segmentIndex];
+          const offsetY = segment.startPx;
+          const sliceHeight = segment.endPx - segment.startPx;
+          if (semanticPagePlan && segmentIndex > 0) {
+            const pageBottomPx = offsetY + sliceHeight;
+            if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
+              if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
+              continue;
+            }
+          }
+          if (
+            shouldTrimBlankPdfSlices
+            && !semanticPagePlan
+            && segmentIndex > 0
+            && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
+          ) {
+            break;
+          }
+          renderPaddedPdfSlice(
+            offsetY,
+            sliceHeight,
+            renderedPageIndex,
+            segmentIndex === segments.length - 1,
+            rirekishoTopInsetCanvasPx,
+            rirekishoBottomInsetCanvasPx,
           );
           renderedPageIndex += 1;
         }

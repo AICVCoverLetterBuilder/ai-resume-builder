@@ -7,8 +7,20 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import { createRirekishoPdfTemplate } from '@/lib/rirekisho-pdf-template';
 import {
+  applyRirekishoKeepTogetherPagination,
+  applyRirekishoSelfPrPageBalance,
+  buildPaddedPdfSlice,
   buildRirekishoPdfBlob,
   exportRirekishoToDOCX,
+  extractRirekishoInkLineIntervalsFromCanvas,
+  findSafeElegantFormalPageBreakCanvasPx,
+  getRirekishoPdfContentBoundsCss,
+  isUnsafeElegantFormalPageBreakCanvasPx,
+  planRirekishoPdfSliceSegments,
+  rebalanceRirekishoSparseTrailingPdfSliceSegments,
+  resolveRirekishoSafePageBreakCanvasPx,
+  scaleRirekishoContentBoundsToCanvas,
+  selectRirekishoPdfLineIntervalsCanvas,
 } from '@/lib/export';
 import type { CVData } from '@/lib/types';
 
@@ -185,6 +197,41 @@ function source(file: string): string {
   return fs.readFileSync(path.resolve(file), 'utf8');
 }
 
+function rectAttr(top: number, left: number, width: number, height: number): string {
+  return [top, left, width, height].join(',');
+}
+
+function installRectMock() {
+  return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function getRect(this: HTMLElement) {
+    const raw = this.getAttribute('data-test-rect');
+    if (!raw) {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    }
+    const [top, left, width, height] = raw.split(',').map(Number);
+    return {
+      x: left,
+      y: top,
+      top,
+      left,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   loadedImageSources = [];
@@ -234,6 +281,8 @@ describe('Rirekisho export', () => {
     expect(rootText).toContain('職　歴');
     expect(rootText).toContain('スキル');
     expect(rootText).toContain('自己PR');
+    expect(root.querySelector('[data-rirekisho-summary-row="true"]')).not.toBeNull();
+    expect(root.querySelector('[data-rirekisho-section-kind="self-pr"]')).not.toBeNull();
     expect(rootText).toContain('Dragan Obradović');
     expect(photoBox.style.width).toBe('90px');
     expect(photoBox.style.height).toBe('120px');
@@ -241,6 +290,29 @@ describe('Rirekisho export', () => {
     expect(photo.style.objectFit).toBe('cover');
     expect(skills).toEqual(['Teamwork', 'Organization', 'Coaching', 'Coaching', 'Leadership']);
     expect(bullets).toHaveLength(4);
+  });
+
+  test('section bar headings use a fixed-height flex bar with inner label wrapper for Android CJK rendering', () => {
+    const root = createRirekishoPdfTemplate(cv(), { locale: 'en', photoDataUrl: croppedPhoto });
+    const headings = Array.from(root.querySelectorAll<HTMLElement>('section[data-export-group="rirekisho-section"] > h2'));
+
+    expect(headings.length).toBeGreaterThanOrEqual(5);
+    for (const heading of headings) {
+      expect(heading.style.display).toBe('flex');
+      expect(heading.style.alignItems).toBe('center');
+      expect(heading.style.height).toBe('28px');
+      expect(heading.style.minHeight).toBe('28px');
+      expect(heading.style.overflow).toBe('visible');
+      const label = heading.querySelector('[data-rirekisho-section-bar-label="true"]') as HTMLElement | null;
+      expect(label).not.toBeNull();
+      expect(label!.style.display).toBe('inline-flex');
+      expect(label!.style.alignItems).toBe('center');
+      expect(label!.style.lineHeight).toBe('1');
+      expect(label!.style.transform).toBe('translateY(-1px)');
+    }
+    expect(headings.map(h => (h.textContent ?? '').replace(/\u00a0/g, ' '))).toEqual(
+      expect.arrayContaining(['学　歴', '職　歴', 'スキル', '自己PR']),
+    );
   });
 
   test('production PDF route uses latest cvRef, direct export, and disables print fallback', () => {
@@ -276,6 +348,322 @@ describe('Rirekisho export', () => {
     expect(scaledWidth / scaledHeight).toBeCloseTo(600 / 900, 3);
     expect(dx).toBe(0);
     expect(dy).toBeLessThan(0);
+  });
+
+  test('Rirekisho PDF export wires keep-together pagination and padded safe slicing before html2canvas capture', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('applyRirekishoKeepTogetherPagination');
+    expect(exportSource).toContain("captureTemplateId === 'rirekisho' && sourceRootForTag");
+    expect(exportSource).toContain('RIREKISHO_PDF_PAGE_TOP_INSET_CSS_PX');
+    expect(exportSource).toContain('RIREKISHO_PDF_PAGE_BOTTOM_INSET_CSS_PX = 0');
+    expect(exportSource).toContain('rebalanceRirekishoSparseTrailingPdfSliceSegments');
+    expect(exportSource).toContain('applyRirekishoSelfPrPageBalance');
+    expect(exportSource).toContain('RIREKISHO_SELF_PR_MAX_KEEP_LINES');
+    expect(exportSource).toContain('planRirekishoPdfSliceSegments');
+    expect(exportSource).toContain("} else if (captureTemplateId === 'rirekisho')");
+    expect(exportSource).toContain('renderPaddedPdfSlice');
+    expect(exportSource).not.toMatch(/captureTemplateId === 'rirekisho'[\s\S]{0,120}renderPdfSlice\(/);
+  });
+
+  test('Rirekisho keep-together shifts 職歴 heading with first table row when heading would orphan', () => {
+    document.body.innerHTML = `
+      <div data-template-id="rirekisho" data-test-rect="${rectAttr(0, 0, 794, 3200)}">
+        <section data-export-group="rirekisho-section" data-test-rect="${rectAttr(1080, 34, 726, 180)}">
+          <h2 data-test-rect="${rectAttr(1100, 34, 726, 22)}">職　歴</h2>
+          <table data-test-rect="${rectAttr(1130, 34, 726, 120)}">
+            <tr data-export-meaningful="true" data-test-rect="${rectAttr(1130, 34, 726, 28)}">
+              <td>2023-05〜現在</td>
+              <td>Učitelj u osnovnoj školi</td>
+            </tr>
+            <tr data-rirekisho-bullet-row="true" data-test-rect="${rectAttr(1160, 34, 726, 24)}">
+              <td></td>
+              <td>Planirao sam nastavne jedinice.</td>
+            </tr>
+          </table>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="rirekisho"]') as HTMLElement;
+    const heading = root.querySelector('h2') as HTMLElement;
+
+    applyRirekishoKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('職');
+    expect(document.body.textContent).toContain('Planirao sam nastavne jedinice');
+  });
+
+  test('Rirekisho keep-together shifts straddling work-history bullet rows to the next page', () => {
+    document.body.innerHTML = `
+      <div data-template-id="rirekisho" data-test-rect="${rectAttr(0, 0, 794, 3200)}">
+        <table>
+          <tr data-rirekisho-bullet-row="true" data-test-rect="${rectAttr(1100, 34, 726, 48)}">
+            <td></td>
+            <td>Koristio sam geografske karte i digitalne alate za nastavu.</td>
+          </tr>
+        </table>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="rirekisho"]') as HTMLElement;
+    const bullet = root.querySelector('[data-rirekisho-bullet-row="true"]') as HTMLElement;
+
+    applyRirekishoKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(bullet.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Koristio sam geografske karte');
+  });
+
+  test('Rirekisho keep-together keeps 自己PR on the current page when only the heading plus two lines are required', () => {
+    document.body.innerHTML = `
+      <div data-template-id="rirekisho" data-test-rect="${rectAttr(0, 0, 794, 3200)}">
+        <section data-export-group="rirekisho-section" data-rirekisho-section-kind="languages" data-test-rect="${rectAttr(980, 34, 726, 40)}">
+          <h2 data-test-rect="${rectAttr(980, 34, 726, 22)}">語学</h2>
+          <table>
+            <tr data-export-meaningful="true" data-test-rect="${rectAttr(1006, 34, 726, 18)}">
+              <td>Serbian</td><td>Native</td>
+            </tr>
+          </table>
+        </section>
+        <section data-export-group="rirekisho-section" data-rirekisho-section-kind="self-pr" data-test-rect="${rectAttr(1028, 34, 726, 220)}">
+          <h2 data-test-rect="${rectAttr(1028, 34, 726, 22)}">自己PR</h2>
+          <table>
+            <tr data-export-meaningful="true" data-rirekisho-summary-row="true" data-test-rect="${rectAttr(1054, 34, 726, 180)}">
+              <td>Iskusan učitelj sa oko devet godina rada u obrazovanju. Posebnu vrednost donosi kroz koučing i liderske kompetencije.</td>
+            </tr>
+          </table>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="rirekisho"]') as HTMLElement;
+    const heading = root.querySelector('[data-rirekisho-section-kind="self-pr"] h2') as HTMLElement;
+
+    applyRirekishoKeepTogetherPagination(root);
+
+    expect(heading.style.marginTop).toBe('');
+    expect(document.body.textContent).toContain('自己PR');
+    expect(document.body.textContent).toContain('Iskusan učitelj');
+  });
+
+  test('Rirekisho self-pr page balance pulls an over-shifted 自己PR heading back when the previous page has room', () => {
+    document.body.innerHTML = `
+      <div data-template-id="rirekisho" data-test-rect="${rectAttr(0, 0, 794, 3200)}">
+        <section data-export-group="rirekisho-section" data-rirekisho-section-kind="languages" data-test-rect="${rectAttr(980, 34, 726, 40)}">
+          <h2 data-test-rect="${rectAttr(980, 34, 726, 22)}">語学</h2>
+          <table>
+            <tr data-export-meaningful="true" data-test-rect="${rectAttr(1006, 34, 726, 18)}">
+              <td>Serbian</td><td>Native</td>
+            </tr>
+          </table>
+        </section>
+        <section data-export-group="rirekisho-section" data-rirekisho-section-kind="self-pr" data-test-rect="${rectAttr(1140, 34, 726, 220)}">
+          <h2 style="margin-top: 112px" data-test-rect="${rectAttr(1252, 34, 726, 22)}">自己PR</h2>
+          <table>
+            <tr data-export-meaningful="true" data-rirekisho-summary-row="true" data-test-rect="${rectAttr(1278, 34, 726, 180)}">
+              <td>Iskusan učitelj sa oko devet godina rada u obrazovanju. Posebnu vrednost donosi kroz koučing i liderske kompetencije.</td>
+            </tr>
+          </table>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="rirekisho"]') as HTMLElement;
+    const heading = root.querySelector('[data-rirekisho-section-kind="self-pr"] h2') as HTMLElement;
+
+    applyRirekishoSelfPrPageBalance(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeLessThan(112);
+    expect(document.body.textContent).toContain('自己PR');
+  });
+
+  test('Rirekisho keep-together does not shift a section that already fits on one page', () => {
+    document.body.innerHTML = `
+      <div data-template-id="rirekisho" data-test-rect="${rectAttr(0, 0, 794, 3200)}">
+        <section data-export-group="rirekisho-section" data-test-rect="${rectAttr(820, 34, 726, 120)}">
+          <h2 data-test-rect="${rectAttr(820, 34, 726, 22)}">自己PR</h2>
+          <table data-test-rect="${rectAttr(850, 34, 726, 80)}">
+            <tr data-export-meaningful="true" data-test-rect="${rectAttr(850, 34, 726, 80)}">
+              <td>Iskusan učitelj sa oko devet godina rada u obrazovanju.</td>
+            </tr>
+          </table>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="rirekisho"]') as HTMLElement;
+    const heading = root.querySelector('h2') as HTMLElement;
+
+    applyRirekishoKeepTogetherPagination(root);
+
+    expect(heading.style.marginTop).toBe('');
+  });
+
+  test('Rirekisho PDF export bakes continuation-page top padding and avoids slicing through text lines', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('collectElegantFormalTextLineIntervalsCss(sourceRootForTag)');
+    expect(exportSource).toContain('getRirekishoPdfContentBoundsCss');
+    expect(exportSource).toContain('extractRirekishoInkLineIntervalsFromCanvas');
+    expect(exportSource).toContain('selectRirekishoPdfLineIntervalsCanvas');
+    expect(exportSource).toContain('resolveRirekishoSafePageBreakCanvasPx');
+
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = 800;
+    sourceCanvas.height = 1200;
+    const sourceCtx = sourceCanvas.getContext('2d');
+    if (sourceCtx) {
+      sourceCtx.fillStyle = '#ffffff';
+      sourceCtx.fillRect(0, 0, 800, 1200);
+      sourceCtx.fillStyle = '#111111';
+      sourceCtx.fillRect(40, 200, 720, 18);
+    }
+
+    const padded = buildPaddedPdfSlice(sourceCanvas, 200, 400, 800, 28, 0);
+    expect(padded.topInsetCanvasPx).toBe(28);
+    expect(padded.bottomInsetCanvasPx).toBe(0);
+    expect(padded.paddedHeightPx).toBe(428);
+
+    const explicitBounds = getRirekishoPdfContentBoundsCss(
+      createRirekishoPdfTemplate(cv(), { locale: 'en', photoDataUrl: croppedPhoto }),
+    );
+    const canvasBounds = scaleRirekishoContentBoundsToCanvas(explicitBounds, 800, 794);
+    expect(canvasBounds.contentLeftPx).toBeGreaterThan(0);
+    expect(canvasBounds.contentRightPx).toBeGreaterThan(canvasBounds.contentLeftPx);
+
+    const intervals = [
+      { top: 1080, bottom: 1102 },
+      { top: 1106, bottom: 1128 },
+    ];
+    expect(isUnsafeElegantFormalPageBreakCanvasPx(1095, intervals, 16)).toBe(true);
+    expect(findSafeElegantFormalPageBreakCanvasPx(intervals, 1131, 16, 48)).toBeLessThan(1131);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 1400;
+    const ctx = {
+      drawImage: vi.fn(),
+      getImageData: vi.fn((_x: number, y: number, w: number, h: number) => {
+        const data = new Uint8ClampedArray(w * h * 4);
+        data.fill(255);
+        for (let row = 0; row < h; row += 1) {
+          const absoluteY = y + row;
+          const isInkRow = absoluteY >= 1080 && absoluteY < 1098
+            || absoluteY >= 1104 && absoluteY < 1122
+            || absoluteY >= 1128 && absoluteY < 1146;
+          if (!isInkRow) continue;
+          for (let x = 0; x < w; x += 1) {
+            const index = (row * w + x) * 4;
+            data[index] = 17;
+            data[index + 1] = 24;
+            data[index + 2] = 39;
+            data[index + 3] = 255;
+          }
+        }
+        return { data };
+      }),
+    };
+    Object.defineProperty(canvas, 'getContext', { value: vi.fn(() => ctx), configurable: true });
+
+    const resolution = resolveRirekishoSafePageBreakCanvasPx(
+      canvas,
+      [{ top: 1080, bottom: 1146 }],
+      false,
+      1131,
+      16,
+      48,
+      96,
+      0,
+      canvasBounds.contentLeftPx,
+      canvasBounds.contentRightPx,
+    );
+
+    expect(resolution.source).toBe('canvas');
+    expect(resolution.breakPx).toBeLessThan(1131);
+    expect(resolution.breakPx).toBeGreaterThan(1102);
+
+    const inkIntervals = extractRirekishoInkLineIntervalsFromCanvas(
+      canvas,
+      canvasBounds.contentLeftPx,
+      canvasBounds.contentRightPx,
+    );
+    expect(inkIntervals.length).toBeGreaterThan(0);
+    const intervalSelection = selectRirekishoPdfLineIntervalsCanvas(
+      [{ top: 1080, bottom: 1146 }],
+      false,
+      inkIntervals,
+    );
+    expect(intervalSelection.source).toBe('canvas');
+    expect(intervalSelection.reliable).toBe(true);
+    expect(intervalSelection.intervals?.length).toBeGreaterThan(0);
+
+    const segments = planRirekishoPdfSliceSegments(
+      1400,
+      1123,
+      0,
+      canvas,
+      intervalSelection.intervals,
+      intervalSelection.reliable,
+      16,
+      48,
+      96,
+      canvasBounds.contentLeftPx,
+      canvasBounds.contentRightPx,
+      [],
+    );
+    expect(segments.length).toBeGreaterThan(1);
+    expect(segments[0].endPx).toBeLessThan(1123);
+
+    const sparseSegments = rebalanceRirekishoSparseTrailingPdfSliceSegments(
+      [
+        { startPx: 0, endPx: 900, breakSource: 'nominal' },
+        { startPx: 900, endPx: 1123, breakSource: 'nominal' },
+        { startPx: 1123, endPx: 1180, breakSource: 'nominal' },
+      ],
+      1123,
+      0,
+    );
+    expect(sparseSegments).toHaveLength(2);
+    expect(sparseSegments[1].endPx).toBe(1180);
+  });
+
+  test('Rirekisho DOCX keeps small Languages section together with heading and rows', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('function rirekishoLanguagesSectionTable');
+    expect(exportSource).toContain('rirekishoLanguagesHeadingTableRow');
+    expect(exportSource).toContain("jpRun('語学'");
+    expect(exportSource).toContain('cantSplit: true');
+    expect(exportSource).toContain('keepLines: true');
+    expect(exportSource).toContain('children.push(rirekishoLanguagesSectionTable());');
+    expect(exportSource).not.toContain("children.push(sectionHeadingRow('語学'));");
+    expect(exportSource).not.toContain('children: [innerTable]');
+    expect(exportSource).not.toContain('languageCount > 8');
+  });
+
+  test('Rirekisho DOCX emits 語学 and 言語 in one flat table without a nested wrapper', async () => {
+    const multiLangCv = cv({
+      languages: [
+        { name: 'English', level: 'Advanced' },
+        { name: 'French', level: 'Intermediate' },
+        { name: 'Italian', level: 'Native' },
+      ],
+    });
+    const { documentXml } = await captureDocx(multiLangCv);
+    const gogakuIdx = documentXml.indexOf('語学');
+    expect(gogakuIdx).toBeGreaterThan(-1);
+    const tableStart = documentXml.lastIndexOf('<w:tbl>', gogakuIdx);
+    const tableEnd = documentXml.indexOf('</w:tbl>', gogakuIdx);
+    const languagesTable = documentXml.slice(tableStart, tableEnd);
+    expect(languagesTable).toContain('語学');
+    expect(languagesTable).toContain('English');
+    expect(languagesTable).toContain('Italian');
+    expect(languagesTable).toContain('レベル');
+    expect((languagesTable.match(/<w:tbl>/g) ?? []).length).toBe(1);
+    const headingRowEnd = languagesTable.indexOf('</w:tr>', languagesTable.indexOf('語学'));
+    const headerRow = languagesTable.slice(headingRowEnd, languagesTable.indexOf('</w:tr>', headingRowEnd + 1));
+    expect(headerRow).toContain('言語');
+    expect(headerRow).toContain('レベル');
+    expect(languagesTable.indexOf('<w:trPr><w:cantSplit/></w:trPr>', languagesTable.indexOf('語学') - 400)).toBeGreaterThan(-1);
   });
 
   test('DOCX remains table-based, editable, fixed-width, with constrained photo and preserved skills/self PR', async () => {

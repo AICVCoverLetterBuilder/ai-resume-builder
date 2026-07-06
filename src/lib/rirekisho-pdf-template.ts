@@ -14,6 +14,8 @@ const TEXT = '#111827';
 const MUTED = '#4b5563';
 const BORDER = '#d1d5db';
 const HEADER_BG = '#f3f4f6';
+const RIREKISHO_SECTION_BAR_HEIGHT_PX = '28px';
+const RIREKISHO_SECTION_BAR_LABEL_NUDGE_PX = '-1px';
 
 function applyStyle(element: HTMLElement, styles: StyleMap): void {
   Object.entries(styles).forEach(([key, value]) => {
@@ -113,26 +115,48 @@ function table(parent: HTMLElement, styles?: StyleMap): HTMLTableElement {
   return tableEl;
 }
 
-function section(parent: HTMLElement, title: string): HTMLElement {
+function section(
+  parent: HTMLElement,
+  title: string,
+  options: { kind?: string; allowBreakInside?: boolean } = {},
+): HTMLElement {
   const sectionEl = append(parent, 'section', {
     margin: '0 0 10px',
     padding: '0',
-    breakInside: 'avoid',
-    pageBreakInside: 'avoid',
+    ...(options.allowBreakInside ? {} : { breakInside: 'avoid', pageBreakInside: 'avoid' }),
   });
   sectionEl.setAttribute('data-export-group', 'rirekisho-section');
+  if (options.kind) sectionEl.setAttribute('data-rirekisho-section-kind', options.kind);
 
   const heading = append(sectionEl, 'h2', {
     margin: '0 0 4px',
-    padding: '4px 8px',
+    padding: '0 8px',
+    height: RIREKISHO_SECTION_BAR_HEIGHT_PX,
+    minHeight: RIREKISHO_SECTION_BAR_HEIGHT_PX,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
     backgroundColor: '#1f2937',
     color: '#ffffff',
+    boxSizing: 'border-box',
+    overflow: 'visible',
+  });
+  const label = document.createElement('span');
+  label.setAttribute('data-rirekisho-section-bar-label', 'true');
+  applyStyle(label, {
+    display: 'inline-flex',
+    alignItems: 'center',
     fontSize: '12px',
-    lineHeight: '1.2',
+    lineHeight: '1',
     fontWeight: '700',
     letterSpacing: '0.12em',
-    boxSizing: 'border-box',
-  }, title);
+    color: '#ffffff',
+    transform: `translateY(${RIREKISHO_SECTION_BAR_LABEL_NUDGE_PX})`,
+    overflow: 'visible',
+    whiteSpace: 'nowrap',
+  });
+  appendExportText(label, title);
+  heading.appendChild(label);
   heading.setAttribute('data-export-meaningful', 'true');
   return sectionEl;
 }
@@ -247,7 +271,7 @@ function renderHeader(root: HTMLElement, cv: CVData, photoDataUrl?: string | nul
 
 function renderEducation(parent: HTMLElement, cv: CVData): void {
   if (cv.education.length === 0) return;
-  const sectionEl = section(parent, '学　歴');
+  const sectionEl = section(parent, '学　歴', { kind: 'education' });
   const education = table(sectionEl);
   const header = education.insertRow();
   labelCell(header, '期間', '24%');
@@ -264,7 +288,7 @@ function renderEducation(parent: HTMLElement, cv: CVData): void {
 
 function renderExperience(parent: HTMLElement, cv: CVData): void {
   if (cv.experience.length === 0) return;
-  const sectionEl = section(parent, '職　歴');
+  const sectionEl = section(parent, '職　歴', { kind: 'experience' });
   const experience = table(sectionEl);
   const header = experience.insertRow();
   labelCell(header, '期間', '23%');
@@ -297,7 +321,7 @@ function renderExperience(parent: HTMLElement, cv: CVData): void {
 
 function renderSkills(parent: HTMLElement, cv: CVData): void {
   if (cv.skills.length === 0) return;
-  const sectionEl = section(parent, 'スキル');
+  const sectionEl = section(parent, 'スキル', { kind: 'skills' });
   const skills = table(sectionEl);
   for (let index = 0; index < cv.skills.length; index += 3) {
     const row = skills.insertRow();
@@ -312,7 +336,7 @@ function renderSkills(parent: HTMLElement, cv: CVData): void {
 
 function renderLanguages(parent: HTMLElement, cv: CVData): void {
   if (cv.languages.length === 0) return;
-  const sectionEl = section(parent, '語学');
+  const sectionEl = section(parent, '語学', { kind: 'languages' });
   const languages = table(sectionEl);
   cv.languages.forEach((language) => {
     const row = languages.insertRow();
@@ -324,10 +348,11 @@ function renderLanguages(parent: HTMLElement, cv: CVData): void {
 
 function renderSummary(parent: HTMLElement, cv: CVData): void {
   if (!cv.summary) return;
-  const sectionEl = section(parent, '自己PR');
+  const sectionEl = section(parent, '自己PR', { kind: 'self-pr', allowBreakInside: true });
   const summary = table(sectionEl);
   const row = summary.insertRow();
   row.setAttribute('data-export-meaningful', 'true');
+  row.setAttribute('data-rirekisho-summary-row', 'true');
   cell(row, cv.summary, {
     width: '100%',
     minHeight: '70px',
@@ -339,7 +364,7 @@ function renderSummary(parent: HTMLElement, cv: CVData): void {
 
 function renderCertifications(parent: HTMLElement, cv: CVData): void {
   if (cv.certifications.length === 0) return;
-  const sectionEl = section(parent, '資格・免許');
+  const sectionEl = section(parent, '資格・免許', { kind: 'certifications' });
   const certs = table(sectionEl);
   cv.certifications.forEach((certification) => {
     const row = certs.insertRow();
