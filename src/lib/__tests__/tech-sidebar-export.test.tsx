@@ -9,9 +9,19 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { TechSidebarTemplate, templateComponents } from '@/components/cv-templates';
 import { createTechSidebarPdfTemplate } from '@/lib/tech-sidebar-pdf-template';
 import {
+  buildPaddedPdfSlice,
   buildTechSidebarPdfBlob,
+  collectTechSidebarMainColumnTextLineIntervalsCss,
   exportTechSidebarPdf,
   exportToDOCX,
+  extractTechSidebarMainColumnInkLineIntervalsFromCanvas,
+  findSafeElegantFormalPageBreakCanvasPx,
+  getTechSidebarMainColumnContentBoundsCss,
+  isUnsafeElegantFormalPageBreakCanvasPx,
+  planTechSidebarPdfSliceSegments,
+  resolveTechSidebarSafePageBreakCanvasPx,
+  scaleTechSidebarMainColumnBoundsToCanvas,
+  selectTechSidebarPdfLineIntervalsCanvas,
 } from '@/lib/export';
 import type { CVData } from '@/lib/types';
 
@@ -276,6 +286,131 @@ describe('Tech Sidebar export', () => {
     expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
     expect(instances[0].pages).toBe(1);
+  });
+
+  test('Tech Sidebar PDF export bakes continuation-page top padding into slice bitmaps', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('TECH_SIDEBAR_PDF_PAGE_TOP_INSET_CSS_PX');
+    expect(exportSource).toContain('TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX');
+    expect(exportSource).toContain('buildPaddedPdfSlice');
+    expect(exportSource).toContain("captureTemplateId === 'tech-sidebar'");
+    expect(exportSource).toContain('renderPaddedPdfSlice');
+
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = 800;
+    sourceCanvas.height = 1200;
+    const sourceCtx = sourceCanvas.getContext('2d');
+    if (sourceCtx) {
+      sourceCtx.fillStyle = '#ffffff';
+      sourceCtx.fillRect(0, 0, 800, 1200);
+      sourceCtx.fillStyle = '#111111';
+      sourceCtx.fillRect(40, 200, 720, 18);
+    }
+
+    const padded = buildPaddedPdfSlice(sourceCanvas, 200, 400, 800, 28, 28);
+    expect(padded.topInsetCanvasPx).toBe(28);
+    expect(padded.bottomInsetCanvasPx).toBe(28);
+    expect(padded.paddedHeightPx).toBe(456);
+  });
+
+  test('Tech Sidebar safe page breaks scan only the main column and avoid slicing through text lines', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('planTechSidebarPdfSliceSegments');
+    expect(exportSource).toContain('collectTechSidebarMainColumnTextLineIntervalsCss');
+    expect(exportSource).toContain('extractTechSidebarMainColumnInkLineIntervalsFromCanvas');
+    expect(exportSource).toContain('selectTechSidebarPdfLineIntervalsCanvas');
+    expect(exportSource).toContain('resolveTechSidebarSafePageBreakCanvasPx');
+    expect(exportSource).toContain('scaleTechSidebarMainColumnBoundsToCanvas');
+    expect(exportSource).toContain('data-ts-pdf-break-sources');
+
+    const fallbackMainLeft = Math.floor(800 * (64 / 210));
+    const explicitBounds = { leftCssPx: fallbackMainLeft + 2, rightCssPx: 780 };
+    const canvasBounds = scaleTechSidebarMainColumnBoundsToCanvas(explicitBounds, 800, 794);
+    expect(canvasBounds.contentLeftPx).toBeGreaterThanOrEqual(fallbackMainLeft);
+    expect(canvasBounds.contentRightPx).toBeGreaterThan(canvasBounds.contentLeftPx);
+
+    const intervals = [
+      { top: 1080, bottom: 1102 },
+      { top: 1106, bottom: 1128 },
+    ];
+    expect(isUnsafeElegantFormalPageBreakCanvasPx(1095, intervals, 16)).toBe(true);
+    expect(findSafeElegantFormalPageBreakCanvasPx(intervals, 1131, 16, 48)).toBeLessThan(1131);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 1400;
+    const ctx = {
+      drawImage: vi.fn(),
+      getImageData: vi.fn((_x: number, y: number, w: number, h: number) => {
+        const data = new Uint8ClampedArray(w * h * 4);
+        data.fill(255);
+        for (let row = 0; row < h; row += 1) {
+          const absoluteY = y + row;
+          const isInkRow = absoluteY >= 1080 && absoluteY < 1098
+            || absoluteY >= 1104 && absoluteY < 1122
+            || absoluteY >= 1128 && absoluteY < 1146;
+          if (!isInkRow) continue;
+          for (let x = 0; x < w; x += 1) {
+            const index = (row * w + x) * 4;
+            data[index] = 17;
+            data[index + 1] = 24;
+            data[index + 2] = 39;
+            data[index + 3] = 255;
+          }
+        }
+        return { data };
+      }),
+    };
+    Object.defineProperty(canvas, 'getContext', { value: vi.fn(() => ctx), configurable: true });
+
+    const resolution = resolveTechSidebarSafePageBreakCanvasPx(
+      canvas,
+      [{ top: 1080, bottom: 1146 }],
+      false,
+      1131,
+      28,
+      48,
+      96,
+      0,
+      canvasBounds.contentLeftPx,
+      canvasBounds.contentRightPx,
+    );
+
+    expect(resolution.source).toBe('canvas');
+    expect(resolution.breakPx).toBeLessThan(1131);
+    expect(resolution.breakPx).toBeGreaterThan(1102);
+
+    const inkIntervals = extractTechSidebarMainColumnInkLineIntervalsFromCanvas(
+      canvas,
+      canvasBounds.contentLeftPx,
+      canvasBounds.contentRightPx,
+    );
+    expect(inkIntervals.length).toBeGreaterThan(0);
+    const intervalSelection = selectTechSidebarPdfLineIntervalsCanvas(
+      [{ top: 1080, bottom: 1146 }],
+      false,
+      inkIntervals,
+    );
+    expect(intervalSelection.source).toBe('canvas');
+    expect(intervalSelection.reliable).toBe(true);
+    expect(intervalSelection.intervals?.length).toBeGreaterThan(0);
+
+    const segments = planTechSidebarPdfSliceSegments(
+      1400,
+      1123,
+      0,
+      canvas,
+      intervalSelection.intervals,
+      intervalSelection.reliable,
+      28,
+      48,
+      96,
+      canvasBounds.contentLeftPx,
+      canvasBounds.contentRightPx,
+      [],
+    );
+    expect(segments.length).toBeGreaterThan(1);
+    expect(segments[0].endPx).toBeLessThan(1123);
   });
 
   test('Tech Sidebar direct export uses shared native/platform save result', async () => {

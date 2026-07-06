@@ -1020,6 +1020,14 @@ const EXECUTIVE_PREMIUM_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
 // Nordic Clean uses the same baked-padding PDF slice model.
 const NORDIC_CLEAN_PDF_PAGE_TOP_INSET_CSS_PX = 28;
 const NORDIC_CLEAN_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+// Tech Sidebar uses the same baked-padding PDF slice model.
+const TECH_SIDEBAR_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+// Safe page-break selection for Tech Sidebar — scan/cut only the main column, not the dark sidebar.
+const TECH_SIDEBAR_PAGE_BREAK_GUARD_PX = 16;
+const TECH_SIDEBAR_PAGE_BREAK_SEARCH_RANGE_PX = 48;
+const TECH_SIDEBAR_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX = 96;
+const TECH_SIDEBAR_SIDEBAR_WIDTH_MM = 64;
 // If the final PDF page would be mostly empty tail (Education/Skills/Languages only),
 // merge it with the previous page instead of emitting a sparse trailing page.
 const ELEGANT_FORMAL_TRAILING_TAIL_SPARSE_RATIO = 0.35;
@@ -2522,6 +2530,427 @@ export function planElegantFormalPdfSliceSegments(
     trailingTolerancePx,
     lineIntervalsCanvasPx,
   );
+}
+
+export function collectTechSidebarMainColumnTextLineIntervalsCss(
+  root: HTMLElement,
+): ElegantFormalTextLineIntervalCss[] {
+  const main = root.querySelector<HTMLElement>('[data-tech-sidebar-pdf-main]');
+  if (!main) return [];
+
+  void root.offsetHeight;
+  void main.offsetHeight;
+
+  const mainTopOffsetCssPx = (() => {
+    const mainOffset = getRelativeOffsetRect(root, main);
+    if (mainOffset) return mainOffset.top;
+    const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+    const mainRect = getPositiveRect(main.getBoundingClientRect(), main);
+    if (rootRect && mainRect) return mainRect.top - rootRect.top;
+    return 0;
+  })();
+
+  const mainIntervals = collectTechSidebarMainColumnTextLineIntervalsFromMain(main);
+  return mainIntervals.map(interval => ({
+    topCssPx: interval.topCssPx + mainTopOffsetCssPx,
+    bottomCssPx: interval.bottomCssPx + mainTopOffsetCssPx,
+  }));
+}
+
+function parseTechSidebarCssLineHeightPx(element: HTMLElement): number {
+  const style = window.getComputedStyle(element);
+  const fontSize = Number.parseFloat(style.fontSize) || 11;
+  const lineHeightRaw = style.lineHeight;
+  if (lineHeightRaw.endsWith('px')) {
+    const parsed = Number.parseFloat(lineHeightRaw);
+    return Number.isFinite(parsed) ? parsed : fontSize * 1.35;
+  }
+  if (lineHeightRaw === 'normal') return fontSize * 1.35;
+  const parsed = Number.parseFloat(lineHeightRaw);
+  return Number.isFinite(parsed) ? parsed * fontSize : fontSize * 1.35;
+}
+
+function synthesizeTechSidebarTextLineIntervalsFromElement(
+  root: HTMLElement,
+  element: HTMLElement,
+): ElegantFormalTextLineIntervalCss[] {
+  const blockRect = getRelativeExportRect({ top: 0 }, element, root);
+  if (!blockRect || blockRect.height <= PDF_PAGE_INTERSECTION_EPSILON_PX) return [];
+
+  const lineHeightPx = Math.max(parseTechSidebarCssLineHeightPx(element), 8);
+  const intervals: ElegantFormalTextLineIntervalCss[] = [];
+  for (let lineTop = blockRect.top; lineTop < blockRect.bottom - 1; lineTop += lineHeightPx) {
+    const lineBottom = Math.min(blockRect.bottom, lineTop + lineHeightPx * 0.92);
+    if (lineBottom > lineTop + 2) {
+      intervals.push({ topCssPx: lineTop, bottomCssPx: lineBottom });
+    }
+  }
+  return intervals;
+}
+
+function collectTechSidebarMainColumnTextLineIntervalsFromMain(
+  main: HTMLElement,
+): ElegantFormalTextLineIntervalCss[] {
+  void main.offsetHeight;
+  const mainBox = getPositiveRect(main.getBoundingClientRect(), main);
+  const mainTop = mainBox?.top ?? 0;
+  const intervals: ElegantFormalTextLineIntervalCss[] = [];
+  const synthesizedParents = new Set<HTMLElement>();
+  const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode() as Text | null;
+
+  while (node) {
+    const text = node.textContent ?? '';
+    if (!text.trim()) {
+      node = walker.nextNode() as Text | null;
+      continue;
+    }
+
+    const parentEl = node.parentElement;
+    if (!parentEl) {
+      node = walker.nextNode() as Text | null;
+      continue;
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    let rects: DOMRect[] = [];
+    if (typeof range.getClientRects === 'function') {
+      rects = Array.from(range.getClientRects()).filter(
+        rect => rect.width > 0 && rect.height > PDF_PAGE_INTERSECTION_EPSILON_PX,
+      );
+    }
+
+    let addedRects = false;
+    for (const rect of rects) {
+      const topCssPx = rect.top - mainTop;
+      const bottomCssPx = rect.bottom - mainTop;
+      if (bottomCssPx <= topCssPx + PDF_PAGE_INTERSECTION_EPSILON_PX) continue;
+      if (Math.abs(topCssPx) < PDF_PAGE_INTERSECTION_EPSILON_PX && Math.abs(bottomCssPx) < PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        continue;
+      }
+      intervals.push({ topCssPx, bottomCssPx });
+      addedRects = true;
+    }
+
+    if (!addedRects && !synthesizedParents.has(parentEl)) {
+      synthesizedParents.add(parentEl);
+      intervals.push(...synthesizeTechSidebarTextLineIntervalsFromElement(main, parentEl));
+    }
+
+    node = walker.nextNode() as Text | null;
+  }
+
+  return mergeElegantFormalTextLineIntervals(intervals);
+}
+
+function isTechSidebarMainColumnCanvasRowInk(
+  canvas: HTMLCanvasElement,
+  rowY: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+): boolean {
+  const rows = analyzeElegantFormalCanvasWhitespaceRows(
+    canvas,
+    rowY,
+    rowY,
+    contentLeftPx,
+    contentRightPx,
+  );
+  return rows.length === 0 || !rows[0];
+}
+
+// Build line intervals from the rendered html2canvas bitmap in the main column only.
+// This is the most reliable source on Android WebView where pre-capture DOM line boxes
+// are often block-level, zero-sized, or missing for off-screen export roots.
+export function extractTechSidebarMainColumnInkLineIntervalsFromCanvas(
+  canvas: HTMLCanvasElement,
+  contentLeftPx: number,
+  contentRightPx: number,
+): Array<{ top: number; bottom: number }> {
+  const intervals: Array<{ top: number; bottom: number }> = [];
+  let inkStart: number | null = null;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    const isInk = isTechSidebarMainColumnCanvasRowInk(canvas, y, contentLeftPx, contentRightPx);
+    if (isInk) {
+      if (inkStart === null) inkStart = y;
+    } else if (inkStart !== null) {
+      intervals.push({ top: inkStart, bottom: y });
+      inkStart = null;
+    }
+  }
+  if (inkStart !== null) intervals.push({ top: inkStart, bottom: canvas.height });
+
+  const merged: Array<{ top: number; bottom: number }> = [];
+  for (const interval of intervals) {
+    const last = merged[merged.length - 1];
+    if (last && interval.top - last.bottom <= 3) {
+      last.bottom = Math.max(last.bottom, interval.bottom);
+    } else {
+      merged.push({ top: interval.top, bottom: interval.bottom });
+    }
+  }
+  return merged;
+}
+
+export function selectTechSidebarPdfLineIntervalsCanvas(
+  domIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  domIntervalsReliable: boolean,
+  canvasInkIntervalsCanvasPx: Array<{ top: number; bottom: number }>,
+): {
+  intervals: Array<{ top: number; bottom: number }> | null;
+  reliable: boolean;
+  source: 'canvas' | 'dom' | 'none';
+} {
+  if (canvasInkIntervalsCanvasPx.length >= 3) {
+    return {
+      intervals: canvasInkIntervalsCanvasPx,
+      reliable: true,
+      source: 'canvas',
+    };
+  }
+  if (domIntervalsCanvasPx && domIntervalsCanvasPx.length > 0 && domIntervalsReliable) {
+    return {
+      intervals: domIntervalsCanvasPx,
+      reliable: true,
+      source: 'dom',
+    };
+  }
+  if (domIntervalsCanvasPx && domIntervalsCanvasPx.length > 0) {
+    return {
+      intervals: domIntervalsCanvasPx,
+      reliable: false,
+      source: 'dom',
+    };
+  }
+  if (canvasInkIntervalsCanvasPx.length > 0) {
+    return {
+      intervals: canvasInkIntervalsCanvasPx,
+      reliable: true,
+      source: 'canvas',
+    };
+  }
+  return { intervals: null, reliable: false, source: 'none' };
+}
+
+export function getTechSidebarMainColumnContentBoundsCss(
+  root: HTMLElement,
+): { leftCssPx: number; rightCssPx: number } {
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
+  const fallbackLeft = rootWidth * (TECH_SIDEBAR_SIDEBAR_WIDTH_MM / CV_PDF_A4_WIDTH_MM);
+
+  const main = root.querySelector<HTMLElement>('[data-tech-sidebar-pdf-main]');
+  if (!main || rootWidth <= 0) {
+    return { leftCssPx: fallbackLeft + 2, rightCssPx: Math.max(fallbackLeft + 4, rootWidth - 2) };
+  }
+
+  const rootDomRect = root.getBoundingClientRect();
+  const mainDomRect = main.getBoundingClientRect();
+  const measuredLeft = mainDomRect.left - rootDomRect.left + 2;
+  const measuredRight = mainDomRect.right - rootDomRect.left - 2;
+  if (
+    mainDomRect.width > PDF_PAGE_INTERSECTION_EPSILON_PX
+    && measuredRight > measuredLeft + 8
+    && measuredLeft >= fallbackLeft * 0.85
+  ) {
+    return {
+      leftCssPx: Math.max(0, measuredLeft),
+      rightCssPx: Math.min(rootWidth, measuredRight),
+    };
+  }
+
+  return { leftCssPx: fallbackLeft + 2, rightCssPx: Math.max(fallbackLeft + 4, rootWidth - 2) };
+}
+
+export function scaleTechSidebarMainColumnBoundsToCanvas(
+  boundsCss: { leftCssPx: number; rightCssPx: number },
+  canvasWidthPx: number,
+  cssWidthPx: number,
+): { contentLeftPx: number; contentRightPx: number } {
+  if (cssWidthPx <= 0 || canvasWidthPx <= 0) {
+    const fallbackLeft = Math.floor(canvasWidthPx * (TECH_SIDEBAR_SIDEBAR_WIDTH_MM / CV_PDF_A4_WIDTH_MM));
+    return { contentLeftPx: fallbackLeft, contentRightPx: canvasWidthPx };
+  }
+  const scalePxPerCssPx = canvasWidthPx / cssWidthPx;
+  return {
+    contentLeftPx: Math.max(0, Math.floor(boundsCss.leftCssPx * scalePxPerCssPx)),
+    contentRightPx: Math.min(canvasWidthPx, Math.ceil(boundsCss.rightCssPx * scalePxPerCssPx)),
+  };
+}
+
+export function resolveTechSidebarSafePageBreakCanvasPx(
+  canvas: HTMLCanvasElement,
+  domLineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  domIntervalsReliable: boolean,
+  targetBreakPx: number,
+  guardPx: number,
+  domSearchPx: number,
+  canvasSearchPx: number,
+  minBreakPx: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+): ElegantFormalPageBreakResolution {
+  const nominalBreakPx = Math.floor(targetBreakPx);
+  let breakPx = nominalBreakPx;
+  let source: ElegantFormalPageBreakResolution['source'] = 'nominal';
+
+  const nominalCutsInk = !isElegantFormalCanvasBreakRowWhitespace(
+    canvas,
+    nominalBreakPx,
+    contentLeftPx,
+    contentRightPx,
+  );
+
+  if (domIntervalsReliable && domLineIntervalsCanvasPx && domLineIntervalsCanvasPx.length > 0) {
+    const domBreakPx = findSafeElegantFormalPageBreakCanvasPx(
+      domLineIntervalsCanvasPx,
+      targetBreakPx,
+      guardPx,
+      domSearchPx,
+    );
+    if (domBreakPx !== nominalBreakPx) {
+      breakPx = domBreakPx;
+      source = 'dom';
+    }
+  }
+
+  const domBreakStillCutsInk = !isElegantFormalCanvasBreakRowWhitespace(
+    canvas,
+    breakPx,
+    contentLeftPx,
+    contentRightPx,
+  );
+  const needsCanvasFallback = source === 'nominal'
+    || nominalCutsInk
+    || !domIntervalsReliable
+    || !domLineIntervalsCanvasPx
+    || domLineIntervalsCanvasPx.length === 0
+    || domBreakStillCutsInk;
+
+  if (needsCanvasFallback) {
+    const canvasBreakPx = findSafeElegantFormalPageBreakFromCanvasPixels(
+      canvas,
+      targetBreakPx,
+      guardPx,
+      canvasSearchPx,
+      minBreakPx,
+      contentLeftPx,
+      contentRightPx,
+    );
+    if (
+      canvasBreakPx !== nominalBreakPx
+      || nominalCutsInk
+      || domBreakStillCutsInk
+      || !isElegantFormalCanvasBreakRowWhitespace(canvas, breakPx, contentLeftPx, contentRightPx)
+    ) {
+      breakPx = canvasBreakPx;
+      source = 'canvas';
+    }
+  }
+
+  if (breakPx <= minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+    breakPx = Math.max(minBreakPx + 1, nominalBreakPx);
+    source = nominalBreakPx === breakPx ? 'nominal' : source;
+  }
+
+  if (
+    domLineIntervalsCanvasPx
+    && domLineIntervalsCanvasPx.length > 0
+    && isUnsafeElegantFormalPageBreakCanvasPx(breakPx, domLineIntervalsCanvasPx, guardPx)
+  ) {
+    const forcedDomBreakPx = findSafeElegantFormalPageBreakCanvasPx(
+      domLineIntervalsCanvasPx,
+      targetBreakPx,
+      guardPx,
+      domSearchPx,
+    );
+    if (
+      forcedDomBreakPx !== nominalBreakPx
+      && forcedDomBreakPx > minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && !isUnsafeElegantFormalPageBreakCanvasPx(forcedDomBreakPx, domLineIntervalsCanvasPx, guardPx)
+    ) {
+      breakPx = forcedDomBreakPx;
+      source = 'dom';
+    }
+  }
+
+  if (!isElegantFormalCanvasBreakRowWhitespace(canvas, breakPx, contentLeftPx, contentRightPx)) {
+    const forcedCanvasBreakPx = findSafeElegantFormalPageBreakFromCanvasPixels(
+      canvas,
+      targetBreakPx,
+      guardPx,
+      canvasSearchPx,
+      minBreakPx,
+      contentLeftPx,
+      contentRightPx,
+    );
+    if (
+      forcedCanvasBreakPx !== nominalBreakPx
+      && forcedCanvasBreakPx > minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && isElegantFormalCanvasBreakRowWhitespace(canvas, forcedCanvasBreakPx, contentLeftPx, contentRightPx)
+    ) {
+      breakPx = forcedCanvasBreakPx;
+      source = 'canvas';
+    }
+  }
+
+  return { breakPx, source };
+}
+
+export type TechSidebarPdfSliceSegment = ElegantFormalPdfSliceSegment;
+
+export function planTechSidebarPdfSliceSegments(
+  canvasHeightPx: number,
+  pageHeightPx: number,
+  trailingTolerancePx: number,
+  pdfCanvas: HTMLCanvasElement,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  domIntervalsReliable: boolean,
+  guardCanvasPx: number,
+  domSearchCanvasPx: number,
+  canvasSearchCanvasPx: number,
+  contentLeftPx: number,
+  contentRightPx: number,
+  breakSourcesOut: string[],
+): TechSidebarPdfSliceSegment[] {
+  const segments: TechSidebarPdfSliceSegment[] = [];
+  let offsetY = 0;
+
+  while (offsetY < canvasHeightPx - trailingTolerancePx) {
+    let sliceHeight = Math.min(pageHeightPx, canvasHeightPx - offsetY);
+    let breakSource: ElegantFormalPageBreakResolution['source'] = 'nominal';
+
+    if (
+      sliceHeight >= pageHeightPx - PDF_PAGE_INTERSECTION_EPSILON_PX
+      && offsetY + pageHeightPx < canvasHeightPx - trailingTolerancePx
+    ) {
+      const targetBreakPx = offsetY + pageHeightPx;
+      const breakResolution = resolveTechSidebarSafePageBreakCanvasPx(
+        pdfCanvas,
+        lineIntervalsCanvasPx,
+        domIntervalsReliable,
+        targetBreakPx,
+        guardCanvasPx,
+        domSearchCanvasPx,
+        canvasSearchCanvasPx,
+        offsetY,
+        contentLeftPx,
+        contentRightPx,
+      );
+      breakSource = breakResolution.source;
+      breakSourcesOut.push(breakResolution.source);
+      if (breakResolution.breakPx > offsetY + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        sliceHeight = breakResolution.breakPx - offsetY;
+      }
+    }
+
+    segments.push({ startPx: offsetY, endPx: offsetY + sliceHeight, breakSource });
+    offsetY += sliceHeight;
+  }
+
+  return segments;
 }
 
 export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement): void {
@@ -7016,6 +7445,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   let sourceStyleSnapshots: InlineStyleSnapshot[] = [];
   let elegantFormalTextLineIntervalsCss: ElegantFormalTextLineIntervalCss[] | null = null;
   const elegantFormalPageBreakSources: string[] = [];
+  let techSidebarTextLineIntervalsCss: ElegantFormalTextLineIntervalCss[] | null = null;
+  let techSidebarMainColumnBoundsCss: { leftCssPx: number; rightCssPx: number } | null = null;
+  const techSidebarPageBreakSources: string[] = [];
   try {
     // ── HARD VERIFICATION: capture the actual template child directly, not the
     //    scroll wrapper. The #cv-preview / #cv-inline-preview div is an
@@ -7034,6 +7466,11 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       void sourceRootForTag.offsetHeight;
       applyElegantFormalKeepTogetherPagination(sourceRootForTag);
       elegantFormalTextLineIntervalsCss = collectElegantFormalTextLineIntervalsCss(sourceRootForTag);
+    }
+    if (captureTemplateId === 'tech-sidebar' && sourceRootForTag) {
+      void sourceRootForTag.offsetHeight;
+      techSidebarTextLineIntervalsCss = collectTechSidebarMainColumnTextLineIntervalsCss(sourceRootForTag);
+      techSidebarMainColumnBoundsCss = getTechSidebarMainColumnContentBoundsCss(sourceRootForTag);
     }
     if (captureTemplateId === 'professional-classic' && sourceRootForTag) {
       // Must run on the real (pre-clone) source root, not only inside onclone: the
@@ -7341,6 +7778,12 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       const nordicCleanBottomInsetCanvasPx = captureTemplateId === 'nordic-clean'
         ? Math.round(NORDIC_CLEAN_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
         : 0;
+      const techSidebarTopInsetCanvasPx = captureTemplateId === 'tech-sidebar'
+        ? Math.round(TECH_SIDEBAR_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const techSidebarBottomInsetCanvasPx = captureTemplateId === 'tech-sidebar'
+        ? Math.round(TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
 
       const renderPdfSlice = (
         offsetY: number,
@@ -7457,6 +7900,81 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           );
           renderedPageIndex += 1;
         }
+      } else if (captureTemplateId === 'tech-sidebar') {
+        const techSidebarDomLineIntervalsCanvas = (
+          techSidebarTextLineIntervalsCss
+          && techSidebarTextLineIntervalsCss.length > 0
+        )
+          ? scaleElegantFormalTextLineIntervalsToCanvas(techSidebarTextLineIntervalsCss, cssToCanvasScale)
+          : null;
+        const techSidebarDomIntervalsReliable = techSidebarTextLineIntervalsCss
+          ? areElegantFormalDomLineIntervalsReliable(techSidebarTextLineIntervalsCss)
+          : false;
+        const techSidebarMainColumnBoundsCanvas = scaleTechSidebarMainColumnBoundsToCanvas(
+          techSidebarMainColumnBoundsCss ?? getTechSidebarMainColumnContentBoundsCss(
+            taggedCaptureTarget ?? (firstChild ?? element),
+          ),
+          canvasWidthPx,
+          captureWidth,
+        );
+        const techSidebarCanvasInkLineIntervals = extractTechSidebarMainColumnInkLineIntervalsFromCanvas(
+          pdfCanvas,
+          techSidebarMainColumnBoundsCanvas.contentLeftPx,
+          techSidebarMainColumnBoundsCanvas.contentRightPx,
+        );
+        const techSidebarIntervalSelection = selectTechSidebarPdfLineIntervalsCanvas(
+          techSidebarDomLineIntervalsCanvas,
+          techSidebarDomIntervalsReliable,
+          techSidebarCanvasInkLineIntervals,
+        );
+        const techSidebarGuardCanvasPx = TECH_SIDEBAR_PAGE_BREAK_GUARD_PX * cssToCanvasScale;
+        const techSidebarDomSearchCanvasPx = TECH_SIDEBAR_PAGE_BREAK_SEARCH_RANGE_PX * cssToCanvasScale;
+        const techSidebarCanvasSearchCanvasPx = TECH_SIDEBAR_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX * cssToCanvasScale;
+        const segments = planTechSidebarPdfSliceSegments(
+          canvasHeightPx,
+          pageHeightPx,
+          trailingTolerancePx,
+          pdfCanvas,
+          techSidebarIntervalSelection.intervals,
+          techSidebarIntervalSelection.reliable,
+          techSidebarGuardCanvasPx,
+          techSidebarDomSearchCanvasPx,
+          techSidebarCanvasSearchCanvasPx,
+          techSidebarMainColumnBoundsCanvas.contentLeftPx,
+          techSidebarMainColumnBoundsCanvas.contentRightPx,
+          techSidebarPageBreakSources,
+        );
+
+        let renderedPageIndex = 0;
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          const segment = segments[segmentIndex];
+          const offsetY = segment.startPx;
+          const sliceHeight = segment.endPx - segment.startPx;
+          if (semanticPagePlan && segmentIndex > 0) {
+            const pageBottomPx = offsetY + sliceHeight;
+            if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
+              if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
+              continue;
+            }
+          }
+          if (
+            shouldTrimBlankPdfSlices
+            && !semanticPagePlan
+            && segmentIndex > 0
+            && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
+          ) {
+            break;
+          }
+          renderPaddedPdfSlice(
+            offsetY,
+            sliceHeight,
+            renderedPageIndex,
+            segmentIndex === segments.length - 1,
+            techSidebarTopInsetCanvasPx,
+            techSidebarBottomInsetCanvasPx,
+          );
+          renderedPageIndex += 1;
+        }
       } else {
         let offsetY = 0;
         let renderedPageIndex = 0;
@@ -7530,6 +8048,16 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       taggedCaptureTarget.setAttribute(
         'data-ef-pdf-safe-slice',
         elegantFormalPageBreakSources.some(source => source === 'canvas' || source === 'dom') ? 'true' : 'false',
+      );
+    }
+    if (captureTemplateId === 'tech-sidebar' && taggedCaptureTarget) {
+      taggedCaptureTarget.setAttribute(
+        'data-ts-pdf-break-sources',
+        techSidebarPageBreakSources.join(',') || 'none',
+      );
+      taggedCaptureTarget.setAttribute(
+        'data-ts-pdf-safe-slice',
+        techSidebarPageBreakSources.some(source => source === 'canvas' || source === 'dom') ? 'true' : 'false',
       );
     }
     return pdfBlob;
