@@ -9,6 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { CorporateNavyTemplate, templateComponents } from '@/components/cv-templates';
 import { createCorporateNavyPdfTemplate } from '@/lib/corporate-navy-pdf-template';
 import {
+  applyCorporateNavyKeepTogetherPagination,
   buildCorporateNavyPdfBlob,
   createCorporateNavyCircularDocxPhotoDataUrl,
   exportCorporateNavyPdf,
@@ -190,6 +191,41 @@ function source(file: string): string {
   return fs.readFileSync(path.resolve(file), 'utf8');
 }
 
+function rectAttr(top: number, left: number, width: number, height: number): string {
+  return [top, left, width, height].join(',');
+}
+
+function installRectMock() {
+  return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function getRect(this: HTMLElement) {
+    const raw = this.getAttribute('data-test-rect');
+    if (!raw) {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    }
+    const [top, left, width, height] = raw.split(',').map(Number);
+    return {
+      x: left,
+      y: top,
+      top,
+      left,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   loadedImageSources = [];
@@ -267,6 +303,113 @@ describe('Corporate Navy export', () => {
     expect(guard).toBeGreaterThan(branch);
     expect(fallback).toBeGreaterThan(guard);
     expect(handler.slice(guard, fallback)).toContain("cv.templateId === 'corporate-navy'");
+  });
+
+  test('Corporate Navy PDF export wires keep-together pagination before html2canvas capture', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('applyCorporateNavyKeepTogetherPagination');
+    expect(exportSource).toContain("captureTemplateId === 'corporate-navy' && sourceRootForTag");
+    expect(exportSource).toContain('[data-export-group="corporate-navy-section"]');
+    expect(exportSource).toContain('[data-export-group="corporate-navy-experience"]');
+  });
+
+  test('Corporate Navy keep-together shifts WORK EXPERIENCE heading with first entry when heading would orphan', () => {
+    document.body.innerHTML = `
+      <div data-template-id="corporate-navy" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <section data-export-group="corporate-navy-section" data-test-rect="${rectAttr(1080, 34, 732, 180)}">
+          <h2 data-export-keep-with-next="true" data-test-rect="${rectAttr(1100, 34, 732, 22)}">WORK EXPERIENCE</h2>
+          <div data-export-group="corporate-navy-experience" data-test-rect="${rectAttr(1130, 34, 732, 120)}">
+            <div data-test-rect="${rectAttr(1130, 34, 732, 28)}">
+              <h3>Primary School Teacher</h3>
+            </div>
+            <p data-test-rect="${rectAttr(1160, 34, 732, 18)}">Primary School ZHFF</p>
+            <div data-export-meaningful="true" data-test-rect="${rectAttr(1182, 34, 732, 24)}">
+              <span>-</span><span>Planned teaching units for Serbian language and mathematics.</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="corporate-navy"]') as HTMLElement;
+    const heading = root.querySelector('h2') as HTMLElement;
+
+    applyCorporateNavyKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('WORK EXPERIENCE');
+    expect(document.body.textContent).toContain('Primary School Teacher');
+  });
+
+  test('Corporate Navy keep-together shifts Education heading with first education row when heading would orphan', () => {
+    document.body.innerHTML = `
+      <div data-template-id="corporate-navy" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <main data-corporate-navy-pdf-body="true">
+          <section data-export-group="corporate-navy-section" data-test-rect="${rectAttr(1080, 34, 732, 90)}">
+            <h2 data-export-keep-with-next="true" data-test-rect="${rectAttr(1100, 34, 732, 22)}">EDUCATION</h2>
+            <div data-test-rect="${rectAttr(1130, 34, 732, 40)}">
+              <div>
+                <h3>VI stepen</h3>
+                <p>Mathematics Faculty</p>
+              </div>
+              <div>2020-01 - 2025-02</div>
+            </div>
+          </section>
+        </main>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="corporate-navy"]') as HTMLElement;
+    const heading = root.querySelector('h2') as HTMLElement;
+
+    applyCorporateNavyKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('EDUCATION');
+    expect(document.body.textContent).toContain('Mathematics Faculty');
+  });
+
+  test('Corporate Navy keep-together shifts Skills heading with first skill chip when heading would orphan', () => {
+    document.body.innerHTML = `
+      <div data-template-id="corporate-navy" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <section data-export-group="corporate-navy-section" data-test-rect="${rectAttr(1080, 34, 732, 70)}">
+          <h2 data-export-keep-with-next="true" data-test-rect="${rectAttr(1100, 34, 732, 22)}">SKILLS</h2>
+          <div data-test-rect="${rectAttr(1130, 34, 732, 20)}">
+            <span data-export-meaningful="true" data-test-rect="${rectAttr(1130, 34, 80, 18)}">Leadership</span>
+          </div>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="corporate-navy"]') as HTMLElement;
+    const heading = root.querySelector('h2') as HTMLElement;
+
+    applyCorporateNavyKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('SKILLS');
+    expect(document.body.textContent).toContain('Leadership');
+  });
+
+  test('Corporate Navy keep-together does not shift a section that already fits on one page', () => {
+    document.body.innerHTML = `
+      <div data-template-id="corporate-navy" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <section data-export-group="corporate-navy-section" data-test-rect="${rectAttr(820, 34, 732, 120)}">
+          <h2 data-export-keep-with-next="true" data-test-rect="${rectAttr(820, 34, 732, 22)}">WORK EXPERIENCE</h2>
+          <div data-export-group="corporate-navy-experience" data-test-rect="${rectAttr(850, 34, 732, 90)}">
+            <div data-test-rect="${rectAttr(850, 34, 732, 28)}"><h3>Teacher</h3></div>
+            <p data-test-rect="${rectAttr(880, 34, 732, 18)}">School</p>
+          </div>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="corporate-navy"]') as HTMLElement;
+    const heading = root.querySelector('h2') as HTMLElement;
+
+    applyCorporateNavyKeepTogetherPagination(root);
+
+    expect(heading.style.marginTop).toBe('');
   });
 
   test('Corporate Navy PDF Blob is non-empty and short fixture remains one page', async () => {

@@ -1053,6 +1053,12 @@ const PROFESSIONAL_CLASSIC_GROUP_PAGE_PADDING_PX = 0.5;
 const PROFESSIONAL_CLASSIC_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
 const CREATIVE_BOLD_GROUP_PAGE_PADDING_PX = 0.5;
 const CREATIVE_BOLD_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
+// Corporate Navy uses fixed-height canvas slicing with no prior keep-together pass, which
+// let section headings (especially WORK EXPERIENCE) land alone at a page bottom while
+// their first content block started on the next page.
+const CORPORATE_NAVY_GROUP_PAGE_PADDING_PX = 0.5;
+const CORPORATE_NAVY_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
+const CORPORATE_NAVY_EXPERIENCE_MAX_KEEP_UNIT_PAGE_RATIO = 0.9;
 // Visual-polish-only tuning for a trailing page that ends up containing nothing but the
 // closing Education/Skills+Languages/Certifications blocks (see
 // applyProfessionalClassicFinalPageBalance below). None of these affect a page that has
@@ -2951,6 +2957,135 @@ export function planTechSidebarPdfSliceSegments(
   }
 
   return segments;
+}
+
+export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): void {
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
+  if (rootWidth <= 0) return;
+
+  const rootBox = { top: rootRect?.top ?? 0 };
+  const pageHeightCssPx = rootWidth * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return;
+
+  const maxShortGroupHeight = pageHeightCssPx * CORPORATE_NAVY_MAX_KEEP_GROUP_PAGE_RATIO;
+  const maxExperienceUnitHeight = pageHeightCssPx * CORPORATE_NAVY_EXPERIENCE_MAX_KEEP_UNIT_PAGE_RATIO;
+
+  const shiftHeaderIfNeeded = (header: HTMLElement, requiredTrailingHeight: number | null): boolean => {
+    const rect = getRelativeExportRect(rootBox, header, root);
+    if (!rect || rect.height <= 0) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const headerItselfStraddles = startsOnPage !== endsOnPage;
+
+    const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
+    const roomAfterHeader = pageBottom - rect.bottom;
+    const wouldOrphanHeading = requiredTrailingHeight !== null
+      && requiredTrailingHeight > 0
+      && roomAfterHeader + PDF_PAGE_INTERSECTION_EPSILON_PX < requiredTrailingHeight;
+
+    if (!headerItselfStraddles && !wouldOrphanHeading) return false;
+
+    const shiftPx = Math.max(0, pageBottom - rect.top + CORPORATE_NAVY_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(header, shiftPx);
+    return true;
+  };
+
+  const shiftIfStraddling = (el: HTMLElement, maxHeight: number): boolean => {
+    const rect = getRelativeExportRect(rootBox, el, root);
+    if (!rect || rect.height <= 0 || rect.height >= maxHeight) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    if (startsOnPage === endsOnPage) return false;
+
+    const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+    const shiftPx = Math.max(0, nextPageTop - rect.top + CORPORATE_NAVY_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(el, shiftPx);
+    return true;
+  };
+
+  const getRequiredTrailingHeightForSection = (section: HTMLElement, firstContent: HTMLElement): number | null => {
+    const firstContentRect = getRelativeExportRect(rootBox, firstContent, root);
+    if (!firstContentRect) return null;
+
+    if (firstContent.matches('[data-export-group="corporate-navy-experience"]')) {
+      const titleRow = firstContent.querySelector<HTMLElement>(':scope > div');
+      const company = firstContent.querySelector<HTMLElement>(':scope > p');
+      const firstBullet = Array.from(firstContent.children).find(
+        (child): child is HTMLElement => child instanceof HTMLElement
+          && child.tagName === 'DIV'
+          && child.getAttribute('data-export-meaningful') === 'true',
+      ) ?? null;
+      const titleRect = titleRow ? getRelativeExportRect(rootBox, titleRow, root) : null;
+      const companyRect = company ? getRelativeExportRect(rootBox, company, root) : null;
+      const bulletRect = firstBullet ? getRelativeExportRect(rootBox, firstBullet, root) : null;
+      if (titleRect) {
+        const anchorTop = titleRect.top;
+        const anchorBottom = bulletRect?.bottom ?? companyRect?.bottom ?? firstContentRect.bottom;
+        if (anchorBottom > anchorTop) return anchorBottom - anchorTop;
+      }
+      return firstContentRect.height;
+    }
+
+    const firstMeaningful = firstContent.querySelector<HTMLElement>('[data-export-meaningful="true"]');
+    if (firstMeaningful && firstMeaningful !== firstContent) {
+      const containerRect = getRelativeExportRect(rootBox, firstContent, root);
+      const meaningfulRect = getRelativeExportRect(rootBox, firstMeaningful, root);
+      if (containerRect && meaningfulRect && meaningfulRect.bottom > containerRect.top) {
+        return meaningfulRect.bottom - containerRect.top;
+      }
+    }
+
+    return firstContentRect.height;
+  };
+
+  for (let pass = 0; pass < 8; pass += 1) {
+    let movedAnyGroup = false;
+
+    const sections = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="corporate-navy-section"]'));
+    for (const section of sections) {
+      const heading = section.querySelector<HTMLElement>(':scope > h2');
+      if (!heading || section.firstElementChild !== heading) continue;
+
+      const firstContent = heading.nextElementSibling;
+      if (!(firstContent instanceof HTMLElement)) continue;
+
+      const requiredTrailingHeight = getRequiredTrailingHeightForSection(section, firstContent);
+      if (shiftHeaderIfNeeded(heading, requiredTrailingHeight)) movedAnyGroup = true;
+    }
+
+    const experienceEntries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="corporate-navy-experience"]'));
+    for (const entry of experienceEntries) {
+      const bullets = Array.from(entry.children).filter(
+        (child): child is HTMLElement => child instanceof HTMLElement
+          && child.tagName === 'DIV'
+          && child.getAttribute('data-export-meaningful') === 'true',
+      );
+      for (const bullet of bullets) {
+        if (shiftIfStraddling(bullet, maxExperienceUnitHeight)) movedAnyGroup = true;
+      }
+    }
+
+    const educationRows = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        '[data-corporate-navy-pdf-body] [data-export-group="corporate-navy-section"] > div:not([data-export-group="corporate-navy-experience"])',
+      ),
+    );
+    for (const row of educationRows) {
+      if (row.querySelector(':scope > h3')) {
+        if (shiftIfStraddling(row, maxShortGroupHeight)) movedAnyGroup = true;
+      }
+    }
+
+    if (!movedAnyGroup) break;
+  }
 }
 
 export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement): void {
@@ -7471,6 +7606,10 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       void sourceRootForTag.offsetHeight;
       techSidebarTextLineIntervalsCss = collectTechSidebarMainColumnTextLineIntervalsCss(sourceRootForTag);
       techSidebarMainColumnBoundsCss = getTechSidebarMainColumnContentBoundsCss(sourceRootForTag);
+    }
+    if (captureTemplateId === 'corporate-navy' && sourceRootForTag) {
+      void sourceRootForTag.offsetHeight;
+      applyCorporateNavyKeepTogetherPagination(sourceRootForTag);
     }
     if (captureTemplateId === 'professional-classic' && sourceRootForTag) {
       // Must run on the real (pre-clone) source root, not only inside onclone: the
