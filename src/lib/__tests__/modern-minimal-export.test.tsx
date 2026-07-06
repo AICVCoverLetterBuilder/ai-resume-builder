@@ -10,7 +10,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { ModernMinimalTemplate, templateComponents } from '@/components/cv-templates';
 import { createModernMinimalPdfTemplate } from '@/lib/modern-minimal-pdf-template';
 import {
+  applyModernMinimalKeepTogetherPagination,
   buildModernMinimalPdfBlob,
+  buildPaddedPdfSlice,
   CV_PDF_A4_HEIGHT_MM,
   CV_PDF_A4_WIDTH_MM,
   exportModernMinimalPdf,
@@ -130,6 +132,41 @@ function draganCv(): CVData {
     languages: [{ name: 'Serbian', level: 'Native' }],
     templateId: 'modern-minimal',
     region: 'Balkan',
+  });
+}
+
+function rectAttr(top: number, left: number, width: number, height: number): string {
+  return [top, left, width, height].join(',');
+}
+
+function installRectMock() {
+  return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function getRect(this: HTMLElement) {
+    const raw = this.getAttribute('data-test-rect');
+    if (!raw) {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    }
+    const [top, left, width, height] = raw.split(',').map(Number);
+    return {
+      x: left,
+      y: top,
+      top,
+      left,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height,
+      toJSON: () => ({}),
+    } as DOMRect;
   });
 }
 
@@ -445,6 +482,7 @@ describe('Modern Minimal preview/export parity', () => {
     const text = root.textContent ?? '';
 
     expect(root.dataset.templateId).toBe('modern-minimal');
+    expect(root.getAttribute('data-modern-minimal-pdf-body')).toBe('true');
     expect(root.style.width).toBe('210mm');
     expect(root.style.minWidth).toBe('210mm');
     expect(root.style.padding).toBe('24px 34px 22px');
@@ -491,6 +529,93 @@ describe('Modern Minimal preview/export parity', () => {
     const educationContainer = safeWordContainers.find(el => el.textContent === 'VI / Metematički fakultet');
     expect(educationContainer).toBeDefined();
     expect(Array.from(educationContainer!.querySelectorAll('span')).map(s => s.textContent)).toEqual(['VI', '/', 'Metematički', 'fakultet']);
+    expect(root.querySelector('[data-export-group="modern-minimal-experience-header"]')).not.toBeNull();
+    expect(root.querySelector('[data-export-group="modern-minimal-experience-line"]')).not.toBeNull();
+  });
+
+  test('Modern Minimal PDF export wires keep-together pagination before html2canvas capture', () => {
+    const src = exportSource();
+    expect(src).toContain('applyModernMinimalKeepTogetherPagination');
+    expect(src).toContain("captureTemplateId === 'modern-minimal' && sourceRootForTag");
+    expect(src).toContain("captureTemplateId === 'modern-minimal'");
+  });
+
+  test('Modern Minimal PDF export bakes continuation-page top padding into slice bitmaps', () => {
+    const src = exportSource();
+    expect(src).toContain('MODERN_MINIMAL_PDF_PAGE_TOP_INSET_CSS_PX');
+    expect(src).toContain('MODERN_MINIMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX');
+    expect(src).toContain('buildPaddedPdfSlice');
+    expect(src).toContain("captureTemplateId === 'modern-minimal'");
+    expect(src).toContain('renderPaddedPdfSlice');
+
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = 800;
+    sourceCanvas.height = 1200;
+    const sourceCtx = sourceCanvas.getContext('2d');
+    if (sourceCtx) {
+      sourceCtx.fillStyle = '#ffffff';
+      sourceCtx.fillRect(0, 0, 800, 1200);
+      sourceCtx.fillStyle = '#111111';
+      sourceCtx.fillRect(40, 200, 720, 18);
+    }
+
+    const padded = buildPaddedPdfSlice(sourceCanvas, 200, 400, 800, 28, 0);
+    expect(padded.topInsetCanvasPx).toBe(28);
+    expect(padded.bottomInsetCanvasPx).toBe(0);
+    expect(padded.paddedHeightPx).toBe(428);
+  });
+
+  test('Modern Minimal keep-together shifts WORK EXPERIENCE heading with first entry when heading would orphan', () => {
+    document.body.innerHTML = `
+      <div data-template-id="modern-minimal" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <section data-export-group="modern-minimal-section" data-test-rect="${rectAttr(1080, 34, 732, 180)}">
+          <h2 data-export-keep-with-next="true" data-test-rect="${rectAttr(1100, 34, 732, 22)}">WORK EXPERIENCE</h2>
+          <div data-export-group="modern-minimal-experience" data-test-rect="${rectAttr(1130, 34, 732, 120)}">
+            <div data-export-group="modern-minimal-experience-header" data-test-rect="${rectAttr(1130, 34, 732, 48)}">
+              <div data-test-rect="${rectAttr(1130, 34, 732, 28)}">Software engineer</div>
+              <p data-test-rect="${rectAttr(1160, 34, 732, 18)}">Zezezeze</p>
+            </div>
+            <div data-export-group="modern-minimal-experience-line" data-export-meaningful="true" data-test-rect="${rectAttr(1182, 34, 732, 24)}">- First bullet line</div>
+          </div>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="modern-minimal"]') as HTMLElement;
+    const heading = root.querySelector('h2') as HTMLElement;
+
+    applyModernMinimalKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('WORK EXPERIENCE');
+    expect(document.body.textContent).toContain('Software engineer');
+    expect(document.body.textContent).toContain('Zezezeze');
+  });
+
+  test('Modern Minimal keep-together shifts first job header when company and bullets would start on the next page', () => {
+    document.body.innerHTML = `
+      <div data-template-id="modern-minimal" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
+        <section data-export-group="modern-minimal-section" data-test-rect="${rectAttr(980, 34, 732, 180)}">
+          <h2 data-test-rect="${rectAttr(990, 34, 732, 22)}">WORK EXPERIENCE</h2>
+          <div data-export-group="modern-minimal-experience" data-test-rect="${rectAttr(1020, 34, 732, 120)}">
+            <div data-export-group="modern-minimal-experience-header" data-test-rect="${rectAttr(1100, 34, 732, 50)}">
+              <div data-test-rect="${rectAttr(1100, 34, 732, 28)}">Software engineer</div>
+              <p data-test-rect="${rectAttr(1130, 34, 732, 18)}">Zezezeze</p>
+            </div>
+            <div data-export-group="modern-minimal-experience-line" data-export-meaningful="true" data-test-rect="${rectAttr(1155, 34, 732, 24)}">- First bullet line</div>
+          </div>
+        </section>
+      </div>
+    `;
+    installRectMock();
+    const root = document.querySelector('[data-template-id="modern-minimal"]') as HTMLElement;
+    const header = root.querySelector('[data-export-group="modern-minimal-experience-header"]') as HTMLElement;
+
+    applyModernMinimalKeepTogetherPagination(root);
+
+    expect(Number.parseFloat(header.style.marginTop)).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('Zezezeze');
+    expect(document.body.textContent).toContain('First bullet line');
   });
 
   test('Modern Minimal direct PDF Blob is non-empty, uses the user-framed selected photo (matching DOCX), and Dragan fixture remains one page', async () => {

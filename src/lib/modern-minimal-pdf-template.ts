@@ -125,6 +125,7 @@ export function createModernMinimalPdfTemplate(
   const root = document.createElement('div');
   root.setAttribute('data-template-id', 'modern-minimal');
   root.setAttribute('data-modern-minimal-pdf-template', 'true');
+  root.setAttribute('data-modern-minimal-pdf-body', 'true');
   style(root, {
     width: '210mm',
     minWidth: '210mm',
@@ -240,9 +241,11 @@ export function createModernMinimalPdfTemplate(
   if (cv.experience.length > 0) {
     const sectionEl = section(root, L.experience);
     cv.experience.forEach((exp) => {
-      const entry = append(sectionEl, 'div', { margin: '0 0 7px', breakInside: 'avoid', pageBreakInside: 'avoid' });
+      const entry = append(sectionEl, 'div', { margin: '0 0 7px' });
       entry.setAttribute('data-export-group', 'modern-minimal-experience');
-      const row = append(entry, 'div', {
+      const header = append(entry, 'div', { breakInside: 'avoid', pageBreakInside: 'avoid' });
+      header.setAttribute('data-export-group', 'modern-minimal-experience-header');
+      const row = append(header, 'div', {
         display: 'grid',
         gridTemplateColumns: 'minmax(0, 1fr) 104px',
         columnGap: '12px',
@@ -250,7 +253,7 @@ export function createModernMinimalPdfTemplate(
       });
       appendSafeWords(row, 'div', exp.position, { color: TEXT, fontSize: '11px', fontWeight: '700', lineHeight: '1.22', minWidth: '0', wordSpacing: '1.2px' }).setAttribute('data-export-meaningful', 'true');
       append(row, 'div', { color: '#6b7280', fontSize: '9.5px', lineHeight: '1.2', textAlign: 'right', whiteSpace: 'nowrap' }, dateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)).setAttribute('data-export-meaningful', 'true');
-      if (exp.company) append(entry, 'p', { margin: '1px 0 2px', color: '#6b7280', fontSize: '10px', lineHeight: '1.2', wordSpacing: '1.2px' }, exp.company).setAttribute('data-export-meaningful', 'true');
+      if (exp.company) append(header, 'p', { margin: '1px 0 2px', color: '#6b7280', fontSize: '10px', lineHeight: '1.2', wordSpacing: '1.2px' }, exp.company).setAttribute('data-export-meaningful', 'true');
       lines(exp.description).forEach((line) => {
         const bullet = append(entry, 'div', {
           display: 'grid',
@@ -261,6 +264,7 @@ export function createModernMinimalPdfTemplate(
           lineHeight: '1.28',
           wordSpacing: '0.9px',
         });
+        bullet.setAttribute('data-export-group', 'modern-minimal-experience-line');
         bullet.setAttribute('data-export-meaningful', 'true');
         append(bullet, 'span', undefined, '-');
         append(bullet, 'span', undefined, line);

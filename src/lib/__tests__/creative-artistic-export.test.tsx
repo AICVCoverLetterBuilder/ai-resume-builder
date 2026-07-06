@@ -357,7 +357,6 @@ describe('Creative Artistic export routing and rendering', () => {
     );
     const artisticBranch = cloneBlock.slice(cloneBlock.indexOf("if (captureTemplateId === 'creative-artistic')"));
 
-    expect(cloneBlock).not.toContain("if (captureTemplateId === 'modern-minimal')");
     expect(cloneBlock).not.toContain("if (captureTemplateId === 'clean-simple')");
     expect(professionalBranch).not.toContain('applyCreativeArtistic');
     expect(boldBranch).not.toContain('applyCreativeArtistic');

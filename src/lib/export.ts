@@ -1023,6 +1023,10 @@ const NORDIC_CLEAN_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
 // Tech Sidebar uses the same baked-padding PDF slice model.
 const TECH_SIDEBAR_PDF_PAGE_TOP_INSET_CSS_PX = 28;
 const TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+// Modern Minimal uses generic fixed-height slicing after keep-together; continuation pages
+// need baked top padding so section headings are not flush to the PDF page edge.
+const MODERN_MINIMAL_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const MODERN_MINIMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX = 0;
 // Safe page-break selection for Tech Sidebar — scan/cut only the main column, not the dark sidebar.
 const TECH_SIDEBAR_PAGE_BREAK_GUARD_PX = 16;
 const TECH_SIDEBAR_PAGE_BREAK_SEARCH_RANGE_PX = 48;
@@ -1074,6 +1078,9 @@ const CREATIVE_BOLD_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
 const CORPORATE_NAVY_GROUP_PAGE_PADDING_PX = 0.5;
 const CORPORATE_NAVY_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
 const CORPORATE_NAVY_EXPERIENCE_MAX_KEEP_UNIT_PAGE_RATIO = 0.9;
+const MODERN_MINIMAL_GROUP_PAGE_PADDING_PX = 0.5;
+const MODERN_MINIMAL_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
+const MODERN_MINIMAL_EXPERIENCE_MAX_KEEP_UNIT_PAGE_RATIO = 0.9;
 // Visual-polish-only tuning for a trailing page that ends up containing nothing but the
 // closing Education/Skills+Languages/Certifications blocks (see
 // applyProfessionalClassicFinalPageBalance below). None of these affect a page that has
@@ -3645,6 +3652,130 @@ export function applyCorporateNavyKeepTogetherPagination(root: HTMLElement): voi
 
 export function applyContemporaryBoldKeepTogetherPagination(root: HTMLElement): void {
   applyCorporateFamilyKeepTogetherPagination(root, 'contemporary-bold');
+}
+
+// Modern Minimal previously used only generic fixed-height html2canvas slicing with no
+// pre-capture keep-together pass. That let WORK EXPERIENCE land at the bottom of a page
+// with only the first job title/date visible while the company line and bullets started on
+// the next page — exactly the orphan-heading pattern Corporate Navy/Contemporary Bold
+// already guard against.
+export function applyModernMinimalKeepTogetherPagination(root: HTMLElement): void {
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
+  if (rootWidth <= 0) return;
+
+  const rootBox = { top: rootRect?.top ?? 0 };
+  const pageHeightCssPx = rootWidth * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return;
+
+  const maxShortGroupHeight = pageHeightCssPx * MODERN_MINIMAL_MAX_KEEP_GROUP_PAGE_RATIO;
+  const maxExperienceUnitHeight = pageHeightCssPx * MODERN_MINIMAL_EXPERIENCE_MAX_KEEP_UNIT_PAGE_RATIO;
+
+  const shiftHeaderIfNeeded = (header: HTMLElement, requiredTrailingHeight: number | null): boolean => {
+    const rect = getRelativeExportRect(rootBox, header, root);
+    if (!rect || rect.height <= 0) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const headerItselfStraddles = startsOnPage !== endsOnPage;
+
+    const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
+    const roomAfterHeader = pageBottom - rect.bottom;
+    const wouldOrphanHeading = requiredTrailingHeight !== null
+      && requiredTrailingHeight > 0
+      && roomAfterHeader + PDF_PAGE_INTERSECTION_EPSILON_PX < requiredTrailingHeight;
+
+    if (!headerItselfStraddles && !wouldOrphanHeading) return false;
+
+    const shiftPx = Math.max(0, pageBottom - rect.top + MODERN_MINIMAL_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(header, shiftPx);
+    return true;
+  };
+
+  const shiftIfStraddling = (el: HTMLElement, maxHeight: number): boolean => {
+    const rect = getRelativeExportRect(rootBox, el, root);
+    if (!rect || rect.height <= 0 || rect.height >= maxHeight) return false;
+
+    const startsOnPage = Math.floor((rect.top + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    const endsOnPage = Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+    if (startsOnPage === endsOnPage) return false;
+
+    const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+    const shiftPx = Math.max(0, nextPageTop - rect.top + MODERN_MINIMAL_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    shiftGroupToNextPage(el, shiftPx);
+    return true;
+  };
+
+  const getRequiredTrailingHeightForExperienceEntry = (entry: HTMLElement): number | null => {
+    const header = entry.querySelector<HTMLElement>('[data-export-group="modern-minimal-experience-header"]');
+    const firstLine = entry.querySelector<HTMLElement>('[data-export-group="modern-minimal-experience-line"]');
+    const headerRect = header ? getRelativeExportRect(rootBox, header, root) : null;
+    const lineRect = firstLine ? getRelativeExportRect(rootBox, firstLine, root) : null;
+    if (headerRect && lineRect && lineRect.bottom > headerRect.top) {
+      return lineRect.bottom - headerRect.top;
+    }
+    if (headerRect) return headerRect.height;
+    const entryRect = getRelativeExportRect(rootBox, entry, root);
+    return entryRect?.height ?? null;
+  };
+
+  for (let pass = 0; pass < 8; pass += 1) {
+    let movedAnyGroup = false;
+    const entries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="modern-minimal-experience"]'));
+    const firstEntry = entries[0] ?? null;
+
+    if (firstEntry) {
+      const sectionEl = firstEntry.parentElement;
+      const heading = sectionEl?.querySelector<HTMLElement>(':scope > h2') ?? null;
+      if (heading && sectionEl?.firstElementChild === heading) {
+        const requiredTrailingHeight = getRequiredTrailingHeightForExperienceEntry(firstEntry);
+        if (shiftHeaderIfNeeded(heading, requiredTrailingHeight)) movedAnyGroup = true;
+      }
+    }
+
+    for (const entry of entries) {
+      const header = entry.querySelector<HTMLElement>('[data-export-group="modern-minimal-experience-header"]');
+      const lines = Array.from(entry.querySelectorAll<HTMLElement>('[data-export-group="modern-minimal-experience-line"]'));
+      if (header) {
+        const firstLineRect = lines.length > 0 ? getRelativeExportRect(rootBox, lines[0], root) : null;
+        if (shiftHeaderIfNeeded(header, firstLineRect ? firstLineRect.height : null)) movedAnyGroup = true;
+      }
+      for (const line of lines) {
+        if (shiftIfStraddling(line, maxExperienceUnitHeight)) movedAnyGroup = true;
+      }
+    }
+
+    const shortGroups = Array.from(root.querySelectorAll<HTMLElement>(
+      '[data-export-group="modern-minimal-education"],[data-export-group="modern-minimal-skills-languages"]',
+    ));
+    for (const group of shortGroups) {
+      if (shiftIfStraddling(group, maxShortGroupHeight)) movedAnyGroup = true;
+    }
+
+    const sections = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="modern-minimal-section"]'));
+    for (const section of sections) {
+      const heading = section.querySelector<HTMLElement>(':scope > h2');
+      if (!heading || section.firstElementChild !== heading) continue;
+      const firstContent = heading.nextElementSibling;
+      if (!(firstContent instanceof HTMLElement)) continue;
+      if (firstContent.matches('[data-export-group="modern-minimal-experience"]')) continue;
+
+      const firstMeaningful = firstContent.querySelector<HTMLElement>('[data-export-meaningful="true"]');
+      const containerRect = getRelativeExportRect(rootBox, firstContent, root);
+      const meaningfulRect = firstMeaningful ? getRelativeExportRect(rootBox, firstMeaningful, root) : null;
+      const requiredTrailingHeight = containerRect && meaningfulRect && meaningfulRect.bottom > containerRect.top
+        ? meaningfulRect.bottom - containerRect.top
+        : containerRect?.height ?? null;
+      if (shiftHeaderIfNeeded(heading, requiredTrailingHeight)) movedAnyGroup = true;
+    }
+
+    if (!movedAnyGroup) break;
+  }
 }
 
 export function applyProfessionalClassicKeepTogetherPagination(root: HTMLElement): void {
@@ -8233,6 +8364,10 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       void sourceRootForTag.offsetHeight;
       applyContemporaryBoldKeepTogetherPagination(sourceRootForTag);
     }
+    if (captureTemplateId === 'modern-minimal' && sourceRootForTag) {
+      void sourceRootForTag.offsetHeight;
+      applyModernMinimalKeepTogetherPagination(sourceRootForTag);
+    }
     if (captureTemplateId === 'rirekisho' && sourceRootForTag) {
       void sourceRootForTag.offsetHeight;
       applyRirekishoKeepTogetherPagination(sourceRootForTag);
@@ -8414,6 +8549,11 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
         }
+        if (captureTemplateId === 'modern-minimal') {
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
         if (captureTemplateId === 'rirekisho') {
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
           expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
@@ -8464,7 +8604,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   }
 
   let pdfCanvas = canvas;
-  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho';
+  const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'modern-minimal' || captureTemplateId === 'rirekisho';
   const shouldUseFullSemanticCanvas = (captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho' || captureTemplateId === 'professional-classic') && Boolean(semanticMeaningfulBounds);
   if (shouldTrimBlankPdfSlices && !shouldUseFullSemanticCanvas) {
     const semanticCanvasBottom = getSemanticCanvasBottom(semanticMeaningfulBounds, canvas.width, captureWidth);
@@ -8550,6 +8690,12 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
         : 0;
       const techSidebarBottomInsetCanvasPx = captureTemplateId === 'tech-sidebar'
         ? Math.round(TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const modernMinimalTopInsetCanvasPx = captureTemplateId === 'modern-minimal'
+        ? Math.round(MODERN_MINIMAL_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const modernMinimalBottomInsetCanvasPx = captureTemplateId === 'modern-minimal'
+        ? Math.round(MODERN_MINIMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
         : 0;
       const rirekishoTopInsetCanvasPx = captureTemplateId === 'rirekisho'
         ? Math.round(RIREKISHO_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
@@ -8872,6 +9018,15 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
               isFinalPage,
               nordicCleanTopInsetCanvasPx,
               nordicCleanBottomInsetCanvasPx,
+            );
+          } else if (captureTemplateId === 'modern-minimal') {
+            renderPaddedPdfSlice(
+              offsetY,
+              sliceHeight,
+              renderedPageIndex,
+              isFinalPage,
+              modernMinimalTopInsetCanvasPx,
+              modernMinimalBottomInsetCanvasPx,
             );
           } else {
             renderPdfSlice(offsetY, sliceHeight, renderedPageIndex);
