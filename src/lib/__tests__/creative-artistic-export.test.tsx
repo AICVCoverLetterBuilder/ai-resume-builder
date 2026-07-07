@@ -10,14 +10,20 @@ import { CreativeArtisticTemplate, templateComponents } from '@/components/cv-te
 import { createCreativeArtisticPdfTemplate } from '@/lib/creative-artistic-pdf-template';
 import {
   applyCreativeArtisticKeepTogetherPagination,
+  buildCreativeArtisticPagedPdfBlob,
   buildCreativeArtisticPdfBlob,
   buildCvPdfBlob,
+  buildPaddedPdfSlice,
   chooseCreativeArtisticTailBalancePull,
   createMeaningfulContentPagePlan,
   exportCreativeArtisticPdf,
   exportToDOCX,
   exportToPDF,
+  isCreativeArtisticContentRowWhitespace,
   measureExportMeaningfulContentBounds,
+  planCreativeArtisticPdfSliceSegments,
+  resolveCreativeArtisticSafePageBreakCanvasPx,
+  resolveCvPdfExportRoute,
 } from '@/lib/export';
 import { getCvExportSuccessToast } from '@/lib/export-success-toast';
 import type { CVData } from '@/lib/types';
@@ -179,6 +185,37 @@ function makeCanvas(width: number, height: number, hasContentAt: (absoluteY: num
   return canvas;
 }
 
+function makePixelCanvas(
+  width: number,
+  height: number,
+  pixelAt: (x: number, y: number) => [number, number, number, number],
+): TestCanvas {
+  const canvas = document.createElement('canvas') as TestCanvas;
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = {
+    drawImage: vi.fn(),
+    getImageData: vi.fn((x: number, y: number, w: number, h: number) => {
+      const data = new Uint8ClampedArray(w * h * 4);
+      for (let row = 0; row < h; row += 1) {
+        for (let col = 0; col < w; col += 1) {
+          const [red, green, blue, alpha] = pixelAt(x + col, y + row);
+          const index = (row * w + col) * 4;
+          data[index] = red;
+          data[index + 1] = green;
+          data[index + 2] = blue;
+          data[index + 3] = alpha;
+        }
+      }
+      return { data };
+    }),
+  };
+  canvas.__ctx = ctx;
+  Object.defineProperty(canvas, 'getContext', { value: vi.fn(() => ctx), configurable: true });
+  Object.defineProperty(canvas, 'toDataURL', { value: vi.fn(() => 'data:image/jpeg;base64,creative-artistic'), configurable: true });
+  return canvas;
+}
+
 function installPdfMocks(canvas: HTMLCanvasElement) {
   const instances: Array<{ pages: number; addImage: ReturnType<typeof vi.fn>; addPage: ReturnType<typeof vi.fn> }> = [];
   const cloneDocuments: Document[] = [];
@@ -212,6 +249,62 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   }));
 
   return { html2canvasMock, instances, cloneDocuments };
+}
+
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      drawnText: string[] = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      rect = vi.fn();
+      line = vi.fn();
+      text = vi.fn((t: string | string[]) => {
+        const parts = Array.isArray(t) ? t : [t];
+        this.drawnText.push(...parts);
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((_text: string) => 20);
+      output() {
+        return new Blob(['%PDF-1.7\ncreative-artistic-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
 }
 
 function rectAttr(top: number, left: number, width: number, height: number): string {
@@ -355,9 +448,11 @@ describe('Creative Artistic export routing and rendering', () => {
       cloneBlock.indexOf("if (captureTemplateId === 'creative-bold')"),
       cloneBlock.indexOf("if (captureTemplateId === 'creative-artistic')"),
     );
-    const artisticBranch = cloneBlock.slice(cloneBlock.indexOf("if (captureTemplateId === 'creative-artistic')"));
+    const artisticBranch = cloneBlock.slice(
+      cloneBlock.indexOf("if (captureTemplateId === 'creative-artistic')"),
+      cloneBlock.indexOf("if (captureTemplateId === 'elegant-formal')"),
+    );
 
-    expect(cloneBlock).not.toContain("if (captureTemplateId === 'clean-simple')");
     expect(professionalBranch).not.toContain('applyCreativeArtistic');
     expect(boldBranch).not.toContain('applyCreativeArtistic');
     expect(artisticBranch).toContain('applyCreativeArtisticPdfLayout');
@@ -870,6 +965,196 @@ describe('Creative Artistic export routing and rendering', () => {
     expect(clickSpy).toHaveBeenCalledTimes(1);
   });
 
+  test('Creative Artistic resolves to the dedicated-creative-artistic export route', () => {
+    expect(resolveCvPdfExportRoute('creative-artistic').kind).toBe('dedicated-creative-artistic');
+  });
+
+  test('Creative Artistic dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {
+    const src = exportSource();
+    expect(src).toContain('buildCreativeArtisticPagedPdfBlob');
+    expect(src).toContain("kind: 'dedicated-creative-artistic'");
+    const fnStart = src.indexOf('export async function buildCreativeArtisticPagedPdfBlob');
+    const fnEnd = src.indexOf('function createRirekishoPortraitPhoto', fnStart);
+    const fn = src.slice(fnStart, fnEnd);
+    expect(fn).not.toContain('renderPdfSlice');
+    expect(fn).not.toContain('renderPaddedPdfSlice');
+    expect(fn).not.toContain('html2canvas');
+    expect(fn).not.toContain('buildCvPdfBlob');
+  });
+
+  test('Creative Artistic buildCreativeArtisticPdfBlob wraps buildCreativeArtisticPagedPdfBlob', async () => {
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const blob = await mod.buildCreativeArtisticPdfBlob(cv({ personal: { photo: undefined, photoEnabled: false } }), 'en');
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.size).toBeGreaterThan(0);
+  });
+
+  test('Creative Artistic source keeps Work Experience heading with first entry lead block', () => {
+    const src = exportSource();
+    const fn = src.indexOf('function caDrawExperience(');
+    const body = src.slice(fn, fn + 600);
+    expect(body).toContain('caMoveToFreshPageIfNeeded');
+    expect(body).toContain('caExperienceLeadBlockHeight');
+  });
+
+  test('Creative Artistic source groups Education + Skills + Languages before drawing', () => {
+    const src = exportSource();
+    expect(src).toContain('caMoveLowerSectionsIfNeeded');
+    expect(src).toContain('caSkillsLanguagesHeight');
+    expect(src).toContain('caEducationHeight');
+  });
+
+  test('Creative Artistic uses padded safe slice path instead of raw renderPdfSlice', () => {
+    const src = exportSource();
+    const branchStart = src.indexOf("} else if (captureTemplateId === 'creative-artistic')");
+    const branchEnd = src.indexOf("} else if (captureTemplateId === 'creative-bold')", branchStart);
+    const branch = src.slice(branchStart, branchEnd);
+
+    expect(branch).toContain('planCreativeArtisticPdfSliceSegments');
+    expect(branch).toContain('renderPaddedPdfSlice');
+    expect(branch).not.toContain('renderPdfSlice(');
+  });
+
+  test('Creative Artistic page 1/page 2 planner reserves top and bottom safety insets', () => {
+    const src = exportSource();
+    expect(src).toContain('CREATIVE_ARTISTIC_PDF_PAGE_TOP_INSET_CSS_PX = 28');
+    expect(src).toContain('CREATIVE_ARTISTIC_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28');
+    const fnStart = src.indexOf('export function planCreativeArtisticPdfSliceSegments');
+    const fn = src.slice(fnStart, fnStart + 1200);
+    expect(fn).toContain('topInsetCanvasPx');
+    expect(fn).toContain('bottomInsetCanvasPx');
+    expect(fn).toContain('contentBudgetPx');
+  });
+
+  test('Creative Artistic moves candidate breaks through text ink to a clean whitespace band', () => {
+    const canvas = makePixelCanvas(1000, 1400, (x, y) => {
+      if (x >= 120 && x <= 880 && y >= 995 && y <= 1006) return [17, 24, 39, 255];
+      return [255, 255, 255, 255];
+    });
+
+    const breakPx = resolveCreativeArtisticSafePageBreakCanvasPx(
+      canvas,
+      1000,
+      700,
+      1000,
+      80,
+      8,
+      24,
+      976,
+    );
+
+    expect(breakPx).toBeLessThan(995);
+    for (let y = breakPx - 3; y <= breakPx + 3; y += 1) {
+      expect(isCreativeArtisticContentRowWhitespace(canvas, y, 24, 976)).toBe(true);
+    }
+  });
+
+  test('Creative Artistic planned segment boundaries never intersect content text ink', () => {
+    const pageHeightPx = 1000;
+    const canvas = makePixelCanvas(1000, 2300, (x, y) => {
+      if (x >= 120 && x <= 880 && y >= 992 && y <= 1008) return [17, 24, 39, 255];
+      if (x >= 120 && x <= 880 && y >= 1878 && y <= 1894) return [17, 24, 39, 255];
+      return [255, 255, 255, 255];
+    });
+
+    const segments = planCreativeArtisticPdfSliceSegments(
+      2300,
+      pageHeightPx,
+      0,
+      canvas,
+      28,
+      28,
+      120,
+      8,
+      1,
+    );
+
+    expect(segments.length).toBeGreaterThanOrEqual(3);
+    for (const segment of segments.slice(0, -1)) {
+      expect(isCreativeArtisticContentRowWhitespace(canvas, segment.endPx, 24, 976)).toBe(true);
+    }
+  });
+
+  test('Creative Artistic continuation top padding band is forcibly cleared white after drawImage', () => {
+    const sourceCanvas = makeCanvas(200, 400, () => true);
+    const realCreateElement = document.createElement.bind(document);
+    const sliceCanvas = realCreateElement('canvas') as HTMLCanvasElement;
+    const operations: string[] = [];
+    const fillRect = vi.fn((_x: number, y: number, _w: number, h: number) => {
+      operations.push(`fill:${y}:${h}`);
+    });
+    const drawImage = vi.fn(() => {
+      operations.push('draw');
+    });
+    Object.defineProperty(sliceCanvas, 'getContext', {
+      value: vi.fn(() => ({
+        fillStyle: '',
+        fillRect,
+        drawImage,
+      })),
+      configurable: true,
+    });
+    Object.defineProperty(sliceCanvas, 'toDataURL', { value: vi.fn(() => 'data:image/jpeg;base64,padded'), configurable: true });
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      if (tagName.toLowerCase() === 'canvas') return sliceCanvas;
+      return realCreateElement(tagName);
+    });
+
+    buildPaddedPdfSlice(sourceCanvas, 40, 120, 200, 24, 12);
+
+    expect(operations).toEqual(['fill:0:156', 'draw', 'fill:0:24']);
+  });
+
+  test('Creative Artistic long direct PDF export paginates without a sparse Skills/Languages-only tail page', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const longCv = (): CVData => ({
+      ...cv(),
+      templateId: 'creative-artistic',
+      summary: Array.from({ length: 40 }, (_, i) =>
+        `Sentence ${i + 1}: award-winning creative direction across global markets.`,
+      ).join(' '),
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Studio Visiva',
+          position: 'Creative Director',
+          startDate: '2018-01',
+          endDate: '',
+          isPresent: true,
+          description: Array.from({ length: 18 }, (_, i) =>
+            `- Achievement ${i + 1}: delivered measurable impact across brand, digital, and campaign work.`,
+          ).join('\n'),
+        },
+        {
+          id: 'exp-2',
+          company: 'Pixel & Co',
+          position: 'Software Tester',
+          startDate: '2015-03',
+          endDate: '2017-12',
+          isPresent: false,
+          description: [
+            '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+            '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+            '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+            '- Managed vendor relationships and production timelines for multiple concurrent projects.',
+            '- Mentored junior designers in brand strategy fundamentals and professional communication.',
+            '- Conducted client workshops and strategic presentations for C-suite stakeholders.',
+          ].join('\n'),
+        },
+      ],
+      education: [{ id: 'edu-1', school: 'Mathematic school', degree: 'MA Graphic Design', startDate: '2020-01', endDate: '2025-01', description: '' }],
+      skills: ['Brand Strategy', 'Art Direction', 'Figma', 'Motion Design', 'Leadership', 'Mentoring', 'Storytelling', 'UX/UI', 'Cloud Services (AWS/Azure/GCP)'],
+      languages: [{ name: 'Italian', level: 'Native' }, { name: 'English', level: 'Fluent' }, { name: 'French', level: 'Intermediate' }],
+    });
+
+    const blob = await mod.buildCreativeArtisticPagedPdfBlob(longCv(), 'en', { photoDataUrl: null });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(3);
+  });
+
   test('Creative Artistic verified Android PDF save produces exactly one shared success toast payload', () => {
     const toastPayloads = [
       getCvExportSuccessToast({
@@ -1117,10 +1402,10 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
   });
 
   test('Creative Artistic PDF Blob prefers the user-framed selected photo over originalPhoto (matching DOCX)', async () => {
-    const canvas = makeCanvas(800, 1050, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildCreativeArtisticPdfBlob(draganCv(), 'en');
+    const blob = await mod.buildCreativeArtisticPdfBlob(draganCv(), 'en');
 
     expect(blob.size).toBeGreaterThan(0);
     expect(loadedImageSources).toContain(draganSelectedPhoto);
@@ -1128,22 +1413,22 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
   });
 
   test('Creative Artistic PDF Blob falls back to originalPhoto only when no selected photo exists', async () => {
-    const canvas = makeCanvas(800, 1050, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
     const cvWithoutSelectedPhoto = draganCv();
     (cvWithoutSelectedPhoto.personal as CVData['personal'] & { photo?: string }).photo = undefined;
 
-    await buildCreativeArtisticPdfBlob(cvWithoutSelectedPhoto, 'en');
+    await mod.buildCreativeArtisticPdfBlob(cvWithoutSelectedPhoto, 'en');
 
     expect(loadedImageSources).toContain(draganOriginalPhoto);
     expect(loadedImageSources).not.toContain(draganSelectedPhoto);
   });
 
   test('Creative Artistic PDF direct Blob is non-empty, one page for the Dragan fixture, and preserves duplicate Coaching', async () => {
-    const canvas = makeCanvas(800, 1050, y => y < 980);
-    const { instances, cloneDocuments } = installPdfMocks(canvas);
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildCreativeArtisticPdfBlob(draganCv(), 'en');
+    const blob = await mod.buildCreativeArtisticPdfBlob(draganCv(), 'en');
 
     expect(blob.size).toBeGreaterThan(0);
     expect(await blob.text()).toContain('%PDF');
@@ -1151,17 +1436,16 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
     expect(instances[0].pages).toBe(1);
     expect(instances[0].addPage).not.toHaveBeenCalled();
 
-    const cloneRoot = cloneDocuments[0]?.querySelector('[data-template-id="creative-artistic"]') as HTMLElement;
-    const cloneText = cloneRoot?.textContent ?? '';
-    expect(cloneText).toContain('Učitelj u osnovnoj školi');
-    expect(cloneText).toContain('Metematički fakultet');
-    expect(cloneText).not.toContain('Metematičkifakultet');
-    expect((cloneText.match(/Coaching/g) ?? [])).toHaveLength(2);
+    const drawn = instances[0].drawnText.join(' ');
+    expect(drawn).toContain('Učitelj u osnovnoj školi');
+    expect(drawn).toContain('Metematički fakultet');
+    expect(drawn).not.toContain('Metematičkifakultet');
+    expect((drawn.match(/Coaching/g) ?? [])).toHaveLength(2);
   });
 
   test('Creative Artistic PDF export save path writes a non-empty PDF through platform save using cvRef-equivalent latest data', async () => {
-    const canvas = makeCanvas(800, 1050, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
     let savedBlob: Blob | undefined;
     vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
       savedBlob = blob as Blob;
@@ -1175,7 +1459,7 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
       return el;
     });
 
-    const result = await exportCreativeArtisticPdf(draganCv(), 'Dragan Obradovic - CV', 'en');
+    const result = await mod.exportCreativeArtisticPdf(draganCv(), 'Dragan Obradovic - CV', 'en');
 
     expect(clickSpy).toHaveBeenCalled();
     expect(savedBlob?.type).toBe('application/pdf');
@@ -1184,10 +1468,10 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
   });
 
   test('Creative Artistic PDF no-photo Blob remains valid with no broken image frame', async () => {
-    const canvas = makeCanvas(800, 1050, () => true);
-    const { instances } = installPdfMocks(canvas);
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildCreativeArtisticPdfBlob(cv({ personal: { photo: undefined, photoEnabled: false } }), 'en');
+    const blob = await mod.buildCreativeArtisticPdfBlob(cv({ personal: { photo: undefined, photoEnabled: false } }), 'en');
 
     expect(blob.size).toBeGreaterThan(0);
     expect(instances[0].pages).toBe(1);

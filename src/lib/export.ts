@@ -1009,6 +1009,14 @@ const CREATIVE_ARTISTIC_TRAILING_PAGE_MIN_FILL_RATIO = 0.55;
 // sparse trailing page, so natural pagination (Education+Skills moved alone, without the
 // entry) is preferred instead.
 const CREATIVE_ARTISTIC_TRAILING_PAGE_MAX_PULL_GAP_RATIO = 0.3;
+// Creative Artistic still uses generic html2canvas capture + fixed-height slicing.
+// Without baked continuation padding and whitespace-aware breaks, page 1 summary rows
+// sit flush to the bottom edge and page 2 continuation starts too tight / with ghosts.
+const CREATIVE_ARTISTIC_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const CREATIVE_ARTISTIC_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+const CREATIVE_ARTISTIC_PDF_PAGE_BREAK_SEARCH_RANGE_CSS_PX = 96;
+const CREATIVE_ARTISTIC_PDF_PAGE_BREAK_MIN_BAND_CSS_PX = 6;
+const CREATIVE_ARTISTIC_PDF_CONTENT_GUARD_CSS_PX = 24;
 const ELEGANT_FORMAL_GROUP_PAGE_PADDING_PX = 0.5;
 const ELEGANT_FORMAL_MAX_KEEP_GROUP_PAGE_RATIO = 0.9;
 // Break-selection guard: keep page cuts out of glyph bands without aggressively
@@ -9755,6 +9763,117 @@ export function planCreativeBoldPdfSliceSegments(
   return segments;
 }
 
+export type CreativeArtisticPdfSliceSegment = {
+  startPx: number;
+  endPx: number;
+};
+
+function getCreativeArtisticContentBounds(
+  canvasWidthPx: number,
+  cssToCanvasScale: number,
+): { leftPx: number; rightPx: number } {
+  const guardPx = Math.max(1, Math.round(CREATIVE_ARTISTIC_PDF_CONTENT_GUARD_CSS_PX * cssToCanvasScale));
+  return {
+    leftPx: guardPx,
+    rightPx: Math.max(guardPx + 1, canvasWidthPx - guardPx),
+  };
+}
+
+export function isCreativeArtisticContentRowWhitespace(
+  canvas: HTMLCanvasElement,
+  rowY: number,
+  leftPx: number,
+  rightPx: number,
+): boolean {
+  return isCreativeBoldMainColumnRowWhitespace(canvas, rowY, leftPx, rightPx);
+}
+
+export function resolveCreativeArtisticSafePageBreakCanvasPx(
+  canvas: HTMLCanvasElement,
+  targetBreakPx: number,
+  minBreakPx: number,
+  maxBreakPx: number,
+  searchRangePx: number,
+  minBandHeightPx: number,
+  leftPx: number,
+  rightPx: number,
+): number {
+  const whitespaceBreak = findCreativeBoldWhitespaceBandCenter(
+    canvas,
+    targetBreakPx,
+    minBreakPx,
+    maxBreakPx,
+    searchRangePx,
+    minBandHeightPx,
+    leftPx,
+    rightPx,
+  );
+  if (whitespaceBreak !== null && whitespaceBreak > minBreakPx) return whitespaceBreak;
+
+  const lower = Math.max(1, Math.ceil(minBreakPx));
+  const start = Math.min(canvas.height - 1, Math.floor(targetBreakPx));
+  for (let y = start; y >= lower; y -= 1) {
+    let safe = true;
+    const guard = Math.max(2, Math.round(minBandHeightPx / 2));
+    for (let guardY = Math.max(lower, y - guard); guardY <= Math.min(canvas.height - 1, y + guard); guardY += 1) {
+      if (!isCreativeArtisticContentRowWhitespace(canvas, guardY, leftPx, rightPx)) {
+        safe = false;
+        break;
+      }
+    }
+    if (safe) return y;
+  }
+  return Math.max(minBreakPx + 1, Math.min(targetBreakPx, maxBreakPx));
+}
+
+export function planCreativeArtisticPdfSliceSegments(
+  canvasHeightPx: number,
+  pageHeightPx: number,
+  trailingTolerancePx: number,
+  pdfCanvas: HTMLCanvasElement,
+  topInsetCanvasPx: number,
+  bottomInsetCanvasPx: number,
+  searchRangeCanvasPx: number,
+  minWhitespaceBandCanvasPx: number,
+  cssToCanvasScale: number,
+): CreativeArtisticPdfSliceSegment[] {
+  const segments: CreativeArtisticPdfSliceSegment[] = [];
+  const { leftPx, rightPx } = getCreativeArtisticContentBounds(pdfCanvas.width, cssToCanvasScale);
+  let offsetY = 0;
+  let pageIndex = 0;
+
+  while (offsetY < canvasHeightPx - trailingTolerancePx) {
+    const topInset = pageIndex > 0 ? topInsetCanvasPx : 0;
+    const contentBudgetPx = Math.max(1, pageHeightPx - topInset - bottomInsetCanvasPx);
+    let sliceHeight = Math.min(contentBudgetPx, canvasHeightPx - offsetY);
+
+    if (offsetY + sliceHeight < canvasHeightPx - trailingTolerancePx) {
+      const targetBreakPx = offsetY + sliceHeight;
+      const minBreakPx = offsetY + Math.max(1, Math.min(contentBudgetPx * 0.45, contentBudgetPx - 1));
+      const maxBreakPx = Math.min(canvasHeightPx, offsetY + contentBudgetPx);
+      const breakPx = resolveCreativeArtisticSafePageBreakCanvasPx(
+        pdfCanvas,
+        targetBreakPx,
+        minBreakPx,
+        maxBreakPx,
+        searchRangeCanvasPx,
+        minWhitespaceBandCanvasPx,
+        leftPx,
+        rightPx,
+      );
+      if (breakPx > offsetY + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        sliceHeight = breakPx - offsetY;
+      }
+    }
+
+    segments.push({ startPx: offsetY, endPx: offsetY + sliceHeight });
+    offsetY += sliceHeight;
+    pageIndex += 1;
+  }
+
+  return segments;
+}
+
 function isTemplateCanvasSliceEffectivelyBlank(
   canvas: HTMLCanvasElement,
   offsetY: number,
@@ -9824,6 +9943,7 @@ export type CvPdfExportRoute =
   | { kind: 'dedicated-clean-simple' }
   | { kind: 'dedicated-professional-classic' }
   | { kind: 'dedicated-creative-bold' }
+  | { kind: 'dedicated-creative-artistic' }
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
@@ -9831,10 +9951,10 @@ export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdf
   if (templateId === 'clean-simple') return { kind: 'dedicated-clean-simple' };
   if (templateId === 'professional-classic') return { kind: 'dedicated-professional-classic' };
   if (templateId === 'creative-bold') return { kind: 'dedicated-creative-bold' };
+  if (templateId === 'creative-artistic') return { kind: 'dedicated-creative-artistic' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
   if (
-    templateId === 'creative-artistic'
-    || templateId === 'elegant-formal'
+    templateId === 'elegant-formal'
     || templateId === 'ats-standard'
     || templateId === 'executive-premium'
     || templateId === 'nordic-clean'
@@ -10458,6 +10578,17 @@ export async function buildCvPdfBlob(
         8,
         Math.round(CREATIVE_BOLD_PDF_PAGE_BREAK_MIN_BAND_CSS_PX * cssToCanvasScale),
       );
+      const creativeArtisticTopInsetCanvasPx = captureTemplateId === 'creative-artistic'
+        ? Math.round(CREATIVE_ARTISTIC_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const creativeArtisticBottomInsetCanvasPx = captureTemplateId === 'creative-artistic'
+        ? Math.round(CREATIVE_ARTISTIC_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const creativeArtisticBreakSearchCanvasPx = CREATIVE_ARTISTIC_PDF_PAGE_BREAK_SEARCH_RANGE_CSS_PX * cssToCanvasScale;
+      const creativeArtisticMinWhitespaceBandCanvasPx = Math.max(
+        8,
+        Math.round(CREATIVE_ARTISTIC_PDF_PAGE_BREAK_MIN_BAND_CSS_PX * cssToCanvasScale),
+      );
       const rirekishoTopInsetCanvasPx = captureTemplateId === 'rirekisho'
         ? Math.round(RIREKISHO_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
         : 0;
@@ -10822,6 +10953,50 @@ export async function buildCvPdfBlob(
             isFinalPage,
             topInsetCanvasPx,
             bottomInsetCanvasPx,
+          );
+          renderedPageIndex += 1;
+        }
+      } else if (captureTemplateId === 'creative-artistic') {
+        const segments = planCreativeArtisticPdfSliceSegments(
+          canvasHeightPx,
+          pageHeightPx,
+          trailingTolerancePx,
+          pdfCanvas,
+          creativeArtisticTopInsetCanvasPx,
+          creativeArtisticBottomInsetCanvasPx,
+          creativeArtisticBreakSearchCanvasPx,
+          creativeArtisticMinWhitespaceBandCanvasPx,
+          cssToCanvasScale,
+        );
+
+        let renderedPageIndex = 0;
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          const segment = segments[segmentIndex];
+          const offsetY = segment.startPx;
+          const sliceHeight = segment.endPx - segment.startPx;
+          const isFinalPage = segmentIndex === segments.length - 1;
+          if (semanticPagePlan && renderedPageIndex > 0) {
+            const pageBottomPx = offsetY + sliceHeight;
+            if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
+              if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
+              continue;
+            }
+          }
+          if (
+            shouldTrimBlankPdfSlices
+            && !semanticPagePlan
+            && renderedPageIndex > 0
+            && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
+          ) {
+            break;
+          }
+          renderPaddedPdfSlice(
+            offsetY,
+            sliceHeight,
+            renderedPageIndex,
+            isFinalPage,
+            creativeArtisticTopInsetCanvasPx,
+            creativeArtisticBottomInsetCanvasPx,
           );
           renderedPageIndex += 1;
         }
@@ -12971,37 +13146,10 @@ export async function buildCreativeArtisticPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Creative Artistic PDF export requires a browser DOM');
-  }
-
   const photoDataUrl = await prepareCreativeArtisticPdfPhotoDataUrl(cv);
-  const container = document.createElement('div');
-  container.id = `creative-artistic-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-creative-artistic-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createCreativeArtisticPdfTemplate(cv, {
-    locale,
-    photoDataUrl,
-  }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Creative Artistic PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  const blob = await buildCreativeArtisticPagedPdfBlob(cv, locale, { photoDataUrl });
+  if (!blob || blob.size === 0) throw new Error('Creative Artistic PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportCreativeArtisticPdf(
@@ -13011,6 +13159,678 @@ export async function exportCreativeArtisticPdf(
 ): Promise<SaveFileResult> {
   const pdfBlob = await buildCreativeArtisticPdfBlob(cv, locale);
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+type CreativeArtisticPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
+
+type CreativeArtisticDirectPdfContext = {
+  pdf: CreativeArtisticPdfWriter;
+  locale: Locale;
+  labels: ReturnType<typeof getCreativeArtisticPdfLabels>;
+  pageWidth: number;
+  pageHeight: number;
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
+  contentWidth: number;
+  bottomSafeY: number;
+  y: number;
+  pageIndex: number;
+};
+
+type CreativeArtisticTextStyle = {
+  size: number;
+  color: [number, number, number];
+  fontStyle?: 'normal' | 'bold' | 'italic';
+  lineHeight: number;
+};
+
+const CA_HEADER_PURPLE: [number, number, number] = [124, 58, 237];
+const CA_HEADER_MAGENTA: [number, number, number] = [192, 38, 211];
+const CA_TITLE_LIGHT: [number, number, number] = [221, 214, 254];
+const CA_CONTACT_LIGHT: [number, number, number] = [245, 208, 254];
+const CA_WHITE: [number, number, number] = [255, 255, 255];
+const CA_HEADING: [number, number, number] = [124, 58, 237];
+const CA_TEXT: [number, number, number] = [17, 24, 39];
+const CA_MUTED: [number, number, number] = [107, 114, 128];
+const CA_MUTED2: [number, number, number] = [75, 85, 99];
+const CA_ACCENT: [number, number, number] = [139, 92, 246];
+const CA_BORDER_ACCENT: [number, number, number] = [221, 214, 254];
+const CA_CHIP_BG: [number, number, number] = [245, 243, 255];
+const CA_CHIP_TEXT: [number, number, number] = [109, 40, 217];
+const CA_SKILLS_LANG_GAP_MM = 6;
+
+function getCreativeArtisticPdfLabels(locale: Locale) {
+  const t = translations[locale] ?? translations.en;
+  return {
+    summary: t.cv.summary,
+    experience: t.cv.experience,
+    education: t.cv.education,
+    skills: t.cv.skills,
+    languages: t.cv.languages,
+    certifications: t.cv.certifications,
+    present: t.cv.present,
+    fathersName: t.cv.fathersName,
+  };
+}
+
+function caDirectDateRange(start: string, end: string, present: boolean, presentLabel: string): string {
+  return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
+}
+
+function caSetTextStyle(ctx: CreativeArtisticDirectPdfContext, style: CreativeArtisticTextStyle): void {
+  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
+  ctx.pdf.setFontSize(style.size);
+  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+}
+
+function caSplitText(ctx: CreativeArtisticDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
+  return Array.isArray(result) ? result.map(String) : [String(result)];
+}
+
+function caFreshPageCapacity(ctx: CreativeArtisticDirectPdfContext): number {
+  return ctx.bottomSafeY - ctx.marginTop;
+}
+
+function caAddPage(ctx: CreativeArtisticDirectPdfContext): void {
+  ctx.pdf.addPage();
+  ctx.pageIndex += 1;
+  ctx.y = ctx.marginTop;
+}
+
+function caEnsureSpace(ctx: CreativeArtisticDirectPdfContext, heightNeeded: number): void {
+  if (ctx.y + heightNeeded <= ctx.bottomSafeY) return;
+  caAddPage(ctx);
+}
+
+function caMoveToFreshPageIfNeeded(ctx: CreativeArtisticDirectPdfContext, blockHeight: number): void {
+  if (blockHeight > caFreshPageCapacity(ctx)) return;
+  if (ctx.y + blockHeight > ctx.bottomSafeY) {
+    caAddPage(ctx);
+  }
+}
+
+function caSectionHeadingHeight(): number {
+  return 7.2;
+}
+
+function caDrawSectionHeading(ctx: CreativeArtisticDirectPdfContext, label: string, x = ctx.marginLeft): void {
+  caEnsureSpace(ctx, caSectionHeadingHeight());
+  caSetTextStyle(ctx, { size: 9.2, color: CA_HEADING, fontStyle: 'bold', lineHeight: 4.0 });
+  ctx.pdf.text(label, x, ctx.y);
+  ctx.y += caSectionHeadingHeight();
+}
+
+function caDrawSectionHeadingAt(ctx: CreativeArtisticDirectPdfContext, label: string, x: number, y: number): number {
+  caSetTextStyle(ctx, { size: 9.2, color: CA_HEADING, fontStyle: 'bold', lineHeight: 4.0 });
+  ctx.pdf.text(label, x, y);
+  return y + caSectionHeadingHeight();
+}
+
+function caDrawLines(
+  ctx: CreativeArtisticDirectPdfContext,
+  lines: string[],
+  style: CreativeArtisticTextStyle,
+  opts: { x?: number; indentX?: number } = {},
+): void {
+  caSetTextStyle(ctx, style);
+  const x = opts.x ?? (ctx.marginLeft + (opts.indentX ?? 0));
+  for (const line of lines) {
+    caEnsureSpace(ctx, style.lineHeight);
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function caDrawLinesBlock(
+  ctx: CreativeArtisticDirectPdfContext,
+  lines: string[],
+  style: CreativeArtisticTextStyle,
+  opts: { x?: number } = {},
+): void {
+  if (!lines.length) return;
+  const blockH = lines.length * style.lineHeight;
+  caMoveToFreshPageIfNeeded(ctx, blockH);
+  caSetTextStyle(ctx, style);
+  const x = opts.x ?? ctx.marginLeft;
+  for (const line of lines) {
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function caDrawHeader(ctx: CreativeArtisticDirectPdfContext, cv: CVData, photoDataUrl: string | null): void {
+  const padX = ctx.marginLeft;
+  const padY = 8;
+  const photoSize = 26;
+  const gap = 5;
+  const textX = photoDataUrl ? padX + photoSize + gap : padX;
+  const textW = ctx.pageWidth - textX - ctx.marginRight;
+
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  const region = regionSettings[cv.region];
+  const contacts = [
+    cv.personal.email,
+    cv.personal.phone,
+    region.showAddress ? cv.personal.address : '',
+  ].filter(Boolean) as string[];
+
+  let textStackH = 6;
+  if (cv.personal.jobTitle) textStackH += 5;
+  if (contacts.length > 0) textStackH += 5;
+  if (cv.personal.fathersName) textStackH += 4;
+  const headerH = Math.max(
+    showPhoto && photoDataUrl ? photoSize + padY * 2 : padY * 2 + 6,
+    textStackH + padY * 2,
+  );
+
+  // Gradient approximation: purple base + magenta overlay on right half
+  ctx.pdf.setFillColor(CA_HEADER_PURPLE[0], CA_HEADER_PURPLE[1], CA_HEADER_PURPLE[2]);
+  ctx.pdf.rect(0, 0, ctx.pageWidth, headerH, 'F');
+  ctx.pdf.setFillColor(CA_HEADER_MAGENTA[0], CA_HEADER_MAGENTA[1], CA_HEADER_MAGENTA[2]);
+  ctx.pdf.rect(ctx.pageWidth * 0.45, 0, ctx.pageWidth * 0.55, headerH, 'F');
+
+  const contentMidY = headerH / 2;
+  if (showPhoto && photoDataUrl) {
+    const photoY = contentMidY - photoSize / 2;
+    try {
+      ctx.pdf.addImage(photoDataUrl, 'PNG', padX, photoY, photoSize, photoSize);
+    } catch {
+      try {
+        ctx.pdf.addImage(photoDataUrl, 'JPEG', padX, photoY, photoSize, photoSize);
+      } catch {
+        // Keep export usable if jsPDF rejects an image data URL.
+      }
+    }
+  }
+
+  let ty = contentMidY - textStackH / 2 + 4;
+  caSetTextStyle(ctx, { size: 16, color: CA_WHITE, fontStyle: 'bold', lineHeight: 6 });
+  const nameLines = caSplitText(ctx, cv.personal.fullName || 'Your Name', textW);
+  for (const line of nameLines) {
+    ctx.pdf.text(line, textX, ty);
+    ty += 5.5;
+  }
+  if (cv.personal.jobTitle) {
+    caSetTextStyle(ctx, { size: 9.5, color: CA_TITLE_LIGHT, lineHeight: 4.2 });
+    const titleLines = caSplitText(ctx, cv.personal.jobTitle, textW);
+    for (const line of titleLines) {
+      ctx.pdf.text(line, textX, ty);
+      ty += 4.0;
+    }
+  }
+  if (contacts.length > 0) {
+    caSetTextStyle(ctx, { size: 7.2, color: CA_CONTACT_LIGHT, lineHeight: 3.5 });
+    ctx.pdf.text(contacts.join('  •  '), textX, ty);
+    ty += 4.0;
+  }
+  if (cv.personal.fathersName) {
+    caSetTextStyle(ctx, { size: 7.2, color: CA_CONTACT_LIGHT, lineHeight: 3.5 });
+    ctx.pdf.text(`${ctx.labels.fathersName}: ${cv.personal.fathersName}`, textX, ty);
+  }
+
+  ctx.y = headerH + 6;
+}
+
+function caDrawSummary(ctx: CreativeArtisticDirectPdfContext, summary: string): void {
+  const blocks = splitCleanSimpleSummaryParagraphBlocks(summary);
+  if (!blocks.length) return;
+  caEnsureSpace(ctx, caSectionHeadingHeight());
+  caDrawSectionHeading(ctx, ctx.labels.summary);
+  const style: CreativeArtisticTextStyle = { size: 8.1, color: CA_MUTED2, lineHeight: 4.0 };
+  blocks.forEach((block, i) => {
+    caDrawLines(ctx, caSplitText(ctx, block), style);
+    if (i < blocks.length - 1) ctx.y += 2.5;
+  });
+  ctx.y += 4;
+}
+
+function caExperienceTextX(ctx: CreativeArtisticDirectPdfContext): number {
+  return ctx.marginLeft + 3.5;
+}
+
+function caExperienceTextW(ctx: CreativeArtisticDirectPdfContext): number {
+  return ctx.contentWidth - 3.5;
+}
+
+function caExperienceDescriptionParts(
+  ctx: CreativeArtisticDirectPdfContext,
+  entry: CVData['experience'][number],
+): Array<{ isBullet: boolean; lines: string[] }> {
+  const textW = caExperienceTextW(ctx);
+  return entry.description
+    .split(/\n+/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const cleaned = part.replace(/^(?:[-•*]|\d+\.)\s+/, '');
+      const isBullet = cleaned !== part;
+      return { isBullet, lines: caSplitText(ctx, cleaned, textW - (isBullet ? 3.5 : 0)) };
+    });
+}
+
+function caExperienceLeadBlockHeight(ctx: CreativeArtisticDirectPdfContext, entry: CVData['experience'][number]): number {
+  const textW = caExperienceTextW(ctx);
+  const titleLines = caSplitText(ctx, entry.position, textW);
+  const headerH = Math.max(4.0, titleLines.length * 4.0)
+    + ((entry.company || entry.startDate) ? 3.5 : 0)
+    + 1.5;
+  const parts = caExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const leadParts = (bulletParts.length ? bulletParts : parts).slice(0, 2);
+  return headerH + leadParts.reduce((sum, p) => sum + p.lines.length * 3.8, 0);
+}
+
+function caExperienceEntryHeight(ctx: CreativeArtisticDirectPdfContext, entry: CVData['experience'][number]): number {
+  const parts = caExperienceDescriptionParts(ctx, entry);
+  const textW = caExperienceTextW(ctx);
+  const titleLines = caSplitText(ctx, entry.position, textW);
+  const headerH = Math.max(4.0, titleLines.length * 4.0)
+    + ((entry.company || entry.startDate) ? 3.5 : 0)
+    + 1.5;
+  return headerH + parts.reduce((sum, p) => sum + p.lines.length * 3.8, 0) + 3;
+}
+
+function caDrawWrappedBulletAtomic(
+  ctx: CreativeArtisticDirectPdfContext,
+  part: { isBullet: boolean; lines: string[] },
+  textX: number,
+): void {
+  if (!part.lines.length) return;
+  const blockH = part.lines.length * 3.8;
+  caMoveToFreshPageIfNeeded(ctx, blockH);
+  caSetTextStyle(ctx, { size: 7.6, color: CA_MUTED2, lineHeight: 3.8 });
+  if (part.isBullet) ctx.pdf.text('•', textX, ctx.y);
+  for (const line of part.lines) {
+    ctx.pdf.text(line, textX + (part.isBullet ? 3.5 : 0), ctx.y);
+    ctx.y += 3.8;
+  }
+}
+
+function caDrawExperienceEntryPaginated(ctx: CreativeArtisticDirectPdfContext, entry: CVData['experience'][number]): void {
+  const dateText = caDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
+  const accentX = ctx.marginLeft;
+  const textX = caExperienceTextX(ctx);
+  const textW = caExperienceTextW(ctx);
+  const leadH = caExperienceLeadBlockHeight(ctx, entry);
+  const fullH = caExperienceEntryHeight(ctx, entry);
+  const remainingSpace = ctx.bottomSafeY - ctx.y;
+  const freshCap = caFreshPageCapacity(ctx);
+
+  const drawHeader = () => {
+    const titleLines = caSplitText(ctx, entry.position, textW);
+    caDrawLinesBlock(ctx, titleLines, { size: 8.2, color: CA_TEXT, fontStyle: 'bold', lineHeight: 4.0 }, { x: textX });
+    if (entry.company || dateText) {
+      const meta = [entry.company, dateText].filter(Boolean).join(' | ');
+      caDrawLinesBlock(ctx, caSplitText(ctx, meta, textW), { size: 7.2, color: CA_ACCENT, lineHeight: 3.5 }, { x: textX });
+    }
+    ctx.y += 1.5;
+  };
+
+  const drawParts = (parts: Array<{ isBullet: boolean; lines: string[] }>) => {
+    for (const part of parts) {
+      if (!part.lines.length) continue;
+      if (part.isBullet || part.lines.length === 1) {
+        caDrawWrappedBulletAtomic(ctx, part, textX);
+        continue;
+      }
+      caSetTextStyle(ctx, { size: 7.6, color: CA_MUTED2, lineHeight: 3.8 });
+      for (const line of part.lines) {
+        caDrawWrappedBulletAtomic(ctx, { isBullet: false, lines: [line] }, textX);
+      }
+    }
+  };
+
+  if (fullH <= remainingSpace) {
+    const startY = ctx.y;
+    drawHeader();
+    drawParts(caExperienceDescriptionParts(ctx, entry));
+    ctx.pdf.setDrawColor(CA_BORDER_ACCENT[0], CA_BORDER_ACCENT[1], CA_BORDER_ACCENT[2]);
+    ctx.pdf.setLineWidth(0.8);
+    ctx.pdf.line(accentX, startY - 1, accentX, ctx.y);
+    ctx.y += 3;
+    return;
+  }
+
+  if (leadH > remainingSpace && leadH <= freshCap) {
+    caAddPage(ctx);
+  }
+
+  const startY = ctx.y;
+  drawHeader();
+  const parts = caExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const useGrouped = bulletParts.length > 0;
+  const leadParts = (useGrouped ? bulletParts : parts).slice(0, 2);
+  const tailParts = (useGrouped ? bulletParts : parts).slice(leadParts.length);
+  const nonBulletParts = useGrouped ? parts.filter(p => !p.isBullet) : [];
+
+  for (const part of leadParts) caDrawWrappedBulletAtomic(ctx, part, textX);
+  ctx.pdf.setDrawColor(CA_BORDER_ACCENT[0], CA_BORDER_ACCENT[1], CA_BORDER_ACCENT[2]);
+  ctx.pdf.setLineWidth(0.8);
+  ctx.pdf.line(accentX, startY - 1, accentX, ctx.y);
+
+  for (const part of nonBulletParts) caDrawWrappedBulletAtomic(ctx, part, textX);
+
+  let continuationShown = false;
+  let tailStartY = ctx.y;
+  for (const part of tailParts) {
+    const partH = part.lines.length * 3.8;
+    if (ctx.y + partH > ctx.bottomSafeY) {
+      caAddPage(ctx);
+      if (!continuationShown) {
+        caSetTextStyle(ctx, { size: 7.5, color: CA_TEXT, fontStyle: 'italic', lineHeight: 3.8 });
+        ctx.pdf.text(`${entry.position} (continued)`, textX, ctx.y);
+        ctx.y += 4.2;
+        continuationShown = true;
+      }
+      tailStartY = ctx.y;
+    }
+    caDrawWrappedBulletAtomic(ctx, part, textX);
+    ctx.pdf.setDrawColor(CA_BORDER_ACCENT[0], CA_BORDER_ACCENT[1], CA_BORDER_ACCENT[2]);
+    ctx.pdf.setLineWidth(0.8);
+    ctx.pdf.line(accentX, tailStartY - 1, accentX, ctx.y);
+    tailStartY = ctx.y;
+  }
+  ctx.y += 3;
+}
+
+function caDrawExperience(ctx: CreativeArtisticDirectPdfContext, cv: CVData): void {
+  if (!cv.experience.length) return;
+  const leadH = caSectionHeadingHeight() + caExperienceLeadBlockHeight(ctx, cv.experience[0]);
+  caMoveToFreshPageIfNeeded(ctx, leadH);
+  caDrawSectionHeading(ctx, ctx.labels.experience);
+  for (const entry of cv.experience) {
+    caDrawExperienceEntryPaginated(ctx, entry);
+  }
+}
+
+function caEducationEntryHeight(ctx: CreativeArtisticDirectPdfContext, edu: CVData['education'][number]): number {
+  const degreeLines = caSplitText(ctx, edu.degree);
+  const degreeH = Math.max(4.0, degreeLines.length * 4.0);
+  const metaH = (edu.school || edu.startDate || edu.endDate) ? 3.5 : 0;
+  return degreeH + metaH + 2.5;
+}
+
+function caEducationHeight(ctx: CreativeArtisticDirectPdfContext, cv: CVData): number {
+  if (!cv.education.length) return 0;
+  let h = caSectionHeadingHeight();
+  for (const edu of cv.education) h += caEducationEntryHeight(ctx, edu);
+  return h + 2;
+}
+
+function caDrawEducationEntry(ctx: CreativeArtisticDirectPdfContext, edu: CVData['education'][number]): void {
+  const entryH = caEducationEntryHeight(ctx, edu);
+  caMoveToFreshPageIfNeeded(ctx, entryH);
+  caDrawLinesBlock(ctx, caSplitText(ctx, edu.degree), { size: 8.2, color: CA_TEXT, fontStyle: 'bold', lineHeight: 4.0 });
+  const dateParts = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+  const metaText = [edu.school, dateParts].filter(Boolean).join(' | ');
+  if (metaText) {
+    caDrawLinesBlock(ctx, caSplitText(ctx, metaText), { size: 7.2, color: CA_MUTED, lineHeight: 3.5 });
+  }
+  ctx.y += 2.5;
+}
+
+function caDrawEducation(ctx: CreativeArtisticDirectPdfContext, cv: CVData): void {
+  if (!cv.education.length) return;
+  const fullH = caEducationHeight(ctx, cv);
+  const headingPlusFirst = caSectionHeadingHeight() + caEducationEntryHeight(ctx, cv.education[0]);
+  const freshCap = caFreshPageCapacity(ctx);
+  if (fullH <= freshCap) {
+    caMoveToFreshPageIfNeeded(ctx, fullH);
+  } else {
+    caMoveToFreshPageIfNeeded(ctx, headingPlusFirst);
+  }
+  caDrawSectionHeading(ctx, ctx.labels.education);
+  for (const edu of cv.education) caDrawEducationEntry(ctx, edu);
+  ctx.y += 2;
+}
+
+type CaSkillChipLayout = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  lines: string[];
+};
+
+function caMeasureSkillChip(
+  ctx: CreativeArtisticDirectPdfContext,
+  label: string,
+  maxColWidth: number,
+): { width: number; height: number; lines: string[] } {
+  const padH = 2.1;
+  const padV = 0.85;
+  const lineH = 3.4;
+  caSetTextStyle(ctx, { size: 7.2, color: CA_CHIP_TEXT, lineHeight: lineH });
+  const textWidth = ctx.pdf.getTextWidth(label);
+  const singleLineWidth = textWidth + padH * 2;
+  if (singleLineWidth <= maxColWidth) {
+    return { width: singleLineWidth, height: lineH + padV * 2, lines: [label] };
+  }
+  const lines = caSplitText(ctx, label, maxColWidth - padH * 2);
+  return { width: maxColWidth, height: lines.length * lineH + padV * 2, lines };
+}
+
+function caLayoutSkillChips(
+  ctx: CreativeArtisticDirectPdfContext,
+  skills: string[],
+  maxColWidth: number,
+): { chips: CaSkillChipLayout[]; totalHeight: number } {
+  const gapX = 1.1;
+  const gapY = 1.1;
+  let cursorX = 0;
+  let cursorY = 0;
+  let rowHeight = 0;
+  const chips: CaSkillChipLayout[] = [];
+  for (const skill of skills) {
+    const measured = caMeasureSkillChip(ctx, skill, maxColWidth);
+    if (cursorX > 0 && cursorX + measured.width > maxColWidth) {
+      cursorY += rowHeight + gapY;
+      cursorX = 0;
+      rowHeight = 0;
+    }
+    chips.push({ x: cursorX, y: cursorY, width: measured.width, height: measured.height, lines: measured.lines });
+    cursorX += measured.width + gapX;
+    rowHeight = Math.max(rowHeight, measured.height);
+  }
+  return { chips, totalHeight: cursorY + rowHeight };
+}
+
+function caMeasureSkillChipsHeight(ctx: CreativeArtisticDirectPdfContext, skills: string[], maxColWidth: number): number {
+  if (!skills.length) return 0;
+  return caLayoutSkillChips(ctx, skills, maxColWidth).totalHeight;
+}
+
+function caDrawSkillChips(
+  ctx: CreativeArtisticDirectPdfContext,
+  skills: string[],
+  colX: number,
+  colY: number,
+  maxColWidth: number,
+): number {
+  const layout = caLayoutSkillChips(ctx, skills, maxColWidth);
+  const padH = 2.1;
+  const padV = 0.85;
+  const lineH = 3.4;
+  for (const chip of layout.chips) {
+    const chipX = colX + chip.x;
+    const chipY = colY + chip.y;
+    ctx.pdf.setFillColor(CA_CHIP_BG[0], CA_CHIP_BG[1], CA_CHIP_BG[2]);
+    ctx.pdf.rect(chipX, chipY - padV - lineH + 1.2, chip.width, chip.height, 'F');
+    caSetTextStyle(ctx, { size: 7.2, color: CA_CHIP_TEXT, lineHeight: lineH });
+    chip.lines.forEach((line, lineIndex) => {
+      ctx.pdf.text(line, chipX + padH, chipY + lineIndex * lineH);
+    });
+  }
+  return layout.totalHeight;
+}
+
+function caSkillsLanguagesHeight(ctx: CreativeArtisticDirectPdfContext, cv: CVData): number {
+  const skills = cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale));
+  const hasSkills = skills.length > 0;
+  const hasLangs = cv.languages.length > 0;
+  if (!hasSkills && !hasLangs) return 0;
+
+  const colW = (ctx.contentWidth - CA_SKILLS_LANG_GAP_MM) / 2;
+  let skillsH = 0;
+  let langsH = 0;
+  if (hasSkills) {
+    skillsH = caSectionHeadingHeight() + caMeasureSkillChipsHeight(ctx, skills, colW);
+  }
+  if (hasLangs) {
+    langsH = caSectionHeadingHeight() + cv.languages.length * 3.8;
+  }
+  return Math.max(skillsH, langsH) + 2;
+}
+
+function caDrawSkillsLanguagesBlock(ctx: CreativeArtisticDirectPdfContext, cv: CVData): void {
+  const skills = cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale));
+  const hasSkills = skills.length > 0;
+  const hasLangs = cv.languages.length > 0;
+  if (!hasSkills && !hasLangs) return;
+
+  const blockH = caSkillsLanguagesHeight(ctx, cv);
+  caMoveToFreshPageIfNeeded(ctx, blockH);
+
+  const colW = (ctx.contentWidth - CA_SKILLS_LANG_GAP_MM) / 2;
+  const skillsX = ctx.marginLeft;
+  const langsX = ctx.marginLeft + colW + CA_SKILLS_LANG_GAP_MM;
+  const blockTopY = ctx.y;
+  let skillsBottom = blockTopY;
+  let langsBottom = blockTopY;
+
+  if (hasSkills) {
+    const headingEnd = caDrawSectionHeadingAt(ctx, ctx.labels.skills, skillsX, blockTopY);
+    const chipsH = caDrawSkillChips(ctx, skills, skillsX, headingEnd, colW);
+    skillsBottom = headingEnd + chipsH;
+  }
+
+  if (hasLangs) {
+    const headingEnd = caDrawSectionHeadingAt(ctx, ctx.labels.languages, langsX, blockTopY);
+    caSetTextStyle(ctx, { size: 7.6, color: CA_TEXT, lineHeight: 3.8 });
+    let langY = headingEnd;
+    for (const lang of cv.languages) {
+      ctx.pdf.text(
+        `${getLocalizedCvLanguageName(lang.name, ctx.locale)} - ${lang.level}`,
+        langsX,
+        langY,
+      );
+      langY += 3.8;
+    }
+    langsBottom = langY;
+  }
+
+  ctx.y = Math.max(skillsBottom, langsBottom) + 2;
+}
+
+function caCertificationsHeight(ctx: CreativeArtisticDirectPdfContext, cv: CVData): number {
+  if (!cv.certifications.length) return 0;
+  let h = caSectionHeadingHeight();
+  for (const cert of cv.certifications) {
+    h += caSplitText(ctx, cert).length * 3.8 + 1;
+  }
+  return h;
+}
+
+function caDrawCertifications(ctx: CreativeArtisticDirectPdfContext, cv: CVData): void {
+  if (!cv.certifications.length) return;
+  caMoveToFreshPageIfNeeded(ctx, caSectionHeadingHeight() + 6);
+  caDrawSectionHeading(ctx, ctx.labels.certifications);
+  for (const cert of cv.certifications) {
+    caDrawLines(ctx, caSplitText(ctx, cert), { size: 7.6, color: CA_MUTED2, lineHeight: 3.8 });
+  }
+  ctx.y += 2;
+}
+
+function caMoveLowerSectionsIfNeeded(
+  ctx: CreativeArtisticDirectPdfContext,
+  educationH: number,
+  skillsLangH: number,
+  certsH: number,
+): void {
+  const lowerH = educationH + skillsLangH + certsH;
+  if (lowerH <= 0) return;
+  const freshCap = caFreshPageCapacity(ctx);
+  const remaining = ctx.bottomSafeY - ctx.y;
+
+  if (lowerH <= remaining) return;
+
+  if (lowerH <= freshCap) {
+    caAddPage(ctx);
+    return;
+  }
+
+  const eduSkillsLangH = educationH + skillsLangH;
+  if (eduSkillsLangH > 0 && eduSkillsLangH <= freshCap && eduSkillsLangH > remaining) {
+    caAddPage(ctx);
+  }
+}
+
+export async function buildCreativeArtisticPagedPdfBlob(
+  cv: CVData,
+  locale: Locale,
+  options: { photoDataUrl?: string | null } = {},
+): Promise<Blob> {
+  const { jsPDF } = await import('jspdf');
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const marginLeft = 10;
+  const marginRight = 10;
+  const marginTop = 10;
+  const marginBottom = 12;
+  const ctx: CreativeArtisticDirectPdfContext = {
+    pdf,
+    locale,
+    labels: getCreativeArtisticPdfLabels(locale),
+    pageWidth: CV_PDF_A4_WIDTH_MM,
+    pageHeight: CV_PDF_A4_HEIGHT_MM,
+    marginLeft,
+    marginRight,
+    marginTop,
+    marginBottom,
+    contentWidth: CV_PDF_A4_WIDTH_MM - marginLeft - marginRight,
+    bottomSafeY: CV_PDF_A4_HEIGHT_MM - marginBottom,
+    y: 0,
+    pageIndex: 0,
+  };
+
+  caDrawHeader(ctx, cv, options.photoDataUrl ?? null);
+  caDrawSummary(ctx, cv.summary);
+  caDrawExperience(ctx, cv);
+
+  const educationH = caEducationHeight(ctx, cv);
+  const skillsLangH = caSkillsLanguagesHeight(ctx, cv);
+  const certsH = caCertificationsHeight(ctx, cv);
+  caMoveLowerSectionsIfNeeded(ctx, educationH, skillsLangH, certsH);
+
+  if (educationH > 0) caDrawEducation(ctx, cv);
+
+  if (skillsLangH > 0) {
+    const blockH = caSkillsLanguagesHeight(ctx, cv);
+    const freshCap = caFreshPageCapacity(ctx);
+    if (blockH <= freshCap) {
+      caMoveToFreshPageIfNeeded(ctx, blockH);
+    } else {
+      const skillsOnlyH = caSectionHeadingHeight() + caMeasureSkillChipsHeight(
+        ctx,
+        cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale)),
+        (ctx.contentWidth - CA_SKILLS_LANG_GAP_MM) / 2,
+      );
+      caMoveToFreshPageIfNeeded(ctx, skillsOnlyH);
+    }
+    caDrawSkillsLanguagesBlock(ctx, cv);
+  }
+
+  if (certsH > 0) caDrawCertifications(ctx, cv);
+
+  const output = pdf.output('blob');
+  return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
 }
 
 function createRirekishoPortraitPhoto(dataUrl: string): Promise<string | null> {
