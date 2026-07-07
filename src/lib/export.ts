@@ -9944,6 +9944,7 @@ export type CvPdfExportRoute =
   | { kind: 'dedicated-professional-classic' }
   | { kind: 'dedicated-creative-bold' }
   | { kind: 'dedicated-creative-artistic' }
+  | { kind: 'dedicated-elegant-formal' }
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
@@ -9952,10 +9953,10 @@ export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdf
   if (templateId === 'professional-classic') return { kind: 'dedicated-professional-classic' };
   if (templateId === 'creative-bold') return { kind: 'dedicated-creative-bold' };
   if (templateId === 'creative-artistic') return { kind: 'dedicated-creative-artistic' };
+  if (templateId === 'elegant-formal') return { kind: 'dedicated-elegant-formal' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
   if (
-    templateId === 'elegant-formal'
-    || templateId === 'ats-standard'
+    templateId === 'ats-standard'
     || templateId === 'executive-premium'
     || templateId === 'nordic-clean'
     || templateId === 'tech-sidebar'
@@ -14194,44 +14195,636 @@ async function awaitExportTemplateImages(root: HTMLElement): Promise<void> {
   }));
 }
 
+type ElegantFormalPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
+
+type ElegantFormalDirectPdfContext = {
+  pdf: ElegantFormalPdfWriter;
+  locale: Locale;
+  labels: ReturnType<typeof getElegantFormalPdfLabels>;
+  pageWidth: number;
+  pageHeight: number;
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
+  contentWidth: number;
+  bottomSafeY: number;
+  y: number;
+  pageIndex: number;
+};
+
+type ElegantFormalTextStyle = {
+  size: number;
+  color: [number, number, number];
+  fontStyle?: 'normal' | 'bold' | 'italic';
+  lineHeight: number;
+};
+
+const EF_AMBER: [number, number, number] = [180, 83, 9];
+const EF_TEXT: [number, number, number] = [17, 24, 39];
+const EF_NAME: [number, number, number] = [31, 41, 55];
+const EF_SUMMARY: [number, number, number] = [55, 65, 81];
+const EF_MUTED: [number, number, number] = [75, 85, 99];
+const EF_LIGHT: [number, number, number] = [156, 163, 175];
+const EF_EDU_META: [number, number, number] = [107, 114, 128];
+const EF_RULE: [number, number, number] = [229, 231, 235];
+const EF_SEPARATOR: [number, number, number] = [209, 213, 219];
+const EF_PHOTO_W_MM = 21.7;
+const EF_PHOTO_H_MM = 28.9;
+const EF_HEADER_GAP_MM = 4.8;
+const EF_LOWER_COL_GAP_MM = 3.7;
+
+function getElegantFormalPdfLabels(locale: Locale) {
+  const t = translations[locale] ?? translations.en;
+  return {
+    summary: t.cv.summary,
+    experience: t.cv.experience,
+    education: t.cv.education,
+    skills: t.cv.skills,
+    languages: t.cv.languages,
+    certifications: t.cv.certifications,
+    present: t.cv.present,
+  };
+}
+
+function efSetTextStyle(ctx: ElegantFormalDirectPdfContext, style: ElegantFormalTextStyle): void {
+  ctx.pdf.setFont('times', style.fontStyle ?? 'normal');
+  ctx.pdf.setFontSize(style.size);
+  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+}
+
+function efSplitText(ctx: ElegantFormalDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
+  return Array.isArray(result) ? result.map(String) : [String(result)];
+}
+
+function efFreshPageCapacity(ctx: ElegantFormalDirectPdfContext): number {
+  return ctx.bottomSafeY - ctx.marginTop;
+}
+
+function efAddPage(ctx: ElegantFormalDirectPdfContext): void {
+  ctx.pdf.addPage();
+  ctx.pageIndex += 1;
+  ctx.y = ctx.marginTop;
+}
+
+function efEnsureSpace(ctx: ElegantFormalDirectPdfContext, heightNeeded: number): void {
+  if (ctx.y + heightNeeded <= ctx.bottomSafeY) return;
+  efAddPage(ctx);
+}
+
+function efMoveToFreshPageIfNeeded(ctx: ElegantFormalDirectPdfContext, blockHeight: number): void {
+  if (blockHeight > efFreshPageCapacity(ctx)) return;
+  if (ctx.y + blockHeight > ctx.bottomSafeY) {
+    efAddPage(ctx);
+  }
+}
+
+function efCenteredX(ctx: ElegantFormalDirectPdfContext, text: string): number {
+  return (ctx.pageWidth - ctx.pdf.getTextWidth(text)) / 2;
+}
+
+function efCenteredXInColumn(ctx: ElegantFormalDirectPdfContext, text: string, colX: number, colW: number): number {
+  return colX + (colW - ctx.pdf.getTextWidth(text)) / 2;
+}
+
+function efSectionHeadingHeight(withRule = false): number {
+  return withRule ? 8.2 : 6.2;
+}
+
+function efDrawSectionHeading(ctx: ElegantFormalDirectPdfContext, label: string, withRule = false): void {
+  const blockH = efSectionHeadingHeight(withRule);
+  efEnsureSpace(ctx, blockH);
+  const upper = label.toUpperCase();
+  efSetTextStyle(ctx, { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 });
+  ctx.pdf.text(upper, efCenteredX(ctx, upper), ctx.y);
+  ctx.y += 4.8;
+  if (withRule) {
+    ctx.pdf.setDrawColor(EF_RULE[0], EF_RULE[1], EF_RULE[2]);
+    ctx.pdf.setLineWidth(0.25);
+    ctx.pdf.line(ctx.marginLeft, ctx.y, ctx.pageWidth - ctx.marginRight, ctx.y);
+    ctx.y += 2.4;
+  }
+}
+
+function efDrawSectionHeadingAt(
+  ctx: ElegantFormalDirectPdfContext,
+  label: string,
+  colX: number,
+  colW: number,
+  y: number,
+): number {
+  const upper = label.toUpperCase();
+  efSetTextStyle(ctx, { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 });
+  ctx.pdf.text(upper, efCenteredXInColumn(ctx, upper, colX, colW), y);
+  return y + 5.2;
+}
+
+function efDrawCenteredLines(
+  ctx: ElegantFormalDirectPdfContext,
+  lines: string[],
+  style: ElegantFormalTextStyle,
+): void {
+  if (!lines.length) return;
+  efSetTextStyle(ctx, style);
+  for (const line of lines) {
+    efEnsureSpace(ctx, style.lineHeight);
+    ctx.pdf.text(line, efCenteredX(ctx, line), ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function efDrawLinesBlock(
+  ctx: ElegantFormalDirectPdfContext,
+  lines: string[],
+  style: ElegantFormalTextStyle,
+  opts: { x?: number } = {},
+): void {
+  if (!lines.length) return;
+  const blockH = lines.length * style.lineHeight;
+  efMoveToFreshPageIfNeeded(ctx, blockH);
+  efSetTextStyle(ctx, style);
+  const x = opts.x ?? ctx.marginLeft;
+  for (const line of lines) {
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function efDirectDateRange(start: string, end: string, present: boolean, presentLabel: string): string {
+  return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
+}
+
+function efHasPhotoEnabled(cv: CVData): boolean {
+  if (cv.personal.photoEnabled !== undefined) return cv.personal.photoEnabled;
+  return cv.region !== 'US';
+}
+
+function efDrawHeader(ctx: ElegantFormalDirectPdfContext, cv: CVData, photoDataUrl: string | null): void {
+  const region = regionSettings[cv.region];
+  const contacts = [
+    cv.personal.email,
+    cv.personal.phone,
+    region.showAddress ? cv.personal.address : '',
+  ].filter(Boolean) as string[];
+  const showPhoto = Boolean(photoDataUrl && efHasPhotoEnabled(cv));
+  const headerTop = ctx.marginTop;
+  let headerBottom = headerTop;
+
+  if (showPhoto && photoDataUrl) {
+    try {
+      ctx.pdf.addImage(photoDataUrl, 'JPEG', ctx.marginLeft, headerTop, EF_PHOTO_W_MM, EF_PHOTO_H_MM);
+    } catch {
+      try {
+        ctx.pdf.addImage(photoDataUrl, 'PNG', ctx.marginLeft, headerTop, EF_PHOTO_W_MM, EF_PHOTO_H_MM);
+      } catch {
+        // Keep export usable if jsPDF rejects an image data URL.
+      }
+    }
+    headerBottom = Math.max(headerBottom, headerTop + EF_PHOTO_H_MM);
+  }
+
+  const centerColX = showPhoto
+    ? ctx.marginLeft + EF_PHOTO_W_MM + EF_HEADER_GAP_MM
+    : ctx.marginLeft;
+  const centerColW = showPhoto
+    ? ctx.contentWidth - EF_PHOTO_W_MM - EF_HEADER_GAP_MM - EF_PHOTO_W_MM
+    : ctx.contentWidth;
+  const centerOfCol = (text: string) => centerColX + (centerColW - ctx.pdf.getTextWidth(text)) / 2;
+
+  let textY = headerTop + 4;
+  efSetTextStyle(ctx, { size: 22, color: EF_NAME, fontStyle: 'normal', lineHeight: 5.5 });
+  for (const line of efSplitText(ctx, cv.personal.fullName || 'Your Name', centerColW)) {
+    ctx.pdf.text(line, centerOfCol(line), textY);
+    textY += 5.2;
+  }
+
+  if (cv.personal.jobTitle) {
+    efSetTextStyle(ctx, { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 });
+    const title = cv.personal.jobTitle.toUpperCase();
+    for (const line of efSplitText(ctx, title, centerColW)) {
+      ctx.pdf.text(line, centerOfCol(line), textY);
+      textY += 3.8;
+    }
+  }
+
+  if (contacts.length > 0) {
+    textY += 1.5;
+    efSetTextStyle(ctx, { size: 9, color: EF_LIGHT, fontStyle: 'normal', lineHeight: 3.5 });
+    const contactParts: string[] = [];
+    contacts.forEach((contact, index) => {
+      if (index > 0) contactParts.push(' | ');
+      contactParts.push(contact);
+    });
+    const contactLine = contactParts.join('');
+    for (const line of efSplitText(ctx, contactLine, centerColW)) {
+      ctx.pdf.text(line, centerOfCol(line), textY);
+      textY += 3.5;
+    }
+  }
+
+  headerBottom = Math.max(headerBottom, textY);
+  ctx.y = headerBottom + 3.5;
+  ctx.pdf.setDrawColor(EF_SEPARATOR[0], EF_SEPARATOR[1], EF_SEPARATOR[2]);
+  ctx.pdf.setLineWidth(0.3);
+  ctx.pdf.line(ctx.marginLeft, ctx.y, ctx.pageWidth - ctx.marginRight, ctx.y);
+  ctx.y += 4.5;
+}
+
+function efDrawSummary(ctx: ElegantFormalDirectPdfContext, summary: string): void {
+  const blocks = splitCleanSimpleSummaryParagraphBlocks(summary);
+  if (!blocks.length) return;
+  efEnsureSpace(ctx, efSectionHeadingHeight());
+  efDrawSectionHeading(ctx, ctx.labels.summary);
+  const style: ElegantFormalTextStyle = { size: 9.5, color: EF_SUMMARY, fontStyle: 'italic', lineHeight: 4.2 };
+  blocks.forEach((block, i) => {
+    efDrawCenteredLines(ctx, efSplitText(ctx, block, ctx.contentWidth), style);
+    if (i < blocks.length - 1) ctx.y += 2;
+  });
+  ctx.y += 3.5;
+}
+
+function efExperienceDescriptionParts(
+  ctx: ElegantFormalDirectPdfContext,
+  entry: CVData['experience'][number],
+): Array<{ isBullet: boolean; lines: string[] }> {
+  return entry.description
+    .split(/\n+/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const cleaned = part.replace(/^(?:[-•*]|\d+\.)\s+/, '');
+      const isBullet = cleaned !== part;
+      const bulletIndent = isBullet ? 5 : 0;
+      return { isBullet, lines: efSplitText(ctx, cleaned, ctx.contentWidth - bulletIndent) };
+    });
+}
+
+function efExperienceLeadBlockHeight(ctx: ElegantFormalDirectPdfContext, entry: CVData['experience'][number]): number {
+  const titleLines = efSplitText(ctx, entry.position);
+  const headerH = Math.max(4.0, titleLines.length * 4.0) + 3.5 + 1.5;
+  const parts = efExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const leadParts = (bulletParts.length ? bulletParts : parts).slice(0, 2);
+  return headerH + leadParts.reduce((sum, p) => sum + p.lines.length * 3.8, 0);
+}
+
+function efExperienceEntryHeight(ctx: ElegantFormalDirectPdfContext, entry: CVData['experience'][number]): number {
+  const parts = efExperienceDescriptionParts(ctx, entry);
+  return efExperienceLeadBlockHeight(ctx, entry)
+    + parts.slice(2).reduce((sum, p) => sum + p.lines.length * 3.8, 0)
+    + 3;
+}
+
+function efDrawWrappedBulletAtomic(
+  ctx: ElegantFormalDirectPdfContext,
+  part: { isBullet: boolean; lines: string[] },
+): void {
+  const lineH = 3.8;
+  const blockH = part.lines.length * lineH;
+  efEnsureSpace(ctx, blockH);
+  efSetTextStyle(ctx, { size: 9.5, color: EF_MUTED, lineHeight: lineH });
+  part.lines.forEach((line, index) => {
+    const prefix = part.isBullet && index === 0 ? '• ' : part.isBullet ? '  ' : '';
+    ctx.pdf.text(`${prefix}${line}`, ctx.marginLeft + (part.isBullet ? 4 : 0), ctx.y);
+    ctx.y += lineH;
+  });
+}
+
+function efDrawExperienceEntryPaginated(ctx: ElegantFormalDirectPdfContext, entry: CVData['experience'][number]): void {
+  const dateText = efDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
+  const fullH = efExperienceEntryHeight(ctx, entry);
+  const leadH = efExperienceLeadBlockHeight(ctx, entry);
+  const remainingSpace = ctx.bottomSafeY - ctx.y;
+  const freshCap = efFreshPageCapacity(ctx);
+
+  const drawHeader = () => {
+    const titleLines = efSplitText(ctx, entry.position);
+    const titleLineH = 4.0;
+    const headerBlockH = Math.max(titleLineH, titleLines.length * titleLineH);
+    efEnsureSpace(ctx, headerBlockH);
+    efSetTextStyle(ctx, { size: 10, color: EF_TEXT, fontStyle: 'bold', lineHeight: titleLineH });
+    titleLines.forEach((line) => {
+      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      ctx.y += titleLineH;
+    });
+    if (dateText) {
+      efSetTextStyle(ctx, { size: 9, color: EF_LIGHT, fontStyle: 'italic', lineHeight: 3.5 });
+      const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
+      ctx.pdf.text(dateText, dateX, ctx.y - titleLineH + 0.5);
+    }
+    if (entry.company) {
+      efDrawLinesBlock(ctx, efSplitText(ctx, entry.company), { size: 9, color: EF_AMBER, lineHeight: 3.5 });
+    } else {
+      ctx.y += 1;
+    }
+  };
+
+  if (fullH <= remainingSpace) {
+    drawHeader();
+    for (const part of efExperienceDescriptionParts(ctx, entry)) {
+      efDrawWrappedBulletAtomic(ctx, part);
+    }
+    ctx.y += 2.5;
+    return;
+  }
+
+  if (leadH > remainingSpace && leadH <= freshCap) {
+    efAddPage(ctx);
+  }
+
+  drawHeader();
+  const parts = efExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const useGrouped = bulletParts.length > 0;
+  const leadParts = (useGrouped ? bulletParts : parts).slice(0, 2);
+  const tailParts = (useGrouped ? bulletParts : parts).slice(leadParts.length);
+  const nonBulletParts = useGrouped ? parts.filter(p => !p.isBullet) : [];
+
+  for (const part of leadParts) efDrawWrappedBulletAtomic(ctx, part);
+  for (const part of nonBulletParts) efDrawWrappedBulletAtomic(ctx, part);
+
+  let continuationShown = false;
+  for (const part of tailParts) {
+    const partH = part.lines.length * 3.8;
+    if (ctx.y + partH > ctx.bottomSafeY) {
+      efAddPage(ctx);
+      if (!continuationShown) {
+        efSetTextStyle(ctx, { size: 9.5, color: EF_TEXT, fontStyle: 'italic', lineHeight: 3.8 });
+        const cont = `${entry.position} (continued)`;
+        ctx.pdf.text(cont, ctx.marginLeft, ctx.y);
+        ctx.y += 4.2;
+        continuationShown = true;
+      }
+    }
+    efDrawWrappedBulletAtomic(ctx, part);
+  }
+  ctx.y += 2.5;
+}
+
+function efDrawExperience(ctx: ElegantFormalDirectPdfContext, cv: CVData): void {
+  if (!cv.experience.length) return;
+  const leadH = efSectionHeadingHeight(true) + efExperienceLeadBlockHeight(ctx, cv.experience[0]);
+  efMoveToFreshPageIfNeeded(ctx, leadH);
+  efDrawSectionHeading(ctx, ctx.labels.experience, true);
+  for (const entry of cv.experience) {
+    efDrawExperienceEntryPaginated(ctx, entry);
+  }
+  ctx.y += 1.5;
+}
+
+function efEducationEntryHeight(ctx: ElegantFormalDirectPdfContext, edu: CVData['education'][number]): number {
+  const degreeLines = efSplitText(ctx, edu.degree);
+  const degreeH = Math.max(4.0, degreeLines.length * 4.0);
+  const metaH = (edu.school || edu.startDate || edu.endDate) ? 3.5 : 0;
+  return degreeH + metaH + 2;
+}
+
+function efEducationHeight(ctx: ElegantFormalDirectPdfContext, cv: CVData): number {
+  if (!cv.education.length) return 0;
+  let h = efSectionHeadingHeight(true);
+  for (const edu of cv.education) h += efEducationEntryHeight(ctx, edu);
+  return h + 2;
+}
+
+function efDrawEducationEntry(ctx: ElegantFormalDirectPdfContext, edu: CVData['education'][number]): void {
+  const entryH = efEducationEntryHeight(ctx, edu);
+  efMoveToFreshPageIfNeeded(ctx, entryH);
+  efDrawCenteredLines(
+    ctx,
+    efSplitText(ctx, edu.degree),
+    { size: 10, color: EF_TEXT, fontStyle: 'bold', lineHeight: 4.0 },
+  );
+  const dateParts = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+  const metaText = [edu.school, dateParts].filter(Boolean).join(' | ');
+  if (metaText) {
+    efDrawCenteredLines(
+      ctx,
+      efSplitText(ctx, metaText),
+      { size: 9, color: EF_EDU_META, lineHeight: 3.5 },
+    );
+  }
+  ctx.y += 2;
+}
+
+function efDrawEducation(ctx: ElegantFormalDirectPdfContext, cv: CVData): void {
+  if (!cv.education.length) return;
+  const fullH = efEducationHeight(ctx, cv);
+  const headingPlusFirst = efSectionHeadingHeight(true) + efEducationEntryHeight(ctx, cv.education[0]);
+  if (fullH <= efFreshPageCapacity(ctx)) {
+    efMoveToFreshPageIfNeeded(ctx, fullH);
+  } else {
+    efMoveToFreshPageIfNeeded(ctx, headingPlusFirst);
+  }
+  efDrawSectionHeading(ctx, ctx.labels.education, true);
+  for (const edu of cv.education) efDrawEducationEntry(ctx, edu);
+  ctx.y += 1.5;
+}
+
+type EfInlineRow = { items: string[]; y: number; height: number };
+
+function efLayoutInlineItems(ctx: ElegantFormalDirectPdfContext, items: string[], colW: number): EfInlineRow[] {
+  const gapX = 2.8;
+  const gapY = 1.2;
+  const lineH = 3.8;
+  efSetTextStyle(ctx, { size: 9, color: EF_MUTED, lineHeight: lineH });
+  const rows: EfInlineRow[] = [];
+  let rowItems: string[] = [];
+  let rowWidth = 0;
+  let rowY = 0;
+  let rowHeight = lineH;
+
+  const flush = () => {
+    if (!rowItems.length) return;
+    rows.push({ items: rowItems, y: rowY, height: rowHeight });
+    rowY += rowHeight + gapY;
+    rowItems = [];
+    rowWidth = 0;
+    rowHeight = lineH;
+  };
+
+  for (const item of items) {
+    const itemW = ctx.pdf.getTextWidth(item);
+    const nextW = rowWidth > 0 ? rowWidth + gapX + itemW : itemW;
+    if (rowItems.length > 0 && nextW > colW) flush();
+    rowWidth = rowItems.length > 0 ? rowWidth + gapX + itemW : itemW;
+    rowItems.push(item);
+  }
+  flush();
+  return rows;
+}
+
+function efMeasureInlineItemsHeight(ctx: ElegantFormalDirectPdfContext, items: string[], colW: number): number {
+  const rows = efLayoutInlineItems(ctx, items, colW);
+  if (!rows.length) return 0;
+  const last = rows[rows.length - 1];
+  return last.y + last.height;
+}
+
+function efDrawInlineItems(ctx: ElegantFormalDirectPdfContext, items: string[], colX: number, colW: number, startY: number): number {
+  const rows = efLayoutInlineItems(ctx, items, colW);
+  efSetTextStyle(ctx, { size: 9, color: EF_MUTED, lineHeight: 3.8 });
+  for (const row of rows) {
+    const totalW = row.items.reduce((sum, item, i) => sum + ctx.pdf.getTextWidth(item) + (i > 0 ? 2.8 : 0), 0);
+    let x = colX + (colW - totalW) / 2;
+    const y = startY + row.y;
+    for (const item of row.items) {
+      ctx.pdf.text(item, x, y);
+      x += ctx.pdf.getTextWidth(item) + 2.8;
+    }
+  }
+  const h = efMeasureInlineItemsHeight(ctx, items, colW);
+  return startY + h;
+}
+
+function efLowerColumns(ctx: ElegantFormalDirectPdfContext, cv: CVData): Array<{ key: string; heading: string; items: string[] }> {
+  const columns: Array<{ key: string; heading: string; items: string[] }> = [];
+  const skills = cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale));
+  const languages = cv.languages.map(l =>
+    `${getLocalizedCvLanguageName(l.name, ctx.locale)} (${l.level})`,
+  );
+  if (skills.length) columns.push({ key: 'skills', heading: ctx.labels.skills, items: skills });
+  if (languages.length) columns.push({ key: 'languages', heading: ctx.labels.languages, items: languages });
+  if (cv.certifications.length) {
+    columns.push({ key: 'certifications', heading: ctx.labels.certifications, items: cv.certifications });
+  }
+  return columns;
+}
+
+function efLowerBlockHeight(ctx: ElegantFormalDirectPdfContext, cv: CVData): number {
+  const columns = efLowerColumns(ctx, cv);
+  if (!columns.length) return 0;
+  const colCount = columns.length;
+  const colW = (ctx.contentWidth - EF_LOWER_COL_GAP_MM * (colCount - 1)) / colCount;
+  let maxColH = 0;
+  for (const col of columns) {
+    const headingH = 5.2;
+    const itemsH = efMeasureInlineItemsHeight(ctx, col.items, colW);
+    maxColH = Math.max(maxColH, headingH + itemsH);
+  }
+  return 2.5 + 2.5 + maxColH + 2;
+}
+
+function efDrawSkillsLanguagesBlock(ctx: ElegantFormalDirectPdfContext, cv: CVData): void {
+  const columns = efLowerColumns(ctx, cv);
+  if (!columns.length) return;
+
+  const blockH = efLowerBlockHeight(ctx, cv);
+  efMoveToFreshPageIfNeeded(ctx, blockH);
+
+  ctx.pdf.setDrawColor(EF_RULE[0], EF_RULE[1], EF_RULE[2]);
+  ctx.pdf.setLineWidth(0.25);
+  ctx.pdf.line(ctx.marginLeft, ctx.y, ctx.pageWidth - ctx.marginRight, ctx.y);
+  ctx.y += 2.5;
+
+  const colCount = columns.length;
+  const colW = (ctx.contentWidth - EF_LOWER_COL_GAP_MM * (colCount - 1)) / colCount;
+  const blockTopY = ctx.y;
+  let blockBottom = blockTopY;
+
+  columns.forEach((col, index) => {
+    const colX = ctx.marginLeft + index * (colW + EF_LOWER_COL_GAP_MM);
+    const headingEnd = efDrawSectionHeadingAt(ctx, col.heading, colX, colW, blockTopY);
+    const itemsBottom = efDrawInlineItems(ctx, col.items, colX, colW, headingEnd);
+    blockBottom = Math.max(blockBottom, itemsBottom);
+  });
+
+  ctx.y = blockBottom + 2;
+}
+
+function efMoveLowerSectionsIfNeeded(
+  ctx: ElegantFormalDirectPdfContext,
+  educationH: number,
+  lowerH: number,
+): void {
+  const combined = educationH + lowerH;
+  if (combined <= 0) return;
+  const freshCap = efFreshPageCapacity(ctx);
+  const remaining = ctx.bottomSafeY - ctx.y;
+
+  if (combined <= remaining) return;
+  if (combined <= freshCap) {
+    efAddPage(ctx);
+    return;
+  }
+
+  const eduLowerH = educationH + lowerH;
+  if (eduLowerH > 0 && eduLowerH <= freshCap && eduLowerH > remaining) {
+    efAddPage(ctx);
+  }
+}
+
+export async function buildElegantFormalPagedPdfBlob(
+  cv: CVData,
+  locale: Locale,
+  options: { photoDataUrl?: string | null } = {},
+): Promise<Blob> {
+  const { jsPDF } = await import('jspdf');
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const marginLeft = 9;
+  const marginRight = 9;
+  const marginTop = 9;
+  const marginBottom = 11;
+  const ctx: ElegantFormalDirectPdfContext = {
+    pdf,
+    locale,
+    labels: getElegantFormalPdfLabels(locale),
+    pageWidth: CV_PDF_A4_WIDTH_MM,
+    pageHeight: CV_PDF_A4_HEIGHT_MM,
+    marginLeft,
+    marginRight,
+    marginTop,
+    marginBottom,
+    contentWidth: CV_PDF_A4_WIDTH_MM - marginLeft - marginRight,
+    bottomSafeY: CV_PDF_A4_HEIGHT_MM - marginBottom,
+    y: 0,
+    pageIndex: 0,
+  };
+
+  ctx.y = ctx.marginTop;
+  efDrawHeader(ctx, cv, options.photoDataUrl ?? null);
+  efDrawSummary(ctx, cv.summary);
+  efDrawExperience(ctx, cv);
+
+  const educationH = efEducationHeight(ctx, cv);
+  const lowerH = efLowerBlockHeight(ctx, cv);
+  efMoveLowerSectionsIfNeeded(ctx, educationH, lowerH);
+
+  if (educationH > 0) efDrawEducation(ctx, cv);
+  if (lowerH > 0) {
+    if (lowerH <= efFreshPageCapacity(ctx)) {
+      efMoveToFreshPageIfNeeded(ctx, lowerH);
+    } else {
+      const columns = efLowerColumns(ctx, cv);
+      const colW = (ctx.contentWidth - EF_LOWER_COL_GAP_MM * Math.max(columns.length - 1, 0)) / Math.max(columns.length, 1);
+      const skillsCol = columns.find(c => c.key === 'skills');
+      if (skillsCol) {
+        efMoveToFreshPageIfNeeded(ctx, 5.2 + efMeasureInlineItemsHeight(ctx, skillsCol.items, colW));
+      }
+    }
+    efDrawSkillsLanguagesBlock(ctx, cv);
+  }
+
+  const output = pdf.output('blob');
+  return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
+}
+
 export async function buildElegantFormalPdfBlob(
   cv: CVData,
   locale: Locale,
   options: { photoDataUrl?: string | null } = {},
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Elegant Formal PDF export requires a browser DOM');
-  }
-
   const personalPhotoFields = cv.personal as CVData['personal'] & { originalPhoto?: string };
   const photoDataUrl = options.photoDataUrl ?? null;
   if (personalPhotoFields.originalPhoto && !photoDataUrl) {
     throw new Error('ELEGANT_FORMAL_PDF_PHOTO_PROP_MISSING');
   }
 
-  const container = document.createElement('div');
-  container.id = `elegant-formal-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-elegant-formal-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createElegantFormalPdfTemplate(cv, { locale, photoDataUrl }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Elegant Formal PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  const blob = await buildElegantFormalPagedPdfBlob(cv, locale, { photoDataUrl });
+  if (!blob || blob.size === 0) throw new Error('Elegant Formal PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportElegantFormalPdf(

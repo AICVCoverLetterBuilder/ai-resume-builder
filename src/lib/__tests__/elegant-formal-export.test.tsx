@@ -25,6 +25,7 @@ import {
   areElegantFormalDomLineIntervalsReliable,
   buildCvPdfBlob,
   buildElegantFormalPaddedPdfSlice,
+  buildElegantFormalPagedPdfBlob,
   buildElegantFormalPdfBlob,
   collectElegantFormalTextLineIntervalsCss,
   exportElegantFormalPdf,
@@ -37,6 +38,7 @@ import {
   planElegantFormalPdfSliceSegments,
   prepareCvPhotoForExport,
   rebalanceElegantFormalSparseTrailingPdfSliceSegments,
+  resolveCvPdfExportRoute,
   resolveElegantFormalSafePageBreakCanvasPx,
 } from '@/lib/export';
 import { loadCvDraft, saveCvDraft, clearCvDraft } from '@/lib/draft-storage';
@@ -190,6 +192,62 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   }));
 
   return { html2canvasMock, instances, cloneDocuments };
+}
+
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      drawnText: string[] = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      rect = vi.fn();
+      line = vi.fn();
+      text = vi.fn((t: string | string[]) => {
+        const parts = Array.isArray(t) ? t : [t];
+        this.drawnText.push(...parts);
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((_text: string) => 20);
+      output() {
+        return new Blob(['%PDF-1.7\nelegant-formal-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
 }
 
 function rectAttr(top: number, left: number, width: number, height: number): string {
@@ -705,9 +763,9 @@ describe('Elegant Formal export routing and rendering', () => {
     expect(elegantPdfBranch).not.toContain('exportToPDF(previewId');
     expect(elegantPdfBranch).not.toContain('openPrintFallback');
     expect(elegantPdfBranch).not.toContain('exportToDOCX');
-    expect(exportModule).toContain('createElegantFormalPdfTemplate(cv, { locale, photoDataUrl })');
+    expect(exportModule).toContain('buildElegantFormalPagedPdfBlob');
     expect(exportModule).toContain('ELEGANT_FORMAL_PDF_PHOTO_PROP_MISSING');
-    expect(exportModule).toContain("container.setAttribute('data-elegant-formal-pdf-export-container', 'true')");
+    expect(exportModule).not.toContain("container.setAttribute('data-elegant-formal-pdf-export-container', 'true')");
   });
 
   test('Elegant Formal photo variants are persisted inside cv.personal and survive draft reload/partial personal edits', () => {
@@ -1214,6 +1272,94 @@ describe('Elegant Formal export routing and rendering', () => {
     expect(rawPrepared?.bytes.length).toBeGreaterThan(0);
   });
 
+  test('Elegant Formal resolves to the dedicated-elegant-formal export route', () => {
+    expect(resolveCvPdfExportRoute('elegant-formal').kind).toBe('dedicated-elegant-formal');
+  });
+
+  test('Elegant Formal dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {
+    const src = exportSource();
+    expect(src).toContain('buildElegantFormalPagedPdfBlob');
+    expect(src).toContain("kind: 'dedicated-elegant-formal'");
+    const fnStart = src.indexOf('export async function buildElegantFormalPagedPdfBlob');
+    const fnEnd = src.indexOf('export async function buildElegantFormalPdfBlob', fnStart);
+    const fn = src.slice(fnStart, fnEnd);
+    expect(fn).not.toContain('renderPdfSlice');
+    expect(fn).not.toContain('renderPaddedPdfSlice');
+    expect(fn).not.toContain('html2canvas');
+    expect(fn).not.toContain('buildCvPdfBlob');
+  });
+
+  test('Elegant Formal buildElegantFormalPdfBlob wraps buildElegantFormalPagedPdfBlob', async () => {
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const blob = await mod.buildElegantFormalPdfBlob(cv(), 'en', { photoDataUrl: canonicalElegantFormalJpeg });
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob.size).toBeGreaterThan(0);
+  });
+
+  test('Elegant Formal source keeps WORK EXPERIENCE heading with first entry lead block', () => {
+    const src = exportSource();
+    const fn = src.indexOf('function efDrawExperience(');
+    const body = src.slice(fn, fn + 600);
+    expect(body).toContain('efMoveToFreshPageIfNeeded');
+    expect(body).toContain('efExperienceLeadBlockHeight');
+  });
+
+  test('Elegant Formal source groups Education + lower sections before drawing', () => {
+    const src = exportSource();
+    expect(src).toContain('efMoveLowerSectionsIfNeeded');
+    expect(src).toContain('efLowerBlockHeight');
+    expect(src).toContain('efEducationHeight');
+  });
+
+  test('Elegant Formal long direct PDF export paginates without ghost fragments or sparse tail', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const longCv = (): CVData => ({
+      ...cv(),
+      summary: Array.from({ length: 40 }, (_, i) =>
+        `Sentence ${i + 1}: refined executive leadership across global markets.`,
+      ).join(' '),
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Studio Visiva',
+          position: 'Creative Director',
+          startDate: '2018-01',
+          endDate: '',
+          isPresent: true,
+          description: Array.from({ length: 18 }, (_, i) =>
+            `- Achievement ${i + 1}: delivered measurable impact across brand, digital, and campaign work.`,
+          ).join('\n'),
+        },
+        {
+          id: 'exp-2',
+          company: 'Pixel & Co',
+          position: 'Software Tester',
+          startDate: '2015-03',
+          endDate: '2017-12',
+          isPresent: false,
+          description: [
+            '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+            '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+            '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+            '- Managed vendor relationships and production timelines for multiple concurrent projects.',
+            '- Mentored junior designers in brand strategy fundamentals and professional communication.',
+            '- Conducted client workshops and strategic presentations for C-suite stakeholders.',
+          ].join('\n'),
+        },
+      ],
+      education: [{ id: 'edu-1', school: 'Mathematic school', degree: 'MA Graphic Design', startDate: '2020-01', endDate: '2025-01', description: '' }],
+      skills: ['Brand Strategy', 'Art Direction', 'Figma', 'Motion Design', 'Leadership', 'Mentoring', 'Storytelling', 'UX/UI'],
+      languages: [{ name: 'Italian', level: 'Native' }, { name: 'English', level: 'Fluent' }, { name: 'French', level: 'Intermediate' }],
+    });
+
+    const blob = await mod.buildElegantFormalPagedPdfBlob(longCv(), 'en', { photoDataUrl: canonicalElegantFormalJpeg });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(3);
+  });
+
   test('Elegant Formal PDF export builds a non-empty one-page Blob for short content', async () => {
     document.body.innerHTML = `<div id="cv-preview">${renderToStaticMarkup(<ElegantFormalTemplate data={cv()} locale="en" />)}</div>`;
     const canvas = makeCanvas(800, 1000, () => true);
@@ -1229,28 +1375,26 @@ describe('Elegant Formal export routing and rendering', () => {
     expect(instances[0].addPage).not.toHaveBeenCalled();
   });
 
-  test('Elegant Formal dedicated PDF Blob captures the offscreen export renderer, not the visible preview', async () => {
-    document.body.innerHTML = '<div id="cv-preview"><div data-template-id="elegant-formal">VISIBLE PREVIEW SHOULD NOT EXPORT</div></div>';
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { html2canvasMock, instances } = installPdfMocks(canvas);
-    const blob = await buildElegantFormalPdfBlob(cv(), 'en', { photoDataUrl: canonicalElegantFormalJpeg });
-    const captureTarget = html2canvasMock.mock.calls[0][0] as HTMLElement;
-    const img = captureTarget.querySelector('[data-export-photo="elegant-formal"]') as HTMLImageElement;
+  test('Elegant Formal dedicated PDF Blob uses direct renderer and preserves content', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const blob = await mod.buildElegantFormalPdfBlob(cv(), 'en', { photoDataUrl: canonicalElegantFormalJpeg });
 
     expect(blob.size).toBeGreaterThan(0);
-    expect(captureTarget.getAttribute('data-template-id')).toBe('elegant-formal');
-    expect(captureTarget.getAttribute('data-elegant-formal-pdf-template')).toBe('true');
-    expect(captureTarget.textContent).toContain('Dragan Obradovic');
-    expect(captureTarget.textContent).not.toContain('VISIBLE PREVIEW SHOULD NOT EXPORT');
-    expect(captureTarget.querySelector('[data-elegant-formal-photo="frame"]')).not.toBeNull();
-    expect(captureTarget.querySelectorAll('img')).toHaveLength(1);
-    expect(img.getAttribute('src')).toBe(canonicalElegantFormalJpeg);
-    expect(document.querySelector('[data-elegant-formal-pdf-export-container]')).toBeNull();
+    expect(await blob.text()).toContain('%PDF');
+    expect(instances).toHaveLength(1);
     expect(instances[0].pages).toBe(1);
+    expect(instances[0].addPage).not.toHaveBeenCalled();
+    const drawn = instances[0].drawnText.join(' ');
+    expect(drawn).toContain('Dragan Obradovic');
+    expect(drawn).toContain('Team Leadership');
+    expect(document.querySelector('[data-elegant-formal-pdf-export-container]')).toBeNull();
   });
 
   test('Elegant Formal dedicated PDF throws when original photo exists but photoDataUrl is missing', async () => {
-    await expect(buildElegantFormalPdfBlob(
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await expect(mod.buildElegantFormalPdfBlob(
       cv({ personal: { originalPhoto: realPhotoPng, rectangularPhoto: undefined } }),
       'en',
       { photoDataUrl: null },
@@ -1327,21 +1471,17 @@ describe('Elegant Formal export routing and rendering', () => {
   });
 
   test('Elegant Formal no-photo PDF remains valid and has no broken image frame', async () => {
-    document.body.innerHTML = `<div id="cv-preview">${renderToStaticMarkup(<ElegantFormalTemplate data={cv({ personal: { photo: undefined, photoEnabled: false } })} locale="en" />)}</div>`;
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { instances } = installPdfMocks(canvas);
-
-    const blob = await buildCvPdfBlob('cv-preview');
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const blob = await mod.buildElegantFormalPdfBlob(cv({ personal: { photo: undefined, photoEnabled: false } }), 'en', { photoDataUrl: null });
 
     expect(blob.size).toBeGreaterThan(0);
     expect(instances[0].pages).toBe(1);
-    expect(document.querySelector('[data-template-id="elegant-formal"] img')).toBeNull();
   });
 
   test('Elegant Formal dedicated PDF reaches the shared save result after Blob generation', async () => {
-    document.body.innerHTML = '<div id="cv-preview"><div data-template-id="elegant-formal">VISIBLE PREVIEW SHOULD NOT EXPORT</div></div>';
-    const canvas = makeCanvas(800, 1000, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
     const clickSpy = vi.fn();
     const realCreateElement = document.createElement.bind(document);
     vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
@@ -1349,7 +1489,7 @@ describe('Elegant Formal export routing and rendering', () => {
       if (tagName.toLowerCase() === 'a') el.click = clickSpy;
       return el;
     });
-    const result = await exportElegantFormalPdf(cv(), 'Dragan Obradovic - CV', 'en', { photoDataUrl: canonicalElegantFormalJpeg });
+    const result = await mod.exportElegantFormalPdf(cv(), 'Dragan Obradovic - CV', 'en', { photoDataUrl: canonicalElegantFormalJpeg });
 
     expect(result.result).toBe('saved');
     expect(result.platform).toBe('web');
