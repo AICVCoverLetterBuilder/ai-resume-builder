@@ -15,6 +15,8 @@ import { createCreativeArtisticPdfTemplate } from './creative-artistic-pdf-templ
 import { createNordicCleanPdfTemplate } from './nordic-clean-pdf-template';
 import { createRirekishoPdfTemplate } from './rirekisho-pdf-template';
 import { createTechSidebarPdfTemplate } from './tech-sidebar-pdf-template';
+import { buildTechSidebarPagedPdfBlob } from './tech-sidebar-pdf-renderer';
+export { buildTechSidebarPagedPdfBlob } from './tech-sidebar-pdf-renderer';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -9947,6 +9949,7 @@ export type CvPdfExportRoute =
   | { kind: 'dedicated-elegant-formal' }
   | { kind: 'dedicated-ats-standard' }
   | { kind: 'dedicated-nordic-clean' }
+  | { kind: 'dedicated-tech-sidebar' }
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
@@ -9958,10 +9961,10 @@ export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdf
   if (templateId === 'elegant-formal') return { kind: 'dedicated-elegant-formal' };
   if (templateId === 'ats-standard') return { kind: 'dedicated-ats-standard' };
   if (templateId === 'nordic-clean') return { kind: 'dedicated-nordic-clean' };
+  if (templateId === 'tech-sidebar') return { kind: 'dedicated-tech-sidebar' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
   if (
     templateId === 'executive-premium'
-    || templateId === 'tech-sidebar'
     || templateId === 'corporate-navy'
     || templateId === 'contemporary-bold'
     || templateId === 'rirekisho'
@@ -13986,37 +13989,12 @@ export async function buildTechSidebarPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Tech Sidebar PDF export requires a browser DOM');
-  }
-
   const canonicalPhoto = await prepareTechSidebarPdfPhotoDataUrl(cv);
-  const container = document.createElement('div');
-  container.id = `tech-sidebar-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-tech-sidebar-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createTechSidebarPdfTemplate(cv, {
-    locale,
+  const blob = await buildTechSidebarPagedPdfBlob(cv, locale, {
     photoDataUrl: canonicalPhoto?.dataUrl ?? null,
-  }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Tech Sidebar PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  });
+  if (!blob || blob.size === 0) throw new Error('Tech Sidebar PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportTechSidebarPdf(

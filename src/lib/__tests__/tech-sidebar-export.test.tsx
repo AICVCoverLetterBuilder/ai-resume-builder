@@ -19,6 +19,7 @@ import {
   getTechSidebarMainColumnContentBoundsCss,
   isUnsafeElegantFormalPageBreakCanvasPx,
   planTechSidebarPdfSliceSegments,
+  resolveCvPdfExportRoute,
   resolveTechSidebarSafePageBreakCanvasPx,
   scaleTechSidebarMainColumnBoundsToCanvas,
   selectTechSidebarPdfLineIntervalsCanvas,
@@ -167,6 +168,112 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   return { html2canvasMock, instances, capturedPhotoSrcs };
 }
 
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+  rect: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      drawnText: string[] = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      rect = vi.fn();
+      line = vi.fn();
+      circle = vi.fn();
+      text = vi.fn((t: string | string[]) => {
+        const parts = Array.isArray(t) ? t : [t];
+        this.drawnText.push(...parts);
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((text: string) => Math.min(text.length * 1.8, 40));
+      output() {
+        return new Blob(['%PDF-1.7\ntech-sidebar-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
+}
+
+function longStressCv(): CVData {
+  return {
+    ...cv(),
+    summary: Array.from({ length: 40 }, (_, i) =>
+      `Sentence ${i + 1}: reliable engineering delivery across distributed systems and product teams.`,
+    ).join(' '),
+    experience: [
+      {
+        id: 'exp-1',
+        company: 'Platform Labs',
+        position: 'Senior Software Engineer',
+        startDate: '2021-01',
+        endDate: '',
+        isPresent: true,
+        description: Array.from({ length: 18 }, (_, i) =>
+          `- Achievement ${i + 1}: delivered measurable impact across deployment, QA, and release work.`,
+        ).join('\n'),
+      },
+      {
+        id: 'exp-2',
+        company: 'Pixel & Co',
+        position: 'Software Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: [
+          '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+          '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+          '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+          '- Managed vendor relationships and production timelines for multiple concurrent projects.',
+          '- Mentored junior designers in brand strategy fundamentals and professional communication.',
+          '- Conducted client workshops and strategic presentations while reporting findings to the development team.',
+        ].join('\n'),
+      },
+    ],
+    education: [{
+      id: 'edu-1',
+      school: 'Mathematic school',
+      degree: 'VI',
+      startDate: '2020-01',
+      endDate: '2025-01',
+      description: '',
+    }],
+    skills: ['React', 'TypeScript', 'System Design', 'Leadership', 'Cloud Services (AWS/Azure/GCP)'],
+    languages: [{ name: 'English', level: 'Native' }, { name: 'Serbian', level: 'Fluent' }],
+  };
+}
+
 async function captureDocx(data: CVData): Promise<{ documentXml: string; text: string }> {
   const blobByUrl = new Map<string, Blob>();
   let capturedBlob: Blob | null = null;
@@ -275,20 +382,91 @@ describe('Tech Sidebar export', () => {
     expect(pageSource.slice(guard, fallback)).toContain("cv.templateId === 'tech-sidebar'");
   });
 
+  test('tech-sidebar resolves to the dedicated-tech-sidebar export route', () => {
+    expect(resolveCvPdfExportRoute('tech-sidebar').kind).toBe('dedicated-tech-sidebar');
+  });
+
+  test('Tech Sidebar dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {
+    const exportSource = source('src/lib/export.ts');
+    const rendererSource = source('src/lib/tech-sidebar-pdf-renderer.ts');
+    expect(exportSource).toContain('buildTechSidebarPagedPdfBlob');
+    expect(exportSource).toContain("kind: 'dedicated-tech-sidebar'");
+    expect(rendererSource).toContain('tsCreateContext');
+    expect(rendererSource).toContain('tsDrawPageOneSidebar');
+    expect(rendererSource).toContain('tsDrawContinuationSidebar');
+    expect(rendererSource).not.toContain('html2canvas');
+    expect(rendererSource).not.toContain('buildCvPdfBlob');
+    expect(rendererSource).not.toContain('renderPdfSlice');
+    expect(rendererSource).not.toContain('renderPaddedPdfSlice');
+  });
+
   test('Tech Sidebar PDF Blob is non-empty and short fixture remains one page', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { html2canvasMock, instances } = installPdfMocks(canvas);
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildTechSidebarPdfBlob(cv(), 'en');
+    const blob = await mod.buildTechSidebarPdfBlob(cv(), 'en');
 
-    expect(html2canvasMock).toHaveBeenCalled();
     expect(blob.size).toBeGreaterThan(0);
     expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
     expect(instances[0].pages).toBe(1);
+    expect(instances[0].addPage).not.toHaveBeenCalled();
+    const drawn = instances[0].drawnText.join(' ');
+    expect(drawn).toContain('Dragan Obradovic');
+    expect(drawn).toContain('React');
+    expect(drawn).toContain('PROFESSIONAL SUMMARY');
   });
 
-  test('Tech Sidebar PDF export bakes continuation-page top padding into slice bitmaps', () => {
+  test('Tech Sidebar long direct PDF export paginates without ghost fragments or orphaned tails', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+
+    const blob = await mod.buildTechSidebarPagedPdfBlob(longStressCv(), 'en', { photoDataUrl: squarePhoto });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(3);
+
+    const drawn = instances[0]?.drawnText ?? [];
+    const text = drawn.join(' ');
+    const count = (needle: string) => {
+      let total = 0;
+      let pos = 0;
+      while (true) {
+        const idx = text.indexOf(needle, pos);
+        if (idx === -1) break;
+        total += 1;
+        pos = idx + needle.length;
+      }
+      return total;
+    };
+
+    expect(count('PROFESSIONAL SUMMARY')).toBe(1);
+    expect(count('Sentence 1:')).toBe(1);
+    expect(count('WORK EXPERIENCE')).toBe(1);
+    expect(count('Designed visual identities for 50+ brands')).toBe(1);
+    expect(text).toContain('reporting findings to the development team.');
+    expect(text).not.toContain('lead.Assisted');
+    expect(text).toContain('Mathematic school');
+    expect(text).toContain('EDUCATION');
+    expect(text).toContain('CONTINUED');
+    if ((instances[0]?.pages ?? 0) >= 3) {
+      expect(text).toContain('Software Tester (continued)');
+    }
+    expect(instances[0]?.rect).toHaveBeenCalled();
+  });
+
+  test('Tech Sidebar sidebar page 1 includes skills and languages in direct PDF output', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildTechSidebarPdfBlob(cv(), 'en');
+    const drawn = instances[0]?.drawnText.join(' ') ?? '';
+    expect(drawn).toContain('SKILLS');
+    expect(drawn).toContain('LANGUAGES');
+    expect(drawn).toContain('React');
+    expect(drawn).toContain('English');
+  });
+
+  test('legacy Tech Sidebar padded slice helpers remain available for generic preview path', () => {
     const exportSource = source('src/lib/export.ts');
     expect(exportSource).toContain('TECH_SIDEBAR_PDF_PAGE_TOP_INSET_CSS_PX');
     expect(exportSource).toContain('TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX');
@@ -414,8 +592,7 @@ describe('Tech Sidebar export', () => {
   });
 
   test('Tech Sidebar direct export uses shared native/platform save result', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
     let clickedDownload = '';
     const blobByUrl = new Map<string, Blob>();
     Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true, writable: true });
@@ -438,8 +615,7 @@ describe('Tech Sidebar export', () => {
   });
 
   test('selected originalPhoto is used and square cover crop is proportional', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { capturedPhotoSrcs } = installPdfMocks(canvas);
+    installDirectPdfMocks();
 
     await buildTechSidebarPdfBlob(cv({
       personal: {
@@ -450,9 +626,8 @@ describe('Tech Sidebar export', () => {
     }), 'en');
 
     expect(loadedImageSources).toContain(originalPhoto);
-    expect(capturedPhotoSrcs).toContain(squarePhoto);
-    expect(capturedPhotoSrcs[0]).not.toContain('circular-field');
-    expect(capturedPhotoSrcs[0]).not.toContain('photo-field');
+    expect(loadedImageSources).not.toContain('circular-field');
+    expect(drawImageCalls.length).toBeGreaterThan(0);
     const [, dx, dy, scaledWidth, scaledHeight] = drawImageCalls[0] as [unknown, number, number, number, number];
     expect(dx).toBe(0);
     expect(dy).toBe(-82);
