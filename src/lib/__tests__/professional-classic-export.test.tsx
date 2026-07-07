@@ -10,8 +10,10 @@ import { ProfessionalClassicTemplate, templateComponents } from '@/components/cv
 import { createProfessionalClassicPdfTemplate } from '@/lib/professional-classic-pdf-template';
 import {
   buildProfessionalClassicPdfBlob,
+  buildProfessionalClassicPagedPdfBlob,
   exportProfessionalClassicPdf,
   exportToDOCX,
+  resolveCvPdfExportRoute,
 } from '@/lib/export';
 import type { CVData } from '@/lib/types';
 
@@ -170,7 +172,15 @@ function makeCanvas(width: number, height: number, hasContentAt: (absoluteY: num
 }
 
 function installPdfMocks(canvas: HTMLCanvasElement) {
-  const instances: Array<{ pages: number; addImage: ReturnType<typeof vi.fn>; addPage: ReturnType<typeof vi.fn> }> = [];
+  const instances: Array<{
+    pages: number;
+    addImage: ReturnType<typeof vi.fn>;
+    addPage: ReturnType<typeof vi.fn>;
+    roundedRect: ReturnType<typeof vi.fn>;
+    drawnText: string[];
+    drawnRuns: Array<{ page: number; text: string; x: number; y: number }>;
+    chipRects: Array<{ page: number; x: number; y: number; w: number; h: number }>;
+  }> = [];
   const clonedTextContents: string[] = [];
   vi.doMock('html2canvas', () => ({
     default: vi.fn(async (_target: HTMLElement, options?: { onclone?: (doc: Document) => void }) => {
@@ -190,11 +200,50 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
       addPage = vi.fn(() => {
         this.pages += 1;
       });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      line = vi.fn();
+      rect = vi.fn();
+      roundedRect = vi.fn((x: number, y: number, w: number, h: number) => {
+        this.chipRects.push({ page: this.pages, x, y, w, h });
+      });
+      drawnText: string[] = [];
+      drawnRuns: Array<{ page: number; text: string; x: number; y: number }> = [];
+      chipRects: Array<{ page: number; x: number; y: number; w: number; h: number }> = [];
+      text = vi.fn((value: string | string[], x: number, y: number) => {
+        const values = Array.isArray(value) ? value.map(String) : [String(value)];
+        this.drawnText.push(...values);
+        values.forEach(text => this.drawnRuns.push({ page: this.pages, text, x, y }));
+      });
+      splitTextToSize = vi.fn((value: string, maxWidth: number) => {
+        const words = String(value).split(/\s+/).filter(Boolean);
+        const maxChars = Math.max(12, Math.floor(maxWidth / 2.2));
+        const lines: string[] = [];
+        let current = '';
+        words.forEach((word) => {
+          const next = current ? `${current} ${word}` : word;
+          if (next.length > maxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = next;
+          }
+        });
+        if (current) lines.push(current);
+        return lines.length > 0 ? lines : [''];
+      });
+      getTextWidth = vi.fn((value: string) => String(value).length * 1.4);
       constructor() {
         instances.push(this);
       }
-      output() {
-        return new Blob(['%PDF-1.7\nprofessional-classic\n%%EOF'], { type: 'application/pdf' });
+      output(type?: string) {
+        const body = `%PDF-1.7\nprofessional-classic\n${this.drawnText.join('\n')}\n%%EOF`;
+        if (type === 'blob') return new Blob([body], { type: 'application/pdf' });
+        return body;
       }
     },
   }));
@@ -268,9 +317,23 @@ describe('Professional Classic preview/export parity', () => {
 
     const src = exportSource();
     expect(src).toContain('export async function exportProfessionalClassicPdf');
-    expect(src).toContain('const pdfBlob = await buildProfessionalClassicPdfBlob(cv, locale)');
+    expect(src).toContain('buildProfessionalClassicPagedPdfBlob(cv, locale');
     expect(src).toContain('export async function buildProfessionalClassicPdfBlob');
     expect(src).toContain("await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf')");
+    expect(resolveCvPdfExportRoute('professional-classic')).toEqual({ kind: 'dedicated-professional-classic' });
+  });
+
+  test('buildProfessionalClassicPdfBlob uses the dedicated page-aware jsPDF renderer, not the generic tall-canvas slice path', () => {
+    const src = exportSource();
+    const start = src.indexOf('export async function buildProfessionalClassicPdfBlob');
+    const end = src.indexOf('export async function exportProfessionalClassicPdf', start);
+    const block = src.slice(start, end);
+
+    expect(src).toContain('export async function buildProfessionalClassicPagedPdfBlob');
+    expect(block).toContain('buildProfessionalClassicPagedPdfBlob(cv, locale');
+    expect(block).not.toContain('buildCvPdfBlob');
+    expect(block).not.toContain('html2canvas');
+    expect(block).not.toContain('createProfessionalClassicPdfTemplate');
   });
 
   test('dedicated Professional Classic PDF root is fixed A4, dark header, and keeps text spacing intact', () => {
@@ -342,7 +405,7 @@ describe('Professional Classic preview/export parity', () => {
 
   test('Professional Classic PDF direct Blob is non-empty, uses the user-framed selected photo (matching DOCX), and the Dragan fixture stays compact', async () => {
     const canvas = makeCanvas(800, 1050, y => y < 980);
-    const { instances, clonedTextContents } = installPdfMocks(canvas);
+    const { instances } = installPdfMocks(canvas);
 
     const blob = await buildProfessionalClassicPdfBlob(draganCv(), 'en');
 
@@ -354,16 +417,16 @@ describe('Professional Classic preview/export parity', () => {
     expect(loadedImageSources).toContain(selectedPhoto);
     expect(loadedImageSources).not.toContain(originalPhoto);
 
-    const cloneText = clonedTextContents.join('\n');
-    expect(cloneText).toContain('Učitelj u osnovnoj školi');
-    expect(cloneText).toContain('Nastavnik geografije');
-    expect(cloneText).toContain('Metematički fakultet');
-    expect(cloneText).not.toContain('osnovnojškoli');
-    expect(cloneText).not.toContain('Nastavnikgeografije');
-    expect(cloneText).not.toContain('Metematičkifakultet');
-    expect(cloneText).toContain('Coaching');
-    expect(cloneText).toContain('Mentoring');
-    expect(cloneText).not.toContain('CoachingCoaching');
+    const pdfText = instances[0].drawnText.join('\n');
+    expect(pdfText).toContain('Učitelj u osnovnoj školi');
+    expect(pdfText).toContain('Nastavnik geografije');
+    expect(pdfText).toContain('Metematički fakultet');
+    expect(pdfText).toContain('Coaching');
+    expect(pdfText).toContain('Mentoring');
+    expect(pdfText).not.toContain('osnovnojškoli');
+    expect(pdfText).not.toContain('Nastavnikgeografije');
+    expect(pdfText).not.toContain('Metematičkifakultet');
+    expect(pdfText).not.toContain('CoachingCoaching');
   });
 
   test('Professional Classic PDF falls back to originalPhoto only when no selected photo exists', async () => {
@@ -377,6 +440,243 @@ describe('Professional Classic preview/export parity', () => {
     expect(blob.size).toBeGreaterThan(0);
     expect(loadedImageSources).toContain(originalPhoto);
     expect(loadedImageSources).not.toContain(selectedPhoto);
+  });
+
+  test('Professional Classic direct PDF renderer preserves skills/languages and keeps section headings with their blocks', async () => {
+    const longCv = cv({
+      summary: Array.from({ length: 20 }, (_, index) => `Summary sentence ${index + 1} describes reliable delivery and careful coordination.`).join(' '),
+      experience: [
+        {
+          id: 'exp-long-1',
+          company: 'Acme Platforms',
+          position: 'Software Engineer',
+          startDate: '2021-01',
+          endDate: '',
+          isPresent: true,
+          description: [
+            '- Built APIs and internal tooling for delivery teams.',
+            '- Improved release quality through testing, debugging, and clear documentation.',
+            '- Collaborated with product and support teams on operational fixes.',
+          ].join('\n'),
+        },
+        {
+          id: 'exp-long-2',
+          company: 'Beta Systems',
+          position: 'Junior Developer',
+          startDate: '2019-01',
+          endDate: '2020-12',
+          isPresent: false,
+          description: '- Maintained web applications and fixed production issues.',
+        },
+      ],
+      education: [
+        { id: 'edu-long', school: 'University of Belgrade', degree: 'BSc Computer Science', startDate: '2015', endDate: '2019', description: '' },
+      ],
+      skills: [
+        'Python',
+        'TypeScript',
+        'SQL / Databases',
+        'Node.js',
+        'REST APIs',
+        'Agile / Scrum',
+        'JavaScript',
+        'React',
+        'Software Testing',
+        'Debugging',
+        'Teamwork',
+        'Cloud Services (AWS/Azure/GCP)',
+        'Problem Solving',
+      ],
+      languages: [
+        { name: 'English', level: 'Advanced' },
+        { name: 'French', level: 'Intermediate' },
+        { name: 'Italian', level: 'Native' },
+      ],
+      certifications: [],
+    });
+    const { instances } = installPdfMocks(makeCanvas(800, 2600, () => true));
+    await buildProfessionalClassicPdfBlob(longCv, 'en');
+
+    const pdf = instances[0];
+    const text = pdf.drawnText.join(' ').replace(/\s+/g, ' ');
+    [
+      'SQL / Databases',
+      'REST APIs',
+      'Cloud Services (AWS/Azure/GCP)',
+      'Software Testing',
+      'Problem Solving',
+      'English - Advanced',
+      'French - Intermediate',
+      'Italian - Native',
+    ].forEach(item => expect(text).toContain(item));
+
+    const experienceHeading = pdf.drawnRuns.find(run => run.text === 'WORK EXPERIENCE');
+    const firstTitle = pdf.drawnRuns.find(run => run.text.includes('Software Engineer'));
+    const firstBullet = pdf.drawnRuns.find(run => run.text.includes('Built APIs and internal tooling'));
+    const educationHeading = pdf.drawnRuns.find(run => run.text === 'EDUCATION');
+    const degreeRow = pdf.drawnRuns.find(run => run.text.includes('BSc Computer Science'));
+    const skillsHeading = pdf.drawnRuns.find(run => run.text === 'SKILLS');
+    const sqlChip = pdf.drawnRuns.find(run => run.text.includes('SQL / Databases'));
+    const languagesHeading = pdf.drawnRuns.find(run => run.text === 'LANGUAGES');
+    const englishRow = pdf.drawnRuns.find(run => run.text.includes('English - Advanced'));
+
+    expect(experienceHeading).toBeDefined();
+    expect(firstTitle?.page).toBe(experienceHeading?.page);
+    expect(firstBullet?.page).toBe(experienceHeading?.page);
+    expect(educationHeading).toBeDefined();
+    expect(degreeRow?.page).toBe(educationHeading?.page);
+    expect(skillsHeading).toBeDefined();
+    expect(sqlChip?.page).toBe(skillsHeading?.page);
+    expect(languagesHeading).toBeDefined();
+    expect(englishRow?.page).toBe(languagesHeading?.page);
+    expect(skillsHeading?.page).toBe(languagesHeading?.page);
+
+    expect(pdf.chipRects.length).toBeGreaterThan(0);
+    for (let i = 0; i < pdf.chipRects.length; i += 1) {
+      for (let j = i + 1; j < pdf.chipRects.length; j += 1) {
+        const a = pdf.chipRects[i];
+        const b = pdf.chipRects[j];
+        const overlap = a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+        expect(overlap).toBe(false);
+      }
+    }
+  });
+
+  test('Professional Classic direct PDF continuation pages start near the normal top margin', async () => {
+    const longCv = cv({
+      summary: Array.from({ length: 24 }, (_, index) => `Summary sentence ${index + 1} with enough detail to wrap across multiple pages.`).join(' '),
+      experience: [
+        {
+          id: 'exp-gap',
+          company: 'Acme Platforms',
+          position: 'Software Engineer',
+          startDate: '2021-01',
+          endDate: '',
+          isPresent: true,
+          description: '- Built APIs and internal tooling for delivery teams.',
+        },
+      ],
+    });
+    const { instances } = installPdfMocks(makeCanvas(800, 2600, () => true));
+    await buildProfessionalClassicPdfBlob(longCv, 'en');
+    const pdf = instances[0];
+    const experienceHeading = pdf.drawnRuns.find(run => run.text === 'WORK EXPERIENCE');
+    expect(experienceHeading).toBeDefined();
+    if (experienceHeading && experienceHeading.page > 1) {
+      expect(experienceHeading.y).toBeLessThanOrEqual(20);
+    }
+  });
+
+  function pageTwoUnderfillCv(): CVData {
+    return cv({
+      summary: Array.from({ length: 28 }, (_, index) => `Summary sentence ${index + 1} with enough detail to wrap across multiple pages and keep the first page naturally filled.`).join(' '),
+      experience: [
+        {
+          id: 'exp-first',
+          company: 'Acme Platforms',
+          position: 'Software Engineer',
+          startDate: '2021-01',
+          endDate: '',
+          isPresent: true,
+          description: [
+            '- Built APIs and internal tooling for delivery teams.',
+            '- Improved release quality through testing, debugging, and clear documentation.',
+            '- Collaborated with product and support teams on operational fixes.',
+            '- Mentored junior engineers on code review and release hygiene.',
+            '- Drove incident follow-up and postmortem action tracking.',
+          ].join('\n'),
+        },
+        {
+          id: 'exp-second',
+          company: 'Quality Labs',
+          position: 'Software Tester',
+          startDate: '2018-01',
+          endDate: '2020-12',
+          isPresent: false,
+          description: [
+            '- Designed regression suites for mobile and web releases.',
+            '- Automated API and UI checks across Android, iOS, and web clients.',
+            '- Partnered with developers to reproduce production defects quickly.',
+            '- Maintained release checklists and documented verification evidence.',
+            '- Coached junior testers on reproducible bug reports.',
+            '- Reviewed acceptance criteria before sprint planning.',
+            '- Executed exploratory testing on high-risk export workflows.',
+            '- Verified localization, accessibility, and print/PDF output quality.',
+            '- Triaged flaky automation and stabilized nightly test pipelines.',
+            '- Published release readiness notes for product and support teams.',
+            '- Audited crash logs and narrowed reproduction paths for Android WebView issues.',
+            '- Coordinated UAT cycles with business stakeholders and support leads.',
+          ].join('\n'),
+        },
+      ],
+      education: [
+        { id: 'edu-underfill', school: 'University of Belgrade', degree: 'BSc Computer Science', startDate: '2015', endDate: '2019', description: '' },
+      ],
+      skills: ['SQL / Databases', 'REST APIs', 'Software Testing', 'Problem Solving'],
+      languages: [{ name: 'English', level: 'Advanced' }, { name: 'French', level: 'Intermediate' }],
+      certifications: [],
+    });
+  }
+
+  test('Professional Classic long second job starts on the current page when lead block fits instead of moving the whole entry', async () => {
+    const longCv = pageTwoUnderfillCv();
+    const { instances } = installPdfMocks(makeCanvas(800, 2600, () => true));
+    await buildProfessionalClassicPdfBlob(longCv, 'en');
+    const pdf = instances[0];
+    const firstJobBullet = pdf.drawnRuns.find(run => run.text.includes('Built APIs and internal tooling'));
+    const secondJobTitle = pdf.drawnRuns.find(run => run.text.includes('Software Tester'));
+    expect(firstJobBullet).toBeDefined();
+    expect(secondJobTitle).toBeDefined();
+    expect(secondJobTitle?.page).toBe(firstJobBullet?.page);
+  });
+
+  test('Professional Classic long experience entry splits across pages at bullet boundaries without clipping bullets', async () => {
+    const longCv = pageTwoUnderfillCv();
+    const { instances } = installPdfMocks(makeCanvas(800, 2600, () => true));
+    await buildProfessionalClassicPdfBlob(longCv, 'en');
+    const pdf = instances[0];
+    const bullets = [
+      'Designed regression suites for mobile and web releases.',
+      'Automated API and UI checks across Android, iOS, and web clients.',
+      'Partnered with developers to reproduce production defects quickly.',
+      'Maintained release checklists and documented verification evidence.',
+      'Coached junior testers on reproducible bug reports.',
+      'Reviewed acceptance criteria before sprint planning.',
+      'Executed exploratory testing on high-risk export workflows.',
+      'Verified localization, accessibility, and print/PDF output quality.',
+      'Triaged flaky automation and stabilized nightly test pipelines.',
+      'Published release readiness notes for product and support teams.',
+      'Audited crash logs and narrowed reproduction paths for Android WebView issues.',
+      'Coordinated UAT cycles with business stakeholders and support leads.',
+    ];
+    const text = pdf.drawnText.join(' ').replace(/\s+/g, ' ');
+    bullets.forEach(bullet => expect(text).toContain(bullet.replace(/\s+/g, ' ')));
+    const testerBulletPages = new Set(
+      pdf.drawnRuns
+        .filter(run => bullets.some(bullet => run.text.includes(bullet.slice(0, 24))))
+        .map(run => run.page),
+    );
+    if (testerBulletPages.size > 1) {
+      expect(pdf.drawnRuns.some(run => run.text.includes('Software Tester (continued)'))).toBe(true);
+    }
+    expect(pdf.pages).toBeGreaterThanOrEqual(2);
+  });
+
+  test('Professional Classic page 2 underfill regression keeps Education and Skills visible after split Work Experience', async () => {
+    const longCv = pageTwoUnderfillCv();
+    const { instances } = installPdfMocks(makeCanvas(800, 2600, () => true));
+    await buildProfessionalClassicPdfBlob(longCv, 'en');
+    const pdf = instances[0];
+    const text = pdf.drawnText.join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('BSc Computer Science');
+    expect(text).toContain('SQL / Databases');
+    expect(text).toContain('REST APIs');
+    expect(text).toContain('English - Advanced');
+    const skillsHeading = pdf.drawnRuns.find(run => run.text === 'SKILLS');
+    const sqlChip = pdf.drawnRuns.find(run => run.text.includes('SQL / Databases'));
+    expect(skillsHeading).toBeDefined();
+    expect(sqlChip?.page).toBe(skillsHeading?.page);
+    expect(pdf.chipRects.length).toBeGreaterThan(0);
   });
 
   test('Professional Classic PDF export paginates long content without appending a blank trailing page', async () => {

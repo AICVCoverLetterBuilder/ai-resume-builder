@@ -9562,15 +9562,16 @@ export async function readPdfBlobAsLatin1Text(blob: Blob): Promise<string> {
 
 export type CvPdfExportRoute =
   | { kind: 'dedicated-clean-simple' }
+  | { kind: 'dedicated-professional-classic' }
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
 export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdfExportRoute {
   if (templateId === 'clean-simple') return { kind: 'dedicated-clean-simple' };
+  if (templateId === 'professional-classic') return { kind: 'dedicated-professional-classic' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
   if (
-    templateId === 'professional-classic'
-    || templateId === 'creative-bold'
+    templateId === 'creative-bold'
     || templateId === 'creative-artistic'
     || templateId === 'elegant-formal'
     || templateId === 'ats-standard'
@@ -11311,41 +11312,621 @@ async function prepareProfessionalClassicPdfPhotoDataUrl(cv: CVData): Promise<st
   }
 }
 
+type ProfessionalClassicPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
+
+type ProfessionalClassicDirectPdfContext = {
+  pdf: ProfessionalClassicPdfWriter;
+  locale: Locale;
+  labels: ReturnType<typeof getProfessionalClassicPdfLabels>;
+  pageWidth: number;
+  pageHeight: number;
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
+  contentWidth: number;
+  bottomSafeY: number;
+  y: number;
+};
+
+type ProfessionalClassicTextStyle = {
+  size: number;
+  color: [number, number, number];
+  fontStyle?: 'normal' | 'bold' | 'italic';
+  lineHeight: number;
+};
+
+const PRO_CLASSIC_DARK: [number, number, number] = [31, 41, 55];
+const PRO_CLASSIC_HEADING: [number, number, number] = [30, 41, 59];
+const PRO_CLASSIC_TEXT: [number, number, number] = [17, 24, 39];
+const PRO_CLASSIC_CHIP_TEXT: [number, number, number] = [55, 65, 81];
+const PRO_CLASSIC_MUTED: [number, number, number] = [107, 114, 128];
+const PRO_CLASSIC_MUTED2: [number, number, number] = [75, 85, 99];
+const PRO_CLASSIC_DATE: [number, number, number] = [156, 163, 175];
+const PRO_CLASSIC_RULE: [number, number, number] = [226, 232, 240];
+const PRO_CLASSIC_CHIP_BG: [number, number, number] = [241, 245, 249];
+const PRO_CLASSIC_SKILLS_LANG_GAP_MM = 6.35;
+
+function getProfessionalClassicPdfLabels(locale: Locale) {
+  const t = translations[locale] ?? translations.en;
+  return {
+    summary: t.cv.summary,
+    experience: t.cv.experience,
+    education: t.cv.education,
+    skills: t.cv.skills,
+    languages: t.cv.languages,
+    certifications: t.cv.certifications,
+    present: t.cv.present,
+  };
+}
+
+function proClassicDirectDateRange(start: string, end: string, present: boolean, presentLabel: string): string {
+  return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
+}
+
+function proClassicSetTextStyle(ctx: ProfessionalClassicDirectPdfContext, style: ProfessionalClassicTextStyle): void {
+  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
+  ctx.pdf.setFontSize(style.size);
+  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+}
+
+function proClassicSplitText(ctx: ProfessionalClassicDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
+  return Array.isArray(result) ? result.map(String) : [String(result)];
+}
+
+function proClassicStartPage(ctx: ProfessionalClassicDirectPdfContext): void {
+  ctx.pdf.addPage();
+  ctx.y = ctx.marginTop;
+}
+
+function proClassicFreshPageCapacity(ctx: ProfessionalClassicDirectPdfContext): number {
+  return ctx.bottomSafeY - ctx.marginTop;
+}
+
+function proClassicEnsureSpace(ctx: ProfessionalClassicDirectPdfContext, heightNeeded: number): void {
+  if (ctx.y + heightNeeded <= ctx.bottomSafeY) return;
+  proClassicStartPage(ctx);
+}
+
+function proClassicMoveToFreshPageIfNeeded(ctx: ProfessionalClassicDirectPdfContext, blockHeight: number): void {
+  const freshCapacity = proClassicFreshPageCapacity(ctx);
+  if (blockHeight > freshCapacity) return;
+  if (ctx.y + blockHeight > ctx.bottomSafeY) {
+    proClassicStartPage(ctx);
+  }
+}
+
+function proClassicSectionHeadingHeight(): number {
+  return 7.2;
+}
+
+function proClassicDrawSectionHeading(ctx: ProfessionalClassicDirectPdfContext, label: string): void {
+  proClassicEnsureSpace(ctx, proClassicSectionHeadingHeight());
+  proClassicSetTextStyle(ctx, { size: 9, color: PRO_CLASSIC_HEADING, fontStyle: 'bold', lineHeight: 3.5 });
+  ctx.pdf.text(label.toUpperCase(), ctx.marginLeft, ctx.y);
+  const ruleY = ctx.y + 1.6;
+  ctx.pdf.setDrawColor(PRO_CLASSIC_RULE[0], PRO_CLASSIC_RULE[1], PRO_CLASSIC_RULE[2]);
+  ctx.pdf.setLineWidth(0.25);
+  ctx.pdf.line(ctx.marginLeft, ruleY, ctx.pageWidth - ctx.marginRight, ruleY);
+  ctx.y += proClassicSectionHeadingHeight();
+}
+
+function proClassicDrawLines(
+  ctx: ProfessionalClassicDirectPdfContext,
+  lines: string[],
+  style: ProfessionalClassicTextStyle,
+  options: { indentX?: number; x?: number } = {},
+): void {
+  proClassicSetTextStyle(ctx, style);
+  const x = options.x ?? (ctx.marginLeft + (options.indentX ?? 0));
+  for (const line of lines) {
+    proClassicEnsureSpace(ctx, style.lineHeight);
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function proClassicDrawLinesBlock(
+  ctx: ProfessionalClassicDirectPdfContext,
+  lines: string[],
+  style: ProfessionalClassicTextStyle,
+  options: { indentX?: number; x?: number } = {},
+): void {
+  if (lines.length === 0) return;
+  const blockHeight = lines.length * style.lineHeight;
+  proClassicMoveToFreshPageIfNeeded(ctx, blockHeight);
+  proClassicSetTextStyle(ctx, style);
+  const x = options.x ?? (ctx.marginLeft + (options.indentX ?? 0));
+  for (const line of lines) {
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function proClassicDrawHeader(ctx: ProfessionalClassicDirectPdfContext, cv: CVData, photoDataUrl: string | null): void {
+  const headerPadX = ctx.marginLeft;
+  const headerPadY = 7;
+  const photoSize = 24;
+  const gap = 4.2;
+  const textX = photoDataUrl ? headerPadX + photoSize + gap : headerPadX;
+  let textStackHeight = 6;
+  if (cv.personal.jobTitle) textStackHeight += 5;
+  const region = regionSettings[cv.region];
+  const contacts = [cv.personal.email, cv.personal.phone, region.showAddress ? cv.personal.address : ''].filter(Boolean);
+  if (contacts.length > 0) textStackHeight += 5;
+  const headerHeight = Math.max(photoSize + headerPadY * 2, textStackHeight + headerPadY * 2);
+
+  ctx.pdf.setFillColor(PRO_CLASSIC_DARK[0], PRO_CLASSIC_DARK[1], PRO_CLASSIC_DARK[2]);
+  ctx.pdf.rect(0, 0, ctx.pageWidth, headerHeight, 'F');
+
+  if (photoDataUrl) {
+    try {
+      ctx.pdf.addImage(photoDataUrl, 'PNG', headerPadX, headerPadY, photoSize, photoSize);
+    } catch {
+      try {
+        ctx.pdf.addImage(photoDataUrl, 'JPEG', headerPadX, headerPadY, photoSize, photoSize);
+      } catch {
+        // Keep PDF export usable if jsPDF rejects an image data URL.
+      }
+    }
+  }
+
+  proClassicSetTextStyle(ctx, { size: 16.5, color: [255, 255, 255], fontStyle: 'bold', lineHeight: 6 });
+  ctx.pdf.text(cv.personal.fullName || 'Your Name', textX, headerPadY + 5);
+  if (cv.personal.jobTitle) {
+    proClassicSetTextStyle(ctx, { size: 9, color: [203, 213, 225], lineHeight: 4 });
+    ctx.pdf.text(cv.personal.jobTitle, textX, headerPadY + 11);
+  }
+  if (contacts.length > 0) {
+    proClassicSetTextStyle(ctx, { size: 7.2, color: [148, 163, 184], lineHeight: 4 });
+    ctx.pdf.text(contacts.join('  |  '), textX, headerPadY + 17);
+  }
+
+  ctx.y = headerHeight + 3.7;
+}
+
+function proClassicDrawSummary(ctx: ProfessionalClassicDirectPdfContext, summary: string): void {
+  const blocks = splitCleanSimpleSummaryParagraphBlocks(summary);
+  if (blocks.length === 0) return;
+  const style: ProfessionalClassicTextStyle = { size: 8, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 4.1 };
+  proClassicEnsureSpace(ctx, proClassicSectionHeadingHeight());
+  proClassicDrawSectionHeading(ctx, ctx.labels.summary);
+  blocks.forEach((block, index) => {
+    proClassicDrawLines(ctx, proClassicSplitText(ctx, block), style);
+    if (index < blocks.length - 1) ctx.y += 2.5;
+  });
+  ctx.y += 4;
+}
+
+function proClassicExperienceLeadBlockHeight(ctx: ProfessionalClassicDirectPdfContext, entry: CVData['experience'][number]): number {
+  return proClassicEstimateExperienceLeadBlockHeight(ctx, entry);
+}
+
+function proClassicExperienceDescriptionParts(
+  ctx: ProfessionalClassicDirectPdfContext,
+  entry: CVData['experience'][number],
+): Array<{ isBullet: boolean; lines: string[] }> {
+  return entry.description
+    .split(/\n+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const cleaned = part.replace(/^(?:[-•*]|\d+\.)\s+/, '');
+      const isBullet = cleaned !== part;
+      return {
+        isBullet,
+        lines: proClassicSplitText(ctx, cleaned, ctx.contentWidth - (isBullet ? 4 : 0)),
+      };
+    });
+}
+
+function proClassicMeasureExperiencePartHeight(part: { lines: string[] }): number {
+  return part.lines.length * 3.9;
+}
+
+function proClassicEstimateExperienceEntryHeaderHeight(ctx: ProfessionalClassicDirectPdfContext, entry: CVData['experience'][number]): number {
+  const titleLines = proClassicSplitText(ctx, entry.position, ctx.contentWidth - 32);
+  return Math.max(4.5, titleLines.length * 4.3) + (entry.company ? 3.8 : 0);
+}
+
+function proClassicEstimateExperienceLeadBlockHeight(ctx: ProfessionalClassicDirectPdfContext, entry: CVData['experience'][number]): number {
+  const parts = proClassicExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(part => part.isBullet);
+  const leadParts = (bulletParts.length > 0 ? bulletParts : parts).slice(0, 2);
+  const headerHeight = proClassicEstimateExperienceEntryHeaderHeight(ctx, entry);
+  const leadHeight = leadParts.reduce((total, part) => total + proClassicMeasureExperiencePartHeight(part), 0);
+  return headerHeight + leadHeight + 2.5;
+}
+
+function proClassicExperienceEntryHeight(ctx: ProfessionalClassicDirectPdfContext, entry: CVData['experience'][number]): number {
+  const parts = proClassicExperienceDescriptionParts(ctx, entry);
+  const headerHeight = proClassicEstimateExperienceEntryHeaderHeight(ctx, entry);
+  const bodyHeight = parts.reduce((total, part) => total + proClassicMeasureExperiencePartHeight(part), 0);
+  return headerHeight + bodyHeight + 2.5;
+}
+
+function proClassicDrawWrappedBulletLinesAtomic(
+  ctx: ProfessionalClassicDirectPdfContext,
+  part: { isBullet: boolean; lines: string[] },
+): void {
+  if (part.lines.length === 0) return;
+  const blockHeight = proClassicMeasureExperiencePartHeight(part);
+  proClassicMoveToFreshPageIfNeeded(ctx, blockHeight);
+  const style: ProfessionalClassicTextStyle = { size: 7.6, color: PRO_CLASSIC_MUTED2, lineHeight: 3.9 };
+  if (part.isBullet) {
+    proClassicSetTextStyle(ctx, style);
+    ctx.pdf.text('•', ctx.marginLeft, ctx.y);
+    proClassicDrawLinesBlock(ctx, part.lines, style, { indentX: 4 });
+    return;
+  }
+  proClassicDrawLinesBlock(ctx, part.lines, style);
+}
+
+function proClassicDrawExperienceEntryHeader(ctx: ProfessionalClassicDirectPdfContext, entry: CVData['experience'][number]): void {
+  const dateText = proClassicDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
+  const titleLines = proClassicSplitText(ctx, entry.position, ctx.contentWidth - 32);
+  proClassicDrawLinesBlock(ctx, titleLines, { size: 8.1, color: PRO_CLASSIC_TEXT, fontStyle: 'bold', lineHeight: 4.3 });
+  if (dateText) {
+    proClassicSetTextStyle(ctx, { size: 7.1, color: PRO_CLASSIC_DATE, fontStyle: 'italic', lineHeight: 3.5 });
+    ctx.pdf.text(dateText, ctx.pageWidth - ctx.marginRight, ctx.y - 4.3, { align: 'right' });
+  }
+  if (entry.company) {
+    proClassicDrawLinesBlock(ctx, [entry.company], { size: 7.5, color: PRO_CLASSIC_MUTED, lineHeight: 3.8 });
+  }
+}
+
+function proClassicDrawExperienceContinuationHeader(ctx: ProfessionalClassicDirectPdfContext, entry: CVData['experience'][number]): void {
+  const dateText = proClassicDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
+  proClassicEnsureSpace(ctx, 4.2);
+  proClassicSetTextStyle(ctx, { size: 7.6, color: PRO_CLASSIC_MUTED, fontStyle: 'italic', lineHeight: 3.8 });
+  const label = `${entry.position} (continued)`;
+  ctx.pdf.text(label, ctx.marginLeft, ctx.y);
+  if (dateText) {
+    ctx.pdf.text(dateText, ctx.pageWidth - ctx.marginRight, ctx.y, { align: 'right' });
+  }
+  ctx.y += 4.2;
+}
+
+function proClassicDrawExperienceEntryPaginated(ctx: ProfessionalClassicDirectPdfContext, entry: CVData['experience'][number]): void {
+  const parts = proClassicExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(part => part.isBullet);
+  const leadParts = (bulletParts.length > 0 ? bulletParts : parts).slice(0, 2);
+  const tailParts = (bulletParts.length > 0 ? bulletParts : parts).slice(leadParts.length);
+  const leadBlockHeight = proClassicEstimateExperienceLeadBlockHeight(ctx, entry);
+  const fullEntryHeight = proClassicExperienceEntryHeight(ctx, entry);
+  const remainingSpace = ctx.bottomSafeY - ctx.y;
+  const freshCapacity = proClassicFreshPageCapacity(ctx);
+
+  if (fullEntryHeight <= remainingSpace) {
+    proClassicDrawExperienceEntryHeader(ctx, entry);
+    parts.forEach(part => proClassicDrawWrappedBulletLinesAtomic(ctx, part));
+    ctx.y += 2.5;
+    return;
+  }
+
+  if (leadBlockHeight > remainingSpace && leadBlockHeight <= freshCapacity) {
+    proClassicStartPage(ctx);
+  }
+
+  proClassicDrawExperienceEntryHeader(ctx, entry);
+  leadParts.forEach(part => proClassicDrawWrappedBulletLinesAtomic(ctx, part));
+
+  let continuationShown = false;
+  tailParts.forEach((part) => {
+    const partHeight = proClassicMeasureExperiencePartHeight(part);
+    if (ctx.y + partHeight > ctx.bottomSafeY) {
+      proClassicStartPage(ctx);
+      if (!continuationShown) {
+        proClassicDrawExperienceContinuationHeader(ctx, entry);
+        continuationShown = true;
+      }
+    }
+    proClassicDrawWrappedBulletLinesAtomic(ctx, part);
+  });
+  ctx.y += 2.5;
+}
+
+function proClassicDrawExperience(ctx: ProfessionalClassicDirectPdfContext, cv: CVData): void {
+  if (cv.experience.length === 0) return;
+  const leadBlockHeight = proClassicSectionHeadingHeight() + proClassicExperienceLeadBlockHeight(ctx, cv.experience[0]);
+  proClassicMoveToFreshPageIfNeeded(ctx, leadBlockHeight);
+  proClassicDrawSectionHeading(ctx, ctx.labels.experience);
+  cv.experience.forEach(entry => proClassicDrawExperienceEntryPaginated(ctx, entry));
+}
+
+function proClassicEducationEntryHeight(ctx: ProfessionalClassicDirectPdfContext, edu: CVData['education'][number]): number {
+  const degreeHeight = Math.max(4.3, proClassicSplitText(ctx, edu.degree, ctx.contentWidth - 32).length * 4.3);
+  const schoolHeight = edu.school ? proClassicSplitText(ctx, edu.school).length * 3.8 : 0;
+  const descHeight = edu.description ? proClassicSplitText(ctx, edu.description).length * 3.9 : 0;
+  return degreeHeight + schoolHeight + descHeight + 3;
+}
+
+function proClassicDrawEducationEntry(ctx: ProfessionalClassicDirectPdfContext, edu: CVData['education'][number]): void {
+  const entryHeight = proClassicEducationEntryHeight(ctx, edu);
+  proClassicMoveToFreshPageIfNeeded(ctx, entryHeight);
+  const dateText = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+  const degreeLines = proClassicSplitText(ctx, edu.degree, ctx.contentWidth - 32);
+  proClassicDrawLinesBlock(ctx, degreeLines, { size: 7.9, color: PRO_CLASSIC_TEXT, fontStyle: 'bold', lineHeight: 4.3 });
+  if (dateText) {
+    proClassicSetTextStyle(ctx, { size: 7.1, color: PRO_CLASSIC_DATE, lineHeight: 3.5 });
+    ctx.pdf.text(dateText, ctx.pageWidth - ctx.marginRight, ctx.y - 4.3, { align: 'right' });
+  }
+  if (edu.school) {
+    proClassicDrawLinesBlock(ctx, [edu.school], { size: 7.4, color: PRO_CLASSIC_MUTED, lineHeight: 3.8 });
+  }
+  if (edu.description) {
+    proClassicDrawLinesBlock(ctx, proClassicSplitText(ctx, edu.description), { size: 7.6, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 3.9 });
+  }
+  ctx.y += 2;
+}
+
+function proClassicEducationHeight(ctx: ProfessionalClassicDirectPdfContext, cv: CVData): number {
+  if (cv.education.length === 0) return 0;
+  let height = proClassicSectionHeadingHeight();
+  cv.education.forEach(edu => {
+    height += proClassicEducationEntryHeight(ctx, edu);
+  });
+  return height + 2;
+}
+
+function proClassicDrawEducation(ctx: ProfessionalClassicDirectPdfContext, cv: CVData): void {
+  if (cv.education.length === 0) return;
+  const fullHeight = proClassicEducationHeight(ctx, cv);
+  const headingPlusFirst = proClassicSectionHeadingHeight() + proClassicEducationEntryHeight(ctx, cv.education[0]);
+  const freshCapacity = proClassicFreshPageCapacity(ctx);
+  if (fullHeight <= freshCapacity) {
+    proClassicMoveToFreshPageIfNeeded(ctx, fullHeight);
+  } else {
+    proClassicMoveToFreshPageIfNeeded(ctx, headingPlusFirst);
+  }
+  proClassicDrawSectionHeading(ctx, ctx.labels.education);
+  cv.education.forEach(edu => proClassicDrawEducationEntry(ctx, edu));
+}
+
+type ProClassicSkillChipLayout = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  lines: string[];
+};
+
+function proClassicMeasureSkillChip(
+  ctx: ProfessionalClassicDirectPdfContext,
+  label: string,
+  maxColWidth: number,
+): { width: number; height: number; lines: string[] } {
+  const padH = 1.85;
+  const padV = 0.75;
+  const lineH = 3.2;
+  const chipStyle: ProfessionalClassicTextStyle = { size: 7.2, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: lineH };
+  proClassicSetTextStyle(ctx, chipStyle);
+  const textWidth = ctx.pdf.getTextWidth(label);
+  const singleLineChipWidth = textWidth + padH * 2;
+  if (singleLineChipWidth <= maxColWidth) {
+    return { width: singleLineChipWidth, height: lineH + padV * 2, lines: [label] };
+  }
+  const lines = proClassicSplitText(ctx, label, maxColWidth - padH * 2);
+  return { width: maxColWidth, height: lines.length * lineH + padV * 2, lines };
+}
+
+function proClassicLayoutSkillChips(
+  ctx: ProfessionalClassicDirectPdfContext,
+  skills: string[],
+  maxColWidth: number,
+): { chips: ProClassicSkillChipLayout[]; totalHeight: number } {
+  const gapX = 1.1;
+  const gapY = 1.1;
+  let cursorX = 0;
+  let cursorY = 0;
+  let rowHeight = 0;
+  const chips: ProClassicSkillChipLayout[] = [];
+  skills.forEach((skill) => {
+    const measured = proClassicMeasureSkillChip(ctx, skill, maxColWidth);
+    if (cursorX > 0 && cursorX + measured.width > maxColWidth) {
+      cursorY += rowHeight + gapY;
+      cursorX = 0;
+      rowHeight = 0;
+    }
+    chips.push({
+      x: cursorX,
+      y: cursorY,
+      width: measured.width,
+      height: measured.height,
+      lines: measured.lines,
+    });
+    cursorX += measured.width + gapX;
+    rowHeight = Math.max(rowHeight, measured.height);
+  });
+  return { chips, totalHeight: cursorY + rowHeight };
+}
+
+function proClassicMeasureSkillChipsHeight(
+  ctx: ProfessionalClassicDirectPdfContext,
+  skills: string[],
+  maxColWidth: number,
+): number {
+  if (skills.length === 0) return 0;
+  return proClassicLayoutSkillChips(ctx, skills, maxColWidth).totalHeight;
+}
+
+function proClassicDrawSkillChips(
+  ctx: ProfessionalClassicDirectPdfContext,
+  skills: string[],
+  colX: number,
+  colY: number,
+  maxColWidth: number,
+): number {
+  const layout = proClassicLayoutSkillChips(ctx, skills, maxColWidth);
+  const padH = 1.85;
+  const padV = 0.75;
+  const lineH = 3.2;
+  layout.chips.forEach((chip) => {
+    const chipX = colX + chip.x;
+    const chipY = colY + chip.y;
+    ctx.pdf.setFillColor(PRO_CLASSIC_CHIP_BG[0], PRO_CLASSIC_CHIP_BG[1], PRO_CLASSIC_CHIP_BG[2]);
+    ctx.pdf.roundedRect(chipX, chipY, chip.width, chip.height, 1, 1, 'F');
+    proClassicSetTextStyle(ctx, { size: 7.2, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: lineH });
+    chip.lines.forEach((line, lineIndex) => {
+      ctx.pdf.text(line, chipX + padH, chipY + padV + lineH * (lineIndex + 0.75));
+    });
+  });
+  return layout.totalHeight;
+}
+
+function proClassicLanguagesHeight(ctx: ProfessionalClassicDirectPdfContext, cv: CVData): number {
+  if (cv.languages.length === 0) return 0;
+  return cv.languages.length * 3.8;
+}
+
+function proClassicSkillsLanguagesHeight(ctx: ProfessionalClassicDirectPdfContext, cv: CVData): number {
+  const colWidth = (ctx.contentWidth - PRO_CLASSIC_SKILLS_LANG_GAP_MM) / 2;
+  let skillsHeight = 0;
+  let languagesHeight = 0;
+  if (cv.skills.length > 0) {
+    skillsHeight = proClassicSectionHeadingHeight() + proClassicMeasureSkillChipsHeight(ctx, cv.skills, colWidth) + 2;
+  }
+  if (cv.languages.length > 0) {
+    languagesHeight = proClassicSectionHeadingHeight() + proClassicLanguagesHeight(ctx, cv) + 2;
+  }
+  return Math.max(skillsHeight, languagesHeight);
+}
+
+function proClassicDrawSectionHeadingAt(
+  ctx: ProfessionalClassicDirectPdfContext,
+  label: string,
+  x: number,
+  y: number,
+): number {
+  proClassicSetTextStyle(ctx, { size: 9, color: PRO_CLASSIC_HEADING, fontStyle: 'bold', lineHeight: 3.5 });
+  ctx.pdf.text(label.toUpperCase(), x, y);
+  const ruleY = y + 1.6;
+  ctx.pdf.setDrawColor(PRO_CLASSIC_RULE[0], PRO_CLASSIC_RULE[1], PRO_CLASSIC_RULE[2]);
+  ctx.pdf.setLineWidth(0.25);
+  ctx.pdf.line(x, ruleY, x + ((ctx.contentWidth - PRO_CLASSIC_SKILLS_LANG_GAP_MM) / 2), ruleY);
+  return y + proClassicSectionHeadingHeight();
+}
+
+function proClassicDrawSkillsLanguages(ctx: ProfessionalClassicDirectPdfContext, cv: CVData): void {
+  if (cv.skills.length === 0 && cv.languages.length === 0) return;
+  const colWidth = (ctx.contentWidth - PRO_CLASSIC_SKILLS_LANG_GAP_MM) / 2;
+  const skillsColX = ctx.marginLeft;
+  const langsColX = ctx.marginLeft + colWidth + PRO_CLASSIC_SKILLS_LANG_GAP_MM;
+  const blockHeight = proClassicSkillsLanguagesHeight(ctx, cv);
+  proClassicMoveToFreshPageIfNeeded(ctx, blockHeight);
+
+  const blockTopY = ctx.y;
+  let maxBottom = blockTopY;
+
+  if (cv.skills.length > 0) {
+    const chipsTop = proClassicDrawSectionHeadingAt(ctx, ctx.labels.skills, skillsColX, blockTopY);
+    const chipsHeight = proClassicDrawSkillChips(ctx, cv.skills, skillsColX, chipsTop, colWidth);
+    maxBottom = Math.max(maxBottom, chipsTop + chipsHeight + 2);
+  }
+
+  if (cv.languages.length > 0) {
+    let langsY = proClassicDrawSectionHeadingAt(ctx, ctx.labels.languages, langsColX, blockTopY);
+    const langStyle: ProfessionalClassicTextStyle = { size: 7.6, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 3.8 };
+    cv.languages.forEach((language) => {
+      const line = `${getLocalizedCvLanguageName(language.name, ctx.locale)} - ${language.level}`;
+      const lines = [line];
+      proClassicSetTextStyle(ctx, langStyle);
+      lines.forEach((textLine) => {
+        ctx.pdf.text(textLine, langsColX, langsY);
+        langsY += langStyle.lineHeight;
+      });
+    });
+    maxBottom = Math.max(maxBottom, langsY + 2);
+  }
+
+  ctx.y = maxBottom;
+}
+
+function proClassicCertificationsHeight(ctx: ProfessionalClassicDirectPdfContext, cv: CVData): number {
+  if (cv.certifications.length === 0) return 0;
+  const lines = cv.certifications.flatMap(cert => proClassicSplitText(ctx, cert));
+  return proClassicSectionHeadingHeight() + lines.length * 3.8 + 2;
+}
+
+function proClassicDrawCertifications(ctx: ProfessionalClassicDirectPdfContext, cv: CVData): void {
+  if (cv.certifications.length === 0) return;
+  const lines = cv.certifications.flatMap(cert => proClassicSplitText(ctx, cert));
+  const blockHeight = proClassicSectionHeadingHeight() + lines.length * 3.8 + 2;
+  proClassicMoveToFreshPageIfNeeded(ctx, blockHeight);
+  proClassicDrawSectionHeading(ctx, ctx.labels.certifications);
+  cv.certifications.forEach((cert) => {
+    proClassicEnsureSpace(ctx, 3.8);
+    proClassicSetTextStyle(ctx, { size: 7.6, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 3.8 });
+    ctx.pdf.text('•', ctx.marginLeft, ctx.y);
+    proClassicDrawLines(ctx, proClassicSplitText(ctx, cert), { size: 7.6, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 3.8 }, { indentX: 4 });
+  });
+  ctx.y += 2;
+}
+
+export async function buildProfessionalClassicPagedPdfBlob(
+  cv: CVData,
+  locale: Locale,
+  options: { photoDataUrl?: string | null } = {},
+): Promise<Blob> {
+  const { jsPDF } = await import('jspdf');
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const marginLeft = 8.5;
+  const marginRight = 8.5;
+  const marginTop = 14;
+  const marginBottom = 14;
+  const ctx: ProfessionalClassicDirectPdfContext = {
+    pdf,
+    locale,
+    labels: getProfessionalClassicPdfLabels(locale),
+    pageWidth: CV_PDF_A4_WIDTH_MM,
+    pageHeight: CV_PDF_A4_HEIGHT_MM,
+    marginLeft,
+    marginRight,
+    marginTop,
+    marginBottom,
+    contentWidth: CV_PDF_A4_WIDTH_MM - marginLeft - marginRight,
+    bottomSafeY: CV_PDF_A4_HEIGHT_MM - marginBottom,
+    y: 0,
+  };
+
+  proClassicDrawHeader(ctx, cv, options.photoDataUrl ?? null);
+  proClassicDrawSummary(ctx, cv.summary);
+  proClassicDrawExperience(ctx, cv);
+
+  const educationHeight = proClassicEducationHeight(ctx, cv);
+  const skillsLanguagesHeight = proClassicSkillsLanguagesHeight(ctx, cv);
+  const certificationsHeight = proClassicCertificationsHeight(ctx, cv);
+  const lowerSectionsHeight = educationHeight + skillsLanguagesHeight + certificationsHeight;
+  const freshPageCapacity = proClassicFreshPageCapacity(ctx);
+  if (lowerSectionsHeight > 0 && lowerSectionsHeight <= freshPageCapacity && ctx.y + lowerSectionsHeight > ctx.bottomSafeY) {
+    proClassicStartPage(ctx);
+  }
+
+  if (educationHeight > 0) {
+    proClassicDrawEducation(ctx, cv);
+  }
+  if (skillsLanguagesHeight > 0) {
+    proClassicDrawSkillsLanguages(ctx, cv);
+  }
+  if (certificationsHeight > 0) {
+    proClassicDrawCertifications(ctx, cv);
+  }
+
+  const output = pdf.output('blob');
+  return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
+}
+
 export async function buildProfessionalClassicPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Professional Classic PDF export requires a browser DOM');
-  }
-
   const photoDataUrl = await prepareProfessionalClassicPdfPhotoDataUrl(cv);
-  const container = document.createElement('div');
-  container.id = `professional-classic-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-professional-classic-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createProfessionalClassicPdfTemplate(cv, {
-    locale,
-    photoDataUrl,
-  }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Professional Classic PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  const blob = await buildProfessionalClassicPagedPdfBlob(cv, locale, { photoDataUrl });
+  if (!blob || blob.size === 0) throw new Error('Professional Classic PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportProfessionalClassicPdf(
