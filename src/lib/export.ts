@@ -9,7 +9,7 @@ import { createCorporateNavyPdfTemplate } from './corporate-navy-pdf-template';
 import { createElegantFormalPdfTemplate } from './elegant-formal-pdf-template';
 import { createExecutivePremiumPdfTemplate } from './executive-premium-pdf-template';
 import { createModernMinimalPdfTemplate } from './modern-minimal-pdf-template';
-import { createCleanSimplePdfTemplate } from './clean-simple-pdf-template';
+import { createCleanSimplePdfTemplate, splitCleanSimpleSummaryParagraphBlocks, splitCleanSimpleSummarySentenceRuns } from './clean-simple-pdf-template';
 import { createProfessionalClassicPdfTemplate } from './professional-classic-pdf-template';
 import { createCreativeArtisticPdfTemplate } from './creative-artistic-pdf-template';
 import { createNordicCleanPdfTemplate } from './nordic-clean-pdf-template';
@@ -685,7 +685,11 @@ function isModernMinimalCaptureTarget(target: HTMLElement): boolean {
 }
 
 function isCleanSimpleCaptureTarget(target: HTMLElement): boolean {
-  return target.dataset.templateId === 'clean-simple'
+  // getAttribute is required: some Android WebViews do not mirror data-* onto
+  // dataset for off-screen export roots, and querySelector does not match self.
+  return target.getAttribute('data-template-id') === 'clean-simple'
+    || target.getAttribute('data-export-template') === 'clean-simple'
+    || target.dataset.templateId === 'clean-simple'
     || Boolean(target.querySelector('[data-template-id="clean-simple"]'));
 }
 
@@ -745,9 +749,13 @@ function isRirekishoCaptureTarget(target: HTMLElement): boolean {
 }
 
 function getTemplateCaptureRoot(target: HTMLElement, templateId: StyledPdfTemplateId): HTMLElement | null {
-  return target.dataset.templateId === templateId
-    ? target
-    : (target.querySelector(`[data-template-id="${templateId}"]`) as HTMLElement | null);
+  if (
+    target.getAttribute('data-template-id') === templateId
+    || target.dataset.templateId === templateId
+  ) {
+    return target;
+  }
+  return target.querySelector(`[data-template-id="${templateId}"]`) as HTMLElement | null;
 }
 
 function getExportStyleTemplateId(target: HTMLElement): StyledPdfTemplateId | null {
@@ -1027,6 +1035,75 @@ const TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
 // need baked top padding so section headings are not flush to the PDF page edge.
 const MODERN_MINIMAL_PDF_PAGE_TOP_INSET_CSS_PX = 28;
 const MODERN_MINIMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX = 0;
+// Clean Simple uses the same generic fixed-height slicing model; continuation summary text
+// was flush to the PDF top edge without baked continuation-page padding.
+// V6: 56px baked top whitespace measured ~14-15mm on Android viewers — visually too
+// large once real block-aware pagination stopped continuation pages from starting
+// mid-sentence. V7: 42px still measured slightly too large ("1-2 lines" ask) — 34px
+// targets the middle of the requested 32-36px band.
+const CLEAN_SIMPLE_PDF_PAGE_TOP_INSET_CSS_PX = 34;
+// V6: previously 0 — the safe-break search could fall back to a break within a few
+// canvas px of the true page bottom with no margin for error, and (see the slice
+// planner below) the planned break height didn't even account for the top inset that
+// would later shrink the same page's usable content, so the render step silently
+// cropped already-planned content off the bottom of the slice instead of deferring it
+// to the next page. A real reserved bottom band, now fed into slice planning itself,
+// guarantees no source pixel is ever assigned to the last N px of a page.
+// V7: 28px still wasn't enough margin for error on real Android WebView rasterization
+// (JPEG compression + anti-aliasing can make a glyph's edge pixels look "safe enough"
+// to a pixel-only scan) — 40px targets the middle of the requested 36-44px band, and is
+// now paired with a real per-rendered-text-line DOM safe-break search (see
+// `collectElegantFormalTextLineIntervalsCss` usage below) instead of relying on pixel
+// scanning alone.
+const CLEAN_SIMPLE_PDF_PAGE_BOTTOM_INSET_CSS_PX = 40;
+const CLEAN_SIMPLE_PDF_HORIZONTAL_PADDING_CSS_PX = 32;
+const CLEAN_SIMPLE_PAGE_BREAK_GUARD_PX = 8;
+const CLEAN_SIMPLE_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX = 128;
+// V7: search range (in CSS px, scaled to canvas px at call time) for the DOM/real-text-
+// line-based safe break search — mirrors Elegant Formal's line-interval search, which
+// replaces guessing a safe row from rasterized canvas pixels with the actual rendered
+// line boxes of the Clean Simple template (measured via Range.getClientRects()).
+const CLEAN_SIMPLE_DOM_PAGE_BREAK_SEARCH_RANGE_PX = 64;
+// V9: after a line-safe break, nudge the source-crop boundary a few canvas px past the
+// previous text line's measured bottom so anti-aliased/descender pixels from that row are
+// not included in the next page's slice — the ghost specks above page-2 text.
+const CLEAN_SIMPLE_POST_LINE_BREAK_GUARD_CSS_PX = 3;
+// V11: FINAL AUTHORITY for every Clean Simple page boundary is the actual captured
+// html2canvas bitmap, not DOM measurements taken before capture — real Android WebView
+// rasterization can shift glyph rows by a few px relative to what Range.getClientRects()
+// reported pre-capture, which is exactly what let V10's DOM-verified "safe" break still
+// land inside real rendered ink (a text row split across page 1/page 2). Require a band
+// of this many consecutive zero-ink canvas rows (scaled by capture DPI) before accepting
+// a break inside it; degrades to a thinner real gap only when a full-width band truly
+// doesn't exist (tight line-height), but never accepts a break inside an ink row.
+const CLEAN_SIMPLE_CANVAS_WHITESPACE_MIN_BAND_CSS_PX = 6;
+// Strict near-white threshold: any channel below this counts as ink. Deliberately much
+// closer to 255 than Elegant Formal's 248 (and checked on every pixel, not a sampled
+// subset) so faint anti-aliased glyph edges can never be misread as clean whitespace.
+const CLEAN_SIMPLE_CANVAS_INK_NEAR_WHITE_THRESHOLD = 250;
+const CLEAN_SIMPLE_CANVAS_INK_ALPHA_THRESHOLD = 4;
+const CLEAN_SIMPLE_GROUP_PAGE_PADDING_PX = 2;
+// A keep-group (heading + first entry, or a whole experience/education entry) is only
+// ever moved to a fresh page wholesale when it is short enough to actually fit there —
+// otherwise shifting it just recreates the same overflow one page later.
+const CLEAN_SIMPLE_MAX_KEEP_GROUP_PAGE_RATIO = 0.62;
+// "Keep with next" for Work Experience: the section heading must stay glued to at least
+// the first entry's title/company/date row plus this many lines of its description, not
+// just the bare heading — otherwise a heading can "safely" (no clipped glyph) land alone
+// at the bottom of a page while its first entry starts the next page with no heading.
+const CLEAN_SIMPLE_EXPERIENCE_REQUIRED_TRAILING_LINES = 2;
+// Same "keep with next" idea for the Professional Summary heading, bounded to a couple
+// of lines rather than the whole (now unsplit, potentially very long) summary
+// paragraph — otherwise a long summary would make the heading "require" nearly a full
+// page of trailing room and get shifted away from its own body text unnecessarily.
+const CLEAN_SIMPLE_SUMMARY_REQUIRED_TRAILING_LINES = 2;
+/**
+ * Historical build-tag constant, kept only for tests/diagnostics that want to tag a PDF
+ * build explicitly via `BuildCvPdfBlobOptions.pdfBuildCanary`. V11: production Clean
+ * Simple exports (`getCleanSimplePdfExportBuildOptions`) no longer embed this in real
+ * output PDF metadata — no canary-only success claims.
+ */
+export const CLEAN_SIMPLE_PDF_BUILD_CANARY = 'CLEAN_SIMPLE_CANVAS_PIXEL_FINAL_V11';
 // Safe page-break selection for Tech Sidebar — scan/cut only the main column, not the dark sidebar.
 const TECH_SIDEBAR_PAGE_BREAK_GUARD_PX = 16;
 const TECH_SIDEBAR_PAGE_BREAK_SEARCH_RANGE_PX = 48;
@@ -2168,7 +2245,7 @@ function analyzeElegantFormalCanvasWhitespaceRows(
   const bandWidth = Math.max(1, right - left);
   const bandHeight = bottom - top + 1;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return Array.from({ length: bandHeight }, () => true);
+  if (!ctx || bandHeight <= 0) return Array.from({ length: Math.max(0, bandHeight) }, () => true);
 
   const sampleStep = Math.max(2, Math.floor(bandWidth / 120));
   const data = ctx.getImageData(left, top, bandWidth, bandHeight).data;
@@ -2474,6 +2551,13 @@ export function buildPaddedPdfSlice(
       canvasWidthPx,
       sliceHeight,
     );
+    // V9: forcibly re-clear the continuation-page top padding band after drawImage.
+    // JPEG compression and anti-aliased glyph edges at the slice boundary can leave
+    // dark specks in y=0..topPad even though source pixels were drawn starting at topPad.
+    if (safeTopInsetCanvasPx > 0) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvasWidthPx, safeTopInsetCanvasPx);
+    }
   }
 
   return {
@@ -2558,6 +2642,1284 @@ export function planElegantFormalPdfSliceSegments(
     trailingTolerancePx,
     lineIntervalsCanvasPx,
   );
+}
+
+export type CleanSimplePdfSliceSegment = {
+  startPx: number;
+  endPx: number;
+};
+
+export type CleanSimplePdfSliceBreakDiagnostics = {
+  pageIndex: number;
+  offsetY: number;
+  targetBreakPx: number;
+  lineSafeBreakPx: number;
+  sentenceAdjustedBreakPx: number | null;
+  /** Break passed into the final pixel-authority resolver (DOM/sentence hint only). */
+  preCanvasWhitespaceBreakPx: number;
+  /** V11 FINAL AUTHORITY: center of a verified zero-ink canvas row band, or null if the
+   *  resolver had no legal window to search (`finalBreakPx` then falls back unchanged). */
+  canvasWhitespaceBreakPx: number | null;
+  canvasWhitespaceBandStartPx: number | null;
+  canvasWhitespaceBandEndPx: number | null;
+  canvasWhitespaceBandHeightPx: number;
+  canvasWhitespaceFound: boolean;
+  finalBreakPx: number;
+  sliceHeight: number;
+  minBreakPx: number;
+  topInsetCanvasPx: number;
+  bottomInsetCanvasPx: number;
+  breakSource: ElegantFormalPageBreakResolution['source'];
+  sentenceRelocationApplied: boolean;
+  previousLineInterval: { top: number; bottom: number } | null;
+  nextLineInterval: { top: number; bottom: number } | null;
+};
+
+function getCleanSimpleLineIntervalsInSpan(
+  span: { top: number; bottom: number },
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }>,
+): Array<{ top: number; bottom: number }> {
+  return lineIntervalsCanvasPx
+    .filter(line => (
+      line.bottom > span.top + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && line.top < span.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX
+    ))
+    .sort((a, b) => a.top - b.top || a.bottom - b.bottom);
+}
+
+function findCleanSimplePreviousAndNextLineIntervals(
+  breakPx: number,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+): { previousLine: { top: number; bottom: number } | null; nextLine: { top: number; bottom: number } | null } {
+  if (!lineIntervalsCanvasPx || lineIntervalsCanvasPx.length === 0) {
+    return { previousLine: null, nextLine: null };
+  }
+  const sorted = [...lineIntervalsCanvasPx].sort((a, b) => a.top - b.top || a.bottom - b.bottom);
+  let previousLine: { top: number; bottom: number } | null = null;
+  let nextLine: { top: number; bottom: number } | null = null;
+  for (const line of sorted) {
+    if (line.bottom <= breakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) previousLine = line;
+    if (line.top >= breakPx - PDF_PAGE_INTERSECTION_EPSILON_PX && !nextLine) {
+      nextLine = line;
+      break;
+    }
+  }
+  return { previousLine, nextLine };
+}
+
+/**
+ * True when `breakPx` lies strictly inside a measured text-line ink band (not merely
+ * on its top/bottom edge). Bitmap slicing at such a Y physically cuts the row in half.
+ */
+export function isCleanSimpleBreakInsideLineInterval(
+  breakPx: number,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }>,
+): { top: number; bottom: number } | null {
+  for (const line of lineIntervalsCanvasPx) {
+    if (
+      breakPx > line.top + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && breakPx < line.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX
+    ) {
+      return line;
+    }
+  }
+  return null;
+}
+
+/** True when a planned segment boundary is in whitespace with guard on both sides. */
+export function isCleanSimpleSegmentBoundaryLineSafe(
+  boundaryPx: number,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }>,
+  guardCanvasPx: number,
+): boolean {
+  return isCleanSimpleBreakInsideLineInterval(boundaryPx, lineIntervalsCanvasPx) === null
+    && !isUnsafeElegantFormalPageBreakCanvasPx(boundaryPx, lineIntervalsCanvasPx, guardCanvasPx);
+}
+
+export type CleanSimpleLineAtomicBreakResolution = {
+  breakPx: number;
+  candidateBreakPx: number;
+  movedPx: number;
+  intersectedLine: { top: number; bottom: number } | null;
+  applied: boolean;
+};
+
+/**
+ * Final line-atomic snap for Clean Simple PDF slicing. After sentence-aware relocation
+ * (which may land on a sentence/line *top* — still unsafe for bitmap crops because
+ * anti-aliased ink extends above/below DOM rects), this resolver guarantees the break
+ * sits in a real whitespace gap between two rendered lines with guard pixels on both
+ * sides. Never allows a page boundary to intersect any line interval.
+ */
+export function resolveCleanSimpleLineAtomicBreakCanvasPx(
+  candidateBreakPx: number,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  guardCanvasPx: number,
+  searchRangeCanvasPx: number,
+  minBreakPx: number,
+  maxBreakPx: number,
+): CleanSimpleLineAtomicBreakResolution {
+  const candidate = Math.floor(candidateBreakPx);
+  if (!lineIntervalsCanvasPx || lineIntervalsCanvasPx.length === 0) {
+    return {
+      breakPx: candidate,
+      candidateBreakPx: candidate,
+      movedPx: 0,
+      intersectedLine: null,
+      applied: false,
+    };
+  }
+
+  const sorted = [...lineIntervalsCanvasPx].sort((a, b) => a.top - b.top || a.bottom - b.bottom);
+  const guardPx = Math.max(1, guardCanvasPx);
+  const intersectedLine = isCleanSimpleBreakInsideLineInterval(candidate, sorted);
+  const needsSnap = intersectedLine !== null
+    || isUnsafeElegantFormalPageBreakCanvasPx(candidate, sorted, guardPx);
+
+  if (!needsSnap) {
+    return {
+      breakPx: candidate,
+      candidateBreakPx: candidate,
+      movedPx: 0,
+      intersectedLine,
+      applied: false,
+    };
+  }
+
+  const isSafe = (y: number) => (
+    y > minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+    && y <= maxBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+    && isCleanSimpleBreakInsideLineInterval(y, sorted) === null
+    && !isUnsafeElegantFormalPageBreakCanvasPx(y, sorted, guardPx)
+  );
+
+  // When the candidate is inside a line band, search upward first for the nearest
+  // whitespace row *before* that line — never push the break down through the line.
+  if (intersectedLine) {
+    for (let y = Math.floor(intersectedLine.top - guardPx); y >= minBreakPx; y -= 1) {
+      if (isSafe(y)) {
+        return {
+          breakPx: y,
+          candidateBreakPx: candidate,
+          movedPx: y - candidate,
+          intersectedLine,
+          applied: true,
+        };
+      }
+    }
+  }
+
+  // Candidate is on a line edge / too close to ink — search near candidate for safe gap.
+  let safeBreakPx = findSafeElegantFormalPageBreakCanvasPx(
+    sorted,
+    candidate,
+    guardPx,
+    searchRangeCanvasPx,
+  );
+  if (!isSafe(safeBreakPx)) {
+    for (let y = candidate; y >= Math.max(minBreakPx, candidate - searchRangeCanvasPx); y -= 1) {
+      if (isSafe(y)) {
+        safeBreakPx = y;
+        break;
+      }
+    }
+  }
+  safeBreakPx = Math.min(safeBreakPx, maxBreakPx);
+
+  const applied = Math.abs(safeBreakPx - candidate) > PDF_PAGE_INTERSECTION_EPSILON_PX
+    || intersectedLine !== null;
+  return {
+    breakPx: safeBreakPx,
+    candidateBreakPx: candidate,
+    movedPx: safeBreakPx - candidate,
+    intersectedLine,
+    applied,
+  };
+}
+
+/** @deprecated V10+ uses resolveCleanSimpleLineAtomicBreakCanvasPx instead. */
+export function applyCleanSimplePostLineBreakGuardCanvasPx(
+  breakPx: number,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  guardCanvasPx: number,
+  maxBreakPx: number,
+): number {
+  if (!lineIntervalsCanvasPx || lineIntervalsCanvasPx.length === 0 || guardCanvasPx <= 0) return breakPx;
+  const resolution = resolveCleanSimpleLineAtomicBreakCanvasPx(
+    breakPx,
+    lineIntervalsCanvasPx,
+    guardCanvasPx,
+    guardCanvasPx * 8,
+    0,
+    maxBreakPx,
+  );
+  return resolution.breakPx;
+}
+
+/** True when every pixel in the continuation-page top padding band is white/near-white. */
+export function isCleanSimpleTopPaddingBandClean(
+  sliceCanvas: HTMLCanvasElement,
+  topInsetCanvasPx: number,
+  inkThreshold = 248,
+): boolean {
+  const topPad = Math.max(0, Math.round(topInsetCanvasPx));
+  if (topPad <= 0) return true;
+  const ctx = sliceCanvas.getContext('2d');
+  if (!ctx) return false;
+  const imageData = ctx.getImageData(0, 0, sliceCanvas.width, topPad);
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const alpha = imageData.data[index + 3];
+    if (alpha === 0) continue;
+    const red = imageData.data[index];
+    const green = imageData.data[index + 1];
+    const blue = imageData.data[index + 2];
+    if (red < inkThreshold || green < inkThreshold || blue < inkThreshold) return false;
+  }
+  return true;
+}
+
+export function getCleanSimplePdfContentBoundsCanvas(
+  canvasWidthPx: number,
+  captureWidthCssPx: number,
+  cssToCanvasScale: number,
+): { contentLeftPx: number; contentRightPx: number } {
+  const scale = captureWidthCssPx > 0 ? canvasWidthPx / captureWidthCssPx : cssToCanvasScale;
+  const left = Math.max(0, Math.round(CLEAN_SIMPLE_PDF_HORIZONTAL_PADDING_CSS_PX * scale));
+  return {
+    contentLeftPx: left,
+    contentRightPx: Math.max(left + 1, canvasWidthPx - left),
+  };
+}
+
+/**
+ * Measures the real rendered vertical span (top of its first line to bottom of its last
+ * line) of every sentence inside every Clean Simple Professional Summary paragraph, via
+ * DOM Range measurement — the exact same `getClientRects()` technique used for
+ * `collectElegantFormalTextLineIntervalsCss`. This never inspects or changes the DOM
+ * (no markers, no new elements): it re-splits each paragraph's own rendered text with
+ * the identical sentence-boundary detection already used to build that text
+ * (`splitCleanSimpleSummarySentenceRuns`), then measures a `Range` over each sentence's
+ * character offsets within the paragraph's single text node.
+ *
+ * The line-interval-based safe break search (V7) only guarantees a break never lands
+ * mid-glyph — it happily lands between two lines of the *same* sentence, which is what
+ * let a page end with a sentence's first line or two (e.g. "Rooted in") and continue the
+ * rest of that same sentence on the next page. These spans let slice planning recognize
+ * "this candidate break is inside a sentence" and prefer moving it to the sentence's own
+ * start instead.
+ */
+export function collectCleanSimpleSummarySentenceSpansCss(root: HTMLElement): ElegantFormalTextLineIntervalCss[] {
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  if (!rootRect) return [];
+  const rootTop = rootRect.top;
+
+  const spans: ElegantFormalTextLineIntervalCss[] = [];
+  const blocks = root.querySelectorAll<HTMLElement>('[data-clean-simple-summary-block]');
+
+  blocks.forEach((block) => {
+    const textNode = block.firstChild;
+    const text = block.textContent ?? '';
+    // The template always renders each summary paragraph as exactly one text node (see
+    // appendCleanSimpleSummaryParagraph-equivalent in clean-simple-pdf-template.ts) — if
+    // that ever isn't true, skip sentence-level protection for this block rather than
+    // guess at wrong offsets; the line-interval safe break still applies as a fallback.
+    if (!(textNode instanceof Text) || !text.trim()) return;
+
+    const sentences = splitCleanSimpleSummarySentenceRuns(text);
+    if (sentences.length <= 1) return;
+
+    let charOffset = 0;
+    sentences.forEach((sentence) => {
+      const startOffset = Math.min(charOffset, textNode.length);
+      const endOffset = Math.min(startOffset + sentence.length, textNode.length);
+      charOffset = endOffset + 1; // +1 to skip the single joining space
+      if (endOffset <= startOffset) return;
+
+      const range = document.createRange();
+      try {
+        range.setStart(textNode, startOffset);
+        range.setEnd(textNode, endOffset);
+      } catch {
+        return;
+      }
+      const rects = typeof range.getClientRects === 'function' ? Array.from(range.getClientRects()) : [];
+      let top: number | null = null;
+      let bottom: number | null = null;
+      if (rects.length > 0) {
+        top = Math.min(...rects.map(r => r.top)) - rootTop;
+        bottom = Math.max(...rects.map(r => r.bottom)) - rootTop;
+      } else {
+        // Some WebViews return empty getClientRects() for sub-ranges while the full
+        // paragraph still lays out correctly — estimate this sentence's vertical span
+        // from the block box and character offsets so sentence-aware breaks still work.
+        const blockRect = getPositiveRect(block.getBoundingClientRect(), block);
+        if (blockRect && text.length > 0) {
+          const startFrac = startOffset / text.length;
+          const endFrac = endOffset / text.length;
+          top = (blockRect.top - rootTop) + blockRect.height * startFrac;
+          bottom = (blockRect.top - rootTop) + blockRect.height * endFrac;
+        }
+      }
+      if (top !== null && bottom !== null && bottom > top + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        spans.push({ topCssPx: top, bottomCssPx: bottom });
+      }
+    });
+  });
+
+  return spans;
+}
+
+// Fallback when rendered line intervals are unavailable: treat a break as a bad prefix
+// split only when less than ~45% of the sentence span would remain on the current page.
+const CLEAN_SIMPLE_SENTENCE_BAD_SPLIT_PREFIX_RATIO = 0.45;
+
+export type CleanSimpleSentenceBreakAdjustment = {
+  breakPx: number;
+  applied: boolean;
+  reason: 'line-prefix-split' | 'ratio-prefix-split' | 'min-break-rejected' | 'not-inside-sentence' | null;
+};
+
+/**
+ * If `breakPx` would split a multi-line sentence after only its opening line(s) — the
+ * exact "Rooted in" / "a mathematics background..." failure mode — relocate the break to
+ * that sentence's own top so page 2 starts with the full sentence. Uses rendered line
+ * intervals when available (precise, immune to the V8 50%-of-height edge case on
+ * two-line sentences); falls back to span-height ratio only when line data is missing.
+ */
+export function adjustCleanSimpleBreakForSentenceBoundary(
+  breakPx: number,
+  sentenceSpansCanvasPx: Array<{ top: number; bottom: number }>,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null,
+  minBreakPx: number,
+): CleanSimpleSentenceBreakAdjustment {
+  for (const span of sentenceSpansCanvasPx) {
+    const insideSentence = breakPx > span.top + PDF_PAGE_INTERSECTION_EPSILON_PX
+      && breakPx < span.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX;
+    if (!insideSentence) continue;
+
+    let isBadPrefixSplit = false;
+    if (lineIntervalsCanvasPx && lineIntervalsCanvasPx.length > 0) {
+      const sentenceLines = getCleanSimpleLineIntervalsInSpan(span, lineIntervalsCanvasPx);
+      if (sentenceLines.length >= 2) {
+        let linesBeforeBreak = 0;
+        for (const line of sentenceLines) {
+          if (line.bottom <= breakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) linesBeforeBreak += 1;
+          else break;
+        }
+        const linesAfterBreak = sentenceLines.length - linesBeforeBreak;
+        isBadPrefixSplit = linesBeforeBreak <= 1 || linesAfterBreak >= linesBeforeBreak;
+      }
+    } else {
+      const sentenceHeightPx = span.bottom - span.top;
+      const shownBeforeBreakPx = breakPx - span.top;
+      isBadPrefixSplit = sentenceHeightPx > 0
+        && shownBeforeBreakPx < sentenceHeightPx * CLEAN_SIMPLE_SENTENCE_BAD_SPLIT_PREFIX_RATIO;
+    }
+
+    if (!isBadPrefixSplit) continue;
+    if (span.top > minBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+      // Target the first rendered line of the sentence — the line-atomic snap that runs
+      // afterward will move this to real whitespace *before* that line, never at its top.
+      let targetPx = span.top;
+      if (lineIntervalsCanvasPx && lineIntervalsCanvasPx.length > 0) {
+        const sentenceLines = getCleanSimpleLineIntervalsInSpan(span, lineIntervalsCanvasPx);
+        if (sentenceLines.length > 0) targetPx = sentenceLines[0].top;
+      }
+      return {
+        breakPx: targetPx,
+        applied: true,
+        reason: lineIntervalsCanvasPx && lineIntervalsCanvasPx.length > 0
+          ? 'line-prefix-split'
+          : 'ratio-prefix-split',
+      };
+    }
+    return { breakPx, applied: false, reason: 'min-break-rejected' };
+  }
+  return { breakPx, applied: false, reason: null };
+}
+
+/**
+ * Every pixel in a row is checked (no sampling stride) against a strict near-white
+ * threshold. This is the only ink test the Clean Simple final boundary resolver trusts —
+ * a coarse sampled scan can step over a single-pixel-wide anti-aliased glyph stroke
+ * between sample columns and misreport a row as clean, which is exactly the class of bug
+ * a "safe" DOM-measured break could still hit on real Android WebView rasterization.
+ */
+function isCleanSimpleCanvasPixelInk(red: number, green: number, blue: number, alpha: number): boolean {
+  if (alpha <= CLEAN_SIMPLE_CANVAS_INK_ALPHA_THRESHOLD) return false;
+  return red < CLEAN_SIMPLE_CANVAS_INK_NEAR_WHITE_THRESHOLD
+    || green < CLEAN_SIMPLE_CANVAS_INK_NEAR_WHITE_THRESHOLD
+    || blue < CLEAN_SIMPLE_CANVAS_INK_NEAR_WHITE_THRESHOLD;
+}
+
+function computeCleanSimpleCanvasInkRows(
+  canvas: HTMLCanvasElement,
+  topPx: number,
+  bottomPx: number,
+  leftPx: number,
+  rightPx: number,
+): boolean[] {
+  const top = Math.max(0, Math.floor(topPx));
+  const bottom = Math.min(canvas.height - 1, Math.ceil(bottomPx));
+  if (bottom < top) return [];
+
+  const left = Math.max(0, Math.floor(leftPx));
+  const right = Math.min(canvas.width, Math.ceil(rightPx));
+  const width = Math.max(1, right - left);
+  const height = bottom - top + 1;
+  const ctx = canvas.getContext('2d');
+  if (!ctx || height <= 0) return Array.from({ length: Math.max(0, height) }, () => true);
+
+  const data = ctx.getImageData(left, top, width, height).data;
+  const inkRow: boolean[] = new Array(height).fill(false);
+  for (let row = 0; row < height; row += 1) {
+    const rowOffset = row * width * 4;
+    for (let x = 0; x < width; x += 1) {
+      const index = rowOffset + x * 4;
+      if (isCleanSimpleCanvasPixelInk(data[index], data[index + 1], data[index + 2], data[index + 3])) {
+        inkRow[row] = true;
+        break;
+      }
+    }
+  }
+  return inkRow;
+}
+
+/**
+ * V12 content-completeness fix: finds the true bottom of rendered content on the
+ * Clean Simple canvas — the canvas-y one past the very last row (within
+ * `[contentLeftPx, contentRightPx)`) that contains any ink — using the exact same
+ * full-resolution, no-stride pixel scan as the V11 whitespace-break resolver.
+ *
+ * This exists because both the pre-slice "visible bottom" crop
+ * (`findVisibleCanvasBottom`) and the flat `PDF_TRAILING_SLICE_TOLERANCE_MM` applied at
+ * the tail of `planCleanSimplePdfSliceSegments` were sized/sampled for detecting
+ * *approximately* where trailing whitespace begins, not for guaranteeing every real
+ * content pixel is preserved. A coarse dual-axis sample stride (`findVisibleCanvasBottom`)
+ * can step clean over a short, sparse trailing section like Languages, and a flat ~30px
+ * trailing tolerance can silently swallow one real text row sitting right at the bottom
+ * of the captured canvas. Callers use this value to cap those heuristics so they can
+ * never remove or skip past genuine content, regardless of how sparse/short it is.
+ */
+export function findCleanSimpleCanvasContentBottomPx(
+  canvas: HTMLCanvasElement,
+  contentLeftPx: number,
+  contentRightPx: number,
+): number {
+  const height = canvas.height;
+  if (height <= 0) return 0;
+  const inkRows = computeCleanSimpleCanvasInkRows(canvas, 0, height - 1, contentLeftPx, contentRightPx);
+  for (let row = inkRows.length - 1; row >= 0; row -= 1) {
+    if (inkRows[row]) return Math.min(height, row + 1);
+  }
+  return 0;
+}
+
+export type CleanSimpleCanvasWhitespaceBreakOptions = {
+  contentLeftPx: number;
+  contentRightPx: number;
+  minBreakPx: number;
+  maxBreakPx: number;
+  searchRangePx: number;
+  minBandHeightPx: number;
+};
+
+export type CleanSimpleCanvasWhitespaceBreakResult = {
+  breakPx: number;
+  bandStartPx: number;
+  bandEndPx: number;
+  bandHeightPx: number;
+  targetBreakPx: number;
+  movedPx: number;
+  found: boolean;
+};
+
+/**
+ * FINAL AUTHORITY for every Clean Simple PDF page boundary. Ignores DOM/sentence
+ * measurements entirely and inspects only the actual rasterized html2canvas bitmap: it
+ * finds a horizontal band of rows with zero ink pixels (full-row scan, strict near-white
+ * threshold — see `isCleanSimpleCanvasPixelInk`) at or before `targetBreakPx`, and
+ * returns the center of that band as the break. This can never return a break inside a
+ * row that contains any ink pixel in the real captured bitmap — the exact invariant
+ * DOM-based line-interval reasoning (V7-V10) could not guarantee, because rasterized
+ * glyph positions on real Android WebView captures can drift a few px from whatever was
+ * measured via Range.getClientRects() before html2canvas ran.
+ *
+ * `targetBreakPx` may still come from a DOM/sentence-aware hint (natural paragraph/line
+ * boundary preference) — but that hint is never trusted on its own; this resolver always
+ * re-verifies it against the real bitmap and moves it if needed.
+ */
+export function findCleanSimpleCanvasWhitespaceBreak(
+  canvas: HTMLCanvasElement,
+  targetBreakPx: number,
+  options: CleanSimpleCanvasWhitespaceBreakOptions,
+): CleanSimpleCanvasWhitespaceBreakResult {
+  const target = Math.floor(targetBreakPx);
+  const searchFloorPx = Math.max(0, Math.floor(options.minBreakPx));
+  const searchCeilingPx = Math.min(canvas.height - 1, Math.floor(options.maxBreakPx));
+  const notFound = (): CleanSimpleCanvasWhitespaceBreakResult => ({
+    breakPx: target,
+    bandStartPx: target,
+    bandEndPx: target,
+    bandHeightPx: 0,
+    targetBreakPx: target,
+    movedPx: 0,
+    found: false,
+  });
+  if (searchCeilingPx <= searchFloorPx) return notFound();
+
+  // Scan the entire legal window in one pass — never only a narrow radius around the
+  // target — so a clean band anywhere between the minimum allowed break and the nominal
+  // target is always found. This is what satisfies "if no whitespace band exists near
+  // the target, move the break earlier until a clean band is found" instead of only
+  // checking a small fixed radius and giving up.
+  const downwardAllowancePx = Math.max(0, searchCeilingPx - target);
+  const scanTop = Math.max(searchFloorPx, target - options.searchRangePx);
+  const scanBottom = Math.min(searchCeilingPx, target + downwardAllowancePx);
+  const inkRows = computeCleanSimpleCanvasInkRows(
+    canvas,
+    scanTop,
+    scanBottom,
+    options.contentLeftPx,
+    options.contentRightPx,
+  );
+  if (inkRows.length === 0) return notFound();
+
+  type Band = { startIndex: number; endIndex: number; heightPx: number };
+  const collectBands = (minHeightPx: number): Band[] => {
+    const bands: Band[] = [];
+    let runStart: number | null = null;
+    for (let i = 0; i < inkRows.length; i += 1) {
+      if (!inkRows[i]) {
+        if (runStart === null) runStart = i;
+      } else if (runStart !== null) {
+        const heightPx = i - runStart;
+        if (heightPx >= minHeightPx) bands.push({ startIndex: runStart, endIndex: i - 1, heightPx });
+        runStart = null;
+      }
+    }
+    if (runStart !== null) {
+      const heightPx = inkRows.length - runStart;
+      if (heightPx >= minHeightPx) bands.push({ startIndex: runStart, endIndex: inkRows.length - 1, heightPx });
+    }
+    return bands;
+  };
+
+  // Prefer a full-height guard band; if real line spacing is too tight to ever offer one,
+  // degrade the requirement rather than ever choosing a break inside an ink row — a
+  // thinner-than-ideal blank gap is still infinitely better than splitting a text row.
+  const minHeightSteps = [
+    Math.max(1, options.minBandHeightPx),
+    Math.max(1, Math.ceil(options.minBandHeightPx / 2)),
+    2,
+    1,
+  ];
+
+  let bands: Band[] = [];
+  for (const minHeightPx of minHeightSteps) {
+    bands = collectBands(minHeightPx);
+    if (bands.length > 0) break;
+  }
+  if (bands.length === 0) return notFound();
+
+  let best: Band | null = null;
+  let bestScore = Infinity;
+  for (const band of bands) {
+    const centerIndex = band.startIndex + Math.floor(band.heightPx / 2);
+    const centerPx = scanTop + centerIndex;
+    // Bands at or before the nominal target are strongly preferred — moving the break
+    // earlier only trims trailing whitespace off this page. A band after target is
+    // penalized so it's chosen only when nothing usable exists at or before target.
+    const distance = centerPx <= target ? (target - centerPx) : (centerPx - target) * 4;
+    if (distance < bestScore) {
+      bestScore = distance;
+      best = band;
+    }
+  }
+  if (!best) return notFound();
+
+  const centerIndex = best.startIndex + Math.floor(best.heightPx / 2);
+  const breakPx = scanTop + centerIndex;
+  return {
+    breakPx,
+    bandStartPx: scanTop + best.startIndex,
+    bandEndPx: scanTop + best.endIndex,
+    bandHeightPx: best.heightPx,
+    targetBreakPx: target,
+    movedPx: breakPx - target,
+    found: true,
+  };
+}
+
+export function planCleanSimplePdfSliceSegments(
+  canvasHeightPx: number,
+  pageHeightPx: number,
+  trailingTolerancePx: number,
+  pdfCanvas: HTMLCanvasElement,
+  contentLeftPx: number,
+  contentRightPx: number,
+  guardCanvasPx: number,
+  canvasSearchCanvasPx: number,
+  topInsetCanvasPx = 0,
+  bottomInsetCanvasPx = 0,
+  lineIntervalsCanvasPx: Array<{ top: number; bottom: number }> | null = null,
+  _domIntervalsReliable = false,
+  domSearchCanvasPx = 0,
+  _sentenceSpansCanvasPx: Array<{ top: number; bottom: number }> | null = null,
+  postLineGuardCanvasPx = 0,
+  breakDiagnosticsOut: CleanSimplePdfSliceBreakDiagnostics[] | null = null,
+): CleanSimplePdfSliceSegment[] {
+  const segments: CleanSimplePdfSliceSegment[] = [];
+  let offsetY = 0;
+  let pageIndex = 0;
+
+  // V12 content-completeness guarantee: never let the flat trailing tolerance extend
+  // above the real last row of ink. If genuine content (e.g. a Languages row) sits
+  // closer to the canvas bottom than `trailingTolerancePx`, shrink the effective
+  // tolerance so the final segment's endPx is mathematically guaranteed to reach past
+  // it — see findCleanSimpleCanvasContentBottomPx for the full-resolution scan this
+  // relies on. When trailing whitespace genuinely exceeds the flat tolerance (the
+  // common case), behavior is unchanged.
+  const contentBottomPx = findCleanSimpleCanvasContentBottomPx(pdfCanvas, contentLeftPx, contentRightPx);
+  const effectiveTrailingTolerancePx = Math.max(
+    0,
+    Math.min(trailingTolerancePx, canvasHeightPx - contentBottomPx),
+  );
+
+  while (offsetY < canvasHeightPx - effectiveTrailingTolerancePx) {
+    // Continuation pages (pageIndex > 0) bake in a top inset at render time, which
+    // shrinks how much source canvas height that page can actually show versus a raw
+    // pageHeightPx slice. Planning must use this same reduced budget up front — picking
+    // a break based on the full pageHeightPx here, only to have the renderer silently
+    // crop the slice back down to size afterward, drops whatever fell in the gap (never
+    // shown on this page *or* the next) and cuts mid-glyph instead of at a safe row.
+    const topPadForThisPage = pageIndex === 0 ? 0 : topInsetCanvasPx;
+    const maxHeightAsFinalPage = Math.max(1, pageHeightPx - topPadForThisPage);
+    const remainingPx = canvasHeightPx - offsetY - effectiveTrailingTolerancePx;
+    const isFinalPage = remainingPx <= maxHeightAsFinalPage + PDF_PAGE_INTERSECTION_EPSILON_PX;
+    // A non-final page additionally reserves a bottom safety band so no line of text is
+    // ever assigned pixels within that band — it is real, guaranteed-blank margin, not
+    // just a "best-effort" whitespace search near the physical edge.
+    const maxUsableHeightPx = isFinalPage
+      ? maxHeightAsFinalPage
+      : Math.max(1, pageHeightPx - topPadForThisPage - bottomInsetCanvasPx);
+
+    let sliceHeight = Math.min(maxUsableHeightPx, canvasHeightPx - offsetY);
+
+    if (
+      !isFinalPage
+      && sliceHeight >= maxUsableHeightPx - PDF_PAGE_INTERSECTION_EPSILON_PX
+    ) {
+      const targetBreakPx = offsetY + maxUsableHeightPx;
+      const minBreakPx = offsetY + Math.min(maxUsableHeightPx * 0.22, maxUsableHeightPx - guardCanvasPx * 2);
+      // Clean Simple V13: do not let legacy DOM/sentence relocation choose an early
+      // page break for the actual export. Those hints fixed earlier paragraph aesthetics
+      // but became too conservative for long summaries, leaving page 1 with a large blank
+      // area even when several more rendered rows could fit. The final authority is now
+      // the actual canvas: start from the latest usable target and let the pixel
+      // whitespace resolver move only as much as needed to avoid ink.
+      const lineSafeBreakPx = targetBreakPx;
+      let resolvedBreakPx = targetBreakPx;
+      const sentenceAdjustedBreakPx: number | null = null;
+      const sentenceRelocationApplied = false;
+      // Kept in diagnostics as null/false so older debug consumers can tell no legacy
+      // sentence relocation influenced this break.
+      const preCanvasWhitespaceBreakPx = resolvedBreakPx;
+      const approxCssToCanvasScale = guardCanvasPx > 0 ? guardCanvasPx / CLEAN_SIMPLE_PAGE_BREAK_GUARD_PX : 1;
+      const minBandHeightPx = Math.max(
+        8,
+        Math.round(CLEAN_SIMPLE_CANVAS_WHITESPACE_MIN_BAND_CSS_PX * approxCssToCanvasScale),
+        // Folds the old "post-line guard" margin (V9) into the new band-height floor: a
+        // clean band must be at least this tall so the resolved center still keeps that
+        // many guard px of verified-blank canvas on both sides of the final break.
+        Math.round(postLineGuardCanvasPx * 2),
+      );
+      const canvasWhitespaceSearchPx = Math.max(canvasSearchCanvasPx, domSearchCanvasPx, minBandHeightPx * 8);
+      const canvasWhitespaceMaxBreakPx = targetBreakPx
+        + Math.min(canvasSearchCanvasPx * 0.5, guardCanvasPx * 2);
+      const canvasWhitespace = findCleanSimpleCanvasWhitespaceBreak(
+        pdfCanvas,
+        resolvedBreakPx,
+        {
+          contentLeftPx,
+          contentRightPx,
+          minBreakPx,
+          maxBreakPx: canvasWhitespaceMaxBreakPx,
+          searchRangePx: canvasWhitespaceSearchPx,
+          minBandHeightPx,
+        },
+      );
+      if (canvasWhitespace.found) resolvedBreakPx = canvasWhitespace.breakPx;
+      const { previousLine, nextLine } = findCleanSimplePreviousAndNextLineIntervals(
+        resolvedBreakPx,
+        lineIntervalsCanvasPx,
+      );
+      if (breakDiagnosticsOut) {
+        breakDiagnosticsOut.push({
+          pageIndex,
+          offsetY,
+          targetBreakPx,
+          lineSafeBreakPx,
+          sentenceAdjustedBreakPx,
+          preCanvasWhitespaceBreakPx,
+          canvasWhitespaceBreakPx: canvasWhitespace.found ? canvasWhitespace.breakPx : null,
+          canvasWhitespaceBandStartPx: canvasWhitespace.found ? canvasWhitespace.bandStartPx : null,
+          canvasWhitespaceBandEndPx: canvasWhitespace.found ? canvasWhitespace.bandEndPx : null,
+          canvasWhitespaceBandHeightPx: canvasWhitespace.bandHeightPx,
+          canvasWhitespaceFound: canvasWhitespace.found,
+          finalBreakPx: resolvedBreakPx,
+          sliceHeight: Math.max(0, resolvedBreakPx - offsetY),
+          minBreakPx,
+          topInsetCanvasPx: topPadForThisPage,
+          bottomInsetCanvasPx: isFinalPage ? 0 : bottomInsetCanvasPx,
+          breakSource: 'canvas',
+          sentenceRelocationApplied,
+          previousLineInterval: previousLine,
+          nextLineInterval: nextLine,
+        });
+      }
+      // Accept up to `canvasWhitespaceMaxBreakPx` (not just `targetBreakPx`): the pixel
+      // resolver is explicitly allowed a small amount of downward slack into the
+      // reserved bottom-guard margin (never past it) when that's where the nearest real
+      // whitespace band actually is — rejecting that here would silently discard a
+      // verified-safe break and fall back to an unverified fixed-height cut instead.
+      if (
+        resolvedBreakPx > offsetY + PDF_PAGE_INTERSECTION_EPSILON_PX
+        && resolvedBreakPx <= canvasWhitespaceMaxBreakPx + PDF_PAGE_INTERSECTION_EPSILON_PX
+      ) {
+        sliceHeight = resolvedBreakPx - offsetY;
+      } else if (breakDiagnosticsOut) {
+        const last = breakDiagnosticsOut[breakDiagnosticsOut.length - 1];
+        if (last) {
+          last.finalBreakPx = offsetY + sliceHeight;
+          last.sliceHeight = sliceHeight;
+        }
+      }
+    }
+
+    segments.push({ startPx: offsetY, endPx: offsetY + sliceHeight });
+    offsetY += sliceHeight;
+    pageIndex += 1;
+  }
+
+  return segments;
+}
+
+export type CleanSimpleBlockKind =
+  | 'summary-heading'
+  | 'summary-block'
+  | 'section-heading'
+  | 'final-section-group'
+  | 'experience-entry'
+  | 'education-entry';
+
+export type CleanSimpleBlockDiagnostic = {
+  kind: CleanSimpleBlockKind;
+  keepGroupId: string;
+  textPreview: string;
+  top: number | null;
+  bottom: number | null;
+  height: number | null;
+  pageBoundary: number | null;
+  straddles: boolean;
+  shifted: boolean;
+  appliedMarginTopPx: number;
+};
+
+export type CleanSimpleFinalSectionsPaginationDiagnostic = {
+  found: boolean;
+  beforeTop: number | null;
+  beforeBottom: number | null;
+  beforeHeight: number | null;
+  afterTop: number | null;
+  afterBottom: number | null;
+  afterHeight: number | null;
+  pageBoundary: number | null;
+  straddledBefore: boolean;
+  straddlesAfter: boolean;
+  fitsOnContinuationPage: boolean;
+  spacerHeightPx: number;
+  moved: boolean;
+  textPreview: string;
+};
+
+export type CleanSimpleBlockPaginationReport = {
+  pageHeightCssPx: number | null;
+  topInsetCssPx: number;
+  bottomInsetCssPx: number;
+  blockCount: number;
+  blocks: CleanSimpleBlockDiagnostic[];
+  finalSections: CleanSimpleFinalSectionsPaginationDiagnostic;
+};
+
+function cleanSimpleTextPreview(element: HTMLElement): string {
+  return (element.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 96);
+}
+
+function getCleanSimpleLineHeightPx(element: HTMLElement): number {
+  const fallback = 10.2 * 1.32;
+  if (typeof window === 'undefined' || !window.getComputedStyle) return fallback;
+  const computed = window.getComputedStyle(element);
+  const fontSize = Number.parseFloat(computed.fontSize) || 10.2;
+  const lineHeightRaw = computed.lineHeight;
+  if (lineHeightRaw.endsWith('px')) {
+    const parsed = Number.parseFloat(lineHeightRaw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fontSize * 1.32;
+  }
+  const parsed = Number.parseFloat(lineHeightRaw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed * fontSize : fontSize * 1.32;
+}
+
+function cleanSimpleEmptyBlockPaginationReport(): CleanSimpleBlockPaginationReport {
+  return {
+    pageHeightCssPx: null,
+    topInsetCssPx: CLEAN_SIMPLE_PDF_PAGE_TOP_INSET_CSS_PX,
+    bottomInsetCssPx: CLEAN_SIMPLE_PDF_PAGE_BOTTOM_INSET_CSS_PX,
+    blockCount: 0,
+    blocks: [],
+    finalSections: {
+      found: false,
+      beforeTop: null,
+      beforeBottom: null,
+      beforeHeight: null,
+      afterTop: null,
+      afterBottom: null,
+      afterHeight: null,
+      pageBoundary: null,
+      straddledBefore: false,
+      straddlesAfter: false,
+      fitsOnContinuationPage: false,
+      spacerHeightPx: 0,
+      moved: false,
+      textPreview: '',
+    },
+  };
+}
+
+/**
+ * Clean Simple's real pre-capture page planner. Fixed-height canvas slicing plus a
+ * pixel-level whitespace search (see `planCleanSimplePdfSliceSegments`) only guarantees
+ * a break never lands mid-glyph — it has no idea a "clean" whitespace row it just picked
+ * sits directly between a section heading and that section's first entry, orphaning the
+ * heading. This pass runs first, entirely in the DOM, and physically relocates any
+ * heading/entry that would straddle (or be orphaned across) a page boundary by inserting
+ * a margin-top spacer, so by the time html2canvas rasterizes the page the keep-together
+ * groups already live wholly on one page and can never be picked apart downstream.
+ */
+export function applyCleanSimpleKeepTogetherPagination(root: HTMLElement): CleanSimpleBlockPaginationReport {
+  void root.offsetHeight;
+  const rootRect = getPositiveRect(root.getBoundingClientRect(), root);
+  const rootWidth = rootRect?.width || root.offsetWidth || root.scrollWidth;
+  if (rootWidth <= 0) return cleanSimpleEmptyBlockPaginationReport();
+
+  const rootBox = { top: rootRect?.top ?? 0 };
+  const pageHeightCssPx = rootWidth * (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM);
+  if (pageHeightCssPx <= 0) return cleanSimpleEmptyBlockPaginationReport();
+
+  const maxKeepGroupHeightPx = pageHeightCssPx * CLEAN_SIMPLE_MAX_KEEP_GROUP_PAGE_RATIO;
+  // A keep-group relocated onto a continuation page still has to fit inside that page's
+  // reduced usable height (full page height minus baked top+bottom insets) — otherwise
+  // the shift just recreates the same straddle one page later.
+  const continuationUsableHeightPx = Math.max(
+    pageHeightCssPx * 0.3,
+    pageHeightCssPx - CLEAN_SIMPLE_PDF_PAGE_TOP_INSET_CSS_PX - CLEAN_SIMPLE_PDF_PAGE_BOTTOM_INSET_CSS_PX,
+  );
+
+  const rectOf = (el: Element | null | undefined): { top: number; bottom: number; height: number } | null => {
+    if (!el || !(el instanceof HTMLElement)) return null;
+    return getRelativeExportRect(rootBox, el, root);
+  };
+
+  const pageIndexOf = (topPx: number): number => (
+    Math.floor((topPx + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx)
+  );
+
+  const rectStraddles = (rect: { top: number; bottom: number }): boolean => (
+    pageIndexOf(rect.top) !== Math.floor((rect.bottom - PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx)
+  );
+
+  const rectFromElements = (...elements: Array<Element | null | undefined>): { top: number; bottom: number; height: number } | null => {
+    const rects = elements
+      .map((element) => rectOf(element))
+      .filter((rect): rect is { top: number; bottom: number; height: number } => Boolean(rect));
+    if (rects.length === 0) return null;
+    const top = Math.min(...rects.map(rect => rect.top));
+    const bottom = Math.max(...rects.map(rect => rect.bottom));
+    return { top, bottom, height: bottom - top };
+  };
+
+  const finalSectionsChildUnionRect = (wrapper: HTMLElement): { top: number; bottom: number; height: number } | null => {
+    const meaningfulChildren = Array.from(wrapper.querySelectorAll<HTMLElement>('[data-export-meaningful="true"], [data-clean-simple-skill="item"]'))
+      // The wrapper is itself meaningful for semantic content-bottom purposes, but its own
+      // border box is not the pagination authority here. Union real child boxes so an
+      // Android/WebView wrapper measurement quirk cannot hide the last skill/language row.
+      .filter(element => element !== wrapper);
+    return rectFromElements(...meaningfulChildren);
+  };
+
+  const getFinalSectionsSpacer = (wrapper: HTMLElement): HTMLElement => {
+    const previous = wrapper.previousElementSibling;
+    if (previous instanceof HTMLElement && previous.getAttribute('data-clean-simple-final-sections-spacer') === 'true') {
+      return previous;
+    }
+    const spacer = document.createElement('div');
+    spacer.setAttribute('data-clean-simple-final-sections-spacer', 'true');
+    spacer.setAttribute('aria-hidden', 'true');
+    spacer.style.setProperty('height', '0px');
+    spacer.style.setProperty('margin', '0');
+    spacer.style.setProperty('padding', '0');
+    spacer.style.setProperty('line-height', '0');
+    wrapper.parentElement?.insertBefore(spacer, wrapper);
+    return spacer;
+  };
+
+  const spacerHeightOf = (wrapper: HTMLElement | null): number => {
+    const previous = wrapper?.previousElementSibling;
+    if (previous instanceof HTMLElement && previous.getAttribute('data-clean-simple-final-sections-spacer') === 'true') {
+      return parseCssPx(previous.style.height);
+    }
+    return 0;
+  };
+
+  const setFinalSectionsSpacerHeight = (wrapper: HTMLElement, additionalHeightPx: number): number => {
+    const spacer = getFinalSectionsSpacer(wrapper);
+    const nextHeightPx = Math.max(0, parseCssPx(spacer.style.height) + additionalHeightPx);
+    spacer.style.setProperty('height', `${nextHeightPx}px`);
+    return nextHeightPx;
+  };
+
+  let finalSectionsDiagnostic: CleanSimpleFinalSectionsPaginationDiagnostic = {
+    found: false,
+    beforeTop: null,
+    beforeBottom: null,
+    beforeHeight: null,
+    afterTop: null,
+    afterBottom: null,
+    afterHeight: null,
+    pageBoundary: null,
+    straddledBefore: false,
+    straddlesAfter: false,
+    fitsOnContinuationPage: false,
+    spacerHeightPx: 0,
+    moved: false,
+    textPreview: '',
+  };
+
+  // Shift `anchor` (a section heading) to the next page boundary when it either straddles
+  // a boundary itself, or there isn't enough room left on its current page for
+  // `requiredTrailingHeightPx` of content that must stay glued to it.
+  const shiftAnchorIfOrphaned = (anchor: HTMLElement, requiredTrailingHeightPx: number | null): boolean => {
+    const rect = rectOf(anchor);
+    if (!rect || rect.height <= 0) return false;
+
+    const anchorStraddles = rectStraddles(rect);
+    const startsOnPage = pageIndexOf(rect.top);
+    const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
+    const roomAfterAnchor = pageBottom - rect.bottom;
+    const wouldOrphanNext = requiredTrailingHeightPx !== null
+      && requiredTrailingHeightPx > PDF_PAGE_INTERSECTION_EPSILON_PX
+      && roomAfterAnchor + PDF_PAGE_INTERSECTION_EPSILON_PX < requiredTrailingHeightPx;
+
+    if (!anchorStraddles && !wouldOrphanNext) return false;
+    if (
+      !anchorStraddles
+      && requiredTrailingHeightPx !== null
+      && (rect.height + requiredTrailingHeightPx) > continuationUsableHeightPx
+    ) {
+      // Even a fresh page can't hold heading + required content glued together —
+      // shifting would just relocate the same overflow, so let it flow naturally.
+      return false;
+    }
+
+    const shiftPx = Math.max(0, pageBottom - rect.top + CLEAN_SIMPLE_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+    shiftGroupToNextPage(anchor, shiftPx);
+    return true;
+  };
+
+  const shiftWholeGroupIfStraddling = (group: HTMLElement, maxHeightPx: number): boolean => {
+    const rect = rectOf(group);
+    if (!rect || rect.height <= 0 || rect.height > maxHeightPx) return false;
+    if (!rectStraddles(rect)) return false;
+    const startsOnPage = pageIndexOf(rect.top);
+    const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+    const shiftPx = Math.max(0, nextPageTop - rect.top + CLEAN_SIMPLE_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+    shiftGroupToNextPage(group, shiftPx);
+    return true;
+  };
+
+  const shiftAnchorForGroupIfStraddling = (
+    anchor: HTMLElement,
+    groupRect: { top: number; bottom: number; height: number } | null,
+    maxHeightPx: number,
+  ): boolean => {
+    if (!groupRect || groupRect.height <= 0 || groupRect.height > maxHeightPx) return false;
+    if (!rectStraddles(groupRect)) return false;
+    const startsOnPage = pageIndexOf(groupRect.top);
+    const nextPageTop = (startsOnPage + 1) * pageHeightCssPx;
+    const shiftPx = Math.max(0, nextPageTop - groupRect.top + CLEAN_SIMPLE_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+    shiftGroupToNextPage(anchor, shiftPx);
+    return true;
+  };
+
+  const shiftFinalSectionsWrapperIfNeeded = (wrapper: HTMLElement): { moved: boolean; fits: boolean } => {
+    const beforeRect = finalSectionsChildUnionRect(wrapper);
+    const fits = Boolean(beforeRect && beforeRect.height > 0 && beforeRect.height <= continuationUsableHeightPx);
+    const straddledBefore = beforeRect ? rectStraddles(beforeRect) : false;
+    const pageBoundary = beforeRect ? (pageIndexOf(beforeRect.top) + 1) * pageHeightCssPx : null;
+    let moved = false;
+
+    if (finalSectionsDiagnostic.moved && !straddledBefore) {
+      finalSectionsDiagnostic = {
+        ...finalSectionsDiagnostic,
+        afterTop: beforeRect?.top ?? finalSectionsDiagnostic.afterTop,
+        afterBottom: beforeRect?.bottom ?? finalSectionsDiagnostic.afterBottom,
+        afterHeight: beforeRect?.height ?? finalSectionsDiagnostic.afterHeight,
+        straddlesAfter: straddledBefore,
+        spacerHeightPx: spacerHeightOf(wrapper),
+      };
+      return { moved: false, fits };
+    }
+
+    finalSectionsDiagnostic = {
+      found: true,
+      beforeTop: beforeRect?.top ?? null,
+      beforeBottom: beforeRect?.bottom ?? null,
+      beforeHeight: beforeRect?.height ?? null,
+      afterTop: beforeRect?.top ?? null,
+      afterBottom: beforeRect?.bottom ?? null,
+      afterHeight: beforeRect?.height ?? null,
+      pageBoundary,
+      straddledBefore,
+      straddlesAfter: straddledBefore,
+      fitsOnContinuationPage: fits,
+      spacerHeightPx: spacerHeightOf(wrapper),
+      moved: false,
+      textPreview: cleanSimpleTextPreview(wrapper),
+    };
+
+    if (beforeRect && fits && straddledBefore && pageBoundary !== null) {
+      const shiftPx = Math.max(0, pageBoundary - beforeRect.top + CLEAN_SIMPLE_GROUP_PAGE_PADDING_PX);
+      if (shiftPx > PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        const spacerHeightPx = setFinalSectionsSpacerHeight(wrapper, shiftPx);
+        moved = true;
+        void root.offsetHeight;
+        const afterRect = finalSectionsChildUnionRect(wrapper);
+        finalSectionsDiagnostic = {
+          ...finalSectionsDiagnostic,
+          afterTop: afterRect?.top ?? null,
+          afterBottom: afterRect?.bottom ?? null,
+          afterHeight: afterRect?.height ?? null,
+          straddlesAfter: afterRect ? rectStraddles(afterRect) : false,
+          spacerHeightPx,
+          moved: true,
+        };
+      }
+    }
+
+    return { moved, fits };
+  };
+
+  // Work Experience needs more than "heading + first entry exists": the entry's header
+  // row (title/company/date) plus the first couple of description lines must also stay
+  // with the heading — otherwise the heading can end up alone at a page bottom while the
+  // entry's title starts the next page with no section heading above it at all.
+  const requiredTrailingForSection = (
+    sectionKind: string | null,
+    firstContent: HTMLElement,
+  ): number | null => {
+    if (sectionKind === 'experience') {
+      const firstEntry = firstContent.matches('[data-export-group="clean-simple-experience"]')
+        ? firstContent
+        : firstContent.querySelector<HTMLElement>('[data-export-group="clean-simple-experience"]');
+      if (!firstEntry) return rectOf(firstContent)?.height ?? null;
+      const headerRow = firstEntry.querySelector<HTMLElement>('[data-clean-simple-experience-header]');
+      const description = firstEntry.querySelector<HTMLElement>('[data-clean-simple-experience-description]');
+      const headerHeight = rectOf(headerRow)?.height ?? 0;
+      const descRect = rectOf(description);
+      const descAllowance = description && descRect
+        ? Math.min(descRect.height, getCleanSimpleLineHeightPx(description) * CLEAN_SIMPLE_EXPERIENCE_REQUIRED_TRAILING_LINES)
+        : 0;
+      return headerHeight + descAllowance;
+    }
+    return rectOf(firstContent)?.height ?? null;
+  };
+
+  for (let pass = 0; pass < 10; pass += 1) {
+    let movedAnyBlock = false;
+
+    // 1. Professional Summary heading must stay glued to (a couple of lines of) its
+    //    first paragraph block. Since the summary is now rendered as one flowing
+    //    paragraph per real user paragraph break (see clean-simple-pdf-template.ts),
+    //    that first block can be very tall — the requirement is deliberately bounded to
+    //    a couple of lines (like the Work Experience rule below) rather than the whole
+    //    paragraph's height, so a long summary never forces the heading to "require" an
+    //    entire page of trailing room.
+    const summarySection = root.querySelector<HTMLElement>('[data-clean-simple-section="summary"]');
+    if (summarySection) {
+      const heading = summarySection.querySelector<HTMLElement>('h2');
+      const firstBlock = summarySection.querySelector<HTMLElement>('[data-clean-simple-summary-block]');
+      const firstBlockRect = firstBlock ? rectOf(firstBlock) : null;
+      const summaryRequiredTrailingPx = firstBlock && firstBlockRect
+        ? Math.min(
+            firstBlockRect.height,
+            getCleanSimpleLineHeightPx(firstBlock) * CLEAN_SIMPLE_SUMMARY_REQUIRED_TRAILING_LINES,
+          )
+        : null;
+      if (heading && firstBlock && shiftAnchorIfOrphaned(heading, summaryRequiredTrailingPx)) {
+        movedAnyBlock = true;
+      }
+    }
+
+    // 2. Final compact sections: Skills and Languages are visually a single short tail
+    //    block in Clean Simple. Use the real PDF-template wrapper when present so the
+    //    inserted spacer moves the entire block before html2canvas rasterizes it. This
+    //    must run before the generic heading+first-child rule below; otherwise that rule
+    //    can move only the Skills section first, after which the synthetic combined
+    //    group no longer appears to straddle and Android still starts page 3 with
+    //    orphaned skill chips.
+    const finalSectionsWrapper = root.querySelector<HTMLElement>('[data-clean-simple-final-sections="true"]');
+    const skillsSection = root.querySelector<HTMLElement>('[data-clean-simple-section="skills"]');
+    const languagesSection = root.querySelector<HTMLElement>('[data-clean-simple-section="languages"]');
+    let finalSectionsWrapperFits = false;
+    if (finalSectionsWrapper) {
+      const finalSectionsResult = shiftFinalSectionsWrapperIfNeeded(finalSectionsWrapper);
+      finalSectionsWrapperFits = finalSectionsResult.fits;
+      if (finalSectionsResult.moved) movedAnyBlock = true;
+    } else if (skillsSection && languagesSection) {
+      const finalSectionRect = rectFromElements(skillsSection, languagesSection);
+      if (shiftAnchorForGroupIfStraddling(skillsSection, finalSectionRect, continuationUsableHeightPx)) {
+        movedAnyBlock = true;
+      }
+    }
+    if (!finalSectionsWrapper || !finalSectionsWrapperFits) {
+      if (skillsSection && shiftWholeGroupIfStraddling(skillsSection, continuationUsableHeightPx)) {
+        movedAnyBlock = true;
+      }
+      if (languagesSection && shiftWholeGroupIfStraddling(languagesSection, continuationUsableHeightPx)) {
+        movedAnyBlock = true;
+      }
+    }
+
+    // 3. Every other section heading (Work Experience, Education, Skills, Languages,
+    //    Certifications) must stay glued to its first meaningful child.
+    const otherSections = Array.from(root.querySelectorAll<HTMLElement>('[data-clean-simple-section]'))
+      .filter((section) => {
+        if (section.getAttribute('data-clean-simple-section') === 'summary') return false;
+        // Final Skills/Languages are handled as a real atomic wrapper above. Letting the
+        // generic heading+first-child rule touch descendants afterwards reintroduces the
+        // exact Android failure: SKILLS can be handled independently while later skill
+        // chips still flow onto page 3.
+        if (finalSectionsWrapper?.contains(section)) return false;
+        return true;
+      });
+    for (const section of otherSections) {
+      const heading = section.querySelector<HTMLElement>(':scope > h2');
+      const firstContent = heading?.nextElementSibling;
+      if (!heading || !(firstContent instanceof HTMLElement)) continue;
+      const required = requiredTrailingForSection(section.getAttribute('data-clean-simple-section'), firstContent);
+      if (shiftAnchorIfOrphaned(heading, required)) movedAnyBlock = true;
+    }
+
+    // 4. Summary paragraph blocks: move a whole block to the next page rather than
+    //    slicing through it when it straddles the boundary and is short enough to fit.
+    //    Bounded by the same short-keep-group ratio used for experience/education
+    //    entries below (not the much larger continuation-page budget) — a summary is
+    //    now rendered as one flowing paragraph per real user paragraph break, so a
+    //    single block can be most of a page tall. Relocating a block that large would
+    //    leave the *previous* page almost entirely blank (just the heading) instead of
+    //    letting the paragraph naturally fill it and split at a safe rendered line
+    //    boundary (see the DOM line-interval-based safe break search in
+    //    planCleanSimplePdfSliceSegments), which is what actually produces natural,
+    //    professional-looking continuation pages for long summaries.
+    const summaryBlocks = summarySection
+      ? Array.from(summarySection.querySelectorAll<HTMLElement>('[data-clean-simple-summary-block]'))
+      : [];
+    for (const block of summaryBlocks) {
+      if (shiftWholeGroupIfStraddling(block, maxKeepGroupHeightPx)) movedAnyBlock = true;
+    }
+
+    // 5. Individual Work Experience / Education entries: keep each entry whole rather
+    //    than letting the canvas slicer cut through the middle of one.
+    const experienceEntries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="clean-simple-experience"]'));
+    for (const entry of experienceEntries) {
+      if (shiftWholeGroupIfStraddling(entry, maxKeepGroupHeightPx)) movedAnyBlock = true;
+    }
+    const educationEntries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="clean-simple-education"]'));
+    for (const entry of educationEntries) {
+      if (shiftWholeGroupIfStraddling(entry, maxKeepGroupHeightPx)) movedAnyBlock = true;
+    }
+
+    if (!movedAnyBlock) break;
+  }
+
+  const blocks: CleanSimpleBlockDiagnostic[] = [];
+  const pushDiagnosticEntry = (
+    kind: CleanSimpleBlockKind,
+    keepGroupId: string,
+    el: HTMLElement,
+    rect: { top: number; bottom: number; height: number } | null,
+  ): void => {
+    const pageBoundary = rect ? (pageIndexOf(rect.top) + 1) * pageHeightCssPx : null;
+    blocks.push({
+      kind,
+      keepGroupId,
+      textPreview: cleanSimpleTextPreview(el),
+      top: rect?.top ?? null,
+      bottom: rect?.bottom ?? null,
+      height: rect?.height ?? null,
+      pageBoundary,
+      straddles: rect ? rectStraddles(rect) : false,
+      shifted: parseCssPx(el.style.marginTop) > PDF_PAGE_INTERSECTION_EPSILON_PX,
+      appliedMarginTopPx: parseCssPx(el.style.marginTop),
+    });
+  };
+  const pushDiagnostic = (kind: CleanSimpleBlockKind, keepGroupId: string, el: HTMLElement | null | undefined): void => {
+    if (!el) return;
+    pushDiagnosticEntry(kind, keepGroupId, el, rectOf(el));
+  };
+
+  const finalSummarySection = root.querySelector<HTMLElement>('[data-clean-simple-section="summary"]');
+  if (finalSummarySection) {
+    pushDiagnostic('summary-heading', 'summary', finalSummarySection.querySelector<HTMLElement>('h2'));
+    Array.from(finalSummarySection.querySelectorAll<HTMLElement>('[data-clean-simple-summary-block]'))
+      .forEach((block, index) => pushDiagnostic('summary-block', `summary-block-${index}`, block));
+  }
+  Array.from(root.querySelectorAll<HTMLElement>('[data-clean-simple-section]'))
+    .filter(section => section.getAttribute('data-clean-simple-section') !== 'summary')
+    .forEach((section) => {
+      const sectionKind = section.getAttribute('data-clean-simple-section') ?? 'section';
+      pushDiagnostic('section-heading', sectionKind, section.querySelector<HTMLElement>(':scope > h2'));
+    });
+  const finalSkillsSection = root.querySelector<HTMLElement>('[data-clean-simple-section="skills"]');
+  const finalLanguagesSection = root.querySelector<HTMLElement>('[data-clean-simple-section="languages"]');
+  const finalSectionsDiagnosticWrapper = root.querySelector<HTMLElement>('[data-clean-simple-final-sections="true"]');
+  if (finalSectionsDiagnosticWrapper) {
+    pushDiagnostic('final-section-group', 'skills-languages', finalSectionsDiagnosticWrapper);
+  } else if (finalSkillsSection && finalLanguagesSection) {
+    pushDiagnosticEntry(
+      'final-section-group',
+      'skills-languages',
+      finalSkillsSection,
+      rectFromElements(finalSkillsSection, finalLanguagesSection),
+    );
+  }
+  Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="clean-simple-experience"]'))
+    .forEach((entry, index) => pushDiagnostic('experience-entry', `experience-entry-${index}`, entry));
+  Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="clean-simple-education"]'))
+    .forEach((entry, index) => pushDiagnostic('education-entry', `education-entry-${index}`, entry));
+
+  return {
+    pageHeightCssPx,
+    topInsetCssPx: CLEAN_SIMPLE_PDF_PAGE_TOP_INSET_CSS_PX,
+    bottomInsetCssPx: CLEAN_SIMPLE_PDF_PAGE_BOTTOM_INSET_CSS_PX,
+    blockCount: blocks.length,
+    blocks,
+    finalSections: finalSectionsDiagnostic,
+  };
 }
 
 export function collectTechSidebarMainColumnTextLineIntervalsCss(
@@ -8179,9 +9541,85 @@ function getSemanticCanvasBottom(
   return Math.ceil(bounds.maxBottomCssPx * scalePxPerCssPx + SEMANTIC_CANVAS_BOTTOM_PADDING_PX);
 }
 
-export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
+export type CvPdfContinuationSliceInsets = {
+  topInsetCssPx: number;
+  bottomInsetCssPx: number;
+};
+
+export type BuildCvPdfBlobOptions = {
+  /** Bypass DOM marker detection when export wiring must not rely on WebView dataset/querySelector. */
+  forcedCaptureTemplateId?: StyledPdfTemplateId;
+  /** Explicit continuation-page padding profile; cannot be neutralized by failed DOM detection. */
+  continuationSliceInsets?: CvPdfContinuationSliceInsets;
+  /** Embedded in PDF metadata to verify the exported file came from this build path. */
+  pdfBuildCanary?: string;
+};
+
+export async function readPdfBlobAsLatin1Text(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  return new TextDecoder('latin1').decode(buffer);
+}
+
+export type CvPdfExportRoute =
+  | { kind: 'dedicated-clean-simple' }
+  | { kind: 'dedicated-modern-minimal' }
+  | { kind: 'generic-preview' };
+
+export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdfExportRoute {
+  if (templateId === 'clean-simple') return { kind: 'dedicated-clean-simple' };
+  if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
+  if (
+    templateId === 'professional-classic'
+    || templateId === 'creative-bold'
+    || templateId === 'creative-artistic'
+    || templateId === 'elegant-formal'
+    || templateId === 'ats-standard'
+    || templateId === 'executive-premium'
+    || templateId === 'nordic-clean'
+    || templateId === 'tech-sidebar'
+    || templateId === 'corporate-navy'
+    || templateId === 'contemporary-bold'
+    || templateId === 'rirekisho'
+  ) {
+    return { kind: 'generic-preview' };
+  }
+  return { kind: 'generic-preview' };
+}
+
+/**
+ * V11: no `pdfBuildCanary` here — production Clean Simple exports must not embed any
+ * debug/build-tag metadata in the real output PDF. Tests that want to tag a build for
+ * their own isolated assertions can still pass `pdfBuildCanary` explicitly to
+ * `buildCvPdfBlob`/`buildCleanSimplePdfBlob`.
+ */
+export function getCleanSimplePdfExportBuildOptions(): BuildCvPdfBlobOptions {
+  return {
+    forcedCaptureTemplateId: 'clean-simple',
+    continuationSliceInsets: {
+      topInsetCssPx: CLEAN_SIMPLE_PDF_PAGE_TOP_INSET_CSS_PX,
+      bottomInsetCssPx: CLEAN_SIMPLE_PDF_PAGE_BOTTOM_INSET_CSS_PX,
+    },
+  };
+}
+
+export function resolveCvPdfCaptureTemplateId(
+  element: HTMLElement,
+  options: BuildCvPdfBlobOptions = {},
+): StyledPdfTemplateId | null {
+  if (options.forcedCaptureTemplateId) return options.forcedCaptureTemplateId;
+  const captureTarget = (element.firstElementChild as HTMLElement | null) ?? element;
+  return getExportStyleTemplateId(captureTarget) ?? getExportStyleTemplateId(element);
+}
+
+export async function buildCvPdfBlob(
+  elementId: string,
+  options: BuildCvPdfBlobOptions = {},
+): Promise<Blob> {
   const element = document.getElementById(elementId);
   if (!element) throw new Error(`PDF export: element #${elementId} not found in DOM`);
+  const forcedCaptureTemplateId = options.forcedCaptureTemplateId ?? null;
+  const explicitContinuationSliceInsets = options.continuationSliceInsets ?? null;
+  const pdfBuildCanary = options.pdfBuildCanary ?? null;
 
   // ── Step 1: load libraries ────────────────────────────────────────────────
   let html2canvasFn: typeof import('html2canvas').default;
@@ -8202,7 +9640,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   }
 
   const initialCaptureTarget = (element.firstElementChild as HTMLElement | null) ?? element;
-  const initialCaptureTemplateId = getExportStyleTemplateId(initialCaptureTarget);
+  const initialCaptureTemplateId = forcedCaptureTemplateId
+    ?? getExportStyleTemplateId(initialCaptureTarget)
+    ?? getExportStyleTemplateId(element);
   const captureFontFamily = initialCaptureTemplateId === 'ats-standard'
     ? 'Arial, Helvetica, sans-serif'
     : initialCaptureTemplateId === 'executive-premium'
@@ -8332,6 +9772,8 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
   let rirekishoTextLineIntervalsCss: ElegantFormalTextLineIntervalCss[] | null = null;
   let rirekishoContentBoundsCss: { leftCssPx: number; rightCssPx: number } | null = null;
   const rirekishoPageBreakSources: string[] = [];
+  let cleanSimpleTextLineIntervalsCss: ElegantFormalTextLineIntervalCss[] | null = null;
+  let cleanSimpleSummarySentenceSpansCss: ElegantFormalTextLineIntervalCss[] | null = null;
   try {
     // ── HARD VERIFICATION: capture the actual template child directly, not the
     //    scroll wrapper. The #cv-preview / #cv-inline-preview div is an
@@ -8340,7 +9782,9 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     //    By targeting the template child directly we guarantee we capture exactly
     //    what is rendered, including any background-color changes.
     const captureTarget = (firstChild as HTMLElement | null) ?? element;
-    captureTemplateId = getExportStyleTemplateId(captureTarget);
+    captureTemplateId = forcedCaptureTemplateId
+      ?? getExportStyleTemplateId(captureTarget)
+      ?? getExportStyleTemplateId(element);
     const sourceRootForTag = captureTemplateId ? getTemplateCaptureRoot(captureTarget, captureTemplateId) : null;
     if (captureTemplateId === 'elegant-formal' && sourceRootForTag) {
       sourceStyleSnapshots = snapshotInlineStyles(sourceRootForTag);
@@ -8423,6 +9867,26 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
       applyCreativeArtisticPdfNoWrapItems(sourceRootForTag);
       void sourceRootForTag.offsetHeight;
       applyCreativeArtisticKeepTogetherPagination(sourceRootForTag);
+    }
+    if (captureTemplateId === 'clean-simple' && sourceRootForTag) {
+      void sourceRootForTag.offsetHeight;
+      const cleanSimplePaginationReport = applyCleanSimpleKeepTogetherPagination(sourceRootForTag);
+      if (typeof window !== 'undefined') {
+        (window as typeof window & {
+          __cleanSimpleBlockPaginationReport?: CleanSimpleBlockPaginationReport;
+        }).__cleanSimpleBlockPaginationReport = cleanSimplePaginationReport;
+      }
+      // Must run after keep-together so measured line positions already reflect any
+      // margin-top shifts that pass applied, and before html2canvas rasterizes the
+      // page — this walks the *real* DOM (Range.getClientRects()) to find every actual
+      // rendered text line, which is what lets slice planning below choose a page break
+      // at a genuine line boundary instead of a rasterized-pixel guess.
+      cleanSimpleTextLineIntervalsCss = collectElegantFormalTextLineIntervalsCss(sourceRootForTag);
+      // Same real-DOM measurement pass, but per-sentence rather than per-line: lets the
+      // slice planner recognize when a line-safe break would still land inside a single
+      // sentence (e.g. after just its first line/word) and prefer breaking before that
+      // sentence starts instead. Never mutates the DOM.
+      cleanSimpleSummarySentenceSpansCss = collectCleanSimpleSummarySentenceSpansCss(sourceRootForTag);
     }
     captureWidth = Math.max(captureTarget.scrollWidth, captureTarget.offsetWidth);
     captureHeight = Math.max(captureTarget.scrollHeight, captureTarget.offsetHeight);
@@ -8559,6 +10023,22 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
           semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
         }
+        if (captureTemplateId === 'clean-simple') {
+          // V12: Clean Simple's keep-together pagination already ran on the *source*
+          // root (before cloning) and its resulting margin shifts are cloned verbatim,
+          // so no layout pass needs to be replayed here. What was missing is measuring
+          // real semantic content bounds at all — every other multipage template does
+          // this so its page-plan can never treat a page holding genuine tail content
+          // (e.g. Skills/Languages) as trimmable, and so the pre-slice canvas crop below
+          // can never cut the canvas shorter than the true last meaningful element.
+          // Clean Simple skipped this entirely, which combined with Skills/Languages
+          // chips having no `data-export-meaningful` marker (now fixed in
+          // clean-simple-pdf-template.ts) let the canvas-pixel-only crop/trim heuristics
+          // silently truncate those sections on real Android captures.
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+          expandRootToMeaningfulContentHeight(cloneRoot, semanticMeaningfulBounds);
+          semanticMeaningfulBounds = measureExportMeaningfulContentBounds(cloneRoot);
+        }
         cloneRoot.removeAttribute('data-export-capture-id');
         removeCloneStylesheets(clonedDocument);
       },
@@ -8605,7 +10085,7 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
 
   let pdfCanvas = canvas;
   const shouldTrimBlankPdfSlices = captureTemplateId === 'clean-simple' || captureTemplateId === 'professional-classic' || captureTemplateId === 'creative-bold' || captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'modern-minimal' || captureTemplateId === 'rirekisho';
-  const shouldUseFullSemanticCanvas = (captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho' || captureTemplateId === 'professional-classic') && Boolean(semanticMeaningfulBounds);
+  const shouldUseFullSemanticCanvas = (captureTemplateId === 'creative-artistic' || captureTemplateId === 'elegant-formal' || captureTemplateId === 'ats-standard' || captureTemplateId === 'executive-premium' || captureTemplateId === 'nordic-clean' || captureTemplateId === 'tech-sidebar' || captureTemplateId === 'corporate-navy' || captureTemplateId === 'contemporary-bold' || captureTemplateId === 'rirekisho' || captureTemplateId === 'professional-classic' || captureTemplateId === 'clean-simple') && Boolean(semanticMeaningfulBounds);
   if (shouldTrimBlankPdfSlices && !shouldUseFullSemanticCanvas) {
     const semanticCanvasBottom = getSemanticCanvasBottom(semanticMeaningfulBounds, canvas.width, captureWidth);
     const visibleBottom = Math.min(
@@ -8648,7 +10128,15 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
     } else {
       const pageHeightPx = (CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM) * canvasWidthPx;
       const trailingTolerancePx = (PDF_TRAILING_SLICE_TOLERANCE_MM / CV_PDF_A4_WIDTH_MM) * canvasWidthPx;
-      const cssToCanvasScale = captureWidth > 0 ? canvasWidthPx / captureWidth : 1;
+      const cssToCanvasScale = captureWidth > 0 ? canvasWidthPx / captureWidth : scale;
+      const activeCaptureTemplateId = forcedCaptureTemplateId ?? captureTemplateId;
+      const continuationSliceInsets = explicitContinuationSliceInsets
+        ?? (activeCaptureTemplateId === 'clean-simple'
+          ? {
+              topInsetCssPx: CLEAN_SIMPLE_PDF_PAGE_TOP_INSET_CSS_PX,
+              bottomInsetCssPx: CLEAN_SIMPLE_PDF_PAGE_BOTTOM_INSET_CSS_PX,
+            }
+          : null);
       const elegantFormalLineIntervalsCanvas = (
         elegantFormalTextLineIntervalsCss
         && elegantFormalTextLineIntervalsCss.length > 0
@@ -8742,10 +10230,16 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
 
         const topPadCanvasPx = pdfPageIndex > 0 ? topInsetCanvasPx : 0;
         const bottomPadCanvasPx = isFinalPage ? 0 : bottomInsetCanvasPx;
+        const maxContentHeightPx = topPadCanvasPx > 0
+          ? Math.max(1, pageHeightPx - topPadCanvasPx)
+          : sliceHeight;
+        const safeSliceHeight = topPadCanvasPx > 0
+          ? Math.min(sliceHeight, maxContentHeightPx)
+          : sliceHeight;
         const paddedSlice = buildPaddedPdfSlice(
           pdfCanvas,
           offsetY,
-          sliceHeight,
+          safeSliceHeight,
           canvasWidthPx,
           topPadCanvasPx,
           bottomPadCanvasPx,
@@ -8969,6 +10463,88 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           );
           renderedPageIndex += 1;
         }
+      } else if (continuationSliceInsets) {
+        const topInsetCanvasPx = Math.round(continuationSliceInsets.topInsetCssPx * cssToCanvasScale);
+        const bottomInsetCanvasPx = Math.round(continuationSliceInsets.bottomInsetCssPx * cssToCanvasScale);
+        const contentBounds = getCleanSimplePdfContentBoundsCanvas(canvasWidthPx, captureWidth, cssToCanvasScale);
+        const guardCanvasPx = CLEAN_SIMPLE_PAGE_BREAK_GUARD_PX * cssToCanvasScale;
+        const canvasSearchCanvasPx = CLEAN_SIMPLE_CANVAS_PAGE_BREAK_SEARCH_RANGE_PX * cssToCanvasScale;
+        const cleanSimpleLineIntervalsCanvas = (
+          cleanSimpleTextLineIntervalsCss && cleanSimpleTextLineIntervalsCss.length > 0
+        )
+          ? scaleElegantFormalTextLineIntervalsToCanvas(cleanSimpleTextLineIntervalsCss, cssToCanvasScale)
+          : null;
+        const cleanSimpleDomIntervalsReliable = cleanSimpleTextLineIntervalsCss
+          ? areElegantFormalDomLineIntervalsReliable(cleanSimpleTextLineIntervalsCss)
+          : false;
+        const cleanSimpleDomSearchCanvasPx = CLEAN_SIMPLE_DOM_PAGE_BREAK_SEARCH_RANGE_PX * cssToCanvasScale;
+        const cleanSimpleSentenceSpansCanvas = (
+          cleanSimpleSummarySentenceSpansCss && cleanSimpleSummarySentenceSpansCss.length > 0
+        )
+          ? scaleElegantFormalTextLineIntervalsToCanvas(cleanSimpleSummarySentenceSpansCss, cssToCanvasScale)
+          : null;
+        const postLineGuardCanvasPx = CLEAN_SIMPLE_POST_LINE_BREAK_GUARD_CSS_PX * cssToCanvasScale;
+        const cleanSimpleSliceBreakDiagnostics: CleanSimplePdfSliceBreakDiagnostics[] = [];
+        const segments = planCleanSimplePdfSliceSegments(
+          canvasHeightPx,
+          pageHeightPx,
+          trailingTolerancePx,
+          pdfCanvas,
+          contentBounds.contentLeftPx,
+          contentBounds.contentRightPx,
+          guardCanvasPx,
+          canvasSearchCanvasPx,
+          topInsetCanvasPx,
+          bottomInsetCanvasPx,
+          cleanSimpleLineIntervalsCanvas,
+          cleanSimpleDomIntervalsReliable,
+          cleanSimpleDomSearchCanvasPx,
+          cleanSimpleSentenceSpansCanvas,
+          postLineGuardCanvasPx,
+          cleanSimpleSliceBreakDiagnostics,
+        );
+        if (typeof window !== 'undefined') {
+          (window as typeof window & {
+            __cleanSimplePdfPaginationReport?: {
+              segments: CleanSimplePdfSliceSegment[];
+              breakDiagnostics: CleanSimplePdfSliceBreakDiagnostics[];
+              topInsetCanvasPx: number;
+              bottomInsetCanvasPx: number;
+              postLineGuardCanvasPx: number;
+            };
+          }).__cleanSimplePdfPaginationReport = {
+            segments,
+            breakDiagnostics: cleanSimpleSliceBreakDiagnostics,
+            topInsetCanvasPx,
+            bottomInsetCanvasPx,
+            postLineGuardCanvasPx,
+          };
+        }
+
+        let renderedPageIndex = 0;
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          const segment = segments[segmentIndex];
+          const offsetY = segment.startPx;
+          const sliceHeight = segment.endPx - segment.startPx;
+          const isFinalPage = segmentIndex === segments.length - 1;
+          if (
+            shouldTrimBlankPdfSlices
+            && !semanticPagePlan
+            && renderedPageIndex > 0
+            && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, activeCaptureTemplateId)
+          ) {
+            break;
+          }
+          renderPaddedPdfSlice(
+            offsetY,
+            sliceHeight,
+            renderedPageIndex,
+            isFinalPage,
+            topInsetCanvasPx,
+            bottomInsetCanvasPx,
+          );
+          renderedPageIndex += 1;
+        }
       } else {
         let offsetY = 0;
         let renderedPageIndex = 0;
@@ -9035,6 +10611,13 @@ export async function buildCvPdfBlob(elementId: string): Promise<Blob> {
           offsetY += sliceHeight;
         }
       }
+    }
+
+    if (pdfBuildCanary) {
+      pdf.setProperties({
+        keywords: pdfBuildCanary,
+        subject: pdfBuildCanary,
+      });
     }
 
     // Unified flow: create a PDF Blob first, then hand it to the platform save
@@ -9243,41 +10826,422 @@ async function prepareCleanSimplePdfPhotoDataUrl(cv: CVData): Promise<string | n
   }
 }
 
+type CleanSimplePdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
+
+type CleanSimpleDirectPdfContext = {
+  pdf: CleanSimplePdfWriter;
+  locale: Locale;
+  labels: ReturnType<typeof getCleanSimplePdfLabels>;
+  pageWidth: number;
+  pageHeight: number;
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
+  contentWidth: number;
+  bottomSafeY: number;
+  y: number;
+};
+
+type CleanSimpleTextStyle = {
+  size: number;
+  color: [number, number, number];
+  fontStyle?: 'normal' | 'bold';
+  lineHeight: number;
+};
+
+const CLEAN_SIMPLE_DIRECT_GREEN: [number, number, number] = [5, 150, 105];
+const CLEAN_SIMPLE_DIRECT_TEXT: [number, number, number] = [17, 24, 39];
+const CLEAN_SIMPLE_DIRECT_MUTED: [number, number, number] = [75, 85, 99];
+const CLEAN_SIMPLE_DIRECT_LIGHT: [number, number, number] = [156, 163, 175];
+const CLEAN_SIMPLE_DIRECT_RULE: [number, number, number] = [229, 231, 235];
+
+function getCleanSimplePdfLabels(locale: Locale) {
+  const t = translations[locale] ?? translations.en;
+  return {
+    summary: t.cv.summary,
+    experience: t.cv.experience,
+    education: t.cv.education,
+    skills: t.cv.skills,
+    languages: t.cv.languages,
+    certifications: t.cv.certifications,
+    present: t.cv.present,
+  };
+}
+
+function cleanSimpleDirectDateRange(start: string, end: string, present: boolean, presentLabel: string): string {
+  return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
+}
+
+function cleanSimpleSetTextStyle(ctx: CleanSimpleDirectPdfContext, style: CleanSimpleTextStyle): void {
+  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
+  ctx.pdf.setFontSize(style.size);
+  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+}
+
+function cleanSimpleSplitText(ctx: CleanSimpleDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
+  return Array.isArray(result) ? result.map(String) : [String(result)];
+}
+
+function cleanSimpleStartPage(ctx: CleanSimpleDirectPdfContext): void {
+  ctx.pdf.addPage();
+  ctx.y = ctx.marginTop;
+}
+
+function cleanSimpleFreshPageCapacity(ctx: CleanSimpleDirectPdfContext): number {
+  return ctx.bottomSafeY - ctx.marginTop;
+}
+
+function cleanSimpleEnsureSpace(ctx: CleanSimpleDirectPdfContext, heightNeeded: number): void {
+  if (ctx.y + heightNeeded <= ctx.bottomSafeY) return;
+  cleanSimpleStartPage(ctx);
+}
+
+function cleanSimpleMoveToFreshPageIfNeeded(ctx: CleanSimpleDirectPdfContext, blockHeight: number): void {
+  const freshCapacity = cleanSimpleFreshPageCapacity(ctx);
+  if (blockHeight > freshCapacity) return;
+  if (ctx.y + blockHeight > ctx.bottomSafeY) {
+    cleanSimpleStartPage(ctx);
+  }
+}
+
+function cleanSimpleDrawLines(
+  ctx: CleanSimpleDirectPdfContext,
+  lines: string[],
+  style: CleanSimpleTextStyle,
+  options: { indentX?: number } = {},
+): void {
+  cleanSimpleSetTextStyle(ctx, style);
+  const x = ctx.marginLeft + (options.indentX ?? 0);
+  for (const line of lines) {
+    cleanSimpleEnsureSpace(ctx, style.lineHeight);
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function cleanSimpleDrawLinesBlock(
+  ctx: CleanSimpleDirectPdfContext,
+  lines: string[],
+  style: CleanSimpleTextStyle,
+  options: { indentX?: number } = {},
+): void {
+  if (lines.length === 0) return;
+  const blockHeight = lines.length * style.lineHeight;
+  cleanSimpleMoveToFreshPageIfNeeded(ctx, blockHeight);
+  cleanSimpleSetTextStyle(ctx, style);
+  const x = ctx.marginLeft + (options.indentX ?? 0);
+  for (const line of lines) {
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function cleanSimpleDrawAtomicSection(
+  ctx: CleanSimpleDirectPdfContext,
+  label: string,
+  lines: string[],
+  style: CleanSimpleTextStyle,
+  options: { spacingAfter?: number; indentX?: number } = {},
+): void {
+  const spacingAfter = options.spacingAfter ?? 4;
+  const blockHeight = cleanSimpleSectionHeadingHeight() + lines.length * style.lineHeight + spacingAfter;
+  cleanSimpleMoveToFreshPageIfNeeded(ctx, blockHeight);
+  cleanSimpleDrawSectionHeading(ctx, label);
+  cleanSimpleDrawLinesBlock(ctx, lines, style, { indentX: options.indentX });
+  ctx.y += spacingAfter;
+}
+
+function cleanSimpleSectionHeadingHeight(): number {
+  return 7.2;
+}
+
+function cleanSimpleDrawSectionHeading(ctx: CleanSimpleDirectPdfContext, label: string): void {
+  cleanSimpleEnsureSpace(ctx, cleanSimpleSectionHeadingHeight());
+  cleanSimpleSetTextStyle(ctx, { size: 8.25, color: CLEAN_SIMPLE_DIRECT_GREEN, fontStyle: 'bold', lineHeight: 4.2 });
+  ctx.pdf.text(label.toUpperCase(), ctx.marginLeft, ctx.y);
+  ctx.y += cleanSimpleSectionHeadingHeight();
+}
+
+function cleanSimpleMeasureSectionWithLines(lines: string[], style: CleanSimpleTextStyle): number {
+  return cleanSimpleSectionHeadingHeight() + lines.length * style.lineHeight + 4;
+}
+
+function cleanSimpleDrawHeader(ctx: CleanSimpleDirectPdfContext, cv: CVData, photoDataUrl: string | null): void {
+  const headerTop = ctx.y;
+  const photoSize = 22;
+  if (photoDataUrl) {
+    try {
+      ctx.pdf.addImage(photoDataUrl, 'PNG', ctx.marginLeft, headerTop, photoSize, photoSize);
+    } catch {
+      try {
+        ctx.pdf.addImage(photoDataUrl, 'JPEG', ctx.marginLeft, headerTop, photoSize, photoSize);
+      } catch {
+        // Keep PDF export usable if jsPDF rejects an image data URL.
+      }
+    }
+  }
+
+  const textX = photoDataUrl ? ctx.marginLeft + photoSize + 5 : ctx.marginLeft;
+  cleanSimpleSetTextStyle(ctx, { size: 16.5, color: CLEAN_SIMPLE_DIRECT_TEXT, fontStyle: 'bold', lineHeight: 6 });
+  ctx.pdf.text(cv.personal.fullName || 'Your Name', textX, headerTop + 5);
+  if (cv.personal.jobTitle) {
+    cleanSimpleSetTextStyle(ctx, { size: 9, color: CLEAN_SIMPLE_DIRECT_GREEN, lineHeight: 4 });
+    ctx.pdf.text(cv.personal.jobTitle, textX, headerTop + 11);
+  }
+  const region = regionSettings[cv.region];
+  const contacts = [cv.personal.email, cv.personal.phone, region.showAddress ? cv.personal.address : ''].filter(Boolean);
+  if (contacts.length > 0) {
+    cleanSimpleSetTextStyle(ctx, { size: 7.8, color: CLEAN_SIMPLE_DIRECT_MUTED, lineHeight: 4 });
+    ctx.pdf.text(contacts.join('  |  '), textX, headerTop + 17);
+  }
+  ctx.y = headerTop + 28;
+  ctx.pdf.setDrawColor(CLEAN_SIMPLE_DIRECT_RULE[0], CLEAN_SIMPLE_DIRECT_RULE[1], CLEAN_SIMPLE_DIRECT_RULE[2]);
+  ctx.pdf.setLineWidth(0.3);
+  ctx.pdf.line(ctx.marginLeft, ctx.y, ctx.pageWidth - ctx.marginRight, ctx.y);
+  ctx.y += 8;
+}
+
+function cleanSimpleDrawSummary(ctx: CleanSimpleDirectPdfContext, summary: string): void {
+  const blocks = splitCleanSimpleSummaryParagraphBlocks(summary);
+  if (blocks.length === 0) return;
+  const style: CleanSimpleTextStyle = { size: 8.1, color: CLEAN_SIMPLE_DIRECT_MUTED, lineHeight: 4.25 };
+  cleanSimpleEnsureSpace(ctx, cleanSimpleSectionHeadingHeight());
+  cleanSimpleDrawSectionHeading(ctx, ctx.labels.summary);
+  blocks.forEach((block, index) => {
+    cleanSimpleDrawLines(ctx, cleanSimpleSplitText(ctx, block), style);
+    if (index < blocks.length - 1) ctx.y += 2.5;
+  });
+  ctx.y += 4.5;
+}
+
+function cleanSimpleExperienceLeadBlockHeight(ctx: CleanSimpleDirectPdfContext, entry: CVData['experience'][number]): number {
+  const title = entry.company ? `${entry.position} at ${entry.company}` : entry.position;
+  const titleLines = cleanSimpleSplitText(ctx, title, ctx.contentWidth - 35);
+  const titleHeight = Math.max(4.8, titleLines.length * 4.3);
+  const parts = entry.description.split(/\n+/).map(part => part.trim()).filter(Boolean);
+  const bulletParts = parts.filter(part => /^[-•]\s*/.test(part));
+  const leadParts = (bulletParts.length > 0 ? bulletParts : parts).slice(0, 2);
+  const bulletHeight = leadParts.reduce((total, part) => {
+    const lines = cleanSimpleSplitText(ctx, part.replace(/^[-•]\s*/, ''), ctx.contentWidth - 4);
+    return total + lines.length * 4.05;
+  }, 0);
+  return titleHeight + bulletHeight + 4;
+}
+
+function cleanSimpleDrawExperienceEntry(ctx: CleanSimpleDirectPdfContext, entry: CVData['experience'][number]): void {
+  const title = entry.company ? `${entry.position} at ${entry.company}` : entry.position;
+  const titleLines = cleanSimpleSplitText(ctx, title, ctx.contentWidth - 35);
+  cleanSimpleEnsureSpace(ctx, Math.max(4.8, titleLines.length * 4.3) + 8);
+  cleanSimpleDrawLines(ctx, titleLines, { size: 8.1, color: CLEAN_SIMPLE_DIRECT_TEXT, fontStyle: 'bold', lineHeight: 4.3 });
+  const dateText = cleanSimpleDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
+  if (dateText) {
+    cleanSimpleSetTextStyle(ctx, { size: 7.1, color: CLEAN_SIMPLE_DIRECT_LIGHT, lineHeight: 3.5 });
+    ctx.pdf.text(dateText, ctx.pageWidth - ctx.marginRight, ctx.y - 4.3, { align: 'right' });
+  }
+  entry.description.split(/\n+/).map(part => part.trim()).filter(Boolean).forEach((part) => {
+    const bullet = /^[-•]\s*/.test(part);
+    const lines = cleanSimpleSplitText(ctx, part.replace(/^[-•]\s*/, ''), ctx.contentWidth - (bullet ? 4 : 0));
+    if (bullet && lines.length > 0) {
+      cleanSimpleEnsureSpace(ctx, 4.05);
+      cleanSimpleSetTextStyle(ctx, { size: 7.65, color: CLEAN_SIMPLE_DIRECT_MUTED, lineHeight: 4.05 });
+      ctx.pdf.text('•', ctx.marginLeft, ctx.y);
+      cleanSimpleDrawLines(ctx, lines, { size: 7.65, color: CLEAN_SIMPLE_DIRECT_MUTED, lineHeight: 4.05 }, { indentX: 4 });
+    } else {
+      cleanSimpleDrawLines(ctx, lines, { size: 7.65, color: CLEAN_SIMPLE_DIRECT_MUTED, lineHeight: 4.05 });
+    }
+  });
+  ctx.y += 3.5;
+}
+
+function cleanSimpleDrawExperience(ctx: CleanSimpleDirectPdfContext, cv: CVData): void {
+  if (cv.experience.length === 0) return;
+  const leadBlockHeight = cleanSimpleSectionHeadingHeight() + cleanSimpleExperienceLeadBlockHeight(ctx, cv.experience[0]);
+  cleanSimpleMoveToFreshPageIfNeeded(ctx, leadBlockHeight);
+  cleanSimpleDrawSectionHeading(ctx, ctx.labels.experience);
+  cv.experience.forEach(entry => cleanSimpleDrawExperienceEntry(ctx, entry));
+}
+
+function cleanSimpleEducationEntryHeight(ctx: CleanSimpleDirectPdfContext, edu: CVData['education'][number]): number {
+  const degreeLines = cleanSimpleSplitText(ctx, edu.degree, ctx.contentWidth - 35);
+  const schoolLines = edu.school ? cleanSimpleSplitText(ctx, edu.school) : [];
+  return Math.max(4.3, degreeLines.length * 4.3) + schoolLines.length * 3.9 + 4;
+}
+
+function cleanSimpleEducationHeight(ctx: CleanSimpleDirectPdfContext, cv: CVData): number {
+  if (cv.education.length === 0) return 0;
+  let height = cleanSimpleSectionHeadingHeight();
+  cv.education.forEach((edu) => {
+    height += cleanSimpleEducationEntryHeight(ctx, edu);
+  });
+  return height + 2;
+}
+
+function cleanSimpleDrawEducationEntry(ctx: CleanSimpleDirectPdfContext, edu: CVData['education'][number]): void {
+  const entryHeight = cleanSimpleEducationEntryHeight(ctx, edu);
+  cleanSimpleMoveToFreshPageIfNeeded(ctx, entryHeight);
+  cleanSimpleDrawLines(ctx, cleanSimpleSplitText(ctx, edu.degree, ctx.contentWidth - 35), {
+    size: 7.9,
+    color: CLEAN_SIMPLE_DIRECT_TEXT,
+    fontStyle: 'bold',
+    lineHeight: 4.3,
+  });
+  const dateText = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+  if (dateText) {
+    cleanSimpleSetTextStyle(ctx, { size: 7.1, color: CLEAN_SIMPLE_DIRECT_LIGHT, lineHeight: 3.5 });
+    ctx.pdf.text(dateText, ctx.pageWidth - ctx.marginRight, ctx.y - 4.3, { align: 'right' });
+  }
+  if (edu.school) {
+    cleanSimpleDrawLinesBlock(ctx, cleanSimpleSplitText(ctx, edu.school), {
+      size: 7.35,
+      color: CLEAN_SIMPLE_DIRECT_MUTED,
+      lineHeight: 3.9,
+    });
+  }
+  ctx.y += 3.5;
+}
+
+function cleanSimpleDrawEducation(ctx: CleanSimpleDirectPdfContext, cv: CVData): void {
+  if (cv.education.length === 0) return;
+  const fullHeight = cleanSimpleEducationHeight(ctx, cv);
+  const headingPlusFirst = cleanSimpleSectionHeadingHeight() + cleanSimpleEducationEntryHeight(ctx, cv.education[0]);
+  const freshCapacity = cleanSimpleFreshPageCapacity(ctx);
+  if (fullHeight <= freshCapacity) {
+    cleanSimpleMoveToFreshPageIfNeeded(ctx, fullHeight);
+  } else {
+    cleanSimpleMoveToFreshPageIfNeeded(ctx, headingPlusFirst);
+  }
+  cleanSimpleDrawSectionHeading(ctx, ctx.labels.education);
+  cv.education.forEach(edu => cleanSimpleDrawEducationEntry(ctx, edu));
+}
+
+function cleanSimplePipeLines(ctx: CleanSimpleDirectPdfContext, items: string[]): string[] {
+  return cleanSimpleSplitText(ctx, items.join(' | '));
+}
+
+function cleanSimpleSkillsLanguagesHeight(ctx: CleanSimpleDirectPdfContext, cv: CVData, locale: Locale): number {
+  let height = 0;
+  if (cv.skills.length > 0) {
+    const skills = cv.skills.map(skill => getLocalizedCvSkillName(skill, locale));
+    height += cleanSimpleMeasureSectionWithLines(cleanSimplePipeLines(ctx, skills), {
+      size: 7.65,
+      color: CLEAN_SIMPLE_DIRECT_MUTED,
+      lineHeight: 4.05,
+    });
+  }
+  if (cv.languages.length > 0) {
+    const languages = cv.languages.map(language => `${getLocalizedCvLanguageName(language.name, locale)} (${language.level})`);
+    height += cleanSimpleMeasureSectionWithLines(cleanSimplePipeLines(ctx, languages), {
+      size: 7.65,
+      color: CLEAN_SIMPLE_DIRECT_MUTED,
+      lineHeight: 4.05,
+    });
+  }
+  return height;
+}
+
+function cleanSimpleDrawSkillsLanguages(ctx: CleanSimpleDirectPdfContext, cv: CVData, locale: Locale): void {
+  const sectionStyle: CleanSimpleTextStyle = { size: 7.65, color: CLEAN_SIMPLE_DIRECT_MUTED, lineHeight: 4.05 };
+  const skillsLines = cv.skills.length > 0
+    ? cleanSimplePipeLines(ctx, cv.skills.map(skill => getLocalizedCvSkillName(skill, locale)))
+    : [];
+  const languageLines = cv.languages.length > 0
+    ? cleanSimplePipeLines(ctx, cv.languages.map(language => `${getLocalizedCvLanguageName(language.name, locale)} (${language.level})`))
+    : [];
+  const skillsHeight = skillsLines.length > 0
+    ? cleanSimpleMeasureSectionWithLines(skillsLines, sectionStyle)
+    : 0;
+  const languagesHeight = languageLines.length > 0
+    ? cleanSimpleMeasureSectionWithLines(languageLines, sectionStyle)
+    : 0;
+  const combinedHeight = skillsHeight + languagesHeight;
+  const freshCapacity = cleanSimpleFreshPageCapacity(ctx);
+  if (combinedHeight > 0 && combinedHeight <= freshCapacity) {
+    cleanSimpleMoveToFreshPageIfNeeded(ctx, combinedHeight);
+  }
+  if (skillsLines.length > 0) {
+    cleanSimpleDrawAtomicSection(ctx, ctx.labels.skills, skillsLines, sectionStyle);
+  }
+  if (languageLines.length > 0) {
+    cleanSimpleDrawAtomicSection(ctx, ctx.labels.languages, languageLines, sectionStyle);
+  }
+}
+
+function cleanSimpleCertificationsHeight(ctx: CleanSimpleDirectPdfContext, cv: CVData): number {
+  if (cv.certifications.length === 0) return 0;
+  const lines = cv.certifications.flatMap(cert => cleanSimpleSplitText(ctx, cert));
+  return cleanSimpleMeasureSectionWithLines(lines, { size: 7.65, color: CLEAN_SIMPLE_DIRECT_MUTED, lineHeight: 4.05 });
+}
+
+export async function buildCleanSimplePagedPdfBlob(
+  cv: CVData,
+  locale: Locale,
+  options: { photoDataUrl?: string | null } = {},
+): Promise<Blob> {
+  const { jsPDF } = await import('jspdf');
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const marginLeft = 14;
+  const marginRight = 14;
+  const marginTop = 14;
+  const marginBottom = 14;
+  const ctx: CleanSimpleDirectPdfContext = {
+    pdf,
+    locale,
+    labels: getCleanSimplePdfLabels(locale),
+    pageWidth: CV_PDF_A4_WIDTH_MM,
+    pageHeight: CV_PDF_A4_HEIGHT_MM,
+    marginLeft,
+    marginRight,
+    marginTop,
+    marginBottom,
+    contentWidth: CV_PDF_A4_WIDTH_MM - marginLeft - marginRight,
+    bottomSafeY: CV_PDF_A4_HEIGHT_MM - marginBottom,
+    y: marginTop,
+  };
+
+  cleanSimpleDrawHeader(ctx, cv, options.photoDataUrl ?? null);
+  cleanSimpleDrawSummary(ctx, cv.summary);
+  cleanSimpleDrawExperience(ctx, cv);
+
+  const educationHeight = cleanSimpleEducationHeight(ctx, cv);
+  const skillsLanguagesHeight = cleanSimpleSkillsLanguagesHeight(ctx, cv, locale);
+  const certificationsHeight = cleanSimpleCertificationsHeight(ctx, cv);
+  const lowerSectionsHeight = educationHeight + skillsLanguagesHeight + certificationsHeight;
+  const freshPageCapacity = cleanSimpleFreshPageCapacity(ctx);
+  if (lowerSectionsHeight > 0 && lowerSectionsHeight <= freshPageCapacity && ctx.y + lowerSectionsHeight > ctx.bottomSafeY) {
+    cleanSimpleStartPage(ctx);
+  }
+
+  if (educationHeight > 0) {
+    cleanSimpleDrawEducation(ctx, cv);
+  }
+  if (skillsLanguagesHeight > 0) {
+    cleanSimpleDrawSkillsLanguages(ctx, cv, locale);
+  }
+  if (certificationsHeight > 0) {
+    const certLines = cv.certifications.flatMap(cert => cleanSimpleSplitText(ctx, cert));
+    cleanSimpleDrawAtomicSection(ctx, ctx.labels.certifications, certLines, {
+      size: 7.65,
+      color: CLEAN_SIMPLE_DIRECT_MUTED,
+      lineHeight: 4.05,
+    });
+  }
+
+  const output = pdf.output('blob');
+  return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
+}
+
 export async function buildCleanSimplePdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Clean Simple PDF export requires a browser DOM');
-  }
-
   const photoDataUrl = await prepareCleanSimplePdfPhotoDataUrl(cv);
-  const container = document.createElement('div');
-  container.id = `clean-simple-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-clean-simple-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createCleanSimplePdfTemplate(cv, {
-    locale,
-    photoDataUrl,
-  }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Clean Simple PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  const blob = await buildCleanSimplePagedPdfBlob(cv, locale, { photoDataUrl });
+  if (!blob || blob.size === 0) throw new Error('Clean Simple PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportCleanSimplePdf(

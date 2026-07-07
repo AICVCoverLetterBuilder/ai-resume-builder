@@ -114,6 +114,79 @@ function dateRange(start: string, end: string, present: boolean, presentLabel: s
   return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
 }
 
+// Detects real sentence boundaries (including a no-space "matter.Software" glued join)
+// so the text-correction pass below can insert the single space that was always meant
+// to be there. This never decides where the visible summary is split into blocks —
+// the summary is rendered as one flowing paragraph per real user paragraph break, so
+// this only ever changes text content (a missing space), never layout.
+//
+// Exported so export.ts's PDF pagination can reuse the *exact same* sentence-boundary
+// detection to locate each sentence's rendered position (via DOM Range measurement) and
+// prefer breaking the page before a sentence rather than after just its first line/word
+// — without ever creating a new visible block here.
+export function splitCleanSimpleSummarySentenceRuns(text: string): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+
+  const chunks: string[] = [];
+  let start = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    if (!'.!?…'.includes(char)) continue;
+
+    let end = index + 1;
+    while (end < normalized.length && '.!?…'.includes(normalized[end])) end += 1;
+
+    const next = normalized.slice(end).match(/^\s*["'([{“‘]*[A-Z0-9À-ÖØ-ÞЀ-Я]/u);
+    if (end >= normalized.length || next) {
+      const sentence = normalized.slice(start, end).trim();
+      if (sentence) chunks.push(sentence);
+      start = end;
+    }
+    index = end - 1;
+  }
+
+  const tail = normalized.slice(start).trim();
+  if (tail) chunks.push(tail);
+  return chunks.length > 0 ? chunks : [normalized];
+}
+
+/**
+ * Fixes real text-entry bugs where sentence-ending punctuation is glued directly to the
+ * next sentence with no space at all (e.g. "...subject matter.Software engineer...").
+ * Reuses the same sentence-boundary detection as `splitCleanSimpleSummarySentenceRuns`
+ * (already proven not to fire on ordinary text) purely to repair the missing space, then
+ * rejoins every sentence back into ONE continuous string — it never creates a new
+ * visible paragraph or block, so the summary keeps flowing exactly like the template's
+ * original single/multi-paragraph typography.
+ */
+function repairCleanSimpleSummarySpacing(paragraphText: string): string {
+  return splitCleanSimpleSummarySentenceRuns(paragraphText).join(' ');
+}
+
+/**
+ * Split summary text into real, user-authored paragraph blocks only (an explicit blank
+ * line, or otherwise a single line break) — never at sentence boundaries. Each returned
+ * block is rendered as exactly one flowing `<p>`, matching the template's original
+ * typography; the only text change applied is `repairCleanSimpleSummarySpacing`'s
+ * missing-space fix for glued sentences.
+ */
+export function splitCleanSimpleSummaryParagraphBlocks(summary: string): string[] {
+  const trimmed = summary.trim();
+  if (!trimmed) return [];
+
+  const paragraphs = trimmed
+    .split(/\n\s*\n+/)
+    .map(part => part.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const baseBlocks = paragraphs.length > 1
+    ? paragraphs
+    : trimmed.split(/\n/).map(part => part.replace(/\s+/g, ' ').trim()).filter(Boolean);
+
+  const blocks = baseBlocks.length > 0 ? baseBlocks : [trimmed.replace(/\s+/g, ' ')];
+  return blocks.map(repairCleanSimpleSummarySpacing);
+}
+
 export function createCleanSimplePdfTemplate(
   cv: CVData,
   options: CleanSimplePdfTemplateOptions = {},
@@ -210,17 +283,31 @@ export function createCleanSimplePdfTemplate(
   });
 
   if (cv.summary) {
-    const sectionEl = append(root, 'section', { margin: '0 0 12px', breakInside: 'avoid', pageBreakInside: 'avoid' });
+    const sectionEl = append(root, 'section', { margin: '0 0 12px' });
     sectionEl.setAttribute('data-clean-simple-section', 'summary');
     sectionHeading(sectionEl, L.summary, '5px');
-    append(sectionEl, 'p', {
-      margin: '0',
-      color: '#374151',
-      fontSize: '10.7px',
-      lineHeight: '1.35',
-      whiteSpace: 'pre-wrap',
-      wordSpacing: '0.9px',
-    }, cv.summary).setAttribute('data-export-meaningful', 'true');
+    const blocksHost = append(sectionEl, 'div', { margin: '0' });
+    blocksHost.setAttribute('data-clean-simple-summary-blocks', 'true');
+    // One flowing <p> per real user paragraph break — matching the template's original
+    // typography exactly (no per-sentence blocks/margins). Where a paragraph is too
+    // tall to fit on the remaining page, the PDF export's line-level safe-break search
+    // (see `collectElegantFormalTextLineIntervalsCss` usage in export.ts) finds a real
+    // rendered text-line boundary to cut at, so pagination never has to fragment this
+    // paragraph into extra visible blocks to control where it may split.
+    const summaryBlocks = splitCleanSimpleSummaryParagraphBlocks(cv.summary);
+    summaryBlocks.forEach((blockText, index) => {
+      const block = append(blocksHost, 'p', {
+        margin: index > 0 ? '10px 0 0' : '0',
+        color: '#374151',
+        fontSize: '10.7px',
+        lineHeight: '1.35',
+        whiteSpace: 'pre-wrap',
+        wordSpacing: '0.9px',
+      }, blockText);
+      block.setAttribute('data-clean-simple-summary-block', 'true');
+      block.setAttribute('data-export-block', 'clean-simple-summary');
+      block.setAttribute('data-export-meaningful', 'true');
+    });
   }
 
   if (cv.experience.length > 0) {
@@ -236,18 +323,21 @@ export function createCleanSimplePdfTemplate(
         columnGap: '12px',
         alignItems: 'baseline',
       });
+      row.setAttribute('data-clean-simple-experience-header', 'true');
       const titleText = exp.company ? `${exp.position} at ${exp.company}` : exp.position;
       appendSafeWords(row, 'div', titleText, { color: TEXT, fontSize: '10.8px', fontWeight: '600', lineHeight: '1.25', minWidth: '0' }).setAttribute('data-export-meaningful', 'true');
       append(row, 'div', { color: '#9ca3af', fontSize: '9.5px', lineHeight: '1.2', textAlign: 'right', whiteSpace: 'nowrap' }, dateRange(exp.startDate, exp.endDate, exp.isPresent, L.present)).setAttribute('data-export-meaningful', 'true');
       if (exp.description) {
-        append(entry, 'p', {
+        const description = append(entry, 'p', {
           margin: '3px 0 0',
           color: MUTED2,
           fontSize: '10.2px',
           lineHeight: '1.32',
           whiteSpace: 'pre-wrap',
           wordSpacing: '0.9px',
-        }, exp.description).setAttribute('data-export-meaningful', 'true');
+        }, exp.description);
+        description.setAttribute('data-export-meaningful', 'true');
+        description.setAttribute('data-clean-simple-experience-description', 'true');
       }
     });
   }
@@ -265,6 +355,7 @@ export function createCleanSimplePdfTemplate(
         columnGap: '12px',
         alignItems: 'baseline',
       });
+      row.setAttribute('data-clean-simple-education-header', 'true');
       appendSafeWords(row, 'div', edu.degree, { color: TEXT, fontSize: '10.5px', fontWeight: '600', lineHeight: '1.25', minWidth: '0' }).setAttribute('data-export-meaningful', 'true');
       append(row, 'div', { color: '#9ca3af', fontSize: '9.5px', lineHeight: '1.2', textAlign: 'right', whiteSpace: 'nowrap' }, [edu.startDate, edu.endDate].filter(Boolean).join(' - ')).setAttribute('data-export-meaningful', 'true');
       if (edu.school) {
@@ -273,8 +364,16 @@ export function createCleanSimplePdfTemplate(
     });
   }
 
-  if (cv.skills.length > 0) {
-    const sectionEl = append(root, 'section', { margin: '0 0 12px', breakInside: 'avoid', pageBreakInside: 'avoid' });
+  const finalSectionsHost = (cv.skills.length > 0 || cv.languages.length > 0)
+    ? append(root, 'div', { display: 'block', margin: '0', breakInside: 'avoid', pageBreakInside: 'avoid' })
+    : null;
+  if (finalSectionsHost) {
+    finalSectionsHost.setAttribute('data-clean-simple-final-sections', 'true');
+    finalSectionsHost.setAttribute('data-export-meaningful', 'true');
+  }
+
+  if (cv.skills.length > 0 && finalSectionsHost) {
+    const sectionEl = append(finalSectionsHost, 'section', { margin: '0 0 12px', breakInside: 'avoid', pageBreakInside: 'avoid' });
     sectionEl.setAttribute('data-clean-simple-section', 'skills');
     sectionHeading(sectionEl, L.skills, '5px');
     const list = append(sectionEl, 'div', {
@@ -290,13 +389,18 @@ export function createCleanSimplePdfTemplate(
       if (index > 0) append(list, 'span', { color: '#d1d5db' }, '|');
       // whiteSpace: 'nowrap' guarantees a skill word can never split mid-word
       // ("Teamwor k") the way overflow-wrap/break-word can at narrow capture widths.
-      append(list, 'span', { whiteSpace: 'nowrap' }, getLocalizedCvSkillName(skill, options.locale ?? 'en'))
-        .setAttribute('data-clean-simple-skill', 'item');
+      const chip = append(list, 'span', { whiteSpace: 'nowrap' }, getLocalizedCvSkillName(skill, options.locale ?? 'en'));
+      chip.setAttribute('data-clean-simple-skill', 'item');
+      // Marks this chip as real content for measureExportMeaningfulContentBounds() so
+      // the export pipeline's semantic content-bottom measurement (and the page-plan it
+      // drives) can never place a page break above the last skill, and the pre-slice
+      // canvas crop can never trim the canvas short of it either.
+      chip.setAttribute('data-export-meaningful', 'true');
     });
   }
 
-  if (cv.languages.length > 0) {
-    const sectionEl = append(root, 'section', { margin: '0 0 12px', breakInside: 'avoid', pageBreakInside: 'avoid' });
+  if (cv.languages.length > 0 && finalSectionsHost) {
+    const sectionEl = append(finalSectionsHost, 'section', { margin: '0 0 12px', breakInside: 'avoid', pageBreakInside: 'avoid' });
     sectionEl.setAttribute('data-clean-simple-section', 'languages');
     sectionHeading(sectionEl, L.languages, '5px');
     const list = append(sectionEl, 'div', {
@@ -310,7 +414,12 @@ export function createCleanSimplePdfTemplate(
     });
     cv.languages.forEach((language, index) => {
       if (index > 0) append(list, 'span', { color: '#d1d5db' }, '|');
-      append(list, 'span', { whiteSpace: 'nowrap' }, `${getLocalizedCvLanguageName(language.name, options.locale ?? 'en')} (${language.level})`);
+      // Same data-export-meaningful marker as skill chips above — without it, Languages
+      // was the very last thing in the document with no meaningful-content marker below
+      // its own heading, so the semantic content-bottom measurement stopped at the
+      // heading and treated everything below (the actual language rows) as trimmable.
+      append(list, 'span', { whiteSpace: 'nowrap' }, `${getLocalizedCvLanguageName(language.name, options.locale ?? 'en')} (${language.level})`)
+        .setAttribute('data-export-meaningful', 'true');
     });
   }
 
