@@ -8,7 +8,7 @@ import { useApp, checkProAccess } from '@/lib/store';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
-import { exportAtsStandardPdf, exportCleanSimplePdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportCreativeArtisticPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportProfessionalClassicPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback } from '@/lib/export';
+import { exportAtsStandardPdf, exportCleanSimplePdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportCreativeArtisticPdf, exportCreativeBoldPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportProfessionalClassicPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback, resolveCvPdfExportRoute } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
 import type { SaveFileResult } from '@/lib/native-save';
@@ -996,7 +996,7 @@ export default function CVBuilderPage() {
           incrementDownloads('cv');
           return;
         }
-        if (liveCv.templateId === 'clean-simple') {
+        if (resolveCvPdfExportRoute(liveCv.templateId).kind === 'dedicated-clean-simple') {
           const latestCv = cvRef.current;
           const saveResult = await exportCleanSimplePdf(latestCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
@@ -1006,6 +1006,13 @@ export default function CVBuilderPage() {
         if (liveCv.templateId === 'professional-classic') {
           const latestCv = cvRef.current;
           const saveResult = await exportProfessionalClassicPdf(latestCv, exportFilename, locale);
+          showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
+          incrementDownloads('cv');
+          return;
+        }
+        if (liveCv.templateId === 'creative-bold') {
+          const latestCv = cvRef.current;
+          const saveResult = await exportCreativeBoldPdf(latestCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;

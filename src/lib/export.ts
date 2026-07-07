@@ -1035,6 +1035,14 @@ const TECH_SIDEBAR_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
 // need baked top padding so section headings are not flush to the PDF page edge.
 const MODERN_MINIMAL_PDF_PAGE_TOP_INSET_CSS_PX = 28;
 const MODERN_MINIMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX = 0;
+// Creative Bold still uses the generic html2canvas capture, but its red sidebar is
+// non-white on every row. Page-break ink checks must therefore scan only the white
+// main column, then render with baked padding to prevent boundary glyph ghosts.
+const CREATIVE_BOLD_PDF_PAGE_TOP_INSET_CSS_PX = 28;
+const CREATIVE_BOLD_PDF_PAGE_BOTTOM_INSET_CSS_PX = 28;
+const CREATIVE_BOLD_PDF_PAGE_BREAK_SEARCH_RANGE_CSS_PX = 84;
+const CREATIVE_BOLD_PDF_PAGE_BREAK_MIN_BAND_CSS_PX = 6;
+const CREATIVE_BOLD_PDF_MAIN_COLUMN_GUARD_CSS_PX = 14;
 // Clean Simple uses the same generic fixed-height slicing model; continuation summary text
 // was flush to the PDF top edge without baked continuation-page padding.
 // V6: 56px baked top whitespace measured ~14-15mm on Android viewers — visually too
@@ -1351,6 +1359,23 @@ function applyCreativeBoldPdfLayout(root: HTMLElement): void {
   main.style.setProperty('box-sizing', 'border-box');
   main.style.setProperty('overflow-x', 'hidden');
   main.style.setProperty('background-color', '#ffffff');
+
+  const firstExperienceEntry = main.querySelector<HTMLElement>('[data-export-group="creative-bold-experience-entry"]');
+  const experienceSection = firstExperienceEntry?.closest('section') as HTMLElement | null;
+  const experienceHeading = experienceSection?.querySelector<HTMLElement>('h2') ?? null;
+  if (experienceHeading) {
+    experienceHeading.setAttribute('data-export-group', 'creative-bold-experience-section-heading');
+  }
+
+  const educationSection = main.querySelector<HTMLElement>('[data-export-group="creative-bold-education-section"]');
+  const educationHeading = educationSection?.querySelector<HTMLElement>('h2') ?? null;
+  const educationEntry = educationSection?.querySelector<HTMLElement>('div[data-export-meaningful="true"]') ?? null;
+  if (educationHeading) {
+    educationHeading.setAttribute('data-export-group', 'creative-bold-education-heading');
+  }
+  if (educationEntry) {
+    educationEntry.setAttribute('data-export-group', 'creative-bold-education-entry');
+  }
 }
 
 function applyElegantFormalPdfLayout(root: HTMLElement): void {
@@ -5227,6 +5252,32 @@ export function applyCreativeBoldKeepTogetherPagination(root: HTMLElement): void
     return true;
   };
 
+  const pageIndexOf = (y: number): number => Math.floor((y + PDF_PAGE_INTERSECTION_EPSILON_PX) / pageHeightCssPx);
+
+  const shiftBlockIfNeeded = (anchor: HTMLElement, topPx: number, bottomPx: number): boolean => {
+    if (bottomPx <= topPx + PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+    const startsOnPage = pageIndexOf(topPx);
+    const pageBottom = (startsOnPage + 1) * pageHeightCssPx;
+    if (bottomPx <= pageBottom - PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+
+    const shiftPx = Math.max(0, pageBottom - topPx + CREATIVE_BOLD_GROUP_PAGE_PADDING_PX);
+    if (shiftPx <= PDF_PAGE_INTERSECTION_EPSILON_PX) return false;
+    shiftGroupToNextPage(anchor, shiftPx);
+    return true;
+  };
+
+  const shiftHeadingLeadGroupIfNeeded = (heading: HTMLElement, leadElements: HTMLElement[]): boolean => {
+    const headingRect = getRelativeExportRect(rootBox, heading);
+    const leadRects = leadElements
+      .map(el => getRelativeExportRect(rootBox, el))
+      .filter((rect): rect is { top: number; bottom: number; height: number } => Boolean(rect));
+    if (!headingRect || leadRects.length === 0) return false;
+    const bottomPx = Math.max(headingRect.bottom, ...leadRects.map(rect => rect.bottom));
+    const height = bottomPx - headingRect.top;
+    if (height <= 0 || height >= maxShortGroupHeight) return false;
+    return shiftBlockIfNeeded(heading, headingRect.top, bottomPx);
+  };
+
   const shiftHeaderIfNeeded = (header: HTMLElement, firstLineHeight: number | null): boolean => {
     const rect = getRelativeExportRect(rootBox, header);
     if (!rect || rect.height <= 0 || rect.height >= maxShortGroupHeight) return false;
@@ -5250,6 +5301,21 @@ export function applyCreativeBoldKeepTogetherPagination(root: HTMLElement): void
 
   for (let pass = 0; pass < 8; pass += 1) {
     let movedAnyGroup = false;
+
+    const experienceHeading = root.querySelector<HTMLElement>('[data-export-group="creative-bold-experience-section-heading"]');
+    const firstExperienceEntry = root.querySelector<HTMLElement>('[data-export-group="creative-bold-experience-entry"]');
+    if (experienceHeading && firstExperienceEntry) {
+      const firstHeader = firstExperienceEntry.querySelector<HTMLElement>('[data-export-group="creative-bold-experience-header"]');
+      const firstLines = Array.from(firstExperienceEntry.querySelectorAll<HTMLElement>('[data-export-group="creative-bold-experience-line"]')).slice(0, 2);
+      const leadElements = [firstHeader, ...firstLines].filter((el): el is HTMLElement => Boolean(el));
+      if (shiftHeadingLeadGroupIfNeeded(experienceHeading, leadElements)) movedAnyGroup = true;
+    }
+
+    const educationHeading = root.querySelector<HTMLElement>('[data-export-group="creative-bold-education-heading"]');
+    const educationEntry = root.querySelector<HTMLElement>('[data-export-group="creative-bold-education-entry"]');
+    if (educationHeading && educationEntry) {
+      if (shiftHeadingLeadGroupIfNeeded(educationHeading, [educationEntry])) movedAnyGroup = true;
+    }
 
     const entries = Array.from(root.querySelectorAll<HTMLElement>('[data-export-group="creative-bold-experience-entry"]'));
     for (const entry of entries) {
@@ -9454,6 +9520,7 @@ function isMeaningfulCreativeBoldPixel(
     ) {
       return false;
     }
+    if (!sidebarRowBackground && isNearWhite(red, green, blue)) return false;
     return true;
   }
 
@@ -9493,6 +9560,199 @@ export function isCreativeBoldCanvasSliceEffectivelyBlank(canvas: HTMLCanvasElem
     }
   }
   return true;
+}
+
+export type CreativeBoldPdfSliceSegment = {
+  startPx: number;
+  endPx: number;
+};
+
+function getCreativeBoldMainColumnBounds(
+  canvasWidthPx: number,
+  cssToCanvasScale: number,
+): { leftPx: number; rightPx: number } {
+  const sidebarWidthPx = Math.round(canvasWidthPx * (CREATIVE_BOLD_PDF_SIDEBAR_PERCENT / 100));
+  const guardPx = Math.max(1, Math.round(CREATIVE_BOLD_PDF_MAIN_COLUMN_GUARD_CSS_PX * cssToCanvasScale));
+  return {
+    leftPx: Math.min(canvasWidthPx - 1, sidebarWidthPx + guardPx),
+    rightPx: canvasWidthPx,
+  };
+}
+
+export function isCreativeBoldMainColumnRowWhitespace(
+  canvas: HTMLCanvasElement,
+  rowY: number,
+  leftPx: number,
+  rightPx: number,
+): boolean {
+  const width = canvas.width;
+  const height = canvas.height;
+  if (width <= 0 || height <= 0) return true;
+  const y = Math.max(0, Math.min(height - 1, Math.round(rowY)));
+  const left = Math.max(0, Math.min(width - 1, Math.floor(leftPx)));
+  const right = Math.max(left + 1, Math.min(width, Math.ceil(rightPx)));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return false;
+  const data = ctx.getImageData(left, y, right - left, 1).data;
+  for (let x = 0; x < right - left; x += 1) {
+    const index = x * 4;
+    const alpha = data[index + 3];
+    if (alpha === 0) continue;
+    if (!isNearWhite(data[index], data[index + 1], data[index + 2])) return false;
+  }
+  return true;
+}
+
+function findCreativeBoldWhitespaceBandCenter(
+  canvas: HTMLCanvasElement,
+  targetBreakPx: number,
+  minBreakPx: number,
+  maxBreakPx: number,
+  searchRangePx: number,
+  minBandHeightPx: number,
+  leftPx: number,
+  rightPx: number,
+): number | null {
+  const height = canvas.height;
+  const lower = Math.max(
+    Math.ceil(minBreakPx),
+    Math.ceil(targetBreakPx - searchRangePx),
+    1,
+  );
+  const upper = Math.min(
+    Math.floor(maxBreakPx),
+    Math.floor(targetBreakPx + searchRangePx),
+    height - 1,
+  );
+  if (upper <= lower) return null;
+
+  const rowCount = upper - lower + 1;
+  const unsafeRows = new Uint8Array(rowCount);
+  const inkGuardPx = Math.max(4, Math.round(minBandHeightPx));
+  for (let y = lower; y <= upper; y += 1) {
+    if (isCreativeBoldMainColumnRowWhitespace(canvas, y, leftPx, rightPx)) continue;
+    const unsafeStart = Math.max(lower, y - inkGuardPx);
+    const unsafeEnd = Math.min(upper, y + inkGuardPx);
+    for (let unsafeY = unsafeStart; unsafeY <= unsafeEnd; unsafeY += 1) {
+      unsafeRows[unsafeY - lower] = 1;
+    }
+  }
+
+  const bands: Array<{ start: number; end: number; center: number }> = [];
+  let bandStart: number | null = null;
+  for (let y = lower; y <= upper; y += 1) {
+    if (unsafeRows[y - lower] === 0) {
+      if (bandStart === null) bandStart = y;
+      continue;
+    }
+    if (bandStart !== null && y - bandStart >= minBandHeightPx) {
+      const center = Math.round((bandStart + y - 1) / 2);
+      bands.push({ start: bandStart, end: y - 1, center });
+    }
+    bandStart = null;
+  }
+  if (bandStart !== null && upper - bandStart + 1 >= minBandHeightPx) {
+    const center = Math.round((bandStart + upper) / 2);
+    bands.push({ start: bandStart, end: upper, center });
+  }
+  if (bands.length === 0) return null;
+
+  const earlierOrAtTarget = bands
+    .filter(band => band.center <= targetBreakPx)
+    .sort((a, b) => Math.abs(a.center - targetBreakPx) - Math.abs(b.center - targetBreakPx));
+  if (earlierOrAtTarget.length > 0) return earlierOrAtTarget[0].center;
+
+  return bands
+    .sort((a, b) => Math.abs(a.center - targetBreakPx) - Math.abs(b.center - targetBreakPx))[0]
+    .center;
+}
+
+export function resolveCreativeBoldSafePageBreakCanvasPx(
+  canvas: HTMLCanvasElement,
+  targetBreakPx: number,
+  minBreakPx: number,
+  maxBreakPx: number,
+  searchRangePx: number,
+  minBandHeightPx: number,
+  leftPx: number,
+  rightPx: number,
+): number {
+  const whitespaceBreak = findCreativeBoldWhitespaceBandCenter(
+    canvas,
+    targetBreakPx,
+    minBreakPx,
+    maxBreakPx,
+    searchRangePx,
+    minBandHeightPx,
+    leftPx,
+    rightPx,
+  );
+  if (whitespaceBreak !== null && whitespaceBreak > minBreakPx) return whitespaceBreak;
+
+  // Last resort: never advance through a row containing main-column ink. Walk upward
+  // from the target so the current page gets a safer bottom gap rather than a cut line.
+  const lower = Math.max(1, Math.ceil(minBreakPx));
+  const start = Math.min(canvas.height - 1, Math.floor(targetBreakPx));
+  for (let y = start; y >= lower; y -= 1) {
+    let safe = true;
+    const guard = Math.max(2, Math.round(minBandHeightPx / 2));
+    for (let guardY = Math.max(lower, y - guard); guardY <= Math.min(canvas.height - 1, y + guard); guardY += 1) {
+      if (!isCreativeBoldMainColumnRowWhitespace(canvas, guardY, leftPx, rightPx)) {
+        safe = false;
+        break;
+      }
+    }
+    if (safe) return y;
+  }
+  return Math.max(minBreakPx + 1, Math.min(targetBreakPx, maxBreakPx));
+}
+
+export function planCreativeBoldPdfSliceSegments(
+  canvasHeightPx: number,
+  pageHeightPx: number,
+  trailingTolerancePx: number,
+  pdfCanvas: HTMLCanvasElement,
+  topInsetCanvasPx: number,
+  bottomInsetCanvasPx: number,
+  searchRangeCanvasPx: number,
+  minWhitespaceBandCanvasPx: number,
+  cssToCanvasScale: number,
+): CreativeBoldPdfSliceSegment[] {
+  const segments: CreativeBoldPdfSliceSegment[] = [];
+  const { leftPx, rightPx } = getCreativeBoldMainColumnBounds(pdfCanvas.width, cssToCanvasScale);
+  let offsetY = 0;
+  let pageIndex = 0;
+
+  while (offsetY < canvasHeightPx - trailingTolerancePx) {
+    const topInset = pageIndex > 0 ? topInsetCanvasPx : 0;
+    const contentBudgetPx = Math.max(1, pageHeightPx - topInset - bottomInsetCanvasPx);
+    let sliceHeight = Math.min(contentBudgetPx, canvasHeightPx - offsetY);
+
+    if (offsetY + sliceHeight < canvasHeightPx - trailingTolerancePx) {
+      const targetBreakPx = offsetY + sliceHeight;
+      const minBreakPx = offsetY + Math.max(1, Math.min(contentBudgetPx * 0.45, contentBudgetPx - 1));
+      const maxBreakPx = Math.min(canvasHeightPx, offsetY + contentBudgetPx);
+      const breakPx = resolveCreativeBoldSafePageBreakCanvasPx(
+        pdfCanvas,
+        targetBreakPx,
+        minBreakPx,
+        maxBreakPx,
+        searchRangeCanvasPx,
+        minWhitespaceBandCanvasPx,
+        leftPx,
+        rightPx,
+      );
+      if (breakPx > offsetY + PDF_PAGE_INTERSECTION_EPSILON_PX) {
+        sliceHeight = breakPx - offsetY;
+      }
+    }
+
+    segments.push({ startPx: offsetY, endPx: offsetY + sliceHeight });
+    offsetY += sliceHeight;
+    pageIndex += 1;
+  }
+
+  return segments;
 }
 
 function isTemplateCanvasSliceEffectivelyBlank(
@@ -9563,16 +9823,17 @@ export async function readPdfBlobAsLatin1Text(blob: Blob): Promise<string> {
 export type CvPdfExportRoute =
   | { kind: 'dedicated-clean-simple' }
   | { kind: 'dedicated-professional-classic' }
+  | { kind: 'dedicated-creative-bold' }
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
 export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdfExportRoute {
   if (templateId === 'clean-simple') return { kind: 'dedicated-clean-simple' };
   if (templateId === 'professional-classic') return { kind: 'dedicated-professional-classic' };
+  if (templateId === 'creative-bold') return { kind: 'dedicated-creative-bold' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
   if (
-    templateId === 'creative-bold'
-    || templateId === 'creative-artistic'
+    templateId === 'creative-artistic'
     || templateId === 'elegant-formal'
     || templateId === 'ats-standard'
     || templateId === 'executive-premium'
@@ -10186,6 +10447,17 @@ export async function buildCvPdfBlob(
       const modernMinimalBottomInsetCanvasPx = captureTemplateId === 'modern-minimal'
         ? Math.round(MODERN_MINIMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
         : 0;
+      const creativeBoldTopInsetCanvasPx = captureTemplateId === 'creative-bold'
+        ? Math.round(CREATIVE_BOLD_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const creativeBoldBottomInsetCanvasPx = captureTemplateId === 'creative-bold'
+        ? Math.round(CREATIVE_BOLD_PDF_PAGE_BOTTOM_INSET_CSS_PX * cssToCanvasScale)
+        : 0;
+      const creativeBoldBreakSearchCanvasPx = CREATIVE_BOLD_PDF_PAGE_BREAK_SEARCH_RANGE_CSS_PX * cssToCanvasScale;
+      const creativeBoldMinWhitespaceBandCanvasPx = Math.max(
+        8,
+        Math.round(CREATIVE_BOLD_PDF_PAGE_BREAK_MIN_BAND_CSS_PX * cssToCanvasScale),
+      );
       const rirekishoTopInsetCanvasPx = captureTemplateId === 'rirekisho'
         ? Math.round(RIREKISHO_PDF_PAGE_TOP_INSET_CSS_PX * cssToCanvasScale)
         : 0;
@@ -10528,6 +10800,13 @@ export async function buildCvPdfBlob(
           const offsetY = segment.startPx;
           const sliceHeight = segment.endPx - segment.startPx;
           const isFinalPage = segmentIndex === segments.length - 1;
+          if (semanticPagePlan && renderedPageIndex > 0) {
+            const pageBottomPx = offsetY + sliceHeight;
+            if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
+              if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
+              continue;
+            }
+          }
           if (
             shouldTrimBlankPdfSlices
             && !semanticPagePlan
@@ -10543,6 +10822,50 @@ export async function buildCvPdfBlob(
             isFinalPage,
             topInsetCanvasPx,
             bottomInsetCanvasPx,
+          );
+          renderedPageIndex += 1;
+        }
+      } else if (captureTemplateId === 'creative-bold') {
+        const segments = planCreativeBoldPdfSliceSegments(
+          canvasHeightPx,
+          pageHeightPx,
+          trailingTolerancePx,
+          pdfCanvas,
+          creativeBoldTopInsetCanvasPx,
+          creativeBoldBottomInsetCanvasPx,
+          creativeBoldBreakSearchCanvasPx,
+          creativeBoldMinWhitespaceBandCanvasPx,
+          cssToCanvasScale,
+        );
+
+        let renderedPageIndex = 0;
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          const segment = segments[segmentIndex];
+          const offsetY = segment.startPx;
+          const sliceHeight = segment.endPx - segment.startPx;
+          const isFinalPage = segmentIndex === segments.length - 1;
+          if (semanticPagePlan && renderedPageIndex > 0) {
+            const pageBottomPx = offsetY + sliceHeight;
+            if (!pageHasMeaningfulContent(semanticPagePlan, offsetY, pageBottomPx)) {
+              if (!hasFutureMeaningfulContent(semanticPagePlan, pageBottomPx)) break;
+              continue;
+            }
+          }
+          if (
+            shouldTrimBlankPdfSlices
+            && !semanticPagePlan
+            && renderedPageIndex > 0
+            && isTemplateCanvasSliceEffectivelyBlank(pdfCanvas, offsetY, sliceHeight, captureTemplateId)
+          ) {
+            break;
+          }
+          renderPaddedPdfSlice(
+            offsetY,
+            sliceHeight,
+            renderedPageIndex,
+            isFinalPage,
+            creativeBoldTopInsetCanvasPx,
+            creativeBoldBottomInsetCanvasPx,
           );
           renderedPageIndex += 1;
         }
@@ -11935,6 +12258,654 @@ export async function exportProfessionalClassicPdf(
   locale: Locale,
 ): Promise<SaveFileResult> {
   const pdfBlob = await buildProfessionalClassicPdfBlob(cv, locale);
+  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+}
+
+// ─── Creative Bold Direct jsPDF Renderer ─────────────────────────────────────
+
+function cropCreativeBoldPdfPhoto(dataUrl: string, outputSize: number): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = outputSize;
+      canvas.height = outputSize;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(dataUrl); return; }
+      const isPortrait = img.naturalHeight > img.naturalWidth;
+      const scale = outputSize / Math.min(img.naturalWidth, img.naturalHeight);
+      const scaledW = img.naturalWidth * scale;
+      const scaledH = img.naturalHeight * scale;
+      const sx = (outputSize - scaledW) / 2;
+      const sy = isPortrait ? -(scaledH - outputSize) * 0.32 : (outputSize - scaledH) / 2;
+      ctx.beginPath();
+      ctx.arc(outputSize / 2, outputSize / 2, outputSize / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(img, sx, sy, scaledW, scaledH);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function prepareCreativeBoldPdfPhotoDataUrl(cv: CVData): Promise<string | null> {
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  if (!showPhoto) return null;
+
+  const personalPhotos = cv.personal as CVData['personal'] & { originalPhoto?: string };
+  const source = cv.personal.photo?.trim() || personalPhotos.originalPhoto?.trim();
+  if (!source) return null;
+
+  const prepared = await prepareCvPhotoForExport(source);
+  if (!prepared?.dataUrl) return null;
+  const decoded = await decodeImageForExport(prepared.dataUrl);
+  if (!decoded) return null;
+
+  try {
+    return await cropCreativeBoldPdfPhoto(prepared.dataUrl, 512);
+  } catch {
+    return prepared.dataUrl;
+  }
+}
+
+type CreativeBoldPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
+
+type CreativeBoldDirectPdfContext = {
+  pdf: CreativeBoldPdfWriter;
+  locale: Locale;
+  labels: ReturnType<typeof getCreativeBoldPdfLabels>;
+  pageWidth: number;
+  pageHeight: number;
+  sidebarW: number;
+  sidebarPad: number;
+  mainX: number;
+  mainPad: number;
+  contentX: number;
+  contentW: number;
+  marginTop: number;
+  marginBottom: number;
+  bottomSafeY: number;
+  y: number;
+  pageIndex: number;
+};
+
+type CreativeBoldTextStyle = {
+  size: number;
+  color: [number, number, number];
+  fontStyle?: 'normal' | 'bold' | 'italic';
+  lineHeight: number;
+};
+
+const CB_SIDEBAR_RED: [number, number, number] = [190, 18, 60];
+const CB_HEADING_RED: [number, number, number] = [225, 29, 72];
+const CB_CB_WHITE: [number, number, number] = [255, 255, 255];
+const CB_ROSE_100: [number, number, number] = [255, 228, 230];
+const CB_ROSE_200_BORDER: [number, number, number] = [254, 205, 211];
+const CB_CB_DARK: [number, number, number] = [17, 24, 39];
+const CB_GRAY_600: [number, number, number] = [75, 85, 99];
+const CB_GRAY_500_CB: [number, number, number] = [107, 114, 128];
+
+function getCreativeBoldPdfLabels(locale: Locale) {
+  const t = translations[locale] ?? translations.en;
+  return {
+    summary: t.cv.summary,
+    experience: t.cv.experience,
+    education: t.cv.education,
+    skills: t.cv.skills,
+    languages: t.cv.languages,
+    certifications: t.cv.certifications,
+    present: t.cv.present,
+  };
+}
+
+function cbDirectDateRange(start: string, end: string, present: boolean, presentLabel: string): string {
+  return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
+}
+
+function cbSetTextStyle(ctx: CreativeBoldDirectPdfContext, style: CreativeBoldTextStyle): void {
+  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
+  ctx.pdf.setFontSize(style.size);
+  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+}
+
+function cbSplitText(ctx: CreativeBoldDirectPdfContext, text: string, maxWidth?: number): string[] {
+  const w = maxWidth ?? ctx.contentW;
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const result = ctx.pdf.splitTextToSize(normalized, w);
+  return Array.isArray(result) ? result.map(String) : [String(result)];
+}
+
+function cbFreshPageCapacity(ctx: CreativeBoldDirectPdfContext): number {
+  return ctx.bottomSafeY - ctx.marginTop;
+}
+
+function cbDrawContinuationSidebar(ctx: CreativeBoldDirectPdfContext): void {
+  ctx.pdf.setFillColor(CB_SIDEBAR_RED[0], CB_SIDEBAR_RED[1], CB_SIDEBAR_RED[2]);
+  ctx.pdf.rect(0, 0, ctx.sidebarW, ctx.pageHeight, 'F');
+}
+
+function cbAddPage(ctx: CreativeBoldDirectPdfContext): void {
+  ctx.pdf.addPage();
+  ctx.pageIndex += 1;
+  ctx.y = ctx.marginTop;
+  cbDrawContinuationSidebar(ctx);
+}
+
+function cbEnsureSpace(ctx: CreativeBoldDirectPdfContext, heightNeeded: number): void {
+  if (ctx.y + heightNeeded <= ctx.bottomSafeY) return;
+  cbAddPage(ctx);
+}
+
+function cbMoveToFreshPageIfNeeded(ctx: CreativeBoldDirectPdfContext, blockHeight: number): void {
+  if (blockHeight > cbFreshPageCapacity(ctx)) return;
+  if (ctx.y + blockHeight > ctx.bottomSafeY) {
+    cbAddPage(ctx);
+  }
+}
+
+function cbSectionHeadingHeight(): number {
+  return 8.0;
+}
+
+function cbDrawSectionHeading(ctx: CreativeBoldDirectPdfContext, label: string): void {
+  cbEnsureSpace(ctx, cbSectionHeadingHeight());
+  cbSetTextStyle(ctx, { size: 8.5, color: CB_HEADING_RED, fontStyle: 'bold', lineHeight: 4.5 });
+  ctx.pdf.text(label.toUpperCase(), ctx.contentX, ctx.y);
+  ctx.y += cbSectionHeadingHeight();
+}
+
+function cbDrawLines(
+  ctx: CreativeBoldDirectPdfContext,
+  lines: string[],
+  style: CreativeBoldTextStyle,
+  opts: { x?: number; indentX?: number } = {},
+): void {
+  cbSetTextStyle(ctx, style);
+  const x = opts.x ?? (ctx.contentX + (opts.indentX ?? 0));
+  for (const line of lines) {
+    cbEnsureSpace(ctx, style.lineHeight);
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function cbDrawLinesBlock(
+  ctx: CreativeBoldDirectPdfContext,
+  lines: string[],
+  style: CreativeBoldTextStyle,
+  opts: { x?: number } = {},
+): void {
+  if (!lines.length) return;
+  const blockH = lines.length * style.lineHeight;
+  cbMoveToFreshPageIfNeeded(ctx, blockH);
+  cbSetTextStyle(ctx, style);
+  const x = opts.x ?? ctx.contentX;
+  for (const line of lines) {
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function cbDrawPage1Sidebar(
+  ctx: CreativeBoldDirectPdfContext,
+  cv: CVData,
+  photoDataUrl: string | null,
+): void {
+  ctx.pdf.setFillColor(CB_SIDEBAR_RED[0], CB_SIDEBAR_RED[1], CB_SIDEBAR_RED[2]);
+  ctx.pdf.rect(0, 0, ctx.sidebarW, ctx.pageHeight, 'F');
+
+  const padX = ctx.sidebarPad;
+  const contentW = ctx.sidebarW - 2 * padX;
+  let sy = ctx.marginTop;
+
+  const showPhoto = cv.personal.photoEnabled !== undefined
+    ? cv.personal.photoEnabled
+    : cv.region !== 'US';
+  const photoSize = 26;
+  if (showPhoto && photoDataUrl) {
+    const photoX = (ctx.sidebarW - photoSize) / 2;
+    try {
+      ctx.pdf.addImage(photoDataUrl, 'PNG', photoX, sy, photoSize, photoSize);
+    } catch {
+      try {
+        ctx.pdf.addImage(photoDataUrl, 'JPEG', photoX, sy, photoSize, photoSize);
+      } catch {
+        // Keep export usable if jsPDF rejects an image data URL.
+      }
+    }
+    sy += photoSize + 7;
+  }
+
+  // Name
+  ctx.pdf.setFont('helvetica', 'bold');
+  ctx.pdf.setFontSize(11);
+  ctx.pdf.setTextColor(CB_CB_WHITE[0], CB_CB_WHITE[1], CB_CB_WHITE[2]);
+  const nameRaw = ctx.pdf.splitTextToSize(cv.personal.fullName || 'Your Name', contentW);
+  const nameLines: string[] = Array.isArray(nameRaw) ? nameRaw.map(String) : [String(nameRaw)];
+  for (const line of nameLines) {
+    if (sy > ctx.pageHeight - 6) break;
+    ctx.pdf.text(line, padX, sy);
+    sy += 5.0;
+  }
+
+  // Job title
+  if (cv.personal.jobTitle) {
+    ctx.pdf.setFont('helvetica', 'normal');
+    ctx.pdf.setFontSize(8);
+    ctx.pdf.setTextColor(CB_ROSE_100[0], CB_ROSE_100[1], CB_ROSE_100[2]);
+    const titleRaw = ctx.pdf.splitTextToSize(cv.personal.jobTitle, contentW);
+    const titleLines: string[] = Array.isArray(titleRaw) ? titleRaw.map(String) : [String(titleRaw)];
+    for (const line of titleLines) {
+      if (sy > ctx.pageHeight - 6) break;
+      ctx.pdf.text(line, padX, sy);
+      sy += 3.8;
+    }
+    sy += 1;
+  }
+
+  // Contact info
+  sy += 4;
+  const region = regionSettings[cv.region];
+  const contacts = [
+    cv.personal.email,
+    cv.personal.phone,
+    region.showAddress ? cv.personal.address : '',
+  ].filter(Boolean) as string[];
+  if (contacts.length > 0) {
+    ctx.pdf.setFont('helvetica', 'normal');
+    ctx.pdf.setFontSize(6.5);
+    ctx.pdf.setTextColor(CB_ROSE_100[0], CB_ROSE_100[1], CB_ROSE_100[2]);
+    for (const contact of contacts) {
+      if (sy > ctx.pageHeight - 6) break;
+      const raw = ctx.pdf.splitTextToSize(contact, contentW);
+      const lines: string[] = Array.isArray(raw) ? raw.map(String) : [String(raw)];
+      for (const line of lines) {
+        if (sy > ctx.pageHeight - 6) break;
+        ctx.pdf.text(line, padX, sy);
+        sy += 3.2;
+      }
+    }
+  }
+
+  // SKILLS
+  if (cv.skills.length > 0 && sy <= ctx.pageHeight - 12) {
+    sy += 6;
+    ctx.pdf.setFont('helvetica', 'bold');
+    ctx.pdf.setFontSize(6.5);
+    ctx.pdf.setTextColor(CB_CB_WHITE[0], CB_CB_WHITE[1], CB_CB_WHITE[2]);
+    ctx.pdf.text(ctx.labels.skills.toUpperCase(), padX, sy);
+    sy += 4.5;
+    ctx.pdf.setFont('helvetica', 'normal');
+    ctx.pdf.setFontSize(6.5);
+    for (const skill of cv.skills) {
+      if (sy > ctx.pageHeight - 4) break;
+      const raw = ctx.pdf.splitTextToSize(skill, contentW);
+      const lines: string[] = Array.isArray(raw) ? raw.map(String) : [String(raw)];
+      for (const line of lines) {
+        if (sy > ctx.pageHeight - 4) break;
+        ctx.pdf.text(line, padX, sy);
+        sy += 3.2;
+      }
+      sy += 0.8;
+    }
+  }
+
+  // LANGUAGES
+  if (cv.languages.length > 0 && sy <= ctx.pageHeight - 14) {
+    sy += 5;
+    ctx.pdf.setFont('helvetica', 'bold');
+    ctx.pdf.setFontSize(6.5);
+    ctx.pdf.setTextColor(CB_CB_WHITE[0], CB_CB_WHITE[1], CB_CB_WHITE[2]);
+    ctx.pdf.text(ctx.labels.languages.toUpperCase(), padX, sy);
+    sy += 4.5;
+    ctx.pdf.setFont('helvetica', 'normal');
+    ctx.pdf.setFontSize(7);
+    ctx.pdf.setTextColor(CB_ROSE_100[0], CB_ROSE_100[1], CB_ROSE_100[2]);
+    for (const lang of cv.languages) {
+      if (sy > ctx.pageHeight - 4) break;
+      ctx.pdf.text(`${lang.name} - ${lang.level}`, padX, sy);
+      sy += 3.5;
+    }
+  }
+}
+
+function cbDrawSummary(ctx: CreativeBoldDirectPdfContext, summary: string): void {
+  const blocks = splitCleanSimpleSummaryParagraphBlocks(summary);
+  if (!blocks.length) return;
+  cbEnsureSpace(ctx, cbSectionHeadingHeight());
+  cbDrawSectionHeading(ctx, ctx.labels.summary);
+  const style: CreativeBoldTextStyle = { size: 8, color: CB_GRAY_600, lineHeight: 4.1 };
+  blocks.forEach((block, i) => {
+    cbDrawLines(ctx, cbSplitText(ctx, block), style);
+    if (i < blocks.length - 1) ctx.y += 2.5;
+  });
+  ctx.y += 4;
+}
+
+function cbExperienceTextX(ctx: CreativeBoldDirectPdfContext): number {
+  return ctx.contentX + 3.5;
+}
+
+function cbExperienceTextW(ctx: CreativeBoldDirectPdfContext): number {
+  return ctx.contentX + ctx.contentW - cbExperienceTextX(ctx);
+}
+
+function cbExperienceDescriptionParts(
+  ctx: CreativeBoldDirectPdfContext,
+  entry: CVData['experience'][number],
+): Array<{ isBullet: boolean; lines: string[] }> {
+  const textW = cbExperienceTextW(ctx);
+  return entry.description
+    .split(/\n+/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const cleaned = part.replace(/^(?:[-•*]|\d+\.)\s+/, '');
+      const isBullet = cleaned !== part;
+      return { isBullet, lines: cbSplitText(ctx, cleaned, textW - (isBullet ? 3.5 : 0)) };
+    });
+}
+
+function cbExperienceLeadBlockHeight(
+  ctx: CreativeBoldDirectPdfContext,
+  entry: CVData['experience'][number],
+): number {
+  const textW = cbExperienceTextW(ctx);
+  const titleLines = cbSplitText(ctx, entry.position, textW);
+  const headerH = Math.max(4.0, titleLines.length * 4.0)
+    + ((entry.company || entry.startDate) ? 3.5 : 0)
+    + 1.5;
+  const parts = cbExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const leadParts = (bulletParts.length ? bulletParts : parts).slice(0, 2);
+  return headerH + leadParts.reduce((sum, p) => sum + p.lines.length * 3.8, 0);
+}
+
+function cbExperienceEntryHeight(
+  ctx: CreativeBoldDirectPdfContext,
+  entry: CVData['experience'][number],
+): number {
+  const textW = cbExperienceTextW(ctx);
+  const titleLines = cbSplitText(ctx, entry.position, textW);
+  const headerH = Math.max(4.0, titleLines.length * 4.0)
+    + ((entry.company || entry.startDate) ? 3.5 : 0)
+    + 1.5;
+  const parts = cbExperienceDescriptionParts(ctx, entry);
+  return headerH + parts.reduce((sum, p) => sum + p.lines.length * 3.8, 0) + 3;
+}
+
+function cbDrawWrappedBulletAtomic(
+  ctx: CreativeBoldDirectPdfContext,
+  part: { isBullet: boolean; lines: string[] },
+  textX: number,
+): void {
+  if (!part.lines.length) return;
+  const blockH = part.lines.length * 3.8;
+  cbMoveToFreshPageIfNeeded(ctx, blockH);
+  cbSetTextStyle(ctx, { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 });
+  if (part.isBullet) ctx.pdf.text('•', textX, ctx.y);
+  for (const line of part.lines) {
+    ctx.pdf.text(line, textX + (part.isBullet ? 3.5 : 0), ctx.y);
+    ctx.y += 3.8;
+  }
+}
+
+function cbDrawExperienceEntryPaginated(
+  ctx: CreativeBoldDirectPdfContext,
+  entry: CVData['experience'][number],
+): void {
+  const dateText = cbDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
+  const accentX = ctx.contentX;
+  const textX = cbExperienceTextX(ctx);
+  const textW = cbExperienceTextW(ctx);
+
+  const leadH = cbExperienceLeadBlockHeight(ctx, entry);
+  const fullH = cbExperienceEntryHeight(ctx, entry);
+  const remainingSpace = ctx.bottomSafeY - ctx.y;
+  const freshCap = cbFreshPageCapacity(ctx);
+
+  // If the full entry fits, draw it atomically
+  if (fullH <= remainingSpace) {
+    const startY = ctx.y;
+    const titleLines = cbSplitText(ctx, entry.position, textW);
+    cbDrawLinesBlock(ctx, titleLines, { size: 8.0, color: CB_CB_DARK, fontStyle: 'bold', lineHeight: 4.0 }, { x: textX });
+    if (entry.company || dateText) {
+      const meta = [entry.company, dateText].filter(Boolean).join(' | ');
+      cbDrawLinesBlock(ctx, cbSplitText(ctx, meta, textW), { size: 7.0, color: CB_GRAY_500_CB, lineHeight: 3.5 }, { x: textX });
+    }
+    ctx.y += 1.5;
+    const parts = cbExperienceDescriptionParts(ctx, entry);
+    for (const part of parts) {
+      if (!part.lines.length) continue;
+      cbSetTextStyle(ctx, { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 });
+      if (part.isBullet) ctx.pdf.text('•', textX, ctx.y);
+      for (const line of part.lines) {
+        ctx.pdf.text(line, textX + (part.isBullet ? 3.5 : 0), ctx.y);
+        ctx.y += 3.8;
+      }
+    }
+    ctx.pdf.setDrawColor(CB_ROSE_200_BORDER[0], CB_ROSE_200_BORDER[1], CB_ROSE_200_BORDER[2]);
+    ctx.pdf.setLineWidth(0.8);
+    ctx.pdf.line(accentX, startY - 1, accentX, ctx.y);
+    ctx.y += 4;
+    return;
+  }
+
+  // Lead block doesn't fit; move to fresh page if lead fits there
+  if (leadH > remainingSpace && leadH <= freshCap) {
+    cbAddPage(ctx);
+  }
+
+  const startY = ctx.y;
+  const titleLines = cbSplitText(ctx, entry.position, textW);
+  cbDrawLinesBlock(ctx, titleLines, { size: 8.0, color: CB_CB_DARK, fontStyle: 'bold', lineHeight: 4.0 }, { x: textX });
+  if (entry.company || dateText) {
+    const meta = [entry.company, dateText].filter(Boolean).join(' | ');
+    cbDrawLinesBlock(ctx, cbSplitText(ctx, meta, textW), { size: 7.0, color: CB_GRAY_500_CB, lineHeight: 3.5 }, { x: textX });
+  }
+  ctx.y += 1.5;
+
+  const parts = cbExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const useGrouped = bulletParts.length > 0;
+  const leadParts = (useGrouped ? bulletParts : parts).slice(0, 2);
+  const tailParts = (useGrouped ? bulletParts : parts).slice(leadParts.length);
+  const nonBulletParts = useGrouped ? parts.filter(p => !p.isBullet) : [];
+
+  // Draw lead parts (kept together with header on this page)
+  for (const part of leadParts) {
+    cbDrawWrappedBulletAtomic(ctx, part, textX);
+  }
+
+  // Accent line for header block
+  ctx.pdf.setDrawColor(CB_ROSE_200_BORDER[0], CB_ROSE_200_BORDER[1], CB_ROSE_200_BORDER[2]);
+  ctx.pdf.setLineWidth(0.8);
+  ctx.pdf.line(accentX, startY - 1, accentX, ctx.y);
+
+  // Draw any non-bullet prefix parts
+  for (const part of nonBulletParts) {
+    cbDrawWrappedBulletAtomic(ctx, part, textX);
+  }
+
+  // Draw tail parts page-by-page
+  let continuationShown = false;
+  let tailStartY = ctx.y;
+  for (const part of tailParts) {
+    const partH = part.lines.length * 3.8;
+    if (ctx.y + partH > ctx.bottomSafeY) {
+      cbAddPage(ctx);
+      if (!continuationShown) {
+        cbSetTextStyle(ctx, { size: 7.5, color: CB_CB_DARK, fontStyle: 'italic', lineHeight: 3.8 });
+        ctx.pdf.text(`${entry.position} (continued)`, textX, ctx.y);
+        ctx.y += 4.2;
+        continuationShown = true;
+      }
+      tailStartY = ctx.y;
+    }
+    cbDrawWrappedBulletAtomic(ctx, part, textX);
+    ctx.pdf.setDrawColor(CB_ROSE_200_BORDER[0], CB_ROSE_200_BORDER[1], CB_ROSE_200_BORDER[2]);
+    ctx.pdf.setLineWidth(0.8);
+    ctx.pdf.line(accentX, tailStartY - 1, accentX, ctx.y);
+    tailStartY = ctx.y;
+  }
+
+  ctx.y += 4;
+}
+
+function cbDrawExperience(ctx: CreativeBoldDirectPdfContext, cv: CVData): void {
+  if (!cv.experience.length) return;
+  const leadH = cbSectionHeadingHeight() + cbExperienceLeadBlockHeight(ctx, cv.experience[0]);
+  cbMoveToFreshPageIfNeeded(ctx, leadH);
+  cbDrawSectionHeading(ctx, ctx.labels.experience);
+  for (const entry of cv.experience) {
+    cbDrawExperienceEntryPaginated(ctx, entry);
+  }
+}
+
+function cbEducationEntryHeight(
+  ctx: CreativeBoldDirectPdfContext,
+  edu: CVData['education'][number],
+): number {
+  const degreeLines = cbSplitText(ctx, edu.degree);
+  const degreeH = Math.max(4.0, degreeLines.length * 4.0);
+  const metaH = (edu.school || edu.startDate || edu.endDate) ? 3.5 : 0;
+  return degreeH + metaH + 2.5;
+}
+
+function cbDrawEducationEntry(
+  ctx: CreativeBoldDirectPdfContext,
+  edu: CVData['education'][number],
+): void {
+  const entryH = cbEducationEntryHeight(ctx, edu);
+  cbMoveToFreshPageIfNeeded(ctx, entryH);
+  const degreeLines = cbSplitText(ctx, edu.degree);
+  cbDrawLinesBlock(ctx, degreeLines, { size: 8.0, color: CB_CB_DARK, fontStyle: 'bold', lineHeight: 4.0 });
+  const dateParts = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+  const metaText = [edu.school, dateParts].filter(Boolean).join(' | ');
+  if (metaText) {
+    cbDrawLinesBlock(ctx, cbSplitText(ctx, metaText), { size: 7.0, color: CB_GRAY_500_CB, lineHeight: 3.5 });
+  }
+  ctx.y += 2.5;
+}
+
+function cbEducationHeight(ctx: CreativeBoldDirectPdfContext, cv: CVData): number {
+  if (!cv.education.length) return 0;
+  let h = cbSectionHeadingHeight();
+  for (const edu of cv.education) h += cbEducationEntryHeight(ctx, edu);
+  return h + 2;
+}
+
+function cbDrawEducation(ctx: CreativeBoldDirectPdfContext, cv: CVData): void {
+  if (!cv.education.length) return;
+  const fullH = cbEducationHeight(ctx, cv);
+  const headingPlusFirst = cbSectionHeadingHeight() + cbEducationEntryHeight(ctx, cv.education[0]);
+  const freshCap = cbFreshPageCapacity(ctx);
+  if (fullH <= freshCap) {
+    cbMoveToFreshPageIfNeeded(ctx, fullH);
+  } else {
+    cbMoveToFreshPageIfNeeded(ctx, headingPlusFirst);
+  }
+  cbDrawSectionHeading(ctx, ctx.labels.education);
+  for (const edu of cv.education) cbDrawEducationEntry(ctx, edu);
+}
+
+function cbCertificationsHeight(ctx: CreativeBoldDirectPdfContext, cv: CVData): number {
+  if (!cv.certifications.length) return 0;
+  let h = cbSectionHeadingHeight();
+  for (const cert of cv.certifications) h += cbSplitText(ctx, cert, ctx.contentW - 3.5).length * 3.8 + 1;
+  return h;
+}
+
+function cbDrawCertifications(ctx: CreativeBoldDirectPdfContext, cv: CVData): void {
+  if (!cv.certifications.length) return;
+  cbMoveToFreshPageIfNeeded(ctx, cbSectionHeadingHeight() + 6);
+  cbDrawSectionHeading(ctx, ctx.labels.certifications);
+  for (const cert of cv.certifications) {
+    cbEnsureSpace(ctx, 3.8);
+    cbSetTextStyle(ctx, { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 });
+    ctx.pdf.text('•', ctx.contentX, ctx.y);
+    cbDrawLines(ctx, cbSplitText(ctx, cert, ctx.contentW - 3.5), { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 }, { indentX: 3.5 });
+  }
+  ctx.y += 2;
+}
+
+export async function buildCreativeBoldPagedPdfBlob(
+  cv: CVData,
+  locale: Locale,
+  options: { photoDataUrl?: string | null } = {},
+): Promise<Blob> {
+  const { jsPDF } = await import('jspdf');
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  const sidebarW = 62;
+  const sidebarPad = 7;
+  const mainPad = 8;
+  const mainX = sidebarW;
+  const contentX = mainX + mainPad;
+  const contentW = CV_PDF_A4_WIDTH_MM - contentX - mainPad;
+  const marginTop = 12;
+  const marginBottom = 12;
+
+  const ctx: CreativeBoldDirectPdfContext = {
+    pdf,
+    locale,
+    labels: getCreativeBoldPdfLabels(locale),
+    pageWidth: CV_PDF_A4_WIDTH_MM,
+    pageHeight: CV_PDF_A4_HEIGHT_MM,
+    sidebarW,
+    sidebarPad,
+    mainX,
+    mainPad,
+    contentX,
+    contentW,
+    marginTop,
+    marginBottom,
+    bottomSafeY: CV_PDF_A4_HEIGHT_MM - marginBottom,
+    y: marginTop,
+    pageIndex: 0,
+  };
+
+  cbDrawPage1Sidebar(ctx, cv, options.photoDataUrl ?? null);
+
+  cbDrawSummary(ctx, cv.summary);
+  cbDrawExperience(ctx, cv);
+
+  const eduH = cbEducationHeight(ctx, cv);
+  const certH = cbCertificationsHeight(ctx, cv);
+  const lowerH = eduH + certH;
+  const freshCap = cbFreshPageCapacity(ctx);
+  if (lowerH > 0 && lowerH <= freshCap && ctx.y + lowerH > ctx.bottomSafeY) {
+    cbAddPage(ctx);
+  }
+
+  cbDrawEducation(ctx, cv);
+  cbDrawCertifications(ctx, cv);
+
+  const output = pdf.output('blob');
+  return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
+}
+
+export async function buildCreativeBoldPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  const photoDataUrl = await prepareCreativeBoldPdfPhotoDataUrl(cv);
+  const blob = await buildCreativeBoldPagedPdfBlob(cv, locale, { photoDataUrl });
+  if (!blob || blob.size === 0) throw new Error('Creative Bold PDF generation produced an empty Blob');
+  return blob;
+}
+
+export async function exportCreativeBoldPdf(
+  cv: CVData,
+  fileName: string,
+  locale: Locale,
+): Promise<SaveFileResult> {
+  const pdfBlob = await buildCreativeBoldPdfBlob(cv, locale);
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
