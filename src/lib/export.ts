@@ -9945,6 +9945,7 @@ export type CvPdfExportRoute =
   | { kind: 'dedicated-creative-bold' }
   | { kind: 'dedicated-creative-artistic' }
   | { kind: 'dedicated-elegant-formal' }
+  | { kind: 'dedicated-ats-standard' }
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
@@ -9954,10 +9955,10 @@ export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdf
   if (templateId === 'creative-bold') return { kind: 'dedicated-creative-bold' };
   if (templateId === 'creative-artistic') return { kind: 'dedicated-creative-artistic' };
   if (templateId === 'elegant-formal') return { kind: 'dedicated-elegant-formal' };
+  if (templateId === 'ats-standard') return { kind: 'dedicated-ats-standard' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
   if (
-    templateId === 'ats-standard'
-    || templateId === 'executive-premium'
+    templateId === 'executive-premium'
     || templateId === 'nordic-clean'
     || templateId === 'tech-sidebar'
     || templateId === 'corporate-navy'
@@ -14837,37 +14838,575 @@ export async function exportElegantFormalPdf(
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
+type AtsStandardPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
+
+type AtsStandardDirectPdfContext = {
+  pdf: AtsStandardPdfWriter;
+  locale: Locale;
+  labels: ReturnType<typeof getAtsStandardPdfLabels>;
+  pageWidth: number;
+  pageHeight: number;
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
+  contentWidth: number;
+  bottomSafeY: number;
+  y: number;
+  pageIndex: number;
+};
+
+type AtsStandardTextStyle = {
+  size: number;
+  color: [number, number, number];
+  fontStyle?: 'normal' | 'bold' | 'italic';
+  lineHeight: number;
+};
+
+const ATS_TEXT: [number, number, number] = [17, 24, 39];
+const ATS_BODY: [number, number, number] = [31, 41, 55];
+const ATS_MUTED: [number, number, number] = [75, 85, 99];
+const ATS_RULE: [number, number, number] = [209, 213, 219];
+const ATS_SEPARATOR: [number, number, number] = [156, 163, 175];
+
+function getAtsStandardPdfLabels(locale: Locale) {
+  const t = translations[locale] ?? translations.en;
+  return {
+    summary: t.cv.summary,
+    experience: t.cv.experience,
+    education: t.cv.education,
+    skills: t.cv.skills,
+    languages: t.cv.languages,
+    certifications: t.cv.certifications,
+    present: t.cv.present,
+  };
+}
+
+function atsSetTextStyle(ctx: AtsStandardDirectPdfContext, style: AtsStandardTextStyle): void {
+  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
+  ctx.pdf.setFontSize(style.size);
+  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+}
+
+function atsSplitText(ctx: AtsStandardDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
+  return Array.isArray(result) ? result.map(String) : [String(result)];
+}
+
+function atsFreshPageCapacity(ctx: AtsStandardDirectPdfContext): number {
+  return ctx.bottomSafeY - ctx.marginTop;
+}
+
+function atsAddPage(ctx: AtsStandardDirectPdfContext): void {
+  ctx.pdf.addPage();
+  ctx.pageIndex += 1;
+  ctx.y = ctx.marginTop;
+}
+
+function atsEnsureSpace(ctx: AtsStandardDirectPdfContext, heightNeeded: number): void {
+  if (ctx.y + heightNeeded <= ctx.bottomSafeY) return;
+  atsAddPage(ctx);
+}
+
+function atsMoveToFreshPageIfNeeded(ctx: AtsStandardDirectPdfContext, blockHeight: number): void {
+  if (blockHeight > atsFreshPageCapacity(ctx)) return;
+  if (ctx.y + blockHeight > ctx.bottomSafeY) {
+    atsAddPage(ctx);
+  }
+}
+
+function atsCenteredX(ctx: AtsStandardDirectPdfContext, text: string): number {
+  return (ctx.pageWidth - ctx.pdf.getTextWidth(text)) / 2;
+}
+
+function atsSectionHeadingHeight(): number {
+  return 7.5;
+}
+
+function atsDrawSectionHeading(ctx: AtsStandardDirectPdfContext, label: string): void {
+  const blockH = atsSectionHeadingHeight();
+  atsEnsureSpace(ctx, blockH);
+  const upper = label.toUpperCase();
+  atsSetTextStyle(ctx, { size: 8.6, color: ATS_TEXT, fontStyle: 'bold', lineHeight: 3.8 });
+  ctx.pdf.text(upper, ctx.marginLeft, ctx.y);
+  ctx.y += 4.2;
+  ctx.pdf.setDrawColor(ATS_RULE[0], ATS_RULE[1], ATS_RULE[2]);
+  ctx.pdf.setLineWidth(0.25);
+  ctx.pdf.line(ctx.marginLeft, ctx.y, ctx.pageWidth - ctx.marginRight, ctx.y);
+  ctx.y += 3.2;
+}
+
+function atsDrawLines(
+  ctx: AtsStandardDirectPdfContext,
+  lines: string[],
+  style: AtsStandardTextStyle,
+  opts: { x?: number } = {},
+): void {
+  if (!lines.length) return;
+  atsSetTextStyle(ctx, style);
+  const x = opts.x ?? ctx.marginLeft;
+  for (const line of lines) {
+    atsEnsureSpace(ctx, style.lineHeight);
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function atsDrawLinesBlock(
+  ctx: AtsStandardDirectPdfContext,
+  lines: string[],
+  style: AtsStandardTextStyle,
+  opts: { x?: number } = {},
+): void {
+  if (!lines.length) return;
+  const blockH = lines.length * style.lineHeight;
+  atsMoveToFreshPageIfNeeded(ctx, blockH);
+  atsSetTextStyle(ctx, style);
+  const x = opts.x ?? ctx.marginLeft;
+  for (const line of lines) {
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function atsDirectDateRange(start: string, end: string, present: boolean, presentLabel: string): string {
+  return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
+}
+
+function atsDrawHeader(ctx: AtsStandardDirectPdfContext, cv: CVData): void {
+  const region = regionSettings[cv.region];
+  const contacts = [
+    cv.personal.email,
+    cv.personal.phone,
+    region.showAddress ? cv.personal.address : '',
+  ].filter(Boolean) as string[];
+
+  ctx.y = ctx.marginTop + 2;
+  atsSetTextStyle(ctx, { size: 16, color: ATS_TEXT, fontStyle: 'bold', lineHeight: 5.0 });
+  for (const line of atsSplitText(ctx, cv.personal.fullName || 'Your Name', ctx.contentWidth)) {
+    ctx.pdf.text(line, atsCenteredX(ctx, line), ctx.y);
+    ctx.y += 4.8;
+  }
+
+  if (cv.personal.jobTitle) {
+    atsSetTextStyle(ctx, { size: 9, color: ATS_MUTED, lineHeight: 3.8 });
+    for (const line of atsSplitText(ctx, cv.personal.jobTitle, ctx.contentWidth)) {
+      ctx.pdf.text(line, atsCenteredX(ctx, line), ctx.y);
+      ctx.y += 3.6;
+    }
+  }
+
+  if (contacts.length > 0) {
+    ctx.y += 1.2;
+    atsSetTextStyle(ctx, { size: 8, color: ATS_MUTED, lineHeight: 3.4 });
+    const contactLine = contacts.join('  |  ');
+    for (const line of atsSplitText(ctx, contactLine, ctx.contentWidth)) {
+      ctx.pdf.text(line, atsCenteredX(ctx, line), ctx.y);
+      ctx.y += 3.4;
+    }
+  }
+
+  ctx.y += 4;
+}
+
+function atsDrawSummary(ctx: AtsStandardDirectPdfContext, summary: string): void {
+  const blocks = splitCleanSimpleSummaryParagraphBlocks(summary);
+  if (!blocks.length) return;
+  atsEnsureSpace(ctx, atsSectionHeadingHeight());
+  atsDrawSectionHeading(ctx, ctx.labels.summary);
+  const style: AtsStandardTextStyle = { size: 8.6, color: ATS_BODY, lineHeight: 4.0 };
+  blocks.forEach((block, i) => {
+    atsDrawLines(ctx, atsSplitText(ctx, block), style);
+    if (i < blocks.length - 1) ctx.y += 2;
+  });
+  ctx.y += 3;
+}
+
+function atsExperienceDescriptionParts(
+  ctx: AtsStandardDirectPdfContext,
+  entry: CVData['experience'][number],
+): Array<{ isBullet: boolean; lines: string[] }> {
+  const bulletIndent = 5;
+  const textW = ctx.contentWidth - bulletIndent;
+  return entry.description
+    .split(/\n+/)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const cleaned = part.replace(/^(?:[-•*]|\d+\.)\s+/, '');
+      const isBullet = cleaned !== part;
+      return { isBullet, lines: atsSplitText(ctx, cleaned, textW) };
+    });
+}
+
+function atsExperienceLeadBlockHeight(ctx: AtsStandardDirectPdfContext, entry: CVData['experience'][number]): number {
+  const titleLine = [entry.position, entry.company].filter(Boolean).join(', ');
+  const headerH = Math.max(4.0, atsSplitText(ctx, titleLine).length * 4.0) + 1.5;
+  const parts = atsExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const leadParts = (bulletParts.length ? bulletParts : parts).slice(0, 2);
+  return headerH + leadParts.reduce((sum, p) => sum + p.lines.length * 3.7, 0);
+}
+
+function atsExperienceEntryHeight(ctx: AtsStandardDirectPdfContext, entry: CVData['experience'][number]): number {
+  const parts = atsExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const leadParts = (bulletParts.length ? bulletParts : parts).slice(0, 2);
+  const tailParts = (bulletParts.length ? bulletParts : parts).slice(leadParts.length);
+  return atsExperienceLeadBlockHeight(ctx, entry)
+    + tailParts.reduce((sum, p) => sum + p.lines.length * 3.7, 0)
+    + 3;
+}
+
+function atsDrawWrappedBulletAtomic(
+  ctx: AtsStandardDirectPdfContext,
+  part: { isBullet: boolean; lines: string[] },
+): void {
+  const lineH = 3.7;
+  const blockH = part.lines.length * lineH;
+  atsEnsureSpace(ctx, blockH);
+  atsSetTextStyle(ctx, { size: 8.6, color: ATS_BODY, lineHeight: lineH });
+  part.lines.forEach((line, index) => {
+    const prefix = part.isBullet && index === 0 ? '- ' : part.isBullet ? '  ' : '';
+    ctx.pdf.text(`${prefix}${line}`, ctx.marginLeft + (part.isBullet ? 2 : 0), ctx.y);
+    ctx.y += lineH;
+  });
+}
+
+function atsDrawExperienceEntryPaginated(ctx: AtsStandardDirectPdfContext, entry: CVData['experience'][number]): void {
+  const dateText = atsDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
+  const titleLine = [entry.position, entry.company].filter(Boolean).join(', ');
+  const fullH = atsExperienceEntryHeight(ctx, entry);
+  const leadH = atsExperienceLeadBlockHeight(ctx, entry);
+  const remainingSpace = ctx.bottomSafeY - ctx.y;
+  const freshCap = atsFreshPageCapacity(ctx);
+
+  const drawHeader = () => {
+    const titleLines = atsSplitText(ctx, titleLine, ctx.contentWidth - 28);
+    const titleLineH = 4.0;
+    const headerBlockH = Math.max(titleLineH, titleLines.length * titleLineH);
+    atsEnsureSpace(ctx, headerBlockH);
+    atsSetTextStyle(ctx, { size: 9.4, color: ATS_TEXT, fontStyle: 'bold', lineHeight: titleLineH });
+    titleLines.forEach((line) => {
+      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      ctx.y += titleLineH;
+    });
+    if (dateText) {
+      atsSetTextStyle(ctx, { size: 8, color: ATS_MUTED, lineHeight: 3.4 });
+      const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
+      ctx.pdf.text(dateText, dateX, ctx.y - titleLineH + 0.5);
+    }
+    ctx.y += 1;
+  };
+
+  if (fullH <= remainingSpace) {
+    drawHeader();
+    for (const part of atsExperienceDescriptionParts(ctx, entry)) {
+      atsDrawWrappedBulletAtomic(ctx, part);
+    }
+    ctx.y += 2.5;
+    return;
+  }
+
+  if (leadH > remainingSpace && leadH <= freshCap) {
+    atsAddPage(ctx);
+  }
+
+  drawHeader();
+  const parts = atsExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const useGrouped = bulletParts.length > 0;
+  const leadParts = (useGrouped ? bulletParts : parts).slice(0, 2);
+  const tailParts = (useGrouped ? bulletParts : parts).slice(leadParts.length);
+  const nonBulletParts = useGrouped ? parts.filter(p => !p.isBullet) : [];
+
+  for (const part of leadParts) atsDrawWrappedBulletAtomic(ctx, part);
+  for (const part of nonBulletParts) atsDrawWrappedBulletAtomic(ctx, part);
+
+  let continuationShown = false;
+  for (const part of tailParts) {
+    const partH = part.lines.length * 3.7;
+    if (ctx.y + partH > ctx.bottomSafeY) {
+      atsAddPage(ctx);
+      if (!continuationShown) {
+        atsSetTextStyle(ctx, { size: 8.6, color: ATS_TEXT, fontStyle: 'italic', lineHeight: 3.7 });
+        const cont = `${entry.position} (continued)`;
+        ctx.pdf.text(cont, ctx.marginLeft, ctx.y);
+        ctx.y += 4.0;
+        continuationShown = true;
+      }
+    }
+    atsDrawWrappedBulletAtomic(ctx, part);
+  }
+  ctx.y += 2.5;
+}
+
+function atsDrawExperience(ctx: AtsStandardDirectPdfContext, cv: CVData): void {
+  if (!cv.experience.length) return;
+  const leadH = atsSectionHeadingHeight() + atsExperienceLeadBlockHeight(ctx, cv.experience[0]);
+  atsMoveToFreshPageIfNeeded(ctx, leadH);
+  atsDrawSectionHeading(ctx, ctx.labels.experience);
+  for (const entry of cv.experience) {
+    atsDrawExperienceEntryPaginated(ctx, entry);
+  }
+  ctx.y += 1.5;
+}
+
+function atsEducationEntryHeight(ctx: AtsStandardDirectPdfContext, edu: CVData['education'][number]): number {
+  const rowText = [edu.degree, edu.school].filter(Boolean).join(', ');
+  const rowH = Math.max(4.0, atsSplitText(ctx, rowText).length * 4.0);
+  const descH = edu.description ? atsSplitText(ctx, edu.description).length * 3.7 + 1 : 0;
+  return rowH + descH + 2;
+}
+
+function atsEducationHeight(ctx: AtsStandardDirectPdfContext, cv: CVData): number {
+  if (!cv.education.length) return 0;
+  let h = atsSectionHeadingHeight();
+  for (const edu of cv.education) h += atsEducationEntryHeight(ctx, edu);
+  return h + 2;
+}
+
+function atsDrawEducationEntry(ctx: AtsStandardDirectPdfContext, edu: CVData['education'][number]): void {
+  const entryH = atsEducationEntryHeight(ctx, edu);
+  atsMoveToFreshPageIfNeeded(ctx, entryH);
+  const rowText = [edu.degree, edu.school].filter(Boolean).join(', ');
+  const dateText = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+  const titleLines = atsSplitText(ctx, rowText, ctx.contentWidth - 28);
+  const titleLineH = 4.0;
+  atsEnsureSpace(ctx, titleLines.length * titleLineH);
+  atsSetTextStyle(ctx, { size: 8.6, color: ATS_TEXT, fontStyle: 'bold', lineHeight: titleLineH });
+  titleLines.forEach((line) => {
+    ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+    ctx.y += titleLineH;
+  });
+  if (dateText) {
+    atsSetTextStyle(ctx, { size: 8, color: ATS_MUTED, lineHeight: 3.4 });
+    const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
+    ctx.pdf.text(dateText, dateX, ctx.y - titleLineH + 0.5);
+  }
+  if (edu.description) {
+    atsDrawLines(ctx, atsSplitText(ctx, edu.description), { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+  }
+  ctx.y += 1.5;
+}
+
+function atsDrawEducation(ctx: AtsStandardDirectPdfContext, cv: CVData): void {
+  if (!cv.education.length) return;
+  const fullH = atsEducationHeight(ctx, cv);
+  const headingPlusFirst = atsSectionHeadingHeight() + atsEducationEntryHeight(ctx, cv.education[0]);
+  if (fullH <= atsFreshPageCapacity(ctx)) {
+    atsMoveToFreshPageIfNeeded(ctx, fullH);
+  } else {
+    atsMoveToFreshPageIfNeeded(ctx, headingPlusFirst);
+  }
+  atsDrawSectionHeading(ctx, ctx.labels.education);
+  for (const edu of cv.education) atsDrawEducationEntry(ctx, edu);
+  ctx.y += 1.5;
+}
+
+function atsSkillsHeight(ctx: AtsStandardDirectPdfContext, cv: CVData): number {
+  if (!cv.skills.length) return 0;
+  const skills = cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale));
+  const lineH = 3.7;
+  atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: lineH });
+  const rows = atsLayoutPipeItems(ctx, skills, ctx.contentWidth);
+  return atsSectionHeadingHeight() + (rows.length ? rows[rows.length - 1].y + rows[rows.length - 1].height : 0) + 2;
+}
+
+function atsLanguagesHeight(ctx: AtsStandardDirectPdfContext, cv: CVData): number {
+  if (!cv.languages.length) return 0;
+  return atsSectionHeadingHeight() + cv.languages.length * 3.7 + 2;
+}
+
+function atsCertificationsHeight(ctx: AtsStandardDirectPdfContext, cv: CVData): number {
+  if (!cv.certifications.length) return 0;
+  return atsSectionHeadingHeight() + cv.certifications.length * 3.7 + 2;
+}
+
+type AtsPipeRow = { items: string[]; y: number; height: number };
+
+function atsLayoutPipeItems(ctx: AtsStandardDirectPdfContext, items: string[], maxWidth: number): AtsPipeRow[] {
+  const gapX = 2.4;
+  const gapY = 1.0;
+  const lineH = 3.7;
+  const sep = ' | ';
+  atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: lineH });
+  const rows: AtsPipeRow[] = [];
+  let rowItems: string[] = [];
+  let rowWidth = 0;
+  let rowY = 0;
+
+  const flush = () => {
+    if (!rowItems.length) return;
+    rows.push({ items: rowItems, y: rowY, height: lineH });
+    rowY += lineH + gapY;
+    rowItems = [];
+    rowWidth = 0;
+  };
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    const itemW = ctx.pdf.getTextWidth(item);
+    const sepW = rowItems.length > 0 ? ctx.pdf.getTextWidth(sep) : 0;
+    const nextW = rowWidth + sepW + itemW;
+    if (rowItems.length > 0 && nextW > maxWidth) flush();
+    rowWidth = rowItems.length > 0 ? rowWidth + ctx.pdf.getTextWidth(sep) + itemW : itemW;
+    rowItems.push(item);
+  }
+  flush();
+  return rows;
+}
+
+function atsDrawPipeItems(ctx: AtsStandardDirectPdfContext, items: string[], startY: number): number {
+  const rows = atsLayoutPipeItems(ctx, items, ctx.contentWidth);
+  const sep = ' | ';
+  atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+  for (const row of rows) {
+    let x = ctx.marginLeft;
+    const y = startY + row.y;
+    row.items.forEach((item, index) => {
+      if (index > 0) {
+        atsSetTextStyle(ctx, { size: 8.4, color: ATS_SEPARATOR, lineHeight: 3.7 });
+        ctx.pdf.text(sep, x, y);
+        x += ctx.pdf.getTextWidth(sep);
+        atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+      }
+      ctx.pdf.text(item, x, y);
+      x += ctx.pdf.getTextWidth(item);
+    });
+  }
+  const h = rows.length ? rows[rows.length - 1].y + rows[rows.length - 1].height : 0;
+  return startY + h;
+}
+
+function atsLowerSectionsHeight(ctx: AtsStandardDirectPdfContext, cv: CVData): number {
+  let h = 0;
+  if (cv.skills.length) h += atsSkillsHeight(ctx, cv);
+  if (cv.languages.length) h += atsLanguagesHeight(ctx, cv);
+  if (cv.certifications.length) h += atsCertificationsHeight(ctx, cv);
+  return h;
+}
+
+function atsDrawSkills(ctx: AtsStandardDirectPdfContext, cv: CVData): void {
+  if (!cv.skills.length) return;
+  const skills = cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale));
+  const blockH = atsSkillsHeight(ctx, cv);
+  atsMoveToFreshPageIfNeeded(ctx, blockH);
+  atsDrawSectionHeading(ctx, ctx.labels.skills);
+  ctx.y = atsDrawPipeItems(ctx, skills, ctx.y) + 2;
+}
+
+function atsDrawLanguages(ctx: AtsStandardDirectPdfContext, cv: CVData): void {
+  if (!cv.languages.length) return;
+  const blockH = atsLanguagesHeight(ctx, cv);
+  atsMoveToFreshPageIfNeeded(ctx, blockH);
+  atsDrawSectionHeading(ctx, ctx.labels.languages);
+  atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+  for (const lang of cv.languages) {
+    atsEnsureSpace(ctx, 3.7);
+    const line = `${getLocalizedCvLanguageName(lang.name, ctx.locale)} - ${lang.level}`;
+    ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+    ctx.y += 3.7;
+  }
+  ctx.y += 2;
+}
+
+function atsDrawCertifications(ctx: AtsStandardDirectPdfContext, cv: CVData): void {
+  if (!cv.certifications.length) return;
+  const blockH = atsCertificationsHeight(ctx, cv);
+  atsMoveToFreshPageIfNeeded(ctx, blockH);
+  atsDrawSectionHeading(ctx, ctx.labels.certifications);
+  atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+  for (const cert of cv.certifications) {
+    atsEnsureSpace(ctx, 3.7);
+    ctx.pdf.text(cert, ctx.marginLeft, ctx.y);
+    ctx.y += 3.7;
+  }
+  ctx.y += 2;
+}
+
+function atsMoveLowerSectionsIfNeeded(
+  ctx: AtsStandardDirectPdfContext,
+  educationH: number,
+  lowerH: number,
+): void {
+  const combined = educationH + lowerH;
+  if (combined <= 0) return;
+  const freshCap = atsFreshPageCapacity(ctx);
+  const remaining = ctx.bottomSafeY - ctx.y;
+
+  if (combined <= remaining) return;
+  if (combined <= freshCap) {
+    atsAddPage(ctx);
+    return;
+  }
+
+  const eduLowerH = educationH + lowerH;
+  if (eduLowerH > 0 && eduLowerH <= freshCap && eduLowerH > remaining) {
+    atsAddPage(ctx);
+  }
+}
+
+export async function buildAtsStandardPagedPdfBlob(
+  cv: CVData,
+  locale: Locale,
+): Promise<Blob> {
+  const { jsPDF } = await import('jspdf');
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const marginLeft = 13;
+  const marginRight = 13;
+  const marginTop = 10;
+  const marginBottom = 12;
+  const ctx: AtsStandardDirectPdfContext = {
+    pdf,
+    locale,
+    labels: getAtsStandardPdfLabels(locale),
+    pageWidth: CV_PDF_A4_WIDTH_MM,
+    pageHeight: CV_PDF_A4_HEIGHT_MM,
+    marginLeft,
+    marginRight,
+    marginTop,
+    marginBottom,
+    contentWidth: CV_PDF_A4_WIDTH_MM - marginLeft - marginRight,
+    bottomSafeY: CV_PDF_A4_HEIGHT_MM - marginBottom,
+    y: 0,
+    pageIndex: 0,
+  };
+
+  atsDrawHeader(ctx, cv);
+  atsDrawSummary(ctx, cv.summary);
+  atsDrawExperience(ctx, cv);
+
+  const educationH = atsEducationHeight(ctx, cv);
+  const lowerH = atsLowerSectionsHeight(ctx, cv);
+  atsMoveLowerSectionsIfNeeded(ctx, educationH, lowerH);
+
+  if (educationH > 0) atsDrawEducation(ctx, cv);
+
+  if (lowerH > 0) {
+    if (lowerH <= atsFreshPageCapacity(ctx)) {
+      atsMoveToFreshPageIfNeeded(ctx, lowerH);
+    } else if (cv.skills.length) {
+      atsMoveToFreshPageIfNeeded(ctx, atsSkillsHeight(ctx, cv));
+    }
+    if (cv.skills.length) atsDrawSkills(ctx, cv);
+    if (cv.languages.length) atsDrawLanguages(ctx, cv);
+    if (cv.certifications.length) atsDrawCertifications(ctx, cv);
+  }
+
+  const output = pdf.output('blob');
+  return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
+}
+
 export async function buildAtsStandardPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('ATS Standard PDF export requires a browser DOM');
-  }
-
-  const container = document.createElement('div');
-  container.id = `ats-standard-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-ats-standard-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createAtsStandardPdfTemplate(cv, { locale }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('ATS Standard PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  const blob = await buildAtsStandardPagedPdfBlob(cv, locale);
+  if (!blob || blob.size === 0) throw new Error('ATS Standard PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportAtsStandardPdf(

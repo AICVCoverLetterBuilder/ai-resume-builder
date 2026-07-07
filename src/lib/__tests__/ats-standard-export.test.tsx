@@ -8,9 +8,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { ATSStandardTemplate, templateComponents } from '@/components/cv-templates';
 import { createAtsStandardPdfTemplate } from '@/lib/ats-standard-pdf-template';
 import {
-  buildAtsStandardPdfBlob,
   buildCvPdfBlob,
-  buildPaddedPdfSlice,
+  resolveCvPdfExportRoute,
 } from '@/lib/export';
 import type { CVData } from '@/lib/types';
 
@@ -152,6 +151,62 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   return { html2canvasMock, instances, clonedTextContents };
 }
 
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      drawnText: string[] = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      rect = vi.fn();
+      line = vi.fn();
+      text = vi.fn((t: string | string[]) => {
+        const parts = Array.isArray(t) ? t : [t];
+        this.drawnText.push(...parts);
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((_text: string) => 20);
+      output() {
+        return new Blob(['%PDF-1.7\nats-standard-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
+}
+
 function source(file: string): string {
   return fs.readFileSync(path.resolve(file), 'utf8');
 }
@@ -247,7 +302,7 @@ describe('ATS Standard PDF export', () => {
     expect(root.textContent).not.toContain('StrategicPlanning');
   });
 
-  test('fixture, renderer, and cloned export DOM preserve ATS body word spaces', async () => {
+  test('fixture and dedicated PDF template DOM preserve ATS body word spaces', () => {
     const fixture = cv();
     const rawFixtureText = [
       fixture.summary,
@@ -258,8 +313,6 @@ describe('ATS Standard PDF export', () => {
     const bodyParagraph = Array.from(root.querySelectorAll<HTMLElement>('p, li span:last-child'))
       .find(element => element.textContent?.includes('building high-performance teams')) as HTMLElement;
     const heading = root.querySelector('main h2') as HTMLElement;
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { clonedTextContents } = installPdfMocks(canvas);
 
     spacedPhrases.forEach((phrase) => {
       expect(rawFixtureText).toContain(phrase);
@@ -269,14 +322,100 @@ describe('ATS Standard PDF export', () => {
     expect(bodyParagraph.style.wordSpacing).toBe('normal');
     expect(bodyParagraph.style.letterSpacing).toBe('normal');
     expect(heading.style.letterSpacing).toBe('0.02em');
+  });
 
-    await buildAtsStandardPdfBlob(fixture, 'en');
-    const cloneText = clonedTextContents.join('\n');
+  test('direct PDF renderer preserves ATS body word spaces in drawn text', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const fixture = cv();
+
+    await mod.buildAtsStandardPdfBlob(fixture, 'en');
+    const drawn = instances[0]?.drawnText.join(' ') ?? '';
 
     spacedPhrases.forEach((phrase) => {
-      expect(cloneText).toContain(phrase);
-      expect(cloneText).not.toContain(phrase.replaceAll(' ', ''));
+      expect(drawn).toContain(phrase);
+      expect(drawn).not.toContain(phrase.replaceAll(' ', ''));
     });
+  });
+
+  test('ats-standard resolves to the dedicated-ats-standard export route', () => {
+    expect(resolveCvPdfExportRoute('ats-standard').kind).toBe('dedicated-ats-standard');
+  });
+
+  test('ATS Standard dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('buildAtsStandardPagedPdfBlob');
+    expect(exportSource).toContain("kind: 'dedicated-ats-standard'");
+    const fnStart = exportSource.indexOf('export async function buildAtsStandardPagedPdfBlob');
+    const fnEnd = exportSource.indexOf('export async function buildAtsStandardPdfBlob', fnStart);
+    const fn = exportSource.slice(fnStart, fnEnd);
+    expect(fn).not.toContain('renderPdfSlice');
+    expect(fn).not.toContain('renderPaddedPdfSlice');
+    expect(fn).not.toContain('html2canvas');
+    expect(fn).not.toContain('buildCvPdfBlob');
+  });
+
+  test('ATS Standard source keeps WORK EXPERIENCE heading with first entry lead block', () => {
+    const exportSource = source('src/lib/export.ts');
+    const fn = exportSource.indexOf('function atsDrawExperience(');
+    const body = exportSource.slice(fn, fn + 600);
+    expect(body).toContain('atsMoveToFreshPageIfNeeded');
+    expect(body).toContain('atsExperienceLeadBlockHeight');
+  });
+
+  test('ATS Standard source groups Education + lower sections before drawing', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('atsMoveLowerSectionsIfNeeded');
+    expect(exportSource).toContain('atsLowerSectionsHeight');
+    expect(exportSource).toContain('atsEducationHeight');
+  });
+
+  test('ATS Standard long direct PDF export paginates without half-line splits', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const longCv = (): CVData => ({
+      ...cv(),
+      summary: Array.from({ length: 40 }, (_, i) =>
+        `Sentence ${i + 1}: results-driven revenue growth across global markets.`,
+      ).join(' '),
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Global Ventures',
+          position: 'Sales Director',
+          startDate: '2019-04',
+          endDate: '',
+          isPresent: true,
+          description: Array.from({ length: 18 }, (_, i) =>
+            `- Achievement ${i + 1}: delivered measurable impact across sales, pipeline, and forecasting work.`,
+          ).join('\n'),
+        },
+        {
+          id: 'exp-2',
+          company: 'Apex Solutions',
+          position: 'Software Tester',
+          startDate: '2015-06',
+          endDate: '2019-03',
+          isPresent: false,
+          description: [
+            '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+            '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+            '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+            '- Managed vendor relationships and production timelines for multiple concurrent projects.',
+            '- Mentored junior designers in brand strategy fundamentals and professional communication.',
+            '- Conducted client workshops and strategic presentations for C-suite stakeholders.',
+          ].join('\n'),
+        },
+      ],
+      education: [{ id: 'edu-1', school: 'Harvard Business School', degree: 'MBA', startDate: '2012-09', endDate: '2014-05', description: '' }],
+      skills: ['Strategic Planning', 'Leadership', 'Negotiation', 'CRM Forecasting', 'Cloud Services (AWS/Azure/GCP)'],
+      languages: [{ name: 'English', level: 'Native' }, { name: 'French', level: 'Intermediate' }],
+    });
+
+    const blob = await mod.buildAtsStandardPagedPdfBlob(longCv(), 'en');
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(3);
   });
 
   test('production handler routes ats-standard to dedicated PDF export and disables print fallback', () => {
@@ -312,22 +451,26 @@ describe('ATS Standard PDF export', () => {
     expect(branch).not.toContain('originalPhoto');
     expect(branch).not.toContain('rectangularPhoto');
     expect(branch).not.toContain('circularPhoto');
+    expect(buildBlock).toContain('buildAtsStandardPagedPdfBlob');
     expect(buildBlock).not.toContain('photoDataUrl');
-    expect(buildBlock).not.toContain('img');
+    expect(buildBlock).not.toContain('html2canvas');
+    expect(buildBlock).not.toContain('buildCvPdfBlob');
   });
 
   test('ATS Standard PDF Blob is non-empty and short fixture remains one page', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { html2canvasMock, instances } = installPdfMocks(canvas);
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildAtsStandardPdfBlob(cv(), 'en');
+    const blob = await mod.buildAtsStandardPdfBlob(cv(), 'en');
 
-    expect(html2canvasMock).toHaveBeenCalled();
     expect(blob.size).toBeGreaterThan(0);
     expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
     expect(instances[0].pages).toBe(1);
     expect(instances[0].addPage).not.toHaveBeenCalled();
+    const drawn = instances[0].drawnText.join(' ');
+    expect(drawn).toContain('Marcus Thorne');
+    expect(drawn).toContain('Strategic Planning');
   });
 
   test('blank trailing canvas content is removed before pagination', async () => {
@@ -353,29 +496,15 @@ describe('ATS Standard PDF export', () => {
     expect(instances[0].addImage).toHaveBeenCalledTimes(3);
   });
 
-  test('ATS Standard PDF export bakes continuation-page top padding into slice bitmaps', () => {
+  test('legacy generic preview slicing helpers remain for other templates only', () => {
     const exportSource = source('src/lib/export.ts');
     expect(exportSource).toContain('ATS_STANDARD_PDF_PAGE_TOP_INSET_CSS_PX');
-    expect(exportSource).toContain('ATS_STANDARD_PDF_PAGE_BOTTOM_INSET_CSS_PX');
     expect(exportSource).toContain('buildPaddedPdfSlice');
     expect(exportSource).toContain("captureTemplateId === 'ats-standard'");
-    expect(exportSource).toContain('renderPaddedPdfSlice');
-
-    const sourceCanvas = document.createElement('canvas');
-    sourceCanvas.width = 800;
-    sourceCanvas.height = 1200;
-    const sourceCtx = sourceCanvas.getContext('2d');
-    if (sourceCtx) {
-      sourceCtx.fillStyle = '#ffffff';
-      sourceCtx.fillRect(0, 0, 800, 1200);
-      sourceCtx.fillStyle = '#111111';
-      sourceCtx.fillRect(40, 200, 720, 18);
-    }
-
-    const padded = buildPaddedPdfSlice(sourceCanvas, 200, 400, 800, 28, 28);
-    expect(padded.topInsetCanvasPx).toBe(28);
-    expect(padded.bottomInsetCanvasPx).toBe(28);
-    expect(padded.paddedHeightPx).toBe(456);
+    const fnStart = exportSource.indexOf('export async function buildAtsStandardPagedPdfBlob');
+    const fnEnd = exportSource.indexOf('export async function buildAtsStandardPdfBlob', fnStart);
+    const fn = exportSource.slice(fnStart, fnEnd);
+    expect(fn).not.toContain('renderPaddedPdfSlice');
   });
 
   test('DOCX export code is not part of the ATS Standard PDF route', () => {
