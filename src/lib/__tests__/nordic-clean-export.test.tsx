@@ -9,8 +9,8 @@ import { NordicCleanTemplate, templateComponents } from '@/components/cv-templat
 import { createNordicCleanPdfTemplate } from '@/lib/nordic-clean-pdf-template';
 import {
   buildNordicCleanPdfBlob,
-  buildPaddedPdfSlice,
   exportNordicCleanPdf,
+  resolveCvPdfExportRoute,
 } from '@/lib/export';
 import type { CVData } from '@/lib/types';
 
@@ -159,6 +159,62 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   return { html2canvasMock, instances, capturedPhotoSrcs };
 }
 
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      drawnText: string[] = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      rect = vi.fn();
+      line = vi.fn();
+      text = vi.fn((t: string | string[]) => {
+        const parts = Array.isArray(t) ? t : [t];
+        this.drawnText.push(...parts);
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((text: string) => Math.min(text.length * 1.8, 40));
+      output() {
+        return new Blob(['%PDF-1.7\nnordic-clean-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
+}
+
 function source(file: string): string {
   return fs.readFileSync(path.resolve(file), 'utf8');
 }
@@ -248,47 +304,187 @@ describe('Nordic Clean PDF export', () => {
     expect(pageSource.slice(guard, fallback)).toContain("cv.templateId === 'nordic-clean'");
   });
 
+  test('nordic-clean resolves to the dedicated-nordic-clean export route', () => {
+    expect(resolveCvPdfExportRoute('nordic-clean').kind).toBe('dedicated-nordic-clean');
+  });
+
+  test('Nordic Clean dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('buildNordicCleanPagedPdfBlob');
+    expect(exportSource).toContain("kind: 'dedicated-nordic-clean'");
+    const fnStart = exportSource.indexOf('export async function buildNordicCleanPagedPdfBlob');
+    const fnEnd = exportSource.indexOf('export async function buildNordicCleanPdfBlob', fnStart);
+    const fn = exportSource.slice(fnStart, fnEnd);
+    expect(fn).not.toContain('renderPdfSlice');
+    expect(fn).not.toContain('renderPaddedPdfSlice');
+    expect(fn).not.toContain('html2canvas');
+    expect(fn).not.toContain('buildCvPdfBlob');
+  });
+
+  test('Nordic Clean source keeps WORK EXPERIENCE heading with first entry lead block', () => {
+    const exportSource = source('src/lib/export.ts');
+    const fn = exportSource.indexOf('function ncDrawExperience(');
+    const body = exportSource.slice(fn, fn + 600);
+    expect(body).toContain('ncMoveToFreshPageIfNeeded');
+    expect(body).toContain('ncExperienceLeadBlockHeight');
+  });
+
+  test('Nordic Clean source groups Education + lower sections before drawing', () => {
+    const exportSource = source('src/lib/export.ts');
+    expect(exportSource).toContain('ncMoveLowerSectionsIfNeeded');
+    expect(exportSource).toContain('ncSkillsLanguagesHeight');
+    expect(exportSource).toContain('ncEducationHeight');
+  });
+
+  test('Nordic Clean long direct PDF export paginates without half-line splits', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const longCv = (): CVData => ({
+      ...cv(),
+      summary: Array.from({ length: 40 }, (_, i) =>
+        `Sentence ${i + 1}: calm focused teaching experience across global classrooms.`,
+      ).join(' '),
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zhff',
+          position: 'Učitelj u osnovnoj školi',
+          startDate: '2023-05',
+          endDate: '',
+          isPresent: true,
+          description: Array.from({ length: 18 }, (_, i) =>
+            `- Achievement ${i + 1}: delivered measurable impact across curriculum, assessment, and classroom work.`,
+          ).join('\n'),
+        },
+        {
+          id: 'exp-2',
+          company: 'Pixel & Co',
+          position: 'Software Tester',
+          startDate: '2015-03',
+          endDate: '2017-12',
+          isPresent: false,
+          description: [
+            '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+            '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+            '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+            '- Managed vendor relationships and production timelines for multiple concurrent projects.',
+            '- Mentored junior designers in brand strategy fundamentals and professional communication.',
+            '- Conducted client workshops and strategic presentations for C-suite stakeholders.',
+          ].join('\n'),
+        },
+      ],
+      languages: [{ name: 'Serbian', level: 'Native' }, { name: 'English', level: 'Fluent' }],
+    });
+
+    const blob = await mod.buildNordicCleanPagedPdfBlob(longCv(), 'en', { photoDataUrl: squarePhoto });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(3);
+  });
+
+  test('Nordic Clean direct PDF renders Professional Summary heading and body exactly once', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const longSummary = Array.from({ length: 40 }, (_, i) =>
+      `Sentence ${i + 1}: calm focused teaching experience across global classrooms.`,
+    ).join(' ');
+
+    await mod.buildNordicCleanPagedPdfBlob({
+      ...cv(),
+      summary: longSummary,
+      experience: [{
+        id: 'exp-qa',
+        company: 'Pixel & Co',
+        position: 'Software Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: [
+          '- QA lead.',
+          '- Assisted senior QA engineers with test planning.',
+          '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+          '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+          '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+          '- Managed vendor relationships and production timelines for multiple concurrent projects.',
+        ].join('\n'),
+      }],
+    }, 'en', { photoDataUrl: null });
+
+    const drawn = instances[0]?.drawnText.join(' ') ?? '';
+    const count = (needle: string) => {
+      let total = 0;
+      let pos = 0;
+      while (true) {
+        const idx = drawn.indexOf(needle, pos);
+        if (idx === -1) break;
+        total += 1;
+        pos = idx + needle.length;
+      }
+      return total;
+    };
+
+    expect(count('PROFESSIONAL SUMMARY')).toBe(1);
+    expect(count('Sentence 1:')).toBe(1);
+    expect(count('Sentence 40:')).toBe(1);
+    expect(count('QA lead.')).toBe(1);
+    expect(count('Assisted senior QA engineers')).toBe(1);
+    expect(count('Designed visual identities for 50+ brands')).toBe(1);
+    expect(drawn).not.toContain('lead.Assisted');
+  });
+
+  test('Nordic Clean direct PDF splits glued experience sentences into separate bullet items', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+
+    await mod.buildNordicCleanPagedPdfBlob({
+      ...cv(),
+      summary: 'Focused QA specialist with strong attention to detail.',
+      experience: [{
+        id: 'exp-glued',
+        company: 'Pixel & Co',
+        position: 'Software Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: 'QA lead.Assisted senior QA engineers with test planning.',
+      }],
+    }, 'en', { photoDataUrl: null });
+
+    const drawn = instances[0]?.drawnText.join(' ') ?? '';
+    expect(drawn).toContain('QA lead.');
+    expect(drawn).toContain('Assisted senior QA engineers');
+    expect(drawn).not.toContain('lead.Assisted');
+  });
+
   test('Nordic Clean PDF Blob is non-empty and fixture remains one page', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { html2canvasMock, instances } = installPdfMocks(canvas);
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildNordicCleanPdfBlob(cv(), 'en');
+    const blob = await mod.buildNordicCleanPdfBlob(cv(), 'en');
 
-    expect(html2canvasMock).toHaveBeenCalled();
     expect(blob.size).toBeGreaterThan(0);
     expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
     expect(instances[0].pages).toBe(1);
+    expect(instances[0].addPage).not.toHaveBeenCalled();
+    const drawn = instances[0].drawnText.join(' ');
+    expect(drawn).toContain('Dragan Obradović');
+    expect(drawn).toContain('Teamwork');
   });
 
-  test('Nordic Clean PDF export bakes continuation-page top padding into slice bitmaps', () => {
-    const exportSource = fs.readFileSync(path.resolve('src/lib/export.ts'), 'utf8');
+  test('legacy generic preview slicing helpers remain for other templates only', () => {
+    const exportSource = source('src/lib/export.ts');
     expect(exportSource).toContain('NORDIC_CLEAN_PDF_PAGE_TOP_INSET_CSS_PX');
-    expect(exportSource).toContain('NORDIC_CLEAN_PDF_PAGE_BOTTOM_INSET_CSS_PX');
-    expect(exportSource).toContain('buildPaddedPdfSlice');
     expect(exportSource).toContain("captureTemplateId === 'nordic-clean'");
-    expect(exportSource).toContain('renderPaddedPdfSlice');
-
-    const sourceCanvas = document.createElement('canvas');
-    sourceCanvas.width = 800;
-    sourceCanvas.height = 1200;
-    const sourceCtx = sourceCanvas.getContext('2d');
-    if (sourceCtx) {
-      sourceCtx.fillStyle = '#ffffff';
-      sourceCtx.fillRect(0, 0, 800, 1200);
-      sourceCtx.fillStyle = '#111111';
-      sourceCtx.fillRect(40, 200, 720, 18);
-    }
-
-    const padded = buildPaddedPdfSlice(sourceCanvas, 200, 400, 800, 28, 28);
-    expect(padded.topInsetCanvasPx).toBe(28);
-    expect(padded.bottomInsetCanvasPx).toBe(28);
-    expect(padded.paddedHeightPx).toBe(456);
+    const fnStart = exportSource.indexOf('export async function buildNordicCleanPagedPdfBlob');
+    const fnEnd = exportSource.indexOf('export async function buildNordicCleanPdfBlob', fnStart);
+    const fn = exportSource.slice(fnStart, fnEnd);
+    expect(fn).not.toContain('renderPaddedPdfSlice');
   });
 
   test('Nordic Clean direct export uses shared native save result', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
     const blobByUrl = new Map<string, Blob>();
     let clickedDownload = '';
     Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true, writable: true });
@@ -303,7 +499,7 @@ describe('Nordic Clean PDF export', () => {
       clickedDownload = this.download;
     });
 
-    const result = await exportNordicCleanPdf(cv(), 'Dragan Obradovic - CV', 'en');
+    const result = await mod.exportNordicCleanPdf(cv(), 'Dragan Obradovic - CV', 'en');
 
     expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     expect(clickedDownload).toBe('Dragan Obradovic - CV.pdf');
@@ -312,10 +508,10 @@ describe('Nordic Clean PDF export', () => {
   });
 
   test('selected original photo is used instead of circularPhoto', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { capturedPhotoSrcs } = installPdfMocks(canvas);
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    await buildNordicCleanPdfBlob(cv({
+    await mod.buildNordicCleanPdfBlob(cv({
       personal: {
         originalPhoto,
         photo: 'data:image/jpeg;base64,photo-field',
@@ -324,16 +520,14 @@ describe('Nordic Clean PDF export', () => {
     }), 'en');
 
     expect(loadedImageSources).toContain(originalPhoto);
-    expect(capturedPhotoSrcs).toContain(squarePhoto);
-    expect(capturedPhotoSrcs[0]).not.toContain('circular-field');
-    expect(capturedPhotoSrcs[0]).not.toContain('photo-field');
+    expect(loadedImageSources).not.toContain('circular-field');
   });
 
   test('Nordic Clean photo preparation uses uniform center-cover scaling', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    await buildNordicCleanPdfBlob(cv(), 'en');
+    await mod.buildNordicCleanPdfBlob(cv(), 'en');
 
     expect(drawImageCalls.length).toBeGreaterThan(0);
     const [, dx, dy, scaledWidth, scaledHeight] = drawImageCalls[0] as [unknown, number, number, number, number];

@@ -9946,6 +9946,7 @@ export type CvPdfExportRoute =
   | { kind: 'dedicated-creative-artistic' }
   | { kind: 'dedicated-elegant-formal' }
   | { kind: 'dedicated-ats-standard' }
+  | { kind: 'dedicated-nordic-clean' }
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
@@ -9956,10 +9957,10 @@ export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdf
   if (templateId === 'creative-artistic') return { kind: 'dedicated-creative-artistic' };
   if (templateId === 'elegant-formal') return { kind: 'dedicated-elegant-formal' };
   if (templateId === 'ats-standard') return { kind: 'dedicated-ats-standard' };
+  if (templateId === 'nordic-clean') return { kind: 'dedicated-nordic-clean' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
   if (
     templateId === 'executive-premium'
-    || templateId === 'nordic-clean'
     || templateId === 'tech-sidebar'
     || templateId === 'corporate-navy'
     || templateId === 'contemporary-bold'
@@ -15491,41 +15492,712 @@ async function prepareNordicCleanPdfPhotoDataUrl(cv: CVData): Promise<NordicClea
   };
 }
 
+type NordicCleanPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
+
+type NordicCleanDirectPdfContext = {
+  pdf: NordicCleanPdfWriter;
+  locale: Locale;
+  labels: ReturnType<typeof getNordicCleanPdfLabels>;
+  pageWidth: number;
+  pageHeight: number;
+  marginLeft: number;
+  marginRight: number;
+  marginTop: number;
+  marginBottom: number;
+  contentWidth: number;
+  bottomSafeY: number;
+  y: number;
+  pageIndex: number;
+};
+
+type NordicCleanTextStyle = {
+  size: number;
+  color: [number, number, number];
+  fontStyle?: 'normal' | 'bold' | 'italic';
+  lineHeight: number;
+};
+
+const NC_TEAL: [number, number, number] = [13, 148, 136];
+const NC_TEAL_RULE: [number, number, number] = [153, 246, 228];
+const NC_TEAL_SOFT: [number, number, number] = [240, 253, 250];
+const NC_CHIP_TEXT: [number, number, number] = [15, 118, 110];
+const NC_TEXT: [number, number, number] = [17, 24, 39];
+const NC_BODY: [number, number, number] = [75, 85, 99];
+const NC_MUTED: [number, number, number] = [156, 163, 175];
+const NC_COMPANY: [number, number, number] = [107, 114, 128];
+const NC_PHOTO_MM = 21.7;
+const NC_LOWER_COL_GAP_MM = 6.4;
+
+function getNordicCleanPdfLabels(locale: Locale) {
+  const t = translations[locale] ?? translations.en;
+  return {
+    summary: t.cv.summary,
+    experience: t.cv.experience,
+    education: t.cv.education,
+    skills: t.cv.skills,
+    languages: t.cv.languages,
+    certifications: t.cv.certifications,
+    present: t.cv.present,
+  };
+}
+
+function ncSetTextStyle(ctx: NordicCleanDirectPdfContext, style: NordicCleanTextStyle): void {
+  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
+  ctx.pdf.setFontSize(style.size);
+  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+}
+
+function ncSplitText(ctx: NordicCleanDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
+  return Array.isArray(result) ? result.map(String) : [String(result)];
+}
+
+function ncFreshPageCapacity(ctx: NordicCleanDirectPdfContext): number {
+  return ctx.bottomSafeY - ctx.marginTop;
+}
+
+function ncAddPage(ctx: NordicCleanDirectPdfContext): void {
+  ctx.pdf.addPage();
+  ctx.pageIndex += 1;
+  ctx.y = ctx.marginTop;
+}
+
+function ncEnsureSpace(ctx: NordicCleanDirectPdfContext, heightNeeded: number): void {
+  if (ctx.y + heightNeeded <= ctx.bottomSafeY) return;
+  ncAddPage(ctx);
+}
+
+function ncMoveToFreshPageIfNeeded(ctx: NordicCleanDirectPdfContext, blockHeight: number): void {
+  if (blockHeight > ncFreshPageCapacity(ctx)) return;
+  if (ctx.y + blockHeight > ctx.bottomSafeY) {
+    ncAddPage(ctx);
+  }
+}
+
+function ncSectionHeadingHeight(): number {
+  return 7.8;
+}
+
+function ncDrawSectionHeading(ctx: NordicCleanDirectPdfContext, label: string): void {
+  const blockH = ncSectionHeadingHeight();
+  ncEnsureSpace(ctx, blockH);
+  const upper = label.toUpperCase();
+  ncSetTextStyle(ctx, { size: 7.5, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.6 });
+  ctx.pdf.text(upper, ctx.marginLeft, ctx.y);
+  ctx.y += 4.0;
+  ctx.pdf.setDrawColor(NC_TEAL_RULE[0], NC_TEAL_RULE[1], NC_TEAL_RULE[2]);
+  ctx.pdf.setLineWidth(0.25);
+  ctx.pdf.line(ctx.marginLeft, ctx.y, ctx.pageWidth - ctx.marginRight, ctx.y);
+  ctx.y += 3.5;
+}
+
+function ncDrawSectionHeadingAt(
+  ctx: NordicCleanDirectPdfContext,
+  label: string,
+  colX: number,
+  colW: number,
+  y: number,
+): number {
+  const upper = label.toUpperCase();
+  ncSetTextStyle(ctx, { size: 7.5, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.6 });
+  ctx.pdf.text(upper, colX, y);
+  const ruleY = y + 3.8;
+  ctx.pdf.setDrawColor(NC_TEAL_RULE[0], NC_TEAL_RULE[1], NC_TEAL_RULE[2]);
+  ctx.pdf.setLineWidth(0.25);
+  ctx.pdf.line(colX, ruleY, colX + colW, ruleY);
+  return ruleY + 3.5;
+}
+
+function ncDrawLines(
+  ctx: NordicCleanDirectPdfContext,
+  lines: string[],
+  style: NordicCleanTextStyle,
+  opts: { x?: number } = {},
+): void {
+  if (!lines.length) return;
+  ncSetTextStyle(ctx, style);
+  const x = opts.x ?? ctx.marginLeft;
+  for (const line of lines) {
+    ncEnsureSpace(ctx, style.lineHeight);
+    ctx.pdf.text(line, x, ctx.y);
+    ctx.y += style.lineHeight;
+  }
+}
+
+function ncDirectDateRange(start: string, end: string, present: boolean, presentLabel: string): string {
+  return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
+}
+
+function ncHasPhotoEnabled(cv: CVData): boolean {
+  if (cv.personal.photoEnabled !== undefined) return cv.personal.photoEnabled;
+  return cv.region !== 'US';
+}
+
+function ncDrawHeader(ctx: NordicCleanDirectPdfContext, cv: CVData, photoDataUrl: string | null): void {
+  const region = regionSettings[cv.region];
+  const contacts = [
+    cv.personal.email,
+    cv.personal.phone,
+    region.showAddress ? cv.personal.address : '',
+  ].filter(Boolean) as string[];
+  const showPhoto = Boolean(photoDataUrl && ncHasPhotoEnabled(cv));
+  const textMaxW = showPhoto ? ctx.contentWidth - NC_PHOTO_MM - 5.8 : ctx.contentWidth;
+  const headerStartY = ctx.marginTop;
+
+  ctx.y = headerStartY;
+  ncSetTextStyle(ctx, { size: 22, color: NC_TEXT, fontStyle: 'normal', lineHeight: 5.2 });
+  for (const line of ncSplitText(ctx, cv.personal.fullName || 'Your Name', textMaxW)) {
+    ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+    ctx.y += 4.8;
+  }
+
+  if (cv.personal.jobTitle) {
+    ncSetTextStyle(ctx, { size: 9.8, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.8 });
+    for (const line of ncSplitText(ctx, cv.personal.jobTitle, textMaxW)) {
+      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      ctx.y += 3.6;
+    }
+  }
+
+  if (contacts.length > 0) {
+    ctx.y += 1.5;
+    ncSetTextStyle(ctx, { size: 8, color: NC_MUTED, lineHeight: 3.4 });
+    const contactLine = contacts.join('  |  ');
+    for (const line of ncSplitText(ctx, contactLine, textMaxW)) {
+      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      ctx.y += 3.4;
+    }
+  }
+
+  const textBottom = ctx.y;
+  if (showPhoto && photoDataUrl) {
+    const photoX = ctx.pageWidth - ctx.marginRight - NC_PHOTO_MM;
+    const photoY = headerStartY;
+    try {
+      ctx.pdf.addImage(photoDataUrl, 'JPEG', photoX, photoY, NC_PHOTO_MM, NC_PHOTO_MM);
+    } catch {
+      try {
+        ctx.pdf.addImage(photoDataUrl, 'PNG', photoX, photoY, NC_PHOTO_MM, NC_PHOTO_MM);
+      } catch {
+        // Keep export usable if jsPDF rejects an image data URL.
+      }
+    }
+    ctx.y = Math.max(textBottom, headerStartY + NC_PHOTO_MM);
+  }
+
+  ctx.y += 3.5;
+  ctx.pdf.setDrawColor(NC_TEAL_RULE[0], NC_TEAL_RULE[1], NC_TEAL_RULE[2]);
+  ctx.pdf.setLineWidth(0.3);
+  ctx.pdf.line(ctx.marginLeft, ctx.y, ctx.pageWidth - ctx.marginRight, ctx.y);
+  ctx.y += 5.5;
+}
+
+function ncSummaryParagraphBlocks(summary: string): string[] {
+  const trimmed = summary.trim();
+  if (!trimmed) return [];
+
+  const paragraphs = trimmed
+    .split(/\n\s*\n+/)
+    .map(part => part.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (paragraphs.length > 1) {
+    return paragraphs.map(part => splitCleanSimpleSummarySentenceRuns(part).join(' '));
+  }
+  return [splitCleanSimpleSummarySentenceRuns(trimmed.replace(/\s+/g, ' ')).join(' ')];
+}
+
+function ncDrawSummary(ctx: NordicCleanDirectPdfContext, summary: string): void {
+  const blocks = ncSummaryParagraphBlocks(summary);
+  if (!blocks.length) return;
+  ncEnsureSpace(ctx, ncSectionHeadingHeight());
+  ncDrawSectionHeading(ctx, ctx.labels.summary);
+  const style: NordicCleanTextStyle = { size: 8.4, color: NC_BODY, lineHeight: 3.8 };
+  blocks.forEach((block, i) => {
+    ncDrawLines(ctx, ncSplitText(ctx, block), style);
+    if (i < blocks.length - 1) ctx.y += 2;
+  });
+  ctx.y += 4;
+}
+
+function ncExpandExperienceDescriptionLines(description: string): string[] {
+  const rawLines = description.split(/\n+/).map(part => part.trim()).filter(Boolean);
+  const expanded: string[] = [];
+
+  for (const line of rawLines) {
+    const normalizedLine = line
+      .replace(/\.(\s*(?:[-•*]|\d+\.)\s+)/g, '.\n$1')
+      .replace(/([.!?…])([A-ZÀ-ÖØ-ÞЀ-Я])/g, '$1\n$2');
+    const segments = normalizedLine
+      .split(/\n+/)
+      .flatMap(segment => segment.split(/(?=(?:^|\s)(?:[-•*]|\d+\.)\s+)/))
+      .map(segment => segment.trim())
+      .filter(Boolean);
+
+    for (const segment of segments) {
+      const bulletMatch = segment.match(/^(?:[-•*]|\d+\.)\s+(.*)$/);
+      const text = (bulletMatch?.[1] ?? segment).replace(/\s+/g, ' ').trim();
+      if (!text) continue;
+      const normalized = splitCleanSimpleSummarySentenceRuns(text).join(' ').trim();
+      if (!normalized) continue;
+      expanded.push(bulletMatch ? `- ${normalized}` : normalized);
+    }
+  }
+
+  return expanded;
+}
+
+function ncExperienceDescriptionParts(
+  ctx: NordicCleanDirectPdfContext,
+  entry: CVData['experience'][number],
+): Array<{ isBullet: boolean; lines: string[] }> {
+  const textW = ctx.contentWidth - 28 - 5;
+  return ncExpandExperienceDescriptionLines(entry.description).map((part) => {
+    const cleaned = part.replace(/^(?:[-•*]|\d+\.)\s+/, '');
+    const isBullet = cleaned !== part;
+    return { isBullet, lines: ncSplitText(ctx, cleaned, textW - (isBullet ? 4 : 0)) };
+  });
+}
+
+function ncMeasureExperienceHeaderHeight(ctx: NordicCleanDirectPdfContext, entry: CVData['experience'][number]): number {
+  const textW = ctx.contentWidth - 28;
+  const titleLines = ncSplitText(ctx, entry.position, textW);
+  const titleLineH = 3.8;
+  let height = Math.max(titleLineH, titleLines.length * titleLineH);
+  if (entry.company) height += 3.2;
+  return height + 0.8;
+}
+
+function ncExperienceLeadBlockHeight(ctx: NordicCleanDirectPdfContext, entry: CVData['experience'][number]): number {
+  const parts = ncExperienceDescriptionParts(ctx, entry);
+  const bulletParts = parts.filter(p => p.isBullet);
+  const leadParts = (bulletParts.length ? bulletParts : parts).slice(0, 2);
+  return ncMeasureExperienceHeaderHeight(ctx, entry)
+    + leadParts.reduce((sum, p) => sum + p.lines.length * 3.5, 0);
+}
+
+function ncExperienceEntryHeight(ctx: NordicCleanDirectPdfContext, entry: CVData['experience'][number]): number {
+  const parts = ncExperienceDescriptionParts(ctx, entry);
+  return ncMeasureExperienceHeaderHeight(ctx, entry)
+    + parts.reduce((sum, p) => sum + p.lines.length * 3.5, 0)
+    + 3;
+}
+
+function ncDrawWrappedBulletAtomic(
+  ctx: NordicCleanDirectPdfContext,
+  part: { isBullet: boolean; lines: string[] },
+): void {
+  const lineH = 3.5;
+  const blockH = part.lines.length * lineH;
+  ncEnsureSpace(ctx, blockH);
+  part.lines.forEach((line, index) => {
+    if (part.isBullet && index === 0) {
+      ncSetTextStyle(ctx, { size: 7.8, color: NC_TEAL, lineHeight: lineH });
+      ctx.pdf.text('-', ctx.marginLeft, ctx.y);
+      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: lineH });
+      ctx.pdf.text(line, ctx.marginLeft + 4, ctx.y);
+    } else if (part.isBullet) {
+      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: lineH });
+      ctx.pdf.text(line, ctx.marginLeft + 4, ctx.y);
+    } else {
+      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: lineH });
+      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+    }
+    ctx.y += lineH;
+  });
+}
+
+function ncDrawExperienceEntryPaginated(ctx: NordicCleanDirectPdfContext, entry: CVData['experience'][number]): void {
+  const dateText = ncDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
+  const parts = ncExperienceDescriptionParts(ctx, entry);
+  const fullH = ncExperienceEntryHeight(ctx, entry);
+  const leadH = ncExperienceLeadBlockHeight(ctx, entry);
+  const remainingSpace = ctx.bottomSafeY - ctx.y;
+  const freshCap = ncFreshPageCapacity(ctx);
+  const textW = ctx.contentWidth - 28;
+
+  const drawHeader = () => {
+    const titleLines = ncSplitText(ctx, entry.position, textW);
+    const titleLineH = 3.8;
+    const headerBlockH = ncMeasureExperienceHeaderHeight(ctx, entry);
+    ncEnsureSpace(ctx, headerBlockH);
+    const startY = ctx.y;
+    ncSetTextStyle(ctx, { size: 9.8, color: NC_TEXT, fontStyle: 'bold', lineHeight: titleLineH });
+    titleLines.forEach((line) => {
+      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      ctx.y += titleLineH;
+    });
+    if (entry.company) {
+      ncSetTextStyle(ctx, { size: 8, color: NC_COMPANY, lineHeight: 3.2 });
+      ctx.pdf.text(entry.company, ctx.marginLeft, ctx.y);
+      ctx.y += 3.2;
+    }
+    if (dateText) {
+      ncSetTextStyle(ctx, { size: 7.5, color: NC_MUTED, lineHeight: 3.2 });
+      const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
+      ctx.pdf.text(dateText, dateX, startY + 0.5);
+    }
+    ctx.y += 0.8;
+  };
+
+  if (leadH > remainingSpace && fullH > remainingSpace && leadH <= freshCap) {
+    ncAddPage(ctx);
+  }
+
+  drawHeader();
+
+  let continuationShown = false;
+  for (const part of parts) {
+    const partH = part.lines.length * 3.5;
+    if (partH > 0 && ctx.y + partH > ctx.bottomSafeY) {
+      ncAddPage(ctx);
+      if (!continuationShown) {
+        ncSetTextStyle(ctx, { size: 7.8, color: NC_TEXT, fontStyle: 'italic', lineHeight: 3.5 });
+        ctx.pdf.text(`${entry.position} (continued)`, ctx.marginLeft, ctx.y);
+        ctx.y += 4.0;
+        continuationShown = true;
+      }
+    }
+    ncDrawWrappedBulletAtomic(ctx, part);
+  }
+  ctx.y += 3;
+}
+
+function ncDrawExperience(ctx: NordicCleanDirectPdfContext, cv: CVData): void {
+  if (!cv.experience.length) return;
+  const leadH = ncSectionHeadingHeight() + ncExperienceLeadBlockHeight(ctx, cv.experience[0]);
+  ncMoveToFreshPageIfNeeded(ctx, leadH);
+  ncDrawSectionHeading(ctx, ctx.labels.experience);
+  for (const entry of cv.experience) {
+    ncDrawExperienceEntryPaginated(ctx, entry);
+  }
+  ctx.y += 2;
+}
+
+function ncEducationEntryHeight(ctx: NordicCleanDirectPdfContext, edu: CVData['education'][number]): number {
+  const degreeH = Math.max(3.8, ncSplitText(ctx, edu.degree).length * 3.8);
+  const schoolH = edu.school ? 3.2 : 0;
+  return degreeH + schoolH + 2;
+}
+
+function ncEducationHeight(ctx: NordicCleanDirectPdfContext, cv: CVData): number {
+  if (!cv.education.length) return 0;
+  let h = ncSectionHeadingHeight();
+  for (const edu of cv.education) h += ncEducationEntryHeight(ctx, edu);
+  return h + 2;
+}
+
+function ncDrawEducationEntry(ctx: NordicCleanDirectPdfContext, edu: CVData['education'][number]): void {
+  const entryH = ncEducationEntryHeight(ctx, edu);
+  ncMoveToFreshPageIfNeeded(ctx, entryH);
+  const dateText = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
+  const startY = ctx.y;
+  ncSetTextStyle(ctx, { size: 9.4, color: NC_TEXT, fontStyle: 'bold', lineHeight: 3.8 });
+  ctx.pdf.text(edu.degree, ctx.marginLeft, ctx.y);
+  ctx.y += 3.8;
+  if (edu.school) {
+    ncSetTextStyle(ctx, { size: 8, color: NC_COMPANY, lineHeight: 3.2 });
+    ctx.pdf.text(edu.school, ctx.marginLeft, ctx.y);
+    ctx.y += 3.2;
+  }
+  if (dateText) {
+    ncSetTextStyle(ctx, { size: 7.5, color: NC_MUTED, lineHeight: 3.2 });
+    const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
+    ctx.pdf.text(dateText, dateX, startY + 0.5);
+  }
+  ctx.y += 2;
+}
+
+function ncDrawEducation(ctx: NordicCleanDirectPdfContext, cv: CVData): void {
+  if (!cv.education.length) return;
+  const fullH = ncEducationHeight(ctx, cv);
+  const headingPlusFirst = ncSectionHeadingHeight() + ncEducationEntryHeight(ctx, cv.education[0]);
+  if (fullH <= ncFreshPageCapacity(ctx)) {
+    ncMoveToFreshPageIfNeeded(ctx, fullH);
+  } else {
+    ncMoveToFreshPageIfNeeded(ctx, headingPlusFirst);
+  }
+  ncDrawSectionHeading(ctx, ctx.labels.education);
+  for (const edu of cv.education) ncDrawEducationEntry(ctx, edu);
+  ctx.y += 2;
+}
+
+type NcSkillChipLayout = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  lines: string[];
+};
+
+function ncMeasureSkillChip(
+  ctx: NordicCleanDirectPdfContext,
+  label: string,
+  maxColWidth: number,
+): { width: number; height: number; lines: string[] } {
+  const padH = 1.8;
+  const padV = 0.7;
+  const lineH = 3.2;
+  ncSetTextStyle(ctx, { size: 7.5, color: NC_CHIP_TEXT, lineHeight: lineH });
+  const textWidth = ctx.pdf.getTextWidth(label);
+  const singleLineWidth = textWidth + padH * 2;
+  if (singleLineWidth <= maxColWidth) {
+    return { width: singleLineWidth, height: lineH + padV * 2, lines: [label] };
+  }
+  const lines = ncSplitText(ctx, label, maxColWidth - padH * 2);
+  return { width: maxColWidth, height: lines.length * lineH + padV * 2, lines };
+}
+
+function ncLayoutSkillChips(
+  ctx: NordicCleanDirectPdfContext,
+  skills: string[],
+  maxColWidth: number,
+): { chips: NcSkillChipLayout[]; totalHeight: number } {
+  const gapX = 1.4;
+  const gapY = 1.4;
+  let cursorX = 0;
+  let cursorY = 0;
+  let rowHeight = 0;
+  const chips: NcSkillChipLayout[] = [];
+  for (const skill of skills) {
+    const measured = ncMeasureSkillChip(ctx, skill, maxColWidth);
+    if (cursorX > 0 && cursorX + measured.width > maxColWidth) {
+      cursorY += rowHeight + gapY;
+      cursorX = 0;
+      rowHeight = 0;
+    }
+    chips.push({ x: cursorX, y: cursorY, width: measured.width, height: measured.height, lines: measured.lines });
+    cursorX += measured.width + gapX;
+    rowHeight = Math.max(rowHeight, measured.height);
+  }
+  return { chips, totalHeight: cursorY + rowHeight };
+}
+
+function ncMeasureSkillChipsHeight(ctx: NordicCleanDirectPdfContext, skills: string[], maxColWidth: number): number {
+  if (!skills.length) return 0;
+  return ncLayoutSkillChips(ctx, skills, maxColWidth).totalHeight;
+}
+
+function ncDrawSkillChips(
+  ctx: NordicCleanDirectPdfContext,
+  skills: string[],
+  colX: number,
+  colY: number,
+  maxColWidth: number,
+): number {
+  const layout = ncLayoutSkillChips(ctx, skills, maxColWidth);
+  const padH = 1.8;
+  const padV = 0.7;
+  const lineH = 3.2;
+  for (const chip of layout.chips) {
+    const chipX = colX + chip.x;
+    const chipY = colY + chip.y;
+    ctx.pdf.setDrawColor(NC_TEAL_RULE[0], NC_TEAL_RULE[1], NC_TEAL_RULE[2]);
+    ctx.pdf.setFillColor(NC_TEAL_SOFT[0], NC_TEAL_SOFT[1], NC_TEAL_SOFT[2]);
+    ctx.pdf.setLineWidth(0.2);
+    ctx.pdf.rect(chipX, chipY - padV - lineH + 1.0, chip.width, chip.height, 'FD');
+    ncSetTextStyle(ctx, { size: 7.5, color: NC_CHIP_TEXT, lineHeight: lineH });
+    chip.lines.forEach((line, lineIndex) => {
+      ctx.pdf.text(line, chipX + padH, chipY + lineIndex * lineH);
+    });
+  }
+  return colY + layout.totalHeight;
+}
+
+function ncSkillsLanguagesHeight(ctx: NordicCleanDirectPdfContext, cv: CVData): number {
+  const skills = cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale));
+  const hasSkills = skills.length > 0;
+  const hasLangs = cv.languages.length > 0;
+  if (!hasSkills && !hasLangs) return 0;
+
+  const twoCol = hasSkills && hasLangs;
+  const colW = twoCol ? (ctx.contentWidth - NC_LOWER_COL_GAP_MM) / 2 : ctx.contentWidth;
+  let skillsH = 0;
+  let langsH = 0;
+  if (hasSkills) {
+    skillsH = ncSectionHeadingHeight() + ncMeasureSkillChipsHeight(ctx, skills, colW);
+  }
+  if (hasLangs) {
+    langsH = ncSectionHeadingHeight() + cv.languages.length * 3.5;
+  }
+  return Math.max(skillsH, langsH) + 2;
+}
+
+function ncDrawSkillsLanguagesBlock(ctx: NordicCleanDirectPdfContext, cv: CVData): void {
+  const skills = cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale));
+  const hasSkills = skills.length > 0;
+  const hasLangs = cv.languages.length > 0;
+  if (!hasSkills && !hasLangs) return;
+
+  const blockH = ncSkillsLanguagesHeight(ctx, cv);
+  ncMoveToFreshPageIfNeeded(ctx, blockH);
+
+  const twoCol = hasSkills && hasLangs;
+  const colW = twoCol ? (ctx.contentWidth - NC_LOWER_COL_GAP_MM) / 2 : ctx.contentWidth;
+  const skillsX = ctx.marginLeft;
+  const langsX = twoCol ? ctx.marginLeft + colW + NC_LOWER_COL_GAP_MM : ctx.marginLeft;
+  const blockTopY = ctx.y;
+  let blockBottom = blockTopY;
+
+  if (hasSkills) {
+    if (twoCol) {
+      const headingEnd = ncDrawSectionHeadingAt(ctx, ctx.labels.skills, skillsX, colW, blockTopY);
+      const chipsBottom = ncDrawSkillChips(ctx, skills, skillsX, headingEnd, colW);
+      blockBottom = Math.max(blockBottom, chipsBottom);
+    } else {
+      ncDrawSectionHeading(ctx, ctx.labels.skills);
+      const chipsBottom = ncDrawSkillChips(ctx, skills, skillsX, ctx.y, colW);
+      blockBottom = Math.max(blockBottom, chipsBottom);
+      ctx.y = chipsBottom;
+    }
+  }
+
+  if (hasLangs) {
+    if (twoCol) {
+      const headingEnd = ncDrawSectionHeadingAt(ctx, ctx.labels.languages, langsX, colW, blockTopY);
+      let langY = headingEnd;
+      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: 3.5 });
+      for (const lang of cv.languages) {
+        ctx.pdf.text(
+          `${getLocalizedCvLanguageName(lang.name, ctx.locale)} / ${lang.level}`,
+          langsX,
+          langY,
+        );
+        langY += 3.5;
+      }
+      blockBottom = Math.max(blockBottom, langY);
+    } else if (!hasSkills) {
+      ncDrawSectionHeading(ctx, ctx.labels.languages);
+      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: 3.5 });
+      for (const lang of cv.languages) {
+        ncEnsureSpace(ctx, 3.5);
+        ctx.pdf.text(
+          `${getLocalizedCvLanguageName(lang.name, ctx.locale)} / ${lang.level}`,
+          ctx.marginLeft,
+          ctx.y,
+        );
+        ctx.y += 3.5;
+      }
+      blockBottom = ctx.y;
+    }
+  }
+
+  ctx.y = blockBottom + 2;
+}
+
+function ncCertificationsHeight(ctx: NordicCleanDirectPdfContext, cv: CVData): number {
+  if (!cv.certifications.length) return 0;
+  return ncSectionHeadingHeight() + cv.certifications.length * 3.5 + 2;
+}
+
+function ncDrawCertifications(ctx: NordicCleanDirectPdfContext, cv: CVData): void {
+  if (!cv.certifications.length) return;
+  const blockH = ncCertificationsHeight(ctx, cv);
+  ncMoveToFreshPageIfNeeded(ctx, blockH);
+  ncDrawSectionHeading(ctx, ctx.labels.certifications);
+  ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: 3.5 });
+  for (const cert of cv.certifications) {
+    ncEnsureSpace(ctx, 3.5);
+    ctx.pdf.text(cert, ctx.marginLeft, ctx.y);
+    ctx.y += 3.5;
+  }
+  ctx.y += 2;
+}
+
+function ncMoveLowerSectionsIfNeeded(
+  ctx: NordicCleanDirectPdfContext,
+  educationH: number,
+  skillsLangH: number,
+  certsH: number,
+): void {
+  const lowerH = educationH + skillsLangH + certsH;
+  if (lowerH <= 0) return;
+  const freshCap = ncFreshPageCapacity(ctx);
+  const remaining = ctx.bottomSafeY - ctx.y;
+
+  if (lowerH <= remaining) return;
+  if (lowerH <= freshCap) {
+    ncAddPage(ctx);
+    return;
+  }
+
+  const eduLowerH = educationH + skillsLangH;
+  if (eduLowerH > 0 && eduLowerH <= freshCap && eduLowerH > remaining) {
+    ncAddPage(ctx);
+  }
+}
+
+export async function buildNordicCleanPagedPdfBlob(
+  cv: CVData,
+  locale: Locale,
+  options: { photoDataUrl?: string | null } = {},
+): Promise<Blob> {
+  const { jsPDF } = await import('jspdf');
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const marginLeft = 13;
+  const marginRight = 13;
+  const marginTop = 10;
+  const marginBottom = 12;
+  const ctx: NordicCleanDirectPdfContext = {
+    pdf,
+    locale,
+    labels: getNordicCleanPdfLabels(locale),
+    pageWidth: CV_PDF_A4_WIDTH_MM,
+    pageHeight: CV_PDF_A4_HEIGHT_MM,
+    marginLeft,
+    marginRight,
+    marginTop,
+    marginBottom,
+    contentWidth: CV_PDF_A4_WIDTH_MM - marginLeft - marginRight,
+    bottomSafeY: CV_PDF_A4_HEIGHT_MM - marginBottom,
+    y: 0,
+    pageIndex: 0,
+  };
+
+  ncDrawHeader(ctx, cv, options.photoDataUrl ?? null);
+  ncDrawSummary(ctx, cv.summary);
+  ncDrawExperience(ctx, cv);
+
+  const educationH = ncEducationHeight(ctx, cv);
+  const skillsLangH = ncSkillsLanguagesHeight(ctx, cv);
+  const certsH = ncCertificationsHeight(ctx, cv);
+  ncMoveLowerSectionsIfNeeded(ctx, educationH, skillsLangH, certsH);
+
+  if (educationH > 0) ncDrawEducation(ctx, cv);
+
+  if (skillsLangH > 0) {
+    if (skillsLangH <= ncFreshPageCapacity(ctx)) {
+      ncMoveToFreshPageIfNeeded(ctx, skillsLangH);
+    } else if (cv.skills.length) {
+      const colW = cv.languages.length
+        ? (ctx.contentWidth - NC_LOWER_COL_GAP_MM) / 2
+        : ctx.contentWidth;
+      ncMoveToFreshPageIfNeeded(ctx, ncSectionHeadingHeight() + ncMeasureSkillChipsHeight(
+        ctx,
+        cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale)),
+        colW,
+      ));
+    }
+    ncDrawSkillsLanguagesBlock(ctx, cv);
+  }
+
+  if (certsH > 0) ncDrawCertifications(ctx, cv);
+
+  const output = pdf.output('blob');
+  return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
+}
+
 export async function buildNordicCleanPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Nordic Clean PDF export requires a browser DOM');
-  }
-
   const canonicalPhoto = await prepareNordicCleanPdfPhotoDataUrl(cv);
-  const container = document.createElement('div');
-  container.id = `nordic-clean-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-nordic-clean-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createNordicCleanPdfTemplate(cv, {
-    locale,
+  const blob = await buildNordicCleanPagedPdfBlob(cv, locale, {
     photoDataUrl: canonicalPhoto?.dataUrl ?? null,
-  }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Nordic Clean PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  });
+  if (!blob || blob.size === 0) throw new Error('Nordic Clean PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportNordicCleanPdf(
