@@ -6,10 +6,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { createRirekishoPdfTemplate } from '@/lib/rirekisho-pdf-template';
+import { rkNormalizePdfText } from '@/lib/rirekisho-pdf-renderer';
 import {
   applyRirekishoKeepTogetherPagination,
   applyRirekishoSelfPrPageBalance,
   buildPaddedPdfSlice,
+  buildRirekishoPagedPdfBlob,
   buildRirekishoPdfBlob,
   exportRirekishoToDOCX,
   extractRirekishoInkLineIntervalsFromCanvas,
@@ -18,6 +20,7 @@ import {
   isUnsafeElegantFormalPageBreakCanvasPx,
   planRirekishoPdfSliceSegments,
   rebalanceRirekishoSparseTrailingPdfSliceSegments,
+  resolveCvPdfExportRoute,
   resolveRirekishoSafePageBreakCanvasPx,
   scaleRirekishoContentBoundsToCanvas,
   selectRirekishoPdfLineIntervalsCanvas,
@@ -163,6 +166,129 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   }));
 
   return { html2canvasMock, instances };
+}
+
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+  rect: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      drawnText: string[] = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      rect = vi.fn();
+      line = vi.fn();
+      addFileToVFS = vi.fn();
+      addFont = vi.fn();
+      text = vi.fn((t: string | string[]) => {
+        const parts = Array.isArray(t) ? t : [t];
+        this.drawnText.push(...parts);
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((text: string) => Math.min(text.length * 1.8, 40));
+      output() {
+        return new Blob(['%PDF-1.7\nrirekisho-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
+}
+
+function longStressCv(): CVData {
+  return {
+    ...cv(),
+    summary: [
+      'Software engineer with strong delivery experience across distributed systems and quality-focused product teams.',
+      'Built reliable regression packs and CI gates that reduced release risk.lead.Assisted junior engineers during onboarding.',
+      'Applied automation across staging environments.Software engineer focused on measurable quality outcomes.',
+      ...Array.from({ length: 28 }, (_, i) =>
+        `Sentence ${i + 1}: reliable teaching delivery across classrooms, coaching, and leadership development.`,
+      ),
+    ].join(' ').replace('development. Sentence 2', 'development.Sentence 2'),
+    experience: [
+      {
+        id: 'exp-1',
+        company: 'Zezezeze',
+        position: 'Software engineer',
+        startDate: '2021-01',
+        endDate: '',
+        isPresent: true,
+        description: [
+          '- Owned end-to-end release quality for customer-facing products across mobile and web surfaces.',
+          '- Built reusable automation scaffolds.logic.Built smoke suites covering login, checkout, and account recovery paths.',
+          '- Partnered with developers to triage flaky suites and stabilize nightly pipelines before cutover weekends.',
+          '- Documented defect trends and risk signals for product stakeholders during major migration windows.',
+          '- Mentored QA peers on exploratory strategies while keeping regression coverage complete and measurable.',
+          '- Improved feedback loops between engineering and support so production incidents were resolved faster.',
+          '- Introduced risk-based testing for high-impact flows and reduced escape defects across consecutive releases.',
+          '- Collaborated on observability dashboards that highlighted failing critical journeys before customers noticed.',
+          '- Authored clear reproduction steps so developers could fix regressions without lengthy clarification threads.',
+          '- Maintained shared fixture data and seeded environments.Software platforms stayed consistent across squads.',
+          '- Drove post-release verification checklists used by multiple product teams after weekend deployments.',
+          '- Reduced duplicate defect noise by refining severity criteria and triage rituals across the QA board.',
+        ].join('\n'),
+      },
+      {
+        id: 'exp-2',
+        company: 'Pixel & Co',
+        position: 'QA Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: [
+          '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+          '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+          '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+          '- Managed vendor relationships and production timelines for multiple concurrent projects.',
+          '- Mentored junior designers in brand strategy.applied.Designed workshop kits for onboarding cohorts.',
+          '- Conducted client workshops and strategic presentations while reporting findings to the development team.',
+        ].join('\n'),
+      },
+    ],
+    education: [{
+      id: 'edu-1',
+      school: 'Mathematic school',
+      degree: 'VI',
+      startDate: '2020-01',
+      endDate: '2025-01',
+      description: '',
+    }],
+    skills: ['React', 'TypeScript', 'System Design', 'Leadership', 'Coaching'],
+    languages: [{ name: 'English', level: 'Native' }, { name: 'Serbian', level: 'Fluent' }],
+  };
 }
 
 async function captureDocx(data: CVData): Promise<{ documentXml: string; text: string; files: string[] }> {
@@ -332,37 +458,148 @@ describe('Rirekisho export', () => {
     expect(handler.slice(branch, exportCall)).not.toContain('querySelector');
   });
 
+  test('rirekisho resolves to the dedicated-rirekisho export route', () => {
+    expect(resolveCvPdfExportRoute('rirekisho').kind).toBe('dedicated-rirekisho');
+  });
+
+  test('Rirekisho dedicated PDF uses hybrid content-flow direct jsPDF renderer, not canvas slicing', () => {
+    const exportSource = source('src/lib/export.ts');
+    const rendererSource = source('src/lib/rirekisho-pdf-renderer.ts');
+    expect(exportSource).toContain('buildRirekishoPagedPdfBlob');
+    expect(exportSource).toContain("kind: 'dedicated-rirekisho'");
+    expect(rendererSource).toContain('rkCreateContext');
+    expect(rendererSource).toContain('rkDrawSectionBar');
+    expect(rendererSource).toContain('rkDrawWorkLeadBlock');
+    expect(rendererSource).toContain('rkDrawWorkBulletFlow');
+    expect(rendererSource).toContain('rkDrawAtomicWrappedBullet');
+    expect(rendererSource).toContain('rkNormalizePdfText');
+    expect(rendererSource).toContain('rkRebalanceSparseFinalSelfPrPage');
+    expect(rendererSource).toContain('rkDrawSelfPrSection');
+    expect(rendererSource).toContain('rkDrawSelfPrContinuation');
+    expect(rendererSource).toContain('rkDrawSkillsLanguagesGroup');
+    expect(rendererSource).not.toContain('html2canvas');
+    expect(rendererSource).not.toContain('buildCvPdfBlob');
+    expect(rendererSource).not.toContain('renderPdfSlice');
+    expect(rendererSource).not.toContain('renderPaddedPdfSlice');
+    expect(exportSource).not.toMatch(/buildRirekishoPdfBlob[\s\S]{0,400}buildCvPdfBlob/);
+  });
+
+  test('rkNormalizePdfText fixes glued sentence boundaries for PDF rendering only', () => {
+    expect(rkNormalizePdfText('matter.Software engineer with QA experience.')).toBe(
+      'matter. Software engineer with QA experience.',
+    );
+    expect(rkNormalizePdfText('lead.Assisted students during lessons.')).toBe(
+      'lead. Assisted students during lessons.',
+    );
+    expect(rkNormalizePdfText('logic.Built automated smoke suites.')).toBe(
+      'logic. Built automated smoke suites.',
+    );
+    expect(rkNormalizePdfText('applied.Designed regression packs.')).toBe(
+      'applied. Designed regression packs.',
+    );
+    expect(rkNormalizePdfText('environments.Software engineer with expertise.')).toBe(
+      'environments. Software engineer with expertise.',
+    );
+    expect(rkNormalizePdfText('scaffolds.logic.Built smoke suites.')).toBe(
+      'scaffolds. logic. Built smoke suites.',
+    );
+    expect(rkNormalizePdfText('risk.lead.Assisted junior engineers.')).toBe(
+      'risk. lead. Assisted junior engineers.',
+    );
+    expect(rkNormalizePdfText('Already fine. Next sentence.')).toBe('Already fine. Next sentence.');
+    expect(rkNormalizePdfText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
+      'Used Node.js and REST APIs with CI/CD pipelines.',
+    );
+  });
+
+  test('rkRebalanceSparseFinalSelfPrPage avoids tiny final Self PR tails', async () => {
+    const { rkRebalanceSparseFinalSelfPrPage } = await import('@/lib/rirekisho-pdf-renderer');
+    const rebalanced = rkRebalanceSparseFinalSelfPrPage([
+      Array.from({ length: 20 }, (_, i) => `L${i}`),
+      ['A', 'B'],
+    ]);
+    expect(rebalanced[rebalanced.length - 1]!.length).toBeGreaterThanOrEqual(6);
+  });
+
   test('PDF Blob is non-empty, one page, and originalPhoto is used before selected photo', async () => {
-    const canvas = makeCanvas(800, 1080);
-    const { html2canvasMock, instances } = installPdfMocks(canvas);
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildRirekishoPdfBlob(cv(), 'en');
+    const blob = await mod.buildRirekishoPdfBlob(cv(), 'en');
 
-    expect(html2canvasMock).toHaveBeenCalled();
     expect(blob.size).toBeGreaterThan(0);
+    expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
-    expect(instances[0].pages).toBe(1);
+    expect(instances[0]!.pages).toBe(1);
+    expect(instances[0]!.addPage).not.toHaveBeenCalled();
     expect(loadedImageSources).toContain(originalPhoto);
     expect(loadedImageSources).not.toContain(selectedPhoto);
     const [, dx, dy, scaledWidth, scaledHeight] = drawImageCalls[0] as [unknown, number, number, number, number];
     expect(scaledWidth / scaledHeight).toBeCloseTo(600 / 900, 3);
     expect(dx).toBe(0);
     expect(dy).toBeLessThan(0);
+    const drawn = instances[0]!.drawnText.join(' ');
+    expect(drawn).toContain('Dragan Obradović');
+    expect(drawn).toContain('Metematički fakultet');
+    expect(drawn).toContain('自己PR');
   });
 
-  test('Rirekisho PDF export wires keep-together pagination and padded safe slicing before html2canvas capture', () => {
+  test('Rirekisho long direct PDF export paginates with continuation headers and full content', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+
+    const blob = await mod.buildRirekishoPagedPdfBlob(longStressCv(), 'en', { photoDataUrl: croppedPhoto });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(4);
+
+    const drawn = instances[0]?.drawnText ?? [];
+    const text = drawn.join(' ');
+    const count = (needle: string) => {
+      let total = 0;
+      let pos = 0;
+      while (true) {
+        const idx = text.indexOf(needle, pos);
+        if (idx === -1) break;
+        total += 1;
+        pos = idx + needle.length;
+      }
+      return total;
+    };
+
+    expect(count('Sentence 1:')).toBe(1);
+    expect(text).not.toContain('development.Sentence 2');
+    expect(text).toContain('development. Sentence 2');
+    expect(text).not.toContain('logic.Built');
+    expect(text).toContain('logic. Built');
+    expect(text).not.toContain('applied.Designed');
+    expect(text).toContain('applied. Designed');
+    expect(text).not.toContain('environments.Software');
+    expect(text).toContain('environments. Software');
+    expect(text).not.toContain('risk.lead.Assisted');
+    expect(text).toContain('Designed visual identities for 50+ brands');
+    expect(text).toContain('reporting findings to the development team.');
+    expect(text).toContain('Mathematic school');
+    expect(text).toContain('React');
+    expect(text).toContain('English');
+    expect(text).toContain('職　歴');
+    expect(text).toContain('自己PR');
+    if (text.includes('自己PR 続き') || text.includes('(continued)') || text.includes('職歴 続き')) {
+      expect(instances[0]?.pages ?? 0).toBeGreaterThanOrEqual(2);
+    }
+    expect(instances[0]?.pages ?? 0).toBeLessThan(5);
+    expect(instances[0]?.rect).toHaveBeenCalled();
+  });
+
+  test('legacy Rirekisho padded slice helpers remain available for generic preview path', () => {
     const exportSource = source('src/lib/export.ts');
     expect(exportSource).toContain('applyRirekishoKeepTogetherPagination');
-    expect(exportSource).toContain("captureTemplateId === 'rirekisho' && sourceRootForTag");
     expect(exportSource).toContain('RIREKISHO_PDF_PAGE_TOP_INSET_CSS_PX');
-    expect(exportSource).toContain('RIREKISHO_PDF_PAGE_BOTTOM_INSET_CSS_PX = 0');
     expect(exportSource).toContain('rebalanceRirekishoSparseTrailingPdfSliceSegments');
     expect(exportSource).toContain('applyRirekishoSelfPrPageBalance');
-    expect(exportSource).toContain('RIREKISHO_SELF_PR_MAX_KEEP_LINES');
     expect(exportSource).toContain('planRirekishoPdfSliceSegments');
-    expect(exportSource).toContain("} else if (captureTemplateId === 'rirekisho')");
     expect(exportSource).toContain('renderPaddedPdfSlice');
-    expect(exportSource).not.toMatch(/captureTemplateId === 'rirekisho'[\s\S]{0,120}renderPdfSlice\(/);
+    expect(exportSource).toContain("captureTemplateId === 'rirekisho'");
   });
 
   test('Rirekisho keep-together shifts 職歴 heading with first table row when heading would orphan', () => {
