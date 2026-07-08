@@ -10,8 +10,11 @@ import { createNordicCleanPdfTemplate } from '@/lib/nordic-clean-pdf-template';
 import {
   buildNordicCleanPdfBlob,
   exportNordicCleanPdf,
+  exportToDOCX,
+  ncNormalizeDocxText,
   resolveCvPdfExportRoute,
 } from '@/lib/export';
+import JSZip from 'jszip';
 import type { CVData } from '@/lib/types';
 
 const originalPhoto = `data:image/jpeg;base64,${Buffer.from('nordic-original-photo').toString('base64')}`;
@@ -548,14 +551,85 @@ describe('Nordic Clean PDF export', () => {
     expect(root.textContent).toContain('Dragan');
   });
 
-  test('Nordic Clean DOCX branch remains dedicated and unchanged', () => {
+  test('Nordic Clean DOCX includes Professional Summary heading with keepNext and normalizes glued text', async () => {
     const exportSource = source('src/lib/export.ts');
     const branchStart = exportSource.indexOf("cfg.customLayout === 'nordic-clean'");
     const branchEnd = exportSource.indexOf("else if (cfg.customLayout === 'executive-premium')", branchStart);
     const branch = exportSource.slice(branchStart, branchEnd);
 
-    expect(branchStart).toBeGreaterThan(-1);
-    expect(branch).toContain('nordic-clean');
-    expect(branch).toContain('BorderStyle.SINGLE, size: 4, color:');
+    expect(branch).toContain('ncHeading(t.cv.summary, { keepNext: true })');
+    expect(branch).toContain('ncNormalizeDocxText(cvData.summary)');
+    expect(branch).toContain('keepNext: options.keepNext ?? false');
+
+    expect(ncNormalizeDocxText('leads.Software engineer focused on quality.')).toBe(
+      'leads. Software engineer focused on quality.',
+    );
+    expect(ncNormalizeDocxText('assertions.Built reusable test scaffolds.')).toBe(
+      'assertions. Built reusable test scaffolds.',
+    );
+    expect(ncNormalizeDocxText('scaffolds.logic.Built smoke suites.')).toBe(
+      'scaffolds. logic. Built smoke suites.',
+    );
+    expect(ncNormalizeDocxText('strategy.applied.Designed workshop kits.')).toBe(
+      'strategy. applied. Designed workshop kits.',
+    );
+    expect(ncNormalizeDocxText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
+      'Used Node.js and REST APIs with CI/CD pipelines.',
+    );
+
+    let savedBlob: Blob | undefined;
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      savedBlob = blob as Blob;
+      return 'blob:http://test/nordic-clean-docx';
+    });
+    const clickSpy = vi.fn();
+    const realCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => {
+      const el = realCreateElement(tagName);
+      if (tagName.toLowerCase() === 'a') el.click = clickSpy;
+      return el;
+    });
+
+    const gluedCv = cv({
+      personal: { photoEnabled: false, photo: undefined },
+      summary: 'QA lead focused on release quality.leads.Software validation across teams.',
+      experience: [{
+        id: 'exp-glued-docx',
+        company: 'Pixel & Co',
+        position: 'Software Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: 'QA lead.Assisted senior QA engineers.assertions.Built reusable automation scaffolds.logic.Built smoke suites.strategy.applied.Designed workshop kits.',
+      }],
+      languages: [{ name: 'English', level: 'Native' }, { name: 'Serbian', level: 'Fluent' }],
+    });
+
+    await exportToDOCX(gluedCv, 'nordic-clean-docx-test', 'en', 'nordic-clean');
+
+    expect(clickSpy).toHaveBeenCalled();
+    expect(savedBlob).toBeDefined();
+    expect(savedBlob!.size).toBeGreaterThan(5000);
+
+    const zip = await JSZip.loadAsync(await savedBlob!.arrayBuffer());
+    const documentXml = await zip.file('word/document.xml')!.async('text');
+    const plain = documentXml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+    expect(plain.toUpperCase()).toContain('PROFESSIONAL SUMMARY');
+    expect(plain).toContain('QA lead focused on release quality. leads. Software validation across teams.');
+    expect(plain).toContain('QA lead. Assisted senior QA engineers.');
+    expect(plain).toContain('assertions. Built reusable automation scaffolds.');
+    expect(plain).toContain('logic. Built smoke suites.');
+    expect(plain).toContain('applied. Designed workshop kits.');
+    expect(plain).not.toContain('leads.Software');
+    expect(plain).not.toContain('assertions.Built');
+    expect(plain).not.toContain('logic.Built');
+    expect(plain).not.toContain('applied.Designed');
+    expect(plain.toUpperCase()).toContain('WORK EXPERIENCE');
+    expect(plain.toUpperCase()).toContain('EDUCATION');
+    expect(plain.toUpperCase()).toContain('SKILLS');
+    expect(plain.toUpperCase()).toContain('LANGUAGES');
+    expect(plain).toContain('Teamwork');
+    expect(plain).toContain('English');
   });
 });

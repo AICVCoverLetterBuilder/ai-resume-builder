@@ -5681,6 +5681,28 @@ export function createCorporateNavyCircularDocxPhotoDataUrl(dataUrl: string, out
   });
 }
 
+/** DOCX-only normalization for Nordic Clean — never mutates saved CV data. */
+export function ncNormalizeDocxText(text: string): string {
+  if (!text) return '';
+  let out = text.replace(/\r\n/g, '\n');
+  const protect: Array<{ token: string; stub: string }> = [
+    { token: 'Node.js', stub: '\u0001NODEJS\u0001' },
+    { token: 'node.js', stub: '\u0001nodejs\u0001' },
+    { token: 'Express.js', stub: '\u0001EXPRESSJS\u0001' },
+    { token: 'Next.js', stub: '\u0001NEXTJS\u0001' },
+    { token: 'Vue.js', stub: '\u0001VUEJS\u0001' },
+    { token: 'CI/CD', stub: '\u0001CICD\u0001' },
+    { token: 'REST APIs', stub: '\u0001RESTAPIS\u0001' },
+    { token: 'REST API', stub: '\u0001RESTAPI\u0001' },
+  ];
+  for (const p of protect) out = out.split(p.token).join(p.stub);
+  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
+  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
+  out = out.replace(/\.([a-z]{3,})\.(\s*)([A-Z])/g, '. $1. $3');
+  for (const p of protect) out = out.split(p.stub).join(p.token);
+  return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+}
+
 export async function exportToDOCX(
   cvData: CVData,
   fileName: string,
@@ -6638,17 +6660,20 @@ export async function exportToDOCX(
     }));
 
     // ── Section heading helper: tiny teal UPPERCASE, subtle bottom border ─
-    function ncHeading(text: string) {
+    function ncHeading(text: string, options: { keepNext?: boolean } = {}) {
       return new Paragraph({
         children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 14, color: '0D9488' })],
         spacing: { before: 200, after: 100 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'CCFBF1' } },
+        keepNext: options.keepNext ?? false,
       });
     }
 
-    // ── Summary: no heading, plain paragraph ─────────────────────────────
+    // ── Summary: teal heading + body (keepNext prevents orphaned heading) ─
     if (cvData.summary) {
-      children.push(new Paragraph({ children: [new TextRun({ text: cvData.summary, size: 20, color: '4B5563' })], spacing: { after: 160 } }));
+      const summaryText = ncNormalizeDocxText(cvData.summary);
+      children.push(ncHeading(t.cv.summary, { keepNext: true }));
+      children.push(new Paragraph({ children: [new TextRun({ text: summaryText, size: 20, color: '4B5563' })], spacing: { after: 160 } }));
     }
 
     // ── Experience: position/date row + company below ─────────────────────
@@ -6668,7 +6693,7 @@ export async function exportToDOCX(
         // Company in gray below
         children.push(new Paragraph({ children: [new TextRun({ text: exp.company, size: 16, color: '6B7280' })], spacing: { after: 50 } }));
         if (exp.description) {
-          for (const line of exp.description.split('\n')) {
+          for (const line of ncNormalizeDocxText(exp.description).split('\n')) {
             if (line.trim()) children.push(new Paragraph({ children: [new TextRun({ text: line, size: 20, color: '4B5563' })], spacing: { after: 40 } }));
           }
         }
@@ -6693,7 +6718,7 @@ export async function exportToDOCX(
           children.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' })], spacing: { after: 0 } }));
         }
         children.push(new Paragraph({ children: [new TextRun({ text: edu.school, size: 16, color: '6B7280' })], spacing: { after: edu.description ? 40 : 100 } }));
-        if (edu.description) children.push(new Paragraph({ children: [new TextRun({ text: edu.description, size: 20, color: '4B5563' })], spacing: { after: 100 } }));
+        if (edu.description) children.push(new Paragraph({ children: [new TextRun({ text: ncNormalizeDocxText(edu.description), size: 20, color: '4B5563' })], spacing: { after: 100 } }));
       }
     }
 
