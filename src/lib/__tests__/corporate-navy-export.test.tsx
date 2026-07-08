@@ -11,10 +11,13 @@ import { createCorporateNavyPdfTemplate } from '@/lib/corporate-navy-pdf-templat
 import {
   applyCorporateNavyKeepTogetherPagination,
   buildCorporateNavyPdfBlob,
+  buildCorporateNavyPagedPdfBlob,
   createCorporateNavyCircularDocxPhotoDataUrl,
   exportCorporateNavyPdf,
   exportToDOCX,
+  resolveCvPdfExportRoute,
 } from '@/lib/export';
+import { cnNormalizePdfText } from '@/lib/corporate-navy-pdf-renderer';
 import type { CVData } from '@/lib/types';
 
 const originalPhoto = `data:image/jpeg;base64,${Buffer.from('corporate-navy-original-photo').toString('base64')}`;
@@ -158,6 +161,139 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   }));
 
   return { html2canvasMock, instances, capturedPhotoSrcs };
+}
+
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  textCalls: Array<{ text: string; x: number }>;
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+  rect: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      drawnText: string[] = [];
+      textCalls: Array<{ text: string; x: number }> = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      rect = vi.fn();
+      line = vi.fn();
+      circle = vi.fn();
+      text = vi.fn((t: string | string[], x?: number) => {
+        const parts = Array.isArray(t) ? t : [t];
+        for (const part of parts) {
+          this.drawnText.push(part);
+          this.textCalls.push({ text: part, x: x ?? 0 });
+        }
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((text: string) => Math.min(text.length * 1.8, 40));
+      output() {
+        return new Blob(['%PDF-1.7\ncorporate-navy-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
+}
+
+function androidStressCv(): CVData {
+  return {
+    ...cv(),
+    personal: {
+      ...cv().personal,
+      fullName: 'Dragan Obradović',
+      jobTitle: 'Software engineer',
+      email: 'diodala12@gmail.com',
+      phone: '865333680065',
+      address: 'Braće Abafi 4',
+      photoEnabled: true,
+    },
+    summary: [
+      'Software engineer with strong delivery experience across distributed systems and quality-focused product teams.',
+      'Built reliable regression packs and CI gates that reduced release risk.lead.Assisted junior engineers during onboarding.',
+      'Applied automation across staging environments.Software engineer focused on measurable quality outcomes.',
+      ...Array.from({ length: 18 }, (_, i) =>
+        `Sentence ${i + 1}: reliable engineering delivery across classrooms, coaching, and leadership development.`,
+      ),
+    ].join(' '),
+    experience: [
+      {
+        id: 'exp-1',
+        company: 'Zezezeze',
+        position: 'Software engineer',
+        startDate: '2021-01',
+        endDate: '',
+        isPresent: true,
+        description: [
+          '- Owned end-to-end release quality for customer-facing products across mobile and web surfaces.',
+          '- Built reusable automation scaffolds.logic.Built smoke suites covering login, checkout, and account recovery paths.',
+          '- Partnered with developers to triage flaky suites and stabilize nightly pipelines before cutover weekends.',
+          '- Documented defect trends and risk signals for product stakeholders during major migration windows.',
+          '- Mentored QA peers on exploratory strategies while keeping regression coverage complete and measurable.',
+          '- Improved feedback loops between engineering and support so production incidents were resolved faster.',
+          '- Introduced risk-based testing for high-impact flows and reduced escape defects across consecutive releases.',
+          '- Collaborated on observability dashboards that highlighted failing critical journeys before customers noticed.',
+          '- Authored clear reproduction steps so developers could fix regressions without lengthy clarification threads.',
+          '- Maintained shared fixture data and seeded environments.Software platforms stayed consistent across squads.',
+        ].join('\n'),
+      },
+      {
+        id: 'exp-2',
+        company: 'Pixel & Co',
+        position: 'QA Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: [
+          '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+          '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+          '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+          '- Mentored junior designers in brand strategy.applied.Designed workshop kits for onboarding cohorts.',
+          '- Conducted client workshops and strategic presentations while reporting findings to the development team.',
+        ].join('\n'),
+      },
+    ],
+    education: [{
+      id: 'edu-1',
+      school: 'Mathematic school',
+      degree: 'VI',
+      startDate: '2020-01',
+      endDate: '2025-01',
+      description: '',
+    }],
+    skills: ['React', 'TypeScript', 'System Design', 'Leadership', 'Coaching'],
+    languages: [{ name: 'English', level: 'Native' }, { name: 'Serbian', level: 'Fluent' }],
+  };
 }
 
 async function captureDocx(data: CVData): Promise<{ documentXml: string; text: string }> {
@@ -305,10 +441,143 @@ describe('Corporate Navy export', () => {
     expect(handler.slice(guard, fallback)).toContain("cv.templateId === 'corporate-navy'");
   });
 
-  test('Corporate Navy PDF export wires keep-together pagination before html2canvas capture', () => {
+  test('corporate-navy resolves to the dedicated-corporate-navy export route', () => {
+    expect(resolveCvPdfExportRoute('corporate-navy').kind).toBe('dedicated-corporate-navy');
+    expect(resolveCvPdfExportRoute('contemporary-bold').kind).toBe('generic-preview');
+  });
+
+  test('Corporate Navy dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {
+    const exportSource = source('src/lib/export.ts');
+    const rendererSource = source('src/lib/corporate-navy-pdf-renderer.ts');
+    expect(exportSource).toContain('buildCorporateNavyPagedPdfBlob');
+    expect(exportSource).toContain("kind: 'dedicated-corporate-navy'");
+    expect(rendererSource).toContain('cnCreateContext');
+    expect(rendererSource).toContain('cnDrawHeader');
+    expect(rendererSource).toContain('cnDrawSummary');
+    expect(rendererSource).toContain('cnDrawWrappedBullet');
+    expect(rendererSource).toContain('cnMeasureBulletHeight');
+    expect(rendererSource).toContain('cnNormalizePdfText');
+    expect(rendererSource).not.toContain('html2canvas');
+    expect(rendererSource).not.toContain('buildCvPdfBlob');
+    expect(rendererSource).not.toContain('renderPdfSlice');
+    expect(rendererSource).not.toContain('renderPaddedPdfSlice');
+    expect(exportSource).not.toMatch(/buildCorporateNavyPdfBlob[\s\S]{0,400}buildCvPdfBlob/);
+  });
+
+  test('cnNormalizePdfText fixes glued sentence boundaries for PDF rendering only', () => {
+    expect(cnNormalizePdfText('scaffolds.logic.Built smoke suites.')).toBe(
+      'scaffolds. logic. Built smoke suites.',
+    );
+    expect(cnNormalizePdfText('strategy.applied.Designed workshop kits.')).toBe(
+      'strategy. applied. Designed workshop kits.',
+    );
+    expect(cnNormalizePdfText('environments.Software platforms stayed consistent.')).toBe(
+      'environments. Software platforms stayed consistent.',
+    );
+    expect(cnNormalizePdfText('risk.lead.Assisted junior engineers.')).toBe(
+      'risk. lead. Assisted junior engineers.',
+    );
+    expect(cnNormalizePdfText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
+      'Used Node.js and REST APIs with CI/CD pipelines.',
+    );
+  });
+
+  test('cnDrawWrappedBullet draws only one dash marker for wrapped bullet lines', async () => {
+    vi.doUnmock('jspdf');
+    const textCalls: Array<{ text: string; x: number }> = [];
+    vi.doMock('jspdf', () => ({
+      jsPDF: class MockPdf {
+        text = vi.fn((t: string, x?: number) => {
+          textCalls.push({ text: t, x: x ?? 0 });
+        });
+        setFont = vi.fn();
+        setFontSize = vi.fn();
+        setTextColor = vi.fn();
+        getTextWidth = vi.fn(() => 2);
+        addPage = vi.fn();
+        output() { return new Blob(['%PDF'], { type: 'application/pdf' }); }
+      },
+    }));
+
+    const { cnCreateContext, cnDrawWrappedBullet, cnBulletTextLayout } = await import('@/lib/corporate-navy-pdf-renderer');
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const ctx = cnCreateContext(pdf, cv({ personal: { photoEnabled: false } }), 'en');
+    const layout = cnBulletTextLayout(ctx, ctx.contentW);
+    const lines = [
+      'Built and maintained RESTful APIs using Node.js and Express, supporting core product features used across the',
+      'platform.',
+    ];
+
+    cnDrawWrappedBullet(ctx, lines, layout);
+
+    expect(textCalls.filter((c) => c.text === '-')).toHaveLength(1);
+    const continuation = textCalls.find((c) => c.text.includes('platform.'));
+    expect(continuation).toBeDefined();
+    expect(continuation!.x).toBe(layout.textX);
+    expect(continuation!.text).not.toMatch(/^-/);
+  });
+
+  test('wrapped experience bullets do not prefix continuation lines with a dash', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildCorporateNavyPagedPdfBlob(cv({
+      personal: { photoEnabled: false, fullName: 'Test User' },
+      summary: '',
+      education: [],
+      skills: [],
+      languages: [],
+      experience: [{
+        id: 'exp-wrap',
+        company: 'Acme',
+        position: 'Software engineer',
+        startDate: '2020-01',
+        endDate: '',
+        isPresent: true,
+        description: '- Built and maintained RESTful APIs using Node.js and Express, supporting core product features used across the platform.',
+      }],
+    }), 'en');
+
+    const calls = instances[0]?.textCalls ?? [];
+    const dashes = calls.filter((c) => c.text === '-');
+    const bodyLines = calls.filter((c) => c.text !== '-' && !/^(WORK EXPERIENCE|PROFESSIONAL SUMMARY)$/i.test(c.text));
+    const continuation = bodyLines.find((c) => /platform\./i.test(c.text));
+
+    expect(dashes.length).toBeGreaterThanOrEqual(1);
+    expect(continuation).toBeDefined();
+    expect(continuation!.text).not.toMatch(/^-/);
+    expect(calls.filter((c) => c.text === '-').length).toBe(1);
+  });
+
+  test('long QA Tester bullet does not render "- and API layers" on continuation line', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildCorporateNavyPagedPdfBlob(cv({
+      personal: { photoEnabled: false, fullName: 'Test User' },
+      summary: '',
+      education: [],
+      skills: [],
+      languages: [],
+      experience: [{
+        id: 'exp-qa',
+        company: 'Pixel & Co',
+        position: 'QA Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: '- Designed and maintained end-to-end test suites using Selenium and TestNG, covering critical user journeys across web and API layers.',
+      }],
+    }), 'en');
+
+    const drawn = instances[0]?.drawnText ?? [];
+    expect(drawn.some((t) => /and API layers/i.test(t))).toBe(true);
+    expect(drawn.some((t) => /^-\s*and API layers/i.test(t))).toBe(false);
+    expect(instances[0]?.textCalls.filter((c) => c.text === '-').length).toBe(1);
+  });
+
+  test('legacy Corporate Navy keep-together pagination helper remains for generic preview path', () => {
     const exportSource = source('src/lib/export.ts');
     expect(exportSource).toContain('applyCorporateNavyKeepTogetherPagination');
-    expect(exportSource).toContain("captureTemplateId === 'corporate-navy' && sourceRootForTag");
     expect(exportSource).toContain("applyCorporateFamilyKeepTogetherPagination(root, 'corporate-navy')");
   });
 
@@ -412,21 +681,67 @@ describe('Corporate Navy export', () => {
   });
 
   test('Corporate Navy PDF Blob is non-empty and short fixture remains one page', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { html2canvasMock, instances } = installPdfMocks(canvas);
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildCorporateNavyPdfBlob(cv(), 'en');
+    const blob = await mod.buildCorporateNavyPdfBlob(
+      cv({ personal: { photoEnabled: false, originalPhoto: undefined } }),
+      'en',
+    );
 
-    expect(html2canvasMock).toHaveBeenCalled();
     expect(blob.size).toBeGreaterThan(0);
     expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
-    expect(instances[0].pages).toBe(1);
+    expect(instances[0]!.pages).toBe(1);
+    expect(instances[0]!.addPage).not.toHaveBeenCalled();
+    const drawn = instances[0]!.drawnText.join(' ');
+    expect(drawn).toContain('Dragan Obradovic');
+    expect(drawn.toUpperCase()).toContain('PROFESSIONAL SUMMARY');
+    expect(drawn.toUpperCase()).toContain('WORK EXPERIENCE');
+  });
+
+  test('Page 1 draws Professional Summary after header (body is not blank)', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildCorporateNavyPdfBlob(cv({ personal: { photoEnabled: false } }), 'en');
+    const drawn = instances[0]?.drawnText ?? [];
+    const summaryIdx = drawn.findIndex((t) => /professional summary/i.test(t));
+    const nameIdx = drawn.findIndex((t) => /Dragan Obradovic/i.test(t));
+    expect(nameIdx).toBeGreaterThanOrEqual(0);
+    expect(summaryIdx).toBeGreaterThan(nameIdx);
+    expect(instances[0]?.pages).toBe(1);
+  });
+
+  test('Android stress fixture paginates with summary on page 1 and no glued text', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const blob = await mod.buildCorporateNavyPagedPdfBlob(androidStressCv(), 'en', { photoDataUrl: originalPhoto });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(3);
+
+    const text = (instances[0]?.drawnText ?? []).join(' ');
+    expect(text.toUpperCase()).toContain('PROFESSIONAL SUMMARY');
+    expect(text.toUpperCase()).toContain('WORK EXPERIENCE');
+    expect(text.toUpperCase()).toContain('EDUCATION');
+    expect(text.toUpperCase()).toContain('SKILLS');
+    expect(text.toUpperCase()).toContain('LANGUAGES');
+    expect(text).toContain('React');
+    expect(text).toContain('English');
+    expect(text).not.toContain('logic.Built');
+    expect(text).toContain('logic. Built');
+    expect(text).not.toContain('applied.Designed');
+    expect(text).toContain('applied. Designed');
+    expect(text).not.toContain('environments.Software');
+    expect(text).toContain('environments. Software');
+    expect(text).toContain('reporting findings to the development team.');
+    if ((instances[0]?.pages ?? 0) >= 2) {
+      expect(text).toMatch(/\(continued\)|Sentence 1:/);
+    }
   });
 
   test('Corporate Navy direct export uses shared native/platform save result', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
     let clickedDownload = '';
     const blobByUrl = new Map<string, Blob>();
     Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true, writable: true });
@@ -448,9 +763,8 @@ describe('Corporate Navy export', () => {
     expect(result.fileName).toBe('Dragan - CV.pdf');
   });
 
-  test('selected originalPhoto is used and square cover crop is proportional', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { capturedPhotoSrcs } = installPdfMocks(canvas);
+  test('selected originalPhoto is used for direct PDF photo embedding', async () => {
+    const { instances } = installDirectPdfMocks();
 
     await buildCorporateNavyPdfBlob(cv({
       personal: {
@@ -461,14 +775,7 @@ describe('Corporate Navy export', () => {
     }), 'en');
 
     expect(loadedImageSources).toContain(originalPhoto);
-    expect(capturedPhotoSrcs).toContain(squarePhoto);
-    expect(capturedPhotoSrcs[0]).not.toContain('circular-field');
-    expect(capturedPhotoSrcs[0]).not.toContain('photo-field');
-    const [, dx, dy, scaledWidth, scaledHeight] = drawImageCalls[0] as [unknown, number, number, number, number];
-    expect(dx).toBe(0);
-    expect(dy).toBe(-82);
-    expect(scaledWidth).toBe(164);
-    expect(scaledHeight).toBe(328);
+    expect(instances[0]?.addImage).toHaveBeenCalled();
   });
 
   test('Corporate Navy no-photo PDF renders without placeholder', () => {
