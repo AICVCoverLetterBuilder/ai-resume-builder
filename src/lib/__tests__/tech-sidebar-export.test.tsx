@@ -376,7 +376,7 @@ describe('Tech Sidebar export', () => {
 
     expect(branch).toBeGreaterThan(-1);
     expect(pageSource.slice(branch, branch + 500)).toContain('exportTechSidebarPdf');
-    expect(pageSource.slice(branch, branch + 500)).toContain('cvRef.current');
+    expect(pageSource.slice(branch, branch + 500)).toContain('liveCv');
     expect(guard).toBeGreaterThan(branch);
     expect(fallback).toBeGreaterThan(guard);
     expect(pageSource.slice(guard, fallback)).toContain("cv.templateId === 'tech-sidebar'");

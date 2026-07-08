@@ -468,8 +468,8 @@ describe('Clean Simple preview/export parity', () => {
 
   test('Clean Simple PDF uses the dedicated direct renderer route, not generic exportToPDF/print fallback', () => {
     const page = pageSource();
-    const branch = page.indexOf("resolveCvPdfExportRoute(liveCv.templateId).kind === 'dedicated-clean-simple'");
-    const exportCall = page.indexOf('exportCleanSimplePdf', branch);
+    const branch = page.indexOf("pdfResolution.route.kind === 'dedicated-clean-simple'");
+    const exportCall = page.indexOf('exportCleanSimplePdf(liveCv', branch);
     const genericExport = page.indexOf('exportToPDF(previewId', branch);
     const fallbackGuard = page.indexOf("cv.templateId === 'clean-simple'", branch);
     const fallback = page.indexOf('await openPrintFallback', fallbackGuard);
@@ -477,7 +477,6 @@ describe('Clean Simple preview/export parity', () => {
     expect(branch).toBeGreaterThan(-1);
     expect(exportCall).toBeGreaterThan(branch);
     expect(exportCall).toBeLessThan(genericExport);
-    expect(page.slice(branch, exportCall)).toContain('cvRef.current');
     expect(page.slice(branch, branch + 300)).toContain('showCvExportSuccessToast');
     expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');
@@ -737,8 +736,8 @@ describe('Clean Simple preview/export parity', () => {
     expect(resolveCvPdfExportRoute('clean-simple')).toEqual({ kind: 'dedicated-clean-simple' });
 
     const page = pageSource();
-    const branch = page.indexOf("resolveCvPdfExportRoute(liveCv.templateId).kind === 'dedicated-clean-simple'");
-    const exportCall = page.indexOf('exportCleanSimplePdf', branch);
+    const branch = page.indexOf("pdfResolution.route.kind === 'dedicated-clean-simple'");
+    const exportCall = page.indexOf('exportCleanSimplePdf(liveCv', branch);
     const genericExport = page.indexOf('exportToPDF(previewId', branch);
 
     expect(branch).toBeGreaterThan(-1);

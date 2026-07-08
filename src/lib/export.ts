@@ -1,12 +1,11 @@
 import type { CVData } from './types';
-import { regionSettings } from './types';
+import { regionSettings, templateInfo } from './types';
 import { translations, type Locale } from './i18n/translations';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { createAtsStandardPdfTemplate } from './ats-standard-pdf-template';
 import { createContemporaryBoldPdfTemplate } from './contemporary-bold-pdf-template';
 import { createElegantFormalPdfTemplate } from './elegant-formal-pdf-template';
-import { createModernMinimalPdfTemplate } from './modern-minimal-pdf-template';
 import { createCleanSimplePdfTemplate, splitCleanSimpleSummaryParagraphBlocks, splitCleanSimpleSummarySentenceRuns } from './clean-simple-pdf-template';
 import { createProfessionalClassicPdfTemplate } from './professional-classic-pdf-template';
 import { createCreativeArtisticPdfTemplate } from './creative-artistic-pdf-template';
@@ -21,6 +20,8 @@ import { buildExecutivePremiumPagedPdfBlob } from './executive-premium-pdf-rende
 export { buildExecutivePremiumPagedPdfBlob } from './executive-premium-pdf-renderer';
 import { buildCorporateNavyPagedPdfBlob } from './corporate-navy-pdf-renderer';
 export { buildCorporateNavyPagedPdfBlob } from './corporate-navy-pdf-renderer';
+import { buildModernMinimalPagedPdfBlob } from './modern-minimal-pdf-renderer';
+export { buildModernMinimalPagedPdfBlob } from './modern-minimal-pdf-renderer';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -6590,11 +6591,11 @@ export async function exportToDOCX(
   }
 
   // ════ LAYOUT: nordic-clean (dedicated) ══════════════════════════════════════════════════════
-  // Matches the HTML template exactly:
+  // Matches the Nordic Clean preview structure:
   //   • White background, Calibri, name left (font-light text-3xl), teal job title, gray contacts
   //   • Circular photo 72×72 right-aligned, vertically aligned to TOP of header
   //   • Thin teal divider line below header (CCFBF1 color)
-  //   • No summary heading — just the paragraph
+  //   • Summary: teal UPPERCASE heading + body paragraph (keepNext keeps heading with first paragraph)
   //   • Section headings: tiny teal (0D9488) UPPERCASE tracked, with subtle teal bottom border
   //   • Experience: position bold left / date right, company gray below, description
   //   • Education: degree bold left / date right, school gray below
@@ -9960,6 +9961,94 @@ export type CvPdfExportRoute =
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
+export type CvPdfExportResolution = {
+  exportCv: CVData;
+  templateId: CVData['templateId'];
+  route: CvPdfExportRoute;
+  sources: {
+    cvRefTemplateId: CVData['templateId'];
+    uiTemplateId?: CVData['templateId'];
+    previewTemplateId: CVData['templateId'] | null;
+  };
+};
+
+function isCvTemplateId(value: string): value is CVData['templateId'] {
+  return Object.prototype.hasOwnProperty.call(templateInfo, value);
+}
+
+/** Read the template actually rendered inside a CV preview mount (authoritative for export). */
+export function readPdfExportTemplateIdFromPreview(previewElementId: string): CVData['templateId'] | null {
+  const mount = document.getElementById(previewElementId);
+  if (!mount) return null;
+  const styled =
+    mount.querySelector<HTMLElement>('[data-template-id]')
+    ?? (mount.firstElementChild as HTMLElement | null);
+  const raw = styled?.getAttribute('data-template-id') ?? styled?.dataset.templateId ?? null;
+  if (!raw || !isCvTemplateId(raw)) return null;
+  return raw;
+}
+
+/**
+ * Resolve the CV snapshot used for PDF export.
+ * React UI selection + preview DOM beat a stale cvRef/localStorage templateId.
+ */
+export function resolveCvForPdfExport(
+  cv: CVData,
+  options: { previewElementId?: string; uiTemplateId?: CVData['templateId'] } = {},
+): CvPdfExportResolution {
+  const previewTemplateId = options.previewElementId
+    ? readPdfExportTemplateIdFromPreview(options.previewElementId)
+    : null;
+  const uiTemplateId = options.uiTemplateId ?? null;
+
+  // UI selection at export time is authoritative — never let stale cvRef override it.
+  const templateId = uiTemplateId ?? previewTemplateId ?? cv.templateId;
+
+  const exportCv: CVData = { ...cv, templateId };
+  return {
+    exportCv,
+    templateId,
+    route: resolveCvPdfExportRoute(templateId),
+    sources: {
+      cvRefTemplateId: cv.templateId,
+      uiTemplateId: uiTemplateId ?? undefined,
+      previewTemplateId,
+    },
+  };
+}
+
+export type CvPdfExportRuntimeTrace = {
+  selectedTemplateId: CVData['templateId'];
+  cvRefTemplateId: CVData['templateId'];
+  exportTemplateId: CVData['templateId'];
+  previewTemplateId: CVData['templateId'] | null;
+  routeKind: CvPdfExportRoute['kind'];
+  exportFunction: string;
+  at: string;
+};
+
+let lastCvPdfExportRuntimeTrace: CvPdfExportRuntimeTrace | null = null;
+
+export function peekCvPdfExportRuntimeTrace(): CvPdfExportRuntimeTrace | null {
+  return lastCvPdfExportRuntimeTrace;
+}
+
+export function resetCvPdfExportRuntimeTraceForTests(): void {
+  lastCvPdfExportRuntimeTrace = null;
+}
+
+export function recordCvPdfExportRuntimeTrace(trace: CvPdfExportRuntimeTrace): void {
+  lastCvPdfExportRuntimeTrace = trace;
+}
+
+/** Prevent silent generic-preview export when a dedicated route template is visible. */
+export function assertDedicatedPdfRouteWasHandled(resolution: CvPdfExportResolution): void {
+  if (resolution.route.kind === 'generic-preview') return;
+  throw new Error(
+    `Dedicated PDF route "${resolution.route.kind}" was bypassed (templateId=${resolution.templateId}, cvRef=${resolution.sources.cvRefTemplateId}, preview=${resolution.sources.previewTemplateId ?? 'null'})`,
+  );
+}
+
 export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdfExportRoute {
   if (templateId === 'clean-simple') return { kind: 'dedicated-clean-simple' };
   if (templateId === 'professional-classic') return { kind: 'dedicated-professional-classic' };
@@ -10038,6 +10127,11 @@ export async function buildCvPdfBlob(
   const initialCaptureTemplateId = forcedCaptureTemplateId
     ?? getExportStyleTemplateId(initialCaptureTarget)
     ?? getExportStyleTemplateId(element);
+  if (initialCaptureTemplateId === 'modern-minimal') {
+    throw new Error(
+      'Modern Minimal PDF must use exportModernMinimalPdf (dedicated-modern-minimal), not buildCvPdfBlob/html2canvas',
+    );
+  }
   const captureFontFamily = initialCaptureTemplateId === 'ats-standard'
     ? 'Arial, Helvetica, sans-serif'
     : initialCaptureTemplateId === 'executive-premium'
@@ -11238,37 +11332,16 @@ export async function buildModernMinimalPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Modern Minimal PDF export requires a browser DOM');
+  const route = resolveCvPdfExportRoute(cv.templateId);
+  if (route.kind !== 'dedicated-modern-minimal') {
+    throw new Error(
+      `Modern Minimal PDF export requires dedicated-modern-minimal route, got ${route.kind} for templateId=${cv.templateId}`,
+    );
   }
-
   const photoDataUrl = await prepareModernMinimalPdfPhotoDataUrl(cv);
-  const container = document.createElement('div');
-  container.id = `modern-minimal-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-modern-minimal-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createModernMinimalPdfTemplate(cv, {
-    locale,
-    photoDataUrl,
-  }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Modern Minimal PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  const blob = await buildModernMinimalPagedPdfBlob(cv, locale, { photoDataUrl });
+  if (!blob || blob.size === 0) throw new Error('Modern Minimal PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportModernMinimalPdf(
@@ -11276,6 +11349,22 @@ export async function exportModernMinimalPdf(
   fileName: string,
   locale: Locale,
 ): Promise<SaveFileResult> {
+  if (cv.templateId !== 'modern-minimal') {
+    throw new Error(`exportModernMinimalPdf requires templateId modern-minimal, got ${cv.templateId}`);
+  }
+  const route = resolveCvPdfExportRoute(cv.templateId);
+  if (route.kind !== 'dedicated-modern-minimal') {
+    throw new Error(`exportModernMinimalPdf route mismatch: ${route.kind}`);
+  }
+  recordCvPdfExportRuntimeTrace({
+    selectedTemplateId: cv.templateId,
+    cvRefTemplateId: cv.templateId,
+    exportTemplateId: cv.templateId,
+    previewTemplateId: null,
+    routeKind: route.kind,
+    exportFunction: 'exportModernMinimalPdf→buildModernMinimalPdfBlob→buildModernMinimalPagedPdfBlob',
+    at: new Date().toISOString(),
+  });
   const pdfBlob = await buildModernMinimalPdfBlob(cv, locale);
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }

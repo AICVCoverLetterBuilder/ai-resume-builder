@@ -627,7 +627,8 @@ describe('Elegant Formal export routing and rendering', () => {
     expect(source).toContain('const variants = getPersonalPhotoVariants(cv)');
     expect(source).toContain('createElegantFormalPortraitPhoto(sourceOriginal)');
     expect(source).toContain('prepareElegantFormalCanonicalPhoto');
-    expect(source).toContain('const liveCv = cvRef.current');
+    expect(source).toContain('selectedTemplateId = cv.templateId');
+    expect(source).toContain('cvForExport');
     expect(source).toContain('originalPhoto = personalVariants.originalPhoto');
     expect(source).toContain('rectangularPhoto = personalVariants.rectangularPhoto');
     expect(source).toContain('getElegantFormalPreviewPhotoSrc');
@@ -752,12 +753,13 @@ describe('Elegant Formal export routing and rendering', () => {
 
     expect(source).toContain('exportElegantFormalPdf');
     expect(source).toContain('prepareElegantFormalPdfPhotoDataUrl');
-    expect(source).toContain('const liveCv = cvRef.current');
+    expect(source).toContain('selectedTemplateId = cv.templateId');
+    expect(source).toContain('cvForExport');
     expect(source).toContain('const originalPhoto = personalVariants.originalPhoto');
     expect(source).toContain('const rectangularPhoto = originalPhoto ? undefined : personalVariants.rectangularPhoto');
     expect(source).toContain("throw new Error('ELEGANT_FORMAL_PDF_PHOTO_PROP_MISSING')");
     expect(elegantPdfBranch).toContain('const photoDataUrl = await prepareElegantFormalPdfPhotoDataUrl()');
-    expect(elegantPdfBranch).toContain('await exportElegantFormalPdf(latestCv, exportFilename, locale, { photoDataUrl })');
+    expect(elegantPdfBranch).toContain('await exportElegantFormalPdf(liveCv, exportFilename, locale, { photoDataUrl })');
     expect(elegantPdfBranch).toContain('return;');
     expect(elegantPdfBranch).not.toContain('applyElegantFormalPhotoToPreview');
     expect(elegantPdfBranch).not.toContain('exportToPDF(previewId');

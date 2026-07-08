@@ -8,7 +8,7 @@ import { useApp, checkProAccess } from '@/lib/store';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
-import { exportAtsStandardPdf, exportCleanSimplePdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportCreativeArtisticPdf, exportCreativeBoldPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportProfessionalClassicPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback, resolveCvPdfExportRoute } from '@/lib/export';
+import { exportAtsStandardPdf, exportCleanSimplePdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportCreativeArtisticPdf, exportCreativeBoldPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportProfessionalClassicPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback, assertDedicatedPdfRouteWasHandled, readPdfExportTemplateIdFromPreview, recordCvPdfExportRuntimeTrace, resolveCvForPdfExport, resolveCvPdfExportRoute } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
 import type { SaveFileResult } from '@/lib/native-save';
@@ -108,6 +108,16 @@ export default function CVBuilderPage() {
   const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, lastCvSavedAt, getAiGate } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
+  const commitCvUpdate = useCallback((updater: (prev: CVData) => CVData) => {
+    setCv((prev) => {
+      const next = updater(prev);
+      cvRef.current = next;
+      if (next.templateId !== prev.templateId) {
+        setCurrentCv(next);
+      }
+      return next;
+    });
+  }, [setCurrentCv]);
   const [step, setStep] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const [skillInput, setSkillInput] = useState('');
@@ -147,8 +157,15 @@ export default function CVBuilderPage() {
 
 
   useEffect(() => {
-    if (currentCv) setCv(currentCv);
+    if (currentCv) {
+      setCv(currentCv);
+      cvRef.current = currentCv;
+    }
   }, [currentCv]);
+
+  useEffect(() => {
+    cvRef.current = cv;
+  }, [cv]);
 
   // ── Autosave: debounce-save to context (which persists to localStorage) ──────
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -987,96 +1004,146 @@ export default function CVBuilderPage() {
       setShowDownloadMenu(false);
       setIsPdfExporting(true);
       try {
-        const liveCv = cvRef.current;
-        const exportFilename = makeCvExportBaseName(liveCv.personal.fullName);
-        if (liveCv.templateId === 'modern-minimal') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportModernMinimalPdf(latestCv, exportFilename, locale);
+        // selectedTemplateId is the live UI selection and is authoritative over any
+        // stale cvRef.current/localStorage templateId (hard requirement — do not
+        // let a stale ref silently redirect Modern Minimal into another renderer).
+        const selectedTemplateId = cv.templateId;
+        const cvRefTemplateId = cvRef.current.templateId;
+        const previewTemplateId = readPdfExportTemplateIdFromPreview(previewId);
+        if (cvRefTemplateId !== selectedTemplateId) {
+          console.error(
+            `[CV PDF export] cvRef.current.templateId (${cvRefTemplateId}) !== selectedTemplateId (${selectedTemplateId}) — overwriting before export`,
+          );
+        }
+        // Force templateId from the live UI selection; cvRef.current can only supply
+        // the rest of the data, never the template choice.
+        const cvForExport: CVData = { ...cvRef.current, ...cv, templateId: selectedTemplateId };
+        cvRef.current = cvForExport;
+        const route = resolveCvPdfExportRoute(selectedTemplateId);
+
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[CV PDF export] tap', {
+            selectedTemplateId,
+            cvRefTemplateId,
+            previewTemplateId,
+            route: route.kind,
+          });
+        }
+
+        const exportFunctionForTrace =
+          selectedTemplateId === 'modern-minimal'
+            ? 'exportModernMinimalPdf'
+            : route.kind === 'generic-preview'
+              ? 'exportToPDF'
+              : `dedicated-${selectedTemplateId}`;
+
+        recordCvPdfExportRuntimeTrace({
+          selectedTemplateId,
+          cvRefTemplateId,
+          exportTemplateId: selectedTemplateId,
+          previewTemplateId,
+          routeKind: route.kind,
+          exportFunction: exportFunctionForTrace,
+          at: new Date().toISOString(),
+        });
+
+        const exportFilename = makeCvExportBaseName(cvForExport.personal.fullName);
+
+        if (selectedTemplateId === 'modern-minimal') {
+          if (route.kind !== 'dedicated-modern-minimal') {
+            toast.error(t.cv.pdfExportFailed);
+            throw new Error(`Modern Minimal route mismatch: ${route.kind}`);
+          }
+          if (previewTemplateId && previewTemplateId !== 'modern-minimal') {
+            toast.error(t.cv.pdfExportFailed);
+            throw new Error(`Modern Minimal preview mismatch: ${previewTemplateId}`);
+          }
+          const saveResult = await exportModernMinimalPdf(cvForExport, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
-        if (resolveCvPdfExportRoute(liveCv.templateId).kind === 'dedicated-clean-simple') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportCleanSimplePdf(latestCv, exportFilename, locale);
+
+        if (previewTemplateId === 'modern-minimal') {
+          toast.error(t.cv.pdfExportFailed);
+          throw new Error('Modern Minimal preview detected outside dedicated export path');
+        }
+
+        const pdfResolution = resolveCvForPdfExport(cvForExport, {
+          previewElementId: previewId,
+          uiTemplateId: selectedTemplateId,
+        });
+        const liveCv = pdfResolution.exportCv;
+        cvRef.current = liveCv;
+        if (pdfResolution.route.kind === 'dedicated-clean-simple') {
+          const saveResult = await exportCleanSimplePdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'professional-classic') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportProfessionalClassicPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportProfessionalClassicPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-bold') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportCreativeBoldPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportCreativeBoldPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'creative-artistic') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportCreativeArtisticPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportCreativeArtisticPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'elegant-formal') {
           const photoDataUrl = await prepareElegantFormalPdfPhotoDataUrl();
-          const latestCv = cvRef.current;
-          const saveResult = await exportElegantFormalPdf(latestCv, exportFilename, locale, { photoDataUrl });
+          const saveResult = await exportElegantFormalPdf(liveCv, exportFilename, locale, { photoDataUrl });
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'ats-standard') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportAtsStandardPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportAtsStandardPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'executive-premium') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportExecutivePremiumPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportExecutivePremiumPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'nordic-clean') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportNordicCleanPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportNordicCleanPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'tech-sidebar') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportTechSidebarPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportTechSidebarPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'corporate-navy') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportCorporateNavyPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportCorporateNavyPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'contemporary-bold') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportContemporaryBoldPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportContemporaryBoldPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
         }
         if (liveCv.templateId === 'rirekisho') {
-          const latestCv = cvRef.current;
-          const saveResult = await exportRirekishoPdf(latestCv, exportFilename, locale);
+          const saveResult = await exportRirekishoPdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -1097,6 +1164,8 @@ export default function CVBuilderPage() {
           await new Promise(requestAnimationFrame);
           await new Promise(requestAnimationFrame);
         }
+
+        assertDedicatedPdfRouteWasHandled(pdfResolution);
 
         const saveResult = await exportToPDF(previewId, exportFilename);
         showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
@@ -1131,7 +1200,7 @@ export default function CVBuilderPage() {
     const handleTemplateRecommend = () => {
       if (!getCurrentProTokenOrToast(() => setAiRecommendModal(true))) return;
       const recommended = recommendTemplate(cv);
-      setCv(prev => ({ ...prev, templateId: recommended }));
+      commitCvUpdate(prev => ({ ...prev, templateId: recommended }));
       setRecommendedTemplateId(recommended);
       markAiRecommendUsed();
       recordProAiSuccess();
@@ -1289,7 +1358,7 @@ export default function CVBuilderPage() {
                         <label className="mb-1.5 block text-sm font-medium">{t.cv.region}</label>
                         <select value={cv.region} onChange={e => {
                           const region = e.target.value as Region;
-                          setCv(prev => ({
+                          commitCvUpdate(prev => ({
                             ...prev,
                             region,
                             templateId: region === 'Japan' ? 'rirekisho' : (prev.templateId === 'rirekisho' ? 'modern-minimal' : prev.templateId),
@@ -1863,7 +1932,7 @@ export default function CVBuilderPage() {
                                   setProTemplateModal(true);
                                   return;
                                 }
-                                setCv(prev => ({ ...prev, templateId: id }));
+                                commitCvUpdate(prev => ({ ...prev, templateId: id }));
                               }}
                               className={`group rounded-xl border-2 text-start transition-all overflow-hidden flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${isSelected ? 'border-primary shadow-md' : isRecommended ? 'border-amber-400 shadow-md' : 'border-border hover:border-primary/40 hover:shadow-lg hover:-translate-y-0.5'}`}
                             >

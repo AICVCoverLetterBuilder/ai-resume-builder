@@ -435,7 +435,7 @@ describe('Corporate Navy export', () => {
 
     expect(branch).toBeGreaterThan(-1);
     expect(handler.slice(branch, branch + 500)).toContain('exportCorporateNavyPdf');
-    expect(handler.slice(branch, branch + 500)).toContain('cvRef.current');
+    expect(handler.slice(branch, branch + 500)).toContain('liveCv');
     expect(guard).toBeGreaterThan(branch);
     expect(fallback).toBeGreaterThan(guard);
     expect(handler.slice(guard, fallback)).toContain("cv.templateId === 'corporate-navy'");

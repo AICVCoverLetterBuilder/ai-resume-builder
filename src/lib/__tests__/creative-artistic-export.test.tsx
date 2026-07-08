@@ -1295,7 +1295,7 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
     expect(branch).toBeGreaterThan(-1);
     expect(exportCall).toBeGreaterThan(branch);
     expect(exportCall).toBeLessThan(genericExport);
-    expect(page.slice(branch, exportCall)).toContain('cvRef.current');
+    expect(page.slice(branch, exportCall)).toContain('liveCv');
     expect(page.slice(branch, branch + 300)).toContain('showCvExportSuccessToast');
     expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');

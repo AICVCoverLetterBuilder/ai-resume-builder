@@ -11,15 +11,21 @@ import { ModernMinimalTemplate, templateComponents } from '@/components/cv-templ
 import { createModernMinimalPdfTemplate } from '@/lib/modern-minimal-pdf-template';
 import {
   applyModernMinimalKeepTogetherPagination,
+  assertDedicatedPdfRouteWasHandled,
+  buildCvPdfBlob,
   buildModernMinimalPdfBlob,
+  buildModernMinimalPagedPdfBlob,
   buildPaddedPdfSlice,
   CV_PDF_A4_HEIGHT_MM,
   CV_PDF_A4_WIDTH_MM,
   exportModernMinimalPdf,
   prepareModernMinimalImagesForExport,
+  resolveCvForPdfExport,
+  resolveCvPdfExportRoute,
   resolveExportImageDataUrl,
 } from '@/lib/export';
 import { exportToDOCX } from '@/lib/export';
+import { mmNormalizePdfText } from '@/lib/modern-minimal-pdf-renderer';
 import type { CVData } from '@/lib/types';
 
 function cv(overrides: Partial<CVData> = {}): CVData {
@@ -232,6 +238,145 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   return { instances, clonedTextContents, clonedPhotoFrameWidths };
 }
 
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  textCalls: Array<{ text: string; x: number }>;
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      currentPage = 1;
+      drawnText: string[] = [];
+      textCalls: Array<{ text: string; x: number }> = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; this.currentPage = this.pages; });
+      setPage = vi.fn((page: number) => { this.currentPage = page; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      setProperties = vi.fn();
+      rect = vi.fn();
+      roundedRect = vi.fn();
+      line = vi.fn();
+      circle = vi.fn();
+      text = vi.fn((t: string | string[], x?: number) => {
+        const parts = Array.isArray(t) ? t : [t];
+        for (const part of parts) {
+          this.drawnText.push(part);
+          this.textCalls.push({ text: part, x: x ?? 0 });
+        }
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((text: string) => Math.min(text.length * 1.8, 40));
+      output() {
+        return new Blob(['%PDF-1.7\nmodern-minimal-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
+}
+
+function androidStressCv(): CVData {
+  return {
+    ...cv(),
+    personal: {
+      ...cv().personal,
+      fullName: 'Dragan Obradović',
+      jobTitle: 'Software engineer',
+      email: 'diodala12@gmail.com',
+      phone: '865333680065',
+      address: 'Braće Abafi 4',
+      photo: selectedPhoto,
+      originalPhoto,
+      photoEnabled: true,
+    },
+    summary: [
+      'Software engineer with strong delivery experience across distributed systems and quality-focused product teams.',
+      'Built reliable regression packs and CI gates that reduced release risk.lead.Assisted junior engineers during onboarding.',
+      'Applied automation across staging environments.Software engineer focused on measurable quality outcomes.',
+      ...Array.from({ length: 18 }, (_, i) =>
+        `Sentence ${i + 1}: reliable engineering delivery across classrooms, coaching, and leadership development.`,
+      ),
+    ].join(' '),
+    experience: [
+      {
+        id: 'exp-1',
+        company: 'Zezezeze',
+        position: 'Software engineer',
+        startDate: '2021-01',
+        endDate: '',
+        isPresent: true,
+        description: [
+          '- Owned end-to-end release quality for customer-facing products across mobile and web surfaces.',
+          '- Built reusable automation scaffolds.logic.Built smoke suites covering login, checkout, and account recovery paths.',
+          '- Partnered with developers to triage flaky suites and stabilize nightly pipelines before cutover weekends.',
+          '- Documented defect trends and risk signals for product stakeholders during major migration windows.',
+          '- Mentored QA peers on exploratory strategies while keeping regression coverage complete and measurable.',
+          '- Improved feedback loops between engineering and support so production incidents were resolved faster.',
+          '- Introduced risk-based testing for high-impact flows and reduced escape defects across consecutive releases.',
+          '- Collaborated on observability dashboards that highlighted failing critical journeys before customers noticed.',
+          '- Authored clear reproduction steps so developers could fix regressions without lengthy clarification threads.',
+          '- Maintained shared fixture data and seeded environments.Software platforms stayed consistent across squads.',
+        ].join('\n'),
+      },
+      {
+        id: 'exp-2',
+        company: 'Pixel & Co',
+        position: 'QA Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: [
+          '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+          '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+          '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+          '- Mentored junior designers in brand strategy.applied.Designed workshop kits for onboarding cohorts.',
+          '- Conducted client workshops and strategic presentations while reporting findings to the development team.',
+        ].join('\n'),
+      },
+    ],
+    education: [{
+      id: 'edu-1',
+      school: 'Mathematic school',
+      degree: 'VI',
+      startDate: '2020-01',
+      endDate: '2025-01',
+      description: '',
+    }],
+    skills: ['React', 'TypeScript', 'System Design', 'Leadership', 'Coaching'],
+    languages: [{ name: 'English', level: 'Native' }, { name: 'Serbian', level: 'Fluent' }],
+    region: 'Balkan',
+  };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   loadedImageSources = [];
@@ -415,56 +560,215 @@ describe('Modern Minimal preview/export parity', () => {
 
   test('Modern Minimal PDF uses the direct renderer route and disables print fallback', () => {
     const page = pageSource();
-    const branch = page.indexOf("liveCv.templateId === 'modern-minimal'");
-    const exportCall = page.indexOf('exportModernMinimalPdf', branch);
-    const genericExport = page.indexOf('exportToPDF', branch);
+    const branch = page.indexOf('selectedTemplateId = cv.templateId');
+    const mmBranch = page.indexOf("selectedTemplateId === 'modern-minimal'", branch);
+    const exportCall = page.indexOf('exportModernMinimalPdf(cvForExport', branch);
+    const genericExport = page.indexOf('exportToPDF(previewId', branch);
     const fallbackGuard = page.indexOf("cv.templateId === 'modern-minimal'", branch);
     const fallback = page.indexOf('await openPrintFallback', fallbackGuard);
 
     expect(branch).toBeGreaterThan(-1);
-    expect(exportCall).toBeGreaterThan(branch);
+    expect(mmBranch).toBeGreaterThan(branch);
+    expect(page.indexOf('templateId: selectedTemplateId', branch)).toBeGreaterThan(branch);
+    expect(page.indexOf("route.kind !== 'dedicated-modern-minimal'", branch)).toBeGreaterThan(branch);
+    expect(exportCall).toBeGreaterThan(mmBranch);
     expect(exportCall).toBeLessThan(genericExport);
-    expect(page.slice(branch, exportCall)).toContain('cvRef.current');
-    expect(page.slice(branch, branch + 420)).toContain('showCvExportSuccessToast');
+    expect(page.indexOf('assertDedicatedPdfRouteWasHandled(pdfResolution)', branch)).toBeGreaterThan(branch);
     expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');
   });
 
-  test('the exact real-world Android-reported joined words never appear anywhere in the routed Modern Minimal PDF chain', () => {
-    // This is a stronger, end-to-end regression: it verifies the single source
-    // chain the real app/Android build actually executes — page.tsx routes
-    // 'modern-minimal' to exportModernMinimalPdf, which is defined in export.ts
-    // and built from createModernMinimalPdfTemplate — and that the renderer file
-    // itself cannot reintroduce per-word/spacer-span text splitting, which is
-    // what previously caused "Učitelj u osnovnojškoli", "profesionalnupažnju",
-    // "Nastavnikgeografije" and "Metematičkifakultet" to appear in production.
+  test('resolveCvForPdfExport prefers UI modern-minimal over stale cvRef corporate-navy', () => {
+    document.body.innerHTML = `
+      <div id="cv-preview">
+        <div data-template-id="modern-minimal">Modern Minimal preview</div>
+      </div>
+    `;
+    const staleCv = cv({ templateId: 'corporate-navy' });
+    const resolution = resolveCvForPdfExport(staleCv, {
+      previewElementId: 'cv-preview',
+      uiTemplateId: 'modern-minimal',
+    });
+    expect(resolution.templateId).toBe('modern-minimal');
+    expect(resolution.route.kind).toBe('dedicated-modern-minimal');
+    expect(resolution.sources.cvRefTemplateId).toBe('corporate-navy');
+  });
+
+  test('selecting Corporate Navy then Modern Minimal exports via Modern Minimal renderer only', async () => {
+    installDirectPdfMocks();
+    const corporateSpy = vi.spyOn(
+      await import('@/lib/corporate-navy-pdf-renderer'),
+      'buildCorporateNavyPagedPdfBlob',
+    );
+    const executiveSpy = vi.spyOn(
+      await import('@/lib/executive-premium-pdf-renderer'),
+      'buildExecutivePremiumPagedPdfBlob',
+    );
+    const pagedSpy = vi.spyOn(
+      await import('@/lib/modern-minimal-pdf-renderer'),
+      'buildModernMinimalPagedPdfBlob',
+    );
+
+    const staleCorporate = cv({ templateId: 'corporate-navy', personal: { photoEnabled: false } });
+    const mmCv = { ...staleCorporate, templateId: 'modern-minimal' as const };
+    await exportModernMinimalPdf(mmCv, 'route-test', 'en');
+
+    expect(pagedSpy).toHaveBeenCalled();
+    expect(corporateSpy).not.toHaveBeenCalled();
+    expect(executiveSpy).not.toHaveBeenCalled();
+  });
+
+  test('selecting Executive Premium then Modern Minimal exports via Modern Minimal renderer only', async () => {
+    installDirectPdfMocks();
+    const corporateSpy = vi.spyOn(
+      await import('@/lib/corporate-navy-pdf-renderer'),
+      'buildCorporateNavyPagedPdfBlob',
+    );
+    const executiveSpy = vi.spyOn(
+      await import('@/lib/executive-premium-pdf-renderer'),
+      'buildExecutivePremiumPagedPdfBlob',
+    );
+    const pagedSpy = vi.spyOn(
+      await import('@/lib/modern-minimal-pdf-renderer'),
+      'buildModernMinimalPagedPdfBlob',
+    );
+
+    const staleExecutive = cv({ templateId: 'executive-premium', personal: { photoEnabled: false } });
+    const mmCv = { ...staleExecutive, templateId: 'modern-minimal' as const };
+    await exportModernMinimalPdf(mmCv, 'route-test', 'en');
+
+    expect(pagedSpy).toHaveBeenCalled();
+    expect(corporateSpy).not.toHaveBeenCalled();
+    expect(executiveSpy).not.toHaveBeenCalled();
+  });
+
+  test('buildCvPdfBlob hard-fails for modern-minimal DOM capture', async () => {
+    document.body.innerHTML = '<div id="cv-preview"><div data-template-id="modern-minimal">MM</div></div>';
+    await expect(buildCvPdfBlob('cv-preview')).rejects.toThrow(/dedicated-modern-minimal/);
+  });
+
+  test('assertDedicatedPdfRouteWasHandled blocks generic export for dedicated templates', () => {
+    const resolution = resolveCvForPdfExport(cv({ templateId: 'modern-minimal' }), {
+      uiTemplateId: 'modern-minimal',
+    });
+    expect(() => assertDedicatedPdfRouteWasHandled(resolution)).toThrow(/Dedicated PDF route/);
+  });
+
+  test('modern-minimal resolves to the dedicated-modern-minimal export route', () => {
+    expect(resolveCvPdfExportRoute('modern-minimal').kind).toBe('dedicated-modern-minimal');
+  });
+
+  test('Modern Minimal runtime export reaches buildModernMinimalPagedPdfBlob only', async () => {
+    installDirectPdfMocks();
+    const pagedSpy = vi.spyOn(
+      await import('@/lib/modern-minimal-pdf-renderer'),
+      'buildModernMinimalPagedPdfBlob',
+    );
+    const corporateSpy = vi.spyOn(
+      await import('@/lib/corporate-navy-pdf-renderer'),
+      'buildCorporateNavyPagedPdfBlob',
+    );
+    const executiveSpy = vi.spyOn(
+      await import('@/lib/executive-premium-pdf-renderer'),
+      'buildExecutivePremiumPagedPdfBlob',
+    );
+
+    await exportModernMinimalPdf(cv({ personal: { photoEnabled: false } }), 'modern-minimal-test', 'en');
+
+    expect(pagedSpy).toHaveBeenCalled();
+    expect(corporateSpy).not.toHaveBeenCalled();
+    expect(executiveSpy).not.toHaveBeenCalled();
+  });
+
+  test('Modern Minimal PDF does not stamp removed debug canary markers', async () => {
+    const { instances } = installDirectPdfMocks();
+    const blob = await buildModernMinimalPagedPdfBlob(androidStressCv(), 'en', { photoDataUrl: selectedPhoto });
+    expect(blob.size).toBeGreaterThan(0);
+
+    const inst = instances[0]!;
+    const drawn = inst.drawnText.join(' ');
+    expect(drawn).not.toContain('MM_DIRECT_158');
+    expect(drawn).not.toContain('Modern Minimal Direct PDF');
+    expect(inst.textCalls.filter((c) => c.text === 'MM_DIRECT_158')).toHaveLength(0);
+  });
+
+  test('handlePDFDownload forces templateId from live selection and hard-fails before falling through to another renderer', () => {
+    const page = pageSource();
+    const branch = page.indexOf('selectedTemplateId = cv.templateId');
+    const mmBranch = page.indexOf("selectedTemplateId === 'modern-minimal'", branch);
+
+    expect(page.indexOf('...cvRef.current, ...cv, templateId: selectedTemplateId', branch)).toBeGreaterThan(branch);
+    expect(page.indexOf('cvRefTemplateId !== selectedTemplateId', branch)).toBeGreaterThan(branch);
+    expect(page.indexOf("route.kind !== 'dedicated-modern-minimal'", mmBranch)).toBeGreaterThan(mmBranch);
+    expect(page.indexOf('exportModernMinimalPdf(cvForExport, exportFilename, locale)', mmBranch)).toBeGreaterThan(mmBranch);
+    expect(page.indexOf('[MM PDF CANARY]', branch)).toBe(-1);
+    expect(page.indexOf('__CV_PDF_EXPORT_TRACE__', branch)).toBe(-1);
+    expect(page.indexOf('MM_DIRECT_158', branch)).toBe(-1);
+  });
+
+  test('Modern Minimal PDF header uses white/indigo accent, not corporate navy full-width fill', async () => {
+    const { instances } = installDirectPdfMocks();
+    await buildModernMinimalPagedPdfBlob(
+      cv({ personal: { photoEnabled: true, photo: tinyPng } }),
+      'en',
+      { photoDataUrl: tinyPng },
+    );
+    const inst = instances[0]!;
+    expect(inst.rect).not.toHaveBeenCalled();
+    expect(inst.setFillColor).toHaveBeenCalledWith(255, 255, 255);
+    expect(inst.setDrawColor).toHaveBeenCalledWith(79, 70, 229);
+    expect(inst.setFillColor).not.toHaveBeenCalledWith(15, 23, 42);
+  });
+
+  test('Modern Minimal dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {
+    const src = exportSource();
+    const rendererSource = fs.readFileSync(path.resolve('src/lib/modern-minimal-pdf-renderer.ts'), 'utf8');
+    expect(src).toContain('buildModernMinimalPagedPdfBlob');
+    expect(src).toContain("kind: 'dedicated-modern-minimal'");
+    expect(rendererSource).toContain('mmCreateContext');
+    expect(rendererSource).toContain('mmDrawHeader');
+    expect(rendererSource).toContain('mmDrawSummary');
+    expect(rendererSource).toContain('mmDrawWrappedBullet');
+    expect(rendererSource).toContain('mmDrawWrappedParagraph');
+    expect(rendererSource).toContain('mmDrawExperienceEntry');
+    expect(rendererSource).toContain('mmMoveToNextPage');
+    expect(rendererSource).toContain('mmMeasureLowerSectionsHeight');
+    expect(rendererSource).toContain('mmNormalizePdfText');
+    expect(rendererSource).not.toContain('html2canvas');
+    expect(rendererSource).not.toContain('buildCvPdfBlob');
+    expect(rendererSource).not.toContain('renderPdfSlice');
+    expect(rendererSource).not.toContain('renderPaddedPdfSlice');
+    expect(src).not.toMatch(/buildModernMinimalPdfBlob[\s\S]{0,400}buildCvPdfBlob/);
+  });
+
+  test('mmNormalizePdfText fixes glued sentence boundaries for PDF rendering only', () => {
+    expect(mmNormalizePdfText('scaffolds.logic.Built smoke suites.')).toBe(
+      'scaffolds. logic. Built smoke suites.',
+    );
+    expect(mmNormalizePdfText('strategy.applied.Designed workshop kits.')).toBe(
+      'strategy. applied. Designed workshop kits.',
+    );
+    expect(mmNormalizePdfText('environments.Software platforms stayed consistent.')).toBe(
+      'environments. Software platforms stayed consistent.',
+    );
+    expect(mmNormalizePdfText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
+      'Used Node.js and REST APIs with CI/CD pipelines.',
+    );
+  });
+
+  test('the exact real-world Android-reported joined words never appear in the routed Modern Minimal PDF chain', () => {
     const page = pageSource();
     const src = exportSource();
     const rendererSrc = fs.readFileSync(path.resolve('src/lib/modern-minimal-pdf-template.ts'), 'utf8');
 
-    // 1. page.tsx really calls exportModernMinimalPdf for this template id.
-    expect(page).toContain("liveCv.templateId === 'modern-minimal'");
-    expect(page).toContain('exportModernMinimalPdf(latestCv, exportFilename, locale)');
-
-    // 2. export.ts's exportModernMinimalPdf is built on buildModernMinimalPdfBlob,
-    //    which in turn renders via createModernMinimalPdfTemplate — not some other
-    //    older/duplicate Modern Minimal PDF function.
+    expect(page).toContain("selectedTemplateId === 'modern-minimal'");
+    expect(page).toContain('exportModernMinimalPdf(cvForExport, exportFilename, locale)');
     expect(src).toContain('export async function exportModernMinimalPdf');
     expect(src).toContain('const pdfBlob = await buildModernMinimalPdfBlob(cv, locale)');
-    expect(src).toContain('export async function buildModernMinimalPdfBlob');
-    expect(src).toContain('container.appendChild(createModernMinimalPdfTemplate(cv,');
+    expect(src).toContain('buildModernMinimalPagedPdfBlob');
     expect(src.match(/function buildModernMinimalPdfBlob/g)?.length).toBe(1);
-    expect(src.match(/function exportModernMinimalPdf/g)?.length).toBe(1);
-
-    // 3. The renderer that actually produces the DOM text nodes uses plain
-    //    textContent assignment, not a per-word span/spacer implementation.
     expect(rendererSrc).toContain('element.textContent = text');
-    expect(rendererSrc).not.toContain('data-modern-minimal-export-space');
-    expect(rendererSrc).not.toContain('split(/( +)/)');
-    expect(rendererSrc).not.toMatch(/for\s*\(.*word/i);
 
-    // 4. Runtime proof with the exact fixture that produced the reported bug —
-    //    none of the real-world Android-reported joined words are present.
     const root = createModernMinimalPdfTemplate(draganCv(), { locale: 'en', photoDataUrl: originalPhoto });
     const text = root.textContent ?? '';
     expect(text).not.toContain('osnovnojškoli');
@@ -533,14 +837,13 @@ describe('Modern Minimal preview/export parity', () => {
     expect(root.querySelector('[data-export-group="modern-minimal-experience-line"]')).not.toBeNull();
   });
 
-  test('Modern Minimal PDF export wires keep-together pagination before html2canvas capture', () => {
+  test('legacy Modern Minimal keep-together pagination helper remains for generic preview path', () => {
     const src = exportSource();
     expect(src).toContain('applyModernMinimalKeepTogetherPagination');
-    expect(src).toContain("captureTemplateId === 'modern-minimal' && sourceRootForTag");
     expect(src).toContain("captureTemplateId === 'modern-minimal'");
   });
 
-  test('Modern Minimal PDF export bakes continuation-page top padding into slice bitmaps', () => {
+  test('legacy Modern Minimal padded slice helpers remain available for generic preview path', () => {
     const src = exportSource();
     expect(src).toContain('MODERN_MINIMAL_PDF_PAGE_TOP_INSET_CSS_PX');
     expect(src).toContain('MODERN_MINIMAL_PDF_PAGE_BOTTOM_INSET_CSS_PX');
@@ -618,40 +921,100 @@ describe('Modern Minimal preview/export parity', () => {
     expect(document.body.textContent).toContain('First bullet line');
   });
 
-  test('Modern Minimal direct PDF Blob is non-empty, uses the user-framed selected photo (matching DOCX), and Dragan fixture remains one page', async () => {
-    const canvas = makeCanvas(800, 1050, y => y < 980);
-    const { instances, clonedTextContents, clonedPhotoFrameWidths } = installPdfMocks(canvas);
+  test('Modern Minimal direct PDF Blob is non-empty and short fixture remains one page', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildModernMinimalPdfBlob(draganCv(), 'en');
+    const blob = await mod.buildModernMinimalPdfBlob(
+      cv({ personal: { photoEnabled: false, photo: undefined } }),
+      'en',
+    );
 
     expect(blob.size).toBeGreaterThan(0);
     expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
-    expect(instances[0].pages).toBe(1);
-    expect(instances[0].addPage).not.toHaveBeenCalled();
-    // The PDF must use cv.personal.photo (selectedPhoto) — the circular crop the user
-    // already framed themselves in the in-app cropper — exactly like the DOCX export
-    // does. Using the raw, un-framed originalPhoto here would re-guess a crop with no
-    // knowledge of where the user's face actually is, which was the real cause of the
-    // reported "cropped too high / chin missing" bug. originalPhoto is only consulted
-    // as a fallback when no selected photo exists (not exercised by this fixture).
+    expect(instances[0]!.pages).toBe(1);
+    expect(instances[0]!.addPage).not.toHaveBeenCalled();
+    const drawn = instances[0]!.drawnText.join(' ');
+    expect(drawn).toContain('Alexandra Very Long Candidate Name');
+    expect(drawn.toUpperCase()).toContain('PROFESSIONAL SUMMARY');
+    expect(drawn.toUpperCase()).toContain('WORK EXPERIENCE');
+  });
+
+  test('Page 1 draws Professional Summary after header (body is not blank)', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildModernMinimalPdfBlob(cv({ personal: { photoEnabled: false } }), 'en');
+    const drawn = instances[0]?.drawnText ?? [];
+    const summaryIdx = drawn.findIndex((t) => /professional summary/i.test(t));
+    const nameIdx = drawn.findIndex((t) => /Alexandra Very Long Candidate Name/i.test(t));
+    expect(nameIdx).toBeGreaterThanOrEqual(0);
+    expect(summaryIdx).toBeGreaterThan(nameIdx);
+    expect(instances[0]?.pages).toBe(1);
+  });
+
+  test('Android stress fixture paginates with summary on page 1 and no glued text', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const blob = await mod.buildModernMinimalPagedPdfBlob(androidStressCv(), 'en', { photoDataUrl: selectedPhoto });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(3);
+
+    const text = (instances[0]?.drawnText ?? []).join(' ');
+    expect(text.toUpperCase()).toContain('PROFESSIONAL SUMMARY');
+    expect(text.toUpperCase()).toContain('WORK EXPERIENCE');
+    expect(text.toUpperCase()).toContain('EDUCATION');
+    expect(text.toUpperCase()).toContain('SKILLS');
+    expect(text.toUpperCase()).toContain('LANGUAGES');
+    expect(text).toContain('React');
+    expect(text).toContain('English');
+    expect(text).not.toContain('logic.Built');
+    expect(text).toContain('logic. Built');
+    expect(text).not.toContain('applied.Designed');
+    expect(text).toContain('applied. Designed');
+    expect(text).toContain('reporting findings to the development team.');
+    if ((instances[0]?.pages ?? 0) >= 2) {
+      expect(text).toMatch(/\(continued\)|Sentence 1:/);
+    }
+  });
+
+  test('wrapped experience bullets do not prefix continuation lines with a dash', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildModernMinimalPagedPdfBlob(cv({
+      personal: { photoEnabled: false, fullName: 'Test User' },
+      summary: '',
+      education: [],
+      skills: [],
+      languages: [],
+      experience: [{
+        id: 'exp-wrap',
+        company: 'Acme',
+        position: 'Software engineer',
+        startDate: '2020-01',
+        endDate: '',
+        isPresent: true,
+        description: '- Built and maintained RESTful APIs using Node.js and Express, supporting core product features used across the platform.',
+      }],
+    }), 'en');
+    expect(instances[0]?.textCalls.filter((c) => c.text === '-').length).toBe(1);
+    const continuation = instances[0]?.textCalls.find((c) => /platform\./i.test(c.text));
+    expect(continuation?.text).not.toMatch(/^-/);
+  });
+
+  test('Modern Minimal direct PDF uses selected photo and Dragan fixture export path', async () => {
+    installDirectPdfMocks();
+
+    const blob = await buildModernMinimalPdfBlob(draganCv(), 'en');
+
+    expect(blob.size).toBeGreaterThan(0);
     expect(loadedImageSources).toContain(selectedPhoto);
     expect(loadedImageSources).not.toContain(originalPhoto);
-    expect(clonedPhotoFrameWidths).toContain('100px');
-    const cloneText = clonedTextContents.join('\n');
-    expect(cloneText).toContain('VI / Metematički fakultet');
-    expect(cloneText).toContain('Teamwork');
-    expect(cloneText).toContain('Učitelj u osnovnoj školi');
-    expect(cloneText).not.toContain('osnovnojškoli');
-    expect(cloneText).not.toContain('Nastavnikgeografije');
-    expect(cloneText).not.toContain('Metematičkifakultet');
-    expect(cloneText).not.toContain('profesionalnupažnju');
-    expect(cloneText).not.toContain('kreiranjukvalitetnih');
   });
 
   test('Modern Minimal PDF falls back to originalPhoto only when no selected photo exists', async () => {
-    const canvas = makeCanvas(800, 1050, y => y < 980);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
     const cvWithoutSelectedPhoto = draganCv();
     (cvWithoutSelectedPhoto.personal as CVData['personal'] & { photo?: string }).photo = undefined;
 
@@ -663,8 +1026,7 @@ describe('Modern Minimal preview/export parity', () => {
   });
 
   test('Modern Minimal export save path writes a PDF through platform save', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    installPdfMocks(canvas);
+    installDirectPdfMocks();
     let savedBlob: Blob | undefined;
     vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
       savedBlob = blob as Blob;
@@ -817,11 +1179,9 @@ describe('Modern Minimal synced Android assets regression', () => {
   test.skipIf(!found)('synced Android assets contain the current Modern Minimal PDF renderer and no old span-spacer markers', () => {
     const { combined } = readSyncedAndroidChunks();
 
-    // New renderer markers must be present — proves the currently built source
-    // (with element.textContent = text, no per-word spacer spans) is what
-    // actually ships inside the Android app bundle, not a stale/duplicate copy.
-    expect(combined).toContain('data-modern-minimal-pdf-template');
-    expect(combined.includes('modern-minimal-pdf-export')).toBe(true);
+    // Direct renderer must ship in the synced Android bundle.
+    expect(combined).toContain('dedicated-modern-minimal');
+    expect(combined).toContain('Modern Minimal PDF export requires dedicated-modern-minimal route');
 
     // Old markers from the pre-fix span-by-word spacer implementation must be
     // completely absent. If these ever reappear, the synced Android assets are

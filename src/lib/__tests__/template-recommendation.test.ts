@@ -215,7 +215,7 @@ describe('template recommendation', () => {
 
     expect(handler).toContain('getCurrentProTokenOrToast(() => setAiRecommendModal(true))');
     expect(handler.indexOf('getCurrentProTokenOrToast')).toBeLessThan(handler.indexOf('recommendTemplate(cv)'));
-    expect(handler).toContain('setCv(prev => ({ ...prev, templateId: recommended }))');
+    expect(handler).toContain('commitCvUpdate(prev => ({ ...prev, templateId: recommended }))');
     expect(handler).toContain('setRecommendedTemplateId(recommended)');
   });
 
@@ -223,7 +223,7 @@ describe('template recommendation', () => {
     const cvBuilder = fs.readFileSync(path.resolve('src/app/cv-builder/page.tsx'), 'utf8');
 
     expect(cvBuilder).toContain('(Object.entries(templateInfo) as [TemplateId, typeof templateInfo[TemplateId]][]).map');
-    expect(cvBuilder).toContain('setCv(prev => ({ ...prev, templateId: id }))');
+    expect(cvBuilder).toContain('commitCvUpdate');
     expect(freeTemplateIds.length).toBeGreaterThan(0);
     freeTemplateIds.forEach((id) => {
       expect(registryIds).toContain(id);

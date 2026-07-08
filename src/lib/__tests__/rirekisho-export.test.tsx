@@ -453,7 +453,7 @@ describe('Rirekisho export', () => {
     expect(branch).toBeGreaterThan(-1);
     expect(exportCall).toBeGreaterThan(branch);
     expect(exportCall).toBeLessThan(genericExport);
-    expect(handler.slice(branch, branch + 420)).toContain('cvRef.current');
+    expect(handler.slice(branch, branch + 420)).toContain('liveCv');
     expect(handler.slice(fallbackGuard, fallback)).toContain("cv.templateId === 'rirekisho'");
     expect(handler.slice(branch, exportCall)).not.toContain('querySelector');
   });

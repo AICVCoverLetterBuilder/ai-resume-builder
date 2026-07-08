@@ -288,7 +288,7 @@ describe('Contemporary Bold export', () => {
     const fallback = handler.indexOf('await openPrintFallback', guard);
 
     expect(branch).toBeGreaterThan(-1);
-    expect(handler.slice(branch, branch + 520)).toContain('cvRef.current');
+    expect(handler.slice(branch, branch + 520)).toContain('liveCv');
     expect(handler.slice(branch, branch + 520)).toContain('exportContemporaryBoldPdf');
     expect(guard).toBeGreaterThan(branch);
     expect(fallback).toBeGreaterThan(guard);
