@@ -326,17 +326,22 @@ describe('Nordic Clean PDF export', () => {
 
   test('Nordic Clean source keeps WORK EXPERIENCE heading with first entry lead block', () => {
     const exportSource = source('src/lib/export.ts');
-    const fn = exportSource.indexOf('function ncDrawExperience(');
-    const body = exportSource.slice(fn, fn + 600);
-    expect(body).toContain('ncMoveToFreshPageIfNeeded');
-    expect(body).toContain('ncExperienceLeadBlockHeight');
+    const branchStart = exportSource.indexOf("cfg.customLayout === 'nordic-clean'");
+    const branchEnd = exportSource.indexOf("else if (cfg.customLayout === 'executive-premium')", branchStart);
+    const branch = exportSource.slice(branchStart, branchEnd);
+    expect(branch).toContain('ncExperienceLeadBlocks');
+    expect(branch).toContain('cantSplit: true');
+    expect(branch).toContain('ncHeading(t.cv.experience, { keepNext: true })');
   });
 
   test('Nordic Clean source groups Education + lower sections before drawing', () => {
     const exportSource = source('src/lib/export.ts');
-    expect(exportSource).toContain('ncMoveLowerSectionsIfNeeded');
-    expect(exportSource).toContain('ncSkillsLanguagesHeight');
-    expect(exportSource).toContain('ncEducationHeight');
+    const branchStart = exportSource.indexOf("cfg.customLayout === 'nordic-clean'");
+    const branchEnd = exportSource.indexOf("else if (cfg.customLayout === 'executive-premium')", branchStart);
+    const branch = exportSource.slice(branchStart, branchEnd);
+    expect(branch).toContain('ncShouldGroupLowerDocxSections');
+    expect(branch).toContain('ncBuildEducationBlocks');
+    expect(branch).toContain('ncBuildSkillsLanguagesTable');
   });
 
   test('Nordic Clean long direct PDF export paginates without half-line splits', async () => {
@@ -576,6 +581,12 @@ describe('Nordic Clean PDF export', () => {
     expect(ncNormalizeDocxText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
       'Used Node.js and REST APIs with CI/CD pipelines.',
     );
+    expect(ncNormalizeDocxText('Stvarao sam priliku daIskusan učitelj sa iskustvom.')).toBe(
+      'Stvarao sam priliku da. Iskusan učitelj sa iskustvom.',
+    );
+    expect(ncNormalizeDocxText('Contact me at diodala12@gmail.com about TypeScript and JavaScript.')).toBe(
+      'Contact me at diodala12@gmail.com about TypeScript and JavaScript.',
+    );
 
     let savedBlob: Blob | undefined;
     vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
@@ -615,6 +626,8 @@ describe('Nordic Clean PDF export', () => {
     const documentXml = await zip.file('word/document.xml')!.async('text');
     const plain = documentXml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
+    expect(documentXml).toContain('w:keepNext');
+    expect(documentXml).toContain('w:cantSplit');
     expect(plain.toUpperCase()).toContain('PROFESSIONAL SUMMARY');
     expect(plain).toContain('QA lead focused on release quality. leads. Software validation across teams.');
     expect(plain).toContain('QA lead. Assisted senior QA engineers.');

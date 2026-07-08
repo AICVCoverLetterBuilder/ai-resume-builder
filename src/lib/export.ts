@@ -5691,15 +5691,27 @@ export function ncNormalizeDocxText(text: string): string {
     { token: 'Express.js', stub: '\u0001EXPRESSJS\u0001' },
     { token: 'Next.js', stub: '\u0001NEXTJS\u0001' },
     { token: 'Vue.js', stub: '\u0001VUEJS\u0001' },
+    { token: 'TypeScript', stub: '\u0001TS\u0001' },
+    { token: 'JavaScript', stub: '\u0001JS\u0001' },
     { token: 'CI/CD', stub: '\u0001CICD\u0001' },
     { token: 'REST APIs', stub: '\u0001RESTAPIS\u0001' },
     { token: 'REST API', stub: '\u0001RESTAPI\u0001' },
   ];
   for (const p of protect) out = out.split(p.token).join(p.stub);
+  const emails: string[] = [];
+  out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, (email) => {
+    const stub = `\u0001EMAIL${emails.length}\u0001`;
+    emails.push(email);
+    return stub;
+  });
   out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
   out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
   out = out.replace(/\.([a-z]{3,})\.(\s*)([A-Z])/g, '. $1. $3');
+  out = out.replace(/([a-z]{2,})([A-Z][a-z]{2,})/g, '$1. $2');
   for (const p of protect) out = out.split(p.stub).join(p.token);
+  emails.forEach((email, index) => {
+    out = out.split(`\u0001EMAIL${index}\u0001`).join(email);
+  });
   return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
@@ -6660,90 +6672,118 @@ export async function exportToDOCX(
     }));
 
     // ── Section heading helper: tiny teal UPPERCASE, subtle bottom border ─
-    function ncHeading(text: string, options: { keepNext?: boolean } = {}) {
+    function ncHeading(text: string, options: { keepNext?: boolean; pageBreakBefore?: boolean } = {}) {
       return new Paragraph({
         children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 14, color: '0D9488' })],
         spacing: { before: 200, after: 100 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'CCFBF1' } },
         keepNext: options.keepNext ?? false,
+        pageBreakBefore: options.pageBreakBefore ?? false,
       });
     }
 
-    // ── Summary: teal heading + body (keepNext prevents orphaned heading) ─
-    if (cvData.summary) {
-      const summaryText = ncNormalizeDocxText(cvData.summary);
-      children.push(ncHeading(t.cv.summary, { keepNext: true }));
-      children.push(new Paragraph({ children: [new TextRun({ text: summaryText, size: 20, color: '4B5563' })], spacing: { after: 160 } }));
-    }
-
-    // ── Experience: position/date row + company below ─────────────────────
-    if (cvData.experience.length > 0) {
-      children.push(ncHeading(t.cv.experience));
-      for (const exp of cvData.experience) {
-        const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
-        // Position bold left | date right
-        children.push(new Table({
-          width: { size: 100, type: WidthType.PERCENTAGE },
-          borders: noBorders,
-          rows: [new TableRow({ children: [
-            new TableCell({ width: { size: 75, type: WidthType.PERCENTAGE }, borders: noBorders, children: [new Paragraph({ children: [new TextRun({ text: exp.position, bold: true, size: 20, color: '111827' })], spacing: { after: 0 } })] }),
-            new TableCell({ width: { size: 25, type: WidthType.PERCENTAGE }, borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: dateText, size: 16, color: '9CA3AF' })], spacing: { after: 0 } })] }),
-          ]})],
-        }));
-        // Company in gray below
-        children.push(new Paragraph({ children: [new TextRun({ text: exp.company, size: 16, color: '6B7280' })], spacing: { after: 50 } }));
-        if (exp.description) {
-          for (const line of ncNormalizeDocxText(exp.description).split('\n')) {
-            if (line.trim()) children.push(new Paragraph({ children: [new TextRun({ text: line, size: 20, color: '4B5563' })], spacing: { after: 40 } }));
-          }
-        }
-        children.push(new Paragraph({ text: '', spacing: { after: 100 } }));
-      }
-    }
-
-    // ── Education: degree/date row + school below ─────────────────────────
-    if (cvData.education.length > 0) {
-      children.push(ncHeading(t.cv.education));
-      for (const edu of cvData.education) {
-        if (edu.startDate || edu.endDate) {
-          children.push(new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            borders: noBorders,
-            rows: [new TableRow({ children: [
-              new TableCell({ width: { size: 75, type: WidthType.PERCENTAGE }, borders: noBorders, children: [new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' })], spacing: { after: 0 } })] }),
-              new TableCell({ width: { size: 25, type: WidthType.PERCENTAGE }, borders: noBorders, children: [new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun({ text: `${edu.startDate} – ${edu.endDate}`, size: 16, color: '9CA3AF' })], spacing: { after: 0 } })] }),
-            ]})],
-          }));
-        } else {
-          children.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' })], spacing: { after: 0 } }));
-        }
-        children.push(new Paragraph({ children: [new TextRun({ text: edu.school, size: 16, color: '6B7280' })], spacing: { after: edu.description ? 40 : 100 } }));
-        if (edu.description) children.push(new Paragraph({ children: [new TextRun({ text: ncNormalizeDocxText(edu.description), size: 20, color: '4B5563' })], spacing: { after: 100 } }));
-      }
-    }
-
-    // ── 2-column grid: Skills | Languages ─────────────────────────────────
     const ncLocalizedSkills = cvData.skills.map((s) => getLocalizedCvSkillName(s, locale));
     const ncHasSkills = ncLocalizedSkills.length > 0;
     const ncHasLangs = cvData.languages.length > 0;
-    if (ncHasSkills || ncHasLangs) {
+
+    function ncExperienceDescriptionLines(description: string): string[] {
+      return ncNormalizeDocxText(description).split('\n').filter((line) => line.trim());
+    }
+
+    function ncExperiencePositionTable(
+      exp: CVData['experience'][number],
+      options: { keepNext?: boolean } = {},
+    ) {
+      const dateText = `${exp.startDate} – ${exp.isPresent ? t.cv.present : exp.endDate}`;
+      return new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({
+          cantSplit: true,
+          children: [
+            new TableCell({
+              width: { size: 75, type: WidthType.PERCENTAGE },
+              borders: noBorders,
+              children: [new Paragraph({
+                keepNext: options.keepNext ?? false,
+                children: [new TextRun({ text: exp.position, bold: true, size: 20, color: '111827' })],
+                spacing: { after: 0 },
+              })],
+            }),
+            new TableCell({
+              width: { size: 25, type: WidthType.PERCENTAGE },
+              borders: noBorders,
+              children: [new Paragraph({
+                alignment: AlignmentType.RIGHT,
+                children: [new TextRun({ text: dateText, size: 16, color: '9CA3AF' })],
+                spacing: { after: 0 },
+              })],
+            }),
+          ],
+        })],
+      });
+    }
+
+    function ncExperienceLeadBlocks(
+      exp: CVData['experience'][number],
+      options: { lineSlice?: { start: number; end?: number }; trailingSpacer?: boolean } = {},
+    ) {
+      const lines = ncExperienceDescriptionLines(exp.description ?? '');
+      const slicedLines = options.lineSlice ? lines.slice(options.lineSlice.start, options.lineSlice.end) : lines;
+      const hasDescription = slicedLines.length > 0;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const blocks: any[] = [
+        ncExperiencePositionTable(exp, { keepNext: true }),
+        new Paragraph({
+          children: [new TextRun({ text: exp.company, size: 16, color: '6B7280' })],
+          spacing: { after: 50 },
+          keepNext: hasDescription,
+        }),
+      ];
+      slicedLines.forEach((line, lineIndex) => {
+        blocks.push(new Paragraph({
+          children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
+          spacing: { after: 40 },
+          keepNext: lineIndex === 0 && slicedLines.length > 1,
+        }));
+      });
+      if (options.trailingSpacer ?? true) {
+        blocks.push(new Paragraph({ text: '', spacing: { after: 100 } }));
+      }
+      return blocks;
+    }
+
+    function ncShouldGroupLowerDocxSections(): boolean {
+      if (cvData.experience.length === 0) return false;
+      const hasLower = cvData.education.length > 0 || ncHasSkills || ncHasLangs;
+      if (!hasLower) return false;
+      const lowerSmall =
+        cvData.education.length <= 2 &&
+        ncLocalizedSkills.length <= 12 &&
+        cvData.languages.length <= 6;
+      const expSubstantial =
+        cvData.experience.length >= 2 ||
+        cvData.experience.some((entry) => ncExperienceDescriptionLines(entry.description ?? '').join(' ').length > 160) ||
+        (cvData.summary?.length ?? 0) > 220;
+      return lowerSmall && expSubstantial;
+    }
+
+    function ncBuildSkillsLanguagesTable() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ncSkillsCol: any[] = [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ncLangsCol: any[] = [];
 
       if (ncHasSkills) {
-        ncSkillsCol.push(ncHeading(t.cv.skills));
-        // Pill-style: bullet-separated tags (closest DOCX approximation)
+        ncSkillsCol.push(ncHeading(t.cv.skills, { keepNext: true }));
         ncSkillsCol.push(new Paragraph({
           children: ncLocalizedSkills.map((s, i) => new TextRun({ text: (i > 0 ? '  •  ' : '') + s, size: 18, color: '0F766E' })),
           spacing: { after: 80 },
         }));
       }
       if (ncHasLangs) {
-        ncLangsCol.push(ncHeading(t.cv.languages));
+        ncLangsCol.push(ncHeading(t.cv.languages, { keepNext: true }));
         for (const lang of cvData.languages) {
-          // Match PDF format: "English / Advanced" — name then / level in gray
           ncLangsCol.push(new Paragraph({
             children: [
               new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), size: 18, color: '374151' }),
@@ -6755,25 +6795,209 @@ export async function exportToDOCX(
       }
 
       if (cvData.certifications.length > 0) {
-        // certifications go in skills column below skills
-        ncSkillsCol.push(ncHeading(t.cv.certifications));
+        ncSkillsCol.push(ncHeading(t.cv.certifications, { keepNext: true }));
         for (const cert of cvData.certifications) {
           ncSkillsCol.push(new Paragraph({ children: [new TextRun({ text: '• ' + cert, size: 18, color: '374151' })], spacing: { after: 40 } }));
+        }
+      }
+
+      return new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({
+          cantSplit: true,
+          children: [
+            new TableCell({
+              width: { size: 55, type: WidthType.PERCENTAGE },
+              verticalAlign: VerticalAlign.TOP,
+              borders: noBorders,
+              margins: { top: 0, bottom: 0, left: 0, right: 280 },
+              children: ncSkillsCol.length ? ncSkillsCol : [new Paragraph({ text: '' })],
+            }),
+            new TableCell({
+              width: { size: 45, type: WidthType.PERCENTAGE },
+              verticalAlign: VerticalAlign.TOP,
+              borders: noBorders,
+              margins: { top: 0, bottom: 0, left: 0, right: 0 },
+              children: ncLangsCol.length ? ncLangsCol : [new Paragraph({ text: '' })],
+            }),
+          ],
+        })],
+      });
+    }
+
+    function ncBuildEducationBlocks(options: { pageBreakBefore?: boolean; keepWithNext?: boolean } = {}) {
+      if (cvData.education.length === 0) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const blocks: any[] = [ncHeading(t.cv.education, { keepNext: true, pageBreakBefore: options.pageBreakBefore ?? false })];
+      cvData.education.forEach((edu, eduIndex) => {
+        const isLastEdu = eduIndex === cvData.education.length - 1;
+        const keepSchoolWithNext = isLastEdu && (options.keepWithNext ?? false) && !edu.description;
+        if (edu.startDate || edu.endDate) {
+          blocks.push(new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            borders: noBorders,
+            rows: [new TableRow({
+              cantSplit: true,
+              children: [
+                new TableCell({
+                  width: { size: 75, type: WidthType.PERCENTAGE },
+                  borders: noBorders,
+                  children: [new Paragraph({
+                    keepNext: true,
+                    children: [new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' })],
+                    spacing: { after: 0 },
+                  })],
+                }),
+                new TableCell({
+                  width: { size: 25, type: WidthType.PERCENTAGE },
+                  borders: noBorders,
+                  children: [new Paragraph({
+                    alignment: AlignmentType.RIGHT,
+                    children: [new TextRun({ text: `${edu.startDate} – ${edu.endDate}`, size: 16, color: '9CA3AF' })],
+                    spacing: { after: 0 },
+                  })],
+                }),
+              ],
+            })],
+          }));
+        } else {
+          blocks.push(new Paragraph({
+            keepNext: true,
+            children: [new TextRun({ text: edu.degree, bold: true, size: 20, color: '111827' })],
+            spacing: { after: 0 },
+          }));
+        }
+        blocks.push(new Paragraph({
+          children: [new TextRun({ text: edu.school, size: 16, color: '6B7280' })],
+          spacing: { after: edu.description ? 40 : 100 },
+          keepNext: keepSchoolWithNext || Boolean(edu.description),
+        }));
+        if (edu.description) {
+          blocks.push(new Paragraph({
+            children: [new TextRun({ text: ncNormalizeDocxText(edu.description), size: 20, color: '4B5563' })],
+            spacing: { after: 100 },
+            keepNext: isLastEdu && (options.keepWithNext ?? false),
+          }));
+        }
+      });
+      return blocks;
+    }
+
+    // ── Summary: teal heading + body (keepNext prevents orphaned heading) ─
+    if (cvData.summary) {
+      const summaryText = ncNormalizeDocxText(cvData.summary);
+      children.push(ncHeading(t.cv.summary, { keepNext: true }));
+      children.push(new Paragraph({ children: [new TextRun({ text: summaryText, size: 20, color: '4B5563' })], spacing: { after: 160 } }));
+    }
+
+    // ── Experience: heading + first entry lead kept together via cantSplit table ─
+    if (cvData.experience.length > 0) {
+      const [firstExp, ...restExp] = cvData.experience;
+
+      children.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: noBorders,
+        rows: [new TableRow({
+          cantSplit: true,
+          children: [new TableCell({
+            verticalAlign: VerticalAlign.TOP,
+            borders: noBorders,
+            margins: { top: 0, bottom: 0, left: 0, right: 0 },
+            children: [
+              ncHeading(t.cv.experience, { keepNext: true }),
+              ...ncExperienceLeadBlocks(firstExp, { lineSlice: { start: 0, end: 1 }, trailingSpacer: false }),
+            ],
+          })],
+        })],
+      }));
+
+      const firstRemainderLines = ncExperienceDescriptionLines(firstExp.description ?? '').slice(1);
+      if (firstRemainderLines.length > 0) {
+        firstRemainderLines.forEach((line, lineIndex) => {
+          children.push(new Paragraph({
+            children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
+            spacing: { after: 40 },
+            keepNext: lineIndex < firstRemainderLines.length - 1,
+          }));
+        });
+      }
+      children.push(new Paragraph({ text: '', spacing: { after: 100 } }));
+
+      for (const exp of restExp) {
+        children.push(new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          borders: noBorders,
+          rows: [new TableRow({
+            cantSplit: true,
+            children: [new TableCell({
+              verticalAlign: VerticalAlign.TOP,
+              borders: noBorders,
+              margins: { top: 0, bottom: 0, left: 0, right: 0 },
+              children: ncExperienceLeadBlocks(exp, { lineSlice: { start: 0, end: 1 }, trailingSpacer: false }),
+            })],
+          })],
+        }));
+
+        const remainderLines = ncExperienceDescriptionLines(exp.description ?? '').slice(1);
+        if (remainderLines.length > 0) {
+          remainderLines.forEach((line, lineIndex) => {
+            children.push(new Paragraph({
+              children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
+              spacing: { after: 40 },
+              keepNext: lineIndex < remainderLines.length - 1,
+            }));
+          });
+        }
+        children.push(new Paragraph({ text: '', spacing: { after: 100 } }));
+      }
+    }
+
+    // ── Education + Skills/Languages: group lower sections when compact ─────
+    const ncGroupLowerSections = ncShouldGroupLowerDocxSections();
+    const ncHasLowerSections = cvData.education.length > 0 || ncHasSkills || ncHasLangs || cvData.certifications.length > 0;
+
+    if (ncGroupLowerSections && ncHasLowerSections) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const groupedLowerBlocks: any[] = [
+        ...ncBuildEducationBlocks({ pageBreakBefore: true, keepWithNext: ncHasSkills || ncHasLangs }),
+      ];
+      if (ncHasSkills || ncHasLangs) {
+        groupedLowerBlocks.push(ncBuildSkillsLanguagesTable());
+      } else if (cvData.certifications.length > 0) {
+        groupedLowerBlocks.push(ncHeading(t.cv.certifications, { keepNext: true }));
+        for (const cert of cvData.certifications) {
+          groupedLowerBlocks.push(new Paragraph({ children: [new TextRun({ text: '• ' + cert, size: 18, color: '374151' })], spacing: { after: 40 } }));
         }
       }
 
       children.push(new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
         borders: noBorders,
-        rows: [new TableRow({ children: [
-          new TableCell({ width: { size: 55, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 280 }, children: ncSkillsCol.length ? ncSkillsCol : [new Paragraph({ text: '' })] }),
-          new TableCell({ width: { size: 45, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 0 }, children: ncLangsCol.length ? ncLangsCol : [new Paragraph({ text: '' })] }),
-        ]})],
+        rows: [new TableRow({
+          cantSplit: true,
+          children: [new TableCell({
+            verticalAlign: VerticalAlign.TOP,
+            borders: noBorders,
+            margins: { top: 0, bottom: 0, left: 0, right: 0 },
+            children: groupedLowerBlocks,
+          })],
+        })],
       }));
-    } else if (cvData.certifications.length > 0) {
-      children.push(ncHeading(t.cv.certifications));
-      for (const cert of cvData.certifications) {
-        children.push(new Paragraph({ children: [new TextRun({ text: '• ' + cert, size: 18, color: '374151' })], spacing: { after: 40 } }));
+    } else {
+      if (cvData.education.length > 0) {
+        children.push(...ncBuildEducationBlocks({
+          keepWithNext: ncHasSkills || ncHasLangs,
+        }));
+      }
+
+      if (ncHasSkills || ncHasLangs) {
+        children.push(ncBuildSkillsLanguagesTable());
+      } else if (cvData.certifications.length > 0) {
+        children.push(ncHeading(t.cv.certifications, { keepNext: true }));
+        for (const cert of cvData.certifications) {
+          children.push(new Paragraph({ children: [new TextRun({ text: '• ' + cert, size: 18, color: '374151' })], spacing: { after: 40 } }));
+        }
       }
     }
   }

@@ -855,6 +855,8 @@ describe('Corporate Navy export', () => {
     const branchStart = exportSource.indexOf("cfg.customLayout === 'corporate-navy'");
     const legacyStart = exportSource.indexOf("false && cfg.customLayout === 'corporate-navy'", branchStart);
     const branch = exportSource.slice(branchStart, legacyStart);
+    const docxBranchStart = exportSource.indexOf("else if (cfg.customLayout === 'corporate-navy')");
+    const docxBranch = exportSource.slice(docxBranchStart, legacyStart);
     const docxHandlerBranchStart = pageSource.indexOf("liveCv.templateId === 'corporate-navy'");
     const docxHandlerBranch = pageSource.slice(docxHandlerBranchStart, docxHandlerBranchStart + 260);
 
@@ -867,7 +869,7 @@ describe('Corporate Navy export', () => {
     expect(branch).toContain('margins: { top: 4, bottom: 4, left: 0, right: 0 }');
     expect(branch).toContain("cnSkills.join('  |  ')");
     expect(branch).not.toContain('alignment: AlignmentType.CENTER, children: [new ImageRun');
-    expect(branch).not.toContain('pageBreakBefore');
+    expect(docxBranch).not.toContain('pageBreakBefore');
     expect(docxHandlerBranch.indexOf('originalPhoto')).toBeGreaterThan(-1);
     expect(docxHandlerBranch.indexOf('originalPhoto')).toBeLessThan(docxHandlerBranch.indexOf('circularPhotoDataUrl'));
   });

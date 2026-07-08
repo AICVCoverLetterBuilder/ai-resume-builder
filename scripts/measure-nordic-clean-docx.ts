@@ -67,6 +67,7 @@ function fixtureCv(): CVData {
     summary: [
       'Software engineer with strong delivery experience across distributed systems.',
       'Built reliable regression packs.leads.Software validation across product teams.',
+      'Stvarao sam priliku daIskusan učitelj sa iskustvom.',
     ].join(' '),
     experience: [
       {
@@ -149,6 +150,8 @@ async function main(): Promise<void> {
     educationVisible: plain.toUpperCase().includes('EDUCATION'),
     skillsVisible: plain.toUpperCase().includes('SKILLS') && plain.includes('React'),
     languagesVisible: plain.toUpperCase().includes('LANGUAGES') && plain.includes('English'),
+    containsGluedDaIskusan: plain.includes('daIskusan'),
+    containsFixedDaIskusan: plain.includes('da. Iskusan'),
     containsGluedLeadsSoftware: plain.includes('leads.Software'),
     containsGluedAssertionsBuilt: plain.includes('assertions.Built'),
     containsGluedLogicBuilt: plain.includes('logic.Built'),
@@ -157,9 +160,22 @@ async function main(): Promise<void> {
     containsFixedAssertionsBuilt: plain.includes('assertions. Built'),
     containsFixedLogicBuilt: plain.includes('logic. Built'),
     containsFixedAppliedDesigned: plain.includes('applied. Designed'),
+    docxHasKeepNext: documentXml.includes('w:keepNext'),
+    docxHasCantSplit: documentXml.includes('w:cantSplit'),
+    docxHasPageBreakBefore: documentXml.includes('w:pageBreakBefore'),
     pdfUntouched: true,
     blobSizeBytes: buffer.length,
   };
+
+  const previewPath = path.join(outDir, 'preview.html');
+  fs.writeFileSync(previewPath, `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Nordic Clean DOCX Preview</title>
+<style>body{font-family:Calibri,sans-serif;max-width:820px;margin:2rem auto;line-height:1.5;color:#374151}h1{font-size:1.25rem;color:#0D9488}</style>
+</head><body>
+<h1>Nordic Clean DOCX text extract</h1>
+<pre>${plain.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+</body></html>`);
+  (report as Record<string, unknown>).previewPath = previewPath;
 
   const reportPath = path.join(outDir, 'report.json');
   fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
