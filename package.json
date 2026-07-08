@@ -5,8 +5,10 @@
   "scripts": {
     "dev": "node node_modules/next/dist/bin/next dev --turbopack",
     "build": "node node_modules/next/dist/bin/next build",
-    "build:android": "npm run build && npx cap sync android",
+    "build:static": "node scripts/build-static.js",
+    "build:android": "npm run build:static && npx cap sync android",
     "build:android:clean": "node scripts/build-android-clean.js",
+    "verify:android:release": "node scripts/verify-android-release-assets.js",
     "start": "node node_modules/next/dist/bin/next start",
     "lint": "eslint",
     "test": "vitest run",
