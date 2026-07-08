@@ -13,7 +13,9 @@ import {
   buildExecutivePremiumPdfBlob,
   buildPaddedPdfSlice,
   exportToDOCX,
+  resolveCvPdfExportRoute,
 } from '@/lib/export';
+import { epNormalizePdfText } from '@/lib/executive-premium-pdf-renderer';
 import type { CVData } from '@/lib/types';
 
 const photo = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2w==';
@@ -142,6 +144,135 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   return { html2canvasMock, instances };
 }
 
+type DirectPdfInstance = {
+  pages: number;
+  drawnText: string[];
+  addImage: ReturnType<typeof vi.fn>;
+  addPage: ReturnType<typeof vi.fn>;
+  rect: ReturnType<typeof vi.fn>;
+};
+
+function installDirectPdfMocks() {
+  const instances: DirectPdfInstance[] = [];
+  vi.doMock('jspdf', () => ({
+    jsPDF: class MockPdf {
+      pages = 1;
+      drawnText: string[] = [];
+      addImage = vi.fn();
+      addPage = vi.fn(() => { this.pages += 1; });
+      setFont = vi.fn();
+      setFontSize = vi.fn();
+      setTextColor = vi.fn();
+      setFillColor = vi.fn();
+      setDrawColor = vi.fn();
+      setLineWidth = vi.fn();
+      rect = vi.fn();
+      roundedRect = vi.fn();
+      line = vi.fn();
+      circle = vi.fn();
+      text = vi.fn((t: string | string[]) => {
+        const parts = Array.isArray(t) ? t : [t];
+        this.drawnText.push(...parts);
+      });
+      splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
+        if (!text || typeof text !== 'string') return [];
+        const approxChars = Math.max(8, Math.floor(maxWidth / 2.5));
+        const words = text.split(/\s+/).filter(Boolean);
+        if (!words.length) return [text];
+        const lines: string[] = [];
+        let current = '';
+        for (const word of words) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (candidate.length > approxChars && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        if (current) lines.push(current);
+        return lines.length ? lines : [text];
+      });
+      getTextWidth = vi.fn((text: string) => Math.min(text.length * 1.8, 40));
+      output() {
+        return new Blob(['%PDF-1.7\nexecutive-premium-direct\n%%EOF'], { type: 'application/pdf' });
+      }
+      constructor() { instances.push(this as unknown as DirectPdfInstance); }
+    },
+  }));
+  return { instances };
+}
+
+function androidStressCv(): CVData {
+  return {
+    ...cv(),
+    personal: {
+      ...cv().personal,
+      fullName: 'Dragan Obradović',
+      jobTitle: 'Software engineer',
+      email: 'diodala12@gmail.com',
+      phone: '865333680065',
+      address: 'Braće Abafi 4',
+      photoEnabled: true,
+    },
+    summary: [
+      'Software engineer with strong delivery experience across distributed systems and quality-focused product teams.',
+      'Built reliable regression packs and CI gates that reduced release risk.lead.Assisted junior engineers during onboarding.',
+      'Applied automation across staging environments.Software engineer focused on measurable quality outcomes.',
+      ...Array.from({ length: 18 }, (_, i) =>
+        `Sentence ${i + 1}: reliable engineering delivery across classrooms, coaching, and leadership development.`,
+      ),
+    ].join(' '),
+    experience: [
+      {
+        id: 'exp-1',
+        company: 'Zezezeze',
+        position: 'Software engineer',
+        startDate: '2021-01',
+        endDate: '',
+        isPresent: true,
+        description: [
+          '- Owned end-to-end release quality for customer-facing products across mobile and web surfaces.',
+          '- Built reusable automation scaffolds.logic.Built smoke suites covering login, checkout, and account recovery paths.',
+          '- Partnered with developers to triage flaky suites and stabilize nightly pipelines before cutover weekends.',
+          '- Documented defect trends and risk signals for product stakeholders during major migration windows.',
+          '- Mentored QA peers on exploratory strategies while keeping regression coverage complete and measurable.',
+          '- Improved feedback loops between engineering and support so production incidents were resolved faster.',
+          '- Introduced risk-based testing for high-impact flows and reduced escape defects across consecutive releases.',
+          '- Collaborated on observability dashboards that highlighted failing critical journeys before customers noticed.',
+          '- Authored clear reproduction steps so developers could fix regressions without lengthy clarification threads.',
+          '- Maintained shared fixture data and seeded environments.Software platforms stayed consistent across squads.',
+        ].join('\n'),
+      },
+      {
+        id: 'exp-2',
+        company: 'Pixel & Co',
+        position: 'QA Tester',
+        startDate: '2015-03',
+        endDate: '2017-12',
+        isPresent: false,
+        description: [
+          '- Designed visual identities for 50+ brands across Europe, North America, and Asia Pacific.',
+          '- Produced motion graphics for broadcast TV and digital channels including RAI, Sky, and BBC.',
+          '- Collaborated with product teams on UX/UI improvements for e-commerce and mobile platforms.',
+          '- Mentored junior designers in brand strategy.applied.Designed workshop kits for onboarding cohorts.',
+          '- Conducted client workshops and strategic presentations while reporting findings to the development team.',
+        ].join('\n'),
+      },
+    ],
+    education: [{
+      id: 'edu-1',
+      school: 'Mathematic school',
+      degree: 'VI',
+      startDate: '2020-01',
+      endDate: '2025-01',
+      description: '',
+    }],
+    skills: ['React', 'TypeScript', 'System Design', 'Leadership', 'Coaching'],
+    languages: [{ name: 'English', level: 'Native' }, { name: 'Serbian', level: 'Fluent' }],
+  };
+}
+
 async function captureDocx(data: CVData): Promise<{ documentXml: string; mediaNames: string[]; mediaBytes: Uint8Array[] }> {
   const blobByUrl = new Map<string, Blob>();
   let capturedBlob: Blob | null = null;
@@ -247,30 +378,105 @@ describe('Executive Premium export', () => {
     expect(pageSource.slice(guard, fallback)).toContain("cv.templateId === 'executive-premium'");
   });
 
+  test('executive-premium resolves to the dedicated-executive-premium export route', () => {
+    expect(resolveCvPdfExportRoute('executive-premium').kind).toBe('dedicated-executive-premium');
+  });
+
+  test('Executive Premium dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {
+    const exportSource = source('src/lib/export.ts');
+    const rendererSource = source('src/lib/executive-premium-pdf-renderer.ts');
+    expect(exportSource).toContain('buildExecutivePremiumPagedPdfBlob');
+    expect(exportSource).toContain("kind: 'dedicated-executive-premium'");
+    expect(rendererSource).toContain('epCreateContext');
+    expect(rendererSource).toContain('epDrawHeader');
+    expect(rendererSource).toContain('epDrawSummary');
+    expect(rendererSource).toContain('epNormalizePdfText');
+    expect(rendererSource).not.toContain('html2canvas');
+    expect(rendererSource).not.toContain('buildCvPdfBlob');
+    expect(rendererSource).not.toContain('renderPdfSlice');
+    expect(rendererSource).not.toContain('renderPaddedPdfSlice');
+    expect(exportSource).not.toMatch(/buildExecutivePremiumPdfBlob[\s\S]{0,400}buildCvPdfBlob/);
+  });
+
+  test('epNormalizePdfText fixes glued sentence boundaries for PDF rendering only', () => {
+    expect(epNormalizePdfText('scaffolds.logic.Built smoke suites.')).toBe(
+      'scaffolds. logic. Built smoke suites.',
+    );
+    expect(epNormalizePdfText('strategy.applied.Designed workshop kits.')).toBe(
+      'strategy. applied. Designed workshop kits.',
+    );
+    expect(epNormalizePdfText('environments.Software platforms stayed consistent.')).toBe(
+      'environments. Software platforms stayed consistent.',
+    );
+    expect(epNormalizePdfText('risk.lead.Assisted junior engineers.')).toBe(
+      'risk. lead. Assisted junior engineers.',
+    );
+    expect(epNormalizePdfText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
+      'Used Node.js and REST APIs with CI/CD pipelines.',
+    );
+  });
+
   test('Executive Premium PDF Blob is non-empty and short fixture remains one page', async () => {
-    const canvas = makeCanvas(800, 1000, () => true);
-    const { html2canvasMock, instances } = installPdfMocks(canvas);
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
 
-    const blob = await buildExecutivePremiumPdfBlob(cv({ personal: { photoEnabled: false, originalPhoto: undefined, rectangularPhoto: undefined } }), 'en');
+    const blob = await mod.buildExecutivePremiumPdfBlob(
+      cv({ personal: { photoEnabled: false, originalPhoto: undefined, rectangularPhoto: undefined } }),
+      'en',
+    );
 
-    expect(html2canvasMock).toHaveBeenCalled();
     expect(blob.size).toBeGreaterThan(0);
+    expect(await blob.text()).toContain('%PDF');
     expect(instances).toHaveLength(1);
-    expect(instances[0].pages).toBe(1);
+    expect(instances[0]!.pages).toBe(1);
+    expect(instances[0]!.addPage).not.toHaveBeenCalled();
+    const drawn = instances[0]!.drawnText.join(' ');
+    expect(drawn).toContain('MARCUS THORNE');
+    expect(drawn.toUpperCase()).toContain('PROFESSIONAL SUMMARY');
+    expect(drawn.toUpperCase()).toContain('WORK EXPERIENCE');
   });
 
-  test('Executive Premium blank trailing canvas content is removed before pagination', async () => {
-    document.body.innerHTML = '<div id="cv-preview"><div data-template-id="executive-premium" style="width:800px;height:2300px"><div data-export-meaningful="true" style="height:900px">Executive Premium</div></div></div>';
-    const canvas = makeCanvas(800, 2300, y => y < 900);
-    const { instances } = installPdfMocks(canvas);
-
-    await buildCvPdfBlob('cv-preview');
-
-    expect(instances).toHaveLength(1);
-    expect(instances[0].pages).toBe(1);
+  test('Page 1 draws Professional Summary after header (body is not blank)', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildExecutivePremiumPdfBlob(cv({ personal: { photoEnabled: false } }), 'en');
+    const drawn = instances[0]?.drawnText ?? [];
+    const summaryIdx = drawn.findIndex((t) => /professional summary/i.test(t));
+    const nameIdx = drawn.findIndex((t) => /MARCUS THORNE/i.test(t));
+    expect(nameIdx).toBeGreaterThanOrEqual(0);
+    expect(summaryIdx).toBeGreaterThan(nameIdx);
+    expect(instances[0]?.pages).toBe(1);
   });
 
-  test('Executive Premium PDF export bakes continuation-page top padding into slice bitmaps', () => {
+  test('Android stress fixture paginates with summary on page 1 and no glued text', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    const blob = await mod.buildExecutivePremiumPagedPdfBlob(androidStressCv(), 'en', { photoDataUrl: photo });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
+    expect(instances[0]?.pages).toBeLessThanOrEqual(3);
+
+    const text = (instances[0]?.drawnText ?? []).join(' ');
+    expect(text.toUpperCase()).toContain('PROFESSIONAL SUMMARY');
+    expect(text.toUpperCase()).toContain('WORK EXPERIENCE');
+    expect(text.toUpperCase()).toContain('EDUCATION');
+    expect(text.toUpperCase()).toContain('SKILLS');
+    expect(text.toUpperCase()).toContain('LANGUAGES');
+    expect(text).toContain('React');
+    expect(text).toContain('English');
+    expect(text).not.toContain('logic.Built');
+    expect(text).toContain('logic. Built');
+    expect(text).not.toContain('applied.Designed');
+    expect(text).toContain('applied. Designed');
+    expect(text).not.toContain('environments.Software');
+    expect(text).toContain('environments. Software');
+    expect(text).toContain('reporting findings to the development team.');
+    if ((instances[0]?.pages ?? 0) >= 2) {
+      expect(text).toMatch(/\(continued\)|Sentence 1:/);
+    }
+  });
+
+  test('legacy Executive Premium padded slice helpers remain available for generic preview path', () => {
     const exportSource = source('src/lib/export.ts');
     expect(exportSource).toContain('EXECUTIVE_PREMIUM_PDF_PAGE_TOP_INSET_CSS_PX');
     expect(exportSource).toContain('EXECUTIVE_PREMIUM_PDF_PAGE_BOTTOM_INSET_CSS_PX');

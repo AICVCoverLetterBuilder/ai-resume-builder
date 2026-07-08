@@ -7,7 +7,6 @@ import { createAtsStandardPdfTemplate } from './ats-standard-pdf-template';
 import { createContemporaryBoldPdfTemplate } from './contemporary-bold-pdf-template';
 import { createCorporateNavyPdfTemplate } from './corporate-navy-pdf-template';
 import { createElegantFormalPdfTemplate } from './elegant-formal-pdf-template';
-import { createExecutivePremiumPdfTemplate } from './executive-premium-pdf-template';
 import { createModernMinimalPdfTemplate } from './modern-minimal-pdf-template';
 import { createCleanSimplePdfTemplate, splitCleanSimpleSummaryParagraphBlocks, splitCleanSimpleSummarySentenceRuns } from './clean-simple-pdf-template';
 import { createProfessionalClassicPdfTemplate } from './professional-classic-pdf-template';
@@ -19,6 +18,8 @@ import { buildTechSidebarPagedPdfBlob } from './tech-sidebar-pdf-renderer';
 export { buildTechSidebarPagedPdfBlob } from './tech-sidebar-pdf-renderer';
 import { buildRirekishoPagedPdfBlob } from './rirekisho-pdf-renderer';
 export { buildRirekishoPagedPdfBlob } from './rirekisho-pdf-renderer';
+import { buildExecutivePremiumPagedPdfBlob } from './executive-premium-pdf-renderer';
+export { buildExecutivePremiumPagedPdfBlob } from './executive-premium-pdf-renderer';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -9953,6 +9954,7 @@ export type CvPdfExportRoute =
   | { kind: 'dedicated-nordic-clean' }
   | { kind: 'dedicated-tech-sidebar' }
   | { kind: 'dedicated-rirekisho' }
+  | { kind: 'dedicated-executive-premium' }
   | { kind: 'dedicated-modern-minimal' }
   | { kind: 'generic-preview' };
 
@@ -9966,10 +9968,10 @@ export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdf
   if (templateId === 'nordic-clean') return { kind: 'dedicated-nordic-clean' };
   if (templateId === 'tech-sidebar') return { kind: 'dedicated-tech-sidebar' };
   if (templateId === 'rirekisho') return { kind: 'dedicated-rirekisho' };
+  if (templateId === 'executive-premium') return { kind: 'dedicated-executive-premium' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
   if (
-    templateId === 'executive-premium'
-    || templateId === 'corporate-navy'
+    templateId === 'corporate-navy'
     || templateId === 'contemporary-bold'
   ) {
     return { kind: 'generic-preview' };
@@ -15375,41 +15377,19 @@ export async function exportAtsStandardPdf(
   return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
 }
 
+async function prepareExecutivePremiumPdfPhotoDataUrl(cv: CVData): Promise<string | null> {
+  const prepared = await prepareExecutivePremiumCanonicalPhoto(cv);
+  return prepared?.dataUrl ?? null;
+}
+
 export async function buildExecutivePremiumPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Executive Premium PDF export requires a browser DOM');
-  }
-
-  const canonicalPhoto = await prepareExecutivePremiumCanonicalPhoto(cv);
-  const container = document.createElement('div');
-  container.id = `executive-premium-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-executive-premium-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createExecutivePremiumPdfTemplate(cv, {
-    locale,
-    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
-  }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Executive Premium PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  const photoDataUrl = await prepareExecutivePremiumPdfPhotoDataUrl(cv);
+  const blob = await buildExecutivePremiumPagedPdfBlob(cv, locale, { photoDataUrl });
+  if (!blob || blob.size === 0) throw new Error('Executive Premium PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportExecutivePremiumPdf(
