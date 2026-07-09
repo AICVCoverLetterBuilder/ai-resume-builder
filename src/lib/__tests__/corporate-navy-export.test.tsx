@@ -443,7 +443,7 @@ describe('Corporate Navy export', () => {
 
   test('corporate-navy resolves to the dedicated-corporate-navy export route', () => {
     expect(resolveCvPdfExportRoute('corporate-navy').kind).toBe('dedicated-corporate-navy');
-    expect(resolveCvPdfExportRoute('contemporary-bold').kind).toBe('generic-preview');
+    expect(resolveCvPdfExportRoute('contemporary-bold').kind).toBe('dedicated-contemporary-bold');
   });
 
   test('Corporate Navy dedicated PDF uses direct jsPDF renderer, not canvas slicing', () => {

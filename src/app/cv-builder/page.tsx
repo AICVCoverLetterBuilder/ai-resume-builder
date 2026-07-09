@@ -37,7 +37,7 @@ import { toast } from 'sonner';
 import {
   Sparkles, Plus, Trash2, Eye, FileText, Copy,
   Search, ChevronLeft, ChevronRight, Wand2, Crown, Star, Lock,
-  Download, ChevronDown, File
+  Download, ChevronDown, File, Maximize2
 } from 'lucide-react';
 import { PhotoUpload } from '@/components/PhotoUpload';
 import { MonthPicker } from '@/components/MonthPicker';
@@ -45,6 +45,7 @@ import { UpgradeBuilderBanner, FreeLimitModal, JobAnalyzerProModal, AiImprovemen
 import { PremiumAIButton, ProBadge } from '@/components/PremiumAIButton';
 import { JobAnalysisResultScreen, JobAnalysisLoadingState } from '@/components/JobAnalysisResultScreen';
 import { TemplatePreview } from '@/components/TemplatePreview';
+import { TemplatePreviewFullscreenModal } from '@/components/TemplatePreviewFullscreenModal';
 import {
   createElegantFormalPortraitPhoto,
   isCleanElegantFormalPortraitPhoto,
@@ -144,6 +145,7 @@ export default function CVBuilderPage() {
   const [activeLanguageSuggestionIndex, setActiveLanguageSuggestionIndex] = useState(-1);
   const [showSkillSuggestions, setShowSkillSuggestions] = useState(false);
   const [recommendedTemplateId, setRecommendedTemplateId] = useState<TemplateId | null>(null);
+  const [fullscreenTemplateId, setFullscreenTemplateId] = useState<TemplateId | null>(null);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [isPdfExporting, setIsPdfExporting] = useState(false);
   const [isWordExporting, setIsWordExporting] = useState(false);
@@ -1207,6 +1209,14 @@ export default function CVBuilderPage() {
       toast.success(`${t.cv.recommendedToast}: ${t.templates.items[recommended].name}`);
     };
 
+    const handleTemplateSelect = (id: TemplateId) => {
+      const info = templateInfo[id];
+      if (info.isPro && !isPro) {
+        setProTemplateModal(true);
+        return;
+      }
+      commitCvUpdate(prev => ({ ...prev, templateId: id }));
+    };
 
   const TemplateComponent = templateComponents[cv.templateId];
   const trimmedSkillQuery = skillInput.trim();
@@ -1917,7 +1927,7 @@ export default function CVBuilderPage() {
                           showArrow
                         />
                       </div>
-                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <div className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
                         {(Object.entries(templateInfo) as [TemplateId, typeof templateInfo[TemplateId]][]).map(([id, info]) => {
                           const translated = t.templates.items[id];
                           const isSelected = cv.templateId === id;
@@ -1925,19 +1935,12 @@ export default function CVBuilderPage() {
                           const categoryKey = info.category.toLowerCase().replace('-friendly', '').replace('japanese', 'japanese') as keyof typeof t.templates.categories;
                           const translatedCategory = translated?.category || t.templates.categories[categoryKey] || info.category;
                           return (
-                            <button
+                            <div
                               key={id}
-                              onClick={() => {
-                                if (info.isPro && !isPro) {
-                                  setProTemplateModal(true);
-                                  return;
-                                }
-                                commitCvUpdate(prev => ({ ...prev, templateId: id }));
-                              }}
-                              className={`group rounded-xl border-2 text-start transition-all overflow-hidden flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-primary ${isSelected ? 'border-primary shadow-md' : isRecommended ? 'border-amber-400 shadow-md' : 'border-border hover:border-primary/40 hover:shadow-lg hover:-translate-y-0.5'}`}
+                              className={`group rounded-xl border-2 transition-all overflow-hidden flex flex-col ${isSelected ? 'border-primary shadow-md' : isRecommended ? 'border-amber-400 shadow-md' : 'border-border hover:border-primary/40 hover:shadow-lg hover:-translate-y-0.5'}`}
                             >
-                              {/* Visual preview area */}
-                              <div className="relative aspect-[3/4] w-full bg-muted/40 overflow-hidden shrink-0">
+                              {/* Visual preview area — tap to open fullscreen */}
+                              <div className="relative aspect-[210/297] w-full bg-muted/30 overflow-hidden shrink-0">
                                 {info.isPro && (
                                   <div className="absolute top-2 end-2 z-10 flex items-center gap-1 rounded-full bg-primary px-2 py-0.5 text-[10px] font-bold text-primary-foreground shadow-md">
                                     <Crown className="h-2.5 w-2.5" />
@@ -1953,13 +1956,28 @@ export default function CVBuilderPage() {
                                 {isSelected && (
                                   <div className="absolute inset-0 border-2 border-primary rounded-[0.6rem] pointer-events-none z-20" />
                                 )}
-                                <div className="absolute inset-0 p-3 transition-transform duration-300 ease-out group-hover:scale-[1.04]">
-                                  <TemplatePreview templateId={id} />
-                                </div>
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/5 to-transparent pointer-events-none" />
+                                <button
+                                  type="button"
+                                  aria-label={`${t.cv.preview}: ${translated?.name || info.name}`}
+                                  onClick={() => setFullscreenTemplateId(id)}
+                                  className="absolute inset-0 z-[15] flex flex-col focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
+                                >
+                                  <div className="absolute inset-0 p-0.5 sm:p-1.5 transition-transform duration-300 ease-out group-hover:scale-[1.02]">
+                                    <TemplatePreview templateId={id} lazy maxScale={0.72} />
+                                  </div>
+                                  <span className="absolute bottom-2 end-2 z-20 inline-flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[10px] font-medium text-white backdrop-blur-sm">
+                                    <Maximize2 className="h-3 w-3" />
+                                    {t.cv.preview}
+                                  </span>
+                                </button>
+                                <div className="absolute inset-0 bg-gradient-to-t from-black/10 via-transparent to-transparent pointer-events-none" />
                               </div>
-                              {/* Card info */}
-                              <div className="p-3 border-t border-border flex flex-col gap-1 flex-1 min-w-0">
+                              {/* Card info — tap to select template */}
+                              <button
+                                type="button"
+                                onClick={() => handleTemplateSelect(id)}
+                                className={`p-3 border-t border-border flex flex-col gap-1 flex-1 min-w-0 text-start w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset ${isSelected ? 'bg-primary/5' : 'bg-card hover:bg-muted/30'}`}
+                              >
                                 <div className="flex items-center justify-between gap-1 min-w-0">
                                   <h4 className="text-xs font-bold text-foreground leading-tight truncate">{translated?.name || info.name}</h4>
                                   <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-bold text-primary whitespace-nowrap shrink-0">
@@ -1980,8 +1998,8 @@ export default function CVBuilderPage() {
                                     <span className="text-[9px] text-primary/70 font-medium">{t.cv.unlockWithPro}</span>
                                   </div>
                                 )}
-                              </div>
-                            </button>
+                              </button>
+                            </div>
                           );
                         })}
                       </div>
@@ -2085,6 +2103,19 @@ export default function CVBuilderPage() {
       <AiRecommendProModal
         open={aiRecommendModal}
         onClose={() => setAiRecommendModal(false)}
+      />
+      <TemplatePreviewFullscreenModal
+        open={fullscreenTemplateId !== null}
+        templateId={fullscreenTemplateId}
+        templateName={
+          fullscreenTemplateId
+            ? (t.templates.items[fullscreenTemplateId]?.name || templateInfo[fullscreenTemplateId].name)
+            : ''
+        }
+        selectLabel={t.cv.selectTemplate}
+        previewLabel={t.cv.preview}
+        onClose={() => setFullscreenTemplateId(null)}
+        onSelect={handleTemplateSelect}
       />
     </div>
   );

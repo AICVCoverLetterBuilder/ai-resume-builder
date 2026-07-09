@@ -1,12 +1,20 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { TemplateId } from '@/lib/types';
 import { templateComponents } from '@/components/cv-templates';
 import type { CVData } from '@/lib/types';
 
+/** Logical A4 content width used by CV template components (~210mm at 96dpi). */
+export const TEMPLATE_A4_WIDTH_PX = 794;
+
 interface TemplatePreviewProps {
   templateId: TemplateId;
+  /** Defer rendering until the card scrolls into view (template picker list). */
+  lazy?: boolean;
+  /** Upper bound for auto-fit scale — card previews stay smaller than fullscreen. */
+  maxScale?: number;
+  className?: string;
 }
 
 // Sample CV data used to populate the preview. Each profile shows variety
@@ -117,7 +125,6 @@ function getSampleData(templateId: TemplateId): CVData {
     languages = [{ name: 'English', level: 'Native' }];
     summary = 'Full-stack engineer with 6+ years building high-performance web applications and cloud infrastructure.';
   } else {
-    // Default (contemporary-bold, clean-simple, etc.)
     personal = {
       fullName: 'Alex Morgan',
       jobTitle: 'Product Manager',
@@ -156,43 +163,88 @@ function getSampleData(templateId: TemplateId): CVData {
   };
 }
 
-export const TemplatePreview: React.FC<TemplatePreviewProps> = ({ templateId }) => {
+export const TemplatePreview: React.FC<TemplatePreviewProps> = ({
+  templateId,
+  lazy = false,
+  maxScale = 0.72,
+  className = '',
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0.36);
+  const [shouldRender, setShouldRender] = useState(!lazy);
+
+  useEffect(() => {
+    if (!lazy || shouldRender) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          setShouldRender(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '120px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [lazy, shouldRender]);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el || !shouldRender) return;
+    const updateScale = () => {
+      const width = el.clientWidth;
+      if (width <= 0) return;
+      const next = Math.min(maxScale, Math.max(0.15, width / TEMPLATE_A4_WIDTH_PX));
+      setScale(next);
+    };
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [maxScale, shouldRender, templateId]);
+
   const TemplateComponent = templateComponents[templateId];
 
   if (!TemplateComponent) {
     return (
-      <div className="bg-white h-full w-full rounded-sm overflow-hidden flex items-center justify-center">
+      <div
+        ref={containerRef}
+        className={`bg-white h-full w-full rounded-sm overflow-hidden flex items-center justify-center ${className}`}
+      >
         <p className="text-xs text-gray-400">Preview unavailable</p>
       </div>
     );
   }
 
+  if (!shouldRender) {
+    return (
+      <div
+        ref={containerRef}
+        className={`bg-muted/50 h-full w-full rounded-sm overflow-hidden animate-pulse ${className}`}
+        aria-hidden
+      />
+    );
+  }
+
   const sampleData = getSampleData(templateId);
+  const logicalWidthPct = `${100 / scale}%`;
 
   return (
-    // Outer container: clips and scales the full-size template down to fit the card
     <div
-      className="bg-white h-full w-full rounded-sm overflow-hidden"
+      ref={containerRef}
+      className={`bg-white h-full w-full rounded-sm overflow-hidden ${className}`}
       style={{ position: 'relative' }}
     >
-      {/*
-        Scale the full A4-width template (210mm ≈ 794px) down to fit inside
-        the card container. We use a fixed origin-top-left scale so the visual
-        output is pixel-perfect identical to the full preview — just smaller.
-
-        The outer div has overflow:hidden, so any overflow is clipped cleanly.
-        We use a transform wrapper with pointer-events:none so the template
-        doesn't interfere with the card click handler.
-      */}
       <div
         style={{
           position: 'absolute',
           top: 0,
           left: 0,
-          // Scale to ~18% of original size so 794px → ~143px card width
-          transform: 'scale(0.18)',
+          transform: `scale(${scale})`,
           transformOrigin: 'top left',
-          width: '555%',   // 100 / 0.18 = 555%  → restores logical width for the template
+          width: logicalWidthPct,
           pointerEvents: 'none',
           userSelect: 'none',
         }}
