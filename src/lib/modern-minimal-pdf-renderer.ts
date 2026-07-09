@@ -1,8 +1,10 @@
 /**
- * Modern Minimal — dedicated direct jsPDF renderer (scratch rebuild).
+ * Modern Minimal — dedicated direct jsPDF renderer (Unicode rebuild).
  *
- * White header + indigo accent. Direct jsPDF only — no DOM capture, no navy fill.
- * Page 1 always uses body immediately after header for Professional Summary.
+ * White/indigo minimal header — no dark navy fill. Direct jsPDF only, no DOM
+ * capture. Embeds Noto Sans (Latin Extended) so Serbian/Croatian/Bosnian text
+ * renders correctly instead of relying on jsPDF's built-in Helvetica, which
+ * lacks the glyphs for č ć š đ ž and silently drops/replaces them.
  */
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
@@ -19,6 +21,7 @@ export type ModernMinimalPdfContext = {
   cv: CVData;
   locale: Locale;
   labels: ReturnType<typeof getModernMinimalPdfLabels>;
+  unicodeReady: boolean;
   contentX: number;
   contentW: number;
   marginTop: number;
@@ -34,7 +37,6 @@ type TextStyle = {
   bold?: boolean;
   italic?: boolean;
   lineH: number;
-  font?: 'helvetica' | 'times';
 };
 
 type BulletBlock = { lines: string[] };
@@ -69,6 +71,70 @@ const DATE_COL_W = 28;
 const SKILLS_COL_RATIO = 0.58;
 const LOWER_SECTIONS_MIN_REMAINING = 50;
 
+const FONT_REG_PATHS = [
+  '/fonts/NotoSans-Regular.ttf',
+  'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf',
+];
+const FONT_BOLD_PATHS = [
+  '/fonts/NotoSans-Bold.ttf',
+  'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Bold.ttf',
+];
+
+let cachedFontPayload: { regular: string; bold: string } | null = null;
+let fontPayloadPromise: Promise<{ regular: string; bold: string } | null> | null = null;
+
+function toB64(buf: ArrayBuffer): string {
+  const b = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < b.length; i += 1) s += String.fromCharCode(b[i]!);
+  return btoa(s);
+}
+
+async function readFontBytes(urls: string[]): Promise<ArrayBuffer | null> {
+  for (const url of urls) {
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 15000) : null;
+      const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
+      if (timer) clearTimeout(timer);
+      if (res.ok) return await res.arrayBuffer();
+    } catch {
+      // try next source
+    }
+  }
+  return null;
+}
+
+async function loadMmFontPayload(): Promise<{ regular: string; bold: string } | null> {
+  if (cachedFontPayload) return cachedFontPayload;
+  if (fontPayloadPromise) return fontPayloadPromise;
+  fontPayloadPromise = (async () => {
+    const [regular, bold] = await Promise.all([
+      readFontBytes(FONT_REG_PATHS),
+      readFontBytes(FONT_BOLD_PATHS),
+    ]);
+    if (!regular || !bold) return null;
+    cachedFontPayload = { regular: toB64(regular), bold: toB64(bold) };
+    return cachedFontPayload;
+  })();
+  return fontPayloadPromise;
+}
+
+/** Embed Noto Sans (Latin Extended) into jsPDF — required for Serbian/Croatian/Bosnian PDF text. */
+export async function mmRegisterUnicodeFonts(pdf: Pdf): Promise<boolean> {
+  try {
+    const fonts = await loadMmFontPayload();
+    if (!fonts) return false;
+    pdf.addFileToVFS('NotoSans-Regular.ttf', fonts.regular);
+    pdf.addFileToVFS('NotoSans-Bold.ttf', fonts.bold);
+    pdf.addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal');
+    pdf.addFont('NotoSans-Bold.ttf', 'NotoSans', 'bold');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getModernMinimalPdfLabels(locale: Locale) {
   const t = translations[locale] ?? translations.en;
   return {
@@ -93,33 +159,49 @@ export function mmNormalizePdfText(text: string): string {
     { token: 'Express.js', stub: '\u0001EXPRESSJS\u0001' },
     { token: 'Next.js', stub: '\u0001NEXTJS\u0001' },
     { token: 'Vue.js', stub: '\u0001VUEJS\u0001' },
+    { token: 'TypeScript', stub: '\u0001TS\u0001' },
+    { token: 'JavaScript', stub: '\u0001JS\u0001' },
     { token: 'CI/CD', stub: '\u0001CICD\u0001' },
     { token: 'REST APIs', stub: '\u0001RESTAPIS\u0001' },
     { token: 'REST API', stub: '\u0001RESTAPI\u0001' },
   ];
   for (const p of protect) out = out.split(p.token).join(p.stub);
 
-  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
-  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
-  out = out.replace(/\.([a-z]{3,})\.(\s*)([A-Z])/g, '. $1. $3');
+  const emails: string[] = [];
+  out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, (email) => {
+    const stub = `\u0001EMAIL${emails.length}\u0001`;
+    emails.push(email);
+    return stub;
+  });
+
+  const latLo = 'a-z\u0161\u0111\u010d\u0107\u017e';
+  const latHi = 'A-Z\u0160\u0110\u010c\u0106\u017d';
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`\\.([${latLo}]{3,})\\.(\s*)([${latHi}])`, 'g'), '. $1. $3');
+  out = out.replace(new RegExp(`([${latLo}]{3,})\\.([${latLo}]{3,})`, 'g'), '$1. $2');
   out = out.replace(
-    /\.([ \t]*)(lead|logic|applied|environments|built|designed|assisted)(?=\.?[A-Z])/gi,
+    /\.([ \t]*)(lead|logic|applied|environments|built|designed|assisted)(?=\.?[A-Z\u0160\u0110\u010c\u0106\u017d])/gi,
     '. $2',
   );
-  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
-  out = out.replace(/\.([a-z]{3,})\.(\s*)([A-Z])/g, '. $1. $3');
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`([${latLo}]{2,})([${latHi}][${latLo}]{2,})`, 'g'), '$1. $2');
 
   for (const p of protect) out = out.split(p.stub).join(p.token);
+  emails.forEach((email, index) => {
+    out = out.split(`\u0001EMAIL${index}\u0001`).join(email);
+  });
+
   return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
+function fontFamily(ctx: ModernMinimalPdfContext): string {
+  return ctx.unicodeReady ? 'NotoSans' : 'helvetica';
+}
+
 function applyStyle(ctx: ModernMinimalPdfContext, style: TextStyle): void {
-  const family = style.font ?? 'helvetica';
-  let fontStyle: 'normal' | 'bold' | 'italic' | 'bolditalic' = 'normal';
-  if (style.bold && style.italic) fontStyle = 'bolditalic';
-  else if (style.bold) fontStyle = 'bold';
-  else if (style.italic) fontStyle = 'italic';
-  ctx.pdf.setFont(family, fontStyle);
+  const family = fontFamily(ctx);
+  ctx.pdf.setFont(family, style.bold ? 'bold' : 'normal');
   ctx.pdf.setFontSize(style.size);
   ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
 }
@@ -132,12 +214,18 @@ function remainingY(ctx: ModernMinimalPdfContext): number {
   return ctx.bottomSafeY - ctx.y;
 }
 
-export function mmCreateContext(pdf: Pdf, cv: CVData, locale: Locale): ModernMinimalPdfContext {
+export function mmCreateContext(
+  pdf: Pdf,
+  cv: CVData,
+  locale: Locale,
+  unicodeReady: boolean,
+): ModernMinimalPdfContext {
   return {
     pdf,
     cv,
     locale,
     labels: getModernMinimalPdfLabels(locale),
+    unicodeReady,
     contentX: MARGIN_X,
     contentW: A4_W - MARGIN_X * 2,
     marginTop: MARGIN_TOP,
@@ -187,7 +275,7 @@ export function mmMeasureBulletHeight(lineCount: number): number {
 }
 
 function bulletLayout(ctx: ModernMinimalPdfContext, contentW: number): MmBulletLayout {
-  applyStyle(ctx, { size: 9, color: BODY, font: 'helvetica', lineH: BULLET_LINE_H });
+  applyStyle(ctx, { size: 9, color: BODY, lineH: BULLET_LINE_H });
   const markerW = ctx.pdf.getTextWidth('-');
   const markerX = ctx.contentX;
   const textX = markerX + markerW + BULLET_GAP;
@@ -227,14 +315,14 @@ export function mmDrawHeader(ctx: ModernMinimalPdfContext, photoDataUrl: string 
   let textBottom = ctx.y + 2;
 
   const name = ctx.cv.personal.fullName || 'Your Name';
-  applyStyle(ctx, { size: 18, color: TEXT, bold: true, font: 'helvetica', lineH: 6 });
+  applyStyle(ctx, { size: 18, color: TEXT, bold: true, lineH: 6 });
   for (const line of wrapLines(ctx, name, textMaxW).slice(0, 2)) {
     ctx.pdf.text(line, textLeft, textBottom + 4.5);
     textBottom += 5.6;
   }
 
   if (ctx.cv.personal.jobTitle) {
-    applyStyle(ctx, { size: 10.5, color: INDIGO, bold: true, font: 'helvetica', lineH: 4 });
+    applyStyle(ctx, { size: 10.5, color: INDIGO, bold: true, lineH: 4 });
     for (const line of wrapLines(ctx, ctx.cv.personal.jobTitle, textMaxW).slice(0, 2)) {
       ctx.pdf.text(line, textLeft, textBottom + 3);
       textBottom += 4;
@@ -244,7 +332,7 @@ export function mmDrawHeader(ctx: ModernMinimalPdfContext, photoDataUrl: string 
   const contacts = headerContactParts(ctx);
   if (contacts.length) {
     textBottom += 1.5;
-    applyStyle(ctx, { size: 8.5, color: CONTACT, font: 'helvetica', lineH: 3.3 });
+    applyStyle(ctx, { size: 8.5, color: CONTACT, lineH: 3.3 });
     const contactLine = contacts.join('    ');
     for (const line of wrapLines(ctx, contactLine, textMaxW).slice(0, 2)) {
       ctx.pdf.text(line, textLeft, textBottom + 2.5);
@@ -296,7 +384,7 @@ export function mmDrawSectionHeading(
   const x = opts.x ?? ctx.contentX;
   const w = opts.w ?? ctx.contentW;
   mmEnsureSpace(ctx, SECTION_HEADING_H + 2);
-  applyStyle(ctx, { size: 8.5, color: INDIGO, bold: true, font: 'helvetica', lineH: 3.4 });
+  applyStyle(ctx, { size: 8.5, color: INDIGO, bold: true, lineH: 3.4 });
   ctx.pdf.text(label.toUpperCase(), x, ctx.y + 3);
   ctx.y += 4;
   ctx.pdf.setDrawColor(RULE[0], RULE[1], RULE[2]);
@@ -323,7 +411,7 @@ export function mmDrawWrappedParagraph(
 export function mmDrawSummary(ctx: ModernMinimalPdfContext): void {
   if (!ctx.cv.summary?.trim()) return;
 
-  const bodyStyle: TextStyle = { size: 9.2, color: BODY, font: 'helvetica', lineH: BODY_LINE_H };
+  const bodyStyle: TextStyle = { size: 9.2, color: BODY, lineH: BODY_LINE_H };
   const lines = wrapLines(ctx, ctx.cv.summary, ctx.contentW);
   if (!lines.length) return;
 
@@ -351,7 +439,7 @@ export function mmDrawWrappedBullet(
   opts: { drawMarker?: boolean } = {},
 ): void {
   const drawMarker = opts.drawMarker ?? true;
-  const style: TextStyle = { size: 9, color: BODY, font: 'helvetica', lineH: BULLET_LINE_H };
+  const style: TextStyle = { size: 9, color: BODY, lineH: BULLET_LINE_H };
   for (let i = 0; i < lines.length; i += 1) {
     mmEnsureSpace(ctx, BULLET_LINE_H);
     if (i === 0 && drawMarker) {
@@ -370,7 +458,7 @@ export function mmDrawExperienceEntryContinuation(
 ): void {
   mmEnsureSpace(ctx, 5);
   const role = entry.position || entry.company || 'Experience';
-  applyStyle(ctx, { size: 8, color: MUTED, bold: true, font: 'helvetica', lineH: 3.2 });
+  applyStyle(ctx, { size: 8, color: MUTED, bold: true, lineH: 3.2 });
   ctx.pdf.text(`${mmNormalizePdfText(role)} (continued)`, ctx.contentX, ctx.y + 2.5);
   ctx.y += 4.5;
 }
@@ -386,7 +474,7 @@ function drawExperienceLead(ctx: ModernMinimalPdfContext, entry: CVData['experie
     .filter(Boolean)
     .join(' - ');
 
-  applyStyle(ctx, { size: 10, color: TEXT, bold: true, font: 'helvetica', lineH: 4 });
+  applyStyle(ctx, { size: 10, color: TEXT, bold: true, lineH: 4 });
   const positionLines = wrapLines(ctx, entry.position || '', ctx.contentW - DATE_COL_W);
   const startY = ctx.y;
   let lineY = startY;
@@ -396,13 +484,13 @@ function drawExperienceLead(ctx: ModernMinimalPdfContext, entry: CVData['experie
   }
 
   if (date) {
-    applyStyle(ctx, { size: 8, color: MUTED, font: 'helvetica', lineH: 3.2 });
+    applyStyle(ctx, { size: 8, color: MUTED, lineH: 3.2 });
     const dateW = ctx.pdf.getTextWidth(date);
     ctx.pdf.text(date, ctx.contentX + ctx.contentW - dateW, startY + 3);
   }
 
   if (entry.company) {
-    applyStyle(ctx, { size: 9, color: MUTED, font: 'helvetica', lineH: 3.4 });
+    applyStyle(ctx, { size: 9, color: MUTED, lineH: 3.4 });
     ctx.pdf.text(mmNormalizePdfText(entry.company), ctx.contentX, lineY + 2.6);
     lineY += 3.4;
   }
@@ -517,7 +605,7 @@ export function mmDrawEducationSection(ctx: ModernMinimalPdfContext): void {
     const date = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
     const label = [edu.degree, edu.school].filter(Boolean).join(' / ');
 
-    applyStyle(ctx, { size: 9.8, color: TEXT, bold: true, font: 'helvetica', lineH: 3.8 });
+    applyStyle(ctx, { size: 9.8, color: TEXT, bold: true, lineH: 3.8 });
     const labelLines = wrapLines(ctx, label, ctx.contentW - DATE_COL_W);
     const startY = ctx.y;
     let lineY = startY;
@@ -527,7 +615,7 @@ export function mmDrawEducationSection(ctx: ModernMinimalPdfContext): void {
     }
 
     if (date) {
-      applyStyle(ctx, { size: 8, color: MUTED, font: 'helvetica', lineH: 3.2 });
+      applyStyle(ctx, { size: 8, color: MUTED, lineH: 3.2 });
       const dateW = ctx.pdf.getTextWidth(date);
       ctx.pdf.text(date, ctx.contentX + ctx.contentW - dateW, startY + 3);
     }
@@ -538,7 +626,6 @@ export function mmDrawEducationSection(ctx: ModernMinimalPdfContext): void {
       mmDrawWrappedParagraph(ctx, descLines, {
         size: 8.5,
         color: BODY,
-        font: 'helvetica',
         lineH: 3.3,
       });
     }
@@ -551,7 +638,7 @@ export function mmLayoutSkillChips(
   skills: string[],
   maxW: number,
 ): ChipLayout[] {
-  applyStyle(ctx, { size: 8, color: CHIP_TEXT, font: 'helvetica', lineH: 3.1 });
+  applyStyle(ctx, { size: 8, color: CHIP_TEXT, lineH: 3.1 });
   return skills.map((raw) => {
     const text = getLocalizedCvSkillName(raw, ctx.locale) || raw;
     const w = Math.min(maxW, ctx.pdf.getTextWidth(text) + 5.5);
@@ -584,19 +671,30 @@ function measureLanguagesBlockH(ctx: ModernMinimalPdfContext): number {
   return SECTION_HEADING_H + ctx.cv.languages.length * 4 + 2;
 }
 
-export function mmMeasureLowerSectionsHeight(ctx: ModernMinimalPdfContext): number {
-  let total = 0;
-  if (ctx.cv.education.length) {
-    total += SECTION_HEADING_H + ctx.cv.education.length * 8;
+/** Mirrors the row-height approximation mmDrawEducationSection uses when paginating. */
+function mmMeasureEducationSectionHeight(ctx: ModernMinimalPdfContext): number {
+  if (!ctx.cv.education.length) return 0;
+  let total = SECTION_HEADING_H;
+  for (const edu of ctx.cv.education) {
+    total += 8 + (edu.description
+      ? mmMeasureWrappedTextHeight(ctx, edu.description, ctx.contentW, 3.3)
+      : 0);
   }
+  return total;
+}
+
+function mmMeasureSkillsLanguagesGroupHeight(ctx: ModernMinimalPdfContext): number {
   const hasSkills = ctx.cv.skills.length > 0;
   const hasLangs = ctx.cv.languages.length > 0;
-  if (hasSkills || hasLangs) {
-    const skillsW = hasLangs ? ctx.contentW * SKILLS_COL_RATIO : ctx.contentW;
-    const skillsH = hasSkills ? measureSkillsBlockH(ctx, skillsW) : 0;
-    const langsH = hasLangs ? measureLanguagesBlockH(ctx) : 0;
-    total += Math.max(skillsH, langsH);
-  }
+  if (!hasSkills && !hasLangs) return 0;
+  const skillsW = hasLangs ? ctx.contentW * SKILLS_COL_RATIO : ctx.contentW;
+  const skillsH = hasSkills ? measureSkillsBlockH(ctx, skillsW) : 0;
+  const langsH = hasLangs ? measureLanguagesBlockH(ctx) : 0;
+  return Math.max(skillsH, langsH);
+}
+
+export function mmMeasureLowerSectionsHeight(ctx: ModernMinimalPdfContext): number {
+  let total = mmMeasureEducationSectionHeight(ctx) + mmMeasureSkillsLanguagesGroupHeight(ctx);
   if (ctx.cv.certifications.length) {
     total += SECTION_HEADING_H + ctx.cv.certifications.length * 4;
   }
@@ -628,7 +726,7 @@ function drawSkillChipsColumn(
     ctx.pdf.setDrawColor(CHIP_BG[0], CHIP_BG[1], CHIP_BG[2]);
     ctx.pdf.setLineWidth(0.1);
     ctx.pdf.roundedRect(x, rowY, chip.w, 4.8, 2.4, 2.4, 'F');
-    applyStyle(ctx, { size: 8, color: CHIP_TEXT, font: 'helvetica', lineH: 3.1 });
+    applyStyle(ctx, { size: 8, color: CHIP_TEXT, lineH: 3.1 });
     ctx.pdf.text(chip.text, x + 2.2, rowY + 3.2);
     x += chip.w + 2;
   }
@@ -653,7 +751,7 @@ function drawLanguagesColumn(
   for (const lang of ctx.cv.languages) {
     const name = getLocalizedCvLanguageName(lang.name, ctx.locale) || lang.name;
     const line = lang.level ? `${name} - ${lang.level}` : name;
-    applyStyle(ctx, { size: 9, color: BODY, font: 'helvetica', lineH: 3.5 });
+    applyStyle(ctx, { size: 9, color: BODY, lineH: 3.5 });
     ctx.pdf.text(mmNormalizePdfText(line), colX, rowY + 2.6);
     rowY += 4;
   }
@@ -691,13 +789,38 @@ export function mmDrawSkillsLanguagesGroup(ctx: ModernMinimalPdfContext): void {
   ctx.y = Math.max(skillsEnd, langsEnd);
 }
 
+/**
+ * Keeps Education + Skills/Languages grouped together when the combined block
+ * is small enough to fit one fresh page. Without this, Education can land on
+ * the tail of the current page (just barely fitting) while Skills/Languages —
+ * measured independently right after — no longer has enough remaining room
+ * and gets orphaned alone on the next page, even though the whole group
+ * would have fit together starting from a clean page.
+ */
+export function mmDrawLowerSections(ctx: ModernMinimalPdfContext): void {
+  const educationH = mmMeasureEducationSectionHeight(ctx);
+  const skillsLangsH = mmMeasureSkillsLanguagesGroupHeight(ctx);
+
+  if (educationH > 0 && skillsLangsH > 0) {
+    const combinedH = educationH + skillsLangsH;
+    const fitsOnFreshPage = combinedH <= usablePageHeight(ctx);
+    const fitsOnCurrentPage = ctx.y + combinedH <= ctx.bottomSafeY;
+    if (fitsOnFreshPage && !fitsOnCurrentPage) {
+      mmMoveToNextPage(ctx);
+    }
+  }
+
+  mmDrawEducationSection(ctx);
+  mmDrawSkillsLanguagesGroup(ctx);
+}
+
 function mmDrawCertifications(ctx: ModernMinimalPdfContext): void {
   if (!ctx.cv.certifications.length) return;
   mmEnsureSpace(ctx, SECTION_HEADING_H + 6);
   mmDrawSectionHeading(ctx, ctx.labels.certifications);
   for (const cert of ctx.cv.certifications) {
     const lines = wrapLines(ctx, cert, ctx.contentW);
-    mmDrawWrappedParagraph(ctx, lines, { size: 9, color: BODY, font: 'helvetica', lineH: 3.5 });
+    mmDrawWrappedParagraph(ctx, lines, { size: 9, color: BODY, lineH: 3.5 });
   }
 }
 
@@ -708,13 +831,13 @@ export async function buildModernMinimalPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const ctx = mmCreateContext(pdf, cv, locale);
+  const unicodeReady = await mmRegisterUnicodeFonts(pdf);
+  const ctx = mmCreateContext(pdf, cv, locale, unicodeReady);
 
   mmDrawHeader(ctx, options.photoDataUrl ?? null);
   mmDrawSummary(ctx);
   mmDrawExperienceSection(ctx);
-  mmDrawEducationSection(ctx);
-  mmDrawSkillsLanguagesGroup(ctx);
+  mmDrawLowerSections(ctx);
   mmDrawCertifications(ctx);
 
   const out = pdf.output('blob');

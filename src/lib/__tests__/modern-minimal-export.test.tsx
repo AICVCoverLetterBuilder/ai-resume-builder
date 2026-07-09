@@ -26,6 +26,7 @@ import {
 } from '@/lib/export';
 import { exportToDOCX } from '@/lib/export';
 import { mmNormalizePdfText } from '@/lib/modern-minimal-pdf-renderer';
+import { countPdfPages, extractPdfUnicodeText } from '@/lib/pdf-text-extract';
 import type { CVData } from '@/lib/types';
 
 function cv(overrides: Partial<CVData> = {}): CVData {
@@ -141,6 +142,60 @@ function draganCv(): CVData {
   });
 }
 
+function serbianStressCv(): CVData {
+  return {
+    ...cv(),
+    personal: {
+      fullName: 'Dragan Obradović',
+      email: 'diodala12@gmail.com',
+      phone: '865333680065',
+      address: 'Braće Abafi 4',
+      jobTitle: 'Učitelj u osnovnoj školi',
+      photoEnabled: false,
+      photo: undefined,
+    },
+    summary: [
+      'Iskusan učitelj sa oko devet godina rada u obrazovanju.',
+      'Stvarao sam priliku daIskusan učitelj sa čvrstom stručnom praksom u koučingu i sarađivanju sa učenicima.',
+      'Planirao sam rad u Matematičkom fakultetu uz praćenje i izvođenje nastave.',
+      ...Array.from({ length: 14 }, (_, i) =>
+        `Rečenica ${i + 1}: diferencirana nastava za učenike različitih nivoa znanja i stilova učenja.`,
+      ),
+    ].join(' '),
+    experience: [
+      {
+        id: 'exp-sr-1',
+        company: 'Zhff',
+        position: 'Učitelj u osnovnoj školi',
+        startDate: '2023-05',
+        endDate: '',
+        isPresent: true,
+        description: [
+          '- Planirao sam i realizovao nastavne jedinice iz srpskog jezika i matematike.',
+          '- Primenio sam diferenciranu nastavu kako bi prilagodio sadržaje učenicima različitih nivoa znanja.',
+          '- Sprovodio sam formativno i sumativno ocenjivanje učenika uz praćenje napretka.',
+        ].join('\n'),
+      },
+    ],
+    education: [{
+      id: 'edu-sr-1',
+      school: 'Matematički fakultet',
+      degree: 'VI',
+      startDate: '2020-01',
+      endDate: '2025-02',
+      description: '',
+    }],
+    skills: ['Teamwork', 'Organization', 'Coaching', 'Leadership'],
+    languages: [{ name: 'Serbian', level: 'Native' }, { name: 'English', level: 'Fluent' }],
+    templateId: 'modern-minimal',
+    region: 'Balkan',
+  };
+}
+
+function pdfTextIncludes(text: string, needle: string): boolean {
+  return text.includes(needle) || text.toUpperCase().includes(needle.toUpperCase());
+}
+
 function rectAttr(top: number, left: number, width: number, height: number): string {
   return [top, left, width, height].join(',');
 }
@@ -241,9 +296,11 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
 type DirectPdfInstance = {
   pages: number;
   drawnText: string[];
-  textCalls: Array<{ text: string; x: number }>;
+  textCalls: Array<{ text: string; x: number; page: number }>;
   addImage: ReturnType<typeof vi.fn>;
   addPage: ReturnType<typeof vi.fn>;
+  addFileToVFS: ReturnType<typeof vi.fn>;
+  addFont: ReturnType<typeof vi.fn>;
 };
 
 function installDirectPdfMocks() {
@@ -253,9 +310,11 @@ function installDirectPdfMocks() {
       pages = 1;
       currentPage = 1;
       drawnText: string[] = [];
-      textCalls: Array<{ text: string; x: number }> = [];
+      textCalls: Array<{ text: string; x: number; page: number }> = [];
       addImage = vi.fn();
       addPage = vi.fn(() => { this.pages += 1; this.currentPage = this.pages; });
+      addFileToVFS = vi.fn();
+      addFont = vi.fn();
       setPage = vi.fn((page: number) => { this.currentPage = page; });
       setFont = vi.fn();
       setFontSize = vi.fn();
@@ -272,7 +331,7 @@ function installDirectPdfMocks() {
         const parts = Array.isArray(t) ? t : [t];
         for (const part of parts) {
           this.drawnText.push(part);
-          this.textCalls.push({ text: part, x: x ?? 0 });
+          this.textCalls.push({ text: part, x: x ?? 0, page: this.currentPage });
         }
       });
       splitTextToSize = vi.fn((text: string, maxWidth: number): string[] => {
@@ -400,6 +459,19 @@ beforeEach(() => {
   Object.defineProperty(document, 'fonts', {
     value: { load: vi.fn().mockResolvedValue([]), ready: Promise.resolve() },
     configurable: true,
+  });
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: string | URL | Request) => {
+    const url = String(input);
+    const fileName = url.split('/').pop() ?? '';
+    const fontPath = path.join(process.cwd(), 'public', 'fonts', fileName);
+    if (fs.existsSync(fontPath)) {
+      const buf = fs.readFileSync(fontPath);
+      return {
+        ok: true,
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+      } as Response;
+    }
+    return { ok: false, arrayBuffer: async () => new ArrayBuffer(0) } as Response;
   });
 });
 
@@ -754,7 +826,89 @@ describe('Modern Minimal preview/export parity', () => {
     expect(mmNormalizePdfText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
       'Used Node.js and REST APIs with CI/CD pipelines.',
     );
+    expect(mmNormalizePdfText('Stvarao sam priliku daIskusan učitelj sa čvrstom stručnom praksom.')).toContain(
+      'da. Iskusan',
+    );
+    expect(mmNormalizePdfText('Stvarao sam priliku daIskusan učitelj sa čvrstom stručnom praksom.')).not.toContain(
+      'daIskusan',
+    );
   });
+
+  test('Modern Minimal renderer registers Noto Sans via addFileToVFS + addFont, not built-in Helvetica/Times for Serbian text', () => {
+    const rendererSource = fs.readFileSync(path.resolve('src/lib/modern-minimal-pdf-renderer.ts'), 'utf8');
+    expect(rendererSource).toContain('mmRegisterUnicodeFonts');
+    expect(rendererSource).toContain('addFileToVFS');
+    expect(rendererSource).toContain("addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal')");
+    expect(rendererSource).toContain("addFont('NotoSans-Bold.ttf', 'NotoSans', 'bold')");
+    expect(rendererSource).toContain("'/fonts/NotoSans-Regular.ttf'");
+    expect(rendererSource).toContain("'/fonts/NotoSans-Bold.ttf'");
+    expect(rendererSource).toContain('await mmRegisterUnicodeFonts(pdf)');
+  });
+
+  test('Serbian Unicode passes through renderer text calls before PDF encoding', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildModernMinimalPdfBlob(serbianStressCv(), 'en');
+    const drawn = instances[0]?.drawnText.join(' ') ?? '';
+    for (const needle of ['Obradović', 'Učitelj', 'Braće', 'učenicima', 'Matematičkom', 'da. Iskusan']) {
+      expect(pdfTextIncludes(drawn, needle), `missing ${needle} in drawn text`).toBe(true);
+    }
+    expect(drawn).not.toContain('daIskusan');
+  });
+
+  test('Serbian Latin Extended characters survive in real direct PDF output', async () => {
+    vi.doUnmock('jspdf');
+    const mod = await import('@/lib/modern-minimal-pdf-renderer');
+    const blob = await mod.buildModernMinimalPagedPdfBlob(serbianStressCv(), 'en', { photoDataUrl: null });
+    expect(blob.size).toBeGreaterThan(3000);
+
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    const extracted = extractPdfUnicodeText(buffer);
+    expect(buffer.toString('latin1').includes('NotoSans')).toBe(true);
+
+    for (const needle of [
+      'Obradović',
+      'Učitelj',
+      'Braće',
+      'učenicima',
+      'Matematičkom',
+      'čvrstom',
+      'stručnom',
+      'koučingu',
+      'sarađivanju',
+      'praćenje',
+      'izvođenje',
+    ]) {
+      expect(pdfTextIncludes(extracted, needle), `missing ${needle}`).toBe(true);
+    }
+
+    expect(extracted.includes('daIskusan')).toBe(false);
+    expect(extracted.includes('da. Iskusan')).toBe(true);
+    expect(extracted.includes('\uFFFD')).toBe(false);
+    // Reject C0 control characters (other than the normal whitespace ones) that
+    // would indicate broken glyph decoding around Serbian letters.
+    expect(/[\u0000-\u0008\u000B\u000E-\u001F]/.test(extracted)).toBe(false);
+  }, 30000);
+
+  test('real direct Modern Minimal PDF keeps Page 1 body used and Professional Summary starting after the header', async () => {
+    vi.doUnmock('jspdf');
+    const mod = await import('@/lib/modern-minimal-pdf-renderer');
+    const blob = await mod.buildModernMinimalPagedPdfBlob(serbianStressCv(), 'en', { photoDataUrl: null });
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    const extracted = extractPdfUnicodeText(buffer);
+    const pageCount = countPdfPages(buffer);
+
+    expect(pageCount).toBeGreaterThanOrEqual(1);
+    expect(pageCount).toBeLessThanOrEqual(3);
+    expect(extracted.toUpperCase()).toMatch(/PROFESSIONAL SUMMARY/);
+    expect(extracted.toUpperCase()).toMatch(/WORK EXPERIENCE/);
+    expect(extracted.toUpperCase()).toMatch(/EDUCATION/);
+    expect(extracted.toUpperCase()).toMatch(/SKILLS/);
+    expect(extracted.toUpperCase()).toMatch(/LANGUAGES/);
+    const summaryIdx = extracted.toUpperCase().indexOf('PROFESSIONAL SUMMARY');
+    const nameIdx = extracted.toUpperCase().indexOf('OBRADOVI');
+    expect(summaryIdx).toBeGreaterThan(nameIdx);
+  }, 30000);
 
   test('the exact real-world Android-reported joined words never appear in the routed Modern Minimal PDF chain', () => {
     const page = pageSource();
@@ -977,6 +1131,125 @@ describe('Modern Minimal preview/export parity', () => {
     if ((instances[0]?.pages ?? 0) >= 2) {
       expect(text).toMatch(/\(continued\)|Sentence 1:/);
     }
+
+    // Education and Skills/Languages must be grouped on the same page rather
+    // than Education landing on the tail of one page while Skills/Languages
+    // gets orphaned alone on the next.
+    const calls = instances[0]?.textCalls ?? [];
+    const educationPage = calls.find((c) => c.text.toUpperCase() === 'EDUCATION')?.page;
+    const skillsPage = calls.find((c) => c.text.toUpperCase() === 'SKILLS')?.page;
+    const languagesPage = calls.find((c) => c.text.toUpperCase() === 'LANGUAGES')?.page;
+    expect(educationPage).toBeDefined();
+    expect(skillsPage).toBeDefined();
+    expect(educationPage).toBe(skillsPage);
+    expect(educationPage).toBe(languagesPage);
+  });
+
+  test('lower-section grouping keeps Education with Skills/Languages instead of orphaning Skills alone on a final page', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    // Long-enough experience content pushes close to a page boundary right
+    // before Education, reproducing the real-world "Education fits at the
+    // bottom of page 2, Skills/Languages alone on page 3" report.
+    const heavyCv = cv({
+      personal: { photoEnabled: false },
+      summary: '',
+      experience: [{
+        id: 'exp-heavy',
+        company: 'Acme Corp',
+        position: 'Senior Engineer',
+        startDate: '2021-01',
+        endDate: '',
+        isPresent: true,
+        description: Array.from({ length: 26 }, (_, i) =>
+          `- Delivered measurable outcome number ${i + 1} across distributed systems, quality gates, and release engineering practices for enterprise customers.`,
+        ).join('\n'),
+      }],
+      education: [{ id: 'edu-1', school: 'State University', degree: 'BS Computer Science', startDate: '2014', endDate: '2018', description: '' }],
+      skills: ['TypeScript', 'React', 'Node.js', 'Accessibility', 'PostgreSQL', 'Cloud Architecture'],
+      languages: [{ name: 'English', level: 'Native' }, { name: 'French', level: 'Intermediate' }],
+      certifications: [],
+    });
+
+    await mod.buildModernMinimalPagedPdfBlob(heavyCv, 'en');
+    const calls = instances[0]?.textCalls ?? [];
+    const educationPage = calls.find((c) => c.text.toUpperCase() === 'EDUCATION')?.page;
+    const skillsPage = calls.find((c) => c.text.toUpperCase() === 'SKILLS')?.page;
+    const languagesPage = calls.find((c) => c.text.toUpperCase() === 'LANGUAGES')?.page;
+
+    expect(educationPage).toBeDefined();
+    expect(skillsPage).toBeDefined();
+    expect(languagesPage).toBeDefined();
+    expect(educationPage).toBe(skillsPage);
+    expect(educationPage).toBe(languagesPage);
+
+    // No content lost: education/skills/languages text must all still appear.
+    const text = (instances[0]?.drawnText ?? []).join(' ');
+    expect(text).toContain('State University');
+    expect(text).toContain('React');
+    expect(text).toContain('English');
+    expect(text.toUpperCase()).toContain('WORK EXPERIENCE');
+  });
+
+  test('mmDrawLowerSections moves the whole Education + Skills/Languages group to a fresh page only when the group fits together but not on the current page', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/modern-minimal-pdf-renderer');
+    const { jsPDF } = await import('jspdf');
+
+    const smallGroupCv = cv({
+      personal: { photoEnabled: false },
+      summary: '',
+      experience: [],
+      education: [{ id: 'edu-1', school: 'State University', degree: 'BS Computer Science', startDate: '2014', endDate: '2018', description: '' }],
+      skills: ['TypeScript', 'React', 'Node.js'],
+      languages: [{ name: 'English', level: 'Native' }],
+      certifications: [],
+    });
+
+    const pdf = new jsPDF();
+    const ctx = mod.mmCreateContext(pdf as unknown as Parameters<typeof mod.mmCreateContext>[0], smallGroupCv, 'en', false);
+    // Simulate near the bottom of a page: Education alone would fit in the
+    // remaining room, but Education + Skills/Languages together would not —
+    // while the combined group easily fits on a fresh page.
+    ctx.y = ctx.bottomSafeY - 16;
+    const pageBefore = ctx.pageIndex;
+
+    mod.mmDrawLowerSections(ctx);
+
+    expect(ctx.pageIndex).toBe(pageBefore + 1);
+    const inst = instances[0]!;
+    expect(inst.addPage).toHaveBeenCalledTimes(1);
+    const educationPage = inst.textCalls.find((c) => c.text.toUpperCase() === 'EDUCATION')?.page;
+    const skillsPage = inst.textCalls.find((c) => c.text.toUpperCase() === 'SKILLS')?.page;
+    expect(educationPage).toBeDefined();
+    expect(educationPage).toBe(skillsPage);
+  });
+
+  test('mmDrawLowerSections does not force an unnecessary page break when the group already fits on the current page', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/modern-minimal-pdf-renderer');
+    const { jsPDF } = await import('jspdf');
+
+    const smallGroupCv = cv({
+      personal: { photoEnabled: false },
+      summary: '',
+      experience: [],
+      education: [{ id: 'edu-1', school: 'State University', degree: 'BS Computer Science', startDate: '2014', endDate: '2018', description: '' }],
+      skills: ['TypeScript', 'React'],
+      languages: [{ name: 'English', level: 'Native' }],
+      certifications: [],
+    });
+
+    const pdf = new jsPDF();
+    const ctx = mod.mmCreateContext(pdf as unknown as Parameters<typeof mod.mmCreateContext>[0], smallGroupCv, 'en', false);
+    ctx.y = ctx.marginTop;
+    const pageBefore = ctx.pageIndex;
+
+    mod.mmDrawLowerSections(ctx);
+
+    expect(ctx.pageIndex).toBe(pageBefore);
+    const inst = instances[0]!;
+    expect(inst.addPage).not.toHaveBeenCalled();
   });
 
   test('wrapped experience bullets do not prefix continuation lines with a dash', async () => {
