@@ -12,10 +12,12 @@ import {
   buildCvPdfBlob,
   buildExecutivePremiumPdfBlob,
   buildPaddedPdfSlice,
+  epNormalizeDocxText,
   exportToDOCX,
   resolveCvPdfExportRoute,
 } from '@/lib/export';
 import { epNormalizePdfText } from '@/lib/executive-premium-pdf-renderer';
+import { extractPdfUnicodeText, countPdfPages } from '@/lib/pdf-text-extract';
 import type { CVData } from '@/lib/types';
 
 const photo = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2w==';
@@ -203,6 +205,56 @@ function installDirectPdfMocks() {
   return { instances };
 }
 
+function serbianStressCv(): CVData {
+  return {
+    ...cv(),
+    personal: {
+      fullName: 'Dragan Obradović',
+      email: 'diodala12@gmail.com',
+      phone: '865333680065',
+      address: 'Braće Abafi 4',
+      jobTitle: 'Učitelj u osnovnoj školi',
+      photoEnabled: false,
+      photo: undefined,
+      originalPhoto: undefined,
+      rectangularPhoto: undefined,
+    },
+    summary: [
+      'Iskusan učitelj sa oko devet godina rada u obrazovanju.',
+      'Stvarao sam priliku daIskusan učitelj sa čvrstom stručnom praksom u koučingu i sarađivanju sa učenicima.',
+      'Planirao sam rad u Matematičkom fakultetu uz praćenje i izvođenje nastave.',
+      ...Array.from({ length: 14 }, (_, i) =>
+        `Rečenica ${i + 1}: diferencirana nastava za učenike različitih nivoa znanja i stilova učenja.`,
+      ),
+    ].join(' '),
+    experience: [
+      {
+        id: 'exp-sr-1',
+        company: 'Zhff',
+        position: 'Učitelj u osnovnoj školi',
+        startDate: '2023-05',
+        endDate: '',
+        isPresent: true,
+        description: [
+          '- Planirao sam i realizovao nastavne jedinice iz srpskog jezika i matematike.',
+          '- Primenio sam diferenciranu nastavu kako bi prilagodio sadržaje učenicima različitih nivoa znanja.',
+          '- Sprovodio sam formativno i sumativno ocenjivanje učenika uz praćenje napretka.',
+        ].join('\n'),
+      },
+    ],
+    education: [{
+      id: 'edu-sr-1',
+      school: 'Matematički fakultet',
+      degree: 'VI',
+      startDate: '2020-01',
+      endDate: '2025-02',
+      description: '',
+    }],
+    skills: ['Teamwork', 'Organization', 'Coaching', 'Leadership'],
+    languages: [{ name: 'Serbian', level: 'Native' }, { name: 'English', level: 'Fluent' }],
+  };
+}
+
 function androidStressCv(): CVData {
   return {
     ...cv(),
@@ -311,6 +363,10 @@ function source(file: string): string {
   return fs.readFileSync(path.resolve(file), 'utf8');
 }
 
+function pdfTextIncludes(text: string, needle: string): boolean {
+  return text.includes(needle) || text.toUpperCase().includes(needle.toUpperCase());
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   Object.defineProperty(globalThis, 'Image', { value: MockImage, configurable: true });
@@ -318,6 +374,19 @@ beforeEach(() => {
   Object.defineProperty(document, 'fonts', {
     value: { load: vi.fn().mockResolvedValue([]), ready: Promise.resolve() },
     configurable: true,
+  });
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: string | URL | Request) => {
+    const url = String(input);
+    const fileName = url.split('/').pop() ?? '';
+    const fontPath = path.join(process.cwd(), 'public', 'fonts', fileName);
+    if (fs.existsSync(fontPath)) {
+      const buf = fs.readFileSync(fontPath);
+      return {
+        ok: true,
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+      } as Response;
+    }
+    return { ok: false, arrayBuffer: async () => new ArrayBuffer(0) } as Response;
   });
 });
 
@@ -390,12 +459,34 @@ describe('Executive Premium export', () => {
     expect(rendererSource).toContain('epCreateContext');
     expect(rendererSource).toContain('epDrawHeader');
     expect(rendererSource).toContain('epDrawSummary');
+    expect(rendererSource).toContain('epRegisterUnicodeFonts');
+    expect(rendererSource).toContain('epDrawWrappedBullet');
+    expect(rendererSource).toContain('epDrawExperienceEntryContinuation');
     expect(rendererSource).toContain('epNormalizePdfText');
     expect(rendererSource).not.toContain('html2canvas');
     expect(rendererSource).not.toContain('buildCvPdfBlob');
     expect(rendererSource).not.toContain('renderPdfSlice');
     expect(rendererSource).not.toContain('renderPaddedPdfSlice');
+    expect(rendererSource).not.toContain('buildModernMinimalPagedPdfBlob');
+    expect(rendererSource).not.toContain('buildCorporateNavyPagedPdfBlob');
+    expect(exportSource).toContain('Executive Premium PDF must use exportExecutivePremiumPdf');
     expect(exportSource).not.toMatch(/buildExecutivePremiumPdfBlob[\s\S]{0,400}buildCvPdfBlob/);
+  });
+
+  test('epNormalizeDocxText fixes glued sentence boundaries for DOCX export only', () => {
+    expect(epNormalizeDocxText('napreduje.Iskusan učitelj.')).toBe('napreduje. Iskusan učitelj.');
+    expect(epNormalizeDocxText('Stvarao sam priliku daIskusan učitelj.')).toBe(
+      'Stvarao sam priliku da. Iskusan učitelj.',
+    );
+    expect(epNormalizeDocxText('scaffolds.logic.Built smoke suites.')).toBe(
+      'scaffolds. logic. Built smoke suites.',
+    );
+    expect(epNormalizeDocxText('strategy.applied.Designed workshop kits.')).toBe(
+      'strategy. applied. Designed workshop kits.',
+    );
+    expect(epNormalizeDocxText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
+      'Used Node.js and REST APIs with CI/CD pipelines.',
+    );
   });
 
   test('epNormalizePdfText fixes glued sentence boundaries for PDF rendering only', () => {
@@ -410,6 +501,9 @@ describe('Executive Premium export', () => {
     );
     expect(epNormalizePdfText('risk.lead.Assisted junior engineers.')).toBe(
       'risk. lead. Assisted junior engineers.',
+    );
+    expect(epNormalizePdfText('Stvarao sam priliku daIskusan učitelj.')).toBe(
+      'Stvarao sam priliku da. Iskusan učitelj.',
     );
     expect(epNormalizePdfText('Used Node.js and REST APIs with CI/CD pipelines.')).toBe(
       'Used Node.js and REST APIs with CI/CD pipelines.',
@@ -472,9 +566,71 @@ describe('Executive Premium export', () => {
     expect(text).toContain('environments. Software');
     expect(text).toContain('reporting findings to the development team.');
     if ((instances[0]?.pages ?? 0) >= 2) {
-      expect(text).toMatch(/\(continued\)|Sentence 1:/);
+      expect(text).toMatch(/\(continued\)|Sentence 1:|PROFESSIONAL SUMMARY CONTINUED/i);
     }
   });
+
+  test('Serbian Latin Extended characters survive in real direct PDF output', async () => {
+    vi.doUnmock('jspdf');
+    const mod = await import('@/lib/executive-premium-pdf-renderer');
+    const blob = await mod.buildExecutivePremiumPagedPdfBlob(serbianStressCv(), 'en', { photoDataUrl: null });
+    expect(blob.size).toBeGreaterThan(5000);
+
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    const extracted = extractPdfUnicodeText(buffer);
+    expect(buffer.toString('latin1').includes('NotoSans')).toBe(true);
+
+    for (const needle of [
+      'Obradović',
+      'Učitelj',
+      'Braće',
+      'učenicima',
+      'Matematičkom',
+      'čvrstom',
+      'stručnom',
+      'koučingu',
+      'sarađivanju',
+      'praćenje',
+      'izvođenje',
+    ]) {
+      expect(pdfTextIncludes(extracted, needle), `missing ${needle}`).toBe(true);
+    }
+
+    expect(extracted.includes('daIskusan')).toBe(false);
+    expect(extracted.includes('da. Iskusan')).toBe(true);
+    expect(extracted.includes('\uFFFD')).toBe(false);
+  }, 30000);
+
+  test('Serbian Unicode passes through renderer text calls before PDF encoding', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildExecutivePremiumPdfBlob(serbianStressCv(), 'en');
+    const drawn = instances[0]?.drawnText.join(' ') ?? '';
+    for (const needle of ['Obradović', 'Učitelj', 'Braće', 'učenicima', 'Matematičkom', 'da. Iskusan']) {
+      expect(pdfTextIncludes(drawn, needle), `missing ${needle} in drawn text`).toBe(true);
+    }
+    expect(drawn).not.toContain('daIskusan');
+  });
+
+  test('real Serbian PDF starts summary on page 1 and includes lower sections', async () => {
+    vi.doUnmock('jspdf');
+    const mod = await import('@/lib/executive-premium-pdf-renderer');
+    const blob = await mod.buildExecutivePremiumPagedPdfBlob(serbianStressCv(), 'en', { photoDataUrl: null });
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    const extracted = extractPdfUnicodeText(buffer);
+    const pageCount = countPdfPages(buffer);
+
+    expect(pageCount).toBeGreaterThanOrEqual(1);
+    expect(pageCount).toBeLessThanOrEqual(3);
+    expect(extracted.toUpperCase()).toMatch(/PROFESSIONAL SUMMARY/);
+    expect(extracted.toUpperCase()).toMatch(/WORK EXPERIENCE/);
+    expect(extracted.toUpperCase()).toMatch(/EDUCATION/);
+    expect(extracted.toUpperCase()).toMatch(/SKILLS/);
+    expect(extracted.toUpperCase()).toMatch(/LANGUAGES/);
+    const summaryIdx = extracted.toUpperCase().indexOf('PROFESSIONAL SUMMARY');
+    const nameIdx = extracted.toUpperCase().indexOf('OBRADOVI');
+    expect(summaryIdx).toBeGreaterThan(nameIdx);
+  }, 30000);
 
   test('legacy Executive Premium padded slice helpers remain available for generic preview path', () => {
     const exportSource = source('src/lib/export.ts');
@@ -532,13 +688,35 @@ describe('Executive Premium export', () => {
     const text = visibleDocxText(documentXml);
 
     expect(mediaNames).toHaveLength(0);
-    expect(text).not.toContain('PROFESSIONAL SUMMARY');
+    expect(text).toContain('PROFESSIONAL SUMMARY');
     expect(text).toContain('Senior teacher with experience creating structured and inclusive classrooms.');
     expect(text).toContain('Teamwork | Organization | Time Management | Creativity | Presentation Skills | Coaching | Coaching | Leadership');
     expect((text.match(/\bLeadership\b/g) ?? [])).toHaveLength(1);
     expect((text.match(/\bCoaching\b/g) ?? [])).toHaveLength(2);
     expect(documentXml).not.toContain('<w:br w:type="page"');
     expect(documentXml).not.toContain('<w:numPr>');
+    expect(documentXml).toContain('w:keepNext');
+  });
+
+  test('Executive Premium DOCX renders PROFESSIONAL SUMMARY heading and fixes glued summary text', async () => {
+    const data = cv({
+      personal: { photoEnabled: false, photo: undefined, originalPhoto: undefined, rectangularPhoto: undefined },
+      summary: 'Nastavnik čiji rad napreduje.Iskusan učitelj sa priliku daIskusan učenicima.',
+      experience: [],
+      education: [],
+      skills: [],
+      languages: [],
+    });
+    const { documentXml } = await captureDocx(data);
+    const text = visibleDocxText(documentXml);
+
+    expect(text).toContain('PROFESSIONAL SUMMARY');
+    expect(text).toContain('napreduje. Iskusan');
+    expect(text).toContain('da. Iskusan');
+    expect(text).not.toContain('napreduje.Iskusan');
+    expect(text).not.toContain('daIskusan');
+    expect(text).toContain('učenicima');
+    expect(documentXml).toContain('w:keepNext');
   });
 
   test('Executive Premium DOCX embeds the selected original photo bytes', async () => {

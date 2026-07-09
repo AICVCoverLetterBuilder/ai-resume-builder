@@ -5715,6 +5715,53 @@ export function ncNormalizeDocxText(text: string): string {
   return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
+/** DOCX-only normalization for Executive Premium — never mutates saved CV data. */
+export function epNormalizeDocxText(text: string): string {
+  if (!text) return '';
+  let out = text.replace(/\r\n/g, '\n');
+
+  const protect: Array<{ token: string; stub: string }> = [
+    { token: 'Node.js', stub: '\u0001NODEJS\u0001' },
+    { token: 'node.js', stub: '\u0001nodejs\u0001' },
+    { token: 'Express.js', stub: '\u0001EXPRESSJS\u0001' },
+    { token: 'Next.js', stub: '\u0001NEXTJS\u0001' },
+    { token: 'Vue.js', stub: '\u0001VUEJS\u0001' },
+    { token: 'TypeScript', stub: '\u0001TS\u0001' },
+    { token: 'JavaScript', stub: '\u0001JS\u0001' },
+    { token: 'CI/CD', stub: '\u0001CICD\u0001' },
+    { token: 'REST APIs', stub: '\u0001RESTAPIS\u0001' },
+    { token: 'REST API', stub: '\u0001RESTAPI\u0001' },
+  ];
+  for (const p of protect) out = out.split(p.token).join(p.stub);
+
+  const emails: string[] = [];
+  out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, (email) => {
+    const stub = `\u0001EMAIL${emails.length}\u0001`;
+    emails.push(email);
+    return stub;
+  });
+
+  const latLo = 'a-z\u0161\u0111\u010d\u0107\u017e';
+  const latHi = 'A-Z\u0160\u0110\u010c\u0106\u017d';
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`\\.([${latLo}]{3,})\\.(\s*)([${latHi}])`, 'g'), '. $1. $3');
+  out = out.replace(new RegExp(`([${latLo}]{3,})\\.([${latLo}]{3,})`, 'g'), '$1. $2');
+  out = out.replace(
+    /\.([ \t]*)(lead|logic|applied|environments|built|designed|assisted)(?=\.?[A-Z\u0160\u0110\u010c\u0106\u017d])/gi,
+    '. $2',
+  );
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`([${latLo}]{2,})([${latHi}][${latLo}]{2,})`, 'g'), '$1. $2');
+
+  for (const p of protect) out = out.split(p.stub).join(p.token);
+  emails.forEach((email, index) => {
+    out = out.split(`\u0001EMAIL${index}\u0001`).join(email);
+  });
+
+  return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+}
+
 export async function exportToDOCX(
   cvData: CVData,
   fileName: string,
@@ -7099,11 +7146,13 @@ export async function exportToDOCX(
       });
     }
 
-    // ── Summary: centered italic ───────────────────────────────────────────
+    // ── Summary: PROFESSIONAL SUMMARY heading + centered italic body ───────
     if (cvData.summary) {
+      const summaryText = epNormalizeDocxText(cvData.summary);
+      children.push(epHeading(t.cv.summary, { keepNext: true }));
       children.push(new Paragraph({
         alignment: AlignmentType.CENTER,
-        children: [new TextRun({ text: cvData.summary, size: 18, color: '374151', italics: true, font: 'Georgia' })],
+        children: [new TextRun({ text: summaryText, size: 18, color: '374151', italics: true, font: 'Georgia' })],
         spacing: { after: 80, line: 236, lineRule: 'auto' },
       }));
     }
@@ -7128,7 +7177,7 @@ export async function exportToDOCX(
           for (const line of exp.description.split('\n')) {
             const trimmed = line.trim();
             if (trimmed) {
-              const bulletText = trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, '');
+              const bulletText = epNormalizeDocxText(trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, ''));
               children.push(new Paragraph({
                 children: [
                   new TextRun({ text: '-  ', size: 17, color: '6B7280', font: 'Calibri' }),
@@ -10381,13 +10430,16 @@ export async function buildCvPdfBlob(
       'Modern Minimal PDF must use exportModernMinimalPdf (dedicated-modern-minimal), not buildCvPdfBlob/html2canvas',
     );
   }
+  if (initialCaptureTemplateId === 'executive-premium') {
+    throw new Error(
+      'Executive Premium PDF must use exportExecutivePremiumPdf (dedicated-executive-premium), not buildCvPdfBlob/html2canvas',
+    );
+  }
   const captureFontFamily = initialCaptureTemplateId === 'ats-standard'
     ? 'Arial, Helvetica, sans-serif'
-    : initialCaptureTemplateId === 'executive-premium'
-      ? 'Georgia, "Times New Roman", serif'
-      : initialCaptureTemplateId === 'nordic-clean' || initialCaptureTemplateId === 'tech-sidebar' || initialCaptureTemplateId === 'corporate-navy' || initialCaptureTemplateId === 'contemporary-bold'
-        ? 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif'
-        : "'NotoSans', 'NotoSansArabic', 'NotoSansDevanagari', 'NotoSansJP', sans-serif";
+    : initialCaptureTemplateId === 'nordic-clean' || initialCaptureTemplateId === 'tech-sidebar' || initialCaptureTemplateId === 'corporate-navy' || initialCaptureTemplateId === 'contemporary-bold'
+      ? 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif'
+      : "'NotoSans', 'NotoSansArabic', 'NotoSansDevanagari', 'NotoSansJP', sans-serif";
 
   // ── Step 2: inject Noto Sans fonts so html2canvas renders Unicode correctly ─
   // This ensures characters like č ć š đ ž (Latin Ext), Cyrillic, Arabic,

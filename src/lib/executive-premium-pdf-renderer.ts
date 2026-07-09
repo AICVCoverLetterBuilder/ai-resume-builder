@@ -1,9 +1,8 @@
 /**
- * Executive Premium — dedicated direct jsPDF page-aware renderer.
+ * Executive Premium — dedicated direct jsPDF renderer (full rebuild).
  *
- * Replaces the previous DOM capture / tall-canvas / slice export path.
- * Page 1 draws a full-width navy header, then immediately uses the body
- * for PROFESSIONAL SUMMARY (never leave page 1 blank after the header).
+ * Unicode-first: embeds Noto Sans for Latin Extended (Serbian/Croatian/Bosnian).
+ * Page-aware layout with continuation headings and hanging-indent bullets.
  */
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
@@ -20,6 +19,7 @@ export type ExecutivePremiumDirectPdfContext = {
   cv: CVData;
   locale: Locale;
   labels: ReturnType<typeof getExecutivePremiumPdfLabels>;
+  unicodeReady: boolean;
   contentX: number;
   contentW: number;
   marginTop: number;
@@ -27,7 +27,6 @@ export type ExecutivePremiumDirectPdfContext = {
   bottomSafeY: number;
   y: number;
   pageIndex: number;
-  headerDrawn: boolean;
 };
 
 type Style = {
@@ -36,10 +35,11 @@ type Style = {
   bold?: boolean;
   italic?: boolean;
   lineH: number;
-  font?: 'times' | 'helvetica';
 };
 
 type BulletUnit = { lines: string[] };
+
+type BulletLayout = { markerX: number; textX: number; textW: number };
 
 const NAVY: [number, number, number] = [17, 24, 39];
 const GOLD: [number, number, number] = [217, 119, 6];
@@ -49,19 +49,45 @@ const BODY: [number, number, number] = [55, 65, 81];
 const MUTED: [number, number, number] = [107, 114, 128];
 const HEADING: [number, number, number] = [156, 163, 175];
 const RULE: [number, number, number] = [229, 231, 235];
-const CHIP_BG: [number, number, number] = [249, 250, 251];
 const CONTACT: [number, number, number] = [209, 213, 219];
 
 const MARGIN_X = 16;
 const MARGIN_TOP_CONT = 16;
 const MARGIN_BOTTOM = 14;
 const BODY_AFTER_HEADER = 12;
-const LINE = 4.0;
 const BODY_LINE = 3.7;
 const BULLET_LH = 3.6;
+const BULLET_INDENT = 4.2;
 const SECTION_H = 7.5;
 const PHOTO_R = 14;
-const SPARSE_LOWER_THRESHOLD_MM = 55;
+const SPARSE_LOWER_THRESHOLD_MM = 52;
+
+const FONT_REG_PATHS = [
+  '/fonts/NotoSans-Regular.ttf',
+  'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf',
+];
+const FONT_BOLD_PATHS = [
+  '/fonts/NotoSans-Bold.ttf',
+  'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Bold.ttf',
+];
+
+let cachedFontPayload: { regular: string; bold: string } | null = null;
+let fontPayloadPromise: Promise<{ regular: string; bold: string } | null> | null = null;
+
+async function loadEpFontPayload(): Promise<{ regular: string; bold: string } | null> {
+  if (cachedFontPayload) return cachedFontPayload;
+  if (fontPayloadPromise) return fontPayloadPromise;
+  fontPayloadPromise = (async () => {
+    const [regular, bold] = await Promise.all([
+      readFontBytes(FONT_REG_PATHS),
+      readFontBytes(FONT_BOLD_PATHS),
+    ]);
+    if (!regular || !bold) return null;
+    cachedFontPayload = { regular: toB64(regular), bold: toB64(bold) };
+    return cachedFontPayload;
+  })();
+  return fontPayloadPromise;
+}
 
 export function getExecutivePremiumPdfLabels(locale: Locale) {
   const t = translations[locale] ?? translations.en;
@@ -73,7 +99,45 @@ export function getExecutivePremiumPdfLabels(locale: Locale) {
     languages: t.cv.languages,
     certifications: t.cv.certifications,
     present: t.cv.present,
+    summaryContinued: `${t.cv.summary} continued`,
   };
+}
+
+function toB64(buf: ArrayBuffer): string {
+  const b = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < b.length; i += 1) s += String.fromCharCode(b[i]!);
+  return btoa(s);
+}
+
+async function readFontBytes(urls: string[]): Promise<ArrayBuffer | null> {
+  for (const url of urls) {
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 15000) : null;
+      const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
+      if (timer) clearTimeout(timer);
+      if (res.ok) return await res.arrayBuffer();
+    } catch {
+      // try next source
+    }
+  }
+  return null;
+}
+
+/** Embed Noto Sans (Latin Extended) into jsPDF — required for Serbian/Croatian/Bosnian PDF text. */
+export async function epRegisterUnicodeFonts(pdf: Pdf): Promise<boolean> {
+  try {
+    const fonts = await loadEpFontPayload();
+    if (!fonts) return false;
+    pdf.addFileToVFS('NotoSans-Regular.ttf', fonts.regular);
+    pdf.addFileToVFS('NotoSans-Bold.ttf', fonts.bold);
+    pdf.addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal');
+    pdf.addFont('NotoSans-Bold.ttf', 'NotoSans', 'bold');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -89,33 +153,57 @@ export function epNormalizePdfText(text: string): string {
     { token: 'Express.js', stub: '\u0001EXPRESSJS\u0001' },
     { token: 'Next.js', stub: '\u0001NEXTJS\u0001' },
     { token: 'Vue.js', stub: '\u0001VUEJS\u0001' },
+    { token: 'TypeScript', stub: '\u0001TS\u0001' },
+    { token: 'JavaScript', stub: '\u0001JS\u0001' },
     { token: 'CI/CD', stub: '\u0001CICD\u0001' },
     { token: 'REST APIs', stub: '\u0001RESTAPIS\u0001' },
     { token: 'REST API', stub: '\u0001RESTAPI\u0001' },
   ];
   for (const p of protect) out = out.split(p.token).join(p.stub);
 
-  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
-  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
-  out = out.replace(/\.([a-z]{3,})\.(\s*)([A-Z])/g, '. $1. $3');
+  const emails: string[] = [];
+  out = out.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, (email) => {
+    const stub = `\u0001EMAIL${emails.length}\u0001`;
+    emails.push(email);
+    return stub;
+  });
+
+  const latLo = 'a-z\u0161\u0111\u010d\u0107\u017e';
+  const latHi = 'A-Z\u0160\u0110\u010c\u0106\u017d';
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`\\.([${latLo}]{3,})\\.(\s*)([${latHi}])`, 'g'), '. $1. $3');
+  out = out.replace(new RegExp(`([${latLo}]{3,})\\.([${latLo}]{3,})`, 'g'), '$1. $2');
   out = out.replace(
-    /\.([ \t]*)(lead|logic|applied|environments|built|designed|assisted)(?=\.?[A-Z])/gi,
+    /\.([ \t]*)(lead|logic|applied|environments|built|designed|assisted)(?=\.?[A-Z\u0160\u0110\u010c\u0106\u017d])/gi,
     '. $2',
   );
-  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
-  out = out.replace(/\.([a-z]{3,})\.(\s*)([A-Z])/g, '. $1. $3');
+  out = out.replace(new RegExp(`([${latLo}])\\.([${latHi}])`, 'g'), '$1. $2');
+  out = out.replace(new RegExp(`([${latLo}]{2,})([${latHi}][${latLo}]{2,})`, 'g'), '$1. $2');
 
   for (const p of protect) out = out.split(p.stub).join(p.token);
+  emails.forEach((email, index) => {
+    out = out.split(`\u0001EMAIL${index}\u0001`).join(email);
+  });
+
   return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
+function fontFamily(ctx: ExecutivePremiumDirectPdfContext): string {
+  return ctx.unicodeReady ? 'NotoSans' : 'helvetica';
+}
+
 function setStyle(ctx: ExecutivePremiumDirectPdfContext, s: Style): void {
-  const family = s.font ?? 'helvetica';
+  const family = fontFamily(ctx);
   let style: 'normal' | 'bold' | 'italic' | 'bolditalic' = 'normal';
   if (s.bold && s.italic) style = 'bolditalic';
   else if (s.bold) style = 'bold';
   else if (s.italic) style = 'italic';
-  ctx.pdf.setFont(family, style);
+  if (style === 'italic' || style === 'bolditalic') {
+    ctx.pdf.setFont(family, s.bold ? 'bold' : 'normal');
+  } else {
+    ctx.pdf.setFont(family, s.bold ? 'bold' : 'normal');
+  }
   ctx.pdf.setFontSize(s.size);
   ctx.pdf.setTextColor(s.color[0], s.color[1], s.color[2]);
 }
@@ -131,7 +219,7 @@ export function epMeasureWrappedLines(
   return Array.isArray(r) ? r.map(String) : [String(r)];
 }
 
-export function epMeasureBlockHeight(lineCount: number, lineH: number, pad = 0): number {
+export function epMeasureWrappedTextHeight(lineCount: number, lineH: number, pad = 0): number {
   if (lineCount <= 0) return pad;
   return lineCount * lineH + pad;
 }
@@ -144,12 +232,14 @@ export function epCreateContext(
   pdf: Pdf,
   cv: CVData,
   locale: Locale,
+  unicodeReady: boolean,
 ): ExecutivePremiumDirectPdfContext {
   return {
     pdf,
     cv,
     locale,
     labels: getExecutivePremiumPdfLabels(locale),
+    unicodeReady,
     contentX: MARGIN_X,
     contentW: A4_W - MARGIN_X * 2,
     marginTop: MARGIN_TOP_CONT,
@@ -157,7 +247,6 @@ export function epCreateContext(
     bottomSafeY: A4_H - MARGIN_BOTTOM,
     y: MARGIN_TOP_CONT,
     pageIndex: 0,
-    headerDrawn: false,
   };
 }
 
@@ -165,6 +254,10 @@ export function epAddPage(ctx: ExecutivePremiumDirectPdfContext): void {
   ctx.pdf.addPage();
   ctx.pageIndex += 1;
   ctx.y = ctx.marginTop;
+}
+
+export function epMoveToNextPage(ctx: ExecutivePremiumDirectPdfContext): void {
+  epAddPage(ctx);
 }
 
 export function epEnsureSpace(ctx: ExecutivePremiumDirectPdfContext, h: number): void {
@@ -177,25 +270,6 @@ export function epMoveToFreshPageIfNeeded(ctx: ExecutivePremiumDirectPdfContext,
   if (ctx.y + h > ctx.bottomSafeY) epAddPage(ctx);
 }
 
-function splitBullets(raw: string): string[] {
-  return raw
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => epNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, '')))
-    .filter(Boolean);
-}
-
-function buildBullets(ctx: ExecutivePremiumDirectPdfContext, raw: string, maxW: number): BulletUnit[] {
-  return splitBullets(raw).map((b) => ({
-    lines: epMeasureWrappedLines(ctx, `- ${b}`, maxW),
-  }));
-}
-
-function bulletH(unit: BulletUnit): number {
-  return unit.lines.length * BULLET_LH;
-}
-
 export function epDrawHeader(
   ctx: ExecutivePremiumDirectPdfContext,
   photoDataUrl: string | null,
@@ -205,54 +279,33 @@ export function epDrawHeader(
   ctx.pdf.rect(0, 0, A4_W, headerH, 'F');
 
   const textLeft = MARGIN_X;
-  const textMaxW = photoDataUrl
-    ? A4_W - MARGIN_X * 2 - PHOTO_R * 2 - 10
-    : ctx.contentW;
+  const textMaxW = photoDataUrl ? A4_W - MARGIN_X * 2 - PHOTO_R * 2 - 10 : ctx.contentW;
   let ty = 10;
 
   const name = (ctx.cv.personal.fullName || 'YOUR NAME').toUpperCase();
-  setStyle(ctx, {
-    size: 18,
-    color: [255, 255, 255],
-    font: 'times',
-    lineH: 6.5,
-  });
-  const nameLines = epMeasureWrappedLines(ctx, name, textMaxW).slice(0, 2);
-  for (const ln of nameLines) {
+  setStyle(ctx, { size: 18, color: [255, 255, 255], bold: true, lineH: 6.5 });
+  for (const ln of epMeasureWrappedLines(ctx, name, textMaxW).slice(0, 2)) {
     ctx.pdf.text(ln, textLeft, ty + 4.5);
     ty += 6.2;
   }
 
-  // Gold accent under name
   ctx.pdf.setFillColor(GOLD[0], GOLD[1], GOLD[2]);
   ctx.pdf.rect(textLeft, ty + 1, 18, 0.55, 'F');
   ty += 5;
 
   if (ctx.cv.personal.jobTitle) {
-    setStyle(ctx, {
-      size: 10,
-      color: SOFT_GOLD,
-      font: 'times',
-      lineH: 4,
-    });
-    const titleLines = epMeasureWrappedLines(ctx, ctx.cv.personal.jobTitle, textMaxW).slice(0, 2);
-    for (const ln of titleLines) {
+    setStyle(ctx, { size: 10, color: SOFT_GOLD, lineH: 4 });
+    for (const ln of epMeasureWrappedLines(ctx, ctx.cv.personal.jobTitle, textMaxW).slice(0, 2)) {
       ctx.pdf.text(ln, textLeft, ty + 3);
       ty += 4;
     }
   }
 
-  const contacts = [
-    ctx.cv.personal.email,
-    ctx.cv.personal.phone,
-    ctx.cv.personal.address,
-  ].filter(Boolean) as string[];
+  const contacts = [ctx.cv.personal.email, ctx.cv.personal.phone, ctx.cv.personal.address].filter(Boolean) as string[];
   if (contacts.length) {
     ty += 2;
-    setStyle(ctx, { size: 8, color: CONTACT, font: 'helvetica', lineH: 3.4 });
-    const contactText = contacts.join('  |  ');
-    for (const ln of epMeasureWrappedLines(ctx, contactText, textMaxW).slice(0, 2)) {
-      // Draw with gold separators preserved in joined string
+    setStyle(ctx, { size: 8, color: CONTACT, lineH: 3.4 });
+    for (const ln of epMeasureWrappedLines(ctx, contacts.join('  |  '), textMaxW).slice(0, 2)) {
       ctx.pdf.text(ln, textLeft, ty + 2.5);
       ty += 3.5;
     }
@@ -262,53 +315,38 @@ export function epDrawHeader(
     const cx = A4_W - MARGIN_X - PHOTO_R;
     const cy = headerH / 2;
     try {
-      // Soft circular frame — clip via sequential path
       ctx.pdf.setFillColor(255, 255, 255);
       ctx.pdf.circle(cx, cy, PHOTO_R + 0.6, 'F');
-      ctx.pdf.addImage(
-        photoDataUrl,
-        'JPEG',
-        cx - PHOTO_R,
-        cy - PHOTO_R,
-        PHOTO_R * 2,
-        PHOTO_R * 2,
-        undefined,
-        'FAST',
-      );
-      // Mask ring to soften square image corners toward circle appearance
+      ctx.pdf.addImage(photoDataUrl, 'JPEG', cx - PHOTO_R, cy - PHOTO_R, PHOTO_R * 2, PHOTO_R * 2, undefined, 'FAST');
       ctx.pdf.setDrawColor(NAVY[0], NAVY[1], NAVY[2]);
       ctx.pdf.setLineWidth(2.2);
       ctx.pdf.circle(cx, cy, PHOTO_R + 0.3, 'S');
       ctx.pdf.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
-      ctx.pdf.setLineWidth(0.4);
-      ctx.pdf.circle(cx, cy, PHOTO_R + 0.6, 'S');
+      ctx.pdf.setLineWidth(0.45);
+      ctx.pdf.circle(cx, cy, PHOTO_R + 0.65, 'S');
     } catch {
       ctx.pdf.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
-      ctx.pdf.setLineWidth(0.4);
+      ctx.pdf.setLineWidth(0.45);
       ctx.pdf.circle(cx, cy, PHOTO_R, 'S');
     }
   }
 
-  // Thin accent rule under the full-width header
   ctx.pdf.setFillColor(GOLD[0], GOLD[1], GOLD[2]);
   ctx.pdf.rect(0, headerH, A4_W, 0.7, 'F');
 
-  ctx.headerDrawn = true;
-  // CRITICAL: body starts immediately under the header — never leave page 1 blank.
   ctx.y = headerH + BODY_AFTER_HEADER;
 }
 
 export function epDrawSectionHeading(
   ctx: ExecutivePremiumDirectPdfContext,
   label: string,
-  opts: { centered?: boolean } = {},
+  opts: { centered?: boolean; compact?: boolean } = {},
 ): void {
-  epEnsureSpace(ctx, SECTION_H + 2);
+  epEnsureSpace(ctx, SECTION_H + 1);
   setStyle(ctx, {
-    size: 8.5,
+    size: opts.compact ? 7.8 : 8.5,
     color: HEADING,
     bold: true,
-    font: 'times',
     lineH: 3.5,
   });
   const text = label.toUpperCase();
@@ -325,7 +363,7 @@ export function epDrawSectionHeading(
   ctx.y += 3.2;
 }
 
-export function epDrawWrappedText(
+export function epDrawWrappedParagraph(
   ctx: ExecutivePremiumDirectPdfContext,
   lines: string[],
   style: Style,
@@ -347,137 +385,185 @@ export function epDrawWrappedText(
 
 export function epDrawSummary(ctx: ExecutivePremiumDirectPdfContext): void {
   if (!ctx.cv.summary) return;
-  const style: Style = {
-    size: 9.5,
-    color: BODY,
-    italic: true,
-    font: 'times',
-    lineH: BODY_LINE,
-  };
+  const style: Style = { size: 9.5, color: BODY, italic: true, lineH: BODY_LINE };
   const lines = epMeasureWrappedLines(ctx, ctx.cv.summary, ctx.contentW);
   if (!lines.length) return;
 
-  const keep = Math.min(3, lines.length);
-  epMoveToFreshPageIfNeeded(ctx, SECTION_H + keep * style.lineH);
-  epDrawSectionHeading(ctx, ctx.labels.summary);
+  let idx = 0;
+  let firstBlock = true;
+  while (idx < lines.length) {
+    const headingLabel = firstBlock ? ctx.labels.summary : ctx.labels.summaryContinued;
+    const headingH = SECTION_H + 1;
+    const available = ctx.bottomSafeY - ctx.y - headingH;
+    const roomLines = Math.floor(available / style.lineH);
+    if (roomLines <= 0) {
+      epMoveToNextPage(ctx);
+      firstBlock = false;
+      continue;
+    }
 
-  for (const line of lines) {
-    if (ctx.y + style.lineH > ctx.bottomSafeY) epAddPage(ctx);
-    setStyle(ctx, style);
-    ctx.pdf.text(line, ctx.contentX, ctx.y + style.size * 0.32);
-    ctx.y += style.lineH;
+    if (firstBlock) {
+      epMoveToFreshPageIfNeeded(ctx, headingH + style.lineH);
+    } else {
+      epEnsureSpace(ctx, headingH + style.lineH);
+    }
+
+    epDrawSectionHeading(ctx, headingLabel, { compact: !firstBlock });
+    const take = Math.min(lines.length - idx, Math.max(1, roomLines));
+    epDrawWrappedParagraph(ctx, lines.slice(idx, idx + take), style);
+    idx += take;
+    if (idx < lines.length) {
+      epMoveToNextPage(ctx);
+      firstBlock = false;
+    }
   }
   ctx.y += 4;
 }
 
-function measureLeadH(ctx: ExecutivePremiumDirectPdfContext, entry: CVData['experience'][number]): number {
-  const title = [entry.position, entry.company].filter(Boolean).join(', ');
-  const titleLines = epMeasureWrappedLines(ctx, title, ctx.contentW - 42);
-  return Math.max(4.2, titleLines.length * 4.2) + 3.2;
+function splitBullets(raw: string): string[] {
+  return raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => epNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, '')))
+    .filter(Boolean);
 }
 
-export function epDrawContinuationHeader(
+function epBulletTextLayout(ctx: ExecutivePremiumDirectPdfContext, maxW: number): BulletLayout {
+  const markerX = ctx.contentX;
+  const textX = ctx.contentX + BULLET_INDENT;
+  return { markerX, textX, textW: maxW - BULLET_INDENT };
+}
+
+function buildBulletUnits(ctx: ExecutivePremiumDirectPdfContext, raw: string, maxW: number): BulletUnit[] {
+  const layout = epBulletTextLayout(ctx, maxW);
+  return splitBullets(raw).map((text) => ({
+    lines: epMeasureWrappedLines(ctx, text, layout.textW),
+  }));
+}
+
+export function epMeasureBulletHeight(lineCount: number): number {
+  return lineCount * BULLET_LH;
+}
+
+function bulletUnitHeight(unit: BulletUnit): number {
+  return epMeasureBulletHeight(unit.lines.length);
+}
+
+export function epDrawWrappedBullet(
+  ctx: ExecutivePremiumDirectPdfContext,
+  lines: string[],
+  layout: BulletLayout,
+  opts: { drawMarker?: boolean } = {},
+): void {
+  const drawMarker = opts.drawMarker ?? true;
+  const style: Style = { size: 9, color: BODY, lineH: BULLET_LH };
+  for (let i = 0; i < lines.length; i += 1) {
+    epEnsureSpace(ctx, BULLET_LH);
+    if (i === 0 && drawMarker) {
+      setStyle(ctx, { size: 9, color: GOLD, lineH: BULLET_LH });
+      ctx.pdf.text('-', layout.markerX, ctx.y + 2.8);
+    }
+    setStyle(ctx, style);
+    ctx.pdf.text(lines[i]!, layout.textX, ctx.y + 2.8);
+    ctx.y += BULLET_LH;
+  }
+}
+
+function epMeasureExperienceLeadHeight(ctx: ExecutivePremiumDirectPdfContext, entry: CVData['experience'][number]): number {
+  const posLines = epMeasureWrappedLines(ctx, entry.position || '', ctx.contentW - 42);
+  let h = Math.max(4.2, posLines.length * 4.2) + 3.6;
+  if (entry.company) h += 3.8;
+  return h + 1.5;
+}
+
+export function epDrawExperienceEntryContinuation(
   ctx: ExecutivePremiumDirectPdfContext,
   entry: CVData['experience'][number],
 ): void {
   epEnsureSpace(ctx, 5);
-  const role = entry.position || entry.company || 'Experience';
-  setStyle(ctx, { size: 8.2, color: MUTED, bold: true, font: 'helvetica', lineH: 3.4 });
-  const label = `${epNormalizePdfText(role)} (continued)`;
-  ctx.pdf.text(label, ctx.contentX, ctx.y + 2.5);
+  const role = epNormalizePdfText(entry.position || entry.company || 'Experience');
+  setStyle(ctx, { size: 8.2, color: MUTED, bold: true, lineH: 3.4 });
+  ctx.pdf.text(`${role} (continued)`, ctx.contentX, ctx.y + 2.5);
   ctx.y += 5;
 }
 
-function drawExperienceLead(
-  ctx: ExecutivePremiumDirectPdfContext,
-  entry: CVData['experience'][number],
-): void {
-  const title = [entry.position, entry.company].filter(Boolean).join(', ');
-  const date = [entry.startDate, entry.isPresent ? ctx.labels.present : entry.endDate]
-    .filter(Boolean)
-    .join(' - ');
-
-  setStyle(ctx, { size: 10.5, color: TEXT, bold: true, font: 'times', lineH: 4.2 });
-  const titleLines = epMeasureWrappedLines(ctx, title, ctx.contentW - 42);
+function epDrawExperienceLead(ctx: ExecutivePremiumDirectPdfContext, entry: CVData['experience'][number]): void {
+  const date = [entry.startDate, entry.isPresent ? ctx.labels.present : entry.endDate].filter(Boolean).join(' - ');
+  setStyle(ctx, { size: 10.5, color: TEXT, bold: true, lineH: 4.2 });
+  const posLines = epMeasureWrappedLines(ctx, entry.position || '', ctx.contentW - 42);
   const startY = ctx.y;
   let ty = startY;
-  for (const ln of titleLines) {
+  for (const ln of posLines) {
     ctx.pdf.text(ln, ctx.contentX, ty + 3.2);
     ty += 4.2;
   }
 
   if (date) {
-    setStyle(ctx, { size: 8.2, color: HEADING, italic: true, font: 'helvetica', lineH: 3.2 });
+    setStyle(ctx, { size: 8.2, color: HEADING, italic: true, lineH: 3.2 });
     const dw = ctx.pdf.getTextWidth(date);
     ctx.pdf.text(date, ctx.contentX + ctx.contentW - dw, startY + 3);
   }
 
-  // Subtle gold underline under the role line (executive accent)
+  if (entry.company) {
+    setStyle(ctx, { size: 9.5, color: GOLD, bold: true, lineH: 3.6 });
+    ctx.pdf.text(epNormalizePdfText(entry.company), ctx.contentX, ty + 2.8);
+    ty += 3.8;
+  }
+
   ctx.pdf.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
   ctx.pdf.setLineWidth(0.35);
-  const accentW = Math.min(22, ctx.contentW * 0.12);
-  ctx.pdf.line(ctx.contentX, ty + 0.4, ctx.contentX + accentW, ty + 0.4);
-
-  ctx.y = ty + 2.2;
+  ctx.pdf.line(ctx.contentX, ty + 0.4, ctx.contentX + Math.min(22, ctx.contentW * 0.12), ty + 0.4);
+  ctx.y = ty + 1.5;
 }
 
-export function epDrawBulletAtomic(
-  ctx: ExecutivePremiumDirectPdfContext,
-  unit: BulletUnit,
-  entry: CVData['experience'][number],
-  continuation: { shown: boolean },
-): void {
-  const style: Style = { size: 9, color: BODY, font: 'helvetica', lineH: BULLET_LH };
-  let idx = 0;
-  while (idx < unit.lines.length) {
-    const remaining = unit.lines.length - idx;
-    const room = Math.floor((ctx.bottomSafeY - ctx.y) / BULLET_LH);
-    if (room <= 0) {
-      epAddPage(ctx);
-      if (!continuation.shown) {
-        epDrawContinuationHeader(ctx, entry);
-        continuation.shown = true;
-      }
-      continue;
-    }
-    if (remaining > room && idx === 0 && remaining * BULLET_LH <= freshCap(ctx)) {
-      epAddPage(ctx);
-      if (!continuation.shown) {
-        epDrawContinuationHeader(ctx, entry);
-        continuation.shown = true;
-      }
-      continue;
-    }
-    const take = Math.min(remaining, Math.max(1, room));
-    const chunk = unit.lines.slice(idx, idx + take);
-    epDrawWrappedText(ctx, chunk, style);
-    idx += take;
-    if (idx < unit.lines.length) {
-      epAddPage(ctx);
-      if (!continuation.shown) {
-        epDrawContinuationHeader(ctx, entry);
-        continuation.shown = true;
-      }
-    }
-  }
-  ctx.y += 0.4;
-}
+function epDrawExperienceEntry(ctx: ExecutivePremiumDirectPdfContext, entry: CVData['experience'][number]): void {
+  const layout = epBulletTextLayout(ctx, ctx.contentW - 4);
+  const units = buildBulletUnits(ctx, entry.description || '', ctx.contentW - 4);
+  const leadH = epMeasureExperienceLeadHeight(ctx, entry);
+  const firstBulletH = units[0] ? bulletUnitHeight(units[0]) : 0;
+  const keepH = leadH + Math.min(firstBulletH, BULLET_LH * 2);
 
-export function epDrawExperienceEntryPaginated(
-  ctx: ExecutivePremiumDirectPdfContext,
-  entry: CVData['experience'][number],
-): void {
-  const bullets = buildBullets(ctx, entry.description || '', ctx.contentW - 4);
-  const leadH = measureLeadH(ctx, entry);
-  const firstBh = bullets[0] ? bulletH(bullets[0]) : 0;
-  const keepH = leadH + Math.min(firstBh, BULLET_LH * 2);
+  if (ctx.y + keepH > ctx.bottomSafeY && keepH <= freshCap(ctx)) epMoveToNextPage(ctx);
 
-  if (ctx.y + keepH > ctx.bottomSafeY && keepH <= freshCap(ctx)) epAddPage(ctx);
-
-  drawExperienceLead(ctx, entry);
+  epDrawExperienceLead(ctx, entry);
   const continuation = { shown: false };
-  for (const unit of bullets) {
-    epDrawBulletAtomic(ctx, unit, entry, continuation);
+
+  for (const unit of units) {
+    const h = bulletUnitHeight(unit);
+    if (ctx.y + h > ctx.bottomSafeY && h <= freshCap(ctx)) {
+      epMoveToNextPage(ctx);
+      if (!continuation.shown) {
+        epDrawExperienceEntryContinuation(ctx, entry);
+        continuation.shown = true;
+      }
+    }
+
+    let lineIndex = 0;
+    while (lineIndex < unit.lines.length) {
+      const remaining = unit.lines.length - lineIndex;
+      const room = Math.floor((ctx.bottomSafeY - ctx.y) / BULLET_LH);
+      if (room <= 0) {
+        epMoveToNextPage(ctx);
+        if (!continuation.shown) {
+          epDrawExperienceEntryContinuation(ctx, entry);
+          continuation.shown = true;
+        }
+        continue;
+      }
+      const take = Math.min(remaining, room);
+      epDrawWrappedBullet(ctx, unit.lines.slice(lineIndex, lineIndex + take), layout, {
+        drawMarker: lineIndex === 0,
+      });
+      lineIndex += take;
+      if (lineIndex < unit.lines.length) {
+        epMoveToNextPage(ctx);
+        if (!continuation.shown) {
+          epDrawExperienceEntryContinuation(ctx, entry);
+          continuation.shown = true;
+        }
+      }
+    }
   }
   ctx.y += 3.5;
 }
@@ -485,84 +571,57 @@ export function epDrawExperienceEntryPaginated(
 export function epDrawExperienceSection(ctx: ExecutivePremiumDirectPdfContext): void {
   if (!ctx.cv.experience.length) return;
   const first = ctx.cv.experience[0]!;
-  const leadH = measureLeadH(ctx, first);
-  const bullets = buildBullets(ctx, first.description || '', ctx.contentW - 4);
-  const firstBh = bullets[0] ? bulletH(bullets[0]) : 0;
+  const leadH = epMeasureExperienceLeadHeight(ctx, first);
+  const units = buildBulletUnits(ctx, first.description || '', ctx.contentW - 4);
+  const firstBh = units[0] ? bulletUnitHeight(units[0]) : 0;
   epMoveToFreshPageIfNeeded(ctx, SECTION_H + leadH + Math.min(firstBh, BULLET_LH * 2));
   epDrawSectionHeading(ctx, ctx.labels.experience);
-  for (const entry of ctx.cv.experience) {
-    epDrawExperienceEntryPaginated(ctx, entry);
-  }
+  for (const entry of ctx.cv.experience) epDrawExperienceEntry(ctx, entry);
 }
 
 export function epDrawEducationSection(ctx: ExecutivePremiumDirectPdfContext): void {
   if (!ctx.cv.education.length) return;
-  const first = ctx.cv.education[0]!;
-  const firstH = 10;
-  epMoveToFreshPageIfNeeded(ctx, SECTION_H + firstH);
+  epMoveToFreshPageIfNeeded(ctx, SECTION_H + 10);
   epDrawSectionHeading(ctx, ctx.labels.education, { centered: true });
 
   for (const edu of ctx.cv.education) {
     epMoveToFreshPageIfNeeded(ctx, 10);
-    setStyle(ctx, { size: 10, color: TEXT, bold: true, font: 'times', lineH: 4 });
+    setStyle(ctx, { size: 10, color: TEXT, bold: true, lineH: 4 });
     const degree = epNormalizePdfText(edu.degree || '');
     const dw = ctx.pdf.getTextWidth(degree);
     ctx.pdf.text(degree, ctx.contentX + (ctx.contentW - dw) / 2, ctx.y + 3);
     ctx.y += 4.2;
 
-    const meta = [
-      edu.school,
-      [edu.startDate, edu.endDate].filter(Boolean).join(' - '),
-    ]
-      .filter(Boolean)
-      .join(' | ');
+    const meta = [edu.school, [edu.startDate, edu.endDate].filter(Boolean).join(' - ')].filter(Boolean).join(' | ');
     if (meta) {
-      setStyle(ctx, { size: 8.5, color: MUTED, font: 'helvetica', lineH: 3.4 });
-      const mw = ctx.pdf.getTextWidth(meta);
-      ctx.pdf.text(meta, ctx.contentX + (ctx.contentW - mw) / 2, ctx.y + 2.5);
+      setStyle(ctx, { size: 8.5, color: MUTED, lineH: 3.4 });
+      const mw = ctx.pdf.getTextWidth(epNormalizePdfText(meta));
+      ctx.pdf.text(epNormalizePdfText(meta), ctx.contentX + (ctx.contentW - mw) / 2, ctx.y + 2.5);
       ctx.y += 4;
     }
     if (edu.description) {
-      const lines = epMeasureWrappedLines(ctx, edu.description, ctx.contentW);
-      epDrawWrappedText(ctx, lines, {
-        size: 8.5,
-        color: BODY,
-        font: 'helvetica',
-        lineH: 3.4,
-      }, { centered: true });
+      epDrawWrappedParagraph(
+        ctx,
+        epMeasureWrappedLines(ctx, edu.description, ctx.contentW),
+        { size: 8.5, color: BODY, lineH: 3.4 },
+        { centered: true },
+      );
     }
     ctx.y += 2;
   }
 }
 
-type Chip = { text: string; w: number };
-
-export function epLayoutSkillChips(
-  ctx: ExecutivePremiumDirectPdfContext,
-  skills: string[],
-): Chip[] {
-  setStyle(ctx, { size: 8.2, color: BODY, font: 'helvetica', lineH: 3.2 });
-  return skills.map((raw) => {
-    const text = getLocalizedCvSkillName(raw, ctx.locale) || raw;
-    const w = Math.min(ctx.contentW, ctx.pdf.getTextWidth(text) + 5);
-    return { text, w };
-  });
+export function epLayoutSkillChips(ctx: ExecutivePremiumDirectPdfContext, skills: string[]): string[] {
+  return skills.map((s) => getLocalizedCvSkillName(s, ctx.locale) || s);
 }
 
 function measureSkillsBlockH(ctx: ExecutivePremiumDirectPdfContext): number {
   if (!ctx.cv.skills.length) return 0;
-  const chips = epLayoutSkillChips(ctx, ctx.cv.skills);
-  const rowH = 6.2;
-  let x = 0;
-  let rows = 1;
-  for (const chip of chips) {
-    if (x > 0 && x + chip.w > ctx.contentW) {
-      rows += 1;
-      x = 0;
-    }
-    x += chip.w + 2.2;
-  }
-  return SECTION_H + rows * rowH + 2;
+  const labels = epLayoutSkillChips(ctx, ctx.cv.skills);
+  setStyle(ctx, { size: 9, color: BODY, lineH: 3.6 });
+  const text = labels.join('  |  ');
+  const lines = epMeasureWrappedLines(ctx, text, ctx.contentW);
+  return SECTION_H + epMeasureWrappedTextHeight(lines.length, 3.6) + 2;
 }
 
 function measureLangsBlockH(ctx: ExecutivePremiumDirectPdfContext): number {
@@ -570,35 +629,25 @@ function measureLangsBlockH(ctx: ExecutivePremiumDirectPdfContext): number {
   return SECTION_H + ctx.cv.languages.length * 4.2 + 2;
 }
 
-function drawSkillChips(ctx: ExecutivePremiumDirectPdfContext): void {
+export function epMeasureLowerSectionsHeight(ctx: ExecutivePremiumDirectPdfContext): number {
+  let h = 0;
+  if (ctx.cv.education.length) h += SECTION_H + ctx.cv.education.length * 10 + 4;
+  h += measureSkillsBlockH(ctx) + measureLangsBlockH(ctx);
+  if (ctx.cv.certifications.length) h += SECTION_H + ctx.cv.certifications.length * 3.6;
+  return h;
+}
+
+function drawSkillsPipeList(ctx: ExecutivePremiumDirectPdfContext): void {
   if (!ctx.cv.skills.length) return;
   epDrawSectionHeading(ctx, ctx.labels.skills);
-  const chips = epLayoutSkillChips(ctx, ctx.cv.skills);
-  const rowH = 6.2;
-  let x = ctx.contentX;
-  let rowY = ctx.y;
-
-  const newRow = () => {
-    rowY += rowH;
-    x = ctx.contentX;
-    if (rowY + rowH > ctx.bottomSafeY) {
-      epAddPage(ctx);
-      rowY = ctx.y;
-      x = ctx.contentX;
-    }
-  };
-
-  for (const chip of chips) {
-    if (x > ctx.contentX && x + chip.w > ctx.contentX + ctx.contentW) newRow();
-    ctx.pdf.setFillColor(CHIP_BG[0], CHIP_BG[1], CHIP_BG[2]);
-    ctx.pdf.setDrawColor(RULE[0], RULE[1], RULE[2]);
-    ctx.pdf.setLineWidth(0.2);
-    ctx.pdf.rect(x, rowY, chip.w, 5.2, 'FD');
-    setStyle(ctx, { size: 8.2, color: BODY, font: 'helvetica', lineH: 3.2 });
-    ctx.pdf.text(chip.text, x + 2.4, rowY + 3.5);
-    x += chip.w + 2.2;
-  }
-  ctx.y = rowY + rowH + 1;
+  const labels = epLayoutSkillChips(ctx, ctx.cv.skills);
+  epDrawWrappedParagraph(
+    ctx,
+    epMeasureWrappedLines(ctx, labels.join('  |  '), ctx.contentW),
+    { size: 9, color: BODY, lineH: 3.6 },
+    { centered: true },
+  );
+  ctx.y += 1;
 }
 
 function drawLanguages(ctx: ExecutivePremiumDirectPdfContext): void {
@@ -607,10 +656,10 @@ function drawLanguages(ctx: ExecutivePremiumDirectPdfContext): void {
   for (const lang of ctx.cv.languages) {
     epEnsureSpace(ctx, 4.2);
     const name = getLocalizedCvLanguageName(lang.name, ctx.locale) || lang.name;
-    setStyle(ctx, { size: 9, color: TEXT, bold: true, font: 'helvetica', lineH: 3.6 });
+    setStyle(ctx, { size: 9, color: TEXT, bold: true, lineH: 3.6 });
     ctx.pdf.text(name, ctx.contentX, ctx.y + 2.8);
     if (lang.level) {
-      setStyle(ctx, { size: 8.5, color: MUTED, font: 'helvetica', lineH: 3.6 });
+      setStyle(ctx, { size: 8.5, color: MUTED, lineH: 3.6 });
       const lw = ctx.pdf.getTextWidth(lang.level);
       ctx.pdf.text(lang.level, ctx.contentX + ctx.contentW - lw, ctx.y + 2.8);
     }
@@ -619,45 +668,24 @@ function drawLanguages(ctx: ExecutivePremiumDirectPdfContext): void {
   ctx.y += 1.5;
 }
 
-/**
- * Keep Skills + Languages together when the combined block fits;
- * avoid stranding them on a nearly empty final page when possible.
- */
-export function epRebalanceLowerSections(ctx: ExecutivePremiumDirectPdfContext): void {
-  const skillsH = measureSkillsBlockH(ctx);
-  const langsH = measureLangsBlockH(ctx);
-  const total = skillsH + langsH;
-  if (!total) return;
-
-  const remaining = ctx.bottomSafeY - ctx.y;
-  if (total <= remaining) return;
-  if (total <= freshCap(ctx)) {
-    // Move the whole lower group to a fresh page if it won't look sparse
-    // and the current leftover is smaller than the group.
-    if (remaining < SPARSE_LOWER_THRESHOLD_MM) epAddPage(ctx);
-  }
-}
-
 export function epDrawSkillsLanguagesGroup(ctx: ExecutivePremiumDirectPdfContext): void {
   if (!ctx.cv.skills.length && !ctx.cv.languages.length) return;
-  epRebalanceLowerSections(ctx);
 
   const skillsH = measureSkillsBlockH(ctx);
   const langsH = measureLangsBlockH(ctx);
   const combined = skillsH + langsH;
+  const remaining = ctx.bottomSafeY - ctx.y;
 
-  if (combined > 0 && combined <= ctx.bottomSafeY - ctx.y) {
-    // Draw both in place
-  } else if (combined <= freshCap(ctx) && ctx.y + Math.min(skillsH, langsH || skillsH) > ctx.bottomSafeY) {
-    epAddPage(ctx);
+  if (combined > 0 && combined <= freshCap(ctx) && remaining < combined && remaining < SPARSE_LOWER_THRESHOLD_MM) {
+    epMoveToNextPage(ctx);
   }
 
   if (ctx.cv.skills.length) {
-    if (ctx.y + skillsH > ctx.bottomSafeY && skillsH <= freshCap(ctx)) epAddPage(ctx);
-    drawSkillChips(ctx);
+    if (ctx.y + skillsH > ctx.bottomSafeY && skillsH <= freshCap(ctx)) epMoveToNextPage(ctx);
+    drawSkillsPipeList(ctx);
   }
   if (ctx.cv.languages.length) {
-    if (ctx.y + langsH > ctx.bottomSafeY && langsH <= freshCap(ctx)) epAddPage(ctx);
+    if (ctx.y + langsH > ctx.bottomSafeY && langsH <= freshCap(ctx)) epMoveToNextPage(ctx);
     drawLanguages(ctx);
   }
 }
@@ -667,11 +695,10 @@ function epDrawCertifications(ctx: ExecutivePremiumDirectPdfContext): void {
   epMoveToFreshPageIfNeeded(ctx, SECTION_H + 6);
   epDrawSectionHeading(ctx, ctx.labels.certifications, { centered: true });
   for (const cert of ctx.cv.certifications) {
-    const lines = epMeasureWrappedLines(ctx, epNormalizePdfText(cert), ctx.contentW);
-    epDrawWrappedText(
+    epDrawWrappedParagraph(
       ctx,
-      lines,
-      { size: 9, color: BODY, font: 'helvetica', lineH: 3.6 },
+      epMeasureWrappedLines(ctx, cert, ctx.contentW),
+      { size: 9, color: BODY, lineH: 3.6 },
       { centered: true },
     );
   }
@@ -684,7 +711,8 @@ export async function buildExecutivePremiumPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const ctx = epCreateContext(pdf, cv, locale);
+  const unicodeReady = await epRegisterUnicodeFonts(pdf);
+  const ctx = epCreateContext(pdf, cv, locale, unicodeReady);
 
   epDrawHeader(ctx, options.photoDataUrl ?? null);
   epDrawSummary(ctx);
