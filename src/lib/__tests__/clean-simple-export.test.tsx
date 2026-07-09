@@ -38,6 +38,7 @@ import {
   resolveCvPdfExportRoute,
 } from '@/lib/export';
 import type { CleanSimplePdfSliceBreakDiagnostics } from '@/lib/export';
+import { csNormalizePdfText } from '@/lib/clean-simple-pdf-renderer';
 import type { CVData } from '@/lib/types';
 
 const exportSource = () => fs.readFileSync(path.resolve('src/lib/export.ts'), 'utf8');
@@ -204,6 +205,65 @@ function draganCv(): CVData {
   });
 }
 
+function serbianStressCv(): CVData {
+  return {
+    ...cv(),
+    personal: {
+      fullName: 'Dragan Obradović',
+      email: 'diodala12@gmail.com',
+      phone: '865333680065',
+      address: 'Braće Abafi 4',
+      jobTitle: 'Učitelj u osnovnoj školi',
+      photoEnabled: false,
+      photo: undefined,
+    },
+    summary: [
+      'Iskusan učitelj sa oko devet godina rada u obrazovanju.',
+      'Stvarao sam priliku daIskusan učitelj sa čvrstom stručnom praksom u koučingu i sarađivanju sa učenicima.',
+      'Planirao sam rad u Matematičkom fakultetu uz praćenje i izvođenje nastave.',
+      ...Array.from({ length: 14 }, (_, i) =>
+        `Rečenica ${i + 1}: diferencirana nastava za učenike različitih nivoa znanja i stilova učenja.`,
+      ),
+    ].join(' '),
+    experience: [
+      {
+        id: 'exp-sr-1',
+        company: 'Zhff',
+        position: 'Učitelj u osnovnoj školi',
+        startDate: '2023-05',
+        endDate: '',
+        isPresent: true,
+        description: [
+          '- Planirao sam i realizovao nastavne jedinice iz srpskog jezika i matematike.',
+          '- Primenio sam diferenciranu nastavu kako bi prilagodio sadržaje učenicima različitih nivoa znanja.',
+          '- Sprovodio sam formativno i sumativno ocenjivanje učenika.Planirao sam dalje aktivnosti uz praćenje napretka.',
+        ].join('\n'),
+      },
+      {
+        id: 'exp-sr-2',
+        company: 'Hfh',
+        position: 'Nastavnik geografije',
+        startDate: '2017-02',
+        endDate: '2023-01',
+        isPresent: false,
+        description: '- Koristio sam geografske karte i digitalne alate.',
+      },
+    ],
+    education: [{
+      id: 'edu-sr-1',
+      school: 'Matematički fakultet',
+      degree: 'VI',
+      startDate: '2020-01',
+      endDate: '2025-02',
+      description: '',
+    }],
+    skills: ['Teamwork', 'Organization', 'Coaching', 'Leadership'],
+    languages: [{ name: 'Serbian', level: 'Native' }, { name: 'English', level: 'Fluent' }],
+    templateId: 'clean-simple',
+    region: 'Balkan',
+  };
+}
+
 function makeCanvas(width: number, height: number, hasContentAt: (absoluteY: number) => boolean): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -348,6 +408,8 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
     pages: number;
     addImage: ReturnType<typeof vi.fn>;
     addPage: ReturnType<typeof vi.fn>;
+    addFileToVFS: ReturnType<typeof vi.fn>;
+    addFont: ReturnType<typeof vi.fn>;
     metadataKeywords: string;
     drawnText: string[];
     drawnRuns: Array<{ page: number; text: string }>;
@@ -366,23 +428,28 @@ function installPdfMocks(canvas: HTMLCanvasElement) {
   vi.doMock('jspdf', () => ({
     jsPDF: class MockPdf {
       pages = 1;
+      currentPage = 1;
       metadataKeywords = '';
       drawnText: string[] = [];
       drawnRuns: Array<{ page: number; text: string }> = [];
       addImage = vi.fn();
       addPage = vi.fn(() => {
         this.pages += 1;
+        this.currentPage = this.pages;
       });
+      addFileToVFS = vi.fn();
+      addFont = vi.fn();
       setFont = vi.fn();
       setFontSize = vi.fn();
       setTextColor = vi.fn();
       setDrawColor = vi.fn();
       setLineWidth = vi.fn();
       line = vi.fn();
+      getTextWidth = vi.fn((text: string) => Math.min(String(text).length * 1.8, 40));
       text = vi.fn((value: string | string[]) => {
         const values = Array.isArray(value) ? value.map(String) : [String(value)];
         this.drawnText.push(...values);
-        values.forEach(text => this.drawnRuns.push({ page: this.pages, text }));
+        values.forEach(text => this.drawnRuns.push({ page: this.currentPage, text }));
       });
       splitTextToSize = vi.fn((value: string, maxWidth: number) => {
         const words = String(value).split(/\s+/).filter(Boolean);
@@ -441,6 +508,19 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(tinyPng);
   Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(() => 'blob:http://test/docx'), configurable: true });
   Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true });
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: string | URL | Request) => {
+    const url = String(input);
+    const fileName = url.split('/').pop() ?? '';
+    const fontPath = path.join(process.cwd(), 'public', 'fonts', fileName);
+    if (fs.existsSync(fontPath)) {
+      const buf = fs.readFileSync(fontPath);
+      return {
+        ok: true,
+        arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+      } as Response;
+    }
+    return { ok: false, arrayBuffer: async () => new ArrayBuffer(0) } as Response;
+  });
 });
 
 afterEach(() => {
@@ -750,8 +830,13 @@ describe('Clean Simple preview/export parity', () => {
     const start = src.indexOf('export async function buildCleanSimplePdfBlob');
     const end = src.indexOf('export async function exportCleanSimplePdf', start);
     const block = src.slice(start, end);
+    const rendererSrc = fs.readFileSync(path.resolve('src/lib/clean-simple-pdf-renderer.ts'), 'utf8');
 
-    expect(src).toContain('export async function buildCleanSimplePagedPdfBlob');
+    // The dedicated renderer now lives in its own module, imported/re-exported by export.ts.
+    expect(src).toContain("from './clean-simple-pdf-renderer'");
+    expect(rendererSrc).toContain('export async function buildCleanSimplePagedPdfBlob');
+    expect(rendererSrc).not.toContain("import('html2canvas')");
+    expect(rendererSrc).not.toContain("from 'html2canvas'");
     expect(block).toContain('buildCleanSimplePagedPdfBlob(cv, locale');
     expect(block).not.toContain('buildCvPdfBlob');
     expect(block).not.toContain('html2canvas');
@@ -1515,50 +1600,15 @@ describe('Clean Simple preview/export parity', () => {
       expect(shouldUseFullSemanticCanvasDecl).toContain("captureTemplateId === 'clean-simple'");
     });
 
-    test('V12: full Clean Simple export pipeline never drops a planned page once real semantic content bounds exist, and the final page reaches the true content bottom', async () => {
-      const pageHeightCanvasPx = (297 / 210) * 800;
-      const totalHeight = Math.round(pageHeightCanvasPx * 1.85);
-      const skillsHeadingTop = totalHeight - 140;
-      const languagesHeadingTop = totalHeight - 60;
-      const languagesRowTop = totalHeight - 30;
-      const languagesRowBottom = totalHeight - 16;
+    test('buildCvPdfBlob hard-fails for clean-simple DOM capture — the rebuilt Clean Simple PDF must never fall through to html2canvas/tall-canvas slicing', async () => {
+      document.body.innerHTML = '<div id="cv-preview"><div data-template-id="clean-simple">CS</div></div>';
+      const canvas = makeCanvas(800, 1200, () => true);
+      const { html2canvasMock } = installPdfMocks(canvas);
 
-      document.body.innerHTML = `
-        <div id="cv-preview">
-          <div data-template-id="clean-simple" data-test-rect="${rectAttr(0, 0, 800, totalHeight)}">
-            <div data-export-meaningful="true" data-test-rect="${rectAttr(0, 40, 400, 40)}">Mila Petrovic</div>
-            <p data-export-meaningful="true" data-test-rect="${rectAttr(60, 40, 720, skillsHeadingTop - 80)}">Filler experience content spanning most of the document.</p>
-            <h2 data-export-meaningful="true" data-test-rect="${rectAttr(skillsHeadingTop, 40, 200, 16)}">SKILLS</h2>
-            <span data-export-meaningful="true" data-test-rect="${rectAttr(skillsHeadingTop + 20, 40, 200, 14)}">Python</span>
-            <h2 data-export-meaningful="true" data-test-rect="${rectAttr(languagesHeadingTop, 40, 200, 16)}">LANGUAGES</h2>
-            <span data-export-meaningful="true" data-test-rect="${rectAttr(languagesRowTop, 40, 200, 14)}">Italian (Native)</span>
-          </div>
-        </div>
-      `;
-      installRectMock();
-
-      const canvas = makeCanvas(800, totalHeight, (y) => (
-        (y >= 0 && y <= 40)
-        || (y >= 60 && y <= skillsHeadingTop - 20)
-        || (y >= skillsHeadingTop && y <= skillsHeadingTop + 34)
-        || (y >= languagesHeadingTop && y <= languagesRowBottom)
-      ));
-      const { instances } = installPdfMocks(canvas);
-
-      await buildCvPdfBlob('cv-preview', getCleanSimplePdfExportBuildOptions());
-
-      expect(instances).toHaveLength(1);
-      const report = (window as unknown as {
-        __cleanSimplePdfPaginationReport?: { segments: Array<{ startPx: number; endPx: number }> };
-      }).__cleanSimplePdfPaginationReport;
-      expect(report).toBeDefined();
-      expect(report!.segments.length).toBeGreaterThanOrEqual(2);
-      // Every planned segment must actually have been rendered onto the PDF — none
-      // silently dropped by the blank-page heuristic now that real semantic content
-      // bounds exist for Clean Simple.
-      expect(instances[0].addImage).toHaveBeenCalledTimes(report!.segments.length);
-      const lastSegment = report!.segments[report!.segments.length - 1];
-      expect(lastSegment.endPx).toBeGreaterThanOrEqual(languagesRowBottom);
+      await expect(buildCvPdfBlob('cv-preview', getCleanSimplePdfExportBuildOptions()))
+        .rejects.toThrow(/dedicated-clean-simple/);
+      await expect(buildCvPdfBlob('cv-preview')).rejects.toThrow(/dedicated-clean-simple/);
+      expect(html2canvasMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1609,40 +1659,24 @@ describe('Clean Simple preview/export parity', () => {
     expect(pdfText).not.toMatch(/CLEAN_SIMPLE_[A-Z0-9_]*V\d+/);
   });
 
-  test('explicit continuation slice options prevent renderPdfSlice fallthrough without DOM markers', async () => {
-    const runMarkerlessExport = async (buildOptions?: ReturnType<typeof getCleanSimplePdfExportBuildOptions>) => {
-      const container = document.createElement('div');
-      container.id = `clean-simple-markerless-${Math.random().toString(36).slice(2)}`;
-      const inner = document.createElement('div');
-      inner.style.width = '800px';
-      inner.style.height = '2000px';
-      inner.textContent = 'Markerless Clean Simple export fixture';
-      container.appendChild(inner);
-      document.body.appendChild(container);
+  test('forced clean-simple capture options guard-throw before any renderPdfSlice/tall-canvas fallthrough, even without DOM markers', async () => {
+    const container = document.createElement('div');
+    container.id = `clean-simple-markerless-${Math.random().toString(36).slice(2)}`;
+    const inner = document.createElement('div');
+    inner.style.width = '800px';
+    inner.style.height = '2000px';
+    inner.textContent = 'Markerless Clean Simple export fixture';
+    container.appendChild(inner);
+    document.body.appendChild(container);
 
-      const canvas = makeCanvas(800, 2000, () => true);
-      const { instances } = installPdfMocks(canvas);
-      await buildCvPdfBlob(container.id, buildOptions ?? {});
-      container.remove();
-      return instances[0];
-    };
+    const canvas = makeCanvas(800, 2000, () => true);
+    const { html2canvasMock } = installPdfMocks(canvas);
 
-    const unpaddedPdf = await runMarkerlessExport();
-    const paddedPdf = await runMarkerlessExport(getCleanSimplePdfExportBuildOptions());
+    await expect(buildCvPdfBlob(container.id, getCleanSimplePdfExportBuildOptions()))
+      .rejects.toThrow(/dedicated-clean-simple/);
+    expect(html2canvasMock).not.toHaveBeenCalled();
 
-    expect(unpaddedPdf.pages).toBeGreaterThanOrEqual(2);
-    expect(paddedPdf.pages).toBeGreaterThanOrEqual(2);
-
-    const unpaddedPage2Y = Number(unpaddedPdf.addImage.mock.calls[1][3]);
-    const unpaddedPage2HeightMm = Number(unpaddedPdf.addImage.mock.calls[1][5]);
-    const paddedPage2Y = Number(paddedPdf.addImage.mock.calls[1][3]);
-    const paddedPage2HeightMm = Number(paddedPdf.addImage.mock.calls[1][5]);
-    const expectedTopPadMm = (34 / 800) * 210;
-
-    expect(unpaddedPage2Y).toBe(0);
-    expect(paddedPage2Y).toBe(0);
-    expect(paddedPage2HeightMm).toBeGreaterThan(unpaddedPage2HeightMm);
-    expect(paddedPage2HeightMm - unpaddedPage2HeightMm).toBeGreaterThanOrEqual(expectedTopPadMm - 1);
+    container.remove();
   });
 
   test('dedicated Clean Simple PDF root is fixed A4, uses real text nodes, and keeps text spacing intact', () => {
@@ -1711,7 +1745,9 @@ describe('Clean Simple preview/export parity', () => {
 
     const pdfText = instances[0].drawnText.join('\n');
     expect(pdfText).toContain('Učitelj u osnovnoj školi');
-    expect(pdfText).toContain('Nastavnik geografije at Hfh');
+    expect(pdfText).toContain('Nastavnik geografije \u2014 Hfh');
+    expect(pdfText).not.toContain('Nastavnik geografije at Hfh');
+    expect(pdfText).not.toContain(' at Hfh');
     expect(pdfText).toContain('Metematički fakultet');
     expect(pdfText).not.toContain('osnovnojškoli');
     expect(pdfText).not.toContain('Nastavnikgeografije');
@@ -1859,7 +1895,7 @@ describe('Clean Simple preview/export parity', () => {
     await buildCleanSimplePdfBlob(longCv, 'en');
     const pdf = instances[0];
     const experienceHeading = pdf.drawnRuns.find(run => run.text === 'WORK EXPERIENCE');
-    const firstTitle = pdf.drawnRuns.find(run => run.text.includes('Software Engineer at Acme Platforms'));
+    const firstTitle = pdf.drawnRuns.find(run => run.text.includes('Software Engineer \u2014 Acme Platforms'));
     const firstBullet = pdf.drawnRuns.find(run => run.text.includes('Built APIs and internal tooling'));
     expect(experienceHeading).toBeDefined();
     expect(firstTitle?.page).toBe(experienceHeading?.page);
@@ -2086,5 +2122,311 @@ describe('Clean Simple preview/export parity', () => {
       'contemporary-bold',
       'rirekisho',
     ]);
+  });
+});
+
+describe('Clean Simple PDF rebuild — dedicated Unicode-first renderer', () => {
+  // 1-8: routing / forbidden-path isolation ---------------------------------
+  test('R1: resolveCvPdfExportRoute(clean-simple) resolves to dedicated-clean-simple', () => {
+    expect(resolveCvPdfExportRoute('clean-simple')).toEqual({ kind: 'dedicated-clean-simple' });
+  });
+
+  test('R2: buildCleanSimplePdfBlob wires through buildCleanSimplePagedPdfBlob from the dedicated renderer module', () => {
+    const src = exportSource();
+    const start = src.indexOf('export async function buildCleanSimplePdfBlob');
+    const end = src.indexOf('export async function exportCleanSimplePdf', start);
+    const block = src.slice(start, end);
+    expect(block).toContain('prepareCleanSimplePdfPhotoDataUrl(cv)');
+    expect(block).toContain('buildCleanSimplePagedPdfBlob(cv, locale, { photoDataUrl })');
+  });
+
+  test('R3/R4: Clean Simple PDF export never calls buildCvPdfBlob or html2canvas at runtime', async () => {
+    const { instances, html2canvasMock } = installPdfMocks(makeCanvas(800, 1200, () => true));
+    await buildCleanSimplePdfBlob(draganCv(), 'en');
+    expect(instances).toHaveLength(1);
+    expect(html2canvasMock).not.toHaveBeenCalled();
+  });
+
+  test('R5: Clean Simple renderer module never calls renderPdfSlice/renderPaddedPdfSlice/buildPaddedPdfSlice', () => {
+    const rendererSrc = fs.readFileSync(path.resolve('src/lib/clean-simple-pdf-renderer.ts'), 'utf8');
+    expect(rendererSrc).not.toContain('renderPdfSlice');
+    expect(rendererSrc).not.toContain('renderPaddedPdfSlice');
+    expect(rendererSrc).not.toContain('buildPaddedPdfSlice');
+    expect(rendererSrc).not.toContain('planCleanSimplePdfSliceSegments');
+  });
+
+  test('R6/R7/R8: Clean Simple renderer module never imports Modern Minimal, Executive Premium, or Corporate Navy renderers', () => {
+    const rendererSrc = fs.readFileSync(path.resolve('src/lib/clean-simple-pdf-renderer.ts'), 'utf8');
+    expect(rendererSrc).not.toContain('modern-minimal-pdf-renderer');
+    expect(rendererSrc).not.toContain('executive-premium-pdf-renderer');
+    expect(rendererSrc).not.toContain('corporate-navy-pdf-renderer');
+    expect(rendererSrc).not.toContain('buildModernMinimalPagedPdfBlob');
+    expect(rendererSrc).not.toContain('buildExecutivePremiumPagedPdfBlob');
+    expect(rendererSrc).not.toContain('buildCorporateNavyPagedPdfBlob');
+  });
+
+  test('buildCvPdfBlob hard-fails for clean-simple (dedicated route guard) instead of silently falling back to generic-preview/html2canvas', async () => {
+    document.body.innerHTML = '<div id="cv-preview"><div data-template-id="clean-simple">CS</div></div>';
+    const { html2canvasMock } = installPdfMocks(makeCanvas(800, 1200, () => true));
+    await expect(buildCvPdfBlob('cv-preview')).rejects.toThrow(/dedicated-clean-simple/);
+    expect(html2canvasMock).not.toHaveBeenCalled();
+  });
+
+  // 9-14: Unicode / Serbian Latin Extended rendering ------------------------
+  test('R9/R10: csRegisterUnicodeFonts embeds NotoSans Regular+Bold via addFileToVFS/addFont from public/fonts', async () => {
+    const { instances } = installPdfMocks(makeCanvas(800, 1200, () => true));
+    await buildCleanSimplePdfBlob(serbianStressCv(), 'en');
+    const pdf = instances[0];
+    expect(pdf.addFileToVFS).toHaveBeenCalledWith('NotoSans-Regular.ttf', expect.any(String));
+    expect(pdf.addFileToVFS).toHaveBeenCalledWith('NotoSans-Bold.ttf', expect.any(String));
+    expect(pdf.addFont).toHaveBeenCalledWith('NotoSans-Regular.ttf', 'NotoSans', 'normal');
+    expect(pdf.addFont).toHaveBeenCalledWith('NotoSans-Bold.ttf', 'NotoSans', 'bold');
+    // setFont must actually switch to the embedded family, never fall back to
+    // jsPDF's built-in Helvetica/Times for Serbian/Latin-Extended text.
+    expect(pdf.setFont).toHaveBeenCalledWith('NotoSans', 'normal');
+    expect(pdf.setFont).toHaveBeenCalledWith('NotoSans', 'bold');
+    expect(pdf.setFont).not.toHaveBeenCalledWith('helvetica', expect.anything());
+    expect(pdf.setFont).not.toHaveBeenCalledWith('times', expect.anything());
+  });
+
+  test('R11/R12: rendered Clean Simple PDF text preserves Serbian/Croatian/Bosnian Latin Extended characters intact, with no ASCII-stripped or replacement-character fallbacks', async () => {
+    const { instances } = installPdfMocks(makeCanvas(800, 1600, () => true));
+    await buildCleanSimplePdfBlob(draganCv(), 'en');
+    const text = instances[0].drawnText.join('\n');
+
+    expect(text).toContain('Dragan Obradović');
+    expect(text).toContain('Učitelj u osnovnoj školi');
+    expect(text).toContain('Braće Abafi');
+
+    // Must not be stripped to plain ASCII.
+    expect(text).not.toContain('Uitelj');
+    expect(text).not.toContain('Brae');
+    expect(text).not.toContain('Dragan Obradovic');
+
+    // Must not contain the Unicode replacement character or raw control chars.
+    expect(text).not.toContain('\uFFFD');
+    expect(/[\u0000-\u0008\u000B\u000E-\u001F]/.test(text)).toBe(false);
+  });
+
+  test('R11: rendered Clean Simple PDF preserves učenicima and Matematičkom from a Serbian summary/education stress fixture', async () => {
+    const { instances } = installPdfMocks(makeCanvas(800, 2400, () => true));
+    await buildCleanSimplePdfBlob(serbianStressCv(), 'en');
+    const text = instances[0].drawnText.join('\n');
+
+    expect(text).toContain('učenicima');
+    expect(text).toContain('Matematičkom');
+    expect(text).not.toContain('Matematikom');
+    expect(text).not.toContain('učenicima'.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+  });
+
+  test('csNormalizePdfText leaves every Serbian/Croatian/Bosnian diacritic character untouched', () => {
+    const stress = 'č ć š đ ž Č Ć Š Đ Ž Dragan Obradović Braće Abafi 4 koučinga sarađivao praćenje izvođenje';
+    expect(csNormalizePdfText(stress)).toBe(stress);
+  });
+
+  // 13-14: glued-sentence normalization --------------------------------------
+  test('R13/R14: csNormalizePdfText fixes every required glued sentence boundary', () => {
+    const cases: Array<[string, string]> = [
+      ['daIskusan', 'da. Iskusan'],
+      ['napreduje.Iskusan', 'napreduje. Iskusan'],
+      ['učenika.Planirao', 'učenika. Planirao'],
+      ['logic.Built', 'logic. Built'],
+      ['applied.Designed', 'applied. Designed'],
+      ['environments.Software', 'environments. Software'],
+      ['lead.Assisted', 'lead. Assisted'],
+    ];
+    for (const [input, expected] of cases) {
+      expect(csNormalizePdfText(input)).toContain(expected);
+    }
+  });
+
+  test('csNormalizePdfText protects technical tokens, emails, and dates from being altered', () => {
+    const input = 'Built with Node.js and TypeScript/JavaScript. Ran CI/CD and exposed REST APIs. Contact diodala12@gmail.com on 2023-05-12.';
+    const out = csNormalizePdfText(input);
+    expect(out).toContain('Node.js');
+    expect(out).toContain('TypeScript');
+    expect(out).toContain('JavaScript');
+    expect(out).toContain('CI/CD');
+    expect(out).toContain('REST APIs');
+    expect(out).toContain('diodala12@gmail.com');
+    expect(out).toContain('2023-05-12');
+  });
+
+  test('Rendered Clean Simple PDF normalizes glued text from a real Serbian description without mutating the saved CVData object', async () => {
+    const stressCv = serbianStressCv();
+    const originalDescription = stressCv.experience[0]!.description;
+    const { instances } = installPdfMocks(makeCanvas(800, 2400, () => true));
+
+    await buildCleanSimplePdfBlob(stressCv, 'en');
+
+    // PDF-only normalization must never mutate the caller's CV data in place.
+    expect(stressCv.experience[0]!.description).toBe(originalDescription);
+
+    const text = instances[0].drawnText.join(' ').replace(/\s+/g, ' ');
+    expect(text).not.toContain('učenika.Planirao');
+    expect(text).toContain('učenika. Planirao');
+  });
+
+  // 15-16: neutral work-experience separator --------------------------------
+  test('R15/R16: Work Experience uses a neutral "\u2014" separator, never the hardcoded English " at "', async () => {
+    const { instances } = installPdfMocks(makeCanvas(800, 1600, () => true));
+    await buildCleanSimplePdfBlob(draganCv(), 'en');
+    const text = instances[0].drawnText.join('\n');
+
+    expect(text).toContain('Učitelj u osnovnoj školi \u2014 Zhff');
+    expect(text).toContain('Nastavnik geografije \u2014 Hfh');
+    expect(text).not.toMatch(/Učitelj u osnovnoj školi\s+at\s+Zhff/);
+    expect(text).not.toMatch(/Nastavnik geografije\s+at\s+Hfh/);
+    expect(text).not.toContain(' at ');
+  });
+
+  // 17-19: page 1 / summary flow ---------------------------------------------
+  test('R17/R18: page 1 draws Professional Summary immediately after the header and is never header-only blank', async () => {
+    const { instances } = installPdfMocks(makeCanvas(800, 1400, () => true));
+    await buildCleanSimplePdfBlob(cv(), 'en');
+    const pdf = instances[0];
+
+    const nameRun = pdf.drawnRuns.find(run => run.text.includes('Mila Petrovic'));
+    const summaryHeadingRun = pdf.drawnRuns.find(run => run.text === 'PROFESSIONAL SUMMARY');
+    const summaryBodyRun = pdf.drawnRuns.find(run => run.text.includes('Organized coordinator'));
+
+    expect(nameRun?.page).toBe(1);
+    expect(summaryHeadingRun).toBeDefined();
+    expect(summaryHeadingRun?.page).toBe(1);
+    expect(summaryBodyRun?.page).toBe(1);
+
+    const page1Runs = pdf.drawnRuns.filter(run => run.page === 1);
+    expect(page1Runs.length).toBeGreaterThan(3);
+  });
+
+  test('R19: a long Professional Summary flows line-by-line across pages without dropping any sentence', async () => {
+    const sentences = Array.from(
+      { length: 70 },
+      (_, i) => `Duga rečenica broj ${i + 1} sa dovoljno teksta da prelama stranice višestruko i nikad ne izgubi sadržaj.`,
+    );
+    const longCv = cv({ summary: sentences.join(' ') });
+    const { instances } = installPdfMocks(makeCanvas(800, 4600, () => true));
+    await buildCleanSimplePdfBlob(longCv, 'en');
+    const pdf = instances[0];
+    expect(pdf.pages).toBeGreaterThanOrEqual(2);
+    const text = pdf.drawnText.join(' ').replace(/\s+/g, ' ');
+    sentences.forEach(sentence => expect(text).toContain(sentence.replace(/\s+/g, ' ')));
+  });
+
+  // 20-22: Work Experience keep-together + hanging indent bullets ----------
+  test('R20: Work Experience heading stays with the first job title/company/date and at least the first bullet', async () => {
+    const longCv = cv({
+      summary: Array.from({ length: 20 }, (_, i) => `Sentence ${i + 1} padding the summary so work experience nearly overflows page one.`).join(' '),
+      experience: [
+        {
+          id: 'exp-keep',
+          company: 'Acme Platforms',
+          position: 'Software Engineer',
+          startDate: '2021-01',
+          endDate: '',
+          isPresent: true,
+          description: '- Built APIs and internal tooling for delivery teams.\n- Improved release quality through testing.',
+        },
+      ],
+    });
+    const { instances } = installPdfMocks(makeCanvas(800, 2600, () => true));
+    await buildCleanSimplePdfBlob(longCv, 'en');
+    const pdf = instances[0];
+    const heading = pdf.drawnRuns.find(run => run.text === 'WORK EXPERIENCE');
+    const lead = pdf.drawnRuns.find(run => run.text.includes('Software Engineer \u2014 Acme Platforms'));
+    const firstBullet = pdf.drawnRuns.find(run => run.text.includes('Built APIs'));
+    expect(heading?.page).toBe(lead?.page);
+    expect(heading?.page).toBe(firstBullet?.page);
+  });
+
+  test('R21/R22: wrapped bullets use a hanging indent — the bullet marker is drawn once per bullet, never once per wrapped visual line', async () => {
+    const longCv = cv({
+      experience: [
+        {
+          id: 'exp-wrap',
+          company: 'Acme Platforms',
+          position: 'Software Engineer',
+          startDate: '2021-01',
+          endDate: '',
+          isPresent: true,
+          description: [
+            '- This is a deliberately long bullet point sentence designed to wrap across multiple visual lines when rendered inside the narrow content column of the page.',
+            '- A second similarly long bullet point sentence engineered to also wrap across several visual lines so hanging indent behavior can be verified reliably.',
+          ].join('\n'),
+        },
+      ],
+    });
+    const { instances } = installPdfMocks(makeCanvas(800, 1600, () => true));
+    await buildCleanSimplePdfBlob(longCv, 'en');
+    const pdf = instances[0];
+    const bulletMarkerRuns = pdf.drawnRuns.filter(run => run.text === '\u2022');
+    // Exactly one marker per bullet item — never one per wrapped continuation line.
+    expect(bulletMarkerRuns).toHaveLength(2);
+  });
+
+  // 23-24: lower-section visibility + grouping -------------------------------
+  test('R23: Education, Skills, and Languages headings are all present and visible', async () => {
+    const { instances } = installPdfMocks(makeCanvas(800, 1600, () => true));
+    await buildCleanSimplePdfBlob(draganCv(), 'en');
+    const text = instances[0].drawnText;
+    expect(text).toContain('WORK EXPERIENCE');
+    expect(text).toContain('EDUCATION');
+    expect(text).toContain('SKILLS');
+    expect(text).toContain('LANGUAGES');
+  });
+
+  test('R24: Education + Skills + Languages are moved together to the next page rather than orphaning Skills/Languages alone', async () => {
+    // Summary long enough that Education just barely fits at the bottom of page 1,
+    // but Skills+Languages measured independently would no longer have room.
+    const longCv = cv({
+      summary: Array.from({ length: 21 }, (_, i) => `Sentence ${i + 1} of padding text to push the lower sections near the page boundary.`).join(' '),
+      experience: [{
+        id: 'exp-group',
+        company: 'Acme Platforms',
+        position: 'Software Engineer',
+        startDate: '2021-01',
+        endDate: '',
+        isPresent: true,
+        description: '- Built APIs and internal tooling for delivery teams.',
+      }],
+      education: [{ id: 'edu-group', school: 'University of Belgrade', degree: 'BSc Computer Science', startDate: '2015', endDate: '2019', description: '' }],
+      skills: ['Python', 'TypeScript', 'SQL', 'Node.js', 'REST APIs', 'Agile', 'JavaScript', 'React'],
+      languages: [{ name: 'English', level: 'Advanced' }, { name: 'French', level: 'Intermediate' }],
+    });
+    const { instances } = installPdfMocks(makeCanvas(800, 2600, () => true));
+    await buildCleanSimplePdfBlob(longCv, 'en');
+    const pdf = instances[0];
+    const educationHeading = pdf.drawnRuns.find(run => run.text === 'EDUCATION');
+    const skillsHeading = pdf.drawnRuns.find(run => run.text === 'SKILLS');
+    const languagesHeading = pdf.drawnRuns.find(run => run.text === 'LANGUAGES');
+    expect(educationHeading).toBeDefined();
+    expect(skillsHeading).toBeDefined();
+    expect(languagesHeading).toBeDefined();
+    // All three lower sections must land on the same page as a group.
+    expect(skillsHeading?.page).toBe(educationHeading?.page);
+    expect(languagesHeading?.page).toBe(educationHeading?.page);
+  });
+
+  // 25-26: content completeness / DOCX isolation -----------------------------
+  test('R25: no experience/education/skills/languages content is lost for the Dragan Serbian fixture', async () => {
+    const { instances } = installPdfMocks(makeCanvas(800, 1600, () => true));
+    await buildCleanSimplePdfBlob(draganCv(), 'en');
+    const text = instances[0].drawnText.join(' ').replace(/\s+/g, ' ');
+
+    expect(text).toContain('Planirao sam i realizovao nastavne jedinice');
+    expect(text).toContain('Koristio sam geografske karte');
+    expect(text).toContain('Metematički fakultet');
+    ['Teamwork', 'Organization', 'Coaching', 'Leadership', 'Creativity'].forEach(skill => expect(text).toContain(skill));
+  });
+
+  test('R26: Clean Simple DOCX export path is completely untouched by the PDF renderer rebuild', () => {
+    const src = exportSource();
+    const docxStart = src.indexOf("directCleanSimplePhoto = cfg.customLayout === 'clean-simple'");
+    expect(docxStart).toBeGreaterThan(-1);
+    // DOCX still goes through the pre-existing clean-simple-pdf-template based
+    // photo prep path, not the new dedicated PDF renderer module.
+    const rendererSrc = fs.readFileSync(path.resolve('src/lib/clean-simple-pdf-renderer.ts'), 'utf8');
+    expect(rendererSrc).not.toContain('docx');
+    expect(rendererSrc).not.toContain('exportToDOCX');
   });
 });
