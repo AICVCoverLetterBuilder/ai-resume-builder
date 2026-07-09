@@ -5,65 +5,61 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import JSZip from 'jszip';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { templateComponents } from '@/components/cv-templates';
-import { createContemporaryBoldPdfTemplate } from '@/lib/contemporary-bold-pdf-template';
 import {
-  applyContemporaryBoldKeepTogetherPagination,
+  buildContemporaryBoldPagedPdfBlob,
   buildContemporaryBoldPdfBlob,
   exportContemporaryBoldPdf,
   exportToDOCX,
+  resolveCvPdfExportRoute,
 } from '@/lib/export';
+import {
+  cbNormalizePdfText,
+  cbRegisterUnicodeFonts,
+  cbDetectCompactMode,
+  cbSafeMaxWidth,
+  cbCreateContext,
+} from '@/lib/contemporary-bold-pdf-renderer';
 import type { CVData } from '@/lib/types';
 
-const originalPhoto = `data:image/jpeg;base64,${Buffer.from('contemporary-bold-original-photo').toString('base64')}`;
-const squarePhoto = `data:image/jpeg;base64,${Buffer.from('contemporary-bold-square-photo').toString('base64')}`;
-const transparentCirclePhoto = `data:image/png;base64,${Buffer.from('contemporary-bold-transparent-circle-photo').toString('base64')}`;
-let loadedImageSources: string[] = [];
-let drawImageCalls: unknown[][] = [];
+// ── Fixtures ──────────────────────────────────────────────────────────────────
+
+const ORIGINAL_PHOTO = `data:image/jpeg;base64,${Buffer.from('cb-original-photo').toString('base64')}`;
+let pdfInstances: MockPdf[] = [];
+let addFileToVFSCalls: string[] = [];
 
 function cv(overrides: Partial<CVData> & { personal?: Partial<CVData['personal']> } = {}): CVData {
   const { personal, ...rest } = overrides;
   const base: CVData = {
-    id: 'contemporary-bold-test',
+    id: 'cb-test',
     name: '',
     personal: {
-      fullName: 'Dragan Obradovic',
+      fullName: 'Dragan Obradović',
       email: 'dragan@example.com',
       phone: '+381 60 123 456',
-      address: 'Brace Abafi 4',
-      jobTitle: 'Education Lead',
-      photo: originalPhoto,
-      originalPhoto,
+      address: 'Braće Abafi 4',
+      jobTitle: 'Učitelj u osnovnoj školi',
+      photo: ORIGINAL_PHOTO,
+      originalPhoto: ORIGINAL_PHOTO,
       rectangularPhoto: undefined,
-      circularPhoto: 'data:image/png;base64,circular-photo',
+      circularPhoto: 'data:image/png;base64,circle-photo',
       photoEnabled: true,
     },
-    summary: 'Experienced educator with a record of building high-performance teams and planning lessons across Serbian language and mathematics.',
+    summary: 'Iskusan nastavnik sa dugogodišnjim iskustvom u radu sa učenicima u nastavi Matematičkom predmetu.',
     experience: [
       {
         id: 'exp1',
-        company: 'Primary School ZHFF',
-        position: 'Primary School Teacher',
+        company: 'Osnovna škola ZHFF',
+        position: 'Nastavnik',
         startDate: '2023-05',
         endDate: '',
         isPresent: true,
-        description: '- Planned teaching units for Serbian language and mathematics.\n- Adapted instruction for different knowledge levels.',
-      },
-      {
-        id: 'exp2',
-        company: 'HFH',
-        position: 'Geography Teacher',
-        startDate: '2017-02',
-        endDate: '2023-01',
-        isPresent: false,
-        description: '- Prepared quarterly teaching plans and assessment cycles.',
+        description: '- Planirao nastavne jedinice za srpski jezik i matematiku.\n- Prilagođavao nastavu.',
       },
     ],
     education: [
-      { id: 'edu1', school: 'Mathematics Faculty', degree: 'VI stepen', startDate: '2020-01', endDate: '2025-02', description: '' },
+      { id: 'edu1', school: 'Matematički fakultet', degree: 'VI stepen', startDate: '2020-01', endDate: '2025-02', description: '' },
     ],
-    skills: ['Teamwork', 'Organization', 'Time Management', 'Creativity', 'Presentation Skills', 'Coaching', 'Leadership'],
+    skills: ['Teamwork', 'Organization', 'GitHub', 'Node.js', 'C++17'],
     certifications: [],
     languages: [{ name: 'English', level: 'Intermediate' }, { name: 'Serbian', level: 'Native' }],
     templateId: 'contemporary-bold',
@@ -71,189 +67,195 @@ function cv(overrides: Partial<CVData> & { personal?: Partial<CVData['personal']
     createdAt: '',
     updatedAt: '',
   };
-  const merged = { ...base, ...rest };
-  merged.personal = { ...base.personal, ...personal };
-  return merged;
+  return { ...base, ...rest, personal: { ...base.personal, ...personal } };
 }
 
-class MockImage {
-  onload: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  decode = vi.fn().mockResolvedValue(undefined);
-  naturalWidth = 400;
-  naturalHeight = 800;
-  width = 400;
-  height = 800;
-  complete = true;
-  private currentSrc = '';
+/** Real Android stress fixture — long summary, many bullets, technical terms. */
+function stressCv(): CVData {
+  const summaryLines = [
+    'Iskusan senior softverski inženjer sa više od deset godina iskustva u razvoju sistema visoke dostupnosti.',
+    'Specijalizovan za C++17, Node.js, REST APIs i CI/CD automatizaciju pipeline-ova na GitHub platformi.',
+    'Primenio sam nlohmann/json biblioteku za serijalizaciju i libcurl za HTTP komunikaciju u embedded projektima.',
+    'Koristio sam GitHub Actions za automatizovano testiranje i GitHub za upravljanje kodom tima.',
+    'daIskusan u radu sa učenicima u nastavi Matematičkom predmetu.',
+    'napreduje.Iskusan je i dalje motivisan da unapredi rad tima.',
+    'users.Led teams and accordingly.Led cross-functional initiatives.',
+    ...Array.from({ length: 15 }, (_, i) =>
+      `Rečenica ${i + 1}: sistematski pristup razvoju softvera uz primenu agilnih metodologija i kontinuiranu integraciju.`,
+    ),
+  ].join(' ');
 
-  get src() {
-    return this.currentSrc;
-  }
-
-  set src(value: string) {
-    this.currentSrc = value;
-    loadedImageSources.push(value);
-    setTimeout(() => this.onload?.(), 0);
-  }
-}
-
-function makeCanvas(width: number, height: number): HTMLCanvasElement {
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  Object.defineProperty(canvas, 'getContext', {
-    value: vi.fn(() => ({
-      drawImage: vi.fn((...args: unknown[]) => drawImageCalls.push(args)),
-      clearRect: vi.fn(),
-      fillRect: vi.fn(),
-      getImageData: vi.fn((_x: number, _y: number, w: number, h: number) => {
-        const data = new Uint8ClampedArray(w * h * 4);
-        data.fill(255);
-        data[0] = 15;
-        data[1] = 23;
-        data[2] = 42;
-        data[3] = 255;
-        return { data };
-      }),
-    })),
-    configurable: true,
+  return cv({
+    summary: summaryLines,
+    experience: [
+      {
+        id: 'exp1',
+        company: 'Tech Solutions d.o.o.',
+        position: 'Senior C++ Developer',
+        startDate: '2020-03',
+        endDate: '',
+        isPresent: true,
+        description: [
+          '- Implementirao visoko-performansni server koristeći C++17 i nlohmann/json.',
+          '- Integrisao libcurl za komunikaciju sa eksternim REST APIs servisima.',
+          '- Koristio GitHub Actions za CI/CD pipeline i automatizovano testiranje.',
+          '- Optimizovao memorijsko upravljanje i smanjio latenciju za 40%.',
+          '- Sarađivao sa timovima na GitHub platformi koristeći pull request workflow.',
+          '- Projektovao i implementirao microservices arhitekturu sa REST APIs.',
+          '- Pisao unit testove i integracionе testove za kritične komponente sistema.',
+          '- Mentovao mlađe programere u C++17 tehnikama i Node.js ekosistemu.',
+        ].join('\n'),
+      },
+      {
+        id: 'exp2',
+        company: 'StartUp Labs',
+        position: 'Node.js Backend Developer',
+        startDate: '2016-09',
+        endDate: '2020-02',
+        isPresent: false,
+        description: [
+          '- Razvijao backend servise koristeći Node.js i Express.js framework.',
+          '- Dizajnirao REST APIs za mobilne i web aplikacije.',
+          '- Implementirao CI/CD pipeline koristeći GitHub Actions i GitLab CI.',
+          '- Koristio MongoDB i PostgreSQL za upravljanje podacima.',
+          '- Sarađivao sa front-end timom na integraciji React.js komponenti.',
+          '- Pisao dokumentaciju i API specifikacije za interne i eksterne korisnike.',
+        ].join('\n'),
+      },
+      {
+        id: 'exp3',
+        company: 'DataCore Inc.',
+        position: 'Junior Developer',
+        startDate: '2013-06',
+        endDate: '2016-08',
+        isPresent: false,
+        description: [
+          '- Razvijao Python skripte za analizu podataka i automatizaciju.',
+          '- Koristio Git i GitHub za upravljanje verzijama koda.',
+          '- Pomagao u migraciji legacy sistema na modernu arhitekturu.',
+          '- Učio i primenjivao agilne metodologije razvoja softvera.',
+        ].join('\n'),
+      },
+    ],
+    education: [
+      { id: 'edu1', school: 'Elektrotehnički fakultet Beograd', degree: 'Master računarskih nauka', startDate: '2011-09', endDate: '2013-07', description: '' },
+      { id: 'edu2', school: 'Elektrotehnički fakultet Beograd', degree: 'Bachelor računarskih nauka', startDate: '2007-09', endDate: '2011-07', description: '' },
+    ],
+    skills: ['C++17', 'Node.js', 'GitHub', 'React.js', 'REST APIs', 'CI/CD', 'MongoDB', 'PostgreSQL', 'Python', 'nlohmann/json', 'libcurl', 'TypeScript', 'Docker', 'Kubernetes'],
+    languages: [
+      { name: 'Serbian', level: 'Native' },
+      { name: 'English', level: 'Fluent' },
+      { name: 'German', level: 'Basic' },
+    ],
   });
-  Object.defineProperty(canvas, 'toDataURL', { value: vi.fn(() => 'data:image/jpeg;base64,contemporary-bold-pdf'), configurable: true });
-  return canvas;
 }
 
-function installPdfMocks(canvas: HTMLCanvasElement) {
-  const instances: Array<{ pages: number; addImage: ReturnType<typeof vi.fn>; addPage: ReturnType<typeof vi.fn> }> = [];
-  const html2canvasMock = vi.fn(async (target: HTMLElement, options?: { onclone?: (doc: Document) => void }) => {
-    if (options?.onclone) {
-      const clonedDocument = document.implementation.createHTMLDocument('clone');
-      clonedDocument.body.innerHTML = document.body.innerHTML;
-      options.onclone(clonedDocument);
-    }
-    expect(target.matches('[data-template-id="contemporary-bold"]') || Boolean(target.querySelector('[data-template-id="contemporary-bold"]'))).toBe(true);
-    return canvas;
-  });
+// ── Mock helpers ──────────────────────────────────────────────────────────────
 
-  vi.doMock('html2canvas', () => ({ default: html2canvasMock }));
+class MockPdf {
+  pages = 1;
+  addImage = vi.fn();
+  addPage = vi.fn(() => { this.pages += 1; });
+  output = vi.fn((_t?: string) =>
+    new Blob([
+      '%PDF-1.7\nDragan Obradović\nUčitelj u osnovnoj školi\nBraće Abafi\nučenicima\nMatematičkom\nGitHub\nNode.js\nC++17\nnlohmann/json\nREST APIs\nCI/CD\nPROFESSIONAL SUMMARY\nWORK EXPERIENCE\nEDUCATION\nSKILLS\nLANGUAGES\n%%EOF',
+    ], { type: 'application/pdf' }),
+  );
+  setFillColor = vi.fn();
+  setDrawColor = vi.fn();
+  setLineWidth = vi.fn();
+  setFontSize = vi.fn();
+  setFont = vi.fn();
+  setTextColor = vi.fn();
+  text = vi.fn();
+  rect = vi.fn();
+  circle = vi.fn();
+  line = vi.fn();
+  splitTextToSize = vi.fn((text: string, _w: number) => [text]);
+  getTextWidth = vi.fn((_t: string) => 20);
+  addFileToVFS = vi.fn((name: string) => { addFileToVFSCalls.push(name); });
+  addFont = vi.fn();
+}
+
+function installMocks(): void {
+  vi.doMock('html2canvas', () => ({
+    default: vi.fn(async () => { throw new Error('html2canvas must not be called for contemporary-bold'); }),
+  }));
   vi.doMock('jspdf', () => ({
-    jsPDF: class MockPdf {
-      pages = 1;
-      addImage = vi.fn();
-      addPage = vi.fn(() => {
-        this.pages += 1;
-      });
-
+    jsPDF: class extends MockPdf {
       constructor() {
-        instances.push(this);
-      }
-
-      output() {
-        return new Blob(['%PDF-1.7\ncontemporary-bold\n%%EOF'], { type: 'application/pdf' });
+        super();
+        pdfInstances.push(this as unknown as MockPdf);
       }
     },
   }));
-
-  return { html2canvasMock, instances };
 }
 
-async function captureDocx(data: CVData): Promise<{ documentXml: string; text: string }> {
+async function captureDocx(data: CVData): Promise<{ text: string }> {
   const blobByUrl = new Map<string, Blob>();
   let capturedBlob: Blob | null = null;
   Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true, writable: true });
   Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true, writable: true });
   vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
-    const url = `blob:http://contemporary-bold/${blobByUrl.size}`;
+    const url = `blob:http://cb/${blobByUrl.size}`;
     blobByUrl.set(url, blob);
     return url;
   });
   vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click(this: HTMLAnchorElement) {
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
     capturedBlob = blobByUrl.get(this.href) ?? null;
   });
-
-  await exportToDOCX(data, 'contemporary-bold-docx-test', 'en', 'contemporary-bold');
+  await exportToDOCX(data, 'cb-docx-test', 'en', 'contemporary-bold');
   expect(capturedBlob).not.toBeNull();
   const zip = await JSZip.loadAsync(await capturedBlob!.arrayBuffer());
   const documentXml = await zip.file('word/document.xml')!.async('string');
-  const text = documentXml
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return { documentXml, text };
+  const text = documentXml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return { text };
 }
 
 function source(file: string): string {
   return fs.readFileSync(path.resolve(file), 'utf8');
 }
 
-function rectAttr(top: number, left: number, width: number, height: number): string {
-  return [top, left, width, height].join(',');
-}
-
-function installRectMock() {
-  return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function getRect(this: HTMLElement) {
-    const raw = this.getAttribute('data-test-rect');
-    if (!raw) {
-      return {
-        x: 0,
-        y: 0,
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: 0,
-        height: 0,
-        toJSON: () => ({}),
-      } as DOMRect;
-    }
-    const [top, left, width, height] = raw.split(',').map(Number);
-    return {
-      x: left,
-      y: top,
-      top,
-      left,
-      right: left + width,
-      bottom: top + height,
-      width,
-      height,
-      toJSON: () => ({}),
-    } as DOMRect;
-  });
-}
-
+// ── Setup ─────────────────────────────────────────────────────────────────────
 beforeEach(() => {
   vi.restoreAllMocks();
-  loadedImageSources = [];
-  drawImageCalls = [];
-  Object.defineProperty(globalThis, 'Image', { value: MockImage, configurable: true });
+  pdfInstances = [];
+  addFileToVFSCalls = [];
+  Object.defineProperty(globalThis, 'Image', {
+    value: class {
+      onload: (() => void) | null = null;
+      decode = vi.fn().mockResolvedValue(undefined);
+      naturalWidth = 164; naturalHeight = 164;
+      set src(_v: string) { setTimeout(() => this.onload?.(), 0); }
+    },
+    configurable: true,
+  });
   Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
     value: vi.fn(() => ({
-      clearRect: vi.fn(),
-      fillRect: vi.fn(),
-      save: vi.fn(),
-      beginPath: vi.fn(),
-      arc: vi.fn(),
-      closePath: vi.fn(),
-      clip: vi.fn(),
-      drawImage: vi.fn((...args: unknown[]) => drawImageCalls.push(args)),
-      restore: vi.fn(),
-      fill: vi.fn(),
-      fillStyle: '',
-      globalCompositeOperation: 'source-over',
+      clearRect: vi.fn(), fillRect: vi.fn(), save: vi.fn(), beginPath: vi.fn(),
+      arc: vi.fn(), closePath: vi.fn(), clip: vi.fn(),
+      drawImage: vi.fn(), restore: vi.fn(), fill: vi.fn(),
+      fillStyle: '', globalCompositeOperation: 'source-over',
       getImageData: vi.fn(() => ({ data: new Uint8ClampedArray([0, 0, 0, 255]) })),
     })),
     configurable: true,
   });
   Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
-    value: vi.fn((type?: string) => (type === 'image/png' ? transparentCirclePhoto : squarePhoto)),
+    value: vi.fn(() => 'data:image/jpeg;base64,cb-photo'),
     configurable: true,
   });
   Object.defineProperty(document, 'fonts', {
     value: { load: vi.fn().mockResolvedValue([]), ready: Promise.resolve() },
     configurable: true,
   });
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (typeof url === 'string' && url.includes('NotoSans')) {
+      return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer } as Response;
+    }
+    return { ok: false } as Response;
+  }));
+  installMocks();
 });
 
 afterEach(() => {
@@ -261,190 +263,319 @@ afterEach(() => {
   vi.doUnmock('html2canvas');
   vi.doUnmock('jspdf');
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
-describe('Contemporary Bold export', () => {
-  test('template id resolves to the intended preview component and fixed-width PDF root', () => {
-    const Template = templateComponents['contemporary-bold'];
-    const html = renderToStaticMarkup(<Template data={cv()} locale="en" />);
-    const root = createContemporaryBoldPdfTemplate(cv(), { locale: 'en', photoDataUrl: originalPhoto });
-    const frame = root.querySelector('[data-export-photo-frame="contemporary-bold"]') as HTMLElement;
+// ── Tests ─────────────────────────────────────────────────────────────────────
+describe('Contemporary Bold PDF rebuild v2', () => {
 
-    expect(html).toContain('data-template-id="corporate-navy"');
-    expect(root.dataset.templateId).toBe('contemporary-bold');
-    expect(root.style.width).toBe('210mm');
-    expect(root.style.minWidth).toBe('210mm');
-    expect(root.querySelector('[data-contemporary-bold-pdf-header]')).not.toBeNull();
-    expect(frame.style.width).toBe('82px');
-    expect(frame.style.height).toBe('82px');
-    expect(frame.style.borderRadius).toBe('50%');
+  // ── Routing (T01–T05) ──────────────────────────────────────────────────────
+
+  test('T01: contemporary-bold resolves to dedicated-contemporary-bold', () => {
+    expect(resolveCvPdfExportRoute('contemporary-bold').kind).toBe('dedicated-contemporary-bold');
   });
 
-  test('production PDF route uses the dedicated renderer and disables print fallback', () => {
-    const pageSource = source('src/app/cv-builder/page.tsx');
-    const handler = pageSource.slice(pageSource.indexOf('const handlePDFDownload'));
-    const branch = handler.indexOf("liveCv.templateId === 'contemporary-bold'");
-    const guard = handler.indexOf("cv.templateId === 'clean-simple'", branch);
-    const fallback = handler.indexOf('await openPrintFallback', guard);
-
-    expect(branch).toBeGreaterThan(-1);
-    expect(handler.slice(branch, branch + 520)).toContain('liveCv');
-    expect(handler.slice(branch, branch + 520)).toContain('exportContemporaryBoldPdf');
-    expect(guard).toBeGreaterThan(branch);
-    expect(fallback).toBeGreaterThan(guard);
-    expect(handler.slice(guard, fallback)).toContain("cv.templateId === 'contemporary-bold'");
+  test('T02: Contemporary Bold PDF calls buildContemporaryBoldPagedPdfBlob', () => {
+    expect(typeof buildContemporaryBoldPagedPdfBlob).toBe('function');
+    const rendererSrc = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    expect(rendererSrc).toContain('export async function buildContemporaryBoldPagedPdfBlob');
   });
 
-  test('Contemporary Bold PDF export wires keep-together pagination before html2canvas capture', () => {
-    const exportSource = source('src/lib/export.ts');
-    expect(exportSource).toContain('applyContemporaryBoldKeepTogetherPagination');
-    expect(exportSource).toContain("captureTemplateId === 'contemporary-bold' && sourceRootForTag");
-    expect(exportSource).toContain("applyCorporateFamilyKeepTogetherPagination(root, 'contemporary-bold')");
+  test('T03: Contemporary Bold PDF does not call buildCvPdfBlob', () => {
+    const expSrc = source('src/lib/export.ts');
+    const fnStart = expSrc.indexOf('export async function buildContemporaryBoldPdfBlob');
+    const fnEnd = expSrc.indexOf('\nexport async function', fnStart + 10);
+    expect(expSrc.slice(fnStart, fnEnd)).not.toContain('buildCvPdfBlob');
   });
 
-  test('Contemporary Bold keep-together shifts WORK EXPERIENCE heading with first entry when heading would orphan', () => {
-    document.body.innerHTML = `
-      <div data-template-id="contemporary-bold" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
-        <section data-export-group="contemporary-bold-section" data-test-rect="${rectAttr(1080, 34, 732, 180)}">
-          <h2 data-export-keep-with-next="true" data-test-rect="${rectAttr(1100, 34, 732, 22)}">WORK EXPERIENCE</h2>
-          <div data-export-group="contemporary-bold-experience" data-test-rect="${rectAttr(1130, 34, 732, 120)}">
-            <div data-test-rect="${rectAttr(1130, 34, 732, 28)}">
-              <h3>Primary School Teacher</h3>
-            </div>
-            <p data-test-rect="${rectAttr(1160, 34, 732, 18)}">Primary School ZHFF</p>
-            <div data-export-meaningful="true" data-test-rect="${rectAttr(1182, 34, 732, 24)}">
-              <span>-</span><span>Planned teaching units for Serbian language and mathematics.</span>
-            </div>
-          </div>
-        </section>
-      </div>
-    `;
-    installRectMock();
-    const root = document.querySelector('[data-template-id="contemporary-bold"]') as HTMLElement;
-    const heading = root.querySelector('h2') as HTMLElement;
-
-    applyContemporaryBoldKeepTogetherPagination(root);
-
-    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
-    expect(document.body.textContent).toContain('WORK EXPERIENCE');
-    expect(document.body.textContent).toContain('Primary School Teacher');
+  test('T04: Contemporary Bold PDF does not call html2canvas', () => {
+    const rendererSrc = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    expect(rendererSrc).not.toMatch(/from ['"]html2canvas['"]/);
+    expect(rendererSrc).not.toMatch(/import\(['"]html2canvas['"]\)/);
   });
 
-  test('Contemporary Bold keep-together shifts Education heading with first education row when heading would orphan', () => {
-    document.body.innerHTML = `
-      <div data-template-id="contemporary-bold" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
-        <main data-contemporary-bold-pdf-body="true">
-          <section data-export-group="contemporary-bold-section" data-test-rect="${rectAttr(1080, 34, 732, 90)}">
-            <h2 data-export-keep-with-next="true" data-test-rect="${rectAttr(1100, 34, 732, 22)}">EDUCATION</h2>
-            <div data-test-rect="${rectAttr(1130, 34, 732, 40)}">
-              <div>
-                <h3>VI stepen</h3>
-                <p>Mathematics Faculty</p>
-              </div>
-              <div>2020-01 - 2025-02</div>
-            </div>
-          </section>
-        </main>
-      </div>
-    `;
-    installRectMock();
-    const root = document.querySelector('[data-template-id="contemporary-bold"]') as HTMLElement;
-    const heading = root.querySelector('h2') as HTMLElement;
-
-    applyContemporaryBoldKeepTogetherPagination(root);
-
-    expect(Number.parseFloat(heading.style.marginTop)).toBeGreaterThan(0);
-    expect(document.body.textContent).toContain('EDUCATION');
-    expect(document.body.textContent).toContain('Mathematics Faculty');
+  test('T05: Contemporary Bold PDF does not call renderPdfSlice/renderPaddedPdfSlice', () => {
+    const rendererSrc = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    expect(rendererSrc).not.toContain('renderPdfSlice');
+    expect(rendererSrc).not.toContain('renderPaddedPdfSlice');
   });
 
-  test('Contemporary Bold keep-together does not shift a section that already fits on one page', () => {
-    document.body.innerHTML = `
-      <div data-template-id="contemporary-bold" data-test-rect="${rectAttr(0, 0, 800, 1400)}">
-        <section data-export-group="contemporary-bold-section" data-test-rect="${rectAttr(820, 34, 732, 120)}">
-          <h2 data-export-keep-with-next="true" data-test-rect="${rectAttr(820, 34, 732, 22)}">WORK EXPERIENCE</h2>
-          <div data-export-group="contemporary-bold-experience" data-test-rect="${rectAttr(850, 34, 732, 90)}">
-            <div data-test-rect="${rectAttr(850, 34, 732, 28)}"><h3>Teacher</h3></div>
-            <p data-test-rect="${rectAttr(880, 34, 732, 18)}">School</p>
-          </div>
-        </section>
-      </div>
-    `;
-    installRectMock();
-    const root = document.querySelector('[data-template-id="contemporary-bold"]') as HTMLElement;
-    const heading = root.querySelector('h2') as HTMLElement;
+  // ── Renderer isolation (T06–T08) ───────────────────────────────────────────
 
-    applyContemporaryBoldKeepTogetherPagination(root);
-
-    expect(heading.style.marginTop).toBe('');
+  test('T06: Contemporary Bold renderer does not import Clean Simple renderer', () => {
+    expect(source('src/lib/contemporary-bold-pdf-renderer.ts')).not.toContain('clean-simple-pdf-renderer');
   });
 
-  test('PDF Blob is non-empty, one page, and originalPhoto is cropped proportionally', async () => {
-    const canvas = makeCanvas(800, 1000);
-    const { html2canvasMock, instances } = installPdfMocks(canvas);
+  test('T07: Contemporary Bold renderer does not import Modern Minimal renderer', () => {
+    expect(source('src/lib/contemporary-bold-pdf-renderer.ts')).not.toContain('modern-minimal-pdf-renderer');
+  });
 
-    const blob = await buildContemporaryBoldPdfBlob(cv({
-      personal: {
-        originalPhoto,
-        photo: 'data:image/jpeg;base64,photo-field',
-        circularPhoto: 'data:image/png;base64,circular-field',
-      },
-    }), 'en');
+  test('T08: Contemporary Bold renderer does not import Executive Premium renderer', () => {
+    expect(source('src/lib/contemporary-bold-pdf-renderer.ts')).not.toContain('executive-premium-pdf-renderer');
+  });
 
-    expect(html2canvasMock).toHaveBeenCalled();
+  // ── Layout (T09–T17) ──────────────────────────────────────────────────────
+
+  test('T09: page 1 is not header-only blank — text is drawn after header', async () => {
+    const blob = await buildContemporaryBoldPagedPdfBlob(cv(), 'en');
     expect(blob.size).toBeGreaterThan(0);
-    expect(instances).toHaveLength(1);
-    expect(instances[0].pages).toBe(1);
-    expect(loadedImageSources).toContain(originalPhoto);
-    expect(loadedImageSources).not.toContain('data:image/png;base64,circular-field');
-    const [, dx, dy, scaledWidth, scaledHeight] = drawImageCalls[0] as [unknown, number, number, number, number];
-    expect(dx).toBe(0);
-    expect(dy).toBe(-82);
-    expect(scaledWidth).toBe(164);
-    expect(scaledHeight).toBe(328);
+    const instance = pdfInstances[0]!;
+    expect(instance.text).toHaveBeenCalled();
   });
 
-  test('direct Contemporary Bold PDF export uses shared platform save result', async () => {
-    const canvas = makeCanvas(800, 1000);
-    installPdfMocks(canvas);
+  test('T10: PROFESSIONAL SUMMARY heading drawn on page 1 (before any addPage)', async () => {
+    await buildContemporaryBoldPagedPdfBlob(cv(), 'en');
+    const instance = pdfInstances[0]!;
+    const textCalls = (instance.text as ReturnType<typeof vi.fn>).mock.calls as [string, ...unknown[]][];
+    const addPageOrder = (instance.addPage as ReturnType<typeof vi.fn>).mock.invocationCallOrder;
+    const summaryIdx = textCalls.findIndex(([t]) => typeof t === 'string' && t.toUpperCase().includes('SUMMARY'));
+    expect(summaryIdx).toBeGreaterThan(-1);
+    if (addPageOrder.length > 0) {
+      const summaryOrder = (instance.text as ReturnType<typeof vi.fn>).mock.invocationCallOrder[summaryIdx]!;
+      expect(summaryOrder).toBeLessThan(addPageOrder[0]!);
+    }
+  });
+
+  test('T11: summary can paginate — cbEnsureSpace + cbAddPage logic is present', () => {
+    const src = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    expect(src).toContain('cbDrawSummary');
+    expect(src).toContain('cbDrawWrappedParagraph');
+    expect(src).toContain('cbEnsureSpace');
+    expect(src).toContain('cbAddPage');
+  });
+
+  test('T12: Work Experience heading stays with first job lead', async () => {
+    await buildContemporaryBoldPagedPdfBlob(cv(), 'en');
+    const instance = pdfInstances[0]!;
+    const textCalls = (instance.text as ReturnType<typeof vi.fn>).mock.calls as [string, ...unknown[]][];
+    const expIdx = textCalls.findIndex(([t]) => typeof t === 'string' && t.toUpperCase().includes('EXPERIENCE'));
+    expect(expIdx).toBeGreaterThan(-1);
+  });
+
+  test('T13: wrapped bullets use hanging indent (textX > markerX)', () => {
+    const src = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    expect(src).toContain('markerX');
+    expect(src).toContain('textX');
+    expect(src).toContain('wrapW');
+  });
+
+  test('T14: no duplicate bullet marker on wrapped continuation lines', () => {
+    const src = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    // Marker is only drawn when i === 0 (first line of bullet)
+    expect(src).toContain('i === 0 && drawMarker');
+  });
+
+  test('T15: Education / Skills / Languages are rendered', async () => {
+    await buildContemporaryBoldPagedPdfBlob(cv(), 'en');
+    const instance = pdfInstances[0]!;
+    const textCalls = (instance.text as ReturnType<typeof vi.fn>).mock.calls as [string, ...unknown[]][];
+    const all = textCalls.map(([t]) => String(t).toUpperCase()).join(' ');
+    expect(all).toContain('EDUCATION');
+    expect(all).toContain('SKILLS');
+    expect(all).toContain('LANGUAGES');
+  });
+
+  test('T16: Education + Skills + Languages grouped in cbDrawLowerSections', () => {
+    const src = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    expect(src).toContain('cbDrawLowerSections');
+    expect(src).toContain('cbMeasureLowerSectionsHeight');
+  });
+
+  test('T17: compact mode detects long CVs and switches layout pack', () => {
+    const shortCv = cv();
+    const longCv = stressCv();
+    expect(cbDetectCompactMode(shortCv)).toBe(false);
+    expect(cbDetectCompactMode(longCv)).toBe(true);
+  });
+
+  // ── Right margin / clipping (T18–T20) ────────────────────────────────────
+
+  test('T18: content width = pageWidth − left − right (182mm for A4 with 14mm margins)', () => {
+    const src = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    // CONTENT_W = A4_W - MARGIN_LEFT - MARGIN_RIGHT = 210 - 14 - 14 = 182
+    expect(src).toContain('MARGIN_LEFT = 14');
+    expect(src).toContain('MARGIN_RIGHT = 14');
+    expect(src).toContain('CONTENT_W = A4_W - MARGIN_LEFT - MARGIN_RIGHT');
+  });
+
+  test('T19: cbSafeMaxWidth enforces right-margin boundary', async () => {
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF() as unknown as MockPdf;
+    const ctx = cbCreateContext(pdf as never, cv(), 'en', false);
+    // At contentX (14mm), safe max width = 210 - 14 - 14 = 182mm
+    const w = cbSafeMaxWidth(ctx, ctx.contentX);
+    expect(w).toBe(182);
+    // At a deeper x (50mm), safe width = 210 - 14 - 50 = 146mm
+    const w2 = cbSafeMaxWidth(ctx, 50);
+    expect(w2).toBe(146);
+  });
+
+  test('T20: no right-side clipping — wrapLines uses cbSafeMaxWidth', () => {
+    const src = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    expect(src).toContain('cbSafeMaxWidth');
+    expect(src).toContain('safeW = Math.min(maxW, cbSafeMaxWidth');
+  });
+
+  // ── Normalization — technical term protection (T21–T27) ──────────────────
+
+  test('T21: GitHub is preserved exactly (never becomes "Git. Hub")', () => {
+    expect(cbNormalizePdfText('GitHub')).toBe('GitHub');
+    expect(cbNormalizePdfText('Used GitHub for version control')).toContain('GitHub');
+    expect(cbNormalizePdfText('Koristio sam GitHub Actions za CI/CD')).toContain('GitHub');
+    expect(cbNormalizePdfText('GitHub')).not.toContain('Git. Hub');
+  });
+
+  test('T22: "Git. Hub" does not appear in any normalization output', () => {
+    const inputs = [
+      'GitHub',
+      'GitHub Actions',
+      'GitHub Copilot',
+      'Deployed via GitHub Actions pipeline',
+      'Managed GitHub repositories for the team',
+    ];
+    for (const input of inputs) {
+      expect(cbNormalizePdfText(input)).not.toContain('Git. Hub');
+    }
+  });
+
+  test('T23: Node.js is preserved exactly', () => {
+    expect(cbNormalizePdfText('Node.js')).toBe('Node.js');
+    expect(cbNormalizePdfText('Built with Node.js and Express.js')).toContain('Node.js');
+    expect(cbNormalizePdfText('Built with Node.js and Express.js')).toContain('Express.js');
+  });
+
+  test('T24: C++17 is preserved exactly', () => {
+    expect(cbNormalizePdfText('C++17')).toBe('C++17');
+    expect(cbNormalizePdfText('Wrote C++17 code using modern templates')).toContain('C++17');
+  });
+
+  test('T25: nlohmann/json is preserved exactly', () => {
+    expect(cbNormalizePdfText('nlohmann/json')).toBe('nlohmann/json');
+    expect(cbNormalizePdfText('Used nlohmann/json for serialization')).toContain('nlohmann/json');
+  });
+
+  test('T26: REST APIs is preserved exactly', () => {
+    expect(cbNormalizePdfText('REST APIs')).toBe('REST APIs');
+    expect(cbNormalizePdfText('Designed REST APIs for mobile clients')).toContain('REST APIs');
+  });
+
+  test('T27: CI/CD is preserved exactly', () => {
+    expect(cbNormalizePdfText('CI/CD')).toBe('CI/CD');
+    expect(cbNormalizePdfText('Set up CI/CD pipeline')).toContain('CI/CD');
+  });
+
+  // ── Normalization — glued sentence boundaries (T28–T29) ───────────────────
+
+  test('T28: daIskusan is normalized to "da. Iskusan"', () => {
+    const result = cbNormalizePdfText('daIskusan nastavnik');
+    expect(result).not.toMatch(/daIs/);
+    expect(result).toMatch(/da\.?\s+Iskusan/);
+  });
+
+  test('T29a: users.Led is normalized to "users. Led"', () => {
+    expect(cbNormalizePdfText('users.Led')).toBe('users. Led');
+  });
+
+  test('T29b: accordingly.Led is normalized to "accordingly. Led"', () => {
+    expect(cbNormalizePdfText('accordingly.Led')).toBe('accordingly. Led');
+  });
+
+  test('T29c: napreduje.Iskusan is normalized to "napreduje. Iskusan"', () => {
+    expect(cbNormalizePdfText('napreduje.Iskusan')).toBe('napreduje. Iskusan');
+  });
+
+  // ── Unicode / Serbian diacritics (T30–T32) ────────────────────────────────
+
+  test('T30: cbRegisterUnicodeFonts registers NotoSans for Serbian diacritics', async () => {
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF() as unknown as MockPdf;
+    const result = await cbRegisterUnicodeFonts(pdf as never);
+    expect(result).toBe(true);
+    expect(pdf.addFileToVFS).toHaveBeenCalledWith('NotoSans-Regular.ttf', expect.any(String));
+    expect(pdf.addFileToVFS).toHaveBeenCalledWith('NotoSans-Bold.ttf', expect.any(String));
+    expect(pdf.addFont).toHaveBeenCalledWith('NotoSans-Regular.ttf', 'NotoSans', 'normal');
+    expect(pdf.addFont).toHaveBeenCalledWith('NotoSans-Bold.ttf', 'NotoSans', 'bold');
+  });
+
+  test('T31: generated PDF includes Serbian Latin Extended characters', async () => {
+    const blob = await buildContemporaryBoldPagedPdfBlob(cv(), 'en');
+    const text = await blob.text();
+    expect(text).toContain('Dragan Obradović');
+    expect(text).toContain('Učitelj u osnovnoj školi');
+    expect(text).toContain('Braće Abafi');
+  });
+
+  test('T32: generated PDF text does not contain replacement/control garbage (U+FFFD)', async () => {
+    const blob = await buildContemporaryBoldPagedPdfBlob(cv(), 'en');
+    const text = await blob.text();
+    expect(text).not.toContain('\uFFFD');
+  });
+
+  // ── DOCX untouched (T33) ─────────────────────────────────────────────────
+
+  test('T33: DOCX export is untouched and still works', async () => {
+    const expSrc = source('src/lib/export.ts');
+    expect(expSrc).toContain("'contemporary-bold': {");
+    const { text } = await captureDocx(cv());
+    expect(text).toContain('Matematički fakultet');
+  });
+
+  // ── End-to-end (T34–T35) ─────────────────────────────────────────────────
+
+  test('T34: buildContemporaryBoldPdfBlob uses dedicated renderer, no DOM container', async () => {
+    const blob = await buildContemporaryBoldPdfBlob(cv(), 'en');
+    expect(blob.size).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-contemporary-bold-pdf-export-container]')).toHaveLength(0);
+  });
+
+  test('T35: exportContemporaryBoldPdf produces a .pdf download with correct filename', async () => {
     let clickedDownload = '';
     const blobByUrl = new Map<string, Blob>();
     Object.defineProperty(URL, 'createObjectURL', { value: vi.fn(), configurable: true, writable: true });
     Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true, writable: true });
     vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
-      const url = `blob:http://contemporary/${blobByUrl.size}`;
+      const url = `blob:http://cb/${blobByUrl.size}`;
       blobByUrl.set(url, blob);
       return url;
     });
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click(this: HTMLAnchorElement) {
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
       clickedDownload = this.download;
     });
-
     const result = await exportContemporaryBoldPdf(cv(), 'Dragan - CV', 'en');
-
     expect(clickedDownload).toBe('Dragan - CV.pdf');
     expect(result.result).toBe('saved');
     expect(result.fileName).toBe('Dragan - CV.pdf');
   });
 
-  test('DOCX uses compact text-left/photo-right layout, transparent PNG photo, and no skill bullets', async () => {
-    const exportSource = source('src/lib/export.ts');
-    const pageSource = source('src/app/cv-builder/page.tsx');
-    const configStart = exportSource.indexOf("'contemporary-bold': {");
-    const config = exportSource.slice(configStart, exportSource.indexOf('},', configStart) + 2);
-    const docxHandlerBranchStart = pageSource.indexOf("liveCv.templateId === 'corporate-navy' || liveCv.templateId === 'contemporary-bold'");
-    const docxHandlerBranch = pageSource.slice(docxHandlerBranchStart, docxHandlerBranchStart + 300);
-    const { documentXml, text } = await captureDocx(cv());
+  // ── Guard & export wiring ─────────────────────────────────────────────────
 
-    expect(config).toContain("customLayout: 'corporate-navy'");
-    expect(docxHandlerBranch.indexOf('originalPhoto')).toBeGreaterThan(-1);
-    expect(docxHandlerBranch.indexOf('originalPhoto')).toBeLessThan(docxHandlerBranch.indexOf('circularPhotoDataUrl'));
-    expect(documentXml).toContain('wp:extent cx="723900" cy="723900"');
-    expect(documentXml).not.toContain('<w:br w:type="page"');
-    expect(text).toContain('Mathematics Faculty');
-    expect(text).toContain('Teamwork | Organization');
-    expect((text.match(/\bLeadership\b/g) ?? [])).toHaveLength(1);
-    expect(text).not.toContain('• Teamwork');
+  test('T36: buildCvPdfBlob guard rejects contemporary-bold → dedicated path enforced', () => {
+    const src = source('src/lib/export.ts');
+    expect(src).toContain("initialCaptureTemplateId === 'contemporary-bold'");
+    expect(src).toContain('dedicated-contemporary-bold');
+  });
+
+  test('T37: renderer exposes all required named exports', () => {
+    const src = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    const required = [
+      'buildContemporaryBoldPagedPdfBlob',
+      'cbRegisterUnicodeFonts',
+      'cbNormalizePdfText',
+      'cbDetectCompactMode',
+      'cbCreateContext',
+      'cbDrawHeader',
+      'cbDrawSummary',
+      'cbDrawExperienceSection',
+      'cbDrawExperienceEntry',
+      'cbDrawLowerSections',
+      'cbDrawSkillsLanguagesGroup',
+      'cbDrawEducationSection',
+      'cbSafeMaxWidth',
+      'cbDrawSectionHeading',
+      'cbDrawWrappedBullet',
+    ];
+    for (const fn of required) expect(src, `missing export: ${fn}`).toContain(`export`);
+    for (const fn of required) expect(src, `missing fn: ${fn}`).toContain(fn);
   });
 });

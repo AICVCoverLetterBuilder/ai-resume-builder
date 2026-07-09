@@ -24,6 +24,8 @@ import { buildModernMinimalPagedPdfBlob } from './modern-minimal-pdf-renderer';
 export { buildModernMinimalPagedPdfBlob } from './modern-minimal-pdf-renderer';
 import { buildCleanSimplePagedPdfBlob } from './clean-simple-pdf-renderer';
 export { buildCleanSimplePagedPdfBlob } from './clean-simple-pdf-renderer';
+import { buildContemporaryBoldPagedPdfBlob } from './contemporary-bold-pdf-renderer';
+export { buildContemporaryBoldPagedPdfBlob } from './contemporary-bold-pdf-renderer';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -10250,6 +10252,7 @@ export type CvPdfExportRoute =
   | { kind: 'dedicated-clean-simple' }
   | { kind: 'dedicated-professional-classic' }
   | { kind: 'dedicated-creative-bold' }
+  | { kind: 'dedicated-contemporary-bold' }
   | { kind: 'dedicated-creative-artistic' }
   | { kind: 'dedicated-elegant-formal' }
   | { kind: 'dedicated-ats-standard' }
@@ -10362,11 +10365,7 @@ export function resolveCvPdfExportRoute(templateId: CVData['templateId']): CvPdf
   if (templateId === 'executive-premium') return { kind: 'dedicated-executive-premium' };
   if (templateId === 'corporate-navy') return { kind: 'dedicated-corporate-navy' };
   if (templateId === 'modern-minimal') return { kind: 'dedicated-modern-minimal' };
-  if (
-    templateId === 'contemporary-bold'
-  ) {
-    return { kind: 'generic-preview' };
-  }
+  if (templateId === 'contemporary-bold') return { kind: 'dedicated-contemporary-bold' };
   return { kind: 'generic-preview' };
 }
 
@@ -10442,9 +10441,14 @@ export async function buildCvPdfBlob(
       'Clean Simple PDF must use exportCleanSimplePdf (dedicated-clean-simple), not buildCvPdfBlob/html2canvas',
     );
   }
+  if (initialCaptureTemplateId === 'contemporary-bold') {
+    throw new Error(
+      'Contemporary Bold PDF must use exportContemporaryBoldPdf (dedicated-contemporary-bold), not buildCvPdfBlob/html2canvas',
+    );
+  }
   const captureFontFamily = initialCaptureTemplateId === 'ats-standard'
     ? 'Arial, Helvetica, sans-serif'
-    : initialCaptureTemplateId === 'nordic-clean' || initialCaptureTemplateId === 'tech-sidebar' || initialCaptureTemplateId === 'corporate-navy' || initialCaptureTemplateId === 'contemporary-bold'
+    : initialCaptureTemplateId === 'nordic-clean' || initialCaptureTemplateId === 'tech-sidebar' || initialCaptureTemplateId === 'corporate-navy'
       ? 'Arial, Helvetica, NotoSans, NotoSansArabic, NotoSansDevanagari, NotoSansJP, sans-serif'
       : "'NotoSans', 'NotoSansArabic', 'NotoSansDevanagari', 'NotoSansJP', sans-serif";
 
@@ -14060,37 +14064,12 @@ export async function buildContemporaryBoldPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  if (typeof document === 'undefined') {
-    throw new Error('Contemporary Bold PDF export requires a browser DOM');
-  }
-
-  const canonicalPhoto = await prepareContemporaryBoldPdfPhotoDataUrl(cv);
-  const container = document.createElement('div');
-  container.id = `contemporary-bold-pdf-export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  container.setAttribute('data-contemporary-bold-pdf-export-container', 'true');
-  container.style.position = 'fixed';
-  container.style.left = '-10000px';
-  container.style.top = '0';
-  container.style.width = '210mm';
-  container.style.minWidth = '210mm';
-  container.style.backgroundColor = '#ffffff';
-  container.style.pointerEvents = 'none';
-  container.style.zIndex = '-1';
-  container.style.opacity = '1';
-  container.appendChild(createContemporaryBoldPdfTemplate(cv, {
-    locale,
-    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
-  }));
-  document.body.appendChild(container);
-
-  try {
-    await awaitExportTemplateImages(container);
-    const blob = await buildCvPdfBlob(container.id);
-    if (!blob || blob.size === 0) throw new Error('Contemporary Bold PDF generation produced an empty Blob');
-    return blob;
-  } finally {
-    container.remove();
-  }
+  const photoResult = await prepareContemporaryBoldPdfPhotoDataUrl(cv);
+  const blob = await buildContemporaryBoldPagedPdfBlob(cv, locale, {
+    photoDataUrl: photoResult?.dataUrl ?? null,
+  });
+  if (!blob || blob.size === 0) throw new Error('Contemporary Bold PDF generation produced an empty Blob');
+  return blob;
 }
 
 export async function exportContemporaryBoldPdf(
