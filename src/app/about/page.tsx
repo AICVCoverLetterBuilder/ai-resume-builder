@@ -5,6 +5,7 @@ import Footer from '@/components/Footer';
 import Link from 'next/link';
 import { Check, X, Sparkles, Shield, Crown, Star, Globe, ArrowRight } from 'lucide-react';
 import { useI18n } from '@/lib/i18n/context';
+import { LEGAL_CONTACT_HREF, LEGAL_LINKS } from '@/lib/legal-links';
 
 export default function AboutPage() {
   const { t } = useI18n();
@@ -181,26 +182,22 @@ export default function AboutPage() {
           <section>
             <h2 className="text-2xl font-bold tracking-tight mb-4">{t.about.legal.title}</h2>
             <div className="grid gap-3 sm:grid-cols-2">
-              <a
-                href="https://aicvcoverletterbuilder.github.io/cvappai-legal/privacy.html"
-                target="_blank"
-                rel="noopener noreferrer"
+              <Link
+                href={LEGAL_LINKS.privacy}
                 className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4 text-sm font-medium text-foreground hover:bg-accent transition-colors"
               >
                 {t.about.legal.privacyPolicy}
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
-              </a>
-              <a
-                href="https://aicvcoverletterbuilder.github.io/cvappai-legal/terms.html"
-                target="_blank"
-                rel="noopener noreferrer"
+              </Link>
+              <Link
+                href={LEGAL_LINKS.terms}
                 className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4 text-sm font-medium text-foreground hover:bg-accent transition-colors"
               >
                 {t.about.legal.termsOfService}
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />
-              </a>
+              </Link>
               <a
-                href="mailto:help.cvappai@gmail.com"
+                href={LEGAL_CONTACT_HREF}
                 className="flex items-center justify-between rounded-xl border border-border bg-card px-5 py-4 text-sm font-medium text-foreground hover:bg-accent transition-colors"
               >
                 {t.about.legal.contact}

@@ -4,8 +4,8 @@ import Link from 'next/link';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useI18n } from '@/lib/i18n/context';
-import { ExternalLink } from 'lucide-react';
 import { en } from '@/lib/i18n/translations';
+import { LEGAL_CONTACT_HREF, LEGAL_LINKS } from '@/lib/legal-links';
 
 // English fallback content — always visible even if i18n fails
 const FALLBACK_TERMS = en.legal.terms;
@@ -45,16 +45,6 @@ export default function TermsPage() {
             <p className="mt-3 text-sm text-muted-foreground">
               {terms.effectiveDate}
             </p>
-            {/* External link to full ToS */}
-            <a
-              href="https://aicvcoverletterbuilder.github.io/cvappai-legal/terms.html"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-4 inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-            >
-              {terms.title}
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
           </div>
         </div>
 
@@ -93,13 +83,13 @@ export default function TermsPage() {
             ))}
 
             <p className="text-xs text-muted-foreground">
-              {terms.title} — {appName} · {contactLabel}: <a href="mailto:help.cvappai@gmail.com">help.cvappai@gmail.com</a>
+              {terms.title} — {appName} · {contactLabel}: <a href={LEGAL_CONTACT_HREF}>{LEGAL_CONTACT_HREF.replace('mailto:', '')}</a>
             </p>
           </div>
 
           {/* Bottom nav */}
           <div className="mt-12 flex flex-wrap items-center justify-between gap-4 border-t border-border pt-8 text-sm">
-            <Link href="/privacy" className="text-primary hover:underline">
+            <Link href={LEGAL_LINKS.privacy} className="text-primary hover:underline">
               {privacyTitle} →
             </Link>
             <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">

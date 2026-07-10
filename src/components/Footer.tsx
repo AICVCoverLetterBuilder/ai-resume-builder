@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useI18n } from '@/lib/i18n/context';
 import { FileText, Mail } from 'lucide-react';
+import { LEGAL_CONTACT_HREF, LEGAL_LINKS } from '@/lib/legal-links';
 
 export default function Footer() {
   const { t } = useI18n();
@@ -22,9 +23,9 @@ export default function Footer() {
             <Link href="/pricing" className="hover:text-foreground transition-colors">{t.nav.pricing}</Link>
             <Link href="/templates" className="hover:text-foreground transition-colors">{t.nav.templates}</Link>
             <Link href="/about" className="hover:text-foreground transition-colors">{t.nav.about}</Link>
-            <Link href="/privacy" className="hover:text-foreground transition-colors">{t.footer.privacy}</Link>
-            <Link href="/terms" className="hover:text-foreground transition-colors">{t.footer.terms}</Link>
-            <a href="mailto:help.cvappai@gmail.com" className="hover:text-foreground transition-colors flex items-center gap-1">
+            <Link href={LEGAL_LINKS.privacy} className="hover:text-foreground transition-colors">{t.footer.privacy}</Link>
+            <Link href={LEGAL_LINKS.terms} className="hover:text-foreground transition-colors">{t.footer.terms}</Link>
+            <a href={LEGAL_CONTACT_HREF} className="hover:text-foreground transition-colors flex items-center gap-1">
               <Mail className="h-3 w-3" />
               {t.nav.contact}
             </a>
