@@ -1257,8 +1257,8 @@ export default function CVBuilderPage() {
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
-      <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-6xl">
+      <main className="flex-1 overflow-x-hidden px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mx-auto w-full max-w-6xl min-w-0">
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
               <div className="flex items-center justify-between mb-6">
                 <h1 className="text-2xl font-bold">{t.cv.title}</h1>
@@ -1389,6 +1389,7 @@ export default function CVBuilderPage() {
                         isPro={isPro}
                         photoShape={RECT_PHOTO_TEMPLATES.includes(cv.templateId) ? 'rectangle' : 'circle'}
                         onChange={handlePhotoChange}
+                        onUpgradeRequest={() => setProTemplateModal(true)}
                       />
                       <div className="grid gap-4 sm:grid-cols-2">
                       <div><label className="mb-1.5 block text-sm font-medium">{t.cv.fullName}</label><input value={cv.personal.fullName} onChange={e => updatePersonal('fullName', e.target.value)} className={inputClass} placeholder={t.cv.fullNamePlaceholder} /></div>

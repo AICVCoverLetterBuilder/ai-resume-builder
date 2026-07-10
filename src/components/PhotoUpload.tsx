@@ -17,6 +17,8 @@ interface PhotoUploadProps {
   region: Region;
   isPro?: boolean;
   photoShape?: 'circle' | 'rectangle';
+  /** Opens the existing Upgrade to Pro modal for free users. */
+  onUpgradeRequest?: () => void;
   /** `originalPhoto` is the raw uploaded file data URL, never circular/rect cropped.
    *  `rectPhoto` is always the 300×400 JPEG cropped with the same zoom/offset as `photo`. */
   onChange: (photo: string | undefined, enabled: boolean, originalPhoto?: string, rectPhoto?: string) => void;
@@ -54,11 +56,13 @@ function PhotoPreview({ photo, alt }: { photo: string; alt: string }) {
   );
 }
 
-export function PhotoUpload({ photo, photoEnabled, region, isPro = false, photoShape = 'circle', onChange }: PhotoUploadProps) {
+export function PhotoUpload({ photo, photoEnabled, region, isPro = false, photoShape = 'circle', onUpgradeRequest, onChange }: PhotoUploadProps) {
   const { t } = useI18n();
   // photoEnabled: undefined = use region default, true/false = user override
   const isEnabled = photoEnabled !== undefined ? photoEnabled : getDefaultPhotoVisibility(region);
   const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+  const hasPhoto = Boolean(photo);
+  const aiLocked = !isPro || !hasPhoto;
 
   const [showCropper, setShowCropper] = useState(false);
   const [rawImage, setRawImage] = useState<string | null>(null);
@@ -290,129 +294,143 @@ export function PhotoUpload({ photo, photoEnabled, region, isPro = false, photoS
     ? t.cv.photo.usRegion
     : t.cv.photo.otherRegion;
 
+  const handleAiCardClick = () => {
+    if (!hasPhoto) return;
+    if (!isPro) {
+      onUpgradeRequest?.();
+      return;
+    }
+    void handleAiEnhance();
+  };
+
+  const aiSubtitle = !hasPhoto
+    ? 'Upload a photo to enhance'
+    : isPro
+      ? (aiEnhancing ? undefined : 'Remove bg & sharpen')
+      : t.cv.photo.upgrade;
+
   return (
-    <div className="rounded-xl border border-border bg-card p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-sm font-semibold">{t.cv.photo.title} <span className="text-muted-foreground font-normal">({t.cv.photo.optional})</span></h3>
-          <p className="text-xs text-muted-foreground mt-0.5">{regionLabel}</p>
+    <div className="box-border w-full max-w-full min-w-0 overflow-hidden rounded-xl border border-border bg-card p-4 sm:p-5">
+      <div className="mb-4 flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold break-words">
+            {t.cv.photo.title}{' '}
+            <span className="font-normal text-muted-foreground">({t.cv.photo.optional})</span>
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground break-words">{regionLabel}</p>
         </div>
         {/* Toggle show/hide */}
         <button
           type="button"
           onClick={() => handleToggleEnabled(!isEnabled)}
-          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors border ${
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors sm:px-3 ${
             isEnabled
-              ? 'bg-primary/10 text-primary border-primary/20 hover:bg-primary/20'
-              : 'bg-muted text-muted-foreground border-border hover:bg-accent'
+              ? 'border-primary/20 bg-primary/10 text-primary hover:bg-primary/20'
+              : 'border-border bg-muted text-muted-foreground hover:bg-accent'
           }`}
         >
           {isEnabled ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-          {isEnabled ? t.cv.photo.shown : t.cv.photo.hidden}
+          <span className="whitespace-nowrap">{isEnabled ? t.cv.photo.shown : t.cv.photo.hidden}</span>
         </button>
       </div>
 
       {!isEnabled && (
-        <p className="text-xs text-muted-foreground italic">
+        <p className="mb-3 text-xs italic text-muted-foreground break-words">
           {t.cv.photo.hiddenDesc}
         </p>
       )}
 
-      <div className={`flex items-start gap-4 ${!isEnabled ? 'opacity-60' : ''}`}>
-        {/* Preview */}
-        <div className="flex-shrink-0">
-          {photo ? (
-            <div
-              className="relative overflow-hidden border-2 border-primary/20 shadow-md"
-              style={{
-                width: photoShape === 'rectangle' ? 60 : 80,
-                height: photoShape === 'rectangle' ? 80 : 80,
-                borderRadius: photoShape === 'circle' ? '50%' : '4px',
-              }}
-            >
-              <PhotoPreview photo={photo} alt={t.cv.photo.title} />
-              <button
-                onClick={handleRemovePhoto}
-                className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 hover:opacity-100 transition-opacity"
-                style={{ borderRadius: photoShape === 'circle' ? '50%' : '4px' }}
-                title={t.cv.photo.remove}
+      <div className={`box-border w-full max-w-full min-w-0 space-y-4 ${!isEnabled ? 'opacity-60' : ''}`}>
+        {/* Photo preview + action buttons — stacks cleanly on narrow screens */}
+        <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+          <div className="mx-auto shrink-0 sm:mx-0">
+            {photo ? (
+              <div
+                className="relative overflow-hidden border-2 border-primary/20 shadow-md"
+                style={{
+                  width: photoShape === 'rectangle' ? 60 : 80,
+                  height: photoShape === 'rectangle' ? 80 : 80,
+                  borderRadius: photoShape === 'circle' ? '50%' : '4px',
+                }}
               >
-                <X className="h-5 w-5 text-white" />
-              </button>
-            </div>
-          ) : (
-            <div
-              className="border-2 border-dashed border-border bg-muted/30 flex items-center justify-center"
-              style={{
-                width: photoShape === 'rectangle' ? 60 : 80,
-                height: photoShape === 'rectangle' ? 80 : 80,
-                borderRadius: photoShape === 'circle' ? '50%' : '4px',
-              }}
-            >
-              <Camera className="h-7 w-7 text-muted-foreground" />
-            </div>
-          )}
-        </div>
-
-        {/* Actions */}
-        <div className="flex-1 space-y-2">
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent"
-            >
-              <Upload className="h-3.5 w-3.5" />
-              {photo ? t.cv.photo.change : t.cv.photo.upload}
-            </button>
-            {photo && (
-              <button
-                type="button"
-                onClick={() => { setRawImage(originalRaw ?? photo ?? null); setShowCropper(true); setOffset({ x: 0, y: 0 }); }}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent"
+                <PhotoPreview photo={photo} alt={t.cv.photo.title} />
+                <button
+                  onClick={handleRemovePhoto}
+                  className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity hover:opacity-100"
+                  style={{ borderRadius: photoShape === 'circle' ? '50%' : '4px' }}
+                  title={t.cv.photo.remove}
+                >
+                  <X className="h-5 w-5 text-white" />
+                </button>
+              </div>
+            ) : (
+              <div
+                className="flex items-center justify-center border-2 border-dashed border-border bg-muted/30"
+                style={{
+                  width: photoShape === 'rectangle' ? 60 : 80,
+                  height: photoShape === 'rectangle' ? 80 : 80,
+                  borderRadius: photoShape === 'circle' ? '50%' : '4px',
+                }}
               >
-                <Crop className="h-3.5 w-3.5" />
-                {t.cv.photo.recrop}
-              </button>
+                <Camera className="h-7 w-7 text-muted-foreground" />
+              </div>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">{t.cv.photo.hint}</p>
 
-          {/* AI Enhancement — Pro Feature */}
-          {photo && (
-            <div className="rounded-xl border border-[rgba(212,178,84,0.20)] bg-[#080b12] px-3 py-3 shadow-[0_4px_20px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.03)]" style={{backgroundImage:'linear-gradient(180deg,rgba(255,255,255,0.025) 0%,transparent 60%)'}}>
-              {isPro ? (
-                <PremiumAIButton
+          <div className="min-w-0 w-full flex-1 space-y-2">
+            <div className="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium transition-colors hover:bg-accent sm:w-auto sm:justify-start sm:py-1.5"
+              >
+                <Upload className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{photo ? t.cv.photo.change : t.cv.photo.upload}</span>
+              </button>
+              {photo && (
+                <button
                   type="button"
-                  onClick={handleAiEnhance}
-                  disabled={aiEnhancing}
-                  icon={Sparkles}
-                  label={aiEnhancing ? t.cv.photo.aiEnhancing : t.cv.photo.aiEnhance}
-                  subtitle={aiEnhancing ? undefined : 'Remove bg & sharpen'}
-                  badge={aiEnhanced ? <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-400">{t.cv.photo.applied}</span> : <ProBadge />}
-                  showArrow
-                />
-              ) : (
-                <PremiumAIButton
-                  type="button"
-                  disabled
-                  icon={Sparkles}
-                  label={t.cv.photo.aiEnhance}
-                  subtitle={t.onboarding.upgradeToPro}
-                  badge={<ProBadge />}
-                  showArrow
-                />
-              )}
-              {isPro && (
-                <ul className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5">
-                  {t.cv.photo.features.map(f => (
-                    <li key={f} className="text-[10px] text-amber-700 dark:text-amber-400 flex items-center gap-1">
-                      <span className="h-1 w-1 rounded-full bg-amber-500 flex-shrink-0" />{f}
-                    </li>
-                  ))}
-                </ul>
+                  onClick={() => { setRawImage(originalRaw ?? photo ?? null); setShowCropper(true); setOffset({ x: 0, y: 0 }); }}
+                  className="inline-flex w-full min-w-0 items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium transition-colors hover:bg-accent sm:w-auto sm:justify-start sm:py-1.5"
+                >
+                  <Crop className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{t.cv.photo.recrop}</span>
+                </button>
               )}
             </div>
+            <p className="text-xs text-muted-foreground break-words">{t.cv.photo.hint}</p>
+          </div>
+        </div>
+
+        {/* AI Enhancement — always rendered inside the Profile Photo card (full width) */}
+        <div
+          className={`box-border w-full max-w-full min-w-0 rounded-xl border border-[rgba(212,178,84,0.20)] bg-[#080b12] p-2.5 shadow-[0_4px_20px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.03)] sm:p-3 ${aiLocked ? 'opacity-90' : ''}`}
+          style={{ backgroundImage: 'linear-gradient(180deg,rgba(255,255,255,0.025) 0%,transparent 60%)' }}
+        >
+          <PremiumAIButton
+            type="button"
+            onClick={handleAiCardClick}
+            disabled={aiEnhancing || !hasPhoto}
+            icon={Sparkles}
+            label={aiEnhancing ? t.cv.photo.aiEnhancing : t.cv.photo.aiEnhance}
+            subtitle={aiSubtitle}
+            badge={
+              aiEnhanced && isPro && hasPhoto
+                ? <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-400">{t.cv.photo.applied}</span>
+                : <ProBadge />
+            }
+            showArrow
+            className={`!px-3 !py-2.5 !rounded-xl max-w-full min-w-0 ${!isPro && hasPhoto ? '!opacity-80' : ''}`}
+          />
+          {isPro && hasPhoto && (
+            <ul className="mt-2 grid w-full min-w-0 grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
+              {t.cv.photo.features.map(f => (
+                <li key={f} className="flex min-w-0 items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400">
+                  <span className="h-1 w-1 shrink-0 rounded-full bg-amber-500" />
+                  <span className="min-w-0 break-words">{f}</span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       </div>
