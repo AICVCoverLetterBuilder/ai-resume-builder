@@ -6,6 +6,7 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { splitCleanSimpleSummarySentenceRuns } from './clean-simple-pdf-template';
 import { translations, type Locale } from './i18n/translations';
+import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-photo';
 import { regionSettings, type CVData } from './types';
 const CV_PDF_A4_WIDTH_MM = 210;
 const CV_PDF_A4_HEIGHT_MM = 297;
@@ -290,17 +291,14 @@ export function tsDrawPageOneSidebar(ctx: TechSidebarDirectPdfContext, photoData
     const photoY = sy;
     const cx = photoX + TS_PHOTO_MM / 2;
     const cy = photoY + TS_PHOTO_MM / 2;
-    ctx.pdf.setDrawColor(TS_SIDEBAR_RULE[0], TS_SIDEBAR_RULE[1], TS_SIDEBAR_RULE[2]);
-    ctx.pdf.setLineWidth(0.6);
-    ctx.pdf.circle(cx, cy, TS_PHOTO_MM / 2 + 0.6, 'S');
     try {
-      ctx.pdf.addImage(photoDataUrl, 'JPEG', photoX, photoY, TS_PHOTO_MM, TS_PHOTO_MM);
+      drawCircularPdfPhoto(ctx.pdf, photoDataUrl, cx, cy, TS_PHOTO_MM / 2, {
+        borders: [{ color: TS_SIDEBAR_RULE, lineWidth: 0.6, radiusDelta: 0.6 }],
+      });
     } catch {
-      try {
-        ctx.pdf.addImage(photoDataUrl, 'PNG', photoX, photoY, TS_PHOTO_MM, TS_PHOTO_MM);
-      } catch {
-        // Keep export usable if jsPDF rejects an image data URL.
-      }
+      ctx.pdf.setDrawColor(TS_SIDEBAR_RULE[0], TS_SIDEBAR_RULE[1], TS_SIDEBAR_RULE[2]);
+      ctx.pdf.setLineWidth(0.6);
+      ctx.pdf.circle(cx, cy, TS_PHOTO_MM / 2 + 0.6, 'S');
     }
     sy += TS_PHOTO_MM + 6;
   }
@@ -638,7 +636,10 @@ export async function buildTechSidebarPagedPdfBlob(
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const ctx = tsCreateContext(pdf, cv, locale);
 
-  tsDrawPageOneSidebar(ctx, options.photoDataUrl ?? null);
+  const maskedPhoto = options.photoDataUrl
+    ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)
+    : null;
+  tsDrawPageOneSidebar(ctx, maskedPhoto);
   tsDrawSummary(ctx, cv.summary);
   tsDrawExperienceSection(ctx);
   tsDrawEducationSection(ctx);

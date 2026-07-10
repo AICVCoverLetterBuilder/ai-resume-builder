@@ -371,15 +371,24 @@ beforeEach(() => {
     value: vi.fn(() => ({
       fillStyle: '',
       fillRect: vi.fn(),
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      arc: vi.fn(),
+      closePath: vi.fn(),
+      clip: vi.fn(),
+      fill: vi.fn(),
       drawImage: vi.fn((...args: unknown[]) => {
         drawImageCalls.push(args);
       }),
       getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4) })),
+      globalCompositeOperation: 'source-over',
     })),
     configurable: true,
   });
   Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
-    value: vi.fn(() => squarePhoto),
+    value: vi.fn(() => transparentCirclePhoto),
     configurable: true,
   });
   Object.defineProperty(globalThis, 'requestAnimationFrame', { value: (cb: FrameRequestCallback) => setTimeout(cb, 0), configurable: true });
@@ -453,6 +462,9 @@ describe('Corporate Navy export', () => {
     expect(exportSource).toContain("kind: 'dedicated-corporate-navy'");
     expect(rendererSource).toContain('cnCreateContext');
     expect(rendererSource).toContain('cnDrawHeader');
+    expect(rendererSource).toContain('drawCircularPdfPhoto');
+    expect(rendererSource).toContain('preparePdfCircularPhotoDataUrl');
+    expect(rendererSource).not.toContain("addImage(photoDataUrl, 'JPEG'");
     expect(rendererSource).toContain('cnDrawSummary');
     expect(rendererSource).toContain('cnDrawWrappedBullet');
     expect(rendererSource).toContain('cnMeasureBulletHeight');
@@ -776,6 +788,8 @@ describe('Corporate Navy export', () => {
 
     expect(loadedImageSources).toContain(originalPhoto);
     expect(instances[0]?.addImage).toHaveBeenCalled();
+    const addImageArgs = instances[0]?.addImage.mock.calls[0] as [string, string];
+    expect(addImageArgs[1]).toBe('PNG');
   });
 
   test('Corporate Navy no-photo PDF renders without placeholder', () => {

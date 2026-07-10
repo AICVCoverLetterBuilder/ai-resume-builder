@@ -7,6 +7,7 @@
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
+import { drawRectPdfPhoto, preparePdfRectPhotoDataUrl } from './pdf-photo';
 import type { CVData } from './types';
 
 const A4_W = 210;
@@ -59,7 +60,11 @@ const BODY_LINE = 3.7;
 const BULLET_LH = 3.6;
 const BULLET_INDENT = 4.2;
 const SECTION_H = 7.5;
-const PHOTO_R = 14;
+/** Portrait photo in header — matches preview ratio 54×72 (3:4), unframed. */
+const EP_PHOTO_W = 10.5;
+const EP_PHOTO_H = 14;
+const EP_PHOTO_PREP_W_PX = 216;
+const EP_PHOTO_PREP_H_PX = 288;
 const SPARSE_LOWER_THRESHOLD_MM = 52;
 
 const FONT_REG_PATHS = [
@@ -278,25 +283,55 @@ export function epDrawHeader(
   ctx.pdf.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
   ctx.pdf.rect(0, 0, A4_W, headerH, 'F');
 
-  const textLeft = MARGIN_X;
-  const textMaxW = photoDataUrl ? A4_W - MARGIN_X * 2 - PHOTO_R * 2 - 10 : ctx.contentW;
+  const textMaxW = ctx.contentW;
   let ty = 10;
+
+  if (photoDataUrl) {
+    const photoX = (A4_W - EP_PHOTO_W) / 2;
+    const photoY = 6;
+    try {
+      drawRectPdfPhoto(ctx.pdf, photoDataUrl, photoX, photoY, EP_PHOTO_W, EP_PHOTO_H, 'JPEG');
+    } catch {
+      try {
+        drawRectPdfPhoto(ctx.pdf, photoDataUrl, photoX, photoY, EP_PHOTO_W, EP_PHOTO_H, 'PNG');
+      } catch {
+        // Keep export usable if jsPDF rejects an image data URL.
+      }
+    }
+    ty = photoY + EP_PHOTO_H + 2.5;
+  }
 
   const name = (ctx.cv.personal.fullName || 'YOUR NAME').toUpperCase();
   setStyle(ctx, { size: 18, color: [255, 255, 255], bold: true, lineH: 6.5 });
-  for (const ln of epMeasureWrappedLines(ctx, name, textMaxW).slice(0, 2)) {
-    ctx.pdf.text(ln, textLeft, ty + 4.5);
+  const nameLines = epMeasureWrappedLines(ctx, name, textMaxW).slice(0, 2);
+  for (const ln of nameLines) {
+    if (photoDataUrl) {
+      const lineW = ctx.pdf.getTextWidth(ln);
+      ctx.pdf.text(ln, (A4_W - lineW) / 2, ty + 4.5);
+    } else {
+      ctx.pdf.text(ln, MARGIN_X, ty + 4.5);
+    }
     ty += 6.2;
   }
 
   ctx.pdf.setFillColor(GOLD[0], GOLD[1], GOLD[2]);
-  ctx.pdf.rect(textLeft, ty + 1, 18, 0.55, 'F');
+  if (photoDataUrl) {
+    ctx.pdf.rect((A4_W - 18) / 2, ty + 1, 18, 0.55, 'F');
+  } else {
+    ctx.pdf.rect(MARGIN_X, ty + 1, 18, 0.55, 'F');
+  }
   ty += 5;
 
   if (ctx.cv.personal.jobTitle) {
     setStyle(ctx, { size: 10, color: SOFT_GOLD, lineH: 4 });
-    for (const ln of epMeasureWrappedLines(ctx, ctx.cv.personal.jobTitle, textMaxW).slice(0, 2)) {
-      ctx.pdf.text(ln, textLeft, ty + 3);
+    const titleLines = epMeasureWrappedLines(ctx, ctx.cv.personal.jobTitle, textMaxW).slice(0, 2);
+    for (const ln of titleLines) {
+      if (photoDataUrl) {
+        const lineW = ctx.pdf.getTextWidth(ln);
+        ctx.pdf.text(ln, (A4_W - lineW) / 2, ty + 3);
+      } else {
+        ctx.pdf.text(ln, MARGIN_X, ty + 3);
+      }
       ty += 4;
     }
   }
@@ -305,29 +340,15 @@ export function epDrawHeader(
   if (contacts.length) {
     ty += 2;
     setStyle(ctx, { size: 8, color: CONTACT, lineH: 3.4 });
-    for (const ln of epMeasureWrappedLines(ctx, contacts.join('  |  '), textMaxW).slice(0, 2)) {
-      ctx.pdf.text(ln, textLeft, ty + 2.5);
+    const contactLines = epMeasureWrappedLines(ctx, contacts.join('  |  '), textMaxW).slice(0, 2);
+    for (const ln of contactLines) {
+      if (photoDataUrl) {
+        const lineW = ctx.pdf.getTextWidth(ln);
+        ctx.pdf.text(ln, (A4_W - lineW) / 2, ty + 2.5);
+      } else {
+        ctx.pdf.text(ln, MARGIN_X, ty + 2.5);
+      }
       ty += 3.5;
-    }
-  }
-
-  if (photoDataUrl) {
-    const cx = A4_W - MARGIN_X - PHOTO_R;
-    const cy = headerH / 2;
-    try {
-      ctx.pdf.setFillColor(255, 255, 255);
-      ctx.pdf.circle(cx, cy, PHOTO_R + 0.6, 'F');
-      ctx.pdf.addImage(photoDataUrl, 'JPEG', cx - PHOTO_R, cy - PHOTO_R, PHOTO_R * 2, PHOTO_R * 2, undefined, 'FAST');
-      ctx.pdf.setDrawColor(NAVY[0], NAVY[1], NAVY[2]);
-      ctx.pdf.setLineWidth(2.2);
-      ctx.pdf.circle(cx, cy, PHOTO_R + 0.3, 'S');
-      ctx.pdf.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
-      ctx.pdf.setLineWidth(0.45);
-      ctx.pdf.circle(cx, cy, PHOTO_R + 0.65, 'S');
-    } catch {
-      ctx.pdf.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
-      ctx.pdf.setLineWidth(0.45);
-      ctx.pdf.circle(cx, cy, PHOTO_R, 'S');
     }
   }
 
@@ -714,7 +735,14 @@ export async function buildExecutivePremiumPagedPdfBlob(
   const unicodeReady = await epRegisterUnicodeFonts(pdf);
   const ctx = epCreateContext(pdf, cv, locale, unicodeReady);
 
-  epDrawHeader(ctx, options.photoDataUrl ?? null);
+  const preparedPhoto = options.photoDataUrl
+    ? await preparePdfRectPhotoDataUrl(options.photoDataUrl, {
+      widthPx: EP_PHOTO_PREP_W_PX,
+      heightPx: EP_PHOTO_PREP_H_PX,
+      mimeType: 'image/jpeg',
+    })
+    : null;
+  epDrawHeader(ctx, preparedPhoto);
   epDrawSummary(ctx);
   epDrawExperienceSection(ctx);
   epDrawEducationSection(ctx);

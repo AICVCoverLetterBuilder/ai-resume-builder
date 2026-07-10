@@ -8,6 +8,7 @@
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
+import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-photo';
 import { regionSettings, type CVData } from './types';
 
 const A4_W = 210;
@@ -297,21 +298,11 @@ export function cnDrawHeader(
     const cx = A4_W - MARGIN_X - PHOTO_R;
     const cy = headerH / 2;
     try {
-      ctx.pdf.setFillColor(255, 255, 255);
-      ctx.pdf.circle(cx, cy, PHOTO_R + 0.6, 'F');
-      ctx.pdf.addImage(
-        photoDataUrl,
-        'JPEG',
-        cx - PHOTO_R,
-        cy - PHOTO_R,
-        PHOTO_R * 2,
-        PHOTO_R * 2,
-        undefined,
-        'FAST',
-      );
-      ctx.pdf.setDrawColor(30, 41, 59);
-      ctx.pdf.setLineWidth(1.8);
-      ctx.pdf.circle(cx, cy, PHOTO_R + 0.3, 'S');
+      drawCircularPdfPhoto(ctx.pdf, photoDataUrl, cx, cy, PHOTO_R, {
+        outerFill: [255, 255, 255],
+        outerRadiusDelta: 0.6,
+        borders: [{ color: [30, 41, 59], lineWidth: 1.8, radiusDelta: 0.3 }],
+      });
     } catch {
       ctx.pdf.setDrawColor(30, 41, 59);
       ctx.pdf.setLineWidth(1.8);
@@ -760,7 +751,10 @@ export async function buildCorporateNavyPagedPdfBlob(
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const ctx = cnCreateContext(pdf, cv, locale);
 
-  cnDrawHeader(ctx, options.photoDataUrl ?? null);
+  const maskedPhoto = options.photoDataUrl
+    ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)
+    : null;
+  cnDrawHeader(ctx, maskedPhoto);
   cnDrawSummary(ctx);
   cnDrawExperienceSection(ctx);
   cnDrawEducationSection(ctx);

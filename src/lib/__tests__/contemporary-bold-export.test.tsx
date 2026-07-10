@@ -24,6 +24,7 @@ import type { CVData } from '@/lib/types';
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const ORIGINAL_PHOTO = `data:image/jpeg;base64,${Buffer.from('cb-original-photo').toString('base64')}`;
+const MASKED_CIRCLE_PHOTO = 'data:image/png;base64,cb-masked-circle-photo';
 let pdfInstances: MockPdf[] = [];
 let addFileToVFSCalls: string[] = [];
 
@@ -242,7 +243,7 @@ beforeEach(() => {
     configurable: true,
   });
   Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
-    value: vi.fn(() => 'data:image/jpeg;base64,cb-photo'),
+    value: vi.fn(() => MASKED_CIRCLE_PHOTO),
     configurable: true,
   });
   Object.defineProperty(document, 'fonts', {
@@ -577,5 +578,13 @@ describe('Contemporary Bold PDF rebuild v2', () => {
     ];
     for (const fn of required) expect(src, `missing export: ${fn}`).toContain(`export`);
     for (const fn of required) expect(src, `missing fn: ${fn}`).toContain(fn);
+  });
+
+  test('Contemporary Bold PDF uses circular masked photo helper in header renderer', () => {
+    const src = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    expect(src).toContain('drawCircularPdfPhoto');
+    expect(src).toContain('preparePdfCircularPhotoDataUrl');
+    expect(src).not.toContain("addImage(photoDataUrl, 'JPEG'");
+    expect(src).not.toContain("addImage(photoDataUrl, 'PNG', cx - PHOTO_R");
   });
 });

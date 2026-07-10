@@ -16,6 +16,7 @@
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
+import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-photo';
 import { regionSettings, type CVData } from './types';
 
 // ── Page metrics ─────────────────────────────────────────────────────────────
@@ -621,16 +622,11 @@ export function cbDrawHeader(
     const cx = A4_W - MARGIN_RIGHT - PHOTO_R;
     const cy = headerH / 2;
     try {
-      ctx.pdf.setFillColor(WHITE[0], WHITE[1], WHITE[2]);
-      ctx.pdf.circle(cx, cy, PHOTO_R + 0.6, 'F');
-      try {
-        ctx.pdf.addImage(photoDataUrl, 'PNG', cx - PHOTO_R, cy - PHOTO_R, PHOTO_R * 2, PHOTO_R * 2, undefined, 'FAST');
-      } catch {
-        ctx.pdf.addImage(photoDataUrl, 'JPEG', cx - PHOTO_R, cy - PHOTO_R, PHOTO_R * 2, PHOTO_R * 2, undefined, 'FAST');
-      }
-      ctx.pdf.setDrawColor(30, 41, 59);
-      ctx.pdf.setLineWidth(1.8);
-      ctx.pdf.circle(cx, cy, PHOTO_R + 0.3, 'S');
+      drawCircularPdfPhoto(ctx.pdf, photoDataUrl, cx, cy, PHOTO_R, {
+        outerFill: WHITE,
+        outerRadiusDelta: 0.6,
+        borders: [{ color: [30, 41, 59], lineWidth: 1.8, radiusDelta: 0.3 }],
+      });
     } catch {
       ctx.pdf.setDrawColor(30, 41, 59);
       ctx.pdf.setLineWidth(1.8);
@@ -1022,7 +1018,10 @@ export async function buildContemporaryBoldPagedPdfBlob(
   const unicodeReady = await cbRegisterUnicodeFonts(pdf);
   const ctx = cbCreateContext(pdf, cv, locale, unicodeReady);
 
-  cbDrawHeader(ctx, options.photoDataUrl ?? null);
+  const maskedPhoto = options.photoDataUrl
+    ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)
+    : null;
+  cbDrawHeader(ctx, maskedPhoto);
   cbDrawSummary(ctx);
   cbDrawExperienceSection(ctx);
   cbDrawLowerSections(ctx);

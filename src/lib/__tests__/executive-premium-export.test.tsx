@@ -21,6 +21,7 @@ import { extractPdfUnicodeText, countPdfPages } from '@/lib/pdf-text-extract';
 import type { CVData } from '@/lib/types';
 
 const photo = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2w==';
+const maskedCirclePhoto = 'data:image/png;base64,AQIDBA==';
 
 function cv(overrides: Partial<CVData> & { personal?: Partial<CVData['personal']> } = {}): CVData {
   const { personal, ...rest } = overrides;
@@ -370,6 +371,28 @@ function pdfTextIncludes(text: string, needle: string): boolean {
 beforeEach(() => {
   vi.restoreAllMocks();
   Object.defineProperty(globalThis, 'Image', { value: MockImage, configurable: true });
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    value: vi.fn(() => ({
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      arc: vi.fn(),
+      closePath: vi.fn(),
+      clip: vi.fn(),
+      fill: vi.fn(),
+      fillStyle: '',
+      fillRect: vi.fn(),
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4) })),
+      globalCompositeOperation: 'source-over',
+    })),
+    configurable: true,
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
+    value: vi.fn(() => maskedCirclePhoto),
+    configurable: true,
+  });
   Object.defineProperty(globalThis, 'requestAnimationFrame', { value: (cb: FrameRequestCallback) => setTimeout(cb, 0), configurable: true });
   Object.defineProperty(document, 'fonts', {
     value: { load: vi.fn().mockResolvedValue([]), ready: Promise.resolve() },
@@ -458,6 +481,11 @@ describe('Executive Premium export', () => {
     expect(exportSource).toContain("kind: 'dedicated-executive-premium'");
     expect(rendererSource).toContain('epCreateContext');
     expect(rendererSource).toContain('epDrawHeader');
+    expect(rendererSource).toContain('drawRectPdfPhoto');
+    expect(rendererSource).toContain('preparePdfRectPhotoDataUrl');
+    expect(rendererSource).not.toContain('drawCircularPdfPhoto');
+    expect(rendererSource).not.toContain('preparePdfCircularPhotoDataUrl');
+    expect(rendererSource).not.toContain('drawPdfPhotoBorder');
     expect(rendererSource).toContain('epDrawSummary');
     expect(rendererSource).toContain('epRegisterUnicodeFonts');
     expect(rendererSource).toContain('epDrawWrappedBullet');
@@ -471,6 +499,41 @@ describe('Executive Premium export', () => {
     expect(rendererSource).not.toContain('buildCorporateNavyPagedPdfBlob');
     expect(exportSource).toContain('Executive Premium PDF must use exportExecutivePremiumPdf');
     expect(exportSource).not.toMatch(/buildExecutivePremiumPdfBlob[\s\S]{0,400}buildCvPdfBlob/);
+  });
+
+  test('Executive Premium PDF uses unframed portrait photo centered above name', async () => {
+    const { instances } = installDirectPdfMocks();
+    const mod = await import('@/lib/export');
+    await mod.buildExecutivePremiumPagedPdfBlob(cv(), 'en', { photoDataUrl: photo });
+
+    expect(instances[0]?.addImage).toHaveBeenCalled();
+    const [imageData, format, x, y, w, h] = instances[0]!.addImage.mock.calls[0] as [string, string, number, number, number, number];
+    expect(format).toBe('JPEG');
+    expect(w).toBeCloseTo(10.5, 1);
+    expect(h).toBeCloseTo(14, 1);
+    expect(x).toBeCloseTo((210 - 10.5) / 2, 1);
+    expect(y).toBeCloseTo(6, 1);
+    expect(imageData).toBeTruthy();
+
+    const nameCall = instances[0]!.text.mock.calls.find((call) => String(call[0]).includes('MARCUS THORNE'));
+    expect(nameCall).toBeTruthy();
+    const nameY = Number(nameCall?.[2]);
+    expect(nameY).toBeGreaterThan(y + h);
+
+    expect(instances[0]!.circle).not.toHaveBeenCalled();
+  });
+
+  test('other circular-photo templates keep masked circular rendering', () => {
+    const corporateNavy = source('src/lib/corporate-navy-pdf-renderer.ts');
+    const contemporaryBold = source('src/lib/contemporary-bold-pdf-renderer.ts');
+    const techSidebar = source('src/lib/tech-sidebar-pdf-renderer.ts');
+
+    expect(corporateNavy).toContain('drawCircularPdfPhoto');
+    expect(corporateNavy).toContain('preparePdfCircularPhotoDataUrl');
+    expect(contemporaryBold).toContain('drawCircularPdfPhoto');
+    expect(contemporaryBold).toContain('preparePdfCircularPhotoDataUrl');
+    expect(techSidebar).toContain('drawCircularPdfPhoto');
+    expect(techSidebar).toContain('preparePdfCircularPhotoDataUrl');
   });
 
   test('epNormalizeDocxText fixes glued sentence boundaries for DOCX export only', () => {
@@ -565,6 +628,9 @@ describe('Executive Premium export', () => {
     expect(text).not.toContain('environments.Software');
     expect(text).toContain('environments. Software');
     expect(text).toContain('reporting findings to the development team.');
+    expect(instances[0]?.addImage).toHaveBeenCalled();
+    const addImageArgs = instances[0]?.addImage.mock.calls[0] as [string, string];
+    expect(addImageArgs[1]).toBe('JPEG');
     if ((instances[0]?.pages ?? 0) >= 2) {
       expect(text).toMatch(/\(continued\)|Sentence 1:|PROFESSIONAL SUMMARY CONTINUED/i);
     }

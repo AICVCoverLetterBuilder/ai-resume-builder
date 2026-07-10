@@ -8,6 +8,7 @@ import JSZip from 'jszip';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { TechSidebarTemplate, templateComponents } from '@/components/cv-templates';
 import { createTechSidebarPdfTemplate } from '@/lib/tech-sidebar-pdf-template';
+import { clearPdfPhotoCache } from '@/lib/pdf-photo';
 import {
   buildPaddedPdfSlice,
   buildTechSidebarPdfBlob,
@@ -28,6 +29,7 @@ import type { CVData } from '@/lib/types';
 
 const originalPhoto = `data:image/jpeg;base64,${Buffer.from('tech-sidebar-original-photo').toString('base64')}`;
 const squarePhoto = `data:image/jpeg;base64,${Buffer.from('tech-sidebar-square-photo').toString('base64')}`;
+const maskedCirclePhoto = `data:image/png;base64,${Buffer.from('tech-sidebar-masked-circle-photo').toString('base64')}`;
 let loadedImageSources: string[] = [];
 let drawImageCalls: unknown[][] = [];
 
@@ -307,6 +309,7 @@ function source(file: string): string {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  clearPdfPhotoCache();
   loadedImageSources = [];
   drawImageCalls = [];
   Object.defineProperty(globalThis, 'Image', { value: MockImage, configurable: true });
@@ -314,15 +317,24 @@ beforeEach(() => {
     value: vi.fn(() => ({
       fillStyle: '',
       fillRect: vi.fn(),
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      arc: vi.fn(),
+      closePath: vi.fn(),
+      clip: vi.fn(),
+      fill: vi.fn(),
       drawImage: vi.fn((...args: unknown[]) => {
         drawImageCalls.push(args);
       }),
       getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(4) })),
+      globalCompositeOperation: 'source-over',
     })),
     configurable: true,
   });
   Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', {
-    value: vi.fn(() => squarePhoto),
+    value: vi.fn(() => maskedCirclePhoto),
     configurable: true,
   });
   Object.defineProperty(globalThis, 'requestAnimationFrame', { value: (cb: FrameRequestCallback) => setTimeout(cb, 0), configurable: true });
@@ -393,6 +405,9 @@ describe('Tech Sidebar export', () => {
     expect(exportSource).toContain("kind: 'dedicated-tech-sidebar'");
     expect(rendererSource).toContain('tsCreateContext');
     expect(rendererSource).toContain('tsDrawPageOneSidebar');
+    expect(rendererSource).toContain('drawCircularPdfPhoto');
+    expect(rendererSource).toContain('preparePdfCircularPhotoDataUrl');
+    expect(rendererSource).not.toContain("addImage(photoDataUrl, 'JPEG'");
     expect(rendererSource).toContain('tsDrawContinuationSidebar');
     expect(rendererSource).not.toContain('html2canvas');
     expect(rendererSource).not.toContain('buildCvPdfBlob');
@@ -614,8 +629,8 @@ describe('Tech Sidebar export', () => {
     expect(result.fileName).toBe('Dragan - CV.pdf');
   });
 
-  test('selected originalPhoto is used and square cover crop is proportional', async () => {
-    installDirectPdfMocks();
+  test('selected originalPhoto is used and circular cover crop is proportional', async () => {
+    const { instances } = installDirectPdfMocks();
 
     await buildTechSidebarPdfBlob(cv({
       personal: {
@@ -628,11 +643,9 @@ describe('Tech Sidebar export', () => {
     expect(loadedImageSources).toContain(originalPhoto);
     expect(loadedImageSources).not.toContain('circular-field');
     expect(drawImageCalls.length).toBeGreaterThan(0);
-    const [, dx, dy, scaledWidth, scaledHeight] = drawImageCalls[0] as [unknown, number, number, number, number];
-    expect(dx).toBe(0);
-    expect(dy).toBe(-82);
-    expect(scaledWidth).toBe(164);
-    expect(scaledHeight).toBe(328);
+    const addImageArgs = instances[0]?.addImage.mock.calls[0] as [string, string];
+    expect(addImageArgs[0]).toBe(maskedCirclePhoto);
+    expect(addImageArgs[1]).toBe('PNG');
   });
 
   test('Tech Sidebar no-photo PDF renders without a placeholder', () => {
