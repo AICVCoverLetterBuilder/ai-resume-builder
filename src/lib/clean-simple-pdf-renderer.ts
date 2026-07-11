@@ -12,6 +12,16 @@
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
+import {
+  isRtlLocale,
+  pdfI18nCtxApplyStyle,
+  pdfI18nCtxDraw,
+  pdfI18nCtxSplit,
+  pdfI18nCtxTextWidth,
+  registerPdfI18nFonts,
+  shouldApplyLatinPdfSentenceFixes,
+  type PdfI18nRegistry,
+} from './pdf-i18n-text';
 import { regionSettings, type CVData } from './types';
 
 const A4_W = 210;
@@ -24,7 +34,9 @@ export type CleanSimplePdfContext = {
   cv: CVData;
   locale: Locale;
   labels: ReturnType<typeof getCleanSimplePdfLabels>;
+  i18n: PdfI18nRegistry;
   unicodeReady: boolean;
+  lastTextStyle?: TextStyle;
   contentX: number;
   contentW: number;
   marginTop: number;
@@ -65,68 +77,10 @@ const DATE_COL_W = 34;
 const PHOTO_SIZE = 22;
 const LOWER_SECTIONS_MIN_REMAINING = 40;
 
-const FONT_REG_PATHS = [
-  '/fonts/NotoSans-Regular.ttf',
-  'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf',
-];
-const FONT_BOLD_PATHS = [
-  '/fonts/NotoSans-Bold.ttf',
-  'https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSans/NotoSans-Bold.ttf',
-];
-
-let cachedFontPayload: { regular: string; bold: string } | null = null;
-let fontPayloadPromise: Promise<{ regular: string; bold: string } | null> | null = null;
-
-function toB64(buf: ArrayBuffer): string {
-  const b = new Uint8Array(buf);
-  let s = '';
-  for (let i = 0; i < b.length; i += 1) s += String.fromCharCode(b[i]!);
-  return btoa(s);
-}
-
-async function readFontBytes(urls: string[]): Promise<ArrayBuffer | null> {
-  for (const url of urls) {
-    try {
-      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = controller ? setTimeout(() => controller.abort(), 15000) : null;
-      const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
-      if (timer) clearTimeout(timer);
-      if (res.ok) return await res.arrayBuffer();
-    } catch {
-      // try next source
-    }
-  }
-  return null;
-}
-
-async function loadCsFontPayload(): Promise<{ regular: string; bold: string } | null> {
-  if (cachedFontPayload) return cachedFontPayload;
-  if (fontPayloadPromise) return fontPayloadPromise;
-  fontPayloadPromise = (async () => {
-    const [regular, bold] = await Promise.all([
-      readFontBytes(FONT_REG_PATHS),
-      readFontBytes(FONT_BOLD_PATHS),
-    ]);
-    if (!regular || !bold) return null;
-    cachedFontPayload = { regular: toB64(regular), bold: toB64(bold) };
-    return cachedFontPayload;
-  })();
-  return fontPayloadPromise;
-}
-
-/** Embed Noto Sans (Latin Extended) into jsPDF — required for Serbian/Croatian/Bosnian PDF text. */
+/** Embed multilingual Noto families into jsPDF. */
 export async function csRegisterUnicodeFonts(pdf: Pdf): Promise<boolean> {
-  try {
-    const fonts = await loadCsFontPayload();
-    if (!fonts) return false;
-    pdf.addFileToVFS('NotoSans-Regular.ttf', fonts.regular);
-    pdf.addFileToVFS('NotoSans-Bold.ttf', fonts.bold);
-    pdf.addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal');
-    pdf.addFont('NotoSans-Bold.ttf', 'NotoSans', 'bold');
-    return true;
-  } catch {
-    return false;
-  }
+  const i18n = await registerPdfI18nFonts(pdf);
+  return i18n.latinReady;
 }
 
 export function getCleanSimplePdfLabels(locale: Locale) {
@@ -149,11 +103,16 @@ export function getCleanSimplePdfLabels(locale: Locale) {
  * protecting technical tokens (Node.js, CI/CD, REST APIs, ...), email
  * addresses and dates from being altered.
  */
-export function csNormalizePdfText(text: string): string {
+export function csNormalizePdfText(text: string, locale: Locale = 'en'): string {
   if (!text) return '';
   let out = text.replace(/\r\n/g, '\n');
+  if (!shouldApplyLatinPdfSentenceFixes(locale, text)) {
+    return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+  }
 
   const protect: Array<{ token: string; stub: string }> = [
+    { token: 'GitHub', stub: '\u0001GITHUB\u0001' },
+    { token: 'GitLab', stub: '\u0001GITLAB\u0001' },
     { token: 'Node.js', stub: '\u0001NODEJS\u0001' },
     { token: 'node.js', stub: '\u0001nodejs\u0001' },
     { token: 'Express.js', stub: '\u0001EXPRESSJS\u0001' },
@@ -195,15 +154,26 @@ export function csNormalizePdfText(text: string): string {
   return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
-function fontFamily(ctx: CleanSimplePdfContext): string {
-  return ctx.unicodeReady ? 'NotoSans' : 'helvetica';
+function applyStyle(ctx: CleanSimplePdfContext, style: TextStyle, text?: string): void {
+  ctx.lastTextStyle = style;
+  pdfI18nCtxApplyStyle(ctx, { size: style.size, color: style.color, bold: style.bold }, text);
 }
 
-function applyStyle(ctx: CleanSimplePdfContext, style: TextStyle): void {
-  const family = fontFamily(ctx);
-  ctx.pdf.setFont(family, style.bold ? 'bold' : 'normal');
-  ctx.pdf.setFontSize(style.size);
-  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+function drawText(
+  ctx: CleanSimplePdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: TextStyle,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.bold,
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+  });
 }
 
 function usablePageHeight(ctx: CleanSimplePdfContext): number {
@@ -218,14 +188,15 @@ export function csCreateContext(
   pdf: Pdf,
   cv: CVData,
   locale: Locale,
-  unicodeReady: boolean,
+  i18n: PdfI18nRegistry,
 ): CleanSimplePdfContext {
   return {
     pdf,
     cv,
     locale,
     labels: getCleanSimplePdfLabels(locale),
-    unicodeReady,
+    i18n,
+    unicodeReady: i18n.latinReady,
     contentX: MARGIN_X,
     contentW: A4_W - MARGIN_X * 2,
     marginTop: MARGIN_TOP,
@@ -251,11 +222,11 @@ export function csEnsureSpace(ctx: CleanSimplePdfContext, neededMm: number): voi
   csMoveToNextPage(ctx);
 }
 
-function wrapLines(ctx: CleanSimplePdfContext, text: string, maxW: number): string[] {
-  const normalized = csNormalizePdfText(text);
+function wrapLines(ctx: CleanSimplePdfContext, text: string, maxW: number, style?: Pick<TextStyle, 'size' | 'bold'>): string[] {
+  const normalized = csNormalizePdfText(text, ctx.locale);
   if (!normalized) return [];
-  const result = ctx.pdf.splitTextToSize(normalized, maxW);
-  return Array.isArray(result) ? result.map(String) : [String(result)];
+  const wrapStyle = style ?? ctx.lastTextStyle ?? { size: 8.1, bold: false };
+  return pdfI18nCtxSplit(ctx, normalized, maxW, { size: wrapStyle.size, bold: wrapStyle.bold });
 }
 
 export function csMeasureWrappedTextHeight(
@@ -275,25 +246,26 @@ export function csMeasureBulletHeight(lineCount: number): number {
 }
 
 function bulletLayout(ctx: CleanSimplePdfContext, contentW: number): CsBulletLayout {
-  applyStyle(ctx, { size: 7.65, color: MUTED, lineH: BULLET_LINE_H });
-  const markerW = ctx.pdf.getTextWidth('\u2022');
+  const markerStyle: TextStyle = { size: 7.65, color: MUTED, lineH: BULLET_LINE_H };
+  applyStyle(ctx, markerStyle, '\u2022');
+  const markerW = pdfI18nCtxTextWidth(ctx, '\u2022', { size: markerStyle.size, bold: false });
   const markerX = ctx.contentX;
   const textX = markerX + markerW + 1.6;
   return { markerX, textX, wrapW: Math.max(8, contentW - (textX - markerX)) };
 }
 
-function parseBulletLines(raw: string): string[] {
+function parseBulletLines(raw: string, locale: Locale): string[] {
   return raw
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => csNormalizePdfText(line.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, '')))
+    .map((line) => csNormalizePdfText(line.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''), locale))
     .filter(Boolean);
 }
 
 function buildBulletBlocks(ctx: CleanSimplePdfContext, raw: string, contentW: number): BulletBlock[] {
   const layout = bulletLayout(ctx, contentW);
-  return parseBulletLines(raw).map((text) => ({
+  return parseBulletLines(raw, ctx.locale).map((text) => ({
     lines: wrapLines(ctx, text, layout.wrapW),
   }));
 }
@@ -326,28 +298,31 @@ export function csDrawHeader(ctx: CleanSimplePdfContext, photoDataUrl: string | 
   }
 
   applyStyle(ctx, { size: 16.5, color: TEXT, bold: true, lineH: 6 });
-  const nameLines = wrapLines(ctx, ctx.cv.personal.fullName || 'Your Name', textMaxW).slice(0, 2);
+  const nameStyle: TextStyle = { size: 16.5, color: TEXT, bold: true, lineH: 6 };
+  const nameLines = wrapLines(ctx, ctx.cv.personal.fullName || 'Your Name', textMaxW, nameStyle).slice(0, 2);
   let textBottom = headerTop + 5;
   for (const line of nameLines) {
-    ctx.pdf.text(line, textX, textBottom);
+    drawText(ctx, line, textX, textBottom, nameStyle);
     textBottom += 6;
   }
 
   if (ctx.cv.personal.jobTitle) {
-    applyStyle(ctx, { size: 9, color: ACCENT, lineH: 4 });
-    const jobLines = wrapLines(ctx, ctx.cv.personal.jobTitle, textMaxW).slice(0, 2);
+    const jobStyle: TextStyle = { size: 9, color: ACCENT, lineH: 4 };
+    applyStyle(ctx, jobStyle);
+    const jobLines = wrapLines(ctx, ctx.cv.personal.jobTitle, textMaxW, jobStyle).slice(0, 2);
     for (const line of jobLines) {
-      ctx.pdf.text(line, textX, textBottom);
+      drawText(ctx, line, textX, textBottom, jobStyle);
       textBottom += 4;
     }
   }
 
   const contacts = headerContactParts(ctx);
   if (contacts.length > 0) {
-    applyStyle(ctx, { size: 7.8, color: MUTED, lineH: 4 });
-    const contactLines = wrapLines(ctx, contacts.join('  |  '), textMaxW).slice(0, 2);
+    const contactStyle: TextStyle = { size: 7.8, color: MUTED, lineH: 4 };
+    applyStyle(ctx, contactStyle);
+    const contactLines = wrapLines(ctx, contacts.join('  |  '), textMaxW, contactStyle).slice(0, 2);
     for (const line of contactLines) {
-      ctx.pdf.text(line, textX, textBottom);
+      drawText(ctx, line, textX, textBottom, contactStyle);
       textBottom += 4;
     }
   }
@@ -362,8 +337,9 @@ export function csDrawHeader(ctx: CleanSimplePdfContext, photoDataUrl: string | 
 
 export function csDrawSectionHeading(ctx: CleanSimplePdfContext, label: string): void {
   csEnsureSpace(ctx, SECTION_HEADING_H);
-  applyStyle(ctx, { size: 8.25, color: ACCENT, bold: true, lineH: 4.2 });
-  ctx.pdf.text(label.toUpperCase(), ctx.contentX, ctx.y);
+  const style: TextStyle = { size: 8.25, color: ACCENT, bold: true, lineH: 4.2 };
+  applyStyle(ctx, style, label);
+  drawText(ctx, label.toUpperCase(), ctx.contentX, ctx.y, style);
   ctx.y += SECTION_HEADING_H;
 }
 
@@ -376,8 +352,8 @@ export function csDrawWrappedParagraph(
   const x = opts.x ?? ctx.contentX;
   for (const line of lines) {
     csEnsureSpace(ctx, style.lineH);
-    applyStyle(ctx, style);
-    ctx.pdf.text(line, x, ctx.y);
+    applyStyle(ctx, style, line);
+    drawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineH;
   }
 }
@@ -421,11 +397,11 @@ export function csDrawWrappedBullet(
   for (let i = 0; i < lines.length; i += 1) {
     csEnsureSpace(ctx, BULLET_LINE_H);
     if (i === 0 && drawMarker) {
-      applyStyle(ctx, style);
-      ctx.pdf.text('\u2022', layout.markerX, ctx.y);
+      applyStyle(ctx, style, '\u2022');
+      drawText(ctx, '\u2022', layout.markerX, ctx.y, style);
     }
-    applyStyle(ctx, style);
-    ctx.pdf.text(lines[i]!, layout.textX, ctx.y);
+    applyStyle(ctx, style, lines[i]!);
+    drawText(ctx, lines[i]!, layout.textX, ctx.y, style);
     ctx.y += BULLET_LINE_H;
   }
 }
@@ -436,14 +412,16 @@ function drawExperienceEntryContinuation(
 ): void {
   csEnsureSpace(ctx, 5);
   const role = entry.position || entry.company || 'Experience';
-  applyStyle(ctx, { size: 7.3, color: LIGHT, bold: true, lineH: 3.2 });
-  ctx.pdf.text(`${csNormalizePdfText(role)} (continued)`, ctx.contentX, ctx.y + 2.5);
+  const contStyle: TextStyle = { size: 7.3, color: LIGHT, bold: true, lineH: 3.2 };
+  const contText = `${csNormalizePdfText(role, ctx.locale)} (continued)`;
+  applyStyle(ctx, contStyle, contText);
+  drawText(ctx, contText, ctx.contentX, ctx.y + 2.5, contStyle);
   ctx.y += 4.5;
 }
 
-function experienceTitle(entry: CVData['experience'][number]): string {
-  const position = csNormalizePdfText(entry.position || '');
-  const company = csNormalizePdfText(entry.company || '');
+function experienceTitle(ctx: CleanSimplePdfContext, entry: CVData['experience'][number]): string {
+  const position = csNormalizePdfText(entry.position || '', ctx.locale);
+  const company = csNormalizePdfText(entry.company || '', ctx.locale);
   return company ? `${position} \u2014 ${company}` : position;
 }
 
@@ -454,25 +432,27 @@ function experienceDateRange(ctx: CleanSimplePdfContext, entry: CVData['experien
 }
 
 function measureExperienceLeadHeight(ctx: CleanSimplePdfContext, entry: CVData['experience'][number]): number {
-  const titleLines = wrapLines(ctx, experienceTitle(entry), ctx.contentW - DATE_COL_W);
+  const titleLines = wrapLines(ctx, experienceTitle(ctx, entry), ctx.contentW - DATE_COL_W);
   return Math.max(4.3, titleLines.length * 4.3) + 2;
 }
 
 function drawExperienceLead(ctx: CleanSimplePdfContext, entry: CVData['experience'][number]): void {
   const date = experienceDateRange(ctx, entry);
-  applyStyle(ctx, { size: 8.1, color: TEXT, bold: true, lineH: 4.3 });
-  const titleLines = wrapLines(ctx, experienceTitle(entry), ctx.contentW - DATE_COL_W);
+  const titleStyle: TextStyle = { size: 8.1, color: TEXT, bold: true, lineH: 4.3 };
+  applyStyle(ctx, titleStyle);
+  const titleLines = wrapLines(ctx, experienceTitle(ctx, entry), ctx.contentW - DATE_COL_W, titleStyle);
   const startY = ctx.y;
   let lineY = startY;
   for (const line of titleLines) {
-    ctx.pdf.text(line, ctx.contentX, lineY + 3.2);
+    drawText(ctx, line, ctx.contentX, lineY + 3.2, titleStyle);
     lineY += 4.3;
   }
 
   if (date) {
-    applyStyle(ctx, { size: 7.1, color: LIGHT, lineH: 3.5 });
-    const dateW = ctx.pdf.getTextWidth(date);
-    ctx.pdf.text(date, ctx.contentX + ctx.contentW - dateW, startY + 3.2);
+    const dateStyle: TextStyle = { size: 7.1, color: LIGHT, lineH: 3.5 };
+    applyStyle(ctx, dateStyle, date);
+    const dateW = pdfI18nCtxTextWidth(ctx, date, { size: dateStyle.size, bold: false });
+    drawText(ctx, date, ctx.contentX + ctx.contentW - dateW, startY + 3.2, dateStyle, { align: 'right' });
   }
 
   ctx.y = lineY + 1.6;
@@ -583,20 +563,22 @@ function drawEducationEntry(ctx: CleanSimplePdfContext, edu: CVData['education']
     csMoveToNextPage(ctx);
   }
 
-  applyStyle(ctx, { size: 7.9, color: TEXT, bold: true, lineH: 4.3 });
-  const degreeLines = wrapLines(ctx, edu.degree || '', ctx.contentW - DATE_COL_W);
+  const degreeStyle: TextStyle = { size: 7.9, color: TEXT, bold: true, lineH: 4.3 };
+  applyStyle(ctx, degreeStyle);
+  const degreeLines = wrapLines(ctx, edu.degree || '', ctx.contentW - DATE_COL_W, degreeStyle);
   const startY = ctx.y;
   let lineY = startY;
   for (const line of degreeLines) {
-    ctx.pdf.text(line, ctx.contentX, lineY + 3.2);
+    drawText(ctx, line, ctx.contentX, lineY + 3.2, degreeStyle);
     lineY += 4.3;
   }
 
   const dateText = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
   if (dateText) {
-    applyStyle(ctx, { size: 7.1, color: LIGHT, lineH: 3.5 });
-    const dateW = ctx.pdf.getTextWidth(dateText);
-    ctx.pdf.text(dateText, ctx.contentX + ctx.contentW - dateW, startY + 3.2);
+    const dateStyle: TextStyle = { size: 7.1, color: LIGHT, lineH: 3.5 };
+    applyStyle(ctx, dateStyle, dateText);
+    const dateW = pdfI18nCtxTextWidth(ctx, dateText, { size: dateStyle.size, bold: false });
+    drawText(ctx, dateText, ctx.contentX + ctx.contentW - dateW, startY + 3.2, dateStyle, { align: 'right' });
   }
   ctx.y = lineY + 0.3;
 
@@ -732,8 +714,9 @@ export async function buildCleanSimplePagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const unicodeReady = await csRegisterUnicodeFonts(pdf);
-  const ctx = csCreateContext(pdf, cv, locale, unicodeReady);
+  (pdf as InstanceType<typeof jsPDF> & { allowFsRead?: string[] }).allowFsRead = ['*'];
+  const i18n = await registerPdfI18nFonts(pdf);
+  const ctx = csCreateContext(pdf, cv, locale, i18n);
 
   csDrawHeader(ctx, options.photoDataUrl ?? null);
   csDrawSummary(ctx);

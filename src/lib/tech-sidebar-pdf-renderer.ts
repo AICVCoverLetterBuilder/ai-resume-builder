@@ -6,6 +6,16 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { splitCleanSimpleSummarySentenceRuns } from './clean-simple-pdf-template';
 import { translations, type Locale } from './i18n/translations';
+import {
+  isRtlLocale,
+  pdfI18nCtxApplyStyle,
+  pdfI18nCtxDraw,
+  pdfI18nCtxSplit,
+  pdfI18nCtxTextWidth,
+  registerPdfI18nFonts,
+  shouldApplyLatinPdfSentenceFixes,
+  type PdfI18nRegistry,
+} from './pdf-i18n-text';
 import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-photo';
 import { regionSettings, type CVData } from './types';
 const CV_PDF_A4_WIDTH_MM = 210;
@@ -17,6 +27,7 @@ export type TechSidebarDirectPdfContext = {
   pdf: TechSidebarPdfWriter;
   cv: CVData;
   locale: Locale;
+  i18n: PdfI18nRegistry;
   labels: ReturnType<typeof getTechSidebarPdfLabels>;
   pageWidth: number;
   pageHeight: number;
@@ -68,17 +79,77 @@ export function getTechSidebarPdfLabels(locale: Locale) {
   };
 }
 
-function tsSetTextStyle(ctx: TechSidebarDirectPdfContext, style: TechSidebarTextStyle): void {
-  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
-  ctx.pdf.setFontSize(style.size);
-  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+function tsNormalizePdfText(text: string, locale: Locale): string {
+  if (!text) return '';
+  let out = text.replace(/\r\n/g, '\n');
+  if (!shouldApplyLatinPdfSentenceFixes(locale, text)) {
+    return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+  }
+
+  const protect: Array<{ token: string; stub: string }> = [
+    { token: 'Node.js', stub: '\u0001NODEJS\u0001' },
+    { token: 'node.js', stub: '\u0001nodejs\u0001' },
+    { token: 'Express.js', stub: '\u0001EXPRESSJS\u0001' },
+    { token: 'Next.js', stub: '\u0001NEXTJS\u0001' },
+    { token: 'Vue.js', stub: '\u0001VUEJS\u0001' },
+    { token: 'CI/CD', stub: '\u0001CICD\u0001' },
+    { token: 'REST APIs', stub: '\u0001RESTAPIS\u0001' },
+    { token: 'REST API', stub: '\u0001RESTAPI\u0001' },
+  ];
+  for (const p of protect) out = out.split(p.token).join(p.stub);
+
+  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
+  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
+  out = out.replace(/\.([a-z]{3,})\.(\s*)([A-Z])/g, '. $1. $3');
+  out = out.replace(
+    /\.([ \t]*)(lead|logic|applied|environments|built|designed|assisted)(?=\.?[A-Z])/gi,
+    '. $2',
+  );
+  out = out.replace(/([a-z])\.([A-Z])/g, '$1. $2');
+  out = out.replace(/\.([a-z]{3,})\.(\s*)([A-Z])/g, '. $1. $3');
+
+  for (const p of protect) out = out.split(p.stub).join(p.token);
+  return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
-function tsSplitText(ctx: TechSidebarDirectPdfContext, text: string, maxWidth = ctx.contentW): string[] {
-  const normalized = text.replace(/\s+/g, ' ').trim();
+function tsApplyStyle(ctx: TechSidebarDirectPdfContext, style: TechSidebarTextStyle, text?: string): void {
+  pdfI18nCtxApplyStyle(
+    ctx,
+    { size: style.size, color: style.color, bold: style.fontStyle === 'bold' },
+    text,
+  );
+}
+
+function tsDrawText(
+  ctx: TechSidebarDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: TechSidebarTextStyle,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.fontStyle === 'bold',
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+  });
+}
+
+function tsSplitText(
+  ctx: TechSidebarDirectPdfContext,
+  text: string,
+  maxWidth = ctx.contentW,
+  style?: Pick<TechSidebarTextStyle, 'size' | 'fontStyle'>,
+): string[] {
+  const normalized = tsNormalizePdfText(text, ctx.locale);
   if (!normalized) return [];
-  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
-  return Array.isArray(result) ? result.map(String) : [String(result)];
+  const wrapStyle = style ?? { size: 8.5, fontStyle: 'normal' as const };
+  return pdfI18nCtxSplit(ctx, normalized, maxWidth, {
+    size: wrapStyle.size,
+    bold: wrapStyle.fontStyle === 'bold',
+  });
 }
 
 function tsFreshPageCapacity(ctx: TechSidebarDirectPdfContext): number {
@@ -96,18 +167,20 @@ function tsDrawContinuationSidebar(ctx: TechSidebarDirectPdfContext): void {
   const innerW = ctx.sidebarW - pad * 2;
   let sy = ctx.marginTop;
 
-  tsSetTextStyle(ctx, { size: 11, color: TS_SIDEBAR_TEXT, fontStyle: 'bold', lineHeight: 4.0 });
-  for (const line of tsSplitText(ctx, ctx.cv.personal.fullName || 'Your Name', innerW).slice(0, 2)) {
-    ctx.pdf.text(line, pad, sy);
+  const nameStyle: TechSidebarTextStyle = { size: 11, color: TS_SIDEBAR_TEXT, fontStyle: 'bold', lineHeight: 4.0 };
+  for (const line of tsSplitText(ctx, ctx.cv.personal.fullName || 'Your Name', innerW, nameStyle).slice(0, 2)) {
+    tsDrawText(ctx, line, pad, sy, nameStyle);
     sy += 3.8;
   }
 
   if (ctx.cv.personal.jobTitle) {
-    tsSetTextStyle(ctx, { size: 8, color: TS_BLUE_LIGHT, fontStyle: 'bold', lineHeight: 3.3 });
-    ctx.pdf.text(
-      tsSplitText(ctx, ctx.cv.personal.jobTitle, innerW)[0] ?? ctx.cv.personal.jobTitle,
+    const titleStyle: TechSidebarTextStyle = { size: 8, color: TS_BLUE_LIGHT, fontStyle: 'bold', lineHeight: 3.3 };
+    tsDrawText(
+      ctx,
+      tsSplitText(ctx, ctx.cv.personal.jobTitle, innerW, titleStyle)[0] ?? ctx.cv.personal.jobTitle,
       pad,
       sy,
+      titleStyle,
     );
     sy += 3.6;
   }
@@ -118,14 +191,15 @@ function tsDrawContinuationSidebar(ctx: TechSidebarDirectPdfContext): void {
   ctx.pdf.line(pad, sy, ctx.sidebarW - pad, sy);
   sy += 4;
 
-  tsSetTextStyle(ctx, { size: 6.5, color: TS_SIDEBAR_MUTED, fontStyle: 'bold', lineHeight: 3.0 });
-  ctx.pdf.text('CONTINUED', pad, sy);
+  const contStyle: TechSidebarTextStyle = { size: 6.5, color: TS_SIDEBAR_MUTED, fontStyle: 'bold', lineHeight: 3.0 };
+  tsDrawText(ctx, 'CONTINUED', pad, sy, contStyle);
 }
 
 export function tsCreateContext(
   pdf: TechSidebarPdfWriter,
   cv: CVData,
   locale: Locale,
+  i18n: PdfI18nRegistry,
 ): TechSidebarDirectPdfContext {
   const sidebarW = 62;
   const sidebarPad = 6;
@@ -139,6 +213,7 @@ export function tsCreateContext(
     pdf,
     cv,
     locale,
+    i18n,
     labels: getTechSidebarPdfLabels(locale),
     pageWidth: CV_PDF_A4_WIDTH_MM,
     pageHeight: CV_PDF_A4_HEIGHT_MM,
@@ -178,8 +253,10 @@ function tsSectionHeadingHeight(): number {
 
 function tsDrawSectionHeading(ctx: TechSidebarDirectPdfContext, label: string): void {
   tsEnsureSpace(ctx, tsSectionHeadingHeight());
-  tsSetTextStyle(ctx, { size: 7.8, color: TS_BLUE, fontStyle: 'bold', lineHeight: 3.8 });
-  ctx.pdf.text(label.toUpperCase(), ctx.contentX, ctx.y);
+  const headingStyle: TechSidebarTextStyle = { size: 7.8, color: TS_BLUE, fontStyle: 'bold', lineHeight: 3.8 };
+  const text = label.toUpperCase();
+  tsApplyStyle(ctx, headingStyle, text);
+  tsDrawText(ctx, text, ctx.contentX, ctx.y, headingStyle);
   ctx.y += 4.2;
   ctx.pdf.setDrawColor(TS_RULE[0], TS_RULE[1], TS_RULE[2]);
   ctx.pdf.setLineWidth(0.3);
@@ -197,15 +274,17 @@ function tsDrawWrappedText(
   const x = opts.x ?? ctx.contentX + (opts.indentX ?? 0);
   for (const line of lines) {
     tsEnsureSpace(ctx, style.lineHeight);
-    tsSetTextStyle(ctx, style);
-    ctx.pdf.text(line, x, ctx.y);
+    tsApplyStyle(ctx, style, line);
+    tsDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
 
 function tsSidebarSectionHeadingY(ctx: TechSidebarDirectPdfContext, label: string, y: number): number {
-  tsSetTextStyle(ctx, { size: 7.2, color: TS_BLUE_LIGHT, fontStyle: 'bold', lineHeight: 3.2 });
-  ctx.pdf.text(label.toUpperCase(), ctx.sidebarPad, y);
+  const headingStyle: TechSidebarTextStyle = { size: 7.2, color: TS_BLUE_LIGHT, fontStyle: 'bold', lineHeight: 3.2 };
+  const text = label.toUpperCase();
+  tsApplyStyle(ctx, headingStyle, text);
+  tsDrawText(ctx, text, ctx.sidebarPad, y, headingStyle);
   const ruleY = y + 3.6;
   ctx.pdf.setDrawColor(TS_SIDEBAR_RULE[0], TS_SIDEBAR_RULE[1], TS_SIDEBAR_RULE[2]);
   ctx.pdf.setLineWidth(0.25);
@@ -225,14 +304,15 @@ function tsDrawSidebarSkills(ctx: TechSidebarDirectPdfContext, skills: string[],
     const padH = 1.8;
     const padV = 1.0;
     const lineH = 3.1;
-    tsSetTextStyle(ctx, { size: 7.0, color: TS_SIDEBAR_TEXT, lineHeight: lineH });
-    const textW = ctx.pdf.getTextWidth(skill);
+    const chipStyle: TechSidebarTextStyle = { size: 7.0, color: TS_SIDEBAR_TEXT, lineHeight: lineH };
+    tsApplyStyle(ctx, chipStyle, skill);
+    const textW = pdfI18nCtxTextWidth(ctx, skill, { size: chipStyle.size, bold: false });
     let chipW = textW + padH * 2;
     let chipH = lineH + padV;
     let lines = [skill];
 
     if (chipW > innerW) {
-      lines = tsSplitText(ctx, skill, innerW - padH * 2);
+      lines = tsSplitText(ctx, skill, innerW - padH * 2, chipStyle);
       chipW = innerW;
       chipH = lines.length * lineH + padV;
     }
@@ -246,7 +326,8 @@ function tsDrawSidebarSkills(ctx: TechSidebarDirectPdfContext, skills: string[],
     ctx.pdf.setFillColor(TS_NAVY_SOFT[0], TS_NAVY_SOFT[1], TS_NAVY_SOFT[2]);
     ctx.pdf.rect(x, y - lineH + 0.4, chipW, chipH, 'F');
     lines.forEach((line, index) => {
-      ctx.pdf.text(line, x + padH, y + index * lineH);
+      tsApplyStyle(ctx, chipStyle, line);
+      tsDrawText(ctx, line, x + padH, y + index * lineH, chipStyle);
     });
 
     x += chipW + gapX;
@@ -263,11 +344,11 @@ function tsDrawSidebarSkills(ctx: TechSidebarDirectPdfContext, skills: string[],
 function tsDrawSidebarLanguages(ctx: TechSidebarDirectPdfContext, startY: number): number {
   const innerW = ctx.sidebarW - ctx.sidebarPad * 2;
   let y = startY;
-  tsSetTextStyle(ctx, { size: 7.2, color: TS_SIDEBAR_TEXT, lineHeight: 3.3 });
+  const langStyle: TechSidebarTextStyle = { size: 7.2, color: TS_SIDEBAR_TEXT, lineHeight: 3.3 };
   for (const language of ctx.cv.languages) {
     const label = `${getLocalizedCvLanguageName(language.name, ctx.locale)} / ${language.level}`;
-    for (const line of tsSplitText(ctx, label, innerW)) {
-      ctx.pdf.text(line, ctx.sidebarPad, y);
+    for (const line of tsSplitText(ctx, label, innerW, langStyle)) {
+      tsDrawText(ctx, line, ctx.sidebarPad, y, langStyle);
       y += 3.2;
     }
     y += 0.6;
@@ -303,17 +384,17 @@ export function tsDrawPageOneSidebar(ctx: TechSidebarDirectPdfContext, photoData
     sy += TS_PHOTO_MM + 6;
   }
 
-  tsSetTextStyle(ctx, { size: 12.5, color: TS_SIDEBAR_TEXT, fontStyle: 'bold', lineHeight: 4.2 });
-  for (const line of tsSplitText(ctx, ctx.cv.personal.fullName || 'Your Name', innerW)) {
-    ctx.pdf.text(line, pad, sy);
+  const nameStyle: TechSidebarTextStyle = { size: 12.5, color: TS_SIDEBAR_TEXT, fontStyle: 'bold', lineHeight: 4.2 };
+  for (const line of tsSplitText(ctx, ctx.cv.personal.fullName || 'Your Name', innerW, nameStyle)) {
+    tsDrawText(ctx, line, pad, sy, nameStyle);
     sy += 4.0;
   }
 
   if (ctx.cv.personal.jobTitle) {
     sy += 1;
-    tsSetTextStyle(ctx, { size: 8.4, color: TS_BLUE_LIGHT, fontStyle: 'bold', lineHeight: 3.5 });
-    for (const line of tsSplitText(ctx, ctx.cv.personal.jobTitle, innerW)) {
-      ctx.pdf.text(line, pad, sy);
+    const titleStyle: TechSidebarTextStyle = { size: 8.4, color: TS_BLUE_LIGHT, fontStyle: 'bold', lineHeight: 3.5 };
+    for (const line of tsSplitText(ctx, ctx.cv.personal.jobTitle, innerW, titleStyle)) {
+      tsDrawText(ctx, line, pad, sy, titleStyle);
       sy += 3.4;
     }
   }
@@ -327,10 +408,10 @@ export function tsDrawPageOneSidebar(ctx: TechSidebarDirectPdfContext, photoData
 
   if (contacts.length > 0) {
     sy += 4;
-    tsSetTextStyle(ctx, { size: 7.2, color: TS_SIDEBAR_MUTED, lineHeight: 3.2 });
+    const contactStyle: TechSidebarTextStyle = { size: 7.2, color: TS_SIDEBAR_MUTED, lineHeight: 3.2 };
     for (const contact of contacts) {
-      for (const line of tsSplitText(ctx, contact, innerW)) {
-        ctx.pdf.text(line, pad, sy);
+      for (const line of tsSplitText(ctx, contact, innerW, contactStyle)) {
+        tsDrawText(ctx, line, pad, sy, contactStyle);
         sy += 3.1;
       }
     }
@@ -351,10 +432,10 @@ export function tsDrawPageOneSidebar(ctx: TechSidebarDirectPdfContext, photoData
   if (ctx.cv.certifications.length > 0) {
     sy += 4;
     sy = tsSidebarSectionHeadingY(ctx, ctx.labels.certifications, sy);
-    tsSetTextStyle(ctx, { size: 7.2, color: TS_SIDEBAR_TEXT, lineHeight: 3.2 });
+    const certStyle: TechSidebarTextStyle = { size: 7.2, color: TS_SIDEBAR_TEXT, lineHeight: 3.2 };
     for (const cert of ctx.cv.certifications) {
-      for (const line of tsSplitText(ctx, cert, innerW)) {
-        ctx.pdf.text(line, pad, sy);
+      for (const line of tsSplitText(ctx, cert, innerW, certStyle)) {
+        tsDrawText(ctx, line, pad, sy, certStyle);
         sy += 3.1;
       }
     }
@@ -434,7 +515,8 @@ function tsMeasurePartHeight(part: TsBulletPart): number {
 
 function tsMeasureExperienceHeaderHeight(ctx: TechSidebarDirectPdfContext, entry: CVData['experience'][number]): number {
   const dateReserve = 30;
-  const titleLines = tsSplitText(ctx, entry.position, ctx.contentW - dateReserve);
+  const titleStyle: TechSidebarTextStyle = { size: 9.6, color: TS_TEXT, fontStyle: 'bold', lineHeight: 4.0 };
+  const titleLines = tsSplitText(ctx, entry.position, ctx.contentW - dateReserve, titleStyle);
   let h = Math.max(4.0, titleLines.length * 4.0);
   if (entry.company) h += 3.4;
   return h + 1.0;
@@ -462,21 +544,23 @@ function tsDrawExperienceEntryHeader(ctx: TechSidebarDirectPdfContext, entry: CV
   tsEnsureSpace(ctx, headerH);
   const startY = ctx.y;
 
-  tsSetTextStyle(ctx, { size: 9.6, color: TS_TEXT, fontStyle: 'bold', lineHeight: 4.0 });
-  for (const line of tsSplitText(ctx, entry.position, ctx.contentW - dateReserve)) {
-    ctx.pdf.text(line, ctx.contentX, ctx.y);
+  const titleStyle: TechSidebarTextStyle = { size: 9.6, color: TS_TEXT, fontStyle: 'bold', lineHeight: 4.0 };
+  for (const line of tsSplitText(ctx, entry.position, ctx.contentW - dateReserve, titleStyle)) {
+    tsDrawText(ctx, line, ctx.contentX, ctx.y, titleStyle);
     ctx.y += 4.0;
   }
 
   if (dateText) {
-    tsSetTextStyle(ctx, { size: 7.4, color: TS_MUTED, lineHeight: 3.2 });
-    const dateX = ctx.pageWidth - ctx.mainPad - ctx.pdf.getTextWidth(dateText);
-    ctx.pdf.text(dateText, dateX, startY + 0.5);
+    const dateStyle: TechSidebarTextStyle = { size: 7.4, color: TS_MUTED, lineHeight: 3.2 };
+    const dateW = pdfI18nCtxTextWidth(ctx, dateText, { size: dateStyle.size, bold: false });
+    const dateX = ctx.pageWidth - ctx.mainPad - dateW;
+    tsDrawText(ctx, dateText, dateX, startY + 0.5, dateStyle, { align: 'right' });
   }
 
   if (entry.company) {
-    tsSetTextStyle(ctx, { size: 8.0, color: TS_BLUE, fontStyle: 'bold', lineHeight: 3.4 });
-    ctx.pdf.text(entry.company, ctx.contentX, ctx.y);
+    const companyStyle: TechSidebarTextStyle = { size: 8.0, color: TS_BLUE, fontStyle: 'bold', lineHeight: 3.4 };
+    tsApplyStyle(ctx, companyStyle, entry.company);
+    tsDrawText(ctx, entry.company, ctx.contentX, ctx.y, companyStyle);
     ctx.y += 3.4;
   }
   ctx.y += 1.0;
@@ -484,8 +568,10 @@ function tsDrawExperienceEntryHeader(ctx: TechSidebarDirectPdfContext, entry: CV
 
 function tsDrawContinuationHeader(ctx: TechSidebarDirectPdfContext, entry: CVData['experience'][number]): void {
   tsEnsureSpace(ctx, 4.5);
-  tsSetTextStyle(ctx, { size: 7.8, color: TS_TEXT, fontStyle: 'italic', lineHeight: 3.8 });
-  ctx.pdf.text(`${entry.position} (continued)`, ctx.contentX, ctx.y);
+  const contStyle: TechSidebarTextStyle = { size: 7.8, color: TS_TEXT, fontStyle: 'italic', lineHeight: 3.8 };
+  const contText = `${entry.position} (continued)`;
+  tsApplyStyle(ctx, contStyle, contText);
+  tsDrawText(ctx, contText, ctx.contentX, ctx.y, contStyle);
   ctx.y += 4.5;
 }
 
@@ -506,17 +592,19 @@ function tsDrawBulletAtomic(
   }
 
   part.lines.forEach((line, index) => {
+    const bulletMarkerStyle: TechSidebarTextStyle = { size: 8.0, color: TS_BLUE, lineHeight: TS_BULLET_LINE_H };
+    const bulletBodyStyle: TechSidebarTextStyle = { size: 8.0, color: TS_BODY, lineHeight: TS_BULLET_LINE_H };
     if (part.isBullet && index === 0) {
-      tsSetTextStyle(ctx, { size: 8.0, color: TS_BLUE, lineHeight: TS_BULLET_LINE_H });
-      ctx.pdf.text('-', ctx.contentX, ctx.y);
-      tsSetTextStyle(ctx, { size: 8.0, color: TS_BODY, lineHeight: TS_BULLET_LINE_H });
-      ctx.pdf.text(line, ctx.contentX + 4, ctx.y);
+      tsApplyStyle(ctx, bulletMarkerStyle, '-');
+      tsDrawText(ctx, '-', ctx.contentX, ctx.y, bulletMarkerStyle);
+      tsApplyStyle(ctx, bulletBodyStyle, line);
+      tsDrawText(ctx, line, ctx.contentX + 4, ctx.y, bulletBodyStyle);
     } else if (part.isBullet) {
-      tsSetTextStyle(ctx, { size: 8.0, color: TS_BODY, lineHeight: TS_BULLET_LINE_H });
-      ctx.pdf.text(line, ctx.contentX + 4, ctx.y);
+      tsApplyStyle(ctx, bulletBodyStyle, line);
+      tsDrawText(ctx, line, ctx.contentX + 4, ctx.y, bulletBodyStyle);
     } else {
-      tsSetTextStyle(ctx, { size: 8.0, color: TS_BODY, lineHeight: TS_BULLET_LINE_H });
-      ctx.pdf.text(line, ctx.contentX, ctx.y);
+      tsApplyStyle(ctx, bulletBodyStyle, line);
+      tsDrawText(ctx, line, ctx.contentX, ctx.y, bulletBodyStyle);
     }
     ctx.y += TS_BULLET_LINE_H;
   });
@@ -525,17 +613,19 @@ function tsDrawBulletAtomic(
 function tsDrawBulletAtomicNoBreak(ctx: TechSidebarDirectPdfContext, part: TsBulletPart): void {
   if (!part.lines.length) return;
   part.lines.forEach((line, index) => {
+    const bulletMarkerStyle: TechSidebarTextStyle = { size: 8.0, color: TS_BLUE, lineHeight: TS_BULLET_LINE_H };
+    const bulletBodyStyle: TechSidebarTextStyle = { size: 8.0, color: TS_BODY, lineHeight: TS_BULLET_LINE_H };
     if (part.isBullet && index === 0) {
-      tsSetTextStyle(ctx, { size: 8.0, color: TS_BLUE, lineHeight: TS_BULLET_LINE_H });
-      ctx.pdf.text('-', ctx.contentX, ctx.y);
-      tsSetTextStyle(ctx, { size: 8.0, color: TS_BODY, lineHeight: TS_BULLET_LINE_H });
-      ctx.pdf.text(line, ctx.contentX + 4, ctx.y);
+      tsApplyStyle(ctx, bulletMarkerStyle, '-');
+      tsDrawText(ctx, '-', ctx.contentX, ctx.y, bulletMarkerStyle);
+      tsApplyStyle(ctx, bulletBodyStyle, line);
+      tsDrawText(ctx, line, ctx.contentX + 4, ctx.y, bulletBodyStyle);
     } else if (part.isBullet) {
-      tsSetTextStyle(ctx, { size: 8.0, color: TS_BODY, lineHeight: TS_BULLET_LINE_H });
-      ctx.pdf.text(line, ctx.contentX + 4, ctx.y);
+      tsApplyStyle(ctx, bulletBodyStyle, line);
+      tsDrawText(ctx, line, ctx.contentX + 4, ctx.y, bulletBodyStyle);
     } else {
-      tsSetTextStyle(ctx, { size: 8.0, color: TS_BODY, lineHeight: TS_BULLET_LINE_H });
-      ctx.pdf.text(line, ctx.contentX, ctx.y);
+      tsApplyStyle(ctx, bulletBodyStyle, line);
+      tsDrawText(ctx, line, ctx.contentX, ctx.y, bulletBodyStyle);
     }
     ctx.y += TS_BULLET_LINE_H;
   });
@@ -585,7 +675,8 @@ function tsDrawExperienceSection(ctx: TechSidebarDirectPdfContext): void {
 }
 
 function tsEducationEntryHeight(ctx: TechSidebarDirectPdfContext, edu: CVData['education'][number]): number {
-  const degreeH = Math.max(4.0, tsSplitText(ctx, edu.degree, ctx.contentW - 30).length * 4.0);
+  const degreeStyle: TechSidebarTextStyle = { size: 9.4, color: TS_TEXT, fontStyle: 'bold', lineHeight: 4.0 };
+  const degreeH = Math.max(4.0, tsSplitText(ctx, edu.degree, ctx.contentW - 30, degreeStyle).length * 4.0);
   const schoolH = edu.school ? 3.4 : 0;
   const descH = edu.description ? tsSplitText(ctx, edu.description).length * 3.7 + 1 : 0;
   return degreeH + schoolH + descH + 2.5;
@@ -603,19 +694,22 @@ function tsDrawEducationSection(ctx: TechSidebarDirectPdfContext): void {
     const dateText = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
     const startY = ctx.y;
 
-    tsSetTextStyle(ctx, { size: 9.4, color: TS_TEXT, fontStyle: 'bold', lineHeight: 4.0 });
-    ctx.pdf.text(edu.degree, ctx.contentX, ctx.y);
+    const degreeStyle: TechSidebarTextStyle = { size: 9.4, color: TS_TEXT, fontStyle: 'bold', lineHeight: 4.0 };
+    tsApplyStyle(ctx, degreeStyle, edu.degree);
+    tsDrawText(ctx, edu.degree, ctx.contentX, ctx.y, degreeStyle);
     ctx.y += 4.0;
 
     if (dateText) {
-      tsSetTextStyle(ctx, { size: 7.4, color: TS_MUTED, lineHeight: 3.2 });
-      const dateX = ctx.pageWidth - ctx.mainPad - ctx.pdf.getTextWidth(dateText);
-      ctx.pdf.text(dateText, dateX, startY + 0.5);
+      const dateStyle: TechSidebarTextStyle = { size: 7.4, color: TS_MUTED, lineHeight: 3.2 };
+      const dateW = pdfI18nCtxTextWidth(ctx, dateText, { size: dateStyle.size, bold: false });
+      const dateX = ctx.pageWidth - ctx.mainPad - dateW;
+      tsDrawText(ctx, dateText, dateX, startY + 0.5, dateStyle, { align: 'right' });
     }
 
     if (edu.school) {
-      tsSetTextStyle(ctx, { size: 7.6, color: TS_MUTED, lineHeight: 3.4 });
-      ctx.pdf.text(edu.school, ctx.contentX, ctx.y);
+      const schoolStyle: TechSidebarTextStyle = { size: 7.6, color: TS_MUTED, lineHeight: 3.4 };
+      tsApplyStyle(ctx, schoolStyle, edu.school);
+      tsDrawText(ctx, edu.school, ctx.contentX, ctx.y, schoolStyle);
       ctx.y += 3.4;
     }
 
@@ -634,7 +728,8 @@ export async function buildTechSidebarPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const ctx = tsCreateContext(pdf, cv, locale);
+  const i18n = await registerPdfI18nFonts(pdf);
+  const ctx = tsCreateContext(pdf, cv, locale, i18n);
 
   const maskedPhoto = options.photoDataUrl
     ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)

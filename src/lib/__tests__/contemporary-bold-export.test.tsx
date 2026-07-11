@@ -251,8 +251,18 @@ beforeEach(() => {
     configurable: true,
   });
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    if (typeof url === 'string' && url.includes('NotoSans')) {
-      return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer } as Response;
+    if (typeof url === 'string' && url.startsWith('/fonts/')) {
+      const fileName = url.split('/').pop() ?? '';
+      const fontPath = path.join(process.cwd(), 'public', 'fonts', fileName);
+      if (fs.existsSync(fontPath)) {
+        const buf = fs.readFileSync(fontPath);
+        if (buf.byteLength > 1024) {
+          return {
+            ok: true,
+            arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+          } as Response;
+        }
+      }
     }
     return { ok: false } as Response;
   }));
@@ -402,7 +412,12 @@ describe('Contemporary Bold PDF rebuild v2', () => {
   test('T19: cbSafeMaxWidth enforces right-margin boundary', async () => {
     const { jsPDF } = await import('jspdf');
     const pdf = new jsPDF() as unknown as MockPdf;
-    const ctx = cbCreateContext(pdf as never, cv(), 'en', false);
+    const ctx = cbCreateContext(pdf as never, cv(), 'en', {
+      latinReady: false,
+      arabicReady: false,
+      devanagariReady: false,
+      japaneseReady: false,
+    });
     // At contentX (14mm), safe max width = 210 - 14 - 14 = 182mm
     const w = cbSafeMaxWidth(ctx, ctx.contentX);
     expect(w).toBe(182);

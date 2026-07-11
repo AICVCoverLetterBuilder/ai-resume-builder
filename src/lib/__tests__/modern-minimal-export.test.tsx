@@ -834,15 +834,14 @@ describe('Modern Minimal preview/export parity', () => {
     );
   });
 
-  test('Modern Minimal renderer registers Noto Sans via addFileToVFS + addFont, not built-in Helvetica/Times for Serbian text', () => {
+  test('Modern Minimal renderer registers multilingual fonts via shared pdf-i18n-text layer', () => {
     const rendererSource = fs.readFileSync(path.resolve('src/lib/modern-minimal-pdf-renderer.ts'), 'utf8');
     expect(rendererSource).toContain('mmRegisterUnicodeFonts');
-    expect(rendererSource).toContain('addFileToVFS');
-    expect(rendererSource).toContain("addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal')");
-    expect(rendererSource).toContain("addFont('NotoSans-Bold.ttf', 'NotoSans', 'bold')");
-    expect(rendererSource).toContain("'/fonts/NotoSans-Regular.ttf'");
-    expect(rendererSource).toContain("'/fonts/NotoSans-Bold.ttf'");
-    expect(rendererSource).toContain('await mmRegisterUnicodeFonts(pdf)');
+    expect(rendererSource).toContain('registerPdfI18nFonts');
+    expect(rendererSource).toContain('pdfI18nCtxDraw');
+    expect(rendererSource).toContain('pdfI18nCtxSplit');
+    expect(rendererSource).toContain('shouldApplyLatinPdfSentenceFixes');
+    expect(rendererSource).toContain('const i18n = await registerPdfI18nFonts(pdf)');
   });
 
   test('Serbian Unicode passes through renderer text calls before PDF encoding', async () => {

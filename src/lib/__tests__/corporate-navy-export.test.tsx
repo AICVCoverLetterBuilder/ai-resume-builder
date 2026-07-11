@@ -514,7 +514,12 @@ describe('Corporate Navy export', () => {
     const { cnCreateContext, cnDrawWrappedBullet, cnBulletTextLayout } = await import('@/lib/corporate-navy-pdf-renderer');
     const { jsPDF } = await import('jspdf');
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const ctx = cnCreateContext(pdf, cv({ personal: { photoEnabled: false } }), 'en');
+    const ctx = cnCreateContext(pdf, cv({ personal: { photoEnabled: false } }), 'en', {
+      latinReady: true,
+      arabicReady: false,
+      devanagariReady: false,
+      japaneseReady: false,
+    });
     const layout = cnBulletTextLayout(ctx, ctx.contentW);
     const lines = [
       'Built and maintained RESTful APIs using Node.js and Express, supporting core product features used across the',

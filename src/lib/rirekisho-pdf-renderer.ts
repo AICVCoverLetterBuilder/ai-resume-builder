@@ -8,6 +8,16 @@
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { type Locale } from './i18n/translations';
+import {
+  isRtlLocale,
+  pdfI18nCtxApplyStyle,
+  pdfI18nCtxDraw,
+  pdfI18nCtxSplit,
+  pdfI18nCtxTextWidth,
+  registerPdfI18nFonts,
+  shouldApplyLatinPdfSentenceFixes,
+  type PdfI18nRegistry,
+} from './pdf-i18n-text';
 import { type CVData } from './types';
 
 const A4_W = 210;
@@ -19,6 +29,7 @@ export type RirekishoDirectPdfContext = {
   pdf: Pdf;
   cv: CVData;
   locale: Locale;
+  i18n: PdfI18nRegistry;
   contentX: number;
   contentW: number;
   marginTop: number;
@@ -26,7 +37,6 @@ export type RirekishoDirectPdfContext = {
   bottomSafeY: number;
   y: number;
   pageIndex: number;
-  jpFontReady: boolean;
 };
 
 type Style = {
@@ -84,15 +94,16 @@ const L = {
   photoPh: '写真\n3×4cm',
 } as const;
 
-let fontPromise: Promise<boolean> | null = null;
-
 /**
  * PDF-only text cleanup. Does not mutate saved CV data.
  * Fixes glued sentence boundaries while preserving Node.js / REST / CI/CD.
  */
-export function rkNormalizePdfText(text: string): string {
+export function rkNormalizePdfText(text: string, locale: Locale = 'en'): string {
   if (!text) return '';
   let out = text.replace(/\r\n/g, '\n');
+  if (!shouldApplyLatinPdfSentenceFixes(locale, text)) {
+    return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+  }
 
   // Protect common technical tokens from the sentence splitter.
   const protect: Array<{ token: string; stub: string }> = [
@@ -128,45 +139,37 @@ export function rkNormalizePdfText(text: string): string {
   return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
-function toB64(buf: ArrayBuffer): string {
-  const b = new Uint8Array(buf);
-  let s = '';
-  for (let i = 0; i < b.length; i += 1) s += String.fromCharCode(b[i]!);
-  return btoa(s);
+function applyStyle(ctx: RirekishoDirectPdfContext, s: Style, text?: string): void {
+  pdfI18nCtxApplyStyle(ctx, { size: s.size, color: s.color, bold: s.bold }, text);
 }
 
-async function loadJpFonts(pdf: Pdf): Promise<boolean> {
-  if (fontPromise) return fontPromise;
-  fontPromise = (async () => {
-    try {
-      const [reg, bold] = await Promise.all([
-        fetch('/fonts/NotoSansJP-Regular.ttf').then((r) => (r.ok ? r.arrayBuffer() : null)),
-        fetch('/fonts/NotoSansJP-Bold.ttf').then((r) => (r.ok ? r.arrayBuffer() : null)),
-      ]);
-      if (!reg || !bold) return false;
-      pdf.addFileToVFS('NotoSansJP-Regular.ttf', toB64(reg));
-      pdf.addFileToVFS('NotoSansJP-Bold.ttf', toB64(bold));
-      pdf.addFont('NotoSansJP-Regular.ttf', 'NotoSansJP', 'normal');
-      pdf.addFont('NotoSansJP-Bold.ttf', 'NotoSansJP', 'bold');
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-  return fontPromise;
+function drawText(
+  ctx: RirekishoDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: Style,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.bold,
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+  });
 }
 
-function setStyle(ctx: RirekishoDirectPdfContext, s: Style): void {
-  ctx.pdf.setFont(ctx.jpFontReady ? 'NotoSansJP' : 'helvetica', s.bold ? 'bold' : 'normal');
-  ctx.pdf.setFontSize(s.size);
-  ctx.pdf.setTextColor(s.color[0], s.color[1], s.color[2]);
-}
-
-function wrap(ctx: RirekishoDirectPdfContext, text: string, maxW: number): string[] {
-  const t = rkNormalizePdfText(text);
+function wrap(
+  ctx: RirekishoDirectPdfContext,
+  text: string,
+  maxW: number,
+  style?: Pick<Style, 'size' | 'bold'>,
+): string[] {
+  const t = rkNormalizePdfText(text, ctx.locale);
   if (!t) return [];
-  const r = ctx.pdf.splitTextToSize(t, maxW);
-  return Array.isArray(r) ? r.map(String) : [String(r)];
+  const wrapStyle = style ?? { size: 8.6, bold: false };
+  return pdfI18nCtxSplit(ctx, t, maxW, { size: wrapStyle.size, bold: wrapStyle.bold });
 }
 
 export function rkMeasureWrappedLines(ctx: RirekishoDirectPdfContext, text: string, maxW: number): string[] {
@@ -178,12 +181,12 @@ function dateRange(start?: string, end?: string, present?: boolean): string {
   return `${start ?? ''}${start ? '〜' : ''}${present ? L.present : end ?? ''}`;
 }
 
-export function rkSplitIntoCleanBullets(raw: string): string[] {
+export function rkSplitIntoCleanBullets(raw: string, locale: Locale = 'ja'): string[] {
   return raw
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => rkNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\u30fb|\d+\.)\s*/, '')))
+    .map((l) => rkNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\u30fb|\d+\.)\s*/, ''), locale))
     .filter(Boolean);
 }
 
@@ -195,7 +198,7 @@ export function rkCreateContext(
   pdf: Pdf,
   cv: CVData,
   locale: Locale,
-  jp: boolean,
+  i18n: PdfI18nRegistry,
 ): RirekishoDirectPdfContext {
   const ml = 12;
   const mr = 12;
@@ -205,6 +208,7 @@ export function rkCreateContext(
     pdf,
     cv,
     locale,
+    i18n,
     contentX: ml,
     contentW: A4_W - ml - mr,
     marginTop: mt,
@@ -212,7 +216,6 @@ export function rkCreateContext(
     bottomSafeY: A4_H - mb,
     y: mt,
     pageIndex: 0,
-    jpFontReady: jp,
   };
 }
 
@@ -257,10 +260,10 @@ function drawTextLines(
   startY: number,
   s: Style,
 ): number {
-  setStyle(ctx, s);
   let cy = startY;
   for (const line of lines) {
-    ctx.pdf.text(line, x, cy + s.size * 0.32);
+    applyStyle(ctx, s, line);
+    drawText(ctx, line, x, cy + s.size * 0.32, s);
     cy += s.lineH;
   }
   return cy;
@@ -272,13 +275,14 @@ export function rkMeasureBlockHeight(lineCount: number, lineH: number, pad = 0):
 }
 
 export function rkDrawTitle(ctx: RirekishoDirectPdfContext): void {
-  setStyle(ctx, { size: 17, color: C_TEXT, bold: true, lineH: 6.5 });
-  const tw = ctx.pdf.getTextWidth(L.title);
-  ctx.pdf.text(L.title, ctx.contentX + (ctx.contentW - tw) / 2, ctx.y + 4.5);
+  const titleStyle: Style = { size: 17, color: C_TEXT, bold: true, lineH: 6.5 };
+  const titleX = ctx.contentX + ctx.contentW / 2;
+  applyStyle(ctx, titleStyle, L.title);
+  drawText(ctx, L.title, titleX, ctx.y + 4.5, titleStyle, { align: 'center' });
   ctx.y += 7;
-  setStyle(ctx, { size: 7.5, color: C_MUTED, lineH: 3 });
-  const sw = ctx.pdf.getTextWidth(L.sub);
-  ctx.pdf.text(L.sub, ctx.contentX + (ctx.contentW - sw) / 2, ctx.y);
+  const subStyle: Style = { size: 7.5, color: C_MUTED, lineH: 3 };
+  applyStyle(ctx, subStyle, L.sub);
+  drawText(ctx, L.sub, titleX, ctx.y, subStyle, { align: 'center' });
   ctx.y += 3.8;
   ctx.pdf.setDrawColor(C_TEXT[0], C_TEXT[1], C_TEXT[2]);
   ctx.pdf.setLineWidth(0.45);
@@ -298,11 +302,13 @@ export function rkDrawPhoto(ctx: RirekishoDirectPdfContext, url: string | null, 
     }
   }
   fill(ctx, x, topY, PHOTO_W, PHOTO_H, C_SKILL);
-  setStyle(ctx, { size: 7, color: [156, 163, 175], lineH: 3 });
+  const phStyle: Style = { size: 7, color: [156, 163, 175], lineH: 3 };
   const ph = L.photoPh.split('\n');
   let py = topY + PHOTO_H / 2 - (ph.length * 3) / 2 + 1.5;
+  const centerX = x + PHOTO_W / 2;
   for (const ln of ph) {
-    ctx.pdf.text(ln, x + (PHOTO_W - ctx.pdf.getTextWidth(ln)) / 2, py);
+    applyStyle(ctx, phStyle, ln);
+    drawText(ctx, ln, centerX, py, phStyle, { align: 'center' });
     py += 3;
   }
 }
@@ -325,7 +331,7 @@ function personalRow(
     const s: Style = c.label
       ? lab
       : { size: c.sz ?? 8.6, color: C_TEXT, bold: c.bold, lineH: LINE };
-    const lines = wrap(ctx, c.t, w - PAD_H * 2);
+    const lines = wrap(ctx, c.t, w - PAD_H * 2, s);
     const h = Math.max(PAD_V * 2 + s.lineH, PAD_V * 2 + lines.length * s.lineH);
     maxH = Math.max(maxH, h);
     layouts.push({ x: cx, w, lines, s });
@@ -335,10 +341,10 @@ function personalRow(
     const l = layouts[i]!;
     if (cells[i]?.label) fill(ctx, l.x, ty, l.w, maxH, C_HDR);
     border(ctx, l.x, ty, l.w, maxH);
-    setStyle(ctx, l.s);
     let cy = ty + PAD_V + l.s.size * 0.32;
     for (const line of l.lines) {
-      ctx.pdf.text(line, l.x + PAD_H, cy);
+      applyStyle(ctx, l.s, line);
+      drawText(ctx, line, l.x + PAD_H, cy, l.s);
       cy += l.s.lineH;
     }
   }
@@ -419,8 +425,8 @@ function resolveEmailCellFontSize(
   const preferred = 7.8;
   const min = 6.4;
   for (let sz = preferred; sz >= min - 0.01; sz -= 0.35) {
-    setStyle(ctx, { size: sz, color: C_TEXT, lineH: LINE });
-    const lines = wrap(ctx, email, maxW);
+    const probeStyle: Style = { size: sz, color: C_TEXT, lineH: LINE };
+    const lines = wrap(ctx, email, maxW, probeStyle);
     if (lines.length <= 1) return Math.round(sz * 100) / 100;
   }
   return min;
@@ -430,8 +436,9 @@ export function rkDrawSectionBar(ctx: RirekishoDirectPdfContext, label: string):
   rkEnsureSpace(ctx, BAR_H + GAP_AFTER_BAR);
   const y = ctx.y;
   fill(ctx, ctx.contentX, y, ctx.contentW, BAR_H, C_BAR);
-  setStyle(ctx, { size: 9.5, color: [255, 255, 255], bold: true, lineH: BAR_H });
-  ctx.pdf.text(label, ctx.contentX + 2.2, y + BAR_H / 2 + 1.05);
+  const barStyle: Style = { size: 9.5, color: [255, 255, 255], bold: true, lineH: BAR_H };
+  applyStyle(ctx, barStyle, label);
+  drawText(ctx, label, ctx.contentX + 2.2, y + BAR_H / 2 + 1.05, barStyle);
   ctx.y = y + BAR_H + GAP_AFTER_BAR;
 }
 
@@ -446,9 +453,11 @@ function drawCompactTableHeader(ctx: RirekishoDirectPdfContext, a: string, b: st
   fill(ctx, ctx.contentX + pw, y, dw, HDR_H, C_HDR);
   border(ctx, ctx.contentX, y, pw, HDR_H);
   border(ctx, ctx.contentX + pw, y, dw, HDR_H);
-  setStyle(ctx, { size: 8, color: C_LABEL, bold: true, lineH: 3 });
-  ctx.pdf.text(a, ctx.contentX + PAD_H, y + HDR_H / 2 + 0.85);
-  ctx.pdf.text(b, ctx.contentX + pw + PAD_H, y + HDR_H / 2 + 0.85);
+  const hdrStyle: Style = { size: 8, color: C_LABEL, bold: true, lineH: 3 };
+  applyStyle(ctx, hdrStyle, a);
+  drawText(ctx, a, ctx.contentX + PAD_H, y + HDR_H / 2 + 0.85, hdrStyle);
+  applyStyle(ctx, hdrStyle, b);
+  drawText(ctx, b, ctx.contentX + pw + PAD_H, y + HDR_H / 2 + 0.85, hdrStyle);
   ctx.y += HDR_H;
   return { pw, dw };
 }
@@ -460,8 +469,8 @@ function rkDrawCompactEducationSection(ctx: RirekishoDirectPdfContext): void {
   const ds: Style = { size: 8.5, color: C_TEXT, lineH: LINE };
   const ps: Style = { size: 8, color: C_MUTED, lineH: LINE };
   const first = ctx.cv.education[0]!;
-  const firstDetail = rkNormalizePdfText([first.school, first.degree].filter(Boolean).join('\u3000'));
-  const firstLines = wrap(ctx, firstDetail, dw - PAD_H * 2);
+  const firstDetail = rkNormalizePdfText([first.school, first.degree].filter(Boolean).join('\u3000'), ctx.locale);
+  const firstLines = wrap(ctx, firstDetail, dw - PAD_H * 2, ds);
   const firstH = Math.max(
     PAD_V * 2 + firstLines.length * ds.lineH,
     PAD_V * 2 + ps.lineH,
@@ -471,10 +480,10 @@ function rkDrawCompactEducationSection(ctx: RirekishoDirectPdfContext): void {
   drawCompactTableHeader(ctx, L.period, L.eduCol);
 
   for (const edu of ctx.cv.education) {
-    let detail = rkNormalizePdfText([edu.school, edu.degree].filter(Boolean).join('\u3000'));
-    if (edu.description) detail = `${detail}\n${rkNormalizePdfText(edu.description)}`;
-    const dLines = detail.split('\n').flatMap((p) => wrap(ctx, p, dw - PAD_H * 2));
-    const pLines = wrap(ctx, dateRange(edu.startDate, edu.endDate), pw - PAD_H * 2);
+    let detail = rkNormalizePdfText([edu.school, edu.degree].filter(Boolean).join('\u3000'), ctx.locale);
+    if (edu.description) detail = `${detail}\n${rkNormalizePdfText(edu.description, ctx.locale)}`;
+    const dLines = detail.split('\n').flatMap((p) => wrap(ctx, p, dw - PAD_H * 2, ds));
+    const pLines = wrap(ctx, dateRange(edu.startDate, edu.endDate), pw - PAD_H * 2, ps);
     const rh = Math.max(
       PAD_V * 2 + dLines.length * ds.lineH,
       PAD_V * 2 + pLines.length * ps.lineH,
@@ -483,16 +492,16 @@ function rkDrawCompactEducationSection(ctx: RirekishoDirectPdfContext): void {
     const y = ctx.y;
     border(ctx, ctx.contentX, y, pw, rh);
     border(ctx, ctx.contentX + pw, y, dw, rh);
-    setStyle(ctx, ps);
     let cy = y + PAD_V + ps.size * 0.32;
     for (const ln of pLines) {
-      ctx.pdf.text(ln, ctx.contentX + PAD_H, cy);
+      applyStyle(ctx, ps, ln);
+      drawText(ctx, ln, ctx.contentX + PAD_H, cy, ps);
       cy += ps.lineH;
     }
-    setStyle(ctx, ds);
     cy = y + PAD_V + ds.size * 0.32;
     for (const ln of dLines) {
-      ctx.pdf.text(ln, ctx.contentX + pw + PAD_H, cy);
+      applyStyle(ctx, ds, ln);
+      drawText(ctx, ln, ctx.contentX + pw + PAD_H, cy, ds);
       cy += ds.lineH;
     }
     ctx.y = y + rh;
@@ -501,7 +510,7 @@ function rkDrawCompactEducationSection(ctx: RirekishoDirectPdfContext): void {
 }
 
 function buildBulletUnits(ctx: RirekishoDirectPdfContext, raw: string, maxW: number): BulletUnit[] {
-  return rkSplitIntoCleanBullets(raw).map((b) => ({
+  return rkSplitIntoCleanBullets(raw, ctx.locale).map((b) => ({
     lines: wrap(ctx, `\u30fb${b}`, maxW),
   }));
 }
@@ -524,15 +533,17 @@ function rkDrawWorkContinuationHeader(
   entry: CVData['experience'][number],
 ): void {
   rkEnsureSpace(ctx, 7);
-  setStyle(ctx, { size: 8, color: C_MUTED, bold: true, lineH: 3.1 });
-  ctx.pdf.text(L.expCont, ctx.contentX, ctx.y + 2);
+  const contStyle: Style = { size: 8, color: C_MUTED, bold: true, lineH: 3.1 };
+  applyStyle(ctx, contStyle, L.expCont);
+  drawText(ctx, L.expCont, ctx.contentX, ctx.y + 2, contStyle);
   ctx.y += 3.6;
   const role = entry.position || entry.company || '';
   if (role) {
-    setStyle(ctx, { size: 8.2, color: C_TEXT, bold: true, lineH: 3.1 });
-    const label = `${rkNormalizePdfText(role)} (continued)`;
-    for (const ln of wrap(ctx, label, ctx.contentW)) {
-      ctx.pdf.text(ln, ctx.contentX, ctx.y + 2);
+    const roleStyle: Style = { size: 8.2, color: C_TEXT, bold: true, lineH: 3.1 };
+    const label = `${rkNormalizePdfText(role, ctx.locale)} (continued)`;
+    for (const ln of wrap(ctx, label, ctx.contentW, roleStyle)) {
+      applyStyle(ctx, roleStyle, ln);
+      drawText(ctx, ln, ctx.contentX, ctx.y + 2, roleStyle);
       ctx.y += 3.2;
     }
   }
@@ -548,9 +559,9 @@ function rkDrawWorkLeadBlock(
   const ps: Style = { size: 8, color: C_MUTED, lineH: LINE };
   const cs: Style = { size: 8.6, color: C_TEXT, bold: true, lineH: LINE };
   const rs: Style = { size: 8.3, color: C_LABEL, lineH: LINE };
-  const periodLines = wrap(ctx, dateRange(entry.startDate, entry.endDate, entry.isPresent), pw - PAD_H * 2);
-  const companyLines = entry.company ? wrap(ctx, entry.company, dw - PAD_H * 2) : [];
-  const roleLines = entry.position ? wrap(ctx, entry.position, dw - PAD_H * 2) : [];
+  const periodLines = wrap(ctx, dateRange(entry.startDate, entry.endDate, entry.isPresent), pw - PAD_H * 2, ps);
+  const companyLines = entry.company ? wrap(ctx, entry.company, dw - PAD_H * 2, cs) : [];
+  const roleLines = entry.position ? wrap(ctx, entry.position, dw - PAD_H * 2, rs) : [];
   const detailH = PAD_V * 2 + (companyLines.length + roleLines.length) * LINE;
   const periodH = PAD_V * 2 + Math.max(1, periodLines.length) * LINE;
   const rh = Math.max(detailH, periodH);
@@ -560,22 +571,22 @@ function rkDrawWorkLeadBlock(
   border(ctx, ctx.contentX, y, pw, rh);
   border(ctx, ctx.contentX + pw, y, dw, rh);
 
-  setStyle(ctx, ps);
   let cy = y + PAD_V + ps.size * 0.32;
   for (const ln of periodLines) {
-    ctx.pdf.text(ln, ctx.contentX + PAD_H, cy);
+    applyStyle(ctx, ps, ln);
+    drawText(ctx, ln, ctx.contentX + PAD_H, cy, ps);
     cy += ps.lineH;
   }
 
   cy = y + PAD_V + cs.size * 0.32;
-  setStyle(ctx, cs);
   for (const ln of companyLines) {
-    ctx.pdf.text(ln, ctx.contentX + pw + PAD_H, cy);
+    applyStyle(ctx, cs, ln);
+    drawText(ctx, ln, ctx.contentX + pw + PAD_H, cy, cs);
     cy += cs.lineH;
   }
-  setStyle(ctx, rs);
   for (const ln of roleLines) {
-    ctx.pdf.text(ln, ctx.contentX + pw + PAD_H, cy);
+    applyStyle(ctx, rs, ln);
+    drawText(ctx, ln, ctx.contentX + pw + PAD_H, cy, rs);
     cy += rs.lineH;
   }
 
@@ -624,9 +635,9 @@ function rkDrawAtomicWrappedBullet(
 
     const take = Math.min(remaining, linesFit);
     const chunk = unit.lines.slice(lineIdx, lineIdx + take);
-    setStyle(ctx, style);
     for (const ln of chunk) {
-      ctx.pdf.text(ln, x, ctx.y + style.size * 0.32);
+      applyStyle(ctx, style, ln);
+      drawText(ctx, ln, x, ctx.y + style.size * 0.32, style);
       ctx.y += style.lineH;
     }
     lineIdx += take;
@@ -763,8 +774,8 @@ function rkDrawSkillsLanguagesGroup(ctx: RirekishoDirectPdfContext): void {
         if (skill) fill(ctx, x, y, colW, rowH, C_SKILL);
         border(ctx, x, y, colW, rowH);
         if (skill) {
-          setStyle(ctx, ss);
-          ctx.pdf.text(skill, x + PAD_H, y + PAD_V + ss.size * 0.32);
+          applyStyle(ctx, ss, skill);
+          drawText(ctx, skill, x + PAD_H, y + PAD_V + ss.size * 0.32, ss);
         }
       }
       ctx.y = y + rowH;
@@ -787,10 +798,10 @@ function rkDrawSkillsLanguagesGroup(ctx: RirekishoDirectPdfContext): void {
       const name = getLocalizedCvLanguageName(lang.name, ctx.locale) || lang.name;
       border(ctx, ctx.contentX, y, colW, rowH);
       border(ctx, ctx.contentX + colW, y, colW, rowH);
-      setStyle(ctx, ns);
-      ctx.pdf.text(name, ctx.contentX + PAD_H, y + PAD_V + ns.size * 0.32);
-      setStyle(ctx, ls);
-      ctx.pdf.text(lang.level || '', ctx.contentX + colW + PAD_H, y + PAD_V + ls.size * 0.32);
+      applyStyle(ctx, ns, name);
+      drawText(ctx, name, ctx.contentX + PAD_H, y + PAD_V + ns.size * 0.32, ns);
+      applyStyle(ctx, ls, lang.level || '');
+      drawText(ctx, lang.level || '', ctx.contentX + colW + PAD_H, y + PAD_V + ls.size * 0.32, ls);
       ctx.y = y + rowH;
     }
   }
@@ -867,21 +878,22 @@ function planSelfPrFragments(
 
 function rkDrawSelfPrContinuation(ctx: RirekishoDirectPdfContext): void {
   rkEnsureSpace(ctx, 5);
-  setStyle(ctx, { size: 8, color: C_MUTED, bold: true, lineH: 3.1 });
-  ctx.pdf.text(L.selfCont, ctx.contentX, ctx.y + 2);
+  const contStyle: Style = { size: 8, color: C_MUTED, bold: true, lineH: 3.1 };
+  applyStyle(ctx, contStyle, L.selfCont);
+  drawText(ctx, L.selfCont, ctx.contentX, ctx.y + 2, contStyle);
   ctx.y += 4.5;
 }
 
 function rkDrawSelfPrSection(ctx: RirekishoDirectPdfContext): void {
   if (!ctx.cv.summary) return;
-  const normalized = rkNormalizePdfText(ctx.cv.summary);
+  const normalized = rkNormalizePdfText(ctx.cv.summary, ctx.locale);
   if (!normalized) return;
 
+  const style: Style = { size: 8.6, color: C_TEXT, lineH: LINE + 0.1 };
   const paragraphs = normalized.split(/\n+/).map((p) => p.trim()).filter(Boolean);
-  const lines = paragraphs.flatMap((p) => wrap(ctx, p, ctx.contentW));
+  const lines = paragraphs.flatMap((p) => wrap(ctx, p, ctx.contentW, style));
   if (!lines.length) return;
 
-  const style: Style = { size: 8.6, color: C_TEXT, lineH: LINE + 0.1 };
   const keep = Math.min(3, lines.length);
   const keepH = BAR_H + GAP_AFTER_BAR + keep * style.lineH;
   rkMoveToFreshPageIfNeeded(ctx, keepH);
@@ -904,8 +916,8 @@ function rkDrawSelfPrSection(ctx: RirekishoDirectPdfContext): void {
         rkAddPage(ctx);
         rkDrawSelfPrContinuation(ctx);
       }
-      setStyle(ctx, style);
-      ctx.pdf.text(line, ctx.contentX, ctx.y + style.size * 0.32);
+      applyStyle(ctx, style, line);
+      drawText(ctx, line, ctx.contentX, ctx.y + style.size * 0.32, style);
       ctx.y += style.lineH;
     }
   }
@@ -917,11 +929,11 @@ function rkDrawCertifications(ctx: RirekishoDirectPdfContext): void {
   rkDrawSectionBar(ctx, '資格・免許');
   const style: Style = { size: 8.5, color: C_TEXT, lineH: LINE };
   for (const cert of ctx.cv.certifications) {
-    const lines = wrap(ctx, `\u30fb${rkNormalizePdfText(cert)}`, ctx.contentW);
+    const lines = wrap(ctx, `\u30fb${rkNormalizePdfText(cert, ctx.locale)}`, ctx.contentW, style);
     for (const ln of lines) {
       rkEnsureSpace(ctx, style.lineH);
-      setStyle(ctx, style);
-      ctx.pdf.text(ln, ctx.contentX, ctx.y + style.size * 0.32);
+      applyStyle(ctx, style, ln);
+      drawText(ctx, ln, ctx.contentX, ctx.y + style.size * 0.32, style);
       ctx.y += style.lineH;
     }
   }
@@ -935,8 +947,8 @@ export async function buildRirekishoPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const jp = await loadJpFonts(pdf);
-  const ctx = rkCreateContext(pdf, cv, locale, jp);
+  const i18n = await registerPdfI18nFonts(pdf);
+  const ctx = rkCreateContext(pdf, cv, locale, i18n);
 
   rkDrawTitle(ctx);
   rkDrawPersonalInfoTable(ctx, options.photoDataUrl ?? null);

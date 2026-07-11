@@ -7,6 +7,8 @@ const { execSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { REQUIRED_PDF_FONT_FILES, MIN_FONT_BYTES } = require('./pdf-font-manifest');
+
 const repoRoot = path.resolve(__dirname, '..');
 
 function fail(message) {
@@ -37,6 +39,21 @@ function assertFile(relPath, label) {
   if (!fs.existsSync(full)) fail(`${label} missing: ${relPath}`);
 }
 
+function assertPdfFontBundle(relDir, label) {
+  for (const fileName of REQUIRED_PDF_FONT_FILES) {
+    const relPath = path.join(relDir, 'fonts', fileName);
+    const full = path.join(repoRoot, relPath);
+    if (!fs.existsSync(full)) {
+      fail(`${label} missing multilingual PDF font: ${relPath}`);
+    }
+    const size = fs.statSync(full).size;
+    if (size < MIN_FONT_BYTES) {
+      fail(`${label} PDF font too small (${size} bytes): ${relPath}`);
+    }
+  }
+  console.log(`[verify:android:release] ${label} PDF fonts OK (${REQUIRED_PDF_FONT_FILES.length} files)`);
+}
+
 function collectJsFiles(dir, out = []) {
   if (!fs.existsSync(dir)) return out;
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -59,7 +76,9 @@ function verifySyncedAssets() {
   }
 
   assertFile('out/index.html', 'static export');
+  assertPdfFontBundle('out', 'static export');
   assertFile('android/app/src/main/assets/public/index.html', 'synced Android web assets');
+  assertPdfFontBundle(path.join('android', 'app', 'src', 'main', 'assets', 'public'), 'synced Android web assets');
 
   const publicDir = path.join(repoRoot, 'android', 'app', 'src', 'main', 'assets', 'public');
   const jsFiles = collectJsFiles(publicDir);
@@ -94,6 +113,7 @@ function verifyAab(aabPath) {
     'base/assets/public/index.html',
     'base/assets/public/_next/',
     'base/assets/capacitor.config.json',
+    'base/assets/public/fonts/',
   ];
 
   for (const entry of required) {
@@ -101,6 +121,14 @@ function verifyAab(aabPath) {
       fail(`AAB ${full} is missing ${entry}`);
     }
   }
+
+  for (const fileName of REQUIRED_PDF_FONT_FILES) {
+    const entry = `base/assets/public/fonts/${fileName}`;
+    if (!listing.includes(entry)) {
+      fail(`AAB ${full} is missing multilingual PDF font ${entry}`);
+    }
+  }
+  console.log(`[verify:android:release] AAB PDF fonts OK (${REQUIRED_PDF_FONT_FILES.length} files)`);
 
   if (/server\.url|"url"\s*:\s*"https?:\/\//.test(listing)) {
     // jar listing won't include config body; extract and inspect separately below.

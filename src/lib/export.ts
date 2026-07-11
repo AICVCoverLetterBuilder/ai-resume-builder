@@ -26,6 +26,15 @@ import { buildCleanSimplePagedPdfBlob } from './clean-simple-pdf-renderer';
 export { buildCleanSimplePagedPdfBlob } from './clean-simple-pdf-renderer';
 import { buildContemporaryBoldPagedPdfBlob } from './contemporary-bold-pdf-renderer';
 export { buildContemporaryBoldPagedPdfBlob } from './contemporary-bold-pdf-renderer';
+import {
+  isRtlLocale,
+  pdfI18nCtxApplyStyle,
+  pdfI18nCtxDraw,
+  pdfI18nCtxSplit,
+  pdfI18nCtxTextWidth,
+  registerPdfI18nFonts,
+  type PdfI18nRegistry,
+} from './pdf-i18n-text';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -11821,6 +11830,7 @@ type ProfessionalClassicPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
 type ProfessionalClassicDirectPdfContext = {
   pdf: ProfessionalClassicPdfWriter;
   locale: Locale;
+  i18n: PdfI18nRegistry | null;
   labels: ReturnType<typeof getProfessionalClassicPdfLabels>;
   pageWidth: number;
   pageHeight: number;
@@ -11868,18 +11878,32 @@ function proClassicDirectDateRange(start: string, end: string, present: boolean,
   return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
 }
 
-function proClassicSetTextStyle(ctx: ProfessionalClassicDirectPdfContext, style: ProfessionalClassicTextStyle): void {
-  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
-  ctx.pdf.setFontSize(style.size);
-  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+function proClassicSetTextStyle(ctx: ProfessionalClassicDirectPdfContext, style: ProfessionalClassicTextStyle, text?: string): void {
+  pdfI18nCtxApplyStyle(ctx, { size: style.size, color: style.color, bold: style.fontStyle === 'bold' }, text);
 }
 
-function proClassicSplitText(ctx: ProfessionalClassicDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+function proClassicSplitText(ctx: ProfessionalClassicDirectPdfContext, text: string, maxWidth = ctx.contentWidth, size = 8, bold = false): string[] {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
-  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
-  return Array.isArray(result) ? result.map(String) : [String(result)];
+  return pdfI18nCtxSplit(ctx, normalized, maxWidth, { size, bold });
 }
+function proClassicDrawText(
+  ctx: ProfessionalClassicDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: ProfessionalClassicTextStyle,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.fontStyle === 'bold',
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align,
+  });
+}
+
 
 function proClassicStartPage(ctx: ProfessionalClassicDirectPdfContext): void {
   ctx.pdf.addPage();
@@ -11909,8 +11933,8 @@ function proClassicSectionHeadingHeight(): number {
 
 function proClassicDrawSectionHeading(ctx: ProfessionalClassicDirectPdfContext, label: string): void {
   proClassicEnsureSpace(ctx, proClassicSectionHeadingHeight());
-  proClassicSetTextStyle(ctx, { size: 9, color: PRO_CLASSIC_HEADING, fontStyle: 'bold', lineHeight: 3.5 });
-  ctx.pdf.text(label.toUpperCase(), ctx.marginLeft, ctx.y);
+  const headingStyle: ProfessionalClassicTextStyle = { size: 9, color: PRO_CLASSIC_HEADING, fontStyle: 'bold', lineHeight: 3.5 };
+  proClassicDrawText(ctx, label.toUpperCase(), ctx.marginLeft, ctx.y, headingStyle);
   const ruleY = ctx.y + 1.6;
   ctx.pdf.setDrawColor(PRO_CLASSIC_RULE[0], PRO_CLASSIC_RULE[1], PRO_CLASSIC_RULE[2]);
   ctx.pdf.setLineWidth(0.25);
@@ -11924,11 +11948,10 @@ function proClassicDrawLines(
   style: ProfessionalClassicTextStyle,
   options: { indentX?: number; x?: number } = {},
 ): void {
-  proClassicSetTextStyle(ctx, style);
   const x = options.x ?? (ctx.marginLeft + (options.indentX ?? 0));
   for (const line of lines) {
     proClassicEnsureSpace(ctx, style.lineHeight);
-    ctx.pdf.text(line, x, ctx.y);
+    proClassicDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -11942,10 +11965,9 @@ function proClassicDrawLinesBlock(
   if (lines.length === 0) return;
   const blockHeight = lines.length * style.lineHeight;
   proClassicMoveToFreshPageIfNeeded(ctx, blockHeight);
-  proClassicSetTextStyle(ctx, style);
   const x = options.x ?? (ctx.marginLeft + (options.indentX ?? 0));
   for (const line of lines) {
-    ctx.pdf.text(line, x, ctx.y);
+    proClassicDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -11978,15 +12000,15 @@ function proClassicDrawHeader(ctx: ProfessionalClassicDirectPdfContext, cv: CVDa
     }
   }
 
-  proClassicSetTextStyle(ctx, { size: 16.5, color: [255, 255, 255], fontStyle: 'bold', lineHeight: 6 });
-  ctx.pdf.text(cv.personal.fullName || 'Your Name', textX, headerPadY + 5);
+  const nameStyle: ProfessionalClassicTextStyle = { size: 16.5, color: [255, 255, 255], fontStyle: 'bold', lineHeight: 6 };
+  proClassicDrawText(ctx, cv.personal.fullName || 'Your Name', textX, headerPadY + 5, nameStyle);
   if (cv.personal.jobTitle) {
-    proClassicSetTextStyle(ctx, { size: 9, color: [203, 213, 225], lineHeight: 4 });
-    ctx.pdf.text(cv.personal.jobTitle, textX, headerPadY + 11);
+    const titleStyle: ProfessionalClassicTextStyle = { size: 9, color: [203, 213, 225], lineHeight: 4 };
+    proClassicDrawText(ctx, cv.personal.jobTitle, textX, headerPadY + 11, titleStyle);
   }
   if (contacts.length > 0) {
-    proClassicSetTextStyle(ctx, { size: 7.2, color: [148, 163, 184], lineHeight: 4 });
-    ctx.pdf.text(contacts.join('  |  '), textX, headerPadY + 17);
+    const contactStyle: ProfessionalClassicTextStyle = { size: 7.2, color: [148, 163, 184], lineHeight: 4 };
+    proClassicDrawText(ctx, contacts.join('  |  '), textX, headerPadY + 17, contactStyle);
   }
 
   ctx.y = headerHeight + 3.7;
@@ -12061,8 +12083,7 @@ function proClassicDrawWrappedBulletLinesAtomic(
   proClassicMoveToFreshPageIfNeeded(ctx, blockHeight);
   const style: ProfessionalClassicTextStyle = { size: 7.6, color: PRO_CLASSIC_MUTED2, lineHeight: 3.9 };
   if (part.isBullet) {
-    proClassicSetTextStyle(ctx, style);
-    ctx.pdf.text('•', ctx.marginLeft, ctx.y);
+    proClassicDrawText(ctx, '•', ctx.marginLeft, ctx.y, style);
     proClassicDrawLinesBlock(ctx, part.lines, style, { indentX: 4 });
     return;
   }
@@ -12074,8 +12095,8 @@ function proClassicDrawExperienceEntryHeader(ctx: ProfessionalClassicDirectPdfCo
   const titleLines = proClassicSplitText(ctx, entry.position, ctx.contentWidth - 32);
   proClassicDrawLinesBlock(ctx, titleLines, { size: 8.1, color: PRO_CLASSIC_TEXT, fontStyle: 'bold', lineHeight: 4.3 });
   if (dateText) {
-    proClassicSetTextStyle(ctx, { size: 7.1, color: PRO_CLASSIC_DATE, fontStyle: 'italic', lineHeight: 3.5 });
-    ctx.pdf.text(dateText, ctx.pageWidth - ctx.marginRight, ctx.y - 4.3, { align: 'right' });
+    const dateStyle: ProfessionalClassicTextStyle = { size: 7.1, color: PRO_CLASSIC_DATE, fontStyle: 'italic', lineHeight: 3.5 };
+    proClassicDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, ctx.y - 4.3, dateStyle, { align: 'right' });
   }
   if (entry.company) {
     proClassicDrawLinesBlock(ctx, [entry.company], { size: 7.5, color: PRO_CLASSIC_MUTED, lineHeight: 3.8 });
@@ -12085,11 +12106,12 @@ function proClassicDrawExperienceEntryHeader(ctx: ProfessionalClassicDirectPdfCo
 function proClassicDrawExperienceContinuationHeader(ctx: ProfessionalClassicDirectPdfContext, entry: CVData['experience'][number]): void {
   const dateText = proClassicDirectDateRange(entry.startDate, entry.endDate, entry.isPresent, ctx.labels.present);
   proClassicEnsureSpace(ctx, 4.2);
-  proClassicSetTextStyle(ctx, { size: 7.6, color: PRO_CLASSIC_MUTED, fontStyle: 'italic', lineHeight: 3.8 });
+  const contStyle: ProfessionalClassicTextStyle = { size: 7.6, color: PRO_CLASSIC_MUTED, fontStyle: 'italic', lineHeight: 3.8 };
   const label = `${entry.position} (continued)`;
-  ctx.pdf.text(label, ctx.marginLeft, ctx.y);
+  proClassicDrawText(ctx, label, ctx.marginLeft, ctx.y, contStyle);
   if (dateText) {
-    ctx.pdf.text(dateText, ctx.pageWidth - ctx.marginRight, ctx.y, { align: 'right' });
+    const dateStyle: ProfessionalClassicTextStyle = { size: 7.1, color: PRO_CLASSIC_DATE, fontStyle: 'italic', lineHeight: 3.5 };
+    proClassicDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, ctx.y, dateStyle, { align: 'right' });
   }
   ctx.y += 4.2;
 }
@@ -12155,8 +12177,8 @@ function proClassicDrawEducationEntry(ctx: ProfessionalClassicDirectPdfContext, 
   const degreeLines = proClassicSplitText(ctx, edu.degree, ctx.contentWidth - 32);
   proClassicDrawLinesBlock(ctx, degreeLines, { size: 7.9, color: PRO_CLASSIC_TEXT, fontStyle: 'bold', lineHeight: 4.3 });
   if (dateText) {
-    proClassicSetTextStyle(ctx, { size: 7.1, color: PRO_CLASSIC_DATE, lineHeight: 3.5 });
-    ctx.pdf.text(dateText, ctx.pageWidth - ctx.marginRight, ctx.y - 4.3, { align: 'right' });
+    const dateStyle: ProfessionalClassicTextStyle = { size: 7.1, color: PRO_CLASSIC_DATE, lineHeight: 3.5 };
+    proClassicDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, ctx.y - 4.3, dateStyle, { align: 'right' });
   }
   if (edu.school) {
     proClassicDrawLinesBlock(ctx, [edu.school], { size: 7.4, color: PRO_CLASSIC_MUTED, lineHeight: 3.8 });
@@ -12207,8 +12229,7 @@ function proClassicMeasureSkillChip(
   const padV = 0.75;
   const lineH = 3.2;
   const chipStyle: ProfessionalClassicTextStyle = { size: 7.2, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: lineH };
-  proClassicSetTextStyle(ctx, chipStyle);
-  const textWidth = ctx.pdf.getTextWidth(label);
+  const textWidth = pdfI18nCtxTextWidth(ctx, label, { size: chipStyle.size });
   const singleLineChipWidth = textWidth + padH * 2;
   if (singleLineChipWidth <= maxColWidth) {
     return { width: singleLineChipWidth, height: lineH + padV * 2, lines: [label] };
@@ -12268,14 +12289,14 @@ function proClassicDrawSkillChips(
   const padH = 1.85;
   const padV = 0.75;
   const lineH = 3.2;
+  const chipStyle: ProfessionalClassicTextStyle = { size: 7.2, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: lineH };
   layout.chips.forEach((chip) => {
     const chipX = colX + chip.x;
     const chipY = colY + chip.y;
     ctx.pdf.setFillColor(PRO_CLASSIC_CHIP_BG[0], PRO_CLASSIC_CHIP_BG[1], PRO_CLASSIC_CHIP_BG[2]);
     ctx.pdf.roundedRect(chipX, chipY, chip.width, chip.height, 1, 1, 'F');
-    proClassicSetTextStyle(ctx, { size: 7.2, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: lineH });
     chip.lines.forEach((line, lineIndex) => {
-      ctx.pdf.text(line, chipX + padH, chipY + padV + lineH * (lineIndex + 0.75));
+      proClassicDrawText(ctx, line, chipX + padH, chipY + padV + lineH * (lineIndex + 0.75), chipStyle);
     });
   });
   return layout.totalHeight;
@@ -12305,8 +12326,8 @@ function proClassicDrawSectionHeadingAt(
   x: number,
   y: number,
 ): number {
-  proClassicSetTextStyle(ctx, { size: 9, color: PRO_CLASSIC_HEADING, fontStyle: 'bold', lineHeight: 3.5 });
-  ctx.pdf.text(label.toUpperCase(), x, y);
+  const headingStyle: ProfessionalClassicTextStyle = { size: 9, color: PRO_CLASSIC_HEADING, fontStyle: 'bold', lineHeight: 3.5 };
+  proClassicDrawText(ctx, label.toUpperCase(), x, y, headingStyle);
   const ruleY = y + 1.6;
   ctx.pdf.setDrawColor(PRO_CLASSIC_RULE[0], PRO_CLASSIC_RULE[1], PRO_CLASSIC_RULE[2]);
   ctx.pdf.setLineWidth(0.25);
@@ -12336,12 +12357,8 @@ function proClassicDrawSkillsLanguages(ctx: ProfessionalClassicDirectPdfContext,
     const langStyle: ProfessionalClassicTextStyle = { size: 7.6, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 3.8 };
     cv.languages.forEach((language) => {
       const line = `${getLocalizedCvLanguageName(language.name, ctx.locale)} - ${language.level}`;
-      const lines = [line];
-      proClassicSetTextStyle(ctx, langStyle);
-      lines.forEach((textLine) => {
-        ctx.pdf.text(textLine, langsColX, langsY);
-        langsY += langStyle.lineHeight;
-      });
+      proClassicDrawText(ctx, line, langsColX, langsY, langStyle);
+      langsY += langStyle.lineHeight;
     });
     maxBottom = Math.max(maxBottom, langsY + 2);
   }
@@ -12363,9 +12380,9 @@ function proClassicDrawCertifications(ctx: ProfessionalClassicDirectPdfContext, 
   proClassicDrawSectionHeading(ctx, ctx.labels.certifications);
   cv.certifications.forEach((cert) => {
     proClassicEnsureSpace(ctx, 3.8);
-    proClassicSetTextStyle(ctx, { size: 7.6, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 3.8 });
-    ctx.pdf.text('•', ctx.marginLeft, ctx.y);
-    proClassicDrawLines(ctx, proClassicSplitText(ctx, cert), { size: 7.6, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 3.8 }, { indentX: 4 });
+    const certStyle: ProfessionalClassicTextStyle = { size: 7.6, color: PRO_CLASSIC_CHIP_TEXT, lineHeight: 3.8 };
+    proClassicDrawText(ctx, '•', ctx.marginLeft, ctx.y, certStyle);
+    proClassicDrawLines(ctx, proClassicSplitText(ctx, cert), certStyle, { indentX: 4 });
   });
   ctx.y += 2;
 }
@@ -12377,12 +12394,14 @@ export async function buildProfessionalClassicPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const i18n = await registerPdfI18nFonts(pdf);
   const marginLeft = 8.5;
   const marginRight = 8.5;
   const marginTop = 14;
   const marginBottom = 14;
   const ctx: ProfessionalClassicDirectPdfContext = {
     pdf,
+    i18n,
     locale,
     labels: getProfessionalClassicPdfLabels(locale),
     pageWidth: CV_PDF_A4_WIDTH_MM,
@@ -12498,6 +12517,7 @@ type CreativeBoldPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
 type CreativeBoldDirectPdfContext = {
   pdf: CreativeBoldPdfWriter;
   locale: Locale;
+  i18n: PdfI18nRegistry | null;
   labels: ReturnType<typeof getCreativeBoldPdfLabels>;
   pageWidth: number;
   pageHeight: number;
@@ -12547,19 +12567,33 @@ function cbDirectDateRange(start: string, end: string, present: boolean, present
   return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
 }
 
-function cbSetTextStyle(ctx: CreativeBoldDirectPdfContext, style: CreativeBoldTextStyle): void {
-  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
-  ctx.pdf.setFontSize(style.size);
-  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+function cbSetTextStyle(ctx: CreativeBoldDirectPdfContext, style: CreativeBoldTextStyle, text?: string): void {
+  pdfI18nCtxApplyStyle(ctx, { size: style.size, color: style.color, bold: style.fontStyle === 'bold' }, text);
 }
 
-function cbSplitText(ctx: CreativeBoldDirectPdfContext, text: string, maxWidth?: number): string[] {
+function cbSplitText(ctx: CreativeBoldDirectPdfContext, text: string, maxWidth?: number, size = 8, bold = false): string[] {
   const w = maxWidth ?? ctx.contentW;
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
-  const result = ctx.pdf.splitTextToSize(normalized, w);
-  return Array.isArray(result) ? result.map(String) : [String(result)];
+  return pdfI18nCtxSplit(ctx, normalized, w, { size, bold });
 }
+function cbDrawText(
+  ctx: CreativeBoldDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: CreativeBoldTextStyle,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.fontStyle === 'bold',
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align,
+  });
+}
+
 
 function cbFreshPageCapacity(ctx: CreativeBoldDirectPdfContext): number {
   return ctx.bottomSafeY - ctx.marginTop;
@@ -12595,8 +12629,8 @@ function cbSectionHeadingHeight(): number {
 
 function cbDrawSectionHeading(ctx: CreativeBoldDirectPdfContext, label: string): void {
   cbEnsureSpace(ctx, cbSectionHeadingHeight());
-  cbSetTextStyle(ctx, { size: 8.5, color: CB_HEADING_RED, fontStyle: 'bold', lineHeight: 4.5 });
-  ctx.pdf.text(label.toUpperCase(), ctx.contentX, ctx.y);
+  const headingStyle: CreativeBoldTextStyle = { size: 8.5, color: CB_HEADING_RED, fontStyle: 'bold', lineHeight: 4.5 };
+  cbDrawText(ctx, label.toUpperCase(), ctx.contentX, ctx.y, headingStyle);
   ctx.y += cbSectionHeadingHeight();
 }
 
@@ -12606,11 +12640,10 @@ function cbDrawLines(
   style: CreativeBoldTextStyle,
   opts: { x?: number; indentX?: number } = {},
 ): void {
-  cbSetTextStyle(ctx, style);
   const x = opts.x ?? (ctx.contentX + (opts.indentX ?? 0));
   for (const line of lines) {
     cbEnsureSpace(ctx, style.lineHeight);
-    ctx.pdf.text(line, x, ctx.y);
+    cbDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -12624,10 +12657,9 @@ function cbDrawLinesBlock(
   if (!lines.length) return;
   const blockH = lines.length * style.lineHeight;
   cbMoveToFreshPageIfNeeded(ctx, blockH);
-  cbSetTextStyle(ctx, style);
   const x = opts.x ?? ctx.contentX;
   for (const line of lines) {
-    ctx.pdf.text(line, x, ctx.y);
+    cbDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -12662,34 +12694,28 @@ function cbDrawPage1Sidebar(
     sy += photoSize + 7;
   }
 
-  // Name
-  ctx.pdf.setFont('helvetica', 'bold');
-  ctx.pdf.setFontSize(11);
-  ctx.pdf.setTextColor(CB_CB_WHITE[0], CB_CB_WHITE[1], CB_CB_WHITE[2]);
-  const nameRaw = ctx.pdf.splitTextToSize(cv.personal.fullName || 'Your Name', contentW);
-  const nameLines: string[] = Array.isArray(nameRaw) ? nameRaw.map(String) : [String(nameRaw)];
-  for (const line of nameLines) {
+  const nameStyle: CreativeBoldTextStyle = { size: 11, color: CB_CB_WHITE, fontStyle: 'bold', lineHeight: 5 };
+  const titleStyle: CreativeBoldTextStyle = { size: 8, color: CB_ROSE_100, lineHeight: 3.8 };
+  const contactStyle: CreativeBoldTextStyle = { size: 6.5, color: CB_ROSE_100, lineHeight: 3.2 };
+  const sidebarHeadingStyle: CreativeBoldTextStyle = { size: 6.5, color: CB_CB_WHITE, fontStyle: 'bold', lineHeight: 4.5 };
+  const sidebarItemStyle: CreativeBoldTextStyle = { size: 6.5, color: CB_ROSE_100, lineHeight: 3.2 };
+  const langStyle: CreativeBoldTextStyle = { size: 7, color: CB_ROSE_100, lineHeight: 3.5 };
+
+  for (const line of cbSplitText(ctx, cv.personal.fullName || 'Your Name', contentW, 11, true)) {
     if (sy > ctx.pageHeight - 6) break;
-    ctx.pdf.text(line, padX, sy);
+    cbDrawText(ctx, line, padX, sy, nameStyle);
     sy += 5.0;
   }
 
-  // Job title
   if (cv.personal.jobTitle) {
-    ctx.pdf.setFont('helvetica', 'normal');
-    ctx.pdf.setFontSize(8);
-    ctx.pdf.setTextColor(CB_ROSE_100[0], CB_ROSE_100[1], CB_ROSE_100[2]);
-    const titleRaw = ctx.pdf.splitTextToSize(cv.personal.jobTitle, contentW);
-    const titleLines: string[] = Array.isArray(titleRaw) ? titleRaw.map(String) : [String(titleRaw)];
-    for (const line of titleLines) {
+    for (const line of cbSplitText(ctx, cv.personal.jobTitle, contentW, 8)) {
       if (sy > ctx.pageHeight - 6) break;
-      ctx.pdf.text(line, padX, sy);
+      cbDrawText(ctx, line, padX, sy, titleStyle);
       sy += 3.8;
     }
     sy += 1;
   }
 
-  // Contact info
   sy += 4;
   const region = regionSettings[cv.region];
   const contacts = [
@@ -12698,58 +12724,38 @@ function cbDrawPage1Sidebar(
     region.showAddress ? cv.personal.address : '',
   ].filter(Boolean) as string[];
   if (contacts.length > 0) {
-    ctx.pdf.setFont('helvetica', 'normal');
-    ctx.pdf.setFontSize(6.5);
-    ctx.pdf.setTextColor(CB_ROSE_100[0], CB_ROSE_100[1], CB_ROSE_100[2]);
     for (const contact of contacts) {
       if (sy > ctx.pageHeight - 6) break;
-      const raw = ctx.pdf.splitTextToSize(contact, contentW);
-      const lines: string[] = Array.isArray(raw) ? raw.map(String) : [String(raw)];
-      for (const line of lines) {
+      for (const line of cbSplitText(ctx, contact, contentW, 6.5)) {
         if (sy > ctx.pageHeight - 6) break;
-        ctx.pdf.text(line, padX, sy);
+        cbDrawText(ctx, line, padX, sy, contactStyle);
         sy += 3.2;
       }
     }
   }
 
-  // SKILLS
   if (cv.skills.length > 0 && sy <= ctx.pageHeight - 12) {
     sy += 6;
-    ctx.pdf.setFont('helvetica', 'bold');
-    ctx.pdf.setFontSize(6.5);
-    ctx.pdf.setTextColor(CB_CB_WHITE[0], CB_CB_WHITE[1], CB_CB_WHITE[2]);
-    ctx.pdf.text(ctx.labels.skills.toUpperCase(), padX, sy);
+    cbDrawText(ctx, ctx.labels.skills.toUpperCase(), padX, sy, sidebarHeadingStyle);
     sy += 4.5;
-    ctx.pdf.setFont('helvetica', 'normal');
-    ctx.pdf.setFontSize(6.5);
     for (const skill of cv.skills) {
       if (sy > ctx.pageHeight - 4) break;
-      const raw = ctx.pdf.splitTextToSize(skill, contentW);
-      const lines: string[] = Array.isArray(raw) ? raw.map(String) : [String(raw)];
-      for (const line of lines) {
+      for (const line of cbSplitText(ctx, skill, contentW, 6.5)) {
         if (sy > ctx.pageHeight - 4) break;
-        ctx.pdf.text(line, padX, sy);
+        cbDrawText(ctx, line, padX, sy, sidebarItemStyle);
         sy += 3.2;
       }
       sy += 0.8;
     }
   }
 
-  // LANGUAGES
   if (cv.languages.length > 0 && sy <= ctx.pageHeight - 14) {
     sy += 5;
-    ctx.pdf.setFont('helvetica', 'bold');
-    ctx.pdf.setFontSize(6.5);
-    ctx.pdf.setTextColor(CB_CB_WHITE[0], CB_CB_WHITE[1], CB_CB_WHITE[2]);
-    ctx.pdf.text(ctx.labels.languages.toUpperCase(), padX, sy);
+    cbDrawText(ctx, ctx.labels.languages.toUpperCase(), padX, sy, sidebarHeadingStyle);
     sy += 4.5;
-    ctx.pdf.setFont('helvetica', 'normal');
-    ctx.pdf.setFontSize(7);
-    ctx.pdf.setTextColor(CB_ROSE_100[0], CB_ROSE_100[1], CB_ROSE_100[2]);
     for (const lang of cv.languages) {
       if (sy > ctx.pageHeight - 4) break;
-      ctx.pdf.text(`${lang.name} - ${lang.level}`, padX, sy);
+      cbDrawText(ctx, `${lang.name} - ${lang.level}`, padX, sy, langStyle);
       sy += 3.5;
     }
   }
@@ -12828,10 +12834,10 @@ function cbDrawWrappedBulletAtomic(
   if (!part.lines.length) return;
   const blockH = part.lines.length * 3.8;
   cbMoveToFreshPageIfNeeded(ctx, blockH);
-  cbSetTextStyle(ctx, { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 });
-  if (part.isBullet) ctx.pdf.text('•', textX, ctx.y);
+  const style: CreativeBoldTextStyle = { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 };
+  if (part.isBullet) cbDrawText(ctx, '•', textX, ctx.y, style);
   for (const line of part.lines) {
-    ctx.pdf.text(line, textX + (part.isBullet ? 3.5 : 0), ctx.y);
+    cbDrawText(ctx, line, textX + (part.isBullet ? 3.5 : 0), ctx.y, style);
     ctx.y += 3.8;
   }
 }
@@ -12861,12 +12867,12 @@ function cbDrawExperienceEntryPaginated(
     }
     ctx.y += 1.5;
     const parts = cbExperienceDescriptionParts(ctx, entry);
+    const bulletStyle: CreativeBoldTextStyle = { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 };
     for (const part of parts) {
       if (!part.lines.length) continue;
-      cbSetTextStyle(ctx, { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 });
-      if (part.isBullet) ctx.pdf.text('•', textX, ctx.y);
+      if (part.isBullet) cbDrawText(ctx, '•', textX, ctx.y, bulletStyle);
       for (const line of part.lines) {
-        ctx.pdf.text(line, textX + (part.isBullet ? 3.5 : 0), ctx.y);
+        cbDrawText(ctx, line, textX + (part.isBullet ? 3.5 : 0), ctx.y, bulletStyle);
         ctx.y += 3.8;
       }
     }
@@ -12921,8 +12927,8 @@ function cbDrawExperienceEntryPaginated(
     if (ctx.y + partH > ctx.bottomSafeY) {
       cbAddPage(ctx);
       if (!continuationShown) {
-        cbSetTextStyle(ctx, { size: 7.5, color: CB_CB_DARK, fontStyle: 'italic', lineHeight: 3.8 });
-        ctx.pdf.text(`${entry.position} (continued)`, textX, ctx.y);
+        const contStyle: CreativeBoldTextStyle = { size: 7.5, color: CB_CB_DARK, fontStyle: 'italic', lineHeight: 3.8 };
+        cbDrawText(ctx, `${entry.position} (continued)`, textX, ctx.y, contStyle);
         ctx.y += 4.2;
         continuationShown = true;
       }
@@ -13008,9 +13014,9 @@ function cbDrawCertifications(ctx: CreativeBoldDirectPdfContext, cv: CVData): vo
   cbDrawSectionHeading(ctx, ctx.labels.certifications);
   for (const cert of cv.certifications) {
     cbEnsureSpace(ctx, 3.8);
-    cbSetTextStyle(ctx, { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 });
-    ctx.pdf.text('•', ctx.contentX, ctx.y);
-    cbDrawLines(ctx, cbSplitText(ctx, cert, ctx.contentW - 3.5), { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 }, { indentX: 3.5 });
+    const certStyle: CreativeBoldTextStyle = { size: 7.5, color: CB_GRAY_600, lineHeight: 3.8 };
+    cbDrawText(ctx, '•', ctx.contentX, ctx.y, certStyle);
+    cbDrawLines(ctx, cbSplitText(ctx, cert, ctx.contentW - 3.5), certStyle, { indentX: 3.5 });
   }
   ctx.y += 2;
 }
@@ -13022,6 +13028,7 @@ export async function buildCreativeBoldPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const i18n = await registerPdfI18nFonts(pdf);
 
   const sidebarW = 62;
   const sidebarPad = 7;
@@ -13034,6 +13041,7 @@ export async function buildCreativeBoldPagedPdfBlob(
 
   const ctx: CreativeBoldDirectPdfContext = {
     pdf,
+    i18n,
     locale,
     labels: getCreativeBoldPdfLabels(locale),
     pageWidth: CV_PDF_A4_WIDTH_MM,
@@ -13172,6 +13180,7 @@ type CreativeArtisticPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
 type CreativeArtisticDirectPdfContext = {
   pdf: CreativeArtisticPdfWriter;
   locale: Locale;
+  i18n: PdfI18nRegistry | null;
   labels: ReturnType<typeof getCreativeArtisticPdfLabels>;
   pageWidth: number;
   pageHeight: number;
@@ -13225,18 +13234,32 @@ function caDirectDateRange(start: string, end: string, present: boolean, present
   return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
 }
 
-function caSetTextStyle(ctx: CreativeArtisticDirectPdfContext, style: CreativeArtisticTextStyle): void {
-  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
-  ctx.pdf.setFontSize(style.size);
-  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+function caSetTextStyle(ctx: CreativeArtisticDirectPdfContext, style: CreativeArtisticTextStyle, text?: string): void {
+  pdfI18nCtxApplyStyle(ctx, { size: style.size, color: style.color, bold: style.fontStyle === 'bold' }, text);
 }
 
-function caSplitText(ctx: CreativeArtisticDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+function caSplitText(ctx: CreativeArtisticDirectPdfContext, text: string, maxWidth = ctx.contentWidth, size = 8, bold = false): string[] {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
-  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
-  return Array.isArray(result) ? result.map(String) : [String(result)];
+  return pdfI18nCtxSplit(ctx, normalized, maxWidth, { size, bold });
 }
+function caDrawText(
+  ctx: CreativeArtisticDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: CreativeArtisticTextStyle,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.fontStyle === 'bold',
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align,
+  });
+}
+
 
 function caFreshPageCapacity(ctx: CreativeArtisticDirectPdfContext): number {
   return ctx.bottomSafeY - ctx.marginTop;
@@ -13266,14 +13289,14 @@ function caSectionHeadingHeight(): number {
 
 function caDrawSectionHeading(ctx: CreativeArtisticDirectPdfContext, label: string, x = ctx.marginLeft): void {
   caEnsureSpace(ctx, caSectionHeadingHeight());
-  caSetTextStyle(ctx, { size: 9.2, color: CA_HEADING, fontStyle: 'bold', lineHeight: 4.0 });
-  ctx.pdf.text(label, x, ctx.y);
+  const headingStyle: CreativeArtisticTextStyle = { size: 9.2, color: CA_HEADING, fontStyle: 'bold', lineHeight: 4.0 };
+  caDrawText(ctx, label, x, ctx.y, headingStyle);
   ctx.y += caSectionHeadingHeight();
 }
 
 function caDrawSectionHeadingAt(ctx: CreativeArtisticDirectPdfContext, label: string, x: number, y: number): number {
-  caSetTextStyle(ctx, { size: 9.2, color: CA_HEADING, fontStyle: 'bold', lineHeight: 4.0 });
-  ctx.pdf.text(label, x, y);
+  const headingStyle: CreativeArtisticTextStyle = { size: 9.2, color: CA_HEADING, fontStyle: 'bold', lineHeight: 4.0 };
+  caDrawText(ctx, label, x, y, headingStyle);
   return y + caSectionHeadingHeight();
 }
 
@@ -13283,11 +13306,10 @@ function caDrawLines(
   style: CreativeArtisticTextStyle,
   opts: { x?: number; indentX?: number } = {},
 ): void {
-  caSetTextStyle(ctx, style);
   const x = opts.x ?? (ctx.marginLeft + (opts.indentX ?? 0));
   for (const line of lines) {
     caEnsureSpace(ctx, style.lineHeight);
-    ctx.pdf.text(line, x, ctx.y);
+    caDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -13301,10 +13323,9 @@ function caDrawLinesBlock(
   if (!lines.length) return;
   const blockH = lines.length * style.lineHeight;
   caMoveToFreshPageIfNeeded(ctx, blockH);
-  caSetTextStyle(ctx, style);
   const x = opts.x ?? ctx.marginLeft;
   for (const line of lines) {
-    ctx.pdf.text(line, x, ctx.y);
+    caDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -13357,28 +13378,26 @@ function caDrawHeader(ctx: CreativeArtisticDirectPdfContext, cv: CVData, photoDa
   }
 
   let ty = contentMidY - textStackH / 2 + 4;
-  caSetTextStyle(ctx, { size: 16, color: CA_WHITE, fontStyle: 'bold', lineHeight: 6 });
-  const nameLines = caSplitText(ctx, cv.personal.fullName || 'Your Name', textW);
-  for (const line of nameLines) {
-    ctx.pdf.text(line, textX, ty);
+  const nameStyle: CreativeArtisticTextStyle = { size: 16, color: CA_WHITE, fontStyle: 'bold', lineHeight: 6 };
+  for (const line of caSplitText(ctx, cv.personal.fullName || 'Your Name', textW, 16, true)) {
+    caDrawText(ctx, line, textX, ty, nameStyle);
     ty += 5.5;
   }
   if (cv.personal.jobTitle) {
-    caSetTextStyle(ctx, { size: 9.5, color: CA_TITLE_LIGHT, lineHeight: 4.2 });
-    const titleLines = caSplitText(ctx, cv.personal.jobTitle, textW);
-    for (const line of titleLines) {
-      ctx.pdf.text(line, textX, ty);
+    const titleStyle: CreativeArtisticTextStyle = { size: 9.5, color: CA_TITLE_LIGHT, lineHeight: 4.2 };
+    for (const line of caSplitText(ctx, cv.personal.jobTitle, textW, 9.5)) {
+      caDrawText(ctx, line, textX, ty, titleStyle);
       ty += 4.0;
     }
   }
   if (contacts.length > 0) {
-    caSetTextStyle(ctx, { size: 7.2, color: CA_CONTACT_LIGHT, lineHeight: 3.5 });
-    ctx.pdf.text(contacts.join('  •  '), textX, ty);
+    const contactStyle: CreativeArtisticTextStyle = { size: 7.2, color: CA_CONTACT_LIGHT, lineHeight: 3.5 };
+    caDrawText(ctx, contacts.join('  •  '), textX, ty, contactStyle);
     ty += 4.0;
   }
   if (cv.personal.fathersName) {
-    caSetTextStyle(ctx, { size: 7.2, color: CA_CONTACT_LIGHT, lineHeight: 3.5 });
-    ctx.pdf.text(`${ctx.labels.fathersName}: ${cv.personal.fathersName}`, textX, ty);
+    const fatherStyle: CreativeArtisticTextStyle = { size: 7.2, color: CA_CONTACT_LIGHT, lineHeight: 3.5 };
+    caDrawText(ctx, `${ctx.labels.fathersName}: ${cv.personal.fathersName}`, textX, ty, fatherStyle);
   }
 
   ctx.y = headerH + 6;
@@ -13451,10 +13470,11 @@ function caDrawWrappedBulletAtomic(
   if (!part.lines.length) return;
   const blockH = part.lines.length * 3.8;
   caMoveToFreshPageIfNeeded(ctx, blockH);
-  caSetTextStyle(ctx, { size: 7.6, color: CA_MUTED2, lineHeight: 3.8 });
-  if (part.isBullet) ctx.pdf.text('•', textX, ctx.y);
+  const style: CreativeArtisticTextStyle = { size: 7.6, color: CA_MUTED2, lineHeight: 3.8 };
+  caSetTextStyle(ctx, style);
+  if (part.isBullet) caDrawText(ctx, '•', textX, ctx.y, style);
   for (const line of part.lines) {
-    ctx.pdf.text(line, textX + (part.isBullet ? 3.5 : 0), ctx.y);
+    caDrawText(ctx, line, textX + (part.isBullet ? 3.5 : 0), ctx.y, style);
     ctx.y += 3.8;
   }
 }
@@ -13531,8 +13551,9 @@ function caDrawExperienceEntryPaginated(ctx: CreativeArtisticDirectPdfContext, e
     if (ctx.y + partH > ctx.bottomSafeY) {
       caAddPage(ctx);
       if (!continuationShown) {
-        caSetTextStyle(ctx, { size: 7.5, color: CA_TEXT, fontStyle: 'italic', lineHeight: 3.8 });
-        ctx.pdf.text(`${entry.position} (continued)`, textX, ctx.y);
+        const contStyle: CreativeArtisticTextStyle = { size: 7.5, color: CA_TEXT, fontStyle: 'italic', lineHeight: 3.8 };
+        caSetTextStyle(ctx, contStyle);
+        caDrawText(ctx, `${entry.position} (continued)`, textX, ctx.y, contStyle);
         ctx.y += 4.2;
         continuationShown = true;
       }
@@ -13615,7 +13636,7 @@ function caMeasureSkillChip(
   const padV = 0.85;
   const lineH = 3.4;
   caSetTextStyle(ctx, { size: 7.2, color: CA_CHIP_TEXT, lineHeight: lineH });
-  const textWidth = ctx.pdf.getTextWidth(label);
+  const textWidth = pdfI18nCtxTextWidth(ctx, label, { size: 7.2 });
   const singleLineWidth = textWidth + padH * 2;
   if (singleLineWidth <= maxColWidth) {
     return { width: singleLineWidth, height: lineH + padV * 2, lines: [label] };
@@ -13665,14 +13686,14 @@ function caDrawSkillChips(
   const padH = 2.1;
   const padV = 0.85;
   const lineH = 3.4;
+  const chipStyle: CreativeArtisticTextStyle = { size: 7.2, color: CA_CHIP_TEXT, lineHeight: lineH };
   for (const chip of layout.chips) {
     const chipX = colX + chip.x;
     const chipY = colY + chip.y;
     ctx.pdf.setFillColor(CA_CHIP_BG[0], CA_CHIP_BG[1], CA_CHIP_BG[2]);
     ctx.pdf.rect(chipX, chipY - padV - lineH + 1.2, chip.width, chip.height, 'F');
-    caSetTextStyle(ctx, { size: 7.2, color: CA_CHIP_TEXT, lineHeight: lineH });
     chip.lines.forEach((line, lineIndex) => {
-      ctx.pdf.text(line, chipX + padH, chipY + lineIndex * lineH);
+      caDrawText(ctx, line, chipX + padH, chipY + lineIndex * lineH, chipStyle);
     });
   }
   return layout.totalHeight;
@@ -13720,13 +13741,15 @@ function caDrawSkillsLanguagesBlock(ctx: CreativeArtisticDirectPdfContext, cv: C
 
   if (hasLangs) {
     const headingEnd = caDrawSectionHeadingAt(ctx, ctx.labels.languages, langsX, blockTopY);
-    caSetTextStyle(ctx, { size: 7.6, color: CA_TEXT, lineHeight: 3.8 });
+    const langStyle: CreativeArtisticTextStyle = { size: 7.6, color: CA_TEXT, lineHeight: 3.8 };
     let langY = headingEnd;
     for (const lang of cv.languages) {
-      ctx.pdf.text(
+      caDrawText(
+        ctx,
         `${getLocalizedCvLanguageName(lang.name, ctx.locale)} - ${lang.level}`,
         langsX,
         langY,
+        langStyle,
       );
       langY += 3.8;
     }
@@ -13786,12 +13809,14 @@ export async function buildCreativeArtisticPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const i18n = await registerPdfI18nFonts(pdf);
   const marginLeft = 10;
   const marginRight = 10;
   const marginTop = 10;
   const marginBottom = 12;
   const ctx: CreativeArtisticDirectPdfContext = {
     pdf,
+    i18n,
     locale,
     labels: getCreativeArtisticPdfLabels(locale),
     pageWidth: CV_PDF_A4_WIDTH_MM,
@@ -14105,6 +14130,7 @@ type ElegantFormalPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
 type ElegantFormalDirectPdfContext = {
   pdf: ElegantFormalPdfWriter;
   locale: Locale;
+  i18n: PdfI18nRegistry | null;
   labels: ReturnType<typeof getElegantFormalPdfLabels>;
   pageWidth: number;
   pageHeight: number;
@@ -14152,18 +14178,32 @@ function getElegantFormalPdfLabels(locale: Locale) {
   };
 }
 
-function efSetTextStyle(ctx: ElegantFormalDirectPdfContext, style: ElegantFormalTextStyle): void {
-  ctx.pdf.setFont('times', style.fontStyle ?? 'normal');
-  ctx.pdf.setFontSize(style.size);
-  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+function efSetTextStyle(ctx: ElegantFormalDirectPdfContext, style: ElegantFormalTextStyle, text?: string): void {
+  pdfI18nCtxApplyStyle(ctx, { size: style.size, color: style.color, bold: style.fontStyle === 'bold' }, text);
 }
 
-function efSplitText(ctx: ElegantFormalDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+function efSplitText(ctx: ElegantFormalDirectPdfContext, text: string, maxWidth = ctx.contentWidth, size = 8, bold = false): string[] {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
-  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
-  return Array.isArray(result) ? result.map(String) : [String(result)];
+  return pdfI18nCtxSplit(ctx, normalized, maxWidth, { size, bold });
 }
+function efDrawText(
+  ctx: ElegantFormalDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: ElegantFormalTextStyle,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.fontStyle === 'bold',
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align,
+  });
+}
+
 
 function efFreshPageCapacity(ctx: ElegantFormalDirectPdfContext): number {
   return ctx.bottomSafeY - ctx.marginTop;
@@ -14187,12 +14227,12 @@ function efMoveToFreshPageIfNeeded(ctx: ElegantFormalDirectPdfContext, blockHeig
   }
 }
 
-function efCenteredX(ctx: ElegantFormalDirectPdfContext, text: string): number {
-  return (ctx.pageWidth - ctx.pdf.getTextWidth(text)) / 2;
+function efCenteredX(ctx: ElegantFormalDirectPdfContext, text: string, size = 9, bold = false): number {
+  return (ctx.pageWidth - pdfI18nCtxTextWidth(ctx, text, { size, bold })) / 2;
 }
 
-function efCenteredXInColumn(ctx: ElegantFormalDirectPdfContext, text: string, colX: number, colW: number): number {
-  return colX + (colW - ctx.pdf.getTextWidth(text)) / 2;
+function efCenteredXInColumn(ctx: ElegantFormalDirectPdfContext, text: string, colX: number, colW: number, size = 9, bold = false): number {
+  return colX + (colW - pdfI18nCtxTextWidth(ctx, text, { size, bold })) / 2;
 }
 
 function efSectionHeadingHeight(withRule = false): number {
@@ -14203,8 +14243,8 @@ function efDrawSectionHeading(ctx: ElegantFormalDirectPdfContext, label: string,
   const blockH = efSectionHeadingHeight(withRule);
   efEnsureSpace(ctx, blockH);
   const upper = label.toUpperCase();
-  efSetTextStyle(ctx, { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 });
-  ctx.pdf.text(upper, efCenteredX(ctx, upper), ctx.y);
+  const headingStyle: ElegantFormalTextStyle = { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 };
+  efDrawText(ctx, upper, efCenteredX(ctx, upper, 9, true), ctx.y, headingStyle, { align: 'center' });
   ctx.y += 4.8;
   if (withRule) {
     ctx.pdf.setDrawColor(EF_RULE[0], EF_RULE[1], EF_RULE[2]);
@@ -14222,8 +14262,8 @@ function efDrawSectionHeadingAt(
   y: number,
 ): number {
   const upper = label.toUpperCase();
-  efSetTextStyle(ctx, { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 });
-  ctx.pdf.text(upper, efCenteredXInColumn(ctx, upper, colX, colW), y);
+  const headingStyle: ElegantFormalTextStyle = { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 };
+  efDrawText(ctx, upper, efCenteredXInColumn(ctx, upper, colX, colW, 9, true), y, headingStyle, { align: 'center' });
   return y + 5.2;
 }
 
@@ -14233,10 +14273,9 @@ function efDrawCenteredLines(
   style: ElegantFormalTextStyle,
 ): void {
   if (!lines.length) return;
-  efSetTextStyle(ctx, style);
   for (const line of lines) {
     efEnsureSpace(ctx, style.lineHeight);
-    ctx.pdf.text(line, efCenteredX(ctx, line), ctx.y);
+    efDrawText(ctx, line, efCenteredX(ctx, line, style.size, style.fontStyle === 'bold'), ctx.y, style, { align: 'center' });
     ctx.y += style.lineHeight;
   }
 }
@@ -14253,7 +14292,7 @@ function efDrawLinesBlock(
   efSetTextStyle(ctx, style);
   const x = opts.x ?? ctx.marginLeft;
   for (const line of lines) {
-    ctx.pdf.text(line, x, ctx.y);
+    efDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -14297,35 +14336,31 @@ function efDrawHeader(ctx: ElegantFormalDirectPdfContext, cv: CVData, photoDataU
   const centerColW = showPhoto
     ? ctx.contentWidth - EF_PHOTO_W_MM - EF_HEADER_GAP_MM - EF_PHOTO_W_MM
     : ctx.contentWidth;
-  const centerOfCol = (text: string) => centerColX + (centerColW - ctx.pdf.getTextWidth(text)) / 2;
+  const centerOfCol = (text: string, size: number, bold = false) =>
+    centerColX + (centerColW - pdfI18nCtxTextWidth(ctx, text, { size, bold })) / 2;
 
   let textY = headerTop + 4;
-  efSetTextStyle(ctx, { size: 22, color: EF_NAME, fontStyle: 'normal', lineHeight: 5.5 });
-  for (const line of efSplitText(ctx, cv.personal.fullName || 'Your Name', centerColW)) {
-    ctx.pdf.text(line, centerOfCol(line), textY);
+  const nameStyle: ElegantFormalTextStyle = { size: 22, color: EF_NAME, fontStyle: 'normal', lineHeight: 5.5 };
+  for (const line of efSplitText(ctx, cv.personal.fullName || 'Your Name', centerColW, 22)) {
+    efDrawText(ctx, line, centerOfCol(line, 22), textY, nameStyle, { align: 'center' });
     textY += 5.2;
   }
 
   if (cv.personal.jobTitle) {
-    efSetTextStyle(ctx, { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 });
+    const titleStyle: ElegantFormalTextStyle = { size: 9, color: EF_AMBER, fontStyle: 'bold', lineHeight: 4.0 };
     const title = cv.personal.jobTitle.toUpperCase();
-    for (const line of efSplitText(ctx, title, centerColW)) {
-      ctx.pdf.text(line, centerOfCol(line), textY);
+    for (const line of efSplitText(ctx, title, centerColW, 9, true)) {
+      efDrawText(ctx, line, centerOfCol(line, 9, true), textY, titleStyle, { align: 'center' });
       textY += 3.8;
     }
   }
 
   if (contacts.length > 0) {
     textY += 1.5;
-    efSetTextStyle(ctx, { size: 9, color: EF_LIGHT, fontStyle: 'normal', lineHeight: 3.5 });
-    const contactParts: string[] = [];
-    contacts.forEach((contact, index) => {
-      if (index > 0) contactParts.push(' | ');
-      contactParts.push(contact);
-    });
-    const contactLine = contactParts.join('');
-    for (const line of efSplitText(ctx, contactLine, centerColW)) {
-      ctx.pdf.text(line, centerOfCol(line), textY);
+    const contactStyle: ElegantFormalTextStyle = { size: 9, color: EF_LIGHT, fontStyle: 'normal', lineHeight: 3.5 };
+    const contactLine = contacts.join(' | ');
+    for (const line of efSplitText(ctx, contactLine, centerColW, 9)) {
+      efDrawText(ctx, line, centerOfCol(line, 9), textY, contactStyle, { align: 'center' });
       textY += 3.5;
     }
   }
@@ -14390,10 +14425,10 @@ function efDrawWrappedBulletAtomic(
   const lineH = 3.8;
   const blockH = part.lines.length * lineH;
   efEnsureSpace(ctx, blockH);
-  efSetTextStyle(ctx, { size: 9.5, color: EF_MUTED, lineHeight: lineH });
+  const bulletStyle: ElegantFormalTextStyle = { size: 9.5, color: EF_MUTED, lineHeight: lineH };
   part.lines.forEach((line, index) => {
     const prefix = part.isBullet && index === 0 ? '• ' : part.isBullet ? '  ' : '';
-    ctx.pdf.text(`${prefix}${line}`, ctx.marginLeft + (part.isBullet ? 4 : 0), ctx.y);
+    efDrawText(ctx, `${prefix}${line}`, ctx.marginLeft + (part.isBullet ? 4 : 0), ctx.y, bulletStyle);
     ctx.y += lineH;
   });
 }
@@ -14410,15 +14445,14 @@ function efDrawExperienceEntryPaginated(ctx: ElegantFormalDirectPdfContext, entr
     const titleLineH = 4.0;
     const headerBlockH = Math.max(titleLineH, titleLines.length * titleLineH);
     efEnsureSpace(ctx, headerBlockH);
-    efSetTextStyle(ctx, { size: 10, color: EF_TEXT, fontStyle: 'bold', lineHeight: titleLineH });
+    const titleStyle: ElegantFormalTextStyle = { size: 10, color: EF_TEXT, fontStyle: 'bold', lineHeight: titleLineH };
     titleLines.forEach((line) => {
-      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      efDrawText(ctx, line, ctx.marginLeft, ctx.y, titleStyle);
       ctx.y += titleLineH;
     });
     if (dateText) {
-      efSetTextStyle(ctx, { size: 9, color: EF_LIGHT, fontStyle: 'italic', lineHeight: 3.5 });
-      const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
-      ctx.pdf.text(dateText, dateX, ctx.y - titleLineH + 0.5);
+      const dateStyle: ElegantFormalTextStyle = { size: 9, color: EF_LIGHT, fontStyle: 'italic', lineHeight: 3.5 };
+      efDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, ctx.y - titleLineH + 0.5, dateStyle, { align: 'right' });
     }
     if (entry.company) {
       efDrawLinesBlock(ctx, efSplitText(ctx, entry.company), { size: 9, color: EF_AMBER, lineHeight: 3.5 });
@@ -14457,9 +14491,8 @@ function efDrawExperienceEntryPaginated(ctx: ElegantFormalDirectPdfContext, entr
     if (ctx.y + partH > ctx.bottomSafeY) {
       efAddPage(ctx);
       if (!continuationShown) {
-        efSetTextStyle(ctx, { size: 9.5, color: EF_TEXT, fontStyle: 'italic', lineHeight: 3.8 });
-        const cont = `${entry.position} (continued)`;
-        ctx.pdf.text(cont, ctx.marginLeft, ctx.y);
+        const contStyle: ElegantFormalTextStyle = { size: 9.5, color: EF_TEXT, fontStyle: 'italic', lineHeight: 3.8 };
+        efDrawText(ctx, `${entry.position} (continued)`, ctx.marginLeft, ctx.y, contStyle);
         ctx.y += 4.2;
         continuationShown = true;
       }
@@ -14551,7 +14584,7 @@ function efLayoutInlineItems(ctx: ElegantFormalDirectPdfContext, items: string[]
   };
 
   for (const item of items) {
-    const itemW = ctx.pdf.getTextWidth(item);
+    const itemW = pdfI18nCtxTextWidth(ctx, item, { size: 9 });
     const nextW = rowWidth > 0 ? rowWidth + gapX + itemW : itemW;
     if (rowItems.length > 0 && nextW > colW) flush();
     rowWidth = rowItems.length > 0 ? rowWidth + gapX + itemW : itemW;
@@ -14570,14 +14603,14 @@ function efMeasureInlineItemsHeight(ctx: ElegantFormalDirectPdfContext, items: s
 
 function efDrawInlineItems(ctx: ElegantFormalDirectPdfContext, items: string[], colX: number, colW: number, startY: number): number {
   const rows = efLayoutInlineItems(ctx, items, colW);
-  efSetTextStyle(ctx, { size: 9, color: EF_MUTED, lineHeight: 3.8 });
+  const itemStyle: ElegantFormalTextStyle = { size: 9, color: EF_MUTED, lineHeight: 3.8 };
   for (const row of rows) {
-    const totalW = row.items.reduce((sum, item, i) => sum + ctx.pdf.getTextWidth(item) + (i > 0 ? 2.8 : 0), 0);
+    const totalW = row.items.reduce((sum, item, i) => sum + pdfI18nCtxTextWidth(ctx, item, { size: 9 }) + (i > 0 ? 2.8 : 0), 0);
     let x = colX + (colW - totalW) / 2;
     const y = startY + row.y;
     for (const item of row.items) {
-      ctx.pdf.text(item, x, y);
-      x += ctx.pdf.getTextWidth(item) + 2.8;
+      efDrawText(ctx, item, x, y, itemStyle);
+      x += pdfI18nCtxTextWidth(ctx, item, { size: 9 }) + 2.8;
     }
   }
   const h = efMeasureInlineItemsHeight(ctx, items, colW);
@@ -14668,12 +14701,14 @@ export async function buildElegantFormalPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const i18n = await registerPdfI18nFonts(pdf);
   const marginLeft = 9;
   const marginRight = 9;
   const marginTop = 9;
   const marginBottom = 11;
   const ctx: ElegantFormalDirectPdfContext = {
     pdf,
+    i18n,
     locale,
     labels: getElegantFormalPdfLabels(locale),
     pageWidth: CV_PDF_A4_WIDTH_MM,
@@ -14747,6 +14782,7 @@ type AtsStandardPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
 type AtsStandardDirectPdfContext = {
   pdf: AtsStandardPdfWriter;
   locale: Locale;
+  i18n: PdfI18nRegistry | null;
   labels: ReturnType<typeof getAtsStandardPdfLabels>;
   pageWidth: number;
   pageHeight: number;
@@ -14786,18 +14822,32 @@ function getAtsStandardPdfLabels(locale: Locale) {
   };
 }
 
-function atsSetTextStyle(ctx: AtsStandardDirectPdfContext, style: AtsStandardTextStyle): void {
-  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
-  ctx.pdf.setFontSize(style.size);
-  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+function atsSetTextStyle(ctx: AtsStandardDirectPdfContext, style: AtsStandardTextStyle, text?: string): void {
+  pdfI18nCtxApplyStyle(ctx, { size: style.size, color: style.color, bold: style.fontStyle === 'bold' }, text);
 }
 
-function atsSplitText(ctx: AtsStandardDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+function atsSplitText(ctx: AtsStandardDirectPdfContext, text: string, maxWidth = ctx.contentWidth, size = 8, bold = false): string[] {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
-  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
-  return Array.isArray(result) ? result.map(String) : [String(result)];
+  return pdfI18nCtxSplit(ctx, normalized, maxWidth, { size, bold });
 }
+function atsDrawText(
+  ctx: AtsStandardDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: AtsStandardTextStyle,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.fontStyle === 'bold',
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align,
+  });
+}
+
 
 function atsFreshPageCapacity(ctx: AtsStandardDirectPdfContext): number {
   return ctx.bottomSafeY - ctx.marginTop;
@@ -14821,8 +14871,8 @@ function atsMoveToFreshPageIfNeeded(ctx: AtsStandardDirectPdfContext, blockHeigh
   }
 }
 
-function atsCenteredX(ctx: AtsStandardDirectPdfContext, text: string): number {
-  return (ctx.pageWidth - ctx.pdf.getTextWidth(text)) / 2;
+function atsCenteredX(ctx: AtsStandardDirectPdfContext, text: string, size = 8, bold = false): number {
+  return (ctx.pageWidth - pdfI18nCtxTextWidth(ctx, text, { size, bold })) / 2;
 }
 
 function atsSectionHeadingHeight(): number {
@@ -14833,8 +14883,8 @@ function atsDrawSectionHeading(ctx: AtsStandardDirectPdfContext, label: string):
   const blockH = atsSectionHeadingHeight();
   atsEnsureSpace(ctx, blockH);
   const upper = label.toUpperCase();
-  atsSetTextStyle(ctx, { size: 8.6, color: ATS_TEXT, fontStyle: 'bold', lineHeight: 3.8 });
-  ctx.pdf.text(upper, ctx.marginLeft, ctx.y);
+  const headingStyle: AtsStandardTextStyle = { size: 8.6, color: ATS_TEXT, fontStyle: 'bold', lineHeight: 3.8 };
+  atsDrawText(ctx, upper, ctx.marginLeft, ctx.y, headingStyle);
   ctx.y += 4.2;
   ctx.pdf.setDrawColor(ATS_RULE[0], ATS_RULE[1], ATS_RULE[2]);
   ctx.pdf.setLineWidth(0.25);
@@ -14849,11 +14899,10 @@ function atsDrawLines(
   opts: { x?: number } = {},
 ): void {
   if (!lines.length) return;
-  atsSetTextStyle(ctx, style);
   const x = opts.x ?? ctx.marginLeft;
   for (const line of lines) {
     atsEnsureSpace(ctx, style.lineHeight);
-    ctx.pdf.text(line, x, ctx.y);
+    atsDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -14867,10 +14916,9 @@ function atsDrawLinesBlock(
   if (!lines.length) return;
   const blockH = lines.length * style.lineHeight;
   atsMoveToFreshPageIfNeeded(ctx, blockH);
-  atsSetTextStyle(ctx, style);
   const x = opts.x ?? ctx.marginLeft;
   for (const line of lines) {
-    ctx.pdf.text(line, x, ctx.y);
+    atsDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -14888,26 +14936,26 @@ function atsDrawHeader(ctx: AtsStandardDirectPdfContext, cv: CVData): void {
   ].filter(Boolean) as string[];
 
   ctx.y = ctx.marginTop + 2;
-  atsSetTextStyle(ctx, { size: 16, color: ATS_TEXT, fontStyle: 'bold', lineHeight: 5.0 });
-  for (const line of atsSplitText(ctx, cv.personal.fullName || 'Your Name', ctx.contentWidth)) {
-    ctx.pdf.text(line, atsCenteredX(ctx, line), ctx.y);
+  const nameStyle: AtsStandardTextStyle = { size: 16, color: ATS_TEXT, fontStyle: 'bold', lineHeight: 5.0 };
+  for (const line of atsSplitText(ctx, cv.personal.fullName || 'Your Name', ctx.contentWidth, 16, true)) {
+    atsDrawText(ctx, line, atsCenteredX(ctx, line, 16, true), ctx.y, nameStyle, { align: 'center' });
     ctx.y += 4.8;
   }
 
   if (cv.personal.jobTitle) {
-    atsSetTextStyle(ctx, { size: 9, color: ATS_MUTED, lineHeight: 3.8 });
-    for (const line of atsSplitText(ctx, cv.personal.jobTitle, ctx.contentWidth)) {
-      ctx.pdf.text(line, atsCenteredX(ctx, line), ctx.y);
+    const titleStyle: AtsStandardTextStyle = { size: 9, color: ATS_MUTED, lineHeight: 3.8 };
+    for (const line of atsSplitText(ctx, cv.personal.jobTitle, ctx.contentWidth, 9)) {
+      atsDrawText(ctx, line, atsCenteredX(ctx, line, 9), ctx.y, titleStyle, { align: 'center' });
       ctx.y += 3.6;
     }
   }
 
   if (contacts.length > 0) {
     ctx.y += 1.2;
-    atsSetTextStyle(ctx, { size: 8, color: ATS_MUTED, lineHeight: 3.4 });
+    const contactStyle: AtsStandardTextStyle = { size: 8, color: ATS_MUTED, lineHeight: 3.4 };
     const contactLine = contacts.join('  |  ');
-    for (const line of atsSplitText(ctx, contactLine, ctx.contentWidth)) {
-      ctx.pdf.text(line, atsCenteredX(ctx, line), ctx.y);
+    for (const line of atsSplitText(ctx, contactLine, ctx.contentWidth, 8)) {
+      atsDrawText(ctx, line, atsCenteredX(ctx, line, 8), ctx.y, contactStyle, { align: 'center' });
       ctx.y += 3.4;
     }
   }
@@ -14971,10 +15019,10 @@ function atsDrawWrappedBulletAtomic(
   const lineH = 3.7;
   const blockH = part.lines.length * lineH;
   atsEnsureSpace(ctx, blockH);
-  atsSetTextStyle(ctx, { size: 8.6, color: ATS_BODY, lineHeight: lineH });
+  const bulletStyle: AtsStandardTextStyle = { size: 8.6, color: ATS_BODY, lineHeight: lineH };
   part.lines.forEach((line, index) => {
     const prefix = part.isBullet && index === 0 ? '- ' : part.isBullet ? '  ' : '';
-    ctx.pdf.text(`${prefix}${line}`, ctx.marginLeft + (part.isBullet ? 2 : 0), ctx.y);
+    atsDrawText(ctx, `${prefix}${line}`, ctx.marginLeft + (part.isBullet ? 2 : 0), ctx.y, bulletStyle);
     ctx.y += lineH;
   });
 }
@@ -14992,15 +15040,14 @@ function atsDrawExperienceEntryPaginated(ctx: AtsStandardDirectPdfContext, entry
     const titleLineH = 4.0;
     const headerBlockH = Math.max(titleLineH, titleLines.length * titleLineH);
     atsEnsureSpace(ctx, headerBlockH);
-    atsSetTextStyle(ctx, { size: 9.4, color: ATS_TEXT, fontStyle: 'bold', lineHeight: titleLineH });
+    const titleStyle: AtsStandardTextStyle = { size: 9.4, color: ATS_TEXT, fontStyle: 'bold', lineHeight: titleLineH };
     titleLines.forEach((line) => {
-      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      atsDrawText(ctx, line, ctx.marginLeft, ctx.y, titleStyle);
       ctx.y += titleLineH;
     });
     if (dateText) {
-      atsSetTextStyle(ctx, { size: 8, color: ATS_MUTED, lineHeight: 3.4 });
-      const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
-      ctx.pdf.text(dateText, dateX, ctx.y - titleLineH + 0.5);
+      const dateStyle: AtsStandardTextStyle = { size: 8, color: ATS_MUTED, lineHeight: 3.4 };
+      atsDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, ctx.y - titleLineH + 0.5, dateStyle, { align: 'right' });
     }
     ctx.y += 1;
   };
@@ -15035,9 +15082,8 @@ function atsDrawExperienceEntryPaginated(ctx: AtsStandardDirectPdfContext, entry
     if (ctx.y + partH > ctx.bottomSafeY) {
       atsAddPage(ctx);
       if (!continuationShown) {
-        atsSetTextStyle(ctx, { size: 8.6, color: ATS_TEXT, fontStyle: 'italic', lineHeight: 3.7 });
-        const cont = `${entry.position} (continued)`;
-        ctx.pdf.text(cont, ctx.marginLeft, ctx.y);
+        const contStyle: AtsStandardTextStyle = { size: 8.6, color: ATS_TEXT, fontStyle: 'italic', lineHeight: 3.7 };
+        atsDrawText(ctx, `${entry.position} (continued)`, ctx.marginLeft, ctx.y, contStyle);
         ctx.y += 4.0;
         continuationShown = true;
       }
@@ -15080,15 +15126,14 @@ function atsDrawEducationEntry(ctx: AtsStandardDirectPdfContext, edu: CVData['ed
   const titleLines = atsSplitText(ctx, rowText, ctx.contentWidth - 28);
   const titleLineH = 4.0;
   atsEnsureSpace(ctx, titleLines.length * titleLineH);
-  atsSetTextStyle(ctx, { size: 8.6, color: ATS_TEXT, fontStyle: 'bold', lineHeight: titleLineH });
+  const titleStyle: AtsStandardTextStyle = { size: 8.6, color: ATS_TEXT, fontStyle: 'bold', lineHeight: titleLineH };
   titleLines.forEach((line) => {
-    ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+    atsDrawText(ctx, line, ctx.marginLeft, ctx.y, titleStyle);
     ctx.y += titleLineH;
   });
   if (dateText) {
-    atsSetTextStyle(ctx, { size: 8, color: ATS_MUTED, lineHeight: 3.4 });
-    const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
-    ctx.pdf.text(dateText, dateX, ctx.y - titleLineH + 0.5);
+    const dateStyle: AtsStandardTextStyle = { size: 8, color: ATS_MUTED, lineHeight: 3.4 };
+    atsDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, ctx.y - titleLineH + 0.5, dateStyle, { align: 'right' });
   }
   if (edu.description) {
     atsDrawLines(ctx, atsSplitText(ctx, edu.description), { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
@@ -15152,11 +15197,11 @@ function atsLayoutPipeItems(ctx: AtsStandardDirectPdfContext, items: string[], m
 
   for (let i = 0; i < items.length; i += 1) {
     const item = items[i];
-    const itemW = ctx.pdf.getTextWidth(item);
-    const sepW = rowItems.length > 0 ? ctx.pdf.getTextWidth(sep) : 0;
+    const itemW = pdfI18nCtxTextWidth(ctx, item, { size: 8.4 });
+    const sepW = rowItems.length > 0 ? pdfI18nCtxTextWidth(ctx, sep, { size: 8.4 }) : 0;
     const nextW = rowWidth + sepW + itemW;
     if (rowItems.length > 0 && nextW > maxWidth) flush();
-    rowWidth = rowItems.length > 0 ? rowWidth + ctx.pdf.getTextWidth(sep) + itemW : itemW;
+    rowWidth = rowItems.length > 0 ? rowWidth + pdfI18nCtxTextWidth(ctx, sep, { size: 8.4 }) + itemW : itemW;
     rowItems.push(item);
   }
   flush();
@@ -15166,19 +15211,18 @@ function atsLayoutPipeItems(ctx: AtsStandardDirectPdfContext, items: string[], m
 function atsDrawPipeItems(ctx: AtsStandardDirectPdfContext, items: string[], startY: number): number {
   const rows = atsLayoutPipeItems(ctx, items, ctx.contentWidth);
   const sep = ' | ';
-  atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+  const bodyStyle: AtsStandardTextStyle = { size: 8.4, color: ATS_BODY, lineHeight: 3.7 };
+  const sepStyle: AtsStandardTextStyle = { size: 8.4, color: ATS_SEPARATOR, lineHeight: 3.7 };
   for (const row of rows) {
     let x = ctx.marginLeft;
     const y = startY + row.y;
     row.items.forEach((item, index) => {
       if (index > 0) {
-        atsSetTextStyle(ctx, { size: 8.4, color: ATS_SEPARATOR, lineHeight: 3.7 });
-        ctx.pdf.text(sep, x, y);
-        x += ctx.pdf.getTextWidth(sep);
-        atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+        atsDrawText(ctx, sep, x, y, sepStyle);
+        x += pdfI18nCtxTextWidth(ctx, sep, { size: 8.4 });
       }
-      ctx.pdf.text(item, x, y);
-      x += ctx.pdf.getTextWidth(item);
+      atsDrawText(ctx, item, x, y, bodyStyle);
+      x += pdfI18nCtxTextWidth(ctx, item, { size: 8.4 });
     });
   }
   const h = rows.length ? rows[rows.length - 1].y + rows[rows.length - 1].height : 0;
@@ -15207,11 +15251,11 @@ function atsDrawLanguages(ctx: AtsStandardDirectPdfContext, cv: CVData): void {
   const blockH = atsLanguagesHeight(ctx, cv);
   atsMoveToFreshPageIfNeeded(ctx, blockH);
   atsDrawSectionHeading(ctx, ctx.labels.languages);
-  atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+  const langStyle: AtsStandardTextStyle = { size: 8.4, color: ATS_BODY, lineHeight: 3.7 };
   for (const lang of cv.languages) {
     atsEnsureSpace(ctx, 3.7);
     const line = `${getLocalizedCvLanguageName(lang.name, ctx.locale)} - ${lang.level}`;
-    ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+    atsDrawText(ctx, line, ctx.marginLeft, ctx.y, langStyle);
     ctx.y += 3.7;
   }
   ctx.y += 2;
@@ -15222,10 +15266,10 @@ function atsDrawCertifications(ctx: AtsStandardDirectPdfContext, cv: CVData): vo
   const blockH = atsCertificationsHeight(ctx, cv);
   atsMoveToFreshPageIfNeeded(ctx, blockH);
   atsDrawSectionHeading(ctx, ctx.labels.certifications);
-  atsSetTextStyle(ctx, { size: 8.4, color: ATS_BODY, lineHeight: 3.7 });
+  const certStyle: AtsStandardTextStyle = { size: 8.4, color: ATS_BODY, lineHeight: 3.7 };
   for (const cert of cv.certifications) {
     atsEnsureSpace(ctx, 3.7);
-    ctx.pdf.text(cert, ctx.marginLeft, ctx.y);
+    atsDrawText(ctx, cert, ctx.marginLeft, ctx.y, certStyle);
     ctx.y += 3.7;
   }
   ctx.y += 2;
@@ -15259,12 +15303,14 @@ export async function buildAtsStandardPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const i18n = await registerPdfI18nFonts(pdf);
   const marginLeft = 13;
   const marginRight = 13;
   const marginTop = 10;
   const marginBottom = 12;
   const ctx: AtsStandardDirectPdfContext = {
     pdf,
+    i18n,
     locale,
     labels: getAtsStandardPdfLabels(locale),
     pageWidth: CV_PDF_A4_WIDTH_MM,
@@ -15378,6 +15424,7 @@ type NordicCleanPdfWriter = InstanceType<typeof import('jspdf').jsPDF>;
 type NordicCleanDirectPdfContext = {
   pdf: NordicCleanPdfWriter;
   locale: Locale;
+  i18n: PdfI18nRegistry | null;
   labels: ReturnType<typeof getNordicCleanPdfLabels>;
   pageWidth: number;
   pageHeight: number;
@@ -15422,18 +15469,32 @@ function getNordicCleanPdfLabels(locale: Locale) {
   };
 }
 
-function ncSetTextStyle(ctx: NordicCleanDirectPdfContext, style: NordicCleanTextStyle): void {
-  ctx.pdf.setFont('helvetica', style.fontStyle ?? 'normal');
-  ctx.pdf.setFontSize(style.size);
-  ctx.pdf.setTextColor(style.color[0], style.color[1], style.color[2]);
+function ncSetTextStyle(ctx: NordicCleanDirectPdfContext, style: NordicCleanTextStyle, text?: string): void {
+  pdfI18nCtxApplyStyle(ctx, { size: style.size, color: style.color, bold: style.fontStyle === 'bold' }, text);
 }
 
-function ncSplitText(ctx: NordicCleanDirectPdfContext, text: string, maxWidth = ctx.contentWidth): string[] {
+function ncSplitText(ctx: NordicCleanDirectPdfContext, text: string, maxWidth = ctx.contentWidth, size = 8, bold = false): string[] {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
-  const result = ctx.pdf.splitTextToSize(normalized, maxWidth);
-  return Array.isArray(result) ? result.map(String) : [String(result)];
+  return pdfI18nCtxSplit(ctx, normalized, maxWidth, { size, bold });
 }
+function ncDrawText(
+  ctx: NordicCleanDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: NordicCleanTextStyle,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.fontStyle === 'bold',
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align,
+  });
+}
+
 
 function ncFreshPageCapacity(ctx: NordicCleanDirectPdfContext): number {
   return ctx.bottomSafeY - ctx.marginTop;
@@ -15465,8 +15526,8 @@ function ncDrawSectionHeading(ctx: NordicCleanDirectPdfContext, label: string): 
   const blockH = ncSectionHeadingHeight();
   ncEnsureSpace(ctx, blockH);
   const upper = label.toUpperCase();
-  ncSetTextStyle(ctx, { size: 7.5, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.6 });
-  ctx.pdf.text(upper, ctx.marginLeft, ctx.y);
+  const headingStyle: NordicCleanTextStyle = { size: 7.5, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.6 };
+  ncDrawText(ctx, upper, ctx.marginLeft, ctx.y, headingStyle);
   ctx.y += 4.0;
   ctx.pdf.setDrawColor(NC_TEAL_RULE[0], NC_TEAL_RULE[1], NC_TEAL_RULE[2]);
   ctx.pdf.setLineWidth(0.25);
@@ -15482,8 +15543,8 @@ function ncDrawSectionHeadingAt(
   y: number,
 ): number {
   const upper = label.toUpperCase();
-  ncSetTextStyle(ctx, { size: 7.5, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.6 });
-  ctx.pdf.text(upper, colX, y);
+  const headingStyle: NordicCleanTextStyle = { size: 7.5, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.6 };
+  ncDrawText(ctx, upper, colX, y, headingStyle);
   const ruleY = y + 3.8;
   ctx.pdf.setDrawColor(NC_TEAL_RULE[0], NC_TEAL_RULE[1], NC_TEAL_RULE[2]);
   ctx.pdf.setLineWidth(0.25);
@@ -15498,11 +15559,10 @@ function ncDrawLines(
   opts: { x?: number } = {},
 ): void {
   if (!lines.length) return;
-  ncSetTextStyle(ctx, style);
   const x = opts.x ?? ctx.marginLeft;
   for (const line of lines) {
     ncEnsureSpace(ctx, style.lineHeight);
-    ctx.pdf.text(line, x, ctx.y);
+    ncDrawText(ctx, line, x, ctx.y, style);
     ctx.y += style.lineHeight;
   }
 }
@@ -15528,26 +15588,26 @@ function ncDrawHeader(ctx: NordicCleanDirectPdfContext, cv: CVData, photoDataUrl
   const headerStartY = ctx.marginTop;
 
   ctx.y = headerStartY;
-  ncSetTextStyle(ctx, { size: 22, color: NC_TEXT, fontStyle: 'normal', lineHeight: 5.2 });
-  for (const line of ncSplitText(ctx, cv.personal.fullName || 'Your Name', textMaxW)) {
-    ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+  const nameStyle: NordicCleanTextStyle = { size: 22, color: NC_TEXT, fontStyle: 'normal', lineHeight: 5.2 };
+  for (const line of ncSplitText(ctx, cv.personal.fullName || 'Your Name', textMaxW, 22)) {
+    ncDrawText(ctx, line, ctx.marginLeft, ctx.y, nameStyle);
     ctx.y += 4.8;
   }
 
   if (cv.personal.jobTitle) {
-    ncSetTextStyle(ctx, { size: 9.8, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.8 });
-    for (const line of ncSplitText(ctx, cv.personal.jobTitle, textMaxW)) {
-      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+    const titleStyle: NordicCleanTextStyle = { size: 9.8, color: NC_TEAL, fontStyle: 'bold', lineHeight: 3.8 };
+    for (const line of ncSplitText(ctx, cv.personal.jobTitle, textMaxW, 9.8, true)) {
+      ncDrawText(ctx, line, ctx.marginLeft, ctx.y, titleStyle);
       ctx.y += 3.6;
     }
   }
 
   if (contacts.length > 0) {
     ctx.y += 1.5;
-    ncSetTextStyle(ctx, { size: 8, color: NC_MUTED, lineHeight: 3.4 });
+    const contactStyle: NordicCleanTextStyle = { size: 8, color: NC_MUTED, lineHeight: 3.4 };
     const contactLine = contacts.join('  |  ');
-    for (const line of ncSplitText(ctx, contactLine, textMaxW)) {
-      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+    for (const line of ncSplitText(ctx, contactLine, textMaxW, 8)) {
+      ncDrawText(ctx, line, ctx.marginLeft, ctx.y, contactStyle);
       ctx.y += 3.4;
     }
   }
@@ -15672,18 +15732,16 @@ function ncDrawWrappedBulletAtomic(
   const lineH = 3.5;
   const blockH = part.lines.length * lineH;
   ncEnsureSpace(ctx, blockH);
+  const bulletMarkerStyle: NordicCleanTextStyle = { size: 7.8, color: NC_TEAL, lineHeight: lineH };
+  const bulletBodyStyle: NordicCleanTextStyle = { size: 7.8, color: NC_BODY, lineHeight: lineH };
   part.lines.forEach((line, index) => {
     if (part.isBullet && index === 0) {
-      ncSetTextStyle(ctx, { size: 7.8, color: NC_TEAL, lineHeight: lineH });
-      ctx.pdf.text('-', ctx.marginLeft, ctx.y);
-      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: lineH });
-      ctx.pdf.text(line, ctx.marginLeft + 4, ctx.y);
+      ncDrawText(ctx, '-', ctx.marginLeft, ctx.y, bulletMarkerStyle);
+      ncDrawText(ctx, line, ctx.marginLeft + 4, ctx.y, bulletBodyStyle);
     } else if (part.isBullet) {
-      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: lineH });
-      ctx.pdf.text(line, ctx.marginLeft + 4, ctx.y);
+      ncDrawText(ctx, line, ctx.marginLeft + 4, ctx.y, bulletBodyStyle);
     } else {
-      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: lineH });
-      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      ncDrawText(ctx, line, ctx.marginLeft, ctx.y, bulletBodyStyle);
     }
     ctx.y += lineH;
   });
@@ -15704,20 +15762,19 @@ function ncDrawExperienceEntryPaginated(ctx: NordicCleanDirectPdfContext, entry:
     const headerBlockH = ncMeasureExperienceHeaderHeight(ctx, entry);
     ncEnsureSpace(ctx, headerBlockH);
     const startY = ctx.y;
-    ncSetTextStyle(ctx, { size: 9.8, color: NC_TEXT, fontStyle: 'bold', lineHeight: titleLineH });
+    const titleStyle: NordicCleanTextStyle = { size: 9.8, color: NC_TEXT, fontStyle: 'bold', lineHeight: titleLineH };
     titleLines.forEach((line) => {
-      ctx.pdf.text(line, ctx.marginLeft, ctx.y);
+      ncDrawText(ctx, line, ctx.marginLeft, ctx.y, titleStyle);
       ctx.y += titleLineH;
     });
     if (entry.company) {
-      ncSetTextStyle(ctx, { size: 8, color: NC_COMPANY, lineHeight: 3.2 });
-      ctx.pdf.text(entry.company, ctx.marginLeft, ctx.y);
+      const companyStyle: NordicCleanTextStyle = { size: 8, color: NC_COMPANY, lineHeight: 3.2 };
+      ncDrawText(ctx, entry.company, ctx.marginLeft, ctx.y, companyStyle);
       ctx.y += 3.2;
     }
     if (dateText) {
-      ncSetTextStyle(ctx, { size: 7.5, color: NC_MUTED, lineHeight: 3.2 });
-      const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
-      ctx.pdf.text(dateText, dateX, startY + 0.5);
+      const dateStyle: NordicCleanTextStyle = { size: 7.5, color: NC_MUTED, lineHeight: 3.2 };
+      ncDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, startY + 0.5, dateStyle, { align: 'right' });
     }
     ctx.y += 0.8;
   };
@@ -15734,8 +15791,8 @@ function ncDrawExperienceEntryPaginated(ctx: NordicCleanDirectPdfContext, entry:
     if (partH > 0 && ctx.y + partH > ctx.bottomSafeY) {
       ncAddPage(ctx);
       if (!continuationShown) {
-        ncSetTextStyle(ctx, { size: 7.8, color: NC_TEXT, fontStyle: 'italic', lineHeight: 3.5 });
-        ctx.pdf.text(`${entry.position} (continued)`, ctx.marginLeft, ctx.y);
+        const contStyle: NordicCleanTextStyle = { size: 7.8, color: NC_TEXT, fontStyle: 'italic', lineHeight: 3.5 };
+        ncDrawText(ctx, `${entry.position} (continued)`, ctx.marginLeft, ctx.y, contStyle);
         ctx.y += 4.0;
         continuationShown = true;
       }
@@ -15774,18 +15831,17 @@ function ncDrawEducationEntry(ctx: NordicCleanDirectPdfContext, edu: CVData['edu
   ncMoveToFreshPageIfNeeded(ctx, entryH);
   const dateText = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
   const startY = ctx.y;
-  ncSetTextStyle(ctx, { size: 9.4, color: NC_TEXT, fontStyle: 'bold', lineHeight: 3.8 });
-  ctx.pdf.text(edu.degree, ctx.marginLeft, ctx.y);
+  const degreeStyle: NordicCleanTextStyle = { size: 9.4, color: NC_TEXT, fontStyle: 'bold', lineHeight: 3.8 };
+  ncDrawText(ctx, edu.degree, ctx.marginLeft, ctx.y, degreeStyle);
   ctx.y += 3.8;
   if (edu.school) {
-    ncSetTextStyle(ctx, { size: 8, color: NC_COMPANY, lineHeight: 3.2 });
-    ctx.pdf.text(edu.school, ctx.marginLeft, ctx.y);
+    const schoolStyle: NordicCleanTextStyle = { size: 8, color: NC_COMPANY, lineHeight: 3.2 };
+    ncDrawText(ctx, edu.school, ctx.marginLeft, ctx.y, schoolStyle);
     ctx.y += 3.2;
   }
   if (dateText) {
-    ncSetTextStyle(ctx, { size: 7.5, color: NC_MUTED, lineHeight: 3.2 });
-    const dateX = ctx.pageWidth - ctx.marginRight - ctx.pdf.getTextWidth(dateText);
-    ctx.pdf.text(dateText, dateX, startY + 0.5);
+    const dateStyle: NordicCleanTextStyle = { size: 7.5, color: NC_MUTED, lineHeight: 3.2 };
+    ncDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, startY + 0.5, dateStyle, { align: 'right' });
   }
   ctx.y += 2;
 }
@@ -15821,7 +15877,7 @@ function ncMeasureSkillChip(
   const padV = 0.7;
   const lineH = 3.2;
   ncSetTextStyle(ctx, { size: 7.5, color: NC_CHIP_TEXT, lineHeight: lineH });
-  const textWidth = ctx.pdf.getTextWidth(label);
+  const textWidth = pdfI18nCtxTextWidth(ctx, label, { size: 7.5 });
   const singleLineWidth = textWidth + padH * 2;
   if (singleLineWidth <= maxColWidth) {
     return { width: singleLineWidth, height: lineH + padV * 2, lines: [label] };
@@ -15871,6 +15927,7 @@ function ncDrawSkillChips(
   const padH = 1.8;
   const padV = 0.7;
   const lineH = 3.2;
+  const chipStyle: NordicCleanTextStyle = { size: 7.5, color: NC_CHIP_TEXT, lineHeight: lineH };
   for (const chip of layout.chips) {
     const chipX = colX + chip.x;
     const chipY = colY + chip.y;
@@ -15878,9 +15935,8 @@ function ncDrawSkillChips(
     ctx.pdf.setFillColor(NC_TEAL_SOFT[0], NC_TEAL_SOFT[1], NC_TEAL_SOFT[2]);
     ctx.pdf.setLineWidth(0.2);
     ctx.pdf.rect(chipX, chipY - padV - lineH + 1.0, chip.width, chip.height, 'FD');
-    ncSetTextStyle(ctx, { size: 7.5, color: NC_CHIP_TEXT, lineHeight: lineH });
     chip.lines.forEach((line, lineIndex) => {
-      ctx.pdf.text(line, chipX + padH, chipY + lineIndex * lineH);
+      ncDrawText(ctx, line, chipX + padH, chipY + lineIndex * lineH, chipStyle);
     });
   }
   return colY + layout.totalHeight;
@@ -15938,25 +15994,29 @@ function ncDrawSkillsLanguagesBlock(ctx: NordicCleanDirectPdfContext, cv: CVData
     if (twoCol) {
       const headingEnd = ncDrawSectionHeadingAt(ctx, ctx.labels.languages, langsX, colW, blockTopY);
       let langY = headingEnd;
-      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: 3.5 });
+      const langStyle: NordicCleanTextStyle = { size: 7.8, color: NC_BODY, lineHeight: 3.5 };
       for (const lang of cv.languages) {
-        ctx.pdf.text(
+        ncDrawText(
+          ctx,
           `${getLocalizedCvLanguageName(lang.name, ctx.locale)} / ${lang.level}`,
           langsX,
           langY,
+          langStyle,
         );
         langY += 3.5;
       }
       blockBottom = Math.max(blockBottom, langY);
     } else if (!hasSkills) {
       ncDrawSectionHeading(ctx, ctx.labels.languages);
-      ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: 3.5 });
+      const langStyle: NordicCleanTextStyle = { size: 7.8, color: NC_BODY, lineHeight: 3.5 };
       for (const lang of cv.languages) {
         ncEnsureSpace(ctx, 3.5);
-        ctx.pdf.text(
+        ncDrawText(
+          ctx,
           `${getLocalizedCvLanguageName(lang.name, ctx.locale)} / ${lang.level}`,
           ctx.marginLeft,
           ctx.y,
+          langStyle,
         );
         ctx.y += 3.5;
       }
@@ -15977,10 +16037,10 @@ function ncDrawCertifications(ctx: NordicCleanDirectPdfContext, cv: CVData): voi
   const blockH = ncCertificationsHeight(ctx, cv);
   ncMoveToFreshPageIfNeeded(ctx, blockH);
   ncDrawSectionHeading(ctx, ctx.labels.certifications);
-  ncSetTextStyle(ctx, { size: 7.8, color: NC_BODY, lineHeight: 3.5 });
+  const certStyle: NordicCleanTextStyle = { size: 7.8, color: NC_BODY, lineHeight: 3.5 };
   for (const cert of cv.certifications) {
     ncEnsureSpace(ctx, 3.5);
-    ctx.pdf.text(cert, ctx.marginLeft, ctx.y);
+    ncDrawText(ctx, cert, ctx.marginLeft, ctx.y, certStyle);
     ctx.y += 3.5;
   }
   ctx.y += 2;
@@ -16016,12 +16076,14 @@ export async function buildNordicCleanPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const i18n = await registerPdfI18nFonts(pdf);
   const marginLeft = 13;
   const marginRight = 13;
   const marginTop = 10;
   const marginBottom = 12;
   const ctx: NordicCleanDirectPdfContext = {
     pdf,
+    i18n,
     locale,
     labels: getNordicCleanPdfLabels(locale),
     pageWidth: CV_PDF_A4_WIDTH_MM,

@@ -8,6 +8,16 @@
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
+import {
+  isRtlLocale,
+  pdfI18nCtxApplyStyle,
+  pdfI18nCtxDraw,
+  pdfI18nCtxSplit,
+  pdfI18nCtxTextWidth,
+  registerPdfI18nFonts,
+  shouldApplyLatinPdfSentenceFixes,
+  type PdfI18nRegistry,
+} from './pdf-i18n-text';
 import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-photo';
 import { regionSettings, type CVData } from './types';
 
@@ -20,6 +30,7 @@ export type CorporateNavyDirectPdfContext = {
   pdf: Pdf;
   cv: CVData;
   locale: Locale;
+  i18n: PdfI18nRegistry;
   labels: ReturnType<typeof getCorporateNavyPdfLabels>;
   contentX: number;
   contentW: number;
@@ -35,9 +46,7 @@ type Style = {
   size: number;
   color: [number, number, number];
   bold?: boolean;
-  italic?: boolean;
   lineH: number;
-  font?: 'times' | 'helvetica';
 };
 
 type BulletUnit = { lines: string[] };
@@ -87,9 +96,12 @@ export function getCorporateNavyPdfLabels(locale: Locale) {
 /**
  * PDF-only text cleanup. Does not mutate saved CV data.
  */
-export function cnNormalizePdfText(text: string): string {
+export function cnNormalizePdfText(text: string, locale: Locale = 'en'): string {
   if (!text) return '';
   let out = text.replace(/\r\n/g, '\n');
+  if (!shouldApplyLatinPdfSentenceFixes(locale, text)) {
+    return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+  }
 
   const protect: Array<{ token: string; stub: string }> = [
     { token: 'Node.js', stub: '\u0001NODEJS\u0001' },
@@ -117,26 +129,37 @@ export function cnNormalizePdfText(text: string): string {
   return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
-function setStyle(ctx: CorporateNavyDirectPdfContext, s: Style): void {
-  const family = s.font ?? 'helvetica';
-  let style: 'normal' | 'bold' | 'italic' | 'bolditalic' = 'normal';
-  if (s.bold && s.italic) style = 'bolditalic';
-  else if (s.bold) style = 'bold';
-  else if (s.italic) style = 'italic';
-  ctx.pdf.setFont(family, style);
-  ctx.pdf.setFontSize(s.size);
-  ctx.pdf.setTextColor(s.color[0], s.color[1], s.color[2]);
+function applyStyle(ctx: CorporateNavyDirectPdfContext, s: Style, text?: string): void {
+  pdfI18nCtxApplyStyle(ctx, { size: s.size, color: s.color, bold: s.bold }, text);
+}
+
+function drawText(
+  ctx: CorporateNavyDirectPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  style: Style,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: style.size,
+    color: style.color,
+    bold: style.bold,
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+  });
 }
 
 export function cnMeasureWrappedLines(
   ctx: CorporateNavyDirectPdfContext,
   text: string,
   maxW: number,
+  style?: Pick<Style, 'size' | 'bold'>,
 ): string[] {
-  const t = cnNormalizePdfText(text);
+  const t = cnNormalizePdfText(text, ctx.locale);
   if (!t) return [];
-  const r = ctx.pdf.splitTextToSize(t, maxW);
-  return Array.isArray(r) ? r.map(String) : [String(r)];
+  const wrapStyle = style ?? { size: 9, bold: false };
+  return pdfI18nCtxSplit(ctx, t, maxW, { size: wrapStyle.size, bold: wrapStyle.bold });
 }
 
 export function cnMeasureBlockHeight(lineCount: number, lineH: number, pad = 0): number {
@@ -152,11 +175,13 @@ export function cnCreateContext(
   pdf: Pdf,
   cv: CVData,
   locale: Locale,
+  i18n: PdfI18nRegistry,
 ): CorporateNavyDirectPdfContext {
   return {
     pdf,
     cv,
     locale,
+    i18n,
     labels: getCorporateNavyPdfLabels(locale),
     contentX: MARGIN_X,
     contentW: A4_W - MARGIN_X * 2,
@@ -185,18 +210,18 @@ export function cnMoveToFreshPageIfNeeded(ctx: CorporateNavyDirectPdfContext, h:
   if (ctx.y + h > ctx.bottomSafeY) cnAddPage(ctx);
 }
 
-function splitBullets(raw: string): string[] {
+function splitBullets(raw: string, locale: Locale): string[] {
   return raw
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => cnNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, '')))
+    .map((l) => cnNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''), locale))
     .filter(Boolean);
 }
 
 function buildBullets(ctx: CorporateNavyDirectPdfContext, raw: string, contentW: number): BulletUnit[] {
   const { wrapW } = cnBulletTextLayout(ctx, contentW);
-  return splitBullets(raw).map((b) => ({
+  return splitBullets(raw, ctx.locale).map((b) => ({
     lines: cnMeasureWrappedLines(ctx, b, wrapW),
   }));
 }
@@ -205,8 +230,9 @@ export function cnBulletTextLayout(
   ctx: CorporateNavyDirectPdfContext,
   contentW: number,
 ): CnBulletLayout {
-  setStyle(ctx, { size: 9, color: BLUE, font: 'helvetica', lineH: BULLET_LH });
-  const markerW = ctx.pdf.getTextWidth('-');
+  const markerStyle: Style = { size: 9, color: BLUE, lineH: BULLET_LH };
+  applyStyle(ctx, markerStyle, '-');
+  const markerW = pdfI18nCtxTextWidth(ctx, '-', { size: markerStyle.size, bold: false });
   const markerX = ctx.contentX;
   const textX = markerX + markerW + BULLET_MARKER_GAP;
   const wrapW = contentW - (textX - markerX);
@@ -250,30 +276,28 @@ export function cnDrawHeader(
   let ty = 10;
 
   const name = ctx.cv.personal.fullName || 'Your Name';
-  setStyle(ctx, {
+  const nameStyle: Style = {
     size: 17,
     color: [255, 255, 255],
     bold: true,
-    font: 'helvetica',
     lineH: 6,
-  });
-  const nameLines = cnMeasureWrappedLines(ctx, name, textMaxW).slice(0, 2);
+  };
+  const nameLines = cnMeasureWrappedLines(ctx, name, textMaxW, nameStyle).slice(0, 2);
   for (const ln of nameLines) {
-    ctx.pdf.text(ln, textLeft, ty + 4.5);
+    drawText(ctx, ln, textLeft, ty + 4.5, nameStyle);
     ty += 5.8;
   }
 
   if (ctx.cv.personal.jobTitle) {
-    setStyle(ctx, {
+    const titleStyle: Style = {
       size: 10,
       color: LIGHT_BLUE,
       bold: true,
-      font: 'helvetica',
       lineH: 4,
-    });
-    const titleLines = cnMeasureWrappedLines(ctx, ctx.cv.personal.jobTitle, textMaxW).slice(0, 2);
+    };
+    const titleLines = cnMeasureWrappedLines(ctx, ctx.cv.personal.jobTitle, textMaxW, titleStyle).slice(0, 2);
     for (const ln of titleLines) {
-      ctx.pdf.text(ln, textLeft, ty + 3);
+      drawText(ctx, ln, textLeft, ty + 3, titleStyle);
       ty += 4.2;
     }
   }
@@ -281,15 +305,15 @@ export function cnDrawHeader(
   const contacts = headerContacts(ctx);
   if (contacts.length) {
     ty += 2;
-    setStyle(ctx, { size: 8, color: CONTACT, font: 'helvetica', lineH: 3.4 });
+    const contactStyle: Style = { size: 8, color: CONTACT, lineH: 3.4 };
     const parts: string[] = [];
     for (let i = 0; i < contacts.length; i += 1) {
       if (i > 0) parts.push('|');
       parts.push(contacts[i]!);
     }
     const contactText = parts.join('  ');
-    for (const ln of cnMeasureWrappedLines(ctx, contactText, textMaxW).slice(0, 2)) {
-      ctx.pdf.text(ln, textLeft, ty + 2.5);
+    for (const ln of cnMeasureWrappedLines(ctx, contactText, textMaxW, contactStyle).slice(0, 2)) {
+      drawText(ctx, ln, textLeft, ty + 2.5, contactStyle);
       ty += 3.5;
     }
   }
@@ -327,15 +351,15 @@ export function cnDrawSectionHeading(
   const x = opts.x ?? ctx.contentX;
   const w = opts.w ?? ctx.contentW;
   cnEnsureSpace(ctx, SECTION_H + 2);
-  setStyle(ctx, {
+  const headingStyle: Style = {
     size: 8.5,
     color: NAVY,
     bold: true,
-    font: 'helvetica',
     lineH: 3.5,
-  });
+  };
   const text = label.toUpperCase();
-  ctx.pdf.text(text, x, ctx.y + 3);
+  applyStyle(ctx, headingStyle, text);
+  drawText(ctx, text, x, ctx.y + 3, headingStyle);
   ctx.y += 4.2;
   ctx.pdf.setDrawColor(RULE[0], RULE[1], RULE[2]);
   ctx.pdf.setLineWidth(0.25);
@@ -352,8 +376,8 @@ export function cnDrawWrappedText(
   const x = opts.x ?? ctx.contentX;
   for (const line of lines) {
     cnEnsureSpace(ctx, style.lineH);
-    setStyle(ctx, style);
-    ctx.pdf.text(line, x, ctx.y + style.size * 0.32);
+    applyStyle(ctx, style, line);
+    drawText(ctx, line, x, ctx.y + style.size * 0.32, style);
     ctx.y += style.lineH;
   }
 }
@@ -363,10 +387,9 @@ export function cnDrawSummary(ctx: CorporateNavyDirectPdfContext): void {
   const style: Style = {
     size: 9.5,
     color: BODY,
-    font: 'helvetica',
     lineH: BODY_LINE,
   };
-  const lines = cnMeasureWrappedLines(ctx, ctx.cv.summary, ctx.contentW);
+  const lines = cnMeasureWrappedLines(ctx, ctx.cv.summary, ctx.contentW, style);
   if (!lines.length) return;
 
   const keep = Math.min(3, lines.length);
@@ -375,15 +398,16 @@ export function cnDrawSummary(ctx: CorporateNavyDirectPdfContext): void {
 
   for (const line of lines) {
     if (ctx.y + style.lineH > ctx.bottomSafeY) cnAddPage(ctx);
-    setStyle(ctx, style);
-    ctx.pdf.text(line, ctx.contentX, ctx.y + style.size * 0.32);
+    applyStyle(ctx, style, line);
+    drawText(ctx, line, ctx.contentX, ctx.y + style.size * 0.32, style);
     ctx.y += style.lineH;
   }
   ctx.y += 4;
 }
 
 function measureLeadH(ctx: CorporateNavyDirectPdfContext, entry: CVData['experience'][number]): number {
-  const posLines = cnMeasureWrappedLines(ctx, entry.position || '', ctx.contentW - 42);
+  const posStyle: Style = { size: 10.5, color: TEXT, bold: true, lineH: 4.2 };
+  const posLines = cnMeasureWrappedLines(ctx, entry.position || '', ctx.contentW - 42, posStyle);
   return Math.max(4.2, posLines.length * 4.2) + 3.8;
 }
 
@@ -393,9 +417,10 @@ export function cnDrawContinuationHeader(
 ): void {
   cnEnsureSpace(ctx, 5);
   const role = entry.position || entry.company || 'Experience';
-  setStyle(ctx, { size: 8.2, color: MUTED, bold: true, font: 'helvetica', lineH: 3.4 });
-  const label = `${cnNormalizePdfText(role)} (continued)`;
-  ctx.pdf.text(label, ctx.contentX, ctx.y + 2.5);
+  const contStyle: Style = { size: 8.2, color: MUTED, bold: true, lineH: 3.4 };
+  const label = `${cnNormalizePdfText(role, ctx.locale)} (continued)`;
+  applyStyle(ctx, contStyle, label);
+  drawText(ctx, label, ctx.contentX, ctx.y + 2.5, contStyle);
   ctx.y += 5;
 }
 
@@ -407,24 +432,27 @@ function drawExperienceLead(
     .filter(Boolean)
     .join(' - ');
 
-  setStyle(ctx, { size: 10.5, color: TEXT, bold: true, font: 'helvetica', lineH: 4.2 });
-  const posLines = cnMeasureWrappedLines(ctx, entry.position || '', ctx.contentW - 42);
+  const posStyle: Style = { size: 10.5, color: TEXT, bold: true, lineH: 4.2 };
+  const posLines = cnMeasureWrappedLines(ctx, entry.position || '', ctx.contentW - 42, posStyle);
   const startY = ctx.y;
   let ty = startY;
   for (const ln of posLines) {
-    ctx.pdf.text(ln, ctx.contentX, ty + 3.2);
+    drawText(ctx, ln, ctx.contentX, ty + 3.2, posStyle);
     ty += 4.2;
   }
 
   if (date) {
-    setStyle(ctx, { size: 8.2, color: MUTED, font: 'helvetica', lineH: 3.2 });
-    const dw = ctx.pdf.getTextWidth(date);
-    ctx.pdf.text(date, ctx.contentX + ctx.contentW - dw, startY + 3);
+    const dateStyle: Style = { size: 8.2, color: MUTED, lineH: 3.2 };
+    applyStyle(ctx, dateStyle, date);
+    const dw = pdfI18nCtxTextWidth(ctx, date, { size: dateStyle.size, bold: false });
+    drawText(ctx, date, ctx.contentX + ctx.contentW - dw, startY + 3, dateStyle, { align: 'right' });
   }
 
   if (entry.company) {
-    setStyle(ctx, { size: 9.5, color: BLUE, bold: true, font: 'helvetica', lineH: 3.6 });
-    ctx.pdf.text(cnNormalizePdfText(entry.company), ctx.contentX, ty + 2.8);
+    const companyStyle: Style = { size: 9.5, color: BLUE, bold: true, lineH: 3.6 };
+    const company = cnNormalizePdfText(entry.company, ctx.locale);
+    applyStyle(ctx, companyStyle, company);
+    drawText(ctx, company, ctx.contentX, ty + 2.8, companyStyle);
     ty += 3.8;
   }
 
@@ -438,15 +466,16 @@ export function cnDrawWrappedBullet(
   opts: { drawMarkerOnFirstLine?: boolean } = {},
 ): void {
   const drawMarkerOnFirstLine = opts.drawMarkerOnFirstLine ?? true;
-  const style: Style = { size: 9, color: BODY, font: 'helvetica', lineH: BULLET_LH };
+  const style: Style = { size: 9, color: BODY, lineH: BULLET_LH };
+  const markerStyle: Style = { size: 9, color: BLUE, lineH: BULLET_LH };
   for (let i = 0; i < lines.length; i += 1) {
     cnEnsureSpace(ctx, BULLET_LH);
     if (i === 0 && drawMarkerOnFirstLine) {
-      setStyle(ctx, { size: 9, color: BLUE, font: 'helvetica', lineH: BULLET_LH });
-      ctx.pdf.text('-', layout.markerX, ctx.y + 2.8);
+      applyStyle(ctx, markerStyle, '-');
+      drawText(ctx, '-', layout.markerX, ctx.y + 2.8, markerStyle);
     }
-    setStyle(ctx, style);
-    ctx.pdf.text(lines[i]!, layout.textX, ctx.y + 2.8);
+    applyStyle(ctx, style, lines[i]!);
+    drawText(ctx, lines[i]!, layout.textX, ctx.y + 2.8, style);
     ctx.y += BULLET_LH;
   }
 }
@@ -540,29 +569,29 @@ export function cnDrawEducationSection(ctx: CorporateNavyDirectPdfContext): void
     cnMoveToFreshPageIfNeeded(ctx, 10);
     const date = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
 
-    setStyle(ctx, { size: 10, color: TEXT, bold: true, font: 'helvetica', lineH: 4 });
-    const degree = cnNormalizePdfText(edu.degree || '');
-    ctx.pdf.text(degree, ctx.contentX, ctx.y + 3);
+    const degreeStyle: Style = { size: 10, color: TEXT, bold: true, lineH: 4 };
+    const degree = cnNormalizePdfText(edu.degree || '', ctx.locale);
+    applyStyle(ctx, degreeStyle, degree);
+    drawText(ctx, degree, ctx.contentX, ctx.y + 3, degreeStyle);
     if (date) {
-      setStyle(ctx, { size: 8.2, color: MUTED, font: 'helvetica', lineH: 3.2 });
-      const dw = ctx.pdf.getTextWidth(date);
-      ctx.pdf.text(date, ctx.contentX + ctx.contentW - dw, ctx.y + 3);
+      const dateStyle: Style = { size: 8.2, color: MUTED, lineH: 3.2 };
+      applyStyle(ctx, dateStyle, date);
+      const dw = pdfI18nCtxTextWidth(ctx, date, { size: dateStyle.size, bold: false });
+      drawText(ctx, date, ctx.contentX + ctx.contentW - dw, ctx.y + 3, dateStyle, { align: 'right' });
     }
     ctx.y += 4.2;
 
     if (edu.school) {
-      setStyle(ctx, { size: 9, color: MUTED, font: 'helvetica', lineH: 3.4 });
-      ctx.pdf.text(cnNormalizePdfText(edu.school), ctx.contentX, ctx.y + 2.5);
+      const schoolStyle: Style = { size: 9, color: MUTED, lineH: 3.4 };
+      const school = cnNormalizePdfText(edu.school, ctx.locale);
+      applyStyle(ctx, schoolStyle, school);
+      drawText(ctx, school, ctx.contentX, ctx.y + 2.5, schoolStyle);
       ctx.y += 4;
     }
     if (edu.description) {
-      const lines = cnMeasureWrappedLines(ctx, edu.description, ctx.contentW);
-      cnDrawWrappedText(ctx, lines, {
-        size: 8.5,
-        color: BODY,
-        font: 'helvetica',
-        lineH: 3.4,
-      });
+      const descStyle: Style = { size: 8.5, color: BODY, lineH: 3.4 };
+      const lines = cnMeasureWrappedLines(ctx, edu.description, ctx.contentW, descStyle);
+      cnDrawWrappedText(ctx, lines, descStyle);
     }
     ctx.y += 2;
   }
@@ -575,10 +604,11 @@ export function cnLayoutSkillChips(
   skills: string[],
   maxW: number,
 ): Chip[] {
-  setStyle(ctx, { size: 8.2, color: CHIP_TEXT, font: 'helvetica', lineH: 3.2 });
+  const chipStyle: Style = { size: 8.2, color: CHIP_TEXT, lineH: 3.2 };
+  applyStyle(ctx, chipStyle);
   return skills.map((raw) => {
     const text = getLocalizedCvSkillName(raw, ctx.locale) || raw;
-    const w = Math.min(maxW, ctx.pdf.getTextWidth(text) + 5);
+    const w = Math.min(maxW, pdfI18nCtxTextWidth(ctx, text, { size: chipStyle.size, bold: false }) + 5);
     return { text, w };
   });
 }
@@ -638,8 +668,9 @@ function drawSkillChipsInColumn(
     ctx.pdf.setDrawColor(RULE[0], RULE[1], RULE[2]);
     ctx.pdf.setLineWidth(0.15);
     ctx.pdf.rect(x, rowY, chip.w, 5.2, 'FD');
-    setStyle(ctx, { size: 8.2, color: CHIP_TEXT, font: 'helvetica', lineH: 3.2 });
-    ctx.pdf.text(chip.text, x + 2.4, rowY + 3.5);
+    const chipStyle: Style = { size: 8.2, color: CHIP_TEXT, lineH: 3.2 };
+    applyStyle(ctx, chipStyle, chip.text);
+    drawText(ctx, chip.text, x + 2.4, rowY + 3.5, chipStyle);
     x += chip.w + 2.2;
   }
   const endY = rowY + rowH + 1;
@@ -661,13 +692,15 @@ function drawLanguagesInColumn(
   let rowY = ctx.y;
   for (const lang of ctx.cv.languages) {
     const name = getLocalizedCvLanguageName(lang.name, ctx.locale) || lang.name;
-    setStyle(ctx, { size: 9, color: BODY, font: 'helvetica', lineH: 3.6 });
-    ctx.pdf.text(name, colX, rowY + 2.8);
+    const nameStyle: Style = { size: 9, color: BODY, lineH: 3.6 };
+    applyStyle(ctx, nameStyle, name);
+    drawText(ctx, name, colX, rowY + 2.8, nameStyle);
     if (lang.level) {
-      setStyle(ctx, { size: 8.5, color: MUTED, font: 'helvetica', lineH: 3.6 });
+      const levelStyle: Style = { size: 8.5, color: MUTED, lineH: 3.6 };
       const levelText = `/ ${lang.level}`;
-      const lw = ctx.pdf.getTextWidth(levelText);
-      ctx.pdf.text(levelText, colX + colW - lw, rowY + 2.8);
+      applyStyle(ctx, levelStyle, levelText);
+      const lw = pdfI18nCtxTextWidth(ctx, levelText, { size: levelStyle.size, bold: false });
+      drawText(ctx, levelText, colX + colW - lw, rowY + 2.8, levelStyle, { align: 'right' });
     }
     rowY += 4.2;
   }
@@ -737,8 +770,9 @@ function cnDrawCertifications(ctx: CorporateNavyDirectPdfContext): void {
   cnMoveToFreshPageIfNeeded(ctx, SECTION_H + 6);
   cnDrawSectionHeading(ctx, ctx.labels.certifications);
   for (const cert of ctx.cv.certifications) {
-    const lines = cnMeasureWrappedLines(ctx, cnNormalizePdfText(cert), ctx.contentW);
-    cnDrawWrappedText(ctx, lines, { size: 9, color: BODY, font: 'helvetica', lineH: 3.6 });
+    const certStyle: Style = { size: 9, color: BODY, lineH: 3.6 };
+    const lines = cnMeasureWrappedLines(ctx, cnNormalizePdfText(cert, ctx.locale), ctx.contentW, certStyle);
+    cnDrawWrappedText(ctx, lines, certStyle);
   }
 }
 
@@ -749,7 +783,8 @@ export async function buildCorporateNavyPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const ctx = cnCreateContext(pdf, cv, locale);
+  const i18n = await registerPdfI18nFonts(pdf);
+  const ctx = cnCreateContext(pdf, cv, locale, i18n);
 
   const maskedPhoto = options.photoDataUrl
     ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)

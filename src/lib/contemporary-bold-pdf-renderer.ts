@@ -16,6 +16,16 @@
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
+import {
+  isRtlLocale,
+  pdfI18nCtxApplyStyle,
+  pdfI18nCtxDraw,
+  pdfI18nCtxSplit,
+  pdfI18nCtxTextWidth,
+  registerPdfI18nFonts,
+  shouldApplyLatinPdfSentenceFixes,
+  type PdfI18nRegistry,
+} from './pdf-i18n-text';
 import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-photo';
 import { regionSettings, type CVData } from './types';
 
@@ -141,7 +151,9 @@ export type ContemporaryBoldPdfContext = {
   cv: CVData;
   locale: Locale;
   labels: ReturnType<typeof getCbPdfLabels>;
+  i18n: PdfI18nRegistry;
   unicodeReady: boolean;
+  lastTextStyle?: StyleSpec;
   contentX: number;
   contentW: number;
   pageW: number;
@@ -172,60 +184,10 @@ export type CbBulletLayout = {
   wrapW: number;
 };
 
-// ── Font loading ─────────────────────────────────────────────────────────────
-const FONT_REG_URLS = ['/fonts/NotoSans-Regular.ttf'];
-const FONT_BOLD_URLS = ['/fonts/NotoSans-Bold.ttf'];
-
-let cbCachedFont: { regular: string; bold: string } | null = null;
-let cbFontPromise: Promise<{ regular: string; bold: string } | null> | null = null;
-
-function toB64(buf: ArrayBuffer): string {
-  const b = new Uint8Array(buf);
-  let s = '';
-  for (let i = 0; i < b.length; i += 1) s += String.fromCharCode(b[i]!);
-  return btoa(s);
-}
-
-async function fetchFontBytes(urls: string[]): Promise<ArrayBuffer | null> {
-  for (const url of urls) {
-    try {
-      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = ctrl ? setTimeout(() => ctrl.abort(), 15000) : null;
-      const res = await fetch(url, ctrl ? { signal: ctrl.signal } : undefined);
-      if (timer) clearTimeout(timer);
-      if (res.ok) return res.arrayBuffer();
-    } catch {
-      // try next url
-    }
-  }
-  return null;
-}
-
-async function loadFonts(): Promise<{ regular: string; bold: string } | null> {
-  if (cbCachedFont) return cbCachedFont;
-  if (cbFontPromise) return cbFontPromise;
-  cbFontPromise = (async () => {
-    const [reg, bold] = await Promise.all([fetchFontBytes(FONT_REG_URLS), fetchFontBytes(FONT_BOLD_URLS)]);
-    if (!reg || !bold) return null;
-    cbCachedFont = { regular: toB64(reg), bold: toB64(bold) };
-    return cbCachedFont;
-  })();
-  return cbFontPromise;
-}
-
-/** Embed Noto Sans into jsPDF — required for full Serbian/Croatian/Bosnian diacritic support. */
+/** Embed multilingual Noto families into jsPDF. */
 export async function cbRegisterUnicodeFonts(pdf: Pdf): Promise<boolean> {
-  try {
-    const fonts = await loadFonts();
-    if (!fonts) return false;
-    pdf.addFileToVFS('NotoSans-Regular.ttf', fonts.regular);
-    pdf.addFileToVFS('NotoSans-Bold.ttf', fonts.bold);
-    pdf.addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal');
-    pdf.addFont('NotoSans-Bold.ttf', 'NotoSans', 'bold');
-    return true;
-  } catch {
-    return false;
-  }
+  const i18n = await registerPdfI18nFonts(pdf);
+  return i18n.latinReady;
 }
 
 // ── Labels ────────────────────────────────────────────────────────────────────
@@ -256,9 +218,12 @@ export function getCbPdfLabels(locale: Locale) {
  *
  * This order ensures GitHub → never becomes "Git. Hub".
  */
-export function cbNormalizePdfText(text: string): string {
+export function cbNormalizePdfText(text: string, locale: Locale = 'en'): string {
   if (!text) return '';
   let out = text.replace(/\r\n/g, '\n');
+  if (!shouldApplyLatinPdfSentenceFixes(locale, text)) {
+    return out.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+  }
 
   // ── Step 1: Explicit technical term protection ──────────────────────────────
   // Order matters: longer/more-specific tokens first (GitHub Actions before GitHub).
@@ -416,14 +381,26 @@ export function cbNormalizePdfText(text: string): string {
 }
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
-function fontFamily(ctx: ContemporaryBoldPdfContext): string {
-  return ctx.unicodeReady ? 'NotoSans' : 'helvetica';
+function applyStyle(ctx: ContemporaryBoldPdfContext, spec: StyleSpec, text?: string): void {
+  ctx.lastTextStyle = spec;
+  pdfI18nCtxApplyStyle(ctx, { size: spec.size, color: spec.color, bold: spec.bold }, text);
 }
 
-function applyStyle(ctx: ContemporaryBoldPdfContext, spec: StyleSpec): void {
-  ctx.pdf.setFont(fontFamily(ctx), spec.bold ? 'bold' : 'normal');
-  ctx.pdf.setFontSize(spec.size);
-  ctx.pdf.setTextColor(spec.color[0], spec.color[1], spec.color[2]);
+function drawText(
+  ctx: ContemporaryBoldPdfContext,
+  text: string,
+  x: number,
+  y: number,
+  spec: StyleSpec,
+  extra: { align?: 'left' | 'center' | 'right' } = {},
+): void {
+  pdfI18nCtxDraw(ctx, text, x, y, {
+    size: spec.size,
+    color: spec.color,
+    bold: spec.bold,
+    rtl: isRtlLocale(ctx.locale),
+    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+  });
 }
 
 function freshCap(ctx: ContemporaryBoldPdfContext): number {
@@ -445,7 +422,7 @@ export function cbCreateContext(
   pdf: Pdf,
   cv: CVData,
   locale: Locale,
-  unicodeReady: boolean,
+  i18n: PdfI18nRegistry,
 ): ContemporaryBoldPdfContext {
   const compact = cbDetectCompactMode(cv);
   return {
@@ -453,7 +430,8 @@ export function cbCreateContext(
     cv,
     locale,
     labels: getCbPdfLabels(locale),
-    unicodeReady,
+    i18n,
+    unicodeReady: i18n.latinReady,
     contentX: CONTENT_X,
     contentW: CONTENT_W,
     pageW: A4_W,
@@ -491,12 +469,17 @@ function cbFreshPageIfNeeded(ctx: ContemporaryBoldPdfContext, h: number): void {
 }
 
 // ── Text measurement ──────────────────────────────────────────────────────────
-function wrapLines(ctx: ContemporaryBoldPdfContext, text: string, maxW: number): string[] {
-  const t = cbNormalizePdfText(text);
+function wrapLines(
+  ctx: ContemporaryBoldPdfContext,
+  text: string,
+  maxW: number,
+  spec?: Pick<StyleSpec, 'size' | 'bold'>,
+): string[] {
+  const t = cbNormalizePdfText(text, ctx.locale);
   if (!t) return [];
   const safeW = Math.min(maxW, cbSafeMaxWidth(ctx, ctx.contentX));
-  const r = ctx.pdf.splitTextToSize(t, safeW);
-  return Array.isArray(r) ? r.map(String) : [String(r)];
+  const style = spec ?? ctx.lastTextStyle ?? { size: 9, bold: false };
+  return pdfI18nCtxSplit(ctx, t, safeW, { size: style.size, bold: style.bold });
 }
 
 export function cbMeasureWrappedTextHeight(
@@ -515,8 +498,9 @@ export function cbMeasureBulletHeight(lineCount: number, lh: number): number {
 
 // ── Bullet layout ─────────────────────────────────────────────────────────────
 function buildBulletLayout(ctx: ContemporaryBoldPdfContext): CbBulletLayout {
-  applyStyle(ctx, { size: ctx.lp.bulletSize, color: BLUE, lh: ctx.lp.bulletLH });
-  const markerW = ctx.pdf.getTextWidth('-');
+  const markerSpec: StyleSpec = { size: ctx.lp.bulletSize, color: BLUE, lh: ctx.lp.bulletLH };
+  applyStyle(ctx, markerSpec, '-');
+  const markerW = pdfI18nCtxTextWidth(ctx, '-', { size: markerSpec.size, bold: false });
   const markerX = ctx.contentX;
   const textX = markerX + markerW + 1.5;
   // wrapW must not exceed right margin
@@ -524,24 +508,20 @@ function buildBulletLayout(ctx: ContemporaryBoldPdfContext): CbBulletLayout {
   return { markerX, textX, wrapW: Math.max(4, wrapW) };
 }
 
-function splitBullets(raw: string): string[] {
+function splitBullets(raw: string, locale: Locale): string[] {
   return raw
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => cbNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, '')))
+    .map((l) => cbNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''), locale))
     .filter(Boolean);
 }
 
 function buildBulletUnits(ctx: ContemporaryBoldPdfContext, raw: string): BulletUnit[] {
   const layout = buildBulletLayout(ctx);
-  return splitBullets(raw).map((b) => ({
-    lines: (() => {
-      const t = cbNormalizePdfText(b);
-      if (!t) return [];
-      const r = ctx.pdf.splitTextToSize(t, layout.wrapW);
-      return (Array.isArray(r) ? r : [String(r)]).map(String);
-    })(),
+  const bulletSpec: StyleSpec = { size: ctx.lp.bulletSize, color: BODY_CLR, lh: ctx.lp.bulletLH };
+  return splitBullets(raw, ctx.locale).map((b) => ({
+    lines: wrapLines(ctx, b, layout.wrapW, bulletSpec),
   }));
 }
 
@@ -576,27 +556,21 @@ export function cbDrawHeader(
   let ty = 10;
 
   // Name
-  applyStyle(ctx, { size: 17, color: WHITE, bold: true, lh: 6 });
-  const nameLines = (() => {
-    const t = cbNormalizePdfText(ctx.cv.personal.fullName || 'Your Name');
-    const r = ctx.pdf.splitTextToSize(t, textMaxW);
-    return (Array.isArray(r) ? r : [String(r)]).map(String).slice(0, 2);
-  })();
+  const nameSpec: StyleSpec = { size: 17, color: WHITE, bold: true, lh: 6 };
+  applyStyle(ctx, nameSpec, ctx.cv.personal.fullName || 'Your Name');
+  const nameLines = wrapLines(ctx, ctx.cv.personal.fullName || 'Your Name', textMaxW, nameSpec).slice(0, 2);
   for (const ln of nameLines) {
-    ctx.pdf.text(ln, textLeft, ty + 4.5);
+    drawText(ctx, ln, textLeft, ty + 4.5, nameSpec);
     ty += 5.8;
   }
 
   // Job title
   if (ctx.cv.personal.jobTitle) {
-    applyStyle(ctx, { size: 10, color: LIGHT_BLUE, bold: true, lh: 4 });
-    const titleLines = (() => {
-      const t = cbNormalizePdfText(ctx.cv.personal.jobTitle);
-      const r = ctx.pdf.splitTextToSize(t, textMaxW);
-      return (Array.isArray(r) ? r : [String(r)]).map(String).slice(0, 2);
-    })();
+    const titleSpec: StyleSpec = { size: 10, color: LIGHT_BLUE, bold: true, lh: 4 };
+    applyStyle(ctx, titleSpec, ctx.cv.personal.jobTitle);
+    const titleLines = wrapLines(ctx, ctx.cv.personal.jobTitle, textMaxW, titleSpec).slice(0, 2);
     for (const ln of titleLines) {
-      ctx.pdf.text(ln, textLeft, ty + 3);
+      drawText(ctx, ln, textLeft, ty + 3, titleSpec);
       ty += 4.2;
     }
   }
@@ -605,14 +579,12 @@ export function cbDrawHeader(
   const contacts = headerContacts(ctx);
   if (contacts.length) {
     ty += 2;
-    applyStyle(ctx, { size: 8, color: CONTACT_CLR, lh: 3.4 });
+    const contactSpec: StyleSpec = { size: 8, color: CONTACT_CLR, lh: 3.4 };
+    applyStyle(ctx, contactSpec);
     const contactStr = contacts.join('  |  ');
-    const contactLines = (() => {
-      const r = ctx.pdf.splitTextToSize(contactStr, textMaxW);
-      return (Array.isArray(r) ? r : [String(r)]).map(String).slice(0, 2);
-    })();
+    const contactLines = wrapLines(ctx, contactStr, textMaxW, contactSpec).slice(0, 2);
     for (const ln of contactLines) {
-      ctx.pdf.text(ln, textLeft, ty + 2.5);
+      drawText(ctx, ln, textLeft, ty + 2.5, contactSpec);
       ty += 3.5;
     }
   }
@@ -645,8 +617,9 @@ export function cbDrawHeader(
 // ── Section heading ───────────────────────────────────────────────────────────
 export function cbDrawSectionHeading(ctx: ContemporaryBoldPdfContext, label: string): void {
   cbEnsureSpace(ctx, ctx.lp.sectionH + 2);
-  applyStyle(ctx, { size: ctx.lp.headingSize, color: NAVY, bold: true, lh: 3.5 });
-  ctx.pdf.text(label.toUpperCase(), ctx.contentX, ctx.y + 3);
+  const spec: StyleSpec = { size: ctx.lp.headingSize, color: NAVY, bold: true, lh: 3.5 };
+  applyStyle(ctx, spec, label);
+  drawText(ctx, label.toUpperCase(), ctx.contentX, ctx.y + 3, spec);
   ctx.y += 4.2;
   ctx.pdf.setDrawColor(RULE_CLR[0], RULE_CLR[1], RULE_CLR[2]);
   ctx.pdf.setLineWidth(0.25);
@@ -664,8 +637,8 @@ export function cbDrawWrappedParagraph(
   const x = opts.x ?? ctx.contentX;
   for (const line of lines) {
     cbEnsureSpace(ctx, spec.lh);
-    applyStyle(ctx, spec);
-    ctx.pdf.text(line, x, ctx.y + spec.size * 0.32);
+    applyStyle(ctx, spec, line);
+    drawText(ctx, line, x, ctx.y + spec.size * 0.32, spec);
     ctx.y += spec.lh;
   }
 }
@@ -714,27 +687,31 @@ function drawExperienceLead(
 
   // Title (position)
   const titleW = cbSafeMaxWidth(ctx, ctx.contentX) - DATE_COL_W;
-  applyStyle(ctx, { size: ctx.lp.titleSize, color: TEXT_DARK, bold: true, lh: ctx.lp.bodyLH });
-  const posLines = wrapLines(ctx, entry.position || '', Math.max(4, titleW));
+  const titleSpec: StyleSpec = { size: ctx.lp.titleSize, color: TEXT_DARK, bold: true, lh: ctx.lp.bodyLH };
+  applyStyle(ctx, titleSpec);
+  const posLines = wrapLines(ctx, entry.position || '', Math.max(4, titleW), titleSpec);
   const startY = ctx.y;
   let ty = startY;
   for (const ln of posLines) {
-    ctx.pdf.text(ln, ctx.contentX, ty + ctx.lp.titleSize * 0.32);
+    drawText(ctx, ln, ctx.contentX, ty + ctx.lp.titleSize * 0.32, titleSpec);
     ty += ctx.lp.bodyLH;
   }
 
   // Date — right-aligned within content area
   if (date) {
-    applyStyle(ctx, { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.bodyLH * 0.9 });
-    const dw = ctx.pdf.getTextWidth(date);
+    const dateSpec: StyleSpec = { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.bodyLH * 0.9 };
+    applyStyle(ctx, dateSpec, date);
+    const dw = pdfI18nCtxTextWidth(ctx, date, { size: dateSpec.size, bold: false });
     const dateX = ctx.contentX + ctx.contentW - dw;
-    ctx.pdf.text(date, dateX, startY + ctx.lp.titleSize * 0.32);
+    drawText(ctx, date, dateX, startY + ctx.lp.titleSize * 0.32, dateSpec, { align: 'right' });
   }
 
   // Company — blue accent below title
   if (entry.company) {
-    applyStyle(ctx, { size: ctx.lp.companySize, color: BLUE, bold: true, lh: ctx.lp.bodyLH });
-    ctx.pdf.text(cbNormalizePdfText(entry.company), ctx.contentX, ty + ctx.lp.companySize * 0.32);
+    const companySpec: StyleSpec = { size: ctx.lp.companySize, color: BLUE, bold: true, lh: ctx.lp.bodyLH };
+    const company = cbNormalizePdfText(entry.company, ctx.locale);
+    applyStyle(ctx, companySpec, company);
+    drawText(ctx, company, ctx.contentX, ty + ctx.lp.companySize * 0.32, companySpec);
     ty += ctx.lp.bodyLH * 1.1;
   }
 
@@ -744,8 +721,10 @@ function drawExperienceLead(
 function drawContinuation(ctx: ContemporaryBoldPdfContext, entry: CVData['experience'][number]): void {
   cbEnsureSpace(ctx, 5);
   const role = entry.position || entry.company || 'Experience';
-  applyStyle(ctx, { size: ctx.lp.dateSize, color: MUTED, bold: true, lh: ctx.lp.bodyLH });
-  ctx.pdf.text(`${cbNormalizePdfText(role)} (continued)`, ctx.contentX, ctx.y + 2.5);
+  const contSpec: StyleSpec = { size: ctx.lp.dateSize, color: MUTED, bold: true, lh: ctx.lp.bodyLH };
+  const contText = `${cbNormalizePdfText(role, ctx.locale)} (continued)`;
+  applyStyle(ctx, contSpec, contText);
+  drawText(ctx, contText, ctx.contentX, ctx.y + 2.5, contSpec);
   ctx.y += 4.5;
 }
 
@@ -757,15 +736,16 @@ export function cbDrawWrappedBullet(
 ): void {
   const drawMarker = opts.drawMarker ?? true;
   const spec: StyleSpec = { size: ctx.lp.bulletSize, color: BODY_CLR, lh: ctx.lp.bulletLH };
+  const markerSpec: StyleSpec = { size: ctx.lp.bulletSize, color: BLUE, lh: ctx.lp.bulletLH };
   for (let i = 0; i < lines.length; i += 1) {
     cbEnsureSpace(ctx, ctx.lp.bulletLH);
     // Marker only on first visual line — true hanging indent, no duplicate markers.
     if (i === 0 && drawMarker) {
-      applyStyle(ctx, { size: ctx.lp.bulletSize, color: BLUE, lh: ctx.lp.bulletLH });
-      ctx.pdf.text('-', layout.markerX, ctx.y + ctx.lp.bulletSize * 0.32);
+      applyStyle(ctx, markerSpec, '-');
+      drawText(ctx, '-', layout.markerX, ctx.y + ctx.lp.bulletSize * 0.32, markerSpec);
     }
-    applyStyle(ctx, spec);
-    ctx.pdf.text(lines[i]!, layout.textX, ctx.y + spec.size * 0.32);
+    applyStyle(ctx, spec, lines[i]!);
+    drawText(ctx, lines[i]!, layout.textX, ctx.y + spec.size * 0.32, spec);
     ctx.y += ctx.lp.bulletLH;
   }
 }
@@ -846,26 +826,30 @@ function measureEducationH(ctx: ContemporaryBoldPdfContext): number {
 
 function drawEducationEntry(ctx: ContemporaryBoldPdfContext, edu: CVData['education'][number]): void {
   cbFreshPageIfNeeded(ctx, educationEntryH(ctx, edu));
-  applyStyle(ctx, { size: ctx.lp.titleSize, color: TEXT_DARK, bold: true, lh: ctx.lp.bodyLH });
-  const dLines = wrapLines(ctx, edu.degree || '', ctx.contentW - DATE_COL_W);
+  const degreeSpec: StyleSpec = { size: ctx.lp.titleSize, color: TEXT_DARK, bold: true, lh: ctx.lp.bodyLH };
+  applyStyle(ctx, degreeSpec);
+  const dLines = wrapLines(ctx, edu.degree || '', ctx.contentW - DATE_COL_W, degreeSpec);
   const startY = ctx.y;
   let lineY = startY;
   for (const ln of dLines) {
-    ctx.pdf.text(ln, ctx.contentX, lineY + ctx.lp.titleSize * 0.32);
+    drawText(ctx, ln, ctx.contentX, lineY + ctx.lp.titleSize * 0.32, degreeSpec);
     lineY += ctx.lp.bodyLH;
   }
 
   const dateText = [edu.startDate, edu.endDate].filter(Boolean).join(' – ');
   if (dateText) {
-    applyStyle(ctx, { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.bodyLH });
-    const dw = ctx.pdf.getTextWidth(dateText);
-    ctx.pdf.text(dateText, ctx.contentX + ctx.contentW - dw, startY + ctx.lp.titleSize * 0.32);
+    const dateSpec: StyleSpec = { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.bodyLH };
+    applyStyle(ctx, dateSpec, dateText);
+    const dw = pdfI18nCtxTextWidth(ctx, dateText, { size: dateSpec.size, bold: false });
+    drawText(ctx, dateText, ctx.contentX + ctx.contentW - dw, startY + ctx.lp.titleSize * 0.32, dateSpec, { align: 'right' });
   }
   ctx.y = lineY + 0.3;
 
   if (edu.school) {
-    applyStyle(ctx, { size: ctx.lp.companySize, color: MUTED, lh: ctx.lp.bodyLH });
-    ctx.pdf.text(cbNormalizePdfText(edu.school), ctx.contentX, ctx.y + ctx.lp.companySize * 0.32);
+    const schoolSpec: StyleSpec = { size: ctx.lp.companySize, color: MUTED, lh: ctx.lp.bodyLH };
+    const school = cbNormalizePdfText(edu.school, ctx.locale);
+    applyStyle(ctx, schoolSpec, school);
+    drawText(ctx, school, ctx.contentX, ctx.y + ctx.lp.companySize * 0.32, schoolSpec);
     ctx.y += ctx.lp.bodyLH + 1;
   }
   ctx.y += 2;
@@ -891,10 +875,11 @@ function measureLangsH(ctx: ContemporaryBoldPdfContext): number {
 }
 
 function layoutChips(ctx: ContemporaryBoldPdfContext, maxW: number): Chip[] {
-  applyStyle(ctx, { size: ctx.lp.chipSize, color: CHIP_TEXT, lh: 3 });
+  const chipSpec: StyleSpec = { size: ctx.lp.chipSize, color: CHIP_TEXT, lh: 3 };
+  applyStyle(ctx, chipSpec);
   return ctx.cv.skills.map((raw) => {
     const text = getLocalizedCvSkillName(raw, ctx.locale) || raw;
-    const w = Math.min(maxW, ctx.pdf.getTextWidth(text) + 5);
+    const w = Math.min(maxW, pdfI18nCtxTextWidth(ctx, text, { size: chipSpec.size, bold: false }) + 5);
     return { text, w };
   });
 }
@@ -924,8 +909,9 @@ function drawSkillChips(ctx: ContemporaryBoldPdfContext, colX: number, colW: num
     ctx.pdf.setDrawColor(RULE_CLR[0], RULE_CLR[1], RULE_CLR[2]);
     ctx.pdf.setLineWidth(0.15);
     ctx.pdf.rect(x, rowY, chip.w, ctx.lp.chipH, 'FD');
-    applyStyle(ctx, { size: ctx.lp.chipSize, color: CHIP_TEXT, lh: 3 });
-    ctx.pdf.text(chip.text, x + 2.2, rowY + ctx.lp.chipH * 0.68);
+    const chipSpec: StyleSpec = { size: ctx.lp.chipSize, color: CHIP_TEXT, lh: 3 };
+    applyStyle(ctx, chipSpec, chip.text);
+    drawText(ctx, chip.text, x + 2.2, rowY + ctx.lp.chipH * 0.68, chipSpec);
     x += chip.w + 2;
   }
   const endY = rowY + rowH + 1;
@@ -941,12 +927,15 @@ function drawLanguagesCol(ctx: ContemporaryBoldPdfContext, colX: number, colW: n
   let rowY = ctx.y;
   for (const lang of ctx.cv.languages) {
     const name = getLocalizedCvLanguageName(lang.name, ctx.locale) || lang.name;
-    applyStyle(ctx, { size: ctx.lp.langSize, color: BODY_CLR, lh: ctx.lp.langLH });
-    ctx.pdf.text(name, colX, rowY + ctx.lp.langSize * 0.32);
+    const nameSpec: StyleSpec = { size: ctx.lp.langSize, color: BODY_CLR, lh: ctx.lp.langLH };
+    applyStyle(ctx, nameSpec, name);
+    drawText(ctx, name, colX, rowY + ctx.lp.langSize * 0.32, nameSpec);
     if (lang.level) {
-      applyStyle(ctx, { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.langLH });
-      const lw = ctx.pdf.getTextWidth(`/ ${lang.level}`);
-      ctx.pdf.text(`/ ${lang.level}`, colX + colW - lw, rowY + ctx.lp.langSize * 0.32);
+      const levelText = `/ ${lang.level}`;
+      const levelSpec: StyleSpec = { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.langLH };
+      applyStyle(ctx, levelSpec, levelText);
+      const lw = pdfI18nCtxTextWidth(ctx, levelText, { size: levelSpec.size, bold: false });
+      drawText(ctx, levelText, colX + colW - lw, rowY + ctx.lp.langSize * 0.32, levelSpec, { align: 'right' });
     }
     rowY += ctx.lp.langLH;
   }
@@ -1015,8 +1004,8 @@ export async function buildContemporaryBoldPagedPdfBlob(
 ): Promise<Blob> {
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const unicodeReady = await cbRegisterUnicodeFonts(pdf);
-  const ctx = cbCreateContext(pdf, cv, locale, unicodeReady);
+  const i18n = await registerPdfI18nFonts(pdf);
+  const ctx = cbCreateContext(pdf, cv, locale, i18n);
 
   const maskedPhoto = options.photoDataUrl
     ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)
