@@ -86,9 +86,22 @@ function main() {
 
   assertFile('out/index.html');
 
+  const { REQUIRED_PDF_FONT_FILES, MIN_FONT_BYTES } = require('./pdf-font-manifest');
+  for (const fileName of REQUIRED_PDF_FONT_FILES) {
+    const rel = path.join('out', 'fonts', fileName);
+    const full = path.join(repoRoot, rel);
+    if (!fs.existsSync(full)) fail(`missing required font in static export: ${rel}`);
+    if (fs.statSync(full).size < MIN_FONT_BYTES) fail(`font too small in static export: ${rel}`);
+    log(`OK  ${rel}`);
+  }
+
   run(isWindows ? 'npx.cmd cap sync android' : 'npx cap sync android');
 
   assertFile('android/app/src/main/assets/public/index.html');
+  for (const fileName of REQUIRED_PDF_FONT_FILES) {
+    const rel = path.join('android', 'app', 'src', 'main', 'assets', 'public', 'fonts', fileName);
+    assertFile(rel);
+  }
   assertCapacitorConfigNoServerUrl('android/app/src/main/assets/capacitor.config.json');
   verifySyncedAppChunks();
 
