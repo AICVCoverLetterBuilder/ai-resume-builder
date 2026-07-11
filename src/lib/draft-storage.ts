@@ -5,6 +5,9 @@ import type { CVData, CoverLetterData } from './types';
 const CV_DRAFT_KEY = 'cvpro-cv-draft';
 const CL_DRAFT_KEY = 'cvpro-cover-letter-draft';
 
+export const CV_DRAFT_STORAGE_KEY = CV_DRAFT_KEY;
+export const CL_DRAFT_STORAGE_KEY = CL_DRAFT_KEY;
+
 // ─── CV Draft ─────────────────────────────────────────────────────────────────
 
 export interface CvDraftData {

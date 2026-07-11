@@ -39,6 +39,23 @@ function assertFile(relPath, label) {
   if (!fs.existsSync(full)) fail(`${label} missing: ${relPath}`);
 }
 
+function assertSensitiveDataBackupDisabled() {
+  const manifestPath = path.join(repoRoot, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+  if (!fs.existsSync(manifestPath)) fail(`missing ${manifestPath}`);
+  const manifest = fs.readFileSync(manifestPath, 'utf8');
+  if (/android:allowBackup\s*=\s*"true"/.test(manifest)) {
+    fail('AndroidManifest must set android:allowBackup="false" to prevent CV draft cloud restore');
+  }
+  if (!/android:allowBackup\s*=\s*"false"/.test(manifest)) {
+    fail('AndroidManifest must explicitly set android:allowBackup="false"');
+  }
+  const rulesPath = path.join(repoRoot, 'android', 'app', 'src', 'main', 'res', 'xml', 'data_extraction_rules.xml');
+  if (!fs.existsSync(rulesPath)) {
+    fail('missing android/app/src/main/res/xml/data_extraction_rules.xml');
+  }
+  console.log('[verify:android:release] sensitive CV backup disabled (allowBackup=false)');
+}
+
 function assertPdfFontBundle(relDir, label) {
   for (const fileName of REQUIRED_PDF_FONT_FILES) {
     const relPath = path.join(relDir, 'fonts', fileName);
@@ -79,6 +96,7 @@ function verifySyncedAssets() {
   assertPdfFontBundle('out', 'static export');
   assertFile('android/app/src/main/assets/public/index.html', 'synced Android web assets');
   assertPdfFontBundle(path.join('android', 'app', 'src', 'main', 'assets', 'public'), 'synced Android web assets');
+  assertSensitiveDataBackupDisabled();
 
   const publicDir = path.join(repoRoot, 'android', 'app', 'src', 'main', 'assets', 'public');
   const jsFiles = collectJsFiles(publicDir);

@@ -28,6 +28,7 @@ import {
   getSkillCategory,
   type CvSkillOption,
 } from '@/lib/cv-skill-options';
+import { createEmptyCv } from '@/lib/cv-defaults';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import { loadCvDraft } from '@/lib/draft-storage';
@@ -53,21 +54,7 @@ import {
   type ElegantFormalCanonicalPhotoResult,
 } from '@/lib/elegant-formal-photo';
 
-const emptyCV = (): CVData => ({
-  id: crypto.randomUUID(),
-  name: '',
-  personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '' },
-  summary: '',
-  experience: [],
-  education: [],
-  skills: [],
-  certifications: [],
-  languages: [],
-  templateId: 'modern-minimal',
-  region: 'US',
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-});
+const emptyCV = createEmptyCv;
 
 const emptyExp = (): WorkExperience => ({
   id: crypto.randomUUID(), company: '', position: '', startDate: '', endDate: '', isPresent: false, description: '',
