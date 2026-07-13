@@ -1,8 +1,9 @@
 /**
- * Arabic cover-letter PDF via html2canvas (isolated opaque root; no Android preview clone).
+ * Arabic cover-letter PDF via html2canvas inside a clean same-origin iframe.
+ * Avoids parent-document Tailwind/oklch CSS that breaks Android WebView html2canvas.
  */
 import { Capacitor } from '@capacitor/core';
-import { ensureNotoFontsForHtmlCapture, CV_PDF_A4_HEIGHT_MM, CV_PDF_A4_WIDTH_MM } from './export';
+import { CV_PDF_A4_HEIGHT_MM, CV_PDF_A4_WIDTH_MM } from './export';
 import {
   CoverLetterArabicPdfExportError,
   getArabicCoverLetterPdfDiagnostics,
@@ -13,18 +14,20 @@ import {
   type ArabicCoverLetterPdfStage,
 } from './cover-letter-arabic-pdf-diagnostics';
 import {
-  ARABIC_BODY_FONT,
-  EXPORT_ROOT_ATTR,
-  EXPORT_ROOT_ID,
+  A4_MIN_HEIGHT_PX,
+  IFRAME_ATTR,
   MIN_NON_WHITE_RATIO,
   analyzeCanvasPixels,
-  buildIsolatedArabicExportRoot,
+  assertTargetBelongsToIframe,
   buildPaddedPngSlice,
+  createArabicCaptureIframe,
   createExportOverlay,
-  forceCloneCaptureStyles,
-  tryResolvePreviewRoot,
+  isUnsupportedColorFunctionError,
+  loadArabicFontsInIframe,
+  runUnsafeColorScanOrThrow,
+  sanitizeClonedIframeDocument,
   validateCaptureRootLayout,
-  waitForStableLayout,
+  waitForIframeStableLayout,
 } from './cover-letter-arabic-pdf-capture';
 
 export {
@@ -45,11 +48,19 @@ export {
 export {
   applyOpaqueCaptureStyles,
   analyzeCanvasPixels,
+  assertTargetBelongsToIframe,
+  buildIframeSafeCss,
   buildIsolatedArabicExportRoot,
+  createArabicCaptureIframe,
   forceCloneCaptureStyles,
+  inlineStylesAreCaptureSafe,
+  isUnsupportedColorFunctionError,
+  resolveArabicFontAbsoluteUrl,
+  runUnsafeColorScanOrThrow,
+  sanitizeClonedIframeDocument,
+  scanDocumentForUnsafeColorFunctions,
   tryResolvePreviewRoot,
   validateCaptureRootLayout,
-  inlineStylesAreCaptureSafe,
 } from './cover-letter-arabic-pdf-capture';
 
 const CONTINUATION_TOP_PAD_PX = 28;
@@ -73,26 +84,6 @@ function fail(stage: ArabicCoverLetterPdfStage, message: string, cause?: unknown
   throw new CoverLetterArabicPdfExportError(stage, message, cause, code);
 }
 
-async function ensureArabicFontsReady(): Promise<() => void> {
-  recordArabicCoverLetterPdfStage('font_loading_started');
-  const cleanup = await ensureNotoFontsForHtmlCapture();
-  if (document.fonts?.load) {
-    await Promise.all([
-      document.fonts.load(`400 11pt ${ARABIC_BODY_FONT}`),
-      document.fonts.load(`700 11pt ${ARABIC_BODY_FONT}`),
-    ]).catch(() => undefined);
-    await document.fonts.ready;
-  }
-  const fontCheckPassed = document.fonts?.check
-    ? document.fonts.check(`400 11pt ${ARABIC_BODY_FONT}`)
-    : true;
-  updateArabicCoverLetterPdfMetrics({ fontCheckPassed });
-  recordArabicCoverLetterPdfStage('font_check_result', fontCheckPassed ? 'passed' : 'failed');
-  recordArabicCoverLetterPdfStage('font_loading_completed');
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  return cleanup;
-}
-
 function validateCanvasHasContent(canvas: HTMLCanvasElement): void {
   if (!canvas.width || !canvas.height) {
     fail('canvas_measured', `html2canvas produced an empty canvas (${canvas.width}×${canvas.height})`, undefined, 'empty_canvas');
@@ -106,6 +97,7 @@ function validateCanvasHasContent(canvas: HTMLCanvasElement): void {
     nonWhitePixelRatio: analysis.ratio,
   });
   recordArabicCoverLetterPdfStage('canvas_pixel_validation_completed', `ratio=${analysis.ratio.toFixed(5)}`);
+  recordArabicCoverLetterPdfStage('canvas_validation_completed', `ratio=${analysis.ratio.toFixed(5)}`);
   if (analysis.ratio < MIN_NON_WHITE_RATIO) {
     fail(
       'canvas_pixel_validation_completed',
@@ -124,6 +116,7 @@ function encodeCanvasToPng(canvas: HTMLCanvasElement): string {
   }
   updateArabicCoverLetterPdfMetrics({ imageMime: 'image/png', imageDataUrlLength: dataUrl.length });
   recordArabicCoverLetterPdfStage('image_encoding_completed', `len=${dataUrl.length}`);
+  recordArabicCoverLetterPdfStage('png_created', `len=${dataUrl.length}`);
   return dataUrl;
 }
 
@@ -141,10 +134,12 @@ async function validatePdfBlob(blob: Blob, expectedPageCount: number): Promise<v
   if (mime !== 'application/pdf') fail('pdf_blob_validated', `Unexpected PDF MIME: ${mime}`, undefined, 'invalid_pdf_mime');
   if (!pdfSignatureValid) fail('pdf_blob_validated', 'Invalid PDF signature', undefined, 'invalid_pdf_signature');
   recordArabicCoverLetterPdfStage('pdf_blob_validated', `size=${blob.size}`);
+  recordArabicCoverLetterPdfStage('pdf_created', `size=${blob.size}`);
 }
 
 function describeTargetStyles(element: HTMLElement): string {
-  const cs = getComputedStyle(element);
+  const view = element.ownerDocument.defaultView;
+  const cs = view ? view.getComputedStyle(element) : getComputedStyle(element);
   return [
     `position=${cs.position}`,
     `left=${cs.left}`,
@@ -167,13 +162,11 @@ function buildHtml2CanvasOptions(
   captureWidth: number,
   captureHeight: number,
   scale: number,
-  androidSafe: boolean,
 ): Record<string, unknown> {
-  const rootSelector = `[${EXPORT_ROOT_ATTR}="true"]`;
   return {
     scale,
     useCORS: true,
-    allowTaint: !androidSafe,
+    allowTaint: false,
     backgroundColor: '#ffffff',
     logging: false,
     foreignObjectRendering: false,
@@ -181,9 +174,20 @@ function buildHtml2CanvasOptions(
     scrollY: 0,
     width: captureWidth,
     height: captureHeight,
-    windowWidth: Math.max(captureWidth, typeof window !== 'undefined' ? window.innerWidth : captureWidth),
-    windowHeight: Math.max(captureHeight, typeof window !== 'undefined' ? window.innerHeight : captureHeight),
-    onclone: (doc: Document) => forceCloneCaptureStyles(doc, rootSelector),
+    windowWidth: captureWidth,
+    windowHeight: captureHeight,
+    onclone: (clonedDoc: Document) => {
+      try {
+        sanitizeClonedIframeDocument(clonedDoc);
+      } catch (err) {
+        recordArabicCoverLetterPdfStage(
+          'html2canvas_onclone_validation',
+          err instanceof Error ? err.message : String(err),
+        );
+        throw err;
+      }
+      recordArabicCoverLetterPdfStage('html2canvas_onclone_validation', 'passed');
+    },
   };
 }
 
@@ -193,12 +197,11 @@ async function runHtml2CanvasCapture(
   captureWidth: number,
   captureHeight: number,
   scale: number,
-  androidSafe: boolean,
   isRetry: boolean,
 ): Promise<HTMLCanvasElement> {
-  const options = buildHtml2CanvasOptions(captureWidth, captureHeight, scale, androidSafe);
+  const options = buildHtml2CanvasOptions(captureWidth, captureHeight, scale);
   updateArabicCoverLetterPdfMetrics({
-    html2canvasOptionsSummary: `scale=${scale};w=${captureWidth};h=${captureHeight};allowTaint=${options.allowTaint};foreignObjectRendering=false;x/y=omitted`,
+    html2canvasOptionsSummary: `scale=${scale};w=${captureWidth};h=${captureHeight};allowTaint=false;foreignObjectRendering=false;window=${captureWidth}x${captureHeight};x/y=omitted`,
   });
   recordArabicCoverLetterPdfStage(
     isRetry ? 'html2canvas_retry_started' : 'html2canvas_started',
@@ -213,7 +216,13 @@ async function runHtml2CanvasCapture(
       targetRect: `${Math.round(rect.width)}x${Math.round(rect.height)}@${Math.round(rect.x)},${Math.round(rect.y)}`,
       targetStyles: describeTargetStyles(captureRoot),
     });
-    // Re-throw the original cause so callers can retry without recording a wrapper lastError yet.
+    if (
+      captureErr instanceof Error &&
+      ((captureErr as Error & { code?: string }).code === 'unsafe_cloned_css' ||
+        /unsafe_cloned_css/.test(captureErr.message))
+    ) {
+      fail('html2canvas_onclone_validation', captureErr.message, captureErr, 'unsafe_cloned_css');
+    }
     throw captureErr;
   }
 }
@@ -279,12 +288,9 @@ function canvasToPdfBlob(
   return blob;
 }
 
-/**
- * Android never clones #cl-preview. Isolated root is the only strategy.
- */
-export function resolveArabicPdfCaptureStrategy(_previewAvailable: boolean): 'isolated-primary' {
-  void _previewAvailable;
-  return 'isolated-primary';
+/** Android (and all platforms) use a clean iframe document — never the parent app DOM. */
+export function resolveArabicPdfCaptureStrategy(): 'isolated-iframe-primary' {
+  return 'isolated-iframe-primary';
 }
 
 export async function buildArabicCoverLetterPdfBlob(
@@ -298,10 +304,8 @@ export async function buildArabicCoverLetterPdfBlob(
   if (!probe) fail('source_content_validated', 'Empty content');
   recordArabicCoverLetterPdfStage('source_content_validated', `${probe.length} chars`);
 
-  let removeFonts: (() => void) | null = null;
-  let captureRoot: HTMLElement | null = null;
   let overlay: HTMLDivElement | null = null;
-  const android = isAndroidArabicPdfCapture();
+  let iframe: HTMLIFrameElement | null = null;
   let usedScale = resolveCaptureScale(false);
 
   try {
@@ -312,18 +316,36 @@ export async function buildArabicCoverLetterPdfBlob(
     const jsPDF = (jspdfMod.jsPDF ?? jspdfMod.default) as typeof import('jspdf').jsPDF;
     if (typeof html2canvasFn !== 'function') fail('export_entered', 'html2canvas unavailable');
 
-    const strategy = resolveArabicPdfCaptureStrategy(Boolean(tryResolvePreviewRoot()));
+    const strategy = resolveArabicPdfCaptureStrategy();
     updateArabicCoverLetterPdfMetrics({ captureStrategy: strategy });
-    const built = buildIsolatedArabicExportRoot(candidateName, content, locale, { simplified: false });
-    captureRoot = built.root;
     recordArabicCoverLetterPdfStage('export_root_created', strategy);
 
     overlay = createExportOverlay();
-    document.body.appendChild(captureRoot);
-    recordArabicCoverLetterPdfStage('export_root_attached', EXPORT_ROOT_ID);
+    const ctx = await createArabicCaptureIframe(candidateName, content, locale);
+    iframe = ctx.iframe;
+    const { iframeDocument, root: captureRoot, fontAbsoluteUrl } = ctx;
+    recordArabicCoverLetterPdfStage('export_root_attached', `iframe:${captureRoot.id}`);
 
-    removeFonts = await ensureArabicFontsReady();
-    const { width: captureWidth, height: captureHeight } = await waitForStableLayout(captureRoot);
+    try {
+      assertTargetBelongsToIframe(captureRoot, iframeDocument);
+    } catch (ownerErr) {
+      fail(
+        'layout_validation_failed',
+        ownerErr instanceof Error ? ownerErr.message : 'Target not in iframe document',
+        ownerErr,
+        'invalid_owner_document',
+      );
+    }
+
+    await loadArabicFontsInIframe(iframeDocument, iframe.contentWindow, fontAbsoluteUrl);
+
+    iframe.style.height = `${A4_MIN_HEIGHT_PX}px`;
+    const { width: captureWidth, height: captureHeight } = await waitForIframeStableLayout(
+      captureRoot,
+      iframe.contentWindow,
+    );
+    iframe.style.height = `${captureHeight}px`;
+
     try {
       validateCaptureRootLayout(captureRoot, captureWidth, captureHeight);
     } catch (layoutErr) {
@@ -338,7 +360,21 @@ export async function buildArabicCoverLetterPdfBlob(
         'invalid_layout',
       );
     }
-    recordArabicCoverLetterPdfStage('export_root_styles_applied', `opacity=1 ${captureWidth}x${captureHeight}@0,0`);
+    recordArabicCoverLetterPdfStage(
+      'export_root_styles_applied',
+      `iframe opacity=1 ${captureWidth}x${captureHeight}@0,0`,
+    );
+
+    try {
+      runUnsafeColorScanOrThrow(iframeDocument);
+    } catch (scanErr) {
+      fail(
+        'unsafe_css_scan_completed',
+        scanErr instanceof Error ? scanErr.message : 'Unsafe CSS scan failed',
+        scanErr,
+        'unsafe_css',
+      );
+    }
 
     usedScale = resolveCaptureScale(false);
     let canvas: HTMLCanvasElement;
@@ -349,45 +385,29 @@ export async function buildArabicCoverLetterPdfBlob(
         captureWidth,
         captureHeight,
         usedScale,
-        android,
         false,
       );
-    } catch (_primaryErr) {
-      // One controlled simplified retry after recording the original html2canvas cause.
-      void _primaryErr;
-      recordArabicCoverLetterPdfStage('html2canvas_retry_started', 'isolated-simplified-retry');
-      captureRoot.remove();
-      const retryBuilt = buildIsolatedArabicExportRoot(candidateName, content, locale, { simplified: true });
-      captureRoot = retryBuilt.root;
-      document.body.appendChild(captureRoot);
-      updateArabicCoverLetterPdfMetrics({ captureStrategy: 'isolated-simplified-retry' });
-      const retryLayout = await waitForStableLayout(captureRoot);
-      try {
-        validateCaptureRootLayout(captureRoot, retryLayout.width, retryLayout.height);
-      } catch (layoutErr) {
-        recordArabicCoverLetterPdfStage(
-          'layout_validation_failed',
-          layoutErr instanceof Error ? layoutErr.message : String(layoutErr),
-        );
-        fail(
-          'layout_validation_failed',
-          layoutErr instanceof Error ? layoutErr.message : 'Retry layout validation failed',
-          layoutErr,
-          'invalid_layout',
-        );
+    } catch (primaryErr) {
+      if (primaryErr instanceof CoverLetterArabicPdfExportError) throw primaryErr;
+      // Never retry unsupported CSS parser errors — the iframe document must change first.
+      if (isUnsupportedColorFunctionError(primaryErr)) {
+        wrapHtml2CanvasFailure(primaryErr);
       }
+      // Optional scale-1 retry inside the same clean iframe only for non-CSS failures.
       usedScale = resolveCaptureScale(true);
+      updateArabicCoverLetterPdfMetrics({ captureStrategy: 'isolated-iframe-scale-retry' });
+      recordArabicCoverLetterPdfStage('html2canvas_retry_started', 'isolated-iframe-scale-retry');
       try {
         canvas = await runHtml2CanvasCapture(
           html2canvasFn,
           captureRoot,
-          retryLayout.width,
-          retryLayout.height,
+          captureWidth,
+          captureHeight,
           usedScale,
-          android,
           true,
         );
       } catch (retryErr) {
+        if (retryErr instanceof CoverLetterArabicPdfExportError) throw retryErr;
         wrapHtml2CanvasFailure(retryErr);
       }
     }
@@ -404,12 +424,13 @@ export async function buildArabicCoverLetterPdfBlob(
     const stage = getArabicCoverLetterPdfDiagnostics().at(-1)?.stage ?? 'pdf_blob_created';
     throw fail(stage, err instanceof Error ? err.message : 'Arabic PDF export failed', err);
   } finally {
+    recordArabicCoverLetterPdfStage('iframe_cleanup_started');
     recordArabicCoverLetterPdfStage('cleanup_started');
     overlay?.remove();
-    captureRoot?.remove();
-    document.getElementById(EXPORT_ROOT_ID)?.remove();
+    iframe?.remove();
+    document.querySelectorAll(`[${IFRAME_ATTR}]`).forEach((el) => el.remove());
     document.querySelectorAll('[data-cl-arabic-pdf-overlay]').forEach((el) => el.remove());
-    removeFonts?.();
+    recordArabicCoverLetterPdfStage('iframe_cleanup_completed');
     recordArabicCoverLetterPdfStage('cleanup_completed');
   }
 }

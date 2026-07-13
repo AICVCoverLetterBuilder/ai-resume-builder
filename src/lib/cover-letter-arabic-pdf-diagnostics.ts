@@ -4,6 +4,11 @@ export type ArabicCoverLetterPdfStage =
   | 'export_root_created'
   | 'export_root_attached'
   | 'export_root_styles_applied'
+  | 'iframe_created'
+  | 'iframe_document_written'
+  | 'iframe_font_loading_started'
+  | 'iframe_font_loading_completed'
+  | 'iframe_layout_stable'
   | 'font_loading_started'
   | 'font_loading_completed'
   | 'font_check_result'
@@ -11,24 +16,33 @@ export type ArabicCoverLetterPdfStage =
   | 'second_layout_measurement'
   | 'layout_stable'
   | 'layout_validation_failed'
+  | 'unsafe_css_scan_completed'
   | 'html2canvas_started'
   | 'html2canvas_completed'
+  | 'html2canvas_onclone_validation'
   | 'html2canvas_retry_started'
   | 'canvas_measured'
   | 'canvas_pixel_validation_completed'
+  | 'canvas_validation_completed'
   | 'image_encoding_started'
   | 'image_encoding_completed'
+  | 'png_created'
   | 'jspdf_created'
   | 'page_slice_started'
   | 'page_slice_completed'
   | 'pdf_blob_created'
   | 'pdf_blob_validated'
+  | 'pdf_created'
   | 'platform_save_started'
   | 'platform_save_completed'
   | 'cleanup_started'
-  | 'cleanup_completed';
+  | 'cleanup_completed'
+  | 'iframe_cleanup_started'
+  | 'iframe_cleanup_completed';
 
 export type ArabicCoverLetterCaptureStrategy =
+  | 'isolated-iframe-primary'
+  | 'isolated-iframe-scale-retry'
   | 'isolated-primary'
   | 'isolated-simplified-retry'
   | 'opaque_export_root'
@@ -37,6 +51,12 @@ export type ArabicCoverLetterCaptureStrategy =
 export type ArabicCoverLetterPdfMetrics = {
   captureStrategy?: ArabicCoverLetterCaptureStrategy;
   measuredElementId?: string;
+  targetOwnerDocument?: 'iframe' | 'main';
+  iframeStyleElementCount?: number;
+  iframeStylesheetLinkCount?: number;
+  iframeClassAttributeCount?: number;
+  unsafeColorFunctionScanResult?: string;
+  unsafeColorOffender?: string;
   rootOffsetWidth?: number;
   rootOffsetHeight?: number;
   rootScrollWidth?: number;
@@ -66,6 +86,8 @@ export type ArabicCoverLetterPdfMetrics = {
   expectedPageCount?: number;
   generatedPageCount?: number;
   fontCheckPassed?: boolean;
+  iframeFontCheckPassed?: boolean;
+  iframeFontAbsoluteUrl?: string;
   platformSaveResult?: string;
   html2canvasCauseName?: string;
   html2canvasCauseMessage?: string;
@@ -246,6 +268,7 @@ export function formatArabicCoverLetterPdfDiagnosticReport(): string {
     `timestamp: ${new Date().toISOString()}`,
     `lastCompletedStage: ${lastStage ?? 'none'}`,
     `captureStrategy: ${m.captureStrategy ?? 'unknown'}`,
+    `targetOwnerDocument: ${m.targetOwnerDocument ?? 'n/a'}`,
     `measuredElementId: ${m.measuredElementId ?? 'n/a'}`,
     `errorName: ${err?.name ?? 'none'}`,
     `errorMessage: ${err?.message ?? 'none'}`,
@@ -260,6 +283,13 @@ export function formatArabicCoverLetterPdfDiagnosticReport(): string {
     `html2canvasTargetRect: ${m.html2canvasTargetRect ?? 'n/a'}`,
     `html2canvasTargetStyles: ${m.html2canvasTargetStyles ?? 'n/a'}`,
     `html2canvasOptionsSummary: ${m.html2canvasOptionsSummary ?? 'n/a'}`,
+    `iframeStyleElementCount: ${m.iframeStyleElementCount ?? 'n/a'}`,
+    `iframeStylesheetLinkCount: ${m.iframeStylesheetLinkCount ?? 'n/a'}`,
+    `iframeClassAttributeCount: ${m.iframeClassAttributeCount ?? 'n/a'}`,
+    `unsafeColorFunctionScanResult: ${m.unsafeColorFunctionScanResult ?? 'n/a'}`,
+    `unsafeColorOffender: ${m.unsafeColorOffender ?? 'n/a'}`,
+    `iframeFontAbsoluteUrl: ${m.iframeFontAbsoluteUrl ?? 'n/a'}`,
+    `iframeFontCheckPassed: ${m.iframeFontCheckPassed ?? false}`,
     `rootDimensions: ${m.rootOffsetWidth ?? 0}x${m.rootOffsetHeight ?? 0} (scroll ${m.rootScrollWidth ?? 0}x${m.rootScrollHeight ?? 0})`,
     `rootBoundingRect: ${m.rootBoundingRect ?? 'n/a'}`,
     `finalCaptureSize: ${m.finalCaptureWidth ?? 0}x${m.finalCaptureHeight ?? 0}`,

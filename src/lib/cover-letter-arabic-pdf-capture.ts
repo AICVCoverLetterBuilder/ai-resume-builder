@@ -7,14 +7,38 @@ import { CV_PDF_A4_HEIGHT_MM, CV_PDF_A4_WIDTH_MM } from './export';
 
 export const A4_WIDTH_PX = Math.round((CV_PDF_A4_WIDTH_MM * 96) / 25.4);
 export const A4_MIN_HEIGHT_PX = Math.round((CV_PDF_A4_HEIGHT_MM * 96) / 25.4);
-export const ARABIC_BODY_FONT = "'NotoSansArabic','Noto Sans Arabic',sans-serif";
+/** Font family registered only inside the clean capture iframe. */
+export const ARABIC_CAPTURE_FONT = 'NotoSansArabicCapture';
+export const ARABIC_BODY_FONT = `'${ARABIC_CAPTURE_FONT}','NotoSansArabic','Noto Sans Arabic',sans-serif`;
 export const MIN_NON_WHITE_RATIO = 0.0015;
 export const EXPORT_ROOT_ATTR = 'data-cl-arabic-export-root';
 export const EXPORT_ROOT_ID = 'cl-arabic-pdf-export-root';
+export const SAFE_STYLE_ID = 'cl-arabic-pdf-capture-style';
+export const IFRAME_ATTR = 'data-cl-arabic-pdf-iframe';
 export const PREVIEW_ATTR = 'data-cl-arabic-preview';
-export const UNSAFE_CSS_COLOR_RE = /oklch\(|lab\(|lch\(|color-mix\(|var\(--/i;
+export const UNSAFE_CSS_COLOR_RE = /oklch\s*\(|lab\s*\(|lch\s*\(|color-mix\s*\(/i;
 
-const A4_PADDING = '56px 60px';
+const COLOR_PROPS = [
+  'color',
+  'background-color',
+  'border-top-color',
+  'border-right-color',
+  'border-bottom-color',
+  'border-left-color',
+  'outline-color',
+  'text-decoration-color',
+  'column-rule-color',
+  'caret-color',
+  'fill',
+  'stroke',
+  'box-shadow',
+  'text-shadow',
+] as const;
+
+export type UnsafeColorScanResult = {
+  passed: boolean;
+  offender?: string;
+};
 
 export type CaptureLayoutSnapshot = {
   width: number;
@@ -30,6 +54,167 @@ export type CaptureLayoutSnapshot = {
   top: string;
   direction: string;
 };
+
+export type ArabicIframeCaptureContext = {
+  iframe: HTMLIFrameElement;
+  iframeDocument: Document;
+  root: HTMLDivElement;
+  fontAbsoluteUrl: string;
+};
+
+export function resolveArabicFontAbsoluteUrl(): string {
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  return `${origin}/fonts/NotoSansArabic-Regular.ttf`;
+}
+
+export function buildIframeSafeCss(fontAbsoluteUrl: string): string {
+  return `
+@font-face {
+  font-family: '${ARABIC_CAPTURE_FONT}';
+  font-style: normal;
+  font-weight: 400;
+  src: url('${fontAbsoluteUrl}') format('truetype');
+}
+html, body {
+  margin: 0;
+  padding: 0;
+  width: ${A4_WIDTH_PX}px;
+  min-height: ${A4_MIN_HEIGHT_PX}px;
+  box-sizing: border-box;
+  background: #ffffff;
+  color: #111111;
+  color-scheme: light;
+  opacity: 1;
+  visibility: visible;
+  display: block;
+  transform: none;
+  filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  text-shadow: none;
+  direction: rtl;
+  text-align: right;
+  overflow: visible;
+  font-family: '${ARABIC_CAPTURE_FONT}', sans-serif;
+  font-size: 11pt;
+  font-weight: 400;
+  line-height: 1.6;
+}
+#${EXPORT_ROOT_ID} {
+  margin: 0;
+  padding: 56px 60px;
+  width: ${A4_WIDTH_PX}px;
+  min-height: ${A4_MIN_HEIGHT_PX}px;
+  box-sizing: border-box;
+  background: #ffffff;
+  color: #111111;
+  opacity: 1;
+  visibility: visible;
+  display: block;
+  transform: none;
+  filter: none;
+  box-shadow: none;
+  text-shadow: none;
+  direction: rtl;
+  text-align: right;
+  overflow: visible;
+  font-family: '${ARABIC_CAPTURE_FONT}', sans-serif;
+  font-size: 11pt;
+  font-weight: 400;
+  line-height: 1.6;
+}
+#${EXPORT_ROOT_ID} p,
+#${EXPORT_ROOT_ID} div {
+  margin: 0 0 10px 0;
+  padding: 0;
+  color: #111111;
+  background: transparent;
+  font-weight: 400;
+  text-align: right;
+  direction: rtl;
+}
+#${EXPORT_ROOT_ID} [data-cl-date="true"] {
+  margin: 0 0 20px 0;
+  color: #4B5563;
+}
+`.trim();
+}
+
+export function inlineStylesAreCaptureSafe(styleText: string): boolean {
+  if (!styleText) return true;
+  return !UNSAFE_CSS_COLOR_RE.test(styleText);
+}
+
+export function scanDocumentForUnsafeColorFunctions(doc: Document): UnsafeColorScanResult {
+  const styleEls = Array.from(doc.querySelectorAll('style'));
+  for (const styleEl of styleEls) {
+    const text = styleEl.textContent ?? '';
+    if (UNSAFE_CSS_COLOR_RE.test(text)) {
+      const match = text.match(UNSAFE_CSS_COLOR_RE);
+      return {
+        passed: false,
+        offender: `style#${styleEl.id || 'anonymous'}: ${match?.[0] ?? 'unsafe'}`,
+      };
+    }
+  }
+
+  const withStyle = Array.from(doc.querySelectorAll('[style]')) as HTMLElement[];
+  for (const el of withStyle) {
+    const styleAttr = el.getAttribute('style') ?? '';
+    if (UNSAFE_CSS_COLOR_RE.test(styleAttr)) {
+      const match = styleAttr.match(UNSAFE_CSS_COLOR_RE);
+      return {
+        passed: false,
+        offender: `${el.tagName.toLowerCase()}[style]: ${match?.[0] ?? 'unsafe'}`,
+      };
+    }
+  }
+
+  const nodes: Element[] = [doc.documentElement, doc.body].filter(Boolean) as Element[];
+  const root = doc.getElementById(EXPORT_ROOT_ID);
+  if (root) {
+    nodes.push(root);
+    nodes.push(...Array.from(root.querySelectorAll('*')));
+  }
+
+  for (const node of nodes) {
+    if (!(node instanceof HTMLElement)) continue;
+    let cs: CSSStyleDeclaration;
+    try {
+      cs = node.ownerDocument.defaultView?.getComputedStyle(node) ?? getComputedStyle(node);
+    } catch {
+      continue;
+    }
+    for (const prop of COLOR_PROPS) {
+      const value = cs.getPropertyValue(prop) || (cs as unknown as Record<string, string>)[prop] || '';
+      if (value && UNSAFE_CSS_COLOR_RE.test(value)) {
+        return {
+          passed: false,
+          offender: `${node.tagName.toLowerCase()}#${node.id || ''} ${prop}=${value}`,
+        };
+      }
+    }
+  }
+
+  return { passed: true };
+}
+
+export function recordIframeDocumentMetrics(iframeDocument: Document, root: HTMLElement): void {
+  const styleCount = iframeDocument.querySelectorAll('style').length;
+  const linkCount = iframeDocument.querySelectorAll('link[rel="stylesheet"]').length;
+  const classCount = Array.from(iframeDocument.querySelectorAll('[class]')).filter(
+    (el) => (el.getAttribute('class') ?? '').trim().length > 0,
+  ).length;
+  const owner: 'iframe' | 'main' =
+    typeof window !== 'undefined' && root.ownerDocument === window.document ? 'main' : 'iframe';
+  updateArabicCoverLetterPdfMetrics({
+    targetOwnerDocument: owner,
+    iframeStyleElementCount: styleCount,
+    iframeStylesheetLinkCount: linkCount,
+    iframeClassAttributeCount: classCount,
+    measuredElementId: root.id || EXPORT_ROOT_ID,
+  });
+}
 
 export function applyOpaqueCaptureStyles(el: HTMLElement, width: number, height: number): void {
   el.style.position = 'fixed';
@@ -48,71 +233,74 @@ export function applyOpaqueCaptureStyles(el: HTMLElement, width: number, height:
   el.style.maxHeight = 'none';
   el.style.overflow = 'visible';
   el.style.transform = 'none';
-  el.style.translate = 'none';
-  el.style.scale = 'none';
-  el.style.rotate = 'none';
-  el.style.clipPath = 'none';
-  el.style.clip = 'auto';
   el.style.filter = 'none';
-  el.style.backdropFilter = 'none';
   el.style.boxShadow = 'none';
   el.style.background = '#ffffff';
   el.style.backgroundColor = '#ffffff';
-  el.style.zIndex = '2147483645';
+  el.style.color = '#111111';
+  el.style.zIndex = '1';
   el.style.pointerEvents = 'none';
   el.style.boxSizing = 'border-box';
 }
 
-export function forceCloneCaptureStyles(clonedDocument: Document, rootSelector: string): void {
-  const cloneRoot = clonedDocument.querySelector(rootSelector) as HTMLElement | null;
-  if (!cloneRoot) return;
-  let node: HTMLElement | null = cloneRoot;
-  while (node) {
-    node.style.opacity = '1';
-    node.style.visibility = 'visible';
-    node.style.display = node === cloneRoot ? 'block' : node.style.display || 'block';
-    node.style.transform = 'none';
-    node.style.translate = 'none';
-    node.style.scale = 'none';
-    node.style.clipPath = 'none';
-    node.style.clip = 'auto';
-    node.style.filter = 'none';
-    node.style.backdropFilter = 'none';
-    if (node === cloneRoot) {
-      node.style.position = 'fixed';
-      node.style.top = '0';
-      node.style.left = '0';
-      node.style.background = '#ffffff';
-      node.style.backgroundColor = '#ffffff';
-    }
-    node = node.parentElement;
+export function sanitizeClonedIframeDocument(clonedDocument: Document): void {
+  clonedDocument.querySelectorAll('link[rel="stylesheet"]').forEach((el) => el.remove());
+  clonedDocument.querySelectorAll('style').forEach((el) => {
+    if (el.id !== SAFE_STYLE_ID) el.remove();
+  });
+  clonedDocument.querySelectorAll('[class]').forEach((el) => el.removeAttribute('class'));
+
+  const forceSafe = (el: HTMLElement | null) => {
+    if (!el) return;
+    el.style.opacity = '1';
+    el.style.visibility = 'visible';
+    el.style.display = 'block';
+    el.style.transform = 'none';
+    el.style.filter = 'none';
+    el.style.boxShadow = 'none';
+    el.style.textShadow = 'none';
+    el.style.background = '#ffffff';
+    el.style.backgroundColor = '#ffffff';
+    el.style.color = '#111111';
+  };
+
+  forceSafe(clonedDocument.documentElement);
+  forceSafe(clonedDocument.body);
+  const root = clonedDocument.getElementById(EXPORT_ROOT_ID);
+  forceSafe(root);
+  if (root) {
+    root.querySelectorAll('*').forEach((child) => {
+      if (child instanceof HTMLElement) {
+        child.style.color = child.getAttribute('data-cl-date') === 'true' ? '#4B5563' : '#111111';
+        child.style.background = 'transparent';
+        child.style.backgroundColor = 'transparent';
+        child.style.transform = 'none';
+        child.style.filter = 'none';
+        child.style.boxShadow = 'none';
+        child.removeAttribute('class');
+      }
+    });
   }
-  sanitizeCloneSubtree(cloneRoot);
+
+  const scan = scanDocumentForUnsafeColorFunctions(clonedDocument);
+  if (!scan.passed) {
+    const err = new Error(`unsafe_cloned_css: ${scan.offender ?? 'unknown'}`);
+    (err as Error & { code?: string }).code = 'unsafe_cloned_css';
+    throw err;
+  }
 }
 
-function sanitizeCloneSubtree(root: HTMLElement): void {
-  const walk = (el: HTMLElement) => {
-    const styleText = el.getAttribute('style') ?? '';
-    if (UNSAFE_CSS_COLOR_RE.test(styleText)) {
-      el.style.color = '#111111';
-      el.style.backgroundColor = el === root ? '#ffffff' : 'transparent';
-      el.style.borderColor = '#111111';
-    }
-    el.style.filter = 'none';
-    el.style.backdropFilter = 'none';
-    el.style.boxShadow = 'none';
-    el.style.transform = 'none';
-    for (const child of Array.from(el.children)) {
-      if (child instanceof HTMLElement) walk(child);
-    }
-  };
-  walk(root);
+/** @deprecated Prefer sanitizeClonedIframeDocument — kept for unit tests. */
+export function forceCloneCaptureStyles(clonedDocument: Document, _rootSelector: string): void {
+  void _rootSelector;
+  sanitizeClonedIframeDocument(clonedDocument);
 }
 
 export function collectCaptureLayout(element: HTMLElement): CaptureLayoutSnapshot {
   void element.offsetHeight;
   const rect = element.getBoundingClientRect();
-  const cs = getComputedStyle(element);
+  const view = element.ownerDocument.defaultView;
+  const cs = view ? view.getComputedStyle(element) : getComputedStyle(element);
   return {
     width: Math.round(Math.max(element.scrollWidth, element.offsetWidth, rect.width)),
     height: Math.round(Math.max(element.scrollHeight, element.offsetHeight, rect.height)),
@@ -154,6 +342,16 @@ export function recordRootMetrics(
   return { width: snapshot.width, height: snapshot.height };
 }
 
+export function assertTargetBelongsToIframe(element: HTMLElement, iframeDocument: Document): void {
+  if (element.ownerDocument !== iframeDocument) {
+    throw new Error('Export root must belong to the clean iframe document, not the main application document');
+  }
+  if (typeof window !== 'undefined' && element.ownerDocument === window.document) {
+    throw new Error('Export root ownerDocument must not be the main application document');
+  }
+  updateArabicCoverLetterPdfMetrics({ targetOwnerDocument: 'iframe' });
+}
+
 export function validateCaptureRootLayout(
   element: HTMLElement,
   expectedWidth: number,
@@ -184,7 +382,6 @@ export function validateCaptureRootLayout(
   if (snapshot.display === 'none') {
     throw new Error('Export root display must not be none');
   }
-  // jsdom often reports 0 offset sizes; skip strict size match when layout is incomplete.
   const hasRealLayout = element.offsetWidth > 0 || element.offsetHeight > 0;
   if (hasRealLayout) {
     if (Math.abs(element.offsetWidth - expectedWidth) > 2 && Math.abs(snapshot.width - expectedWidth) > 2) {
@@ -201,48 +398,53 @@ export function validateCaptureRootLayout(
   return snapshot;
 }
 
-export async function waitForStableLayout(element: HTMLElement): Promise<{ width: number; height: number }> {
-  applyOpaqueCaptureStyles(element, A4_WIDTH_PX, A4_MIN_HEIGHT_PX);
-  element.style.height = 'auto';
-  element.style.minHeight = `${A4_MIN_HEIGHT_PX}px`;
-  void element.offsetHeight;
+function waitIframeFrames(iframeWindow: Window | null, count = 2): Promise<void> {
+  return new Promise((resolve) => {
+    if (!iframeWindow?.requestAnimationFrame) {
+      resolve();
+      return;
+    }
+    let remaining = count;
+    const tick = () => {
+      remaining -= 1;
+      if (remaining <= 0) resolve();
+      else iframeWindow.requestAnimationFrame(tick);
+    };
+    iframeWindow.requestAnimationFrame(tick);
+  });
+}
+
+export async function waitForIframeStableLayout(
+  root: HTMLElement,
+  iframeWindow: Window | null,
+): Promise<{ width: number; height: number }> {
+  root.style.width = `${A4_WIDTH_PX}px`;
+  root.style.height = 'auto';
+  root.style.minHeight = `${A4_MIN_HEIGHT_PX}px`;
+  void root.offsetHeight;
 
   recordArabicCoverLetterPdfStage('first_layout_measurement');
-  const scrollHeight = Math.max(element.scrollHeight, A4_MIN_HEIGHT_PX);
-  const firstWidth = A4_WIDTH_PX;
-  const firstHeight = scrollHeight;
-  applyOpaqueCaptureStyles(element, firstWidth, firstHeight);
-  recordRootMetrics(element);
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const firstHeight = Math.max(root.scrollHeight, A4_MIN_HEIGHT_PX);
+  root.style.height = `${firstHeight}px`;
+  root.style.minHeight = `${firstHeight}px`;
+  recordRootMetrics(root);
+  await waitIframeFrames(iframeWindow, 2);
 
   recordArabicCoverLetterPdfStage('second_layout_measurement');
-  const secondScroll = Math.max(element.scrollHeight, A4_MIN_HEIGHT_PX);
-  const secondWidth = A4_WIDTH_PX;
-  const secondHeight = secondScroll;
-  applyOpaqueCaptureStyles(element, secondWidth, secondHeight);
-  void element.offsetHeight;
-  recordRootMetrics(element);
+  const secondHeight = Math.max(root.scrollHeight, A4_MIN_HEIGHT_PX);
+  root.style.height = `${secondHeight}px`;
+  root.style.minHeight = `${secondHeight}px`;
+  void root.offsetHeight;
+  recordRootMetrics(root);
 
-  if (Math.abs(firstHeight - secondHeight) > 2) {
-    await new Promise((r) => setTimeout(r, 50));
-    const thirdHeight = Math.max(element.scrollHeight, A4_MIN_HEIGHT_PX);
-    applyOpaqueCaptureStyles(element, A4_WIDTH_PX, thirdHeight);
-    void element.offsetHeight;
-    recordRootMetrics(element);
-    recordArabicCoverLetterPdfStage('layout_stable', `${A4_WIDTH_PX}x${thirdHeight}`);
-    updateArabicCoverLetterPdfMetrics({
-      finalCaptureWidth: A4_WIDTH_PX,
-      finalCaptureHeight: thirdHeight,
-    });
-    return { width: A4_WIDTH_PX, height: thirdHeight };
-  }
-
-  recordArabicCoverLetterPdfStage('layout_stable', `${secondWidth}x${secondHeight}`);
+  const finalHeight = secondHeight;
+  recordArabicCoverLetterPdfStage('iframe_layout_stable', `${A4_WIDTH_PX}x${finalHeight}`);
+  recordArabicCoverLetterPdfStage('layout_stable', `${A4_WIDTH_PX}x${finalHeight}`);
   updateArabicCoverLetterPdfMetrics({
-    finalCaptureWidth: secondWidth,
-    finalCaptureHeight: secondHeight,
+    finalCaptureWidth: A4_WIDTH_PX,
+    finalCaptureHeight: finalHeight,
   });
-  return { width: secondWidth, height: secondHeight };
+  return { width: A4_WIDTH_PX, height: finalHeight };
 }
 
 export function analyzeCanvasPixels(canvas: HTMLCanvasElement): {
@@ -288,136 +490,165 @@ export function tryResolvePreviewRoot(): HTMLElement | null {
   return preview;
 }
 
-export type IsolatedExportOptions = {
-  simplified?: boolean;
-};
+function populateExportRoot(
+  doc: Document,
+  root: HTMLDivElement,
+  candidateName: string,
+  content: string,
+  locale: string,
+): void {
+  const paragraphs = computeCoverLetterPdfParagraphs(content, candidateName);
+  const dateStr = formatCoverLetterDate(locale);
 
-function appendTextParagraph(root: HTMLElement, text: string, simplified: boolean): void {
-  const p = document.createElement('p');
-  p.setAttribute('dir', 'rtl');
-  if (simplified) {
-    p.style.cssText =
-      'margin:0 0 12px 0;padding:0;color:#111111;font-weight:400;text-align:right;direction:rtl;';
-  } else {
-    p.style.cssText =
-      'margin:0 0 10px 0;padding:0;color:#111111;font-weight:400;text-align:right;direction:rtl;unicode-bidi:plaintext;';
+  const dateEl = doc.createElement('div');
+  dateEl.setAttribute('dir', 'rtl');
+  dateEl.setAttribute('data-cl-date', 'true');
+  dateEl.textContent = dateStr;
+  root.appendChild(dateEl);
+
+  for (const para of paragraphs) {
+    const p = doc.createElement('p');
+    p.setAttribute('dir', 'rtl');
+    p.textContent = para;
+    root.appendChild(p);
   }
-  p.textContent = text;
-  root.appendChild(p);
 }
 
 /**
- * Minimal isolated Arabic export document — no Tailwind/app classes, no preview clone.
- * Appended directly to document.body with position:fixed at 0,0.
+ * Minimal isolated export root built in an arbitrary document (iframe preferred).
+ * No Tailwind/app classes on root; .cl-date is iframe-local only.
  */
 export function buildIsolatedArabicExportRoot(
   candidateName: string,
   content: string,
   locale: string,
-  options: IsolatedExportOptions = {},
+  options: { simplified?: boolean; ownerDocument?: Document } = {},
 ): { root: HTMLDivElement } {
-  const simplified = Boolean(options.simplified);
-  const paragraphs = computeCoverLetterPdfParagraphs(content, candidateName);
-  const dateStr = formatCoverLetterDate(locale);
-
-  const root = document.createElement('div');
+  const doc = options.ownerDocument ?? document;
+  const root = doc.createElement('div');
   root.id = EXPORT_ROOT_ID;
   root.setAttribute(EXPORT_ROOT_ATTR, 'true');
   root.setAttribute('dir', 'rtl');
-  root.setAttribute('data-cl-arabic-isolated', simplified ? 'simplified' : 'primary');
-
-  if (simplified) {
-    root.style.cssText = [
-      'position:fixed',
-      'top:0',
-      'left:0',
-      `width:${A4_WIDTH_PX}px`,
-      `min-height:${A4_MIN_HEIGHT_PX}px`,
-      'height:auto',
-      'margin:0',
-      `padding:${A4_PADDING}`,
-      'box-sizing:border-box',
-      'transform:none',
-      'opacity:1',
-      'visibility:visible',
-      'display:block',
-      'overflow:visible',
-      'z-index:2147483645',
-      'pointer-events:none',
-      'background:#ffffff',
-      'color:#111111',
-      `font-family:${ARABIC_BODY_FONT}`,
-      'font-size:11pt',
-      'font-weight:400',
-      'line-height:1.6',
-      'direction:rtl',
-      'text-align:right',
-    ].join(';');
-  } else {
-    root.style.cssText = [
-      'position:fixed',
-      'top:0',
-      'left:0',
-      `width:${A4_WIDTH_PX}px`,
-      `min-height:${A4_MIN_HEIGHT_PX}px`,
-      'height:auto',
-      'margin:0',
-      `padding:${A4_PADDING}`,
-      'box-sizing:border-box',
-      'transform:none',
-      'translate:none',
-      'scale:none',
-      'opacity:1',
-      'visibility:visible',
-      'display:block',
-      'overflow:visible',
-      'z-index:2147483645',
-      'pointer-events:none',
-      'background:#ffffff',
-      'color:#111111',
-      `font-family:${ARABIC_BODY_FONT}`,
-      'font-size:11pt',
-      'font-weight:400',
-      'line-height:1.6',
-      'direction:rtl',
-      'text-align:right',
-      'unicode-bidi:plaintext',
-    ].join(';');
-  }
-
-  const dateEl = document.createElement('div');
-  dateEl.setAttribute('dir', 'rtl');
-  dateEl.style.cssText = simplified
-    ? 'margin:0 0 20px 0;padding:0;color:#111111;font-size:11pt;font-weight:400;text-align:right;direction:rtl;'
-    : 'margin:0 0 20px 0;padding:0;color:#4B5563;font-size:11pt;font-weight:400;text-align:right;direction:rtl;unicode-bidi:plaintext;';
-  dateEl.textContent = dateStr;
-  root.appendChild(dateEl);
-
-  for (const para of paragraphs) {
-    appendTextParagraph(root, para, simplified);
-  }
-
+  root.setAttribute('data-cl-arabic-isolated', options.simplified ? 'simplified' : 'primary');
+  populateExportRoot(doc, root, candidateName, content, locale);
   return { root };
 }
 
-/** @deprecated Prefer buildIsolatedArabicExportRoot — kept for callers expecting mount wrapper. */
-export function buildOpaqueExportRoot(
+async function awaitIframeReady(iframe: HTMLIFrameElement): Promise<Document> {
+  await new Promise<void>((resolve) => {
+    if (iframe.contentDocument?.readyState === 'complete') {
+      resolve();
+      return;
+    }
+    iframe.addEventListener('load', () => resolve(), { once: true });
+    // about:blank can already be interactive
+    setTimeout(() => resolve(), 0);
+  });
+  const doc = iframe.contentDocument;
+  if (!doc) throw new Error('iframe.contentDocument unavailable');
+  return doc;
+}
+
+export async function createArabicCaptureIframe(
   candidateName: string,
   content: string,
   locale: string,
-): { mount: HTMLDivElement; root: HTMLDivElement } {
-  const { root } = buildIsolatedArabicExportRoot(candidateName, content, locale);
-  const mount = document.createElement('div');
-  mount.setAttribute('data-cl-arabic-pdf-mount', 'true');
-  mount.style.cssText =
-    'position:fixed;top:0;left:0;width:0;height:0;overflow:visible;pointer-events:none;z-index:2147483645;';
-  mount.appendChild(root);
-  return { mount, root };
+): Promise<ArabicIframeCaptureContext> {
+  const fontAbsoluteUrl = resolveArabicFontAbsoluteUrl();
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute(IFRAME_ATTR, 'true');
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.setAttribute('title', 'Arabic cover letter PDF capture');
+  iframe.style.cssText = [
+    'position:fixed',
+    'top:0',
+    'left:0',
+    `width:${A4_WIDTH_PX}px`,
+    `height:${A4_MIN_HEIGHT_PX}px`,
+    'border:0',
+    'opacity:1',
+    'visibility:visible',
+    'background:#ffffff',
+    'z-index:2147483645',
+    'pointer-events:none',
+  ].join(';');
+  document.body.appendChild(iframe);
+  recordArabicCoverLetterPdfStage('iframe_created', `${A4_WIDTH_PX}x${A4_MIN_HEIGHT_PX}`);
+
+  const iframeDocument = await awaitIframeReady(iframe);
+  const safeCss = buildIframeSafeCss(fontAbsoluteUrl);
+  iframeDocument.open();
+  iframeDocument.write(`<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="utf-8"/>
+<meta name="color-scheme" content="light"/>
+<title>Arabic CL PDF Capture</title>
+<style id="${SAFE_STYLE_ID}">${safeCss}</style>
+</head>
+<body></body>
+</html>`);
+  iframeDocument.close();
+  recordArabicCoverLetterPdfStage('iframe_document_written');
+
+  const { root } = buildIsolatedArabicExportRoot(candidateName, content, locale, {
+    ownerDocument: iframeDocument,
+  });
+  iframeDocument.body.appendChild(root);
+  recordIframeDocumentMetrics(iframeDocument, root);
+  updateArabicCoverLetterPdfMetrics({ iframeFontAbsoluteUrl: fontAbsoluteUrl });
+
+  return { iframe, iframeDocument, root, fontAbsoluteUrl };
 }
 
-export function inlineStylesAreCaptureSafe(styleText: string): boolean {
-  if (!styleText) return true;
-  return !UNSAFE_CSS_COLOR_RE.test(styleText);
+export async function loadArabicFontsInIframe(
+  iframeDocument: Document,
+  iframeWindow: Window | null,
+  fontAbsoluteUrl: string,
+): Promise<void> {
+  recordArabicCoverLetterPdfStage('iframe_font_loading_started', fontAbsoluteUrl);
+  recordArabicCoverLetterPdfStage('font_loading_started', fontAbsoluteUrl);
+  const fonts = iframeDocument.fonts;
+  if (fonts?.load) {
+    try {
+      await fonts.load(`400 11pt ${ARABIC_CAPTURE_FONT}`);
+      await fonts.ready;
+    } catch {
+      // non-fatal; scan/check records result
+    }
+  }
+  const fontCheckPassed = fonts?.check ? fonts.check(`400 11pt ${ARABIC_CAPTURE_FONT}`) : true;
+  updateArabicCoverLetterPdfMetrics({
+    iframeFontCheckPassed: fontCheckPassed,
+    fontCheckPassed,
+    iframeFontAbsoluteUrl: fontAbsoluteUrl,
+  });
+  recordArabicCoverLetterPdfStage('font_check_result', fontCheckPassed ? 'passed' : 'failed');
+  recordArabicCoverLetterPdfStage('iframe_font_loading_completed', fontCheckPassed ? 'passed' : 'failed');
+  recordArabicCoverLetterPdfStage('font_loading_completed', fontCheckPassed ? 'passed' : 'failed');
+  await waitIframeFrames(iframeWindow, 2);
+}
+
+export function runUnsafeColorScanOrThrow(doc: Document): void {
+  const scan = scanDocumentForUnsafeColorFunctions(doc);
+  updateArabicCoverLetterPdfMetrics({
+    unsafeColorFunctionScanResult: scan.passed ? 'passed' : `failed:${scan.offender ?? 'unknown'}`,
+    unsafeColorOffender: scan.offender,
+  });
+  recordArabicCoverLetterPdfStage(
+    'unsafe_css_scan_completed',
+    scan.passed ? 'passed' : scan.offender ?? 'failed',
+  );
+  if (!scan.passed) {
+    const err = new Error(`Unsafe color function in capture document: ${scan.offender ?? 'unknown'}`);
+    (err as Error & { code?: string }).code = 'unsafe_css';
+    throw err;
+  }
+}
+
+export function isUnsupportedColorFunctionError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /unsupported color function|oklch|lab\(|lch\(|color-mix/i.test(message);
 }
 
 export function buildPaddedPngSlice(
