@@ -1,30 +1,31 @@
 /**
- * Arabic cover-letter PDF via html2canvas (preview-first, fully opaque capture).
+ * Arabic cover-letter PDF via html2canvas (isolated opaque root; no Android preview clone).
  */
 import { Capacitor } from '@capacitor/core';
-import { ensureNotoFontsForHtmlCapture } from './export';
+import { ensureNotoFontsForHtmlCapture, CV_PDF_A4_HEIGHT_MM, CV_PDF_A4_WIDTH_MM } from './export';
 import {
   CoverLetterArabicPdfExportError,
   getArabicCoverLetterPdfDiagnostics,
+  getArabicCoverLetterPdfMetrics,
   recordArabicCoverLetterPdfStage,
+  recordHtml2CanvasCause,
   updateArabicCoverLetterPdfMetrics,
   type ArabicCoverLetterPdfStage,
 } from './cover-letter-arabic-pdf-diagnostics';
 import {
   ARABIC_BODY_FONT,
   EXPORT_ROOT_ATTR,
+  EXPORT_ROOT_ID,
   MIN_NON_WHITE_RATIO,
   analyzeCanvasPixels,
-  applyOpaqueCaptureStyles,
-  buildOpaqueExportRoot,
+  buildIsolatedArabicExportRoot,
   buildPaddedPngSlice,
-  clonePreviewToExportRoot,
   createExportOverlay,
   forceCloneCaptureStyles,
   tryResolvePreviewRoot,
+  validateCaptureRootLayout,
   waitForStableLayout,
 } from './cover-letter-arabic-pdf-capture';
-import { CV_PDF_A4_HEIGHT_MM, CV_PDF_A4_WIDTH_MM } from './export';
 
 export {
   CoverLetterArabicPdfExportError,
@@ -37,22 +38,35 @@ export {
   getLastCompletedArabicPdfStage,
   loadPersistedArabicCoverLetterPdfDiagnostics,
   resetArabicCoverLetterPdfDiagnostics,
+  recordHtml2CanvasCause,
   type ArabicCoverLetterPdfStage,
 } from './cover-letter-arabic-pdf-diagnostics';
 
 export {
   applyOpaqueCaptureStyles,
   analyzeCanvasPixels,
+  buildIsolatedArabicExportRoot,
   forceCloneCaptureStyles,
   tryResolvePreviewRoot,
+  validateCaptureRootLayout,
+  inlineStylesAreCaptureSafe,
 } from './cover-letter-arabic-pdf-capture';
 
 const CONTINUATION_TOP_PAD_PX = 28;
 const CONTINUATION_BOTTOM_PAD_PX = 12;
 
-function resolveCaptureScale(): number {
-  if (typeof window === 'undefined') return 2;
-  return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android' ? 1.5 : 2;
+export function isAndroidArabicPdfCapture(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
+  } catch {
+    return false;
+  }
+}
+
+function resolveCaptureScale(simplified: boolean): number {
+  if (simplified) return 1;
+  return isAndroidArabicPdfCapture() ? 1.5 : 2;
 }
 
 function fail(stage: ArabicCoverLetterPdfStage, message: string, cause?: unknown, code?: string): never {
@@ -129,6 +143,150 @@ async function validatePdfBlob(blob: Blob, expectedPageCount: number): Promise<v
   recordArabicCoverLetterPdfStage('pdf_blob_validated', `size=${blob.size}`);
 }
 
+function describeTargetStyles(element: HTMLElement): string {
+  const cs = getComputedStyle(element);
+  return [
+    `position=${cs.position}`,
+    `left=${cs.left}`,
+    `top=${cs.top}`,
+    `transform=${cs.transform}`,
+    `opacity=${cs.opacity}`,
+    `visibility=${cs.visibility}`,
+    `display=${cs.display}`,
+    `overflow=${cs.overflow}`,
+    `direction=${cs.direction}`,
+  ].join(';');
+}
+
+type Html2CanvasFn = (
+  element: HTMLElement,
+  options?: Record<string, unknown>,
+) => Promise<HTMLCanvasElement>;
+
+function buildHtml2CanvasOptions(
+  captureWidth: number,
+  captureHeight: number,
+  scale: number,
+  androidSafe: boolean,
+): Record<string, unknown> {
+  const rootSelector = `[${EXPORT_ROOT_ATTR}="true"]`;
+  return {
+    scale,
+    useCORS: true,
+    allowTaint: !androidSafe,
+    backgroundColor: '#ffffff',
+    logging: false,
+    foreignObjectRendering: false,
+    scrollX: 0,
+    scrollY: 0,
+    width: captureWidth,
+    height: captureHeight,
+    windowWidth: Math.max(captureWidth, typeof window !== 'undefined' ? window.innerWidth : captureWidth),
+    windowHeight: Math.max(captureHeight, typeof window !== 'undefined' ? window.innerHeight : captureHeight),
+    onclone: (doc: Document) => forceCloneCaptureStyles(doc, rootSelector),
+  };
+}
+
+async function runHtml2CanvasCapture(
+  html2canvasFn: Html2CanvasFn,
+  captureRoot: HTMLElement,
+  captureWidth: number,
+  captureHeight: number,
+  scale: number,
+  androidSafe: boolean,
+  isRetry: boolean,
+): Promise<HTMLCanvasElement> {
+  const options = buildHtml2CanvasOptions(captureWidth, captureHeight, scale, androidSafe);
+  updateArabicCoverLetterPdfMetrics({
+    html2canvasOptionsSummary: `scale=${scale};w=${captureWidth};h=${captureHeight};allowTaint=${options.allowTaint};foreignObjectRendering=false;x/y=omitted`,
+  });
+  recordArabicCoverLetterPdfStage(
+    isRetry ? 'html2canvas_retry_started' : 'html2canvas_started',
+    `scale=${scale} ${captureWidth}x${captureHeight}`,
+  );
+  try {
+    return await html2canvasFn(captureRoot, options);
+  } catch (captureErr) {
+    const rect = captureRoot.getBoundingClientRect();
+    recordHtml2CanvasCause(captureErr, {
+      isRetry,
+      targetRect: `${Math.round(rect.width)}x${Math.round(rect.height)}@${Math.round(rect.x)},${Math.round(rect.y)}`,
+      targetStyles: describeTargetStyles(captureRoot),
+    });
+    // Re-throw the original cause so callers can retry without recording a wrapper lastError yet.
+    throw captureErr;
+  }
+}
+
+function wrapHtml2CanvasFailure(err: unknown): never {
+  const causeMessage = err instanceof Error ? err.message : String(err);
+  fail(
+    'html2canvas_completed',
+    `html2canvas capture failed: ${causeMessage}`,
+    err,
+    'html2canvas_error',
+  );
+}
+
+function canvasToPdfBlob(
+  canvas: HTMLCanvasElement,
+  scale: number,
+  jsPDF: typeof import('jspdf').jsPDF,
+): Blob {
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  recordArabicCoverLetterPdfStage('jspdf_created');
+
+  const canvasWidthPx = canvas.width;
+  const canvasHeightPx = canvas.height;
+  const pageHeightPx = Math.round((CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM) * (canvasWidthPx / scale));
+  const scaledPageHeightPx = pageHeightPx * scale;
+  const expectedPageCount = canvasHeightPx <= scaledPageHeightPx + 4 ? 1 : Math.ceil(canvasHeightPx / scaledPageHeightPx);
+  updateArabicCoverLetterPdfMetrics({ expectedPageCount });
+
+  let generatedPageCount = 0;
+  if (canvasHeightPx <= scaledPageHeightPx + 4) {
+    recordArabicCoverLetterPdfStage('page_slice_started', 'single');
+    const img = encodeCanvasToPng(canvas);
+    const heightMm = (canvasHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
+    pdf.addImage(img, 'PNG', 0, 0, CV_PDF_A4_WIDTH_MM, Math.min(heightMm, CV_PDF_A4_HEIGHT_MM));
+    generatedPageCount = 1;
+    recordArabicCoverLetterPdfStage('page_slice_completed', 'page=0');
+  } else {
+    let offsetY = 0;
+    let pageIndex = 0;
+    while (offsetY < canvasHeightPx) {
+      recordArabicCoverLetterPdfStage('page_slice_started', `page=${pageIndex}`);
+      const sliceHeight = Math.min(scaledPageHeightPx, canvasHeightPx - offsetY);
+      const topPad = pageIndex === 0 ? 0 : CONTINUATION_TOP_PAD_PX * scale;
+      const bottomPad = offsetY + sliceHeight < canvasHeightPx ? CONTINUATION_BOTTOM_PAD_PX * scale : 0;
+      const padded = buildPaddedPngSlice(canvas, offsetY, sliceHeight, canvasWidthPx, topPad, bottomPad);
+      if (!padded.dataUrl || padded.dataUrl.length < 128) {
+        fail('page_slice_completed', `Empty PNG slice page ${pageIndex}`, undefined, 'invalid_image');
+      }
+      const sliceHeightMm = (padded.paddedHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
+      if (pageIndex > 0) pdf.addPage();
+      pdf.addImage(padded.dataUrl, 'PNG', 0, 0, CV_PDF_A4_WIDTH_MM, Math.min(sliceHeightMm, CV_PDF_A4_HEIGHT_MM));
+      generatedPageCount += 1;
+      recordArabicCoverLetterPdfStage('page_slice_completed', `page=${pageIndex}`);
+      offsetY += sliceHeight;
+      pageIndex += 1;
+    }
+  }
+
+  updateArabicCoverLetterPdfMetrics({ generatedPageCount });
+  const blob = pdf.output('blob') as Blob;
+  recordArabicCoverLetterPdfStage('pdf_blob_created', `size=${blob.size}`);
+  return blob;
+}
+
+/**
+ * Android never clones #cl-preview. Isolated root is the only strategy.
+ */
+export function resolveArabicPdfCaptureStrategy(_previewAvailable: boolean): 'isolated-primary' {
+  void _previewAvailable;
+  return 'isolated-primary';
+}
+
 export async function buildArabicCoverLetterPdfBlob(
   candidateName: string,
   content: string,
@@ -141,109 +299,105 @@ export async function buildArabicCoverLetterPdfBlob(
   recordArabicCoverLetterPdfStage('source_content_validated', `${probe.length} chars`);
 
   let removeFonts: (() => void) | null = null;
-  let mount: HTMLDivElement | null = null;
-  let overlay: HTMLDivElement | null = null;
   let captureRoot: HTMLElement | null = null;
+  let overlay: HTMLDivElement | null = null;
+  const android = isAndroidArabicPdfCapture();
+  let usedScale = resolveCaptureScale(false);
 
   try {
     const [{ default: html2canvasMod }, jspdfMod] = await Promise.all([import('html2canvas'), import('jspdf')]);
     const html2canvasFn = (
       (html2canvasMod as { default?: typeof import('html2canvas').default }).default ?? html2canvasMod
-    ) as typeof import('html2canvas').default;
+    ) as Html2CanvasFn;
     const jsPDF = (jspdfMod.jsPDF ?? jspdfMod.default) as typeof import('jspdf').jsPDF;
     if (typeof html2canvasFn !== 'function') fail('export_entered', 'html2canvas unavailable');
 
-    const preview = tryResolvePreviewRoot();
-    const built = preview ? clonePreviewToExportRoot(preview) : buildOpaqueExportRoot(candidateName, content, locale);
-    mount = built.mount;
+    const strategy = resolveArabicPdfCaptureStrategy(Boolean(tryResolvePreviewRoot()));
+    updateArabicCoverLetterPdfMetrics({ captureStrategy: strategy });
+    const built = buildIsolatedArabicExportRoot(candidateName, content, locale, { simplified: false });
     captureRoot = built.root;
-    updateArabicCoverLetterPdfMetrics({ captureStrategy: preview ? 'preview' : 'opaque_export_root' });
-    recordArabicCoverLetterPdfStage('export_root_created', preview ? 'preview' : 'opaque_export_root');
+    recordArabicCoverLetterPdfStage('export_root_created', strategy);
 
     overlay = createExportOverlay();
-    document.body.appendChild(mount);
-    recordArabicCoverLetterPdfStage('export_root_attached');
+    document.body.appendChild(captureRoot);
+    recordArabicCoverLetterPdfStage('export_root_attached', EXPORT_ROOT_ID);
 
     removeFonts = await ensureArabicFontsReady();
     const { width: captureWidth, height: captureHeight } = await waitForStableLayout(captureRoot);
-    recordArabicCoverLetterPdfStage('export_root_styles_applied', `opacity=1 ${captureWidth}x${captureHeight}`);
-    if (captureWidth <= 0 || captureHeight <= 0) {
-      fail('layout_stable', `Zero dimensions (${captureWidth}×${captureHeight})`, undefined, 'zero_dimensions');
+    try {
+      validateCaptureRootLayout(captureRoot, captureWidth, captureHeight);
+    } catch (layoutErr) {
+      recordArabicCoverLetterPdfStage(
+        'layout_validation_failed',
+        layoutErr instanceof Error ? layoutErr.message : String(layoutErr),
+      );
+      fail(
+        'layout_validation_failed',
+        layoutErr instanceof Error ? layoutErr.message : 'Layout validation failed',
+        layoutErr,
+        'invalid_layout',
+      );
     }
+    recordArabicCoverLetterPdfStage('export_root_styles_applied', `opacity=1 ${captureWidth}x${captureHeight}@0,0`);
 
-    const scale = resolveCaptureScale();
-    const rootSelector = `[${EXPORT_ROOT_ATTR}="true"]`;
-    recordArabicCoverLetterPdfStage('html2canvas_started', `scale=${scale}`);
+    usedScale = resolveCaptureScale(false);
     let canvas: HTMLCanvasElement;
     try {
-      canvas = await html2canvasFn(captureRoot, {
-        scale,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#ffffff',
-        logging: false,
-        x: 0,
-        y: 0,
-        scrollX: 0,
-        scrollY: 0,
-        width: captureWidth,
-        height: captureHeight,
-        windowWidth: captureWidth,
-        windowHeight: captureHeight,
-        onclone: (doc) => forceCloneCaptureStyles(doc, rootSelector),
-      });
-    } catch (captureErr) {
-      fail('html2canvas_completed', 'html2canvas capture failed', captureErr, 'html2canvas_error');
+      canvas = await runHtml2CanvasCapture(
+        html2canvasFn,
+        captureRoot,
+        captureWidth,
+        captureHeight,
+        usedScale,
+        android,
+        false,
+      );
+    } catch (_primaryErr) {
+      // One controlled simplified retry after recording the original html2canvas cause.
+      void _primaryErr;
+      recordArabicCoverLetterPdfStage('html2canvas_retry_started', 'isolated-simplified-retry');
+      captureRoot.remove();
+      const retryBuilt = buildIsolatedArabicExportRoot(candidateName, content, locale, { simplified: true });
+      captureRoot = retryBuilt.root;
+      document.body.appendChild(captureRoot);
+      updateArabicCoverLetterPdfMetrics({ captureStrategy: 'isolated-simplified-retry' });
+      const retryLayout = await waitForStableLayout(captureRoot);
+      try {
+        validateCaptureRootLayout(captureRoot, retryLayout.width, retryLayout.height);
+      } catch (layoutErr) {
+        recordArabicCoverLetterPdfStage(
+          'layout_validation_failed',
+          layoutErr instanceof Error ? layoutErr.message : String(layoutErr),
+        );
+        fail(
+          'layout_validation_failed',
+          layoutErr instanceof Error ? layoutErr.message : 'Retry layout validation failed',
+          layoutErr,
+          'invalid_layout',
+        );
+      }
+      usedScale = resolveCaptureScale(true);
+      try {
+        canvas = await runHtml2CanvasCapture(
+          html2canvasFn,
+          captureRoot,
+          retryLayout.width,
+          retryLayout.height,
+          usedScale,
+          android,
+          true,
+        );
+      } catch (retryErr) {
+        wrapHtml2CanvasFailure(retryErr);
+      }
     }
 
     recordArabicCoverLetterPdfStage('html2canvas_completed', `${canvas.width}×${canvas.height}`);
     recordArabicCoverLetterPdfStage('canvas_measured', `${canvas.width}×${canvas.height}`);
     validateCanvasHasContent(canvas);
 
-    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    recordArabicCoverLetterPdfStage('jspdf_created');
-
-    const canvasWidthPx = canvas.width;
-    const canvasHeightPx = canvas.height;
-    const pageHeightPx = Math.round((CV_PDF_A4_HEIGHT_MM / CV_PDF_A4_WIDTH_MM) * (canvasWidthPx / scale));
-    const scaledPageHeightPx = pageHeightPx * scale;
-    const expectedPageCount = canvasHeightPx <= scaledPageHeightPx + 4 ? 1 : Math.ceil(canvasHeightPx / scaledPageHeightPx);
-    updateArabicCoverLetterPdfMetrics({ expectedPageCount });
-
-    let generatedPageCount = 0;
-    if (canvasHeightPx <= scaledPageHeightPx + 4) {
-      recordArabicCoverLetterPdfStage('page_slice_started', 'single');
-      const img = encodeCanvasToPng(canvas);
-      const heightMm = (canvasHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
-      pdf.addImage(img, 'PNG', 0, 0, CV_PDF_A4_WIDTH_MM, Math.min(heightMm, CV_PDF_A4_HEIGHT_MM));
-      generatedPageCount = 1;
-      recordArabicCoverLetterPdfStage('page_slice_completed', 'page=0');
-    } else {
-      let offsetY = 0;
-      let pageIndex = 0;
-      while (offsetY < canvasHeightPx) {
-        recordArabicCoverLetterPdfStage('page_slice_started', `page=${pageIndex}`);
-        const sliceHeight = Math.min(scaledPageHeightPx, canvasHeightPx - offsetY);
-        const topPad = pageIndex === 0 ? 0 : CONTINUATION_TOP_PAD_PX * scale;
-        const bottomPad = offsetY + sliceHeight < canvasHeightPx ? CONTINUATION_BOTTOM_PAD_PX * scale : 0;
-        const padded = buildPaddedPngSlice(canvas, offsetY, sliceHeight, canvasWidthPx, topPad, bottomPad);
-        if (!padded.dataUrl || padded.dataUrl.length < 128) {
-          fail('page_slice_completed', `Empty PNG slice page ${pageIndex}`, undefined, 'invalid_image');
-        }
-        const sliceHeightMm = (padded.paddedHeightPx / canvasWidthPx) * CV_PDF_A4_WIDTH_MM;
-        if (pageIndex > 0) pdf.addPage();
-        pdf.addImage(padded.dataUrl, 'PNG', 0, 0, CV_PDF_A4_WIDTH_MM, Math.min(sliceHeightMm, CV_PDF_A4_HEIGHT_MM));
-        generatedPageCount += 1;
-        recordArabicCoverLetterPdfStage('page_slice_completed', `page=${pageIndex}`);
-        offsetY += sliceHeight;
-        pageIndex += 1;
-      }
-    }
-
-    updateArabicCoverLetterPdfMetrics({ generatedPageCount });
-    const blob = pdf.output('blob') as Blob;
-    recordArabicCoverLetterPdfStage('pdf_blob_created', `size=${blob.size}`);
-    await validatePdfBlob(blob, generatedPageCount);
+    const blob = canvasToPdfBlob(canvas, usedScale, jsPDF);
+    await validatePdfBlob(blob, getArabicCoverLetterPdfMetrics().generatedPageCount ?? 1);
     return blob;
   } catch (err) {
     if (err instanceof CoverLetterArabicPdfExportError) throw err;
@@ -252,7 +406,9 @@ export async function buildArabicCoverLetterPdfBlob(
   } finally {
     recordArabicCoverLetterPdfStage('cleanup_started');
     overlay?.remove();
-    mount?.remove();
+    captureRoot?.remove();
+    document.getElementById(EXPORT_ROOT_ID)?.remove();
+    document.querySelectorAll('[data-cl-arabic-pdf-overlay]').forEach((el) => el.remove());
     removeFonts?.();
     recordArabicCoverLetterPdfStage('cleanup_completed');
   }
