@@ -12,6 +12,7 @@ import {
   sanitizeCoverLetterContent,
 } from '@/lib/cover-letter-generation';
 import { buildCoverLetterFactSet } from '@/lib/cover-letter-facts';
+import { COVER_LETTER_GROUNDING_BACKEND_REVISION } from '@/lib/cover-letter-grounding-diagnostics';
 
 // ─── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -395,7 +396,14 @@ export async function POST(req: NextRequest) {
       });
 
       let generationAttempts = 0;
-      const { letter: structuredLetter, groundingStatus } = await generateStructuredCoverLetterWithRetries({
+      const {
+        letter: structuredLetter,
+        groundingStatus,
+        repairAttempted,
+        fallbackUsed,
+        usedFactIds,
+        groundingViolationCount,
+      } = await generateStructuredCoverLetterWithRetries({
         locale: resolvedLocale,
         closing: localeInfo.closing,
         candidateName,
@@ -473,7 +481,15 @@ Rules:
       return jsonResponse({
         result: fullLetter,
         coverLetterGenerationEngine: 'structured-v4',
+        coverLetterBackendRevision: COVER_LETTER_GROUNDING_BACKEND_REVISION,
         groundingStatus,
+        repairAttempted,
+        fallbackUsed,
+        usedFactIds,
+        groundingViolations: groundingViolationCount,
+        contentLocale: resolvedLocale,
+        requestFactCount: factSet.facts.length,
+        isSparse: factSet.isSparse,
       });
     }
 

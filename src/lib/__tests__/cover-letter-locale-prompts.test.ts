@@ -29,15 +29,15 @@ describe('Hindi and Arabic cover letter prompt grounding', () => {
     expect(prompt).toContain('HINDI QUALITY RULES');
     expect(prompt).toContain('natural, professional Hindi');
     expect(prompt).toContain('not a literal English translation');
-    expect(prompt).toContain('Do NOT invent revenue increases');
-    expect(prompt).toContain('exceeded targets');
+    expect(prompt).toContain('Never invent numbers');
     expect(prompt).toContain('Keep company praise brief');
     expect(prompt).toContain('Salesman');
-    expect(prompt).toContain('do NOT upgrade, broaden, or replace');
+    expect(prompt).toContain('do NOT upgrade or replace');
     expect(prompt).toContain('Sales Executive');
     expect(prompt).toContain('Sales Representative');
     expect(prompt).toContain('Sales Manager');
-    expect(prompt).toContain('Use ONLY facts from the candidate CV');
+    expect(prompt).toContain('SOURCE FACTS');
+    expect(prompt).toContain('UNIVERSAL GROUNDING RULES');
   });
 
   test('Hindi prompt preserves Salesman seniority without role substitution', () => {
@@ -62,13 +62,14 @@ describe('Hindi and Arabic cover letter prompt grounding', () => {
     expect(prompt).toContain('Modern Standard Arabic');
     expect(prompt).toContain('not word-for-word English translation');
     expect(prompt).toContain('Do NOT claim Java, Python, C++');
-    expect(prompt).toContain('للتقدم لشغل وظيفة');
+    expect(prompt).toContain('أتطلع إلى فرصة لمناقشة كيف يمكنني المساهمة في فريقكم');
+    expect(prompt).toContain('do NOT claim "إضافة قيمة حقيقية"');
     expect(prompt).toContain('مع خالص التحية،');
-    expect(prompt).toContain('object-oriented programming');
-    expect(prompt).toContain('Do NOT claim years of experience');
+    expect(prompt).toContain('للتقدم لشغل وظيفة');
+    expect(prompt).toContain('بوصفي');
     expect(prompt).toContain('Write entirely in Arabic');
     expect(prompt).toContain('Salesman');
-    expect(prompt).toContain('Google');
+    expect(prompt).toContain('UNIVERSAL GROUNDING RULES');
   });
 
   test('Hindi prompt forbids unsupported experience and skill claims', () => {
@@ -78,13 +79,14 @@ describe('Hindi and Arabic cover letter prompt grounding', () => {
       jobTitle: 'Software Developer',
     });
     expect(prompt).toContain('सॉफ़्टवेयर डेवलपर (Software Developer)');
-    expect(prompt).toContain('web-application development');
-    expect(prompt).toContain('database management');
-    expect(prompt).toContain('project delivery');
+    expect(prompt).toContain('व्यापक अनुभव');
+    expect(prompt).toContain('डेटाबेस प्रबंधन');
+    expect(prompt).toContain('परियोजनाओं का नेतृत्व');
     expect(prompt).toContain('Do NOT claim Java, Python, C++');
+    expect(prompt).toContain('UNIVERSAL GROUNDING RULES');
   });
 
-  test('English prompt does not inject Hindi or Arabic grounding blocks', () => {
+  test('English prompt includes universal grounding rules', () => {
     const prompt = buildStructuredCoverLetterPrompt({
       ...PROMPT_BASE,
       languageName: 'English',
@@ -95,10 +97,13 @@ describe('Hindi and Arabic cover letter prompt grounding', () => {
     });
     expect(prompt).not.toContain('HINDI QUALITY RULES');
     expect(prompt).not.toContain('ARABIC QUALITY RULES');
+    expect(prompt).toContain('ENGLISH QUALITY RULES');
+    expect(prompt).toContain('UNIVERSAL GROUNDING RULES');
+    expect(prompt).toContain('SOURCE FACTS');
     expect(prompt).toContain('Write every field entirely in English');
   });
 
-  test('German prompt remains unchanged without hi/ar locale blocks', () => {
+  test('German prompt includes universal grounding without hi/ar blocks', () => {
     const prompt = buildStructuredCoverLetterPrompt({
       ...PROMPT_BASE,
       languageName: 'German',
@@ -109,6 +114,8 @@ describe('Hindi and Arabic cover letter prompt grounding', () => {
     });
     expect(prompt).not.toContain('HINDI QUALITY RULES');
     expect(prompt).not.toContain('ARABIC QUALITY RULES');
+    expect(prompt).toContain('GERMAN QUALITY RULES');
+    expect(prompt).toContain('UNIVERSAL GROUNDING RULES');
     expect(prompt).toContain('German');
   });
 

@@ -29,6 +29,7 @@ import {
   Font,
 } from '@react-pdf/renderer';
 import { sanitizeCoverLetterContent } from './cover-letter-generation';
+import { stripCoverLetterExportHeader } from './cover-letter-header';
 
 // ── Font Registration ─────────────────────────────────────────────────────────
 // Fonts are served from /public/fonts/ and embedded into the PDF at render time.
@@ -169,70 +170,6 @@ function makeStyles(fontFamily: string, rtl: boolean) {
   });
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Strip the candidate name when it appears as a standalone leading line
- * in the API-produced header block. The name must appear only at the bottom
- * as part of the AI closing ("Sincerely,\nJohn Doe"), so we remove any bare
- * leading name line but deliberately leave the trailing signature intact.
- *
- * The full structure the API produces:
- *   {name}              ← header line – strip this
- *   {email / phone}     ← also strip (contact lines in header)
- *   {date}              ← stripped separately by stripLeadingDate
- *   {letter body}
- *   Sincerely,
- *   {name}              ← keep – this is the sole signature
- */
-function stripLeadingName(raw: string, candidateName: string): string {
-  if (!candidateName.trim()) return raw;
-
-  const nameLower = candidateName.trim().toLowerCase();
-  const lines = raw.split('\n');
-
-  // Strip any leading lines that are exactly the candidate name
-  while (lines.length > 0 && lines[0].trim().toLowerCase() === nameLower) {
-    lines.shift();
-  }
-  // Strip leading blank lines that follow
-  while (lines.length > 0 && lines[0].trim() === '') {
-    lines.shift();
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * Strip any leading line(s) that look like a date (contain a 4-digit year).
- * The API bakes a date into the content string; the PDF component renders its
- * own localized date, so we must remove the one embedded in the text to
- * prevent it appearing twice.
- *
- * Detection: a line is treated as a date line when it contains a 4-digit
- * year (e.g. "April 30, 2026", "30 أبريل 2026", "30 avril 2026", etc.).
- * Year numbers in letter bodies (e.g. "worked there since 2019") are never
- * the very first non-empty line, so false-positive risk is minimal.
- */
-function stripLeadingDate(text: string): string {
-  const lines = text.split('\n');
-
-  // Strip leading blank lines first, then check for date
-  while (lines.length > 0 && lines[0].trim() === '') {
-    lines.shift();
-  }
-
-  if (lines.length > 0 && (/\b\d{4}\b/.test(lines[0].trim()) || /(?:\b\d{4}\b|[٠-٩]{4}|[०-९]{4})/u.test(lines[0].trim()))) {
-    lines.shift();
-    // Also strip blank lines that follow the date
-    while (lines.length > 0 && lines[0].trim() === '') {
-      lines.shift();
-    }
-  }
-
-  return lines.join('\n');
-}
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export interface CoverLetterPDFProps {
@@ -243,15 +180,13 @@ export interface CoverLetterPDFProps {
 
 /**
  * Pure text-preparation step shared by the PDF component: sanitizes the schema
- * marker, strips the leading name/date lines the API bakes into the header, and
- * splits the remainder into paragraph blocks. Exported (independent of
- * @react-pdf/renderer/React) so the exact text that would be rendered into the
- * PDF can be asserted in unit tests without mocking the renderer.
+ * marker, strips the leading name/contact/date header lines the API bakes in,
+ * and splits the remainder into paragraph blocks. Exported so tests can assert
+ * the exact text that would be rendered without mocking the renderer.
  */
 export function computeCoverLetterPdfParagraphs(content: string, candidateName: string): string[] {
   const sanitizedContent = sanitizeCoverLetterContent(content);
-  const afterName = stripLeadingName(sanitizedContent, candidateName);
-  const cleanedContent = stripLeadingDate(afterName);
+  const cleanedContent = stripCoverLetterExportHeader(sanitizedContent, candidateName);
   return cleanedContent
     .split(/\n{2,}/)
     .map(p => p.trim())

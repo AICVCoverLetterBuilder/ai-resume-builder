@@ -2,7 +2,22 @@ import type { Locale } from './i18n/translations';
 import { contentMatchesRequestedLocale } from './cover-letter-generation';
 
 export type CoverLetterGenerationPhase = 'idle' | 'loading' | 'success' | 'error';
-export type CoverLetterGroundingStatus = 'unknown' | 'passed' | 'repaired' | 'fallback' | 'failed';
+
+/** Trusted grounding outcomes that may become active content. */
+export type CoverLetterGroundingStatus =
+  | 'unknown'
+  | 'passed'
+  | 'repaired'
+  | 'fallback'
+  | 'failed'
+  | 'invalid'
+  | 'missing';
+
+export const COVER_LETTER_TRUSTED_GROUNDING_STATUSES: ReadonlyArray<CoverLetterGroundingStatus> = [
+  'passed',
+  'repaired',
+  'fallback',
+];
 
 export type ActiveCoverLetterRequest = {
   requestId: string;
@@ -26,9 +41,33 @@ export function shouldApplyCoverLetterGenerationResult(
   return active.requestId === responseRequestId && active.locale === requestedLocale;
 }
 
+export function isTrustedCoverLetterGroundingStatus(
+  status: CoverLetterGroundingStatus | string | null | undefined,
+): status is 'passed' | 'repaired' | 'fallback' {
+  return status === 'passed' || status === 'repaired' || status === 'fallback';
+}
+
 /**
- * Preview/download may show persisted content only when it was generated (or manually
- * edited) for the currently selected content language and is not mid-generation.
+ * Normalize raw API grounding metadata. Missing/unknown/malformed values must NOT
+ * become trusted — they become `missing` or `invalid`.
+ */
+export function normalizeCoverLetterGroundingStatus(
+  raw: unknown,
+): CoverLetterGroundingStatus {
+  if (raw == null || raw === '') return 'missing';
+  if (typeof raw !== 'string') return 'invalid';
+  const value = raw.trim().toLowerCase();
+  if (value === 'passed' || value === 'validated') return 'passed';
+  if (value === 'repaired') return 'repaired';
+  if (value === 'fallback') return 'fallback';
+  if (value === 'failed' || value === 'invalid') return value as CoverLetterGroundingStatus;
+  if (value === 'unknown' || value === 'missing') return value as CoverLetterGroundingStatus;
+  return 'invalid';
+}
+
+/**
+ * Preview/download may show content only when language matches and grounding is trusted.
+ * `unknown` / `missing` / `failed` / `invalid` are fail-closed.
  */
 export function isCoverLetterContentCurrent(
   content: string,
@@ -40,7 +79,7 @@ export function isCoverLetterContentCurrent(
   if (phase === 'loading') return false;
   if (!content.trim()) return false;
   if (!contentLocale || contentLocale !== selectedLocale) return false;
-  if (groundingStatus === 'failed') return false;
+  if (!isTrustedCoverLetterGroundingStatus(groundingStatus)) return false;
   return contentMatchesRequestedLocale(content, selectedLocale);
 }
 

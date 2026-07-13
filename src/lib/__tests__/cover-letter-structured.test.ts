@@ -20,10 +20,10 @@ const CANDIDATE = 'Alex Carter';
 const VALID_HINDI = {
   dateLine: '12 जुलाई 2026',
   greeting: 'Tuxy की भर्ती टीम को,',
-  paragraph1: 'मैं Tuxy में सॉफ्टवेयर इंजीनियर पद के लिए आवेदन कर रही हूँ। मेरे पास वेब एप्लिकेशन विकसित करने का व्यावहारिक अनुभव है।',
-  paragraph2: 'मैंने टीम परियोजनाओं में सहयोग किया है और गुणवत्ता-केंद्रित वितरण पर काम किया है।',
-  paragraph3: 'Tuxy की उत्पाद गुणवत्ता और ग्राहक-केंद्रित दृष्टि मुझे प्रेरित करती है, और मैं आपकी टीम में सार्थक योगदान देने के लिए उत्सुक हूँ।',
-  closing: 'मैं साक्षात्कार में अपनी योग्यता पर चर्चा करने का अवसर चाहती हूँ और आपके समय के लिए धन्यवाद देती हूँ।',
+  paragraph1: 'मैं Tuxy में सॉफ्टवेयर इंजीनियर पद के लिए आवेदन कर रही हूँ और इस अवसर में सचमुच रुचि रखती हूँ।',
+  paragraph2: 'मैं सीखने, योगदान देने और आपकी टीम के साथ आगे बढ़ने के लिए प्रेरित हूँ।',
+  paragraph3: 'Tuxy की उत्पाद गुणवत्ता और ग्राहक-केंद्रित दृष्टि मुझे प्रेरित करती है, और मैं आपकी टीम में योगदान देने के लिए उत्सुक हूँ।',
+  closing: 'मैं साक्षात्कार में अपनी रुचि पर चर्चा करने का अवसर चाहती हूँ और आपके समय के लिए धन्यवाद देती हूँ।',
   signOff: 'सादर',
   candidateName: CANDIDATE,
 };
@@ -39,10 +39,10 @@ const INVALID_HINDI = {
 const VALID_ENGLISH = {
   dateLine: 'July 12, 2026',
   greeting: 'Dear Tuxy Hiring Team,',
-  paragraph1: 'I am applying for the Software Engineer role at Tuxy and bring practical experience building reliable web applications.',
-  paragraph2: 'My background includes collaborative product work, careful debugging, and delivering user-focused features.',
-  paragraph3: 'Tuxy commitment to product quality and customer focus is motivating, and I am eager to contribute meaningfully to your team.',
-  closing: 'I would welcome the opportunity to discuss my fit in an interview and thank you for your time and consideration.',
+  paragraph1: 'I am writing to apply for the Software Engineer role at Tuxy and am genuinely interested in this opportunity.',
+  paragraph2: 'I am motivated to learn, contribute, and grow with your team in this role.',
+  paragraph3: 'Tuxy commitment to product quality and customer focus is motivating, and I am eager to contribute to your team.',
+  closing: 'I would welcome the opportunity to discuss my interest in an interview and thank you for your time and consideration.',
   signOff: 'Sincerely',
   candidateName: CANDIDATE,
 };
@@ -140,7 +140,8 @@ describe('structured cover letter core', () => {
     });
 
     expect(calls.length).toBeGreaterThan(1);
-    expect(result.candidateName).toBe(CANDIDATE);
+    expect(result.letter.candidateName).toBe(CANDIDATE);
+    expect(result.groundingStatus).toBe('passed');
   });
 
   test('structured generation fails closed when JSON never validates', async () => {

@@ -86,6 +86,9 @@ const NAMED_TECH = [
   'database(?:s)?',
   'database management',
   'cloud systems?',
+  'cloud infrastructure',
+  'scalable applications?',
+  'agile(?:\s+methodology|\s+methodologies|\s+work(?:ing)?)?',
   'software projects?',
   'programming languages?',
   'microservices?',
@@ -98,6 +101,7 @@ const NAMED_TECH = [
   'kafka',
   'graphql',
   'rest(?:ful)? api',
+  'api development',
   'websockets?',
 ];
 
@@ -118,9 +122,9 @@ const LEADERSHIP_PATTERNS: RegExp[] = [
 ];
 
 const ACHIEVEMENT_PATTERNS: RegExp[] = [
-  /\b(improved (?:efficiency|performance|user experience)|increased (?:revenue|sales)|reduced costs|exceeded targets|expanded markets|secured (?:major )?contracts|optimized performance|delivered successful projects)\b/iu,
-  /क(?:ा|ी) कार्यक्षमता में सुधार|राजस्व बढ़ा|लागत घट|लक्ष्य पार|प्रदर्शन सुधार/u,
-  /رفعت كفاءة|حسّنت تجربة المستخدم|زدت الإيرادات|خفّضت التكاليف|تجاوزت الأهداف|حسّن(?:ت)? الأداء/u,
+  /\b(improved (?:efficiency|performance|user experience|quality|productivity)|increased (?:revenue|sales)|reduced (?:costs|response times?|latency)|exceeded targets|expanded markets|secured (?:major )?contracts|optimized performance|delivered successful projects|quality and productivity improvements)\b/iu,
+  /क(?:ा|ी) कार्यक्षमता में सुधार|राजस्व बढ़ा|लागत घट|लक्ष्य पार|प्रदर्शन सुधार|उत्पादकता में सुधार/u,
+  /رفعت كفاءة|حسّنت تجربة المستخدم|زدت الإيرادات|خفّضت التكاليف|تجاوزت الأهداف|حسّن(?:ت)? الأداء|قلل(?:ت)? أوقات الاستجابة/u,
   /повысил(?:а)? эффективность|увеличил(?:а)? выручку|снизил(?:а)? затраты|превысил(?:а)? план/iu,
   /\b(steigerte|verbesserte Effizienz|senkte Kosten|übertraf Ziele)\b/iu,
   /\b(mejoré la eficiencia|aumenté ingresos|reduje costos|superé objetivos)\b/iu,
@@ -132,9 +136,9 @@ const ACHIEVEMENT_PATTERNS: RegExp[] = [
 ];
 
 const EXPERIENCE_STRENGTH_PATTERNS: RegExp[] = [
-  /\b(extensive experience|several years of experience|proven (?:track record|expertise)|deep knowledge|strong technical (?:background|expertise|capabilities)|highly experienced|expert in|accomplished|proven success)\b/iu,
-  /व्यापक अनुभव|कई वर्षों का अनुभव|मजबूत तकनीकी|विशेषज्ञता/u,
-  /خبرة واسعة|سنوات من الخبرة|خبرة مثبتة|كفاءات تقنية متقدمة|قدرات تحليلية قوية|خبير في/u,
+  /\b(extensive experience|several years of experience|proven (?:track record|expertise)|deep knowledge|strong (?:record|technical (?:background|expertise|capabilities))|highly experienced|expert in|accomplished|proven success|full[-\s]?stack experience|project ownership from conception|conception to production|architectural design through launch)\b/iu,
+  /व्यापक अनुभव|कई वर्षों का अनुभव|मजबूत तकनीकी|विशेषज्ञता|जटिल सिस्टम|उच्च[-\s]?प्रदर्शन/u,
+  /خبرة واسعة|سنوات من الخبرة|خبرة مثبتة|كفاءات تقنية متقدمة|قدرات تحليلية قوية|خبير في|سجل(?:اً)? قوي(?:اً)? من الإنجازات|خبرة واسعة/u,
   /обширный опыт|многолетний опыт|глубокие знания|высокий уровень экспертизы/iu,
   /\b(umfangreiche Erfahrung|jahrelange Erfahrung|fundierte Expertise|tiefgreifende Kenntnisse)\b/iu,
   /\b(amplia experiencia|varios años de experiencia|sólida experiencia técnica)\b/iu,

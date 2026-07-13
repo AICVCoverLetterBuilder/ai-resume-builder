@@ -37,6 +37,11 @@ import {
   type PdfI18nRegistry,
 } from './pdf-i18n-text';
 import { assertCoverLetterExportable, getDefaultCoverLetterClosing, sanitizeCoverLetterContent } from './cover-letter-generation';
+import {
+  stripLeadingCoverLetterName,
+  stripLeadingCoverLetterDateAndContacts,
+  stripCoverLetterExportHeader,
+} from './cover-letter-header';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -16323,37 +16328,17 @@ export async function exportCoverLetterToPDF(
 
 /**
  * Strip any leading lines that are exactly the candidate name.
- * Mirrors the same helper in cover-letter-pdf.tsx so DOCX and PDF behave identically.
+ * Shared with PDF via cover-letter-header so DOCX and PDF behave identically.
  */
 export function stripLeadingNameForDocx(raw: string, candidateName: string): string {
-  if (!candidateName.trim()) return raw;
-  const nameLower = candidateName.trim().toLowerCase();
-  const lines = raw.split('\n');
-  while (lines.length > 0 && lines[0].trim().toLowerCase() === nameLower) {
-    lines.shift();
-  }
-  while (lines.length > 0 && lines[0].trim() === '') {
-    lines.shift();
-  }
-  return lines.join('\n');
+  return stripLeadingCoverLetterName(raw, candidateName);
 }
 
 /**
- * Strip any leading line that looks like a date (contains a 4-digit year).
- * Mirrors the same helper in cover-letter-pdf.tsx.
+ * Strip leading contact + date header lines (API-baked). Shared with PDF.
  */
 export function stripLeadingDateForDocx(text: string): string {
-  const lines = text.split('\n');
-  while (lines.length > 0 && lines[0].trim() === '') {
-    lines.shift();
-  }
-  if (lines.length > 0 && (/\b\d{4}\b/.test(lines[0].trim()) || /(?:\b\d{4}\b|[٠-٩]{4}|[०-९]{4})/u.test(lines[0].trim()))) {
-    lines.shift();
-    while (lines.length > 0 && lines[0].trim() === '') {
-      lines.shift();
-    }
-  }
-  return lines.join('\n');
+  return stripLeadingCoverLetterDateAndContacts(text);
 }
 
 export async function buildCoverLetterDocxBlob(
@@ -16362,10 +16347,10 @@ export async function buildCoverLetterDocxBlob(
   locale: Locale = 'en',
 ): Promise<Blob> {
   // Final safety net: strip any diagnostic schema/version marker (e.g. a legacy
-  // saved draft) so it never appears in the exported DOCX text.
+  // saved draft) so it never appears in the exported DOCX text. Also strips the
+  // API-baked name/contact/date header so the DOCX date renders exactly once.
   const sanitizedContent = sanitizeCoverLetterContent(content);
-  const afterName = stripLeadingNameForDocx(sanitizedContent, candidateName);
-  const text = stripLeadingDateForDocx(afterName);
+  const text = stripCoverLetterExportHeader(sanitizedContent, candidateName);
 
   let fontFamily: string;
   let isRTL = false;

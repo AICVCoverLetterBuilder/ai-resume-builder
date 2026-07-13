@@ -3,6 +3,7 @@ import {
   createCoverLetterRequestId,
   isCoverLetterContentCurrent,
   isCoverLetterDownloadAllowed,
+  normalizeCoverLetterGroundingStatus,
   shouldApplyCoverLetterGenerationResult,
   type ActiveCoverLetterRequest,
 } from '../cover-letter-flow';
@@ -33,38 +34,38 @@ describe('cover letter generation flow guards', () => {
 
   test('stale Hindi content is not current when Arabic is selected', () => {
     expect(
-      isCoverLetterContentCurrent(HINDI_SAMPLE, 'hi', 'ar', 'idle'),
+      isCoverLetterContentCurrent(HINDI_SAMPLE, 'hi', 'ar', 'idle', 'passed'),
     ).toBe(false);
     expect(
-      isCoverLetterDownloadAllowed(HINDI_SAMPLE, 'hi', 'ar', 'idle'),
+      isCoverLetterDownloadAllowed(HINDI_SAMPLE, 'hi', 'ar', 'idle', 'passed'),
     ).toBe(false);
   });
 
   test('loading phase hides preview and blocks downloads even when locale matches', () => {
     expect(
-      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'ar', 'loading'),
+      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'ar', 'loading', 'passed'),
     ).toBe(false);
     expect(
-      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'loading'),
+      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'loading', 'passed'),
     ).toBe(false);
   });
 
   test('Arabic content is current only after successful generation for Arabic locale', () => {
     expect(
-      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'ar', 'success'),
+      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'passed'),
     ).toBe(true);
     expect(
-      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'success'),
+      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'passed'),
     ).toBe(true);
   });
 
   test('wrong-language Arabic body is rejected when Hindi was requested', () => {
     expect(contentMatchesRequestedLocale(ARABIC_SAMPLE, 'hi')).toBe(false);
     expect(
-      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'ar', 'success'),
+      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'passed'),
     ).toBe(true);
     expect(
-      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'hi', 'success'),
+      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'hi', 'success', 'passed'),
     ).toBe(false);
   });
 
@@ -78,5 +79,43 @@ describe('cover letter generation flow guards', () => {
   test('stale Arabic response cannot overwrite newer request in another language', () => {
     const englishActive: ActiveCoverLetterRequest = { requestId: 'en-req-2', locale: 'en' };
     expect(shouldApplyCoverLetterGenerationResult(englishActive, 'ar-req-1', 'ar')).toBe(false);
+  });
+
+  test('failed grounding blocks downloads even when locale matches', () => {
+    expect(
+      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'failed'),
+    ).toBe(false);
+    expect(
+      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'passed'),
+    ).toBe(true);
+    expect(
+      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'fallback'),
+    ).toBe(true);
+  });
+
+  test('missing groundingStatus is rejected for preview and export', () => {
+    expect(
+      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'missing'),
+    ).toBe(false);
+    expect(
+      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'missing'),
+    ).toBe(false);
+  });
+
+  test('unknown groundingStatus is rejected', () => {
+    expect(
+      isCoverLetterContentCurrent(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'unknown'),
+    ).toBe(false);
+    expect(
+      isCoverLetterDownloadAllowed(ARABIC_SAMPLE, 'ar', 'ar', 'success', 'unknown'),
+    ).toBe(false);
+  });
+
+  test('normalizeCoverLetterGroundingStatus does not coerce missing to passed', () => {
+    expect(normalizeCoverLetterGroundingStatus(undefined)).toBe('missing');
+    expect(normalizeCoverLetterGroundingStatus(null)).toBe('missing');
+    expect(normalizeCoverLetterGroundingStatus('')).toBe('missing');
+    expect(normalizeCoverLetterGroundingStatus('validated')).toBe('passed');
+    expect(normalizeCoverLetterGroundingStatus('weird-legacy')).toBe('invalid');
   });
 });

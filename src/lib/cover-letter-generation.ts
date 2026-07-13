@@ -902,12 +902,20 @@ export async function generateStructuredCoverLetterWithRetries(options: {
   fallbackCompany: string;
   factSet?: CoverLetterFactSet;
   generate: (attempt: number, maxTokens: number, userPrompt: string) => Promise<string>;
-}): Promise<{ letter: StructuredCoverLetter; groundingStatus: 'passed' | 'repaired' | 'fallback' }> {
+}): Promise<{
+  letter: StructuredCoverLetter;
+  groundingStatus: 'passed' | 'repaired' | 'fallback';
+  repairAttempted: boolean;
+  fallbackUsed: boolean;
+  usedFactIds: string[];
+  groundingViolationCount: number;
+}> {
   let maxTokens = coverLetterMaxTokensForLocale(options.locale);
   const retryCap = coverLetterRetryMaxTokensForLocale(options.locale);
   const signatureName = options.candidateName || options.displayName;
   const dateLine = localizedDateLine(options.locale);
   const factSet: CoverLetterFactSet = options.factSet ?? { facts: [], isSparse: true };
+  const usedFactIds = factSet.facts.map((f) => f.id);
 
   const tryParseAndValidate = (raw: string): StructuredCoverLetter | null => {
     const parsed = parseStructuredCoverLetterJson(raw);
@@ -924,6 +932,8 @@ export async function generateStructuredCoverLetterWithRetries(options: {
 
   let structurallyValid: StructuredCoverLetter | null = null;
   let assembledForGrounding = '';
+  let lastViolationCount = 0;
+  let repairAttempted = false;
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const retryNote = attempt > 0
@@ -965,11 +975,20 @@ export async function generateStructuredCoverLetterWithRetries(options: {
     structurallyValid = parsed;
     assembledForGrounding = assembleCoverLetterContent(parsed);
     const grounding = validateCoverLetterGrounding(assembledForGrounding, factSet);
+    lastViolationCount = grounding.violations.length;
     if (grounding.valid) {
-      return { letter: parsed, groundingStatus: 'passed' };
+      return {
+        letter: parsed,
+        groundingStatus: 'passed',
+        repairAttempted,
+        fallbackUsed: false,
+        usedFactIds,
+        groundingViolationCount: 0,
+      };
     }
 
     // One automatic grounding repair
+    repairAttempted = true;
     const repairPrompt = `${buildStructuredCoverLetterPrompt({
       languageName: options.languageName,
       locale: options.locale,
@@ -993,8 +1012,16 @@ export async function generateStructuredCoverLetterWithRetries(options: {
     if (repaired) {
       const repairedText = assembleCoverLetterContent(repaired);
       const repairedGrounding = validateCoverLetterGrounding(repairedText, factSet);
+      lastViolationCount = repairedGrounding.violations.length;
       if (repairedGrounding.valid) {
-        return { letter: repaired, groundingStatus: 'repaired' };
+        return {
+          letter: repaired,
+          groundingStatus: 'repaired',
+          repairAttempted: true,
+          fallbackUsed: false,
+          usedFactIds,
+          groundingViolationCount: 0,
+        };
       }
     }
 
@@ -1008,7 +1035,14 @@ export async function generateStructuredCoverLetterWithRetries(options: {
     });
     // Soft-align signOff with locale closing preference
     fallback.signOff = options.closing || fallback.signOff;
-    return { letter: fallback, groundingStatus: 'fallback' };
+    return {
+      letter: fallback,
+      groundingStatus: 'fallback',
+      repairAttempted,
+      fallbackUsed: true,
+      usedFactIds,
+      groundingViolationCount: lastViolationCount,
+    };
   }
 
   // Structural generation failed entirely — still return grounded fallback rather than hard error when possible
@@ -1021,7 +1055,14 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       dateLine,
     });
     fallback.signOff = options.closing || fallback.signOff;
-    return { letter: fallback, groundingStatus: 'fallback' };
+    return {
+      letter: fallback,
+      groundingStatus: 'fallback',
+      repairAttempted,
+      fallbackUsed: true,
+      usedFactIds,
+      groundingViolationCount: lastViolationCount,
+    };
   }
 
   throw new CoverLetterGenerationIncompleteError();

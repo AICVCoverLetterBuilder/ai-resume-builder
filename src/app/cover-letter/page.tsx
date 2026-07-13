@@ -14,6 +14,8 @@ import {
   isCoverLetterDownloadAllowed,
   isCoverLetterContentCurrent,
   shouldApplyCoverLetterGenerationResult,
+  normalizeCoverLetterGroundingStatus,
+  isTrustedCoverLetterGroundingStatus,
   type ActiveCoverLetterRequest,
   type CoverLetterGenerationPhase,
   type CoverLetterGroundingStatus,
@@ -31,8 +33,18 @@ import { toast } from 'sonner';
 import { Sparkles, FileText, Copy, Pencil, RefreshCw, Crown, Info, Loader2, Download, ChevronDown, File, User } from 'lucide-react';
 import { CoverLetterProModal, FreeLimitModal } from '@/components/UpgradePro';
 import { PremiumAIButton, AIBadge } from '@/components/PremiumAIButton';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { getAppUserId } from '@/lib/iap';
+import { buildCoverLetterFactSet } from '@/lib/cover-letter-facts';
+import { activateCoverLetterContentWithClientGrounding } from '@/lib/cover-letter-client-grounding';
+import {
+  beginCoverLetterGroundingDiagnostics,
+  countFactsByCategory,
+  updateCoverLetterGroundingDiagnostics,
+  recordGroundingViolations,
+  copyCoverLetterGroundingDiagnosticsToClipboard,
+  COVER_LETTER_GROUNDING_BACKEND_REVISION,
+} from '@/lib/cover-letter-grounding-diagnostics';
 
 const emptyCL = (): CoverLetterData => ({
   id: crypto.randomUUID(),
@@ -70,7 +82,17 @@ async function callGenerateAI(params: {
   certifications?: string[];
   summary?: string;
   jobDescription?: string;
-}): Promise<{ content: string; status: number; groundingStatus?: CoverLetterGroundingStatus }> {
+}): Promise<{
+  content: string;
+  status: number;
+  groundingStatus?: unknown;
+  coverLetterBackendRevision?: unknown;
+  repairAttempted?: unknown;
+  fallbackUsed?: unknown;
+  usedFactIds?: unknown;
+  groundingViolations?: unknown;
+  contentLocale?: unknown;
+}> {
   const ownsController = !params.signal;
   const controller = ownsController ? new AbortController() : null;
   const timer = ownsController ? setTimeout(() => controller!.abort(), 45000) : null;
@@ -79,7 +101,13 @@ async function callGenerateAI(params: {
     const { data, response: res } = await apiFetch<{
       result?: string;
       error?: string;
-      groundingStatus?: CoverLetterGroundingStatus;
+      groundingStatus?: unknown;
+      coverLetterBackendRevision?: unknown;
+      repairAttempted?: unknown;
+      fallbackUsed?: unknown;
+      usedFactIds?: unknown;
+      groundingViolations?: unknown;
+      contentLocale?: unknown;
     }>('/api/generate', {
       body: { action: params.action || 'cover-letter-gen', ...params },
       signal,
@@ -91,6 +119,12 @@ async function callGenerateAI(params: {
       content: data.result as string,
       status: res.status,
       groundingStatus: data.groundingStatus,
+      coverLetterBackendRevision: data.coverLetterBackendRevision,
+      repairAttempted: data.repairAttempted,
+      fallbackUsed: data.fallbackUsed,
+      usedFactIds: data.usedFactIds,
+      groundingViolations: data.groundingViolations,
+      contentLocale: data.contentLocale,
     };
   } finally {
     if (timer) clearTimeout(timer);
@@ -116,6 +150,7 @@ export default function CoverLetterPage() {
   const [isPdfExporting, setIsPdfExporting] = useState(false);
   const [isWordExporting, setIsWordExporting] = useState(false);
   const [showArabicPdfDiagnostics, setShowArabicPdfDiagnostics] = useState(false);
+  const [showGroundingDiagnostics, setShowGroundingDiagnostics] = useState(false);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
   const activeGenerationRef = useRef<ActiveCoverLetterRequest | null>(null);
   const generationAbortRef = useRef<AbortController | null>(null);
@@ -261,9 +296,44 @@ export default function CoverLetterPage() {
 
     const proToken = aiGate.status === 'ready' ? aiGate.token : null;
     const fullName = getFullName();
+    const experienceEntries = currentCv?.experience ?? [];
+    const skills = currentCv?.skills ?? [];
+    const education = currentCv?.education ?? [];
+    const languages = currentCv?.languages ?? [];
+    const certifications = currentCv?.certifications ?? [];
+    const summary = currentCv?.summary ?? '';
+    const factSet = buildCoverLetterFactSet({
+      personalName: fullName || currentCv?.personal?.fullName || '',
+      jobTitle: cl.jobTitle,
+      companyName: cl.companyName,
+      jobDescription: '',
+      summary,
+      experience: experienceEntries,
+      education,
+      skills,
+      certifications,
+      languages,
+    });
+    const factCounts = countFactsByCategory(factSet);
+    beginCoverLetterGroundingDiagnostics({
+      apiBaseUrl: getApiBaseUrl(),
+      apiPath: '/api/generate',
+      locale: requestedLocale,
+      requestId,
+      requestFactCounts: factCounts,
+      leadershipEvidence: factSet.facts.some((f) => f.type === 'leadership'),
+      groundingValidatorStarted: true,
+    });
 
     try {
-      const { content, groundingStatus: responseGrounding } = await callGenerateAI({
+      const {
+        content,
+        groundingStatus: responseGrounding,
+        coverLetterBackendRevision,
+        repairAttempted,
+        fallbackUsed,
+        groundingViolations,
+      } = await callGenerateAI({
         action,
         jobTitle: cl.jobTitle,
         companyName: cl.companyName,
@@ -274,12 +344,12 @@ export default function CoverLetterPage() {
         personalName: fullName || currentCv?.personal?.fullName || '',
         personalEmail: currentCv?.personal?.email || '',
         personalPhone: currentCv?.personal?.phone || '',
-        experienceEntries: currentCv?.experience ?? [],
-        skills: currentCv?.skills ?? [],
-        education: currentCv?.education ?? [],
-        languages: currentCv?.languages ?? [],
-        certifications: currentCv?.certifications ?? [],
-        summary: currentCv?.summary ?? '',
+        experienceEntries,
+        skills,
+        education,
+        languages,
+        certifications,
+        summary,
         proToken,
         freeUserId: isCurrentPro ? undefined : getAppUserId(),
         signal: abortController.signal,
@@ -293,22 +363,71 @@ export default function CoverLetterPage() {
       if (!contentMatchesRequestedLocale(sanitized, requestedLocale)) {
         setGenerationPhase('error');
         setGroundingStatus('failed');
+        updateCoverLetterGroundingDiagnostics({
+          serverGroundingStatus: String(responseGrounding ?? 'n/a'),
+          finalGroundingStatus: 'failed',
+          backendRevision: typeof coverLetterBackendRevision === 'string' ? coverLetterBackendRevision : null,
+        });
         toast.error(coverLetterWrongLanguage(requestedLocale));
         return;
       }
 
-      const nextGrounding: CoverLetterGroundingStatus =
-        responseGrounding === 'passed' ||
-        responseGrounding === 'repaired' ||
-        responseGrounding === 'fallback'
-          ? responseGrounding
-          : 'passed';
+      const activation = activateCoverLetterContentWithClientGrounding({
+        serverContent: sanitized,
+        serverGroundingRaw: responseGrounding,
+        backendRevision: coverLetterBackendRevision,
+        locale: requestedLocale,
+        candidateName: fullName || currentCv?.personal?.fullName || '',
+        jobTitle: cl.jobTitle,
+        companyName: cl.companyName,
+        factSet,
+      });
 
-      setCl(prev => ({ ...prev, content: sanitized, updatedAt: new Date().toISOString() }));
+      recordGroundingViolations(activation.violations);
+      updateCoverLetterGroundingDiagnostics({
+        serverGroundingStatus: activation.serverGroundingStatus,
+        finalGroundingStatus: activation.groundingStatus,
+        groundingValidatorStarted: activation.validatorStarted,
+        groundingValidatorCompleted: activation.validatorCompleted,
+        repairAttempted: Boolean(repairAttempted) || activation.clientFallbackUsed,
+        fallbackUsed: Boolean(fallbackUsed) || activation.clientFallbackUsed,
+        clientFallbackUsed: activation.clientFallbackUsed,
+        backendRevision: typeof coverLetterBackendRevision === 'string' ? coverLetterBackendRevision : null,
+        schemaMismatch:
+          activation.schemaMismatch ||
+          coverLetterBackendRevision !== COVER_LETTER_GROUNDING_BACKEND_REVISION,
+        contentLocale: requestedLocale,
+        violationCount:
+          typeof groundingViolations === 'number'
+            ? Math.max(groundingViolations, activation.violations.length)
+            : activation.violations.length,
+      });
+
+      if (!activation.accepted || !activation.content.trim()) {
+        setGenerationPhase('error');
+        setGroundingStatus(normalizeCoverLetterGroundingStatus(activation.groundingStatus));
+        setShowGroundingDiagnostics(true);
+        toast.error(coverLetterGroundingFailed(requestedLocale));
+        return;
+      }
+
+      // Never activate invented/server-ungrounded text without trusted grounding.
+      if (!isTrustedCoverLetterGroundingStatus(activation.groundingStatus)) {
+        setGenerationPhase('error');
+        setGroundingStatus(activation.groundingStatus);
+        setShowGroundingDiagnostics(true);
+        toast.error(coverLetterGroundingFailed(requestedLocale));
+        return;
+      }
+
+      setCl(prev => ({ ...prev, content: activation.content, updatedAt: new Date().toISOString() }));
       setContentLocale(requestedLocale);
-      setGroundingStatus(nextGrounding);
+      setGroundingStatus(activation.groundingStatus);
       setGenerationPhase('success');
       setHasGenerated(true);
+      if (activation.clientFallbackUsed || activation.schemaMismatch) {
+        setShowGroundingDiagnostics(true);
+      }
 
       if (!isCurrentPro) {
         if (mode === 'generate') {
@@ -752,6 +871,20 @@ export default function CoverLetterPage() {
                         className="mt-2 text-xs text-amber-700 dark:text-amber-400 underline"
                       >
                         Copy PDF diagnostics
+                      </button>
+                    )}
+                    {showGroundingDiagnostics && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const ok = await copyCoverLetterGroundingDiagnosticsToClipboard();
+                          toast[ok ? 'success' : 'error'](
+                            ok ? 'Grounding diagnostics copied' : 'Could not copy grounding diagnostics',
+                          );
+                        }}
+                        className="mt-2 block text-xs text-amber-700 dark:text-amber-400 underline"
+                      >
+                        Copy grounding diagnostics
                       </button>
                     )}
                   </>

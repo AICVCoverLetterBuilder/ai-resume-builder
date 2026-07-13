@@ -9,7 +9,8 @@
  *   localStorage.setItem('cvpro_api_base_url', 'https://api.cvproai.com')
  */
 
-function getApiBaseUrl(): string {
+/** Resolved API origin for Capacitor/native (empty string = same-origin / relative). */
+export function getApiBaseUrl(): string {
   if (typeof window === 'undefined') return '';
 
   // 1. localStorage override (set by Capacitor native at startup)
