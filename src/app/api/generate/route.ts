@@ -11,6 +11,7 @@ import {
   generateStructuredCoverLetterWithRetries,
   sanitizeCoverLetterContent,
 } from '@/lib/cover-letter-generation';
+import { buildCoverLetterFactSet } from '@/lib/cover-letter-facts';
 
 // ─── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -159,62 +160,62 @@ const localeInstructions: Record<Locale, {
   en: {
     languageName: 'English', fallbackCandidate: 'the candidate', fallbackRole: 'the role', fallbackCompany: 'the company', coverLetterName: 'Your Name', closing: 'Sincerely',
     toneMap: { formal: 'formal and professional', confident: 'confident and assertive', friendly: 'warm and personable' },
-    nativeQualityNote: 'Write as a native English-speaking professional. Use standard British or American business English. Avoid overly formal or robotic phrasing.',
+    nativeQualityNote: 'Write as a native English-speaking professional. Use standard business English. Use strong action verbs only when SOURCE FACTS support them. Never invent leadership, tools, or achievements.',
   },
   'pt-BR': {
     languageName: 'Portuguese (Brazil)', fallbackCandidate: 'a pessoa candidata', fallbackRole: 'a vaga', fallbackCompany: 'a empresa', coverLetterName: 'Seu nome', closing: 'Atenciosamente',
     toneMap: { formal: 'formal e profissional', confident: 'confiante e assertivo', friendly: 'caloroso e próximo' },
-    nativeQualityNote: 'Escreva como um profissional nativo do Brasil. Use português brasileiro natural e fluente, com vocabulário de negócios adequado. Evite traduções literais do inglês. Use "liderou", "desenvolveu", "implementou" como verbos de ação. Nunca misture inglês no texto.',
+    nativeQualityNote: 'Escreva como um profissional nativo do Brasil. Use português brasileiro natural. Use verbos de ação fortes somente quando suportados pelos SOURCE FACTS. Nunca invente liderança, ferramentas ou conquistas. Nunca misture inglês no texto salvo siglas padrão.',
   },
   de: {
     languageName: 'German', fallbackCandidate: 'die bewerbende Person', fallbackRole: 'die Position', fallbackCompany: 'das Unternehmen', coverLetterName: 'Ihr Name', closing: 'Mit freundlichen Grüßen',
     toneMap: { formal: 'formell und professionell', confident: 'selbstbewusst und überzeugend', friendly: 'warm und persönlich' },
-    nativeQualityNote: 'Schreiben Sie wie ein Muttersprachler im deutschen Geschäftsumfeld. Verwenden Sie natürliche, professionelle Formulierungen aus deutschen Lebensläufen (Lebenslauf-Stil). Bevorzugen Sie deutsche Fachbegriffe. Niemals englische Begriffe einfügen, außer für etablierte Abkürzungen wie CRM, ERP, KPI. Starke Verben: "leitete", "entwickelte", "optimierte", "koordinierte".',
+    nativeQualityNote: 'Schreiben Sie wie ein Muttersprachler im deutschen Geschäftsumfeld. Starke Verben nur bei Beleg in SOURCE FACTS. Niemals Führungs- oder Leistungsversprechen erfinden. Keine erfundenen Tools oder Kennzahlen.',
   },
   es: {
     languageName: 'Spanish', fallbackCandidate: 'la persona candidata', fallbackRole: 'el puesto', fallbackCompany: 'la empresa', coverLetterName: 'Tu nombre', closing: 'Atentamente',
     toneMap: { formal: 'formal y profesional', confident: 'seguro y convincente', friendly: 'cercano y amable' },
-    nativeQualityNote: 'Escribe como un profesional nativo de habla hispana. Usa español profesional natural, con terminología de negocio estándar. Verbos de acción fuertes: "lideró", "desarrolló", "implementó", "coordinó", "gestionó". Evita calcos del inglés. Nunca mezcles inglés en el texto salvo siglas estándar como CRM, ERP.',
+    nativeQualityNote: 'Escribe como un profesional nativo. Usa verbos de acción solo si están respaldados por SOURCE FACTS. Nunca inventes liderazgo, herramientas ni logros.',
   },
   fr: {
     languageName: 'French', fallbackCandidate: 'la personne candidate', fallbackRole: 'le poste', fallbackCompany: "l'entreprise", coverLetterName: 'Votre nom', closing: 'Cordialement',
     toneMap: { formal: 'formel et professionnel', confident: 'sûr de soi et affirmé', friendly: 'chaleureux et accessible' },
-    nativeQualityNote: "Rédigez comme un professionnel francophone natif. Utilisez un français professionnel naturel avec un vocabulaire commercial courant en France. Verbes d'action forts : a dirigé, a développé, a mis en oeuvre, a coordonné. Évitez les calques de l'anglais et ne mélangez jamais l'anglais sauf pour les acronymes standard comme CRM, ERP.",
+    nativeQualityNote: "Rédigez comme un professionnel francophone natif. N'utilisez des verbes d'action forts que s'ils sont étayés par SOURCE FACTS. N'inventez jamais leadership, outils ou réalisations.",
   },
   it: {
     languageName: 'Italian', fallbackCandidate: 'la persona candidata', fallbackRole: 'il ruolo', fallbackCompany: "l'azienda", coverLetterName: 'Il tuo nome', closing: 'Cordiali saluti',
     toneMap: { formal: 'formale e professionale', confident: 'sicuro e deciso', friendly: 'cordiale e umano' },
-    nativeQualityNote: "Scrivi come un professionista italiano madrelingua. Usa un italiano professionale naturale con terminologia aziendale corrente. Verbi d'azione forti: ha guidato, ha sviluppato, ha implementato, ha coordinato, ha gestito. Evita i calchi dall'inglese e non mescolare mai l'inglese, ad eccezione di acronimi standard come CRM, ERP.",
+    nativeQualityNote: "Scrivi come un professionista italiano madrelingua. Usa verbi d'azione forti solo se supportati da SOURCE FACTS. Non inventare leadership, strumenti o risultati.",
   },
   ar: {
     languageName: 'Arabic', fallbackCandidate: 'المرشح', fallbackRole: 'الوظيفة', fallbackCompany: 'الشركة', coverLetterName: 'اسمك', closing: 'مع خالص التحية',
     toneMap: { formal: 'رسمي واحترافي', confident: 'واثق وحازم', friendly: 'ودود وقريب' },
-    nativeQualityNote: 'اكتب بأسلوب محترف عربي سليم، كما يكتبه متحدث عربي أصلي. استخدم مصطلحات الأعمال العربية الأصيلة بدلاً من التعريب الحرفي من الإنجليزية. أفعال قوية: "قاد"، "طوّر"، "نفّذ"، "نسّق"، "أدار"، "أشرف". لا تستخدم كلمات إنجليزية مدرجة داخل الجملة العربية إلا للاختصارات المعروفة مثل CRM وERP. اكتب باللغة العربية الفصحى المهنية.',
+    nativeQualityNote: 'اكتب بأسلوب عربي فصحى مهني طبيعي. استخدم أفعالًا قوية فقط إن وردت في SOURCE FACTS. لا تخترع قيادة أو أدوات أو إنجازات. فضّل "للتقدم لشغل وظيفة" ولا تُشعِر أن المرشح يعمل أصلًا لدى الشركة.',
   },
   sr: {
     languageName: 'Serbian', fallbackCandidate: 'kandidat', fallbackRole: 'poziciju', fallbackCompany: 'kompaniju', coverLetterName: 'Vaše ime', closing: 'Srdačno',
     toneMap: { formal: 'formalan i profesionalan', confident: 'samouveren i odlučan', friendly: 'topao i pristupačan' },
-    nativeQualityNote: 'Piši kao izvorni govornik srpskog jezika u profesionalnom kontekstu. Koristi prirodan, fluidan srpski poslovni jezik. Jaki glagoli radnje: "vodio/la", "razvio/la", "implementirao/la", "koordinirao/la", "upravljao/la". Nikada ne umeći engleske reči u srpski tekst osim standardnih skraćenica (CRM, ERP, KPI). Koristiti latinicu.',
+    nativeQualityNote: 'Piši prirodnim profesionalnim srpskim. Jaki glagoli samo ako su podržani u SOURCE FACTS. Ne izmišljaj vođenje, alate ili postignuća. Latinica.',
   },
   hr: {
     languageName: 'Croatian', fallbackCandidate: 'kandidat', fallbackRole: 'poziciju', fallbackCompany: 'tvrtku', coverLetterName: 'Vaše ime', closing: 'Srdačan pozdrav',
     toneMap: { formal: 'formalan i profesionalan', confident: 'samouvjeren i odlučan', friendly: 'topao i pristupačan' },
-    nativeQualityNote: 'Piši kao izvorni govornik hrvatskog jezika u profesionalnom kontekstu. Koristi prirodan, tečan hrvatski poslovni jezik. Jaki glagoli radnje: "vodio/la", "razvio/la", "implementirao/la", "koordinirao/la", "upravljao/la". Nikada ne umetaj engleske riječi u hrvatski tekst osim standardnih kratica (CRM, ERP, KPI). Koristiti latinicu.',
+    nativeQualityNote: 'Piši prirodnim profesionalnim hrvatskim. Jaki glagoli samo ako su podržani u SOURCE FACTS. Ne izmišljaj vodstvo, alate ili postignuća. Latinica.',
   },
   ru: {
     languageName: 'Russian', fallbackCandidate: 'кандидат', fallbackRole: 'позицию', fallbackCompany: 'компанию', coverLetterName: 'Ваше имя', closing: 'С уважением',
     toneMap: { formal: 'формальный и профессиональный', confident: 'уверенный и убедительный', friendly: 'доброжелательный и открытый' },
-    nativeQualityNote: 'Пишите как носитель русского языка в профессиональном контексте. Используйте естественный деловой русский язык. Сильные глаголы действия: «руководил», «разработал», «внедрил», «координировал», «управлял», «оптимизировал». Никогда не вставляйте английские слова в русский текст, кроме устоявшихся аббревиатур (CRM, ERP, KPI). Не используйте формы «(а)» — определите род из контекста или сформулируйте нейтрально.',
+    nativeQualityNote: 'Пишите естественным деловым русским. Сильные глаголы — только при подтверждении в SOURCE FACTS. Не выдумывайте руководство, инструменты или достижения.',
   },
   hi: {
     languageName: 'Hindi', fallbackCandidate: 'उम्मीदवार', fallbackRole: 'पद', fallbackCompany: 'कंपनी', coverLetterName: 'आपका नाम', closing: 'सादर',
     toneMap: { formal: 'औपचारिक और पेशेवर', confident: 'आत्मविश्वासी और प्रभावशाली', friendly: 'सौम्य और आत्मीय' },
-    nativeQualityNote: 'शुद्ध और स्वाभाविक हिंदी में लिखें जैसा कोई हिंदी-भाषी पेशेवर लिखता है। व्यावसायिक हिंदी शब्दावली का उपयोग करें। मजबूत क्रिया शब्द: "नेतृत्व किया", "विकसित किया", "क्रियान्वित किया", "समन्वय किया", "प्रबंधन किया"। अंग्रेज़ी शब्दों का हिंदी में अनुलिपि (transliteration) न करें — जैसे "नेगोशिएशन" की जगह "वार्तालाप" या "बातचीत" लिखें। CRM, ERP जैसे प्रचलित संक्षिप्त रूप स्वीकार्य हैं।',
+    nativeQualityNote: 'स्वाभाविक पेशेवर हिंदी लिखें। मजबूत क्रियाएँ केवल तभी जब SOURCE FACTS में हों। नेतृत्व, तकनीक या उपलब्धियाँ गढ़ें नहीं।',
   },
   ja: {
     languageName: 'Japanese', fallbackCandidate: '候補者', fallbackRole: '職種', fallbackCompany: '企業', coverLetterName: 'お名前', closing: '敬具',
     toneMap: { formal: 'フォーマルで丁寧', confident: '自信があり説得力のある', friendly: '親しみやすく温かい' },
-    nativeQualityNote: '日本語ネイティブのビジネスパーソンとして記述してください。職務経歴書・履歴書で実際に使われる自然な日本語ビジネス表現を使用してください。力強い動詞：「主導した」「開発した」「実装した」「調整した」「管理した」「改善した」。英単語を日本語の文中に混在させないこと（CRM、ERP などの定着した略語は可）。カタカナ語は最小限にし、適切な日本語表現を優先してください。',
+    nativeQualityNote: '自然なビジネス日本語で記述してください。強い動詞はSOURCE FACTSがある場合のみ。リーダーシップ・ツール・成果を創作しないでください。',
   },
 };
 
@@ -357,6 +358,8 @@ export async function POST(req: NextRequest) {
       const personalName = sanitizeField(params.personalName, 200);
       const personalEmail = sanitizeField(params.personalEmail, 200);
       const personalPhone = sanitizeField(params.personalPhone, 100);
+      const jobDescription = sanitizeField(params.jobDescription, 4000);
+      const summary = sanitizeField(params.summary, 2000);
       const resolvedLocale = normalizeLocale(locale);
       const localeInfo = localeInstructions[resolvedLocale];
 
@@ -368,12 +371,31 @@ export async function POST(req: NextRequest) {
 
       const toneDesc = localeInfo.toneMap[(tone as 'formal' | 'confident' | 'friendly') || 'formal'] || localeInfo.toneMap.formal;
       const variantNote = variant && variant > 0
-        ? ' Use a different opening and structure than the standard version.'
+        ? ' Use a different opening and structure than the standard version — still without inventing facts.'
         : '';
       const genderNote = getGenderInstruction(resolvedLocale, gender || '');
 
+      const experienceEntries = Array.isArray(params.experienceEntries) ? params.experienceEntries : [];
+      const skillsList: string[] = Array.isArray(params.skills) ? params.skills : [];
+      const languagesList = Array.isArray(params.languages) ? params.languages : [];
+      const educationList = Array.isArray(params.education) ? params.education : [];
+      const certificationsList: string[] = Array.isArray(params.certifications) ? params.certifications : [];
+
+      const factSet = buildCoverLetterFactSet({
+        personalName: candidateName,
+        jobTitle,
+        companyName,
+        jobDescription,
+        summary,
+        experience: experienceEntries,
+        education: educationList,
+        skills: skillsList,
+        certifications: certificationsList,
+        languages: languagesList,
+      });
+
       let generationAttempts = 0;
-      const structuredLetter = await generateStructuredCoverLetterWithRetries({
+      const { letter: structuredLetter, groundingStatus } = await generateStructuredCoverLetterWithRetries({
         locale: resolvedLocale,
         closing: localeInfo.closing,
         candidateName,
@@ -386,6 +408,7 @@ export async function POST(req: NextRequest) {
         genderNote,
         fallbackRole: localeInfo.fallbackRole,
         fallbackCompany: localeInfo.fallbackCompany,
+        factSet,
         generate: async (attempt, maxTokens, userPrompt) => {
           generationAttempts = attempt + 1;
           if (process.env.NODE_ENV !== 'production') {
@@ -394,20 +417,24 @@ export async function POST(req: NextRequest) {
               coverLetter: true,
               maxTokens,
               attempt,
+              factCount: factSet.facts.length,
+              isSparse: factSet.isSparse,
             });
           }
           const response = await callWithRetry({
             model: MODEL,
             max_tokens: maxTokens,
-            temperature: attempt === 0 ? 0.5 : 0.3,
+            temperature: attempt === 0 ? 0.4 : 0.2,
             stream: false,
             system: `You are an expert cover letter writer for ${localeInfo.languageName}.
 Return ONLY valid JSON matching the requested schema.
 Rules:
 - Every field must be complete and in ${localeInfo.languageName}.
 - Never stop mid-sentence.
+- Never invent experience, skills, tools, leadership, metrics, or achievements that are absent from SOURCE FACTS.
 - Never mix languages except company names, job titles, or candidate names when appropriate.
 - Never use placeholder names.
+- Prefer a shorter honest letter over a detailed invented one.
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
             messages: [{ role: 'user', content: userPrompt }],
           });
@@ -416,11 +443,8 @@ Rules:
       });
 
       // NOTE: the `structured-v4` schema/version marker is intentionally NOT stamped
-      // into the letter body anymore. It used to be wrapped in zero-width characters
-      // (`\u200Bstructured-v4\u200B`), but only the zero-width characters were
-      // invisible — the ASCII text "structured-v4" itself rendered as a visible line
-      // in the preview, copied text, and PDF/DOCX exports. The engine fingerprint is
-      // now carried solely by the `coverLetterGenerationEngine` response field below.
+      // into the letter body anymore. The engine fingerprint is carried by
+      // `coverLetterGenerationEngine` (and groundingStatus for diagnostics).
       const letterBody = assembleCoverLetterContent(structuredLetter);
 
       const dateStr = new Date().toLocaleDateString(resolvedLocale, { year: 'numeric', month: 'long', day: 'numeric' });
@@ -432,26 +456,25 @@ Rules:
       if (personalPhone && typeof personalPhone === 'string' && personalPhone.trim()) headerLines.push(personalPhone.trim());
 
       const headerBlock = headerLines.length > 0 ? headerLines.join('\n') + '\n\n' : '';
-      // Defensive final safety net — strips the marker even if it somehow ended up
-      // embedded in the structured fields (e.g. a stale cached prompt/response).
       const fullLetter = sanitizeCoverLetterContent(`${headerBlock}${dateStr}\n\n${letterBody}`);
 
-      // Non-personal backend fingerprint + dev-only diagnostics. Never logs the
-      // generated letter text or personal data — locale/engine/attempt count only.
-      // Lets a deployed environment be checked for the structured-v4 pipeline
-      // (e.g. `curl .../api/generate | jq .coverLetterGenerationEngine`).
       if (process.env.NODE_ENV !== 'production') {
         console.log('[Cover Letter Generation]', {
           type: 'coverLetter',
           locale: resolvedLocale,
           generationEngine: 'structured-v4',
+          groundingStatus,
           valid: true,
           retryCount: generationAttempts,
         });
       }
 
       if (_freeUserId) recordFreeAction(_freeUserId, action === 'cover-letter' ? 'cover-letter-gen' : action);
-      return jsonResponse({ result: fullLetter, coverLetterGenerationEngine: 'structured-v4' });
+      return jsonResponse({
+        result: fullLetter,
+        coverLetterGenerationEngine: 'structured-v4',
+        groundingStatus,
+      });
     }
 
     if (action === 'summary') {

@@ -2,6 +2,7 @@ import type { Locale } from './i18n/translations';
 import { contentMatchesRequestedLocale } from './cover-letter-generation';
 
 export type CoverLetterGenerationPhase = 'idle' | 'loading' | 'success' | 'error';
+export type CoverLetterGroundingStatus = 'unknown' | 'passed' | 'repaired' | 'fallback' | 'failed';
 
 export type ActiveCoverLetterRequest = {
   requestId: string;
@@ -34,10 +35,12 @@ export function isCoverLetterContentCurrent(
   contentLocale: Locale | null,
   selectedLocale: Locale,
   phase: CoverLetterGenerationPhase,
+  groundingStatus: CoverLetterGroundingStatus = 'unknown',
 ): boolean {
   if (phase === 'loading') return false;
   if (!content.trim()) return false;
   if (!contentLocale || contentLocale !== selectedLocale) return false;
+  if (groundingStatus === 'failed') return false;
   return contentMatchesRequestedLocale(content, selectedLocale);
 }
 
@@ -46,6 +49,7 @@ export function isCoverLetterDownloadAllowed(
   contentLocale: Locale | null,
   selectedLocale: Locale,
   phase: CoverLetterGenerationPhase,
+  groundingStatus: CoverLetterGroundingStatus = 'unknown',
 ): boolean {
-  return isCoverLetterContentCurrent(content, contentLocale, selectedLocale, phase);
+  return isCoverLetterContentCurrent(content, contentLocale, selectedLocale, phase, groundingStatus);
 }

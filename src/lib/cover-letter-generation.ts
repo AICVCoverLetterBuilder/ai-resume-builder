@@ -1,4 +1,13 @@
 import type { Locale } from '@/lib/i18n/translations';
+import {
+  formatCoverLetterFactsForPrompt,
+  type CoverLetterFactSet,
+} from './cover-letter-facts';
+import {
+  buildDeterministicSparseCoverLetter,
+  buildGroundingRepairUserNote,
+  validateCoverLetterGrounding,
+} from './cover-letter-grounding';
 
 export const COVER_LETTER_SCHEMA_VERSION = 'structured-v4';
 export const COVER_LETTER_SCHEMA_MARKER = `\u200B${COVER_LETTER_SCHEMA_VERSION}\u200B`;
@@ -296,32 +305,43 @@ export function contentMatchesRequestedLocale(content: string, locale: Locale): 
   }
 }
 
-function buildLocaleGroundingRules(locale: Locale, jobTitle: string): string {
+function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: boolean): string {
   const role = jobTitle.trim() || 'the role';
   const shared = [
-    '- Use ONLY facts from the candidate CV/profile, job description fields, and user inputs provided in this request.',
-    '- Every experience, skill, tool, programming language, responsibility, achievement, leadership claim, number, or year of experience MUST be directly supported by the supplied CV, job description, or user input.',
-    '- Do NOT invent revenue increases, exceeded targets, major contracts, new-market expansion, leadership responsibilities, years of experience, percentages, numeric achievements, tools, or systems not mentioned in the source data.',
-    '- Do NOT claim Java, Python, C++, cloud systems, Agile, continuous integration, team leadership, complex algorithms, large projects, or performance improvements unless explicitly present in the source data.',
-    '- When source data is limited, write a shorter honest letter rather than inventing qualifications.',
-    '- Mention measurable achievements ONLY when explicitly present in the source data; otherwise use honest neutral wording about responsibilities and skills.',
-    '- Keep company praise brief, specific, and relevant — avoid repetitive or exaggerated compliments.',
-    '- Mention only the two or three strongest qualifications relevant to the role.',
-    '- Preserve company names, product names, CRM/software names, and technical terms exactly.',
-    `- Use the job title "${role}" faithfully — preserve its meaning and seniority; do NOT upgrade, broaden, or replace it with a different position (e.g. do not change "Salesman" into Sales Executive, Sales Representative, or Sales Manager).`,
-    '- If the job title is specialized, branded, or non-translatable, keep it exactly as written; you may add the original English title in parentheses only when it improves clarity.',
-    '- Target approximately 250–400 words total across all body fields unless an explicit length rule applies.',
+    'UNIVERSAL GROUNDING RULES (apply to every locale):',
+    '1. Every factual professional claim MUST be supported by SOURCE FACTS provided below.',
+    '2. Never infer a skill from the target job title.',
+    '3. Never infer experience from the target industry.',
+    '4. Never infer technical tools from a general profession.',
+    '5. Never infer leadership from seniority, age, or job title.',
+    '6. Never infer years of experience.',
+    '7. Never invent numbers, percentages, dates, revenue, savings, team size, or project scale.',
+    '8. Never claim that the candidate performed a responsibility merely because it appears in the job description.',
+    '9. Job-description requirements may be discussed as interest or willingness to contribute — NOT as existing experience unless SOURCE FACTS support it.',
+    '10. Do not transform weak evidence into a stronger claim.',
+    '11. Do not upgrade responsibilities into achievements.',
+    '12. Do not upgrade participation into leadership.',
+    '13. Do not upgrade familiarity into expertise.',
+    '14. Do not describe the candidate as experienced, highly skilled, expert, accomplished, proven, or successful unless SOURCE FACTS support it.',
+    '15. A shorter honest letter is always preferable to a detailed invented one.',
+    '- Do NOT claim Java, Python, C++, JavaScript, React, databases, SQL, cloud, AWS, Azure, CRM, Agile, Scrum, OOP, frontend/backend, or similar tools unless present in SOURCE FACTS.',
+    '- Do NOT claim extensive experience, proven track record, strong technical expertise, projects successfully led, or efficiency/revenue improvements unless present in SOURCE FACTS.',
+    '- Keep company praise brief and specific — avoid exaggerated compliments and repetitive company-name mentions.',
+    `- Use the job title "${role}" faithfully — preserve its meaning and seniority; do NOT upgrade or replace it (e.g. do not change "Salesman" into Sales Executive, Sales Representative, or Sales Manager).`,
+    '- If the title is specialized or clearer in English, you may keep it and optionally add a natural translation with the English title in parentheses.',
+    isSparse
+      ? '- SOURCE FACTS are SPARSE: write a concise honest letter about interest in the exact role, motivation, willingness to learn/contribute, interview availability, and ONLY explicitly supplied education/skills/experience.'
+      : '- Mention only the strongest qualifications that appear in SOURCE FACTS and are relevant to the role.',
+    '- Do NOT include fictional example achievements in the letter.',
   ];
 
   if (locale === 'hi') {
     return [
       'HINDI QUALITY RULES:',
       '- Write natural, professional Hindi — not a literal English translation.',
-      '- Use formal language appropriate for a real job application.',
-      '- Translate the job title faithfully into natural Hindi without changing seniority (e.g. "Software Developer" → "सॉफ़्टवेयर डेवलपर (Software Developer)" — do NOT change it to a different or more senior role).',
-      '- Do NOT claim web-application development, database management, complex technical problems, project delivery, leadership, performance improvements, specific programming languages, cloud systems, several years of experience, metrics, or achievements unless explicitly in the source data.',
-      '- When source data is sparse, use neutral motivation and transferable strengths — not invented technical depth.',
-      '- Avoid awkward direct translations and excessive praise.',
+      '- Translate the job title faithfully into natural Hindi without changing seniority (e.g. Software Developer → "सॉफ़्टवेयर डेवलपर (Software Developer)").',
+      '- Do NOT claim व्यापक अनुभव, कई वर्षों का अनुभव, वेब अनुप्रयोगों का निर्माण, डेटाबेस प्रबंधन, जटिल तकनीकी समस्याओं का समाधान, परियोजनाओं का नेतृत्व, प्रणाली की कार्यक्षमता में सुधार, प्रोग्रामिंग भाषाओं में विशेषज्ञता, or क्लाउड/Agile अनुभव unless in SOURCE FACTS.',
+      '- When evidence is sparse, use neutral professional Hindi focused on interest, motivation, supplied education/skills, and interview availability.',
       '- Use correct Devanagari punctuation and characters.',
       ...shared,
     ].join('\n');
@@ -331,19 +351,37 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string): string {
     return [
       'ARABIC QUALITY RULES:',
       '- Write professional Modern Standard Arabic — not word-for-word English translation.',
-      '- Translate the job title faithfully while preserving meaning and seniority.',
-      '- Prefer natural phrasing such as "للتقدم لشغل وظيفة [Role]" or "للانضمام إلى فريقكم لشغل وظيفة [Role]" — avoid awkward calques like "في مسمى [Role]" or "فريقكم المتميز في مسمى".',
-      '- For the closing, prefer "أتطلع إلى فرصة لمناقشة كيف يمكنني إضافة قيمة حقيقية لفريقكم." — do NOT use "أودّ أن أتاح لي الفرصة".',
+      '- Prefer natural phrasing such as "للتقدم لشغل وظيفة [Role]" or "للانضمام إلى فريقكم لشغل وظيفة [Role]".',
+      '- Do NOT imply the candidate already works at the employer (avoid forms like "بوصفي [Role] في شركة [Company]").',
       '- Use "مع خالص التحية،" with the Arabic comma "،".',
-      '- Do NOT claim years of experience, programming languages, frameworks, databases, Agile, object-oriented programming, project leadership, architectural responsibility, system-performance improvements, major projects, metrics, or achievements unless explicitly in source data.',
-      '- When source data is limited, write a shorter honest letter — do not invent qualifications or certainty of major impact.',
-      '- Keep mixed Latin terms (Google, Java, Python, C++, CRM, email addresses) readable within Arabic sentences.',
-      '- Write entirely in Arabic — never output Hindi, English, or another language.',
+      '- For sparse facts, prefer a neutral closing such as "أتطلع إلى فرصة لمناقشة كيف يمكنني المساهمة في فريقكم." — do NOT claim "إضافة قيمة حقيقية" unless SOURCE FACTS establish that value.',
+      '- Do NOT claim خبرة واسعة، قدت مشاريع، طورت حلولاً، رفعت كفاءة الأنظمة، حسنت تجربة المستخدم، أتقن لغات برمجة متعددة، كفاءات تقنية متقدمة، or قدرات تحليلية قوية unless in SOURCE FACTS.',
+      '- Keep mixed Latin terms (Google, Java, Python, C++, CRM, emails) readable; do not reverse them.',
+      '- Write entirely in Arabic — never output Hindi or English body text.',
       ...shared,
     ].join('\n');
   }
 
-  return '';
+  const languageLabel: Partial<Record<Locale, string>> = {
+    en: 'English',
+    de: 'German',
+    es: 'Spanish',
+    fr: 'French',
+    it: 'Italian',
+    sr: 'Serbian',
+    hr: 'Croatian',
+    ru: 'Russian',
+    'pt-BR': 'Brazilian Portuguese',
+    ja: 'Japanese',
+  };
+
+  return [
+    `${(languageLabel[locale] ?? 'LOCAL').toUpperCase()} QUALITY RULES:`,
+    `- Write natural professional ${languageLabel[locale] ?? 'native'} phrasing — not a literal translation.`,
+    '- Preserve the exact job-title meaning and seniority.',
+    '- Prefer native greeting, punctuation, and closing conventions.',
+    ...shared,
+  ].join('\n');
 }
 
 function normalizeExportLine(line: string): string {
@@ -648,12 +686,18 @@ export function buildStructuredCoverLetterPrompt(options: {
   genderNote: string;
   closing: string;
   dateLine: string;
+  factSet?: CoverLetterFactSet;
   retryNote?: string;
 }): string {
   const company = options.companyName || options.fallbackCompany;
   const role = options.jobTitle || options.fallbackRole;
   const retry = options.retryNote ? `\n${options.retryNote}` : '';
-  const localeRules = buildLocaleGroundingRules(options.locale, options.jobTitle);
+  const factSet = options.factSet ?? { facts: [], isSparse: true };
+  const localeRules = buildLocaleGroundingRules(options.locale, options.jobTitle, factSet.isSparse);
+  const factsBlock = formatCoverLetterFactsForPrompt(factSet);
+  const paragraph2Hint = factSet.isSparse
+    ? 'motivation, willingness to learn/contribute, and ONLY explicitly supplied facts (do NOT invent experience or skills)'
+    : 'ONLY experience and skills that appear in SOURCE FACTS (do not invent)';
 
   return `Return ONLY valid JSON for a cover letter in ${options.languageName}.
 Candidate: ${options.displayName}
@@ -664,13 +708,15 @@ Date line: ${options.dateLine}
 Required sign-off: ${options.closing}
 The candidateName field MUST be exactly "${options.candidateName || options.displayName}".
 
+${factsBlock}
+
 JSON schema (all fields required, complete sentences only):
 {
   "dateLine": "${options.dateLine}",
   "greeting": "localized greeting to ${company}",
-  "paragraph1": "introduction and application for ${role}",
-  "paragraph2": "relevant experience and skills",
-  "paragraph3": "company motivation for ${company}",
+  "paragraph1": "introduction and application for ${role} (interest in the exact role — do not claim prior employment at ${company})",
+  "paragraph2": "${paragraph2Hint}",
+  "paragraph3": "brief company interest/motivation for ${company} without inventing impact",
   "closing": "interview availability and thank-you sentence",
   "signOff": "${options.closing}",
   "candidateName": "${options.candidateName || options.displayName}"
@@ -679,10 +725,11 @@ JSON schema (all fields required, complete sentences only):
 Rules:
 - Write every field entirely in ${options.languageName}.
 - Do not stop mid-sentence in any field.
-- paragraph3 must fully explain motivation for ${company}.
+- paragraph3 must briefly explain interest in ${company} without exaggerated claims.
 - closing must mention interview availability or thanks.
 - signOff must be "${options.closing}".
 - candidateName must be exactly "${options.candidateName || options.displayName}".
+- Prefer ~150–300 words when SOURCE FACTS are limited; never pad with invented experience.
 ${localeRules ? `\n${localeRules}` : ''}
 - Output JSON only. No markdown. No commentary.${retry}`;
 }
@@ -853,16 +900,34 @@ export async function generateStructuredCoverLetterWithRetries(options: {
   genderNote: string;
   fallbackRole: string;
   fallbackCompany: string;
+  factSet?: CoverLetterFactSet;
   generate: (attempt: number, maxTokens: number, userPrompt: string) => Promise<string>;
-}): Promise<StructuredCoverLetter> {
+}): Promise<{ letter: StructuredCoverLetter; groundingStatus: 'passed' | 'repaired' | 'fallback' }> {
   let maxTokens = coverLetterMaxTokensForLocale(options.locale);
   const retryCap = coverLetterRetryMaxTokensForLocale(options.locale);
   const signatureName = options.candidateName || options.displayName;
   const dateLine = localizedDateLine(options.locale);
+  const factSet: CoverLetterFactSet = options.factSet ?? { facts: [], isSparse: true };
+
+  const tryParseAndValidate = (raw: string): StructuredCoverLetter | null => {
+    const parsed = parseStructuredCoverLetterJson(raw);
+    if (!parsed) return null;
+    const validation = validateStructuredCoverLetter(
+      parsed,
+      options.locale,
+      signatureName,
+      options.companyName,
+      options.closing,
+    );
+    return validation.valid ? parsed : null;
+  };
+
+  let structurallyValid: StructuredCoverLetter | null = null;
+  let assembledForGrounding = '';
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const retryNote = attempt > 0
-      ? 'Previous JSON was invalid or incomplete. Return complete JSON with full paragraph3, closing, signOff, and candidateName. Do not stop mid-sentence.'
+      ? 'Previous JSON was invalid or incomplete. Return complete JSON with full paragraph3, closing, signOff, and candidateName. Do not stop mid-sentence. Do not invent unsupported experience.'
       : undefined;
     const userPrompt = buildStructuredCoverLetterPrompt({
       languageName: options.languageName,
@@ -878,39 +943,85 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       genderNote: options.genderNote,
       closing: options.closing,
       dateLine,
+      factSet,
       retryNote,
     });
 
     const raw = await options.generate(attempt, maxTokens, userPrompt);
-    const parsed = parseStructuredCoverLetterJson(raw);
+    const parsed = tryParseAndValidate(raw);
     if (!parsed) {
       if (maxTokens < retryCap) maxTokens = retryCap;
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[Cover Letter Structured]', {
+          locale: options.locale,
+          attempt,
+          maxTokens,
+          valid: false,
+        });
+      }
       continue;
     }
 
-    const validation = validateStructuredCoverLetter(
-      parsed,
-      options.locale,
-      signatureName,
-      options.companyName,
-      options.closing,
-    );
-
-    if (validation.valid) {
-      return parsed;
+    structurallyValid = parsed;
+    assembledForGrounding = assembleCoverLetterContent(parsed);
+    const grounding = validateCoverLetterGrounding(assembledForGrounding, factSet);
+    if (grounding.valid) {
+      return { letter: parsed, groundingStatus: 'passed' };
     }
 
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('[Cover Letter Structured]', {
-        locale: options.locale,
-        attempt,
-        maxTokens,
-        valid: false,
-        errors: validation.errors,
-      });
+    // One automatic grounding repair
+    const repairPrompt = `${buildStructuredCoverLetterPrompt({
+      languageName: options.languageName,
+      locale: options.locale,
+      displayName: options.displayName,
+      candidateName: signatureName,
+      jobTitle: options.jobTitle,
+      companyName: options.companyName,
+      fallbackRole: options.fallbackRole,
+      fallbackCompany: options.fallbackCompany,
+      toneDesc: options.toneDesc,
+      variantNote: options.variantNote,
+      genderNote: options.genderNote,
+      closing: options.closing,
+      dateLine,
+      factSet,
+      retryNote: buildGroundingRepairUserNote(factSet, grounding.violations, assembledForGrounding),
+    })}`;
+
+    const repairedRaw = await options.generate(attempt + 10, retryCap, repairPrompt);
+    const repaired = tryParseAndValidate(repairedRaw);
+    if (repaired) {
+      const repairedText = assembleCoverLetterContent(repaired);
+      const repairedGrounding = validateCoverLetterGrounding(repairedText, factSet);
+      if (repairedGrounding.valid) {
+        return { letter: repaired, groundingStatus: 'repaired' };
+      }
     }
 
-    if (maxTokens < retryCap) maxTokens = retryCap;
+    // Deterministic safe fallback — never expose ungrounded inventing content
+    const fallback = buildDeterministicSparseCoverLetter(options.locale, {
+      candidateName: signatureName,
+      jobTitle: options.jobTitle || options.fallbackRole,
+      companyName: options.companyName || options.fallbackCompany,
+      factSet,
+      dateLine,
+    });
+    // Soft-align signOff with locale closing preference
+    fallback.signOff = options.closing || fallback.signOff;
+    return { letter: fallback, groundingStatus: 'fallback' };
+  }
+
+  // Structural generation failed entirely — still return grounded fallback rather than hard error when possible
+  if (structurallyValid) {
+    const fallback = buildDeterministicSparseCoverLetter(options.locale, {
+      candidateName: signatureName,
+      jobTitle: options.jobTitle || options.fallbackRole,
+      companyName: options.companyName || options.fallbackCompany,
+      factSet,
+      dateLine,
+    });
+    fallback.signOff = options.closing || fallback.signOff;
+    return { letter: fallback, groundingStatus: 'fallback' };
   }
 
   throw new CoverLetterGenerationIncompleteError();

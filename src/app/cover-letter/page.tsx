@@ -16,8 +16,14 @@ import {
   shouldApplyCoverLetterGenerationResult,
   type ActiveCoverLetterRequest,
   type CoverLetterGenerationPhase,
+  type CoverLetterGroundingStatus,
 } from '@/lib/cover-letter-flow';
-import { coverLetterAiUnavailable, coverLetterStaleContent, coverLetterWrongLanguage } from '@/lib/cover-letter-messages';
+import {
+  coverLetterAiUnavailable,
+  coverLetterGroundingFailed,
+  coverLetterStaleContent,
+  coverLetterWrongLanguage,
+} from '@/lib/cover-letter-messages';
 import { copyArabicCoverLetterPdfDiagnosticsToClipboard } from '@/lib/cover-letter-arabic-pdf';
 import type { CoverLetterData, Tone } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -57,20 +63,35 @@ async function callGenerateAI(params: {
   freeUserId?: string;
   action?: string;
   signal?: AbortSignal;
-}): Promise<{ content: string; status: number }> {
+  experienceEntries?: unknown[];
+  skills?: string[];
+  education?: unknown[];
+  languages?: unknown[];
+  certifications?: string[];
+  summary?: string;
+  jobDescription?: string;
+}): Promise<{ content: string; status: number; groundingStatus?: CoverLetterGroundingStatus }> {
   const ownsController = !params.signal;
   const controller = ownsController ? new AbortController() : null;
-  const timer = ownsController ? setTimeout(() => controller!.abort(), 30000) : null;
+  const timer = ownsController ? setTimeout(() => controller!.abort(), 45000) : null;
   const signal = params.signal ?? controller!.signal;
   try {
-    const { data, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
+    const { data, response: res } = await apiFetch<{
+      result?: string;
+      error?: string;
+      groundingStatus?: CoverLetterGroundingStatus;
+    }>('/api/generate', {
       body: { action: params.action || 'cover-letter-gen', ...params },
       signal,
     });
     if (!res.ok || data.error) {
       throw Object.assign(new Error(data.error || 'AI service error'), { status: res.status });
     }
-    return { content: data.result as string, status: res.status };
+    return {
+      content: data.result as string,
+      status: res.status,
+      groundingStatus: data.groundingStatus,
+    };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -87,6 +108,7 @@ export default function CoverLetterPage() {
   const [hasGenerated, setHasGenerated] = useState(false);
   const [contentLocale, setContentLocale] = useState<Locale | null>(null);
   const [generationPhase, setGenerationPhase] = useState<CoverLetterGenerationPhase>('idle');
+  const [groundingStatus, setGroundingStatus] = useState<CoverLetterGroundingStatus>('unknown');
   const [showAiTooltip, setShowAiTooltip] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -186,12 +208,14 @@ export default function CoverLetterPage() {
     contentLocale,
     selectedLocale,
     generationPhase,
+    groundingStatus,
   ) ? cl.content : '';
   const downloadsAllowed = isCoverLetterDownloadAllowed(
     cl.content,
     contentLocale,
     selectedLocale,
     generationPhase,
+    groundingStatus,
   );
   const previewIsRtl = selectedLocale === 'ar';
   const isGenerationBusy = isGenerating || isRegenerating;
@@ -231,6 +255,7 @@ export default function CoverLetterPage() {
     activeGenerationRef.current = { requestId, locale: requestedLocale };
 
     setGenerationPhase('loading');
+    setGroundingStatus('unknown');
     if (mode === 'generate') setIsGenerating(true);
     else setIsRegenerating(true);
 
@@ -238,7 +263,7 @@ export default function CoverLetterPage() {
     const fullName = getFullName();
 
     try {
-      const { content } = await callGenerateAI({
+      const { content, groundingStatus: responseGrounding } = await callGenerateAI({
         action,
         jobTitle: cl.jobTitle,
         companyName: cl.companyName,
@@ -249,6 +274,12 @@ export default function CoverLetterPage() {
         personalName: fullName || currentCv?.personal?.fullName || '',
         personalEmail: currentCv?.personal?.email || '',
         personalPhone: currentCv?.personal?.phone || '',
+        experienceEntries: currentCv?.experience ?? [],
+        skills: currentCv?.skills ?? [],
+        education: currentCv?.education ?? [],
+        languages: currentCv?.languages ?? [],
+        certifications: currentCv?.certifications ?? [],
+        summary: currentCv?.summary ?? '',
         proToken,
         freeUserId: isCurrentPro ? undefined : getAppUserId(),
         signal: abortController.signal,
@@ -261,12 +292,21 @@ export default function CoverLetterPage() {
       const sanitized = sanitizeCoverLetterContent(content);
       if (!contentMatchesRequestedLocale(sanitized, requestedLocale)) {
         setGenerationPhase('error');
+        setGroundingStatus('failed');
         toast.error(coverLetterWrongLanguage(requestedLocale));
         return;
       }
 
+      const nextGrounding: CoverLetterGroundingStatus =
+        responseGrounding === 'passed' ||
+        responseGrounding === 'repaired' ||
+        responseGrounding === 'fallback'
+          ? responseGrounding
+          : 'passed';
+
       setCl(prev => ({ ...prev, content: sanitized, updatedAt: new Date().toISOString() }));
       setContentLocale(requestedLocale);
+      setGroundingStatus(nextGrounding);
       setGenerationPhase('success');
       setHasGenerated(true);
 
@@ -296,7 +336,13 @@ export default function CoverLetterPage() {
       } else {
         if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Generation error:', err);
         setGenerationPhase('error');
-        toast.error(coverLetterAiUnavailable(requestedLocale));
+        setGroundingStatus('failed');
+        const msg = String((err as Error)?.message ?? '');
+        if (/unsupported information|grounding|could not be used safely/i.test(msg)) {
+          toast.error(coverLetterGroundingFailed(requestedLocale));
+        } else {
+          toast.error(coverLetterAiUnavailable(requestedLocale));
+        }
       }
     } finally {
       if (activeGenerationRef.current?.requestId === requestId) {
