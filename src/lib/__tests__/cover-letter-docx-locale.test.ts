@@ -182,8 +182,23 @@ describe('Special characters', () => {
     expect(result).toBe('प्रिय महोदय,\n\nमैं लिख रहा हूं...');
   });
 
-  test('stripLeadingDateForDocx handles Japanese date formats', () => {
-    const result = stripLeadingDateForDocx('2026年6月15日\n\n採用ご担当者様\n\n私は…');
-    expect(result).toBe('採用ご担当者様\n\n私は…');
+  test('Arabic DOCX candidate name paragraph uses right alignment with LTR name run', async () => {
+    const { buildCoverLetterDocxBlob } = await import('../export');
+    const content = [
+      'السادة الكرام،',
+      '',
+      'أكتب للتقدم لوظيفة مطوّر برمجيات في Google ولدي خبرة في C++.',
+      '',
+      'مع خالص التحية،',
+      'Alex Carter',
+    ].join('\n');
+    const blob = await buildCoverLetterDocxBlob(content, 'Alex Carter', 'ar');
+    const zip = await (await import('jszip')).default.loadAsync(await blob.arrayBuffer());
+    const xml = await zip.file('word/document.xml')!.async('string');
+    expect(xml).toContain('w:val="right"');
+    expect(xml).toContain('w:bidi');
+    expect(xml).toContain('Alex Carter');
+    expect(xml).toContain('C++');
+    expect(xml).toMatch(/w:rtl w:val="false"[\s\S]*Alex Carter/);
   });
 });

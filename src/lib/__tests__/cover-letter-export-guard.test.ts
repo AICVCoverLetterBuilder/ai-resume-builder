@@ -299,7 +299,7 @@ describe('cover letter export guard integration', () => {
     }));
     vi.doMock('@react-pdf/renderer', () => ({
       pdf: vi.fn(() => ({
-        toBlob: vi.fn(async () => new Blob(['pdf'], { type: 'application/pdf' })),
+        toBlob: vi.fn(async () => new Blob(['%PDF-1.4 english mock content'], { type: 'application/pdf' })),
       })),
     }));
     vi.doMock('react', () => ({
@@ -351,7 +351,7 @@ describe('cover letter export guard integration', () => {
       saveFileViaPlatform: vi.fn(async () => ({ saved: true, fileName: 'كوفر ليتر.pdf', destination: 'downloads' })),
     }));
     vi.doMock('../cover-letter-arabic-pdf', () => ({
-      buildArabicCoverLetterPdfBlob: vi.fn(async () => new Blob(['pdf'], { type: 'application/pdf' })),
+      buildArabicCoverLetterPdfBlob: vi.fn(async () => new Blob(['%PDF-1.4 arabic mock content'], { type: 'application/pdf' })),
     }));
 
     const { exportCoverLetterToPDF } = await import('../export');
@@ -369,7 +369,7 @@ describe('cover letter export guard integration', () => {
     }));
     vi.doMock('@react-pdf/renderer', () => ({
       pdf: vi.fn(() => ({
-        toBlob: vi.fn(async () => new Blob(['pdf'], { type: 'application/pdf' })),
+        toBlob: vi.fn(async () => new Blob(['%PDF-1.4 english mock content'], { type: 'application/pdf' })),
       })),
     }));
     vi.doMock('react', () => ({

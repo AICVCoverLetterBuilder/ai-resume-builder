@@ -300,7 +300,10 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string): string {
   const role = jobTitle.trim() || 'the role';
   const shared = [
     '- Use ONLY facts from the candidate CV/profile, job description fields, and user inputs provided in this request.',
+    '- Every experience, skill, tool, programming language, responsibility, achievement, leadership claim, number, or year of experience MUST be directly supported by the supplied CV, job description, or user input.',
     '- Do NOT invent revenue increases, exceeded targets, major contracts, new-market expansion, leadership responsibilities, years of experience, percentages, numeric achievements, tools, or systems not mentioned in the source data.',
+    '- Do NOT claim Java, Python, C++, cloud systems, Agile, continuous integration, team leadership, complex algorithms, large projects, or performance improvements unless explicitly present in the source data.',
+    '- When source data is limited, write a shorter honest letter rather than inventing qualifications.',
     '- Mention measurable achievements ONLY when explicitly present in the source data; otherwise use honest neutral wording about responsibilities and skills.',
     '- Keep company praise brief, specific, and relevant — avoid repetitive or exaggerated compliments.',
     '- Mention only the two or three strongest qualifications relevant to the role.',
@@ -315,7 +318,8 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string): string {
       'HINDI QUALITY RULES:',
       '- Write natural, professional Hindi — not a literal English translation.',
       '- Use formal language appropriate for a real job application.',
-      '- Translate the job title faithfully into natural Hindi without changing seniority.',
+      '- Translate the job title faithfully into natural Hindi without changing seniority (e.g. "Software Developer" → "सॉफ़्टवेयर डेवलपर (Software Developer)" — do NOT change it to a different or more senior role).',
+      '- Do NOT claim several years of experience, high-performance applications, complex algorithms, leadership of multi-level projects, Python/Java/cloud expertise, or significant performance improvements unless explicitly in the source data.',
       '- Avoid awkward direct translations and excessive praise.',
       '- Use correct Devanagari punctuation and characters.',
       ...shared,
@@ -327,8 +331,11 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string): string {
       'ARABIC QUALITY RULES:',
       '- Write professional Modern Standard Arabic — not word-for-word English translation.',
       '- Translate the job title faithfully while preserving meaning and seniority.',
+      '- Use natural Arabic sentence structure for applications, e.g. prefer "يسعدني تقديم طلبي للانضمام إلى فريقكم في شركة [Company] لشغل وظيفة [Role]" rather than awkward calques.',
+      '- For the closing, prefer "أتطلع إلى فرصة لمناقشة كيف يمكنني إضافة قيمة حقيقية لفريقكم" — do NOT use incorrect forms such as "أودّ أن أتاح لي الفرصة".',
+      '- Use Arabic punctuation, including "،" (Arabic comma), not the English comma where appropriate.',
       '- Use a professional Arabic greeting and closing.',
-      '- Keep mixed Latin terms (Google, CRM, email addresses) readable within Arabic sentences.',
+      '- Keep mixed Latin terms (Google, Java, Python, C++, CRM, email addresses) readable within Arabic sentences.',
       '- Write entirely in Arabic — never output Hindi, English, or another language.',
       ...shared,
     ].join('\n');

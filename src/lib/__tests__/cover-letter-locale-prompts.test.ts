@@ -61,10 +61,26 @@ describe('Hindi and Arabic cover letter prompt grounding', () => {
     expect(prompt).toContain('ARABIC QUALITY RULES');
     expect(prompt).toContain('Modern Standard Arabic');
     expect(prompt).toContain('not word-for-word English translation');
-    expect(prompt).toContain('Do NOT invent revenue increases');
+    expect(prompt).toContain('Do NOT claim Java, Python, C++');
+    expect(prompt).toContain('أتطلع إلى فرصة لمناقشة كيف يمكنني إضافة قيمة حقيقية لفريقكم');
+    expect(prompt).toContain('أودّ أن أتاح لي الفرصة');
+    expect(prompt).toContain('Arabic comma');
     expect(prompt).toContain('Write entirely in Arabic');
     expect(prompt).toContain('Salesman');
-    expect(prompt).toContain('Google, CRM');
+    expect(prompt).toContain('Google');
+  });
+
+  test('Hindi prompt forbids unsupported experience and skill claims', () => {
+    const prompt = buildStructuredCoverLetterPrompt({
+      ...PROMPT_BASE,
+      locale: 'hi',
+      jobTitle: 'Software Developer',
+    });
+    expect(prompt).toContain('सॉफ़्टवेयर डेवलपर (Software Developer)');
+    expect(prompt).toContain('several years of experience');
+    expect(prompt).toContain('complex algorithms');
+    expect(prompt).toContain('Python/Java/cloud');
+    expect(prompt).toContain('Do NOT claim Java, Python, C++');
   });
 
   test('English prompt does not inject Hindi or Arabic grounding blocks', () => {

@@ -23,6 +23,7 @@ export { buildCorporateNavyPagedPdfBlob } from './corporate-navy-pdf-renderer';
 import { buildModernMinimalPagedPdfBlob } from './modern-minimal-pdf-renderer';
 export { buildModernMinimalPagedPdfBlob } from './modern-minimal-pdf-renderer';
 import { buildCleanSimplePagedPdfBlob } from './clean-simple-pdf-renderer';
+import { splitMixedArabicDocxRuns } from './cover-letter-docx-runs';
 export { buildCleanSimplePagedPdfBlob } from './clean-simple-pdf-renderer';
 import { buildContemporaryBoldPagedPdfBlob } from './contemporary-bold-pdf-renderer';
 export { buildContemporaryBoldPagedPdfBlob } from './contemporary-bold-pdf-renderer';
@@ -9785,6 +9786,11 @@ async function injectAndAwaitNotoFonts(): Promise<() => void> {
   };
 }
 
+/** Shared Noto font injection for html2canvas capture paths (CV + cover letter). */
+export async function ensureNotoFontsForHtmlCapture(): Promise<() => void> {
+  return injectAndAwaitNotoFonts();
+}
+
 // ─── PDF Export ──────────────────────────────────────────────────────────────
 
 export function isCanvasSliceEffectivelyBlank(canvas: HTMLCanvasElement, offsetY: number, sliceHeight: number): boolean {
@@ -16280,7 +16286,14 @@ export async function exportCoverLetterToPDF(
     if (renderErr instanceof Error && renderErr.stack) {
       console.error('[Cover Letter PDF] Stack:', renderErr.stack);
     }
+    if (renderErr && typeof renderErr === 'object' && 'stage' in renderErr) {
+      console.error('[Cover Letter PDF] Arabic capture stage:', (renderErr as { stage?: string }).stage);
+    }
     throw renderErr;
+  }
+
+  if (!blob || blob.size < 16) {
+    throw new Error(`[Cover Letter PDF] Generated blob is empty or too small (${blob?.size ?? 0} bytes)`);
   }
 
   return await saveFileViaPlatform(blob, `${fileName}.pdf`, 'application/pdf');
@@ -16396,6 +16409,29 @@ export async function buildCoverLetterDocxBlob(
       paragraphs.push(new Paragraph({ spacing: { after: 160 }, children: [] }));
       continue;
     }
+
+    if (isRTL) {
+      const runs = splitMixedArabicDocxRuns(trimmed).map(
+        (spec) =>
+          new TextRun({
+            text: spec.text,
+            font: fontFamily,
+            size: 22,
+            color: '1F2937',
+            rightToLeft: spec.rightToLeft,
+          }),
+      );
+      paragraphs.push(
+        new Paragraph({
+          children: runs.length ? runs : [new TextRun({ text: trimmed, font: fontFamily, size: 22, color: '1F2937', rightToLeft: false })],
+          spacing: { after: 160 },
+          alignment: AlignmentType.RIGHT,
+          bidirectional: true,
+        }),
+      );
+      continue;
+    }
+
     paragraphs.push(
       new Paragraph({
         children: [new TextRun({
