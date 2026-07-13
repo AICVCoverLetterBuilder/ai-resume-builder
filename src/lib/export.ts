@@ -23,7 +23,7 @@ export { buildCorporateNavyPagedPdfBlob } from './corporate-navy-pdf-renderer';
 import { buildModernMinimalPagedPdfBlob } from './modern-minimal-pdf-renderer';
 export { buildModernMinimalPagedPdfBlob } from './modern-minimal-pdf-renderer';
 import { buildCleanSimplePagedPdfBlob } from './clean-simple-pdf-renderer';
-import { splitMixedArabicDocxRuns } from './cover-letter-docx-runs';
+import { formatArabicDocxLineForRtlParagraph } from './cover-letter-docx-runs';
 export { buildCleanSimplePagedPdfBlob } from './clean-simple-pdf-renderer';
 import { buildContemporaryBoldPagedPdfBlob } from './contemporary-bold-pdf-renderer';
 export { buildContemporaryBoldPagedPdfBlob } from './contemporary-bold-pdf-renderer';
@@ -16254,6 +16254,10 @@ export async function exportCoverLetterToPDF(
   // Final safety net: strip any diagnostic schema/version marker (e.g. a legacy
   // saved draft) so it never appears in the exported PDF text.
   const sanitizedContent = sanitizeCoverLetterContent(content);
+  if (locale === 'ar') {
+    const { beginArabicCoverLetterPdfExportTrace } = await import('./cover-letter-arabic-pdf-diagnostics');
+    beginArabicCoverLetterPdfExportTrace();
+  }
   // Dynamic import so the heavy @react-pdf/renderer bundle is only loaded on demand
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let pdfFn: any, createElementFn: any, CoverLetterPDFDocumentComp: any;
@@ -16294,6 +16298,22 @@ export async function exportCoverLetterToPDF(
 
   if (!blob || blob.size < 16) {
     throw new Error(`[Cover Letter PDF] Generated blob is empty or too small (${blob?.size ?? 0} bytes)`);
+  }
+
+  if (locale === 'ar') {
+    const { recordArabicCoverLetterPdfStage, updateArabicCoverLetterPdfMetrics } = await import(
+      './cover-letter-arabic-pdf-diagnostics'
+    );
+    recordArabicCoverLetterPdfStage('platform_save_started');
+    try {
+      const result = await saveFileViaPlatform(blob, `${fileName}.pdf`, 'application/pdf');
+      updateArabicCoverLetterPdfMetrics({ platformSaveResult: result.result });
+      recordArabicCoverLetterPdfStage('platform_save_completed', result.result);
+      return result;
+    } catch (saveErr) {
+      recordArabicCoverLetterPdfStage('platform_save_completed', 'failed');
+      throw saveErr;
+    }
   }
 
   return await saveFileViaPlatform(blob, `${fileName}.pdf`, 'application/pdf');
@@ -16411,7 +16431,7 @@ export async function buildCoverLetterDocxBlob(
     }
 
     if (isRTL) {
-      const runs = splitMixedArabicDocxRuns(trimmed).map(
+      const runs = formatArabicDocxLineForRtlParagraph(trimmed).map(
         (spec) =>
           new TextRun({
             text: spec.text,

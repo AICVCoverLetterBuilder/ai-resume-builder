@@ -199,6 +199,6 @@ describe('Special characters', () => {
     expect(xml).toContain('w:bidi');
     expect(xml).toContain('Alex Carter');
     expect(xml).toContain('C++');
-    expect(xml).toMatch(/w:rtl w:val="false"[\s\S]*Alex Carter/);
+    expect(xml).toMatch(/w:rtl w:val="false"[\s\S]*\u200F?Alex Carter/);
   });
 });

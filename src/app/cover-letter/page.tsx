@@ -18,6 +18,7 @@ import {
   type CoverLetterGenerationPhase,
 } from '@/lib/cover-letter-flow';
 import { coverLetterAiUnavailable, coverLetterStaleContent, coverLetterWrongLanguage } from '@/lib/cover-letter-messages';
+import { copyArabicCoverLetterPdfDiagnosticsToClipboard } from '@/lib/cover-letter-arabic-pdf';
 import type { CoverLetterData, Tone } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -92,6 +93,7 @@ export default function CoverLetterPage() {
   const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const [isPdfExporting, setIsPdfExporting] = useState(false);
   const [isWordExporting, setIsWordExporting] = useState(false);
+  const [showArabicPdfDiagnostics, setShowArabicPdfDiagnostics] = useState(false);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
   const activeGenerationRef = useRef<ActiveCoverLetterRequest | null>(null);
   const generationAbortRef = useRef<AbortController | null>(null);
@@ -346,6 +348,7 @@ export default function CoverLetterPage() {
     try {
       await exportCoverLetterToPDF(getExportCandidateName(), previewContent, filename, locale, cl.companyName);
       incrementDownloads('cl');
+      setShowArabicPdfDiagnostics(false);
     } catch (err: unknown) {
       if (err instanceof CoverLetterExportIncompleteError) {
         toast.error('Cover letter is incomplete. Please regenerate before exporting.');
@@ -353,6 +356,7 @@ export default function CoverLetterPage() {
       }
       if (err instanceof Error && err.name === 'SaveCancelledError') return;
       if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter PDF export] failed:', err);
+      if (selectedLocale === 'ar') setShowArabicPdfDiagnostics(true);
       toast.error(t.cv.pdfExportFailed);
     } finally {
       setIsPdfExporting(false);
@@ -591,6 +595,7 @@ export default function CoverLetterPage() {
                 ) : (
                   <div
                     id="cl-preview"
+                    data-cl-arabic-preview={previewIsRtl ? 'true' : undefined}
                     dir={previewIsRtl ? 'rtl' : 'ltr'}
                     className={cn(
                       'min-h-[400px] whitespace-pre-line rounded-lg bg-white p-6 text-sm text-gray-800 shadow-inner border border-gray-100 relative',
@@ -691,6 +696,18 @@ export default function CoverLetterPage() {
                     <p className="mt-1 text-[10px] text-muted-foreground italic">
                       {t.coverLetter.aiDisclaimer}
                     </p>
+                    {selectedLocale === 'ar' && showArabicPdfDiagnostics && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const ok = await copyArabicCoverLetterPdfDiagnosticsToClipboard();
+                          toast[ok ? 'success' : 'error'](ok ? 'PDF diagnostics copied' : 'Could not copy diagnostics');
+                        }}
+                        className="mt-2 text-xs text-amber-700 dark:text-amber-400 underline"
+                      >
+                        Copy PDF diagnostics
+                      </button>
+                    )}
                   </>
                 )}
               </div>

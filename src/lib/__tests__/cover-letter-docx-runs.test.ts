@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  formatArabicDocxLineForRtlParagraph,
   lineLooksLatinDominant,
   splitMixedArabicDocxRuns,
 } from '../cover-letter-docx-runs';
@@ -13,10 +14,11 @@ describe('Arabic cover letter DOCX mixed-direction runs', () => {
     expect(cppRun!.text).toContain('C++');
   });
 
-  test('Latin candidate name line is LTR-dominant', () => {
-    expect(lineLooksLatinDominant('Alex Carter')).toBe(true);
-    const runs = splitMixedArabicDocxRuns('Alex Carter');
-    expect(runs.every((r) => !r.rightToLeft)).toBe(true);
+  test('Latin candidate name uses RLM anchor for RTL paragraph', () => {
+    const runs = formatArabicDocxLineForRtlParagraph('Alex Carter');
+    expect(runs[0].rightToLeft).toBe(false);
+    expect(runs[0].text.startsWith('\u200F')).toBe(true);
+    expect(runs[0].text).toContain('Alex Carter');
   });
 
   test('Arabic clause remains RTL run', () => {

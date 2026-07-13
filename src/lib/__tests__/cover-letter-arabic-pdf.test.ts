@@ -1,7 +1,63 @@
 // @vitest-environment jsdom
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
+import {
+  analyzeCanvasPixels,
+  applyOpaqueCaptureStyles,
+  forceCloneCaptureStyles,
+} from '../cover-letter-arabic-pdf-capture';
 
-describe('Arabic cover letter PDF Android-safe capture', () => {
+describe('Arabic cover letter PDF capture helpers', () => {
+  test('applyOpaqueCaptureStyles sets opacity to 1', () => {
+    const el = document.createElement('div');
+    el.style.opacity = '0.01';
+    applyOpaqueCaptureStyles(el, 794, 1123);
+    expect(el.style.opacity).toBe('1');
+    expect(el.style.visibility).toBe('visible');
+    expect(el.style.display).toBe('block');
+    expect(el.style.width).toBe('794px');
+    expect(el.style.height).toBe('1123px');
+  });
+
+  test('forceCloneCaptureStyles restores opacity on cloned ancestors', () => {
+    const doc = document.implementation.createHTMLDocument('clone');
+    const parent = doc.createElement('div');
+    parent.style.opacity = '0.01';
+    const root = doc.createElement('div');
+    root.setAttribute('data-cl-arabic-export-root', 'true');
+    root.style.opacity = '0.01';
+    parent.appendChild(root);
+    doc.body.appendChild(parent);
+    forceCloneCaptureStyles(doc, '[data-cl-arabic-export-root="true"]');
+    expect(root.style.opacity).toBe('1');
+    expect(parent.style.opacity).toBe('1');
+  });
+
+  test('analyzeCanvasPixels detects non-white content', () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 200;
+    canvas.height = 200;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 200, 200);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(10, 10, 80, 20);
+    const analysis = analyzeCanvasPixels(canvas);
+    expect(analysis.ratio).toBeGreaterThan(0.01);
+  });
+
+  test('blank white canvas has near-zero non-white ratio', () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 100;
+    canvas.height = 100;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 100, 100);
+    const analysis = analyzeCanvasPixels(canvas);
+    expect(analysis.ratio).toBeLessThan(0.001);
+  });
+});
+
+describe('Arabic cover letter PDF export integration', () => {
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
       cb(0);
@@ -12,19 +68,25 @@ describe('Arabic cover letter PDF Android-safe capture', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.resetModules();
-    document.querySelectorAll('[data-cl-arabic-pdf-wrapper]').forEach((el) => el.remove());
+    document.querySelectorAll('[data-cl-arabic-pdf-mount]').forEach((el) => el.remove());
+    document.querySelectorAll('[data-cl-arabic-pdf-overlay]').forEach((el) => el.remove());
   });
 
-  test('buildArabicCoverLetterPdfBlob attaches measurable container and returns non-empty PDF blob', async () => {
+  test('buildArabicCoverLetterPdfBlob returns validated PDF with opaque capture', async () => {
     const html2canvasMock = vi.fn(async () => {
       const canvas = document.createElement('canvas');
-      Object.defineProperty(canvas, 'width', { value: 1588 });
-      Object.defineProperty(canvas, 'height', { value: 2246 });
-      canvas.getContext = () =>
-        ({
-          getImageData: () => ({ data: new Uint8ClampedArray([0, 0, 0, 255]) }),
-        }) as unknown as CanvasRenderingContext2D;
-      canvas.toDataURL = () => 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBD';
+      canvas.width = 1200;
+      canvas.height = 1600;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 1200, 1600);
+      ctx.fillStyle = '#111827';
+      ctx.font = '16px sans-serif';
+      for (let y = 40; y < 300; y += 24) {
+        ctx.fillText('Arabic export validation line content', 40, y);
+      }
+      canvas.toDataURL = () =>
+        `data:image/png;base64,${'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='.repeat(4)}`;
       return canvas;
     });
 
@@ -33,108 +95,61 @@ describe('Arabic cover letter PDF Android-safe capture', () => {
       jsPDF: vi.fn(() => ({
         addImage: vi.fn(),
         addPage: vi.fn(),
-        output: vi.fn(() => new Blob([`%PDF-1.4 ${'0'.repeat(520)}`], { type: 'application/pdf' })),
+        output: vi.fn(() => new Blob([`%PDF-1.4 ${'0'.repeat(600)}`], { type: 'application/pdf' })),
       })),
     }));
     vi.doMock('../export', async (importOriginal) => {
       const actual = await importOriginal<typeof import('../export')>();
-      return {
-        ...actual,
-        ensureNotoFontsForHtmlCapture: vi.fn(async () => () => undefined),
-      };
+      return { ...actual, ensureNotoFontsForHtmlCapture: vi.fn(async () => () => undefined) };
     });
 
     const { buildArabicCoverLetterPdfBlob, getArabicCoverLetterPdfDiagnostics } = await import(
       '../cover-letter-arabic-pdf'
     );
-
     const content =
-      'أليكس كارتر\n\n12 يوليو 2026\n\nالسادة الكرام،\n\nأكتب للتقدم لوظيفة مطوّر برمجيات في Google.\n\nساعدت الفريق في المهام اليومية.\n\nأقدر التزام الشركة.\n\nأتطلع إلى فرصة لمناقشة كيف يمكنني إضافة قيمة حقيقية لفريقكم.\n\nمع خالص التحية،\nAlex Carter';
+      'أليكس كارتر\n\n12 يوليو 2026\n\nالسادة الكرام،\n\nأكتب للتقدم لوظيفة مطوّر برمجيات في Google.\n\nمع خالص التحية،\nAlex Carter';
 
     const blob = await buildArabicCoverLetterPdfBlob('Alex Carter', content, 'ar');
-    expect(blob.size).toBeGreaterThan(100);
     expect(blob.type).toBe('application/pdf');
+    expect(blob.size).toBeGreaterThan(100);
 
     const stages = getArabicCoverLetterPdfDiagnostics().map((d) => d.stage);
-    expect(stages).toContain('container_attached');
-    expect(stages).toContain('container_measured');
-    expect(stages).toContain('html2canvas_completed');
-    expect(stages).toContain('blob_validated');
-    expect(stages.indexOf('cleanup_completed')).toBeGreaterThan(stages.indexOf('blob_validated'));
+    expect(stages).toContain('export_root_attached');
+    expect(stages).toContain('canvas_pixel_validation_completed');
+    expect(stages).toContain('pdf_blob_validated');
+    expect(stages.indexOf('cleanup_completed')).toBeGreaterThan(stages.indexOf('pdf_blob_validated'));
 
-    expect(html2canvasMock).toHaveBeenCalled();
     const captureTarget = html2canvasMock.mock.calls[0][0] as HTMLElement;
-    expect(captureTarget.getAttribute('data-cl-arabic-pdf')).toBe('true');
-    expect(captureTarget.getAttribute('dir')).toBe('rtl');
-    expect(document.querySelector('[data-cl-arabic-pdf-wrapper]')).toBeNull();
+    expect(getComputedStyle(captureTarget).opacity).toBe('1');
   });
 
-  test('html2canvas failure surfaces export-specific error with stage', async () => {
+  test('blank canvas throws blank_canvas error', async () => {
     vi.doMock('html2canvas', () => ({
       default: vi.fn(async () => {
-        throw new Error('clone failed');
+        const canvas = document.createElement('canvas');
+        canvas.width = 400;
+        canvas.height = 400;
+        const ctx = canvas.getContext('2d')!;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 400, 400);
+        canvas.toDataURL = () => 'data:image/png;base64,abc';
+        return canvas;
       }),
     }));
     vi.doMock('jspdf', () => ({ jsPDF: vi.fn() }));
     vi.doMock('../export', async (importOriginal) => {
       const actual = await importOriginal<typeof import('../export')>();
-      return {
-        ...actual,
-        ensureNotoFontsForHtmlCapture: vi.fn(async () => () => undefined),
-      };
+      return { ...actual, ensureNotoFontsForHtmlCapture: vi.fn(async () => () => undefined) };
     });
 
     const { buildArabicCoverLetterPdfBlob, CoverLetterArabicPdfExportError } = await import(
       '../cover-letter-arabic-pdf'
     );
-
     await expect(
-      buildArabicCoverLetterPdfBlob(
-        'Alex',
-        'مرحبا بكم في هذه الرسالة الطويلة بما يكفي للاختبار والتحقق من المحتوى العربي.',
-        'ar',
-      ),
+      buildArabicCoverLetterPdfBlob('Alex', 'مرحبا بكم في هذه الرسالة الطويلة بما يكفي للاختبار والتحقق.', 'ar'),
+    ).rejects.toMatchObject({ code: 'blank_canvas' });
+    await expect(
+      buildArabicCoverLetterPdfBlob('Alex', 'مرحبا بكم في هذه الرسالة الطويلة بما يكفي للاختبار والتحقق.', 'ar'),
     ).rejects.toBeInstanceOf(CoverLetterArabicPdfExportError);
-  });
-
-  test('cleanup happens only after capture completes', async () => {
-    const appendSpy = vi.spyOn(document.body, 'appendChild');
-    const removeSpy = vi.spyOn(HTMLElement.prototype, 'remove');
-
-    vi.doMock('html2canvas', () => ({
-      default: vi.fn(async (target: HTMLElement) => {
-        expect(document.body.contains(target.closest('[data-cl-arabic-pdf-wrapper]')!)).toBe(true);
-        const canvas = document.createElement('canvas');
-        Object.defineProperty(canvas, 'width', { value: 1200 });
-        Object.defineProperty(canvas, 'height', { value: 1600 });
-        canvas.toDataURL = () => 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBD';
-        return canvas;
-      }),
-    }));
-    vi.doMock('jspdf', () => ({
-      jsPDF: vi.fn(() => ({
-        addImage: vi.fn(),
-        output: vi.fn(() => new Blob([`%PDF-1.4 ${'0'.repeat(520)}`], { type: 'application/pdf' })),
-      })),
-    }));
-    vi.doMock('../export', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../export')>();
-      return {
-        ...actual,
-        ensureNotoFontsForHtmlCapture: vi.fn(async () => () => undefined),
-      };
-    });
-
-    const { buildArabicCoverLetterPdfBlob } = await import('../cover-letter-arabic-pdf');
-    await buildArabicCoverLetterPdfBlob(
-      'Alex',
-      'مرحبا بكم في هذه الرسالة الطويلة بما يكفي للاختبار والتحقق من المحتوى العربي.',
-      'ar',
-    );
-
-    expect(appendSpy).toHaveBeenCalled();
-    expect(removeSpy).toHaveBeenCalled();
-    appendSpy.mockRestore();
-    removeSpy.mockRestore();
   });
 });

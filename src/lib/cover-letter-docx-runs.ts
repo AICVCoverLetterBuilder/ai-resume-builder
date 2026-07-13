@@ -61,3 +61,13 @@ export function lineLooksLatinDominant(line: string): boolean {
   const latinLetters = (trimmed.match(/[A-Za-z]/g) ?? []).length;
   return latinLetters >= 2 && latinLetters > arabicCount;
 }
+
+/** RTL paragraph anchor for a Latin-only closing/name line in Arabic DOCX. */
+export function formatArabicDocxLineForRtlParagraph(line: string): CoverLetterDocxTextRunSpec[] {
+  const trimmed = line.trim();
+  if (!trimmed) return [];
+  if (lineLooksLatinDominant(trimmed)) {
+    return [{ text: `\u200F${trimmed}`, rightToLeft: false }];
+  }
+  return splitMixedArabicDocxRuns(trimmed);
+}
