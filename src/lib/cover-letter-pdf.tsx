@@ -97,7 +97,7 @@ function fontFamilyForLocale(locale: string): string {
  * numeral rendering is unreliable in PDF fonts; result looks like
  * "30 أبريل 2026" (day + Arabic month name + year in Western digits).
  */
-function formatDate(locale: string): string {
+export function formatCoverLetterDate(locale: string): string {
   const date = new Date();
 
   const localeMap: Record<string, string> = {
@@ -222,7 +222,7 @@ function stripLeadingDate(text: string): string {
     lines.shift();
   }
 
-  if (lines.length > 0 && /\b\d{4}\b/.test(lines[0].trim())) {
+  if (lines.length > 0 && (/\b\d{4}\b/.test(lines[0].trim()) || /(?:\b\d{4}\b|[٠-٩]{4}|[०-९]{4})/u.test(lines[0].trim()))) {
     lines.shift();
     // Also strip blank lines that follow the date
     while (lines.length > 0 && lines[0].trim() === '') {
@@ -277,7 +277,7 @@ export function CoverLetterPDFDocument({
   const fontFamily = fontFamilyForLocale(locale);
   const rtl        = isRTLLocale(locale);
   const styles     = makeStyles(fontFamily, rtl);
-  const dateStr    = formatDate(locale);
+  const dateStr    = formatCoverLetterDate(locale);
 
   // Final safety net: never render the diagnostic structured-v4 schema marker,
   // even for a legacy saved draft that still has it embedded. Also strips the

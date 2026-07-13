@@ -16268,8 +16268,13 @@ export async function exportCoverLetterToPDF(
 
   let blob: Blob;
   try {
-    const doc = createElementFn(CoverLetterPDFDocumentComp, { candidateName, content: sanitizedContent, locale });
-    blob = await pdfFn(doc).toBlob();
+    if (locale === 'ar') {
+      const { buildArabicCoverLetterPdfBlob } = await import('./cover-letter-arabic-pdf');
+      blob = await buildArabicCoverLetterPdfBlob(candidateName, sanitizedContent, locale);
+    } else {
+      const doc = createElementFn(CoverLetterPDFDocumentComp, { candidateName, content: sanitizedContent, locale });
+      blob = await pdfFn(doc).toBlob();
+    }
   } catch (renderErr) {
     console.error('[Cover Letter PDF] Render failed — locale:', locale, 'error:', renderErr);
     if (renderErr instanceof Error && renderErr.stack) {
@@ -16309,7 +16314,7 @@ export function stripLeadingDateForDocx(text: string): string {
   while (lines.length > 0 && lines[0].trim() === '') {
     lines.shift();
   }
-  if (lines.length > 0 && /\b\d{4}\b/.test(lines[0].trim())) {
+  if (lines.length > 0 && (/\b\d{4}\b/.test(lines[0].trim()) || /(?:\b\d{4}\b|[٠-٩]{4}|[०-९]{4})/u.test(lines[0].trim()))) {
     lines.shift();
     while (lines.length > 0 && lines[0].trim() === '') {
       lines.shift();
@@ -16370,7 +16375,13 @@ export async function buildCoverLetterDocxBlob(
 
   paragraphs.push(
     new Paragraph({
-      children: [new TextRun({ text: dateStr, font: fontFamily, size: 20, color: '6B7280' })],
+      children: [new TextRun({
+        text: dateStr,
+        font: fontFamily,
+        size: 20,
+        color: '6B7280',
+        rightToLeft: isRTL,
+      })],
       spacing: { after: 300 },
       alignment: isRTL ? AlignmentType.RIGHT : AlignmentType.LEFT,
     }),
@@ -16387,7 +16398,13 @@ export async function buildCoverLetterDocxBlob(
     }
     paragraphs.push(
       new Paragraph({
-        children: [new TextRun({ text: trimmed, font: fontFamily, size: 22, color: '1F2937' })],
+        children: [new TextRun({
+          text: trimmed,
+          font: fontFamily,
+          size: 22,
+          color: '1F2937',
+          rightToLeft: isRTL,
+        })],
         spacing: { after: 160 },
         alignment: isRTL ? AlignmentType.RIGHT : AlignmentType.LEFT,
         bidirectional: isRTL,

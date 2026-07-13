@@ -7,7 +7,17 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n/context';
 import { useApp } from '@/lib/store';
 import { exportToClipboard, exportCoverLetterToDOCX, exportCoverLetterToPDF } from '@/lib/export';
-import { CoverLetterExportIncompleteError, getDefaultCoverLetterClosing, resolveExportCandidateName, sanitizeCoverLetterContent } from '@/lib/cover-letter-generation';
+import { CoverLetterExportIncompleteError, contentMatchesRequestedLocale, getDefaultCoverLetterClosing, resolveExportCandidateName, sanitizeCoverLetterContent } from '@/lib/cover-letter-generation';
+import type { Locale } from '@/lib/i18n/translations';
+import {
+  createCoverLetterRequestId,
+  isCoverLetterDownloadAllowed,
+  isCoverLetterContentCurrent,
+  shouldApplyCoverLetterGenerationResult,
+  type ActiveCoverLetterRequest,
+  type CoverLetterGenerationPhase,
+} from '@/lib/cover-letter-flow';
+import { coverLetterAiUnavailable, coverLetterStaleContent, coverLetterWrongLanguage } from '@/lib/cover-letter-messages';
 import type { CoverLetterData, Tone } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -45,20 +55,23 @@ async function callGenerateAI(params: {
   proToken?: string | null;
   freeUserId?: string;
   action?: string;
+  signal?: AbortSignal;
 }): Promise<{ content: string; status: number }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  const ownsController = !params.signal;
+  const controller = ownsController ? new AbortController() : null;
+  const timer = ownsController ? setTimeout(() => controller!.abort(), 30000) : null;
+  const signal = params.signal ?? controller!.signal;
   try {
     const { data, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
       body: { action: params.action || 'cover-letter-gen', ...params },
-      signal: controller.signal,
+      signal,
     });
     if (!res.ok || data.error) {
       throw Object.assign(new Error(data.error || 'AI service error'), { status: res.status });
     }
     return { content: data.result as string, status: res.status };
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -71,6 +84,8 @@ export default function CoverLetterPage() {
   const [paywallReason, setPaywallReason] = useState<'generate' | 'regenerate'>('generate');
   const [downloadLimitModal, setDownloadLimitModal] = useState(false);
   const [hasGenerated, setHasGenerated] = useState(false);
+  const [contentLocale, setContentLocale] = useState<Locale | null>(null);
+  const [generationPhase, setGenerationPhase] = useState<CoverLetterGenerationPhase>('idle');
   const [showAiTooltip, setShowAiTooltip] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -78,15 +93,23 @@ export default function CoverLetterPage() {
   const [isPdfExporting, setIsPdfExporting] = useState(false);
   const [isWordExporting, setIsWordExporting] = useState(false);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
+  const activeGenerationRef = useRef<ActiveCoverLetterRequest | null>(null);
+  const generationAbortRef = useRef<AbortController | null>(null);
+  const prevUiLocaleRef = useRef(locale);
 
   // Auto-fill identity fields from CV personal info on mount or when CV changes
   useEffect(() => {
     if (currentCoverLetter) {
-      // Defensive final safety net for legacy drafts saved before the schema/version
-      // marker was removed from generated content — never show it in the preview.
-      setCl(currentCoverLetter.content
-        ? { ...currentCoverLetter, content: sanitizeCoverLetterContent(currentCoverLetter.content) }
-        : currentCoverLetter);
+      const sanitized = currentCoverLetter.content
+        ? sanitizeCoverLetterContent(currentCoverLetter.content)
+        : '';
+      setCl(sanitized ? { ...currentCoverLetter, content: sanitized } : currentCoverLetter);
+      if (sanitized) {
+        const locales: Locale[] = ['ar', 'hi', 'en', 'de', 'es', 'fr', 'it', 'sr', 'hr', 'ru', 'pt-BR', 'ja'];
+        const detected = locales.find((l) => contentMatchesRequestedLocale(sanitized, l)) ?? null;
+        setContentLocale(detected);
+        if (detected) setHasGenerated(true);
+      }
     } else if (currentCv?.personal) {
       // Pre-fill from CV if no existing cover letter
       const fullName = currentCv.personal.fullName?.trim() || '';
@@ -144,6 +167,145 @@ export default function CoverLetterPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cl]);
 
+  // UI locale change invalidates content generated for a different content language.
+  useEffect(() => {
+    if (prevUiLocaleRef.current !== locale) {
+      if (contentLocale && contentLocale !== locale) {
+        setGenerationPhase('idle');
+        setHasGenerated(false);
+      }
+      prevUiLocaleRef.current = locale;
+    }
+  }, [locale, contentLocale]);
+
+  const selectedLocale = locale as Locale;
+  const previewContent = isCoverLetterContentCurrent(
+    cl.content,
+    contentLocale,
+    selectedLocale,
+    generationPhase,
+  ) ? cl.content : '';
+  const downloadsAllowed = isCoverLetterDownloadAllowed(
+    cl.content,
+    contentLocale,
+    selectedLocale,
+    generationPhase,
+  );
+  const previewIsRtl = selectedLocale === 'ar';
+  const isGenerationBusy = isGenerating || isRegenerating;
+
+  const runCoverLetterGeneration = async (
+    action: 'cover-letter-gen' | 'cover-letter-regen',
+    mode: 'generate' | 'regenerate',
+  ) => {
+    const aiGate = getAiGate();
+    const isCurrentPro = aiGate.status !== 'free';
+
+    if (mode === 'generate' && !isCurrentPro && !canGenerateCoverLetter()) {
+      setPaywallReason('generate');
+      setProModal(true);
+      return;
+    }
+    if (mode === 'regenerate' && !isCurrentPro && !canRegenerateCoverLetter()) {
+      setPaywallReason('regenerate');
+      setProModal(true);
+      return;
+    }
+    if (aiGate.status === 'syncing') {
+      toast.error(t.common.proAuthorizationUnavailable);
+      return;
+    }
+    if (isCurrentPro && !canUseProAi()) {
+      toast.error(coverLetterAiUnavailable(selectedLocale));
+      return;
+    }
+    if (isGenerationBusy) return;
+
+    generationAbortRef.current?.abort();
+    const abortController = new AbortController();
+    generationAbortRef.current = abortController;
+    const requestId = createCoverLetterRequestId();
+    const requestedLocale = selectedLocale;
+    activeGenerationRef.current = { requestId, locale: requestedLocale };
+
+    setGenerationPhase('loading');
+    if (mode === 'generate') setIsGenerating(true);
+    else setIsRegenerating(true);
+
+    const proToken = aiGate.status === 'ready' ? aiGate.token : null;
+    const fullName = getFullName();
+
+    try {
+      const { content } = await callGenerateAI({
+        action,
+        jobTitle: cl.jobTitle,
+        companyName: cl.companyName,
+        tone: cl.tone,
+        locale: requestedLocale,
+        variant: mode === 'regenerate' ? Date.now() : 0,
+        gender: cl.gender || '',
+        personalName: fullName || currentCv?.personal?.fullName || '',
+        personalEmail: currentCv?.personal?.email || '',
+        personalPhone: currentCv?.personal?.phone || '',
+        proToken,
+        freeUserId: isCurrentPro ? undefined : getAppUserId(),
+        signal: abortController.signal,
+      });
+
+      if (!shouldApplyCoverLetterGenerationResult(activeGenerationRef.current, requestId, requestedLocale)) {
+        return;
+      }
+
+      const sanitized = sanitizeCoverLetterContent(content);
+      if (!contentMatchesRequestedLocale(sanitized, requestedLocale)) {
+        setGenerationPhase('error');
+        toast.error(coverLetterWrongLanguage(requestedLocale));
+        return;
+      }
+
+      setCl(prev => ({ ...prev, content: sanitized, updatedAt: new Date().toISOString() }));
+      setContentLocale(requestedLocale);
+      setGenerationPhase('success');
+      setHasGenerated(true);
+
+      if (!isCurrentPro) {
+        if (mode === 'generate') {
+          resetClRegen();
+          incrementClGeneration();
+        } else {
+          incrementClRegen();
+        }
+      } else {
+        recordProAiSuccess();
+      }
+      toast.success(t.coverLetter.genSuccess);
+    } catch (err: unknown) {
+      if ((err as { name?: string }).name === 'AbortError') return;
+      if (!shouldApplyCoverLetterGenerationResult(activeGenerationRef.current, requestId, requestedLocale)) {
+        return;
+      }
+      if ((err as { status?: number }).status === 403) {
+        if (getAiGate().status !== 'free') {
+          toast.error(t.common.proAuthorizationUnavailable);
+        } else {
+          setPaywallReason(mode);
+          setProModal(true);
+        }
+      } else {
+        if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Generation error:', err);
+        setGenerationPhase('error');
+        toast.error(coverLetterAiUnavailable(requestedLocale));
+      }
+    } finally {
+      if (activeGenerationRef.current?.requestId === requestId) {
+        setIsGenerating(false);
+        setIsRegenerating(false);
+        activeGenerationRef.current = null;
+        generationAbortRef.current = null;
+      }
+    }
+  };
+
   /** Derive the full candidate name from the CL identity fields */
   const getFullName = (): string => {
     const first = cl.firstName.trim();
@@ -158,7 +320,7 @@ export default function CoverLetterPage() {
     const cvName = currentCv?.personal?.fullName?.trim();
     if (cvName) return cvName;
     return resolveExportCandidateName(
-      cl.content,
+      previewContent || cl.content,
       '',
       locale,
       getDefaultCoverLetterClosing(locale),
@@ -166,6 +328,10 @@ export default function CoverLetterPage() {
   };
 
   const handleClPDFDownload = async () => {
+    if (!downloadsAllowed) {
+      toast.error(coverLetterStaleContent(selectedLocale));
+      return;
+    }
     if (!canDownload('cl')) {
       setShowDownloadMenu(false);
       setDownloadLimitModal(true);
@@ -178,7 +344,7 @@ export default function CoverLetterPage() {
       ? `${t.coverLetter.filename} - ${cl.companyName}`
       : t.coverLetter.filename;
     try {
-      await exportCoverLetterToPDF(getExportCandidateName(), cl.content, filename, locale, cl.companyName);
+      await exportCoverLetterToPDF(getExportCandidateName(), previewContent, filename, locale, cl.companyName);
       incrementDownloads('cl');
     } catch (err: unknown) {
       if (err instanceof CoverLetterExportIncompleteError) {
@@ -194,6 +360,10 @@ export default function CoverLetterPage() {
   };
 
   const handleClDOCXDownload = async () => {
+    if (!downloadsAllowed) {
+      toast.error(coverLetterStaleContent(selectedLocale));
+      return;
+    }
     if (!canDownload('cl')) {
       setShowDownloadMenu(false);
       setDownloadLimitModal(true);
@@ -203,7 +373,7 @@ export default function CoverLetterPage() {
     setShowDownloadMenu(false);
     setIsWordExporting(true);
     try {
-      await exportCoverLetterToDOCX(cl.content, `${t.coverLetter.filename} - ${cl.companyName}`, getExportCandidateName(), locale, cl.companyName);
+      await exportCoverLetterToDOCX(previewContent, `${t.coverLetter.filename} - ${cl.companyName}`, getExportCandidateName(), locale, cl.companyName);
       incrementDownloads('cl');
     } catch (err: unknown) {
       if (err instanceof CoverLetterExportIncompleteError) {
@@ -219,124 +389,11 @@ export default function CoverLetterPage() {
   };
 
   const handleGenerate = async () => {
-    const aiGate = getAiGate();
-    const isCurrentPro = aiGate.status !== 'free';
-    if (!isCurrentPro && !canGenerateCoverLetter()) {
-      setPaywallReason('generate');
-      setProModal(true);
-      return;
-    }
-    if (aiGate.status === 'syncing') {
-      toast.error(t.common.proAuthorizationUnavailable);
-      return;
-    }
-    if (isCurrentPro && !canUseProAi()) {
-      toast.error('AI service is temporarily unavailable. Please try again later.');
-      return;
-    }
-    const proToken = aiGate.status === 'ready' ? aiGate.token : null;
-    if (isGenerating) return;
-
-    setIsGenerating(true);
-    try {
-      const fullName = getFullName();
-      const { content } = await callGenerateAI({
-        jobTitle: cl.jobTitle,
-        companyName: cl.companyName,
-        tone: cl.tone,
-        locale,
-        variant: 0,
-        gender: cl.gender || '',
-        personalName: fullName || currentCv?.personal?.fullName || '',
-        personalEmail: currentCv?.personal?.email || '',
-        personalPhone: currentCv?.personal?.phone || '',
-        proToken,
-        freeUserId: isCurrentPro ? undefined : getAppUserId(),
-      });
-      setCl(prev => ({ ...prev, content: sanitizeCoverLetterContent(content), updatedAt: new Date().toISOString() }));
-      setHasGenerated(true);
-      if (!isCurrentPro) {
-        resetClRegen();
-        incrementClGeneration();
-      } else {
-        recordProAiSuccess();
-      }
-      toast.success(t.coverLetter.genSuccess);
-    } catch (err: unknown) {
-      if ((err as { status?: number }).status === 403) {
-        if (getAiGate().status !== 'free') {
-          toast.error(t.common.proAuthorizationUnavailable);
-        } else {
-          setPaywallReason('generate');
-          setProModal(true);
-        }
-      } else {
-        if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Generate error:', err);
-        toast.error('AI service is temporarily unavailable. Please try again later.');
-      }
-    } finally {
-      setIsGenerating(false);
-    }
+    await runCoverLetterGeneration('cover-letter-gen', 'generate');
   };
 
   const handleRegenerate = async () => {
-    const aiGate = getAiGate();
-    const isCurrentPro = aiGate.status !== 'free';
-    if (!isCurrentPro && !canRegenerateCoverLetter()) {
-      setPaywallReason('regenerate');
-      setProModal(true);
-      return;
-    }
-    if (aiGate.status === 'syncing') {
-      toast.error(t.common.proAuthorizationUnavailable);
-      return;
-    }
-    if (isCurrentPro && !canUseProAi()) {
-      toast.error('AI service is temporarily unavailable. Please try again later.');
-      return;
-    }
-    const proToken = aiGate.status === 'ready' ? aiGate.token : null;
-    if (isRegenerating) return;
-
-    setIsRegenerating(true);
-    try {
-      const fullName = getFullName();
-      const { content } = await callGenerateAI({
-        action: 'cover-letter-regen',
-        jobTitle: cl.jobTitle,
-        companyName: cl.companyName,
-        tone: cl.tone,
-        locale,
-        variant: Date.now(), // unique variant per call
-        gender: cl.gender || '',
-        personalName: fullName || currentCv?.personal?.fullName || '',
-        personalEmail: currentCv?.personal?.email || '',
-        personalPhone: currentCv?.personal?.phone || '',
-        proToken,
-        freeUserId: isCurrentPro ? undefined : getAppUserId(),
-      });
-      setCl(prev => ({ ...prev, content: sanitizeCoverLetterContent(content), updatedAt: new Date().toISOString() }));
-      if (!isCurrentPro) {
-        incrementClRegen();
-      } else {
-        recordProAiSuccess();
-      }
-      toast.success(t.coverLetter.genSuccess);
-    } catch (err: unknown) {
-      if ((err as { status?: number }).status === 403) {
-        if (getAiGate().status !== 'free') {
-          toast.error(t.common.proAuthorizationUnavailable);
-        } else {
-          setPaywallReason('regenerate');
-          setProModal(true);
-        }
-      } else {
-        if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Regenerate error:', err);
-        toast.error('AI service is temporarily unavailable. Please try again later.');
-      }
-    } finally {
-      setIsRegenerating(false);
-    }
+    await runCoverLetterGeneration('cover-letter-regen', 'regenerate');
   };
 
   const handleSave = () => {
@@ -518,18 +575,36 @@ export default function CoverLetterPage() {
                 {editing ? (
                   <textarea
                     value={cl.content}
-                    onChange={e => setCl(prev => ({ ...prev, content: e.target.value }))}
-                    className="w-full rounded-lg border border-input bg-background p-4 text-sm outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 min-h-[400px] resize-y font-mono"
+                    onChange={e => {
+                      const next = e.target.value;
+                      setCl(prev => ({ ...prev, content: next }));
+                      setContentLocale(selectedLocale);
+                      setGenerationPhase('success');
+                    }}
+                    dir={previewIsRtl ? 'rtl' : 'ltr'}
+                    className={cn(
+                      'w-full rounded-lg border border-input bg-background p-4 text-sm outline-none transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 min-h-[400px] resize-y',
+                      previewIsRtl ? 'text-right' : 'font-mono',
+                    )}
+                    style={previewIsRtl ? { unicodeBidi: 'plaintext' } : undefined}
                   />
                 ) : (
-                  <div id="cl-preview" className="min-h-[400px] whitespace-pre-line rounded-lg bg-white p-6 text-sm text-gray-800 shadow-inner border border-gray-100 relative">
-                    {isGenerating ? (
+                  <div
+                    id="cl-preview"
+                    dir={previewIsRtl ? 'rtl' : 'ltr'}
+                    className={cn(
+                      'min-h-[400px] whitespace-pre-line rounded-lg bg-white p-6 text-sm text-gray-800 shadow-inner border border-gray-100 relative',
+                      previewIsRtl && 'text-right',
+                    )}
+                    style={previewIsRtl ? { unicodeBidi: 'plaintext', letterSpacing: 'normal' } : undefined}
+                  >
+                    {isGenerationBusy ? (
                       <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-lg bg-white/80">
                         <Loader2 className="h-8 w-8 animate-spin text-primary" />
                         <p className="text-sm text-muted-foreground">{t.coverLetter.generating}</p>
                       </div>
                     ) : null}
-                    {cl.content || <span className="text-gray-400 italic">{t.coverLetter.placeholder}</span>}
+                    {previewContent || <span className="text-gray-400 italic">{t.coverLetter.placeholder}</span>}
                   </div>
                 )}
 
@@ -559,7 +634,7 @@ export default function CoverLetterPage() {
                   </div>
                 )}
 
-                {cl.content && (
+                {(previewContent || isGenerationBusy) && (
                   <>
                     <div className="mt-4 flex gap-2 flex-wrap items-center">
                       {/* Download dropdown */}
@@ -567,7 +642,7 @@ export default function CoverLetterPage() {
                         <button
                           onClick={() => setShowDownloadMenu(v => !v)}
                           className={btnPrimary + ' flex items-center gap-1'}
-                          disabled={isPdfExporting || isWordExporting}
+                          disabled={!downloadsAllowed || isPdfExporting || isWordExporting}
                         >
                           <Download className="h-4 w-4" />
                           {isPdfExporting || isWordExporting ? '...' : t.coverLetter.downloadCl}
@@ -578,7 +653,7 @@ export default function CoverLetterPage() {
                             <button
                               onClick={handleClPDFDownload}
                               className="w-full flex items-start gap-3 px-4 py-3 hover:bg-accent transition-colors text-left"
-                              disabled={isPdfExporting}
+                              disabled={!downloadsAllowed || isPdfExporting}
                             >
                               <File className="h-4 w-4 mt-0.5 text-primary shrink-0" />
                               <div>
@@ -589,7 +664,7 @@ export default function CoverLetterPage() {
                             <button
                               onClick={handleClDOCXDownload}
                               className="w-full flex items-start gap-3 px-4 py-3 hover:bg-accent transition-colors text-left border-t border-border"
-                              disabled={isWordExporting}
+                              disabled={!downloadsAllowed || isWordExporting}
                             >
                               <FileText className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
                               <div>
@@ -600,7 +675,15 @@ export default function CoverLetterPage() {
                           </div>
                         )}
                       </div>
-                      <button onClick={() => { exportToClipboard('cl-preview'); toast.success(t.cv.copied); }} className={btnSecondary}>
+                      <button
+                        onClick={() => {
+                          if (!previewContent) return;
+                          exportToClipboard('cl-preview');
+                          toast.success(t.cv.copied);
+                        }}
+                        className={btnSecondary}
+                        disabled={!downloadsAllowed}
+                      >
                         <Copy className="h-4 w-4" />{t.cv.copy}
                       </button>
                     </div>

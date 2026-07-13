@@ -350,21 +350,13 @@ describe('cover letter export guard integration', () => {
     vi.doMock('../native-save', () => ({
       saveFileViaPlatform: vi.fn(async () => ({ saved: true, fileName: 'كوفر ليتر.pdf', destination: 'downloads' })),
     }));
-    vi.doMock('@react-pdf/renderer', () => ({
-      pdf: vi.fn(() => ({
-        toBlob: vi.fn(async () => new Blob(['pdf'], { type: 'application/pdf' })),
-      })),
-    }));
-    vi.doMock('react', () => ({
-      createElement: vi.fn((_type, _props) => ({})),
-    }));
-    vi.doMock('../cover-letter-pdf', () => ({
-      CoverLetterPDFDocument: vi.fn(),
+    vi.doMock('../cover-letter-arabic-pdf', () => ({
+      buildArabicCoverLetterPdfBlob: vi.fn(async () => new Blob(['pdf'], { type: 'application/pdf' })),
     }));
 
     const { exportCoverLetterToPDF } = await import('../export');
     const content = legacyFullLetter(
-      'مرحبا بكم في هذه الرسالة، أكتب لأعرب عن اهتمامي بالانضمام إلى فريقكم.',
+      'مرحبا بكم في هذه الرسالة، أكتب لأعرب عن اهتمامي بالانضمام إلى فريقكم والمساهمة بخبرتي العملية.',
       'Alex Carter',
       '12 يوليو 2026',
     );

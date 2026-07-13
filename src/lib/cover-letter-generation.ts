@@ -254,6 +254,89 @@ function hasArabicScript(text: string): boolean {
   return ARABIC_SCRIPT_RE.test(text);
 }
 
+/** Exported for preview/export locale guards and tests. */
+export function contentHasDevanagari(text: string): boolean {
+  return hasDevanagari(text);
+}
+
+/** Exported for preview/export locale guards and tests. */
+export function contentHasArabicScript(text: string): boolean {
+  return hasArabicScript(text);
+}
+
+/**
+ * Client-side guard: reject clearly wrong-language bodies when a specific locale
+ * was requested. Uses script detection with a minimum Arabic/Devanagari presence
+ * threshold — not brittle single-character counting alone.
+ */
+export function contentMatchesRequestedLocale(content: string, locale: Locale): boolean {
+  const probe = extractCoverLetterBody(content, '').replace(BIDI_AND_ZW_RE, '');
+  if (!probe.trim()) return false;
+
+  const arabicCount = (probe.match(new RegExp(ARABIC_SCRIPT_RE.source, 'gu')) ?? []).length;
+  const devanagariCount = (probe.match(new RegExp(DEVANAGARI_RE.source, 'gu')) ?? []).length;
+  const latinLetters = (probe.match(/[A-Za-z]/g) ?? []).length;
+
+  switch (locale) {
+    case 'ar':
+      if (devanagariCount >= 8) return false;
+      return arabicCount >= 24;
+    case 'hi':
+      if (arabicCount >= 8) return false;
+      return devanagariCount >= 24;
+    case 'en':
+      if (devanagariCount >= 8 || arabicCount >= 8) return false;
+      return latinLetters >= 40;
+    case 'ja':
+      return /[\u3040-\u30FF\u3400-\u9FFF]/.test(probe);
+    case 'ru':
+      return /[\u0400-\u04FF]/.test(probe) && devanagariCount < 8 && arabicCount < 8;
+    default:
+      return devanagariCount < 12 && arabicCount < 12;
+  }
+}
+
+function buildLocaleGroundingRules(locale: Locale, jobTitle: string): string {
+  const role = jobTitle.trim() || 'the role';
+  const shared = [
+    '- Use ONLY facts from the candidate CV/profile, job description fields, and user inputs provided in this request.',
+    '- Do NOT invent revenue increases, exceeded targets, major contracts, new-market expansion, leadership responsibilities, years of experience, percentages, numeric achievements, tools, or systems not mentioned in the source data.',
+    '- Mention measurable achievements ONLY when explicitly present in the source data; otherwise use honest neutral wording about responsibilities and skills.',
+    '- Keep company praise brief, specific, and relevant — avoid repetitive or exaggerated compliments.',
+    '- Mention only the two or three strongest qualifications relevant to the role.',
+    '- Preserve company names, product names, CRM/software names, and technical terms exactly.',
+    `- Use the job title "${role}" faithfully — preserve its meaning and seniority; do NOT upgrade, broaden, or replace it with a different position (e.g. do not change "Salesman" into Sales Executive, Sales Representative, or Sales Manager).`,
+    '- If the job title is specialized, branded, or non-translatable, keep it exactly as written; you may add the original English title in parentheses only when it improves clarity.',
+    '- Target approximately 250–400 words total across all body fields unless an explicit length rule applies.',
+  ];
+
+  if (locale === 'hi') {
+    return [
+      'HINDI QUALITY RULES:',
+      '- Write natural, professional Hindi — not a literal English translation.',
+      '- Use formal language appropriate for a real job application.',
+      '- Translate the job title faithfully into natural Hindi without changing seniority.',
+      '- Avoid awkward direct translations and excessive praise.',
+      '- Use correct Devanagari punctuation and characters.',
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'ar') {
+    return [
+      'ARABIC QUALITY RULES:',
+      '- Write professional Modern Standard Arabic — not word-for-word English translation.',
+      '- Translate the job title faithfully while preserving meaning and seniority.',
+      '- Use a professional Arabic greeting and closing.',
+      '- Keep mixed Latin terms (Google, CRM, email addresses) readable within Arabic sentences.',
+      '- Write entirely in Arabic — never output Hindi, English, or another language.',
+      ...shared,
+    ].join('\n');
+  }
+
+  return '';
+}
+
 function normalizeExportLine(line: string): string {
   return line
     .normalize('NFC')
@@ -499,6 +582,12 @@ export function validateStructuredCoverLetter(
       errors.push('Hindi output missing सादर sign-off');
     }
   }
+  if (locale === 'ar') {
+    const arabicFields = [letter.greeting, letter.paragraph1, letter.paragraph2, letter.paragraph3, letter.closing];
+    if (!arabicFields.every(hasArabicScript)) errors.push('Arabic output missing Arabic script');
+    if (hasDevanagari(assembledProbe)) errors.push('Arabic output contains Devanagari');
+    if (!hasSignoff(assembledProbe, locale, closing)) errors.push('Arabic output missing sign-off');
+  }
   if (locale === 'en' && !hasSignoff(assembledProbe, locale, closing)) {
     errors.push('English output missing Sincerely sign-off');
   }
@@ -555,6 +644,7 @@ export function buildStructuredCoverLetterPrompt(options: {
   const company = options.companyName || options.fallbackCompany;
   const role = options.jobTitle || options.fallbackRole;
   const retry = options.retryNote ? `\n${options.retryNote}` : '';
+  const localeRules = buildLocaleGroundingRules(options.locale, options.jobTitle);
 
   return `Return ONLY valid JSON for a cover letter in ${options.languageName}.
 Candidate: ${options.displayName}
@@ -584,6 +674,7 @@ Rules:
 - closing must mention interview availability or thanks.
 - signOff must be "${options.closing}".
 - candidateName must be exactly "${options.candidateName || options.displayName}".
+${localeRules ? `\n${localeRules}` : ''}
 - Output JSON only. No markdown. No commentary.${retry}`;
 }
 
