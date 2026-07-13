@@ -6,9 +6,11 @@ import {
   CoverLetterExportIncompleteError,
   evaluateCoverLetterExportGuard,
   resolveExportCandidateName,
+  sanitizeCoverLetterContent,
   stampCoverLetterContent,
   validateCoverLetterExportContent,
 } from '../cover-letter-generation';
+import { computeCoverLetterPdfParagraphs } from '../cover-letter-pdf';
 
 const COMPANY = 'Tuxy';
 const CANDIDATE = 'Alex Tuhel';
@@ -48,8 +50,13 @@ describe('cover letter export guard (minimal, pragmatic)', () => {
 
   test('English complete content with structured marker in the middle passes after stripping', () => {
     const content = productionFullLetter(assembleCoverLetterContent(VALID_ENGLISH));
+    // `productionFullLetter` simulates a legacy draft that was saved with the
+    // marker embedded (before it was removed from generation output).
     expect(content).toContain('structured-v4');
     expect(validateCoverLetterExportContent(content, 'en', CANDIDATE, COMPANY, 'Sincerely').valid).toBe(true);
+    // But the marker must never survive sanitization — the safety net applied
+    // before preview/export/copy.
+    expect(sanitizeCoverLetterContent(content)).not.toContain('structured-v4');
   });
 
   test('English complete content passes even when provided candidate name mismatches visible signature', () => {
@@ -171,6 +178,116 @@ describe('cover letter export guard (minimal, pragmatic)', () => {
   });
 });
 
+describe('sanitizeCoverLetterContent (structured-v4 marker removal)', () => {
+  test('removes the zero-width-wrapped marker on its own line', () => {
+    const content = productionFullLetter(assembleCoverLetterContent(VALID_ENGLISH));
+    const sanitized = sanitizeCoverLetterContent(content);
+    expect(sanitized).not.toContain('structured-v4');
+    expect(sanitized).toContain('Sincerely');
+    expect(sanitized).toContain(CANDIDATE);
+  });
+
+  test('removes an unwrapped marker line (any casing)', () => {
+    const content = `${CANDIDATE}\n\nJuly 12, 2026\n\nSTRUCTURED-V4\nDear Team,\n\nBody text here.\n\nSincerely,\n${CANDIDATE}`;
+    const sanitized = sanitizeCoverLetterContent(content);
+    expect(sanitized).not.toMatch(/structured-v4/i);
+  });
+
+  test('removes a marker embedded mid-line without dropping surrounding text', () => {
+    const content = `Dear Team, structured-v4 I am writing to apply.`;
+    const sanitized = sanitizeCoverLetterContent(content);
+    expect(sanitized).not.toMatch(/structured-v4/i);
+    expect(sanitized).toContain('Dear Team,');
+    expect(sanitized).toContain('I am writing to apply.');
+  });
+
+  test('leaves already-clean content untouched', () => {
+    const content = legacyFullLetter(assembleCoverLetterContent(VALID_ENGLISH));
+    expect(sanitizeCoverLetterContent(content)).toBe(content);
+  });
+
+  test('handles empty and non-string input gracefully', () => {
+    expect(sanitizeCoverLetterContent('')).toBe('');
+    // @ts-expect-error intentionally passing a non-string to verify no throw
+    expect(sanitizeCoverLetterContent(undefined)).toBe(undefined);
+  });
+
+  test('does not leave a stray blank line where the marker line used to be', () => {
+    const content = productionFullLetter(assembleCoverLetterContent(VALID_ENGLISH));
+    const sanitized = sanitizeCoverLetterContent(content);
+    expect(sanitized.startsWith('\n')).toBe(false);
+  });
+});
+
+describe('computeCoverLetterPdfParagraphs (PDF source text)', () => {
+  test('Hindi PDF paragraphs contain no structured-v4 marker and include सादर + candidate name', () => {
+    const body = assembleCoverLetterContent({
+      dateLine: '12 जुलाई 2026',
+      greeting: 'Tuxy की भर्ती टीम को,',
+      paragraph1: 'मैं Tuxy में सॉफ्टवेयर इंजीनियर पद के लिए आवेदन कर रही हूँ।',
+      paragraph2: 'मैंने टीम परियोजनाओं में सहयोग किया है और गुणवत्ता-केंद्रित वितरण पर काम किया है।',
+      paragraph3: 'Tuxy की उत्पाद गुणवत्ता मुझे प्रेरित करती है, और मैं आपकी टीम में योगदान देने के लिए उत्सुक हूँ।',
+      closing: 'मैं साक्षात्कार में अपनी योग्यता पर चर्चा करने का अवसर चाहती हूँ।',
+      signOff: 'सादर',
+      candidateName: 'Alex Carter',
+    });
+    const content = productionFullLetter(body, 'Alex Carter', '12 जुलाई 2026');
+    const paragraphs = computeCoverLetterPdfParagraphs(content, 'Alex Carter');
+    const joined = paragraphs.join('\n');
+    expect(joined).not.toMatch(/structured-v4/i);
+    expect(joined).toContain('सादर');
+    expect(joined).toContain('Alex Carter');
+    expect(paragraphs.every((p) => p.trim().length > 0)).toBe(true);
+  });
+
+  test('English PDF paragraphs contain no structured-v4 marker and include Sincerely + candidate name', () => {
+    const content = productionFullLetter(assembleCoverLetterContent(VALID_ENGLISH));
+    const paragraphs = computeCoverLetterPdfParagraphs(content, CANDIDATE);
+    const joined = paragraphs.join('\n');
+    expect(joined).not.toMatch(/structured-v4/i);
+    expect(joined).toContain('Sincerely');
+    expect(joined).toContain(CANDIDATE);
+  });
+
+  test('Arabic PDF paragraphs contain no structured-v4 marker, no mojibake replacement chars, and no empty/degenerate paragraphs', () => {
+    const body = assembleCoverLetterContent({
+      dateLine: '12 يوليو 2026',
+      greeting: 'إلى فريق التوظيف في Tuxy،',
+      paragraph1: 'أتقدم بطلب للحصول على وظيفة مهندس برمجيات في Tuxy.',
+      paragraph2: 'شاركت في مشاريع جماعية وحرصت على تقديم ميزات تركز على المستخدم.',
+      paragraph3: 'يحفزني التزام Tuxy بجودة المنتج، وأنا متحمس للمساهمة في فريقكم.',
+      closing: 'أرحب بفرصة مناقشة مؤهلاتي في مقابلة وأشكركم على وقتكم.',
+      signOff: 'مع خالص التحية',
+      candidateName: 'Alex Carter',
+    });
+    const content = productionFullLetter(body, 'Alex Carter', '12 يوليو 2026');
+    const paragraphs = computeCoverLetterPdfParagraphs(content, 'Alex Carter');
+    const joined = paragraphs.join('\n');
+    expect(joined).not.toMatch(/structured-v4/i);
+    expect(joined).not.toContain('\uFFFD'); // no mojibake replacement character
+    expect(joined).toContain('مع خالص التحية');
+    expect(joined).toContain('Alex Carter');
+    // No degenerate near-empty paragraph (e.g. a stray marker-only line) that
+    // could previously collapse to a zero-height text block and overlap siblings.
+    expect(paragraphs.every((p) => p.replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/gu, '').trim().length > 0)).toBe(true);
+  });
+
+  test('Spanish/Italian/Serbian PDF paragraphs remain unaffected and marker-free', () => {
+    const italian = legacyFullLetter([
+      'Gentile team di selezione di Tuxy,',
+      'Scrivo per candidarmi al ruolo di Software Engineer.',
+      'Ho lavorato in team collaborativi.',
+      'Mi motiva l attenzione di Tuxy alla qualità.',
+      'Resto disponibile per un colloquio.',
+      'Cordiali saluti,',
+      'Mario Rossi',
+    ].join('\n\n'), 'Mario Rossi', '12 luglio 2026');
+    const paragraphs = computeCoverLetterPdfParagraphs(italian, 'Mario Rossi');
+    expect(paragraphs.join('\n')).not.toMatch(/structured-v4/i);
+    expect(paragraphs.join('\n')).toContain('Cordiali saluti');
+  });
+});
+
 describe('cover letter export guard integration', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -188,16 +305,27 @@ describe('cover letter export guard integration', () => {
     vi.doMock('react', () => ({
       createElement: vi.fn((_type, _props) => ({})),
     }));
+    let capturedProps: Record<string, unknown> | undefined;
+    vi.doMock('react', () => ({
+      createElement: vi.fn((_type: unknown, props: unknown) => {
+        capturedProps = props as Record<string, unknown>;
+        return {};
+      }),
+    }));
     vi.doMock('../cover-letter-pdf', () => ({
       CoverLetterPDFDocument: vi.fn(),
     }));
 
     const { exportCoverLetterToPDF } = await import('../export');
+    // Simulates a legacy draft saved with the structured-v4 marker embedded.
     const content = productionFullLetter(assembleCoverLetterContent(VALID_ENGLISH));
+    expect(content).toContain('structured-v4');
     await expect(exportCoverLetterToPDF(CANDIDATE, content, 'Cover Letter', 'en', COMPANY)).resolves.toBeDefined();
+    // The content actually handed to the PDF document component must be marker-free.
+    expect(String(capturedProps?.content)).not.toContain('structured-v4');
   });
 
-  test('DOCX export path uses corrected guard for complete English letter', async () => {
+  test('DOCX export path uses corrected guard for complete English letter and strips the structured-v4 marker', async () => {
     let savedBlob: Blob | null = null;
     vi.doMock('../native-save', () => ({
       saveFileViaPlatform: vi.fn(async (blob: Blob) => {
@@ -207,12 +335,15 @@ describe('cover letter export guard integration', () => {
     }));
 
     const { exportCoverLetterToDOCX } = await import('../export');
+    // Simulates a legacy draft saved with the structured-v4 marker embedded.
     const content = productionFullLetter(assembleCoverLetterContent(VALID_ENGLISH));
+    expect(content).toContain('structured-v4');
     await exportCoverLetterToDOCX(content, 'Cover Letter', CANDIDATE, 'en', COMPANY);
     const zip = await JSZip.loadAsync(await savedBlob!.arrayBuffer());
     const xml = await zip.file('word/document.xml')!.async('string');
     expect(xml).toContain('Sincerely');
     expect(xml).toContain(CANDIDATE);
+    expect(xml).not.toContain('structured-v4');
   });
 
   test('PDF export path allows non-empty Arabic content without a recognized sign-off', async () => {
@@ -291,6 +422,48 @@ describe('cover letter export guard integration', () => {
       '12 जुलाई 2026',
     );
     await expect(exportCoverLetterToDOCX(content, 'Cover Letter', 'Alex Carter', 'hi', COMPANY)).resolves.toBeDefined();
+  });
+
+  test('DOCX export path strips the structured-v4 marker for a legacy-stamped Arabic draft and keeps readable Arabic', async () => {
+    let savedBlob: Blob | null = null;
+    vi.doMock('../native-save', () => ({
+      saveFileViaPlatform: vi.fn(async (blob: Blob) => {
+        savedBlob = blob;
+        return { saved: true, fileName: 'خطاب تقديم.docx', destination: 'downloads' };
+      }),
+    }));
+
+    const { exportCoverLetterToDOCX } = await import('../export');
+    const arabicBody = 'مرحبا بكم في هذه الرسالة، أكتب لأعرب عن اهتمامي بالانضمام إلى فريقكم.\n\nمع خالص التحية،\n\nAlex Carter';
+    const content = productionFullLetter(arabicBody, 'Alex Carter', '12 يوليو 2026');
+    expect(content).toContain('structured-v4');
+    await exportCoverLetterToDOCX(content, 'خطاب تقديم', 'Alex Carter', 'ar', COMPANY);
+    const zip = await JSZip.loadAsync(await savedBlob!.arrayBuffer());
+    const xml = await zip.file('word/document.xml')!.async('string');
+    expect(xml).not.toContain('structured-v4');
+    expect(xml).toContain('مع خالص التحية');
+    expect(xml).toContain('Alex Carter');
+  });
+
+  test('DOCX export path strips the structured-v4 marker for a legacy-stamped Hindi draft and keeps सादर + candidate name', async () => {
+    let savedBlob: Blob | null = null;
+    vi.doMock('../native-save', () => ({
+      saveFileViaPlatform: vi.fn(async (blob: Blob) => {
+        savedBlob = blob;
+        return { saved: true, fileName: 'कवर लेटर.docx', destination: 'downloads' };
+      }),
+    }));
+
+    const { exportCoverLetterToDOCX } = await import('../export');
+    const hindiBody = 'मैं इस पद के लिए आवेदन करना चाहती हूँ।\n\nसादर,\n\nAlex Carter';
+    const content = productionFullLetter(hindiBody, 'Alex Carter', '12 जुलाई 2026');
+    expect(content).toContain('structured-v4');
+    await exportCoverLetterToDOCX(content, 'कवर लेटर', 'Alex Carter', 'hi', COMPANY);
+    const zip = await JSZip.loadAsync(await savedBlob!.arrayBuffer());
+    const xml = await zip.file('word/document.xml')!.async('string');
+    expect(xml).not.toContain('structured-v4');
+    expect(xml).toContain('सादर');
+    expect(xml).toContain('Alex Carter');
   });
 
   test('export guard no longer blocks a visibly non-empty Hindi draft with an unusual ending', async () => {

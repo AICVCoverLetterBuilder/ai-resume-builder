@@ -28,7 +28,7 @@ import {
   StyleSheet,
   Font,
 } from '@react-pdf/renderer';
-import type { Style } from '@react-pdf/types';
+import { sanitizeCoverLetterContent } from './cover-letter-generation';
 
 // ── Font Registration ─────────────────────────────────────────────────────────
 // Fonts are served from /public/fonts/ and embedded into the PDF at render time.
@@ -242,6 +242,23 @@ export interface CoverLetterPDFProps {
 }
 
 /**
+ * Pure text-preparation step shared by the PDF component: sanitizes the schema
+ * marker, strips the leading name/date lines the API bakes into the header, and
+ * splits the remainder into paragraph blocks. Exported (independent of
+ * @react-pdf/renderer/React) so the exact text that would be rendered into the
+ * PDF can be asserted in unit tests without mocking the renderer.
+ */
+export function computeCoverLetterPdfParagraphs(content: string, candidateName: string): string[] {
+  const sanitizedContent = sanitizeCoverLetterContent(content);
+  const afterName = stripLeadingName(sanitizedContent, candidateName);
+  const cleanedContent = stripLeadingDate(afterName);
+  return cleanedContent
+    .split(/\n{2,}/)
+    .map(p => p.trim())
+    .filter(p => p.length > 0);
+}
+
+/**
  * React-PDF document for a Cover Letter.
  *
  * Layout (top → bottom):
@@ -262,16 +279,11 @@ export function CoverLetterPDFDocument({
   const styles     = makeStyles(fontFamily, rtl);
   const dateStr    = formatDate(locale);
 
-  // Strip any standalone leading name line the API adds as a header block
-  const afterName = stripLeadingName(content, candidateName);
-  // Strip the date line the API bakes in — the PDF component renders its own
-  const cleanedContent = stripLeadingDate(afterName);
-
-  // Split on blank lines or single newlines into individual paragraphs
-  const paragraphs = cleanedContent
-    .split(/\n{2,}|\n/)
-    .map(p => p.trim())
-    .filter(p => p.length > 0);
+  // Final safety net: never render the diagnostic structured-v4 schema marker,
+  // even for a legacy saved draft that still has it embedded. Also strips the
+  // leading name/date header lines the API bakes in (the date is re-rendered
+  // above via `dateStr`) and splits the remainder into paragraph blocks.
+  const paragraphs = computeCoverLetterPdfParagraphs(content, candidateName);
 
   return (
     <Document>
@@ -279,17 +291,15 @@ export function CoverLetterPDFDocument({
         {/* ── Date (once, at the top) ── */}
         <Text style={styles.date}>{dateStr}</Text>
 
-        {/* ── Letter body (includes closing + signature from AI) ── */}
+        {/* ── Letter body (includes closing + signature from AI) ──
+            @react-pdf/textkit runs the Unicode bidi algorithm and the
+            embedded Noto Sans Arabic/Devanagari fonts' shaping tables
+            automatically, so plain right-aligned <Text> renders Arabic/Hindi
+            correctly without any extra "direction" style (that key isn't
+            part of the supported Style API and was a no-op). */}
         <View style={styles.body}>
           {paragraphs.map((para, i) => (
-            <Text
-              key={i}
-              style={[
-                styles.paragraph,
-                // RTL: tell the text-layout engine to handle bidi correctly
-                rtl ? ({ direction: 'rtl' } as Style) : ({} as Style),
-              ]}
-            >
+            <Text key={i} style={styles.paragraph}>
               {para}
             </Text>
           ))}

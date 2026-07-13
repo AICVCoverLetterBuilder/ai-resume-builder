@@ -109,10 +109,11 @@ if (patched) {
 }
 
 // ── Patch 3: fontkit getAnchor — null anchor guard (Hindi / Devanagari) ──────
-// Must be applied to ALL three fontkit bundles:
-//   module.mjs        – used by Node / server-side
+// Must be applied to ALL four fontkit bundles:
+//   module.mjs        – used by Node / server-side (ESM)
 //   browser-module.mjs – used by bundlers (Webpack/Turbopack) in browser builds
 //   browser.cjs       – CJS browser fallback
+//   main.cjs          – used by Node / server-side (CJS require, e.g. Vitest/Jest)
 
 const OLD_GET_ANCHOR = `    getAnchor(anchor) {
         // TODO: contour point, device tables
@@ -131,6 +132,7 @@ const fontkitFiles = [
   '../node_modules/fontkit/dist/module.mjs',
   '../node_modules/fontkit/dist/browser-module.mjs',
   '../node_modules/fontkit/dist/browser.cjs',
+  '../node_modules/fontkit/dist/main.cjs',
 ];
 
 for (const rel of fontkitFiles) {

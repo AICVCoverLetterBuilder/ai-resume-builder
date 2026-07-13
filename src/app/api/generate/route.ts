@@ -9,7 +9,7 @@ import {
   assembleCoverLetterContent,
   CoverLetterGenerationIncompleteError,
   generateStructuredCoverLetterWithRetries,
-  stampCoverLetterContent,
+  sanitizeCoverLetterContent,
 } from '@/lib/cover-letter-generation';
 
 // ─── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
@@ -415,7 +415,13 @@ Rules:
         },
       });
 
-      const letterBody = stampCoverLetterContent(assembleCoverLetterContent(structuredLetter));
+      // NOTE: the `structured-v4` schema/version marker is intentionally NOT stamped
+      // into the letter body anymore. It used to be wrapped in zero-width characters
+      // (`\u200Bstructured-v4\u200B`), but only the zero-width characters were
+      // invisible — the ASCII text "structured-v4" itself rendered as a visible line
+      // in the preview, copied text, and PDF/DOCX exports. The engine fingerprint is
+      // now carried solely by the `coverLetterGenerationEngine` response field below.
+      const letterBody = assembleCoverLetterContent(structuredLetter);
 
       const dateStr = new Date().toLocaleDateString(resolvedLocale, { year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -426,7 +432,9 @@ Rules:
       if (personalPhone && typeof personalPhone === 'string' && personalPhone.trim()) headerLines.push(personalPhone.trim());
 
       const headerBlock = headerLines.length > 0 ? headerLines.join('\n') + '\n\n' : '';
-      const fullLetter = `${headerBlock}${dateStr}\n\n${letterBody}`;
+      // Defensive final safety net — strips the marker even if it somehow ended up
+      // embedded in the structured fields (e.g. a stale cached prompt/response).
+      const fullLetter = sanitizeCoverLetterContent(`${headerBlock}${dateStr}\n\n${letterBody}`);
 
       // Non-personal backend fingerprint + dev-only diagnostics. Never logs the
       // generated letter text or personal data — locale/engine/attempt count only.

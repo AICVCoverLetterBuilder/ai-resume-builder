@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n/context';
 import { useApp } from '@/lib/store';
 import { exportToClipboard, exportCoverLetterToDOCX, exportCoverLetterToPDF } from '@/lib/export';
-import { CoverLetterExportIncompleteError, getDefaultCoverLetterClosing, resolveExportCandidateName } from '@/lib/cover-letter-generation';
+import { CoverLetterExportIncompleteError, getDefaultCoverLetterClosing, resolveExportCandidateName, sanitizeCoverLetterContent } from '@/lib/cover-letter-generation';
 import type { CoverLetterData, Tone } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -82,7 +82,11 @@ export default function CoverLetterPage() {
   // Auto-fill identity fields from CV personal info on mount or when CV changes
   useEffect(() => {
     if (currentCoverLetter) {
-      setCl(currentCoverLetter);
+      // Defensive final safety net for legacy drafts saved before the schema/version
+      // marker was removed from generated content — never show it in the preview.
+      setCl(currentCoverLetter.content
+        ? { ...currentCoverLetter, content: sanitizeCoverLetterContent(currentCoverLetter.content) }
+        : currentCoverLetter);
     } else if (currentCv?.personal) {
       // Pre-fill from CV if no existing cover letter
       const fullName = currentCv.personal.fullName?.trim() || '';
@@ -249,7 +253,7 @@ export default function CoverLetterPage() {
         proToken,
         freeUserId: isCurrentPro ? undefined : getAppUserId(),
       });
-      setCl(prev => ({ ...prev, content, updatedAt: new Date().toISOString() }));
+      setCl(prev => ({ ...prev, content: sanitizeCoverLetterContent(content), updatedAt: new Date().toISOString() }));
       setHasGenerated(true);
       if (!isCurrentPro) {
         resetClRegen();
@@ -311,7 +315,7 @@ export default function CoverLetterPage() {
         proToken,
         freeUserId: isCurrentPro ? undefined : getAppUserId(),
       });
-      setCl(prev => ({ ...prev, content, updatedAt: new Date().toISOString() }));
+      setCl(prev => ({ ...prev, content: sanitizeCoverLetterContent(content), updatedAt: new Date().toISOString() }));
       if (!isCurrentPro) {
         incrementClRegen();
       } else {

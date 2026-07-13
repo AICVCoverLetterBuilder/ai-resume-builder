@@ -232,6 +232,7 @@ describe('cover letter export source completeness', () => {
     expect(text).toContain('सादर');
     expect(text).toContain(CANDIDATE);
     expect(text).toContain('साक्षात्कार');
+    expect(text).not.toContain('structured-v4');
   });
 
   test('PDF/DOCX source preprocessing keeps complete Hindi closing/sign-off/name', () => {

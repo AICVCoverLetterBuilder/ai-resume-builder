@@ -35,7 +35,7 @@ import {
   registerPdfI18nFonts,
   type PdfI18nRegistry,
 } from './pdf-i18n-text';
-import { assertCoverLetterExportable, getDefaultCoverLetterClosing } from './cover-letter-generation';
+import { assertCoverLetterExportable, getDefaultCoverLetterClosing, sanitizeCoverLetterContent } from './cover-letter-generation';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -16245,6 +16245,9 @@ export async function exportCoverLetterToPDF(
     companyName,
     getDefaultCoverLetterClosing(locale),
   );
+  // Final safety net: strip any diagnostic schema/version marker (e.g. a legacy
+  // saved draft) so it never appears in the exported PDF text.
+  const sanitizedContent = sanitizeCoverLetterContent(content);
   // Dynamic import so the heavy @react-pdf/renderer bundle is only loaded on demand
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let pdfFn: any, createElementFn: any, CoverLetterPDFDocumentComp: any;
@@ -16265,7 +16268,7 @@ export async function exportCoverLetterToPDF(
 
   let blob: Blob;
   try {
-    const doc = createElementFn(CoverLetterPDFDocumentComp, { candidateName, content, locale });
+    const doc = createElementFn(CoverLetterPDFDocumentComp, { candidateName, content: sanitizedContent, locale });
     blob = await pdfFn(doc).toBlob();
   } catch (renderErr) {
     console.error('[Cover Letter PDF] Render failed — locale:', locale, 'error:', renderErr);
@@ -16320,7 +16323,10 @@ export async function buildCoverLetterDocxBlob(
   candidateName = '',
   locale: Locale = 'en',
 ): Promise<Blob> {
-  const afterName = stripLeadingNameForDocx(content, candidateName);
+  // Final safety net: strip any diagnostic schema/version marker (e.g. a legacy
+  // saved draft) so it never appears in the exported DOCX text.
+  const sanitizedContent = sanitizeCoverLetterContent(content);
+  const afterName = stripLeadingNameForDocx(sanitizedContent, candidateName);
   const text = stripLeadingDateForDocx(afterName);
 
   let fontFamily: string;

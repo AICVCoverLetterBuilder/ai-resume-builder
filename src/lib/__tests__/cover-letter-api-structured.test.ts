@@ -55,6 +55,17 @@ const VALID_ENGLISH = {
   candidateName: CANDIDATE,
 };
 
+const VALID_ARABIC = {
+  dateLine: '12 يوليو 2026',
+  greeting: 'إلى فريق التوظيف في Tuxy،',
+  paragraph1: 'أتقدم بطلب للحصول على وظيفة مهندس برمجيات في Tuxy وأتمتع بخبرة عملية في تطوير تطبيقات ويب موثوقة.',
+  paragraph2: 'شاركت في مشاريع جماعية وحرصت على تقديم ميزات تركز على المستخدم مع اهتمام دقيق بالتفاصيل.',
+  paragraph3: 'يحفزني التزام Tuxy بجودة المنتج وتركيزها على العميل، وأنا متحمس للمساهمة الفعالة في فريقكم.',
+  closing: 'أرحب بفرصة مناقشة مؤهلاتي في مقابلة وأشكركم على وقتكم واهتمامكم.',
+  signOff: 'مع خالص التحية',
+  candidateName: CANDIDATE,
+};
+
 async function importRoute() {
   vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
   vi.stubEnv('ANTHROPIC_AUTH_TOKEN', '');
@@ -89,6 +100,10 @@ describe('structured cover letter API generation', () => {
     expect(data.result).toContain(CANDIDATE);
     expect(data.result).toContain('साक्षात्कार');
     expect(data.result).not.toMatch(/और\s+यही$/u);
+    // Diagnostic marker must never be visible in the returned letter text —
+    // it is carried solely by the coverLetterGenerationEngine field.
+    expect(data.result).not.toContain('structured-v4');
+    expect(data.coverLetterGenerationEngine).toBe('structured-v4');
     expect(anthropicCreateMock).toHaveBeenCalledTimes(1);
     expect(anthropicCreateMock.mock.calls[0][0].max_tokens).toBe(1200);
   });
@@ -134,6 +149,50 @@ describe('structured cover letter API generation', () => {
     expect(data.result).toContain('Sincerely,');
     expect(data.result).toContain(CANDIDATE);
     expect(data.result).not.toMatch(/[\u0900-\u097F]/u);
+    expect(data.result).not.toContain('structured-v4');
+    expect(data.coverLetterGenerationEngine).toBe('structured-v4');
     expect(anthropicCreateMock.mock.calls[0][0].max_tokens).toBe(600);
+  });
+
+  test('Arabic API returns complete Arabic content with sign-off, candidate name, and no visible marker', async () => {
+    anthropicCreateMock.mockResolvedValueOnce(anthropicJson(VALID_ARABIC));
+
+    const { POST } = await importRoute();
+    const response = await POST(makeGenerateRequest({
+      action: 'cover-letter-gen',
+      locale: 'ar',
+      jobTitle: 'Software Engineer',
+      companyName: COMPANY,
+      tone: 'formal',
+      personalName: CANDIDATE,
+    }) as never);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.result).toContain('مع خالص التحية');
+    expect(data.result).toContain(CANDIDATE);
+    expect(data.result).not.toContain('structured-v4');
+    expect(data.coverLetterGenerationEngine).toBe('structured-v4');
+  });
+
+  test('API response never leaks the structured-v4 marker into result text for any locale, even wrapped in zero-width characters', async () => {
+    anthropicCreateMock.mockResolvedValueOnce(anthropicJson(VALID_ENGLISH));
+
+    const { POST } = await importRoute();
+    const response = await POST(makeGenerateRequest({
+      action: 'cover-letter-gen',
+      locale: 'en',
+      jobTitle: 'Software Engineer',
+      companyName: COMPANY,
+      tone: 'formal',
+      personalName: CANDIDATE,
+    }) as never);
+    const data = await response.json();
+
+    // Neither the literal marker text nor its historical zero-width-wrapped form
+    // should ever appear in user-visible result text.
+    expect(data.result).not.toMatch(/structured-v4/i);
+    expect(data.result).not.toContain('\u200Bstructured-v4\u200B');
+    expect(data.coverLetterGenerationEngine).toBe('structured-v4');
   });
 });

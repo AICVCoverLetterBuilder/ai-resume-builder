@@ -181,8 +181,35 @@ function normalizeField(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+// Matches the literal marker text with or without its zero-width wrapper, case-insensitively.
+// This is intentionally broader than the exact `\u200Bstructured-v4\u200B` stamp so any legacy
+// variant (unwrapped, differently-cased, or embedded mid-line) is still caught.
+const SCHEMA_MARKER_TOKEN_RE = /[\u200B\uFEFF]*structured-v4[\u200B\uFEFF]*/gi;
+
+function isSchemaMarkerOnlyLine(line: string): boolean {
+  const stripped = line.replace(BIDI_AND_ZW_RE, '').trim();
+  return stripped.length > 0 && /^structured-v4$/i.test(stripped);
+}
+
+/**
+ * Removes the diagnostic `structured-v4` schema/version marker from cover-letter
+ * text wherever it appears — as its own standalone line (the normal case, added by
+ * `stampCoverLetterContent`), embedded mid-line, or wrapped in zero-width characters.
+ * The marker is diagnostic metadata (mirrored separately in the API's
+ * `coverLetterGenerationEngine` response field) and must never be visible to users
+ * in the preview, copied text, or PDF/DOCX exports.
+ */
+export function sanitizeCoverLetterContent(content: string): string {
+  if (typeof content !== 'string' || content.length === 0) return content;
+  const withoutMarkerLines = content
+    .split('\n')
+    .filter((line) => !isSchemaMarkerOnlyLine(line))
+    .join('\n');
+  return withoutMarkerLines.replace(SCHEMA_MARKER_TOKEN_RE, '').replace(/^\s*\n+/, '');
+}
+
 function stripSchemaMarker(content: string): string {
-  return content.replace(/\u200Bstructured-v4\u200B\n?/gu, '').trim();
+  return sanitizeCoverLetterContent(content).trim();
 }
 
 export function parseStructuredCoverLetterJson(raw: string): StructuredCoverLetter | null {
@@ -697,6 +724,14 @@ export function assertCoverLetterExportable(
   }
 }
 
+/**
+ * Historical helper that stamps content with the `structured-v4` diagnostic marker.
+ * No longer called by the generation API route — the marker text was visible to
+ * users (zero-width characters only hide themselves, not the ASCII "structured-v4"
+ * they wrap) — but kept for tests that simulate legacy stamped drafts and for any
+ * caller that still wants an explicit, in-memory-only diagnostic marker. Always
+ * strip with `sanitizeCoverLetterContent()` before the text is shown/exported.
+ */
 export function stampCoverLetterContent(body: string): string {
   return `${COVER_LETTER_SCHEMA_MARKER}\n${body}`;
 }
