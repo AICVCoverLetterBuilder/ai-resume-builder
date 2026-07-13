@@ -5,6 +5,12 @@ import { DEFAULT_LOCALE, type Locale, resolveLocaleCandidate } from '@/lib/i18n/
 import { sanitizeField, sanitizeText } from '@/lib/input-sanitizer';
 import { resolveCorsOrigin, buildCorsHeaders, handleOptions } from '@/lib/cors';
 import { verifyProToken } from '@/lib/pro-token';
+import {
+  assembleCoverLetterContent,
+  CoverLetterGenerationIncompleteError,
+  generateStructuredCoverLetterWithRetries,
+  stampCoverLetterContent,
+} from '@/lib/cover-letter-generation';
 
 // ─── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -366,36 +372,51 @@ export async function POST(req: NextRequest) {
         : '';
       const genderNote = getGenderInstruction(resolvedLocale, gender || '');
 
-      const response = await callWithRetry({
-        model: MODEL,
-        max_tokens: 480,
-        temperature: 0.8,
-        stream: false,
-        system: `You are an expert cover letter writer who creates authentic, human-sounding cover letters in ${localeInfo.languageName}.
+      let generationAttempts = 0;
+      const structuredLetter = await generateStructuredCoverLetterWithRetries({
+        locale: resolvedLocale,
+        closing: localeInfo.closing,
+        candidateName,
+        displayName,
+        companyName,
+        jobTitle,
+        languageName: localeInfo.languageName,
+        toneDesc,
+        variantNote,
+        genderNote,
+        fallbackRole: localeInfo.fallbackRole,
+        fallbackCompany: localeInfo.fallbackCompany,
+        generate: async (attempt, maxTokens, userPrompt) => {
+          generationAttempts = attempt + 1;
+          if (process.env.NODE_ENV !== 'production') {
+            console.log('[Cover Letter Structured]', {
+              locale: resolvedLocale,
+              coverLetter: true,
+              maxTokens,
+              attempt,
+            });
+          }
+          const response = await callWithRetry({
+            model: MODEL,
+            max_tokens: maxTokens,
+            temperature: attempt === 0 ? 0.5 : 0.3,
+            stream: false,
+            system: `You are an expert cover letter writer for ${localeInfo.languageName}.
+Return ONLY valid JSON matching the requested schema.
 Rules:
-- Plain text only. No markdown. No bullet points.
-- Do NOT wrap output in quotation marks — output the letter text directly.
-- Write naturally and professionally, as a real person would.
-- Do NOT use fake or invented numbers, percentages, or metrics unless clearly implied by the job title.
-- Focus on genuine motivation, relevant skills, and fit for the role.
-- Keep sentences concise. Avoid corporate jargon and filler phrases.
-- NEVER use placeholder names like "Your Name", "the candidate", "Candidate", or equivalent in any language. Always use the actual name provided.
-- When referring to the job title inside the letter, use the natural ${localeInfo.languageName} equivalent of the title (e.g. if the letter is in Arabic and the job title is "Software Engineer", write "مهندس برمجيات"; if Hindi, write "सॉफ्टवेयर इंजीनियर"). If the title is already in the target language, keep it as-is.
+- Every field must be complete and in ${localeInfo.languageName}.
+- Never stop mid-sentence.
+- Never mix languages except company names, job titles, or candidate names when appropriate.
+- Never use placeholder names.
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
-        messages: [
-          {
-            role: 'user',
-            content: `Write a cover letter in ${localeInfo.languageName} for ${displayName} applying for ${jobTitle || localeInfo.fallbackRole} at ${companyName || localeInfo.fallbackCompany}.
-Tone: ${toneDesc}.${variantNote}${genderNote}
-Structure: greeting, 3 short paragraphs (motivation + relevant experience / key skills / enthusiasm for company), closing with "${localeInfo.closing},\n${displayName}".
-The closing signature MUST use "${displayName}" — never a placeholder.
-Localize the job title naturally into ${localeInfo.languageName} when mentioning it in the letter body.
-Plain text only. Under 280 words. Output the letter only. Do not wrap in quotation marks.`,
-          },
-        ],
+            messages: [{ role: 'user', content: userPrompt }],
+          });
+          return getText(response);
+        },
       });
 
-      const letterBody = getText(response);
+      const letterBody = stampCoverLetterContent(assembleCoverLetterContent(structuredLetter));
+
       const dateStr = new Date().toLocaleDateString(resolvedLocale, { year: 'numeric', month: 'long', day: 'numeric' });
 
       // Build header: only include lines that have real content
@@ -407,8 +428,22 @@ Plain text only. Under 280 words. Output the letter only. Do not wrap in quotati
       const headerBlock = headerLines.length > 0 ? headerLines.join('\n') + '\n\n' : '';
       const fullLetter = `${headerBlock}${dateStr}\n\n${letterBody}`;
 
+      // Non-personal backend fingerprint + dev-only diagnostics. Never logs the
+      // generated letter text or personal data — locale/engine/attempt count only.
+      // Lets a deployed environment be checked for the structured-v4 pipeline
+      // (e.g. `curl .../api/generate | jq .coverLetterGenerationEngine`).
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[Cover Letter Generation]', {
+          type: 'coverLetter',
+          locale: resolvedLocale,
+          generationEngine: 'structured-v4',
+          valid: true,
+          retryCount: generationAttempts,
+        });
+      }
+
       if (_freeUserId) recordFreeAction(_freeUserId, action === 'cover-letter' ? 'cover-letter-gen' : action);
-      return jsonResponse({ result: fullLetter });
+      return jsonResponse({ result: fullLetter, coverLetterGenerationEngine: 'structured-v4' });
     }
 
     if (action === 'summary') {
@@ -658,6 +693,12 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
 
     return jsonResponse({ error: 'Unknown action' }, { status: 400 });
   } catch (err) {
+    if (err instanceof CoverLetterGenerationIncompleteError) {
+      return jsonResponse(
+        { error: err.message },
+        { status: 502 },
+      );
+    }
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error('[AI Generate Error]', errorMessage);
     if (err instanceof Error && err.stack) {

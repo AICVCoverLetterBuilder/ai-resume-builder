@@ -35,6 +35,7 @@ import {
   registerPdfI18nFonts,
   type PdfI18nRegistry,
 } from './pdf-i18n-text';
+import { assertCoverLetterExportable, getDefaultCoverLetterClosing } from './cover-letter-generation';
 import { isNative } from './iap';
 import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
@@ -16235,7 +16236,15 @@ export async function exportCoverLetterToPDF(
   content: string,
   fileName: string,
   locale: string,
+  companyName = '',
 ): Promise<SaveFileResult> {
+  assertCoverLetterExportable(
+    content,
+    locale as Locale,
+    candidateName,
+    companyName,
+    getDefaultCoverLetterClosing(locale),
+  );
   // Dynamic import so the heavy @react-pdf/renderer bundle is only loaded on demand
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let pdfFn: any, createElementFn: any, CoverLetterPDFDocumentComp: any;
@@ -16306,12 +16315,14 @@ export function stripLeadingDateForDocx(text: string): string {
   return lines.join('\n');
 }
 
-export async function exportCoverLetterToDOCX(content: string, fileName: string, candidateName = '', locale: Locale = 'en'): Promise<SaveFileResult> {
-  // Apply same stripping logic as PDF: remove leading name header, then leading date
+export async function buildCoverLetterDocxBlob(
+  content: string,
+  candidateName = '',
+  locale: Locale = 'en',
+): Promise<Blob> {
   const afterName = stripLeadingNameForDocx(content, candidateName);
   const text = stripLeadingDateForDocx(afterName);
 
-  // Locale-aware font selection (mirrors cover-letter-pdf.tsx)
   let fontFamily: string;
   let isRTL = false;
   switch (locale) {
@@ -16332,7 +16343,6 @@ export async function exportCoverLetterToDOCX(content: string, fileName: string,
 
   const { Document, Packer, Paragraph, TextRun, AlignmentType } = await import('docx');
 
-  // Today's date formatted per locale
   const dateStr = new Intl.DateTimeFormat(
     locale === 'en' ? 'en-US' :
     locale === 'de' ? 'de-DE' :
@@ -16352,7 +16362,6 @@ export async function exportCoverLetterToDOCX(content: string, fileName: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const paragraphs: any[] = [];
 
-  // Date line
   paragraphs.push(
     new Paragraph({
       children: [new TextRun({ text: dateStr, font: fontFamily, size: 20, color: '6B7280' })],
@@ -16361,10 +16370,8 @@ export async function exportCoverLetterToDOCX(content: string, fileName: string,
     }),
   );
 
-  // Spacing
   paragraphs.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
 
-  // Body paragraphs
   const bodyLines = text.split('\n');
   for (const line of bodyLines) {
     const trimmed = line.trim();
@@ -16401,6 +16408,17 @@ export async function exportCoverLetterToDOCX(content: string, fileName: string,
     ],
   });
 
-  const blob = await Packer.toBlob(doc);
+  return Packer.toBlob(doc);
+}
+
+export async function exportCoverLetterToDOCX(content: string, fileName: string, candidateName = '', locale: Locale = 'en', companyName = ''): Promise<SaveFileResult> {
+  assertCoverLetterExportable(
+    content,
+    locale,
+    candidateName,
+    companyName,
+    getDefaultCoverLetterClosing(locale),
+  );
+  const blob = await buildCoverLetterDocxBlob(content, candidateName, locale);
   return await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 }

@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n/context';
 import { useApp } from '@/lib/store';
 import { exportToClipboard, exportCoverLetterToDOCX, exportCoverLetterToPDF } from '@/lib/export';
+import { CoverLetterExportIncompleteError, getDefaultCoverLetterClosing, resolveExportCandidateName } from '@/lib/cover-letter-generation';
 import type { CoverLetterData, Tone } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -147,6 +148,19 @@ export default function CoverLetterPage() {
     return first || last || '';
   };
 
+  const getExportCandidateName = (): string => {
+    const formName = getFullName();
+    if (formName) return formName;
+    const cvName = currentCv?.personal?.fullName?.trim();
+    if (cvName) return cvName;
+    return resolveExportCandidateName(
+      cl.content,
+      '',
+      locale,
+      getDefaultCoverLetterClosing(locale),
+    );
+  };
+
   const handleClPDFDownload = async () => {
     if (!canDownload('cl')) {
       setShowDownloadMenu(false);
@@ -160,9 +174,13 @@ export default function CoverLetterPage() {
       ? `${t.coverLetter.filename} - ${cl.companyName}`
       : t.coverLetter.filename;
     try {
-      await exportCoverLetterToPDF(getFullName(), cl.content, filename, locale);
+      await exportCoverLetterToPDF(getExportCandidateName(), cl.content, filename, locale, cl.companyName);
       incrementDownloads('cl');
     } catch (err: unknown) {
+      if (err instanceof CoverLetterExportIncompleteError) {
+        toast.error('Cover letter is incomplete. Please regenerate before exporting.');
+        return;
+      }
       if (err instanceof Error && err.name === 'SaveCancelledError') return;
       if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter PDF export] failed:', err);
       toast.error(t.cv.pdfExportFailed);
@@ -181,9 +199,13 @@ export default function CoverLetterPage() {
     setShowDownloadMenu(false);
     setIsWordExporting(true);
     try {
-      await exportCoverLetterToDOCX(cl.content, `${t.coverLetter.filename} - ${cl.companyName}`, getFullName(), locale);
+      await exportCoverLetterToDOCX(cl.content, `${t.coverLetter.filename} - ${cl.companyName}`, getExportCandidateName(), locale, cl.companyName);
       incrementDownloads('cl');
     } catch (err: unknown) {
+      if (err instanceof CoverLetterExportIncompleteError) {
+        toast.error('Cover letter is incomplete. Please regenerate before exporting.');
+        return;
+      }
       if (err instanceof Error && err.name === 'SaveCancelledError') return;
       if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter DOCX export] failed:', err);
       toast.error(t.cv.wordExportFailed);
