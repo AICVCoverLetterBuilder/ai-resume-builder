@@ -17,7 +17,6 @@ import {
 } from '@/lib/cover-letter-flow';
 import { normalizeCoverLetterGender } from '@/lib/cover-letter-gender';
 import {
-  formatCoverLetterGenerationDiagnosticsForCopy,
   resolveCoverLetterGenerationResult,
 } from '@/lib/cover-letter-generation-resolve';
 import {
@@ -35,13 +34,17 @@ import {
   coverLetterStaleContent,
   coverLetterWrongLanguage,
 } from '@/lib/cover-letter-messages';
-import { copyArabicCoverLetterPdfDiagnosticsToClipboard } from '@/lib/cover-letter-arabic-pdf';
 import type { CoverLetterData, Tone } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { Sparkles, FileText, Copy, Pencil, RefreshCw, Crown, Info, Loader2, Download, ChevronDown, File, User } from 'lucide-react';
 import { CoverLetterProModal, FreeLimitModal } from '@/components/UpgradePro';
 import { PremiumAIButton, AIBadge } from '@/components/PremiumAIButton';
+import {
+  CoverLetterArabicPdfDiagnosticsButton,
+  CoverLetterGenerationDiagnosticsButton,
+  CoverLetterGroundingDiagnosticsButton,
+} from '@/components/CoverLetterDiagnosticControls';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { getAppUserId } from '@/lib/iap';
 import { buildCoverLetterFactSet } from '@/lib/cover-letter-facts';
@@ -49,7 +52,6 @@ import {
   beginCoverLetterGroundingDiagnostics,
   countFactsByCategory,
   updateCoverLetterGroundingDiagnostics,
-  copyCoverLetterGroundingDiagnosticsToClipboard,
   COVER_LETTER_GROUNDING_BACKEND_REVISION,
 } from '@/lib/cover-letter-grounding-diagnostics';
 import { normalizeCoverLetterBody, prepareCoverLetterForDisplay } from '@/lib/cover-letter-header';
@@ -1157,22 +1159,13 @@ export default function CoverLetterPage() {
                   </div>
                 )}
 
-                {(generationPhase === 'success' || generationPhase === 'error' || showGroundingDiagnostics) && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(formatCoverLetterGenerationDiagnosticsForCopy());
-                        toast.success('Generation diagnostics copied');
-                      } catch {
-                        toast.error('Could not copy generation diagnostics');
-                      }
-                    }}
-                    className="mt-3 block text-xs text-amber-700 dark:text-amber-400 underline"
-                  >
-                    Copy generation diagnostics
-                  </button>
-                )}
+                <CoverLetterGenerationDiagnosticsButton
+                  show={
+                    generationPhase === 'success' ||
+                    generationPhase === 'error' ||
+                    showGroundingDiagnostics
+                  }
+                />
 
                 {/* Regenerate section — shown after first generation */}
                 {hasGenerated && (
@@ -1257,32 +1250,10 @@ export default function CoverLetterPage() {
                     <p className="mt-1 text-[10px] text-muted-foreground italic">
                       {t.coverLetter.aiDisclaimer}
                     </p>
-                    {selectedLocale === 'ar' && showArabicPdfDiagnostics && (
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const ok = await copyArabicCoverLetterPdfDiagnosticsToClipboard();
-                          toast[ok ? 'success' : 'error'](ok ? 'PDF diagnostics copied' : 'Could not copy diagnostics');
-                        }}
-                        className="mt-2 text-xs text-amber-700 dark:text-amber-400 underline"
-                      >
-                        Copy PDF diagnostics
-                      </button>
-                    )}
-                    {showGroundingDiagnostics && (
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const ok = await copyCoverLetterGroundingDiagnosticsToClipboard();
-                          toast[ok ? 'success' : 'error'](
-                            ok ? 'Grounding diagnostics copied' : 'Could not copy grounding diagnostics',
-                          );
-                        }}
-                        className="mt-2 block text-xs text-amber-700 dark:text-amber-400 underline"
-                      >
-                        Copy grounding diagnostics
-                      </button>
-                    )}
+                    <CoverLetterArabicPdfDiagnosticsButton
+                      show={selectedLocale === 'ar' && showArabicPdfDiagnostics}
+                    />
+                    <CoverLetterGroundingDiagnosticsButton show={showGroundingDiagnostics} />
                   </>
                 )}
               </div>
