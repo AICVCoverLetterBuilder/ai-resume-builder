@@ -24,12 +24,13 @@ describe('cover letter generation flow guards', () => {
     expect(a).not.toBe(b);
   });
 
-  test('shouldApplyCoverLetterGenerationResult accepts only matching request id and locale', () => {
-    const active: ActiveCoverLetterRequest = { requestId: 'req-1', locale: 'ar' };
-    expect(shouldApplyCoverLetterGenerationResult(active, 'req-1', 'ar')).toBe(true);
-    expect(shouldApplyCoverLetterGenerationResult(active, 'req-2', 'ar')).toBe(false);
-    expect(shouldApplyCoverLetterGenerationResult(active, 'req-1', 'hi')).toBe(false);
-    expect(shouldApplyCoverLetterGenerationResult(null, 'req-1', 'ar')).toBe(false);
+  test('shouldApplyCoverLetterGenerationResult accepts only matching request id, locale, and gender', () => {
+    const active: ActiveCoverLetterRequest = { requestId: 'req-1', locale: 'ar', gender: 'female' };
+    expect(shouldApplyCoverLetterGenerationResult(active, 'req-1', 'ar', 'female')).toBe(true);
+    expect(shouldApplyCoverLetterGenerationResult(active, 'req-2', 'ar', 'female')).toBe(false);
+    expect(shouldApplyCoverLetterGenerationResult(active, 'req-1', 'hi', 'female')).toBe(false);
+    expect(shouldApplyCoverLetterGenerationResult(active, 'req-1', 'ar', 'male')).toBe(false);
+    expect(shouldApplyCoverLetterGenerationResult(null, 'req-1', 'ar', 'female')).toBe(false);
   });
 
   test('stale Hindi content is not current when Arabic is selected', () => {
@@ -70,15 +71,22 @@ describe('cover letter generation flow guards', () => {
   });
 
   test('race: late Hindi response must not apply after Arabic request started', () => {
-    const arabicActive: ActiveCoverLetterRequest = { requestId: 'arabic-req', locale: 'ar' };
+    const arabicActive: ActiveCoverLetterRequest = { requestId: 'arabic-req', locale: 'ar', gender: 'unspecified' };
     const hindiResponseId = 'hindi-req';
-    expect(shouldApplyCoverLetterGenerationResult(arabicActive, hindiResponseId, 'hi')).toBe(false);
-    expect(shouldApplyCoverLetterGenerationResult(arabicActive, 'arabic-req', 'ar')).toBe(true);
+    expect(shouldApplyCoverLetterGenerationResult(arabicActive, hindiResponseId, 'hi', 'unspecified')).toBe(false);
+    expect(shouldApplyCoverLetterGenerationResult(arabicActive, 'arabic-req', 'ar', 'unspecified')).toBe(true);
   });
 
   test('stale Arabic response cannot overwrite newer request in another language', () => {
-    const englishActive: ActiveCoverLetterRequest = { requestId: 'en-req-2', locale: 'en' };
-    expect(shouldApplyCoverLetterGenerationResult(englishActive, 'ar-req-1', 'ar')).toBe(false);
+    const englishActive: ActiveCoverLetterRequest = { requestId: 'en-req-2', locale: 'en', gender: 'unspecified' };
+    expect(shouldApplyCoverLetterGenerationResult(englishActive, 'ar-req-1', 'ar', 'unspecified')).toBe(false);
+  });
+
+  test('gender-switch race: late male response must not overwrite female request', () => {
+    const femaleActive: ActiveCoverLetterRequest = { requestId: 'female-req', locale: 'hi', gender: 'female' };
+    expect(shouldApplyCoverLetterGenerationResult(femaleActive, 'male-req', 'hi', 'male')).toBe(false);
+    expect(shouldApplyCoverLetterGenerationResult(femaleActive, 'female-req', 'hi', 'male')).toBe(false);
+    expect(shouldApplyCoverLetterGenerationResult(femaleActive, 'female-req', 'hi', 'female')).toBe(true);
   });
 
   test('failed grounding blocks downloads even when locale matches', () => {

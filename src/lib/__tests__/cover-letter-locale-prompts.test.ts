@@ -68,6 +68,8 @@ describe('Hindi and Arabic cover letter prompt grounding', () => {
     expect(prompt).toContain('مع خالص التحية،');
     expect(prompt).toContain('للتقدم لشغل وظيفة');
     expect(prompt).toContain('بوصفي');
+    expect(prompt).toContain('فرصة مدروسة نحو مسيرة مهنية هادفة');
+    expect(prompt).toContain('وأرحب بفرصة التعرف على متطلبات الوظيفة ومناقشة إمكانية الانضمام إلى فريقكم');
     expect(prompt).toContain('Write entirely in Arabic');
     expect(prompt).toContain('Salesman');
     expect(prompt).toContain('UNIVERSAL GROUNDING RULES');

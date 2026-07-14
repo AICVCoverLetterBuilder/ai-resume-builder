@@ -20,6 +20,7 @@ import {
   type CoverLetterGenerationPhase,
   type CoverLetterGroundingStatus,
 } from '@/lib/cover-letter-flow';
+import { normalizeCoverLetterGender } from '@/lib/cover-letter-gender';
 import {
   coverLetterAiUnavailable,
   coverLetterGroundingFailed,
@@ -300,7 +301,12 @@ export default function CoverLetterPage() {
     generationAbortRef.current = abortController;
     const requestId = createCoverLetterRequestId();
     const requestedLocale = selectedLocale;
-    activeGenerationRef.current = { requestId, locale: requestedLocale };
+    const requestedGender = normalizeCoverLetterGender(cl.gender);
+    activeGenerationRef.current = {
+      requestId,
+      locale: requestedLocale,
+      gender: requestedGender,
+    };
 
     setGenerationPhase('loading');
     setGroundingStatus('unknown');
@@ -368,7 +374,12 @@ export default function CoverLetterPage() {
         signal: abortController.signal,
       });
 
-      if (!shouldApplyCoverLetterGenerationResult(activeGenerationRef.current, requestId, requestedLocale)) {
+      if (!shouldApplyCoverLetterGenerationResult(
+        activeGenerationRef.current,
+        requestId,
+        requestedLocale,
+        requestedGender,
+      )) {
         return;
       }
 
@@ -394,6 +405,7 @@ export default function CoverLetterPage() {
         jobTitle: cl.jobTitle,
         companyName: cl.companyName,
         factSet,
+        gender: requestedGender,
       });
 
       recordGroundingViolations(activation.violations);
@@ -459,7 +471,12 @@ export default function CoverLetterPage() {
       toast.success(t.coverLetter.genSuccess);
     } catch (err: unknown) {
       if ((err as { name?: string }).name === 'AbortError') return;
-      if (!shouldApplyCoverLetterGenerationResult(activeGenerationRef.current, requestId, requestedLocale)) {
+      if (!shouldApplyCoverLetterGenerationResult(
+        activeGenerationRef.current,
+        requestId,
+        requestedLocale,
+        requestedGender,
+      )) {
         return;
       }
       if ((err as { status?: number }).status === 403) {

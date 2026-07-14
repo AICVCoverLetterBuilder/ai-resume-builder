@@ -9,6 +9,8 @@ import {
   validateCoverLetterGrounding,
 } from './cover-letter-grounding';
 import { stripCoverLetterExportHeader } from './cover-letter-header';
+import type { CoverLetterGender } from './cover-letter-gender';
+import { normalizeCoverLetterGender } from './cover-letter-gender';
 
 export const COVER_LETTER_SCHEMA_VERSION = 'structured-v4';
 export const COVER_LETTER_SCHEMA_MARKER = `\u200B${COVER_LETTER_SCHEMA_VERSION}\u200B`;
@@ -346,7 +348,11 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
       'HINDI QUALITY RULES:',
       '- Write natural, professional Hindi — not a literal English translation.',
       '- Translate the job title faithfully into natural Hindi without changing seniority (e.g. Software Developer → "सॉफ़्टवेयर डेवलपर (Software Developer)").',
-      '- Prefer gender-neutral constructions. NEVER use slash forms such as चाहता/चाहती, करूँगा/करूँगी, रहा/रही.',
+      '- Prefer gender-neutral constructions ONLY when applicant gender is unspecified in the GENDER instruction above.',
+      '- When GENDER says FEMALE: use exclusively feminine first-person forms (चाहती हूँ, कर रही हूँ, प्रस्तुत कर रही हूँ). Never masculine.',
+      '- When GENDER says MALE: use exclusively masculine first-person forms (चाहता हूँ, कर रहा हूँ, प्रस्तुत कर रहा हूँ). Never feminine.',
+      '- NEVER use slash forms such as चाहता/चाहती, करूँगा/करूँगी, रहा/रही.',
+      '- Never infer gender from the candidate name or job title.',
       '- Do NOT claim ईमानदारी, लगन, सूक्ष्मता, रचनात्मक सोच, समस्या-समाधान क्षमता, नेतृत्व क्षमता, or मजबूत कार्य-नैतिकता unless in SOURCE FACTS.',
       '- Do NOT claim व्यापक अनुभव, कई वर्षों का अनुभव, वेब अनुप्रयोगों का निर्माण, डेटाबेस प्रबंधन, जटिल तकनीकी समस्याओं का समाधान, परियोजनाओं का नेतृत्व, प्रणाली की कार्यक्षमता में सुधार, प्रोग्रामिंग भाषाओं में विशेषज्ञता, or क्लाउड/Agile अनुभव unless in SOURCE FACTS.',
       '- When evidence is sparse, use neutral professional Hindi focused on interest, willingness to learn/contribute, and interview availability.',
@@ -362,6 +368,9 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
       '- Prefer natural phrasing such as "أتقدم بطلب لشغل وظيفة [Role]" or "للتقدم لشغل وظيفة [Role]" or "للانضمام إلى فريقكم لشغل وظيفة [Role]".',
       '- Prefer greeting "إلى فريق التوظيف المحترم في شركة [Company]،" when natural.',
       '- Prefer "أنضم إليها" over awkward "أنتمي إليها" when describing joining a workplace.',
+      '- Prefer natural sparse interest wording such as "وأرحب بفرصة التعرف على متطلبات الوظيفة ومناقشة إمكانية الانضمام إلى فريقكم."',
+      '- Do NOT use artificial career-path rhetoric such as "فرصة مدروسة نحو مسيرة مهنية هادفة" or similar overly formal abstractions about a "هادفة" career journey.',
+      '- Prefer simpler alternatives when needed (e.g. "فرصة مناسبة للتطور المهني" or "خطوة مناسبة في مسيرتي المهنية"), or omit career-direction claims entirely when SOURCE FACTS are sparse.',
       '- Do NOT imply the candidate already works at the employer (avoid forms like "بوصفي [Role] في شركة [Company]").',
       '- Use "مع خالص التحية،" with the Arabic comma "،".',
       '- For sparse facts, prefer neutral interest/learning/growth wording — do NOT claim "إضافة قيمة حقيقية" unless SOURCE FACTS establish that value.',
@@ -861,6 +870,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
   toneDesc: string;
   variantNote: string;
   genderNote: string;
+  gender?: CoverLetterGender | string;
   fallbackRole: string;
   fallbackCompany: string;
   factSet?: CoverLetterFactSet;
@@ -879,6 +889,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
   const dateLine = localizedDateLine(options.locale);
   const factSet: CoverLetterFactSet = options.factSet ?? { facts: [], isSparse: true };
   const usedFactIds = factSet.facts.map((f) => f.id);
+  const gender = normalizeCoverLetterGender(options.gender);
 
   const tryParseAndValidate = (raw: string): StructuredCoverLetter | null => {
     const parsed = parseStructuredCoverLetterJson(raw);
@@ -995,6 +1006,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       companyName: options.companyName || options.fallbackCompany,
       factSet,
       dateLine,
+      gender,
     });
     // Soft-align signOff with locale closing preference
     fallback.signOff = options.closing || fallback.signOff;
@@ -1016,6 +1028,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       companyName: options.companyName || options.fallbackCompany,
       factSet,
       dateLine,
+      gender,
     });
     fallback.signOff = options.closing || fallback.signOff;
     return {

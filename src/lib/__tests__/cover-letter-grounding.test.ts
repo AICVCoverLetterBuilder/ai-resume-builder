@@ -250,12 +250,98 @@ describe('cover letter grounding validation', () => {
       companyName: 'Gnox',
       factSet: facts,
       dateLine: '14 जुलाई 2026',
+      gender: 'unspecified',
     });
     const text = assembleCoverLetterContent(letter);
     expect(text).not.toMatch(/चाहता\/चाहती|करूँगा\/करूँगी|रहा\/रही/);
+    expect(text).not.toMatch(/चाहता हूँ|चाहती हूँ|कर रहा हूँ|कर रही हूँ/);
     expect(text).not.toMatch(/ईमानदारी|लगन/);
     expect(text).toContain('Software Developer');
+    expect(text).toContain('यह आवेदन प्रस्तुत है');
     expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
+  });
+
+  test('Hindi female sparse fallback uses feminine forms only', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+    });
+    const letter = buildDeterministicSparseCoverLetter('hi', {
+      candidateName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+      factSet: facts,
+      dateLine: '14 जुलाई 2026',
+      gender: 'female',
+    });
+    const text = assembleCoverLetterContent(letter);
+    expect(text).toContain('प्रस्तुत कर रही हूँ');
+    expect(text).toContain('चाहती हूँ');
+    expect(text).not.toContain('प्रस्तुत कर रहा हूँ');
+    expect(text).not.toContain('चाहता हूँ');
+    expect(text).not.toMatch(/चाहता\/चाहती|रहा\/रही/);
+    expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
+  });
+
+  test('Hindi male sparse fallback uses masculine forms only', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+    });
+    const letter = buildDeterministicSparseCoverLetter('hi', {
+      candidateName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+      factSet: facts,
+      dateLine: '14 जुलाई 2026',
+      gender: 'male',
+    });
+    const text = assembleCoverLetterContent(letter);
+    expect(text).toContain('प्रस्तुत कर रहा हूँ');
+    expect(text).toContain('चाहता हूँ');
+    expect(text).not.toContain('प्रस्तुत कर रही हूँ');
+    expect(text).not.toContain('चाहती हूँ');
+    expect(text).not.toMatch(/चाहता\/चाहती|रहा\/रही/);
+    expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
+  });
+
+  test('gendered locale sparse fallbacks preserve selected gender without slash placeholders', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex Carter',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+    });
+    const cases: Array<{ locale: typeof ALL_LOCALES[number]; gender: 'male' | 'female'; mustInclude: string; mustNotInclude: string }> = [
+      { locale: 'fr', gender: 'female', mustInclude: 'Je serais ravie', mustNotInclude: "Je serais ravi d" },
+      { locale: 'fr', gender: 'male', mustInclude: "Je serais ravi d", mustNotInclude: 'Je serais ravie' },
+      { locale: 'it', gender: 'female', mustInclude: 'Sarei lieta', mustNotInclude: 'Sarei lieto' },
+      { locale: 'it', gender: 'male', mustInclude: 'Sarei lieto', mustNotInclude: 'Sarei lieta' },
+      { locale: 'es', gender: 'female', mustInclude: 'encantada', mustNotInclude: 'encantado' },
+      { locale: 'es', gender: 'male', mustInclude: 'encantado', mustNotInclude: 'encantada' },
+      { locale: 'ru', gender: 'female', mustInclude: 'Готова к собеседованию', mustNotInclude: 'Готов к собеседованию' },
+      { locale: 'ru', gender: 'male', mustInclude: 'Готов к собеседованию', mustNotInclude: 'Готова к собеседованию' },
+      { locale: 'sr', gender: 'female', mustInclude: 'Dostupna sam', mustNotInclude: 'Dostupan sam' },
+      { locale: 'sr', gender: 'male', mustInclude: 'Dostupan sam', mustNotInclude: 'Dostupna sam' },
+      { locale: 'hr', gender: 'female', mustInclude: 'Dostupna sam', mustNotInclude: 'Dostupan sam' },
+      { locale: 'hr', gender: 'male', mustInclude: 'Dostupan sam', mustNotInclude: 'Dostupna sam' },
+    ];
+    for (const c of cases) {
+      const letter = buildDeterministicSparseCoverLetter(c.locale, {
+        candidateName: 'Alex Carter',
+        jobTitle: 'Android tester',
+        companyName: 'Gnof',
+        factSet: facts,
+        dateLine: '2026-07-14',
+        gender: c.gender,
+      });
+      const text = assembleCoverLetterContent(letter);
+      expect(text, `${c.locale}-${c.gender}`).toContain(c.mustInclude);
+      expect(text, `${c.locale}-${c.gender}`).not.toContain(c.mustNotInclude);
+      expect(text).not.toMatch(/motivé\(e\)|encantado\/a|lieto\/a|рад\(а\)|obrigado\(a\)/);
+      expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
+    }
   });
 
   test('Arabic sparse fallback uses natural join wording without unsupported traits', () => {

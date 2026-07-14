@@ -17,6 +17,10 @@ import {
 import { assembleCoverLetterContent } from './cover-letter-generation';
 import { normalizeCoverLetterBody } from './cover-letter-header';
 import { COVER_LETTER_GROUNDING_BACKEND_REVISION } from './cover-letter-grounding-diagnostics';
+import {
+  normalizeCoverLetterGender,
+  type CoverLetterGender,
+} from './cover-letter-gender';
 
 export type ClientGroundingActivation = {
   content: string;
@@ -52,6 +56,7 @@ function buildLocalSparseFallback(options: {
   jobTitle: string;
   companyName: string;
   factSet: CoverLetterFactSet;
+  gender?: CoverLetterGender | string;
 }): string {
   const letter = buildDeterministicSparseCoverLetter(options.locale, {
     candidateName: options.candidateName,
@@ -59,6 +64,7 @@ function buildLocalSparseFallback(options: {
     companyName: options.companyName,
     factSet: options.factSet,
     dateLine: localizedDateLine(options.locale),
+    gender: normalizeCoverLetterGender(options.gender),
   });
   return normalizeCoverLetterBody(assembleCoverLetterContent(letter), options.candidateName);
 }
@@ -84,6 +90,7 @@ export function activateCoverLetterContentWithClientGrounding(options: {
   jobTitle: string;
   companyName: string;
   factSet: CoverLetterFactSet;
+  gender?: CoverLetterGender | string;
 }): ClientGroundingActivation {
   const serverGroundingStatus = normalizeCoverLetterGroundingStatus(options.serverGroundingRaw);
   const schemaMismatch =
@@ -133,6 +140,7 @@ export function activateCoverLetterContentWithClientGrounding(options: {
     jobTitle: options.jobTitle,
     companyName: options.companyName,
     factSet: options.factSet,
+    gender: options.gender,
   });
   const fallbackGrounding = validateCoverLetterGrounding(fallback, options.factSet);
 

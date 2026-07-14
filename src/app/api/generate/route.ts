@@ -13,8 +13,9 @@ import {
 } from '@/lib/cover-letter-generation';
 import { buildCoverLetterFactSet } from '@/lib/cover-letter-facts';
 import { COVER_LETTER_GROUNDING_BACKEND_REVISION } from '@/lib/cover-letter-grounding-diagnostics';
+import { getCoverLetterGenderInstruction, normalizeCoverLetterGender } from '@/lib/cover-letter-gender';
 
-// ─── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
+// ── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
 // an external store (Upstash Redis, etc.).
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
@@ -254,22 +255,11 @@ function getText(response: Anthropic.Messages.Message): string {
 }
 
 /**
- * Returns a gender instruction clause to append to AI prompts for languages
- * that require grammatical gender agreement (Serbian, Croatian).
- * For other languages returns an empty string.
+ * Gender instruction for languages that require grammatical gender agreement.
+ * Selected app gender is the only source of truth (never inferred from names).
  */
 function getGenderInstruction(locale: string, gender: string): string {
-  const genderLocales = ['sr', 'hr'];
-  if (!genderLocales.includes(locale)) return '';
-
-  if (gender === 'male') {
-    return ' VAŽNO: Subjekt je MUŠKI. Koristi ISKLJUČIVO muške glagolske i pridevske oblike kroz ceo tekst (npr. "Vodio sam", "Razvio sam", "Radio sam", "Bio sam", "Sarađivao sam", "Upravljao sam"). NIKADA ne koristi kombinovane oblike kao "Vodio/la", "radio/la", "bio/la". Svaki glagol mora biti u muškom rodu.';
-  }
-  if (gender === 'female') {
-    return ' VAŽNO: Subjekt je ŽENSKI. Koristi ISKLJUČIVO ženske glagolske i pridevske oblike kroz ceo tekst (npr. "Vodila sam", "Razvila sam", "Radila sam", "Bila sam", "Sarađivala sam", "Upravljala sam"). NIKADA ne koristi kombinovane oblike kao "Vodio/la", "radio/la", "bio/la". Svaki glagol mora biti u ženskom rodu.';
-  }
-  // No gender selected — use neutral/nominalized structures
-  return ' Pol nije poznat. Koristi neutralne imeničke i gerundske strukture bez ličnih glagolskih oblika (npr. "Vođenje projekata", "Razvoj sistema", "Upravljanje timom", "Koordinacija aktivnosti"). NIKADA ne koristi kombinovane oblike kao "Vodio/la", "radio/la", "bio/la".';
+  return getCoverLetterGenderInstruction(locale, gender);
 }
 
 /**
@@ -371,6 +361,7 @@ export async function POST(req: NextRequest) {
         ? ' Use a different opening and structure than the standard version — still without inventing facts.'
         : '';
       const genderNote = getGenderInstruction(resolvedLocale, gender || '');
+      const normalizedGender = normalizeCoverLetterGender(gender || '');
 
       const experienceEntries = Array.isArray(params.experienceEntries) ? params.experienceEntries : [];
       const skillsList: string[] = Array.isArray(params.skills) ? params.skills : [];
@@ -410,6 +401,7 @@ export async function POST(req: NextRequest) {
         toneDesc,
         variantNote,
         genderNote,
+        gender: normalizedGender,
         fallbackRole: localeInfo.fallbackRole,
         fallbackCompany: localeInfo.fallbackCompany,
         factSet,

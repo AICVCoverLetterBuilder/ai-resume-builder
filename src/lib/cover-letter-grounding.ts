@@ -7,6 +7,10 @@ import {
   type CoverLetterFactSet,
 } from './cover-letter-facts';
 import type { Locale } from '@/lib/i18n/translations';
+import {
+  normalizeCoverLetterGender,
+  type CoverLetterGender,
+} from './cover-letter-gender';
 
 export type GroundingViolationKind =
   | 'numeric_claim'
@@ -390,7 +394,14 @@ type FallbackParts = {
   signOff: string;
 };
 
-function fallbackParts(locale: Locale, name: string, role: string, company: string, extras: string[]): FallbackParts {
+function fallbackParts(
+  locale: Locale,
+  name: string,
+  role: string,
+  company: string,
+  extras: string[],
+  gender: CoverLetterGender,
+): FallbackParts {
   const extraSentence = extras.length ? extras.join(' ') : '';
   const templates: Record<Locale, FallbackParts> = {
     en: {
@@ -415,7 +426,11 @@ function fallbackParts(locale: Locale, name: string, role: string, company: stri
       greeting: `Estimado equipo de selección de ${company}:`,
       paragraph1: `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me gustaría unirme a su equipo, aprender en el rol y contribuir cuando sea apropiado.`,
       paragraph2: extraSentence
-        || 'El puesto me resulta de verdadero interés. Agradecería poder hablar sobre mi candidatura y conocer mejor sus expectativas para el rol.',
+        || (gender === 'female'
+          ? 'El puesto me resulta de verdadero interés. Estaría encantada de hablar sobre mi candidatura y conocer mejor sus expectativas para el rol.'
+          : gender === 'male'
+            ? 'El puesto me resulta de verdadero interés. Estaría encantado de hablar sobre mi candidatura y conocer mejor sus expectativas para el rol.'
+            : 'El puesto me resulta de verdadero interés. Agradecería poder hablar sobre mi candidatura y conocer mejor sus expectativas para el rol.'),
       paragraph3: 'Quedo a disposición para una entrevista.',
       closing: 'Gracias por su tiempo y consideración.',
       signOff: 'Atentamente',
@@ -424,7 +439,11 @@ function fallbackParts(locale: Locale, name: string, role: string, company: stri
       greeting: `Madame, Monsieur, équipe de recrutement de ${company},`,
       paragraph1: `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. J'aimerais rejoindre votre équipe, apprendre dans ce rôle et contribuer lorsque cela sera utile.`,
       paragraph2: extraSentence
-        || `Ce poste m'intéresse réellement. Je souhaite échanger sur ma candidature et en savoir davantage sur vos attentes.`,
+        || (gender === 'female'
+          ? `Ce poste m'intéresse réellement. Je serais ravie d'échanger sur ma candidature et d'en savoir davantage sur vos attentes.`
+          : gender === 'male'
+            ? `Ce poste m'intéresse réellement. Je serais ravi d'échanger sur ma candidature et d'en savoir davantage sur vos attentes.`
+            : `Ce poste m'intéresse réellement. Je souhaite échanger sur ma candidature et en savoir davantage sur vos attentes.`),
       paragraph3: `Je reste disponible pour un entretien à votre convenance.`,
       closing: `Je vous remercie pour votre temps et votre considération.`,
       signOff: 'Cordialement',
@@ -433,7 +452,11 @@ function fallbackParts(locale: Locale, name: string, role: string, company: stri
       greeting: `Gentile team di selezione di ${company},`,
       paragraph1: `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Vorrei unirmi al vostro team, imparare nel ruolo e contribuire ove opportuno.`,
       paragraph2: extraSentence
-        || `La posizione è di concreto interesse. Vorrei approfondire la candidatura e conoscere meglio le vostre aspettative.`,
+        || (gender === 'female'
+          ? `La posizione è di concreto interesse. Sarei lieta di approfondire la candidatura e conoscere meglio le vostre aspettative.`
+          : gender === 'male'
+            ? `La posizione è di concreto interesse. Sarei lieto di approfondire la candidatura e conoscere meglio le vostre aspettative.`
+            : `La posizione è di concreto interesse. Vorrei approfondire la candidatura e conoscere meglio le vostre aspettative.`),
       paragraph3: `Resto a disposizione per un colloquio.`,
       closing: `Grazie per il vostro tempo e la vostra considerazione.`,
       signOff: 'Cordiali saluti',
@@ -452,7 +475,11 @@ function fallbackParts(locale: Locale, name: string, role: string, company: stri
       paragraph1: `ovim putem se prijavljujem za poziciju ${role} u kompaniji ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gde je to primereno.`,
       paragraph2: extraSentence
         || 'Pozicija je od stvarnog interesa. Bilo bi mi drago da razgovaramo o prijavi i saznam više o vašim očekivanjima.',
-      paragraph3: 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
+      paragraph3: gender === 'female'
+        ? 'Dostupna sam za razgovor u terminu koji vama odgovara.'
+        : gender === 'male'
+          ? 'Dostupan sam za razgovor u terminu koji vama odgovara.'
+          : 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
       closing: 'Hvala na vašem vremenu i razmatranju.',
       signOff: 'Srdačno',
     },
@@ -461,7 +488,11 @@ function fallbackParts(locale: Locale, name: string, role: string, company: stri
       paragraph1: `ovim putem se prijavljujem za poziciju ${role} u tvrtki ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gdje je to primjereno.`,
       paragraph2: extraSentence
         || 'Pozicija je od stvarnog interesa. Bilo bi mi drago da razgovaramo o prijavi i saznam više o vašim očekivanjima.',
-      paragraph3: 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
+      paragraph3: gender === 'female'
+        ? 'Dostupna sam za razgovor u terminu koji vama odgovara.'
+        : gender === 'male'
+          ? 'Dostupan sam za razgovor u terminu koji vama odgovara.'
+          : 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
       closing: 'Hvala na vašem vremenu i razmatranju.',
       signOff: 'Srdačan pozdrav',
     },
@@ -470,7 +501,11 @@ function fallbackParts(locale: Locale, name: string, role: string, company: stri
       paragraph1: `пишу, чтобы выразить интерес к позиции ${role} в компании ${company}. Хотелось бы присоединиться к вашей команде, учиться в этой роли и вносить вклад там, где это уместно.`,
       paragraph2: extraSentence
         || 'Вакансия представляет интерес. С удовольствием обсужу заявление и узнаю больше о ваших ожиданиях к роли.',
-      paragraph3: 'Собеседование можно назначить в удобное для вас время.',
+      paragraph3: gender === 'female'
+        ? 'Готова к собеседованию в удобное для вас время.'
+        : gender === 'male'
+          ? 'Готов к собеседованию в удобное для вас время.'
+          : 'Собеседование можно назначить в удобное для вас время.',
       closing: 'Спасибо за ваше время и рассмотрение.',
       signOff: 'С уважением',
     },
@@ -478,17 +513,25 @@ function fallbackParts(locale: Locale, name: string, role: string, company: stri
       greeting: `Prezada equipe de recrutamento da ${company},`,
       paragraph1: `escrevo para expressar meu interesse na vaga de ${role} na ${company}. Gostaria de me juntar à equipe, aprender no cargo e contribuir quando for apropriado.`,
       paragraph2: extraSentence
-        || 'A vaga é de real interesse. Ficaria feliz em conversar sobre a candidatura e conhecer melhor as expectativas para o cargo.',
+        || 'A vaga é de real interesse. Será um prazer conversar sobre a candidatura e conhecer melhor as expectativas para o cargo.',
       paragraph3: 'Fico à disposição para uma entrevista.',
       closing: 'Agradeço pelo tempo e pela consideração.',
       signOff: 'Atenciosamente',
     },
     hi: {
       greeting: `${company} की सम्मानित भर्ती टीम को,`,
-      paragraph1: `${company} में ${role} पद के लिए यह आवेदन प्रस्तुत है। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`,
+      paragraph1: gender === 'female'
+        ? `मैं ${company} में ${role} पद के लिए आवेदन प्रस्तुत कर रही हूँ। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`
+        : gender === 'male'
+          ? `मैं ${company} में ${role} पद के लिए आवेदन प्रस्तुत कर रहा हूँ। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`
+          : `${company} में ${role} पद के लिए यह आवेदन प्रस्तुत है। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`,
       paragraph2: extraSentence
         || 'यह पद रुचिकर लगता है। आवेदन पर चर्चा करने और पद की अपेक्षाओं को बेहतर समझने का अवसर स्वागतयोग्य होगा।',
-      paragraph3: 'साक्षात्कार के लिए अनुरोध है।',
+      paragraph3: gender === 'female'
+        ? 'साक्षात्कार के लिए मैं उपलब्ध रहना चाहती हूँ।'
+        : gender === 'male'
+          ? 'साक्षात्कार के लिए मैं उपलब्ध रहना चाहता हूँ।'
+          : 'साक्षात्कार के लिए अनुरोध है।',
       closing: 'समय और विचार के लिए धन्यवाद।',
       signOff: 'सादर',
     },
@@ -545,13 +588,15 @@ export function buildDeterministicSparseCoverLetter(
     companyName: string;
     factSet: CoverLetterFactSet;
     dateLine: string;
+    gender?: CoverLetterGender | string;
   },
 ): StructuredCoverLetter {
   const role = options.jobTitle.trim() || 'the role';
   const company = options.companyName.trim() || 'the company';
   const name = options.candidateName.trim() || 'Candidate';
+  const gender = normalizeCoverLetterGender(options.gender);
   const extras = extrasFromFacts(options.factSet, locale);
-  const parts = fallbackParts(locale, name, role, company, extras);
+  const parts = fallbackParts(locale, name, role, company, extras, gender);
   return {
     dateLine: options.dateLine,
     greeting: parts.greeting,
