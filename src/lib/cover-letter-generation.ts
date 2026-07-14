@@ -489,7 +489,8 @@ function buildLocaleGroundingRules(
     return [
       'SERBIAN QUALITY RULES:',
       '- Write natural professional Serbian (Latinica).',
-      `- Prefer "prijavljujem se za poziciju ${role}${/^[A-Za-z0-9]/.test(role) && !/[aeiouAEIOU]$/.test(role) ? 'a' : ''}" when the English title needs a natural genitive after "za poziciju" (e.g. Android tester → Android testera).`,
+      '- For the known title "Android tester", prefer "prijavljujem se za poziciju Android testera".',
+      '- For other unknown English/Latin job titles, do NOT invent Serbian case endings (never Teachera, Lawyera, Managera). Keep the exact title in quotation marks, e.g. prijavljujem se za poziciju „Teacher“ and u ulozi „Teacher“.',
       '- Avoid clumsy repetition such as "proizvodi koriste korisnici". Prefer natural phrasing like "čije proizvode koriste ljudi širom sveta" when company reach is discussed generally (still invent no facts).',
       ...confidentShared,
       ...shared,

@@ -3,6 +3,7 @@ import { assembleCoverLetterContent, buildStructuredCoverLetterPrompt } from '..
 import {
   buildDeterministicSparseCoverLetter,
   serbianPozicijuRolePhrase,
+  serbianUloziRolePhrase,
   validateCoverLetterGrounding,
 } from '../cover-letter-grounding';
 import { buildCoverLetterFactSet } from '../cover-letter-facts';
@@ -139,6 +140,56 @@ describe('female + confident language quality polish', () => {
     });
     expect(prompt).toContain('proizvodi koriste korisnici');
     expect(prompt).toContain('SERBIAN QUALITY RULES');
+    expect(prompt).toContain('Teachera');
+  });
+
+  test('Serbian unknown English roles stay exact and quoted (no Teachera)', () => {
+    expect(serbianPozicijuRolePhrase('Teacher')).toBe('poziciju „Teacher“');
+    expect(serbianPozicijuRolePhrase('AI-Lawyer')).toBe('poziciju „AI-Lawyer“');
+    expect(serbianUloziRolePhrase('Teacher')).toBe('ulozi „Teacher“');
+    expect(serbianPozicijuRolePhrase('Teacher')).not.toContain('Teachera');
+
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Ana Petrović',
+      jobTitle: 'Teacher',
+      companyName: 'Edu-Bridge',
+    });
+    for (const gender of ['female', 'male', 'unspecified'] as const) {
+      const letter = buildDeterministicSparseCoverLetter('sr', {
+        candidateName: 'Ana Petrović',
+        jobTitle: 'Teacher',
+        companyName: 'Edu-Bridge',
+        factSet: facts,
+        dateLine: '14. jul 2026.',
+        gender,
+        tone: 'confident',
+      });
+      const text = assembleCoverLetterContent(letter, 'sr');
+      expect(text).toContain('„Teacher“');
+      expect(text).not.toContain('Teachera');
+      expect(text).toContain('Ana Petrović');
+      expect(text).toContain('Edu-Bridge');
+      expect(validateCoverLetterGrounding(text, facts, { locale: 'sr', gender }).valid).toBe(true);
+    }
+
+    const lawyerLetter = buildDeterministicSparseCoverLetter('sr', {
+      candidateName: 'Ana Petrović',
+      jobTitle: 'AI-Lawyer',
+      companyName: 'Edu-Bridge',
+      factSet: buildCoverLetterFactSet({
+        personalName: 'Ana Petrović',
+        jobTitle: 'AI-Lawyer',
+        companyName: 'Edu-Bridge',
+      }),
+      dateLine: '14. jul 2026.',
+      gender: 'female',
+      tone: 'confident',
+    });
+    const lawyerText = assembleCoverLetterContent(lawyerLetter, 'sr');
+    expect(lawyerText).toContain('„AI-Lawyer“');
+    expect(lawyerText).toContain('AI-Lawyer');
+    expect(lawyerText).not.toMatch(/AI-Lawyera|Lawyera/);
+    expect(lawyerText).not.toContain('AI Lawyer'); // preserve hyphenated title
   });
 
   test('German forbids ehrlichen Beitrag and prefers engagierten Beitrag', () => {

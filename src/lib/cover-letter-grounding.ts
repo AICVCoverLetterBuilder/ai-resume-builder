@@ -14,13 +14,45 @@ import {
 } from './cover-letter-gender';
 import { collectGenderAndSelfCorrectionViolations } from './cover-letter-gender-validation';
 
-/** Natural genitive after "za poziciju" for Latin/English titles ending in a consonant. */
+/**
+ * Known English role titles with an explicit, tested Serbian genitive form
+ * after "za poziciju". Do not invent endings for other Latin titles.
+ */
+const SERBIAN_GENITIVE_AFTER_POZICIJU: Readonly<Record<string, string>> = {
+  'android tester': 'Android testera',
+};
+
+function normalizeSerbianRoleKey(role: string): string {
+  return role.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function looksLikeForeignLatinRole(role: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9 +\-/]*$/.test(role.trim());
+}
+
+/**
+ * Phrase after "za " for Serbian applications.
+ * - Known exception: Android tester → poziciju Android testera
+ * - Unknown English titles: poziciju „Teacher“ (exact value, no invented case ending)
+ */
 export function serbianPozicijuRolePhrase(role: string): string {
-  const trimmed = role.trim() || 'ovu poziciju';
-  if (/^[A-Za-z0-9][A-Za-z0-9 +\-/]*$/.test(trimmed) && /[bcdfghjklmnpqrstvwxyz0-9]$/i.test(trimmed)) {
-    return `poziciju ${trimmed}a`;
-  }
+  const trimmed = role.trim();
+  if (!trimmed) return 'ovu poziciju';
+  const declined = SERBIAN_GENITIVE_AFTER_POZICIJU[normalizeSerbianRoleKey(trimmed)];
+  if (declined) return `poziciju ${declined}`;
+  if (looksLikeForeignLatinRole(trimmed)) return `poziciju „${trimmed}“`;
   return `poziciju ${trimmed}`;
+}
+
+/**
+ * Phrase after "u " for Serbian role references (e.g. "u ulozi „Teacher“").
+ * Preserves the exact supplied foreign title; does not invent Serbian case endings.
+ */
+export function serbianUloziRolePhrase(role: string): string {
+  const trimmed = role.trim();
+  if (!trimmed) return 'ulozi';
+  if (looksLikeForeignLatinRole(trimmed)) return `ulozi „${trimmed}“`;
+  return `ulozi ${trimmed}`;
 }
 
 function normalizeTone(raw: unknown): Tone {

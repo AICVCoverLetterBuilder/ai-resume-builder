@@ -8,8 +8,9 @@
  * and can truncate or still show `-` on Android.
  *
  * Strategy: sanitize wrap markers, segment graphemes (keeping Latin tokens),
- * measure with NotoSansJP-calibrated advances, wrap with basic kinsoku, then
- * render each line with wrap disabled so textkit never invents a hyphen.
+ * measure with NotoSansJP-calibrated advances, wrap with kinsoku (never start a
+ * line with 、。 etc.), then render each line with wrap disabled so textkit
+ * never invents a hyphen.
  */
 
 export const COVER_LETTER_JA_PDF_FONT_SIZE = 11;
@@ -19,6 +20,9 @@ export const COVER_LETTER_JA_PDF_FONT_SIZE = 11;
  * Latin / punctuation would otherwise still trigger U+002D insertion).
  */
 export const COVER_LETTER_JA_PDF_MAX_LINE_WIDTH = (595.28 - 120) * 0.88;
+
+/** Tiny overflow allowed when attaching a closing mark to the previous line. */
+const KINSOKU_ATTACH_TOLERANCE = COVER_LETTER_JA_PDF_FONT_SIZE * 0.35;
 
 const NO_START =
   '、。，．）］｝〉》」』】！？ー･・,.!?:;%）］｝';
@@ -117,29 +121,66 @@ function cannotEnd(ch: string | undefined): boolean {
   return Boolean(ch && [...NO_END].includes(ch));
 }
 
-function applyKinsoku(
+function isPunctuationOnlyLine(units: string[]): boolean {
+  if (units.length === 0) return true;
+  const joined = units.join('');
+  return [...joined].every((ch) => cannotStart(ch) || cannotEnd(ch) || /[\s]/.test(ch));
+}
+
+/**
+ * Resolve a break so the sealed line never ends with opening punctuation and the
+ * carry never begins with closing punctuation (and is never punctuation-only).
+ *
+ * Previous bug: when 、/。 did not fit on the previous line, applyKinsoku stopped
+ * and left those marks as the start of the next line.
+ */
+export function applyJapaneseKinsokuBreak(
   lineUnits: string[],
-  nextUnits: string[],
+  overflowUnits: string[],
   maxWidth: number,
   fontSize: number,
-): { line: string[]; next: string[] } {
-  const line = [...lineUnits];
-  const next = [...nextUnits];
+): { sealed: string[]; carry: string[] } {
+  const sealed = [...lineUnits];
+  const carry = [...overflowUnits];
 
-  while (line.length > 1 && cannotEnd(line[line.length - 1])) {
-    next.unshift(line.pop()!);
+  // Opening marks must not end a line.
+  while (sealed.length > 1 && cannotEnd(sealed[sealed.length - 1])) {
+    carry.unshift(sealed.pop()!);
   }
-  while (next.length > 0 && line.length > 0 && cannotStart(next[0])) {
-    const pulled = next.shift()!;
-    const trial = [...line, pulled];
-    if (measureJapanesePdfText(trial.join(''), fontSize) <= maxWidth + 0.01) {
-      line.push(pulled);
-    } else {
-      next.unshift(pulled);
+
+  // Closing / non-starter marks must not begin the next line.
+  while (carry.length > 0 && cannotStart(carry[0])) {
+    const mark = carry[0];
+    const attachTrial = [...sealed, mark];
+    const attachWidth = measureJapanesePdfText(attachTrial.join(''), fontSize);
+    if (sealed.length > 0 && attachWidth <= maxWidth + KINSOKU_ATTACH_TOLERANCE) {
+      sealed.push(carry.shift()!);
+      continue;
+    }
+    // Backtrack at least one preceding grapheme with the punctuation.
+    if (sealed.length === 0) {
+      // Nothing to steal — keep mark with following content (caller ensures more units).
       break;
     }
+    carry.unshift(sealed.pop()!);
+    // After stealing a normal grapheme, carry[0] can start a line; loop re-checks.
   }
-  return { line, next };
+
+  // Never seal a punctuation-only line.
+  while (sealed.length > 0 && isPunctuationOnlyLine(sealed)) {
+    carry.unshift(sealed.pop()!);
+  }
+
+  // If carry is still only punctuation, steal one more grapheme from sealed when possible.
+  while (
+    carry.length > 0 &&
+    isPunctuationOnlyLine(carry) &&
+    sealed.length > 0
+  ) {
+    carry.unshift(sealed.pop()!);
+  }
+
+  return { sealed, carry };
 }
 
 /**
@@ -168,7 +209,14 @@ export function wrapJapanesePdfParagraphLines(
 
     const flush = (unitsToFlush: string[]) => {
       const text = unitsToFlush.join('');
-      if (text.length > 0) out.push(text);
+      if (text.length > 0 && !isPunctuationOnlyLine(unitsToFlush)) {
+        out.push(text);
+      } else if (text.length > 0 && out.length > 0) {
+        // Attach orphan punctuation to the previous emitted line (never drop it).
+        out[out.length - 1] = `${out[out.length - 1]}${text}`;
+      } else if (text.length > 0) {
+        out.push(text);
+      }
     };
 
     for (const unit of units) {
@@ -181,40 +229,68 @@ export function wrapJapanesePdfParagraphLines(
 
       if (measureJapanesePdfText(unit, fontSize) > maxWidth) {
         if (lineUnits.length) {
-          flush(lineUnits);
-          lineUnits = [];
+          const { sealed, carry } = applyJapaneseKinsokuBreak(lineUnits, [], maxWidth, fontSize);
+          if (sealed.length) flush(sealed);
+          lineUnits = carry;
         }
         const parts = graphemeClusters(unit);
         let chunk: string[] = [];
         for (const g of parts) {
           const trial = [...chunk, g];
           if (chunk.length && measureJapanesePdfText(trial.join(''), fontSize) > maxWidth) {
-            flush(chunk);
-            chunk = [g];
+            const { sealed, carry } = applyJapaneseKinsokuBreak(chunk, [g], maxWidth, fontSize);
+            if (sealed.length) flush(sealed);
+            chunk = carry;
           } else {
             chunk = trial;
           }
         }
-        lineUnits = chunk;
+        lineUnits = chunk.length ? [...lineUnits, ...chunk] : lineUnits;
         continue;
       }
 
-      const adjusted = applyKinsoku(lineUnits, [unit], maxWidth, fontSize);
-      flush(adjusted.line);
-      lineUnits = adjusted.next;
+      const { sealed, carry } = applyJapaneseKinsokuBreak(lineUnits, [unit], maxWidth, fontSize);
+      if (sealed.length) flush(sealed);
+      lineUnits = carry;
+
+      // If carry alone still exceeds max width (rare), keep progressing one unit at a time.
       if (
-        lineUnits.length &&
-        measureJapanesePdfText(lineUnits.join(''), fontSize) > maxWidth
+        lineUnits.length > 1 &&
+        measureJapanesePdfText(lineUnits.join(''), fontSize) > maxWidth &&
+        !cannotStart(lineUnits[0])
       ) {
-        flush(lineUnits);
-        lineUnits = [];
+        const head = lineUnits.slice(0, -1);
+        const tail = lineUnits.slice(-1);
+        const again = applyJapaneseKinsokuBreak(head, tail, maxWidth, fontSize);
+        if (again.sealed.length) flush(again.sealed);
+        lineUnits = again.carry;
       }
     }
 
-    if (lineUnits.length) flush(lineUnits);
+    if (lineUnits.length) {
+      // Final line: pull trailing non-starters onto previous emitted line if this
+      // would otherwise be punctuation-only.
+      if (isPunctuationOnlyLine(lineUnits) && out.length > 0) {
+        out[out.length - 1] = `${out[out.length - 1]}${lineUnits.join('')}`;
+      } else {
+        flush(lineUnits);
+      }
+    }
   }
 
-  return out.map((l) => sanitizeJapanesePdfWrapMarkers(l));
+  // Post-pass: no line may start with prohibited punctuation or be punctuation-only.
+  const repaired: string[] = [];
+  for (const line of out.map((l) => sanitizeJapanesePdfWrapMarkers(l))) {
+    if (!line) continue;
+    const first = graphemeClusters(line)[0];
+    if (repaired.length > 0 && (cannotStart(first) || isPunctuationOnlyLine(segmentJapanesePdfUnits(line)))) {
+      repaired[repaired.length - 1] = `${repaired[repaired.length - 1]}${line}`;
+    } else {
+      repaired.push(line);
+    }
+  }
+
+  return repaired;
 }
 
 /** Assert prepared Japanese PDF lines are free of wrap artifacts (tests/diagnostics). */
@@ -228,6 +304,9 @@ export function assertJapanesePdfLinesClean(lines: string[]): string[] {
       if (cp === 0xfffe || cp === 0xffff) violations.push(`U+${cp.toString(16).toUpperCase()}`);
       if (cp === 0x200b) violations.push('U+200B');
     }
+    const first = graphemeClusters(line)[0];
+    if (cannotStart(first)) violations.push(`line_starts_with_${first}`);
+    if (isPunctuationOnlyLine(segmentJapanesePdfUnits(line))) violations.push('punctuation_only_line');
   }
   return [...new Set(violations)];
 }

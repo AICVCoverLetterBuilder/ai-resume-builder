@@ -197,7 +197,7 @@ const localeInstructions: Record<Locale, {
   sr: {
     languageName: 'Serbian', fallbackCandidate: 'kandidat', fallbackRole: 'poziciju', fallbackCompany: 'kompaniju', coverLetterName: 'Vaše ime', closing: 'Srdačno',
     toneMap: { formal: 'formalan i profesionalan', confident: 'samouveren i odlučan', friendly: 'topao i pristupačan' },
-    nativeQualityNote: 'Piši prirodnim profesionalnim srpskim. Jaki glagoli samo ako su podržani u SOURCE FACTS. Ne izmišljaj vođenje, alate ili postignuća. Latinica. Preferiraj „prijavljujem se za poziciju Android testera” umesto neprirodnog „za poziciju Android tester”. Izbegavaj „proizvodi koriste korisnici”.',
+    nativeQualityNote: 'Piši prirodnim profesionalnim srpskim. Jaki glagoli samo ako su podržani u SOURCE FACTS. Ne izmišljaj vođenje, alate ili postignuća. Latinica. Za „Android tester” koristi „poziciju Android testera”. Za ostale engleske/latinične nazive uloga NE dodaj padežne nastavke (nikad Teachera/Lawyera/Managera) — zadrži tačan naziv u navodnicima: „Teacher“. Izbegavaj „proizvodi koriste korisnici”.',
   },
   hr: {
     languageName: 'Croatian', fallbackCandidate: 'kandidat', fallbackRole: 'poziciju', fallbackCompany: 'tvrtku', coverLetterName: 'Vaše ime', closing: 'Srdačan pozdrav',

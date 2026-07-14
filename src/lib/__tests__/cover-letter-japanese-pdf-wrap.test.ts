@@ -13,6 +13,7 @@ import {
 } from '../cover-letter-pdf';
 import {
   assertJapanesePdfLinesClean,
+  COVER_LETTER_JA_PDF_MAX_LINE_WIDTH,
   sanitizeJapanesePdfWrapMarkers,
   segmentJapanesePdfUnits,
   wrapJapanesePdfParagraphLines,
@@ -113,6 +114,36 @@ describe('Japanese Cover Letter PDF wrapping', () => {
     // Line starts should not be stranded closers where kinsoku applies
     for (const line of lines) {
       expect(line).not.toMatch(/^[、。！？）」』]/u);
+    }
+  });
+
+  test('kinsoku never starts a line with 、 or 。 and never invents CJK hyphens', () => {
+    const samples = [
+      '業務に真摯に取り組みながら、着実に貢献してまいります。',
+      '貴社の取り組みとともに歩んでいきたいと考えております。',
+    ];
+    // Force many narrow widths so punctuation hits the break boundary often.
+    const widths = [40, 55, 70, 90, 110, 130, COVER_LETTER_JA_PDF_MAX_LINE_WIDTH];
+    for (const sample of samples) {
+      for (const maxWidth of widths) {
+        const lines = wrapJapanesePdfParagraphLines(sample, { maxWidth });
+        expect(lines.length).toBeGreaterThan(0);
+        expect(assertJapanesePdfLinesClean(lines)).toEqual([]);
+        for (const line of lines) {
+          expect(line).not.toMatch(/^[、。]/u);
+          expect(line.trim()).not.toMatch(/^[、。，．）］｝〉》」』】！？ー]+$/u);
+        }
+        const joined = lines.join('');
+        expect(joined).toBe(sample);
+        // Each punctuation mark appears exactly once
+        expect([...joined].filter((c) => c === '、').length).toBe(
+          [...sample].filter((c) => c === '、').length,
+        );
+        expect([...joined].filter((c) => c === '。').length).toBe(
+          [...sample].filter((c) => c === '。').length,
+        );
+        expect(findCjkInsertedHyphens(joined)).toEqual([]);
+      }
     }
   });
 
