@@ -212,7 +212,8 @@ function isSchemaMarkerOnlyLine(line: string): boolean {
  * in the preview, copied text, or PDF/DOCX exports.
  */
 export function sanitizeCoverLetterContent(content: string): string {
-  if (typeof content !== 'string' || content.length === 0) return content;
+  if (typeof content !== 'string') return '';
+  if (content.length === 0) return '';
   const withoutMarkerLines = content
     .split('\n')
     .filter((line) => !isSchemaMarkerOnlyLine(line))
@@ -282,25 +283,32 @@ export function contentHasArabicScript(text: string): boolean {
  * threshold — not brittle single-character counting alone.
  */
 export function contentMatchesRequestedLocale(content: string, locale: Locale): boolean {
+  if (typeof content !== 'string' || !content.trim()) return false;
   const probe = extractCoverLetterBody(content, '').replace(BIDI_AND_ZW_RE, '');
   if (!probe.trim()) return false;
 
   const arabicCount = (probe.match(new RegExp(ARABIC_SCRIPT_RE.source, 'gu')) ?? []).length;
   const devanagariCount = (probe.match(new RegExp(DEVANAGARI_RE.source, 'gu')) ?? []).length;
   const latinLetters = (probe.match(/[A-Za-z]/g) ?? []).length;
+  const japaneseCount = (probe.match(/[\u3040-\u30FF\u3400-\u9FFF]/g) ?? []).length;
 
   switch (locale) {
     case 'ar':
       if (devanagariCount >= 8) return false;
       return arabicCount >= 24;
     case 'hi':
+      // Allow Latin candidate names, companies, and branded job titles in short letters.
       if (arabicCount >= 8) return false;
-      return devanagariCount >= 24;
+      if (devanagariCount >= 24) return true;
+      // Short sparse Hindi: require clear Devanagari presence, not a Latin-letter ratio.
+      return devanagariCount >= 10 && /[\u0900-\u097F]{3,}/u.test(probe);
     case 'en':
       if (devanagariCount >= 8 || arabicCount >= 8) return false;
       return latinLetters >= 40;
     case 'ja':
-      return /[\u3040-\u30FF\u3400-\u9FFF]/.test(probe);
+      // Allow Latin names/companies/titles; require any Japanese script presence.
+      if (devanagariCount >= 8 || arabicCount >= 8) return false;
+      return japaneseCount >= 1;
     case 'ru':
       return /[\u0400-\u04FF]/.test(probe) && devanagariCount < 8 && arabicCount < 8;
     default:

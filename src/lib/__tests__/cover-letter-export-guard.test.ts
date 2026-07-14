@@ -209,7 +209,7 @@ describe('sanitizeCoverLetterContent (structured-v4 marker removal)', () => {
   test('handles empty and non-string input gracefully', () => {
     expect(sanitizeCoverLetterContent('')).toBe('');
     // @ts-expect-error intentionally passing a non-string to verify no throw
-    expect(sanitizeCoverLetterContent(undefined)).toBe(undefined);
+    expect(sanitizeCoverLetterContent(undefined)).toBe('');
   });
 
   test('does not leave a stray blank line where the marker line used to be', () => {

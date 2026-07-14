@@ -39,7 +39,8 @@ export function createCoverLetterRequestId(): string {
 
 /**
  * True when this response belongs to the newest in-flight generation for the
- * same locale and gender. A late male response must not overwrite female content.
+ * same locale and normalized gender. A late male response must not overwrite
+ * female content. Raw UI aliases (prefer_not_to_say) are normalized before compare.
  */
 export function shouldApplyCoverLetterGenerationResult(
   active: ActiveCoverLetterRequest | null,
@@ -49,10 +50,11 @@ export function shouldApplyCoverLetterGenerationResult(
 ): boolean {
   if (!active) return false;
   const gender = normalizeCoverLetterGender(requestedGender);
+  const activeGender = normalizeCoverLetterGender(active.gender);
   return (
     active.requestId === responseRequestId &&
     active.locale === requestedLocale &&
-    active.gender === gender
+    activeGender === gender
   );
 }
 

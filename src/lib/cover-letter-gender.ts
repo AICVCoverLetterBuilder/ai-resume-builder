@@ -21,12 +21,33 @@ export const COVER_LETTER_GENDERED_LOCALES: ReadonlyArray<Locale> = [
 ];
 
 export function normalizeCoverLetterGender(raw: unknown): CoverLetterGender {
+  if (raw == null) return 'unspecified';
   if (typeof raw !== 'string') return 'unspecified';
-  const value = raw.trim().toLowerCase();
+  const value = raw.trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (value === 'male' || value === 'm' || value === 'man' || value === 'masculine') return 'male';
   if (value === 'female' || value === 'f' || value === 'woman' || value === 'feminine') return 'female';
-  // prefer_not_to_say, empty, unknown → neutral
+  // Aliases and empty → canonical unspecified (never compare raw UI values afterward)
+  if (
+    value === '' ||
+    value === 'unspecified' ||
+    value === 'prefer_not_to_say' ||
+    value === 'prefer_not_to_say_' ||
+    value === 'not_specified' ||
+    value === 'not_specified_' ||
+    value === 'none' ||
+    value === 'unknown' ||
+    value === 'other' ||
+    value === 'n_a' ||
+    value === 'na'
+  ) {
+    return 'unspecified';
+  }
   return 'unspecified';
+}
+
+/** Compare genders only after normalization. */
+export function coverLetterGendersEqual(a: unknown, b: unknown): boolean {
+  return normalizeCoverLetterGender(a) === normalizeCoverLetterGender(b);
 }
 
 /**

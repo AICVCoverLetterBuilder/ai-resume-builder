@@ -13,14 +13,15 @@ import {
   createCoverLetterRequestId,
   isCoverLetterDownloadAllowed,
   isCoverLetterContentCurrent,
-  shouldApplyCoverLetterGenerationResult,
-  normalizeCoverLetterGroundingStatus,
-  isTrustedCoverLetterGroundingStatus,
   type ActiveCoverLetterRequest,
   type CoverLetterGenerationPhase,
   type CoverLetterGroundingStatus,
 } from '@/lib/cover-letter-flow';
 import { normalizeCoverLetterGender } from '@/lib/cover-letter-gender';
+import {
+  formatCoverLetterGenerationDiagnosticsForCopy,
+  resolveCoverLetterGenerationResult,
+} from '@/lib/cover-letter-generation-resolve';
 import {
   coverLetterAiUnavailable,
   coverLetterGroundingFailed,
@@ -37,12 +38,10 @@ import { PremiumAIButton, AIBadge } from '@/components/PremiumAIButton';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { getAppUserId } from '@/lib/iap';
 import { buildCoverLetterFactSet } from '@/lib/cover-letter-facts';
-import { activateCoverLetterContentWithClientGrounding } from '@/lib/cover-letter-client-grounding';
 import {
   beginCoverLetterGroundingDiagnostics,
   countFactsByCategory,
   updateCoverLetterGroundingDiagnostics,
-  recordGroundingViolations,
   copyCoverLetterGroundingDiagnosticsToClipboard,
   COVER_LETTER_GROUNDING_BACKEND_REVISION,
 } from '@/lib/cover-letter-grounding-diagnostics';
@@ -114,11 +113,19 @@ async function callGenerateAI(params: {
       body: { action: params.action || 'cover-letter-gen', ...params },
       signal,
     });
-    if (!res.ok || data.error) {
-      throw Object.assign(new Error(data.error || 'AI service error'), { status: res.status });
+    if (!data || !res.ok || (data as { error?: string }).error) {
+      throw Object.assign(new Error((data as { error?: string } | null)?.error || 'AI service error'), {
+        status: res.status,
+      });
+    }
+    if (typeof data.result !== 'string') {
+      throw Object.assign(new Error('malformed_response'), {
+        status: res.status,
+        name: 'MalformedResponseError',
+      });
     }
     return {
-      content: data.result as string,
+      content: data.result,
       status: res.status,
       groundingStatus: data.groundingStatus,
       coverLetterBackendRevision: data.coverLetterBackendRevision,
@@ -352,6 +359,8 @@ export default function CoverLetterPage() {
         repairAttempted,
         fallbackUsed,
         groundingViolations,
+        contentLocale: responseContentLocale,
+        status: httpStatus,
       } = await callGenerateAI({
         action,
         jobTitle: cl.jobTitle,
@@ -359,7 +368,7 @@ export default function CoverLetterPage() {
         tone: cl.tone,
         locale: requestedLocale,
         variant: mode === 'regenerate' ? Date.now() : 0,
-        gender: cl.gender || '',
+        gender: requestedGender,
         personalName: fullName || currentCv?.personal?.fullName || '',
         personalEmail: currentCv?.personal?.email || '',
         personalPhone: currentCv?.personal?.phone || '',
@@ -374,87 +383,78 @@ export default function CoverLetterPage() {
         signal: abortController.signal,
       });
 
-      if (!shouldApplyCoverLetterGenerationResult(
-        activeGenerationRef.current,
+      const resolved = resolveCoverLetterGenerationResult({
+        active: activeGenerationRef.current,
         requestId,
         requestedLocale,
-        requestedGender,
-      )) {
-        return;
-      }
-
-      const sanitized = sanitizeCoverLetterContent(content);
-      if (!contentMatchesRequestedLocale(sanitized, requestedLocale)) {
-        setGenerationPhase('error');
-        setGroundingStatus('failed');
-        updateCoverLetterGroundingDiagnostics({
-          serverGroundingStatus: String(responseGrounding ?? 'n/a'),
-          finalGroundingStatus: 'failed',
-          backendRevision: typeof coverLetterBackendRevision === 'string' ? coverLetterBackendRevision : null,
-        });
-        toast.error(coverLetterWrongLanguage(requestedLocale));
-        return;
-      }
-
-      const activation = activateCoverLetterContentWithClientGrounding({
-        serverContent: sanitized,
+        selectedLocale: requestedLocale,
+        selectedGenderRaw: cl.gender || '',
+        requestedGenderNormalized: requestedGender,
+        serverContent: content,
         serverGroundingRaw: responseGrounding,
         backendRevision: coverLetterBackendRevision,
-        locale: requestedLocale,
+        repairAttempted,
+        fallbackUsed,
+        httpStatus,
+        responseKeys: [
+          'result',
+          'groundingStatus',
+          'coverLetterBackendRevision',
+          'repairAttempted',
+          'fallbackUsed',
+          'contentLocale',
+        ],
+        responseContentLocale,
         candidateName: fullName || currentCv?.personal?.fullName || '',
         jobTitle: cl.jobTitle,
         companyName: cl.companyName,
         factSet,
-        gender: requestedGender,
       });
 
-      recordGroundingViolations(activation.violations);
       updateCoverLetterGroundingDiagnostics({
-        serverGroundingStatus: activation.serverGroundingStatus,
-        finalGroundingStatus: activation.groundingStatus,
-        groundingValidatorStarted: activation.validatorStarted,
-        groundingValidatorCompleted: activation.validatorCompleted,
-        repairAttempted: Boolean(repairAttempted) || activation.clientFallbackUsed,
-        fallbackUsed: Boolean(fallbackUsed) || activation.clientFallbackUsed,
-        clientFallbackUsed: activation.clientFallbackUsed,
+        serverGroundingStatus: String(responseGrounding ?? 'n/a'),
+        finalGroundingStatus: resolved.groundingStatus,
+        groundingValidatorStarted: true,
+        groundingValidatorCompleted: true,
+        repairAttempted: Boolean(repairAttempted) || resolved.clientFallbackUsed,
+        fallbackUsed: Boolean(fallbackUsed) || resolved.clientFallbackUsed,
+        clientFallbackUsed: resolved.clientFallbackUsed,
         backendRevision: typeof coverLetterBackendRevision === 'string' ? coverLetterBackendRevision : null,
         schemaMismatch:
-          activation.schemaMismatch ||
+          resolved.diagnostics.schemaMismatch ||
           coverLetterBackendRevision !== COVER_LETTER_GROUNDING_BACKEND_REVISION,
         contentLocale: requestedLocale,
-        violationCount:
-          typeof groundingViolations === 'number'
-            ? Math.max(groundingViolations, activation.violations.length)
-            : activation.violations.length,
+        violationCount: typeof groundingViolations === 'number' ? groundingViolations : 0,
       });
 
-      if (!activation.accepted || !activation.content.trim()) {
-        setGenerationPhase('error');
-        setGroundingStatus(normalizeCoverLetterGroundingStatus(activation.groundingStatus));
-        setShowGroundingDiagnostics(true);
-        toast.error(coverLetterGroundingFailed(requestedLocale));
+      if (resolved.outcome === 'stale') {
         return;
       }
 
-      // Never activate invented/server-ungrounded text without trusted grounding.
-      if (!isTrustedCoverLetterGroundingStatus(activation.groundingStatus)) {
+      if (resolved.outcome === 'rejected' || !resolved.content.trim()) {
         setGenerationPhase('error');
-        setGroundingStatus(activation.groundingStatus);
+        setGroundingStatus(resolved.groundingStatus);
         setShowGroundingDiagnostics(true);
-        toast.error(coverLetterGroundingFailed(requestedLocale));
+        if (resolved.toastKind === 'wrong_language') {
+          toast.error(coverLetterWrongLanguage(requestedLocale));
+        } else if (resolved.toastKind === 'grounding_failed') {
+          toast.error(coverLetterGroundingFailed(requestedLocale));
+        } else if (resolved.toastKind === 'api_unavailable') {
+          toast.error(coverLetterAiUnavailable(requestedLocale));
+        }
         return;
       }
 
       setCl(prev => ({
         ...prev,
-        content: normalizeCoverLetterBody(activation.content, fullName || currentCv?.personal?.fullName || ''),
+        content: normalizeCoverLetterBody(resolved.content, fullName || currentCv?.personal?.fullName || ''),
         updatedAt: new Date().toISOString(),
       }));
       setContentLocale(requestedLocale);
-      setGroundingStatus(activation.groundingStatus);
+      setGroundingStatus(resolved.groundingStatus);
       setGenerationPhase('success');
       setHasGenerated(true);
-      if (activation.clientFallbackUsed || activation.schemaMismatch) {
+      if (resolved.clientFallbackUsed || resolved.diagnostics.schemaMismatch) {
         setShowGroundingDiagnostics(true);
       }
 
@@ -471,31 +471,88 @@ export default function CoverLetterPage() {
       toast.success(t.coverLetter.genSuccess);
     } catch (err: unknown) {
       if ((err as { name?: string }).name === 'AbortError') return;
-      if (!shouldApplyCoverLetterGenerationResult(
-        activeGenerationRef.current,
+
+      const resolved = resolveCoverLetterGenerationResult({
+        active: activeGenerationRef.current,
         requestId,
         requestedLocale,
-        requestedGender,
-      )) {
+        selectedLocale: requestedLocale,
+        selectedGenderRaw: cl.gender || '',
+        requestedGenderNormalized: requestedGender,
+        apiError: {
+          message: String((err as Error)?.message ?? err),
+          status: (err as { status?: number }).status,
+          name: (err as { name?: string }).name,
+        },
+        httpStatus: (err as { status?: number }).status ?? null,
+        candidateName: fullName || currentCv?.personal?.fullName || '',
+        jobTitle: cl.jobTitle,
+        companyName: cl.companyName,
+        factSet,
+      });
+
+      updateCoverLetterGroundingDiagnostics({
+        serverGroundingStatus: 'n/a',
+        finalGroundingStatus: resolved.groundingStatus,
+        groundingValidatorStarted: true,
+        groundingValidatorCompleted: true,
+        repairAttempted: false,
+        fallbackUsed: resolved.clientFallbackUsed,
+        clientFallbackUsed: resolved.clientFallbackUsed,
+        contentLocale: requestedLocale,
+      });
+
+      if (resolved.outcome === 'stale') {
         return;
       }
-      if ((err as { status?: number }).status === 403) {
+
+      if (resolved.toastKind === 'auth') {
         if (getAiGate().status !== 'free') {
           toast.error(t.common.proAuthorizationUnavailable);
         } else {
           setPaywallReason(mode);
           setProModal(true);
         }
-      } else {
-        if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Generation error:', err);
         setGenerationPhase('error');
         setGroundingStatus('failed');
-        const msg = String((err as Error)?.message ?? '');
-        if (/unsupported information|grounding|could not be used safely/i.test(msg)) {
-          toast.error(coverLetterGroundingFailed(requestedLocale));
+        return;
+      }
+
+      if (resolved.outcome === 'recovered' && resolved.content.trim()) {
+        setCl(prev => ({
+          ...prev,
+          content: normalizeCoverLetterBody(resolved.content, fullName || currentCv?.personal?.fullName || ''),
+          updatedAt: new Date().toISOString(),
+        }));
+        setContentLocale(requestedLocale);
+        setGroundingStatus(resolved.groundingStatus);
+        setGenerationPhase('success');
+        setHasGenerated(true);
+        setShowGroundingDiagnostics(true);
+        if (!isCurrentPro) {
+          if (mode === 'generate') {
+            resetClRegen();
+            incrementClGeneration();
+          } else {
+            incrementClRegen();
+          }
         } else {
-          toast.error(coverLetterAiUnavailable(requestedLocale));
+          recordProAiSuccess();
         }
+        toast.success(t.coverLetter.genSuccess);
+        return;
+      }
+
+      if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Generation error:', err);
+      setGenerationPhase('error');
+      setGroundingStatus(resolved.groundingStatus);
+      setShowGroundingDiagnostics(true);
+      if (resolved.toastKind === 'grounding_failed') {
+        toast.error(coverLetterGroundingFailed(requestedLocale));
+      } else if (resolved.toastKind === 'wrong_language') {
+        toast.error(coverLetterWrongLanguage(requestedLocale));
+      } else {
+        toast.error(coverLetterAiUnavailable(requestedLocale));
       }
     } finally {
       if (activeGenerationRef.current?.requestId === requestId) {
@@ -810,6 +867,23 @@ export default function CoverLetterPage() {
                     ) : null}
                     {previewContent || <span className="text-gray-400 italic">{t.coverLetter.placeholder}</span>}
                   </div>
+                )}
+
+                {(generationPhase === 'success' || generationPhase === 'error' || showGroundingDiagnostics) && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(formatCoverLetterGenerationDiagnosticsForCopy());
+                        toast.success('Generation diagnostics copied');
+                      } catch {
+                        toast.error('Could not copy generation diagnostics');
+                      }
+                    }}
+                    className="mt-3 block text-xs text-amber-700 dark:text-amber-400 underline"
+                  >
+                    Copy generation diagnostics
+                  </button>
                 )}
 
                 {/* Regenerate section — shown after first generation */}
