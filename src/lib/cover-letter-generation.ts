@@ -490,8 +490,13 @@ function buildLocaleGroundingRules(
       'SERBIAN QUALITY RULES:',
       '- Write natural professional Serbian (Latinica).',
       '- For the known title "Android tester", prefer "prijavljujem se za poziciju Android testera".',
-      '- For other unknown English/Latin job titles, do NOT invent Serbian case endings (never Teachera, Lawyera, Managera). Keep the exact title in quotation marks, e.g. prijavljujem se za poziciju „Teacher“ and u ulozi „Teacher“.',
+      '- For other unknown English/Latin job titles, do NOT invent Serbian case endings (never Teachera, Lawyera, Managera). Keep the exact title in quotation marks, e.g. prijavljujem se za poziciju „Teacher“ / ulogu „Teacher“ / u ulozi „Teacher“.',
       '- Avoid clumsy repetition such as "proizvodi koriste korisnici". Prefer natural phrasing like "čije proizvode koriste ljudi širom sveta" when company reach is discussed generally (still invent no facts).',
+      ...(tone === 'confident'
+        ? [
+            '- For confident tone: write decisive grounded motivation (willingness to learn and contribute). Do NOT use hesitant sparse phrasing such as "gde je to primereno", "Pozicija je od stvarnog interesa", or "Bilo bi mi drago" as the main closing.',
+          ]
+        : []),
       ...confidentShared,
       ...shared,
     ].join('\n');

@@ -55,6 +55,58 @@ export function serbianUloziRolePhrase(role: string): string {
   return `ulozi ${trimmed}`;
 }
 
+/**
+ * Accusative role phrase (e.g. "ulogu „Teacher“") for Serbian fallbacks.
+ * Known exception: Android tester → ulogu Android testera.
+ */
+export function serbianUloguRolePhrase(role: string): string {
+  const trimmed = role.trim();
+  if (!trimmed) return 'ovu ulogu';
+  const declined = SERBIAN_GENITIVE_AFTER_POZICIJU[normalizeSerbianRoleKey(trimmed)];
+  if (declined) return `ulogu ${declined}`;
+  if (looksLikeForeignLatinRole(trimmed)) return `ulogu „${trimmed}“`;
+  return `ulogu ${trimmed}`;
+}
+
+function serbianConfidentFallbackParts(
+  role: string,
+  company: string,
+  gender: CoverLetterGender,
+  extraSentence: string,
+): { paragraph1: string; paragraph2: string; paragraph3: string } {
+  const poziciju = serbianPozicijuRolePhrase(role);
+  const ulogu = serbianUloguRolePhrase(role);
+  const ulozi = serbianUloziRolePhrase(role);
+
+  if (gender === 'female') {
+    return {
+      paragraph1: `Ovim putem se prijavljujem za ${poziciju} u kompaniji ${company}. Motivisana sam da se posvetim zahtevima ove uloge, brzo usvojim potrebna znanja i odgovorno doprinesem radu vašeg tima.`,
+      paragraph2: extraSentence
+        || `Ovu priliku vidim kao značajan naredni korak i spremna sam da joj pristupim sa ozbiljnošću, posvećenošću i jasnom željom za profesionalnim razvojem. Kompanija ${company} privlači me kao okruženje u kojem bih mogla da učim, razvijam se i doprinosim zajedničkim ciljevima u ${ulozi}.`,
+      paragraph3:
+        `Rado bih na razgovoru detaljnije predstavila svoju motivaciju za ${ulogu}. Dostupna sam u terminu koji vama odgovara.`,
+    };
+  }
+
+  if (gender === 'male') {
+    return {
+      paragraph1: `Ovim putem se prijavljujem za ${poziciju} u kompaniji ${company}. Motivisan sam da se posvetim zahtevima ove uloge, brzo usvojim potrebna znanja i odgovorno doprinesem radu vašeg tima.`,
+      paragraph2: extraSentence
+        || `Ovu priliku vidim kao značajan naredni korak i spreman sam da joj pristupim sa ozbiljnošću, posvećenošću i jasnom željom za profesionalnim razvojem. Kompanija ${company} privlači me kao okruženje u kojem bih mogao da učim, razvijam se i doprinosim zajedničkim ciljevima u ${ulozi}.`,
+      paragraph3:
+        `Rado bih na razgovoru detaljnije predstavio svoju motivaciju za ${ulogu}. Dostupan sam u terminu koji vama odgovara.`,
+    };
+  }
+
+  return {
+    paragraph1: `Ovim putem se prijavljujem za ${poziciju} u kompaniji ${company}. Želim da se posvetim zahtevima ove uloge, brzo usvojim potrebna znanja i odgovorno doprinesem radu vašeg tima.`,
+    paragraph2: extraSentence
+      || `Ovu priliku vidim kao značajan naredni korak i pristupiću joj sa ozbiljnošću, posvećenošću i jasnom željom za profesionalnim razvojem. Kompanija ${company} privlači me kao okruženje u kojem mogu da učim, razvijam se i doprinosim zajedničkim ciljevima u ${ulozi}.`,
+    paragraph3:
+      `Na razgovoru mogu detaljnije predstaviti svoju motivaciju za ${ulogu}. Razgovor je moguće dogovoriti u terminu koji vama odgovara.`,
+  };
+}
+
 function normalizeTone(raw: unknown): Tone {
   if (raw === 'confident' || raw === 'friendly' || raw === 'formal') return raw;
   return 'formal';
@@ -549,19 +601,26 @@ function fallbackParts(
       closing: 'شكرًا لوقتكم واهتمامكم.',
       signOff: 'مع خالص التحية',
     },
-    sr: {
-      greeting: `Poštovani tim za zapošljavanje u kompaniji ${company},`,
-      paragraph1: `ovim putem se prijavljujem za ${serbianPozicijuRolePhrase(role)} u kompaniji ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gde je to primereno.`,
-      paragraph2: extraSentence
-        || 'Pozicija je od stvarnog interesa. Bilo bi mi drago da razgovaramo o prijavi i saznam više o vašim očekivanjima.',
-      paragraph3: gender === 'female'
-        ? 'Dostupna sam za razgovor u terminu koji vama odgovara.'
-        : gender === 'male'
-          ? 'Dostupan sam za razgovor u terminu koji vama odgovara.'
-          : 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
-      closing: 'Hvala na vašem vremenu i razmatranju.',
-      signOff: 'Srdačno',
-    },
+    sr: confident
+      ? {
+          greeting: `Poštovani tim za zapošljavanje u kompaniji ${company},`,
+          ...serbianConfidentFallbackParts(role, company, gender, extraSentence),
+          closing: 'Hvala na vašem vremenu i razmatranju.',
+          signOff: 'Srdačno',
+        }
+      : {
+          greeting: `Poštovani tim za zapošljavanje u kompaniji ${company},`,
+          paragraph1: `ovim putem se prijavljujem za ${serbianPozicijuRolePhrase(role)} u kompaniji ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gde je to primereno.`,
+          paragraph2: extraSentence
+            || 'Pozicija je od stvarnog interesa. Bilo bi mi drago da razgovaramo o prijavi i saznam više o vašim očekivanjima.',
+          paragraph3: gender === 'female'
+            ? 'Dostupna sam za razgovor u terminu koji vama odgovara.'
+            : gender === 'male'
+              ? 'Dostupan sam za razgovor u terminu koji vama odgovara.'
+              : 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
+          closing: 'Hvala na vašem vremenu i razmatranju.',
+          signOff: 'Srdačno',
+        },
     hr: {
       greeting: `Poštovani tim za zapošljavanje u tvrtki ${company},`,
       paragraph1: `ovim putem se prijavljujem za poziciju ${role} u tvrtki ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gdje je to primjereno.`,

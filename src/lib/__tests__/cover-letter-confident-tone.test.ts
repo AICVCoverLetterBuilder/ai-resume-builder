@@ -3,6 +3,7 @@ import { assembleCoverLetterContent, buildStructuredCoverLetterPrompt } from '..
 import {
   buildDeterministicSparseCoverLetter,
   serbianPozicijuRolePhrase,
+  serbianUloguRolePhrase,
   serbianUloziRolePhrase,
   validateCoverLetterGrounding,
 } from '../cover-letter-grounding';
@@ -110,6 +111,7 @@ describe('female + confident language quality polish', () => {
 
   test('Serbian declines Android tester and prompts forbid proizvodi koriste korisnici', () => {
     expect(serbianPozicijuRolePhrase('Android tester')).toBe('poziciju Android testera');
+    expect(serbianUloguRolePhrase('Android tester')).toBe('ulogu Android testera');
     const letter = buildDeterministicSparseCoverLetter('sr', {
       candidateName: 'Many Loom',
       jobTitle: 'Android tester',
@@ -126,6 +128,9 @@ describe('female + confident language quality polish', () => {
     expect(text).not.toMatch(/za poziciju Android tester(?!a)/);
     expect(text).not.toContain('proizvodi koriste korisnici');
     expect(text).toContain('Dostupna sam');
+    expect(text).toContain('Motivisana sam');
+    expect(text).not.toContain('gde je to primereno');
+    expect(text).not.toContain('Pozicija je od stvarnog interesa');
     expect(validateCoverLetterGrounding(text, SPARSE, { locale: 'sr', gender: 'female' }).valid).toBe(true);
 
     const prompt = buildStructuredCoverLetterPrompt({
@@ -141,12 +146,14 @@ describe('female + confident language quality polish', () => {
     expect(prompt).toContain('proizvodi koriste korisnici');
     expect(prompt).toContain('SERBIAN QUALITY RULES');
     expect(prompt).toContain('Teachera');
+    expect(prompt).toContain('gde je to primereno');
   });
 
-  test('Serbian unknown English roles stay exact and quoted (no Teachera)', () => {
+  test('Serbian female confident fallback is decisive, not sparse, and keeps Teacher quoted', () => {
     expect(serbianPozicijuRolePhrase('Teacher')).toBe('poziciju „Teacher“');
     expect(serbianPozicijuRolePhrase('AI-Lawyer')).toBe('poziciju „AI-Lawyer“');
     expect(serbianUloziRolePhrase('Teacher')).toBe('ulozi „Teacher“');
+    expect(serbianUloguRolePhrase('Teacher')).toBe('ulogu „Teacher“');
     expect(serbianPozicijuRolePhrase('Teacher')).not.toContain('Teachera');
 
     const facts = buildCoverLetterFactSet({
@@ -154,21 +161,66 @@ describe('female + confident language quality polish', () => {
       jobTitle: 'Teacher',
       companyName: 'Edu-Bridge',
     });
-    for (const gender of ['female', 'male', 'unspecified'] as const) {
-      const letter = buildDeterministicSparseCoverLetter('sr', {
+    const female = assembleCoverLetterContent(
+      buildDeterministicSparseCoverLetter('sr', {
         candidateName: 'Ana Petrović',
         jobTitle: 'Teacher',
         companyName: 'Edu-Bridge',
         factSet: facts,
         dateLine: '14. jul 2026.',
-        gender,
+        gender: 'female',
         tone: 'confident',
-      });
-      const text = assembleCoverLetterContent(letter, 'sr');
+      }),
+      'sr',
+    );
+    expect(female).toContain('poziciju „Teacher“');
+    expect(female).toContain('ulogu „Teacher“');
+    expect(female).toContain('ulozi „Teacher“');
+    expect(female).not.toContain('Teachera');
+    expect(female).toContain('Motivisana sam');
+    expect(female).toContain('spremna sam');
+    expect(female).toContain('predstavila');
+    expect(female).toContain('Dostupna sam');
+    expect(female).toContain('Ana Petrović');
+    expect(female).toContain('Edu-Bridge');
+    expect(female).not.toContain('gde je to primereno');
+    expect(female).not.toContain('Pozicija je od stvarnog interesa');
+    expect(female).not.toMatch(/Bilo bi mi drago/i);
+    expect(female.split(/[.!?]/u).filter((s) => s.trim().length > 20).length).toBeGreaterThanOrEqual(4);
+    expect(female.length).toBeGreaterThan(320);
+    expect(validateCoverLetterGrounding(female, facts, { locale: 'sr', gender: 'female' }).valid).toBe(true);
+
+    for (const gender of ['male', 'unspecified'] as const) {
+      const text = assembleCoverLetterContent(
+        buildDeterministicSparseCoverLetter('sr', {
+          candidateName: 'Ana Petrović',
+          jobTitle: 'Teacher',
+          companyName: 'Edu-Bridge',
+          factSet: facts,
+          dateLine: '14. jul 2026.',
+          gender,
+          tone: 'confident',
+        }),
+        'sr',
+      );
       expect(text).toContain('„Teacher“');
       expect(text).not.toContain('Teachera');
       expect(text).toContain('Ana Petrović');
       expect(text).toContain('Edu-Bridge');
+      expect(text).not.toContain('gde je to primereno');
+      expect(text).not.toContain('Pozicija je od stvarnog interesa');
+      expect(text.length).toBeGreaterThan(280);
+      if (gender === 'male') {
+        expect(text).toContain('Motivisan sam');
+        expect(text).toContain('Dostupan sam');
+        expect(text).not.toContain('Motivisana sam');
+        expect(text).not.toContain('Dostupna sam');
+      } else {
+        expect(text).not.toContain('Motivisana sam');
+        expect(text).not.toContain('Motivisan sam');
+        expect(text).not.toContain('Dostupna sam');
+        expect(text).not.toContain('Dostupan sam');
+      }
       expect(validateCoverLetterGrounding(text, facts, { locale: 'sr', gender }).valid).toBe(true);
     }
 
