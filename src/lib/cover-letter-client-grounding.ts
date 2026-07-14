@@ -66,7 +66,10 @@ function buildLocalSparseFallback(options: {
     dateLine: localizedDateLine(options.locale),
     gender: normalizeCoverLetterGender(options.gender),
   });
-  return normalizeCoverLetterBody(assembleCoverLetterContent(letter), options.candidateName);
+  return normalizeCoverLetterBody(
+    assembleCoverLetterContent(letter, options.locale),
+    options.candidateName,
+  );
 }
 
 /**
@@ -98,7 +101,10 @@ export function activateCoverLetterContentWithClientGrounding(options: {
     options.backendRevision !== COVER_LETTER_GROUNDING_BACKEND_REVISION;
 
   const validatorStarted = true;
-  const grounding = validateCoverLetterGrounding(options.serverContent, options.factSet);
+  const grounding = validateCoverLetterGrounding(options.serverContent, options.factSet, {
+    locale: options.locale,
+    gender: options.gender,
+  });
   const validatorCompleted = true;
 
   if (grounding.valid && isTrustedCoverLetterGroundingStatus(serverGroundingStatus)) {
@@ -142,7 +148,10 @@ export function activateCoverLetterContentWithClientGrounding(options: {
     factSet: options.factSet,
     gender: options.gender,
   });
-  const fallbackGrounding = validateCoverLetterGrounding(fallback, options.factSet);
+  const fallbackGrounding = validateCoverLetterGrounding(fallback, options.factSet, {
+    locale: options.locale,
+    gender: options.gender,
+  });
 
   if (fallbackGrounding.valid) {
     return {

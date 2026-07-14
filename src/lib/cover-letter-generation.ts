@@ -359,7 +359,9 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
       '- Prefer gender-neutral constructions ONLY when applicant gender is unspecified in the GENDER instruction above.',
       '- When GENDER says FEMALE: use exclusively feminine first-person forms (चाहती हूँ, कर रही हूँ, प्रस्तुत कर रही हूँ). Never masculine.',
       '- When GENDER says MALE: use exclusively masculine first-person forms (चाहता हूँ, कर रहा हूँ, प्रस्तुत कर रहा हूँ). Never feminine.',
+      '- When GENDER is unspecified: use impersonal constructions only (e.g. "यह आवेदन प्रस्तुत है", "अवसर स्वागतयोग्य होगा"). Never चाहता/चाहती, कर रहा/रही, and never rewrite as third person with the candidate name (e.g. "Name आवेदन कर रहे हैं").',
       '- NEVER use slash forms such as चाहता/चाहती, करूँगा/करूँगी, रहा/रही.',
+      '- Never show draft self-corrections such as "— नहीं", "क्षमा करें", or "मेरा मतलब".',
       '- Never infer gender from the candidate name or job title.',
       '- Do NOT claim ईमानदारी, लगन, सूक्ष्मता, रचनात्मक सोच, समस्या-समाधान क्षमता, नेतृत्व क्षमता, or मजबूत कार्य-नैतिकता unless in SOURCE FACTS.',
       '- Do NOT claim व्यापक अनुभव, कई वर्षों का अनुभव, वेब अनुप्रयोगों का निर्माण, डेटाबेस प्रबंधन, जटिल तकनीकी समस्याओं का समाधान, परियोजनाओं का नेतृत्व, प्रणाली की कार्यक्षमता में सुधार, प्रोग्रामिंग भाषाओं में विशेषज्ञता, or क्लाउड/Agile अनुभव unless in SOURCE FACTS.',
@@ -682,15 +684,24 @@ export function validateStructuredCoverLetter(
   };
 }
 
-export function assembleCoverLetterContent(letter: StructuredCoverLetter): string {
+export function assembleCoverLetterContent(
+  letter: StructuredCoverLetter,
+  locale?: Locale,
+): string {
   const signOff = letter.signOff.replace(/[,.،、]\s*$/u, '').trim();
+  const signOffLine =
+    locale === 'ja'
+      ? signOff
+      : locale === 'ar'
+        ? `${signOff}،`
+        : `${signOff},`;
   return [
     letter.greeting,
     letter.paragraph1,
     letter.paragraph2,
     letter.paragraph3,
     letter.closing,
-    `${signOff},`,
+    signOffLine,
     letter.candidateName,
   ].join('\n\n');
 }
@@ -955,8 +966,11 @@ export async function generateStructuredCoverLetterWithRetries(options: {
     }
 
     structurallyValid = parsed;
-    assembledForGrounding = assembleCoverLetterContent(parsed);
-    const grounding = validateCoverLetterGrounding(assembledForGrounding, factSet);
+    assembledForGrounding = assembleCoverLetterContent(parsed, options.locale);
+    const grounding = validateCoverLetterGrounding(assembledForGrounding, factSet, {
+      locale: options.locale,
+      gender,
+    });
     lastViolationCount = grounding.violations.length;
     if (grounding.valid) {
       return {
@@ -989,22 +1003,29 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       retryNote: buildGroundingRepairUserNote(factSet, grounding.violations, assembledForGrounding),
     })}`;
 
-    const repairedRaw = await options.generate(attempt + 10, retryCap, repairPrompt);
-    const repaired = tryParseAndValidate(repairedRaw);
-    if (repaired) {
-      const repairedText = assembleCoverLetterContent(repaired);
-      const repairedGrounding = validateCoverLetterGrounding(repairedText, factSet);
-      lastViolationCount = repairedGrounding.violations.length;
-      if (repairedGrounding.valid) {
-        return {
-          letter: repaired,
-          groundingStatus: 'repaired',
-          repairAttempted: true,
-          fallbackUsed: false,
-          usedFactIds,
-          groundingViolationCount: 0,
-        };
+    try {
+      const repairedRaw = await options.generate(attempt + 10, retryCap, repairPrompt);
+      const repaired = tryParseAndValidate(repairedRaw);
+      if (repaired) {
+        const repairedText = assembleCoverLetterContent(repaired, options.locale);
+        const repairedGrounding = validateCoverLetterGrounding(repairedText, factSet, {
+          locale: options.locale,
+          gender,
+        });
+        lastViolationCount = repairedGrounding.violations.length;
+        if (repairedGrounding.valid) {
+          return {
+            letter: repaired,
+            groundingStatus: 'repaired',
+            repairAttempted: true,
+            fallbackUsed: false,
+            usedFactIds,
+            groundingViolationCount: 0,
+          };
+        }
       }
+    } catch {
+      // Repair generation failed — fall through to deterministic neutral fallback.
     }
 
     // Deterministic safe fallback — never expose ungrounded inventing content

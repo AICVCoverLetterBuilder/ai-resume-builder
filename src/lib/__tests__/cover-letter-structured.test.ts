@@ -131,6 +131,7 @@ describe('structured cover letter core', () => {
       toneDesc: 'formal',
       variantNote: '',
       genderNote: '',
+      gender: 'female',
       fallbackRole: 'पद',
       fallbackCompany: 'कंपनी',
       generate: async (attempt) => {

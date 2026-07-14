@@ -70,7 +70,8 @@ Font.register({
   ],
 });
 
-// Disable automatic hyphenation so words are never split across lines
+// Hyphenation callback: never inject soft hyphens. Japanese wrapping is handled
+// via ZWSP opportunities in computeCoverLetterPdfParagraphs (locale === 'ja').
 Font.registerHyphenationCallback((word) => [word]);
 
 // ── Font family selector ──────────────────────────────────────────────────────
@@ -148,13 +149,31 @@ export interface CoverLetterPDFProps {
  * and splits the remainder into paragraph blocks. Exported so tests can assert
  * the exact text that would be rendered without mocking the renderer.
  */
-export function computeCoverLetterPdfParagraphs(content: string, candidateName: string): string[] {
+/**
+ * Allow Japanese (CJK) line wraps without soft-hyphen / ASCII hyphen artifacts.
+ * @react-pdf/textkit inserts U+00AD between hyphenation syllables; returning
+ * per-character syllables still adds soft hyphens. Instead we keep words whole
+ * for hyphenation and insert ZWSP between CJK characters so wrapping can occur
+ * at those points without a visible hyphen.
+ */
+export function insertJapanesePdfWrapOpportunities(text: string): string {
+  // Strip soft hyphens / BOM-like markers that only appear from wrap engines.
+  const cleaned = text.replace(/\u00AD/g, '').replace(/\uFFFE/g, '');
+  return cleaned.replace(/([\u3040-\u30FF\u3400-\u9FFF々〆ヵヶ])/gu, '$1\u200B');
+}
+
+export function computeCoverLetterPdfParagraphs(
+  content: string,
+  candidateName: string,
+  locale?: string,
+): string[] {
   const sanitizedContent = sanitizeCoverLetterContent(content);
   const cleanedContent = stripCoverLetterExportHeader(sanitizedContent, candidateName);
   return cleanedContent
     .split(/\n{2,}/)
-    .map(p => p.trim())
-    .filter(p => p.length > 0);
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .map((p) => (locale === 'ja' ? insertJapanesePdfWrapOpportunities(p) : p));
 }
 
 /**
@@ -182,7 +201,7 @@ export function CoverLetterPDFDocument({
   // even for a legacy saved draft that still has it embedded. Also strips the
   // leading name/date header lines the API bakes in (the date is re-rendered
   // above via `dateStr`) and splits the remainder into paragraph blocks.
-  const paragraphs = computeCoverLetterPdfParagraphs(content, candidateName);
+  const paragraphs = computeCoverLetterPdfParagraphs(content, candidateName, locale);
 
   return (
     <Document>

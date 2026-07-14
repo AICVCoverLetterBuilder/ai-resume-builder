@@ -141,10 +141,13 @@ function buildValidatedLocalFallback(options: {
     gender: options.gender,
   });
   const content = normalizeCoverLetterBody(
-    assembleCoverLetterContent(letter),
+    assembleCoverLetterContent(letter, options.locale),
     options.candidateName,
   );
-  const grounding = validateCoverLetterGrounding(content, options.factSet);
+  const grounding = validateCoverLetterGrounding(content, options.factSet, {
+    locale: options.locale,
+    gender: options.gender,
+  });
   const localeOk = contentMatchesRequestedLocale(content, options.locale);
   return { content, valid: grounding.valid && localeOk && content.trim().length > 0 };
 }

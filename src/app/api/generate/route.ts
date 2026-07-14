@@ -441,7 +441,7 @@ Rules:
       // NOTE: the `structured-v4` schema/version marker is intentionally NOT stamped
       // into the letter body anymore. The engine fingerprint is carried by
       // `coverLetterGenerationEngine` (and groundingStatus for diagnostics).
-      const letterBody = assembleCoverLetterContent(structuredLetter);
+      const letterBody = assembleCoverLetterContent(structuredLetter, resolvedLocale);
 
       // Body-only response: preview/PDF/DOCX render the document date (and any
       // contact block) themselves. Do not bake name/email/phone/date into result.

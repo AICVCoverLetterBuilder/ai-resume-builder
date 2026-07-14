@@ -11,6 +11,7 @@ import {
   normalizeCoverLetterGender,
   type CoverLetterGender,
 } from './cover-letter-gender';
+import { collectGenderAndSelfCorrectionViolations } from './cover-letter-gender-validation';
 
 export type GroundingViolationKind =
   | 'numeric_claim'
@@ -21,7 +22,9 @@ export type GroundingViolationKind =
   | 'meta_or_system_wording'
   | 'personality_claim'
   | 'role_inferred_duty'
-  | 'gender_placeholder';
+  | 'gender_placeholder'
+  | 'self_correction_leak'
+  | 'gender_form_mismatch';
 
 export type GroundingViolation = {
   kind: GroundingViolationKind;
@@ -274,6 +277,7 @@ const GENDER_PLACEHOLDER_PATTERNS: RegExp[] = [
 export function validateCoverLetterGrounding(
   content: string,
   factSet: CoverLetterFactSet,
+  options?: { locale?: Locale | string; gender?: CoverLetterGender | string },
 ): GroundingValidationResult {
   const text = normalizeForMatch(content);
   const violations: GroundingViolation[] = [];
@@ -354,6 +358,14 @@ export function validateCoverLetterGrounding(
     if (/[.@\d]/.test(matched)) continue;
     violations.push({ kind: 'gender_placeholder', matched });
   }
+
+  // Self-correction leakage + gendered speaker forms vs selected app gender
+  violations.push(
+    ...collectGenderAndSelfCorrectionViolations(content, {
+      locale: options?.locale,
+      gender: options?.gender,
+    }),
+  );
 
   return { valid: violations.length === 0, violations };
 }
@@ -466,7 +478,9 @@ function fallbackParts(
       paragraph1: `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}، وأرحب بفرصة التعرف على متطلبات الوظيفة ومناقشة إمكانية الانضمام إلى فريقكم.`,
       paragraph2: extraSentence
         || 'تهمّني هذه الفرصة، ويسعدني معرفة المزيد عن الدور وما يتطلبه.',
-      paragraph3: 'يشرفني مناقشة طلبي ومعرفة المزيد عن توقعاتكم لهذا المنصب.',
+      paragraph3: gender === 'unspecified'
+        ? 'يسعدني حضور مقابلة في الوقت الذي يناسبكم.'
+        : 'يشرفني مناقشة طلبي ومعرفة المزيد عن توقعاتكم لهذا المنصب.',
       closing: 'شكرًا لوقتكم واهتمامكم.',
       signOff: 'مع خالص التحية',
     },
@@ -524,14 +538,16 @@ function fallbackParts(
         ? `मैं ${company} में ${role} पद के लिए आवेदन प्रस्तुत कर रही हूँ। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`
         : gender === 'male'
           ? `मैं ${company} में ${role} पद के लिए आवेदन प्रस्तुत कर रहा हूँ। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`
-          : `${company} में ${role} पद के लिए यह आवेदन प्रस्तुत है। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`,
+          : `${company} में ${role} पद के लिए यह आवेदन प्रस्तुत है। इस अवसर में रुचि है और पद की अपेक्षाओं के बारे में अधिक जानने का अवसर स्वागतयोग्य होगा।`,
       paragraph2: extraSentence
-        || 'यह पद रुचिकर लगता है। आवेदन पर चर्चा करने और पद की अपेक्षाओं को बेहतर समझने का अवसर स्वागतयोग्य होगा।',
+        || (gender === 'unspecified'
+          ? 'टीम से जुड़ने और भूमिका को समझते हुए जहाँ उपयुक्त हो योगदान देने के अवसर का स्वागत है।'
+          : 'यह पद रुचिकर लगता है। आवेदन पर चर्चा करने और पद की अपेक्षाओं को बेहतर समझने का अवसर स्वागतयोग्य होगा।'),
       paragraph3: gender === 'female'
         ? 'साक्षात्कार के लिए मैं उपलब्ध रहना चाहती हूँ।'
         : gender === 'male'
           ? 'साक्षात्कार के लिए मैं उपलब्ध रहना चाहता हूँ।'
-          : 'साक्षात्कार के लिए अनुरोध है।',
+          : 'साक्षात्कार के माध्यम से आवेदन पर चर्चा करने का अवसर भी स्वागतयोग्य होगा।',
       closing: 'समय और विचार के लिए धन्यवाद।',
       signOff: 'सादर',
     },

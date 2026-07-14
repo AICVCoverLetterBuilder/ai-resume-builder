@@ -81,8 +81,9 @@ export function getCoverLetterGenderInstruction(locale: Locale | string, genderR
     }
     return [
       ' GENDER: Unspecified.',
-      'Use natural gender-neutral Hindi constructions (impersonal or noun-based).',
-      'Never use slash alternatives (चाहता/चाहती, रहा/रही) and do not invent gender from the name.',
+      'Use natural gender-neutral Hindi constructions only (impersonal noun-based sentences such as "यह आवेदन प्रस्तुत है", "अवसर स्वागतयोग्य होगा").',
+      'Never use masculine forms (चाहता हूँ, कर रहा हूँ), feminine forms (चाहती हूँ, कर रही हूँ), slash alternatives, or third-person rewrites that name the candidate as the grammatical subject (e.g. "Name आवेदन कर रहे हैं").',
+      'Never show drafting corrections ("— नहीं", "क्षमा करें", "मेरा मतलब"). Do not invent gender from the name.',
     ].join(' ');
   }
 
@@ -91,9 +92,9 @@ export function getCoverLetterGenderInstruction(locale: Locale | string, genderR
       return ' GENDER (MANDATORY): Applicant is MALE. Use masculine agreement consistently. Never use slash or dual-gender placeholders. Do not infer gender from the name.';
     }
     if (gender === 'female') {
-      return ' GENDER (MANDATORY): Applicant is FEMALE. Use feminine agreement consistently (e.g. متقدمة، مهتمة، يسعدني as appropriate). Never use slash placeholders. Do not infer gender from the name.';
+      return ' GENDER (MANDATORY): Applicant is FEMALE. Use feminine agreement consistently (e.g. متقدمة، مهتمة). Never use slash placeholders. Do not infer gender from the name.';
     }
-    return ' GENDER: Unspecified. Prefer natural gender-neutral Modern Standard Arabic phrasing without slash placeholders. Do not infer gender from the name.';
+    return ' GENDER: Unspecified. Prefer natural gender-neutral Modern Standard Arabic first-person phrasing (أتقدم، أرحب، تهمني، يسعدني، أرغب، أتطلع). Never use speaker-marking adjectives such as حريص/حريصة، متاح/متاحة، مستعد/مستعدة، مهتم/مهتمة، متحمس/متحمسة، سعيد/سعيدة. Never use slash placeholders. Do not infer gender from the name.';
   }
 
   if (loc === 'sr' || loc === 'hr') {

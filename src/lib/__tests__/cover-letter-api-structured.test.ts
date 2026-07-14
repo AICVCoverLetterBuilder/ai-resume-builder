@@ -92,6 +92,7 @@ describe('structured cover letter API generation', () => {
       companyName: COMPANY,
       tone: 'formal',
       personalName: CANDIDATE,
+      gender: 'female',
     }) as never);
     const data = await response.json();
 
@@ -168,6 +169,7 @@ describe('structured cover letter API generation', () => {
       companyName: COMPANY,
       tone: 'formal',
       personalName: CANDIDATE,
+      gender: 'male',
     }) as never);
     const data = await response.json();
 
