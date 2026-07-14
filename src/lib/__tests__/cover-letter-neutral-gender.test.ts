@@ -15,8 +15,9 @@ import {
 import { getCoverLetterGenderInstruction } from '../cover-letter-gender';
 import {
   computeCoverLetterPdfParagraphs,
-  insertJapanesePdfWrapOpportunities,
+  computeJapaneseCoverLetterPdfLines,
 } from '../cover-letter-pdf';
+import { wrapJapanesePdfParagraphLines } from '../cover-letter-japanese-pdf-wrap';
 import { activateCoverLetterContentWithClientGrounding } from '../cover-letter-client-grounding';
 import { COVER_LETTER_GROUNDING_BACKEND_REVISION } from '../cover-letter-grounding-diagnostics';
 import { isActiveCoverLetterResultEligible, createCoverLetterActiveResult } from '../cover-letter-active-result';
@@ -139,7 +140,7 @@ describe('unspecified gender + self-correction + Japanese PDF', () => {
     expect(findGenderFormMismatches('मैं चाहता हूँ।', 'hi', 'female').length).toBeGreaterThan(0);
   });
 
-  test('Japanese PDF wrapping uses ZWSP and assemble omits comma after 敬具', () => {
+  test('Japanese assemble omits comma after 敬具; PDF lines use no ZWSP strategy', () => {
     const letter = buildDeterministicSparseCoverLetter('ja', {
       candidateName: 'Many Loom',
       jobTitle: 'Teacher',
@@ -154,18 +155,18 @@ describe('unspecified gender + self-correction + Japanese PDF', () => {
     expect(text).toContain('Dioda');
     expect(text).toContain('Teacher');
 
-    const wrapped = insertJapanesePdfWrapOpportunities('ご連絡申し上げます。志望状をお送りします。');
-    expect(wrapped).toContain('\u200B');
-    expect(wrapped).not.toContain('\u00AD');
-    expect(wrapped.replace(/\u200B/g, '')).toBe('ご連絡申し上げます。志望状をお送りします。');
-
     const paragraphs = computeCoverLetterPdfParagraphs(text, 'Many Loom', 'ja');
-    const joined = paragraphs.join('\n').replace(/\u200B/g, '');
-    expect(joined).not.toContain('敬具,');
-    expect(joined).toContain('敬具');
-    expect(joined).not.toMatch(/申-\s|送-\s|を-\s|討-\s/);
+    expect(paragraphs.join('\n')).not.toContain('\u200B');
     expect(paragraphs.join('\n')).not.toContain('\u00AD');
-    expect(paragraphs.join('\n')).toContain('\u200B');
+    expect(paragraphs.join('\n')).toContain('敬具');
+    expect(paragraphs.join('\n')).not.toContain('敬具,');
+
+    const lines = computeJapaneseCoverLetterPdfLines(text, 'Many Loom').flat();
+    expect(lines.join('')).toContain('敬具');
+    expect(lines.some((l) => l.includes('敬具,'))).toBe(false);
+    expect(wrapJapanesePdfParagraphLines('ご連絡申し上げます。志望状をお送りします。').join('')).toBe(
+      'ご連絡申し上げます。志望状をお送りします。',
+    );
   });
 
   test('client activation rejects Hindi self-correction and uses neutral fallback', () => {

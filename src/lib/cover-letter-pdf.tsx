@@ -33,45 +33,61 @@ import {
   stripCoverLetterExportHeader,
   formatCoverLetterDocumentDate,
 } from './cover-letter-header';
+import {
+  sanitizeJapanesePdfWrapMarkers,
+  wrapJapanesePdfParagraphLines,
+} from './cover-letter-japanese-pdf-wrap';
 
 // ── Font Registration ─────────────────────────────────────────────────────────
 // Fonts are served from /public/fonts/ and embedded into the PDF at render time.
-// Hyphenation is disabled globally so words never break mid-word.
+// Hyphenation is disabled globally so Latin words never break mid-word with a
+// discretionary hyphen. Japanese Cover Letter PDFs use explicit pre-wrapped
+// lines (wrap={false}) because textkit still inserts U+002D between script-
+// itemized kanji/kana syllables when auto-wrapping.
+
+/** Browser: /fonts/... ; Node/tests: absolute public/fonts path (no path import). */
+function coverLetterFontSrc(fileName: string): string {
+  if (typeof window === 'undefined' && typeof process !== 'undefined' && typeof process.cwd === 'function') {
+    const root = process.cwd().replace(/\\/g, '/');
+    return `${root}/public/fonts/${fileName}`;
+  }
+  return `/fonts/${fileName}`;
+}
 
 Font.register({
   family: 'NotoSans',
   fonts: [
-    { src: '/fonts/NotoSans-Regular.ttf', fontWeight: 400 },
-    { src: '/fonts/NotoSans-Bold.ttf',    fontWeight: 700 },
+    { src: coverLetterFontSrc('NotoSans-Regular.ttf'), fontWeight: 400 },
+    { src: coverLetterFontSrc('NotoSans-Bold.ttf'),    fontWeight: 700 },
   ],
 });
 
 Font.register({
   family: 'NotoSansArabic',
   fonts: [
-    { src: '/fonts/NotoSansArabic-Regular.ttf', fontWeight: 400 },
-    { src: '/fonts/NotoSansArabic-Bold.ttf',    fontWeight: 700 },
+    { src: coverLetterFontSrc('NotoSansArabic-Regular.ttf'), fontWeight: 400 },
+    { src: coverLetterFontSrc('NotoSansArabic-Bold.ttf'),    fontWeight: 700 },
   ],
 });
 
 Font.register({
   family: 'NotoSansDevanagari',
   fonts: [
-    { src: '/fonts/NotoSansDevanagari-Regular.ttf', fontWeight: 400 },
-    { src: '/fonts/NotoSansDevanagari-Bold.ttf',    fontWeight: 700 },
+    { src: coverLetterFontSrc('NotoSansDevanagari-Regular.ttf'), fontWeight: 400 },
+    { src: coverLetterFontSrc('NotoSansDevanagari-Bold.ttf'),    fontWeight: 700 },
   ],
 });
 
 Font.register({
   family: 'NotoSansJP',
   fonts: [
-    { src: '/fonts/NotoSansJP-Regular.ttf', fontWeight: 400 },
-    { src: '/fonts/NotoSansJP-Bold.ttf',    fontWeight: 700 },
+    { src: coverLetterFontSrc('NotoSansJP-Regular.ttf'), fontWeight: 400 },
+    { src: coverLetterFontSrc('NotoSansJP-Bold.ttf'),    fontWeight: 700 },
   ],
 });
 
-// Hyphenation callback: never inject soft hyphens. Japanese wrapping is handled
-// via ZWSP opportunities in computeCoverLetterPdfParagraphs (locale === 'ja').
+// Return each word intact so textkit does not insert discretionary soft hyphens
+// for Latin scripts. Japanese lines are pre-wrapped separately (never syllabified).
 Font.registerHyphenationCallback((word) => [word]);
 
 // ── Font family selector ──────────────────────────────────────────────────────
@@ -132,6 +148,11 @@ function makeStyles(fontFamily: string, rtl: boolean) {
       marginBottom: 10,
       textAlign:    rtl ? 'right' : 'left',
     },
+    /** Single pre-wrapped Japanese line — no textkit auto-wrap / hyphen insertion. */
+    jaLine: {
+      marginBottom: 0,
+      textAlign: 'left',
+    },
   });
 }
 
@@ -148,20 +169,10 @@ export interface CoverLetterPDFProps {
  * marker, strips the leading name/contact/date header lines the API bakes in,
  * and splits the remainder into paragraph blocks. Exported so tests can assert
  * the exact text that would be rendered without mocking the renderer.
+ *
+ * Japanese: strips wrap markers only — no ZWSP/soft-hyphen injection. Actual
+ * line breaks are computed by wrapJapanesePdfParagraphLines at render time.
  */
-/**
- * Allow Japanese (CJK) line wraps without soft-hyphen / ASCII hyphen artifacts.
- * @react-pdf/textkit inserts U+00AD between hyphenation syllables; returning
- * per-character syllables still adds soft hyphens. Instead we keep words whole
- * for hyphenation and insert ZWSP between CJK characters so wrapping can occur
- * at those points without a visible hyphen.
- */
-export function insertJapanesePdfWrapOpportunities(text: string): string {
-  // Strip soft hyphens / BOM-like markers that only appear from wrap engines.
-  const cleaned = text.replace(/\u00AD/g, '').replace(/\uFFFE/g, '');
-  return cleaned.replace(/([\u3040-\u30FF\u3400-\u9FFF々〆ヵヶ])/gu, '$1\u200B');
-}
-
 export function computeCoverLetterPdfParagraphs(
   content: string,
   candidateName: string,
@@ -173,7 +184,17 @@ export function computeCoverLetterPdfParagraphs(
     .split(/\n{2,}/)
     .map((p) => p.trim())
     .filter((p) => p.length > 0)
-    .map((p) => (locale === 'ja' ? insertJapanesePdfWrapOpportunities(p) : p));
+    .map((p) => (locale === 'ja' ? sanitizeJapanesePdfWrapMarkers(p) : p));
+}
+
+/** Explicit Japanese PDF lines per paragraph (layout only — not stored content). */
+export function computeJapaneseCoverLetterPdfLines(
+  content: string,
+  candidateName: string,
+): string[][] {
+  return computeCoverLetterPdfParagraphs(content, candidateName, 'ja').map((para) =>
+    wrapJapanesePdfParagraphLines(para),
+  );
 }
 
 /**
@@ -202,6 +223,8 @@ export function CoverLetterPDFDocument({
   // leading name/date header lines the API bakes in (the date is re-rendered
   // above via `dateStr`) and splits the remainder into paragraph blocks.
   const paragraphs = computeCoverLetterPdfParagraphs(content, candidateName, locale);
+  const japaneseParagraphLines =
+    locale === 'ja' ? computeJapaneseCoverLetterPdfLines(content, candidateName) : null;
 
   return (
     <Document>
@@ -214,13 +237,25 @@ export function CoverLetterPDFDocument({
             embedded Noto Sans Arabic/Devanagari fonts' shaping tables
             automatically, so plain right-aligned <Text> renders Arabic/Hindi
             correctly without any extra "direction" style (that key isn't
-            part of the supported Style API and was a no-op). */}
+            part of the supported Style API and was a no-op).
+            Japanese: each visual line is a wrap={false} Text so textkit cannot
+            insert U+002D at kanji/kana script boundaries. */}
         <View style={styles.body}>
-          {paragraphs.map((para, i) => (
-            <Text key={i} style={styles.paragraph}>
-              {para}
-            </Text>
-          ))}
+          {japaneseParagraphLines
+            ? japaneseParagraphLines.map((lines, i) => (
+                <View key={i} style={styles.paragraph} wrap>
+                  {lines.map((line, j) => (
+                    <Text key={j} style={styles.jaLine} wrap={false}>
+                      {line}
+                    </Text>
+                  ))}
+                </View>
+              ))
+            : paragraphs.map((para, i) => (
+                <Text key={i} style={styles.paragraph}>
+                  {para}
+                </Text>
+              ))}
         </View>
 
         {/* NOTE: NO second <Text>{candidateName}</Text> here.
