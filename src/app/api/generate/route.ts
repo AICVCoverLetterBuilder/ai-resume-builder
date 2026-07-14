@@ -357,8 +357,6 @@ export async function POST(req: NextRequest) {
       const jobTitle = sanitizeField(params.jobTitle, 500);
       const companyName = sanitizeField(params.companyName, 500);
       const personalName = sanitizeField(params.personalName, 200);
-      const personalEmail = sanitizeField(params.personalEmail, 200);
-      const personalPhone = sanitizeField(params.personalPhone, 100);
       const jobDescription = sanitizeField(params.jobDescription, 4000);
       const summary = sanitizeField(params.summary, 2000);
       const resolvedLocale = normalizeLocale(locale);
@@ -367,8 +365,6 @@ export async function POST(req: NextRequest) {
       // Use provided name strictly — never fall back to placeholder strings when name exists
       const candidateName = (typeof personalName === 'string' ? personalName.trim() : '') || '';
       const displayName = candidateName || localeInfo.fallbackCandidate;
-      // Header name line: only use candidateName if available, otherwise empty (we won't show placeholder in header)
-      const headerName = candidateName || '';
 
       const toneDesc = localeInfo.toneMap[(tone as 'formal' | 'confident' | 'friendly') || 'formal'] || localeInfo.toneMap.formal;
       const variantNote = variant && variant > 0
@@ -455,16 +451,9 @@ Rules:
       // `coverLetterGenerationEngine` (and groundingStatus for diagnostics).
       const letterBody = assembleCoverLetterContent(structuredLetter);
 
-      const dateStr = new Date().toLocaleDateString(resolvedLocale, { year: 'numeric', month: 'long', day: 'numeric' });
-
-      // Build header: only include lines that have real content
-      const headerLines: string[] = [];
-      if (headerName) headerLines.push(headerName);
-      if (personalEmail && typeof personalEmail === 'string' && personalEmail.trim()) headerLines.push(personalEmail.trim());
-      if (personalPhone && typeof personalPhone === 'string' && personalPhone.trim()) headerLines.push(personalPhone.trim());
-
-      const headerBlock = headerLines.length > 0 ? headerLines.join('\n') + '\n\n' : '';
-      const fullLetter = sanitizeCoverLetterContent(`${headerBlock}${dateStr}\n\n${letterBody}`);
+      // Body-only response: preview/PDF/DOCX render the document date (and any
+      // contact block) themselves. Do not bake name/email/phone/date into result.
+      const fullLetter = sanitizeCoverLetterContent(letterBody);
 
       if (process.env.NODE_ENV !== 'production') {
         console.log('[Cover Letter Generation]', {

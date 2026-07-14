@@ -45,6 +45,7 @@ import {
   copyCoverLetterGroundingDiagnosticsToClipboard,
   COVER_LETTER_GROUNDING_BACKEND_REVISION,
 } from '@/lib/cover-letter-grounding-diagnostics';
+import { normalizeCoverLetterBody, prepareCoverLetterForDisplay } from '@/lib/cover-letter-header';
 
 const emptyCL = (): CoverLetterData => ({
   id: crypto.randomUUID(),
@@ -238,13 +239,25 @@ export default function CoverLetterPage() {
   }, [locale, contentLocale]);
 
   const selectedLocale = locale as Locale;
-  const previewContent = isCoverLetterContentCurrent(
+  const exportCandidateNameForPreview = (() => {
+    const first = cl.firstName.trim();
+    const last = cl.lastName.trim();
+    if (first && last) return `${first} ${last}`;
+    return first || last || currentCv?.personal?.fullName?.trim() || '';
+  })();
+  const rawPreviewContent = isCoverLetterContentCurrent(
     cl.content,
     contentLocale,
     selectedLocale,
     generationPhase,
     groundingStatus,
   ) ? cl.content : '';
+  const previewContent = rawPreviewContent
+    ? prepareCoverLetterForDisplay(rawPreviewContent, exportCandidateNameForPreview, selectedLocale)
+    : '';
+  const exportBodyContent = rawPreviewContent
+    ? normalizeCoverLetterBody(rawPreviewContent, exportCandidateNameForPreview)
+    : '';
   const downloadsAllowed = isCoverLetterDownloadAllowed(
     cl.content,
     contentLocale,
@@ -420,7 +433,11 @@ export default function CoverLetterPage() {
         return;
       }
 
-      setCl(prev => ({ ...prev, content: activation.content, updatedAt: new Date().toISOString() }));
+      setCl(prev => ({
+        ...prev,
+        content: normalizeCoverLetterBody(activation.content, fullName || currentCv?.personal?.fullName || ''),
+        updatedAt: new Date().toISOString(),
+      }));
       setContentLocale(requestedLocale);
       setGroundingStatus(activation.groundingStatus);
       setGenerationPhase('success');
@@ -487,7 +504,7 @@ export default function CoverLetterPage() {
     const cvName = currentCv?.personal?.fullName?.trim();
     if (cvName) return cvName;
     return resolveExportCandidateName(
-      previewContent || cl.content,
+      exportBodyContent || cl.content,
       '',
       locale,
       getDefaultCoverLetterClosing(locale),
@@ -511,7 +528,7 @@ export default function CoverLetterPage() {
       ? `${t.coverLetter.filename} - ${cl.companyName}`
       : t.coverLetter.filename;
     try {
-      await exportCoverLetterToPDF(getExportCandidateName(), previewContent, filename, locale, cl.companyName);
+      await exportCoverLetterToPDF(getExportCandidateName(), exportBodyContent, filename, locale, cl.companyName);
       incrementDownloads('cl');
       setShowArabicPdfDiagnostics(false);
     } catch (err: unknown) {
@@ -542,7 +559,7 @@ export default function CoverLetterPage() {
     setShowDownloadMenu(false);
     setIsWordExporting(true);
     try {
-      await exportCoverLetterToDOCX(previewContent, `${t.coverLetter.filename} - ${cl.companyName}`, getExportCandidateName(), locale, cl.companyName);
+      await exportCoverLetterToDOCX(exportBodyContent, `${t.coverLetter.filename} - ${cl.companyName}`, getExportCandidateName(), locale, cl.companyName);
       incrementDownloads('cl');
     } catch (err: unknown) {
       if (err instanceof CoverLetterExportIncompleteError) {

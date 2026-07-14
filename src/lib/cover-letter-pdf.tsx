@@ -29,7 +29,10 @@ import {
   Font,
 } from '@react-pdf/renderer';
 import { sanitizeCoverLetterContent } from './cover-letter-generation';
-import { stripCoverLetterExportHeader } from './cover-letter-header';
+import {
+  stripCoverLetterExportHeader,
+  formatCoverLetterDocumentDate,
+} from './cover-letter-header';
 
 // ── Font Registration ─────────────────────────────────────────────────────────
 // Fonts are served from /public/fonts/ and embedded into the PDF at render time.
@@ -89,48 +92,9 @@ function fontFamilyForLocale(locale: string): string {
 
 // ── Locale → date format ──────────────────────────────────────────────────────
 
-/**
- * Format today's date according to the selected locale.
- * Returns a clean UTF-8 string. Serbian Latin stays in Latin script
- * (sr-Latn-RS, NOT sr-Cyrl which would produce Cyrillic month names).
- *
- * For Arabic we force Latin digits and Latin month names since Arabic
- * numeral rendering is unreliable in PDF fonts; result looks like
- * "30 أبريل 2026" (day + Arabic month name + year in Western digits).
- */
+/** Locale-aware document date; shared with preview via cover-letter-header. */
 export function formatCoverLetterDate(locale: string): string {
-  const date = new Date();
-
-  const localeMap: Record<string, string> = {
-    en:    'en-US',
-    de:    'de-DE',
-    es:    'es-ES',
-    fr:    'fr-FR',
-    it:    'it-IT',
-    ar:    'ar-EG',
-    sr:    'sr-Latn-RS',   // Serbian Latin
-    hr:    'hr-HR',
-    ru:    'ru-RU',
-    'pt-BR': 'pt-BR',
-    hi:    'hi-IN',
-    ja:    'ja-JP',
-  };
-
-  const tag = localeMap[locale] ?? 'en-US';
-
-  try {
-    return new Intl.DateTimeFormat(tag, {
-      year:  'numeric',
-      month: 'long',
-      day:   'numeric',
-    }).format(date);
-  } catch {
-    return new Intl.DateTimeFormat('en-US', {
-      year:  'numeric',
-      month: 'long',
-      day:   'numeric',
-    }).format(date);
-  }
+  return formatCoverLetterDocumentDate(locale);
 }
 
 // ── RTL locale detection ──────────────────────────────────────────────────────

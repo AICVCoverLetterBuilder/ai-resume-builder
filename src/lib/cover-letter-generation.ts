@@ -8,6 +8,7 @@ import {
   buildGroundingRepairUserNote,
   validateCoverLetterGrounding,
 } from './cover-letter-grounding';
+import { stripCoverLetterExportHeader } from './cover-letter-header';
 
 export const COVER_LETTER_SCHEMA_VERSION = 'structured-v4';
 export const COVER_LETTER_SCHEMA_MARKER = `\u200B${COVER_LETTER_SCHEMA_VERSION}\u200B`;
@@ -330,9 +331,11 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
     `- Use the job title "${role}" faithfully — preserve its meaning and seniority; do NOT upgrade or replace it (e.g. do not change "Salesman" into Sales Executive, Sales Representative, or Sales Manager).`,
     '- If the title is specialized or clearer in English, you may keep it and optionally add a natural translation with the English title in parentheses.',
     isSparse
-      ? '- SOURCE FACTS are SPARSE: write a concise honest letter about interest in the exact role, motivation, willingness to learn/contribute, interview availability, and ONLY explicitly supplied education/skills/experience.'
+      ? '- SOURCE FACTS are SPARSE: write a concise honest letter about interest in the exact role, motivation, willingness to learn/contribute, and interview availability. Do NOT invent experience. Do NOT mention that information is limited, sparse, missing, or unavailable.'
       : '- Mention only the strongest qualifications that appear in SOURCE FACTS and are relevant to the role.',
     '- Do NOT include fictional example achievements in the letter.',
+    '- Do NOT put date, email, phone, address, or a header candidate-name block in any JSON field — the application template already renders those.',
+    '- Never mention source facts, CV data, AI, prompts, validation, fallbacks, or system limitations in the letter body.',
   ];
 
   if (locale === 'hi') {
@@ -351,10 +354,11 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
     return [
       'ARABIC QUALITY RULES:',
       '- Write professional Modern Standard Arabic — not word-for-word English translation.',
-      '- Prefer natural phrasing such as "للتقدم لشغل وظيفة [Role]" or "للانضمام إلى فريقكم لشغل وظيفة [Role]".',
+      '- Prefer natural phrasing such as "أتقدم بطلب لشغل وظيفة [Role]" or "للتقدم لشغل وظيفة [Role]" or "للانضمام إلى فريقكم لشغل وظيفة [Role]".',
+      '- Prefer greeting "إلى فريق التوظيف المحترم في شركة [Company]،" when natural.',
       '- Do NOT imply the candidate already works at the employer (avoid forms like "بوصفي [Role] في شركة [Company]").',
       '- Use "مع خالص التحية،" with the Arabic comma "،".',
-      '- For sparse facts, prefer a neutral closing such as "أتطلع إلى فرصة لمناقشة كيف يمكنني المساهمة في فريقكم." — do NOT claim "إضافة قيمة حقيقية" unless SOURCE FACTS establish that value.',
+      '- For sparse facts, prefer neutral interest/learning/growth wording — do NOT claim "إضافة قيمة حقيقية" unless SOURCE FACTS establish that value.',
       '- Do NOT claim خبرة واسعة، قدت مشاريع، طورت حلولاً، رفعت كفاءة الأنظمة، حسنت تجربة المستخدم، أتقن لغات برمجة متعددة، كفاءات تقنية متقدمة، or قدرات تحليلية قوية unless in SOURCE FACTS.',
       '- Keep mixed Latin terms (Google, Java, Python, C++, CRM, emails) readable; do not reverse them.',
       '- Write entirely in Arabic — never output Hindi or English body text.',
@@ -407,11 +411,6 @@ function extractTailLines(text: string): string[] {
     .split('\n')
     .map((line) => normalizeExportLine(line))
     .filter(Boolean);
-}
-
-function isLikelyDateLine(line: string): boolean {
-  const normalized = normalizeExportLine(line);
-  return /(?:\b\d{4}\b|[٠-٩]{4}|[०-९]{4})/u.test(normalized);
 }
 
 function localeSignOffOptions(locale: Locale, closing: string): string[] {
@@ -729,7 +728,8 @@ Rules:
 - closing must mention interview availability or thanks.
 - signOff must be "${options.closing}".
 - candidateName must be exactly "${options.candidateName || options.displayName}".
-- Prefer ~150–300 words when SOURCE FACTS are limited; never pad with invented experience.
+- Prefer a concise letter (~120–280 words); never pad with invented experience.
+- Never write phrases like "source details are limited", "based on the limited information provided", or any equivalent about missing CV/source/AI/validation data.
 ${localeRules ? `\n${localeRules}` : ''}
 - Output JSON only. No markdown. No commentary.${retry}`;
 }
@@ -756,51 +756,7 @@ export function extractCoverLetterBody(content: string, candidateName: string): 
   const normalizedContent = content
     .normalize('NFC')
     .replace(BIDI_AND_ZW_RE, '');
-  const lines = stripSchemaMarker(normalizedContent).split('\n');
-  let index = 0;
-  while (index < lines.length && lines[index].trim() === '') index++;
-
-  let passedDate = false;
-  while (index < lines.length && !passedDate) {
-    const line = lines[index].trim();
-    if (line === '') {
-      index++;
-      continue;
-    }
-    if (isLikelyDateLine(line)) {
-      passedDate = true;
-      index++;
-      while (index < lines.length && lines[index].trim() === '') index++;
-      break;
-    }
-    if (
-      candidateName
-      && normalizeExportLine(line).toLowerCase() === normalizeExportLine(candidateName).toLowerCase()
-    ) {
-      index++;
-      continue;
-    }
-    index++;
-  }
-
-  if (!passedDate) {
-    const fallback = stripSchemaMarker(normalizedContent).split('\n');
-    while (fallback.length > 0 && fallback[0].trim() === '') fallback.shift();
-    if (
-      candidateName
-      && normalizeExportLine(fallback[0] ?? '').toLowerCase() === normalizeExportLine(candidateName).toLowerCase()
-    ) {
-      fallback.shift();
-      while (fallback.length > 0 && fallback[0].trim() === '') fallback.shift();
-    }
-    if (fallback.length > 0 && isLikelyDateLine(fallback[0])) {
-      fallback.shift();
-      while (fallback.length > 0 && fallback[0].trim() === '') fallback.shift();
-    }
-    return fallback.join('\n').trim();
-  }
-
-  return lines.slice(index).join('\n').trim();
+  return stripCoverLetterExportHeader(stripSchemaMarker(normalizedContent), candidateName).trim();
 }
 
 export type CoverLetterExportValidationResult = {

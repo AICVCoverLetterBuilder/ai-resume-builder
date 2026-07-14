@@ -62,7 +62,8 @@ describe('Hindi and Arabic cover letter prompt grounding', () => {
     expect(prompt).toContain('Modern Standard Arabic');
     expect(prompt).toContain('not word-for-word English translation');
     expect(prompt).toContain('Do NOT claim Java, Python, C++');
-    expect(prompt).toContain('أتطلع إلى فرصة لمناقشة كيف يمكنني المساهمة في فريقكم');
+    expect(prompt).toContain('أتقدم بطلب لشغل وظيفة');
+    expect(prompt).toContain('إلى فريق التوظيف المحترم');
     expect(prompt).toContain('do NOT claim "إضافة قيمة حقيقية"');
     expect(prompt).toContain('مع خالص التحية،');
     expect(prompt).toContain('للتقدم لشغل وظيفة');

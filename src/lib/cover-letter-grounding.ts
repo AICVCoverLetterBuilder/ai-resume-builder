@@ -13,7 +13,8 @@ export type GroundingViolationKind =
   | 'named_skill_or_tool'
   | 'leadership_claim'
   | 'achievement_claim'
-  | 'experience_strength_claim';
+  | 'experience_strength_claim'
+  | 'meta_or_system_wording';
 
 export type GroundingViolation = {
   kind: GroundingViolationKind;
@@ -30,16 +31,16 @@ const NAMED_TECH = [
   'javascript',
   'typescript',
   'python',
-  'java',
+  '\\bjava\\b',
   'c\\+\\+',
   'c#',
   'golang',
   '\\bgo\\b',
-  'rust',
+  '\\brust\\b',
   'kotlin',
   'swift',
-  'ruby',
-  'php',
+  '\\bruby\\b',
+  '\\bphp\\b',
   'scala',
   'perl',
   'react',
@@ -50,32 +51,32 @@ const NAMED_TECH = [
   'flask',
   'spring',
   '\\.net',
-  'sql',
+  '\\bsql\\b',
   'mysql',
   'postgresql',
   'mongodb',
   'redis',
-  'aws',
+  '\\baws\\b',
   'azure',
-  'gcp',
+  '\\bgcp\\b',
   'google cloud',
   'docker',
   'kubernetes',
   'devops',
   'ci/?cd',
   'continuous integration',
-  'agile',
-  'scrum',
+  '\\bagile\\b',
+  '\\bscrum\\b',
   'kanban',
-  'oop',
+  '\\boop\\b',
   'object[- ]oriented',
-  'crm',
-  'erp',
+  '\\bcrm\\b',
+  '\\berp\\b',
   'salesforce',
-  'sap',
+  '\\bsap\\b',
   'tableau',
   'power bi',
-  'excel',
+  '\\bexcel\\b',
   'frontend',
   'front[- ]end',
   'backend',
@@ -210,6 +211,21 @@ const EXPERIENCE_PRESENCE_PATTERNS: RegExp[] = [
   /\b(experiência (?:profissional|prática)|tenho experiência)\b/iu,
 ];
 
+/** Internal/meta wording that must never appear in a real cover letter. */
+const META_WORDING_PATTERNS: RegExp[] = [
+  /\b(source details? are limited|my source details|limited (?:source |supplied )?(?:details?|information|data|facts?)|available (?:source )?(?:information|data|details?)|provided (?:CV |resume )?(?:data|information|details?)|insufficient (?:information|data|details?)|sparse (?:facts?|data|details?)|based on the limited|although few details|according to the provided|information available to me|because no experience was provided|the system (?:generated|has little)|AI[- ]generated|automated system|fallback logic)\b/iu,
+  /\b(begrenzte (?:Angaben|Informationen|Daten)|verfügbare (?:Quell)?informationen|wenig Informationen|bereitgestellte (?:Lebenslauf)?daten|KI[- ]generiert)\b/iu,
+  /\b(información (?:limitada|disponible|proporcionada)|datos (?:limitados|disponibles|del CV)|pocos detalles|generado por (?:IA|AI))\b/iu,
+  /\b(informations? (?:limitées?|disponibles?|fournies?)|données (?:limitées?|disponibles?)|peu de détails|généré(?:e)? par (?:l')?IA)\b/iu,
+  /\b(informazioni? (?:limitate|disponibili|fornite)|pochi dettagli|generat[oa] dall'?IA)\b/iu,
+  /(?:تفاصيل المصدر|المعلومات (?:المحدودة|المتوفر|المتوفرة|المقدمة)|بيانات (?:السيرة|محدودة)|لا توجد معلومات كافية|توليد آلي)/u,
+  /\b(ograničen(?:e|ih)? (?:informacij[ae]|podat(?:aka|ci))|dostupne informacije|malo informacija|podaci iz CV|generisan[oa] AI)\b/iu,
+  /(?:ограниченн(?:ые|ой|ая) (?:информаци|данн)|доступн(?:ая|ые) информаци|мало информаци|данные (?:из )?резюме|сгенерировано (?:ИИ|AI))/iu,
+  /\b(informações? (?:limitadas?|disponíveis?|fornecidas?)|poucos detalhes|dados (?:do )?CV|gerad[oa] por IA)\b/iu,
+  /(?:स्रोत विवरण|सीमित (?:जानकारी|विवरण|डेटा)|उपलब्ध जानकारी|प्रदान की गई जानकारी|सीवी डेटा|एआई[- ]?जनरेटेड)/u,
+  /(?:ソース詳細|限られた情報|提供された情報|情報不足|利用可能な情報|AI生成|フォールバック)/u,
+];
+
 export function validateCoverLetterGrounding(
   content: string,
   factSet: CoverLetterFactSet,
@@ -270,6 +286,11 @@ export function validateCoverLetterGrounding(
     }
   }
 
+  // Internal / meta wording must never reach the employer
+  for (const matched of collectMatches(text, META_WORDING_PATTERNS)) {
+    violations.push({ kind: 'meta_or_system_wording', matched });
+  }
+
   return { valid: violations.length === 0, violations };
 }
 
@@ -289,7 +310,8 @@ export function buildGroundingRepairUserNote(
     'Rewrite the ENTIRE JSON letter so that EVERY factual professional claim is supported by SOURCE FACTS.',
     'Remove or neutralize every unsupported claim listed below.',
     'Do not invent skills, tools, leadership, metrics, years of experience, or achievements.',
-    'If SOURCE FACTS are sparse, write a short honest letter focused on interest, motivation, willingness to learn/contribute, and interview availability.',
+    'Never mention source facts, limited information, CV data, AI, validation, prompts, or fallbacks in the letter.',
+    'If SOURCE FACTS are sparse, write a short honest letter focused on interest, motivation, willingness to learn/contribute, and interview availability — without discussing why details are limited.',
     'Unsupported claims to remove:',
     formatGroundingViolationsForPrompt(violations),
     'Previous invalid letter (for reference only — do not copy unsupported claims):',
@@ -307,121 +329,118 @@ type FallbackParts = {
 };
 
 function fallbackParts(locale: Locale, name: string, role: string, company: string, extras: string[]): FallbackParts {
-  const extraSentence = extras.length
-    ? extras.join(' ')
-    : '';
+  const extraSentence = extras.length ? extras.join(' ') : '';
   const templates: Record<Locale, FallbackParts> = {
     en: {
-      greeting: `Dear ${company} Hiring Team,`,
-      paragraph1: `I am writing to apply for the ${role} position at ${company}.`,
+      greeting: `Dear Hiring Team at ${company},`,
+      paragraph1: `I am writing to express my interest in the ${role} position at ${company}. I would welcome the opportunity to join your team, learn within the role, and contribute to your work.`,
       paragraph2: extraSentence
-        || 'I am motivated to learn, contribute, and grow with your team in this role.',
-      paragraph3: `${company}'s work is of genuine interest to me, and I would value the opportunity to contribute.`,
-      closing: 'I would welcome an interview to discuss how I can support your team. Thank you for your consideration.',
+        || 'This opportunity appeals to me, and I am motivated to approach it with commitment and a willingness to grow.',
+      paragraph3: 'I would be pleased to discuss my application and learn more about the position.',
+      closing: 'Thank you for your time and consideration.',
       signOff: 'Sincerely',
     },
     de: {
-      greeting: `Sehr geehrte Damen und Herren bei ${company},`,
-      paragraph1: `hiermit bewerbe ich mich um die Position als ${role} bei ${company}.`,
+      greeting: `Sehr geehrtes Bewerbungsteam von ${company},`,
+      paragraph1: `hiermit bekunde ich mein Interesse an der Position als ${role} bei ${company}. Ich würde mich freuen, Teil Ihres Teams zu werden, in der Rolle dazuzulernen und zum gemeinsamen Erfolg beizutragen.`,
       paragraph2: extraSentence
-        || 'Ich bin motiviert, zu lernen, beizutragen und mich in dieser Rolle weiterzuentwickeln.',
-      paragraph3: `Die Arbeit von ${company} interessiert mich und ich würde gern zum Team beitragen.`,
-      closing: 'Über eine Einladung zum Gespräch würde ich mich freuen. Vielen Dank für Ihre Zeit.',
+        || 'Diese Aufgabe spricht mich an, und ich gehe sie mit Engagement und der Bereitschaft an, weiterzuwachsen.',
+      paragraph3: 'Gerne erläutere ich meine Bewerbung in einem persönlichen Gespräch und erfahre mehr über die Position.',
+      closing: 'Vielen Dank für Ihre Zeit und Ihre Berücksichtigung.',
       signOff: 'Mit freundlichen Grüßen',
     },
     es: {
-      greeting: `Estimado equipo de ${company}:`,
-      paragraph1: `Me dirijo a ustedes para postularme al puesto de ${role} en ${company}.`,
+      greeting: `Estimado equipo de selección de ${company}:`,
+      paragraph1: `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me gustaría unirme a su equipo, aprender en el rol y aportar a su trabajo.`,
       paragraph2: extraSentence
-        || 'Estoy motivado/a para aprender, aportar y crecer con su equipo en este rol.',
-      paragraph3: `El trabajo de ${company} me interesa de verdad y valoro la oportunidad de contribuir.`,
-      closing: 'Agradecería una entrevista para hablar sobre cómo puedo apoyar a su equipo. Gracias por su consideración.',
+        || 'Esta oportunidad me resulta atractiva y me motiva afrontarla con compromiso y disposición a crecer.',
+      paragraph3: 'Estaré encantado/a de hablar sobre mi candidatura y conocer mejor el puesto.',
+      closing: 'Gracias por su tiempo y consideración.',
       signOff: 'Atentamente',
     },
     fr: {
-      greeting: `Madame, Monsieur, équipe ${company},`,
-      paragraph1: `Je vous écris pour postuler au poste de ${role} chez ${company}.`,
+      greeting: `Madame, Monsieur, équipe de recrutement de ${company},`,
+      paragraph1: `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. Je serais ravi(e) de rejoindre votre équipe, d'apprendre dans ce rôle et de contribuer à vos projets.`,
       paragraph2: extraSentence
-        || 'Je suis motivé(e) à apprendre, à contribuer et à évoluer avec votre équipe.',
-      paragraph3: `Le travail de ${company} m'intéresse réellement et je serais heureux(se) d'y contribuer.`,
-      closing: 'Je serais ravi(e) d\'échanger lors d\'un entretien. Merci pour votre considération.',
+        || `Cette opportunité m'attire, et je souhaite l'aborder avec engagement et une volonté de progresser.`,
+      paragraph3: `Je serais heureux(se) d'échanger sur ma candidature et d'en savoir davantage sur le poste.`,
+      closing: `Je vous remercie pour votre temps et votre considération.`,
       signOff: 'Cordialement',
     },
     it: {
-      greeting: `Gentile team di ${company},`,
-      paragraph1: `scrivo per candidarmi alla posizione di ${role} presso ${company}.`,
+      greeting: `Gentile team di selezione di ${company},`,
+      paragraph1: `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Sarei lieto/a di unirmi al vostro team, imparare nel ruolo e contribuire al vostro lavoro.`,
       paragraph2: extraSentence
-        || 'Sono motivato/a a imparare, contribuire e crescere con il vostro team in questo ruolo.',
-      paragraph3: `Il lavoro di ${company} mi interessa davvero e apprezzerei l'opportunità di contribuire.`,
-      closing: 'Sarei lieto/a di un colloquio per discutere come posso supportare il team. Grazie per la considerazione.',
+        || `Questa opportunità mi stimola e intendo affrontarla con impegno e voglia di crescere.`,
+      paragraph3: `Sarei felice di approfondire la mia candidatura e saperne di più sulla posizione.`,
+      closing: `Grazie per il vostro tempo e la vostra considerazione.`,
       signOff: 'Cordiali saluti',
     },
     ar: {
-      greeting: `السادة فريق التوظيف في ${company}،`,
-      paragraph1: `أكتب للتقدم لشغل وظيفة ${role} لدى شركة ${company}.`,
+      greeting: `إلى فريق التوظيف المحترم في شركة ${company}،`,
+      paragraph1: `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}. يسرّني الانضمام إلى فريقكم والتعلّم ضمن هذا الدور والمساهمة في أعمالكم.`,
       paragraph2: extraSentence
-        || 'أودّ أن أتعلّم وأساهم وأنمو مع فريقكم في هذا الدور.',
-      paragraph3: `يهتمّني عمل ${company}، ويسعدني إتاحة الفرصة للمساهمة معكم.`,
-      closing: 'أتطلع إلى فرصة لمناقشة كيف يمكنني المساهمة في فريقكم. شكرًا لوقتكم واهتمامكم.',
+        || 'تهتمّني هذه الفرصة، وأرغب في التعامل معها بالتزام ورغبة في التطوّر المهني.',
+      paragraph3: 'يسعدني مناقشة طلبي ومعرفة المزيد عن الوظيفة.',
+      closing: 'شكرًا لوقتكم واهتمامكم.',
       signOff: 'مع خالص التحية',
     },
     sr: {
-      greeting: `Poštovani tim ${company},`,
-      paragraph1: `pišem vam da se prijavim za poziciju ${role} u kompaniji ${company}.`,
+      greeting: `Poštovani tim za zapošljavanje u kompaniji ${company},`,
+      paragraph1: `pišem vam kako bih izrazio/la interesovanje za poziciju ${role} u kompaniji ${company}. Rado bih se priključio/la vašem timu, učio/la u toj ulozi i doprinosio/la vašem radu.`,
       paragraph2: extraSentence
-        || 'Motervisani/a sam da učim, doprinosim i rastem zajedno sa vašim timom na ovoj poziciji.',
-      paragraph3: `Rad kompanije ${company} me iskreno zanima i želeo/la bih da doprinesem timu.`,
-      closing: 'Radujem se razgovoru i zahvaljujem na razmatranju.',
+        || 'Ova prilika mi je privlačna i pristupio/la bih joj odgovorno, uz želju da rastem.',
+      paragraph3: 'Sa zadovoljstvom bih razgovarao/la o prijavi i saznao/la više o poziciji.',
+      closing: 'Hvala na vašem vremenu i razmatranju.',
       signOff: 'Srdačno',
     },
     hr: {
-      greeting: `Poštovani tim ${company},`,
-      paragraph1: `pišem vam kako bih se prijavio/la za poziciju ${role} u tvrtki ${company}.`,
+      greeting: `Poštovani tim za zapošljavanje u tvrtki ${company},`,
+      paragraph1: `pišem kako bih izrazio/la interes za poziciju ${role} u tvrtki ${company}. Rado bih se pridružio/la vašem timu, učio/la u toj ulozi i pridonio/la vašem radu.`,
       paragraph2: extraSentence
-        || 'Motiviran/a sam učiti, doprinositi i rasti zajedno s vašim timom na ovoj poziciji.',
-      paragraph3: `Rad tvrtke ${company} me iskreno zanima i želio/ljela bih doprinijeti timu.`,
-      closing: 'Radujem se razgovoru i zahvaljujem na razmatranju.',
+        || 'Ova prilika mi je privlačna i pristupio/la bih joj s predanošću i željom za rastom.',
+      paragraph3: 'Rado bih razgovarao/la o prijavi i saznao/la više o poziciji.',
+      closing: 'Hvala na vašem vremenu i razmatranju.',
       signOff: 'Srdačan pozdrav',
     },
     ru: {
-      greeting: `Уважаемая команда ${company},`,
-      paragraph1: `обращаюсь к вам, чтобы подать заявку на позицию ${role} в компании ${company}.`,
+      greeting: `Уважаемая команда по подбору персонала ${company},`,
+      paragraph1: `пишу, чтобы выразить интерес к позиции ${role} в компании ${company}. Буду рад(а) присоединиться к вашей команде, учиться в этой роли и вносить вклад в вашу работу.`,
       paragraph2: extraSentence
-        || 'Я мотивирован(а) учиться, вносить вклад и развиваться вместе с вашей командой.',
-      paragraph3: `Работа ${company} мне по-настоящему интересна, и я был(а) бы рад(а) внести вклад.`,
-      closing: 'Буду рад(а) обсудить это на собеседовании. Спасибо за рассмотрение.',
+        || 'Эта возможность мне близка, и я готов(а) подойти к ней ответственно, с желанием расти.',
+      paragraph3: 'Буду рад(а) обсудить моё заявление и узнать больше о вакансии.',
+      closing: 'Спасибо за ваше время и рассмотрение.',
       signOff: 'С уважением',
     },
     'pt-BR': {
-      greeting: `Prezada equipe da ${company},`,
-      paragraph1: `escrevo para me candidatar à vaga de ${role} na ${company}.`,
+      greeting: `Prezada equipe de recrutamento da ${company},`,
+      paragraph1: `escrevo para expressar meu interesse na vaga de ${role} na ${company}. Gostaria de me juntar à equipe, aprender no cargo e contribuir com o trabalho de vocês.`,
       paragraph2: extraSentence
-        || 'Estou motivado(a) a aprender, contribuir e crescer com a equipe nesse papel.',
-      paragraph3: `O trabalho da ${company} é de real interesse para mim, e valorizo a chance de contribuir.`,
-      closing: 'Ficaria feliz em conversar em uma entrevista. Obrigado(a) pela consideração.',
+        || 'Essa oportunidade me atrai, e quero enfrentá-la com compromisso e vontade de crescer.',
+      paragraph3: 'Ficaria feliz em conversar sobre minha candidatura e saber mais sobre a vaga.',
+      closing: 'Obrigado(a) pelo tempo e pela consideração.',
       signOff: 'Atenciosamente',
     },
     hi: {
-      greeting: `${company} की भर्ती टीम को,`,
-      paragraph1: `मैं ${company} में ${role} पद के लिए आवेदन कर रहा/रही हूँ।`,
+      greeting: `${company} की सम्मानित भर्ती टीम को,`,
+      paragraph1: `मैं ${company} में ${role} पद के प्रति अपनी रुचि व्यक्त करने के लिए लिख रहा/रही हूँ। मुझे आपकी टीम में शामिल होने, इस भूमिका में सीखने और आपके कार्य में योगदान देने का अवसर मिले तो मुझे प्रसन्नता होगी।`,
       paragraph2: extraSentence
-        || 'मैं इस भूमिका में सीखने, योगदान देने और आपकी टीम के साथ आगे बढ़ने के लिए प्रेरित हूँ।',
-      paragraph3: `${company} का कार्य मुझे वास्तव में रुचिकर लगता है, और मैं योगदान देने का अवसर चाहूँगा/चाहूँगी।`,
-      closing: 'साक्षात्कार में चर्चा का अवसर मिलने पर मुझे प्रसन्नता होगी। आपके समय के लिए धन्यवाद।',
+        || 'यह अवसर मुझे आकर्षित करता है, और मैं इसे प्रतिबद्धता तथा आगे बढ़ने की इच्छा के साथ अपनाना चाहता/चाहती हूँ।',
+      paragraph3: 'मुझे अपने आवेदन पर चर्चा करने और पद के बारे में और जानने में खुशी होगी।',
+      closing: 'आपके समय और विचार के लिए धन्यवाद।',
       signOff: 'सादर',
     },
     ja: {
       greeting: `${company}採用ご担当者様`,
-      paragraph1: `${company}の${role}職に応募いたしたく、ご連絡申し上げます。`,
+      paragraph1: `${company}の${role}職に強い関心があり、ご連絡申し上げます。貴社の一員として学びながら業務に貢献できれば幸いです。`,
       paragraph2: extraSentence
-        || '本職において学び、貢献し、チームとともに成長したいと考えております。',
-      paragraph3: `${company}の取り組みに関心があり、貢献の機会をいただけますと幸いです。`,
-      closing: '面接にてお話しできる機会をいただけますと幸いです。ご検討のほど、何卒よろしくお願いいたします。',
+        || '本機会に魅力を感じており、誠実な姿勢と成長意欲をもって取り組みたいと考えております。',
+      paragraph3: '応募内容について伺い、職位についてさらに理解を深める機会をいただけますと幸いです。',
+      closing: 'ご多忙のところ恐縮ですが、ご検討のほど何卒よろしくお願いいたします。',
       signOff: '敬具',
     },
   };
-  const base = templates[locale] ?? templates.en;
-  return base;
+  return templates[locale] ?? templates.en;
 }
 
 function extrasFromFacts(factSet: CoverLetterFactSet, locale: Locale): string[] {
@@ -432,22 +451,24 @@ function extrasFromFacts(factSet: CoverLetterFactSet, locale: Locale): string[] 
   const work = factSet.facts.filter((f) => f.type === 'work_history').map((f) => f.value);
   const bits: string[] = [];
   if (education[0]) {
-    if (locale === 'ar') bits.push(`ومن خلفيتي التعليمية: ${education[0]}.`);
+    if (locale === 'ar') bits.push(`خلفيتي التعليمية تشمل: ${education[0]}.`);
     else if (locale === 'hi') bits.push(`मेरी शैक्षिक पृष्ठभूमि में ${education[0]} शामिल है।`);
+    else if (locale === 'en') bits.push(`My education includes ${education[0]}.`);
     else bits.push(`My education includes ${education[0]}.`);
   }
   if (skills[0]) {
-    if (locale === 'ar') bits.push(`ومن المهارات المذكورة: ${skills.slice(0, 3).join('، ')}.`);
-    else if (locale === 'hi') bits.push(`मेरे पास ${skills.slice(0, 3).join(', ')} जैसे कौशल हैं।`);
-    else bits.push(`Relevant supplied skills include ${skills.slice(0, 3).join(', ')}.`);
+    if (locale === 'ar') bits.push(`من مهاراتي: ${skills.slice(0, 3).join('، ')}.`);
+    else if (locale === 'hi') bits.push(`मेरे कौशल में ${skills.slice(0, 3).join(', ')} शामिल हैं।`);
+    else if (locale === 'en') bits.push(`My skills include ${skills.slice(0, 3).join(', ')}.`);
+    else bits.push(`My skills include ${skills.slice(0, 3).join(', ')}.`);
   }
   if (work[0] && !skills[0] && !education[0]) {
-    if (locale === 'ar') bits.push(`ومن خبرتي المهنية المصرّح بها: ${work[0]}.`);
-    else if (locale === 'hi') bits.push(`मेरे पास उल्लेखित अनुभव है: ${work[0]}.`);
-    else bits.push(`My supplied work history includes ${work[0]}.`);
+    if (locale === 'ar') bits.push(`من خبرتي المهنية: ${work[0]}.`);
+    else if (locale === 'hi') bits.push(`मेरे कार्य अनुभव में ${work[0]} शामिल है।`);
+    else if (locale === 'en') bits.push(`My work experience includes ${work[0]}.`);
+    else bits.push(`My work experience includes ${work[0]}.`);
   }
-  // Prefer locale-neutral short extras for non en/hi/ar by using English only as last resort —
-  // for other locales fall back to motivation-only when extras would be English.
+  // Avoid English-only extras leaking into other locales.
   if (locale !== 'en' && locale !== 'ar' && locale !== 'hi') {
     return [];
   }

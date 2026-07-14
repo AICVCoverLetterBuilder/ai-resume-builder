@@ -148,10 +148,64 @@ describe('cover letter grounding validation', () => {
       factSet: facts,
       dateLine: '12 يوليو 2026',
     });
-    expect(letter.paragraph1).toContain('للتقدم لشغل وظيفة');
+    expect(letter.greeting).toContain('إلى فريق التوظيف المحترم في شركة');
+    expect(letter.paragraph1).toContain('أتقدم بطلب لشغل وظيفة');
     expect(letter.paragraph1).not.toContain('بوصفي');
-    expect(letter.closing).toContain('المساهمة في فريقكم');
     expect(letter.closing).not.toContain('قيمة حقيقية');
     expect(letter.signOff).toContain('مع خالص التحية');
+  });
+
+  test('all locale sparse fallbacks avoid meta/system wording', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+    });
+    for (const locale of ALL_LOCALES) {
+      const letter = buildDeterministicSparseCoverLetter(locale, {
+        candidateName: 'Alex Carter',
+        jobTitle: 'Software Developer',
+        companyName: 'Gnox',
+        factSet: facts,
+        dateLine: '2026-07-14',
+      });
+      const text = assembleCoverLetterContent(letter);
+      expect(text).not.toMatch(/source details|limited information|sparse|fallback|AI-?generated|SOURCE FACTS/i);
+      expect(text).toContain('Software Developer');
+      expect(letter.candidateName).toBe('Alex Carter');
+      expect(validateCoverLetterGrounding(text, facts).valid, locale).toBe(true);
+    }
+  });
+
+  test('English sparse fallback does not leak source-details phrasing', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+    });
+    const letter = buildDeterministicSparseCoverLetter('en', {
+      candidateName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+      factSet: facts,
+      dateLine: 'July 14, 2026',
+    });
+    const text = assembleCoverLetterContent(letter);
+    expect(text).not.toMatch(/source details/i);
+    expect(text).not.toMatch(/limited information/i);
+    expect(text).toMatch(/express my interest/i);
+    expect(text).toContain('Software Developer');
+  });
+
+  test('meta wording is rejected by grounding validation', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex',
+      jobTitle: 'Developer',
+      companyName: 'Acme',
+    });
+    const draft = 'While my source details are limited, I am applying for Developer at Acme.';
+    const result = validateCoverLetterGrounding(draft, facts);
+    expect(result.valid).toBe(false);
+    expect(result.violations.some((v) => v.kind === 'meta_or_system_wording')).toBe(true);
   });
 });

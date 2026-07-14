@@ -15,6 +15,7 @@ import {
   type GroundingViolation,
 } from './cover-letter-grounding';
 import { assembleCoverLetterContent } from './cover-letter-generation';
+import { normalizeCoverLetterBody } from './cover-letter-header';
 import { COVER_LETTER_GROUNDING_BACKEND_REVISION } from './cover-letter-grounding-diagnostics';
 
 export type ClientGroundingActivation = {
@@ -59,7 +60,7 @@ function buildLocalSparseFallback(options: {
     factSet: options.factSet,
     dateLine: localizedDateLine(options.locale),
   });
-  return assembleCoverLetterContent(letter);
+  return normalizeCoverLetterBody(assembleCoverLetterContent(letter), options.candidateName);
 }
 
 /**
@@ -95,7 +96,7 @@ export function activateCoverLetterContentWithClientGrounding(options: {
 
   if (grounding.valid && isTrustedCoverLetterGroundingStatus(serverGroundingStatus)) {
     return {
-      content: options.serverContent,
+      content: normalizeCoverLetterBody(options.serverContent, options.candidateName),
       groundingStatus: serverGroundingStatus,
       serverGroundingStatus,
       clientFallbackUsed: false,
@@ -113,7 +114,7 @@ export function activateCoverLetterContentWithClientGrounding(options: {
     (serverGroundingStatus === 'missing' || serverGroundingStatus === 'unknown')
   ) {
     return {
-      content: options.serverContent,
+      content: normalizeCoverLetterBody(options.serverContent, options.candidateName),
       groundingStatus: 'passed',
       serverGroundingStatus,
       clientFallbackUsed: false,
