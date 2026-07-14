@@ -11,8 +11,6 @@ import { CoverLetterExportIncompleteError, contentMatchesRequestedLocale, getDef
 import type { Locale } from '@/lib/i18n/translations';
 import {
   createCoverLetterRequestId,
-  isCoverLetterDownloadAllowed,
-  isCoverLetterContentCurrent,
   type ActiveCoverLetterRequest,
   type CoverLetterGenerationPhase,
   type CoverLetterGroundingStatus,
@@ -22,6 +20,15 @@ import {
   formatCoverLetterGenerationDiagnosticsForCopy,
   resolveCoverLetterGenerationResult,
 } from '@/lib/cover-letter-generation-resolve';
+import {
+  clearCoverLetterStateTransitions,
+  createCoverLetterActiveResult,
+  detectCoverLetterContentLocale,
+  isActiveCoverLetterResultEligible,
+  recordCoverLetterStateTransition,
+  snapshotCoverLetterState,
+  type CoverLetterActiveResult,
+} from '@/lib/cover-letter-active-result';
 import {
   coverLetterAiUnavailable,
   coverLetterGroundingFailed,
@@ -152,6 +159,7 @@ export default function CoverLetterPage() {
   const [contentLocale, setContentLocale] = useState<Locale | null>(null);
   const [generationPhase, setGenerationPhase] = useState<CoverLetterGenerationPhase>('idle');
   const [groundingStatus, setGroundingStatus] = useState<CoverLetterGroundingStatus>('unknown');
+  const [activeResult, setActiveResult] = useState<CoverLetterActiveResult | null>(null);
   const [showAiTooltip, setShowAiTooltip] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -164,17 +172,40 @@ export default function CoverLetterPage() {
   const activeGenerationRef = useRef<ActiveCoverLetterRequest | null>(null);
   const generationAbortRef = useRef<AbortController | null>(null);
   const prevUiLocaleRef = useRef(locale);
+  const prevGenderRef = useRef(normalizeCoverLetterGender((currentCoverLetter || emptyCL()).gender));
+  const skipNextCoverLetterStoreSyncRef = useRef(false);
+  const preservedActiveResultRef = useRef<CoverLetterActiveResult | null>(null);
+  const activeResultRef = useRef<CoverLetterActiveResult | null>(null);
+  activeResultRef.current = activeResult;
 
   // Auto-fill identity fields from CV personal info on mount or when CV changes
   useEffect(() => {
+    // Autosave echoes must not re-detect locale (jp+Latin was misclassified as en and blanked preview).
+    if (skipNextCoverLetterStoreSyncRef.current) {
+      skipNextCoverLetterStoreSyncRef.current = false;
+      return;
+    }
+
     if (currentCoverLetter) {
       const sanitized = currentCoverLetter.content
         ? sanitizeCoverLetterContent(currentCoverLetter.content)
         : '';
       setCl(sanitized ? { ...currentCoverLetter, content: sanitized } : currentCoverLetter);
       if (sanitized) {
-        const locales: Locale[] = ['ar', 'hi', 'en', 'de', 'es', 'fr', 'it', 'sr', 'hr', 'ru', 'pt-BR', 'ja'];
-        const detected = locales.find((l) => contentMatchesRequestedLocale(sanitized, l)) ?? null;
+        const preferred = (locale as Locale) || null;
+        const existing = activeResultRef.current;
+        // Preserve a trusted activation when the stored body still matches it.
+        if (
+          existing &&
+          existing.content === sanitized &&
+          contentMatchesRequestedLocale(sanitized, existing.locale)
+        ) {
+          setContentLocale(existing.locale);
+          setGroundingStatus(existing.groundingStatus);
+          setHasGenerated(true);
+          return;
+        }
+        const detected = detectCoverLetterContentLocale(sanitized, preferred);
         setContentLocale(detected);
         if (detected) setHasGenerated(true);
       }
@@ -227,6 +258,7 @@ export default function CoverLetterPage() {
   useEffect(() => {
     if (clAutosaveTimerRef.current) clearTimeout(clAutosaveTimerRef.current);
     clAutosaveTimerRef.current = setTimeout(() => {
+      skipNextCoverLetterStoreSyncRef.current = true;
       setCurrentCoverLetter(cl);
     }, 800);
     return () => {
@@ -235,46 +267,118 @@ export default function CoverLetterPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cl]);
 
-  // UI locale change invalidates content generated for a different content language.
+  // UI locale change intentionally invalidates content generated for another language.
   useEffect(() => {
     if (prevUiLocaleRef.current !== locale) {
       if (contentLocale && contentLocale !== locale) {
+        const before = snapshotCoverLetterState({
+          selectedLocale: locale as Locale,
+          contentLocale,
+          groundingStatus,
+          generationPhase,
+          contentLength: cl.content.length,
+          resultSource: activeResult?.source ?? null,
+          lastActivationTimestamp: activeResult?.activatedAt ?? null,
+          downloadsAllowed: false,
+          copyAllowed: false,
+          selectedGenderNormalized: normalizeCoverLetterGender(cl.gender),
+        });
         setGenerationPhase('idle');
         setHasGenerated(false);
+        setActiveResult(null);
+        setGroundingStatus('unknown');
+        recordCoverLetterStateTransition('ui_locale_changed_invalidate', before, {
+          ...before,
+          generationPhase: 'idle',
+          groundingStatus: 'unknown',
+          resultSource: null,
+          lastActivationTimestamp: null,
+          contentLocale,
+        });
       }
       prevUiLocaleRef.current = locale;
     }
-  }, [locale, contentLocale]);
+  }, [locale, contentLocale, groundingStatus, generationPhase, cl.content.length, cl.gender, activeResult]);
+
+  // Gender change intentionally invalidates the previous grammatical-gender snapshot.
+  useEffect(() => {
+    const nextGender = normalizeCoverLetterGender(cl.gender);
+    if (prevGenderRef.current === nextGender) return;
+    prevGenderRef.current = nextGender;
+    if (!activeResultRef.current) return;
+    if (activeResultRef.current.gender === nextGender) return;
+    const before = snapshotCoverLetterState({
+      selectedLocale: locale as Locale,
+      contentLocale,
+      groundingStatus,
+      generationPhase,
+      contentLength: cl.content.length,
+      resultSource: activeResultRef.current.source,
+      lastActivationTimestamp: activeResultRef.current.activatedAt,
+      selectedGenderNormalized: nextGender,
+      downloadsAllowed: false,
+      copyAllowed: false,
+    });
+    setActiveResult(null);
+    setGroundingStatus('unknown');
+    setGenerationPhase('idle');
+    recordCoverLetterStateTransition('gender_changed_invalidate', before, {
+      ...before,
+      groundingStatus: 'unknown',
+      generationPhase: 'idle',
+      resultSource: null,
+      lastActivationTimestamp: null,
+    });
+  }, [cl.gender, contentLocale, groundingStatus, generationPhase, cl.content.length, locale]);
 
   const selectedLocale = locale as Locale;
+  const selectedGenderNormalized = normalizeCoverLetterGender(cl.gender);
   const exportCandidateNameForPreview = (() => {
     const first = cl.firstName.trim();
     const last = cl.lastName.trim();
     if (first && last) return `${first} ${last}`;
     return first || last || currentCv?.personal?.fullName?.trim() || '';
   })();
-  const rawPreviewContent = isCoverLetterContentCurrent(
-    cl.content,
-    contentLocale,
+
+  const eligibleActiveResult = isActiveCoverLetterResultEligible(
+    activeResult,
     selectedLocale,
+    selectedGenderNormalized,
     generationPhase,
-    groundingStatus,
-  ) ? cl.content : '';
+  )
+    ? activeResult
+    : null;
+
+  const rawPreviewContent = eligibleActiveResult?.content ?? '';
   const previewContent = rawPreviewContent
     ? prepareCoverLetterForDisplay(rawPreviewContent, exportCandidateNameForPreview, selectedLocale)
     : '';
   const exportBodyContent = rawPreviewContent
     ? normalizeCoverLetterBody(rawPreviewContent, exportCandidateNameForPreview)
     : '';
-  const downloadsAllowed = isCoverLetterDownloadAllowed(
-    cl.content,
-    contentLocale,
-    selectedLocale,
-    generationPhase,
-    groundingStatus,
-  );
+  const downloadsAllowed = Boolean(eligibleActiveResult);
   const previewIsRtl = selectedLocale === 'ar';
   const isGenerationBusy = isGenerating || isRegenerating;
+
+  const captureStateSnapshot = (overrides?: Partial<Parameters<typeof snapshotCoverLetterState>[0]>) =>
+    snapshotCoverLetterState({
+      requestId: activeGenerationRef.current?.requestId ?? activeResult?.requestId ?? null,
+      activeRequestPresent: activeGenerationRef.current != null,
+      activeRequestLocale: activeGenerationRef.current?.locale ?? null,
+      activeRequestGender: activeGenerationRef.current?.gender ?? null,
+      generationPhase,
+      isGenerating: isGenerationBusy,
+      contentLength: (activeResult?.content ?? cl.content).length,
+      contentLocale: activeResult?.locale ?? contentLocale,
+      groundingStatus: activeResult?.groundingStatus ?? groundingStatus,
+      resultSource: activeResult?.source ?? null,
+      downloadsAllowed: Boolean(eligibleActiveResult),
+      copyAllowed: Boolean(eligibleActiveResult),
+      selectedLocale,
+      selectedGenderNormalized,
+      lastActivationTimestamp: activeResult?.activatedAt ?? null,
+      ...overrides,
+    });
 
   const runCoverLetterGeneration = async (
     action: 'cover-letter-gen' | 'cover-letter-regen',
@@ -309,6 +413,9 @@ export default function CoverLetterPage() {
     const requestId = createCoverLetterRequestId();
     const requestedLocale = selectedLocale;
     const requestedGender = normalizeCoverLetterGender(cl.gender);
+    clearCoverLetterStateTransitions();
+    preservedActiveResultRef.current = activeResultRef.current;
+    const beforeStart = captureStateSnapshot();
     activeGenerationRef.current = {
       requestId,
       locale: requestedLocale,
@@ -316,9 +423,19 @@ export default function CoverLetterPage() {
     };
 
     setGenerationPhase('loading');
-    setGroundingStatus('unknown');
+    // Keep groundingStatus / activeResult until replaced — only loading phase hides preview.
     if (mode === 'generate') setIsGenerating(true);
     else setIsRegenerating(true);
+    recordCoverLetterStateTransition('generation_started', beforeStart, captureStateSnapshot({
+      requestId,
+      activeRequestPresent: true,
+      activeRequestLocale: requestedLocale,
+      activeRequestGender: requestedGender,
+      generationPhase: 'loading',
+      isGenerating: true,
+      downloadsAllowed: false,
+      copyAllowed: false,
+    }));
 
     const proToken = aiGate.status === 'ready' ? aiGate.token : null;
     const fullName = getFullName();
@@ -428,12 +545,44 @@ export default function CoverLetterPage() {
       });
 
       if (resolved.outcome === 'stale') {
+        recordCoverLetterStateTransition(
+          'stale_response_ignored',
+          captureStateSnapshot(),
+          captureStateSnapshot(),
+        );
         return;
       }
 
       if (resolved.outcome === 'rejected' || !resolved.content.trim()) {
-        setGenerationPhase('error');
-        setGroundingStatus(resolved.groundingStatus);
+        const beforeReject = captureStateSnapshot();
+        const restored = preservedActiveResultRef.current;
+        if (restored && isActiveCoverLetterResultEligible(restored, requestedLocale, requestedGender, 'success')) {
+          setActiveResult(restored);
+          setCl(prev => ({ ...prev, content: restored.content }));
+          setContentLocale(restored.locale);
+          setGroundingStatus(restored.groundingStatus);
+          setGenerationPhase('success');
+          setHasGenerated(true);
+          recordCoverLetterStateTransition('generation_failed_restore_previous', beforeReject, captureStateSnapshot({
+            generationPhase: 'success',
+            groundingStatus: restored.groundingStatus,
+            resultSource: restored.source,
+            contentLocale: restored.locale,
+            contentLength: restored.content.length,
+            lastActivationTimestamp: restored.activatedAt,
+            downloadsAllowed: true,
+            copyAllowed: true,
+          }));
+        } else {
+          setGenerationPhase('error');
+          setGroundingStatus(resolved.groundingStatus);
+          recordCoverLetterStateTransition('generation_rejected', beforeReject, captureStateSnapshot({
+            generationPhase: 'error',
+            groundingStatus: resolved.groundingStatus,
+            downloadsAllowed: false,
+            copyAllowed: false,
+          }));
+        }
         setShowGroundingDiagnostics(true);
         if (resolved.toastKind === 'wrong_language') {
           toast.error(coverLetterWrongLanguage(requestedLocale));
@@ -445,18 +594,61 @@ export default function CoverLetterPage() {
         return;
       }
 
+      const beforeActivate = captureStateSnapshot();
+      const normalizedContent = normalizeCoverLetterBody(
+        resolved.content,
+        fullName || currentCv?.personal?.fullName || '',
+      );
+      const source =
+        resolved.groundingStatus === 'fallback' || resolved.clientFallbackUsed
+          ? 'fallback'
+          : resolved.groundingStatus === 'repaired'
+            ? 'repaired'
+            : 'passed';
+      const nextActive = createCoverLetterActiveResult({
+        content: normalizedContent,
+        locale: requestedLocale,
+        gender: requestedGender,
+        groundingStatus: resolved.groundingStatus,
+        requestId,
+        source,
+      });
+      if (!nextActive) {
+        setGenerationPhase('error');
+        setGroundingStatus('failed');
+        setShowGroundingDiagnostics(true);
+        toast.error(coverLetterGroundingFailed(requestedLocale));
+        return;
+      }
+
       setCl(prev => ({
         ...prev,
-        content: normalizeCoverLetterBody(resolved.content, fullName || currentCv?.personal?.fullName || ''),
+        content: normalizedContent,
         updatedAt: new Date().toISOString(),
       }));
+      setActiveResult(nextActive);
       setContentLocale(requestedLocale);
-      setGroundingStatus(resolved.groundingStatus);
+      setGroundingStatus(nextActive.groundingStatus);
       setGenerationPhase('success');
       setHasGenerated(true);
       if (resolved.clientFallbackUsed || resolved.diagnostics.schemaMismatch) {
         setShowGroundingDiagnostics(true);
       }
+      recordCoverLetterStateTransition(
+        resolved.outcome === 'recovered' ? 'activation_recovered_fallback' : 'activation_success',
+        beforeActivate,
+        captureStateSnapshot({
+          generationPhase: 'success',
+          groundingStatus: nextActive.groundingStatus,
+          resultSource: nextActive.source,
+          contentLocale: requestedLocale,
+          contentLength: normalizedContent.length,
+          lastActivationTimestamp: nextActive.activatedAt,
+          downloadsAllowed: true,
+          copyAllowed: true,
+          isGenerating: false,
+        }),
+      );
 
       if (!isCurrentPro) {
         if (mode === 'generate') {
@@ -503,6 +695,11 @@ export default function CoverLetterPage() {
       });
 
       if (resolved.outcome === 'stale') {
+        recordCoverLetterStateTransition(
+          'stale_error_ignored',
+          captureStateSnapshot(),
+          captureStateSnapshot(),
+        );
         return;
       }
 
@@ -513,53 +710,134 @@ export default function CoverLetterPage() {
           setPaywallReason(mode);
           setProModal(true);
         }
-        setGenerationPhase('error');
-        setGroundingStatus('failed');
+        const restored = preservedActiveResultRef.current;
+        if (restored) {
+          setActiveResult(restored);
+          setContentLocale(restored.locale);
+          setGroundingStatus(restored.groundingStatus);
+          setGenerationPhase('success');
+        } else {
+          setGenerationPhase('error');
+          setGroundingStatus('failed');
+        }
         return;
       }
 
       if (resolved.outcome === 'recovered' && resolved.content.trim()) {
-        setCl(prev => ({
-          ...prev,
-          content: normalizeCoverLetterBody(resolved.content, fullName || currentCv?.personal?.fullName || ''),
-          updatedAt: new Date().toISOString(),
-        }));
-        setContentLocale(requestedLocale);
-        setGroundingStatus(resolved.groundingStatus);
-        setGenerationPhase('success');
-        setHasGenerated(true);
-        setShowGroundingDiagnostics(true);
-        if (!isCurrentPro) {
-          if (mode === 'generate') {
-            resetClRegen();
-            incrementClGeneration();
+        const beforeRecover = captureStateSnapshot();
+        const normalizedContent = normalizeCoverLetterBody(
+          resolved.content,
+          fullName || currentCv?.personal?.fullName || '',
+        );
+        const nextActive = createCoverLetterActiveResult({
+          content: normalizedContent,
+          locale: requestedLocale,
+          gender: requestedGender,
+          groundingStatus: 'fallback',
+          requestId,
+          source: 'fallback',
+        });
+        if (nextActive) {
+          setCl(prev => ({
+            ...prev,
+            content: normalizedContent,
+            updatedAt: new Date().toISOString(),
+          }));
+          setActiveResult(nextActive);
+          setContentLocale(requestedLocale);
+          setGroundingStatus(nextActive.groundingStatus);
+          setGenerationPhase('success');
+          setHasGenerated(true);
+          setShowGroundingDiagnostics(true);
+          recordCoverLetterStateTransition('api_error_recovered_fallback', beforeRecover, captureStateSnapshot({
+            generationPhase: 'success',
+            groundingStatus: 'fallback',
+            resultSource: 'fallback',
+            contentLocale: requestedLocale,
+            contentLength: normalizedContent.length,
+            lastActivationTimestamp: nextActive.activatedAt,
+            downloadsAllowed: true,
+            copyAllowed: true,
+          }));
+          if (!isCurrentPro) {
+            if (mode === 'generate') {
+              resetClRegen();
+              incrementClGeneration();
+            } else {
+              incrementClRegen();
+            }
           } else {
-            incrementClRegen();
+            recordProAiSuccess();
           }
-        } else {
-          recordProAiSuccess();
+          toast.success(t.coverLetter.genSuccess);
+          return;
         }
-        toast.success(t.coverLetter.genSuccess);
-        return;
       }
 
       if (process.env.NODE_ENV !== 'production') console.error('[Cover Letter] Generation error:', err);
-      setGenerationPhase('error');
-      setGroundingStatus(resolved.groundingStatus);
-      setShowGroundingDiagnostics(true);
-      if (resolved.toastKind === 'grounding_failed') {
-        toast.error(coverLetterGroundingFailed(requestedLocale));
-      } else if (resolved.toastKind === 'wrong_language') {
-        toast.error(coverLetterWrongLanguage(requestedLocale));
+      const beforeFail = captureStateSnapshot();
+      const restored = preservedActiveResultRef.current;
+      if (restored && isActiveCoverLetterResultEligible(restored, requestedLocale, requestedGender, 'success')) {
+        setActiveResult(restored);
+        setCl(prev => ({ ...prev, content: restored.content }));
+        setContentLocale(restored.locale);
+        setGroundingStatus(restored.groundingStatus);
+        setGenerationPhase('success');
+        setHasGenerated(true);
+        recordCoverLetterStateTransition('api_error_restore_previous', beforeFail, captureStateSnapshot({
+          generationPhase: 'success',
+          groundingStatus: restored.groundingStatus,
+          resultSource: restored.source,
+          downloadsAllowed: true,
+          copyAllowed: true,
+        }));
       } else {
-        toast.error(coverLetterAiUnavailable(requestedLocale));
+        setGenerationPhase('error');
+        setGroundingStatus(resolved.groundingStatus);
+        setShowGroundingDiagnostics(true);
+        recordCoverLetterStateTransition('api_error_no_recovery', beforeFail, captureStateSnapshot({
+          generationPhase: 'error',
+          downloadsAllowed: false,
+          copyAllowed: false,
+        }));
+        if (resolved.toastKind === 'grounding_failed') {
+          toast.error(coverLetterGroundingFailed(requestedLocale));
+        } else if (resolved.toastKind === 'wrong_language') {
+          toast.error(coverLetterWrongLanguage(requestedLocale));
+        } else {
+          toast.error(coverLetterAiUnavailable(requestedLocale));
+        }
       }
     } finally {
       if (activeGenerationRef.current?.requestId === requestId) {
+        const beforeCleanup = captureStateSnapshot();
         setIsGenerating(false);
         setIsRegenerating(false);
         activeGenerationRef.current = null;
         generationAbortRef.current = null;
+        recordCoverLetterStateTransition('request_cleanup_finally', beforeCleanup, captureStateSnapshot({
+          activeRequestPresent: false,
+          requestId: activeResultRef.current?.requestId ?? null,
+          isGenerating: false,
+          // content / grounding / active result intentionally unchanged
+          contentLength: (activeResultRef.current?.content ?? cl.content).length,
+          groundingStatus: activeResultRef.current?.groundingStatus ?? groundingStatus,
+          resultSource: activeResultRef.current?.source ?? null,
+          lastActivationTimestamp: activeResultRef.current?.activatedAt ?? null,
+          contentLocale: activeResultRef.current?.locale ?? contentLocale,
+          downloadsAllowed: isActiveCoverLetterResultEligible(
+            activeResultRef.current,
+            requestedLocale,
+            requestedGender,
+            generationPhase === 'loading' ? 'success' : generationPhase,
+          ),
+          copyAllowed: isActiveCoverLetterResultEligible(
+            activeResultRef.current,
+            requestedLocale,
+            requestedGender,
+            generationPhase === 'loading' ? 'success' : generationPhase,
+          ),
+        }));
       }
     }
   };
@@ -840,6 +1118,16 @@ export default function CoverLetterPage() {
                       setCl(prev => ({ ...prev, content: next }));
                       setContentLocale(selectedLocale);
                       setGenerationPhase('success');
+                      const edited = createCoverLetterActiveResult({
+                        content: next,
+                        locale: selectedLocale,
+                        gender: selectedGenderNormalized,
+                        groundingStatus: 'passed',
+                        requestId: activeResult?.requestId ?? 'user-edit',
+                        source: 'passed',
+                      });
+                      setActiveResult(edited);
+                      setGroundingStatus(edited ? 'passed' : 'unknown');
                     }}
                     dir={previewIsRtl ? 'rtl' : 'ltr'}
                     className={cn(

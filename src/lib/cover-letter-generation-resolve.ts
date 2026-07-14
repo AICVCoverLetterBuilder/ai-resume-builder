@@ -29,6 +29,7 @@ import {
 } from './cover-letter-generation';
 import { normalizeCoverLetterBody } from './cover-letter-header';
 import { COVER_LETTER_GROUNDING_BACKEND_REVISION } from './cover-letter-grounding-diagnostics';
+import { getCoverLetterStateTransitions } from './cover-letter-active-result';
 
 export type CoverLetterGenErrorCode =
   | 'stale_response'
@@ -94,8 +95,17 @@ export function getLastCoverLetterGenerationDiagnostics(): CoverLetterGeneration
 }
 
 export function formatCoverLetterGenerationDiagnosticsForCopy(): string {
-  if (!lastDiagnostics) return 'No cover-letter generation diagnostics recorded yet.';
-  return JSON.stringify(lastDiagnostics, null, 2);
+  if (!lastDiagnostics && getCoverLetterStateTransitions().length === 0) {
+    return 'No cover-letter generation diagnostics recorded yet.';
+  }
+  return JSON.stringify(
+    {
+      generation: lastDiagnostics,
+      stateTransitions: getCoverLetterStateTransitions(),
+    },
+    null,
+    2,
+  );
 }
 
 function localizedDateLine(locale: Locale): string {
