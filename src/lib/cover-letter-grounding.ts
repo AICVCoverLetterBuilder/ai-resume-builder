@@ -14,7 +14,10 @@ export type GroundingViolationKind =
   | 'leadership_claim'
   | 'achievement_claim'
   | 'experience_strength_claim'
-  | 'meta_or_system_wording';
+  | 'meta_or_system_wording'
+  | 'personality_claim'
+  | 'role_inferred_duty'
+  | 'gender_placeholder';
 
 export type GroundingViolation = {
   kind: GroundingViolationKind;
@@ -226,6 +229,44 @@ const META_WORDING_PATTERNS: RegExp[] = [
   /(?:ソース詳細|限られた情報|提供された情報|情報不足|利用可能な情報|AI生成|フォールバック)/u,
 ];
 
+/** Personal-trait claims that require explicit source support. */
+const PERSONALITY_CLAIM_PATTERNS: RegExp[] = [
+  /\b(attention to detail|detail[- ]oriented|professionalism|honesty|dedication|reliability|reliable|creativity|creative|analytical thinking|strong communication|teamwork|team player|adaptability|adaptable|determination|passion(?:ate)?|discipline|problem[- ]solving|leadership potential|strong work ethic|work ethic|organizational ability|responsibility|precision|integrity|proven ability|make a positive impact|contribute meaningfully|highly motivated|self[- ]motivated)\b/iu,
+  /\b(zuverlässig|engagiert|detailorientiert|Einsatzbereitschaft|gewissenhaft|teamfähig|belastbar)\b/iu,
+  /\b(responsable|proactiv[oa]|detallista|puntual|honesto|creativ[oa]|comprometid[oa])\b/iu,
+  /\b(rigoureux|rigoureuse|dynamique|proactif|proactive|autonome|créatif|créative|sérieux|sérieuse)\b/iu,
+  /\b(preciso|precisa|affidabile|determinato|determinata|puntuale|creativo|creativa|responsabile)\b/iu,
+  /(?:الدقة|الاحترافية|الالتزام|الإبداع|القدرة التحليلية|روح الفريق|التفاني|تحمل المسؤولية|المهنية)/u,
+  /\b(posvećenost|odgovornost|preciznost|pouzdanost|kreativnost|analitičk\w*|timski igrač)\b/iu,
+  /(?:ответственн\w*|внимательн\w*|целеустремлённ\w*|целеустремленн\w*|исполнительн\w*|дисциплинированн\w*|креативн\w*)/iu,
+  /\b(dedicad[oa]|proativ[oa]|atent[oa] aos detalhes|pontual|confiável|criativ[oa]|organizado)\b/iu,
+  /(?:ईमानदारी|लगन|सूक्ष्मता|रचनात्मक सोच|समस्या[- ]?समाधान|नेतृत्व क्षमता|कार्य[- ]?नैतिकता|विवरण पर ध्यान|पेशेवरिया)/u,
+  /(?:誠実|正確性|注意力|責任感|創造性|協調性|勤勉|几帳面|丁寧な仕事)/u,
+];
+
+/** Duties/domains often wrongly inferred from job titles when no evidence exists. */
+const ROLE_INFERRED_DUTY_PATTERNS: RegExp[] = [
+  /\b(quality assuran(?:ce|ce efforts)|QA (?:team|process|testing)|test automation|automated testing|bug reports?|test cases?|android[- ]testing|mobile (?:app )?testing|regression testing|manual testing)\b/iu,
+  /\b(contribute meaningfully to .{0,40}(?:quality|assurance|QA|sales|marketing|engineering) (?:efforts|initiatives|processes))\b/iu,
+  /\b(Qualitätssicherung|Testautomatisierung|Fehlerberichte|Testfälle)\b/iu,
+  /\b(aseguramiento de calidad|automatización de pruebas|casos de prueba)\b/iu,
+  /\b(assurance qualité|automatisation des tests|cas de test)\b/iu,
+  /\b(assicurazione qualità|automazione dei test|casi di test)\b/iu,
+  /(?:ضمان الجودة|اختبار الأندرويد|أتمتة الاختبار|حالات الاختبار)/u,
+  /\b(osiguranje kvaliteta|automatizacij\w* test|testirani?\w* android)\b/iu,
+  /(?:обеспечен\w* качества|автоматизац\w* тест|тест[- ]кейс)/iu,
+  /\b(garantia de qualidade|automação de testes|casos de teste)\b/iu,
+  /(?:गुणवत्ता आश्वासन|टेस्ट ऑटोमेशन|बग रिपोर्ट|एंड्रॉइड परीक्षण)/u,
+  /(?:品質保証|テスト自動化|バグ報告|Android(?:テスト|検証))/u,
+];
+
+/** Slash / parenthetical gender-alternative placeholders in finished letters. */
+const GENDER_PLACEHOLDER_PATTERNS: RegExp[] = [
+  /\b[\p{L}]{2,}\/[\p{L}]{1,6}\b/u, // e.g. lieto/a, izrazio/la, चाहता/चाहती
+  /\([\p{L}аaеe]\)/u, // e.g. (a), (e), (а)
+  /चाहता\/चाहती|करूँगा\/करूँगी|रहा\/रही|इच्छुक\/इच्छुका|करता\/करती/u,
+];
+
 export function validateCoverLetterGrounding(
   content: string,
   factSet: CoverLetterFactSet,
@@ -291,6 +332,25 @@ export function validateCoverLetterGrounding(
     violations.push({ kind: 'meta_or_system_wording', matched });
   }
 
+  // Unsupported personal-quality claims
+  for (const matched of collectMatches(text, PERSONALITY_CLAIM_PATTERNS)) {
+    if (isFactSupportedLiteral(matched, factSet)) continue;
+    violations.push({ kind: 'personality_claim', matched });
+  }
+
+  // Role-title-inferred duties (unless literally present in source facts)
+  for (const matched of collectMatches(text, ROLE_INFERRED_DUTY_PATTERNS)) {
+    if (isFactSupportedLiteral(matched, factSet)) continue;
+    violations.push({ kind: 'role_inferred_duty', matched });
+  }
+
+  // Gender slash / parenthetical placeholders
+  for (const matched of collectMatches(text, GENDER_PLACEHOLDER_PATTERNS)) {
+    // Allow email-like or path-like false positives with digits/dots
+    if (/[.@\d]/.test(matched)) continue;
+    violations.push({ kind: 'gender_placeholder', matched });
+  }
+
   return { valid: violations.length === 0, violations };
 }
 
@@ -311,6 +371,8 @@ export function buildGroundingRepairUserNote(
     'Remove or neutralize every unsupported claim listed below.',
     'Do not invent skills, tools, leadership, metrics, years of experience, or achievements.',
     'Never mention source facts, limited information, CV data, AI, validation, prompts, or fallbacks in the letter.',
+    'Do not invent personal qualities or infer role responsibilities from the job title alone.',
+    'Do not use slash gender placeholders in the finished letter.',
     'If SOURCE FACTS are sparse, write a short honest letter focused on interest, motivation, willingness to learn/contribute, and interview availability — without discussing why details are limited.',
     'Unsupported claims to remove:',
     formatGroundingViolationsForPrompt(violations),
@@ -333,109 +395,109 @@ function fallbackParts(locale: Locale, name: string, role: string, company: stri
   const templates: Record<Locale, FallbackParts> = {
     en: {
       greeting: `Dear Hiring Team at ${company},`,
-      paragraph1: `I am writing to express my interest in the ${role} position at ${company}. I would welcome the opportunity to join your team, learn within the role, and contribute to your work.`,
+      paragraph1: `I am writing to express my interest in the ${role} position at ${company}. I would welcome the opportunity to join your team, learn within the role, and contribute where appropriate.`,
       paragraph2: extraSentence
-        || 'This opportunity appeals to me, and I am motivated to approach it with commitment and a willingness to grow.',
-      paragraph3: 'I would be pleased to discuss my application and learn more about the position.',
+        || 'The position is of genuine interest to me, and I would be pleased to discuss my application and learn more about your expectations for the role.',
+      paragraph3: 'I am available for an interview at your convenience.',
       closing: 'Thank you for your time and consideration.',
       signOff: 'Sincerely',
     },
     de: {
       greeting: `Sehr geehrtes Bewerbungsteam von ${company},`,
-      paragraph1: `hiermit bekunde ich mein Interesse an der Position als ${role} bei ${company}. Ich würde mich freuen, Teil Ihres Teams zu werden, in der Rolle dazuzulernen und zum gemeinsamen Erfolg beizutragen.`,
+      paragraph1: `hiermit bekunde ich mein Interesse an der Position als ${role} bei ${company}. Ich würde mich freuen, Ihr Team kennenzulernen, in der Rolle dazuzulernen und nach Möglichkeit beizutragen.`,
       paragraph2: extraSentence
-        || 'Diese Aufgabe spricht mich an, und ich gehe sie mit Engagement und der Bereitschaft an, weiterzuwachsen.',
-      paragraph3: 'Gerne erläutere ich meine Bewerbung in einem persönlichen Gespräch und erfahre mehr über die Position.',
+        || 'Die ausgeschriebene Aufgabe spricht mich an. Gerne erläutere ich meine Bewerbung und erfahre mehr über Ihre Erwartungen an die Rolle.',
+      paragraph3: 'Für ein Gespräch stehe ich gerne zur Verfügung.',
       closing: 'Vielen Dank für Ihre Zeit und Ihre Berücksichtigung.',
       signOff: 'Mit freundlichen Grüßen',
     },
     es: {
       greeting: `Estimado equipo de selección de ${company}:`,
-      paragraph1: `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me gustaría unirme a su equipo, aprender en el rol y aportar a su trabajo.`,
+      paragraph1: `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me gustaría unirme a su equipo, aprender en el rol y contribuir cuando sea apropiado.`,
       paragraph2: extraSentence
-        || 'Esta oportunidad me resulta atractiva y me motiva afrontarla con compromiso y disposición a crecer.',
-      paragraph3: 'Estaré encantado/a de hablar sobre mi candidatura y conocer mejor el puesto.',
+        || 'El puesto me resulta de verdadero interés. Agradecería poder hablar sobre mi candidatura y conocer mejor sus expectativas para el rol.',
+      paragraph3: 'Quedo a disposición para una entrevista.',
       closing: 'Gracias por su tiempo y consideración.',
       signOff: 'Atentamente',
     },
     fr: {
       greeting: `Madame, Monsieur, équipe de recrutement de ${company},`,
-      paragraph1: `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. Je serais ravi(e) de rejoindre votre équipe, d'apprendre dans ce rôle et de contribuer à vos projets.`,
+      paragraph1: `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. J'aimerais rejoindre votre équipe, apprendre dans ce rôle et contribuer lorsque cela sera utile.`,
       paragraph2: extraSentence
-        || `Cette opportunité m'attire, et je souhaite l'aborder avec engagement et une volonté de progresser.`,
-      paragraph3: `Je serais heureux(se) d'échanger sur ma candidature et d'en savoir davantage sur le poste.`,
+        || `Ce poste m'intéresse réellement. Je souhaite échanger sur ma candidature et en savoir davantage sur vos attentes.`,
+      paragraph3: `Je reste disponible pour un entretien à votre convenance.`,
       closing: `Je vous remercie pour votre temps et votre considération.`,
       signOff: 'Cordialement',
     },
     it: {
       greeting: `Gentile team di selezione di ${company},`,
-      paragraph1: `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Sarei lieto/a di unirmi al vostro team, imparare nel ruolo e contribuire al vostro lavoro.`,
+      paragraph1: `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Vorrei unirmi al vostro team, imparare nel ruolo e contribuire ove opportuno.`,
       paragraph2: extraSentence
-        || `Questa opportunità mi stimola e intendo affrontarla con impegno e voglia di crescere.`,
-      paragraph3: `Sarei felice di approfondire la mia candidatura e saperne di più sulla posizione.`,
+        || `La posizione è di concreto interesse. Vorrei approfondire la candidatura e conoscere meglio le vostre aspettative.`,
+      paragraph3: `Resto a disposizione per un colloquio.`,
       closing: `Grazie per il vostro tempo e la vostra considerazione.`,
       signOff: 'Cordiali saluti',
     },
     ar: {
       greeting: `إلى فريق التوظيف المحترم في شركة ${company}،`,
-      paragraph1: `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}. يسرّني الانضمام إلى فريقكم والتعلّم ضمن هذا الدور والمساهمة في أعمالكم.`,
+      paragraph1: `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}، وأرحب بفرصة التعرف على متطلبات الدور ومناقشة إمكانية الانضمام إلى فريقكم.`,
       paragraph2: extraSentence
-        || 'تهتمّني هذه الفرصة، وأرغب في التعامل معها بالتزام ورغبة في التطوّر المهني.',
-      paragraph3: 'يسعدني مناقشة طلبي ومعرفة المزيد عن الوظيفة.',
+        || 'تهتمّني هذه الفرصة، ويسعدني التعلّم ضمن الدور والمساهمة حيث يكون ذلك مناسبًا في أي بيئة عمل أنضم إليها.',
+      paragraph3: 'يشرفني مناقشة طلبي ومعرفة المزيد عن توقعاتكم لهذا المنصب.',
       closing: 'شكرًا لوقتكم واهتمامكم.',
       signOff: 'مع خالص التحية',
     },
     sr: {
       greeting: `Poštovani tim za zapošljavanje u kompaniji ${company},`,
-      paragraph1: `pišem vam kako bih izrazio/la interesovanje za poziciju ${role} u kompaniji ${company}. Rado bih se priključio/la vašem timu, učio/la u toj ulozi i doprinosio/la vašem radu.`,
+      paragraph1: `ovim putem se prijavljujem za poziciju ${role} u kompaniji ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gde je to primereno.`,
       paragraph2: extraSentence
-        || 'Ova prilika mi je privlačna i pristupio/la bih joj odgovorno, uz želju da rastem.',
-      paragraph3: 'Sa zadovoljstvom bih razgovarao/la o prijavi i saznao/la više o poziciji.',
+        || 'Pozicija je od stvarnog interesa. Bilo bi mi drago da razgovaramo o prijavi i saznam više o vašim očekivanjima.',
+      paragraph3: 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
       closing: 'Hvala na vašem vremenu i razmatranju.',
       signOff: 'Srdačno',
     },
     hr: {
       greeting: `Poštovani tim za zapošljavanje u tvrtki ${company},`,
-      paragraph1: `pišem kako bih izrazio/la interes za poziciju ${role} u tvrtki ${company}. Rado bih se pridružio/la vašem timu, učio/la u toj ulozi i pridonio/la vašem radu.`,
+      paragraph1: `ovim putem se prijavljujem za poziciju ${role} u tvrtki ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gdje je to primjereno.`,
       paragraph2: extraSentence
-        || 'Ova prilika mi je privlačna i pristupio/la bih joj s predanošću i željom za rastom.',
-      paragraph3: 'Rado bih razgovarao/la o prijavi i saznao/la više o poziciji.',
+        || 'Pozicija je od stvarnog interesa. Bilo bi mi drago da razgovaramo o prijavi i saznam više o vašim očekivanjima.',
+      paragraph3: 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
       closing: 'Hvala na vašem vremenu i razmatranju.',
       signOff: 'Srdačan pozdrav',
     },
     ru: {
       greeting: `Уважаемая команда по подбору персонала ${company},`,
-      paragraph1: `пишу, чтобы выразить интерес к позиции ${role} в компании ${company}. Буду рад(а) присоединиться к вашей команде, учиться в этой роли и вносить вклад в вашу работу.`,
+      paragraph1: `пишу, чтобы выразить интерес к позиции ${role} в компании ${company}. Хотелось бы присоединиться к вашей команде, учиться в этой роли и вносить вклад там, где это уместно.`,
       paragraph2: extraSentence
-        || 'Эта возможность мне близка, и я готов(а) подойти к ней ответственно, с желанием расти.',
-      paragraph3: 'Буду рад(а) обсудить моё заявление и узнать больше о вакансии.',
+        || 'Вакансия представляет интерес. С удовольствием обсужу заявление и узнаю больше о ваших ожиданиях к роли.',
+      paragraph3: 'Собеседование можно назначить в удобное для вас время.',
       closing: 'Спасибо за ваше время и рассмотрение.',
       signOff: 'С уважением',
     },
     'pt-BR': {
       greeting: `Prezada equipe de recrutamento da ${company},`,
-      paragraph1: `escrevo para expressar meu interesse na vaga de ${role} na ${company}. Gostaria de me juntar à equipe, aprender no cargo e contribuir com o trabalho de vocês.`,
+      paragraph1: `escrevo para expressar meu interesse na vaga de ${role} na ${company}. Gostaria de me juntar à equipe, aprender no cargo e contribuir quando for apropriado.`,
       paragraph2: extraSentence
-        || 'Essa oportunidade me atrai, e quero enfrentá-la com compromisso e vontade de crescer.',
-      paragraph3: 'Ficaria feliz em conversar sobre minha candidatura e saber mais sobre a vaga.',
-      closing: 'Obrigado(a) pelo tempo e pela consideração.',
+        || 'A vaga é de real interesse. Ficaria feliz em conversar sobre a candidatura e conhecer melhor as expectativas para o cargo.',
+      paragraph3: 'Fico à disposição para uma entrevista.',
+      closing: 'Agradeço pelo tempo e pela consideração.',
       signOff: 'Atenciosamente',
     },
     hi: {
       greeting: `${company} की सम्मानित भर्ती टीम को,`,
-      paragraph1: `मैं ${company} में ${role} पद के प्रति अपनी रुचि व्यक्त करने के लिए लिख रहा/रही हूँ। मुझे आपकी टीम में शामिल होने, इस भूमिका में सीखने और आपके कार्य में योगदान देने का अवसर मिले तो मुझे प्रसन्नता होगी।`,
+      paragraph1: `${company} में ${role} पद के लिए यह आवेदन प्रस्तुत है। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`,
       paragraph2: extraSentence
-        || 'यह अवसर मुझे आकर्षित करता है, और मैं इसे प्रतिबद्धता तथा आगे बढ़ने की इच्छा के साथ अपनाना चाहता/चाहती हूँ।',
-      paragraph3: 'मुझे अपने आवेदन पर चर्चा करने और पद के बारे में और जानने में खुशी होगी।',
-      closing: 'आपके समय और विचार के लिए धन्यवाद।',
+        || 'यह पद रुचिकर लगता है। आवेदन पर चर्चा करने और पद की अपेक्षाओं को बेहतर समझने का अवसर स्वागतयोग्य होगा।',
+      paragraph3: 'साक्षात्कार के लिए अनुरोध है।',
+      closing: 'समय और विचार के लिए धन्यवाद।',
       signOff: 'सादर',
     },
     ja: {
       greeting: `${company}採用ご担当者様`,
-      paragraph1: `${company}の${role}職に強い関心があり、ご連絡申し上げます。貴社の一員として学びながら業務に貢献できれば幸いです。`,
+      paragraph1: `${company}の${role}職に応募いたします。チームの一員として学びながら、適切な場面で貢献できれば幸いです。`,
       paragraph2: extraSentence
-        || '本機会に魅力を感じており、誠実な姿勢と成長意欲をもって取り組みたいと考えております。',
-      paragraph3: '応募内容について伺い、職位についてさらに理解を深める機会をいただけますと幸いです。',
+        || '本職に関心があり、応募内容について伺い、役割への期待を知る機会をいただけますと幸いです。',
+      paragraph3: '面接の機会をいただけますと幸いです。',
       closing: 'ご多忙のところ恐縮ですが、ご検討のほど何卒よろしくお願いいたします。',
       signOff: '敬具',
     },

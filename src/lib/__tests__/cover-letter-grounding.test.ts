@@ -195,6 +195,7 @@ describe('cover letter grounding validation', () => {
     expect(text).not.toMatch(/limited information/i);
     expect(text).toMatch(/express my interest/i);
     expect(text).toContain('Software Developer');
+    expect(text).not.toMatch(/attention to detail|professionalism|quality assurance|positive impact|strong work ethic/i);
   });
 
   test('meta wording is rejected by grounding validation', () => {
@@ -207,5 +208,97 @@ describe('cover letter grounding validation', () => {
     const result = validateCoverLetterGrounding(draft, facts);
     expect(result.valid).toBe(false);
     expect(result.violations.some((v) => v.kind === 'meta_or_system_wording')).toBe(true);
+  });
+
+  test('rejects unsupported personal qualities and role-derived duties', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+    });
+    const draft =
+      'I apply for Android tester at Gnof. I bring professionalism and attention to detail and will contribute meaningfully to Gnof\'s quality assurance efforts with test automation.';
+    const result = validateCoverLetterGrounding(draft, facts);
+    expect(result.valid).toBe(false);
+    expect(result.violations.some((v) => v.kind === 'personality_claim')).toBe(true);
+    expect(result.violations.some((v) => v.kind === 'role_inferred_duty')).toBe(true);
+  });
+
+  test('allows explicitly supplied personal quality', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex',
+      jobTitle: 'Developer',
+      companyName: 'Acme',
+      summary: 'Detail-oriented developer focused on clear delivery.',
+      skills: ['teamwork'],
+    });
+    const draft =
+      'I am applying for Developer at Acme. I am detail-oriented and value teamwork.';
+    const result = validateCoverLetterGrounding(draft, facts);
+    expect(result.valid).toBe(true);
+  });
+
+  test('Hindi sparse fallback is gender-neutral without personality filler', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+    });
+    const letter = buildDeterministicSparseCoverLetter('hi', {
+      candidateName: 'Alex Carter',
+      jobTitle: 'Software Developer',
+      companyName: 'Gnox',
+      factSet: facts,
+      dateLine: '14 जुलाई 2026',
+    });
+    const text = assembleCoverLetterContent(letter);
+    expect(text).not.toMatch(/चाहता\/चाहती|करूँगा\/करूँगी|रहा\/रही/);
+    expect(text).not.toMatch(/ईमानदारी|लगन/);
+    expect(text).toContain('Software Developer');
+    expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
+  });
+
+  test('Arabic sparse fallback uses natural join wording without unsupported traits', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex Carter',
+      jobTitle: 'مطوّر برمجيات',
+      companyName: 'Gnoogy',
+    });
+    const letter = buildDeterministicSparseCoverLetter('ar', {
+      candidateName: 'Alex Carter',
+      jobTitle: 'مطوّر برمجيات',
+      companyName: 'Gnoogy',
+      factSet: facts,
+      dateLine: '12 يوليو 2026',
+    });
+    const text = assembleCoverLetterContent(letter);
+    expect(text).not.toContain('أنتمي إليها');
+    expect(text).toContain('أنضم إليها');
+    expect(text).not.toMatch(/الدقة|الاحترافية|القدرات التحليلية/);
+    expect(letter.signOff).toContain('مع خالص التحية');
+    expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
+  });
+
+  test('all locale sparse fallbacks avoid invented qualities and gender placeholders', () => {
+    const facts = buildCoverLetterFactSet({
+      personalName: 'Alex Carter',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+    });
+    for (const locale of ALL_LOCALES) {
+      const letter = buildDeterministicSparseCoverLetter(locale, {
+        candidateName: 'Alex Carter',
+        jobTitle: 'Android tester',
+        companyName: 'Gnof',
+        factSet: facts,
+        dateLine: '2026-07-14',
+      });
+      const text = assembleCoverLetterContent(letter);
+      const grounding = validateCoverLetterGrounding(text, facts);
+      expect(grounding.valid, `${locale}: ${JSON.stringify(grounding.violations)}`).toBe(true);
+      expect(text).toContain('Android tester');
+      expect(text).not.toMatch(/quality assurance|test automation|attention to detail/i);
+      expect(text).not.toMatch(/\b[\p{L}]{3,}\/[\p{L}]{1,4}\b/u);
+    }
   });
 });
