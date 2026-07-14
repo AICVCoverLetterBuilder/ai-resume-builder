@@ -1,0 +1,212 @@
+import { describe, expect, test } from 'vitest';
+import { assembleCoverLetterContent, buildStructuredCoverLetterPrompt } from '../cover-letter-generation';
+import {
+  buildDeterministicSparseCoverLetter,
+  serbianPozicijuRolePhrase,
+  validateCoverLetterGrounding,
+} from '../cover-letter-grounding';
+import { buildCoverLetterFactSet } from '../cover-letter-facts';
+import { getCoverLetterGenderInstruction } from '../cover-letter-gender';
+
+const SPARSE = buildCoverLetterFactSet({
+  personalName: 'Many Loom',
+  jobTitle: 'Android tester',
+  companyName: 'Gnof',
+});
+
+const PROMPT_BASE = {
+  displayName: 'Many Loom',
+  candidateName: 'Many Loom',
+  companyName: 'Gnof',
+  jobTitle: 'Android tester',
+  fallbackRole: 'the role',
+  fallbackCompany: 'the company',
+  variantNote: '',
+  dateLine: '14 July 2026',
+};
+
+describe('female + confident language quality polish', () => {
+  test('Spanish confident female fallback is assertive without cuando sea apropiado', () => {
+    const letter = buildDeterministicSparseCoverLetter('es', {
+      candidateName: 'Many Loom',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+      factSet: SPARSE,
+      dateLine: '14 de julio de 2026',
+      gender: 'female',
+      tone: 'confident',
+    });
+    const text = assembleCoverLetterContent(letter, 'es');
+    expect(text).toContain('aportar con decisión');
+    expect(text).not.toContain('cuando sea apropiado');
+    expect(text).not.toContain('contribuir de forma responsable');
+    expect(text).toMatch(/motivada|preparada|encantada/);
+    expect(text.split(/[.!?؟。]/u).filter((s) => s.trim().length > 12).length).toBeGreaterThanOrEqual(3);
+    expect(validateCoverLetterGrounding(text, SPARSE, { locale: 'es', gender: 'female' }).valid).toBe(true);
+    expect(getCoverLetterGenderInstruction('es', 'female')).toContain('motivada');
+  });
+
+  test('Japanese confident wording is assertive, gender-neutral, and keep 敬具 without comma', () => {
+    const letter = buildDeterministicSparseCoverLetter('ja', {
+      candidateName: 'Many Loom',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+      factSet: SPARSE,
+      dateLine: '2026年7月14日',
+      gender: 'female',
+      tone: 'confident',
+    });
+    const text = assembleCoverLetterContent(letter, 'ja');
+    expect(text).not.toContain('現時点では');
+    expect(text).not.toContain('積み重ねていきたい');
+    expect(text).toContain('迅速に習得');
+    expect(text).toContain('真摯に');
+    expect(text).toContain('着実に貢献');
+    expect(text).not.toMatch(/経験豊富|テスト実績|Android製品の品質向上に長年/);
+    expect(text).toContain('敬具');
+    expect(text).not.toContain('敬具,');
+    expect(validateCoverLetterGrounding(text, SPARSE, { locale: 'ja', gender: 'female' }).valid).toBe(true);
+  });
+
+  test('Arabic confident uses أتطلع and natural responsibilities; female keeps مستعدة', () => {
+    const letter = buildDeterministicSparseCoverLetter('ar', {
+      candidateName: 'Many Loom',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+      factSet: SPARSE,
+      dateLine: '14 يوليو 2026',
+      gender: 'female',
+      tone: 'confident',
+    });
+    const text = assembleCoverLetterContent(letter, 'ar');
+    expect(text).toContain('وأتطلع إلى فرصة الانضمام إلى فريقكم');
+    expect(text).not.toContain('وأرجو أن تتاح لي الفرصة للانضمام');
+    expect(text).toContain('والتكيف مع متطلبات هذا الدور والوفاء بمسؤولياته');
+    expect(text).not.toContain('والعمل على تلبية ما ينتظر من شاغله');
+    expect(text).toContain('مستعدة');
+    expect(text).not.toMatch(/(?:^|[^\u0600-\u06FF])مستعد(?:[^\u0600-\u06FF]|$)/u);
+    expect(validateCoverLetterGrounding(text, SPARSE, { locale: 'ar', gender: 'female' }).valid).toBe(true);
+  });
+
+  test('Italian removes disponibilità tautology and uses Vi ringrazio', () => {
+    const letter = buildDeterministicSparseCoverLetter('it', {
+      candidateName: 'Many Loom',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+      factSet: SPARSE,
+      dateLine: '14 luglio 2026',
+      gender: 'female',
+      tone: 'confident',
+    });
+    const text = assembleCoverLetterContent(letter, 'it');
+    expect(text).not.toContain('mettere a disposizione la mia disponibilità');
+    expect(text).toContain('il mio impegno e la mia volontà di contribuire');
+    expect(text).toContain('Vi ringrazio');
+    expect(text).not.toContain('La ringrazio');
+    expect(text).toMatch(/motivata|lieta|interessata/);
+    expect(validateCoverLetterGrounding(text, SPARSE, { locale: 'it', gender: 'female' }).valid).toBe(true);
+  });
+
+  test('Serbian declines Android tester and prompts forbid proizvodi koriste korisnici', () => {
+    expect(serbianPozicijuRolePhrase('Android tester')).toBe('poziciju Android testera');
+    const letter = buildDeterministicSparseCoverLetter('sr', {
+      candidateName: 'Many Loom',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+      factSet: SPARSE,
+      dateLine: '14. jul 2026.',
+      gender: 'female',
+      tone: 'confident',
+    });
+    const text = assembleCoverLetterContent(letter, 'sr');
+    expect(text).toContain('Android testera');
+    expect(text).toContain('prijavljujem');
+    expect(text.includes('poziciju Android testera')).toBe(true);
+    expect(text).not.toMatch(/za poziciju Android tester(?!a)/);
+    expect(text).not.toContain('proizvodi koriste korisnici');
+    expect(text).toContain('Dostupna sam');
+    expect(validateCoverLetterGrounding(text, SPARSE, { locale: 'sr', gender: 'female' }).valid).toBe(true);
+
+    const prompt = buildStructuredCoverLetterPrompt({
+      ...PROMPT_BASE,
+      languageName: 'Serbian',
+      locale: 'sr',
+      toneDesc: 'samouveren i odlučan',
+      tone: 'confident',
+      gender: 'female',
+      genderNote: getCoverLetterGenderInstruction('sr', 'female'),
+      closing: 'Srdačno',
+    });
+    expect(prompt).toContain('proizvodi koriste korisnici');
+    expect(prompt).toContain('SERBIAN QUALITY RULES');
+  });
+
+  test('German forbids ehrlichen Beitrag and prefers engagierten Beitrag', () => {
+    const letter = buildDeterministicSparseCoverLetter('de', {
+      candidateName: 'Many Loom',
+      jobTitle: 'Android tester',
+      companyName: 'Gnof',
+      factSet: SPARSE,
+      dateLine: '14. Juli 2026',
+      gender: 'female',
+      tone: 'confident',
+    });
+    const text = assembleCoverLetterContent(letter, 'de');
+    expect(text).not.toContain('ehrlichen Beitrag');
+    expect(text).toContain('engagierten Beitrag');
+    expect(validateCoverLetterGrounding(text, SPARSE, { locale: 'de', gender: 'female' }).valid).toBe(true);
+
+    const prompt = buildStructuredCoverLetterPrompt({
+      ...PROMPT_BASE,
+      languageName: 'German',
+      locale: 'de',
+      toneDesc: 'selbstbewusst und überzeugend',
+      tone: 'confident',
+      gender: 'female',
+      genderNote: getCoverLetterGenderInstruction('de', 'female'),
+      closing: 'Mit freundlichen Grüßen',
+    });
+    expect(prompt).toContain('ehrlichen Beitrag');
+    expect(prompt).toContain('engagierten Beitrag');
+  });
+
+  test('Hindi/Russian/Croatian/French female fallbacks remain valid', () => {
+    const cases: Array<{ locale: 'hi' | 'ru' | 'hr' | 'fr'; mustInclude: string }> = [
+      { locale: 'hi', mustInclude: 'कर रही हूँ' },
+      { locale: 'ru', mustInclude: 'Готова' },
+      { locale: 'hr', mustInclude: 'Dostupna sam' },
+      { locale: 'fr', mustInclude: 'ravie' },
+    ];
+    for (const c of cases) {
+      const letter = buildDeterministicSparseCoverLetter(c.locale, {
+        candidateName: 'Many Loom',
+        jobTitle: 'Android tester',
+        companyName: 'Gnof',
+        factSet: SPARSE,
+        dateLine: '2026-07-14',
+        gender: 'female',
+        tone: 'confident',
+      });
+      const text = assembleCoverLetterContent(letter, c.locale);
+      expect(text, c.locale).toContain(c.mustInclude);
+      expect(validateCoverLetterGrounding(text, SPARSE, { locale: c.locale, gender: 'female' }).valid).toBe(true);
+    }
+  });
+
+  test('Spanish confident prompt forbids cuando sea apropiado', () => {
+    const prompt = buildStructuredCoverLetterPrompt({
+      ...PROMPT_BASE,
+      languageName: 'Spanish',
+      locale: 'es',
+      toneDesc: 'segura, convincente y decidida',
+      tone: 'confident',
+      gender: 'female',
+      genderNote: getCoverLetterGenderInstruction('es', 'female'),
+      closing: 'Atentamente',
+    });
+    expect(prompt).toContain('SPANISH QUALITY RULES');
+    expect(prompt).toContain('cuando sea apropiado');
+    expect(prompt).toContain('motivada');
+    expect(prompt).toContain('CONFIDENT TONE');
+  });
+});

@@ -1,4 +1,5 @@
 import type { Locale } from '@/lib/i18n/translations';
+import type { Tone } from '@/lib/types';
 import {
   formatCoverLetterFactsForPrompt,
   type CoverLetterFactSet,
@@ -11,6 +12,22 @@ import {
 import { stripCoverLetterExportHeader } from './cover-letter-header';
 import type { CoverLetterGender } from './cover-letter-gender';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
+
+export function normalizeCoverLetterTone(raw: unknown): Tone {
+  if (raw === 'confident' || raw === 'friendly' || raw === 'formal') return raw;
+  const s = String(raw ?? '').toLowerCase();
+  if (
+    /confident|assert|seguro|segura|convincente|selbstbewusst|überzeugend|sicuro|sicura|deciso|decisa|واثق|حازم|samouveren|samouvjeren|odluč|уверен|убедител|自信|आत्मविश्वास|confiante|assertiv|sûr de soi|affirmé/.test(
+      s,
+    )
+  ) {
+    return 'confident';
+  }
+  if (/friendly|warm|cercano|amable|親しみ|sống|topao|доброжелател|सौम्य|caloroso|chaleureux|accesible|ودود/.test(s)) {
+    return 'friendly';
+  }
+  return 'formal';
+}
 
 export const COVER_LETTER_SCHEMA_VERSION = 'structured-v4';
 export const COVER_LETTER_SCHEMA_MARKER = `\u200B${COVER_LETTER_SCHEMA_VERSION}\u200B`;
@@ -316,7 +333,13 @@ export function contentMatchesRequestedLocale(content: string, locale: Locale): 
   }
 }
 
-function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: boolean): string {
+function buildLocaleGroundingRules(
+  locale: Locale,
+  jobTitle: string,
+  isSparse: boolean,
+  tone: Tone = 'formal',
+  gender: CoverLetterGender = 'unspecified',
+): string {
   const role = jobTitle.trim() || 'the role';
   const shared = [
     'UNIVERSAL GROUNDING RULES (apply to every locale):',
@@ -351,6 +374,16 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
     '- Never mention source facts, CV data, AI, prompts, validation, fallbacks, or system limitations in the letter body.',
   ];
 
+  const confidentShared =
+    tone === 'confident'
+      ? [
+          'CONFIDENT TONE (apply with grounding intact):',
+          '- Sound decisive about motivation and readiness — not tentative, junior, or pleading.',
+          '- Still NEVER invent experience, skills, certifications, achievements, or past employment.',
+          '- Prefer assertive readiness to learn and contribute; do not shrink a confident letter into four very short hesitant sentences.',
+        ]
+      : [];
+
   if (locale === 'hi') {
     return [
       'HINDI QUALITY RULES:',
@@ -367,6 +400,7 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
       '- Do NOT claim व्यापक अनुभव, कई वर्षों का अनुभव, वेब अनुप्रयोगों का निर्माण, डेटाबेस प्रबंधन, जटिल तकनीकी समस्याओं का समाधान, परियोजनाओं का नेतृत्व, प्रणाली की कार्यक्षमता में सुधार, प्रोग्रामिंग भाषाओं में विशेषज्ञता, or क्लाउड/Agile अनुभव unless in SOURCE FACTS.',
       '- When evidence is sparse, use neutral professional Hindi focused on interest, willingness to learn/contribute, and interview availability.',
       '- Use correct Devanagari punctuation and characters.',
+      ...confidentShared,
       ...shared,
     ].join('\n');
   }
@@ -379,6 +413,8 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
       '- Prefer greeting "إلى فريق التوظيف المحترم في شركة [Company]،" when natural.',
       '- Prefer "أنضم إليها" over awkward "أنتمي إليها" when describing joining a workplace.',
       '- Prefer natural sparse interest wording such as "وأرحب بفرصة التعرف على متطلبات الوظيفة ومناقشة إمكانية الانضمام إلى فريقكم."',
+      '- Prefer confident interest with "وأتطلع إلى فرصة الانضمام إلى فريقكم" — avoid pleading "وأرجو أن تتاح لي الفرصة للانضمام إلى فريقكم".',
+      '- Prefer natural role-responsibility wording such as "والتكيف مع متطلبات هذا الدور والوفاء بمسؤولياته" — avoid awkward "والعمل على تلبية ما ينتظر من شاغله".',
       '- Do NOT use artificial career-path rhetoric such as "فرصة مدروسة نحو مسيرة مهنية هادفة" or similar overly formal abstractions about a "هادفة" career journey.',
       '- Prefer simpler alternatives when needed (e.g. "فرصة مناسبة للتطور المهني" or "خطوة مناسبة في مسيرتي المهنية"), or omit career-direction claims entirely when SOURCE FACTS are sparse.',
       '- Do NOT imply the candidate already works at the employer (avoid forms like "بوصفي [Role] في شركة [Company]").',
@@ -388,21 +424,95 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
       '- Do NOT claim خبرة واسعة، قدت مشاريع، طورت حلولاً، رفعت كفاءة الأنظمة، حسنت تجربة المستخدم، أتقن لغات برمجة متعددة، كفاءات تقنية متقدمة، or قدرات تحليلية قوية unless in SOURCE FACTS.',
       '- Keep mixed Latin terms (Google, Java, Python, C++, CRM, emails) readable; do not reverse them.',
       '- Write entirely in Arabic — never output Hindi or English body text.',
+      ...(gender === 'female'
+        ? ['- When stating readiness, prefer feminine agreement such as مستعدة (never masculine مستعد).']
+        : []),
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'es') {
+    return [
+      'SPANISH QUALITY RULES:',
+      '- Write natural professional Spanish — not a literal English translation.',
+      '- Never use hesitant filler such as "contribuir cuando sea apropiado" or "cuando sea apropiado".',
+      '- Prefer assertive but grounded contribution wording (e.g. "aportar con decisión a los objetivos del equipo").',
+      '- Do not reduce a normal confident letter to four very short hesitant sentences — include a meaningful motivation/contribution paragraph without inventing experience.',
+      ...(gender === 'female'
+        ? ['- For a female applicant use feminine forms such as motivada, preparada, interesada, encantada where agreement applies.']
+        : gender === 'male'
+          ? ['- For a male applicant use masculine forms such as motivado, preparado, interesado, encantado where agreement applies.']
+          : []),
+      ...(tone === 'confident'
+        ? [
+            '- CONFIDENT Spanish: decisive motivation and readiness; still no invented skills, tools, or past employment.',
+            '- Prefer phrasing in the spirit of: "Estoy motivada/motivado para asumir las responsabilidades del puesto, aprender con rapidez y aportar con decisión a los objetivos del equipo." (match GENDER).',
+          ]
+        : []),
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'ja') {
+    return [
+      'JAPANESE QUALITY RULES:',
+      '- Write natural professional Japanese. Keep naturally gender-neutral first-person style.',
+      '- Closing sign-off must be 敬具 with no trailing comma.',
+      '- Avoid overly tentative junior wording such as "現時点では、このロールを通じて必要な知識と経験を積み重ねていきたい".',
+      '- Prefer grounded assertive contribution wording such as "必要な知識を迅速に習得し、業務に真摯に取り組みながら、着実に貢献してまいります" — without inventing prior experience.',
+      '- Do NOT claim prior Android testing/product experience unless present in SOURCE FACTS.',
+      '- Preserve Latin names, companies, titles, and legitimate ASCII hyphens unchanged.',
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'it') {
+    return [
+      'ITALIAN QUALITY RULES:',
+      '- Write natural professional Italian — not a literal translation.',
+      '- Never write the tautology "mettere a disposizione la mia disponibilità". Prefer "mettere a disposizione il mio impegno e la mia volontà di contribuire" (or equivalent natural Italian).',
+      '- When the greeting addresses a team (Gentile team / Gentili), thank in plural: "Vi ringrazio" — never switch to singular "La ringrazio".',
+      ...(gender === 'female'
+        ? ['- Keep feminine agreement: interessata, entusiasta, motivata, pronta, lieta where applicable.']
+        : gender === 'male'
+          ? ['- Keep masculine agreement: interessato, entusiasta, motivato, pronto, lieto where applicable.']
+          : []),
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'sr') {
+    return [
+      'SERBIAN QUALITY RULES:',
+      '- Write natural professional Serbian (Latinica).',
+      `- Prefer "prijavljujem se za poziciju ${role}${/^[A-Za-z0-9]/.test(role) && !/[aeiouAEIOU]$/.test(role) ? 'a' : ''}" when the English title needs a natural genitive after "za poziciju" (e.g. Android tester → Android testera).`,
+      '- Avoid clumsy repetition such as "proizvodi koriste korisnici". Prefer natural phrasing like "čije proizvode koriste ljudi širom sveta" when company reach is discussed generally (still invent no facts).',
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'de') {
+    return [
+      'GERMAN QUALITY RULES:',
+      '- Write natural professional German.',
+      '- Never write the unnatural collocation "einen ehrlichen Beitrag". Prefer "einen engagierten Beitrag im Team zu leisten" or another grounded professional equivalent.',
+      '- Do not force gendered self-reference where German stays naturally gender-neutral.',
+      ...confidentShared,
       ...shared,
     ].join('\n');
   }
 
   const languageLabel: Partial<Record<Locale, string>> = {
     en: 'English',
-    de: 'German',
-    es: 'Spanish',
     fr: 'French',
-    it: 'Italian',
-    sr: 'Serbian',
     hr: 'Croatian',
     ru: 'Russian',
     'pt-BR': 'Brazilian Portuguese',
-    ja: 'Japanese',
   };
 
   return [
@@ -410,6 +520,7 @@ function buildLocaleGroundingRules(locale: Locale, jobTitle: string, isSparse: b
     `- Write natural professional ${languageLabel[locale] ?? 'native'} phrasing — not a literal translation.`,
     '- Preserve the exact job-title meaning and seniority.',
     '- Prefer native greeting, punctuation, and closing conventions.',
+    ...confidentShared,
     ...shared,
   ].join('\n');
 }
@@ -722,12 +833,22 @@ export function buildStructuredCoverLetterPrompt(options: {
   dateLine: string;
   factSet?: CoverLetterFactSet;
   retryNote?: string;
+  tone?: Tone | string;
+  gender?: CoverLetterGender | string;
 }): string {
   const company = options.companyName || options.fallbackCompany;
   const role = options.jobTitle || options.fallbackRole;
   const retry = options.retryNote ? `\n${options.retryNote}` : '';
   const factSet = options.factSet ?? { facts: [], isSparse: true };
-  const localeRules = buildLocaleGroundingRules(options.locale, options.jobTitle, factSet.isSparse);
+  const tone = normalizeCoverLetterTone(options.tone ?? options.toneDesc);
+  const gender = normalizeCoverLetterGender(options.gender);
+  const localeRules = buildLocaleGroundingRules(
+    options.locale,
+    options.jobTitle,
+    factSet.isSparse,
+    tone,
+    gender,
+  );
   const factsBlock = formatCoverLetterFactsForPrompt(factSet);
   const paragraph2Hint = factSet.isSparse
     ? 'motivation, willingness to learn/contribute, and ONLY explicitly supplied facts (do NOT invent experience or skills)'
@@ -890,6 +1011,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
   variantNote: string;
   genderNote: string;
   gender?: CoverLetterGender | string;
+  tone?: Tone | string;
   fallbackRole: string;
   fallbackCompany: string;
   factSet?: CoverLetterFactSet;
@@ -909,6 +1031,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
   const factSet: CoverLetterFactSet = options.factSet ?? { facts: [], isSparse: true };
   const usedFactIds = factSet.facts.map((f) => f.id);
   const gender = normalizeCoverLetterGender(options.gender);
+  const tone = normalizeCoverLetterTone(options.tone ?? options.toneDesc);
 
   const tryParseAndValidate = (raw: string): StructuredCoverLetter | null => {
     const parsed = parseStructuredCoverLetterJson(raw);
@@ -948,6 +1071,8 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       dateLine,
       factSet,
       retryNote,
+      tone,
+      gender,
     });
 
     const raw = await options.generate(attempt, maxTokens, userPrompt);
@@ -1001,6 +1126,8 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       dateLine,
       factSet,
       retryNote: buildGroundingRepairUserNote(factSet, grounding.violations, assembledForGrounding),
+      tone,
+      gender,
     })}`;
 
     try {
@@ -1036,6 +1163,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       factSet,
       dateLine,
       gender,
+      tone,
     });
     // Soft-align signOff with locale closing preference
     fallback.signOff = options.closing || fallback.signOff;
@@ -1058,6 +1186,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
       factSet,
       dateLine,
       gender,
+      tone,
     });
     fallback.signOff = options.closing || fallback.signOff;
     return {

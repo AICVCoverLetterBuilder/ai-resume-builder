@@ -89,10 +89,10 @@ export function getCoverLetterGenderInstruction(locale: Locale | string, genderR
 
   if (loc === 'ar') {
     if (gender === 'male') {
-      return ' GENDER (MANDATORY): Applicant is MALE. Use masculine agreement consistently. Never use slash or dual-gender placeholders. Do not infer gender from the name.';
+      return ' GENDER (MANDATORY): Applicant is MALE. Use masculine agreement consistently (e.g. مستعد when readiness is stated). Never use slash or dual-gender placeholders. Do not infer gender from the name.';
     }
     if (gender === 'female') {
-      return ' GENDER (MANDATORY): Applicant is FEMALE. Use feminine agreement consistently (e.g. متقدمة، مهتمة). Never use slash placeholders. Do not infer gender from the name.';
+      return ' GENDER (MANDATORY): Applicant is FEMALE. Use feminine agreement consistently (e.g. متقدمة، مهتمة، مستعدة). Never use slash placeholders. Do not infer gender from the name.';
     }
     return ' GENDER: Unspecified. Prefer natural gender-neutral Modern Standard Arabic first-person phrasing (أتقدم، أرحب، تهمني، يسعدني، أرغب، أتطلع). Never use speaker-marking adjectives such as حريص/حريصة، متاح/متاحة، مستعد/مستعدة، مهتم/مهتمة، متحمس/متحمسة، سعيد/سعيدة. Never use slash placeholders. Do not infer gender from the name.';
   }
@@ -129,20 +129,20 @@ export function getCoverLetterGenderInstruction(locale: Locale | string, genderR
 
   if (loc === 'es') {
     if (gender === 'male') {
-      return ' GENDER (MANDATORY): Applicant is MALE. Use masculine agreement (e.g. "interesado", "encantado"). Never write slash forms like encantado/a. Do not infer gender from the name.';
+      return ' GENDER (MANDATORY): Applicant is MALE. Use masculine agreement (e.g. "interesado", "motivado", "preparado", "encantado"). Never write slash forms like encantado/a. Do not infer gender from the name.';
     }
     if (gender === 'female') {
-      return ' GENDER (MANDATORY): Applicant is FEMALE. Use feminine agreement (e.g. "interesada", "encantada"). Never write slash forms like encantado/a. Do not infer gender from the name.';
+      return ' GENDER (MANDATORY): Applicant is FEMALE. Use feminine agreement (e.g. "interesada", "motivada", "preparada", "encantada"). Never write slash forms like encantado/a. Do not infer gender from the name.';
     }
     return ' GENDER: Unspecified. Prefer gender-neutral Spanish constructions. Never write slash forms like encantado/a. Do not infer gender from the name.';
   }
 
   if (loc === 'it') {
     if (gender === 'male') {
-      return ' GENDER (MANDATORY): Applicant is MALE. Use masculine agreement (e.g. "interessato", "lieto"). Never write slash forms like lieto/a. Do not infer gender from the name.';
+      return ' GENDER (MANDATORY): Applicant is MALE. Use masculine agreement (e.g. "interessato", "entusiasta", "motivato", "pronto", "lieto"). Never write slash forms like lieto/a. Do not infer gender from the name.';
     }
     if (gender === 'female') {
-      return ' GENDER (MANDATORY): Applicant is FEMALE. Use feminine agreement (e.g. "interessata", "lieta"). Never write slash forms like lieto/a. Do not infer gender from the name.';
+      return ' GENDER (MANDATORY): Applicant is FEMALE. Use feminine agreement (e.g. "interessata", "entusiasta", "motivata", "pronta", "lieta"). Never write slash forms like lieto/a. Do not infer gender from the name.';
     }
     return ' GENDER: Unspecified. Prefer gender-neutral Italian constructions. Never write slash forms like lieto/a. Do not infer gender from the name.';
   }

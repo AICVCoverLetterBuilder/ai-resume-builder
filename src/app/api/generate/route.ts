@@ -172,12 +172,12 @@ const localeInstructions: Record<Locale, {
   de: {
     languageName: 'German', fallbackCandidate: 'die bewerbende Person', fallbackRole: 'die Position', fallbackCompany: 'das Unternehmen', coverLetterName: 'Ihr Name', closing: 'Mit freundlichen Grüßen',
     toneMap: { formal: 'formell und professionell', confident: 'selbstbewusst und überzeugend', friendly: 'warm und persönlich' },
-    nativeQualityNote: 'Schreiben Sie wie ein Muttersprachler im deutschen Geschäftsumfeld. Starke Verben nur bei Beleg in SOURCE FACTS. Niemals Führungs- oder Leistungsversprechen erfinden. Keine erfundenen Tools oder Kennzahlen.',
+    nativeQualityNote: 'Schreiben Sie wie ein Muttersprachler im deutschen Geschäftsumfeld. Starke Verben nur bei Beleg in SOURCE FACTS. Niemals Führungs- oder Leistungsversprechen erfinden. Keine erfundenen Tools oder Kennzahlen. Nie „einen ehrlichen Beitrag“ — lieber „einen engagierten Beitrag im Team zu leisten“.',
   },
   es: {
     languageName: 'Spanish', fallbackCandidate: 'la persona candidata', fallbackRole: 'el puesto', fallbackCompany: 'la empresa', coverLetterName: 'Tu nombre', closing: 'Atentamente',
     toneMap: { formal: 'formal y profesional', confident: 'seguro y convincente', friendly: 'cercano y amable' },
-    nativeQualityNote: 'Escribe como un profesional nativo. Usa verbos de acción solo si están respaldados por SOURCE FACTS. Nunca inventes liderazgo, herramientas ni logros.',
+    nativeQualityNote: 'Escribe como un profesional nativo. Usa verbos de acción solo si están respaldados por SOURCE FACTS. Nunca inventes liderazgo, herramientas ni logros. Evita "cuando sea apropiado"; prefiere motivación decidida y contribución responsable. Para tono confiado, no reduzcas la carta a frases demasiado breves e inseguras.',
   },
   fr: {
     languageName: 'French', fallbackCandidate: 'la personne candidate', fallbackRole: 'le poste', fallbackCompany: "l'entreprise", coverLetterName: 'Votre nom', closing: 'Cordialement',
@@ -187,17 +187,17 @@ const localeInstructions: Record<Locale, {
   it: {
     languageName: 'Italian', fallbackCandidate: 'la persona candidata', fallbackRole: 'il ruolo', fallbackCompany: "l'azienda", coverLetterName: 'Il tuo nome', closing: 'Cordiali saluti',
     toneMap: { formal: 'formale e professionale', confident: 'sicuro e deciso', friendly: 'cordiale e umano' },
-    nativeQualityNote: "Scrivi come un professionista italiano madrelingua. Usa verbi d'azione forti solo se supportati da SOURCE FACTS. Non inventare leadership, strumenti o risultati.",
+    nativeQualityNote: "Scrivi come un professionista italiano madrelingua. Usa verbi d'azione forti solo se supportati da SOURCE FACTS. Non inventare leadership, strumenti o risultati. Mai \"mettere a disposizione la mia disponibilità\". Con saluto al team usa \"Vi ringrazio\", non \"La ringrazio\".",
   },
   ar: {
     languageName: 'Arabic', fallbackCandidate: 'المرشح', fallbackRole: 'الوظيفة', fallbackCompany: 'الشركة', coverLetterName: 'اسمك', closing: 'مع خالص التحية',
     toneMap: { formal: 'رسمي واحترافي', confident: 'واثق وحازم', friendly: 'ودود وقريب' },
-    nativeQualityNote: 'اكتب بأسلوب عربي فصحى مهني طبيعي. استخدم أفعالًا قوية فقط إن وردت في SOURCE FACTS. لا تخترع قيادة أو أدوات أو إنجازات. فضّل "للتقدم لشغل وظيفة" ولا تُشعِر أن المرشح يعمل أصلًا لدى الشركة.',
+    nativeQualityNote: 'اكتب بأسلوب عربي فصحى مهني طبيعي. استخدم أفعالًا قوية فقط إن وردت في SOURCE FACTS. لا تخترع قيادة أو أدوات أو إنجازات. فضّل "للتقدم لشغل وظيفة" و"وأتطلع إلى فرصة الانضمام إلى فريقكم" بدل الترجّي. فضّل "والتكيف مع متطلبات هذا الدور والوفاء بمسؤولياته". ولا تُشعِر أن المرشح يعمل أصلًا لدى الشركة.',
   },
   sr: {
     languageName: 'Serbian', fallbackCandidate: 'kandidat', fallbackRole: 'poziciju', fallbackCompany: 'kompaniju', coverLetterName: 'Vaše ime', closing: 'Srdačno',
     toneMap: { formal: 'formalan i profesionalan', confident: 'samouveren i odlučan', friendly: 'topao i pristupačan' },
-    nativeQualityNote: 'Piši prirodnim profesionalnim srpskim. Jaki glagoli samo ako su podržani u SOURCE FACTS. Ne izmišljaj vođenje, alate ili postignuća. Latinica.',
+    nativeQualityNote: 'Piši prirodnim profesionalnim srpskim. Jaki glagoli samo ako su podržani u SOURCE FACTS. Ne izmišljaj vođenje, alate ili postignuća. Latinica. Preferiraj „prijavljujem se za poziciju Android testera” umesto neprirodnog „za poziciju Android tester”. Izbegavaj „proizvodi koriste korisnici”.',
   },
   hr: {
     languageName: 'Croatian', fallbackCandidate: 'kandidat', fallbackRole: 'poziciju', fallbackCompany: 'tvrtku', coverLetterName: 'Vaše ime', closing: 'Srdačan pozdrav',
@@ -217,7 +217,7 @@ const localeInstructions: Record<Locale, {
   ja: {
     languageName: 'Japanese', fallbackCandidate: '候補者', fallbackRole: '職種', fallbackCompany: '企業', coverLetterName: 'お名前', closing: '敬具',
     toneMap: { formal: 'フォーマルで丁寧', confident: '自信があり説得力のある', friendly: '親しみやすく温かい' },
-    nativeQualityNote: '自然なビジネス日本語で記述してください。強い動詞はSOURCE FACTSがある場合のみ。リーダーシップ・ツール・成果を創作しないでください。',
+    nativeQualityNote: '自然なビジネス日本語で記述してください。強い動詞はSOURCE FACTSがある場合のみ。リーダーシップ・ツール・成果を創作しないでください。自信のあるトーンでは「現時点では…積み重ねていきたい」など過度に弱気な表現を避け、学習と貢献の意思をはっきり書いてください。敬具に読点を付けないでください。',
   },
 };
 
@@ -355,13 +355,26 @@ export async function POST(req: NextRequest) {
       // Use provided name strictly — never fall back to placeholder strings when name exists
       const candidateName = (typeof personalName === 'string' ? personalName.trim() : '') || '';
       const displayName = candidateName || localeInfo.fallbackCandidate;
+      const normalizedGender = normalizeCoverLetterGender(gender || '');
 
-      const toneDesc = localeInfo.toneMap[(tone as 'formal' | 'confident' | 'friendly') || 'formal'] || localeInfo.toneMap.formal;
+      const resolvedTone = (['formal', 'confident', 'friendly'].includes(String(tone))
+        ? tone
+        : 'formal') as 'formal' | 'confident' | 'friendly';
+      let toneDesc = localeInfo.toneMap[resolvedTone] || localeInfo.toneMap.formal;
+      // Gender-aware Spanish/Italian tone adjectives for confident letters.
+      if (resolvedLocale === 'es' && resolvedTone === 'confident' && normalizedGender === 'female') {
+        toneDesc = 'segura, convincente y decidida';
+      } else if (resolvedLocale === 'es' && resolvedTone === 'confident' && normalizedGender === 'male') {
+        toneDesc = 'seguro, convincente y decidido';
+      } else if (resolvedLocale === 'it' && resolvedTone === 'confident' && normalizedGender === 'female') {
+        toneDesc = 'sicura e decisa';
+      } else if (resolvedLocale === 'it' && resolvedTone === 'confident' && normalizedGender === 'male') {
+        toneDesc = 'sicuro e deciso';
+      }
       const variantNote = variant && variant > 0
         ? ' Use a different opening and structure than the standard version — still without inventing facts.'
         : '';
       const genderNote = getGenderInstruction(resolvedLocale, gender || '');
-      const normalizedGender = normalizeCoverLetterGender(gender || '');
 
       const experienceEntries = Array.isArray(params.experienceEntries) ? params.experienceEntries : [];
       const skillsList: string[] = Array.isArray(params.skills) ? params.skills : [];
@@ -402,6 +415,7 @@ export async function POST(req: NextRequest) {
         variantNote,
         genderNote,
         gender: normalizedGender,
+        tone: resolvedTone,
         fallbackRole: localeInfo.fallbackRole,
         fallbackCompany: localeInfo.fallbackCompany,
         factSet,
