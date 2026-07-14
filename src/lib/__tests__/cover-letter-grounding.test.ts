@@ -273,7 +273,12 @@ describe('cover letter grounding validation', () => {
     });
     const text = assembleCoverLetterContent(letter);
     expect(text).not.toContain('أنتمي إليها');
-    expect(text).toContain('أنضم إليها');
+    expect(text).not.toContain('فرصة مدروسة نحو مسيرة مهنية هادفة');
+    expect(text).not.toMatch(/مسيرة مهنية هادفة|فرصة مدروسة/);
+    expect(text).not.toContain('تهتمّني');
+    expect(text).toContain('تهمّني هذه الفرصة');
+    expect(text).toContain('تهمّني هذه الفرصة، ويسعدني معرفة المزيد عن الدور وما يتطلبه.');
+    expect(text).toContain('وأرحب بفرصة التعرف على متطلبات الوظيفة ومناقشة إمكانية الانضمام إلى فريقكم');
     expect(text).not.toMatch(/الدقة|الاحترافية|القدرات التحليلية/);
     expect(letter.signOff).toContain('مع خالص التحية');
     expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
