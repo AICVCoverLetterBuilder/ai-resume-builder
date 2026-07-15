@@ -17,6 +17,7 @@ const HINDI_MASCULINE_SPEAKER: RegExp[] = [
   /रहोँगा|रहूँगा/u,
   /उपलब्ध\s+रहना\s+चाहता/u,
   /आवेदन\s+कर\s+रहा\s+हूँ/u,
+  /खरा\s+उतर/u,
 ];
 
 const HINDI_FEMININE_SPEAKER: RegExp[] = [
@@ -27,6 +28,7 @@ const HINDI_FEMININE_SPEAKER: RegExp[] = [
   /रहूँगी/u,
   /उपलब्ध\s+रहना\s+चाहती/u,
   /आवेदन\s+कर\s+रही\s+हूँ/u,
+  /खरी\s+उतर/u,
 ];
 
 /** Awkward third-person self-reference workarounds (unspecified Hindi). */

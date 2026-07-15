@@ -39,9 +39,11 @@ describe('female + confident language quality polish', () => {
       tone: 'confident',
     });
     const text = assembleCoverLetterContent(letter, 'es');
-    expect(text).toContain('aportar con decisión');
+    expect(text).toContain('contribuir de forma activa y responsable');
+    expect(text).not.toContain('aportar con decisión');
     expect(text).not.toContain('cuando sea apropiado');
-    expect(text).not.toContain('contribuir de forma responsable');
+    expect(text).not.toContain('aprender en el rol');
+    expect(text).not.toContain('El puesto me resulta de verdadero interés');
     expect(text).toMatch(/motivada|preparada|encantada/);
     expect(text.split(/[.!?؟。]/u).filter((s) => s.trim().length > 12).length).toBeGreaterThanOrEqual(3);
     expect(validateCoverLetterGrounding(text, SPARSE, { locale: 'es', gender: 'female' }).valid).toBe(true);
@@ -81,9 +83,10 @@ describe('female + confident language quality polish', () => {
       tone: 'confident',
     });
     const text = assembleCoverLetterContent(letter, 'ar');
-    expect(text).toContain('وأتطلع إلى فرصة الانضمام إلى فريقكم');
+    expect(text).toContain('مستعدة لتولي مسؤوليات الدور');
+    expect(text).toContain('فهم متطلبات الدور والتكيف معها والوفاء بمسؤولياته');
     expect(text).not.toContain('وأرجو أن تتاح لي الفرصة للانضمام');
-    expect(text).toContain('والتكيف مع متطلبات هذا الدور والوفاء بمسؤولياته');
+    expect(text).not.toContain('معرفة المزيد عن الدور والتكيف مع متطلبات هذا الدور');
     expect(text).not.toContain('والعمل على تلبية ما ينتظر من شاغله');
     expect(text).toContain('مستعدة');
     expect(text).not.toMatch(/(?:^|[^\u0600-\u06FF])مستعد(?:[^\u0600-\u06FF]|$)/u);

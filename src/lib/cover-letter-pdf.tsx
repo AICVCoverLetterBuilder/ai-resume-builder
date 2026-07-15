@@ -37,6 +37,10 @@ import {
   sanitizeJapanesePdfWrapMarkers,
   wrapJapanesePdfParagraphLines,
 } from './cover-letter-japanese-pdf-wrap';
+import {
+  usesLatinCoverLetterPdfWordWrap,
+  wrapLatinPdfParagraphLines,
+} from './cover-letter-latin-pdf-wrap';
 
 // ── Font Registration ─────────────────────────────────────────────────────────
 // Fonts are served from /public/fonts/ and embedded into the PDF at render time.
@@ -153,6 +157,11 @@ function makeStyles(fontFamily: string, rtl: boolean) {
       marginBottom: 0,
       textAlign: 'left',
     },
+    /** Single pre-wrapped Latin/Cyrillic line — prevents mid-word letter splits. */
+    latinLine: {
+      marginBottom: 0,
+      textAlign: rtl ? 'right' : 'left',
+    },
   });
 }
 
@@ -197,6 +206,17 @@ export function computeJapaneseCoverLetterPdfLines(
   );
 }
 
+/** Explicit Latin/Cyrillic PDF word lines per paragraph (layout only). */
+export function computeLatinCoverLetterPdfLines(
+  content: string,
+  candidateName: string,
+  locale: string,
+): string[][] {
+  return computeCoverLetterPdfParagraphs(content, candidateName, locale).map((para) =>
+    wrapLatinPdfParagraphLines(para),
+  );
+}
+
 /**
  * React-PDF document for a Cover Letter.
  *
@@ -225,6 +245,10 @@ export function CoverLetterPDFDocument({
   const paragraphs = computeCoverLetterPdfParagraphs(content, candidateName, locale);
   const japaneseParagraphLines =
     locale === 'ja' ? computeJapaneseCoverLetterPdfLines(content, candidateName) : null;
+  const latinParagraphLines =
+    !japaneseParagraphLines && usesLatinCoverLetterPdfWordWrap(locale)
+      ? computeLatinCoverLetterPdfLines(content, candidateName, locale)
+      : null;
 
   return (
     <Document>
@@ -239,7 +263,9 @@ export function CoverLetterPDFDocument({
             correctly without any extra "direction" style (that key isn't
             part of the supported Style API and was a no-op).
             Japanese: each visual line is a wrap={false} Text so textkit cannot
-            insert U+002D at kanji/kana script boundaries. */}
+            insert U+002D at kanji/kana script boundaries.
+            Latin/Cyrillic: explicit word-boundary lines (wrap={false}) so
+            ordinary words cannot split into single-letter fragments. */}
         <View style={styles.body}>
           {japaneseParagraphLines
             ? japaneseParagraphLines.map((lines, i) => (
@@ -251,11 +277,21 @@ export function CoverLetterPDFDocument({
                   ))}
                 </View>
               ))
-            : paragraphs.map((para, i) => (
-                <Text key={i} style={styles.paragraph}>
-                  {para}
-                </Text>
-              ))}
+            : latinParagraphLines
+              ? latinParagraphLines.map((lines, i) => (
+                  <View key={i} style={styles.paragraph} wrap>
+                    {lines.map((line, j) => (
+                      <Text key={j} style={styles.latinLine} wrap={false}>
+                        {line}
+                      </Text>
+                    ))}
+                  </View>
+                ))
+              : paragraphs.map((para, i) => (
+                  <Text key={i} style={styles.paragraph}>
+                    {para}
+                  </Text>
+                ))}
         </View>
 
         {/* NOTE: NO second <Text>{candidateName}</Text> here.

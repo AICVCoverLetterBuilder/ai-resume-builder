@@ -364,6 +364,7 @@ function buildLocaleGroundingRules(
     '- Do NOT claim Java, Python, C++, JavaScript, React, databases, SQL, cloud, AWS, Azure, CRM, Agile, Scrum, OOP, frontend/backend, or similar tools unless present in SOURCE FACTS.',
     '- Do NOT claim extensive experience, proven track record, strong technical expertise, projects successfully led, or efficiency/revenue improvements unless present in SOURCE FACTS.',
     '- Keep company praise brief and specific — avoid exaggerated compliments and repetitive company-name mentions.',
+    '- Do NOT assert as fact that the company is prestigious, a market leader, known for excellence, committed to service quality, focused on customer satisfaction, or oriented toward a particular corporate value unless SOURCE FACTS / vacancy context explicitly support it. Prefer subjective interest in the advertised role or field.',
     `- Use the job title "${role}" faithfully — preserve its meaning and seniority; do NOT upgrade or replace it (e.g. do not change "Salesman" into Sales Executive, Sales Representative, or Sales Manager).`,
     '- If the title is specialized or clearer in English, you may keep it and optionally add a natural translation with the English title in parentheses.',
     isSparse
@@ -398,6 +399,7 @@ function buildLocaleGroundingRules(
       '- Never infer gender from the candidate name or job title.',
       '- Do NOT claim ईमानदारी, लगन, सूक्ष्मता, रचनात्मक सोच, समस्या-समाधान क्षमता, नेतृत्व क्षमता, or मजबूत कार्य-नैतिकता unless in SOURCE FACTS.',
       '- Do NOT claim व्यापक अनुभव, कई वर्षों का अनुभव, वेब अनुप्रयोगों का निर्माण, डेटाबेस प्रबंधन, जटिल तकनीकी समस्याओं का समाधान, परियोजनाओं का नेतृत्व, प्रणाली की कार्यक्षमता में सुधार, प्रोग्रामिंग भाषाओं में विशेषज्ञता, or क्लाउड/Agile अनुभव unless in SOURCE FACTS.',
+      '- Do NOT claim the company is प्रतिष्ठित / a prestigious organization or assert unsupported company values unless present in SOURCE FACTS. Prefer interest in the role and responsible contribution.',
       '- When evidence is sparse, use neutral professional Hindi focused on interest, willingness to learn/contribute, and interview availability.',
       '- Use correct Devanagari punctuation and characters.',
       ...confidentShared,
@@ -437,8 +439,6 @@ function buildLocaleGroundingRules(
       'SPANISH QUALITY RULES:',
       '- Write natural professional Spanish — not a literal English translation.',
       '- Never use hesitant filler such as "contribuir cuando sea apropiado" or "cuando sea apropiado".',
-      '- Prefer assertive but grounded contribution wording (e.g. "aportar con decisión a los objetivos del equipo").',
-      '- Do not reduce a normal confident letter to four very short hesitant sentences — include a meaningful motivation/contribution paragraph without inventing experience.',
       ...(gender === 'female'
         ? ['- For a female applicant use feminine forms such as motivada, preparada, interesada, encantada where agreement applies.']
         : gender === 'male'
@@ -447,9 +447,19 @@ function buildLocaleGroundingRules(
       ...(tone === 'confident'
         ? [
             '- CONFIDENT Spanish: decisive motivation and readiness; still no invented skills, tools, or past employment.',
-            '- Prefer phrasing in the spirit of: "Estoy motivada/motivado para asumir las responsabilidades del puesto, aprender con rapidez y aportar con decisión a los objetivos del equipo." (match GENDER).',
+            '- Prefer: "Estoy preparada/preparado para asumir las responsabilidades del puesto, aprender con rapidez y contribuir de forma activa y responsable al trabajo del equipo." (match GENDER).',
+            '- Do NOT use "aportar con decisión", "aprender en el rol", or "El puesto me resulta de verdadero interés".',
           ]
-        : []),
+        : tone === 'formal'
+          ? [
+              '- FORMAL Spanish: write approximately three meaningful body paragraphs in natural professional Spanish — not a sparse fallback.',
+              '- Prefer grounded formal wording such as "Estoy interesado/interesada en asumir las responsabilidades del puesto, conocer sus procesos y contribuir de manera responsable a los objetivos del equipo" (match GENDER).',
+              '- Do NOT use "aportar con decisión", "aprender en el rol", or "El puesto me resulta de verdadero interés".',
+            ]
+          : [
+              '- FRIENDLY Spanish: warmer but professional; prefer "contribuir de manera activa y responsable al trabajo del equipo".',
+              '- Do NOT use "aportar con decisión", "aprender en el rol", or "El puesto me resulta de verdadero interés".',
+            ]),
       ...confidentShared,
       ...shared,
     ].join('\n');
@@ -463,6 +473,7 @@ function buildLocaleGroundingRules(
       '- Avoid overly tentative junior wording such as "現時点では、このロールを通じて必要な知識と経験を積み重ねていきたい".',
       '- Prefer grounded assertive contribution wording such as "必要な知識を迅速に習得し、業務に真摯に取り組みながら、着実に貢献してまいります" — without inventing prior experience.',
       '- Do NOT claim prior Android testing/product experience unless present in SOURCE FACTS.',
+      '- Do NOT assert unsupported company reputation or values (e.g. "顧客サービスを重視する企業として認識") unless present in SOURCE FACTS. Prefer interest in the role and responsible contribution.',
       '- Preserve Latin names, companies, titles, and legitimate ASCII hyphens unchanged.',
       ...confidentShared,
       ...shared,
@@ -475,6 +486,7 @@ function buildLocaleGroundingRules(
       '- Write natural professional Italian — not a literal translation.',
       '- Never write the tautology "mettere a disposizione la mia disponibilità". Prefer "mettere a disposizione il mio impegno e la mia volontà di contribuire" (or equivalent natural Italian).',
       '- When the greeting addresses a team (Gentile team / Gentili), thank in plural: "Vi ringrazio" — never switch to singular "La ringrazio".',
+      '- Interview-availability sentences must contain a finite verb. Prefer "Sarei lieto/lieta di approfondire la mia candidatura durante un colloquio e rimango a vostra completa disposizione per concordarne la data e le modalità." Never attach a bare fragment ", a vostra completa disposizione…" without a governing verb such as rimango/resto.',
       ...(gender === 'female'
         ? ['- Keep feminine agreement: interessata, entusiasta, motivata, pronta, lieta where applicable.']
         : gender === 'male'
@@ -506,6 +518,7 @@ function buildLocaleGroundingRules(
     return [
       'GERMAN QUALITY RULES:',
       '- Write natural professional German.',
+      '- Greeting must be "Sehr geehrte Damen und Herren," — never "Sehr geehrte Damen und Herren von {company}," or "Sehr geehrtes Bewerbungsteam von {company},". Reference the company naturally in the opening paragraph instead.',
       '- Never write the unnatural collocation "einen ehrlichen Beitrag". Prefer "einen engagierten Beitrag im Team zu leisten" or another grounded professional equivalent.',
       '- Do not force gendered self-reference where German stays naturally gender-neutral.',
       ...confidentShared,
@@ -513,12 +526,68 @@ function buildLocaleGroundingRules(
     ].join('\n');
   }
 
+  if (locale === 'fr') {
+    return [
+      'FRENCH QUALITY RULES:',
+      '- Write natural professional French — not a literal translation.',
+      '- Prefer the collocation "vivement intéressé/intéressée par la possibilité de rejoindre vos équipes" (match GENDER) — not "intéressé à rejoindre".',
+      '- Prefer "mettre mon engagement et ma motivation au service de votre organisation" — avoid weak/outdated "mettre toute ma bonne volonté".',
+      ...(gender === 'female'
+        ? ['- Keep feminine agreement: intéressée, désireuse, motivée, prête, heureuse where applicable.']
+        : gender === 'male'
+          ? ['- Keep masculine agreement: intéressé, désireux, motivé, prêt, heureux where applicable.']
+          : []),
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'hr') {
+    return [
+      'CROATIAN QUALITY RULES:',
+      '- Write natural professional Croatian (Latinica).',
+      '- For unknown/raw multiword job titles, preserve the EXACT supplied title in Croatian quotation marks after poziciju (e.g. poziciju „Saradnik za podršku klijentima logistike“). Do NOT partially decline only the first word (never "Saradnika za podršku…").',
+      '- A natural Croatian paraphrase may appear in parentheses only when helpful; the exact supplied role must remain visible.',
+      '- Do NOT invent company reputation/value claims such as "tvrtku kojoj je stalo do kvalitete usluge" unless present in SOURCE FACTS.',
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'ru') {
+    return [
+      'RUSSIAN QUALITY RULES:',
+      '- Write natural professional Russian.',
+      '- Prefer "буду рад/рада возможности присоединиться к вашей команде" or "был бы рад/была бы рада возможности присоединиться" (match GENDER) — not "рассмотреть возможность присоединиться", which implies hesitation about joining.',
+      '- Do NOT invent company reputation/value claims such as "привлекает меня своей ориентацией на клиентский сервис" unless present in SOURCE FACTS.',
+      ...(gender === 'female'
+        ? ['- Keep feminine agreement: готова, заинтересована, рада where applicable.']
+        : gender === 'male'
+          ? ['- Keep masculine agreement: готов, заинтересован, рад where applicable.']
+          : []),
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
+  if (locale === 'pt-BR') {
+    return [
+      'BRAZILIAN PORTUGUESE QUALITY RULES:',
+      '- Write natural professional Brazilian Portuguese.',
+      '- Preserve the exact supplied job title before any Portuguese explanation.',
+      '- When explaining a customer-support / logistics title, prefer "Colaborador de suporte ao cliente na área de logística" — not "Colaborador de Suporte a Clientes de Logística".',
+      ...(gender === 'female'
+        ? ['- Keep feminine agreement: motivada, disposta where applicable.']
+        : gender === 'male'
+          ? ['- Keep masculine agreement: motivado, disposto where applicable.']
+          : []),
+      ...confidentShared,
+      ...shared,
+    ].join('\n');
+  }
+
   const languageLabel: Partial<Record<Locale, string>> = {
     en: 'English',
-    fr: 'French',
-    hr: 'Croatian',
-    ru: 'Russian',
-    'pt-BR': 'Brazilian Portuguese',
   };
 
   return [

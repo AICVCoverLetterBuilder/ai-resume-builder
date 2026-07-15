@@ -167,27 +167,27 @@ const localeInstructions: Record<Locale, {
   'pt-BR': {
     languageName: 'Portuguese (Brazil)', fallbackCandidate: 'a pessoa candidata', fallbackRole: 'a vaga', fallbackCompany: 'a empresa', coverLetterName: 'Seu nome', closing: 'Atenciosamente',
     toneMap: { formal: 'formal e profissional', confident: 'confiante e assertivo', friendly: 'caloroso e próximo' },
-    nativeQualityNote: 'Escreva como um profissional nativo do Brasil. Use português brasileiro natural. Use verbos de ação fortes somente quando suportados pelos SOURCE FACTS. Nunca invente liderança, ferramentas ou conquistas. Nunca misture inglês no texto salvo siglas padrão.',
+    nativeQualityNote: 'Escreva como um profissional nativo do Brasil. Use português brasileiro natural. Use verbos de ação fortes somente quando suportados pelos SOURCE FACTS. Nunca invente liderança, ferramentas ou conquistas. Preserve o título exato; ao explicar suporte/logística, prefira "Colaborador de suporte ao cliente na área de logística". Nunca misture inglês no texto salvo siglas padrão.',
   },
   de: {
     languageName: 'German', fallbackCandidate: 'die bewerbende Person', fallbackRole: 'die Position', fallbackCompany: 'das Unternehmen', coverLetterName: 'Ihr Name', closing: 'Mit freundlichen Grüßen',
     toneMap: { formal: 'formell und professionell', confident: 'selbstbewusst und überzeugend', friendly: 'warm und persönlich' },
-    nativeQualityNote: 'Schreiben Sie wie ein Muttersprachler im deutschen Geschäftsumfeld. Starke Verben nur bei Beleg in SOURCE FACTS. Niemals Führungs- oder Leistungsversprechen erfinden. Keine erfundenen Tools oder Kennzahlen. Nie „einen ehrlichen Beitrag“ — lieber „einen engagierten Beitrag im Team zu leisten“.',
+    nativeQualityNote: 'Schreiben Sie wie ein Muttersprachler im deutschen Geschäftsumfeld. Anrede: „Sehr geehrte Damen und Herren,“ — nie „von {Firma}“. Starke Verben nur bei Beleg in SOURCE FACTS. Niemals Führungs- oder Leistungsversprechen erfinden. Keine erfundenen Tools oder Kennzahlen. Nie „einen ehrlichen Beitrag“ — lieber „einen engagierten Beitrag im Team zu leisten“.',
   },
   es: {
     languageName: 'Spanish', fallbackCandidate: 'la persona candidata', fallbackRole: 'el puesto', fallbackCompany: 'la empresa', coverLetterName: 'Tu nombre', closing: 'Atentamente',
     toneMap: { formal: 'formal y profesional', confident: 'seguro y convincente', friendly: 'cercano y amable' },
-    nativeQualityNote: 'Escribe como un profesional nativo. Usa verbos de acción solo si están respaldados por SOURCE FACTS. Nunca inventes liderazgo, herramientas ni logros. Evita "cuando sea apropiado"; prefiere motivación decidida y contribución responsable. Para tono confiado, no reduzcas la carta a frases demasiado breves e inseguras.',
+    nativeQualityNote: 'Escribe como un profesional nativo. Usa verbos de acción solo si están respaldados por SOURCE FACTS. Nunca inventes liderazgo, herramientas ni logros. Evita "cuando sea apropiado". En tono formal: carta completa (unos tres párrafos), sin "aportar con decisión" ni "El puesto me resulta de verdadero interés". Para tono confiado, no reduzcas la carta a frases demasiado breves e inseguras.',
   },
   fr: {
     languageName: 'French', fallbackCandidate: 'la personne candidate', fallbackRole: 'le poste', fallbackCompany: "l'entreprise", coverLetterName: 'Votre nom', closing: 'Cordialement',
     toneMap: { formal: 'formel et professionnel', confident: 'sûr de soi et affirmé', friendly: 'chaleureux et accessible' },
-    nativeQualityNote: "Rédigez comme un professionnel francophone natif. N'utilisez des verbes d'action forts que s'ils sont étayés par SOURCE FACTS. N'inventez jamais leadership, outils ou réalisations.",
+    nativeQualityNote: "Rédigez comme un professionnel francophone natif. Préférez « vivement intéressé par la possibilité de rejoindre vos équipes » et « mettre mon engagement et ma motivation au service de votre organisation » — pas « intéressé à rejoindre » ni « mettre toute ma bonne volonté ». N'utilisez des verbes d'action forts que s'ils sont étayés par SOURCE FACTS. N'inventez jamais leadership, outils ou réalisations.",
   },
   it: {
     languageName: 'Italian', fallbackCandidate: 'la persona candidata', fallbackRole: 'il ruolo', fallbackCompany: "l'azienda", coverLetterName: 'Il tuo nome', closing: 'Cordiali saluti',
     toneMap: { formal: 'formale e professionale', confident: 'sicuro e deciso', friendly: 'cordiale e umano' },
-    nativeQualityNote: "Scrivi come un professionista italiano madrelingua. Usa verbi d'azione forti solo se supportati da SOURCE FACTS. Non inventare leadership, strumenti o risultati. Mai \"mettere a disposizione la mia disponibilità\". Con saluto al team usa \"Vi ringrazio\", non \"La ringrazio\".",
+    nativeQualityNote: "Scrivi come un professionista italiano madrelingua. Usa verbi d'azione forti solo se supportati da SOURCE FACTS. Non inventare leadership, strumenti o risultati. Mai \"mettere a disposizione la mia disponibilità\". Con saluto al team usa \"Vi ringrazio\", non \"La ringrazio\". Per la disponibilità al colloquio usa una frase completa con verbo finito (es. \"rimango a vostra completa disposizione\"), mai un frammento staccato.",
   },
   ar: {
     languageName: 'Arabic', fallbackCandidate: 'المرشح', fallbackRole: 'الوظيفة', fallbackCompany: 'الشركة', coverLetterName: 'اسمك', closing: 'مع خالص التحية',
@@ -202,22 +202,22 @@ const localeInstructions: Record<Locale, {
   hr: {
     languageName: 'Croatian', fallbackCandidate: 'kandidat', fallbackRole: 'poziciju', fallbackCompany: 'tvrtku', coverLetterName: 'Vaše ime', closing: 'Srdačan pozdrav',
     toneMap: { formal: 'formalan i profesionalan', confident: 'samouvjeren i odlučan', friendly: 'topao i pristupačan' },
-    nativeQualityNote: 'Piši prirodnim profesionalnim hrvatskim. Jaki glagoli samo ako su podržani u SOURCE FACTS. Ne izmišljaj vodstvo, alate ili postignuća. Latinica.',
+    nativeQualityNote: 'Piši prirodnim profesionalnim hrvatskim. Jaki glagoli samo ako su podržani u SOURCE FACTS. Ne izmišljaj vodstvo, alate ili postignuća. Latinica. Nepoznate/višeriječi nazive uloga zadrži točno u navodnicima (poziciju „Saradnik…“), bez djelomičnog sklanjanja (nikad „Saradnika za…“). Ne izmišljaj ugled tvrtke.',
   },
   ru: {
     languageName: 'Russian', fallbackCandidate: 'кандидат', fallbackRole: 'позицию', fallbackCompany: 'компанию', coverLetterName: 'Ваше имя', closing: 'С уважением',
     toneMap: { formal: 'формальный и профессиональный', confident: 'уверенный и убедительный', friendly: 'доброжелательный и открытый' },
-    nativeQualityNote: 'Пишите естественным деловым русским. Сильные глаголы — только при подтверждении в SOURCE FACTS. Не выдумывайте руководство, инструменты или достижения.',
+    nativeQualityNote: 'Пишите естественным деловым русским. Сильные глаголы — только при подтверждении в SOURCE FACTS. Не выдумывайте руководство, инструменты или достижения. Предпочитайте «буду рад возможности присоединиться», не «рассмотреть возможность присоединиться». Не приписывайте компании неподтверждённую ориентацию/престиж.',
   },
   hi: {
     languageName: 'Hindi', fallbackCandidate: 'उम्मीदवार', fallbackRole: 'पद', fallbackCompany: 'कंपनी', coverLetterName: 'आपका नाम', closing: 'सादर',
     toneMap: { formal: 'औपचारिक और पेशेवर', confident: 'आत्मविश्वासी और प्रभावशाली', friendly: 'सौम्य और आत्मीय' },
-    nativeQualityNote: 'स्वाभाविक पेशेवर हिंदी लिखें। मजबूत क्रियाएँ केवल तभी जब SOURCE FACTS में हों। नेतृत्व, तकनीक या उपलब्धियाँ गढ़ें नहीं।',
+    nativeQualityNote: 'स्वाभाविक पेशेवर हिंदी लिखें। मजबूत क्रियाएँ केवल तभी जब SOURCE FACTS में हों। नेतृत्व, तकनीक या उपलब्धियाँ गढ़ें नहीं। कंपनी को बिना स्रोत के प्रतिष्ठित/मूल्य-केंद्रित न बताएँ।',
   },
   ja: {
     languageName: 'Japanese', fallbackCandidate: '候補者', fallbackRole: '職種', fallbackCompany: '企業', coverLetterName: 'お名前', closing: '敬具',
     toneMap: { formal: 'フォーマルで丁寧', confident: '自信があり説得力のある', friendly: '親しみやすく温かい' },
-    nativeQualityNote: '自然なビジネス日本語で記述してください。強い動詞はSOURCE FACTSがある場合のみ。リーダーシップ・ツール・成果を創作しないでください。自信のあるトーンでは「現時点では…積み重ねていきたい」など過度に弱気な表現を避け、学習と貢献の意思をはっきり書いてください。敬具に読点を付けないでください。',
+    nativeQualityNote: '自然なビジネス日本語で記述してください。強い動詞はSOURCE FACTSがある場合のみ。リーダーシップ・ツール・成果を創作しないでください。企業の評判や価値観（例: 顧客サービスを重視する企業として認識）を根拠なく断言しないでください。自信のあるトーンでは「現時点では…積み重ねていきたい」など過度に弱気な表現を避け、学習と貢献の意思をはっきり書いてください。敬具に読点を付けないでください。',
   },
 };
 

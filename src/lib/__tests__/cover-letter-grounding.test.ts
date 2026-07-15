@@ -277,9 +277,9 @@ describe('cover letter grounding validation', () => {
     });
     const text = assembleCoverLetterContent(letter);
     expect(text).toContain('प्रस्तुत कर रही हूँ');
-    expect(text).toContain('चाहती हूँ');
+    expect(text).toContain('मैं साक्षात्कार के लिए उपलब्ध हूँ');
     expect(text).not.toContain('प्रस्तुत कर रहा हूँ');
-    expect(text).not.toContain('चाहता हूँ');
+    expect(text).not.toContain('उपलब्ध रहना चाहती हूँ');
     expect(text).not.toMatch(/चाहता\/चाहती|रहा\/रही/);
     expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
   });
@@ -300,9 +300,9 @@ describe('cover letter grounding validation', () => {
     });
     const text = assembleCoverLetterContent(letter);
     expect(text).toContain('प्रस्तुत कर रहा हूँ');
-    expect(text).toContain('चाहता हूँ');
+    expect(text).toContain('मैं साक्षात्कार के लिए उपलब्ध हूँ');
     expect(text).not.toContain('प्रस्तुत कर रही हूँ');
-    expect(text).not.toContain('चाहती हूँ');
+    expect(text).not.toContain('उपलब्ध रहना चाहता हूँ');
     expect(text).not.toMatch(/चाहता\/चाहती|रहा\/रही/);
     expect(validateCoverLetterGrounding(text, facts).valid).toBe(true);
   });
@@ -318,8 +318,8 @@ describe('cover letter grounding validation', () => {
       { locale: 'fr', gender: 'male', mustInclude: "Je serais ravi d", mustNotInclude: 'Je serais ravie' },
       { locale: 'it', gender: 'female', mustInclude: 'Sarei lieta', mustNotInclude: 'Sarei lieto' },
       { locale: 'it', gender: 'male', mustInclude: 'Sarei lieto', mustNotInclude: 'Sarei lieta' },
-      { locale: 'es', gender: 'female', mustInclude: 'encantada', mustNotInclude: 'encantado' },
-      { locale: 'es', gender: 'male', mustInclude: 'encantado', mustNotInclude: 'encantada' },
+      { locale: 'es', gender: 'female', mustInclude: 'interesada', mustNotInclude: 'interesado' },
+      { locale: 'es', gender: 'male', mustInclude: 'interesado', mustNotInclude: 'interesada' },
       { locale: 'ru', gender: 'female', mustInclude: 'Готова к собеседованию', mustNotInclude: 'Готов к собеседованию' },
       { locale: 'ru', gender: 'male', mustInclude: 'Готов к собеседованию', mustNotInclude: 'Готова к собеседованию' },
       { locale: 'sr', gender: 'female', mustInclude: 'Dostupna sam', mustNotInclude: 'Dostupan sam' },
@@ -364,7 +364,8 @@ describe('cover letter grounding validation', () => {
     expect(text).not.toContain('تهتمّني');
     expect(text).toContain('تهمّني هذه الفرصة');
     expect(text).toContain('وأتطلع إلى فرصة الانضمام إلى فريقكم');
-    expect(text).toContain('والتكيف مع متطلبات هذا الدور والوفاء بمسؤولياته');
+    expect(text).toContain('فهم متطلبات الدور والتكيف معها والوفاء بمسؤولياته');
+    expect(text).not.toContain('معرفة المزيد عن الدور والتكيف مع متطلبات هذا الدور');
     expect(text).not.toContain('وأرجو أن تتاح لي الفرصة للانضمام');
     expect(text).not.toContain('والعمل على تلبية ما ينتظر من شاغله');
     expect(text).not.toContain('وأرحب بفرصة التعرف على متطلبات الوظيفة ومناقشة إمكانية الانضمام إلى فريقكم');

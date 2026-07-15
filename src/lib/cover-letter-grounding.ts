@@ -20,6 +20,8 @@ import { collectGenderAndSelfCorrectionViolations } from './cover-letter-gender-
  */
 const SERBIAN_GENITIVE_AFTER_POZICIJU: Readonly<Record<string, string>> = {
   'android tester': 'Android testera',
+  vozač: 'vozača',
+  vozac: 'vozača',
 };
 
 function normalizeSerbianRoleKey(role: string): string {
@@ -40,7 +42,10 @@ export function serbianPozicijuRolePhrase(role: string): string {
   if (!trimmed) return 'ovu poziciju';
   const declined = SERBIAN_GENITIVE_AFTER_POZICIJU[normalizeSerbianRoleKey(trimmed)];
   if (declined) return `poziciju ${declined}`;
-  if (looksLikeForeignLatinRole(trimmed)) return `poziciju „${trimmed}“`;
+  // Quote unknown Latin / multiword titles — never partially decline the first word.
+  if (looksLikeForeignLatinRole(trimmed) || /\s/.test(trimmed)) {
+    return `poziciju „${trimmed}“`;
+  }
   return `poziciju ${trimmed}`;
 }
 
@@ -66,6 +71,55 @@ export function serbianUloguRolePhrase(role: string): string {
   if (declined) return `ulogu ${declined}`;
   if (looksLikeForeignLatinRole(trimmed)) return `ulogu „${trimmed}“`;
   return `ulogu ${trimmed}`;
+}
+
+/**
+ * Known Croatian genitive forms after "za poziciju". Empty by default —
+ * unknown/raw titles must stay exact and quoted (never partial decline).
+ */
+const CROATIAN_GENITIVE_AFTER_POZICIJU: Readonly<Record<string, string>> = {};
+
+/**
+ * Phrase after "za " for Croatian applications.
+ * Unknown/raw titles (including multiword) keep the exact supplied spelling in „…“.
+ */
+export function croatianPozicijuRolePhrase(role: string): string {
+  const trimmed = role.trim();
+  if (!trimmed) return 'ovu poziciju';
+  const declined = CROATIAN_GENITIVE_AFTER_POZICIJU[normalizeSerbianRoleKey(trimmed)];
+  if (declined) return `poziciju ${declined}`;
+  return `poziciju „${trimmed}“`;
+}
+
+/** Optional natural Croatian gloss; exact supplied title always remains visible separately. */
+function croatianOptionalRoleGloss(role: string): string {
+  const t = role.trim();
+  if (
+    /^saradnik za podršku klijentima logistike$/i.test(t)
+    || /^saradnik za podršku klijentima u logistici$/i.test(t)
+  ) {
+    return ' (suradnik za podršku korisnicima u logistici)';
+  }
+  return '';
+}
+
+/** Keep exact title; add a natural pt-BR explanation only for known support/logistics wording. */
+export function portugueseBrRoleReference(
+  role: string,
+  gender: CoverLetterGender = 'unspecified',
+): string {
+  const trimmed = role.trim();
+  if (!trimmed) return 'a vaga';
+  if (
+    /^saradnik za podršku klijentima logistike$/i.test(trimmed)
+    || /^saradnik za podršku klijentima u logistici$/i.test(trimmed)
+    || /\b(?:customer|client) support\b.*\blogistic/i.test(trimmed)
+    || /\bsupport(?:o)? (?:ao|a|para) cliente\b.*\blog[ií]stic/i.test(trimmed)
+  ) {
+    const label = gender === 'female' ? 'Colaboradora' : 'Colaborador';
+    return `${trimmed} (${label} de suporte ao cliente na área de logística)`;
+  }
+  return trimmed;
 }
 
 function serbianConfidentFallbackParts(
@@ -120,6 +174,8 @@ export type GroundingViolationKind =
   | 'experience_strength_claim'
   | 'meta_or_system_wording'
   | 'personality_claim'
+  | 'unsupported_company_claim'
+  | 'unsupported_company_attribute'
   | 'role_inferred_duty'
   | 'gender_placeholder'
   | 'self_correction_leak'
@@ -339,15 +395,46 @@ const META_WORDING_PATTERNS: RegExp[] = [
 const PERSONALITY_CLAIM_PATTERNS: RegExp[] = [
   /\b(attention to detail|detail[- ]oriented|professionalism|honesty|dedication|reliability|reliable|creativity|creative|analytical thinking|strong communication|teamwork|team player|adaptability|adaptable|determination|passion(?:ate)?|discipline|problem[- ]solving|leadership potential|strong work ethic|work ethic|organizational ability|responsibility|precision|integrity|proven ability|make a positive impact|contribute meaningfully|highly motivated|self[- ]motivated)\b/iu,
   /\b(zuverlässig|engagiert|detailorientiert|Einsatzbereitschaft|gewissenhaft|teamfähig|belastbar)\b/iu,
-  /\b(responsable|proactiv[oa]|detallista|puntual|honesto|creativ[oa]|comprometid[oa])\b/iu,
+  /\b((?:soy|persona)\s+responsable|proactiv[oa]|detallista|puntual|honesto|creativ[oa]|comprometid[oa])\b/iu,
   /\b(rigoureux|rigoureuse|dynamique|proactif|proactive|autonome|créatif|créative|sérieux|sérieuse)\b/iu,
-  /\b(preciso|precisa|affidabile|determinato|determinata|puntuale|creativo|creativa|responsabile)\b/iu,
+  /\b(preciso|precisa|affidabile|determinato|determinata|puntuale|creativo|creativa|(?:sono|persona)\s+responsabile)\b/iu,
   /(?:الدقة|الاحترافية|الالتزام|الإبداع|القدرة التحليلية|روح الفريق|التفاني|تحمل المسؤولية|المهنية)/u,
   /\b(posvećenost|odgovornost|preciznost|pouzdanost|kreativnost|analitičk\w*|timski igrač)\b/iu,
   /(?:ответственн\w*|внимательн\w*|целеустремлённ\w*|целеустремленн\w*|исполнительн\w*|дисциплинированн\w*|креативн\w*)/iu,
   /\b(dedicad[oa]|proativ[oa]|atent[oa] aos detalhes|pontual|confiável|criativ[oa]|organizado)\b/iu,
   /(?:ईमानदारी|लगन|सूक्ष्मता|रचनात्मक सोच|समस्या[- ]?समाधान|नेतृत्व क्षमता|कार्य[- ]?नैतिकता|विवरण पर ध्यान|पेशेवरिया)/u,
   /(?:誠実|正確性|注意力|責任感|創造性|協調性|勤勉|几帳面|丁寧な仕事)/u,
+];
+
+/**
+ * Factual company reputation / value assertions that require vacancy/company evidence.
+ * Subjective interest in the role or field is allowed.
+ */
+const UNSUPPORTED_COMPANY_CLAIM_PATTERNS: RegExp[] = [
+  /\b(?:prestigious|renowned|world[- ]class|industry[- ]leading)\b.{0,40}\b(?:company|organization|organisation|employer)\b/iu,
+  /\b(?:company|organization|organisation|employer)\b.{0,40}\b(?:prestigious|renowned|world[- ]class|industry[- ]leading|recognized as a leader)\b/iu,
+  /\b(?:known for|recognized for|renowned for)\b.{0,60}\b(?:excellence|quality|innovation|service|customer satisfaction)\b/iu,
+  /\b(?:committed to|focused on|oriented toward)\b.{0,40}\b(?:service quality|customer satisfaction|customer service excellence)\b/iu,
+  /\ba team that takes client support seriously\b/iu,
+  /\b(?:'s|’s)\s+work in this space\b/iu,
+  /(?:एक प्रतिष्ठित (?:संगठन|कंपनी|संस्था)|प्रतिष्ठित संगठन है)/u,
+  /(?:顧客サービスを重視する企業として認識|顧客との信頼関係を(?:重視|大切にする)企業として認識|として認識しており)/u,
+  /\btvrtk\w*\s+kojoj\s+je\s+stalo\s+do\s+(?:kvalitete|kvalitete?\s+usluge|zadovoljstva)\b/iu,
+  /\b(?:prestižn\w*\s+tvrtk|poznat\w*\s+po\s+kvalitet|orijentiran\w*\s+na\s+(?:kvalitet|zadovoljstvo))\b/iu,
+  /\bprocese i standarde koje\b.{0,40}\bprimenjuje\b/iu,
+  /\bkompaniju koja ozbiljno pristupa\b/iu,
+  /привлекает меня своей ориентацией/iu,
+  /ориентацией на клиентск(?:ий|ого) сервис/iu,
+  /клиентский сервис занимает важное место/iu,
+  /(?:престижн\w*\s+(?:компан|организац)|признанн\w*\s+лидер\w*)/iu,
+  /\bper la sua presenza nel mercato\b/iu,
+  /\bper le opportunità di sviluppo che offre\b/iu,
+  /\bun team orientato al servizio e alla soddisfazione del cliente\b/iu,
+  /\bambiente dinamico\b/iu,
+  /\b(?:entreprise prestigieuse|réputée pour|reconnu(?:e)? comme un leader|axée sur la satisfaction client)\b/iu,
+  /\b(?:empresa prestigiosa|reconocida como líder|comprometida con la calidad del servicio|orientada a la satisfacción)\b/iu,
+  /\b(?:azienda prestigiosa|riconosciuta come leader|attenta alla qualità del servizio)\b/iu,
+  /\b(?:empresa prestigiada|reconhecida como líder|comprometida com a qualidade do serviço)\b/iu,
 ];
 
 /** Duties/domains often wrongly inferred from job titles when no evidence exists. */
@@ -445,6 +532,12 @@ export function validateCoverLetterGrounding(
     violations.push({ kind: 'personality_claim', matched });
   }
 
+  // Unsupported factual company reputation / value / process claims
+  for (const matched of collectMatches(text, UNSUPPORTED_COMPANY_CLAIM_PATTERNS)) {
+    if (isFactSupportedLiteral(matched, factSet)) continue;
+    violations.push({ kind: 'unsupported_company_attribute', matched });
+  }
+
   // Role-title-inferred duties (unless literally present in source facts)
   for (const matched of collectMatches(text, ROLE_INFERRED_DUTY_PATTERNS)) {
     if (isFactSupportedLiteral(matched, factSet)) continue;
@@ -516,88 +609,177 @@ function fallbackParts(
 ): FallbackParts {
   const extraSentence = extras.length ? extras.join(' ') : '';
   const confident = tone === 'confident';
+  const friendly = tone === 'friendly';
+  const formal = tone === 'formal' || (!confident && !friendly);
+  const ptRole = portugueseBrRoleReference(role, gender);
+  const hrPoziciju = croatianPozicijuRolePhrase(role);
+  const hrGloss = croatianOptionalRoleGloss(role);
+  const srPoz = serbianPozicijuRolePhrase(role);
+
+  const esFormal: FallbackParts = {
+    greeting: `Estimado equipo de selección de ${company}:`,
+    paragraph1: gender === 'female'
+      ? `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Estoy interesada en asumir las responsabilidades del puesto, conocer sus procesos y contribuir de manera responsable a los objetivos del equipo.`
+      : gender === 'male'
+        ? `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Estoy interesado en asumir las responsabilidades del puesto, conocer sus procesos y contribuir de manera responsable a los objetivos del equipo.`
+        : `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me interesa asumir las responsabilidades del puesto, conocer sus procesos y contribuir de manera responsable a los objetivos del equipo.`,
+    paragraph2: extraSentence
+      || `La oportunidad de desempeñar el puesto de ${role} en ${company} representa para mí una vía relevante de desarrollo profesional. Deseo conocer con mayor detalle las expectativas del rol y aportar de forma constante en las tareas propias del puesto.`,
+    paragraph3: 'Quedo a su disposición para una entrevista en la que pueda presentar con claridad los motivos de mi candidatura.',
+    closing: 'Gracias por su tiempo y consideración.',
+    signOff: 'Atentamente',
+  };
+  const esConfident: FallbackParts = {
+    greeting: esFormal.greeting,
+    paragraph1: gender === 'female'
+      ? `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Estoy preparada para asumir las responsabilidades del puesto, aprender con rapidez y contribuir de forma activa y responsable al trabajo del equipo.`
+      : gender === 'male'
+        ? `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Estoy preparado para asumir las responsabilidades del puesto, aprender con rapidez y contribuir de forma activa y responsable al trabajo del equipo.`
+        : `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Deseo asumir las responsabilidades del puesto, aprender con rapidez y contribuir de forma activa y responsable al trabajo del equipo.`,
+    paragraph2: extraSentence
+      || `El puesto de ${role} en ${company} supone para mí un paso relevante de desarrollo profesional. Me interesa comprender las expectativas del rol y aportar con constancia en las tareas del puesto.`,
+    paragraph3: 'Quedo a su disposición para una entrevista en la que pueda presentar los motivos de mi candidatura.',
+    closing: 'Gracias por su tiempo y consideración.',
+    signOff: 'Atentamente',
+  };
+  const esFriendly: FallbackParts = {
+    greeting: esFormal.greeting,
+    paragraph1: gender === 'female'
+      ? `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me gustaría unirme a su equipo, aprender en el día a día del rol y contribuir de manera activa y responsable al trabajo del equipo.`
+      : gender === 'male'
+        ? `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me gustaría unirme a su equipo, aprender en el día a día del rol y contribuir de manera activa y responsable al trabajo del equipo.`
+        : `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me gustaría unirme a su equipo, aprender en el día a día del rol y contribuir de manera activa y responsable al trabajo del equipo.`,
+    paragraph2: extraSentence
+      || `Me interesa el puesto de ${role} en ${company} como oportunidad de crecimiento y de aportar en un entorno colaborativo.`,
+    paragraph3: gender === 'female'
+      ? 'Estaría encantada de conversar sobre mi candidatura. Quedo a disposición para una entrevista.'
+      : gender === 'male'
+        ? 'Estaría encantado de conversar sobre mi candidatura. Quedo a disposición para una entrevista.'
+        : 'Agradecería poder conversar sobre la candidatura. Quedo a disposición para una entrevista.',
+    closing: 'Gracias por su tiempo y consideración.',
+    signOff: 'Atentamente',
+  };
+
   const templates: Record<Locale, FallbackParts> = {
     en: {
       greeting: `Dear Hiring Team at ${company},`,
-      paragraph1: `I am writing to express my interest in the ${role} position at ${company}. I would welcome the opportunity to join your team, learn within the role, and contribute where appropriate.`,
+      paragraph1: confident
+        ? `I am writing to apply for the ${role} position at ${company}. I am prepared to take on the role's responsibilities, learn required processes promptly, and contribute with clear focus.`
+        : friendly
+          ? `I am writing to express my interest in the ${role} position at ${company}. I would welcome the chance to join your team, learn within the role, and support shared goals.`
+          : `I am writing to express my interest in the ${role} position at ${company}. I would welcome the opportunity to learn the role's responsibilities and contribute where I can add value.`,
       paragraph2: extraSentence
-        || 'The position is of genuine interest to me, and I would be pleased to discuss my application and learn more about your expectations for the role.',
+        || (confident
+          ? `The ${role} role interests me as a concrete next step. I am ready to learn the day-to-day expectations and contribute actively to the team's work.`
+          : friendly
+            ? `I am drawn to the ${role} opportunity at ${company} and would enjoy learning the expectations while supporting the team in a collaborative way.`
+            : `I am interested in the ${role} role at ${company} and in learning the processes of the position so I can contribute responsibly.`),
       paragraph3: 'I am available for an interview at your convenience.',
       closing: 'Thank you for your time and consideration.',
       signOff: 'Sincerely',
     },
     de: {
-      greeting: `Sehr geehrtes Bewerbungsteam von ${company},`,
+      greeting: 'Sehr geehrte Damen und Herren,',
       paragraph1: `hiermit bekunde ich mein Interesse an der Position als ${role} bei ${company}. Ich würde mich freuen, Ihr Team kennenzulernen, in der Rolle dazuzulernen und nach Möglichkeit beizutragen.`,
       paragraph2: extraSentence
         || (confident
-          ? 'Die ausgeschriebene Aufgabe spricht mich an. Gerne erläutere ich meine Bewerbung und bringe mich mit einem engagierten Beitrag im Team ein.'
-          : 'Die ausgeschriebene Aufgabe spricht mich an. Gerne erläutere ich meine Bewerbung und erfahre mehr über Ihre Erwartungen an die Rolle.'),
+          ? 'Die ausgeschriebene Aufgabe spricht mich an. Diese Chance möchte ich entschlossen nutzen und mich mit einem engagierten Beitrag im Team einbringen.'
+          : friendly
+            ? 'Die ausgeschriebene Aufgabe spricht mich an. Gerne erläutere ich meine Bewerbung und erfahre mehr darüber, wie ich das Team unterstützen kann.'
+            : 'Die ausgeschriebene Aufgabe spricht mich an. Gerne erläutere ich meine Bewerbung und erfahre mehr über Ihre Erwartungen an die Rolle.'),
       paragraph3: 'Für ein Gespräch stehe ich gerne zur Verfügung.',
       closing: 'Vielen Dank für Ihre Zeit und Ihre Berücksichtigung.',
       signOff: 'Mit freundlichen Grüßen',
     },
-    es: {
-      greeting: `Estimado equipo de selección de ${company}:`,
+    es: confident ? esConfident : friendly ? esFriendly : esFormal,
+    fr: {
+      greeting: 'Madame, Monsieur,',
       paragraph1: gender === 'female'
         ? (confident
-          ? `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Estoy motivada para asumir las responsabilidades del puesto, aprender con rapidez y aportar con decisión a los objetivos del equipo.`
-          : `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Deseo unirme a su equipo, aprender en el rol y aportar con decisión a los objetivos del equipo.`)
+          ? `Je vous écris pour le poste de ${role} chez ${company}. Je suis motivée pour assumer les responsabilités du poste, me familiariser rapidement avec vos processus et contribuer de manière active et responsable.`
+          : friendly
+            ? `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. J'aimerais rejoindre votre équipe, apprendre avec vous et contribuer de manière active et responsable.`
+            : `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. Je suis vivement intéressée par la possibilité de rejoindre vos équipes, de me familiariser avec les responsabilités du poste et de mettre mon engagement et ma motivation au service de votre organisation.`)
         : gender === 'male'
           ? (confident
-            ? `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Estoy motivado para asumir las responsabilidades del puesto, aprender con rapidez y aportar con decisión a los objetivos del equipo.`
-            : `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Deseo unirme a su equipo, aprender en el rol y aportar con decisión a los objetivos del equipo.`)
-          : `Le escribo para expresar mi interés en el puesto de ${role} en ${company}. Me gustaría unirme a su equipo, aprender en el rol y aportar con decisión a los objetivos del equipo.`,
+            ? `Je vous écris pour le poste de ${role} chez ${company}. Je suis motivé pour assumer les responsabilités du poste, me familiariser rapidement avec vos processus et contribuer de manière active et responsable.`
+            : friendly
+              ? `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. J'aimerais rejoindre votre équipe, apprendre avec vous et contribuer de manière active et responsable.`
+              : `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. Je suis vivement intéressé par la possibilité de rejoindre vos équipes, de me familiariser avec les responsabilités du poste et de mettre mon engagement et ma motivation au service de votre organisation.`)
+          : `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. Ce poste représente une possibilité de rejoindre vos équipes et de contribuer de manière active et responsable.`,
       paragraph2: extraSentence
         || (gender === 'female'
-          ? (confident
-            ? 'El puesto me resulta de verdadero interés. Estoy preparada para profundizar en las expectativas del rol y estaría encantada de conversar sobre cómo puedo aportar con compromiso al equipo.'
-            : 'El puesto me resulta de verdadero interés. Estaría encantada de hablar sobre mi candidatura y conocer mejor sus expectativas para el rol.')
+          ? (friendly
+            ? `${company} suscite mon intérêt. Je serais ravie d'échanger sur ma candidature et sur la manière dont je peux soutenir l'équipe.`
+            : `Le poste de ${role} chez ${company} représente pour moi une étape pertinente de développement professionnel. Je serais ravie d'échanger sur ma candidature.`)
           : gender === 'male'
-            ? (confident
-              ? 'El puesto me resulta de verdadero interés. Estoy preparado para profundizar en las expectativas del rol y estaría encantado de conversar sobre cómo puedo aportar con compromiso al equipo.'
-              : 'El puesto me resulta de verdadero interés. Estaría encantado de hablar sobre mi candidatura y conocer mejor sus expectativas para el rol.')
-            : 'El puesto me resulta de verdadero interés. Agradecería poder hablar sobre mi candidatura y conocer mejor sus expectativas para el rol.'),
-      paragraph3: 'Quedo a disposición para una entrevista.',
-      closing: 'Gracias por su tiempo y consideración.',
-      signOff: 'Atentamente',
-    },
-    fr: {
-      greeting: `Madame, Monsieur, équipe de recrutement de ${company},`,
-      paragraph1: `Je vous écris pour vous faire part de mon intérêt pour le poste de ${role} chez ${company}. J'aimerais rejoindre votre équipe, apprendre dans ce rôle et contribuer lorsque cela sera utile.`,
-      paragraph2: extraSentence
-        || (gender === 'female'
-          ? `Ce poste m'intéresse réellement. Je serais ravie d'échanger sur ma candidature et d'en savoir davantage sur vos attentes.`
-          : gender === 'male'
-            ? `Ce poste m'intéresse réellement. Je serais ravi d'échanger sur ma candidature et d'en savoir davantage sur vos attentes.`
-            : `Ce poste m'intéresse réellement. Je souhaite échanger sur ma candidature et en savoir davantage sur vos attentes.`),
-      paragraph3: `Je reste disponible pour un entretien à votre convenance.`,
-      closing: `Je vous remercie pour votre temps et votre considération.`,
+            ? (friendly
+              ? `${company} suscite mon intérêt. Je serais ravi d'échanger sur ma candidature et sur la manière dont je peux soutenir l'équipe.`
+              : `Le poste de ${role} chez ${company} représente pour moi une étape pertinente de développement professionnel. Je serais ravi d'échanger sur ma candidature.`)
+            : `Le poste de ${role} chez ${company} représente une étape pertinente de développement professionnel.`),
+      paragraph3: 'Je reste disponible pour un entretien à votre convenance.',
+      closing: "Je vous remercie de l'attention portée à ma candidature.",
       signOff: 'Cordialement',
     },
     it: {
       greeting: `Gentile team di selezione di ${company},`,
-      paragraph1: `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Vorrei unirmi al vostro team, imparare nel ruolo e contribuire ove opportuno.`,
+      paragraph1: friendly
+        ? (gender === 'female'
+          ? `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Sarei lieta di entrare a far parte del vostro team, imparare nel ruolo e contribuire ove opportuno.`
+          : gender === 'male'
+            ? `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Sarei lieto di entrare a far parte del vostro team, imparare nel ruolo e contribuire ove opportuno.`
+            : `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Vorrei entrare a far parte del vostro team, imparare nel ruolo e contribuire ove opportuno.`)
+        : confident
+          ? (gender === 'female'
+            ? `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Sono motivata ad assumere le responsabilità del ruolo, apprendere rapidamente i processi necessari e contribuire in modo attivo e responsabile.`
+            : gender === 'male'
+              ? `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Sono motivato ad assumere le responsabilità del ruolo, apprendere rapidamente i processi necessari e contribuire in modo attivo e responsabile.`
+              : `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Desidero assumere le responsabilità del ruolo, apprendere rapidamente i processi necessari e contribuire in modo attivo e responsabile.`)
+          : `scrivo per esprimere il mio interesse per la posizione di ${role} presso ${company}. Vorrei unirmi al vostro team, imparare nel ruolo e contribuire ove opportuno.`,
       paragraph2: extraSentence
         || (gender === 'female'
-          ? `La posizione è di concreto interesse. Sarei lieta di approfondire la candidatura, mettendo a disposizione il mio impegno e la mia volontà di contribuire e conoscendo meglio le vostre aspettative.`
+          ? `La posizione di ${role} mi interessa come concreto passo di crescita professionale. Sarei lieta di approfondire la candidatura, mettendo a disposizione il mio impegno e la mia volontà di contribuire.`
           : gender === 'male'
-            ? `La posizione è di concreto interesse. Sarei lieto di approfondire la candidatura, mettendo a disposizione il mio impegno e la mia volontà di contribuire e conoscendo meglio le vostre aspettative.`
-            : `La posizione è di concreto interesse. Vorrei approfondire la candidatura e conoscere meglio le vostre aspettative.`),
-      paragraph3: `Resto a disposizione per un colloquio.`,
+            ? `La posizione di ${role} mi interessa come concreto passo di crescita professionale. Sarei lieto di approfondire la candidatura, mettendo a disposizione il mio impegno e la mia volontà di contribuire.`
+            : `La posizione di ${role} mi interessa come concreto passo di crescita professionale. Vorrei approfondire la candidatura e conoscere meglio le vostre aspettative.`),
+      paragraph3: gender === 'female'
+        ? 'Sarei lieta di approfondire la mia candidatura durante un colloquio e rimango a vostra completa disposizione per concordarne la data e le modalità.'
+        : gender === 'male'
+          ? 'Sarei lieto di approfondire la mia candidatura durante un colloquio e rimango a vostra completa disposizione per concordarne la data e le modalità.'
+          : 'Vorrei approfondire la mia candidatura durante un colloquio e resto a vostra completa disposizione per concordarne la data e le modalità.',
       closing: `Vi ringrazio per il vostro tempo e la vostra considerazione.`,
       signOff: 'Cordiali saluti',
     },
     ar: {
       greeting: `إلى فريق التوظيف المحترم في شركة ${company}،`,
-      paragraph1: `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}، وأتطلع إلى فرصة الانضمام إلى فريقكم والتعرف على متطلبات الوظيفة.`,
+      paragraph1: confident
+        ? (gender === 'female'
+          ? `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}. أنا مستعدة لتولي مسؤوليات الدور، وتعلّم العمليات المطلوبة، والمساهمة بفعالية ومسؤولية.`
+          : gender === 'male'
+            ? `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}. أنا مستعد لتولي مسؤوليات الدور، وتعلّم العمليات المطلوبة، والمساهمة بفعالية ومسؤولية.`
+            : `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}. أتطلع لتولي مسؤوليات الدور، وتعلّم العمليات المطلوبة، والمساهمة بفعالية ومسؤولية.`)
+        : friendly
+          ? `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}، ويسعدني فرصة الانضمام إلى فريقكم والتعلّم معكم والمساهمة في العمل اليومي.`
+          : `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}، وأتطلع إلى فرصة الانضمام إلى فريقكم والتعرف على متطلبات الوظيفة.`,
       paragraph2: extraSentence
-        || 'تهمّني هذه الفرصة، ويسعدني معرفة المزيد عن الدور والتكيف مع متطلبات هذا الدور والوفاء بمسؤولياته.',
+        || (confident
+          ? `يهمّني العمل في هذا المجال، وأسعى لفهم متطلبات الدور والتكيف معها والوفاء بمسؤولياته.`
+          : friendly
+            ? `تجذبني فرصة العمل مع فريقكم في دور ${role}، وأرحب بمناقشة طلبتي بأسلوب تعاوني.`
+            : `تهمّني هذه الفرصة، وأسعى لفهم متطلبات الدور والتكيف معها والوفاء بمسؤولياته.`),
       paragraph3: gender === 'unspecified'
         ? 'يسعدني حضور مقابلة في الوقت الذي يناسبكم.'
         : gender === 'female'
-          ? 'أنا مستعدة لمناقشة طلبي ومعرفة المزيد عن توقعاتكم لهذا المنصب.'
-          : 'يشرفني مناقشة طلبي ومعرفة المزيد عن توقعاتكم لهذا المنصب.',
+          ? (confident
+            ? 'أنا مستعدة لمناقشة طلبي في الوقت الذي يناسبكم.'
+            : friendly
+              ? 'يسعدني التحدث معكم حول طلبي، وأنا متاحة في الوقت المناسب لكم.'
+              : 'أنا مستعدة لمناقشة طلبي في الوقت الذي يناسبكم.')
+          : (confident
+            ? 'يشرفني مناقشة طلبي في الوقت الذي يناسبكم.'
+            : friendly
+              ? 'يسعدني التحدث معكم حول طلبي، وأنا متاح في الوقت المناسب لكم.'
+              : 'يشرفني مناقشة طلبي في الوقت الذي يناسبكم.'),
       closing: 'شكرًا لوقتكم واهتمامكم.',
       signOff: 'مع خالص التحية',
     },
@@ -610,9 +792,17 @@ function fallbackParts(
         }
       : {
           greeting: `Poštovani tim za zapošljavanje u kompaniji ${company},`,
-          paragraph1: `ovim putem se prijavljujem za ${serbianPozicijuRolePhrase(role)} u kompaniji ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gde je to primereno.`,
+          paragraph1: gender === 'female'
+            ? `Ovim putem se prijavljujem za ${srPoz} u kompaniji ${company}. ${friendly ? 'Radujem se prilici da se priključim vašem timu i doprinesem zajedničkim ciljevima.' : 'Želim da se posvetim zahtevima ove uloge, usvojim potrebna znanja i odgovorno doprinesem radu tima.'}`
+            : gender === 'male'
+              ? `Ovim putem se prijavljujem za ${srPoz} u kompaniji ${company}. ${friendly ? 'Radujem se prilici da se priključim vašem timu i doprinesem zajedničkim ciljevima.' : 'Želim da se posvetim zahtevima ove uloge, usvojim potrebna znanja i odgovorno doprinesem radu tima.'}`
+              : `Ovim putem se prijavljujem za ${srPoz} u kompaniji ${company}. Želim da usvojim zahteve uloge i odgovorno doprinesem radu tima.`,
           paragraph2: extraSentence
-            || 'Pozicija je od stvarnog interesa. Bilo bi mi drago da razgovaramo o prijavi i saznam više o vašim očekivanjima.',
+            || (gender === 'female'
+              ? `Kompanija ${company} privukla mi je pažnju kao okruženje u kojem bih želela da učim i razvijam se u ovoj ulozi.`
+              : gender === 'male'
+                ? `Kompanija ${company} privukla mi je pažnju kao okruženje u kojem bih želeo da učim i razvijam se u ovoj ulozi.`
+                : `Kompanija ${company} predstavlja zanimljivo okruženje za učenje i razvoj u ovoj ulozi.`),
           paragraph3: gender === 'female'
             ? 'Dostupna sam za razgovor u terminu koji vama odgovara.'
             : gender === 'male'
@@ -623,9 +813,19 @@ function fallbackParts(
         },
     hr: {
       greeting: `Poštovani tim za zapošljavanje u tvrtki ${company},`,
-      paragraph1: `ovim putem se prijavljujem za poziciju ${role} u tvrtki ${company}. Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim gdje je to primjereno.`,
+      paragraph1: `Ovim putem se prijavljujem za ${hrPoziciju}${hrGloss} u tvrtki ${company}. ${
+        confident
+          ? 'Želim se posvetiti zahtjevima uloge, brzo usvojiti potrebna znanja i odgovorno doprinijeti radu tima.'
+          : friendly
+            ? 'Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim zajedničkim ciljevima.'
+            : 'Želim usvojiti očekivanja uloge i odgovorno doprinijeti radu tima.'
+      }`,
       paragraph2: extraSentence
-        || 'Pozicija je od stvarnog interesa. Bilo bi mi drago da razgovaramo o prijavi i saznam više o vašim očekivanjima.',
+        || (gender === 'female'
+          ? `Pozicija ${role} zanima me kao smislen sljedeći korak. Spremna sam odgovorno pristupiti očekivanjima uloge.`
+          : gender === 'male'
+            ? `Pozicija ${role} zanima me kao smislen sljedeći korak. Spreman sam odgovorno pristupiti očekivanjima uloge.`
+            : `Pozicija ${role} zanima me kao smislen sljedeći korak profesionalnog razvoja.`),
       paragraph3: gender === 'female'
         ? 'Dostupna sam za razgovor u terminu koji vama odgovara.'
         : gender === 'male'
@@ -636,9 +836,13 @@ function fallbackParts(
     },
     ru: {
       greeting: `Уважаемая команда по подбору персонала ${company},`,
-      paragraph1: `пишу, чтобы выразить интерес к позиции ${role} в компании ${company}. Хотелось бы присоединиться к вашей команде, учиться в этой роли и вносить вклад там, где это уместно.`,
+      paragraph1: gender === 'female'
+        ? `Обращаюсь к вам, чтобы выразить интерес к позиции ${role} в компании ${company}. Буду рада возможности присоединиться к вашей команде, учиться в этой роли и вносить полезный вклад.`
+        : gender === 'male'
+          ? `Обращаюсь к вам, чтобы выразить интерес к позиции ${role} в компании ${company}. Буду рад возможности присоединиться к вашей команде, учиться в этой роли и вносить полезный вклад.`
+          : `Обращаюсь к вам, чтобы выразить интерес к позиции ${role} в компании ${company}. Интересна возможность присоединиться к вашей команде, учиться в этой роли и вносить полезный вклад.`,
       paragraph2: extraSentence
-        || 'Вакансия представляет интерес. С удовольствием обсужу заявление и узнаю больше о ваших ожиданиях к роли.',
+        || 'Вакансия представляет интерес как конкретный шаг профессионального развития. С удовольствием обсужу заявление и ожидания к роли.',
       paragraph3: gender === 'female'
         ? 'Готова к собеседованию в удобное для вас время.'
         : gender === 'male'
@@ -649,29 +853,43 @@ function fallbackParts(
     },
     'pt-BR': {
       greeting: `Prezada equipe de recrutamento da ${company},`,
-      paragraph1: `escrevo para expressar meu interesse na vaga de ${role} na ${company}. Gostaria de me juntar à equipe, aprender no cargo e contribuir quando for apropriado.`,
+      paragraph1: gender === 'female'
+        ? `escrevo para expressar meu interesse na vaga de ${ptRole} na ${company}. Estou motivada para assumir as responsabilidades do cargo, aprender os processos necessários e contribuir de forma ativa.`
+        : gender === 'male'
+          ? `escrevo para expressar meu interesse na vaga de ${ptRole} na ${company}. Estou motivado para assumir as responsabilidades do cargo, aprender os processos necessários e contribuir de forma ativa.`
+          : `escrevo para expressar meu interesse na vaga de ${ptRole} na ${company}. Gostaria de assumir as responsabilidades do cargo, aprender os processos necessários e contribuir de forma ativa.`,
       paragraph2: extraSentence
-        || 'A vaga é de real interesse. Será um prazer conversar sobre a candidatura e conhecer melhor as expectativas para o cargo.',
-      paragraph3: 'Fico à disposição para uma entrevista.',
+        || `Vejo nessa posição uma oportunidade concreta para desenvolver minhas capacidades e agregar valor à organização. Acredito que a ${company} possa representar um ambiente propício ao meu desenvolvimento profissional.`,
+      paragraph3: gender === 'female'
+        ? 'Fico à disposição para uma entrevista e estou disposta a conversar sobre a candidatura.'
+        : gender === 'male'
+          ? 'Fico à disposição para uma entrevista e estou disposto a conversar sobre a candidatura.'
+          : 'Fico à disposição para uma entrevista.',
       closing: 'Agradeço pelo tempo e pela consideração.',
       signOff: 'Atenciosamente',
     },
     hi: {
       greeting: `${company} की सम्मानित भर्ती टीम को,`,
       paragraph1: gender === 'female'
-        ? `मैं ${company} में ${role} पद के लिए आवेदन प्रस्तुत कर रही हूँ। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`
+        ? `मैं ${company} में ${role} पद के लिए आवेदन प्रस्तुत कर रही हूँ। इस भूमिका की जिम्मेदारियों को समझने, आवश्यक प्रक्रियाएँ सीखने और टीम के उद्देश्यों में योगदान देने के लिए मैं प्रतिबद्ध हूँ।`
         : gender === 'male'
-          ? `मैं ${company} में ${role} पद के लिए आवेदन प्रस्तुत कर रहा हूँ। टीम से जुड़कर इस भूमिका में सीखने तथा जहाँ उपयुक्त हो योगदान देने में रुचि है।`
-          : `${company} में ${role} पद के लिए यह आवेदन प्रस्तुत है। इस अवसर में रुचि है और पद की अपेक्षाओं के बारे में अधिक जानने का अवसर स्वागतयोग्य होगा।`,
+          ? `मैं ${company} में ${role} पद के लिए आवेदन प्रस्तुत कर रहा हूँ। इस भूमिका की जिम्मेदारियों को समझने, आवश्यक प्रक्रियाएँ सीखने और टीम के उद्देश्यों में योगदान देने के लिए मैं प्रतिबद्ध हूँ।`
+          : `${company} में ${role} पद के लिए यह आवेदन प्रस्तुत है। भूमिका की जिम्मेदारियों को समझने तथा अपेक्षाओं को पूरा करने के लिए प्रतिबद्ध हूँ।`,
       paragraph2: extraSentence
-        || (gender === 'unspecified'
-          ? 'टीम से जुड़ने और भूमिका को समझते हुए जहाँ उपयुक्त हो योगदान देने के अवसर का स्वागत है।'
-          : 'यह पद रुचिकर लगता है। आवेदन पर चर्चा करने और पद की अपेक्षाओं को बेहतर समझने का अवसर स्वागतयोग्य होगा।'),
-      paragraph3: gender === 'female'
-        ? 'साक्षात्कार के लिए मैं उपलब्ध रहना चाहती हूँ।'
-        : gender === 'male'
-          ? 'साक्षात्कार के लिए मैं उपलब्ध रहना चाहता हूँ।'
-          : 'साक्षात्कार के माध्यम से आवेदन पर चर्चा करने का अवसर भी स्वागतयोग्य होगा।',
+        || (friendly
+          ? (gender === 'female'
+            ? `${company} में ${role} की भूमिका मुझे सार्थक अगला कदम लगती है। मैं अपेक्षाओं पर खरी उतरने के लिए टीम के साथ सहयोगी ढंग से योगदान देना चाहती हूँ।`
+            : gender === 'male'
+              ? `${company} में ${role} की भूमिका मुझे सार्थक अगला कदम लगता है। मैं अपेक्षाओं पर खरा उतरने के लिए टीम के साथ सहयोगी ढंग से योगदान देना चाहता हूँ।`
+              : `${company} में ${role} की भूमिका एक सार्थक अगला कदम है। अपेक्षाओं को पूरा करने के लिए टीम के साथ योगदान देने का अवसर स्वागतयोग्य है।`)
+          : (gender === 'female'
+            ? `इस पद में रुचि का आधार दी गई भूमिका की प्रकृति है। मैं अपेक्षाओं पर खरी उतरने हेतु जिम्मेदारियों को समझना और योगदान देना चाहती हूँ।`
+            : gender === 'male'
+              ? `इस पद में रुचि का आधार दी गई भूमिका की प्रकृति है। मैं अपेक्षाओं पर खरा उतरने हेतु जिम्मेदारियों को समझना और योगदान देना चाहता हूँ।`
+              : `इस पद में रुचि का आधार दी गई भूमिका की प्रकृति है। अपेक्षाओं को पूरा करने के लिए प्रतिबद्ध हूँ।`)),
+      paragraph3: gender === 'unspecified'
+        ? 'साक्षात्कार के माध्यम से आवेदन पर चर्चा करने का अवसर स्वागतयोग्य होगा।'
+        : 'मैं साक्षात्कार के लिए उपलब्ध हूँ।',
       closing: 'समय और विचार के लिए धन्यवाद।',
       signOff: 'सादर',
     },
@@ -679,16 +897,21 @@ function fallbackParts(
       greeting: `${company}採用ご担当者様`,
       paragraph1: confident
         ? `${company}の${role}職に応募いたします。必要な知識を迅速に習得し、業務に真摯に取り組みながら、着実に貢献してまいります。`
-        : `${company}の${role}職に応募いたします。チームの一員として学びながら、適切な場面で貢献できれば幸いです。`,
+        : friendly
+          ? `${company}の${role}職に応募いたします。チームの一員として前向きに学び、日々の業務に協力して貢献できれば幸いです。`
+          : `${company}の${role}職に応募いたします。役割の責任を理解し、必要な過程を学びながら責任ある貢献を果たしたいと考えております。`,
       paragraph2: extraSentence
         || (confident
-          ? '本職に関心があり、応募内容について伺い、役割への期待を理解したうえで責任ある貢献を果たしたいと考えております。'
-          : '本職に関心があり、応募内容について伺い、役割への期待を知る機会をいただけますと幸いです。'),
+          ? '物流および顧客サポートの業務に関心を持っており、この分野で責任を持って貢献したいと考えております。'
+          : friendly
+            ? 'この分野の業務に関心があり、チームと関わりながら役割への期待を理解していきたいと考えております。'
+            : '物流および顧客サポートの業務に関心を持っており、応募内容について伺い、役割への期待を理解したうえで貢献したいと考えております。'),
       paragraph3: '面接の機会をいただけますと幸いです。',
       closing: 'ご多忙のところ恐縮ですが、ご検討のほど何卒よろしくお願いいたします。',
       signOff: '敬具',
     },
   };
+  void formal;
   return templates[locale] ?? templates.en;
 }
 
