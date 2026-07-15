@@ -3,6 +3,7 @@ import { regionSettings, templateInfo } from './types';
 import { translations, type Locale } from './i18n/translations';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
+import { localizeCvLanguageLevel } from './cv-language-levels';
 import { createAtsStandardPdfTemplate } from './ats-standard-pdf-template';
 import { createContemporaryBoldPdfTemplate } from './contemporary-bold-pdf-template';
 import { createElegantFormalPdfTemplate } from './elegant-formal-pdf-template';
@@ -6305,18 +6306,55 @@ export async function exportToDOCX(
   //   • skills + languages: side-by-side 2-column grid
   else if (cfg.customLayout === 'creative-artistic') {
     const headerBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
+    const caIsRtl = isRtlLocale(locale);
+    const caAlign = caIsRtl ? AlignmentType.RIGHT : AlignmentType.LEFT;
+    const caRuns = (text: string, opts: { bold?: boolean; size?: number; color?: string } = {}) => {
+      if (!caIsRtl) {
+        return [new TextRun({ text, bold: opts.bold, size: opts.size, color: opts.color })];
+      }
+      return formatArabicDocxLineForRtlParagraph(text).map((run) => new TextRun({
+        text: run.text,
+        bold: opts.bold,
+        size: opts.size,
+        color: opts.color,
+        rightToLeft: run.rightToLeft,
+      }));
+    };
 
     // ── Header ──────────────────────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const caHeaderInfo: any[] = [
-      new Paragraph({ children: [new TextRun({ text: cvData.personal.fullName || 'Your Name', bold: true, size: 52, color: 'FFFFFF' })], spacing: { after: 30 } }),
-      new Paragraph({ children: [new TextRun({ text: cvData.personal.jobTitle || '', size: 26, color: 'DDD6FE' })], spacing: { after: 50 } }),
+      new Paragraph({
+        alignment: caAlign,
+        bidirectional: caIsRtl,
+        children: caRuns(cvData.personal.fullName || 'Your Name', { bold: true, size: 52, color: 'FFFFFF' }),
+        spacing: { after: 30 },
+      }),
+      new Paragraph({
+        alignment: caAlign,
+        bidirectional: caIsRtl,
+        children: caRuns(cvData.personal.jobTitle || '', { size: 26, color: 'DDD6FE' }),
+        spacing: { after: 50 },
+      }),
     ];
     if (contacts.length > 0) {
-      caHeaderInfo.push(new Paragraph({ children: contacts.map((c, i) => new TextRun({ text: (i > 0 ? '    ' : '') + c, size: 18, color: 'DDD6FE' })), spacing: { after: 0 } }));
+      caHeaderInfo.push(new Paragraph({
+        alignment: caAlign,
+        bidirectional: caIsRtl,
+        children: caRuns(contacts.join('    '), { size: 18, color: 'DDD6FE' }),
+        spacing: { after: 0 },
+      }));
     }
     if (cvData.personal.fathersName) {
-      caHeaderInfo.push(new Paragraph({ children: [new TextRun({ text: `${t.cv.fathersName}: `, bold: true, size: 18, color: 'DDD6FE' }), new TextRun({ text: cvData.personal.fathersName, size: 18, color: 'DDD6FE' })], spacing: { after: 0 } }));
+      caHeaderInfo.push(new Paragraph({
+        alignment: caAlign,
+        bidirectional: caIsRtl,
+        children: [
+          ...caRuns(`${t.cv.fathersName}: `, { bold: true, size: 18, color: 'DDD6FE' }),
+          ...caRuns(cvData.personal.fathersName, { size: 18, color: 'DDD6FE' }),
+        ],
+        spacing: { after: 0 },
+      }));
     }
 
     if (photoBytes) {
@@ -6349,7 +6387,9 @@ export async function exportToDOCX(
     // across many sections/entries. No section is removed or redesigned.
     function caHeading(text: string, options: { keepNext?: boolean } = {}) {
       return new Paragraph({
-        children: [new TextRun({ text, bold: true, size: 22, color: '7C3AED' })],
+        alignment: caAlign,
+        bidirectional: caIsRtl,
+        children: caRuns(text, { bold: true, size: 22, color: '7C3AED' }),
         spacing: { before: 180, after: 80 },
         keepNext: options.keepNext ?? false,
       });
@@ -6362,7 +6402,12 @@ export async function exportToDOCX(
     // of a page, separated from its own paragraph.
     if (cvData.summary) {
       children.push(caHeading(t.cv.summary, { keepNext: true }));
-      children.push(new Paragraph({ children: [new TextRun({ text: cvData.summary, size: 22, color: '374151' })], spacing: { after: 200 } }));
+      children.push(new Paragraph({
+        alignment: caAlign,
+        bidirectional: caIsRtl,
+        children: caRuns(cvData.summary, { size: 22, color: '374151' }),
+        spacing: { after: 200 },
+      }));
     }
 
     // ── Experience: left purple border accent per entry ──────────────────────
@@ -6388,27 +6433,37 @@ export async function exportToDOCX(
           ? allLines.slice(options.lineSlice.start, options.lineSlice.end)
           : allLines;
         const hasDescription = lines.length > 0;
+        const sideBorder = caIsRtl
+          ? { right: { style: BorderStyle.SINGLE, size: 14, color: 'DDD6FE' } }
+          : caVioletLeftParagraphBorder;
+        const sideIndent = caIsRtl ? { right: 160 } : caExperienceIndent;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const paras: any[] = [
           new Paragraph({
-            children: [new TextRun({ text: exp.position, bold: true, size: 22, color: '111827' })],
+            alignment: caAlign,
+            bidirectional: caIsRtl,
+            children: caRuns(exp.position, { bold: true, size: 22, color: '111827' }),
             spacing: { before: options.isFirst ? 0 : 60, after: 20 },
-            border: caVioletLeftParagraphBorder,
-            indent: caExperienceIndent,
+            border: sideBorder,
+            indent: sideIndent,
             keepNext: true,
           }),
           new Paragraph({
-            children: [new TextRun({ text: metaLine, size: 18, color: '8B5CF6' })],
+            alignment: caAlign,
+            bidirectional: caIsRtl,
+            children: caRuns(metaLine, { size: 18, color: '8B5CF6' }),
             spacing: { after: 40 },
-            indent: caExperienceIndent,
+            indent: sideIndent,
             keepNext: hasDescription,
           }),
         ];
         lines.forEach((line, lineIndex) => {
           paras.push(new Paragraph({
-            children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
+            alignment: caAlign,
+            bidirectional: caIsRtl,
+            children: caRuns(line, { size: 20, color: '4B5563' }),
             spacing: { after: 30 },
-            indent: caExperienceIndent,
+            indent: sideIndent,
             keepNext: lineIndex === 0 && lines.length > 1,
           }));
         });
@@ -6441,9 +6496,11 @@ export async function exportToDOCX(
       if (firstRemainderLines.length > 0) {
         firstRemainderLines.forEach((line, lineIndex) => {
           children.push(new Paragraph({
-            children: [new TextRun({ text: line, size: 20, color: '4B5563' })],
+            alignment: caAlign,
+            bidirectional: caIsRtl,
+            children: caRuns(line, { size: 20, color: '4B5563' }),
             spacing: { after: 30 },
-            indent: caExperienceIndent,
+            indent: caIsRtl ? { right: 160 } : caExperienceIndent,
             keepNext: lineIndex < firstRemainderLines.length - 1,
           }));
         });
@@ -6467,14 +6524,37 @@ export async function exportToDOCX(
         // dates that the PDF route already shows via the same [school, dates] meta
         // line pattern (see creative-artistic-pdf-template.ts's `dateRange`/metaLine).
         const metaLine = [edu.school, eduDates].filter(Boolean).join('  |  ');
-        children.push(new Paragraph({ children: [new TextRun({ text: edu.degree, bold: true, size: 22, color: '111827' })], spacing: { after: 20 } }));
-        children.push(new Paragraph({ children: [new TextRun({ text: metaLine, size: 20, color: '6B7280' })], spacing: { after: edu.description ? 30 : 60 } }));
-        if (edu.description) children.push(new Paragraph({ children: [new TextRun({ text: edu.description, size: 20, color: '374151' })], spacing: { after: 80 } }));
+        children.push(new Paragraph({
+          alignment: caAlign,
+          bidirectional: caIsRtl,
+          children: caRuns(edu.degree, { bold: true, size: 22, color: '111827' }),
+          spacing: { after: 20 },
+        }));
+        children.push(new Paragraph({
+          alignment: caAlign,
+          bidirectional: caIsRtl,
+          children: caRuns(metaLine, { size: 20, color: '6B7280' }),
+          spacing: { after: edu.description ? 30 : 60 },
+        }));
+        if (edu.description) {
+          children.push(new Paragraph({
+            alignment: caAlign,
+            bidirectional: caIsRtl,
+            children: caRuns(edu.description, { size: 20, color: '374151' }),
+            spacing: { after: 80 },
+          }));
+        }
       }
     }
 
     // ── Skills + Languages: side-by-side 2-column ───────────────────────────
-    const caLocalizedSkills = cvData.skills.map((s) => getLocalizedCvSkillName(s, locale));
+    // Japanese/CJK skill tokens: insert word joiners so Word cannot orphan a final kana.
+    const caSkillToken = (label: string) => (
+      /[\u3040-\u30ff\u3400-\u9fff]/.test(label)
+        ? label.replace(/([\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff])/gu, '$1\u2060').replace(/\u2060$/u, '')
+        : label
+    );
+    const caLocalizedSkills = cvData.skills.map((s) => caSkillToken(getLocalizedCvSkillName(s, locale)));
     const caHasSkills = caLocalizedSkills.length > 0;
     const caHasLangs = cvData.languages.length > 0;
     if (caHasSkills || caHasLangs) {
@@ -6485,31 +6565,44 @@ export async function exportToDOCX(
 
       if (caHasSkills) {
         caSkillsCol.push(caHeading(t.cv.skills));
-        // Pill-style: bullet-separated list (closest DOCX approximation to rounded tags)
+        // Pill-style: bullet-separated list. Keep each skill label in its own run
+        // (separators separate) so PDF/DOCX can share identical label text, and so
+        // CJK skills can use word-joiners without contaminating neighboring tokens.
         caSkillsCol.push(new Paragraph({
-          children: caLocalizedSkills.map((s, i) => new TextRun({ text: (i > 0 ? '  • ' : '') + s, size: 20, color: '6D28D9' })),
+          alignment: caAlign,
+          bidirectional: caIsRtl,
+          children: caLocalizedSkills.flatMap((s, i) => [
+            ...(i > 0 ? caRuns('  • ', { size: 20, color: '6D28D9' }) : []),
+            ...caRuns(s, { size: 20, color: '6D28D9' }),
+          ]),
           spacing: { after: 80 },
         }));
       }
       if (caHasLangs) {
         caLangsCol.push(caHeading(t.cv.languages));
         for (const lang of cvData.languages) {
+          const levelLabel = localizeCvLanguageLevel(lang.level, locale);
           caLangsCol.push(new Paragraph({
+            alignment: caAlign,
+            bidirectional: caIsRtl,
             children: [
-              new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 20, color: '111827' }),
-              new TextRun({ text: `  –  ${lang.level}`, size: 20, color: '6B7280' }),
+              ...caRuns(`${getLocalizedCvLanguageName(lang.name, locale)}`, { bold: true, size: 20, color: '111827' }),
+              ...caRuns(`  –  ${levelLabel}`, { size: 20, color: '6B7280' }),
             ],
             spacing: { after: 40 },
           }));
         }
       }
 
+      // Arabic: mirror Skills (right) / Languages (left) relative to LTR layout.
+      const caLeftCol = caIsRtl ? caLangsCol : caSkillsCol;
+      const caRightCol = caIsRtl ? caSkillsCol : caLangsCol;
       children.push(new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
         borders: noBorders,
         rows: [new TableRow({ children: [
-          new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 200 }, children: caSkillsCol.length ? caSkillsCol : [new Paragraph({ text: '' })] }),
-          new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 200, right: 0 }, children: caLangsCol.length ? caLangsCol : [new Paragraph({ text: '' })] }),
+          new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 200 }, children: caLeftCol.length ? caLeftCol : [new Paragraph({ text: '' })] }),
+          new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, verticalAlign: VerticalAlign.TOP, borders: noBorders, margins: { top: 0, bottom: 0, left: 200, right: 0 }, children: caRightCol.length ? caRightCol : [new Paragraph({ text: '' })] }),
         ]})],
       }));
     }
@@ -6518,7 +6611,12 @@ export async function exportToDOCX(
     if (cvData.certifications.length > 0) {
       children.push(caHeading(t.cv.certifications));
       for (const cert of cvData.certifications) {
-        children.push(new Paragraph({ children: [new TextRun({ text: '• ', size: 22, color: '7C3AED' }), new TextRun({ text: cert, size: 22, color: '374151' })], spacing: { after: 40 } }));
+        children.push(new Paragraph({
+          alignment: caAlign,
+          bidirectional: caIsRtl,
+          children: caRuns(`• ${cert}`, { size: 22, color: '374151' }),
+          spacing: { after: 40 },
+        }));
       }
     }
   }
@@ -9030,6 +9128,9 @@ export async function exportToDOCX(
                   : (templateId ?? cvData.templateId) === 'creative-artistic'
                     ? { margin: { top: 620, right: 620, bottom: 620, left: 620 } }
                     : { margin: { top: 720, right: 720, bottom: 720, left: 720 } },
+          ...((templateId ?? cvData.templateId) === 'creative-artistic' && isRtlLocale(locale)
+            ? { bidi: true }
+            : {}),
         },
         children,
       },
@@ -13758,7 +13859,7 @@ function caDrawSkillsLanguagesBlock(ctx: CreativeArtisticDirectPdfContext, cv: C
     for (const lang of cv.languages) {
       caDrawText(
         ctx,
-        `${getLocalizedCvLanguageName(lang.name, ctx.locale)} - ${lang.level}`,
+        `${getLocalizedCvLanguageName(lang.name, ctx.locale)} - ${localizeCvLanguageLevel(lang.level, ctx.locale)}`,
         langsX,
         langY,
         langStyle,

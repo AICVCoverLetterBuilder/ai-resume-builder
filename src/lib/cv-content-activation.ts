@@ -1,0 +1,238 @@
+/**
+ * Fail-closed activation for CV AI text: validate → one repair → deterministic fallback.
+ */
+import type { Locale } from './i18n/translations';
+import type { CoverLetterGender } from './cover-letter-gender';
+import {
+  bulletsForExperience,
+  deterministicBulletsFromCanonical,
+  type CvCanonicalFactSet,
+} from './cv-canonical-facts';
+import {
+  formatCvFidelityViolationsForPrompt,
+  validateLocalizedExperienceBullets,
+  validateLocalizedSummary,
+  validateSummaryCompleteness,
+  type CvFidelityViolation,
+} from './cv-semantic-fidelity';
+
+export type CvContentActivation = {
+  content: string;
+  status: 'passed' | 'repaired' | 'fallback';
+  repairAttempted: boolean;
+  fallbackUsed: boolean;
+  violations: CvFidelityViolation[];
+};
+
+export function buildBulletRepairPrompt(
+  locale: Locale | string,
+  violations: CvFidelityViolation[],
+  previous: string,
+  canonicalBullets: string,
+): string {
+  return [
+    'CV BULLET FIDELITY REPAIR REQUIRED.',
+    `Rewrite the experience bullets in ${locale}.`,
+    'Keep the SAME bullet count and the SAME duties as SOURCE BULLETS.',
+    'Do NOT invent allergy checks, muddling, syrups, wastage, inventory shortages, kitchen staff, evening shifts, or other unsupported duties.',
+    'Output ONLY bullet lines starting with "•".',
+    'Unsupported issues:',
+    formatCvFidelityViolationsForPrompt(violations),
+    'SOURCE BULLETS:',
+    canonicalBullets,
+    'Previous invalid output (do not copy invented duties):',
+    previous.slice(0, 2500),
+  ].join('\n');
+}
+
+export function buildSummaryRepairPrompt(
+  locale: Locale | string,
+  violations: CvFidelityViolation[],
+  previous: string,
+  sourceFacts: string,
+): string {
+  return [
+    'CV SUMMARY FIDELITY REPAIR REQUIRED.',
+    `Rewrite a COMPLETE professional summary in ${locale}.`,
+    'Finish every sentence. Do not truncate mid-word.',
+    'Use only SOURCE FACTS. Do not invent new duties, techniques, shifts, or achievements.',
+    'Keep one consistent perspective (first person OR third person, not mixed).',
+    'Unsupported issues:',
+    formatCvFidelityViolationsForPrompt(violations),
+    'SOURCE FACTS:',
+    sourceFacts.slice(0, 3000),
+    'Previous invalid summary:',
+    previous.slice(0, 2000),
+  ].join('\n');
+}
+
+export async function activateCvExperienceBullets(options: {
+  locale: Locale;
+  gender?: CoverLetterGender | string;
+  experienceIndex: number;
+  factSet: CvCanonicalFactSet;
+  candidate: string;
+  repair?: (prompt: string) => Promise<string>;
+}): Promise<CvContentActivation> {
+  const canonical = bulletsForExperience(options.factSet, options.experienceIndex);
+  const fallback = deterministicBulletsFromCanonical(canonical);
+  const first = validateLocalizedExperienceBullets(options.candidate, options.factSet, {
+    locale: options.locale,
+    gender: options.gender,
+    experienceIndex: options.experienceIndex,
+    stage: 'initial',
+  });
+  if (first.valid && options.candidate.trim()) {
+    return {
+      content: options.candidate.trim(),
+      status: 'passed',
+      repairAttempted: false,
+      fallbackUsed: false,
+      violations: [],
+    };
+  }
+
+  if (options.repair && canonical.length > 0) {
+    try {
+      const repaired = await options.repair(
+        buildBulletRepairPrompt(
+          options.locale,
+          first.violations,
+          options.candidate,
+          canonical.map((b) => `- [${b.id}] ${b.value}`).join('\n'),
+        ),
+      );
+      const recheck = validateLocalizedExperienceBullets(repaired, options.factSet, {
+        locale: options.locale,
+        gender: options.gender,
+        experienceIndex: options.experienceIndex,
+        stage: 'repair',
+      });
+      if (recheck.valid && repaired.trim()) {
+        return {
+          content: repaired.trim(),
+          status: 'repaired',
+          repairAttempted: true,
+          fallbackUsed: false,
+          violations: first.violations,
+        };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  return {
+    content: fallback || options.candidate.trim(),
+    status: 'fallback',
+    repairAttempted: Boolean(options.repair),
+    fallbackUsed: true,
+    violations: first.violations,
+  };
+}
+
+/** Deterministic complete summary from canonical facts only (never invents duties). */
+export function deterministicSummaryFromCanonical(
+  factSet: CvCanonicalFactSet,
+  fallbackHint = '',
+): string {
+  const role = factSet.facts.find((f) => f.type === 'job_title')?.value
+    || factSet.facts.find((f) => f.type === 'role')?.value
+    || '';
+  const bullets = factSet.facts
+    .filter((f) => f.type === 'experience_bullet')
+    .slice(0, 3)
+    .map((f) => f.value.replace(/[.。۔।]\s*$/u, ''));
+  const skills = factSet.facts
+    .filter((f) => f.type === 'skill')
+    .slice(0, 4)
+    .map((f) => f.value);
+  const safeHint = fallbackHint.trim();
+  const hintUsable = safeHint
+    && validateSummaryCompleteness(safeHint).valid
+    && !UNSUPPORTED_HINT_MARKERS.test(safeHint);
+  const parts = [
+    role ? `${role}.` : '',
+    bullets.length ? `${bullets.join('; ')}.` : '',
+    skills.length ? `${skills.join(', ')}.` : '',
+    hintUsable ? safeHint : '',
+  ].filter(Boolean);
+  let text = parts.join(' ').replace(/\s+/g, ' ').trim();
+  if (!text) text = 'Professional with relevant experience.';
+  if (!/[.!?…।۔]\s*$/u.test(text)) text = `${text}.`;
+  return text;
+}
+
+const UNSUPPORTED_HINT_MARKERS = /करते\s*हु\s*$|allerg|muddling|wastage/iu;
+
+export async function activateCvSummary(options: {
+  locale: Locale;
+  gender?: CoverLetterGender | string;
+  factSet: CvCanonicalFactSet;
+  candidate: string;
+  sourceFactsText: string;
+  repair?: (prompt: string) => Promise<string>;
+  fallbackSummary: string;
+}): Promise<CvContentActivation> {
+  const first = validateLocalizedSummary(options.candidate, options.factSet, {
+    locale: options.locale,
+    gender: options.gender,
+    stage: 'initial',
+  });
+  if (first.valid && options.candidate.trim()) {
+    return {
+      content: options.candidate.trim(),
+      status: 'passed',
+      repairAttempted: false,
+      fallbackUsed: false,
+      violations: [],
+    };
+  }
+
+  if (options.repair) {
+    try {
+      const repaired = await options.repair(
+        buildSummaryRepairPrompt(
+          options.locale,
+          first.violations,
+          options.candidate,
+          options.sourceFactsText,
+        ),
+      );
+      const recheck = validateLocalizedSummary(repaired, options.factSet, {
+        locale: options.locale,
+        gender: options.gender,
+        stage: 'repair',
+      });
+      if (recheck.valid && repaired.trim()) {
+        return {
+          content: repaired.trim(),
+          status: 'repaired',
+          repairAttempted: true,
+          fallbackUsed: false,
+          violations: first.violations,
+        };
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  const hinted = options.fallbackSummary.trim();
+  const hintedOk = hinted && validateSummaryCompleteness(hinted, { locale: options.locale }).valid
+    && validateLocalizedSummary(hinted, options.factSet, {
+      locale: options.locale,
+      gender: options.gender,
+      stage: 'fallback',
+    }).valid;
+  const fallback = hintedOk
+    ? hinted
+    : deterministicSummaryFromCanonical(options.factSet, hinted);
+  return {
+    content: fallback,
+    status: 'fallback',
+    repairAttempted: Boolean(options.repair),
+    fallbackUsed: true,
+    violations: first.violations,
+  };
+}

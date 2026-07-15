@@ -14,6 +14,14 @@ import {
 import { buildCoverLetterFactSet } from '@/lib/cover-letter-facts';
 import { COVER_LETTER_GROUNDING_BACKEND_REVISION } from '@/lib/cover-letter-grounding-diagnostics';
 import { getCoverLetterGenderInstruction, normalizeCoverLetterGender } from '@/lib/cover-letter-gender';
+import {
+  buildFactSetFromExperienceDescription,
+  buildCvCanonicalFactSet,
+  formatCanonicalBulletsForPrompt,
+  bulletsForExperience,
+  deterministicBulletsFromCanonical,
+} from '@/lib/cv-canonical-facts';
+import { activateCvExperienceBullets, activateCvSummary } from '@/lib/cv-content-activation';
 
 // ── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -550,6 +558,9 @@ Rules:
 - Focus on genuine strengths: professional background, core skills, key strengths, work style, and the value the person brings to a team.
 - Write in a natural, human tone — professional but warm, not robotic.
 - For mobile readability, break the text into 2–3 short paragraphs separated by a blank line.
+- FACT LOCK: Use ONLY duties/skills/languages present in the CV data. Never invent allergy checks, muddling, syrups, wastage, kitchen staff, evening shifts, inventory shortages, opening/closing procedures, or other unsupported claims.
+- COMPLETENESS: Always finish every sentence. Never stop mid-word, mid-participle, or after a dangling conjunction (especially in Hindi Devanagari).
+- PERSPECTIVE: Use one consistent perspective (first person OR third person) throughout — never mix.
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
         messages: [
           {
@@ -565,7 +576,7 @@ Structure (3–5 sentences, 180–250 words total):
 4. Work style, approach, or how they collaborate.
 5. (Optional) Career focus or professional goal.
 
-Plain text only. No quotation marks anywhere. Output the summary only — nothing else.${genderNote}`,
+Plain text only. No quotation marks anywhere. Finish the last sentence completely before stopping. Output the summary only — nothing else.${genderNote}`,
           },
         ],
       });
@@ -575,8 +586,70 @@ Plain text only. No quotation marks anywhere. Output the summary only — nothin
         .trim()
         .replace(/^[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+/, '')
         .replace(/[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/, '');
+
+      const factSet = buildCvCanonicalFactSet({
+        personal: { fullName: '', email: '', phone: '', address: '', jobTitle: jobTitle || '' },
+        summary: '',
+        experience: entries.map((e, idx) => ({
+          id: `e${idx}`,
+          company: e.company || '',
+          position: e.position || '',
+          startDate: e.startDate || '',
+          endDate: e.endDate === 'present' ? '' : (e.endDate || ''),
+          isPresent: e.endDate === 'present',
+          description: e.description || '',
+        })),
+        education: eduList.map((e, idx) => ({
+          id: `ed${idx}`,
+          school: e.school || '',
+          degree: e.degree || '',
+          startDate: '',
+          endDate: '',
+          description: '',
+        })),
+        skills: skillsList,
+        certifications: [],
+        languages: langsList.map((l) => ({ name: l.name || '', level: l.level || '' })),
+      });
+      const sourceFactsText = [experienceBlock, skillsBlock, langsBlock, eduBlock].join('\n');
+      const groundedFallback = [
+        jobTitle ? `${jobTitle}.` : '',
+        entries[0]?.description ? entries[0].description.split('\n')[0] : '',
+        skillsList.length ? skillsList.slice(0, 5).join(', ') + '.' : '',
+      ].filter(Boolean).join(' ').trim()
+        || 'Professional with relevant experience, ready to contribute responsibly.';
+
+      const activated = await activateCvSummary({
+        locale: resolvedLocale,
+        gender: gender || '',
+        factSet,
+        candidate: cleanedText,
+        sourceFactsText,
+        fallbackSummary: groundedFallback,
+        repair: async (prompt) => {
+          const repaired = await callWithRetry({
+            model: MODEL,
+            max_tokens: 600,
+            temperature: 0.3,
+            stream: false,
+            system: `You rewrite complete CV summaries in ${localeInfo.languageName}. Finish every sentence. Never invent duties. Plain text only.`,
+            messages: [{ role: 'user', content: prompt }],
+          });
+          return getText(repaired)
+            .trim()
+            .replace(/^[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+/, '')
+            .replace(/[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/, '');
+        },
+      });
+
       if (_freeUserId) recordFreeAction(_freeUserId, 'summary');
-      return jsonResponse({ result: cleanedText });
+      return jsonResponse({
+        result: activated.content,
+        cvFidelityStatus: activated.status,
+        repairAttempted: activated.repairAttempted,
+        fallbackUsed: activated.fallbackUsed,
+        violationCount: activated.violations.length,
+      });
     }
 
     if (action === 'rewrite') {
@@ -594,7 +667,7 @@ Plain text only. No quotation marks anywhere. Output the summary only — nothin
 
       const response = await callWithRetry({
         model: MODEL,
-        max_tokens: 180,
+        max_tokens: 400,
         temperature: 0.65,
         stream: false,
         system: `You are a professional CV editor. Rewrite text per the given instructions in ${localeInfo.languageName}.
@@ -602,11 +675,12 @@ Rules:
 - Output only the rewritten text, nothing else.
 - Do NOT wrap output in quotation marks of any kind.
 - Keep the meaning intact while improving quality.
-- Do NOT invent numbers, metrics, or percentages that are not in the original text.
+- Do NOT invent numbers, metrics, percentages, or duties that are not in the original text.
 - Do NOT use vague invented metrics like "by 44%" or "11 hours" unless they appear in the original.
 - Focus on responsibilities, collaboration, and qualitative improvements — not fabricated numbers.
 - Sound natural and human, not templated or robotic.
-- Use 3–4 concise bullet points or short sentences. Avoid long, repetitive, or overly corporate phrasing.
+- Always finish every sentence completely — never truncate mid-word.
+- Keep one consistent perspective (first OR third person).
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
         messages: [
           {
@@ -616,121 +690,181 @@ Rules:
         ],
       });
 
-      return jsonResponse({ result: getText(response) || text });
+      const rewritten = getText(response) || text;
+      const rewriteFactSet = buildCvCanonicalFactSet({
+        personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '' },
+        summary: text,
+        experience: [{
+          id: 'rewrite-0',
+          company: '',
+          position: '',
+          startDate: '',
+          endDate: '',
+          isPresent: false,
+          description: text,
+        }],
+        education: [],
+        skills: [],
+        certifications: [],
+        languages: [],
+      });
+      const activated = await activateCvSummary({
+        locale: resolvedLocale,
+        gender: gender || '',
+        factSet: rewriteFactSet,
+        candidate: rewritten,
+        sourceFactsText: text,
+        fallbackSummary: text,
+        repair: async (prompt) => {
+          const repaired = await callWithRetry({
+            model: MODEL,
+            max_tokens: 400,
+            temperature: 0.25,
+            stream: false,
+            system: `You repair CV text in ${localeInfo.languageName}. Keep the same facts. Finish every sentence. Plain text only.`,
+            messages: [{ role: 'user', content: prompt }],
+          });
+          return getText(repaired).trim();
+        },
+      });
+
+      return jsonResponse({
+        result: activated.content || text,
+        cvFidelityStatus: activated.status,
+        repairAttempted: activated.repairAttempted,
+        fallbackUsed: activated.fallbackUsed,
+        violationCount: activated.violations.length,
+      });
     }
 
     if (action === 'bullets') {
       const { industry, level, locale, gender } = params;
       const position = sanitizeField(params.position, 500);
       const company = sanitizeField(params.company, 500);
+      const sourceDescription = sanitizeText(params.sourceDescription ?? params.description ?? '', 8000);
       const resolvedLocale = normalizeLocale(locale);
       const localeInfo = localeInstructions[resolvedLocale];
       const companyName = company || localeInfo.fallbackCompany;
+      const factSet = buildFactSetFromExperienceDescription(sourceDescription, {
+        experienceIndex: 0,
+        company: companyName,
+        position,
+      });
+      const canonicalBullets = bulletsForExperience(factSet, 0);
+      const hasCanonical = canonicalBullets.length > 0;
 
-      // If no API key, fall back to offline templates
+      // If no API key, fall back to offline templates (fact-locked when source exists)
       if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
         const offlineResult = generateBulletsOffline(
           (industry || 'general') as BulletIndustry,
           (level || 'mid') as BulletLevel,
           companyName,
           resolvedLocale,
+          sourceDescription,
         );
         if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
-        return jsonResponse({ result: offlineResult });
+        return jsonResponse({
+          result: offlineResult,
+          cvFidelityStatus: hasCanonical ? 'fallback' : 'passed',
+          usedFactIds: canonicalBullets.map((b) => b.id),
+        });
       }
 
       const genderNote = getGenderInstruction(resolvedLocale, gender || '');
-
       const levelDescriptions: Record<string, string> = {
         entry: 'entry-level or junior',
         mid: 'mid-level',
         senior: 'senior',
         lead: 'lead or managerial',
       };
-
-      // Industry-specific context hints to guide more relevant AI output
-      const industryContextHints: Record<string, string> = {
-        tech: 'Use specific technologies: programming languages, frameworks, cloud platforms, dev tools. Mention real engineering activities like code reviews, deployments, architecture, debugging.',
-        data_ai: 'Reference tools like Python, SQL, Spark, ML frameworks, BI platforms. Mention real data activities: pipelines, model training, dashboards, analysis, experimentation.',
-        cybersecurity: 'Reference security tools, threat categories, compliance frameworks. Mention real activities: incident response, penetration testing, vulnerability management, SIEM, access control.',
-        sales_retail: 'Reference retail activities: serving customers on the floor, POS systems, upselling, stock management, visual merchandising, targets. Avoid vague corporate language.',
-        sales_b2b: 'Reference B2B activities: prospecting, pipeline management, CRM, deal closing, account management, negotiations, demos. Use specific targets and outcomes.',
-        sales: 'Reference specific sales activities: pipeline management, CRM tools, prospecting, negotiations, account management, quota attainment.',
-        marketing: 'Reference specific channels and tools: SEO, Google Ads, email campaigns, social media, analytics platforms, content creation, campaign results.',
-        finance: 'Reference finance tools and activities: financial modelling, Excel, ERP, month-end close, budgeting, reporting, audit, variance analysis.',
-        banking_fintech: 'Reference banking and fintech-specific activities: KYC, AML, credit analysis, payment systems, regulatory compliance, portfolio management, open banking.',
-        healthcare: 'Reference clinical activities: patient care, assessments, documentation, multidisciplinary teams, clinical protocols, patient safety. Keep language professional and accurate.',
-        pharmacy: 'Reference pharmacy activities: dispensing, patient counselling, drug interactions, controlled drugs, stock management, clinical audits, pharmacy law compliance.',
-        education: 'Reference teaching activities: lesson planning, curriculum delivery, student assessment, classroom management, differentiation, parent communication, CPD.',
-        human_resources: 'Reference HR activities: recruitment, onboarding, performance management, ER cases, policy development, payroll, engagement surveys, compliance.',
-        customer_service: 'Reference support activities: handling enquiries, complaints, ticketing systems, KPIs like CSAT and FCR, escalation, CRM tools, SLA adherence.',
-        logistics: 'Reference logistics activities: shipment coordination, WMS, inventory management, carrier management, customs compliance, OTIF, route optimisation.',
-        operations: 'Reference operational activities: process improvement, KPI reporting, capacity planning, quality control, vendor management, operational efficiency initiatives.',
-        executive: 'Reference leadership activities: P&L management, board reporting, strategic planning, stakeholder management, change programmes, team building.',
-        project_management: 'Reference PM activities: project planning, risk registers, stakeholder communication, budget management, Agile/PRINCE2, governance, delivery milestones.',
-        design: 'Reference design tools and activities: Figma, user research, usability testing, design systems, prototyping, accessibility, design sprints.',
-        engineering: 'Reference engineering activities: CAD design, testing, FEA, component qualification, project delivery, technical documentation, standards compliance.',
-        construction: 'Reference construction activities: site management, programme scheduling, subcontractor management, NEC/JCT contracts, RAMS, health and safety, RFIs.',
-        hospitality: 'Reference hospitality activities: guest service, F&B operations, housekeeping standards, revenue management, reservations, events coordination.',
-        legal: 'Reference legal activities: drafting, due diligence, litigation, regulatory compliance, contract negotiation, client management, legal research.',
-        administration: 'Reference admin activities: diary management, document processing, event coordination, office management, supplier liaison, data entry, compliance.',
-        general: 'Use professional, role-appropriate language. Reference realistic tasks and responsibilities for the position described.',
-      };
-
-      const industryHint = industryContextHints[(industry as string) ?? 'general'] || industryContextHints.general;
-
       const levelDesc = levelDescriptions[level || 'mid'] || 'mid-level';
       const roleLabel = position ? `${position}` : `${industry || 'professional'}`;
       const atCompany = companyName && companyName !== localeInfo.fallbackCompany ? ` at ${companyName}` : '';
+      const factLockNote = hasCanonical
+        ? `FACT LOCK: You are given SOURCE BULLETS with stable IDs. Output EXACTLY ${canonicalBullets.length} bullets in the same order. Translate/polish grammar only. Do NOT add, remove, or replace duties. Do NOT invent allergy checks, muddling, syrups, wastage, kitchen cooperation, evening shifts, inventory shortages, or any duty absent from SOURCE BULLETS.`
+        : 'No prior bullets were supplied. Write role-appropriate bullets without invented metrics.';
 
       const response = await callWithRetry({
         model: MODEL,
         max_tokens: 450,
-        temperature: 0.65,
+        temperature: hasCanonical ? 0.35 : 0.65,
         stream: false,
         system: `You are an expert CV writer creating work experience bullet points in ${localeInfo.languageName}.
 Rules:
 - Output ONLY bullet points, each starting with "•"
 - Each bullet: exactly 1 sentence, clear and direct, under 22 words
-- Be SPECIFIC to the job title, seniority level, and industry — name real tools, systems, tasks, and outcomes for this exact profession
-- Use strong action verbs in past tense appropriate to the role
-- NO generic phrases like "improved processes", "worked with team", "participated in projects", "contributed to company success"
-- NO fake metrics or invented percentages — omit numbers unless the role clearly involves measurable outcomes
-- NO filler words, no long explanations
-- Professional but natural — sound like a real person describing real work, not a template
-- Match the seniority: entry = assisted/supported/contributed; mid = led/managed/built; senior/lead = directed/defined/oversaw
-- CRITICAL LANGUAGE RULE: Every word must be in ${localeInfo.languageName}. NEVER mix in English words, English phrases, or English transliterations mid-sentence. Translate tools and concepts natively where a native term exists. Only keep universally accepted technical acronyms (CRM, ERP, KPI, SQL, API) if they are genuinely used in that language.${genderNote}
-- LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}
-Industry context: ${industryHint}`,
+- ${factLockNote}
+- NO fake metrics or invented percentages
+- CRITICAL LANGUAGE RULE: Every word must be in ${localeInfo.languageName}. Only keep universal acronyms (CRM, ERP, KPI, SQL, API) when genuinely used.${genderNote}
+- LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
         messages: [
           {
             role: 'user',
-            content: `Write 4 CV work experience bullet points in ${localeInfo.languageName} for a ${levelDesc} ${roleLabel}${atCompany}.
+            content: hasCanonical
+              ? `Localize the following canonical work bullets into ${localeInfo.languageName} for ${levelDesc} ${roleLabel}${atCompany}.
 
-Each bullet must describe a specific, realistic task or achievement for this exact role and industry. Use industry-specific language, tools, and terminology.
+SOURCE BULLETS:
+${formatCanonicalBulletsForPrompt(canonicalBullets)}
+
+Output format: one bullet per line, each starting with "•". Same count and order. Nothing else.`
+              : `Write 4 CV work experience bullet points in ${localeInfo.languageName} for a ${levelDesc} ${roleLabel}${atCompany}.
 
 Output format: one bullet per line, each starting with "•". Nothing else.`,
           },
         ],
       });
 
-      const aiResult = getText(response);
-
-      // Validate we got bullets; fall back to offline if response looks bad
+      let aiResult = getText(response);
       if (!aiResult || !aiResult.includes('•')) {
-        const offlineResult = generateBulletsOffline(
+        aiResult = generateBulletsOffline(
           (industry || 'general') as BulletIndustry,
           (level || 'mid') as BulletLevel,
           companyName,
           resolvedLocale,
+          sourceDescription,
         );
-        if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
-        return jsonResponse({ result: offlineResult });
       }
 
+      const activated = await activateCvExperienceBullets({
+        locale: resolvedLocale,
+        gender: gender || '',
+        experienceIndex: 0,
+        factSet,
+        candidate: aiResult,
+        repair: hasCanonical
+          ? async (prompt) => {
+              const repaired = await callWithRetry({
+                model: MODEL,
+                max_tokens: 450,
+                temperature: 0.2,
+                stream: false,
+                system: `You repair CV bullets in ${localeInfo.languageName}. Preserve fact IDs/duties. Output only "•" lines.`,
+                messages: [{ role: 'user', content: prompt }],
+              });
+              return getText(repaired);
+            }
+          : undefined,
+      });
+
       if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
-      if (process.env.NODE_ENV !== 'production') console.log('[AI Improvements API]', { industry, level, locale, resultLength: aiResult.length });
-      return jsonResponse({ result: aiResult });
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[AI Improvements API]', {
+          industry,
+          level,
+          locale,
+          resultLength: activated.content.length,
+          cvFidelityStatus: activated.status,
+          factCount: canonicalBullets.length,
+        });
+      }
+      return jsonResponse({
+        result: activated.content || deterministicBulletsFromCanonical(canonicalBullets),
+        cvFidelityStatus: activated.status,
+        repairAttempted: activated.repairAttempted,
+        fallbackUsed: activated.fallbackUsed,
+        usedFactIds: canonicalBullets.map((b) => b.id),
+        violationCount: activated.violations.length,
+      });
     }
 
     return jsonResponse({ error: 'Unknown action' }, { status: 400 });

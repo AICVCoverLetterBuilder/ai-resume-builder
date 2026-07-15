@@ -3292,13 +3292,26 @@ function shuffle<T>(arr: T[]): T[] {
 /**
  * Randomly pick 3–5 bullet points for a given industry + level + locale.
  * Each supported locale has its own complete template matrix.
+ *
+ * When `sourceDescription` already contains bullets, those are treated as
+ * canonical and returned unchanged (fact-lock). Invented hospitality/tech
+ * duties must not replace real user content just because the UI locale changed.
  */
 export function generateBulletsOffline(
   industry: BulletIndustry,
   level: BulletLevel,
   company: string,
   locale: Locale = 'en',
+  sourceDescription?: string,
 ): string {
+  const sourceLines = (sourceDescription || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[•\-\*\u2022]\s*/, '').trim())
+    .filter(Boolean);
+  if (sourceLines.length > 0) {
+    return sourceLines.map((line) => `• ${line}`).join('\n');
+  }
+
   const localeTemplates = LOCALE_TEMPLATES[locale] ?? LOCALE_TEMPLATES.en;
   const industrySet = localeTemplates[industry] ?? localeTemplates.general;
   const pool = industrySet[level] ?? industrySet.mid;

@@ -1,6 +1,7 @@
 'use client';
 
 import { getLocalizedCvLanguageName } from './cv-language-options';
+import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
 import { regionSettings, type CVData } from './types';
@@ -363,7 +364,8 @@ export function createCreativeArtisticPdfTemplate(
       langsCol.setAttribute('data-export-group', 'languages-section');
       sectionHeading(langsCol, L.languages);
       cv.languages.forEach((language) => {
-        append(langsCol, 'p', { margin: '0 0 4px', color: TEXT, fontSize: '10px', lineHeight: '1.3' }, `${getLocalizedCvLanguageName(language.name, options.locale ?? 'en')} - ${language.level}`).setAttribute('data-export-meaningful', 'true');
+        const levelLabel = localizeCvLanguageLevel(language.level, options.locale ?? 'en');
+        append(langsCol, 'p', { margin: '0 0 4px', color: TEXT, fontSize: '10px', lineHeight: '1.3' }, `${getLocalizedCvLanguageName(language.name, options.locale ?? 'en')} - ${levelLabel}`).setAttribute('data-export-meaningful', 'true');
       });
     }
   }

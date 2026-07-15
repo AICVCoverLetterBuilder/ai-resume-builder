@@ -281,7 +281,7 @@ const SKILL_LABELS: Record<CvSkillKey, Record<Locale, string>> = {
     en: 'Organization', de: 'Organisation', es: 'Organización', fr: 'Organisation', it: 'Organizzazione', ar: 'التنظيم', sr: 'Organizacija', hr: 'Organizacija', ru: 'Организованность', 'pt-BR': 'Organização', hi: 'संगठन', ja: '組織力',
   },
   attentionToDetail: {
-    en: 'Attention to Detail', de: 'Detailgenauigkeit', es: 'Atención al detalle', fr: 'Souci du détail', it: 'Attenzione ai dettagli', ar: 'الاهتمام بالتفاصيل', sr: 'Pažnja prema detaljima', hr: 'Pozornost na detalje', ru: 'Внимание к деталям', 'pt-BR': 'Atenção aos detalhes', hi: 'विवरण पर ध्यान', ja: '注意力',
+    en: 'Attention to Detail', de: 'Detailgenauigkeit', es: 'Atención al detalle', fr: 'Souci du détail', it: 'Attenzione ai dettagli', ar: 'الاهتمام بالتفاصيل', sr: 'Pažnja prema detaljima', hr: 'Pozornost na detalje', ru: 'Внимание к деталям', 'pt-BR': 'Atenção aos detalhes', hi: 'विवरण पर ध्यान', ja: '細部への注意力',
   },
   adaptability: {
     en: 'Adaptability', de: 'Anpassungsfähigkeit', es: 'Adaptabilidad', fr: 'Adaptabilité', it: 'Adattabilità', ar: 'القدرة على التكيف', sr: 'Prilagodljivost', hr: 'Prilagodljivost', ru: 'Адаптивность', 'pt-BR': 'Adaptabilidade', hi: 'अनुकूलनशीलता', ja: '適応力',
@@ -620,7 +620,7 @@ const SKILL_ALIASES: Partial<Record<CvSkillKey, string[]>> = {
   problemSolving: ['problem solving', 'troubleshooting', 'root cause analysis'],
   timeManagement: ['prioritization', 'scheduling', 'task management'],
   organization: ['organizing', 'planning'],
-  attentionToDetail: ['detail', 'accuracy', 'precise'],
+  attentionToDetail: ['detail', 'accuracy', 'precise', 'アテンション・トゥ・ディテール', 'アテンショントゥディテール', '注意力'],
   adaptability: ['flexibility', 'agility'],
   criticalThinking: ['analysis', 'reasoning', 'analytical thinking'],
   conflictResolution: ['mediation', 'dispute resolution'],

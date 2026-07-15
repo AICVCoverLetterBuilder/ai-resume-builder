@@ -851,6 +851,8 @@ export default function CVBuilderPage() {
         level,
         locale,
         gender: cv.personal.gender || '',
+        // Canonical source — AI may polish/translate, never invent replacement duties.
+        sourceDescription: exp.description || '',
       };
 
       const { data: bulletsData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
