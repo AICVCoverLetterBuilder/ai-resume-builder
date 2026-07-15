@@ -528,6 +528,7 @@ export default function CoverLetterPage() {
         jobTitle: cl.jobTitle,
         companyName: cl.companyName,
         factSet,
+        tone: cl.tone,
       });
 
       updateCoverLetterGroundingDiagnostics({
@@ -683,6 +684,7 @@ export default function CoverLetterPage() {
         jobTitle: cl.jobTitle,
         companyName: cl.companyName,
         factSet,
+        tone: cl.tone,
       });
 
       updateCoverLetterGroundingDiagnostics({

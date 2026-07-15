@@ -176,6 +176,7 @@ export type GroundingViolationKind =
   | 'personality_claim'
   | 'unsupported_company_claim'
   | 'unsupported_company_attribute'
+  | 'locale_quality'
   | 'role_inferred_duty'
   | 'gender_placeholder'
   | 'self_correction_leak'
@@ -408,34 +409,96 @@ const PERSONALITY_CLAIM_PATTERNS: RegExp[] = [
 
 /**
  * Factual company reputation / value assertions that require vacancy/company evidence.
- * Subjective interest in the role or field is allowed.
+ * Subjective interest in the role or field is allowed. Company names are opaque:
+ * common brand knowledge (Mercedes, Google, …) is never evidence.
  */
 const UNSUPPORTED_COMPANY_CLAIM_PATTERNS: RegExp[] = [
-  /\b(?:prestigious|renowned|world[- ]class|industry[- ]leading)\b.{0,40}\b(?:company|organization|organisation|employer)\b/iu,
-  /\b(?:company|organization|organisation|employer)\b.{0,40}\b(?:prestigious|renowned|world[- ]class|industry[- ]leading|recognized as a leader)\b/iu,
-  /\b(?:known for|recognized for|renowned for)\b.{0,60}\b(?:excellence|quality|innovation|service|customer satisfaction)\b/iu,
-  /\b(?:committed to|focused on|oriented toward)\b.{0,40}\b(?:service quality|customer satisfaction|customer service excellence)\b/iu,
+  // EN — company as subject of fame/quality attributes
+  /\b(?:prestigious|renowned|world[- ]class|industry[- ]leading|well[- ]known)\b.{0,40}\b(?:company|organization|organisation|employer|brand)\b/iu,
+  /\b(?:company|organization|organisation|employer|brand)\b.{0,40}\b(?:prestigious|renowned|world[- ]class|industry[- ]leading|well[- ]known|recognized as a leader)\b/iu,
+  /\bis\s+(?:a\s+)?(?:renowned|prestigious|well[- ]known|leading|famous)\b/iu,
+  /\b(?:known for|recognized for|renowned for)\b.{0,80}\b(?:excellence|quality|innovation|service|customer satisfaction|vehicles?|cars?|products?)\b/iu,
+  /\b(?:committed to|focused on|oriented toward)\b.{0,40}\b(?:service quality|customer satisfaction|customer service excellence|quality)\b/iu,
   /\ba team that takes client support seriously\b/iu,
   /\b(?:'s|’s)\s+work in this space\b/iu,
-  /(?:एक प्रतिष्ठित (?:संगठन|कंपनी|संस्था)|प्रतिष्ठित संगठन है)/u,
-  /(?:顧客サービスを重視する企業として認識|顧客との信頼関係を(?:重視|大切にする)企業として認識|として認識しており)/u,
+  // HI — famous/prestigious brand assertions (truth of brand is irrelevant)
+  /(?:एक\s+)?(?:जाना[- ]?माना|सुपरिचित|सुप्रसिद्ध|प्रतिष्ठित)\s+(?:ऑटोमोबाइल\s+)?(?:ब्रांड|कंपनी|संगठन|संस्था)/u,
+  /(?:जाना[- ]?माना|सुपरिचित|सुप्रसिद्ध|प्रतिष्ठित)\s+(?:ऑटोमोबाइल\s+)?(?:ब्रांड|कंपनी)\s+है/u,
+  /(?:गुणवत्ता\s+को\s+प्राथमिकता|ग्राहक\s+विश्वास\s+को\s+महत्व)/u,
+  // JA
+  /(?:顧客サービスを重視する企業として認識|顧客との信頼関係を(?:重視|大切にする)企業として認識|として認識しており|品質を重視する企業)/u,
+  // HR/SR
   /\btvrtk\w*\s+kojoj\s+je\s+stalo\s+do\s+(?:kvalitete|kvalitete?\s+usluge|zadovoljstva)\b/iu,
-  /\b(?:prestižn\w*\s+tvrtk|poznat\w*\s+po\s+kvalitet|orijentiran\w*\s+na\s+(?:kvalitet|zadovoljstvo))\b/iu,
+  /\b(?:prestižn\w*|ugledn\w*|vodeć\w*|poznat\w*)\s+(?:tvrtk|kompanij|brend)/iu,
+  /\b(?:poznat\w*\s+po\s+kvalitet|orijentiran\w*\s+na\s+(?:kvalitet|zadovoljstvo)|brine\s+o\s+klijentima)\b/iu,
   /\bprocese i standarde koje\b.{0,40}\bprimenjuje\b/iu,
   /\bkompaniju koja ozbiljno pristupa\b/iu,
+  /\bprimenjuje\s+visok\w*\s+standard/iu,
+  // RU
   /привлекает меня своей ориентацией/iu,
   /ориентацией на клиентск(?:ий|ого) сервис/iu,
   /клиентский сервис занимает важное место/iu,
-  /(?:престижн\w*\s+(?:компан|организац)|признанн\w*\s+лидер\w*)/iu,
+  /(?:престижн\w*|известн\w*|ведущ\w*)\s+(?:компан|организац|бренд)/iu,
+  /известн\w*\s+качеств/iu,
+  /ориентирован\w*\s+на\s+качество\s+обслуживания/iu,
+  // IT
   /\bper la sua presenza nel mercato\b/iu,
   /\bper le opportunità di sviluppo che offre\b/iu,
   /\bun team orientato al servizio e alla soddisfazione del cliente\b/iu,
+  /\b(?:azienda\s+)?rinomat\w*\b/iu,
+  /\bcontesto dinamico\b/iu,
   /\bambiente dinamico\b/iu,
-  /\b(?:entreprise prestigieuse|réputée pour|reconnu(?:e)? comme un leader|axée sur la satisfaction client)\b/iu,
+  // FR — brand/quality attributions (company/brand as subject)
+  /\best\s+(?:une\s+)?(?:marque|entreprise)\s+(?:prestigieuse|réputée|reconnue)\b/iu,
+  /\bmarque\b[^.!?]{0,120}\b(?:qualité|soin)\b/iu,
+  /\bqualité et (?:le )?soin apport/iu,
+  /\baccorde une grande importance à\b/iu,
+  /\breconnue pour\b/iu,
+  /\béputée pour\b/iu,
+  /\b(?:reconnu(?:e)? comme un leader|axée sur la satisfaction client)\b/iu,
+  // ES / PT
   /\b(?:empresa prestigiosa|reconocida como líder|comprometida con la calidad del servicio|orientada a la satisfacción)\b/iu,
   /\b(?:azienda prestigiosa|riconosciuta come leader|attenta alla qualità del servizio)\b/iu,
   /\b(?:empresa prestigiada|reconhecida como líder|comprometida com a qualidade do serviço)\b/iu,
 ];
+
+/** Cover-letter locale wording defects that must never reach preview/download. */
+const LOCALE_QUALITY_PATTERNS: RegExp[] = [
+  // AR application context: طلبتي = "my female students"; ويسعدني فرصة is incomplete
+  /(?:مناقشة|حول|بشأن)\s+طلبتي/u,
+  /ويسعدني\s+فرصة/u,
+  // HR sparse / unnatural formal
+  /\busvojiti očekivanja uloge\b/iu,
+  /\bPozicija\b.+\bzanima me kao smislen sljedeći korak\b/iu,
+  /\bOvim putem prijavila sam se\b/iu,
+  /\bpoziciju Saradnika\b/iu,
+  // FR closing centered on "demande" instead of candidature
+  /\bl['’]attention que vous porterez à ma demande\b/iu,
+  /\bl['’]attention portée à ma demande\b/iu,
+  /\bmerci de l['’]attention.{0,40}ma demande\b/iu,
+];
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function collectCompanyAttributeMatches(text: string, factSet: CoverLetterFactSet): string[] {
+  const found = collectMatches(text, UNSUPPORTED_COMPANY_CLAIM_PATTERNS);
+  const company = factSet.facts.find((f) => f.type === 'target_company')?.value?.trim();
+  if (!company) return found;
+  const c = escapeRegExp(company);
+  const companyScoped: RegExp[] = [
+    new RegExp(`${c}\\s+(?:एक\\s+)?(?:जाना[- ]?माना|सुपरिचित|सुप्रसिद्ध|प्रतिष्ठित)`, 'u'),
+    new RegExp(`${c}\\s+est\\s+(?:une\\s+)?(?:marque\\s+)?(?:reconnue|réputée|prestigieuse)`, 'iu'),
+    new RegExp(`${c}\\s+est\\s+une\\s+marque[^.!?]{0,120}(?:qualité|soin)`, 'iu'),
+    new RegExp(`${c}\\s+is\\s+(?:a\\s+)?(?:renowned|prestigious|well[- ]known|leading|famous)`, 'iu'),
+    new RegExp(`${c}\\s+(?:je\\s+)?(?:poznat|ugledan|vodeć|prestižn)`, 'iu'),
+    new RegExp(`${c}\\s+(?:ist\\s+)?(?:ein\\s+)?(?:renommierte[rs]?|bekannt(?:es|e)?)`, 'iu'),
+    new RegExp(`${c}\\s+(?:は|が).{0,40}(?:認識|重視|定評)`, 'u'),
+    new RegExp(`${c}\\s+(?:—\\s*)?(?:известн|престижн|ведущ)`, 'iu'),
+  ];
+  return [...found, ...collectMatches(text, companyScoped)];
+}
 
 /** Duties/domains often wrongly inferred from job titles when no evidence exists. */
 const ROLE_INFERRED_DUTY_PATTERNS: RegExp[] = [
@@ -460,13 +523,24 @@ const GENDER_PLACEHOLDER_PATTERNS: RegExp[] = [
   /चाहता\/चाहती|करूँगा\/करूँगी|रहा\/रही|इच्छुक\/इच्छुका|करता\/करती/u,
 ];
 
+function groundingDiagEvidence(
+  options?: { locale?: Locale | string; stage?: string },
+): string | undefined {
+  const bits = [
+    options?.locale ? `locale=${options.locale}` : '',
+    options?.stage ? `stage=${options.stage}` : '',
+  ].filter(Boolean);
+  return bits.length ? bits.join(' ') : undefined;
+}
+
 export function validateCoverLetterGrounding(
   content: string,
   factSet: CoverLetterFactSet,
-  options?: { locale?: Locale | string; gender?: CoverLetterGender | string },
+  options?: { locale?: Locale | string; gender?: CoverLetterGender | string; stage?: string },
 ): GroundingValidationResult {
   const text = normalizeForMatch(content);
   const violations: GroundingViolation[] = [];
+  const diagEvidence = groundingDiagEvidence(options);
 
   // Named skills/tools
   const techFlags = text.match(new RegExp(NAMED_TECH_RE.source, 'giu')) ?? [];
@@ -533,9 +607,22 @@ export function validateCoverLetterGrounding(
   }
 
   // Unsupported factual company reputation / value / process claims
-  for (const matched of collectMatches(text, UNSUPPORTED_COMPANY_CLAIM_PATTERNS)) {
+  for (const matched of collectCompanyAttributeMatches(text, factSet)) {
     if (isFactSupportedLiteral(matched, factSet)) continue;
-    violations.push({ kind: 'unsupported_company_attribute', matched });
+    violations.push({
+      kind: 'unsupported_company_attribute',
+      matched,
+      evidence: diagEvidence,
+    });
+  }
+
+  // Locale-specific wording defects (Arabic application typos, sparse HR, weak FR closings)
+  for (const matched of collectMatches(text, LOCALE_QUALITY_PATTERNS)) {
+    violations.push({
+      kind: 'locale_quality',
+      matched,
+      evidence: diagEvidence,
+    });
   }
 
   // Role-title-inferred duties (unless literally present in source facts)
@@ -574,13 +661,18 @@ export function buildGroundingRepairUserNote(
 ): string {
   return [
     'GROUNDING REPAIR REQUIRED.',
-    'The previous cover letter contained unsupported professional claims.',
+    'The previous cover letter contained unsupported professional claims or locale-quality defects.',
     'Rewrite the ENTIRE JSON letter so that EVERY factual professional claim is supported by SOURCE FACTS.',
     'Remove or neutralize every unsupported claim listed below.',
+    'Treat the company name as an opaque user string — do NOT use real-world brand knowledge (fame, quality, prestige, sector leadership) unless present in SOURCE FACTS.',
+    'Prefer role-centered interest, readiness to learn responsibilities, and subjective motivation to join.',
     'Do not invent skills, tools, leadership, metrics, years of experience, or achievements.',
     'Never mention source facts, limited information, CV data, AI, validation, prompts, or fallbacks in the letter.',
     'Do not invent personal qualities or infer role responsibilities from the job title alone.',
     'Do not use slash gender placeholders in the finished letter.',
+    'Arabic: never write طلبتي for the job application (use طلبي); never write incomplete ويسعدني فرصة.',
+    'French: thank for attention to ma candidature — not ma demande.',
+    'Croatian: use present-tense Ovim putem se prijavljujem; quote unknown titles; do not use usvojiti očekivanja uloge.',
     'If SOURCE FACTS are sparse, write a short honest letter focused on interest, motivation, willingness to learn/contribute, and interview availability — without discussing why details are limited.',
     'Unsupported claims to remove:',
     formatGroundingViolationsForPrompt(violations),
@@ -710,13 +802,23 @@ function fallbackParts(
       paragraph2: extraSentence
         || (gender === 'female'
           ? (friendly
-            ? `${company} suscite mon intérêt. Je serais ravie d'échanger sur ma candidature et sur la manière dont je peux soutenir l'équipe.`
-            : `Le poste de ${role} chez ${company} représente pour moi une étape pertinente de développement professionnel. Je serais ravie d'échanger sur ma candidature.`)
+            ? `La possibilité d'occuper ce poste chez ${company} m'intéresse. Je serais ravie d'échanger sur ma candidature et sur la manière dont je peux soutenir l'équipe.`
+            : `${
+              /servis|auto|voiture|vehicle|fahrzeug|automobil/i.test(role)
+                ? `Le poste de ${role} m'intéresse particulièrement en raison des responsabilités liées à l'entretien et au service automobile.`
+                : `Le poste de ${role} m'intéresse particulièrement en raison des responsabilités liées à ce rôle.`
+            } Je serais ravie d'échanger sur ma candidature.`)
           : gender === 'male'
             ? (friendly
-              ? `${company} suscite mon intérêt. Je serais ravi d'échanger sur ma candidature et sur la manière dont je peux soutenir l'équipe.`
-              : `Le poste de ${role} chez ${company} représente pour moi une étape pertinente de développement professionnel. Je serais ravi d'échanger sur ma candidature.`)
-            : `Le poste de ${role} chez ${company} représente une étape pertinente de développement professionnel.`),
+              ? `La possibilité d'occuper ce poste chez ${company} m'intéresse. Je serais ravi d'échanger sur ma candidature et sur la manière dont je peux soutenir l'équipe.`
+              : `${
+                /servis|auto|voiture|vehicle|fahrzeug|automobil/i.test(role)
+                  ? `Le poste de ${role} m'intéresse particulièrement en raison des responsabilités liées à l'entretien et au service automobile.`
+                  : `Le poste de ${role} m'intéresse particulièrement en raison des responsabilités liées à ce rôle.`
+              } Je serais ravi d'échanger sur ma candidature.`)
+            : (/servis|auto|voiture|vehicle|fahrzeug|automobil/i.test(role)
+              ? `Le poste de ${role} m'intéresse particulièrement en raison des responsabilités liées à l'entretien et au service automobile.`
+              : `Le poste de ${role} m'intéresse particulièrement en raison des responsabilités liées à ce rôle.`)),
       paragraph3: 'Je reste disponible pour un entretien à votre convenance.',
       closing: "Je vous remercie de l'attention portée à ma candidature.",
       signOff: 'Cordialement',
@@ -759,13 +861,13 @@ function fallbackParts(
             ? `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}. أنا مستعد لتولي مسؤوليات الدور، وتعلّم العمليات المطلوبة، والمساهمة بفعالية ومسؤولية.`
             : `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}. أتطلع لتولي مسؤوليات الدور، وتعلّم العمليات المطلوبة، والمساهمة بفعالية ومسؤولية.`)
         : friendly
-          ? `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}، ويسعدني فرصة الانضمام إلى فريقكم والتعلّم معكم والمساهمة في العمل اليومي.`
+          ? `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}، ويسعدني الانضمام إلى فريقكم والتعلّم معكم والمساهمة في العمل اليومي.`
           : `أتقدم بطلب لشغل وظيفة ${role} لدى شركة ${company}، وأتطلع إلى فرصة الانضمام إلى فريقكم والتعرف على متطلبات الوظيفة.`,
       paragraph2: extraSentence
         || (confident
           ? `يهمّني العمل في هذا المجال، وأسعى لفهم متطلبات الدور والتكيف معها والوفاء بمسؤولياته.`
           : friendly
-            ? `تجذبني فرصة العمل مع فريقكم في دور ${role}، وأرحب بمناقشة طلبتي بأسلوب تعاوني.`
+            ? `تجذبني فرصة العمل مع فريقكم في دور ${role}، وأرحب بفرصة مناقشة طلبي معكم بأسلوب تعاوني.`
             : `تهمّني هذه الفرصة، وأسعى لفهم متطلبات الدور والتكيف معها والوفاء بمسؤولياته.`),
       paragraph3: gender === 'unspecified'
         ? 'يسعدني حضور مقابلة في الوقت الذي يناسبكم.'
@@ -813,23 +915,41 @@ function fallbackParts(
         },
     hr: {
       greeting: `Poštovani tim za zapošljavanje u tvrtki ${company},`,
-      paragraph1: `Ovim putem se prijavljujem za ${hrPoziciju}${hrGloss} u tvrtki ${company}. ${
-        confident
-          ? 'Želim se posvetiti zahtjevima uloge, brzo usvojiti potrebna znanja i odgovorno doprinijeti radu tima.'
-          : friendly
-            ? 'Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim zajedničkim ciljevima.'
-            : 'Želim usvojiti očekivanja uloge i odgovorno doprinijeti radu tima.'
-      }`,
+      paragraph1: gender === 'female'
+        ? `Ovim putem se prijavljujem za ${hrPoziciju}${hrGloss} u tvrtki ${company}. ${
+          confident
+            ? 'Motivirana sam posvetiti se zahtjevima uloge, brzo usvojiti potrebna znanja i odgovorno doprinijeti radu tima.'
+            : friendly
+              ? 'Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim zajedničkim ciljevima.'
+              : 'Spremna sam upoznati se sa zahtjevima uloge, odgovorno pristupiti povjerenim zadacima i aktivno doprinositi radu tima.'
+        }`
+        : gender === 'male'
+          ? `Ovim putem se prijavljujem za ${hrPoziciju}${hrGloss} u tvrtki ${company}. ${
+            confident
+              ? 'Motiviran sam posvetiti se zahtjevima uloge, brzo usvojiti potrebna znanja i odgovorno doprinijeti radu tima.'
+              : friendly
+                ? 'Radujem se prilici da se pridružim vašem timu, učim u toj ulozi i doprinosim zajedničkim ciljevima.'
+                : 'Spreman sam upoznati se sa zahtjevima uloge, odgovorno pristupiti povjerenim zadacima i aktivno doprinositi radu tima.'
+          }`
+          : `Ovim putem se prijavljujem za ${hrPoziciju}${hrGloss} u tvrtki ${company}. Želim upoznati zahtjeve uloge i odgovorno doprinositi radu tima.`,
       paragraph2: extraSentence
         || (gender === 'female'
-          ? `Pozicija ${role} zanima me kao smislen sljedeći korak. Spremna sam odgovorno pristupiti očekivanjima uloge.`
+          ? (friendly
+            ? `Zainteresirana sam za ${hrPoziciju} jer vidim priliku za učenje i suradnju u timu.`
+            : `Ovu priliku vidim kao smislen sljedeći korak u svom profesionalnom razvoju i mogućnost da se razvijam u području vezanom uz ${hrPoziciju}.`)
           : gender === 'male'
-            ? `Pozicija ${role} zanima me kao smislen sljedeći korak. Spreman sam odgovorno pristupiti očekivanjima uloge.`
-            : `Pozicija ${role} zanima me kao smislen sljedeći korak profesionalnog razvoja.`),
+            ? (friendly
+              ? `Zainteresiran sam za ${hrPoziciju} jer vidim priliku za učenje i suradnju u timu.`
+              : `Ovu priliku vidim kao smislen sljedeći korak u svom profesionalnom razvoju i mogućnost da se razvijam u području vezanom uz ${hrPoziciju}.`)
+            : `Ovu priliku vidim kao smislen sljedeći korak profesionalnog razvoja u području vezanom uz ${hrPoziciju}.`),
       paragraph3: gender === 'female'
-        ? 'Dostupna sam za razgovor u terminu koji vama odgovara.'
+        ? (formal || (!confident && !friendly)
+          ? 'Bila bih zahvalna na prilici da svoju motivaciju detaljnije predstavim na razgovoru. Dostupna sam u terminu koji vama odgovara.'
+          : 'Dostupna sam za razgovor u terminu koji vama odgovara.')
         : gender === 'male'
-          ? 'Dostupan sam za razgovor u terminu koji vama odgovara.'
+          ? (formal || (!confident && !friendly)
+            ? 'Bio bih zahvalan na prilici da svoju motivaciju detaljnije predstavim na razgovoru. Dostupan sam u terminu koji vama odgovara.'
+            : 'Dostupan sam za razgovor u terminu koji vama odgovara.')
           : 'Razgovor je moguće dogovoriti u terminu koji vama odgovara.',
       closing: 'Hvala na vašem vremenu i razmatranju.',
       signOff: 'Srdačan pozdrav',
@@ -883,10 +1003,10 @@ function fallbackParts(
               ? `${company} में ${role} की भूमिका मुझे सार्थक अगला कदम लगता है। मैं अपेक्षाओं पर खरा उतरने के लिए टीम के साथ सहयोगी ढंग से योगदान देना चाहता हूँ।`
               : `${company} में ${role} की भूमिका एक सार्थक अगला कदम है। अपेक्षाओं को पूरा करने के लिए टीम के साथ योगदान देने का अवसर स्वागतयोग्य है।`)
           : (gender === 'female'
-            ? `इस पद में रुचि का आधार दी गई भूमिका की प्रकृति है। मैं अपेक्षाओं पर खरी उतरने हेतु जिम्मेदारियों को समझना और योगदान देना चाहती हूँ।`
+            ? `${company} में ${role} के पद पर कार्य करने का अवसर मेरे लिए व्यावसायिक विकास और जिम्मेदार योगदान का एक महत्वपूर्ण अवसर होगा। मैं अपेक्षाओं पर खरी उतरने हेतु जिम्मेदारियों को समझना चाहती हूँ।`
             : gender === 'male'
-              ? `इस पद में रुचि का आधार दी गई भूमिका की प्रकृति है। मैं अपेक्षाओं पर खरा उतरने हेतु जिम्मेदारियों को समझना और योगदान देना चाहता हूँ।`
-              : `इस पद में रुचि का आधार दी गई भूमिका की प्रकृति है। अपेक्षाओं को पूरा करने के लिए प्रतिबद्ध हूँ।`)),
+              ? `${company} में ${role} के पद पर कार्य करने का अवसर मेरे लिए व्यावसायिक विकास और जिम्मेदार योगदान का एक महत्वपूर्ण अवसर होगा। मैं अपेक्षाओं पर खरा उतरने हेतु जिम्मेदारियों को समझना चाहता हूँ।`
+              : `${company} में ${role} के पद पर कार्य करने का अवसर व्यावसायिक विकास और जिम्मेदार योगदान का एक महत्वपूर्ण अवसर है। अपेक्षाओं को पूरा करने के लिए प्रतिबद्ध हूँ।`)),
       paragraph3: gender === 'unspecified'
         ? 'साक्षात्कार के माध्यम से आवेदन पर चर्चा करने का अवसर स्वागतयोग्य होगा।'
         : 'मैं साक्षात्कार के लिए उपलब्ध हूँ।',

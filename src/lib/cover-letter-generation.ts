@@ -364,7 +364,7 @@ function buildLocaleGroundingRules(
     '- Do NOT claim Java, Python, C++, JavaScript, React, databases, SQL, cloud, AWS, Azure, CRM, Agile, Scrum, OOP, frontend/backend, or similar tools unless present in SOURCE FACTS.',
     '- Do NOT claim extensive experience, proven track record, strong technical expertise, projects successfully led, or efficiency/revenue improvements unless present in SOURCE FACTS.',
     '- Keep company praise brief and specific — avoid exaggerated compliments and repetitive company-name mentions.',
-    '- Do NOT assert as fact that the company is prestigious, a market leader, known for excellence, committed to service quality, focused on customer satisfaction, or oriented toward a particular corporate value unless SOURCE FACTS / vacancy context explicitly support it. Prefer subjective interest in the advertised role or field.',
+    '- Treat every company name as an opaque user value. Do NOT use real-world brand knowledge (even for Mercedes, Google, Apple, Toyota, etc.). Do NOT assert as fact that the company is famous, well-known, prestigious, a market leader, innovative, known for quality, committed to service quality, focused on customer satisfaction, or oriented toward a particular corporate value unless SOURCE FACTS / vacancy context explicitly support it. Prefer subjective interest in the advertised role or field.',
     `- Use the job title "${role}" faithfully — preserve its meaning and seniority; do NOT upgrade or replace it (e.g. do not change "Salesman" into Sales Executive, Sales Representative, or Sales Manager).`,
     '- If the title is specialized or clearer in English, you may keep it and optionally add a natural translation with the English title in parentheses.',
     isSparse
@@ -399,7 +399,9 @@ function buildLocaleGroundingRules(
       '- Never infer gender from the candidate name or job title.',
       '- Do NOT claim ईमानदारी, लगन, सूक्ष्मता, रचनात्मक सोच, समस्या-समाधान क्षमता, नेतृत्व क्षमता, or मजबूत कार्य-नैतिकता unless in SOURCE FACTS.',
       '- Do NOT claim व्यापक अनुभव, कई वर्षों का अनुभव, वेब अनुप्रयोगों का निर्माण, डेटाबेस प्रबंधन, जटिल तकनीकी समस्याओं का समाधान, परियोजनाओं का नेतृत्व, प्रणाली की कार्यक्षमता में सुधार, प्रोग्रामिंग भाषाओं में विशेषज्ञता, or क्लाउड/Agile अनुभव unless in SOURCE FACTS.',
-      '- Do NOT claim the company is प्रतिष्ठित / a prestigious organization or assert unsupported company values unless present in SOURCE FACTS. Prefer interest in the role and responsible contribution.',
+      '- Do NOT claim the company is जाना-माना / सुपरिचित / सुप्रसिद्ध / प्रतिष्ठित or a famous automotive/brand/organization, and do NOT assert unsupported company values, unless present in SOURCE FACTS. Prefer interest in the role and responsible contribution.',
+      '- Prefer role-centered wording such as "[Company] में [Role] के पद पर कार्य करने का अवसर व्यावसायिक विकास और जिम्मेदार योगदान का एक महत्वपूर्ण अवसर होगा।" — never brand-fame claims.',
+      '- Prefer a direct close: "मैं साक्षात्कार के लिए उपलब्ध हूँ।" when gender is male or female.',
       '- When evidence is sparse, use neutral professional Hindi focused on interest, willingness to learn/contribute, and interview availability.',
       '- Use correct Devanagari punctuation and characters.',
       ...confidentShared,
@@ -417,6 +419,9 @@ function buildLocaleGroundingRules(
       '- Prefer natural sparse interest wording such as "وأرحب بفرصة التعرف على متطلبات الوظيفة ومناقشة إمكانية الانضمام إلى فريقكم."',
       '- Prefer confident interest with "وأتطلع إلى فرصة الانضمام إلى فريقكم" — avoid pleading "وأرجو أن تتاح لي الفرصة للانضمام إلى فريقكم".',
       '- Prefer natural role-responsibility wording such as "والتكيف مع متطلبات هذا الدور والوفاء بمسؤولياته" — avoid awkward "والعمل على تلبية ما ينتظر من شاغله".',
+      '- For the job application, always write طلبي — never طلبتي (which means "my female students"). Prefer "مناقشة طلبي" / "حول طلبي".',
+      '- Prefer "ويسعدني الانضمام إلى فريقكم" or "وتسعدني فرصة الانضمام إلى فريقكم" — never incomplete "ويسعدني فرصة".',
+      '- Friendly Arabic must be warm and distinct from formal/confident; do not repeat معرفة المزيد.',
       '- Do NOT use artificial career-path rhetoric such as "فرصة مدروسة نحو مسيرة مهنية هادفة" or similar overly formal abstractions about a "هادفة" career journey.',
       '- Prefer simpler alternatives when needed (e.g. "فرصة مناسبة للتطور المهني" or "خطوة مناسبة في مسيرتي المهنية"), or omit career-direction claims entirely when SOURCE FACTS are sparse.',
       '- Do NOT imply the candidate already works at the employer (avoid forms like "بوصفي [Role] في شركة [Company]").',
@@ -427,8 +432,10 @@ function buildLocaleGroundingRules(
       '- Keep mixed Latin terms (Google, Java, Python, C++, CRM, emails) readable; do not reverse them.',
       '- Write entirely in Arabic — never output Hindi or English body text.',
       ...(gender === 'female'
-        ? ['- When stating readiness, prefer feminine agreement such as مستعدة (never masculine مستعد).']
-        : []),
+        ? ['- When stating readiness, prefer feminine agreement such as مستعدة / متاحة (never masculine مستعد / متاح).']
+        : gender === 'male'
+          ? ['- When stating readiness, prefer masculine agreement such as مستعد / متاح where natural.']
+          : []),
       ...confidentShared,
       ...shared,
     ].join('\n');
@@ -530,12 +537,16 @@ function buildLocaleGroundingRules(
     return [
       'FRENCH QUALITY RULES:',
       '- Write natural professional French — not a literal translation.',
+      '- Prefer salutation "Madame, Monsieur,".',
       '- Prefer the collocation "vivement intéressé/intéressée par la possibilité de rejoindre vos équipes" (match GENDER) — not "intéressé à rejoindre".',
       '- Prefer "mettre mon engagement et ma motivation au service de votre organisation" — avoid weak/outdated "mettre toute ma bonne volonté".',
+      '- Do NOT assign quality/care/prestige attributes to the company or brand (e.g. "Mercedes est une marque… qualité et soin") without SOURCE FACTS. Prefer role-centered interest.',
+      '- Close with attention to "ma candidature" — never "ma demande". Prefer: "Je vous remercie de l\'attention portée à ma candidature."',
+      '- Do NOT use "votre temps et votre considération" as the closing.',
       ...(gender === 'female'
-        ? ['- Keep feminine agreement: intéressée, désireuse, motivée, prête, heureuse where applicable.']
+        ? ['- Keep feminine agreement: intéressée, désireuse, motivée, prête, disposée, heureuse/ravie where applicable.']
         : gender === 'male'
-          ? ['- Keep masculine agreement: intéressé, désireux, motivé, prêt, heureux where applicable.']
+          ? ['- Keep masculine agreement: intéressé, désireux, motivé, prêt, disposé, heureux/ravi where applicable.']
           : []),
       ...confidentShared,
       ...shared,
@@ -546,9 +557,17 @@ function buildLocaleGroundingRules(
     return [
       'CROATIAN QUALITY RULES:',
       '- Write natural professional Croatian (Latinica).',
-      '- For unknown/raw multiword job titles, preserve the EXACT supplied title in Croatian quotation marks after poziciju (e.g. poziciju „Saradnik za podršku klijentima logistike“). Do NOT partially decline only the first word (never "Saradnika za podršku…").',
+      '- FORMAL: substantial present-tense application — prefer "Ovim putem se prijavljujem za poziciju „[exact title]“"; never "Ovim putem prijavila sam se".',
+      '- Do NOT use sparse phrases such as "usvojiti očekivanja uloge" or "Pozicija … zanima me kao smislen sljedeći korak".',
+      '- For unknown/raw multiword job titles, preserve the EXACT supplied title in Croatian quotation marks after poziciju (e.g. poziciju „Serviser automobila“). Do NOT partially decline only the first word (never "Saradnika za podršku…").',
       '- A natural Croatian paraphrase may appear in parentheses only when helpful; the exact supplied role must remain visible.',
+      '- Include role motivation, readiness to learn responsibilities, grounded professional development, and an interview close.',
       '- Do NOT invent company reputation/value claims such as "tvrtku kojoj je stalo do kvalitete usluge" unless present in SOURCE FACTS.',
+      ...(gender === 'female'
+        ? ['- Keep feminine forms: spremna, motivirana, zainteresirana, dostupna, bila bih zahvalna where natural.']
+        : gender === 'male'
+          ? ['- Keep masculine forms: spreman, motiviran, zainteresiran, dostupan, bio bih zahvalan where natural.']
+          : []),
       ...confidentShared,
       ...shared,
     ].join('\n');
@@ -1170,6 +1189,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
     const grounding = validateCoverLetterGrounding(assembledForGrounding, factSet, {
       locale: options.locale,
       gender,
+      stage: 'initial',
     });
     lastViolationCount = grounding.violations.length;
     if (grounding.valid) {
@@ -1213,6 +1233,7 @@ export async function generateStructuredCoverLetterWithRetries(options: {
         const repairedGrounding = validateCoverLetterGrounding(repairedText, factSet, {
           locale: options.locale,
           gender,
+          stage: 'repair',
         });
         lastViolationCount = repairedGrounding.violations.length;
         if (repairedGrounding.valid) {
@@ -1242,6 +1263,15 @@ export async function generateStructuredCoverLetterWithRetries(options: {
     });
     // Soft-align signOff with locale closing preference
     fallback.signOff = options.closing || fallback.signOff;
+    const fallbackText = assembleCoverLetterContent(fallback, options.locale);
+    const fallbackGrounding = validateCoverLetterGrounding(fallbackText, factSet, {
+      locale: options.locale,
+      gender,
+      stage: 'fallback',
+    });
+    if (!fallbackGrounding.valid) {
+      lastViolationCount = fallbackGrounding.violations.length;
+    }
     return {
       letter: fallback,
       groundingStatus: 'fallback',

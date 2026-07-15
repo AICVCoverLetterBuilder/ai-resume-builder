@@ -3,6 +3,7 @@
  * Fail-closed for invalid text, but not fail-dead when a locale+gender fallback exists.
  */
 import type { Locale } from './i18n/translations';
+import type { Tone } from './types';
 import type { CoverLetterFactSet } from './cover-letter-facts';
 import {
   normalizeCoverLetterGender,
@@ -11,7 +12,6 @@ import {
 import {
   shouldApplyCoverLetterGenerationResult,
   isTrustedCoverLetterGroundingStatus,
-  normalizeCoverLetterGroundingStatus,
   type ActiveCoverLetterRequest,
   type CoverLetterGroundingStatus,
 } from './cover-letter-flow';
@@ -30,6 +30,11 @@ import {
 import { normalizeCoverLetterBody } from './cover-letter-header';
 import { COVER_LETTER_GROUNDING_BACKEND_REVISION } from './cover-letter-grounding-diagnostics';
 import { getCoverLetterStateTransitions } from './cover-letter-active-result';
+
+function normalizeTone(raw: unknown): Tone {
+  if (raw === 'confident' || raw === 'friendly' || raw === 'formal') return raw;
+  return 'formal';
+}
 
 export type CoverLetterGenErrorCode =
   | 'stale_response'
@@ -131,6 +136,7 @@ function buildValidatedLocalFallback(options: {
   companyName: string;
   factSet: CoverLetterFactSet;
   gender: CoverLetterGender;
+  tone?: Tone | string;
 }): { content: string; valid: boolean } {
   const letter = buildDeterministicSparseCoverLetter(options.locale, {
     candidateName: options.candidateName,
@@ -139,6 +145,7 @@ function buildValidatedLocalFallback(options: {
     factSet: options.factSet,
     dateLine: localizedDateLine(options.locale),
     gender: options.gender,
+    tone: normalizeTone(options.tone),
   });
   const content = normalizeCoverLetterBody(
     assembleCoverLetterContent(letter, options.locale),
@@ -147,6 +154,7 @@ function buildValidatedLocalFallback(options: {
   const grounding = validateCoverLetterGrounding(content, options.factSet, {
     locale: options.locale,
     gender: options.gender,
+    stage: 'client_fallback',
   });
   const localeOk = contentMatchesRequestedLocale(content, options.locale);
   return { content, valid: grounding.valid && localeOk && content.trim().length > 0 };
@@ -179,6 +187,7 @@ export function resolveCoverLetterGenerationResult(options: {
   jobTitle: string;
   companyName: string;
   factSet: CoverLetterFactSet;
+  tone?: Tone | string;
 }): CoverLetterResolveResult {
   const selectedGenderNormalized = normalizeCoverLetterGender(options.selectedGenderRaw);
   const requestedGender = normalizeCoverLetterGender(options.requestedGenderNormalized);
@@ -257,6 +266,7 @@ export function resolveCoverLetterGenerationResult(options: {
       companyName: options.companyName,
       factSet: options.factSet,
       gender: requestedGender,
+      tone: options.tone,
     });
     baseDiag.localFallbackValidationValid = fallback.valid;
     if (fallback.valid) {
@@ -363,6 +373,7 @@ export function resolveCoverLetterGenerationResult(options: {
     companyName: options.companyName,
     factSet: options.factSet,
     gender: requestedGender,
+    tone: options.tone,
   });
 
   baseDiag.clientGroundingValid = activation.accepted && !activation.clientFallbackUsed

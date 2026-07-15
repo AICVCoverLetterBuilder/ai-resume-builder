@@ -3,6 +3,7 @@
  * Never treats missing/legacy grounding metadata as validated.
  */
 import type { Locale } from './i18n/translations';
+import type { Tone } from './types';
 import type { CoverLetterFactSet } from './cover-letter-facts';
 import {
   normalizeCoverLetterGroundingStatus,
@@ -21,6 +22,11 @@ import {
   normalizeCoverLetterGender,
   type CoverLetterGender,
 } from './cover-letter-gender';
+
+function normalizeTone(raw: unknown): Tone {
+  if (raw === 'confident' || raw === 'friendly' || raw === 'formal') return raw;
+  return 'formal';
+}
 
 export type ClientGroundingActivation = {
   content: string;
@@ -57,6 +63,7 @@ function buildLocalSparseFallback(options: {
   companyName: string;
   factSet: CoverLetterFactSet;
   gender?: CoverLetterGender | string;
+  tone?: Tone | string;
 }): string {
   const letter = buildDeterministicSparseCoverLetter(options.locale, {
     candidateName: options.candidateName,
@@ -65,6 +72,7 @@ function buildLocalSparseFallback(options: {
     factSet: options.factSet,
     dateLine: localizedDateLine(options.locale),
     gender: normalizeCoverLetterGender(options.gender),
+    tone: normalizeTone(options.tone),
   });
   return normalizeCoverLetterBody(
     assembleCoverLetterContent(letter, options.locale),
@@ -94,6 +102,7 @@ export function activateCoverLetterContentWithClientGrounding(options: {
   companyName: string;
   factSet: CoverLetterFactSet;
   gender?: CoverLetterGender | string;
+  tone?: Tone | string;
 }): ClientGroundingActivation {
   const serverGroundingStatus = normalizeCoverLetterGroundingStatus(options.serverGroundingRaw);
   const schemaMismatch =
@@ -104,6 +113,7 @@ export function activateCoverLetterContentWithClientGrounding(options: {
   const grounding = validateCoverLetterGrounding(options.serverContent, options.factSet, {
     locale: options.locale,
     gender: options.gender,
+    stage: 'client_initial',
   });
   const validatorCompleted = true;
 
@@ -147,10 +157,12 @@ export function activateCoverLetterContentWithClientGrounding(options: {
     companyName: options.companyName,
     factSet: options.factSet,
     gender: options.gender,
+    tone: options.tone,
   });
   const fallbackGrounding = validateCoverLetterGrounding(fallback, options.factSet, {
     locale: options.locale,
     gender: options.gender,
+    stage: 'client_fallback',
   });
 
   if (fallbackGrounding.valid) {
