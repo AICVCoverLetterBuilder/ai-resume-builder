@@ -6,7 +6,10 @@
  * for PROFESSIONAL SUMMARY (never leave page 1 blank after the header).
  */
 import { getLocalizedCvLanguageName } from './cv-language-options';
+import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvSkillName } from './cv-skill-options';
+import { prepareCorporateNavyExport } from './corporate-navy-export-integrity';
+import { formatCorporateNavySectionHeading } from './corporate-navy-heading';
 import { translations, type Locale } from './i18n/translations';
 import {
   isRtlLocale,
@@ -357,7 +360,8 @@ export function cnDrawSectionHeading(
     bold: true,
     lineH: 3.5,
   };
-  const text = label.toUpperCase();
+  // Script-aware: Devanagari stays one shaped unit; Latin/Cyrillic keep PDF uppercase (unspaced).
+  const text = formatCorporateNavySectionHeading(label, { letterSpaced: false });
   applyStyle(ctx, headingStyle, text);
   drawText(ctx, text, x, ctx.y + 3, headingStyle);
   ctx.y += 4.2;
@@ -697,7 +701,7 @@ function drawLanguagesInColumn(
     drawText(ctx, name, colX, rowY + 2.8, nameStyle);
     if (lang.level) {
       const levelStyle: Style = { size: 8.5, color: MUTED, lineH: 3.6 };
-      const levelText = `/ ${lang.level}`;
+      const levelText = `/ ${localizeCvLanguageLevel(lang.level, ctx.locale)}`;
       applyStyle(ctx, levelStyle, levelText);
       const lw = pdfI18nCtxTextWidth(ctx, levelText, { size: levelStyle.size, bold: false });
       drawText(ctx, levelText, colX + colW - lw, rowY + 2.8, levelStyle, { align: 'right' });
@@ -779,12 +783,20 @@ function cnDrawCertifications(ctx: CorporateNavyDirectPdfContext): void {
 export async function buildCorporateNavyPagedPdfBlob(
   cv: CVData,
   locale: Locale,
-  options: { photoDataUrl?: string | null } = {},
+  options: {
+    photoDataUrl?: string | null;
+    alreadyPrepared?: boolean;
+    projectionId?: string;
+  } = {},
 ): Promise<Blob> {
+  const safeCv = options.alreadyPrepared
+    ? cv
+    : prepareCorporateNavyExport(cv, locale, { gender: cv.personal?.gender }).cv;
+  void options.projectionId;
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
-  const ctx = cnCreateContext(pdf, cv, locale, i18n);
+  const ctx = cnCreateContext(pdf, safeCv, locale, i18n);
 
   const maskedPhoto = options.photoDataUrl
     ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)

@@ -5,6 +5,8 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { prepareCreativeArtisticExport } from './cv-export-integrity';
+import { prepareCorporateNavyExport } from './corporate-navy-export-integrity';
+import { formatCorporateNavySectionHeading } from './corporate-navy-heading';
 import { createAtsStandardPdfTemplate } from './ats-standard-pdf-template';
 import { createContemporaryBoldPdfTemplate } from './contemporary-bold-pdf-template';
 import { createElegantFormalPdfTemplate } from './elegant-formal-pdf-template';
@@ -7945,16 +7947,23 @@ export async function exportToDOCX(
   // ════ LAYOUT: corporate-navy (dedicated) ═════════════════════════════════════════════════════
   // Centered dark header · letter-spaced section headings · 2-col skills · slash languages
   else if (cfg.customLayout === 'corporate-navy') {
+    // One validated projection for PDF/DOCX parity (per-field locale integrity).
+    const cnPrepared = prepareCorporateNavyExport(cvData, locale, {
+      gender: cvData.personal?.gender,
+    });
+    cvData = cnPrepared.cv;
+    (cvData as CVData & { __cnExportProjectionId?: string }).__cnExportProjectionId = cnPrepared.projection.projectionId;
     const cnBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
-
-    function cnSpaced(text: string): string {
-      return text.toUpperCase().split('').join(' ');
-    }
 
     function cnHeading(text: string) {
       return new Paragraph({
         alignment: AlignmentType.LEFT,
-        children: [new TextRun({ text: cnSpaced(text), bold: true, size: 17, color: cfg.headingColor })],
+        children: [new TextRun({
+          text: formatCorporateNavySectionHeading(text, { letterSpaced: true }),
+          bold: true,
+          size: 17,
+          color: cfg.headingColor,
+        })],
         spacing: { before: 150, after: 72 },
         border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: cfg.headingBorder } },
       });
@@ -8156,7 +8165,7 @@ export async function exportToDOCX(
           metaChildren.push(new Paragraph({
             children: [
               new TextRun({ text: getLocalizedCvLanguageName(lang.name, locale), bold: true, size: 17, color: '111827' }),
-              new TextRun({ text: ' / ' + lang.level, size: 17, color: '6B7280' }),
+              new TextRun({ text: ' / ' + localizeCvLanguageLevel(lang.level, locale), size: 17, color: '6B7280' }),
             ],
             spacing: { after: 14 },
           }));
@@ -14183,12 +14192,22 @@ export async function buildCorporateNavyPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  const canonicalPhoto = await prepareCorporateNavyPdfPhotoDataUrl(cv);
-  const blob = await buildCorporateNavyPagedPdfBlob(cv, locale, {
+  const prepared = prepareCorporateNavyExport(cv, locale, {
+    gender: cv.personal?.gender,
+  });
+  const canonicalPhoto = await prepareCorporateNavyPdfPhotoDataUrl(prepared.cv);
+  const blob = await buildCorporateNavyPagedPdfBlob(prepared.cv, locale, {
     photoDataUrl: canonicalPhoto?.dataUrl ?? null,
+    alreadyPrepared: true,
+    projectionId: prepared.projection.projectionId,
   });
   if (!blob || blob.size === 0) throw new Error('Corporate Navy PDF generation produced an empty Blob');
   return blob;
+}
+
+/** Shared prep so Corporate Navy PDF/DOCX tests can assert one identical projection. */
+export function prepareCorporateNavyPdfDocxExport(cv: CVData, locale: Locale) {
+  return prepareCorporateNavyExport(cv, locale, { gender: cv.personal?.gender });
 }
 
 export async function exportCorporateNavyPdf(
