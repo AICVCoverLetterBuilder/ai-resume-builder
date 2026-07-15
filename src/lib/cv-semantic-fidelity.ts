@@ -14,6 +14,10 @@ import {
   splitExperienceBullets,
 } from './cv-canonical-facts';
 import { normalizeCoverLetterGender, type CoverLetterGender } from './cover-letter-gender';
+import {
+  type ExperienceDuration,
+  validateSummaryDuration,
+} from './cv-experience-duration';
 
 export type CvFidelityViolationKind =
   | 'unsupported_duty'
@@ -25,7 +29,8 @@ export type CvFidelityViolationKind =
   | 'perspective_mix'
   | 'gender_form_mismatch'
   | 'locale_quality'
-  | 'language_level_mismatch';
+  | 'language_level_mismatch'
+  | 'experience_duration_mismatch';
 
 export type CvFidelityViolation = {
   kind: CvFidelityViolationKind;
@@ -97,6 +102,7 @@ const LOCALE_QUALITY_PATTERNS: Array<{ locale?: Locale; re: RegExp; kind?: CvFid
   { locale: 'fr', re: /\bdes notions en italien\b/iu, kind: 'language_level_mismatch' },
   { locale: 'ja', re: /アテンション・トゥ・ディテール/u, kind: 'locale_quality' },
   { locale: 'it', re: /\bPreparò\b|\bGestì\b|\bMantenne\b|\bSupportò\b/u, kind: 'locale_quality' },
+  { locale: 'hi', re: /रिक्लेमेशन/u, kind: 'locale_quality' },
 ];
 
 const FEMALE_MISMATCH: Array<{ locale: Locale; re: RegExp }> = [
@@ -440,6 +446,8 @@ export function validateLocalizedSummary(
     locale?: Locale | string;
     gender?: CoverLetterGender | string;
     stage?: string;
+    /** When provided, duration year claims must match this shared snapshot. */
+    expectedDuration?: ExperienceDuration;
   },
 ): CvFidelityResult {
   const violations: CvFidelityViolation[] = [];
@@ -475,6 +483,19 @@ export function validateLocalizedSummary(
         matched: m[0],
         section: 'summary',
         factId: 'summary-0',
+      });
+    }
+  }
+
+  if (options.expectedDuration) {
+    const durationCheck = validateSummaryDuration(localizedSummary, options.expectedDuration);
+    if (!durationCheck.valid) {
+      violations.push({
+        kind: 'experience_duration_mismatch',
+        matched: durationCheck.claims.join(',') || 'duration',
+        section: 'summary',
+        factId: 'summary-0',
+        evidence: `expectedApproxYears=${options.expectedDuration.approxYears}`,
       });
     }
   }

@@ -39,6 +39,12 @@ import {
   applyCanonicalSummaryEdit,
 } from '@/lib/cv-canonical-snapshot';
 import { validateSummaryCompleteness } from '@/lib/cv-semantic-fidelity';
+import {
+  buildExperienceDurationSnapshot,
+  durationToPromptToken,
+  validateSummaryDuration,
+} from '@/lib/cv-experience-duration';
+import { applyCvContentQuality, resolveSummaryWithDurationPolicy } from '@/lib/cv-content-quality';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
@@ -766,34 +772,10 @@ export default function CVBuilderPage() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
     try {
-      // Calculate real total experience duration from actual dates
-      const calculateExperienceSummary = (): string => {
-        if (cv.experience.length === 0) return '';
-        let totalMonths = 0;
-        let hasValidDates = false;
-        const now = new Date();
-        for (const exp of cv.experience) {
-          if (!exp.startDate) continue;
-          const start = new Date(exp.startDate + '-01');
-          if (isNaN(start.getTime())) continue;
-          const end = exp.isPresent || !exp.endDate
-            ? now
-            : new Date(exp.endDate + '-01');
-          if (isNaN(end.getTime())) continue;
-          const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth());
-          if (months > 0) { totalMonths += months; hasValidDates = true; }
-        }
-        if (!hasValidDates) return '';
-        if (totalMonths < 6) return 'practical';
-        if (totalMonths < 12) return 'under-one-year';
-        const years = Math.floor(totalMonths / 12);
-        const remainingMonths = totalMonths % 12;
-        if (remainingMonths === 0) return `${years}`;
-        if (remainingMonths < 6) return `${years}`;
-        return `${years}.5`;
-      };
-
-      const experienceDuration = calculateExperienceSummary();
+      // Shared deterministic duration — never let each locale estimate independently.
+      const referenceDateIso = new Date().toISOString().slice(0, 10);
+      const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
+      const experienceDuration = durationToPromptToken(durationSnapshot.total);
       const experienceEntries = cv.experience.slice(0, 4).map(exp => ({
         position: exp.position,
         company: exp.company,
@@ -801,6 +783,8 @@ export default function CVBuilderPage() {
         endDate: exp.isPresent ? 'present' : exp.endDate,
         // Always ground summaries on frozen canonical duties, not a prior locale rewrite.
         description: freezeCanonicalExperienceDescription(exp).slice(0, 300),
+        isPresent: exp.isPresent,
+        duration: durationSnapshot.byExperienceId[exp.id],
       }));
 
       const { data: summaryData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
@@ -809,6 +793,8 @@ export default function CVBuilderPage() {
           proToken,
           jobTitle: cv.personal.jobTitle,
           experienceDuration,
+          experienceDurationSnapshot: durationSnapshot,
+          referenceDateIso,
           experienceEntries,
           skills: cv.skills.slice(0, 10),
           languages: cv.languages.slice(0, 4),
@@ -827,12 +813,26 @@ export default function CVBuilderPage() {
         }
         throw new Error(summaryData.error || 'AI error');
       }
-      const nextSummary = (summaryData.result ?? '').trim();
+      let nextSummary = (summaryData.result ?? '').trim();
       if (!validateSummaryCompleteness(nextSummary, { locale }).valid) {
         toast.error(locale === 'hi'
           ? 'AI summary was incomplete and was not applied. Please try again.'
           : 'AI summary failed completeness checks and was not applied. Please try again.');
         return;
+      }
+      if (!validateSummaryDuration(nextSummary, durationSnapshot.total).valid) {
+        nextSummary = resolveSummaryWithDurationPolicy(
+          nextSummary,
+          durationSnapshot.total,
+          locale,
+        ).summary;
+        if (
+          !validateSummaryCompleteness(nextSummary, { locale }).valid
+          || !validateSummaryDuration(nextSummary, durationSnapshot.total).valid
+        ) {
+          toast.error('AI summary duration was inconsistent and was not applied. Please try again.');
+          return;
+        }
       }
       setCv((prev) => acceptValidatedAiContent(prev, {
         locale,
@@ -893,11 +893,18 @@ export default function CVBuilderPage() {
       }
 
       const newDescription = bulletsData.result || '';
-      setCv((prev) => acceptValidatedAiContent(prev, {
-        locale,
-        experienceId: expId,
-        description: newDescription,
-      }));
+      setCv((prev) => {
+        const withRaw = acceptValidatedAiContent(prev, {
+          locale,
+          experienceId: expId,
+          description: newDescription,
+        });
+        // Content-quality normalize current-role tense / natural Hindi for this experience only.
+        const quality = applyCvContentQuality(withRaw, locale, {
+          gender: withRaw.personal?.gender || '',
+        });
+        return quality.cv;
+      });
       recordProAiSuccess();
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {

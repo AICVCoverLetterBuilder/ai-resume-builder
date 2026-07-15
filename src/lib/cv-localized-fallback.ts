@@ -12,6 +12,10 @@ import {
   type CvCanonicalFactSet,
   type CvDutyCategory,
 } from './cv-canonical-facts';
+import {
+  formatApproximateDurationPhrase,
+  type ExperienceDuration,
+} from './cv-experience-duration';
 
 type GenderTone = 'male' | 'female' | 'neutral';
 
@@ -173,37 +177,67 @@ const BULLET_BY_CATEGORY: Record<
   },
 };
 
-const SUMMARY_SHELL: Record<Locale, (role: string, duties: string, g: GenderTone) => string> = {
-  en: (role, duties) =>
-    `${role || 'Professional'} with relevant experience. ${duties}`.trim(),
-  de: (role, duties) =>
-    `${role || 'Fachkraft'} mit relevanter Berufserfahrung. ${duties}`.trim(),
-  es: (role, duties) =>
-    `${role || 'Profesional'} con experiencia relevante. ${duties}`.trim(),
-  fr: (role, duties) =>
-    `${role || 'Professionnel(le)'} avec une expérience pertinente. ${duties}`.trim(),
-  it: (role, duties) =>
-    `${role || 'Professionista'} con esperienza pertinente. ${duties}`.trim(),
-  ar: (role, duties) =>
-    `${role || 'محترف'} ذو خبرة ذات صلة. ${duties}`.trim(),
-  sr: (role, duties, g) =>
+const SUMMARY_SHELL: Record<Locale, (role: string, duties: string, g: GenderTone, durationPhrase?: string) => string> = {
+  en: (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'Professional'} ${durationPhrase}. ${duties}`.trim()
+      : `${role || 'Professional'} with relevant experience. ${duties}`.trim(),
+  de: (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'Fachkraft'} ${durationPhrase}. ${duties}`.trim()
+      : `${role || 'Fachkraft'} mit relevanter Berufserfahrung. ${duties}`.trim(),
+  es: (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'Profesional'} ${durationPhrase}. ${duties}`.trim()
+      : `${role || 'Profesional'} con experiencia relevante. ${duties}`.trim(),
+  fr: (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'Professionnel(le)'} ${durationPhrase}. ${duties}`.trim()
+      : `${role || 'Professionnel(le)'} avec une expérience pertinente. ${duties}`.trim(),
+  it: (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'Professionista'} ${durationPhrase}. ${duties}`.trim()
+      : `${role || 'Professionista'} con esperienza pertinente. ${duties}`.trim(),
+  ar: (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'محترف'} ${durationPhrase}. ${duties}`.trim()
+      : `${role || 'محترف'} ذو خبرة ذات صلة. ${duties}`.trim(),
+  sr: (role, duties, g, durationPhrase) =>
     g === 'male'
-      ? `${role || 'Profesionalac'} sa relevantnim iskustvom. ${duties}`.trim()
-      : `${role || 'Profesionalka'} sa relevantnim iskustvom. ${duties}`.trim(),
-  hr: (role, duties, g) =>
+      ? (durationPhrase
+        ? `${role || 'Profesionalac'} ${durationPhrase}. ${duties}`.trim()
+        : `${role || 'Profesionalac'} sa relevantnim iskustvom. ${duties}`.trim())
+      : (durationPhrase
+        ? `${role || 'Profesionalka'} ${durationPhrase}. ${duties}`.trim()
+        : `${role || 'Profesionalka'} sa relevantnim iskustvom. ${duties}`.trim()),
+  hr: (role, duties, g, durationPhrase) =>
     g === 'male'
-      ? `${role || 'Profesionalac'} s relevantnim iskustvom. ${duties}`.trim()
-      : `${role || 'Profesionalka'} s relevantnim iskustvom. ${duties}`.trim(),
-  ru: (role, duties, g) =>
+      ? (durationPhrase
+        ? `${role || 'Profesionalac'} ${durationPhrase}. ${duties}`.trim()
+        : `${role || 'Profesionalac'} s relevantnim iskustvom. ${duties}`.trim())
+      : (durationPhrase
+        ? `${role || 'Profesionalka'} ${durationPhrase}. ${duties}`.trim()
+        : `${role || 'Profesionalka'} s relevantnim iskustvom. ${duties}`.trim()),
+  ru: (role, duties, g, durationPhrase) =>
     g === 'male'
-      ? `${role || 'Специалист'} с релевантным опытом. ${duties}`.trim()
-      : `${role || 'Специалистка'} с релевантным опытом. ${duties}`.trim(),
-  'pt-BR': (role, duties) =>
-    `${role || 'Profissional'} com experiência relevante. ${duties}`.trim(),
-  hi: (role, duties) =>
-    `${role || 'पेशेवर'} के पास प्रासंगिक अनुभव है। ${duties}`.trim(),
-  ja: (role, duties) =>
-    `${role || 'プロフェッショナル'}として関連経験があります。${duties}`.trim(),
+      ? (durationPhrase
+        ? `${role || 'Специалист'} ${durationPhrase}. ${duties}`.trim()
+        : `${role || 'Специалист'} с релевантным опытом. ${duties}`.trim())
+      : (durationPhrase
+        ? `${role || 'Специалистка'} ${durationPhrase}. ${duties}`.trim()
+        : `${role || 'Специалистка'} с релевантным опытом. ${duties}`.trim()),
+  'pt-BR': (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'Profissional'} ${durationPhrase}. ${duties}`.trim()
+      : `${role || 'Profissional'} com experiência relevante. ${duties}`.trim(),
+  hi: (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'पेशेवर'} ${durationPhrase}। ${duties}`.trim()
+      : `${role || 'पेशेवर'} के पास प्रासंगिक अनुभव है। ${duties}`.trim(),
+  ja: (role, duties, _g, durationPhrase) =>
+    durationPhrase
+      ? `${role || 'プロフェッショナル'}${durationPhrase}。${duties}`.trim()
+      : `${role || 'プロフェッショナル'}として関連経験があります。${duties}`.trim(),
 };
 
 function localizeRoleLabel(role: string, locale: Locale, g: GenderTone): string {
@@ -264,6 +298,7 @@ export function deterministicLocalizedSummaryFromCanonical(
   factSet: CvCanonicalFactSet,
   locale: Locale,
   gender?: CoverLetterGender | string,
+  duration?: ExperienceDuration,
 ): string {
   const g = tone(gender);
   const rawRole = factSet.facts.find((f) => f.type === 'job_title')?.value
@@ -277,7 +312,10 @@ export function deterministicLocalizedSummaryFromCanonical(
   if (bullets.some((b) => !b.trim())) return '';
   const duties = bullets.join(locale === 'ja' ? '。' : locale === 'hi' ? '। ' : '. ');
   const shell = SUMMARY_SHELL[locale] || SUMMARY_SHELL.en;
-  let text = shell(role, duties, g).replace(/\s+/g, ' ').trim();
+  const durationPhrase = duration?.hasValidDates
+    ? formatApproximateDurationPhrase(duration, locale)
+    : '';
+  let text = shell(role, duties, g, durationPhrase || undefined).replace(/\s+/g, ' ').trim();
   if (locale === 'hi' && !/[।.!?…]\s*$/u.test(text)) text = `${text}।`;
   else if (!/[.!?…।۔]\s*$/u.test(text)) text = `${text}.`;
   return text;

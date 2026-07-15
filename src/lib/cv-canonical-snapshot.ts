@@ -73,6 +73,9 @@ export type ValidatedLocalizedCvProjection = {
   localizedExperiences: LocalizedProjectionExperience[];
   localizedLanguageLevels: Array<{ name: string; level: string }>;
   validationStatus: 'passed' | 'repaired' | 'fallback';
+  /** Precomputed duration — PDF/DOCX must not recalculate independently. */
+  experienceDurationSnapshot?: import('./cv-experience-duration').ExperienceDurationSnapshot;
+  gender?: string;
 };
 
 function fnv1aHex(input: string): string {
@@ -133,6 +136,8 @@ export function buildProjectionId(projection: Omit<ValidatedLocalizedCvProjectio
     localizedExperiences: projection.localizedExperiences,
     localizedLanguageLevels: projection.localizedLanguageLevels,
     validationStatus: projection.validationStatus,
+    experienceDurationSnapshot: projection.experienceDurationSnapshot || null,
+    gender: projection.gender || '',
   }))}`;
 }
 

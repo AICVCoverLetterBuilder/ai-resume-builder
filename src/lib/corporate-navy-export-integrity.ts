@@ -13,6 +13,8 @@ import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
+import { buildExperienceDurationSnapshot, type ExperienceDurationSnapshot } from './cv-experience-duration';
+import { applyCvContentQuality } from './cv-content-quality';
 
 export type CorporateNavySecurityCategory =
   | 'premises_access_monitoring'
@@ -49,7 +51,9 @@ export type CorporateNavyExportProjection = {
     }>;
   }>;
   localizedLanguageLevels: Array<{ name: string; level: string }>;
-  validationStatus: 'passed' | 'fallback';
+  validationStatus: 'passed' | 'fallback' | 'repaired';
+  experienceDurationSnapshot?: ExperienceDurationSnapshot;
+  gender?: string;
 };
 
 export class CorporateNavyLocaleExportError extends Error {
@@ -248,9 +252,15 @@ function resolveBulletForLocale(
 export function prepareCorporateNavyExport(
   cv: CVData,
   locale: Locale,
-  options?: { gender?: string },
+  options?: {
+    gender?: string;
+    referenceDate?: Date | string;
+    durationSnapshot?: ExperienceDurationSnapshot;
+  },
 ): { cv: CVData; projection: CorporateNavyExportProjection } {
   const gender = options?.gender || cv.personal?.gender || '';
+  const sharedDuration = options?.durationSnapshot
+    || buildExperienceDurationSnapshot(cv.experience || [], options?.referenceDate ?? new Date());
   let usedFallback = false;
 
   if (locale === 'hi' && cv.summary && !textMatchesRequestedLocale(cv.summary, 'hi')) {
@@ -311,30 +321,7 @@ export function prepareCorporateNavyExport(
     level: localizeCvLanguageLevel(lang.level, locale),
   }));
 
-  const projectionBase = {
-    requestedLocale: locale,
-    canonicalLocale: cv.canonicalSnapshot?.canonicalLocale ?? detectContentLocale(
-      [cv.canonicalSummary || cv.summary, ...experiences.map((e) => e.canonicalDescription)].join('\n'),
-    ),
-    canonicalRevision: cv.canonicalSnapshot?.canonicalRevision ?? 0,
-    canonicalSourceHash: cv.canonicalSnapshot?.canonicalSourceHash ?? '',
-    localizedSummary: cv.summary || '',
-    localizedExperiences: experiences.map((e) => ({
-      experienceId: e.experienceId,
-      role: e.role,
-      company: e.company,
-      bullets: e.bullets,
-    })),
-    localizedLanguageLevels: languageLevels,
-    validationStatus: (usedFallback ? 'fallback' : 'passed') as 'passed' | 'fallback',
-  };
-
-  const projection: CorporateNavyExportProjection = {
-    ...projectionBase,
-    projectionId: `cn-proj-${fnv1aHex(JSON.stringify(projectionBase))}`,
-  };
-
-  const nextCv: CVData = {
+  let nextCv: CVData = {
     ...cv,
     experience: (cv.experience || []).map((exp, idx) => {
       const localized = experiences[idx];
@@ -350,6 +337,55 @@ export function prepareCorporateNavyExport(
       level: languageLevels[i]?.level || lang.level,
     })),
     skills: (cv.skills || []).map((s) => getLocalizedCvSkillName(s, locale)),
+  };
+
+  const quality = applyCvContentQuality(nextCv, locale, {
+    gender,
+    durationSnapshot: sharedDuration,
+    referenceDate: options?.referenceDate || sharedDuration.referenceDateIso,
+  });
+  nextCv = quality.cv;
+
+  const qualityExperiences = experiences.map((e) => {
+    const qExp = nextCv.experience.find((x) => x.id === e.experienceId);
+    if (!qExp) return e;
+    const qBullets = splitExperienceBullets(qExp.description || '');
+    return {
+      ...e,
+      bullets: e.bullets.map((b, i) => ({
+        ...b,
+        localizedText: qBullets[i] || b.localizedText,
+      })),
+    };
+  });
+
+  const projectionBase = {
+    requestedLocale: locale,
+    canonicalLocale: cv.canonicalSnapshot?.canonicalLocale ?? detectContentLocale(
+      [cv.canonicalSummary || cv.summary, ...experiences.map((e) => e.canonicalDescription)].join('\n'),
+    ),
+    canonicalRevision: cv.canonicalSnapshot?.canonicalRevision ?? 0,
+    canonicalSourceHash: cv.canonicalSnapshot?.canonicalSourceHash ?? '',
+    localizedSummary: nextCv.summary || '',
+    localizedExperiences: qualityExperiences.map((e) => ({
+      experienceId: e.experienceId,
+      role: e.role,
+      company: e.company,
+      bullets: e.bullets,
+    })),
+    localizedLanguageLevels: languageLevels,
+    validationStatus: (usedFallback
+      ? 'fallback'
+      : quality.repaired
+        ? 'repaired'
+        : 'passed') as 'passed' | 'fallback' | 'repaired',
+    experienceDurationSnapshot: quality.durationSnapshot,
+    gender,
+  };
+
+  const projection: CorporateNavyExportProjection = {
+    ...projectionBase,
+    projectionId: `cn-proj-${fnv1aHex(JSON.stringify(projectionBase))}`,
   };
 
   return { cv: nextCv, projection };

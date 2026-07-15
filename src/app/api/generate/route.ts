@@ -22,6 +22,12 @@ import {
   deterministicBulletsFromCanonical,
 } from '@/lib/cv-canonical-facts';
 import { activateCvExperienceBullets, activateCvSummary } from '@/lib/cv-content-activation';
+import {
+  applyApproximateDurationPolicy,
+  durationToPromptToken,
+  type ExperienceDuration,
+  type ExperienceDurationSnapshot,
+} from '@/lib/cv-experience-duration';
 
 // ── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -499,10 +505,19 @@ Rules:
     if (action === 'summary') {
       const { locale, gender, experienceEntries, skills, languages, education } = params;
       const jobTitle = sanitizeField(params.jobTitle, 500);
-      const experienceDuration = sanitizeField(params.experienceDuration, 50);
       const resolvedLocale = normalizeLocale(locale);
       const localeInfo = localeInstructions[resolvedLocale];
       const genderNote = getGenderInstruction(resolvedLocale, gender || '');
+
+      // Prefer the shared precomputed duration snapshot — never re-estimate per locale.
+      const snapshot = params.experienceDurationSnapshot as ExperienceDurationSnapshot | undefined;
+      const totalFromSnapshot: ExperienceDuration | undefined = snapshot?.total
+        && typeof snapshot.total.totalMonths === 'number'
+        ? applyApproximateDurationPolicy(snapshot.total.totalMonths)
+        : undefined;
+      const experienceDuration = totalFromSnapshot
+        ? durationToPromptToken(totalFromSnapshot)
+        : sanitizeField(params.experienceDuration, 50);
 
       // Build experience context block from real data
       const entries: Array<{ position?: string; company?: string; startDate?: string; endDate?: string; description?: string }> =
@@ -511,19 +526,15 @@ Rules:
       const langsList: Array<{ name?: string; level?: string }> = Array.isArray(languages) ? languages : [];
       const eduList: Array<{ degree?: string; school?: string }> = Array.isArray(education) ? education : [];
 
-      // Build duration phrase based on actual calculated duration
+      // Build duration phrase based on actual calculated duration (integer years only — never "4.5")
       let durationPhrase = '';
       if (experienceDuration === 'practical') {
         durationPhrase = 'IMPORTANT: The candidate has less than 6 months of work experience. Use wording like "with practical experience in" or "with recent hands-on experience as" — never mention years or imply long experience.';
       } else if (experienceDuration === 'under-one-year') {
-        durationPhrase = 'IMPORTANT: The candidate has 6–11 months of work experience. Use wording like "with almost one year of experience" — never say "1 year" or more.';
+        durationPhrase = 'IMPORTANT: The candidate has under one year of work experience. Use months / "almost one year" wording — never say "1 year" or more.';
       } else if (experienceDuration && !isNaN(Number(experienceDuration))) {
-        const yrs = parseFloat(experienceDuration as string);
-        if (yrs < 2) {
-          durationPhrase = `IMPORTANT: The candidate has approximately ${yrs} year(s) of work experience. State this accurately (e.g. "over one year" or "around ${yrs} year(s)") — do not round up or inflate.`;
-        } else {
-          durationPhrase = `IMPORTANT: The candidate has approximately ${yrs} years of work experience. You may state this accurately — do not inflate or invent higher numbers.`;
-        }
+        const yrs = Math.floor(parseFloat(experienceDuration as string));
+        durationPhrase = `IMPORTANT: Shared deterministic duration: approximately ${yrs} year(s) of work experience (totalMonths=${totalFromSnapshot?.totalMonths ?? 'n/a'}). State THIS exact approximate year count in the summary — do not use four when the value is five, and do not invent a different number per language.`;
       } else {
         durationPhrase = 'IMPORTANT: Exact experience duration is unknown. Do NOT mention any number of years or imply a specific duration. Use phrases like "with professional experience in" instead.';
       }

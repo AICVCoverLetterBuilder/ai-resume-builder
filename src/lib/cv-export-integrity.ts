@@ -16,6 +16,7 @@ import { deterministicSummaryFromCanonical } from './cv-content-activation';
 import {
   applyProjectionToCv,
   buildProjectionFromLocalizedCv,
+  buildProjectionId,
   isProjectionFresh,
   storeLocalizedProjection,
   type ValidatedLocalizedCvProjection,
@@ -30,6 +31,9 @@ import {
   validateLocalizedSummary,
   validateSummaryCompleteness,
 } from './cv-semantic-fidelity';
+import { buildExperienceDurationSnapshot } from './cv-experience-duration';
+import { applyCvContentQuality } from './cv-content-quality';
+import { localizeCvLanguageLevel } from './cv-language-levels';
 
 export class CreativeArtisticLocaleExportError extends Error {
   readonly locale: Locale;
@@ -177,7 +181,13 @@ function localizeCvAgainstCanonical(
 
   if (!isValidLocalizedSummary(summary, factSet, locale, gender, canonicalSummary || summary, canonicalLocale)) {
     validationStatus = 'fallback';
-    const localizedSummary = deterministicLocalizedSummaryFromCanonical(factSet, locale, gender);
+    const durationForShell = buildExperienceDurationSnapshot(cv.experience || []).total;
+    const localizedSummary = deterministicLocalizedSummaryFromCanonical(
+      factSet,
+      locale,
+      gender,
+      durationForShell,
+    );
     if (localizedSummary && isValidLocalizedSummary(
       localizedSummary,
       factSet,
@@ -237,21 +247,83 @@ function localizeCvAgainstCanonical(
 export function applyCreativeArtisticExportIntegrity(
   cv: CVData,
   locale: Locale,
-  options?: { gender?: string },
+  options?: { gender?: string; referenceDate?: Date | string },
 ): CVData {
   return prepareCreativeArtisticExport(cv, locale, options).cv;
 }
 
+function attachQualityToProjection(
+  sourceCv: CVData,
+  localizedCv: CVData,
+  locale: Locale,
+  gender: string,
+  validationStatus: ValidatedLocalizedCvProjection['validationStatus'],
+  referenceDate?: Date | string,
+  priorSnapshot?: ValidatedLocalizedCvProjection['experienceDurationSnapshot'],
+): { cv: CVData; projection: ValidatedLocalizedCvProjection } {
+  const quality = applyCvContentQuality(localizedCv, locale, {
+    gender,
+    referenceDate,
+    durationSnapshot: priorSnapshot,
+  });
+  const status: ValidatedLocalizedCvProjection['validationStatus'] = quality.repaired
+    ? (validationStatus === 'fallback' ? 'fallback' : 'repaired')
+    : validationStatus;
+
+  const base = buildProjectionFromLocalizedCv(sourceCv, quality.cv, locale, status);
+  const withoutId = {
+    requestedLocale: base.requestedLocale,
+    canonicalLocale: base.canonicalLocale,
+    canonicalRevision: base.canonicalRevision,
+    canonicalSourceHash: base.canonicalSourceHash,
+    localizedSummary: quality.cv.summary || '',
+    localizedExperiences: base.localizedExperiences.map((exp) => {
+      const qExp = quality.cv.experience.find((e) => e.id === exp.experienceId);
+      if (!qExp) return exp;
+      const bullets = (qExp.description || '')
+        .split(/\r?\n/)
+        .map((line) => line.replace(/^[•\-\*\u2022]\s*/, '').trim())
+        .filter(Boolean);
+      return {
+        ...exp,
+        bullets: exp.bullets.map((b, i) => ({
+          ...b,
+          localizedText: bullets[i] || b.localizedText,
+        })),
+      };
+    }),
+    localizedLanguageLevels: (quality.cv.languages || []).map((lang) => ({
+      name: lang.name,
+      level: localizeCvLanguageLevel(lang.level, locale),
+    })),
+    validationStatus: status,
+    experienceDurationSnapshot: quality.durationSnapshot,
+    gender,
+  };
+  const projection: ValidatedLocalizedCvProjection = {
+    ...withoutId,
+    projectionId: buildProjectionId(withoutId),
+  };
+  const withProjection = storeLocalizedProjection(quality.cv, projection);
+  return {
+    cv: applyProjectionToCv(withProjection, projection),
+    projection,
+  };
+}
+
 /**
  * Single prep used by PDF and DOCX so both consume the identical projection.
+ * Both exporters must receive the same precomputed experienceDurationSnapshot.
  */
 export function prepareCreativeArtisticExport(
   cv: CVData,
   locale: Locale,
-  options?: { gender?: string },
+  options?: { gender?: string; referenceDate?: Date | string; durationSnapshot?: import('./cv-experience-duration').ExperienceDurationSnapshot },
 ): { cv: CVData; projection: ValidatedLocalizedCvProjection } {
   const gender = options?.gender || cv.personal?.gender || '';
   const snapshot = cv.canonicalSnapshot;
+  const durationSnapshot = options?.durationSnapshot
+    || buildExperienceDurationSnapshot(cv.experience || [], options?.referenceDate ?? new Date());
 
   if (snapshot?.canonicalState === 'needs_rebuild') {
     throw new CreativeArtisticLocaleExportError(
@@ -274,7 +346,16 @@ export function prepareCreativeArtisticExport(
       throw new CreativeArtisticLocaleExportError(locale, 'stale/fresh projection failed English-dump invariant');
     }
     const applied = applyProjectionToCv(cv, freshProjection);
-    return { cv: applied, projection: freshProjection };
+    // Re-run content quality with the shared duration snapshot (never recalculate from localized text).
+    return attachQualityToProjection(
+      cv,
+      applied,
+      locale,
+      gender,
+      freshProjection.validationStatus,
+      options?.referenceDate || durationSnapshot.referenceDateIso,
+      options?.durationSnapshot || freshProjection.experienceDurationSnapshot || durationSnapshot,
+    );
   }
 
   if (freshProjection && snapshot && !isProjectionFresh(freshProjection, snapshot)) {
@@ -282,13 +363,15 @@ export function prepareCreativeArtisticExport(
   }
 
   const { cv: localizedCv, validationStatus } = localizeCvAgainstCanonical(cv, locale, gender);
-  const projection = buildProjectionFromLocalizedCv(cv, localizedCv, locale, validationStatus);
-  const withProjection = storeLocalizedProjection(localizedCv, projection);
-
-  return {
-    cv: applyProjectionToCv(withProjection, projection),
-    projection,
-  };
+  return attachQualityToProjection(
+    cv,
+    localizedCv,
+    locale,
+    gender,
+    validationStatus,
+    options?.referenceDate || durationSnapshot.referenceDateIso,
+    durationSnapshot,
+  );
 }
 
 /** Safe wrapper used by preview helpers that prefer empty section over a crash. */
