@@ -49,6 +49,22 @@ import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { getAppUserId } from '@/lib/iap';
 import { buildCoverLetterFactSet } from '@/lib/cover-letter-facts';
 import {
+  COVER_LETTER_CARD_CLASS,
+  COVER_LETTER_CONTENT_CLASS,
+  COVER_LETTER_FORM_GRID_CLASS,
+  COVER_LETTER_MAIN_CLASS,
+  COVER_LETTER_PAGE_SHELL_CLASS,
+  COVER_LETTER_PREVIEW_CARD_CLASS,
+  COVER_LETTER_SAVE_CLUSTER_CLASS,
+  COVER_LETTER_SEGMENTED_BTN_BASE_CLASS,
+  COVER_LETTER_SEGMENTED_BTN_MIN_HEIGHT_CLASS,
+  COVER_LETTER_SEGMENTED_ROW_CLASS,
+  COVER_LETTER_TITLE_CLASS,
+  COVER_LETTER_TITLE_ROW_RESPONSIVE_CLASS,
+  COVER_LETTER_TONE_BTN_BASE_CLASS,
+  COVER_LETTER_TONE_BTN_MIN_HEIGHT_CLASS,
+} from '@/lib/cover-letter-mobile-layout';
+import {
   beginCoverLetterGroundingDiagnostics,
   countFactsByCategory,
   updateCoverLetterGroundingDiagnostics,
@@ -301,6 +317,14 @@ export default function CoverLetterPage() {
       prevUiLocaleRef.current = locale;
     }
   }, [locale, contentLocale, groundingStatus, generationPhase, cl.content.length, cl.gender, activeResult]);
+
+  // Defensive: clear any leftover horizontal offset after locale switches.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.scrollTo({ left: 0 });
+    document.documentElement.scrollLeft = 0;
+    document.body.scrollLeft = 0;
+  }, [locale]);
 
   // Gender change intentionally invalidates the previous grammatical-gender snapshot.
   useEffect(() => {
@@ -950,36 +974,36 @@ export default function CoverLetterPage() {
   const regenExhausted = !canRegenerateCoverLetter();
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className={COVER_LETTER_PAGE_SHELL_CLASS} data-cover-letter-page-root>
       <Header />
-      <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-4xl">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-            <div className="flex items-center justify-between mb-6">
-              <h1 className="text-2xl font-bold">{t.coverLetter.title}</h1>
-              <div className="flex items-center gap-3">
+      <main className={COVER_LETTER_MAIN_CLASS}>
+        <div className={COVER_LETTER_CONTENT_CLASS}>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full min-w-0 max-w-full">
+            <div className={COVER_LETTER_TITLE_ROW_RESPONSIVE_CLASS} data-cover-letter-title-row>
+              <h1 className={COVER_LETTER_TITLE_CLASS}>{t.coverLetter.title}</h1>
+              <div className={COVER_LETTER_SAVE_CLUSTER_CLASS}>
                 {/* "Draft saved" indicator — appears briefly after autosave */}
                 {lastClSavedAt > 0 && Date.now() - lastClSavedAt < 3000 && (
                   <span className="text-xs text-muted-foreground animate-pulse" key={lastClSavedAt}>
                     {t.coverLetter.draftSaved || 'Draft saved'}
                   </span>
                 )}
-                <button onClick={handleSave} className={btnPrimary}>{t.common.save}</button>
+                <button onClick={handleSave} className={`${btnPrimary} shrink-0`}>{t.common.save}</button>
               </div>
             </div>
 
-            <div className="grid gap-8 lg:grid-cols-2">
+            <div className={COVER_LETTER_FORM_GRID_CLASS}>
               {/* Form */}
-              <div className="rounded-xl border border-border bg-card p-6 space-y-4">
+              <div className={COVER_LETTER_CARD_CLASS} data-cover-letter-info-card>
 
                 {/* Identity section */}
-                <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-3">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    <User className="h-3.5 w-3.5" />
-                    {t.coverLetter.identitySection}
+                <div className="min-w-0 w-full max-w-full rounded-lg border border-border bg-muted/30 p-3 space-y-3" data-cover-letter-identity-card>
+                  <div className="flex min-w-0 items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    <User className="h-3.5 w-3.5 shrink-0" />
+                    <span className="min-w-0 break-words">{t.coverLetter.identitySection}</span>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
+                  <div className="grid min-w-0 grid-cols-2 gap-3">
+                    <div className="min-w-0">
                       <label className="mb-1.5 block text-sm font-medium">{t.coverLetter.firstName}</label>
                       <input
                         value={cl.firstName}
@@ -988,7 +1012,7 @@ export default function CoverLetterPage() {
                         placeholder={t.coverLetter.firstNamePlaceholder}
                       />
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <label className="mb-1.5 block text-sm font-medium">{t.coverLetter.lastName}</label>
                       <input
                         value={cl.lastName}
@@ -998,9 +1022,9 @@ export default function CoverLetterPage() {
                       />
                     </div>
                   </div>
-                  <div>
+                  <div className="min-w-0" data-cover-letter-gender>
                     <label className="mb-1.5 block text-sm font-medium">{t.coverLetter.gender}</label>
-                    <div className="flex gap-2">
+                    <div className={COVER_LETTER_SEGMENTED_ROW_CLASS} data-cover-letter-gender-row>
                       {([
                         { value: 'male', label: t.coverLetter.genderMale },
                         { value: 'female', label: t.coverLetter.genderFemale },
@@ -1010,7 +1034,13 @@ export default function CoverLetterPage() {
                           key={opt.value}
                           type="button"
                           onClick={() => setCl(prev => ({ ...prev, gender: prev.gender === opt.value ? '' : opt.value }))}
-                          className={`flex-1 rounded-lg border px-2 py-1.5 text-xs font-medium transition-all ${cl.gender === opt.value ? 'border-primary bg-primary/5 text-primary' : 'border-border hover:bg-accent'}`}
+                          className={cn(
+                            COVER_LETTER_SEGMENTED_BTN_BASE_CLASS,
+                            COVER_LETTER_SEGMENTED_BTN_MIN_HEIGHT_CLASS,
+                            cl.gender === opt.value
+                              ? 'border-primary bg-primary/5 text-primary'
+                              : 'border-border hover:bg-accent',
+                          )}
                         >
                           {opt.label}
                         </button>
@@ -1019,22 +1049,27 @@ export default function CoverLetterPage() {
                   </div>
                 </div>
 
-                <div>
+                <div className="min-w-0" data-cover-letter-job-company>
                   <label className="mb-1.5 block text-sm font-medium">{t.coverLetter.jobTitle}</label>
                   <input value={cl.jobTitle} onChange={e => setCl(prev => ({ ...prev, jobTitle: e.target.value }))} className={inputClass} placeholder={t.cv.jobTitlePlaceholder} />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium">{t.coverLetter.companyName}</label>
+                  <label className="mb-1.5 mt-4 block text-sm font-medium">{t.coverLetter.companyName}</label>
                   <input value={cl.companyName} onChange={e => setCl(prev => ({ ...prev, companyName: e.target.value }))} className={inputClass} placeholder={t.coverLetter.companyPlaceholder} />
                 </div>
-                <div>
+                <div className="min-w-0" data-cover-letter-tone>
                   <label className="mb-1.5 block text-sm font-medium">{t.coverLetter.tone}</label>
-                  <div className="flex gap-2">
+                  <div className={COVER_LETTER_SEGMENTED_ROW_CLASS} data-cover-letter-tone-row>
                     {(['formal', 'confident', 'friendly'] as Tone[]).map(tone => (
                       <button
                         key={tone}
+                        type="button"
                         onClick={() => setCl(prev => ({ ...prev, tone }))}
-                        className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all ${cl.tone === tone ? 'border-primary bg-primary/5 text-primary' : 'border-border hover:bg-accent'}`}
+                        className={cn(
+                          COVER_LETTER_TONE_BTN_BASE_CLASS,
+                          COVER_LETTER_TONE_BTN_MIN_HEIGHT_CLASS,
+                          cl.tone === tone
+                            ? 'border-primary bg-primary/5 text-primary'
+                            : 'border-border hover:bg-accent',
+                        )}
                       >
                         {t.coverLetter.tones[tone]}
                       </button>
@@ -1043,7 +1078,7 @@ export default function CoverLetterPage() {
                 </div>
 
                 {/* Generate button */}
-                <div className="relative">
+                <div className="relative min-w-0 w-full max-w-full" data-cover-letter-generate>
                   <PremiumAIButton
                     onClick={handleGenerate}
                     disabled={isGenerating}
@@ -1052,6 +1087,7 @@ export default function CoverLetterPage() {
                     subtitle={isGenerating ? undefined : t.coverLetter.generateSubtitle}
                     badge={<AIBadge />}
                     showArrow
+                    className="max-w-full"
                   />
                   {!isGenerating && (
                     <button
@@ -1093,24 +1129,27 @@ export default function CoverLetterPage() {
                 )}
 
                 {/* AI badge + disclaimer */}
-                <div className="rounded-lg border border-blue-100 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30 px-3 py-2.5 space-y-1">
-                  <p className="flex items-center gap-1.5 text-xs text-blue-700 dark:text-blue-300 font-medium">
-                    <Sparkles className="h-3 w-3 flex-shrink-0" />
-                    {t.about.aiDisclosure.items[1]}
+                <div
+                  className="min-w-0 w-full max-w-full rounded-lg border border-blue-100 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30 px-3 py-2.5 space-y-1"
+                  data-cover-letter-privacy
+                >
+                  <p className="flex min-w-0 items-start gap-1.5 text-xs text-blue-700 dark:text-blue-300 font-medium">
+                    <Sparkles className="h-3 w-3 flex-shrink-0 mt-0.5" />
+                    <span className="min-w-0 break-words">{t.about.aiDisclosure.items[1]}</span>
                   </p>
-                  <p className="text-[10px] text-blue-600 dark:text-blue-400 leading-relaxed">
+                  <p className="text-[10px] text-blue-600 dark:text-blue-400 leading-relaxed break-words">
                     {t.about.aiDisclosure.items[0]}
                   </p>
                 </div>
               </div>
 
               {/* Preview */}
-              <div className="rounded-xl border border-border bg-card p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold">{t.coverLetter.preview}</h3>
-                  <div className="flex gap-2">
+              <div className={COVER_LETTER_PREVIEW_CARD_CLASS} data-cover-letter-preview-card>
+                <div className="mb-4 flex min-w-0 items-center justify-between gap-2">
+                  <h3 className="min-w-0 font-semibold break-words">{t.coverLetter.preview}</h3>
+                  <div className="flex shrink-0 gap-2">
                     <button onClick={() => setEditing(!editing)} className={btnSecondary}>
-                      <Pencil className="h-4 w-4" />{editing ? t.coverLetter.preview : t.coverLetter.edit}
+                      <Pencil className="h-4 w-4 shrink-0" />{editing ? t.coverLetter.preview : t.coverLetter.edit}
                     </button>
                   </div>
                 </div>

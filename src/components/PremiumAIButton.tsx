@@ -43,8 +43,8 @@ export function PremiumAIButton({
   return (
     <button
       className={cn(
-        // Base layout — card style, full width
-        'group relative flex w-full items-start gap-3 overflow-hidden text-left',
+        // Base layout — card style, full width; min-w-0 so long locale labels cannot widen parents
+        'group relative flex w-full max-w-full min-w-0 items-start gap-3 overflow-hidden text-left',
         // Border radius — premium card (16–18px range)
         'rounded-[17px]',
         // Padding — compact, breathable (12–14px)
@@ -111,7 +111,7 @@ export function PremiumAIButton({
       <span className="relative flex min-w-0 flex-1 flex-col gap-[3px]">
         {/* Title — 15px, weight 600, single line */}
         <span
-          className="text-[15px] font-semibold leading-[1.25] tracking-[-0.01em] text-[#f0ead8] truncate"
+          className="min-w-0 text-[15px] font-semibold leading-[1.25] tracking-[-0.01em] text-[#f0ead8] whitespace-normal break-words sm:truncate"
         >
           {label}
         </span>
@@ -119,7 +119,7 @@ export function PremiumAIButton({
         {/* Description — 12–13px, muted, max 2 lines, no overflow */}
         {subtitle && (
           <span
-            className="text-[12px] font-normal leading-[1.4] text-[rgba(240,234,216,0.55)] line-clamp-2"
+            className="min-w-0 text-[12px] font-normal leading-[1.4] text-[rgba(240,234,216,0.55)] line-clamp-2 break-words"
           >
             {typeof subtitle === 'string'
               ? subtitle.replace(/ · /g, ' · ')
