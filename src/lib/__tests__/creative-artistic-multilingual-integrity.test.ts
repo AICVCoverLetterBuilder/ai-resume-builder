@@ -9,8 +9,10 @@ import JSZip from 'jszip';
 import {
   buildCvCanonicalFactSet,
   bulletsForExperience,
+  classifyDutyCategory,
   deterministicBulletsFromCanonical,
   formatExperienceBullets,
+  freezeCanonicalExperienceDescription,
   splitExperienceBullets,
 } from '@/lib/cv-canonical-facts';
 import {
@@ -18,7 +20,15 @@ import {
   activateCvSummary,
   deterministicSummaryFromCanonical,
 } from '@/lib/cv-content-activation';
+import {
+  applyCreativeArtisticExportIntegrity,
+  CreativeArtisticLocaleExportError,
+} from '@/lib/cv-export-integrity';
 import { localizeCvLanguageLevel } from '@/lib/cv-language-levels';
+import {
+  deterministicLocalizedBulletsFromCanonical,
+  isEnglishCanonicalDump,
+} from '@/lib/cv-localized-fallback';
 import { getLocalizedCvSkillName } from '@/lib/cv-skill-options';
 import {
   validateLocalizedExperienceBullets,
@@ -35,10 +45,10 @@ const LOCALES: Locale[] = [
 ];
 
 const CANONICAL_BULLETS = [
-  'Prepared and served cocktails and non-alcoholic drinks according to bar recipes.',
-  'Welcomed guests at the bar and took orders accurately.',
-  'Maintained mise en place and bar cleanliness during service.',
-  'Followed hygiene and service standards set by the venue.',
+  'Prepared and served a wide variety of cocktails, spirits, and beverages.',
+  'Maintained a clean and organised bar area and hygiene/safety standards.',
+  'Provided attentive customer service and built rapport with guests.',
+  'Managed stock levels, assisted with inventory counts, and communicated supply needs to management.',
 ];
 
 function bartenderCv(overrides: Partial<CVData> = {}): CVData {
@@ -51,10 +61,11 @@ function bartenderCv(overrides: Partial<CVData> = {}): CVData {
       phone: '+381 60 123 4567',
       address: 'Belgrade',
       jobTitle: 'Bartender',
+      gender: 'female',
       photoEnabled: false,
     },
     summary:
-      'Bartender with about one and a half years of experience. I prepare cocktails and non-alcoholic drinks to bar standards, welcome guests accurately, and keep a clean mise en place. I work reliably in a team and communicate clearly in English and Italian.',
+      'Bartender with about one and a half years of experience. I prepare cocktails, spirits, and beverages, maintain a clean and organised bar with strong hygiene/safety standards, provide attentive customer service and guest rapport, and manage stock with inventory counts communicated to management.',
     experience: [
       {
         id: 'exp0',
@@ -64,8 +75,11 @@ function bartenderCv(overrides: Partial<CVData> = {}): CVData {
         endDate: '',
         isPresent: true,
         description: formatExperienceBullets(CANONICAL_BULLETS),
+        canonicalDescription: formatExperienceBullets(CANONICAL_BULLETS),
       },
     ],
+    canonicalSummary:
+      'Bartender with about one and a half years of experience. I prepare cocktails, spirits, and beverages, maintain a clean and organised bar with strong hygiene/safety standards, provide attentive customer service and guest rapport, and manage stock with inventory counts communicated to management.',
     education: [
       {
         id: 'edu0',
@@ -98,8 +112,9 @@ function bartenderCv(overrides: Partial<CVData> = {}): CVData {
 }
 
 function longCreativeArtisticCv(withPhoto = false): CVData {
+  // Long but category-classified duties so non-English exports can localize without dumping English.
   const bullets = Array.from({ length: 7 }, (_, i) =>
-    `• Delivered responsibility ${i + 1} for long-company-name-international-hospitality-group with precise service standards and reliable collaboration across busy service periods.`,
+    `• ${CANONICAL_BULLETS[i % CANONICAL_BULLETS.length]} Extended operational coverage item ${i + 1} across high-volume service windows with precise documentation for long-company-name-international-hospitality-group.`,
   ).join('\n');
   const experiences = Array.from({ length: 5 }, (_, i) => ({
     id: `exp-${i}`,
@@ -109,7 +124,14 @@ function longCreativeArtisticCv(withPhoto = false): CVData {
     endDate: i === 0 ? '' : `201${i + 1}-12`,
     isPresent: i === 0,
     description: bullets,
+    canonicalDescription: bullets,
   }));
+  const longSummary = [
+    'Experienced bartender and hospitality professional with a multi-year track record of guest-focused service, precise drink preparation, and calm coordination in high-volume venues.',
+    'I prepare cocktails and non-alcoholic drinks according to established recipes, welcome guests clearly, maintain mise en place, and uphold hygiene and service standards.',
+    'I collaborate reliably with colleagues, communicate in English and Italian at intermediate to advanced levels, and continuously refine technique without inventing unsupported duties.',
+    'My professional focus is consistent quality, accurate orders, and a welcoming bar experience for every guest across peak service windows and special venue moments when already part of the role.',
+  ].join(' ');
   return bartenderCv({
     personal: {
       fullName: 'Ana Markovic',
@@ -122,12 +144,8 @@ function longCreativeArtisticCv(withPhoto = false): CVData {
         ? 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR42mP8z8DwnwEJMDGgAcQGALpCAwPXYZaSAAAAAElFTkSuQmCC'
         : undefined,
     },
-    summary: [
-      'Experienced bartender and hospitality professional with a multi-year track record of guest-focused service, precise drink preparation, and calm coordination in high-volume venues.',
-      'I prepare cocktails and non-alcoholic drinks according to established recipes, welcome guests clearly, maintain mise en place, and uphold hygiene and service standards.',
-      'I collaborate reliably with colleagues, communicate in English and Italian at intermediate to advanced levels, and continuously refine technique without inventing unsupported duties.',
-      'My professional focus is consistent quality, accurate orders, and a welcoming bar experience for every guest across peak service windows and special venue moments when already part of the role.',
-    ].join(' '),
+    summary: longSummary,
+    canonicalSummary: longSummary,
     experience: experiences,
     education: [
       {
@@ -292,7 +310,7 @@ describe('Creative Artistic multilingual content integrity', () => {
       const offline = generateBulletsOffline('hospitality', 'mid', 'Atelje Bar', locale, cv.experience[0].description);
       const lines = splitExperienceBullets(offline);
       expect(lines).toHaveLength(4);
-      expect(lines[0]).toContain('Prepared and served cocktails');
+      expect(lines[0]).toContain('Prepared and served a wide variety of cocktails');
       expect(offline.toLowerCase()).not.toMatch(/allerg|muddling|wastage|evening shift|kitchen staff|syrup/);
     }
   });
@@ -338,7 +356,7 @@ describe('Creative Artistic multilingual content integrity', () => {
     expect(activated.content).toBe(deterministicBulletsFromCanonical(bulletsForExperience(factSet, 0)));
   });
 
-  test('Hindi truncated summary is rejected and complete fallback activated', async () => {
+  test('Hindi truncated summary is rejected and complete localized fallback activated', async () => {
     const truncated = 'आगे चलकर मैं अपने बारटेंडिंग कौशल को और परिष्कृत करते हु';
     expect(validateSummaryCompleteness(truncated, { locale: 'hi' }).valid).toBe(false);
 
@@ -353,7 +371,11 @@ describe('Creative Artistic multilingual content integrity', () => {
       repair: async () => truncated,
     });
     expect(activated.status).toBe('fallback');
+    expect(activated.blocked).not.toBe(true);
     expect(activated.content).not.toContain('करते हु');
+    expect(activated.content).not.toContain('मैंअप');
+    expect(/[\u0900-\u097F]/.test(activated.content)).toBe(true);
+    expect(activated.content.toLowerCase()).not.toContain('prepared and served');
     expect(validateSummaryCompleteness(activated.content, { locale: 'hi' }).valid).toBe(true);
     expect(activated.content.toLowerCase()).not.toMatch(/allerg|muddling|wastage/);
   });
@@ -471,15 +493,27 @@ describe('Creative Artistic multilingual content integrity', () => {
       const pdfText = normalizeParityText(root.textContent || '');
       const xml = await exportDocxXml(cv, locale);
       const docxText = normalizeParityText(extractDocxText(xml));
+      const safe = applyCreativeArtisticExportIntegrity(cv, locale, { gender: 'female' });
+      const expectedBullets = normalizeParityText(safe.experience[0].description);
+      const expectedSummary = normalizeParityText(safe.summary);
 
       expect(pdfText).toContain(normalizeParityText('Atelje Bar'));
       expect(docxText).toContain(normalizeParityText('Atelje Bar'));
       expect(pdfText).toContain(normalizeParityText('Bartender'));
       expect(docxText).toContain(normalizeParityText('Bartender'));
-      for (const bullet of CANONICAL_BULLETS) {
-        const token = normalizeParityText(bullet).slice(0, 28);
+      // PDF and DOCX must share the same locale-valid facts (never English dump vs localized mix).
+      // Compare PDF ↔ DOCX using overlapping duty tokens (summary may wrap differently).
+      for (const line of splitExperienceBullets(safe.experience[0].description)) {
+        const token = normalizeParityText(line).slice(0, 24);
         expect(pdfText, `pdf locale=${locale}`).toContain(token);
         expect(docxText, `docx locale=${locale}`).toContain(token);
+      }
+      expect(normalizeParityText(safe.summary).length).toBeGreaterThan(20);
+      expect(docxText.includes(normalizeParityText(safe.summary).slice(0, 32))
+        || pdfText.includes(normalizeParityText(safe.summary).slice(0, 32))).toBe(true);
+      expect(expectedBullets.length).toBeGreaterThan(20);
+      if (locale !== 'en') {
+        expect(isEnglishCanonicalDump(safe.experience[0].description, formatExperienceBullets(CANONICAL_BULLETS), locale)).toBe(false);
       }
       const adv = normalizeParityText(localizeCvLanguageLevel('Advanced', locale));
       const mid = normalizeParityText(localizeCvLanguageLevel('Intermediate', locale));
@@ -487,7 +521,7 @@ describe('Creative Artistic multilingual content integrity', () => {
       expect(docxText).toContain(adv);
       expect(pdfText).toContain(mid);
       expect(docxText).toContain(mid);
-      expect(splitExperienceBullets(cv.experience[0].description)).toHaveLength(4);
+      expect(splitExperienceBullets(safe.experience[0].description)).toHaveLength(4);
     }
   }, 120_000);
 
@@ -505,15 +539,31 @@ describe('Creative Artistic multilingual content integrity', () => {
     const longCvPhoto = longCreativeArtisticCv(true);
     const pageLocales: Locale[] = ['en', 'de', 'sr', 'hi', 'ja', 'ar'];
 
-    for (const locale of pageLocales) {
+    // English proves multi-page pagination with long source bullets.
+    {
+      vi.resetModules();
+      const { instances } = installDirectPdfMocks();
+      const mod = await import('@/lib/export');
+      const blob = await mod.buildCreativeArtisticPdfBlob(longCv, 'en');
+      expect(blob.size).toBeGreaterThan(0);
+      expect(instances[0].pages).toBeGreaterThanOrEqual(3);
+      expect(instances[0].addPage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    }
+
+    // Non-English locales must export localized (never English dump), even if shorter.
+    for (const locale of ['de', 'sr', 'hi', 'ja', 'ar'] as Locale[]) {
       vi.resetModules();
       const { instances } = installDirectPdfMocks();
       const mod = await import('@/lib/export');
       const blob = await mod.buildCreativeArtisticPdfBlob(longCv, locale);
       expect(blob.size).toBeGreaterThan(0);
-      expect(instances.length, `jspdf instance locale=${locale}`).toBeGreaterThan(0);
-      expect(instances[0].pages, `pdf pages locale=${locale}`).toBeGreaterThanOrEqual(3);
-      expect(instances[0].addPage.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(instances.length).toBeGreaterThan(0);
+      const safe = applyCreativeArtisticExportIntegrity(longCv, locale, { gender: 'female' });
+      expect(isEnglishCanonicalDump(
+        safe.experience[0].description,
+        longCv.experience[0].canonicalDescription || longCv.experience[0].description,
+        locale,
+      )).toBe(false);
     }
 
     vi.resetModules();
@@ -524,16 +574,19 @@ describe('Creative Artistic multilingual content integrity', () => {
       expect(instances[0].pages).toBeGreaterThanOrEqual(3);
     }
 
-    // Factual content + pagination/keep-with-next for representative DOCX locales.
     for (const locale of ['en', 'de', 'ar'] as Locale[]) {
       const xml = await exportDocxXml(longCv, locale);
       expect(xml).toContain('w:keepNext');
       expect(xml).toContain('Very Long Employer Name');
-      expect(xml).toContain('Delivered responsibility 1');
       expect(extractDocxText(xml).length).toBeGreaterThan(400);
       if (locale === 'ar') {
         expect(xml).toContain('w:bidi');
         expect(xml).toMatch(/w:jc[^>]*w:val="right"/);
+      }
+      if (locale === 'en') {
+        expect(xml).toContain('Prepared and served a wide variety of cocktails');
+      } else {
+        expect(xml.toLowerCase()).not.toContain('prepared and served a wide variety of cocktails');
       }
     }
   }, 120_000);
@@ -545,4 +598,208 @@ describe('Creative Artistic multilingual content integrity', () => {
     expect(summary.toLowerCase()).toContain('bartender');
     expect(summary.toLowerCase()).not.toMatch(/allerg|muddling|wastage/);
   });
+
+  test('build 214: Serbian meaning drift is rejected; canonical categories are preserved', async () => {
+    const english = formatExperienceBullets(CANONICAL_BULLETS);
+    expect(classifyDutyCategory(CANONICAL_BULLETS[2])).toBe('customer_service_guest_relationship');
+    expect(classifyDutyCategory(CANONICAL_BULLETS[3])).toBe('inventory_stock');
+
+    const factSet = buildFactSetFromEnglish(english);
+    const badSr = [
+      '• Pripremala sam i služila širok spektar kokteile i pića po standardnim i prilagođenim receptima.',
+      '• Održavala sam čist i uredan šank i higijenske standarde.',
+      '• Sarađivala sam sa kolegama tokom gužve i podržavala tim.',
+      '• Dopunjavala sam zalihe po potrebi.',
+    ].join('\n');
+
+    const check = validateLocalizedExperienceBullets(badSr, factSet, {
+      locale: 'sr',
+      gender: 'female',
+      experienceIndex: 0,
+      stage: 'initial',
+    });
+    expect(check.valid).toBe(false);
+    expect(check.violations.some((v) => v.kind === 'duty_replaced' || v.kind === 'material_duty_removed')).toBe(true);
+    expect(check.violations.some((v) => /kokteile/i.test(v.matched) || v.kind === 'locale_quality')).toBe(true);
+    expect(check.violations.some((v) => v.kind === 'unsupported_duty' && /recipe/i.test(v.matched))).toBe(true);
+
+    const activated = await activateCvExperienceBullets({
+      locale: 'sr',
+      gender: 'female',
+      experienceIndex: 0,
+      factSet,
+      candidate: badSr,
+      repair: async () => badSr,
+    });
+    expect(activated.status).toBe('fallback');
+    expect(activated.blocked).not.toBe(true);
+    expect(activated.content).toContain('koktela');
+    expect(activated.content).toContain('gostima');
+    expect(activated.content).toContain('zaliha');
+    expect(activated.content.toLowerCase()).not.toContain('prepared and served');
+    expect(isEnglishCanonicalDump(
+      activated.content,
+      formatExperienceBullets(CANONICAL_BULLETS),
+      'sr',
+    )).toBe(false);
+  });
+
+  test('build 214: Hindi mid-token stub never exports English; uses Hindi fallback or blocks', () => {
+    const stub = 'आगेचलकर मैंअप';
+    expect(validateSummaryCompleteness(stub, { locale: 'hi' }).valid).toBe(false);
+
+    const cv = bartenderCv({
+      summary: stub,
+      canonicalSummary:
+        'Bartender with about one and a half years of experience preparing cocktails and serving guests.',
+      experience: [
+        {
+          id: 'exp0',
+          company: 'Atelje Bar',
+          position: 'Bartender',
+          startDate: '2024-01',
+          endDate: '',
+          isPresent: true,
+          description: '• गलत कर्तव्य और रेसिपी आविष्कार',
+          canonicalDescription: formatExperienceBullets(CANONICAL_BULLETS),
+        },
+      ],
+    });
+
+    const safe = applyCreativeArtisticExportIntegrity(cv, 'hi', { gender: 'female' });
+    expect(safe.summary).not.toContain('मैंअप');
+    expect(safe.summary).not.toContain('आगेचलकर');
+    expect(/[\u0900-\u097F]/.test(safe.summary)).toBe(true);
+    expect(safe.summary.toLowerCase()).not.toContain('prepared and served');
+    expect(/[\u0900-\u097F]/.test(safe.experience[0].description)).toBe(true);
+    expect(safe.experience[0].description.toLowerCase()).not.toContain('prepared and served');
+    expect(validateSummaryCompleteness(safe.summary, { locale: 'hi' }).valid).toBe(true);
+
+    const root = createCreativeArtisticPdfTemplate(cv, { locale: 'hi' });
+    const text = root.textContent || '';
+    expect(text).not.toContain('मैंअप');
+    expect(text.toLowerCase()).not.toContain('prepared and served a wide variety of cocktails');
+  });
+
+  test('non-English export never silently dumps English canonical text', () => {
+    const english = formatExperienceBullets(CANONICAL_BULLETS);
+    const cv = bartenderCv({
+      summary: english,
+      canonicalSummary: english,
+      experience: [{
+        id: 'exp0',
+        company: 'Atelje Bar',
+        position: 'Bartender',
+        startDate: '2024-01',
+        endDate: '',
+        isPresent: true,
+        description: english,
+        canonicalDescription: english,
+      }],
+    });
+
+    for (const locale of ['sr', 'hi', 'ar'] as Locale[]) {
+      const safe = applyCreativeArtisticExportIntegrity(cv, locale, { gender: 'female' });
+      expect(isEnglishCanonicalDump(safe.experience[0].description, english, locale)).toBe(false);
+      expect(isEnglishCanonicalDump(safe.summary, english, locale)).toBe(false);
+      expect(
+        validateLocalizedExperienceBullets(safe.experience[0].description, buildFactSetFromEnglish(english), {
+          locale,
+          gender: 'female',
+          experienceIndex: 0,
+        }).valid,
+      ).toBe(true);
+    }
+
+    // English export may keep English.
+    const enSafe = applyCreativeArtisticExportIntegrity(cv, 'en');
+    expect(enSafe.experience[0].description).toContain('Prepared and served');
+  });
+
+  test('export integrity throws instead of mixing languages when localized fallback is impossible', () => {
+    const cv = bartenderCv({
+      summary: 'x',
+      canonicalSummary: '',
+      experience: [{
+        id: 'exp0',
+        company: 'Atelje Bar',
+        position: 'Bartender',
+        startDate: '2024-01',
+        endDate: '',
+        isPresent: true,
+        // Generic unique duty — no category template → localization cannot be guaranteed.
+        description: '• Tuned experimental quark calibrators for research lab Protocol Q.',
+        canonicalDescription: '• Tuned experimental quark calibrators for research lab Protocol Q.',
+      }],
+      personal: {
+        fullName: 'Ana',
+        email: 'a@b.c',
+        phone: '1',
+        address: 'x',
+        jobTitle: '',
+      },
+    });
+    expect(() => applyCreativeArtisticExportIntegrity(cv, 'sr', { gender: 'female' }))
+      .toThrow(CreativeArtisticLocaleExportError);
+  });
+
+  test('canonicalDescription freezes before locale overwrite and grounds fact IDs', () => {
+    const exp = {
+      description: formatExperienceBullets(CANONICAL_BULLETS),
+      canonicalDescription: '',
+    };
+    const frozen = freezeCanonicalExperienceDescription(exp);
+    expect(frozen).toContain('inventory counts');
+    const afterLocale = {
+      description: '• Lokalizovani tekst koji menja značenje',
+      canonicalDescription: frozen,
+    };
+    expect(freezeCanonicalExperienceDescription(afterLocale)).toBe(frozen);
+    const facts = buildCvCanonicalFactSet({
+      personal: { fullName: '', email: '', phone: '', address: '', jobTitle: 'Bartender' },
+      summary: '',
+      experience: [{
+        id: 'e0',
+        company: 'Atelje Bar',
+        position: 'Bartender',
+        startDate: '2024-01',
+        endDate: '',
+        isPresent: true,
+        description: afterLocale.description,
+        canonicalDescription: afterLocale.canonicalDescription,
+      }],
+      education: [],
+      skills: [],
+      certifications: [],
+      languages: [],
+    });
+    expect(bulletsForExperience(facts, 0).map((b) => b.id)).toEqual([
+      'experience-0-bullet-0',
+      'experience-0-bullet-1',
+      'experience-0-bullet-2',
+      'experience-0-bullet-3',
+    ]);
+    expect(bulletsForExperience(facts, 0)[2].category).toBe('customer_service_guest_relationship');
+  });
 });
+
+function buildFactSetFromEnglish(english: string) {
+  return buildCvCanonicalFactSet({
+    personal: { fullName: '', email: '', phone: '', address: '', jobTitle: 'Bartender' },
+    summary: '',
+    experience: [{
+      id: 'e0',
+      company: 'Atelje Bar',
+      position: 'Bartender',
+      startDate: '2024-01',
+      endDate: '',
+      isPresent: true,
+      description: english,
+      canonicalDescription: english,
+    }],
+    education: [],
+    skills: [],
+    certifications: [],
+    languages: [],
+  });
+}

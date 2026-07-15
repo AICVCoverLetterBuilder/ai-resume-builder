@@ -5,7 +5,12 @@ import type { Locale } from './i18n/translations';
 import {
   bulletsForExperience,
   buildCvCanonicalFactSet,
+  classifyDutyCategory,
+  DUTY_CATEGORY_PRESENCE,
+  GUEST_DUTY_REPLACEMENT,
+  RECIPE_INVENTION,
   type CvCanonicalFactSet,
+  type CvDutyCategory,
   splitExperienceBullets,
 } from './cv-canonical-facts';
 import { normalizeCoverLetterGender, type CoverLetterGender } from './cover-letter-gender';
@@ -14,6 +19,7 @@ export type CvFidelityViolationKind =
   | 'unsupported_duty'
   | 'bullet_count_mismatch'
   | 'material_duty_removed'
+  | 'duty_replaced'
   | 'meta_changed'
   | 'summary_incomplete'
   | 'perspective_mix'
@@ -52,11 +58,15 @@ const UNSUPPORTED_DUTY_PATTERNS: RegExp[] = [
   /wastage|otpad|هدر|Abfall|gaspi/iu,
   /syrups? and garnishes?|сирупа и гарнир|عصائر وشرابات|sirovi i garniture/iu,
   /receiving and storing (?:wines|beers|spirits)|prijem i skladištenje|استلام وتخزين/iu,
+  RECIPE_INVENTION,
 ];
 
 const SUMMARY_INCOMPLETE_PATTERNS: RegExp[] = [
   /करते\s*हु\s*$/u,
   /करते\s*हुए\s*$/u,
+  /मैंअप\s*$/u,
+  /आगेचलकर\s*मैंअप\s*$/u,
+  /आगे\s*चलकर\s*मैं\s*अप\s*$/u,
   /और\s*$/u,
   /तथा\s*$/u,
   /with\s*$/iu,
@@ -74,6 +84,9 @@ const SUMMARY_INCOMPLETE_PATTERNS: RegExp[] = [
 const LOCALE_QUALITY_PATTERNS: Array<{ locale?: Locale; re: RegExp; kind?: CvFidelityViolationKind }> = [
   { locale: 'sr', re: /\bspreman je\b/iu, kind: 'gender_form_mismatch' },
   { locale: 'sr', re: /\bprateći tehnikama\b/iu, kind: 'locale_quality' },
+  { locale: 'sr', re: /\bkokteile\b/iu, kind: 'locale_quality' },
+  { locale: 'sr', re: /\bbartening/iu, kind: 'locale_quality' },
+  { locale: 'sr', re: /\bsrednje\s+napredn/iu, kind: 'language_level_mismatch' },
   { locale: 'hr', re: /\bUpravljala sam gostima\b/iu, kind: 'locale_quality' },
   { locale: 'ru', re: /Опытн(?:ый|ого)\s+бартендер[\s\S]{0,80}специализирующ(?:аяся|ейся)/iu, kind: 'gender_form_mismatch' },
   { locale: 'ru', re: /командный игрок,\s*способная/iu, kind: 'locale_quality' },
@@ -132,6 +145,13 @@ function dutySupportedByCanonical(matched: string, corpus: string): boolean {
   return stem.length >= 4 && corpus.includes(stem);
 }
 
+function isDevanagariHeavy(text: string): boolean {
+  const letters = text.replace(/\s+/g, '');
+  if (!letters) return false;
+  const dev = (letters.match(/[\u0900-\u097F]/g) || []).length;
+  return dev / letters.length >= 0.35;
+}
+
 export function validateSummaryCompleteness(
   summary: string,
   options?: { locale?: Locale | string },
@@ -141,6 +161,7 @@ export function validateSummaryCompleteness(
   if (!text) {
     return { valid: true, violations: [] };
   }
+  const locale = options?.locale;
 
   // Mid-word / unfinished Devanagari endings and conjunctions
   for (const matched of collectMatches(text, SUMMARY_INCOMPLETE_PATTERNS)) {
@@ -148,7 +169,7 @@ export function validateSummaryCompleteness(
       kind: 'summary_incomplete',
       matched,
       section: 'summary',
-      evidence: options?.locale ? `locale=${options.locale}` : undefined,
+      evidence: locale ? `locale=${locale}` : undefined,
     });
   }
 
@@ -172,9 +193,39 @@ export function validateSummaryCompleteness(
     }
   }
 
-  // Hindi: truncated participle / auxiliary without completion
-  if ((options?.locale === 'hi' || /[\u0900-\u097F]/.test(text)) && /(?:करते|रहते|होते)\s*हु\s*$/u.test(text)) {
-    violations.push({ kind: 'summary_incomplete', matched: 'करते हु', section: 'summary' });
+  // Hindi / Devanagari: reject build-214 style mid-token stubs (`आगेचलकर मैंअप`)
+  const hindiLocale = locale === 'hi' || isDevanagariHeavy(text);
+  if (hindiLocale) {
+    if (
+      /(?:करते|रहते|होते)\s*हु\s*$/u.test(text)
+      || /मैंअप/u.test(text)
+      || (/आगेचलकर/u.test(text) && text.length < 80)
+    ) {
+      violations.push({
+        kind: 'summary_incomplete',
+        matched: text.slice(-24),
+        section: 'summary',
+        evidence: 'hindi-mid-token',
+      });
+    }
+    // Devanagari-heavy text must finish a sentence. Locale=hi with Latin fallback
+    // (export recovery) still needs terminal punctuation.
+    if (!/[।.!?…]\s*$/u.test(text)) {
+      violations.push({
+        kind: 'summary_incomplete',
+        matched: 'missing-sentence-end',
+        section: 'summary',
+        evidence: 'hindi-no-terminal-punct',
+      });
+    }
+    if (
+      isDevanagariHeavy(text)
+      && lastToken
+      && /^[\u0900-\u097F]{1,8}$/u.test(lastToken)
+      && !/[।.!?…]\s*$/u.test(text)
+    ) {
+      violations.push({ kind: 'summary_incomplete', matched: lastToken, section: 'summary' });
+    }
   }
 
   // Empty / whitespace-only after trimming control chars
@@ -183,6 +234,11 @@ export function validateSummaryCompleteness(
   }
 
   return { valid: violations.length === 0, violations };
+}
+
+function localizedPreservesCategory(localized: string, category: CvDutyCategory): boolean {
+  if (category === 'generic') return true;
+  return DUTY_CATEGORY_PRESENCE[category].test(localized);
 }
 
 export function detectPerspectiveMix(
@@ -296,11 +352,65 @@ export function validateLocalizedExperienceBullets(
 
   const corpus = canonicalDutyCorpus(factSet);
   const joined = normalizeLoose(localizedDescription);
+
+  // Per-bullet semantic lock: category + guest/inventory anchors must survive localization.
+  const pairCount = Math.min(canonical.length, localized.length);
+  for (let i = 0; i < pairCount; i += 1) {
+    const fact = canonical[i];
+    const category = fact.category || classifyDutyCategory(fact.sourceText || fact.value);
+    const loc = localized[i];
+    if (!localizedPreservesCategory(loc, category)) {
+      violations.push({
+        kind: 'material_duty_removed',
+        matched: category,
+        factId: fact.id,
+        section: `experience-${experienceIndex}`,
+        evidence: diag,
+      });
+    }
+    if (
+      category === 'customer_service_guest_relationship'
+      && GUEST_DUTY_REPLACEMENT.test(loc)
+      && !DUTY_CATEGORY_PRESENCE.customer_service_guest_relationship.test(loc)
+    ) {
+      violations.push({
+        kind: 'duty_replaced',
+        matched: 'guest→colleague',
+        factId: fact.id,
+        section: `experience-${experienceIndex}`,
+        evidence: diag,
+      });
+    }
+    if (
+      category === 'inventory_stock'
+      && /\b(dopunjav|replenish|nadopun)/iu.test(loc)
+      && !/\b(inventory|inventar|conteggio|count|zalih|manag|uprav|communic|javlja|management)\b/iu.test(loc)
+    ) {
+      violations.push({
+        kind: 'material_duty_removed',
+        matched: 'inventory-communication-weakened',
+        factId: fact.id,
+        section: `experience-${experienceIndex}`,
+        evidence: diag,
+      });
+    }
+  }
+
   for (const matched of collectMatches(joined, UNSUPPORTED_DUTY_PATTERNS)) {
     if (dutySupportedByCanonical(matched, corpus)) continue;
     violations.push({
       kind: 'unsupported_duty',
       matched,
+      section: `experience-${experienceIndex}`,
+      evidence: diag,
+    });
+  }
+
+  // Recipe inventions when canonical corpus has no recipe claim.
+  if (RECIPE_INVENTION.test(joined) && !/recip|recept/iu.test(corpus)) {
+    violations.push({
+      kind: 'unsupported_duty',
+      matched: 'recipe-invention',
       section: `experience-${experienceIndex}`,
       evidence: diag,
     });

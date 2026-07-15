@@ -2,7 +2,8 @@
 
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { localizeCvLanguageLevel } from './cv-language-levels';
-import { getLocalizedCvSkillName } from './cv-skill-options';
+import { applyCreativeArtisticExportIntegrity } from './cv-export-integrity';
+import { getLocalizedCvSkillName } from './cv-skill-options'; // locale skill labels for export chips
 import { translations, type Locale } from './i18n/translations';
 import { regionSettings, type CVData } from './types';
 
@@ -104,7 +105,17 @@ export function createCreativeArtisticPdfTemplate(
   cv: CVData,
   options: CreativeArtisticPdfTemplateOptions = {},
 ): HTMLElement {
-  const L = labels(options.locale);
+  const locale = options.locale ?? 'en';
+  // Preview/PDF template: apply locale-safe integrity. Never dump English into
+  // non-English locales; if localization cannot be guaranteed, leave CV unchanged
+  // and let the dedicated export path throw CreativeArtisticLocaleExportError.
+  try {
+    cv = applyCreativeArtisticExportIntegrity(cv, locale, { gender: cv.personal?.gender });
+  } catch {
+    // Export callers use applyCreativeArtisticExportIntegrity directly and must throw.
+    // Template preview keeps prior content rather than mixing languages.
+  }
+  const L = labels(locale);
   const region = regionSettings[cv.region];
   const root = document.createElement('div');
   root.setAttribute('data-template-id', 'creative-artistic');

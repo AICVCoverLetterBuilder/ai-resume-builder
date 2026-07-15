@@ -9,6 +9,11 @@ import {
   type CvCanonicalFactSet,
 } from './cv-canonical-facts';
 import {
+  deterministicLocalizedBulletsFromCanonical,
+  deterministicLocalizedSummaryFromCanonical,
+  isEnglishCanonicalDump,
+} from './cv-localized-fallback';
+import {
   formatCvFidelityViolationsForPrompt,
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -18,10 +23,12 @@ import {
 
 export type CvContentActivation = {
   content: string;
-  status: 'passed' | 'repaired' | 'fallback';
+  status: 'passed' | 'repaired' | 'fallback' | 'blocked';
   repairAttempted: boolean;
   fallbackUsed: boolean;
   violations: CvFidelityViolation[];
+  /** True when non-English locale could not produce valid localized content (never English dump). */
+  blocked?: boolean;
 };
 
 export function buildBulletRepairPrompt(
@@ -66,6 +73,29 @@ export function buildSummaryRepairPrompt(
   ].join('\n');
 }
 
+function experiencePasses(
+  content: string,
+  options: {
+    locale: Locale;
+    gender?: CoverLetterGender | string;
+    experienceIndex: number;
+    factSet: CvCanonicalFactSet;
+    stage: string;
+    canonicalJoined: string;
+  },
+): boolean {
+  if (!content.trim()) return false;
+  const check = validateLocalizedExperienceBullets(content, options.factSet, {
+    locale: options.locale,
+    gender: options.gender,
+    experienceIndex: options.experienceIndex,
+    stage: options.stage,
+  });
+  if (!check.valid) return false;
+  if (isEnglishCanonicalDump(content, options.canonicalJoined, options.locale)) return false;
+  return true;
+}
+
 export async function activateCvExperienceBullets(options: {
   locale: Locale;
   gender?: CoverLetterGender | string;
@@ -75,14 +105,21 @@ export async function activateCvExperienceBullets(options: {
   repair?: (prompt: string) => Promise<string>;
 }): Promise<CvContentActivation> {
   const canonical = bulletsForExperience(options.factSet, options.experienceIndex);
-  const fallback = deterministicBulletsFromCanonical(canonical);
+  const canonicalJoined = canonical.map((b) => b.value).join('\n');
+  const englishFallback = deterministicBulletsFromCanonical(canonical);
   const first = validateLocalizedExperienceBullets(options.candidate, options.factSet, {
     locale: options.locale,
     gender: options.gender,
     experienceIndex: options.experienceIndex,
     stage: 'initial',
   });
-  if (first.valid && options.candidate.trim()) {
+  if (
+    experiencePasses(options.candidate, {
+      ...options,
+      stage: 'initial',
+      canonicalJoined,
+    })
+  ) {
     return {
       content: options.candidate.trim(),
       status: 'passed',
@@ -102,13 +139,13 @@ export async function activateCvExperienceBullets(options: {
           canonical.map((b) => `- [${b.id}] ${b.value}`).join('\n'),
         ),
       );
-      const recheck = validateLocalizedExperienceBullets(repaired, options.factSet, {
-        locale: options.locale,
-        gender: options.gender,
-        experienceIndex: options.experienceIndex,
-        stage: 'repair',
-      });
-      if (recheck.valid && repaired.trim()) {
+      if (
+        experiencePasses(repaired, {
+          ...options,
+          stage: 'repair',
+          canonicalJoined,
+        })
+      ) {
         return {
           content: repaired.trim(),
           status: 'repaired',
@@ -122,11 +159,45 @@ export async function activateCvExperienceBullets(options: {
     }
   }
 
+  const localizedFallback = deterministicLocalizedBulletsFromCanonical(
+    canonical,
+    options.locale,
+    options.gender,
+  );
+  if (
+    localizedFallback
+    && experiencePasses(localizedFallback, {
+      ...options,
+      stage: 'fallback',
+      canonicalJoined,
+    })
+  ) {
+    return {
+      content: localizedFallback,
+      status: 'fallback',
+      repairAttempted: Boolean(options.repair),
+      fallbackUsed: true,
+      violations: first.violations,
+    };
+  }
+
+  if (options.locale === 'en' && englishFallback) {
+    return {
+      content: englishFallback,
+      status: 'fallback',
+      repairAttempted: Boolean(options.repair),
+      fallbackUsed: true,
+      violations: first.violations,
+    };
+  }
+
+  // Never return English for a non-English locale.
   return {
-    content: fallback || options.candidate.trim(),
-    status: 'fallback',
+    content: '',
+    status: 'blocked',
     repairAttempted: Boolean(options.repair),
     fallbackUsed: true,
+    blocked: true,
     violations: first.violations,
   };
 }
@@ -218,21 +289,67 @@ export async function activateCvSummary(options: {
     }
   }
 
+  const sourceCanonical = options.factSet.facts.find((f) => f.type === 'summary')?.value || '';
   const hinted = options.fallbackSummary.trim();
-  const hintedOk = hinted && validateSummaryCompleteness(hinted, { locale: options.locale }).valid
+  const hintedOk = hinted
+    && validateSummaryCompleteness(hinted, { locale: options.locale }).valid
     && validateLocalizedSummary(hinted, options.factSet, {
       locale: options.locale,
       gender: options.gender,
       stage: 'fallback',
-    }).valid;
-  const fallback = hintedOk
-    ? hinted
-    : deterministicSummaryFromCanonical(options.factSet, hinted);
+    }).valid
+    && !isEnglishCanonicalDump(hinted, sourceCanonical || hinted, options.locale);
+
+  if (hintedOk) {
+    return {
+      content: hinted,
+      status: 'fallback',
+      repairAttempted: Boolean(options.repair),
+      fallbackUsed: true,
+      violations: first.violations,
+    };
+  }
+
+  const localized = deterministicLocalizedSummaryFromCanonical(
+    options.factSet,
+    options.locale,
+    options.gender,
+  );
+  if (
+    localized
+    && validateSummaryCompleteness(localized, { locale: options.locale }).valid
+    && validateLocalizedSummary(localized, options.factSet, {
+      locale: options.locale,
+      gender: options.gender,
+      stage: 'fallback',
+    }).valid
+    && !isEnglishCanonicalDump(localized, sourceCanonical || localized, options.locale)
+  ) {
+    return {
+      content: localized,
+      status: 'fallback',
+      repairAttempted: Boolean(options.repair),
+      fallbackUsed: true,
+      violations: first.violations,
+    };
+  }
+
+  if (options.locale === 'en') {
+    return {
+      content: deterministicSummaryFromCanonical(options.factSet, hinted),
+      status: 'fallback',
+      repairAttempted: Boolean(options.repair),
+      fallbackUsed: true,
+      violations: first.violations,
+    };
+  }
+
   return {
-    content: fallback,
-    status: 'fallback',
+    content: '',
+    status: 'blocked',
     repairAttempted: Boolean(options.repair),
     fallbackUsed: true,
+    blocked: true,
     violations: first.violations,
   };
 }

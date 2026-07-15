@@ -1423,7 +1423,14 @@ describe('Modern Minimal preview/export parity', () => {
           .filter(Boolean)
       : [];
 
-    expect(changedFiles).not.toContain('src/lib/types.ts');
+    // types.ts may gain optional CV fact-lock fields (canonicalDescription/canonicalSummary);
+    // AI recommend template scoring must remain untouched.
+    if (changedFiles.includes('src/lib/types.ts')) {
+      const typesDiff = execFileSync('git', ['diff', '--', 'src/lib/types.ts'], { encoding: 'utf8' });
+      expect(typesDiff).not.toMatch(/recommendTemplate|ProfessionCategory|templateInfo/);
+      expect(typesDiff).toMatch(/canonicalDescription|canonicalSummary/);
+    }
+    expect(changedFiles).not.toContain('src/lib/ai.ts');
   });
 });
 

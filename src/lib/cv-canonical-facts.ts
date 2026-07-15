@@ -22,11 +22,23 @@ export type CvFactType =
   | 'identity'
   | 'job_title';
 
+/** Stable semantic buckets used to reject meaning-replacement across locales. */
+export type CvDutyCategory =
+  | 'beverage_service'
+  | 'hygiene_safety'
+  | 'customer_service_guest_relationship'
+  | 'inventory_stock'
+  | 'generic';
+
 export type CvCanonicalFact = {
   id: string;
   type: CvFactType;
   value: string;
   source: string;
+  /** Original source text for experience bullets (same as value when built from canonical). */
+  sourceText?: string;
+  category?: CvDutyCategory;
+  order?: number;
   experienceIndex?: number;
   bulletIndex?: number;
 };
@@ -49,6 +61,51 @@ export function formatExperienceBullets(bullets: string[], bulletPrefix = '• '
   return bullets.map((b) => `${bulletPrefix}${b.replace(/^[•\-\*\u2022]\s*/, '').trim()}`).join('\n');
 }
 
+export function classifyDutyCategory(text: string): CvDutyCategory {
+  const t = text.toLowerCase().normalize('NFKC');
+  if (/\b(inventory|stock|supply|zalih|inventar|снабжен|запас|स्टॉक|在庫|مخزون|replenish|dopun)/iu.test(t)) {
+    return 'inventory_stock';
+  }
+  if (
+    /\b(guest|guests|customer|customers|rapport|gost|gosti|gostima|klijent|клиент|грах|ग्राहक|客|ضيف|clientes?)\b/iu.test(t)
+    || /attentive customer|building rapport|built rapport|uslugu gost/iu.test(t)
+  ) {
+    return 'customer_service_guest_relationship';
+  }
+  if (
+    /\b(hygiene|safety|clean|organised|organized|čist|cist|higijen|санитар|स्वच्छ|衛生|نظاف)\b/iu.test(t)
+    || /bar area|standarde higijen/iu.test(t)
+  ) {
+    return 'hygiene_safety';
+  }
+  if (
+    /\b(cocktail|cocktails|spirit|spirits|beverage|beverages|drink|drinks|koktel|koktele|koktela|коктейл|पेय|飲料|مشروب)\b/iu.test(t)
+    || /\b(prepared|served|préparé|servir|priprema|služila|služio)\b/iu.test(t)
+  ) {
+    return 'beverage_service';
+  }
+  return 'generic';
+}
+
+/** Multilingual anchors that must remain for each duty category. */
+// Note: avoid \\b for non-Latin scripts — JS word boundaries are ASCII-centric.
+export const DUTY_CATEGORY_PRESENCE: Record<Exclude<CvDutyCategory, 'generic'>, RegExp> = {
+  beverage_service:
+    /(cocktail|koktel|cóctel|coquetel|кокт|напит|कॉकटेल|कोकटेल|पेय|飲料|مشروب|كوكتيل|bebida|getränk|spirit|spirituosen|beverage|drink|pić|napit)/iu,
+  hygiene_safety:
+    /(hygiene|higijen|гигиен|безопасност|safety|bezbednost|sigurnost|clean|чист|čist|cist|organiz|organis|bar area|higij|साफ|स्वच्छ|衛生|نظاف|sicherheit|igiene|higiene)/iu,
+  customer_service_guest_relationship:
+    /(guest|gäst|gost|гост|customer|kunden|klijent|клиент|rapport|odnos|ग्राहक|अतिथि|客|ضيف|ضيوف|client|huésp|ospiti|atenti)/iu,
+  inventory_stock:
+    /(inventory|stock|zalih|inventar|inventur|supply|запас|снаб|स्टॉक|इन्वेंट|在庫|مخزون|invent|beständ|inventaire|conteggio|scorte|estoque|Bestände|niveau)/iu,
+};
+
+/** Phrases that replace guest service with teammate cooperation (not equivalent). */
+export const GUEST_DUTY_REPLACEMENT = /\b(colleagu|koleg|saradnik|saradn|коллег|सहकर्मी|busy period|gužv|peak (?:hour|period)|zajedno sa kolegama)\b/iu;
+
+/** Recipe claims often invented by hospitality localization. */
+export const RECIPE_INVENTION = /\b(standard|custom|standardn|prilagođen).{0,40}(recip|recept)|receptur|signature recip/iu;
+
 function push(
   facts: CvCanonicalFact[],
   fact: Omit<CvCanonicalFact, 'value'> & { value: string },
@@ -58,11 +115,21 @@ function push(
   facts.push({ ...fact, value });
 }
 
+function experienceSourceDescription(exp: WorkExperience): string {
+  return (exp.canonicalDescription || exp.description || '').trim();
+}
+
 export function buildCvCanonicalFactSet(
-  cv: Pick<CVData, 'personal' | 'summary' | 'experience' | 'education' | 'skills' | 'certifications' | 'languages'>,
-  options?: { localeHint?: Locale | string },
+  cv: Pick<CVData, 'personal' | 'summary' | 'experience' | 'education' | 'skills' | 'certifications' | 'languages'> & {
+    canonicalSummary?: string;
+  },
+  options?: { localeHint?: Locale | string; preferCanonicalFields?: boolean },
 ): CvCanonicalFactSet {
   const facts: CvCanonicalFact[] = [];
+  const preferCanonical = options?.preferCanonicalFields !== false;
+  const summaryValue = preferCanonical
+    ? (cv.canonicalSummary || cv.summary || '')
+    : (cv.summary || '');
 
   push(facts, {
     id: 'identity-0',
@@ -79,8 +146,8 @@ export function buildCvCanonicalFactSet(
   push(facts, {
     id: 'summary-0',
     type: 'summary',
-    value: cv.summary ?? '',
-    source: 'cv.summary',
+    value: summaryValue,
+    source: preferCanonical && cv.canonicalSummary ? 'cv.canonicalSummary' : 'cv.summary',
   });
 
   (cv.experience ?? []).forEach((exp, experienceIndex) => {
@@ -106,12 +173,19 @@ export function buildCvCanonicalFactSet(
       source: `cv.experience[${experienceIndex}].dates`,
       experienceIndex,
     });
-    splitExperienceBullets(exp.description ?? '').forEach((bullet, bulletIndex) => {
+    const sourceDescription = experienceSourceDescription(exp);
+    splitExperienceBullets(sourceDescription).forEach((bullet, bulletIndex) => {
+      const category = classifyDutyCategory(bullet);
       push(facts, {
         id: `experience-${experienceIndex}-bullet-${bulletIndex}`,
         type: 'experience_bullet',
         value: bullet,
-        source: `cv.experience[${experienceIndex}].description[${bulletIndex}]`,
+        sourceText: bullet,
+        category,
+        order: bulletIndex,
+        source: exp.canonicalDescription
+          ? `cv.experience[${experienceIndex}].canonicalDescription[${bulletIndex}]`
+          : `cv.experience[${experienceIndex}].description[${bulletIndex}]`,
         experienceIndex,
         bulletIndex,
       });
@@ -200,7 +274,14 @@ export function bulletsForExperience(
 
 export function buildFactSetFromExperienceDescription(
   description: string,
-  meta?: { experienceIndex?: number; company?: string; position?: string; startDate?: string; endDate?: string; isPresent?: boolean },
+  meta?: {
+    experienceIndex?: number;
+    company?: string;
+    position?: string;
+    startDate?: string;
+    endDate?: string;
+    isPresent?: boolean;
+  },
 ): CvCanonicalFactSet {
   const experienceIndex = meta?.experienceIndex ?? 0;
   const experience: WorkExperience = {
@@ -211,11 +292,25 @@ export function buildFactSetFromExperienceDescription(
     endDate: meta?.endDate ?? '',
     isPresent: Boolean(meta?.isPresent),
     description,
+    canonicalDescription: description,
   };
+  // Pad leading empty experiences so forEach indices match the real experienceIndex.
+  // Otherwise bullets are tagged experience-0 and bulletsForExperience(…, n>0) returns none.
+  const padded: WorkExperience[] = Array.from({ length: experienceIndex }, (_, i) => ({
+    id: `exp-pad-${i}`,
+    company: '',
+    position: '',
+    startDate: '',
+    endDate: '',
+    isPresent: false,
+    description: '',
+    canonicalDescription: '',
+  }));
+  padded.push(experience);
   return buildCvCanonicalFactSet({
     personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '' },
     summary: '',
-    experience: [experience],
+    experience: padded,
     education: [] as Education[],
     skills: [],
     certifications: [],
@@ -227,12 +322,22 @@ export function formatCanonicalBulletsForPrompt(
   bullets: CvCanonicalFact[],
 ): string {
   if (!bullets.length) return '(none — do not invent duties)';
-  return bullets.map((b) => `- [${b.id}] ${b.value}`).join('\n');
+  return bullets
+    .map((b) => `- [${b.id}] category=${b.category || 'generic'} :: ${b.sourceText || b.value}`)
+    .join('\n');
 }
 
 export function deterministicBulletsFromCanonical(
   bullets: CvCanonicalFact[],
 ): string {
   if (!bullets.length) return '';
-  return formatExperienceBullets(bullets.map((b) => b.value));
+  return formatExperienceBullets(bullets.map((b) => b.sourceText || b.value));
+}
+
+/** Freeze source bullets before the first localized overwrite. */
+export function freezeCanonicalExperienceDescription(
+  exp: Pick<WorkExperience, 'description' | 'canonicalDescription'>,
+): string {
+  if (exp.canonicalDescription?.trim()) return exp.canonicalDescription.trim();
+  return (exp.description || '').trim();
 }

@@ -16,6 +16,7 @@ import {
   loadClDraft,
   clearClDraft,
 } from './draft-storage';
+import { migrateLegacyCanonicalCv } from './cv-canonical-snapshot';
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
 
@@ -211,8 +212,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const isPro = internalIsPro;
   const [proToken, setProToken] = useState<string | null>(() => (loadIsPro() ? loadProToken() : null));
   const [downloads, setDownloads] = useState<{ cv: number; cl: number }>(() => loadDownloads());
-  // Initialize from localStorage drafts for persistence across sessions
-  const [currentCv, internalSetCurrentCv] = useState<CVData | null>(() => loadCvDraft()?.cv ?? null);
+  // Initialize from localStorage drafts for persistence across sessions.
+  // Controlled idempotent migration only — never invents English or rewrites on autosave.
+  const [currentCv, internalSetCurrentCv] = useState<CVData | null>(() => {
+    const draft = loadCvDraft()?.cv ?? null;
+    return draft ? migrateLegacyCanonicalCv(draft) : null;
+  });
   const [currentCoverLetter, internalSetCurrentCoverLetter] = useState<CoverLetterData | null>(
     () => loadClDraft()?.coverLetter ?? null,
   );

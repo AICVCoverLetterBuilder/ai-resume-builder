@@ -4,6 +4,7 @@ import { translations, type Locale } from './i18n/translations';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { localizeCvLanguageLevel } from './cv-language-levels';
+import { prepareCreativeArtisticExport } from './cv-export-integrity';
 import { createAtsStandardPdfTemplate } from './ats-standard-pdf-template';
 import { createContemporaryBoldPdfTemplate } from './contemporary-bold-pdf-template';
 import { createElegantFormalPdfTemplate } from './elegant-formal-pdf-template';
@@ -6305,6 +6306,13 @@ export async function exportToDOCX(
   //   • education: violet heading, degree bold, school gray
   //   • skills + languages: side-by-side 2-column grid
   else if (cfg.customLayout === 'creative-artistic') {
+    // Fail-closed locale gate: one validated projection for this DOCX export.
+    // Non-English exports never dump English — they throw.
+    const caPrepared = prepareCreativeArtisticExport(cvData, locale, {
+      gender: cvData.personal?.gender,
+    });
+    cvData = caPrepared.cv;
+    (cvData as CVData & { __caExportProjectionId?: string }).__caExportProjectionId = caPrepared.projection.projectionId;
     const headerBg = { fill: cfg.headerBg, type: ShadingType.SOLID, color: cfg.headerBg };
     const caIsRtl = isRtlLocale(locale);
     const caAlign = caIsRtl ? AlignmentType.RIGHT : AlignmentType.LEFT;
@@ -13273,10 +13281,23 @@ export async function buildCreativeArtisticPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  const photoDataUrl = await prepareCreativeArtisticPdfPhotoDataUrl(cv);
-  const blob = await buildCreativeArtisticPagedPdfBlob(cv, locale, { photoDataUrl });
+  const prepared = prepareCreativeArtisticExport(cv, locale, {
+    gender: cv.personal?.gender,
+  });
+  const safeCv = prepared.cv;
+  const photoDataUrl = await prepareCreativeArtisticPdfPhotoDataUrl(safeCv);
+  const blob = await buildCreativeArtisticPagedPdfBlob(safeCv, locale, {
+    photoDataUrl,
+    alreadyPrepared: true,
+    projectionId: prepared.projection.projectionId,
+  });
   if (!blob || blob.size === 0) throw new Error('Creative Artistic PDF generation produced an empty Blob');
   return blob;
+}
+
+/** Shared prep so PDF/DOCX tests can assert one identical projection per export. */
+export function prepareCreativeArtisticPdfDocxExport(cv: CVData, locale: Locale) {
+  return prepareCreativeArtisticExport(cv, locale, { gender: cv.personal?.gender });
 }
 
 export async function exportCreativeArtisticPdf(
@@ -13918,8 +13939,18 @@ function caMoveLowerSectionsIfNeeded(
 export async function buildCreativeArtisticPagedPdfBlob(
   cv: CVData,
   locale: Locale,
-  options: { photoDataUrl?: string | null } = {},
+  options: {
+    photoDataUrl?: string | null;
+    alreadyPrepared?: boolean;
+    projectionId?: string;
+  } = {},
 ): Promise<Blob> {
+  const safeCv = options.alreadyPrepared
+    ? cv
+    : prepareCreativeArtisticExport(cv, locale, {
+      gender: cv.personal?.gender,
+    }).cv;
+  void options.projectionId;
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
@@ -13944,34 +13975,34 @@ export async function buildCreativeArtisticPagedPdfBlob(
     pageIndex: 0,
   };
 
-  caDrawHeader(ctx, cv, options.photoDataUrl ?? null);
-  caDrawSummary(ctx, cv.summary);
-  caDrawExperience(ctx, cv);
+  caDrawHeader(ctx, safeCv, options.photoDataUrl ?? null);
+  caDrawSummary(ctx, safeCv.summary);
+  caDrawExperience(ctx, safeCv);
 
-  const educationH = caEducationHeight(ctx, cv);
-  const skillsLangH = caSkillsLanguagesHeight(ctx, cv);
-  const certsH = caCertificationsHeight(ctx, cv);
+  const educationH = caEducationHeight(ctx, safeCv);
+  const skillsLangH = caSkillsLanguagesHeight(ctx, safeCv);
+  const certsH = caCertificationsHeight(ctx, safeCv);
   caMoveLowerSectionsIfNeeded(ctx, educationH, skillsLangH, certsH);
 
-  if (educationH > 0) caDrawEducation(ctx, cv);
+  if (educationH > 0) caDrawEducation(ctx, safeCv);
 
   if (skillsLangH > 0) {
-    const blockH = caSkillsLanguagesHeight(ctx, cv);
+    const blockH = caSkillsLanguagesHeight(ctx, safeCv);
     const freshCap = caFreshPageCapacity(ctx);
     if (blockH <= freshCap) {
       caMoveToFreshPageIfNeeded(ctx, blockH);
     } else {
       const skillsOnlyH = caSectionHeadingHeight() + caMeasureSkillChipsHeight(
         ctx,
-        cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale)),
+        safeCv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale)),
         (ctx.contentWidth - CA_SKILLS_LANG_GAP_MM) / 2,
       );
       caMoveToFreshPageIfNeeded(ctx, skillsOnlyH);
     }
-    caDrawSkillsLanguagesBlock(ctx, cv);
+    caDrawSkillsLanguagesBlock(ctx, safeCv);
   }
 
-  if (certsH > 0) caDrawCertifications(ctx, cv);
+  if (certsH > 0) caDrawCertifications(ctx, safeCv);
 
   const output = pdf.output('blob');
   return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });

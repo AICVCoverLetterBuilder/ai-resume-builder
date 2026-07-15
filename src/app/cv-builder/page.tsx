@@ -31,6 +31,14 @@ import {
 import { createEmptyCv } from '@/lib/cv-defaults';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
 import { templateInfo, recommendTemplate } from '@/lib/types';
+import { freezeCanonicalExperienceDescription } from '@/lib/cv-canonical-facts';
+import {
+  acceptValidatedAiContent,
+  applyCanonicalExperienceEdit,
+  applyCanonicalSkillsLanguagesEducationEdit,
+  applyCanonicalSummaryEdit,
+} from '@/lib/cv-canonical-snapshot';
+import { validateSummaryCompleteness } from '@/lib/cv-semantic-fidelity';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
@@ -57,7 +65,14 @@ import {
 const emptyCV = createEmptyCv;
 
 const emptyExp = (): WorkExperience => ({
-  id: crypto.randomUUID(), company: '', position: '', startDate: '', endDate: '', isPresent: false, description: '',
+  id: crypto.randomUUID(),
+  company: '',
+  position: '',
+  startDate: '',
+  endDate: '',
+  isPresent: false,
+  description: '',
+  canonicalDescription: '',
 });
 
 const emptyEdu = (): Education => ({
@@ -270,21 +285,15 @@ export default function CVBuilderPage() {
   const addExperience = () => setCv(prev => ({ ...prev, experience: [...prev.experience, emptyExp()] }));
   const removeExperience = (id: string) => setCv(prev => ({ ...prev, experience: prev.experience.filter(e => e.id !== id) }));
   const updateExperience = (id: string, field: string, value: string | boolean) => {
-    setCv(prev => {
-      const updated = { ...prev, experience: prev.experience.map(e => {
-        if (e.id === id) {
-          return { ...e, [field]: value };
-        }
-        return e;
-      })};
-      return updated;
-    });
+    setCv((prev) => applyCanonicalExperienceEdit(prev, id, field, value, locale));
   };
 
   const addEducation = () => setCv(prev => ({ ...prev, education: [...prev.education, emptyEdu()] }));
   const removeEducation = (id: string) => setCv(prev => ({ ...prev, education: prev.education.filter(e => e.id !== id) }));
   const updateEducation = (id: string, field: string, value: string) => {
-    setCv(prev => ({ ...prev, education: prev.education.map(e => e.id === id ? { ...e, [field]: value } : e) }));
+    setCv((prev) => applyCanonicalSkillsLanguagesEducationEdit(prev, {
+      education: prev.education.map((e) => (e.id === id ? { ...e, [field]: value } : e)),
+    }));
   };
 
   const addSkill = (option?: CvSkillOption) => {
@@ -299,13 +308,17 @@ export default function CVBuilderPage() {
         return prev;
       }
 
-      return { ...prev, skills: [...prev.skills, resolvedSkill] };
+      return applyCanonicalSkillsLanguagesEducationEdit(prev, {
+        skills: [...prev.skills, resolvedSkill],
+      });
     });
 
     setSkillInput('');
     setShowSkillSuggestions(false);
   };
-  const removeSkill = (idx: number) => setCv(prev => ({ ...prev, skills: prev.skills.filter((_, i) => i !== idx) }));
+  const removeSkill = (idx: number) => setCv((prev) => applyCanonicalSkillsLanguagesEducationEdit(prev, {
+    skills: prev.skills.filter((_, i) => i !== idx),
+  }));
 
   const addCert = () => { if (certInput.trim()) { setCv(prev => ({ ...prev, certifications: [...prev.certifications, certInput.trim()] })); setCertInput(''); } };
 
@@ -657,16 +670,14 @@ export default function CVBuilderPage() {
 
     if (!resolvedName) return;
 
-    setCv(prev => {
+    setCv((prev) => {
       if (prev.languages.some((language) => language.name === resolvedName)) return prev;
-
-      return {
-        ...prev,
+      return applyCanonicalSkillsLanguagesEducationEdit(prev, {
         languages: [
           ...prev.languages,
           { name: resolvedName, level: langLevel || t.cv.levels.intermediate },
         ],
-      };
+      });
     });
 
     setLangName('');
@@ -788,7 +799,8 @@ export default function CVBuilderPage() {
         company: exp.company,
         startDate: exp.startDate,
         endDate: exp.isPresent ? 'present' : exp.endDate,
-        description: exp.description?.slice(0, 300) || '',
+        // Always ground summaries on frozen canonical duties, not a prior locale rewrite.
+        description: freezeCanonicalExperienceDescription(exp).slice(0, 300),
       }));
 
       const { data: summaryData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
@@ -803,6 +815,7 @@ export default function CVBuilderPage() {
           education: cv.education.slice(0, 2).map(e => ({ degree: e.degree, school: e.school })),
           locale,
           gender: cv.personal.gender || '',
+          canonicalSummary: cv.canonicalSummary || '',
         },
         signal: controller.signal,
       });
@@ -814,7 +827,17 @@ export default function CVBuilderPage() {
         }
         throw new Error(summaryData.error || 'AI error');
       }
-      setCv(prev => ({ ...prev, summary: summaryData.result ?? '' }));
+      const nextSummary = (summaryData.result ?? '').trim();
+      if (!validateSummaryCompleteness(nextSummary, { locale }).valid) {
+        toast.error(locale === 'hi'
+          ? 'AI summary was incomplete and was not applied. Please try again.'
+          : 'AI summary failed completeness checks and was not applied. Please try again.');
+        return;
+      }
+      setCv((prev) => acceptValidatedAiContent(prev, {
+        locale,
+        summary: nextSummary,
+      }));
       recordProAiSuccess();
       toast.success(t.cv.genSuccess);
     } catch {
@@ -842,6 +865,7 @@ export default function CVBuilderPage() {
     const timer = setTimeout(() => controller.abort(), 30000);
 
     try {
+      const canonicalSource = freezeCanonicalExperienceDescription(exp);
       const requestBody = {
         action: 'bullets',
         proToken,
@@ -851,8 +875,8 @@ export default function CVBuilderPage() {
         level,
         locale,
         gender: cv.personal.gender || '',
-        // Canonical source — AI may polish/translate, never invent replacement duties.
-        sourceDescription: exp.description || '',
+        // Always send the frozen canonical source — never a prior Serbian/Hindi rewrite.
+        sourceDescription: canonicalSource || exp.description || '',
       };
 
       const { data: bulletsData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
@@ -868,9 +892,12 @@ export default function CVBuilderPage() {
         throw new Error(bulletsData.error || 'AI error');
       }
 
-      // Completely replace existing description with new localized bullets
       const newDescription = bulletsData.result || '';
-      updateExperience(expId, 'description', newDescription);
+      setCv((prev) => acceptValidatedAiContent(prev, {
+        locale,
+        experienceId: expId,
+        description: newDescription,
+      }));
       recordProAiSuccess();
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {
@@ -895,7 +922,15 @@ export default function CVBuilderPage() {
         signal: controller.signal,
       });
       if (!res.ok || rewriteData.error) throw new Error(rewriteData.error || 'AI error');
-      setCv(prev => ({ ...prev, summary: rewriteData.result ?? cv.summary }));
+      const nextSummary = (rewriteData.result ?? cv.summary).trim();
+      if (!validateSummaryCompleteness(nextSummary, { locale }).valid) {
+        toast.error('AI rewrite was incomplete and was not applied. Please try again.');
+        return;
+      }
+      setCv((prev) => acceptValidatedAiContent(prev, {
+        locale,
+        summary: nextSummary,
+      }));
       recordProAiSuccess();
       toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);
     } catch {
@@ -1818,7 +1853,9 @@ export default function CVBuilderPage() {
                         {cv.languages.map((l, i) => (
                           <div key={i} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm">
                             {getLocalizedCvLanguageName(l.name, locale)} - {l.level}
-                            <button onClick={() => setCv(prev => ({ ...prev, languages: prev.languages.filter((_, idx) => idx !== i) }))} className="text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => setCv(prev => applyCanonicalSkillsLanguagesEducationEdit(prev, {
+                              languages: prev.languages.filter((_, idx) => idx !== i),
+                            }))} className="text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
                           </div>
                         ))}
                       </div>
@@ -1860,7 +1897,7 @@ export default function CVBuilderPage() {
                     </div>
                     <textarea
                       value={cv.summary}
-                      onChange={e => setCv(prev => ({ ...prev, summary: e.target.value }))}
+                      onChange={e => setCv(prev => applyCanonicalSummaryEdit(prev, e.target.value, locale))}
                       className={textareaClass + ' min-h-[180px]'}
                       placeholder={t.cv.summaryPlaceholder}
                     />

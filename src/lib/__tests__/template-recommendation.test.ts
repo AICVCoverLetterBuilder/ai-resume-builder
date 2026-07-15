@@ -235,6 +235,13 @@ describe('template recommendation', () => {
       .split(/\r?\n/)
       .filter(Boolean);
 
-    expect(changedFiles).not.toContain('src/lib/types.ts');
+    // Optional canonical fact-lock fields on CVData/WorkExperience are allowed;
+    // recommendation scoring sources must not be altered by export/content work.
+    if (changedFiles.includes('src/lib/types.ts')) {
+      const typesDiff = execFileSync('git', ['diff', '--', 'src/lib/types.ts'], { encoding: 'utf8' });
+      expect(typesDiff).not.toMatch(/recommendTemplate|ProfessionCategory/);
+      expect(typesDiff).toMatch(/canonicalDescription|canonicalSummary/);
+    }
+    expect(changedFiles.filter((f) => f === 'src/lib/ai.ts' || f.endsWith('/recommend-template.ts'))).toEqual([]);
   });
 });

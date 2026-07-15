@@ -643,6 +643,15 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
       });
 
       if (_freeUserId) recordFreeAction(_freeUserId, 'summary');
+      if (activated.blocked || activated.status === 'blocked' || !activated.content.trim()) {
+        return jsonResponse({
+          error: `Could not produce a complete localized summary for ${resolvedLocale}. Export/generation was blocked to avoid an English dump.`,
+          cvFidelityStatus: 'blocked',
+          repairAttempted: activated.repairAttempted,
+          fallbackUsed: activated.fallbackUsed,
+          violationCount: activated.violations.length,
+        }, { status: 422 });
+      }
       return jsonResponse({
         result: activated.content,
         cvFidelityStatus: activated.status,
@@ -728,8 +737,17 @@ Rules:
         },
       });
 
+      if (activated.blocked || activated.status === 'blocked' || !activated.content.trim()) {
+        return jsonResponse({
+          error: `Could not produce complete localized text for ${resolvedLocale}. Changes were not applied to avoid mixed-language content.`,
+          cvFidelityStatus: 'blocked',
+          repairAttempted: activated.repairAttempted,
+          fallbackUsed: activated.fallbackUsed,
+          violationCount: activated.violations.length,
+        }, { status: 422 });
+      }
       return jsonResponse({
-        result: activated.content || text,
+        result: activated.content,
         cvFidelityStatus: activated.status,
         repairAttempted: activated.repairAttempted,
         fallbackUsed: activated.fallbackUsed,
@@ -781,7 +799,7 @@ Rules:
       const roleLabel = position ? `${position}` : `${industry || 'professional'}`;
       const atCompany = companyName && companyName !== localeInfo.fallbackCompany ? ` at ${companyName}` : '';
       const factLockNote = hasCanonical
-        ? `FACT LOCK: You are given SOURCE BULLETS with stable IDs. Output EXACTLY ${canonicalBullets.length} bullets in the same order. Translate/polish grammar only. Do NOT add, remove, or replace duties. Do NOT invent allergy checks, muddling, syrups, wastage, kitchen cooperation, evening shifts, inventory shortages, or any duty absent from SOURCE BULLETS.`
+        ? `FACT LOCK: You are given SOURCE BULLETS with stable IDs and semantic categories. Output EXACTLY ${canonicalBullets.length} bullets in the same order. Translate/polish grammar only. Preserve each bullet's category meaning (guest service stays guest/customer service — never replace with colleague cooperation; inventory counts/management communication must stay; do not invent standard/custom recipes unless present in SOURCE). Do NOT invent allergy checks, muddling, syrups, wastage, kitchen cooperation, evening shifts, inventory shortages, or any duty absent from SOURCE BULLETS. Serbian must use natural forms (koktele not kokteile; barmen/bartending not barteninga; level phrases must match stored enums — never "srednje naprednom").`
         : 'No prior bullets were supplied. Write role-appropriate bullets without invented metrics.';
 
       const response = await callWithRetry({
@@ -857,8 +875,18 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
           factCount: canonicalBullets.length,
         });
       }
+      if (activated.blocked || activated.status === 'blocked' || !activated.content.trim()) {
+        return jsonResponse({
+          error: `Could not produce valid localized bullets for ${resolvedLocale}. English canonical text was not written into the CV.`,
+          cvFidelityStatus: 'blocked',
+          repairAttempted: activated.repairAttempted,
+          fallbackUsed: activated.fallbackUsed,
+          usedFactIds: canonicalBullets.map((b) => b.id),
+          violationCount: activated.violations.length,
+        }, { status: 422 });
+      }
       return jsonResponse({
-        result: activated.content || deterministicBulletsFromCanonical(canonicalBullets),
+        result: activated.content,
         cvFidelityStatus: activated.status,
         repairAttempted: activated.repairAttempted,
         fallbackUsed: activated.fallbackUsed,

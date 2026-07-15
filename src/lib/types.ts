@@ -29,7 +29,13 @@ export interface WorkExperience {
   startDate: string;
   endDate: string;
   isPresent: boolean;
+  /** Display / localized bullets for the active UI locale. */
   description: string;
+  /**
+   * Frozen source-locale professional bullets (locale = canonicalSnapshot.canonicalLocale).
+   * Localization must always ground against this text — never against a prior locale rewrite.
+   */
+  canonicalDescription?: string;
 }
 
 export interface Education {
@@ -46,6 +52,8 @@ export interface CVData {
   name: string;
   personal: PersonalInfo;
   summary: string;
+  /** Frozen source-locale summary (mirrors canonicalSnapshot when present). */
+  canonicalSummary?: string;
   experience: WorkExperience[];
   education: Education[];
   skills: string[];
@@ -55,6 +63,13 @@ export interface CVData {
   region: Region;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Locale-aware canonical source lock. Locale is the validated source language
+   * (Serbian-first, Hindi-first, Arabic-first, …) — never assumed English.
+   */
+  canonicalSnapshot?: import('./cv-canonical-snapshot').CanonicalCvSnapshot;
+  /** Localized projections keyed by requested locale; must match snapshot revision/hash to export. */
+  localizedProjections?: Record<string, import('./cv-canonical-snapshot').ValidatedLocalizedCvProjection>;
 }
 
 export interface CoverLetterData {
