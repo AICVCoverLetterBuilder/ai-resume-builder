@@ -30,7 +30,8 @@ export type CvFidelityViolationKind =
   | 'gender_form_mismatch'
   | 'locale_quality'
   | 'language_level_mismatch'
-  | 'experience_duration_mismatch';
+  | 'experience_duration_mismatch'
+  | 'summary_sentence_fragment';
 
 export type CvFidelityViolation = {
   kind: CvFidelityViolationKind;
@@ -109,6 +110,33 @@ const LOCALE_QUALITY_PATTERNS: Array<{ locale?: Locale; re: RegExp; kind?: CvFid
   { locale: 'hi', re: /ग्राहक संतुष्टि सुनिश्चित/u, kind: 'locale_quality' },
   { locale: 'hi', re: /जिससे ग्राहक संतुष्टि/u, kind: 'locale_quality' },
 ];
+
+/**
+ * A "sentence" consisting solely of a dependent duration clause (no finite verb / subject).
+ * These are never valid as a standalone sentence — the duration must be woven into a
+ * complete clause with a subject and a verb (e.g. "<Role> ... with ~N years of experience.").
+ */
+const DURATION_ONLY_FRAGMENT_PATTERNS: RegExp[] = [
+  /^with\s+(?:around|about|approximately)?\s*[\w.-]+\+?\s+years?\s+of\s+experience\.?$/iu,
+  /^mit\s+(?:etwa|ca\.?)?\s*[\wäöüß.-]+\s+jahren?\s+erfahrung\.?$/iu,
+  /^con\s+(?:alrededor de|circa)?\s*[\w.-]+\s+años\s+de\s+experiencia\.?$/iu,
+  /^avec\s+(?:environ)?\s*[\w.-]+\s+ans\s+d'expérience\.?$/iu,
+  /^con\s+(?:circa)?\s*[\w.-]+\s+anni\s+di\s+esperienza\.?$/iu,
+  /^com\s+(?:cerca de)?\s*[\w.-]+\s+anos\s+de\s+experiência\.?$/iu,
+  /^sa\s+oko\s+[\wčćžšđ.-]+\s+godina\s+iskustva\.?$/iu,
+  /^s\s+oko\s+[\wčćžšđ.-]+\s+godina\s+iskustva\.?$/iu,
+  /^लगभग\s+\S+\s+वर्षों\s+के\s+अनुभव\s+के\s+साथ।?$/u,
+  /^करीब\s+\S+\s+वर्षों\s+के\s+अनुभव\s+के\s+साथ।?$/u,
+  /^लगभग\s+\d+\s+महीनों।?$/u,
+  /^約\s*[\w0-9]+\s*年の経験。?$/u,
+];
+
+/** True when a single sentence is nothing but a dependent duration clause (no subject/verb). */
+export function isDurationOnlyFragmentSentence(sentence: string): boolean {
+  const s = (sentence || '').trim();
+  if (!s) return false;
+  return DURATION_ONLY_FRAGMENT_PATTERNS.some((re) => re.test(s));
+}
 
 /** Unsupported invented outcome / fluff phrases stripped from summaries. */
 export const UNSUPPORTED_SUMMARY_FLUFF: Array<{ locale?: Locale; re: RegExp }> = [
@@ -250,6 +278,35 @@ export function validateSummaryCompleteness(
   // Empty / whitespace-only after trimming control chars
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(text)) {
     violations.push({ kind: 'summary_incomplete', matched: 'control-char', section: 'summary' });
+  }
+
+  // Reject summaries that begin or end with a bare duration clause (no subject/verb) —
+  // e.g. "With approximately five years of experience." / "लगभग पाँच वर्षों के अनुभव के साथ।"
+  const fragmentSentences = text
+    .split(/(?<=[।.!?])\s+/u)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (fragmentSentences.length) {
+    const first = fragmentSentences[0];
+    if (isDurationOnlyFragmentSentence(first)) {
+      violations.push({
+        kind: 'summary_sentence_fragment',
+        matched: first,
+        section: 'summary',
+        evidence: 'leading-duration-fragment',
+      });
+    }
+    if (fragmentSentences.length > 1) {
+      const last = fragmentSentences[fragmentSentences.length - 1];
+      if (isDurationOnlyFragmentSentence(last)) {
+        violations.push({
+          kind: 'summary_sentence_fragment',
+          matched: last,
+          section: 'summary',
+          evidence: 'trailing-duration-fragment',
+        });
+      }
+    }
   }
 
   return { valid: violations.length === 0, violations };

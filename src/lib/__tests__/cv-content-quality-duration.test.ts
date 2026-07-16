@@ -16,6 +16,7 @@ import {
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import { applyCanonicalSummaryEdit, sealCanonicalFromValidatedSource } from '@/lib/cv-canonical-snapshot';
+import { isDurationOnlyFragmentSentence, validateSummaryCompleteness } from '@/lib/cv-semantic-fidelity';
 
 const REF = '2026-07-15';
 
@@ -385,5 +386,253 @@ describe('EN/SR/HI verified content quality', () => {
     );
     expect(d.unit).toBe('months');
     expect(d.totalMonths).toBe(6);
+  });
+});
+
+describe('residual fix: never a standalone Hindi duration fragment', () => {
+  const expected = applyApproximateDurationPolicy(62); // ≈ five years
+
+  it('flags a leading bare duration clause as summary_sentence_fragment', () => {
+    const bad = validateSummaryCompleteness(
+      'लगभग पाँच वर्षों के अनुभव के साथ। ग्राहकों की मदद करती हूँ।',
+      { locale: 'hi' },
+    );
+    expect(bad.valid).toBe(false);
+    expect(bad.violations.some((v) => v.kind === 'summary_sentence_fragment')).toBe(true);
+
+    const badEn = validateSummaryCompleteness(
+      'With approximately five years of experience. Supports clients daily.',
+      { locale: 'en' },
+    );
+    expect(badEn.violations.some((v) => v.kind === 'summary_sentence_fragment')).toBe(true);
+  });
+
+  it('does not flag a complete duration sentence embedded in running prose', () => {
+    const ok = validateSummaryCompleteness(
+      'मैं लगभग पाँच वर्षों के अनुभव वाली कॉल सेंटर एजेंट हूँ और मई 2021 से Zrewq में कार्यरत हूँ।',
+      { locale: 'hi' },
+    );
+    expect(ok.violations.some((v) => v.kind === 'summary_sentence_fragment')).toBe(false);
+  });
+
+  it('isDurationOnlyFragmentSentence matches only the bare clause, not a full sentence', () => {
+    expect(isDurationOnlyFragmentSentence('लगभग पाँच वर्षों के अनुभव के साथ।')).toBe(true);
+    expect(isDurationOnlyFragmentSentence('With approximately five years of experience.')).toBe(true);
+    expect(isDurationOnlyFragmentSentence('sa oko pet godina iskustva.')).toBe(true);
+    expect(
+      isDurationOnlyFragmentSentence('मैं लगभग पाँच वर्षों के अनुभव वाली कॉल सेंटर एजेंट हूँ।'),
+    ).toBe(false);
+  });
+
+  it('builds the female-preferred subject-led Hindi sentence for the verified case (2021-05, current, Jul 2026)', () => {
+    const result = resolveSummaryWithDurationPolicy('', expected, 'hi', {
+      forceDurationPhrase: true,
+      requireDurationClaim: true,
+      context: {
+        role: 'कॉल सेंटर एजेंट',
+        company: 'Zrewq',
+        startDate: '2021-05',
+        gender: 'female',
+      },
+    });
+    expect(result.summary).toBe(
+      'मैं लगभग पाँच वर्षों के अनुभव वाली कॉल सेंटर एजेंट हूँ और मई 2021 से Zrewq में कार्यरत हूँ।',
+    );
+    expect(result.summary.startsWith('लगभग')).toBe(false);
+    expect(validateSummaryCompleteness(result.summary, { locale: 'hi' }).valid).toBe(true);
+  });
+
+  it('builds a valid male Hindi sentence using वाला (regression)', () => {
+    const result = resolveSummaryWithDurationPolicy('', expected, 'hi', {
+      forceDurationPhrase: true,
+      requireDurationClaim: true,
+      context: {
+        role: 'कॉल सेंटर एजेंट',
+        company: 'Zrewq',
+        startDate: '2021-05',
+        gender: 'male',
+      },
+    });
+    expect(result.summary).toContain('वाला');
+    expect(result.summary).not.toContain('वाली');
+    expect(validateSummaryCompleteness(result.summary, { locale: 'hi' }).valid).toBe(true);
+  });
+
+  it('builds a valid neutral Hindi sentence without वाला/वाली when gender is unspecified (regression)', () => {
+    const result = resolveSummaryWithDurationPolicy('', expected, 'hi', {
+      forceDurationPhrase: true,
+      requireDurationClaim: true,
+      context: {
+        role: 'कॉल सेंटर एजेंट',
+        company: 'Zrewq',
+        startDate: '2021-05',
+      },
+    });
+    expect(result.summary).not.toContain('वाला');
+    expect(result.summary).not.toContain('वाली');
+    expect(validateSummaryCompleteness(result.summary, { locale: 'hi' }).valid).toBe(true);
+  });
+
+  it('repairs a previously-fragmented Hindi AI summary into one complete sentence (no leading fragment)', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary: 'लगभग पाँच वर्षों के अनुभव के साथ। ग्राहकों की मदद करती हूँ और शिकायतों का समाधान करती हूँ।',
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zrewq',
+          position: 'कॉल सेंटर एजेंट',
+          startDate: '2021-05',
+          endDate: '',
+          isPresent: true,
+          description: EN_BULLETS,
+          canonicalDescription: EN_BULLETS,
+        },
+      ],
+    });
+    const q = applyCvContentQuality(cv, 'hi', { referenceDate: REF, gender: 'female' });
+    // The duration clause may still lead the sentence (e.g. "लगभग ... के साथ, मैं ...")
+    // as long as it is fused into ONE complete sentence — never its own bare fragment.
+    expect(isDurationOnlyFragmentSentence(q.cv.summary.split(/(?<=[।.!?])\s+/u)[0])).toBe(false);
+    expect(validateSummaryCompleteness(q.cv.summary, { locale: 'hi' }).valid).toBe(true);
+    expect(q.cv.summary).toMatch(/पाँच|पांच/);
+    expect(q.violations).not.toContain('experience_duration_mismatch');
+  });
+
+  it('a very long single-clause Hindi AI summary (no early delimiter) never yields a standalone fragment', () => {
+    const longNoDelimiter = 'मई 2021 से Zrewq में कॉल सेंटर एजेंट के रूप में ग्राहकों की फ़ोन पर सहायता करती हूँ और उनकी शिकायतों तथा समस्याओं का समाधान करती हूँ';
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary: longNoDelimiter,
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zrewq',
+          position: 'कॉल सेंटर एजेंट',
+          startDate: '2021-05',
+          endDate: '',
+          isPresent: true,
+          description: EN_BULLETS,
+          canonicalDescription: EN_BULLETS,
+        },
+      ],
+    });
+    const q = applyCvContentQuality(cv, 'hi', { referenceDate: REF, gender: 'female' });
+    expect(validateSummaryCompleteness(q.cv.summary, { locale: 'hi' }).valid).toBe(true);
+    expect(q.cv.summary).toMatch(/पाँच|पांच/);
+    expect(q.violations).not.toContain('experience_duration_mismatch');
+  });
+
+  it('replaces कौशलताओं with the natural कौशलों', () => {
+    const q = applyCvContentQuality(
+      baseCv({
+        summary: 'मुझे Attention to Detail, Time Management, Organization और Adaptability जैसे कौशलताओं में विशेष दक्षता है।',
+      }),
+      'hi',
+      { referenceDate: REF, gender: 'female' },
+    );
+    expect(q.cv.summary).not.toMatch(/कौशलताओं/);
+    expect(q.cv.summary).toMatch(/कौशलों/);
+  });
+});
+
+describe('residual fix: Serbian natural role phrase + current-role summary tense', () => {
+  it('replaces the unnatural "Call centar agentkinja" with "agentkinja call centra"', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary: 'Iskusna Call centar agentkinja sa oko pet godina iskustva u korisničkoj podršci.',
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zrewq',
+          position: 'Call centar agent',
+          startDate: '2021-05',
+          endDate: '',
+          isPresent: true,
+          description: EN_BULLETS,
+          canonicalDescription: EN_BULLETS,
+        },
+      ],
+    });
+    const q = applyCvContentQuality(cv, 'sr', { referenceDate: REF, gender: 'female' });
+    expect(q.cv.summary).not.toMatch(/Call centar agentkinja/i);
+    expect(q.cv.summary).toMatch(/agentkinja call centra/i);
+    // The dedicated role/title field is never rewritten by content-quality.
+    expect(q.cv.experience[0].position).toBe('Call centar agent');
+  });
+
+  it('rewrites past-tense summary duties to present tense for a current role', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary:
+        'Agentkinja call centra sa oko pet godina profesionalnog iskustva. Odgovarala je na upite klijenata i pružala im informacije. Rešavala je reklamacije i žalbe.',
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zrewq',
+          position: 'Call centar agent',
+          startDate: '2021-05',
+          endDate: '',
+          isPresent: true,
+          description: EN_BULLETS,
+          canonicalDescription: EN_BULLETS,
+        },
+      ],
+    });
+    const q = applyCvContentQuality(cv, 'sr', { referenceDate: REF, gender: 'female' });
+    expect(q.cv.summary).not.toMatch(/odgovarala je|rešavala je/i);
+    expect(q.cv.summary).toMatch(/\bodgovara\b/i);
+    expect(q.cv.summary).toMatch(/\bpruža\b/i);
+    expect(q.cv.summary).toMatch(/\brešava\b/i);
+    expect(q.cv.summary.toLowerCase()).toMatch(/oko pet godina/);
+  });
+
+  it('does not force past-tense summaries into present tense for a role that has ended', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary: 'Agentkinja call centra sa oko pet godina profesionalnog iskustva. Odgovarala je na upite klijenata.',
+      experience: [
+        {
+          id: 'exp-past',
+          company: 'Old Co',
+          position: 'Call centar agent',
+          startDate: '2018-01',
+          endDate: '2019-06',
+          isPresent: false,
+          description: '• x',
+          canonicalDescription: EN_BULLETS,
+        },
+      ],
+    });
+    const q = applyCvContentQuality(cv, 'sr', { referenceDate: REF, gender: 'female' });
+    expect(q.cv.summary).toMatch(/odgovarala je/i);
+  });
+});
+
+describe('residual fix: EN unaffected, user summaries protected, PDF/DOCX parity', () => {
+  it('English "approximately five years" summary is unchanged (no regression)', () => {
+    const cv = baseCv();
+    const q = applyCvContentQuality(cv, 'en', { referenceDate: REF, gender: 'female' });
+    expect(q.cv.summary).toBe(
+      'Customer Service Specialist with around five years of experience. Handles phone inquiries and customer complaints.',
+    );
+    expect(validateSummaryCompleteness(q.cv.summary, { locale: 'en' }).valid).toBe(true);
+    expect(q.violations).not.toContain('experience_duration_mismatch');
+  });
+
+  it('a manually written summary without duration remains fully unchanged', () => {
+    const custom = 'Dedicated specialist focused on clear communication and careful follow-up.';
+    const cv = baseCv({ summary: custom, summaryOrigin: 'user' });
+    const q = applyCvContentQuality(cv, 'en', { referenceDate: REF, gender: 'female', summaryOrigin: 'user' });
+    expect(q.cv.summary).toBe(custom);
+  });
+
+  it('PDF and DOCX exports consume the same validated Hindi summary for the verified case', () => {
+    const cv = baseCv();
+    const pdf = prepareCreativeArtisticExport(cv, 'hi', { gender: 'female', referenceDate: REF });
+    const docx = prepareCreativeArtisticExport(cv, 'hi', { gender: 'female', referenceDate: REF });
+    expect(pdf.cv.summary).toBe(docx.cv.summary);
+    expect(validateSummaryCompleteness(pdf.cv.summary, { locale: 'hi' }).valid).toBe(true);
+    expect(pdf.cv.experience[0].description.split('\n').filter(Boolean).length).toBe(4);
   });
 });

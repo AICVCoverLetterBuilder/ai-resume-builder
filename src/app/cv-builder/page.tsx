@@ -822,11 +822,21 @@ export default function CVBuilderPage() {
         return;
       }
       // AI-generated summaries must include the shared deterministic duration (all locales).
+      const primaryExpForSummary = cv.experience.find((e) => e.isPresent) || cv.experience[0];
       const durationResolved = resolveSummaryWithDurationPolicy(
         nextSummary,
         durationSnapshot.total,
         locale,
-        { forceDurationPhrase: true, requireDurationClaim: true },
+        {
+          forceDurationPhrase: true,
+          requireDurationClaim: true,
+          context: {
+            role: primaryExpForSummary?.position || cv.personal.jobTitle || '',
+            company: primaryExpForSummary?.company || '',
+            startDate: primaryExpForSummary?.startDate || '',
+            gender: cv.personal.gender || '',
+          },
+        },
       );
       nextSummary = durationResolved.summary;
       if (
@@ -942,11 +952,21 @@ export default function CVBuilderPage() {
       }
       const referenceDateIso = new Date().toISOString().slice(0, 10);
       const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
+      const primaryExpForRewrite = cv.experience.find((e) => e.isPresent) || cv.experience[0];
       const durationResolved = resolveSummaryWithDurationPolicy(
         nextSummary,
         durationSnapshot.total,
         locale,
-        { forceDurationPhrase: true, requireDurationClaim: true },
+        {
+          forceDurationPhrase: true,
+          requireDurationClaim: true,
+          context: {
+            role: primaryExpForRewrite?.position || cv.personal.jobTitle || '',
+            company: primaryExpForRewrite?.company || '',
+            startDate: primaryExpForRewrite?.startDate || '',
+            gender: cv.personal.gender || '',
+          },
+        },
       );
       setCv((prev) => acceptValidatedAiContent(prev, {
         locale,

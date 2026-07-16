@@ -263,6 +263,11 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
   },
 };
 
+/** Localized word/digit form for an approximate year count (shared by injectors/templates). */
+export function yearWordForLocale(locale: Locale, n: number): string {
+  return YEAR_WORD_BY_LOCALE[locale]?.[n] || String(n);
+}
+
 export function summaryHasDurationClaim(text: string): boolean {
   return extractSummaryYearClaims(text).length > 0
     || /\b(years? of experience|godina iskustva|profesionalnog iskustva|Jahr(?:en)? Erfahrung|años de experiencia|ans d'expérience|anni di esperienza|anos de experiência|वर्षों के अनुभव|वर्ष के अनुभव|वर्षों?\s*का\s*अनुभव)\b/iu.test(text)

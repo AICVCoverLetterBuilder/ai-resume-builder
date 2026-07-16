@@ -11,12 +11,21 @@ import {
   repairSummaryDuration,
   summaryHasDurationClaim,
   summaryIncludesDurationPhrase,
+  yearWordForLocale,
   type ExperienceDuration,
   type ExperienceDurationSnapshot,
   validateSummaryDuration,
 } from './cv-experience-duration';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
-import { UNSUPPORTED_SUMMARY_FLUFF } from './cv-semantic-fidelity';
+import { isDurationOnlyFragmentSentence, UNSUPPORTED_SUMMARY_FLUFF } from './cv-semantic-fidelity';
+
+/** Structured context used to build a natural, non-fragment duration sentence. */
+export type DurationIntegrationContext = {
+  role?: string;
+  company?: string;
+  startDate?: string;
+  gender?: string;
+};
 
 export type ContactCenterMeaning =
   | 'phone_inquiries'
@@ -171,6 +180,50 @@ export function normalizeHindiCustomerServiceWording(text: string): string {
   out = out.replace(/रिक्लेमेशन/gu, 'समस्याओं');
   out = out.replace(/शिकायतों और समस्याओंओं/gu, 'शिकायतों और समस्याओं');
   out = out.replace(/शिकायतों\s+और\s+समस्याओं/gu, 'शिकायतों और समस्याओं');
+  // Natural plural for "skills" — "कौशलताओं" is an awkward double-plural.
+  out = out.replace(/कौशलताओं/gu, 'कौशलों');
+  return out;
+}
+
+/** Natural Serbian role phrase for running prose — never touches the dedicated role/title field. */
+export function normalizeSerbianRolePhrase(text: string): string {
+  let out = text || '';
+  out = out.replace(
+    /\b(Iskusna|Iskusan)\s+Call\s*centar\s+(agentkinja|agent)\b/giu,
+    (_m, adj: string, noun: string) => `${adj} ${noun} call centra`,
+  );
+  out = out.replace(
+    /\bCall\s*centar\s+(agentkinja|agent)\b/giu,
+    (_m, noun: string) => `${noun} call centra`,
+  );
+  return out;
+}
+
+/** Serbian present-tense summary verbs for an ongoing (current) role — mirrors bullet-level tense fix. */
+export function applySerbianSummaryCurrentTense(text: string, isCurrentRole: boolean): string {
+  if (!isCurrentRole) return text || '';
+  let out = text || '';
+  const pairs: Array<[RegExp, string]> = [
+    [/\bodgovarala je\b/giu, 'odgovara'],
+    [/\bodgovarao je\b/giu, 'odgovara'],
+    [/\brešavala je\b/giu, 'rešava'],
+    [/\brešavao je\b/giu, 'rešava'],
+    [/\bsarađivala je\b/giu, 'sarađuje'],
+    [/\bsarađivao je\b/giu, 'sarađuje'],
+    [/\bvodila je\b/giu, 'vodi'],
+    [/\bvodio je\b/giu, 'vodi'],
+    [/\bpružala je\b/giu, 'pruža'],
+    [/\bpružao je\b/giu, 'pruža'],
+    [/\bpružala\b/giu, 'pruža'],
+    [/\bpružao\b/giu, 'pruža'],
+    [/\bunosila\b/giu, 'unosi'],
+    [/\bunosio\b/giu, 'unosi'],
+    [/\bodgovarala sam\b/giu, 'odgovaram'],
+    [/\bodgovarao sam\b/giu, 'odgovaram'],
+    [/\brešavala sam\b/giu, 'rešavam'],
+    [/\brešavao sam\b/giu, 'rešavam'],
+  ];
+  for (const [re, repl] of pairs) out = out.replace(re, repl);
   return out;
 }
 
@@ -260,6 +313,110 @@ export function normalizeExperienceBulletsForQuality(
   return { description: formatExperienceBullets(next), changed };
 }
 
+const HINDI_MONTHS: Record<string, string> = {
+  '01': 'जनवरी', '02': 'फ़रवरी', '03': 'मार्च', '04': 'अप्रैल', '05': 'मई', '06': 'जून',
+  '07': 'जुलाई', '08': 'अगस्त', '09': 'सितंबर', '10': 'अक्तूबर', '11': 'नवंबर', '12': 'दिसंबर',
+};
+
+function formatHindiMonthYear(startDate?: string): string {
+  const m = /^(\d{4})-(\d{2})/.exec((startDate || '').trim());
+  if (!m) return '';
+  const month = HINDI_MONTHS[m[2]];
+  return month ? `${month} ${m[1]}` : '';
+}
+
+/**
+ * Deterministic, gender-aware Hindi sentence that integrates the duration claim into a
+ * single complete sentence (never a standalone "लगभग ... के साथ।" fragment).
+ * Female/male prefer the direct subject-led form; unspecified gender uses a neutral
+ * restructuring without वाला/वाली, per project policy (never infer gender from name/photo).
+ */
+function buildHindiIntegratedDurationSentence(
+  duration: ExperienceDuration,
+  context: DurationIntegrationContext,
+): string {
+  const word = duration.unit === 'years'
+    ? yearWordForLocale('hi', duration.approxYears)
+    : String(duration.totalMonths);
+  const unitWord = duration.unit === 'years' ? 'वर्षों' : 'महीनों';
+  const role = (context.role || 'पेशेवर').trim();
+  const company = (context.company || '').trim();
+  const monthYear = formatHindiMonthYear(context.startDate);
+  const employmentClause = monthYear && company
+    ? ` और ${monthYear} से ${company} में कार्यरत हूँ`
+    : company
+      ? ` और ${company} में कार्यरत हूँ`
+      : '';
+  const gender = normalizeCoverLetterGender(context.gender);
+  if (gender === 'female') {
+    return `मैं लगभग ${word} ${unitWord} के अनुभव वाली ${role} हूँ${employmentClause}।`;
+  }
+  if (gender === 'male') {
+    return `मैं लगभग ${word} ${unitWord} के अनुभव वाला ${role} हूँ${employmentClause}।`;
+  }
+  return `${role} के क्षेत्र में लगभग ${word} ${unitWord} का अनुभव है${employmentClause}।`;
+}
+
+function findFirstSentenceSplit(text: string): { head: string; delim: string; rest: string } | null {
+  const m = text.match(/^([\s\S]*?)([.।!?])(\s*[\s\S]*)$/u);
+  if (!m || !m[1].trim()) return null;
+  return { head: m[1], delim: m[2], rest: m[3].trim() };
+}
+
+/**
+ * Weave a duration phrase into the first sentence of `text` via a comma — never emit the
+ * phrase as its own standalone sentence (no fragment such as "लगभग पाँच वर्षों ... के साथ।").
+ * Searches the whole string for the first sentence terminator (no fixed-length window), so
+ * long AI-generated sentences never fall through to a naive "phrase. rest" concatenation.
+ */
+function mergeDurationPhraseIntoFirstSentence(text: string, phrase: string, locale: Locale): string {
+  const trimmed = (text || '').trim();
+  const terminal = locale === 'hi' ? '।' : '.';
+  if (!trimmed) {
+    return locale === 'hi' ? `${phrase}।` : `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
+  }
+  const split = findFirstSentenceSplit(trimmed);
+  if (split) {
+    const merged = `${split.head.trim()}, ${phrase}${split.delim}`.replace(/\s+/g, ' ').trim();
+    return split.rest ? `${merged} ${split.rest}`.replace(/\s+/g, ' ').trim() : merged;
+  }
+  const withoutTrailingPunct = trimmed.replace(/[.।!?]+\s*$/u, '');
+  return `${withoutTrailingPunct}, ${phrase}${terminal}`.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Constrained rewrite for an already-fragmented summary: when the first (or last) sentence
+ * is a bare duration clause, merge it into the neighboring sentence via a comma instead of
+ * leaving it as its own sentence. Does not remove the duration claim.
+ */
+export function repairFragmentedSummary(text: string, locale: Locale): string {
+  const original = (text || '').trim();
+  if (!original) return original;
+  const sentences = original.split(/(?<=[।.!?])\s+/u).map((s) => s.trim()).filter(Boolean);
+  if (sentences.length < 2) return original;
+  const terminal = locale === 'hi' ? '।' : '.';
+  if (isDurationOnlyFragmentSentence(sentences[0])) {
+    const first = sentences[0].replace(/[।.!?]\s*$/u, '');
+    const rest = sentences.slice(1).join(' ');
+    return `${first}, ${rest}`.replace(/\s+/g, ' ').trim();
+  }
+  const lastIdx = sentences.length - 1;
+  if (isDurationOnlyFragmentSentence(sentences[lastIdx])) {
+    const last = sentences[lastIdx].replace(/[।.!?]\s*$/u, '');
+    const head = sentences.slice(0, lastIdx).join(' ').replace(/[।.!?]\s*$/u, '');
+    return `${head}, ${last}${terminal}`.replace(/\s+/g, ' ').trim();
+  }
+  return original;
+}
+
+function hasLeadingOrTrailingFragment(text: string): boolean {
+  const sentences = (text || '').split(/(?<=[।.!?])\s+/u).map((s) => s.trim()).filter(Boolean);
+  if (!sentences.length) return false;
+  if (isDurationOnlyFragmentSentence(sentences[0])) return true;
+  if (sentences.length > 1 && isDurationOnlyFragmentSentence(sentences[sentences.length - 1])) return true;
+  return false;
+}
+
 /** Summary duration: reject → constrained repair → revalidate → duration-locked fallback. */
 export function resolveSummaryWithDurationPolicy(
   summary: string,
@@ -269,6 +426,8 @@ export function resolveSummaryWithDurationPolicy(
     /** When true (AI / fallback), missing duration is a violation and must be injected. */
     forceDurationPhrase?: boolean;
     requireDurationClaim?: boolean;
+    /** Role/company/date/gender used to build a natural, non-fragment duration sentence. */
+    context?: DurationIntegrationContext;
   },
 ): {
   summary: string;
@@ -276,20 +435,32 @@ export function resolveSummaryWithDurationPolicy(
   violation?: 'experience_duration_mismatch';
 } {
   const requireClaim = Boolean(options?.forceDurationPhrase || options?.requireDurationClaim);
-  const initial = validateSummaryDuration(summary, duration, {
+  const context = options?.context;
+
+  // A previously-saved or independently produced summary may already carry the duration
+  // claim but as a standalone leading/trailing fragment — repair the structure first.
+  let working = summary;
+  if (requireClaim && hasLeadingOrTrailingFragment(working)) {
+    working = repairFragmentedSummary(working, locale);
+  }
+
+  const initial = validateSummaryDuration(working, duration, {
     requireDurationClaim: requireClaim,
     locale,
   });
-  if (initial.valid) {
-    return { summary: summary.trim(), status: 'passed' };
+  if (initial.valid && (!requireClaim || !hasLeadingOrTrailingFragment(working))) {
+    return { summary: working.trim(), status: working === summary ? 'passed' : 'repaired' };
   }
 
   // Missing claim on generated summaries: inject the shared phrase (do not invent duties).
-  if (requireClaim && !summaryHasDurationClaim(summary)
-    && !summaryIncludesDurationPhrase(summary, duration, locale)
+  if (requireClaim && !summaryHasDurationClaim(working)
+    && !summaryIncludesDurationPhrase(working, duration, locale)
     && duration.hasValidDates) {
-    const injected = injectDurationPhrase(summary, duration, locale);
-    if (validateSummaryDuration(injected, duration, { requireDurationClaim: true, locale }).valid) {
+    const injected = injectDurationPhrase(working, duration, locale);
+    if (
+      validateSummaryDuration(injected, duration, { requireDurationClaim: true, locale }).valid
+      && !hasLeadingOrTrailingFragment(injected)
+    ) {
       return {
         summary: injected.trim(),
         status: 'repaired',
@@ -298,12 +469,12 @@ export function resolveSummaryWithDurationPolicy(
     }
   }
 
-  const repaired = repairSummaryDuration(summary, duration, locale);
+  const repaired = repairSummaryDuration(working, duration, locale);
   const afterRepair = validateSummaryDuration(repaired, duration, {
     requireDurationClaim: requireClaim,
     locale,
   });
-  if (afterRepair.valid) {
+  if (afterRepair.valid && (!requireClaim || !hasLeadingOrTrailingFragment(repaired))) {
     return {
       summary: repaired.trim(),
       status: 'repaired',
@@ -313,7 +484,7 @@ export function resolveSummaryWithDurationPolicy(
 
   // Deterministic locale fallback using the same duration — do not invent duties.
   const phrase = formatApproximateDurationPhrase(duration, locale);
-  const stripped = summary
+  const stripped = working
     .replace(/\bwith\s+(?:around|about|approximately)\s+(?:\d+(?:\.\d+)?|one|two|three|four|five|six)\s+years?\s+of\s+experience\b/giu, '')
     .replace(/\b(?:around|about|approximately)\s+(?:\d+(?:\.\d+)?|one|two|three|four|five|six)\s+years?\b/giu, '')
     .replace(/\bsa\s+oko\s+(?:jedne?|dve|dvije|tri|četiri|cetiri|pet|šest|\d+)\s+godina\s+iskustva\b/giu, '')
@@ -325,31 +496,27 @@ export function resolveSummaryWithDurationPolicy(
     .trim();
 
   let fallback = '';
-  if (phrase && stripped) {
-    const roleInject = stripped.match(/^(.{2,80}?)[.।]\s*(.*)$/u);
-    if (locale === 'hi') {
-      if (roleInject) {
-        fallback = `${roleInject[1].trim()} ${phrase}। ${roleInject[2].trim()}`.replace(/\s+/g, ' ').trim();
-      } else {
-        fallback = `${phrase}। ${stripped}`;
-      }
-      if (!/[।.!?…]\s*$/u.test(fallback)) fallback = `${fallback}।`;
-    } else if (roleInject) {
-      fallback = `${roleInject[1].trim()} ${phrase}. ${roleInject[2].trim()}`.replace(/\s+/g, ' ').trim();
-      if (!/[.!?…]\s*$/u.test(fallback)) fallback = `${fallback}.`;
-    } else {
-      fallback = `${stripped} ${phrase}.`.replace(/\s+/g, ' ').trim();
-    }
+  if (locale === 'hi' && context?.role) {
+    // Prefer the exact gendered/neutral deterministic template (never a bare fragment).
+    fallback = buildHindiIntegratedDurationSentence(duration, context);
+  } else if (phrase && stripped) {
+    fallback = mergeDurationPhraseIntoFirstSentence(stripped, phrase, locale);
   } else if (phrase) {
     fallback = locale === 'hi' ? `${phrase}।` : `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
   } else {
-    fallback = stripped || summary.trim();
+    fallback = stripped || working.trim();
   }
 
   // Last resort: minimal duration-locked sentence (same underlying length).
-  if (!validateSummaryDuration(fallback, duration, { requireDurationClaim: requireClaim, locale }).valid || !fallback.trim()) {
+  if (
+    !validateSummaryDuration(fallback, duration, { requireDurationClaim: requireClaim, locale }).valid
+    || hasLeadingOrTrailingFragment(fallback)
+    || !fallback.trim()
+  ) {
     if (locale === 'hi') {
-      fallback = phrase ? `${phrase}।` : 'पेशेवर के पास प्रासंगिक अनुभव है।';
+      fallback = duration.hasValidDates
+        ? buildHindiIntegratedDurationSentence(duration, context || {})
+        : 'पेशेवर के पास प्रासंगिक अनुभव है।';
     } else if (locale === 'sr' || locale === 'hr') {
       fallback = phrase ? `Profesionalka ${phrase}.` : 'Profesionalka sa relevantnim iskustvom.';
     } else if (locale === 'ja') {
@@ -366,7 +533,11 @@ export function resolveSummaryWithDurationPolicy(
   };
 }
 
-/** Inject the shared approximate-duration phrase into a summary that lacks any duration claim. */
+/**
+ * Inject the shared approximate-duration phrase into a summary that lacks any duration claim.
+ * Always merges into an existing sentence via a comma — never inserts the phrase as its own
+ * standalone sentence (which would be a dependent clause with no subject/verb).
+ */
 export function injectDurationPhrase(
   summary: string,
   duration: ExperienceDuration,
@@ -375,53 +546,7 @@ export function injectDurationPhrase(
   const phrase = formatApproximateDurationPhrase(duration, locale);
   const text = (summary || '').trim();
   if (!phrase) return text;
-  if (!text) {
-    return locale === 'hi' ? `${phrase}।` : `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
-  }
-  if (locale === 'hi') {
-    // Prefer: "<role/opening> लगभग पाँच वर्षों के अनुभव के साथ। <rest>"
-    const roleInject = text.match(/^(.{2,100}?)([.।])\s*(.*)$/u);
-    if (roleInject) {
-      let out = `${roleInject[1].trim()} ${phrase}${roleInject[2]} ${roleInject[3].trim()}`.replace(/\s+/g, ' ').trim();
-      if (!/[।.!?…]\s*$/u.test(out)) out = `${out}।`;
-      return out;
-    }
-    // Or lead with duration when the text is a single clause.
-    let out = `${phrase}। ${text.replace(/^[।.\s]+/u, '')}`.replace(/\s+/g, ' ').trim();
-    if (!/[।.!?…]\s*$/u.test(out)) out = `${out}।`;
-    return out;
-  }
-  if (locale === 'ja') {
-    const roleInject = text.match(/^(.{2,100}?)([。．.])\s*(.*)$/u);
-    if (roleInject) {
-      return `${roleInject[1].trim()}${phrase}${roleInject[2]}${roleInject[3].trim()}`;
-    }
-    return `${text.replace(/[。．.]\s*$/u, '')}${phrase}。`;
-  }
-  if (locale === 'sr' || locale === 'hr') {
-    // Prefer: "Profesionalka sa oko pet godina iskustva ..."
-    const roleInject = text.match(/^(.{2,100}?)\.\s*(.*)$/u);
-    if (roleInject) {
-      const head = roleInject[1].trim();
-      // If head already looks like a role intro, append phrase after it.
-      let out = `${head} ${phrase}. ${roleInject[2].trim()}`.replace(/\s+/g, ' ').trim();
-      if (!/[.!?…]\s*$/u.test(out)) out = `${out}.`;
-      return out;
-    }
-    const out = `${text.replace(/\.\s*$/u, '')} ${phrase}.`.replace(/\s+/g, ' ').trim();
-    return out;
-  }
-  // English / default
-  {
-    const roleInject = text.match(/^(.{2,100}?)\.\s*(.*)$/u);
-    if (roleInject) {
-      let out = `${roleInject[1].trim()} ${phrase}. ${roleInject[2].trim()}`.replace(/\s+/g, ' ').trim();
-      if (!/[.!?…]\s*$/u.test(out)) out = `${out}.`;
-      return out;
-    }
-    const out = `${text.replace(/\.\s*$/u, '')} ${phrase}.`.replace(/\s+/g, ' ').trim();
-    return out;
-  }
+  return mergeDurationPhraseIntoFirstSentence(text, phrase, locale);
 }
 
 export type CvContentQualityResult = {
@@ -471,9 +596,19 @@ export function applyCvContentQuality(
   let summary = stripUnsupportedSummaryFluff(cv.summary || '', locale);
   if (summary !== (cv.summary || '').trim()) repaired = true;
 
+  const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+  const hasCurrentRole = (cv.experience || []).some((e) => e.isPresent);
+  const durationContext: DurationIntegrationContext = {
+    role: primaryExp?.position || cv.personal?.jobTitle || '',
+    company: primaryExp?.company || '',
+    startDate: primaryExp?.startDate || '',
+    gender,
+  };
+
   const summaryResult = resolveSummaryWithDurationPolicy(summary, duration, locale, {
     forceDurationPhrase: requireDuration,
     requireDurationClaim: requireDuration,
+    context: durationContext,
   });
   if (summaryResult.status !== 'passed') {
     repaired = true;
@@ -493,6 +628,8 @@ export function applyCvContentQuality(
     if (summary !== before) repaired = true;
   } else if (locale === 'sr' || locale === 'hr') {
     const before = summary;
+    summary = normalizeSerbianRolePhrase(summary);
+    if (hasCurrentRole) summary = applySerbianSummaryCurrentTense(summary, true);
     summary = stripUnsupportedSummaryFluff(summary, locale);
     if (summary !== before) repaired = true;
   }
