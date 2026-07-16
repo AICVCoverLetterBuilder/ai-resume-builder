@@ -1,8 +1,13 @@
 /**
  * Authoritative Pro AI usage + transient failure state machine.
  *
- * - Pro safety cap: 20 successful *user-visible AI actions* per 30-day window
- *   (localStorage `cvpro-ai-usage`). Configured value — not 50.
+ * - Pro safety cap: 50 successful *user-visible AI actions* per 30-day window
+ *   (localStorage `cvpro-ai-usage`). Public Pro UI remains “Unlimited”; this is
+ *   internal abuse protection only.
+ * - Boundary: counts 0–49 allow; after the 50th success count=50 and further
+ *   actions are blocked until the rolling window expires.
+ * - Schema v2 migrates build-223 `{ count, windowStart }` (limit 20) in place:
+ *   preserve count + windowStart, raise policyLimit to 50, recompute blocked.
  * - Only real AI API successes count (summary / rewrite / bullets / cover-letter).
  * - Local Job Analyzer / template recommend must NOT increment this counter.
  * - Repair / fallback / automatic retries must NOT count as extra user actions.
@@ -12,11 +17,15 @@ import type { AiErrorCode, AiErrorPayload } from './ai-error-codes';
 import { aiErrorMessage } from './ai-error-codes';
 import type { Locale } from './i18n/translations';
 
-/** Configured hidden Pro safety cap (store historically used 20, not 50). */
-export const PRO_AI_SAFETY_CAP = 20;
+/** Authoritative hidden Pro safety cap (abuse protection; public UI says Unlimited). */
+export const PRO_AI_SAFETY_CAP = 50;
+/** Legacy build-223 (and earlier) client cap — used only for migration detection. */
+export const PRO_AI_LEGACY_SAFETY_CAP = 20;
 export const PRO_AI_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 export const AI_USAGE_STORAGE_KEY = 'cvpro-ai-usage';
 export const AI_CIRCUIT_STORAGE_KEY = 'cvpro-ai-circuit';
+/** Persisted usage-policy schema version (build-223 was unversioned / implicit v1). */
+export const AI_USAGE_SCHEMA_VERSION = 2;
 
 /** Default cooldown when provider/server signals unavailability without Retry-After. */
 export const AI_CIRCUIT_DEFAULT_COOLDOWN_MS = 60_000;
@@ -37,6 +46,20 @@ export type ProAiCountedAction = (typeof PRO_AI_COUNTED_ACTIONS)[number];
 export interface ProAiRecord {
   count: number;
   windowStart: number;
+  schemaVersion?: number;
+  policyLimit?: number;
+}
+
+interface PersistedProAiRecord {
+  schemaVersion?: number;
+  count?: number;
+  windowStart?: number;
+  windowStartedAt?: number | string;
+  policyLimit?: number;
+  /** Legacy aliases / accidental fields — ignored for blocking after migration. */
+  blocked?: boolean;
+  limitReached?: boolean;
+  oldLimit?: number;
 }
 
 export interface AiCircuitState {
@@ -71,40 +94,125 @@ export function createAiRequestId(): string {
   return `ai_${Date.now().toString(36)}_${rand}`;
 }
 
+function resolveWindowStart(raw: PersistedProAiRecord, now: number): number | null {
+  if (typeof raw.windowStart === 'number' && Number.isFinite(raw.windowStart)) {
+    return raw.windowStart;
+  }
+  if (typeof raw.windowStartedAt === 'number' && Number.isFinite(raw.windowStartedAt)) {
+    return raw.windowStartedAt;
+  }
+  if (typeof raw.windowStartedAt === 'string') {
+    const parsed = Date.parse(raw.windowStartedAt);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+/**
+ * Normalize + migrate any persisted build-223 / legacy usage blob to schema v2.
+ * Preserves count and original window start; raises policyLimit to 50.
+ * Does not reset usage. Blocked state is never persisted — always recomputed.
+ */
+export function migrateProAiRecord(
+  raw: PersistedProAiRecord | null | undefined,
+  now = Date.now(),
+): ProAiRecord {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      schemaVersion: AI_USAGE_SCHEMA_VERSION,
+      count: 0,
+      windowStart: now,
+      policyLimit: PRO_AI_SAFETY_CAP,
+    };
+  }
+
+  const windowStart = resolveWindowStart(raw, now) ?? now;
+  const count = typeof raw.count === 'number' && Number.isFinite(raw.count)
+    ? Math.max(0, Math.floor(raw.count))
+    : 0;
+
+  if (now - windowStart >= PRO_AI_WINDOW_MS) {
+    return {
+      schemaVersion: AI_USAGE_SCHEMA_VERSION,
+      count: 0,
+      windowStart: now,
+      policyLimit: PRO_AI_SAFETY_CAP,
+    };
+  }
+
+  return {
+    schemaVersion: AI_USAGE_SCHEMA_VERSION,
+    count,
+    windowStart,
+    policyLimit: PRO_AI_SAFETY_CAP,
+  };
+}
+
+function needsPersistUpgrade(raw: PersistedProAiRecord | null, migrated: ProAiRecord): boolean {
+  if (!raw) return true;
+  if (raw.schemaVersion !== AI_USAGE_SCHEMA_VERSION) return true;
+  if (raw.policyLimit !== PRO_AI_SAFETY_CAP) return true;
+  if (typeof raw.blocked === 'boolean' || typeof raw.limitReached === 'boolean') return true;
+  if (raw.count !== migrated.count || raw.windowStart !== migrated.windowStart) return true;
+  return false;
+}
+
 export function loadProAiRecord(now = Date.now()): ProAiRecord {
-  if (typeof window === 'undefined') return { count: 0, windowStart: now };
+  if (typeof window === 'undefined') {
+    return {
+      schemaVersion: AI_USAGE_SCHEMA_VERSION,
+      count: 0,
+      windowStart: now,
+      policyLimit: PRO_AI_SAFETY_CAP,
+    };
+  }
   try {
     const stored = localStorage.getItem(AI_USAGE_STORAGE_KEY);
     if (stored) {
-      const parsed = JSON.parse(stored) as ProAiRecord;
-      if (
-        typeof parsed.count === 'number' &&
-        typeof parsed.windowStart === 'number' &&
-        now - parsed.windowStart < PRO_AI_WINDOW_MS
-      ) {
-        return { count: Math.max(0, parsed.count), windowStart: parsed.windowStart };
+      const parsed = JSON.parse(stored) as PersistedProAiRecord;
+      const migrated = migrateProAiRecord(parsed, now);
+      if (needsPersistUpgrade(parsed, migrated)) {
+        persistProAiRecord(migrated);
       }
+      return migrated;
     }
   } catch {
     /* ignore */
   }
-  return { count: 0, windowStart: now };
+  return {
+    schemaVersion: AI_USAGE_SCHEMA_VERSION,
+    count: 0,
+    windowStart: now,
+    policyLimit: PRO_AI_SAFETY_CAP,
+  };
 }
 
 export function persistProAiRecord(record: ProAiRecord): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(AI_USAGE_STORAGE_KEY, JSON.stringify(record));
+  const toStore: ProAiRecord = {
+    schemaVersion: AI_USAGE_SCHEMA_VERSION,
+    count: Math.max(0, record.count),
+    windowStart: record.windowStart,
+    policyLimit: PRO_AI_SAFETY_CAP,
+  };
+  localStorage.setItem(AI_USAGE_STORAGE_KEY, JSON.stringify(toStore));
 }
 
 export function getProAiUsageCount(now = Date.now()): number {
   return loadProAiRecord(now).count;
 }
 
+export function isProAiSafetyBlocked(record: ProAiRecord, now = Date.now()): boolean {
+  if (now - record.windowStart >= PRO_AI_WINDOW_MS) return false;
+  const limit = record.policyLimit ?? PRO_AI_SAFETY_CAP;
+  return record.count >= limit;
+}
+
 export function canUseProAiSafety(isProReady: boolean, record?: ProAiRecord, now = Date.now()): boolean {
   if (!isProReady) return false;
   const fresh = record ?? loadProAiRecord(now);
   if (now - fresh.windowStart >= PRO_AI_WINDOW_MS) return true;
-  return fresh.count < PRO_AI_SAFETY_CAP;
+  return !isProAiSafetyBlocked(fresh, now);
 }
 
 export function recordProAiUserActionSuccess(
@@ -114,11 +222,21 @@ export function recordProAiUserActionSuccess(
   const base = prev ?? loadProAiRecord(now);
   const windowBase =
     now - base.windowStart >= PRO_AI_WINDOW_MS
-      ? { count: 0, windowStart: now }
-      : base;
+      ? {
+          schemaVersion: AI_USAGE_SCHEMA_VERSION,
+          count: 0,
+          windowStart: now,
+          policyLimit: PRO_AI_SAFETY_CAP,
+        }
+      : {
+          schemaVersion: AI_USAGE_SCHEMA_VERSION,
+          count: base.count,
+          windowStart: base.windowStart,
+          policyLimit: PRO_AI_SAFETY_CAP,
+        };
   const updated: ProAiRecord = {
+    ...windowBase,
     count: windowBase.count + 1,
-    windowStart: windowBase.windowStart,
   };
   persistProAiRecord(updated);
   return updated;

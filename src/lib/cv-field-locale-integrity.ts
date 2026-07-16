@@ -62,6 +62,14 @@ function hasForeignProseForHindi(text: string): boolean {
 /**
  * Hindi prose must be dominated by Hindi grammar. Latin product names, acronyms,
  * company names, email addresses and URLs are neutral and may remain.
+ *
+ * NOTE: this is the broad, historically Hindi-only "final export" check, applied to
+ * an entire CV that may legitimately contain long-standing untranslated content in
+ * any other locale (the export pipeline never required every field to already be
+ * written in the requested locale, only Hindi). For the narrower "was this field
+ * *just generated* by AI for this exact requested locale" check, use
+ * `isWrongLanguageAiOutput` from `cv-ai-locale-guard.ts` instead — do not broaden
+ * this function's scope, it would reject long-standing valid exports.
  */
 export function textMatchesRequestedFieldLocale(
   text: string,

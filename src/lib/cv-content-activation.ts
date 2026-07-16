@@ -21,6 +21,7 @@ import {
   type CvFidelityViolation,
 } from './cv-semantic-fidelity';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
+import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 
 export type CvContentActivation = {
   content: string;
@@ -86,6 +87,12 @@ function experiencePasses(
   },
 ): boolean {
   if (!content.trim()) return false;
+  // The provider (or an earlier repair) may echo the source CV's language instead of
+  // the requested one — most commonly Serbian, since existing CV content in
+  // production is frequently Serbian regardless of the newly requested target locale.
+  // Catch that here, at the server activation stage, so a real repair attempt still
+  // gets a chance before we ever fall back to the deterministic template.
+  if (isWrongLanguageAiOutput(content, options.locale)) return false;
   const check = validateLocalizedExperienceBullets(content, options.factSet, {
     locale: options.locale,
     gender: options.gender,
@@ -258,6 +265,7 @@ export async function activateCvSummary(options: {
     first.valid
     && options.candidate.trim()
     && textMatchesRequestedFieldLocale(options.candidate, options.locale, 'summary')
+    && !isWrongLanguageAiOutput(options.candidate, options.locale)
   ) {
     return {
       content: options.candidate.trim(),
@@ -287,6 +295,7 @@ export async function activateCvSummary(options: {
         recheck.valid
         && repaired.trim()
         && textMatchesRequestedFieldLocale(repaired, options.locale, 'summary')
+        && !isWrongLanguageAiOutput(repaired, options.locale)
       ) {
         return {
           content: repaired.trim(),
@@ -305,6 +314,10 @@ export async function activateCvSummary(options: {
   const hinted = options.fallbackSummary.trim();
   const hintedOk = hinted
     && textMatchesRequestedFieldLocale(hinted, options.locale, 'summary')
+    // The caller-supplied hint is frequently built from frozen canonical source text
+    // (e.g. an unlocalized Serbian job title/description), so it can carry the wrong
+    // language even when the requested locale is something else entirely.
+    && !isWrongLanguageAiOutput(hinted, options.locale)
     && validateSummaryCompleteness(hinted, { locale: options.locale }).valid
     && validateLocalizedSummary(hinted, options.factSet, {
       locale: options.locale,
@@ -331,6 +344,7 @@ export async function activateCvSummary(options: {
   if (
     localized
     && textMatchesRequestedFieldLocale(localized, options.locale, 'summary')
+    && !isWrongLanguageAiOutput(localized, options.locale)
     && validateSummaryCompleteness(localized, { locale: options.locale }).valid
     && validateLocalizedSummary(localized, options.factSet, {
       locale: options.locale,

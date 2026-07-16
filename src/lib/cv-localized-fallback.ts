@@ -273,12 +273,38 @@ function localizeRoleLabel(role: string, locale: Locale, g: GenderTone, profileJ
 
 type GenericDutyIntent = 'process' | 'collaboration' | 'analysis' | 'planning';
 
+/**
+ * `\b<stem>\b` breaks the moment the source language inflects the stem with a
+ * suffix — e.g. Serbian "saradn\b" never matches inside "saradnja", "koordin\b"
+ * never matches inside "koordinacija", because the trailing `\b` requires the
+ * stem to end the word. Latin-script stems below therefore only anchor the
+ * *start* of the word (`\b<stem>`) and allow any run of further ASCII letters to
+ * follow, which safely covers Serbian/Croatian/Spanish/etc. case endings without
+ * requiring an exact word match. Devanagari terms use plain substring checks
+ * since `\b` never matches at a non-word/non-word (Devanagari-to-space) boundary.
+ */
 function classifyGenericDutyIntent(text: string): GenericDutyIntent | null {
   const t = text.toLowerCase();
-  if (/\b(process|internal|implement|razvoj|unapređ|proces|प्रक्रिया)\b/iu.test(t)) return 'process';
-  if (/\b(cross.?functional|collaborat|saradn|tim|project execution|सहयोग|परियोजना)\b/iu.test(t)) return 'collaboration';
-  if (/\b(data|analys|report|izveštaj|analiz|विश्लेषण|रिपोर्ट)\b/iu.test(t)) return 'analysis';
-  if (/\b(plan|planning|coordinat|coordination|koordin|planir|योजना|समन्वय)\b/iu.test(t)) return 'planning';
+  const startsWord = (...stems: string[]) =>
+    new RegExp(`\\b(?:${stems.join('|')})[a-z]*`, 'iu').test(t);
+  const includesAny = (...terms: string[]) => terms.some((term) => t.includes(term));
+
+  if (
+    startsWord('process', 'internal', 'implement', 'razvoj', 'unapređ', 'proces')
+    || includesAny('प्रक्रिया')
+  ) return 'process';
+  if (
+    startsWord('cross.?functional', 'collaborat', 'saradn', 'tim', 'project execution')
+    || includesAny('सहयोग', 'परियोजना')
+  ) return 'collaboration';
+  if (
+    startsWord('data', 'analys', 'report', 'izveštaj', 'analiz')
+    || includesAny('विश्लेषण', 'रिपोर्ट')
+  ) return 'analysis';
+  if (
+    startsWord('plan', 'planning', 'coordinat', 'coordination', 'koordin', 'planir')
+    || includesAny('योजना', 'समन्वय')
+  ) return 'planning';
   return null;
 }
 
@@ -290,6 +316,54 @@ const GENERIC_INTENT_BULLET: Partial<
     collaboration: () => 'Collaborate with cross-functional teams on project execution.',
     analysis: () => 'Analyze business data and prepare reports for senior management.',
     planning: () => 'Plan and coordinate departmental activities.',
+  },
+  de: {
+    process: () => 'Entwicklung und Umsetzung interner Prozesse.',
+    collaboration: () => 'Zusammenarbeit mit funktionsübergreifenden Teams bei der Projektumsetzung.',
+    analysis: () => 'Analyse von Geschäftsdaten und Erstellung von Berichten für die Geschäftsführung.',
+    planning: () => 'Planung und Koordination von Abteilungsaktivitäten.',
+  },
+  es: {
+    process: () => 'Desarrollo e implementación de procesos internos.',
+    collaboration: () => 'Colaboración con equipos multifuncionales en la ejecución de proyectos.',
+    analysis: () => 'Análisis de datos empresariales y elaboración de informes para la alta dirección.',
+    planning: () => 'Planificación y coordinación de las actividades del departamento.',
+  },
+  fr: {
+    process: () => 'Développement et mise en œuvre de processus internes.',
+    collaboration: () => 'Collaboration avec des équipes transverses sur l’exécution de projets.',
+    analysis: () => 'Analyse des données commerciales et préparation de rapports pour la direction.',
+    planning: () => 'Planification et coordination des activités du département.',
+  },
+  it: {
+    process: () => 'Sviluppo e implementazione di processi interni.',
+    collaboration: () => 'Collaborazione con team multifunzionali nell’esecuzione dei progetti.',
+    analysis: () => 'Analisi dei dati aziendali e preparazione di report per il management.',
+    planning: () => 'Pianificazione e coordinamento delle attività del reparto.',
+  },
+  ar: {
+    process: () => 'تطوير وتنفيذ العمليات الداخلية.',
+    collaboration: () => 'التعاون مع فرق متعددة الوظائف لتنفيذ المشاريع.',
+    analysis: () => 'تحليل بيانات الأعمال وإعداد التقارير للإدارة العليا.',
+    planning: () => 'التخطيط والتنسيق لأنشطة القسم.',
+  },
+  ru: {
+    process: () => 'Разработка и внедрение внутренних процессов.',
+    collaboration: () => 'Сотрудничество с межфункциональными командами при реализации проектов.',
+    analysis: () => 'Анализ бизнес-данных и подготовка отчётов для руководства.',
+    planning: () => 'Планирование и координация деятельности отдела.',
+  },
+  'pt-BR': {
+    process: () => 'Desenvolvimento e implementação de processos internos.',
+    collaboration: () => 'Colaboração com equipes multifuncionais na execução de projetos.',
+    analysis: () => 'Análise de dados de negócios e elaboração de relatórios para a alta gestão.',
+    planning: () => 'Planejamento e coordenação das atividades do departamento.',
+  },
+  ja: {
+    process: () => '社内プロセスの開発と実施。',
+    collaboration: () => 'プロジェクト遂行のための部門横断チームとの協力。',
+    analysis: () => '経営データの分析と経営陣向け報告書の作成。',
+    planning: () => '部門活動の計画と調整。',
   },
   sr: {
     process: () => 'Radim na razvoju i implementaciji internih procesa.',

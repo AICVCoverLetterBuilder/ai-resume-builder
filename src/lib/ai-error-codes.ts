@@ -47,18 +47,18 @@ const FREE_LIMIT: MsgMap = {
 };
 
 const PRO_SAFETY: MsgMap = {
-  en: 'You have reached the Pro AI safety limit for this period. Please try again later.',
-  hi: 'आप इस अवधि की Pro AI सुरक्षा सीमा तक पहुँच चुके हैं। कृपया बाद में पुनः प्रयास करें।',
-  de: 'Sie haben das Pro-KI-Sicherheitslimit für diesen Zeitraum erreicht. Bitte versuchen Sie es später erneut.',
-  es: 'Has alcanzado el límite de seguridad de IA Pro de este período. Inténtalo más tarde.',
-  fr: 'Vous avez atteint la limite de sécurité IA Pro pour cette période. Réessayez plus tard.',
-  it: 'Hai raggiunto il limite di sicurezza IA Pro per questo periodo. Riprova più tardi.',
-  ar: 'لقد وصلت إلى حد أمان الذكاء الاصطناعي لـ Pro لهذه الفترة. يُرجى المحاولة لاحقًا.',
-  sr: 'Dostigli ste Pro AI bezbednosni limit za ovaj period. Pokušajte ponovo kasnije.',
-  hr: 'Dosegli ste Pro AI sigurnosni limit za ovo razdoblje. Pokušajte ponovno kasnije.',
-  ru: 'Вы достигли защитного лимита Pro ИИ за этот период. Повторите попытку позже.',
-  'pt-BR': 'Você atingiu o limite de segurança de IA Pro deste período. Tente novamente mais tarde.',
-  ja: 'この期間のPro AIセーフティ上限に達しました。しばらくしてからもう一度お試しください。',
+  en: 'AI is temporarily pausing high usage for protection. Please try again later.',
+  hi: 'सुरक्षा के लिए AI अस्थायी रूप से उच्च उपयोग रोक रहा है। कृपया बाद में पुनः प्रयास करें।',
+  de: 'Die KI pausiert vorübergehend bei hoher Nutzung zum Schutz. Bitte versuchen Sie es später erneut.',
+  es: 'La IA pausa temporalmente el uso intenso por protección. Inténtalo más tarde.',
+  fr: 'L’IA met temporairement en pause une utilisation intensive pour protection. Réessayez plus tard.',
+  it: 'L’IA mette temporaneamente in pausa l’uso intensivo per protezione. Riprova più tardi.',
+  ar: 'يوقف الذكاء الاصطناعي مؤقتًا الاستخدام المرتفع للحماية. يُرجى المحاولة لاحقًا.',
+  sr: 'AI privremeno pauzira visoku upotrebu radi zaštite. Pokušajte ponovo kasnije.',
+  hr: 'AI privremeno pauzira visoku upotrebu radi zaštite. Pokušajte ponovno kasnije.',
+  ru: 'ИИ временно приостанавливает высокую нагрузку для защиты. Повторите попытку позже.',
+  'pt-BR': 'A IA está pausando temporariamente o uso intenso por proteção. Tente novamente mais tarde.',
+  ja: '保護のため、AIは一時的に高頻度の利用を制限しています。しばらくしてからもう一度お試しください。',
 };
 
 const RATE_LIMIT: MsgMap = {

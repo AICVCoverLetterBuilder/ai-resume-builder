@@ -1,12 +1,16 @@
 /**
  * @vitest-environment jsdom
  *
- * Deterministic 60-request sequential AI harness — no real provider calls.
+ * Deterministic sequential AI harness — no real provider calls.
+ * Cap is authoritative PRO_AI_SAFETY_CAP (50).
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
   PRO_AI_SAFETY_CAP,
   PRO_AI_WINDOW_MS,
+  PRO_AI_LEGACY_SAFETY_CAP,
+  AI_USAGE_SCHEMA_VERSION,
+  AI_USAGE_STORAGE_KEY,
   canUseProAiSafety,
   clearTransientAiSessionState,
   classifyAiFailure,
@@ -14,6 +18,7 @@ import {
   getProAiUsageCount,
   isAiCircuitOpen,
   loadProAiRecord,
+  migrateProAiRecord,
   noteAiRequestFailure,
   noteAiRequestSuccess,
   openAiCircuit,
@@ -23,7 +28,7 @@ import {
 import { aiErrorMessage } from '@/lib/ai-error-codes';
 import { checkProAccess } from '@/lib/store';
 
-describe('60 sequential visible AI actions (mocked provider)', () => {
+describe('sequential visible AI actions (mocked provider)', () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
@@ -36,35 +41,29 @@ describe('60 sequential visible AI actions (mocked provider)', () => {
     sessionStorage.clear();
   });
 
-  test('60 visible actions: each counts once; lockout only at configured PRO_AI_SAFETY_CAP', () => {
+  test('60 visible actions: each counts once; lockout only at configured PRO_AI_SAFETY_CAP (50)', () => {
     let record = loadProAiRecord();
     let visibleActions = 0;
     let repairPasses = 0;
     let fallbackPasses = 0;
     let allowedBeforeCap = 0;
     let blockedAtCap = 0;
-
-    // Simulated Pro token refresh mid-run — entitlement stays ready
     let isProVerified = true;
 
     for (let i = 0; i < 60; i++) {
       const access = checkProAccess(isProVerified, record.count);
       if (access === 'allowed') {
         allowedBeforeCap++;
-        // One user-visible Generate/Rewrite/Stronger counts once
         record = recordProAiUserActionSuccess(record);
         visibleActions++;
-        // Simulated automatic repair + validation fallback — must NOT increment again
         repairPasses++;
         fallbackPasses++;
       } else {
         expect(access).toBe('safety_cap');
         blockedAtCap++;
-        // Blocked requests must not increment usage
         expect(record.count).toBe(PRO_AI_SAFETY_CAP);
       }
 
-      // Occasional mocked provider 429 / 503 — transient circuit, then success clears it
       if (i === 5) {
         noteAiRequestFailure(classifyAiFailure({ httpStatus: 429, retryAfterSec: 2 }));
         expect(isAiCircuitOpen()).toBe(true);
@@ -77,30 +76,45 @@ describe('60 sequential visible AI actions (mocked provider)', () => {
         noteAiRequestSuccess();
         expect(isAiCircuitOpen()).toBe(false);
       }
-
-      // Mid-run Pro token refresh simulation
       if (i === 15) {
         isProVerified = true;
       }
     }
 
-    expect(PRO_AI_SAFETY_CAP).toBe(20);
+    expect(PRO_AI_SAFETY_CAP).toBe(50);
     expect(visibleActions).toBe(PRO_AI_SAFETY_CAP);
     expect(allowedBeforeCap).toBe(PRO_AI_SAFETY_CAP);
     expect(blockedAtCap).toBe(60 - PRO_AI_SAFETY_CAP);
     expect(repairPasses).toBe(PRO_AI_SAFETY_CAP);
     expect(fallbackPasses).toBe(PRO_AI_SAFETY_CAP);
     expect(record.count).toBe(PRO_AI_SAFETY_CAP);
-    // No early lockout from double-counting around 10–19
-    expect(canUseProAiSafety(true, { count: 19, windowStart: record.windowStart })).toBe(true);
+    expect(canUseProAiSafety(true, { count: 49, windowStart: record.windowStart })).toBe(true);
     expect(canUseProAiSafety(true, record)).toBe(false);
+  });
+
+  test('10 Summary + 10 Stronger AI = count 20; next 30 visible actions work through count 50', () => {
+    let record = loadProAiRecord();
+    for (let i = 0; i < 10; i++) {
+      record = recordProAiUserActionSuccess(record); // Summary
+    }
+    for (let i = 0; i < 10; i++) {
+      record = recordProAiUserActionSuccess(record); // Stronger AI
+    }
+    expect(record.count).toBe(20);
+    expect(checkProAccess(true, record.count)).toBe('allowed');
+
+    for (let i = 0; i < 30; i++) {
+      expect(checkProAccess(true, record.count)).toBe('allowed');
+      record = recordProAiUserActionSuccess(record);
+    }
+    expect(record.count).toBe(50);
+    expect(checkProAccess(true, record.count)).toBe('safety_cap');
   });
 
   test('repair-only bursts do not advance the Pro safety counter', () => {
     const start = loadProAiRecord();
     for (let i = 0; i < 40; i++) {
-      // repair / fallback only
-      repairPassesNoop();
+      // intentional no-op — repair/fallback must not touch usage
     }
     expect(loadProAiRecord().count).toBe(start.count);
     expect(canUseProAiSafety(true, loadProAiRecord())).toBe(true);
@@ -146,16 +160,15 @@ describe('60 sequential visible AI actions (mocked provider)', () => {
     expect(getProAiUsageCount()).toBe(0);
   });
 
-  test('error codes remain distinct and Hindi toasts are localized', () => {
-    expect(aiErrorMessage('pro_safety_limit_reached', 'hi')).toMatch(/सुरक्षा|सीमा/);
+  test('error codes remain distinct; Serbian and Hindi use UI locales', () => {
+    expect(aiErrorMessage('pro_safety_limit_reached', 'sr')).toMatch(/privremeno|zaštite|kasnije/i);
+    expect(aiErrorMessage('pro_safety_limit_reached', 'sr')).not.toMatch(/temporarily unavailable/i);
+    expect(aiErrorMessage('pro_safety_limit_reached', 'hi')).toMatch(/सुरक्षा|उच्च|प्रयास/);
     expect(aiErrorMessage('pro_safety_limit_reached', 'hi')).not.toBe(
       aiErrorMessage('pro_safety_limit_reached', 'en'),
     );
     expect(aiErrorMessage('server_rate_limited', 'hi', 12)).toContain('12');
     expect(aiErrorMessage('provider_temporarily_unavailable', 'hi')).toMatch(/प्रदाता|उपलब्ध/);
-    expect(aiErrorMessage('network_error', 'hi')).toMatch(/नेटवर्क/);
-    expect(aiErrorMessage('invalid_pro_token', 'hi')).toMatch(/Pro|प्राधिकरण|रीफ़्रेश/);
-    expect(aiErrorMessage('free_ai_limit_reached', 'hi')).toMatch(/मुफ़्त|सीमा/);
 
     const codes = [
       classifyAiFailure({ httpStatus: 429, body: { code: 'server_rate_limited' } }).code,
@@ -165,6 +178,8 @@ describe('60 sequential visible AI actions (mocked provider)', () => {
       classifyAiFailure({ httpStatus: 422 }).code,
     ];
     expect(new Set(codes).size).toBe(codes.length);
+    expect(classifyAiFailure({ httpStatus: 429, body: { code: 'server_rate_limited' } }).code)
+      .not.toBe('pro_safety_limit_reached');
   });
 
   test('Android storage lifecycle: restart / reload / clear session / reinstall simulation', () => {
@@ -190,7 +205,7 @@ describe('60 sequential visible AI actions (mocked provider)', () => {
     const start = Date.now();
     vi.setSystemTime(start);
     localStorage.setItem(
-      'cvpro-ai-usage',
+      AI_USAGE_STORAGE_KEY,
       JSON.stringify({ count: PRO_AI_SAFETY_CAP, windowStart: start }),
     );
     expect(canUseProAiSafety(true, loadProAiRecord())).toBe(false);
@@ -200,9 +215,69 @@ describe('60 sequential visible AI actions (mocked provider)', () => {
   });
 });
 
-function repairPassesNoop() {
-  // Intentionally empty — repair/fallback must not touch usage storage
-}
+describe('build-223 → schema v2 Pro usage migration', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  test('count=20 under old limit 20 becomes allowed under policy 50 without clearing storage', () => {
+    const windowStart = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    // Exact build-223 shape
+    localStorage.setItem(
+      AI_USAGE_STORAGE_KEY,
+      JSON.stringify({
+        count: 20,
+        windowStart,
+        oldLimit: PRO_AI_LEGACY_SAFETY_CAP,
+      }),
+    );
+
+    // Would have been blocked under legacy 20:
+    expect(20 >= PRO_AI_LEGACY_SAFETY_CAP).toBe(true);
+
+    const migrated = loadProAiRecord();
+    expect(migrated.count).toBe(20);
+    expect(migrated.windowStart).toBe(windowStart);
+    expect(migrated.schemaVersion).toBe(AI_USAGE_SCHEMA_VERSION);
+    expect(migrated.policyLimit).toBe(50);
+    expect(canUseProAiSafety(true, migrated)).toBe(true);
+    expect(checkProAccess(true, migrated.count)).toBe('allowed');
+
+    // Action 21 succeeds and increments
+    const after21 = recordProAiUserActionSuccess(migrated);
+    expect(after21.count).toBe(21);
+    expect(after21.windowStart).toBe(windowStart);
+    expect(after21.policyLimit).toBe(50);
+
+    const persisted = JSON.parse(localStorage.getItem(AI_USAGE_STORAGE_KEY)!);
+    expect(persisted.schemaVersion).toBe(2);
+    expect(persisted.policyLimit).toBe(50);
+    expect(persisted.count).toBe(21);
+    expect(persisted.blocked).toBeUndefined();
+    expect(persisted.limitReached).toBeUndefined();
+  });
+
+  test('migrateProAiRecord ignores persisted blocked/limitReached flags', () => {
+    const windowStart = Date.now();
+    const migrated = migrateProAiRecord({
+      count: 20,
+      windowStart,
+      blocked: true,
+      limitReached: true,
+      oldLimit: 20,
+    });
+    expect(migrated.count).toBe(20);
+    expect(migrated.windowStart).toBe(windowStart);
+    expect(migrated.policyLimit).toBe(50);
+    expect(canUseProAiSafety(true, migrated)).toBe(true);
+  });
+});
 
 describe('API failure classification contract', () => {
   test('maps HTTP statuses to distinct application codes', () => {

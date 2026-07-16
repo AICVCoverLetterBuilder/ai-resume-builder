@@ -958,7 +958,10 @@ export function appendDurationToSummaryShell(
   locale: Locale,
 ): string {
   if (!duration.hasValidDates || !summaryHasClaimableSlot(summary)) return summary;
-  if (validateSummaryDuration(summary, duration).valid && /\b(year|godin|वर्ष)/iu.test(summary)) {
+  if (
+    validateSummaryDuration(summary, duration, { locale }).valid
+    && summaryHasDurationClaim(summary)
+  ) {
     return summary;
   }
   const phrase = formatApproximateDurationPhrase(duration, locale);

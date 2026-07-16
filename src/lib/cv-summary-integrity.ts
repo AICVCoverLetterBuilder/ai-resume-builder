@@ -17,6 +17,7 @@ import {
 } from './cv-semantic-fidelity';
 import type { ExperienceDurationSnapshot } from './cv-experience-duration';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
+import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 
 export function buildDurationContextFromCv(cv: CVData, locale: Locale): DurationIntegrationContext {
   const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
@@ -43,6 +44,10 @@ function summaryPassesIntegrity(
   const factSet = buildCvCanonicalFactSet(cv);
   const gender = cv.personal?.gender || '';
   if (!textMatchesRequestedFieldLocale(summary, locale, 'summary')) return false;
+  // Freshly-generated AI text must actually be in the requested target locale — the
+  // source CV is frequently Serbian, and the provider echoing it back (or generating
+  // in the old contentLocale) must be rejected here, not silently applied.
+  if (isWrongLanguageAiOutput(summary, locale)) return false;
   if (!validateSummaryCompleteness(summary, { locale }).valid) return false;
   return validateLocalizedSummary(summary, factSet, {
     locale,

@@ -166,28 +166,61 @@ export function durationToPromptToken(duration: ExperienceDuration): string {
   return String(duration.approxYears);
 }
 
+/**
+ * Word-number maps for every supported locale (1-10), used to parse the duration
+ * a translated/localized AI summary actually claims — never just the source language.
+ * Includes common alternate/nominative forms in addition to the dative/oblique forms
+ * used by `YEAR_WORD_BY_LOCALE` for the canned phrase (e.g. German "ein" vs "einem").
+ */
+const WORD_TO_YEARS_BY_LOCALE: Record<string, Record<string, number>> = {
+  en: {
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
+    seven: 7, eight: 8, nine: 9, ten: 10,
+  },
+  de: {
+    ein: 1, eine: 1, einem: 1, einen: 1, einer: 1, zwei: 2, drei: 3, vier: 4,
+    fünf: 5, funf: 5, sechs: 6, sieben: 7, acht: 8, neun: 9, zehn: 10,
+  },
+  es: {
+    un: 1, una: 1, uno: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5,
+    seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10,
+  },
+  fr: {
+    un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6,
+    sept: 7, huit: 8, neuf: 9, dix: 10,
+  },
+  it: {
+    un: 1, una: 1, uno: 1, due: 2, tre: 3, quattro: 4, cinque: 5,
+    sei: 6, sette: 7, otto: 8, nove: 9, dieci: 10,
+  },
+  'pt-BR': {
+    um: 1, uma: 1, dois: 2, duas: 2, tres: 3, 'três': 3, quatro: 4, cinco: 5,
+    seis: 6, sete: 7, oito: 8, nove: 9, dez: 10,
+  },
+  ru: {
+    'один': 1, 'одного': 1, 'одна': 1, 'два': 2, 'двух': 2, 'три': 3, 'трёх': 3, 'трех': 3,
+    'четыре': 4, 'четырёх': 4, 'четырех': 4, 'пять': 5, 'пяти': 5, 'шесть': 6, 'шести': 6,
+    'семь': 7, 'семи': 7, 'восемь': 8, 'восьми': 8, 'девять': 9, 'девяти': 9,
+    'десять': 10, 'десяти': 10,
+  },
+  ar: {
+    'سنة واحدة': 1, 'سنتين': 2, 'ثلاث': 3, 'أربع': 4, 'خمس': 5,
+    'ست': 6, 'سبع': 7, 'ثمان': 8, 'تسع': 9, 'عشر': 10,
+  },
+  sr: { jedne: 1, jedna: 1, jedan: 1, dve: 2, dvije: 2, dva: 2, tri: 3, četiri: 4, cetiri: 4, pet: 5, šest: 6, sest: 6 },
+  hr: { jedne: 1, jedna: 1, jedan: 1, dve: 2, dvije: 2, dva: 2, tri: 3, četiri: 4, cetiri: 4, pet: 5, šest: 6, sest: 6 },
+  hi: { 'एक': 1, 'दो': 2, 'तीन': 3, 'चार': 4, 'पाँच': 5, 'पांच': 5, 'छह': 6, 'छः': 6 },
+};
+
 function tokenToYears(token: string): number | null {
   const t = (token || '').trim();
   if (!t) return null;
   if (/^\d+(\.\d+)?$/.test(t)) return Math.floor(parseFloat(t));
   const lower = t.toLowerCase();
-  const en: Record<string, number> = {
-    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
-    seven: 7, eight: 8, nine: 9, ten: 10,
-  };
-  if (en[lower] != null) return en[lower];
-  if (/^jedn/i.test(t)) return 1;
-  if (/^(dve|dvije|dva)/i.test(t)) return 2;
-  if (/^tri$/i.test(t)) return 3;
-  if (/^(četiri|cetiri)$/i.test(t)) return 4;
-  if (/^pet$/i.test(t)) return 5;
-  if (/^(šest|sest)$/i.test(t)) return 6;
-  if (t === 'एक') return 1;
-  if (t === 'दो') return 2;
-  if (t === 'तीन') return 3;
-  if (t === 'चार') return 4;
-  if (t === 'पाँच' || t === 'पांच') return 5;
-  if (t === 'छह' || t === 'छः') return 6;
+  for (const wordMap of Object.values(WORD_TO_YEARS_BY_LOCALE)) {
+    if (wordMap[t] != null) return wordMap[t];
+    if (wordMap[lower] != null) return wordMap[lower];
+  }
   return null;
 }
 
@@ -200,6 +233,24 @@ export function extractSummaryYearClaims(text: string): number[] {
     /\b(?:around|about|approximately)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+years?\b/giu,
     /\b(?:oko|od|približno|vise od|više od)\s+(jedne?|dvije?|dve|tri|četiri|cetiri|pet|šest|sest|\d+)\s+godin/giu,
     /(?:लगभग|करीब)?\s*(\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्ष/giu,
+    // German: "mit etwa vier Jahren Erfahrung" / "Vier Jahre Erfahrung" (Jahr|Jahre|Jahren).
+    /\b(?:etwa|rund|ca\.?|ungefähr)?\s*(ein|eine|einem|einen|einer|zwei|drei|vier|fünf|funf|sechs|sieben|acht|neun|zehn|\d+(?:\.\d+)?)\s*\+?\s*Jahre?n?\b/giu,
+    // Spanish: "con alrededor de cuatro años de experiencia".
+    /\b(?:alrededor de|circa|unos?|unas?)?\s*(un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\d+(?:\.\d+)?)\s*\+?\s*años?\b/giu,
+    // French: "avec environ quatre ans d'expérience".
+    /\b(?:environ|à peu près)?\s*(un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\d+(?:\.\d+)?)\s*\+?\s*ans?\b/giu,
+    // Italian: "con circa quattro anni di esperienza".
+    /\b(?:circa)?\s*(un|una|uno|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|\d+(?:\.\d+)?)\s*\+?\s*anni?\b/giu,
+    // Portuguese (BR): "com cerca de quatro anos de experiência".
+    /\b(?:cerca de|aproximadamente)?\s*(um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|\d+(?:\.\d+)?)\s*\+?\s*anos?\b/giu,
+    // Russian: "с опытом около четырёх лет" / "четыре года опыта".
+    /\b(?:около|примерно)?\s*(один|одного|одна|два|двух|три|трёх|трех|четыре|четырёх|четырех|пять|пяти|шесть|шести|семь|семи|восемь|восьми|девять|девяти|десять|десяти|\d+(?:\.\d+)?)\s*(?:лет|года|год)\b/giu,
+    // Arabic: "سنة واحدة" / "سنتين" are already complete one/two-year phrases.
+    /(سنة واحدة|سنتين)/giu,
+    // Arabic: "مع حوالي أربع سنوات من الخبرة" (number word 3-10 + سنوات).
+    /(ثلاث|أربع|خمس|ست|سبع|ثمان|تسع|عشر)\s*سنوات/giu,
+    // Arabic: digit + سنوات/سنة.
+    /(\d+(?:\.\d+)?)\s*(?:سنوات|سنة)/giu,
   ];
   for (const re of patterns) {
     let m: RegExpExecArray | null;
@@ -270,14 +321,38 @@ export function yearWordForLocale(locale: Locale, n: number): string {
 
 export function summaryHasDurationClaim(text: string): boolean {
   return extractSummaryYearClaims(text).length > 0
-    || /\b(years? of experience|godina iskustva|profesionalnog iskustva|Jahr(?:en)? Erfahrung|años de experiencia|ans d'expérience|anni di esperienza|anos de experiência|वर्षों के अनुभव|वर्ष के अनुभव|वर्षों?\s*का\s*अनुभव)\b/iu.test(text)
+    // Jahre?n? covers Jahr / Jahre / Jahren — the plural nominative "Jahre" (no
+    // trailing "n") was previously missed, rejecting natural German phrasing such
+    // as "Vier Jahre Erfahrung" that never uses the dative "Jahren" form.
+    || /\b(years? of experience|godina iskustva|profesionalnog iskustva|Jahre?n?\s*(?:Berufs)?[Ee]rfahrung|años de experiencia|ans d'expérience|anni di esperienza|anos de experiência|वर्षों के अनुभव|वर्ष के अनुभव|वर्षों?\s*का\s*अनुभव)\b/iu.test(text)
     || /\b(?:around|about|approximately)\s+[\w-]+\s+years?\b/iu.test(text)
     || /\boko\s+\S+\s+godin/iu.test(text)
     || /लगभग\s+\S+\s+वर्ष/u.test(text)
     || /約\s*\d+\s*年/u.test(text)
     || /\d+\s*年の経験/u.test(text)
     || /سنوات|سنة|خبرة/u.test(text)
-    || /лет опыта|годом опыта/u.test(text);
+    || /лет опыта|годом опыта|года опыта/u.test(text);
+}
+
+/** Escapes regex metacharacters so locale word forms can be embedded safely. */
+function escapeRegExpToken(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Scripts where JS regex `\b` is unreliable (it only recognises ASCII `[A-Za-z0-9_]`
+ * as word characters), so a locale word must be matched with a plain substring test
+ * instead of a word-boundary-anchored one.
+ */
+function scriptNeedsSubstringMatch(word: string): boolean {
+  return /[^\u0000-\u02FF]/u.test(word);
+}
+
+/** True when `word` appears in `summary` as a standalone token, script-aware. */
+function localeWordAppearsIn(summary: string, word: string): boolean {
+  if (!word) return false;
+  if (scriptNeedsSubstringMatch(word)) return summary.includes(word);
+  return new RegExp(`\\b${escapeRegExpToken(word)}\\b`, 'iu').test(summary);
 }
 
 export function summaryIncludesDurationPhrase(
@@ -297,6 +372,10 @@ export function summaryIncludesDurationPhrase(
     if ((locale === 'sr' || locale === 'hr') && new RegExp(`\\boko\\s+${word}\\s+godin`, 'iu').test(summary)) {
       return true;
     }
+    // Generic cross-locale fallback: the expected number is claimed in this locale's
+    // own word/digit form AND the text carries a recognizable duration/experience claim.
+    // (Guards against accepting a bare number that has nothing to do with tenure.)
+    if (localeWordAppearsIn(summary, word) && summaryHasDurationClaim(summary)) return true;
   }
   return false;
 }
@@ -328,14 +407,16 @@ export function validateSummaryDuration(
       : { valid: false, claims, violation: 'experience_duration_mismatch' };
   }
   // Duration phrasing present but year token unparsed (e.g. "ninety-nine years") —
-  // require the deterministic approxYears to appear as a digit or known word.
+  // require the deterministic approxYears to appear as a digit or a known word form.
+  // Checks the *requested* locale's own word first (the actual root cause of the
+  // cross-locale regression was this check silently only recognising en/sr/hi words),
+  // then falls back to English as a universal safety net.
+  const digitMentioned = new RegExp(`\\b${expected.approxYears}\\b`, 'iu').test(summary);
+  const localeWord = locale ? YEAR_WORD_BY_LOCALE[locale]?.[expected.approxYears] : undefined;
+  const localeWordMentioned = localeWord ? localeWordAppearsIn(summary, localeWord) : false;
   const enWord = YEAR_WORD_BY_LOCALE.en[expected.approxYears] || String(expected.approxYears);
-  const hiWord = YEAR_WORD_BY_LOCALE.hi[expected.approxYears] || '';
-  const srWord = YEAR_WORD_BY_LOCALE.sr[expected.approxYears] || '';
-  const expectedMentioned = new RegExp(
-    `(\\b${expected.approxYears}\\b|\\b${enWord}\\b|\\b${srWord}\\b|${hiWord})`,
-    'iu',
-  ).test(summary);
+  const enWordMentioned = localeWordAppearsIn(summary, enWord);
+  const expectedMentioned = digitMentioned || localeWordMentioned || enWordMentioned;
   return expectedMentioned
     ? { valid: true, claims }
     : { valid: false, claims, violation: 'experience_duration_mismatch' };

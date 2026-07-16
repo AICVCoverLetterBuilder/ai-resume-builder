@@ -62,6 +62,6 @@ describe('generate route API contract (structured errors)', () => {
   test('localized client mapping for contract codes', () => {
     expect(aiErrorMessage('server_rate_limited', 'en', 9)).toContain('9');
     expect(aiErrorMessage('pro_safety_limit_reached', 'hi')).not.toMatch(/temporarily unavailable/i);
-    expect(PRO_AI_SAFETY_CAP).toBe(20);
+    expect(PRO_AI_SAFETY_CAP).toBe(50);
   });
 });

@@ -19,6 +19,7 @@ import {
   validateSummaryDuration,
 } from './cv-experience-duration';
 import { localizeCvLanguageLevel } from './cv-language-levels';
+import { isLocale } from './i18n/translations';
 import { isValidOccupationalTitle } from './cv-role-title';
 
 export type CvFidelityViolationKind =
@@ -880,7 +881,12 @@ export function validateLocalizedSummary(
   }
 
   if (options.expectedDuration) {
-    const durationCheck = validateSummaryDuration(localizedSummary, options.expectedDuration);
+    // locale must be forwarded so duration matching checks the requested-language
+    // phrase/word form instead of silently falling back to English/Serbian/Hindi-only
+    // detection (the root cause of translated durations being rejected cross-locale).
+    const durationCheck = validateSummaryDuration(localizedSummary, options.expectedDuration, {
+      locale: isLocale(options.locale) ? options.locale : undefined,
+    });
     if (!durationCheck.valid) {
       violations.push({
         kind: 'experience_duration_mismatch',

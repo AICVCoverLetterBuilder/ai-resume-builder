@@ -9,14 +9,14 @@ import path from 'node:path';
  * Tests for Pro gating in CV Builder.
  *
  * Shared gate: checkProAccess()
- *   'upgrade'    -> Free user: show Pro modal, no API, no mutations
- *   'safety_cap' -> Pro user at 20-use rolling limit: show toast
+ *   'upgrade'    -> Free user: show Pro upgrade modal
+ *   'safety_cap' -> Pro user at 50-use rolling limit: show toast
  *   'allowed'    -> Pro user below cap: proceed
  */
 
-// ─── Constants (mirroring store.tsx, not exported) ────────────────────────────
+// ─── Constants (must match ai-usage-policy / store) ───────────────────────────
 
-const PRO_AI_SAFETY_CAP = 20;
+const PRO_AI_SAFETY_CAP = 50;
 const FREE_DOWNLOAD_LIMIT = 1;
 const FREE_CL_GENERATION_LIMIT = 1;
 const FREE_CL_REGEN_LIMIT = 1;
@@ -47,18 +47,22 @@ describe('checkProAccess — shared Pro gating helper', () => {
       expect(checkProAccess(true, 0)).toBe('allowed');
     });
 
-    test('Pro user with count 19 is allowed', () => {
-      expect(checkProAccess(true, 19)).toBe('allowed');
+    test('Pro user with count 49 is allowed', () => {
+      expect(checkProAccess(true, 49)).toBe('allowed');
+    });
+
+    test('Pro user with count 20 (legacy build-223 lockout point) is allowed under 50', () => {
+      expect(checkProAccess(true, 20)).toBe('allowed');
     });
   });
 
   describe('denies Pro users at the cap', () => {
-    test('Pro user at count 20 gets safety_cap', () => {
-      expect(checkProAccess(true, 20)).toBe('safety_cap');
+    test('Pro user at count 50 gets safety_cap', () => {
+      expect(checkProAccess(true, 50)).toBe('safety_cap');
     });
 
-    test('Pro user above count 20 gets safety_cap', () => {
-      expect(checkProAccess(true, 25)).toBe('safety_cap');
+    test('Pro user above count 50 gets safety_cap', () => {
+      expect(checkProAccess(true, 55)).toBe('safety_cap');
     });
   });
 });
@@ -81,7 +85,7 @@ describe('AI Improvements (handleGenBullets)', () => {
   });
 
   test('Pro user at cap: safety_cap toast', () => {
-    expect(checkProAccess(true, 20)).toBe('safety_cap');
+    expect(checkProAccess(true, 50)).toBe('safety_cap');
   });
 });
 
@@ -100,7 +104,7 @@ describe('Generate with AI (handleGenSummary)', () => {
   });
 
   test('Pro user at cap: safety_cap toast', () => {
-    expect(checkProAccess(true, 20)).toBe('safety_cap');
+    expect(checkProAccess(true, 50)).toBe('safety_cap');
   });
 });
 
@@ -119,7 +123,7 @@ describe('AI Recommend (handleTemplateRecommend)', () => {
   });
 
   test('Pro user at cap: safety_cap toast', () => {
-    expect(checkProAccess(true, 20)).toBe('safety_cap');
+    expect(checkProAccess(true, 50)).toBe('safety_cap');
   });
 });
 
@@ -142,7 +146,7 @@ describe('existing Free limits unchanged', () => {
   test('Free CL download limit: 1', () => expect(FREE_DOWNLOAD_LIMIT).toBe(1));
   test('Free CL gen limit: 1', () => expect(FREE_CL_GENERATION_LIMIT).toBe(1));
   test('Free CL regen limit: 1', () => expect(FREE_CL_REGEN_LIMIT).toBe(1));
-  test('Pro safety cap: 20', () => expect(PRO_AI_SAFETY_CAP).toBe(20));
+  test('Pro safety cap: 50', () => expect(PRO_AI_SAFETY_CAP).toBe(50));
 });
 
 describe('no one-free-use AI Recommend logic remains', () => {
@@ -181,7 +185,7 @@ describe('Job Description Analyzer (handleAnalyzeJob)', () => {
   });
 
   test('Pro user at cap: safety_cap message', () => {
-    expect(checkProAccess(true, 20)).toBe('safety_cap');
+    expect(checkProAccess(true, 50)).toBe('safety_cap');
   });
 });
 
@@ -207,7 +211,7 @@ describe('isPro-aware caller audit', () => {
     expect(canUseProAi(false, 0)).toBe(false);
     expect(canUseProAi(false, 5)).toBe(false);
     expect(canUseProAi(true, 5)).toBe(true);
-    expect(canUseProAi(true, 20)).toBe(false);
+    expect(canUseProAi(true, 50)).toBe(false);
   });
 
   test('AI feature callers read the shared current-token AI gate at click time', () => {

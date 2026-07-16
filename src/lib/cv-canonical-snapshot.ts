@@ -17,6 +17,7 @@ import {
   textMatchesRequestedFieldLocale,
   type LocalizedSummaryProvenance,
 } from './cv-field-locale-integrity';
+import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 
 export type CanonicalCreatedFrom =
   | 'user_structured_input'
@@ -608,7 +609,10 @@ export function acceptValidatedAiContent(
 ): CVData {
   let next = { ...cv };
   if (options.summary !== undefined) {
-    if (!textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary')) {
+    if (
+      !textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary')
+      || isWrongLanguageAiOutput(options.summary, options.locale)
+    ) {
       return cv;
     }
     const snap = cv.canonicalSnapshot;
@@ -621,6 +625,16 @@ export function acceptValidatedAiContent(
       summaryOrigin: options.summaryOrigin || 'ai_generated',
       ...(becomesCanonical ? { canonicalSummary: options.summary } : {}),
     };
+  }
+  if (
+    options.experienceId
+    && options.description !== undefined
+    && (
+      !textMatchesRequestedFieldLocale(options.description, options.locale, 'experience_bullet')
+      || isWrongLanguageAiOutput(options.description, options.locale)
+    )
+  ) {
+    return cv;
   }
   if (options.experienceId && options.description !== undefined) {
     next = {

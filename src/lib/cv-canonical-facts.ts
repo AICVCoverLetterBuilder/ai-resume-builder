@@ -78,9 +78,11 @@ export function classifyDutyCategory(text: string): CvDutyCategory {
   ) {
     return 'hygiene_safety';
   }
+  // "prepared/served/priprema/…" alone are generic verbs used across many unrelated
+  // duties (e.g. "prepared reports", "priprema izveštaja") — only beverage-classify
+  // when an actual drink/beverage noun is present in the text.
   if (
-    /\b(cocktail|cocktails|spirit|spirits|beverage|beverages|drink|drinks|koktel|koktele|koktela|коктейл|पेय|飲料|مشروب)\b/iu.test(t)
-    || /\b(prepared|served|préparé|servir|priprema|služila|služio)\b/iu.test(t)
+    /\b(cocktail|cocktails|spirit|spirits|beverage|beverages|drink|drinks|koktel\w*|коктейл|पेय|飲料|مشروب|pić\w*|napi(?:tak|tka|će|ci))\b/iu.test(t)
   ) {
     return 'beverage_service';
   }
