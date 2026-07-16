@@ -463,6 +463,40 @@ export function toastMessageForAiError(
   return aiErrorMessage(payload.code, locale, payload.retryAfterSec);
 }
 
+/**
+ * Development/test-only trace of the Pro AI safety-cap counter around a single
+ * user-facing action. Never runs in production (no internal cap value, request
+ * shape, or CV text is ever exposed to end users) and never logs CV content —
+ * only the numeric before/after count, the action name, the content origin,
+ * whether the action actually applied a visible result, and (when rejected)
+ * the reason. Intended to answer "did this button press increment the Pro
+ * usage counter, and why/why not" during investigation, e.g.:
+ *   PRO_AI_USAGE before=47 after=48 action=summary_stronger origin=ai_repaired applied=true requestId=...
+ *   PRO_AI_USAGE before=47 after=47 action=summary_generate origin=none applied=false reason=locale_validation_failed
+ */
+export function logProAiUsageDiagnostics(input: {
+  before: number | null;
+  after: number | null;
+  action: string;
+  origin?: string | null;
+  applied: boolean;
+  requestId?: string | null;
+  reason?: string | null;
+}): void {
+  if (process.env.NODE_ENV === 'production') return;
+  if (typeof console === 'undefined' || !console.debug) return;
+  const parts = [
+    `PRO_AI_USAGE before=${input.before ?? 'n/a'}`,
+    `after=${input.after ?? 'n/a'}`,
+    `action=${input.action}`,
+    `origin=${input.origin ?? 'none'}`,
+    `applied=${input.applied}`,
+  ];
+  if (input.requestId) parts.push(`requestId=${input.requestId}`);
+  if (!input.applied && input.reason) parts.push(`reason=${input.reason}`);
+  console.debug(parts.join(' '));
+}
+
 export function logAiDiagnostics(diag: AiRequestDiagnostics): void {
   // Safe structured log — no CV text, emails, tokens, or API keys.
   const safe = {

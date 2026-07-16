@@ -38,6 +38,7 @@ import {
   precheckAiCircuit,
   resolveAiHttpFailure,
 } from '@/lib/ai-client-request';
+import { getProAiUsageCount, logProAiUsageDiagnostics } from '@/lib/ai-usage-policy';
 import type { CoverLetterData, Tone } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -590,6 +591,15 @@ export default function CoverLetterPage() {
       }
 
       if (resolved.outcome === 'rejected' || !resolved.content.trim()) {
+        logProAiUsageDiagnostics({
+          before: getProAiUsageCount(),
+          after: getProAiUsageCount(),
+          action: mode === 'generate' ? 'cover-letter-gen' : 'cover-letter-regen',
+          origin: 'none',
+          applied: false,
+          requestId,
+          reason: resolved.toastKind ?? 'rejected',
+        });
         const beforeReject = captureStateSnapshot();
         const restored = preservedActiveResultRef.current;
         if (restored && isActiveCoverLetterResultEligible(restored, requestedLocale, requestedGender, 'success')) {
@@ -698,7 +708,16 @@ export default function CoverLetterPage() {
           incrementClRegen();
         }
       } else {
+        const before = getProAiUsageCount();
         recordProAiSuccess();
+        logProAiUsageDiagnostics({
+          before,
+          after: getProAiUsageCount(),
+          action: mode === 'generate' ? 'cover-letter-gen' : 'cover-letter-regen',
+          origin: source,
+          applied: true,
+          requestId,
+        });
       }
       toast.success(t.coverLetter.genSuccess);
     } catch (err: unknown) {
@@ -808,7 +827,16 @@ export default function CoverLetterPage() {
               incrementClRegen();
             }
           } else {
+            const before = getProAiUsageCount();
             recordProAiSuccess();
+            logProAiUsageDiagnostics({
+              before,
+              after: getProAiUsageCount(),
+              action: mode === 'generate' ? 'cover-letter-gen' : 'cover-letter-regen',
+              origin: 'deterministic_fallback',
+              applied: true,
+              requestId,
+            });
           }
           toast.success(t.coverLetter.genSuccess);
           return;

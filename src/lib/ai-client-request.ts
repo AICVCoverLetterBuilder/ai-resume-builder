@@ -7,6 +7,7 @@ import {
   getAiCircuitState,
   isAiCircuitOpen,
   logAiDiagnostics,
+  logProAiUsageDiagnostics,
   noteAiRequestFailure,
   noteAiRequestSuccess,
   parseRetryAfterSeconds,
@@ -90,6 +91,15 @@ export function finishAiClientRequest(opts: {
     responseSource: opts.responseSource ?? (opts.error ? 'blocked' : 'provider'),
   };
   logAiDiagnostics(diag);
+  logProAiUsageDiagnostics({
+    before: opts.countBefore,
+    after: opts.countAfter,
+    action: opts.ctx.operation,
+    origin: diag.responseSource,
+    applied: !opts.error,
+    requestId: opts.ctx.requestId,
+    reason: opts.error?.code ?? null,
+  });
 
   if (opts.error) {
     noteAiRequestFailure(opts.error);

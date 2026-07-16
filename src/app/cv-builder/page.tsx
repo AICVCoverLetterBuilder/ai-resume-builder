@@ -41,6 +41,7 @@ import { templateInfo, recommendTemplate } from '@/lib/types';
 import { freezeCanonicalExperienceDescription } from '@/lib/cv-canonical-facts';
 import {
   acceptValidatedAiContent,
+  willAcceptValidatedAiContent,
   applyCanonicalExperienceEdit,
   applyCanonicalSkillsLanguagesEducationEdit,
   applyCanonicalSummaryEdit,
@@ -969,6 +970,26 @@ export default function CVBuilderPage() {
       }
 
       const newDescription = bulletsData.result || '';
+      // acceptValidatedAiContent silently no-ops (returns the CV unchanged) when
+      // the requested-locale/wrong-language guard rejects the field — that must
+      // never be mistaken for a successful, visible user action: no counter
+      // increment and no success toast unless the content is actually applied.
+      if (
+        !newDescription.trim()
+        || !willAcceptValidatedAiContent({ locale, experienceId: expId, description: newDescription })
+      ) {
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        return;
+      }
       setCv((prev) => {
         const withRaw = acceptValidatedAiContent(prev, {
           locale,

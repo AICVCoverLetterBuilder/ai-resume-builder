@@ -597,15 +597,48 @@ export function applyCanonicalSkillsLanguagesEducationEdit(
   });
 }
 
+type AcceptValidatedAiContentOptions = {
+  locale: Locale;
+  summary?: string;
+  experienceId?: string;
+  description?: string;
+  summaryOrigin?: import('./types').CvSummaryOrigin;
+};
+
+/**
+ * Same rejection rule `acceptValidatedAiContent` uses internally, exposed so a
+ * caller can tell — *before* incrementing any Pro-usage counter or showing a
+ * success toast — whether the field it is about to apply will actually be
+ * written into the CV. `acceptValidatedAiContent` silently no-ops and returns
+ * the original `cv` on rejection (so it is always safe to call), but that
+ * silence must never be mistaken by a caller for a successful, visible user
+ * action.
+ */
+export function willAcceptValidatedAiContent(options: AcceptValidatedAiContentOptions): boolean {
+  if (options.summary !== undefined) {
+    if (
+      !textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary')
+      || isWrongLanguageAiOutput(options.summary, options.locale)
+    ) {
+      return false;
+    }
+  }
+  if (
+    options.experienceId
+    && options.description !== undefined
+    && (
+      !textMatchesRequestedFieldLocale(options.description, options.locale, 'experience_bullet')
+      || isWrongLanguageAiOutput(options.description, options.locale)
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function acceptValidatedAiContent(
   cv: CVData,
-  options: {
-    locale: Locale;
-    summary?: string;
-    experienceId?: string;
-    description?: string;
-    summaryOrigin?: import('./types').CvSummaryOrigin;
-  },
+  options: AcceptValidatedAiContentOptions,
 ): CVData {
   let next = { ...cv };
   if (options.summary !== undefined) {
