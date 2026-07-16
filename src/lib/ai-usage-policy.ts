@@ -403,12 +403,30 @@ export function classifyAiFailure(input: ClassifyAiFailureInput): AiErrorPayload
   }
 
   const errName = input.error instanceof Error ? input.error.name : '';
+  const errMsg = (input.error instanceof Error ? input.error.message : String(input.error ?? '')).toLowerCase();
+
   if (errName === 'AbortError' || msg.includes('timeout') || msg.includes('aborted')) {
     return { code: 'request_timeout', httpStatus: status ?? undefined };
   }
 
-  if (msg.includes('failed to fetch') || msg.includes('network') || errName === 'TypeError') {
-    return { code: 'network_error', httpStatus: status ?? undefined };
+  // Transport-level failures only. Do NOT map every TypeError to network_error —
+  // Android build 230 showed that null-body / property-access TypeErrors in the
+  // client catch path were mislabeled as "Mrežna greška" even when Vercel had
+  // already returned an HTTP response (or the failure was a local coding error).
+  const isTransportFailure =
+    errName === 'NetworkError'
+    || msg.includes('failed to fetch')
+    || errMsg.includes('failed to fetch')
+    || msg.includes('networkerror')
+    || errMsg.includes('networkerror')
+    || msg.includes('load failed')
+    || errMsg.includes('load failed')
+    || msg.includes('network request failed')
+    || errMsg.includes('network request failed')
+    || ((typeof navigator !== 'undefined') && navigator.onLine === false && status == null);
+
+  if (isTransportFailure && status == null) {
+    return { code: 'network_error', httpStatus: undefined };
   }
 
   if (status && status >= 500) {
@@ -420,6 +438,8 @@ export function classifyAiFailure(input: ClassifyAiFailureInput): AiErrorPayload
     };
   }
 
+  // Non-2xx without a recognized body code, or a client-side TypeError after a
+  // response was received, must never look like an offline/network outage.
   return {
     code: 'provider_temporarily_unavailable',
     httpStatus: status ?? undefined,

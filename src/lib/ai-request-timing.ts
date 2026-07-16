@@ -38,6 +38,11 @@
  */
 export const AI_CLIENT_TIMEOUT_MS = 40_000;
 
+/** Guarantees a finite, positive AbortController delay (never 0 / NaN / negative). */
+export function resolveClientAbortTimeoutMs(value: number = AI_CLIENT_TIMEOUT_MS): number {
+  return Number.isFinite(value) && value >= 1_000 ? value : AI_CLIENT_TIMEOUT_MS;
+}
+
 /**
  * Hard-coded AbortController deadline that shipped in Android build 229 (and
  * earlier). The server budget below is intentionally kept under this value so

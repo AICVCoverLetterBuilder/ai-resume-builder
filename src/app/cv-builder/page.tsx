@@ -14,7 +14,11 @@ import {
 } from '@/lib/ai-client-request';
 import { aiErrorMessage } from '@/lib/ai-error-codes';
 import { logAiLocaleTransitionDiagnostics } from '@/lib/ai-usage-policy';
-import { AI_CLIENT_TIMEOUT_MS, logAiClientRequestTiming } from '@/lib/ai-request-timing';
+import {
+  AI_CLIENT_TIMEOUT_MS,
+  logAiClientRequestTiming,
+  resolveClientAbortTimeoutMs,
+} from '@/lib/ai-request-timing';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
@@ -799,7 +803,8 @@ export default function CVBuilderPage() {
     if (isSummaryGenerating) return;
     setIsSummaryGenerating(true);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AI_CLIENT_TIMEOUT_MS);
+    const clientTimeoutMs = resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), clientTimeoutMs);
     // Immutable request context: `reqCtx.locale` is captured once, at button-press
     // time, and is the ONLY locale used for the API call, validation, and apply
     // below — never re-read the (possibly since-changed) `locale` closure/UI value
@@ -844,9 +849,9 @@ export default function CVBuilderPage() {
         },
         signal: controller.signal,
       });
-      if (!res.ok || summaryData.error) {
+      if (!res.ok || summaryData?.error) {
         if (res.status === 403) {
-          const payload = resolveAiHttpFailure({ response: res, body: summaryData });
+          const payload = resolveAiHttpFailure({ response: res, body: summaryData ?? null });
           const msg = finishAiClientRequest({
             ctx: reqCtx,
             isProVerified: getAiGate().status === 'ready',
@@ -888,7 +893,7 @@ export default function CVBuilderPage() {
         });
         return;
       }
-      const nextSummary = (summaryData.result ?? '').trim();
+      const nextSummary = (summaryData?.result ?? '').trim();
       const finalized = finalizeClientAiSummary(nextSummary, cv, requestedLocale, durationSnapshot);
       if (finalized.blocked) {
         const msg = finishAiClientRequest({
@@ -946,7 +951,7 @@ export default function CVBuilderPage() {
         action: 'summary_generate',
         requestedLocale,
         clientStartedAt: reqCtx.startedAt,
-        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientTimeoutMs,
         clientAborted: false,
         applied: true,
       });
@@ -967,12 +972,12 @@ export default function CVBuilderPage() {
         action: 'summary_generate',
         requestedLocale,
         clientStartedAt: reqCtx.startedAt,
-        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientTimeoutMs,
         clientAborted: err instanceof Error && err.name === 'AbortError',
         applied: false,
         reason: payload.code,
       });
-      toast.error(msg ?? aiErrorMessage('network_error', locale));
+      toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {
       clearTimeout(timer);
       setIsSummaryGenerating(false);
@@ -992,7 +997,8 @@ export default function CVBuilderPage() {
 
     setGeneratingBulletsId(expId);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AI_CLIENT_TIMEOUT_MS);
+    const clientTimeoutMs = resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), clientTimeoutMs);
     // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest('bullets', locale);
     const requestedLocale = reqCtx.locale as Locale;
@@ -1021,7 +1027,7 @@ export default function CVBuilderPage() {
         signal: controller.signal,
       });
 
-      if (!res.ok || bulletsData.error) {
+      if (!res.ok || bulletsData?.error) {
         if (res.status === 403) {
           const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
           const msg = finishAiClientRequest({
@@ -1136,7 +1142,7 @@ export default function CVBuilderPage() {
         action: 'bullets_generate',
         requestedLocale,
         clientStartedAt: reqCtx.startedAt,
-        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientTimeoutMs,
         clientAborted: false,
         applied: true,
       });
@@ -1157,12 +1163,12 @@ export default function CVBuilderPage() {
         action: 'bullets_generate',
         requestedLocale,
         clientStartedAt: reqCtx.startedAt,
-        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientTimeoutMs,
         clientAborted: err instanceof Error && err.name === 'AbortError',
         applied: false,
         reason: payload.code,
       });
-      toast.error(msg ?? aiErrorMessage('network_error', locale));
+      toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {
       clearTimeout(timer);
       setGeneratingBulletsId(null);
@@ -1175,7 +1181,8 @@ export default function CVBuilderPage() {
     if (!proToken) return;
     setRewritingStyle(style);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AI_CLIENT_TIMEOUT_MS);
+    const clientTimeoutMs = resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), clientTimeoutMs);
     // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest(`rewrite:${style}`, locale);
     const requestedLocale = reqCtx.locale as Locale;
@@ -1209,7 +1216,7 @@ export default function CVBuilderPage() {
         },
         signal: controller.signal,
       });
-      if (!res.ok || rewriteData.error) {
+      if (!res.ok || rewriteData?.error) {
         const payload = resolveAiHttpFailure({ response: res, body: rewriteData });
         const msg = finishAiClientRequest({
           ctx: reqCtx,
@@ -1301,7 +1308,7 @@ export default function CVBuilderPage() {
         action: `rewrite_${style}`,
         requestedLocale,
         clientStartedAt: reqCtx.startedAt,
-        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientTimeoutMs,
         clientAborted: false,
         applied: true,
       });
@@ -1321,12 +1328,12 @@ export default function CVBuilderPage() {
         action: `rewrite_${style}`,
         requestedLocale,
         clientStartedAt: reqCtx.startedAt,
-        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientTimeoutMs,
         clientAborted: err instanceof Error && err.name === 'AbortError',
         applied: false,
         reason: payload.code,
       });
-      toast.error(msg ?? aiErrorMessage('network_error', locale));
+      toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {
       clearTimeout(timer);
       setRewritingStyle(null);

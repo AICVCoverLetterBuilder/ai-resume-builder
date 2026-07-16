@@ -508,7 +508,8 @@ describe('Android build 229 client timeout is the AbortController value that pro
     const path = await import('node:path');
     const src = fs.readFileSync(path.resolve('src/app/cv-builder/page.tsx'), 'utf8');
     expect(src).toContain('AI_CLIENT_TIMEOUT_MS');
-    expect(src).toMatch(/setTimeout\(\(\) => controller\.abort\(\), AI_CLIENT_TIMEOUT_MS\)/);
+    expect(src).toContain('resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS)');
+    expect(src).toMatch(/setTimeout\(\(\) => controller\.abort\(\), clientTimeoutMs\)/);
     // No leftover hard-coded 30s abort left in the three AI handlers.
     expect(src).not.toMatch(/setTimeout\(\(\) => controller\.abort\(\),\s*30000\)/);
   });
