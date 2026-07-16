@@ -48,11 +48,30 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
   if (/dizajner(?:ka)?\s+enterijera|interior\s+designer|innenarchitekt/i.test(normalized)) {
     return localizeInteriorDesigner(locale, gender);
   }
-  if (locale === 'sr' || locale === 'hr' || locale === 'en') return normalized;
-  if (/^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2) {
-    return null;
+  // sr/hr never need translation of their own titles, and `isWrongLanguageAiOutput`
+  // explicitly exempts sr/hr from its Serbo-Croatian-diacritic check.
+  if (locale === 'sr' || locale === 'hr') return normalized;
+  const isAsciiTitle = /^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2;
+  if (locale === 'en') {
+    // A plain-ASCII title is already readable English prose — keep it as-is.
+    // Anything else here is actually foreign-script/diacritic source text
+    // (e.g. Serbian "Vozač"), which must NOT be kept: `isWrongLanguageAiOutput`
+    // rejects Serbo-Croatian diacritics for every locale except sr/hr,
+    // INCLUDING English, so leaking it here would surface as a validation
+    // failure downstream instead of a generic-but-safe fallback.
+    return isAsciiTitle ? normalized : null;
   }
-  return normalized;
+  // For every other target locale, an unmapped title — ASCII (no known
+  // translation) or non-ASCII (Serbian/Croatian diacritics or any other
+  // script) — must fall back to the generic role label instead of being
+  // returned as-is. Returning raw source-language text here leaks untranslated
+  // text into the deterministic duration-shell sentence and the grounded
+  // canonical-fallback summary (both embed `role` directly into prose for
+  // every locale). Downstream locale validation then rejects that leaked
+  // text, which surfaces as an intermittent "validation failed" toast
+  // specifically for whichever job titles aren't in the small explicit map
+  // above — regardless of which locale was requested immediately before.
+  return null;
 }
 
 /** Localize a known occupational title on a detached preview/export projection. */

@@ -497,6 +497,47 @@ export function logProAiUsageDiagnostics(input: {
   console.debug(parts.join(' '));
 }
 
+/**
+ * Dev/test-only trace of a single AI action's locale values from button-press
+ * through final apply. Used to diagnose "first request after a language
+ * switch" style regressions without ever logging CV text or PII.
+ * Disabled/no-op in production.
+ */
+export function logAiLocaleTransitionDiagnostics(input: {
+  requestId: string;
+  action: string;
+  /** Live UI locale re-read at the moment the outcome is logged (may differ from requestedLocale if the user switched again mid-flight). */
+  uiLocale: string;
+  /** Immutable locale captured at button-press time — used for the whole request lifecycle. */
+  requestedLocale: string;
+  /** Best-available locale of the content that was active before this request (e.g. canonicalSnapshot.canonicalLocale). */
+  previousContentLocale?: string | null;
+  /** Locale actually sent to /api/generate. */
+  apiLocale: string;
+  /** Locale used for the final client-side validation/guard decision. */
+  finalValidationLocale: string;
+  applied: boolean;
+  newContentLocale?: string | null;
+  reason?: string | null;
+}): void {
+  if (process.env.NODE_ENV === 'production') return;
+  if (typeof console === 'undefined' || !console.debug) return;
+  const lines = [
+    'AI_LOCALE_REQUEST',
+    `requestId=${input.requestId}`,
+    `action=${input.action}`,
+    `uiLocale=${input.uiLocale}`,
+    `requestedLocale=${input.requestedLocale}`,
+    `previousContentLocale=${input.previousContentLocale ?? 'n/a'}`,
+    `apiLocale=${input.apiLocale}`,
+    `finalValidationLocale=${input.finalValidationLocale}`,
+    `applied=${input.applied}`,
+  ];
+  if (input.applied) lines.push(`newContentLocale=${input.newContentLocale ?? 'n/a'}`);
+  else if (input.reason) lines.push(`reason=${input.reason}`);
+  console.debug(lines.join('\n'));
+}
+
 export function logAiDiagnostics(diag: AiRequestDiagnostics): void {
   // Safe structured log — no CV text, emails, tokens, or API keys.
   const safe = {

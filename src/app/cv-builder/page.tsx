@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useI18n } from '@/lib/i18n/context';
+import type { Locale } from '@/lib/i18n/translations';
 import { useApp, checkProAccess } from '@/lib/store';
 import {
   beginAiClientRequest,
@@ -12,6 +13,7 @@ import {
   resolveAiHttpFailure,
 } from '@/lib/ai-client-request';
 import { aiErrorMessage } from '@/lib/ai-error-codes';
+import { logAiLocaleTransitionDiagnostics } from '@/lib/ai-usage-policy';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
@@ -125,6 +127,13 @@ export default function CVBuilderPage() {
   const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, getProAiUsageCount, lastCvSavedAt, getAiGate } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
+  // Stale-response correlation: each AI action tracks the requestId of its
+  // most-recently-started request. An in-flight request whose id no longer
+  // matches when its response arrives is a stale/out-of-order response and
+  // must never be applied, regardless of which locale it was requested in.
+  const latestSummaryRequestIdRef = useRef<string | null>(null);
+  const latestBulletsRequestIdRef = useRef<Record<string, string>>({});
+  const latestRewriteRequestIdRef = useRef<string | null>(null);
   const commitCvUpdate = useCallback((updater: (prev: CVData) => CVData) => {
     setCv((prev) => {
       const next = updater(prev);
@@ -790,7 +799,14 @@ export default function CVBuilderPage() {
     setIsSummaryGenerating(true);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
+    // Immutable request context: `reqCtx.locale` is captured once, at button-press
+    // time, and is the ONLY locale used for the API call, validation, and apply
+    // below — never re-read the (possibly since-changed) `locale` closure/UI value
+    // partway through the request.
     const reqCtx = beginAiClientRequest('summary', locale);
+    const requestedLocale = reqCtx.locale as Locale;
+    const previousContentLocale = cv.canonicalSnapshot?.canonicalLocale ?? null;
+    latestSummaryRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
     try {
       // Shared deterministic duration — never let each locale estimate independently.
@@ -820,7 +836,7 @@ export default function CVBuilderPage() {
           skills: cv.skills.slice(0, 10),
           languages: cv.languages.slice(0, 4),
           education: cv.education.slice(0, 2).map(e => ({ degree: e.degree, school: e.school })),
-          locale,
+          locale: requestedLocale,
           gender: cv.personal.gender || '',
           canonicalSummary: cv.canonicalSummary || '',
           requestId: reqCtx.requestId,
@@ -854,8 +870,25 @@ export default function CVBuilderPage() {
         toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
         return;
       }
+      // Stale-response guard: if another summary request started after this one
+      // (e.g. the user pressed Generate again), drop this response silently —
+      // it must never overwrite a newer request's result or locale.
+      if (latestSummaryRequestIdRef.current !== reqCtx.requestId) {
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: 'summary_generate',
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: 'stale_request_superseded',
+        });
+        return;
+      }
       const nextSummary = (summaryData.result ?? '').trim();
-      const finalized = finalizeClientAiSummary(nextSummary, cv, locale, durationSnapshot);
+      const finalized = finalizeClientAiSummary(nextSummary, cv, requestedLocale, durationSnapshot);
       if (finalized.blocked) {
         const msg = finishAiClientRequest({
           ctx: reqCtx,
@@ -866,11 +899,22 @@ export default function CVBuilderPage() {
           error: { code: 'generation_validation_failed', httpStatus: 422 },
           responseSource: 'blocked',
         });
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: 'summary_generate',
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: 'generation_validation_failed',
+        });
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
       setCv((prev) => acceptValidatedAiContent(prev, {
-        locale,
+        locale: requestedLocale,
         summary: finalized.summary,
         summaryOrigin: finalized.origin,
       }));
@@ -884,6 +928,17 @@ export default function CVBuilderPage() {
         error: null,
         fallbackUsed: finalized.origin === 'deterministic_fallback',
         responseSource: finalized.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider',
+      });
+      logAiLocaleTransitionDiagnostics({
+        requestId: reqCtx.requestId,
+        action: 'summary_generate',
+        uiLocale: locale,
+        requestedLocale,
+        previousContentLocale,
+        apiLocale: requestedLocale,
+        finalValidationLocale: requestedLocale,
+        applied: true,
+        newContentLocale: requestedLocale,
       });
       toast.success(t.cv.genSuccess);
     } catch (err) {
@@ -918,7 +973,11 @@ export default function CVBuilderPage() {
     setGeneratingBulletsId(expId);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
+    // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest('bullets', locale);
+    const requestedLocale = reqCtx.locale as Locale;
+    const previousContentLocale = cv.canonicalSnapshot?.canonicalLocale ?? null;
+    latestBulletsRequestIdRef.current = { ...latestBulletsRequestIdRef.current, [expId]: reqCtx.requestId };
     const countBefore = getProAiUsageCount();
 
     try {
@@ -930,7 +989,7 @@ export default function CVBuilderPage() {
         company: exp.company,
         industry,
         level,
-        locale,
+        locale: requestedLocale,
         gender: cv.personal.gender || '',
         // Always send the frozen canonical source — never a prior Serbian/Hindi rewrite.
         sourceDescription: canonicalSource || exp.description || '',
@@ -969,6 +1028,22 @@ export default function CVBuilderPage() {
         return;
       }
 
+      // Stale-response guard: only the most recently started bullets request for
+      // THIS experience may apply its result.
+      if (latestBulletsRequestIdRef.current[expId] !== reqCtx.requestId) {
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: 'bullets_generate',
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: 'stale_request_superseded',
+        });
+        return;
+      }
       const newDescription = bulletsData.result || '';
       // acceptValidatedAiContent silently no-ops (returns the CV unchanged) when
       // the requested-locale/wrong-language guard rejects the field — that must
@@ -976,7 +1051,7 @@ export default function CVBuilderPage() {
       // increment and no success toast unless the content is actually applied.
       if (
         !newDescription.trim()
-        || !willAcceptValidatedAiContent({ locale, experienceId: expId, description: newDescription })
+        || !willAcceptValidatedAiContent({ locale: requestedLocale, experienceId: expId, description: newDescription })
       ) {
         const msg = finishAiClientRequest({
           ctx: reqCtx,
@@ -987,17 +1062,28 @@ export default function CVBuilderPage() {
           error: { code: 'generation_validation_failed', httpStatus: 422 },
           responseSource: 'blocked',
         });
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: 'bullets_generate',
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: 'generation_validation_failed',
+        });
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
       setCv((prev) => {
         const withRaw = acceptValidatedAiContent(prev, {
-          locale,
+          locale: requestedLocale,
           experienceId: expId,
           description: newDescription,
         });
         // Content-quality normalize current-role tense / natural Hindi for this experience only.
-        const quality = applyCvContentQuality(withRaw, locale, {
+        const quality = applyCvContentQuality(withRaw, requestedLocale, {
           gender: withRaw.personal?.gender || '',
         });
         return quality.cv;
@@ -1013,6 +1099,17 @@ export default function CVBuilderPage() {
         automaticRepairCount: bulletsData.repairAttempted ? 1 : 0,
         fallbackUsed: Boolean(bulletsData.fallbackUsed),
         responseSource: bulletsData.fallbackUsed ? 'deterministic_fallback' : bulletsData.repairAttempted ? 'repair' : 'provider',
+      });
+      logAiLocaleTransitionDiagnostics({
+        requestId: reqCtx.requestId,
+        action: 'bullets_generate',
+        uiLocale: locale,
+        requestedLocale,
+        previousContentLocale,
+        apiLocale: requestedLocale,
+        finalValidationLocale: requestedLocale,
+        applied: true,
+        newContentLocale: requestedLocale,
       });
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {
@@ -1040,7 +1137,11 @@ export default function CVBuilderPage() {
     setRewritingStyle(style);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
+    // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest(`rewrite:${style}`, locale);
+    const requestedLocale = reqCtx.locale as Locale;
+    const previousContentLocale = cv.canonicalSnapshot?.canonicalLocale ?? null;
+    latestRewriteRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
     try {
       const { data: rewriteData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
@@ -1049,7 +1150,7 @@ export default function CVBuilderPage() {
           proToken,
           text: cv.summary,
           style,
-          locale,
+          locale: requestedLocale,
           gender: cv.personal.gender || '',
           requestId: reqCtx.requestId,
           cvContext: {
@@ -1082,9 +1183,24 @@ export default function CVBuilderPage() {
         toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
         return;
       }
+      // Stale-response guard: only the most recently started rewrite may apply.
+      if (latestRewriteRequestIdRef.current !== reqCtx.requestId) {
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: `rewrite_${style}`,
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: 'stale_request_superseded',
+        });
+        return;
+      }
       const referenceDateIso = new Date().toISOString().slice(0, 10);
       const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
-      const finalized = finalizeClientAiSummary((rewriteData.result ?? cv.summary).trim(), cv, locale, durationSnapshot);
+      const finalized = finalizeClientAiSummary((rewriteData.result ?? cv.summary).trim(), cv, requestedLocale, durationSnapshot);
       if (finalized.blocked) {
         const msg = finishAiClientRequest({
           ctx: reqCtx,
@@ -1095,11 +1211,22 @@ export default function CVBuilderPage() {
           error: { code: 'generation_validation_failed', httpStatus: 422 },
           responseSource: 'blocked',
         });
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: `rewrite_${style}`,
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: 'generation_validation_failed',
+        });
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
       setCv((prev) => acceptValidatedAiContent(prev, {
-        locale,
+        locale: requestedLocale,
         summary: finalized.summary,
         summaryOrigin: finalized.origin,
       }));
@@ -1118,6 +1245,17 @@ export default function CVBuilderPage() {
           : rewriteData.repairAttempted
             ? 'repair'
             : 'provider',
+      });
+      logAiLocaleTransitionDiagnostics({
+        requestId: reqCtx.requestId,
+        action: `rewrite_${style}`,
+        uiLocale: locale,
+        requestedLocale,
+        previousContentLocale,
+        apiLocale: requestedLocale,
+        finalValidationLocale: requestedLocale,
+        applied: true,
+        newContentLocale: requestedLocale,
       });
       toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);
     } catch (err) {
