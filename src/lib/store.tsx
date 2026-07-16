@@ -17,6 +17,18 @@ import {
   clearClDraft,
 } from './draft-storage';
 import { migrateLegacyCanonicalCv } from './cv-canonical-snapshot';
+import {
+  PRO_AI_SAFETY_CAP,
+  PRO_AI_WINDOW_MS,
+  loadProAiRecord,
+  recordProAiUserActionSuccess,
+  type ProAiRecord,
+} from './ai-usage-policy';
+
+export { PRO_AI_SAFETY_CAP, PRO_AI_WINDOW_MS } from './ai-usage-policy';
+
+// silence unused when only re-exported elsewhere
+void PRO_AI_WINDOW_MS;
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
 
@@ -77,9 +89,11 @@ interface AppContextType {
   canRegenerateCoverLetter: () => boolean;
   incrementClRegen: () => void;
   resetClRegen: () => void;
-  // Pro safety cap (hidden, high limit — normal users never reach it)
+  // Pro safety cap (hidden — configured PRO_AI_SAFETY_CAP per rolling window)
   canUseProAi: () => boolean;
   recordProAiSuccess: () => void;
+  /** Current Pro AI usage count in the active rolling window (0 when window expired). */
+  getProAiUsageCount: () => number;
   // Draft persistence — timestamps for "Draft saved" indicators
   lastCvSavedAt: number;
   lastClSavedAt: number;
@@ -161,10 +175,6 @@ const FREE_CL_GENERATION_LIMIT = 1; // 1 initial generation for free users
 const FREE_CL_REGEN_LIMIT = 1; // 1 cover letter regeneration for free users (persisted)
 const FREE_AI_RECOMMEND_LIMIT = 1; // 1 AI template recommend for free users
 
-// Hidden Pro safety cap — 20 successful AI actions per 30 days.
-// Normal users never reach this. No UI exposure.
-const PRO_AI_SAFETY_CAP = 20;
-const PRO_AI_WINDOW_MS = 30 * 24 * 60 * 60 * 1000; // 30 days in ms
 // ─── Shared Pro gating helper ──────────────────────────────────────────────
 // Returns one of:
 //   'upgrade'    -> Free user: show Pro upgrade modal
@@ -177,33 +187,6 @@ export function checkProAccess(isPro: boolean, usageCount: number): AccessResult
   if (!isPro) return 'upgrade';
   if (usageCount >= PRO_AI_SAFETY_CAP) return 'safety_cap';
   return 'allowed';
-}
-
-
-interface ProAiRecord {
-  count: number;
-  windowStart: number; // epoch ms
-}
-
-function loadProAiRecord(): ProAiRecord {
-  if (typeof window === 'undefined') return { count: 0, windowStart: Date.now() };
-  try {
-    const stored = localStorage.getItem('cvpro-ai-usage');
-    if (stored) {
-      const parsed = JSON.parse(stored) as ProAiRecord;
-      // If the 30-day window has expired, start fresh
-      if (Date.now() - parsed.windowStart >= PRO_AI_WINDOW_MS) {
-        return { count: 0, windowStart: Date.now() };
-      }
-      return parsed;
-    }
-  } catch { /* ignore parse errors */ }
-  return { count: 0, windowStart: Date.now() };
-}
-
-function persistProAiRecord(record: ProAiRecord) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem('cvpro-ai-usage', JSON.stringify(record));
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -430,9 +413,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Pro safety cap helpers — only active for Pro users; free users are never checked here.
+  const getProAiUsageCount = useCallback((): number => {
+    const fresh = loadProAiRecord();
+    if (fresh.windowStart !== proAiRecord.windowStart || fresh.count !== proAiRecord.count) {
+      setProAiRecord(fresh);
+    }
+    return fresh.count;
+  }, [proAiRecord]);
+
   const canUseProAi = useCallback((): boolean => {
     if (readAiGateState().status !== 'ready') return false;
-    // Re-read from storage to ensure freshness across re-renders
     const fresh = loadProAiRecord();
     if (fresh.windowStart !== proAiRecord.windowStart || fresh.count !== proAiRecord.count) {
       setProAiRecord(fresh);
@@ -442,16 +432,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const recordProAiSuccess = useCallback(() => {
     if (readAiGateState().status !== 'ready') return; // only track for Pro users
-    setProAiRecord(prev => {
-      const now = Date.now();
-      // Reset window if expired
-      const base = now - prev.windowStart >= PRO_AI_WINDOW_MS
-        ? { count: 0, windowStart: now }
-        : prev;
-      const updated: ProAiRecord = { count: base.count + 1, windowStart: base.windowStart };
-      persistProAiRecord(updated);
-      return updated;
-    });
+    setProAiRecord(prev => recordProAiUserActionSuccess(prev));
   }, [readAiGateState]);
 
   const saveCv = useCallback((cv: CVData) => {
@@ -569,7 +550,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       clGenerationCount, canGenerateCoverLetter, incrementClGeneration,
       aiRecommendUsed, canUseAiRecommend, markAiRecommendUsed,
       clRegenCount, canRegenerateCoverLetter, incrementClRegen, resetClRegen,
-      canUseProAi, recordProAiSuccess,
+      canUseProAi, recordProAiSuccess, getProAiUsageCount,
       lastCvSavedAt, lastClSavedAt, clearAllDrafts, persistCurrentDraft,
     }}>
       {children}

@@ -29,11 +29,15 @@ import {
   type CoverLetterActiveResult,
 } from '@/lib/cover-letter-active-result';
 import {
-  coverLetterAiUnavailable,
   coverLetterGroundingFailed,
   coverLetterStaleContent,
   coverLetterWrongLanguage,
 } from '@/lib/cover-letter-messages';
+import { aiErrorMessage } from '@/lib/ai-error-codes';
+import {
+  precheckAiCircuit,
+  resolveAiHttpFailure,
+} from '@/lib/ai-client-request';
 import type { CoverLetterData, Tone } from '@/lib/types';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -428,7 +432,12 @@ export default function CoverLetterPage() {
       return;
     }
     if (isCurrentPro && !canUseProAi()) {
-      toast.error(coverLetterAiUnavailable(selectedLocale));
+      toast.error(aiErrorMessage('pro_safety_limit_reached', selectedLocale));
+      return;
+    }
+    const circuitErr = precheckAiCircuit(selectedLocale);
+    if (circuitErr) {
+      toast.error(aiErrorMessage(circuitErr.code, selectedLocale, circuitErr.retryAfterSec));
       return;
     }
     if (isGenerationBusy) return;
@@ -616,7 +625,11 @@ export default function CoverLetterPage() {
         } else if (resolved.toastKind === 'grounding_failed') {
           toast.error(coverLetterGroundingFailed(requestedLocale));
         } else if (resolved.toastKind === 'api_unavailable') {
-          toast.error(coverLetterAiUnavailable(requestedLocale));
+          const payload = resolveAiHttpFailure({
+            response: null,
+            body: { error: 'api_unavailable', code: 'provider_temporarily_unavailable' },
+          });
+          toast.error(aiErrorMessage(payload.code, requestedLocale, payload.retryAfterSec));
         }
         return;
       }
@@ -833,7 +846,7 @@ export default function CoverLetterPage() {
         } else if (resolved.toastKind === 'wrong_language') {
           toast.error(coverLetterWrongLanguage(requestedLocale));
         } else {
-          toast.error(coverLetterAiUnavailable(requestedLocale));
+          toast.error(aiErrorMessage('provider_temporarily_unavailable', requestedLocale));
         }
       }
     } finally {

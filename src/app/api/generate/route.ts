@@ -28,31 +28,43 @@ import {
   type ExperienceDuration,
   type ExperienceDurationSnapshot,
 } from '@/lib/cv-experience-duration';
+import { createHash } from 'crypto';
+import type { AiErrorCode } from '@/lib/ai-error-codes';
 
-// ── Rate limiter (in-memory, per-IP) ─────────────────────────────────────────
+// ── Rate limiter (in-memory) ────────────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
 // an external store (Upstash Redis, etc.).
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 20;  // 20 requests per minute per IP
+/** Anonymous / IP burst limit — abuse protection (not the Pro 30-day safety cap). */
+const RATE_LIMIT_MAX_REQUESTS_IP = 20;
+/** Verified Pro token-hash burst limit — higher than IP so rapid UI actions are not mistaken for outages. */
+const RATE_LIMIT_MAX_REQUESTS_PRO = 60;
 
 const rateLimitMap = new Map<string, { count: number; windowStart: number }>();
 
-function rateLimit(ip: string): { allowed: boolean; retryAfter: number } {
+function rateLimit(
+  key: string,
+  maxRequests: number,
+): { allowed: boolean; retryAfter: number; count: number } {
   const now = Date.now();
-  const entry = rateLimitMap.get(ip);
+  const entry = rateLimitMap.get(key);
 
   if (!entry || now - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
-    rateLimitMap.set(ip, { count: 1, windowStart: now });
-    return { allowed: true, retryAfter: 0 };
+    rateLimitMap.set(key, { count: 1, windowStart: now });
+    return { allowed: true, retryAfter: 0, count: 1 };
   }
 
-  if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
+  if (entry.count >= maxRequests) {
     const retryAfter = Math.ceil((RATE_LIMIT_WINDOW_MS - (now - entry.windowStart)) / 1000);
-    return { allowed: false, retryAfter };
+    return { allowed: false, retryAfter, count: entry.count };
   }
 
   entry.count++;
-  return { allowed: true, retryAfter: 0 };
+  return { allowed: true, retryAfter: 0, count: entry.count };
+}
+
+function hashLimiterIdentity(raw: string): string {
+  return createHash('sha256').update(raw).digest('hex').slice(0, 16);
 }
 
 // Periodic cleanup of stale entries (every 5 minutes)
@@ -65,6 +77,35 @@ if (typeof setInterval !== 'undefined') {
       }
     }
   }, 5 * 60_000);
+}
+
+function classifyProviderError(err: unknown): {
+  code: AiErrorCode;
+  status: number;
+  retryAfter: number | null;
+  providerStatus: number | string | null;
+} {
+  const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
+  const statusMatch = msg.match(/\b(429|529|503|502|401|403|402)\b/);
+  const providerStatus = statusMatch ? Number(statusMatch[1]) : null;
+
+  if (providerStatus === 429 || lower.includes('rate limit') || lower.includes('too many requests')) {
+    return { code: 'provider_rate_limited', status: 429, retryAfter: 60, providerStatus: providerStatus ?? 429 };
+  }
+  if (providerStatus === 529 || providerStatus === 503 || lower.includes('overloaded') || lower.includes('529')) {
+    return { code: 'provider_temporarily_unavailable', status: 503, retryAfter: 60, providerStatus: providerStatus ?? 503 };
+  }
+  if (lower.includes('credit') || lower.includes('billing') || lower.includes('quota') || providerStatus === 402) {
+    return { code: 'provider_credit_exhausted', status: 402, retryAfter: null, providerStatus: providerStatus ?? 402 };
+  }
+  if (lower.includes('authentication') || lower.includes('invalid api key') || lower.includes('unauthorized') || providerStatus === 401) {
+    return { code: 'provider_auth_error', status: 401, retryAfter: null, providerStatus: providerStatus ?? 401 };
+  }
+  if (lower.includes('timeout')) {
+    return { code: 'request_timeout', status: 504, retryAfter: null, providerStatus: null };
+  }
+  return { code: 'provider_temporarily_unavailable', status: 503, retryAfter: 60, providerStatus };
 }
 
 // ─── Pro token verification ───────────────────────────────────────────────────
@@ -302,29 +343,53 @@ export async function POST(req: NextRequest) {
   const contentType = req.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {
     return jsonResponse(
-      { error: 'Content-Type must be application/json.' },
+      { error: 'Content-Type must be application/json.', code: 'generation_validation_failed' },
       { status: 415 },
     );
   }
 
-  // ── Rate limiting ─────────────────────────────────────────────────────────
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || req.headers.get('x-real-ip')
     || 'unknown';
-  const { allowed, retryAfter } = rateLimit(ip);
-  if (!allowed) {
-    return jsonResponse(
-      { error: `Too many requests. Please try again in ${retryAfter} seconds.` },
-      { status: 429, headers: { 'Retry-After': String(retryAfter) } },
-    );
-  }
 
   try {
     const body = await req.json();
-    const { action, proToken, freeUserId, ...params } = body;
+    const { action, proToken, freeUserId, requestId, ...params } = body;
 
-    // ── Pro token verification ──────────────────────────────────────────────
-    const isPro = (await verifyProToken(proToken)) !== null;
+    // ── Pro token verification (before limiter identity) ────────────────────
+    const verifiedPro = await verifyProToken(proToken);
+    const isPro = verifiedPro !== null;
+
+    // Verified Pro → token-hash key (not free anonymous / install counter).
+    // Anonymous → IP key. Never log the raw token.
+    const limiterKeyType = isPro ? 'pro_token_hash' : 'ip';
+    const limiterKey = isPro
+      ? `pro:${hashLimiterIdentity(String(proToken))}`
+      : `ip:${ip}`;
+    const maxRequests = isPro ? RATE_LIMIT_MAX_REQUESTS_PRO : RATE_LIMIT_MAX_REQUESTS_IP;
+    const { allowed, retryAfter, count: limiterCount } = rateLimit(limiterKey, maxRequests);
+    if (!allowed) {
+      console.info('[ai-diagnostics]', JSON.stringify({
+        requestId: typeof requestId === 'string' ? requestId : null,
+        timestamp: Date.now(),
+        operation: action ?? null,
+        httpStatus: 429,
+        applicationErrorCode: 'server_rate_limited',
+        isProVerified: isPro,
+        limiterKeyType,
+        countBefore: limiterCount,
+        countAfter: limiterCount,
+        retryAfterSec: retryAfter,
+      }));
+      return jsonResponse(
+        {
+          error: `Too many requests. Please try again in ${retryAfter} seconds.`,
+          code: 'server_rate_limited',
+          retryAfter,
+        },
+        { status: 429, headers: { 'Retry-After': String(retryAfter) } },
+      );
+    }
 
     // ── Free tier handling ────────────────────────────────────────────
     // Free users are allowed limited AI actions tracked server-side.
@@ -335,12 +400,18 @@ export async function POST(req: NextRequest) {
 
     let _freeUserId: string | null = null;
     if (!isPro && PRO_SIGNING_KEY) {
-      _freeUserId = freeUserId || req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
+      _freeUserId = freeUserId || ip || 'anon';
       // Check how many free uses this user has left for this action (NO increment)
-      const { allowed } = canUseFreeAction(_freeUserId!, resolvedAction);
-      if (!allowed) {
+      const { allowed: freeAllowed } = canUseFreeAction(_freeUserId!, resolvedAction);
+      if (!freeAllowed) {
+        const code: AiErrorCode = FREE_ALLOWED_ACTIONS.has(resolvedAction)
+          ? 'free_ai_limit_reached'
+          : 'invalid_pro_token';
         return jsonResponse(
-          { error: 'Pro access required for AI features.' },
+          {
+            error: 'Pro access required for AI features.',
+            code,
+          },
           { status: 403 },
         );
       }
@@ -920,11 +991,11 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
       });
     }
 
-    return jsonResponse({ error: 'Unknown action' }, { status: 400 });
+    return jsonResponse({ error: 'Unknown action', code: 'generation_validation_failed' }, { status: 400 });
   } catch (err) {
     if (err instanceof CoverLetterGenerationIncompleteError) {
       return jsonResponse(
-        { error: err.message },
+        { error: err.message, code: 'generation_validation_failed' },
         { status: 502 },
       );
     }
@@ -933,9 +1004,35 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
     if (err instanceof Error && err.stack) {
       console.error('[AI Generate Error Stack]', err.stack);
     }
+    const classified = classifyProviderError(err);
+    console.info('[ai-diagnostics]', JSON.stringify({
+      timestamp: Date.now(),
+      httpStatus: classified.status,
+      applicationErrorCode: classified.code,
+      providerStatus: classified.providerStatus,
+      retryAfterSec: classified.retryAfter,
+    }));
     return jsonResponse(
-      { error: 'AI service is temporarily unavailable. Please try again in a moment.' },
-      { status: 503 }
+      {
+        error: classified.code === 'provider_rate_limited'
+          ? 'AI provider rate limit reached. Please try again shortly.'
+          : classified.code === 'provider_auth_error'
+            ? 'AI provider authentication failed.'
+            : classified.code === 'provider_credit_exhausted'
+              ? 'AI provider credits are exhausted.'
+              : classified.code === 'request_timeout'
+                ? 'AI request timed out.'
+                : 'AI provider is temporarily unavailable. Please try again in a moment.',
+        code: classified.code,
+        retryAfter: classified.retryAfter,
+        providerStatus: classified.providerStatus,
+      },
+      {
+        status: classified.status,
+        headers: classified.retryAfter
+          ? { 'Retry-After': String(classified.retryAfter) }
+          : undefined,
+      },
     );
   }
 }

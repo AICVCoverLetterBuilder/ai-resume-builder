@@ -5,6 +5,13 @@ import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import { useI18n } from '@/lib/i18n/context';
 import { useApp, checkProAccess } from '@/lib/store';
+import {
+  beginAiClientRequest,
+  finishAiClientRequest,
+  precheckAiCircuit,
+  resolveAiHttpFailure,
+} from '@/lib/ai-client-request';
+import { aiErrorMessage } from '@/lib/ai-error-codes';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
@@ -114,7 +121,7 @@ function stripPhotoCacheFragment(value?: string): string | undefined {
 
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
-  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, lastCvSavedAt, getAiGate } = useApp();
+  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, getProAiUsageCount, lastCvSavedAt, getAiGate } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
   const commitCvUpdate = useCallback((updater: (prev: CVData) => CVData) => {
@@ -753,17 +760,23 @@ export default function CVBuilderPage() {
 
   const getCurrentProTokenOrToast = (openUpgradeModal: () => void) => {
     const aiGate = getAiGate();
-    const gateAccess = checkProAccess(aiGate.status !== 'free', 0);
+    const usageCount = getProAiUsageCount();
+    const gateAccess = checkProAccess(aiGate.status !== 'free', usageCount);
     if (gateAccess !== 'allowed') {
       if (gateAccess === 'upgrade') {
         openUpgradeModal();
         return null;
       }
-      toast.error('AI service is temporarily unavailable. Please try again later.');
+      toast.error(aiErrorMessage('pro_safety_limit_reached', locale));
       return null;
     }
     if (aiGate.status === 'syncing') {
       toast.error(t.common.proAuthorizationUnavailable);
+      return null;
+    }
+    const circuitErr = precheckAiCircuit(locale);
+    if (circuitErr) {
+      toast.error(aiErrorMessage(circuitErr.code, locale, circuitErr.retryAfterSec));
       return null;
     }
     return aiGate.status === 'ready' ? aiGate.token : null;
@@ -776,6 +789,8 @@ export default function CVBuilderPage() {
     setIsSummaryGenerating(true);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
+    const reqCtx = beginAiClientRequest('summary', locale);
+    const countBefore = getProAiUsageCount();
     try {
       // Shared deterministic duration — never let each locale estimate independently.
       const referenceDateIso = new Date().toISOString().slice(0, 10);
@@ -792,7 +807,7 @@ export default function CVBuilderPage() {
         duration: durationSnapshot.byExperienceId[exp.id],
       }));
 
-      const { data: summaryData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
+      const { data: summaryData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number }>('/api/generate', {
         body: {
           action: 'summary',
           proToken,
@@ -807,23 +822,50 @@ export default function CVBuilderPage() {
           locale,
           gender: cv.personal.gender || '',
           canonicalSummary: cv.canonicalSummary || '',
+          requestId: reqCtx.requestId,
         },
         signal: controller.signal,
       });
       if (!res.ok || summaryData.error) {
         if (res.status === 403) {
-          if (getAiGate().status !== 'free') toast.error(t.common.proAuthorizationUnavailable);
+          const payload = resolveAiHttpFailure({ response: res, body: summaryData });
+          const msg = finishAiClientRequest({
+            ctx: reqCtx,
+            isProVerified: getAiGate().status === 'ready',
+            countBefore,
+            countAfter: countBefore,
+            httpStatus: res.status,
+            error: payload,
+          });
+          if (getAiGate().status !== 'free') toast.error(msg ?? t.common.proAuthorizationUnavailable);
           else setSummaryAiModal(true);
           return;
         }
-        throw new Error(summaryData.error || 'AI error');
+        const payload = resolveAiHttpFailure({ response: res, body: summaryData });
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: payload,
+        });
+        toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
+        return;
       }
       const nextSummary = (summaryData.result ?? '').trim();
       const finalized = finalizeClientAiSummary(nextSummary, cv, locale, durationSnapshot);
       if (finalized.blocked) {
-        toast.error(locale === 'hi'
-          ? 'AI summary failed integrity checks and was not applied. Please try again.'
-          : 'AI summary failed integrity checks and was not applied. Please try again.');
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
       setCv((prev) => acceptValidatedAiContent(prev, {
@@ -832,10 +874,29 @@ export default function CVBuilderPage() {
         summaryOrigin: finalized.origin,
       }));
       recordProAiSuccess();
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: countBefore + 1,
+        httpStatus: res.status,
+        error: null,
+        fallbackUsed: finalized.origin === 'deterministic_fallback',
+        responseSource: finalized.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider',
+      });
       toast.success(t.cv.genSuccess);
-    } catch {
+    } catch (err) {
       if (process.env.NODE_ENV !== 'production') console.error('[Professional Summary] Generate error');
-      toast.error('AI service is temporarily unavailable. Please try again later.');
+      const payload = resolveAiHttpFailure({ response: null, error: err });
+      const msg = finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: countBefore,
+        httpStatus: null,
+        error: payload,
+      });
+      toast.error(msg ?? aiErrorMessage('network_error', locale));
     } finally {
       clearTimeout(timer);
       setIsSummaryGenerating(false);
@@ -856,6 +917,8 @@ export default function CVBuilderPage() {
     setGeneratingBulletsId(expId);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
+    const reqCtx = beginAiClientRequest('bullets', locale);
+    const countBefore = getProAiUsageCount();
 
     try {
       const canonicalSource = freezeCanonicalExperienceDescription(exp);
@@ -870,19 +933,39 @@ export default function CVBuilderPage() {
         gender: cv.personal.gender || '',
         // Always send the frozen canonical source — never a prior Serbian/Hindi rewrite.
         sourceDescription: canonicalSource || exp.description || '',
+        requestId: reqCtx.requestId,
       };
 
-      const { data: bulletsData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
+      const { data: bulletsData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
         body: requestBody,
         signal: controller.signal,
       });
 
       if (!res.ok || bulletsData.error) {
         if (res.status === 403) {
-          toast.error(getAiGate().status !== 'free' ? t.common.proAuthorizationUnavailable : t.common.proAccessRequired);
+          const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
+          const msg = finishAiClientRequest({
+            ctx: reqCtx,
+            isProVerified: getAiGate().status === 'ready',
+            countBefore,
+            countAfter: countBefore,
+            httpStatus: res.status,
+            error: payload,
+          });
+          toast.error(getAiGate().status !== 'free' ? (msg ?? t.common.proAuthorizationUnavailable) : t.common.proAccessRequired);
           return;
         }
-        throw new Error(bulletsData.error || 'AI error');
+        const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: payload,
+        });
+        toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
+        return;
       }
 
       const newDescription = bulletsData.result || '';
@@ -899,10 +982,30 @@ export default function CVBuilderPage() {
         return quality.cv;
       });
       recordProAiSuccess();
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: countBefore + 1,
+        httpStatus: res.status,
+        error: null,
+        automaticRepairCount: bulletsData.repairAttempted ? 1 : 0,
+        fallbackUsed: Boolean(bulletsData.fallbackUsed),
+        responseSource: bulletsData.fallbackUsed ? 'deterministic_fallback' : bulletsData.repairAttempted ? 'repair' : 'provider',
+      });
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {
       if (process.env.NODE_ENV !== 'production') console.error('[AI Improvements Error]', err);
-      toast.error('AI service is temporarily unavailable. Please try again later.');
+      const payload = resolveAiHttpFailure({ response: null, error: err });
+      const msg = finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: countBefore,
+        httpStatus: null,
+        error: payload,
+      });
+      toast.error(msg ?? aiErrorMessage('network_error', locale));
     } finally {
       clearTimeout(timer);
       setGeneratingBulletsId(null);
@@ -916,8 +1019,10 @@ export default function CVBuilderPage() {
     setRewritingStyle(style);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30000);
+    const reqCtx = beginAiClientRequest(`rewrite:${style}`, locale);
+    const countBefore = getProAiUsageCount();
     try {
-      const { data: rewriteData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
+      const { data: rewriteData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
         body: {
           action: 'rewrite',
           proToken,
@@ -925,6 +1030,7 @@ export default function CVBuilderPage() {
           style,
           locale,
           gender: cv.personal.gender || '',
+          requestId: reqCtx.requestId,
           cvContext: {
             personal: cv.personal,
             summary: cv.canonicalSummary || cv.summary,
@@ -942,12 +1048,33 @@ export default function CVBuilderPage() {
         },
         signal: controller.signal,
       });
-      if (!res.ok || rewriteData.error) throw new Error(rewriteData.error || 'AI error');
+      if (!res.ok || rewriteData.error) {
+        const payload = resolveAiHttpFailure({ response: res, body: rewriteData });
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: payload,
+        });
+        toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
+        return;
+      }
       const referenceDateIso = new Date().toISOString().slice(0, 10);
       const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
       const finalized = finalizeClientAiSummary((rewriteData.result ?? cv.summary).trim(), cv, locale, durationSnapshot);
       if (finalized.blocked) {
-        toast.error('AI rewrite failed integrity checks and was not applied. Please try again.');
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
       setCv((prev) => acceptValidatedAiContent(prev, {
@@ -956,9 +1083,33 @@ export default function CVBuilderPage() {
         summaryOrigin: finalized.origin,
       }));
       recordProAiSuccess();
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: countBefore + 1,
+        httpStatus: res.status,
+        error: null,
+        automaticRepairCount: rewriteData.repairAttempted ? 1 : 0,
+        fallbackUsed: Boolean(rewriteData.fallbackUsed) || finalized.origin === 'deterministic_fallback',
+        responseSource: finalized.origin === 'deterministic_fallback' || rewriteData.fallbackUsed
+          ? 'deterministic_fallback'
+          : rewriteData.repairAttempted
+            ? 'repair'
+            : 'provider',
+      });
       toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);
-    } catch {
-      toast.error('AI service is temporarily unavailable. Please try again later.');
+    } catch (err) {
+      const payload = resolveAiHttpFailure({ response: null, error: err });
+      const msg = finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: countBefore,
+        httpStatus: null,
+        error: payload,
+      });
+      toast.error(msg ?? aiErrorMessage('network_error', locale));
     } finally {
       clearTimeout(timer);
       setRewritingStyle(null);
@@ -976,7 +1127,7 @@ export default function CVBuilderPage() {
       setAnalysis(result);
       setIsAnalyzing(false);
       setShowAnalysis(true);
-      recordProAiSuccess();
+      // Local heuristic only — does not consume Pro AI safety-cap quota.
     }, 1300);
   };
 
@@ -1273,7 +1424,7 @@ export default function CVBuilderPage() {
       commitCvUpdate(prev => ({ ...prev, templateId: recommended }));
       setRecommendedTemplateId(recommended);
       markAiRecommendUsed();
-      recordProAiSuccess();
+      // Local recommend — does not consume Pro AI safety-cap quota.
       toast.success(`${t.cv.recommendedToast}: ${t.templates.items[recommended].name}`);
     };
 

@@ -222,9 +222,13 @@ describe('isPro-aware caller audit', () => {
     expect(cvBuilder).toContain('isPro');
     expect(cvBuilder).toContain('getAiGate');
     expect(cvBuilder).not.toContain('getProToken');
-    expect(cvBuilder).toContain("checkProAccess(aiGate.status !== 'free', 0)");
+    expect(cvBuilder).toContain('getProAiUsageCount');
+    expect(cvBuilder).toContain("checkProAccess(aiGate.status !== 'free', usageCount)");
     expect(cvBuilder).toContain('getCurrentProTokenOrToast');
     expect(cvBuilder).toContain('t.common.proAuthorizationUnavailable');
+    expect(cvBuilder).toContain("aiErrorMessage('pro_safety_limit_reached'");
+    expect(cvBuilder).not.toContain("checkProAccess(aiGate.status !== 'free', 0)");
+    expect(cvBuilder).not.toContain("AI service is temporarily unavailable. Please try again later.");
     expect(coverLetter).toContain('useApp()');
     expect(coverLetter).toContain('isPro');
     expect(coverLetter).toContain('getAiGate');
@@ -239,9 +243,11 @@ describe('isPro-aware caller audit', () => {
     const translations = fs.readFileSync(path.resolve('src/lib/i18n/translations.ts'), 'utf8');
 
     expect(generateRoute).toContain("import { verifyProToken } from '@/lib/pro-token';");
-    expect(generateRoute).toContain('(await verifyProToken(proToken)) !== null');
+    expect(generateRoute).toContain('await verifyProToken(proToken)');
+    expect(generateRoute).toContain('verifiedPro !== null');
     expect(generateRoute).not.toContain('function verifyProToken(');
     expect(generateRoute).toContain('Pro access required for AI features.');
+    expect(generateRoute).toContain("code: 'server_rate_limited'");
     expect(`${generateRoute}\n${translations}`).not.toContain('Pro subscription required');
   });
 });
