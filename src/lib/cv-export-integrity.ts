@@ -96,9 +96,13 @@ function localizeCvAgainstCanonical(
   cv: CVData,
   locale: Locale,
   gender: string,
-): { cv: CVData; validationStatus: ValidatedLocalizedCvProjection['validationStatus'] } {
+): {
+  cv: CVData;
+  validationStatus: ValidatedLocalizedCvProjection['validationStatus'];
+} {
   let validationStatus: ValidatedLocalizedCvProjection['validationStatus'] = 'passed';
   const canonicalLocale = cv.canonicalSnapshot?.canonicalLocale;
+  let summaryOrigin = cv.summaryOrigin;
 
   const experience = (cv.experience ?? []).map((exp, experienceIndex) => {
     const canonicalDescription = resolveCanonicalExperienceDescription(exp);
@@ -197,12 +201,14 @@ function localizeCvAgainstCanonical(
       canonicalLocale,
     )) {
       summary = localizedSummary;
+      summaryOrigin = 'deterministic_fallback';
     } else if (locale === 'en') {
       if (canonicalSummary && validateSummaryCompleteness(canonicalSummary, { locale: 'en' }).valid) {
         summary = canonicalSummary;
       } else {
         summary = deterministicSummaryFromCanonical(factSet, canonicalSummary);
       }
+      summaryOrigin = 'deterministic_fallback';
     } else {
       throw new CreativeArtisticLocaleExportError(
         locale,
@@ -231,6 +237,7 @@ function localizeCvAgainstCanonical(
       ...cv,
       summary,
       experience,
+      ...(summaryOrigin ? { summaryOrigin } : {}),
     },
     validationStatus,
   };
@@ -265,6 +272,7 @@ function attachQualityToProjection(
     gender,
     referenceDate,
     durationSnapshot: priorSnapshot,
+    summaryOrigin: localizedCv.summaryOrigin,
   });
   const status: ValidatedLocalizedCvProjection['validationStatus'] = quality.repaired
     ? (validationStatus === 'fallback' ? 'fallback' : 'repaired')

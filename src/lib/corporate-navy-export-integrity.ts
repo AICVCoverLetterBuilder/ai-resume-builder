@@ -343,6 +343,7 @@ export function prepareCorporateNavyExport(
     gender,
     durationSnapshot: sharedDuration,
     referenceDate: options?.referenceDate || sharedDuration.referenceDateIso,
+    summaryOrigin: nextCv.summaryOrigin,
   });
   nextCv = quality.cv;
 

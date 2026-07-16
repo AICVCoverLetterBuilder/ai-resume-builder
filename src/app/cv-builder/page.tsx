@@ -44,7 +44,7 @@ import {
   durationToPromptToken,
   validateSummaryDuration,
 } from '@/lib/cv-experience-duration';
-import { applyCvContentQuality, resolveSummaryWithDurationPolicy } from '@/lib/cv-content-quality';
+import { applyCvContentQuality, resolveSummaryWithDurationPolicy, stripUnsupportedSummaryFluff } from '@/lib/cv-content-quality';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
@@ -814,29 +814,35 @@ export default function CVBuilderPage() {
         throw new Error(summaryData.error || 'AI error');
       }
       let nextSummary = (summaryData.result ?? '').trim();
+      nextSummary = stripUnsupportedSummaryFluff(nextSummary, locale);
       if (!validateSummaryCompleteness(nextSummary, { locale }).valid) {
         toast.error(locale === 'hi'
           ? 'AI summary was incomplete and was not applied. Please try again.'
           : 'AI summary failed completeness checks and was not applied. Please try again.');
         return;
       }
-      if (!validateSummaryDuration(nextSummary, durationSnapshot.total).valid) {
-        nextSummary = resolveSummaryWithDurationPolicy(
-          nextSummary,
-          durationSnapshot.total,
+      // AI-generated summaries must include the shared deterministic duration (all locales).
+      const durationResolved = resolveSummaryWithDurationPolicy(
+        nextSummary,
+        durationSnapshot.total,
+        locale,
+        { forceDurationPhrase: true, requireDurationClaim: true },
+      );
+      nextSummary = durationResolved.summary;
+      if (
+        !validateSummaryCompleteness(nextSummary, { locale }).valid
+        || !validateSummaryDuration(nextSummary, durationSnapshot.total, {
+          requireDurationClaim: true,
           locale,
-        ).summary;
-        if (
-          !validateSummaryCompleteness(nextSummary, { locale }).valid
-          || !validateSummaryDuration(nextSummary, durationSnapshot.total).valid
-        ) {
-          toast.error('AI summary duration was inconsistent and was not applied. Please try again.');
-          return;
-        }
+        }).valid
+      ) {
+        toast.error('AI summary duration was inconsistent and was not applied. Please try again.');
+        return;
       }
       setCv((prev) => acceptValidatedAiContent(prev, {
         locale,
         summary: nextSummary,
+        summaryOrigin: durationResolved.status === 'passed' ? 'ai_generated' : 'ai_repaired',
       }));
       recordProAiSuccess();
       toast.success(t.cv.genSuccess);
@@ -934,9 +940,18 @@ export default function CVBuilderPage() {
         toast.error('AI rewrite was incomplete and was not applied. Please try again.');
         return;
       }
+      const referenceDateIso = new Date().toISOString().slice(0, 10);
+      const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
+      const durationResolved = resolveSummaryWithDurationPolicy(
+        nextSummary,
+        durationSnapshot.total,
+        locale,
+        { forceDurationPhrase: true, requireDurationClaim: true },
+      );
       setCv((prev) => acceptValidatedAiContent(prev, {
         locale,
-        summary: nextSummary,
+        summary: durationResolved.summary,
+        summaryOrigin: durationResolved.status === 'passed' ? 'ai_generated' : 'ai_repaired',
       }));
       recordProAiSuccess();
       toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);

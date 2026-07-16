@@ -487,7 +487,12 @@ export function isProjectionFresh(
 }
 
 export function applyCanonicalSummaryEdit(cv: CVData, summary: string, uiLocale: Locale): CVData {
-  const next = { ...cv, summary, updatedAt: new Date().toISOString() };
+  const next = {
+    ...cv,
+    summary,
+    summaryOrigin: 'user' as const,
+    updatedAt: new Date().toISOString(),
+  };
   const snap = cv.canonicalSnapshot;
   if (!snap || snap.canonicalState !== 'valid') {
     const soft = { ...next, canonicalSummary: summary };
@@ -582,6 +587,7 @@ export function acceptValidatedAiContent(
     summary?: string;
     experienceId?: string;
     description?: string;
+    summaryOrigin?: import('./types').CvSummaryOrigin;
   },
 ): CVData {
   let next = { ...cv };
@@ -593,6 +599,7 @@ export function acceptValidatedAiContent(
     next = {
       ...next,
       summary: options.summary,
+      summaryOrigin: options.summaryOrigin || 'ai_generated',
       ...(becomesCanonical ? { canonicalSummary: options.summary } : {}),
     };
   }

@@ -47,6 +47,13 @@ export interface Education {
   description: string;
 }
 
+/** Provenance for the active professional summary — controls duration-injection policy. */
+export type CvSummaryOrigin =
+  | 'user'
+  | 'ai_generated'
+  | 'ai_repaired'
+  | 'deterministic_fallback';
+
 export interface CVData {
   id: string;
   name: string;
@@ -54,6 +61,11 @@ export interface CVData {
   summary: string;
   /** Frozen source-locale summary (mirrors canonicalSnapshot when present). */
   canonicalSummary?: string;
+  /**
+   * Who authored the current summary. AI/fallback summaries must carry the shared
+   * deterministic duration; user-written summaries must not be force-injected.
+   */
+  summaryOrigin?: CvSummaryOrigin;
   experience: WorkExperience[];
   education: Education[];
   skills: string[];

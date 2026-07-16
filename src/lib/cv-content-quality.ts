@@ -2,18 +2,21 @@
  * Shared CV content-quality fixes (duration, tense, natural wording).
  * Applied in the content/localization pipeline — not in template layouts.
  */
-import type { CVData, WorkExperience } from './types';
+import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
 import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
 import {
   buildExperienceDurationSnapshot,
   formatApproximateDurationPhrase,
   repairSummaryDuration,
+  summaryHasDurationClaim,
+  summaryIncludesDurationPhrase,
   type ExperienceDuration,
   type ExperienceDurationSnapshot,
   validateSummaryDuration,
 } from './cv-experience-duration';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
+import { UNSUPPORTED_SUMMARY_FLUFF } from './cv-semantic-fidelity';
 
 export type ContactCenterMeaning =
   | 'phone_inquiries'
@@ -21,6 +24,23 @@ export type ContactCenterMeaning =
   | 'cross_team_coordination'
   | 'interaction_logging'
   | null;
+
+/** True when the summary authoring path must carry the shared duration claim. */
+export function summaryOriginRequiresDuration(origin?: CvSummaryOrigin | null): boolean {
+  return origin === 'ai_generated'
+    || origin === 'ai_repaired'
+    || origin === 'deterministic_fallback';
+}
+
+/** Strip invented fluff / outcome guarantees (Serbian enrichment, Hindi satisfaction). */
+export function stripUnsupportedSummaryFluff(text: string, locale: Locale): string {
+  let out = text || '';
+  for (const row of UNSUPPORTED_SUMMARY_FLUFF) {
+    if (row.locale && row.locale !== locale) continue;
+    out = out.replace(row.re, ' ');
+  }
+  return out.replace(/\s+/g, ' ').replace(/\s+([.।!?])/gu, '$1').trim();
+}
 
 /** Classify a source (canonical) bullet into contact-center meanings without changing fact categories. */
 export function classifyContactCenterMeaning(sourceText: string): ContactCenterMeaning {
@@ -245,19 +265,44 @@ export function resolveSummaryWithDurationPolicy(
   summary: string,
   duration: ExperienceDuration,
   locale: Locale,
-  options?: { forceDurationPhrase?: boolean },
+  options?: {
+    /** When true (AI / fallback), missing duration is a violation and must be injected. */
+    forceDurationPhrase?: boolean;
+    requireDurationClaim?: boolean;
+  },
 ): {
   summary: string;
   status: 'passed' | 'repaired' | 'fallback';
   violation?: 'experience_duration_mismatch';
 } {
-  const initial = validateSummaryDuration(summary, duration);
+  const requireClaim = Boolean(options?.forceDurationPhrase || options?.requireDurationClaim);
+  const initial = validateSummaryDuration(summary, duration, {
+    requireDurationClaim: requireClaim,
+    locale,
+  });
   if (initial.valid) {
     return { summary: summary.trim(), status: 'passed' };
   }
 
+  // Missing claim on generated summaries: inject the shared phrase (do not invent duties).
+  if (requireClaim && !summaryHasDurationClaim(summary)
+    && !summaryIncludesDurationPhrase(summary, duration, locale)
+    && duration.hasValidDates) {
+    const injected = injectDurationPhrase(summary, duration, locale);
+    if (validateSummaryDuration(injected, duration, { requireDurationClaim: true, locale }).valid) {
+      return {
+        summary: injected.trim(),
+        status: 'repaired',
+        violation: 'experience_duration_mismatch',
+      };
+    }
+  }
+
   const repaired = repairSummaryDuration(summary, duration, locale);
-  const afterRepair = validateSummaryDuration(repaired, duration);
+  const afterRepair = validateSummaryDuration(repaired, duration, {
+    requireDurationClaim: requireClaim,
+    locale,
+  });
   if (afterRepair.valid) {
     return {
       summary: repaired.trim(),
@@ -302,22 +347,81 @@ export function resolveSummaryWithDurationPolicy(
   }
 
   // Last resort: minimal duration-locked sentence (same underlying length).
-  if (!validateSummaryDuration(fallback, duration).valid || !fallback.trim()) {
+  if (!validateSummaryDuration(fallback, duration, { requireDurationClaim: requireClaim, locale }).valid || !fallback.trim()) {
     if (locale === 'hi') {
       fallback = phrase ? `${phrase}।` : 'पेशेवर के पास प्रासंगिक अनुभव है।';
     } else if (locale === 'sr' || locale === 'hr') {
       fallback = phrase ? `Profesionalka ${phrase}.` : 'Profesionalka sa relevantnim iskustvom.';
+    } else if (locale === 'ja') {
+      fallback = phrase ? `プロフェッショナル${phrase}。` : 'プロフェッショナルとして関連経験があります。';
     } else {
       fallback = phrase ? `Professional ${phrase}.` : 'Professional with relevant experience.';
     }
   }
 
-  void options;
   return {
     summary: fallback.trim(),
     status: 'fallback',
     violation: 'experience_duration_mismatch',
   };
+}
+
+/** Inject the shared approximate-duration phrase into a summary that lacks any duration claim. */
+export function injectDurationPhrase(
+  summary: string,
+  duration: ExperienceDuration,
+  locale: Locale,
+): string {
+  const phrase = formatApproximateDurationPhrase(duration, locale);
+  const text = (summary || '').trim();
+  if (!phrase) return text;
+  if (!text) {
+    return locale === 'hi' ? `${phrase}।` : `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
+  }
+  if (locale === 'hi') {
+    // Prefer: "<role/opening> लगभग पाँच वर्षों के अनुभव के साथ। <rest>"
+    const roleInject = text.match(/^(.{2,100}?)([.।])\s*(.*)$/u);
+    if (roleInject) {
+      let out = `${roleInject[1].trim()} ${phrase}${roleInject[2]} ${roleInject[3].trim()}`.replace(/\s+/g, ' ').trim();
+      if (!/[।.!?…]\s*$/u.test(out)) out = `${out}।`;
+      return out;
+    }
+    // Or lead with duration when the text is a single clause.
+    let out = `${phrase}। ${text.replace(/^[।.\s]+/u, '')}`.replace(/\s+/g, ' ').trim();
+    if (!/[।.!?…]\s*$/u.test(out)) out = `${out}।`;
+    return out;
+  }
+  if (locale === 'ja') {
+    const roleInject = text.match(/^(.{2,100}?)([。．.])\s*(.*)$/u);
+    if (roleInject) {
+      return `${roleInject[1].trim()}${phrase}${roleInject[2]}${roleInject[3].trim()}`;
+    }
+    return `${text.replace(/[。．.]\s*$/u, '')}${phrase}。`;
+  }
+  if (locale === 'sr' || locale === 'hr') {
+    // Prefer: "Profesionalka sa oko pet godina iskustva ..."
+    const roleInject = text.match(/^(.{2,100}?)\.\s*(.*)$/u);
+    if (roleInject) {
+      const head = roleInject[1].trim();
+      // If head already looks like a role intro, append phrase after it.
+      let out = `${head} ${phrase}. ${roleInject[2].trim()}`.replace(/\s+/g, ' ').trim();
+      if (!/[.!?…]\s*$/u.test(out)) out = `${out}.`;
+      return out;
+    }
+    const out = `${text.replace(/\.\s*$/u, '')} ${phrase}.`.replace(/\s+/g, ' ').trim();
+    return out;
+  }
+  // English / default
+  {
+    const roleInject = text.match(/^(.{2,100}?)\.\s*(.*)$/u);
+    if (roleInject) {
+      let out = `${roleInject[1].trim()} ${phrase}. ${roleInject[2].trim()}`.replace(/\s+/g, ' ').trim();
+      if (!/[.!?…]\s*$/u.test(out)) out = `${out}.`;
+      return out;
+    }
+    const out = `${text.replace(/\.\s*$/u, '')} ${phrase}.`.replace(/\s+/g, ' ').trim();
+    return out;
+  }
 }
 
 export type CvContentQualityResult = {
@@ -333,11 +437,14 @@ export type CvContentQualityOptions = {
   referenceDate?: Date | string;
   /** Precomputed snapshot; when set, dates are not recalculated from localized text. */
   durationSnapshot?: ExperienceDurationSnapshot;
+  /** Override / clarify summary provenance for duration policy. */
+  summaryOrigin?: CvSummaryOrigin;
 };
 
 /**
  * Shared content path for preview / PDF / DOCX.
  * Attaches duration claims to experience via snapshot; never invents dates.
+ * Duration injection applies only to AI / repaired / deterministic_fallback summaries.
  */
 export function applyCvContentQuality(
   cv: CVData,
@@ -347,9 +454,12 @@ export function applyCvContentQuality(
   const gender = options?.gender || cv.personal?.gender || '';
   const durationSnapshot = options?.durationSnapshot
     || buildExperienceDurationSnapshot(cv.experience || [], options?.referenceDate ?? new Date());
+  const origin: CvSummaryOrigin | undefined = options?.summaryOrigin ?? cv.summaryOrigin;
+  const requireDuration = summaryOriginRequiresDuration(origin);
 
   const violations: Array<'experience_duration_mismatch'> = [];
   let repaired = false;
+  let nextOrigin = origin;
 
   const experience = (cv.experience || []).map((exp) => {
     const q = normalizeExperienceBulletsForQuality(exp, locale, gender);
@@ -358,19 +468,40 @@ export function applyCvContentQuality(
   });
 
   const duration = durationSnapshot.total;
-  const summaryResult = resolveSummaryWithDurationPolicy(cv.summary || '', duration, locale);
-  if (summaryResult.status !== 'passed') repaired = true;
+  let summary = stripUnsupportedSummaryFluff(cv.summary || '', locale);
+  if (summary !== (cv.summary || '').trim()) repaired = true;
 
-  let summary = summaryResult.summary;
+  const summaryResult = resolveSummaryWithDurationPolicy(summary, duration, locale, {
+    forceDurationPhrase: requireDuration,
+    requireDurationClaim: requireDuration,
+  });
+  if (summaryResult.status !== 'passed') {
+    repaired = true;
+    if (summaryResult.status === 'repaired' && origin === 'ai_generated') {
+      nextOrigin = 'ai_repaired';
+    } else if (summaryResult.status === 'fallback') {
+      nextOrigin = 'deterministic_fallback';
+    }
+  }
+
+  summary = summaryResult.summary;
   if (locale === 'hi') {
     const before = summary;
     summary = normalizeHindiCustomerServiceWording(summary);
     summary = applyHindiCurrentRoleTense(summary);
+    summary = stripUnsupportedSummaryFluff(summary, locale);
+    if (summary !== before) repaired = true;
+  } else if (locale === 'sr' || locale === 'hr') {
+    const before = summary;
+    summary = stripUnsupportedSummaryFluff(summary, locale);
     if (summary !== before) repaired = true;
   }
 
-  // Only surface a violation if the final summary still mismatches.
-  if (!validateSummaryDuration(summary, duration).valid) {
+  // Only surface a violation if the final summary still mismatches the policy for this origin.
+  if (!validateSummaryDuration(summary, duration, {
+    requireDurationClaim: requireDuration,
+    locale,
+  }).valid) {
     violations.push('experience_duration_mismatch');
   }
 
@@ -379,6 +510,7 @@ export function applyCvContentQuality(
       ...cv,
       summary,
       experience,
+      ...(nextOrigin ? { summaryOrigin: nextOrigin } : {}),
     },
     durationSnapshot,
     repaired,

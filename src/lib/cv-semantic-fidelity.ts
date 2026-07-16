@@ -63,6 +63,7 @@ const UNSUPPORTED_DUTY_PATTERNS: RegExp[] = [
   /wastage|otpad|هدر|Abfall|gaspi/iu,
   /syrups? and garnishes?|сирупа и гарнир|عصائر وشرابات|sirovi i garniture/iu,
   /receiving and storing (?:wines|beers|spirits)|prijem i skladištenje|استلام وتخزين/iu,
+  /customer satisfaction|ग्राहक संतुष्टि सुनिश्चित|obogaćuje kao profesional/iu,
   RECIPE_INVENTION,
 ];
 
@@ -103,6 +104,18 @@ const LOCALE_QUALITY_PATTERNS: Array<{ locale?: Locale; re: RegExp; kind?: CvFid
   { locale: 'ja', re: /アテンション・トゥ・ディテール/u, kind: 'locale_quality' },
   { locale: 'it', re: /\bPreparò\b|\bGestì\b|\bMantenne\b|\bSupportò\b/u, kind: 'locale_quality' },
   { locale: 'hi', re: /रिक्लेमेशन/u, kind: 'locale_quality' },
+  { locale: 'sr', re: /\bobogaćuje\b/iu, kind: 'locale_quality' },
+  { locale: 'sr', re: /Izrada izveštaja dodatno/iu, kind: 'locale_quality' },
+  { locale: 'hi', re: /ग्राहक संतुष्टि सुनिश्चित/u, kind: 'locale_quality' },
+  { locale: 'hi', re: /जिससे ग्राहक संतुष्टि/u, kind: 'locale_quality' },
+];
+
+/** Unsupported invented outcome / fluff phrases stripped from summaries. */
+export const UNSUPPORTED_SUMMARY_FLUFF: Array<{ locale?: Locale; re: RegExp }> = [
+  { locale: 'sr', re: /[^.?!]*\bobogaćuje\b[^.?!]*[.?!]?/giu },
+  { locale: 'sr', re: /Izrada izveštaja dodatno[^.?!]*[.?!]?/giu },
+  { locale: 'hi', re: /,?\s*जिससे ग्राहक संतुष्टि सुनिश्चित होती है।?/gu },
+  { locale: 'hi', re: /ग्राहक संतुष्टि सुनिश्चित होती है।?/gu },
 ];
 
 const FEMALE_MISMATCH: Array<{ locale: Locale; re: RegExp }> = [

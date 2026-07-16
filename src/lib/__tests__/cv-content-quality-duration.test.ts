@@ -15,7 +15,7 @@ import {
 } from '@/lib/cv-content-quality';
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
-import { sealCanonicalFromValidatedSource } from '@/lib/cv-canonical-snapshot';
+import { applyCanonicalSummaryEdit, sealCanonicalFromValidatedSource } from '@/lib/cv-canonical-snapshot';
 
 const REF = '2026-07-15';
 
@@ -132,6 +132,106 @@ describe('duration validation and recovery', () => {
     const check = validateSummaryDuration(custom, expected);
     expect(check.valid).toBe(true);
     expect(check.claims).toEqual([]);
+
+    const cv = baseCv({
+      summary: custom,
+      summaryOrigin: 'user',
+    });
+    const q = applyCvContentQuality(cv, 'en', {
+      referenceDate: REF,
+      gender: 'female',
+      summaryOrigin: 'user',
+    });
+    expect(q.cv.summary).toBe(custom);
+    expect(q.cv.summary.toLowerCase()).not.toMatch(/five|years of experience/);
+  });
+
+  it('requires duration on AI-generated summaries that omit it', () => {
+    const expected = applyApproximateDurationPolicy(62);
+    const omitted = 'Customer Service Specialist working since May 2021. Supports clients by phone.';
+    expect(validateSummaryDuration(omitted, expected).valid).toBe(true);
+    expect(
+      validateSummaryDuration(omitted, expected, { requireDurationClaim: true }).valid,
+    ).toBe(false);
+  });
+});
+
+describe('EN/SR/HI residual AI duration + fluff', () => {
+  it('injects shared five-year duration into Serbian AI summaries that omit it', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary:
+        'Profesionalka u radu kao agent call centra od maja 2021. Pruža podršku klijentima putem telefona.',
+    });
+    const q = applyCvContentQuality(cv, 'sr', {
+      referenceDate: REF,
+      gender: 'female',
+      summaryOrigin: 'ai_generated',
+    });
+    expect(q.durationSnapshot.total.totalMonths).toBe(62);
+    expect(q.cv.summary.toLowerCase()).toMatch(/oko pet godina/);
+    expect(q.violations).not.toContain('experience_duration_mismatch');
+    expect(q.cv.summaryOrigin === 'ai_repaired' || q.cv.summaryOrigin === 'ai_generated').toBe(true);
+  });
+
+  it('injects shared five-year duration into Hindi AI summaries that omit it', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary: 'मई 2021 से कॉल सेंटर एजेंट के रूप में कार्यरत हूँ। ग्राहकों की मदद करती हूँ।',
+    });
+    const q = applyCvContentQuality(cv, 'hi', {
+      referenceDate: REF,
+      gender: 'female',
+      summaryOrigin: 'ai_generated',
+    });
+    expect(q.durationSnapshot.total.approxYears).toBe(5);
+    expect(q.cv.summary).toMatch(/पाँच|पांच|5/);
+    expect(q.cv.summary).toMatch(/वर्ष/);
+    expect(q.violations).not.toContain('experience_duration_mismatch');
+  });
+
+  it('strips Serbian unnatural enrichment fluff from summaries', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary:
+        'Profesionalka sa oko pet godina iskustva u oblasti korisničke podrške. Izrada izveštaja dodatno je obogaćuje kao profesionalku u oblasti korisničke podrške.',
+    });
+    const q = applyCvContentQuality(cv, 'sr', {
+      referenceDate: REF,
+      gender: 'female',
+      summaryOrigin: 'ai_generated',
+    });
+    expect(q.cv.summary.toLowerCase()).not.toMatch(/obogaćuje/);
+    expect(q.cv.summary.toLowerCase()).not.toMatch(/izrada izveštaja dodatno/);
+    expect(q.cv.summary.toLowerCase()).toMatch(/oko pet godina/);
+  });
+
+  it('strips Hindi unsupported customer-satisfaction guarantee', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary:
+        'लगभग पाँच वर्षों के अनुभव के साथ कॉल सेंटर एजेंट हूँ, जिससे ग्राहक संतुष्टि सुनिश्चित होती है।',
+    });
+    const q = applyCvContentQuality(cv, 'hi', {
+      referenceDate: REF,
+      gender: 'female',
+      summaryOrigin: 'ai_generated',
+    });
+    expect(q.cv.summary).not.toMatch(/संतुष्टि सुनिश्चित/);
+    expect(q.cv.summary).toMatch(/पाँच|पांच/);
+  });
+
+  it('marks manual summary edits as user origin and does not inject duration', () => {
+    let cv = baseCv({ summaryOrigin: 'ai_generated' });
+    cv = applyCanonicalSummaryEdit(
+      cv,
+      'Ručno napisan rezime bez trajanja. Fokus na jasnu komunikaciju.',
+      'sr',
+    );
+    expect(cv.summaryOrigin).toBe('user');
+    const q = applyCvContentQuality(cv, 'sr', { referenceDate: REF, gender: 'female' });
+    expect(q.cv.summary.toLowerCase()).not.toMatch(/oko pet godina/);
+    expect(q.cv.summary).toContain('Ručno napisan');
   });
 });
 

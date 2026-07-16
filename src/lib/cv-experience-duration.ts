@@ -265,19 +265,54 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
 
 export function summaryHasDurationClaim(text: string): boolean {
   return extractSummaryYearClaims(text).length > 0
-    || /\b(years? of experience|godina iskustva|वर्षों के अनुभव|वर्ष के अनुभव)\b/iu.test(text)
-    || /\b(?:around|about|approximately)\s+[\w-]+\s+years?\b/iu.test(text);
+    || /\b(years? of experience|godina iskustva|profesionalnog iskustva|Jahr(?:en)? Erfahrung|años de experiencia|ans d'expérience|anni di esperienza|anos de experiência|वर्षों के अनुभव|वर्ष के अनुभव|वर्षों?\s*का\s*अनुभव)\b/iu.test(text)
+    || /\b(?:around|about|approximately)\s+[\w-]+\s+years?\b/iu.test(text)
+    || /\boko\s+\S+\s+godin/iu.test(text)
+    || /लगभग\s+\S+\s+वर्ष/u.test(text)
+    || /約\s*\d+\s*年/u.test(text)
+    || /\d+\s*年の経験/u.test(text)
+    || /سنوات|سنة|خبرة/u.test(text)
+    || /лет опыта|годом опыта/u.test(text);
+}
+
+export function summaryIncludesDurationPhrase(
+  summary: string,
+  duration: ExperienceDuration,
+  locale: Locale,
+): boolean {
+  if (!duration.hasValidDates) return false;
+  const phrase = formatApproximateDurationPhrase(duration, locale);
+  if (phrase && summary.includes(phrase)) return true;
+  // Locale digit/word forms of the expected approx years.
+  if (duration.unit === 'years' && duration.approxYears > 0) {
+    const n = duration.approxYears;
+    const word = YEAR_WORD_BY_LOCALE[locale]?.[n] || String(n);
+    if (locale === 'ja' && new RegExp(`約\\s*${n}\\s*年`).test(summary)) return true;
+    if (locale === 'hi' && summary.includes(word) && /वर्ष/.test(summary)) return true;
+    if ((locale === 'sr' || locale === 'hr') && new RegExp(`\\boko\\s+${word}\\s+godin`, 'iu').test(summary)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function validateSummaryDuration(
   summary: string,
   expected: ExperienceDuration,
+  options?: { requireDurationClaim?: boolean; locale?: Locale },
 ): { valid: boolean; claims: number[]; violation?: 'experience_duration_mismatch' } {
   if (!expected.hasValidDates || expected.unit !== 'years') {
     return { valid: true, claims: extractSummaryYearClaims(summary) };
   }
+  const locale = options?.locale;
+  if (locale && summaryIncludesDurationPhrase(summary, expected, locale)) {
+    return { valid: true, claims: [expected.approxYears] };
+  }
   if (!summaryHasDurationClaim(summary)) {
-    // Custom summaries without a duration claim are allowed.
+    // AI/fallback summaries must include the shared duration; user-written may omit it.
+    if (options?.requireDurationClaim) {
+      return { valid: false, claims: [], violation: 'experience_duration_mismatch' };
+    }
     return { valid: true, claims: [] };
   }
   const claims = extractSummaryYearClaims(summary);
