@@ -14,6 +14,7 @@ import {
 } from '@/lib/ai-client-request';
 import { aiErrorMessage } from '@/lib/ai-error-codes';
 import { logAiLocaleTransitionDiagnostics } from '@/lib/ai-usage-policy';
+import { AI_CLIENT_TIMEOUT_MS, logAiClientRequestTiming } from '@/lib/ai-request-timing';
 import { templateComponents } from '@/components/cv-templates';
 import { analyzeJobDescription } from '@/lib/ai';
 import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } from '@/lib/ai-bullets';
@@ -798,7 +799,7 @@ export default function CVBuilderPage() {
     if (isSummaryGenerating) return;
     setIsSummaryGenerating(true);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), AI_CLIENT_TIMEOUT_MS);
     // Immutable request context: `reqCtx.locale` is captured once, at button-press
     // time, and is the ONLY locale used for the API call, validation, and apply
     // below — never re-read the (possibly since-changed) `locale` closure/UI value
@@ -940,6 +941,15 @@ export default function CVBuilderPage() {
         applied: true,
         newContentLocale: requestedLocale,
       });
+      logAiClientRequestTiming({
+        requestId: reqCtx.requestId,
+        action: 'summary_generate',
+        requestedLocale,
+        clientStartedAt: reqCtx.startedAt,
+        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientAborted: false,
+        applied: true,
+      });
       toast.success(t.cv.genSuccess);
     } catch (err) {
       if (process.env.NODE_ENV !== 'production') console.error('[Professional Summary] Generate error');
@@ -951,6 +961,16 @@ export default function CVBuilderPage() {
         countAfter: countBefore,
         httpStatus: null,
         error: payload,
+      });
+      logAiClientRequestTiming({
+        requestId: reqCtx.requestId,
+        action: 'summary_generate',
+        requestedLocale,
+        clientStartedAt: reqCtx.startedAt,
+        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientAborted: err instanceof Error && err.name === 'AbortError',
+        applied: false,
+        reason: payload.code,
       });
       toast.error(msg ?? aiErrorMessage('network_error', locale));
     } finally {
@@ -972,7 +992,7 @@ export default function CVBuilderPage() {
 
     setGeneratingBulletsId(expId);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), AI_CLIENT_TIMEOUT_MS);
     // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest('bullets', locale);
     const requestedLocale = reqCtx.locale as Locale;
@@ -1111,6 +1131,15 @@ export default function CVBuilderPage() {
         applied: true,
         newContentLocale: requestedLocale,
       });
+      logAiClientRequestTiming({
+        requestId: reqCtx.requestId,
+        action: 'bullets_generate',
+        requestedLocale,
+        clientStartedAt: reqCtx.startedAt,
+        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientAborted: false,
+        applied: true,
+      });
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {
       if (process.env.NODE_ENV !== 'production') console.error('[AI Improvements Error]', err);
@@ -1122,6 +1151,16 @@ export default function CVBuilderPage() {
         countAfter: countBefore,
         httpStatus: null,
         error: payload,
+      });
+      logAiClientRequestTiming({
+        requestId: reqCtx.requestId,
+        action: 'bullets_generate',
+        requestedLocale,
+        clientStartedAt: reqCtx.startedAt,
+        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientAborted: err instanceof Error && err.name === 'AbortError',
+        applied: false,
+        reason: payload.code,
       });
       toast.error(msg ?? aiErrorMessage('network_error', locale));
     } finally {
@@ -1136,7 +1175,7 @@ export default function CVBuilderPage() {
     if (!proToken) return;
     setRewritingStyle(style);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), AI_CLIENT_TIMEOUT_MS);
     // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest(`rewrite:${style}`, locale);
     const requestedLocale = reqCtx.locale as Locale;
@@ -1257,6 +1296,15 @@ export default function CVBuilderPage() {
         applied: true,
         newContentLocale: requestedLocale,
       });
+      logAiClientRequestTiming({
+        requestId: reqCtx.requestId,
+        action: `rewrite_${style}`,
+        requestedLocale,
+        clientStartedAt: reqCtx.startedAt,
+        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientAborted: false,
+        applied: true,
+      });
       toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);
     } catch (err) {
       const payload = resolveAiHttpFailure({ response: null, error: err });
@@ -1267,6 +1315,16 @@ export default function CVBuilderPage() {
         countAfter: countBefore,
         httpStatus: null,
         error: payload,
+      });
+      logAiClientRequestTiming({
+        requestId: reqCtx.requestId,
+        action: `rewrite_${style}`,
+        requestedLocale,
+        clientStartedAt: reqCtx.startedAt,
+        clientTimeoutMs: AI_CLIENT_TIMEOUT_MS,
+        clientAborted: err instanceof Error && err.name === 'AbortError',
+        applied: false,
+        reason: payload.code,
       });
       toast.error(msg ?? aiErrorMessage('network_error', locale));
     } finally {

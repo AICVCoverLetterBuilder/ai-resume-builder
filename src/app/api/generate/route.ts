@@ -30,6 +30,29 @@ import {
 } from '@/lib/cv-experience-duration';
 import { createHash } from 'crypto';
 import type { AiErrorCode } from '@/lib/ai-error-codes';
+import {
+  AI_PROVIDER_CALL_TIMEOUT_MS,
+  AI_SERVER_BUDGET_MS,
+  computeServerDeadline,
+  isRetryableProviderError,
+  logAiServerRequestTiming,
+  remainingBudgetMs,
+} from '@/lib/ai-request-timing';
+
+/**
+ * Explicit Vercel serverless function execution budget (seconds), so the
+ * platform's own default execution limit can never cut the recovery chain
+ * off before our internal `AI_SERVER_BUDGET_MS` deadline has a chance to
+ * return a response. A few seconds of headroom is left for routing/response
+ * serialization above `AI_SERVER_BUDGET_MS`.
+ *
+ * NOTE: Next.js requires this route-segment config to be a plain literal
+ * (no expression) to statically extract it, so it cannot directly reference
+ * `AI_SERVER_BUDGET_MS` here — kept in sync manually:
+ * AI_SERVER_BUDGET_MS (26_000ms = 26s) + 5s headroom = 31.
+ * `ai-request-timing.ts` unit tests assert this invariant stays true.
+ */
+export const maxDuration = 31;
 
 // ── Rate limiter (in-memory) ────────────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -196,7 +219,7 @@ function getClient(): Anthropic {
   if (!anthropic) {
     anthropic = new Anthropic({
       apiKey,
-      timeout: 25000,
+      timeout: AI_PROVIDER_CALL_TIMEOUT_MS,
     });
   }
   return anthropic;
@@ -280,22 +303,27 @@ function normalizeLocale(value: unknown): Locale {
   return resolveLocaleCandidate(typeof value === 'string' ? value : null) ?? DEFAULT_LOCALE;
 }
 
-async function callWithRetry(params: Parameters<Anthropic['messages']['create']>[0]): Promise<Anthropic.Messages.Message> {
+/**
+ * `deadlineAt`, when provided, bounds the total time this call (including one
+ * possible retry) is allowed to take. A call that itself timed out is NEVER
+ * retried — see `isRetryableProviderError` / `ai-request-timing.ts` — since a
+ * retry with the same per-call timeout can only make the shared request
+ * deadline worse, never better. Other genuinely fast-failing transient errors
+ * (5xx/ECONNRESET/overloaded) still get a single retry, but only when enough
+ * budget plausibly remains for it to finish.
+ */
+async function callWithRetry(
+  params: Parameters<Anthropic['messages']['create']>[0],
+  deadlineAt?: number | null,
+): Promise<Anthropic.Messages.Message> {
   const client = getClient();
   try {
     return await client.messages.create(params) as Anthropic.Messages.Message;
   } catch (err) {
-    // Retry once on transient errors (network, 5xx, timeout, overloaded)
-    const isTransient =
-      err instanceof Error &&
-      (err.message.includes('timeout') ||
-        err.message.includes('ECONNRESET') ||
-        err.message.includes('overloaded') ||
-        err.message.includes('529') ||
-        err.message.includes('503') ||
-        err.message.includes('502') ||
-        err.message.includes('500'));
-    if (isTransient) {
+    const canRetry =
+      isRetryableProviderError(err)
+      && (deadlineAt == null || remainingBudgetMs(deadlineAt) >= AI_PROVIDER_CALL_TIMEOUT_MS);
+    if (canRetry) {
       return await client.messages.create(params) as Anthropic.Messages.Message;
     }
     throw err;
@@ -351,6 +379,9 @@ export async function POST(req: NextRequest) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || req.headers.get('x-real-ip')
     || 'unknown';
+
+  const serverReceivedAt = Date.now();
+  const deadlineAt = computeServerDeadline(serverReceivedAt);
 
   try {
     const body = await req.json();
@@ -623,6 +654,7 @@ Rules:
       const langsBlock = langsList.length > 0 ? `\n\nLanguages: ${langsList.map(l => l.name + (l.level ? ' (' + l.level + ')' : '')).join(', ')}` : '';
       const eduBlock = eduList.length > 0 ? `\n\nEducation: ${eduList.map(e => [e.degree, e.school].filter(Boolean).join(' at ')).join('; ')}` : '';
 
+      const providerStartedAt = Date.now();
       const response = await callWithRetry({
         model: MODEL,
         max_tokens: 600,
@@ -661,7 +693,8 @@ Structure (3–5 sentences, 180–250 words total):
 Plain text only. No quotation marks anywhere. Finish the last sentence completely before stopping. Output the summary only — nothing else.${genderNote}`,
           },
         ],
-      });
+      }, deadlineAt);
+      const providerFinishedAt = Date.now();
 
       const rawText = getText(response);
       const cleanedText = rawText
@@ -701,6 +734,9 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
       ].filter(Boolean).join(' ').trim()
         || 'Professional with relevant experience, ready to contribute responsibly.';
 
+      let repairStartedAt: number | null = null;
+      let repairFinishedAt: number | null = null;
+      const fallbackStartedAt = Date.now();
       const activated = await activateCvSummary({
         locale: resolvedLocale,
         gender: gender || '',
@@ -708,7 +744,9 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
         candidate: cleanedText,
         sourceFactsText,
         fallbackSummary: groundedFallback,
+        deadlineAt,
         repair: async (prompt) => {
+          repairStartedAt = Date.now();
           const repaired = await callWithRetry({
             model: MODEL,
             max_tokens: 600,
@@ -716,12 +754,34 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
             stream: false,
             system: `You rewrite complete CV summaries in ${localeInfo.languageName}. Finish every sentence. Never invent duties. Plain text only.`,
             messages: [{ role: 'user', content: prompt }],
-          });
+          }, deadlineAt);
+          repairFinishedAt = Date.now();
           return getText(repaired)
             .trim()
             .replace(/^[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+/, '')
             .replace(/[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/, '');
         },
+      });
+      const fallbackFinishedAt = Date.now();
+
+      logAiServerRequestTiming({
+        requestId: typeof requestId === 'string' ? requestId : null,
+        action: 'summary_generate',
+        requestedLocale: resolvedLocale,
+        serverReceivedAt,
+        providerStartedAt,
+        providerFinishedAt,
+        providerValid: activated.status === 'passed',
+        repairAttempted: activated.repairAttempted,
+        repairSkippedReason: !activated.repairAttempted && activated.status !== 'passed'
+          ? 'insufficient_deadline_budget'
+          : null,
+        repairStartedAt,
+        repairFinishedAt,
+        fallbackStartedAt: activated.status === 'fallback' ? fallbackStartedAt : null,
+        fallbackFinishedAt: activated.status === 'fallback' ? fallbackFinishedAt : null,
+        serverRespondedAt: Date.now(),
+        deadlineAt,
       });
 
       if (_freeUserId) recordFreeAction(_freeUserId, 'summary');
@@ -756,6 +816,7 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
         professional: 'Rewrite in a polished, professional tone. Use clear, formal vocabulary without corporate jargon or filler words.',
       };
 
+      const providerStartedAt = Date.now();
       const response = await callWithRetry({
         model: MODEL,
         max_tokens: 400,
@@ -779,7 +840,8 @@ Rules:
             content: `${styleMap[style] || styleMap.professional}${genderNote}\n\nText: ${text}`,
           },
         ],
-      });
+      }, deadlineAt);
+      const providerFinishedAt = Date.now();
 
       const rewritten = getText(response) || text;
       const cvContext = params.cvContext;
@@ -813,6 +875,9 @@ Rules:
       const fallbackSummary = cvContext
         ? (cvContext.summary || text)
         : text;
+      let rewriteRepairStartedAt: number | null = null;
+      let rewriteRepairFinishedAt: number | null = null;
+      const rewriteFallbackStartedAt = Date.now();
       const activated = await activateCvSummary({
         locale: resolvedLocale,
         gender: gender || '',
@@ -820,7 +885,9 @@ Rules:
         candidate: rewritten,
         sourceFactsText,
         fallbackSummary,
+        deadlineAt,
         repair: async (prompt) => {
+          rewriteRepairStartedAt = Date.now();
           const repaired = await callWithRetry({
             model: MODEL,
             max_tokens: 400,
@@ -828,9 +895,31 @@ Rules:
             stream: false,
             system: `You repair CV text in ${localeInfo.languageName}. Keep the same facts. Finish every sentence. Plain text only.`,
             messages: [{ role: 'user', content: prompt }],
-          });
+          }, deadlineAt);
+          rewriteRepairFinishedAt = Date.now();
           return getText(repaired).trim();
         },
+      });
+      const rewriteFallbackFinishedAt = Date.now();
+
+      logAiServerRequestTiming({
+        requestId: typeof requestId === 'string' ? requestId : null,
+        action: `rewrite_${style}`,
+        requestedLocale: resolvedLocale,
+        serverReceivedAt,
+        providerStartedAt,
+        providerFinishedAt,
+        providerValid: activated.status === 'passed',
+        repairAttempted: activated.repairAttempted,
+        repairSkippedReason: !activated.repairAttempted && activated.status !== 'passed'
+          ? 'insufficient_deadline_budget'
+          : null,
+        repairStartedAt: rewriteRepairStartedAt,
+        repairFinishedAt: rewriteRepairFinishedAt,
+        fallbackStartedAt: activated.status === 'fallback' ? rewriteFallbackStartedAt : null,
+        fallbackFinishedAt: activated.status === 'fallback' ? rewriteFallbackFinishedAt : null,
+        serverRespondedAt: Date.now(),
+        deadlineAt,
       });
 
       if (activated.blocked || activated.status === 'blocked' || !activated.content.trim()) {
@@ -898,6 +987,7 @@ Rules:
         ? `FACT LOCK: You are given SOURCE BULLETS with stable IDs and semantic categories. Output EXACTLY ${canonicalBullets.length} bullets in the same order. Translate/polish grammar only. Preserve each bullet's category meaning (guest service stays guest/customer service — never replace with colleague cooperation; inventory counts/management communication must stay; do not invent standard/custom recipes unless present in SOURCE). Do NOT invent allergy checks, muddling, syrups, wastage, kitchen cooperation, evening shifts, inventory shortages, or any duty absent from SOURCE BULLETS. Serbian must use natural forms (koktele not kokteile; barmen/bartending not barteninga; level phrases must match stored enums — never "srednje naprednom").`
         : 'No prior bullets were supplied. Write role-appropriate bullets without invented metrics.';
 
+      const providerStartedAt = Date.now();
       const response = await callWithRetry({
         model: MODEL,
         max_tokens: 450,
@@ -926,7 +1016,8 @@ Output format: one bullet per line, each starting with "•". Same count and ord
 Output format: one bullet per line, each starting with "•". Nothing else.`,
           },
         ],
-      });
+      }, deadlineAt);
+      const providerFinishedAt = Date.now();
 
       let aiResult = getText(response);
       if (!aiResult || !aiResult.includes('•')) {
@@ -939,14 +1030,19 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         );
       }
 
+      let bulletsRepairStartedAt: number | null = null;
+      let bulletsRepairFinishedAt: number | null = null;
+      const bulletsFallbackStartedAt = Date.now();
       const activated = await activateCvExperienceBullets({
         locale: resolvedLocale,
         gender: gender || '',
         experienceIndex: 0,
         factSet,
         candidate: aiResult,
+        deadlineAt,
         repair: hasCanonical
           ? async (prompt) => {
+              bulletsRepairStartedAt = Date.now();
               const repaired = await callWithRetry({
                 model: MODEL,
                 max_tokens: 450,
@@ -954,10 +1050,32 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
                 stream: false,
                 system: `You repair CV bullets in ${localeInfo.languageName}. Preserve fact IDs/duties. Output only "•" lines.`,
                 messages: [{ role: 'user', content: prompt }],
-              });
+              }, deadlineAt);
+              bulletsRepairFinishedAt = Date.now();
               return getText(repaired);
             }
           : undefined,
+      });
+      const bulletsFallbackFinishedAt = Date.now();
+
+      logAiServerRequestTiming({
+        requestId: typeof requestId === 'string' ? requestId : null,
+        action: 'bullets_generate',
+        requestedLocale: resolvedLocale,
+        serverReceivedAt,
+        providerStartedAt,
+        providerFinishedAt,
+        providerValid: activated.status === 'passed',
+        repairAttempted: activated.repairAttempted,
+        repairSkippedReason: hasCanonical && !activated.repairAttempted && activated.status !== 'passed'
+          ? 'insufficient_deadline_budget'
+          : null,
+        repairStartedAt: bulletsRepairStartedAt,
+        repairFinishedAt: bulletsRepairFinishedAt,
+        fallbackStartedAt: activated.status === 'fallback' ? bulletsFallbackStartedAt : null,
+        fallbackFinishedAt: activated.status === 'fallback' ? bulletsFallbackFinishedAt : null,
+        serverRespondedAt: Date.now(),
+        deadlineAt,
       });
 
       if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');

@@ -22,6 +22,7 @@ import {
 } from './cv-semantic-fidelity';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
+import { hasRepairBudget } from './ai-request-timing';
 
 export type CvContentActivation = {
   content: string;
@@ -111,6 +112,11 @@ export async function activateCvExperienceBullets(options: {
   factSet: CvCanonicalFactSet;
   candidate: string;
   repair?: (prompt: string) => Promise<string>;
+  /** Absolute deadline (ms epoch) the whole request must respond by. When
+   * insufficient budget remains for one more provider round-trip, repair is
+   * skipped and the local deterministic fallback is used immediately instead
+   * — see `ai-request-timing.ts`. */
+  deadlineAt?: number | null;
 }): Promise<CvContentActivation> {
   const canonical = bulletsForExperience(options.factSet, options.experienceIndex);
   const canonicalJoined = canonical.map((b) => b.value).join('\n');
@@ -137,7 +143,9 @@ export async function activateCvExperienceBullets(options: {
     };
   }
 
-  if (options.repair && canonical.length > 0) {
+  let repairAttempted = false;
+  if (options.repair && canonical.length > 0 && hasRepairBudget(options.deadlineAt)) {
+    repairAttempted = true;
     try {
       const repaired = await options.repair(
         buildBulletRepairPrompt(
@@ -183,7 +191,7 @@ export async function activateCvExperienceBullets(options: {
     return {
       content: localizedFallback,
       status: 'fallback',
-      repairAttempted: Boolean(options.repair),
+      repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
     };
@@ -193,7 +201,7 @@ export async function activateCvExperienceBullets(options: {
     return {
       content: englishFallback,
       status: 'fallback',
-      repairAttempted: Boolean(options.repair),
+      repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
     };
@@ -203,7 +211,7 @@ export async function activateCvExperienceBullets(options: {
   return {
     content: '',
     status: 'blocked',
-    repairAttempted: Boolean(options.repair),
+    repairAttempted,
     fallbackUsed: true,
     blocked: true,
     violations: first.violations,
@@ -255,6 +263,11 @@ export async function activateCvSummary(options: {
   sourceFactsText: string;
   repair?: (prompt: string) => Promise<string>;
   fallbackSummary: string;
+  /** Absolute deadline (ms epoch) the whole request must respond by. When
+   * insufficient budget remains for one more provider round-trip, repair is
+   * skipped and the local deterministic fallback is used immediately instead
+   * — see `ai-request-timing.ts`. */
+  deadlineAt?: number | null;
 }): Promise<CvContentActivation> {
   const first = validateLocalizedSummary(options.candidate, options.factSet, {
     locale: options.locale,
@@ -276,7 +289,9 @@ export async function activateCvSummary(options: {
     };
   }
 
-  if (options.repair) {
+  let repairAttempted = false;
+  if (options.repair && hasRepairBudget(options.deadlineAt)) {
+    repairAttempted = true;
     try {
       const repaired = await options.repair(
         buildSummaryRepairPrompt(
@@ -330,7 +345,7 @@ export async function activateCvSummary(options: {
     return {
       content: hinted,
       status: 'fallback',
-      repairAttempted: Boolean(options.repair),
+      repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
     };
@@ -356,7 +371,7 @@ export async function activateCvSummary(options: {
     return {
       content: localized,
       status: 'fallback',
-      repairAttempted: Boolean(options.repair),
+      repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
     };
@@ -366,7 +381,7 @@ export async function activateCvSummary(options: {
     return {
       content: deterministicSummaryFromCanonical(options.factSet, hinted),
       status: 'fallback',
-      repairAttempted: Boolean(options.repair),
+      repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
     };
@@ -375,7 +390,7 @@ export async function activateCvSummary(options: {
   return {
     content: '',
     status: 'blocked',
-    repairAttempted: Boolean(options.repair),
+    repairAttempted,
     fallbackUsed: true,
     blocked: true,
     violations: first.violations,
