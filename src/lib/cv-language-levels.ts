@@ -128,7 +128,7 @@ const LOCALIZED: Record<Locale, Record<'native' | 'fluent' | 'advanced' | 'inter
   },
   hi: {
     native: 'मातृभाषा',
-    fluent: 'प्रवाहपूर्ण',
+    fluent: 'धाराप्रवाह',
     advanced: 'उन्नत',
     intermediate: 'मध्यम',
     basic: 'बुनियादी',

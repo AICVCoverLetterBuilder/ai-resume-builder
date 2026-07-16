@@ -4,7 +4,7 @@
  */
 import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
-import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
+import { formatExperienceBullets, splitExperienceBullets, buildCvCanonicalFactSet, classifyDutyCategory } from './cv-canonical-facts';
 import {
   buildExperienceDurationSnapshot,
   formatApproximateDurationPhrase,
@@ -17,7 +17,17 @@ import {
   validateSummaryDuration,
 } from './cv-experience-duration';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
-import { hasMisplacedHindiDuration, isDurationOnlyFragmentSentence, UNSUPPORTED_SUMMARY_FLUFF } from './cv-semantic-fidelity';
+import {
+  hasMisplacedHindiDuration,
+  isDurationOnlyFragmentSentence,
+  UNSUPPORTED_SUMMARY_FLUFF,
+  validateLocalizedSummary,
+  validateSummaryCompleteness,
+} from './cv-semantic-fidelity';
+import { resolveOccupationalTitleForSummary } from './cv-role-title';
+import { deduplicateSkillsForExport } from './cv-skills-projection';
+import { localizeCvLanguageLevel } from './cv-language-levels';
+import { deterministicLocalizedSummaryFromCanonical, localizeCanonicalBulletLine } from './cv-localized-fallback';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
 export type DurationIntegrationContext = {
@@ -277,11 +287,43 @@ export function applySerbianCurrentRoleTense(text: string): string {
     [/\bSarađivao sam\b/gu, 'Sarađujem'],
     [/\bVodila sam\b/gu, 'Vodim'],
     [/\bVodio sam\b/gu, 'Vodim'],
+    [/\bRadila sam\b/gu, 'Radim'],
+    [/\bRadio sam\b/gu, 'Radim'],
+    [/\bAnalizirala sam\b/gu, 'Analiziram'],
+    [/\bAnalizirao sam\b/gu, 'Analiziram'],
+    [/\bUčestvovala sam\b/gu, 'Učestvujem'],
+    [/\bUčestvovao sam\b/gu, 'Učestvujem'],
     [/\bpružala\b/gu, 'pružam'],
     [/\bpružao\b/gu, 'pružam'],
     [/\bunosila\b/gu, 'unosim'],
     [/\bunosio\b/gu, 'unosim'],
   ];
+  for (const [re, repl] of pairs) out = out.replace(re, repl);
+  return out;
+}
+
+/** Hindi present-progressive for ongoing production/process roles. */
+export function applyProductionHindiPresentTense(text: string, gender?: string): string {
+  const g = normalizeCoverLetterGender(gender);
+  const female = g !== 'male';
+  let out = text || '';
+  const pairs: Array<[RegExp, string]> = female
+    ? [
+      [/काम करती थी/gu, 'काम कर रही हूँ'],
+      [/सहयोग करती थी/gu, 'सहयोग कर रही हूँ'],
+      [/विश्लेषण करती थी/gu, 'विश्लेषण कर रही हूँ'],
+      [/तैयार करती थी/gu, 'तैयार कर रही हूँ'],
+      [/भाग लेती थी/gu, 'भाग ले रही हूँ'],
+      [/योजना बनाती थी/gu, 'योजना बना रही हूँ'],
+    ]
+    : [
+      [/काम करता था/gu, 'काम कर रहा हूँ'],
+      [/सहयोग करता था/gu, 'सहयोग कर रहा हूँ'],
+      [/विश्लेषण करता था/gu, 'विश्लेषण कर रहा हूँ'],
+      [/तैयार करता था/gu, 'तैयार कर रहा हूँ'],
+      [/भाग लेता था/gu, 'भाग ले रहा हूँ'],
+      [/योजना बनाता था/gu, 'योजना बना रहा हूँ'],
+    ];
   for (const [re, repl] of pairs) out = out.replace(re, repl);
   return out;
 }
@@ -306,10 +348,32 @@ export function normalizeExperienceBulletsForQuality(
         return preferred;
       }
     }
+    if (
+      classifyDutyCategory(sourceText) === 'generic'
+      && (locale === 'hi' || locale === 'sr' || locale === 'hr')
+    ) {
+      const localized = localizeCanonicalBulletLine(sourceText, locale, gender);
+      if (localized) {
+        let next = localized;
+        if (locale === 'hi' && isPresent) {
+          next = applyProductionHindiPresentTense(next, gender);
+        }
+        if ((locale === 'sr' || locale === 'hr') && isPresent) {
+          next = applySerbianCurrentRoleTense(next);
+        }
+        if (next !== text) changed = true;
+        return next;
+      }
+    }
     if (locale === 'hi') {
       const before = text;
       text = normalizeHindiCustomerServiceWording(text);
-      if (isPresent) text = applyHindiCurrentRoleTense(text);
+      if (isPresent) {
+        text = applyHindiCurrentRoleTense(text);
+        if (!classifyContactCenterMeaning(sourceText)) {
+          text = applyProductionHindiPresentTense(text, gender);
+        }
+      }
       if (text !== before) changed = true;
     }
     if ((locale === 'sr' || locale === 'hr') && isPresent) {
@@ -459,6 +523,8 @@ export function injectHindiDurationWithOpening(
     cleaned = stripHindiEmploymentDuplicate(cleaned, context);
     cleaned = cleaned.replace(/^[,\s]+|[,\s]+$/gu, '').trim();
     if (!cleaned || cleaned.length < 8) continue;
+    if (/\bV\b/u.test(cleaned) || /पेशेवर के पास प्रासंगिक अनुभव है/u.test(cleaned)) continue;
+    if (/स्टॉक|इन्वेंटरी|आपूर्ति/u.test(cleaned)) continue;
     if (sentenceOverlapsOpening(cleaned, opening)) continue;
     if (!/[।.!?…]\s*$/u.test(cleaned)) cleaned = `${cleaned}।`;
     remainderParts.push(cleaned);
@@ -654,7 +720,7 @@ export function resolveSummaryWithDurationPolicy(
     if (locale === 'hi') {
       fallback = duration.hasValidDates
         ? buildHindiIntegratedDurationSentence(duration, context || {})
-        : 'पेशेवर के पास प्रासंगिक अनुभव है।';
+        : buildHindiIntegratedDurationSentence(duration, context || { role: 'पेशेवर' });
     } else if (locale === 'sr' || locale === 'hr') {
       fallback = phrase ? `Profesionalka ${phrase}.` : 'Profesionalka sa relevantnim iskustvom.';
     } else if (locale === 'ja') {
@@ -740,7 +806,12 @@ export function applyCvContentQuality(
   const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
   const hasCurrentRole = (cv.experience || []).some((e) => e.isPresent);
   const durationContext: DurationIntegrationContext = {
-    role: primaryExp?.position || cv.personal?.jobTitle || '',
+    role: resolveOccupationalTitleForSummary({
+      profileJobTitle: cv.personal?.jobTitle,
+      currentExperienceTitle: primaryExp?.position,
+      locale,
+      gender,
+    }),
     company: primaryExp?.company || '',
     startDate: primaryExp?.startDate || '',
     gender,
@@ -763,7 +834,15 @@ export function applyCvContentQuality(
   summary = summaryResult.summary;
   if (locale === 'hi') {
     const before = summary;
-    if (requireDuration && hasMisplacedHindiDuration(summary)) {
+    if (
+      requireDuration
+      && (
+        hasMisplacedHindiDuration(summary)
+        || /\bV\b/u.test(summary)
+        || /पेशेवर के पास प्रासंगिक अनुभव है/u.test(summary)
+        || /स्टॉक|इन्वेंटरी|आपूर्ति/u.test(summary)
+      )
+    ) {
       summary = injectHindiDurationWithOpening(summary, duration, durationContext);
       repaired = true;
     }
@@ -788,11 +867,60 @@ export function applyCvContentQuality(
     violations.push('experience_duration_mismatch');
   }
 
+  const factSet = buildCvCanonicalFactSet({ ...cv, experience });
+  const summaryIntegrity = validateLocalizedSummary(summary, factSet, {
+    locale,
+    gender,
+    expectedDuration: duration,
+    stage: 'export-quality',
+  });
+  const completeness = validateSummaryCompleteness(summary, { locale });
+  const blockingKinds = new Set([
+    'summary_incomplete',
+    'generic_summary_template_leak',
+    'unsupported_summary_fact',
+    'unsupported_achievement_or_impact',
+    'invalid_occupational_title_in_summary',
+  ]);
+  const needsGroundedFallback = !completeness.valid
+    || summaryIntegrity.violations.some((v) => blockingKinds.has(v.kind));
+  if (needsGroundedFallback && summaryOriginRequiresDuration(origin)) {
+    const grounded = deterministicLocalizedSummaryFromCanonical(factSet, locale, gender, duration);
+    if (grounded) {
+      const groundedResolved = resolveSummaryWithDurationPolicy(grounded, duration, locale, {
+        forceDurationPhrase: requireDuration,
+        requireDurationClaim: requireDuration,
+        context: durationContext,
+      });
+      const groundedCheck = validateLocalizedSummary(groundedResolved.summary, factSet, {
+        locale,
+        gender,
+        expectedDuration: duration,
+        stage: 'export-fallback',
+      });
+      const groundedComplete = validateSummaryCompleteness(groundedResolved.summary, { locale }).valid;
+      const groundedBlocked = groundedCheck.violations.some((v) => blockingKinds.has(v.kind));
+      if (groundedComplete && !groundedBlocked) {
+        summary = groundedResolved.summary;
+        nextOrigin = 'deterministic_fallback';
+        repaired = true;
+      }
+    }
+  }
+
+  const localizedLanguages = (cv.languages || []).map((lang) => ({
+    name: lang.name,
+    level: localizeCvLanguageLevel(lang.level, locale),
+  }));
+  const localizedSkills = deduplicateSkillsForExport(cv.skills || [], locale);
+
   return {
     cv: {
       ...cv,
       summary,
       experience,
+      languages: localizedLanguages,
+      skills: localizedSkills,
       ...(nextOrigin ? { summaryOrigin: nextOrigin } : {}),
     },
     durationSnapshot,

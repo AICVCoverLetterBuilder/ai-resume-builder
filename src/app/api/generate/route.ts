@@ -711,30 +711,44 @@ Rules:
       });
 
       const rewritten = getText(response) || text;
-      const rewriteFactSet = buildCvCanonicalFactSet({
-        personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '' },
-        summary: text,
-        experience: [{
-          id: 'rewrite-0',
-          company: '',
-          position: '',
-          startDate: '',
-          endDate: '',
-          isPresent: false,
-          description: text,
-        }],
-        education: [],
-        skills: [],
-        certifications: [],
-        languages: [],
-      });
+      const cvContext = params.cvContext;
+      const rewriteFactSet = cvContext
+        ? buildCvCanonicalFactSet(cvContext)
+        : buildCvCanonicalFactSet({
+          personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '' },
+          summary: text,
+          experience: [{
+            id: 'rewrite-0',
+            company: '',
+            position: '',
+            startDate: '',
+            endDate: '',
+            isPresent: false,
+            description: text,
+          }],
+          education: [],
+          skills: [],
+          certifications: [],
+          languages: [],
+        });
+      const sourceFactsText = cvContext
+        ? [
+          cvContext.personal?.jobTitle || '',
+          ...(cvContext.experience || []).map((e: { position?: string; company?: string; description?: string }) =>
+            [e.position, e.company, e.description].filter(Boolean).join(' — ')),
+          (cvContext.skills || []).join(', '),
+        ].filter(Boolean).join('\n')
+        : text;
+      const fallbackSummary = cvContext
+        ? (cvContext.summary || text)
+        : text;
       const activated = await activateCvSummary({
         locale: resolvedLocale,
         gender: gender || '',
         factSet: rewriteFactSet,
         candidate: rewritten,
-        sourceFactsText: text,
-        fallbackSummary: text,
+        sourceFactsText,
+        fallbackSummary,
         repair: async (prompt) => {
           const repaired = await callWithRetry({
             model: MODEL,

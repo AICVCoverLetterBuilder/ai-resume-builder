@@ -16,6 +16,7 @@ import {
   formatApproximateDurationPhrase,
   type ExperienceDuration,
 } from './cv-experience-duration';
+import { resolveOccupationalTitleForSummary } from './cv-role-title';
 
 type GenderTone = 'male' | 'female' | 'neutral';
 
@@ -231,18 +232,20 @@ const SUMMARY_SHELL: Record<Locale, (role: string, duties: string, g: GenderTone
       ? `${role || 'Profissional'} ${durationPhrase}. ${duties}`.trim()
       : `${role || 'Profissional'} com experiência relevante. ${duties}`.trim(),
   hi: (role, duties, _g, durationPhrase) =>
-    durationPhrase
-      ? `${role || 'पेशेवर'} ${durationPhrase}। ${duties}`.trim()
-      : `${role || 'पेशेवर'} के पास प्रासंगिक अनुभव है। ${duties}`.trim(),
+    durationPhrase && role
+      ? `मैं ${durationPhrase} वाली ${role} हूँ। ${duties}`.trim()
+      : role
+        ? `${role} के रूप में ${duties}`.trim()
+        : duties,
   ja: (role, duties, _g, durationPhrase) =>
     durationPhrase
       ? `${role || 'プロフェッショナル'}${durationPhrase}。${duties}`.trim()
       : `${role || 'プロフェッショナル'}として関連経験があります。${duties}`.trim(),
 };
 
-function localizeRoleLabel(role: string, locale: Locale, g: GenderTone): string {
+function localizeRoleLabel(role: string, locale: Locale, g: GenderTone, profileJobTitle?: string): string {
   const raw = (role || '').trim();
-  if (!raw) return '';
+  const gender = g === 'male' ? 'male' : g === 'female' ? 'female' : '';
   if (/bartender/i.test(raw)) {
     const map: Partial<Record<Locale, string>> = {
       en: 'Bartender',
@@ -260,12 +263,53 @@ function localizeRoleLabel(role: string, locale: Locale, g: GenderTone): string 
     };
     return map[locale] || raw;
   }
-  // Avoid injecting raw English job titles into locales with gendered forms that would fail validation.
-  if (locale !== 'en' && /^[A-Za-z][A-Za-z\s/&'’.-]{0,60}$/.test(raw)) {
-    return '';
-  }
-  return raw;
+  return resolveOccupationalTitleForSummary({
+    profileJobTitle,
+    currentExperienceTitle: raw,
+    locale,
+    gender,
+  });
 }
+
+type GenericDutyIntent = 'process' | 'collaboration' | 'analysis' | 'planning';
+
+function classifyGenericDutyIntent(text: string): GenericDutyIntent | null {
+  const t = text.toLowerCase();
+  if (/\b(process|internal|implement|razvoj|unapređ|proces|प्रक्रिया)\b/iu.test(t)) return 'process';
+  if (/\b(cross.?functional|collaborat|saradn|tim|project execution|सहयोग|परियोजना)\b/iu.test(t)) return 'collaboration';
+  if (/\b(data|analys|report|izveštaj|analiz|विश्लेषण|रिपोर्ट)\b/iu.test(t)) return 'analysis';
+  if (/\b(plan|planning|coordinat|coordination|koordin|planir|योजना|समन्वय)\b/iu.test(t)) return 'planning';
+  return null;
+}
+
+const GENERIC_INTENT_BULLET: Partial<
+  Record<Locale, Record<GenericDutyIntent, (g: GenderTone) => string>>
+> = {
+  en: {
+    process: () => 'Develop and implement internal processes.',
+    collaboration: () => 'Collaborate with cross-functional teams on project execution.',
+    analysis: () => 'Analyze business data and prepare reports for senior management.',
+    planning: () => 'Plan and coordinate departmental activities.',
+  },
+  sr: {
+    process: () => 'Radim na razvoju i implementaciji internih procesa.',
+    collaboration: () => 'Sarađujem sa međufunkcionalnim timovima na izvršenju projekata.',
+    analysis: () => 'Analiziram poslovne podatke i pripremam izveštaje za više rukovodstvo.',
+    planning: () => 'Učestvujem u planiranju i koordinaciji aktivnosti odeljenja.',
+  },
+  hr: {
+    process: () => 'Radim na razvoju i implementaciji internih procesa.',
+    collaboration: () => 'Surađujem s međufunkcionalnim timovima na izvršenju projekata.',
+    analysis: () => 'Analiziram poslovne podatke i pripremam izvještaje za više rukovodstvo.',
+    planning: () => 'Sudjelujem u planiranju i koordinaciji aktivnosti odjela.',
+  },
+  hi: {
+    process: (g) => (g === 'male' ? 'आंतरिक प्रक्रियाओं के विकास और कार्यान्वयन में काम कर रहा हूँ।' : 'आंतरिक प्रक्रियाओं के विकास और कार्यान्वयन में काम कर रही हूँ।'),
+    collaboration: (g) => (g === 'male' ? 'परियोजना क्रियान्वयन पर क्रॉस-फंक्शनल टीमों के साथ सहयोग कर रहा हूँ।' : 'परियोजना क्रियान्वयन पर क्रॉस-फंक्शनल टीमों के साथ सहयोग कर रही हूँ।'),
+    analysis: (g) => (g === 'male' ? 'व्यावसायिक डेटा का विश्लेषण कर रहा हूँ और वरिष्ठ प्रबंधन के लिए रिपोर्ट तैयार कर रहा हूँ।' : 'व्यावसायिक डेटा का विश्लेषण कर रही हूँ और वरिष्ठ प्रबंधन के लिए रिपोर्ट तैयार कर रही हूँ।'),
+    planning: (g) => (g === 'male' ? 'विभागीय गतिविधियों की योजना और समन्वय में भाग ले रहा हूँ।' : 'विभागीय गतिविधियों की योजना और समन्वय में भाग ले रही हूँ।'),
+  },
+};
 
 function localizedBulletForFact(
   fact: CvCanonicalFact,
@@ -275,12 +319,30 @@ function localizedBulletForFact(
   const g = tone(gender);
   const category = fact.category || classifyDutyCategory(fact.sourceText || fact.value);
   if (category === 'generic') {
+    const intent = classifyGenericDutyIntent(fact.sourceText || fact.value);
+    const table = GENERIC_INTENT_BULLET[locale] || GENERIC_INTENT_BULLET.en;
+    if (intent && table?.[intent]) return table[intent](g).trim();
     if (locale === 'en') return (fact.sourceText || fact.value).trim();
-    // Non-English: cannot claim a safe translation for unknown duties — force block upstream.
     return '';
   }
   const table = BULLET_BY_CATEGORY[locale] || BULLET_BY_CATEGORY.en;
   return table[category](g).trim();
+}
+
+export function localizeCanonicalBulletLine(
+  sourceText: string,
+  locale: Locale,
+  gender?: CoverLetterGender | string,
+): string {
+  const fact: CvCanonicalFact = {
+    id: 'tmp',
+    type: 'experience_bullet',
+    value: sourceText.replace(/^[•\-\*\u2022]\s*/, '').trim(),
+    sourceText: sourceText.replace(/^[•\-\*\u2022]\s*/, '').trim(),
+    category: classifyDutyCategory(sourceText),
+    source: 'tmp',
+  };
+  return localizedBulletForFact(fact, locale, gender);
 }
 
 export function deterministicLocalizedBulletsFromCanonical(
@@ -304,7 +366,8 @@ export function deterministicLocalizedSummaryFromCanonical(
   const rawRole = factSet.facts.find((f) => f.type === 'job_title')?.value
     || factSet.facts.find((f) => f.type === 'role')?.value
     || '';
-  const role = localizeRoleLabel(rawRole, locale, g);
+  const profileTitle = factSet.facts.find((f) => f.type === 'job_title')?.value || '';
+  const role = localizeRoleLabel(rawRole, locale, g, profileTitle);
   const bullets = factSet.facts
     .filter((f) => f.type === 'experience_bullet')
     .slice(0, 4)

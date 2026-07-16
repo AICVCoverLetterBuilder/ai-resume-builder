@@ -1337,11 +1337,9 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
     expect(text).not.toContain('Nastavnikgeografije');
     expect(text).not.toContain('Metematičkifakultet');
 
-    // Skills preserve same order/duplicates as the source array, mapped through
-    // the same per-skill label lookup the DOCX export uses (identity for these
-    // plain English labels, so text is unchanged here).
+    // Skills are deduplicated in the shared export projection while preserving first-occurrence order.
     const skillChips = Array.from(root.querySelectorAll<HTMLElement>('[data-export-skill-chip="true"]'));
-    expect(skillChips.map(el => el.textContent)).toEqual(['Teamwork', 'Organization', 'Coaching', 'Coaching', 'Leadership']);
+    expect(skillChips.map(el => el.textContent)).toEqual(['Teamwork', 'Organization', 'Coaching', 'Leadership']);
     skillChips.forEach((el) => expect(el.style.whiteSpace).toBe('nowrap'));
   });
 
@@ -1440,7 +1438,7 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
     expect(drawn).toContain('Učitelj u osnovnoj školi');
     expect(drawn).toContain('Metematički fakultet');
     expect(drawn).not.toContain('Metematičkifakultet');
-    expect((drawn.match(/Coaching/g) ?? [])).toHaveLength(2);
+    expect((drawn.match(/Coaching/g) ?? [])).toHaveLength(1);
   });
 
   test('Creative Artistic PDF export save path writes a non-empty PDF through platform save using cvRef-equivalent latest data', async () => {

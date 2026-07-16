@@ -229,7 +229,10 @@ export function deterministicSummaryFromCanonical(
     hintUsable ? safeHint : '',
   ].filter(Boolean);
   let text = parts.join(' ').replace(/\s+/g, ' ').trim();
-  if (!text) text = 'Professional with relevant experience.';
+  if (!text) {
+    const rolePart = role ? `${role}.` : '';
+    text = rolePart || 'Experienced professional ready to contribute responsibly.';
+  }
   if (!/[.!?…।۔]\s*$/u.test(text)) text = `${text}.`;
   return text;
 }

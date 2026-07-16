@@ -38,13 +38,9 @@ import {
   applyCanonicalSkillsLanguagesEducationEdit,
   applyCanonicalSummaryEdit,
 } from '@/lib/cv-canonical-snapshot';
-import { validateSummaryCompleteness } from '@/lib/cv-semantic-fidelity';
-import {
-  buildExperienceDurationSnapshot,
-  durationToPromptToken,
-  validateSummaryDuration,
-} from '@/lib/cv-experience-duration';
-import { applyCvContentQuality, resolveSummaryWithDurationPolicy, stripUnsupportedSummaryFluff } from '@/lib/cv-content-quality';
+import { buildExperienceDurationSnapshot, durationToPromptToken } from '@/lib/cv-experience-duration';
+import { applyCvContentQuality } from '@/lib/cv-content-quality';
+import { finalizeClientAiSummary } from '@/lib/cv-summary-integrity';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
@@ -813,46 +809,18 @@ export default function CVBuilderPage() {
         }
         throw new Error(summaryData.error || 'AI error');
       }
-      let nextSummary = (summaryData.result ?? '').trim();
-      nextSummary = stripUnsupportedSummaryFluff(nextSummary, locale);
-      if (!validateSummaryCompleteness(nextSummary, { locale }).valid) {
+      const nextSummary = (summaryData.result ?? '').trim();
+      const finalized = finalizeClientAiSummary(nextSummary, cv, locale, durationSnapshot);
+      if (finalized.blocked) {
         toast.error(locale === 'hi'
-          ? 'AI summary was incomplete and was not applied. Please try again.'
-          : 'AI summary failed completeness checks and was not applied. Please try again.');
-        return;
-      }
-      // AI-generated summaries must include the shared deterministic duration (all locales).
-      const primaryExpForSummary = cv.experience.find((e) => e.isPresent) || cv.experience[0];
-      const durationResolved = resolveSummaryWithDurationPolicy(
-        nextSummary,
-        durationSnapshot.total,
-        locale,
-        {
-          forceDurationPhrase: true,
-          requireDurationClaim: true,
-          context: {
-            role: primaryExpForSummary?.position || cv.personal.jobTitle || '',
-            company: primaryExpForSummary?.company || '',
-            startDate: primaryExpForSummary?.startDate || '',
-            gender: cv.personal.gender || '',
-          },
-        },
-      );
-      nextSummary = durationResolved.summary;
-      if (
-        !validateSummaryCompleteness(nextSummary, { locale }).valid
-        || !validateSummaryDuration(nextSummary, durationSnapshot.total, {
-          requireDurationClaim: true,
-          locale,
-        }).valid
-      ) {
-        toast.error('AI summary duration was inconsistent and was not applied. Please try again.');
+          ? 'AI summary failed integrity checks and was not applied. Please try again.'
+          : 'AI summary failed integrity checks and was not applied. Please try again.');
         return;
       }
       setCv((prev) => acceptValidatedAiContent(prev, {
         locale,
-        summary: nextSummary,
-        summaryOrigin: durationResolved.status === 'passed' ? 'ai_generated' : 'ai_repaired',
+        summary: finalized.summary,
+        summaryOrigin: finalized.origin,
       }));
       recordProAiSuccess();
       toast.success(t.cv.genSuccess);
@@ -941,37 +909,42 @@ export default function CVBuilderPage() {
     const timer = setTimeout(() => controller.abort(), 30000);
     try {
       const { data: rewriteData, response: res } = await apiFetch<{ result?: string; error?: string }>('/api/generate', {
-        body: { action: 'rewrite', proToken, text: cv.summary, style, locale, gender: cv.personal.gender || '' },
+        body: {
+          action: 'rewrite',
+          proToken,
+          text: cv.summary,
+          style,
+          locale,
+          gender: cv.personal.gender || '',
+          cvContext: {
+            personal: cv.personal,
+            summary: cv.canonicalSummary || cv.summary,
+            canonicalSummary: cv.canonicalSummary || '',
+            experience: cv.experience.map((e) => ({
+              ...e,
+              description: freezeCanonicalExperienceDescription(e),
+              canonicalDescription: e.canonicalDescription || freezeCanonicalExperienceDescription(e),
+            })),
+            education: cv.education,
+            skills: cv.skills,
+            languages: cv.languages,
+            certifications: cv.certifications,
+          },
+        },
         signal: controller.signal,
       });
       if (!res.ok || rewriteData.error) throw new Error(rewriteData.error || 'AI error');
-      const nextSummary = (rewriteData.result ?? cv.summary).trim();
-      if (!validateSummaryCompleteness(nextSummary, { locale }).valid) {
-        toast.error('AI rewrite was incomplete and was not applied. Please try again.');
-        return;
-      }
       const referenceDateIso = new Date().toISOString().slice(0, 10);
       const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
-      const primaryExpForRewrite = cv.experience.find((e) => e.isPresent) || cv.experience[0];
-      const durationResolved = resolveSummaryWithDurationPolicy(
-        nextSummary,
-        durationSnapshot.total,
-        locale,
-        {
-          forceDurationPhrase: true,
-          requireDurationClaim: true,
-          context: {
-            role: primaryExpForRewrite?.position || cv.personal.jobTitle || '',
-            company: primaryExpForRewrite?.company || '',
-            startDate: primaryExpForRewrite?.startDate || '',
-            gender: cv.personal.gender || '',
-          },
-        },
-      );
+      const finalized = finalizeClientAiSummary((rewriteData.result ?? cv.summary).trim(), cv, locale, durationSnapshot);
+      if (finalized.blocked) {
+        toast.error('AI rewrite failed integrity checks and was not applied. Please try again.');
+        return;
+      }
       setCv((prev) => acceptValidatedAiContent(prev, {
         locale,
-        summary: durationResolved.summary,
-        summaryOrigin: durationResolved.status === 'passed' ? 'ai_generated' : 'ai_repaired',
+        summary: finalized.summary,
+        summaryOrigin: finalized.origin,
       }));
       recordProAiSuccess();
       toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);

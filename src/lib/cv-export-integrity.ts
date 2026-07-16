@@ -62,6 +62,7 @@ function isValidLocalizedExperience(
   experienceIndex: number,
   canonicalDescription: string,
   canonicalLocale?: Locale,
+  isPresent?: boolean,
 ): boolean {
   if (!candidate.trim()) return false;
   const check = validateLocalizedExperienceBullets(candidate, factSet, {
@@ -69,6 +70,7 @@ function isValidLocalizedExperience(
     gender,
     experienceIndex,
     stage: 'export',
+    isPresent,
   });
   if (!check.valid) return false;
   if (isEnglishCanonicalDump(candidate, canonicalDescription, locale, { canonicalLocale })) return false;
@@ -125,6 +127,7 @@ function localizeCvAgainstCanonical(
       experienceIndex,
       canonicalDescription,
       canonicalLocale,
+      exp.isPresent,
     )) {
       return {
         ...exp,
@@ -145,6 +148,7 @@ function localizeCvAgainstCanonical(
         experienceIndex,
         canonicalDescription,
         canonicalLocale,
+        exp.isPresent,
       )
     ) {
       return {

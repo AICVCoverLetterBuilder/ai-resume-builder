@@ -18,6 +18,8 @@ import {
   type ExperienceDuration,
   validateSummaryDuration,
 } from './cv-experience-duration';
+import { localizeCvLanguageLevel } from './cv-language-levels';
+import { isValidOccupationalTitle } from './cv-role-title';
 
 export type CvFidelityViolationKind =
   | 'unsupported_duty'
@@ -32,7 +34,13 @@ export type CvFidelityViolationKind =
   | 'language_level_mismatch'
   | 'experience_duration_mismatch'
   | 'summary_sentence_fragment'
-  | 'summary_duration_misplaced';
+  | 'summary_duration_misplaced'
+  | 'generic_summary_template_leak'
+  | 'unsupported_summary_fact'
+  | 'unsupported_achievement_or_impact'
+  | 'current_role_tense_mismatch'
+  | 'mixed_locale_proficiency'
+  | 'invalid_occupational_title_in_summary';
 
 export type CvFidelityViolation = {
   kind: CvFidelityViolationKind;
@@ -87,7 +95,56 @@ const SUMMARY_INCOMPLETE_PATTERNS: RegExp[] = [
   /…\s*$/u,
   /\.\.\.\s*$/u,
   /[\u0600-\u06FF]\s*و\s*$/u,
+  /\bi\s+trajno\s*$/iu,
+  /\bi\s+kontinuirano\s*$/iu,
+  /\bkao\s+i\s*$/iu,
+  /\bs\s+ciljem\s+da\s*$/iu,
+  /\bkvalitet\s+i\s+trajno\s*$/iu,
+  /\borganizacijama\s+koje\s+cene\s+efikasnost,\s+kvalitet\s+i\s+trajno\s*$/iu,
+  /\b(trajno|kontinuirano|efikasnost|kvalitet)\s*$/iu,
 ];
+
+const GENERIC_TEMPLATE_PATTERNS: Array<{ locale?: Locale; re: RegExp }> = [
+  { locale: 'hi', re: /पेशेवर के पास प्रासंगिक अनुभव है/u },
+  { locale: 'hi', re: /उम्मीदवार के पास आवश्यक कौशल हैं/u },
+  { locale: 'en', re: /\bThe candidate has relevant experience\b/iu },
+  { locale: 'en', re: /\bThe professional has the necessary skills\b/iu },
+  { locale: 'en', re: /\bProfessional with relevant experience\b/iu },
+  { locale: 'sr', re: /\bKandidat ima relevantno iskustvo\b/iu },
+  { locale: 'sr', re: /\bProfesionalac poseduje potrebne veštine\b/iu },
+  { locale: 'sr', re: /\bsa relevantnim iskustvom\b/iu },
+  { locale: 'hr', re: /\bs relevantnim iskustvom\b/iu },
+];
+
+const UNSUPPORTED_ACHIEVEMENT_PATTERNS: RegExp[] = [
+  /stabilnijem\s+funkcionisanju\s+organizacije/iu,
+  /samouvereno\s+savladava\s+izazove/iu,
+  /poveže\s+različite\s+sektore/iu,
+  /partnerima\s+iz\s+različitih\s+zemalja/iu,
+  /produktivn\w*\s+saradnj\w*\s+sa\s+partnerima/iu,
+  /improved\s+organizational\s+stability/iu,
+  /international\s+partners?/iu,
+  /exceptional\s+confidence/iu,
+  /organizational\s+transformation/iu,
+];
+
+const SUMMARY_CATEGORY_MARKERS: Record<Exclude<CvDutyCategory, 'generic'>, RegExp> = {
+  inventory_stock:
+    /(stock\s*level|inventory\s*count|supply\s*need|zalih|inventar|skladišt|स्टॉक|इन्वेंटरी|आपूर्ति|مخزون|replenish|dopun)/iu,
+  beverage_service:
+    /(bartend|cocktail|koktel|bar\s+service|कॉकटेल|पेय\s+तैयार)/iu,
+  customer_service_guest_relationship:
+    /(guest\s+service|gostima|ग्राहक\s+सेवा|atentive\s+customer)/iu,
+  hygiene_safety:
+    /(bar\s+area|higijen|hygiene\s+standard|स्वच्छता\s+मानक)/iu,
+};
+
+const SR_PAST_CURRENT_ROLE = /\b(Radila\s+sam|Analizirala\s+sam|Učestvovala\s+sam|Radio\s+sam|Analizirao\s+sam|Učestvovao\s+sam)\b/giu;
+const SR_PRESENT_CURRENT_ROLE = /\b(Radim|Sarađujem|Analiziram|Učestvujem)\b/giu;
+
+const SR_KNOWN_LEVELS = /\b(Napredni|Tečan|Srednji|Osnovni|Maternji)\b/u;
+const EN_KNOWN_LEVELS = /\b(Advanced|Fluent|Intermediate|Basic|Native)\b/i;
+const HI_KNOWN_LEVELS = /(उन्नत|प्रवाहपूर्ण|धाराप्रवाह|मध्यम|बुनियादी|मातृभाषा)/u;
 
 const LOCALE_QUALITY_PATTERNS: Array<{ locale?: Locale; re: RegExp; kind?: CvFidelityViolationKind }> = [
   { locale: 'sr', re: /\bspreman je\b/iu, kind: 'gender_form_mismatch' },
@@ -148,8 +205,14 @@ export function isDurationOnlyFragmentSentence(sentence: string): boolean {
 export const UNSUPPORTED_SUMMARY_FLUFF: Array<{ locale?: Locale; re: RegExp }> = [
   { locale: 'sr', re: /[^.?!]*\bobogaćuje\b[^.?!]*[.?!]?/giu },
   { locale: 'sr', re: /Izrada izveštaja dodatno[^.?!]*[.?!]?/giu },
+  { locale: 'sr', re: /[^.?!]*\bdoprinela\s+stabilnijem\s+funkcionisanju[^.?!]*[.?!]?/giu },
+  { locale: 'sr', re: /[^.?!]*\bproduktivn\w*\s+saradnj\w*\s+sa\s+partnerima[^.?!]*[.?!]?/giu },
+  { locale: 'sr', re: /[^.?!]*\bsamouvereno\s+savladava\s+izazove[^.?!]*[.?!]?/giu },
+  { locale: 'sr', re: /[^.?!]*\bpoveže\s+različite\s+sektore[^.?!]*[.?!]?/giu },
   { locale: 'hi', re: /,?\s*जिससे ग्राहक संतुष्टि सुनिश्चित होती है।?/gu },
   { locale: 'hi', re: /ग्राहक संतुष्टि सुनिश्चित होती है।?/gu },
+  { locale: 'hi', re: /पेशेवर के पास प्रासंगिक अनुभव है।?/gu },
+  { locale: 'hi', re: /[^।.!?]*(?:स्टॉक\s+स्तर|इन्वेंटरी\s+गणना|आपूर्ति\s+आवश्यक)[^।.!?]*[।.!?]?/gu },
 ];
 
 /** True when a Hindi duration clause is comma-spliced after an unrelated finite verb. */
@@ -215,6 +278,191 @@ function canonicalDutyCorpus(factSet: CvCanonicalFactSet): string {
     .filter((f) => f.type === 'experience_bullet' || f.type === 'summary')
     .map((f) => f.value.toLowerCase())
     .join('\n');
+}
+
+function canonicalDutyCategories(factSet: CvCanonicalFactSet): Set<CvDutyCategory> {
+  const cats = new Set<CvDutyCategory>();
+  for (const fact of factSet.facts) {
+    if (fact.type !== 'experience_bullet') continue;
+    cats.add(fact.category || classifyDutyCategory(fact.sourceText || fact.value));
+  }
+  return cats;
+}
+
+function validateGenericTemplateLeak(
+  text: string,
+  locale?: Locale | string,
+): CvFidelityViolation[] {
+  const violations: CvFidelityViolation[] = [];
+  for (const row of GENERIC_TEMPLATE_PATTERNS) {
+    if (row.locale && locale && row.locale !== locale) continue;
+    const m = text.match(row.re);
+    if (m?.[0]) {
+      violations.push({
+        kind: 'generic_summary_template_leak',
+        matched: m[0],
+        section: 'summary',
+      });
+    }
+  }
+  return violations;
+}
+
+function validateSummaryFactGrounding(
+  summary: string,
+  factSet: CvCanonicalFactSet,
+): CvFidelityViolation[] {
+  const violations: CvFidelityViolation[] = [];
+  const cats = canonicalDutyCategories(factSet);
+  const joined = normalizeLoose(summary);
+  const categories = Object.keys(SUMMARY_CATEGORY_MARKERS) as Array<Exclude<CvDutyCategory, 'generic'>>;
+  for (const category of categories) {
+    if (cats.has(category)) continue;
+    const m = joined.match(SUMMARY_CATEGORY_MARKERS[category]);
+    if (m?.[0]) {
+      violations.push({
+        kind: 'unsupported_summary_fact',
+        matched: `${category}:${m[0]}`,
+        section: 'summary',
+        evidence: 'category-drift',
+      });
+    }
+  }
+  return violations;
+}
+
+function validateUnsupportedAchievements(
+  summary: string,
+  factSet: CvCanonicalFactSet,
+): CvFidelityViolation[] {
+  const violations: CvFidelityViolation[] = [];
+  const corpus = canonicalDutyCorpus(factSet);
+  for (const re of UNSUPPORTED_ACHIEVEMENT_PATTERNS) {
+    const m = summary.match(re);
+    if (!m?.[0]) continue;
+    if (corpus.includes(m[0].toLowerCase().slice(0, Math.min(12, m[0].length)))) continue;
+    violations.push({
+      kind: 'unsupported_achievement_or_impact',
+      matched: m[0],
+      section: 'summary',
+    });
+  }
+  return violations;
+}
+
+export function validateSummaryOccupationalTitle(
+  summary: string,
+  options: { locale?: Locale | string; resolvedRole?: string; experienceTitle?: string },
+): CvFidelityViolation[] {
+  const violations: CvFidelityViolation[] = [];
+  const locale = options.locale;
+  const expTitle = (options.experienceTitle || '').trim();
+  if (expTitle && !isValidOccupationalTitle(expTitle)) {
+    const escaped = expTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (locale === 'hi' && new RegExp(`मैं\\s+[^।]{0,120}?\\b${escaped}\\b\\s+हूँ`, 'u').test(summary)) {
+      violations.push({
+        kind: 'invalid_occupational_title_in_summary',
+        matched: expTitle,
+        section: 'summary',
+      });
+    }
+    if ((locale === 'sr' || locale === 'hr') && new RegExp(`\\b${escaped}\\b`, 'iu').test(summary)) {
+      violations.push({
+        kind: 'invalid_occupational_title_in_summary',
+        matched: expTitle,
+        section: 'summary',
+      });
+    }
+  }
+  if (locale === 'hi' && /\bV\b/u.test(summary) && /मैं\s+[^।]{0,80}?\bV\b\s+हूँ/u.test(summary)) {
+    violations.push({
+      kind: 'invalid_occupational_title_in_summary',
+      matched: 'V',
+      section: 'summary',
+    });
+  }
+  return violations;
+}
+
+export function validateCurrentRoleTenseMix(
+  text: string,
+  locale: Locale | string,
+  isPresent: boolean,
+): CvFidelityViolation[] {
+  if (!isPresent) return [];
+  const violations: CvFidelityViolation[] = [];
+  if (locale === 'sr' || locale === 'hr') {
+    const hasPast = SR_PAST_CURRENT_ROLE.test(text);
+    const hasPresent = SR_PRESENT_CURRENT_ROLE.test(text);
+    SR_PAST_CURRENT_ROLE.lastIndex = 0;
+    SR_PRESENT_CURRENT_ROLE.lastIndex = 0;
+    if (hasPast && hasPresent) {
+      violations.push({
+        kind: 'current_role_tense_mismatch',
+        matched: 'mixed-sr-past-present',
+        section: 'experience',
+      });
+    } else if (hasPast && !hasPresent) {
+      const m = text.match(SR_PAST_CURRENT_ROLE);
+      if (m?.[0]) {
+        violations.push({
+          kind: 'current_role_tense_mismatch',
+          matched: m[0],
+          section: 'experience',
+        });
+      }
+    }
+  }
+  if (locale === 'hi' && isPresent) {
+    const pastHabitual = /(करती\s+थी|करता\s+था)/u.test(text);
+    const presentProg = /(कर\s+रही\s+हूँ|कर\s+रहा\s+हूँ)/u.test(text);
+    const presentSimple = /(करती\s+हूँ|करता\s+हूँ)/u.test(text);
+    if (pastHabitual && (presentProg || presentSimple)) {
+      violations.push({
+        kind: 'current_role_tense_mismatch',
+        matched: 'mixed-hi-past-present',
+        section: 'experience',
+      });
+    }
+  }
+  return violations;
+}
+
+export function validateMixedLocaleProficiency(
+  languages: Array<{ name?: string; level?: string }>,
+  locale: Locale | string,
+): CvFidelityViolation[] {
+  const violations: CvFidelityViolation[] = [];
+  for (const lang of languages) {
+    const level = (lang.level || '').trim();
+    if (!level) continue;
+    const localized = localizeCvLanguageLevel(level, locale as Locale);
+    if (locale === 'hi') {
+      if (SR_KNOWN_LEVELS.test(level) || SR_KNOWN_LEVELS.test(localized)) {
+        violations.push({
+          kind: 'mixed_locale_proficiency',
+          matched: localized || level,
+          section: 'languages',
+        });
+      } else if (EN_KNOWN_LEVELS.test(level) && !HI_KNOWN_LEVELS.test(localized)) {
+        violations.push({
+          kind: 'mixed_locale_proficiency',
+          matched: level,
+          section: 'languages',
+        });
+      }
+    }
+    if (locale === 'sr' || locale === 'hr') {
+      if (HI_KNOWN_LEVELS.test(level) || EN_KNOWN_LEVELS.test(level)) {
+        violations.push({
+          kind: 'mixed_locale_proficiency',
+          matched: level,
+          section: 'languages',
+        });
+      }
+    }
+  }
+  return violations;
 }
 
 function dutySupportedByCanonical(matched: string, corpus: string): boolean {
@@ -323,6 +571,31 @@ export function validateSummaryCompleteness(
   // Empty / whitespace-only after trimming control chars
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(text)) {
     violations.push({ kind: 'summary_incomplete', matched: 'control-char', section: 'summary' });
+  }
+
+  const srLocale = locale === 'sr' || locale === 'hr';
+  if (srLocale) {
+    if (!/[.!?…]\s*$/u.test(text)) {
+      violations.push({
+        kind: 'summary_incomplete',
+        matched: 'missing-sentence-end',
+        section: 'summary',
+        evidence: 'sr-no-terminal-punct',
+      });
+    }
+    const lastWord = (text.split(/\s+/).pop() || '').replace(/[.,;:!?…]+$/u, '');
+    if (
+      lastWord
+      && !/[.!?…]\s*$/u.test(text)
+      && /^(trajno|kontinuirano|efikasnost|kvalitet|kao|i)$/iu.test(lastWord)
+    ) {
+      violations.push({
+        kind: 'summary_incomplete',
+        matched: lastWord,
+        section: 'summary',
+        evidence: 'sr-dangling-ending',
+      });
+    }
   }
 
   // Reject summaries that begin or end with a bare duration clause (no subject/verb) —
@@ -448,6 +721,7 @@ export function validateLocalizedExperienceBullets(
     gender?: CoverLetterGender | string;
     experienceIndex?: number;
     stage?: string;
+    isPresent?: boolean;
   },
 ): CvFidelityResult {
   const violations: CvFidelityViolation[] = [];
@@ -551,6 +825,9 @@ export function validateLocalizedExperienceBullets(
   }
 
   violations.push(...validateCvGenderForms(joined, options));
+  if (options.isPresent) {
+    violations.push(...validateCurrentRoleTenseMix(joined, options.locale || 'en', true));
+  }
   return { valid: violations.length === 0, violations };
 }
 
@@ -616,6 +893,13 @@ export function validateLocalizedSummary(
   }
 
   violations.push(...validateCvGenderForms(joined, options));
+  violations.push(...validateGenericTemplateLeak(joined, options.locale));
+  violations.push(...validateSummaryFactGrounding(joined, factSet));
+  violations.push(...validateUnsupportedAchievements(joined, factSet));
+  violations.push(...validateSummaryOccupationalTitle(joined, {
+    locale: options.locale,
+    experienceTitle: factSet.facts.find((f) => f.type === 'role')?.value,
+  }));
   return { valid: violations.length === 0, violations };
 }
 
