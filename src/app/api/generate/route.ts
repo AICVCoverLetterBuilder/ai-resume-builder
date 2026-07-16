@@ -19,8 +19,11 @@ import {
   buildCvCanonicalFactSet,
   formatCanonicalBulletsForPrompt,
   bulletsForExperience,
-  deterministicBulletsFromCanonical,
 } from '@/lib/cv-canonical-facts';
+import {
+  deterministicLocalizedBulletsFromCanonical,
+  deterministicLocalizedSummaryFromCanonical,
+} from '@/lib/cv-localized-fallback';
 import { activateCvExperienceBullets, activateCvSummary } from '@/lib/cv-content-activation';
 import {
   applyApproximateDurationPolicy,
@@ -680,6 +683,8 @@ Rules:
       const providerStartedAt = Date.now();
       let providerFinishedAt = providerStartedAt;
       let providerAborted = false;
+      let providerFailureReason: 'provider_attempt_timeout' | null = null;
+      let repairFailureReason: 'repair_attempt_timeout' | null = null;
       let cleanedText = '';
       try {
         const response = await callWithRetry({
@@ -733,6 +738,7 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
         // Continue to activateCvSummary → deterministic local fallback. Never
         // wait for a late provider promise or let Vercel kill the invocation.
         if (!providerAborted) throw providerErr;
+        providerFailureReason = 'provider_attempt_timeout';
         cleanedText = '';
       }
 
@@ -805,7 +811,10 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
                 .replace(/[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/, '');
             } catch (repairErr) {
               repairFinishedAt = Date.now();
-              if (isProviderAbortOrTimeoutError(repairErr)) throw repairErr;
+              if (isProviderAbortOrTimeoutError(repairErr)) {
+                repairFailureReason = 'repair_attempt_timeout';
+                throw repairErr;
+              }
               throw repairErr;
             }
           },
@@ -821,7 +830,9 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
         providerFinishedAt,
         providerValid: activated.status === 'passed',
         providerAborted,
+        providerFailureReason,
         repairAttempted: activated.repairAttempted,
+        repairFailureReason,
         repairSkippedReason: !activated.repairAttempted && activated.status !== 'passed'
           ? (forceRespond ? 'response_guard_or_provider_abort' : 'insufficient_deadline_budget')
           : null,
@@ -835,7 +846,7 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
 
       if (_freeUserId) recordFreeAction(_freeUserId, 'summary');
       if (activated.blocked || activated.status === 'blocked' || !activated.content.trim()) {
-        if (shouldForceRespond(deadlineAt) || providerAborted) {
+        if (shouldForceRespond(deadlineAt)) {
           return jsonResponse({
             error: 'AI request timed out.',
             code: 'request_timeout',
@@ -844,6 +855,22 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
             fallbackUsed: activated.fallbackUsed,
             violationCount: activated.violations.length,
           }, { status: 504 });
+        }
+        const emergencyLocalized = deterministicLocalizedSummaryFromCanonical(
+          factSet,
+          resolvedLocale,
+          gender || '',
+        ).trim();
+        if (emergencyLocalized) {
+          return jsonResponse({
+            result: emergencyLocalized,
+            cvFidelityStatus: 'fallback',
+            repairAttempted: activated.repairAttempted,
+            fallbackUsed: true,
+            violationCount: activated.violations.length,
+            providerFailureReason,
+            repairFailureReason,
+          });
         }
         return jsonResponse({
           error: `Could not produce a complete localized summary for ${resolvedLocale}. Export/generation was blocked to avoid an English dump.`,
@@ -878,6 +905,8 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
       const providerStartedAt = Date.now();
       let providerFinishedAt = providerStartedAt;
       let providerAborted = false;
+      let providerFailureReason: 'provider_attempt_timeout' | null = null;
+      let repairFailureReason: 'repair_attempt_timeout' | null = null;
       let rewritten = text;
       try {
         const response = await callWithRetry({
@@ -910,6 +939,7 @@ Rules:
         providerFinishedAt = Date.now();
         providerAborted = isProviderAbortOrTimeoutError(providerErr);
         if (!providerAborted) throw providerErr;
+        providerFailureReason = 'provider_attempt_timeout';
         rewritten = text;
       }
       const cvContext = params.cvContext;
@@ -972,6 +1002,9 @@ Rules:
               return getText(repaired).trim();
             } catch (repairErr) {
               rewriteRepairFinishedAt = Date.now();
+              if (isProviderAbortOrTimeoutError(repairErr)) {
+                repairFailureReason = 'repair_attempt_timeout';
+              }
               throw repairErr;
             }
           },
@@ -987,7 +1020,9 @@ Rules:
         providerFinishedAt,
         providerValid: activated.status === 'passed',
         providerAborted,
+        providerFailureReason,
         repairAttempted: activated.repairAttempted,
+        repairFailureReason,
         repairSkippedReason: !activated.repairAttempted && activated.status !== 'passed'
           ? (rewriteForceRespond ? 'response_guard_or_provider_abort' : 'insufficient_deadline_budget')
           : null,
@@ -1000,6 +1035,32 @@ Rules:
       });
 
       if (activated.blocked || activated.status === 'blocked' || !activated.content.trim()) {
+        if (shouldForceRespond(deadlineAt)) {
+          return jsonResponse({
+            error: 'AI request timed out.',
+            code: 'request_timeout',
+            cvFidelityStatus: 'blocked',
+            repairAttempted: activated.repairAttempted,
+            fallbackUsed: activated.fallbackUsed,
+            violationCount: activated.violations.length,
+          }, { status: 504 });
+        }
+        const emergencyLocalized = deterministicLocalizedSummaryFromCanonical(
+          rewriteFactSet,
+          resolvedLocale,
+          gender || '',
+        ).trim();
+        if (emergencyLocalized) {
+          return jsonResponse({
+            result: emergencyLocalized,
+            cvFidelityStatus: 'fallback',
+            repairAttempted: activated.repairAttempted,
+            fallbackUsed: true,
+            violationCount: activated.violations.length,
+            providerFailureReason,
+            repairFailureReason,
+          });
+        }
         return jsonResponse({
           error: `Could not produce complete localized text for ${resolvedLocale}. Changes were not applied to avoid mixed-language content.`,
           cvFidelityStatus: 'blocked',
@@ -1067,6 +1128,8 @@ Rules:
       const providerStartedAt = Date.now();
       let providerFinishedAt = providerStartedAt;
       let providerAborted = false;
+      let providerFailureReason: 'provider_attempt_timeout' | null = null;
+      let repairFailureReason: 'repair_attempt_timeout' | null = null;
       let aiResult = '';
       try {
         const response = await callWithRetry({
@@ -1104,6 +1167,7 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         providerFinishedAt = Date.now();
         providerAborted = isProviderAbortOrTimeoutError(providerErr);
         if (!providerAborted) throw providerErr;
+        providerFailureReason = 'provider_attempt_timeout';
         aiResult = '';
       }
       if (!aiResult || !aiResult.includes('•')) {
@@ -1143,6 +1207,9 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
                 return getText(repaired);
               } catch (repairErr) {
                 bulletsRepairFinishedAt = Date.now();
+                if (isProviderAbortOrTimeoutError(repairErr)) {
+                  repairFailureReason = 'repair_attempt_timeout';
+                }
                 throw repairErr;
               }
             }
@@ -1159,7 +1226,9 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         providerFinishedAt,
         providerValid: activated.status === 'passed',
         providerAborted,
+        providerFailureReason,
         repairAttempted: activated.repairAttempted,
+        repairFailureReason,
         repairSkippedReason: hasCanonical && !activated.repairAttempted && activated.status !== 'passed'
           ? (bulletsForceRespond ? 'response_guard_or_provider_abort' : 'insufficient_deadline_budget')
           : null,
@@ -1183,6 +1252,34 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         });
       }
       if (activated.blocked || activated.status === 'blocked' || !activated.content.trim()) {
+        if (shouldForceRespond(deadlineAt)) {
+          return jsonResponse({
+            error: 'AI request timed out.',
+            code: 'request_timeout',
+            cvFidelityStatus: 'blocked',
+            repairAttempted: activated.repairAttempted,
+            fallbackUsed: activated.fallbackUsed,
+            usedFactIds: canonicalBullets.map((b) => b.id),
+            violationCount: activated.violations.length,
+          }, { status: 504 });
+        }
+        const emergencyLocalized = deterministicLocalizedBulletsFromCanonical(
+          canonicalBullets,
+          resolvedLocale,
+          gender || '',
+        ).trim();
+        if (emergencyLocalized) {
+          return jsonResponse({
+            result: emergencyLocalized,
+            cvFidelityStatus: 'fallback',
+            repairAttempted: activated.repairAttempted,
+            fallbackUsed: true,
+            usedFactIds: canonicalBullets.map((b) => b.id),
+            violationCount: activated.violations.length,
+            providerFailureReason,
+            repairFailureReason,
+          });
+        }
         return jsonResponse({
           error: `Could not produce valid localized bullets for ${resolvedLocale}. English canonical text was not written into the CV.`,
           cvFidelityStatus: 'blocked',

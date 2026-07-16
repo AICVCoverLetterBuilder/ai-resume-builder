@@ -236,6 +236,8 @@ export interface AiServerRequestTiming {
   serverRespondedAt: number;
   deadlineAt?: number | null;
   providerAborted?: boolean;
+  providerFailureReason?: 'provider_attempt_timeout' | null;
+  repairFailureReason?: 'repair_attempt_timeout' | null;
 }
 
 /**
@@ -269,7 +271,9 @@ export function logAiServerRequestTiming(t: AiServerRequestTiming): void {
     `providerDurationMs=${providerDurationMs ?? 'n/a'}`,
     `providerValid=${t.providerValid ?? 'n/a'}`,
     `providerAborted=${Boolean(t.providerAborted)}`,
+    `providerFailureReason=${t.providerFailureReason ?? 'n/a'}`,
     `repairAttempted=${Boolean(t.repairAttempted)}`,
+    `repairFailureReason=${t.repairFailureReason ?? 'n/a'}`,
     `repairSkippedReason=${t.repairSkippedReason ?? 'n/a'}`,
     `repairStartedAt=${t.repairStartedAt ?? 'n/a'}`,
     `repairFinishedAt=${t.repairFinishedAt ?? 'n/a'}`,
