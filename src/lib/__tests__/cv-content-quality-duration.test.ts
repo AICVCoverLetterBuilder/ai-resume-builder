@@ -16,7 +16,7 @@ import {
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import { applyCanonicalSummaryEdit, sealCanonicalFromValidatedSource } from '@/lib/cv-canonical-snapshot';
-import { isDurationOnlyFragmentSentence, validateSummaryCompleteness } from '@/lib/cv-semantic-fidelity';
+import { isDurationOnlyFragmentSentence, hasMisplacedHindiDuration, validateSummaryCompleteness } from '@/lib/cv-semantic-fidelity';
 
 const REF = '2026-07-15';
 
@@ -499,7 +499,7 @@ describe('residual fix: never a standalone Hindi duration fragment', () => {
     expect(q.violations).not.toContain('experience_duration_mismatch');
   });
 
-  it('a very long single-clause Hindi AI summary (no early delimiter) never yields a standalone fragment', () => {
+  it('a very long single-clause Hindi AI summary (no early delimiter) integrates duration at the start', () => {
     const longNoDelimiter = 'मई 2021 से Zrewq में कॉल सेंटर एजेंट के रूप में ग्राहकों की फ़ोन पर सहायता करती हूँ और उनकी शिकायतों तथा समस्याओं का समाधान करती हूँ';
     const cv = baseCv({
       summaryOrigin: 'ai_generated',
@@ -519,6 +519,9 @@ describe('residual fix: never a standalone Hindi duration fragment', () => {
     });
     const q = applyCvContentQuality(cv, 'hi', { referenceDate: REF, gender: 'female' });
     expect(validateSummaryCompleteness(q.cv.summary, { locale: 'hi' }).valid).toBe(true);
+    expect(hasMisplacedHindiDuration(q.cv.summary)).toBe(false);
+    expect(q.cv.summary).toMatch(/^मैं\s+लगभग\s+पाँच/);
+    expect(q.cv.summary).not.toMatch(/,\s*लगभग\s+पाँच\s+वर्षों\s+के\s+अनुभव\s+के\s+साथ।/);
     expect(q.cv.summary).toMatch(/पाँच|पांच/);
     expect(q.violations).not.toContain('experience_duration_mismatch');
   });
@@ -533,6 +536,129 @@ describe('residual fix: never a standalone Hindi duration fragment', () => {
     );
     expect(q.cv.summary).not.toMatch(/कौशलताओं/);
     expect(q.cv.summary).toMatch(/कौशलों/);
+  });
+
+  it('replaces शिकायतों और आपत्तियों with शिकायतों और समस्याओं in customer-service bullets', () => {
+    const cv = baseCv({
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zrewq',
+          position: 'कॉल सेंटर एजेंट',
+          startDate: '2021-05',
+          endDate: '',
+          isPresent: true,
+          description: '• ग्राहकों की शिकायतों और आपत्तियों का समाधान करती हूँ।',
+          canonicalDescription: EN_BULLETS,
+        },
+      ],
+    });
+    const q = applyCvContentQuality(cv, 'hi', { referenceDate: REF, gender: 'female' });
+    expect(q.cv.experience[0].description).not.toMatch(/आपत्तियों/);
+    expect(q.cv.experience[0].description).toMatch(/शिकायतों और समस्याओं/);
+  });
+});
+
+describe('residual fix: Hindi trailing duration + Serbian female agreement', () => {
+  const expected = applyApproximateDurationPolicy(62);
+
+  it('flags comma-spliced trailing Hindi duration as summary_duration_misplaced', () => {
+    const bad = validateSummaryCompleteness(
+      'मैं ग्राहकों को सटीक तथा समयबद्ध जानकारी प्रदान करती हूँ, लगभग पाँच वर्षों के अनुभव के साथ।',
+      { locale: 'hi' },
+    );
+    expect(bad.valid).toBe(false);
+    expect(bad.violations.some((v) => v.kind === 'summary_duration_misplaced')).toBe(true);
+    expect(hasMisplacedHindiDuration(
+      'मैं ग्राहकों को सटीक तथा समयबद्ध जानकारी प्रदान करती हूँ, लगभग पाँच वर्षों के अनुभव के साथ।',
+    )).toBe(true);
+  });
+
+  it('does not flag valid female opening with integrated duration', () => {
+    const ok = 'मैं लगभग पाँच वर्षों के अनुभव वाली कॉल सेंटर एजेंट हूँ और मई 2021 से Zrewq में कार्यरत हूँ।';
+    expect(hasMisplacedHindiDuration(ok)).toBe(false);
+    expect(validateSummaryCompleteness(ok, { locale: 'hi' }).valid).toBe(true);
+  });
+
+  it('repairs trailing comma-spliced Hindi duration into a natural opening sentence', () => {
+    const misplaced =
+      'मई 2021 से Zrewq में कॉल सेंटर एजेंट के रूप में ग्राहकों की फ़ोन पर सहायता करती हूँ और सेवाओं के बारे में सटीक तथा समयबद्ध जानकारी प्रदान करती हूँ, लगभग पाँच वर्षों के अनुभव के साथ।';
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary: misplaced,
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zrewq',
+          position: 'कॉल सेंटर एजेंट',
+          startDate: '2021-05',
+          endDate: '',
+          isPresent: true,
+          description: EN_BULLETS,
+          canonicalDescription: EN_BULLETS,
+        },
+      ],
+    });
+    const q = applyCvContentQuality(cv, 'hi', { referenceDate: REF, gender: 'female' });
+    expect(q.cv.summary).toMatch(/^मैं\s+लगभग\s+पाँच\s+वर्षों\s+के\s+अनुभव\s+वाली/);
+    expect(q.cv.summary).not.toMatch(/,\s*लगभग\s+पाँच\s+वर्षों\s+के\s+अनुभव\s+के\s+साथ।/);
+    expect(hasMisplacedHindiDuration(q.cv.summary)).toBe(false);
+    expect(validateSummaryCompleteness(q.cv.summary, { locale: 'hi' }).valid).toBe(true);
+    expect(q.cv.summary).toMatch(/समयबद्ध जानकारी प्रदान करती हूँ/);
+  });
+
+  it('repairs Serbian female vrednim članom to vrednom članicom', () => {
+    const cv = baseCv({
+      summaryOrigin: 'ai_generated',
+      summary:
+        'Iskusna agentkinja call centra sa oko pet godina iskustva, što je čini vrednim članom svakog tima. Odgovara na upite klijenata.',
+      experience: [
+        {
+          id: 'exp-1',
+          company: 'Zrewq',
+          position: 'Call centar agent',
+          startDate: '2021-05',
+          endDate: '',
+          isPresent: true,
+          description: EN_BULLETS,
+          canonicalDescription: EN_BULLETS,
+        },
+      ],
+    });
+    const q = applyCvContentQuality(cv, 'sr', { referenceDate: REF, gender: 'female' });
+    expect(q.cv.summary).not.toMatch(/vrednim\s+članom/i);
+    expect(q.cv.summary).toMatch(/vrednom\s+članicom/i);
+    expect(q.cv.summary).toMatch(/agentkinja call centra/i);
+    expect(q.cv.summary).toMatch(/\bodgovara\b/i);
+    expect(q.cv.experience[0].position).toBe('Call centar agent');
+  });
+
+  it('does not rewrite user-written Hindi summaries for style', () => {
+    const custom =
+      'मैं ग्राहकों को सटीक तथा समयबद्ध जानकारी प्रदान करती हूँ, लगभग पाँच वर्षों के अनुभव के साथ।';
+    const cv = baseCv({ summary: custom, summaryOrigin: 'user' });
+    const q = applyCvContentQuality(cv, 'hi', { referenceDate: REF, gender: 'female', summaryOrigin: 'user' });
+    expect(q.cv.summary).toBe(custom);
+  });
+
+  it('male Hindi regression keeps वाला opening without trailing duration splice', () => {
+    const result = resolveSummaryWithDurationPolicy(
+      'ग्राहकों की मदद करता हूँ।',
+      expected,
+      'hi',
+      {
+        forceDurationPhrase: true,
+        requireDurationClaim: true,
+        context: {
+          role: 'कॉल सेंटर एजेंट',
+          company: 'Zrewq',
+          startDate: '2021-05',
+          gender: 'male',
+        },
+      },
+    );
+    expect(result.summary).toMatch(/वाला/);
+    expect(hasMisplacedHindiDuration(result.summary)).toBe(false);
   });
 });
 

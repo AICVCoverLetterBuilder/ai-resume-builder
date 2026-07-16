@@ -17,7 +17,7 @@ import {
   validateSummaryDuration,
 } from './cv-experience-duration';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
-import { isDurationOnlyFragmentSentence, UNSUPPORTED_SUMMARY_FLUFF } from './cv-semantic-fidelity';
+import { hasMisplacedHindiDuration, isDurationOnlyFragmentSentence, UNSUPPORTED_SUMMARY_FLUFF } from './cv-semantic-fidelity';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
 export type DurationIntegrationContext = {
@@ -180,6 +180,10 @@ export function normalizeHindiCustomerServiceWording(text: string): string {
   out = out.replace(/रिक्लेमेशन/gu, 'समस्याओं');
   out = out.replace(/शिकायतों और समस्याओंओं/gu, 'शिकायतों और समस्याओं');
   out = out.replace(/शिकायतों\s+और\s+समस्याओं/gu, 'शिकायतों और समस्याओं');
+  // Customer-service complaint/problem pairing — not a global आपत्ति ban.
+  if (/शिकायत/u.test(out)) {
+    out = out.replace(/शिकायतों\s+और\s+आपत्तियों/gu, 'शिकायतों और समस्याओं');
+  }
   // Natural plural for "skills" — "कौशलताओं" is an awkward double-plural.
   out = out.replace(/कौशलताओं/gu, 'कौशलों');
   return out;
@@ -196,6 +200,23 @@ export function normalizeSerbianRolePhrase(text: string): string {
     /\bCall\s*centar\s+(agentkinja|agent)\b/giu,
     (_m, noun: string) => `${noun} call centra`,
   );
+  return out;
+}
+
+/** Serbian feminine team-member agreement in summary prose (female gender only). */
+export function applySerbianFemaleAgreement(text: string, gender?: string): string {
+  if (normalizeCoverLetterGender(gender) !== 'female') return text || '';
+  let out = text || '';
+  const pairs: Array<[RegExp, string]> = [
+    [/što\s+je\s+čini\s+vrednim\s+članom/giu, 'što je čini vrednom članicom'],
+    [/čini\s+je\s+vrednim\s+članom/giu, 'čini je vrednom članicom'],
+    [/čini\s+vrednim\s+članom/giu, 'čini vrednom članicom'],
+    [/čini\s+je\s+pouzdanim\s+članom/giu, 'čini je pouzdanom članicom'],
+    [/čini\s+pouzdanim\s+članom/giu, 'čini pouzdanom članicom'],
+    [/čini\s+je\s+važnim\s+članom/giu, 'čini je važnom članicom'],
+    [/čini\s+važnim\s+članom/giu, 'čini važnom članicom'],
+  ];
+  for (const [re, repl] of pairs) out = out.replace(re, repl);
   return out;
 }
 
@@ -357,6 +378,96 @@ function buildHindiIntegratedDurationSentence(
   return `${role} के क्षेत्र में लगभग ${word} ${unitWord} का अनुभव है${employmentClause}।`;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Remove malformed or duplicate Hindi duration clauses from running text. */
+function stripHindiDurationClauses(text: string): string {
+  let out = (text || '').trim();
+  out = out.replace(
+    /,\s*(?:लगभग|करीब)\s*(?:\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्षों?\s*(?:के\s+अनुभव)?\s*के\s+साथ\s*/gu,
+    '',
+  );
+  out = out.replace(
+    /(?:^|\s)(?:लगभग|करीब)\s*(?:\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्षों?\s*(?:के\s+अनुभव)?\s*के\s+साथ\s*/gu,
+    ' ',
+  );
+  return out.replace(/\s+/g, ' ').replace(/\s+([,।])/gu, '$1').trim();
+}
+
+/** Strip employment/role/start-date phrases already carried by the Hindi opening sentence. */
+function stripHindiEmploymentDuplicate(text: string, context: DurationIntegrationContext): string {
+  let out = (text || '').trim();
+  const company = (context.company || '').trim();
+  const monthYear = formatHindiMonthYear(context.startDate);
+  const role = (context.role || '').trim();
+
+  if (monthYear && company) {
+    const patterns = [
+      new RegExp(
+        `(?:और\\s+)?${escapeRegExp(monthYear)}\\s+से\\s+${escapeRegExp(company)}\\s+में\\s+(?:कार्यरत\\s+)?(?:हूँ|है)`,
+        'giu',
+      ),
+      new RegExp(
+        `${escapeRegExp(monthYear)}\\s+से\\s+${escapeRegExp(company)}\\s+में\\s+${escapeRegExp(role)}\\s+के\\s+रूप\\s+में`,
+        'giu',
+      ),
+      new RegExp(`${escapeRegExp(monthYear)}\\s+से\\s+${escapeRegExp(company)}`, 'giu'),
+    ];
+    for (const re of patterns) out = out.replace(re, ' ');
+  }
+
+  if (role) {
+    out = out.replace(new RegExp(`${escapeRegExp(role)}\\s+के\\s+रूप\\s+में`, 'giu'), '');
+    out = out.replace(new RegExp(`(?:मैं\\s+)?${escapeRegExp(role)}\\s+हूँ`, 'giu'), '');
+  }
+
+  return out.replace(/\s+/g, ' ').replace(/^[,\s]+|[,\s]+$/gu, '').trim();
+}
+
+function sentenceOverlapsOpening(sentence: string, opening: string): boolean {
+  const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const s = norm(sentence);
+  const o = norm(opening);
+  if (!s || s.length < 12) return true;
+  if (o.includes(s)) return true;
+  if (/^(?:मैं\s+)?(?:लगभग|करीब)\s+\S+\s+वर्ष/u.test(s) && /कार्यरत\s+हूँ/u.test(s) && s.length <= o.length + 24) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Hindi-only duration integration: build a natural opening sentence with duration at the
+ * start, then append remaining grounded content with duplicate claims removed.
+ */
+export function injectHindiDurationWithOpening(
+  summary: string,
+  duration: ExperienceDuration,
+  context: DurationIntegrationContext,
+): string {
+  const opening = buildHindiIntegratedDurationSentence(duration, context);
+  const trimmed = (summary || '').trim();
+  if (!trimmed) return opening;
+
+  const sentences = trimmed.split(/(?<=[।.!?])\s+/u).map((s) => s.trim()).filter(Boolean);
+  const remainderParts: string[] = [];
+
+  for (const sent of sentences) {
+    let cleaned = stripHindiDurationClauses(sent);
+    cleaned = stripHindiEmploymentDuplicate(cleaned, context);
+    cleaned = cleaned.replace(/^[,\s]+|[,\s]+$/gu, '').trim();
+    if (!cleaned || cleaned.length < 8) continue;
+    if (sentenceOverlapsOpening(cleaned, opening)) continue;
+    if (!/[।.!?…]\s*$/u.test(cleaned)) cleaned = `${cleaned}।`;
+    remainderParts.push(cleaned);
+  }
+
+  if (!remainderParts.length) return opening;
+  return `${opening} ${remainderParts.join(' ')}`.replace(/\s+/g, ' ').trim();
+}
+
 function findFirstSentenceSplit(text: string): { head: string; delim: string; rest: string } | null {
   const m = text.match(/^([\s\S]*?)([.।!?])(\s*[\s\S]*)$/u);
   if (!m || !m[1].trim()) return null;
@@ -371,9 +482,11 @@ function findFirstSentenceSplit(text: string): { head: string; delim: string; re
  */
 function mergeDurationPhraseIntoFirstSentence(text: string, phrase: string, locale: Locale): string {
   const trimmed = (text || '').trim();
-  const terminal = locale === 'hi' ? '।' : '.';
+  // Hindi must never use comma-splice — use injectHindiDurationWithOpening instead.
+  if (locale === 'hi') return trimmed;
+  const terminal = '.';
   if (!trimmed) {
-    return locale === 'hi' ? `${phrase}।` : `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
+    return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
   }
   const split = findFirstSentenceSplit(trimmed);
   if (split) {
@@ -417,6 +530,10 @@ function hasLeadingOrTrailingFragment(text: string): boolean {
   return false;
 }
 
+function hindiDurationPlacementOk(text: string, locale: Locale): boolean {
+  return locale !== 'hi' || !hasMisplacedHindiDuration(text);
+}
+
 /** Summary duration: reject → constrained repair → revalidate → duration-locked fallback. */
 export function resolveSummaryWithDurationPolicy(
   summary: string,
@@ -444,11 +561,31 @@ export function resolveSummaryWithDurationPolicy(
     working = repairFragmentedSummary(working, locale);
   }
 
+  // Hindi comma-spliced duration at end of first sentence → opening-sentence rewrite.
+  if (requireClaim && locale === 'hi' && context && hasMisplacedHindiDuration(working)) {
+    const repairedHi = injectHindiDurationWithOpening(working, duration, context);
+    if (
+      validateSummaryDuration(repairedHi, duration, { requireDurationClaim: requireClaim, locale }).valid
+      && hindiDurationPlacementOk(repairedHi, locale)
+      && !hasLeadingOrTrailingFragment(repairedHi)
+    ) {
+      return {
+        summary: repairedHi.trim(),
+        status: 'repaired',
+        violation: 'experience_duration_mismatch',
+      };
+    }
+    working = repairedHi;
+  }
+
   const initial = validateSummaryDuration(working, duration, {
     requireDurationClaim: requireClaim,
     locale,
   });
-  if (initial.valid && (!requireClaim || !hasLeadingOrTrailingFragment(working))) {
+  if (
+    initial.valid
+    && (!requireClaim || (!hasLeadingOrTrailingFragment(working) && hindiDurationPlacementOk(working, locale)))
+  ) {
     return { summary: working.trim(), status: working === summary ? 'passed' : 'repaired' };
   }
 
@@ -456,10 +593,11 @@ export function resolveSummaryWithDurationPolicy(
   if (requireClaim && !summaryHasDurationClaim(working)
     && !summaryIncludesDurationPhrase(working, duration, locale)
     && duration.hasValidDates) {
-    const injected = injectDurationPhrase(working, duration, locale);
+    const injected = injectDurationPhrase(working, duration, locale, context);
     if (
       validateSummaryDuration(injected, duration, { requireDurationClaim: true, locale }).valid
       && !hasLeadingOrTrailingFragment(injected)
+      && hindiDurationPlacementOk(injected, locale)
     ) {
       return {
         summary: injected.trim(),
@@ -474,7 +612,7 @@ export function resolveSummaryWithDurationPolicy(
     requireDurationClaim: requireClaim,
     locale,
   });
-  if (afterRepair.valid && (!requireClaim || !hasLeadingOrTrailingFragment(repaired))) {
+  if (afterRepair.valid && (!requireClaim || (!hasLeadingOrTrailingFragment(repaired) && hindiDurationPlacementOk(repaired, locale)))) {
     return {
       summary: repaired.trim(),
       status: 'repaired',
@@ -496,9 +634,8 @@ export function resolveSummaryWithDurationPolicy(
     .trim();
 
   let fallback = '';
-  if (locale === 'hi' && context?.role) {
-    // Prefer the exact gendered/neutral deterministic template (never a bare fragment).
-    fallback = buildHindiIntegratedDurationSentence(duration, context);
+  if (locale === 'hi' && context) {
+    fallback = injectHindiDurationWithOpening(stripped || working, duration, context);
   } else if (phrase && stripped) {
     fallback = mergeDurationPhraseIntoFirstSentence(stripped, phrase, locale);
   } else if (phrase) {
@@ -511,6 +648,7 @@ export function resolveSummaryWithDurationPolicy(
   if (
     !validateSummaryDuration(fallback, duration, { requireDurationClaim: requireClaim, locale }).valid
     || hasLeadingOrTrailingFragment(fallback)
+    || !hindiDurationPlacementOk(fallback, locale)
     || !fallback.trim()
   ) {
     if (locale === 'hi') {
@@ -535,16 +673,19 @@ export function resolveSummaryWithDurationPolicy(
 
 /**
  * Inject the shared approximate-duration phrase into a summary that lacks any duration claim.
- * Always merges into an existing sentence via a comma — never inserts the phrase as its own
- * standalone sentence (which would be a dependent clause with no subject/verb).
+ * Hindi uses a dedicated opening-sentence builder — never comma-splice.
  */
 export function injectDurationPhrase(
   summary: string,
   duration: ExperienceDuration,
   locale: Locale,
+  context?: DurationIntegrationContext,
 ): string {
-  const phrase = formatApproximateDurationPhrase(duration, locale);
   const text = (summary || '').trim();
+  if (locale === 'hi' && duration.hasValidDates) {
+    return injectHindiDurationWithOpening(text, duration, context || {});
+  }
+  const phrase = formatApproximateDurationPhrase(duration, locale);
   if (!phrase) return text;
   return mergeDurationPhraseIntoFirstSentence(text, phrase, locale);
 }
@@ -622,6 +763,10 @@ export function applyCvContentQuality(
   summary = summaryResult.summary;
   if (locale === 'hi') {
     const before = summary;
+    if (requireDuration && hasMisplacedHindiDuration(summary)) {
+      summary = injectHindiDurationWithOpening(summary, duration, durationContext);
+      repaired = true;
+    }
     summary = normalizeHindiCustomerServiceWording(summary);
     summary = applyHindiCurrentRoleTense(summary);
     summary = stripUnsupportedSummaryFluff(summary, locale);
@@ -630,6 +775,7 @@ export function applyCvContentQuality(
     const before = summary;
     summary = normalizeSerbianRolePhrase(summary);
     if (hasCurrentRole) summary = applySerbianSummaryCurrentTense(summary, true);
+    summary = applySerbianFemaleAgreement(summary, gender);
     summary = stripUnsupportedSummaryFluff(summary, locale);
     if (summary !== before) repaired = true;
   }

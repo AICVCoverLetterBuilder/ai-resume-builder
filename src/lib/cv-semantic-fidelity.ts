@@ -31,7 +31,8 @@ export type CvFidelityViolationKind =
   | 'locale_quality'
   | 'language_level_mismatch'
   | 'experience_duration_mismatch'
-  | 'summary_sentence_fragment';
+  | 'summary_sentence_fragment'
+  | 'summary_duration_misplaced';
 
 export type CvFidelityViolation = {
   kind: CvFidelityViolationKind;
@@ -109,6 +110,11 @@ const LOCALE_QUALITY_PATTERNS: Array<{ locale?: Locale; re: RegExp; kind?: CvFid
   { locale: 'sr', re: /Izrada izveštaja dodatno/iu, kind: 'locale_quality' },
   { locale: 'hi', re: /ग्राहक संतुष्टि सुनिश्चित/u, kind: 'locale_quality' },
   { locale: 'hi', re: /जिससे ग्राहक संतुष्टि/u, kind: 'locale_quality' },
+  { locale: 'hi', re: /शिकायतों\s+और\s+आपत्तियों/u, kind: 'locale_quality' },
+  { locale: 'sr', re: /čini\s+(?:je\s+)?vrednim\s+članom/iu, kind: 'gender_form_mismatch' },
+  { locale: 'sr', re: /čini\s+(?:je\s+)?pouzdanim\s+članom/iu, kind: 'gender_form_mismatch' },
+  { locale: 'sr', re: /čini\s+(?:je\s+)?važnim\s+članom/iu, kind: 'gender_form_mismatch' },
+  { locale: 'hr', re: /čini\s+(?:je\s+)?vrednim\s+članom/iu, kind: 'gender_form_mismatch' },
 ];
 
 /**
@@ -146,7 +152,35 @@ export const UNSUPPORTED_SUMMARY_FLUFF: Array<{ locale?: Locale; re: RegExp }> =
   { locale: 'hi', re: /ग्राहक संतुष्टि सुनिश्चित होती है।?/gu },
 ];
 
+/** True when a Hindi duration clause is comma-spliced after an unrelated finite verb. */
+export function hasMisplacedHindiDuration(summary: string): boolean {
+  const sentences = (summary || '').split(/(?<=[।.!?])\s+/u).map((s) => s.trim()).filter(Boolean);
+  for (const sent of sentences) {
+    if (!sent) continue;
+    // Valid: duration integrated at the beginning of the sentence.
+    if (/^(?:लगभग|करीब)\s+\S+\s+वर्ष/u.test(sent)) continue;
+    if (/^मैं\s+(?:लगभग|करीब)/u.test(sent)) continue;
+    if (/^.{0,80}?(?:लगभग|करीब)\s+\S+\s+वर्षों?\s+(?:के\s+अनुभव\s+)?(?:वाला|वाली|का)\b/u.test(sent)) {
+      continue;
+    }
+    // Invalid: trailing duration modifier after a comma following a finite verb.
+    if (
+      /(?:करती|करता|देती|देता|प्रदान\s+करती|प्रदान\s+करता|किया|रखती|रखता|दर्ज\s+करती|दर्ज\s+करता)\s*(?:हूँ|है|थी|था)/u.test(sent)
+      && /,\s*(?:लगभग|करीब)\s+\S+\s+वर्षों?\s*(?:के\s+अनुभव)?\s*के\s+साथ\s*[।.!?]?\s*$/u.test(sent)
+    ) {
+      return true;
+    }
+    if (/,\s*(?:लगभग|करीब)\s+\S+\s+वर्ष[^।.!?]{0,40}के\s+अनुभव\s+के\s+साथ/u.test(sent)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const FEMALE_MISMATCH: Array<{ locale: Locale; re: RegExp }> = [
+  { locale: 'sr', re: /čini\s+(?:je\s+)?vrednim\s+članom/iu },
+  { locale: 'sr', re: /čini\s+(?:je\s+)?pouzdanim\s+članom/iu },
+  { locale: 'sr', re: /čini\s+(?:je\s+)?važnim\s+članom/iu },
   { locale: 'sr', re: /\bspreman je\b/iu },
   { locale: 'hr', re: /\bspreman je\b/iu },
   { locale: 'ru', re: /\bОпытный\b/u },
@@ -272,6 +306,17 @@ export function validateSummaryCompleteness(
       && !/[।.!?…]\s*$/u.test(text)
     ) {
       violations.push({ kind: 'summary_incomplete', matched: lastToken, section: 'summary' });
+    }
+    // Duration clause comma-spliced after an unrelated finite verb (not at sentence start).
+    if (hasMisplacedHindiDuration(text)) {
+      violations.push({
+        kind: 'summary_duration_misplaced',
+        matched: text.match(
+          /,\s*(?:लगभग|करीब)\s+\S+\s+वर्ष[^।.!?]{0,60}के\s+अनुभव\s+के\s+साथ[^।.!?]*[।.!?]?/u,
+        )?.[0] || 'misplaced-hindi-duration',
+        section: 'summary',
+        evidence: 'hindi-trailing-duration',
+      });
     }
   }
 
