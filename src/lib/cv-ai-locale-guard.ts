@@ -52,7 +52,16 @@ export function isWrongLanguageAiOutput(text: string, locale: Locale): boolean {
     const total = Math.max(1, scriptCount + latinCount);
     // Neutral proper nouns / acronyms may keep some Latin letters, but the
     // requested script must clearly dominate the generated prose.
-    return !(scriptCount >= 4 && scriptCount / total >= 0.35);
+    if (!(scriptCount >= 4 && scriptCount / total >= 0.35)) return true;
+    // A leaked Serbian/Croatian sentence (e.g. spliced in by duration-repair
+    // logic that only strips known duration fragments, not whole foreign
+    // sentences) counts toward `latinCount` above, so it can be diluted by a
+    // long-enough requested-script opening and slip past the ratio check.
+    // These diacritics never legitimately occur in hi/ar/ja/ru prose, so any
+    // occurrence — regardless of overall script ratio — is still a reliable,
+    // unambiguous wrong-language signal.
+    if (SERBO_CROATIAN_DIACRITICS.test(value)) return true;
+    return false;
   }
 
   // Latin-script requested locale (en, de, es, fr, it, sr, hr, pt-BR): a non-Latin

@@ -259,12 +259,19 @@ describe('6. Stale-response guard (out-of-order requests)', () => {
   });
 });
 
-describe('7. Terminal failure: provider, repair, and fallback all genuinely fail', () => {
-  it('deterministic fallback is empty when a duty cannot be safely localized, and finalize blocks with no false success', () => {
-    // A duty that doesn't match any known category (beverage/hygiene/customer/
-    // inventory) or any generic intent (process/collaboration/analysis/
-    // planning) has no safe non-English translation — the fallback must
-    // legitimately produce nothing rather than invent or leak content.
+describe('7. A duty outside the known category/intent vocabulary must still produce a safe, grounded fallback (never block)', () => {
+  it('a duty matching no category and no generic intent still gets a safe, non-empty, correct-script Hindi fallback', () => {
+    // "Šišanje pudlica..." (grooming poodles) matches none of the known duty
+    // categories (beverage/hygiene/customer/inventory) nor any generic intent
+    // (process/collaboration/analysis/planning/logistics). Before the
+    // GENERIC_DUTY_FALLBACK catch-all, `localizedBulletForFact` returned ''
+    // for every non-English locale here, which made the deterministic
+    // fallback — the step every validator treats as "always available" —
+    // silently produce NOTHING. Real-world CVs with duties outside the
+    // office/hospitality/logistics vocabulary (matches the real-device
+    // report) hit this exact gap, most visibly for Hindi because its script/
+    // duration/tense validators reject provider output more often, forcing
+    // the deterministic path far more frequently than for sr/en.
     const unclassifiableBullet = '• Šišanje pudlica i drugih kućnih ljubimaca u salonu';
     const cv = srCv({
       summary: '',
@@ -284,21 +291,30 @@ describe('7. Terminal failure: provider, repair, and fallback all genuinely fail
     const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, REF);
     const factSet = buildCvCanonicalFactSet(cv);
     const grounded = deterministicLocalizedSummaryFromCanonical(factSet, 'hi', 'male', durationSnapshot.total);
-    expect(grounded).toBe('');
+    expect(grounded).toBeTruthy();
+    expect(grounded).toMatch(/[\u0900-\u097F]/);
+    expect(grounded).not.toMatch(/Šišanje|pudlic/iu);
 
-    // With no candidate, no repair, and a fallback hint that is itself the
-    // unclassifiable Serbian source, activation has no safe Hindi content to
-    // offer and must block rather than fabricate or leak Serbian text.
+    const finalized = finalizeClientAiSummary(grounded, cv, 'hi', durationSnapshot);
+    expect(finalized.blocked).toBe(false);
+    expect(isWrongLanguageAiOutput(finalized.summary, 'hi')).toBe(false);
+
+    // Server activation chain: provider + repair both echo the unclassifiable
+    // Serbian source, so it must recover via the same safe catch-all fallback
+    // instead of blocking.
     const activated = activateCvSummary({
       locale: 'hi',
       gender: 'male',
       factSet,
-      candidate: '',
+      candidate: cv.summary,
       sourceFactsText: unclassifiableBullet,
-      fallbackSummary: '',
+      fallbackSummary: cv.summary,
+      repair: async () => cv.summary,
     });
     return activated.then((result) => {
-      expect(result.blocked).toBe(true);
+      expect(result.blocked).toBeFalsy();
+      expect(result.content).toMatch(/[\u0900-\u097F]/);
+      expect(result.content).not.toMatch(/Šišanje|pudlic/iu);
     });
   });
 });

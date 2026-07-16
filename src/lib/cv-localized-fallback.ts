@@ -271,7 +271,7 @@ function localizeRoleLabel(role: string, locale: Locale, g: GenderTone, profileJ
   });
 }
 
-type GenericDutyIntent = 'process' | 'collaboration' | 'analysis' | 'planning';
+type GenericDutyIntent = 'process' | 'collaboration' | 'analysis' | 'planning' | 'logistics';
 
 /**
  * `\b<stem>\b` breaks the moment the source language inflects the stem with a
@@ -305,6 +305,19 @@ function classifyGenericDutyIntent(text: string): GenericDutyIntent | null {
     startsWord('plan', 'planning', 'coordinat', 'coordination', 'koordin', 'planir')
     || includesAny('योजना', 'समन्वय')
   ) return 'planning';
+  // Warehouse / driving / delivery duties (e.g. forklift operators, drivers,
+  // couriers) never matched any bucket above — every generic-duty CV outside
+  // an office/hospitality context fell through to an empty translation for
+  // every non-English locale (see `GENERIC_DUTY_FALLBACK` below for the
+  // remaining catch-all once even this bucket doesn't match).
+  if (
+    startsWord(
+      'transport', 'deliver', 'delivery', 'load', 'unload', 'warehouse',
+      'utovar', 'istovar', 'vozi', 'vožnj', 'voz', 'rukovan', 'viličar', 'vilicar',
+      'sklad', 'isporuč', 'isporuc', 'prevoz', 'tovar',
+    )
+    || includesAny('परिवहन', 'गोदाम', 'डिलीवरी', 'लोडिंग')
+  ) return 'logistics';
   return null;
 }
 
@@ -316,79 +329,129 @@ const GENERIC_INTENT_BULLET: Partial<
     collaboration: () => 'Collaborate with cross-functional teams on project execution.',
     analysis: () => 'Analyze business data and prepare reports for senior management.',
     planning: () => 'Plan and coordinate departmental activities.',
+    logistics: () => 'Transport, load, and deliver goods safely as part of warehouse operations.',
   },
   de: {
     process: () => 'Entwicklung und Umsetzung interner Prozesse.',
     collaboration: () => 'Zusammenarbeit mit funktionsübergreifenden Teams bei der Projektumsetzung.',
     analysis: () => 'Analyse von Geschäftsdaten und Erstellung von Berichten für die Geschäftsführung.',
     planning: () => 'Planung und Koordination von Abteilungsaktivitäten.',
+    logistics: () => 'Transport, Beladung und sichere Auslieferung von Waren im Rahmen des Lagerbetriebs.',
   },
   es: {
     process: () => 'Desarrollo e implementación de procesos internos.',
     collaboration: () => 'Colaboración con equipos multifuncionales en la ejecución de proyectos.',
     analysis: () => 'Análisis de datos empresariales y elaboración de informes para la alta dirección.',
     planning: () => 'Planificación y coordinación de las actividades del departamento.',
+    logistics: () => 'Transporte, carga y entrega segura de mercancías en las operaciones del almacén.',
   },
   fr: {
     process: () => 'Développement et mise en œuvre de processus internes.',
     collaboration: () => 'Collaboration avec des équipes transverses sur l’exécution de projets.',
     analysis: () => 'Analyse des données commerciales et préparation de rapports pour la direction.',
     planning: () => 'Planification et coordination des activités du département.',
+    logistics: () => 'Transport, chargement et livraison sécurisée des marchandises dans le cadre des opérations d’entrepôt.',
   },
   it: {
     process: () => 'Sviluppo e implementazione di processi interni.',
     collaboration: () => 'Collaborazione con team multifunzionali nell’esecuzione dei progetti.',
     analysis: () => 'Analisi dei dati aziendali e preparazione di report per il management.',
     planning: () => 'Pianificazione e coordinamento delle attività del reparto.',
+    logistics: () => 'Trasporto, carico e consegna sicura delle merci nelle operazioni di magazzino.',
   },
   ar: {
     process: () => 'تطوير وتنفيذ العمليات الداخلية.',
     collaboration: () => 'التعاون مع فرق متعددة الوظائف لتنفيذ المشاريع.',
     analysis: () => 'تحليل بيانات الأعمال وإعداد التقارير للإدارة العليا.',
     planning: () => 'التخطيط والتنسيق لأنشطة القسم.',
+    logistics: () => 'نقل وتحميل وتسليم البضائع بأمان ضمن عمليات المستودع.',
   },
   ru: {
     process: () => 'Разработка и внедрение внутренних процессов.',
     collaboration: () => 'Сотрудничество с межфункциональными командами при реализации проектов.',
     analysis: () => 'Анализ бизнес-данных и подготовка отчётов для руководства.',
     planning: () => 'Планирование и координация деятельности отдела.',
+    logistics: () => 'Транспортировка, погрузка и безопасная доставка товаров в рамках складских операций.',
   },
   'pt-BR': {
     process: () => 'Desenvolvimento e implementação de processos internos.',
     collaboration: () => 'Colaboração com equipes multifuncionais na execução de projetos.',
     analysis: () => 'Análise de dados de negócios e elaboração de relatórios para a alta gestão.',
     planning: () => 'Planejamento e coordenação das atividades do departamento.',
+    logistics: () => 'Transporte, carregamento e entrega segura de mercadorias nas operações do armazém.',
   },
   ja: {
     process: () => '社内プロセスの開発と実施。',
     collaboration: () => 'プロジェクト遂行のための部門横断チームとの協力。',
     analysis: () => '経営データの分析と経営陣向け報告書の作成。',
     planning: () => '部門活動の計画と調整。',
+    logistics: () => '倉庫業務における貨物の輸送、積み込み、および安全な配送。',
   },
   sr: {
     process: () => 'Radim na razvoju i implementaciji internih procesa.',
     collaboration: () => 'Sarađujem sa međufunkcionalnim timovima na izvršenju projekata.',
     analysis: () => 'Analiziram poslovne podatke i pripremam izveštaje za više rukovodstvo.',
     planning: () => 'Učestvujem u planiranju i koordinaciji aktivnosti odeljenja.',
+    logistics: () => 'Transportujem, utovaram i bezbedno isporučujem robu u okviru skladišnog poslovanja.',
   },
   hr: {
     process: () => 'Radim na razvoju i implementaciji internih procesa.',
     collaboration: () => 'Surađujem s međufunkcionalnim timovima na izvršenju projekata.',
     analysis: () => 'Analiziram poslovne podatke i pripremam izvještaje za više rukovodstvo.',
     planning: () => 'Sudjelujem u planiranju i koordinaciji aktivnosti odjela.',
+    logistics: () => 'Transportiram, utovarujem i sigurno isporučujem robu u okviru skladišnog poslovanja.',
   },
   hi: {
     process: (g) => (g === 'male' ? 'आंतरिक प्रक्रियाओं के विकास और कार्यान्वयन में काम कर रहा हूँ।' : 'आंतरिक प्रक्रियाओं के विकास और कार्यान्वयन में काम कर रही हूँ।'),
     collaboration: (g) => (g === 'male' ? 'परियोजना क्रियान्वयन पर क्रॉस-फंक्शनल टीमों के साथ सहयोग कर रहा हूँ।' : 'परियोजना क्रियान्वयन पर क्रॉस-फंक्शनल टीमों के साथ सहयोग कर रही हूँ।'),
     analysis: (g) => (g === 'male' ? 'व्यावसायिक डेटा का विश्लेषण कर रहा हूँ और वरिष्ठ प्रबंधन के लिए रिपोर्ट तैयार कर रहा हूँ।' : 'व्यावसायिक डेटा का विश्लेषण कर रही हूँ और वरिष्ठ प्रबंधन के लिए रिपोर्ट तैयार कर रही हूँ।'),
     planning: (g) => (g === 'male' ? 'विभागीय गतिविधियों की योजना और समन्वय में भाग ले रहा हूँ।' : 'विभागीय गतिविधियों की योजना और समन्वय में भाग ले रही हूँ।'),
+    logistics: (g) => (g === 'male' ? 'गोदाम कार्यों के अंतर्गत माल का परिवहन, लोडिंग और सुरक्षित डिलीवरी कर रहा हूँ।' : 'गोदाम कार्यों के अंतर्गत माल का परिवहन, लोडिंग और सुरक्षित डिलीवरी कर रही हूँ।'),
   },
+};
+
+/**
+ * Last-resort, non-inventive duty sentence used only when a "generic" bullet
+ * matches none of the known intents above (`classifyGenericDutyIntent` ===
+ * null). Before this existed, `localizedBulletForFact` returned an EMPTY
+ * string for every locale except `en` (which leaked the raw, possibly
+ * wrong-language source text instead) — which made
+ * `deterministicLocalizedSummaryFromCanonical` / `deterministicLocalizedBulletsFromCanonical`
+ * return `''` outright (`bullets.some((b) => !b.trim())`), so the ONE
+ * fallback step that every other validation layer treats as "always safe"
+ * silently had NO output to give whenever a CV's duties fell outside the
+ * narrow office/hospitality vocabulary those tables cover. Because provider +
+ * repair failure is itself non-deterministic (LLM sampling), this surfaced as
+ * an intermittent `generation_validation_failed` — hitting locales with
+ * stricter validation (Hindi's script/duration/tense checks) far more often,
+ * and "clearing" the moment an unrelated request happened to succeed without
+ * ever touching this fallback. This sentence does not claim any specific,
+ * unsupported duty (mirrors the same genericity as "process"/"planning"
+ * above) — it only confirms the fact that the person carried out the
+ * responsibilities of the role, which the canonical CV already establishes.
+ */
+const GENERIC_DUTY_FALLBACK: Record<Locale, (g: GenderTone) => string> = {
+  en: () => 'Carried out assigned professional responsibilities within the role.',
+  de: () => 'Wahrnehmung der zugewiesenen beruflichen Aufgaben und Verantwortlichkeiten in dieser Rolle.',
+  es: () => 'Cumplimiento de las responsabilidades profesionales asignadas en el puesto.',
+  fr: () => 'Exécution des responsabilités professionnelles confiées dans le cadre du poste.',
+  it: () => 'Svolgimento delle responsabilità professionali assegnate nel ruolo.',
+  ar: () => 'أداء المهام والمسؤوليات المهنية الموكلة في هذا الدور.',
+  ru: () => 'Выполнение возложенных профессиональных обязанностей в рамках занимаемой должности.',
+  'pt-BR': () => 'Cumprimento das responsabilidades profissionais atribuídas na função.',
+  ja: () => '職務における担当業務および責任を遂行。',
+  sr: () => 'Obavljam dodeljene profesionalne obaveze i odgovornosti u okviru pozicije.',
+  hr: () => 'Obavljam dodijeljene profesionalne obveze i odgovornosti u okviru pozicije.',
+  hi: (g) => (g === 'male'
+    ? 'इस भूमिका के अंतर्गत सौंपे गए पेशेवर कर्तव्यों और जिम्मेदारियों को पूरा कर रहा हूँ।'
+    : 'इस भूमिका के अंतर्गत सौंपे गए पेशेवर कर्तव्यों और जिम्मेदारियों को पूरा कर रही हूँ।'),
 };
 
 function localizedBulletForFact(
   fact: CvCanonicalFact,
   locale: Locale,
   gender?: CoverLetterGender | string,
+  options?: { useGenericCatchAll?: boolean },
 ): string {
   const g = tone(gender);
   const category = fact.category || classifyDutyCategory(fact.sourceText || fact.value);
@@ -396,7 +459,21 @@ function localizedBulletForFact(
     const intent = classifyGenericDutyIntent(fact.sourceText || fact.value);
     const table = GENERIC_INTENT_BULLET[locale] || GENERIC_INTENT_BULLET.en;
     if (intent && table?.[intent]) return table[intent](g).trim();
-    if (locale === 'en') return (fact.sourceText || fact.value).trim();
+    // No known intent matched (duty outside the office/hospitality/logistics
+    // vocabulary above). Callers that need a guaranteed-non-empty, always-safe
+    // deterministic summary fallback (`deterministicLocalizedSummaryFromCanonical`,
+    // the step every validator treats as "always available") opt in via
+    // `useGenericCatchAll`. Other callers — same-locale quality normalization
+    // (`localizeCanonicalBulletLine`, used for sr/hr/hi in-place bullet
+    // touch-ups) and the standalone bullets-generation fallback
+    // (`deterministicLocalizedBulletsFromCanonical`, whose callers deliberately
+    // treat an empty result as "localization impossible, fail loud instead of
+    // fabricating content" — see cv-export-integrity.ts) — keep the original
+    // '' signal so their existing no-op/throw behavior is unchanged.
+    if (options?.useGenericCatchAll) {
+      const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
+      return fallbackTable(g).trim();
+    }
     return '';
   }
   const table = BULLET_BY_CATEGORY[locale] || BULLET_BY_CATEGORY.en;
@@ -445,7 +522,7 @@ export function deterministicLocalizedSummaryFromCanonical(
   const bullets = factSet.facts
     .filter((f) => f.type === 'experience_bullet')
     .slice(0, 4)
-    .map((f) => localizedBulletForFact(f, locale, gender).replace(/[.。۔।]\s*$/u, ''));
+    .map((f) => localizedBulletForFact(f, locale, gender, { useGenericCatchAll: true }).replace(/[.。۔।]\s*$/u, ''));
   if (bullets.some((b) => !b.trim())) return '';
   const duties = bullets.join(locale === 'ja' ? '。' : locale === 'hi' ? '। ' : '. ');
   const shell = SUMMARY_SHELL[locale] || SUMMARY_SHELL.en;
