@@ -41,6 +41,10 @@ import {
 import { buildExperienceDurationSnapshot, durationToPromptToken } from '@/lib/cv-experience-duration';
 import { applyCvContentQuality } from '@/lib/cv-content-quality';
 import { finalizeClientAiSummary } from '@/lib/cv-summary-integrity';
+import {
+  omitInvalidLocalizedFieldsForPreview,
+  validateFinalLocalizedCvFields,
+} from '@/lib/cv-field-locale-integrity';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
@@ -612,10 +616,15 @@ export default function CVBuilderPage() {
 
   const localizedPreviewCv = useMemo<CVData>(
     () => {
+      const qualityCv = applyCvContentQuality(cv, locale, {
+        gender: cv.personal?.gender,
+        summaryOrigin: cv.summaryOrigin,
+      }).cv;
+      const localeSafeCv = omitInvalidLocalizedFieldsForPreview(qualityCv, locale);
       const base = {
-        ...cv,
-        skills: cv.skills.map((skill) => getLocalizedCvSkillName(skill, locale)),
-        languages: cv.languages.map((language) => ({
+        ...localeSafeCv,
+        skills: localeSafeCv.skills.map((skill) => getLocalizedCvSkillName(skill, locale)),
+        languages: localeSafeCv.languages.map((language) => ({
           ...language,
           name: getLocalizedCvLanguageName(language.name, locale),
         })),
@@ -986,6 +995,19 @@ export default function CVBuilderPage() {
       toast.success(copy.title, { description: copy.description });
     };
 
+    const prepareFinalLocaleSafeCv = (sourceCv: CVData): CVData => {
+      const qualityCv = applyCvContentQuality(sourceCv, locale, {
+        gender: sourceCv.personal?.gender,
+        summaryOrigin: sourceCv.summaryOrigin,
+      }).cv;
+      const localeCheck = validateFinalLocalizedCvFields(qualityCv, locale);
+      if (!localeCheck.valid) {
+        const first = localeCheck.violations[0];
+        throw new Error(`${first.kind}: ${first.path} does not match requested locale ${locale}`);
+      }
+      return qualityCv;
+    };
+
     const handleDOCXDownload = async () => {
       if (!canDownload('cv')) {
         setLimitModal({ open: true, type: 'cv' });
@@ -1020,7 +1042,10 @@ export default function CVBuilderPage() {
             photoForExport = circularPhotoDataUrl ?? liveCv.personal.photo;
           }
           const latestCv = cvRef.current;
-          const cvForExport = { ...latestCv, personal: { ...latestCv.personal, photo: photoForExport } };
+          const cvForExport = prepareFinalLocaleSafeCv({
+            ...latestCv,
+            personal: { ...latestCv.personal, photo: photoForExport },
+          });
           const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
           saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cvForExport.templateId, { elegantFormalPhoto });
           fallbackFileName = `${exportBaseName}.docx`;
@@ -1058,7 +1083,11 @@ export default function CVBuilderPage() {
         }
         // Force templateId from the live UI selection; cvRef.current can only supply
         // the rest of the data, never the template choice.
-        const cvForExport: CVData = { ...cvRef.current, ...cv, templateId: selectedTemplateId };
+        const cvForExport = prepareFinalLocaleSafeCv({
+          ...cvRef.current,
+          ...cv,
+          templateId: selectedTemplateId,
+        });
         cvRef.current = cvForExport;
         const route = resolveCvPdfExportRoute(selectedTemplateId);
 

@@ -12,6 +12,11 @@ import {
 } from './cv-canonical-facts';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { validateSummaryCompleteness } from './cv-semantic-fidelity';
+import {
+  buildLocalizedSummaryProvenance,
+  textMatchesRequestedFieldLocale,
+  type LocalizedSummaryProvenance,
+} from './cv-field-locale-integrity';
 
 export type CanonicalCreatedFrom =
   | 'user_structured_input'
@@ -70,7 +75,10 @@ export type ValidatedLocalizedCvProjection = {
   canonicalRevision: number;
   canonicalSourceHash: string;
   localizedSummary: string;
+  localizedSummaryProvenance: LocalizedSummaryProvenance;
   localizedExperiences: LocalizedProjectionExperience[];
+  localizedEducation: CVData['education'];
+  localizedSkills: string[];
   localizedLanguageLevels: Array<{ name: string; level: string }>;
   validationStatus: 'passed' | 'repaired' | 'fallback';
   /** Precomputed duration — PDF/DOCX must not recalculate independently. */
@@ -133,7 +141,10 @@ export function buildProjectionId(projection: Omit<ValidatedLocalizedCvProjectio
     canonicalRevision: projection.canonicalRevision,
     canonicalSourceHash: projection.canonicalSourceHash,
     localizedSummary: projection.localizedSummary,
+    localizedSummaryProvenance: projection.localizedSummaryProvenance,
     localizedExperiences: projection.localizedExperiences,
+    localizedEducation: projection.localizedEducation,
+    localizedSkills: projection.localizedSkills,
     localizedLanguageLevels: projection.localizedLanguageLevels,
     validationStatus: projection.validationStatus,
     experienceDurationSnapshot: projection.experienceDurationSnapshot || null,
@@ -483,6 +494,11 @@ export function isProjectionFresh(
   return (
     projection.canonicalRevision === snapshot.canonicalRevision
     && projection.canonicalSourceHash === snapshot.canonicalSourceHash
+    && projection.localizedSummaryProvenance?.requestedLocale === projection.requestedLocale
+    && projection.localizedSummaryProvenance?.localizedLocale === projection.requestedLocale
+    && projection.localizedSummaryProvenance?.canonicalLocale === snapshot.canonicalLocale
+    && projection.localizedSummaryProvenance?.canonicalRevision === snapshot.canonicalRevision
+    && projection.localizedSummaryProvenance?.canonicalSourceHash === snapshot.canonicalSourceHash
   );
 }
 
@@ -592,6 +608,9 @@ export function acceptValidatedAiContent(
 ): CVData {
   let next = { ...cv };
   if (options.summary !== undefined) {
+    if (!textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary')) {
+      return cv;
+    }
     const snap = cv.canonicalSnapshot;
     const becomesCanonical = !snap
       || snap.canonicalState !== 'valid'
@@ -695,7 +714,16 @@ export function buildProjectionFromLocalizedCv(
     canonicalRevision: snapshot.canonicalRevision,
     canonicalSourceHash: snapshot.canonicalSourceHash,
     localizedSummary: localizedCv.summary || '',
+    localizedSummaryProvenance: buildLocalizedSummaryProvenance({
+      requestedLocale,
+      canonicalLocale: snapshot.canonicalLocale,
+      canonicalRevision: snapshot.canonicalRevision,
+      canonicalSourceHash: snapshot.canonicalSourceHash,
+      origin: localizedCv.summaryOrigin,
+    }),
     localizedExperiences: experiences,
+    localizedEducation: localizedCv.education || [],
+    localizedSkills: localizedCv.skills || [],
     localizedLanguageLevels: (localizedCv.languages || []).map((lang) => ({
       name: lang.name,
       level: localizeCvLanguageLevel(lang.level, requestedLocale),
@@ -713,6 +741,10 @@ export function applyProjectionToCv(cv: CVData, projection: ValidatedLocalizedCv
   return {
     ...cv,
     summary: projection.localizedSummary,
+    summaryOrigin: projection.localizedSummaryProvenance.origin,
+    personal: {
+      ...cv.personal,
+    },
     experience: (cv.experience || []).map((exp) => {
       const loc = byId.get(exp.id);
       if (!loc) return exp;
@@ -723,8 +755,10 @@ export function applyProjectionToCv(cv: CVData, projection: ValidatedLocalizedCv
         description: formatExperienceBullets(loc.bullets.map((b) => b.localizedText)),
       };
     }),
+    education: projection.localizedEducation || cv.education,
+    skills: projection.localizedSkills || cv.skills,
     languages: (cv.languages || []).map((lang, i) => ({
-      name: lang.name,
+      name: projection.localizedLanguageLevels[i]?.name || lang.name,
       level: projection.localizedLanguageLevels[i]?.level || lang.level,
     })),
   };

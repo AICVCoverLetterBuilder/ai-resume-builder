@@ -29,16 +29,40 @@ function localizeProductionOperator(locale: Locale, gender?: string): string {
   return 'Production Operator';
 }
 
+function localizeInteriorDesigner(locale: Locale, gender?: string): string {
+  const g = normalizeCoverLetterGender(gender);
+  if (locale === 'hi') return 'इंटीरियर डिज़ाइनर';
+  if (locale === 'sr' || locale === 'hr') {
+    return g === 'female' ? 'Dizajnerka enterijera' : 'Dizajner enterijera';
+  }
+  if (locale === 'en') return 'Interior Designer';
+  if (locale === 'de') return g === 'female' ? 'Innenarchitektin' : 'Innenarchitekt';
+  return 'Interior Designer';
+}
+
 function localizeKnownTitle(title: string, locale: Locale, gender?: string): string | null {
   const normalized = title.normalize('NFKC');
   if (/operater.*proizvod|production\s+operator|operatore.*produz/i.test(normalized)) {
     return localizeProductionOperator(locale, gender);
+  }
+  if (/dizajner(?:ka)?\s+enterijera|interior\s+designer|innenarchitekt/i.test(normalized)) {
+    return localizeInteriorDesigner(locale, gender);
   }
   if (locale === 'sr' || locale === 'hr' || locale === 'en') return normalized;
   if (/^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2) {
     return null;
   }
   return normalized;
+}
+
+/** Localize a known occupational title on a detached preview/export projection. */
+export function localizeOccupationalTitleForProjection(
+  title: string,
+  locale: Locale,
+  gender?: string,
+): string {
+  if (!isValidOccupationalTitle(title)) return title;
+  return localizeKnownTitle(title.trim(), locale, gender) || title;
 }
 
 export function getOccupationalTitleFallback(locale: Locale, gender?: string): string {

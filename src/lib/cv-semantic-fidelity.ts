@@ -139,8 +139,8 @@ const SUMMARY_CATEGORY_MARKERS: Record<Exclude<CvDutyCategory, 'generic'>, RegEx
     /(bar\s+area|higijen|hygiene\s+standard|स्वच्छता\s+मानक)/iu,
 };
 
-const SR_PAST_CURRENT_ROLE = /\b(Radila\s+sam|Analizirala\s+sam|Učestvovala\s+sam|Radio\s+sam|Analizirao\s+sam|Učestvovao\s+sam)\b/giu;
-const SR_PRESENT_CURRENT_ROLE = /\b(Radim|Sarađujem|Analiziram|Učestvujem)\b/giu;
+const SR_PAST_CURRENT_ROLE = /\b(Radila\s+sam|Analizirala\s+sam|Učestvovala\s+sam|Kreirala\s+sam|Izrađivala\s+sam|Pratila\s+sam|Radio\s+sam|Analizirao\s+sam|Učestvovao\s+sam|Kreirao\s+sam|Izrađivao\s+sam|Pratio\s+sam)\b/giu;
+const SR_PRESENT_CURRENT_ROLE = /\b(Radim|Sarađujem|Analiziram|Učestvujem|Kreiram|Izrađujem|Pratim)\b/giu;
 
 const SR_KNOWN_LEVELS = /\b(Napredni|Tečan|Srednji|Osnovni|Maternji)\b/u;
 const EN_KNOWN_LEVELS = /\b(Advanced|Fluent|Intermediate|Basic|Native)\b/i;

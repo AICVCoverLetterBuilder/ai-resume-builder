@@ -15,6 +15,11 @@ import { getLocalizedCvSkillName } from './cv-skill-options';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
 import { buildExperienceDurationSnapshot, type ExperienceDurationSnapshot } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
+import {
+  buildLocalizedSummaryProvenance,
+  validateFinalLocalizedCvFields,
+  type LocalizedSummaryProvenance,
+} from './cv-field-locale-integrity';
 
 export type CorporateNavySecurityCategory =
   | 'premises_access_monitoring'
@@ -38,6 +43,7 @@ export type CorporateNavyExportProjection = {
   canonicalRevision: number;
   canonicalSourceHash: string;
   localizedSummary: string;
+  localizedSummaryProvenance: LocalizedSummaryProvenance;
   localizedExperiences: Array<{
     experienceId: string;
     role: string;
@@ -51,6 +57,8 @@ export type CorporateNavyExportProjection = {
     }>;
   }>;
   localizedLanguageLevels: Array<{ name: string; level: string }>;
+  localizedEducation: CVData['education'];
+  localizedSkills: string[];
   validationStatus: 'passed' | 'fallback' | 'repaired';
   experienceDurationSnapshot?: ExperienceDurationSnapshot;
   gender?: string;
@@ -346,6 +354,14 @@ export function prepareCorporateNavyExport(
     summaryOrigin: nextCv.summaryOrigin,
   });
   nextCv = quality.cv;
+  const finalLocaleCheck = validateFinalLocalizedCvFields(nextCv, locale);
+  if (!finalLocaleCheck.valid) {
+    const first = finalLocaleCheck.violations[0];
+    throw new CorporateNavyLocaleExportError(
+      locale,
+      `${first.kind}: ${first.path} does not match requested locale ${locale}`,
+    );
+  }
 
   const qualityExperiences = experiences.map((e) => {
     const qExp = nextCv.experience.find((x) => x.id === e.experienceId);
@@ -364,17 +380,26 @@ export function prepareCorporateNavyExport(
     requestedLocale: locale,
     canonicalLocale: cv.canonicalSnapshot?.canonicalLocale ?? detectContentLocale(
       [cv.canonicalSummary || cv.summary, ...experiences.map((e) => e.canonicalDescription)].join('\n'),
-    ),
+    ) ?? locale,
     canonicalRevision: cv.canonicalSnapshot?.canonicalRevision ?? 0,
     canonicalSourceHash: cv.canonicalSnapshot?.canonicalSourceHash ?? '',
     localizedSummary: nextCv.summary || '',
+    localizedSummaryProvenance: buildLocalizedSummaryProvenance({
+      requestedLocale: locale,
+      canonicalLocale: cv.canonicalSnapshot?.canonicalLocale ?? locale,
+      canonicalRevision: cv.canonicalSnapshot?.canonicalRevision ?? 0,
+      canonicalSourceHash: cv.canonicalSnapshot?.canonicalSourceHash ?? '',
+      origin: nextCv.summaryOrigin,
+    }),
     localizedExperiences: qualityExperiences.map((e) => ({
       experienceId: e.experienceId,
-      role: e.role,
+      role: nextCv.experience.find((x) => x.id === e.experienceId)?.position || e.role,
       company: e.company,
       bullets: e.bullets,
     })),
-    localizedLanguageLevels: languageLevels,
+    localizedLanguageLevels: nextCv.languages || languageLevels,
+    localizedEducation: nextCv.education || [],
+    localizedSkills: nextCv.skills || [],
     validationStatus: (usedFallback
       ? 'fallback'
       : quality.repaired

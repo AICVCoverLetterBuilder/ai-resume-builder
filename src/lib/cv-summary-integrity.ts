@@ -16,6 +16,7 @@ import {
   validateSummaryCompleteness,
 } from './cv-semantic-fidelity';
 import type { ExperienceDurationSnapshot } from './cv-experience-duration';
+import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 
 export function buildDurationContextFromCv(cv: CVData, locale: Locale): DurationIntegrationContext {
   const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
@@ -41,6 +42,7 @@ function summaryPassesIntegrity(
 ): boolean {
   const factSet = buildCvCanonicalFactSet(cv);
   const gender = cv.personal?.gender || '';
+  if (!textMatchesRequestedFieldLocale(summary, locale, 'summary')) return false;
   if (!validateSummaryCompleteness(summary, { locale }).valid) return false;
   return validateLocalizedSummary(summary, factSet, {
     locale,

@@ -552,16 +552,25 @@ describe('Creative Artistic multilingual content integrity', () => {
 
     // Non-English locales must export localized (never English dump), even if shorter.
     for (const locale of ['de', 'sr', 'hi', 'ja', 'ar'] as Locale[]) {
+      const localeCv = locale === 'hi'
+        ? {
+          ...longCv,
+          education: longCv.education.map((education) => ({
+            ...education,
+            description: 'डिज़ाइन सिद्धांत, परियोजना योजना और व्यावसायिक संचार का अध्ययन किया।',
+          })),
+        }
+        : longCv;
       vi.resetModules();
       const { instances } = installDirectPdfMocks();
       const mod = await import('@/lib/export');
-      const blob = await mod.buildCreativeArtisticPdfBlob(longCv, locale);
+      const blob = await mod.buildCreativeArtisticPdfBlob(localeCv, locale);
       expect(blob.size).toBeGreaterThan(0);
       expect(instances.length).toBeGreaterThan(0);
-      const safe = applyCreativeArtisticExportIntegrity(longCv, locale, { gender: 'female' });
+      const safe = applyCreativeArtisticExportIntegrity(localeCv, locale, { gender: 'female' });
       expect(isEnglishCanonicalDump(
         safe.experience[0].description,
-        longCv.experience[0].canonicalDescription || longCv.experience[0].description,
+        localeCv.experience[0].canonicalDescription || localeCv.experience[0].description,
         locale,
       )).toBe(false);
     }

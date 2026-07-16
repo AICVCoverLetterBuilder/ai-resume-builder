@@ -20,6 +20,7 @@ import {
   validateSummaryCompleteness,
   type CvFidelityViolation,
 } from './cv-semantic-fidelity';
+import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 
 export type CvContentActivation = {
   content: string;
@@ -253,7 +254,11 @@ export async function activateCvSummary(options: {
     gender: options.gender,
     stage: 'initial',
   });
-  if (first.valid && options.candidate.trim()) {
+  if (
+    first.valid
+    && options.candidate.trim()
+    && textMatchesRequestedFieldLocale(options.candidate, options.locale, 'summary')
+  ) {
     return {
       content: options.candidate.trim(),
       status: 'passed',
@@ -278,7 +283,11 @@ export async function activateCvSummary(options: {
         gender: options.gender,
         stage: 'repair',
       });
-      if (recheck.valid && repaired.trim()) {
+      if (
+        recheck.valid
+        && repaired.trim()
+        && textMatchesRequestedFieldLocale(repaired, options.locale, 'summary')
+      ) {
         return {
           content: repaired.trim(),
           status: 'repaired',
@@ -295,6 +304,7 @@ export async function activateCvSummary(options: {
   const sourceCanonical = options.factSet.facts.find((f) => f.type === 'summary')?.value || '';
   const hinted = options.fallbackSummary.trim();
   const hintedOk = hinted
+    && textMatchesRequestedFieldLocale(hinted, options.locale, 'summary')
     && validateSummaryCompleteness(hinted, { locale: options.locale }).valid
     && validateLocalizedSummary(hinted, options.factSet, {
       locale: options.locale,
@@ -320,6 +330,7 @@ export async function activateCvSummary(options: {
   );
   if (
     localized
+    && textMatchesRequestedFieldLocale(localized, options.locale, 'summary')
     && validateSummaryCompleteness(localized, { locale: options.locale }).valid
     && validateLocalizedSummary(localized, options.factSet, {
       locale: options.locale,

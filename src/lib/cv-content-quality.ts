@@ -24,9 +24,13 @@ import {
   validateLocalizedSummary,
   validateSummaryCompleteness,
 } from './cv-semantic-fidelity';
-import { resolveOccupationalTitleForSummary } from './cv-role-title';
+import {
+  localizeOccupationalTitleForProjection,
+  resolveOccupationalTitleForSummary,
+} from './cv-role-title';
 import { deduplicateSkillsForExport } from './cv-skills-projection';
 import { localizeCvLanguageLevel } from './cv-language-levels';
+import { getLocalizedCvLanguageName } from './cv-language-options';
 import { deterministicLocalizedSummaryFromCanonical, localizeCanonicalBulletLine } from './cv-localized-fallback';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
@@ -293,6 +297,12 @@ export function applySerbianCurrentRoleTense(text: string): string {
     [/\bAnalizirao sam\b/gu, 'Analiziram'],
     [/\bUčestvovala sam\b/gu, 'Učestvujem'],
     [/\bUčestvovao sam\b/gu, 'Učestvujem'],
+    [/\bKreirala sam\b/gu, 'Kreiram'],
+    [/\bKreirao sam\b/gu, 'Kreiram'],
+    [/\bIzrađivala sam\b/gu, 'Izrađujem'],
+    [/\bIzrađivao sam\b/gu, 'Izrađujem'],
+    [/\bPratila sam\b/gu, 'Pratim'],
+    [/\bPratio sam\b/gu, 'Pratim'],
     [/\bpružala\b/gu, 'pružam'],
     [/\bpružao\b/gu, 'pružam'],
     [/\bunosila\b/gu, 'unosim'],
@@ -909,16 +919,28 @@ export function applyCvContentQuality(
   }
 
   const localizedLanguages = (cv.languages || []).map((lang) => ({
-    name: lang.name,
+    name: getLocalizedCvLanguageName(lang.name, locale) || lang.name,
     level: localizeCvLanguageLevel(lang.level, locale),
   }));
   const localizedSkills = deduplicateSkillsForExport(cv.skills || [], locale);
+  const localizedExperience = experience.map((exp) => ({
+    ...exp,
+    position: localizeOccupationalTitleForProjection(exp.position || '', locale, gender),
+  }));
 
   return {
     cv: {
       ...cv,
+      personal: {
+        ...cv.personal,
+        jobTitle: localizeOccupationalTitleForProjection(
+          cv.personal?.jobTitle || '',
+          locale,
+          gender,
+        ),
+      },
       summary,
-      experience,
+      experience: localizedExperience,
       languages: localizedLanguages,
       skills: localizedSkills,
       ...(nextOrigin ? { summaryOrigin: nextOrigin } : {}),

@@ -640,7 +640,8 @@ describe('Elegant Formal export routing and rendering', () => {
     expect(source).toContain("liveCv.templateId === 'elegant-formal'");
     expect(source).toContain('elegantFormalPhoto = await ensureElegantFormalPhotoForExport()');
     expect(source).toContain('photoForExport = elegantFormalPhoto?.dataUrl');
-    expect(source).toContain('const cvForExport = { ...latestCv, personal: { ...latestCv.personal, photo: photoForExport } }');
+    expect(source).toContain('const cvForExport = prepareFinalLocaleSafeCv({');
+    expect(source).toContain('personal: { ...latestCv.personal, photo: photoForExport }');
     expect(source).toContain('getPersonalPhotoVariants(cv).originalPhoto ? getPersonalPhotoVariants(cv).rectangularPhoto : validatedElegantFormalFallbackPhoto');
     expect(source).not.toContain('findLoadedElegantFormalPreviewPhoto');
     expect(source).not.toContain('personalPhoto: cv.personal.photo');

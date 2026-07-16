@@ -34,6 +34,8 @@ import {
 import { buildExperienceDurationSnapshot } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
 import { localizeCvLanguageLevel } from './cv-language-levels';
+import { getLocalizedCvLanguageName } from './cv-language-options';
+import { validateFinalLocalizedCvFields } from './cv-field-locale-integrity';
 
 export class CreativeArtisticLocaleExportError extends Error {
   readonly locale: Locale;
@@ -86,6 +88,15 @@ function isValidLocalizedSummary(
   canonicalLocale?: Locale,
 ): boolean {
   if (!candidate.trim()) return false;
+  const localeCheck = validateFinalLocalizedCvFields({
+    summary: candidate,
+    personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '' },
+    experience: [],
+    education: [],
+    skills: [],
+    languages: [],
+  }, locale);
+  if (!localeCheck.valid) return false;
   if (!validateSummaryCompleteness(candidate, { locale }).valid) return false;
   if (!validateLocalizedSummary(candidate, factSet, { locale, gender, stage: 'export' }).valid) {
     return false;
@@ -278,6 +289,14 @@ function attachQualityToProjection(
     durationSnapshot: priorSnapshot,
     summaryOrigin: localizedCv.summaryOrigin,
   });
+  const finalLocaleCheck = validateFinalLocalizedCvFields(quality.cv, locale);
+  if (!finalLocaleCheck.valid) {
+    const first = finalLocaleCheck.violations[0];
+    throw new CreativeArtisticLocaleExportError(
+      locale,
+      `${first.kind}: ${first.path} does not match requested locale ${locale}`,
+    );
+  }
   const status: ValidatedLocalizedCvProjection['validationStatus'] = quality.repaired
     ? (validationStatus === 'fallback' ? 'fallback' : 'repaired')
     : validationStatus;
@@ -289,6 +308,7 @@ function attachQualityToProjection(
     canonicalRevision: base.canonicalRevision,
     canonicalSourceHash: base.canonicalSourceHash,
     localizedSummary: quality.cv.summary || '',
+    localizedSummaryProvenance: base.localizedSummaryProvenance,
     localizedExperiences: base.localizedExperiences.map((exp) => {
       const qExp = quality.cv.experience.find((e) => e.id === exp.experienceId);
       if (!qExp) return exp;
@@ -304,8 +324,10 @@ function attachQualityToProjection(
         })),
       };
     }),
+    localizedEducation: quality.cv.education || [],
+    localizedSkills: quality.cv.skills || [],
     localizedLanguageLevels: (quality.cv.languages || []).map((lang) => ({
-      name: lang.name,
+      name: getLocalizedCvLanguageName(lang.name, locale) || lang.name,
       level: localizeCvLanguageLevel(lang.level, locale),
     })),
     validationStatus: status,
@@ -346,28 +368,33 @@ export function prepareCreativeArtisticExport(
 
   const freshProjection = cv.localizedProjections?.[locale];
   if (freshProjection && snapshot && isProjectionFresh(freshProjection, snapshot)) {
-    if (locale !== 'en' && (
-      isEnglishCanonicalDump(freshProjection.localizedSummary, snapshot.canonicalSummary, locale)
-      || freshProjection.localizedExperiences.some((exp) => {
-        const canon = snapshot.canonicalExperiences.find((e) => e.experienceId === exp.experienceId);
-        const joined = exp.bullets.map((b) => b.localizedText).join('\n');
-        const canonJoined = (canon?.bullets || []).map((b) => b.sourceText).join('\n');
-        return isEnglishCanonicalDump(joined, canonJoined, locale);
-      })
-    )) {
-      throw new CreativeArtisticLocaleExportError(locale, 'stale/fresh projection failed English-dump invariant');
+    const freshApplied = applyProjectionToCv(cv, freshProjection);
+    const freshFieldCheck = validateFinalLocalizedCvFields(freshApplied, locale);
+    if (freshFieldCheck.valid) {
+      if (locale !== 'en' && (
+        isEnglishCanonicalDump(freshProjection.localizedSummary, snapshot.canonicalSummary, locale)
+        || freshProjection.localizedExperiences.some((exp) => {
+          const canon = snapshot.canonicalExperiences.find((e) => e.experienceId === exp.experienceId);
+          const joined = exp.bullets.map((b) => b.localizedText).join('\n');
+          const canonJoined = (canon?.bullets || []).map((b) => b.sourceText).join('\n');
+          return isEnglishCanonicalDump(joined, canonJoined, locale);
+        })
+      )) {
+        throw new CreativeArtisticLocaleExportError(locale, 'stale/fresh projection failed English-dump invariant');
+      }
+      // Re-run content quality with the shared duration snapshot (never recalculate from localized text).
+      return attachQualityToProjection(
+        cv,
+        freshApplied,
+        locale,
+        gender,
+        freshProjection.validationStatus,
+        options?.referenceDate || durationSnapshot.referenceDateIso,
+        options?.durationSnapshot || freshProjection.experienceDurationSnapshot || durationSnapshot,
+      );
     }
-    const applied = applyProjectionToCv(cv, freshProjection);
-    // Re-run content quality with the shared duration snapshot (never recalculate from localized text).
-    return attachQualityToProjection(
-      cv,
-      applied,
-      locale,
-      gender,
-      freshProjection.validationStatus,
-      options?.referenceDate || durationSnapshot.referenceDateIso,
-      options?.durationSnapshot || freshProjection.experienceDurationSnapshot || durationSnapshot,
-    );
+    // Fresh metadata with invalid field text is not reusable. Regenerate below
+    // from the current canonical snapshot; never trust locale metadata alone.
   }
 
   if (freshProjection && snapshot && !isProjectionFresh(freshProjection, snapshot)) {
