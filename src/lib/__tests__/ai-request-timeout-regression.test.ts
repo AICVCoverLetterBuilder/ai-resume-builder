@@ -49,6 +49,7 @@ import {
   AI_CLIENT_TIMEOUT_MS,
   AI_LEGACY_CLIENT_TIMEOUT_MS,
   AI_MIN_REPAIR_BUDGET_MS,
+  AI_PLATFORM_MAX_DURATION_S,
   AI_PROVIDER_CALL_TIMEOUT_MS,
   AI_SERVER_BUDGET_MS,
   computeServerDeadline,
@@ -111,12 +112,17 @@ const SERBIAN_ECHO = 'Vozač viličara sa iskustvom u skladišnom poslovanju.';
 const VALID_HINDI = 'मैं लगभग छह वर्षों के अनुभव वाला वेयरहाउस चालक हूँ और गोदाम में माल का सुरक्षित परिवहन करता हूँ।';
 
 describe('/api/generate route maxDuration stays in sync with AI_SERVER_BUDGET_MS', () => {
-  it('the hardcoded Next.js route-segment `maxDuration` (31s) covers AI_SERVER_BUDGET_MS + 5s headroom', () => {
+  it('the hardcoded Next.js route-segment `maxDuration` (30s) leaves multi-second headroom above AI_SERVER_BUDGET_MS', async () => {
     // Next.js requires `export const maxDuration` in route.ts to be a plain
     // numeric literal (no expression), so it cannot import this constant
     // directly — this test is the drift guard for that manually-kept-in-sync value.
-    const expectedMaxDuration = Math.ceil(AI_SERVER_BUDGET_MS / 1000) + 5;
-    expect(expectedMaxDuration).toBe(31);
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const src = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
+    expect(src).toMatch(/export const maxDuration = 30\b/);
+    // Application budget must finish several seconds before the platform kill.
+    expect(AI_PLATFORM_MAX_DURATION_S * 1000 - AI_SERVER_BUDGET_MS).toBeGreaterThanOrEqual(6_000);
+    expect(AI_SERVER_BUDGET_MS).toBe(22_000);
   });
 });
 

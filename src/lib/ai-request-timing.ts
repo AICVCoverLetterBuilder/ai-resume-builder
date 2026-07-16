@@ -2,40 +2,24 @@
  * Deadline-aware budget for CV AI generation requests (Professional Summary,
  * Bullets, Rewrite) and dev/test-only timing diagnostics.
  *
- * ROOT CAUSE (Android build 229 "first Hindi request times out, retry
- * succeeds"): the server recovery chain (provider attempt -> repair attempt
- * -> deterministic fallback) had no shared deadline. Each provider call used
- * a 25s Anthropic SDK timeout AND was retried once even when the failure WAS
- * that same timeout (up to 50s for a single logical attempt), so a request
- * that needed both an initial attempt and a repair attempt could take up to
- * ~100s server-side while the client aborted at a fixed 30s — regardless of
- * locale. Hindi hits the repair path far more often than sr/en (its
- * validators — script, duration placement, tense — are the strictest of the
- * 12 locales), so it was disproportionately likely to need two sequential
- * provider round-trips and blow the client deadline on the very first
- * attempt. A same-locale retry then either got a directly-valid provider
- * response or simply drew a faster network round-trip and finished in time —
- * explaining the "intermittent, fixed by retrying" symptom without any
- * state, cache, or initialization-order involvement.
+ * ROOT CAUSE (Android build 231 "~32s then Mrežna greška"):
+ *   Vercel `maxDuration` for `/api/generate` is ~31s. The Anthropic SDK's
+ *   client-level `timeout` is retried by default (`maxRetries`), so a single
+ *   logical provider attempt can wait far longer than `AI_PROVIDER_CALL_TIMEOUT_MS`
+ *   and hold the serverless invocation open until the platform terminates the
+ *   connection — which Android then surfaces as `network_error` (Failed to
+ *   fetch / connection closed), ~1s after the 31s platform limit, while the
+ *   client AbortController is still at 40s.
  *
- * FIX: one authoritative, bounded deadline budget shared by every stage:
- *  - new clients wait `AI_CLIENT_TIMEOUT_MS` (40s); the server budget is kept
- *    under the legacy Android-229 client abort of 30s as well, so a
- *    Production Vercel deploy alone unblocks already-shipped builds;
- *  - the server tracks remaining budget and skips the repair round-trip
- *    entirely (going straight to the fast local fallback) once there is not
- *    enough time left for it to plausibly finish before the shared deadline;
- *  - a provider call that itself times out is never retried (a retry with
- *    the same timeout can only make the deadline worse, never better) —
- *    only genuinely fast-failing transient errors (5xx/ECONNRESET/overload)
- *    get a single bounded retry.
+ * FIX:
+ *  - Application response budget well under the platform limit (~22s vs ~30s).
+ *  - Every provider call uses `maxRetries: 0` + AbortSignal hard-cancel so the
+ *    underlying HTTP request is terminated when its slice expires.
+ *  - Repair is skipped when remaining budget cannot cover another call.
+ *  - Deterministic local fallback returns before the platform can kill us.
  */
 
-/**
- * Client-side AbortController deadline for one CV AI request (summary/bullets/rewrite).
- * New Android/web builds ship this value. Android build 229 (and earlier) still
- * abort at the previous hard-coded 30_000ms — see `AI_LEGACY_CLIENT_TIMEOUT_MS`.
- */
+/** Client-side AbortController deadline (Android build 230+). */
 export const AI_CLIENT_TIMEOUT_MS = 40_000;
 
 /** Guarantees a finite, positive AbortController delay (never 0 / NaN / negative). */
@@ -43,40 +27,47 @@ export function resolveClientAbortTimeoutMs(value: number = AI_CLIENT_TIMEOUT_MS
   return Number.isFinite(value) && value >= 1_000 ? value : AI_CLIENT_TIMEOUT_MS;
 }
 
-/**
- * Hard-coded AbortController deadline that shipped in Android build 229 (and
- * earlier). The server budget below is intentionally kept under this value so
- * a Production Vercel deploy alone can still finish — and return a valid
- * deterministic fallback — before those already-shipped clients abort. New
- * Android builds that pick up `AI_CLIENT_TIMEOUT_MS` get additional margin.
- */
+/** Hard-coded AbortController deadline that shipped in Android build 229. */
 export const AI_LEGACY_CLIENT_TIMEOUT_MS = 30_000;
 
 /**
- * Server-side wall-clock budget for the full recovery chain (initial provider
- * attempt + optional repair attempt + local deterministic fallback). Kept
- * under BOTH `AI_LEGACY_CLIENT_TIMEOUT_MS` (so already-shipped Android 229
- * clients stop timing out) and `AI_CLIENT_TIMEOUT_MS` (new builds), leaving
- * margin for request/response network transfer, Vercel cold start, and
- * hosting-platform routing overhead.
+ * Vercel/Next.js route `maxDuration` (seconds) for `/api/generate`.
+ * Kept as a named constant for tests; the route file must repeat the literal
+ * because Next.js requires a static numeric export.
  */
-export const AI_SERVER_BUDGET_MS = 26_000;
+export const AI_PLATFORM_MAX_DURATION_S = 30;
 
 /**
- * Single Anthropic call deadline. No automatic retry-on-timeout (see
- * `isRetryableProviderError`) — retrying an already-timed-out call can only
- * make the deadline worse, never better.
+ * Application wall-clock budget for the full recovery chain, measured from
+ * the earliest route entry. Must finish — and begin returning JSON — several
+ * seconds before the platform limit so cold-start, validation and response
+ * serialization cannot push us into a Vercel kill.
  */
-export const AI_PROVIDER_CALL_TIMEOUT_MS = 11_000;
+export const AI_SERVER_BUDGET_MS = 22_000;
 
 /**
- * Minimum remaining server budget required to even START a repair call. One
- * more provider round-trip can take up to `AI_PROVIDER_CALL_TIMEOUT_MS`; the
- * margin covers validation/serialization overhead. Below this threshold,
- * repair is skipped and the deterministic fallback (fast, local, no network
- * call) is used immediately instead.
+ * Single provider-call slice. Used both as the SDK `timeout` and as the
+ * AbortSignal timer. Combined with `maxRetries: 0` so the SDK cannot silently
+ * stack multiple full timeouts.
+ */
+export const AI_PROVIDER_CALL_TIMEOUT_MS = 8_000;
+
+/**
+ * Minimum remaining application budget required to START a repair call.
+ * Below this, skip repair and return the local deterministic fallback.
  */
 export const AI_MIN_REPAIR_BUDGET_MS = AI_PROVIDER_CALL_TIMEOUT_MS + 2_000;
+
+/**
+ * Final response-guard margin: if less than this remains before the
+ * application deadline, skip further awaitable work and return whatever safe
+ * result is already available (or a structured timeout error).
+ */
+export const AI_RESPONSE_GUARD_MS = 2_000;
+
+/** Safety margin between application budget and platform maxDuration. */
+export const AI_PLATFORM_SAFETY_MARGIN_MS =
+  AI_PLATFORM_MAX_DURATION_S * 1000 - AI_SERVER_BUDGET_MS;
 
 export function computeServerDeadline(requestStartedAt: number): number {
   return requestStartedAt + AI_SERVER_BUDGET_MS;
@@ -88,17 +79,47 @@ export function remainingBudgetMs(deadlineAt: number, now = Date.now()): number 
 
 /** True when there is enough remaining budget to attempt one more provider round-trip (repair). */
 export function hasRepairBudget(deadlineAt: number | null | undefined, now = Date.now()): boolean {
-  if (deadlineAt == null) return true; // No deadline configured (e.g. legacy callers/tests) — behave as before.
+  if (deadlineAt == null) return true;
   return remainingBudgetMs(deadlineAt, now) >= AI_MIN_REPAIR_BUDGET_MS;
 }
 
+/** True when enough time remains to start *any* provider call. */
+export function hasProviderBudget(deadlineAt: number | null | undefined, now = Date.now()): boolean {
+  if (deadlineAt == null) return true;
+  return remainingBudgetMs(deadlineAt, now) >= Math.min(AI_PROVIDER_CALL_TIMEOUT_MS, AI_RESPONSE_GUARD_MS + 1_000);
+}
+
+/** True when the route should stop awaiting and return immediately. */
+export function shouldForceRespond(deadlineAt: number | null | undefined, now = Date.now()): boolean {
+  if (deadlineAt == null) return false;
+  return remainingBudgetMs(deadlineAt, now) <= AI_RESPONSE_GUARD_MS;
+}
+
 /**
- * Errors worth a single fast retry. Timeout is deliberately EXCLUDED — see
- * module docstring: retrying a call that already consumed its full timeout
- * budget cannot help and only risks blowing the shared deadline further.
+ * Per-call timeout clamped to the remaining application budget (minus a small
+ * serialization cushion) so a provider call can never run into the platform kill.
+ */
+export function providerCallTimeoutMs(deadlineAt: number | null | undefined, now = Date.now()): number {
+  if (deadlineAt == null) return AI_PROVIDER_CALL_TIMEOUT_MS;
+  const remaining = remainingBudgetMs(deadlineAt, now) - 500;
+  return Math.max(1_000, Math.min(AI_PROVIDER_CALL_TIMEOUT_MS, remaining));
+}
+
+/**
+ * Errors worth a single fast retry. Timeout / abort are deliberately EXCLUDED —
+ * retrying an already-timed-out call can only make the shared deadline worse.
  */
 export function isRetryableProviderError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
+  if (
+    lower.includes('timeout')
+    || lower.includes('aborted')
+    || lower.includes('abort')
+    || (err instanceof Error && err.name === 'AbortError')
+  ) {
+    return false;
+  }
   return (
     msg.includes('ECONNRESET')
     || msg.includes('overloaded')
@@ -107,6 +128,94 @@ export function isRetryableProviderError(err: unknown): boolean {
     || msg.includes('502')
     || msg.includes('500')
   );
+}
+
+export function isProviderAbortOrTimeoutError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  const name = err instanceof Error ? err.name : '';
+  return (
+    name === 'AbortError'
+    || name === 'APIUserAbortError'
+    || name === 'APIConnectionTimeoutError'
+    || msg.includes('timeout')
+    || msg.includes('aborted')
+    || msg.includes('abort')
+  );
+}
+
+/**
+ * Options passed to a provider `messages.create`-compatible function.
+ * Matches the Anthropic SDK RequestOptions subset we rely on.
+ */
+export interface ProviderCallOptions {
+  signal?: AbortSignal;
+  timeout?: number;
+  maxRetries?: number;
+}
+
+/**
+ * Runs one provider call under a hard AbortSignal + timeout, with SDK retries
+ * disabled. The underlying request is cancelled when the slice expires so the
+ * serverless function can continue to deterministic fallback immediately.
+ */
+export async function callProviderWithDeadline<T>(
+  create: (options: ProviderCallOptions) => Promise<T>,
+  deadlineAt?: number | null,
+): Promise<T> {
+  if (!hasProviderBudget(deadlineAt)) {
+    const err = new Error('Request timeout: insufficient provider budget');
+    err.name = 'AbortError';
+    throw err;
+  }
+
+  const timeoutMs = providerCallTimeoutMs(deadlineAt);
+  // Clamp further when the shared application deadline is closer than the slice.
+  const effectiveMs = deadlineAt == null
+    ? timeoutMs
+    : Math.max(1_000, Math.min(timeoutMs, remainingBudgetMs(deadlineAt) - AI_RESPONSE_GUARD_MS));
+  const controller = new AbortController();
+  let sliceTimer: ReturnType<typeof setTimeout> | undefined;
+  const abort = () => {
+    try {
+      controller.abort();
+    } catch {
+      // ignore
+    }
+  };
+
+  const timeoutError = () => {
+    const err = new Error(`Request timeout after ${effectiveMs}ms`);
+    err.name = 'AbortError';
+    return err;
+  };
+
+  // Race the provider call against an explicit timer. AbortSignal cancels the
+  // underlying HTTP request; the race guarantees we regain control even if the
+  // SDK is slow to surface the abort (build 231: wrapper rejection alone left
+  // the serverless invocation open until Vercel killed it).
+  const slicePromise = new Promise<never>((_, reject) => {
+    sliceTimer = setTimeout(() => {
+      abort();
+      reject(timeoutError());
+    }, effectiveMs);
+  });
+
+  const createPromise = create({
+    signal: controller.signal,
+    timeout: effectiveMs,
+    maxRetries: 0,
+  });
+
+  try {
+    return await Promise.race([createPromise, slicePromise]);
+  } catch (err) {
+    // Swallow late provider completion so it cannot apply content, increment
+    // usage, or keep the route awaiting an unresolved promise.
+    void createPromise.then(() => undefined, () => undefined);
+    throw err;
+  } finally {
+    if (sliceTimer) clearTimeout(sliceTimer);
+  }
 }
 
 export interface AiServerRequestTiming {
@@ -126,12 +235,19 @@ export interface AiServerRequestTiming {
   fallbackFinishedAt?: number | null;
   serverRespondedAt: number;
   deadlineAt?: number | null;
+  providerAborted?: boolean;
 }
 
-/** Dev/test-only. Never logs CV content or personal data — timestamps and stage outcomes only. */
+/**
+ * Structured timing metadata for Vercel/server logs.
+ * Never logs CV content or personal data — timestamps and stage outcomes only.
+ * Enabled in development, on Vercel, or when AI_TIMING_LOGS=1.
+ */
 export function logAiServerRequestTiming(t: AiServerRequestTiming): void {
-  if (process.env.NODE_ENV === 'production') return;
   if (typeof console === 'undefined' || !console.info) return;
+  const onVercel = process.env.VERCEL === '1';
+  const forced = process.env.AI_TIMING_LOGS === '1';
+  if (process.env.NODE_ENV === 'production' && !onVercel && !forced) return;
   const providerDurationMs = t.providerStartedAt != null && t.providerFinishedAt != null
     ? t.providerFinishedAt - t.providerStartedAt
     : null;
@@ -141,7 +257,7 @@ export function logAiServerRequestTiming(t: AiServerRequestTiming): void {
   const fallbackDurationMs = t.fallbackStartedAt != null && t.fallbackFinishedAt != null
     ? t.fallbackFinishedAt - t.fallbackStartedAt
     : null;
-  const lines = [
+  console.info([
     'AI_REQUEST_TIMING',
     `requestId=${t.requestId ?? 'n/a'}`,
     `action=${t.action}`,
@@ -152,6 +268,7 @@ export function logAiServerRequestTiming(t: AiServerRequestTiming): void {
     `providerFinishedAt=${t.providerFinishedAt ?? 'n/a'}`,
     `providerDurationMs=${providerDurationMs ?? 'n/a'}`,
     `providerValid=${t.providerValid ?? 'n/a'}`,
+    `providerAborted=${Boolean(t.providerAborted)}`,
     `repairAttempted=${Boolean(t.repairAttempted)}`,
     `repairSkippedReason=${t.repairSkippedReason ?? 'n/a'}`,
     `repairStartedAt=${t.repairStartedAt ?? 'n/a'}`,
@@ -163,8 +280,9 @@ export function logAiServerRequestTiming(t: AiServerRequestTiming): void {
     `serverRespondedAt=${t.serverRespondedAt}`,
     `serverTotalMs=${t.serverRespondedAt - t.serverReceivedAt}`,
     `deadlineAt=${t.deadlineAt ?? 'n/a'}`,
-  ];
-  console.info(lines.join('\n'));
+    `budgetMs=${AI_SERVER_BUDGET_MS}`,
+    `platformMaxDurationS=${AI_PLATFORM_MAX_DURATION_S}`,
+  ].join('\n'));
 }
 
 /** Dev/test-only. Never logs CV content or personal data — timestamps and stage outcomes only. */

@@ -32,27 +32,27 @@ import { createHash } from 'crypto';
 import type { AiErrorCode } from '@/lib/ai-error-codes';
 import {
   AI_PROVIDER_CALL_TIMEOUT_MS,
-  AI_SERVER_BUDGET_MS,
+  callProviderWithDeadline,
   computeServerDeadline,
+  hasProviderBudget,
+  isProviderAbortOrTimeoutError,
   isRetryableProviderError,
   logAiServerRequestTiming,
   remainingBudgetMs,
+  shouldForceRespond,
 } from '@/lib/ai-request-timing';
 
 /**
- * Explicit Vercel serverless function execution budget (seconds), so the
- * platform's own default execution limit can never cut the recovery chain
- * off before our internal `AI_SERVER_BUDGET_MS` deadline has a chance to
- * return a response. A few seconds of headroom is left for routing/response
- * serialization above `AI_SERVER_BUDGET_MS`.
+ * Explicit Vercel serverless function execution budget (seconds).
+ * The application response deadline (`AI_SERVER_BUDGET_MS` = 22s) is kept
+ * several seconds under this platform limit so cold-start + serialization
+ * cannot push a healthy recovery path into a Vercel kill (~31s previously
+ * terminated Android build 231 after ~32s with a transport-level network toast).
  *
- * NOTE: Next.js requires this route-segment config to be a plain literal
- * (no expression) to statically extract it, so it cannot directly reference
- * `AI_SERVER_BUDGET_MS` here — kept in sync manually:
- * AI_SERVER_BUDGET_MS (26_000ms = 26s) + 5s headroom = 31.
- * `ai-request-timing.ts` unit tests assert this invariant stays true.
+ * NOTE: Next.js requires this route-segment config to be a plain literal.
+ * Kept in sync with `AI_PLATFORM_MAX_DURATION_S` (30) via unit tests.
  */
-export const maxDuration = 31;
+export const maxDuration = 30;
 
 // ── Rate limiter (in-memory) ────────────────────────────────────────────────
 // Resets on server restart. For production with multiple instances, replace with
@@ -125,7 +125,16 @@ function classifyProviderError(err: unknown): {
   if (lower.includes('authentication') || lower.includes('invalid api key') || lower.includes('unauthorized') || providerStatus === 401) {
     return { code: 'provider_auth_error', status: 401, retryAfter: null, providerStatus: providerStatus ?? 401 };
   }
-  if (lower.includes('timeout')) {
+  if (
+    lower.includes('timeout')
+    || lower.includes('aborted')
+    || lower.includes('abort')
+    || (err instanceof Error && (
+      err.name === 'AbortError'
+      || err.name === 'APIUserAbortError'
+      || err.name === 'APIConnectionTimeoutError'
+    ))
+  ) {
     return { code: 'request_timeout', status: 504, retryAfter: null, providerStatus: null };
   }
   return { code: 'provider_temporarily_unavailable', status: 503, retryAfter: 60, providerStatus };
@@ -219,6 +228,10 @@ function getClient(): Anthropic {
   if (!anthropic) {
     anthropic = new Anthropic({
       apiKey,
+      // Hard-disable SDK retries: the SDK retries timeouts by default, which
+      // stacked multiple full timeout slices and held the Vercel invocation
+      // open until the platform killed it (~31s → Android network_error).
+      maxRetries: 0,
       timeout: AI_PROVIDER_CALL_TIMEOUT_MS,
     });
   }
@@ -304,28 +317,35 @@ function normalizeLocale(value: unknown): Locale {
 }
 
 /**
- * `deadlineAt`, when provided, bounds the total time this call (including one
- * possible retry) is allowed to take. A call that itself timed out is NEVER
- * retried — see `isRetryableProviderError` / `ai-request-timing.ts` — since a
- * retry with the same per-call timeout can only make the shared request
- * deadline worse, never better. Other genuinely fast-failing transient errors
- * (5xx/ECONNRESET/overloaded) still get a single retry, but only when enough
- * budget plausibly remains for it to finish.
+ * One bounded Anthropic call under the shared application deadline.
+ * - `maxRetries: 0` (SDK default retries of timeouts are the build-231 killer)
+ * - AbortSignal hard-cancels the underlying HTTP request when the slice expires
+ * - Timeouts/aborts are NEVER retried; only fast 5xx/ECONNRESET may retry once
+ *   when enough remaining budget remains for another full slice
  */
 async function callWithRetry(
   params: Parameters<Anthropic['messages']['create']>[0],
   deadlineAt?: number | null,
 ): Promise<Anthropic.Messages.Message> {
   const client = getClient();
+  const runOnce = () => callProviderWithDeadline(
+    (options) => client.messages.create(params, {
+      signal: options.signal ?? undefined,
+      timeout: options.timeout,
+      maxRetries: 0,
+    }) as Promise<Anthropic.Messages.Message>,
+    deadlineAt,
+  );
+
   try {
-    return await client.messages.create(params) as Anthropic.Messages.Message;
+    return await runOnce();
   } catch (err) {
+    if (isProviderAbortOrTimeoutError(err)) throw err;
     const canRetry =
       isRetryableProviderError(err)
+      && hasProviderBudget(deadlineAt)
       && (deadlineAt == null || remainingBudgetMs(deadlineAt) >= AI_PROVIDER_CALL_TIMEOUT_MS);
-    if (canRetry) {
-      return await client.messages.create(params) as Anthropic.Messages.Message;
-    }
+    if (canRetry) return await runOnce();
     throw err;
   }
 }
@@ -354,6 +374,12 @@ export async function OPTIONS(req: NextRequest): Promise<Response> {
 }
 
 export async function POST(req: NextRequest) {
+  // Application deadline starts at the earliest route entry — before CORS
+  // resolution, body parsing, auth, or any provider work — so cold-start and
+  // validation cannot silently eat the budget that must stay under Vercel.
+  const serverReceivedAt = Date.now();
+  const deadlineAt = computeServerDeadline(serverReceivedAt);
+
   // Resolve CORS origin from the request once, used in all jsonResponse calls
   const _corsOrigin = resolveCorsOrigin(req.headers.get('origin'));
   const _corsHeaders = buildCorsHeaders(_corsOrigin);
@@ -379,9 +405,6 @@ export async function POST(req: NextRequest) {
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || req.headers.get('x-real-ip')
     || 'unknown';
-
-  const serverReceivedAt = Date.now();
-  const deadlineAt = computeServerDeadline(serverReceivedAt);
 
   try {
     const body = await req.json();
@@ -655,12 +678,16 @@ Rules:
       const eduBlock = eduList.length > 0 ? `\n\nEducation: ${eduList.map(e => [e.degree, e.school].filter(Boolean).join(' at ')).join('; ')}` : '';
 
       const providerStartedAt = Date.now();
-      const response = await callWithRetry({
-        model: MODEL,
-        max_tokens: 600,
-        temperature: 0.75,
-        stream: false,
-        system: `You are an expert CV writer who creates authentic, human-sounding professional summaries in ${localeInfo.languageName}.
+      let providerFinishedAt = providerStartedAt;
+      let providerAborted = false;
+      let cleanedText = '';
+      try {
+        const response = await callWithRetry({
+          model: MODEL,
+          max_tokens: 600,
+          temperature: 0.75,
+          stream: false,
+          system: `You are an expert CV writer who creates authentic, human-sounding professional summaries in ${localeInfo.languageName}.
 Rules:
 - Plain text only. No markdown, no bullet points, no headers, no lists.
 - NEVER wrap output in quotation marks of any kind (" " ' ' « » „ " etc.). Output the raw text directly.
@@ -676,10 +703,10 @@ Rules:
 - COMPLETENESS: Always finish every sentence. Never stop mid-word, mid-participle, or after a dangling conjunction (especially in Hindi Devanagari).
 - PERSPECTIVE: Use one consistent perspective (first person OR third person) throughout — never mix.
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
-        messages: [
-          {
-            role: 'user',
-            content: `Write a professional summary in ${localeInfo.languageName} for a ${jobTitle || localeInfo.fallbackRole}.
+          messages: [
+            {
+              role: 'user',
+              content: `Write a professional summary in ${localeInfo.languageName} for a ${jobTitle || localeInfo.fallbackRole}.
 
 ${durationPhrase}${experienceBlock}${skillsBlock}${langsBlock}${eduBlock}
 
@@ -691,16 +718,23 @@ Structure (3–5 sentences, 180–250 words total):
 5. (Optional) Career focus or professional goal.
 
 Plain text only. No quotation marks anywhere. Finish the last sentence completely before stopping. Output the summary only — nothing else.${genderNote}`,
-          },
-        ],
-      }, deadlineAt);
-      const providerFinishedAt = Date.now();
-
-      const rawText = getText(response);
-      const cleanedText = rawText
-        .trim()
-        .replace(/^[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+/, '')
-        .replace(/[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/, '');
+            },
+          ],
+        }, deadlineAt);
+        providerFinishedAt = Date.now();
+        const rawText = getText(response);
+        cleanedText = rawText
+          .trim()
+          .replace(/^[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+/, '')
+          .replace(/[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/, '');
+      } catch (providerErr) {
+        providerFinishedAt = Date.now();
+        providerAborted = isProviderAbortOrTimeoutError(providerErr);
+        // Continue to activateCvSummary → deterministic local fallback. Never
+        // wait for a late provider promise or let Vercel kill the invocation.
+        if (!providerAborted) throw providerErr;
+        cleanedText = '';
+      }
 
       const factSet = buildCvCanonicalFactSet({
         personal: { fullName: '', email: '', phone: '', address: '', jobTitle: jobTitle || '' },
@@ -734,6 +768,9 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
       ].filter(Boolean).join(' ').trim()
         || 'Professional with relevant experience, ready to contribute responsibly.';
 
+      // Final response guard: if almost no budget remains, skip repair and go
+      // straight to local fallback so JSON is returned before Vercel kills us.
+      const forceRespond = shouldForceRespond(deadlineAt) || providerAborted;
       let repairStartedAt: number | null = null;
       let repairFinishedAt: number | null = null;
       const fallbackStartedAt = Date.now();
@@ -745,22 +782,33 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
         sourceFactsText,
         fallbackSummary: groundedFallback,
         deadlineAt,
-        repair: async (prompt) => {
-          repairStartedAt = Date.now();
-          const repaired = await callWithRetry({
-            model: MODEL,
-            max_tokens: 600,
-            temperature: 0.3,
-            stream: false,
-            system: `You rewrite complete CV summaries in ${localeInfo.languageName}. Finish every sentence. Never invent duties. Plain text only.`,
-            messages: [{ role: 'user', content: prompt }],
-          }, deadlineAt);
-          repairFinishedAt = Date.now();
-          return getText(repaired)
-            .trim()
-            .replace(/^[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+/, '')
-            .replace(/[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/, '');
-        },
+        repair: forceRespond
+          ? undefined
+          : async (prompt) => {
+            if (shouldForceRespond(deadlineAt)) {
+              throw Object.assign(new Error('Request timeout: response guard'), { name: 'AbortError' });
+            }
+            repairStartedAt = Date.now();
+            try {
+              const repaired = await callWithRetry({
+                model: MODEL,
+                max_tokens: 600,
+                temperature: 0.3,
+                stream: false,
+                system: `You rewrite complete CV summaries in ${localeInfo.languageName}. Finish every sentence. Never invent duties. Plain text only.`,
+                messages: [{ role: 'user', content: prompt }],
+              }, deadlineAt);
+              repairFinishedAt = Date.now();
+              return getText(repaired)
+                .trim()
+                .replace(/^[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+/, '')
+                .replace(/[\s"""''«»„\u201C\u201D\u2018\u2019\u00AB\u00BB]+$/, '');
+            } catch (repairErr) {
+              repairFinishedAt = Date.now();
+              if (isProviderAbortOrTimeoutError(repairErr)) throw repairErr;
+              throw repairErr;
+            }
+          },
       });
       const fallbackFinishedAt = Date.now();
 
@@ -772,9 +820,10 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
         providerStartedAt,
         providerFinishedAt,
         providerValid: activated.status === 'passed',
+        providerAborted,
         repairAttempted: activated.repairAttempted,
         repairSkippedReason: !activated.repairAttempted && activated.status !== 'passed'
-          ? 'insufficient_deadline_budget'
+          ? (forceRespond ? 'response_guard_or_provider_abort' : 'insufficient_deadline_budget')
           : null,
         repairStartedAt,
         repairFinishedAt,
@@ -786,6 +835,16 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
 
       if (_freeUserId) recordFreeAction(_freeUserId, 'summary');
       if (activated.blocked || activated.status === 'blocked' || !activated.content.trim()) {
+        if (shouldForceRespond(deadlineAt) || providerAborted) {
+          return jsonResponse({
+            error: 'AI request timed out.',
+            code: 'request_timeout',
+            cvFidelityStatus: 'blocked',
+            repairAttempted: activated.repairAttempted,
+            fallbackUsed: activated.fallbackUsed,
+            violationCount: activated.violations.length,
+          }, { status: 504 });
+        }
         return jsonResponse({
           error: `Could not produce a complete localized summary for ${resolvedLocale}. Export/generation was blocked to avoid an English dump.`,
           cvFidelityStatus: 'blocked',
@@ -817,12 +876,16 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
       };
 
       const providerStartedAt = Date.now();
-      const response = await callWithRetry({
-        model: MODEL,
-        max_tokens: 400,
-        temperature: 0.65,
-        stream: false,
-        system: `You are a professional CV editor. Rewrite text per the given instructions in ${localeInfo.languageName}.
+      let providerFinishedAt = providerStartedAt;
+      let providerAborted = false;
+      let rewritten = text;
+      try {
+        const response = await callWithRetry({
+          model: MODEL,
+          max_tokens: 400,
+          temperature: 0.65,
+          stream: false,
+          system: `You are a professional CV editor. Rewrite text per the given instructions in ${localeInfo.languageName}.
 Rules:
 - Output only the rewritten text, nothing else.
 - Do NOT wrap output in quotation marks of any kind.
@@ -834,16 +897,21 @@ Rules:
 - Always finish every sentence completely — never truncate mid-word.
 - Keep one consistent perspective (first OR third person).
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
-        messages: [
-          {
-            role: 'user',
-            content: `${styleMap[style] || styleMap.professional}${genderNote}\n\nText: ${text}`,
-          },
-        ],
-      }, deadlineAt);
-      const providerFinishedAt = Date.now();
-
-      const rewritten = getText(response) || text;
+          messages: [
+            {
+              role: 'user',
+              content: `${styleMap[style] || styleMap.professional}${genderNote}\n\nText: ${text}`,
+            },
+          ],
+        }, deadlineAt);
+        providerFinishedAt = Date.now();
+        rewritten = getText(response) || text;
+      } catch (providerErr) {
+        providerFinishedAt = Date.now();
+        providerAborted = isProviderAbortOrTimeoutError(providerErr);
+        if (!providerAborted) throw providerErr;
+        rewritten = text;
+      }
       const cvContext = params.cvContext;
       const rewriteFactSet = cvContext
         ? buildCvCanonicalFactSet(cvContext)
@@ -875,6 +943,7 @@ Rules:
       const fallbackSummary = cvContext
         ? (cvContext.summary || text)
         : text;
+      const rewriteForceRespond = shouldForceRespond(deadlineAt) || providerAborted;
       let rewriteRepairStartedAt: number | null = null;
       let rewriteRepairFinishedAt: number | null = null;
       const rewriteFallbackStartedAt = Date.now();
@@ -886,19 +955,26 @@ Rules:
         sourceFactsText,
         fallbackSummary,
         deadlineAt,
-        repair: async (prompt) => {
-          rewriteRepairStartedAt = Date.now();
-          const repaired = await callWithRetry({
-            model: MODEL,
-            max_tokens: 400,
-            temperature: 0.25,
-            stream: false,
-            system: `You repair CV text in ${localeInfo.languageName}. Keep the same facts. Finish every sentence. Plain text only.`,
-            messages: [{ role: 'user', content: prompt }],
-          }, deadlineAt);
-          rewriteRepairFinishedAt = Date.now();
-          return getText(repaired).trim();
-        },
+        repair: rewriteForceRespond
+          ? undefined
+          : async (prompt) => {
+            rewriteRepairStartedAt = Date.now();
+            try {
+              const repaired = await callWithRetry({
+                model: MODEL,
+                max_tokens: 400,
+                temperature: 0.25,
+                stream: false,
+                system: `You repair CV text in ${localeInfo.languageName}. Keep the same facts. Finish every sentence. Plain text only.`,
+                messages: [{ role: 'user', content: prompt }],
+              }, deadlineAt);
+              rewriteRepairFinishedAt = Date.now();
+              return getText(repaired).trim();
+            } catch (repairErr) {
+              rewriteRepairFinishedAt = Date.now();
+              throw repairErr;
+            }
+          },
       });
       const rewriteFallbackFinishedAt = Date.now();
 
@@ -910,9 +986,10 @@ Rules:
         providerStartedAt,
         providerFinishedAt,
         providerValid: activated.status === 'passed',
+        providerAborted,
         repairAttempted: activated.repairAttempted,
         repairSkippedReason: !activated.repairAttempted && activated.status !== 'passed'
-          ? 'insufficient_deadline_budget'
+          ? (rewriteForceRespond ? 'response_guard_or_provider_abort' : 'insufficient_deadline_budget')
           : null,
         repairStartedAt: rewriteRepairStartedAt,
         repairFinishedAt: rewriteRepairFinishedAt,
@@ -988,12 +1065,16 @@ Rules:
         : 'No prior bullets were supplied. Write role-appropriate bullets without invented metrics.';
 
       const providerStartedAt = Date.now();
-      const response = await callWithRetry({
-        model: MODEL,
-        max_tokens: 450,
-        temperature: hasCanonical ? 0.35 : 0.65,
-        stream: false,
-        system: `You are an expert CV writer creating work experience bullet points in ${localeInfo.languageName}.
+      let providerFinishedAt = providerStartedAt;
+      let providerAborted = false;
+      let aiResult = '';
+      try {
+        const response = await callWithRetry({
+          model: MODEL,
+          max_tokens: 450,
+          temperature: hasCanonical ? 0.35 : 0.65,
+          stream: false,
+          system: `You are an expert CV writer creating work experience bullet points in ${localeInfo.languageName}.
 Rules:
 - Output ONLY bullet points, each starting with "•"
 - Each bullet: exactly 1 sentence, clear and direct, under 22 words
@@ -1001,25 +1082,30 @@ Rules:
 - NO fake metrics or invented percentages
 - CRITICAL LANGUAGE RULE: Every word must be in ${localeInfo.languageName}. Only keep universal acronyms (CRM, ERP, KPI, SQL, API) when genuinely used.${genderNote}
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
-        messages: [
-          {
-            role: 'user',
-            content: hasCanonical
-              ? `Localize the following canonical work bullets into ${localeInfo.languageName} for ${levelDesc} ${roleLabel}${atCompany}.
+          messages: [
+            {
+              role: 'user',
+              content: hasCanonical
+                ? `Localize the following canonical work bullets into ${localeInfo.languageName} for ${levelDesc} ${roleLabel}${atCompany}.
 
 SOURCE BULLETS:
 ${formatCanonicalBulletsForPrompt(canonicalBullets)}
 
 Output format: one bullet per line, each starting with "•". Same count and order. Nothing else.`
-              : `Write 4 CV work experience bullet points in ${localeInfo.languageName} for a ${levelDesc} ${roleLabel}${atCompany}.
+                : `Write 4 CV work experience bullet points in ${localeInfo.languageName} for a ${levelDesc} ${roleLabel}${atCompany}.
 
 Output format: one bullet per line, each starting with "•". Nothing else.`,
-          },
-        ],
-      }, deadlineAt);
-      const providerFinishedAt = Date.now();
-
-      let aiResult = getText(response);
+            },
+          ],
+        }, deadlineAt);
+        providerFinishedAt = Date.now();
+        aiResult = getText(response);
+      } catch (providerErr) {
+        providerFinishedAt = Date.now();
+        providerAborted = isProviderAbortOrTimeoutError(providerErr);
+        if (!providerAborted) throw providerErr;
+        aiResult = '';
+      }
       if (!aiResult || !aiResult.includes('•')) {
         aiResult = generateBulletsOffline(
           (industry || 'general') as BulletIndustry,
@@ -1030,6 +1116,7 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         );
       }
 
+      const bulletsForceRespond = shouldForceRespond(deadlineAt) || providerAborted;
       let bulletsRepairStartedAt: number | null = null;
       let bulletsRepairFinishedAt: number | null = null;
       const bulletsFallbackStartedAt = Date.now();
@@ -1040,19 +1127,24 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         factSet,
         candidate: aiResult,
         deadlineAt,
-        repair: hasCanonical
+        repair: hasCanonical && !bulletsForceRespond
           ? async (prompt) => {
               bulletsRepairStartedAt = Date.now();
-              const repaired = await callWithRetry({
-                model: MODEL,
-                max_tokens: 450,
-                temperature: 0.2,
-                stream: false,
-                system: `You repair CV bullets in ${localeInfo.languageName}. Preserve fact IDs/duties. Output only "•" lines.`,
-                messages: [{ role: 'user', content: prompt }],
-              }, deadlineAt);
-              bulletsRepairFinishedAt = Date.now();
-              return getText(repaired);
+              try {
+                const repaired = await callWithRetry({
+                  model: MODEL,
+                  max_tokens: 450,
+                  temperature: 0.2,
+                  stream: false,
+                  system: `You repair CV bullets in ${localeInfo.languageName}. Preserve fact IDs/duties. Output only "•" lines.`,
+                  messages: [{ role: 'user', content: prompt }],
+                }, deadlineAt);
+                bulletsRepairFinishedAt = Date.now();
+                return getText(repaired);
+              } catch (repairErr) {
+                bulletsRepairFinishedAt = Date.now();
+                throw repairErr;
+              }
             }
           : undefined,
       });
@@ -1066,9 +1158,10 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         providerStartedAt,
         providerFinishedAt,
         providerValid: activated.status === 'passed',
+        providerAborted,
         repairAttempted: activated.repairAttempted,
         repairSkippedReason: hasCanonical && !activated.repairAttempted && activated.status !== 'passed'
-          ? 'insufficient_deadline_budget'
+          ? (bulletsForceRespond ? 'response_guard_or_provider_abort' : 'insufficient_deadline_budget')
           : null,
         repairStartedAt: bulletsRepairStartedAt,
         repairFinishedAt: bulletsRepairFinishedAt,
