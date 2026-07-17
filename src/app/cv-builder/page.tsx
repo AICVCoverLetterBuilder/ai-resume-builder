@@ -45,7 +45,10 @@ import {
 import { createEmptyCv } from '@/lib/cv-defaults';
 import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/lib/types';
 import { templateInfo, recommendTemplate } from '@/lib/types';
-import { freezeCanonicalExperienceDescription } from '@/lib/cv-canonical-facts';
+import {
+  ensureCanonicalExperienceFrozen,
+  freezeCanonicalExperienceDescription,
+} from '@/lib/cv-canonical-facts';
 import {
   applyCanonicalExperienceEdit,
   applyCanonicalSkillsLanguagesEducationEdit,
@@ -57,8 +60,7 @@ import {
   applyFinalizedBulletsToCv,
   applyFinalizedSummaryToCv,
   finalizeCvAiFieldForApply,
-} from '@/lib/cv-ai-finalize-apply';
-import {
+} from '@/lib/cv-ai-finalize-apply';import {
   localizeCvLanguageLevel,
   normalizeCvLanguagesProficiency,
   normalizeLanguageProficiencyToCanonical,
@@ -1031,7 +1033,24 @@ export default function CVBuilderPage() {
     const countBefore = getProAiUsageCount();
 
     try {
-      const canonicalSource = freezeCanonicalExperienceDescription(exp);
+      // Legacy migration: freeze user-entered description into canonicalDescription
+      // before the first AI Improvements call when the field is still empty.
+      const expFrozen = ensureCanonicalExperienceFrozen(exp);
+      if (!exp.canonicalDescription?.trim() && expFrozen.canonicalDescription?.trim()) {
+        commitCvUpdate((prev) => ({
+          ...prev,
+          experience: prev.experience.map((e) =>
+            e.id === expId ? ensureCanonicalExperienceFrozen(e) : e,
+          ),
+        }));
+      }
+      const requestCv = {
+        ...cv,
+        experience: cv.experience.map((e) =>
+          e.id === expId ? expFrozen : e,
+        ),
+      };
+      const canonicalSource = freezeCanonicalExperienceDescription(expFrozen);
       const requestBody = {
         action: 'bullets',
         proToken,
@@ -1100,7 +1119,7 @@ export default function CVBuilderPage() {
         field: 'experience_description',
         requestedLocale,
         gender: cv.personal.gender || '',
-        cv,
+        cv: requestCv,
         candidate: newDescription,
         experienceId: expId,
         originHint: bulletsData.fallbackUsed

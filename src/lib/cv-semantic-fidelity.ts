@@ -81,6 +81,11 @@ const UNSUPPORTED_DUTY_PATTERNS: RegExp[] = [
   /syrups? and garnishes?|сирупа и гарнир|عصائر وشرابات|sirovi i garniture/iu,
   /receiving and storing (?:wines|beers|spirits)|prijem i skladištenje|استلام وتخزين/iu,
   /customer satisfaction|ग्राहक संतुष्टि सुनिश्चित|obogaćuje kao profesional/iu,
+  /\bincreased\s+revenue\b/iu,
+  /\bteam\s+leadership\b/iu,
+  /\bled\s+the\s+(?:kitchen\s+)?team\b/iu,
+  /\bcost\s+reduction\b/iu,
+  /\bmenu\s+development\b/iu,
   // Generic corporate inventions that replace concrete logistics/process duties
   /\bsupporting senior team members?\b/iu,
   /\borganizational goals?\b/iu,
@@ -201,7 +206,7 @@ const MATERIAL_DUTY_ANCHORS: Array<{ source: RegExp; localized: RegExp; label: s
   },
   {
     source: /\b(warehouse|skladišt|गोदाम)\b/iu,
-    localized: /(warehouse|skladišt|गोदाम|lager|almacén|entrepôt|magazzino|склад|armazém|倉庫|مستودع)/iu,
+    localized: /(warehouse|skladiš|गोदाम|lager|almacén|entrepôt|magazzino|склад|armazém|倉庫|مستودع)/iu,
     label: 'warehouse-operations',
   },
   {
@@ -219,7 +224,9 @@ const SUMMARY_CATEGORY_MARKERS: Record<Exclude<CvDutyCategory, 'generic'>, RegEx
   customer_service_guest_relationship:
     /(guest\s+service|gostima|ग्राहक\s+सेवा|atentive\s+customer)/iu,
   hygiene_safety:
-    /(bar\s+area|higijen|hygiene\s+standard|स्वच्छता\s+मानक)/iu,
+    /(bar\s+area|higijen|hygiene\s+standard|स्वच्छता\s+मानक|food[- ]?safet)/iu,
+  food_preparation:
+    /(dish(?:es)?|cuisine|\bkitchen\b|küche|küchen|\bjela\b|\bkuhinj|restaurant\s+standard|mediterr|mediterranean|व्यंजन|रसोई|रेस्तराँ|भोजन|पकवान|料理)/iu,
 };
 
 const SR_PAST_CURRENT_ROLE = /\b(Radila\s+sam|Analizirala\s+sam|Učestvovala\s+sam|Kreirala\s+sam|Izrađivala\s+sam|Pratila\s+sam|Radio\s+sam|Analizirao\s+sam|Učestvovao\s+sam|Kreirao\s+sam|Izrađivao\s+sam|Pratio\s+sam)\b/giu;
@@ -623,6 +630,20 @@ function dutySupportedByCanonical(matched: string, corpus: string): boolean {
   const token = matched.toLowerCase().replace(/\s+/g, ' ').trim();
   if (!token) return true;
   if (corpus.includes(token)) return true;
+  // Cross-language hygiene / food-safety equivalence (Serbian higijen ↔ EN food-safety).
+  if (
+    /food[- ]?safet|higijen|hygiene|bezbednost\s+hran|sigurnost\s+hran/iu.test(token)
+    && /higijen|hygiene|food.?safet|bezbednost|sigurnost\s+hran|ingredient|namirnic|skladišt/iu.test(corpus)
+  ) {
+    return true;
+  }
+  // Kitchen staff / colleagues: grounded when source already has kitchen team.
+  if (
+    /kitchen\s+staff|kitchen\s+colleagues|kuhinj|Küchenpersonal/iu.test(token)
+    && /kuhinj|kitchen|koleg|sara[dđ]/iu.test(corpus)
+  ) {
+    return true;
+  }
   // Allow short stem overlap when the source already mentions the concept.
   const stem = token.slice(0, Math.min(6, token.length));
   return stem.length >= 4 && corpus.includes(stem);

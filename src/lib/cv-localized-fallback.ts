@@ -41,6 +41,8 @@ const BULLET_BY_CATEGORY: Record<
       'Provided attentive customer service and built rapport with guests.',
     inventory_stock: () =>
       'Managed stock levels, assisted with inventory counts, and communicated supply needs to management.',
+    food_preparation: () =>
+      'Prepared dishes in accordance with established restaurant and cuisine standards.',
   },
   de: {
     beverage_service: () =>
@@ -51,6 +53,8 @@ const BULLET_BY_CATEGORY: Record<
       'Aufmerksamen Kundenservice geleistet und eine gute Beziehung zu den Gästen aufgebaut.',
     inventory_stock: () =>
       'Bestände verwaltet, bei Inventurzählungen unterstützt und Bedarf an das Management gemeldet.',
+    food_preparation: () =>
+      'Zubereitung von Gerichten gemäß den festgelegten Restaurant- und Küchenstandards.',
   },
   es: {
     beverage_service: () =>
@@ -61,6 +65,8 @@ const BULLET_BY_CATEGORY: Record<
       'Ofrecí un servicio atento a los clientes y construí rapport con los huéspedes.',
     inventory_stock: () =>
       'Gestioné niveles de inventario, apoyé conteos de stock y comuniqué necesidades al management.',
+    food_preparation: () =>
+      'Preparación de platos conforme a los estándares establecidos del restaurante y la cocina.',
   },
   fr: {
     beverage_service: () =>
@@ -71,6 +77,8 @@ const BULLET_BY_CATEGORY: Record<
       'Assurer un service client attentif et instaurer une relation de confiance avec les clients.',
     inventory_stock: () =>
       'Gérer les stocks, assister aux inventaires et communiquer les besoins à la direction.',
+    food_preparation: () =>
+      'Préparation de plats conformément aux normes établies du restaurant et de la cuisine.',
   },
   it: {
     beverage_service: () =>
@@ -81,6 +89,8 @@ const BULLET_BY_CATEGORY: Record<
       'Fornisce un servizio clienti attento e costruisce un buon rapporto con gli ospiti.',
     inventory_stock: () =>
       'Gestisce i livelli di scorte, supporta gli inventari e comunica le esigenze alla direzione.',
+    food_preparation: () =>
+      'Preparazione di piatti in conformità con gli standard del ristorante e della cucina.',
   },
   ar: {
     beverage_service: () =>
@@ -91,6 +101,8 @@ const BULLET_BY_CATEGORY: Record<
       'تقديم خدمة عملاء منتبهة وبناء علاقة جيدة مع الضيوف.',
     inventory_stock: () =>
       'إدارة مستويات المخزون والمساعدة في جرد المخزون وإبلاغ الإدارة باحتياجات التوريد.',
+    food_preparation: () =>
+      'إعداد الأطباق وفقاً لمعايير المطعم والمطبخ المعتمدة.',
   },
   sr: {
     beverage_service: (g) =>
@@ -109,6 +121,10 @@ const BULLET_BY_CATEGORY: Record<
       g === 'male'
         ? 'Upravljao sam nivoima zaliha, pomagao pri inventaru i javljao potrebe snabdevanja menadžmentu.'
         : 'Upravljala sam nivoima zaliha, pomagala pri inventaru i javljala potrebe snabdevanja menadžmentu.',
+    food_preparation: (g) =>
+      g === 'male'
+        ? 'Pripremao sam jela u skladu sa utvrđenim standardima restorana i kuhinje.'
+        : 'Pripremala sam jela u skladu sa utvrđenim standardima restorana i kuhinje.',
   },
   hr: {
     beverage_service: (g) =>
@@ -127,6 +143,10 @@ const BULLET_BY_CATEGORY: Record<
       g === 'male'
         ? 'Upravljao sam razinama zaliha, pomagao pri inventuri i javljao potrebe nabave menadžmentu.'
         : 'Upravljala sam razinama zaliha, pomagala pri inventuri i javljala potrebe nabave menadžmentu.',
+    food_preparation: (g) =>
+      g === 'male'
+        ? 'Pripremao sam jela u skladu s utvrđenim standardima restorana i kuhinje.'
+        : 'Pripremala sam jela u skladu s utvrđenim standardima restorana i kuhinje.',
   },
   ru: {
     beverage_service: (g) =>
@@ -145,6 +165,10 @@ const BULLET_BY_CATEGORY: Record<
       g === 'male'
         ? 'Управлял уровнем запасов, помогал с инвентаризацией и сообщал о потребностях снабжения руководству.'
         : 'Управляла уровнем запасов, помогала с инвентаризацией и сообщала о потребностях снабжения руководству.',
+    food_preparation: (g) =>
+      g === 'male'
+        ? 'Готовил блюда в соответствии с установленными стандартами ресторана и кухни.'
+        : 'Готовила блюда в соответствии с установленными стандартами ресторана и кухни.',
   },
   'pt-BR': {
     beverage_service: () =>
@@ -155,6 +179,8 @@ const BULLET_BY_CATEGORY: Record<
       'Prestei atendimento atento aos clientes e construí rapport com os hóspedes.',
     inventory_stock: () =>
       'Gerenciei níveis de estoque, apoiei contagens de inventário e comuniquei necessidades à gestão.',
+    food_preparation: () =>
+      'Preparo de pratos de acordo com os padrões estabelecidos do restaurante e da cozinha.',
   },
   hi: {
     beverage_service: () =>
@@ -165,6 +191,8 @@ const BULLET_BY_CATEGORY: Record<
       'अतिथियों को ध्यानपूर्वक सेवा दी और ग्राहकों के साथ अच्छा संबंध बनाया।',
     inventory_stock: () =>
       'स्टॉक स्तरों का प्रबंधन किया, इन्वेंटरी गणना में सहायता की और प्रबंधन को आपूर्ति आवश्यकताएँ बताईं।',
+    food_preparation: () =>
+      'रेस्तराँ और रसोई के निर्धारित मानकों के अनुसार व्यंजन तैयार किए।',
   },
   ja: {
     beverage_service: () =>
@@ -175,6 +203,8 @@ const BULLET_BY_CATEGORY: Record<
       '丁寧なお客様対応を行い、ゲストとの信頼関係を築いた。',
     inventory_stock: () =>
       '在庫水準を管理し、棚卸しを支援し、補充ニーズをマネジメントへ伝えた。',
+    food_preparation: () =>
+      'レストランおよび厨房の定められた基準に従って料理を準備した。',
   },
 };
 
@@ -281,6 +311,192 @@ function localizeRoleLabel(
 }
 
 type GenericDutyIntent = 'process' | 'collaboration' | 'analysis' | 'planning' | 'logistics';
+type CookingDutyIntent = 'cuisine_prep' | 'kitchen_org' | 'kitchen_collab' | 'food_hygiene';
+
+/**
+ * Cooking / restaurant duty intents. Checked before office collaboration/process
+ * so Serbian "sarađivala … kuhinjskog tima" does not become cross-functional
+ * corporate collaboration.
+ */
+function classifyCookingDutyIntent(text: string): CookingDutyIntent | null {
+  const t = text.toLowerCase().normalize('NFKC');
+  const kitchenCtx = /(kuhinj|kitchen|jel\w*|namirnic|cuisine|dish(?:es)?|restaurant|food|mediteransk|mediterranean)/iu.test(t);
+  if (
+    /\b(higijen\w*|hygiene|food[- ]?safet|bezbednost\s+hran|sigurnost\s+hran|skladišt\w*\s+namirnic|ingredient.?stor|freshness)/iu.test(t)
+    && (kitchenCtx || /namirnic|ingredient|hran|food/.test(t))
+  ) {
+    return 'food_hygiene';
+  }
+  if (
+    kitchenCtx
+    && /(sara[dđ]\w*|collaborat|koordin\w*|koleg\w*|tim|team|servis|service|posluživ\w*)/iu.test(t)
+  ) {
+    return 'kitchen_collab';
+  }
+  if (
+    /(radni\s+prostor|workstation|uredan|orderly|priprem\w*\s+namirnic|food[- ]?preparation\s+task)/iu.test(t)
+    || (/organiz\w*/iu.test(t) && kitchenCtx)
+  ) {
+    return 'kitchen_org';
+  }
+  if (
+    /\b(jel\w*|kuhinj\w*|cuisine|dish(?:es)?|mediteransk\w*|mediterranean|srpsk\w*|serbian|restaurant\s+standard|recept\w*|recipe|menu|cook)/iu.test(t)
+    || /priprem\w*.{0,40}(jel|hran|obrok|dish)/iu.test(t)
+    || /भोजन|पकवान|طبخ|料理/.test(t)
+  ) {
+    return 'cuisine_prep';
+  }
+  return null;
+}
+
+const COOKING_INTENT_BULLET: Partial<
+  Record<Locale, Record<CookingDutyIntent, (g: GenderTone) => string>>
+> = {
+  en: {
+    cuisine_prep: () =>
+      'Prepared Serbian and Mediterranean dishes in accordance with the restaurant’s established standards.',
+    kitchen_org: () =>
+      'Organized food-preparation tasks and maintained an orderly kitchen workstation.',
+    kitchen_collab: () =>
+      'Coordinated with kitchen colleagues during daily service.',
+    food_hygiene: () =>
+      'Followed hygiene and ingredient-storage procedures stated in the role duties.',
+  },
+  de: {
+    cuisine_prep: () =>
+      'Zubereitung serbischer und mediterraner Gerichte gemäß den festgelegten Restaurantstandards.',
+    kitchen_org: () =>
+      'Organisation der Essenszubereitung und Aufrechterhaltung eines ordentlichen Küchenarbeitsplatzes.',
+    kitchen_collab: () =>
+      'Abstimmung mit Küchenkolleginnen und -kollegen während des täglichen Service.',
+    food_hygiene: () =>
+      'Einhaltung der Hygiene- und Lebensmittel-Lagerungsverfahren gemäß den Aufgaben.',
+  },
+  es: {
+    cuisine_prep: () =>
+      'Preparación de platos serbios y mediterráneos según los estándares establecidos del restaurante.',
+    kitchen_org: () =>
+      'Organización de las tareas de preparación de alimentos y mantenimiento de un puesto de cocina ordenado.',
+    kitchen_collab: () =>
+      'Coordinación con compañeros de cocina durante el servicio diario.',
+    food_hygiene: () =>
+      'Cumplimiento de los procedimientos de higiene y almacenamiento de ingredientes indicados en las funciones.',
+  },
+  fr: {
+    cuisine_prep: () =>
+      'Préparation de plats serbes et méditerranéens conformément aux normes établies du restaurant.',
+    kitchen_org: () =>
+      'Organisation des tâches de préparation des aliments et maintien d’un poste de cuisine ordonné.',
+    kitchen_collab: () =>
+      'Coordination avec les collègues de cuisine pendant le service quotidien.',
+    food_hygiene: () =>
+      'Respect des procédures d’hygiène et de stockage des ingrédients prévues dans les missions.',
+  },
+  it: {
+    cuisine_prep: () =>
+      'Preparazione di piatti serbi e mediterranei secondo gli standard definiti del ristorante.',
+    kitchen_org: () =>
+      'Organizzazione delle attività di preparazione degli alimenti e mantenimento di una postazione di cucina ordinata.',
+    kitchen_collab: () =>
+      'Coordinamento con i colleghi di cucina durante il servizio quotidiano.',
+    food_hygiene: () =>
+      'Rispetto delle procedure di igiene e conservazione degli ingredienti previste nei compiti.',
+  },
+  ar: {
+    cuisine_prep: () =>
+      'إعداد أطباق صربية ومتوسطية وفقاً لمعايير المطعم المعتمدة.',
+    kitchen_org: () =>
+      'تنظيم مهام تحضير الطعام والحفاظ على مكان عمل مرتب في المطبخ.',
+    kitchen_collab: () =>
+      'التنسيق مع زملاء المطبخ أثناء الخدمة اليومية.',
+    food_hygiene: () =>
+      'اتباع إجراءات النظافة وتخزين المكونات الواردة في المهام.',
+  },
+  sr: {
+    cuisine_prep: (g) =>
+      g === 'male'
+        ? 'Pripremao sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.'
+        : 'Pripremala sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.',
+    kitchen_org: (g) =>
+      g === 'male'
+        ? 'Organizovao sam pripremu namirnica i održavao uredan radni prostor u kuhinji.'
+        : 'Organizovala sam pripremu namirnica i održavala uredan radni prostor u kuhinji.',
+    kitchen_collab: (g) =>
+      g === 'male'
+        ? 'Sarađivao sam sa kolegama iz kuhinjskog tima tokom dnevnog servisa.'
+        : 'Sarađivala sam sa kolegama iz kuhinjskog tima tokom dnevnog servisa.',
+    food_hygiene: (g) =>
+      g === 'male'
+        ? 'Poštovao sam higijenske procedure i pravila skladištenja namirnica.'
+        : 'Poštovala sam higijenske procedure i pravila skladištenja namirnica.',
+  },
+  hr: {
+    cuisine_prep: (g) =>
+      g === 'male'
+        ? 'Pripremao sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.'
+        : 'Pripremala sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.',
+    kitchen_org: (g) =>
+      g === 'male'
+        ? 'Organizirao sam pripremu namirnica i održavao uredan radni prostor u kuhinji.'
+        : 'Organizirala sam pripremu namirnica i održavala uredan radni prostor u kuhinji.',
+    kitchen_collab: (g) =>
+      g === 'male'
+        ? 'Surađivao sam s kolegama iz kuhinjskog tima tijekom dnevnog servisa.'
+        : 'Surađivala sam s kolegama iz kuhinjskog tima tijekom dnevnog servisa.',
+    food_hygiene: (g) =>
+      g === 'male'
+        ? 'Poštovao sam higijenske procedure i pravila skladištenja namirnica.'
+        : 'Poštovala sam higijenske procedure i pravila skladištenja namirnica.',
+  },
+  ru: {
+    cuisine_prep: (g) =>
+      g === 'male'
+        ? 'Готовил блюда сербской и средиземноморской кухни в соответствии со стандартами ресторана.'
+        : 'Готовила блюда сербской и средиземноморской кухни в соответствии со стандартами ресторана.',
+    kitchen_org: (g) =>
+      g === 'male'
+        ? 'Организовывал подготовку продуктов и поддерживал порядок на рабочем месте на кухне.'
+        : 'Организовывала подготовку продуктов и поддерживала порядок на рабочем месте на кухне.',
+    kitchen_collab: (g) =>
+      g === 'male'
+        ? 'Сотрудничал с коллегами кухонной бригады во время ежедневного обслуживания.'
+        : 'Сотрудничала с коллегами кухонной бригады во время ежедневного обслуживания.',
+    food_hygiene: (g) =>
+      g === 'male'
+        ? 'Соблюдал гигиенические процедуры и правила хранения продуктов.'
+        : 'Соблюдала гигиенические процедуры и правила хранения продуктов.',
+  },
+  'pt-BR': {
+    cuisine_prep: () =>
+      'Preparo de pratos da culinária sérvia e mediterrânea conforme os padrões estabelecidos do restaurante.',
+    kitchen_org: () =>
+      'Organização das tarefas de preparação de alimentos e manutenção de uma estação de cozinha ordenada.',
+    kitchen_collab: () =>
+      'Coordenação com colegas de cozinha durante o serviço diário.',
+    food_hygiene: () =>
+      'Cumprimento dos procedimentos de higiene e armazenamento de ingredientes indicados nas funções.',
+  },
+  hi: {
+    cuisine_prep: () =>
+      'रेस्तराँ के निर्धारित मानकों के अनुसार सर्बियाई और भूमध्यसागरीय व्यंजन तैयार किए।',
+    kitchen_org: () =>
+      'खाद्य तैयारी के कार्यों को व्यवस्थित रखा और रसोई के कार्यक्षेत्र को व्यवस्थित बनाए रखा।',
+    kitchen_collab: () =>
+      'दैनिक सेवा के दौरान रसोई सहयोगियों के साथ समन्वय किया।',
+    food_hygiene: () =>
+      'स्वच्छता और सामग्री भंडारण प्रक्रियाओं का पालन किया जो भूमिका के कर्तव्यों में बताई गई हैं।',
+  },
+  ja: {
+    cuisine_prep: () =>
+      'レストランの定められた基準に従い、セルビア料理および地中海料理を準備した。',
+    kitchen_org: () =>
+      '食材準備作業を整理し、厨房の作業場を整然と維持した。',
+    kitchen_collab: () =>
+      '日常サービス中に厨房の同僚と連携した。',
+    food_hygiene: () =>
+      '職務に示された衛生および食材保管手順に従った。',
+  },
+};
 
 /**
  * `\b<stem>\b` breaks the moment the source language inflects the stem with a
@@ -294,6 +510,8 @@ type GenericDutyIntent = 'process' | 'collaboration' | 'analysis' | 'planning' |
  */
 function classifyGenericDutyIntent(text: string): GenericDutyIntent | null {
   const t = text.toLowerCase();
+  // Cooking duties must not fall through to office collaboration via "tim/sarađ".
+  if (classifyCookingDutyIntent(t)) return null;
   const startsWord = (...stems: string[]) =>
     new RegExp(`\\b(?:${stems.join('|')})[a-z]*`, 'iu').test(t);
   const includesAny = (...terms: string[]) => terms.some((term) => t.includes(term));
@@ -463,9 +681,18 @@ function localizedBulletForFact(
   options?: { useGenericCatchAll?: boolean },
 ): string {
   const g = tone(gender);
-  const category = fact.category || classifyDutyCategory(fact.sourceText || fact.value);
+  const source = fact.sourceText || fact.value;
+  const category = fact.category || classifyDutyCategory(source);
+
+  // Cooking-specific intents (category-aware + generic cooking source text).
+  const cookingIntent = classifyCookingDutyIntent(source);
+  if (cookingIntent) {
+    const cookingTable = COOKING_INTENT_BULLET[locale] || COOKING_INTENT_BULLET.en;
+    if (cookingTable?.[cookingIntent]) return cookingTable[cookingIntent](g).trim();
+  }
+
   if (category === 'generic') {
-    const intent = classifyGenericDutyIntent(fact.sourceText || fact.value);
+    const intent = classifyGenericDutyIntent(source);
     const table = GENERIC_INTENT_BULLET[locale] || GENERIC_INTENT_BULLET.en;
     if (intent && table?.[intent]) return table[intent](g).trim();
     // No known intent matched (duty outside the office/hospitality/logistics

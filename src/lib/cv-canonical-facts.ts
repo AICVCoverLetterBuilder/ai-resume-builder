@@ -28,6 +28,7 @@ export type CvDutyCategory =
   | 'hygiene_safety'
   | 'customer_service_guest_relationship'
   | 'inventory_stock'
+  | 'food_preparation'
   | 'generic';
 
 export type CvCanonicalFact = {
@@ -49,12 +50,64 @@ export type CvCanonicalFactSet = {
   isSparse: boolean;
 };
 
+/**
+ * Split a work-experience description into duty units.
+ * Supports real Android/editor textarea formats:
+ * - newline-separated bullets
+ * - inline `• duty • duty`
+ * - leading hyphen/asterisk bullets
+ * - semicolon-separated duties (when they look like separate sentences)
+ * Does not split inside dates (1.1.2022), decimals, or bare company tokens.
+ */
 export function splitExperienceBullets(description: string): string[] {
   if (!description?.trim()) return [];
-  return description
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^[•\-\*\u2022]\s*/, '').trim())
-    .filter(Boolean);
+  const normalized = description
+    .replace(/\uFEFF/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim();
+
+  const stripPrefix = (line: string) =>
+    line.replace(/^[•\-\*\u2022\u25CF\u25E6]\s*/, '').trim();
+
+  const fromLines: string[] = [];
+  for (const rawLine of normalized.split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    // Inline bullet glyphs: "• a. • b." or "a. • b."
+    if (/[•\u2022\u25CF]/.test(line)) {
+      const parts = line
+        .split(/\s*[•\u2022\u25CF]\s+/)
+        .map((p) => stripPrefix(p).trim())
+        .filter(Boolean);
+      if (parts.length > 1) {
+        fromLines.push(...parts);
+        continue;
+      }
+    }
+    fromLines.push(stripPrefix(line));
+  }
+
+  // Semicolon-separated multi-duty lines (avoid splitting abbreviations like "Inc.;")
+  const expanded: string[] = [];
+  for (const unit of fromLines) {
+    if (
+      /;\s+/.test(unit)
+      && /[a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ\u0900-\u097F]{4,}.{8,};\s+[A-ZČĆŽŠĐ\u0400-\u04FF\u0900-\u097F]/.test(unit)
+    ) {
+      const semis = unit
+        .split(/;\s+/)
+        .map((p) => stripPrefix(p).trim())
+        .filter((p) => p.length > 12);
+      if (semis.length > 1) {
+        expanded.push(...semis);
+        continue;
+      }
+    }
+    if (unit) expanded.push(unit);
+  }
+
+  return expanded.filter(Boolean);
 }
 
 export function formatExperienceBullets(bullets: string[], bulletPrefix = '• '): string {
@@ -63,20 +116,36 @@ export function formatExperienceBullets(bullets: string[], bulletPrefix = '• '
 
 export function classifyDutyCategory(text: string): CvDutyCategory {
   const t = text.toLowerCase().normalize('NFKC');
-  if (/\b(inventory|stock|supply|zalih|inventar|снабжен|запас|स्टॉक|在庫|مخزون|replenish|dopun)/iu.test(t)) {
-    return 'inventory_stock';
-  }
   if (
     /\b(guest|guests|customer|customers|rapport|gost|gosti|gostima|klijent|клиент|грах|ग्राहक|客|ضيف|clientes?)\b/iu.test(t)
     || /attentive customer|building rapport|built rapport|uslugu gost/iu.test(t)
   ) {
     return 'customer_service_guest_relationship';
   }
+  // Stem match: Serbian "higijenske/higijena" must not require an exact word-boundary end.
+  // Prefer hygiene over inventory when both storage and hygiene appear in one duty.
   if (
-    /\b(hygiene|safety|clean|organised|organized|čist|cist|higijen|санитар|स्वच्छ|衛生|نظاف)\b/iu.test(t)
-    || /bar area|standarde higijen/iu.test(t)
+    /\b(hygiene|safety|clean|organised|organized|čist|cist|higijen\w*|санитар\w*|स्वच्छ|衛生|نظاف)/iu.test(t)
+    || /bar area|standarde higijen|food[- ]?safet|bezbednost\s+hran|sigurnost\s+hran/iu.test(t)
   ) {
     return 'hygiene_safety';
+  }
+  if (
+    /\b(inventory|stock|supply|zalih|inventar|снабжен|запас|स्टॉक|在庫|مخزون|replenish|dopun)/iu.test(t)
+    || /\bskladišt\w*/iu.test(t)
+  ) {
+    return 'inventory_stock';
+  }
+  // Cooking / food preparation (not beverage) — before beverage so "jela/kuhinja" wins.
+  if (
+    /\b(dish(?:es)?|cuisine|kitchen|menu|recipe|cook(?:ing|ed)?|food\s*prep|restaurant\s+standard)/iu.test(t)
+    || /\b(jel\w*|kuhinj\w*|kuhar\w*|namirnic\w*|mediteransk\w*|srpsk\w*\s+i\s+mediteransk)/iu.test(t)
+    || /priprem\w*.{0,40}(jel|hran|namirnic|obrok)/iu.test(t)
+    || /organiz\w*.{0,40}(priprem|radni\s+prostor|workstation)/iu.test(t)
+    || /sara[dđ]\w*.{0,40}(kuhinj|kitchen|koleg)/iu.test(t)
+    || /भोजन|पकवान|खाना|طبخ|料理/.test(t)
+  ) {
+    return 'food_preparation';
   }
   // "prepared/served/priprema/…" alone are generic verbs used across many unrelated
   // duties (e.g. "prepared reports", "priprema izveštaja") — only beverage-classify
@@ -95,11 +164,13 @@ export const DUTY_CATEGORY_PRESENCE: Record<Exclude<CvDutyCategory, 'generic'>, 
   beverage_service:
     /(cocktail|koktel|cóctel|coquetel|кокт|напит|कॉकटेल|कोकटेल|पेय|飲料|مشروب|كوكتيل|bebida|getränk|spirit|spirituosen|beverage|drink|pić|napit)/iu,
   hygiene_safety:
-    /(hygiene|higijen|гигиен|безопасност|safety|bezbednost|sigurnost|clean|чист|čist|cist|organiz|organis|bar area|higij|साफ|स्वच्छ|衛生|نظاف|sicherheit|igiene|higiene)/iu,
+    /(hygiene|higijen|гигиен|безопасност|safety|bezbednost|sigurnost|clean|чист|čist|cist|organiz|organis|bar area|higij|साफ|स्वच्छ|衛生|نظاف|sicherheit|igiene|higiene|food[- ]?safet|ingredient.?stor)/iu,
   customer_service_guest_relationship:
     /(guest|gäst|gost|гост|customer|kunden|klijent|клиент|rapport|odnos|ग्राहक|अतिथि|客|ضيف|ضيوف|client|huésp|ospiti|atenti)/iu,
   inventory_stock:
-    /(inventory|stock|zalih|inventar|inventur|supply|запас|снаб|स्टॉक|इन्वेंट|在庫|مخزون|invent|beständ|inventaire|conteggio|scorte|estoque|Bestände|niveau)/iu,
+    /(inventory|stock|zalih|inventar|inventur|supply|запас|снаб|स्टॉक|इन्वेंट|在庫|مخزون|invent|beständ|inventaire|conteggio|scorte|estoque|Bestände|niveau|skladišt|ingredient|namirnic|freshness)/iu,
+  food_preparation:
+    /(dish(?:es)?|cuisine|kitchen|küche|küchen|gerichte|essens|menu|recipe|cook|food\s*prep|restaurant|jel\w*|kuhinj\w*|namirnic\w*|mediterr|mediterranean|serbian\s+and|srpsk|priprem\w*|zubereit|plat|plato|piatto|кухн|طبخ|भोजन|व्यंजन|तैयार|रसोई|रेस्तराँ|料理|prépar|kolleg|colleagues|servis|service|workstation|arbeitsplatz|posto de|poste de)/iu,
 };
 
 /** Phrases that replace guest service with teammate cooperation (not equivalent). */
@@ -336,10 +407,29 @@ export function deterministicBulletsFromCanonical(
   return formatExperienceBullets(bullets.map((b) => b.sourceText || b.value));
 }
 
-/** Freeze source bullets before the first localized overwrite. */
+/** Freeze source bullets before the first localized overwrite.
+ * Prefer an existing canonicalDescription. Otherwise freeze the current
+ * description when it looks like user-entered source text (not a prior AI
+ * rewrite marker / empty). Callers must not pass known AI-only text here
+ * without an existing freeze.
+ */
 export function freezeCanonicalExperienceDescription(
   exp: Pick<WorkExperience, 'description' | 'canonicalDescription'>,
 ): string {
   if (exp.canonicalDescription?.trim()) return exp.canonicalDescription.trim();
   return (exp.description || '').trim();
+}
+
+/**
+ * Ensure legacy entries (description set, canonicalDescription empty) freeze
+ * user-entered duties before the first AI Improvements call.
+ * Does not overwrite an existing freeze. Does not invent content.
+ */
+export function ensureCanonicalExperienceFrozen(
+  exp: WorkExperience,
+): WorkExperience {
+  if (exp.canonicalDescription?.trim()) return exp;
+  const source = (exp.description || '').trim();
+  if (!source) return exp;
+  return { ...exp, canonicalDescription: source };
 }

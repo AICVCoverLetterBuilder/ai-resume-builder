@@ -143,7 +143,7 @@ const TITLE_CATEGORY_RULES: Array<{ category: OccupationCategory; re: RegExp; co
 const DUTY_FAMILY_RULES: Array<{ family: DutyFamily; re: RegExp; confidence: 'high' }> = [
   {
     family: 'cooking',
-    re: /\b(cook(?:ing)?|recipe|kitchen|menu|food\s+prep|priprem\w*\s+hran|kuhinj)|भोजन|पकवान|طبخ/iu,
+    re: /\b(cook(?:ing)?|recipe|kitchen|menu|food\s+prep|kuhinj\w*|jel\w*|namirnic\w*|mediteransk\w*)|priprem\w*.{0,40}(?:hran|jel|namirnic|obrok)|भोजन|पकवान|طبخ/iu,
     confidence: 'high',
   },
   {

@@ -96,8 +96,32 @@ function dutiesTextFromCv(cv: CVData, experienceId?: string): string {
   return scoped.map((e) => freezeCanonicalExperienceDescription(e)).join('\n');
 }
 
-function prepareCandidate(raw: string, locale: Locale): string {
+function prepareCandidate(raw: string, locale: Locale, field: 'summary' | 'experience_description'): string {
   let out = stripAiProtocolMarkers(raw || '');
+  if (field === 'experience_description') {
+    // Preserve bullet line structure — never collapse newlines (summary fluff
+    // stripper replaces all whitespace with a single space).
+    out = out
+      .split(/\r?\n/)
+      .map((line) => {
+        let row = line.replace(/^\s*[•\-\*\u2022]\s*/, '').trim();
+        if (!row) return '';
+        // Strip invented fluff tokens per line without joining lines.
+        for (const fluff of [
+          /\bincreased\s+revenue\b/giu,
+          /\bcustomer[- ]satisfaction\b/giu,
+          /\bawards?\b/giu,
+        ]) {
+          row = row.replace(fluff, ' ');
+        }
+        row = row.replace(/[ \t]+/g, ' ').trim();
+        return row;
+      })
+      .filter(Boolean)
+      .join('\n');
+    out = normalizeLocaleText(out, locale);
+    return out.trim();
+  }
   out = stripUnsupportedSummaryFluff(out, locale);
   out = normalizeLocaleText(out, locale);
   return out;
@@ -242,7 +266,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const roleDutyConflict = consistency.conflict;
   const context = buildDurationContext(cv, locale);
 
-  let candidate = prepareCandidate(input.candidate || '', locale);
+  let candidate = prepareCandidate(input.candidate || '', locale, 'summary');
   if (hasAiProtocolMarker(candidate)) {
     candidate = '';
   }
@@ -347,7 +371,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const roleDutyConflict = consistency.conflict;
   const canonical = bulletsForExperience(factSet, experienceIndex);
 
-  let candidate = prepareCandidate(input.candidate || '', locale);
+  let candidate = prepareCandidate(input.candidate || '', locale, 'experience_description');
   if (hasAiProtocolMarker(candidate)) {
     candidate = '';
   }
@@ -379,7 +403,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   return {
     blocked: true,
-    reason: first.reason || 'bullets_finalization_blocked',
+    reason: second.reason || first.reason || 'bullets_finalization_blocked',
     text: exp?.description || '',
     origin: 'user',
     roleDutyConflict,
