@@ -901,6 +901,11 @@ export function applyCvContentQuality(
     'unsupported_summary_fact',
     'unsupported_achievement_or_impact',
     'invalid_occupational_title_in_summary',
+    'unlocalized_skill_labels',
+    'mixed_language_summary',
+    'unsupported_summary_claim',
+    'skill_inflation',
+    'summary_too_long',
   ]);
   const needsGroundedFallback = !completeness.valid
     || summaryIntegrity.violations.some((v) => blockingKinds.has(v.kind));

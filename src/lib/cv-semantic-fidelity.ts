@@ -66,7 +66,9 @@ export type CvFidelityViolationKind =
   | 'mixed_locale_proficiency'
   | 'invalid_occupational_title_in_summary'
   | 'unsupported_claim'
-  | 'wrong_language';
+  | 'wrong_language'
+  | 'mixed_language_summary'
+  | 'unlocalized_skill_labels';
 
 export type CvFidelityViolation = {
   kind: CvFidelityViolationKind;

@@ -25,6 +25,7 @@ import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } 
 import { exportAtsStandardPdf, exportCleanSimplePdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportCreativeArtisticPdf, exportCreativeBoldPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportProfessionalClassicPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback, assertDedicatedPdfRouteWasHandled, readPdfExportTemplateIdFromPreview, recordCvPdfExportRuntimeTrace, resolveCvForPdfExport, resolveCvPdfExportRoute } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
+import { formatCvExportIntegrityToast } from '@/lib/cv-export-error-message';
 import type { SaveFileResult } from '@/lib/native-save';
 import {
   filterCvLanguageOptions,
@@ -1502,7 +1503,7 @@ export default function CVBuilderPage() {
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV DOCX export] failed:', err);
-        toast.error(t.cv.wordExportFailed);
+        toast.error(formatCvExportIntegrityToast(err, locale, 'docx') || t.cv.wordExportFailed);
       } finally {
         setIsWordExporting(false);
       }
@@ -1692,7 +1693,7 @@ export default function CVBuilderPage() {
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
         const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
         if (cv.templateId === 'modern-minimal' || cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal' || cv.templateId === 'ats-standard' || cv.templateId === 'executive-premium' || cv.templateId === 'nordic-clean' || cv.templateId === 'tech-sidebar' || cv.templateId === 'corporate-navy' || cv.templateId === 'contemporary-bold' || cv.templateId === 'rirekisho') {
-          toast.error(t.cv.pdfExportFailed);
+          toast.error(formatCvExportIntegrityToast(err, locale, 'pdf') || t.cv.pdfExportFailed);
           return;
         }
         // Fallback: attempt print-ready window once so user can Save as PDF via browser.

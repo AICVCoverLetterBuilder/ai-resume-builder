@@ -18,6 +18,7 @@ import {
   localizeOccupationalTitleForProjection,
   resolveOccupationalTitleForSummary,
 } from './cv-role-title';
+import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';
 
 export const SUMMARY_MAX_WORDS = 90;
@@ -298,6 +299,8 @@ export function runSummaryGroundingValidators(
     ...validateSummaryLength(summary, options.locale),
     ...validateSummaryUnsupportedClaims(summary, factSet),
     ...validateSummarySkillInflation(summary),
+    ...validateSummarySkillLocalization(summary, options.locale),
+    ...validateSummaryMixedLanguage(summary, options.locale),
     ...validateSummaryGenderOccupation(summary, factSet, options),
     ...validateSummaryMaterialFacts(summary, factSet),
     ...validateSummaryEmploymentStatus(summary, factSet),
@@ -412,6 +415,9 @@ function andWord(locale: Locale): string {
   if (locale === 'pt-BR' || locale === 'it') return 'e';
   if (locale === 'fr') return 'et';
   if (locale === 'ru') return 'и';
+  if (locale === 'hi') return 'और';
+  if (locale === 'ar') return 'و';
+  if (locale === 'ja') return '、';
   return 'and';
 }
 
@@ -427,22 +433,124 @@ function joinDutyFragments(fragments: string[], locale: Locale): string {
   return `${head} ${andWord(locale)} ${last}`;
 }
 
-function skillSafeForLocale(skill: string, locale: Locale): boolean {
-  const s = (skill || '').trim();
+const SCRIPT_LOCALES: Locale[] = ['hi', 'ar', 'ja', 'ru'];
+
+/** True when a skill label still looks like unlocalized English in a non-English locale. */
+function isUnlocalizedEnglishSkillLabel(label: string, locale: Locale): boolean {
+  if (locale === 'en') return false;
+  const s = (label || '').trim();
   if (!s) return false;
-  // Keep English/Latin skill labels out of RTL/CJK summaries when they would
-  // dominate; still allow common English skill names in Latin-script locales.
-  if (locale === 'ar' || locale === 'ja' || locale === 'hi' || locale === 'ru') {
-    if (/^[A-Za-z0-9][A-Za-z0-9\s/&'’.-]{1,40}$/.test(s)) return true;
+  // Multi-word Title Case English skill phrases (e.g. Critical Thinking).
+  if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+$/.test(s)) return true;
+  if (SCRIPT_LOCALES.includes(locale) && /^[A-Za-z][A-Za-z0-9\s/&'’.-]{1,40}$/.test(s)) {
+    return true;
   }
-  // Never emit Serbian diacritic skill labels into English (title-leak class).
-  if (locale === 'en' && /[čćžšđČĆŽŠĐ]/.test(s)) return false;
-  if (locale === 'en' && /[^\u0000-\u007F]/.test(s)) return false;
-  return true;
+  return false;
+}
+
+/**
+ * Localize skill labels for summary prose. Omit skills that cannot be safely
+ * localized into script locales — never append raw English lists.
+ */
+export function localizeSummarySkillLabels(skills: string[], locale: Locale): string[] {
+  const out: string[] = [];
+  for (const raw of skills) {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) continue;
+    if (locale === 'en') {
+      if (/[čćžšđČĆŽŠĐ]/.test(trimmed) || /[^\u0000-\u007F]/.test(trimmed)) continue;
+      out.push(trimmed);
+      continue;
+    }
+    const localized = getLocalizedCvSkillName(trimmed, locale);
+    if (!localized.trim()) continue;
+    if (isUnlocalizedEnglishSkillLabel(localized, locale)) continue;
+    // If localization returned the same English string for a script locale, omit.
+    if (
+      SCRIPT_LOCALES.includes(locale)
+      && localized === trimmed
+      && /^[A-Za-z]/.test(trimmed)
+    ) {
+      continue;
+    }
+    out.push(localized);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+/** Known English skill labels that must not appear raw in non-English summaries. */
+const ENGLISH_SKILL_LABEL_RE =
+  /\b(?:Critical Thinking|Problem Solving|Time Management|Presentation Skills|Adaptability|Organization|Leadership|Communication|Teamwork|Creativity|Attention to Detail)\b/g;
+
+export function findUnlocalizedSkillLabelsInSummary(
+  summary: string,
+  locale: Locale,
+): string[] {
+  if (locale === 'en' || !summary.trim()) return [];
+  const found = new Set<string>();
+  for (const m of summary.matchAll(ENGLISH_SKILL_LABEL_RE)) {
+    found.add(m[0]);
+  }
+  // Raw English Title-Case lists after an English/Hindi skills opener only.
+  // Do not scan German/French/etc. localized skill sentences for Title Case —
+  // words like "Organisation"/"Anpassungsfähigkeit" are valid locale labels.
+  const skillsClause = summary.match(
+    /(?:Key skills include|मुख्य कौशल(?:ों)? में|मेरे प्रमुख कौशलों में)\s+((?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)(?:,\s*(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?))+(?:\s+and\s+(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?))?)/u,
+  );
+  if (skillsClause?.[1] && /^[\x00-\x7F]+$/.test(skillsClause[1])) {
+    found.add(skillsClause[1].trim());
+  }
+  return [...found];
+}
+
+export function validateSummarySkillLocalization(
+  summary: string,
+  locale?: Locale | string,
+): CvFidelityViolation[] {
+  const loc = (locale || 'en') as Locale;
+  if (loc === 'en') return [];
+  const labels = findUnlocalizedSkillLabelsInSummary(summary, loc);
+  if (!labels.length) return [];
+  return [{
+    kind: 'unlocalized_skill_labels' as CvFidelityViolationKind,
+    matched: labels.join('; '),
+    section: 'summary',
+    evidence: labels[0],
+  }];
+}
+
+export function validateSummaryMixedLanguage(
+  summary: string,
+  locale?: Locale | string,
+): CvFidelityViolation[] {
+  const loc = (locale || 'en') as Locale;
+  if (!SCRIPT_LOCALES.includes(loc)) return [];
+  const value = (summary || '').normalize('NFKC').trim();
+  if (!value) return [];
+  // Substantial English prose clause (not a single proper noun).
+  if (
+    /\b(?:with approximately|years of experience|Key skills include|responsible for|currently contributing)\b/i.test(value)
+  ) {
+    return [{
+      kind: 'mixed_language_summary' as CvFidelityViolationKind,
+      matched: 'english_prose_in_script_locale',
+      section: 'summary',
+    }];
+  }
+  const unlocalized = findUnlocalizedSkillLabelsInSummary(value, loc);
+  if (unlocalized.length >= 2) {
+    return [{
+      kind: 'mixed_language_summary' as CvFidelityViolationKind,
+      matched: unlocalized.slice(0, 4).join(', '),
+      section: 'summary',
+    }];
+  }
+  return [];
 }
 
 function skillsLabelSentence(skills: string[], locale: Locale): string {
-  const list = skills.slice(0, 6).map((s) => s.trim()).filter((s) => skillSafeForLocale(s, locale));
+  const list = localizeSummarySkillLabels(skills, locale);
   if (!list.length) return '';
   const and = andWord(locale);
   let cleanJoined = list[0];
@@ -459,7 +567,7 @@ function skillsLabelSentence(skills: string[], locale: Locale): string {
   if (locale === 'it') return `Le competenze chiave includono ${cleanJoined.toLowerCase()}.`;
   if (locale === 'pt-BR') return `As competências principais incluem ${cleanJoined.toLowerCase()}.`;
   if (locale === 'ru') return `Ключевые навыки включают ${cleanJoined.toLowerCase()}.`;
-  if (locale === 'hi') return `मुख्य कौशल में ${cleanJoined} शामिल हैं।`;
+  if (locale === 'hi') return `मेरे प्रमुख कौशलों में ${cleanJoined} शामिल हैं।`;
   if (locale === 'ar') return `تشمل المهارات الرئيسية ${cleanJoined}.`;
   if (locale === 'ja') return `主なスキルは${cleanJoined}です。`;
   return `Key skills include ${cleanJoined}.`;

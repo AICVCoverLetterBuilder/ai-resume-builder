@@ -103,6 +103,7 @@ export function buildSummaryRepairPrompt(
     'Finish every sentence. Do not truncate mid-word.',
     'Use only SOURCE FACTS below. Do not invent duties, quality, health standards, storage, pressure, efficiency, initiative, demonstrated leadership, career ambitions, or personality traits.',
     'Skills are labels only (e.g. "Key skills include organization and time management"). Never treat skills as achievements.',
+    'Localize skill labels into the requested language. Never append raw English skill lists (Critical Thinking, Adaptability, Problem Solving, …) in non-English summaries.',
     'If gender/occupation is wrong (e.g. Pekara for female Baker), use the correct gendered occupation (Pekarka).',
     'Keep one consistent perspective (first person OR third person, not mixed).',
     'Output ONLY the summary prose. Never prefix with labels like "CORRECTED PROFESSIONAL SUMMARY:", "REPAIRED SUMMARY:", "OUTPUT:", or markdown headings.',

@@ -36,6 +36,10 @@ import { applyCvContentQuality } from './cv-content-quality';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { validateFinalLocalizedCvFields } from './cv-field-locale-integrity';
+import {
+  resolveExperienceGroundingDescription,
+  type CvExperienceDescriptionOrigin,
+} from './cv-experience-provenance';
 
 export class CreativeArtisticLocaleExportError extends Error {
   readonly locale: Locale;
@@ -49,10 +53,23 @@ export class CreativeArtisticLocaleExportError extends Error {
   }
 }
 
+/**
+ * Authoritative export grounding for experience duties.
+ * Prefer originalUserDescription / user-confirmed canonical — never AI display text.
+ */
 export function resolveCanonicalExperienceDescription(exp: {
   description?: string;
   canonicalDescription?: string;
+  originalUserDescription?: string;
+  descriptionOrigin?: CvExperienceDescriptionOrigin | string;
 }): string {
+  const grounded = resolveExperienceGroundingDescription({
+    description: exp.description || '',
+    canonicalDescription: exp.canonicalDescription || '',
+    originalUserDescription: exp.originalUserDescription || '',
+    descriptionOrigin: exp.descriptionOrigin as CvExperienceDescriptionOrigin | undefined,
+  });
+  if (grounded) return grounded;
   return (exp.canonicalDescription || exp.description || '').trim();
 }
 
