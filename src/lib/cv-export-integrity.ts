@@ -35,7 +35,10 @@ import { buildExperienceDurationSnapshot } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
-import { validateFinalLocalizedCvFields } from './cv-field-locale-integrity';
+import {
+  textMatchesRequestedFieldLocale,
+  validateFinalLocalizedCvFields,
+} from './cv-field-locale-integrity';
 import {
   resolveExperienceGroundingDescription,
   type CvExperienceDescriptionOrigin,
@@ -106,6 +109,19 @@ function isValidLocalizedExperience(
   return true;
 }
 
+function structuredExemptionsFromCv(cv?: Pick<CVData, 'personal' | 'experience'>) {
+  return {
+    fullName: cv?.personal?.fullName || '',
+    email: cv?.personal?.email || '',
+    phone: cv?.personal?.phone || '',
+    companies: (cv?.experience || []).map((e) => e.company || '').filter(Boolean),
+    jobTitles: [
+      cv?.personal?.jobTitle || '',
+      ...(cv?.experience || []).map((e) => e.position || ''),
+    ].filter(Boolean),
+  };
+}
+
 function isValidLocalizedSummary(
   candidate: string,
   factSet: ReturnType<typeof buildCvCanonicalFactSet>,
@@ -113,17 +129,20 @@ function isValidLocalizedSummary(
   gender: string,
   canonicalSummary: string,
   canonicalLocale?: Locale,
+  sourceCv?: Pick<CVData, 'personal' | 'experience'>,
 ): boolean {
   if (!candidate.trim()) return false;
-  const localeCheck = validateFinalLocalizedCvFields({
-    summary: candidate,
-    personal: { fullName: '', email: '', phone: '', address: '', jobTitle: '' },
-    experience: [],
-    education: [],
-    skills: [],
-    languages: [],
-  }, locale);
-  if (!localeCheck.valid) return false;
+  // Summary-only locale check with structured proper-noun exemptions from the
+  // live CV (name/company/email/phone/titles). Never use an empty personal stub —
+  // that dropped exemptions and falsely rejected old Hindi saves with Ztrew/etc.
+  if (!textMatchesRequestedFieldLocale(
+    candidate,
+    locale,
+    'summary',
+    structuredExemptionsFromCv(sourceCv),
+  )) {
+    return false;
+  }
   if (!validateSummaryCompleteness(candidate, { locale }).valid) return false;
   if (!validateLocalizedSummary(candidate, factSet, { locale, gender, stage: 'export' }).valid) {
     return false;
@@ -230,7 +249,15 @@ function localizeCvAgainstCanonical(
   const canonicalSummary = (cv.canonicalSummary || '').trim();
   let summary = (cv.summary || '').trim();
 
-  if (!isValidLocalizedSummary(summary, factSet, locale, gender, canonicalSummary || summary, canonicalLocale)) {
+  if (!isValidLocalizedSummary(
+    summary,
+    factSet,
+    locale,
+    gender,
+    canonicalSummary || summary,
+    canonicalLocale,
+    cv,
+  )) {
     validationStatus = 'fallback';
     const rejectedDetail = validateLocalizedSummary(summary, factSet, {
       locale,
@@ -254,6 +281,7 @@ function localizeCvAgainstCanonical(
       gender,
       canonicalSummary,
       canonicalLocale,
+      cv,
     )) {
       summary = localizedSummary;
       summaryOrigin = 'deterministic_fallback';

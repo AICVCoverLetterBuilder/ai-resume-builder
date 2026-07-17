@@ -138,7 +138,8 @@ export function textMatchesRequestedFieldLocale(
   const proseField = field === 'summary'
     || field === 'experience_bullet'
     || field === 'education_description';
-  const scriptProbe = proseField && structuredExemptions
+  // Always neutralize dates/numbers; also strip structured name/company when provided.
+  const scriptProbe = proseField
     ? stripStructuredCvProperNouns(value, structuredExemptions)
     : value;
   // If neutralizing structured tokens leaves almost nothing, the field was only

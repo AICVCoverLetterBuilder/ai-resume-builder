@@ -166,7 +166,9 @@ const TITLE_CATEGORY_RULES: Array<{ category: OccupationCategory; re: RegExp; co
 const DUTY_FAMILY_RULES: Array<{ family: DutyFamily; re: RegExp; confidence: 'high' }> = [
   {
     family: 'cooking',
-    re: /\b(cook(?:ing)?|recipe|kitchen|menu|food\s+prep|kuhinj\w*|jel\w*|namirnic\w*|mediteransk\w*)|priprem\w*.{0,40}(?:hran|jel|namirnic|obrok)|भोजन|पकवान|طبخ/iu,
+    // Include Hindi food/kitchen anchors outside \\b — JS word boundaries are ASCII-only.
+    // Missing व्यंजन/रसोई caused Baker↔बेकर false conflicts on old Hindi-only saves.
+    re: /\b(cook(?:ing)?|recipe|kitchen|menu|food\s+prep|kuhinj\w*|jel\w*|namirnic\w*|mediteransk\w*)|priprem\w*.{0,40}(?:hran|jel|namirnic|obrok)|भोजन|पकवान|खाना|व्यंजन|तैयार|रसोई|रेस्तरां|रेस्तराँ|طبخ|料理/iu,
     confidence: 'high',
   },
   {
@@ -176,7 +178,9 @@ const DUTY_FAMILY_RULES: Array<{ family: DutyFamily; re: RegExp; confidence: 'hi
   },
   {
     family: 'office_process',
-    re: /\b(?:internal\s+process|process(?:es)?|cross[- ]?functional|collaborat|analy[sz]|report|izveštaj|izvestaj|proces|saradn|sarađ|sarad|koordin)|प्रक्रिया|सहयोग|विश्लेषण|रिपोर्ट/iu,
+    // Omit bare Hindi सहयोग — kitchen-team collab must not classify as office_process
+    // (that false-hit made Baker↔बेकर look like a role/duty conflict on old saves).
+    re: /\b(?:internal\s+process|process(?:es)?|cross[- ]?functional|collaborat|analy[sz]|report|izveštaj|izvestaj|proces|saradn|sarađ|sarad|koordin)|प्रक्रिया|विश्लेषण|रिपोर्ट/iu,
     confidence: 'high',
   },
   {

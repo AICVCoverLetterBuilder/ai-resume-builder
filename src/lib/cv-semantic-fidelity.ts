@@ -22,9 +22,11 @@ import { localizeCvLanguageLevel } from './cv-language-levels';
 import { hasSuspiciousHindiMergedTokens } from './cv-hindi-normalize';
 import { isLocale } from './i18n/translations';
 import {
+  classifyDutyFamilies,
   conflictingTitleFormsInSummary,
   evaluateRoleDutyConsistency,
   isValidOccupationalTitle,
+  occupationalTitlesAreEquivalent,
 } from './cv-role-title';
 import { hasIncorrectSerbianDurationGrammar } from './cv-serbian-grammar';
 import {
@@ -520,22 +522,44 @@ export function validateSummaryForcedConflictingTitle(
   },
 ): CvFidelityViolation[] {
   const violations: CvFidelityViolation[] = [];
-  const conflict = options.roleDutyConflict
-    ?? evaluateRoleDutyConsistency({
-      profileJobTitle: options.profileJobTitle,
-      experienceTitle: options.experienceTitle,
-      dutiesText: options.dutiesText,
-    }).conflict;
-  if (!conflict) return violations;
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: options.profileJobTitle,
     experienceTitle: options.experienceTitle,
     dutiesText: options.dutiesText,
   });
+  const conflict = options.roleDutyConflict ?? consistency.conflict;
+  if (!conflict) return violations;
+
+  // Cross-check: per-bullet duty categories confirm cooking/hygiene even when
+  // family regexes previously missed Hindi script on old saved localized duties.
+  const bulletCats = splitExperienceBullets(options.dutiesText || '').map(classifyDutyCategory);
+  const cookingCompatibleBullets = bulletCats.some((c) =>
+    c === 'food_preparation' || c === 'hygiene_safety' || c === 'beverage_service',
+  );
+  if (consistency.titleCategory === 'cooking' && cookingCompatibleBullets) {
+    return violations;
+  }
+  if (
+    consistency.titleCategory === 'cooking'
+    && classifyDutyFamilies(options.dutiesText || '').some((d) => d.family === 'cooking')
+  ) {
+    return violations;
+  }
+
   const locale = (options.locale || 'en') as Locale;
   for (const re of conflictingTitleFormsInSummary(consistency.titleCategory, locale)) {
     const m = summary.match(re);
     if (m?.[0]) {
+      // Localization of the stored title (Baker ↔ बेकर) is not a conflict by itself
+      // when duties do not establish a competing high-confidence family.
+      const families = classifyDutyFamilies(options.dutiesText || '')
+        .filter((d) => d.confidence === 'high' && d.family !== 'generic')
+        .map((d) => d.family);
+      const isStoredTitleForm = occupationalTitlesAreEquivalent(options.profileJobTitle, m[0], locale)
+        || occupationalTitlesAreEquivalent(options.experienceTitle, m[0], locale);
+      if (isStoredTitleForm && families.length === 0) {
+        continue;
+      }
       violations.push({
         kind: 'unsupported_summary_fact',
         matched: `forced-conflicting-title:${m[0]}`,
