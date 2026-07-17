@@ -134,22 +134,69 @@ export function computeExperienceDuration(
   return applyApproximateDurationPolicy(Math.max(0, months));
 }
 
+/** Absolute month index for overlap merging (year*12 + month). */
+function yearMonthToIndex(ym: string): number | null {
+  const parsed = parseYearMonth(ym);
+  if (!parsed) return null;
+  return parsed.year * 12 + parsed.month;
+}
+
+/**
+ * Union length of employment intervals in months (overlapping roles counted once).
+ */
+export function mergeExperienceMonthsUnion(
+  experiences: Array<Pick<WorkExperience, 'startDate' | 'endDate' | 'isPresent'>>,
+  referenceDate: Date | string,
+): number {
+  const refYm = referenceDateToYearMonth(referenceDate);
+  const intervals: Array<{ start: number; end: number }> = [];
+  for (const exp of experiences) {
+    if (!exp.startDate?.trim()) continue;
+    const start = yearMonthToIndex(exp.startDate.trim().slice(0, 7));
+    const endYm = exp.isPresent || !exp.endDate?.trim()
+      ? refYm
+      : exp.endDate.trim().slice(0, 7);
+    const end = yearMonthToIndex(endYm);
+    if (start == null || end == null || end < start) continue;
+    intervals.push({ start, end });
+  }
+  if (!intervals.length) return 0;
+  intervals.sort((a, b) => a.start - b.start || a.end - b.end);
+  let union = 0;
+  let curStart = intervals[0].start;
+  let curEnd = intervals[0].end;
+  for (let i = 1; i < intervals.length; i++) {
+    const next = intervals[i];
+    if (next.start <= curEnd + 1) {
+      curEnd = Math.max(curEnd, next.end);
+    } else {
+      union += Math.max(0, curEnd - curStart);
+      curStart = next.start;
+      curEnd = next.end;
+    }
+  }
+  union += Math.max(0, curEnd - curStart);
+  return union;
+}
+
 export function buildExperienceDurationSnapshot(
   experiences: Array<Pick<WorkExperience, 'id' | 'startDate' | 'endDate' | 'isPresent'>>,
   referenceDate: Date | string = new Date(),
 ): ExperienceDurationSnapshot {
   const referenceDateIso = toReferenceDateIso(referenceDate);
   const byExperienceId: Record<string, ExperienceDuration> = {};
-  let totalMonths = 0;
   let hasValidDates = false;
   for (const exp of experiences) {
     const duration = computeExperienceDuration(exp, referenceDateIso);
     byExperienceId[exp.id] = duration;
     if (duration.hasValidDates) {
-      totalMonths += duration.totalMonths;
       hasValidDates = true;
     }
   }
+  // Total tenure merges overlapping Present/past roles so duration is not double-counted.
+  const totalMonths = hasValidDates
+    ? mergeExperienceMonthsUnion(experiences, referenceDateIso)
+    : 0;
   const total = hasValidDates
     ? applyApproximateDurationPolicy(totalMonths)
     : applyApproximateDurationPolicy(0);
@@ -459,7 +506,7 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     case 'ja':
       return `約${word}年の経験`;
     default:
-      return `with around ${word} years of experience`;
+      return `with approximately ${word} years of experience`;
   }
 }
 

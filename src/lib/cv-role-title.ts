@@ -86,11 +86,34 @@ function localizeCook(locale: Locale, gender?: string): string {
   return 'Cook';
 }
 
+/** Gendered baker occupation forms — never map Baker → Pekara (bakery noun). */
+export function localizeBaker(locale: Locale, gender?: string): string {
+  const g = normalizeCoverLetterGender(gender);
+  if (locale === 'hi') return 'बेकर';
+  if (locale === 'sr' || locale === 'hr') {
+    return g === 'female' ? 'Pekarka' : 'Pekar';
+  }
+  if (locale === 'en') return 'Baker';
+  if (locale === 'de') return g === 'female' ? 'Bäckerin' : 'Bäcker';
+  if (locale === 'fr') return g === 'female' ? 'Boulangère' : 'Boulanger';
+  if (locale === 'es') return g === 'female' ? 'Panadera' : 'Panadero';
+  if (locale === 'it') return g === 'female' ? 'Panettiera' : 'Panettiere';
+  if (locale === 'pt-BR') return g === 'female' ? 'Padeira' : 'Padeiro';
+  if (locale === 'ru') return g === 'female' ? 'Пекарка' : 'Пекарь';
+  if (locale === 'ar') return 'خباز';
+  if (locale === 'ja') return 'ベイカー';
+  return 'Baker';
+}
+
+const BAKER_TITLE_RE =
+  /(?:^|[^a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ])(baker|bäcker(?:in)?|boulanger(?:e)?|panader[oa]|panettier[ae]|padeir[oa]|пекар(?:ка)?|pekar(?:ka)?)(?:[^a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ]|$)|बेकर|خباز|ベイカー/iu;
+
 const TITLE_CATEGORY_RULES: Array<{ category: OccupationCategory; re: RegExp; confidence: 'high' }> = [
   {
     category: 'cooking',
     // Avoid `\b` for Devanagari/Arabic/CJK — JS word boundaries are ASCII-only.
-    re: /(?:^|[^a-zA-Z])(kuvar(?:ica|ka)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар)(?:[^a-zA-Z]|$)|रसोइया|طباخ|料理人/iu,
+    // Include baker/pekar forms so Baker↔kitchen duties stay consistent.
+    re: /(?:^|[^a-zA-Z])(kuvar(?:ica|ka)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар|baker|pekar(?:ka)?|bäcker(?:in)?)(?:[^a-zA-Z]|$)|रसोइया|طباخ|料理人|बेकर|خباز|ベイカー/iu,
     confidence: 'high',
   },
   {
@@ -291,10 +314,13 @@ export function conflictingTitleFormsInSummary(
   const g = normalizeCoverLetterGender(gender);
   if (titleCategory === 'cooking') {
     return [
-      /(?:^|[^a-zA-Z])(kuvar(?:ica|ka)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар)(?:[^a-zA-Z]|$)/iu,
+      /(?:^|[^a-zA-Z])(kuvar(?:ica|ka)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар|baker|pekar(?:ka)?|bäcker(?:in)?)(?:[^a-zA-Z]|$)/iu,
       /रसोइया/u,
+      /बेकर/u,
       /طباخ/u,
+      /خباز/u,
       /料理人/u,
+      /ベイカー/u,
       /\bprofessional\s+cook\b/iu,
       /दक्ष\s+रसोइया/u,
     ];
@@ -328,6 +354,10 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
   }
   if (/dizajner(?:ka)?\s+enterijera|interior\s+designer|innenarchitekt/i.test(normalized)) {
     return localizeInteriorDesigner(locale, gender);
+  }
+  // Baker before generic cook — never collapse Baker into Kuvar/Cook.
+  if (BAKER_TITLE_RE.test(normalized)) {
+    return localizeBaker(locale, gender);
   }
   if (TITLE_CATEGORY_RULES[0].re.test(normalized)) {
     return localizeCook(locale, gender);

@@ -99,16 +99,20 @@ export function buildSummaryRepairPrompt(
   return [
     'CV SUMMARY FIDELITY REPAIR REQUIRED.',
     `Rewrite a COMPLETE professional summary in ${locale}.`,
+    'Maximum 2 short sentences / 90 words. Concise only.',
     'Finish every sentence. Do not truncate mid-word.',
-    'Use only SOURCE FACTS. Do not invent new duties, techniques, shifts, or achievements.',
+    'Use only SOURCE FACTS below. Do not invent duties, quality, health standards, storage, pressure, efficiency, initiative, demonstrated leadership, career ambitions, or personality traits.',
+    'Skills are labels only (e.g. "Key skills include organization and time management"). Never treat skills as achievements.',
+    'If gender/occupation is wrong (e.g. Pekara for female Baker), use the correct gendered occupation (Pekarka).',
     'Keep one consistent perspective (first person OR third person, not mixed).',
     'Output ONLY the summary prose. Never prefix with labels like "CORRECTED PROFESSIONAL SUMMARY:", "REPAIRED SUMMARY:", "OUTPUT:", or markdown headings.',
-    'Unsupported issues:',
+    'Do not reuse rejected unsupported claims from the previous invalid summary.',
+    'Exact defects:',
     formatCvFidelityViolationsForPrompt(violations),
-    'SOURCE FACTS:',
+    'SOURCE FACTS (immutable):',
     sourceFacts.slice(0, 3000),
-    'Previous invalid summary:',
-    previous.slice(0, 2000),
+    'Previous invalid summary (do not copy unsupported claims):',
+    previous.slice(0, 1200),
   ].join('\n');
 }
 
@@ -343,6 +347,7 @@ export async function activateCvSummary(options: {
     locale: options.locale,
     gender: options.gender,
     stage: 'initial',
+    expectedDuration: options.duration,
   });
   if (
     first.valid
@@ -376,6 +381,7 @@ export async function activateCvSummary(options: {
         locale: options.locale,
         gender: options.gender,
         stage: 'repair',
+        expectedDuration: options.duration,
       });
       if (
         recheck.valid
@@ -409,6 +415,7 @@ export async function activateCvSummary(options: {
       locale: options.locale,
       gender: options.gender,
       stage: 'fallback',
+      expectedDuration: options.duration,
     }).valid
     && !isEnglishCanonicalDump(hinted, sourceCanonical || hinted, options.locale);
 
@@ -440,6 +447,7 @@ export async function activateCvSummary(options: {
       locale: options.locale,
       gender: options.gender,
       stage: 'fallback',
+      expectedDuration: options.duration,
     }).valid
     && !isEnglishCanonicalDump(localized, sourceCanonical || localized, options.locale)
   ) {

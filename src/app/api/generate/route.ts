@@ -689,40 +689,39 @@ Rules:
       try {
         const response = await callWithRetry({
           model: MODEL,
-          max_tokens: 600,
-          temperature: 0.75,
+          max_tokens: 220,
+          temperature: 0.4,
           stream: false,
-          system: `You are an expert CV writer who creates authentic, human-sounding professional summaries in ${localeInfo.languageName}.
+          system: `You write concise, fact-locked CV professional summaries in ${localeInfo.languageName}.
 Rules:
 - Plain text only. No markdown, no bullet points, no headers, no lists.
-- NEVER wrap output in quotation marks of any kind (" " ' ' « » „ " etc.). Output the raw text directly.
-- Do NOT start or end with any quote character. The very first character must be a letter.
-- Sound like a real professional, not a generic template.
-- NEVER invent experience duration, years, or metrics. Use ONLY what is provided in the CV data below.
-- NEVER use phrases like "2+ years", "5 years", "extensive experience", "over a decade" unless the calculated duration supports it.
-- Do NOT use clichéd openers like "Highly motivated", "Results-driven", "Dynamic professional", "Passionate about", or "Dedicated to".
-- Focus on genuine strengths: professional background, core skills, key strengths, work style, and the value the person brings to a team.
-- Write in a natural, human tone — professional but warm, not robotic.
-- For mobile readability, break the text into 2–3 short paragraphs separated by a blank line.
-- FACT LOCK: Use ONLY duties/skills/languages present in the CV data. Never invent allergy checks, muddling, syrups, wastage, kitchen staff, evening shifts, inventory shortages, opening/closing procedures, or other unsupported claims.
-- COMPLETENESS: Always finish every sentence. Never stop mid-word, mid-participle, or after a dangling conjunction (especially in Hindi Devanagari).
-- PERSPECTIVE: Use one consistent perspective (first person OR third person) throughout — never mix.
+- NEVER wrap output in quotation marks. Output raw summary text only.
+- MAXIMUM LENGTH: 2 short sentences, about 40–75 words, hard maximum 90 words. Never write an essay or multi-paragraph summary.
+- Use ONLY the immutable allowed facts provided. Never invent duties, quality claims, health/food-safety standards, storage, inventory, menu work, pressure, efficiency, reliability, attention to detail, dedication, career ambitions, or international-workplace suitability.
+- Skills are LABELS only. You may write "Key skills include X, Y, Z." Never convert skills into demonstrated leadership, initiative, problem-solving achievements, smooth operations, or personality traits.
+- NEVER invent experience duration. Use ONLY the shared duration instruction below (or omit duration if unknown).
+- Do NOT use previous summaries, repair text, or template filler as facts.
+- Prefer occupation + approximate experience + grounded responsibilities in sentence 1; optional skills label list in sentence 2.
+- Company name: omit unless needed to distinguish employment.
+- COMPLETENESS: Finish every sentence. Never stop mid-word.
+- PERSPECTIVE: One consistent perspective (first OR third person).
+- GENDER: Use natural gendered occupational forms and grammar for the selected gender where the language requires it (e.g. Serbian female Baker = Pekarka, never Pekara).
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
           messages: [
             {
               role: 'user',
-              content: `Write a professional summary in ${localeInfo.languageName} for a ${jobTitle || localeInfo.fallbackRole}.
+              content: `Write a professional summary in ${localeInfo.languageName} for occupation: ${jobTitle || localeInfo.fallbackRole}.
 
+IMMUTABLE ALLOWED FACTS (use only these):
 ${durationPhrase}${experienceBlock}${skillsBlock}${langsBlock}${eduBlock}
 
-Structure (3–5 sentences, 180–250 words total):
-1. Who the candidate is — their role and experience background (use accurate duration wording per the instruction above).
-2. Key skills and areas of expertise (reference actual skills if provided).
-3. Main strengths, achievements, or contributions (based only on provided description data).
-4. Work style, approach, or how they collaborate.
-5. (Optional) Career focus or professional goal.
+FORBIDDEN: achievements not in duties; skill inflation; high-quality/health/strictly claims; fast-paced/under pressure; initiative/leadership behavior from skill names; career goals; repeating languages unless essential.
 
-Plain text only. No quotation marks anywhere. Finish the last sentence completely before stopping. Output the summary only — nothing else.${genderNote}`,
+Structure:
+1) Occupation + approximate experience (if provided) + core grounded responsibilities.
+2) Optional: "Key skills include …" listing skill labels only.
+
+Output the summary only — nothing else. Max 90 words.${genderNote}`,
             },
           ],
         }, deadlineAt);

@@ -21,6 +21,7 @@ import {
   classifyMaterialDutyKeys,
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
+import { buildConciseGroundedSummary } from './cv-summary-grounding';
 
 type GenderTone = 'male' | 'female' | 'neutral';
 
@@ -1142,6 +1143,15 @@ export function deterministicLocalizedSummaryFromCanonical(
   gender?: CoverLetterGender | string,
   duration?: ExperienceDuration,
 ): string {
+  // Concise grounded summary (≤90 words): occupation + duration + duty meanings
+  // + optional skill labels. Never invents achievements from skill names.
+  const concise = buildConciseGroundedSummary(factSet, locale, gender, duration, {
+    includeSkills: true,
+  }).trim();
+  if (concise) return concise;
+
+  // Legacy shell fallback when the concise builder cannot form a sentence
+  // (e.g. empty duties with only a role).
   const g = tone(gender);
   const rawRole = factSet.facts.find((f) => f.type === 'job_title')?.value
     || factSet.facts.find((f) => f.type === 'role')?.value
@@ -1156,8 +1166,8 @@ export function deterministicLocalizedSummaryFromCanonical(
     .filter((f) => f.type === 'experience_bullet')
     .slice(0, 4)
     .map((f) => localizedBulletForFact(f, locale, gender, { useGenericCatchAll: true }).replace(/[.。۔।]\s*$/u, ''));
-  if (bullets.some((b) => !b.trim())) return '';
-  const duties = bullets.join(locale === 'ja' ? '。' : locale === 'hi' ? '। ' : '. ');
+  if (bullets.some((b) => !b.trim()) && !role) return '';
+  const duties = bullets.filter((b) => b.trim()).join(locale === 'ja' ? '。' : locale === 'hi' ? '। ' : '. ');
   const shell = SUMMARY_SHELL[locale] || SUMMARY_SHELL.en;
   const durationPhrase = duration?.hasValidDates
     ? formatApproximateDurationPhrase(duration, locale)

@@ -32,6 +32,7 @@ import {
   validateNoExtraGeneratedDuties,
 } from './cv-material-duty-coverage';
 import { findCvMetaFallbackMatch } from './cv-ai-meta-text';
+import { runSummaryGroundingValidators } from './cv-summary-grounding';
 
 export type CvFidelityViolationKind =
   | 'unsupported_duty'
@@ -49,7 +50,14 @@ export type CvFidelityViolationKind =
   | 'summary_duration_misplaced'
   | 'generic_summary_template_leak'
   | 'unsupported_summary_fact'
+  | 'unsupported_summary_claim'
   | 'unsupported_achievement_or_impact'
+  | 'skill_inflation'
+  | 'occupation_inference'
+  | 'summary_gender_mismatch'
+  | 'summary_employment_status_mismatch'
+  | 'summary_missing_material_fact'
+  | 'summary_too_long'
   | 'current_role_tense_mismatch'
   | 'employment_tense_mismatch'
   | 'missing_canonical_duty'
@@ -387,9 +395,10 @@ function collectMatches(text: string, patterns: RegExp[]): string[] {
 }
 
 function canonicalDutyCorpus(factSet: CvCanonicalFactSet): string {
+  // Previous AI summaries must never ground new summary claims.
   return factSet.facts
-    .filter((f) => f.type === 'experience_bullet' || f.type === 'summary')
-    .map((f) => f.value.toLowerCase())
+    .filter((f) => f.type === 'experience_bullet')
+    .map((f) => `${(f.sourceText || '').toLowerCase()}\n${(f.value || '').toLowerCase()}`)
     .join('\n');
 }
 
@@ -662,10 +671,10 @@ function dutySupportedByCanonical(matched: string, corpus: string): boolean {
   ) {
     return true;
   }
-  // Cross-language hygiene / food-safety equivalence (Serbian higijen ↔ EN food-safety).
+  // Hygiene equivalence only — never treat workplace hygiene as food-safety / health standards.
   if (
-    /food[- ]?safet|higijen|hygiene|bezbednost\s+hran|sigurnost\s+hran/iu.test(token)
-    && /higijen|hygiene|food.?safet|bezbednost|sigurnost\s+hran|ingredient|namirnic|skladišt/iu.test(corpus)
+    /higijen|hygiene|bezbednost\s+hran|sigurnost\s+hran/iu.test(token)
+    && /higijen|hygiene|bezbednost|sigurnost\s+hran/iu.test(corpus)
   ) {
     return true;
   }
@@ -1165,6 +1174,19 @@ export function validateLocalizedSummary(
   violations.push(...validateGenericTemplateLeak(joined, options.locale));
   violations.push(...validateSummaryFactGrounding(joined, factSet));
   violations.push(...validateUnsupportedAchievements(joined, factSet));
+  violations.push(...runSummaryGroundingValidators(joined, factSet, {
+    locale: options.locale,
+    gender: options.gender,
+  }));
+  const summaryMeta = findCvMetaFallbackMatch(joined);
+  if (summaryMeta) {
+    violations.push({
+      kind: 'meta_fallback_text',
+      matched: summaryMeta,
+      section: 'summary',
+      factId: 'summary-0',
+    });
+  }
   if (options.locale === 'hi' && hasSuspiciousHindiMergedTokens(joined)) {
     violations.push({
       kind: 'locale_quality',
