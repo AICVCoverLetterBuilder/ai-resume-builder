@@ -6,6 +6,8 @@ import type { CVData } from './types';
 import type { Locale } from './i18n/translations';
 import { detectContentLocale } from './cv-canonical-snapshot';
 import {
+  buildFactSetFromExperienceDescription,
+  bulletsForExperience,
   formatExperienceBullets,
   splitExperienceBullets,
 } from './cv-canonical-facts';
@@ -20,6 +22,10 @@ import {
   validateFinalLocalizedCvFields,
   type LocalizedSummaryProvenance,
 } from './cv-field-locale-integrity';
+import { deterministicLocalizedBulletsFromCanonical } from './cv-localized-fallback';
+import { validateLocalizedExperienceBullets } from './cv-semantic-fidelity';
+import { resolveCanonicalExperienceDescription } from './cv-export-integrity';
+import { normalizeLegacyCvRuntime } from './cv-legacy-runtime-migration';
 
 export type CorporateNavySecurityCategory =
   | 'premises_access_monitoring'
@@ -62,6 +68,11 @@ export type CorporateNavyExportProjection = {
   validationStatus: 'passed' | 'fallback' | 'repaired';
   experienceDurationSnapshot?: ExperienceDurationSnapshot;
   gender?: string;
+};
+
+export type CorporateNavyExportDiagnostics = {
+  initialRecoveryReasons: string[];
+  recoverySource: 'saved_localized_bullets' | 'security_fallback' | 'deterministic_authoritative_facts';
 };
 
 export class CorporateNavyLocaleExportError extends Error {
@@ -265,11 +276,18 @@ export function prepareCorporateNavyExport(
     referenceDate?: Date | string;
     durationSnapshot?: ExperienceDurationSnapshot;
   },
-): { cv: CVData; projection: CorporateNavyExportProjection } {
+): {
+  cv: CVData;
+  projection: CorporateNavyExportProjection;
+  diagnostics: CorporateNavyExportDiagnostics;
+} {
+  cv = normalizeLegacyCvRuntime(cv, locale);
   const gender = options?.gender || cv.personal?.gender || '';
   const sharedDuration = options?.durationSnapshot
     || buildExperienceDurationSnapshot(cv.experience || [], options?.referenceDate ?? new Date());
   let usedFallback = false;
+  const initialRecoveryReasons: string[] = [];
+  let recoverySource: CorporateNavyExportDiagnostics['recoverySource'] = 'saved_localized_bullets';
 
   if (locale === 'hi' && cv.summary && !textMatchesRequestedLocale(cv.summary, 'hi')) {
     throw new CorporateNavyLocaleExportError(
@@ -285,20 +303,75 @@ export function prepareCorporateNavyExport(
   }
 
   const experiences = (cv.experience || []).map((exp, experienceIndex) => {
-    const sourceDesc = (exp.canonicalDescription || exp.description || '').trim();
+    const sourceDesc = resolveCanonicalExperienceDescription(exp);
     const sourceBullets = splitExperienceBullets(sourceDesc);
-    const localizedBullets = sourceBullets.map((sourceText, order) => {
-      const factId = `experience-${experienceIndex}-bullet-${order}`;
-      const resolved = resolveBulletForLocale(sourceText, locale, gender, factId);
-      if (resolved.usedFallback) usedFallback = true;
-      return {
-        factId,
-        semanticCategory: resolved.category,
-        localizedText: resolved.text,
+    let localizedBullets: CorporateNavyExportProjection['localizedExperiences'][number]['bullets'];
+    try {
+      localizedBullets = sourceBullets.map((sourceText, order) => {
+        const factId = `experience-${experienceIndex}-bullet-${order}`;
+        const resolved = resolveBulletForLocale(sourceText, locale, gender, factId);
+        if (resolved.usedFallback) {
+          usedFallback = true;
+          recoverySource = 'security_fallback';
+        }
+        return {
+          factId,
+          semanticCategory: resolved.category,
+          localizedText: resolved.text,
+          order,
+          provenance: resolved.provenance,
+        };
+      });
+    } catch (err) {
+      initialRecoveryReasons.push(
+        err && typeof err === 'object' && 'reason' in err
+          ? String((err as { reason?: string }).reason || '')
+          : err instanceof Error
+            ? err.message
+            : 'unknown_recovery_failure',
+      );
+      // Corporate Navy is a visual template, not a security-only occupation.
+      // Legacy Baker/logistics/etc. facts must use the shared grounded fallback
+      // instead of being rejected by the security-category table.
+      const factSet = buildFactSetFromExperienceDescription(sourceDesc, {
+        experienceIndex,
+        company: exp.company,
+        position: exp.position,
+        startDate: exp.startDate,
+        endDate: exp.endDate,
+        isPresent: exp.isPresent,
+      });
+      const facts = bulletsForExperience(factSet, experienceIndex);
+      const generalFallback = deterministicLocalizedBulletsFromCanonical(
+        facts,
+        locale,
+        gender,
+        { isPresent: Boolean(exp.isPresent) },
+      );
+      const validation = validateLocalizedExperienceBullets(generalFallback, factSet, {
+        locale,
+        gender,
+        experienceIndex,
+        stage: 'export',
+        isPresent: exp.isPresent,
+      });
+      if (!generalFallback || !validation.valid) throw err;
+      usedFallback = true;
+      recoverySource = 'deterministic_authoritative_facts';
+      localizedBullets = splitExperienceBullets(generalFallback).map((localizedText, order) => ({
+        factId: facts[order]?.id || `experience-${experienceIndex}-bullet-${order}`,
+        semanticCategory: classifySecurityDutyCategory(sourceBullets[order] || ''),
+        localizedText,
         order,
-        provenance: resolved.provenance,
-      };
-    });
+        provenance: {
+          factId: facts[order]?.id || `experience-${experienceIndex}-bullet-${order}`,
+          requestedLocale: locale,
+          sourceLocale: detectContentLocale(sourceBullets[order] || sourceDesc),
+          localizedLocale: detectContentLocale(localizedText),
+          localizedText,
+        },
+      }));
+    }
 
     // Per-field: Hindi projection cannot mix Serbian bullets with a Hindi summary.
     if (locale === 'hi') {
@@ -414,5 +487,12 @@ export function prepareCorporateNavyExport(
     projectionId: `cn-proj-${fnv1aHex(JSON.stringify(projectionBase))}`,
   };
 
-  return { cv: nextCv, projection };
+  return {
+    cv: nextCv,
+    projection,
+    diagnostics: {
+      initialRecoveryReasons,
+      recoverySource,
+    },
+  };
 }

@@ -73,6 +73,7 @@ import {
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import { loadCvDraft } from '@/lib/draft-storage';
+import { normalizeLegacyCvRuntime } from '@/lib/cv-legacy-runtime-migration';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -660,9 +661,10 @@ export default function CVBuilderPage() {
 
   const localizedPreviewCv = useMemo<CVData>(
     () => {
-      const qualityCv = applyCvContentQuality(cv, locale, {
-        gender: cv.personal?.gender,
-        summaryOrigin: cv.summaryOrigin,
+      const migratedCv = normalizeLegacyCvRuntime(cv, locale);
+      const qualityCv = applyCvContentQuality(migratedCv, locale, {
+        gender: migratedCv.personal?.gender,
+        summaryOrigin: migratedCv.summaryOrigin,
       }).cv;
       const localeSafeCv = omitInvalidLocalizedFieldsForPreview(qualityCv, locale);
       const base = {
@@ -1446,6 +1448,10 @@ export default function CVBuilderPage() {
     };
 
     const prepareFinalLocaleSafeCv = (sourceCv: CVData): CVData => {
+      // The persisted migration is also applied at the final boundary so
+      // preview, PDF and DOCX consume the same normalized legacy provenance,
+      // even when export is tapped before the autosave debounce completes.
+      sourceCv = normalizeLegacyCvRuntime(sourceCv, locale);
       // Creative Artistic / Corporate Navy: apply and export share one integrity
       // contract. Do not reject English source duties before deterministic
       // localization — that caused Hindi PDF generic failures (build 240).

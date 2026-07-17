@@ -43,6 +43,7 @@ import {
   resolveExperienceGroundingDescription,
   type CvExperienceDescriptionOrigin,
 } from './cv-experience-provenance';
+import { normalizeLegacyCvRuntime } from './cv-legacy-runtime-migration';
 
 export class CreativeArtisticLocaleExportError extends Error {
   readonly locale: Locale;
@@ -122,7 +123,25 @@ function structuredExemptionsFromCv(cv?: Pick<CVData, 'personal' | 'experience'>
   };
 }
 
-function isValidLocalizedSummary(
+export type SummaryExportCandidateValidation = {
+  valid: boolean;
+  reason: string;
+  violations: string[];
+};
+
+export type CreativeArtisticSummaryDiagnostics = {
+  initialValidation: SummaryExportCandidateValidation;
+  recoverySource: 'saved_summary' | 'deterministic_authoritative_facts';
+  recoveryValidation: SummaryExportCandidateValidation | null;
+  factSet: Array<{
+    id: string;
+    type: string;
+    value: string;
+    sourceText?: string;
+  }>;
+};
+
+export function validateSummaryExportCandidate(
   candidate: string,
   factSet: ReturnType<typeof buildCvCanonicalFactSet>,
   locale: Locale,
@@ -130,8 +149,8 @@ function isValidLocalizedSummary(
   canonicalSummary: string,
   canonicalLocale?: Locale,
   sourceCv?: Pick<CVData, 'personal' | 'experience'>,
-): boolean {
-  if (!candidate.trim()) return false;
+): SummaryExportCandidateValidation {
+  if (!candidate.trim()) return { valid: false, reason: 'missing_summary', violations: [] };
   // Summary-only locale check with structured proper-noun exemptions from the
   // live CV (name/company/email/phone/titles). Never use an empty personal stub —
   // that dropped exemptions and falsely rejected old Hindi saves with Ztrew/etc.
@@ -141,14 +160,29 @@ function isValidLocalizedSummary(
     'summary',
     structuredExemptionsFromCv(sourceCv),
   )) {
-    return false;
+    return { valid: false, reason: 'mixed_locale_summary', violations: ['mixed_locale_summary'] };
   }
-  if (!validateSummaryCompleteness(candidate, { locale }).valid) return false;
-  if (!validateLocalizedSummary(candidate, factSet, { locale, gender, stage: 'export' }).valid) {
-    return false;
+  if (!validateSummaryCompleteness(candidate, { locale }).valid) {
+    return { valid: false, reason: 'incomplete_summary', violations: ['incomplete_summary'] };
   }
-  if (isEnglishCanonicalDump(candidate, canonicalSummary, locale, { canonicalLocale })) return false;
-  return true;
+  const semantic = validateLocalizedSummary(candidate, factSet, { locale, gender, stage: 'export' });
+  if (!semantic.valid) {
+    const violations = semantic.violations.map((v) =>
+      `${v.kind}${v.matched ? `:${v.matched}` : ''}`);
+    return {
+      valid: false,
+      reason: violations.join('|') || 'summary_semantic_validation_failed',
+      violations,
+    };
+  }
+  if (isEnglishCanonicalDump(candidate, canonicalSummary, locale, { canonicalLocale })) {
+    return {
+      valid: false,
+      reason: 'wrong_language_summary: English canonical dump blocked',
+      violations: ['wrong_language_summary'],
+    };
+  }
+  return { valid: true, reason: 'valid', violations: [] };
 }
 
 function localizeCvAgainstCanonical(
@@ -158,6 +192,7 @@ function localizeCvAgainstCanonical(
 ): {
   cv: CVData;
   validationStatus: ValidatedLocalizedCvProjection['validationStatus'];
+  summaryDiagnostics: CreativeArtisticSummaryDiagnostics;
 } {
   let validationStatus: ValidatedLocalizedCvProjection['validationStatus'] = 'passed';
   const canonicalLocale = cv.canonicalSnapshot?.canonicalLocale;
@@ -243,30 +278,29 @@ function localizeCvAgainstCanonical(
       ...exp,
       description: resolveCanonicalExperienceDescription(exp),
     })),
-    summary: cv.canonicalSummary || cv.summary,
+    // Recovery facts may use a confirmed canonical Summary, but never the
+    // rejected AI/display Summary itself. Structured role, dates, duties and
+    // skills remain authoritative when a legacy save has no user Summary.
+    summary: cv.canonicalSummary
+      || (cv.summaryOrigin === 'user' ? cv.summary : ''),
   });
 
   const canonicalSummary = (cv.canonicalSummary || '').trim();
   let summary = (cv.summary || '').trim();
-
-  if (!isValidLocalizedSummary(
+  const initialSummaryValidation = validateSummaryExportCandidate(
     summary,
     factSet,
     locale,
     gender,
-    canonicalSummary || summary,
+    canonicalSummary,
     canonicalLocale,
     cv,
-  )) {
+  );
+  let recoveryValidation: SummaryExportCandidateValidation | null = null;
+  let recoverySource: CreativeArtisticSummaryDiagnostics['recoverySource'] = 'saved_summary';
+
+  if (!initialSummaryValidation.valid) {
     validationStatus = 'fallback';
-    const rejectedDetail = validateLocalizedSummary(summary, factSet, {
-      locale,
-      gender,
-      stage: 'export',
-    }).violations
-      .map((v) => `${v.kind}${v.matched ? `:${v.matched}` : ''}`)
-      .slice(0, 4)
-      .join('|');
     const durationForShell = buildExperienceDurationSnapshot(cv.experience || []).total;
     const localizedSummary = deterministicLocalizedSummaryFromCanonical(
       factSet,
@@ -274,7 +308,8 @@ function localizeCvAgainstCanonical(
       gender,
       durationForShell,
     );
-    if (localizedSummary && isValidLocalizedSummary(
+    recoverySource = 'deterministic_authoritative_facts';
+    recoveryValidation = validateSummaryExportCandidate(
       localizedSummary,
       factSet,
       locale,
@@ -282,7 +317,8 @@ function localizeCvAgainstCanonical(
       canonicalSummary,
       canonicalLocale,
       cv,
-    )) {
+    );
+    if (localizedSummary && recoveryValidation.valid) {
       summary = localizedSummary;
       summaryOrigin = 'deterministic_fallback';
     } else if (locale === 'en') {
@@ -293,12 +329,13 @@ function localizeCvAgainstCanonical(
       }
       summaryOrigin = 'deterministic_fallback';
     } else {
+      const rejectedDetail = initialSummaryValidation.reason;
       const titleConflict = /forced-conflicting-title|title_localization|invalid_occupational_title/i.test(
-        rejectedDetail,
+        `${rejectedDetail}|${recoveryValidation?.reason || ''}`,
       );
       const reason = titleConflict
-        ? `summary_title_localization_conflict: ${rejectedDetail || 'title mismatch'}`
-        : `summary_grounding_projection_failed: ${rejectedDetail || 'no valid localized summary'}`;
+        ? `summary_title_localization_conflict: initial=${rejectedDetail}; recovery=${recoveryValidation?.reason || 'empty'}`
+        : `summary_recovery_failure: initial=${rejectedDetail}; recovery=${recoveryValidation?.reason || 'empty'}`;
       throw new CreativeArtisticLocaleExportError(locale, reason);
     }
   }
@@ -313,7 +350,10 @@ function localizeCvAgainstCanonical(
         );
       }
     }
-    if (isEnglishCanonicalDump(summary, canonicalSummary || summary, locale, { canonicalLocale })) {
+    if (
+      canonicalSummary
+      && isEnglishCanonicalDump(summary, canonicalSummary, locale, { canonicalLocale })
+    ) {
       throw new CreativeArtisticLocaleExportError(locale, 'summary: English canonical dump blocked');
     }
   }
@@ -326,6 +366,17 @@ function localizeCvAgainstCanonical(
       ...(summaryOrigin ? { summaryOrigin } : {}),
     },
     validationStatus,
+    summaryDiagnostics: {
+      initialValidation: initialSummaryValidation,
+      recoverySource,
+      recoveryValidation,
+      factSet: factSet.facts.map((fact) => ({
+        id: fact.id,
+        type: fact.type,
+        value: fact.value,
+        sourceText: fact.sourceText,
+      })),
+    },
   };
 }
 
@@ -424,7 +475,12 @@ export function prepareCreativeArtisticExport(
   cv: CVData,
   locale: Locale,
   options?: { gender?: string; referenceDate?: Date | string; durationSnapshot?: import('./cv-experience-duration').ExperienceDurationSnapshot },
-): { cv: CVData; projection: ValidatedLocalizedCvProjection } {
+): {
+  cv: CVData;
+  projection: ValidatedLocalizedCvProjection;
+  summaryDiagnostics?: CreativeArtisticSummaryDiagnostics;
+} {
+  cv = normalizeLegacyCvRuntime(cv, locale);
   const gender = options?.gender || cv.personal?.gender || '';
   const snapshot = cv.canonicalSnapshot;
   const durationSnapshot = options?.durationSnapshot
@@ -472,16 +528,23 @@ export function prepareCreativeArtisticExport(
     // Stale projection: regenerate from current canonical — never export old translation.
   }
 
-  const { cv: localizedCv, validationStatus } = localizeCvAgainstCanonical(cv, locale, gender);
-  return attachQualityToProjection(
-    cv,
-    localizedCv,
-    locale,
-    gender,
+  const {
+    cv: localizedCv,
     validationStatus,
-    options?.referenceDate || durationSnapshot.referenceDateIso,
-    durationSnapshot,
-  );
+    summaryDiagnostics,
+  } = localizeCvAgainstCanonical(cv, locale, gender);
+  return {
+    ...attachQualityToProjection(
+      cv,
+      localizedCv,
+      locale,
+      gender,
+      validationStatus,
+      options?.referenceDate || durationSnapshot.referenceDateIso,
+      durationSnapshot,
+    ),
+    summaryDiagnostics,
+  };
 }
 
 /** Safe wrapper used by preview helpers that prefer empty section over a crash. */

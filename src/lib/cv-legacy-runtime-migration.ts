@@ -1,0 +1,289 @@
+import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
+import type { Locale } from './i18n/translations';
+import {
+  buildExperienceSnapshotFromText,
+  computeCanonicalSourceHash,
+  detectContentLocale,
+  type CanonicalCvSnapshot,
+} from './cv-canonical-snapshot';
+import {
+  isAiDescriptionOrigin,
+  isAiPollutedCanonicalDescription,
+} from './cv-experience-provenance';
+import { validateSummaryCompleteness } from './cv-semantic-fidelity';
+
+export const CV_RUNTIME_MIGRATION_VERSION = 1;
+
+const LOCALES = new Set<Locale>([
+  'en', 'de', 'es', 'fr', 'it', 'ar', 'sr', 'hr', 'ru', 'pt-BR', 'hi', 'ja',
+]);
+
+function asLocale(value?: string): Locale | undefined {
+  return value && LOCALES.has(value as Locale) ? value as Locale : undefined;
+}
+
+function normalized(text?: string): string {
+  return (text || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+function sameText(a?: string, b?: string): boolean {
+  return Boolean(normalized(a)) && normalized(a) === normalized(b);
+}
+
+function snapshotDuties(cv: CVData, exp: WorkExperience): string {
+  const snap = cv.canonicalSnapshot?.canonicalExperiences.find((item) => item.experienceId === exp.id);
+  return (snap?.bullets || []).map((bullet) => bullet.sourceText.trim()).filter(Boolean).join('\n');
+}
+
+function inferVisibleDescriptionOrigin(exp: WorkExperience, authoritative: string): WorkExperience['descriptionOrigin'] {
+  if (exp.descriptionOrigin) return exp.descriptionOrigin;
+  const visible = (exp.description || '').trim();
+  const generated = (exp.generatedDescription || '').trim();
+  if (
+    (generated && sameText(generated, visible))
+    || (exp.generatedLocale && visible && !sameText(visible, authoritative))
+  ) {
+    return 'ai_generated';
+  }
+  if (authoritative && visible && !sameText(authoritative, visible)) {
+    const sourceLocale = detectContentLocale(authoritative);
+    const visibleLocale = detectContentLocale(visible);
+    if (sourceLocale && visibleLocale && sourceLocale !== visibleLocale) return 'ai_generated';
+  }
+  return 'user';
+}
+
+function selectAuthoritativeDuties(cv: CVData, exp: WorkExperience): {
+  text: string;
+  source: LegacyExperienceRecoverySource;
+} {
+  const original = (exp.originalUserDescription || '').trim();
+  if (original) return { text: original, source: 'originalUserDescription' };
+
+  const snapshot = snapshotDuties(cv, exp);
+  if (snapshot) return { text: snapshot, source: 'canonicalSnapshot' };
+
+  const canonical = (exp.canonicalDescription || '').trim();
+  const visible = (exp.description || '').trim();
+  const generated = (exp.generatedDescription || '').trim();
+  const canonicalLooksGenerated = canonical && (
+    sameText(canonical, generated)
+    || (
+      sameText(canonical, visible)
+      && (isAiDescriptionOrigin(exp.descriptionOrigin) || Boolean(exp.generatedLocale))
+    )
+  );
+  if (canonical && !canonicalLooksGenerated) {
+    return { text: canonical, source: 'canonicalDescription' };
+  }
+
+  // Last-resort legacy source. It is retained only when no separate generated
+  // display marker or authoritative canonical source survived the old schema.
+  if (visible && !generated && !isAiDescriptionOrigin(exp.descriptionOrigin)) {
+    return { text: visible, source: 'legacyDescription' };
+  }
+  return { text: '', source: 'none' };
+}
+
+export type LegacyExperienceRecoverySource =
+  | 'originalUserDescription'
+  | 'canonicalSnapshot'
+  | 'canonicalDescription'
+  | 'legacyDescription'
+  | 'none';
+
+export type LegacyCvMigrationTrace = {
+  applied: boolean;
+  fromVersion: number;
+  toVersion: number;
+  contentLocaleBefore?: string;
+  contentLocaleAfter?: string;
+  summaryOriginBefore?: string;
+  summaryOriginAfter?: string;
+  generatedSummaryLocale?: string;
+  experienceSources: LegacyExperienceRecoverySource[];
+  clearedLocalizedProjections: boolean;
+  rebuiltCanonicalSnapshot: boolean;
+};
+
+export function normalizeLegacyCvRuntimeWithTrace(
+  input: CVData,
+  localeHint?: Locale,
+): { cv: CVData; trace: LegacyCvMigrationTrace } {
+  const fromVersion = Number(input.runtimeMigrationVersion || 0);
+  if (fromVersion >= CV_RUNTIME_MIGRATION_VERSION) {
+    return {
+      cv: input,
+      trace: {
+        applied: false,
+        fromVersion,
+        toVersion: fromVersion,
+        contentLocaleBefore: input.contentLocale,
+        contentLocaleAfter: input.contentLocale,
+        summaryOriginBefore: input.summaryOrigin,
+        summaryOriginAfter: input.summaryOrigin,
+        generatedSummaryLocale: input.summaryGeneratedLocale,
+        experienceSources: (input.experience || []).map(() => 'none'),
+        clearedLocalizedProjections: false,
+        rebuiltCanonicalSnapshot: false,
+      },
+    };
+  }
+
+  const summaryLocale = detectContentLocale(input.summary || '');
+  const storedLocale = asLocale(input.contentLocale);
+  // Visible content beats stale metadata. A UI hint is only a fallback when the
+  // visible summary itself is ambiguous.
+  const contentLocale = summaryLocale || localeHint || storedLocale;
+  const experienceSources: LegacyExperienceRecoverySource[] = [];
+  let provenanceChanged = false;
+
+  const experience = (input.experience || []).map((exp) => {
+    const selected = selectAuthoritativeDuties(input, exp);
+    experienceSources.push(selected.source);
+    const origin = inferVisibleDescriptionOrigin(exp, selected.text);
+    const generatedDescription = isAiDescriptionOrigin(origin)
+      ? ((exp.generatedDescription || exp.description || '').trim() || undefined)
+      : exp.generatedDescription;
+    const generatedLocale = isAiDescriptionOrigin(origin)
+      ? (asLocale(exp.generatedLocale) || detectContentLocale(generatedDescription || '') || contentLocale)
+      : asLocale(exp.generatedLocale);
+    const canonicalWasPolluted = Boolean(
+      selected.text
+      && (
+        !sameText(exp.canonicalDescription, selected.text)
+        || (
+          exp.originalUserDescription
+          && isAiPollutedCanonicalDescription(exp)
+        )
+      ),
+    );
+    provenanceChanged ||= canonicalWasPolluted
+      || !exp.descriptionOrigin
+      || (!exp.originalUserDescription && Boolean(selected.text));
+    return {
+      ...exp,
+      ...(selected.text ? {
+        originalUserDescription: selected.text,
+        canonicalDescription: selected.text,
+      } : {}),
+      descriptionOrigin: origin,
+      ...(generatedDescription ? { generatedDescription } : {}),
+      ...(generatedLocale ? { generatedLocale } : {}),
+    };
+  });
+
+  let summaryOrigin: CvSummaryOrigin = input.summaryOrigin || 'user';
+  if (!input.summaryOrigin) {
+    const canonicalDiffers = Boolean(
+      input.canonicalSummary
+      && !sameText(input.canonicalSummary, input.summary),
+    );
+    const localizedGeneratedExperience = experience.some((exp) =>
+      isAiDescriptionOrigin(exp.descriptionOrigin)
+      && asLocale(exp.generatedLocale) === contentLocale,
+    );
+    if (canonicalDiffers || localizedGeneratedExperience) summaryOrigin = 'ai_generated';
+  }
+  const summaryGeneratedLocale = summaryOrigin === 'user'
+    ? input.summaryGeneratedLocale
+    : (asLocale(input.summaryGeneratedLocale) || contentLocale);
+
+  const staleLocale = Boolean(contentLocale && storedLocale && contentLocale !== storedLocale);
+  const canonicalSummary = summaryOrigin === 'user'
+    ? ((input.canonicalSummary || input.summary || '').trim() || undefined)
+    : (
+      input.summaryOrigin
+      && input.canonicalSummary
+      && !sameText(input.canonicalSummary, input.summary)
+        ? input.canonicalSummary.trim()
+        : undefined
+    );
+
+  let next: CVData = {
+    ...input,
+    experience,
+    ...(contentLocale ? { contentLocale } : {}),
+    ...(summaryGeneratedLocale ? { summaryGeneratedLocale } : {}),
+    summaryOrigin,
+    canonicalSummary,
+    runtimeMigrationVersion: CV_RUNTIME_MIGRATION_VERSION,
+  };
+
+  const hasAuthoritativeDuties = experience.some((exp) => Boolean((exp.canonicalDescription || '').trim()));
+  const authoritativeSourceText = experience.map((exp) => exp.canonicalDescription || '').join('\n');
+  const detectedAuthoritativeLocale = detectContentLocale(authoritativeSourceText);
+  const hasTrustedExistingLocale = input.canonicalSnapshot?.canonicalState === 'valid';
+  const summaryCanSupportRecovery = validateSummaryCompleteness(input.summary || '', {
+    locale: contentLocale || localeHint || 'en',
+  }).valid;
+  let rebuiltCanonicalSnapshot = false;
+  if (hasAuthoritativeDuties && (
+    provenanceChanged
+    || staleLocale
+    || !input.canonicalSnapshot
+    || input.canonicalSnapshot.canonicalState !== 'valid'
+  ) && (
+    input.canonicalSnapshot?.canonicalState !== 'needs_rebuild'
+    || summaryCanSupportRecovery
+  ) && (Boolean(detectedAuthoritativeLocale) || hasTrustedExistingLocale)) {
+    const canonicalLocale = detectedAuthoritativeLocale
+      || input.canonicalSnapshot?.canonicalLocale
+      || contentLocale
+      || localeHint
+      || 'en';
+    const canonicalExperiences = experience.map((exp, index) =>
+      buildExperienceSnapshotFromText(exp, index));
+    const snapshotBase = {
+      canonicalSummary: canonicalSummary || '',
+      canonicalExperiences,
+      canonicalLocale,
+      canonicalRevision: Math.max(1, input.canonicalSnapshot?.canonicalRevision || 0),
+      canonicalCreatedFrom: 'legacy_migration' as const,
+      canonicalState: 'valid' as const,
+    };
+    const canonicalSnapshot: CanonicalCvSnapshot = {
+      ...snapshotBase,
+      canonicalSourceHash: computeCanonicalSourceHash({
+        canonicalLocale,
+        canonicalSummary: snapshotBase.canonicalSummary,
+        canonicalExperiences,
+        skills: input.skills || [],
+        education: input.education || [],
+        languages: input.languages || [],
+      }),
+    };
+    next = { ...next, canonicalSnapshot };
+    rebuiltCanonicalSnapshot = true;
+  }
+
+  const clearLocalizedProjections = Boolean(
+    input.localizedProjections
+    && (provenanceChanged || staleLocale || rebuiltCanonicalSnapshot),
+  );
+  if (clearLocalizedProjections) {
+    const { localizedProjections: _stale, ...withoutStale } = next;
+    next = withoutStale as CVData;
+  }
+
+  return {
+    cv: next,
+    trace: {
+      applied: true,
+      fromVersion,
+      toVersion: CV_RUNTIME_MIGRATION_VERSION,
+      contentLocaleBefore: input.contentLocale,
+      contentLocaleAfter: next.contentLocale,
+      summaryOriginBefore: input.summaryOrigin,
+      summaryOriginAfter: next.summaryOrigin,
+      generatedSummaryLocale: next.summaryGeneratedLocale,
+      experienceSources,
+      clearedLocalizedProjections: clearLocalizedProjections,
+      rebuiltCanonicalSnapshot,
+    },
+  };
+}
+
+export function normalizeLegacyCvRuntime(input: CVData, localeHint?: Locale): CVData {
+  return normalizeLegacyCvRuntimeWithTrace(input, localeHint).cv;
+}

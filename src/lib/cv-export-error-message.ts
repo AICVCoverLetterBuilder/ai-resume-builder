@@ -49,8 +49,46 @@ const GENERIC_DOCX: Record<Locale, string> = {
   ja: 'Wordのエクスポートに失敗しました。もう一度お試しください。',
 };
 
-function isSummaryLocaleReason(reason: string): boolean {
-  return /summary|mixed.?language|mixed_locale|unlocalized.?skill|english dump|no valid localized summary|summary_grounding_projection_failed|summary_title_localization_conflict|summary_export_contract_mismatch|summary_proper_noun_rejected|summary_locale_state_mismatch/i.test(reason);
+const TITLE_CONFLICT: Record<Locale, string> = {
+  en: 'The saved job title conflicts with the confirmed experience. Review the title and duties, then export again.',
+  de: 'Die gespeicherte Berufsbezeichnung widerspricht der bestätigten Erfahrung. Prüfen Sie Titel und Aufgaben und exportieren Sie erneut.',
+  es: 'El puesto guardado entra en conflicto con la experiencia confirmada. Revise el puesto y las funciones y vuelva a exportar.',
+  fr: 'Le poste enregistré est en conflit avec l’expérience confirmée. Vérifiez le poste et les missions, puis réexportez.',
+  it: 'Il ruolo salvato è in conflitto con l’esperienza confermata. Controlla ruolo e mansioni, quindi esporta di nuovo.',
+  ar: 'يتعارض المسمى الوظيفي المحفوظ مع الخبرة المؤكدة. راجع المسمى والمهام ثم أعد التصدير.',
+  sr: 'Sačuvan naziv pozicije nije usklađen sa potvrđenim iskustvom. Proverite naziv i dužnosti, pa pokušajte ponovo.',
+  hr: 'Spremljeni naziv radnog mjesta nije usklađen s potvrđenim iskustvom. Provjerite naziv i dužnosti pa pokušajte ponovno.',
+  ru: 'Сохранённая должность не соответствует подтверждённому опыту. Проверьте должность и обязанности и повторите экспорт.',
+  'pt-BR': 'O cargo salvo está em conflito com a experiência confirmada. Revise o cargo e as atividades e exporte novamente.',
+  hi: 'सहेजा गया पद पुष्टि किए गए अनुभव से मेल नहीं खाता। पद और जिम्मेदारियाँ जाँचकर फिर निर्यात करें।',
+  ja: '保存された職種が確認済みの職歴と一致しません。職種と業務内容を確認して再度エクスポートしてください。',
+};
+
+const SUMMARY_FACTS_REVIEW: Record<Locale, string> = {
+  en: 'The professional summary could not be verified against the saved experience. Review the saved CV and export again.',
+  de: 'Die Zusammenfassung konnte nicht anhand der gespeicherten Erfahrung geprüft werden. Prüfen Sie den Lebenslauf und exportieren Sie erneut.',
+  es: 'No se pudo verificar el resumen con la experiencia guardada. Revise el CV y vuelva a exportar.',
+  fr: 'Le résumé n’a pas pu être vérifié avec l’expérience enregistrée. Vérifiez le CV puis réexportez.',
+  it: 'Non è stato possibile verificare il riepilogo con l’esperienza salvata. Controlla il CV ed esporta di nuovo.',
+  ar: 'تعذر التحقق من الملخص مقابل الخبرة المحفوظة. راجع السيرة الذاتية ثم أعد التصدير.',
+  sr: 'Rezime nije moguće proveriti prema sačuvanom iskustvu. Pregledajte CV i pokušajte ponovo.',
+  hr: 'Sažetak nije moguće provjeriti prema spremljenom iskustvu. Pregledajte CV i pokušajte ponovno.',
+  ru: 'Не удалось сверить резюме с сохранённым опытом. Проверьте CV и повторите экспорт.',
+  'pt-BR': 'Não foi possível verificar o resumo com a experiência salva. Revise o currículo e exporte novamente.',
+  hi: 'पेशेवर सारांश को सहेजे गए अनुभव से सत्यापित नहीं किया जा सका। CV जाँचकर फिर निर्यात करें।',
+  ja: '職務要約を保存済みの職歴と照合できませんでした。CVを確認して再度エクスポートしてください。',
+};
+
+function isActualSummaryLanguageReason(reason: string): boolean {
+  return /mixed_language_summary|mixed_locale_summary|unlocalized_skill_labels|wrong_language(?:_summary)?|summary:\s*English canonical dump blocked/i.test(reason);
+}
+
+function isTitleConflictReason(reason: string): boolean {
+  return /summary_title_localization_conflict|forced-conflicting-title|invalid_occupational_title|duty_family_mismatch/i.test(reason);
+}
+
+function isSummaryFactsReason(reason: string): boolean {
+  return /summary_grounding_projection_failed|summary_proper_noun_rejected|summary_locale_state_mismatch|missing_provenance|migration_failure|recovery_failure/i.test(reason);
 }
 
 export function formatCvExportIntegrityToast(
@@ -63,8 +101,14 @@ export function formatCvExportIntegrityToast(
     : err instanceof Error
       ? err.message
       : '';
-  if (reason && isSummaryLocaleReason(reason)) {
+  if (reason && isActualSummaryLanguageReason(reason)) {
     return SUMMARY_REGENERATE[locale] || SUMMARY_REGENERATE.en;
+  }
+  if (reason && isTitleConflictReason(reason)) {
+    return TITLE_CONFLICT[locale] || TITLE_CONFLICT.en;
+  }
+  if (reason && isSummaryFactsReason(reason)) {
+    return SUMMARY_FACTS_REVIEW[locale] || SUMMARY_FACTS_REVIEW.en;
   }
   return kind === 'pdf'
     ? (GENERIC_PDF[locale] || GENERIC_PDF.en)

@@ -1,6 +1,10 @@
 'use client';
 
 import type { CVData, CoverLetterData } from './types';
+import {
+  CV_RUNTIME_MIGRATION_VERSION,
+  normalizeLegacyCvRuntime,
+} from './cv-legacy-runtime-migration';
 
 const CV_DRAFT_KEY = 'cvpro-cv-draft';
 const CL_DRAFT_KEY = 'cvpro-cover-letter-draft';
@@ -12,6 +16,8 @@ export const CL_DRAFT_STORAGE_KEY = CL_DRAFT_KEY;
 
 export interface CvDraftData {
   cv: CVData;
+  /** Persisted CV schema version; absent on pre-migration Android saves. */
+  schemaVersion?: number;
   /** Raw uploaded file data URL (never cropped) */
   originalPhoto?: string;
   /** Circular-clip PNG used by circle-shaped templates */
@@ -58,7 +64,12 @@ function isBrowser(): boolean {
 export function saveCvDraft(data: CvDraftData): void {
   if (!isBrowser()) return;
   try {
-    localStorage.setItem(CV_DRAFT_KEY, JSON.stringify(withPersonalPhotoFields(data)));
+    const normalized = withPersonalPhotoFields({
+      ...data,
+      cv: normalizeLegacyCvRuntime(data.cv),
+      schemaVersion: CV_RUNTIME_MIGRATION_VERSION,
+    });
+    localStorage.setItem(CV_DRAFT_KEY, JSON.stringify(normalized));
   } catch (err) {
     // localStorage quota exceeded — silently ignore; data survives in RAM
     console.warn('[draft] Failed to save CV draft:', err);
@@ -73,7 +84,20 @@ export function loadCvDraft(): CvDraftData | null {
     const parsed = JSON.parse(stored) as CvDraftData;
     // Basic validation
     if (!parsed.cv || typeof parsed.cv !== 'object') return null;
-    return withPersonalPhotoFields(parsed);
+    const hydrated = withPersonalPhotoFields({
+      ...parsed,
+      cv: normalizeLegacyCvRuntime(parsed.cv),
+      schemaVersion: CV_RUNTIME_MIGRATION_VERSION,
+    });
+    // Persist the idempotent migration immediately so an export tapped before
+    // the builder autosave timer cannot re-read the old Android snapshot.
+    if (
+      parsed.schemaVersion !== CV_RUNTIME_MIGRATION_VERSION
+      || parsed.cv.runtimeMigrationVersion !== CV_RUNTIME_MIGRATION_VERSION
+    ) {
+      localStorage.setItem(CV_DRAFT_KEY, JSON.stringify(hydrated));
+    }
+    return hydrated;
   } catch {
     return null;
   }

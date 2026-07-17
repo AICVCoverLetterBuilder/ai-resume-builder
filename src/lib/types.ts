@@ -78,6 +78,12 @@ export interface CVData {
   name: string;
   personal: PersonalInfo;
   summary: string;
+  /** Locale of the visible CV content after apply / legacy hydration. */
+  contentLocale?: string;
+  /** Locale of the last generated Summary, when the visible Summary is AI-authored. */
+  summaryGeneratedLocale?: string;
+  /** Idempotent persisted-runtime migration marker. */
+  runtimeMigrationVersion?: number;
   /** Frozen source-locale summary (mirrors canonicalSnapshot when present). */
   canonicalSummary?: string;
   /**

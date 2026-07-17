@@ -23,6 +23,8 @@ export type OccupationCategory =
 
 export type DutyFamily =
   | 'cooking'
+  | 'hygiene_safety'
+  | 'kitchen_collaboration'
   | 'teaching'
   | 'accounting'
   | 'design'
@@ -172,6 +174,17 @@ const DUTY_FAMILY_RULES: Array<{ family: DutyFamily; re: RegExp; confidence: 'hi
     confidence: 'high',
   },
   {
+    family: 'hygiene_safety',
+    re: /\b(?:hygiene|food[- ]?safety|workplace\s+clean|sanitation|higijen\w*)|स्वच्छता|साफ़[- ]?सफाई|स्वच्छ/u,
+    confidence: 'high',
+  },
+  {
+    family: 'kitchen_collaboration',
+    // Context pair, not an isolated collaboration token.
+    re: /(?:collaborat\w*.{0,60}\bkitchen\b|\bkitchen\b.{0,60}collaborat\w*)|(?:सहयोग.{0,60}रसोई|रसोई.{0,60}सहयोग)/iu,
+    confidence: 'high',
+  },
+  {
     family: 'logistics',
     re: /\b(?:transport|utovar|istovar|load(?:ing)?|unload|deliver|delivery|warehouse|skladišt|viličar|vilicar|forklift|logistics|isporuč|isporuc|prevoz)|परिवहन|गोदाम|डिलीवरी/iu,
     confidence: 'high',
@@ -227,7 +240,7 @@ const DUTY_FAMILY_RULES: Array<{ family: DutyFamily; re: RegExp; confidence: 'hi
 
 /** Compatible pairs: occupation may naturally appear with these duty families. */
 const COMPATIBLE: Record<OccupationCategory, DutyFamily[]> = {
-  cooking: ['cooking'],
+  cooking: ['cooking', 'hygiene_safety', 'kitchen_collaboration'],
   teaching: ['teaching'],
   accounting: ['accounting', 'office_process'],
   design: ['design'],
@@ -259,7 +272,16 @@ export function classifyDutyFamilies(dutiesText: string): Array<{
   const duties = (dutiesText || '').trim();
   if (!duties) return [{ family: 'generic', confidence: 'low' }];
   const found: Array<{ family: DutyFamily; confidence: 'high' | 'low' }> = [];
+  const hasKitchenCollaborationContext =
+    /(?:collaborat\w*.{0,60}\bkitchen\b|\bkitchen\b.{0,60}collaborat\w*)|(?:सहयोग.{0,60}रसोई|रसोई.{0,60}सहयोग)/iu.test(duties);
   for (const rule of DUTY_FAMILY_RULES) {
+    if (
+      rule.family === 'office_process'
+      && hasKitchenCollaborationContext
+      && !/\b(?:internal\s+process|process(?:es)?|cross[- ]?functional|analy[sz]|report|izveštaj|izvestaj|proces|koordin)|प्रक्रिया|विश्लेषण|रिपोर्ट/iu.test(duties)
+    ) {
+      continue;
+    }
     if (rule.re.test(duties)) found.push({ family: rule.family, confidence: rule.confidence });
   }
   return found.length ? found : [{ family: 'generic', confidence: 'low' }];

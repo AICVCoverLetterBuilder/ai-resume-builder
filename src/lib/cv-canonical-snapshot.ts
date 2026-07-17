@@ -677,6 +677,8 @@ export function acceptValidatedAiContent(
       ...next,
       summary: options.summary,
       summaryOrigin: options.summaryOrigin || 'ai_generated',
+      contentLocale: options.locale,
+      summaryGeneratedLocale: options.locale,
     };
   }
   if (
@@ -693,6 +695,7 @@ export function acceptValidatedAiContent(
     const origin: CvExperienceDescriptionOrigin = options.descriptionOrigin || 'ai_generated';
     next = {
       ...next,
+      contentLocale: options.locale,
       experience: next.experience.map((e) => {
         if (e.id !== options.experienceId) return e;
         return applyGeneratedExperienceDescription(e, options.description!, {
