@@ -445,10 +445,16 @@ export function applyFinalizedBulletsToCv(
   finalized: FinalizeCvAiFieldResult,
 ): CVData {
   if (finalized.blocked || !finalized.countedAsSuccess) return cv;
+  const descriptionOrigin = finalized.origin === 'deterministic_fallback'
+    ? 'deterministic_fallback' as const
+    : finalized.origin === 'ai_repaired'
+      ? 'ai_repaired' as const
+      : 'ai_generated' as const;
   return acceptValidatedAiContent(cv, {
     locale,
     experienceId,
     description: finalized.text,
+    descriptionOrigin,
   });
 }
 

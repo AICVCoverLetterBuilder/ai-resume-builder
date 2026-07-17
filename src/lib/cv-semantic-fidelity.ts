@@ -86,6 +86,11 @@ const UNSUPPORTED_DUTY_PATTERNS: RegExp[] = [
   /\bled\s+the\s+(?:kitchen\s+)?team\b/iu,
   /\bcost\s+reduction\b/iu,
   /\bmenu\s+development\b/iu,
+  // Cuisine inventions — allowed only when present in canonical corpus
+  // (see dutySupportedByCanonical / source cuisine claims).
+  /\bserbian\s+and\s+mediterranean\b/iu,
+  /\bsrpsk\w*\s+i\s+mediteransk\w*/iu,
+  /\bmediterranean\s+dishes?\b/iu,
   // Generic corporate inventions that replace concrete logistics/process duties
   /\bsupporting senior team members?\b/iu,
   /\borganizational goals?\b/iu,
@@ -630,6 +635,13 @@ function dutySupportedByCanonical(matched: string, corpus: string): boolean {
   const token = matched.toLowerCase().replace(/\s+/g, ' ').trim();
   if (!token) return true;
   if (corpus.includes(token)) return true;
+  // Cuisine pair claims require the same concepts in the grounding corpus.
+  if (
+    /serbian|mediterranean|srpsk|mediteransk/iu.test(token)
+    && /srpsk|serbian|mediteransk|mediterranean/iu.test(corpus)
+  ) {
+    return true;
+  }
   // Cross-language hygiene / food-safety equivalence (Serbian higijen ↔ EN food-safety).
   if (
     /food[- ]?safet|higijen|hygiene|bezbednost\s+hran|sigurnost\s+hran/iu.test(token)

@@ -4,6 +4,10 @@
  */
 import type { CVData, Education, WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
+import {
+  captureUserGroundingBeforeAi,
+  resolveExperienceGroundingDescription,
+} from './cv-experience-provenance';
 
 export type CvFactType =
   | 'summary'
@@ -189,7 +193,7 @@ function push(
 }
 
 function experienceSourceDescription(exp: WorkExperience): string {
-  return (exp.canonicalDescription || exp.description || '').trim();
+  return resolveExperienceGroundingDescription(exp);
 }
 
 export function buildCvCanonicalFactSet(
@@ -407,29 +411,25 @@ export function deterministicBulletsFromCanonical(
   return formatExperienceBullets(bullets.map((b) => b.sourceText || b.value));
 }
 
-/** Freeze source bullets before the first localized overwrite.
- * Prefer an existing canonicalDescription. Otherwise freeze the current
- * description when it looks like user-entered source text (not a prior AI
- * rewrite marker / empty). Callers must not pass known AI-only text here
- * without an existing freeze.
+/**
+ * Resolve grounding duties for AI requests / fact sets.
+ * Never returns AI-generated display text when user/canonical sources exist.
  */
 export function freezeCanonicalExperienceDescription(
-  exp: Pick<WorkExperience, 'description' | 'canonicalDescription'>,
+  exp: Pick<
+    WorkExperience,
+    'description' | 'canonicalDescription' | 'originalUserDescription' | 'descriptionOrigin'
+  >,
 ): string {
-  if (exp.canonicalDescription?.trim()) return exp.canonicalDescription.trim();
-  return (exp.description || '').trim();
+  return resolveExperienceGroundingDescription(exp);
 }
 
 /**
- * Ensure legacy entries (description set, canonicalDescription empty) freeze
- * user-entered duties before the first AI Improvements call.
- * Does not overwrite an existing freeze. Does not invent content.
+ * Capture user grounding before AI Improvements.
+ * Never promotes AI-generated description into canonical/original storage.
  */
 export function ensureCanonicalExperienceFrozen(
   exp: WorkExperience,
 ): WorkExperience {
-  if (exp.canonicalDescription?.trim()) return exp;
-  const source = (exp.description || '').trim();
-  if (!source) return exp;
-  return { ...exp, canonicalDescription: source };
+  return captureUserGroundingBeforeAi(exp);
 }

@@ -18,6 +18,14 @@ import {
   type LocalizedSummaryProvenance,
 } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
+import {
+  applyGeneratedExperienceDescription,
+  experienceProvenanceNeedsRepair,
+  isAiDescriptionOrigin,
+  normalizeExperienceProvenance,
+  resolveExperienceGroundingDescription,
+} from './cv-experience-provenance';
+import type { CvExperienceDescriptionOrigin } from './types';
 
 export type CanonicalCreatedFrom =
   | 'user_structured_input'
@@ -237,11 +245,7 @@ function isTruncatedHindiStub(text: string): boolean {
 }
 
 function experienceDescriptionForCanonical(exp: WorkExperience): string {
-  // Prefer immutable user/source duties. Never prefer a later AI rewrite that only
-  // lives in `description` once `canonicalDescription` has been frozen.
-  const canonical = (exp.canonicalDescription || '').trim();
-  if (canonical) return canonical;
-  return (exp.description || '').trim();
+  return resolveExperienceGroundingDescription(exp);
 }
 
 export function buildExperienceSnapshotFromText(
@@ -350,29 +354,36 @@ export function migrateLegacyCanonicalCv(
   cv: CVData,
   options?: { localeHint?: Locale },
 ): CVData {
-  const existing = cv.canonicalSnapshot;
+  // Repair provenance (e.g. AI-polluted canonical cuisine claims) when needed.
+  // Preserve referential identity when a valid snapshot needs no provenance rewrite.
+  const needsProvenance = (cv.experience || []).some(experienceProvenanceNeedsRepair);
+  const provenanceFixed: CVData = needsProvenance
+    ? { ...cv, experience: (cv.experience || []).map(normalizeExperienceProvenance) }
+    : cv;
+
+  const existing = provenanceFixed.canonicalSnapshot;
   if (existing?.canonicalState === 'valid' && existing.canonicalSourceHash && existing.canonicalRevision >= 1) {
-    return cv;
+    return provenanceFixed;
   }
   if (existing?.canonicalState === 'needs_rebuild') {
-    return cv;
+    return provenanceFixed;
   }
 
-  const text = aggregateCvText(cv);
+  const text = aggregateCvText(provenanceFixed);
   const hasContent = Boolean(
-    (cv.summary || cv.canonicalSummary || '').trim()
-    || cv.experience.some((e) => (e.description || e.canonicalDescription || '').trim()),
+    (provenanceFixed.summary || provenanceFixed.canonicalSummary || '').trim()
+    || provenanceFixed.experience.some((e) => (e.description || e.canonicalDescription || e.originalUserDescription || '').trim()),
   );
   if (!hasContent) {
-    return cv;
+    return provenanceFixed;
   }
 
   const detected = detectContentLocale(text);
-  const summary = (cv.canonicalSummary || cv.summary || '').trim();
+  const summary = (provenanceFixed.canonicalSummary || provenanceFixed.summary || '').trim();
 
   if (isTruncatedHindiStub(summary) || (detected === 'hi' && isTruncatedHindiStub(summary))) {
     const locale: Locale = detected === 'hi' ? 'hi' : (options?.localeHint === 'hi' ? 'hi' : 'hi');
-    const snapshot = buildCanonicalSnapshotFromCv(cv, {
+    const snapshot = buildCanonicalSnapshotFromCv(provenanceFixed, {
       canonicalLocale: locale,
       createdFrom: 'legacy_migration',
       revision: 0,
@@ -380,13 +391,13 @@ export function migrateLegacyCanonicalCv(
     });
     // Preserve display fields unchanged — only attach snapshot metadata.
     return {
-      ...cv,
+      ...provenanceFixed,
       canonicalSnapshot: snapshot,
     };
   }
 
   // Ambiguous or invalid: preserve user data, mark needs_rebuild, never invent English.
-  if (!detected || !contentEligibleForValidCanonical(cv, detected)) {
+  if (!detected || !contentEligibleForValidCanonical(provenanceFixed, detected)) {
     const rebuildLocale: Locale | null = detected
       ?? (options?.localeHint && contentMatchesLocaleHint(text, options.localeHint)
         ? options.localeHint
@@ -395,10 +406,10 @@ export function migrateLegacyCanonicalCv(
     if (!rebuildLocale) {
       // Ambiguous provenance — attach needs_rebuild metadata without claiming English.
       return {
-        ...cv,
+        ...provenanceFixed,
         canonicalSnapshot: {
           canonicalSummary: summary,
-          canonicalExperiences: (cv.experience || []).map((exp, i) => buildExperienceSnapshotFromText(exp, i)),
+          canonicalExperiences: (provenanceFixed.experience || []).map((exp, i) => buildExperienceSnapshotFromText(exp, i)),
           // Placeholder only when truly ambiguous; state=needs_rebuild means exporters must fail closed.
           canonicalLocale: options?.localeHint || 'en',
           canonicalRevision: 0,
@@ -409,25 +420,30 @@ export function migrateLegacyCanonicalCv(
       };
     }
 
-    const snapshot = buildCanonicalSnapshotFromCv(cv, {
+    const snapshot = buildCanonicalSnapshotFromCv(provenanceFixed, {
       canonicalLocale: rebuildLocale,
       createdFrom: 'legacy_migration',
       revision: 0,
       state: 'needs_rebuild',
     });
-    return { ...cv, canonicalSnapshot: snapshot };
+    return { ...provenanceFixed, canonicalSnapshot: snapshot };
   }
 
   const locale = detected;
 
   // Reliable structured content → valid snapshot once.
+  // Seed canonical from grounding provenance only — never from AI display description.
   const synced = {
-    ...cv,
-    canonicalSummary: summary || cv.summary,
-    experience: cv.experience.map((exp) => ({
-      ...exp,
-      canonicalDescription: experienceDescriptionForCanonical(exp) || exp.description,
-    })),
+    ...provenanceFixed,
+    canonicalSummary: (provenanceFixed.canonicalSummary || '').trim() || summary,
+    experience: provenanceFixed.experience.map((exp) => {
+      const grounded = experienceDescriptionForCanonical(exp);
+      return {
+        ...exp,
+        originalUserDescription: (exp.originalUserDescription || '').trim() || grounded || undefined,
+        canonicalDescription: grounded || undefined,
+      };
+    }),
   };
   const snapshot = buildCanonicalSnapshotFromCv(synced, {
     canonicalLocale: locale,
@@ -554,9 +570,12 @@ export function applyCanonicalExperienceEdit(
       const syncCanonical = !snap
         || snap.canonicalState !== 'valid'
         || uiLocale === snap.canonicalLocale;
+      const previousWasAi = isAiDescriptionOrigin(e.descriptionOrigin);
       return {
         ...e,
         description: value,
+        descriptionOrigin: previousWasAi ? 'user_confirmed_ai_edit' as const : 'user' as const,
+        originalUserDescription: (e.originalUserDescription || '').trim() || value,
         ...(syncCanonical ? { canonicalDescription: value } : {}),
       };
     }
@@ -607,6 +626,7 @@ type AcceptValidatedAiContentOptions = {
   experienceId?: string;
   description?: string;
   summaryOrigin?: import('./types').CvSummaryOrigin;
+  descriptionOrigin?: CvExperienceDescriptionOrigin;
 };
 
 /**
@@ -652,15 +672,11 @@ export function acceptValidatedAiContent(
     ) {
       return cv;
     }
-    const snap = cv.canonicalSnapshot;
-    const becomesCanonical = !snap
-      || snap.canonicalState !== 'valid'
-      || options.locale === snap.canonicalLocale;
+    // AI may update visible summary only — never promote into canonicalSummary.
     next = {
       ...next,
       summary: options.summary,
       summaryOrigin: options.summaryOrigin || 'ai_generated',
-      ...(becomesCanonical ? { canonicalSummary: options.summary } : {}),
     };
   }
   if (
@@ -674,34 +690,54 @@ export function acceptValidatedAiContent(
     return cv;
   }
   if (options.experienceId && options.description !== undefined) {
+    const origin: CvExperienceDescriptionOrigin = options.descriptionOrigin || 'ai_generated';
     next = {
       ...next,
       experience: next.experience.map((e) => {
         if (e.id !== options.experienceId) return e;
-        // Freeze user/source duties into canonicalDescription before overwriting
-        // the visible description with AI text. Never promote AI output to canonical.
-        const frozenCanonical = (e.canonicalDescription || '').trim()
-          || (e.description || '').trim();
-        return {
-          ...e,
-          description: options.description!,
-          ...(frozenCanonical ? { canonicalDescription: frozenCanonical } : {}),
-        };
+        return applyGeneratedExperienceDescription(e, options.description!, {
+          locale: options.locale,
+          origin: isAiDescriptionOrigin(origin) ? origin : 'ai_generated',
+        });
       }),
     };
   }
 
+  // AI acceptance must not promote generated text into canonicalSummary /
+  // canonicalDescription. When no valid snapshot exists yet, establish locale
+  // metadata from *user grounding fields only* (never from the AI payload).
   const snap = cv.canonicalSnapshot;
-  const reviseCanonical = !snap
-    || snap.canonicalState !== 'valid'
-    || options.locale === snap.canonicalLocale;
-
-  if (reviseCanonical) {
-    return sealCanonicalFromValidatedSource(next, {
-      locale: snap?.canonicalLocale || options.locale,
-      createdFrom: 'validated_ai_result',
-      revise: Boolean(snap?.canonicalState === 'valid'),
+  if (!snap || snap.canonicalState !== 'valid') {
+    const userSummary = (cv.canonicalSummary || cv.summary || '').trim();
+    const groundedForSeal: CVData = {
+      ...next,
+      // Seal must read user summary — not the AI display summary on `next`.
+      summary: userSummary,
+      canonicalSummary: userSummary || undefined,
+      experience: (next.experience || []).map((e) => ({
+        ...e,
+        canonicalDescription: resolveExperienceGroundingDescription(e) || e.canonicalDescription,
+      })),
+    };
+    if (contentEligibleForValidCanonical(groundedForSeal, options.locale)) {
+      const sealed = sealCanonicalFromValidatedSource(groundedForSeal, {
+        locale: options.locale,
+        createdFrom: 'user_structured_input',
+        revise: false,
+      });
+      return {
+        ...sealed,
+        summary: next.summary,
+        summaryOrigin: next.summaryOrigin,
+      };
+    }
+    const softSnap = buildCanonicalSnapshotFromCv(groundedForSeal, {
+      canonicalLocale: options.locale,
+      createdFrom: 'user_structured_input',
+      revision: 0,
+      state: 'needs_rebuild',
     });
+    return { ...next, canonicalSnapshot: softSnap };
   }
   return next;
 }

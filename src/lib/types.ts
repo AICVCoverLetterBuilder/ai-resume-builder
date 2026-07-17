@@ -22,6 +22,14 @@ export interface PersonalInfo {
   gender?: string;
 }
 
+/** Provenance of the visible experience `description` field. */
+export type CvExperienceDescriptionOrigin =
+  | 'user'
+  | 'ai_generated'
+  | 'ai_repaired'
+  | 'deterministic_fallback'
+  | 'user_confirmed_ai_edit';
+
 export interface WorkExperience {
   id: string;
   company: string;
@@ -29,13 +37,24 @@ export interface WorkExperience {
   startDate: string;
   endDate: string;
   isPresent: boolean;
-  /** Display / localized bullets for the active UI locale. */
+  /** Display / localized bullets for the active UI locale (may be AI-generated). */
   description: string;
   /**
-   * Frozen source-locale professional bullets (locale = canonicalSnapshot.canonicalLocale).
-   * Localization must always ground against this text — never against a prior locale rewrite.
+   * Original user-entered duties before any AI transformation.
+   * Safest grounding source; never written from AI output.
+   */
+  originalUserDescription?: string;
+  /**
+   * User-confirmed canonical grounding facts (initialized from original user input
+   * or explicit user edit). Never automatically promoted from AI output.
    */
   canonicalDescription?: string;
+  /** Provenance of the visible `description` field. */
+  descriptionOrigin?: CvExperienceDescriptionOrigin;
+  /** Last AI/fallback generated description (display), if any. */
+  generatedDescription?: string;
+  /** Locale of `generatedDescription` / last AI apply for this experience. */
+  generatedLocale?: string;
 }
 
 export interface Education {

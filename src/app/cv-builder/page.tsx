@@ -1033,10 +1033,13 @@ export default function CVBuilderPage() {
     const countBefore = getProAiUsageCount();
 
     try {
-      // Legacy migration: freeze user-entered description into canonicalDescription
-      // before the first AI Improvements call when the field is still empty.
+      // Capture user grounding before AI — never promote AI display text to canonical.
       const expFrozen = ensureCanonicalExperienceFrozen(exp);
-      if (!exp.canonicalDescription?.trim() && expFrozen.canonicalDescription?.trim()) {
+      if (
+        expFrozen.originalUserDescription !== exp.originalUserDescription
+        || expFrozen.canonicalDescription !== exp.canonicalDescription
+        || expFrozen.descriptionOrigin !== exp.descriptionOrigin
+      ) {
         commitCvUpdate((prev) => ({
           ...prev,
           experience: prev.experience.map((e) =>

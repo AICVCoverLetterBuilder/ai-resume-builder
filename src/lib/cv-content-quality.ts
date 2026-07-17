@@ -33,6 +33,7 @@ import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { deterministicLocalizedSummaryFromCanonical, localizeCanonicalBulletLine } from './cv-localized-fallback';
 import { normalizeHindiGeneratedWhitespace } from './cv-hindi-normalize';
+import { resolveExperienceGroundingDescription } from './cv-experience-provenance';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
 export type DurationIntegrationContext = {
@@ -344,7 +345,7 @@ export function normalizeExperienceBulletsForQuality(
   locale: Locale,
   gender?: string,
 ): { description: string; changed: boolean } {
-  const source = (exp.canonicalDescription || exp.description || '').trim();
+  const source = resolveExperienceGroundingDescription(exp);
   const sourceBullets = splitExperienceBullets(source);
   const locBullets = splitExperienceBullets(exp.description || '');
   const isPresent = Boolean(exp.isPresent);

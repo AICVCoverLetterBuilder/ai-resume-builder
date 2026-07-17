@@ -349,12 +349,17 @@ function classifyCookingDutyIntent(text: string): CookingDutyIntent | null {
   return null;
 }
 
+/**
+ * Generic cooking fallbacks — never invent specific cuisines (Serbian/Mediterranean/…).
+ * Cuisine names are added only when the *source* fact already contains them
+ * (see `localizeCookingBulletFromSource`).
+ */
 const COOKING_INTENT_BULLET: Partial<
   Record<Locale, Record<CookingDutyIntent, (g: GenderTone) => string>>
 > = {
   en: {
     cuisine_prep: () =>
-      'Prepared Serbian and Mediterranean dishes in accordance with the restaurant’s established standards.',
+      'Prepared dishes in accordance with the restaurant’s established standards.',
     kitchen_org: () =>
       'Organized food-preparation tasks and maintained an orderly kitchen workstation.',
     kitchen_collab: () =>
@@ -364,7 +369,7 @@ const COOKING_INTENT_BULLET: Partial<
   },
   de: {
     cuisine_prep: () =>
-      'Zubereitung serbischer und mediterraner Gerichte gemäß den festgelegten Restaurantstandards.',
+      'Zubereitung von Gerichten gemäß den festgelegten Restaurantstandards.',
     kitchen_org: () =>
       'Organisation der Essenszubereitung und Aufrechterhaltung eines ordentlichen Küchenarbeitsplatzes.',
     kitchen_collab: () =>
@@ -374,7 +379,7 @@ const COOKING_INTENT_BULLET: Partial<
   },
   es: {
     cuisine_prep: () =>
-      'Preparación de platos serbios y mediterráneos según los estándares establecidos del restaurante.',
+      'Preparación de platos según los estándares establecidos del restaurante.',
     kitchen_org: () =>
       'Organización de las tareas de preparación de alimentos y mantenimiento de un puesto de cocina ordenado.',
     kitchen_collab: () =>
@@ -384,7 +389,7 @@ const COOKING_INTENT_BULLET: Partial<
   },
   fr: {
     cuisine_prep: () =>
-      'Préparation de plats serbes et méditerranéens conformément aux normes établies du restaurant.',
+      'Préparation de plats conformément aux normes établies du restaurant.',
     kitchen_org: () =>
       'Organisation des tâches de préparation des aliments et maintien d’un poste de cuisine ordonné.',
     kitchen_collab: () =>
@@ -394,7 +399,7 @@ const COOKING_INTENT_BULLET: Partial<
   },
   it: {
     cuisine_prep: () =>
-      'Preparazione di piatti serbi e mediterranei secondo gli standard definiti del ristorante.',
+      'Preparazione di piatti secondo gli standard definiti del ristorante.',
     kitchen_org: () =>
       'Organizzazione delle attività di preparazione degli alimenti e mantenimento di una postazione di cucina ordinata.',
     kitchen_collab: () =>
@@ -404,7 +409,7 @@ const COOKING_INTENT_BULLET: Partial<
   },
   ar: {
     cuisine_prep: () =>
-      'إعداد أطباق صربية ومتوسطية وفقاً لمعايير المطعم المعتمدة.',
+      'إعداد الأطباق وفقاً لمعايير المطعم المعتمدة.',
     kitchen_org: () =>
       'تنظيم مهام تحضير الطعام والحفاظ على مكان عمل مرتب في المطبخ.',
     kitchen_collab: () =>
@@ -415,8 +420,8 @@ const COOKING_INTENT_BULLET: Partial<
   sr: {
     cuisine_prep: (g) =>
       g === 'male'
-        ? 'Pripremao sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.'
-        : 'Pripremala sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.',
+        ? 'Pripremao sam jela u skladu sa utvrđenim standardima restorana.'
+        : 'Pripremala sam jela u skladu sa utvrđenim standardima restorana.',
     kitchen_org: (g) =>
       g === 'male'
         ? 'Organizovao sam pripremu namirnica i održavao uredan radni prostor u kuhinji.'
@@ -433,8 +438,8 @@ const COOKING_INTENT_BULLET: Partial<
   hr: {
     cuisine_prep: (g) =>
       g === 'male'
-        ? 'Pripremao sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.'
-        : 'Pripremala sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.',
+        ? 'Pripremao sam jela u skladu s utvrđenim standardima restorana.'
+        : 'Pripremala sam jela u skladu s utvrđenim standardima restorana.',
     kitchen_org: (g) =>
       g === 'male'
         ? 'Organizirao sam pripremu namirnica i održavao uredan radni prostor u kuhinji.'
@@ -451,8 +456,8 @@ const COOKING_INTENT_BULLET: Partial<
   ru: {
     cuisine_prep: (g) =>
       g === 'male'
-        ? 'Готовил блюда сербской и средиземноморской кухни в соответствии со стандартами ресторана.'
-        : 'Готовила блюда сербской и средиземноморской кухни в соответствии со стандартами ресторана.',
+        ? 'Готовил блюда в соответствии с установленными стандартами ресторана.'
+        : 'Готовила блюда в соответствии с установленными стандартами ресторана.',
     kitchen_org: (g) =>
       g === 'male'
         ? 'Организовывал подготовку продуктов и поддерживал порядок на рабочем месте на кухне.'
@@ -468,7 +473,7 @@ const COOKING_INTENT_BULLET: Partial<
   },
   'pt-BR': {
     cuisine_prep: () =>
-      'Preparo de pratos da culinária sérvia e mediterrânea conforme os padrões estabelecidos do restaurante.',
+      'Preparo de pratos conforme os padrões estabelecidos do restaurante.',
     kitchen_org: () =>
       'Organização das tarefas de preparação de alimentos e manutenção de uma estação de cozinha ordenada.',
     kitchen_collab: () =>
@@ -478,7 +483,7 @@ const COOKING_INTENT_BULLET: Partial<
   },
   hi: {
     cuisine_prep: () =>
-      'रेस्तराँ के निर्धारित मानकों के अनुसार सर्बियाई और भूमध्यसागरीय व्यंजन तैयार किए।',
+      'रेस्तराँ के निर्धारित मानकों के अनुसार व्यंजन तैयार किए।',
     kitchen_org: () =>
       'खाद्य तैयारी के कार्यों को व्यवस्थित रखा और रसोई के कार्यक्षेत्र को व्यवस्थित बनाए रखा।',
     kitchen_collab: () =>
@@ -488,7 +493,7 @@ const COOKING_INTENT_BULLET: Partial<
   },
   ja: {
     cuisine_prep: () =>
-      'レストランの定められた基準に従い、セルビア料理および地中海料理を準備した。',
+      'レストランの定められた基準に従って料理を準備した。',
     kitchen_org: () =>
       '食材準備作業を整理し、厨房の作業場を整然と維持した。',
     kitchen_collab: () =>
@@ -497,6 +502,59 @@ const COOKING_INTENT_BULLET: Partial<
       '職務に示された衛生および食材保管手順に従った。',
   },
 };
+
+/** Only when source already names both Serbian + Mediterranean cuisines. */
+const COOKING_CUISINE_FROM_SOURCE: Partial<Record<Locale, (g: GenderTone) => string>> = {
+  en: () =>
+    'Prepared Serbian and Mediterranean dishes in accordance with the restaurant’s established standards.',
+  de: () =>
+    'Zubereitung serbischer und mediterraner Gerichte gemäß den festgelegten Restaurantstandards.',
+  es: () =>
+    'Preparación de platos serbios y mediterráneos según los estándares establecidos del restaurante.',
+  fr: () =>
+    'Préparation de plats serbes et méditerranéens conformément aux normes établies du restaurant.',
+  it: () =>
+    'Preparazione di piatti serbi e mediterranei secondo gli standard definiti del ristorante.',
+  ar: () =>
+    'إعداد أطباق صربية ومتوسطية وفقاً لمعايير المطعم المعتمدة.',
+  sr: (g) =>
+    g === 'male'
+      ? 'Pripremao sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.'
+      : 'Pripremala sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.',
+  hr: (g) =>
+    g === 'male'
+      ? 'Pripremao sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.'
+      : 'Pripremala sam jela srpske i mediteranske kuhinje u skladu sa standardima restorana.',
+  ru: (g) =>
+    g === 'male'
+      ? 'Готовил блюда сербской и средиземноморской кухни в соответствии со стандартами ресторана.'
+      : 'Готовила блюда сербской и средиземноморской кухни в соответствии со стандартами ресторана.',
+  'pt-BR': () =>
+    'Preparo de pratos da culinária sérvia e mediterrânea conforme os padrões estabelecidos do restaurante.',
+  hi: () =>
+    'रेस्तराँ के निर्धारित मानकों के अनुसार सर्बियाई और भूमध्यसागरीय व्यंजन तैयार किए।',
+  ja: () =>
+    'レストランの定められた基準に従い、セルビア料理および地中海料理を準備した。',
+};
+
+function localizeCookingBulletFromSource(
+  sourceText: string,
+  intent: CookingDutyIntent,
+  locale: Locale,
+  gender?: CoverLetterGender | string,
+): string {
+  const g = tone(gender);
+  const table = COOKING_INTENT_BULLET[locale] || COOKING_INTENT_BULLET.en;
+  if (
+    intent === 'cuisine_prep'
+    && /\b(srpsk\w*|serbian)/iu.test(sourceText)
+    && /\b(mediteransk\w*|mediterranean)/iu.test(sourceText)
+  ) {
+    const specific = COOKING_CUISINE_FROM_SOURCE[locale] || COOKING_CUISINE_FROM_SOURCE.en;
+    return specific!(g).trim();
+  }
+  return (table?.[intent] || COOKING_INTENT_BULLET.en![intent])(g).trim();
+}
 
 /**
  * `\b<stem>\b` breaks the moment the source language inflects the stem with a
@@ -685,10 +743,10 @@ function localizedBulletForFact(
   const category = fact.category || classifyDutyCategory(source);
 
   // Cooking-specific intents (category-aware + generic cooking source text).
+  // Cuisine names are included only when present in the source fact.
   const cookingIntent = classifyCookingDutyIntent(source);
   if (cookingIntent) {
-    const cookingTable = COOKING_INTENT_BULLET[locale] || COOKING_INTENT_BULLET.en;
-    if (cookingTable?.[cookingIntent]) return cookingTable[cookingIntent](g).trim();
+    return localizeCookingBulletFromSource(source, cookingIntent, locale, gender);
   }
 
   if (category === 'generic') {

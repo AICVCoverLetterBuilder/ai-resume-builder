@@ -8,12 +8,13 @@ import type { ExperienceDurationSnapshot } from './cv-experience-duration';
 import { finalizeCvAiFieldForApply } from './cv-ai-finalize-apply';
 import { resolveOccupationalTitleForSummary } from './cv-role-title';
 import type { DurationIntegrationContext } from './cv-content-quality';
+import { resolveExperienceGroundingDescription } from './cv-experience-provenance';
 
 export function buildDurationContextFromCv(cv: CVData, locale: Locale): DurationIntegrationContext {
   const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
   const gender = cv.personal?.gender || '';
   const dutiesText = (cv.experience || [])
-    .map((e) => e.canonicalDescription || e.description || '')
+    .map((e) => resolveExperienceGroundingDescription(e))
     .join('\n');
   return {
     role: resolveOccupationalTitleForSummary({
