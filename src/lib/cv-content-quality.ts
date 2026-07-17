@@ -351,7 +351,16 @@ export function normalizeExperienceBulletsForQuality(
   const isPresent = Boolean(exp.isPresent);
   let changed = false;
   const next = sourceBullets.map((sourceText, i) => {
-    let text = (locBullets[i] || sourceText).trim();
+    // When authoritative shells outnumber display lines (legacy recovery → 3
+    // English shells vs 2 Hindi lines), never pad with English for non-en locales.
+    let text = (locBullets[i] || '').trim();
+    if (!text) {
+      const localizedShell = localizeCanonicalBulletLine(sourceText, locale, gender);
+      text = (localizedShell || (locale === 'en' ? sourceText : '')).trim();
+      if (!text && locale === 'en') text = sourceText;
+      if (text && text !== sourceText) changed = true;
+    }
+    if (!text) text = locale === 'en' ? sourceText.trim() : '';
     const meaning = classifyContactCenterMeaning(sourceText);
     if (meaning && (locale === 'hi' || locale === 'sr' || locale === 'hr')) {
       const preferred = contactCenterBullet(meaning, locale, isPresent, gender);

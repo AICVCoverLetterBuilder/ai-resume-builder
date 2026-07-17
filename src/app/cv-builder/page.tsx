@@ -72,10 +72,10 @@ import {
 } from '@/lib/cv-language-levels';
 import {
   omitInvalidLocalizedFieldsForPreview,
-  validateFinalLocalizedCvFields,
 } from '@/lib/cv-field-locale-integrity';
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
+import { prepareLegacyRecoveredFinalLocaleSafeCv } from '@/lib/prepare-legacy-recovered-export';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
@@ -1474,38 +1474,63 @@ export default function CVBuilderPage() {
 
     const prepareFinalLocaleSafeCv = (sourceCv: CVData): CVData => {
       try {
-        // The persisted migration is also applied at the final boundary so
-        // preview, PDF and DOCX consume the same normalized legacy provenance,
-        // even when export is tapped before the autosave debounce completes.
-        sourceCv = normalizeLegacyCvRuntime(sourceCv, locale);
-        // Creative Artistic / Corporate Navy: apply and export share one integrity
-        // contract. Do not reject English source duties before deterministic
-        // localization — that caused Hindi PDF generic failures (build 240).
-        if (sourceCv.templateId === 'creative-artistic') {
-          return prepareCreativeArtisticExport(sourceCv, locale, {
-            gender: sourceCv.personal?.gender,
+        // Shared pre-template recovery: Modern Minimal must not validate Summary
+        // against a stale empty fact set before duties are recovered.
+        const { cv: recoveredCv, diagnostics } = prepareLegacyRecoveredFinalLocaleSafeCv(
+          sourceCv,
+          locale,
+          { gender: sourceCv.personal?.gender },
+        );
+        if (process.env.NODE_ENV !== 'production') {
+          console.debug('[CV export] legacy recovery', {
+            templateId: recoveredCv.templateId,
+            recoveryInvoked: diagnostics.recoveryInvoked,
+            experienceSourcesBefore: diagnostics.experienceSourcesBefore,
+            experienceSourcesAfter: diagnostics.experienceSourcesAfter,
+            recoveredDutyKeys: diagnostics.recoveredDutyKeys,
+            summaryInitialReason: diagnostics.summaryInitialReason,
+            summaryRecoverySource: diagnostics.summaryRecoverySource,
+          });
+        }
+        // Persist recovered grounding metadata for reload/second export.
+        // Export still uses recoveredCv below — persistence is secondary.
+        const groundingPersisted: CVData = {
+          ...sourceCv,
+          region: recoveredCv.region,
+          runtimeMigrationVersion: recoveredCv.runtimeMigrationVersion,
+          contentLocale: recoveredCv.contentLocale ?? sourceCv.contentLocale,
+          summaryOrigin: recoveredCv.summaryOrigin ?? sourceCv.summaryOrigin,
+          experience: (sourceCv.experience || []).map((exp) => {
+            const matched = (recoveredCv.experience || []).find((item) => item.id === exp.id);
+            if (!matched) return exp;
+            return {
+              ...exp,
+              originalUserDescription:
+                matched.originalUserDescription ?? exp.originalUserDescription,
+              canonicalDescription:
+                matched.canonicalDescription ?? exp.canonicalDescription,
+              groundingRecoverySource:
+                matched.groundingRecoverySource ?? exp.groundingRecoverySource,
+              descriptionOrigin: matched.descriptionOrigin ?? exp.descriptionOrigin,
+            };
+          }),
+        };
+        setCv(groundingPersisted);
+        setCurrentCv(groundingPersisted);
+
+        // Template-specific integrity on top of the shared recovered snapshot.
+        if (recoveredCv.templateId === 'creative-artistic') {
+          return prepareCreativeArtisticExport(recoveredCv, locale, {
+            gender: recoveredCv.personal?.gender,
           }).cv;
         }
-        if (sourceCv.templateId === 'corporate-navy') {
-          return prepareCorporateNavyExport(sourceCv, locale, {
-            gender: sourceCv.personal?.gender,
+        if (recoveredCv.templateId === 'corporate-navy') {
+          return prepareCorporateNavyExport(recoveredCv, locale, {
+            gender: recoveredCv.personal?.gender,
           }).cv;
         }
-        const qualityCv = applyCvContentQuality(sourceCv, locale, {
-          gender: sourceCv.personal?.gender,
-          summaryOrigin: sourceCv.summaryOrigin,
-        }).cv;
-        const localeCheck = validateFinalLocalizedCvFields(qualityCv, locale);
-        if (!localeCheck.valid) {
-          const first = localeCheck.violations[0];
-          throw wrapCvExportFailure(
-            new Error(
-              `summary_export_contract_mismatch: ${first.kind}: ${first.path} does not match requested locale ${locale}`,
-            ),
-            'summary_export_contract_mismatch',
-          );
-        }
-        return qualityCv;
+        // Modern Minimal and all other templates consume the shared recovered CV.
+        return recoveredCv;
       } catch (err) {
         throw wrapCvExportFailure(err, 'template_export_projection_failed');
       }

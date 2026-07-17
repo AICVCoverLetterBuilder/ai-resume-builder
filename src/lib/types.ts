@@ -55,6 +55,11 @@ export interface WorkExperience {
   generatedDescription?: string;
   /** Locale of `generatedDescription` / last AI apply for this experience. */
   generatedLocale?: string;
+  /**
+   * Marks originalUserDescription/canonicalDescription that were recovered from
+   * classified legacy display text (not ordinary user-confirmed typing).
+   */
+  groundingRecoverySource?: 'legacy_recovered_display_duties';
 }
 
 export interface Education {

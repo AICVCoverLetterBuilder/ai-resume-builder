@@ -89,13 +89,13 @@ function selectAuthoritativeDuties(cv: CVData, exp: WorkExperience): {
     return { text: visible, source: 'legacyDescription' };
   }
 
-  // Build-244: AI display replaced the only surviving duties. Narrowly classify
-  // visible/generated text into English authoritative shells — never store the
-  // AI display string itself as user-confirmed canonical prose.
+  // Build-244/245: AI display replaced the only surviving duties. Narrowly
+  // classify visible/generated text into English authoritative shells — never
+  // store the AI display string itself as ordinary user-confirmed canonical prose.
   const classified = recoverAuthoritativeDutiesFromVisibleText(visible)
     || recoverAuthoritativeDutiesFromVisibleText(generated);
   if (classified) {
-    return { text: classified, source: 'classifiedVisibleDuties' };
+    return { text: classified, source: 'legacy_recovered_display_duties' };
   }
 
   // Latin/source duties that still classify cleanly but were mis-tagged AI.
@@ -111,6 +111,7 @@ export type LegacyExperienceRecoverySource =
   | 'canonicalSnapshot'
   | 'canonicalDescription'
   | 'legacyDescription'
+  | 'legacy_recovered_display_duties'
   | 'classifiedVisibleDuties'
   | 'none';
 
@@ -218,6 +219,9 @@ export function normalizeLegacyCvRuntimeWithTrace(
       ...(selected.text ? {
         originalUserDescription: selected.text,
         canonicalDescription: selected.text,
+        ...(selected.source === 'legacy_recovered_display_duties'
+          ? { groundingRecoverySource: 'legacy_recovered_display_duties' as const }
+          : {}),
       } : {}),
       descriptionOrigin: origin,
       ...(generatedDescription ? { generatedDescription } : {}),

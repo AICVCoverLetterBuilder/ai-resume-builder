@@ -176,7 +176,7 @@ describe('Build 244 legacy grounding recovery', () => {
 
   it('migrates classified visible Hindi duties into English authoritative shells', () => {
     const { cv, trace } = normalizeLegacyCvRuntimeWithTrace(legacyNoSnapshot(), 'hi');
-    expect(trace.experienceSources).toEqual(['classifiedVisibleDuties']);
+    expect(trace.experienceSources).toEqual(['legacy_recovered_display_duties']);
     expect(cv.runtimeMigrationVersion).toBe(CV_RUNTIME_MIGRATION_VERSION);
     expect(cv.region).toBe('EU');
     expect(cv.experience[0].originalUserDescription).toBe(EN_DUTIES);
