@@ -48,9 +48,8 @@ import {
 import { normalizeSerbianDurationGrammar } from './cv-serbian-grammar';
 import { acceptValidatedAiContent } from './cv-canonical-snapshot';
 import { applyCvContentQuality } from './cv-content-quality';
-// PDF/DOCX consume the same quality-projected CV state as preview
-// (`prepareFinalLocaleSafeCv` on the page). Template-specific export wrappers
-// must not invent alternate AI text.
+import { hasAiProtocolMarker, stripAiProtocolMarkers } from './cv-ai-protocol-strip';
+import { freezeCanonicalExperienceDescription } from './cv-canonical-facts';
 
 export type CvAiFinalizeAction =
   | 'summary_generate'
@@ -92,7 +91,16 @@ export type FinalizeCvAiFieldResult = {
 function dutiesTextFromCv(cv: CVData, experienceId?: string): string {
   const exps = cv.experience || [];
   const scoped = experienceId ? exps.filter((e) => e.id === experienceId) : exps;
-  return scoped.map((e) => e.canonicalDescription || e.description || '').join('\n');
+  // Immutable user/source duties only — never prefer a later AI rewrite in `description`
+  // when `canonicalDescription` is already frozen.
+  return scoped.map((e) => freezeCanonicalExperienceDescription(e)).join('\n');
+}
+
+function prepareCandidate(raw: string, locale: Locale): string {
+  let out = stripAiProtocolMarkers(raw || '');
+  out = stripUnsupportedSummaryFluff(out, locale);
+  out = normalizeLocaleText(out, locale);
+  return out;
 }
 
 function buildDurationContext(cv: CVData, locale: Locale): DurationIntegrationContext {
@@ -148,6 +156,9 @@ function summaryPasses(
   if (locale === 'hi' && hasSuspiciousHindiMergedTokens(summary)) {
     return { ok: false, reason: 'hindi_merged_tokens' };
   }
+  if (hasAiProtocolMarker(summary)) {
+    return { ok: false, reason: 'protocol_marker_residual' };
+  }
   if (!validateSummaryCompleteness(summary, { locale }).valid) {
     return { ok: false, reason: 'incomplete_summary' };
   }
@@ -195,6 +206,9 @@ function bulletsPass(
   if (locale === 'hi' && hasSuspiciousHindiMergedTokens(description)) {
     return { ok: false, reason: 'hindi_merged_tokens' };
   }
+  if (hasAiProtocolMarker(description)) {
+    return { ok: false, reason: 'protocol_marker_residual' };
+  }
   const fidelity = validateLocalizedExperienceBullets(description, factSet, {
     locale,
     gender: cv.personal?.gender || '',
@@ -228,10 +242,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const roleDutyConflict = consistency.conflict;
   const context = buildDurationContext(cv, locale);
 
-  let candidate = normalizeLocaleText(
-    stripUnsupportedSummaryFluff(input.candidate || '', locale),
-    locale,
-  );
+  let candidate = prepareCandidate(input.candidate || '', locale);
+  if (hasAiProtocolMarker(candidate)) {
+    candidate = '';
+  }
   const durationResolved = resolveSummaryWithDurationPolicy(
     candidate,
     durationSnapshot.total,
@@ -333,7 +347,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const roleDutyConflict = consistency.conflict;
   const canonical = bulletsForExperience(factSet, experienceIndex);
 
-  const candidate = normalizeLocaleText(input.candidate || '', locale);
+  let candidate = prepareCandidate(input.candidate || '', locale);
+  if (hasAiProtocolMarker(candidate)) {
+    candidate = '';
+  }
   const first = bulletsPass(candidate, factSet, cv, locale, experienceIndex, isPresent);
   if (first.ok) {
     return {

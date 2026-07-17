@@ -89,7 +89,8 @@ function localizeCook(locale: Locale, gender?: string): string {
 const TITLE_CATEGORY_RULES: Array<{ category: OccupationCategory; re: RegExp; confidence: 'high' }> = [
   {
     category: 'cooking',
-    re: /\b(kuvar(?:ica)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар|रसोइया|طباخ|料理人)\b/iu,
+    // Avoid `\b` for Devanagari/Arabic/CJK — JS word boundaries are ASCII-only.
+    re: /(?:^|[^a-zA-Z])(kuvar(?:ica|ka)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар)(?:[^a-zA-Z]|$)|रसोइया|طباخ|料理人/iu,
     confidence: 'high',
   },
   {
@@ -290,12 +291,11 @@ export function conflictingTitleFormsInSummary(
   const g = normalizeCoverLetterGender(gender);
   if (titleCategory === 'cooking') {
     return [
-      /\b(kuvar(?:ica)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар)\b/iu,
+      /(?:^|[^a-zA-Z])(kuvar(?:ica|ka)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар)(?:[^a-zA-Z]|$)/iu,
       /रसोइया/u,
       /طباخ/u,
       /料理人/u,
       /\bprofessional\s+cook\b/iu,
-      /\bdaksh\s+rasoiya\b/iu,
       /दक्ष\s+रसोइया/u,
     ];
   }

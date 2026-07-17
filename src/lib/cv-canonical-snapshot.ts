@@ -237,7 +237,11 @@ function isTruncatedHindiStub(text: string): boolean {
 }
 
 function experienceDescriptionForCanonical(exp: WorkExperience): string {
-  return (exp.canonicalDescription || exp.description || '').trim();
+  // Prefer immutable user/source duties. Never prefer a later AI rewrite that only
+  // lives in `description` once `canonicalDescription` has been frozen.
+  const canonical = (exp.canonicalDescription || '').trim();
+  if (canonical) return canonical;
+  return (exp.description || '').trim();
 }
 
 export function buildExperienceSnapshotFromText(
@@ -674,16 +678,14 @@ export function acceptValidatedAiContent(
       ...next,
       experience: next.experience.map((e) => {
         if (e.id !== options.experienceId) return e;
-        const snap = cv.canonicalSnapshot;
-        const becomesCanonical = !snap
-          || snap.canonicalState !== 'valid'
-          || options.locale === snap.canonicalLocale;
+        // Freeze user/source duties into canonicalDescription before overwriting
+        // the visible description with AI text. Never promote AI output to canonical.
+        const frozenCanonical = (e.canonicalDescription || '').trim()
+          || (e.description || '').trim();
         return {
           ...e,
           description: options.description!,
-          ...(becomesCanonical
-            ? { canonicalDescription: e.canonicalDescription?.trim() || options.description! }
-            : {}),
+          ...(frozenCanonical ? { canonicalDescription: frozenCanonical } : {}),
         };
       }),
     };

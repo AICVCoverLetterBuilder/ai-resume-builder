@@ -10,12 +10,17 @@ import type { CVData } from '@/lib/types';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
 import {
   evaluateRoleDutyConsistency,
+  localizeOccupationalTitleForProjection,
 } from '@/lib/cv-role-title';
 import {
+  applyFinalizedBulletsToCv,
   finalizeCvAiFieldForApply,
   runCvAiApplyPipeline,
 } from '@/lib/cv-ai-finalize-apply';
 import { localizeCvLanguageLevel } from '@/lib/cv-language-levels';
+import { applyCvContentQuality } from '@/lib/cv-content-quality';
+import { stripAiProtocolMarkers, hasAiProtocolMarker } from '@/lib/cv-ai-protocol-strip';
+import { acceptValidatedAiContent } from '@/lib/cv-canonical-snapshot';
 import type { Locale } from '@/lib/i18n/translations';
 
 const REF = '2026-07-15';
@@ -30,8 +35,15 @@ const CANONICAL_DUTIES = [
 const BAD_SR_SUMMARY =
   'Profesionalka sa iskustvom u radu kao kuvarica, sa oko četiri godina iskustva. Podržava starije članove tima u realizaciji projekata usklađenih sa ciljevima organizacije i zahtevima klijenata. Doprinosi unapređenju internih procesa prepoznavanjem neefikasnosti i predlaganjem praktičnih rešenja. Sarađuje sa međufunkcionalnim timovima kako bi se dodeljeni zadaci i rezultati završili na vreme. Vodi preciznu evidenciju i dokumentaciju u cilju podrške izveštavanju i ispunjavanju zahteva usklađenosti.';
 
+/** Latest real-device Serbian export: forces Kuvarka + invents impact. */
+const BAD_SR_SUMMARY_LATEST =
+  'Kuvarka sa oko četiri godine iskustva u oblasti skladišnog poslovanja i operativnih procesa. Konzistentno obezbeđujem visoke standarde u rukovanju robom i doprinosim efikasnijem funkcionisanju tima. Preuzimanjem inicijative obezbeđujem uspešno izvršenje projekata i jasnu komunikaciju između odeljenja. Pripremam izveštaje koji pružaju pouzdan osnov za poslovne odluke.';
+
 const BAD_EN_SUMMARY =
   'Professional cook with four years of experience supporting team operations, identifying process inefficiencies, and collaborating across functions to consistently deliver results on time.';
+
+const BAD_EN_SUMMARY_WITH_MARKER =
+  'CORRECTED PROFESSIONAL SUMMARY:\nProfessional cook with four years of experience supporting senior team members in delivering projects aligned with organizational goals and client requirements, identifying inefficiencies and proposing practical solutions, and maintaining accurate records and documentation to support reporting and compliance requirements.';
 
 const BAD_EN_BULLETS = [
   '• Supported senior team members in delivering projects aligned with organizational goals and client requirements.',
@@ -52,8 +64,12 @@ const UNSUPPORTED_SR = [
   /završili\s+na\s+vreme/iu,
   /dokumentacij/iu,
   /usklađenost/iu,
-  /kuvarica/iu,
+  /kuvarica|kuvarka/iu,
   /četiri\s+godina/iu,
+  /visok\w*\s+standard/iu,
+  /efikasnij\w*\s+funkcionisanju/iu,
+  /inicijativ/iu,
+  /poslovn\w*\s+odluk/iu,
 ];
 
 const UNSUPPORTED_EN = [
@@ -338,6 +354,134 @@ describe('Package-1 E2E apply pipeline (page orchestration)', () => {
     }
   });
 
+  it('latest Serbian Kuvarka+impact fixture → neutral grounded summary', () => {
+    const cv = package1Cv();
+    const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, REF);
+    const pipeline = runCvAiApplyPipeline({
+      cv,
+      locale: 'sr',
+      action: 'summary_stronger',
+      candidate: BAD_SR_SUMMARY_LATEST,
+      durationSnapshot,
+      referenceDateIso: REF,
+    });
+    assertSummaryInvariant(pipeline);
+    expect(pipeline.stateCv.summary).not.toMatch(/kuvarka|kuvarica|inicijativ|visok\w*\s+standard|efikasnij|poslovn\w*\s+odluk/iu);
+    expect(pipeline.stateCv.summary).toMatch(/četiri\s+godine/iu);
+    expect(pipeline.stateCv.personal.jobTitle).toBe('Kuvar');
+    expect(pipeline.finalized.roleDutyConflict).toBe(true);
+  });
+
+  it('English CORRECTED PROFESSIONAL SUMMARY marker never reaches state/export', () => {
+    expect(hasAiProtocolMarker(BAD_EN_SUMMARY_WITH_MARKER)).toBe(true);
+    expect(stripAiProtocolMarkers(BAD_EN_SUMMARY_WITH_MARKER)).not.toMatch(/CORRECTED PROFESSIONAL SUMMARY/i);
+    const cv = package1Cv();
+    const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, REF);
+    const pipeline = runCvAiApplyPipeline({
+      cv,
+      locale: 'en',
+      action: 'summary_stronger',
+      candidate: BAD_EN_SUMMARY_WITH_MARKER,
+      durationSnapshot,
+      referenceDateIso: REF,
+    });
+    assertSummaryInvariant(pipeline);
+    expect(pipeline.stateCv.summary).not.toMatch(/CORRECTED PROFESSIONAL SUMMARY/i);
+    expect(pipeline.stateCv.summary).not.toMatch(/senior team|compliance|organizational goals|cook/i);
+    expect(pipeline.pdfCv.summary).not.toMatch(/CORRECTED PROFESSIONAL SUMMARY/i);
+    expect(pipeline.docxCv.summary).not.toMatch(/CORRECTED PROFESSIONAL SUMMARY/i);
+  });
+
+  it('AI bullets never replace immutable canonical duties', () => {
+    const cv = package1Cv();
+    const before = cv.experience[0].canonicalDescription;
+    const finalized = finalizeCvAiFieldForApply({
+      action: 'experience_bullets',
+      field: 'experience_description',
+      requestedLocale: 'en',
+      cv,
+      candidate: BAD_EN_BULLETS,
+      experienceId: 'exp-egr',
+    });
+    expect(finalized.blocked).toBe(false);
+    const next = applyFinalizedBulletsToCv(cv, 'en', 'exp-egr', finalized);
+    expect(next.experience[0].canonicalDescription).toBe(before);
+    expect(next.experience[0].description).toMatch(/transport/i);
+    expect(next.experience[0].description).not.toMatch(/senior team|compliance/i);
+    // Second locale must still ground on original duties, not English AI text
+    const hi = finalizeCvAiFieldForApply({
+      action: 'experience_bullets',
+      field: 'experience_description',
+      requestedLocale: 'hi',
+      cv: next,
+      candidate: BAD_EN_BULLETS,
+      experienceId: 'exp-egr',
+    });
+    expect(hi.blocked).toBe(false);
+    expect(hi.text).toMatch(/परिवहन|गोदाम|लोडिंग/);
+    const afterHi = applyFinalizedBulletsToCv(next, 'hi', 'exp-egr', hi);
+    expect(afterHi.experience[0].canonicalDescription).toBe(before);
+  });
+
+  it('title leak: canonical Kuvar survives hi→sr→en display projections', () => {
+    let cv = package1Cv();
+    expect(cv.personal.jobTitle).toBe('Kuvar');
+    // Simulate mistaken write of quality projection (historical bug) — ensure
+    // forward path never keeps localized title after apply.
+    const hiProj = applyCvContentQuality(cv, 'hi', { gender: 'female' }).cv;
+    expect(hiProj.personal.jobTitle).toBe('रसोइया');
+    // State must remain canonical when AI applies
+    const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, REF);
+    const hi = runCvAiApplyPipeline({
+      cv,
+      locale: 'hi',
+      action: 'summary_generate',
+      candidate: BAD_HI_SUMMARY,
+      durationSnapshot,
+      referenceDateIso: REF,
+    });
+    expect(hi.stateCv.personal.jobTitle).toBe('Kuvar');
+    cv = hi.stateCv;
+    const sr = runCvAiApplyPipeline({
+      cv,
+      locale: 'sr',
+      action: 'summary_generate',
+      candidate: BAD_SR_SUMMARY_LATEST,
+      durationSnapshot,
+      referenceDateIso: REF,
+    });
+    expect(sr.stateCv.personal.jobTitle).toBe('Kuvar');
+    expect(localizeOccupationalTitleForProjection(sr.stateCv.personal.jobTitle, 'sr', 'female')).toBe('Kuvarica');
+    expect(localizeOccupationalTitleForProjection(sr.stateCv.personal.jobTitle, 'en', 'female')).toBe('Cook');
+    expect(localizeOccupationalTitleForProjection(sr.stateCv.personal.jobTitle, 'hi', 'female')).toBe('रसोइया');
+    // Even if storage were polluted with Hindi display title, projection recovers.
+    expect(localizeOccupationalTitleForProjection('रसोइया', 'sr', 'female')).toBe('Kuvarica');
+    expect(localizeOccupationalTitleForProjection('रसोइया', 'en', 'female')).toBe('Cook');
+    expect(sr.stateCv.summary).not.toMatch(/रसोइया/);
+    const en = runCvAiApplyPipeline({
+      cv: sr.stateCv,
+      locale: 'en',
+      action: 'summary_generate',
+      candidate: BAD_EN_SUMMARY_WITH_MARKER,
+      durationSnapshot,
+      referenceDateIso: REF,
+    });
+    expect(en.stateCv.personal.jobTitle).toBe('Kuvar');
+    expect(en.stateCv.summary).not.toMatch(/रसोइया|CORRECTED PROFESSIONAL SUMMARY/i);
+  });
+
+  it('acceptValidatedAiContent does not promote AI description to canonical', () => {
+    const cv = package1Cv();
+    const frozen = cv.experience[0].canonicalDescription;
+    const next = acceptValidatedAiContent(cv, {
+      locale: 'en',
+      experienceId: 'exp-egr',
+      description: BAD_EN_BULLETS,
+    });
+    expect(next.experience[0].canonicalDescription).toBe(frozen);
+    expect(next.experience[0].description).toBe(BAD_EN_BULLETS);
+  });
+
   it('generic occupation conflict: teacher + software duties → neutral opening', () => {
     const cv = package1Cv();
     cv.personal.jobTitle = 'Teacher';
@@ -372,12 +516,13 @@ describe('50× cold-state package-1 E2E', () => {
         cv,
         locale: 'sr',
         action: 'summary_stronger',
-        candidate: BAD_SR_SUMMARY,
+        candidate: BAD_SR_SUMMARY_LATEST,
         durationSnapshot,
         referenceDateIso: REF,
       });
       expect(sr.blocked).toBe(false);
-      expect(sr.stateCv.summary).not.toMatch(/kuvarica|neefikasnost|dokumentacij/iu);
+      expect(sr.stateCv.summary).not.toMatch(/kuvarka|kuvarica|inicijativ|neefikasnost/iu);
+      expect(sr.stateCv.personal.jobTitle).toBe('Kuvar');
       const enBullets = runCvAiApplyPipeline({
         cv: sr.stateCv,
         locale: 'en',
@@ -387,8 +532,18 @@ describe('50× cold-state package-1 E2E', () => {
         referenceDateIso: REF,
       });
       expect(enBullets.stateCv.experience[0].description).toMatch(/transport/i);
-      const hi = runCvAiApplyPipeline({
+      expect(enBullets.stateCv.experience[0].canonicalDescription).toMatch(/Transport, load/);
+      const enSum = runCvAiApplyPipeline({
         cv: enBullets.stateCv,
+        locale: 'en',
+        action: 'summary_stronger',
+        candidate: BAD_EN_SUMMARY_WITH_MARKER,
+        durationSnapshot,
+        referenceDateIso: REF,
+      });
+      expect(enSum.stateCv.summary).not.toMatch(/CORRECTED PROFESSIONAL SUMMARY/i);
+      const hi = runCvAiApplyPipeline({
+        cv: enSum.stateCv,
         locale: 'hi',
         action: 'summary_generate',
         candidate: BAD_HI_SUMMARY,
@@ -396,6 +551,7 @@ describe('50× cold-state package-1 E2E', () => {
         referenceDateIso: REF,
       });
       expect(hi.stateCv.summary).not.toMatch(/केसाथ|हूँऔर|रसोइया/);
+      expect(hi.stateCv.personal.jobTitle).toBe('Kuvar');
       expect(hi.pdfCv.summary).toBe(hi.stateCv.summary);
       expect(hi.docxCv.summary).toBe(hi.stateCv.summary);
     }

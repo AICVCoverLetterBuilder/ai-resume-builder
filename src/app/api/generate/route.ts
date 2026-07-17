@@ -802,7 +802,7 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
                 max_tokens: 600,
                 temperature: 0.3,
                 stream: false,
-                system: `You rewrite complete CV summaries in ${localeInfo.languageName}. Finish every sentence. Never invent duties. Plain text only.`,
+                system: `You rewrite complete CV summaries in ${localeInfo.languageName}. Finish every sentence. Never invent duties. Plain text only. Never prefix with labels like "CORRECTED PROFESSIONAL SUMMARY:".`,
                 messages: [{ role: 'user', content: prompt }],
               }, deadlineAt);
               repairFinishedAt = Date.now();
@@ -996,7 +996,7 @@ Rules:
                 max_tokens: 400,
                 temperature: 0.25,
                 stream: false,
-                system: `You repair CV text in ${localeInfo.languageName}. Keep the same facts. Finish every sentence. Plain text only.`,
+                system: `You repair CV text in ${localeInfo.languageName}. Keep the same facts. Finish every sentence. Plain text only. Never prefix with labels like "CORRECTED PROFESSIONAL SUMMARY:".`,
                 messages: [{ role: 'user', content: prompt }],
               }, deadlineAt);
               rewriteRepairFinishedAt = Date.now();

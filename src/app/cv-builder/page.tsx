@@ -1133,12 +1133,7 @@ export default function CVBuilderPage() {
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
-      commitCvUpdate((prev) => {
-        const applied = applyFinalizedBulletsToCv(prev, requestedLocale, expId, finalizedBullets);
-        return applyCvContentQuality(applied, requestedLocale, {
-          gender: applied.personal?.gender || '',
-        }).cv;
-      });
+      commitCvUpdate((prev) => applyFinalizedBulletsToCv(prev, requestedLocale, expId, finalizedBullets));
       recordProAiSuccess();
       finishAiClientRequest({
         ctx: reqCtx,

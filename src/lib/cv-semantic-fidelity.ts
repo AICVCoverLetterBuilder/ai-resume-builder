@@ -94,6 +94,8 @@ const UNSUPPORTED_DUTY_PATTERNS: RegExp[] = [
   /\bcompliance requirements?\b/iu,
   /\bdocumentation\b/iu,
   /\bsupporting team operations\b/iu,
+  /\bmaintained accurate records\b/iu,
+  /\brecords and documentation\b/iu,
   // Serbian / Croatian corporate inventions (package-1 exports) — phrase-bound,
   // not bare stems like evidencij/dokumentacij which appear in legitimate logging duties.
   /\bstarije\s+članove\s+tima\b/iu,
@@ -176,9 +178,18 @@ const UNSUPPORTED_ACHIEVEMENT_PATTERNS: RegExp[] = [
   /obezbe[đd]uj\w*\s+uspešn\w*\s+izvršenje/iu,
   /priprem\w*\s+precizn\w*\s+izveštaj/iu,
   /pouzdan\w*\s+osnov\w*\s+za\s+donošenje\s+odluka/iu,
-  /doprinosi\s+unapređenju\s+internih\s+procesa/iu,
-  /prepoznavanjem\s+neefikasnosti/iu,
-  /predlaganjem\s+praktičnih\s+rešenja/iu,
+  // Serbian / English package-1 impact inventions (latest real exports)
+  /visok\w*\s+standard\w*\s+u\s+rukovanju/iu,
+  /efikasnij\w*\s+funkcionisanju\s+tima/iu,
+  /uspešn\w*\s+izvršenj\w*\s+projekata/iu,
+  /\bpreuzimanje\s+inicijative\b/iu,
+  /jasn\w*\s+komunikacij\w*\s+između\s+odeljenja/iu,
+  /pouzdan\w*\s+osnov\w*\s+za\s+poslovn\w*\s+odluk/iu,
+  /consistently\s+ensuring\s+high\s+standards/iu,
+  /more\s+efficient\s+team\s+functioning/iu,
+  /taking\s+initiative/iu,
+  /clear\s+communication\s+between\s+departments/iu,
+  /reliable\s+basis\s+for\s+business\s+decisions/iu,
 ];
 
 /** Material logistics/process anchors that must survive localization when present in source. */

@@ -786,9 +786,11 @@ export type CvContentQualityOptions = {
 };
 
 /**
- * Shared content path for preview / PDF / DOCX.
- * Attaches duration claims to experience via snapshot; never invents dates.
- * Duration injection applies only to AI / repaired / deterministic_fallback summaries.
+ * Shared content path for preview / PDF / DOCX display projection.
+ * Localizes titles, language levels, and skills for the requested locale.
+ * IMPORTANT: The returned CV is a DISPLAY projection only — never write it back
+ * into React state / cvRef / autosave (that would persist localized titles like
+ * Hindi रसोइया into canonical storage and leak across locales).
  */
 export function applyCvContentQuality(
   cv: CVData,

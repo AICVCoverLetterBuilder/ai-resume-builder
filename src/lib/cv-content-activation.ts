@@ -24,6 +24,7 @@ import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 import { hasRepairBudget } from './ai-request-timing';
 import { normalizeHindiGeneratedWhitespace } from './cv-hindi-normalize';
+import { stripAiProtocolMarkers } from './cv-ai-protocol-strip';
 import { resolveOccupationalTitleForSummary } from './cv-role-title';
 import type { ExperienceDuration } from './cv-experience-duration';
 
@@ -49,6 +50,7 @@ export function buildBulletRepairPrompt(
     'Keep the SAME bullet count and the SAME duties as SOURCE BULLETS.',
     'Do NOT invent allergy checks, muddling, syrups, wastage, inventory shortages, kitchen staff, evening shifts, or other unsupported duties.',
     'Output ONLY bullet lines starting with "•".',
+    'Never prefix with labels like "CORRECTED BULLETS:", "OUTPUT:", or markdown headings.',
     'Unsupported issues:',
     formatCvFidelityViolationsForPrompt(violations),
     'SOURCE BULLETS:',
@@ -70,6 +72,7 @@ export function buildSummaryRepairPrompt(
     'Finish every sentence. Do not truncate mid-word.',
     'Use only SOURCE FACTS. Do not invent new duties, techniques, shifts, or achievements.',
     'Keep one consistent perspective (first person OR third person, not mixed).',
+    'Output ONLY the summary prose. Never prefix with labels like "CORRECTED PROFESSIONAL SUMMARY:", "REPAIRED SUMMARY:", "OUTPUT:", or markdown headings.',
     'Unsupported issues:',
     formatCvFidelityViolationsForPrompt(violations),
     'SOURCE FACTS:',
@@ -124,7 +127,10 @@ export async function activateCvExperienceBullets(options: {
   const canonical = bulletsForExperience(options.factSet, options.experienceIndex);
   const canonicalJoined = canonical.map((b) => b.value).join('\n');
   const englishFallback = deterministicBulletsFromCanonical(canonical);
-  const candidate = normalizeHindiGeneratedWhitespace(options.candidate || '', options.locale);
+  const candidate = normalizeHindiGeneratedWhitespace(
+    stripAiProtocolMarkers(options.candidate || ''),
+    options.locale,
+  );
   const first = validateLocalizedExperienceBullets(candidate, options.factSet, {
     locale: options.locale,
     gender: options.gender,
@@ -292,7 +298,10 @@ export async function activateCvSummary(options: {
    * — see `ai-request-timing.ts`. */
   deadlineAt?: number | null;
 }): Promise<CvContentActivation> {
-  const candidate = normalizeHindiGeneratedWhitespace(options.candidate || '', options.locale);
+  const candidate = normalizeHindiGeneratedWhitespace(
+    stripAiProtocolMarkers(options.candidate || ''),
+    options.locale,
+  );
   const first = validateLocalizedSummary(candidate, options.factSet, {
     locale: options.locale,
     gender: options.gender,
