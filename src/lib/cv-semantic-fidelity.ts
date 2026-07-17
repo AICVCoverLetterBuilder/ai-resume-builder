@@ -27,7 +27,11 @@ import {
   isValidOccupationalTitle,
 } from './cv-role-title';
 import { hasIncorrectSerbianDurationGrammar } from './cv-serbian-grammar';
-import { validateMaterialDutyCoverage } from './cv-material-duty-coverage';
+import {
+  validateMaterialDutyCoverage,
+  validateNoExtraGeneratedDuties,
+} from './cv-material-duty-coverage';
+import { findCvMetaFallbackMatch } from './cv-ai-meta-text';
 
 export type CvFidelityViolationKind =
   | 'unsupported_duty'
@@ -49,6 +53,8 @@ export type CvFidelityViolationKind =
   | 'current_role_tense_mismatch'
   | 'employment_tense_mismatch'
   | 'missing_canonical_duty'
+  | 'unsupported_generated_duty'
+  | 'meta_fallback_text'
   | 'mixed_locale_proficiency'
   | 'invalid_occupational_title_in_summary'
   | 'unsupported_claim'
@@ -576,20 +582,19 @@ export function validateCurrentRoleTenseMix(
     }
   }
   if (locale === 'hi' && isPresent) {
-    // Reject habitual past (करती थी / रखती थी) for current roles. Do not treat
-    // perfective CV style (किया / किए) as an automatic employment-tense failure —
-    // that is common Hindi CV wording and is repaired via present templates when needed.
+    // Habitual past and completed perfectives that present ongoing duties as finished.
     const pastHabitual = /(करती\s+थी|करता\s+था|रखती\s+थी|रखता\s+था|बनाए\s+रखती\s+थी|बनाए\s+रखता\s+था|सहयोग\s+करती\s+थी|सहयोग\s+करता\s+था)/u.test(text);
+    const pastPerfective = /(पालन\s+किया|तैयार\s+किए|तैयार\s+किया|समन्वय\s+किया|प्रबंधन\s+किया|सहायता\s+की|बनाया|परोसे)/u.test(text);
     const presentProg = /(कर\s+रही\s+हूँ|कर\s+रहा\s+हूँ)/u.test(text);
     const presentSimple = /(करती\s+हूँ|करता\s+हूँ|रखती\s+हूँ|रखता\s+हूँ|बनाए\s+रखती\s+हूँ|बनाए\s+रखता\s+हूँ|सहयोग\s+करती\s+हूँ|सहयोग\s+करता\s+हूँ)/u.test(text);
-    if (pastHabitual && (presentProg || presentSimple)) {
+    if ((pastHabitual || pastPerfective) && (presentProg || presentSimple)) {
       violations.push({
         kind: 'employment_tense_mismatch',
         matched: 'mixed-hi-past-present',
         section: 'experience',
       });
-    } else if (pastHabitual && !presentProg && !presentSimple) {
-      const m = text.match(/(करती\s+थी|करता\s+था|रखती\s+थी|रखता\s+था)/u);
+    } else if ((pastHabitual || pastPerfective) && !presentProg && !presentSimple) {
+      const m = text.match(/(करती\s+थी|करता\s+था|रखती\s+थी|रखता\s+था|पालन\s+किया|तैयार\s+किए|तैयार\s+किया)/u);
       violations.push({
         kind: 'employment_tense_mismatch',
         matched: m?.[0] || 'hi-past-for-present-role',
@@ -944,6 +949,24 @@ export function validateLocalizedExperienceBullets(
     violations.push({
       kind: 'missing_canonical_duty',
       matched: coverage.missing.join(','),
+      section: `experience-${experienceIndex}`,
+      evidence: diag,
+    });
+  }
+  const extras = validateNoExtraGeneratedDuties(sourceJoinedForCoverage, localizedDescription);
+  if (!extras.valid) {
+    violations.push({
+      kind: 'unsupported_generated_duty',
+      matched: extras.extras.join(','),
+      section: `experience-${experienceIndex}`,
+      evidence: diag,
+    });
+  }
+  const metaMatch = findCvMetaFallbackMatch(localizedDescription);
+  if (metaMatch) {
+    violations.push({
+      kind: 'meta_fallback_text',
+      matched: metaMatch,
       section: `experience-${experienceIndex}`,
       evidence: diag,
     });

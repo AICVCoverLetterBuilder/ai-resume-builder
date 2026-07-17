@@ -275,6 +275,8 @@ describe('cross-locale Present cooking coverage', () => {
       expect(coverage.valid, `${locale}: missing ${coverage.missing.join(',')}`).toBe(true);
       if (locale === 'en') {
         expect(text).toMatch(/\bPrepare\b/);
+        expect(text).toMatch(/\bMaintain\b/);
+        expect(text).toMatch(/\bCollaborate\b/);
         expect(text).not.toMatch(/\bPrepared\b/);
       }
       if (locale === 'sr') {

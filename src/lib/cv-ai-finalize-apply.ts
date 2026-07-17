@@ -49,6 +49,7 @@ import { normalizeSerbianDurationGrammar } from './cv-serbian-grammar';
 import { acceptValidatedAiContent } from './cv-canonical-snapshot';
 import { applyCvContentQuality } from './cv-content-quality';
 import { hasAiProtocolMarker, stripAiProtocolMarkers } from './cv-ai-protocol-strip';
+import { hasCvMetaFallbackText } from './cv-ai-meta-text';
 import { freezeCanonicalExperienceDescription } from './cv-canonical-facts';
 
 export type CvAiFinalizeAction =
@@ -233,6 +234,9 @@ function bulletsPass(
   if (hasAiProtocolMarker(description)) {
     return { ok: false, reason: 'protocol_marker_residual' };
   }
+  if (hasCvMetaFallbackText(description)) {
+    return { ok: false, reason: 'meta_fallback_text' };
+  }
   const fidelity = validateLocalizedExperienceBullets(description, factSet, {
     locale,
     gender: cv.personal?.gender || '',
@@ -242,7 +246,9 @@ function bulletsPass(
   });
   if (!fidelity.valid) {
     const preferred = fidelity.violations.find((v) =>
-      v.kind === 'missing_canonical_duty'
+      v.kind === 'unsupported_generated_duty'
+      || v.kind === 'meta_fallback_text'
+      || v.kind === 'missing_canonical_duty'
       || v.kind === 'employment_tense_mismatch'
       || v.kind === 'wrong_language'
       || v.kind === 'unsupported_claim'

@@ -42,7 +42,7 @@ const DUTY_RULES: DutyRule[] = [
   {
     key: 'hygiene_workplace',
     source: /higijen\w*|hygiene|radn\w*\s+prostor|workstation|workplace|čist|clean|स्वच्छ|कार्यस्थल/iu,
-    localized: /(hygiene|higijen|स्वच्छ|कार्यस्थल|workstation|workplace|clean|sauber|limpieza|hygiène|igiene|نظاف|гигиен|limpeza|衛生|bar area|radni prostor)/iu,
+    localized: /(hygiene|higijen|स्वच्छ|कार्यस्थल|workstation|workplace|clean|sauber|limpieza|hygiène|igiene|نظاف|гигиен|чистот|рабоч\w*\s+мест|limpeza|衛生|bar area|radni prostor|Arbeitsplatz|puesto de trabajo|poste de travail|postazione|مكان العمل|local de trabalho)/iu,
   },
   {
     key: 'kitchen_collaboration',
@@ -213,4 +213,62 @@ export function validateMaterialDutyCoverage(
     };
   }
   return { valid: true, required, missing: [] };
+}
+
+/** Extra industry duties that must not appear unless the source explicitly supports them. */
+const EXTRA_DUTY_CLAIMS: Array<{ label: string; claim: RegExp; support: RegExp }> = [
+  {
+    label: 'ingredient_or_material_storage',
+    claim: /(ingredient[- ]?stor|material[- ]?stor|सामग्री\s*भंडारण|भंडारण\s*प्रक्रिया|skladišt\w*\s+namirnic|Lebensmittel[- ]?Lager|almacenamiento de ingredientes|stockage des ingrédients|conservazione degli ingredienti|تخزين المكونات|хранения продуктов|armazenamento de ingredientes|食材保管)/iu,
+    support: /(ingredient|namirnic|skladišt\w*\s+namirnic|भंडारण|Lebensmittel[- ]?Lager|almacen|stockage|conservazione|تخزين|хранен|armazenamento|食材保管|freshness|свежин)/iu,
+  },
+  {
+    label: 'route_planning',
+    claim: /(route\s+plan|plan\w*\s+delivery\s+routes?|routing|ruta\s+plan|планирован\w*\s+маршрут|ルート計画)/iu,
+    support: /(route\s+plan|routing|ruta|маршрут|ルート)/iu,
+  },
+  {
+    label: 'sales_targets',
+    claim: /(sales\s+target|quota|ciljev\w*\s+prodaj|هدف\s+مبيعات|売上目標)/iu,
+    support: /(sales\s+target|quota|cilj\w*\s+prodaj|هدف|売上目標)/iu,
+  },
+  {
+    label: 'medication_administration',
+    claim: /(medicat(?:ion|e)|administer(?:ed|ing)?\s+drug|primen\w*\s+lek|إعطاء\s+الدواء|投薬)/iu,
+    support: /(medicat|drug|lek|دواء|投薬)/iu,
+  },
+  {
+    label: 'safety_inspections',
+    claim: /(safety\s+inspection|inspecciones? de seguridad|Sicherheitsinspektion|فحص\s+السلامة|安全点検)/iu,
+    support: /(safety\s+inspection|inspeccion|Sicherheitsinspektion|فحص|安全点検)/iu,
+  },
+];
+
+export type ExtraGeneratedDutyResult = {
+  valid: boolean;
+  extras: string[];
+  reason?: 'unsupported_generated_duty';
+};
+
+/**
+ * Inverse of coverage: generated text must not introduce material duties
+ * absent from the canonical source.
+ */
+export function validateNoExtraGeneratedDuties(
+  sourceDescription: string,
+  localizedDescription: string,
+): ExtraGeneratedDutyResult {
+  const source = (sourceDescription || '').normalize('NFKC');
+  const joined = (localizedDescription || '').normalize('NFKC');
+  if (!joined.trim()) return { valid: true, extras: [] };
+  const extras: string[] = [];
+  for (const row of EXTRA_DUTY_CLAIMS) {
+    if (row.claim.test(joined) && !row.support.test(source)) {
+      extras.push(row.label);
+    }
+  }
+  if (extras.length) {
+    return { valid: false, extras, reason: 'unsupported_generated_duty' };
+  }
+  return { valid: true, extras: [] };
 }

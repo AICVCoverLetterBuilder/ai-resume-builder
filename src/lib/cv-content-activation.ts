@@ -49,6 +49,14 @@ export function buildBulletRepairPrompt(
     .filter((v) => v.kind === 'missing_canonical_duty' || v.kind === 'material_duty_removed')
     .map((v) => v.matched)
     .filter(Boolean);
+  const extraDuties = violations
+    .filter((v) => v.kind === 'unsupported_generated_duty')
+    .map((v) => v.matched)
+    .filter(Boolean);
+  const metaHits = violations
+    .filter((v) => v.kind === 'meta_fallback_text')
+    .map((v) => v.matched)
+    .filter(Boolean);
   const tenseRequired = options?.isPresent === true
     ? 'present (ongoing current role — not completed past)'
     : options?.isPresent === false
@@ -58,11 +66,18 @@ export function buildBulletRepairPrompt(
     'CV BULLET FIDELITY REPAIR REQUIRED.',
     `Rewrite the experience bullets in ${locale}.`,
     'Preserve EVERY material canonical duty. Sentence combining is allowed only when no duty is dropped.',
-    'Do NOT invent allergy checks, muddling, syrups, wastage, inventory shortages, kitchen staff, evening shifts, cuisine types, or other unsupported duties.',
+    'Do NOT invent allergy checks, muddling, syrups, wastage, inventory shortages, kitchen staff, evening shifts, cuisine types, ingredient/material storage (unless in SOURCE), or other unsupported duties.',
+    'Do NOT include meta/grounding phrases such as "stated in the role duties" or locale equivalents.',
     `Required employment tense: ${tenseRequired}.`,
     options?.gender ? `Gender grammar: ${options.gender}.` : '',
     missingDuties.length
       ? `Missing duty categories that MUST be restored: ${missingDuties.join('; ')}.`
+      : '',
+    extraDuties.length
+      ? `Unsupported generated duties that MUST be removed: ${extraDuties.join('; ')}.`
+      : '',
+    metaHits.length
+      ? `Forbidden meta text detected: ${metaHits.join('; ')}.`
       : '',
     'Output ONLY bullet lines starting with "•".',
     'Never prefix with labels like "CORRECTED BULLETS:", "OUTPUT:", or markdown headings.',
@@ -70,7 +85,7 @@ export function buildBulletRepairPrompt(
     formatCvFidelityViolationsForPrompt(violations),
     'SOURCE BULLETS:',
     canonicalBullets,
-    'Previous invalid output (do not copy invented duties):',
+    'Previous invalid output (do not copy invented duties or meta wording):',
     previous.slice(0, 2500),
   ].filter(Boolean).join('\n');
 }

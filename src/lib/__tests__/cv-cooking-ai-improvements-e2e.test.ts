@@ -27,10 +27,10 @@ export const SR_COOKING_NL = `• Pripremala sam jela srpske i mediteranske kuhi
 • Poštovala sam higijenske procedure i pravila skladištenja namirnica.`;
 
 const GROUNDED_EN = formatExperienceBullets([
-  'Prepared Serbian and Mediterranean dishes in accordance with the restaurant’s established standards.',
-  'Organized food-preparation tasks and maintained an orderly kitchen workstation.',
-  'Coordinated with kitchen colleagues during daily service.',
-  'Followed hygiene and ingredient-storage procedures stated in the role duties.',
+  'Prepare Serbian and Mediterranean dishes in accordance with the restaurant’s established standards.',
+  'Organize food-preparation tasks and maintain an orderly kitchen workstation.',
+  'Collaborate with the kitchen team during daily service.',
+  'Maintain workplace hygiene.',
 ]);
 
 const BAD_EN_INVENTIONS = formatExperienceBullets([
@@ -107,7 +107,7 @@ describe('Serbian cooking → English AI Improvements apply pipeline', () => {
     });
     expect(pipeline.blocked).toBe(false);
     expect(pipeline.finalized.countedAsSuccess).toBe(true);
-    expect(pipeline.stateCv.experience[0].description).toMatch(/Prepared Serbian and Mediterranean/);
+    expect(pipeline.stateCv.experience[0].description).toMatch(/Prepare Serbian and Mediterranean/);
     expect(pipeline.stateCv.experience[0].canonicalDescription).toContain('Pripremala sam jela');
   });
 
@@ -170,7 +170,7 @@ describe('Serbian cooking → English AI Improvements apply pipeline', () => {
     });
     const next = applyFinalizedBulletsToCv(cv, 'en', 'exp-cook-1', finalized);
     expect(next.experience[0].canonicalDescription).toBe(before);
-    expect(next.experience[0].description).toMatch(/Prepared Serbian/);
+    expect(next.experience[0].description).toMatch(/Prepare Serbian/);
   });
 
   it('9. industry/level metadata do not invent management or impact', () => {

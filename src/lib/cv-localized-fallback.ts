@@ -187,16 +187,26 @@ const BULLET_BY_CATEGORY: Record<
       'Preparo de pratos de acordo com os padrões estabelecidos do restaurante e da cozinha.',
   },
   hi: {
-    beverage_service: () =>
-      'विभिन्न प्रकार के कॉकटेल, स्पिरिट्स और पेय तैयार करके परोसे।',
-    hygiene_safety: () =>
-      'बार क्षेत्र को साफ़ और व्यवस्थित रखा तथा स्वच्छता और सुरक्षा मानकों का पालन किया।',
-    customer_service_guest_relationship: () =>
-      'अतिथियों को ध्यानपूर्वक सेवा दी और ग्राहकों के साथ अच्छा संबंध बनाया।',
-    inventory_stock: () =>
-      'स्टॉक स्तरों का प्रबंधन किया, इन्वेंटरी गणना में सहायता की और प्रबंधन को आपूर्ति आवश्यकताएँ बताईं।',
-    food_preparation: () =>
-      'रेस्तराँ और रसोई के निर्धारित मानकों के अनुसार व्यंजन तैयार किए।',
+    beverage_service: (g) =>
+      g === 'male'
+        ? 'मैं विभिन्न प्रकार के कॉकटेल, स्पिरिट्स और पेय तैयार करके परोसता हूँ।'
+        : 'मैं विभिन्न प्रकार के कॉकटेल, स्पिरिट्स और पेय तैयार करके परोसती हूँ।',
+    hygiene_safety: (g) =>
+      g === 'male'
+        ? 'मैं बार क्षेत्र की स्वच्छता और सुरक्षा मानकों को बनाए रखता हूँ।'
+        : 'मैं बार क्षेत्र की स्वच्छता और सुरक्षा मानकों को बनाए रखती हूँ।',
+    customer_service_guest_relationship: (g) =>
+      g === 'male'
+        ? 'मैं अतिथियों को ध्यानपूर्वक सेवा देता हूँ और ग्राहकों के साथ अच्छा संबंध बनाता हूँ।'
+        : 'मैं अतिथियों को ध्यानपूर्वक सेवा देती हूँ और ग्राहकों के साथ अच्छा संबंध बनाती हूँ।',
+    inventory_stock: (g) =>
+      g === 'male'
+        ? 'मैं स्टॉक स्तरों का प्रबंधन करता हूँ और प्रबंधन को आपूर्ति आवश्यकताएँ बताता हूँ।'
+        : 'मैं स्टॉक स्तरों का प्रबंधन करती हूँ और प्रबंधन को आपूर्ति आवश्यकताएँ बताती हूँ।',
+    food_preparation: (g) =>
+      g === 'male'
+        ? 'मैं रेस्तराँ और रसोई के निर्धारित मानकों के अनुसार व्यंजन तैयार करता हूँ।'
+        : 'मैं रेस्तराँ और रसोई के निर्धारित मानकों के अनुसार व्यंजन तैयार करती हूँ।',
   },
   ja: {
     beverage_service: () =>
@@ -315,7 +325,13 @@ function localizeRoleLabel(
 }
 
 type GenericDutyIntent = 'process' | 'collaboration' | 'analysis' | 'planning' | 'logistics';
-type CookingDutyIntent = 'cuisine_prep' | 'kitchen_org' | 'kitchen_collab' | 'food_hygiene';
+type CookingDutyIntent =
+  | 'cuisine_prep'
+  | 'kitchen_org'
+  | 'kitchen_collab'
+  | 'workplace_hygiene'
+  | 'ingredient_storage'
+  | 'hygiene_and_storage';
 
 /**
  * Cooking / restaurant duty intents. Checked before office collaboration/process
@@ -325,18 +341,26 @@ type CookingDutyIntent = 'cuisine_prep' | 'kitchen_org' | 'kitchen_collab' | 'fo
 function classifyCookingDutyIntent(text: string): CookingDutyIntent | null {
   const t = text.toLowerCase().normalize('NFKC');
   const kitchenCtx = /(kuhinj|kitchen|jel\w*|namirnic|cuisine|dish(?:es)?|restaurant|food|mediteransk|mediterranean)/iu.test(t);
-  // Workplace hygiene in kitchen/restaurant CVs — do not require an explicit
-  // "kitchen" token when the duty already names hygiene of the work area.
-  // Do NOT treat bartender "bar area" hygiene as cooking food_hygiene.
-  if (
-    /\b(higijen\w*|hygiene|food[- ]?safet|bezbednost\s+hran|sigurnost\s+hran|skladišt\w*\s+namirnic|ingredient.?stor|freshness)/iu.test(t)
+  const hasIngredientStorage = /(skladišt\w*\s+namirnic|ingredient.?stor|material.?stor|भंडारण|Lebensmittel[- ]?Lager|almacenamiento de ingredientes|stockage des ingrédients|conservazione degli ingredienti|تخزين المكونات|хранения продуктов|armazenamento de ingredientes|食材保管|freshness|свежин)/iu.test(t);
+  const hasWorkplaceHygiene = (
+    /\b(higijen\w*|hygiene|čist|clean|स्वच्छ)/iu.test(t)
     && !/\b(bar\s+area|šank|shank|cocktail|koktel)/iu.test(t)
     && (
       kitchenCtx
-      || /namirnic|ingredient|hran|food|radn\w*\s+prostor|workstation|workplace|कार्यस्थल/iu.test(t)
+      || /radn\w*\s+prostor|workstation|workplace|कार्यस्थल|radnog\s+prostora/iu.test(t)
     )
-  ) {
-    return 'food_hygiene';
+  );
+  // Combined only when the source explicitly names both meanings.
+  if (hasIngredientStorage && hasWorkplaceHygiene) {
+    return 'hygiene_and_storage';
+  }
+  // Ingredient/material storage only when the source explicitly names it.
+  if (hasIngredientStorage && (kitchenCtx || /namirnic|ingredient|hran|food/iu.test(t))) {
+    return 'ingredient_storage';
+  }
+  // Workplace hygiene — narrowest meaning. Never expand into storage.
+  if (hasWorkplaceHygiene) {
+    return 'workplace_hygiene';
   }
   if (
     (kitchenCtx || /kuhinjsk\w*\s+tim|kitchen\s+team/iu.test(t))
@@ -379,12 +403,18 @@ const COOKING_INTENT_BULLET: Partial<
         : 'Organized food-preparation tasks and maintained an orderly kitchen workstation.',
     kitchen_collab: (_g, present) =>
       present
-        ? 'Coordinate with kitchen colleagues during daily service.'
-        : 'Coordinated with kitchen colleagues during daily service.',
-    food_hygiene: (_g, present) =>
+        ? 'Collaborate with the kitchen team during daily service.'
+        : 'Collaborated with the kitchen team during daily service.',
+    workplace_hygiene: (_g, present) =>
+      present ? 'Maintain workplace hygiene.' : 'Maintained workplace hygiene.',
+    ingredient_storage: (_g, present) =>
       present
-        ? 'Follow hygiene and workplace cleanliness procedures stated in the role duties.'
-        : 'Followed hygiene and workplace cleanliness procedures stated in the role duties.',
+        ? 'Follow ingredient-storage procedures.'
+        : 'Followed ingredient-storage procedures.',
+    hygiene_and_storage: (_g, present) =>
+      present
+        ? 'Maintain workplace hygiene and follow ingredient-storage procedures.'
+        : 'Maintained workplace hygiene and followed ingredient-storage procedures.',
   },
   de: {
     cuisine_prep: () =>
@@ -393,8 +423,12 @@ const COOKING_INTENT_BULLET: Partial<
       'Organisation der Essenszubereitung und Aufrechterhaltung eines ordentlichen Küchenarbeitsplatzes.',
     kitchen_collab: () =>
       'Abstimmung mit Küchenkolleginnen und -kollegen während des täglichen Service.',
-    food_hygiene: () =>
-      'Einhaltung der Hygiene- und Lebensmittel-Lagerungsverfahren gemäß den Aufgaben.',
+    workplace_hygiene: () =>
+      'Aufrechterhaltung der Hygiene am Arbeitsplatz.',
+    ingredient_storage: () =>
+      'Einhaltung der Lebensmittel-Lagerungsverfahren.',
+    hygiene_and_storage: () =>
+      'Aufrechterhaltung der Hygiene am Arbeitsplatz und Einhaltung der Lebensmittel-Lagerungsverfahren.',
   },
   es: {
     cuisine_prep: () =>
@@ -403,8 +437,12 @@ const COOKING_INTENT_BULLET: Partial<
       'Organización de las tareas de preparación de alimentos y mantenimiento de un puesto de cocina ordenado.',
     kitchen_collab: () =>
       'Coordinación con compañeros de cocina durante el servicio diario.',
-    food_hygiene: () =>
-      'Cumplimiento de los procedimientos de higiene y almacenamiento de ingredientes indicados en las funciones.',
+    workplace_hygiene: () =>
+      'Mantenimiento de la higiene del puesto de trabajo.',
+    ingredient_storage: () =>
+      'Cumplimiento de los procedimientos de almacenamiento de ingredientes.',
+    hygiene_and_storage: () =>
+      'Mantenimiento de la higiene del puesto de trabajo y cumplimiento del almacenamiento de ingredientes.',
   },
   fr: {
     cuisine_prep: () =>
@@ -413,8 +451,12 @@ const COOKING_INTENT_BULLET: Partial<
       'Organisation des tâches de préparation des aliments et maintien d’un poste de cuisine ordonné.',
     kitchen_collab: () =>
       'Coordination avec les collègues de cuisine pendant le service quotidien.',
-    food_hygiene: () =>
-      'Respect des procédures d’hygiène et de stockage des ingrédients prévues dans les missions.',
+    workplace_hygiene: () =>
+      'Maintien de l’hygiène du poste de travail.',
+    ingredient_storage: () =>
+      'Respect des procédures de stockage des ingrédients.',
+    hygiene_and_storage: () =>
+      'Maintien de l’hygiène du poste de travail et respect du stockage des ingrédients.',
   },
   it: {
     cuisine_prep: () =>
@@ -423,8 +465,12 @@ const COOKING_INTENT_BULLET: Partial<
       'Organizzazione delle attività di preparazione degli alimenti e mantenimento di una postazione di cucina ordinata.',
     kitchen_collab: () =>
       'Coordinamento con i colleghi di cucina durante il servizio quotidiano.',
-    food_hygiene: () =>
-      'Rispetto delle procedure di igiene e conservazione degli ingredienti previste nei compiti.',
+    workplace_hygiene: () =>
+      'Mantenimento dell’igiene della postazione di lavoro.',
+    ingredient_storage: () =>
+      'Rispetto delle procedure di conservazione degli ingredienti.',
+    hygiene_and_storage: () =>
+      'Mantenimento dell’igiene della postazione e rispetto della conservazione degli ingredienti.',
   },
   ar: {
     cuisine_prep: () =>
@@ -433,8 +479,12 @@ const COOKING_INTENT_BULLET: Partial<
       'تنظيم مهام تحضير الطعام والحفاظ على مكان عمل مرتب في المطبخ.',
     kitchen_collab: () =>
       'التنسيق مع زملاء المطبخ أثناء الخدمة اليومية.',
-    food_hygiene: () =>
-      'اتباع إجراءات النظافة وتخزين المكونات الواردة في المهام.',
+    workplace_hygiene: () =>
+      'الحفاظ على نظافة مكان العمل.',
+    ingredient_storage: () =>
+      'اتباع إجراءات تخزين المكونات.',
+    hygiene_and_storage: () =>
+      'الحفاظ على نظافة مكان العمل واتباع إجراءات تخزين المكونات.',
   },
   sr: {
     cuisine_prep: (g, present) =>
@@ -455,12 +505,24 @@ const COOKING_INTENT_BULLET: Partial<
         : g === 'male'
           ? 'Sarađivao sam sa kolegama iz kuhinjskog tima tokom dnevnog servisa.'
           : 'Sarađivala sam sa kolegama iz kuhinjskog tima tokom dnevnog servisa.',
-    food_hygiene: (g, present) =>
+    workplace_hygiene: (g, present) =>
       present
-        ? 'Poštujem higijenske procedure i održavam higijenu radnog prostora.'
+        ? 'Održavam higijenu radnog prostora.'
         : g === 'male'
-          ? 'Poštovao sam higijenske procedure i pravila skladištenja namirnica.'
-          : 'Poštovala sam higijenske procedure i pravila skladištenja namirnica.',
+          ? 'Održavao sam higijenu radnog prostora.'
+          : 'Održavala sam higijenu radnog prostora.',
+    ingredient_storage: (g, present) =>
+      present
+        ? 'Poštujem pravila skladištenja namirnica.'
+        : g === 'male'
+          ? 'Poštovao sam pravila skladištenja namirnica.'
+          : 'Poštovala sam pravila skladištenja namirnica.',
+    hygiene_and_storage: (g, present) =>
+      present
+        ? 'Održavam higijenu radnog prostora i poštujem pravila skladištenja namirnica.'
+        : g === 'male'
+          ? 'Održavao sam higijenu radnog prostora i poštovao pravila skladištenja namirnica.'
+          : 'Održavala sam higijenu radnog prostora i poštovala pravila skladištenja namirnica.',
   },
   hr: {
     cuisine_prep: (g, present) =>
@@ -481,19 +543,29 @@ const COOKING_INTENT_BULLET: Partial<
         : g === 'male'
           ? 'Surađivao sam s kolegama iz kuhinjskog tima tijekom dnevnog servisa.'
           : 'Surađivala sam s kolegama iz kuhinjskog tima tijekom dnevnog servisa.',
-    food_hygiene: (g, present) =>
+    workplace_hygiene: (g, present) =>
       present
-        ? 'Poštujem higijenske procedure i održavam higijenu radnog prostora.'
+        ? 'Održavam higijenu radnog prostora.'
         : g === 'male'
-          ? 'Poštovao sam higijenske procedure i pravila skladištenja namirnica.'
-          : 'Poštovala sam higijenske procedure i pravila skladištenja namirnica.',
+          ? 'Održavao sam higijenu radnog prostora.'
+          : 'Održavala sam higijenu radnog prostora.',
+    ingredient_storage: (g, present) =>
+      present
+        ? 'Poštujem pravila skladištenja namirnica.'
+        : g === 'male'
+          ? 'Poštovao sam pravila skladištenja namirnica.'
+          : 'Poštovala sam pravila skladištenja namirnica.',
+    hygiene_and_storage: (g, present) =>
+      present
+        ? 'Održavam higijenu radnog prostora i poštujem pravila skladištenja namirnica.'
+        : g === 'male'
+          ? 'Održavao sam higijenu radnog prostora i poštovao pravila skladištenja namirnica.'
+          : 'Održavala sam higijenu radnog prostora i poštovala pravila skladištenja namirnica.',
   },
   ru: {
     cuisine_prep: (g, present) =>
       present
-        ? (g === 'male'
-          ? 'Готовлю блюда в соответствии с установленными стандартами ресторана.'
-          : 'Готовлю блюда в соответствии с установленными стандартами ресторана.')
+        ? 'Готовлю блюда в соответствии с установленными стандартами ресторана.'
         : g === 'male'
           ? 'Готовил блюда в соответствии с установленными стандартами ресторана.'
           : 'Готовила блюда в соответствии с установленными стандартами ресторана.',
@@ -509,12 +581,24 @@ const COOKING_INTENT_BULLET: Partial<
         : g === 'male'
           ? 'Сотрудничал с коллегами кухонной бригады во время ежедневного обслуживания.'
           : 'Сотрудничала с коллегами кухонной бригады во время ежедневного обслуживания.',
-    food_hygiene: (g, present) =>
+    workplace_hygiene: (g, present) =>
       present
-        ? 'Соблюдаю гигиенические процедуры и поддерживаю чистоту рабочего места.'
+        ? 'Поддерживаю чистоту рабочего места.'
         : g === 'male'
-          ? 'Соблюдал гигиенические процедуры и правила хранения продуктов.'
-          : 'Соблюдала гигиенические процедуры и правила хранения продуктов.',
+          ? 'Поддерживал чистоту рабочего места.'
+          : 'Поддерживала чистоту рабочего места.',
+    ingredient_storage: (g, present) =>
+      present
+        ? 'Соблюдаю правила хранения продуктов.'
+        : g === 'male'
+          ? 'Соблюдал правила хранения продуктов.'
+          : 'Соблюдала правила хранения продуктов.',
+    hygiene_and_storage: (g, present) =>
+      present
+        ? 'Поддерживаю чистоту рабочего места и соблюдаю правила хранения продуктов.'
+        : g === 'male'
+          ? 'Поддерживал чистоту рабочего места и соблюдал правила хранения продуктов.'
+          : 'Поддерживала чистоту рабочего места и соблюдала правила хранения продуктов.',
   },
   'pt-BR': {
     cuisine_prep: () =>
@@ -523,8 +607,12 @@ const COOKING_INTENT_BULLET: Partial<
       'Organização das tarefas de preparação de alimentos e manutenção de uma estação de cozinha ordenada.',
     kitchen_collab: () =>
       'Coordenação com colegas de cozinha durante o serviço diário.',
-    food_hygiene: () =>
-      'Cumprimento dos procedimentos de higiene e armazenamento de ingredientes indicados nas funções.',
+    workplace_hygiene: () =>
+      'Manutenção da higiene do local de trabalho.',
+    ingredient_storage: () =>
+      'Cumprimento dos procedimentos de armazenamento de ingredientes.',
+    hygiene_and_storage: () =>
+      'Manutenção da higiene do local de trabalho e cumprimento do armazenamento de ingredientes.',
   },
   hi: {
     cuisine_prep: (g, present) =>
@@ -551,7 +639,7 @@ const COOKING_INTENT_BULLET: Partial<
         : (g === 'male'
           ? 'मैं रसोई टीम के साथ सहयोग करता था।'
           : 'मैं रसोई टीम के साथ सहयोग करती थी।'),
-    food_hygiene: (g, present) =>
+    workplace_hygiene: (g, present) =>
       present
         ? (g === 'male'
           ? 'मैं कार्यस्थल की स्वच्छता बनाए रखता हूँ।'
@@ -559,6 +647,22 @@ const COOKING_INTENT_BULLET: Partial<
         : (g === 'male'
           ? 'मैं कार्यस्थल की स्वच्छता बनाए रखता था।'
           : 'मैं कार्यस्थल की स्वच्छता बनाए रखती थी।'),
+    ingredient_storage: (g, present) =>
+      present
+        ? (g === 'male'
+          ? 'मैं सामग्री भंडारण प्रक्रियाओं का पालन करता हूँ।'
+          : 'मैं सामग्री भंडारण प्रक्रियाओं का पालन करती हूँ।')
+        : (g === 'male'
+          ? 'मैं सामग्री भंडारण प्रक्रियाओं का पालन करता था।'
+          : 'मैं सामग्री भंडारण प्रक्रियाओं का पालन करती थी।'),
+    hygiene_and_storage: (g, present) =>
+      present
+        ? (g === 'male'
+          ? 'मैं कार्यस्थल की स्वच्छता बनाए रखता हूँ और सामग्री भंडारण प्रक्रियाओं का पालन करता हूँ।'
+          : 'मैं कार्यस्थल की स्वच्छता बनाए रखती हूँ और सामग्री भंडारण प्रक्रियाओं का पालन करती हूँ।')
+        : (g === 'male'
+          ? 'मैं कार्यस्थल की स्वच्छता बनाए रखता था और सामग्री भंडारण प्रक्रियाओं का पालन करता था।'
+          : 'मैं कार्यस्थल की स्वच्छता बनाए रखती थी और सामग्री भंडारण प्रक्रियाओं का पालन करती थी।'),
   },
   ja: {
     cuisine_prep: (_g, present) =>
@@ -573,10 +677,18 @@ const COOKING_INTENT_BULLET: Partial<
       present
         ? '日常サービス中に厨房の同僚と連携している。'
         : '日常サービス中に厨房の同僚と連携した。',
-    food_hygiene: (_g, present) =>
+    workplace_hygiene: (_g, present) =>
       present
-        ? '職務に示された衛生および職場の清潔手順に従っている。'
-        : '職務に示された衛生および食材保管手順に従った。',
+        ? '職場の衛生を維持している。'
+        : '職場の衛生を維持した。',
+    ingredient_storage: (_g, present) =>
+      present
+        ? '食材保管手順に従っている。'
+        : '食材保管手順に従った。',
+    hygiene_and_storage: (_g, present) =>
+      present
+        ? '職場の衛生を維持し、食材保管手順に従っている。'
+        : '職場の衛生を維持し、食材保管手順に従った。',
   },
 };
 
@@ -975,7 +1087,24 @@ function localizedBulletForFact(
     return '';
   }
   const table = BULLET_BY_CATEGORY[locale] || BULLET_BY_CATEGORY.en;
-  return table[category](g).trim();
+  let line = table[category](g).trim();
+  // Hindi category shells above are present-tense; convert for completed roles.
+  if (locale === 'hi' && !isPresent) {
+    line = line
+      .replace(/करती हूँ/gu, 'करती थी')
+      .replace(/करता हूँ/gu, 'करता था')
+      .replace(/रखती हूँ/gu, 'रखती थी')
+      .replace(/रखता हूँ/gu, 'रखता था')
+      .replace(/देती हूँ/gu, 'देती थी')
+      .replace(/देता हूँ/gu, 'देता था')
+      .replace(/बनाती हूँ/gu, 'बनाती थी')
+      .replace(/बनाता हूँ/gu, 'बनाता था')
+      .replace(/परोसती हूँ/gu, 'परोसती थी')
+      .replace(/परोसता हूँ/gu, 'परोसता था')
+      .replace(/बताती हूँ/gu, 'बताती थी')
+      .replace(/बताता हूँ/gu, 'बताता था');
+  }
+  return line;
 }
 
 export function localizeCanonicalBulletLine(
