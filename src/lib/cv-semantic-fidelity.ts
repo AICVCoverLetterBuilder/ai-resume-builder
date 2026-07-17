@@ -21,7 +21,12 @@ import {
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { hasSuspiciousHindiMergedTokens } from './cv-hindi-normalize';
 import { isLocale } from './i18n/translations';
-import { isValidOccupationalTitle } from './cv-role-title';
+import {
+  conflictingTitleFormsInSummary,
+  evaluateRoleDutyConsistency,
+  isValidOccupationalTitle,
+} from './cv-role-title';
+import { hasIncorrectSerbianDurationGrammar } from './cv-serbian-grammar';
 
 export type CvFidelityViolationKind =
   | 'unsupported_duty'
@@ -81,10 +86,31 @@ const UNSUPPORTED_DUTY_PATTERNS: RegExp[] = [
   /\borganizational goals?\b/iu,
   /\bclient requirements?\b/iu,
   /\bidentifying inefficienc(?:y|ies)\b/iu,
+  /\bidentifying process inefficienc(?:y|ies)\b/iu,
   /\bproposing practical solutions?\b/iu,
   /\bdeadlines? and deliverables?\b/iu,
+  /\btimely completion of assigned tasks\b/iu,
+  /\bconsistently deliver(?:s|ed)? results on time\b/iu,
   /\bcompliance requirements?\b/iu,
   /\bdocumentation\b/iu,
+  /\bsupporting team operations\b/iu,
+  // Serbian / Croatian corporate inventions (package-1 exports) — phrase-bound,
+  // not bare stems like evidencij/dokumentacij which appear in legitimate logging duties.
+  /\bstarije\s+članove\s+tima\b/iu,
+  /\bciljevima\s+organizacije\b/iu,
+  /\bzahtevima\s+klijenata\b/iu,
+  /\bneefikasnost(?:i|ima)?\b/iu,
+  /\bpraktičn\w*\s+rešenj\w*\b/iu,
+  /\bzavršili\s+na\s+vreme\b/iu,
+  /\busklađenost(?:i)?\b/iu,
+  /\bevidencij\w*.{0,80}usklađenost/iu,
+  /\bdokumentacij\w*.{0,80}(?:usklađenost|compliance)/iu,
+  /\bvodi\s+preciznu\s+evidenciju\b/iu,
+  // Hindi unsupported inventions
+  /टीम\s+ऑपरेशन/u,
+  /प्रक्रिया\s+की\s+कमियों/u,
+  /निर्धारित\s+समय/u,
+  /समय\s+सीमा/u,
   RECIPE_INVENTION,
 ];
 
@@ -150,14 +176,27 @@ const UNSUPPORTED_ACHIEVEMENT_PATTERNS: RegExp[] = [
   /obezbe[đd]uj\w*\s+uspešn\w*\s+izvršenje/iu,
   /priprem\w*\s+precizn\w*\s+izveštaj/iu,
   /pouzdan\w*\s+osnov\w*\s+za\s+donošenje\s+odluka/iu,
+  /doprinosi\s+unapređenju\s+internih\s+procesa/iu,
+  /prepoznavanjem\s+neefikasnosti/iu,
+  /predlaganjem\s+praktičnih\s+rešenja/iu,
 ];
 
 /** Material logistics/process anchors that must survive localization when present in source. */
 const MATERIAL_DUTY_ANCHORS: Array<{ source: RegExp; localized: RegExp; label: string }> = [
   {
     source: /\b(transport|utovar|istovar|load|unload|deliver|delivery|isporuč|परिवहन|डिलीवरी)\b/iu,
-    localized: /\b(transport|load|unload|deliver|delivery|utovar|istovar|isporuč|परिवहन|लोडिंग|डिलीवरी)\b/iu,
+    localized: /(transport|load|unload|deliver|delivery|utovar|istovar|isporuč|परिवहन|लोडिंग|डिलीवरी|Beladung|Auslieferung|carga|entrega|chargement|livraison|trasporto|consegna|نقل|تسليم|погрузк|доставк|carregamento|輸送|配送)/iu,
     label: 'logistics-transport',
+  },
+  {
+    source: /\b(warehouse|skladišt|गोदाम)\b/iu,
+    localized: /(warehouse|skladišt|गोदाम|lager|almacén|entrepôt|magazzino|склад|armazém|倉庫|مستودع)/iu,
+    label: 'warehouse-operations',
+  },
+  {
+    source: /\b(analy[sz]|izveštaj|report|विश्लेषण|रिपोर्ट|poslovne\s+podatke|business\s+data)\b/iu,
+    localized: /(analy[sz]|izveštaj|report|विश्लेषण|रिपोर्ट|data|podatk|daten|données|dati|данн|dados|データ|بيانات)/iu,
+    label: 'data-analysis-reporting',
   },
 ];
 
@@ -185,6 +224,8 @@ const LOCALE_QUALITY_PATTERNS: Array<{ locale?: Locale; re: RegExp; kind?: CvFid
   { locale: 'sr', re: /\bkokteile\b/iu, kind: 'locale_quality' },
   { locale: 'sr', re: /\bbartening/iu, kind: 'locale_quality' },
   { locale: 'sr', re: /\bsrednje\s+napredn/iu, kind: 'language_level_mismatch' },
+  { locale: 'sr', re: /\b(?:dve|dvije|tri|četiri|cetiri|2|3|4)\s+godina\b/iu, kind: 'locale_quality' },
+  { locale: 'hr', re: /\b(?:dve|dvije|tri|četiri|cetiri|2|3|4)\s+godina\b/iu, kind: 'locale_quality' },
   { locale: 'hr', re: /\bUpravljala sam gostima\b/iu, kind: 'locale_quality' },
   { locale: 'ru', re: /Опытн(?:ый|ого)\s+бартендер[\s\S]{0,80}специализирующ(?:аяся|ейся)/iu, kind: 'gender_form_mismatch' },
   { locale: 'ru', re: /командный игрок,\s*способная/iu, kind: 'locale_quality' },
@@ -420,6 +461,61 @@ export function validateSummaryOccupationalTitle(
     });
   }
   return violations;
+}
+
+/** Reject summaries that force a conflicting occupation title into prose. */
+export function validateSummaryForcedConflictingTitle(
+  summary: string,
+  options: {
+    locale?: Locale | string;
+    profileJobTitle?: string;
+    experienceTitle?: string;
+    dutiesText?: string;
+    roleDutyConflict?: boolean;
+  },
+): CvFidelityViolation[] {
+  const violations: CvFidelityViolation[] = [];
+  const conflict = options.roleDutyConflict
+    ?? evaluateRoleDutyConsistency({
+      profileJobTitle: options.profileJobTitle,
+      experienceTitle: options.experienceTitle,
+      dutiesText: options.dutiesText,
+    }).conflict;
+  if (!conflict) return violations;
+  const consistency = evaluateRoleDutyConsistency({
+    profileJobTitle: options.profileJobTitle,
+    experienceTitle: options.experienceTitle,
+    dutiesText: options.dutiesText,
+  });
+  const locale = (options.locale || 'en') as Locale;
+  for (const re of conflictingTitleFormsInSummary(consistency.titleCategory, locale)) {
+    const m = summary.match(re);
+    if (m?.[0]) {
+      violations.push({
+        kind: 'unsupported_summary_fact',
+        matched: `forced-conflicting-title:${m[0]}`,
+        section: 'summary',
+        evidence: `titleCategory=${consistency.titleCategory}`,
+      });
+    }
+  }
+  return violations;
+}
+
+export function validateSerbianDurationGrammar(
+  text: string,
+  locale?: Locale | string,
+): CvFidelityResult {
+  if (locale !== 'sr' && locale !== 'hr') return { valid: true, violations: [] };
+  if (!hasIncorrectSerbianDurationGrammar(text)) return { valid: true, violations: [] };
+  return {
+    valid: false,
+    violations: [{
+      kind: 'locale_quality',
+      matched: 'serbian-duration-declension',
+      section: 'summary',
+    }],
+  };
 }
 
 export function validateCurrentRoleTenseMix(
@@ -982,6 +1078,18 @@ export function validateLocalizedSummary(
     locale: options.locale,
     experienceTitle: factSet.facts.find((f) => f.type === 'role')?.value,
   }));
+  violations.push(...validateSummaryForcedConflictingTitle(joined, {
+    locale: options.locale,
+    profileJobTitle: factSet.facts.find((f) => f.type === 'job_title')?.value,
+    experienceTitle: factSet.facts.find((f) => f.type === 'role')?.value,
+    dutiesText: factSet.facts
+      .filter((f) => f.type === 'experience_bullet')
+      .map((f) => f.sourceText || f.value)
+      .join('\n'),
+  }));
+  if (options.locale === 'sr' || options.locale === 'hr') {
+    violations.push(...validateSerbianDurationGrammar(joined, options.locale).violations);
+  }
   return { valid: violations.length === 0, violations };
 }
 

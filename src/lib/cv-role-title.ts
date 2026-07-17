@@ -1,12 +1,39 @@
 /**
- * Occupational title resolver for generated summary prose only.
- * Never use placeholder experience titles (e.g. "V") as the candidate profession.
+ * Occupational title resolver + generic title↔duty consistency.
  * Display localization must never mutate the canonical stored title.
+ * Conflict handling is category-based (not Kuvar/logistics-hardcoded).
  */
 import type { Locale } from './i18n/translations';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
 
 const PLACEHOLDER_TITLE = /^(n\/a|na|tbd|test|xxx|position|role|job|title|none|unknown)$/i;
+
+export type OccupationCategory =
+  | 'cooking'
+  | 'teaching'
+  | 'accounting'
+  | 'design'
+  | 'sales'
+  | 'healthcare'
+  | 'software'
+  | 'logistics'
+  | 'manufacturing'
+  | 'driving'
+  | 'unknown';
+
+export type DutyFamily =
+  | 'cooking'
+  | 'teaching'
+  | 'accounting'
+  | 'design'
+  | 'sales'
+  | 'healthcare'
+  | 'software'
+  | 'logistics'
+  | 'manufacturing'
+  | 'driving'
+  | 'office_process'
+  | 'generic';
 
 export function isValidOccupationalTitle(title: string): boolean {
   const t = (title || '').trim();
@@ -41,7 +68,6 @@ function localizeInteriorDesigner(locale: Locale, gender?: string): string {
   return 'Interior Designer';
 }
 
-/** Cook / chef family — display only; never invent cooking duties. */
 function localizeCook(locale: Locale, gender?: string): string {
   const g = normalizeCoverLetterGender(gender);
   if (locale === 'hi') return 'रसोइया';
@@ -60,34 +86,239 @@ function localizeCook(locale: Locale, gender?: string): string {
   return 'Cook';
 }
 
-const COOK_TITLE_RE = /\b(kuvar(?:ica)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар|रसोइया|طباخ)\b/iu;
-/** Prefix stems — Serbian/Croatian inflect, so trailing `\b` after the stem is unsafe. */
-const LOGISTICS_DUTY_RE =
-  /\b(?:transport|utovar|istovar|load(?:ing)?|unload|deliver|delivery|warehouse|skladišt|viličar|vilicar|forklift|logistics|isporuč|isporuc|prevoz)|परिवहन|गोदाम|डिलीवरी/iu;
-const PROCESS_REPORT_DUTY_RE =
-  /\b(?:internal\s+process|process(?:es)?|cross[- ]?functional|collaborat|analy[sz]|report|izveštaj|izvestaj|proces|saradn|sarađ|sarad|koordin)|प्रक्रिया|सहयोग|विश्लेषण|रिपोर्ट/iu;
-const COOKING_DUTY_RE =
-  /\b(?:cook(?:ing)?|recipe|kitchen|menu|food\s+prep|priprem\w*\s+hran|kuhinj)|भोजन|पकवान|طبخ/iu;
+const TITLE_CATEGORY_RULES: Array<{ category: OccupationCategory; re: RegExp; confidence: 'high' }> = [
+  {
+    category: 'cooking',
+    re: /\b(kuvar(?:ica)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар|रसोइया|طباخ|料理人)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'teaching',
+    re: /\b(teacher|nastavnik|nastavnica|učitelj(?:ica)?|profesor(?:ka)?|lehrer(?:in)?|enseignant|profesor| معلم| शिक्षक|教師)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'accounting',
+    re: /\b(accountant|računovo[dđ](?:a|kinja)?|buchhalter(?:in)?|comptable|contabile|бухгалтер| المحاسب| लेखाकार)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'design',
+    re: /\b(designer|dizajner(?:ka)?|designer(?:in)?|diseñador|デザイナー| مصمم| डिज़ाइनर)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'sales',
+    re: /\b(sales|prodavac|prodavačica|verkäufer(?:in)?|vendeur|vendedor|продавец| مندوب مبيعات| विक्रेता)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'healthcare',
+    re: /\b(nurse|medicinsk|arzt|ärztin|doctor|doktor(?:ka)?|sestra|pfleger(?:in)?|infirmier|enfermeir| врач| медсестр| ممرض| नर्स|医師|看護師)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'software',
+    re: /\b(software|developer|programer(?:ka)?|entwickler|développeur|desarrollador|разработчик| مطور| डेवलपर|エンジニア)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'logistics',
+    re: /\b(warehouse|skladišt|logist|forklift|viličar|magazinier|lagerist)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'manufacturing',
+    re: /\b(production\s+operator|operater(?:ka)?\s+u\s+proizvod|manufactur|fabrika|工場)\b/iu,
+    confidence: 'high',
+  },
+  {
+    category: 'driving',
+    re: /\b(driver|vozač(?:ica)?|fahrer(?:in)?|chauffeur|conductor|водитель| سائق| चालक|運転手)\b/iu,
+    confidence: 'high',
+  },
+];
+
+const DUTY_FAMILY_RULES: Array<{ family: DutyFamily; re: RegExp; confidence: 'high' }> = [
+  {
+    family: 'cooking',
+    re: /\b(cook(?:ing)?|recipe|kitchen|menu|food\s+prep|priprem\w*\s+hran|kuhinj)|भोजन|पकवान|طبخ/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'logistics',
+    re: /\b(?:transport|utovar|istovar|load(?:ing)?|unload|deliver|delivery|warehouse|skladišt|viličar|vilicar|forklift|logistics|isporuč|isporuc|prevoz)|परिवहन|गोदाम|डिलीवरी/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'office_process',
+    re: /\b(?:internal\s+process|process(?:es)?|cross[- ]?functional|collaborat|analy[sz]|report|izveštaj|izvestaj|proces|saradn|sarađ|sarad|koordin)|प्रक्रिया|सहयोग|विश्लेषण|रिपोर्ट/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'software',
+    re: /\b(?:software|code|coding|api|frontend|backend|deploy|git|react|java|python|programir)\b/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'healthcare',
+    re: /\b(?:patient|pacijen|nurs|clinic|hospital|bolnic|medicin|therapy|therapy)\b/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'teaching',
+    re: /\b(?:lesson|učion|classroom|curriculum|nastav|student|đak|pupil|pedagog)\b/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'accounting',
+    re: /\b(?:ledger|invoice|računovod|bookkeep|bilan|audit|porez|tax\s+return)\b/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'design',
+    re: /\b(?:figma|wireframe|typography|layout|branding|ui\/ux|prototyp)\b/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'sales',
+    re: /\b(?:quota|pipeline|crm|upsell|closing\s+deals|prodaj)\b/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'manufacturing',
+    re: /\b(?:assembly|proizvodn|cnc|machine\s+operat|quality\s+control\s+line)\b/iu,
+    confidence: 'high',
+  },
+  {
+    family: 'driving',
+    re: /\b(?:driving|vožnj|route|delivery\s+route|truck|kamion)\b/iu,
+    confidence: 'high',
+  },
+];
+
+/** Compatible pairs: occupation may naturally appear with these duty families. */
+const COMPATIBLE: Record<OccupationCategory, DutyFamily[]> = {
+  cooking: ['cooking'],
+  teaching: ['teaching'],
+  accounting: ['accounting', 'office_process'],
+  design: ['design'],
+  sales: ['sales', 'office_process'],
+  healthcare: ['healthcare'],
+  software: ['software', 'office_process'],
+  logistics: ['logistics', 'office_process', 'driving'],
+  manufacturing: ['manufacturing', 'office_process', 'logistics'],
+  driving: ['driving', 'logistics'],
+  unknown: [],
+};
+
+export function classifyOccupationCategory(title: string): {
+  category: OccupationCategory;
+  confidence: 'high' | 'low';
+} {
+  const t = (title || '').trim();
+  if (!t) return { category: 'unknown', confidence: 'low' };
+  for (const rule of TITLE_CATEGORY_RULES) {
+    if (rule.re.test(t)) return { category: rule.category, confidence: rule.confidence };
+  }
+  return { category: 'unknown', confidence: 'low' };
+}
+
+export function classifyDutyFamilies(dutiesText: string): Array<{
+  family: DutyFamily;
+  confidence: 'high' | 'low';
+}> {
+  const duties = (dutiesText || '').trim();
+  if (!duties) return [{ family: 'generic', confidence: 'low' }];
+  const found: Array<{ family: DutyFamily; confidence: 'high' | 'low' }> = [];
+  for (const rule of DUTY_FAMILY_RULES) {
+    if (rule.re.test(duties)) found.push({ family: rule.family, confidence: rule.confidence });
+  }
+  return found.length ? found : [{ family: 'generic', confidence: 'low' }];
+}
+
+export type RoleDutyConsistencyResult = {
+  conflict: boolean;
+  titleCategory: OccupationCategory;
+  dutyFamilies: DutyFamily[];
+  confidence: 'high' | 'low';
+};
 
 /**
- * True when the stored occupational title belongs to a different duty family than
- * the experience bullets (e.g. Kuvar + warehouse/logistics/process duties).
- * Used to avoid forcing a contradictory title into Summary openings.
+ * Strong conflict only when both sides are high-confidence and incompatible.
+ * Low confidence → no conflict claim (do not invent occupation).
  */
+export function evaluateRoleDutyConsistency(options: {
+  profileJobTitle?: string;
+  experienceTitle?: string;
+  dutiesText?: string;
+}): RoleDutyConsistencyResult {
+  const title = `${options.profileJobTitle || ''} ${options.experienceTitle || ''}`.trim();
+  const duties = (options.dutiesText || '').trim();
+  const occ = classifyOccupationCategory(title);
+  const dutyHits = classifyDutyFamilies(duties);
+  const dutyFamilies = dutyHits.map((d) => d.family);
+  if (occ.confidence !== 'high' || occ.category === 'unknown') {
+    return { conflict: false, titleCategory: occ.category, dutyFamilies, confidence: 'low' };
+  }
+  const highDuties = dutyHits.filter((d) => d.confidence === 'high' && d.family !== 'generic');
+  if (!highDuties.length) {
+    return { conflict: false, titleCategory: occ.category, dutyFamilies, confidence: 'low' };
+  }
+  const compatible = COMPATIBLE[occ.category] || [];
+  const anyCompatible = highDuties.some((d) => compatible.includes(d.family));
+  if (anyCompatible) {
+    return { conflict: false, titleCategory: occ.category, dutyFamilies, confidence: 'high' };
+  }
+  return { conflict: true, titleCategory: occ.category, dutyFamilies, confidence: 'high' };
+}
+
 export function hasRoleDutyConsistencyConflict(options: {
   profileJobTitle?: string;
   experienceTitle?: string;
   dutiesText?: string;
 }): boolean {
-  const title = `${options.profileJobTitle || ''} ${options.experienceTitle || ''}`.trim();
-  const duties = (options.dutiesText || '').trim();
-  if (!title || !duties) return false;
-  const titleIsCook = COOK_TITLE_RE.test(title);
-  const dutiesAreLogisticsOrOffice =
-    LOGISTICS_DUTY_RE.test(duties) || PROCESS_REPORT_DUTY_RE.test(duties);
-  const dutiesAreCooking = COOKING_DUTY_RE.test(duties);
-  if (titleIsCook && dutiesAreLogisticsOrOffice && !dutiesAreCooking) return true;
-  return false;
+  return evaluateRoleDutyConsistency(options).conflict;
+}
+
+/** Localized display forms of a conflicting occupation that must not be forced into Summary. */
+export function conflictingTitleFormsInSummary(
+  titleCategory: OccupationCategory,
+  locale: Locale,
+  gender?: string,
+): RegExp[] {
+  const g = normalizeCoverLetterGender(gender);
+  if (titleCategory === 'cooking') {
+    return [
+      /\b(kuvar(?:ica)?|cook|chef|kuhar(?:ica)?|koch|köchin|cuisinier|cocinero|cuoco|повар)\b/iu,
+      /रसोइया/u,
+      /طباخ/u,
+      /料理人/u,
+      /\bprofessional\s+cook\b/iu,
+      /\bdaksh\s+rasoiya\b/iu,
+      /दक्ष\s+रसोइया/u,
+    ];
+  }
+  if (titleCategory === 'teaching') {
+    return [/\b(teacher|nastavnik|nastavnica|učitelj(?:ica)?|profesor(?:ka)?)\b/iu];
+  }
+  if (titleCategory === 'accounting') {
+    return [/\b(accountant|računovo[dđ]\w*)\b/iu];
+  }
+  if (titleCategory === 'software') {
+    return [/\b(software\s+developer|programer(?:ka)?)\b/iu];
+  }
+  if (titleCategory === 'driving') {
+    return [/\b(driver|vozač(?:ica)?)\b/iu];
+  }
+  if (titleCategory === 'healthcare') {
+    return [/\b(nurse|doktor(?:ka)?|medicinsk\w*)\b/iu];
+  }
+  if (titleCategory === 'design') {
+    const localized = localizeInteriorDesigner(locale, g);
+    return [new RegExp(localized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu')];
+  }
+  return [];
 }
 
 function localizeKnownTitle(title: string, locale: Locale, gender?: string): string | null {
@@ -98,36 +329,17 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
   if (/dizajner(?:ka)?\s+enterijera|interior\s+designer|innenarchitekt/i.test(normalized)) {
     return localizeInteriorDesigner(locale, gender);
   }
-  if (COOK_TITLE_RE.test(normalized)) {
+  if (TITLE_CATEGORY_RULES[0].re.test(normalized)) {
     return localizeCook(locale, gender);
   }
-  // sr/hr never need translation of their own titles, and `isWrongLanguageAiOutput`
-  // explicitly exempts sr/hr from its Serbo-Croatian-diacritic check.
   if (locale === 'sr' || locale === 'hr') return normalized;
   const isAsciiTitle = /^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2;
   if (locale === 'en') {
-    // A plain-ASCII title is already readable English prose — keep it as-is.
-    // Anything else here is actually foreign-script/diacritic source text
-    // (e.g. Serbian "Vozač"), which must NOT be kept: `isWrongLanguageAiOutput`
-    // rejects Serbo-Croatian diacritics for every locale except sr/hr,
-    // INCLUDING English, so leaking it here would surface as a validation
-    // failure downstream instead of a generic-but-safe fallback.
     return isAsciiTitle ? normalized : null;
   }
-  // For every other target locale, an unmapped title — ASCII (no known
-  // translation) or non-ASCII (Serbian/Croatian diacritics or any other
-  // script) — must fall back to the generic role label instead of being
-  // returned as-is. Returning raw source-language text here leaks untranslated
-  // text into the deterministic duration-shell sentence and the grounded
-  // canonical-fallback summary (both embed `role` directly into prose for
-  // every locale). Downstream locale validation then rejects that leaked
-  // text, which surfaces as an intermittent "validation failed" toast
-  // specifically for whichever job titles aren't in the small explicit map
-  // above — regardless of which locale was requested immediately before.
   return null;
 }
 
-/** Localize a known occupational title on a detached preview/export projection. */
 export function localizeOccupationalTitleForProjection(
   title: string,
   locale: Locale,
@@ -141,21 +353,19 @@ export function getOccupationalTitleFallback(locale: Locale, gender?: string): s
   const g = normalizeCoverLetterGender(gender);
   if (locale === 'hi') return 'पेशेवर';
   if (locale === 'sr' || locale === 'hr') return g === 'female' ? 'profesionalka' : 'profesionalac';
-  if (locale === 'de') return g === 'female' ? 'Fachkraft' : 'Fachkraft';
+  if (locale === 'de') return 'Fachkraft';
+  if (locale === 'ar') return 'محترف';
+  if (locale === 'ja') return 'プロフェッショナル';
+  if (locale === 'ru') return g === 'female' ? 'специалистка' : 'специалист';
+  if (locale === 'pt-BR') return 'profissional';
   return 'professional';
 }
 
-/**
- * Priority: profile/professional title → current experience title → safe locale fallback.
- * When the title strongly conflicts with canonical duties (e.g. Kuvar + warehouse),
- * skip forcing that title into Summary prose and use the neutral fallback instead.
- */
 export function resolveOccupationalTitleForSummary(options: {
   profileJobTitle?: string;
   currentExperienceTitle?: string;
   locale: Locale;
   gender?: string;
-  /** Concatenated experience/description text used for title↔duty consistency. */
   dutiesText?: string;
 }): string {
   if (

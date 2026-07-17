@@ -325,8 +325,10 @@ describe('8. Atomic locale request context is wired into cv-builder/page.tsx', (
   it('handleGenSummary captures requestedLocale once from reqCtx and reuses it end to end', () => {
     const fn = source.slice(source.indexOf('const handleGenSummary'), source.indexOf('const handleGenBullets'));
     expect(fn).toMatch(/const requestedLocale = reqCtx\.locale as Locale/);
-    expect(fn).toMatch(/finalizeClientAiSummary\(nextSummary, cv, requestedLocale, durationSnapshot\)/);
-    expect(fn).toMatch(/acceptValidatedAiContent\(prev, \{\s*locale: requestedLocale/);
+    expect(fn).toMatch(/finalizeCvAiFieldForApply\(\{/);
+    expect(fn).toMatch(/action: 'summary_generate'/);
+    expect(fn).toMatch(/applyFinalizedSummaryToCv\(prev, requestedLocale/);
+    expect(fn).toMatch(/commitCvUpdate\(/);
     expect(fn).toMatch(/latestSummaryRequestIdRef\.current !== reqCtx\.requestId/);
   });
 
@@ -334,7 +336,10 @@ describe('8. Atomic locale request context is wired into cv-builder/page.tsx', (
     const fn = source.slice(source.indexOf('const handleGenBullets'), source.indexOf('const handleRewrite'));
     expect(fn).toMatch(/const requestedLocale = reqCtx\.locale as Locale/);
     expect(fn).toMatch(/latestBulletsRequestIdRef\.current\[expId\] !== reqCtx\.requestId/);
-    expect(fn).toMatch(/willAcceptValidatedAiContent\(\{ locale: requestedLocale/);
+    expect(fn).toMatch(/finalizeCvAiFieldForApply\(\{/);
+    expect(fn).toMatch(/action: 'experience_bullets'/);
+    expect(fn).toMatch(/applyFinalizedBulletsToCv\(prev, requestedLocale, expId/);
+    expect(fn).toMatch(/commitCvUpdate\(/);
   });
 
   it('handleRewrite captures requestedLocale and guards stale responses', () => {

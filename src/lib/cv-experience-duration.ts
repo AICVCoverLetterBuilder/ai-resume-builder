@@ -433,11 +433,13 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
   }
   const n = duration.approxYears;
   const word = YEAR_WORD_BY_LOCALE[locale]?.[n] || String(n);
+  // Serbian/Croatian: 1 godina, 2–4 godine, 5+ godina
+  const srYearNoun = n === 1 ? 'godina' : n >= 2 && n <= 4 ? 'godine' : 'godina';
   switch (locale) {
     case 'sr':
-      return `sa oko ${word} godina iskustva`;
+      return `sa oko ${word} ${srYearNoun} iskustva`;
     case 'hr':
-      return `s oko ${word} godina iskustva`;
+      return `s oko ${word} ${srYearNoun} iskustva`;
     case 'hi':
       return `लगभग ${word} वर्षों के अनुभव के साथ`;
     case 'de':
@@ -487,10 +489,11 @@ export function repairSummaryDuration(
       return _m;
     },
   );
-  // Serbian
+  // Serbian / Croatian — preserve correct year-noun declension
+  const srNoun = target === 1 ? 'godina' : target >= 2 && target <= 4 ? 'godine' : 'godina';
   out = out.replace(
-    /\b(oko|približno)\s+(jedne?|dvije?|dve|tri|četiri|cetiri|pet|šest|sest|\d+)\s+godin\w*/giu,
-    `$1 ${YEAR_WORD_BY_LOCALE.sr[target] || target} godina`,
+    /\b(oko|približno|sa\s+oko|s\s+oko)\s+(jedne?|dvije?|dve|tri|četiri|cetiri|pet|šest|sest|\d+)\s+godin\w*/giu,
+    `$1 ${YEAR_WORD_BY_LOCALE.sr[target] || target} ${srNoun}`,
   );
   // Hindi
   out = out.replace(

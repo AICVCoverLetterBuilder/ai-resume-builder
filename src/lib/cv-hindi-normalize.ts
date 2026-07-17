@@ -22,28 +22,36 @@ const AUX_CONJUNCTION_FIXES: Array<[RegExp, string]> = [
   [/रिपोर्टतैयार/gu, 'रिपोर्ट तैयार'],
   [/अनुभववाला/gu, 'अनुभव वाला'],
   [/अनुभववाली/gu, 'अनुभव वाली'],
-  // Prefer natural "में" over "पर" for project-execution collaboration.
+  [/मेंमैं/gu, 'में मैं'],
   [/परियोजना\s+क्रियान्वयन\s+पर/gu, 'परियोजना क्रियान्वयन में'],
 ];
 
-/**
- * Confirmed glued postposition+token pairs. Prefer exact phrase repairs over
- * character-level splits so legitimate words (कार्यों, परिवहन) stay intact.
- */
 const GLUED_POSTPOSITION_FIXES: Array<[RegExp, string]> = [
   [/केअनुभव/gu, 'के अनुभव'],
+  [/केव्यावसायिक/gu, 'के व्यावसायिक'],
   [/केअंतर्गत/gu, 'के अंतर्गत'],
   [/केविकास/gu, 'के विकास'],
   [/केसाथ/gu, 'के साथ'],
   [/केलिए/gu, 'के लिए'],
+  [/केरूप/gu, 'के रूप'],
   [/कीअनुभव/gu, 'की अनुभव'],
   [/मेंकाम/gu, 'में काम'],
   [/मेंकार्यरत/gu, 'में कार्यरत'],
   [/मेंसहयोग/gu, 'में सहयोग'],
+  [/मेंक्रॉस/gu, 'में क्रॉस'],
   [/परकाम/gu, 'पर काम'],
   [/सेकाम/gu, 'से काम'],
   [/कापरिवहन/gu, 'का परिवहन'],
   [/साथकाम/gu, 'साथ काम'],
+  [/प्रबंधन\s*केलिए/gu, 'प्रबंधन के लिए'],
+];
+
+const BROKEN_SYLLABLE_FIXES: Array<[RegExp, string]> = [
+  [/व\s+र्षों/gu, 'वर्षों'],
+  [/व\s+र्ष/gu, 'वर्ष'],
+  [/अ\s+नुभव/gu, 'अनुभव'],
+  [/प\s+र\s+िवहन/gu, 'परिवहन'],
+  [/प\s+रिवहन/gu, 'परिवहन'],
 ];
 
 function isDevanagari(ch: string): boolean {
@@ -55,10 +63,6 @@ function isLatinLetter(ch: string): boolean {
   return /[A-Za-z]/.test(ch);
 }
 
-/**
- * Insert missing spaces between Devanagari and Latin proper nouns / reverse.
- * Does not touch matras, nukta, or conjunct sequences (those stay within Devanagari range).
- */
 function separateScriptBoundaries(text: string): string {
   let out = '';
   const chars = Array.from(text);
@@ -79,14 +83,6 @@ function separateScriptBoundaries(text: string): string {
   return out;
 }
 
-/**
- * Normalize freshly generated Hindi Summary / bullets.
- * Safe on empty / non-Hindi text (returns input with light trim only when locale !== hi).
- *
- * Uses exact glued-phrase repairs + Devanagari↔Latin boundaries only. Broad
- * "postposition + next letter" splits are unsafe (they break कार्यों, परिवहन,
- * ऑपरेटर, कार्यरत).
- */
 export function normalizeHindiGeneratedWhitespace(
   text: string,
   locale?: Locale | string,
@@ -94,6 +90,9 @@ export function normalizeHindiGeneratedWhitespace(
   if (!text) return text;
   if (locale && locale !== 'hi') return text;
   let out = text.normalize('NFKC');
+  for (const [re, repl] of BROKEN_SYLLABLE_FIXES) {
+    out = out.replace(re, repl);
+  }
   for (const [re, repl] of AUX_CONJUNCTION_FIXES) {
     out = out.replace(re, repl);
   }
@@ -101,25 +100,28 @@ export function normalizeHindiGeneratedWhitespace(
     out = out.replace(re, repl);
   }
   out = separateScriptBoundaries(out);
-  // Collapse accidental multi-spaces introduced by normalization; keep newlines.
   out = out.replace(/[^\S\n]{2,}/g, ' ');
   out = out.replace(/ +\n/g, '\n').replace(/\n +/g, '\n');
   return out.trim();
 }
 
-/** Suspicious merged-token patterns that should fail Hindi quality validation. */
 const MERGED_TOKEN_QUALITY: RegExp[] = [
   /केअनुभव/u,
+  /केव्यावसायिक/u,
+  /केरूप/u,
   /हूँऔर/u,
   /हूंऔर/u,
+  /मेंमैं/u,
   /से[A-Za-z]/u,
   /केअंतर्गत/u,
   /केविकास/u,
   /मेंकाम/u,
+  /मेंक्रॉस/u,
   /केसाथ/u,
   /केलिए/u,
   /रिपोर्टतैयार/u,
-  /[\u0900-\u097F]{18,}/u, // excessively long glued Devanagari token
+  /व\s+र्षों/u,
+  /[\u0900-\u097F]{18,}/u,
 ];
 
 export function hasSuspiciousHindiMergedTokens(text: string): boolean {
@@ -127,9 +129,6 @@ export function hasSuspiciousHindiMergedTokens(text: string): boolean {
   return MERGED_TOKEN_QUALITY.some((re) => re.test(text));
 }
 
-/**
- * Normalize then report whether residual merges remain (for fidelity guards).
- */
 export function normalizeAndAssessHindiText(
   text: string,
   locale?: Locale | string,

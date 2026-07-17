@@ -47,15 +47,17 @@ import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/li
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import { freezeCanonicalExperienceDescription } from '@/lib/cv-canonical-facts';
 import {
-  acceptValidatedAiContent,
-  willAcceptValidatedAiContent,
   applyCanonicalExperienceEdit,
   applyCanonicalSkillsLanguagesEducationEdit,
   applyCanonicalSummaryEdit,
 } from '@/lib/cv-canonical-snapshot';
 import { buildExperienceDurationSnapshot, durationToPromptToken } from '@/lib/cv-experience-duration';
 import { applyCvContentQuality } from '@/lib/cv-content-quality';
-import { finalizeClientAiSummary } from '@/lib/cv-summary-integrity';
+import {
+  applyFinalizedBulletsToCv,
+  applyFinalizedSummaryToCv,
+  finalizeCvAiFieldForApply,
+} from '@/lib/cv-ai-finalize-apply';
 import {
   localizeCvLanguageLevel,
   normalizeCvLanguagesProficiency,
@@ -912,8 +914,16 @@ export default function CVBuilderPage() {
         return;
       }
       const nextSummary = (summaryData?.result ?? '').trim();
-      const finalized = finalizeClientAiSummary(nextSummary, cv, requestedLocale, durationSnapshot);
-      if (finalized.blocked) {
+      const finalizedGate = finalizeCvAiFieldForApply({
+        action: 'summary_generate',
+        field: 'summary',
+        requestedLocale,
+        gender: cv.personal.gender || '',
+        cv,
+        candidate: nextSummary,
+        durationSnapshot,
+      });
+      if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
@@ -932,16 +942,12 @@ export default function CVBuilderPage() {
           apiLocale: requestedLocale,
           finalValidationLocale: requestedLocale,
           applied: false,
-          reason: 'generation_validation_failed',
+          reason: finalizedGate.reason || 'generation_validation_failed',
         });
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
-      setCv((prev) => acceptValidatedAiContent(prev, {
-        locale: requestedLocale,
-        summary: finalized.summary,
-        summaryOrigin: finalized.origin,
-      }));
+      commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
       recordProAiSuccess();
       finishAiClientRequest({
         ctx: reqCtx,
@@ -950,8 +956,8 @@ export default function CVBuilderPage() {
         countAfter: countBefore + 1,
         httpStatus: res.status,
         error: null,
-        fallbackUsed: finalized.origin === 'deterministic_fallback',
-        responseSource: finalized.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider',
+        fallbackUsed: finalizedGate.origin === 'deterministic_fallback',
+        responseSource: finalizedGate.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider',
       });
       logAiLocaleTransitionDiagnostics({
         requestId: reqCtx.requestId,
@@ -1089,14 +1095,21 @@ export default function CVBuilderPage() {
         return;
       }
       const newDescription = bulletsData.result || '';
-      // acceptValidatedAiContent silently no-ops (returns the CV unchanged) when
-      // the requested-locale/wrong-language guard rejects the field — that must
-      // never be mistaken for a successful, visible user action: no counter
-      // increment and no success toast unless the content is actually applied.
-      if (
-        !newDescription.trim()
-        || !willAcceptValidatedAiContent({ locale: requestedLocale, experienceId: expId, description: newDescription })
-      ) {
+      const finalizedBullets = finalizeCvAiFieldForApply({
+        action: 'experience_bullets',
+        field: 'experience_description',
+        requestedLocale,
+        gender: cv.personal.gender || '',
+        cv,
+        candidate: newDescription,
+        experienceId: expId,
+        originHint: bulletsData.fallbackUsed
+          ? 'deterministic_fallback'
+          : bulletsData.repairAttempted
+            ? 'ai_repaired'
+            : 'ai_generated',
+      });
+      if (finalizedBullets.blocked || !finalizedBullets.countedAsSuccess) {
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
@@ -1115,22 +1128,16 @@ export default function CVBuilderPage() {
           apiLocale: requestedLocale,
           finalValidationLocale: requestedLocale,
           applied: false,
-          reason: 'generation_validation_failed',
+          reason: finalizedBullets.reason || 'generation_validation_failed',
         });
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
-      setCv((prev) => {
-        const withRaw = acceptValidatedAiContent(prev, {
-          locale: requestedLocale,
-          experienceId: expId,
-          description: newDescription,
-        });
-        // Content-quality normalize current-role tense / natural Hindi for this experience only.
-        const quality = applyCvContentQuality(withRaw, requestedLocale, {
-          gender: withRaw.personal?.gender || '',
-        });
-        return quality.cv;
+      commitCvUpdate((prev) => {
+        const applied = applyFinalizedBulletsToCv(prev, requestedLocale, expId, finalizedBullets);
+        return applyCvContentQuality(applied, requestedLocale, {
+          gender: applied.personal?.gender || '',
+        }).cv;
       });
       recordProAiSuccess();
       finishAiClientRequest({
@@ -1141,8 +1148,12 @@ export default function CVBuilderPage() {
         httpStatus: res.status,
         error: null,
         automaticRepairCount: bulletsData.repairAttempted ? 1 : 0,
-        fallbackUsed: Boolean(bulletsData.fallbackUsed),
-        responseSource: bulletsData.fallbackUsed ? 'deterministic_fallback' : bulletsData.repairAttempted ? 'repair' : 'provider',
+        fallbackUsed: Boolean(bulletsData.fallbackUsed) || finalizedBullets.origin === 'deterministic_fallback',
+        responseSource: finalizedBullets.origin === 'deterministic_fallback' || bulletsData.fallbackUsed
+          ? 'deterministic_fallback'
+          : bulletsData.repairAttempted
+            ? 'repair'
+            : 'provider',
       });
       logAiLocaleTransitionDiagnostics({
         requestId: reqCtx.requestId,
@@ -1264,8 +1275,26 @@ export default function CVBuilderPage() {
       }
       const referenceDateIso = new Date().toISOString().slice(0, 10);
       const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
-      const finalized = finalizeClientAiSummary((rewriteData.result ?? cv.summary).trim(), cv, requestedLocale, durationSnapshot);
-      if (finalized.blocked) {
+      const rewriteAction = style === 'shorter'
+        ? 'summary_shorter'
+        : style === 'stronger'
+          ? 'summary_stronger'
+          : 'summary_professional';
+      const finalizedGate = finalizeCvAiFieldForApply({
+        action: rewriteAction,
+        field: 'summary',
+        requestedLocale,
+        gender: cv.personal.gender || '',
+        cv,
+        candidate: (rewriteData.result ?? cv.summary).trim(),
+        durationSnapshot,
+        originHint: rewriteData.fallbackUsed
+          ? 'deterministic_fallback'
+          : rewriteData.repairAttempted
+            ? 'ai_repaired'
+            : 'ai_generated',
+      });
+      if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
@@ -1284,16 +1313,12 @@ export default function CVBuilderPage() {
           apiLocale: requestedLocale,
           finalValidationLocale: requestedLocale,
           applied: false,
-          reason: 'generation_validation_failed',
+          reason: finalizedGate.reason || 'generation_validation_failed',
         });
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
-      setCv((prev) => acceptValidatedAiContent(prev, {
-        locale: requestedLocale,
-        summary: finalized.summary,
-        summaryOrigin: finalized.origin,
-      }));
+      commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
       recordProAiSuccess();
       finishAiClientRequest({
         ctx: reqCtx,
@@ -1303,8 +1328,8 @@ export default function CVBuilderPage() {
         httpStatus: res.status,
         error: null,
         automaticRepairCount: rewriteData.repairAttempted ? 1 : 0,
-        fallbackUsed: Boolean(rewriteData.fallbackUsed) || finalized.origin === 'deterministic_fallback',
-        responseSource: finalized.origin === 'deterministic_fallback' || rewriteData.fallbackUsed
+        fallbackUsed: Boolean(rewriteData.fallbackUsed) || finalizedGate.origin === 'deterministic_fallback',
+        responseSource: finalizedGate.origin === 'deterministic_fallback' || rewriteData.fallbackUsed
           ? 'deterministic_fallback'
           : rewriteData.repairAttempted
             ? 'repair'
