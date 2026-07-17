@@ -1,4 +1,5 @@
 import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
+import { normalizeCvRegion } from './cv-region';
 import type { Locale } from './i18n/translations';
 import {
   buildExperienceSnapshotFromText,
@@ -11,8 +12,13 @@ import {
   isAiPollutedCanonicalDescription,
 } from './cv-experience-provenance';
 import { validateSummaryCompleteness } from './cv-semantic-fidelity';
+import {
+  recoverAuthoritativeDutiesFromVisibleText,
+  legacyVisibleLooksLikeUserDuties,
+} from './cv-legacy-grounding-recovery';
 
-export const CV_RUNTIME_MIGRATION_VERSION = 1;
+/** Bumped to 3: recover authoritative duties from classified legacy visible text. */
+export const CV_RUNTIME_MIGRATION_VERSION = 3;
 
 const LOCALES = new Set<Locale>([
   'en', 'de', 'es', 'fr', 'it', 'ar', 'sr', 'hr', 'ru', 'pt-BR', 'hi', 'ja',
@@ -82,6 +88,21 @@ function selectAuthoritativeDuties(cv: CVData, exp: WorkExperience): {
   if (visible && !generated && !isAiDescriptionOrigin(exp.descriptionOrigin)) {
     return { text: visible, source: 'legacyDescription' };
   }
+
+  // Build-244: AI display replaced the only surviving duties. Narrowly classify
+  // visible/generated text into English authoritative shells — never store the
+  // AI display string itself as user-confirmed canonical prose.
+  const classified = recoverAuthoritativeDutiesFromVisibleText(visible)
+    || recoverAuthoritativeDutiesFromVisibleText(generated);
+  if (classified) {
+    return { text: classified, source: 'classifiedVisibleDuties' };
+  }
+
+  // Latin/source duties that still classify cleanly but were mis-tagged AI.
+  if (visible && legacyVisibleLooksLikeUserDuties(visible) && detectContentLocale(visible) === 'en') {
+    return { text: visible, source: 'legacyDescription' };
+  }
+
   return { text: '', source: 'none' };
 }
 
@@ -90,6 +111,7 @@ export type LegacyExperienceRecoverySource =
   | 'canonicalSnapshot'
   | 'canonicalDescription'
   | 'legacyDescription'
+  | 'classifiedVisibleDuties'
   | 'none';
 
 export type LegacyCvMigrationTrace = {
@@ -111,11 +133,41 @@ export function normalizeLegacyCvRuntimeWithTrace(
   localeHint?: Locale,
 ): { cv: CVData; trace: LegacyCvMigrationTrace } {
   const fromVersion = Number(input.runtimeMigrationVersion || 0);
-  if (fromVersion >= CV_RUNTIME_MIGRATION_VERSION) {
+  const normalizedRegion = normalizeCvRegion(input.region);
+  const canRecoverMissingGrounding = (input.experience || []).some((exp) => {
+    if ((exp.originalUserDescription || '').trim()) return false;
+    const visible = (exp.description || '').trim();
+    const generated = (exp.generatedDescription || '').trim();
+    return Boolean(
+      recoverAuthoritativeDutiesFromVisibleText(visible)
+      || recoverAuthoritativeDutiesFromVisibleText(generated),
+    );
+  });
+  if (fromVersion >= CV_RUNTIME_MIGRATION_VERSION && !canRecoverMissingGrounding) {
+    // Idempotent safety: even after a prior migration, never leave an invalid region
+    // that crashes Corporate Navy PDF/DOCX on regionSettings[region].showAddress.
+    if (normalizedRegion === input.region) {
+      return {
+        cv: input,
+        trace: {
+          applied: false,
+          fromVersion,
+          toVersion: fromVersion,
+          contentLocaleBefore: input.contentLocale,
+          contentLocaleAfter: input.contentLocale,
+          summaryOriginBefore: input.summaryOrigin,
+          summaryOriginAfter: input.summaryOrigin,
+          generatedSummaryLocale: input.summaryGeneratedLocale,
+          experienceSources: (input.experience || []).map(() => 'none'),
+          clearedLocalizedProjections: false,
+          rebuiltCanonicalSnapshot: false,
+        },
+      };
+    }
     return {
-      cv: input,
+      cv: { ...input, region: normalizedRegion },
       trace: {
-        applied: false,
+        applied: true,
         fromVersion,
         toVersion: fromVersion,
         contentLocaleBefore: input.contentLocale,
@@ -203,6 +255,7 @@ export function normalizeLegacyCvRuntimeWithTrace(
   let next: CVData = {
     ...input,
     experience,
+    region: normalizedRegion,
     ...(contentLocale ? { contentLocale } : {}),
     ...(summaryGeneratedLocale ? { summaryGeneratedLocale } : {}),
     summaryOrigin,

@@ -1,5 +1,7 @@
 import type { CVData } from './types';
 import { regionSettings, templateInfo } from './types';
+import { getRegionSettings } from './cv-region';
+import { wrapCvExportFailure } from './cv-export-error-message';
 import { translations, type Locale } from './i18n/translations';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
@@ -47,7 +49,7 @@ import {
   stripCoverLetterExportHeader,
 } from './cover-letter-header';
 import { isNative } from './iap';
-import { saveFileViaPlatform, pdfToBlob, SaveFailedError, type SaveFileResult } from './native-save';
+import { saveFileViaPlatform, pdfToBlob, SaveCancelledError, SaveFailedError, type SaveFileResult } from './native-save';
 import { printNativePdf } from './native-print';
 import {
   ELEGANT_FORMAL_PHOTO_EXPORT_HEIGHT,
@@ -5810,7 +5812,8 @@ export async function exportToDOCX(
   } = await import('docx');
 
   const cfg = getDocxConfig(templateId ?? cvData.templateId);
-  const rs = regionSettings[cvData.region];
+  // Legacy Android drafts may omit/pollute region; never crash on showAddress.
+  const rs = getRegionSettings(cvData.region);
   const t = translations[locale];
   const showPhoto =
     cvData.personal.photoEnabled !== undefined
@@ -9154,8 +9157,24 @@ export async function exportToDOCX(
     ],
   });
 
-  const blob = await Packer.toBlob(doc);
-  return await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  let blob: Blob;
+  try {
+    blob = await Packer.toBlob(doc);
+  } catch (err) {
+    throw wrapCvExportFailure(err, 'docx_blob_generation_failed');
+  }
+  if (!blob || blob.size === 0) {
+    throw wrapCvExportFailure(
+      new Error('DOCX generation produced an empty Blob'),
+      'docx_blob_generation_failed',
+    );
+  }
+  try {
+    return await saveFileViaPlatform(blob, `${fileName}.docx`, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  } catch (err) {
+    if (err instanceof SaveCancelledError) throw err;
+    throw wrapCvExportFailure(err, 'android_file_save_failed');
+  }
 }
 
 // ─── Rirekisho (Japanese CV) DOCX Export ─────────────────────────────────────
@@ -14192,17 +14211,26 @@ export async function buildCorporateNavyPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
-  const prepared = prepareCorporateNavyExport(cv, locale, {
-    gender: cv.personal?.gender,
-  });
-  const canonicalPhoto = await prepareCorporateNavyPdfPhotoDataUrl(prepared.cv);
-  const blob = await buildCorporateNavyPagedPdfBlob(prepared.cv, locale, {
-    photoDataUrl: canonicalPhoto?.dataUrl ?? null,
-    alreadyPrepared: true,
-    projectionId: prepared.projection.projectionId,
-  });
-  if (!blob || blob.size === 0) throw new Error('Corporate Navy PDF generation produced an empty Blob');
-  return blob;
+  try {
+    const prepared = prepareCorporateNavyExport(cv, locale, {
+      gender: cv.personal?.gender,
+    });
+    const canonicalPhoto = await prepareCorporateNavyPdfPhotoDataUrl(prepared.cv);
+    const blob = await buildCorporateNavyPagedPdfBlob(prepared.cv, locale, {
+      photoDataUrl: canonicalPhoto?.dataUrl ?? null,
+      alreadyPrepared: true,
+      projectionId: prepared.projection.projectionId,
+    });
+    if (!blob || blob.size === 0) {
+      throw wrapCvExportFailure(
+        new Error('Corporate Navy PDF generation produced an empty Blob'),
+        'pdf_blob_generation_failed',
+      );
+    }
+    return blob;
+  } catch (err) {
+    throw wrapCvExportFailure(err, 'pdf_blob_generation_failed');
+  }
 }
 
 /** Shared prep so Corporate Navy PDF/DOCX tests can assert one identical projection. */
@@ -14215,8 +14243,18 @@ export async function exportCorporateNavyPdf(
   fileName: string,
   locale: Locale,
 ): Promise<SaveFileResult> {
-  const pdfBlob = await buildCorporateNavyPdfBlob(cv, locale);
-  return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+  try {
+    const pdfBlob = await buildCorporateNavyPdfBlob(cv, locale);
+    try {
+      return await saveFileViaPlatform(pdfBlob, `${fileName}.pdf`, 'application/pdf');
+    } catch (err) {
+      if (err instanceof SaveCancelledError) throw err;
+      throw wrapCvExportFailure(err, 'android_file_save_failed');
+    }
+  } catch (err) {
+    if (err instanceof SaveCancelledError) throw err;
+    throw wrapCvExportFailure(err, 'pdf_blob_generation_failed');
+  }
 }
 
 async function prepareContemporaryBoldPdfPhotoDataUrl(cv: CVData): Promise<ContemporaryBoldCanonicalPhotoResult | null> {

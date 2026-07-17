@@ -154,9 +154,10 @@ describe('Build 242 realistic old Hindi save hydration/export', () => {
       prepared.diagnostics.initialRecoveryReasons[0],
     );
     expect(formatCvExportIntegrityToast(oldError, 'en', 'pdf')).toBe(
-      'PDF export failed. Please try again.',
+      'The professional summary could not be verified against the saved experience. Review the saved CV and export again.',
     );
-    expect(formatCvExportIntegrityToast(oldError, 'en', 'pdf')).not.toMatch(/summary|mixes languages|regenerate/i);
+    expect(formatCvExportIntegrityToast(oldError, 'en', 'pdf')).not.toMatch(/mixes languages|regenerate/i);
+    expect(formatCvExportIntegrityToast(oldError, 'en', 'pdf')).not.toMatch(/^PDF export failed/);
   });
 
   it('serializes, hydrates, previews, exports PDF/DOCX projections, and reloads idempotently', () => {

@@ -732,7 +732,12 @@ describe('Corporate Navy export', () => {
   test('Android stress fixture paginates with summary on page 1 and no glued text', async () => {
     const { instances } = installDirectPdfMocks();
     const mod = await import('@/lib/export');
-    const blob = await mod.buildCorporateNavyPagedPdfBlob(androidStressCv(), 'en', { photoDataUrl: originalPhoto });
+    // alreadyPrepared: exercise renderer pagination on the long fixture text.
+    // Integrity recovery may shorten ungrounded summaries and is covered elsewhere.
+    const blob = await mod.buildCorporateNavyPagedPdfBlob(androidStressCv(), 'en', {
+      photoDataUrl: originalPhoto,
+      alreadyPrepared: true,
+    });
     expect(blob.size).toBeGreaterThan(0);
     expect(instances[0]?.pages).toBeGreaterThanOrEqual(2);
     expect(instances[0]?.pages).toBeLessThanOrEqual(3);

@@ -2,7 +2,7 @@
 
 import React, { useRef } from 'react';
 import type { CVData } from '@/lib/types';
-import { regionSettings } from '@/lib/types';
+import { getRegionSettings } from '@/lib/cv-region';
 import { translations, type Locale } from '@/lib/i18n/translations';
 import { ELEGANT_FORMAL_PHOTO_HEIGHT, ELEGANT_FORMAL_PHOTO_WIDTH } from '@/lib/elegant-formal-photo';
 
@@ -85,7 +85,7 @@ function shouldShowPhoto(data: CVData): boolean {
 
 // --- Modern Minimal: circular photo, top-right corner ---
 export function ModernMinimalTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
@@ -185,7 +185,7 @@ export function ModernMinimalTemplate({ data, locale }: TemplateProps) {
 
 // --- Creative Bold: round photo in sidebar ---
 export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
@@ -340,7 +340,7 @@ export function CreativeBoldTemplate({ data, locale }: TemplateProps) {
 // --- Elegant Formal: rectangular formal photo, left aligned with name ---
 // photo is pre-processed to a clean white-background 3:4 JPEG by the page before being passed in.
 export function ElegantFormalTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   const contacts = [
@@ -498,7 +498,7 @@ export function ElegantFormalTemplate({ data, locale }: TemplateProps) {
 
 // --- Clean Simple: small aligned square photo next to name ---
 export function CleanSimpleTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   const contacts = [
@@ -611,7 +611,7 @@ export function CleanSimpleTemplate({ data, locale }: TemplateProps) {
 
 // --- Professional Classic: square photo in dark header ---
 export function ProfessionalClassicTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   const contacts = [
@@ -689,7 +689,7 @@ export function ProfessionalClassicTemplate({ data, locale }: TemplateProps) {
 
 // --- ATS Standard: PDF export uses a dedicated renderer; this is the live preview. ---
 export function ATSStandardTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const L = getLabels(locale);
   return (
     <div data-template-id="ats-standard" className="bg-white text-gray-900 p-8 max-w-[210mm] mx-auto font-sans text-sm leading-relaxed" style={{ minHeight: '297mm' }}>
@@ -713,7 +713,7 @@ export function ATSStandardTemplate({ data, locale }: TemplateProps) {
 // --- Creative Artistic: round photo in colorful header ---
 export function CreativeArtisticTemplate({ data, locale }: TemplateProps) {
   const showPhoto = shouldShowPhoto(data);
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const L = getLabels(locale);
   const contactItems = [
     data.personal.email,
@@ -912,7 +912,7 @@ export function ExecutivePremiumTemplate({ data, locale }: TemplateProps) {
 
 // --- Nordic Clean: minimalist Scandinavian layout, teal accent, generous whitespace ---
 export function NordicCleanTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
@@ -996,7 +996,7 @@ export function NordicCleanTemplate({ data, locale }: TemplateProps) {
 
 // --- Tech Sidebar: two-column with dark sidebar for tech roles ---
 export function TechSidebarTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (
@@ -1089,7 +1089,7 @@ export function TechSidebarTemplate({ data, locale }: TemplateProps) {
 
 // --- Corporate Navy: bold navy header, formal corporate style ---
 export function CorporateNavyTemplate({ data, locale }: TemplateProps) {
-  const rs = regionSettings[data.region];
+  const rs = getRegionSettings(data.region);
   const showPhoto = shouldShowPhoto(data);
   const L = getLabels(locale);
   return (

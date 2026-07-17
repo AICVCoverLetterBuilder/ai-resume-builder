@@ -22,7 +22,9 @@ import {
   type PdfI18nRegistry,
 } from './pdf-i18n-text';
 import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-photo';
-import { regionSettings, type CVData } from './types';
+import { type CVData } from './types';
+import { getRegionSettings } from './cv-region';
+import { wrapCvExportFailure } from './cv-export-error-message';
 
 const A4_W = 210;
 const A4_H = 297;
@@ -252,7 +254,7 @@ function bulletH(unit: BulletUnit): number {
 }
 
 function headerContacts(ctx: CorporateNavyDirectPdfContext): string[] {
-  const region = regionSettings[ctx.cv.region];
+  const region = getRegionSettings(ctx.cv.region);
   const contacts = [
     ctx.cv.personal.email,
     ctx.cv.personal.phone,
@@ -789,25 +791,29 @@ export async function buildCorporateNavyPagedPdfBlob(
     projectionId?: string;
   } = {},
 ): Promise<Blob> {
-  const safeCv = options.alreadyPrepared
-    ? cv
-    : prepareCorporateNavyExport(cv, locale, { gender: cv.personal?.gender }).cv;
-  void options.projectionId;
-  const { jsPDF } = await import('jspdf');
-  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const i18n = await registerPdfI18nFonts(pdf);
-  const ctx = cnCreateContext(pdf, safeCv, locale, i18n);
+  try {
+    const safeCv = options.alreadyPrepared
+      ? cv
+      : prepareCorporateNavyExport(cv, locale, { gender: cv.personal?.gender }).cv;
+    void options.projectionId;
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const i18n = await registerPdfI18nFonts(pdf);
+    const ctx = cnCreateContext(pdf, safeCv, locale, i18n);
 
-  const maskedPhoto = options.photoDataUrl
-    ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)
-    : null;
-  cnDrawHeader(ctx, maskedPhoto);
-  cnDrawSummary(ctx);
-  cnDrawExperienceSection(ctx);
-  cnDrawEducationSection(ctx);
-  cnDrawSkillsLanguagesGroup(ctx);
-  cnDrawCertifications(ctx);
+    const maskedPhoto = options.photoDataUrl
+      ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)
+      : null;
+    cnDrawHeader(ctx, maskedPhoto);
+    cnDrawSummary(ctx);
+    cnDrawExperienceSection(ctx);
+    cnDrawEducationSection(ctx);
+    cnDrawSkillsLanguagesGroup(ctx);
+    cnDrawCertifications(ctx);
 
-  const out = pdf.output('blob');
-  return out instanceof Blob ? out : new Blob([out], { type: 'application/pdf' });
+    const out = pdf.output('blob');
+    return out instanceof Blob ? out : new Blob([out], { type: 'application/pdf' });
+  } catch (err) {
+    throw wrapCvExportFailure(err, 'pdf_blob_generation_failed');
+  }
 }

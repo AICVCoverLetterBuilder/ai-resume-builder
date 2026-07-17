@@ -25,8 +25,12 @@ import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } 
 import { exportAtsStandardPdf, exportCleanSimplePdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportCreativeArtisticPdf, exportCreativeBoldPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportProfessionalClassicPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback, assertDedicatedPdfRouteWasHandled, readPdfExportTemplateIdFromPreview, recordCvPdfExportRuntimeTrace, resolveCvForPdfExport, resolveCvPdfExportRoute } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
-import { formatCvExportIntegrityToast } from '@/lib/cv-export-error-message';
+import { formatCvExportIntegrityToast, wrapCvExportFailure } from '@/lib/cv-export-error-message';
 import type { SaveFileResult } from '@/lib/native-save';
+import {
+  CV_RUNTIME_MIGRATION_VERSION,
+  normalizeLegacyCvRuntime,
+} from '@/lib/cv-legacy-runtime-migration';
 import {
   filterCvLanguageOptions,
   getLocalizedCvLanguageName,
@@ -73,7 +77,6 @@ import {
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import { loadCvDraft } from '@/lib/draft-storage';
-import { normalizeLegacyCvRuntime } from '@/lib/cv-legacy-runtime-migration';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -211,6 +214,28 @@ export default function CVBuilderPage() {
   useEffect(() => {
     cvRef.current = cv;
   }, [cv]);
+
+  // Commit legacy runtime migration atomically to React state, cvRef, and draft storage
+  // so preview/PDF/DOCX cannot read a stale pre-migration snapshot.
+  useEffect(() => {
+    const source = cvRef.current;
+    if (Number(source.runtimeMigrationVersion || 0) >= CV_RUNTIME_MIGRATION_VERSION) return;
+    const migrated = normalizeLegacyCvRuntime(source, locale);
+    cvRef.current = migrated;
+    setCv(migrated);
+    setCurrentCv(migrated);
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[CV runtime migration] committed', {
+        fromVersion: Number(source.runtimeMigrationVersion || 0),
+        toVersion: migrated.runtimeMigrationVersion,
+        templateId: migrated.templateId,
+        region: migrated.region,
+        contentLocale: migrated.contentLocale,
+        summaryOrigin: migrated.summaryOrigin,
+        experienceCount: (migrated.experience || []).length,
+      });
+    }
+  }, [locale, setCurrentCv, cv.id]);
 
   // ── Autosave: debounce-save to context (which persists to localStorage) ──────
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1448,35 +1473,42 @@ export default function CVBuilderPage() {
     };
 
     const prepareFinalLocaleSafeCv = (sourceCv: CVData): CVData => {
-      // The persisted migration is also applied at the final boundary so
-      // preview, PDF and DOCX consume the same normalized legacy provenance,
-      // even when export is tapped before the autosave debounce completes.
-      sourceCv = normalizeLegacyCvRuntime(sourceCv, locale);
-      // Creative Artistic / Corporate Navy: apply and export share one integrity
-      // contract. Do not reject English source duties before deterministic
-      // localization — that caused Hindi PDF generic failures (build 240).
-      if (sourceCv.templateId === 'creative-artistic') {
-        return prepareCreativeArtisticExport(sourceCv, locale, {
+      try {
+        // The persisted migration is also applied at the final boundary so
+        // preview, PDF and DOCX consume the same normalized legacy provenance,
+        // even when export is tapped before the autosave debounce completes.
+        sourceCv = normalizeLegacyCvRuntime(sourceCv, locale);
+        // Creative Artistic / Corporate Navy: apply and export share one integrity
+        // contract. Do not reject English source duties before deterministic
+        // localization — that caused Hindi PDF generic failures (build 240).
+        if (sourceCv.templateId === 'creative-artistic') {
+          return prepareCreativeArtisticExport(sourceCv, locale, {
+            gender: sourceCv.personal?.gender,
+          }).cv;
+        }
+        if (sourceCv.templateId === 'corporate-navy') {
+          return prepareCorporateNavyExport(sourceCv, locale, {
+            gender: sourceCv.personal?.gender,
+          }).cv;
+        }
+        const qualityCv = applyCvContentQuality(sourceCv, locale, {
           gender: sourceCv.personal?.gender,
+          summaryOrigin: sourceCv.summaryOrigin,
         }).cv;
+        const localeCheck = validateFinalLocalizedCvFields(qualityCv, locale);
+        if (!localeCheck.valid) {
+          const first = localeCheck.violations[0];
+          throw wrapCvExportFailure(
+            new Error(
+              `summary_export_contract_mismatch: ${first.kind}: ${first.path} does not match requested locale ${locale}`,
+            ),
+            'summary_export_contract_mismatch',
+          );
+        }
+        return qualityCv;
+      } catch (err) {
+        throw wrapCvExportFailure(err, 'template_export_projection_failed');
       }
-      if (sourceCv.templateId === 'corporate-navy') {
-        return prepareCorporateNavyExport(sourceCv, locale, {
-          gender: sourceCv.personal?.gender,
-        }).cv;
-      }
-      const qualityCv = applyCvContentQuality(sourceCv, locale, {
-        gender: sourceCv.personal?.gender,
-        summaryOrigin: sourceCv.summaryOrigin,
-      }).cv;
-      const localeCheck = validateFinalLocalizedCvFields(qualityCv, locale);
-      if (!localeCheck.valid) {
-        const first = localeCheck.violations[0];
-        throw new Error(
-          `summary_export_contract_mismatch: ${first.kind}: ${first.path} does not match requested locale ${locale}`,
-        );
-      }
-      return qualityCv;
     };
 
     const handleDOCXDownload = async () => {
@@ -1512,11 +1544,19 @@ export default function CVBuilderPage() {
           } else {
             photoForExport = circularPhotoDataUrl ?? liveCv.personal.photo;
           }
-          const latestCv = cvRef.current;
+          const selectedTemplateId = cv.templateId;
+          const latestCv = {
+            ...cvRef.current,
+            ...cv,
+            templateId: selectedTemplateId,
+          };
           const cvForExport = prepareFinalLocaleSafeCv({
             ...latestCv,
             personal: { ...latestCv.personal, photo: photoForExport },
           });
+          // Synchronize cvRef with the export snapshot (same object PDF uses).
+          // Do not write localized export text back into editor React state.
+          cvRef.current = cvForExport;
           const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
           saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cvForExport.templateId, { elegantFormalPhoto });
           fallbackFileName = `${exportBaseName}.docx`;

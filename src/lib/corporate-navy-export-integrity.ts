@@ -6,6 +6,7 @@ import type { CVData } from './types';
 import type { Locale } from './i18n/translations';
 import { detectContentLocale } from './cv-canonical-snapshot';
 import {
+  buildCvCanonicalFactSet,
   buildFactSetFromExperienceDescription,
   bulletsForExperience,
   formatExperienceBullets,
@@ -22,9 +23,15 @@ import {
   validateFinalLocalizedCvFields,
   type LocalizedSummaryProvenance,
 } from './cv-field-locale-integrity';
-import { deterministicLocalizedBulletsFromCanonical } from './cv-localized-fallback';
+import {
+  deterministicLocalizedBulletsFromCanonical,
+  deterministicLocalizedSummaryFromCanonical,
+} from './cv-localized-fallback';
 import { validateLocalizedExperienceBullets } from './cv-semantic-fidelity';
-import { resolveCanonicalExperienceDescription } from './cv-export-integrity';
+import {
+  resolveCanonicalExperienceDescription,
+  validateSummaryExportCandidate,
+} from './cv-export-integrity';
 import { normalizeLegacyCvRuntime } from './cv-legacy-runtime-migration';
 
 export type CorporateNavySecurityCategory =
@@ -73,6 +80,9 @@ export type CorporateNavyExportProjection = {
 export type CorporateNavyExportDiagnostics = {
   initialRecoveryReasons: string[];
   recoverySource: 'saved_localized_bullets' | 'security_fallback' | 'deterministic_authoritative_facts';
+  summaryRecoverySource?: 'saved_summary' | 'deterministic_authoritative_facts';
+  summaryInitialReason?: string;
+  summaryRecoveryReason?: string;
 };
 
 export class CorporateNavyLocaleExportError extends Error {
@@ -427,6 +437,75 @@ export function prepareCorporateNavyExport(
     summaryOrigin: nextCv.summaryOrigin,
   });
   nextCv = quality.cv;
+
+  // Shared Summary recovery with Creative Artistic: never ship an ungrounded
+  // Hindi Summary when authoritative duties exist (or throw a precise reason).
+  const summaryFactSet = buildCvCanonicalFactSet({
+    ...nextCv,
+    experience: (nextCv.experience || []).map((exp) => ({
+      ...exp,
+      description: resolveCanonicalExperienceDescription(exp),
+    })),
+    summary: nextCv.canonicalSummary
+      || (nextCv.summaryOrigin === 'user' ? nextCv.summary : ''),
+  });
+  const bulletFactCount = summaryFactSet.facts.filter((f) => f.type === 'experience_bullet').length;
+  const hadLegacyDisplayDuties = (cv.experience || []).some((exp) => Boolean(
+    resolveCanonicalExperienceDescription(exp).trim()
+    || (exp.description || '').trim()
+    || (exp.generatedDescription || '').trim(),
+  ));
+  if (bulletFactCount === 0 && hadLegacyDisplayDuties) {
+    throw new CorporateNavyLocaleExportError(
+      locale,
+      'summary_authoritative_fact_set_empty: legacy_grounding_source_missing',
+    );
+  }
+  const canonicalSummary = (nextCv.canonicalSummary || '').trim();
+  const canonicalLocale = nextCv.canonicalSnapshot?.canonicalLocale;
+  let summaryRecoverySource: CorporateNavyExportDiagnostics['summaryRecoverySource'] = 'saved_summary';
+  const initialSummaryValidation = validateSummaryExportCandidate(
+    nextCv.summary || '',
+    summaryFactSet,
+    locale,
+    gender,
+    canonicalSummary,
+    canonicalLocale,
+    nextCv,
+  );
+  let summaryRecoveryReason: string | undefined;
+  if (!initialSummaryValidation.valid) {
+    const recovered = deterministicLocalizedSummaryFromCanonical(
+      summaryFactSet,
+      locale,
+      gender,
+      sharedDuration.total,
+    );
+    summaryRecoverySource = 'deterministic_authoritative_facts';
+    const recoveryValidation = validateSummaryExportCandidate(
+      recovered,
+      summaryFactSet,
+      locale,
+      gender,
+      canonicalSummary,
+      canonicalLocale,
+      nextCv,
+    );
+    summaryRecoveryReason = recoveryValidation.reason;
+    if (recovered && recoveryValidation.valid) {
+      nextCv = {
+        ...nextCv,
+        summary: recovered,
+        summaryOrigin: 'deterministic_fallback',
+      };
+    } else {
+      throw new CorporateNavyLocaleExportError(
+        locale,
+        `summary_recovery_projection_failed: initial=${initialSummaryValidation.reason}; recovery=${recoveryValidation.reason || 'empty'}`,
+      );
+    }
+  }
+
   const finalLocaleCheck = validateFinalLocalizedCvFields(nextCv, locale);
   if (!finalLocaleCheck.valid) {
     const first = finalLocaleCheck.violations[0];
@@ -475,7 +554,7 @@ export function prepareCorporateNavyExport(
     localizedSkills: nextCv.skills || [],
     validationStatus: (usedFallback
       ? 'fallback'
-      : quality.repaired
+      : quality.repaired || summaryRecoverySource === 'deterministic_authoritative_facts'
         ? 'repaired'
         : 'passed') as 'passed' | 'fallback' | 'repaired',
     experienceDurationSnapshot: quality.durationSnapshot,
@@ -493,6 +572,9 @@ export function prepareCorporateNavyExport(
     diagnostics: {
       initialRecoveryReasons,
       recoverySource,
+      summaryRecoverySource,
+      summaryInitialReason: initialSummaryValidation.reason,
+      summaryRecoveryReason,
     },
   };
 }
