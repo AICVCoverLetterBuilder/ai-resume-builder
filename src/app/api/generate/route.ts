@@ -1084,6 +1084,9 @@ Rules:
       const position = sanitizeField(params.position, 500);
       const company = sanitizeField(params.company, 500);
       const sourceDescription = sanitizeText(params.sourceDescription ?? params.description ?? '', 8000);
+      const isPresentRole = params.isPresent === true
+        || params.isPresent === 'true'
+        || String(params.endDate || '').toLowerCase() === 'present';
       const resolvedLocale = normalizeLocale(locale);
       const localeInfo = localeInstructions[resolvedLocale];
       const companyName = company || localeInfo.fallbackCompany;
@@ -1122,8 +1125,11 @@ Rules:
       const levelDesc = levelDescriptions[level || 'mid'] || 'mid-level';
       const roleLabel = position ? `${position}` : `${industry || 'professional'}`;
       const atCompany = companyName && companyName !== localeInfo.fallbackCompany ? ` at ${companyName}` : '';
+      const employmentTenseNote = isPresentRole
+        ? 'EMPLOYMENT STATUS: current role (Present). Describe ongoing duties in natural present / habitual-present CV tense for the target language. Do NOT use completed-past forms that present the role as finished.'
+        : 'EMPLOYMENT STATUS: past role (ended). Describe duties in natural past tense for the target language.';
       const factLockNote = hasCanonical
-        ? `FACT LOCK: You are given SOURCE BULLETS with stable IDs and semantic categories. Output EXACTLY ${canonicalBullets.length} bullets in the same order. Translate/polish grammar only. Preserve each bullet's category meaning (guest service stays guest/customer service — never replace with colleague cooperation; inventory counts/management communication must stay; do not invent standard/custom recipes unless present in SOURCE). Do NOT invent allergy checks, muddling, syrups, wastage, kitchen cooperation, evening shifts, inventory shortages, or any duty absent from SOURCE BULLETS. Serbian must use natural forms (koktele not kokteile; barmen/bartending not barteninga; level phrases must match stored enums — never "srednje naprednom").`
+        ? `FACT LOCK: You are given immutable SOURCE BULLETS (original/confirmed user duties) with stable IDs and semantic categories. Preserve EVERY material duty — do not drop, merge-away, or replace any duty. Prefer one bullet per source duty (same order). Translate/polish grammar only. Preserve each bullet's category meaning (guest service stays guest/customer service — never replace with colleague cooperation; inventory counts/management communication must stay; do not invent standard/custom recipes or cuisine types unless present in SOURCE). Do NOT invent allergy checks, muddling, syrups, wastage, kitchen cooperation, evening shifts, inventory shortages, leadership, metrics, or any duty absent from SOURCE BULLETS. Serbian must use natural forms (koktele not kokteile; barmen/bartending not barteninga; level phrases must match stored enums — never "srednje naprednom").`
         : 'No prior bullets were supplied. Write role-appropriate bullets without invented metrics.';
 
       const providerStartedAt = Date.now();
@@ -1143,6 +1149,7 @@ Rules:
 - Output ONLY bullet points, each starting with "•"
 - Each bullet: exactly 1 sentence, clear and direct, under 22 words
 - ${factLockNote}
+- ${employmentTenseNote}
 - NO fake metrics or invented percentages
 - CRITICAL LANGUAGE RULE: Every word must be in ${localeInfo.languageName}. Only keep universal acronyms (CRM, ERP, KPI, SQL, API) when genuinely used.${genderNote}
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
@@ -1151,12 +1158,15 @@ Rules:
               role: 'user',
               content: hasCanonical
                 ? `Localize the following canonical work bullets into ${localeInfo.languageName} for ${levelDesc} ${roleLabel}${atCompany}.
+${employmentTenseNote}
+Gender: ${gender || 'unspecified'}.
 
-SOURCE BULLETS:
+SOURCE BULLETS (immutable confirmed duties — preserve every material duty):
 ${formatCanonicalBulletsForPrompt(canonicalBullets)}
 
 Output format: one bullet per line, each starting with "•". Same count and order. Nothing else.`
                 : `Write 4 CV work experience bullet points in ${localeInfo.languageName} for a ${levelDesc} ${roleLabel}${atCompany}.
+${employmentTenseNote}
 
 Output format: one bullet per line, each starting with "•". Nothing else.`,
             },
@@ -1191,6 +1201,7 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         experienceIndex: 0,
         factSet,
         candidate: aiResult,
+        isPresent: isPresentRole,
         deadlineAt,
         repair: hasCanonical && !bulletsForceRespond
           ? async (prompt) => {
@@ -1201,7 +1212,7 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
                   max_tokens: 450,
                   temperature: 0.2,
                   stream: false,
-                  system: `You repair CV bullets in ${localeInfo.languageName}. Preserve fact IDs/duties. Output only "•" lines.`,
+                  system: `You repair CV bullets in ${localeInfo.languageName}. Preserve every material duty and fact ID. Restore any missing duty categories listed in the repair note. Use the required employment tense. Output only "•" lines.`,
                   messages: [{ role: 'user', content: prompt }],
                 }, deadlineAt);
                 bulletsRepairFinishedAt = Date.now();
@@ -1268,6 +1279,7 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
           canonicalBullets,
           resolvedLocale,
           gender || '',
+          { isPresent: isPresentRole },
         ).trim();
         if (emergencyLocalized) {
           return jsonResponse({

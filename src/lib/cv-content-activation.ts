@@ -43,12 +43,27 @@ export function buildBulletRepairPrompt(
   violations: CvFidelityViolation[],
   previous: string,
   canonicalBullets: string,
+  options?: { isPresent?: boolean; gender?: string },
 ): string {
+  const missingDuties = violations
+    .filter((v) => v.kind === 'missing_canonical_duty' || v.kind === 'material_duty_removed')
+    .map((v) => v.matched)
+    .filter(Boolean);
+  const tenseRequired = options?.isPresent === true
+    ? 'present (ongoing current role — not completed past)'
+    : options?.isPresent === false
+      ? 'past (completed role)'
+      : 'match employment status';
   return [
     'CV BULLET FIDELITY REPAIR REQUIRED.',
     `Rewrite the experience bullets in ${locale}.`,
-    'Keep the SAME bullet count and the SAME duties as SOURCE BULLETS.',
-    'Do NOT invent allergy checks, muddling, syrups, wastage, inventory shortages, kitchen staff, evening shifts, or other unsupported duties.',
+    'Preserve EVERY material canonical duty. Sentence combining is allowed only when no duty is dropped.',
+    'Do NOT invent allergy checks, muddling, syrups, wastage, inventory shortages, kitchen staff, evening shifts, cuisine types, or other unsupported duties.',
+    `Required employment tense: ${tenseRequired}.`,
+    options?.gender ? `Gender grammar: ${options.gender}.` : '',
+    missingDuties.length
+      ? `Missing duty categories that MUST be restored: ${missingDuties.join('; ')}.`
+      : '',
     'Output ONLY bullet lines starting with "•".',
     'Never prefix with labels like "CORRECTED BULLETS:", "OUTPUT:", or markdown headings.',
     'Unsupported issues:',
@@ -57,7 +72,7 @@ export function buildBulletRepairPrompt(
     canonicalBullets,
     'Previous invalid output (do not copy invented duties):',
     previous.slice(0, 2500),
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function buildSummaryRepairPrompt(
@@ -91,6 +106,7 @@ function experiencePasses(
     factSet: CvCanonicalFactSet;
     stage: string;
     canonicalJoined: string;
+    isPresent?: boolean;
   },
 ): boolean {
   if (!content.trim()) return false;
@@ -105,6 +121,7 @@ function experiencePasses(
     gender: options.gender,
     experienceIndex: options.experienceIndex,
     stage: options.stage,
+    isPresent: options.isPresent,
   });
   if (!check.valid) return false;
   if (isEnglishCanonicalDump(content, options.canonicalJoined, options.locale)) return false;
@@ -117,6 +134,8 @@ export async function activateCvExperienceBullets(options: {
   experienceIndex: number;
   factSet: CvCanonicalFactSet;
   candidate: string;
+  /** Structured employment status — authoritative for tense (not source wording). */
+  isPresent?: boolean;
   repair?: (prompt: string) => Promise<string>;
   /** Absolute deadline (ms epoch) the whole request must respond by. When
    * insufficient budget remains for one more provider round-trip, repair is
@@ -136,6 +155,7 @@ export async function activateCvExperienceBullets(options: {
     gender: options.gender,
     experienceIndex: options.experienceIndex,
     stage: 'initial',
+    isPresent: options.isPresent,
   });
   if (
     experiencePasses(candidate, {
@@ -163,6 +183,7 @@ export async function activateCvExperienceBullets(options: {
           first.violations,
           candidate,
           canonical.map((b) => `- [${b.id}] ${b.value}`).join('\n'),
+          { isPresent: options.isPresent, gender: String(options.gender || '') },
         ),
       );
       const repaired = normalizeHindiGeneratedWhitespace(repairedRaw || '', options.locale);
@@ -191,6 +212,7 @@ export async function activateCvExperienceBullets(options: {
       canonical,
       options.locale,
       options.gender,
+      { isPresent: options.isPresent },
     ) || '',
     options.locale,
   );

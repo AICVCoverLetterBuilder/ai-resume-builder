@@ -148,7 +148,12 @@ function localizeCvAgainstCanonical(
     }
 
     validationStatus = 'fallback';
-    const localizedFallback = deterministicLocalizedBulletsFromCanonical(facts, locale, gender);
+    const localizedFallback = deterministicLocalizedBulletsFromCanonical(
+      facts,
+      locale,
+      gender,
+      { isPresent: Boolean(exp.isPresent) },
+    );
     if (
       localizedFallback
       && isValidLocalizedExperience(

@@ -17,6 +17,7 @@ export const AI_ERROR_CODES = [
   'invalid_pro_token',
   'circuit_breaker_open',
   'generation_validation_failed',
+  'experience_description_required',
 ] as const;
 
 export type AiErrorCode = (typeof AI_ERROR_CODES)[number];
@@ -196,6 +197,21 @@ const VALIDATION: MsgMap = {
   ja: 'AI出力の検証に失敗したため適用されませんでした。もう一度お試しください。',
 };
 
+const EXPERIENCE_DESCRIPTION_REQUIRED: MsgMap = {
+  en: 'Enter a work-experience description first.',
+  hi: 'कृपया पहले कार्य अनुभव का विवरण दर्ज करें।',
+  de: 'Bitte geben Sie zuerst eine Berufserfahrungsbeschreibung ein.',
+  es: 'Introduce primero una descripción de la experiencia laboral.',
+  fr: 'Saisissez d’abord une description de l’expérience professionnelle.',
+  it: 'Inserisci prima una descrizione dell’esperienza lavorativa.',
+  ar: 'يرجى إدخال وصف خبرة العمل أولاً.',
+  sr: 'Prvo unesite opis radnog iskustva.',
+  hr: 'Prvo unesite opis radnog iskustva.',
+  ru: 'Сначала введите описание опыта работы.',
+  'pt-BR': 'Insira primeiro uma descrição da experiência profissional.',
+  ja: '先に職歴の説明を入力してください。',
+};
+
 function pick(map: MsgMap, locale: Locale | string): string {
   return map[locale as Locale] ?? map.en ?? '';
 }
@@ -236,6 +252,8 @@ export function aiErrorMessage(
       return withSeconds(pick(CIRCUIT_OPEN, locale), retryAfterSec);
     case 'generation_validation_failed':
       return pick(VALIDATION, locale);
+    case 'experience_description_required':
+      return pick(EXPERIENCE_DESCRIPTION_REQUIRED, locale);
     default:
       return pick(PROVIDER_UNAVAILABLE, locale);
   }

@@ -241,7 +241,21 @@ function bulletsPass(
     isPresent,
   });
   if (!fidelity.valid) {
-    return { ok: false, reason: fidelity.violations[0]?.kind || 'fidelity_failed' };
+    const preferred = fidelity.violations.find((v) =>
+      v.kind === 'missing_canonical_duty'
+      || v.kind === 'employment_tense_mismatch'
+      || v.kind === 'wrong_language'
+      || v.kind === 'unsupported_claim'
+      || v.kind === 'unsupported_duty',
+    );
+    const reason = preferred?.kind
+      || fidelity.violations[0]?.kind
+      || 'fidelity_failed';
+    // Map legacy unsupported_duty to the external contract name when needed.
+    if (reason === 'unsupported_duty') {
+      return { ok: false, reason: 'unsupported_claim' };
+    }
+    return { ok: false, reason };
   }
   return { ok: true };
 }
@@ -387,7 +401,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   }
 
   const grounded = normalizeLocaleText(
-    deterministicLocalizedBulletsFromCanonical(canonical, locale, gender) || '',
+    deterministicLocalizedBulletsFromCanonical(canonical, locale, gender, { isPresent }) || '',
     locale,
   );
   const second = bulletsPass(grounded, factSet, cv, locale, experienceIndex, isPresent);

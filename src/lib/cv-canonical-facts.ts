@@ -111,7 +111,32 @@ export function splitExperienceBullets(description: string): string[] {
     if (unit) expanded.push(unit);
   }
 
-  return expanded.filter(Boolean);
+  // Sentence-separated duties in one textarea block (common on Android when
+  // newlines are lost): "Duty one. Duty two. Duty three."
+  // Do not split decimals/dates (1.1.2022) or trailing elaborations that start
+  // with filler capitals ("Extended operational coverage…").
+  const looksLikeStandaloneDuty = (text: string): boolean => {
+    const t = text.trim();
+    if (t.length < 20) return false;
+    if (/^(Extended|Additional|Including|Across|With\s+precise|Item\s+\d|Coverage\s+item)/iu.test(t)) {
+      return false;
+    }
+    return true;
+  };
+  const sentenced: string[] = [];
+  for (const unit of expanded) {
+    const parts = unit
+      .split(/(?<=[.!?।])\s+(?=[A-ZČĆŽŠĐА-ЯЁІЇЄĞÜÖÄ\u0900-\u097F])/u)
+      .map((p) => stripPrefix(p).trim())
+      .filter((p) => p.length > 8);
+    if (parts.length > 1 && parts.every(looksLikeStandaloneDuty)) {
+      sentenced.push(...parts);
+      continue;
+    }
+    if (unit) sentenced.push(unit);
+  }
+
+  return sentenced.filter(Boolean);
 }
 
 export function formatExperienceBullets(bullets: string[], bulletPrefix = '• '): string {

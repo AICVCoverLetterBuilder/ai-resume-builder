@@ -1015,6 +1015,15 @@ export default function CVBuilderPage() {
     if (!exp) return;
     if (generatingBulletsId) return; // Prevent multiple concurrent requests
 
+    // Empty-description guard: no API call, no usage count.
+    const groundingBeforeRequest = freezeCanonicalExperienceDescription(
+      ensureCanonicalExperienceFrozen(exp),
+    ).trim();
+    if (!groundingBeforeRequest) {
+      toast.error(aiErrorMessage('experience_description_required', locale));
+      return;
+    }
+
     const proToken = getCurrentProTokenOrToast(() => setAiImprovementsModal(true));
     if (!proToken) return;
 
@@ -1065,6 +1074,9 @@ export default function CVBuilderPage() {
         gender: cv.personal.gender || '',
         // Always send the frozen canonical source — never a prior Serbian/Hindi rewrite.
         sourceDescription: canonicalSource || exp.description || '',
+        // Structured date status is authoritative for employment tense.
+        isPresent: Boolean(exp.isPresent),
+        endDate: exp.isPresent ? 'present' : (exp.endDate || ''),
         requestId: reqCtx.requestId,
       };
 

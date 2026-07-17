@@ -27,6 +27,7 @@ import {
   isValidOccupationalTitle,
 } from './cv-role-title';
 import { hasIncorrectSerbianDurationGrammar } from './cv-serbian-grammar';
+import { validateMaterialDutyCoverage } from './cv-material-duty-coverage';
 
 export type CvFidelityViolationKind =
   | 'unsupported_duty'
@@ -46,8 +47,12 @@ export type CvFidelityViolationKind =
   | 'unsupported_summary_fact'
   | 'unsupported_achievement_or_impact'
   | 'current_role_tense_mismatch'
+  | 'employment_tense_mismatch'
+  | 'missing_canonical_duty'
   | 'mixed_locale_proficiency'
-  | 'invalid_occupational_title_in_summary';
+  | 'invalid_occupational_title_in_summary'
+  | 'unsupported_claim'
+  | 'wrong_language';
 
 export type CvFidelityViolation = {
   kind: CvFidelityViolationKind;
@@ -555,7 +560,7 @@ export function validateCurrentRoleTenseMix(
     SR_PRESENT_CURRENT_ROLE.lastIndex = 0;
     if (hasPast && hasPresent) {
       violations.push({
-        kind: 'current_role_tense_mismatch',
+        kind: 'employment_tense_mismatch',
         matched: 'mixed-sr-past-present',
         section: 'experience',
       });
@@ -563,7 +568,7 @@ export function validateCurrentRoleTenseMix(
       const m = text.match(SR_PAST_CURRENT_ROLE);
       if (m?.[0]) {
         violations.push({
-          kind: 'current_role_tense_mismatch',
+          kind: 'employment_tense_mismatch',
           matched: m[0],
           section: 'experience',
         });
@@ -571,13 +576,23 @@ export function validateCurrentRoleTenseMix(
     }
   }
   if (locale === 'hi' && isPresent) {
-    const pastHabitual = /(करती\s+थी|करता\s+था)/u.test(text);
+    // Reject habitual past (करती थी / रखती थी) for current roles. Do not treat
+    // perfective CV style (किया / किए) as an automatic employment-tense failure —
+    // that is common Hindi CV wording and is repaired via present templates when needed.
+    const pastHabitual = /(करती\s+थी|करता\s+था|रखती\s+थी|रखता\s+था|बनाए\s+रखती\s+थी|बनाए\s+रखता\s+था|सहयोग\s+करती\s+थी|सहयोग\s+करता\s+था)/u.test(text);
     const presentProg = /(कर\s+रही\s+हूँ|कर\s+रहा\s+हूँ)/u.test(text);
-    const presentSimple = /(करती\s+हूँ|करता\s+हूँ)/u.test(text);
+    const presentSimple = /(करती\s+हूँ|करता\s+हूँ|रखती\s+हूँ|रखता\s+हूँ|बनाए\s+रखती\s+हूँ|बनाए\s+रखता\s+हूँ|सहयोग\s+करती\s+हूँ|सहयोग\s+करता\s+हूँ)/u.test(text);
     if (pastHabitual && (presentProg || presentSimple)) {
       violations.push({
-        kind: 'current_role_tense_mismatch',
+        kind: 'employment_tense_mismatch',
         matched: 'mixed-hi-past-present',
+        section: 'experience',
+      });
+    } else if (pastHabitual && !presentProg && !presentSimple) {
+      const m = text.match(/(करती\s+थी|करता\s+था|रखती\s+थी|रखता\s+था)/u);
+      violations.push({
+        kind: 'employment_tense_mismatch',
+        matched: m?.[0] || 'hi-past-for-present-role',
         section: 'experience',
       });
     }
@@ -923,7 +938,24 @@ export function validateLocalizedExperienceBullets(
     .filter(Boolean)
     .join(' ');
 
-  if (canonical.length > 0 && localized.length !== canonical.length) {
+  const sourceJoinedForCoverage = canonical.map((f) => f.sourceText || f.value).join('\n');
+  const coverage = validateMaterialDutyCoverage(sourceJoinedForCoverage, localizedDescription);
+  if (!coverage.valid) {
+    violations.push({
+      kind: 'missing_canonical_duty',
+      matched: coverage.missing.join(','),
+      section: `experience-${experienceIndex}`,
+      evidence: diag,
+    });
+  }
+
+  // Bullet count is advisory only when material coverage already fails. When every
+  // material duty is present, sentence combining is allowed (coverage ≠ 1:1 lines).
+  if (
+    canonical.length > 0
+    && localized.length !== canonical.length
+    && !coverage.valid
+  ) {
     violations.push({
       kind: 'bullet_count_mismatch',
       matched: `${localized.length}!=${canonical.length}`,
@@ -998,8 +1030,8 @@ export function validateLocalizedExperienceBullets(
     });
   }
 
-  // Material logistics anchors: transport/loading/delivery must not vanish from the whole description.
-  const sourceJoined = canonical.map((f) => f.sourceText || f.value).join('\n');
+  // Legacy logistics anchors (covered also by material-duty coverage above).
+  const sourceJoined = sourceJoinedForCoverage;
   for (const anchor of MATERIAL_DUTY_ANCHORS) {
     if (anchor.source.test(sourceJoined) && !anchor.localized.test(joined)) {
       violations.push({

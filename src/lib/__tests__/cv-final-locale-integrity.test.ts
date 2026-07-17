@@ -183,7 +183,7 @@ describe('current-role Serbian tense consistency', () => {
   it('detects the verified mixed past/present current role', () => {
     const violations = validateCurrentRoleTenseMix(mixed, 'sr', true);
     expect(violations).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'current_role_tense_mismatch' }),
+      expect.objectContaining({ kind: 'employment_tense_mismatch' }),
     ]));
   });
 

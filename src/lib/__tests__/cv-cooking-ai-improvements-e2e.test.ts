@@ -138,7 +138,7 @@ describe('Serbian cooking → English AI Improvements apply pipeline', () => {
     });
     expect(pipeline.blocked).toBe(false);
     expect(pipeline.finalized.origin).toBe('deterministic_fallback');
-    expect(pipeline.stateCv.experience[0].description).toMatch(/Prepared|Organized|Coordinated|Followed/i);
+    expect(pipeline.stateCv.experience[0].description).toMatch(/Prepare|Organize|Coordinate|Follow/i);
     expect(pipeline.stateCv.experience[0].description).not.toMatch(/Pripremala sam/);
   });
 

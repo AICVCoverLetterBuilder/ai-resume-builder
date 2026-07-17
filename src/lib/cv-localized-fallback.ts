@@ -17,6 +17,10 @@ import {
   type ExperienceDuration,
 } from './cv-experience-duration';
 import { resolveOccupationalTitleForSummary } from './cv-role-title';
+import {
+  classifyMaterialDutyKeys,
+  type MaterialDutyKey,
+} from './cv-material-duty-coverage';
 
 type GenderTone = 'male' | 'female' | 'neutral';
 
@@ -321,15 +325,22 @@ type CookingDutyIntent = 'cuisine_prep' | 'kitchen_org' | 'kitchen_collab' | 'fo
 function classifyCookingDutyIntent(text: string): CookingDutyIntent | null {
   const t = text.toLowerCase().normalize('NFKC');
   const kitchenCtx = /(kuhinj|kitchen|jel\w*|namirnic|cuisine|dish(?:es)?|restaurant|food|mediteransk|mediterranean)/iu.test(t);
+  // Workplace hygiene in kitchen/restaurant CVs — do not require an explicit
+  // "kitchen" token when the duty already names hygiene of the work area.
+  // Do NOT treat bartender "bar area" hygiene as cooking food_hygiene.
   if (
     /\b(higijen\w*|hygiene|food[- ]?safet|bezbednost\s+hran|sigurnost\s+hran|skladišt\w*\s+namirnic|ingredient.?stor|freshness)/iu.test(t)
-    && (kitchenCtx || /namirnic|ingredient|hran|food/.test(t))
+    && !/\b(bar\s+area|šank|shank|cocktail|koktel)/iu.test(t)
+    && (
+      kitchenCtx
+      || /namirnic|ingredient|hran|food|radn\w*\s+prostor|workstation|workplace|कार्यस्थल/iu.test(t)
+    )
   ) {
     return 'food_hygiene';
   }
   if (
-    kitchenCtx
-    && /(sara[dđ]\w*|collaborat|koordin\w*|koleg\w*|tim|team|servis|service|posluživ\w*)/iu.test(t)
+    (kitchenCtx || /kuhinjsk\w*\s+tim|kitchen\s+team/iu.test(t))
+    && /(sara[dđ]\w*|collaborat|koordin\w*|koleg\w*|tim|team|servis|service|posluživ\w*|सहयोग)/iu.test(t)
   ) {
     return 'kitchen_collab';
   }
@@ -355,17 +366,25 @@ function classifyCookingDutyIntent(text: string): CookingDutyIntent | null {
  * (see `localizeCookingBulletFromSource`).
  */
 const COOKING_INTENT_BULLET: Partial<
-  Record<Locale, Record<CookingDutyIntent, (g: GenderTone) => string>>
+  Record<Locale, Record<CookingDutyIntent, (g: GenderTone, present?: boolean) => string>>
 > = {
   en: {
-    cuisine_prep: () =>
-      'Prepared dishes in accordance with the restaurant’s established standards.',
-    kitchen_org: () =>
-      'Organized food-preparation tasks and maintained an orderly kitchen workstation.',
-    kitchen_collab: () =>
-      'Coordinated with kitchen colleagues during daily service.',
-    food_hygiene: () =>
-      'Followed hygiene and ingredient-storage procedures stated in the role duties.',
+    cuisine_prep: (_g, present) =>
+      present
+        ? 'Prepare dishes in accordance with the restaurant’s established standards.'
+        : 'Prepared dishes in accordance with the restaurant’s established standards.',
+    kitchen_org: (_g, present) =>
+      present
+        ? 'Organize food-preparation tasks and maintain an orderly kitchen workstation.'
+        : 'Organized food-preparation tasks and maintained an orderly kitchen workstation.',
+    kitchen_collab: (_g, present) =>
+      present
+        ? 'Coordinate with kitchen colleagues during daily service.'
+        : 'Coordinated with kitchen colleagues during daily service.',
+    food_hygiene: (_g, present) =>
+      present
+        ? 'Follow hygiene and workplace cleanliness procedures stated in the role duties.'
+        : 'Followed hygiene and workplace cleanliness procedures stated in the role duties.',
   },
   de: {
     cuisine_prep: () =>
@@ -418,58 +437,84 @@ const COOKING_INTENT_BULLET: Partial<
       'اتباع إجراءات النظافة وتخزين المكونات الواردة في المهام.',
   },
   sr: {
-    cuisine_prep: (g) =>
-      g === 'male'
-        ? 'Pripremao sam jela u skladu sa utvrđenim standardima restorana.'
-        : 'Pripremala sam jela u skladu sa utvrđenim standardima restorana.',
-    kitchen_org: (g) =>
-      g === 'male'
-        ? 'Organizovao sam pripremu namirnica i održavao uredan radni prostor u kuhinji.'
-        : 'Organizovala sam pripremu namirnica i održavala uredan radni prostor u kuhinji.',
-    kitchen_collab: (g) =>
-      g === 'male'
-        ? 'Sarađivao sam sa kolegama iz kuhinjskog tima tokom dnevnog servisa.'
-        : 'Sarađivala sam sa kolegama iz kuhinjskog tima tokom dnevnog servisa.',
-    food_hygiene: (g) =>
-      g === 'male'
-        ? 'Poštovao sam higijenske procedure i pravila skladištenja namirnica.'
-        : 'Poštovala sam higijenske procedure i pravila skladištenja namirnica.',
+    cuisine_prep: (g, present) =>
+      present
+        ? 'Pripremam jela u skladu sa utvrđenim standardima restorana.'
+        : g === 'male'
+          ? 'Pripremao sam jela u skladu sa utvrđenim standardima restorana.'
+          : 'Pripremala sam jela u skladu sa utvrđenim standardima restorana.',
+    kitchen_org: (g, present) =>
+      present
+        ? 'Organizujem pripremu namirnica i održavam uredan radni prostor u kuhinji.'
+        : g === 'male'
+          ? 'Organizovao sam pripremu namirnica i održavao uredan radni prostor u kuhinji.'
+          : 'Organizovala sam pripremu namirnica i održavala uredan radni prostor u kuhinji.',
+    kitchen_collab: (g, present) =>
+      present
+        ? 'Sarađujem sa kolegama iz kuhinjskog tima tokom dnevnog servisa.'
+        : g === 'male'
+          ? 'Sarađivao sam sa kolegama iz kuhinjskog tima tokom dnevnog servisa.'
+          : 'Sarađivala sam sa kolegama iz kuhinjskog tima tokom dnevnog servisa.',
+    food_hygiene: (g, present) =>
+      present
+        ? 'Poštujem higijenske procedure i održavam higijenu radnog prostora.'
+        : g === 'male'
+          ? 'Poštovao sam higijenske procedure i pravila skladištenja namirnica.'
+          : 'Poštovala sam higijenske procedure i pravila skladištenja namirnica.',
   },
   hr: {
-    cuisine_prep: (g) =>
-      g === 'male'
-        ? 'Pripremao sam jela u skladu s utvrđenim standardima restorana.'
-        : 'Pripremala sam jela u skladu s utvrđenim standardima restorana.',
-    kitchen_org: (g) =>
-      g === 'male'
-        ? 'Organizirao sam pripremu namirnica i održavao uredan radni prostor u kuhinji.'
-        : 'Organizirala sam pripremu namirnica i održavala uredan radni prostor u kuhinji.',
-    kitchen_collab: (g) =>
-      g === 'male'
-        ? 'Surađivao sam s kolegama iz kuhinjskog tima tijekom dnevnog servisa.'
-        : 'Surađivala sam s kolegama iz kuhinjskog tima tijekom dnevnog servisa.',
-    food_hygiene: (g) =>
-      g === 'male'
-        ? 'Poštovao sam higijenske procedure i pravila skladištenja namirnica.'
-        : 'Poštovala sam higijenske procedure i pravila skladištenja namirnica.',
+    cuisine_prep: (g, present) =>
+      present
+        ? 'Pripremam jela u skladu s utvrđenim standardima restorana.'
+        : g === 'male'
+          ? 'Pripremao sam jela u skladu s utvrđenim standardima restorana.'
+          : 'Pripremala sam jela u skladu s utvrđenim standardima restorana.',
+    kitchen_org: (g, present) =>
+      present
+        ? 'Organiziram pripremu namirnica i održavam uredan radni prostor u kuhinji.'
+        : g === 'male'
+          ? 'Organizirao sam pripremu namirnica i održavao uredan radni prostor u kuhinji.'
+          : 'Organizirala sam pripremu namirnica i održavala uredan radni prostor u kuhinji.',
+    kitchen_collab: (g, present) =>
+      present
+        ? 'Surađujem s kolegama iz kuhinjskog tima tijekom dnevnog servisa.'
+        : g === 'male'
+          ? 'Surađivao sam s kolegama iz kuhinjskog tima tijekom dnevnog servisa.'
+          : 'Surađivala sam s kolegama iz kuhinjskog tima tijekom dnevnog servisa.',
+    food_hygiene: (g, present) =>
+      present
+        ? 'Poštujem higijenske procedure i održavam higijenu radnog prostora.'
+        : g === 'male'
+          ? 'Poštovao sam higijenske procedure i pravila skladištenja namirnica.'
+          : 'Poštovala sam higijenske procedure i pravila skladištenja namirnica.',
   },
   ru: {
-    cuisine_prep: (g) =>
-      g === 'male'
-        ? 'Готовил блюда в соответствии с установленными стандартами ресторана.'
-        : 'Готовила блюда в соответствии с установленными стандартами ресторана.',
-    kitchen_org: (g) =>
-      g === 'male'
-        ? 'Организовывал подготовку продуктов и поддерживал порядок на рабочем месте на кухне.'
-        : 'Организовывала подготовку продуктов и поддерживала порядок на рабочем месте на кухне.',
-    kitchen_collab: (g) =>
-      g === 'male'
-        ? 'Сотрудничал с коллегами кухонной бригады во время ежедневного обслуживания.'
-        : 'Сотрудничала с коллегами кухонной бригады во время ежедневного обслуживания.',
-    food_hygiene: (g) =>
-      g === 'male'
-        ? 'Соблюдал гигиенические процедуры и правила хранения продуктов.'
-        : 'Соблюдала гигиенические процедуры и правила хранения продуктов.',
+    cuisine_prep: (g, present) =>
+      present
+        ? (g === 'male'
+          ? 'Готовлю блюда в соответствии с установленными стандартами ресторана.'
+          : 'Готовлю блюда в соответствии с установленными стандартами ресторана.')
+        : g === 'male'
+          ? 'Готовил блюда в соответствии с установленными стандартами ресторана.'
+          : 'Готовила блюда в соответствии с установленными стандартами ресторана.',
+    kitchen_org: (g, present) =>
+      present
+        ? 'Организую подготовку продуктов и поддерживаю порядок на рабочем месте на кухне.'
+        : g === 'male'
+          ? 'Организовывал подготовку продуктов и поддерживал порядок на рабочем месте на кухне.'
+          : 'Организовывала подготовку продуктов и поддерживала порядок на рабочем месте на кухне.',
+    kitchen_collab: (g, present) =>
+      present
+        ? 'Сотрудничаю с коллегами кухонной бригады во время ежедневного обслуживания.'
+        : g === 'male'
+          ? 'Сотрудничал с коллегами кухонной бригады во время ежедневного обслуживания.'
+          : 'Сотрудничала с коллегами кухонной бригады во время ежедневного обслуживания.',
+    food_hygiene: (g, present) =>
+      present
+        ? 'Соблюдаю гигиенические процедуры и поддерживаю чистоту рабочего места.'
+        : g === 'male'
+          ? 'Соблюдал гигиенические процедуры и правила хранения продуктов.'
+          : 'Соблюдала гигиенические процедуры и правила хранения продуктов.',
   },
   'pt-BR': {
     cuisine_prep: () =>
@@ -482,24 +527,56 @@ const COOKING_INTENT_BULLET: Partial<
       'Cumprimento dos procedimentos de higiene e armazenamento de ingredientes indicados nas funções.',
   },
   hi: {
-    cuisine_prep: () =>
-      'रेस्तराँ के निर्धारित मानकों के अनुसार व्यंजन तैयार किए।',
-    kitchen_org: () =>
-      'खाद्य तैयारी के कार्यों को व्यवस्थित रखा और रसोई के कार्यक्षेत्र को व्यवस्थित बनाए रखा।',
-    kitchen_collab: () =>
-      'दैनिक सेवा के दौरान रसोई सहयोगियों के साथ समन्वय किया।',
-    food_hygiene: () =>
-      'स्वच्छता और सामग्री भंडारण प्रक्रियाओं का पालन किया जो भूमिका के कर्तव्यों में बताई गई हैं।',
+    cuisine_prep: (g, present) =>
+      present
+        ? (g === 'male'
+          ? 'मैं रेस्तरां के मानकों के अनुसार व्यंजन तैयार करता हूँ।'
+          : 'मैं रेस्तरां के मानकों के अनुसार व्यंजन तैयार करती हूँ।')
+        : (g === 'male'
+          ? 'मैं रेस्तरां के मानकों के अनुसार व्यंजन तैयार करता था।'
+          : 'मैं रेस्तरां के मानकों के अनुसार व्यंजन तैयार करती थी।'),
+    kitchen_org: (g, present) =>
+      present
+        ? (g === 'male'
+          ? 'मैं खाद्य तैयारी के कार्यों को व्यवस्थित रखता हूँ और रसोई के कार्यक्षेत्र को व्यवस्थित बनाए रखता हूँ।'
+          : 'मैं खाद्य तैयारी के कार्यों को व्यवस्थित रखती हूँ और रसोई के कार्यक्षेत्र को व्यवस्थित बनाए रखती हूँ।')
+        : (g === 'male'
+          ? 'मैं खाद्य तैयारी के कार्यों को व्यवस्थित रखता था और रसोई के कार्यक्षेत्र को व्यवस्थित बनाए रखता था।'
+          : 'मैं खाद्य तैयारी के कार्यों को व्यवस्थित रखती थी और रसोई के कार्यक्षेत्र को व्यवस्थित बनाए रखती थी।'),
+    kitchen_collab: (g, present) =>
+      present
+        ? (g === 'male'
+          ? 'मैं रसोई टीम के साथ सहयोग करता हूँ।'
+          : 'मैं रसोई टीम के साथ सहयोग करती हूँ।')
+        : (g === 'male'
+          ? 'मैं रसोई टीम के साथ सहयोग करता था।'
+          : 'मैं रसोई टीम के साथ सहयोग करती थी।'),
+    food_hygiene: (g, present) =>
+      present
+        ? (g === 'male'
+          ? 'मैं कार्यस्थल की स्वच्छता बनाए रखता हूँ।'
+          : 'मैं कार्यस्थल की स्वच्छता बनाए रखती हूँ।')
+        : (g === 'male'
+          ? 'मैं कार्यस्थल की स्वच्छता बनाए रखता था।'
+          : 'मैं कार्यस्थल की स्वच्छता बनाए रखती थी।'),
   },
   ja: {
-    cuisine_prep: () =>
-      'レストランの定められた基準に従って料理を準備した。',
-    kitchen_org: () =>
-      '食材準備作業を整理し、厨房の作業場を整然と維持した。',
-    kitchen_collab: () =>
-      '日常サービス中に厨房の同僚と連携した。',
-    food_hygiene: () =>
-      '職務に示された衛生および食材保管手順に従った。',
+    cuisine_prep: (_g, present) =>
+      present
+        ? 'レストランの定められた基準に従って料理を準備している。'
+        : 'レストランの定められた基準に従って料理を準備した。',
+    kitchen_org: (_g, present) =>
+      present
+        ? '食材準備作業を整理し、厨房の作業場を整然と維持している。'
+        : '食材準備作業を整理し、厨房の作業場を整然と維持した。',
+    kitchen_collab: (_g, present) =>
+      present
+        ? '日常サービス中に厨房の同僚と連携している。'
+        : '日常サービス中に厨房の同僚と連携した。',
+    food_hygiene: (_g, present) =>
+      present
+        ? '職務に示された衛生および職場の清潔手順に従っている。'
+        : '職務に示された衛生および食材保管手順に従った。',
   },
 };
 
@@ -542,6 +619,7 @@ function localizeCookingBulletFromSource(
   intent: CookingDutyIntent,
   locale: Locale,
   gender?: CoverLetterGender | string,
+  isPresent = false,
 ): string {
   const g = tone(gender);
   const table = COOKING_INTENT_BULLET[locale] || COOKING_INTENT_BULLET.en;
@@ -551,9 +629,25 @@ function localizeCookingBulletFromSource(
     && /\b(mediteransk\w*|mediterranean)/iu.test(sourceText)
   ) {
     const specific = COOKING_CUISINE_FROM_SOURCE[locale] || COOKING_CUISINE_FROM_SOURCE.en;
-    return specific!(g).trim();
+    const specificText = specific!(g).trim();
+    if (isPresent && locale === 'hi') {
+      return g === 'male'
+        ? 'मैं रेस्तरां के निर्धारित मानकों के अनुसार सर्बियाई और भूमध्यसागरीय व्यंजन तैयार करता हूँ।'
+        : 'मैं रेस्तरां के निर्धारित मानकों के अनुसार सर्बियाई और भूमध्यसागरीय व्यंजन तैयार करती हूँ।';
+    }
+    if (isPresent && locale === 'en') {
+      return specificText.replace(/^Prepared\b/, 'Prepare');
+    }
+    if (isPresent && (locale === 'sr' || locale === 'hr')) {
+      return g === 'male' || g === 'female'
+        ? specificText
+          .replace(/^Pripremao sam\b/i, 'Pripremam')
+          .replace(/^Pripremala sam\b/i, 'Pripremam')
+        : specificText;
+    }
+    return specificText;
   }
-  return (table?.[intent] || COOKING_INTENT_BULLET.en![intent])(g).trim();
+  return (table?.[intent] || COOKING_INTENT_BULLET.en![intent])(g, isPresent).trim();
 }
 
 /**
@@ -732,27 +826,137 @@ const GENERIC_DUTY_FALLBACK: Record<Locale, (g: GenderTone) => string> = {
     : 'इस भूमिका के अंतर्गत सौंपे गए पेशेवर कर्तव्यों और जिम्मेदारियों को पूरा कर रही हूँ।'),
 };
 
+/** Per-material-duty lines so warehouse/software/sales duties never collapse. */
+function localizedMaterialDutyBullet(
+  key: MaterialDutyKey,
+  locale: Locale,
+  g: GenderTone,
+  isPresent: boolean,
+): string | null {
+  const hi = (female: string, male: string) => (g === 'male' ? male : female);
+  const table: Partial<Record<MaterialDutyKey, Partial<Record<Locale, string>>>> = {
+    logistics_transport: {
+      en: isPresent ? 'Transport goods as part of warehouse operations.' : 'Transported goods as part of warehouse operations.',
+      hi: hi('मैं गोदाम कार्यों के अंतर्गत माल का परिवहन करती हूँ।', 'मैं गोदाम कार्यों के अंतर्गत माल का परिवहन करता हूँ।'),
+      de: 'Transport von Waren im Rahmen der Lagerprozesse.',
+      sr: isPresent
+        ? 'Transportujem robu u okviru skladišnog poslovanja.'
+        : (g === 'male' ? 'Transportovao sam robu u okviru skladišnog poslovanja.' : 'Transportovala sam robu u okviru skladišnog poslovanja.'),
+    },
+    logistics_loading: {
+      en: isPresent ? 'Load shipments carefully during warehouse handling.' : 'Loaded shipments carefully during warehouse handling.',
+      hi: hi('मैं गोदाम हैंडलिंग के दौरान लोडिंग करती हूँ।', 'मैं गोदाम हैंडलिंग के दौरान लोडिंग करता हूँ।'),
+      de: 'Sorgfältige Beladung von Sendungen im Lagerbetrieb.',
+      sr: isPresent
+        ? 'Utovaram pošiljke pažljivo u skladišnom poslovanju.'
+        : (g === 'male' ? 'Utovarao sam pošiljke pažljivo u skladišnom poslovanju.' : 'Utovarala sam pošiljke pažljivo u skladišnom poslovanju.'),
+    },
+    logistics_delivery: {
+      en: isPresent ? 'Deliver goods safely to their destination.' : 'Delivered goods safely to their destination.',
+      hi: hi('मैं माल की सुरक्षित डिलीवरी करती हूँ।', 'मैं माल की सुरक्षित डिलीवरी करता हूँ।'),
+      de: 'Sichere Auslieferung von Waren an den Bestimmungsort.',
+      sr: isPresent
+        ? 'Sigurno isporučujem robu do odredišta.'
+        : (g === 'male' ? 'Sigurno sam isporučivao robu do odredišta.' : 'Sigurno sam isporučivala robu do odredišta.'),
+    },
+    software_development: {
+      en: isPresent ? 'Develop application features and APIs for the product.' : 'Developed application features and APIs for the product.',
+      hi: hi('मैं उत्पाद के लिए एप्लिकेशन सुविधाएँ और API विकसित करती हूँ।', 'मैं उत्पाद के लिए एप्लिकेशन सुविधाएँ और API विकसित करता हूँ।'),
+      de: 'Entwicklung von Anwendungsfunktionen und APIs für das Produkt.',
+      sr: isPresent
+        ? 'Razvijam aplikativne funkcionalnosti i API-je.'
+        : (g === 'male' ? 'Razvijao sam aplikativne funkcionalnosti i API-je.' : 'Razvijala sam aplikativne funkcionalnosti i API-je.'),
+    },
+    software_testing: {
+      en: isPresent ? 'Test features with unit and integration checks.' : 'Tested features with unit and integration checks.',
+      hi: hi('मैं सुविधाओं का इकाई और एकीकरण परीक्षण करती हूँ।', 'मैं सुविधाओं का इकाई और एकीकरण परीक्षण करता हूँ।'),
+      de: 'Testen von Funktionen mit Unit- und Integrationstests.',
+      sr: isPresent
+        ? 'Testiram funkcionalnosti jediničnim i integracionim testovima.'
+        : (g === 'male' ? 'Testirao sam funkcionalnosti jediničnim i integracionim testovima.' : 'Testirala sam funkcionalnosti jediničnim i integracionim testovima.'),
+    },
+    software_documentation: {
+      en: isPresent ? 'Document APIs and implementation details for the team.' : 'Documented APIs and implementation details for the team.',
+      hi: hi('मैं टीम के लिए API और कार्यान्वयन विवरण का दस्तावेजीकरण करती हूँ।', 'मैं टीम के लिए API और कार्यान्वयन विवरण का दस्तावेजीकरण करता हूँ।'),
+      de: 'Dokumentation von APIs und Implementierungsdetails für das Team.',
+      sr: isPresent
+        ? 'Dokumentujem API-je i detalje implementacije za tim.'
+        : (g === 'male' ? 'Dokumentovao sam API-je i detalje implementacije za tim.' : 'Dokumentovala sam API-je i detalje implementacije za tim.'),
+    },
+    sales_prospecting: {
+      en: isPresent ? 'Prospect new leads and build the sales pipeline.' : 'Prospected new leads and built the sales pipeline.',
+      hi: hi('मैं नए लीड खोजती हूँ और सेल्स पाइपलाइन बनाती हूँ।', 'मैं नए लीड खोजता हूँ और सेल्स पाइपलाइन बनाता हूँ।'),
+      de: 'Akquise neuer Leads und Aufbau der Vertriebspipeline.',
+      sr: isPresent
+        ? 'Pronalazim potencijalne klijente i gradim prodajni pipeline.'
+        : (g === 'male' ? 'Pronalazio sam potencijalne klijente i gradio prodajni pipeline.' : 'Pronalazila sam potencijalne klijente i gradila prodajni pipeline.'),
+    },
+    sales_client_communication: {
+      en: isPresent ? 'Communicate with clients about needs and proposals.' : 'Communicated with clients about needs and proposals.',
+      hi: hi('मैं ग्राहकों से आवश्यकताओं और प्रस्तावों पर संवाद करती हूँ।', 'मैं ग्राहकों से आवश्यकताओं और प्रस्तावों पर संवाद करता हूँ।'),
+      de: 'Kommunikation mit Kunden zu Anforderungen und Angeboten.',
+      sr: isPresent
+        ? 'Komuniciram sa klijentima o potrebama i predlozima.'
+        : (g === 'male' ? 'Komunicirao sam sa klijentima o potrebama i predlozima.' : 'Komunicirala sam sa klijentima o potrebama i predlozima.'),
+    },
+    sales_order_processing: {
+      en: isPresent ? 'Process customer orders through to fulfillment.' : 'Processed customer orders through to fulfillment.',
+      hi: hi('मैं ग्राहक ऑर्डर को पूर्ति तक प्रोसेस करती हूँ।', 'मैं ग्राहक ऑर्डर को पूर्ति तक प्रोसेस करता हूँ।'),
+      de: 'Bearbeitung von Kundenaufträgen bis zur Erfüllung.',
+      sr: isPresent
+        ? 'Obrađujem narudžbe klijenata do isporuke.'
+        : (g === 'male' ? 'Obrađivao sam narudžbe klijenata do isporuke.' : 'Obrađivala sam narudžbe klijenata do isporuke.'),
+    },
+  };
+  const byLocale = table[key];
+  if (!byLocale) return null;
+  return (byLocale[locale] || byLocale.en || null)?.trim() || null;
+}
+
 function localizedBulletForFact(
   fact: CvCanonicalFact,
   locale: Locale,
   gender?: CoverLetterGender | string,
-  options?: { useGenericCatchAll?: boolean },
+  options?: { useGenericCatchAll?: boolean; isPresent?: boolean },
 ): string {
   const g = tone(gender);
   const source = fact.sourceText || fact.value;
   const category = fact.category || classifyDutyCategory(source);
+  const isPresent = Boolean(options?.isPresent);
 
   // Cooking-specific intents (category-aware + generic cooking source text).
   // Cuisine names are included only when present in the source fact.
   const cookingIntent = classifyCookingDutyIntent(source);
   if (cookingIntent) {
-    return localizeCookingBulletFromSource(source, cookingIntent, locale, gender);
+    return localizeCookingBulletFromSource(source, cookingIntent, locale, gender, isPresent);
+  }
+
+  // Material occupation duties (warehouse / software / sales) — one line per key
+  // when the source unit encodes a single material duty. Multi-key units fall
+  // through to generic intents (e.g. combined logistics template).
+  // Never override a known generic office/logistics intent (process/collaboration/…).
+  const materialKeys = classifyMaterialDutyKeys(source).filter((k) =>
+    k.startsWith('logistics_')
+    || k.startsWith('software_')
+    || k.startsWith('sales_')
+  );
+  const genericIntentEarly = category === 'generic' ? classifyGenericDutyIntent(source) : null;
+  if (materialKeys.length === 1 && !genericIntentEarly) {
+    const materialLine = localizedMaterialDutyBullet(materialKeys[0], locale, g, isPresent);
+    if (materialLine) return materialLine;
   }
 
   if (category === 'generic') {
-    const intent = classifyGenericDutyIntent(source);
+    const intent = genericIntentEarly || classifyGenericDutyIntent(source);
     const table = GENERIC_INTENT_BULLET[locale] || GENERIC_INTENT_BULLET.en;
     if (intent && table?.[intent]) return table[intent](g).trim();
+    // Distinct software/sales units that missed the single-key path above.
+    if (materialKeys.length >= 1) {
+      for (const key of materialKeys) {
+        const materialLine = localizedMaterialDutyBullet(key, locale, g, isPresent);
+        if (materialLine) return materialLine;
+      }
+    }
     // No known intent matched (duty outside the office/hospitality/logistics
     // vocabulary above). Callers that need a guaranteed-non-empty, always-safe
     // deterministic summary fallback (`deterministicLocalizedSummaryFromCanonical`,
@@ -778,6 +982,7 @@ export function localizeCanonicalBulletLine(
   sourceText: string,
   locale: Locale,
   gender?: CoverLetterGender | string,
+  options?: { isPresent?: boolean },
 ): string {
   const fact: CvCanonicalFact = {
     id: 'tmp',
@@ -787,16 +992,17 @@ export function localizeCanonicalBulletLine(
     category: classifyDutyCategory(sourceText),
     source: 'tmp',
   };
-  return localizedBulletForFact(fact, locale, gender);
+  return localizedBulletForFact(fact, locale, gender, options);
 }
 
 export function deterministicLocalizedBulletsFromCanonical(
   facts: CvCanonicalFact[],
   locale: Locale,
   gender?: CoverLetterGender | string,
+  options?: { isPresent?: boolean },
 ): string {
   if (!facts.length) return '';
-  const lines = facts.map((f) => localizedBulletForFact(f, locale, gender));
+  const lines = facts.map((f) => localizedBulletForFact(f, locale, gender, options));
   if (lines.some((l) => !l.trim())) return '';
   return formatExperienceBullets(lines);
 }
