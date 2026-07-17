@@ -60,6 +60,16 @@ export interface WorkExperience {
    * classified legacy display text (not ordinary user-confirmed typing).
    */
   groundingRecoverySource?: 'legacy_recovered_display_duties';
+  /**
+   * Semantic duty keys recovered for export grounding alongside
+   * canonicalDescription when present. Identity is key-based — not tied to
+   * display line count or English shell padding.
+   */
+  recoveredSemanticDuties?: Array<{
+    key: string;
+    confidence: 'narrow_supported';
+    sourceClauseIndex: number;
+  }>;
 }
 
 export interface Education {

@@ -350,6 +350,14 @@ export function normalizeExperienceBulletsForQuality(
   const locBullets = splitExperienceBullets(exp.description || '');
   const isPresent = Boolean(exp.isPresent);
   let changed = false;
+  // Legacy semantic recovery: never expand/pad visible Hindi from English shells.
+  if (
+    exp.groundingRecoverySource === 'legacy_recovered_display_duties'
+    && locBullets.length > 0
+    && sourceBullets.length > locBullets.length
+  ) {
+    return { description: exp.description || '', changed: false };
+  }
   const next = sourceBullets.map((sourceText, i) => {
     // When authoritative shells outnumber display lines (legacy recovery → 3
     // English shells vs 2 Hindi lines), never pad with English for non-en locales.

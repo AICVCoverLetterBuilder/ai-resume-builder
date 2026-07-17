@@ -129,12 +129,18 @@ function isTitleConflictReason(reason: string): boolean {
   return /summary_title_localization_conflict|forced-conflicting-title|invalid_occupational_title|duty_family_mismatch/i.test(reason);
 }
 
+function isExportWiringReason(reason: string): boolean {
+  return /legacy_export_recovery_not_invoked|legacy_export_recovery_snapshot_overwritten|modern_minimal_stale_snapshot|modern_minimal_used_stale_snapshot|localized_display_projection_incomplete|summary_fact_set_used_stale_experience/i.test(reason);
+}
+
 function isSummaryFactsReason(reason: string): boolean {
-  return /summary_grounding_projection_failed|summary_proper_noun_rejected|summary_locale_state_mismatch|missing_provenance|migration_failure|recovery_failure|mixed_locale_projection|mixed_locale_field|summary_export_contract_mismatch|template_export_projection_failed|summary_recovery_projection_failed|summary_authoritative_fact_set_empty|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_not_invoked|legacy_grounding_recovery_empty|legacy_grounding_recovery_overwritten|modern_minimal_used_stale_snapshot|summary_fact_set_used_stale_experience/i.test(reason);
+  // Content-grounding only. Wiring/packaging/stale-snapshot bugs must not use this toast.
+  return /summary_grounding_projection_failed|summary_proper_noun_rejected|summary_locale_state_mismatch|missing_provenance|migration_failure|recovery_failure|mixed_locale_projection|mixed_locale_field|summary_export_contract_mismatch|summary_recovery_projection_failed|summary_validation_failed_after_recovery|summary_authoritative_fact_set_empty|summary_fact_set_missing_recovered_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|legacy_export_recovery_no_safe_duties|legacy_grounding_recovery_not_invoked|legacy_grounding_recovery_overwritten/i.test(reason)
+    && !isExportWiringReason(reason);
 }
 
 function isLegacySnapshotReason(reason: string): boolean {
-  return /legacy_runtime_snapshot_not_applied|legacy_runtime_snapshot_invalid|export_snapshot_stale|showAddress|regionSettings|invalid[_ ]?region/i.test(reason);
+  return /legacy_runtime_snapshot_not_applied|legacy_runtime_snapshot_invalid|export_snapshot_stale|showAddress|regionSettings|invalid[_ ]?region|legacy_export_recovery_not_invoked|legacy_export_recovery_snapshot_overwritten|modern_minimal_stale_snapshot|localized_display_projection_incomplete/i.test(reason);
 }
 
 function isBlobGenerationReason(reason: string): boolean {
@@ -203,6 +209,10 @@ export function formatCvExportIntegrityToast(
   }
   if (reason && isTitleConflictReason(reason)) {
     return TITLE_CONFLICT[locale] || TITLE_CONFLICT.en;
+  }
+  // Wiring/stale-snapshot failures must not look like Summary content errors.
+  if (reason && isExportWiringReason(reason)) {
+    return LEGACY_SNAPSHOT_REVIEW[locale] || LEGACY_SNAPSHOT_REVIEW.en;
   }
   if (reason && isSummaryFactsReason(reason)) {
     return SUMMARY_FACTS_REVIEW[locale] || SUMMARY_FACTS_REVIEW.en;

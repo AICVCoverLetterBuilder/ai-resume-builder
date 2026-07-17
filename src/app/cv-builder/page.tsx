@@ -25,7 +25,11 @@ import { industryOptions, levelOptions, type BulletIndustry, type BulletLevel } 
 import { exportAtsStandardPdf, exportCleanSimplePdf, exportContemporaryBoldPdf, exportCorporateNavyPdf, exportCreativeArtisticPdf, exportCreativeBoldPdf, exportElegantFormalPdf, exportExecutivePremiumPdf, exportModernMinimalPdf, exportNordicCleanPdf, exportProfessionalClassicPdf, exportRirekishoPdf, exportTechSidebarPdf, exportToClipboard, exportToDOCX, exportRirekishoToDOCX, exportToPDF, openPrintFallback, assertDedicatedPdfRouteWasHandled, readPdfExportTemplateIdFromPreview, recordCvPdfExportRuntimeTrace, resolveCvForPdfExport, resolveCvPdfExportRoute } from '@/lib/export';
 import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
-import { formatCvExportIntegrityToast, wrapCvExportFailure } from '@/lib/cv-export-error-message';
+import {
+  CvExportFailure,
+  formatCvExportIntegrityToast,
+  wrapCvExportFailure,
+} from '@/lib/cv-export-error-message';
 import type { SaveFileResult } from '@/lib/native-save';
 import {
   CV_RUNTIME_MIGRATION_VERSION,
@@ -75,7 +79,10 @@ import {
 } from '@/lib/cv-field-locale-integrity';
 import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
-import { prepareLegacyRecoveredFinalLocaleSafeCv } from '@/lib/prepare-legacy-recovered-export';
+import {
+  prepareExportReadyCv,
+  unwrapExportReadyCv,
+} from '@/lib/prepare-export-ready-cv';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
@@ -1474,26 +1481,36 @@ export default function CVBuilderPage() {
 
     const prepareFinalLocaleSafeCv = (sourceCv: CVData): CVData => {
       try {
-        // Shared pre-template recovery: Modern Minimal must not validate Summary
-        // against a stale empty fact set before duties are recovered.
-        const { cv: recoveredCv, diagnostics } = prepareLegacyRecoveredFinalLocaleSafeCv(
-          sourceCv,
-          locale,
-          { gender: sourceCv.personal?.gender },
-        );
+        // Single export-ready snapshot for all templates/formats before branching.
+        const prepared = prepareExportReadyCv(sourceCv, locale, sourceCv.templateId, {
+          gender: sourceCv.personal?.gender,
+        });
+        if (!prepared.ok) {
+          if (
+            sourceCv.templateId === 'modern-minimal'
+            && /stale|overwritten|not_invoked|projection_incomplete/i.test(prepared.reason)
+          ) {
+            throw new CvExportFailure(
+              'modern_minimal_stale_snapshot',
+              `${prepared.reason} @ ${prepared.stage}`,
+            );
+          }
+          throw unwrapExportReadyCv(prepared);
+        }
+        const recoveredCv = prepared.cv;
+        const diagnostics = prepared.diagnostics;
         if (process.env.NODE_ENV !== 'production') {
-          console.debug('[CV export] legacy recovery', {
+          console.debug('[CV export] prepareExportReadyCv', {
             templateId: recoveredCv.templateId,
             recoveryInvoked: diagnostics.recoveryInvoked,
-            experienceSourcesBefore: diagnostics.experienceSourcesBefore,
-            experienceSourcesAfter: diagnostics.experienceSourcesAfter,
-            recoveredDutyKeys: diagnostics.recoveredDutyKeys,
+            semanticDutyKeys: diagnostics.summarySemanticDutyKeys,
+            summaryFactSetSource: diagnostics.summaryFactSetSource,
             summaryInitialReason: diagnostics.summaryInitialReason,
             summaryRecoverySource: diagnostics.summaryRecoverySource,
+            stage: diagnostics.stage,
           });
         }
-        // Persist recovered grounding metadata for reload/second export.
-        // Export still uses recoveredCv below — persistence is secondary.
+        // Persist repaired metadata; export uses recoveredCv (not a later cvRef re-read).
         const groundingPersisted: CVData = {
           ...sourceCv,
           region: recoveredCv.region,
@@ -1512,13 +1529,14 @@ export default function CVBuilderPage() {
               groundingRecoverySource:
                 matched.groundingRecoverySource ?? exp.groundingRecoverySource,
               descriptionOrigin: matched.descriptionOrigin ?? exp.descriptionOrigin,
+              recoveredSemanticDuties:
+                matched.recoveredSemanticDuties ?? exp.recoveredSemanticDuties,
             };
           }),
         };
         setCv(groundingPersisted);
         setCurrentCv(groundingPersisted);
 
-        // Template-specific integrity on top of the shared recovered snapshot.
         if (recoveredCv.templateId === 'creative-artistic') {
           return prepareCreativeArtisticExport(recoveredCv, locale, {
             gender: recoveredCv.personal?.gender,
@@ -1529,10 +1547,9 @@ export default function CVBuilderPage() {
             gender: recoveredCv.personal?.gender,
           }).cv;
         }
-        // Modern Minimal and all other templates consume the shared recovered CV.
         return recoveredCv;
       } catch (err) {
-        throw wrapCvExportFailure(err, 'template_export_projection_failed');
+        throw wrapCvExportFailure(err, 'legacy_export_recovery_not_invoked');
       }
     };
 

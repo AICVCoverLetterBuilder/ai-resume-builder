@@ -15,9 +15,9 @@ import {
 import { prepareLegacyRecoveredFinalLocaleSafeCv } from '@/lib/prepare-legacy-recovered-export';
 import {
   recoverLegacyExperienceGrounding,
-  recoveredDutyKeysFromVisibleText,
   LEGACY_RECOVERED_DISPLAY_DUTIES,
 } from '@/lib/cv-legacy-grounding-recovery';
+import { recoverSemanticDutiesFromDisplayText } from '@/lib/cv-semantic-duty-facts';
 import { resolveCanonicalExperienceDescription } from '@/lib/cv-export-integrity';
 import { buildCvCanonicalFactSet } from '@/lib/cv-canonical-facts';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
@@ -37,9 +37,9 @@ const EN_SHELLS = [
   'Collaborate with the kitchen team.',
 ].join('\n');
 const EXPECTED_DUTY_KEYS = [
-  'food_preparation',
-  'hygiene_workplace',
-  'kitchen_collaboration',
+  'food_preparation_restaurant_standards',
+  'workplace_hygiene',
+  'kitchen_team_collaboration',
 ];
 
 function mmLegacy(overrides: Record<string, unknown> = {}): CVData {
@@ -134,7 +134,8 @@ describe('Build 245 Modern Minimal legacy grounding', () => {
       summary: '',
     });
     expect(emptyFacts.facts.filter((f) => f.type === 'experience_bullet')).toHaveLength(0);
-    expect(recoveredDutyKeysFromVisibleText(HI_DUTIES)).toEqual(EXPECTED_DUTY_KEYS);
+    expect(recoverSemanticDutiesFromDisplayText(HI_DUTIES).duties.map((d) => d.key))
+      .toEqual(EXPECTED_DUTY_KEYS);
 
     const aiBefore = localStorage.getItem('cvpro-ai-usage');
     const { cv, diagnostics } = prepareLegacyRecoveredFinalLocaleSafeCv(raw, 'hi', {
@@ -181,12 +182,17 @@ describe('Build 245 Modern Minimal legacy grounding', () => {
     const raw = mmLegacy();
     const recovered = recoverLegacyExperienceGrounding(raw);
     expect(recovered.invoked).toBe(true);
-    expect(recovered.recoveredDutyKeys).toEqual(EXPECTED_DUTY_KEYS);
+    expect(recovered.recoveredDutyKeys).toEqual([
+      'food_preparation',
+      'hygiene_workplace',
+      'kitchen_collaboration',
+    ]);
 
     const prepared = prepareLegacyRecoveredFinalLocaleSafeCv(raw, 'hi', {
       gender: 'female',
       referenceDate: REF,
     });
+    expect(prepared.diagnostics.recoveredDutyKeys).toEqual(EXPECTED_DUTY_KEYS);
     expect(prepared.cv.experience[0].originalUserDescription).toBe(EN_SHELLS);
 
     // Simulate a Modern Minimal merge that only spreads template fields — must
@@ -275,11 +281,11 @@ describe('Build 245 Modern Minimal legacy grounding', () => {
       }],
       summary: 'मैं बेकर हूँ और भंडारण तथा नेतृत्व में माहिर हूँ।',
     });
-    expect(recoveredDutyKeysFromVisibleText(unsafe.experience[0].description)).toEqual([]);
+    expect(recoverSemanticDutiesFromDisplayText(unsafe.experience[0].description).duties).toEqual([]);
     expect(() => prepareLegacyRecoveredFinalLocaleSafeCv(unsafe as CVData, 'hi', {
       gender: 'female',
       referenceDate: REF,
-    })).toThrow(/legacy_grounding_recovery_empty|summary_authoritative_fact_set_empty|summary_recovery_projection_failed/);
+    })).toThrow(/legacy_export_recovery_no_safe_duties|summary_fact_set_missing_recovered_duties|summary_validation_failed_after_recovery|legacy_grounding_recovery_empty|summary_authoritative_fact_set_empty|summary_recovery_projection_failed/);
   });
 
   it('Test E — modern provenance / English MM / CN / CA controls remain green', async () => {
