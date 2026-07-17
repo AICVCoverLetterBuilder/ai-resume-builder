@@ -32,6 +32,7 @@ import { deduplicateSkillsForExport } from './cv-skills-projection';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { deterministicLocalizedSummaryFromCanonical, localizeCanonicalBulletLine } from './cv-localized-fallback';
+import { normalizeHindiGeneratedWhitespace } from './cv-hindi-normalize';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
 export type DurationIntegrationContext = {
@@ -377,6 +378,7 @@ export function normalizeExperienceBulletsForQuality(
     }
     if (locale === 'hi') {
       const before = text;
+      text = normalizeHindiGeneratedWhitespace(text, 'hi');
       text = normalizeHindiCustomerServiceWording(text);
       if (isPresent) {
         text = applyHindiCurrentRoleTense(text);
@@ -815,12 +817,16 @@ export function applyCvContentQuality(
 
   const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
   const hasCurrentRole = (cv.experience || []).some((e) => e.isPresent);
+  const dutiesText = (cv.experience || [])
+    .map((e) => e.canonicalDescription || e.description || '')
+    .join('\n');
   const durationContext: DurationIntegrationContext = {
     role: resolveOccupationalTitleForSummary({
       profileJobTitle: cv.personal?.jobTitle,
       currentExperienceTitle: primaryExp?.position,
       locale,
       gender,
+      dutiesText,
     }),
     company: primaryExp?.company || '',
     startDate: primaryExp?.startDate || '',
@@ -856,6 +862,7 @@ export function applyCvContentQuality(
       summary = injectHindiDurationWithOpening(summary, duration, durationContext);
       repaired = true;
     }
+    summary = normalizeHindiGeneratedWhitespace(summary, 'hi');
     summary = normalizeHindiCustomerServiceWording(summary);
     summary = applyHindiCurrentRoleTense(summary);
     summary = stripUnsupportedSummaryFluff(summary, locale);

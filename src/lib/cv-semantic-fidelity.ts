@@ -19,6 +19,7 @@ import {
   validateSummaryDuration,
 } from './cv-experience-duration';
 import { localizeCvLanguageLevel } from './cv-language-levels';
+import { hasSuspiciousHindiMergedTokens } from './cv-hindi-normalize';
 import { isLocale } from './i18n/translations';
 import { isValidOccupationalTitle } from './cv-role-title';
 
@@ -75,6 +76,15 @@ const UNSUPPORTED_DUTY_PATTERNS: RegExp[] = [
   /syrups? and garnishes?|сирупа и гарнир|عصائر وشرابات|sirovi i garniture/iu,
   /receiving and storing (?:wines|beers|spirits)|prijem i skladištenje|استلام وتخزين/iu,
   /customer satisfaction|ग्राहक संतुष्टि सुनिश्चित|obogaćuje kao profesional/iu,
+  // Generic corporate inventions that replace concrete logistics/process duties
+  /\bsupporting senior team members?\b/iu,
+  /\borganizational goals?\b/iu,
+  /\bclient requirements?\b/iu,
+  /\bidentifying inefficienc(?:y|ies)\b/iu,
+  /\bproposing practical solutions?\b/iu,
+  /\bdeadlines? and deliverables?\b/iu,
+  /\bcompliance requirements?\b/iu,
+  /\bdocumentation\b/iu,
   RECIPE_INVENTION,
 ];
 
@@ -127,6 +137,28 @@ const UNSUPPORTED_ACHIEVEMENT_PATTERNS: RegExp[] = [
   /international\s+partners?/iu,
   /exceptional\s+confidence/iu,
   /organizational\s+transformation/iu,
+  // Package-1 Stronger unsupported impact inflation
+  /ensuring\s+smooth\s+end[- ]to[- ]end\s+logistics/iu,
+  /strengthen\s+operational\s+efficiency/iu,
+  /drive\s+the\s+effective\s+execution/iu,
+  /insight[- ]driven\s+reports?/iu,
+  /support\s+informed\s+decision[- ]making/iu,
+  /reliable\s+basis\s+for\s+decision[- ]making/iu,
+  /ensuring\s+successful\s+project\s+execution/iu,
+  /preparing\s+precise\s+reports?/iu,
+  /unapre[đd]uj\w*\s+interne\s+procese/iu,
+  /obezbe[đd]uj\w*\s+uspešn\w*\s+izvršenje/iu,
+  /priprem\w*\s+precizn\w*\s+izveštaj/iu,
+  /pouzdan\w*\s+osnov\w*\s+za\s+donošenje\s+odluka/iu,
+];
+
+/** Material logistics/process anchors that must survive localization when present in source. */
+const MATERIAL_DUTY_ANCHORS: Array<{ source: RegExp; localized: RegExp; label: string }> = [
+  {
+    source: /\b(transport|utovar|istovar|load|unload|deliver|delivery|isporuč|परिवहन|डिलीवरी)\b/iu,
+    localized: /\b(transport|load|unload|deliver|delivery|utovar|istovar|isporuč|परिवहन|लोडिंग|डिलीवरी)\b/iu,
+    label: 'logistics-transport',
+  },
 ];
 
 const SUMMARY_CATEGORY_MARKERS: Record<Exclude<CvDutyCategory, 'generic'>, RegExp> = {
@@ -214,6 +246,11 @@ export const UNSUPPORTED_SUMMARY_FLUFF: Array<{ locale?: Locale; re: RegExp }> =
   { locale: 'hi', re: /ग्राहक संतुष्टि सुनिश्चित होती है।?/gu },
   { locale: 'hi', re: /पेशेवर के पास प्रासंगिक अनुभव है।?/gu },
   { locale: 'hi', re: /[^।.!?]*(?:स्टॉक\s+स्तर|इन्वेंटरी\s+गणना|आपूर्ति\s+आवश्यक)[^।.!?]*[।.!?]?/gu },
+  { locale: 'en', re: /[^.?!]*ensuring\s+smooth\s+end[- ]to[- ]end\s+logistics[^.?!]*[.?!]?/giu },
+  { locale: 'en', re: /[^.?!]*strengthen\s+operational\s+efficiency[^.?!]*[.?!]?/giu },
+  { locale: 'en', re: /[^.?!]*insight[- ]driven\s+reports?[^.?!]*[.?!]?/giu },
+  { locale: 'en', re: /[^.?!]*support\s+informed\s+decision[- ]making[^.?!]*[.?!]?/giu },
+  { locale: 'en', re: /[^.?!]*drive\s+the\s+effective\s+execution[^.?!]*[.?!]?/giu },
 ];
 
 /** True when a Hindi duration clause is comma-spliced after an unrelated finite verb. */
@@ -437,15 +474,24 @@ export function validateMixedLocaleProficiency(
   for (const lang of languages) {
     const level = (lang.level || '').trim();
     if (!level) continue;
+    // Known canonical keys or aliases that localize cleanly are never mixed-locale leaks.
     const localized = localizeCvLanguageLevel(level, locale as Locale);
+    const canonOk = localized !== level || /^(native|fluent|advanced|intermediate|basic)$/i.test(level);
+    if (canonOk && localized && !HI_KNOWN_LEVELS.test(localized) && locale !== 'hi') {
+      // Localized into current locale Latin/Cyrillic forms — OK.
+    }
     if (locale === 'hi') {
-      if (SR_KNOWN_LEVELS.test(level) || SR_KNOWN_LEVELS.test(localized)) {
+      if (SR_KNOWN_LEVELS.test(level) && !HI_KNOWN_LEVELS.test(localized)) {
         violations.push({
           kind: 'mixed_locale_proficiency',
           matched: localized || level,
           section: 'languages',
         });
-      } else if (EN_KNOWN_LEVELS.test(level) && !HI_KNOWN_LEVELS.test(localized)) {
+      }
+    }
+    if (locale === 'sr' || locale === 'hr') {
+      // Only flag genuine Hindi script leftovers — never canonical English enum keys.
+      if (HI_KNOWN_LEVELS.test(level) || /[\u0900-\u097F]/.test(level)) {
         violations.push({
           kind: 'mixed_locale_proficiency',
           matched: level,
@@ -453,8 +499,8 @@ export function validateMixedLocaleProficiency(
         });
       }
     }
-    if (locale === 'sr' || locale === 'hr') {
-      if (HI_KNOWN_LEVELS.test(level) || EN_KNOWN_LEVELS.test(level)) {
+    if (locale === 'en') {
+      if (HI_KNOWN_LEVELS.test(level) || SR_KNOWN_LEVELS.test(level) || /[\u0900-\u097F]/.test(level)) {
         violations.push({
           kind: 'mixed_locale_proficiency',
           matched: level,
@@ -812,6 +858,28 @@ export function validateLocalizedExperienceBullets(
     });
   }
 
+  // Material logistics anchors: transport/loading/delivery must not vanish from the whole description.
+  const sourceJoined = canonical.map((f) => f.sourceText || f.value).join('\n');
+  for (const anchor of MATERIAL_DUTY_ANCHORS) {
+    if (anchor.source.test(sourceJoined) && !anchor.localized.test(joined)) {
+      violations.push({
+        kind: 'material_duty_removed',
+        matched: anchor.label,
+        section: `experience-${experienceIndex}`,
+        evidence: diag,
+      });
+    }
+  }
+
+  if (options.locale === 'hi' && hasSuspiciousHindiMergedTokens(joined)) {
+    violations.push({
+      kind: 'locale_quality',
+      matched: 'hindi-merged-tokens',
+      section: `experience-${experienceIndex}`,
+      evidence: diag,
+    });
+  }
+
   for (const row of LOCALE_QUALITY_PATTERNS) {
     if (row.locale && options.locale && row.locale !== options.locale) continue;
     const m = joined.match(row.re);
@@ -902,6 +970,14 @@ export function validateLocalizedSummary(
   violations.push(...validateGenericTemplateLeak(joined, options.locale));
   violations.push(...validateSummaryFactGrounding(joined, factSet));
   violations.push(...validateUnsupportedAchievements(joined, factSet));
+  if (options.locale === 'hi' && hasSuspiciousHindiMergedTokens(joined)) {
+    violations.push({
+      kind: 'locale_quality',
+      matched: 'hindi-merged-tokens',
+      section: 'summary',
+      factId: 'summary-0',
+    });
+  }
   violations.push(...validateSummaryOccupationalTitle(joined, {
     locale: options.locale,
     experienceTitle: factSet.facts.find((f) => f.type === 'role')?.value,

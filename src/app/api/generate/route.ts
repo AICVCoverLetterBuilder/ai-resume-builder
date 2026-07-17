@@ -787,6 +787,7 @@ Plain text only. No quotation marks anywhere. Finish the last sentence completel
         candidate: cleanedText,
         sourceFactsText,
         fallbackSummary: groundedFallback,
+        duration: totalFromSnapshot,
         deadlineAt,
         repair: forceRespond
           ? undefined

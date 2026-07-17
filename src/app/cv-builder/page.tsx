@@ -57,6 +57,11 @@ import { buildExperienceDurationSnapshot, durationToPromptToken } from '@/lib/cv
 import { applyCvContentQuality } from '@/lib/cv-content-quality';
 import { finalizeClientAiSummary } from '@/lib/cv-summary-integrity';
 import {
+  localizeCvLanguageLevel,
+  normalizeCvLanguagesProficiency,
+  normalizeLanguageProficiencyToCanonical,
+} from '@/lib/cv-language-levels';
+import {
   omitInvalidLocalizedFieldsForPreview,
   validateFinalLocalizedCvFields,
 } from '@/lib/cv-field-locale-integrity';
@@ -411,6 +416,16 @@ export default function CVBuilderPage() {
     cvRef.current = cv;
   }, [cv]);
 
+  // Migrate polluted translated proficiency strings → canonical enum keys once on hydrate / locale churn.
+  useEffect(() => {
+    setCv((prev) => {
+      const next = normalizeCvLanguagesProficiency(prev);
+      const same = (prev.languages || []).every((lang, i) => lang.level === next.languages?.[i]?.level)
+        && (prev.languages || []).length === (next.languages || []).length;
+      return same ? prev : next;
+    });
+  }, [locale]);
+
   // rectangularPhotoDataUrl is set directly by handlePhotoChange from the crop modal output.
   // No useEffect re-generation — the crop modal produces it with the user's exact framing.
   useEffect(() => {
@@ -705,10 +720,13 @@ export default function CVBuilderPage() {
 
     setCv((prev) => {
       if (prev.languages.some((language) => language.name === resolvedName)) return prev;
+      const canonicalLevel = normalizeLanguageProficiencyToCanonical(
+        langLevel || 'intermediate',
+      );
       return applyCanonicalSkillsLanguagesEducationEdit(prev, {
         languages: [
           ...prev.languages,
-          { name: resolvedName, level: langLevel || t.cv.levels.intermediate },
+          { name: resolvedName, level: canonicalLevel || 'intermediate' },
         ],
       });
     });
@@ -2253,11 +2271,11 @@ export default function CVBuilderPage() {
                             className={inputClass + ' min-h-11 flex-1 sm:w-52 sm:flex-none'}
                           >
                             <option value="">{t.cv.levelPlaceholder}</option>
-                            <option value={t.cv.levels.native}>{t.cv.levels.native}</option>
-                            <option value={t.cv.levels.fluent}>{t.cv.levels.fluent}</option>
-                            <option value={t.cv.levels.advanced}>{t.cv.levels.advanced}</option>
-                            <option value={t.cv.levels.intermediate}>{t.cv.levels.intermediate}</option>
-                            <option value={t.cv.levels.basic}>{t.cv.levels.basic}</option>
+                            <option value="native">{t.cv.levels.native}</option>
+                            <option value="fluent">{t.cv.levels.fluent}</option>
+                            <option value="advanced">{t.cv.levels.advanced}</option>
+                            <option value="intermediate">{t.cv.levels.intermediate}</option>
+                            <option value="basic">{t.cv.levels.basic}</option>
                           </select>
                           <button
                             onClick={() => addLanguage()}
@@ -2271,7 +2289,7 @@ export default function CVBuilderPage() {
                       <div className="space-y-1">
                         {cv.languages.map((l, i) => (
                           <div key={i} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2 text-sm">
-                            {getLocalizedCvLanguageName(l.name, locale)} - {l.level}
+                            {getLocalizedCvLanguageName(l.name, locale)} - {localizeCvLanguageLevel(l.level, locale)}
                             <button onClick={() => setCv(prev => applyCanonicalSkillsLanguagesEducationEdit(prev, {
                               languages: prev.languages.filter((_, idx) => idx !== i),
                             }))} className="text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>

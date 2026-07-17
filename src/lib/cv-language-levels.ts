@@ -1,10 +1,20 @@
 /**
- * Localize known CV language proficiency enums at export time.
- * Custom unknown values are preserved exactly.
+ * Canonical language proficiency enums + display localization.
+ *
+ * Storage must always use locale-independent keys:
+ *   native | fluent | advanced | intermediate | basic
+ * Never persist translated UI strings (Napredni / उन्नत / Advanced) as source of truth.
  */
 import type { Locale } from './i18n/translations';
 
-const LEVEL_ALIASES: Record<string, 'native' | 'fluent' | 'advanced' | 'intermediate' | 'basic'> = {
+export type CanonicalLanguageProficiency =
+  | 'native'
+  | 'fluent'
+  | 'advanced'
+  | 'intermediate'
+  | 'basic';
+
+const LEVEL_ALIASES: Record<string, CanonicalLanguageProficiency> = {
   native: 'native',
   mother: 'native',
   'mother tongue': 'native',
@@ -17,6 +27,8 @@ const LEVEL_ALIASES: Record<string, 'native' | 'fluent' | 'advanced' | 'intermed
   basic: 'basic',
   beginner: 'basic',
   elementary: 'basic',
+  // EN display
+  'native speaker': 'native',
   // DE stored UI strings
   muttersprachlich: 'native',
   fließend: 'fluent',
@@ -31,31 +43,57 @@ const LEVEL_ALIASES: Record<string, 'native' | 'fluent' | 'advanced' | 'intermed
   básico: 'basic',
   avançado: 'advanced',
   intermediário: 'intermediate',
+  fluente: 'fluent',
   // FR
   maternelle: 'native',
+  'langue maternelle': 'native',
   courant: 'fluent',
   avancé: 'advanced',
   intermédiaire: 'intermediate',
   débutant: 'basic',
+  'notions de base': 'basic',
   // IT
   madrelingua: 'native',
-  fluente: 'fluent',
   avanzato: 'advanced',
   // SR/HR
   maternji: 'native',
+  materinski: 'native',
   tečan: 'fluent',
   napredni: 'advanced',
+  'napredna razina': 'advanced',
   srednji: 'intermediate',
+  'srednja razina': 'intermediate',
   osnovni: 'basic',
+  'osnovna razina': 'basic',
   // RU
   родной: 'native',
   свободный: 'fluent',
   продвинутый: 'advanced',
   средний: 'intermediate',
   базовый: 'basic',
+  // HI (critical: polluted storage from locale switch)
+  मातृभाषा: 'native',
+  धाराप्रवाह: 'fluent',
+  प्रवाहपूर्ण: 'fluent',
+  उन्नत: 'advanced',
+  मध्यम: 'intermediate',
+  बुनियादी: 'basic',
+  मूल: 'basic',
+  // AR
+  'لغة أم': 'native',
+  طلق: 'fluent',
+  متقدم: 'advanced',
+  متوسط: 'intermediate',
+  أساسي: 'basic',
+  // JA
+  'ネイティブ': 'native',
+  '流暢': 'fluent',
+  '上級': 'advanced',
+  '中級': 'intermediate',
+  '初級': 'basic',
 };
 
-const LOCALIZED: Record<Locale, Record<'native' | 'fluent' | 'advanced' | 'intermediate' | 'basic', string>> = {
+const LOCALIZED: Record<Locale, Record<CanonicalLanguageProficiency, string>> = {
   en: {
     native: 'Native',
     fluent: 'Fluent',
@@ -142,23 +180,52 @@ const LOCALIZED: Record<Locale, Record<'native' | 'fluent' | 'advanced' | 'inter
   },
 };
 
-function canonicalizeLevelKey(raw: string): keyof typeof LOCALIZED.en | null {
-  const key = raw.trim().toLowerCase();
+/** Map any known display/alias string to the stable canonical enum (or null). */
+export function canonicalizeLanguageProficiency(
+  raw: string,
+): CanonicalLanguageProficiency | null {
+  const key = (raw ?? '').normalize('NFKC').trim().toLowerCase();
   if (!key) return null;
   if (key in LEVEL_ALIASES) return LEVEL_ALIASES[key];
-  // Exact EN display forms
-  for (const [alias, canon] of Object.entries(LEVEL_ALIASES)) {
-    if (alias === key) return canon;
+  // Exact match without lowercasing for scripts that don't case-fold (Hindi/AR/JA/RU)
+  const exact = (raw ?? '').normalize('NFKC').trim();
+  if (exact in LEVEL_ALIASES) return LEVEL_ALIASES[exact];
+  // Case-insensitive Latin / mixed forms already covered; also try each LOCALIZED table value.
+  for (const table of Object.values(LOCALIZED)) {
+    for (const [canon, label] of Object.entries(table) as Array<[CanonicalLanguageProficiency, string]>) {
+      if (label.normalize('NFKC').trim().toLowerCase() === key) return canon;
+      if (label.normalize('NFKC').trim() === exact) return canon;
+    }
   }
   return null;
+}
+
+/**
+ * Normalize a stored proficiency to the canonical enum key.
+ * Unknown custom free-text is preserved unchanged (never erased).
+ */
+export function normalizeLanguageProficiencyToCanonical(raw: string): string {
+  const canon = canonicalizeLanguageProficiency(raw);
+  return canon ?? (raw ?? '').trim();
 }
 
 /** Localize a known proficiency enum; unknown custom text is returned unchanged. */
 export function localizeCvLanguageLevel(level: string, locale: Locale): string {
   const raw = (level ?? '').trim();
   if (!raw) return raw;
-  const canon = canonicalizeLevelKey(raw);
+  const canon = canonicalizeLanguageProficiency(raw);
   if (!canon) return raw;
   const table = LOCALIZED[locale] ?? LOCALIZED.en;
   return table[canon] ?? raw;
+}
+
+/** Rewrite every known translated level on a CV to the canonical enum (migration). */
+export function normalizeCvLanguagesProficiency<
+  T extends { languages?: Array<{ name: string; level: string }> },
+>(cv: T): T {
+  const languages = (cv.languages || []).map((lang) => ({
+    ...lang,
+    level: normalizeLanguageProficiencyToCanonical(lang.level),
+  }));
+  return { ...cv, languages };
 }

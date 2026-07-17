@@ -22,12 +22,16 @@ import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 export function buildDurationContextFromCv(cv: CVData, locale: Locale): DurationIntegrationContext {
   const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
   const gender = cv.personal?.gender || '';
+  const dutiesText = (cv.experience || [])
+    .map((e) => e.canonicalDescription || e.description || '')
+    .join('\n');
   return {
     role: resolveOccupationalTitleForSummary({
       profileJobTitle: cv.personal?.jobTitle,
       currentExperienceTitle: primaryExp?.position,
       locale,
       gender,
+      dutiesText,
     }),
     company: primaryExp?.company || '',
     startDate: primaryExp?.startDate || '',

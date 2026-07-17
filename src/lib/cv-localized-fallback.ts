@@ -182,7 +182,9 @@ const SUMMARY_SHELL: Record<Locale, (role: string, duties: string, g: GenderTone
   en: (role, duties, _g, durationPhrase) =>
     durationPhrase
       ? `${role || 'Professional'} ${durationPhrase}. ${duties}`.trim()
-      : `${role || 'Professional'} with relevant experience. ${duties}`.trim(),
+      // Avoid the banned empty shell "Professional with relevant experience" —
+      // when duties are present, a neutral role + duties is grounded content.
+      : `${role || 'Professional'}. ${duties}`.trim(),
   de: (role, duties, _g, durationPhrase) =>
     durationPhrase
       ? `${role || 'Fachkraft'} ${durationPhrase}. ${duties}`.trim()
@@ -207,18 +209,18 @@ const SUMMARY_SHELL: Record<Locale, (role: string, duties: string, g: GenderTone
     g === 'male'
       ? (durationPhrase
         ? `${role || 'Profesionalac'} ${durationPhrase}. ${duties}`.trim()
-        : `${role || 'Profesionalac'} sa relevantnim iskustvom. ${duties}`.trim())
+        : `${role || 'Profesionalac'}. ${duties}`.trim())
       : (durationPhrase
         ? `${role || 'Profesionalka'} ${durationPhrase}. ${duties}`.trim()
-        : `${role || 'Profesionalka'} sa relevantnim iskustvom. ${duties}`.trim()),
+        : `${role || 'Profesionalka'}. ${duties}`.trim()),
   hr: (role, duties, g, durationPhrase) =>
     g === 'male'
       ? (durationPhrase
         ? `${role || 'Profesionalac'} ${durationPhrase}. ${duties}`.trim()
-        : `${role || 'Profesionalac'} s relevantnim iskustvom. ${duties}`.trim())
+        : `${role || 'Profesionalac'}. ${duties}`.trim())
       : (durationPhrase
         ? `${role || 'Profesionalka'} ${durationPhrase}. ${duties}`.trim()
-        : `${role || 'Profesionalka'} s relevantnim iskustvom. ${duties}`.trim()),
+        : `${role || 'Profesionalka'}. ${duties}`.trim()),
   ru: (role, duties, g, durationPhrase) =>
     g === 'male'
       ? (durationPhrase
@@ -243,7 +245,13 @@ const SUMMARY_SHELL: Record<Locale, (role: string, duties: string, g: GenderTone
       : `${role || 'プロフェッショナル'}として関連経験があります。${duties}`.trim(),
 };
 
-function localizeRoleLabel(role: string, locale: Locale, g: GenderTone, profileJobTitle?: string): string {
+function localizeRoleLabel(
+  role: string,
+  locale: Locale,
+  g: GenderTone,
+  profileJobTitle?: string,
+  dutiesText?: string,
+): string {
   const raw = (role || '').trim();
   const gender = g === 'male' ? 'male' : g === 'female' ? 'female' : '';
   if (/bartender/i.test(raw)) {
@@ -268,6 +276,7 @@ function localizeRoleLabel(role: string, locale: Locale, g: GenderTone, profileJ
     currentExperienceTitle: raw,
     locale,
     gender,
+    dutiesText,
   });
 }
 
@@ -403,7 +412,7 @@ const GENERIC_INTENT_BULLET: Partial<
   },
   hi: {
     process: (g) => (g === 'male' ? 'आंतरिक प्रक्रियाओं के विकास और कार्यान्वयन में काम कर रहा हूँ।' : 'आंतरिक प्रक्रियाओं के विकास और कार्यान्वयन में काम कर रही हूँ।'),
-    collaboration: (g) => (g === 'male' ? 'परियोजना क्रियान्वयन पर क्रॉस-फंक्शनल टीमों के साथ सहयोग कर रहा हूँ।' : 'परियोजना क्रियान्वयन पर क्रॉस-फंक्शनल टीमों के साथ सहयोग कर रही हूँ।'),
+    collaboration: (g) => (g === 'male' ? 'परियोजना क्रियान्वयन में क्रॉस-फंक्शनल टीमों के साथ सहयोग कर रहा हूँ।' : 'परियोजना क्रियान्वयन में क्रॉस-फंक्शनल टीमों के साथ सहयोग कर रही हूँ।'),
     analysis: (g) => (g === 'male' ? 'व्यावसायिक डेटा का विश्लेषण कर रहा हूँ और वरिष्ठ प्रबंधन के लिए रिपोर्ट तैयार कर रहा हूँ।' : 'व्यावसायिक डेटा का विश्लेषण कर रही हूँ और वरिष्ठ प्रबंधन के लिए रिपोर्ट तैयार कर रही हूँ।'),
     planning: (g) => (g === 'male' ? 'विभागीय गतिविधियों की योजना और समन्वय में भाग ले रहा हूँ।' : 'विभागीय गतिविधियों की योजना और समन्वय में भाग ले रही हूँ।'),
     logistics: (g) => (g === 'male' ? 'गोदाम कार्यों के अंतर्गत माल का परिवहन, लोडिंग और सुरक्षित डिलीवरी कर रहा हूँ।' : 'गोदाम कार्यों के अंतर्गत माल का परिवहन, लोडिंग और सुरक्षित डिलीवरी कर रही हूँ।'),
@@ -518,7 +527,11 @@ export function deterministicLocalizedSummaryFromCanonical(
     || factSet.facts.find((f) => f.type === 'role')?.value
     || '';
   const profileTitle = factSet.facts.find((f) => f.type === 'job_title')?.value || '';
-  const role = localizeRoleLabel(rawRole, locale, g, profileTitle);
+  const sourceDuties = factSet.facts
+    .filter((f) => f.type === 'experience_bullet')
+    .map((f) => f.sourceText || f.value)
+    .join('\n');
+  const role = localizeRoleLabel(rawRole, locale, g, profileTitle, sourceDuties);
   const bullets = factSet.facts
     .filter((f) => f.type === 'experience_bullet')
     .slice(0, 4)

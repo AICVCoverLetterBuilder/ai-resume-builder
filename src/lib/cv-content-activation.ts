@@ -23,6 +23,9 @@ import {
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 import { hasRepairBudget } from './ai-request-timing';
+import { normalizeHindiGeneratedWhitespace } from './cv-hindi-normalize';
+import { resolveOccupationalTitleForSummary } from './cv-role-title';
+import type { ExperienceDuration } from './cv-experience-duration';
 
 export type CvContentActivation = {
   content: string;
@@ -121,21 +124,22 @@ export async function activateCvExperienceBullets(options: {
   const canonical = bulletsForExperience(options.factSet, options.experienceIndex);
   const canonicalJoined = canonical.map((b) => b.value).join('\n');
   const englishFallback = deterministicBulletsFromCanonical(canonical);
-  const first = validateLocalizedExperienceBullets(options.candidate, options.factSet, {
+  const candidate = normalizeHindiGeneratedWhitespace(options.candidate || '', options.locale);
+  const first = validateLocalizedExperienceBullets(candidate, options.factSet, {
     locale: options.locale,
     gender: options.gender,
     experienceIndex: options.experienceIndex,
     stage: 'initial',
   });
   if (
-    experiencePasses(options.candidate, {
+    experiencePasses(candidate, {
       ...options,
       stage: 'initial',
       canonicalJoined,
     })
   ) {
     return {
-      content: options.candidate.trim(),
+      content: candidate.trim(),
       status: 'passed',
       repairAttempted: false,
       fallbackUsed: false,
@@ -147,14 +151,15 @@ export async function activateCvExperienceBullets(options: {
   if (options.repair && canonical.length > 0 && hasRepairBudget(options.deadlineAt)) {
     repairAttempted = true;
     try {
-      const repaired = await options.repair(
+      const repairedRaw = await options.repair(
         buildBulletRepairPrompt(
           options.locale,
           first.violations,
-          options.candidate,
+          candidate,
           canonical.map((b) => `- [${b.id}] ${b.value}`).join('\n'),
         ),
       );
+      const repaired = normalizeHindiGeneratedWhitespace(repairedRaw || '', options.locale);
       if (
         experiencePasses(repaired, {
           ...options,
@@ -175,10 +180,13 @@ export async function activateCvExperienceBullets(options: {
     }
   }
 
-  const localizedFallback = deterministicLocalizedBulletsFromCanonical(
-    canonical,
+  const localizedFallback = normalizeHindiGeneratedWhitespace(
+    deterministicLocalizedBulletsFromCanonical(
+      canonical,
+      options.locale,
+      options.gender,
+    ) || '',
     options.locale,
-    options.gender,
   );
   if (
     localizedFallback
@@ -222,10 +230,23 @@ export async function activateCvExperienceBullets(options: {
 export function deterministicSummaryFromCanonical(
   factSet: CvCanonicalFactSet,
   fallbackHint = '',
+  options?: { locale?: Locale; gender?: CoverLetterGender | string },
 ): string {
-  const role = factSet.facts.find((f) => f.type === 'job_title')?.value
-    || factSet.facts.find((f) => f.type === 'role')?.value
-    || '';
+  const locale = options?.locale || 'en';
+  const gender = options?.gender || '';
+  const profileTitle = factSet.facts.find((f) => f.type === 'job_title')?.value || '';
+  const experienceTitle = factSet.facts.find((f) => f.type === 'role')?.value || '';
+  const dutiesText = factSet.facts
+    .filter((f) => f.type === 'experience_bullet')
+    .map((f) => f.sourceText || f.value)
+    .join('\n');
+  const role = resolveOccupationalTitleForSummary({
+    profileJobTitle: profileTitle,
+    currentExperienceTitle: experienceTitle,
+    locale,
+    gender,
+    dutiesText,
+  });
   const bullets = factSet.facts
     .filter((f) => f.type === 'experience_bullet')
     .slice(0, 3)
@@ -263,25 +284,28 @@ export async function activateCvSummary(options: {
   sourceFactsText: string;
   repair?: (prompt: string) => Promise<string>;
   fallbackSummary: string;
+  /** Optional experience duration for grounded neutral openings. */
+  duration?: ExperienceDuration;
   /** Absolute deadline (ms epoch) the whole request must respond by. When
    * insufficient budget remains for one more provider round-trip, repair is
    * skipped and the local deterministic fallback is used immediately instead
    * — see `ai-request-timing.ts`. */
   deadlineAt?: number | null;
 }): Promise<CvContentActivation> {
-  const first = validateLocalizedSummary(options.candidate, options.factSet, {
+  const candidate = normalizeHindiGeneratedWhitespace(options.candidate || '', options.locale);
+  const first = validateLocalizedSummary(candidate, options.factSet, {
     locale: options.locale,
     gender: options.gender,
     stage: 'initial',
   });
   if (
     first.valid
-    && options.candidate.trim()
-    && textMatchesRequestedFieldLocale(options.candidate, options.locale, 'summary')
-    && !isWrongLanguageAiOutput(options.candidate, options.locale)
+    && candidate.trim()
+    && textMatchesRequestedFieldLocale(candidate, options.locale, 'summary')
+    && !isWrongLanguageAiOutput(candidate, options.locale)
   ) {
     return {
-      content: options.candidate.trim(),
+      content: candidate.trim(),
       status: 'passed',
       repairAttempted: false,
       fallbackUsed: false,
@@ -293,14 +317,15 @@ export async function activateCvSummary(options: {
   if (options.repair && hasRepairBudget(options.deadlineAt)) {
     repairAttempted = true;
     try {
-      const repaired = await options.repair(
+      const repairedRaw = await options.repair(
         buildSummaryRepairPrompt(
           options.locale,
           first.violations,
-          options.candidate,
+          candidate,
           options.sourceFactsText,
         ),
       );
+      const repaired = normalizeHindiGeneratedWhitespace(repairedRaw || '', options.locale);
       const recheck = validateLocalizedSummary(repaired, options.factSet, {
         locale: options.locale,
         gender: options.gender,
@@ -326,7 +351,7 @@ export async function activateCvSummary(options: {
   }
 
   const sourceCanonical = options.factSet.facts.find((f) => f.type === 'summary')?.value || '';
-  const hinted = options.fallbackSummary.trim();
+  const hinted = normalizeHindiGeneratedWhitespace(options.fallbackSummary.trim(), options.locale);
   const hintedOk = hinted
     && textMatchesRequestedFieldLocale(hinted, options.locale, 'summary')
     // The caller-supplied hint is frequently built from frozen canonical source text
@@ -351,10 +376,14 @@ export async function activateCvSummary(options: {
     };
   }
 
-  const localized = deterministicLocalizedSummaryFromCanonical(
-    options.factSet,
+  const localized = normalizeHindiGeneratedWhitespace(
+    deterministicLocalizedSummaryFromCanonical(
+      options.factSet,
+      options.locale,
+      options.gender,
+      options.duration,
+    ) || '',
     options.locale,
-    options.gender,
   );
   if (
     localized
@@ -379,7 +408,10 @@ export async function activateCvSummary(options: {
 
   if (options.locale === 'en') {
     return {
-      content: deterministicSummaryFromCanonical(options.factSet, hinted),
+      content: deterministicSummaryFromCanonical(options.factSet, hinted, {
+        locale: options.locale,
+        gender: options.gender,
+      }),
       status: 'fallback',
       repairAttempted,
       fallbackUsed: true,
