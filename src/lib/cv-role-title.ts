@@ -379,6 +379,26 @@ export function localizeOccupationalTitleForProjection(
   return localizeKnownTitle(title.trim(), locale, gender) || title;
 }
 
+/** True when two titles are the same occupation across locales (e.g. Baker ↔ बेकर). */
+export function occupationalTitlesAreEquivalent(
+  a?: string,
+  b?: string,
+  locale: Locale = 'en',
+  gender?: string,
+): boolean {
+  const left = (a || '').trim();
+  const right = (b || '').trim();
+  if (!left || !right) return false;
+  if (left.localeCompare(right, undefined, { sensitivity: 'accent' }) === 0) return true;
+  if (BAKER_TITLE_RE.test(left) && BAKER_TITLE_RE.test(right)) return true;
+  const leftLoc = localizeOccupationalTitleForProjection(left, locale, gender);
+  const rightLoc = localizeOccupationalTitleForProjection(right, locale, gender);
+  if (leftLoc && rightLoc && leftLoc === rightLoc) return true;
+  if (localizeOccupationalTitleForProjection(left, 'en', gender) === right) return true;
+  if (localizeOccupationalTitleForProjection(right, 'en', gender) === left) return true;
+  return false;
+}
+
 export function getOccupationalTitleFallback(locale: Locale, gender?: string): string {
   const g = normalizeCoverLetterGender(gender);
   if (locale === 'hi') return 'पेशेवर';

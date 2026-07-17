@@ -380,7 +380,7 @@ describe('Creative Bold export routing and rendering', () => {
 
     expect(cbGuard).toBeGreaterThan(-1);
     expect(fallback).toBeGreaterThan(cbGuard);
-    expect(guardBlock).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(guardBlock).toContain('t.cv.pdfExportFailed');
     expect(guardBlock).toContain('return;');
   });
 

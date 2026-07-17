@@ -153,9 +153,11 @@ export function classifyDutyCategory(text: string): CvDutyCategory {
   }
   // Stem match: Serbian "higijenske/higijena" must not require an exact word-boundary end.
   // Prefer hygiene over inventory when both storage and hygiene appear in one duty.
+  // Hindi/Arabic/CJK tokens must stay outside `\b(...)` — JS word boundaries are ASCII-only.
   if (
-    /\b(hygiene|safety|clean|organised|organized|čist|cist|higijen\w*|санитар\w*|स्वच्छ|衛生|نظاف)/iu.test(t)
+    /\b(hygiene|safety|clean|organised|organized|čist|cist|higijen\w*|санитар\w*)/iu.test(t)
     || /bar area|standarde higijen|food[- ]?safet|bezbednost\s+hran|sigurnost\s+hran/iu.test(t)
+    || /स्वच्छ|साफ|衛生|نظاف/u.test(t)
   ) {
     return 'hygiene_safety';
   }
@@ -172,7 +174,7 @@ export function classifyDutyCategory(text: string): CvDutyCategory {
     || /priprem\w*.{0,40}(jel|hran|namirnic|obrok)/iu.test(t)
     || /organiz\w*.{0,40}(priprem|radni\s+prostor|workstation)/iu.test(t)
     || /sara[dđ]\w*.{0,40}(kuhinj|kitchen|koleg)/iu.test(t)
-    || /भोजन|पकवान|खाना|طبخ|料理/.test(t)
+    || /भोजन|पकवान|खाना|व्यंजन|तैयार|रसोई|रेस्तरां|रेस्तراँ|طبخ|料理/u.test(t)
   ) {
     return 'food_preparation';
   }

@@ -646,7 +646,7 @@ describe('Modern Minimal preview/export parity', () => {
     expect(exportCall).toBeGreaterThan(mmBranch);
     expect(exportCall).toBeLessThan(genericExport);
     expect(page.indexOf('assertDedicatedPdfRouteWasHandled(pdfResolution)', branch)).toBeGreaterThan(branch);
-    expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(page.slice(fallbackGuard, fallback)).toContain('t.cv.pdfExportFailed');
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');
   });
 

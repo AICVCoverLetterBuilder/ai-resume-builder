@@ -432,7 +432,7 @@ describe('ATS Standard PDF export', () => {
     expect(guard).toBeGreaterThan(atsBranch);
     expect(fallback).toBeGreaterThan(guard);
     expect(pageSource.slice(guard, fallback)).toContain("cv.templateId === 'ats-standard'");
-    expect(pageSource.slice(guard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(pageSource.slice(guard, fallback)).toContain('t.cv.pdfExportFailed');
     expect(pageSource.slice(guard, fallback)).toContain('return;');
   });
 

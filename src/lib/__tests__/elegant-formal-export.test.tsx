@@ -829,7 +829,7 @@ describe('Elegant Formal export routing and rendering', () => {
 
     expect(guard).toBeGreaterThan(-1);
     expect(fallback).toBeGreaterThan(guard);
-    expect(guardBlock).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(guardBlock).toContain('t.cv.pdfExportFailed');
     expect(guardBlock).toContain('return;');
   });
 

@@ -757,7 +757,7 @@ describe('Creative Artistic export routing and rendering', () => {
 
     expect(guard).toBeGreaterThan(-1);
     expect(fallback).toBeGreaterThan(guard);
-    expect(guardBlock).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(guardBlock).toContain('t.cv.pdfExportFailed');
     expect(guardBlock).toContain('return;');
   });
 
@@ -1297,7 +1297,7 @@ describe('Creative Artistic dedicated PDF renderer/export route (Dragan fixture)
     expect(exportCall).toBeLessThan(genericExport);
     expect(page.slice(branch, exportCall)).toContain('liveCv');
     expect(page.slice(branch, branch + 300)).toContain('showCvExportSuccessToast');
-    expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(page.slice(fallbackGuard, fallback)).toContain('t.cv.pdfExportFailed');
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');
 
     const src = exportSource();

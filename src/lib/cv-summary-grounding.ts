@@ -647,14 +647,32 @@ export function buildConciseGroundedSummary(
   let text = '';
   if (locale === 'hi') {
     const rolePart = role || 'पेशेवर';
+    const company = (factSet.facts.find((f) => f.type === 'employer')?.value || '').trim();
+    const datesValue = (factSet.facts.find((f) => f.type === 'dates')?.value || '').trim();
+    const startMatch = /^(\d{4})-(\d{2})/.exec(datesValue);
+    const hindiMonths: Record<string, string> = {
+      '01': 'जनवरी', '02': 'फ़रवरी', '03': 'मार्च', '04': 'अप्रैल', '05': 'मई', '06': 'जून',
+      '07': 'जुलाई', '08': 'अगस्त', '09': 'सितंबर', '10': 'अक्तूबर', '11': 'नवंबर', '12': 'दिसंबर',
+    };
+    const monthYear = startMatch && hindiMonths[startMatch[2]]
+      ? `${hindiMonths[startMatch[2]]} ${startMatch[1]}`
+      : '';
+    const employmentClause = monthYear && company
+      ? ` और ${monthYear} से ${company} में कार्यरत हूँ`
+      : company
+        ? ` और ${company} में कार्यरत हूँ`
+        : '';
     const open = durationPhrase
       ? (g === 'female'
-        ? `मैं ${durationPhrase} वाली ${rolePart} हूँ।`
-        : `मैं ${durationPhrase} वाला ${rolePart} हूँ।`)
-      : `मैं ${rolePart} हूँ।`;
-    const cookingFrags = dutyFacts.map((f) => summaryDutyFragment(f.sourceText || f.value, locale, g));
+        ? `मैं ${durationPhrase} वाली ${rolePart} हूँ${employmentClause}।`
+        : `मैं ${durationPhrase} वाला ${rolePart} हूँ${employmentClause}।`)
+      : `मैं ${rolePart} हूँ${employmentClause}।`;
+    const cookingFrags = dutyFacts
+      .map((f) => summaryDutyFragment(f.sourceText || f.value, locale, g))
+      .filter(Boolean);
     let dutySentence = '';
     if (cookingFrags.length >= 3) {
+      // Natural Hindi: one subject, no awkward "मैं {company} में, जहाँ मैं …".
       dutySentence = `मैं ${cookingFrags[0]}, ${cookingFrags[1]} और ${cookingFrags[2]}।`;
     } else if (cookingFrags.length === 2) {
       dutySentence = `मैं ${cookingFrags[0]} और ${cookingFrags[1]}।`;

@@ -33,6 +33,57 @@ export function isUserAuthoredExperienceDescription(exp: Pick<WorkExperience, 'd
   return !origin || origin === 'user' || origin === 'user_confirmed_ai_edit';
 }
 
+type ScriptBucket = 'latin' | 'devanagari' | 'arabic' | 'cjk' | 'cyrillic' | 'other';
+
+function dominantScriptBucket(text: string): ScriptBucket {
+  const value = (text || '').normalize('NFKC');
+  const counts: Array<[ScriptBucket, number]> = [
+    ['devanagari', (value.match(/[\u0900-\u097F]/g) || []).length],
+    ['arabic', (value.match(/[\u0600-\u06FF]/g) || []).length],
+    ['cjk', (value.match(/[\u3040-\u30FF\u3400-\u9FFF]/g) || []).length],
+    ['cyrillic', (value.match(/[\u0400-\u04FF]/g) || []).length],
+    ['latin', (value.match(/[A-Za-zÀ-ÖØ-öø-ÿŠšŽžĆćČčĐđ]/g) || []).length],
+  ];
+  counts.sort((a, b) => b[1] - a[1]);
+  if (!counts[0] || counts[0][1] < 4) return 'other';
+  return counts[0][0];
+}
+
+/**
+ * True when canonical looks like AI display text promoted over user grounding
+ * (script mismatch vs original, or canonical equals AI-visible description).
+ */
+export function isAiPollutedCanonicalDescription(
+  exp: Pick<
+    WorkExperience,
+    'description' | 'canonicalDescription' | 'originalUserDescription' | 'descriptionOrigin'
+  >,
+): boolean {
+  const original = (exp.originalUserDescription || '').trim();
+  const canonical = (exp.canonicalDescription || '').trim();
+  const visible = (exp.description || '').trim();
+  if (!original || !canonical || original === canonical) return false;
+  if (
+    hasCuisineSpecificClaim(canonical)
+    && !hasCuisineSpecificClaim(original)
+  ) {
+    return true;
+  }
+  if (isAiDescriptionOrigin(exp.descriptionOrigin) && canonical === visible) {
+    return true;
+  }
+  const originalScript = dominantScriptBucket(original);
+  const canonicalScript = dominantScriptBucket(canonical);
+  if (
+    originalScript !== 'other'
+    && canonicalScript !== 'other'
+    && originalScript !== canonicalScript
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Resolve immutable grounding text for AI / fallback / validation.
  * Never returns AI-generated description when safer user sources exist.
@@ -47,13 +98,10 @@ export function resolveExperienceGroundingDescription(
   const canonical = (exp.canonicalDescription || '').trim();
   const visible = (exp.description || '').trim();
 
-  // Prefer confirmed canonical only when it does not invent claims absent from original.
+  // Prefer confirmed canonical only when it does not invent claims absent from original
+  // and was not polluted by AI-localized display text.
   if (canonical) {
-    if (
-      original
-      && hasCuisineSpecificClaim(canonical)
-      && !hasCuisineSpecificClaim(original)
-    ) {
+    if (original && isAiPollutedCanonicalDescription(exp)) {
       return original;
     }
     return canonical;
@@ -89,10 +137,9 @@ export function captureUserGroundingBeforeAi(exp: WorkExperience): WorkExperienc
     if (seed) next.canonicalDescription = seed;
   } else if (
     (next.originalUserDescription || '').trim()
-    && hasCuisineSpecificClaim(next.canonicalDescription!)
-    && !hasCuisineSpecificClaim(next.originalUserDescription!)
+    && isAiPollutedCanonicalDescription(next)
   ) {
-    // Repair polluted canonical that was promoted from AI inventions.
+    // Repair polluted canonical that was promoted from AI inventions / localized display.
     next.canonicalDescription = next.originalUserDescription;
   }
 

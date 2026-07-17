@@ -70,7 +70,17 @@ export function resolveCanonicalExperienceDescription(exp: {
     descriptionOrigin: exp.descriptionOrigin as CvExperienceDescriptionOrigin | undefined,
   });
   if (grounded) return grounded;
-  return (exp.canonicalDescription || exp.description || '').trim();
+  const canonical = (exp.canonicalDescription || '').trim();
+  if (canonical) return canonical;
+  // Never fall back to AI-generated display text as export grounding.
+  if (
+    exp.descriptionOrigin !== 'ai_generated'
+    && exp.descriptionOrigin !== 'ai_repaired'
+    && exp.descriptionOrigin !== 'deterministic_fallback'
+  ) {
+    return (exp.description || '').trim();
+  }
+  return '';
 }
 
 function isValidLocalizedExperience(
@@ -222,6 +232,14 @@ function localizeCvAgainstCanonical(
 
   if (!isValidLocalizedSummary(summary, factSet, locale, gender, canonicalSummary || summary, canonicalLocale)) {
     validationStatus = 'fallback';
+    const rejectedDetail = validateLocalizedSummary(summary, factSet, {
+      locale,
+      gender,
+      stage: 'export',
+    }).violations
+      .map((v) => `${v.kind}${v.matched ? `:${v.matched}` : ''}`)
+      .slice(0, 4)
+      .join('|');
     const durationForShell = buildExperienceDurationSnapshot(cv.experience || []).total;
     const localizedSummary = deterministicLocalizedSummaryFromCanonical(
       factSet,
@@ -247,10 +265,13 @@ function localizeCvAgainstCanonical(
       }
       summaryOrigin = 'deterministic_fallback';
     } else {
-      throw new CreativeArtisticLocaleExportError(
-        locale,
-        'summary: no valid localized summary (refusing English dump)',
+      const titleConflict = /forced-conflicting-title|title_localization|invalid_occupational_title/i.test(
+        rejectedDetail,
       );
+      const reason = titleConflict
+        ? `summary_title_localization_conflict: ${rejectedDetail || 'title mismatch'}`
+        : `summary_grounding_projection_failed: ${rejectedDetail || 'no valid localized summary'}`;
+      throw new CreativeArtisticLocaleExportError(locale, reason);
     }
   }
 

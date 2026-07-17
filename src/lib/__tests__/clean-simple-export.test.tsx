@@ -558,7 +558,7 @@ describe('Clean Simple preview/export parity', () => {
     expect(exportCall).toBeGreaterThan(branch);
     expect(exportCall).toBeLessThan(genericExport);
     expect(page.slice(branch, branch + 300)).toContain('showCvExportSuccessToast');
-    expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(page.slice(fallbackGuard, fallback)).toContain('t.cv.pdfExportFailed');
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');
 
     const src = exportSource();

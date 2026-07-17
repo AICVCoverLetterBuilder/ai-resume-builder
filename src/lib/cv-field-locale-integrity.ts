@@ -59,6 +59,46 @@ function hasForeignProseForHindi(text: string): boolean {
   return SERBIAN_PROSE.test(text) || ENGLISH_PROSE.test(text);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Strip structured CV proper nouns / contacts / dates before Hindi script-ratio checks.
+ * Does not weaken rejection of random English prose or English skill lists.
+ */
+export function stripStructuredCvProperNouns(
+  text: string,
+  structured?: {
+    fullName?: string;
+    email?: string;
+    phone?: string;
+    companies?: string[];
+    jobTitles?: string[];
+  },
+): string {
+  let out = (text || '').normalize('NFKC');
+  const tokens = [
+    structured?.fullName,
+    structured?.email,
+    structured?.phone,
+    ...(structured?.companies || []),
+    ...(structured?.jobTitles || []),
+  ]
+    .map((t) => (t || '').trim())
+    .filter((t) => t.length >= 2)
+    .sort((a, b) => b.length - a.length);
+  for (const token of tokens) {
+    out = out.replace(new RegExp(escapeRegExp(token), 'giu'), ' ');
+  }
+  // Emails, phones, years/dates, and leftover Latin acronyms tied to contacts.
+  out = out.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, ' ');
+  out = out.replace(/\+?\d[\d\s().-]{5,}\d/g, ' ');
+  out = out.replace(/\b(?:19|20)\d{2}\b/g, ' ');
+  out = out.replace(/\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/giu, ' ');
+  return out.replace(/\s+/g, ' ').trim();
+}
+
 /**
  * Hindi prose must be dominated by Hindi grammar. Latin product names, acronyms,
  * company names, email addresses and URLs are neutral and may remain.
@@ -75,6 +115,13 @@ export function textMatchesRequestedFieldLocale(
   text: string,
   locale: Locale,
   field: CvLocalizedFieldKind,
+  structuredExemptions?: {
+    fullName?: string;
+    email?: string;
+    phone?: string;
+    companies?: string[];
+    jobTitles?: string[];
+  },
 ): boolean {
   const value = (text || '').normalize('NFKC').trim();
   if (!value) return true;
@@ -88,10 +135,15 @@ export function textMatchesRequestedFieldLocale(
   }
   if (hasForeignProseForHindi(value)) return false;
 
-  const { devanagari, latin } = scriptCounts(value);
   const proseField = field === 'summary'
     || field === 'experience_bullet'
     || field === 'education_description';
+  const scriptProbe = proseField && structuredExemptions
+    ? stripStructuredCvProperNouns(value, structuredExemptions)
+    : value;
+  // If neutralizing structured tokens leaves almost nothing, the field was only
+  // proper nouns/contacts — accept for compact fields; prose still needs Hindi.
+  const { devanagari, latin } = scriptCounts(scriptProbe || value);
   if (proseField) {
     const total = Math.max(1, devanagari + latin);
     return devanagari >= 4 && devanagari / total >= 0.35;
@@ -108,8 +160,15 @@ function pushIfInvalid(
   locale: Locale,
   field: CvLocalizedFieldKind,
   path: string,
+  structuredExemptions?: {
+    fullName?: string;
+    email?: string;
+    phone?: string;
+    companies?: string[];
+    jobTitles?: string[];
+  },
 ): void {
-  if (textMatchesRequestedFieldLocale(text, locale, field)) return;
+  if (textMatchesRequestedFieldLocale(text, locale, field, structuredExemptions)) return;
   violations.push({
     kind: field === 'summary' ? 'mixed_locale_summary' : 'mixed_locale_field',
     field,
@@ -123,7 +182,24 @@ export function validateFinalLocalizedCvFields(
   requestedLocale: Locale,
 ): CvFieldLocaleValidation {
   const violations: CvFieldLocaleViolation[] = [];
-  pushIfInvalid(violations, cv.summary || '', requestedLocale, 'summary', 'summary');
+  const structuredExemptions = {
+    fullName: cv.personal?.fullName || '',
+    email: cv.personal?.email || '',
+    phone: cv.personal?.phone || '',
+    companies: (cv.experience || []).map((e) => e.company || '').filter(Boolean),
+    jobTitles: [
+      cv.personal?.jobTitle || '',
+      ...(cv.experience || []).map((e) => e.position || ''),
+    ].filter(Boolean),
+  };
+  pushIfInvalid(
+    violations,
+    cv.summary || '',
+    requestedLocale,
+    'summary',
+    'summary',
+    structuredExemptions,
+  );
   pushIfInvalid(
     violations,
     cv.personal?.jobTitle || '',
@@ -151,6 +227,7 @@ export function validateFinalLocalizedCvFields(
           requestedLocale,
           'experience_bullet',
           `experience[${experienceIndex}].description[${bulletIndex}]`,
+          structuredExemptions,
         );
       });
   });

@@ -70,6 +70,8 @@ import {
   omitInvalidLocalizedFieldsForPreview,
   validateFinalLocalizedCvFields,
 } from '@/lib/cv-field-locale-integrity';
+import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
+import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
@@ -1444,6 +1446,19 @@ export default function CVBuilderPage() {
     };
 
     const prepareFinalLocaleSafeCv = (sourceCv: CVData): CVData => {
+      // Creative Artistic / Corporate Navy: apply and export share one integrity
+      // contract. Do not reject English source duties before deterministic
+      // localization — that caused Hindi PDF generic failures (build 240).
+      if (sourceCv.templateId === 'creative-artistic') {
+        return prepareCreativeArtisticExport(sourceCv, locale, {
+          gender: sourceCv.personal?.gender,
+        }).cv;
+      }
+      if (sourceCv.templateId === 'corporate-navy') {
+        return prepareCorporateNavyExport(sourceCv, locale, {
+          gender: sourceCv.personal?.gender,
+        }).cv;
+      }
       const qualityCv = applyCvContentQuality(sourceCv, locale, {
         gender: sourceCv.personal?.gender,
         summaryOrigin: sourceCv.summaryOrigin,
@@ -1451,7 +1466,9 @@ export default function CVBuilderPage() {
       const localeCheck = validateFinalLocalizedCvFields(qualityCv, locale);
       if (!localeCheck.valid) {
         const first = localeCheck.violations[0];
-        throw new Error(`${first.kind}: ${first.path} does not match requested locale ${locale}`);
+        throw new Error(
+          `summary_export_contract_mismatch: ${first.kind}: ${first.path} does not match requested locale ${locale}`,
+        );
       }
       return qualityCv;
     };

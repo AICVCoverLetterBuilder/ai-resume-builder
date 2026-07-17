@@ -50,7 +50,7 @@ const GENERIC_DOCX: Record<Locale, string> = {
 };
 
 function isSummaryLocaleReason(reason: string): boolean {
-  return /summary|mixed.?language|unlocalized.?skill|english dump|no valid localized summary/i.test(reason);
+  return /summary|mixed.?language|mixed_locale|unlocalized.?skill|english dump|no valid localized summary|summary_grounding_projection_failed|summary_title_localization_conflict|summary_export_contract_mismatch|summary_proper_noun_rejected|summary_locale_state_mismatch/i.test(reason);
 }
 
 export function formatCvExportIntegrityToast(

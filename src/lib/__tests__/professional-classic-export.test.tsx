@@ -312,7 +312,7 @@ describe('Professional Classic preview/export parity', () => {
     expect(exportCall).toBeLessThan(genericExport);
     expect(page.slice(branch, exportCall)).toContain('liveCv');
     expect(page.slice(branch, branch + 300)).toContain('showCvExportSuccessToast');
-    expect(page.slice(fallbackGuard, fallback)).toContain('toast.error(t.cv.pdfExportFailed)');
+    expect(page.slice(fallbackGuard, fallback)).toContain('t.cv.pdfExportFailed');
     expect(page.slice(fallbackGuard, fallback)).toContain('return;');
 
     const src = exportSource();
