@@ -26,8 +26,11 @@ import {
 import {
   extractSourceDutyUnits,
   optionalTemplatePreservesSourceUnit,
+  sourceFactIdentitiesFromDescription,
   sourceUsableInLocale,
   universalPreserveSourceUnit,
+  type ProvenancedDeterministicFallback,
+  type ProvenancedFallbackBullet,
 } from './cv-source-fact-identity';
 import { buildConciseGroundedSummary } from './cv-summary-grounding';
 
@@ -1357,6 +1360,62 @@ export function deterministicLocalizedBulletsFromCanonical(
 
 /**
  * Rebuild Experience from authoritative source duty units — one preserved line
+ * per source bullet, with immutable source-fact provenance for deterministic
+ * coverage validation.
+ */
+export function buildSourcePreservingExperienceBulletsWithProvenance(
+  sourceDescription: string,
+  locale: Locale,
+  gender?: CoverLetterGender | string,
+  options?: { isPresent?: boolean },
+): ProvenancedDeterministicFallback {
+  const units = extractSourceDutyUnits(sourceDescription);
+  const identities = sourceFactIdentitiesFromDescription(sourceDescription);
+  if (!units.length) {
+    return { text: '', bullets: [], requiredFactIds: identities.map((i) => i.id) };
+  }
+  const isPresent = Boolean(options?.isPresent);
+  const tenseMode: 'present' | 'past' = isPresent ? 'present' : 'past';
+  const bullets: ProvenancedFallbackBullet[] = [];
+  for (let i = 0; i < units.length; i += 1) {
+    const sourceText = units[i];
+    const identity = identities[i];
+    let text = '';
+    let transformationKind: ProvenancedFallbackBullet['transformationKind'] = 'identity';
+    if (locale === 'en' || sourceUsableInLocale(sourceText, locale)) {
+      text = universalPreserveSourceUnit(sourceText, {
+        isPresent,
+        locale,
+        gender,
+      }) || sourceText.replace(/^[•\-\*\u2022]\s*/u, '').trim();
+      transformationKind = 'universal_preserve_tense';
+    } else {
+      text = localizeCanonicalBulletLine(sourceText, locale, gender, options);
+      transformationKind = 'localize_projection';
+    }
+    if (!text.trim() || !identity) continue;
+    bullets.push({
+      text: text.trim(),
+      sourceUnitId: identity.id,
+      sourceFactIds: [identity.id],
+      sourceUnit: identity.unit,
+      transformationKind,
+      locale,
+      tenseMode,
+    });
+  }
+  if (!bullets.length || bullets.length < units.length) {
+    return { text: '', bullets: [], requiredFactIds: identities.map((i) => i.id) };
+  }
+  return {
+    text: formatExperienceBullets(bullets.map((b) => b.text)),
+    bullets,
+    requiredFactIds: identities.map((i) => i.id),
+  };
+}
+
+/**
+ * Rebuild Experience from authoritative source duty units — one preserved line
  * per source bullet. Does not remap through occupation/intent catalogues.
  */
 export function buildSourcePreservingExperienceBullets(
@@ -1365,23 +1424,12 @@ export function buildSourcePreservingExperienceBullets(
   gender?: CoverLetterGender | string,
   options?: { isPresent?: boolean },
 ): string {
-  const units = extractSourceDutyUnits(sourceDescription);
-  if (!units.length) return '';
-  const isPresent = Boolean(options?.isPresent);
-  const lines = units.map((sourceText) => {
-    // Same-locale (or English) free-text: normalize tense only.
-    if (locale === 'en' || sourceUsableInLocale(sourceText, locale)) {
-      return universalPreserveSourceUnit(sourceText, {
-        isPresent,
-        locale,
-        gender,
-      }) || sourceText.replace(/^[•\-\*\u2022]\s*/u, '').trim();
-    }
-    // Cross-locale: allow localized projection via the shared bullet path.
-    return localizeCanonicalBulletLine(sourceText, locale, gender, options);
-  }).filter((l) => Boolean(l.trim()));
-  if (!lines.length || lines.length < units.length) return '';
-  return formatExperienceBullets(lines);
+  return buildSourcePreservingExperienceBulletsWithProvenance(
+    sourceDescription,
+    locale,
+    gender,
+    options,
+  ).text;
 }
 
 export function deterministicLocalizedSummaryFromCanonical(

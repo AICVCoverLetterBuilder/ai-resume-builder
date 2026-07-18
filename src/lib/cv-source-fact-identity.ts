@@ -22,19 +22,19 @@ const STOPWORDS = new Set([
 
 /** Light multilingual stem for coverage matching (not a full morphological analyser). */
 export function stemTokenForCoverage(token: string): string {
-  let t = (token || '').toLowerCase().normalize('NFKC');
+  let t = foldCoverageToken(token || '');
   if (t.length < 4) return t;
   // Serbian / Croatian verb pairs: pregledam↔pregleda, ažuriram↔ažurira, koordinišem↔koordiniše.
-  t = t.replace(/(?:avam|ava)$/u, '');
+  t = t.replace(/(?:avam|ava|avati)$/u, '');
   t = t.replace(/(?:iram|ira|irati)$/u, 'ir');
-  t = t.replace(/(?:išem|iše|isem|ise|šem|še)$/u, '');
+  t = t.replace(/(?:isem|ise|isem|ise|sem|se)$/u, ''); // folded š→s forms
   t = t.replace(/(?:ijem|uje|ujem|ajem)$/u, '');
   t = t.replace(/(?:ivao|ivala|ivali|ivale)$/u, '');
   t = t.replace(/(?:ao|ala|ali|ale|io|ila|ili|ile)$/u, '');
   t = t.replace(/(?:ama|ima|ove|ovi|eva|eve|om)$/u, '');
   t = t.replace(/(?:am|em|im)$/u, '');
   // Cyrillic Serbian stems
-  t = t.replace(/(?:авам|ава)$/u, '');
+  t = t.replace(/(?:авам|ава|авати)$/u, '');
   t = t.replace(/(?:ирам|ира|ирати)$/u, 'ир');
   t = t.replace(/(?:ишем|ише|шем|ше)$/u, '');
   t = t.replace(/(?:ијем|ује|ујем|ајем)$/u, '');
@@ -42,11 +42,29 @@ export function stemTokenForCoverage(token: string): string {
   t = t.replace(/(?:ао|ала|али|але|ио|ила|или|иле)$/u, '');
   t = t.replace(/(?:ама|има|ове|ови|ева|еве|ом)$/u, '');
   t = t.replace(/(?:ам|ем|им)$/u, '');
+  // Noun/adjective endings common in Serbian duties
+  t = t.replace(/(?:ovima|evima|ama|ima)$/u, '');
+  t = t.replace(/(?:ovi|eve|ova|eva)$/u, '');
   if (t.length >= 5) t = t.replace(/[aeiuаеиу]$/u, '');
   // English
   t = t.replace(/(?:ing|ed|es|s)$/u, '');
   t = t.replace(/(?:tion|ment|ness)$/u, '');
-  return t.length >= 3 ? t : token.toLowerCase();
+  return t.length >= 3 ? t : foldCoverageToken(token);
+}
+
+/**
+ * Fold diacritics for coverage matching so Serbian Latin izveštaj ↔ izvestaj
+ * and š/č/ć/ž/đ variants remain compatible without requiring English tokens.
+ */
+export function foldCoverageToken(token: string): string {
+  return (token || '')
+    .toLowerCase()
+    .normalize('NFKC')
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .replace(/đ/g, 'dj')
+    .replace(/ђ/g, 'dj')
+    .replace(/ј/g, 'j');
 }
 
 /**
@@ -271,34 +289,50 @@ export function sourceFactIdentitiesFromDescription(description: string): Source
 const COVERAGE_SYNONYM_STEMS: Record<string, string[]> = {
   tabel: ['evidenc', 'tabel'],
   evidenc: ['tabel', 'evidenc'],
-  intern: ['unutrasnj', 'unutrašnj', 'intern'],
+  intern: ['unutrasnj', 'intern'],
   unutrasnj: ['intern', 'unutrasnj'],
-  unutrašnj: ['intern', 'unutrašnj'],
-  nedostaj: ['nedostajuc', 'nedostajuć', 'nedostaj'],
+  nedostaj: ['nedostajuc', 'nedostaj'],
   nedostajuc: ['nedostaj', 'nedostajuc'],
-  nedostajuć: ['nedostaj', 'nedostajuć'],
-  odeljen: ['odeljenj', 'odeljen'],
-  odeljenj: ['odeljen', 'odeljenj'],
+  odelen: ['odelenj', 'odelen', 'odeljen', 'odeljenj'],
+  odelenj: ['odelen', 'odelenj'],
+  odeljen: ['odelen', 'odeljen', 'odeljenj'],
+  odeljenj: ['odeljen', 'odelen', 'odeljenj'],
   informacij: ['informac', 'informacij'],
   informac: ['informacij', 'informac'],
+  izvestaj: ['izvestaj'],
+  status: ['statu', 'status'],
+  statu: ['status', 'statu'],
+  unos: ['uno', 'unos'],
+  uno: ['unos', 'uno'],
 };
 
 function expandCoverageStem(stem: string): string[] {
-  const s = stem.toLowerCase().normalize('NFKC');
+  const s = foldCoverageToken(stem);
   const syn = COVERAGE_SYNONYM_STEMS[s];
-  return syn ? [...new Set([s, ...syn])] : [s];
+  return syn ? [...new Set([s, ...syn.map(foldCoverageToken)])] : [s];
 }
 
 function tokenCoverageRatio(required: string[], haystack: string): number {
   if (!required.length) return 1;
   const hay = normalizeSourceFactText(haystack);
+  const hayFolded = foldCoverageToken(hay);
   const hayStems = new Set(
-    hay.split(/\s+/).flatMap((t) => expandCoverageStem(stemTokenForCoverage(t))).filter((t) => t.length >= 3),
+    hay
+      .split(/\s+/)
+      .flatMap((t) => expandCoverageStem(stemTokenForCoverage(t)))
+      .filter((t) => t.length >= 3),
   );
   let hit = 0;
   for (const t of required) {
+    const folded = foldCoverageToken(t);
     const reqStems = expandCoverageStem(stemTokenForCoverage(t));
-    if (hay.includes(t) || reqStems.some((s) => hayStems.has(s))) hit += 1;
+    if (
+      hay.includes(t)
+      || hayFolded.includes(folded)
+      || reqStems.some((s) => hayStems.has(s))
+    ) {
+      hit += 1;
+    }
   }
   return hit / required.length;
 }
@@ -372,6 +406,135 @@ export function validateSourceFactIdentityCoverage(
   }
 
   const ok = missingIds.length === 0;
+  return {
+    ok,
+    requiredIds,
+    coveredIds,
+    missingIds,
+    duplicatedIds: [],
+    reason: ok ? undefined : 'experience_material_fact_coverage_incomplete',
+  };
+}
+
+export type DeterministicFallbackTransformationKind =
+  | 'universal_preserve_tense'
+  | 'localize_projection'
+  | 'identity';
+
+/** One deterministic fallback bullet with immutable source-unit provenance. */
+export type ProvenancedFallbackBullet = {
+  text: string;
+  sourceUnitId: string;
+  sourceFactIds: string[];
+  sourceUnit: string;
+  transformationKind: DeterministicFallbackTransformationKind;
+  locale: Locale;
+  tenseMode: 'present' | 'past';
+};
+
+export type ProvenancedDeterministicFallback = {
+  text: string;
+  bullets: ProvenancedFallbackBullet[];
+  requiredFactIds: string[];
+};
+
+/** Split compound duties on coordinating conjunctions for clause-preservation checks. */
+export function splitCompoundDutyClauses(unit: string): string[] {
+  const t = stripDutyListPrefix(unit || '').replace(/[.!?।۔…]\s*$/u, '').trim();
+  if (!t) return [];
+  const parts = t
+    .split(/\s+(?:i|и|and|und|y|et|&)\s+/iu)
+    .map((p) => p.trim())
+    .filter((p) => contentTokensFromDuty(p).some((tok) => tok.length >= 4));
+  return parts.length > 1 ? parts : [t];
+}
+
+/**
+ * Material preservation for a one-to-one deterministic transform.
+ * Provenance already names the intended source unit — this verifies clauses,
+ * objects and qualifiers were not dropped.
+ */
+export function deterministicBulletPreservesSourceUnit(
+  sourceUnit: string,
+  bulletText: string,
+): boolean {
+  const bullet = (bulletText || '').trim();
+  if (!bullet) return false;
+  const clauses = splitCompoundDutyClauses(sourceUnit);
+  for (const clause of clauses) {
+    const toks = contentTokensFromDuty(clause).filter((t) => t.length >= 4);
+    if (toks.length > 0 && tokenCoverageRatio(toks, bullet) < 0.55) {
+      return false;
+    }
+    // Distinctive tokens (length ≥ 5) are material objects/qualifiers — dropping
+    // any majority of them means the clause was hollowed out.
+    const distinctive = toks.filter((t) => t.length >= 5);
+    if (distinctive.length >= 1 && tokenCoverageRatio(distinctive, bullet) < 0.8) {
+      return false;
+    }
+  }
+  const all = contentTokensFromDuty(sourceUnit).filter((t) => t.length >= 4);
+  if (all.length === 0) return normalizeSourceFactText(bullet).length > 0;
+  if (tokenCoverageRatio(all, bullet) < 0.6) return false;
+  const distinctiveAll = all.filter((t) => t.length >= 5);
+  if (distinctiveAll.length >= 2 && tokenCoverageRatio(distinctiveAll, bullet) < 0.8) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Validate deterministic fallback using explicit source-unit provenance.
+ * Does not rediscover mappings via weak global token overlap alone.
+ * Provider/server output must continue using validateSourceFactIdentityCoverage.
+ */
+export function validateProvenancedDeterministicFallbackCoverage(
+  sourceDescription: string,
+  provenanced: ProvenancedFallbackBullet[],
+): SourceFactIdentityCoverage {
+  const required = sourceFactIdentitiesFromDescription(sourceDescription);
+  const requiredIds = required.map((r) => r.id);
+  if (!required.length) {
+    return { ok: true, requiredIds: [], coveredIds: [], missingIds: [], duplicatedIds: [] };
+  }
+
+  const usedFactIds = new Set<string>();
+  const coveredIds: string[] = [];
+  const candidateText = provenanced.map((b) => b.text).filter(Boolean).join('\n');
+
+  for (const bullet of provenanced) {
+    if (!bullet.text.trim()) continue;
+    const mapped = bullet.sourceFactIds.filter((id) => requiredIds.includes(id));
+    if (!mapped.length) continue;
+    // One bullet may only cover its own mapped source fact(s) from a single unit.
+    if (mapped.length !== 1) {
+      continue;
+    }
+    const factId = mapped[0];
+    if (usedFactIds.has(factId)) continue;
+    const sourceIdentity = required.find((r) => r.id === factId);
+    if (!sourceIdentity) continue;
+    if (!deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)) {
+      continue;
+    }
+    usedFactIds.add(factId);
+    coveredIds.push(factId);
+  }
+
+  const dup = validateDistinctExperienceBullets(candidateText);
+  if (!dup.ok && required.length >= 2) {
+    return {
+      ok: false,
+      requiredIds,
+      coveredIds,
+      missingIds: requiredIds.filter((id) => !coveredIds.includes(id)),
+      duplicatedIds: requiredIds,
+      reason: 'experience_material_fact_coverage_incomplete',
+    };
+  }
+
+  const missingIds = requiredIds.filter((id) => !coveredIds.includes(id));
+  const ok = missingIds.length === 0 && coveredIds.length === requiredIds.length;
   return {
     ok,
     requiredIds,

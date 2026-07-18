@@ -30,9 +30,13 @@ import {
 import {
   deterministicLocalizedBulletsFromCanonical,
   deterministicLocalizedSummaryFromCanonical,
-  buildSourcePreservingExperienceBullets,
+  buildSourcePreservingExperienceBulletsWithProvenance,
 } from './cv-localized-fallback';
-import { validateSourceFactIdentityCoverage, extractSourceDutyUnits } from './cv-source-fact-identity';
+import {
+  validateSourceFactIdentityCoverage,
+  validateProvenancedDeterministicFallbackCoverage,
+  extractSourceDutyUnits,
+} from './cv-source-fact-identity';
 import {
   evaluateRoleDutyConsistency,
   resolveOccupationalTitleForSummary,
@@ -141,6 +145,7 @@ export type FinalizeCvAiFieldResult = {
     clientDeterministicFallbackRequiredFactCount?: number;
     clientDeterministicFallbackCoveredFactCount?: number;
     clientDeterministicFallbackApplied?: boolean;
+    clientDeterministicFallbackUncoveredFactIds?: string[];
   };
 };
 
@@ -432,7 +437,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 function detectBulletScripts(text: string): string[] {
   const scripts: string[] = [];
   if (/[A-Za-z]/.test(text)) scripts.push('latin');
-  if (/[čćžšđČĆŽŠĐ]/.test(text)) scripts.push('latin-diacritic');
+  if (/[čćžšđČĆŽŠĐ]/.test(text)) scripts.push('latin_diacritic');
   if (/\p{Script=Cyrillic}/u.test(text)) scripts.push('cyrillic');
   if (/\p{Script=Devanagari}/u.test(text)) scripts.push('devanagari');
   if (/\p{Script=Arabic}/u.test(text)) scripts.push('arabic');
@@ -499,6 +504,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let clientDeterministicFallbackRequiredFactCount = sourceFactCount;
   let clientDeterministicFallbackCoveredFactCount = 0;
   let clientDeterministicFallbackApplied = false;
+  let clientDeterministicFallbackUncoveredFactIds: string[] = [];
   const serverFallbackUsed = input.originHint === 'deterministic_fallback';
   const apiResponseKind: NonNullable<FinalizeCvAiFieldResult['diagnostics']>['apiResponseKind'] =
     input.originHint === 'deterministic_fallback'
@@ -532,12 +538,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     clientDeterministicFallbackRequiredFactCount,
     clientDeterministicFallbackCoveredFactCount,
     clientDeterministicFallbackApplied,
+    clientDeterministicFallbackUncoveredFactIds,
   });
 
   const tryAccept = (
     text: string,
     origin: FinalizeCvAiFieldResult['origin'],
     stage: string,
+    options?: {
+      /** When set, skip semantic rediscovery and use provenance coverage. */
+      provenancedIdentity?: ReturnType<typeof validateProvenancedDeterministicFallbackCoverage>;
+    },
   ): FinalizeCvAiFieldResult | null => {
     const candidate = (text || '').trim();
     if (!candidate) {
@@ -560,12 +571,24 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastCovered = post.covered?.length ?? 0;
         return null;
       }
-      const identity = validateSourceFactIdentityCoverage(sourceForCoverage, candidate);
+      const identity = options?.provenancedIdentity
+        || validateSourceFactIdentityCoverage(sourceForCoverage, candidate);
       lastRequired = identity.requiredIds.length;
       lastCovered = identity.coveredIds.length;
+      if (stage === 'source_preserving_fallback' || stage === 'canonical_fallback') {
+        clientDeterministicFallbackRequiredFactCount = identity.requiredIds.length;
+        clientDeterministicFallbackCoveredFactCount = identity.coveredIds.length;
+        clientDeterministicFallbackUncoveredFactIds = identity.missingIds || [];
+      }
       if (!identity.ok) {
-        // Cross-script: allow only when every source unit has a material key and
-        // description-level material coverage already passed (cooking/logistics/cs).
+        // Provenanced deterministic path: never bypass via material-key catalogue.
+        if (options?.provenancedIdentity) {
+          lastRejectStage = `${stage}:source_fact_identity`;
+          lastRejectReason = identity.reason || 'experience_material_fact_coverage_incomplete';
+          return null;
+        }
+        // Cross-script provider/semantic path: allow only when every source unit has
+        // a material key and description-level material coverage already passed.
         const units = sourceForCoverage
           .split(/\n+/)
           .map((l) => l.replace(/^[•\-\*\u2022]\s*/u, '').trim())
@@ -590,6 +613,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       clientDeterministicFallbackScripts = detectBulletScripts(candidate);
       clientDeterministicFallbackCoveredFactCount = lastCovered || sourceFactCount;
       clientDeterministicFallbackRequiredFactCount = lastRequired || sourceFactCount;
+      clientDeterministicFallbackUncoveredFactIds = [];
     }
     return {
       blocked: false,
@@ -628,6 +652,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackRequiredFactCount: isClientFallback
           ? (lastRequired || sourceFactCount)
           : clientDeterministicFallbackRequiredFactCount,
+        clientDeterministicFallbackUncoveredFactIds: isClientFallback
+          ? []
+          : clientDeterministicFallbackUncoveredFactIds,
       },
     };
   };
@@ -690,14 +717,34 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   // Identities are captured from immutable source units before tense transforms.
   // Do not skip because the API response was already labelled server `fallback`.
   if (sourceForCoverage && !grounding?.staleGeneratedContentExcluded) {
-    const preserved = normalizeLocaleText(
-      buildSourcePreservingExperienceBullets(sourceForCoverage, locale, gender, { isPresent }) || '',
+    const built = buildSourcePreservingExperienceBulletsWithProvenance(
+      sourceForCoverage,
       locale,
+      gender,
+      { isPresent },
     );
-    clientDeterministicFallbackBulletCount = splitExperienceBullets(preserved).filter(Boolean).length;
+    const preserved = normalizeLocaleText(built.text || '', locale);
+    const normalizedLines = splitExperienceBullets(preserved);
+    const alignedProvenance = built.bullets.map((b, i) => ({
+      ...b,
+      text: (normalizedLines[i] || b.text).trim(),
+    }));
+    const provenanceCoverage = validateProvenancedDeterministicFallbackCoverage(
+      sourceForCoverage,
+      alignedProvenance,
+    );
+    clientDeterministicFallbackBulletCount = normalizedLines.filter(Boolean).length;
     clientDeterministicFallbackScripts = detectBulletScripts(preserved);
+    clientDeterministicFallbackRequiredFactCount = provenanceCoverage.requiredIds.length;
+    clientDeterministicFallbackCoveredFactCount = provenanceCoverage.coveredIds.length;
+    clientDeterministicFallbackUncoveredFactIds = provenanceCoverage.missingIds;
     fallbackBulletCount = clientDeterministicFallbackBulletCount;
-    const preservedAccepted = tryAccept(preserved, 'deterministic_fallback', 'source_preserving_fallback');
+    const preservedAccepted = tryAccept(
+      preserved,
+      'deterministic_fallback',
+      'source_preserving_fallback',
+      { provenancedIdentity: provenanceCoverage },
+    );
     if (preservedAccepted) return preservedAccepted;
   }
 

@@ -312,6 +312,21 @@ const EXTRA_DUTY_CLAIMS: Array<{ label: string; claim: RegExp; support: RegExp }
     claim: /(safety\s+inspection|inspecciones? de seguridad|Sicherheitsinspektion|فحص\s+السلامة|安全点検)/iu,
     support: /(safety\s+inspection|inspeccion|Sicherheitsinspektion|فحص|安全点検)/iu,
   },
+  {
+    label: 'invented_software_tools',
+    claim: /\b(Excel|Salesforce|Slack|Jira|SAP|Tableau)\b/iu,
+    support: /\b(Excel|Salesforce|Slack|Jira|SAP|Tableau)\b/iu,
+  },
+  {
+    label: 'invented_metrics_or_kpi',
+    claim: /\b(KPI|OKRs?|ROI)\b/iu,
+    support: /\b(KPI|OKRs?|ROI)\b/iu,
+  },
+  {
+    label: 'invented_leadership_team',
+    claim: /\b(managed a team|leadership|led a team)\b/iu,
+    support: /\b(managed a team|leadership|led a team|team lead)\b/iu,
+  },
 ];
 
 export type ExtraGeneratedDutyResult = {

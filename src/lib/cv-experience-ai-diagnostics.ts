@@ -121,6 +121,11 @@ export type ExperienceAiDiagnosticTrace = {
   rejectedStaleSourceKinds: ExperienceSelectedSourceKind[];
   englishSourceStillAuthoritative: boolean;
   currentTextareaIgnoredOrOverridden: boolean;
+  liveTextHash: string;
+  selectedSourceMatchesLiveText: boolean;
+  selectedSourceMateriallyDiffersFromLiveText: boolean;
+  selectedSourceEquivalentToLiveText: boolean;
+  selectedSourceContextCurrent: boolean;
   payloadLocale: string;
   payloadIndustryNorm: string;
   payloadLevelNorm: string;
@@ -159,6 +164,7 @@ export type ExperienceAiDiagnosticTrace = {
   clientDeterministicFallbackRequiredFactCount: number;
   clientDeterministicFallbackCoveredFactCount: number;
   clientDeterministicFallbackApplied: boolean;
+  clientDeterministicFallbackUncoveredFactIds: string[];
   finalBulletCount: number;
   finalBulletScripts: ExperienceScriptClass[];
   finalTypedFailureReason: string | null;
@@ -290,6 +296,11 @@ export function diagnoseExperienceSourceSelection(
   | 'rejectedStaleSourceKinds'
   | 'englishSourceStillAuthoritative'
   | 'currentTextareaIgnoredOrOverridden'
+  | 'liveTextHash'
+  | 'selectedSourceMatchesLiveText'
+  | 'selectedSourceMateriallyDiffersFromLiveText'
+  | 'selectedSourceEquivalentToLiveText'
+  | 'selectedSourceContextCurrent'
 > {
   const selected = (selectedText || '').trim();
   const selectedHash = fingerprintText(selected);
@@ -306,14 +317,21 @@ export function diagnoseExperienceSourceSelection(
     }
   }
 
+  // Prefer reporting equivalence when selected text equals the live field.
+  const textarea = (exp.description || '').trim();
+  const textareaHash = fingerprintText(textarea);
+  const selectedSourceMatchesLiveText = Boolean(
+    textarea && selected && textareaHash === selectedHash,
+  );
+
   const rejectedStaleSourceKinds = [...new Set(
     candidates
       .filter((c) => fingerprintText(c.text) !== selectedHash)
       .map((c) => c.kind),
   )];
 
-  const textarea = (exp.description || '').trim();
-  const textareaHash = fingerprintText(textarea);
+  // Selecting current-context canonical that is materially identical to the live
+  // textarea is NOT ignoring/overriding the textarea.
   const currentTextareaIgnoredOrOverridden = Boolean(
     textarea
     && selected
@@ -321,16 +339,17 @@ export function diagnoseExperienceSourceSelection(
   );
 
   const selectedScript = classifyExperienceScript(selected);
-  const textareaScript = classifyExperienceScript(textarea);
   const englishSourceStillAuthoritative = Boolean(
-    selected
+    currentTextareaIgnoredOrOverridden
+    && selected
     && (selectedScript === 'latin')
-    && (textareaScript === 'latin_diacritic'
-      || textareaScript === 'cyrillic'
-      || textareaScript === 'devanagari'
-      || textareaScript === 'arabic'
-      || textareaScript === 'cjk')
-    && currentTextareaIgnoredOrOverridden,
+    && (
+      classifyExperienceScript(textarea) === 'latin_diacritic'
+      || classifyExperienceScript(textarea) === 'cyrillic'
+      || classifyExperienceScript(textarea) === 'devanagari'
+      || classifyExperienceScript(textarea) === 'arabic'
+      || classifyExperienceScript(textarea) === 'cjk'
+    ),
   );
 
   return {
@@ -340,6 +359,11 @@ export function diagnoseExperienceSourceSelection(
     rejectedStaleSourceKinds,
     englishSourceStillAuthoritative,
     currentTextareaIgnoredOrOverridden,
+    liveTextHash: textarea ? textareaHash : 'empty',
+    selectedSourceMatchesLiveText,
+    selectedSourceMateriallyDiffersFromLiveText: currentTextareaIgnoredOrOverridden,
+    selectedSourceEquivalentToLiveText: selectedSourceMatchesLiveText,
+    selectedSourceContextCurrent: groundingSource !== 'excluded_stale',
   };
 }
 
@@ -411,6 +435,11 @@ export class ExperienceAiDiagnosticSession {
       rejectedStaleSourceKinds: [],
       englishSourceStillAuthoritative: false,
       currentTextareaIgnoredOrOverridden: false,
+      liveTextHash: 'empty',
+      selectedSourceMatchesLiveText: false,
+      selectedSourceMateriallyDiffersFromLiveText: false,
+      selectedSourceEquivalentToLiveText: false,
+      selectedSourceContextCurrent: true,
       payloadLocale: input.requestedLocale,
       payloadIndustryNorm: input.industryNorm || '',
       payloadLevelNorm: input.levelNorm || '',
@@ -448,6 +477,7 @@ export class ExperienceAiDiagnosticSession {
       clientDeterministicFallbackRequiredFactCount: 0,
       clientDeterministicFallbackCoveredFactCount: 0,
       clientDeterministicFallbackApplied: false,
+      clientDeterministicFallbackUncoveredFactIds: [],
       finalBulletCount: 0,
       finalBulletScripts: [],
       finalTypedFailureReason: null,
@@ -651,53 +681,56 @@ export class ExperienceAiDiagnosticSession {
       || this.draft.providerResponseKind === 'fallback',
     );
 
+    const clientScripts = (
+      (diag.clientDeterministicFallbackScripts as ExperienceScriptClass[] | undefined)?.length
+        ? (diag.clientDeterministicFallbackScripts as ExperienceScriptClass[])
+        : (clientFallbackApplied ? scriptsFromBullets(text) : [])
+    );
+    const clientBulletCount = clientFallbackAttempted
+      ? (diag.clientDeterministicFallbackBulletCount ?? diag.fallbackBulletCount ?? 0)
+      : 0;
+    const clientCovered = clientFallbackAttempted
+      ? (diag.clientDeterministicFallbackCoveredFactCount ?? 0)
+      : 0;
+    const clientRequired = clientFallbackAttempted
+      ? (diag.clientDeterministicFallbackRequiredFactCount
+        ?? diag.requiredFactCount
+        ?? this.draft.requiredFactCount
+        ?? 0)
+      : 0;
+    const clientUncovered = clientFallbackAttempted
+      ? (diag.clientDeterministicFallbackUncoveredFactIds || [])
+      : [];
+
     this.patch({
       requiredFactCount: diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0,
       coveredFactCount: diag.providerCoveredFactCount
         ?? diag.coveredFactCount
         ?? 0,
+      uncoveredFactIdentityHashes: clientUncovered.length
+        ? clientUncovered
+        : (this.draft.uncoveredFactIdentityHashes || []),
       apiResponseKind: apiResponseKind as ExperienceAiDiagnosticTrace['apiResponseKind'],
       serverFallbackUsed,
-      // Legacy single boolean — client apply only (not server response kind).
+      // Legacy fields derived from the same client-fallback result (no contradictions).
       fallbackSelected: clientFallbackApplied,
       fallbackReason: clientFallbackAttempted
         ? (diag.clientDeterministicFallbackReason || reason || 'deterministic_fallback')
         : null,
-      fallbackBulletCount: clientFallbackAttempted
-        ? (diag.clientDeterministicFallbackBulletCount ?? diag.fallbackBulletCount ?? 0)
-        : 0,
-      fallbackBulletScripts: clientFallbackApplied
-        ? scriptsFromBullets(text)
-        : (diag.clientDeterministicFallbackScripts as ExperienceScriptClass[] | undefined) || [],
-      fallbackRequiredFactCount: clientFallbackAttempted
-        ? (diag.clientDeterministicFallbackRequiredFactCount
-          ?? diag.requiredFactCount
-          ?? this.draft.requiredFactCount
-          ?? 0)
-        : 0,
-      fallbackCoveredFactCount: clientFallbackApplied
-        ? (diag.clientDeterministicFallbackCoveredFactCount ?? diag.coveredFactCount ?? 0)
-        : 0,
+      fallbackBulletCount: clientBulletCount,
+      fallbackBulletScripts: clientScripts,
+      fallbackRequiredFactCount: clientRequired,
+      fallbackCoveredFactCount: clientCovered,
       clientDeterministicFallbackAttempted: clientFallbackAttempted,
       clientDeterministicFallbackReason: clientFallbackAttempted
         ? (diag.clientDeterministicFallbackReason || reason || 'provider_postcondition_failed')
         : null,
-      clientDeterministicFallbackBulletCount: clientFallbackAttempted
-        ? (diag.clientDeterministicFallbackBulletCount ?? 0)
-        : 0,
-      clientDeterministicFallbackScripts: clientFallbackApplied
-        ? scriptsFromBullets(text)
-        : [],
-      clientDeterministicFallbackRequiredFactCount: clientFallbackAttempted
-        ? (diag.clientDeterministicFallbackRequiredFactCount
-          ?? diag.requiredFactCount
-          ?? this.draft.requiredFactCount
-          ?? 0)
-        : 0,
-      clientDeterministicFallbackCoveredFactCount: clientFallbackApplied
-        ? (diag.clientDeterministicFallbackCoveredFactCount ?? diag.coveredFactCount ?? 0)
-        : 0,
+      clientDeterministicFallbackBulletCount: clientBulletCount,
+      clientDeterministicFallbackScripts: clientScripts,
+      clientDeterministicFallbackRequiredFactCount: clientRequired,
+      clientDeterministicFallbackCoveredFactCount: clientCovered,
       clientDeterministicFallbackApplied: clientFallbackApplied,
+      clientDeterministicFallbackUncoveredFactIds: clientUncovered,
       finalBulletCount: diag.finalBulletCount ?? bullets.length,
       finalBulletScripts: scriptsFromBullets(text),
       tenseMode: diag.tenseMode || this.draft.tenseMode || 'unknown',
