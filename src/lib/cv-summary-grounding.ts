@@ -16,11 +16,17 @@ import {
 import { validateMaterialDutyCoverage } from './cv-material-duty-coverage';
 import {
   localizeBaker,
-  localizeOccupationalTitleForProjection,
   resolveOccupationalTitleForSummary,
 } from './cv-role-title';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';
+import {
+  dutyToEnglishGerundFragment,
+  sanitizeSummaryListMarkers,
+  stripDutyListPrefix,
+  summaryContainsListMarkerLeakage,
+  validateSummarySourceFactCoverage,
+} from './cv-source-fact-identity';
 
 export const SUMMARY_MAX_WORDS = 90;
 
@@ -251,27 +257,83 @@ const COOKING_SUMMARY_KEYS = new Set([
   'kitchen_collaboration',
 ]);
 
+/** Bare Title-Case skill list as its own sentence (not "Key skills include …"). */
+export function summaryHasMalformedSkillsFragment(summary: string): boolean {
+  const t = (summary || '').trim();
+  if (!t) return false;
+  // Trailing or standalone comma-separated Title-Case labels without a skills opener.
+  if (
+    /(?:^|[.!?]\s+)((?:[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)(?:,\s*(?:[A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)){2,})\.\s*$/u.test(t)
+    && !/\b(?:Key skills include|Ključne veštine|Wichtige Fähigkeiten|Las habilidades clave|Les compétences clés|Le competenze chiave|As competências|Ключевые навыки|मुख्य कौशल|मेरे प्रमुख कौशलों)\b/u.test(t)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function validateSummaryMaterialFacts(
   summary: string,
   factSet: CvCanonicalFactSet,
+  options?: { locale?: Locale | string },
 ): CvFidelityViolation[] {
   const source = factSet.facts
     .filter((f) => f.type === 'experience_bullet')
     .map((f) => f.sourceText || f.value)
     .join('\n');
   if (!source.trim()) return [];
+  const violations: CvFidelityViolation[] = [];
+  const locale = (options?.locale || 'en') as Locale;
+
+  if (summaryContainsListMarkerLeakage(summary)) {
+    violations.push({
+      kind: 'summary_list_marker_leakage' as CvFidelityViolationKind,
+      matched: 'list_marker',
+      section: 'summary',
+    });
+  }
+  if (summaryHasMalformedSkillsFragment(summary)) {
+    violations.push({
+      kind: 'summary_malformed_skills_fragment' as CvFidelityViolationKind,
+      matched: 'bare_skills_list',
+      section: 'summary',
+    });
+  }
+
+  // Universal source-fact identity coverage for English summaries of
+  // English-authored sources. When Experience was authored in another language,
+  // token overlap is not meaningful — cooking / material-key validators apply.
+  if (locale === 'en') {
+    const sourceIsEnglishCompatible = !/[čćžšđČĆŽŠĐ]/.test(source)
+      && !/\p{Script=Devanagari}|\p{Script=Arabic}|\p{Script=Cyrillic}/u.test(source);
+    if (sourceIsEnglishCompatible) {
+      const identity = validateSummarySourceFactCoverage(source, summary);
+      if (!identity.ok) {
+        violations.push({
+          kind: 'summary_material_fact_coverage_incomplete' as CvFidelityViolationKind,
+          matched: identity.missingIds.slice(0, 4).join(',') || 'missing_source_facts',
+          section: 'summary',
+          evidence: `covered=${identity.coveredIds.length}/${identity.requiredIds.length}`,
+        });
+      }
+    }
+  }
+
+  // Keep cooking triad hard-require for Baker/Cook fixtures (legacy kind).
   const coverage = validateMaterialDutyCoverage(source, summary);
-  if (coverage.valid) return [];
-  // Hard-require only cooking material triad (Baker/Cook fixtures). Broader CVs
-  // may omit secondary office duties for length without failing activation.
-  const requiredCooking = coverage.required.filter((k) => COOKING_SUMMARY_KEYS.has(k));
-  if (requiredCooking.length < 2) return [];
-  const missingCooking = coverage.missing.filter((k) => COOKING_SUMMARY_KEYS.has(k));
-  return missingCooking.map((key) => ({
-    kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
-    matched: key,
-    section: 'summary',
-  }));
+  if (!coverage.valid) {
+    const requiredCooking = coverage.required.filter((k) => COOKING_SUMMARY_KEYS.has(k));
+    if (requiredCooking.length >= 2) {
+      const missingCooking = coverage.missing.filter((k) => COOKING_SUMMARY_KEYS.has(k));
+      for (const key of missingCooking) {
+        violations.push({
+          kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
+          matched: key,
+          section: 'summary',
+        });
+      }
+    }
+  }
+  return violations;
 }
 
 export function validateSummaryEmploymentStatus(
@@ -303,7 +365,7 @@ export function runSummaryGroundingValidators(
     ...validateSummarySkillLocalization(summary, options.locale),
     ...validateSummaryMixedLanguage(summary, options.locale),
     ...validateSummaryGenderOccupation(summary, factSet, options),
-    ...validateSummaryMaterialFacts(summary, factSet),
+    ...validateSummaryMaterialFacts(summary, factSet, { locale: options.locale }),
     ...validateSummaryEmploymentStatus(summary, factSet),
   ];
 }
@@ -419,31 +481,68 @@ function summaryFragmentForIntent(
   return '';
 }
 
+/**
+ * Universal duty fragment for Summary prose — any occupation / free-text title.
+ * Cooking intents keep curated fragments; everything else preserves source meaning
+ * without inventing tools, metrics, or role stereotypes.
+ */
+function universalSummaryDutyFragment(
+  source: string,
+  locale: Locale,
+  _g: GenderTone,
+  _isPresent: boolean,
+): string {
+  const cleaned = stripDutyListPrefix(source || '').replace(/[.。۔।!?…]\s*$/u, '').trim();
+  if (!cleaned) return '';
+
+  if (locale === 'en') {
+    // English Summary paraphrases English/Latin source only — never Serbian/Hindi dumps.
+    if (
+      /\p{Script=Devanagari}|\p{Script=Arabic}|\p{Script=Cyrillic}/u.test(cleaned)
+      || /[čćžšđČĆŽŠĐ]/.test(cleaned)
+    ) {
+      return '';
+    }
+    return dutyToEnglishGerundFragment(cleaned);
+  }
+  if (locale === 'sr' || locale === 'hr') {
+    // Cooking curated fragments still apply via cookingIntentsInSource.
+    // Full Serbian duty prose is left to the legacy shell (length + grammar).
+    return '';
+  }
+  if (locale === 'hi') {
+    if (!/\p{Script=Devanagari}/u.test(cleaned)) return '';
+    return cleaned;
+  }
+  // de/fr/es/it/pt-BR/ja/ar/ru/…: never embed raw source units — cooking
+  // curated fragments still apply; otherwise defer to the legacy shell.
+  return '';
+}
+
 /** Short duty fragments for embedding in a 2-sentence summary. */
 function summaryDutyFragment(
   source: string,
   locale: Locale,
   g: GenderTone,
+  isPresent = true,
 ): string {
   const intent = classifySummaryCookingIntent(source);
   if (intent === 'other') {
-    // Generic (non-cooking) duties are localized by the legacy summary shell.
-    // Never embed raw source here — ASCII Serbian/Croatian words would otherwise
-    // leak into English summaries and fail locale guards.
-    return '';
+    return universalSummaryDutyFragment(source, locale, g, isPresent);
   }
   return summaryFragmentForIntent(intent, locale, g);
 }
 
-/** All cooking fragments from one source unit (combined lines keep hygiene + collab). */
+/** All fragments from one source unit (combined cooking lines keep hygiene + collab). */
 function summaryDutyFragmentsFromSource(
   source: string,
   locale: Locale,
   g: GenderTone,
+  isPresent = true,
 ): string[] {
   const intents = cookingIntentsInSource(source);
   if (intents.length === 0) {
-    const single = summaryDutyFragment(source, locale, g);
+    const single = summaryDutyFragment(source, locale, g, isPresent);
     return single ? [single] : [];
   }
   return intents
@@ -517,7 +616,7 @@ export function localizeSummarySkillLabels(skills: string[], locale: Locale): st
       continue;
     }
     out.push(localized);
-    if (out.length >= 6) break;
+    if (out.length >= 4) break;
   }
   return out;
 }
@@ -593,7 +692,8 @@ export function validateSummaryMixedLanguage(
 }
 
 function skillsLabelSentence(skills: string[], locale: Locale): string {
-  const list = localizeSummarySkillLabels(skills, locale);
+  // Deterministic small subset — never dump every skill to fill the Summary.
+  const list = localizeSummarySkillLabels(skills, locale).slice(0, 4);
   if (!list.length) return '';
   const and = andWord(locale);
   let cleanJoined = list[0];
@@ -635,7 +735,8 @@ function formatDurationForSummary(duration: ExperienceDuration | undefined, loca
 
 /**
  * Concise deterministic summary from allowed fact set only.
- * Skills appear only as a short label list — never as achievements.
+ * Skills appear only as a short grammatical sentence — never as bare lists
+ * or as achievements inferred from skill labels.
  */
 export function buildConciseGroundedSummary(
   factSet: CvCanonicalFactSet,
@@ -648,7 +749,10 @@ export function buildConciseGroundedSummary(
   const genderNorm = normalizeCoverLetterGender(gender);
   const profileTitle = factSet.facts.find((f) => f.type === 'job_title')?.value || '';
   const experienceTitle = factSet.facts.find((f) => f.type === 'role')?.value || '';
-  const dutyFacts = factSet.facts.filter((f) => f.type === 'experience_bullet').slice(0, 4);
+  const employer = (factSet.facts.find((f) => f.type === 'employer')?.value || '').trim();
+  const datesValue = (factSet.facts.find((f) => f.type === 'dates')?.value || '').trim();
+  const isPresent = /present|current|danas|сегодня|ปัจจุบัน/i.test(datesValue);
+  const dutyFacts = factSet.facts.filter((f) => f.type === 'experience_bullet').slice(0, 5);
   const sourceDuties = dutyFacts.map((f) => f.sourceText || f.value).join('\n');
   let role = resolveOccupationalTitleForSummary({
     profileJobTitle: profileTitle,
@@ -660,37 +764,38 @@ export function buildConciseGroundedSummary(
   // Prefer explicit baker localization when title is baker.
   if (/baker|pekar/i.test(`${profileTitle} ${experienceTitle}`)) {
     role = localizeBaker(locale, genderNorm || '');
-  } else if (profileTitle || experienceTitle) {
-    const projected = localizeOccupationalTitleForProjection(
-      experienceTitle || profileTitle,
-      locale,
-      genderNorm || '',
-    );
-    if (projected && projected !== (experienceTitle || profileTitle)) {
-      role = projected;
-    }
   }
+  // Do not overwrite with catalogue title projection when the resolver already
+  // neutralized a conflicting title (e.g. Kuvar + logistics → Professional).
+  // Projection remains available for display titles outside this Summary path.
 
   const fragments = dutyFacts
-    .flatMap((f) => summaryDutyFragmentsFromSource(f.sourceText || f.value, locale, g));
+    .flatMap((f) => summaryDutyFragmentsFromSource(
+      f.sourceText || f.value,
+      locale,
+      g,
+      isPresent,
+    ));
   // Deduplicate identical fragments while preserving first-seen order.
-  const uniqueFragments = [...new Set(fragments)];
-  // When duties exist but none could be safely localized into concise fragments,
-  // defer to the legacy localized shell (handles SR→EN warehouse titles, etc.).
-  if (dutyFacts.length > 0 && uniqueFragments.length === 0) {
+  const uniqueFragments = [...new Set(fragments.map((f) => f.trim()).filter(Boolean))];
+  // Non-English: when duties exist but none could be safely localized into
+  // concise fragments, defer to the legacy localized shell.
+  if (locale !== 'en' && dutyFacts.length > 0 && uniqueFragments.length === 0) {
     return '';
   }
   const durationPhrase = formatDurationForSummary(duration, locale);
   const skills = (options?.includeSkills !== false)
     ? factSet.facts.filter((f) => f.type === 'skill').map((f) => f.value).filter(Boolean)
     : [];
-  const skillSentence = skillsLabelSentence(skills, locale);
+  let skillSentence = skillsLabelSentence(skills, locale);
+  const skillsIncludedCount = skillSentence
+    ? localizeSummarySkillLabels(skills, locale).slice(0, 4).length
+    : 0;
 
   let text = '';
   if (locale === 'hi') {
     const rolePart = role || 'पेशेवर';
-    const company = (factSet.facts.find((f) => f.type === 'employer')?.value || '').trim();
-    const datesValue = (factSet.facts.find((f) => f.type === 'dates')?.value || '').trim();
+    const company = employer;
     const startMatch = /^(\d{4})-(\d{2})/.exec(datesValue);
     const hindiMonths: Record<string, string> = {
       '01': 'जनवरी', '02': 'फ़रवरी', '03': 'मार्च', '04': 'अप्रैल', '05': 'मई', '06': 'जून',
@@ -712,7 +817,6 @@ export function buildConciseGroundedSummary(
     const cookingFrags = uniqueFragments;
     let dutySentence = '';
     if (cookingFrags.length >= 3) {
-      // Natural Hindi: one subject, no awkward "मैं {company} में, जहाँ मैं …".
       dutySentence = `मैं ${cookingFrags[0]}, ${cookingFrags[1]} और ${cookingFrags[2]}।`;
     } else if (cookingFrags.length === 2) {
       dutySentence = `मैं ${cookingFrags[0]} और ${cookingFrags[1]}।`;
@@ -732,13 +836,31 @@ export function buildConciseGroundedSummary(
     text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'en') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
-    const open = dutyJoin
-      ? (durationPhrase
-        ? `${role || 'Professional'} ${durationPhrase} ${dutyJoin}`
-        : `${role || 'Professional'} with experience ${dutyJoin}`)
-      : (durationPhrase
-        ? `${role || 'Professional'} ${durationPhrase}`
-        : `${role || 'Professional'}`);
+    const ym = /^(\d{4})-(\d{2})/.exec(datesValue);
+    const named = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i.exec(datesValue);
+    let sinceClause = '';
+    if (isPresent) {
+      if (ym) {
+        const months = [
+          '', 'January', 'February', 'March', 'April', 'May', 'June',
+          'July', 'August', 'September', 'October', 'November', 'December',
+        ];
+        const mi = Number(ym[2]);
+        if (months[mi]) sinceClause = ` since ${months[mi]} ${ym[1]}`;
+      } else if (named) {
+        sinceClause = ` since ${named[1]} ${named[2]}`;
+      }
+    }
+    const roleHead = role || 'Professional';
+    const companyClause = employer ? ` at ${employer}` : '';
+    let open = `${roleHead}${companyClause}${sinceClause}`;
+    if (dutyJoin && durationPhrase) {
+      open = `${open}, ${durationPhrase} ${dutyJoin}`;
+    } else if (dutyJoin) {
+      open = `${open} with experience ${dutyJoin}`;
+    } else if (durationPhrase) {
+      open = `${open} ${durationPhrase}`;
+    }
     text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'ja') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
@@ -761,12 +883,59 @@ export function buildConciseGroundedSummary(
   }
 
   if (!text.trim()) return '';
+  text = sanitizeSummaryListMarkers(text);
   if (locale === 'hi' && !/[।.!?…]\s*$/u.test(text)) text = `${text}।`;
   else if (locale !== 'ja' && !/[.!?…।۔]\s*$/u.test(text)) text = `${text}.`;
 
-  // Hard length guard: drop optional skills sentence if over budget.
-  if (countSummaryWords(text, locale) > SUMMARY_MAX_WORDS && skillSentence) {
+  // Hard length guard: drop optional skills sentence if over budget or awkward.
+  if (
+    (countSummaryWords(text, locale) > SUMMARY_MAX_WORDS || countSummaryWords(text, locale) > 70)
+    && skillSentence
+  ) {
     text = text.replace(skillSentence, '').replace(/\s+/g, ' ').trim();
+    skillSentence = '';
   }
+  // Expose non-PII composition hints for diagnostics callers (no CV text).
+  void skillsIncludedCount;
   return text.replace(/\s+/g, ' ').trim();
+}
+
+/** Non-PII Summary composition diagnostics derived from the same builder inputs. */
+export function buildSummaryCompositionDiagnostics(
+  factSet: CvCanonicalFactSet,
+  summary: string,
+  options?: { fallbackReason?: string },
+): {
+  summarySourceFactCount: number;
+  summaryCoveredFactCount: number;
+  summaryBulletMarkersRemoved: number;
+  summarySkillsIncludedCount: number;
+  summarySkillsCompositionMode: 'grammatical_sentence' | 'omitted' | 'none';
+  summaryFallbackReason?: string;
+  summaryMaterialCoverageResult: 'complete' | 'incomplete' | 'empty_source';
+} {
+  const source = factSet.facts
+    .filter((f) => f.type === 'experience_bullet')
+    .map((f) => f.sourceText || f.value)
+    .join('\n');
+  const coverage = validateSummarySourceFactCoverage(source, summary);
+  const rawSkills = factSet.facts.filter((f) => f.type === 'skill').map((f) => f.value);
+  const hasKeySkills = /\b(?:Key skills include|Ključne veštine|मेरे प्रमुख कौशलों)\b/u.test(summary || '');
+  const markersInSource = (source.match(/[•\u2022\u25CF\u25E6]/gu) || []).length
+    + ((source.match(/(^|\n)\s*[-–—*]\s+/gm) || []).length);
+  return {
+    summarySourceFactCount: coverage.requiredIds.length,
+    summaryCoveredFactCount: coverage.coveredIds.length,
+    summaryBulletMarkersRemoved: markersInSource,
+    summarySkillsIncludedCount: hasKeySkills
+      ? localizeSummarySkillLabels(rawSkills, 'en').slice(0, 4).length
+      : 0,
+    summarySkillsCompositionMode: hasKeySkills
+      ? 'grammatical_sentence'
+      : (rawSkills.length ? 'omitted' : 'none'),
+    summaryFallbackReason: options?.fallbackReason,
+    summaryMaterialCoverageResult: !coverage.requiredIds.length
+      ? 'empty_source'
+      : (coverage.ok ? 'complete' : 'incomplete'),
+  };
 }

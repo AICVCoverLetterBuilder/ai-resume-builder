@@ -8,7 +8,6 @@ import { normalizeCoverLetterGender } from './cover-letter-gender';
 import {
   classifyDutyCategory,
   formatExperienceBullets,
-  splitExperienceBullets,
   type CvCanonicalFact,
   type CvCanonicalFactSet,
   type CvDutyCategory,
@@ -1386,8 +1385,14 @@ export function deterministicLocalizedSummaryFromCanonical(
   const role = localizeRoleLabel(rawRole, locale, g, profileTitle, sourceDuties);
   const bullets = factSet.facts
     .filter((f) => f.type === 'experience_bullet')
-    .slice(0, 4)
-    .map((f) => localizedBulletForFact(f, locale, gender, { useGenericCatchAll: true }).replace(/[.。۔।]\s*$/u, ''));
+    .slice(0, 5)
+    .map((f) => {
+      const line = localizedBulletForFact(f, locale, gender, { useGenericCatchAll: true })
+        .replace(/^[•\-\u2013\u2014\*\u2022\u25CF\u25E6]\s*/u, '')
+        .replace(/^\d+[.)]\s+/u, '')
+        .replace(/[.。۔।]\s*$/u, '');
+      return line.trim();
+    });
   if (bullets.some((b) => !b.trim()) && !role) return '';
   const duties = bullets.filter((b) => b.trim()).join(locale === 'ja' ? '。' : locale === 'hi' ? '। ' : '. ');
   const shell = SUMMARY_SHELL[locale] || SUMMARY_SHELL.en;
@@ -1395,6 +1400,10 @@ export function deterministicLocalizedSummaryFromCanonical(
     ? formatApproximateDurationPhrase(duration, locale)
     : '';
   let text = shell(role, duties, g, durationPhrase || undefined).replace(/\s+/g, ' ').trim();
+  text = text
+    .replace(/[•\u2022\u25CF\u25E6]/gu, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
   if (locale === 'hi' && !/[।.!?…]\s*$/u.test(text)) text = `${text}।`;
   else if (!/[.!?…।۔]\s*$/u.test(text)) text = `${text}.`;
   return text;

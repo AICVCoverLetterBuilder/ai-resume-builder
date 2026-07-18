@@ -428,7 +428,7 @@ describe('Creative Artistic multilingual content integrity', () => {
     expect(jaOk.valid).toBe(true);
 
     const unspecified = validateLocalizedSummary(
-      'Bartender with experience preparing cocktails and welcoming guests.',
+      'Bartender with experience preparing cocktails and beverages, maintaining bar hygiene and safety standards, providing attentive customer service and guest rapport, and managing stock with inventory counts.',
       factSet,
       { locale: 'en', gender: 'unspecified' },
     );

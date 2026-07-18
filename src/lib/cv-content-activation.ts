@@ -27,6 +27,13 @@ import { normalizeHindiGeneratedWhitespace } from './cv-hindi-normalize';
 import { stripAiProtocolMarkers } from './cv-ai-protocol-strip';
 import { resolveOccupationalTitleForSummary } from './cv-role-title';
 import type { ExperienceDuration } from './cv-experience-duration';
+import {
+  dutyToEnglishGerundFragment,
+  sanitizeSummaryListMarkers,
+  stripDutyListPrefix,
+  summaryContainsListMarkerLeakage,
+} from './cv-source-fact-identity';
+import { summaryHasMalformedSkillsFragment } from './cv-summary-grounding';
 
 export type CvContentActivation = {
   content: string;
@@ -278,10 +285,19 @@ export async function activateCvExperienceBullets(options: {
 export function deterministicSummaryFromCanonical(
   factSet: CvCanonicalFactSet,
   fallbackHint = '',
-  options?: { locale?: Locale; gender?: CoverLetterGender | string },
+  options?: { locale?: Locale; gender?: CoverLetterGender | string; duration?: ExperienceDuration },
 ): string {
   const locale = options?.locale || 'en';
   const gender = options?.gender || '';
+  // Prefer the universal grounded builder (all duties, marker-safe, grammatical skills).
+  const grounded = deterministicLocalizedSummaryFromCanonical(
+    factSet,
+    locale,
+    gender,
+    options?.duration,
+  ).trim();
+  if (grounded) return grounded;
+
   const profileTitle = factSet.facts.find((f) => f.type === 'job_title')?.value || '';
   const experienceTitle = factSet.facts.find((f) => f.type === 'role')?.value || '';
   const dutiesText = factSet.facts
@@ -297,20 +313,28 @@ export function deterministicSummaryFromCanonical(
   });
   const bullets = factSet.facts
     .filter((f) => f.type === 'experience_bullet')
-    .slice(0, 3)
-    .map((f) => f.value.replace(/[.。۔।]\s*$/u, ''));
-  const skills = factSet.facts
-    .filter((f) => f.type === 'skill')
-    .slice(0, 4)
-    .map((f) => f.value);
+    .slice(0, 5)
+    .map((f) => stripDutyListPrefix(f.sourceText || f.value).replace(/[.。۔।]\s*$/u, ''))
+    .filter(Boolean);
   const safeHint = fallbackHint.trim();
   const hintUsable = safeHint
     && validateSummaryCompleteness(safeHint).valid
-    && !UNSUPPORTED_HINT_MARKERS.test(safeHint);
+    && !UNSUPPORTED_HINT_MARKERS.test(safeHint)
+    && !summaryContainsListMarkerLeakage(safeHint)
+    && !summaryHasMalformedSkillsFragment(safeHint);
+  const dutyProse = bullets.length
+    ? (locale === 'en'
+      ? bullets.map((b) => dutyToEnglishGerundFragment(b)).filter(Boolean)
+      : bullets)
+    : [];
+  let dutyJoin = '';
+  if (dutyProse.length === 1) dutyJoin = dutyProse[0];
+  else if (dutyProse.length === 2) dutyJoin = `${dutyProse[0]} and ${dutyProse[1]}`;
+  else if (dutyProse.length > 2) {
+    dutyJoin = `${dutyProse.slice(0, -1).join(', ')}, and ${dutyProse[dutyProse.length - 1]}`;
+  }
   const parts = [
-    role ? `${role}.` : '',
-    bullets.length ? `${bullets.join('; ')}.` : '',
-    skills.length ? `${skills.join(', ')}.` : '',
+    role ? `${role}${dutyJoin ? ` with experience ${dutyJoin}` : ''}.` : (dutyJoin ? `${dutyJoin}.` : ''),
     hintUsable ? safeHint : '',
   ].filter(Boolean);
   let text = parts.join(' ').replace(/\s+/g, ' ').trim();
@@ -318,6 +342,7 @@ export function deterministicSummaryFromCanonical(
     const rolePart = role ? `${role}.` : '';
     text = rolePart || 'Experienced professional ready to contribute responsibly.';
   }
+  text = sanitizeSummaryListMarkers(text);
   if (!/[.!?…।۔]\s*$/u.test(text)) text = `${text}.`;
   return text;
 }

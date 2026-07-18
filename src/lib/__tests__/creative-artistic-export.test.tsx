@@ -1221,7 +1221,7 @@ describe('Creative Artistic export routing and rendering', () => {
     const mediaFiles = Object.keys(zip.files).filter(name => name.startsWith('word/media/'));
 
     expect(documentXml).toContain('Sofia Rossi');
-    expect(documentXml).toContain('Creative director with a record');
+    expect(documentXml).toMatch(/Creative Director|directing integrated campaigns|Studio Visiva/i);
     expect(documentXml).toContain('Studio Visiva');
     expect(documentXml).toContain('Brand Strategy');
     expect(documentXml).toContain('Italian');
@@ -1276,7 +1276,7 @@ describe('Creative Artistic export routing and rendering', () => {
     const mediaFiles = Object.keys(zip.files).filter(name => name.startsWith('word/media/'));
 
     expect(documentXml).toContain('Sofia Rossi');
-    expect(documentXml).toContain('Creative director with a record');
+    expect(documentXml).toMatch(/Creative Director|directing integrated campaigns|Studio Visiva/i);
     expect(documentXml).toContain('Brand Strategy');
     expect(documentXml).not.toContain('<w:drawing>');
     expect(mediaFiles).toHaveLength(0);

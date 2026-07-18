@@ -18,6 +18,7 @@ import {
   localizeCanonicalBulletLine,
   buildSourcePreservingExperienceBullets,
 } from './cv-localized-fallback';
+import { buildSummaryCompositionDiagnostics } from './cv-summary-grounding';
 import { buildExperienceDurationSnapshot, formatApproximateDurationPhrase } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
 import {
@@ -114,6 +115,13 @@ export type ExportReadyDiagnostics = {
   occupationGenericFallbackUsed?: boolean;
   unsupportedRoleSpecificClaimReason?: string;
   durationCompositionSource?: string;
+  summarySourceFactCount?: number;
+  summaryCoveredFactCount?: number;
+  summaryBulletMarkersRemoved?: number;
+  summarySkillsIncludedCount?: number;
+  summarySkillsCompositionMode?: 'grammatical_sentence' | 'omitted' | 'none';
+  summaryFallbackReason?: string;
+  summaryMaterialCoverageResult?: 'complete' | 'incomplete' | 'empty_source';
   stage: ExportReadyStage;
 };
 
@@ -689,7 +697,10 @@ export function prepareExportReadyCv(
   if (!initialSummaryValidation.valid) {
     stage = 'recover_summary';
     let recovered = '';
-    if (summaryKeys.length > 0 && !summaryStale) {
+    const bulletCount = factSet.facts.filter((f) => f.type === 'experience_bullet').length;
+    // Universal: recover from authoritative Experience bullets even when no
+    // catalogue SemanticDutyKey matched (unknown free-text titles).
+    if (!summaryStale && (summaryKeys.length > 0 || bulletCount > 0)) {
       recovered = deterministicLocalizedSummaryFromCanonical(
         factSet,
         requestedLocale,
@@ -699,21 +710,39 @@ export function prepareExportReadyCv(
       summaryRecoverySource = 'deterministic_semantic_facts';
       durationCompositionSource = 'deterministic_semantic_facts';
     }
+    const recoveredLooksCooking = textLooksLikeCookingDuties(recovered);
+    const cookingOccupationMismatch = recoveredLooksCooking
+      && primaryJobCtx.positionClass !== 'baker_food'
+      && primaryJobCtx.positionClass !== 'hospitality_service'
+      && primaryJobCtx.industryNorm !== 'hospitality';
+    // Occupation-generic only when there are no source duty bullets to preserve,
+    // or when cooking shells leaked into a non-food role / stale context.
     if (
-      !recovered
-      || summaryStale
-      || summaryKeys.length === 0
-      || (
-        textLooksLikeCookingDuties(recovered)
-        && primaryJobCtx.positionClass !== 'baker_food'
-        && primaryJobCtx.positionClass !== 'hospitality_service'
-        && primaryJobCtx.industryNorm !== 'hospitality'
-      )
+      summaryStale
+      || cookingOccupationMismatch
+      || (!recovered.trim() && bulletCount === 0)
+      || (!recovered.trim() && summaryKeys.length === 0 && bulletCount === 0)
     ) {
       recovered = rebuildOccupationSummary();
       summaryRecoverySource = 'occupation_generic_fallback';
       occupationGenericFallbackUsed = true;
       factSource = 'occupation_generic';
+    } else if (!recovered.trim() && bulletCount > 0) {
+      // Last resort: still try grounded builder once more (should be rare).
+      recovered = deterministicLocalizedSummaryFromCanonical(
+        factSet,
+        requestedLocale,
+        gender,
+        durationSnapshot.total,
+      );
+      summaryRecoverySource = 'deterministic_semantic_facts';
+      durationCompositionSource = 'deterministic_semantic_facts';
+      if (!recovered.trim()) {
+        recovered = rebuildOccupationSummary();
+        summaryRecoverySource = 'occupation_generic_fallback';
+        occupationGenericFallbackUsed = true;
+        factSource = 'occupation_generic';
+      }
     }
     const recoveryValidation = validateSummaryExportCandidate(
       recovered,
@@ -944,6 +973,11 @@ export function prepareExportReadyCv(
   }
 
   stage = 'complete';
+  const summaryDiag = buildSummaryCompositionDiagnostics(factSet, cv.summary || '', {
+    fallbackReason: summaryRecoverySource === 'saved_summary'
+      ? undefined
+      : (summaryRecoverySource || summaryRecoveryReason),
+  });
   const diagnostics: ExportReadyDiagnostics = {
     selectedTemplateId,
     requestedLocale,
@@ -968,6 +1002,7 @@ export function prepareExportReadyCv(
     occupationGenericFallbackUsed,
     unsupportedRoleSpecificClaimReason,
     durationCompositionSource,
+    ...summaryDiag,
     stage,
   };
   void summaryContextMatch;
