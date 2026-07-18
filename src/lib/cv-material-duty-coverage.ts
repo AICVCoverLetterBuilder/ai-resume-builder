@@ -24,6 +24,10 @@ export type MaterialDutyKey =
   | 'healthcare_patient_care'
   | 'healthcare_records'
   | 'healthcare_team'
+  | 'cs_inquiry_channels'
+  | 'cs_complaint_resolution'
+  | 'cs_issue_logging'
+  | 'cs_request_coordination'
   | 'generic_duty';
 
 type DutyRule = {
@@ -61,7 +65,7 @@ const DUTY_RULES: DutyRule[] = [
   },
   {
     key: 'logistics_delivery',
-    source: /\b(deliver(?:y|ed|ing)?|isporuč|डिलीवरी|safe(?:ly)?\s+deliver)/iu,
+    source: /\b(deliver(?:y|ed|ing)?|isporuč|isporuk|डिलीवरी|safe(?:ly)?\s+deliver)/iu,
     localized: /(deliver|isporuč|डिलीवरी|Auslieferung|entrega|livraison|consegna|تسليم|доставк|配送|sigurno\s+isporuč)/iu,
   },
   {
@@ -134,6 +138,33 @@ const DUTY_RULES: DutyRule[] = [
     source: /\b(care\s+team|medical\s+team|klinick)\b/iu,
     localized: /(team|tim|équipe|チーム)/iu,
   },
+  {
+    key: 'cs_inquiry_channels',
+    source: /\b(inquir|enquiry|email|phone|telefon|e-?mail|poziv|upit)\b/iu,
+    localized: /(inquir|enquiry|email|phone|telefon|e-?mail|poziv|upit|correo|téléphone|telefono|ईमेल|फोन|प्रश्न)/iu,
+  },
+  {
+    key: 'cs_complaint_resolution',
+    source:
+      /\b(complaint|reclamation|reklamacij|शिकायत|reclam)|(?:resolv\w*.{0,48}(?:customer\s+)?(?:complaint|issue|problem|žalb)|(?:customer\s+)?(?:complaint|issue|problem|žalb).{0,48}resolv)/iu,
+    localized:
+      /(complaint|reclamation|reklamacij|शिकायत|issue|problem|žalb|resolv|rešav|समाधान|intern)/iu,
+  },
+  {
+    key: 'cs_issue_logging',
+    source:
+      /\b(records?|log(?:ged|ging)?|support\s+system|ticketing|evidenc|belež|zabiljež|ticket\s+system|tracking\s+system|customer\s+tracking|conversation|razgovor|वार्तालाप)\b/iu,
+    localized:
+      /(records?|log|support\s+system|ticket|evidenc|belež|zabiljež|sistema|registr|टिकट|सिस्टम|conversation|razgovor|वार्तालाप|tracking|праћен|ट्रैकिंग)/iu,
+  },
+  {
+    key: 'cs_request_coordination',
+    // Contact-center escalation only — do not match kitchen/care "collaborate with the … team".
+    source:
+      /\b(?:coordinat\w*.{0,56}(?:colleague|coworker|customer|request|koleg|team)|(?:colleague|coworker|koleg).{0,48}(?:coordinat|resolve|request|customer)|(?:collaborat|sara[dđ])\w*.{0,48}(?:colleague|coworker|koleg|(?:other\s+)?teams?).{0,48}(?:customer\s+)?requests?|resolve\w*\s+(?:customer\s+)?requests?)\b/iu,
+    localized:
+      /(coordinat|colleague|koleg|coworker|team|tim|resolve\w*.{0,24}request|zahtev|zahtjev|customer\s+request|समन्वय|सहकर्मी|सहयोग|अनुरोध|resolve\s+customer)/iu,
+  },
 ];
 
 /** Prefer more specific keys first; skip generic when a specific key matches. */
@@ -144,9 +175,18 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
   for (const rule of DUTY_RULES) {
     if (rule.source.test(t)) keys.push(rule.key);
   }
-  // Kitchen collaboration is more specific than generic team collaboration.
+  // Kitchen / care team collaboration must not inherit contact-center CS keys.
   if (keys.includes('kitchen_collaboration')) {
-    return keys.filter((k) => k !== 'team_collaboration');
+    return keys.filter(
+      (k) => k !== 'team_collaboration' && k !== 'generic_duty' && !k.startsWith('cs_'),
+    );
+  }
+  if (keys.includes('healthcare_team')) {
+    return keys.filter((k) => k !== 'team_collaboration' && k !== 'generic_duty' && !k.startsWith('cs_'));
+  }
+  // Prefer CS contact-center keys over bare team_collaboration when both match.
+  if (keys.some((k) => k.startsWith('cs_'))) {
+    return keys.filter((k) => k !== 'team_collaboration' && k !== 'generic_duty');
   }
   // Prefer documentation/testing over development when those verbs dominate.
   if (keys.includes('software_documentation') && keys.includes('software_development')) {
@@ -263,6 +303,11 @@ const EXTRA_DUTY_CLAIMS: Array<{ label: string; claim: RegExp; support: RegExp }
     support: /(doctor|lekar|pharmacotherapy|farmakoterap)/iu,
   },
   {
+    label: 'guest_rapport_hospitality',
+    claim: /\b(guests?|rapport|hospitality|huésped|ospiti|gost(?:ima|i)?)\b/iu,
+    support: /\b(guests?|rapport|hospitality|huésped|ospiti|gost(?:ima|i)?)\b/iu,
+  },
+  {
     label: 'safety_inspections',
     claim: /(safety\s+inspection|inspecciones? de seguridad|Sicherheitsinspektion|فحص\s+السلامة|安全点検)/iu,
     support: /(safety\s+inspection|inspeccion|Sicherheitsinspektion|فحص|安全点検)/iu,
@@ -296,4 +341,220 @@ export function validateNoExtraGeneratedDuties(
     return { valid: false, extras, reason: 'unsupported_generated_duty' };
   }
   return { valid: true, extras: [] };
+}
+
+/** Normalize a bullet for exact/near-duplicate comparison (no PII beyond duty text). */
+export function normalizeExperienceBulletForCompare(text: string): string {
+  return (text || '')
+    .normalize('NFKC')
+    .replace(/^[•\-\*\u2022]\s*/u, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export type DuplicateBulletCheck = {
+  ok: boolean;
+  distinctCount: number;
+  totalCount: number;
+  reason?: 'exact_duplicate_bullets' | 'near_duplicate_bullets';
+};
+
+/**
+ * Hard postcondition: Experience must not apply the same (or near-same) bullet
+ * multiple times. Does not merge distinct source duties into one.
+ */
+export function validateDistinctExperienceBullets(description: string): DuplicateBulletCheck {
+  const bullets = splitExperienceBullets(description)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  if (bullets.length <= 1) {
+    return { ok: true, distinctCount: bullets.length, totalCount: bullets.length };
+  }
+  const norms = bullets.map(normalizeExperienceBulletForCompare);
+  const unique = new Set(norms);
+  if (unique.size < norms.length) {
+    return {
+      ok: false,
+      distinctCount: unique.size,
+      totalCount: norms.length,
+      reason: 'exact_duplicate_bullets',
+    };
+  }
+  // Near-duplicate: token Jaccard ≥ 0.85 between any pair.
+  for (let i = 0; i < norms.length; i += 1) {
+    const a = new Set(norms[i].split(' ').filter((t) => t.length > 2));
+    for (let j = i + 1; j < norms.length; j += 1) {
+      const bTokens = norms[j].split(' ').filter((t) => t.length > 2);
+      const b = new Set(bTokens);
+      if (!a.size || !b.size) continue;
+      let inter = 0;
+      for (const t of a) if (b.has(t)) inter += 1;
+      const union = a.size + b.size - inter;
+      if (union > 0 && inter / union >= 0.85) {
+        return {
+          ok: false,
+          distinctCount: unique.size,
+          totalCount: norms.length,
+          reason: 'near_duplicate_bullets',
+        };
+      }
+    }
+  }
+  return { ok: true, distinctCount: unique.size, totalCount: norms.length };
+}
+
+/**
+ * Apply structured employment tense to an English duty line.
+ * Present roles → base/present forms; completed roles → past forms.
+ */
+export function applyEnglishEmploymentTense(line: string, isPresent: boolean): string {
+  let t = (line || '').replace(/^[•\-\*\u2022]\s*/u, '').trim();
+  if (!t) return t;
+  const pairs: Array<[RegExp, string, string]> = [
+    [/^(Responded)\b/i, 'Respond', 'Responded'],
+    [/^(Respond)\b/i, 'Respond', 'Responded'],
+    [/^(Recorded)\b/i, 'Record', 'Recorded'],
+    [/^(Record)\b/i, 'Record', 'Recorded'],
+    [/^(Coordinated)\b/i, 'Coordinate', 'Coordinated'],
+    [/^(Coordinate)\b/i, 'Coordinate', 'Coordinated'],
+    [/^(Collaborated)\b/i, 'Collaborate', 'Collaborated'],
+    [/^(Collaborate)\b/i, 'Collaborate', 'Collaborated'],
+    [/^(Provided)\b/i, 'Provide', 'Provided'],
+    [/^(Provide)\b/i, 'Provide', 'Provided'],
+    [/^(Handled)\b/i, 'Handle', 'Handled'],
+    [/^(Handle)\b/i, 'Handle', 'Handled'],
+    [/^(Resolved)\b/i, 'Resolve', 'Resolved'],
+    [/^(Resolve)\b/i, 'Resolve', 'Resolved'],
+    [/^(Logged)\b/i, 'Log', 'Logged'],
+    [/^(Log)\b/i, 'Log', 'Logged'],
+    [/^(Documented)\b/i, 'Document', 'Documented'],
+    [/^(Document)\b/i, 'Document', 'Documented'],
+    [/^(Assisted)\b/i, 'Assist', 'Assisted'],
+    [/^(Assist)\b/i, 'Assist', 'Assisted'],
+    [/^(Supported)\b/i, 'Support', 'Supported'],
+    [/^(Support)\b(?!ed\b)/i, 'Support', 'Supported'],
+    [/^(Maintained)\b/i, 'Maintain', 'Maintained'],
+    [/^(Maintain)\b/i, 'Maintain', 'Maintained'],
+    [/^(Managed)\b/i, 'Manage', 'Managed'],
+    [/^(Manage)\b/i, 'Manage', 'Managed'],
+    [/^(Reviewed)\b/i, 'Review', 'Reviewed'],
+    [/^(Review)\b/i, 'Review', 'Reviewed'],
+    [/^(Updated)\b/i, 'Update', 'Updated'],
+    [/^(Update)\b/i, 'Update', 'Updated'],
+    [/^(Marked)\b/i, 'Mark', 'Marked'],
+    [/^(Mark)\b/i, 'Mark', 'Marked'],
+    [/^(Prepared)\b/i, 'Prepare', 'Prepared'],
+    [/^(Prepare)\b/i, 'Prepare', 'Prepared'],
+    [/^(Operated)\b/i, 'Operate', 'Operated'],
+    [/^(Operate)\b/i, 'Operate', 'Operated'],
+    [/^(Monitored)\b/i, 'Monitor', 'Monitored'],
+    [/^(Monitor)\b/i, 'Monitor', 'Monitored'],
+    [/^(Installed)\b/i, 'Install', 'Installed'],
+    [/^(Install)\b/i, 'Install', 'Installed'],
+    [/^(Taught)\b/i, 'Teach', 'Taught'],
+    [/^(Teach)\b/i, 'Teach', 'Taught'],
+    [/^(Designed)\b/i, 'Design', 'Designed'],
+    [/^(Design)\b/i, 'Design', 'Designed'],
+    [/^(Calculated)\b/i, 'Calculate', 'Calculated'],
+    [/^(Calculate)\b/i, 'Calculate', 'Calculated'],
+    [/^(Cleaned)\b/i, 'Clean', 'Cleaned'],
+    [/^(Clean)\b/i, 'Clean', 'Cleaned'],
+    [/^(Loaded)\b/i, 'Load', 'Loaded'],
+    [/^(Load)\b/i, 'Load', 'Loaded'],
+    [/^(Delivered)\b/i, 'Deliver', 'Delivered'],
+    [/^(Deliver)\b/i, 'Deliver', 'Delivered'],
+    [/^(Tested)\b/i, 'Test', 'Tested'],
+    [/^(Test)\b/i, 'Test', 'Tested'],
+    [/^(Inspected)\b/i, 'Inspect', 'Inspected'],
+    [/^(Inspect)\b/i, 'Inspect', 'Inspected'],
+  ];
+  for (const [re, presentForm, pastForm] of pairs) {
+    if (re.test(t)) {
+      t = t.replace(re, isPresent ? presentForm : pastForm);
+      break;
+    }
+  }
+  return t;
+}
+
+export type ExperienceApplyCoverageCheck = {
+  ok: boolean;
+  reason?: 'experience_material_fact_coverage_incomplete' | 'exact_duplicate_bullets' | 'near_duplicate_bullets' | 'unsupported_generated_duty';
+  required: MaterialDutyKey[];
+  covered: MaterialDutyKey[];
+  distinctSemanticBulletCount: number;
+  finalBulletCount: number;
+};
+
+/**
+ * Final Experience apply gate: coverage of source material facts + no duplicates
+ * + no unsupported hospitality extras when absent from source.
+ * Dynamic source-fact identity coverage is enforced by callers via
+ * `validateSourceFactIdentityCoverage` (avoids a module cycle).
+ */
+export function validateExperienceApplyMaterialPostcondition(
+  sourceDescription: string,
+  candidateDescription: string,
+): ExperienceApplyCoverageCheck {
+  const sourceKeys = materialDutyKeysFromDescription(sourceDescription)
+    .filter((k) => k !== 'generic_duty');
+  const dup = validateDistinctExperienceBullets(candidateDescription);
+  const coverage = validateMaterialDutyCoverage(sourceDescription, candidateDescription);
+  const extras = validateNoExtraGeneratedDuties(sourceDescription, candidateDescription);
+  const covered = sourceKeys.filter((k) => !coverage.missing.includes(k));
+  const finalBulletCount = splitExperienceBullets(candidateDescription).length;
+  const sourceUnitCount = splitExperienceBullets(sourceDescription).filter(Boolean).length
+    || (sourceDescription.trim() ? 1 : 0);
+
+  if (!dup.ok) {
+    return {
+      ok: false,
+      reason: dup.reason,
+      required: sourceKeys,
+      covered,
+      distinctSemanticBulletCount: dup.distinctCount,
+      finalBulletCount,
+    };
+  }
+  if (!extras.valid) {
+    return {
+      ok: false,
+      reason: 'unsupported_generated_duty',
+      required: sourceKeys,
+      covered,
+      distinctSemanticBulletCount: dup.distinctCount,
+      finalBulletCount,
+    };
+  }
+  if (sourceKeys.length > 0 && !coverage.valid) {
+    return {
+      ok: false,
+      reason: 'experience_material_fact_coverage_incomplete',
+      required: sourceKeys,
+      covered,
+      distinctSemanticBulletCount: dup.distinctCount,
+      finalBulletCount,
+    };
+  }
+  // Distinct source units must not collapse to one semantic bullet.
+  const minDistinct = Math.min(Math.max(sourceKeys.length, sourceUnitCount), 2);
+  if (minDistinct >= 2 && dup.distinctCount < minDistinct) {
+    return {
+      ok: false,
+      reason: 'experience_material_fact_coverage_incomplete',
+      required: sourceKeys,
+      covered,
+      distinctSemanticBulletCount: dup.distinctCount,
+      finalBulletCount,
+    };
+  }
+  return {
+    ok: true,
+    required: sourceKeys,
+    covered,
+    distinctSemanticBulletCount: dup.distinctCount,
+    finalBulletCount,
+  };
 }

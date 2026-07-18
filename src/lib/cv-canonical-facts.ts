@@ -197,7 +197,7 @@ export const DUTY_CATEGORY_PRESENCE: Record<Exclude<CvDutyCategory, 'generic'>, 
   hygiene_safety:
     /(hygiene|higijen|гигиен|безопасност|safety|bezbednost|sigurnost|clean|чист|čist|cist|organiz|organis|bar area|higij|साफ|स्वच्छ|衛生|نظاف|sicherheit|igiene|higiene|food[- ]?safet|ingredient.?stor)/iu,
   customer_service_guest_relationship:
-    /(guest|gäst|gost|гост|customer|kunden|klijent|клиент|rapport|odnos|ग्राहक|अतिथि|客|ضيف|ضيوف|client|huésp|ospiti|atenti)/iu,
+    /(guest|gäst|gost|гост|customer|kunden|klijen|клиент|rapport|odnos|ग्राहक|अतिथि|客|ضيف|ضيوف|client|huésp|ospiti|atenti|uslug|zahtev|žalb|reklamacij)/iu,
   inventory_stock:
     /(inventory|stock|zalih|inventar|inventur|supply|запас|снаб|स्टॉक|इन्वेंट|在庫|مخزون|invent|beständ|inventaire|conteggio|scorte|estoque|Bestände|niveau|skladišt|ingredient|namirnic|freshness)/iu,
   food_preparation:

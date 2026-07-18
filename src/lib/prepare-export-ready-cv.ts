@@ -16,6 +16,7 @@ import {
   deterministicLocalizedBulletsFromCanonical,
   deterministicLocalizedSummaryFromCanonical,
   localizeCanonicalBulletLine,
+  buildSourcePreservingExperienceBullets,
 } from './cv-localized-fallback';
 import { buildExperienceDurationSnapshot, formatApproximateDurationPhrase } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
@@ -45,6 +46,12 @@ import {
   scrubOrphanDurationFragments,
   textLooksLikeCookingDuties,
 } from './cv-experience-job-context';
+import {
+  materialDutyKeysFromDescription,
+  validateExperienceApplyMaterialPostcondition,
+  validateMaterialDutyCoverage,
+} from './cv-material-duty-coverage';
+import { validateSourceFactIdentityCoverage } from './cv-source-fact-identity';
 
 function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | 'empty' {
   const t = (bullet || '').trim();
@@ -213,8 +220,71 @@ function projectExperienceDisplayFromSemanticDuties(
   cv: CVData,
 ): string {
   const current = (exp.description || '').trim();
+  const jobCtx = buildExperienceJobContext({
+    position: exp.position || cv.personal?.jobTitle,
+    locale: requestedLocale,
+  });
+  const authoritativeSourceRaw = (
+    exp.originalUserDescription
+    || exp.canonicalDescription
+    || ''
+  ).trim();
+  // Do not rebuild from prior-occupation cooking shells under pharmacist/tech roles.
+  const authoritativeSource = (
+    textLooksLikeCookingDuties(authoritativeSourceRaw)
+    && jobCtx.positionClass !== 'baker_food'
+    && jobCtx.positionClass !== 'hospitality_service'
+    && jobCtx.industryNorm !== 'hospitality'
+  ) || (
+    hasUnsupportedRegulatedPharmacyClaims(authoritativeSourceRaw)
+    && !hasGenuineUserExperienceGrounding(exp)
+  )
+    ? ''
+    : authoritativeSourceRaw;
+
+  // Never keep a locale-matching display that dropped/replaced user material facts
+  // (e.g. three identical hospitality shells replacing contact-center duties).
+  if (authoritativeSource) {
+    const post = validateExperienceApplyMaterialPostcondition(authoritativeSource, current);
+    if (!post.ok || !current) {
+      const rebuilt = buildSourcePreservingExperienceBullets(
+        authoritativeSource,
+        requestedLocale,
+        gender,
+        { isPresent: Boolean(exp.isPresent) },
+      );
+      if (
+        rebuilt
+        && validateExperienceApplyMaterialPostcondition(authoritativeSource, rebuilt).ok
+        && validateSourceFactIdentityCoverage(authoritativeSource, rebuilt).ok
+      ) {
+        // Accept source-preserving rebuild even when locale projection cannot
+        // translate unknown occupations — never invent role stereotypes instead.
+        return rebuilt;
+      }
+    }
+  } else if (
+    textLooksLikeCookingDuties(current)
+    && jobCtx.positionClass !== 'baker_food'
+    && jobCtx.positionClass !== 'hospitality_service'
+    && jobCtx.industryNorm !== 'hospitality'
+  ) {
+    return buildOccupationAwareExperienceFallback({
+      locale: requestedLocale,
+      gender,
+      position: exp.position,
+      industry: jobCtx.industryNorm,
+      isPresent: exp.isPresent,
+    });
+  }
+
   if (current && experienceBulletsMatchRequestedLocale(current, requestedLocale, cv)) {
-    return current;
+    if (
+      !authoritativeSource
+      || validateExperienceApplyMaterialPostcondition(authoritativeSource, current).ok
+    ) {
+      return current;
+    }
   }
 
   const keys = semanticDutyKeys(grounding);
@@ -463,11 +533,30 @@ export function prepareExportReadyCv(
     if (!contextOk && !fallbackOrigin && !occupationGenericFallbackUsed) return false;
     return experienceBulletsMatchRequestedLocale(desc, requestedLocale, cv);
   });
+  const hasMaterialSourceFacts = (cv.experience || []).some((exp) => {
+    const jobCtx = buildExperienceJobContext({
+      position: exp.position || cv.personal?.jobTitle,
+      locale: requestedLocale,
+    });
+    const source = (exp.originalUserDescription || exp.canonicalDescription || '').trim();
+    if (!source) return false;
+    // Cooking material under a non-food role is not a safe export grounding source.
+    if (
+      textLooksLikeCookingDuties(source)
+      && jobCtx.positionClass !== 'baker_food'
+      && jobCtx.positionClass !== 'hospitality_service'
+      && jobCtx.industryNorm !== 'hospitality'
+    ) {
+      return false;
+    }
+    return materialDutyKeysFromDescription(source).some((k) => k !== 'generic_duty');
+  });
   if (
     hadDisplay
     && allKeys.length === 0
     && !occupationGenericFallbackUsed
     && !hasContextSafeEmptyDutyDisplay
+    && !hasMaterialSourceFacts
   ) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
@@ -482,10 +571,6 @@ export function prepareExportReadyCv(
     ...cv,
     experience: (cv.experience || []).map((exp) => {
       const grounding = groundingById.get(exp.id) || { source: 'none' as const, duties: [] };
-      if (grounding.duties.length === 0) {
-        // Occupation-generic or already-safe display — keep as-is.
-        return exp;
-      }
       const projected = projectExperienceDisplayFromSemanticDuties(
         exp,
         grounding,
@@ -527,6 +612,7 @@ export function prepareExportReadyCv(
     && summaryKeys.length === 0
     && !occupationGenericFallbackUsed
     && !hasContextSafeEmptyDutyDisplay
+    && !hasMaterialSourceFacts
   ) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
@@ -820,6 +906,41 @@ export function prepareExportReadyCv(
 
   if (!recoveryInvoked) {
     return fail('legacy_export_recovery_not_invoked', 'recover_legacy_grounding', baseDiagnostics());
+  }
+
+  // Summary↔Experience parity: material facts present in Summary grounding must
+  // still survive in finalized Experience (Summary must not be the only copy).
+  for (const exp of cv.experience || []) {
+    const jobCtx = buildExperienceJobContext({
+      position: exp.position || cv.personal?.jobTitle,
+      locale: requestedLocale,
+    });
+    const source = (exp.originalUserDescription || exp.canonicalDescription || '').trim();
+    if (!source) continue;
+    if (
+      textLooksLikeCookingDuties(source)
+      && jobCtx.positionClass !== 'baker_food'
+      && jobCtx.positionClass !== 'hospitality_service'
+      && jobCtx.industryNorm !== 'hospitality'
+    ) {
+      continue;
+    }
+    const required = materialDutyKeysFromDescription(source).filter((k) => k !== 'generic_duty');
+    if (!required.length) continue;
+    const coverage = validateMaterialDutyCoverage(source, exp.description || '');
+    if (!coverage.valid) {
+      const diagnostics = baseDiagnostics();
+      diagnostics.recoveryInvoked = recoveryInvoked;
+      diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.summaryFactSetSource = factSource;
+      diagnostics.summarySemanticDutyKeys = summaryKeys;
+      return fail(
+        'experience_material_fact_coverage_incomplete',
+        'validate_locale_integrity',
+        diagnostics,
+      );
+    }
   }
 
   stage = 'complete';

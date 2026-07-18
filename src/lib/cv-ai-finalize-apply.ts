@@ -28,7 +28,9 @@ import {
 import {
   deterministicLocalizedBulletsFromCanonical,
   deterministicLocalizedSummaryFromCanonical,
+  buildSourcePreservingExperienceBullets,
 } from './cv-localized-fallback';
+import { validateSourceFactIdentityCoverage } from './cv-source-fact-identity';
 import {
   evaluateRoleDutyConsistency,
   resolveOccupationalTitleForSummary,
@@ -64,6 +66,10 @@ import {
   textLooksLikeCookingDuties,
   type ExperienceJobContext,
 } from './cv-experience-job-context';
+import {
+  materialDutyKeysFromDescription,
+  validateExperienceApplyMaterialPostcondition,
+} from './cv-material-duty-coverage';
 
 export type CvAiFinalizeAction =
   | 'summary_generate'
@@ -426,6 +432,41 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   });
   const roleDutyConflict = consistency.conflict;
   const canonical = bulletsForExperience(factSet, experienceIndex);
+  const sourceForCoverage = dutiesText.trim()
+    || canonical.map((f) => f.sourceText || f.value).join('\n');
+
+  const tryAccept = (
+    text: string,
+    origin: FinalizeCvAiFieldResult['origin'],
+  ): FinalizeCvAiFieldResult | null => {
+    const candidate = (text || '').trim();
+    if (!candidate) return null;
+    const pass = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
+    if (!pass.ok) return null;
+    if (sourceForCoverage) {
+      const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate);
+      if (!post.ok) return null;
+      const identity = validateSourceFactIdentityCoverage(sourceForCoverage, candidate);
+      if (!identity.ok) {
+        // Cross-script: allow only when every source unit has a material key and
+        // description-level material coverage already passed (cooking/logistics/cs).
+        const units = sourceForCoverage
+          .split(/\n+/)
+          .map((l) => l.replace(/^[•\-\*\u2022]\s*/u, '').trim())
+          .filter((l) => l.length > 8);
+        const keyedUnits = units.filter((u) =>
+          materialDutyKeysFromDescription(u).some((k) => k !== 'generic_duty'));
+        if (keyedUnits.length < units.length || keyedUnits.length === 0) return null;
+      }
+    }
+    return {
+      blocked: false,
+      text: candidate,
+      origin,
+      roleDutyConflict,
+      countedAsSuccess: true,
+    };
+  };
 
   let candidate = prepareCandidate(input.candidate || '', locale, 'experience_description');
   if (hasAiProtocolMarker(candidate)) {
@@ -451,30 +492,26 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     candidate = '';
   }
 
-  const first = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
-  if (first.ok && candidate.trim()) {
-    return {
-      blocked: false,
-      text: candidate,
-      origin: input.originHint || 'ai_generated',
-      roleDutyConflict,
-      countedAsSuccess: true,
-    };
-  }
+  const firstAccepted = tryAccept(candidate, input.originHint || 'ai_generated');
+  if (firstAccepted) return firstAccepted;
 
   const grounded = normalizeLocaleText(
     deterministicLocalizedBulletsFromCanonical(canonical, locale, gender, { isPresent }) || '',
     locale,
   );
-  const second = bulletsPass(grounded, factSet, cvForFacts, locale, experienceIndex, isPresent);
-  if (grounded && second.ok && !(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))) {
-    return {
-      blocked: false,
-      text: grounded,
-      origin: 'deterministic_fallback',
-      roleDutyConflict,
-      countedAsSuccess: true,
-    };
+  if (!(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))) {
+    const secondAccepted = tryAccept(grounded, 'deterministic_fallback');
+    if (secondAccepted) return secondAccepted;
+  }
+
+  // Rebuild from authoritative source units when provider/fallback collapsed facts.
+  if (sourceForCoverage && !grounding?.staleGeneratedContentExcluded) {
+    const preserved = normalizeLocaleText(
+      buildSourcePreservingExperienceBullets(sourceForCoverage, locale, gender, { isPresent }) || '',
+      locale,
+    );
+    const preservedAccepted = tryAccept(preserved, 'deterministic_fallback');
+    if (preservedAccepted) return preservedAccepted;
   }
 
   const occupationFallback = normalizeLocaleText(
@@ -487,11 +524,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }),
     locale,
   );
-  // Occupation-aware fallback only when there is no usable grounding (empty
-  // FACT LOCK or stale cross-occupation AI/legacy duties). Do not replace
-  // valid user/canonical duties that simply failed provider validation.
-  // Also do not invent duties for a totally blank experience with no industry
-  // / occupation-change signal (preserves empty→blocked usage boundary).
   const allowOccupationFallback = Boolean(
     grounding?.staleGeneratedContentExcluded
     || (input.industry && input.industry !== 'general')
@@ -503,18 +535,29 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     && allowOccupationFallback
     && (canonical.length === 0 || grounding?.staleGeneratedContentExcluded)
   ) {
-    return {
-      blocked: false,
-      text: occupationFallback,
-      origin: 'deterministic_fallback',
-      roleDutyConflict,
-      countedAsSuccess: true,
-    };
+    // Occupation fallback only when there are no user source facts to preserve.
+    if (!sourceForCoverage.trim()) {
+      return {
+        blocked: false,
+        text: occupationFallback,
+        origin: 'deterministic_fallback',
+        roleDutyConflict,
+        countedAsSuccess: true,
+      };
+    }
   }
+
+  const coverageFail = sourceForCoverage
+    ? validateExperienceApplyMaterialPostcondition(
+      sourceForCoverage,
+      candidate || grounded || '',
+    )
+    : null;
 
   return {
     blocked: true,
-    reason: second.reason || first.reason || 'bullets_finalization_blocked',
+    reason: coverageFail?.reason
+      || 'experience_material_fact_coverage_incomplete',
     text: exp?.description || '',
     origin: 'user',
     roleDutyConflict,

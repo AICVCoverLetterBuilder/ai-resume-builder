@@ -8,6 +8,7 @@ import { normalizeCoverLetterGender } from './cover-letter-gender';
 import {
   classifyDutyCategory,
   formatExperienceBullets,
+  splitExperienceBullets,
   type CvCanonicalFact,
   type CvCanonicalFactSet,
   type CvDutyCategory,
@@ -19,8 +20,15 @@ import {
 import { resolveOccupationalTitleForSummary } from './cv-role-title';
 import {
   classifyMaterialDutyKeys,
+  applyEnglishEmploymentTense,
+  validateMaterialDutyCoverage,
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
+import {
+  extractSourceDutyUnits,
+  optionalTemplatePreservesSourceUnit,
+  universalPreserveSourceUnit,
+} from './cv-source-fact-identity';
 import { buildConciseGroundedSummary } from './cv-summary-grounding';
 
 type GenderTone = 'male' | 'female' | 'neutral';
@@ -1038,10 +1046,69 @@ function localizedMaterialDutyBullet(
         ? 'Obrađujem narudžbe klijenata do isporuke.'
         : (g === 'male' ? 'Obrađivao sam narudžbe klijenata do isporuke.' : 'Obrađivala sam narudžbe klijenata do isporuke.'),
     },
+    cs_inquiry_channels: {
+      en: isPresent
+        ? 'Respond to customer inquiries by email and phone, providing clear and timely support.'
+        : 'Responded to customer inquiries by email and phone, providing clear and timely support.',
+      hi: hi(
+        'मैं ईमेल और फोन द्वारा ग्राहक पूछताछ का उत्तर देती हूँ।',
+        'मैं ईमेल और फोन द्वारा ग्राहक पूछताछ का उत्तर देता हूँ।',
+      ),
+      sr: isPresent
+        ? 'Odgovaram na upite klijenata putem e-pošte i telefona.'
+        : (g === 'male'
+          ? 'Odgovarao sam na upite klijenata putem e-pošte i telefona.'
+          : 'Odgovarala sam na upite klijenata putem e-pošte i telefona.'),
+    },
+    cs_complaint_resolution: {
+      en: isPresent
+        ? 'Resolve customer complaints and issues according to internal procedures and quality standards.'
+        : 'Resolved customer complaints and issues according to internal procedures and quality standards.',
+      hi: hi(
+        'आंतरिक प्रक्रियाओं और गुणवत्ता मानकों के अनुसार ग्राहकों की शिकायतों और समस्याओं का समाधान करती हूँ।',
+        'आंतरिक प्रक्रियाओं और गुणवत्ता मानकों के अनुसार ग्राहकों की शिकायतों और समस्याओं का समाधान करता हूँ।',
+      ),
+      sr: isPresent
+        ? 'Rešavam reklamacije i žalbe klijenata uz poštovanje internih procedura i standarda kvaliteta.'
+        : (g === 'male'
+          ? 'Rešavao sam reklamacije i žalbe klijenata uz poštovanje internih procedura i standarda kvaliteta.'
+          : 'Rešavala sam reklamacije i žalbe klijenata uz poštovanje internih procedura i standarda kvaliteta.'),
+    },
+    cs_issue_logging: {
+      en: isPresent
+        ? 'Record customer issues accurately in the support system.'
+        : 'Recorded customer issues accurately in the support system.',
+      hi: hi(
+        'मैं सपोर्ट सिस्टम में ग्राहक समस्याओं को दर्ज करती हूँ।',
+        'मैं सपोर्ट सिस्टम में ग्राहक समस्याओं को दर्ज करता हूँ।',
+      ),
+      sr: isPresent
+        ? 'Beležim probleme klijenata u sistemu podrške.'
+        : (g === 'male'
+          ? 'Beležio sam probleme klijenata u sistemu podrške.'
+          : 'Beležila sam probleme klijenata u sistemu podrške.'),
+    },
+    cs_request_coordination: {
+      en: isPresent
+        ? 'Coordinate with colleagues to resolve customer requests efficiently.'
+        : 'Coordinated with colleagues to resolve customer requests efficiently.',
+      hi: hi(
+        'मैं सहकर्मियों के साथ समन्वय कर ग्राहक अनुरोधों का समाधान करती हूँ।',
+        'मैं सहकर्मियों के साथ समन्वय कर ग्राहक अनुरोधों का समाधान करता हूँ।',
+      ),
+      sr: isPresent
+        ? 'Koordiniram sa kolegama radi rešavanja zahteva klijenata.'
+        : (g === 'male'
+          ? 'Koordinirao sam sa kolegama radi rešavanja zahteva klijenata.'
+          : 'Koordinirala sam sa kolegama radi rešavanja zahteva klijenata.'),
+    },
   };
   const byLocale = table[key];
   if (!byLocale) return null;
-  return (byLocale[locale] || byLocale.en || null)?.trim() || null;
+  // Never silently substitute English templates for a non-English request —
+  // that leaks English into Serbian/Hindi exports (build-253 generalization).
+  if (locale === 'en') return (byLocale.en || null)?.trim() || null;
+  return (byLocale[locale] || null)?.trim() || null;
 }
 
 function localizedBulletForFact(
@@ -1051,79 +1118,157 @@ function localizedBulletForFact(
   options?: { useGenericCatchAll?: boolean; isPresent?: boolean },
 ): string {
   const g = tone(gender);
-  const source = fact.sourceText || fact.value;
+  const source = (fact.sourceText || fact.value || '').replace(/^[•\-\*\u2022]\s*/u, '').trim();
   const category = fact.category || classifyDutyCategory(source);
   const isPresent = Boolean(options?.isPresent);
+  const universal = universalPreserveSourceUnit(source, { isPresent });
+  const sourceHasGuestHospitality = /\b(guest|guests|rapport|gost(?:ima|i)?|ospiti|huésped|hospitality)\b/iu.test(source);
 
-  // Cooking-specific intents (category-aware + generic cooking source text).
-  // Cuisine names are included only when present in the source fact.
+  // Cooking localization: trusted when cooking intent matched the source unit.
   const cookingIntent = classifyCookingDutyIntent(source);
   if (cookingIntent) {
-    return localizeCookingBulletFromSource(source, cookingIntent, locale, gender, isPresent);
+    const cooked = localizeCookingBulletFromSource(source, cookingIntent, locale, gender, isPresent);
+    if (cooked.trim()) return cooked.trim();
   }
 
-  // Material occupation duties (warehouse / software / sales) — one line per key
-  // when the source unit encodes a single material duty. Multi-key units fall
-  // through to generic intents (e.g. combined logistics template).
-  // Never override a known generic office/logistics intent (process/collaboration/…).
+  const sourceIsNonEnglish = /[čćžšđČĆŽŠĐа-яА-Я\u0900-\u097F\u0600-\u06FF]/.test(source);
+
+  // Optional material-key templates — never required for English-authored correctness.
   const materialKeys = classifyMaterialDutyKeys(source).filter((k) =>
     k.startsWith('logistics_')
     || k.startsWith('software_')
     || k.startsWith('sales_')
+    || k.startsWith('cs_'),
   );
-  const genericIntentEarly = category === 'generic' ? classifyGenericDutyIntent(source) : null;
-  if (materialKeys.length === 1 && !genericIntentEarly) {
-    const materialLine = localizedMaterialDutyBullet(materialKeys[0], locale, g, isPresent);
-    if (materialLine) return materialLine;
+  for (const key of materialKeys) {
+    const materialLine = localizedMaterialDutyBullet(key, locale, g, isPresent);
+    if (!materialLine) continue;
+    if (optionalTemplatePreservesSourceUnit(source, materialLine)) return materialLine;
+    // Non-English source → target locale (including en): allow key-faithful translations.
+    if (
+      (locale !== 'en' || sourceIsNonEnglish)
+      && validateMaterialDutyCoverage(source, materialLine).valid
+      && validateNoExtraGeneratedDutiesRelaxed(source, materialLine)
+    ) {
+      return materialLine;
+    }
   }
 
-  if (category === 'generic') {
-    const intent = genericIntentEarly || classifyGenericDutyIntent(source);
-    const table = GENERIC_INTENT_BULLET[locale] || GENERIC_INTENT_BULLET.en;
-    if (intent && table?.[intent]) return table[intent](g).trim();
-    // Distinct software/sales units that missed the single-key path above.
-    if (materialKeys.length >= 1) {
-      for (const key of materialKeys) {
-        const materialLine = localizedMaterialDutyBullet(key, locale, g, isPresent);
-        if (materialLine) return materialLine;
+  const renderCategoryShell = (): string => {
+    if (category === 'generic') return '';
+    const table = BULLET_BY_CATEGORY[locale] || BULLET_BY_CATEGORY.en;
+    const shellFn = table[category as Exclude<CvDutyCategory, 'generic'>];
+    if (!shellFn) return '';
+    let line = shellFn(g).trim();
+    if (locale === 'hi' && !isPresent) {
+      line = line
+        .replace(/करती हूँ/gu, 'करती थी')
+        .replace(/करता हूँ/gu, 'करता था')
+        .replace(/रखती हूँ/gu, 'रखती थी')
+        .replace(/रखता हूँ/gu, 'रखता था')
+        .replace(/देती हूँ/gu, 'देती थी')
+        .replace(/देता हूँ/gu, 'देता था')
+        .replace(/बनाती हूँ/gu, 'बनाती थी')
+        .replace(/बनाता हूँ/gu, 'बनाता था')
+        .replace(/परोसती हूँ/gu, 'परोसती थी')
+        .replace(/परोसता हूँ/gu, 'परोसता था')
+        .replace(/बताती हूँ/gu, 'बताती थी')
+        .replace(/बताता हूँ/gu, 'बताता था');
+    }
+    if (locale === 'en' && isPresent) {
+      line = applyEnglishEmploymentTense(line, true);
+    }
+    return line;
+  };
+
+  // English: universal source preservation is the correctness path for English
+  // source units. Non-English source still needs English locale projection via
+  // intent/category shells (without inventing guests/rapport).
+  if (locale === 'en') {
+    if (category === 'generic') {
+      const intent = classifyGenericDutyIntent(source);
+      const intentTable = GENERIC_INTENT_BULLET.en;
+      if (intent && intentTable?.[intent]) {
+        const line = intentTable[intent](g).trim();
+        if (optionalTemplatePreservesSourceUnit(source, line) || sourceIsNonEnglish) {
+          return line;
+        }
+      }
+    } else if (!(category === 'customer_service_guest_relationship' && !sourceHasGuestHospitality)) {
+      const shell = renderCategoryShell();
+      if (shell && (optionalTemplatePreservesSourceUnit(source, shell) || sourceIsNonEnglish)) {
+        return shell;
       }
     }
-    // No known intent matched (duty outside the office/hospitality/logistics
-    // vocabulary above). Callers that need a guaranteed-non-empty, always-safe
-    // deterministic summary fallback (`deterministicLocalizedSummaryFromCanonical`,
-    // the step every validator treats as "always available") opt in via
-    // `useGenericCatchAll`. Other callers — same-locale quality normalization
-    // (`localizeCanonicalBulletLine`, used for sr/hr/hi in-place bullet
-    // touch-ups) and the standalone bullets-generation fallback
-    // (`deterministicLocalizedBulletsFromCanonical`, whose callers deliberately
-    // treat an empty result as "localization impossible, fail loud instead of
-    // fabricating content" — see cv-export-integrity.ts) — keep the original
-    // '' signal so their existing no-op/throw behavior is unchanged.
+    if (universal) {
+      // Unmapped non-English duties must not leak into an English summary/export.
+      if (sourceIsNonEnglish) {
+        return (GENERIC_DUTY_FALLBACK.en || (() => ''))(g).trim();
+      }
+      return universal;
+    }
+    if (options?.useGenericCatchAll) {
+      return (GENERIC_DUTY_FALLBACK.en || (() => ''))(g).trim();
+    }
+    return '';
+  }
+
+  // Non-English: locale projection may use intent/category shells, except the
+  // hospitality guest/rapport shell when the source has no guest evidence.
+  if (category === 'generic') {
+    const intent = classifyGenericDutyIntent(source);
+    const intentTable = GENERIC_INTENT_BULLET[locale];
+    if (intent && intentTable?.[intent]) {
+      // Locale-native intent projection (en→sr/hi/de/…). English-authored
+      // unknown duties that only weakly match an intent still prefer universal
+      // when the intent line fails fidelity — see optionalTemplate check.
+      const line = intentTable[intent](g).trim();
+      if (optionalTemplatePreservesSourceUnit(source, line) || sourceIsNonEnglish) {
+        return line;
+      }
+      // Strong generic intents (process/collab/analysis/…) for English source:
+      // project to the requested locale rather than leaking English into sr/hi exports.
+      if (
+        intent === 'process'
+        || intent === 'collaboration'
+        || intent === 'analysis'
+        || intent === 'planning'
+        || intent === 'logistics'
+      ) {
+        return line;
+      }
+    }
     if (options?.useGenericCatchAll) {
       const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
       return fallbackTable(g).trim();
     }
-    return '';
+    if (!sourceIsNonEnglish && universal) return universal;
+    if (locale === 'hi' && /\p{Script=Devanagari}/u.test(universal)) return universal;
+    if ((locale === 'sr' || locale === 'hr') && /[čćžšđČĆŽŠĐ]/u.test(universal)) return universal;
+    if (locale === 'ru' && /[\u0400-\u04FF]/.test(universal)) return universal;
+    if (locale === 'ar' && /[\u0600-\u06FF]/.test(universal)) return universal;
+    if (locale === 'ja' && /[\u3040-\u30FF\u3400-\u9FFF]/.test(universal)) return universal;
+    const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
+    return fallbackTable(g).trim();
   }
-  const table = BULLET_BY_CATEGORY[locale] || BULLET_BY_CATEGORY.en;
-  let line = table[category](g).trim();
-  // Hindi category shells above are present-tense; convert for completed roles.
-  if (locale === 'hi' && !isPresent) {
-    line = line
-      .replace(/करती हूँ/gu, 'करती थी')
-      .replace(/करता हूँ/gu, 'करता था')
-      .replace(/रखती हूँ/gu, 'रखती थी')
-      .replace(/रखता हूँ/gu, 'रखता था')
-      .replace(/देती हूँ/gu, 'देती थी')
-      .replace(/देता हूँ/gu, 'देता था')
-      .replace(/बनाती हूँ/gu, 'बनाती थी')
-      .replace(/बनाता हूँ/gu, 'बनाता था')
-      .replace(/परोसती हूँ/gu, 'परोसती थी')
-      .replace(/परोसता हूँ/gu, 'परोसता था')
-      .replace(/बताती हूँ/gu, 'बताती थी')
-      .replace(/बताता हूँ/gu, 'बताता था');
+
+  if (
+    category === 'customer_service_guest_relationship'
+    && !sourceHasGuestHospitality
+  ) {
+    // Never invent guests/rapport for contact-center / unknown CS-like text.
+    return universal || '';
   }
-  return line;
+
+  const shell = renderCategoryShell();
+  if (shell) return shell;
+  return universal || '';
+}
+
+/** Soft extras check used only for non-English material templates. */
+function validateNoExtraGeneratedDutiesRelaxed(source: string, line: string): boolean {
+  return !/\b(guests?|rapport|hospitality)\b/iu.test(line)
+    || /\b(guests?|rapport|hospitality)\b/iu.test(source);
 }
 
 export function localizeCanonicalBulletLine(
@@ -1150,9 +1295,68 @@ export function deterministicLocalizedBulletsFromCanonical(
   options?: { isPresent?: boolean },
 ): string {
   if (!facts.length) return '';
-  const lines = facts.map((f) => localizedBulletForFact(f, locale, gender, options));
+  let lines = facts.map((f) => localizedBulletForFact(f, locale, gender, options));
   if (lines.some((l) => !l.trim())) return '';
+
+  // Generic category-collision guard: never emit the same English shell once per
+  // source unit. For non-English, keep locale-correct lines (even if templates
+  // collide) rather than injecting English universals or wiping the projection.
+  if (facts.length >= 2) {
+    const norms = lines.map((l) => l.toLowerCase().replace(/\s+/g, ' ').trim());
+    if (new Set(norms).size < norms.length) {
+      if (locale === 'en') {
+        lines = facts.map((f) => {
+          const source = (f.sourceText || f.value || '').replace(/^[•\-\*\u2022]\s*/u, '').trim();
+          return universalPreserveSourceUnit(source, { isPresent: Boolean(options?.isPresent) });
+        });
+        if (lines.some((l) => !l.trim())) return '';
+        const rebuiltNorms = lines.map((l) => l.toLowerCase().replace(/\s+/g, ' ').trim());
+        if (new Set(rebuiltNorms).size < rebuiltNorms.length) return '';
+      } else {
+        const localeOk = (t: string) => {
+          if (locale === 'hi') return /[\u0900-\u097F]/.test(t) && !/[čćžšđ]/i.test(t);
+          if (locale === 'ar') return /[\u0600-\u06FF]/.test(t);
+          if (locale === 'ja') return /[\u3040-\u30ff\u3400-\u9fff]/.test(t);
+          if (locale === 'ru') return /[\u0400-\u04FF]/.test(t);
+          // Latin locales: do not treat plain English ASCII as Serbian/German/etc.
+          if (locale === 'sr' || locale === 'hr') {
+            return /[čćžšđČĆŽŠĐ]/.test(t)
+              || /\b(radim|sarađujem|analiziram|učestvujem|obavljam|vodim|koordiniram|transportujem)\b/i.test(t);
+          }
+          if (locale === 'de') {
+            return /[äöüßÄÖÜ]/.test(t)
+              || /\b(und|mit|für|der|die|das|von|zur|zum|im|am)\b/i.test(t);
+          }
+          return Boolean(t.trim()) && !/[\u0900-\u097F\u0600-\u06FF]/.test(t);
+        };
+        if (!lines.every(localeOk)) return '';
+      }
+    }
+  }
   return formatExperienceBullets(lines);
+}
+
+/**
+ * Rebuild Experience from authoritative source duty units — one localized line
+ * per source bullet. Used when provider/fallback collapsed distinct facts.
+ */
+export function buildSourcePreservingExperienceBullets(
+  sourceDescription: string,
+  locale: Locale,
+  gender?: CoverLetterGender | string,
+  options?: { isPresent?: boolean },
+): string {
+  const units = extractSourceDutyUnits(sourceDescription);
+  if (!units.length) return '';
+  const facts = units.map((sourceText, i) => ({
+    id: `source-preserve-${i}`,
+    type: 'experience_bullet' as const,
+    value: sourceText,
+    sourceText,
+    category: classifyDutyCategory(sourceText),
+    source: 'source_preserve' as const,
+  }));
+  return deterministicLocalizedBulletsFromCanonical(facts, locale, gender, options);
 }
 
 export function deterministicLocalizedSummaryFromCanonical(

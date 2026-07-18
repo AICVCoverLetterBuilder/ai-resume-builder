@@ -382,17 +382,28 @@ export function normalizeExperienceBulletsForQuality(
       classifyDutyCategory(sourceText) === 'generic'
       && (locale === 'hi' || locale === 'sr' || locale === 'hr')
     ) {
-      const localized = localizeCanonicalBulletLine(sourceText, locale, gender);
-      if (localized) {
-        let next = localized;
-        if (locale === 'hi' && isPresent) {
-          next = applyProductionHindiPresentTense(next, gender);
+      // Keep already-valid locale display (e.g. Corporate Navy security Hindi)
+      // instead of re-projecting through identical catch-all shells.
+      // Latin locales: ASCII English must NOT count as already-localized Serbian/Croatian.
+      const displayAlreadyLocalized =
+        Boolean(text.trim())
+        && (
+          (locale === 'hi' && /[\u0900-\u097F]/.test(text) && !/[čćžšđ]/i.test(text))
+          || ((locale === 'sr' || locale === 'hr') && /[čćžšđČĆŽŠĐ]/.test(text))
+        );
+      if (!displayAlreadyLocalized) {
+        const localized = localizeCanonicalBulletLine(sourceText, locale, gender);
+        if (localized) {
+          let next = localized;
+          if (locale === 'hi' && isPresent) {
+            next = applyProductionHindiPresentTense(next, gender);
+          }
+          if ((locale === 'sr' || locale === 'hr') && isPresent) {
+            next = applySerbianCurrentRoleTense(next);
+          }
+          if (next !== text) changed = true;
+          return next;
         }
-        if ((locale === 'sr' || locale === 'hr') && isPresent) {
-          next = applySerbianCurrentRoleTense(next);
-        }
-        if (next !== text) changed = true;
-        return next;
       }
     }
     if (locale === 'hi') {
