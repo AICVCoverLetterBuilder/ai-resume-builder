@@ -8,6 +8,7 @@ import {
   stampExperienceGenerationContext,
   type ExperienceJobContext,
 } from './cv-experience-job-context';
+import { normalizeSourceFactText } from './cv-source-fact-identity';
 
 export type CvExperienceDescriptionOrigin =
   | 'user'
@@ -22,6 +23,210 @@ export function isAiDescriptionOrigin(
   return origin === 'ai_generated'
     || origin === 'ai_repaired'
     || origin === 'deterministic_fallback';
+}
+
+/** Normalized content compare for source-selection / material-edit detection. */
+export function experienceTextsMateriallyDiffer(a: string, b: string): boolean {
+  const na = normalizeSourceFactText(a || '');
+  const nb = normalizeSourceFactText(b || '');
+  if (!na && !nb) return false;
+  if (!na || !nb) return true;
+  return na !== nb;
+}
+
+export type ExperienceAiAuthoritativeSourceKind =
+  | 'currentTextarea'
+  | 'description'
+  | 'originalUserDescription'
+  | 'canonicalDescription'
+  | 'generatedDescription'
+  | 'recovered_semantic_duties'
+  | 'legacy_grounding'
+  | 'none';
+
+export type ExperienceAiAuthoritativeSourceResult = {
+  text: string;
+  kind: ExperienceAiAuthoritativeSourceKind;
+  /** True when a non-empty live textarea lost to another source. */
+  currentTextareaIgnoredOrOverridden: boolean;
+  englishSourceStillAuthoritative: boolean;
+  /**
+   * Request-scoped copy with grounding fields shadowed to the selected text.
+   * Does not mutate persisted historical AI/canonical storage on the live CV.
+   */
+  experienceForAi: WorkExperience;
+};
+
+function recoveredDutiesText(exp: WorkExperience): string {
+  return (exp.recoveredSemanticDuties || [])
+    .map((d) => {
+      const row = d as { label?: string; text?: string; key?: string };
+      return row.label || row.text || '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function scriptLooksEnglishLatin(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t) return false;
+  if (/[čćžšđČĆŽŠĐ]/.test(t) || /\p{Script=Cyrillic}/u.test(t)) return false;
+  if (/\p{Script=Devanagari}/u.test(t) || /\p{Script=Arabic}/u.test(t)) return false;
+  if (/[\u3040-\u30ff\u3400-\u9fff]/.test(t)) return false;
+  return /[A-Za-z]/.test(t);
+}
+
+function scriptLooksNonEnglish(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t) return false;
+  return (
+    /[čćžšđČĆŽŠĐ]/.test(t)
+    || /\p{Script=Cyrillic}/u.test(t)
+    || /\p{Script=Devanagari}/u.test(t)
+    || /\p{Script=Arabic}/u.test(t)
+    || /[\u3040-\u30ff\u3400-\u9fff]/.test(t)
+  );
+}
+
+/**
+ * Experience AI authoritative source policy (request-time only).
+ *
+ * Priority:
+ * 1. Live textarea with genuine user-edited text
+ * 2. Genuine originalUserDescription matching the live textarea
+ * 3. Current-context canonical
+ * 4. Current-context generated
+ * 5. Legacy / recovered only when no live or current-context source exists
+ *
+ * A stale English canonical must never override materially different live user text.
+ * Export grounding continues to use `resolveExperienceGroundingDescription`.
+ */
+export function resolveExperienceAiAuthoritativeSource(
+  exp: WorkExperience,
+): ExperienceAiAuthoritativeSourceResult {
+  const live = (exp.description || '').trim();
+  const original = (exp.originalUserDescription || '').trim();
+  const canonical = (exp.canonicalDescription || '').trim();
+  const generated = (exp.generatedDescription || '').trim();
+  const recovered = recoveredDutiesText(exp);
+
+  const liveEqualsGenerated = Boolean(
+    live && generated && !experienceTextsMateriallyDiffer(live, generated),
+  );
+  const liveEqualsCanonical = Boolean(
+    live && canonical && !experienceTextsMateriallyDiffer(live, canonical),
+  );
+  const liveEqualsOriginal = Boolean(
+    live && original && !experienceTextsMateriallyDiffer(live, original),
+  );
+
+  const userAuthoredLive = Boolean(live && isUserAuthoredExperienceDescription(exp));
+  /**
+   * Material live authority:
+   * - user / user_confirmed_ai_edit provenance, or
+   * - live text diverged from the last AI generation (and is not merely AI display
+   *   equal to generated while still pointing at stale canonical for export).
+   */
+  const liveIsMaterialUserEdit = Boolean(
+    live
+    && (
+      userAuthoredLive
+      || (
+        !liveEqualsGenerated
+        && (
+          !canonical
+          || experienceTextsMateriallyDiffer(live, canonical)
+          || experienceTextsMateriallyDiffer(live, original)
+        )
+      )
+    ),
+  );
+
+  const build = (
+    text: string,
+    kind: ExperienceAiAuthoritativeSourceKind,
+  ): ExperienceAiAuthoritativeSourceResult => {
+    const selected = (text || '').trim();
+    const experienceForAi: WorkExperience = selected
+      ? {
+        ...exp,
+        description: selected,
+        originalUserDescription: selected,
+        canonicalDescription: selected,
+        descriptionOrigin: liveIsMaterialUserEdit || userAuthoredLive
+          ? (isUserAuthoredExperienceDescription(exp)
+            ? (exp.descriptionOrigin || 'user')
+            : 'user_confirmed_ai_edit')
+          : (exp.descriptionOrigin || 'user'),
+        // Stale recovered occupation keys must not outrank the selected live facts.
+        ...(liveIsMaterialUserEdit
+          ? {
+            recoveredSemanticDuties: undefined,
+            groundingRecoverySource: undefined,
+          }
+          : {}),
+      }
+      : { ...exp };
+    return {
+      text: selected,
+      kind: selected ? kind : 'none',
+      currentTextareaIgnoredOrOverridden: Boolean(
+        live && selected && experienceTextsMateriallyDiffer(live, selected),
+      ),
+      englishSourceStillAuthoritative: Boolean(
+        selected
+        && scriptLooksEnglishLatin(selected)
+        && live
+        && scriptLooksNonEnglish(live)
+        && experienceTextsMateriallyDiffer(live, selected),
+      ),
+      experienceForAi,
+    };
+  };
+
+  // 1. Latest live textarea containing genuine user-edited text.
+  if (live && liveIsMaterialUserEdit) {
+    return build(live, 'currentTextarea');
+  }
+
+  // 2. Genuine original matching the current textarea (or no live text).
+  if (original && (!live || liveEqualsOriginal)) {
+    return build(original, 'originalUserDescription');
+  }
+
+  // 3. Current-context canonical (including AI-display live that still equals generated).
+  if (canonical) {
+    return build(canonical, 'canonicalDescription');
+  }
+
+  // 4. Generated display only when no stronger current-context source exists.
+  if (generated) {
+    return build(generated, 'generatedDescription');
+  }
+
+  // 5. Legacy / recovered / bare live.
+  if (recovered) {
+    return build(recovered, 'recovered_semantic_duties');
+  }
+  if (live) {
+    return build(live, 'description');
+  }
+  if (exp.groundingRecoverySource) {
+    const legacy = (canonical || original || live).trim();
+    if (legacy) return build(legacy, 'legacy_grounding');
+  }
+  return build('', 'none');
+}
+
+/** Text resolver for Experience AI FACT LOCK / finalize — never prefer stale canonical over live user edits. */
+export function freezeExperienceAiAuthoritativeDescription(exp: WorkExperience): string {
+  return resolveExperienceAiAuthoritativeSource(exp).text;
+}
+
+/** Shadow experience grounding to the AI-authoritative source for one request. */
+export function ensureExperienceAiAuthoritativeSource(exp: WorkExperience): WorkExperience {
+  return resolveExperienceAiAuthoritativeSource(exp).experienceForAi;
 }
 
 /** Cuisine-specific claims that must not be invented without user/source support. */

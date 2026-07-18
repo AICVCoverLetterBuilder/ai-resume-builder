@@ -20,7 +20,7 @@ import {
 import {
   resolveExperienceAiGrounding,
 } from '@/lib/cv-experience-job-context';
-import { freezeCanonicalExperienceDescription, formatExperienceBullets } from '@/lib/cv-canonical-facts';
+import { freezeCanonicalExperienceDescription, freezeExperienceAiDescription, formatExperienceBullets } from '@/lib/cv-canonical-facts';
 import { buildExperienceJobContext } from '@/lib/cv-experience-job-context';
 import { finalizeCvAiFieldForApply } from '@/lib/cv-ai-finalize-apply';
 import { fingerprintText } from '@/lib/cv-export-diagnostics';
@@ -150,28 +150,30 @@ describe('Build 260 Experience AI non-PII diagnostics', () => {
       locale: 'sr',
       level: 'mid',
     });
-    const grounding = resolveExperienceAiGrounding(
+    // Classic export grounding may still prefer canonical; AI path must not.
+    const classic = resolveExperienceAiGrounding(
       exp,
       ctx,
       freezeCanonicalExperienceDescription,
     );
+    const aiPath = resolveExperienceAiGrounding(
+      exp,
+      ctx,
+      freezeExperienceAiDescription,
+    );
     const selection = diagnoseExperienceSourceSelection(
       exp,
-      grounding.sourceDescription,
-      grounding.groundingSource,
+      aiPath.sourceDescription,
+      aiPath.groundingSource,
+      { requestedLocale: 'sr', selectedSourceKindHint: 'currentTextarea' },
     );
-    // Textarea Serbian must appear among candidates (hash present in rejected or selected).
     const textareaHash = fingerprintText(SR_BLOCK);
-    expect(
-      selection.selectedSourceHash === textareaHash
-      || selection.currentTextareaIgnoredOrOverridden,
-    ).toBe(true);
-    // When English canonical/original wins, diagnostics must flag the override.
-    if (selection.selectedSourceHash !== textareaHash) {
-      expect(selection.currentTextareaIgnoredOrOverridden).toBe(true);
-      expect(selection.englishSourceStillAuthoritative).toBe(true);
-      expect(selection.rejectedStaleSourceKinds).toContain('description');
-    }
+    expect(aiPath.sourceDescription).toBe(SR_BLOCK);
+    expect(selection.selectedSourceHash).toBe(textareaHash);
+    expect(selection.currentTextareaIgnoredOrOverridden).toBe(false);
+    expect(selection.englishSourceStillAuthoritative).toBe(false);
+    // Observation: classic canonical priority still differs (export path).
+    expect(classic.sourceDescription === EN_BLOCK || classic.sourceDescription === SR_BLOCK).toBe(true);
   });
 
   it('provider rejection path records fail stage and usage +0', () => {

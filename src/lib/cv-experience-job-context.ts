@@ -332,6 +332,9 @@ export function resolveExperienceAiGrounding(
     );
     const stripped: WorkExperience = {
       ...exp,
+      // Clear display + grounding on the AI request copy so FACT LOCK cannot
+      // resurrect excluded occupation duties from the live textarea.
+      description: '',
       originalUserDescription: undefined,
       canonicalDescription: undefined,
       recoveredSemanticDuties: undefined,

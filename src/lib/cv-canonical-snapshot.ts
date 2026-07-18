@@ -21,6 +21,7 @@ import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 import {
   applyGeneratedExperienceDescription,
   experienceProvenanceNeedsRepair,
+  experienceTextsMateriallyDiffer,
   isAiDescriptionOrigin,
   normalizeExperienceProvenance,
   resolveExperienceGroundingDescription,
@@ -572,12 +573,34 @@ export function applyCanonicalExperienceEdit(
         || snap.canonicalState !== 'valid'
         || uiLocale === snap.canonicalLocale;
       const previousWasAi = isAiDescriptionOrigin(e.descriptionOrigin);
+      const live = value;
+      const prevVisible = (e.description || '').trim();
+      const prevCanonical = (e.canonicalDescription || '').trim();
+      const prevGenerated = (e.generatedDescription || '').trim();
+      const prevOriginal = (e.originalUserDescription || '').trim();
+      // Material user edit invalidates stale AI/canonical authority for grounding.
+      const materialEdit = experienceTextsMateriallyDiffer(live, prevVisible)
+        || (prevCanonical !== '' && experienceTextsMateriallyDiffer(live, prevCanonical))
+        || (prevGenerated !== '' && experienceTextsMateriallyDiffer(live, prevGenerated));
+      const nextOrigin = previousWasAi
+        ? 'user_confirmed_ai_edit' as const
+        : 'user' as const;
       return {
         ...e,
         description: value,
-        descriptionOrigin: previousWasAi ? 'user_confirmed_ai_edit' as const : 'user' as const,
-        originalUserDescription: (e.originalUserDescription || '').trim() || value,
-        ...(syncCanonical ? { canonicalDescription: value } : {}),
+        descriptionOrigin: nextOrigin,
+        // New user-authored duties become genuine grounding (keep generatedDescription
+        // as historical AI display only — do not delete it merely for selection).
+        originalUserDescription: materialEdit || !prevOriginal ? value : e.originalUserDescription,
+        canonicalDescription: materialEdit || syncCanonical || !prevCanonical
+          ? value
+          : e.canonicalDescription,
+        ...(materialEdit
+          ? {
+            recoveredSemanticDuties: undefined,
+            groundingRecoverySource: undefined,
+          }
+          : {}),
       };
     }
     return { ...e, [field]: value };
@@ -594,6 +617,29 @@ export function applyCanonicalExperienceEdit(
   }
 
   if (field === 'description') {
+    const edited = nextExp.find((e) => e.id === experienceId);
+    const materialCrossLocale = Boolean(
+      edited
+      && snap
+      && snap.canonicalState === 'valid'
+      && uiLocale !== snap.canonicalLocale
+      && experienceTextsMateriallyDiffer(
+        String(value || ''),
+        (cv.experience.find((e) => e.id === experienceId)?.canonicalDescription || ''),
+      ),
+    );
+    // Material edits in a new UI locale become the active content locale / canonical facts.
+    if (materialCrossLocale) {
+      const withLocale = { ...next, contentLocale: uiLocale };
+      if (!contentEligibleForValidCanonical(withLocale, uiLocale)) {
+        return withLocale;
+      }
+      return sealCanonicalFromValidatedSource(withLocale, {
+        locale: uiLocale,
+        createdFrom: 'user_structured_input',
+        revise: true,
+      });
+    }
     if (!snap || snap.canonicalState !== 'valid' || uiLocale === snap.canonicalLocale) {
       if (!contentEligibleForValidCanonical(next, snap?.canonicalLocale || uiLocale)) {
         return next;

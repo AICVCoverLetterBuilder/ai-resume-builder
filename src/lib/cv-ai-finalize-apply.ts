@@ -12,7 +12,7 @@ import type { CoverLetterGender } from './cover-letter-gender';
 import {
   buildCvCanonicalFactSet,
   bulletsForExperience,
-  freezeCanonicalExperienceDescription,
+  freezeExperienceAiDescription,
   splitExperienceBullets,
   type CvCanonicalFactSet,
 } from './cv-canonical-facts';
@@ -119,15 +119,28 @@ export type FinalizeCvAiFieldResult = {
     sourceFactCount?: number;
     requiredFactCount?: number;
     coveredFactCount?: number;
+    providerCoveredFactCount?: number;
+    providerRequiredFactCount?: number;
     providerBulletCount?: number;
+    /** @deprecated Prefer clientDeterministicFallback* fields. */
     fallbackBulletCount?: number;
     finalBulletCount?: number;
     finalBulletScripts?: string[];
     tenseMode?: 'present' | 'past' | 'unknown';
     rejectionStage?: string;
     typedFailureReason?: string;
+    /** @deprecated Prefer clientDeterministicFallbackApplied. */
     fallbackApplied?: boolean;
     countedAsSuccess?: boolean;
+    apiResponseKind?: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown';
+    serverFallbackUsed?: boolean;
+    clientDeterministicFallbackAttempted?: boolean;
+    clientDeterministicFallbackReason?: string;
+    clientDeterministicFallbackBulletCount?: number;
+    clientDeterministicFallbackScripts?: string[];
+    clientDeterministicFallbackRequiredFactCount?: number;
+    clientDeterministicFallbackCoveredFactCount?: number;
+    clientDeterministicFallbackApplied?: boolean;
   };
 };
 
@@ -136,7 +149,7 @@ function dutiesTextFromCv(cv: CVData, experienceId?: string): string {
   const scoped = experienceId ? exps.filter((e) => e.id === experienceId) : exps;
   // Immutable user/source duties only — never prefer a later AI rewrite in `description`
   // when `canonicalDescription` is already frozen.
-  return scoped.map((e) => freezeCanonicalExperienceDescription(e)).join('\n');
+  return scoped.map((e) => freezeExperienceAiDescription(e)).join('\n');
 }
 
 function prepareCandidate(raw: string, locale: Locale, field: 'summary' | 'experience_description'): string {
@@ -442,7 +455,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     level: input.level,
   });
   const grounding = exp
-    ? resolveExperienceAiGrounding(exp, jobContext, freezeCanonicalExperienceDescription)
+    ? resolveExperienceAiGrounding(exp, jobContext, freezeExperienceAiDescription)
     : null;
   const cvForFacts: CVData = exp && grounding
     ? {
@@ -452,8 +465,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     : cv;
   const factSet = buildCvCanonicalFactSet(cvForFacts);
-  const dutiesText = grounding?.sourceDescription
-    || dutiesTextFromCv(cvForFacts, input.experienceId);
+  // After occupation/context exclusion, never re-read live/canonical cooking via
+  // freezeExperienceAiDescription — that would resurrect stale FACT LOCK duties.
+  const dutiesText = grounding?.staleGeneratedContentExcluded
+    ? ''
+    : (grounding?.sourceDescription
+      || dutiesTextFromCv(cvForFacts, input.experienceId));
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: cv.personal?.jobTitle,
     experienceTitle: exp?.position,
@@ -471,14 +488,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let lastRejectReason = 'experience_material_fact_coverage_incomplete';
   let lastCovered = 0;
   let lastRequired = sourceFactCount;
+  let providerCoveredFactCount = 0;
+  let providerRequiredFactCount = sourceFactCount;
   let fallbackBulletCount = 0;
   let fallbackApplied = false;
+  let clientDeterministicFallbackAttempted = false;
+  let clientDeterministicFallbackReason: string | undefined = undefined;
+  let clientDeterministicFallbackBulletCount = 0;
+  let clientDeterministicFallbackScripts: string[] = [];
+  let clientDeterministicFallbackRequiredFactCount = sourceFactCount;
+  let clientDeterministicFallbackCoveredFactCount = 0;
+  let clientDeterministicFallbackApplied = false;
+  const serverFallbackUsed = input.originHint === 'deterministic_fallback';
+  const apiResponseKind: NonNullable<FinalizeCvAiFieldResult['diagnostics']>['apiResponseKind'] =
+    input.originHint === 'deterministic_fallback'
+      ? 'fallback'
+      : input.originHint === 'ai_repaired'
+        ? 'repair'
+        : 'provider';
 
   const baseDiag = (): NonNullable<FinalizeCvAiFieldResult['diagnostics']> => ({
     sourceLocale: locale,
     sourceFactCount,
     requiredFactCount: lastRequired,
-    coveredFactCount: lastCovered,
+    coveredFactCount: providerCoveredFactCount || lastCovered,
+    providerCoveredFactCount,
+    providerRequiredFactCount,
     providerBulletCount,
     fallbackBulletCount,
     finalBulletCount: 0,
@@ -488,6 +523,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     typedFailureReason: lastRejectReason,
     fallbackApplied,
     countedAsSuccess: false,
+    apiResponseKind,
+    serverFallbackUsed,
+    clientDeterministicFallbackAttempted,
+    clientDeterministicFallbackReason,
+    clientDeterministicFallbackBulletCount,
+    clientDeterministicFallbackScripts,
+    clientDeterministicFallbackRequiredFactCount,
+    clientDeterministicFallbackCoveredFactCount,
+    clientDeterministicFallbackApplied,
   });
 
   const tryAccept = (
@@ -536,10 +580,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
     }
     const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
-    const isFallback = origin === 'deterministic_fallback';
-    if (isFallback) {
+    const isClientFallback = origin === 'deterministic_fallback'
+      && (stage === 'canonical_fallback' || stage === 'source_preserving_fallback' || stage === 'occupation_fallback');
+    if (isClientFallback) {
       fallbackApplied = true;
       fallbackBulletCount = bulletCount;
+      clientDeterministicFallbackApplied = true;
+      clientDeterministicFallbackBulletCount = bulletCount;
+      clientDeterministicFallbackScripts = detectBulletScripts(candidate);
+      clientDeterministicFallbackCoveredFactCount = lastCovered || sourceFactCount;
+      clientDeterministicFallbackRequiredFactCount = lastRequired || sourceFactCount;
     }
     return {
       blocked: false,
@@ -549,15 +599,35 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       countedAsSuccess: true,
       diagnostics: {
         ...baseDiag(),
-        coveredFactCount: lastCovered || sourceFactCount,
-        requiredFactCount: lastRequired || sourceFactCount,
-        fallbackBulletCount: isFallback ? bulletCount : fallbackBulletCount,
+        // Keep provider coverage distinct from client fallback coverage.
+        coveredFactCount: isClientFallback
+          ? providerCoveredFactCount
+          : (lastCovered || sourceFactCount),
+        requiredFactCount: isClientFallback
+          ? providerRequiredFactCount
+          : (lastRequired || sourceFactCount),
+        providerCoveredFactCount,
+        providerRequiredFactCount,
+        fallbackBulletCount: isClientFallback ? bulletCount : fallbackBulletCount,
         finalBulletCount: bulletCount,
         finalBulletScripts: detectBulletScripts(candidate),
         rejectionStage: undefined,
         typedFailureReason: undefined,
-        fallbackApplied: isFallback,
+        fallbackApplied: isClientFallback,
         countedAsSuccess: true,
+        clientDeterministicFallbackApplied: isClientFallback,
+        clientDeterministicFallbackBulletCount: isClientFallback
+          ? bulletCount
+          : clientDeterministicFallbackBulletCount,
+        clientDeterministicFallbackScripts: isClientFallback
+          ? detectBulletScripts(candidate)
+          : clientDeterministicFallbackScripts,
+        clientDeterministicFallbackCoveredFactCount: isClientFallback
+          ? (lastCovered || sourceFactCount)
+          : clientDeterministicFallbackCoveredFactCount,
+        clientDeterministicFallbackRequiredFactCount: isClientFallback
+          ? (lastRequired || sourceFactCount)
+          : clientDeterministicFallbackRequiredFactCount,
       },
     };
   };
@@ -586,8 +656,26 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     candidate = '';
   }
 
-  const firstAccepted = tryAccept(candidate, input.originHint || 'ai_generated', 'provider');
-  if (firstAccepted) return firstAccepted;
+  // Provider / server output — never treat as client deterministic fallback.
+  const providerOrigin = input.originHint === 'ai_repaired' ? 'ai_repaired' : 'ai_generated';
+  const firstAccepted = tryAccept(candidate, providerOrigin, 'provider');
+  providerCoveredFactCount = lastCovered;
+  providerRequiredFactCount = lastRequired || sourceFactCount;
+  if (firstAccepted) {
+    return {
+      ...firstAccepted,
+      diagnostics: {
+        ...firstAccepted.diagnostics,
+        coveredFactCount: lastCovered || sourceFactCount,
+        providerCoveredFactCount: lastCovered || sourceFactCount,
+        providerRequiredFactCount: lastRequired || sourceFactCount,
+      },
+    };
+  }
+
+  // Provider/server postconditions failed → always attempt client deterministic fallback.
+  clientDeterministicFallbackAttempted = true;
+  clientDeterministicFallbackReason = lastRejectReason || 'provider_postcondition_failed';
 
   const grounded = normalizeLocaleText(
     deterministicLocalizedBulletsFromCanonical(canonical, locale, gender, { isPresent }) || '',
@@ -600,12 +688,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   // Rebuild from authoritative source units when provider/fallback collapsed facts.
   // Identities are captured from immutable source units before tense transforms.
+  // Do not skip because the API response was already labelled server `fallback`.
   if (sourceForCoverage && !grounding?.staleGeneratedContentExcluded) {
     const preserved = normalizeLocaleText(
       buildSourcePreservingExperienceBullets(sourceForCoverage, locale, gender, { isPresent }) || '',
       locale,
     );
-    fallbackBulletCount = splitExperienceBullets(preserved).filter(Boolean).length;
+    clientDeterministicFallbackBulletCount = splitExperienceBullets(preserved).filter(Boolean).length;
+    clientDeterministicFallbackScripts = detectBulletScripts(preserved);
+    fallbackBulletCount = clientDeterministicFallbackBulletCount;
     const preservedAccepted = tryAccept(preserved, 'deterministic_fallback', 'source_preserving_fallback');
     if (preservedAccepted) return preservedAccepted;
   }
@@ -633,6 +724,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   ) {
     // Occupation fallback only when there are no user source facts to preserve.
     if (!sourceForCoverage.trim()) {
+      clientDeterministicFallbackBulletCount = splitExperienceBullets(occupationFallback).filter(Boolean).length;
+      clientDeterministicFallbackScripts = detectBulletScripts(occupationFallback);
       return {
         blocked: false,
         text: occupationFallback,
@@ -642,12 +735,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         diagnostics: {
           ...baseDiag(),
           fallbackApplied: true,
-          fallbackBulletCount: splitExperienceBullets(occupationFallback).filter(Boolean).length,
-          finalBulletCount: splitExperienceBullets(occupationFallback).filter(Boolean).length,
-          finalBulletScripts: detectBulletScripts(occupationFallback),
+          fallbackBulletCount: clientDeterministicFallbackBulletCount,
+          finalBulletCount: clientDeterministicFallbackBulletCount,
+          finalBulletScripts: clientDeterministicFallbackScripts,
           rejectionStage: undefined,
           typedFailureReason: undefined,
           countedAsSuccess: true,
+          clientDeterministicFallbackAttempted: true,
+          clientDeterministicFallbackApplied: true,
+          clientDeterministicFallbackBulletCount,
+          clientDeterministicFallbackScripts,
+          clientDeterministicFallbackCoveredFactCount: 0,
+          clientDeterministicFallbackRequiredFactCount: 0,
         },
       };
     }
@@ -662,6 +761,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (coverageFail && !coverageFail.ok) {
     lastRejectReason = coverageFail.reason || lastRejectReason;
     lastRejectStage = lastRejectStage === 'init' ? 'final_block' : lastRejectStage;
+    lastCovered = coverageFail.covered?.length ?? lastCovered;
+    lastRequired = coverageFail.required?.length ?? lastRequired;
   }
 
   return {

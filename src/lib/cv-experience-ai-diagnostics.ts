@@ -72,6 +72,8 @@ export type ExperienceScriptClass =
   | 'other';
 
 export type ExperienceSelectedSourceKind =
+  | 'currentTextarea'
+  | 'liveUserDescription'
   | 'description'
   | 'originalUserDescription'
   | 'canonicalDescription'
@@ -141,12 +143,22 @@ export type ExperienceAiDiagnosticTrace = {
   unsupportedClaimCount: number;
   duplicateBulletCount: number;
   tenseMode: 'present' | 'past' | 'unknown';
+  /** @deprecated Prefer apiResponseKind + clientDeterministicFallback* */
   fallbackSelected: boolean;
   fallbackReason: string | null;
   fallbackBulletCount: number;
   fallbackBulletScripts: ExperienceScriptClass[];
   fallbackRequiredFactCount: number;
   fallbackCoveredFactCount: number;
+  apiResponseKind: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown';
+  serverFallbackUsed: boolean;
+  clientDeterministicFallbackAttempted: boolean;
+  clientDeterministicFallbackReason: string | null;
+  clientDeterministicFallbackBulletCount: number;
+  clientDeterministicFallbackScripts: ExperienceScriptClass[];
+  clientDeterministicFallbackRequiredFactCount: number;
+  clientDeterministicFallbackCoveredFactCount: number;
+  clientDeterministicFallbackApplied: boolean;
   finalBulletCount: number;
   finalBulletScripts: ExperienceScriptClass[];
   finalTypedFailureReason: string | null;
@@ -201,13 +213,29 @@ export function classifyApiHostForDiagnostics(): ExperienceApiHostClass {
   }
 }
 
-export function inferLocaleHintFromScript(script: ExperienceScriptClass): string | null {
+export function inferLocaleHintFromScript(
+  script: ExperienceScriptClass,
+  requestedLocale?: string | null,
+): string | null {
+  const loc = (requestedLocale || '').trim();
+  const scriptTag = (() => {
+    switch (script) {
+      case 'devanagari': return 'devanagari';
+      case 'arabic': return 'arabic';
+      case 'cjk': return 'cjk';
+      case 'cyrillic': return 'cyrillic';
+      case 'latin_diacritic': return 'latin';
+      case 'latin': return 'latin';
+      default: return null;
+    }
+  })();
+  if (loc && scriptTag) return `${loc}|${scriptTag}`;
   switch (script) {
     case 'devanagari': return 'hi';
     case 'arabic': return 'ar';
     case 'cjk': return 'ja';
     case 'cyrillic': return 'sr|ru';
-    case 'latin_diacritic': return 'sr|hr|de|…';
+    case 'latin_diacritic': return 'sr|latin';
     case 'latin': return 'en|latin';
     default: return null;
   }
@@ -227,6 +255,7 @@ function candidateSources(exp: WorkExperience): SourceCandidate[] {
     .filter(Boolean)
     .join('\n');
   const candidates: SourceCandidate[] = [
+    { kind: 'currentTextarea', text: (exp.description || '').trim() },
     { kind: 'description', text: (exp.description || '').trim() },
     { kind: 'originalUserDescription', text: (exp.originalUserDescription || '').trim() },
     { kind: 'canonicalDescription', text: (exp.canonicalDescription || '').trim() },
@@ -249,6 +278,10 @@ export function diagnoseExperienceSourceSelection(
   exp: WorkExperience,
   selectedText: string,
   groundingSource: AiGroundingResolution['groundingSource'],
+  options?: {
+    requestedLocale?: string | null;
+    selectedSourceKindHint?: ExperienceSelectedSourceKind;
+  },
 ): Pick<
   ExperienceAiDiagnosticTrace,
   | 'selectedSourceKind'
@@ -263,18 +296,21 @@ export function diagnoseExperienceSourceSelection(
   const candidates = candidateSources(exp);
   const match = candidates.find((c) => fingerprintText(c.text) === selectedHash);
 
-  let selectedSourceKind: ExperienceSelectedSourceKind = match?.kind || 'unknown';
+  let selectedSourceKind: ExperienceSelectedSourceKind =
+    options?.selectedSourceKindHint || match?.kind || 'unknown';
   if (!selected) selectedSourceKind = 'none';
-  else if (!match) {
+  else if (!match && !options?.selectedSourceKindHint) {
     if (groundingSource === 'excluded_stale') selectedSourceKind = 'none';
     else if (groundingSource === 'genuine_user' || groundingSource === 'same_context_generated') {
       selectedSourceKind = 'grounding_resolution';
     }
   }
 
-  const rejectedStaleSourceKinds = candidates
-    .filter((c) => fingerprintText(c.text) !== selectedHash)
-    .map((c) => c.kind);
+  const rejectedStaleSourceKinds = [...new Set(
+    candidates
+      .filter((c) => fingerprintText(c.text) !== selectedHash)
+      .map((c) => c.kind),
+  )];
 
   const textarea = (exp.description || '').trim();
   const textareaHash = fingerprintText(textarea);
@@ -291,12 +327,15 @@ export function diagnoseExperienceSourceSelection(
     && (selectedScript === 'latin')
     && (textareaScript === 'latin_diacritic'
       || textareaScript === 'cyrillic'
-      || textareaScript === 'devanagari'),
+      || textareaScript === 'devanagari'
+      || textareaScript === 'arabic'
+      || textareaScript === 'cjk')
+    && currentTextareaIgnoredOrOverridden,
   );
 
   return {
     selectedSourceKind,
-    selectedSourceLocale: inferLocaleHintFromScript(selectedScript),
+    selectedSourceLocale: inferLocaleHintFromScript(selectedScript, options?.requestedLocale),
     selectedSourceHash: selectedHash,
     rejectedStaleSourceKinds,
     englishSourceStillAuthoritative,
@@ -400,6 +439,15 @@ export class ExperienceAiDiagnosticSession {
       fallbackBulletScripts: [],
       fallbackRequiredFactCount: 0,
       fallbackCoveredFactCount: 0,
+      apiResponseKind: 'unknown',
+      serverFallbackUsed: false,
+      clientDeterministicFallbackAttempted: false,
+      clientDeterministicFallbackReason: null,
+      clientDeterministicFallbackBulletCount: 0,
+      clientDeterministicFallbackScripts: [],
+      clientDeterministicFallbackRequiredFactCount: 0,
+      clientDeterministicFallbackCoveredFactCount: 0,
+      clientDeterministicFallbackApplied: false,
       finalBulletCount: 0,
       finalBulletScripts: [],
       finalTypedFailureReason: null,
@@ -455,6 +503,11 @@ export class ExperienceAiDiagnosticSession {
   recordSourceSelection(
     exp: WorkExperience,
     grounding: AiGroundingResolution,
+    options?: {
+      requestedLocale?: string | null;
+      selectedSourceKindHint?: ExperienceSelectedSourceKind;
+      operationalContentLocale?: string | null;
+    },
   ): void {
     const selected = (grounding.sourceDescription || '').trim();
     const units = extractSourceDutyUnits(selected);
@@ -463,6 +516,10 @@ export class ExperienceAiDiagnosticSession {
       exp,
       selected,
       grounding.groundingSource,
+      {
+        requestedLocale: options?.requestedLocale || this.draft.requestedLocale,
+        selectedSourceKindHint: options?.selectedSourceKindHint,
+      },
     );
     this.patch({
       sourceDescriptionPresent: Boolean(selected),
@@ -480,6 +537,9 @@ export class ExperienceAiDiagnosticSession {
       payloadSourceDescriptionHash: fingerprintText(selected),
       payloadSourceScript: classifyExperienceScript(selected),
       payloadSourceDutyCount: units.length,
+      ...(options?.operationalContentLocale
+        ? { contentLocale: options.operationalContentLocale }
+        : {}),
     });
     this.stage(
       'source_description_selected',
@@ -535,6 +595,8 @@ export class ExperienceAiDiagnosticSession {
     this.patch({
       providerHttpStatus: opts.httpStatus,
       providerResponseKind: kind,
+      apiResponseKind: kind,
+      serverFallbackUsed: kind === 'fallback',
       providerBulletCount: splitExperienceBullets(text).filter(Boolean).length,
       providerBulletScripts: scriptsFromBullets(text),
       duplicateBulletCount: countDuplicateBullets(text),
@@ -572,21 +634,70 @@ export class ExperienceAiDiagnosticSession {
     const diag = finalized.diagnostics || {};
     const text = (finalized.text || '').trim();
     const bullets = splitExperienceBullets(text).filter(Boolean);
-    const isFallback = finalized.origin === 'deterministic_fallback';
+    const clientFallbackApplied = Boolean(
+      diag.clientDeterministicFallbackApplied
+      || (finalized.origin === 'deterministic_fallback' && finalized.countedAsSuccess),
+    );
+    const clientFallbackAttempted = Boolean(
+      diag.clientDeterministicFallbackAttempted
+      || clientFallbackApplied
+      || diag.fallbackApplied,
+    );
     const blocked = Boolean(finalized.blocked || !finalized.countedAsSuccess);
     const reason = finalized.reason || diag.typedFailureReason || null;
+    const apiResponseKind = diag.apiResponseKind || this.draft.providerResponseKind || 'unknown';
+    const serverFallbackUsed = Boolean(
+      diag.serverFallbackUsed
+      || this.draft.providerResponseKind === 'fallback',
+    );
 
     this.patch({
       requiredFactCount: diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0,
-      coveredFactCount: diag.coveredFactCount ?? 0,
-      fallbackSelected: Boolean(diag.fallbackApplied || isFallback),
-      fallbackReason: isFallback ? (reason || 'deterministic_fallback') : null,
-      fallbackBulletCount: diag.fallbackBulletCount ?? (isFallback ? bullets.length : 0),
-      fallbackBulletScripts: isFallback ? scriptsFromBullets(text) : [],
-      fallbackRequiredFactCount: diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0,
-      fallbackCoveredFactCount: isFallback
-        ? (diag.coveredFactCount ?? diag.requiredFactCount ?? 0)
-        : (diag.fallbackApplied ? (diag.coveredFactCount ?? 0) : 0),
+      coveredFactCount: diag.providerCoveredFactCount
+        ?? diag.coveredFactCount
+        ?? 0,
+      apiResponseKind: apiResponseKind as ExperienceAiDiagnosticTrace['apiResponseKind'],
+      serverFallbackUsed,
+      // Legacy single boolean — client apply only (not server response kind).
+      fallbackSelected: clientFallbackApplied,
+      fallbackReason: clientFallbackAttempted
+        ? (diag.clientDeterministicFallbackReason || reason || 'deterministic_fallback')
+        : null,
+      fallbackBulletCount: clientFallbackAttempted
+        ? (diag.clientDeterministicFallbackBulletCount ?? diag.fallbackBulletCount ?? 0)
+        : 0,
+      fallbackBulletScripts: clientFallbackApplied
+        ? scriptsFromBullets(text)
+        : (diag.clientDeterministicFallbackScripts as ExperienceScriptClass[] | undefined) || [],
+      fallbackRequiredFactCount: clientFallbackAttempted
+        ? (diag.clientDeterministicFallbackRequiredFactCount
+          ?? diag.requiredFactCount
+          ?? this.draft.requiredFactCount
+          ?? 0)
+        : 0,
+      fallbackCoveredFactCount: clientFallbackApplied
+        ? (diag.clientDeterministicFallbackCoveredFactCount ?? diag.coveredFactCount ?? 0)
+        : 0,
+      clientDeterministicFallbackAttempted: clientFallbackAttempted,
+      clientDeterministicFallbackReason: clientFallbackAttempted
+        ? (diag.clientDeterministicFallbackReason || reason || 'provider_postcondition_failed')
+        : null,
+      clientDeterministicFallbackBulletCount: clientFallbackAttempted
+        ? (diag.clientDeterministicFallbackBulletCount ?? 0)
+        : 0,
+      clientDeterministicFallbackScripts: clientFallbackApplied
+        ? scriptsFromBullets(text)
+        : [],
+      clientDeterministicFallbackRequiredFactCount: clientFallbackAttempted
+        ? (diag.clientDeterministicFallbackRequiredFactCount
+          ?? diag.requiredFactCount
+          ?? this.draft.requiredFactCount
+          ?? 0)
+        : 0,
+      clientDeterministicFallbackCoveredFactCount: clientFallbackApplied
+        ? (diag.clientDeterministicFallbackCoveredFactCount ?? diag.coveredFactCount ?? 0)
+        : 0,
+      clientDeterministicFallbackApplied: clientFallbackApplied,
       finalBulletCount: diag.finalBulletCount ?? bullets.length,
       finalBulletScripts: scriptsFromBullets(text),
       tenseMode: diag.tenseMode || this.draft.tenseMode || 'unknown',
@@ -606,7 +717,7 @@ export class ExperienceAiDiagnosticSession {
     const localeFail = reason === 'locale_mismatch' || reason === 'wrong_language';
     this.stage(
       'locale_validation',
-      localeFail && !isFallback ? 'fail' : 'ok',
+      localeFail && !clientFallbackApplied ? 'fail' : 'ok',
       localeFail ? reason || undefined : undefined,
     );
 
@@ -617,8 +728,8 @@ export class ExperienceAiDiagnosticSession {
       );
     this.stage(
       'material_coverage_validation',
-      coverageFail && !finalized.countedAsSuccess && !isFallback ? 'fail' : 'ok',
-      coverageFail ? reason || undefined : undefined,
+      coverageFail && !finalized.countedAsSuccess && !clientFallbackApplied ? 'fail' : 'ok',
+      coverageFail && !clientFallbackApplied ? reason || undefined : undefined,
     );
 
     const unsupported = reason === 'unsupported_claim' || reason === 'unsupported_generated_duty';
@@ -637,12 +748,19 @@ export class ExperienceAiDiagnosticSession {
 
     this.stage('tense_normalization', 'ok');
 
-    if (isFallback || diag.fallbackApplied) {
-      this.stage('deterministic_fallback_started', 'ok', diag.rejectionStage || undefined);
+    if (clientFallbackAttempted) {
+      this.stage(
+        'deterministic_fallback_started',
+        'ok',
+        diag.clientDeterministicFallbackReason || diag.rejectionStage || undefined,
+      );
+      const fbCount = diag.clientDeterministicFallbackBulletCount
+        ?? diag.fallbackBulletCount
+        ?? (clientFallbackApplied ? bullets.length : 0);
       this.stage(
         'fallback_output_built',
-        bullets.length > 0 ? 'ok' : 'fail',
-        bullets.length > 0 ? undefined : 'empty_fallback',
+        fbCount > 0 ? 'ok' : 'fail',
+        fbCount > 0 ? undefined : 'empty_fallback',
       );
       this.stage(
         'fallback_locale_validation',
@@ -651,8 +769,10 @@ export class ExperienceAiDiagnosticSession {
       );
       this.stage(
         'fallback_material_coverage',
-        coverageFail && blocked ? 'fail' : 'ok',
-        coverageFail && blocked ? reason || undefined : undefined,
+        clientFallbackApplied
+          ? 'ok'
+          : (coverageFail ? 'fail' : 'ok'),
+        !clientFallbackApplied && coverageFail ? reason || undefined : undefined,
       );
     } else if (blocked) {
       this.stage('deterministic_fallback_started', 'skipped', 'provider_path_rejected_or_fallback_absent');

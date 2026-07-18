@@ -69,7 +69,9 @@ import type { CVData, WorkExperience, Education, Region, TemplateId } from '@/li
 import { templateInfo, recommendTemplate } from '@/lib/types';
 import {
   ensureCanonicalExperienceFrozen,
+  ensureExperienceAiSourceFrozen,
   freezeCanonicalExperienceDescription,
+  freezeExperienceAiDescription,
 } from '@/lib/cv-canonical-facts';
 import {
   applyCanonicalExperienceEdit,
@@ -90,6 +92,9 @@ import {
   candidateConflictsWithJobContext,
   type ExperienceAiJobContextTrace,
 } from '@/lib/cv-experience-job-context';
+import {
+  resolveExperienceAiAuthoritativeSource,
+} from '@/lib/cv-experience-provenance';
 import {
   localizeCvLanguageLevel,
   normalizeCvLanguagesProficiency,
@@ -386,7 +391,9 @@ export default function CVBuilderPage() {
   const addExperience = () => setCv(prev => ({ ...prev, experience: [...prev.experience, emptyExp()] }));
   const removeExperience = (id: string) => setCv(prev => ({ ...prev, experience: prev.experience.filter(e => e.id !== id) }));
   const updateExperience = (id: string, field: string, value: string | boolean) => {
-    setCv((prev) => applyCanonicalExperienceEdit(prev, id, field, value, locale));
+    // Sync cvRef immediately so AI Improvement can read the latest textarea
+    // without waiting for React's post-paint useEffect.
+    commitCvUpdate((prev) => applyCanonicalExperienceEdit(prev, id, field, value, locale));
   };
 
   const addEducation = () => setCv(prev => ({ ...prev, education: [...prev.education, emptyEdu()] }));
@@ -1078,9 +1085,23 @@ export default function CVBuilderPage() {
   const handleGenBullets = async (expId: string) => {
     // Always read the latest committed CV — never a stale closure snapshot.
     const liveCv = cvRef.current;
-    const exp = liveCv.experience.find(e => e.id === expId);
-    if (!exp) return;
+    const expFromState = liveCv.experience.find(e => e.id === expId);
+    if (!expFromState) return;
     if (generatingBulletsId) return; // Prevent multiple concurrent requests
+
+    // Prefer the visible DOM textarea value over any lagged React/cvRef snapshot.
+    let liveDescription = (expFromState.description || '').trim();
+    if (typeof document !== 'undefined') {
+      const domField = document.querySelector(
+        `[data-experience-description-id="${expId}"]`,
+      ) as HTMLTextAreaElement | null;
+      if (domField && typeof domField.value === 'string') {
+        liveDescription = domField.value;
+      }
+    }
+    const exp = liveDescription === (expFromState.description || '')
+      ? expFromState
+      : { ...expFromState, description: liveDescription };
 
     const industry = expIndustry[expId] ?? 'general';
     const level = expLevel[expId] ?? 'mid';
@@ -1091,13 +1112,26 @@ export default function CVBuilderPage() {
       level,
     });
 
-    // Capture user grounding before AI — never promote AI display text to canonical.
-    const expFrozen = ensureCanonicalExperienceFrozen(exp);
+    // Authoritative Experience AI source: live user-edited textarea beats stale canonical.
+    const authoritative = resolveExperienceAiAuthoritativeSource(exp);
+    const expFrozen = ensureExperienceAiSourceFrozen(exp);
     const aiGrounding = resolveExperienceAiGrounding(
       expFrozen,
       requestContext,
-      freezeCanonicalExperienceDescription,
+      freezeExperienceAiDescription,
     );
+    // Prefer the explicit authoritative resolution (includes kind + shadow fields).
+    // Never re-inject duties after job-context exclusion (Baker → Pharmacist).
+    if (!aiGrounding.staleGeneratedContentExcluded && authoritative.text.trim()) {
+      aiGrounding.sourceDescription = authoritative.text;
+      aiGrounding.experienceForAi = {
+        ...authoritative.experienceForAi,
+        generationJobContextKey: expFrozen.generationJobContextKey,
+        groundingJobContextKey: expFrozen.groundingJobContextKey,
+        previousGenerationJobContextKey: expFrozen.previousGenerationJobContextKey,
+      };
+      aiGrounding.groundingSource = 'genuine_user';
+    }
 
     // Empty-description guard: require either valid grounding or a position for
     // occupation-aware generation. Never block solely because stale AI duties
@@ -1117,7 +1151,11 @@ export default function CVBuilderPage() {
     // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest('bullets', locale);
     const requestedLocale = reqCtx.locale as Locale;
-    const previousContentLocale = liveCv.canonicalSnapshot?.canonicalLocale ?? null;
+    const previousContentLocale = liveCv.canonicalSnapshot?.canonicalLocale
+      ?? liveCv.contentLocale
+      ?? null;
+    // Operation content locale follows the selected authoritative source + request.
+    const operationalContentLocale = requestedLocale;
     latestBulletsRequestIdRef.current = { ...latestBulletsRequestIdRef.current, [expId]: reqCtx.requestId };
     latestBulletsContextKeyRef.current = {
       ...latestBulletsContextKeyRef.current,
@@ -1128,7 +1166,7 @@ export default function CVBuilderPage() {
     const diagSession = new ExperienceAiDiagnosticSession({
       uiLocale: locale,
       requestedLocale,
-      contentLocale: previousContentLocale,
+      contentLocale: operationalContentLocale,
       templateId: String(liveCv.templateId || ''),
       gender: liveCv.personal.gender || '',
       industryNorm: requestContext.industryNorm,
@@ -1138,8 +1176,20 @@ export default function CVBuilderPage() {
       usageCountBefore: countBefore,
     });
     diagSession.stage('button_pressed', 'ok');
-    diagSession.recordLiveExperience(expFrozen, Boolean(exp.isPresent));
-    diagSession.recordSourceSelection(expFrozen, aiGrounding);
+    diagSession.recordLiveExperience(exp, Boolean(exp.isPresent));
+    diagSession.recordSourceSelection(exp, aiGrounding, {
+      requestedLocale,
+      selectedSourceKindHint: authoritative.kind === 'currentTextarea'
+        ? 'currentTextarea'
+        : authoritative.kind === 'description'
+          ? 'description'
+          : authoritative.kind === 'originalUserDescription'
+            ? 'originalUserDescription'
+            : authoritative.kind === 'canonicalDescription'
+              ? 'canonicalDescription'
+              : undefined,
+      operationalContentLocale,
+    });
     diagSession.recordPayloadBuilt({
       locale: requestedLocale,
       industryNorm: requestContext.industryNorm,
@@ -2495,7 +2545,7 @@ export default function CVBuilderPage() {
                               </div>
                             </div>
                         </div>
-                        <div><label className="mb-1 block text-xs font-medium">{t.cv.description}</label><textarea value={exp.description} onChange={e => updateExperience(exp.id, 'description', e.target.value)} className={textareaClass} /></div>
+                        <div><label className="mb-1 block text-xs font-medium">{t.cv.description}</label><textarea data-experience-description-id={exp.id} value={exp.description} onChange={e => updateExperience(exp.id, 'description', e.target.value)} className={textareaClass} /></div>
                         {/* AI Improvements panel */}
                         <div className="rounded-xl border border-[rgba(212,178,84,0.20)] bg-[#080b12] p-4 space-y-3 shadow-[0_4px_20px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.03)]" style={{backgroundImage:'linear-gradient(180deg,rgba(255,255,255,0.025) 0%,transparent 50%)'}}>
                           <p className="text-xs font-bold tracking-[0.08em] text-[#d4aa50] flex items-center gap-1.5 uppercase">

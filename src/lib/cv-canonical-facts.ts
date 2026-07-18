@@ -6,6 +6,8 @@ import type { CVData, Education, WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
 import {
   captureUserGroundingBeforeAi,
+  ensureExperienceAiAuthoritativeSource,
+  freezeExperienceAiAuthoritativeDescription,
   resolveExperienceGroundingDescription,
 } from './cv-experience-provenance';
 
@@ -441,6 +443,10 @@ export function deterministicBulletsFromCanonical(
 /**
  * Resolve grounding duties for AI requests / fact sets.
  * Never returns AI-generated display text when user/canonical sources exist.
+ *
+ * @deprecated For Experience AI request/finalize use
+ * `freezeExperienceAiAuthoritativeDescription` so live user edits beat stale canonical.
+ * Kept for export / snapshot callers that still need classic canonical priority.
  */
 export function freezeCanonicalExperienceDescription(
   exp: Pick<
@@ -452,6 +458,15 @@ export function freezeCanonicalExperienceDescription(
 }
 
 /**
+ * Experience AI FACT-LOCK text: live user-edited textarea wins over stale canonical.
+ */
+export function freezeExperienceAiDescription(
+  exp: WorkExperience,
+): string {
+  return freezeExperienceAiAuthoritativeDescription(exp);
+}
+
+/**
  * Capture user grounding before AI Improvements.
  * Never promotes AI-generated description into canonical/original storage.
  */
@@ -459,4 +474,14 @@ export function ensureCanonicalExperienceFrozen(
   exp: WorkExperience,
 ): WorkExperience {
   return captureUserGroundingBeforeAi(exp);
+}
+
+/**
+ * Prepare an experience row for Experience AI: capture provenance, then shadow
+ * grounding to the authoritative live/user source for this request.
+ */
+export function ensureExperienceAiSourceFrozen(
+  exp: WorkExperience,
+): WorkExperience {
+  return ensureExperienceAiAuthoritativeSource(captureUserGroundingBeforeAi(exp));
 }
