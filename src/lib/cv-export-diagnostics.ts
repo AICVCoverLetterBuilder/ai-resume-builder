@@ -463,6 +463,15 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
         stages.push({ stage: name, result: 'skipped' });
         continue;
       }
+      // Never mark validate_summary ok when initial validation failed (e.g. mixed_locale_summary).
+      if (name === 'validate_summary' && diag.summaryInitialValid === false) {
+        stages.push({
+          stage: name,
+          result: 'fail',
+          reason: diag.summaryInitialReason || 'summary_initial_validation_failed',
+        });
+        continue;
+      }
       // recover_summary only when recovery ran
       if (
         name === 'recover_summary'
@@ -472,7 +481,16 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
         stages.push({ stage: name, result: 'skipped' });
         continue;
       }
-      stages.push({ stage: name, result: prepared?.ok ? 'ok' : (failStage ? 'ok' : 'ok') });
+      if (
+        name === 'recover_summary'
+        && diag.summaryInitialValid === false
+        && diag.summaryRecoverySource === 'deterministic_semantic_facts'
+        && prepared?.ok
+      ) {
+        stages.push({ stage: name, result: 'ok' });
+        continue;
+      }
+      stages.push({ stage: name, result: 'ok' });
     }
     if (prepared?.ok) {
       // ensure prepare_template marked ok

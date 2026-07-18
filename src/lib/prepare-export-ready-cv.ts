@@ -8,13 +8,21 @@ import { normalizeLegacyCvRuntime } from './cv-legacy-runtime-migration';
 import { normalizeCvRegion } from './cv-region';
 import {
   buildCvCanonicalFactSet,
+  formatExperienceBullets,
   type CvCanonicalFactSet,
 } from './cv-canonical-facts';
 import { validateSummaryExportCandidate } from './cv-export-integrity';
-import { deterministicLocalizedSummaryFromCanonical } from './cv-localized-fallback';
+import {
+  deterministicLocalizedBulletsFromCanonical,
+  deterministicLocalizedSummaryFromCanonical,
+  localizeCanonicalBulletLine,
+} from './cv-localized-fallback';
 import { buildExperienceDurationSnapshot } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
-import { validateFinalLocalizedCvFields } from './cv-field-locale-integrity';
+import {
+  textMatchesRequestedFieldLocale,
+  validateFinalLocalizedCvFields,
+} from './cv-field-locale-integrity';
 import { CvExportFailure } from './cv-export-error-message';
 import { LEGACY_RECOVERED_DISPLAY_DUTIES } from './cv-legacy-grounding-recovery';
 import {
@@ -26,6 +34,17 @@ import {
   type SemanticDutyKey,
 } from './cv-semantic-duty-facts';
 import { splitExperienceBullets } from './cv-canonical-facts';
+
+function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | 'empty' {
+  const t = (bullet || '').trim();
+  if (!t) return 'empty';
+  const dev = (t.match(/[\u0900-\u097F]/g) || []).length;
+  const lat = (t.match(/[A-Za-z]/g) || []).length;
+  if (dev > 0 && lat >= 4) return 'mixed';
+  if (dev > 0) return 'hi';
+  if (lat > 0) return 'en';
+  return 'empty';
+}
 
 export type ExportReadyStage =
   | 'normalize_runtime'
@@ -94,6 +113,151 @@ function fail(
     stage,
     diagnostics: { ...diagnostics, stage },
   };
+}
+
+const COOKING_TRIAD: SemanticDutyKey[] = [
+  'food_preparation_restaurant_standards',
+  'workplace_hygiene',
+  'kitchen_team_collaboration',
+];
+
+function structuredExemptions(cv: CVData) {
+  return {
+    fullName: cv.personal?.fullName || '',
+    email: cv.personal?.email || '',
+    phone: cv.personal?.phone || '',
+    companies: (cv.experience || []).map((e) => e.company || '').filter(Boolean),
+    jobTitles: [
+      cv.personal?.jobTitle || '',
+      ...(cv.experience || []).map((e) => e.position || ''),
+    ].filter(Boolean),
+  };
+}
+
+/** Strip structured proper nouns before script classification. */
+function stripStructuredProperNouns(text: string, cv: CVData): string {
+  let t = text;
+  const exemptions = structuredExemptions(cv);
+  for (const value of [
+    exemptions.fullName,
+    exemptions.email,
+    exemptions.phone,
+    ...exemptions.companies,
+    ...exemptions.jobTitles,
+  ]) {
+    const v = (value || '').trim();
+    if (v.length >= 2) {
+      t = t.split(v).join(' ');
+    }
+  }
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Material final Experience bullets must match requested locale.
+ * en / mixed / empty after proper-noun strip ⇒ incomplete projection.
+ */
+function experienceBulletsMatchRequestedLocale(
+  description: string,
+  requestedLocale: Locale,
+  cv: CVData,
+): boolean {
+  const bullets = splitExperienceBullets(description);
+  if (!bullets.length) return false;
+  const exemptions = structuredExemptions(cv);
+  for (const bullet of bullets) {
+    const stripped = stripStructuredProperNouns(bullet, cv);
+    if (!stripped) continue;
+    if (requestedLocale === 'hi') {
+      const script = classifyMaterialBulletScript(stripped);
+      if (script === 'en' || script === 'mixed' || script === 'empty') return false;
+    }
+    if (!textMatchesRequestedFieldLocale(stripped, requestedLocale, 'experience_bullet', exemptions)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Project Experience display into requestedLocale from semantic duties.
+ * Does not mutate canonical user facts (originalUserDescription / canonicalSnapshot).
+ * Two Hindi lines may cover the cooking triad — never pad with English shells.
+ */
+function projectExperienceDisplayFromSemanticDuties(
+  exp: WorkExperience,
+  grounding: ExperienceSemanticGrounding,
+  requestedLocale: Locale,
+  gender: string,
+  cv: CVData,
+): string {
+  const current = (exp.description || '').trim();
+  if (current && experienceBulletsMatchRequestedLocale(current, requestedLocale, cv)) {
+    return current;
+  }
+
+  const keys = semanticDutyKeys(grounding);
+  const hasCookingTriad = COOKING_TRIAD.every((k) => keys.includes(k));
+
+  // Compact Hindi cooking triad: 2 display lines, 3 semantic meanings.
+  if (requestedLocale === 'hi' && hasCookingTriad) {
+    const isPresent = Boolean(exp.isPresent);
+    const prep = localizeCanonicalBulletLine(
+      'Prepare dishes according to restaurant standards.',
+      'hi',
+      gender,
+      { isPresent },
+    );
+    const hygieneCollab = localizeCanonicalBulletLine(
+      'Maintain workplace hygiene and collaborate with the kitchen team.',
+      'hi',
+      gender,
+      { isPresent },
+    );
+    const compact = formatExperienceBullets(
+      [prep, hygieneCollab].map((l) => l.replace(/^मैं\s+/u, '').trim()).filter(Boolean),
+    );
+    if (compact && experienceBulletsMatchRequestedLocale(compact, 'hi', cv)) {
+      return compact;
+    }
+  }
+
+  if (grounding.duties.length > 0) {
+    const shells = internalShellsFromSemanticDuties(grounding.duties);
+    const facts = splitExperienceBullets(shells).map((sourceText, i) => ({
+      id: `export-duty-${exp.id}-${i}`,
+      type: 'experience_bullet' as const,
+      value: sourceText,
+      sourceText,
+      category: undefined,
+      source: 'export_semantic' as const,
+    }));
+    const projected = deterministicLocalizedBulletsFromCanonical(
+      facts,
+      requestedLocale,
+      gender,
+      { isPresent: Boolean(exp.isPresent) },
+    );
+    if (projected && experienceBulletsMatchRequestedLocale(projected, requestedLocale, cv)) {
+      return projected;
+    }
+  }
+
+  // Last resort: localize each current visible line in place.
+  if (current) {
+    const localized = formatExperienceBullets(
+      splitExperienceBullets(current)
+        .map((line) => localizeCanonicalBulletLine(line, requestedLocale, gender, {
+          isPresent: Boolean(exp.isPresent),
+        }) || '')
+        .filter(Boolean),
+    );
+    if (localized && experienceBulletsMatchRequestedLocale(localized, requestedLocale, cv)) {
+      return localized;
+    }
+  }
+
+  return current;
 }
 
 function buildSemanticSummaryFactSet(
@@ -202,11 +366,8 @@ export function prepareExportReadyCv(
     } as WorkExperience;
   });
 
-  if (changed) {
-    cv = { ...cv, experience: nextExperience };
-  } else {
-    cv = { ...cv, experience: nextExperience };
-  }
+  cv = { ...cv, experience: nextExperience };
+  void changed;
 
   stage = 'produce_semantic_duties';
   const hadDisplay = (rawCv.experience || []).some((exp) => Boolean(
@@ -222,7 +383,36 @@ export function prepareExportReadyCv(
   }
 
   stage = 'produce_localized_display';
-  // Do not overwrite visible generated Hindi. Quality may localize titles/skills only.
+  // requestedLocale is authoritative for the final exported display projection.
+  cv = {
+    ...cv,
+    experience: (cv.experience || []).map((exp) => {
+      const grounding = groundingById.get(exp.id) || { source: 'none' as const, duties: [] };
+      const projected = projectExperienceDisplayFromSemanticDuties(
+        exp,
+        grounding,
+        requestedLocale,
+        gender,
+        cv,
+      );
+      return { ...exp, description: projected };
+    }),
+  };
+
+  // Hard postcondition: never report projection ok with English/mixed bullets.
+  for (const exp of cv.experience || []) {
+    const grounding = groundingById.get(exp.id);
+    if (!grounding || grounding.duties.length === 0) continue;
+    if (!experienceBulletsMatchRequestedLocale(exp.description || '', requestedLocale, cv)) {
+      const diagnostics = baseDiagnostics();
+      diagnostics.recoveryInvoked = recoveryInvoked;
+      diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.summarySemanticDutyKeys = [...new Set(allKeys)];
+      return fail('localized_display_projection_incomplete', stage, diagnostics);
+    }
+  }
+
   const preservedDescriptions = new Map(
     (cv.experience || []).map((exp) => [exp.id, exp.description]),
   );
@@ -280,6 +470,8 @@ export function prepareExportReadyCv(
         ...cv,
         summary: recovered,
         summaryOrigin: 'deterministic_fallback',
+        contentLocale: requestedLocale,
+        summaryGeneratedLocale: requestedLocale,
       };
     } else {
       const diagnostics = baseDiagnostics();
@@ -294,6 +486,13 @@ export function prepareExportReadyCv(
       diagnostics.summaryRecoveryReason = summaryRecoveryReason;
       return fail('summary_validation_failed_after_recovery', stage, diagnostics);
     }
+  } else {
+    // Valid text with possibly stale metadata — normalize export-snapshot locales.
+    cv = {
+      ...cv,
+      contentLocale: requestedLocale,
+      summaryGeneratedLocale: requestedLocale,
+    };
   }
 
   const quality = applyCvContentQuality(cv, requestedLocale, {
@@ -304,7 +503,7 @@ export function prepareExportReadyCv(
   });
   cv = quality.cv;
 
-  // Enforce: quality/template code must not restore English padding over Hindi display.
+  // Enforce: quality must not restore English padding over projected display.
   cv = {
     ...cv,
     experience: (cv.experience || []).map((exp) => {
@@ -318,12 +517,21 @@ export function prepareExportReadyCv(
       ) {
         return { ...exp, description: preserved };
       }
-      // Prefer preserved visible Hindi when legacy-recovered (no overwrite policy).
       if (grounding?.source === 'legacy_recovered_display_duties' && preserved) {
+        return { ...exp, description: preserved };
+      }
+      // Modern provenance / semantic projection: never let quality reintroduce English.
+      if (
+        preserved
+        && experienceBulletsMatchRequestedLocale(preserved, requestedLocale, cv)
+      ) {
         return { ...exp, description: preserved };
       }
       return exp;
     }),
+    // Quality must not reintroduce stale Summary locale metadata.
+    contentLocale: requestedLocale,
+    summaryGeneratedLocale: requestedLocale,
   };
 
   // Guard against stale overwrite of semantic grounding.
@@ -343,6 +551,25 @@ export function prepareExportReadyCv(
   }
 
   stage = 'validate_locale_integrity';
+  // Re-check Experience projection after quality.
+  for (const exp of cv.experience || []) {
+    const grounding = groundingById.get(exp.id);
+    if (!grounding || grounding.duties.length === 0) continue;
+    if (!experienceBulletsMatchRequestedLocale(exp.description || '', requestedLocale, cv)) {
+      const diagnostics = baseDiagnostics();
+      diagnostics.recoveryInvoked = recoveryInvoked;
+      diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.summaryFactSetSource = factSource;
+      diagnostics.summarySemanticDutyKeys = summaryKeys;
+      diagnostics.summaryInitialValid = initialSummaryValidation.valid;
+      diagnostics.summaryInitialReason = initialSummaryValidation.reason;
+      diagnostics.summaryRecoverySource = summaryRecoverySource;
+      diagnostics.summaryRecoveryReason = summaryRecoveryReason;
+      return fail('localized_display_projection_incomplete', 'produce_localized_display', diagnostics);
+    }
+  }
+
   const localeCheck = validateFinalLocalizedCvFields(cv, requestedLocale);
   if (!localeCheck.valid) {
     const first = localeCheck.violations[0];
@@ -354,7 +581,11 @@ export function prepareExportReadyCv(
       diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
       diagnostics.summaryFactSetSource = factSource;
       diagnostics.summarySemanticDutyKeys = summaryKeys;
-      return fail('localized_display_projection_incomplete', stage, diagnostics);
+      diagnostics.summaryInitialValid = initialSummaryValidation.valid;
+      diagnostics.summaryInitialReason = initialSummaryValidation.reason;
+      diagnostics.summaryRecoverySource = summaryRecoverySource;
+      diagnostics.summaryRecoveryReason = summaryRecoveryReason;
+      return fail('localized_display_projection_incomplete', 'produce_localized_display', diagnostics);
     }
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
@@ -362,6 +593,10 @@ export function prepareExportReadyCv(
     diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
     diagnostics.summaryFactSetSource = factSource;
     diagnostics.summarySemanticDutyKeys = summaryKeys;
+    diagnostics.summaryInitialValid = initialSummaryValidation.valid;
+    diagnostics.summaryInitialReason = initialSummaryValidation.reason;
+    diagnostics.summaryRecoverySource = summaryRecoverySource;
+    diagnostics.summaryRecoveryReason = summaryRecoveryReason;
     return fail(
       `summary_export_contract_mismatch: ${first.kind}: ${first.path}`,
       stage,

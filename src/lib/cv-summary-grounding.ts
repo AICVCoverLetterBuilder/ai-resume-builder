@@ -316,41 +316,54 @@ function tone(gender?: CoverLetterGender | string): GenderTone {
   return 'neutral';
 }
 
-type CookingIntent = 'cuisine_prep' | 'workplace_hygiene' | 'kitchen_collab' | 'other';
+type CookingIntent = 'cuisine_prep' | 'workplace_hygiene' | 'kitchen_collab';
 
-function classifySummaryCookingIntent(text: string): CookingIntent {
+/**
+ * All cooking intents present in one source unit.
+ * Combined hygiene+collaboration lines must yield BOTH — never hygiene alone.
+ */
+function cookingIntentsInSource(text: string): CookingIntent[] {
   const t = text.toLowerCase().normalize('NFKC');
   const kitchenCtx = /(kuhinj|kitchen|jel\w*|cuisine|dish(?:es)?|restaurant|food|व्यंजन|रसोई|namirnic)/iu.test(t);
+  const intents: CookingIntent[] = [];
+  // Dish prep against restaurant standards — require food/dish/restaurant anchors.
+  if (
+    /(priprem\w*.{0,40}(jel|hran|obrok|dish)|(?:prepare|prepared|preparing)\s+(?:dishes|food|meals?)|restaurant\s+standards?|prema\s+standardima\s+restorana|व्यंजन|तैयार)/iu.test(t)
+  ) {
+    intents.push('cuisine_prep');
+  }
   // Explicit workplace hygiene (Baker fixture) — not bare "clean code" / quality standards.
   if (
     /(workplace\s+hygiene|higijen\w*\s+radnog|higijenu\s+radnog|održav\w*\s+higijen|कार्यस्थल.{0,12}स्वच्छ)/iu.test(t)
     || (kitchenCtx && /(higijen|hygiene|स्वच्छ)/iu.test(t))
   ) {
-    return 'workplace_hygiene';
+    intents.push('workplace_hygiene');
   }
-  // Kitchen collaboration only — never generic "collaborate with other teams".
+  // Kitchen collaboration — independent of hygiene (combined lines keep both).
   if (
     kitchenCtx
     && /(sara[dđ]|collaborat|surađ|सहयोग|kuhinjsk\w*\s+tim|kitchen\s+team)/iu.test(t)
   ) {
-    return 'kitchen_collab';
+    intents.push('kitchen_collab');
   }
-  // Dish prep against restaurant standards — require food/dish/restaurant anchors.
-  if (
-    /(priprem\w*.{0,40}(jel|hran|obrok|dish)|(?:prepare|prepared|preparing)\s+(?:dishes|food|meals?)|restaurant\s+standards?|prema\s+standardima\s+restorana|व्यंजन|तैयार)/iu.test(t)
-  ) {
-    return 'cuisine_prep';
-  }
-  return 'other';
+  return intents;
 }
 
-/** Short duty fragments for embedding in a 2-sentence summary. */
-function summaryDutyFragment(
-  source: string,
+function classifySummaryCookingIntent(text: string): CookingIntent | 'other' {
+  const intents = cookingIntentsInSource(text);
+  if (intents.length === 0) return 'other';
+  // Prefer prep, then hygiene, then collab for single-fragment callers.
+  if (intents.includes('cuisine_prep')) return 'cuisine_prep';
+  if (intents.includes('workplace_hygiene')) return 'workplace_hygiene';
+  return intents[0];
+}
+
+/** Short duty fragment for one cooking intent. */
+function summaryFragmentForIntent(
+  intent: CookingIntent,
   locale: Locale,
   g: GenderTone,
 ): string {
-  const intent = classifySummaryCookingIntent(source);
   if (intent === 'cuisine_prep') {
     if (locale === 'en') return 'preparing dishes according to restaurant standards';
     if (locale === 'sr' || locale === 'hr') return 'pripremi jela prema standardima restorana';
@@ -402,10 +415,39 @@ function summaryDutyFragment(
     if (locale === 'ar') return 'التعاون مع فريق المطبخ';
     if (locale === 'ja') return 'キッチンチームとの協力';
   }
-  // Generic (non-cooking) duties are localized by the legacy summary shell.
-  // Never embed raw source here — ASCII Serbian/Croatian words would otherwise
-  // leak into English summaries and fail locale guards.
   return '';
+}
+
+/** Short duty fragments for embedding in a 2-sentence summary. */
+function summaryDutyFragment(
+  source: string,
+  locale: Locale,
+  g: GenderTone,
+): string {
+  const intent = classifySummaryCookingIntent(source);
+  if (intent === 'other') {
+    // Generic (non-cooking) duties are localized by the legacy summary shell.
+    // Never embed raw source here — ASCII Serbian/Croatian words would otherwise
+    // leak into English summaries and fail locale guards.
+    return '';
+  }
+  return summaryFragmentForIntent(intent, locale, g);
+}
+
+/** All cooking fragments from one source unit (combined lines keep hygiene + collab). */
+function summaryDutyFragmentsFromSource(
+  source: string,
+  locale: Locale,
+  g: GenderTone,
+): string[] {
+  const intents = cookingIntentsInSource(source);
+  if (intents.length === 0) {
+    const single = summaryDutyFragment(source, locale, g);
+    return single ? [single] : [];
+  }
+  return intents
+    .map((intent) => summaryFragmentForIntent(intent, locale, g))
+    .filter(Boolean);
 }
 
 function andWord(locale: Locale): string {
@@ -631,11 +673,12 @@ export function buildConciseGroundedSummary(
   }
 
   const fragments = dutyFacts
-    .map((f) => summaryDutyFragment(f.sourceText || f.value, locale, g))
-    .filter(Boolean);
+    .flatMap((f) => summaryDutyFragmentsFromSource(f.sourceText || f.value, locale, g));
+  // Deduplicate identical fragments while preserving first-seen order.
+  const uniqueFragments = [...new Set(fragments)];
   // When duties exist but none could be safely localized into concise fragments,
   // defer to the legacy localized shell (handles SR→EN warehouse titles, etc.).
-  if (dutyFacts.length > 0 && fragments.length === 0) {
+  if (dutyFacts.length > 0 && uniqueFragments.length === 0) {
     return '';
   }
   const durationPhrase = formatDurationForSummary(duration, locale);
@@ -667,9 +710,7 @@ export function buildConciseGroundedSummary(
         ? `मैं ${durationPhrase} वाली ${rolePart} हूँ${employmentClause}।`
         : `मैं ${durationPhrase} वाला ${rolePart} हूँ${employmentClause}।`)
       : `मैं ${rolePart} हूँ${employmentClause}।`;
-    const cookingFrags = dutyFacts
-      .map((f) => summaryDutyFragment(f.sourceText || f.value, locale, g))
-      .filter(Boolean);
+    const cookingFrags = uniqueFragments;
     let dutySentence = '';
     if (cookingFrags.length >= 3) {
       // Natural Hindi: one subject, no awkward "मैं {company} में, जहाँ मैं …".
@@ -681,7 +722,7 @@ export function buildConciseGroundedSummary(
     }
     text = [open, dutySentence, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'sr' || locale === 'hr') {
-    const dutyJoin = joinDutyFragments(fragments, locale);
+    const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin
       ? (durationPhrase
         ? `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')} ${durationPhrase} u ${dutyJoin}`
@@ -691,7 +732,7 @@ export function buildConciseGroundedSummary(
         : `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')}`);
     text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'en') {
-    const dutyJoin = joinDutyFragments(fragments, locale);
+    const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin
       ? (durationPhrase
         ? `${role || 'Professional'} ${durationPhrase} ${dutyJoin}`
@@ -701,7 +742,7 @@ export function buildConciseGroundedSummary(
         : `${role || 'Professional'}`);
     text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'ja') {
-    const dutyJoin = joinDutyFragments(fragments, locale);
+    const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     text = [
       durationPhrase
         ? `${role || 'プロフェッショナル'}${durationPhrase}${dutyJoin ? `。${dutyJoin}` : ''}。`
@@ -709,7 +750,7 @@ export function buildConciseGroundedSummary(
       skillSentence,
     ].filter(Boolean).join('').replace(/\s+/g, '').trim();
   } else {
-    const dutyJoin = joinDutyFragments(fragments, locale);
+    const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin
       ? (durationPhrase
         ? `${role || 'Professional'} ${durationPhrase}. ${dutyJoin}`

@@ -332,7 +332,8 @@ type CookingDutyIntent =
   | 'kitchen_collab'
   | 'workplace_hygiene'
   | 'ingredient_storage'
-  | 'hygiene_and_storage';
+  | 'hygiene_and_storage'
+  | 'hygiene_and_kitchen_collab';
 
 /**
  * Cooking / restaurant duty intents. Checked before office collaboration/process
@@ -351,6 +352,14 @@ function classifyCookingDutyIntent(text: string): CookingDutyIntent | null {
       || /radn\w*\s+prostor|workstation|workplace|कार्यस्थल|radnog\s+prostora/iu.test(t)
     )
   );
+  const hasKitchenCollab = (
+    (kitchenCtx || /kuhinjsk\w*\s+tim|kitchen\s+team/iu.test(t))
+    && /(sara[dđ]\w*|collaborat|koordin\w*|koleg\w*|tim|team|servis|service|posluživ\w*|सहयोग)/iu.test(t)
+  );
+  // Combined hygiene + kitchen collaboration (two meanings, one display unit).
+  if (hasWorkplaceHygiene && hasKitchenCollab) {
+    return 'hygiene_and_kitchen_collab';
+  }
   // Combined only when the source explicitly names both meanings.
   if (hasIngredientStorage && hasWorkplaceHygiene) {
     return 'hygiene_and_storage';
@@ -363,10 +372,7 @@ function classifyCookingDutyIntent(text: string): CookingDutyIntent | null {
   if (hasWorkplaceHygiene) {
     return 'workplace_hygiene';
   }
-  if (
-    (kitchenCtx || /kuhinjsk\w*\s+tim|kitchen\s+team/iu.test(t))
-    && /(sara[dđ]\w*|collaborat|koordin\w*|koleg\w*|tim|team|servis|service|posluživ\w*|सहयोग)/iu.test(t)
-  ) {
+  if (hasKitchenCollab) {
     return 'kitchen_collab';
   }
   if (
@@ -391,7 +397,7 @@ function classifyCookingDutyIntent(text: string): CookingDutyIntent | null {
  * (see `localizeCookingBulletFromSource`).
  */
 const COOKING_INTENT_BULLET: Partial<
-  Record<Locale, Record<CookingDutyIntent, (g: GenderTone, present?: boolean) => string>>
+  Record<Locale, Partial<Record<CookingDutyIntent, (g: GenderTone, present?: boolean) => string>>>
 > = {
   en: {
     cuisine_prep: (_g, present) =>
@@ -416,6 +422,10 @@ const COOKING_INTENT_BULLET: Partial<
       present
         ? 'Maintain workplace hygiene and follow ingredient-storage procedures.'
         : 'Maintained workplace hygiene and followed ingredient-storage procedures.',
+    hygiene_and_kitchen_collab: (_g, present) =>
+      present
+        ? 'Maintain workplace hygiene and collaborate with the kitchen team.'
+        : 'Maintained workplace hygiene and collaborated with the kitchen team.',
   },
   de: {
     cuisine_prep: () =>
@@ -664,6 +674,14 @@ const COOKING_INTENT_BULLET: Partial<
         : (g === 'male'
           ? 'मैं कार्यस्थल की स्वच्छता बनाए रखता था और सामग्री भंडारण प्रक्रियाओं का पालन करता था।'
           : 'मैं कार्यस्थल की स्वच्छता बनाए रखती थी और सामग्री भंडारण प्रक्रियाओं का पालन करती थी।'),
+    hygiene_and_kitchen_collab: (g, present) =>
+      present
+        ? (g === 'male'
+          ? 'कार्यस्थल की स्वच्छता बनाए रखता हूँ और रसोई टीम के साथ सहयोग करता हूँ।'
+          : 'कार्यस्थल की स्वच्छता बनाए रखती हूँ और रसोई टीम के साथ सहयोग करती हूँ।')
+        : (g === 'male'
+          ? 'कार्यस्थल की स्वच्छता बनाए रखता था और रसोई टीम के साथ सहयोग करता था।'
+          : 'कार्यस्थल की स्वच्छता बनाए रखती थी और रसोई टीम के साथ सहयोग करती थी।'),
   },
   ja: {
     cuisine_prep: (_g, present) =>
@@ -760,7 +778,7 @@ function localizeCookingBulletFromSource(
     }
     return specificText;
   }
-  return (table?.[intent] || COOKING_INTENT_BULLET.en![intent])(g, isPresent).trim();
+  return (table?.[intent] || COOKING_INTENT_BULLET.en?.[intent] || (() => ''))(g, isPresent).trim();
 }
 
 /**
