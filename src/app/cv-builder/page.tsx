@@ -76,7 +76,15 @@ import {
   applyFinalizedBulletsToCv,
   applyFinalizedSummaryToCv,
   finalizeCvAiFieldForApply,
-} from '@/lib/cv-ai-finalize-apply';import {
+} from '@/lib/cv-ai-finalize-apply';
+import {
+  buildExperienceJobContext,
+  experienceJobContextsMatch,
+  resolveExperienceAiGrounding,
+  candidateConflictsWithJobContext,
+  type ExperienceAiJobContextTrace,
+} from '@/lib/cv-experience-job-context';
+import {
   localizeCvLanguageLevel,
   normalizeCvLanguagesProficiency,
   normalizeLanguageProficiencyToCanonical,
@@ -173,6 +181,8 @@ export default function CVBuilderPage() {
   // must never be applied, regardless of which locale it was requested in.
   const latestSummaryRequestIdRef = useRef<string | null>(null);
   const latestBulletsRequestIdRef = useRef<Record<string, string>>({});
+  /** Race guard: latest job-context key per experience for bullets AI. */
+  const latestBulletsContextKeyRef = useRef<Record<string, string>>({});
   const latestRewriteRequestIdRef = useRef<string | null>(null);
   const commitCvUpdate = useCallback((updater: (prev: CVData) => CVData) => {
     setCv((prev) => {
@@ -1060,24 +1070,39 @@ export default function CVBuilderPage() {
   };
 
   const handleGenBullets = async (expId: string) => {
-    const exp = cv.experience.find(e => e.id === expId);
+    // Always read the latest committed CV — never a stale closure snapshot.
+    const liveCv = cvRef.current;
+    const exp = liveCv.experience.find(e => e.id === expId);
     if (!exp) return;
     if (generatingBulletsId) return; // Prevent multiple concurrent requests
 
-    // Empty-description guard: no API call, no usage count.
-    const groundingBeforeRequest = freezeCanonicalExperienceDescription(
-      ensureCanonicalExperienceFrozen(exp),
-    ).trim();
-    if (!groundingBeforeRequest) {
+    const industry = expIndustry[expId] ?? 'general';
+    const level = expLevel[expId] ?? 'mid';
+    const requestContext = buildExperienceJobContext({
+      position: exp.position,
+      industry,
+      locale,
+      level,
+    });
+
+    // Capture user grounding before AI — never promote AI display text to canonical.
+    const expFrozen = ensureCanonicalExperienceFrozen(exp);
+    const aiGrounding = resolveExperienceAiGrounding(
+      expFrozen,
+      requestContext,
+      freezeCanonicalExperienceDescription,
+    );
+
+    // Empty-description guard: require either valid grounding or a position for
+    // occupation-aware generation. Never block solely because stale AI duties
+    // were excluded after an occupation change.
+    if (!aiGrounding.sourceDescription.trim() && !String(exp.position || '').trim()) {
       toast.error(aiErrorMessage('experience_description_required', locale));
       return;
     }
 
     const proToken = getCurrentProTokenOrToast(() => setAiImprovementsModal(true));
     if (!proToken) return;
-
-    const industry = expIndustry[expId] ?? 'general';
-    const level = expLevel[expId] ?? 'mid';
 
     setGeneratingBulletsId(expId);
     const controller = new AbortController();
@@ -1086,13 +1111,38 @@ export default function CVBuilderPage() {
     // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest('bullets', locale);
     const requestedLocale = reqCtx.locale as Locale;
-    const previousContentLocale = cv.canonicalSnapshot?.canonicalLocale ?? null;
+    const previousContentLocale = liveCv.canonicalSnapshot?.canonicalLocale ?? null;
     latestBulletsRequestIdRef.current = { ...latestBulletsRequestIdRef.current, [expId]: reqCtx.requestId };
+    latestBulletsContextKeyRef.current = {
+      ...latestBulletsContextKeyRef.current,
+      [expId]: requestContext.key,
+    };
     const countBefore = getProAiUsageCount();
 
+    const logExperienceAiTrace = (partial: Partial<ExperienceAiJobContextTrace>) => {
+      if (process.env.NODE_ENV === 'production') return;
+      const payload: ExperienceAiJobContextTrace = {
+        previousContextKey: exp.generationJobContextKey || exp.groundingJobContextKey,
+        requestContextKey: requestContext.key,
+        normalizedPositionClass: requestContext.positionClass,
+        normalizedIndustry: requestContext.industryNorm,
+        locale: requestedLocale,
+        level: requestContext.levelNorm,
+        descriptionOrigin: exp.descriptionOrigin,
+        groundingSource: aiGrounding.groundingSource,
+        staleGeneratedContentExcluded: aiGrounding.staleGeneratedContentExcluded,
+        semanticDutyKeysBefore: aiGrounding.semanticDutyKeysBefore,
+        semanticDutyKeysUsed: aiGrounding.semanticDutyKeysUsed,
+        requestIdMatch: true,
+        contextMatch: true,
+        resultApplied: false,
+        aiUsageIncremented: false,
+        ...partial,
+      };
+      console.info('[ExperienceAIJobContext]', payload);
+    };
+
     try {
-      // Capture user grounding before AI — never promote AI display text to canonical.
-      const expFrozen = ensureCanonicalExperienceFrozen(exp);
       if (
         expFrozen.originalUserDescription !== exp.originalUserDescription
         || expFrozen.canonicalDescription !== exp.canonicalDescription
@@ -1106,12 +1156,11 @@ export default function CVBuilderPage() {
         }));
       }
       const requestCv = {
-        ...cv,
-        experience: cv.experience.map((e) =>
-          e.id === expId ? expFrozen : e,
+        ...liveCv,
+        experience: liveCv.experience.map((e) =>
+          e.id === expId ? aiGrounding.experienceForAi : e,
         ),
       };
-      const canonicalSource = freezeCanonicalExperienceDescription(expFrozen);
       const requestBody = {
         action: 'bullets',
         proToken,
@@ -1120,9 +1169,10 @@ export default function CVBuilderPage() {
         industry,
         level,
         locale: requestedLocale,
-        gender: cv.personal.gender || '',
-        // Always send the frozen canonical source — never a prior Serbian/Hindi rewrite.
-        sourceDescription: canonicalSource || exp.description || '',
+        gender: liveCv.personal.gender || '',
+        // Never send stale AI/legacy cooking duties after occupation change.
+        sourceDescription: aiGrounding.sourceDescription,
+        jobContextKey: requestContext.key,
         // Structured date status is authoritative for employment tense.
         isPresent: Boolean(exp.isPresent),
         endDate: exp.isPresent ? 'present' : (exp.endDate || ''),
@@ -1146,6 +1196,11 @@ export default function CVBuilderPage() {
             error: payload,
           });
           toast.error(getAiGate().status !== 'free' ? (msg ?? t.common.proAuthorizationUnavailable) : t.common.proAccessRequired);
+          logExperienceAiTrace({
+            resultApplied: false,
+            rejectedReason: 'http_403',
+            aiUsageIncremented: false,
+          });
           return;
         }
         const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
@@ -1158,12 +1213,30 @@ export default function CVBuilderPage() {
           error: payload,
         });
         toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
+        logExperienceAiTrace({
+          resultApplied: false,
+          rejectedReason: payload.code || 'http_error',
+          aiUsageIncremented: false,
+        });
         return;
       }
 
-      // Stale-response guard: only the most recently started bullets request for
-      // THIS experience may apply its result.
-      if (latestBulletsRequestIdRef.current[expId] !== reqCtx.requestId) {
+      // Stale-response guard: requestId + job-context must both still match.
+      const latestId = latestBulletsRequestIdRef.current[expId];
+      const latestCtx = latestBulletsContextKeyRef.current[expId];
+      const liveNow = cvRef.current;
+      const expNow = liveNow.experience.find((e) => e.id === expId);
+      const liveContext = buildExperienceJobContext({
+        position: expNow?.position,
+        industry: expIndustry[expId] ?? industry,
+        locale,
+        level: expLevel[expId] ?? level,
+      });
+      if (
+        latestId !== reqCtx.requestId
+        || latestCtx !== requestContext.key
+        || !experienceJobContextsMatch(liveContext.key, requestContext.key)
+      ) {
         logAiLocaleTransitionDiagnostics({
           requestId: reqCtx.requestId,
           action: 'bullets_generate',
@@ -1175,6 +1248,13 @@ export default function CVBuilderPage() {
           applied: false,
           reason: 'stale_request_superseded',
         });
+        logExperienceAiTrace({
+          resultApplied: false,
+          rejectedReason: 'stale_request_or_context_mismatch',
+          requestIdMatch: latestId === reqCtx.requestId,
+          contextMatch: experienceJobContextsMatch(liveContext.key, requestContext.key),
+          aiUsageIncremented: false,
+        });
         return;
       }
       const newDescription = bulletsData.result || '';
@@ -1182,16 +1262,47 @@ export default function CVBuilderPage() {
         action: 'experience_bullets',
         field: 'experience_description',
         requestedLocale,
-        gender: cv.personal.gender || '',
-        cv: requestCv,
+        gender: liveNow.personal.gender || '',
+        cv: {
+          ...liveNow,
+          experience: liveNow.experience.map((e) =>
+            e.id === expId ? aiGrounding.experienceForAi : e,
+          ),
+        },
         candidate: newDescription,
         experienceId: expId,
+        industry,
+        level,
+        jobContext: requestContext,
         originHint: bulletsData.fallbackUsed
           ? 'deterministic_fallback'
           : bulletsData.repairAttempted
             ? 'ai_repaired'
             : 'ai_generated',
       });
+      if (
+        finalizedBullets.countedAsSuccess
+        && candidateConflictsWithJobContext(finalizedBullets.text, requestContext)
+        && aiGrounding.staleGeneratedContentExcluded
+      ) {
+        // Hard reject cooking survival under pharmacist context.
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        logExperienceAiTrace({
+          resultApplied: false,
+          rejectedReason: 'cooking_duties_under_pharmacist',
+          aiUsageIncremented: false,
+        });
+        toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        return;
+      }
       if (finalizedBullets.blocked || !finalizedBullets.countedAsSuccess) {
         const msg = finishAiClientRequest({
           ctx: reqCtx,
@@ -1213,10 +1324,21 @@ export default function CVBuilderPage() {
           applied: false,
           reason: finalizedBullets.reason || 'generation_validation_failed',
         });
+        logExperienceAiTrace({
+          resultApplied: false,
+          rejectedReason: finalizedBullets.reason || 'generation_validation_failed',
+          aiUsageIncremented: false,
+        });
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
-      commitCvUpdate((prev) => applyFinalizedBulletsToCv(prev, requestedLocale, expId, finalizedBullets));
+      commitCvUpdate((prev) => applyFinalizedBulletsToCv(
+        prev,
+        requestedLocale,
+        expId,
+        finalizedBullets,
+        requestContext,
+      ));
       recordProAiSuccess();
       finishAiClientRequest({
         ctx: reqCtx,
@@ -1253,6 +1375,12 @@ export default function CVBuilderPage() {
         clientAborted: false,
         applied: true,
       });
+      logExperienceAiTrace({
+        appliedContextKey: requestContext.key,
+        resultApplied: true,
+        aiUsageIncremented: true,
+        semanticDutyKeysUsed: [],
+      });
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {
       if (process.env.NODE_ENV !== 'production') console.error('[AI Improvements Error]', err);
@@ -1274,6 +1402,11 @@ export default function CVBuilderPage() {
         clientAborted: err instanceof Error && err.name === 'AbortError',
         applied: false,
         reason: payload.code,
+      });
+      logExperienceAiTrace({
+        resultApplied: false,
+        rejectedReason: payload.code || 'exception',
+        aiUsageIncremented: false,
       });
       toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {

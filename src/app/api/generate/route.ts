@@ -25,6 +25,7 @@ import {
   deterministicLocalizedSummaryFromCanonical,
 } from '@/lib/cv-localized-fallback';
 import { activateCvExperienceBullets, activateCvSummary } from '@/lib/cv-content-activation';
+import { buildOccupationAwareExperienceFallback } from '@/lib/cv-experience-job-context';
 import {
   applyApproximateDurationPolicy,
   durationToPromptToken,
@@ -1089,6 +1090,8 @@ Rules:
       const resolvedLocale = normalizeLocale(locale);
       const localeInfo = localeInstructions[resolvedLocale];
       const companyName = company || localeInfo.fallbackCompany;
+      // Empty sourceDescription means occupation-aware generation (no FACT LOCK).
+      // Never treat a missing/blank source as cooking duties to preserve.
       const factSet = buildFactSetFromExperienceDescription(sourceDescription, {
         experienceIndex: 0,
         company: companyName,
@@ -1099,18 +1102,27 @@ Rules:
 
       // If no API key, fall back to offline templates (fact-locked when source exists)
       if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-        const offlineResult = generateBulletsOffline(
-          (industry || 'general') as BulletIndustry,
-          (level || 'mid') as BulletLevel,
-          companyName,
-          resolvedLocale,
-          sourceDescription,
-        );
+        const offlineResult = hasCanonical
+          ? generateBulletsOffline(
+            (industry || 'general') as BulletIndustry,
+            (level || 'mid') as BulletLevel,
+            companyName,
+            resolvedLocale,
+            sourceDescription,
+          )
+          : buildOccupationAwareExperienceFallback({
+            locale: resolvedLocale,
+            gender: gender || '',
+            position,
+            industry: industry || 'general',
+            isPresent: isPresentRole,
+          });
         if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
         return jsonResponse({
           result: offlineResult,
           cvFidelityStatus: hasCanonical ? 'fallback' : 'passed',
           usedFactIds: canonicalBullets.map((b) => b.id),
+          fallbackUsed: !hasCanonical,
         });
       }
 
@@ -1181,13 +1193,21 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         aiResult = '';
       }
       if (!aiResult || !aiResult.includes('•')) {
-        aiResult = generateBulletsOffline(
-          (industry || 'general') as BulletIndustry,
-          (level || 'mid') as BulletLevel,
-          companyName,
-          resolvedLocale,
-          sourceDescription,
-        );
+        aiResult = hasCanonical
+          ? generateBulletsOffline(
+            (industry || 'general') as BulletIndustry,
+            (level || 'mid') as BulletLevel,
+            companyName,
+            resolvedLocale,
+            sourceDescription,
+          )
+          : buildOccupationAwareExperienceFallback({
+            locale: resolvedLocale,
+            gender: gender || '',
+            position,
+            industry: industry || 'general',
+            isPresent: isPresentRole,
+          });
       }
 
       const bulletsForceRespond = shouldForceRespond(deadlineAt) || providerAborted;
@@ -1274,11 +1294,19 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
             violationCount: activated.violations.length,
           }, { status: 504 });
         }
-        const emergencyLocalized = deterministicLocalizedBulletsFromCanonical(
-          canonicalBullets,
-          resolvedLocale,
-          gender || '',
-          { isPresent: isPresentRole },
+        const emergencyLocalized = (
+          deterministicLocalizedBulletsFromCanonical(
+            canonicalBullets,
+            resolvedLocale,
+            gender || '',
+            { isPresent: isPresentRole },
+          ) || buildOccupationAwareExperienceFallback({
+            locale: resolvedLocale,
+            gender: gender || '',
+            position,
+            industry: industry || 'general',
+            isPresent: isPresentRole,
+          })
         ).trim();
         if (emergencyLocalized) {
           return jsonResponse({

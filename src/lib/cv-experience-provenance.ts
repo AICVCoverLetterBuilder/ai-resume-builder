@@ -4,6 +4,10 @@
  */
 import type { Locale } from './i18n/translations';
 import type { WorkExperience } from './types';
+import {
+  stampExperienceGenerationContext,
+  type ExperienceJobContext,
+} from './cv-experience-job-context';
 
 export type CvExperienceDescriptionOrigin =
   | 'user'
@@ -156,10 +160,11 @@ export function applyGeneratedExperienceDescription(
   options: {
     locale: Locale;
     origin: CvExperienceDescriptionOrigin;
+    jobContext?: ExperienceJobContext;
   },
 ): WorkExperience {
   const preserved = captureUserGroundingBeforeAi(exp);
-  return {
+  let next: WorkExperience = {
     ...preserved,
     description: generated,
     generatedDescription: generated,
@@ -169,6 +174,10 @@ export function applyGeneratedExperienceDescription(
     originalUserDescription: preserved.originalUserDescription,
     canonicalDescription: preserved.canonicalDescription,
   };
+  if (options.jobContext) {
+    next = stampExperienceGenerationContext(next, options.jobContext);
+  }
+  return next;
 }
 
 /**

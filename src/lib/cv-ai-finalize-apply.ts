@@ -51,6 +51,13 @@ import { applyCvContentQuality } from './cv-content-quality';
 import { hasAiProtocolMarker, stripAiProtocolMarkers } from './cv-ai-protocol-strip';
 import { hasCvMetaFallbackText } from './cv-ai-meta-text';
 import { freezeCanonicalExperienceDescription } from './cv-canonical-facts';
+import {
+  buildExperienceJobContext,
+  buildOccupationAwareExperienceFallback,
+  candidateConflictsWithJobContext,
+  resolveExperienceAiGrounding,
+  type ExperienceJobContext,
+} from './cv-experience-job-context';
 
 export type CvAiFinalizeAction =
   | 'summary_generate'
@@ -78,6 +85,12 @@ export type FinalizeCvAiFieldInput = {
   experienceId?: string;
   durationSnapshot?: ExperienceDurationSnapshot;
   referenceDateIso?: string;
+  /** Industry selected in the AI Improvements panel (BulletIndustry token). */
+  industry?: string;
+  /** Level selected in the AI Improvements panel. */
+  level?: string;
+  /** Precomputed job context; when omitted it is derived from position/industry/locale/level. */
+  jobContext?: ExperienceJobContext;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -378,11 +391,28 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const locale = input.requestedLocale;
   const cv = input.cv;
   const gender = input.gender || cv.personal?.gender || '';
-  const factSet = buildCvCanonicalFactSet(cv);
   const experienceIndex = experienceIndexForId(cv, input.experienceId);
   const exp = (cv.experience || [])[experienceIndex];
   const isPresent = Boolean(exp?.isPresent);
-  const dutiesText = dutiesTextFromCv(cv, input.experienceId);
+  const jobContext = input.jobContext || buildExperienceJobContext({
+    position: exp?.position,
+    industry: input.industry,
+    locale,
+    level: input.level,
+  });
+  const grounding = exp
+    ? resolveExperienceAiGrounding(exp, jobContext, freezeCanonicalExperienceDescription)
+    : null;
+  const cvForFacts: CVData = exp && grounding
+    ? {
+      ...cv,
+      experience: (cv.experience || []).map((e) =>
+        (e.id === exp.id ? grounding.experienceForAi : e)),
+    }
+    : cv;
+  const factSet = buildCvCanonicalFactSet(cvForFacts);
+  const dutiesText = grounding?.sourceDescription
+    || dutiesTextFromCv(cvForFacts, input.experienceId);
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: cv.personal?.jobTitle,
     experienceTitle: exp?.position,
@@ -395,8 +425,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (hasAiProtocolMarker(candidate)) {
     candidate = '';
   }
-  const first = bulletsPass(candidate, factSet, cv, locale, experienceIndex, isPresent);
-  if (first.ok) {
+  // Never accept prior-occupation duties after stale grounding was excluded.
+  if (
+    grounding?.staleGeneratedContentExcluded
+    && candidateConflictsWithJobContext(candidate, jobContext)
+  ) {
+    candidate = '';
+  }
+
+  const first = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
+  if (first.ok && candidate.trim()) {
     return {
       blocked: false,
       text: candidate,
@@ -410,11 +448,46 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     deterministicLocalizedBulletsFromCanonical(canonical, locale, gender, { isPresent }) || '',
     locale,
   );
-  const second = bulletsPass(grounded, factSet, cv, locale, experienceIndex, isPresent);
-  if (grounded && second.ok) {
+  const second = bulletsPass(grounded, factSet, cvForFacts, locale, experienceIndex, isPresent);
+  if (grounded && second.ok && !(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))) {
     return {
       blocked: false,
       text: grounded,
+      origin: 'deterministic_fallback',
+      roleDutyConflict,
+      countedAsSuccess: true,
+    };
+  }
+
+  const occupationFallback = normalizeLocaleText(
+    buildOccupationAwareExperienceFallback({
+      locale,
+      gender,
+      position: exp?.position,
+      industry: input.industry || jobContext.industryNorm,
+      isPresent,
+    }),
+    locale,
+  );
+  // Occupation-aware fallback only when there is no usable grounding (empty
+  // FACT LOCK or stale cross-occupation AI/legacy duties). Do not replace
+  // valid user/canonical duties that simply failed provider validation.
+  // Also do not invent duties for a totally blank experience with no industry
+  // / occupation-change signal (preserves empty→blocked usage boundary).
+  const allowOccupationFallback = Boolean(
+    grounding?.staleGeneratedContentExcluded
+    || (input.industry && input.industry !== 'general')
+    || jobContext.positionClass === 'pharmacist_pharmacy'
+    || jobContext.positionClass === 'software_tech',
+  );
+  if (
+    occupationFallback.trim()
+    && allowOccupationFallback
+    && (canonical.length === 0 || grounding?.staleGeneratedContentExcluded)
+  ) {
+    return {
+      blocked: false,
+      text: occupationFallback,
       origin: 'deterministic_fallback',
       roleDutyConflict,
       countedAsSuccess: true,
@@ -463,6 +536,7 @@ export function applyFinalizedBulletsToCv(
   locale: Locale,
   experienceId: string,
   finalized: FinalizeCvAiFieldResult,
+  jobContext?: ExperienceJobContext,
 ): CVData {
   if (finalized.blocked || !finalized.countedAsSuccess) return cv;
   const descriptionOrigin = finalized.origin === 'deterministic_fallback'
@@ -475,6 +549,7 @@ export function applyFinalizedBulletsToCv(
     experienceId,
     description: finalized.text,
     descriptionOrigin,
+    jobContext,
   });
 }
 
@@ -490,6 +565,9 @@ export function runCvAiApplyPipeline(options: {
   experienceId?: string;
   durationSnapshot?: ExperienceDurationSnapshot;
   referenceDateIso?: string;
+  industry?: string;
+  level?: string;
+  jobContext?: ExperienceJobContext;
 }): {
   blocked: boolean;
   reason?: string;
@@ -502,6 +580,17 @@ export function runCvAiApplyPipeline(options: {
   const field: CvAiFinalizeField = options.action === 'experience_bullets'
     ? 'experience_description'
     : 'summary';
+  const exp = options.experienceId
+    ? (options.cv.experience || []).find((e) => e.id === options.experienceId)
+    : (options.cv.experience || [])[0];
+  const jobContext = options.jobContext || (options.action === 'experience_bullets'
+    ? buildExperienceJobContext({
+      position: exp?.position,
+      industry: options.industry,
+      locale: options.locale,
+      level: options.level,
+    })
+    : undefined);
   const finalized = finalizeCvAiFieldForApply({
     action: options.action,
     field,
@@ -512,6 +601,9 @@ export function runCvAiApplyPipeline(options: {
     experienceId: options.experienceId,
     durationSnapshot: options.durationSnapshot,
     referenceDateIso: options.referenceDateIso,
+    industry: options.industry,
+    level: options.level,
+    jobContext,
   });
 
   if (finalized.blocked || !finalized.countedAsSuccess) {
@@ -528,7 +620,7 @@ export function runCvAiApplyPipeline(options: {
 
   const stateCv = field === 'summary'
     ? applyFinalizedSummaryToCv(options.cv, options.locale, finalized)
-    : applyFinalizedBulletsToCv(options.cv, options.locale, options.experienceId!, finalized);
+    : applyFinalizedBulletsToCv(options.cv, options.locale, options.experienceId!, finalized, jobContext);
 
   const previewCv = applyCvContentQuality(stateCv, options.locale, {
     gender: stateCv.personal?.gender || '',

@@ -627,6 +627,7 @@ type AcceptValidatedAiContentOptions = {
   description?: string;
   summaryOrigin?: import('./types').CvSummaryOrigin;
   descriptionOrigin?: CvExperienceDescriptionOrigin;
+  jobContext?: import('./cv-experience-job-context').ExperienceJobContext;
 };
 
 /**
@@ -701,6 +702,7 @@ export function acceptValidatedAiContent(
         return applyGeneratedExperienceDescription(e, options.description!, {
           locale: options.locale,
           origin: isAiDescriptionOrigin(origin) ? origin : 'ai_generated',
+          jobContext: options.jobContext,
         });
       }),
     };
