@@ -34,6 +34,7 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { deterministicLocalizedSummaryFromCanonical, localizeCanonicalBulletLine } from './cv-localized-fallback';
 import { normalizeHindiGeneratedWhitespace } from './cv-hindi-normalize';
 import { resolveExperienceGroundingDescription } from './cv-experience-provenance';
+import { scrubOrphanDurationFragments } from './cv-experience-job-context';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
 export type DurationIntegrationContext = {
@@ -564,10 +565,31 @@ export function injectHindiDurationWithOpening(
   return `${opening} ${remainderParts.join(' ')}`.replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Split on the first real sentence terminator.
+ * Serbian/Croatian year abbreviations (`2024.` / `24.`) are NOT sentence ends —
+ * splitting there produced the device bug `…iskustva. godine, gde…`.
+ */
 function findFirstSentenceSplit(text: string): { head: string; delim: string; rest: string } | null {
-  const m = text.match(/^([\s\S]*?)([.।!?])(\s*[\s\S]*)$/u);
-  if (!m || !m[1].trim()) return null;
-  return { head: m[1], delim: m[2], rest: m[3].trim() };
+  const s = text || '';
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (ch === '।' || ch === '!' || ch === '?') {
+      const head = s.slice(0, i);
+      if (!head.trim()) continue;
+      return { head, delim: ch, rest: s.slice(i + 1).trim() };
+    }
+    if (ch === '.') {
+      // Year abbreviation: digit(s) immediately before the period.
+      if (i > 0 && /\d/.test(s[i - 1]!)) continue;
+      // Ellipsis / decimal continuation
+      if (s[i + 1] === '.') continue;
+      const head = s.slice(0, i);
+      if (!head.trim()) continue;
+      return { head, delim: '.', rest: s.slice(i + 1).trim() };
+    }
+  }
+  return null;
 }
 
 /**
@@ -867,7 +889,8 @@ export function applyCvContentQuality(
     }
   }
 
-  summary = summaryResult.summary;
+  summary = scrubOrphanDurationFragments(summaryResult.summary);
+  if (summary !== summaryResult.summary) repaired = true;
   if (locale === 'hi') {
     const before = summary;
     if (
@@ -889,10 +912,12 @@ export function applyCvContentQuality(
     if (summary !== before) repaired = true;
   } else if (locale === 'sr' || locale === 'hr') {
     const before = summary;
+    summary = scrubOrphanDurationFragments(summary);
     summary = normalizeSerbianRolePhrase(summary);
     if (hasCurrentRole) summary = applySerbianSummaryCurrentTense(summary, true);
     summary = applySerbianFemaleAgreement(summary, gender);
     summary = stripUnsupportedSummaryFluff(summary, locale);
+    summary = scrubOrphanDurationFragments(summary);
     if (summary !== before) repaired = true;
   }
 

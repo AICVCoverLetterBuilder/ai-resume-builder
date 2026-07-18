@@ -238,6 +238,31 @@ const EXTRA_DUTY_CLAIMS: Array<{ label: string; claim: RegExp; support: RegExp }
     support: /(medicat|drug|lek|دواء|投薬)/iu,
   },
   {
+    label: 'prescription_dispensing',
+    claim: /(dispens(?:e|ed|ing)|prescription|recept|izdavanj\w*\s+lek)/iu,
+    support: /(dispens|prescription|recept|izdavanj)/iu,
+  },
+  {
+    label: 'dosage_interaction_check',
+    claim: /(dosag|dozir|drug\s+interaction|interakcij\w*\s+lek|neželjen)/iu,
+    support: /(dosag|dozir|interaction|interakcij|neželjen)/iu,
+  },
+  {
+    label: 'patient_therapy_counseling',
+    claim: /(patient\s+counsel|savetovan\w*\s+pacijen|terapij|therapy|adverse\s+effect)/iu,
+    support: /(patient|pacijen|terapij|therapy|adverse)/iu,
+  },
+  {
+    label: 'medicine_stock_procurement',
+    claim: /(medicine\s+stock|zalih\w*\s+lek|procurement|nabavk)/iu,
+    support: /(stock|zalih|procurement|nabavk)/iu,
+  },
+  {
+    label: 'doctor_pharmacotherapy',
+    claim: /(collaborat\w*\s+with\s+doctors?|saradn\w*\s+sa\s+lekar|pharmacotherapy|farmakoterap)/iu,
+    support: /(doctor|lekar|pharmacotherapy|farmakoterap)/iu,
+  },
+  {
     label: 'safety_inspections',
     claim: /(safety\s+inspection|inspecciones? de seguridad|Sicherheitsinspektion|فحص\s+السلامة|安全点検)/iu,
     support: /(safety\s+inspection|inspeccion|Sicherheitsinspektion|فحص|安全点検)/iu,

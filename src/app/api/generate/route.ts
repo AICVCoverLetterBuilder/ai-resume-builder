@@ -1100,29 +1100,41 @@ Rules:
       const canonicalBullets = bulletsForExperience(factSet, 0);
       const hasCanonical = canonicalBullets.length > 0;
 
+      // No user-authored duties: never invent regulated clinical/pharmacy claims from
+      // occupation/industry alone — return the safe occupation-aware fallback only.
+      if (!hasCanonical) {
+        const occupationFallback = buildOccupationAwareExperienceFallback({
+          locale: resolvedLocale,
+          gender: gender || '',
+          position,
+          industry: industry || 'general',
+          isPresent: isPresentRole,
+        });
+        if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
+        return jsonResponse({
+          result: occupationFallback,
+          cvFidelityStatus: 'passed',
+          usedFactIds: [],
+          fallbackUsed: true,
+          occupationGenericFallbackUsed: true,
+        });
+      }
+
       // If no API key, fall back to offline templates (fact-locked when source exists)
       if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-        const offlineResult = hasCanonical
-          ? generateBulletsOffline(
-            (industry || 'general') as BulletIndustry,
-            (level || 'mid') as BulletLevel,
-            companyName,
-            resolvedLocale,
-            sourceDescription,
-          )
-          : buildOccupationAwareExperienceFallback({
-            locale: resolvedLocale,
-            gender: gender || '',
-            position,
-            industry: industry || 'general',
-            isPresent: isPresentRole,
-          });
+        const offlineResult = generateBulletsOffline(
+          (industry || 'general') as BulletIndustry,
+          (level || 'mid') as BulletLevel,
+          companyName,
+          resolvedLocale,
+          sourceDescription,
+        );
         if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
         return jsonResponse({
           result: offlineResult,
-          cvFidelityStatus: hasCanonical ? 'fallback' : 'passed',
+          cvFidelityStatus: 'fallback',
           usedFactIds: canonicalBullets.map((b) => b.id),
-          fallbackUsed: !hasCanonical,
+          fallbackUsed: true,
         });
       }
 

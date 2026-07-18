@@ -129,10 +129,20 @@ export function classifyExperiencePosition(position?: string | null): Experience
 
 export function buildExperienceJobContext(input: ExperienceJobContextInput): ExperienceJobContext {
   const positionNorm = collapseWs(input.position || '');
-  const industryNorm = normalizeIndustryToken(input.industry);
+  const positionClass = classifyExperiencePosition(input.position);
+  let industryNorm = normalizeIndustryToken(input.industry);
+  // When industry is unset, derive a stable class-aligned token so Summary and
+  // Experience share the same job-context key after occupation changes.
+  if ((!input.industry || !String(input.industry).trim()) || industryNorm === 'general') {
+    if (positionClass === 'pharmacist_pharmacy') industryNorm = 'pharmacy';
+    else if (positionClass === 'baker_food' || positionClass === 'hospitality_service') {
+      industryNorm = 'hospitality';
+    } else if (positionClass === 'software_tech') industryNorm = 'tech';
+    else if (positionClass === 'logistics') industryNorm = 'logistics';
+    else if (positionClass === 'healthcare') industryNorm = 'healthcare';
+  }
   const localeNorm = collapseWs(input.locale || 'en') || 'en';
   const levelNorm = normalizeLevelToken(input.level);
-  const positionClass = classifyExperiencePosition(input.position);
   const key = hashJobContextParts([
     positionClass,
     positionNorm.slice(0, 64),
@@ -465,7 +475,7 @@ export function buildOccupationAwareExperienceFallback(options: {
 
 /** Detect cooking/restaurant wording that must not survive a pharmacist apply. */
 export function textLooksLikeCookingDuties(text: string): boolean {
-  return /priprem\w*\s+jel|restoran|kuhinj|kitchen|dish(?:es)?|baker|बेकर|restaurant\s+standard|higijen\w*\s+radnog|workplace\s+hygiene|kitchen\s+team|food_preparation|namirnic/i.test(
+  return /priprem\w*\s+jel|restoran|kuhinj|kitchen|dish(?:es)?|baker|बेकर|रेस्तरां|व्यंजन|रसोई|restaurant\s+standard|higijen\w*\s+radnog|workplace\s+hygiene|kitchen\s+team|food_preparation|namirnic|kulinar/i.test(
     text || '',
   );
 }
@@ -473,6 +483,16 @@ export function textLooksLikeCookingDuties(text: string): boolean {
 /** Detect pharmacy-domain wording that must not ground a non-pharmacy occupation. */
 export function textLooksLikePharmacyDuties(text: string): boolean {
   return /farmac|apotek|pharmacy\s+practice|pharmacy\s+procedure|ljekarn|फार्मेसी|薬剤/i.test(text || '');
+}
+
+/**
+ * Regulated / clinical pharmacist claims that must not be invented from industry
+ * or title alone — only permitted when present in genuine user-authored duties.
+ */
+export function hasUnsupportedRegulatedPharmacyClaims(text: string): boolean {
+  return /recept|prescription|dozir|dosage|interakcij|interaction|neželjen|adverse|savetovan\w*\s+(?:pacijen|pacijent|pacijenata)|patient\s+counsel|terapij|therapy|zalih|stock|nabavk|procurement|lekar|doctor|pharmacotherapy|farmakoterap|izdavanj\w*\s+lek|dispens/i.test(
+    text || '',
+  );
 }
 
 /**
@@ -502,5 +522,158 @@ export function candidateConflictsWithJobContext(
   ) {
     return true;
   }
+  if (
+    hasUnsupportedRegulatedPharmacyClaims(text)
+    && (context.positionClass === 'pharmacist_pharmacy' || context.industryNorm === 'pharmacy')
+  ) {
+    // Regulated claims without user evidence are always unsupported for empty-grounding
+    // generation — callers decide whether user grounding was present.
+    return true;
+  }
   return false;
+}
+
+const COOKING_SEMANTIC_KEYS = new Set([
+  'food_preparation_restaurant_standards',
+  'workplace_hygiene',
+  'kitchen_team_collaboration',
+]);
+
+/** Drop semantic duties that conflict with the current occupation context. */
+export function filterSemanticDutiesForJobContext<T extends { key: string }>(
+  duties: T[],
+  context: ExperienceJobContext,
+): T[] {
+  const foodOk = context.positionClass === 'baker_food'
+    || context.positionClass === 'hospitality_service'
+    || context.industryNorm === 'hospitality';
+  if (foodOk) return duties;
+  return duties.filter((d) => !COOKING_SEMANTIC_KEYS.has(d.key));
+}
+
+/**
+ * Summary is stale for export/preview when it still carries prior-occupation
+ * claims (e.g. cooking under Apotekar) or its generation context mismatches.
+ */
+export function isSummaryStaleForJobContext(
+  summary: string,
+  context: ExperienceJobContext,
+  options?: {
+    summaryOrigin?: string | null;
+    summaryGenerationContextKey?: string | null;
+    isUserAuthoredSummary?: boolean;
+  },
+): boolean {
+  const text = summary || '';
+  if (!text.trim()) return false;
+  if (
+    options?.summaryGenerationContextKey
+    && !experienceJobContextsMatch(options.summaryGenerationContextKey, context.key)
+    && options.summaryOrigin !== 'user'
+  ) {
+    return true;
+  }
+  if (textLooksLikeCookingDuties(text) && !isFoodCompatibleContext(context)) {
+    // Even user-authored cooking summaries must not export under pharmacist/
+    // software titles as if they were current occupational duties.
+    return true;
+  }
+  return false;
+}
+
+function isFoodCompatibleContext(context: ExperienceJobContext): boolean {
+  return context.positionClass === 'baker_food'
+    || context.positionClass === 'hospitality_service'
+    || context.industryNorm === 'hospitality';
+}
+
+/**
+ * Remove orphan duration noun fragments such as `. godine,` / ` godine, gde`
+ * left after broken sentence merges.
+ */
+export function scrubOrphanDurationFragments(summary: string): string {
+  let out = (summary || '').trim();
+  // Duplicate "…iskustva. godine," / "…iskustva. godina,"
+  out = out.replace(
+    /\b(iskustva|iskustvom|iskustvu)\s*\.\s*(godine|godina|godinu)\b[,:]?\s*/giu,
+    '$1. ',
+  );
+  // Leading orphan "godine, gde" / ". godine, gde" at sentence start
+  out = out.replace(/(^|[.!?]\s*)(godine|godina|godinu)\s*[,:]?\s*(?=gde|gdje|u\s|sa\s)/giu, '$1');
+  // Double duration noun after half-year phrase: "i po godine iskustva godine"
+  out = out.replace(/\bi\s+po\s+godine\s+iskustva\s*\.?\s*godine\b/giu, 'i po godine iskustva');
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/** Safe Summary when duties are role-generic only (no cooking / no regulated claims). */
+export function buildOccupationAwareSummaryFallback(options: {
+  locale: Locale;
+  gender?: string;
+  position?: string;
+  industry?: string;
+  company?: string;
+  startDate?: string;
+  durationPhrase?: string;
+  isPresent?: boolean;
+}): string {
+  const ctx = buildExperienceJobContext({
+    position: options.position,
+    industry: options.industry,
+    locale: options.locale,
+  });
+  const g = String(options.gender || '').toLowerCase();
+  const female = g === 'female' || g === 'f' || g === 'ženski' || g === 'zenski';
+  const locale = options.locale;
+  const company = (options.company || '').trim();
+  const duration = (options.durationPhrase || '').trim();
+  const start = (options.startDate || '').trim();
+  const monthNamesSr: Record<string, string> = {
+    '01': 'januara', '02': 'februara', '03': 'marta', '04': 'aprila',
+    '05': 'maja', '06': 'juna', '07': 'jula', '08': 'avgusta',
+    '09': 'septembra', '10': 'oktobra', '11': 'novembra', '12': 'decembra',
+  };
+  const ym = /^(\d{4})-(\d{2})/.exec(start);
+  const fromClause = ym && monthNamesSr[ym[2]]
+    ? `od ${monthNamesSr[ym[2]]} ${ym[1]}`
+    : '';
+
+  if (locale === 'sr' || locale === 'hr') {
+    const role = ctx.positionClass === 'pharmacist_pharmacy'
+      ? (female ? 'apotekarka' : 'apotekar')
+      : ((options.position || '').trim() || (female ? 'profesionalka' : 'profesionalac'));
+    const employed = female ? 'Zaposlena' : 'Zaposlen';
+    const where = company
+      ? `${employed} kao ${role} u kompaniji ${company}${fromClause ? ` ${fromClause}` : ''}`
+      : `${employed} kao ${role}${fromClause ? ` ${fromClause}` : ''}`;
+    const dur = duration
+      ? (duration.startsWith('sa ') || duration.startsWith('s ') ? duration : `sa ${duration}`)
+      : '';
+    const open = dur ? `${where}, ${dur}.` : `${where}.`;
+    const duties = ctx.positionClass === 'pharmacist_pharmacy' || ctx.industryNorm === 'pharmacy'
+      ? 'Obavlja zadatke u skladu sa standardima farmaceutske delatnosti i vodi računa o tačnosti, organizaciji radnog prostora i profesionalnoj komunikaciji sa klijentima i timom.'
+      : 'Obavlja dodeljene profesionalne zadatke u skladu sa standardima radnog mesta, uz tačnost i profesionalnu komunikaciju u timu.';
+    return scrubOrphanDurationFragments(`${open} ${duties}`.replace(/\s+/g, ' ').trim());
+  }
+
+  if (locale === 'en') {
+    const role = options.position || 'professional';
+    const open = company
+      ? `Working as ${role} at ${company}${duration ? `, ${duration}` : ''}.`
+      : `${role}${duration ? ` ${duration}` : ''}.`;
+    const duties = ctx.positionClass === 'pharmacist_pharmacy' || ctx.industryNorm === 'pharmacy'
+      ? 'Carries out assigned duties in line with pharmacy practice standards, with attention to accuracy, organisation, and professional communication with clients and the team.'
+      : 'Carries out assigned professional duties with accuracy, organisation, and professional team communication.';
+    return `${open} ${duties}`.replace(/\s+/g, ' ').trim();
+  }
+
+  if (locale === 'hi') {
+    const role = options.position || 'पेशेवर';
+    return female
+      ? `मैं ${role} हूँ और फार्मेसी संबंधी मानकों के अनुसार सटीकता, व्यवस्था और पेशेवर संवाद के साथ कार्य करती हूँ।`
+      : `मैं ${role} हूँ और फार्मेसी संबंधी मानकों के अनुसार सटीकता, व्यवस्था और पेशेवर संवाद के साथ कार्य करता हूँ।`;
+  }
+
+  return scrubOrphanDurationFragments(
+    `${options.position || 'Professional'}${duration ? ` ${duration}` : ''}. Carries out assigned professional duties with accuracy and professional communication.`,
+  );
 }

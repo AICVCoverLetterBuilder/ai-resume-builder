@@ -16,6 +16,7 @@ import {
 } from './cv-canonical-facts';
 import {
   buildExperienceDurationSnapshot,
+  formatApproximateDurationPhrase,
   type ExperienceDuration,
   type ExperienceDurationSnapshot,
 } from './cv-experience-duration';
@@ -54,8 +55,13 @@ import { freezeCanonicalExperienceDescription } from './cv-canonical-facts';
 import {
   buildExperienceJobContext,
   buildOccupationAwareExperienceFallback,
+  buildOccupationAwareSummaryFallback,
   candidateConflictsWithJobContext,
+  hasUnsupportedRegulatedPharmacyClaims,
+  isSummaryStaleForJobContext,
   resolveExperienceAiGrounding,
+  scrubOrphanDurationFragments,
+  textLooksLikeCookingDuties,
   type ExperienceJobContext,
 } from './cv-experience-job-context';
 
@@ -432,6 +438,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   ) {
     candidate = '';
   }
+  // Occupation / industry labels alone must never justify regulated pharmacy claims.
+  const userAllowsRegulated = Boolean(
+    grounding?.sourceDescription
+    && hasUnsupportedRegulatedPharmacyClaims(grounding.sourceDescription),
+  );
+  if (
+    candidate.trim()
+    && hasUnsupportedRegulatedPharmacyClaims(candidate)
+    && !userAllowsRegulated
+  ) {
+    candidate = '';
+  }
 
   const first = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
   if (first.ok && candidate.trim()) {
@@ -521,16 +539,23 @@ export function applyFinalizedSummaryToCv(
   cv: CVData,
   locale: Locale,
   finalized: FinalizeCvAiFieldResult,
+  jobContext?: ExperienceJobContext,
 ): CVData {
   if (finalized.blocked || !finalized.countedAsSuccess) return cv;
+  const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+  const ctx = jobContext || buildExperienceJobContext({
+    position: primary?.position || cv.personal?.jobTitle,
+    locale,
+  });
   return acceptValidatedAiContent(cv, {
     locale,
     summary: finalized.text,
     summaryOrigin: finalized.origin as CvSummaryOrigin,
+    jobContext: ctx,
   });
 }
 
-/** Apply finalized bullets into CV. */
+/** Apply finalized bullets into CV. Rebuilds stale AI Summary when occupation changed. */
 export function applyFinalizedBulletsToCv(
   cv: CVData,
   locale: Locale,
@@ -544,13 +569,56 @@ export function applyFinalizedBulletsToCv(
     : finalized.origin === 'ai_repaired'
       ? 'ai_repaired' as const
       : 'ai_generated' as const;
-  return acceptValidatedAiContent(cv, {
+  let next = acceptValidatedAiContent(cv, {
     locale,
     experienceId,
     description: finalized.text,
     descriptionOrigin,
     jobContext,
   });
+
+  const exp = (next.experience || []).find((e) => e.id === experienceId)
+    || (next.experience || [])[0];
+  const ctx = jobContext || buildExperienceJobContext({
+    position: exp?.position || next.personal?.jobTitle,
+    locale,
+  });
+  const summaryText = next.summary || '';
+  const summaryStale = isSummaryStaleForJobContext(summaryText, ctx, {
+    summaryOrigin: next.summaryOrigin,
+    summaryGenerationContextKey: next.summaryGenerationContextKey,
+  }) || textLooksLikeCookingDuties(summaryText);
+
+  if (summaryStale && next.summaryOrigin !== 'user') {
+    const durationSnapshot = buildExperienceDurationSnapshot(next.experience || []);
+    const durationPhrase = formatApproximateDurationPhrase(durationSnapshot.total, locale);
+    const rebuilt = scrubOrphanDurationFragments(
+      buildOccupationAwareSummaryFallback({
+        locale,
+        gender: next.personal?.gender || '',
+        position: exp?.position || next.personal?.jobTitle,
+        industry: ctx.industryNorm,
+        company: exp?.company,
+        startDate: exp?.startDate,
+        durationPhrase,
+        isPresent: exp?.isPresent,
+      }),
+    );
+    next = acceptValidatedAiContent(next, {
+      locale,
+      summary: rebuilt,
+      summaryOrigin: 'deterministic_fallback',
+      jobContext: ctx,
+    });
+  } else if (summaryStale && next.summaryOrigin === 'user') {
+    // Keep user text in state, but clear generation context so export rebuilds safely.
+    next = {
+      ...next,
+      summaryGenerationContextKey: undefined,
+    };
+  }
+
+  return next;
 }
 
 /**

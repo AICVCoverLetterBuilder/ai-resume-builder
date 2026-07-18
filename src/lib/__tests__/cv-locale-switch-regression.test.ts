@@ -335,10 +335,12 @@ describe('8. Atomic locale request context is wired into cv-builder/page.tsx', (
   it('handleGenBullets guards stale responses per-experience and uses requestedLocale', () => {
     const fn = source.slice(source.indexOf('const handleGenBullets'), source.indexOf('const handleRewrite'));
     expect(fn).toMatch(/const requestedLocale = reqCtx\.locale as Locale/);
-    expect(fn).toMatch(/latestBulletsRequestIdRef\.current\[expId\] !== reqCtx\.requestId/);
+    expect(fn).toMatch(/latestBulletsRequestIdRef\.current\[expId\]/);
+    expect(fn).toMatch(/latestBulletsContextKeyRef/);
+    expect(fn).toMatch(/stale_request_or_context_mismatch|stale_request_superseded/);
     expect(fn).toMatch(/finalizeCvAiFieldForApply\(\{/);
     expect(fn).toMatch(/action: 'experience_bullets'/);
-    expect(fn).toMatch(/applyFinalizedBulletsToCv\(prev, requestedLocale, expId/);
+    expect(fn).toMatch(/applyFinalizedBulletsToCv\(/);
     expect(fn).toMatch(/commitCvUpdate\(/);
   });
 

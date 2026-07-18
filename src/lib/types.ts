@@ -116,6 +116,12 @@ export interface CVData {
    * deterministic duration; user-written summaries must not be force-injected.
    */
   summaryOrigin?: CvSummaryOrigin;
+  /**
+   * Job-context identity for the last AI/fallback Summary generation
+   * (same key scheme as Experience). Used to invalidate stale Summary text after
+   * occupation/industry changes without requiring a manual Summary regenerate.
+   */
+  summaryGenerationContextKey?: string;
   experience: WorkExperience[];
   education: Education[];
   skills: string[];

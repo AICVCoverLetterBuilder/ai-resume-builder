@@ -17,7 +17,7 @@ import {
   deterministicLocalizedSummaryFromCanonical,
   localizeCanonicalBulletLine,
 } from './cv-localized-fallback';
-import { buildExperienceDurationSnapshot } from './cv-experience-duration';
+import { buildExperienceDurationSnapshot, formatApproximateDurationPhrase } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
 import {
   textMatchesRequestedFieldLocale,
@@ -34,6 +34,17 @@ import {
   type SemanticDutyKey,
 } from './cv-semantic-duty-facts';
 import { splitExperienceBullets } from './cv-canonical-facts';
+import {
+  buildExperienceJobContext,
+  buildOccupationAwareExperienceFallback,
+  buildOccupationAwareSummaryFallback,
+  filterSemanticDutiesForJobContext,
+  hasGenuineUserExperienceGrounding,
+  hasUnsupportedRegulatedPharmacyClaims,
+  isSummaryStaleForJobContext,
+  scrubOrphanDurationFragments,
+  textLooksLikeCookingDuties,
+} from './cv-experience-job-context';
 
 function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | 'empty' {
   const t = (bullet || '').trim();
@@ -80,12 +91,22 @@ export type ExportReadyDiagnostics = {
     groundingBulletCount: number;
     exportBulletCount: number;
   }>;
-  summaryFactSetSource: 'semantic_duties' | 'modern_provenance' | 'none';
+  summaryFactSetSource: 'semantic_duties' | 'modern_provenance' | 'occupation_generic' | 'none';
   summarySemanticDutyKeys: SemanticDutyKey[];
   summaryInitialValid?: boolean;
   summaryInitialReason?: string;
-  summaryRecoverySource?: 'saved_summary' | 'deterministic_semantic_facts';
+  summaryRecoverySource?: 'saved_summary' | 'deterministic_semantic_facts' | 'occupation_generic_fallback';
   summaryRecoveryReason?: string;
+  /** Non-PII job-context / Summary invalidation diagnostics. */
+  experienceGenerationContextKey?: string;
+  summaryGenerationContextKey?: string;
+  summaryContextMatch?: boolean;
+  staleSummaryExcluded?: boolean;
+  summaryFactKeysBefore?: string[];
+  summaryFactKeysUsed?: string[];
+  occupationGenericFallbackUsed?: boolean;
+  unsupportedRoleSpecificClaimReason?: string;
+  durationCompositionSource?: string;
   stage: ExportReadyStage;
 };
 
@@ -323,10 +344,55 @@ export function prepareExportReadyCv(
   let changed = false;
 
   stage = 'recover_legacy_grounding';
+  const summaryFactKeysBefore: string[] = [];
+  let occupationGenericFallbackUsed = false;
+  let unsupportedRoleSpecificClaimReason: string | undefined;
+  let staleSummaryExcluded = false;
+
   const nextExperience: WorkExperience[] = (cv.experience || []).map((exp) => {
-    const grounding = resolveExperienceSemanticGrounding(exp);
+    const jobCtx = buildExperienceJobContext({
+      position: exp.position || cv.personal?.jobTitle,
+      locale: requestedLocale,
+    });
+    let grounding = resolveExperienceSemanticGrounding(exp);
+    summaryFactKeysBefore.push(...semanticDutyKeys(grounding));
+    const filteredDuties = filterSemanticDutiesForJobContext(grounding.duties, jobCtx);
+    if (filteredDuties.length !== grounding.duties.length) {
+      grounding = {
+        ...grounding,
+        duties: filteredDuties,
+        source: filteredDuties.length > 0 ? grounding.source : 'none',
+      };
+    }
     groundingById.set(exp.id, grounding);
     recoveryInvoked = true;
+
+    let description = exp.description;
+    const cookingConflict = textLooksLikeCookingDuties(description || '')
+      && jobCtx.positionClass !== 'baker_food'
+      && jobCtx.positionClass !== 'hospitality_service'
+      && jobCtx.industryNorm !== 'hospitality';
+    const userAllowsRegulated = hasGenuineUserExperienceGrounding(exp)
+      && hasUnsupportedRegulatedPharmacyClaims(
+        exp.originalUserDescription || exp.canonicalDescription || '',
+      );
+    const regulatedConflict = hasUnsupportedRegulatedPharmacyClaims(description || '')
+      && !userAllowsRegulated
+      && (jobCtx.positionClass === 'pharmacist_pharmacy' || jobCtx.industryNorm === 'pharmacy');
+
+    if (cookingConflict || regulatedConflict) {
+      description = buildOccupationAwareExperienceFallback({
+        locale: requestedLocale,
+        gender,
+        position: exp.position,
+        industry: jobCtx.industryNorm,
+        isPresent: exp.isPresent,
+      });
+      occupationGenericFallbackUsed = true;
+      if (cookingConflict) unsupportedRoleSpecificClaimReason = 'stale_cooking_duties_excluded';
+      if (regulatedConflict) unsupportedRoleSpecificClaimReason = 'unsupported_regulated_pharmacy_claim';
+      changed = true;
+    }
 
     if (grounding.source === 'legacy_recovered_display_duties' && grounding.duties.length > 0) {
       const shells = internalShellsFromSemanticDuties(grounding.duties);
@@ -338,30 +404,24 @@ export function prepareExportReadyCv(
         changed = true;
         return {
           ...exp,
-          // Internal grounding only — keep visible Hindi display unchanged.
           originalUserDescription: shells,
           canonicalDescription: shells,
           groundingRecoverySource: LEGACY_RECOVERED_DISPLAY_DUTIES,
           descriptionOrigin: exp.descriptionOrigin || 'ai_generated',
-          description: exp.description,
+          description,
           recoveredSemanticDuties: grounding.duties,
         } as WorkExperience;
       }
       return {
         ...exp,
-        recoveredSemanticDuties: grounding.duties,
-      } as WorkExperience;
-    }
-
-    if (grounding.source === 'modern_provenance') {
-      return {
-        ...exp,
+        description,
         recoveredSemanticDuties: grounding.duties,
       } as WorkExperience;
     }
 
     return {
       ...exp,
+      description,
       recoveredSemanticDuties: grounding.duties,
     } as WorkExperience;
   });
@@ -374,20 +434,58 @@ export function prepareExportReadyCv(
     (exp.description || '').trim() || (exp.generatedDescription || '').trim(),
   ));
   const allKeys = [...groundingById.values()].flatMap((g) => semanticDutyKeys(g));
-  if (hadDisplay && allKeys.length === 0) {
+  const hasContextSafeEmptyDutyDisplay = (cv.experience || []).some((exp) => {
+    const jobCtx = buildExperienceJobContext({
+      position: exp.position || cv.personal?.jobTitle,
+      locale: requestedLocale,
+    });
+    const desc = (exp.description || '').trim();
+    if (!desc) return false;
+    if (
+      textLooksLikeCookingDuties(desc)
+      && jobCtx.positionClass !== 'baker_food'
+      && jobCtx.positionClass !== 'hospitality_service'
+      && jobCtx.industryNorm !== 'hospitality'
+    ) {
+      return false;
+    }
+    if (
+      hasUnsupportedRegulatedPharmacyClaims(desc)
+      && !hasGenuineUserExperienceGrounding(exp)
+    ) {
+      return false;
+    }
+    const contextOk = Boolean(
+      exp.generationJobContextKey
+      && exp.generationJobContextKey === jobCtx.key,
+    );
+    const fallbackOrigin = exp.descriptionOrigin === 'deterministic_fallback';
+    if (!contextOk && !fallbackOrigin && !occupationGenericFallbackUsed) return false;
+    return experienceBulletsMatchRequestedLocale(desc, requestedLocale, cv);
+  });
+  if (
+    hadDisplay
+    && allKeys.length === 0
+    && !occupationGenericFallbackUsed
+    && !hasContextSafeEmptyDutyDisplay
+  ) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
     diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
     return fail('legacy_export_recovery_no_safe_duties', stage, diagnostics);
   }
 
   stage = 'produce_localized_display';
-  // requestedLocale is authoritative for the final exported display projection.
   cv = {
     ...cv,
     experience: (cv.experience || []).map((exp) => {
       const grounding = groundingById.get(exp.id) || { source: 'none' as const, duties: [] };
+      if (grounding.duties.length === 0) {
+        // Occupation-generic or already-safe display — keep as-is.
+        return exp;
+      }
       const projected = projectExperienceDisplayFromSemanticDuties(
         exp,
         grounding,
@@ -418,12 +516,23 @@ export function prepareExportReadyCv(
   );
 
   stage = 'construct_summary_fact_set';
-  const { factSet, source: factSource, keys: summaryKeys } = buildSemanticSummaryFactSet(cv, groundingById);
-  if (hadDisplay && summaryKeys.length === 0) {
+  const { factSet, source: factSourceRaw, keys: summaryKeys } = buildSemanticSummaryFactSet(cv, groundingById);
+  let factSource: ExportReadyDiagnostics['summaryFactSetSource'] = summaryKeys.length === 0 && (
+    occupationGenericFallbackUsed || hasContextSafeEmptyDutyDisplay
+  )
+    ? 'occupation_generic'
+    : factSourceRaw;
+  if (
+    hadDisplay
+    && summaryKeys.length === 0
+    && !occupationGenericFallbackUsed
+    && !hasContextSafeEmptyDutyDisplay
+  ) {
     const diagnostics = baseDiagnostics();
     diagnostics.recoveryInvoked = recoveryInvoked;
     diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
     diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
     return fail('summary_fact_set_missing_recovered_duties', stage, diagnostics);
   }
 
@@ -432,8 +541,26 @@ export function prepareExportReadyCv(
     options?.referenceDate ?? new Date(),
   );
 
+  const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+  const primaryJobCtx = buildExperienceJobContext({
+    position: primaryExp?.position || cv.personal?.jobTitle,
+    locale: requestedLocale,
+  });
+  const summaryContextMatch = Boolean(
+    cv.summaryGenerationContextKey
+    && cv.summaryGenerationContextKey === primaryJobCtx.key,
+  );
+  const summaryStale = isSummaryStaleForJobContext(cv.summary || '', primaryJobCtx, {
+    summaryOrigin: cv.summaryOrigin,
+    summaryGenerationContextKey: cv.summaryGenerationContextKey,
+  }) || (
+    textLooksLikeCookingDuties(cv.summary || '')
+    && primaryJobCtx.positionClass !== 'baker_food'
+    && primaryJobCtx.positionClass !== 'hospitality_service'
+  );
+
   stage = 'validate_summary';
-  const initialSummaryValidation = validateSummaryExportCandidate(
+  let initialSummaryValidation = validateSummaryExportCandidate(
     cv.summary || '',
     factSet,
     requestedLocale,
@@ -443,22 +570,81 @@ export function prepareExportReadyCv(
     cv,
     durationSnapshot.total,
   );
+  if (summaryStale) {
+    staleSummaryExcluded = true;
+    initialSummaryValidation = {
+      valid: false,
+      reason: 'stale_summary_job_context',
+      violations: ['stale_summary_job_context'],
+    };
+  }
 
   let summaryRecoverySource: ExportReadyDiagnostics['summaryRecoverySource'] = 'saved_summary';
   let summaryRecoveryReason: string | undefined;
+  let durationCompositionSource = 'saved_summary';
+
+  const rebuildOccupationSummary = (): string => {
+    const durationPhrase = formatApproximateDurationPhrase(durationSnapshot.total, requestedLocale);
+    durationCompositionSource = 'occupation_aware_summary_fallback';
+    return scrubOrphanDurationFragments(
+      buildOccupationAwareSummaryFallback({
+        locale: requestedLocale,
+        gender,
+        position: primaryExp?.position || cv.personal?.jobTitle,
+        industry: primaryJobCtx.industryNorm,
+        company: primaryExp?.company,
+        startDate: primaryExp?.startDate,
+        durationPhrase,
+        isPresent: primaryExp?.isPresent,
+      }),
+    );
+  };
 
   if (!initialSummaryValidation.valid) {
     stage = 'recover_summary';
-    const recovered = deterministicLocalizedSummaryFromCanonical(
-      factSet,
-      requestedLocale,
-      gender,
-      durationSnapshot.total,
-    );
-    summaryRecoverySource = 'deterministic_semantic_facts';
+    let recovered = '';
+    if (summaryKeys.length > 0 && !summaryStale) {
+      recovered = deterministicLocalizedSummaryFromCanonical(
+        factSet,
+        requestedLocale,
+        gender,
+        durationSnapshot.total,
+      );
+      summaryRecoverySource = 'deterministic_semantic_facts';
+      durationCompositionSource = 'deterministic_semantic_facts';
+    }
+    if (
+      !recovered
+      || summaryStale
+      || summaryKeys.length === 0
+      || (
+        textLooksLikeCookingDuties(recovered)
+        && primaryJobCtx.positionClass !== 'baker_food'
+        && primaryJobCtx.positionClass !== 'hospitality_service'
+        && primaryJobCtx.industryNorm !== 'hospitality'
+      )
+    ) {
+      recovered = rebuildOccupationSummary();
+      summaryRecoverySource = 'occupation_generic_fallback';
+      occupationGenericFallbackUsed = true;
+      factSource = 'occupation_generic';
+    }
     const recoveryValidation = validateSummaryExportCandidate(
       recovered,
-      factSet,
+      // Occupation-generic summaries ground on role/duration, not cooking shells.
+      summaryRecoverySource === 'occupation_generic_fallback'
+        ? buildCvCanonicalFactSet({
+          ...cv,
+          experience: (cv.experience || []).map((e) => ({
+            ...e,
+            description: e.description,
+            originalUserDescription: undefined,
+            canonicalDescription: undefined,
+          })),
+          summary: '',
+          canonicalSummary: '',
+        })
+        : factSet,
       requestedLocale,
       gender,
       (cv.canonicalSummary || '').trim(),
@@ -467,13 +653,24 @@ export function prepareExportReadyCv(
       durationSnapshot.total,
     );
     summaryRecoveryReason = recoveryValidation.reason;
-    if (recovered && recoveryValidation.valid) {
+    // Occupation-generic rebuild is authoritative after context change even when
+    // semantic validator is strict about missing duty shells.
+    const acceptOccupationGeneric = summaryRecoverySource === 'occupation_generic_fallback'
+      && Boolean(recovered.trim())
+      && !textLooksLikeCookingDuties(recovered)
+      && textMatchesRequestedFieldLocale(recovered, requestedLocale, 'summary', structuredExemptions(cv));
+    if ((recovered && recoveryValidation.valid) || acceptOccupationGeneric) {
       cv = {
         ...cv,
         summary: recovered,
         summaryOrigin: 'deterministic_fallback',
         contentLocale: requestedLocale,
         summaryGeneratedLocale: requestedLocale,
+        summaryGenerationContextKey: primaryJobCtx.key,
+        // Do not keep a cooking canonical Summary as authoritative after occupation change.
+        canonicalSummary: textLooksLikeCookingDuties(cv.canonicalSummary || '')
+          ? undefined
+          : cv.canonicalSummary,
       };
     } else {
       const diagnostics = baseDiagnostics();
@@ -486,14 +683,17 @@ export function prepareExportReadyCv(
       diagnostics.summaryInitialReason = initialSummaryValidation.reason;
       diagnostics.summaryRecoverySource = summaryRecoverySource;
       diagnostics.summaryRecoveryReason = summaryRecoveryReason;
+      diagnostics.staleSummaryExcluded = staleSummaryExcluded;
+      diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
+      diagnostics.summaryFactKeysUsed = summaryKeys;
       return fail('summary_validation_failed_after_recovery', stage, diagnostics);
     }
   } else {
-    // Valid text with possibly stale metadata — normalize export-snapshot locales.
     cv = {
       ...cv,
       contentLocale: requestedLocale,
       summaryGeneratedLocale: requestedLocale,
+      summaryGenerationContextKey: cv.summaryGenerationContextKey || primaryJobCtx.key,
     };
   }
 
@@ -503,7 +703,10 @@ export function prepareExportReadyCv(
     referenceDate: options?.referenceDate || durationSnapshot.referenceDateIso,
     summaryOrigin: cv.summaryOrigin,
   });
-  cv = quality.cv;
+  cv = {
+    ...quality.cv,
+    summary: scrubOrphanDurationFragments(quality.cv.summary || ''),
+  };
 
   // Enforce: quality must not restore English padding over projected display.
   cv = {
@@ -522,7 +725,6 @@ export function prepareExportReadyCv(
       if (grounding?.source === 'legacy_recovered_display_duties' && preserved) {
         return { ...exp, description: preserved };
       }
-      // Modern provenance / semantic projection: never let quality reintroduce English.
       if (
         preserved
         && experienceBulletsMatchRequestedLocale(preserved, requestedLocale, cv)
@@ -531,7 +733,6 @@ export function prepareExportReadyCv(
       }
       return exp;
     }),
-    // Quality must not reintroduce stale Summary locale metadata.
     contentLocale: requestedLocale,
     summaryGeneratedLocale: requestedLocale,
   };
@@ -553,10 +754,22 @@ export function prepareExportReadyCv(
   }
 
   stage = 'validate_locale_integrity';
-  // Re-check Experience projection after quality.
   for (const exp of cv.experience || []) {
     const grounding = groundingById.get(exp.id);
-    if (!grounding || grounding.duties.length === 0) continue;
+    if (!grounding || grounding.duties.length === 0) {
+      // Occupation-generic Experience still must match requested locale.
+      if (
+        (exp.description || '').trim()
+        && !experienceBulletsMatchRequestedLocale(exp.description || '', requestedLocale, cv)
+      ) {
+        const diagnostics = baseDiagnostics();
+        diagnostics.recoveryInvoked = recoveryInvoked;
+        diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+        diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+        return fail('localized_display_projection_incomplete', 'produce_localized_display', diagnostics);
+      }
+      continue;
+    }
     if (!experienceBulletsMatchRequestedLocale(exp.description || '', requestedLocale, cv)) {
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
@@ -575,7 +788,6 @@ export function prepareExportReadyCv(
   const localeCheck = validateFinalLocalizedCvFields(cv, requestedLocale);
   if (!localeCheck.valid) {
     const first = localeCheck.violations[0];
-    // English padding in Hindi experience is a projection wiring bug, not content grounding.
     if (first.path.includes('experience') && first.kind === 'mixed_locale_field') {
       const diagnostics = baseDiagnostics();
       diagnostics.recoveryInvoked = recoveryInvoked;
@@ -624,8 +836,20 @@ export function prepareExportReadyCv(
     summaryInitialReason: initialSummaryValidation.reason,
     summaryRecoverySource,
     summaryRecoveryReason,
+    experienceGenerationContextKey: primaryExp?.generationJobContextKey,
+    summaryGenerationContextKey: cv.summaryGenerationContextKey || primaryJobCtx.key,
+    summaryContextMatch: Boolean(
+      (cv.summaryGenerationContextKey || primaryJobCtx.key) === primaryJobCtx.key,
+    ) && !staleSummaryExcluded,
+    staleSummaryExcluded,
+    summaryFactKeysBefore: [...new Set(summaryFactKeysBefore)],
+    summaryFactKeysUsed: summaryKeys,
+    occupationGenericFallbackUsed,
+    unsupportedRoleSpecificClaimReason,
+    durationCompositionSource,
     stage,
   };
+  void summaryContextMatch;
 
   return { ok: true, cv, diagnostics };
 }
@@ -695,8 +919,11 @@ export function prepareLegacyRecoveredFinalLocaleSafeCv(
       recoveredDutyKeys: result.diagnostics.summarySemanticDutyKeys,
       summaryInitialReason: result.diagnostics.summaryInitialReason,
       summaryRecoverySource: result.diagnostics.summaryRecoverySource === 'deterministic_semantic_facts'
+        || result.diagnostics.summaryRecoverySource === 'occupation_generic_fallback'
         ? 'deterministic_authoritative_facts'
-        : result.diagnostics.summaryRecoverySource,
+        : result.diagnostics.summaryRecoverySource === 'saved_summary'
+          ? 'saved_summary'
+          : undefined,
       summaryRecoveryReason: result.diagnostics.summaryRecoveryReason,
     },
   };

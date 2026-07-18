@@ -26,6 +26,7 @@ import {
   resolveExperienceGroundingDescription,
 } from './cv-experience-provenance';
 import type { CvExperienceDescriptionOrigin } from './types';
+import { buildExperienceJobContext } from './cv-experience-job-context';
 
 export type CanonicalCreatedFrom =
   | 'user_structured_input'
@@ -674,12 +675,21 @@ export function acceptValidatedAiContent(
       return cv;
     }
     // AI may update visible summary only — never promote into canonicalSummary.
+    const primary = (next.experience || []).find((e) => e.isPresent) || (next.experience || [])[0];
+    const summaryJobKey = options.jobContext?.key
+      || buildExperienceJobContext({
+        position: primary?.position || next.personal?.jobTitle,
+        locale: options.locale,
+      }).key;
     next = {
       ...next,
       summary: options.summary,
       summaryOrigin: options.summaryOrigin || 'ai_generated',
       contentLocale: options.locale,
       summaryGeneratedLocale: options.locale,
+      summaryGenerationContextKey: options.summaryOrigin === 'user'
+        ? undefined
+        : summaryJobKey,
     };
   }
   if (
