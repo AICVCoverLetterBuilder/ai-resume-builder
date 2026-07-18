@@ -14,6 +14,9 @@ import { splitExperienceBullets } from './cv-canonical-facts';
 import { getApiBaseUrl } from './api';
 import type { AiGroundingResolution } from './cv-experience-job-context';
 import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
+import {
+  experienceAiSourcesEquivalent,
+} from './cv-experience-ai-operation-snapshot';
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const EXPERIENCE_AI_DIAG_STORAGE_KEY = 'cvpro-experience-ai-diag-v1';
@@ -120,6 +123,15 @@ export type ExperienceAiDiagnosticTrace = {
   selectedSourceHash: string;
   rejectedStaleSourceKinds: ExperienceSelectedSourceKind[];
   englishSourceStillAuthoritative: boolean;
+  /** Explicit replacement for the misnamed englishSourceStillAuthoritative flag. */
+  staleForeignLocaleSourceAuthoritative: boolean;
+  selectedSourceLanguage: string | null;
+  selectedSourceScript: string | null;
+  liveTextSelected: boolean;
+  selectedSourceMatchesLiveNormalized: boolean;
+  selectedSourceDiffReason: string | null;
+  canonicalFormattingOnlyDifference: boolean;
+  operationSnapshotSourceKind: ExperienceSelectedSourceKind | null;
   currentTextareaIgnoredOrOverridden: boolean;
   liveTextHash: string;
   selectedSourceMatchesLiveText: boolean;
@@ -295,6 +307,14 @@ export function diagnoseExperienceSourceSelection(
   | 'selectedSourceHash'
   | 'rejectedStaleSourceKinds'
   | 'englishSourceStillAuthoritative'
+  | 'staleForeignLocaleSourceAuthoritative'
+  | 'selectedSourceLanguage'
+  | 'selectedSourceScript'
+  | 'liveTextSelected'
+  | 'selectedSourceMatchesLiveNormalized'
+  | 'selectedSourceDiffReason'
+  | 'canonicalFormattingOnlyDifference'
+  | 'operationSnapshotSourceKind'
   | 'currentTextareaIgnoredOrOverridden'
   | 'liveTextHash'
   | 'selectedSourceMatchesLiveText'
@@ -317,11 +337,13 @@ export function diagnoseExperienceSourceSelection(
     }
   }
 
-  // Prefer reporting equivalence when selected text equals the live field.
   const textarea = (exp.description || '').trim();
   const textareaHash = fingerprintText(textarea);
+  const equivalentNormalized = Boolean(
+    textarea && selected && experienceAiSourcesEquivalent(textarea, selected),
+  );
   const selectedSourceMatchesLiveText = Boolean(
-    textarea && selected && textareaHash === selectedHash,
+    textarea && selected && (textareaHash === selectedHash || equivalentNormalized),
   );
 
   const rejectedStaleSourceKinds = [...new Set(
@@ -330,39 +352,88 @@ export function diagnoseExperienceSourceSelection(
       .map((c) => c.kind),
   )];
 
-  // Selecting current-context canonical that is materially identical to the live
-  // textarea is NOT ignoring/overriding the textarea.
+  // Formatting-only differences (bullets / CRLF) are NOT overrides.
   const currentTextareaIgnoredOrOverridden = Boolean(
     textarea
     && selected
+    && !equivalentNormalized
     && textareaHash !== selectedHash,
   );
 
   const selectedScript = classifyExperienceScript(selected);
-  const englishSourceStillAuthoritative = Boolean(
+  const liveScript = classifyExperienceScript(textarea);
+  // Serbian Latin must never be reported as "English authoritative".
+  const staleForeignLocaleSourceAuthoritative = Boolean(
     currentTextareaIgnoredOrOverridden
     && selected
-    && (selectedScript === 'latin')
-    && (
-      classifyExperienceScript(textarea) === 'latin_diacritic'
-      || classifyExperienceScript(textarea) === 'cyrillic'
-      || classifyExperienceScript(textarea) === 'devanagari'
-      || classifyExperienceScript(textarea) === 'arabic'
-      || classifyExperienceScript(textarea) === 'cjk'
-    ),
+    && selectedScript === 'latin'
+    && liveScript !== 'latin'
+    && liveScript !== 'latin_diacritic'
+    && liveScript !== 'empty'
+    && liveScript !== 'other',
   );
+  const englishSourceStillAuthoritative = staleForeignLocaleSourceAuthoritative;
+
+  let selectedSourceLanguage: string | null = null;
+  let selectedSourceScript: string | null = null;
+  const localeHint = inferLocaleHintFromScript(selectedScript, options?.requestedLocale);
+  if (localeHint?.includes('|')) {
+    const [lang, script] = localeHint.split('|');
+    selectedSourceLanguage = lang || null;
+    selectedSourceScript = script || null;
+  } else if (localeHint === 'hi') {
+    selectedSourceLanguage = 'hi';
+    selectedSourceScript = 'devanagari';
+  } else if (selectedScript === 'latin_diacritic') {
+    selectedSourceLanguage = options?.requestedLocale || 'sr';
+    selectedSourceScript = 'latin';
+  } else if (selectedScript === 'latin') {
+    // Latin without diacritics under sr request is still Serbian when live matched.
+    selectedSourceLanguage = options?.requestedLocale || 'en';
+    selectedSourceScript = 'latin';
+  }
+
+  const canonical = (exp.canonicalDescription || '').trim();
+  const canonicalFormattingOnlyDifference = Boolean(
+    textarea
+    && canonical
+    && experienceAiSourcesEquivalent(textarea, canonical)
+    && textarea !== canonical,
+  );
+
+  let selectedSourceDiffReason: string | null = null;
+  if (!textarea) selectedSourceDiffReason = 'live_empty';
+  else if (equivalentNormalized && textareaHash !== selectedHash) {
+    selectedSourceDiffReason = 'canonical_formatting_only';
+  } else if (currentTextareaIgnoredOrOverridden) {
+    selectedSourceDiffReason = staleForeignLocaleSourceAuthoritative
+      ? 'foreign_locale_override'
+      : 'material_content';
+  } else {
+    selectedSourceDiffReason = 'none';
+  }
 
   return {
     selectedSourceKind,
-    selectedSourceLocale: inferLocaleHintFromScript(selectedScript, options?.requestedLocale),
+    selectedSourceLocale: localeHint,
     selectedSourceHash: selectedHash,
     rejectedStaleSourceKinds,
     englishSourceStillAuthoritative,
+    staleForeignLocaleSourceAuthoritative,
+    selectedSourceLanguage,
+    selectedSourceScript,
+    liveTextSelected: selectedSourceKind === 'currentTextarea'
+      || selectedSourceKind === 'liveUserDescription'
+      || (equivalentNormalized && !currentTextareaIgnoredOrOverridden),
+    selectedSourceMatchesLiveNormalized: equivalentNormalized,
+    selectedSourceDiffReason,
+    canonicalFormattingOnlyDifference,
+    operationSnapshotSourceKind: selectedSourceKind,
     currentTextareaIgnoredOrOverridden,
     liveTextHash: textarea ? textareaHash : 'empty',
     selectedSourceMatchesLiveText,
     selectedSourceMateriallyDiffersFromLiveText: currentTextareaIgnoredOrOverridden,
-    selectedSourceEquivalentToLiveText: selectedSourceMatchesLiveText,
+    selectedSourceEquivalentToLiveText: equivalentNormalized || selectedSourceMatchesLiveText,
     selectedSourceContextCurrent: groundingSource !== 'excluded_stale',
   };
 }
@@ -434,6 +505,14 @@ export class ExperienceAiDiagnosticSession {
       selectedSourceHash: 'empty',
       rejectedStaleSourceKinds: [],
       englishSourceStillAuthoritative: false,
+      staleForeignLocaleSourceAuthoritative: false,
+      selectedSourceLanguage: null,
+      selectedSourceScript: null,
+      liveTextSelected: false,
+      selectedSourceMatchesLiveNormalized: false,
+      selectedSourceDiffReason: null,
+      canonicalFormattingOnlyDifference: false,
+      operationSnapshotSourceKind: null,
       currentTextareaIgnoredOrOverridden: false,
       liveTextHash: 'empty',
       selectedSourceMatchesLiveText: false,

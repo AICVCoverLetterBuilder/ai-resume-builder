@@ -217,16 +217,28 @@ export function sanitizeSummaryListMarkers(summary: string): string {
     .trim();
 }
 
-/** Split authoritative Experience text into ordered source duty units. */
+/**
+ * Split authoritative Experience text into ordered source duty units.
+ * Accepts plain textarea lines, bullet-formatted canonical, CRLF, and
+ * concatenated sentences without whitespace after terminal punctuation
+ * (Android soft-wrap / lost-newline shape: length == sum of unit lengths).
+ */
 export function extractSourceDutyUnits(description: string): string[] {
   let units = splitExperienceBullets(description || '')
     .map((l) => stripDutyListPrefix(l))
     .filter(Boolean);
   if (units.length <= 1 && (description || '').trim()) {
-    const block = stripDutyListPrefix(description || '');
+    const block = stripDutyListPrefix(
+      (description || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .trim(),
+    );
+    // Prefer whitespace after terminator; also allow zero-width gap before a
+    // new capital-letter duty (build-263 live 183-char concatenated form).
     const sentenced = block
-      .split(/(?<=[.!?।])\s+/)
-      .map((p) => stripDutyListPrefix(p))
+      .split(/(?<=[.!?।])\s*(?=[A-ZČĆŽŠĐА-ЯЁІЇЄĞÜÖÄ\u0900-\u097F])/u)
+      .map((p) => stripDutyListPrefix(p.trim()))
       .filter((p) => p.length > 8);
     if (sentenced.length > 1) units = sentenced;
     else if (block) units = [block];
@@ -430,6 +442,14 @@ export type ProvenancedFallbackBullet = {
   transformationKind: DeterministicFallbackTransformationKind;
   locale: Locale;
   tenseMode: 'present' | 'past';
+  operationSnapshotId?: string;
+  materialClauses?: string[];
+  preservationChecks?: {
+    materialPreserved: boolean;
+    clausePreserved: boolean;
+    unsupportedAddition: boolean;
+    duplicate: boolean;
+  };
 };
 
 export type ProvenancedDeterministicFallback = {
@@ -487,10 +507,18 @@ export function deterministicBulletPreservesSourceUnit(
  * Validate deterministic fallback using explicit source-unit provenance.
  * Does not rediscover mappings via weak global token overlap alone.
  * Provider/server output must continue using validateSourceFactIdentityCoverage.
+ *
+ * When `expectedOperationSnapshotId` is set, bullets whose snapshot id differs
+ * are rejected (prevents mixing identities across representations).
  */
 export function validateProvenancedDeterministicFallbackCoverage(
   sourceDescription: string,
   provenanced: ProvenancedFallbackBullet[],
+  options?: {
+    expectedOperationSnapshotId?: string;
+    /** Per-fact rejection diagnostics (non-PII). */
+    onFactResult?: (row: ProvenancedFactCoverageDiag) => void;
+  },
 ): SourceFactIdentityCoverage {
   const required = sourceFactIdentitiesFromDescription(sourceDescription);
   const requiredIds = required.map((r) => r.id);
@@ -501,24 +529,58 @@ export function validateProvenancedDeterministicFallbackCoverage(
   const usedFactIds = new Set<string>();
   const coveredIds: string[] = [];
   const candidateText = provenanced.map((b) => b.text).filter(Boolean).join('\n');
+  const expectedSnap = options?.expectedOperationSnapshotId;
 
-  for (const bullet of provenanced) {
+  for (let bulletIndex = 0; bulletIndex < provenanced.length; bulletIndex += 1) {
+    const bullet = provenanced[bulletIndex];
     if (!bullet.text.trim()) continue;
     const mapped = bullet.sourceFactIds.filter((id) => requiredIds.includes(id));
-    if (!mapped.length) continue;
-    // One bullet may only cover its own mapped source fact(s) from a single unit.
-    if (mapped.length !== 1) {
-      continue;
+    const sourceIdentity = mapped.length === 1
+      ? required.find((r) => r.id === mapped[0])
+      : undefined;
+    const snapshotMatch = !expectedSnap
+      || !bullet.operationSnapshotId
+      || bullet.operationSnapshotId === expectedSnap;
+    let rejectionReason: string | undefined;
+    let covered = false;
+
+    if (!mapped.length) {
+      rejectionReason = 'source_fact_id_not_in_required_set';
+    } else if (mapped.length !== 1) {
+      rejectionReason = 'multiple_source_fact_ids_on_one_bullet';
+    } else if (!snapshotMatch) {
+      rejectionReason = 'operation_snapshot_id_mismatch';
+    } else if (usedFactIds.has(mapped[0])) {
+      rejectionReason = 'duplicate_source_fact_id_mapping';
+    } else if (!sourceIdentity) {
+      rejectionReason = 'source_identity_missing';
+    } else if (!deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)) {
+      rejectionReason = 'material_or_clause_preservation_failed';
+    } else {
+      usedFactIds.add(mapped[0]);
+      coveredIds.push(mapped[0]);
+      covered = true;
     }
-    const factId = mapped[0];
-    if (usedFactIds.has(factId)) continue;
-    const sourceIdentity = required.find((r) => r.id === factId);
-    if (!sourceIdentity) continue;
-    if (!deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)) {
-      continue;
-    }
-    usedFactIds.add(factId);
-    coveredIds.push(factId);
+
+    options?.onFactResult?.({
+      requiredSourceFactId: mapped[0] || requiredIds[bulletIndex] || '',
+      parentSourceUnitId: bullet.sourceUnitId,
+      fallbackBulletIndex: bulletIndex,
+      fallbackMappedSourceUnitId: bullet.sourceUnitId,
+      fallbackMappedSourceFactIds: bullet.sourceFactIds,
+      operationSnapshotIdMatch: snapshotMatch,
+      transformationKind: bullet.transformationKind,
+      materialPreservationResult: sourceIdentity
+        ? deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)
+        : false,
+      clausePreservationResult: sourceIdentity
+        ? deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)
+        : false,
+      unsupportedAdditionResult: false,
+      duplicateResult: Boolean(mapped[0] && usedFactIds.has(mapped[0]) && !covered),
+      finalCovered: covered,
+      rejectionReason,
+    });
   }
 
   const dup = validateDistinctExperienceBullets(candidateText);
@@ -544,6 +606,22 @@ export function validateProvenancedDeterministicFallbackCoverage(
     reason: ok ? undefined : 'experience_material_fact_coverage_incomplete',
   };
 }
+
+export type ProvenancedFactCoverageDiag = {
+  requiredSourceFactId: string;
+  parentSourceUnitId: string;
+  fallbackBulletIndex: number;
+  fallbackMappedSourceUnitId: string;
+  fallbackMappedSourceFactIds: string[];
+  operationSnapshotIdMatch: boolean;
+  transformationKind: string;
+  materialPreservationResult: boolean;
+  clausePreservationResult: boolean;
+  unsupportedAdditionResult: boolean;
+  duplicateResult: boolean;
+  finalCovered: boolean;
+  rejectionReason?: string;
+};
 
 export type SummarySourceFactCoverage = {
   ok: boolean;

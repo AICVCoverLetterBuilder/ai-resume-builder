@@ -127,8 +127,9 @@ export function splitExperienceBullets(description: string): string[] {
   };
   const sentenced: string[] = [];
   for (const unit of expanded) {
+    // `\s*` allows Android concatenated duties with no space after periods.
     const parts = unit
-      .split(/(?<=[.!?।])\s+(?=[A-ZČĆŽŠĐА-ЯЁІЇЄĞÜÖÄ\u0900-\u097F])/u)
+      .split(/(?<=[.!?।])\s*(?=[A-ZČĆŽŠĐА-ЯЁІЇЄĞÜÖÄ\u0900-\u097F])/u)
       .map((p) => stripPrefix(p).trim())
       .filter((p) => p.length > 8);
     if (parts.length > 1 && parts.every(looksLikeStandaloneDuty)) {

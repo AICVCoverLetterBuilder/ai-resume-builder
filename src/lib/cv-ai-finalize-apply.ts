@@ -13,6 +13,7 @@ import {
   buildCvCanonicalFactSet,
   bulletsForExperience,
   freezeExperienceAiDescription,
+  formatExperienceBullets,
   splitExperienceBullets,
   type CvCanonicalFactSet,
 } from './cv-canonical-facts';
@@ -75,6 +76,7 @@ import {
   materialDutyKeysFromDescription,
   validateExperienceApplyMaterialPostcondition,
 } from './cv-material-duty-coverage';
+import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
 
 export type CvAiFinalizeAction =
   | 'summary_generate'
@@ -108,6 +110,11 @@ export type FinalizeCvAiFieldInput = {
   level?: string;
   /** Precomputed job context; when omitted it is derived from position/industry/locale/level. */
   jobContext?: ExperienceJobContext;
+  /**
+   * Immutable Experience AI operation snapshot created at button press.
+   * When present, source facts / fallback provenance must use this only.
+   */
+  operationSnapshot?: ExperienceAiOperationSnapshot;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -472,9 +479,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const factSet = buildCvCanonicalFactSet(cvForFacts);
   // After occupation/context exclusion, never re-read live/canonical cooking via
   // freezeExperienceAiDescription — that would resurrect stale FACT LOCK duties.
+  const snapshot = input.operationSnapshot;
   const dutiesText = grounding?.staleGeneratedContentExcluded
     ? ''
-    : (grounding?.sourceDescription
+    : (snapshot?.normalizedSourceText
+      || grounding?.sourceDescription
       || dutiesTextFromCv(cvForFacts, input.experienceId));
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: cv.personal?.jobTitle,
@@ -483,9 +492,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   });
   const roleDutyConflict = consistency.conflict;
   const canonical = bulletsForExperience(factSet, experienceIndex);
-  const sourceForCoverage = dutiesText.trim()
+  const sourceForCoverage = (snapshot?.normalizedSourceText || dutiesText).trim()
     || canonical.map((f) => f.sourceText || f.value).join('\n');
-  const sourceUnits = extractSourceDutyUnits(sourceForCoverage);
+  const sourceUnits = snapshot?.units.length
+    ? snapshot.units.map((u) => u.rawUnit)
+    : extractSourceDutyUnits(sourceForCoverage);
   const sourceFactCount = sourceUnits.length;
   const providerBulletCount = splitExperienceBullets(input.candidate || '').filter(Boolean).length;
 
@@ -721,19 +732,35 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       sourceForCoverage,
       locale,
       gender,
-      { isPresent },
+      {
+        isPresent,
+        operationSnapshotId: snapshot?.operationSnapshotId,
+        snapshotUnits: snapshot?.units.map((u) => ({
+          rawUnit: u.rawUnit,
+          sourceUnitId: u.sourceUnitId,
+          sourceFactIds: u.sourceFactIds,
+          operationSnapshotId: u.operationSnapshotId,
+        })),
+      },
     );
-    const preserved = normalizeLocaleText(built.text || '', locale);
-    const normalizedLines = splitExperienceBullets(preserved);
+    // Keep typed provenance through locale/tense post-processing — only refresh
+    // display text per index; never drop sourceUnitId / operationSnapshotId.
+    const preservedLines = built.bullets.map((b) =>
+      normalizeLocaleText(b.text || '', locale).trim());
     const alignedProvenance = built.bullets.map((b, i) => ({
       ...b,
-      text: (normalizedLines[i] || b.text).trim(),
+      text: (preservedLines[i] || b.text).trim(),
+      operationSnapshotId: b.operationSnapshotId || snapshot?.operationSnapshotId,
     }));
+    const preserved = alignedProvenance.map((b) => b.text).filter(Boolean).length
+      ? formatExperienceBullets(alignedProvenance.map((b) => b.text))
+      : normalizeLocaleText(built.text || '', locale);
     const provenanceCoverage = validateProvenancedDeterministicFallbackCoverage(
       sourceForCoverage,
       alignedProvenance,
+      { expectedOperationSnapshotId: snapshot?.operationSnapshotId },
     );
-    clientDeterministicFallbackBulletCount = normalizedLines.filter(Boolean).length;
+    clientDeterministicFallbackBulletCount = alignedProvenance.filter((b) => b.text.trim()).length;
     clientDeterministicFallbackScripts = detectBulletScripts(preserved);
     clientDeterministicFallbackRequiredFactCount = provenanceCoverage.requiredIds.length;
     clientDeterministicFallbackCoveredFactCount = provenanceCoverage.coveredIds.length;

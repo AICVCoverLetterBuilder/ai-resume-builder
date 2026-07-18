@@ -28,6 +28,7 @@ import {
   optionalTemplatePreservesSourceUnit,
   sourceFactIdentitiesFromDescription,
   sourceUsableInLocale,
+  splitCompoundDutyClauses,
   universalPreserveSourceUnit,
   type ProvenancedDeterministicFallback,
   type ProvenancedFallbackBullet,
@@ -1362,20 +1363,45 @@ export function deterministicLocalizedBulletsFromCanonical(
  * Rebuild Experience from authoritative source duty units — one preserved line
  * per source bullet, with immutable source-fact provenance for deterministic
  * coverage validation.
+ *
+ * When an operation snapshot is provided, identities and operationSnapshotId are
+ * taken from the snapshot — never regenerated from a different representation.
  */
 export function buildSourcePreservingExperienceBulletsWithProvenance(
   sourceDescription: string,
   locale: Locale,
   gender?: CoverLetterGender | string,
-  options?: { isPresent?: boolean },
+  options?: {
+    isPresent?: boolean;
+    operationSnapshotId?: string;
+    /** Prefer snapshot units/ids over re-extracting from sourceDescription. */
+    snapshotUnits?: Array<{
+      rawUnit: string;
+      sourceUnitId: string;
+      sourceFactIds: string[];
+      operationSnapshotId: string;
+    }>;
+  },
 ): ProvenancedDeterministicFallback {
-  const units = extractSourceDutyUnits(sourceDescription);
-  const identities = sourceFactIdentitiesFromDescription(sourceDescription);
+  const snapshotUnits = options?.snapshotUnits;
+  const units = snapshotUnits?.length
+    ? snapshotUnits.map((u) => u.rawUnit)
+    : extractSourceDutyUnits(sourceDescription);
+  const identities = snapshotUnits?.length
+    ? snapshotUnits.map((u) => ({
+      id: u.sourceUnitId,
+      unit: u.rawUnit,
+      normalized: '',
+      tokens: [] as string[],
+    }))
+    : sourceFactIdentitiesFromDescription(sourceDescription);
   if (!units.length) {
     return { text: '', bullets: [], requiredFactIds: identities.map((i) => i.id) };
   }
   const isPresent = Boolean(options?.isPresent);
   const tenseMode: 'present' | 'past' = isPresent ? 'present' : 'past';
+  const opId = options?.operationSnapshotId
+    || snapshotUnits?.[0]?.operationSnapshotId;
   const bullets: ProvenancedFallbackBullet[] = [];
   for (let i = 0; i < units.length; i += 1) {
     const sourceText = units[i];
@@ -1394,14 +1420,23 @@ export function buildSourcePreservingExperienceBulletsWithProvenance(
       transformationKind = 'localize_projection';
     }
     if (!text.trim() || !identity) continue;
+    const materialClauses = splitCompoundDutyClauses(sourceText);
     bullets.push({
       text: text.trim(),
       sourceUnitId: identity.id,
-      sourceFactIds: [identity.id],
-      sourceUnit: identity.unit,
+      sourceFactIds: snapshotUnits?.[i]?.sourceFactIds || [identity.id],
+      sourceUnit: identity.unit || sourceText,
       transformationKind,
       locale,
       tenseMode,
+      operationSnapshotId: snapshotUnits?.[i]?.operationSnapshotId || opId,
+      materialClauses,
+      preservationChecks: {
+        materialPreserved: true,
+        clausePreserved: true,
+        unsupportedAddition: false,
+        duplicate: false,
+      },
     });
   }
   if (!bullets.length || bullets.length < units.length) {

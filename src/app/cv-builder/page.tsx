@@ -96,6 +96,10 @@ import {
   resolveExperienceAiAuthoritativeSource,
 } from '@/lib/cv-experience-provenance';
 import {
+  createExperienceAiOperationSnapshot,
+  applyOperationSnapshotToExperience,
+} from '@/lib/cv-experience-ai-operation-snapshot';
+import {
   localizeCvLanguageLevel,
   normalizeCvLanguagesProficiency,
   normalizeLanguageProficiencyToCanonical,
@@ -1163,6 +1167,26 @@ export default function CVBuilderPage() {
     };
     const countBefore = getProAiUsageCount();
 
+    // One immutable operation source for this Experience AI request.
+    const operationSnapshot = createExperienceAiOperationSnapshot({
+      liveText: liveDescription,
+      canonicalText: exp.canonicalDescription || '',
+      originalText: exp.originalUserDescription || '',
+      locale: requestedLocale,
+      requestId: reqCtx.requestId,
+      jobContextHash: requestContext.key,
+    });
+    if (operationSnapshot.normalizedSourceText.trim() && !aiGrounding.staleGeneratedContentExcluded) {
+      aiGrounding.sourceDescription = operationSnapshot.normalizedSourceText;
+      aiGrounding.experienceForAi = {
+        ...applyOperationSnapshotToExperience(aiGrounding.experienceForAi, operationSnapshot),
+        generationJobContextKey: expFrozen.generationJobContextKey,
+        groundingJobContextKey: expFrozen.groundingJobContextKey,
+        previousGenerationJobContextKey: expFrozen.previousGenerationJobContextKey,
+      };
+      aiGrounding.groundingSource = 'genuine_user';
+    }
+
     const diagSession = new ExperienceAiDiagnosticSession({
       uiLocale: locale,
       requestedLocale,
@@ -1177,19 +1201,28 @@ export default function CVBuilderPage() {
     });
     diagSession.stage('button_pressed', 'ok');
     diagSession.recordLiveExperience(exp, Boolean(exp.isPresent));
-    diagSession.recordSourceSelection(exp, aiGrounding, {
-      requestedLocale,
-      selectedSourceKindHint: authoritative.kind === 'currentTextarea'
-        ? 'currentTextarea'
-        : authoritative.kind === 'description'
-          ? 'description'
-          : authoritative.kind === 'originalUserDescription'
-            ? 'originalUserDescription'
-            : authoritative.kind === 'canonicalDescription'
-              ? 'canonicalDescription'
-              : undefined,
-      operationalContentLocale,
-    });
+    diagSession.recordSourceSelection(
+      {
+        ...exp,
+        description: liveDescription,
+      },
+      aiGrounding,
+      {
+        requestedLocale,
+        selectedSourceKindHint: operationSnapshot.provenanceOrigin === 'currentTextarea'
+          ? 'currentTextarea'
+          : authoritative.kind === 'description'
+            ? 'description'
+            : authoritative.kind === 'originalUserDescription'
+              ? 'originalUserDescription'
+              : authoritative.kind === 'canonicalDescription'
+                ? 'canonicalDescription'
+                : authoritative.kind === 'generatedDescription'
+                  ? 'generatedDescription'
+                  : 'unknown',
+        operationalContentLocale,
+      },
+    );
     diagSession.recordPayloadBuilt({
       locale: requestedLocale,
       industryNorm: requestContext.industryNorm,
@@ -1399,6 +1432,7 @@ export default function CVBuilderPage() {
         industry,
         level,
         jobContext: requestContext,
+        operationSnapshot,
         originHint: bulletsData.fallbackUsed
           ? 'deterministic_fallback'
           : bulletsData.repairAttempted
