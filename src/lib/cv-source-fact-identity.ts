@@ -25,6 +25,9 @@ export function stemTokenForCoverage(token: string): string {
   let t = foldCoverageToken(token || '');
   if (t.length < 4) return t;
   // Serbian / Croatian verb pairs: pregledam↔pregleda, ažuriram↔ažurira, koordinišem↔koordiniše.
+  // Past participles from -avam/-iram stems: označavao↔označavam, ažurirao↔ažuriram.
+  t = t.replace(/(?:avao|avala|avali|avale)$/u, '');
+  t = t.replace(/(?:irao|irala|irali|irale)$/u, 'ir');
   t = t.replace(/(?:avam|ava|avati)$/u, '');
   t = t.replace(/(?:iram|ira|irati)$/u, 'ir');
   t = t.replace(/(?:isem|ise|isem|ise|sem|se)$/u, ''); // folded š→s forms
@@ -34,6 +37,8 @@ export function stemTokenForCoverage(token: string): string {
   t = t.replace(/(?:ama|ima|ove|ovi|eva|eve|om)$/u, '');
   t = t.replace(/(?:am|em|im)$/u, '');
   // Cyrillic Serbian stems
+  t = t.replace(/(?:авао|авала|авали|авале)$/u, '');
+  t = t.replace(/(?:ирао|ирала|ирали|ирале)$/u, 'ир');
   t = t.replace(/(?:авам|ава|авати)$/u, '');
   t = t.replace(/(?:ирам|ира|ирати)$/u, 'ир');
   t = t.replace(/(?:ишем|ише|шем|ше)$/u, '');
@@ -417,6 +422,57 @@ export function validateSourceFactIdentityCoverage(
     };
   }
 
+  const ok = missingIds.length === 0;
+  return {
+    ok,
+    requiredIds,
+    coveredIds,
+    missingIds,
+    duplicatedIds: [],
+    reason: ok ? undefined : 'experience_material_fact_coverage_incomplete',
+  };
+}
+
+/**
+ * After identity coverage, require each matched source unit to preserve compound
+ * clauses (e.g. "… i označavam nepotpune unose"). Used for provider output so a
+ * partial rewrite cannot pass token-overlap alone.
+ */
+export function validateSourceUnitsMateriallyPreserved(
+  sourceDescription: string,
+  candidateDescription: string,
+): SourceFactIdentityCoverage {
+  const base = validateSourceFactIdentityCoverage(sourceDescription, candidateDescription);
+  if (!base.ok) return base;
+  const required = sourceFactIdentitiesFromDescription(sourceDescription);
+  const bullets = splitExperienceBullets(candidateDescription || '')
+    .map((b) => b.trim())
+    .filter(Boolean);
+
+  type Pair = { ri: number; bi: number; score: number };
+  const pairs: Pair[] = [];
+  for (let ri = 0; ri < required.length; ri += 1) {
+    for (let bi = 0; bi < bullets.length; bi += 1) {
+      const tokens = required[ri].tokens.filter((t) => t.length >= 4);
+      const score = tokenCoverageRatio(tokens.length ? tokens : required[ri].tokens, bullets[bi]);
+      if (score >= 0.45) pairs.push({ ri, bi, score });
+    }
+  }
+  pairs.sort((a, b) => b.score - a.score);
+  const usedR = new Set<number>();
+  const usedB = new Set<number>();
+  const coveredIds: string[] = [];
+  for (const p of pairs) {
+    if (usedR.has(p.ri) || usedB.has(p.bi)) continue;
+    if (!deterministicBulletPreservesSourceUnit(required[p.ri].unit, bullets[p.bi])) {
+      continue;
+    }
+    usedR.add(p.ri);
+    usedB.add(p.bi);
+    coveredIds.push(required[p.ri].id);
+  }
+  const requiredIds = required.map((r) => r.id);
+  const missingIds = requiredIds.filter((id) => !coveredIds.includes(id));
   const ok = missingIds.length === 0;
   return {
     ok,

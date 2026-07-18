@@ -36,8 +36,23 @@ import {
 import {
   validateSourceFactIdentityCoverage,
   validateProvenancedDeterministicFallbackCoverage,
+  validateSourceUnitsMateriallyPreserved,
   extractSourceDutyUnits,
+  sourceUsableInLocale,
 } from './cv-source-fact-identity';
+import {
+  materialDutyKeysFromDescription,
+  validateExperienceApplyMaterialPostcondition,
+} from './cv-material-duty-coverage';
+import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
+import {
+  normalizeExperienceBulletsPerspective,
+  validateExperienceCvPerspective,
+  experienceAiHasMeaningfulChange,
+  detectExperiencePersonMode,
+  experienceRequiresCvThirdPerson,
+  type ExperiencePersonMode,
+} from './cv-experience-perspective';
 import {
   evaluateRoleDutyConsistency,
   resolveOccupationalTitleForSummary,
@@ -72,11 +87,6 @@ import {
   textLooksLikeCookingDuties,
   type ExperienceJobContext,
 } from './cv-experience-job-context';
-import {
-  materialDutyKeysFromDescription,
-  validateExperienceApplyMaterialPostcondition,
-} from './cv-material-duty-coverage';
-import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
 
 export type CvAiFinalizeAction =
   | 'summary_generate'
@@ -138,6 +148,19 @@ export type FinalizeCvAiFieldResult = {
     finalBulletCount?: number;
     finalBulletScripts?: string[];
     tenseMode?: 'present' | 'past' | 'unknown';
+    perspectiveMode?: 'cv_third_person';
+    sourcePersonMode?: ExperiencePersonMode;
+    providerPersonMode?: ExperiencePersonMode;
+    normalizedPersonMode?: ExperiencePersonMode;
+    finalPersonMode?: ExperiencePersonMode;
+    perspectiveNormalizationAttempted?: boolean;
+    perspectiveNormalizationApplied?: boolean;
+    perspectiveValidationPassed?: boolean;
+    normalizedBulletsUsedForApply?: boolean;
+    finalMatchesProviderOutput?: boolean;
+    finalMatchesSourceAfterNormalization?: boolean;
+    meaningfulChangeDetected?: boolean;
+    noOpRejected?: boolean;
     rejectionStage?: string;
     typedFailureReason?: string;
     /** @deprecated Prefer clientDeterministicFallbackApplied. */
@@ -583,7 +606,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
       const identity = options?.provenancedIdentity
-        || validateSourceFactIdentityCoverage(sourceForCoverage, candidate);
+        || ((locale === 'sr' || locale === 'hr')
+          && !/\p{Script=Devanagari}|\p{Script=Arabic}|[\u3040-\u30ff\u3400-\u9fff]/u.test(sourceForCoverage)
+          ? validateSourceUnitsMateriallyPreserved(sourceForCoverage, candidate)
+          : validateSourceFactIdentityCoverage(sourceForCoverage, candidate));
       lastRequired = identity.requiredIds.length;
       lastCovered = identity.coveredIds.length;
       if (stage === 'source_preserving_fallback' || stage === 'canonical_fallback') {
@@ -695,33 +721,197 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   }
 
   // Provider / server output — never treat as client deterministic fallback.
+  // Perspective (1sg→CV 3sg) is separate from tenseMode present|past.
   const providerOrigin = input.originHint === 'ai_repaired' ? 'ai_repaired' : 'ai_generated';
-  const firstAccepted = tryAccept(candidate, providerOrigin, 'provider');
-  providerCoveredFactCount = lastCovered;
-  providerRequiredFactCount = lastRequired || sourceFactCount;
-  if (firstAccepted) {
-    return {
-      ...firstAccepted,
-      diagnostics: {
-        ...firstAccepted.diagnostics,
-        coveredFactCount: lastCovered || sourceFactCount,
-        providerCoveredFactCount: lastCovered || sourceFactCount,
-        providerRequiredFactCount: lastRequired || sourceFactCount,
-      },
+  const providerRawForCompare = candidate;
+  let perspectiveMeta = {
+    sourcePersonMode: detectExperiencePersonMode(sourceForCoverage, locale) as ExperiencePersonMode,
+    providerPersonMode: detectExperiencePersonMode(candidate, locale) as ExperiencePersonMode,
+    normalizedPersonMode: 'unknown' as ExperiencePersonMode,
+    finalPersonMode: 'unknown' as ExperiencePersonMode,
+    perspectiveMode: 'cv_third_person' as const,
+    perspectiveNormalizationAttempted: false,
+    perspectiveNormalizationApplied: false,
+    perspectiveValidationPassed: false,
+    normalizedBulletsUsedForApply: false,
+    finalMatchesProviderOutput: false,
+    finalMatchesSourceAfterNormalization: false,
+    meaningfulChangeDetected: false,
+    noOpRejected: false,
+  };
+
+  const attachPerspectiveDiag = (
+    result: FinalizeCvAiFieldResult,
+  ): FinalizeCvAiFieldResult => ({
+    ...result,
+    diagnostics: {
+      ...result.diagnostics,
+      ...perspectiveMeta,
+      tenseMode,
+    },
+  });
+
+  if (candidate.trim()) {
+    const persp = normalizeExperienceBulletsPerspective(candidate, {
+      locale,
+      isPresent,
+      gender,
+      sourceDescription: sourceForCoverage,
+    });
+    perspectiveMeta = {
+      ...perspectiveMeta,
+      sourcePersonMode: persp.sourcePersonMode,
+      providerPersonMode: persp.providerPersonMode,
+      normalizedPersonMode: persp.normalizedPersonMode,
+      perspectiveNormalizationAttempted: persp.perspectiveNormalizationAttempted,
+      perspectiveNormalizationApplied: persp.perspectiveNormalizationApplied,
+      perspectiveValidationPassed: persp.perspectiveValidationPassed,
+      finalPersonMode: persp.normalizedPersonMode,
     };
+    // Authoritative finalNormalizedBullets — validate and apply this array only.
+    const finalNormalizedBullets = persp.text;
+    const perspectiveGate = validateExperienceCvPerspective(finalNormalizedBullets, locale);
+    perspectiveMeta.perspectiveValidationPassed = perspectiveGate.ok;
+    perspectiveMeta.finalPersonMode = perspectiveGate.finalPersonMode;
+
+    const meaningful = experienceAiHasMeaningfulChange(sourceForCoverage, finalNormalizedBullets, {
+      perspectiveApplied: persp.perspectiveNormalizationApplied,
+    });
+    perspectiveMeta.meaningfulChangeDetected = meaningful;
+    perspectiveMeta.finalMatchesSourceAfterNormalization = !meaningful
+      && !persp.perspectiveNormalizationApplied;
+    perspectiveMeta.finalMatchesProviderOutput = finalNormalizedBullets.replace(/\s+/g, ' ').trim()
+      === providerRawForCompare.replace(/\s+/g, ' ').trim()
+      || (persp.perspectiveNormalizationApplied === false
+        && experienceAiHasMeaningfulChange(providerRawForCompare, finalNormalizedBullets) === false);
+
+    if (!meaningful && !persp.perspectiveNormalizationApplied) {
+      // Same-locale first-person (or Serbian) source reapplied unchanged → no-op.
+      // Cross-locale "same text" (e.g. Serbian source for an English request) must
+      // fall through to localized deterministic fallback — not count as success.
+      const sourceOkForLocale = sourceUsableInLocale(sourceForCoverage, locale)
+        || (locale === 'en' && sourceUsableInLocale(sourceForCoverage, 'en'));
+      const sourceNeedsPerspective = experienceRequiresCvThirdPerson(locale)
+        && detectExperiencePersonMode(sourceForCoverage, locale) === 'first_singular';
+      if (sourceOkForLocale && (sourceNeedsPerspective || locale === 'sr' || locale === 'hr')) {
+        perspectiveMeta.noOpRejected = true;
+        lastRejectStage = 'provider:noop';
+        lastRejectReason = 'experience_ai_noop';
+        providerCoveredFactCount = lastCovered;
+        providerRequiredFactCount = lastRequired || sourceFactCount;
+        return attachPerspectiveDiag({
+          blocked: true,
+          reason: 'experience_ai_noop',
+          text: exp?.description || '',
+          origin: 'user',
+          roleDutyConflict,
+          countedAsSuccess: false,
+          diagnostics: {
+            ...baseDiag(),
+            typedFailureReason: 'experience_ai_noop',
+            rejectionStage: 'provider:noop',
+          },
+        });
+      }
+      if (sourceOkForLocale) {
+        // Already CV-compatible same-locale source re-sent: allow apply for legacy controls.
+        perspectiveMeta.finalMatchesSourceAfterNormalization = true;
+        const firstAccepted = tryAccept(finalNormalizedBullets, providerOrigin, 'provider');
+        providerCoveredFactCount = lastCovered;
+        providerRequiredFactCount = lastRequired || sourceFactCount;
+        if (firstAccepted) {
+          perspectiveMeta.normalizedBulletsUsedForApply = true;
+          perspectiveMeta.meaningfulChangeDetected = false;
+          perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
+          return attachPerspectiveDiag({
+            ...firstAccepted,
+            diagnostics: {
+              ...firstAccepted.diagnostics,
+              coveredFactCount: lastCovered || sourceFactCount,
+              providerCoveredFactCount: lastCovered || sourceFactCount,
+              providerRequiredFactCount: lastRequired || sourceFactCount,
+            },
+          });
+        }
+      }
+      // Cross-locale unchanged provider text → continue to localized fallback.
+      lastRejectStage = 'provider:cross_locale_or_noop';
+      lastRejectReason = 'locale_mismatch';
+    } else if (!perspectiveGate.ok) {
+      lastRejectStage = 'provider:perspective';
+      lastRejectReason = perspectiveGate.reason || 'experience_cv_perspective_first_person';
+    } else {
+      const firstAccepted = tryAccept(
+        finalNormalizedBullets,
+        providerOrigin,
+        'provider',
+      );
+      providerCoveredFactCount = lastCovered;
+      providerRequiredFactCount = lastRequired || sourceFactCount;
+      if (firstAccepted) {
+        perspectiveMeta.normalizedBulletsUsedForApply = true;
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
+        return attachPerspectiveDiag({
+          ...firstAccepted,
+          diagnostics: {
+            ...firstAccepted.diagnostics,
+            coveredFactCount: lastCovered || sourceFactCount,
+            providerCoveredFactCount: lastCovered || sourceFactCount,
+            providerRequiredFactCount: lastRequired || sourceFactCount,
+          },
+        });
+      }
+    }
+  } else {
+    providerCoveredFactCount = lastCovered;
+    providerRequiredFactCount = lastRequired || sourceFactCount;
   }
 
   // Provider/server postconditions failed → always attempt client deterministic fallback.
   clientDeterministicFallbackAttempted = true;
   clientDeterministicFallbackReason = lastRejectReason || 'provider_postcondition_failed';
 
-  const grounded = normalizeLocaleText(
+  const groundedRaw = normalizeLocaleText(
     deterministicLocalizedBulletsFromCanonical(canonical, locale, gender, { isPresent }) || '',
     locale,
   );
-  if (!(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))) {
-    const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
-    if (secondAccepted) return secondAccepted;
+  const groundedPersp = groundedRaw.trim()
+    ? normalizeExperienceBulletsPerspective(groundedRaw, {
+      locale,
+      isPresent,
+      gender,
+      sourceDescription: sourceForCoverage,
+    })
+    : null;
+  const grounded = groundedPersp?.text || groundedRaw;
+  if (
+    grounded.trim()
+    && !(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))
+  ) {
+    const groundedGate = validateExperienceCvPerspective(grounded, locale);
+    if (groundedGate.ok) {
+      if (groundedPersp) {
+        perspectiveMeta = {
+          ...perspectiveMeta,
+          normalizedPersonMode: groundedPersp.normalizedPersonMode,
+          perspectiveNormalizationAttempted: true,
+          perspectiveNormalizationApplied:
+            perspectiveMeta.perspectiveNormalizationApplied
+            || groundedPersp.perspectiveNormalizationApplied,
+          perspectiveValidationPassed: groundedGate.ok,
+          meaningfulChangeDetected:
+            perspectiveMeta.meaningfulChangeDetected
+            || experienceAiHasMeaningfulChange(sourceForCoverage, grounded),
+          noOpRejected: false,
+        };
+      }
+      const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
+      if (secondAccepted) {
+        perspectiveMeta.normalizedBulletsUsedForApply = true;
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale);
+        return attachPerspectiveDiag(secondAccepted);
+      }
+    }
   }
 
   // Rebuild from authoritative source units when provider/fallback collapsed facts.
@@ -766,13 +956,37 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     clientDeterministicFallbackCoveredFactCount = provenanceCoverage.coveredIds.length;
     clientDeterministicFallbackUncoveredFactIds = provenanceCoverage.missingIds;
     fallbackBulletCount = clientDeterministicFallbackBulletCount;
-    const preservedAccepted = tryAccept(
-      preserved,
-      'deterministic_fallback',
-      'source_preserving_fallback',
-      { provenancedIdentity: provenanceCoverage },
-    );
-    if (preservedAccepted) return preservedAccepted;
+    const preservedGate = validateExperienceCvPerspective(preserved, locale);
+    // Fallback after provider failure is always an allowed repair path — even when
+    // the rebuilt CV text matches the source after perspective (provider was empty
+    // or incomplete). No-op rejection applies only to unchanged provider output.
+    perspectiveMeta = {
+      ...perspectiveMeta,
+      perspectiveNormalizationAttempted: true,
+      perspectiveNormalizationApplied: true,
+      perspectiveValidationPassed: preservedGate.ok,
+      normalizedPersonMode: detectExperiencePersonMode(preserved, locale),
+      meaningfulChangeDetected:
+        perspectiveMeta.meaningfulChangeDetected
+        || experienceAiHasMeaningfulChange(sourceForCoverage, preserved),
+      noOpRejected: false,
+    };
+    if (preservedGate.ok && provenanceCoverage.ok) {
+      const preservedAccepted = tryAccept(
+        preserved,
+        'deterministic_fallback',
+        'source_preserving_fallback',
+        { provenancedIdentity: provenanceCoverage },
+      );
+      if (preservedAccepted) {
+        perspectiveMeta.normalizedBulletsUsedForApply = true;
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(preservedAccepted.text, locale);
+        return attachPerspectiveDiag(preservedAccepted);
+      }
+    } else if (!preservedGate.ok) {
+      lastRejectReason = preservedGate.reason || 'experience_cv_perspective_first_person';
+      lastRejectStage = 'source_preserving_fallback:perspective';
+    }
   }
 
   const occupationFallback = normalizeLocaleText(
@@ -839,7 +1053,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     lastRequired = coverageFail.required?.length ?? lastRequired;
   }
 
-  return {
+  return attachPerspectiveDiag({
     blocked: true,
     reason: coverageFail?.reason
       || lastRejectReason
@@ -849,7 +1063,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     roleDutyConflict,
     countedAsSuccess: false,
     diagnostics: baseDiag(),
-  };
+  });
 }
 
 /**

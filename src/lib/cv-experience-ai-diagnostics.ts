@@ -43,6 +43,7 @@ export type ExperienceAiDiagStageName =
   | 'unsupported_claim_validation'
   | 'duplicate_validation'
   | 'tense_normalization'
+  | 'perspective_normalization'
   | 'deterministic_fallback_started'
   | 'fallback_output_built'
   | 'fallback_locale_validation'
@@ -160,6 +161,20 @@ export type ExperienceAiDiagnosticTrace = {
   unsupportedClaimCount: number;
   duplicateBulletCount: number;
   tenseMode: 'present' | 'past' | 'unknown';
+  perspectiveMode: 'cv_third_person' | null;
+  sourcePersonMode: string | null;
+  providerPersonMode: string | null;
+  normalizedPersonMode: string | null;
+  finalPersonMode: string | null;
+  perspectiveNormalizationAttempted: boolean;
+  perspectiveNormalizationApplied: boolean;
+  perspectiveValidationPassed: boolean;
+  normalizedBulletsUsedForApply: boolean;
+  finalMatchesProviderOutput: boolean;
+  finalMatchesSourceAfterNormalization: boolean;
+  meaningfulChangeDetected: boolean;
+  noOpRejected: boolean;
+  visibleTextareaMatchesFinalNormalizedHash: boolean | null;
   /** @deprecated Prefer apiResponseKind + clientDeterministicFallback* */
   fallbackSelected: boolean;
   fallbackReason: string | null;
@@ -541,6 +556,20 @@ export class ExperienceAiDiagnosticSession {
       unsupportedClaimCount: 0,
       duplicateBulletCount: 0,
       tenseMode: 'unknown',
+      perspectiveMode: null,
+      sourcePersonMode: null,
+      providerPersonMode: null,
+      normalizedPersonMode: null,
+      finalPersonMode: null,
+      perspectiveNormalizationAttempted: false,
+      perspectiveNormalizationApplied: false,
+      perspectiveValidationPassed: false,
+      normalizedBulletsUsedForApply: false,
+      finalMatchesProviderOutput: false,
+      finalMatchesSourceAfterNormalization: false,
+      meaningfulChangeDetected: false,
+      noOpRejected: false,
+      visibleTextareaMatchesFinalNormalizedHash: null,
       fallbackSelected: false,
       fallbackReason: null,
       fallbackBulletCount: 0,
@@ -813,6 +842,19 @@ export class ExperienceAiDiagnosticSession {
       finalBulletCount: diag.finalBulletCount ?? bullets.length,
       finalBulletScripts: scriptsFromBullets(text),
       tenseMode: diag.tenseMode || this.draft.tenseMode || 'unknown',
+      perspectiveMode: (diag.perspectiveMode as ExperienceAiDiagnosticTrace['perspectiveMode']) || 'cv_third_person',
+      sourcePersonMode: (diag.sourcePersonMode as string | undefined) || null,
+      providerPersonMode: (diag.providerPersonMode as string | undefined) || null,
+      normalizedPersonMode: (diag.normalizedPersonMode as string | undefined) || null,
+      finalPersonMode: (diag.finalPersonMode as string | undefined) || null,
+      perspectiveNormalizationAttempted: Boolean(diag.perspectiveNormalizationAttempted),
+      perspectiveNormalizationApplied: Boolean(diag.perspectiveNormalizationApplied),
+      perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed),
+      normalizedBulletsUsedForApply: Boolean(diag.normalizedBulletsUsedForApply),
+      finalMatchesProviderOutput: Boolean(diag.finalMatchesProviderOutput),
+      finalMatchesSourceAfterNormalization: Boolean(diag.finalMatchesSourceAfterNormalization),
+      meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
+      noOpRejected: Boolean(diag.noOpRejected),
       countedAsSuccess: Boolean(finalized.countedAsSuccess),
       finalTypedFailureReason: blocked ? reason : null,
       rejectionStage: blocked
@@ -858,7 +900,40 @@ export class ExperienceAiDiagnosticSession {
       dup ? reason || undefined : undefined,
     );
 
-    this.stage('tense_normalization', 'ok');
+    this.stage(
+      'tense_normalization',
+      'ok',
+      undefined,
+    );
+    // Perspective is a separate stage from present/past tenseMode.
+    const perspAttempted = Boolean(
+      (finalized.diagnostics as { perspectiveNormalizationAttempted?: boolean } | undefined)
+        ?.perspectiveNormalizationAttempted,
+    );
+    const perspApplied = Boolean(
+      (finalized.diagnostics as { perspectiveNormalizationApplied?: boolean } | undefined)
+        ?.perspectiveNormalizationApplied,
+    );
+    const perspPassed = Boolean(
+      (finalized.diagnostics as { perspectiveValidationPassed?: boolean } | undefined)
+        ?.perspectiveValidationPassed,
+    );
+    const noOp = Boolean(
+      (finalized.diagnostics as { noOpRejected?: boolean } | undefined)?.noOpRejected,
+    );
+    if (perspAttempted || noOp || reason === 'experience_cv_perspective_first_person' || reason === 'experience_ai_noop') {
+      this.stage(
+        'perspective_normalization',
+        !finalized.countedAsSuccess && (noOp || reason === 'experience_cv_perspective_first_person' || reason === 'experience_ai_noop')
+          ? 'fail'
+          : (perspPassed || finalized.countedAsSuccess ? 'ok' : 'fail'),
+        noOp
+          ? 'experience_ai_noop'
+          : (!perspPassed && !finalized.countedAsSuccess
+            ? (reason || 'experience_cv_perspective_first_person')
+            : (perspApplied ? undefined : undefined)),
+      );
+    }
 
     if (clientFallbackAttempted) {
       this.stage(
@@ -905,10 +980,22 @@ export class ExperienceAiDiagnosticSession {
     );
   }
 
-  recordVisibleApply(applied: boolean, usageAfter: number): void {
+  recordVisibleApply(
+    applied: boolean,
+    usageAfter: number,
+    options?: { visibleDescription?: string; finalNormalizedText?: string },
+  ): void {
+    let visibleMatch: boolean | null = this.draft.visibleTextareaMatchesFinalNormalizedHash ?? null;
+    if (options?.visibleDescription != null && options?.finalNormalizedText != null) {
+      visibleMatch = fingerprintText(options.visibleDescription)
+        === fingerprintText(options.finalNormalizedText);
+    } else if (applied && this.draft.normalizedBulletsUsedForApply) {
+      visibleMatch = true;
+    }
     this.patch({
       countedAsSuccess: applied,
       usageCountAfter: usageAfter,
+      visibleTextareaMatchesFinalNormalizedHash: visibleMatch,
     });
     this.stage('visible_apply', applied ? 'ok' : 'fail', applied ? undefined : 'not_applied');
     this.stage(
