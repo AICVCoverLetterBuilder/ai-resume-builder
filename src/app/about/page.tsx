@@ -1,14 +1,32 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
 import Link from 'next/link';
 import { Check, X, Sparkles, Shield, Crown, Star, Globe, ArrowRight } from 'lucide-react';
 import { useI18n } from '@/lib/i18n/context';
 import { LEGAL_CONTACT_HREF, LEGAL_LINKS } from '@/lib/legal-links';
+import {
+  CvExportDiagnosticsModal,
+  useSevenTapDiagnosticsOpener,
+} from '@/components/CvExportDiagnosticsControls';
+import { resolveAppVersionInfo } from '@/lib/cv-export-diagnostics';
 
 export default function AboutPage() {
   const { t } = useI18n();
+  const { diagnosticsOpen, closeDiagnostics, onVersionTap } = useSevenTapDiagnosticsOpener();
+  const [versionLabel, setVersionLabel] = useState('CV Pro AI');
+
+  useEffect(() => {
+    void resolveAppVersionInfo().then((info) => {
+      if (info.versionName || info.versionCode) {
+        setVersionLabel(
+          `v${info.versionName || '?'}${info.versionCode ? ` (${info.versionCode})` : ''}`,
+        );
+      }
+    });
+  }, []);
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -27,6 +45,14 @@ export default function AboutPage() {
             <p className="mt-4 text-lg text-muted-foreground leading-relaxed max-w-2xl mx-auto">
               {t.about.hero.description}
             </p>
+            <button
+              type="button"
+              onClick={onVersionTap}
+              className="mt-4 text-xs text-muted-foreground/80 hover:text-muted-foreground"
+              aria-label="App version"
+            >
+              {versionLabel}
+            </button>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1 text-xs font-medium text-muted-foreground">
                 <Star className="h-3 w-3 text-amber-500" />
@@ -216,6 +242,7 @@ export default function AboutPage() {
         </div>
       </main>
       <Footer />
+      <CvExportDiagnosticsModal open={diagnosticsOpen} onClose={closeDiagnostics} />
     </div>
   );
 }

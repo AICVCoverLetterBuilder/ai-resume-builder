@@ -27,9 +27,16 @@ import { makeCvExportBaseName } from '@/lib/export-filename';
 import { getCvExportSuccessToast, type ExportFileFormat } from '@/lib/export-success-toast';
 import {
   CvExportFailure,
+  extractCvExportFailureReason,
   formatCvExportIntegrityToast,
   wrapCvExportFailure,
 } from '@/lib/cv-export-error-message';
+import {
+  buildAndStoreCvExportDiagnostic,
+  copyCvExportDiagnosticsToClipboard,
+  resolveAppVersionInfo,
+  resolveNextBuildId,
+} from '@/lib/cv-export-diagnostics';
 import type { SaveFileResult } from '@/lib/native-save';
 import {
   CV_RUNTIME_MIGRATION_VERSION,
@@ -81,7 +88,7 @@ import { prepareCreativeArtisticExport } from '@/lib/cv-export-integrity';
 import { prepareCorporateNavyExport } from '@/lib/corporate-navy-export-integrity';
 import {
   prepareExportReadyCv,
-  unwrapExportReadyCv,
+  type PrepareExportReadyResult,
 } from '@/lib/prepare-export-ready-cv';
 import { loadCvDraft } from '@/lib/draft-storage';
 import { apiFetch } from '@/lib/api';
@@ -98,6 +105,7 @@ import { UpgradeBuilderBanner, FreeLimitModal, JobAnalyzerProModal, AiImprovemen
 import { PremiumAIButton, ProBadge } from '@/components/PremiumAIButton';
 import { JobAnalysisResultScreen, JobAnalysisLoadingState } from '@/components/JobAnalysisResultScreen';
 import { TemplatePreview } from '@/components/TemplatePreview';
+import { CvExportCopyDiagnosticsButton } from '@/components/CvExportDiagnosticsControls';
 import { TemplatePreviewFullscreenModal } from '@/components/TemplatePreviewFullscreenModal';
 import {
   createElegantFormalPortraitPhoto,
@@ -155,6 +163,10 @@ export default function CVBuilderPage() {
   const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, getProAiUsageCount, lastCvSavedAt, getAiGate } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
+  /** Last prepareExportReadyCv result for release diagnostics (non-PII). */
+  const lastExportPrepareRef = useRef<PrepareExportReadyResult | null>(null);
+  const lastExportRawCvRef = useRef<CVData | null>(null);
+  const [exportDiagTick, setExportDiagTick] = useState(0);
   // Stale-response correlation: each AI action tracks the requestId of its
   // most-recently-started request. An in-flight request whose id no longer
   // matches when its response arrives is a stale/out-of-order response and
@@ -1479,23 +1491,85 @@ export default function CVBuilderPage() {
       toast.success(copy.title, { description: copy.description });
     };
 
+    const showExportFailureToast = (
+      err: unknown,
+      format: 'pdf' | 'docx',
+    ) => {
+      const message = formatCvExportIntegrityToast(err, locale, format)
+        || (format === 'pdf' ? t.cv.pdfExportFailed : t.cv.wordExportFailed);
+      toast.error(message, {
+        duration: 20_000,
+        action: {
+          label: 'Copy diagnostics',
+          onClick: () => {
+            void copyCvExportDiagnosticsToClipboard(format).then((ok) => {
+              toast[ok ? 'success' : 'error'](
+                ok ? 'Export diagnostics copied' : 'Could not copy diagnostics',
+              );
+            });
+          },
+        },
+      });
+      setExportDiagTick((n) => n + 1);
+    };
+
+    const recordExportDiagnostic = async (args: {
+      format: 'pdf' | 'docx';
+      rawCv: CVData;
+      prepared: PrepareExportReadyResult | null;
+      originalFailureReason?: string;
+      finalError?: unknown;
+      rendererReached?: boolean;
+      blobProduced?: boolean;
+      blobSize?: number | null;
+      blobMimeType?: string | null;
+      androidSaveReached?: boolean;
+      saveResult?: SaveFileResult | null;
+      extraStages?: Parameters<typeof buildAndStoreCvExportDiagnostic>[0]['extraStages'];
+    }) => {
+      const app = await resolveAppVersionInfo();
+      buildAndStoreCvExportDiagnostic({
+        format: args.format,
+        locale,
+        rawCv: args.rawCv,
+        prepared: args.prepared,
+        originalFailureReason: args.originalFailureReason,
+        finalError: args.finalError,
+        rendererReached: args.rendererReached,
+        blobProduced: args.blobProduced,
+        blobSize: args.blobSize,
+        blobMimeType: args.blobMimeType,
+        androidSaveReached: args.androidSaveReached,
+        saveResult: args.saveResult,
+        appVersionCode: app.versionCode,
+        appVersionName: app.versionName,
+        nextBuildId: resolveNextBuildId(),
+        extraStages: args.extraStages,
+      });
+      setExportDiagTick((n) => n + 1);
+    };
+
     const prepareFinalLocaleSafeCv = (sourceCv: CVData): CVData => {
+      lastExportRawCvRef.current = sourceCv;
       try {
         // Single export-ready snapshot for all templates/formats before branching.
         const prepared = prepareExportReadyCv(sourceCv, locale, sourceCv.templateId, {
           gender: sourceCv.personal?.gender,
         });
+        lastExportPrepareRef.current = prepared;
         if (!prepared.ok) {
+          // Preserve the exact typed reason for diagnostics before any remapping.
+          const originalReason = prepared.reason;
           if (
             sourceCv.templateId === 'modern-minimal'
             && /stale|overwritten|not_invoked|projection_incomplete/i.test(prepared.reason)
           ) {
             throw new CvExportFailure(
               'modern_minimal_stale_snapshot',
-              `${prepared.reason} @ ${prepared.stage}`,
+              `${originalReason} @ ${prepared.stage}`,
             );
           }
-          throw unwrapExportReadyCv(prepared);
+          throw new CvExportFailure(prepared.reason, `${prepared.reason} @ ${prepared.stage}`);
         }
         const recoveredCv = prepared.cv;
         const diagnostics = prepared.diagnostics;
@@ -1602,13 +1676,42 @@ export default function CVBuilderPage() {
           const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
           saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cvForExport.templateId, { elegantFormalPhoto });
           fallbackFileName = `${exportBaseName}.docx`;
+          await recordExportDiagnostic({
+            format: 'docx',
+            rawCv: lastExportRawCvRef.current || latestCv,
+            prepared: lastExportPrepareRef.current,
+            rendererReached: true,
+            blobProduced: true,
+            blobMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            androidSaveReached: true,
+            saveResult,
+            extraStages: [
+              { stage: 'render_blob', result: 'ok' },
+              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+            ],
+          });
         }
         showCvExportSuccessToast(saveResult, 'docx', fallbackFileName);
         incrementDownloads('cv');
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV DOCX export] failed:', err);
-        toast.error(formatCvExportIntegrityToast(err, locale, 'docx') || t.cv.wordExportFailed);
+        const prepared = lastExportPrepareRef.current;
+        const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
+        await recordExportDiagnostic({
+          format: 'docx',
+          rawCv: lastExportRawCvRef.current || cvRef.current,
+          prepared,
+          originalFailureReason: originalReason,
+          finalError: err,
+          rendererReached: Boolean(prepared?.ok),
+          blobProduced: false,
+          androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
+          extraStages: prepared?.ok
+            ? [{ stage: 'render_blob', result: 'fail', reason: extractCvExportFailureReason(err) }]
+            : undefined,
+        });
+        showExportFailureToast(err, 'docx');
       } finally {
         setIsWordExporting(false);
       }
@@ -1682,6 +1785,20 @@ export default function CVBuilderPage() {
             throw new Error(`Modern Minimal preview mismatch: ${previewTemplateId}`);
           }
           const saveResult = await exportModernMinimalPdf(cvForExport, exportFilename, locale);
+          await recordExportDiagnostic({
+            format: 'pdf',
+            rawCv: lastExportRawCvRef.current || cvForExport,
+            prepared: lastExportPrepareRef.current,
+            rendererReached: true,
+            blobProduced: true,
+            blobMimeType: 'application/pdf',
+            androidSaveReached: true,
+            saveResult,
+            extraStages: [
+              { stage: 'render_blob', result: 'ok' },
+              { stage: 'android_save', result: saveResult.result === 'saved' ? 'ok' : 'fail' },
+            ],
+          });
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);
           incrementDownloads('cv');
           return;
@@ -1796,9 +1913,37 @@ export default function CVBuilderPage() {
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'SaveCancelledError') return;
         if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] failed:', err);
+        const prepared = lastExportPrepareRef.current;
+        const originalReason = prepared && !prepared.ok ? prepared.reason : undefined;
+        await recordExportDiagnostic({
+          format: 'pdf',
+          rawCv: lastExportRawCvRef.current || cvRef.current,
+          prepared,
+          originalFailureReason: originalReason,
+          finalError: err,
+          rendererReached: Boolean(prepared?.ok),
+          blobProduced: false,
+          androidSaveReached: /android_file_save_failed/i.test(extractCvExportFailureReason(err)),
+          extraStages: prepared?.ok
+            ? [{ stage: 'render_blob', result: 'fail', reason: extractCvExportFailureReason(err) }]
+            : undefined,
+        });
         const cv = { templateId: cvRef.current.templateId, personal: { fullName: cvRef.current.personal.fullName } };
         if (cv.templateId === 'modern-minimal' || cv.templateId === 'clean-simple' || cv.templateId === 'professional-classic' || cv.templateId === 'creative-bold' || cv.templateId === 'creative-artistic' || cv.templateId === 'elegant-formal' || cv.templateId === 'ats-standard' || cv.templateId === 'executive-premium' || cv.templateId === 'nordic-clean' || cv.templateId === 'tech-sidebar' || cv.templateId === 'corporate-navy' || cv.templateId === 'contemporary-bold' || cv.templateId === 'rirekisho') {
-          toast.error(formatCvExportIntegrityToast(err, locale, 'pdf') || t.cv.pdfExportFailed);
+          toast.error(formatCvExportIntegrityToast(err, locale, 'pdf') || t.cv.pdfExportFailed, {
+            duration: 20_000,
+            action: {
+              label: 'Copy diagnostics',
+              onClick: () => {
+                void copyCvExportDiagnosticsToClipboard('pdf').then((ok) => {
+                  toast[ok ? 'success' : 'error'](
+                    ok ? 'Export diagnostics copied' : 'Could not copy diagnostics',
+                  );
+                });
+              },
+            },
+          });
+          setExportDiagTick((n) => n + 1);
           return;
         }
         // Fallback: attempt print-ready window once so user can Save as PDF via browser.
@@ -1813,7 +1958,7 @@ export default function CVBuilderPage() {
             return;
           }
           if (process.env.NODE_ENV !== 'production') console.error('[CV PDF export] print fallback also failed:', fallbackErr);
-          toast.error(t.cv.pdfExportFailed);
+          showExportFailureToast(fallbackErr, 'pdf');
         }
       } finally {
         setIsPdfExporting(false);
@@ -1965,9 +2110,12 @@ export default function CVBuilderPage() {
                               </div>
                             )}
                           </div>
-                        <button onClick={() => { exportToClipboard('cv-preview'); toast.success(t.cv.copied); }} className={btnSecondary}>
-                          <Copy className="h-4 w-4" />{t.cv.copy}
-                        </button>
+                          <div key={`diag-preview-${exportDiagTick}`}>
+                            <CvExportCopyDiagnosticsButton />
+                          </div>
+                          <button onClick={() => { exportToClipboard('cv-preview'); toast.success(t.cv.copied); }} className={btnSecondary}>
+                            <Copy className="h-4 w-4" />{t.cv.copy}
+                          </button>
                       </div>
                       <p className="mt-2 text-[10px] text-muted-foreground">{t.cv.downloadNote}</p>
                   <div id="cv-preview" className="overflow-auto rounded-xl border border-border shadow-lg">
@@ -2671,6 +2819,9 @@ export default function CVBuilderPage() {
                                         </button>
                                       </div>
                                     )}
+                                  </div>
+                                  <div key={`diag-inline-${exportDiagTick}`}>
+                                    <CvExportCopyDiagnosticsButton />
                                   </div>
                                 <button onClick={() => { exportToClipboard('cv-inline-preview'); toast.success(t.cv.copied); }} className={btnSecondary}>
                                   <Copy className="h-4 w-4" />{t.cv.copy}
