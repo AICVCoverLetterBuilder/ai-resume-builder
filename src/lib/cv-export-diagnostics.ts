@@ -12,6 +12,10 @@ import {
 } from './cv-export-error-message';
 import type { PrepareExportReadyResult, ExportReadyDiagnostics } from './prepare-export-ready-cv';
 import type { SaveFileResult } from './native-save';
+import {
+  buildExperienceDurationSnapshot,
+  durationDisplayBucket,
+} from './cv-experience-duration';
 
 export type CvExportFormat = 'pdf' | 'docx';
 
@@ -115,6 +119,13 @@ export type CvExportDiagnosticTrace = {
   saveResult: SaveFileResult['result'] | null;
   exportReadySnapshotId: string;
   ok: boolean;
+  /** Non-PII success metadata when available. */
+  pdfTextLayerType?: 'direct_unicode' | 'shaped_png_hybrid' | 'shaped_png_only' | 'unknown';
+  extractedTextLength?: number;
+  extractedScriptClasses?: BulletScriptClass[];
+  pdfHasToUnicode?: boolean;
+  durationMonths?: number;
+  durationDisplayBucket?: string;
 };
 
 const STORAGE_KEY_PDF = 'cvpro-export-diag-pdf';
@@ -400,6 +411,11 @@ export type BuildCvExportTraceInput = {
   appVersionName?: string | null;
   nextBuildId?: string | null;
   extraStages?: CvExportStageDiag[];
+  /** Optional non-PII PDF text-layer metrics from the export caller. */
+  pdfTextLayerType?: CvExportDiagnosticTrace['pdfTextLayerType'];
+  extractedTextLength?: number;
+  extractedScriptClasses?: BulletScriptClass[];
+  pdfHasToUnicode?: boolean;
 };
 
 /**
@@ -525,6 +541,11 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     && !finalReason
     && (input.saveResult?.result === 'saved' || input.blobProduced === true);
 
+  const durationSnap = buildExperienceDurationSnapshot(
+    exportCv.experience || [],
+    new Date(),
+  );
+
   const trace: CvExportDiagnosticTrace = {
     schemaVersion: 1,
     capturedAt: new Date().toISOString(),
@@ -560,6 +581,14 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     saveResult: input.saveResult?.result ?? null,
     exportReadySnapshotId: snapshotId,
     ok: Boolean(ok && !finalReason),
+    pdfTextLayerType: input.pdfTextLayerType,
+    extractedTextLength: input.extractedTextLength,
+    extractedScriptClasses: input.extractedScriptClasses,
+    pdfHasToUnicode: input.pdfHasToUnicode,
+    durationMonths: durationSnap.total.hasValidDates ? durationSnap.total.totalMonths : undefined,
+    durationDisplayBucket: durationSnap.total.hasValidDates
+      ? durationDisplayBucket(durationSnap.total)
+      : undefined,
   };
 
   // If we have a failure reason, force ok=false even when save somehow ran.

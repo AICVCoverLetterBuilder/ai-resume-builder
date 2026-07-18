@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Hindi Professional Summary must not apply/export with raw English skill lists.
  * Apply and PDF/DOCX share one acceptance contract.
  */
@@ -35,10 +35,10 @@ const HI_DUTIES = [
 ].join('\n');
 
 const MIXED_PROVIDER =
-  'मैं लगभग दो वर्षों के अनुभव वाली बेकर हूँ। मैं रेस्तरां के मानकों के अनुसार व्यंजन तैयार करती हूँ, कार्यस्थल की स्वच्छता बनाए रखती हूँ और रसोई टीम के साथ सहयोग करती हूँ। मुख्य कौशल में Critical Thinking, Adaptability, Problem Solving and Time Management शामिल हैं।';
+  'मैं लगभग ढाई वर्षों के अनुभव वाली बेकर हूँ। मैं रेस्तरां के मानकों के अनुसार व्यंजन तैयार करती हूँ, कार्यस्थल की स्वच्छता बनाए रखती हूँ और रसोई टीम के साथ सहयोग करती हूँ। मुख्य कौशल में Critical Thinking, Adaptability, Problem Solving and Time Management शामिल हैं।';
 
 const MIXED_REPAIR =
-  'मैं लगभग दो वर्षों के अनुभव वाली बेकर हूँ। Key skills include Critical Thinking, Adaptability, Problem Solving.';
+  'मैं लगभग ढाई वर्षों के अनुभव वाली बेकर हूँ। Key skills include Critical Thinking, Adaptability, Problem Solving.';
 
 function bakerCv(overrides?: Partial<CVData>): CVData {
   return {
@@ -255,7 +255,7 @@ describe('Hindi summary mixed-language apply/export contract', () => {
     const withCompany = `${MIXED_PROVIDER.replace(/Critical Thinking.*/, '').trim()} Ztrew.`;
     // Duty-only Hindi + company Latin is fine when no English skill list.
     const dutyOnly =
-      'मैं लगभग दो वर्षों के अनुभव वाली बेकर हूँ। मैं रेस्तरां के मानकों के अनुसार व्यंजन तैयार करती हूँ, कार्यस्थल की स्वच्छता बनाए रखती हूँ और रसोई टीम के साथ सहयोग करती हूँ। Ztrew.';
+      'मैं लगभग ढाई वर्षों के अनुभव वाली बेकर हूँ। मैं रेस्तरां के मानकों के अनुसार व्यंजन तैयार करती हूँ, कार्यस्थल की स्वच्छता बनाए रखती हूँ और रसोई टीम के साथ सहयोग करती हूँ। Ztrew.';
     const check = validateLocalizedSummary(dutyOnly, factSet, {
       locale: 'hi',
       gender: 'female',

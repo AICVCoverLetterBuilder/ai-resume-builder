@@ -61,11 +61,16 @@ export function toReferenceDateIso(referenceDate: Date | string): string {
 }
 
 /**
- * Approximate duration policy (shared across locales):
- * - under 12 months → months
- * - 12–17 months → ~1 year
- * - 18–29 months → ~2 years
- * - otherwise → rounded-down full years
+ * Approximate duration policy (shared across all locales).
+ *
+ * Deterministic rule from completed calendar months (Present uses reference clock):
+ * 1. Under 12 months → report months (not years).
+ * 2. Otherwise let `fullYears = floor(months/12)` and `rem = months % 12`:
+ *    - rem ≤ 2  → whole years (near a whole-year boundary)
+ *    - rem 3–8  → fullYears + 0.5 (near a half-year)
+ *    - rem 9–11 → fullYears + 1 (closer to the next whole year)
+ *
+ * Examples: 12→1, 18→1.5, 24→2, 30→2.5, 33→3, 62→5.
  */
 export function applyApproximateDurationPolicy(totalMonths: number): ExperienceDuration {
   if (!Number.isFinite(totalMonths) || totalMonths <= 0) {
@@ -90,34 +95,29 @@ export function applyApproximateDurationPolicy(totalMonths: number): ExperienceD
       hasValidDates: true,
     };
   }
-  if (totalMonths <= 17) {
-    return {
-      totalMonths,
-      fullYears,
-      remainingMonths,
-      approxYears: 1,
-      unit: 'years',
-      hasValidDates: true,
-    };
-  }
-  if (totalMonths <= 29) {
-    return {
-      totalMonths,
-      fullYears,
-      remainingMonths,
-      approxYears: 2,
-      unit: 'years',
-      hasValidDates: true,
-    };
+  let approxYears: number;
+  if (remainingMonths <= 2) {
+    approxYears = fullYears;
+  } else if (remainingMonths <= 8) {
+    approxYears = fullYears + 0.5;
+  } else {
+    approxYears = fullYears + 1;
   }
   return {
     totalMonths,
     fullYears,
     remainingMonths,
-    approxYears: fullYears,
+    approxYears,
     unit: 'years',
     hasValidDates: true,
   };
+}
+
+/** Non-PII diagnostic bucket for duration (e.g. `years:2.5`, `months:8`). */
+export function durationDisplayBucket(duration: ExperienceDuration): string {
+  if (!duration.hasValidDates) return 'none';
+  if (duration.unit === 'months') return `months:${duration.totalMonths}`;
+  return `years:${duration.approxYears}`;
 }
 
 export function computeExperienceDuration(
@@ -256,14 +256,33 @@ const WORD_TO_YEARS_BY_LOCALE: Record<string, Record<string, number>> = {
   },
   sr: { jedne: 1, jedna: 1, jedan: 1, dve: 2, dvije: 2, dva: 2, tri: 3, četiri: 4, cetiri: 4, pet: 5, šest: 6, sest: 6 },
   hr: { jedne: 1, jedna: 1, jedan: 1, dve: 2, dvije: 2, dva: 2, tri: 3, četiri: 4, cetiri: 4, pet: 5, šest: 6, sest: 6 },
-  hi: { 'एक': 1, 'दो': 2, 'तीन': 3, 'चार': 4, 'पाँच': 5, 'पांच': 5, 'छह': 6, 'छः': 6 },
+  hi: { 'एक': 1, 'दो': 2, 'तीन': 3, 'चार': 4, 'पाँच': 5, 'पांच': 5, 'छह': 6, 'छः': 6, 'ढाई': 2.5, 'डेढ़': 1.5, 'डेढ': 1.5 },
 };
 
 function tokenToYears(token: string): number | null {
   const t = (token || '').trim();
   if (!t) return null;
-  if (/^\d+(\.\d+)?$/.test(t)) return Math.floor(parseFloat(t));
+  if (/^\d+(?:\.\d+)?$/.test(t)) {
+    const n = parseFloat(t);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
   const lower = t.toLowerCase();
+  const halfPhrases: Record<string, number> = {
+    'one and a half': 1.5,
+    'two and a half': 2.5,
+    'three and a half': 3.5,
+    'four and a half': 4.5,
+    'five and a half': 5.5,
+    'jedne i po': 1.5,
+    'dve i po': 2.5,
+    'dvije i po': 2.5,
+    'tri i po': 3.5,
+    ढाई: 2.5,
+    डेढ़: 1.5,
+    डेढ: 1.5,
+  };
+  if (halfPhrases[t] != null) return halfPhrases[t];
+  if (halfPhrases[lower] != null) return halfPhrases[lower];
   for (const wordMap of Object.values(WORD_TO_YEARS_BY_LOCALE)) {
     if (wordMap[t] != null) return wordMap[t];
     if (wordMap[lower] != null) return wordMap[lower];
@@ -271,15 +290,49 @@ function tokenToYears(token: string): number | null {
   return null;
 }
 
+function yearsEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < 0.01;
+}
+
 /** Extract approximate year numbers claimed in a summary (empty if no duration claim). */
 export function extractSummaryYearClaims(text: string): number[] {
   const raw = text || '';
   const claims: number[] = [];
+
+  // Half-year phrases (checked before bare "two years" / "दो वर्षों").
+  const halfRes: Array<[RegExp, number]> = [
+    [/\btwo\s+and\s+a\s+half\s+years?\b/giu, 2.5],
+    [/\bone\s+and\s+a\s+half\s+years?\b/giu, 1.5],
+    [/\bthree\s+and\s+a\s+half\s+years?\b/giu, 3.5],
+    [/\bdve\s+i\s+po\s+godin/giu, 2.5],
+    [/\bdvije\s+i\s+po\s+godin/giu, 2.5],
+    [/\bjedne\s+i\s+po\s+godin/giu, 1.5],
+    [/ढाई\s*वर्ष/gu, 2.5],
+    [/डेढ़\s*वर्ष|डेढ\s*वर्ष/gu, 1.5],
+  ];
+  for (const [re, years] of halfRes) {
+    if (re.test(raw)) claims.push(years);
+  }
+  // Numeric half-years beyond the word map (e.g. "16 i po godine", "16 and a half years").
+  const numericHalf = [
+    /\b(\d+)\s+i\s+po\s+godin/giu,
+    /\b(\d+)\s+and\s+a\s+half\s+years?\b/giu,
+    /साढ़े\s*(\d+)\s*वर्ष/gu,
+  ];
+  for (const re of numericHalf) {
+    let m: RegExpExecArray | null;
+    const clone = new RegExp(re.source, re.flags);
+    while ((m = clone.exec(raw)) !== null) {
+      const whole = Number(m[1]);
+      if (Number.isFinite(whole) && whole > 0) claims.push(whole + 0.5);
+    }
+  }
+
   const patterns: RegExp[] = [
     /\b(?:around|about|approximately|over|nearly)?\s*(\d+(?:\.\d+)?)\s*\+?\s*years?\b/giu,
     /\b(?:around|about|approximately)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+years?\b/giu,
     /\b(?:oko|od|približno|vise od|više od)\s+(jedne?|dvije?|dve|tri|četiri|cetiri|pet|šest|sest|\d+)\s+godin/giu,
-    /(?:लगभग|करीब)?\s*(\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्ष/giu,
+    /(?:लगभग|करीब)?\s*(\d+|एक|दो|तीन|चार|पाँच|पांच|छह|ढाई|डेढ़|डेढ)\s*वर्ष/giu,
     // German: "mit etwa vier Jahren Erfahrung" / "Vier Jahre Erfahrung" (Jahr|Jahre|Jahren).
     /\b(?:etwa|rund|ca\.?|ungefähr)?\s*(ein|eine|einem|einen|einer|zwei|drei|vier|fünf|funf|sechs|sieben|acht|neun|zehn|\d+(?:\.\d+)?)\s*\+?\s*Jahre?n?\b/giu,
     // Spanish: "con alrededor de cuatro años de experiencia".
@@ -312,58 +365,88 @@ export function extractSummaryYearClaims(text: string): number[] {
 
 const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
   en: {
-    1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six',
+    1: 'one', 1.5: 'one and a half', 2: 'two', 2.5: 'two and a half', 3: 'three', 3.5: 'three and a half',
+    4: 'four', 4.5: 'four and a half', 5: 'five', 5.5: 'five and a half', 6: 'six',
     7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten',
   },
   de: {
-    1: 'einem', 2: 'zwei', 3: 'drei', 4: 'vier', 5: 'fünf', 6: 'sechs',
+    1: 'einem', 1.5: 'anderthalb', 2: 'zwei', 2.5: 'zweieinhalb', 3: 'drei', 3.5: 'dreiereinhalb',
+    4: 'vier', 4.5: 'viereinhalb', 5: 'fünf', 5.5: 'fünfeinhalb', 6: 'sechs',
     7: 'sieben', 8: 'acht', 9: 'neun', 10: 'zehn',
   },
   es: {
-    1: 'un', 2: 'dos', 3: 'tres', 4: 'cuatro', 5: 'cinco', 6: 'seis',
+    1: 'un', 1.5: 'uno y medio', 2: 'dos', 2.5: 'dos y medio', 3: 'tres', 3.5: 'tres y medio',
+    4: 'cuatro', 4.5: 'cuatro y medio', 5: 'cinco', 5.5: 'cinco y medio', 6: 'seis',
     7: 'siete', 8: 'ocho', 9: 'nueve', 10: 'diez',
   },
   fr: {
-    1: 'un', 2: 'deux', 3: 'trois', 4: 'quatre', 5: 'cinq', 6: 'six',
+    1: 'un', 1.5: 'un an et demi', 2: 'deux', 2.5: 'deux ans et demi', 3: 'trois', 3.5: 'trois ans et demi',
+    4: 'quatre', 4.5: 'quatre ans et demi', 5: 'cinq', 5.5: 'cinq ans et demi', 6: 'six',
     7: 'sept', 8: 'huit', 9: 'neuf', 10: 'dix',
   },
   it: {
-    1: 'un', 2: 'due', 3: 'tre', 4: 'quattro', 5: 'cinque', 6: 'sei',
+    1: 'un', 1.5: 'un anno e mezzo', 2: 'due', 2.5: 'due anni e mezzo', 3: 'tre', 3.5: 'tre anni e mezzo',
+    4: 'quattro', 4.5: 'quattro anni e mezzo', 5: 'cinque', 5.5: 'cinque anni e mezzo', 6: 'sei',
     7: 'sette', 8: 'otto', 9: 'nove', 10: 'dieci',
   },
   ar: {
-    1: 'سنة واحدة', 2: 'سنتين', 3: 'ثلاث', 4: 'أربع', 5: 'خمس', 6: 'ست',
+    1: 'سنة واحدة', 1.5: 'سنة ونصف', 2: 'سنتين', 2.5: 'سنتين ونصف', 3: 'ثلاث', 3.5: 'ثلاث ونصف',
+    4: 'أربع', 4.5: 'أربع ونصف', 5: 'خمس', 5.5: 'خمس ونصف', 6: 'ست',
     7: 'سبع', 8: 'ثمان', 9: 'تسع', 10: 'عشر',
   },
   sr: {
-    1: 'jedne', 2: 'dve', 3: 'tri', 4: 'četiri', 5: 'pet', 6: 'šest',
+    1: 'jedne', 1.5: 'jedne i po', 2: 'dve', 2.5: 'dve i po', 3: 'tri', 3.5: 'tri i po',
+    4: 'četiri', 4.5: 'četiri i po', 5: 'pet', 5.5: 'pet i po', 6: 'šest',
     7: 'sedam', 8: 'osam', 9: 'devet', 10: 'deset',
   },
   hr: {
-    1: 'jedne', 2: 'dvije', 3: 'tri', 4: 'četiri', 5: 'pet', 6: 'šest',
+    1: 'jedne', 1.5: 'jedne i po', 2: 'dvije', 2.5: 'dvije i po', 3: 'tri', 3.5: 'tri i po',
+    4: 'četiri', 4.5: 'četiri i po', 5: 'pet', 5.5: 'pet i po', 6: 'šest',
     7: 'sedam', 8: 'osam', 9: 'devet', 10: 'deset',
   },
   ru: {
-    1: 'одного', 2: 'двух', 3: 'трёх', 4: 'четырёх', 5: 'пяти', 6: 'шести',
+    1: 'одного', 1.5: 'полутора', 2: 'двух', 2.5: 'двух с половиной', 3: 'трёх', 3.5: 'трёх с половиной',
+    4: 'четырёх', 4.5: 'четырёх с половиной', 5: 'пяти', 5.5: 'пяти с половиной', 6: 'шести',
     7: 'семи', 8: 'восьми', 9: 'девяти', 10: 'десяти',
   },
   'pt-BR': {
-    1: 'um', 2: 'dois', 3: 'três', 4: 'quatro', 5: 'cinco', 6: 'seis',
+    1: 'um', 1.5: 'um e meio', 2: 'dois', 2.5: 'dois e meio', 3: 'três', 3.5: 'três e meio',
+    4: 'quatro', 4.5: 'quatro e meio', 5: 'cinco', 5.5: 'cinco e meio', 6: 'seis',
     7: 'sete', 8: 'oito', 9: 'nove', 10: 'dez',
   },
   hi: {
-    1: 'एक', 2: 'दो', 3: 'तीन', 4: 'चार', 5: 'पाँच', 6: 'छह',
+    1: 'एक', 1.5: 'डेढ़', 2: 'दो', 2.5: 'ढाई', 3: 'तीन', 3.5: 'साढ़े तीन',
+    4: 'चार', 4.5: 'साढ़े चार', 5: 'पाँच', 5.5: 'साढ़े पाँच', 6: 'छह',
     7: 'सात', 8: 'आठ', 9: 'नौ', 10: 'दस',
   },
   ja: {
-    1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6',
+    1: '1', 1.5: '1.5', 2: '2', 2.5: '2.5', 3: '3', 3.5: '3.5',
+    4: '4', 4.5: '4.5', 5: '5', 5.5: '5.5', 6: '6',
     7: '7', 8: '8', 9: '9', 10: '10',
   },
 };
 
 /** Localized word/digit form for an approximate year count (shared by injectors/templates). */
 export function yearWordForLocale(locale: Locale, n: number): string {
-  return YEAR_WORD_BY_LOCALE[locale]?.[n] || String(n);
+  const map = YEAR_WORD_BY_LOCALE[locale];
+  if (map?.[n] != null) return map[n];
+  if (Number.isInteger(n)) return String(n);
+  // Avoid awkward "2.5 years" / "16.5 godine" prose when a locale map entry is missing.
+  const whole = Math.floor(n);
+  const half = Math.abs(n - whole - 0.5) < 0.01;
+  if (!half) return String(n);
+  const wholeWord = map?.[whole] ?? String(whole);
+  if (locale === 'en') return `${wholeWord} and a half`;
+  if (locale === 'sr' || locale === 'hr') return `${wholeWord} i po`;
+  if (locale === 'hi') return whole >= 3 ? `साढ़े ${wholeWord}` : String(n);
+  if (locale === 'de') return `${whole},5`;
+  if (locale === 'es') return `${wholeWord} y medio`;
+  if (locale === 'fr') return `${wholeWord} ans et demi`;
+  if (locale === 'it') return `${wholeWord} anni e mezzo`;
+  if (locale === 'pt-BR') return `${wholeWord} e meio`;
+  if (locale === 'ru') return `${wholeWord} с половиной`;
+  // ja/ar and other numeral-friendly locales may keep a decimal.
+  return String(n);
 }
 
 export function summaryHasDurationClaim(text: string): boolean {
@@ -416,7 +499,10 @@ export function summaryIncludesDurationPhrase(
     const word = YEAR_WORD_BY_LOCALE[locale]?.[n] || String(n);
     if (locale === 'ja' && new RegExp(`約\\s*${n}\\s*年`).test(summary)) return true;
     if (locale === 'hi' && summary.includes(word) && /वर्ष/.test(summary)) return true;
-    if ((locale === 'sr' || locale === 'hr') && new RegExp(`\\boko\\s+${word}\\s+godin`, 'iu').test(summary)) {
+    if ((locale === 'sr' || locale === 'hr') && new RegExp(
+      `\\boko\\s+${escapeRegExpToken(word)}\\s+godin`,
+      'iu',
+    ).test(summary)) {
       return true;
     }
     // Generic cross-locale fallback: the expected number is claimed in this locale's
@@ -448,7 +534,7 @@ export function validateSummaryDuration(
   }
   const claims = extractSummaryYearClaims(summary);
   if (claims.length) {
-    const ok = claims.every((c) => c === expected.approxYears);
+    const ok = claims.every((c) => yearsEqual(c, expected.approxYears));
     return ok
       ? { valid: true, claims }
       : { valid: false, claims, violation: 'experience_duration_mismatch' };
@@ -479,9 +565,10 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     return `around ${duration.totalMonths} months`;
   }
   const n = duration.approxYears;
-  const word = YEAR_WORD_BY_LOCALE[locale]?.[n] || String(n);
-  // Serbian/Croatian: 1 godina, 2–4 godine, 5+ godina
-  const srYearNoun = n === 1 ? 'godina' : n >= 2 && n <= 4 ? 'godine' : 'godina';
+  const word = yearWordForLocale(locale, n);
+  const isHalf = !Number.isInteger(n);
+  // Serbian/Croatian: 1 godina, 2–4 godine, 5+ godina; half-years use godine.
+  const srYearNoun = isHalf || (n >= 2 && n <= 4) ? 'godine' : n === 1 ? 'godina' : 'godina';
   switch (locale) {
     case 'sr':
       return `sa oko ${word} ${srYearNoun} iskustva`;
@@ -490,12 +577,17 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     case 'hi':
       return `लगभग ${word} वर्षों के अनुभव के साथ`;
     case 'de':
-      return `mit etwa ${word} Jahren Erfahrung`;
+      return isHalf
+        ? `mit etwa ${word} Jahren Erfahrung`
+        : `mit etwa ${word} Jahren Erfahrung`;
     case 'es':
       return `con alrededor de ${word} años de experiencia`;
     case 'fr':
+      // French half phrases already include "ans".
+      if (isHalf && /ans/.test(word)) return `avec environ ${word} d'expérience`;
       return `avec environ ${word} ans d'expérience`;
     case 'it':
+      if (isHalf && /anni|anno/.test(word)) return `con circa ${word} di esperienza`;
       return `con circa ${word} anni di esperienza`;
     case 'ru':
       return `с опытом около ${word} лет`;
@@ -526,25 +618,29 @@ export function repairSummaryDuration(
     /\b(around|about|approximately|over|nearly)?\s*\d+(?:\.\d+)?\s*\+?\s*years?\b/giu,
     (_m, pref) => `${pref ? `${pref} ` : ''}${target} years`.replace(/\s+/g, ' ').trim(),
   );
-  // English word years (including unparsed compounds like ninety-nine)
+  // English word years (including half-year compounds)
   out = out.replace(
-    /\b(around|about|approximately)\s+(one|two|three|four|five|six|seven|eight|nine|ten|[\w-]+)\s+years?\b/giu,
+    /\b(around|about|approximately)\s+(one and a half|two and a half|three and a half|four and a half|five and a half|one|two|three|four|five|six|seven|eight|nine|ten|[\w-]+)\s+years?\b/giu,
     (_m, pref, tok) => {
+      const mapped = YEAR_WORD_BY_LOCALE.en[target];
+      if (mapped) return `${pref} ${mapped} years`;
       if (/^(one|two|three|four|five|six|seven|eight|nine|ten|[\w-]+)$/i.test(tok)) {
         return `${pref} ${YEAR_WORD_BY_LOCALE.en[target] || target} years`;
       }
       return _m;
     },
   );
-  // Serbian / Croatian — preserve correct year-noun declension
-  const srNoun = target === 1 ? 'godina' : target >= 2 && target <= 4 ? 'godine' : 'godina';
+  // Serbian / Croatian — preserve correct year-noun declension (incl. "dve i po")
+  const srNoun = (!Number.isInteger(target) || (target >= 2 && target <= 4))
+    ? 'godine'
+    : target === 1 ? 'godina' : 'godina';
   out = out.replace(
-    /\b(oko|približno|sa\s+oko|s\s+oko)\s+(jedne?|dvije?|dve|tri|četiri|cetiri|pet|šest|sest|\d+)\s+godin\w*/giu,
+    /\b(oko|približno|sa\s+oko|s\s+oko)\s+(jedne(?:\s+i\s+po)?|dvije?(?:\s+i\s+po)?|dve(?:\s+i\s+po)?|tri(?:\s+i\s+po)?|četiri|cetiri|pet|šest|sest|\d+(?:\.\d+)?)\s+godin\w*/giu,
     `$1 ${YEAR_WORD_BY_LOCALE.sr[target] || target} ${srNoun}`,
   );
-  // Hindi
+  // Hindi — including half-year forms (ढाई / डेढ़)
   out = out.replace(
-    /(लगभग|करीब)?\s*(\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्षों?/giu,
+    /(लगभग|करीब)?\s*(\d+(?:\.\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|ढाई|डेढ़|डेढ)\s*वर्षों?/giu,
     (_m, pref) => `${pref ? `${pref} ` : ''}${word} वर्षों`.trim(),
   );
 

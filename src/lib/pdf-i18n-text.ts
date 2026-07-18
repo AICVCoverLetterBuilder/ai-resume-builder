@@ -1,7 +1,7 @@
 /**
  * Shared multilingual PDF text layer for direct jsPDF CV renderers.
  * Registers embedded Noto fonts per script, selects fonts by locale/text,
- * and uses canvas-shaped PNG fallback for Arabic/Devanagari when needed.
+ * and uses canvas-shaped PNG + invisible Unicode hybrid for Arabic/Devanagari.
  */
 import type { Locale } from './i18n/translations';
 
@@ -315,8 +315,48 @@ export function protectTechnicalTokens(text: string): { text: string; restore: (
 }
 
 export function needsShapedTextFallback(locale: Locale, text: string): boolean {
-  const script = resolvePdfScript(locale, text);
-  return script === 'arabic' || script === 'devanagari';
+  // Shape only when the *text itself* contains complex-script characters.
+  // Locale=hi must not force Latin proper nouns (Ivan, Ztrew) into PNG runs.
+  void locale;
+  const fromText = detectPdfScript(text);
+  return fromText === 'arabic' || fromText === 'devanagari';
+}
+
+/**
+ * Draw an invisible Unicode text run at the same baseline as the visual line.
+ * Used under shaped PNG glyphs so ATS/search/copy see real ToUnicode text
+ * without duplicating visible ink.
+ */
+function drawInvisibleUnicodeTextLayer(
+  pdf: Pdf,
+  registry: PdfI18nRegistry | null | undefined,
+  locale: Locale,
+  text: string,
+  x: number,
+  y: number,
+  options: PdfI18nDrawOptions,
+): void {
+  if (!text.trim()) return;
+  applyPdfI18nTextStyle(pdf, registry, locale, options, text);
+  const rtl = options.rtl ?? isRtlLocale(locale);
+  const align = options.align
+    ?? (rtl ? 'right' : 'left');
+  try {
+    pdf.text(text, x, y, { align, renderingMode: 'invisible' });
+  } catch {
+    // Older jsPDF builds: fall back to fully transparent fill (still extractable).
+    const prev = (pdf as unknown as { getTextColor?: () => string }).getTextColor?.();
+    pdf.setTextColor(255, 255, 255);
+    try {
+      pdf.text(text, x, y, { align });
+    } finally {
+      if (prev && typeof (pdf as unknown as { setTextColor: (c: string) => void }).setTextColor === 'function') {
+        (pdf as unknown as { setTextColor: (c: string) => void }).setTextColor(prev);
+      } else {
+        pdf.setTextColor(options.color[0], options.color[1], options.color[2]);
+      }
+    }
+  }
 }
 
 function cssFontFamilyForScript(script: PdfScript): string {
@@ -456,6 +496,9 @@ export function pdfI18nDrawText(
       } catch {
         pdf.addImage(shaped.dataUrl, 'PNG', drawX, drawY, shaped.widthMm, shaped.heightMm);
       }
+      // Hybrid ATS layer: shaped PNG for correct conjuncts + invisible Unicode
+      // text at the same baseline/reading position (not a page-end dump).
+      drawInvisibleUnicodeTextLayer(pdf, registry, locale, text, x, y, options);
       return;
     }
   }

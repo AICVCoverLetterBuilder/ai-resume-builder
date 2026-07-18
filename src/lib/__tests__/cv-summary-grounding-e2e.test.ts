@@ -132,7 +132,8 @@ describe('Professional Summary grounding — Baker fixture', () => {
     expect(cv.personal.gender).toBe('female');
     expect(cv.experience[0].isPresent).toBe(true);
     expect(duration.total.hasValidDates).toBe(true);
-    expect(duration.total.approxYears).toBe(2);
+    expect(duration.total.totalMonths).toBe(30);
+    expect(duration.total.approxYears).toBe(2.5);
     expect(localizeBaker('sr', 'female')).toBe('Pekarka');
     expect(localizeBaker('en', 'female')).toBe('Baker');
   });
@@ -445,7 +446,7 @@ describe('Professional Summary — generic fixtures', () => {
       ],
     });
     const dOverlap = buildExperienceDurationSnapshot(overlap.experience, REF);
-    expect(dOverlap.total.approxYears).toBe(2);
+    expect(dOverlap.total.approxYears).toBe(2.5);
   });
 
   it('37. past-only experience does not say currently', () => {

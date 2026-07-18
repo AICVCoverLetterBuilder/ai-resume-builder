@@ -10,6 +10,7 @@ import { normalizeCoverLetterGender } from './cover-letter-gender';
 import type { CvCanonicalFactSet } from './cv-canonical-facts';
 import {
   formatApproximateDurationPhrase,
+  yearWordForLocale,
   type ExperienceDuration,
 } from './cv-experience-duration';
 import { validateMaterialDutyCoverage } from './cv-material-duty-coverage';
@@ -617,19 +618,17 @@ function skillsLabelSentence(skills: string[], locale: Locale): string {
 
 function formatDurationForSummary(duration: ExperienceDuration | undefined, locale: Locale): string {
   if (!duration?.hasValidDates) return '';
-  if (locale === 'en') {
-    if (duration.unit === 'years' && duration.approxYears > 0) {
-      const n = duration.approxYears;
-      const word = n === 1 ? 'one' : n === 2 ? 'two' : n === 3 ? 'three' : n === 4 ? 'four' : n === 5 ? 'five' : String(n);
-      return `with approximately ${word} years of experience`;
+  if (duration.unit === 'years' && duration.approxYears > 0) {
+    if (locale === 'en') {
+      return formatApproximateDurationPhrase(duration, 'en');
+    }
+    if (locale === 'hi') {
+      const word = yearWordForLocale('hi', duration.approxYears);
+      return `लगभग ${word} वर्षों के अनुभव`;
     }
   }
-  if (locale === 'hi' && duration.unit === 'years' && duration.approxYears > 0) {
-    const word = duration.approxYears === 2 ? 'दो' : String(duration.approxYears);
-    return `लगभग ${word} वर्षों के अनुभव`;
-  }
   if ((locale === 'sr' || locale === 'hr') && duration.unit === 'years' && duration.approxYears > 0) {
-    return formatApproximateDurationPhrase(duration, locale); // "sa oko dve godine iskustva"
+    return formatApproximateDurationPhrase(duration, locale);
   }
   return formatApproximateDurationPhrase(duration, locale);
 }

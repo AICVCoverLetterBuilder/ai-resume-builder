@@ -84,11 +84,16 @@ describe('deterministic experience duration (2021-05 current → Jul 2026)', () 
     expect(d.unit).toBe('years');
   });
 
-  it('applies shared approximate policy buckets', () => {
+  it('applies shared approximate policy buckets (whole + half years)', () => {
     expect(applyApproximateDurationPolicy(8).unit).toBe('months');
+    expect(applyApproximateDurationPolicy(12).approxYears).toBe(1);
     expect(applyApproximateDurationPolicy(14).approxYears).toBe(1);
-    expect(applyApproximateDurationPolicy(20).approxYears).toBe(2);
-    expect(applyApproximateDurationPolicy(59).approxYears).toBe(4);
+    expect(applyApproximateDurationPolicy(18).approxYears).toBe(1.5);
+    expect(applyApproximateDurationPolicy(20).approxYears).toBe(1.5);
+    expect(applyApproximateDurationPolicy(24).approxYears).toBe(2);
+    expect(applyApproximateDurationPolicy(30).approxYears).toBe(2.5);
+    expect(applyApproximateDurationPolicy(33).approxYears).toBe(3);
+    expect(applyApproximateDurationPolicy(59).approxYears).toBe(5);
     expect(applyApproximateDurationPolicy(62).approxYears).toBe(5);
   });
 

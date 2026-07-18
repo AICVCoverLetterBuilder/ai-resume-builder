@@ -441,6 +441,7 @@ export function prepareExportReadyCv(
     (cv.canonicalSummary || '').trim(),
     cv.canonicalSnapshot?.canonicalLocale,
     cv,
+    durationSnapshot.total,
   );
 
   let summaryRecoverySource: ExportReadyDiagnostics['summaryRecoverySource'] = 'saved_summary';
@@ -463,6 +464,7 @@ export function prepareExportReadyCv(
       (cv.canonicalSummary || '').trim(),
       cv.canonicalSnapshot?.canonicalLocale,
       cv,
+      durationSnapshot.total,
     );
     summaryRecoveryReason = recoveryValidation.reason;
     if (recovered && recoveryValidation.valid) {

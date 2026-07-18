@@ -149,6 +149,7 @@ export function validateSummaryExportCandidate(
   canonicalSummary: string,
   canonicalLocale?: Locale,
   sourceCv?: Pick<CVData, 'personal' | 'experience'>,
+  expectedDuration?: import('./cv-experience-duration').ExperienceDuration,
 ): SummaryExportCandidateValidation {
   if (!candidate.trim()) return { valid: false, reason: 'missing_summary', violations: [] };
   // Summary-only locale check with structured proper-noun exemptions from the
@@ -165,7 +166,12 @@ export function validateSummaryExportCandidate(
   if (!validateSummaryCompleteness(candidate, { locale }).valid) {
     return { valid: false, reason: 'incomplete_summary', violations: ['incomplete_summary'] };
   }
-  const semantic = validateLocalizedSummary(candidate, factSet, { locale, gender, stage: 'export' });
+  const semantic = validateLocalizedSummary(candidate, factSet, {
+    locale,
+    gender,
+    stage: 'export',
+    expectedDuration,
+  });
   if (!semantic.valid) {
     const violations = semantic.violations.map((v) =>
       `${v.kind}${v.matched ? `:${v.matched}` : ''}`);

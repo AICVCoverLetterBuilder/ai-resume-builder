@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @vitest-environment node
  *
  * End-to-end package-1 regression: exercises the SAME apply orchestration used by
@@ -37,7 +37,7 @@ const BAD_SR_SUMMARY =
 
 /** Latest real-device Serbian export: forces Kuvarka + invents impact. */
 const BAD_SR_SUMMARY_LATEST =
-  'Kuvarka sa oko četiri godine iskustva u oblasti skladišnog poslovanja i operativnih procesa. Konzistentno obezbeđujem visoke standarde u rukovanju robom i doprinosim efikasnijem funkcionisanju tima. Preuzimanjem inicijative obezbeđujem uspešno izvršenje projekata i jasnu komunikaciju između odeljenja. Pripremam izveštaje koji pružaju pouzdan osnov za poslovne odluke.';
+  'Kuvarka sa oko četiri i po godine iskustva u oblasti skladišnog poslovanja i operativnih procesa. Konzistentno obezbeđujem visoke standarde u rukovanju robom i doprinosim efikasnijem funkcionisanju tima. Preuzimanjem inicijative obezbeđujem uspešno izvršenje projekata i jasnu komunikaciju između odeljenja. Pripremam izveštaje koji pružaju pouzdan osnov za poslovne odluke.';
 
 const BAD_EN_SUMMARY =
   'Professional cook with four years of experience supporting team operations, identifying process inefficiencies, and collaborating across functions to consistently deliver results on time.';
@@ -162,7 +162,7 @@ describe('Package-1 E2E apply pipeline (page orchestration)', () => {
     expect(r.titleCategory).toBe('cooking');
   });
 
-  it('1-3. Serbian bad summary fixture → grounded state, četiri godine, consistent', () => {
+  it('1-3. Serbian bad summary fixture → grounded state, četiri i po godine, consistent', () => {
     const cv = package1Cv();
     const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, REF);
     const pipeline = runCvAiApplyPipeline({
@@ -177,7 +177,7 @@ describe('Package-1 E2E apply pipeline (page orchestration)', () => {
     for (const re of UNSUPPORTED_SR) {
       expect(pipeline.stateCv.summary).not.toMatch(re);
     }
-    expect(pipeline.stateCv.summary).toMatch(/četiri\s+godine/iu);
+    expect(pipeline.stateCv.summary).toMatch(/četiri(?:\s+i\s+po)?\s+godine/iu);
     expect(pipeline.stateCv.summary).not.toMatch(/kuvarica|cook/iu);
     expect(pipeline.finalized.roleDutyConflict).toBe(true);
     expect(pipeline.finalized.countedAsSuccess).toBe(true);
@@ -367,7 +367,7 @@ describe('Package-1 E2E apply pipeline (page orchestration)', () => {
     });
     assertSummaryInvariant(pipeline);
     expect(pipeline.stateCv.summary).not.toMatch(/kuvarka|kuvarica|inicijativ|visok\w*\s+standard|efikasnij|poslovn\w*\s+odluk/iu);
-    expect(pipeline.stateCv.summary).toMatch(/četiri\s+godine/iu);
+    expect(pipeline.stateCv.summary).toMatch(/četiri(?:\s+i\s+po)?\s+godine/iu);
     expect(pipeline.stateCv.personal.jobTitle).toBe('Kuvar');
     expect(pipeline.finalized.roleDutyConflict).toBe(true);
   });
