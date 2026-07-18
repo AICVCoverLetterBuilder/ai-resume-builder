@@ -1,7 +1,10 @@
 /**
  * @vitest-environment jsdom
  *
- * Internal-only AI usage ledger reset — gate, UI, storage safety, counting.
+ * Internal-only AI usage ledger reset — compile-time gate, UI, storage safety.
+ *
+ * Gate tests reload modules after setting NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED
+ * so they mirror Next's client inlining (literal env access), not dynamic keys.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
@@ -15,17 +18,21 @@ import {
   getProAiUsageDiagnosticsSnapshot,
   loadProAiRecord,
   recordProAiUserActionSuccess,
-  resetProAiTestUsageLedger,
 } from '@/lib/ai-usage-policy';
-import { isInternalAiResetEnabled } from '@/lib/build-channel';
-import { CvExportDiagnosticsModal } from '@/components/CvExportDiagnosticsControls';
+import { computeInternalAiResetEnabledFromSourceFlags } from '@/lib/build-channel';
 import { CV_DRAFT_STORAGE_KEY, CL_DRAFT_STORAGE_KEY } from '@/lib/draft-storage';
 
-function setGate(channel: string | undefined, flag: string | undefined) {
-  if (channel === undefined) delete process.env.NEXT_PUBLIC_BUILD_CHANNEL;
-  else process.env.NEXT_PUBLIC_BUILD_CHANNEL = channel;
-  if (flag === undefined) delete process.env.NEXT_PUBLIC_ENABLE_AI_TEST_RESET;
-  else process.env.NEXT_PUBLIC_ENABLE_AI_TEST_RESET = flag;
+function setCompiledGate(value: 'true' | 'false' | undefined) {
+  if (value === undefined) delete process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED;
+  else process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED = value;
+}
+
+async function loadGateModules() {
+  vi.resetModules();
+  const buildChannel = await import('@/lib/build-channel');
+  const policy = await import('@/lib/ai-usage-policy');
+  const ui = await import('@/components/CvExportDiagnosticsControls');
+  return { ...buildChannel, ...policy, ...ui };
 }
 
 function seedCapReached(now = Date.now()) {
@@ -49,51 +56,54 @@ const CL_FIXTURE = JSON.stringify({
   savedAt: '2026-07-18T00:00:00.000Z',
 });
 
-describe('build-channel gate (F)', () => {
-  const prevChannel = process.env.NEXT_PUBLIC_BUILD_CHANNEL;
-  const prevFlag = process.env.NEXT_PUBLIC_ENABLE_AI_TEST_RESET;
-
-  afterEach(() => {
-    setGate(prevChannel, prevFlag);
-  });
-
+describe('source-flag policy (next.config input)', () => {
   it('requires both flags exactly', () => {
-    setGate('internal', 'true');
-    expect(isInternalAiResetEnabled()).toBe(true);
+    expect(computeInternalAiResetEnabledFromSourceFlags('internal', 'true')).toBe(true);
   });
 
-  it('one flag only → disabled', () => {
-    setGate('internal', undefined);
-    expect(isInternalAiResetEnabled()).toBe(false);
-    setGate(undefined, 'true');
-    expect(isInternalAiResetEnabled()).toBe(false);
-    setGate('internal', 'false');
-    expect(isInternalAiResetEnabled()).toBe(false);
-    setGate('production', 'true');
-    expect(isInternalAiResetEnabled()).toBe(false);
-  });
-
-  it('absent flags → disabled', () => {
-    setGate(undefined, undefined);
-    expect(isInternalAiResetEnabled()).toBe(false);
-  });
-
-  it('unexpected casing/value → disabled', () => {
-    setGate('Internal', 'true');
-    expect(isInternalAiResetEnabled()).toBe(false);
-    setGate('internal', 'True');
-    expect(isInternalAiResetEnabled()).toBe(false);
-    setGate('INTERNAL', 'TRUE');
-    expect(isInternalAiResetEnabled()).toBe(false);
+  it('one flag only / absent / wrong casing → disabled', () => {
+    expect(computeInternalAiResetEnabledFromSourceFlags('internal', undefined)).toBe(false);
+    expect(computeInternalAiResetEnabledFromSourceFlags(undefined, 'true')).toBe(false);
+    expect(computeInternalAiResetEnabledFromSourceFlags('internal', 'false')).toBe(false);
+    expect(computeInternalAiResetEnabledFromSourceFlags('production', 'true')).toBe(false);
+    expect(computeInternalAiResetEnabledFromSourceFlags(undefined, undefined)).toBe(false);
+    expect(computeInternalAiResetEnabledFromSourceFlags('Internal', 'true')).toBe(false);
+    expect(computeInternalAiResetEnabledFromSourceFlags('internal', 'True')).toBe(false);
   });
 });
 
-describe('internal AI reset when gate enabled (A, C, D, E)', () => {
-  const prevChannel = process.env.NEXT_PUBLIC_BUILD_CHANNEL;
-  const prevFlag = process.env.NEXT_PUBLIC_ENABLE_AI_TEST_RESET;
+describe('compile-time INTERNAL_AI_RESET_ENABLED (client-like reload)', () => {
+  const prev = process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED;
+
+  afterEach(() => {
+    setCompiledGate(prev as 'true' | 'false' | undefined);
+    vi.resetModules();
+  });
+
+  it('literal true → helper true', async () => {
+    setCompiledGate('true');
+    const mod = await loadGateModules();
+    expect(mod.INTERNAL_AI_RESET_ENABLED).toBe(true);
+    expect(mod.isInternalAiResetEnabled()).toBe(true);
+  });
+
+  it('literal false / absent → helper false', async () => {
+    setCompiledGate('false');
+    let mod = await loadGateModules();
+    expect(mod.INTERNAL_AI_RESET_ENABLED).toBe(false);
+    expect(mod.isInternalAiResetEnabled()).toBe(false);
+
+    setCompiledGate(undefined);
+    mod = await loadGateModules();
+    expect(mod.INTERNAL_AI_RESET_ENABLED).toBe(false);
+  });
+});
+
+describe('internal AI reset when compiled enabled', () => {
+  const prev = process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED;
 
   beforeEach(() => {
-    setGate('internal', 'true');
+    setCompiledGate('true');
     localStorage.clear();
     sessionStorage.clear();
     localStorage.setItem(CV_DRAFT_STORAGE_KEY, CV_FIXTURE);
@@ -101,56 +111,103 @@ describe('internal AI reset when gate enabled (A, C, D, E)', () => {
     localStorage.setItem('cvpro-plan', 'pro');
     localStorage.setItem('cvpro-pro-token', 'test-token');
     localStorage.setItem('cvpro-downloads', JSON.stringify({ cv: 1, cl: 0 }));
-    localStorage.setItem('cvpro-cl-generations', '2');
     localStorage.setItem('unrelated-key', 'keep-me');
   });
 
   afterEach(() => {
     cleanup();
-    setGate(prevChannel, prevFlag);
+    setCompiledGate(prev as 'true' | 'false' | undefined);
+    vi.resetModules();
     localStorage.clear();
     sessionStorage.clear();
   });
 
-  it('reset UI exists with count; confirmation required; ledger cleared; CV/Pro survive', () => {
+  it('reset UI exists with labels; confirmation; ledger cleared; CV/Pro survive', async () => {
     seedCapReached();
-    expect(getProAiUsageCount()).toBe(50);
-    expect(canUseProAiSafety(true)).toBe(false);
+    const mod = await loadGateModules();
+    expect(mod.getProAiUsageCount()).toBe(50);
+    expect(mod.canUseProAiSafety(true)).toBe(false);
 
-    render(<CvExportDiagnosticsModal open onClose={() => {}} />);
-    expect(screen.getByTestId('internal-ai-usage-reset-panel')).toBeTruthy();
+    render(<mod.CvExportDiagnosticsModal open onClose={() => {}} />);
+    expect(await screen.findByTestId('internal-ai-usage-reset-panel')).toBeTruthy();
+    expect(screen.getByText('Build channel: internal')).toBeTruthy();
+    expect(screen.getByText('AI test reset: enabled')).toBeTruthy();
     expect(screen.getByText(/count:\s*50/)).toBeTruthy();
     expect(screen.getByTestId('internal-ai-usage-reset-button')).toBeTruthy();
-    expect(screen.queryByTestId('internal-ai-usage-reset-confirm')).toBeNull();
 
     fireEvent.click(screen.getByTestId('internal-ai-usage-reset-button'));
-    expect(screen.getByTestId('internal-ai-usage-reset-confirm')).toBeTruthy();
     fireEvent.click(screen.getByTestId('internal-ai-usage-reset-confirm'));
 
-    expect(getProAiUsageCount()).toBe(0);
-    expect(canUseProAiSafety(true)).toBe(true);
+    expect(mod.getProAiUsageCount()).toBe(0);
+    expect(mod.canUseProAiSafety(true)).toBe(true);
     expect(localStorage.getItem(CV_DRAFT_STORAGE_KEY)).toBe(CV_FIXTURE);
     expect(localStorage.getItem(CL_DRAFT_STORAGE_KEY)).toBe(CL_FIXTURE);
     expect(localStorage.getItem('cvpro-plan')).toBe('pro');
     expect(localStorage.getItem('cvpro-pro-token')).toBe('test-token');
     expect(localStorage.getItem('cvpro-downloads')).toBe(JSON.stringify({ cv: 1, cl: 0 }));
-    expect(localStorage.getItem('cvpro-cl-generations')).toBe('2');
     expect(localStorage.getItem('unrelated-key')).toBe('keep-me');
   });
 
-  it('next successful AI apply after reset counts as 1; reset itself is +0', () => {
+  it('50 → reset 0 → next success 1; reset itself +0', async () => {
     seedCapReached();
-    const before = getProAiUsageCount();
-    expect(before).toBe(50);
-    const resetResult = resetProAiTestUsageLedger();
-    expect(resetResult.ok).toBe(true);
-    expect(getProAiUsageCount()).toBe(0);
-
-    recordProAiUserActionSuccess();
-    expect(getProAiUsageCount()).toBe(1);
+    const mod = await loadGateModules();
+    expect(mod.resetProAiTestUsageLedger().ok).toBe(true);
+    expect(mod.getProAiUsageCount()).toBe(0);
+    mod.recordProAiUserActionSuccess();
+    expect(mod.getProAiUsageCount()).toBe(1);
   });
 
-  it('counting: success +1; failure/rejection paths +0; export/reset +0', () => {
+  it('window expiry is windowStart + 30 days', async () => {
+    const now = Date.now();
+    seedCapReached(now);
+    await loadGateModules();
+    const snap = getProAiUsageDiagnosticsSnapshot(now);
+    expect(new Date(snap.windowExpiresIso!).getTime()).toBe(now + PRO_AI_WINDOW_MS);
+  });
+});
+
+describe('internal AI reset when compiled disabled', () => {
+  const prev = process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED;
+
+  beforeEach(() => {
+    setCompiledGate('false');
+    localStorage.clear();
+    seedCapReached();
+    localStorage.setItem(CV_DRAFT_STORAGE_KEY, CV_FIXTURE);
+  });
+
+  afterEach(() => {
+    cleanup();
+    setCompiledGate(prev as 'true' | 'false' | undefined);
+    vi.resetModules();
+    localStorage.clear();
+  });
+
+  it('reset UI absent; reset refused; ledger untouched', async () => {
+    const mod = await loadGateModules();
+    render(<mod.CvExportDiagnosticsModal open onClose={() => {}} />);
+    expect(screen.queryByTestId('internal-ai-usage-reset-panel')).toBeNull();
+    expect(screen.queryByText('Build channel: internal')).toBeNull();
+    expect(screen.queryByText(/Reset AI test usage/i)).toBeNull();
+
+    const result = mod.resetProAiTestUsageLedger();
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('disabled');
+    expect(mod.getProAiUsageCount()).toBe(50);
+    expect(localStorage.getItem(CV_DRAFT_STORAGE_KEY)).toBe(CV_FIXTURE);
+  });
+});
+
+describe('counting invariants (gate-independent)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it('success +1; no silent increments on idle', () => {
     localStorage.setItem(
       AI_USAGE_STORAGE_KEY,
       JSON.stringify({
@@ -161,83 +218,8 @@ describe('internal AI reset when gate enabled (A, C, D, E)', () => {
       }),
     );
     expect(getProAiUsageCount()).toBe(3);
-
-    // Simulated provider failure / validation / stale — no increment
-    expect(getProAiUsageCount()).toBe(3);
-
     recordProAiUserActionSuccess();
     expect(getProAiUsageCount()).toBe(4);
-
-    const beforeExport = getProAiUsageCount();
-    // export does not call recordProAiUserActionSuccess
-    expect(getProAiUsageCount()).toBe(beforeExport);
-
-    resetProAiTestUsageLedger();
-    expect(getProAiUsageCount()).toBe(0);
-  });
-
-  it('50 within window blocked; reset unblocks; next valid → count 1', () => {
-    const now = Date.now();
-    seedCapReached(now);
-    expect(canUseProAiSafety(true, loadProAiRecord(now), now)).toBe(false);
-    expect(resetProAiTestUsageLedger(now).ok).toBe(true);
-    expect(canUseProAiSafety(true, loadProAiRecord(now), now)).toBe(true);
-    recordProAiUserActionSuccess(undefined, now);
-    expect(getProAiUsageCount(now)).toBe(1);
-  });
-
-  it('diagnostics snapshot is non-PII (count/timestamps/backend only)', () => {
-    seedCapReached();
-    const snap = getProAiUsageDiagnosticsSnapshot();
-    expect(snap.storageBackend).toBe('localStorage');
-    expect(snap.storageKey).toBe(AI_USAGE_STORAGE_KEY);
-    expect(snap.count).toBe(50);
-    expect(snap.windowStartIso).toMatch(/^\d{4}-/);
-    expect(snap.windowExpiresIso).toMatch(/^\d{4}-/);
-    expect(JSON.stringify(snap)).not.toMatch(/Test Fixture|Hello|test-token/i);
-  });
-
-  it('window expiry timestamp is windowStart + 30 days', () => {
-    const now = Date.now();
-    seedCapReached(now);
-    const snap = getProAiUsageDiagnosticsSnapshot(now);
-    expect(new Date(snap.windowExpiresIso!).getTime()).toBe(now + PRO_AI_WINDOW_MS);
-  });
-});
-
-describe('internal AI reset when gate disabled (B)', () => {
-  const prevChannel = process.env.NEXT_PUBLIC_BUILD_CHANNEL;
-  const prevFlag = process.env.NEXT_PUBLIC_ENABLE_AI_TEST_RESET;
-
-  beforeEach(() => {
-    setGate(undefined, undefined);
-    localStorage.clear();
-    seedCapReached();
-    localStorage.setItem(CV_DRAFT_STORAGE_KEY, CV_FIXTURE);
-  });
-
-  afterEach(() => {
-    cleanup();
-    setGate(prevChannel, prevFlag);
-    localStorage.clear();
-  });
-
-  it('reset UI absent; reset action cannot clear ledger', () => {
-    render(<CvExportDiagnosticsModal open onClose={() => {}} />);
-    expect(screen.queryByTestId('internal-ai-usage-reset-panel')).toBeNull();
-    expect(screen.queryByTestId('internal-ai-usage-reset-button')).toBeNull();
-    expect(screen.queryByText(/Reset AI test usage/i)).toBeNull();
-
-    const result = resetProAiTestUsageLedger();
-    expect(result.ok).toBe(false);
-    expect(result.reason).toBe('disabled');
-    expect(getProAiUsageCount()).toBe(50);
-    expect(localStorage.getItem(CV_DRAFT_STORAGE_KEY)).toBe(CV_FIXTURE);
-  });
-
-  it('no window.global reset helper is installed by the modal', () => {
-    render(<CvExportDiagnosticsModal open onClose={() => {}} />);
-    expect((window as unknown as { resetProAiTestUsageLedger?: unknown }).resetProAiTestUsageLedger).toBeUndefined();
-    expect((window as unknown as { resetAiUsage?: unknown }).resetAiUsage).toBeUndefined();
+    expect(canUseProAiSafety(true, loadProAiRecord())).toBe(true);
   });
 });

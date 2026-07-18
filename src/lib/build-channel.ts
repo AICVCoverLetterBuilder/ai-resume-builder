@@ -1,38 +1,53 @@
 /**
  * Build-time channel gates for internal testing controls.
  *
- * Internal AI test reset is available only when BOTH are exact:
+ * Source flags (both required at build time):
  * - NEXT_PUBLIC_BUILD_CHANNEL=internal
  * - NEXT_PUBLIC_ENABLE_AI_TEST_RESET=true
  *
- * Missing, Preview/Production defaults, or any other casing/value → disabled.
- * Do not use NODE_ENV: Android release AABs also run in production mode.
+ * next.config.ts compiles those into a single inlined public value:
+ * - NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED=true|false
+ *
+ * Client code MUST read that value only via a static literal property access
+ * (`process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED`). Dynamic keys such as
+ * `process.env[name]` are NOT replaced by Next and evaluate to undefined in
+ * Android WebView (no Node process.env).
  */
 
-function readEnv(name: string): string {
-  // Next inlines NEXT_PUBLIC_* at build time; also accept runtime for tests.
-  const fromProcess =
-    typeof process !== 'undefined' && process.env
-      ? process.env[name]
-      : undefined;
-  return typeof fromProcess === 'string' ? fromProcess : '';
+/** Pure gate used by next.config (and unit tests of source-flag policy). */
+export function computeInternalAiResetEnabledFromSourceFlags(
+  channel: string | undefined | null,
+  enableFlag: string | undefined | null,
+): boolean {
+  return channel === 'internal' && enableFlag === 'true';
 }
 
 /**
- * Single shared gate for the internal AI usage-ledger reset control.
- * Scatter no other environment checks for this feature.
+ * Compile-time boolean. Next replaces the literal env reference at build time.
+ * Do not change this to bracket access, destructuring, or a helper that receives
+ * the env var name dynamically.
  */
+export const INTERNAL_AI_RESET_ENABLED =
+  process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED === 'true';
+
+/** Shared helper — returns the already-compiled boolean only. */
 export function isInternalAiResetEnabled(): boolean {
-  const channel = readEnv('NEXT_PUBLIC_BUILD_CHANNEL');
-  const flag = readEnv('NEXT_PUBLIC_ENABLE_AI_TEST_RESET');
-  return channel === 'internal' && flag === 'true';
+  return INTERNAL_AI_RESET_ENABLED;
 }
 
-/** Build-time console line (called from next.config). No usage history / PII. */
-export function logBuildChannelAiResetStatus(): void {
-  if (isInternalAiResetEnabled()) {
-    console.log('[build-channel] Internal AI test reset ENABLED');
-  } else {
-    console.log('[build-channel] Internal AI test reset disabled');
-  }
-}
+/**
+ * Stable marker only when the compile-time gate is true.
+ * Ternary keeps the literal out of disabled production bundles after DCE.
+ */
+export const INTERNAL_AI_RESET_BUNDLE_MARKER = INTERNAL_AI_RESET_ENABLED
+  ? 'CVPRO_INTERNAL_AI_RESET_ENABLED_V1'
+  : '';
+
+/** Visible labels — empty when disabled so production assets omit the strings. */
+export const INTERNAL_AI_RESET_CHANNEL_LABEL = INTERNAL_AI_RESET_ENABLED
+  ? 'Build channel: internal'
+  : '';
+
+export const INTERNAL_AI_RESET_STATUS_LABEL = INTERNAL_AI_RESET_ENABLED
+  ? 'AI test reset: enabled'
+  : '';
