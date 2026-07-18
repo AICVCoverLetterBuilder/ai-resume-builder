@@ -58,6 +58,7 @@ export function CvExportDiagnosticsModal({
 }) {
   const [json, setJson] = useState('');
   const [panelTick, setPanelTick] = useState(0);
+  const [showJson, setShowJson] = useState(false);
   const [EnabledPanel, setEnabledPanel] = useState<null | typeof import('./InternalAiUsageResetPanel').InternalAiUsageResetPanel>(null);
 
   useEffect(() => {
@@ -66,6 +67,8 @@ export function CvExportDiagnosticsModal({
     const docx = getLatestCvExportDiagnostic('docx');
     setJson(JSON.stringify({ pdf, docx }, null, 2));
     setPanelTick((n) => n + 1);
+    // Internal builds start with JSON collapsed so the reset control is visible.
+    setShowJson(!INTERNAL_AI_RESET_ENABLED);
   }, [open]);
 
   useEffect(() => {
@@ -92,38 +95,84 @@ export function CvExportDiagnosticsModal({
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 p-4 sm:items-center"
+      className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] sm:items-center"
       role="dialog"
       aria-modal="true"
       aria-label="Export diagnostics"
+      data-testid="cv-export-diagnostics-overlay"
     >
-      <div className="max-h-[80vh] w-full max-w-lg overflow-hidden rounded-xl border border-border bg-background shadow-lg">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+      {/*
+        Flex column shell: header/footer shrink-0; body owns scrolling.
+        max-height uses dvh + safe-area so Android nav bars do not clip controls.
+        overflow-hidden only on the shell (not nested over the scroll body).
+      */}
+      <div
+        className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg"
+        data-testid="cv-export-diagnostics-dialog"
+        style={{
+          maxHeight:
+            'calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 2rem)',
+        }}
+      >
+        <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">Export diagnostics</h2>
-          <button type="button" className="text-xs text-muted-foreground" onClick={onClose}>
+          <button type="button" className="min-h-11 min-w-11 text-xs text-muted-foreground" onClick={onClose}>
             Close
           </button>
         </div>
-        <p className="px-4 pt-3 text-xs text-muted-foreground">
-          Non-PII metadata only (no CV text). Copy and send this JSON when reporting an export failure.
-        </p>
-        <pre className="mx-4 my-3 max-h-[45vh] overflow-auto rounded-lg bg-muted/40 p-3 text-[10px] leading-relaxed">
-          {json || 'No export diagnostics recorded yet. Try PDF or DOCX export once.'}
-        </pre>
-        {INTERNAL_AI_RESET_ENABLED && EnabledPanel ? (
-          <EnabledPanel refreshToken={panelTick} />
-        ) : null}
-        <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+
+        <div
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3"
+          data-testid="cv-export-diagnostics-body"
+          style={{
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y',
+            overscrollBehavior: 'contain',
+          }}
+        >
+          {/* Internal reset FIRST so testers never hunt below a tall JSON block. */}
+          {INTERNAL_AI_RESET_ENABLED && EnabledPanel ? (
+            <div className="mb-4 border-b border-border pb-4">
+              <EnabledPanel refreshToken={panelTick} />
+            </div>
+          ) : null}
+
+          <p className="text-xs text-muted-foreground">
+            Non-PII metadata only (no CV text). Copy and send this JSON when reporting an export failure.
+          </p>
+
+          {INTERNAL_AI_RESET_ENABLED ? (
+            <button
+              type="button"
+              data-testid="cv-export-diagnostics-toggle-json"
+              className="mt-3 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+              onClick={() => setShowJson((v) => !v)}
+            >
+              {showJson ? 'Hide diagnostics JSON' : 'Show diagnostics JSON'}
+            </button>
+          ) : null}
+
+          {(showJson || !INTERNAL_AI_RESET_ENABLED) ? (
+            <pre
+              className="mt-3 max-h-40 overflow-auto rounded-lg bg-muted/40 p-3 text-[10px] leading-relaxed sm:max-h-52"
+              data-testid="cv-export-diagnostics-json"
+            >
+              {json || 'No export diagnostics recorded yet. Try PDF or DOCX export once.'}
+            </pre>
+          ) : null}
+        </div>
+
+        <div className="flex shrink-0 justify-end gap-2 border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <button
             type="button"
-            className="rounded-md border border-border px-3 py-1.5 text-xs"
+            className="min-h-11 rounded-md border border-border px-3 py-2 text-xs pointer-events-auto"
             onClick={onClose}
           >
             Close
           </button>
           <button
             type="button"
-            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground"
+            className="min-h-11 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground pointer-events-auto"
             onClick={onCopy}
           >
             Copy diagnostics

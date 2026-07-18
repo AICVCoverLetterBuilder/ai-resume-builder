@@ -5,6 +5,7 @@
  * enabled branch of CvExportDiagnosticsControls so production DCE can drop it.
  */
 import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import {
   INTERNAL_AI_RESET_BUNDLE_MARKER,
@@ -35,44 +36,39 @@ export function InternalAiUsageResetPanel({
 
   if (!snap) return null;
 
-  return (
-    <div
-      className="border-t border-border px-4 py-3 space-y-2"
-      data-testid="internal-ai-usage-reset-panel"
-    >
-      <p className="text-[10px] font-mono text-muted-foreground">{INTERNAL_AI_RESET_CHANNEL_LABEL}</p>
-      <p className="text-[10px] font-mono text-muted-foreground">{INTERNAL_AI_RESET_STATUS_LABEL}</p>
-      <span className="sr-only">{INTERNAL_AI_RESET_BUNDLE_MARKER}</span>
-      <h3 className="text-xs font-semibold">Internal AI test usage</h3>
-      <p className="text-[10px] text-muted-foreground leading-relaxed">
-        Storage: {snap.storageBackend} / {snap.storageKey}
-      </p>
-      <ul className="text-[10px] text-muted-foreground space-y-0.5 font-mono">
-        <li>count: {snap.count} / {snap.policyLimit}</li>
-        <li>window start: {snap.windowStartIso ?? 'n/a'}</li>
-        <li>window expires: {snap.windowExpiresIso ?? 'n/a'}</li>
-        <li>blocked: {snap.blocked ? 'yes' : 'no'}</li>
-      </ul>
-      {!confirming ? (
-        <button
-          type="button"
-          data-testid="internal-ai-usage-reset-button"
-          className="rounded-md border border-amber-600/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-900 dark:text-amber-200"
-          onClick={() => setConfirming(true)}
+  const confirmDialog = confirming && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        className="fixed inset-0 z-[90] flex items-end justify-center bg-black/50 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:items-center"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Confirm AI test usage reset"
+        data-testid="internal-ai-usage-reset-confirm-dialog"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setConfirming(false);
+        }}
+      >
+        <div
+          className="w-full max-w-sm rounded-xl border border-border bg-background p-4 shadow-lg pointer-events-auto"
+          onClick={(e) => e.stopPropagation()}
         >
-          Reset AI test usage
-        </button>
-      ) : (
-        <div className="space-y-2 rounded-md border border-amber-600/30 bg-amber-500/5 p-2">
-          <p className="text-[10px] text-muted-foreground leading-relaxed">
+          <h3 className="text-sm font-semibold">Reset AI test usage?</h3>
+          <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
             Clear only the local AI safety-cap counter (`cvpro-ai-usage`). Saved CVs,
             Cover Letters, Pro entitlement, and other preferences are not changed.
           </p>
-          <div className="flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap gap-2 justify-end">
+            <button
+              type="button"
+              className="min-h-11 rounded-md border border-border px-4 py-2 text-sm pointer-events-auto"
+              onClick={() => setConfirming(false)}
+            >
+              Cancel
+            </button>
             <button
               type="button"
               data-testid="internal-ai-usage-reset-confirm"
-              className="rounded-md bg-amber-700 px-3 py-1.5 text-xs font-medium text-white"
+              className="min-h-11 rounded-md bg-amber-700 px-4 py-2 text-sm font-medium text-white pointer-events-auto"
               onClick={() => {
                 const result = resetProAiTestUsageLedger();
                 setConfirming(false);
@@ -86,16 +82,41 @@ export function InternalAiUsageResetPanel({
             >
               Confirm clear local counter
             </button>
-            <button
-              type="button"
-              className="rounded-md border border-border px-3 py-1.5 text-xs"
-              onClick={() => setConfirming(false)}
-            >
-              Cancel
-            </button>
           </div>
         </div>
-      )}
+      </div>,
+      document.body,
+    )
+    : null;
+
+  return (
+    <div
+      className="space-y-3 pointer-events-auto"
+      data-testid="internal-ai-usage-reset-panel"
+    >
+      <p className="text-[10px] font-mono text-muted-foreground">{INTERNAL_AI_RESET_CHANNEL_LABEL}</p>
+      <p className="text-[10px] font-mono text-muted-foreground">{INTERNAL_AI_RESET_STATUS_LABEL}</p>
+      <span className="sr-only">{INTERNAL_AI_RESET_BUNDLE_MARKER}</span>
+      <h3 className="text-xs font-semibold">Internal AI test usage</h3>
+      <p className="text-[10px] text-muted-foreground leading-relaxed">
+        Storage: {snap.storageBackend} / {snap.storageKey}
+      </p>
+      <ul className="text-[10px] text-muted-foreground space-y-0.5 font-mono">
+        <li data-testid="internal-ai-usage-count">count: {snap.count} / {snap.policyLimit}</li>
+        <li>window start: {snap.windowStartIso ?? 'n/a'}</li>
+        <li>window expires: {snap.windowExpiresIso ?? 'n/a'}</li>
+        <li>blocked: {snap.blocked ? 'yes' : 'no'}</li>
+      </ul>
+      <button
+        type="button"
+        data-testid="internal-ai-usage-reset-button"
+        className="min-h-11 w-full touch-manipulation rounded-md border border-amber-600/40 bg-amber-500/10 px-4 py-2.5 text-sm font-medium text-amber-900 pointer-events-auto dark:text-amber-200"
+        style={{ WebkitTapHighlightColor: 'transparent' }}
+        onClick={() => setConfirming(true)}
+      >
+        Reset AI test usage
+      </button>
+      {confirmDialog}
     </div>
   );
 }

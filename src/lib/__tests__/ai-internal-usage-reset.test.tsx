@@ -132,13 +132,24 @@ describe('internal AI reset when compiled enabled', () => {
     expect(await screen.findByTestId('internal-ai-usage-reset-panel')).toBeTruthy();
     expect(screen.getByText('Build channel: internal')).toBeTruthy();
     expect(screen.getByText('AI test reset: enabled')).toBeTruthy();
-    expect(screen.getByText(/count:\s*50/)).toBeTruthy();
+    expect(screen.getByTestId('internal-ai-usage-count').textContent).toMatch(/count:\s*50/);
     expect(screen.getByTestId('internal-ai-usage-reset-button')).toBeTruthy();
 
+    // Reset panel appears before JSON toggle (no need to scroll past JSON).
+    const body = screen.getByTestId('cv-export-diagnostics-body');
+    const panel = screen.getByTestId('internal-ai-usage-reset-panel');
+    const jsonToggle = screen.getByTestId('cv-export-diagnostics-toggle-json');
+    expect(
+      Boolean(panel.compareDocumentPosition(jsonToggle) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ).toBe(true);
+    expect(body.contains(panel)).toBe(true);
+
     fireEvent.click(screen.getByTestId('internal-ai-usage-reset-button'));
+    expect(await screen.findByTestId('internal-ai-usage-reset-confirm-dialog')).toBeTruthy();
     fireEvent.click(screen.getByTestId('internal-ai-usage-reset-confirm'));
 
     expect(mod.getProAiUsageCount()).toBe(0);
+    expect((await screen.findByTestId('internal-ai-usage-count')).textContent).toMatch(/count:\s*0/);
     expect(mod.canUseProAiSafety(true)).toBe(true);
     expect(localStorage.getItem(CV_DRAFT_STORAGE_KEY)).toBe(CV_FIXTURE);
     expect(localStorage.getItem(CL_DRAFT_STORAGE_KEY)).toBe(CL_FIXTURE);
