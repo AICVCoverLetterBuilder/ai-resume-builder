@@ -70,6 +70,16 @@ export interface WorkExperience {
     confidence: 'narrow_supported';
     sourceClauseIndex: number;
   }>;
+  /**
+   * Job-context identity for the last AI/fallback Experience generation
+   * (position class + industry + locale + level). Used to invalidate stale
+   * AI grounding after occupation/industry changes.
+   */
+  generationJobContextKey?: string;
+  /** Job-context identity when genuine user grounding was captured. */
+  groundingJobContextKey?: string;
+  /** Prior generation context key retained for non-PII diagnostics. */
+  previousGenerationJobContextKey?: string;
 }
 
 export interface Education {
