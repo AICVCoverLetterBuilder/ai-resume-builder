@@ -12,6 +12,8 @@ import type { CoverLetterGender } from './cover-letter-gender';
 import {
   buildCvCanonicalFactSet,
   bulletsForExperience,
+  freezeCanonicalExperienceDescription,
+  splitExperienceBullets,
   type CvCanonicalFactSet,
 } from './cv-canonical-facts';
 import {
@@ -30,7 +32,7 @@ import {
   deterministicLocalizedSummaryFromCanonical,
   buildSourcePreservingExperienceBullets,
 } from './cv-localized-fallback';
-import { validateSourceFactIdentityCoverage } from './cv-source-fact-identity';
+import { validateSourceFactIdentityCoverage, extractSourceDutyUnits } from './cv-source-fact-identity';
 import {
   evaluateRoleDutyConsistency,
   resolveOccupationalTitleForSummary,
@@ -53,7 +55,6 @@ import { acceptValidatedAiContent } from './cv-canonical-snapshot';
 import { applyCvContentQuality } from './cv-content-quality';
 import { hasAiProtocolMarker, stripAiProtocolMarkers } from './cv-ai-protocol-strip';
 import { hasCvMetaFallbackText } from './cv-ai-meta-text';
-import { freezeCanonicalExperienceDescription } from './cv-canonical-facts';
 import {
   buildExperienceJobContext,
   buildOccupationAwareExperienceFallback,
@@ -112,6 +113,22 @@ export type FinalizeCvAiFieldResult = {
   origin: CvSummaryOrigin | 'ai_generated' | 'ai_repaired' | 'deterministic_fallback' | 'user';
   roleDutyConflict: boolean;
   countedAsSuccess: boolean;
+  /** Non-PII Experience AI rejection / apply diagnostics. */
+  diagnostics?: {
+    sourceLocale?: string;
+    sourceFactCount?: number;
+    requiredFactCount?: number;
+    coveredFactCount?: number;
+    providerBulletCount?: number;
+    fallbackBulletCount?: number;
+    finalBulletCount?: number;
+    finalBulletScripts?: string[];
+    tenseMode?: 'present' | 'past' | 'unknown';
+    rejectionStage?: string;
+    typedFailureReason?: string;
+    fallbackApplied?: boolean;
+    countedAsSuccess?: boolean;
+  };
 };
 
 function dutiesTextFromCv(cv: CVData, experienceId?: string): string {
@@ -399,6 +416,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   };
 }
 
+function detectBulletScripts(text: string): string[] {
+  const scripts: string[] = [];
+  if (/[A-Za-z]/.test(text)) scripts.push('latin');
+  if (/[čćžšđČĆŽŠĐ]/.test(text)) scripts.push('latin-diacritic');
+  if (/\p{Script=Cyrillic}/u.test(text)) scripts.push('cyrillic');
+  if (/\p{Script=Devanagari}/u.test(text)) scripts.push('devanagari');
+  if (/\p{Script=Arabic}/u.test(text)) scripts.push('arabic');
+  if (/[\u3040-\u30ff\u3400-\u9fff]/.test(text)) scripts.push('cjk');
+  return scripts;
+}
+
 function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult {
   const locale = input.requestedLocale;
   const cv = input.cv;
@@ -406,6 +434,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const experienceIndex = experienceIndexForId(cv, input.experienceId);
   const exp = (cv.experience || [])[experienceIndex];
   const isPresent = Boolean(exp?.isPresent);
+  const tenseMode: 'present' | 'past' = isPresent ? 'present' : 'past';
   const jobContext = input.jobContext || buildExperienceJobContext({
     position: exp?.position,
     industry: input.industry,
@@ -434,19 +463,62 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const canonical = bulletsForExperience(factSet, experienceIndex);
   const sourceForCoverage = dutiesText.trim()
     || canonical.map((f) => f.sourceText || f.value).join('\n');
+  const sourceUnits = extractSourceDutyUnits(sourceForCoverage);
+  const sourceFactCount = sourceUnits.length;
+  const providerBulletCount = splitExperienceBullets(input.candidate || '').filter(Boolean).length;
+
+  let lastRejectStage = 'init';
+  let lastRejectReason = 'experience_material_fact_coverage_incomplete';
+  let lastCovered = 0;
+  let lastRequired = sourceFactCount;
+  let fallbackBulletCount = 0;
+  let fallbackApplied = false;
+
+  const baseDiag = (): NonNullable<FinalizeCvAiFieldResult['diagnostics']> => ({
+    sourceLocale: locale,
+    sourceFactCount,
+    requiredFactCount: lastRequired,
+    coveredFactCount: lastCovered,
+    providerBulletCount,
+    fallbackBulletCount,
+    finalBulletCount: 0,
+    finalBulletScripts: [],
+    tenseMode,
+    rejectionStage: lastRejectStage,
+    typedFailureReason: lastRejectReason,
+    fallbackApplied,
+    countedAsSuccess: false,
+  });
 
   const tryAccept = (
     text: string,
     origin: FinalizeCvAiFieldResult['origin'],
+    stage: string,
   ): FinalizeCvAiFieldResult | null => {
     const candidate = (text || '').trim();
-    if (!candidate) return null;
+    if (!candidate) {
+      lastRejectStage = stage;
+      lastRejectReason = 'empty_bullets';
+      return null;
+    }
     const pass = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
-    if (!pass.ok) return null;
+    if (!pass.ok) {
+      lastRejectStage = stage;
+      lastRejectReason = pass.reason || 'fidelity_failed';
+      return null;
+    }
     if (sourceForCoverage) {
       const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate);
-      if (!post.ok) return null;
+      if (!post.ok) {
+        lastRejectStage = `${stage}:material_postcondition`;
+        lastRejectReason = post.reason || 'experience_material_fact_coverage_incomplete';
+        lastRequired = post.required?.length ?? sourceFactCount;
+        lastCovered = post.covered?.length ?? 0;
+        return null;
+      }
       const identity = validateSourceFactIdentityCoverage(sourceForCoverage, candidate);
+      lastRequired = identity.requiredIds.length;
+      lastCovered = identity.coveredIds.length;
       if (!identity.ok) {
         // Cross-script: allow only when every source unit has a material key and
         // description-level material coverage already passed (cooking/logistics/cs).
@@ -456,8 +528,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           .filter((l) => l.length > 8);
         const keyedUnits = units.filter((u) =>
           materialDutyKeysFromDescription(u).some((k) => k !== 'generic_duty'));
-        if (keyedUnits.length < units.length || keyedUnits.length === 0) return null;
+        if (keyedUnits.length < units.length || keyedUnits.length === 0) {
+          lastRejectStage = `${stage}:source_fact_identity`;
+          lastRejectReason = identity.reason || 'experience_material_fact_coverage_incomplete';
+          return null;
+        }
       }
+    }
+    const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
+    const isFallback = origin === 'deterministic_fallback';
+    if (isFallback) {
+      fallbackApplied = true;
+      fallbackBulletCount = bulletCount;
     }
     return {
       blocked: false,
@@ -465,6 +547,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       origin,
       roleDutyConflict,
       countedAsSuccess: true,
+      diagnostics: {
+        ...baseDiag(),
+        coveredFactCount: lastCovered || sourceFactCount,
+        requiredFactCount: lastRequired || sourceFactCount,
+        fallbackBulletCount: isFallback ? bulletCount : fallbackBulletCount,
+        finalBulletCount: bulletCount,
+        finalBulletScripts: detectBulletScripts(candidate),
+        rejectionStage: undefined,
+        typedFailureReason: undefined,
+        fallbackApplied: isFallback,
+        countedAsSuccess: true,
+      },
     };
   };
 
@@ -492,7 +586,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     candidate = '';
   }
 
-  const firstAccepted = tryAccept(candidate, input.originHint || 'ai_generated');
+  const firstAccepted = tryAccept(candidate, input.originHint || 'ai_generated', 'provider');
   if (firstAccepted) return firstAccepted;
 
   const grounded = normalizeLocaleText(
@@ -500,17 +594,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     locale,
   );
   if (!(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))) {
-    const secondAccepted = tryAccept(grounded, 'deterministic_fallback');
+    const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
     if (secondAccepted) return secondAccepted;
   }
 
   // Rebuild from authoritative source units when provider/fallback collapsed facts.
+  // Identities are captured from immutable source units before tense transforms.
   if (sourceForCoverage && !grounding?.staleGeneratedContentExcluded) {
     const preserved = normalizeLocaleText(
       buildSourcePreservingExperienceBullets(sourceForCoverage, locale, gender, { isPresent }) || '',
       locale,
     );
-    const preservedAccepted = tryAccept(preserved, 'deterministic_fallback');
+    fallbackBulletCount = splitExperienceBullets(preserved).filter(Boolean).length;
+    const preservedAccepted = tryAccept(preserved, 'deterministic_fallback', 'source_preserving_fallback');
     if (preservedAccepted) return preservedAccepted;
   }
 
@@ -543,6 +639,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         origin: 'deterministic_fallback',
         roleDutyConflict,
         countedAsSuccess: true,
+        diagnostics: {
+          ...baseDiag(),
+          fallbackApplied: true,
+          fallbackBulletCount: splitExperienceBullets(occupationFallback).filter(Boolean).length,
+          finalBulletCount: splitExperienceBullets(occupationFallback).filter(Boolean).length,
+          finalBulletScripts: detectBulletScripts(occupationFallback),
+          rejectionStage: undefined,
+          typedFailureReason: undefined,
+          countedAsSuccess: true,
+        },
       };
     }
   }
@@ -553,15 +659,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       candidate || grounded || '',
     )
     : null;
+  if (coverageFail && !coverageFail.ok) {
+    lastRejectReason = coverageFail.reason || lastRejectReason;
+    lastRejectStage = lastRejectStage === 'init' ? 'final_block' : lastRejectStage;
+  }
 
   return {
     blocked: true,
     reason: coverageFail?.reason
+      || lastRejectReason
       || 'experience_material_fact_coverage_incomplete',
     text: exp?.description || '',
     origin: 'user',
     roleDutyConflict,
     countedAsSuccess: false,
+    diagnostics: baseDiag(),
   };
 }
 

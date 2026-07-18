@@ -65,6 +65,20 @@ export type ExperienceAiJobContextTrace = {
   resultApplied: boolean;
   rejectedReason?: string;
   aiUsageIncremented: boolean;
+  /** Non-PII Experience AI rejection / apply diagnostics (no raw duties). */
+  sourceLocale?: string;
+  sourceFactCount?: number;
+  requiredFactCount?: number;
+  coveredFactCount?: number;
+  providerBulletCount?: number;
+  fallbackBulletCount?: number;
+  finalBulletCount?: number;
+  finalBulletScripts?: string[];
+  tenseMode?: 'present' | 'past' | 'unknown';
+  rejectionStage?: string;
+  typedFailureReason?: string;
+  fallbackApplied?: boolean;
+  countedAsSuccess?: boolean;
 };
 
 function collapseWs(value: string): string {

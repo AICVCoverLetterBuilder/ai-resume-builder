@@ -1328,6 +1328,7 @@ export default function CVBuilderPage() {
           resultApplied: false,
           rejectedReason: finalizedBullets.reason || 'generation_validation_failed',
           aiUsageIncremented: false,
+          ...(finalizedBullets.diagnostics || {}),
         });
         toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
@@ -1380,6 +1381,7 @@ export default function CVBuilderPage() {
         resultApplied: true,
         aiUsageIncremented: true,
         semanticDutyKeysUsed: [],
+        ...(finalizedBullets.diagnostics || {}),
       });
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {

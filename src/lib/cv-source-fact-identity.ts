@@ -10,14 +10,167 @@ import {
   materialDutyKeysFromDescription,
   validateMaterialDutyCoverage,
 } from './cv-material-duty-coverage';
+import type { Locale } from './i18n/translations';
 
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'and', 'or', 'to', 'of', 'in', 'on', 'for', 'with', 'by',
   'at', 'from', 'as', 'into', 'their', 'them', 'they', 'this', 'that', 'when',
   'while', 'during', 'using', 'via', 'per', 'sam', 'sa', 'za', 'na', 'i', 'u',
   'je', 'se', 'the', 'are', 'was', 'were', 'be', 'been', 'is', 'am',
+  'kada', 'kad', 'što', 'sto', 'koji', 'koja', 'koje', 'ili', 'ali',
 ]);
 
+/** Light multilingual stem for coverage matching (not a full morphological analyser). */
+export function stemTokenForCoverage(token: string): string {
+  let t = (token || '').toLowerCase().normalize('NFKC');
+  if (t.length < 4) return t;
+  // Serbian / Croatian verb pairs: pregledam↔pregleda, ažuriram↔ažurira, koordinišem↔koordiniše.
+  t = t.replace(/(?:avam|ava)$/u, '');
+  t = t.replace(/(?:iram|ira|irati)$/u, 'ir');
+  t = t.replace(/(?:išem|iše|isem|ise|šem|še)$/u, '');
+  t = t.replace(/(?:ijem|uje|ujem|ajem)$/u, '');
+  t = t.replace(/(?:ivao|ivala|ivali|ivale)$/u, '');
+  t = t.replace(/(?:ao|ala|ali|ale|io|ila|ili|ile)$/u, '');
+  t = t.replace(/(?:ama|ima|ove|ovi|eva|eve|om)$/u, '');
+  t = t.replace(/(?:am|em|im)$/u, '');
+  // Cyrillic Serbian stems
+  t = t.replace(/(?:авам|ава)$/u, '');
+  t = t.replace(/(?:ирам|ира|ирати)$/u, 'ир');
+  t = t.replace(/(?:ишем|ише|шем|ше)$/u, '');
+  t = t.replace(/(?:ијем|ује|ујем|ајем)$/u, '');
+  t = t.replace(/(?:ивао|ивала|ивали|ивале)$/u, '');
+  t = t.replace(/(?:ао|ала|али|але|ио|ила|или|иле)$/u, '');
+  t = t.replace(/(?:ама|има|ове|ови|ева|еве|ом)$/u, '');
+  t = t.replace(/(?:ам|ем|им)$/u, '');
+  if (t.length >= 5) t = t.replace(/[aeiuаеиу]$/u, '');
+  // English
+  t = t.replace(/(?:ing|ed|es|s)$/u, '');
+  t = t.replace(/(?:tion|ment|ness)$/u, '');
+  return t.length >= 3 ? t : token.toLowerCase();
+}
+
+/**
+ * Convert Serbian/Croatian first-person duty verbs to CV-style 3rd person.
+ * Present: Pregledam → Pregleda; Koordinišem → Koordiniše.
+ * Past (completed): Pregledam → Pregledao/Pregledala (gendered).
+ */
+export function applySerbianCvEmploymentTense(
+  line: string,
+  isPresent: boolean,
+  gender?: string,
+): string {
+  let t = stripDutyListPrefix(line || '');
+  if (!t) return t;
+  const female = /^(female|f|ženski|zenski)$/i.test(String(gender || ''));
+  const male = /^(male|m|muški|muski)$/i.test(String(gender || ''));
+
+  const to3sgPresent = (verb: string): string => {
+    const v = verb;
+    // Latin
+    if (/šem$/i.test(v)) return `${v.slice(0, -3)}še`;
+    if (/ćem$/i.test(v)) return `${v.slice(0, -3)}će`;
+    if (/ijem$/i.test(v)) return `${v.slice(0, -4)}ije`;
+    if (/ujem$/i.test(v)) return `${v.slice(0, -4)}uje`;
+    if (/avam$/i.test(v)) return `${v.slice(0, -2)}a`; // označavam → označava
+    if (/iram$/i.test(v)) return `${v.slice(0, -2)}a`; // ažuriram → ažurira
+    if (/am$/i.test(v)) return `${v.slice(0, -2)}a`; // pregledam → pregleda
+    if (/em$/i.test(v)) return `${v.slice(0, -2)}e`;
+    if (/im$/i.test(v)) return `${v.slice(0, -2)}i`;
+    // Cyrillic 1sg → 3sg
+    if (/шем$/u.test(v)) return `${v.slice(0, -3)}ше`;
+    if (/ћем$/u.test(v)) return `${v.slice(0, -3)}ће`;
+    if (/ијем$/u.test(v)) return `${v.slice(0, -4)}ије`;
+    if (/ујем$/u.test(v)) return `${v.slice(0, -4)}ује`;
+    if (/авам$/u.test(v)) return `${v.slice(0, -2)}а`;
+    if (/ирам$/u.test(v)) return `${v.slice(0, -2)}а`;
+    if (/ам$/u.test(v)) return `${v.slice(0, -2)}а`;
+    if (/ем$/u.test(v)) return `${v.slice(0, -2)}е`;
+    if (/им$/u.test(v)) return `${v.slice(0, -2)}и`;
+    return v;
+  };
+
+  const toPast = (verb: string): string => {
+    const base = to3sgPresent(verb);
+    const cyr = /\p{Script=Cyrillic}/u.test(base);
+    let stem: string;
+    let maleEnd: string;
+    let femaleEnd: string;
+    if (/še$/i.test(base) || /ше$/u.test(base)) {
+      stem = base.slice(0, -2);
+      maleEnd = cyr ? 'сао' : 'sao';
+      femaleEnd = cyr ? 'сала' : 'sala';
+    } else if (/[aа]$/u.test(base)) {
+      stem = base.slice(0, -1);
+      maleEnd = cyr ? 'ао' : 'ao';
+      femaleEnd = cyr ? 'ала' : 'ala';
+    } else if (/[eе]$/u.test(base)) {
+      stem = base.slice(0, -1);
+      maleEnd = cyr ? 'ео' : 'eo';
+      femaleEnd = cyr ? 'ела' : 'ela';
+    } else if (/[iи]$/u.test(base)) {
+      stem = base.slice(0, -1);
+      maleEnd = cyr ? 'ио' : 'io';
+      femaleEnd = cyr ? 'ила' : 'ila';
+    } else {
+      stem = base;
+      maleEnd = cyr ? 'о' : 'o';
+      femaleEnd = cyr ? 'ла' : 'la';
+    }
+    if (female) return `${stem}${femaleEnd}`;
+    if (male) return `${stem}${maleEnd}`;
+    return `${stem}${maleEnd}/${femaleEnd}`;
+  };
+
+  const transformVerb = (verb: string): string => {
+    if (!/(am|em|im|šem|ćem|ijem|ujem|avam|ам|ем|им|шем|ћем|ијем|ујем|авам)$/iu.test(verb)) {
+      return verb;
+    }
+    return isPresent ? to3sgPresent(verb) : toPast(verb);
+  };
+
+  // Leading verb
+  t = t.replace(/^(\p{L}+)/u, (_m, verb: string) => {
+    const next = transformVerb(verb);
+    return verb[0] === verb[0].toUpperCase()
+      ? next.charAt(0).toUpperCase() + next.slice(1)
+      : next;
+  });
+  // Coordinated verbs: "… i označavam …" / "… и означавам …"
+  // Avoid \\b — it does not treat Cyrillic letters as word characters in JS.
+  t = t.replace(/(^|[^\p{L}])(i|и)\s+(\p{L}+)/gu, (_m, pre: string, conj: string, verb: string) =>
+    `${pre}${conj} ${transformVerb(verb)}`);
+  return t;
+}
+
+/** True when source text is already written in the requested locale script/language. */
+export function sourceUsableInLocale(text: string, locale: Locale): boolean {
+  const t = text || '';
+  if (!t.trim()) return false;
+  if (locale === 'hi') return /\p{Script=Devanagari}/u.test(t);
+  if (locale === 'ar') return /\p{Script=Arabic}/u.test(t);
+  if (locale === 'ja') return /[\u3040-\u30ff\u3400-\u9fff]/u.test(t);
+  if (locale === 'ru') return /\p{Script=Cyrillic}/u.test(t);
+  if (locale === 'sr' || locale === 'hr') {
+    if (/\p{Script=Devanagari}|\p{Script=Arabic}/u.test(t)) return false;
+    // Cyrillic Serbian
+    if (/\p{Script=Cyrillic}/u.test(t)) return true;
+    // Latin Serbian/Croatian with diacritics or typical 1sg verb endings
+    if (/[čćžšđČĆŽŠĐ]/u.test(t)) return true;
+    if (/\b\p{L}+(?:am|em|im|šem)\b/u.test(t) && /\b(?:i|sa|za|na|u|kada|kad)\b/u.test(t)) {
+      return true;
+    }
+    return false;
+  }
+  if (locale === 'en') {
+    return !/\p{Script=Devanagari}|\p{Script=Arabic}|\p{Script=Cyrillic}/u.test(t)
+      && !/[čćžšđČĆŽŠĐ]/u.test(t);
+  }
+  // Other Latin locales (de/es/fr/it/pt-BR): accept Latin text but NEVER treat
+  // Serbian/Croatian diacritic or Cyrillic source as already-localized — that
+  // would preserve sr wording under a de/es request (cross-locale regressions).
+  if (/[čćžšđČĆŽŠĐ]/u.test(t) || /\p{Script=Cyrillic}/u.test(t)) return false;
+  return !/\p{Script=Devanagari}|\p{Script=Arabic}/u.test(t);
+}
 /** Strip leading list syntax only (bullets / numbered prefixes). */
 export function stripDutyListPrefix(text: string): string {
   return (text || '')
@@ -114,16 +267,38 @@ export function sourceFactIdentitiesFromDescription(description: string): Source
   return out;
 }
 
+/** Lightweight synonym stems so coverage tolerates natural paraphrase. */
+const COVERAGE_SYNONYM_STEMS: Record<string, string[]> = {
+  tabel: ['evidenc', 'tabel'],
+  evidenc: ['tabel', 'evidenc'],
+  intern: ['unutrasnj', 'unutrašnj', 'intern'],
+  unutrasnj: ['intern', 'unutrasnj'],
+  unutrašnj: ['intern', 'unutrašnj'],
+  nedostaj: ['nedostajuc', 'nedostajuć', 'nedostaj'],
+  nedostajuc: ['nedostaj', 'nedostajuc'],
+  nedostajuć: ['nedostaj', 'nedostajuć'],
+  odeljen: ['odeljenj', 'odeljen'],
+  odeljenj: ['odeljen', 'odeljenj'],
+  informacij: ['informac', 'informacij'],
+  informac: ['informacij', 'informac'],
+};
+
+function expandCoverageStem(stem: string): string[] {
+  const s = stem.toLowerCase().normalize('NFKC');
+  const syn = COVERAGE_SYNONYM_STEMS[s];
+  return syn ? [...new Set([s, ...syn])] : [s];
+}
+
 function tokenCoverageRatio(required: string[], haystack: string): number {
   if (!required.length) return 1;
   const hay = normalizeSourceFactText(haystack);
-  const stem = (t: string) => t
-    .replace(/(?:ing|ed|es|s)$/u, '')
-    .replace(/(?:tion|ment|ness)$/u, '');
-  const hayStems = new Set(hay.split(/\s+/).map(stem).filter((t) => t.length >= 3));
+  const hayStems = new Set(
+    hay.split(/\s+/).flatMap((t) => expandCoverageStem(stemTokenForCoverage(t))).filter((t) => t.length >= 3),
+  );
   let hit = 0;
   for (const t of required) {
-    if (hay.includes(t) || hayStems.has(stem(t))) hit += 1;
+    const reqStems = expandCoverageStem(stemTokenForCoverage(t));
+    if (hay.includes(t) || reqStems.some((s) => hayStems.has(s))) hit += 1;
   }
   return hit / required.length;
 }
@@ -293,14 +468,24 @@ export function optionalTemplatePreservesSourceUnit(
 /**
  * Universal source-unit fallback: preserve meaning + apply structured tense.
  * Does not require occupation categories or catalogues.
+ * Works for English and same-locale non-English free-text duties.
  */
 export function universalPreserveSourceUnit(
   sourceUnit: string,
-  options?: { isPresent?: boolean },
+  options?: { isPresent?: boolean; locale?: Locale; gender?: string },
 ): string {
   const raw = stripDutyListPrefix(sourceUnit || '');
   if (!raw) return '';
-  return applyEnglishEmploymentTense(raw, Boolean(options?.isPresent));
+  const isPresent = Boolean(options?.isPresent);
+  const locale = options?.locale || 'en';
+  if (locale === 'sr' || locale === 'hr') {
+    return applySerbianCvEmploymentTense(raw, isPresent, options?.gender);
+  }
+  if (locale === 'en' || sourceUsableInLocale(raw, 'en')) {
+    return applyEnglishEmploymentTense(raw, isPresent);
+  }
+  // Other locales: keep user wording; do not force English tense transforms.
+  return raw;
 }
 
 /**

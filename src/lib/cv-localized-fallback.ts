@@ -26,6 +26,7 @@ import {
 import {
   extractSourceDutyUnits,
   optionalTemplatePreservesSourceUnit,
+  sourceUsableInLocale,
   universalPreserveSourceUnit,
 } from './cv-source-fact-identity';
 import { buildConciseGroundedSummary } from './cv-summary-grounding';
@@ -1120,7 +1121,11 @@ function localizedBulletForFact(
   const source = (fact.sourceText || fact.value || '').replace(/^[•\-\*\u2022]\s*/u, '').trim();
   const category = fact.category || classifyDutyCategory(source);
   const isPresent = Boolean(options?.isPresent);
-  const universal = universalPreserveSourceUnit(source, { isPresent });
+  const universal = universalPreserveSourceUnit(source, {
+    isPresent,
+    locale,
+    gender,
+  });
   const sourceHasGuestHospitality = /\b(guest|guests|rapport|gost(?:ima|i)?|ospiti|huésped|hospitality)\b/iu.test(source);
 
   // Cooking localization: trusted when cooking intent matched the source unit.
@@ -1131,8 +1136,9 @@ function localizedBulletForFact(
   }
 
   const sourceIsNonEnglish = /[čćžšđČĆŽŠĐа-яА-Я\u0900-\u097F\u0600-\u06FF]/.test(source);
+  const sameLocaleSource = sourceUsableInLocale(source, locale);
 
-  // Optional material-key templates — never required for English-authored correctness.
+  // Optional material-key templates — never required for free-text correctness.
   const materialKeys = classifyMaterialDutyKeys(source).filter((k) =>
     k.startsWith('logistics_')
     || k.startsWith('software_')
@@ -1143,9 +1149,11 @@ function localizedBulletForFact(
     const materialLine = localizedMaterialDutyBullet(key, locale, g, isPresent);
     if (!materialLine) continue;
     if (optionalTemplatePreservesSourceUnit(source, materialLine)) return materialLine;
-    // Non-English source → target locale (including en): allow key-faithful translations.
+    // Cross-locale projection only when the template covers material keys without
+    // inventing extras — never for same-locale free-text that already carries meaning.
     if (
-      (locale !== 'en' || sourceIsNonEnglish)
+      !sameLocaleSource
+      && (locale !== 'en' || sourceIsNonEnglish)
       && validateMaterialDutyCoverage(source, materialLine).valid
       && validateNoExtraGeneratedDutiesRelaxed(source, materialLine)
     ) {
@@ -1214,39 +1222,47 @@ function localizedBulletForFact(
 
   // Non-English: locale projection may use intent/category shells, except the
   // hospitality guest/rapport shell when the source has no guest evidence.
+  // Same-locale free-text (e.g. Serbian-authored duties) must never be replaced
+  // by unrelated generic intent shells (analysis/planning) — that was build-259.
   if (category === 'generic') {
     const intent = classifyGenericDutyIntent(source);
     const intentTable = GENERIC_INTENT_BULLET[locale];
     if (intent && intentTable?.[intent]) {
-      // Locale-native intent projection (en→sr/hi/de/…). English-authored
-      // unknown duties that only weakly match an intent still prefer universal
-      // when the intent line fails fidelity — see optionalTemplate check.
       const line = intentTable[intent](g).trim();
-      if (optionalTemplatePreservesSourceUnit(source, line) || sourceIsNonEnglish) {
+      if (optionalTemplatePreservesSourceUnit(source, line)) {
         return line;
       }
-      // Strong generic intents (process/collab/analysis/…) for English source:
-      // project to the requested locale rather than leaking English into sr/hi exports.
+      // Cross-locale English→sr/hi/… projection only when source is not already
+      // in the requested locale. Same-locale duties fall through to preserve.
       if (
-        intent === 'process'
-        || intent === 'collaboration'
-        || intent === 'analysis'
-        || intent === 'planning'
-        || intent === 'logistics'
+        !sameLocaleSource
+        && (
+          intent === 'process'
+          || intent === 'collaboration'
+          || intent === 'analysis'
+          || intent === 'planning'
+          || intent === 'logistics'
+        )
       ) {
         return line;
       }
     }
-    if (options?.useGenericCatchAll) {
+    if (sameLocaleSource && universal) {
+      return universal;
+    }
+    if (options?.useGenericCatchAll && !sameLocaleSource) {
       const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
       return fallbackTable(g).trim();
     }
     if (!sourceIsNonEnglish && universal) return universal;
     if (locale === 'hi' && /\p{Script=Devanagari}/u.test(universal)) return universal;
-    if ((locale === 'sr' || locale === 'hr') && /[čćžšđČĆŽŠĐ]/u.test(universal)) return universal;
+    if ((locale === 'sr' || locale === 'hr') && (/[čćžšđČĆŽŠĐ]/u.test(universal) || universal)) {
+      return universal || source;
+    }
     if (locale === 'ru' && /[\u0400-\u04FF]/.test(universal)) return universal;
     if (locale === 'ar' && /[\u0600-\u06FF]/.test(universal)) return universal;
     if (locale === 'ja' && /[\u3040-\u30FF\u3400-\u9FFF]/.test(universal)) return universal;
+    if (sameLocaleSource) return universal || source;
     const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
     return fallbackTable(g).trim();
   }
@@ -1306,7 +1322,11 @@ export function deterministicLocalizedBulletsFromCanonical(
       if (locale === 'en') {
         lines = facts.map((f) => {
           const source = (f.sourceText || f.value || '').replace(/^[•\-\*\u2022]\s*/u, '').trim();
-          return universalPreserveSourceUnit(source, { isPresent: Boolean(options?.isPresent) });
+          return universalPreserveSourceUnit(source, {
+            isPresent: Boolean(options?.isPresent),
+            locale: 'en',
+            gender,
+          });
         });
         if (lines.some((l) => !l.trim())) return '';
         const rebuiltNorms = lines.map((l) => l.toLowerCase().replace(/\s+/g, ' ').trim());
@@ -1336,8 +1356,8 @@ export function deterministicLocalizedBulletsFromCanonical(
 }
 
 /**
- * Rebuild Experience from authoritative source duty units — one localized line
- * per source bullet. Used when provider/fallback collapsed distinct facts.
+ * Rebuild Experience from authoritative source duty units — one preserved line
+ * per source bullet. Does not remap through occupation/intent catalogues.
  */
 export function buildSourcePreservingExperienceBullets(
   sourceDescription: string,
@@ -1347,15 +1367,21 @@ export function buildSourcePreservingExperienceBullets(
 ): string {
   const units = extractSourceDutyUnits(sourceDescription);
   if (!units.length) return '';
-  const facts = units.map((sourceText, i) => ({
-    id: `source-preserve-${i}`,
-    type: 'experience_bullet' as const,
-    value: sourceText,
-    sourceText,
-    category: classifyDutyCategory(sourceText),
-    source: 'source_preserve' as const,
-  }));
-  return deterministicLocalizedBulletsFromCanonical(facts, locale, gender, options);
+  const isPresent = Boolean(options?.isPresent);
+  const lines = units.map((sourceText) => {
+    // Same-locale (or English) free-text: normalize tense only.
+    if (locale === 'en' || sourceUsableInLocale(sourceText, locale)) {
+      return universalPreserveSourceUnit(sourceText, {
+        isPresent,
+        locale,
+        gender,
+      }) || sourceText.replace(/^[•\-\*\u2022]\s*/u, '').trim();
+    }
+    // Cross-locale: allow localized projection via the shared bullet path.
+    return localizeCanonicalBulletLine(sourceText, locale, gender, options);
+  }).filter((l) => Boolean(l.trim()));
+  if (!lines.length || lines.length < units.length) return '';
+  return formatExperienceBullets(lines);
 }
 
 export function deterministicLocalizedSummaryFromCanonical(

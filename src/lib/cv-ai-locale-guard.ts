@@ -64,14 +64,21 @@ export function isWrongLanguageAiOutput(text: string, locale: Locale): boolean {
     return false;
   }
 
-  // Latin-script requested locale (en, de, es, fr, it, sr, hr, pt-BR): a non-Latin
+  // Latin-script requested locale (en, de, es, fr, it, pt-BR): a non-Latin
   // script appearing at all means the wrong provider language leaked through.
+  // Serbian/Croatian are dual-script (Latin + Cyrillic) — allow Cyrillic, reject
+  // unrelated scripts only (build-259 Cyrillic Experience preserve).
+  if (locale === 'sr' || locale === 'hr') {
+    if (/[\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/u.test(value)) return true;
+    return false;
+  }
   if (NON_LATIN_SCRIPT_ANY.test(value)) return true;
 
   // The most common real-world cross-locale regression: Serbian/Croatian source
   // content echoed back when a *different* target locale was requested. These
   // diacritics never occur in en/de/es/fr/it/pt-BR, so any occurrence is reliable.
-  if (locale !== 'sr' && locale !== 'hr' && SERBO_CROATIAN_DIACRITICS.test(value)) {
+  // (sr/hr already returned above.)
+  if (SERBO_CROATIAN_DIACRITICS.test(value)) {
     return true;
   }
   return false;
