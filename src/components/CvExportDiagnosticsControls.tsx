@@ -48,6 +48,25 @@ export function CvExportCopyDiagnosticsButton({
   );
 }
 
+/** Internal-only copy link — dynamically loaded so markers stay out of production. */
+export function ExperienceAiCopyDiagnosticsButton() {
+  const [Link, setLink] = useState<null | typeof import('./InternalExperienceAiDiagnosticsPanel').InternalExperienceAiCopyLink>(null);
+
+  useEffect(() => {
+    if (!INTERNAL_AI_RESET_ENABLED) return;
+    let cancelled = false;
+    void import('./InternalExperienceAiDiagnosticsPanel').then((mod) => {
+      if (!cancelled) setLink(() => mod.InternalExperienceAiCopyLink);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!INTERNAL_AI_RESET_ENABLED || !Link) return null;
+  return <Link />;
+}
+
 /** Hidden diagnostics modal opened via seven taps on the About version label. */
 export function CvExportDiagnosticsModal({
   open,
@@ -60,6 +79,7 @@ export function CvExportDiagnosticsModal({
   const [panelTick, setPanelTick] = useState(0);
   const [showJson, setShowJson] = useState(false);
   const [EnabledPanel, setEnabledPanel] = useState<null | typeof import('./InternalAiUsageResetPanel').InternalAiUsageResetPanel>(null);
+  const [ExpAiPanel, setExpAiPanel] = useState<null | typeof import('./InternalExperienceAiDiagnosticsPanel').InternalExperienceAiDiagnosticsPanel>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -67,17 +87,17 @@ export function CvExportDiagnosticsModal({
     const docx = getLatestCvExportDiagnostic('docx');
     setJson(JSON.stringify({ pdf, docx }, null, 2));
     setPanelTick((n) => n + 1);
-    // Internal builds start with JSON collapsed so the reset control is visible.
     setShowJson(!INTERNAL_AI_RESET_ENABLED);
   }, [open]);
 
   useEffect(() => {
-    // Compile-time gate: when false, this branch is DCE'd and the panel chunk
-    // is never referenced from production bundles.
     if (!INTERNAL_AI_RESET_ENABLED) return;
     let cancelled = false;
     void import('./InternalAiUsageResetPanel').then((mod) => {
       if (!cancelled) setEnabledPanel(() => mod.InternalAiUsageResetPanel);
+    });
+    void import('./InternalExperienceAiDiagnosticsPanel').then((mod) => {
+      if (!cancelled) setExpAiPanel(() => mod.InternalExperienceAiDiagnosticsPanel);
     });
     return () => {
       cancelled = true;
@@ -101,11 +121,6 @@ export function CvExportDiagnosticsModal({
       aria-label="Export diagnostics"
       data-testid="cv-export-diagnostics-overlay"
     >
-      {/*
-        Flex column shell: header/footer shrink-0; body owns scrolling.
-        max-height uses dvh + safe-area so Android nav bars do not clip controls.
-        overflow-hidden only on the shell (not nested over the scroll body).
-      */}
       <div
         className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-background shadow-lg"
         data-testid="cv-export-diagnostics-dialog"
@@ -130,11 +145,14 @@ export function CvExportDiagnosticsModal({
             overscrollBehavior: 'contain',
           }}
         >
-          {/* Internal reset FIRST so testers never hunt below a tall JSON block. */}
           {INTERNAL_AI_RESET_ENABLED && EnabledPanel ? (
             <div className="mb-4 border-b border-border pb-4">
               <EnabledPanel refreshToken={panelTick} />
             </div>
+          ) : null}
+
+          {INTERNAL_AI_RESET_ENABLED && ExpAiPanel ? (
+            <ExpAiPanel refreshToken={panelTick} />
           ) : null}
 
           <p className="text-xs text-muted-foreground">

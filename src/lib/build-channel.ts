@@ -51,3 +51,36 @@ export const INTERNAL_AI_RESET_CHANNEL_LABEL = INTERNAL_AI_RESET_ENABLED
 export const INTERNAL_AI_RESET_STATUS_LABEL = INTERNAL_AI_RESET_ENABLED
   ? 'AI test reset: enabled'
   : '';
+
+/** Experience AI diagnostics markers — empty in production-disabled bundles. */
+export const EXPERIENCE_AI_TRACE_BUNDLE_MARKER = INTERNAL_AI_RESET_ENABLED
+  ? 'CVPRO_EXPERIENCE_AI_TRACE_V1'
+  : '';
+
+export const EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL = INTERNAL_AI_RESET_ENABLED
+  ? 'Copy Experience AI diagnostics'
+  : '';
+
+export const EXPERIENCE_AI_SECTION_TITLE = INTERNAL_AI_RESET_ENABLED
+  ? 'Experience AI diagnostics'
+  : '';
+
+export const EXPERIENCE_AI_FIELD_FINAL_REASON = INTERNAL_AI_RESET_ENABLED
+  ? 'finalTypedFailureReason'
+  : '';
+
+export const EXPERIENCE_AI_FIELD_SOURCE_KIND = INTERNAL_AI_RESET_ENABLED
+  ? 'selectedSourceKind'
+  : '';
+
+export const EXPERIENCE_AI_FIELD_FALLBACK_COVERED = INTERNAL_AI_RESET_ENABLED
+  ? 'fallbackCoveredFactCount'
+  : '';
+
+export const EXPERIENCE_AI_COPY_OK = INTERNAL_AI_RESET_ENABLED
+  ? 'Experience AI diagnostics copied'
+  : '';
+
+export const EXPERIENCE_AI_COPY_FAIL = INTERNAL_AI_RESET_ENABLED
+  ? 'Could not copy Experience AI diagnostics'
+  : '';

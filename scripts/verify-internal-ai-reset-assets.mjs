@@ -15,6 +15,12 @@ const RESET_BUTTON = 'Reset AI test usage';
 const CHANNEL_LABEL = 'Build channel: internal';
 const STATUS_LABEL = 'AI test reset: enabled';
 
+const EXPERIENCE_AI_TRACE_MARKER = 'CVPRO_EXPERIENCE_AI_TRACE_V1';
+const EXPERIENCE_AI_COPY = 'Copy Experience AI diagnostics';
+const EXPERIENCE_AI_FIELD_FAILURE = 'finalTypedFailureReason';
+const EXPERIENCE_AI_FIELD_SOURCE = 'selectedSourceKind';
+const EXPERIENCE_AI_FIELD_FALLBACK = 'fallbackCoveredFactCount';
+
 function fail(msg) {
   console.error(`[verify-internal-ai-reset] FAIL: ${msg}`);
   process.exit(1);
@@ -78,9 +84,26 @@ if (expect === 'enabled') {
   if (!hasButton) fail(`missing button text "${RESET_BUTTON}"`);
   if (!hasChannel) fail(`missing "${CHANNEL_LABEL}"`);
   if (!hasStatus) fail(`missing "${STATUS_LABEL}"`);
-  log('OK enabled assets contain marker, button, and build-channel labels');
+  if (!blob.includes(EXPERIENCE_AI_TRACE_MARKER)) {
+    fail(`missing Experience AI marker ${EXPERIENCE_AI_TRACE_MARKER}`);
+  }
+  if (!blob.includes(EXPERIENCE_AI_COPY)) {
+    fail(`missing "${EXPERIENCE_AI_COPY}"`);
+  }
+  if (!blob.includes(EXPERIENCE_AI_FIELD_FAILURE)) {
+    fail(`missing field marker "${EXPERIENCE_AI_FIELD_FAILURE}"`);
+  }
+  if (!blob.includes(EXPERIENCE_AI_FIELD_SOURCE)) {
+    fail(`missing field marker "${EXPERIENCE_AI_FIELD_SOURCE}"`);
+  }
+  if (!blob.includes(EXPERIENCE_AI_FIELD_FALLBACK)) {
+    fail(`missing field marker "${EXPERIENCE_AI_FIELD_FALLBACK}"`);
+  }
+  log('OK enabled assets contain marker, button, build-channel labels, and Experience AI trace markers');
 } else if (hasMarker) {
   fail(`enabled marker must be absent in disabled assets (${MARKER})`);
+} else if (blob.includes(EXPERIENCE_AI_TRACE_MARKER)) {
+  fail(`Experience AI trace marker must be absent in disabled assets (${EXPERIENCE_AI_TRACE_MARKER})`);
 } else {
   log(`OK disabled assets: marker absent (button=${hasButton}, channel=${hasChannel}, status=${hasStatus})`);
 }

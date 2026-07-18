@@ -37,6 +37,12 @@ import {
   resolveAppVersionInfo,
   resolveNextBuildId,
 } from '@/lib/cv-export-diagnostics';
+import {
+  copyExperienceAiDiagnosticsToClipboard,
+  ExperienceAiDiagnosticSession,
+} from '@/lib/cv-experience-ai-diagnostics';
+import { INTERNAL_AI_RESET_ENABLED } from '@/lib/build-channel';
+import { ExperienceAiCopyDiagnosticsButton } from '@/components/CvExportDiagnosticsControls';
 import type { SaveFileResult } from '@/lib/native-save';
 import {
   CV_RUNTIME_MIGRATION_VERSION,
@@ -1119,6 +1125,51 @@ export default function CVBuilderPage() {
     };
     const countBefore = getProAiUsageCount();
 
+    const diagSession = new ExperienceAiDiagnosticSession({
+      uiLocale: locale,
+      requestedLocale,
+      contentLocale: previousContentLocale,
+      templateId: String(liveCv.templateId || ''),
+      gender: liveCv.personal.gender || '',
+      industryNorm: requestContext.industryNorm,
+      levelNorm: requestContext.levelNorm,
+      jobContextHash: requestContext.key,
+      requestId: reqCtx.requestId,
+      usageCountBefore: countBefore,
+    });
+    diagSession.stage('button_pressed', 'ok');
+    diagSession.recordLiveExperience(expFrozen, Boolean(exp.isPresent));
+    diagSession.recordSourceSelection(expFrozen, aiGrounding);
+    diagSession.recordPayloadBuilt({
+      locale: requestedLocale,
+      industryNorm: requestContext.industryNorm,
+      levelNorm: requestContext.levelNorm,
+      isPresent: Boolean(exp.isPresent),
+    });
+    void diagSession.resolveVersions();
+
+    const showExperienceAiRejectToast = (message: string) => {
+      if (INTERNAL_AI_RESET_ENABLED) {
+        void import('@/components/InternalExperienceAiDiagnosticsPanel').then((mod) => {
+          toast.error(message, {
+            duration: 20_000,
+            action: {
+              label: mod.EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL,
+              onClick: () => {
+                void copyExperienceAiDiagnosticsToClipboard().then((ok) => {
+                  toast[ok ? 'success' : 'error'](
+                    ok ? mod.EXPERIENCE_AI_COPY_OK : mod.EXPERIENCE_AI_COPY_FAIL,
+                  );
+                });
+              },
+            },
+          });
+        });
+      } else {
+        toast.error(message);
+      }
+    };
+
     const logExperienceAiTrace = (partial: Partial<ExperienceAiJobContextTrace>) => {
       if (process.env.NODE_ENV === 'production') return;
       const payload: ExperienceAiJobContextTrace = {
@@ -1195,7 +1246,15 @@ export default function CVBuilderPage() {
             httpStatus: res.status,
             error: payload,
           });
-          toast.error(getAiGate().status !== 'free' ? (msg ?? t.common.proAuthorizationUnavailable) : t.common.proAccessRequired);
+          diagSession.recordApiResponse({
+            httpStatus: res.status,
+            errorCode: 'http_403',
+          });
+          diagSession.recordVisibleApply(false, countBefore);
+          diagSession.commit();
+          showExperienceAiRejectToast(
+            getAiGate().status !== 'free' ? (msg ?? t.common.proAuthorizationUnavailable) : t.common.proAccessRequired,
+          );
           logExperienceAiTrace({
             resultApplied: false,
             rejectedReason: 'http_403',
@@ -1212,7 +1271,13 @@ export default function CVBuilderPage() {
           httpStatus: res.status,
           error: payload,
         });
-        toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
+        diagSession.recordApiResponse({
+          httpStatus: res.status,
+          errorCode: payload.code || 'http_error',
+        });
+        diagSession.recordVisibleApply(false, countBefore);
+        diagSession.commit();
+        showExperienceAiRejectToast(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
         logExperienceAiTrace({
           resultApplied: false,
           rejectedReason: payload.code || 'http_error',
@@ -1232,6 +1297,12 @@ export default function CVBuilderPage() {
         locale,
         level: expLevel[expId] ?? level,
       });
+      diagSession.recordApiResponse({
+        httpStatus: res.status,
+        repairAttempted: Boolean(bulletsData.repairAttempted),
+        fallbackUsed: Boolean(bulletsData.fallbackUsed),
+        resultText: bulletsData.result || '',
+      });
       if (
         latestId !== reqCtx.requestId
         || latestCtx !== requestContext.key
@@ -1248,6 +1319,9 @@ export default function CVBuilderPage() {
           applied: false,
           reason: 'stale_request_superseded',
         });
+        diagSession.recordRaceCheck(false, 'stale_request_or_context_mismatch', liveContext.key);
+        diagSession.recordVisibleApply(false, countBefore);
+        diagSession.commit();
         logExperienceAiTrace({
           resultApplied: false,
           rejectedReason: 'stale_request_or_context_mismatch',
@@ -1257,6 +1331,7 @@ export default function CVBuilderPage() {
         });
         return;
       }
+      diagSession.recordRaceCheck(true, undefined, liveContext.key);
       const newDescription = bulletsData.result || '';
       const finalizedBullets = finalizeCvAiFieldForApply({
         action: 'experience_bullets',
@@ -1280,6 +1355,7 @@ export default function CVBuilderPage() {
             ? 'ai_repaired'
             : 'ai_generated',
       });
+      diagSession.recordFinalizeResult(finalizedBullets);
       if (
         finalizedBullets.countedAsSuccess
         && candidateConflictsWithJobContext(finalizedBullets.text, requestContext)
@@ -1300,7 +1376,13 @@ export default function CVBuilderPage() {
           rejectedReason: 'cooking_duties_under_pharmacist',
           aiUsageIncremented: false,
         });
-        toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        diagSession.patch({
+          finalTypedFailureReason: 'cooking_duties_under_pharmacist',
+          rejectionStage: 'final_apply_postcondition',
+        });
+        diagSession.recordVisibleApply(false, countBefore);
+        diagSession.commit();
+        showExperienceAiRejectToast(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
       if (finalizedBullets.blocked || !finalizedBullets.countedAsSuccess) {
@@ -1330,7 +1412,9 @@ export default function CVBuilderPage() {
           aiUsageIncremented: false,
           ...(finalizedBullets.diagnostics || {}),
         });
-        toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        diagSession.recordVisibleApply(false, countBefore);
+        diagSession.commit();
+        showExperienceAiRejectToast(msg ?? aiErrorMessage('generation_validation_failed', locale));
         return;
       }
       commitCvUpdate((prev) => applyFinalizedBulletsToCv(
@@ -1383,6 +1467,8 @@ export default function CVBuilderPage() {
         semanticDutyKeysUsed: [],
         ...(finalizedBullets.diagnostics || {}),
       });
+      diagSession.recordVisibleApply(true, countBefore + 1);
+      diagSession.commit();
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {
       if (process.env.NODE_ENV !== 'production') console.error('[AI Improvements Error]', err);
@@ -1410,7 +1496,15 @@ export default function CVBuilderPage() {
         rejectedReason: payload.code || 'exception',
         aiUsageIncremented: false,
       });
-      toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
+      diagSession.recordApiResponse({
+        httpStatus: null,
+        errorCode: payload.code || 'exception',
+      });
+      diagSession.recordVisibleApply(false, countBefore);
+      diagSession.commit();
+      showExperienceAiRejectToast(
+        msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale),
+      );
     } finally {
       clearTimeout(timer);
       setGeneratingBulletsId(null);
@@ -2446,6 +2540,7 @@ export default function CVBuilderPage() {
                             subtitle={generatingBulletsId === exp.id ? undefined : t.cv.aiBulletsSubtext}
                             showArrow
                           />
+                          {INTERNAL_AI_RESET_ENABLED ? <ExperienceAiCopyDiagnosticsButton /> : null}
                         </div>
                       </div>
                     ))}
