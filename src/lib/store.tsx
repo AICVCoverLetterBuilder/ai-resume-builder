@@ -18,6 +18,7 @@ import {
 } from './draft-storage';
 import { migrateLegacyCanonicalCv } from './cv-canonical-snapshot';
 import {
+  AI_USAGE_RESET_EVENT,
   PRO_AI_SAFETY_CAP,
   PRO_AI_WINDOW_MS,
   loadProAiRecord,
@@ -208,6 +209,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [aiRecommendUsed, setAiRecommendUsed] = useState<boolean>(() => loadAiRecommendUsed());
   const [clRegenCount, setClRegenCount] = useState<number>(() => loadClRegenCount());
   const [proAiRecord, setProAiRecord] = useState<ProAiRecord>(() => loadProAiRecord());
+
+  // Internal-test reset writes localStorage then dispatches this event.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onReset = () => setProAiRecord(loadProAiRecord());
+    window.addEventListener(AI_USAGE_RESET_EVENT, onReset);
+    return () => window.removeEventListener(AI_USAGE_RESET_EVENT, onReset);
+  }, []);
   // Timestamps for "Draft saved" indicator
   const [lastCvSavedAt, setLastCvSavedAt] = useState<number>(() => (currentCv ? Date.now() : 0));
   const [lastClSavedAt, setLastClSavedAt] = useState<number>(() => (currentCoverLetter ? Date.now() : 0));
@@ -432,7 +441,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const recordProAiSuccess = useCallback(() => {
     if (readAiGateState().status !== 'ready') return; // only track for Pro users
-    setProAiRecord(prev => recordProAiUserActionSuccess(prev));
+    // Always re-read storage so an internal ledger reset cannot leave stale React state.
+    setProAiRecord(() => recordProAiUserActionSuccess(loadProAiRecord()));
   }, [readAiGateState]);
 
   const saveCv = useCallback((cv: CVData) => {

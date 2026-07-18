@@ -15,7 +15,11 @@
  */
 import type { AiErrorCode, AiErrorPayload } from './ai-error-codes';
 import { aiErrorMessage } from './ai-error-codes';
+import { isInternalAiResetEnabled } from './build-channel';
 import type { Locale } from './i18n/translations';
+
+/** Dispatched after a successful internal-only ledger reset (no CV / Pro data). */
+export const AI_USAGE_RESET_EVENT = 'cvpro-ai-usage-reset';
 
 /** Authoritative hidden Pro safety cap (abuse protection; public UI says Unlimited). */
 export const PRO_AI_SAFETY_CAP = 50;
@@ -582,5 +586,72 @@ export function simulateReinstallAiState(): void {
     sessionStorage.removeItem(AI_CIRCUIT_STORAGE_KEY);
   } catch {
     /* ignore */
+  }
+}
+
+/** Non-PII snapshot for the internal diagnostics reset panel. */
+export type ProAiUsageDiagnosticsSnapshot = {
+  storageBackend: 'localStorage';
+  storageKey: typeof AI_USAGE_STORAGE_KEY;
+  count: number;
+  policyLimit: number;
+  windowStartIso: string | null;
+  windowExpiresIso: string | null;
+  blocked: boolean;
+};
+
+export function getProAiUsageDiagnosticsSnapshot(now = Date.now()): ProAiUsageDiagnosticsSnapshot {
+  const record = loadProAiRecord(now);
+  const expiresAt = record.windowStart + PRO_AI_WINDOW_MS;
+  return {
+    storageBackend: 'localStorage',
+    storageKey: AI_USAGE_STORAGE_KEY,
+    count: record.count,
+    policyLimit: record.policyLimit ?? PRO_AI_SAFETY_CAP,
+    windowStartIso: record.windowStart ? new Date(record.windowStart).toISOString() : null,
+    windowExpiresIso: record.windowStart ? new Date(expiresAt).toISOString() : null,
+    blocked: isProAiSafetyBlocked(record, now),
+  };
+}
+
+export type ResetProAiTestUsageResult =
+  | { ok: true; count: number; reason: 'cleared' }
+  | { ok: false; count: number; reason: 'disabled' | 'no_window' | 'storage_error' };
+
+/**
+ * Internal-test-only: clear the rolling Pro AI safety-cap ledger (`cvpro-ai-usage`).
+ * No-op / refused when `isInternalAiResetEnabled()` is false.
+ * Does not touch CVs, Cover Letters, Pro entitlement, circuit, or download counters.
+ * Does not count as an AI action.
+ */
+export function resetProAiTestUsageLedger(now = Date.now()): ResetProAiTestUsageResult {
+  if (!isInternalAiResetEnabled()) {
+    return {
+      ok: false,
+      count: typeof window !== 'undefined' ? getProAiUsageCount(now) : 0,
+      reason: 'disabled',
+    };
+  }
+  if (typeof window === 'undefined') {
+    return { ok: false, count: 0, reason: 'no_window' };
+  }
+  try {
+    localStorage.removeItem(AI_USAGE_STORAGE_KEY);
+    const fresh: ProAiRecord = {
+      schemaVersion: AI_USAGE_SCHEMA_VERSION,
+      count: 0,
+      windowStart: now,
+      policyLimit: PRO_AI_SAFETY_CAP,
+    };
+    persistProAiRecord(fresh);
+    try {
+      window.dispatchEvent(new CustomEvent(AI_USAGE_RESET_EVENT));
+    } catch {
+      /* ignore */
+    }
+    const verified = loadProAiRecord(now);
+    return { ok: true, count: verified.count, reason: 'cleared' };
+  } catch {
+    return { ok: false, count: getProAiUsageCount(now), reason: 'storage_error' };
   }
 }
