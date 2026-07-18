@@ -615,8 +615,15 @@ export function scrubOrphanDurationFragments(summary: string): string {
     /\b(iskustva|iskustvom|iskustvu)\s*\.\s*(godine|godina|godinu)\b[,:]?\s*/giu,
     '$1. ',
   );
-  // Leading orphan "godine, gde" / ". godine, gde" at sentence start
-  out = out.replace(/(^|[.!?]\s*)(godine|godina|godinu)\s*[,:]?\s*(?=gde|gdje|u\s|sa\s)/giu, '$1');
+  // Orphan ". godine, gde/sa" — but never calendar genitive "YYYY. godine".
+  out = out.replace(
+    /(?<!\d{4})\.\s*(godine|godina|godinu)\s*[,:]?\s*(?=gde|gdje|u\s|sa\s)/giu,
+    '. ',
+  );
+  out = out.replace(
+    /^(godine|godina|godinu)\s*[,:]?\s*(?=gde|gdje|u\s|sa\s)/giu,
+    '',
+  );
   // Double duration noun after half-year phrase: "i po godine iskustva godine"
   out = out.replace(/\bi\s+po\s+godine\s+iskustva\s*\.?\s*godine\b/giu, 'i po godine iskustva');
   return out.replace(/\s+/g, ' ').trim();

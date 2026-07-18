@@ -71,6 +71,16 @@ import {
   normalizeHindiGeneratedWhitespace,
 } from './cv-hindi-normalize';
 import { normalizeSerbianDurationGrammar } from './cv-serbian-grammar';
+import {
+  normalizeSerbianLatinConfusables,
+  preserveSerbianSummaryFactForms,
+  enrichSerbianSummaryEmploymentGrounding,
+  hasSerbianLatinMixedScriptToken,
+} from './cv-serbian-latin-script';
+import {
+  countSummaryDurationExpressions,
+  summaryDurationPostconditionFailed,
+} from './cv-summary-duration-ownership';
 import { acceptValidatedAiContent } from './cv-canonical-snapshot';
 import { applyCvContentQuality } from './cv-content-quality';
 import { hasAiProtocolMarker, stripAiProtocolMarkers } from './cv-ai-protocol-strip';
@@ -176,6 +186,13 @@ export type FinalizeCvAiFieldResult = {
     clientDeterministicFallbackCoveredFactCount?: number;
     clientDeterministicFallbackApplied?: boolean;
     clientDeterministicFallbackUncoveredFactIds?: string[];
+    summaryDurationExpressionCount?: number;
+    authoritativeDurationMonths?: number | null;
+    authoritativeDurationBucket?: number | null;
+    providerDurationDetected?: boolean;
+    conflictingDurationDetected?: boolean;
+    duplicateDurationRemoved?: boolean;
+    finalDurationExpressionCount?: number;
   };
 };
 
@@ -249,6 +266,8 @@ function normalizeLocaleText(text: string, locale: Locale): string {
   }
   if (locale === 'sr' || locale === 'hr') {
     out = normalizeSerbianDurationGrammar(out);
+    // Serbian Latin Summary must not retain confusable Cyrillic letters (pregledа).
+    out = normalizeSerbianLatinConfusables(out);
   }
   return out.trim();
 }
@@ -289,6 +308,12 @@ function summaryPasses(
   const grammar = validateSerbianDurationGrammar(summary, locale);
   if (!grammar.valid) {
     return { ok: false, reason: 'serbian_duration_grammar' };
+  }
+  if (countSummaryDurationExpressions(summary, locale) > 1) {
+    return { ok: false, reason: 'summary_duplicate_duration' };
+  }
+  if (locale === 'sr' && hasSerbianLatinMixedScriptToken(summary)) {
+    return { ok: false, reason: 'serbian_mixed_script' };
   }
   const forcedTitle = validateSummaryForcedConflictingTitle(summary, {
     locale,
@@ -391,10 +416,46 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     },
   );
   candidate = normalizeLocaleText(durationResolved.summary, locale);
+  if (locale === 'sr' || locale === 'hr') {
+    candidate = preserveSerbianSummaryFactForms(candidate, dutiesText);
+    candidate = normalizeSerbianLatinConfusables(candidate);
+    candidate = enrichSerbianSummaryEmploymentGrounding(candidate, {
+      role: context.role,
+      company: context.company,
+      startDate: context.startDate,
+    });
+  }
+
+  const durationDiag = durationResolved.durationDiagnostics;
+  if (
+    summaryDurationPostconditionFailed(candidate, durationSnapshot.total, locale, {
+      requireDurationClaim: true,
+    })
+    || (locale === 'sr' && hasSerbianLatinMixedScriptToken(candidate))
+  ) {
+    // Force deterministic grounded rebuild when postcondition still fails.
+    candidate = '';
+  }
 
   let origin: CvAiFinalizeOrigin = input.originHint || 'ai_generated';
   if (durationResolved.status === 'repaired') origin = 'ai_repaired';
   if (durationResolved.status === 'fallback') origin = 'deterministic_fallback';
+
+  const attachSummaryDiag = (
+    result: FinalizeCvAiFieldResult,
+  ): FinalizeCvAiFieldResult => ({
+    ...result,
+    diagnostics: {
+      ...result.diagnostics,
+      summaryDurationExpressionCount: durationDiag?.summaryDurationExpressionCount,
+      authoritativeDurationMonths: durationDiag?.authoritativeDurationMonths ?? undefined,
+      authoritativeDurationBucket: durationDiag?.authoritativeDurationBucket ?? undefined,
+      providerDurationDetected: durationDiag?.providerDurationDetected,
+      conflictingDurationDetected: durationDiag?.conflictingDurationDetected,
+      duplicateDurationRemoved: durationDiag?.duplicateDurationRemoved,
+      finalDurationExpressionCount: countSummaryDurationExpressions(result.text, locale),
+    },
+  });
 
   const first = summaryPasses(
     candidate,
@@ -405,13 +466,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     roleDutyConflict,
   );
   if (first.ok) {
-    return {
+    return attachSummaryDiag({
       blocked: false,
       text: candidate,
       origin,
       roleDutyConflict,
       countedAsSuccess: true,
-    };
+    });
   }
 
   const grounded = normalizeLocaleText(
@@ -434,7 +495,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         context,
       },
     );
-    const groundedText = normalizeLocaleText(groundedResolved.summary, locale);
+    let groundedText = normalizeLocaleText(groundedResolved.summary, locale);
+    if (locale === 'sr' || locale === 'hr') {
+      groundedText = preserveSerbianSummaryFactForms(groundedText, dutiesText);
+      groundedText = normalizeSerbianLatinConfusables(groundedText);
+      groundedText = enrichSerbianSummaryEmploymentGrounding(groundedText, {
+        role: context.role,
+        company: context.company,
+        startDate: context.startDate,
+      });
+    }
     const second = summaryPasses(
       groundedText,
       factSet,
@@ -444,24 +514,24 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       roleDutyConflict,
     );
     if (second.ok) {
-      return {
+      return attachSummaryDiag({
         blocked: false,
         text: groundedText,
         origin: 'deterministic_fallback',
         roleDutyConflict,
         countedAsSuccess: true,
-      };
+      });
     }
   }
 
-  return {
+  return attachSummaryDiag({
     blocked: true,
     reason: first.reason || 'summary_finalization_blocked',
     text: cv.summary || '',
     origin: cv.summaryOrigin || 'user',
     roleDutyConflict,
     countedAsSuccess: false,
-  };
+  });
 }
 
 function detectBulletScripts(text: string): string[] {

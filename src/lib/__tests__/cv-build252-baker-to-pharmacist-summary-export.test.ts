@@ -309,7 +309,10 @@ describe('Build 252 Baker→Pharmacist Summary + export', () => {
     const merged = injectDurationPhrase(broken, duration, 'sr');
     const scrubbed = scrubOrphanDurationFragments(merged);
     expect(scrubbed).not.toMatch(/iskustva\.\s*godine/i);
-    expect(scrubbed).not.toMatch(/\. godine,/i);
+    // Calendar genitive "2024. godine" must survive; only orphan ". godine," after
+    // non-year periods (e.g. after iskustva) is scrubbed.
+    expect(scrubbed).not.toMatch(/(?<!\d{4})\.\s*godine,/i);
+    expect(scrubbed).toMatch(/2024\.\s*godine/i);
 
     const safe = buildOccupationAwareSummaryFallback({
       locale: 'sr',

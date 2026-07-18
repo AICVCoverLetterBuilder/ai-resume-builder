@@ -35,6 +35,18 @@ import { deterministicLocalizedSummaryFromCanonical, localizeCanonicalBulletLine
 import { normalizeHindiGeneratedWhitespace } from './cv-hindi-normalize';
 import { resolveExperienceGroundingDescription } from './cv-experience-provenance';
 import { scrubOrphanDurationFragments } from './cv-experience-job-context';
+import {
+  enforceAuthoritativeSummaryDuration,
+  countSummaryDurationExpressions,
+  stripAllSummaryDurationExpressions,
+  type SummaryDurationOwnershipDiagnostics,
+} from './cv-summary-duration-ownership';
+import {
+  normalizeSerbianLatinConfusables,
+  preserveSerbianSummaryFactForms,
+  enrichSerbianSummaryEmploymentGrounding,
+} from './cv-serbian-latin-script';
+import { normalizeSerbianDurationGrammar } from './cv-serbian-grammar';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
 export type DurationIntegrationContext = {
@@ -679,13 +691,23 @@ export function resolveSummaryWithDurationPolicy(
   summary: string;
   status: 'passed' | 'repaired' | 'fallback';
   violation?: 'experience_duration_mismatch';
+  durationDiagnostics?: SummaryDurationOwnershipDiagnostics;
 } {
   const requireClaim = Boolean(options?.forceDurationPhrase || options?.requireDurationClaim);
   const context = options?.context;
 
+  // Single ownership: strip every provider/competing duration, then insert the
+  // structured-date phrase at most once. Prevents "oko godinu dana" + "jedne i po".
+  const owned = enforceAuthoritativeSummaryDuration(summary, duration, locale, {
+    requireDurationClaim: requireClaim,
+    context,
+    injectFn: (text, dur, loc, ctx) => injectDurationPhrase(text, dur, loc, ctx),
+  });
+  let working = owned.summary;
+  const durationDiagnostics = owned.diagnostics;
+
   // A previously-saved or independently produced summary may already carry the duration
   // claim but as a standalone leading/trailing fragment — repair the structure first.
-  let working = summary;
   if (requireClaim && hasLeadingOrTrailingFragment(working)) {
     working = repairFragmentedSummary(working, locale);
   }
@@ -697,14 +719,30 @@ export function resolveSummaryWithDurationPolicy(
       validateSummaryDuration(repairedHi, duration, { requireDurationClaim: requireClaim, locale }).valid
       && hindiDurationPlacementOk(repairedHi, locale)
       && !hasLeadingOrTrailingFragment(repairedHi)
+      && countSummaryDurationExpressions(repairedHi, locale) <= 1
     ) {
       return {
         summary: repairedHi.trim(),
         status: 'repaired',
         violation: 'experience_duration_mismatch',
+        durationDiagnostics: {
+          ...durationDiagnostics,
+          finalDurationExpressionCount: countSummaryDurationExpressions(repairedHi, locale),
+        },
       };
     }
     working = repairedHi;
+  }
+
+  // Re-assert single ownership if later Hindi/fragment repairs reintroduced duplicates.
+  if (countSummaryDurationExpressions(working, locale) > 1) {
+    const again = enforceAuthoritativeSummaryDuration(working, duration, locale, {
+      requireDurationClaim: requireClaim,
+      context,
+      injectFn: (text, dur, loc, ctx) => injectDurationPhrase(text, dur, loc, ctx),
+    });
+    working = again.summary;
+    Object.assign(durationDiagnostics, again.diagnostics);
   }
 
   const initial = validateSummaryDuration(working, duration, {
@@ -713,9 +751,17 @@ export function resolveSummaryWithDurationPolicy(
   });
   if (
     initial.valid
+    && countSummaryDurationExpressions(working, locale) <= 1
     && (!requireClaim || (!hasLeadingOrTrailingFragment(working) && hindiDurationPlacementOk(working, locale)))
   ) {
-    return { summary: working.trim(), status: working === summary ? 'passed' : 'repaired' };
+    return {
+      summary: working.trim(),
+      status: owned.changed || working !== summary ? 'repaired' : 'passed',
+      durationDiagnostics: {
+        ...durationDiagnostics,
+        finalDurationExpressionCount: countSummaryDurationExpressions(working, locale),
+      },
+    };
   }
 
   // Missing claim on generated summaries: inject the shared phrase (do not invent duties).
@@ -727,11 +773,16 @@ export function resolveSummaryWithDurationPolicy(
       validateSummaryDuration(injected, duration, { requireDurationClaim: true, locale }).valid
       && !hasLeadingOrTrailingFragment(injected)
       && hindiDurationPlacementOk(injected, locale)
+      && countSummaryDurationExpressions(injected, locale) <= 1
     ) {
       return {
         summary: injected.trim(),
         status: 'repaired',
         violation: 'experience_duration_mismatch',
+        durationDiagnostics: {
+          ...durationDiagnostics,
+          finalDurationExpressionCount: countSummaryDurationExpressions(injected, locale),
+        },
       };
     }
   }
@@ -741,26 +792,25 @@ export function resolveSummaryWithDurationPolicy(
     requireDurationClaim: requireClaim,
     locale,
   });
-  if (afterRepair.valid && (!requireClaim || (!hasLeadingOrTrailingFragment(repaired) && hindiDurationPlacementOk(repaired, locale)))) {
+  if (
+    afterRepair.valid
+    && countSummaryDurationExpressions(repaired, locale) <= 1
+    && (!requireClaim || (!hasLeadingOrTrailingFragment(repaired) && hindiDurationPlacementOk(repaired, locale)))
+  ) {
     return {
       summary: repaired.trim(),
       status: 'repaired',
       violation: 'experience_duration_mismatch',
+      durationDiagnostics: {
+        ...durationDiagnostics,
+        finalDurationExpressionCount: countSummaryDurationExpressions(repaired, locale),
+      },
     };
   }
 
   // Deterministic locale fallback using the same duration — do not invent duties.
   const phrase = formatApproximateDurationPhrase(duration, locale);
-  const stripped = working
-    .replace(/\bwith\s+(?:around|about|approximately)\s+(?:\d+(?:\.\d+)?|one|two|three|four|five|six)\s+years?\s+of\s+experience\b/giu, '')
-    .replace(/\b(?:around|about|approximately)\s+(?:\d+(?:\.\d+)?|one|two|three|four|five|six)\s+years?\b/giu, '')
-    .replace(/\bsa\s+oko\s+(?:jedne?|dve|dvije|tri|četiri|cetiri|pet|šest|\d+)\s+godina\s+iskustva\b/giu, '')
-    .replace(/\b(?:oko|približno)\s+(?:jedne?|dve|dvije|tri|četiri|cetiri|pet|šest|\d+)\s+godin\w*/giu, '')
-    .replace(/लगभग\s*(?:\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्षों के अनुभव के साथ/gu, '')
-    .replace(/(?:लगभग|करीब)?\s*(?:\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्षों?/gu, '')
-    .replace(/\s+/g, ' ')
-    .replace(/^[،,.\s।]+|[،,.\s।]+$/gu, '')
-    .trim();
+  const stripped = stripAllSummaryDurationExpressions(working, locale);
 
   let fallback = '';
   if (locale === 'hi' && context) {
@@ -778,6 +828,7 @@ export function resolveSummaryWithDurationPolicy(
     !validateSummaryDuration(fallback, duration, { requireDurationClaim: requireClaim, locale }).valid
     || hasLeadingOrTrailingFragment(fallback)
     || !hindiDurationPlacementOk(fallback, locale)
+    || countSummaryDurationExpressions(fallback, locale) > 1
     || !fallback.trim()
   ) {
     if (locale === 'hi') {
@@ -793,10 +844,18 @@ export function resolveSummaryWithDurationPolicy(
     }
   }
 
+  // Absolute final ownership pass.
+  const finalOwned = enforceAuthoritativeSummaryDuration(fallback, duration, locale, {
+    requireDurationClaim: requireClaim,
+    context,
+    injectFn: (text, dur, loc, ctx) => injectDurationPhrase(text, dur, loc, ctx),
+  });
+
   return {
-    summary: fallback.trim(),
+    summary: finalOwned.summary.trim(),
     status: 'fallback',
     violation: 'experience_duration_mismatch',
+    durationDiagnostics: finalOwned.diagnostics,
   };
 }
 
@@ -927,6 +986,14 @@ export function applyCvContentQuality(
     summary = normalizeSerbianRolePhrase(summary);
     if (hasCurrentRole) summary = applySerbianSummaryCurrentTense(summary, true);
     summary = applySerbianFemaleAgreement(summary, gender);
+    summary = normalizeSerbianDurationGrammar(summary);
+    summary = normalizeSerbianLatinConfusables(summary);
+    summary = preserveSerbianSummaryFactForms(summary, dutiesText);
+    summary = enrichSerbianSummaryEmploymentGrounding(summary, {
+      role: durationContext.role,
+      company: durationContext.company,
+      startDate: durationContext.startDate,
+    });
     summary = stripUnsupportedSummaryFluff(summary, locale);
     summary = scrubOrphanDurationFragments(summary);
     if (summary !== before) repaired = true;

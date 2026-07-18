@@ -307,11 +307,16 @@ export function extractSummaryYearClaims(text: string): number[] {
     [/\bdve\s+i\s+po\s+godin/giu, 2.5],
     [/\bdvije\s+i\s+po\s+godin/giu, 2.5],
     [/\bjedne\s+i\s+po\s+godin/giu, 1.5],
+    [/\bgodinu\s+i\s+po\b/giu, 1.5],
     [/ढाई\s*वर्ष/gu, 2.5],
     [/डेढ़\s*वर्ष|डेढ\s*वर्ष/gu, 1.5],
   ];
   for (const [re, years] of halfRes) {
     if (re.test(raw)) claims.push(years);
+  }
+  // Freestyle Serbian "oko godinu dana" ≈ 1 year (provider often invents this).
+  if (/\boko\s+godinu(?:\s+dana)?(?:\s+iskustva)?\b/iu.test(raw) && !/\bgodinu\s+i\s+po\b/iu.test(raw)) {
+    claims.push(1);
   }
   // Numeric half-years beyond the word map (e.g. "16 i po godine", "16 and a half years").
   const numericHalf = [
@@ -454,9 +459,10 @@ export function summaryHasDurationClaim(text: string): boolean {
     // Jahre?n? covers Jahr / Jahre / Jahren — the plural nominative "Jahre" (no
     // trailing "n") was previously missed, rejecting natural German phrasing such
     // as "Vier Jahre Erfahrung" that never uses the dative "Jahren" form.
-    || /\b(years? of experience|godina iskustva|profesionalnog iskustva|Jahre?n?\s*(?:Berufs)?[Ee]rfahrung|años de experiencia|ans d'expérience|anni di esperienza|anos de experiência|वर्षों के अनुभव|वर्ष के अनुभव|वर्षों?\s*का\s*अनुभव)\b/iu.test(text)
+    || /\b(years? of experience|godina iskustva|godinu(?:\s+i\s+po)?(?:\s+dana)?(?:\s+iskustva)?|profesionalnog iskustva|Jahre?n?\s*(?:Berufs)?[Ee]rfahrung|años de experiencia|ans d'expérience|anni di esperienza|anos de experiência|वर्षों के अनुभव|वर्ष के अनुभव|वर्षों?\s*का\s*अनुभव)\b/iu.test(text)
     || /\b(?:around|about|approximately)\s+[\w-]+\s+years?\b/iu.test(text)
-    || /\boko\s+\S+\s+godin/iu.test(text)
+    || /\boko\s+\S+(?:\s+\S+)?\s+godin/iu.test(text)
+    || /\boko\s+godinu\b/iu.test(text)
     || /लगभग\s+\S+\s+वर्ष/u.test(text)
     || /約\s*\d+\s*年/u.test(text)
     || /\d+\s*年の経験/u.test(text)

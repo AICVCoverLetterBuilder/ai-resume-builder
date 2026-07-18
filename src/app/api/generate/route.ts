@@ -655,15 +655,15 @@ Rules:
       const langsList: Array<{ name?: string; level?: string }> = Array.isArray(languages) ? languages : [];
       const eduList: Array<{ degree?: string; school?: string }> = Array.isArray(education) ? education : [];
 
-      // Build duration phrase based on actual calculated duration (integer years only — never "4.5")
+      // Build duration phrase based on actual calculated duration (supports half years).
       let durationPhrase = '';
       if (experienceDuration === 'practical') {
         durationPhrase = 'IMPORTANT: The candidate has less than 6 months of work experience. Use wording like "with practical experience in" or "with recent hands-on experience as" — never mention years or imply long experience.';
       } else if (experienceDuration === 'under-one-year') {
         durationPhrase = 'IMPORTANT: The candidate has under one year of work experience. Use months / "almost one year" wording — never say "1 year" or more.';
       } else if (experienceDuration && !isNaN(Number(experienceDuration))) {
-        const yrs = Math.floor(parseFloat(experienceDuration as string));
-        durationPhrase = `IMPORTANT: Shared deterministic duration: approximately ${yrs} year(s) of work experience (totalMonths=${totalFromSnapshot?.totalMonths ?? 'n/a'}). State THIS exact approximate year count in the summary — do not use four when the value is five, and do not invent a different number per language.`;
+        const yrs = parseFloat(experienceDuration as string);
+        durationPhrase = `IMPORTANT: Shared deterministic duration: approximately ${yrs} year(s) of work experience (totalMonths=${totalFromSnapshot?.totalMonths ?? 'n/a'}). State THIS exact approximate year count in the summary — do not invent a different number. Prefer omitting an explicit year count if unsure; the client will inject the authoritative phrase.`;
       } else {
         durationPhrase = 'IMPORTANT: Exact experience duration is unknown. Do NOT mention any number of years or imply a specific duration. Use phrases like "with professional experience in" instead.';
       }
