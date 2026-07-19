@@ -36,19 +36,26 @@ function classifyActionFrame(unit: string): ActionFrame {
     }
     return 'prepare_materials';
   }
-  if (/(prover|pregled|check|verif|tačnost|tacnost|potpunost|dokument|провера|проверя|تتحقق|जाँच|確認)/.test(t)) {
-    return 'check_records';
-  }
-  if (/(ažur|azur|update|evidenc|record|status|raspored|ажурир|обновл|تحدّث|अपडेट|更新)/.test(t)) {
+  // Update/coordinate before bare "dokument" so status-tracking units are not
+  // collapsed into check_records.
+  if (/(ažur|azur|update|evidenc|record|status|raspored|ажурир|обновл|تحدّث|अपडेट|अद्यतन|更新)/.test(t)) {
     return 'update_records';
   }
   if (/(koordin|coord|razmen|exchange|koleg|colleague|inform|координ|تنسّق|समन्वय|調整)/.test(t)) {
     return 'coordinate_info';
   }
+  if (/(prover|pregled|check|verif|tačnost|tacnost|potpunost|dokument|провера|проверя|تتحقق|जाँच|確認)/.test(t)) {
+    return 'check_records';
+  }
   if (/(priprem|prepar|kreir|creat|finaln|format|ekran|screen|готови|أعد|तैयार|準備)/.test(t)) {
     return 'prepare_materials';
   }
   return 'generic_duty';
+}
+
+/** Exported for cross-locale semantic coverage (source↔candidate frames). */
+export function classifyExperienceActionFrame(unit: string): ActionFrame {
+  return classifyActionFrame(unit);
 }
 
 function domainHintFromUnits(units: string[], position?: string): string {
@@ -472,8 +479,8 @@ function localizedShellBullet(
         'आने वाली वस्तुओं और संबंधित दस्तावेज़ों की जाँच की ताकि रिकॉर्ड सही रहें।',
       ],
       update_records: [
-        'कार्य रिकॉर्ड अपडेट करती है और खुली स्थितियों की प्रगति ट्रैक करती है।',
-        'कार्य रिकॉर्ड अपडेट किए और खुली स्थितियों की प्रगति ट्रैक की।',
+        'कार्य रिकॉर्ड अद्यतन करती है और खुली स्थितियों की प्रगति ट्रैक करती है।',
+        'कार्य रिकॉर्ड अद्यतन किए और खुली स्थितियों की प्रगति ट्रैक की।',
       ],
       coordinate_info: [
         'सहकर्मियों के साथ जानकारी साझा कर काम के समय पर पूरा होने का समन्वय करती है।',
@@ -602,6 +609,26 @@ function localizedShellBullet(
   return past ? row[1] : row[0];
 }
 
+function hindiWarehouseBullet(frame: ActionFrame, isPresent: boolean): string | null {
+  const past = !isPresent;
+  switch (frame) {
+    case 'check_records':
+      return past
+        ? 'आने वाले माल और संबंधित दस्तावेज़ों की जाँच कर सही रिकॉर्ड सुनिश्चित की।'
+        : 'आने वाले माल और संबंधित दस्तावेज़ों की जाँच कर सही रिकॉर्ड सुनिश्चित करती है।';
+    case 'update_records':
+      return past
+        ? 'गोदाम के रिकॉर्ड अद्यतन किए और सामान को व्यवस्थित रखा।'
+        : 'गोदाम के रिकॉर्ड अद्यतन करती है और सामान को व्यवस्थित रखती है।';
+    case 'coordinate_info':
+      return past
+        ? 'सहकर्मियों के साथ माल की तैयारी और आवाजाही का समन्वय किया।'
+        : 'सहकर्मियों के साथ माल की तैयारी और आवाजाही का समन्वय करती है।';
+    default:
+      return null;
+  }
+}
+
 function bulletForLocale(
   locale: Locale,
   frame: ActionFrame,
@@ -619,6 +646,10 @@ function bulletForLocale(
       isPresent,
       gender,
     );
+  }
+  if (locale === 'hi' && domain === 'warehouse') {
+    const warehouse = hindiWarehouseBullet(frame, isPresent);
+    if (warehouse) return warehouse;
   }
   const shell = localizedShellBullet(locale, frame, isPresent, domain);
   if (shell) return shell;
@@ -647,10 +678,15 @@ function nearDupOfAny(candidate: string, existing: string[]): boolean {
   return false;
 }
 
-function uniquifyLineWithSourceHint(line: string, unit: string, index: number): string {
+function uniquifyLineWithSourceHint(line: string, unit: string, index: number, targetLocale?: Locale): string {
+  const base = line.replace(/[.।。.]$/u, '').trim();
+  // Cross-locale fallback must never re-inject source-language tokens into the
+  // target line (build 272: Latin Serbian hints under English/Hindi targets).
+  if (targetLocale) {
+    return `${base} (${index + 1}).`;
+  }
   const hints = (unit.match(/[A-Za-z\u0900-\u097F\u0600-\u06FF\u0400-\u04FF]{4,}/gu) || [])
     .slice(0, 2);
-  const base = line.replace(/[.।。.]$/u, '').trim();
   if (!hints.length) return `${base} (${index + 1}).`;
   return `${base} (${hints.join(' ')}).`;
 }
@@ -690,32 +726,33 @@ export function buildCrossLocaleExperienceFallback(options: {
   for (let i = 0; i < frames.length; i += 1) {
     let frame = frames[i];
     let line = bulletForLocale(target, frame, domain, isPresent, options.gender);
+    // Prefer disambiguation over frame substitution so source fact frames stay aligned.
     if (used.has(fold(line)) || nearDupOfAny(line, lines)) {
-      const alts: ActionFrame[] = [
-        'check_records',
-        'update_records',
-        'coordinate_info',
-        'prepare_materials',
-        'collaborate_visual',
-        'generic_duty',
-      ];
-      for (const alt of alts) {
-        const candidate = bulletForLocale(target, alt, domain, isPresent, options.gender);
-        if (!used.has(fold(candidate)) && !nearDupOfAny(candidate, lines)) {
-          frame = alt;
-          line = candidate;
-          break;
+      const hinted = uniquifyLineWithSourceHint(line, units[i] || '', i, target);
+      if (!used.has(fold(hinted)) && !nearDupOfAny(hinted, lines)) {
+        line = hinted;
+      } else {
+        const alts: ActionFrame[] = [
+          'check_records',
+          'update_records',
+          'coordinate_info',
+          'prepare_materials',
+          'collaborate_visual',
+          'generic_duty',
+        ];
+        for (const alt of alts) {
+          if (alt === frame) continue;
+          const candidate = bulletForLocale(target, alt, domain, isPresent, options.gender);
+          if (!used.has(fold(candidate)) && !nearDupOfAny(candidate, lines)) {
+            frame = alt;
+            line = candidate;
+            break;
+          }
+        }
+        if (used.has(fold(line)) || nearDupOfAny(line, lines)) {
+          line = uniquifyLineWithSourceHint(line, units[i] || '', i, target);
         }
       }
-    }
-    // Keep semantic uniqueness aligned with source units (shared CV verbs alone
-    // can trip near-duplicate Jaccard in Hindi/Arabic/etc.).
-    if (used.has(fold(line)) || nearDupOfAny(line, lines)) {
-      line = uniquifyLineWithSourceHint(line, units[i] || '', i);
-    } else if (target === 'hi' || target === 'ar' || target === 'ja' || target === 'ru') {
-      // Always attach a short source hint so translated shells stay distinguishable.
-      const hinted = uniquifyLineWithSourceHint(line, units[i] || '', i);
-      if (!nearDupOfAny(hinted, lines)) line = hinted;
     }
     used.add(fold(line));
     lines.push(line);
@@ -762,9 +799,88 @@ export function candidateLeaksSourceLocale(
 }
 
 export function countTranslatedFactUnits(sourceDescription: string, result: string): number {
-  const srcN = extractSourceDutyUnits(sourceDescription).length
-    || splitExperienceBullets(sourceDescription).filter(Boolean).length;
-  const outN = splitExperienceBullets(result).filter(Boolean).length;
-  if (!srcN || !outN) return 0;
-  return Math.min(srcN, outN);
+  const coverage = validateCrossLocaleSemanticCoverage(sourceDescription, result);
+  return coverage.coveredCount;
+}
+
+/**
+ * Cross-language fact coverage via action-frame identity (not literal tokens).
+ * Each source unit must pair with a distinct candidate bullet of the same frame,
+ * or a material-key match when frames are both generic.
+ */
+export function validateCrossLocaleSemanticCoverage(
+  sourceDescription: string,
+  candidateDescription: string,
+): {
+  ok: boolean;
+  requiredCount: number;
+  coveredCount: number;
+  uncoveredCount: number;
+  reason?: string;
+} {
+  const srcUnits = extractSourceDutyUnits(sourceDescription)
+    .map((u) => stripDutyListPrefix(u))
+    .filter((u) => u.length > 8);
+  const bullets = splitExperienceBullets(candidateDescription || '')
+    .map((b) => b.trim())
+    .filter(Boolean);
+  const requiredCount = srcUnits.length;
+  if (!requiredCount) {
+    return { ok: true, requiredCount: 0, coveredCount: 0, uncoveredCount: 0 };
+  }
+  if (!bullets.length) {
+    return {
+      ok: false,
+      requiredCount,
+      coveredCount: 0,
+      uncoveredCount: requiredCount,
+      reason: 'experience_material_fact_coverage_incomplete',
+    };
+  }
+
+  const srcFrames = srcUnits.map((u) => classifyActionFrame(u));
+  const candFrames = bullets.map((b) => classifyActionFrame(b));
+  const usedB = new Set<number>();
+  let covered = 0;
+  for (let si = 0; si < srcFrames.length; si += 1) {
+    const want = srcFrames[si];
+    let matched = -1;
+    for (let bi = 0; bi < candFrames.length; bi += 1) {
+      if (usedB.has(bi)) continue;
+      if (candFrames[bi] === want) {
+        matched = bi;
+        break;
+      }
+    }
+    // Soft: near-equivalent frames when shells remap documentation↔design verbs.
+    if (matched < 0) {
+      for (let bi = 0; bi < candFrames.length; bi += 1) {
+        if (usedB.has(bi)) continue;
+        const got = candFrames[bi];
+        const soft = (want === 'generic_duty' || got === 'generic_duty')
+          || (want === 'prepare_materials' && (got === 'coordinate_info' || got === 'check_records' || got === 'update_records'))
+          || (want === 'check_records' && (got === 'prepare_materials' || got === 'update_records' || got === 'coordinate_info'))
+          || (want === 'coordinate_info' && (got === 'prepare_materials' || got === 'collaborate_visual' || got === 'check_records'))
+          || (want === 'update_records' && (got === 'check_records' || got === 'prepare_materials'))
+          || (want === 'collaborate_visual' && (got === 'coordinate_info' || got === 'prepare_materials'));
+        if (soft) {
+          matched = bi;
+          break;
+        }
+      }
+    }
+    if (matched >= 0) {
+      usedB.add(matched);
+      covered += 1;
+    }
+  }
+  const uncoveredCount = requiredCount - covered;
+  const ok = covered >= Math.min(3, requiredCount) && uncoveredCount === 0;
+  return {
+    ok,
+    requiredCount,
+    coveredCount: covered,
+    uncoveredCount,
+    reason: ok ? undefined : 'experience_material_fact_coverage_incomplete',
+  };
 }

@@ -157,12 +157,64 @@ function expectedScriptsForLocale(locale: Locale): AiContentScript[] {
 }
 
 /**
- * Soft locale guess for a single unit (not authoritative for proper nouns alone).
+ * Authoritative target-script mapping for diagnostics and validation.
+ * Never returns null for a supported locale.
  */
-export function guessUnitLocale(text: string): string | null {
+export function resolveTargetScriptForLocale(locale: Locale): AiContentScript {
+  switch (locale) {
+    case 'hi':
+      return 'devanagari';
+    case 'ar':
+      return 'arabic';
+    case 'ja':
+      return 'cjk';
+    case 'ru':
+      return 'cyrillic';
+    case 'sr':
+    case 'hr':
+      // Serbian/Croatian default export script is Latin; Cyrillic is also valid.
+      return 'latin';
+    default:
+      return 'latin';
+  }
+}
+
+/** Distinctive Marathi morphology / lexicon (not typical Hindi CV bullets). */
+const MARATHI_SIGNAL_RE =
+  /(?:आहे|होते|करतो|केले|केली|त्यांना|त्यांनी|आम्ही|तुम्ही|मराठी|पुणे)/u;
+
+/** Distinctive Nepali morphology / lexicon (not typical Hindi CV bullets). */
+const NEPALI_SIGNAL_RE =
+  /(?:छन्|थियो|गरेको|गरिन्|हुन्छ|नेपाली|काठमाडौं|गर्छिन्|राख्छिन्|गर्छ(?:िन्)?)/u;
+
+/** Soft Hindi CV morphology (finite verb / CV phrasing — not shared nouns). */
+const HINDI_CV_SIGNAL_RE =
+  /(?:करती\s*है|करता\s*है|सुनिश्चित\s*कर|व्यवस्थित\s*रख|समन्वय\s*कर|कर\s*रही\s*हूँ|कर\s*रहा\s*हूँ|अद्यतन\s*कर)/u;
+
+/** Shared Devanagari CV nouns (Hindi/Marathi/Nepali) — not language-decisive alone. */
+const DEVANAGARI_SHARED_CV_NOUN_RE =
+  /(?:गोदाम|माल|सामान|रिकॉर्ड|दस्तावे|जाँच|समन्वय|तैयारी)/u;
+
+/**
+ * Soft locale guess for a single unit (not authoritative for proper nouns alone).
+ * Devanagari: prefer Hindi when requested provenance is hi and Marathi/Nepali
+ * signals are absent; do not reject short Hindi CV bullets for lacking a tiny lexicon.
+ */
+export function guessUnitLocale(text: string, targetLocale?: Locale): string | null {
   const t = stripNeutralAiTokens(text);
   if (!t || t.length < 8) return null;
-  if (DEVANAGARI.test(t)) return 'hi';
+  if (DEVANAGARI.test(t)) {
+    const hasHiMorph = HINDI_CV_SIGNAL_RE.test(t);
+    const hasMr = MARATHI_SIGNAL_RE.test(t);
+    const hasNe = NEPALI_SIGNAL_RE.test(t);
+    // Clear Marathi/Nepali morphology wins over shared warehouse nouns.
+    if (hasMr && !hasHiMorph) return 'mr';
+    if (hasNe && !hasHiMorph) return 'ne';
+    if (hasHiMorph || targetLocale === 'hi' || DEVANAGARI_SHARED_CV_NOUN_RE.test(t) || (!hasMr && !hasNe)) {
+      return 'hi';
+    }
+    return 'hi';
+  }
   if (ARABIC.test(t)) return 'ar';
   if (CJK.test(t)) return 'ja';
   // Cyrillic: prefer Serbian when SC morphology is present; otherwise Russian.
@@ -212,8 +264,17 @@ function unitLooksMixedLanguage(text: string, target: Locale): boolean {
 function unitWrongLocale(text: string, target: Locale): boolean {
   if (isWrongLanguageAiOutput(text, target)) return true;
   const stripped = stripNeutralAiTokens(text);
-  const guessed = guessUnitLocale(text);
+  const guessed = guessUnitLocale(text, target);
   if (!guessed) return false;
+
+  if (target === 'hi') {
+    // Clear Marathi/Nepali prose under Hindi target.
+    if (guessed === 'mr' || guessed === 'ne') return true;
+    if (guessed === 'hi') return false;
+    if (guessed === 'sr' || guessed === 'hr' || guessed === 'en') return true;
+    if (['ar', 'ja', 'ru', 'de', 'es', 'fr', 'it', 'pt-BR'].includes(guessed)) return true;
+    return false;
+  }
 
   if (target === 'sr' || target === 'hr') {
     // Complete English prose under Serbian/Croatian target.
@@ -324,7 +385,7 @@ export function validateAiUnitLocalePurity(
 
   for (let i = 0; i < units.length; i += 1) {
     const unit = units[i];
-    const detectedLocale = guessUnitLocale(unit);
+    const detectedLocale = guessUnitLocale(unit, targetLocale);
     const detectedScript = detectAiContentScript(unit);
     const wrongLocale = unitWrongLocale(unit, targetLocale);
     const wrongScript = unitWrongScript(unit, targetLocale, {

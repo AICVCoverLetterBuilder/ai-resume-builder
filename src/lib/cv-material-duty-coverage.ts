@@ -28,6 +28,9 @@ export type MaterialDutyKey =
   | 'cs_complaint_resolution'
   | 'cs_issue_logging'
   | 'cs_request_coordination'
+  | 'warehouse_inbound_check'
+  | 'warehouse_records'
+  | 'warehouse_movement'
   | 'generic_duty';
 
 type DutyRule = {
@@ -168,6 +171,27 @@ const DUTY_RULES: DutyRule[] = [
     localized:
       /(coordinat|colleague|koleg|coworker|team|tim|resolve\w*.{0,24}request|zahtev|zahtjev|customer\s+request|समन्वय|सहकर्मी|सहयोग|अनुरोध|resolve\s+customer)/iu,
   },
+  {
+    key: 'warehouse_inbound_check',
+    source:
+      /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जाच).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:pristigl\w*|incoming|inbound|आने\s*वाल).{0,40}(?:rob\w*|goods?|माल)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित).{0,24}(?:dokument|document|दस्तावे)/iu,
+    localized:
+      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जाच|確認|تتحقق|проверя).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|商品|dokument|document|दस्तावे|وثائق|書類)|(?:rob\w*|goods?|माल|वस्तु|товар|商品|dokument|document|दस्तावे).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जाच|確認|تتحقق|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल).{0,40}(?:rob\w*|goods?|माल)|(?:prateć\w*|accompany\w*|संबंधित).{0,24}(?:dokument|document|दस्तावे))/iu,
+  },
+  {
+    key: 'warehouse_records',
+    source:
+      /(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट).{0,48}(?:evidenc|skladišt|skladist|warehouse|record|रिकॉर्ड|गोदाम)|(?:uredn\w*|orderly|व्यवस्थित).{0,40}(?:raspored|arrang|सामान|rob\w*|goods)/iu,
+    localized:
+      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|обновл|更新).{0,48}(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|skladist|warehouse|गोदाम|مستودع|склад|倉庫)|(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|warehouse|गोदाम).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|обновл|更新)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|товар))/iu,
+  },
+  {
+    key: 'warehouse_movement',
+    source:
+      /(?:koordin\w*|coord\w*|समन्वय).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी)|(?:priprem\w*|prepar\w*).{0,40}(?:kretanj|movement|rob\w*|goods|माल)|(?:koleg\w*|colleague\w*|सहकर्मी).{0,40}(?:rob\w*|goods|माल|kretanj|movement)/iu,
+    localized:
+      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|rob\w*|goods|माल|koleg|colleague|सहकर्मी)|(?:priprem|prepar|तैयारी|kretanj|movement|आवाजाही|rob\w*|goods|माल|koleg|colleague|सहकर्मी).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,40}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही))/iu,
+  },
 ];
 
 /** Prefer more specific keys first; skip generic when a specific key matches. */
@@ -186,6 +210,13 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
   }
   if (keys.includes('healthcare_team')) {
     return keys.filter((k) => k !== 'team_collaboration' && k !== 'generic_duty' && !k.startsWith('cs_'));
+  }
+  // Warehouse inbound/records/movement — prefer over CS false-hits (koleg+coord).
+  if (keys.some((k) => k.startsWith('warehouse_'))) {
+    return keys.filter(
+      (k) => k.startsWith('warehouse_')
+        || (!k.startsWith('cs_') && k !== 'generic_duty' && k !== 'team_collaboration'),
+    );
   }
   // Prefer CS contact-center keys over bare team_collaboration when both match.
   if (keys.some((k) => k.startsWith('cs_'))) {

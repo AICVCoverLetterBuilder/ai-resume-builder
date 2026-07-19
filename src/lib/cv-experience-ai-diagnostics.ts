@@ -18,6 +18,8 @@ import {
   experienceAiSourcesEquivalent,
 } from './cv-experience-ai-operation-snapshot';
 import { detectTextLocale } from './cv-content-locale';
+import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
+import type { Locale } from './i18n/translations';
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const EXPERIENCE_AI_DIAG_STORAGE_KEY = 'cvpro-experience-ai-diag-v1';
@@ -1165,7 +1167,13 @@ export class ExperienceAiDiagnosticSession {
         ?? (diag.requestedTargetLocale as string | undefined)
         ?? this.draft.requestedLocale
         ?? null,
-      targetScript: (diag.targetScript as string | undefined) ?? null,
+      targetScript: (diag.targetScript as string | undefined)
+        ?? (() => {
+          const loc = (diag.targetLocale as string | undefined)
+            || (diag.requestedTargetLocale as string | undefined)
+            || this.draft.requestedLocale;
+          return loc ? resolveTargetScriptForLocale(loc as Locale) : null;
+        })(),
       detectedLocaleByBullet: (diag.detectedLocaleByBullet as Array<string | null> | undefined) || [],
       detectedScriptByBullet: (diag.detectedScriptByBullet as string[] | undefined) || [],
       wrongLocaleBulletCount: diag.wrongLocaleBulletCount ?? 0,

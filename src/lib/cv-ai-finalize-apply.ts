@@ -37,7 +37,12 @@ import {
   buildCrossLocaleExperienceFallback,
   candidateLeaksSourceLocale,
   countTranslatedFactUnits,
+  validateCrossLocaleSemanticCoverage,
 } from './cv-cross-locale-experience';
+import {
+  resolveTargetScriptForLocale,
+  validateAiUnitLocalePurity,
+} from './cv-ai-unit-locale-purity';
 import {
   experienceIndexForIdStrict,
   findExperienceById,
@@ -81,7 +86,6 @@ import {
 } from './cv-semantic-fidelity';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
-import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 import {
   hasSuspiciousHindiMergedTokens,
   normalizeHindiGeneratedWhitespace,
@@ -183,7 +187,9 @@ export type FinalizeCvAiFieldResult = {
     requiredFactCount?: number;
     coveredFactCount?: number;
     providerCoveredFactCount?: number;
+    providerUncoveredFactCount?: number;
     providerRequiredFactCount?: number;
+    providerPrimaryRejectionReason?: string | null;
     providerBulletCount?: number;
     /** @deprecated Prefer clientDeterministicFallback* fields. */
     fallbackBulletCount?: number;
@@ -278,6 +284,11 @@ export type FinalizeCvAiFieldResult = {
     selectedSourceActuallyRejected?: boolean;
     providerCoverageCount?: number;
     fallbackCoverageCount?: number;
+    providerLocalePurityPassed?: boolean | null;
+    providerSemanticCoveragePassed?: boolean | null;
+    fallbackLocalePurityPassed?: boolean | null;
+    fallbackSemanticCoveragePassed?: boolean | null;
+    fallbackPrimaryRejectionReason?: string | null;
     selectedExperienceEntryIdHash?: string | null;
     operationSnapshotExperienceEntryIdHash?: string | null;
     appliedExperienceEntryIdHash?: string | null;
@@ -976,11 +987,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   const baseDiag = (): NonNullable<FinalizeCvAiFieldResult['diagnostics']> => ({
     sourceLocale: locale,
+    targetLocale: locale,
+    targetScript: resolveTargetScriptForLocale(locale),
     sourceFactCount,
     requiredFactCount: lastRequired,
     coveredFactCount: providerCoveredFactCount || lastCovered,
     providerCoveredFactCount,
     providerRequiredFactCount,
+    providerUncoveredFactCount: Math.max(0, (providerRequiredFactCount || lastRequired) - (providerCoveredFactCount || lastCovered)),
     providerBulletCount,
     fallbackBulletCount,
     finalBulletCount: 0,
@@ -1158,7 +1172,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       return null;
     }
     const crossLocaleAccept = stage === 'cross_locale_translation_fallback';
-    if (crossLocaleAccept) {
+    const crossLocaleOp = Boolean(
+      sourceForCoverage
+      && (
+        crossLocaleAccept
+        || !sourceUsableInLocale(sourceForCoverage, locale)
+        || isCrossLocaleOperation(detectTextLocale(sourceForCoverage), locale)
+      ),
+    );
+    // Cross-locale provider + translation fallback: locale/script purity first,
+    // then semantic frame coverage (never Serbian↔Hindi token overlap).
+    if (crossLocaleOp && (crossLocaleAccept || stage === 'provider')) {
       if (!textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')) {
         lastRejectStage = stage;
         lastRejectReason = 'locale_mismatch';
@@ -1203,7 +1227,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       lastRejectReason = leakage.reason || 'cross_entry_fact_leakage';
       return null;
     }
-    if (sourceForCoverage && !crossLocaleAccept) {
+    if (sourceForCoverage && crossLocaleOp && (crossLocaleAccept || stage === 'provider')) {
+      // Locale purity already validated above. Prefer semantic frames across
+      // languages; material keys are a secondary signal when present.
+      const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
+      const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate);
+      lastRequired = semantic.requiredCount || sourceFactCount;
+      lastCovered = semantic.coveredCount;
+      if (semantic.ok) {
+        // ok
+      } else if (post.ok && (post.covered?.length || 0) >= Math.min(3, post.required?.length || sourceFactCount || 3)) {
+        lastRequired = post.required?.length ?? sourceFactCount;
+        lastCovered = post.covered?.length ?? 0;
+      } else {
+        lastRejectStage = `${stage}:semantic_coverage`;
+        lastRejectReason = semantic.reason
+          || post.reason
+          || 'experience_material_fact_coverage_incomplete';
+        if (!post.ok) {
+          lastRequired = post.required?.length ?? lastRequired;
+          lastCovered = post.covered?.length ?? lastCovered;
+        }
+        return null;
+      }
+    } else if (sourceForCoverage && !crossLocaleAccept) {
       const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate);
       if (!post.ok) {
         lastRejectStage = `${stage}:material_postcondition`;
@@ -1244,15 +1291,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           lastRejectReason = identity.reason || 'experience_material_fact_coverage_incomplete';
           return null;
         }
+        // Material keys covered description-level: count material coverage as covered.
+        lastCovered = post.covered?.length ?? keyedUnits.length;
+        lastRequired = post.required?.length ?? units.length;
       }
     } else if (crossLocaleAccept && sourceForCoverage) {
-      // Cross-locale: semantic unit count, not literal token overlap.
-      const translatedCount = countTranslatedFactUnits(sourceForCoverage, candidate);
-      lastRequired = sourceFactCount;
-      lastCovered = translatedCount;
-      if (translatedCount < Math.min(3, sourceFactCount || 3)) {
+      const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
+      lastRequired = semantic.requiredCount || sourceFactCount;
+      lastCovered = semantic.coveredCount;
+      if (!semantic.ok) {
         lastRejectStage = `${stage}:translated_fact_count`;
-        lastRejectReason = 'experience_material_fact_coverage_incomplete';
+        lastRejectReason = semantic.reason || 'experience_material_fact_coverage_incomplete';
         return null;
       }
     }
@@ -1293,8 +1342,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         requiredFactCount: isClientFallback
           ? providerRequiredFactCount
           : (lastRequired || sourceFactCount),
-        providerCoveredFactCount,
-        providerRequiredFactCount,
+        providerCoveredFactCount: isClientFallback
+          ? providerCoveredFactCount
+          : (lastCovered || sourceFactCount),
+        providerRequiredFactCount: isClientFallback
+          ? providerRequiredFactCount
+          : (lastRequired || sourceFactCount),
+        providerCoverageCount: isClientFallback
+          ? providerCoveredFactCount
+          : (lastCovered || sourceFactCount),
+        providerUncoveredFactCount: isClientFallback
+          ? Math.max(0, providerRequiredFactCount - providerCoveredFactCount)
+          : Math.max(0, (lastRequired || sourceFactCount) - lastCovered),
         fallbackBulletCount: isClientFallback ? bulletCount : fallbackBulletCount,
         finalBulletCount: bulletCount,
         finalBulletScripts: detectBulletScripts(candidate),
@@ -1305,8 +1364,23 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         mixedLanguageBulletCount: purity.mixedLanguageUnitCount,
         sourceLanguageLeakageDetected: purity.sourceLanguageLeakageDetected,
         targetLocalePurityPassed: purity.targetLocalePurityPassed,
+        targetLocale: locale,
+        targetScript: resolveTargetScriptForLocale(locale),
         responseRejectedForLocaleImpurity: false,
         crossDomainLeakageDetected: false,
+        providerLocalePurityPassed: isClientFallback ? undefined : purity.targetLocalePurityPassed,
+        providerSemanticCoveragePassed: isClientFallback
+          ? undefined
+          : (lastCovered >= Math.min(3, lastRequired || sourceFactCount || 3)),
+        fallbackLocalePurityPassed: isClientFallback ? purity.targetLocalePurityPassed : undefined,
+        fallbackSemanticCoveragePassed: isClientFallback
+          ? (lastCovered >= Math.min(3, lastRequired || sourceFactCount || 3))
+          : undefined,
+        crossLocaleOperation: crossLocaleOp,
+        translationProviderAttempted: crossLocaleOp && Boolean((input.candidate || '').trim()),
+        translationFallbackAttempted: isClientFallback && crossLocaleOp,
+        translationFallbackApplied: isClientFallback && crossLocaleOp,
+        translatedFactCount: crossLocaleOp ? lastCovered : undefined,
         rejectionStage: undefined,
         typedFailureReason: undefined,
         fallbackApplied: isClientFallback,
@@ -1631,7 +1705,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     && !(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))
   ) {
     const groundedGate = validateExperienceCvPerspective(grounded, locale);
-    if (groundedGate.ok) {
+    const groundedCrossLocale = Boolean(
+      sourceForCoverage
+      && (
+        !sourceUsableInLocale(sourceForCoverage, locale)
+        || isCrossLocaleOperation(detectTextLocale(sourceForCoverage), locale)
+      ),
+    );
+    // Never accept same-language canonical shells for a different target locale.
+    if (groundedGate.ok && !groundedCrossLocale) {
       if (groundedPersp) {
         perspectiveMeta = {
           ...perspectiveMeta,
@@ -1913,6 +1995,20 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     lastRequired = coverageFail.required?.length ?? lastRequired;
   }
 
+  const rejectedPurity = (candidate || '').trim()
+    ? validateAiUnitLocalePurity(candidate, locale, {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    })
+    : null;
+  const crossLocaleReject = Boolean(
+    sourceForCoverage
+    && (
+      !sourceUsableInLocale(sourceForCoverage, locale)
+      || isCrossLocaleOperation(detectTextLocale(sourceForCoverage), locale)
+    ),
+  );
+
   return attachPerspectiveDiag({
     blocked: true,
     reason: coverageFail?.reason
@@ -1922,7 +2018,41 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     origin: 'user',
     roleDutyConflict,
     countedAsSuccess: false,
-    diagnostics: baseDiag(),
+    diagnostics: {
+      ...baseDiag(),
+      targetLocale: locale,
+      targetScript: resolveTargetScriptForLocale(locale),
+      detectedLocaleByBullet: rejectedPurity?.detectedLocaleByUnit || [],
+      detectedScriptByBullet: rejectedPurity?.detectedScriptByUnit || [],
+      wrongLocaleBulletCount: rejectedPurity?.wrongLocaleUnitCount ?? 0,
+      wrongScriptBulletCount: rejectedPurity?.wrongScriptUnitCount ?? 0,
+      mixedLanguageBulletCount: rejectedPurity?.mixedLanguageUnitCount ?? 0,
+      sourceLanguageLeakageDetected: rejectedPurity?.sourceLanguageLeakageDetected ?? false,
+      targetLocalePurityPassed: rejectedPurity?.targetLocalePurityPassed ?? false,
+      providerLocalePurityPassed: rejectedPurity?.targetLocalePurityPassed ?? null,
+      providerSemanticCoveragePassed: providerCoveredFactCount >= Math.min(3, providerRequiredFactCount || 3),
+      providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
+      providerPrimaryRejectionReason: lastRejectReason || null,
+      fallbackLocalePurityPassed: clientDeterministicFallbackAttempted
+        ? (clientDeterministicFallbackScripts.length > 0
+          && !clientDeterministicFallbackScripts.includes('latin')
+          && !clientDeterministicFallbackScripts.includes('mixed'))
+        : null,
+      fallbackSemanticCoveragePassed: clientDeterministicFallbackAttempted
+        ? clientDeterministicFallbackCoveredFactCount >= Math.min(3, clientDeterministicFallbackRequiredFactCount || 3)
+        : null,
+      fallbackPrimaryRejectionReason: clientDeterministicFallbackAttempted
+        ? (lastRejectReason || null)
+        : null,
+      crossLocaleOperation: crossLocaleReject,
+      translationProviderAttempted: crossLocaleReject && Boolean((input.candidate || '').trim()),
+      translationFallbackAttempted: clientDeterministicFallbackAttempted && crossLocaleReject,
+      translationFallbackApplied: false,
+      translatedFactCount: providerCoveredFactCount || lastCovered,
+      providerCoverageCount: providerCoveredFactCount,
+      coveredFactCount: providerCoveredFactCount || lastCovered,
+      requiredFactCount: providerRequiredFactCount || lastRequired || sourceFactCount,
+    },
   });
 }
 
