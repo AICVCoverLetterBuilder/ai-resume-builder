@@ -32,33 +32,38 @@ export type SummaryDurationOwnershipDiagnostics = {
   finalDurationExpressionCount: number;
 };
 
-/** Locale-agnostic duration expression spans for counting / stripping. */
+/**
+ * Locale-agnostic duration expression spans for counting / stripping.
+ * Must match every phrase `formatApproximateDurationPhrase` can emit, including
+ * half-year compounds for six+ (e.g. "six and a half", "šest i po").
+ */
 const DURATION_EXPRESSION_RES: RegExp[] = [
-  // English
-  /\b(?:with\s+)?(?:around|about|approximately|over|nearly)\s+(?:\d+(?:\.\d+)?|one(?:\s+and\s+a\s+half)?|two(?:\s+and\s+a\s+half)?|three(?:\s+and\s+a\s+half)?|four(?:\s+and\s+a\s+half)?|five(?:\s+and\s+a\s+half)?|six|seven|eight|nine|ten)\s+years?(?:\s+of\s+experience)?\b/giu,
+  // English — half-year optional on every spelled number
+  /\b(?:with\s+)?(?:around|about|approximately|over|nearly)\s+(?:\d+(?:\.\d+)?|one(?:\s+and\s+a\s+half)?|two(?:\s+and\s+a\s+half)?|three(?:\s+and\s+a\s+half)?|four(?:\s+and\s+a\s+half)?|five(?:\s+and\s+a\s+half)?|six(?:\s+and\s+a\s+half)?|seven(?:\s+and\s+a\s+half)?|eight(?:\s+and\s+a\s+half)?|nine(?:\s+and\s+a\s+half)?|ten(?:\s+and\s+a\s+half)?)\s+years?(?:\s+of\s+experience)?\b/giu,
   /\b(?:around|about|approximately)\s+\d+\s+months?\b/giu,
-  // Serbian / Croatian — including freestyle "godinu dana" / "jedne i po godine"
-  /\b(?:sa\s+oko|s\s+oko|oko|približno)\s+(?:jedne?(?:\s+i\s+po)?|dvije?(?:\s+i\s+po)?|dve(?:\s+i\s+po)?|tri(?:\s+i\s+po)?|četiri(?:\s+i\s+po)?|cetiri(?:\s+i\s+po)?|pet(?:\s+i\s+po)?|šest|sest|sedam|osam|devet|deset|\d+(?:\.\d+)?(?:\s+i\s+po)?)\s+godin(?:a|e|u)(?:\s+iskustva)?\b/giu,
+  // Serbian / Croatian — half-year optional on every spelled number + freestyle
+  /\b(?:sa\s+oko|s\s+oko|oko|približno)\s+(?:jedne?(?:\s+i\s+po)?|dvije?(?:\s+i\s+po)?|dve(?:\s+i\s+po)?|tri(?:\s+i\s+po)?|četiri(?:\s+i\s+po)?|cetiri(?:\s+i\s+po)?|pet(?:\s+i\s+po)?|šest(?:\s+i\s+po)?|sest(?:\s+i\s+po)?|sedam(?:\s+i\s+po)?|osam(?:\s+i\s+po)?|devet(?:\s+i\s+po)?|deset(?:\s+i\s+po)?|\d+(?:\.\d+)?(?:\s+i\s+po)?)\s+godin(?:a|e|u)(?:\s+iskustva)?\b/giu,
   /\b(?:sa\s+oko|s\s+oko|oko|približno)\s+godinu(?:\s+i\s+po)?(?:\s+dana)?(?:\s+iskustva)?\b/giu,
-  /\b(?:sa\s+oko|s\s+oko|oko)\s+(?:jedne?\s+i\s+po|dve\s+i\s+po|dvije\s+i\s+po)\s+(?:godine|godina|godinu)(?:\s+iskustva)?\b/giu,
+  /\b(?:sa\s+oko|s\s+oko|oko)\s+(?:jedne?\s+i\s+po|dve\s+i\s+po|dvije\s+i\s+po|tri\s+i\s+po|četiri\s+i\s+po|cetiri\s+i\s+po|pet\s+i\s+po|šest\s+i\s+po|sest\s+i\s+po|sedam\s+i\s+po)\s+(?:godine|godina|godinu)(?:\s+iskustva)?\b/giu,
   /\bgodinu(?:\s+i\s+po)?\s+dana(?:\s+iskustva)?\b/giu,
   /\b(?:sa\s+)?oko\s+\d+\s+meseci(?:\s+iskustva)?\b/giu,
   // German
-  /\b(?:mit\s+)?(?:etwa|rund|ca\.?|ungefähr)\s+(?:anderthalb|zweieinhalb|dreiereinhalb|[\wäöü]+|\d+(?:[.,]\d+)?)\s+Jahre?n?(?:\s+(?:Berufs)?[Ee]rfahrung)?\b/giu,
+  /\b(?:mit\s+)?(?:etwa|rund|ca\.?|ungefähr)\s+(?:anderthalb|zweieinhalb|dreieinhalb|[\wäöü]+(?:\s*,\s*5)?|\d+(?:[.,]\d+)?)\s+Jahre?n?(?:\s+(?:Berufs)?[Ee]rfahrung)?\b/giu,
   // Spanish
-  /\b(?:con\s+)?(?:alrededor\s+de|circa|unos?|unas?)\s+(?:un|una|uno|dos|tres|cuatro|cinco|seis|[\w]+|\d+(?:\.\d+)?)\s+años?(?:\s+de\s+experiencia)?\b/giu,
+  /\b(?:con\s+)?(?:alrededor\s+de|circa|unos?|unas?)\s+(?:un|una|uno|dos|tres|cuatro|cinco|seis)(?:\s+y\s+medio)?(?:\s+años?)?(?:\s+de\s+experiencia)?\b/giu,
+  /\b(?:con\s+)?(?:alrededor\s+de|circa|unos?|unas?)\s+(?:[\w]+|\d+(?:\.\d+)?)\s+años?(?:\s+de\s+experiencia)?\b/giu,
   // French
-  /\b(?:avec\s+)?(?:environ|à\s+peu\s+près)\s+(?:un\s+an\s+et\s+demi|deux\s+ans\s+et\s+demi|[\w]+|\d+(?:\.\d+)?)\s*(?:ans?)?(?:\s+d['']expérience)?\b/giu,
+  /\b(?:avec\s+)?(?:environ|à\s+peu\s+près)\s+(?:un\s+an\s+et\s+demi|deux\s+ans\s+et\s+demi|trois\s+ans\s+et\s+demi|quatre\s+ans\s+et\s+demi|cinq\s+ans\s+et\s+demi|six\s+ans\s+et\s+demi|[\w]+|\d+(?:\.\d+)?)\s*(?:ans?)?(?:\s+d['']expérience)?\b/giu,
   // Italian
-  /\b(?:con\s+)?circa\s+(?:un\s+anno\s+e\s+mezzo|due\s+anni\s+e\s+mezzo|[\w]+|\d+(?:\.\d+)?)\s*(?:anni?)?(?:\s+di\s+esperienza)?\b/giu,
+  /\b(?:con\s+)?circa\s+(?:un\s+anno\s+e\s+mezzo|due\s+anni\s+e\s+mezzo|tre\s+anni\s+e\s+mezzo|sei\s+anni\s+e\s+mezzo|[\w]+|\d+(?:\.\d+)?)\s*(?:anni?)?(?:\s+di\s+esperienza)?\b/giu,
   // Portuguese
-  /\b(?:com\s+)?(?:cerca\s+de|aproximadamente)\s+(?:um\s+e\s+meio|dois\s+e\s+meio|[\w]+|\d+(?:\.\d+)?)\s+anos?(?:\s+de\s+experiência)?\b/giu,
+  /\b(?:com\s+)?(?:cerca\s+de|aproximadamente)\s+(?:um\s+e\s+meio|dois\s+e\s+meio|três\s+e\s+meio|seis\s+e\s+meio|[\w]+|\d+(?:\.\d+)?)\s+anos?(?:\s+de\s+experiência)?\b/giu,
   // Hindi
-  /(?:लगभग|करीब)?\s*(?:\d+(?:\.\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|ढाई|डेढ़|डेढ|साढ़े\s*\d+)\s*वर्षों?(?:\s*के\s*अनुभव(?:\s*के\s*साथ)?)?/gu,
+  /(?:लगभग|करीब)?\s*(?:\d+(?:\.\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|डेढ|साढ़े\s*\d+)\s*वर्षों?(?:\s*के\s*अनुभव(?:\s*के\s*साथ)?)?/gu,
   // Japanese
   /約\s*\d+(?:\.\d+)?\s*年の経験/gu,
   // Russian
-  /\b(?:с\s+опытом\s+)?около\s+[\w]+\s+лет\b/giu,
+  /\b(?:с\s+опытом\s+)?около\s+[\w]+\s*(?:с\s+половиной)?\s*лет\b/giu,
   // Arabic (light)
   /مع\s+حوالي\s+.+\s+من\s+الخبرة/gu,
 ];

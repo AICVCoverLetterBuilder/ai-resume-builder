@@ -67,6 +67,25 @@ export function ExperienceAiCopyDiagnosticsButton() {
   return <Link />;
 }
 
+/** Internal-only Summary AI diagnostics copy control. */
+export function SummaryAiCopyDiagnosticsButton() {
+  const [Link, setLink] = useState<null | typeof import('./InternalSummaryAiDiagnosticsPanel').InternalSummaryAiCopyLink>(null);
+
+  useEffect(() => {
+    if (!INTERNAL_AI_RESET_ENABLED) return;
+    let cancelled = false;
+    void import('./InternalSummaryAiDiagnosticsPanel').then((mod) => {
+      if (!cancelled) setLink(() => mod.InternalSummaryAiCopyLink);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!INTERNAL_AI_RESET_ENABLED || !Link) return null;
+  return <Link />;
+}
+
 /** Hidden diagnostics modal opened via seven taps on the About version label. */
 export function CvExportDiagnosticsModal({
   open,
@@ -80,6 +99,7 @@ export function CvExportDiagnosticsModal({
   const [showJson, setShowJson] = useState(false);
   const [EnabledPanel, setEnabledPanel] = useState<null | typeof import('./InternalAiUsageResetPanel').InternalAiUsageResetPanel>(null);
   const [ExpAiPanel, setExpAiPanel] = useState<null | typeof import('./InternalExperienceAiDiagnosticsPanel').InternalExperienceAiDiagnosticsPanel>(null);
+  const [SumAiPanel, setSumAiPanel] = useState<null | typeof import('./InternalSummaryAiDiagnosticsPanel').InternalSummaryAiDiagnosticsPanel>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -98,6 +118,9 @@ export function CvExportDiagnosticsModal({
     });
     void import('./InternalExperienceAiDiagnosticsPanel').then((mod) => {
       if (!cancelled) setExpAiPanel(() => mod.InternalExperienceAiDiagnosticsPanel);
+    });
+    void import('./InternalSummaryAiDiagnosticsPanel').then((mod) => {
+      if (!cancelled) setSumAiPanel(() => mod.InternalSummaryAiDiagnosticsPanel);
     });
     return () => {
       cancelled = true;
@@ -153,6 +176,10 @@ export function CvExportDiagnosticsModal({
 
           {INTERNAL_AI_RESET_ENABLED && ExpAiPanel ? (
             <ExpAiPanel refreshToken={panelTick} />
+          ) : null}
+
+          {INTERNAL_AI_RESET_ENABLED && SumAiPanel ? (
+            <SumAiPanel refreshToken={panelTick} />
           ) : null}
 
           <p className="text-xs text-muted-foreground">

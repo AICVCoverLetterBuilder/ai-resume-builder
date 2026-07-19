@@ -371,7 +371,7 @@ export function extractSummaryYearClaims(text: string): number[] {
 const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
   en: {
     1: 'one', 1.5: 'one and a half', 2: 'two', 2.5: 'two and a half', 3: 'three', 3.5: 'three and a half',
-    4: 'four', 4.5: 'four and a half', 5: 'five', 5.5: 'five and a half', 6: 'six',
+    4: 'four', 4.5: 'four and a half', 5: 'five', 5.5: 'five and a half', 6: 'six', 6.5: 'six and a half',
     7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten',
   },
   de: {
@@ -401,12 +401,12 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
   },
   sr: {
     1: 'jedne', 1.5: 'jedne i po', 2: 'dve', 2.5: 'dve i po', 3: 'tri', 3.5: 'tri i po',
-    4: 'četiri', 4.5: 'četiri i po', 5: 'pet', 5.5: 'pet i po', 6: 'šest',
+    4: 'četiri', 4.5: 'četiri i po', 5: 'pet', 5.5: 'pet i po', 6: 'šest', 6.5: 'šest i po',
     7: 'sedam', 8: 'osam', 9: 'devet', 10: 'deset',
   },
   hr: {
     1: 'jedne', 1.5: 'jedne i po', 2: 'dvije', 2.5: 'dvije i po', 3: 'tri', 3.5: 'tri i po',
-    4: 'četiri', 4.5: 'četiri i po', 5: 'pet', 5.5: 'pet i po', 6: 'šest',
+    4: 'četiri', 4.5: 'četiri i po', 5: 'pet', 5.5: 'pet i po', 6: 'šest', 6.5: 'šest i po',
     7: 'sedam', 8: 'osam', 9: 'devet', 10: 'deset',
   },
   ru: {

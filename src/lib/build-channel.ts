@@ -61,6 +61,26 @@ export const EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL = INTERNAL_AI_RESET_ENABLED
   ? 'Copy Experience AI diagnostics'
   : '';
 
+export const SUMMARY_AI_TRACE_BUNDLE_MARKER = INTERNAL_AI_RESET_ENABLED
+  ? 'CVPRO_SUMMARY_AI_TRACE_V1'
+  : '';
+
+export const SUMMARY_AI_COPY_DIAGNOSTICS_LABEL = INTERNAL_AI_RESET_ENABLED
+  ? 'Copy Summary AI diagnostics'
+  : '';
+
+export const SUMMARY_AI_SECTION_TITLE = INTERNAL_AI_RESET_ENABLED
+  ? 'Summary AI diagnostics'
+  : '';
+
+export const SUMMARY_AI_COPY_OK = INTERNAL_AI_RESET_ENABLED
+  ? 'Summary AI diagnostics copied'
+  : '';
+
+export const SUMMARY_AI_COPY_FAIL = INTERNAL_AI_RESET_ENABLED
+  ? 'Could not copy Summary AI diagnostics'
+  : '';
+
 export const EXPERIENCE_AI_SECTION_TITLE = INTERNAL_AI_RESET_ENABLED
   ? 'Experience AI diagnostics'
   : '';

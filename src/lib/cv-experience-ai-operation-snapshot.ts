@@ -39,6 +39,8 @@ export type ExperienceAiSnapshotUnit = {
 export type ExperienceAiOperationSnapshot = {
   operationSnapshotId: string;
   requestId: string;
+  /** Stable WorkExperience.id hashed into diagnostics; never use array index. */
+  experienceEntryId: string;
   locale: Locale;
   jobContextHash: string;
   provenanceOrigin: ExperienceAiSnapshotSourceKind;
@@ -149,6 +151,8 @@ export type CreateExperienceAiOperationSnapshotInput = {
   locale: Locale;
   requestId: string;
   jobContextHash: string;
+  /** Stable WorkExperience.id — required for entry-scoped apply diagnostics. */
+  experienceEntryId?: string;
 };
 
 /**
@@ -199,6 +203,7 @@ export function createExperienceAiOperationSnapshot(
   return {
     operationSnapshotId,
     requestId: input.requestId,
+    experienceEntryId: String(input.experienceEntryId || '').trim(),
     locale: input.locale,
     jobContextHash: input.jobContextHash,
     provenanceOrigin,

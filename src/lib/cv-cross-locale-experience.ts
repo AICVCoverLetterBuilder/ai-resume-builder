@@ -51,13 +51,16 @@ function classifyActionFrame(unit: string): ActionFrame {
   return 'generic_duty';
 }
 
-function domainHintFromUnits(units: string[]): string {
+function domainHintFromUnits(units: string[], position?: string): string {
+  const title = fold(position || '');
+  if (/(dizajn|design|grafick|visual|ui\b|ux\b)/.test(title)) return 'design';
+  if (/(skladist|warehouse|magacin|lager)/.test(title)) return 'warehouse';
   const joined = fold(units.join(' '));
-  if (/(skladist|склад|warehouse|rob[aeu]|робе|робу|товара|goods|inventar|inventory|مستودع|गोदाम|倉庫|armaz)/.test(joined)) {
-    return 'warehouse';
-  }
   if (/(grafick|dizajn|vizuel|design|visual|ビジュアル|تصميم|डिज़ाइन)/.test(joined)) {
     return 'design';
+  }
+  if (/(skladist|склад|warehouse|rob[aeu]|робе|робу|товара|goods|inventar|inventory|مستودع|गोदाम|倉庫|armaz)/.test(joined)) {
+    return 'warehouse';
   }
   if (/(dokument|document|evidenc|record|وثائق|दस्तावेज़|書類)/.test(joined)) {
     return 'documentation';
@@ -73,14 +76,29 @@ function englishBullet(
   const past = !isPresent;
   switch (frame) {
     case 'check_records':
+      if (domain === 'warehouse') {
+        return past
+          ? 'Checked incoming goods and related documentation for accurate recording.'
+          : 'Checks incoming goods and related documentation for accurate recording.';
+      }
+      if (domain === 'design') {
+        return past
+          ? 'Reviewed visual materials and design specifications for consistency.'
+          : 'Reviews visual materials and design specifications for consistency.';
+      }
       return past
-        ? 'Checked incoming goods and related documentation for accurate recording.'
-        : 'Checks incoming goods and related documentation for accurate recording.';
+        ? 'Reviewed documentation and checked completeness of related records.'
+        : 'Reviews documentation and checks completeness of related records.';
     case 'update_records':
       if (domain === 'warehouse') {
         return past
           ? 'Updated warehouse records and maintained orderly arrangement of goods.'
           : 'Updates warehouse records and maintains orderly arrangement of goods.';
+      }
+      if (domain === 'design') {
+        return past
+          ? 'Updated design files and tracked revision status across deliverables.'
+          : 'Updates design files and tracks revision status across deliverables.';
       }
       return past
         ? 'Updated work records and tracked the status of open items.'
@@ -90,6 +108,11 @@ function englishBullet(
         return past
           ? 'Coordinated preparation and movement of goods with colleagues.'
           : 'Coordinates preparation and movement of goods with colleagues.';
+      }
+      if (domain === 'design') {
+        return past
+          ? 'Coordinated design handoffs with colleagues to keep deliverables on schedule.'
+          : 'Coordinates design handoffs with colleagues to keep deliverables on schedule.';
       }
       return past
         ? 'Coordinated information sharing with colleagues to complete documentation on time.'
@@ -104,10 +127,20 @@ function englishBullet(
           ? 'Created visual materials and graphic elements for digital products and platforms.'
           : 'Creates visual materials and graphic elements for digital products and platforms.';
       }
+      if (domain === 'warehouse') {
+        return past
+          ? 'Prepared goods and related documentation for accurate handling.'
+          : 'Prepares goods and related documentation for accurate handling.';
+      }
       return past
         ? 'Prepared work materials and adjusted outputs to required formats.'
         : 'Prepares work materials and adjusts outputs to required formats.';
     default:
+      if (domain === 'design') {
+        return past
+          ? 'Carried out day-to-day design duties while checking accuracy of related materials.'
+          : 'Performs day-to-day design duties while checking accuracy of related materials.';
+      }
       return past
         ? 'Carried out day-to-day role duties while checking accuracy of related records.'
         : 'Performs day-to-day role duties while checking accuracy of related records.';
@@ -189,9 +222,18 @@ function serbianBullet(
   }
 }
 
-/** Soft target-locale shells keyed by action frame (not occupation catalogues). */
-function localizedShellBullet(locale: Locale, frame: ActionFrame, isPresent: boolean): string | null {
+/** Soft target-locale shells keyed by action frame + domain (not occupation catalogues). */
+function localizedShellBullet(
+  locale: Locale,
+  frame: ActionFrame,
+  isPresent: boolean,
+  domain: string,
+): string | null {
   const past = !isPresent;
+  // Warehouse-hardcoded locale shells must never be used for design/docs/work domains.
+  if (domain !== 'warehouse') {
+    return englishBullet(frame, domain, isPresent);
+  }
   const table: Partial<Record<Locale, Record<ActionFrame, [string, string]>>> = {
     de: {
       check_records: [
@@ -373,7 +415,7 @@ function bulletForLocale(
       gender,
     );
   }
-  const shell = localizedShellBullet(locale, frame, isPresent);
+  const shell = localizedShellBullet(locale, frame, isPresent, domain);
   if (shell) return shell;
   // Unknown target: English CV form (never return the source language).
   return applyEnglishEmploymentTense(englishBullet(frame, domain, isPresent), isPresent);
@@ -418,6 +460,8 @@ export function buildCrossLocaleExperienceFallback(options: {
   targetLocale: Locale;
   gender?: string;
   isPresent?: boolean;
+  /** Free-text position — preferred domain signal over poisoned unit text. */
+  position?: string;
 }): string {
   const target = options.targetLocale;
   const units = extractSourceDutyUnits(options.sourceDescription)
@@ -432,7 +476,7 @@ export function buildCrossLocaleExperienceFallback(options: {
     return '';
   }
 
-  const domain = domainHintFromUnits(units);
+  const domain = domainHintFromUnits(units, options.position);
   const isPresent = options.isPresent !== false;
   const frames = units.map((u) => classifyActionFrame(u));
   // Ensure three distinct bullets when source has three units.

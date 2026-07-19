@@ -46,8 +46,12 @@ import {
   copyExperienceAiDiagnosticsToClipboard,
   ExperienceAiDiagnosticSession,
 } from '@/lib/cv-experience-ai-diagnostics';
+import { SummaryAiDiagnosticSession } from '@/lib/cv-summary-ai-diagnostics';
 import { INTERNAL_AI_RESET_ENABLED } from '@/lib/build-channel';
-import { ExperienceAiCopyDiagnosticsButton } from '@/components/CvExportDiagnosticsControls';
+import {
+  ExperienceAiCopyDiagnosticsButton,
+  SummaryAiCopyDiagnosticsButton,
+} from '@/components/CvExportDiagnosticsControls';
 import type { SaveFileResult } from '@/lib/native-save';
 import {
   CV_RUNTIME_MIGRATION_VERSION,
@@ -927,6 +931,17 @@ export default function CVBuilderPage() {
     const previousContentLocale = liveCvAtPress.canonicalSnapshot?.canonicalLocale ?? null;
     latestSummaryRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
+    const summaryDiag = new SummaryAiDiagnosticSession({
+      uiLocale: locale,
+      requestedLocale,
+      contentLocale: previousContentLocale || liveCvAtPress.contentLocale || null,
+      templateId: String(liveCvAtPress.templateId || ''),
+      gender: liveCvAtPress.personal.gender || '',
+      requestId: reqCtx.requestId,
+      usageCountBefore: countBefore,
+      operationMode,
+    });
+    summaryDiag.recordCvSnapshot(liveCvAtPress, liveSummaryAtPress);
     try {
       // Shared deterministic duration — never let each locale estimate independently.
       const referenceDateIso = new Date().toISOString().slice(0, 10);
@@ -1065,6 +1080,9 @@ export default function CVBuilderPage() {
           applied: false,
           reason: finalizedGate.reason || failCode,
         });
+        summaryDiag.recordFinalizeResult(finalizedGate);
+        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.commit();
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
@@ -1080,6 +1098,9 @@ export default function CVBuilderPage() {
         fallbackUsed: finalizedGate.origin === 'deterministic_fallback',
         responseSource: finalizedGate.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider',
       });
+      summaryDiag.recordFinalizeResult(finalizedGate);
+      summaryDiag.recordVisibleApply(true, countBefore + 1);
+      summaryDiag.commit();
       logAiLocaleTransitionDiagnostics({
         requestId: reqCtx.requestId,
         action: 'summary_generate',
@@ -1190,6 +1211,7 @@ export default function CVBuilderPage() {
       locale: requestedLocale,
       requestId: reqCtx.requestId,
       jobContextHash: requestContext.key,
+      experienceEntryId: expId,
     });
     const liveSourceEmpty = !operationSnapshot.normalizedSourceText.trim();
 
@@ -3047,6 +3069,7 @@ export default function CVBuilderPage() {
                       subtitle={isSummaryGenerating ? undefined : t.cv.generateSubtext}
                       showArrow
                     />
+                    {INTERNAL_AI_RESET_ENABLED ? <SummaryAiCopyDiagnosticsButton /> : null}
                     <div className="space-y-2">
                       <p className="text-xs font-medium text-foreground/60">{t.cv.rewrite}:</p>
                       <div className="space-y-2">

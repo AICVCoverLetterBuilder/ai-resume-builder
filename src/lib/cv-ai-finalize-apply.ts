@@ -39,6 +39,12 @@ import {
   countTranslatedFactUnits,
 } from './cv-cross-locale-experience';
 import {
+  experienceIndexForIdStrict,
+  findExperienceById,
+  hashExperienceEntryId,
+  validateCrossEntryExperienceLeakage,
+} from './cv-experience-entry-isolation';
+import {
   detectTextLocale,
   isCrossLocaleOperation,
 } from './cv-content-locale';
@@ -246,6 +252,22 @@ export type FinalizeCvAiFieldResult = {
     selectedSourceActuallyRejected?: boolean;
     providerCoverageCount?: number;
     fallbackCoverageCount?: number;
+    selectedExperienceEntryIdHash?: string | null;
+    operationSnapshotExperienceEntryIdHash?: string | null;
+    appliedExperienceEntryIdHash?: string | null;
+    sourceFactsEntryIdHash?: string | null;
+    canonicalFactsEntryIdHash?: string | null;
+    fallbackFactsEntryIdHash?: string | null;
+    providerTargetEntryIdHash?: string | null;
+    arrayIndexAtRequest?: number | null;
+    arrayIndexAtApply?: number | null;
+    stableEntryIdentityMatched?: boolean;
+    targetEntryStillExists?: boolean;
+    crossEntryCandidateFactCount?: number;
+    crossEntryLeakageDetected?: boolean;
+    leakedFromExperienceEntryIdHashes?: string[];
+    entryScopedCanonicalStorageUsed?: boolean;
+    responseRejectedForEntryMismatch?: boolean;
   };
 };
 
@@ -307,9 +329,7 @@ function buildDurationContext(cv: CVData, locale: Locale): DurationIntegrationCo
 }
 
 function experienceIndexForId(cv: CVData, experienceId?: string): number {
-  if (!experienceId) return 0;
-  const idx = (cv.experience || []).findIndex((e) => e.id === experienceId);
-  return idx >= 0 ? idx : 0;
+  return experienceIndexForIdStrict(cv, experienceId);
 }
 
 function normalizeLocaleText(text: string, locale: Locale): string {
@@ -474,6 +494,20 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     },
   );
   candidate = normalizeLocaleText(durationResolved.summary, locale);
+  // Idempotent duration ownership: second pass must not grow claim count.
+  {
+    const second = resolveSummaryWithDurationPolicy(
+      candidate,
+      durationSnapshot.total,
+      locale,
+      {
+        forceDurationPhrase: true,
+        requireDurationClaim: true,
+        context,
+      },
+    );
+    candidate = normalizeLocaleText(second.summary, locale);
+  }
   if (locale === 'sr' || locale === 'hr') {
     candidate = preserveSerbianSummaryFactForms(candidate, dutiesText);
     candidate = normalizeSerbianLatinConfusables(candidate);
@@ -648,7 +682,69 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const cv = input.cv;
   const gender = input.gender || cv.personal?.gender || '';
   const experienceIndex = experienceIndexForId(cv, input.experienceId);
-  const exp = (cv.experience || [])[experienceIndex];
+  if (!input.experienceId || experienceIndex < 0) {
+    return {
+      text: '',
+      origin: 'ai_generated',
+      blocked: true,
+      countedAsSuccess: false,
+      reason: 'experience_entry_mismatch',
+      roleDutyConflict: false,
+      diagnostics: {
+        rejectionStage: 'entry_identity',
+        typedFailureReason: 'experience_entry_mismatch',
+        responseRejectedForEntryMismatch: true,
+        targetEntryStillExists: false,
+        stableEntryIdentityMatched: false,
+        selectedExperienceEntryIdHash: hashExperienceEntryId(input.experienceId),
+      },
+    };
+  }
+  const exp = findExperienceById(cv, input.experienceId);
+  if (!exp) {
+    return {
+      text: '',
+      origin: 'ai_generated',
+      blocked: true,
+      countedAsSuccess: false,
+      reason: 'experience_entry_mismatch',
+      roleDutyConflict: false,
+      diagnostics: {
+        rejectionStage: 'entry_identity',
+        typedFailureReason: 'experience_entry_mismatch',
+        responseRejectedForEntryMismatch: true,
+        targetEntryStillExists: false,
+        stableEntryIdentityMatched: false,
+        selectedExperienceEntryIdHash: hashExperienceEntryId(input.experienceId),
+      },
+    };
+  }
+  const arrayIndexAtRequest = experienceIndex;
+  const selectedExperienceEntryIdHash = hashExperienceEntryId(exp.id);
+  const snapshot = input.operationSnapshot;
+  if (
+    snapshot?.experienceEntryId
+    && snapshot.experienceEntryId !== exp.id
+  ) {
+    return {
+      text: '',
+      origin: 'ai_generated',
+      blocked: true,
+      countedAsSuccess: false,
+      reason: 'experience_entry_mismatch',
+      roleDutyConflict: false,
+      diagnostics: {
+        rejectionStage: 'entry_identity:snapshot',
+        typedFailureReason: 'experience_entry_mismatch',
+        responseRejectedForEntryMismatch: true,
+        targetEntryStillExists: true,
+        stableEntryIdentityMatched: false,
+        selectedExperienceEntryIdHash,
+        operationSnapshotExperienceEntryIdHash: hashExperienceEntryId(snapshot.experienceEntryId),
+        arrayIndexAtRequest,
+      },
+    };
+  }
   const isPresent = Boolean(exp?.isPresent);
   const tenseMode: 'present' | 'past' = isPresent ? 'present' : 'past';
   const jobContext = input.jobContext || buildExperienceJobContext({
@@ -657,7 +753,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     locale,
     level: input.level,
   });
-  const snapshot = input.operationSnapshot;
   const grounding = exp
     ? resolveExperienceAiGrounding(exp, jobContext, freezeExperienceAiDescription)
     : null;
@@ -946,6 +1041,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
     }
+    // Entry isolation: never apply another role's distinctive facts.
+    const leakage = validateCrossEntryExperienceLeakage({
+      cv,
+      targetExperienceId: exp.id,
+      candidate,
+      targetPosition: exp.position,
+    });
+    if (!leakage.ok) {
+      lastRejectStage = `${stage}:cross_entry_leakage`;
+      lastRejectReason = leakage.reason || 'cross_entry_fact_leakage';
+      return null;
+    }
     if (sourceForCoverage && !crossLocaleAccept) {
       const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate);
       if (!post.ok) {
@@ -1113,6 +1220,24 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ...result.diagnostics,
       ...perspectiveMeta,
       tenseMode,
+      selectedExperienceEntryIdHash,
+      operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
+        ? hashExperienceEntryId(snapshot.experienceEntryId)
+        : null,
+      appliedExperienceEntryIdHash: result.countedAsSuccess
+        ? selectedExperienceEntryIdHash
+        : null,
+      sourceFactsEntryIdHash: selectedExperienceEntryIdHash,
+      canonicalFactsEntryIdHash: selectedExperienceEntryIdHash,
+      fallbackFactsEntryIdHash: selectedExperienceEntryIdHash,
+      providerTargetEntryIdHash: selectedExperienceEntryIdHash,
+      arrayIndexAtRequest,
+      arrayIndexAtApply: experienceIndexForIdStrict(cv, exp.id),
+      stableEntryIdentityMatched: true,
+      targetEntryStillExists: Boolean(findExperienceById(cv, exp.id)),
+      entryScopedCanonicalStorageUsed: true,
+      responseRejectedForEntryMismatch: false,
+      crossEntryLeakageDetected: Boolean(result.diagnostics?.crossEntryLeakageDetected),
     },
   });
 
@@ -1392,6 +1517,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           targetLocale: locale,
           gender,
           isPresent,
+          position: exp.position,
         }),
         locale,
       );
