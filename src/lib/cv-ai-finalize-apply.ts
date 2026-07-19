@@ -32,8 +32,10 @@ import {
 } from './cv-content-quality';
 import {
   analyzeHindiSummaryEmploymentQuality,
+  splitHindiSummaryUnits,
   SUMMARY_BUILDER_REVISION,
 } from './cv-summary-grounding';
+import { fingerprintText } from './cv-export-diagnostics';
 import {
   deterministicLocalizedBulletsFromCanonical,
   deterministicLocalizedSummaryFromCanonical,
@@ -67,6 +69,7 @@ import {
   sourceUsableInLocale,
 } from './cv-source-fact-identity';
 import {
+  classifyMaterialDutyKeys,
   materialDutyKeysFromDescription,
   validateExperienceApplyMaterialPostcondition,
 } from './cv-material-duty-coverage';
@@ -86,7 +89,7 @@ import {
 } from './cv-role-title';
 
 /** Runtime revision for the production Summary finalize → apply orchestration. */
-export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-279-v1' as const;
+export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-280-v1' as const;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -364,8 +367,88 @@ export type FinalizeCvAiFieldResult = {
     summaryUnitSplitterRevision?: string;
     summaryGroundingRevision?: string;
     summaryDurationFinalizerRevision?: string;
+    /** Non-PII candidate identity across finalize stages. */
+    providerCandidateHash?: string | null;
+    providerCandidateNormalizedHash?: string | null;
+    deterministicCandidateHash?: string | null;
+    deterministicCandidateNormalizedHash?: string | null;
+    durationPass1CandidateHash?: string | null;
+    durationPass2CandidateHash?: string | null;
+    groundingInputCandidateHash?: string | null;
+    finalValidatedCandidateHash?: string | null;
+    providerCandidateEqualsDeterministicCandidate?: boolean | null;
+    deterministicCandidateEqualsGroundingInput?: boolean | null;
+    groundingInputEqualsFinalValidatedCandidate?: boolean | null;
+    providerCandidateSentenceCount?: number | null;
+    deterministicCandidateSentenceCount?: number | null;
+    durationPass1SentenceCount?: number | null;
+    durationPass2SentenceCount?: number | null;
+    groundingInputSentenceCount?: number | null;
+    durationPass1Hash?: string | null;
+    durationPass2Hash?: string | null;
+    durationSecondPassChanged?: boolean | null;
+    durationSecondPassChangeReason?: string | null;
+    contextCurrentRoleResolved?: string | null;
+    contextCurrentRoleLocalized?: string | null;
+    candidateCurrentRoleTitlePresent?: boolean | null;
+    candidateCurrentRoleTitleMatchesStructuredRole?: boolean | null;
+    candidateCurrentEmploymentIntroductionCount?: number | null;
+    candidateCurrentRoleOmittedDetected?: boolean | null;
+    deterministicCurrentEntryIdHash?: string | null;
+    deterministicPriorEntryIdHashes?: string[];
+    currentEntryMaterialKeys?: string[];
+    priorEntryMaterialKeys?: string[];
+    flattenedFactArrayUsed?: boolean;
+    previousSummaryTextUsedByDeterministicFallback?: boolean;
+    providerTextUsedByDeterministicFallback?: boolean;
+    finalSentenceHashes?: string[];
+    finalSentenceRoleSlots?: string[];
   };
 };
+
+function normalizeSummaryCandidateText(text: string): string {
+  return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function hashSummaryCandidate(text: string): string {
+  return fingerprintText(normalizeSummaryCandidateText(text) || 'empty');
+}
+
+function countSummaryCandidateSentences(text: string, locale: Locale): number {
+  const t = normalizeSummaryCandidateText(text);
+  if (!t) return 0;
+  if (locale === 'hi') return splitHindiSummaryUnits(t).length;
+  return t.split(/[.!?।]/u).filter((s) => s.trim()).length;
+}
+
+/**
+ * Hindi Summary rebuild: force live Experience textarea over stale EN/SR
+ * canonical/generated metadata (device autosave shape). Other locales keep
+ * normal grounding resolution so Serbian/English duration cycles stay stable.
+ */
+function buildSummaryFactSetForLocale(cv: CVData, locale: Locale): CvCanonicalFactSet {
+  if (locale !== 'hi') {
+    return buildCvCanonicalFactSet(cv);
+  }
+  const experience = (cv.experience || []).map((exp) => {
+    const liveDisplay = (exp.description || '').trim();
+    const liveAi = freezeExperienceAiDescription(exp).trim();
+    // Prefer visible live text first — freeze already prefers live, but keep
+    // an explicit description-first order for Hindi entry ownership.
+    const authoritative = liveDisplay
+      || liveAi
+      || (exp.originalUserDescription || '').trim()
+      || (exp.canonicalDescription || '').trim();
+    return {
+      ...exp,
+      description: authoritative,
+      canonicalDescription: authoritative,
+      originalUserDescription: (exp.originalUserDescription || '').trim() || authoritative,
+      descriptionOrigin: 'user' as const,
+    };
+  });
+  return buildCvCanonicalFactSet({ ...cv, experience });
+}
 
 function dutiesTextFromCv(cv: CVData, experienceId?: string): string {
   const exps = cv.experience || [];
@@ -597,7 +680,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const locale = input.requestedLocale;
   const cv = input.cv;
   const gender = input.gender || cv.personal?.gender || '';
-  const factSet = buildCvCanonicalFactSet(cv);
+  // Hindi: live Experience beats stale canonical. Other locales: normal facts.
+  const factSet = buildSummaryFactSetForLocale(cv, locale);
   const durationSnapshot = input.durationSnapshot
     || buildExperienceDurationSnapshot(
       cv.experience || [],
@@ -617,10 +701,54 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   });
   const roleDutyConflict = consistency.conflict;
   const context = buildDurationContext(cv, locale);
+  const contextCurrentRoleLocalized = (context.role || '').trim();
+  const contextCurrentRoleResolved = (entryDutiesForRole.currentRoleTitle || '').trim();
 
-  let candidate = prepareCandidate(input.candidate || '', locale, 'summary');
+  const providerRaw = prepareCandidate(input.candidate || '', locale, 'summary');
+  const providerCandidateHash = hashSummaryCandidate(providerRaw);
+  const providerCandidateNormalizedHash = hashSummaryCandidate(
+    normalizeSummaryCandidateText(providerRaw),
+  );
+  const providerCandidateSentenceCount = countSummaryCandidateSentences(providerRaw, locale);
+
+  let candidate = providerRaw;
   if (hasAiProtocolMarker(candidate)) {
     candidate = '';
+  }
+
+  let deterministicCandidateRaw = '';
+  let deterministicCandidateHash: string | null = null;
+  let deterministicCandidateNormalizedHash: string | null = null;
+  let deterministicCandidateSentenceCount: number | null = null;
+  let durationPass1CandidateHash: string | null = null;
+  let durationPass2CandidateHash: string | null = null;
+  let durationPass1SentenceCount: number | null = null;
+  let durationPass2SentenceCount: number | null = null;
+  let durationSecondPassChanged: boolean | null = null;
+  let durationSecondPassChangeReason: string | null = null;
+  let groundingInputCandidateHash: string | null = null;
+  let groundingInputSentenceCount: number | null = null;
+  let previousSummaryTextUsedByDeterministicFallback = false;
+  let providerTextUsedByDeterministicFallback = false;
+  let flattenedFactArrayUsed = false;
+  const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
+    ? hashExperienceEntryId(entryDutiesForRole.currentEntryId)
+    : null;
+  const deterministicPriorEntryIdHashes: string[] = (cv.experience || [])
+    .filter((e) => e.id && e.id !== entryDutiesForRole.currentEntryId)
+    .map((e) => hashExperienceEntryId(e.id));
+  const currentEntryMaterialKeys: string[] = [...new Set(
+    classifyMaterialDutyKeys(entryDutiesForRole.currentEntryDuties),
+  )];
+  // Design prior duties often contain Hindi तैयार which falsely hits food_prep.
+  const priorDesignCue = /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|दृश्य|ब्रांड|graphic|design|print|digital|visual)/iu
+    .test(entryDutiesForRole.priorEntryDuties || '');
+  const priorEntryMaterialKeys: string[] = [...new Set(
+    classifyMaterialDutyKeys(entryDutiesForRole.priorEntryDuties)
+      .filter((k) => !(priorDesignCue && k === 'food_prep')),
+  )];
+  if (priorDesignCue && priorEntryMaterialKeys.length === 0) {
+    priorEntryMaterialKeys.push('design_visual_identity');
   }
   // Empty Summary generation: seed from grounded Experience facts before duration
   // ownership, so injectHindiDurationWithOpening does not emit a duration-only shell.
@@ -747,7 +875,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     candidate = '';
   }
 
-  const durationDiagFinal = durationDiag;
+  let durationDiagFinal = durationDiag;
   if (
     summaryDurationPostconditionFailed(candidate, durationSnapshot.total, locale, {
       requireDurationClaim: true,
@@ -762,18 +890,20 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   let origin: CvAiFinalizeOrigin = input.originHint || 'ai_generated';
   if (durationResolved.status === 'repaired') origin = 'ai_repaired';
-  if (durationResolved.status === 'fallback') origin = 'deterministic_fallback';
+  // Do NOT treat duration-policy "fallback" status as a Summary deterministic
+  // rebuild — that alias made provider prose look like entry-owned repair.
 
   const attachSummaryDiag = (
     result: FinalizeCvAiFieldResult,
   ): FinalizeCvAiFieldResult => {
-    const independent = verifyIndependentFinalDurationCount(result.text, locale, {
+    const analyzedText = result.text || '';
+    const independent = verifyIndependentFinalDurationCount(analyzedText, locale, {
       requireExactlyOne: true,
     });
-    const breakdown = summarizeDurationClaimBreakdown(result.text, locale);
+    const breakdown = summarizeDurationClaimBreakdown(analyzedText, locale);
     const owned = durationDiagFinal as SummaryDurationOwnershipDiagnostics | undefined;
     const rep = independent.representation
-      || analyzeDurationRepresentations(result.text, locale);
+      || analyzeDurationRepresentations(analyzedText, locale);
     const durationOk = independent.ok && independent.count === 1 && !rep.hybridDetected;
     const detectorAgreement = independent.count
       === (owned?.durationClaimCountAfterInsert ?? independent.count)
@@ -784,12 +914,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && (owned?.durationValidationPassed !== false)
       && (owned?.finalDurationHybridDetected !== true),
     );
-    const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(result.text);
+    const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
     const perspectiveValidationPassed = locale === 'hi' ? !firstPerson : true;
     const entryDuties = currentAndPriorDutiesFromCv(cv);
     const empQ = locale === 'hi'
-      ? analyzeHindiSummaryEmploymentQuality(result.text, {
+      ? analyzeHindiSummaryEmploymentQuality(analyzedText, {
         company: context.company || entryDuties.currentCompany,
         role: context.role,
         startDate: context.startDate,
@@ -800,6 +930,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         structuredRole: context.role || entryDuties.currentRoleTitle,
       })
       : null;
+    // Candidate fields — never treat structured context alone as a passing intro/title.
+    const candidateCurrentRoleTitlePresent = empQ?.currentRoleTitlePresent ?? null;
+    const candidateCurrentRoleTitleMatchesStructuredRole =
+      empQ?.currentRoleTitleMatchesStructuredRole ?? null;
+    const candidateCurrentEmploymentIntroductionCount =
+      empQ?.currentEmploymentIntroductionCount ?? null;
+    const candidateCurrentRoleOmittedDetected = empQ?.currentRoleOmittedDetected ?? null;
     const groundingValidationPassed = empQ ? empQ.groundingValidationPassed : !result.blocked;
     // Hard postcondition: coverage 0 with a warehouse current role can never pass.
     const coverageHardFail = Boolean(
@@ -814,11 +951,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         )
       ),
     );
-    // Real second-pass idempotence: duration finalizer must not mutate accepted text.
+    // Real second-pass idempotence on the candidate under evaluation.
     let durationFinalizerIdempotent = durationValidationPassed;
-    if (locale === 'hi' && result.text.trim() && durationSnapshot.total.hasValidDates) {
+    let localPass2Hash = durationPass2CandidateHash;
+    if (locale === 'hi' && analyzedText.trim() && durationSnapshot.total.hasValidDates) {
       const secondPass = resolveSummaryWithDurationPolicy(
-        result.text,
+        analyzedText,
         durationSnapshot.total,
         locale,
         {
@@ -828,8 +966,20 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         },
       );
       const normalizeForIdempotence = (s: string) => s.replace(/\s+/g, ' ').trim();
-      durationFinalizerIdempotent = normalizeForIdempotence(secondPass.summary)
-        === normalizeForIdempotence(result.text);
+      const before = normalizeForIdempotence(analyzedText);
+      const after = normalizeForIdempotence(secondPass.summary);
+      durationFinalizerIdempotent = before === after;
+      localPass2Hash = hashSummaryCandidate(secondPass.summary);
+      if (durationSecondPassChanged == null) {
+        durationSecondPassChanged = before !== after;
+        durationSecondPassChangeReason = before === after
+          ? null
+          : 'duration_finalizer_mutated_candidate';
+      }
+      if (!durationPass1CandidateHash) {
+        durationPass1CandidateHash = hashSummaryCandidate(analyzedText);
+      }
+      durationPass2CandidateHash = localPass2Hash;
     }
     const blockedForDuration = Boolean(
       result.countedAsSuccess && (!durationValidationPassed || !durationFinalizerIdempotent),
@@ -904,8 +1054,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalContentLocaleAfterApply: success ? locale : null,
         finalCandidateSource: result.origin,
         providerCandidatePresent: Boolean((input.candidate || '').trim()),
-        deterministicCandidatePresent: result.origin === 'deterministic_fallback',
+        deterministicCandidatePresent: Boolean(deterministicCandidateRaw.trim())
+          || result.origin === 'deterministic_fallback',
         fallbackCandidatePresent: result.origin === 'deterministic_fallback',
+        providerSentenceCount: providerCandidateSentenceCount,
         perspectiveMode,
         finalPerspectiveMode: perspectiveMode,
         sourcePerspectiveMode: firstPerson ? 'first_person' : 'neutral_cv',
@@ -914,7 +1066,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         perspectiveNormalizationApplied: locale === 'hi' && !firstPerson,
         perspectiveValidationPassed,
         groundingValidationPassed,
-        currentEmploymentIntroductionCount: empQ?.currentEmploymentIntroductionCount,
+        // Candidate-derived postcondition fields (not structured context alone).
+        currentEmploymentIntroductionCount: candidateCurrentEmploymentIntroductionCount ?? undefined,
         repeatedEmploymentFactCount: empQ?.repeatedEmploymentFactCount,
         repeatedProfessionalLabelCount: empQ?.repeatedProfessionalLabelCount,
         currentRoleConcreteFactCoverage: empQ?.currentRoleConcreteFactCoverage,
@@ -923,21 +1076,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         crossEntryLeakageDetected: empQ?.semanticCrossEntryLeakageDetected
           ?? empQ?.crossDomainLeakageDetected
           ?? false,
-        currentRoleTitlePresent: empQ?.currentRoleTitlePresent,
-        currentRoleTitleSource: (() => {
-          const role = (context.role || '').trim();
-          if (/^(?:पेशेवर|professional)$/iu.test(role) || !role) {
-            return empQ?.currentRoleTitleMatchesStructuredRole
-              ? 'structured_current_role'
-              : 'generic_professional';
-          }
-          return 'structured_current_role';
-        })(),
+        currentRoleTitlePresent: candidateCurrentRoleTitlePresent ?? undefined,
+        currentRoleTitleSource: candidateCurrentRoleTitleMatchesStructuredRole
+          ? 'structured_current_role'
+          : (/^(?:पेशेवर|professional)$/iu.test(contextCurrentRoleLocalized) || !contextCurrentRoleLocalized
+            ? 'generic_professional'
+            : 'context_role_only'),
         currentRoleTitleEntryIdHash: entryDuties.currentEntryId
           ? hashExperienceEntryId(entryDuties.currentEntryId)
           : null,
-        currentRoleTitleMatchesStructuredRole: empQ?.currentRoleTitleMatchesStructuredRole,
-        currentRoleOmittedDetected: empQ?.currentRoleOmittedDetected,
+        currentRoleTitleMatchesStructuredRole:
+          candidateCurrentRoleTitleMatchesStructuredRole ?? undefined,
+        currentRoleOmittedDetected: candidateCurrentRoleOmittedDetected ?? undefined,
         currentSlotForeignFactCount: empQ?.currentSlotForeignFactCount,
         priorSlotForeignFactCount: empQ?.priorSlotForeignFactCount,
         semanticCrossEntryLeakageDetected: empQ?.semanticCrossEntryLeakageDetected,
@@ -945,6 +1095,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         priorRoleSemanticFactMentionCount: empQ?.priorRoleSemanticFactMentionCount,
         priorRoleSemanticDuplicationDetected: empQ?.priorRoleSemanticDuplicationDetected,
         finalUnitRoleSlots: empQ?.finalUnitRoleSlots,
+        finalSentenceHashes: empQ?.finalSentenceHashes,
+        finalSentenceRoleSlots: empQ?.finalSentenceRoleSlots,
         hindiFiniteKaAnubhavCollision: empQ?.hindiFiniteKaAnubhavCollision,
         durationFinalizerIdempotent,
         summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
@@ -954,6 +1106,55 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         summaryDurationFinalizerRevision:
           owned?.summaryDurationFinalizerRevision
           || SUMMARY_DURATION_FINALIZER_REVISION,
+        providerCandidateHash,
+        providerCandidateNormalizedHash,
+        deterministicCandidateHash,
+        deterministicCandidateNormalizedHash,
+        durationPass1CandidateHash,
+        durationPass2CandidateHash: durationPass2CandidateHash || localPass2Hash,
+        groundingInputCandidateHash:
+          groundingInputCandidateHash || hashSummaryCandidate(analyzedText),
+        finalValidatedCandidateHash: success
+          ? hashSummaryCandidate(analyzedText)
+          : null,
+        providerCandidateEqualsDeterministicCandidate: deterministicCandidateHash
+          ? providerCandidateHash === deterministicCandidateHash
+          : null,
+        deterministicCandidateEqualsGroundingInput: (
+          deterministicCandidateHash
+          && (groundingInputCandidateHash || hashSummaryCandidate(analyzedText))
+        )
+          ? deterministicCandidateHash
+            === (groundingInputCandidateHash || hashSummaryCandidate(analyzedText))
+          : null,
+        groundingInputEqualsFinalValidatedCandidate: success
+          ? (groundingInputCandidateHash || hashSummaryCandidate(analyzedText))
+            === hashSummaryCandidate(analyzedText)
+          : null,
+        providerCandidateSentenceCount,
+        deterministicCandidateSentenceCount,
+        durationPass1SentenceCount,
+        durationPass2SentenceCount,
+        groundingInputSentenceCount:
+          groundingInputSentenceCount
+          ?? countSummaryCandidateSentences(analyzedText, locale),
+        durationPass1Hash: durationPass1CandidateHash,
+        durationPass2Hash: durationPass2CandidateHash || localPass2Hash,
+        durationSecondPassChanged,
+        durationSecondPassChangeReason,
+        contextCurrentRoleResolved,
+        contextCurrentRoleLocalized,
+        candidateCurrentRoleTitlePresent,
+        candidateCurrentRoleTitleMatchesStructuredRole,
+        candidateCurrentEmploymentIntroductionCount,
+        candidateCurrentRoleOmittedDetected,
+        deterministicCurrentEntryIdHash,
+        deterministicPriorEntryIdHashes,
+        currentEntryMaterialKeys,
+        priorEntryMaterialKeys,
+        flattenedFactArrayUsed,
+        previousSummaryTextUsedByDeterministicFallback,
+        providerTextUsedByDeterministicFallback,
         rejectionStage: blockedForDuration
           ? 'independent_final_duration_verification'
           : blockedForPerspective
@@ -990,7 +1191,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     });
   }
 
-  const grounded = normalizeLocaleText(
+  // Fresh entry-owned rebuild — never seed from provider/previous Summary prose.
+  deterministicCandidateRaw = normalizeLocaleText(
     deterministicLocalizedSummaryFromCanonical(
       factSet,
       locale,
@@ -999,9 +1201,29 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ) || '',
     locale,
   );
-  if (grounded) {
-    const groundedResolved = resolveSummaryWithDurationPolicy(
-      grounded,
+  previousSummaryTextUsedByDeterministicFallback = Boolean(
+    deterministicCandidateRaw
+    && liveSummary
+    && hashSummaryCandidate(deterministicCandidateRaw) === hashSummaryCandidate(liveSummary),
+  );
+  providerTextUsedByDeterministicFallback = Boolean(
+    deterministicCandidateRaw
+    && providerRaw
+    && hashSummaryCandidate(deterministicCandidateRaw) === providerCandidateHash,
+  );
+  flattenedFactArrayUsed = false;
+  deterministicCandidateHash = hashSummaryCandidate(deterministicCandidateRaw);
+  deterministicCandidateNormalizedHash = hashSummaryCandidate(
+    normalizeSummaryCandidateText(deterministicCandidateRaw),
+  );
+  deterministicCandidateSentenceCount = countSummaryCandidateSentences(
+    deterministicCandidateRaw,
+    locale,
+  );
+
+  if (deterministicCandidateRaw) {
+    const groundedPass1 = resolveSummaryWithDurationPolicy(
+      deterministicCandidateRaw,
       durationSnapshot.total,
       locale,
       {
@@ -1010,7 +1232,38 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         context,
       },
     );
-    let groundedText = normalizeLocaleText(groundedResolved.summary, locale);
+    let groundedText = normalizeLocaleText(groundedPass1.summary, locale);
+    durationPass1CandidateHash = hashSummaryCandidate(groundedText);
+    durationPass1SentenceCount = countSummaryCandidateSentences(groundedText, locale);
+    // Authoritative duration diagnostics must come from the rebuild pass.
+    if (groundedPass1.durationDiagnostics) {
+      durationDiagFinal = groundedPass1.durationDiagnostics;
+    }
+    const groundedPass2 = resolveSummaryWithDurationPolicy(
+      groundedText,
+      durationSnapshot.total,
+      locale,
+      {
+        forceDurationPhrase: true,
+        requireDurationClaim: true,
+        context,
+      },
+    );
+    const pass2Text = normalizeLocaleText(groundedPass2.summary, locale);
+    durationPass2CandidateHash = hashSummaryCandidate(pass2Text);
+    durationPass2SentenceCount = countSummaryCandidateSentences(pass2Text, locale);
+    durationSecondPassChanged = durationPass1CandidateHash !== durationPass2CandidateHash;
+    durationSecondPassChangeReason = durationSecondPassChanged
+      ? 'duration_finalizer_mutated_candidate'
+      : null;
+    groundedText = pass2Text;
+    if (groundedPass2.durationDiagnostics) {
+      durationDiagFinal = {
+        ...durationDiagFinal,
+        ...groundedPass2.durationDiagnostics,
+        summaryDurationFinalizerRevision: SUMMARY_DURATION_FINALIZER_REVISION,
+      };
+    }
     if (locale === 'hi') {
       groundedText = normalizeHindiSummaryPerspective(groundedText);
       groundedText = dedupeSummarySentences(groundedText);
@@ -1040,6 +1293,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       });
       groundedText = dedupeSummarySentences(groundedText);
     }
+    groundingInputCandidateHash = hashSummaryCandidate(groundedText);
+    groundingInputSentenceCount = countSummaryCandidateSentences(groundedText, locale);
     const second = summaryPasses(
       groundedText,
       factSet,
@@ -1055,6 +1310,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         origin: 'deterministic_fallback',
         roleDutyConflict,
         countedAsSuccess: true,
+      });
+    }
+    // Deterministic candidate failed postconditions — keep fail-closed visible
+    // Summary, but analyze the rebuild attempt (not provider/old prose) for
+    // candidate diagnostics when Hindi grounding is the failure mode.
+    if (locale === 'hi' && groundedText.trim()) {
+      return attachSummaryDiag({
+        blocked: true,
+        reason: second.reason || first.reason || 'summary_grounding_failed',
+        text: groundedText,
+        origin: 'deterministic_fallback',
+        roleDutyConflict,
+        countedAsSuccess: false,
       });
     }
   }

@@ -28,13 +28,14 @@ import {
   summaryContainsListMarkerLeakage,
   validateSummarySourceFactCoverage,
 } from './cv-source-fact-identity';
+import { fingerprintText } from './cv-export-diagnostics';
 
 export const SUMMARY_MAX_WORDS = 90;
 
 /** Runtime revision — returned by the splitter/grounding/builder that executed. */
-export const SUMMARY_UNIT_SPLITTER_REVISION = 'hindi-decimal-safe-split-v1' as const;
-export const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v1' as const;
-export const SUMMARY_BUILDER_REVISION = 'entry-owned-grounding-v1' as const;
+export const SUMMARY_UNIT_SPLITTER_REVISION = 'hindi-sentence-slot-split-v2' as const;
+export const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v2' as const;
+export const SUMMARY_BUILDER_REVISION = 'entry-owned-candidate-rebuild-v2' as const;
 
 /** Unsupported summary inventions (always reject — hygiene ≠ health/quality claims). */
 const UNSUPPORTED_SUMMARY_CLAIM_PATTERNS: Array<{ re: RegExp; label: string }> = [
@@ -283,12 +284,20 @@ const FINITE_THEN_KA_ANUBHAV_RE =
 const HINDI_MONTH_FROM_RE =
   /(?:जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्तूबर|नवंबर|दिसंबर)(?:\s+\d{4})?\s+से/u;
 
-/** Split Summary units on Hindi danda / ! / ? / non-decimal periods. */
+/**
+ * Split Summary into sentence-level units for Hindi slot ownership.
+ * Devanagari-dominant prose uses danda / ! / ? only — ASCII '.' must not create
+ * false `current_duty` fragments (hybrid/provider leftovers previously yielded ×N).
+ * Latin-dominant text still respects non-decimal periods.
+ */
 export function splitHindiSummaryUnits(text: string): string[] {
   void SUMMARY_UNIT_SPLITTER_REVISION;
   const units: string[] = [];
   let buf = '';
   const s = (text || '').replace(/\s+/g, ' ').trim();
+  const devanagari = (s.match(/[\u0900-\u097F]/g) || []).length;
+  const latin = (s.match(/[A-Za-z]/g) || []).length;
+  const dandaOnly = devanagari >= Math.max(8, latin);
   for (let i = 0; i < s.length; i += 1) {
     const ch = s[i]!;
     buf += ch;
@@ -298,7 +307,7 @@ export function splitHindiSummaryUnits(text: string): string[] {
       buf = '';
       continue;
     }
-    if (ch === '.') {
+    if (ch === '.' && !dandaOnly) {
       const prev = s[i - 1] || '';
       const next = s[i + 1] || '';
       // Keep decimal numbers like 6.5 inside the same unit.
@@ -338,6 +347,10 @@ export type HindiSummaryEmploymentQuality = {
   priorRoleSemanticDuplicationDetected: boolean;
   hindiFiniteKaAnubhavCollision: boolean;
   finalUnitRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
+  /** Sentence-level (not comma-fragment) ownership diagnostics — hashes only. */
+  finalSentenceHashes: string[];
+  finalSentenceRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
+  finalSentenceMaterialKeyCounts: number[];
   /** Non-PII revision markers from the grounding/splitter implementations that ran. */
   summaryUnitSplitterRevision: typeof SUMMARY_UNIT_SPLITTER_REVISION;
   summaryGroundingRevision: typeof SUMMARY_GROUNDING_REVISION;
@@ -593,6 +606,11 @@ export function analyzeHindiSummaryEmploymentQuality(
     priorRoleSemanticDuplicationDetected,
     hindiFiniteKaAnubhavCollision,
     finalUnitRoleSlots,
+    finalSentenceHashes: sentences.map((s) => fingerprintText(s)),
+    finalSentenceRoleSlots: [...finalUnitRoleSlots],
+    finalSentenceMaterialKeyCounts: sentences.map(
+      (s) => classifyMaterialDutyKeys(s).length,
+    ),
     summaryUnitSplitterRevision: SUMMARY_UNIT_SPLITTER_REVISION,
     summaryGroundingRevision: SUMMARY_GROUNDING_REVISION,
   };

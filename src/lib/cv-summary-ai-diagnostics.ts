@@ -137,6 +137,37 @@ export type SummaryAiDiagnosticTrace = {
   summaryUnitSplitterRevision: string | null;
   summaryGroundingRevision: string | null;
   summaryDurationFinalizerRevision: string | null;
+  providerCandidateHash: string | null;
+  providerCandidateNormalizedHash: string | null;
+  deterministicCandidateHash: string | null;
+  deterministicCandidateNormalizedHash: string | null;
+  durationPass1CandidateHash: string | null;
+  durationPass2CandidateHash: string | null;
+  durationPass1Hash: string | null;
+  durationPass2Hash: string | null;
+  groundingInputCandidateHash: string | null;
+  finalValidatedCandidateHash: string | null;
+  visibleCandidateHashAfterApply: string | null;
+  providerCandidateEqualsDeterministicCandidate: boolean | null;
+  deterministicCandidateEqualsGroundingInput: boolean | null;
+  groundingInputEqualsFinalValidatedCandidate: boolean | null;
+  durationSecondPassChanged: boolean | null;
+  durationSecondPassChangeReason: string | null;
+  contextCurrentRoleResolved: string | null;
+  contextCurrentRoleLocalized: string | null;
+  candidateCurrentRoleTitlePresent: boolean | null;
+  candidateCurrentEmploymentIntroductionCount: number | null;
+  candidateCurrentRoleTitleMatchesStructuredRole: boolean | null;
+  candidateCurrentRoleOmittedDetected: boolean | null;
+  deterministicCurrentEntryIdHash: string | null;
+  deterministicPriorEntryIdHashes: string[] | null;
+  currentEntryMaterialKeys: string[] | null;
+  priorEntryMaterialKeys: string[] | null;
+  finalSentenceHashes: string[] | null;
+  finalSentenceRoleSlots: string[] | null;
+  flattenedFactArrayUsed: boolean | null;
+  previousSummaryTextUsedByDeterministicFallback: boolean | null;
+  providerTextUsedByDeterministicFallback: boolean | null;
   perspectiveMode: string | null;
   sourcePerspectiveMode: string | null;
   providerPerspectiveMode: string | null;
@@ -312,6 +343,37 @@ export class SummaryAiDiagnosticSession {
       summaryUnitSplitterRevision: null,
       summaryGroundingRevision: null,
       summaryDurationFinalizerRevision: null,
+      providerCandidateHash: null,
+      providerCandidateNormalizedHash: null,
+      deterministicCandidateHash: null,
+      deterministicCandidateNormalizedHash: null,
+      durationPass1CandidateHash: null,
+      durationPass2CandidateHash: null,
+      durationPass1Hash: null,
+      durationPass2Hash: null,
+      groundingInputCandidateHash: null,
+      finalValidatedCandidateHash: null,
+      visibleCandidateHashAfterApply: null,
+      providerCandidateEqualsDeterministicCandidate: null,
+      deterministicCandidateEqualsGroundingInput: null,
+      groundingInputEqualsFinalValidatedCandidate: null,
+      durationSecondPassChanged: null,
+      durationSecondPassChangeReason: null,
+      contextCurrentRoleResolved: null,
+      contextCurrentRoleLocalized: null,
+      candidateCurrentRoleTitlePresent: null,
+      candidateCurrentEmploymentIntroductionCount: null,
+      candidateCurrentRoleTitleMatchesStructuredRole: null,
+      candidateCurrentRoleOmittedDetected: null,
+      deterministicCurrentEntryIdHash: null,
+      deterministicPriorEntryIdHashes: null,
+      currentEntryMaterialKeys: null,
+      priorEntryMaterialKeys: null,
+      finalSentenceHashes: null,
+      finalSentenceRoleSlots: null,
+      flattenedFactArrayUsed: null,
+      previousSummaryTextUsedByDeterministicFallback: null,
+      providerTextUsedByDeterministicFallback: null,
       perspectiveMode: null,
       sourcePerspectiveMode: null,
       providerPerspectiveMode: null,
@@ -435,13 +497,15 @@ export class SummaryAiDiagnosticSession {
       || diag.clientDeterministicFallbackAttempted
       || fallbackApplied,
     );
-    // Never report fallbackSentenceCount as provider length when no fallback ran.
-    const fallbackSentenceCount = fallbackApplied || fallbackAttempted
-      ? sentenceCount
-      : 0;
-    const deterministicSentenceCount = finalized.origin === 'deterministic_fallback'
-      ? sentenceCount
-      : (diag.deterministicCandidatePresent ? sentenceCount : 0);
+    // Prefer stage-specific counts from finalize — never alias provider as fallback.
+    const fallbackSentenceCount = typeof diag.deterministicCandidateSentenceCount === 'number'
+      ? diag.deterministicCandidateSentenceCount
+      : (fallbackApplied || fallbackAttempted ? sentenceCount : 0);
+    const deterministicSentenceCount = typeof diag.deterministicCandidateSentenceCount === 'number'
+      ? diag.deterministicCandidateSentenceCount
+      : (finalized.origin === 'deterministic_fallback'
+        ? sentenceCount
+        : (diag.deterministicCandidatePresent ? sentenceCount : 0));
     const purity = validateAiUnitLocalePurity(
       text,
       (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
@@ -490,7 +554,9 @@ export class SummaryAiDiagnosticSession {
       deterministicCandidateSentenceCount: deterministicSentenceCount,
       providerSentenceCount: diag.providerCandidatePresent === false
         ? 0
-        : (typeof diag.providerSentenceCount === 'number' ? diag.providerSentenceCount : sentenceCount),
+        : (typeof diag.providerCandidateSentenceCount === 'number'
+          ? diag.providerCandidateSentenceCount
+          : (typeof diag.providerSentenceCount === 'number' ? diag.providerSentenceCount : sentenceCount)),
       storedContentLocaleBeforeRequest: diag.storedContentLocaleBeforeRequest
         ?? this.draft.storedContentLocaleBeforeRequest
         ?? this.draft.storedContentLocale
@@ -541,6 +607,43 @@ export class SummaryAiDiagnosticSession {
       summaryUnitSplitterRevision: diag.summaryUnitSplitterRevision ?? null,
       summaryGroundingRevision: diag.summaryGroundingRevision ?? null,
       summaryDurationFinalizerRevision: diag.summaryDurationFinalizerRevision ?? null,
+      providerCandidateHash: diag.providerCandidateHash ?? null,
+      providerCandidateNormalizedHash: diag.providerCandidateNormalizedHash ?? null,
+      deterministicCandidateHash: diag.deterministicCandidateHash ?? null,
+      deterministicCandidateNormalizedHash: diag.deterministicCandidateNormalizedHash ?? null,
+      durationPass1CandidateHash: diag.durationPass1CandidateHash ?? null,
+      durationPass2CandidateHash: diag.durationPass2CandidateHash ?? null,
+      durationPass1Hash: diag.durationPass1Hash ?? diag.durationPass1CandidateHash ?? null,
+      durationPass2Hash: diag.durationPass2Hash ?? diag.durationPass2CandidateHash ?? null,
+      groundingInputCandidateHash: diag.groundingInputCandidateHash ?? null,
+      finalValidatedCandidateHash: diag.finalValidatedCandidateHash ?? null,
+      providerCandidateEqualsDeterministicCandidate:
+        diag.providerCandidateEqualsDeterministicCandidate ?? null,
+      deterministicCandidateEqualsGroundingInput:
+        diag.deterministicCandidateEqualsGroundingInput ?? null,
+      groundingInputEqualsFinalValidatedCandidate:
+        diag.groundingInputEqualsFinalValidatedCandidate ?? null,
+      durationSecondPassChanged: diag.durationSecondPassChanged ?? null,
+      durationSecondPassChangeReason: diag.durationSecondPassChangeReason ?? null,
+      contextCurrentRoleResolved: diag.contextCurrentRoleResolved ?? null,
+      contextCurrentRoleLocalized: diag.contextCurrentRoleLocalized ?? null,
+      candidateCurrentRoleTitlePresent: diag.candidateCurrentRoleTitlePresent ?? null,
+      candidateCurrentEmploymentIntroductionCount:
+        diag.candidateCurrentEmploymentIntroductionCount ?? null,
+      candidateCurrentRoleTitleMatchesStructuredRole:
+        diag.candidateCurrentRoleTitleMatchesStructuredRole ?? null,
+      candidateCurrentRoleOmittedDetected: diag.candidateCurrentRoleOmittedDetected ?? null,
+      deterministicCurrentEntryIdHash: diag.deterministicCurrentEntryIdHash ?? null,
+      deterministicPriorEntryIdHashes: diag.deterministicPriorEntryIdHashes ?? null,
+      currentEntryMaterialKeys: diag.currentEntryMaterialKeys ?? null,
+      priorEntryMaterialKeys: diag.priorEntryMaterialKeys ?? null,
+      finalSentenceHashes: diag.finalSentenceHashes ?? null,
+      finalSentenceRoleSlots: diag.finalSentenceRoleSlots ?? null,
+      flattenedFactArrayUsed: diag.flattenedFactArrayUsed ?? null,
+      previousSummaryTextUsedByDeterministicFallback:
+        diag.previousSummaryTextUsedByDeterministicFallback ?? null,
+      providerTextUsedByDeterministicFallback:
+        diag.providerTextUsedByDeterministicFallback ?? null,
       nearDuplicateSentenceCount: diag.repeatedEmploymentFactCount ?? 0,
       repeatedClauseCount: Math.max(
         diag.repeatedEmploymentFactCount ?? 0,
@@ -605,6 +708,9 @@ export class SummaryAiDiagnosticSession {
       : null;
     const durationStillOk = !ok
       || (visibleCount === 1 && matches === true);
+    const visibleHash = typeof visibleText === 'string' && visibleText.trim()
+      ? fingerprintText(visibleText.replace(/\s+/g, ' ').trim())
+      : null;
     this.patch({
       visibleApplySucceeded: ok && durationStillOk,
       contentLocaleUpdatedAfterApply: ok && durationStillOk,
@@ -612,7 +718,14 @@ export class SummaryAiDiagnosticSession {
         ? (this.draft.requestedLocale || this.draft.contentLocaleAfterApply || null)
         : this.draft.contentLocaleAfterApply,
       usageCountAfter: usageAfter,
-      visibleSummaryMatchesFinalHash: ok && durationStillOk,
+      visibleCandidateHashAfterApply: visibleHash,
+      visibleSummaryMatchesFinalHash: ok && durationStillOk
+        ? (
+          visibleHash != null
+          && this.draft.finalValidatedCandidateHash != null
+          && visibleHash === this.draft.finalValidatedCandidateHash
+        )
+        : (ok && durationStillOk),
       visibleDurationClaimCountAfterApply: visibleCount,
       visibleDurationMatchesFinalizedCount: matches,
       // Applied summaries use an explicit race/context result of ok (sync finalize path).

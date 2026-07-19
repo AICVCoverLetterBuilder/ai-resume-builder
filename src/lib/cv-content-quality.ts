@@ -30,7 +30,7 @@ import {
 } from './cv-role-title';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
-export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-double-pass-v1' as const;
+export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-double-pass-v2' as const;
 import { deduplicateSkillsForExport } from './cv-skills-projection';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
@@ -668,7 +668,11 @@ export function injectHindiDurationWithOpening(
       || /^(?:पेशेवर|professional)$/iu.test(context.role.trim());
     const hasConcreteRoleForm = /के\s+रूप\s+में/u.test(trimmed)
       && !/पेशेवर\s+के\s+रूप\s+में/u.test(trimmed);
-    if (!contextRoleGeneric || hasConcreteRoleForm) {
+    // Already-valid warehouse intro+duration must never be rebuilt (second-pass
+    // idempotence: finalize(finalize(x)) === finalize(x)).
+    const alreadyValidWarehouseOpening = /वेयरहाउस\s*कर्मचारी\s+के\s+रूप\s+में/u.test(trimmed)
+      && /संयुक्त\s+अनुभव/u.test(trimmed);
+    if (!contextRoleGeneric || hasConcreteRoleForm || alreadyValidWarehouseOpening) {
       return normalizeHindiSummaryPerspective(trimmed);
     }
   }

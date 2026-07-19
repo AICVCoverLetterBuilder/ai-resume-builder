@@ -19,6 +19,8 @@ import {
   analyzeHindiSummaryEmploymentQuality,
 } from '../cv-summary-grounding';
 import { SUMMARY_DURATION_FINALIZER_REVISION } from '../cv-content-quality';
+
+// Revisions move with the active Summary runtime; assert via exported constants.
 import {
   buildExperienceJobContext,
   classifyExperiencePosition,
