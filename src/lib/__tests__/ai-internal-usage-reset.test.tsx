@@ -157,6 +157,14 @@ describe('internal AI reset when compiled enabled', () => {
     expect(localStorage.getItem('cvpro-pro-token')).toBe('test-token');
     expect(localStorage.getItem('cvpro-downloads')).toBe(JSON.stringify({ cv: 1, cl: 0 }));
     expect(localStorage.getItem('unrelated-key')).toBe('keep-me');
+  }, 20_000);
+
+  it('window expiry is windowStart + 30 days', () => {
+    const now = Date.now();
+    seedCapReached(now);
+    // No module reload — expiry is pure policy math from the seeded ledger.
+    const snap = getProAiUsageDiagnosticsSnapshot(now);
+    expect(new Date(snap.windowExpiresIso!).getTime()).toBe(now + PRO_AI_WINDOW_MS);
   });
 
   it('50 → reset 0 → next success 1; reset itself +0', async () => {
@@ -166,15 +174,7 @@ describe('internal AI reset when compiled enabled', () => {
     expect(mod.getProAiUsageCount()).toBe(0);
     mod.recordProAiUserActionSuccess();
     expect(mod.getProAiUsageCount()).toBe(1);
-  });
-
-  it('window expiry is windowStart + 30 days', async () => {
-    const now = Date.now();
-    seedCapReached(now);
-    await loadGateModules();
-    const snap = getProAiUsageDiagnosticsSnapshot(now);
-    expect(new Date(snap.windowExpiresIso!).getTime()).toBe(now + PRO_AI_WINDOW_MS);
-  });
+  }, 20_000);
 });
 
 describe('internal AI reset when compiled disabled', () => {

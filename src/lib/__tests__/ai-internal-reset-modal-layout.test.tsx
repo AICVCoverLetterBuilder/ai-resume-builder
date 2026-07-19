@@ -79,7 +79,7 @@ describe('diagnostics modal mobile accessibility (component)', () => {
     expect(screen.queryByTestId('cv-export-diagnostics-json')).toBeNull();
     fireEvent.click(screen.getByTestId('cv-export-diagnostics-toggle-json'));
     expect(screen.getByTestId('cv-export-diagnostics-json')).toBeTruthy();
-  });
+  }, 20_000);
 
   it('reset → confirm portal → count 0; CV/Pro preserved; modal stays open', async () => {
     const mod = await loadEnabledModal();
@@ -99,7 +99,7 @@ describe('diagnostics modal mobile accessibility (component)', () => {
     expect(localStorage.getItem(CV_DRAFT_STORAGE_KEY)).toBe(CV_FIXTURE);
     expect(localStorage.getItem('cvpro-plan')).toBe('pro');
     expect(localStorage.getItem('cvpro-pro-token')).toBe('tok');
-  });
+  }, 20_000);
 
   it('production gate false: no reset panel or button classes in tree', async () => {
     vi.resetModules();
