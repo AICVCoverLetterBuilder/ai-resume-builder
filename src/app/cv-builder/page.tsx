@@ -12,7 +12,12 @@ import {
   precheckAiCircuit,
   resolveAiHttpFailure,
 } from '@/lib/ai-client-request';
-import { aiErrorMessage } from '@/lib/ai-error-codes';
+import { aiErrorMessage, mapExperienceAiFailureToErrorCode } from '@/lib/ai-error-codes';
+import {
+  hasSufficientSummaryGenerationContext,
+  resolveAiButtonOperationMode,
+  summaryRewriteButtonId,
+} from '@/lib/cv-ai-operation-contract';
 import { logAiLocaleTransitionDiagnostics } from '@/lib/ai-usage-policy';
 import {
   AI_CLIENT_TIMEOUT_MS,
@@ -899,6 +904,16 @@ export default function CVBuilderPage() {
     const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
     if (!proToken) return;
     if (isSummaryGenerating) return;
+    const liveCvAtPress = cvRef.current;
+    const liveSummaryAtPress = (liveCvAtPress.summary || '').trim();
+    const operationMode = resolveAiButtonOperationMode('summary_generate', liveSummaryAtPress);
+    if (
+      operationMode === 'generate_from_context'
+      && !hasSufficientSummaryGenerationContext(liveCvAtPress)
+    ) {
+      toast.error(aiErrorMessage('summary_generation_failed', locale));
+      return;
+    }
     setIsSummaryGenerating(true);
     const controller = new AbortController();
     const clientTimeoutMs = resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS);
@@ -909,15 +924,15 @@ export default function CVBuilderPage() {
     // partway through the request.
     const reqCtx = beginAiClientRequest('summary', locale);
     const requestedLocale = reqCtx.locale as Locale;
-    const previousContentLocale = cv.canonicalSnapshot?.canonicalLocale ?? null;
+    const previousContentLocale = liveCvAtPress.canonicalSnapshot?.canonicalLocale ?? null;
     latestSummaryRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
     try {
       // Shared deterministic duration — never let each locale estimate independently.
       const referenceDateIso = new Date().toISOString().slice(0, 10);
-      const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
+      const durationSnapshot = buildExperienceDurationSnapshot(liveCvAtPress.experience, referenceDateIso);
       const experienceDuration = durationToPromptToken(durationSnapshot.total);
-      const experienceEntries = cv.experience.slice(0, 4).map(exp => ({
+      const experienceEntries = liveCvAtPress.experience.slice(0, 4).map(exp => ({
         position: exp.position,
         company: exp.company,
         startDate: exp.startDate,
@@ -932,18 +947,19 @@ export default function CVBuilderPage() {
         body: {
           action: 'summary',
           proToken,
-          jobTitle: cv.personal.jobTitle,
+          jobTitle: liveCvAtPress.personal.jobTitle,
           experienceDuration,
           experienceDurationSnapshot: durationSnapshot,
           referenceDateIso,
           experienceEntries,
-          skills: cv.skills.slice(0, 10),
-          languages: cv.languages.slice(0, 4),
-          education: cv.education.slice(0, 2).map(e => ({ degree: e.degree, school: e.school })),
+          skills: liveCvAtPress.skills.slice(0, 10),
+          languages: liveCvAtPress.languages.slice(0, 4),
+          education: liveCvAtPress.education.slice(0, 2).map(e => ({ degree: e.degree, school: e.school })),
           locale: requestedLocale,
-          gender: cv.personal.gender || '',
-          canonicalSummary: cv.canonicalSummary || '',
+          gender: liveCvAtPress.personal.gender || '',
+          canonicalSummary: liveCvAtPress.canonicalSummary || '',
           requestId: reqCtx.requestId,
+          operationMode,
         },
         signal: controller.signal,
       });
@@ -991,24 +1007,15 @@ export default function CVBuilderPage() {
         });
         return;
       }
-      const nextSummary = (summaryData?.result ?? '').trim();
-      const finalizedGate = finalizeCvAiFieldForApply({
-        action: 'summary_generate',
-        field: 'summary',
-        requestedLocale,
-        gender: cv.personal.gender || '',
-        cv,
-        candidate: nextSummary,
-        durationSnapshot,
-      });
-      if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
-        const msg = finishAiClientRequest({
+      const liveNow = cvRef.current;
+      if ((liveNow.summary || '').trim() !== liveSummaryAtPress) {
+        finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
           countBefore,
           countAfter: countBefore,
           httpStatus: res.status,
-          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          error: { code: 'ai_request_stale', httpStatus: 409 },
           responseSource: 'blocked',
         });
         logAiLocaleTransitionDiagnostics({
@@ -1020,9 +1027,45 @@ export default function CVBuilderPage() {
           apiLocale: requestedLocale,
           finalValidationLocale: requestedLocale,
           applied: false,
-          reason: finalizedGate.reason || 'generation_validation_failed',
+          reason: 'stale_summary_edited_in_flight',
         });
-        toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        return;
+      }
+      const nextSummary = (summaryData?.result ?? '').trim();
+      const finalizedGate = finalizeCvAiFieldForApply({
+        action: 'summary_generate',
+        field: 'summary',
+        requestedLocale,
+        gender: liveNow.personal.gender || '',
+        cv: liveNow,
+        candidate: nextSummary,
+        durationSnapshot,
+      });
+      if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
+        const failCode = mapExperienceAiFailureToErrorCode(
+          finalizedGate.reason || finalizedGate.diagnostics?.typedFailureReason || 'summary_generation_failed',
+        );
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: failCode, httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: 'summary_generate',
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: finalizedGate.reason || failCode,
+        });
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
@@ -1470,13 +1513,16 @@ export default function CVBuilderPage() {
         return;
       }
       if (finalizedBullets.blocked || !finalizedBullets.countedAsSuccess) {
+        const failCode = mapExperienceAiFailureToErrorCode(
+          finalizedBullets.reason || finalizedBullets.diagnostics?.typedFailureReason,
+        );
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
           countBefore,
           countAfter: countBefore,
           httpStatus: res.status,
-          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          error: { code: failCode, httpStatus: 422 },
           responseSource: 'blocked',
         });
         logAiLocaleTransitionDiagnostics({
@@ -1488,17 +1534,17 @@ export default function CVBuilderPage() {
           apiLocale: requestedLocale,
           finalValidationLocale: requestedLocale,
           applied: false,
-          reason: finalizedBullets.reason || 'generation_validation_failed',
+          reason: finalizedBullets.reason || failCode,
         });
         logExperienceAiTrace({
           resultApplied: false,
-          rejectedReason: finalizedBullets.reason || 'generation_validation_failed',
+          rejectedReason: finalizedBullets.reason || failCode,
           aiUsageIncremented: false,
           ...(finalizedBullets.diagnostics || {}),
         });
         diagSession.recordVisibleApply(false, countBefore);
         diagSession.commit();
-        showExperienceAiRejectToast(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        showExperienceAiRejectToast(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
       commitCvUpdate((prev) => applyFinalizedBulletsToCv(
@@ -1596,7 +1642,18 @@ export default function CVBuilderPage() {
   };
 
   const handleRewrite = async (style: 'shorter' | 'stronger' | 'professional') => {
-    if (rewritingStyle || !cv.summary.trim()) return;
+    if (rewritingStyle) return;
+    const liveCvAtPress = cvRef.current;
+    const liveSummaryAtPress = (liveCvAtPress.summary || '').trim();
+    const buttonId = summaryRewriteButtonId(style);
+    const operationMode = resolveAiButtonOperationMode(buttonId, liveSummaryAtPress);
+    if (
+      operationMode === 'generate_from_context'
+      && !hasSufficientSummaryGenerationContext(liveCvAtPress)
+    ) {
+      toast.error(aiErrorMessage('summary_rewrite_failed', locale));
+      return;
+    }
     const proToken = getCurrentProTokenOrToast(() => setSummaryAiModal(true));
     if (!proToken) return;
     setRewritingStyle(style);
@@ -1606,7 +1663,7 @@ export default function CVBuilderPage() {
     // Immutable request context — see handleGenSummary for the same pattern.
     const reqCtx = beginAiClientRequest(`rewrite:${style}`, locale);
     const requestedLocale = reqCtx.locale as Locale;
-    const previousContentLocale = cv.canonicalSnapshot?.canonicalLocale ?? null;
+    const previousContentLocale = liveCvAtPress.canonicalSnapshot?.canonicalLocale ?? null;
     latestRewriteRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
     try {
@@ -1614,39 +1671,43 @@ export default function CVBuilderPage() {
         body: {
           action: 'rewrite',
           proToken,
-          text: cv.summary,
+          text: liveSummaryAtPress,
           style,
           locale: requestedLocale,
-          gender: cv.personal.gender || '',
+          gender: liveCvAtPress.personal.gender || '',
           requestId: reqCtx.requestId,
+          operationMode,
           cvContext: {
-            personal: cv.personal,
-            summary: cv.canonicalSummary || cv.summary,
-            canonicalSummary: cv.canonicalSummary || '',
-            experience: cv.experience.map((e) => ({
+            personal: liveCvAtPress.personal,
+            summary: liveCvAtPress.canonicalSummary || liveCvAtPress.summary,
+            canonicalSummary: liveCvAtPress.canonicalSummary || '',
+            experience: liveCvAtPress.experience.map((e) => ({
               ...e,
               description: freezeCanonicalExperienceDescription(e),
               canonicalDescription: e.canonicalDescription || freezeCanonicalExperienceDescription(e),
             })),
-            education: cv.education,
-            skills: cv.skills,
-            languages: cv.languages,
-            certifications: cv.certifications,
+            education: liveCvAtPress.education,
+            skills: liveCvAtPress.skills,
+            languages: liveCvAtPress.languages,
+            certifications: liveCvAtPress.certifications,
           },
         },
         signal: controller.signal,
       });
       if (!res.ok || rewriteData?.error) {
         const payload = resolveAiHttpFailure({ response: res, body: rewriteData });
+        const typedCode = payload.code === 'generation_validation_failed'
+          ? 'summary_rewrite_failed'
+          : payload.code;
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
           countBefore,
           countAfter: countBefore,
           httpStatus: res.status,
-          error: payload,
+          error: { ...payload, code: typedCode },
         });
-        toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
+        toast.error(msg ?? aiErrorMessage(typedCode, locale));
         return;
       }
       // Stale-response guard: only the most recently started rewrite may apply.
@@ -1664,35 +1725,15 @@ export default function CVBuilderPage() {
         });
         return;
       }
-      const referenceDateIso = new Date().toISOString().slice(0, 10);
-      const durationSnapshot = buildExperienceDurationSnapshot(cv.experience, referenceDateIso);
-      const rewriteAction = style === 'shorter'
-        ? 'summary_shorter'
-        : style === 'stronger'
-          ? 'summary_stronger'
-          : 'summary_professional';
-      const finalizedGate = finalizeCvAiFieldForApply({
-        action: rewriteAction,
-        field: 'summary',
-        requestedLocale,
-        gender: cv.personal.gender || '',
-        cv,
-        candidate: (rewriteData.result ?? cv.summary).trim(),
-        durationSnapshot,
-        originHint: rewriteData.fallbackUsed
-          ? 'deterministic_fallback'
-          : rewriteData.repairAttempted
-            ? 'ai_repaired'
-            : 'ai_generated',
-      });
-      if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
-        const msg = finishAiClientRequest({
+      const liveNow = cvRef.current;
+      if ((liveNow.summary || '').trim() !== liveSummaryAtPress) {
+        finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
           countBefore,
           countAfter: countBefore,
           httpStatus: res.status,
-          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          error: { code: 'ai_request_stale', httpStatus: 409 },
           responseSource: 'blocked',
         });
         logAiLocaleTransitionDiagnostics({
@@ -1704,9 +1745,58 @@ export default function CVBuilderPage() {
           apiLocale: requestedLocale,
           finalValidationLocale: requestedLocale,
           applied: false,
-          reason: finalizedGate.reason || 'generation_validation_failed',
+          reason: 'stale_summary_edited_in_flight',
         });
-        toast.error(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        return;
+      }
+      const referenceDateIso = new Date().toISOString().slice(0, 10);
+      const durationSnapshot = buildExperienceDurationSnapshot(liveNow.experience, referenceDateIso);
+      const rewriteAction = style === 'shorter'
+        ? 'summary_shorter'
+        : style === 'stronger'
+          ? 'summary_stronger'
+          : 'summary_professional';
+      const finalizedGate = finalizeCvAiFieldForApply({
+        action: rewriteAction,
+        field: 'summary',
+        requestedLocale,
+        gender: liveNow.personal.gender || '',
+        cv: liveNow,
+        candidate: (rewriteData.result ?? liveSummaryAtPress).trim(),
+        durationSnapshot,
+        originHint: rewriteData.fallbackUsed
+          ? 'deterministic_fallback'
+          : rewriteData.repairAttempted
+            ? 'ai_repaired'
+            : 'ai_generated',
+      });
+      if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
+        const failCode = mapExperienceAiFailureToErrorCode(
+          finalizedGate.reason
+            || finalizedGate.diagnostics?.typedFailureReason
+            || (style === 'stronger' ? 'stronger_content_generation_failed' : 'summary_rewrite_failed'),
+        );
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: failCode, httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: `rewrite_${style}`,
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: finalizedGate.reason || failCode,
+        });
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));

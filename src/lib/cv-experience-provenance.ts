@@ -430,9 +430,17 @@ export function applyGeneratedExperienceDescription(
     locale: Locale;
     origin: CvExperienceDescriptionOrigin;
     jobContext?: ExperienceJobContext;
+    /**
+     * When true (Generation Mode from empty description), confirm applied
+     * bullets as grounding so Summary/export treat them as Experience facts.
+     */
+    confirmGeneratedAsGrounding?: boolean;
   },
 ): WorkExperience {
   const preserved = captureUserGroundingBeforeAi(exp);
+  const hadNoGrounding = !(preserved.originalUserDescription || '').trim()
+    && !(preserved.canonicalDescription || '').trim()
+    && !(resolveExperienceGroundingDescription(preserved) || '').trim();
   let next: WorkExperience = {
     ...preserved,
     description: generated,
@@ -443,6 +451,14 @@ export function applyGeneratedExperienceDescription(
     originalUserDescription: preserved.originalUserDescription,
     canonicalDescription: preserved.canonicalDescription,
   };
+  if (options.confirmGeneratedAsGrounding && hadNoGrounding && (generated || '').trim()) {
+    const confirmed = generated.trim();
+    next = {
+      ...next,
+      originalUserDescription: confirmed,
+      canonicalDescription: confirmed,
+    };
+  }
   if (options.jobContext) {
     next = stampExperienceGenerationContext(next, options.jobContext);
   }

@@ -153,16 +153,15 @@ export type CreateExperienceAiOperationSnapshotInput = {
 
 /**
  * Freeze one immutable operation source at Experience AI button press.
- * Non-empty live textarea always wins; canonical only when live is empty.
- * Even when live≡canonical, identities are derived from the live value.
+ * Non-empty live textarea always wins.
+ * Empty live textarea means Generation Mode — do NOT promote canonical/original
+ * (those would incorrectly force Enhancement Mode against resurrected duties).
  */
 export function createExperienceAiOperationSnapshot(
   input: CreateExperienceAiOperationSnapshotInput,
 ): ExperienceAiOperationSnapshot {
   const liveRawText = (input.liveText || '').trimEnd();
   const liveTrimmed = liveRawText.trim();
-  const canonical = (input.canonicalText || '').trim();
-  const original = (input.originalText || '').trim();
 
   let authoritativeRawText = '';
   let provenanceOrigin: ExperienceAiSnapshotSourceKind = 'none';
@@ -170,13 +169,9 @@ export function createExperienceAiOperationSnapshot(
   if (liveTrimmed) {
     authoritativeRawText = liveRawText;
     provenanceOrigin = 'currentTextarea';
-  } else if (canonical) {
-    authoritativeRawText = canonical;
-    provenanceOrigin = 'canonicalDescription';
-  } else if (original) {
-    authoritativeRawText = original;
-    provenanceOrigin = 'originalUserDescription';
   }
+  // Intentionally no canonical/original fallback when live is empty:
+  // empty description → generate_from_job_context.
 
   const unitsRaw = experienceAiSourceUnits(authoritativeRawText);
   const operationSnapshotId = makeOperationSnapshotId(

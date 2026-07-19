@@ -34,6 +34,7 @@ import {
   coverLetterWrongLanguage,
 } from '@/lib/cover-letter-messages';
 import { aiErrorMessage } from '@/lib/ai-error-codes';
+import { resolveAiButtonOperationMode } from '@/lib/cv-ai-operation-contract';
 import {
   precheckAiCircuit,
   resolveAiHttpFailure,
@@ -113,6 +114,8 @@ async function callGenerateAI(params: {
   certifications?: string[];
   summary?: string;
   jobDescription?: string;
+  existingLetter?: string;
+  operationMode?: string;
 }): Promise<{
   content: string;
   status: number;
@@ -200,6 +203,8 @@ export default function CoverLetterPage() {
   const preservedActiveResultRef = useRef<CoverLetterActiveResult | null>(null);
   const activeResultRef = useRef<CoverLetterActiveResult | null>(null);
   activeResultRef.current = activeResult;
+  const clContentRef = useRef(cl.content);
+  clContentRef.current = cl.content;
 
   // Auto-fill identity fields from CV personal info on mount or when CV changes
   useEffect(() => {
@@ -443,6 +448,13 @@ export default function CoverLetterPage() {
     }
     if (isGenerationBusy) return;
 
+    const liveLetterAtPress = (activeResultRef.current?.content ?? cl.content ?? '').trim();
+    const buttonId = mode === 'regenerate' ? 'cover_letter_regenerate' : 'cover_letter_generate';
+    const operationMode = resolveAiButtonOperationMode(buttonId, liveLetterAtPress);
+    const typedFailCode = mode === 'regenerate'
+      ? 'cover_letter_regeneration_failed' as const
+      : 'cover_letter_generation_failed' as const;
+
     generationAbortRef.current?.abort();
     const abortController = new AbortController();
     generationAbortRef.current = abortController;
@@ -531,10 +543,31 @@ export default function CoverLetterPage() {
         languages,
         certifications,
         summary,
+        // Shared contract: empty regen resolves to generate_from_context; populated uses regenerate.
+        // Existing letter body is authoritative context for regenerate when present.
+        ...(operationMode === 'regenerate_existing_content' && liveLetterAtPress
+          ? { existingLetter: liveLetterAtPress }
+          : {}),
+        operationMode,
         proToken,
         freeUserId: isCurrentPro ? undefined : getAppUserId(),
         signal: abortController.signal,
       });
+
+      // Live-state race: user edited letter body while request was in flight.
+      const liveLetterNow = (activeResultRef.current?.content ?? clContentRef.current ?? '').trim();
+      if (liveLetterNow !== liveLetterAtPress) {
+        logProAiUsageDiagnostics({
+          before: getProAiUsageCount(),
+          after: getProAiUsageCount(),
+          action: mode === 'generate' ? 'cover-letter-gen' : 'cover-letter-regen',
+          origin: 'none',
+          applied: false,
+          requestId,
+          reason: 'stale_letter_edited_in_flight',
+        });
+        return;
+      }
 
       const resolved = resolveCoverLetterGenerationResult({
         active: activeGenerationRef.current,
@@ -640,6 +673,8 @@ export default function CoverLetterPage() {
             body: { error: 'api_unavailable', code: 'provider_temporarily_unavailable' },
           });
           toast.error(aiErrorMessage(payload.code, requestedLocale, payload.retryAfterSec));
+        } else {
+          toast.error(aiErrorMessage(typedFailCode, requestedLocale));
         }
         return;
       }
@@ -874,7 +909,7 @@ export default function CoverLetterPage() {
         } else if (resolved.toastKind === 'wrong_language') {
           toast.error(coverLetterWrongLanguage(requestedLocale));
         } else {
-          toast.error(aiErrorMessage('provider_temporarily_unavailable', requestedLocale));
+          toast.error(aiErrorMessage(typedFailCode, requestedLocale));
         }
       }
     } finally {

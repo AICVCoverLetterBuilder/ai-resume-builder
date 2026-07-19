@@ -25,7 +25,11 @@ import {
   deterministicLocalizedSummaryFromCanonical,
 } from '@/lib/cv-localized-fallback';
 import { activateCvExperienceBullets, activateCvSummary } from '@/lib/cv-content-activation';
-import { buildOccupationAwareExperienceFallback } from '@/lib/cv-experience-job-context';
+import { buildJobContextGenerationFallback, validateExperienceGenerationOutput } from '@/lib/cv-experience-ai-operation-mode';
+import {
+  applySummaryRewriteStyleDeterministic,
+  hasSufficientSummaryGenerationContext,
+} from '@/lib/cv-ai-operation-contract';
 import {
   applyApproximateDurationPolicy,
   durationToPromptToken,
@@ -896,54 +900,33 @@ Output the summary only — nothing else. Max 90 words.${genderNote}`,
       const resolvedLocale = normalizeLocale(locale);
       const localeInfo = localeInstructions[resolvedLocale];
       const genderNote = getGenderInstruction(resolvedLocale, gender || '');
+      const isEmptyTarget = !text.trim();
+      const rewriteStyle = (['shorter', 'stronger', 'professional'].includes(String(style))
+        ? style
+        : 'professional') as 'shorter' | 'stronger' | 'professional';
 
       const styleMap: Record<string, string> = {
         shorter: 'Make it more concise and to the point. Keep only the most important information. 1–2 sentences maximum.',
         stronger: 'Rewrite using strong, active verbs and impactful language. Make it sound confident and results-oriented without inventing fake numbers or metrics.',
         professional: 'Rewrite in a polished, professional tone. Use clear, formal vocabulary without corporate jargon or filler words.',
       };
+      const generateStyleMap: Record<string, string> = {
+        shorter: 'Write a concise professional summary (1–2 sentences) from the SOURCE FACTS only.',
+        stronger: 'Write a confident, results-oriented professional summary from the SOURCE FACTS only. Use strong active verbs. Do not invent metrics, tools, leadership, clients, or achievements.',
+        professional: 'Write a polished professional summary from the SOURCE FACTS only. Formal vocabulary, no corporate jargon, no invented facts.',
+      };
 
-      const providerStartedAt = Date.now();
-      let providerFinishedAt = providerStartedAt;
-      let providerAborted = false;
-      let providerFailureReason: 'provider_attempt_timeout' | null = null;
-      let repairFailureReason: 'repair_attempt_timeout' | null = null;
-      let rewritten = text;
-      try {
-        const response = await callWithRetry({
-          model: MODEL,
-          max_tokens: 400,
-          temperature: 0.65,
-          stream: false,
-          system: `You are a professional CV editor. Rewrite text per the given instructions in ${localeInfo.languageName}.
-Rules:
-- Output only the rewritten text, nothing else.
-- Do NOT wrap output in quotation marks of any kind.
-- Keep the meaning intact while improving quality.
-- Do NOT invent numbers, metrics, percentages, or duties that are not in the original text.
-- Do NOT use vague invented metrics like "by 44%" or "11 hours" unless they appear in the original.
-- Focus on responsibilities, collaboration, and qualitative improvements — not fabricated numbers.
-- Sound natural and human, not templated or robotic.
-- Always finish every sentence completely — never truncate mid-word.
-- Keep one consistent perspective (first OR third person).
-- LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
-          messages: [
-            {
-              role: 'user',
-              content: `${styleMap[style] || styleMap.professional}${genderNote}\n\nText: ${text}`,
-            },
-          ],
-        }, deadlineAt);
-        providerFinishedAt = Date.now();
-        rewritten = getText(response) || text;
-      } catch (providerErr) {
-        providerFinishedAt = Date.now();
-        providerAborted = isProviderAbortOrTimeoutError(providerErr);
-        if (!providerAborted) throw providerErr;
-        providerFailureReason = 'provider_attempt_timeout';
-        rewritten = text;
-      }
       const cvContext = params.cvContext;
+      if (isEmptyTarget) {
+        if (!cvContext || !hasSufficientSummaryGenerationContext(cvContext)) {
+          return jsonResponse({
+            error: 'Insufficient CV context to generate a professional summary.',
+            code: 'summary_rewrite_failed' satisfies AiErrorCode,
+            cvFidelityStatus: 'blocked',
+          }, { status: 422 });
+        }
+      }
+
       const rewriteFactSet = cvContext
         ? buildCvCanonicalFactSet(cvContext)
         : buildCvCanonicalFactSet({
@@ -971,9 +954,73 @@ Rules:
           (cvContext.skills || []).join(', '),
         ].filter(Boolean).join('\n')
         : text;
-      const fallbackSummary = cvContext
-        ? (cvContext.summary || text)
-        : text;
+      const groundedBase = cvContext
+        ? deterministicLocalizedSummaryFromCanonical(
+          rewriteFactSet,
+          resolvedLocale,
+          gender || '',
+        ).trim()
+        : '';
+      const fallbackSummary = isEmptyTarget
+        ? applySummaryRewriteStyleDeterministic(groundedBase, rewriteStyle) || groundedBase
+        : (cvContext ? (cvContext.summary || text) : text);
+
+      const providerStartedAt = Date.now();
+      let providerFinishedAt = providerStartedAt;
+      let providerAborted = false;
+      let providerFailureReason: 'provider_attempt_timeout' | null = null;
+      let repairFailureReason: 'repair_attempt_timeout' | null = null;
+      let rewritten = isEmptyTarget ? '' : text;
+      try {
+        const response = await callWithRetry({
+          model: MODEL,
+          max_tokens: 400,
+          temperature: 0.65,
+          stream: false,
+          system: isEmptyTarget
+            ? `You are a professional CV writer. Generate a professional summary in ${localeInfo.languageName} from SOURCE FACTS only.
+Rules:
+- Output only the summary text, nothing else.
+- Do NOT wrap output in quotation marks of any kind.
+- Do NOT invent numbers, metrics, percentages, tools, leadership, clients, certifications, personality traits, or duties that are not in SOURCE FACTS.
+- Use only years/durations that appear in SOURCE FACTS or are clearly derivable from structured dates there.
+- Sound natural and human, not templated or robotic.
+- Always finish every sentence completely — never truncate mid-word.
+- Keep one consistent perspective (first OR third person).
+- LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`
+            : `You are a professional CV editor. Rewrite text per the given instructions in ${localeInfo.languageName}.
+Rules:
+- Output only the rewritten text, nothing else.
+- Do NOT wrap output in quotation marks of any kind.
+- Keep the meaning intact while improving quality.
+- Do NOT invent numbers, metrics, percentages, or duties that are not in the original text.
+- Do NOT use vague invented metrics like "by 44%" or "11 hours" unless they appear in the original.
+- Focus on responsibilities, collaboration, and qualitative improvements — not fabricated numbers.
+- Sound natural and human, not templated or robotic.
+- Always finish every sentence completely — never truncate mid-word.
+- Keep one consistent perspective (first OR third person).
+- LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
+          messages: [
+            {
+              role: 'user',
+              content: isEmptyTarget
+                ? `${generateStyleMap[rewriteStyle] || generateStyleMap.professional}${genderNote}
+
+SOURCE FACTS:
+${sourceFactsText || '(none)'}`
+                : `${styleMap[rewriteStyle] || styleMap.professional}${genderNote}\n\nText: ${text}`,
+            },
+          ],
+        }, deadlineAt);
+        providerFinishedAt = Date.now();
+        rewritten = getText(response) || (isEmptyTarget ? '' : text);
+      } catch (providerErr) {
+        providerFinishedAt = Date.now();
+        providerAborted = isProviderAbortOrTimeoutError(providerErr);
+        if (!providerAborted) throw providerErr;
+        providerFailureReason = 'provider_attempt_timeout';
+        rewritten = isEmptyTarget ? '' : text;
+      }
       const rewriteForceRespond = shouldForceRespond(deadlineAt) || providerAborted;
       let rewriteRepairStartedAt: number | null = null;
       let rewriteRepairFinishedAt: number | null = null;
@@ -1014,7 +1061,7 @@ Rules:
 
       logAiServerRequestTiming({
         requestId: typeof requestId === 'string' ? requestId : null,
-        action: `rewrite_${style}`,
+        action: `rewrite_${rewriteStyle}`,
         requestedLocale: resolvedLocale,
         serverReceivedAt,
         providerStartedAt,
@@ -1046,7 +1093,14 @@ Rules:
             violationCount: activated.violations.length,
           }, { status: 504 });
         }
-        const emergencyLocalized = deterministicLocalizedSummaryFromCanonical(
+        const emergencyLocalized = applySummaryRewriteStyleDeterministic(
+          deterministicLocalizedSummaryFromCanonical(
+            rewriteFactSet,
+            resolvedLocale,
+            gender || '',
+          ).trim(),
+          rewriteStyle,
+        ).trim() || deterministicLocalizedSummaryFromCanonical(
           rewriteFactSet,
           resolvedLocale,
           gender || '',
@@ -1060,10 +1114,12 @@ Rules:
             violationCount: activated.violations.length,
             providerFailureReason,
             repairFailureReason,
+            operationMode: isEmptyTarget ? 'generate_from_context' : 'enhance_existing_content',
           });
         }
         return jsonResponse({
           error: `Could not produce complete localized text for ${resolvedLocale}. Changes were not applied to avoid mixed-language content.`,
+          code: 'summary_rewrite_failed' satisfies AiErrorCode,
           cvFidelityStatus: 'blocked',
           repairAttempted: activated.repairAttempted,
           fallbackUsed: activated.fallbackUsed,
@@ -1076,6 +1132,7 @@ Rules:
         repairAttempted: activated.repairAttempted,
         fallbackUsed: activated.fallbackUsed,
         violationCount: activated.violations.length,
+        operationMode: isEmptyTarget ? 'generate_from_context' : 'enhance_existing_content',
       });
     }
 
@@ -1100,10 +1157,9 @@ Rules:
       const canonicalBullets = bulletsForExperience(factSet, 0);
       const hasCanonical = canonicalBullets.length > 0;
 
-      // No user-authored duties: never invent regulated clinical/pharmacy claims from
-      // occupation/industry alone — return the safe occupation-aware fallback only.
-      if (!hasCanonical) {
-        const occupationFallback = buildOccupationAwareExperienceFallback({
+      // If no API key and no source: title-relevant job-context generation fallback.
+      if (!hasCanonical && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
+        const occupationFallback = buildJobContextGenerationFallback({
           locale: resolvedLocale,
           gender: gender || '',
           position,
@@ -1117,6 +1173,7 @@ Rules:
           usedFactIds: [],
           fallbackUsed: true,
           occupationGenericFallbackUsed: true,
+          operationMode: 'generate_from_job_context',
         });
       }
 
@@ -1153,7 +1210,7 @@ Rules:
         : 'EMPLOYMENT STATUS: past role (ended). Describe duties in natural past tense for the target language.';
       const factLockNote = hasCanonical
         ? `FACT LOCK: You are given immutable SOURCE BULLETS (original/confirmed user duties) with stable IDs and semantic categories. Preserve EVERY material duty — do not drop, merge-away, or replace any duty. Prefer one bullet per source duty (same order). Translate/polish grammar only. Preserve each bullet's category meaning (guest service stays guest/customer service — never replace with colleague cooperation; inventory counts/management communication must stay; do not invent standard/custom recipes or cuisine types unless present in SOURCE). Do NOT invent adjacent industry duties (e.g. do not add ingredient/material storage to workplace hygiene; do not add route planning to delivery; do not add documentation to testing). Do NOT invent allergy checks, muddling, syrups, wastage, kitchen cooperation, evening shifts, inventory shortages, leadership, metrics, or any duty absent from SOURCE BULLETS. Output CV bullets only — never explain grounding, never mention source duties/role duties/canonical facts/validation. Serbian must use natural forms (koktele not kokteile; barmen/bartending not barteninga; level phrases must match stored enums — never "srednje naprednom").`
-        : 'No prior bullets were supplied. Write role-appropriate bullets without invented metrics.';
+        : `GENERATION MODE: The user supplied no duties. Infer exactly 3 ordinary role responsibilities from job title, industry, and seniority only. Company name is display context only — never invent company-specific facts. Use third-person CV style where the language requires it. No tools/software, metrics/KPIs, years of experience, achievements, clients, team size, leadership, certifications, or regulated claims. No generic filler like "carry out assigned professional duties". No English when the target language is not English.`;
 
       const providerStartedAt = Date.now();
       let providerFinishedAt = providerStartedAt;
@@ -1161,11 +1218,12 @@ Rules:
       let providerFailureReason: 'provider_attempt_timeout' | null = null;
       let repairFailureReason: 'repair_attempt_timeout' | null = null;
       let aiResult = '';
+      let generationRepairAttempted = false;
       try {
         const response = await callWithRetry({
           model: MODEL,
           max_tokens: 450,
-          temperature: hasCanonical ? 0.35 : 0.65,
+          temperature: hasCanonical ? 0.35 : 0.55,
           stream: false,
           system: `You are an expert CV writer creating work experience bullet points in ${localeInfo.languageName}.
 Rules:
@@ -1188,10 +1246,12 @@ SOURCE BULLETS (immutable confirmed duties — preserve every material duty):
 ${formatCanonicalBulletsForPrompt(canonicalBullets)}
 
 Output format: one bullet per line, each starting with "•". Same count and order. Nothing else.`
-                : `Write 4 CV work experience bullet points in ${localeInfo.languageName} for a ${levelDesc} ${roleLabel}${atCompany}.
+                : `Generate exactly 3 CV work experience bullet points in ${localeInfo.languageName} for a ${levelDesc} ${roleLabel}${atCompany ? ` (employer display name: ${companyName}; do not invent employer-specific facts)` : ''}.
+Industry context: ${industry || 'general'}.
 ${employmentTenseNote}
+Gender (grammar only): ${gender || 'unspecified'}.
 
-Output format: one bullet per line, each starting with "•". Nothing else.`,
+Infer ordinary day-to-day responsibilities from the job title and level. Output format: exactly three lines, each starting with "•". Nothing else.`,
             },
           ],
         }, deadlineAt);
@@ -1213,7 +1273,7 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
             resolvedLocale,
             sourceDescription,
           )
-          : buildOccupationAwareExperienceFallback({
+          : buildJobContextGenerationFallback({
             locale: resolvedLocale,
             gender: gender || '',
             position,
@@ -1223,6 +1283,69 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
       }
 
       const bulletsForceRespond = shouldForceRespond(deadlineAt) || providerAborted;
+
+      // Generation Mode: skip source-fact activation; optional one repair then job-context fallback.
+      if (!hasCanonical) {
+        let generationContent = aiResult;
+        let generationStatus: 'passed' | 'repaired' | 'fallback' = 'passed';
+        let genCheck = validateExperienceGenerationOutput(generationContent, {
+          locale: resolvedLocale,
+          position,
+          isPresent: isPresentRole,
+        });
+        if (
+          !genCheck.ok
+          && !bulletsForceRespond
+          && (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN)
+        ) {
+          generationRepairAttempted = true;
+          try {
+            const repaired = await callWithRetry({
+              model: MODEL,
+              max_tokens: 450,
+              temperature: 0.2,
+              stream: false,
+              system: `You repair CV generation bullets in ${localeInfo.languageName}. Output exactly 3 third-person CV bullets relevant to the job title. No tools, metrics, leadership, achievements, or company-specific inventions. ${employmentTenseNote}`,
+              messages: [{
+                role: 'user',
+                content: `Job title: ${roleLabel}\nIndustry: ${industry || 'general'}\nLevel: ${levelDesc}\nGender: ${gender || 'unspecified'}\nPrevious invalid output:\n${generationContent.slice(0, 2000)}\n\nOutput exactly 3 lines starting with "•".`,
+              }],
+            }, deadlineAt);
+            generationContent = getText(repaired);
+            genCheck = validateExperienceGenerationOutput(generationContent, {
+              locale: resolvedLocale,
+              position,
+              isPresent: isPresentRole,
+            });
+            if (genCheck.ok) generationStatus = 'repaired';
+          } catch {
+            // fall through to deterministic fallback
+          }
+        }
+        if (!genCheck.ok) {
+          generationContent = buildJobContextGenerationFallback({
+            locale: resolvedLocale,
+            gender: gender || '',
+            position,
+            industry: industry || 'general',
+            isPresent: isPresentRole,
+          });
+          generationStatus = 'fallback';
+        }
+        if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
+        return jsonResponse({
+          result: generationContent,
+          cvFidelityStatus: generationStatus,
+          repairAttempted: generationRepairAttempted,
+          fallbackUsed: generationStatus === 'fallback',
+          usedFactIds: [],
+          violationCount: 0,
+          operationMode: 'generate_from_job_context',
+          providerFailureReason,
+          repairFailureReason,
+        });
+      }
+
       let bulletsRepairStartedAt: number | null = null;
       let bulletsRepairFinishedAt: number | null = null;
       const bulletsFallbackStartedAt = Date.now();
@@ -1234,7 +1357,7 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
         candidate: aiResult,
         isPresent: isPresentRole,
         deadlineAt,
-        repair: hasCanonical && !bulletsForceRespond
+        repair: !bulletsForceRespond
           ? async (prompt) => {
               bulletsRepairStartedAt = Date.now();
               try {
@@ -1312,7 +1435,7 @@ Output format: one bullet per line, each starting with "•". Nothing else.`,
             resolvedLocale,
             gender || '',
             { isPresent: isPresentRole },
-          ) || buildOccupationAwareExperienceFallback({
+          ) || buildJobContextGenerationFallback({
             locale: resolvedLocale,
             gender: gender || '',
             position,

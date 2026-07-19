@@ -218,7 +218,7 @@ describe('Serbian cooking → English AI Improvements apply pipeline', () => {
     );
   });
 
-  it('12. usage: success counts once; terminal block counts zero', () => {
+  it('12. usage: success counts once; empty description generates; no-op enhancement counts zero', () => {
     const cv = makeCookingCv(SR_COOKING_NL);
     const ok = finalizeCvAiFieldForApply({
       action: 'experience_bullets',
@@ -230,11 +230,12 @@ describe('Serbian cooking → English AI Improvements apply pipeline', () => {
       experienceId: 'exp-cook-1',
     });
     expect(ok.countedAsSuccess).toBe(true);
-    // No duties + empty candidate → nothing to apply
+
+    // Empty description → Generation Mode (job-context duties), not a hard reject.
     const emptyCv = makeCookingCv('');
     emptyCv.experience[0].canonicalDescription = '';
     emptyCv.experience[0].description = '';
-    const blocked = finalizeCvAiFieldForApply({
+    const generated = finalizeCvAiFieldForApply({
       action: 'experience_bullets',
       field: 'experience_description',
       requestedLocale: 'en',
@@ -243,8 +244,31 @@ describe('Serbian cooking → English AI Improvements apply pipeline', () => {
       candidate: '',
       experienceId: 'exp-cook-1',
     });
-    expect(blocked.blocked).toBe(true);
-    expect(blocked.countedAsSuccess).toBe(false);
+    expect(generated.blocked).toBe(false);
+    expect(generated.countedAsSuccess).toBe(true);
+    expect(generated.diagnostics?.sourceWasEmpty).toBe(true);
+    expect(generated.diagnostics?.operationMode).toBe('generate_from_job_context');
+    expect(splitExperienceBullets(generated.text).length).toBeGreaterThanOrEqual(3);
+
+    // Enhancement no-op (identical CV-perspective source) must not count as success.
+    const srUnits = [
+      'Priprema jela srpske i mediteranske kuhinje u skladu sa standardima restorana.',
+      'Organizuje pripremu namirnica i održava uredan radni prostor u kuhinji.',
+      'Sarađuje sa kolegama iz kuhinjskog tima tokom dnevnog servisa.',
+    ];
+    const srBlock = formatExperienceBullets(srUnits);
+    const noopCv = makeCookingCv(srBlock);
+    const noop = finalizeCvAiFieldForApply({
+      action: 'experience_bullets',
+      field: 'experience_description',
+      requestedLocale: 'sr',
+      gender: 'female',
+      cv: noopCv,
+      candidate: srBlock,
+      experienceId: 'exp-cook-1',
+    });
+    expect(noop.countedAsSuccess).toBe(false);
+    expect(noop.blocked || noop.reason || noop.diagnostics?.typedFailureReason).toBeTruthy();
   });
 
   it('13. locale switch EN → SR still grounds from original Serbian canonical', () => {

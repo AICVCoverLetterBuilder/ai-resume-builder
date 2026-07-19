@@ -465,6 +465,20 @@ const AI_ERROR_CODE_SET = new Set<string>([
   'invalid_pro_token',
   'circuit_breaker_open',
   'generation_validation_failed',
+  'experience_description_required',
+  'experience_generation_failed',
+  'experience_generation_not_relevant',
+  'experience_generation_locale_invalid',
+  'experience_generation_unsafe_claims',
+  'experience_enhancement_fact_coverage_incomplete',
+  'summary_generation_failed',
+  'summary_grounding_failed',
+  'summary_rewrite_failed',
+  'cover_letter_generation_failed',
+  'cover_letter_regeneration_failed',
+  'stronger_content_generation_failed',
+  'ai_noop',
+  'ai_request_stale',
 ]);
 
 /** Apply failure side-effects: open circuit for transient provider/server limits. */

@@ -97,6 +97,13 @@ import {
   textLooksLikeCookingDuties,
   type ExperienceJobContext,
 } from './cv-experience-job-context';
+import {
+  buildJobContextGenerationFallback,
+  resolveExperienceAiOperationMode,
+  validateExperienceGenerationOutput,
+  type ExperienceAiOperationMode,
+} from './cv-experience-ai-operation-mode';
+import { resolveAiOperationMode } from './cv-ai-operation-contract';
 
 export type CvAiFinalizeAction =
   | 'summary_generate'
@@ -193,6 +200,14 @@ export type FinalizeCvAiFieldResult = {
     conflictingDurationDetected?: boolean;
     duplicateDurationRemoved?: boolean;
     finalDurationExpressionCount?: number;
+    operationMode?: ExperienceAiOperationMode;
+    sourceWasEmpty?: boolean;
+    generationFallbackAttempted?: boolean;
+    generationFallbackApplied?: boolean;
+    generatedBulletCount?: number;
+    relevanceValidationPassed?: boolean;
+    tenseValidationPassed?: boolean;
+    unsupportedClaimCount?: number;
   };
 };
 
@@ -392,6 +407,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       input.referenceDateIso || new Date().toISOString().slice(0, 10),
     );
   const dutiesText = dutiesTextFromCv(cv);
+  const liveSummary = (cv.summary || '').trim();
+  const summaryGenerate = resolveAiOperationMode({
+    targetContent: liveSummary,
+  }) === 'generate_from_context';
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: cv.personal?.jobTitle,
     experienceTitle: (cv.experience || []).find((e) => e.isPresent)?.position
@@ -447,6 +466,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ...result,
     diagnostics: {
       ...result.diagnostics,
+      operationMode: summaryGenerate
+        ? 'generate_from_job_context'
+        : 'enhance_existing_description',
+      sourceWasEmpty: summaryGenerate,
       summaryDurationExpressionCount: durationDiag?.summaryDurationExpressionCount,
       authoritativeDurationMonths: durationDiag?.authoritativeDurationMonths ?? undefined,
       authoritativeDurationBucket: durationDiag?.authoritativeDurationBucket ?? undefined,
@@ -526,7 +549,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   return attachSummaryDiag({
     blocked: true,
-    reason: first.reason || 'summary_finalization_blocked',
+    reason: summaryGenerate
+      ? 'summary_generation_failed'
+      : (first.reason || 'summary_grounding_failed'),
     text: cv.summary || '',
     origin: cv.summaryOrigin || 'user',
     roleDutyConflict,
@@ -585,16 +610,29 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   });
   const roleDutyConflict = consistency.conflict;
   const canonical = bulletsForExperience(factSet, experienceIndex);
-  const sourceForCoverage = (snapshot?.normalizedSourceText || dutiesText).trim()
-    || canonical.map((f) => f.sourceText || f.value).join('\n');
-  const sourceUnits = snapshot?.units.length
-    ? snapshot.units.map((u) => u.rawUnit)
-    : extractSourceDutyUnits(sourceForCoverage);
+  // Mode follows the immutable live snapshot (empty live → generation).
+  // Do not resurrect canonical into enhancement coverage when live is empty.
+  const liveOperationSource = (snapshot
+    ? (snapshot.normalizedSourceText || snapshot.liveRawText || '')
+    : dutiesText).trim();
+  const operationMode = resolveExperienceAiOperationMode(liveOperationSource);
+  const sourceWasEmpty = operationMode === 'generate_from_job_context';
+  const sourceForCoverage = sourceWasEmpty
+    ? ''
+    : (liveOperationSource
+      || canonical.map((f) => f.sourceText || f.value).join('\n'));
+  const sourceUnits = sourceWasEmpty
+    ? []
+    : (snapshot?.units.length
+      ? snapshot.units.map((u) => u.rawUnit)
+      : extractSourceDutyUnits(sourceForCoverage));
   const sourceFactCount = sourceUnits.length;
   const providerBulletCount = splitExperienceBullets(input.candidate || '').filter(Boolean).length;
 
   let lastRejectStage = 'init';
-  let lastRejectReason = 'experience_material_fact_coverage_incomplete';
+  let lastRejectReason = sourceWasEmpty
+    ? 'experience_generation_failed'
+    : 'experience_material_fact_coverage_incomplete';
   let lastCovered = 0;
   let lastRequired = sourceFactCount;
   let providerCoveredFactCount = 0;
@@ -609,6 +647,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let clientDeterministicFallbackCoveredFactCount = 0;
   let clientDeterministicFallbackApplied = false;
   let clientDeterministicFallbackUncoveredFactIds: string[] = [];
+  let generationFallbackAttempted = false;
+  let generationFallbackApplied = false;
+  let generationValidationMeta = {
+    relevanceValidationPassed: false,
+    perspectiveValidationPassed: false,
+    tenseValidationPassed: false,
+    unsupportedClaimCount: 0,
+    generatedBulletCount: 0,
+  };
   const serverFallbackUsed = input.originHint === 'deterministic_fallback';
   const apiResponseKind: NonNullable<FinalizeCvAiFieldResult['diagnostics']>['apiResponseKind'] =
     input.originHint === 'deterministic_fallback'
@@ -643,7 +690,87 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     clientDeterministicFallbackCoveredFactCount,
     clientDeterministicFallbackApplied,
     clientDeterministicFallbackUncoveredFactIds,
+    operationMode,
+    sourceWasEmpty,
+    generationFallbackAttempted,
+    generationFallbackApplied,
+    generatedBulletCount: generationValidationMeta.generatedBulletCount,
+    relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed,
+    perspectiveValidationPassed: generationValidationMeta.perspectiveValidationPassed,
+    tenseValidationPassed: generationValidationMeta.tenseValidationPassed,
+    unsupportedClaimCount: generationValidationMeta.unsupportedClaimCount,
   });
+
+  const tryAcceptGeneration = (
+    text: string,
+    origin: FinalizeCvAiFieldResult['origin'],
+    stage: string,
+  ): FinalizeCvAiFieldResult | null => {
+    const candidate = (text || '').trim();
+    if (!candidate) {
+      lastRejectStage = stage;
+      lastRejectReason = 'experience_generation_failed';
+      return null;
+    }
+    const gen = validateExperienceGenerationOutput(candidate, {
+      locale,
+      position: exp?.position || cv.personal?.jobTitle || '',
+      isPresent,
+    });
+    generationValidationMeta = {
+      relevanceValidationPassed: gen.relevanceValidationPassed,
+      perspectiveValidationPassed: gen.perspectiveValidationPassed,
+      tenseValidationPassed: gen.tenseValidationPassed,
+      unsupportedClaimCount: gen.unsupportedClaimCount,
+      generatedBulletCount: gen.generatedBulletCount,
+    };
+    if (!gen.ok) {
+      lastRejectStage = stage;
+      lastRejectReason = gen.reason || 'experience_generation_failed';
+      return null;
+    }
+    const pass = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
+    if (!pass.ok) {
+      // Free-text occupations may be any script; embedding them into a locale
+      // template must not become a generation dead-end after gen validation passed.
+      const titleScriptExempt = pass.reason === 'locale_mismatch' || pass.reason === 'wrong_language';
+      if (!titleScriptExempt) {
+        lastRejectStage = stage;
+        lastRejectReason = pass.reason === 'locale_mismatch'
+          ? 'experience_generation_locale_invalid'
+          : (pass.reason || 'experience_generation_failed');
+        return null;
+      }
+    }
+    const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
+    const isClientFallback = origin === 'deterministic_fallback';
+    if (isClientFallback) {
+      fallbackApplied = true;
+      fallbackBulletCount = bulletCount;
+      clientDeterministicFallbackApplied = true;
+      clientDeterministicFallbackBulletCount = bulletCount;
+      clientDeterministicFallbackScripts = detectBulletScripts(candidate);
+      generationFallbackApplied = true;
+    }
+    return {
+      blocked: false,
+      text: candidate,
+      origin,
+      roleDutyConflict,
+      countedAsSuccess: true,
+      diagnostics: {
+        ...baseDiag(),
+        coveredFactCount: 0,
+        requiredFactCount: 0,
+        finalBulletCount: bulletCount,
+        finalBulletScripts: detectBulletScripts(candidate),
+        rejectionStage: undefined,
+        typedFailureReason: undefined,
+        countedAsSuccess: true,
+        generatedBulletCount: bulletCount,
+      },
+    };
+  };
 
   const tryAccept = (
     text: string,
@@ -826,11 +953,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       locale,
       isPresent,
       gender,
-      sourceDescription: sourceForCoverage,
+      sourceDescription: sourceForCoverage || candidate,
     });
     perspectiveMeta = {
       ...perspectiveMeta,
-      sourcePersonMode: persp.sourcePersonMode,
+      sourcePersonMode: sourceWasEmpty
+        ? 'unknown'
+        : persp.sourcePersonMode,
       providerPersonMode: persp.providerPersonMode,
       normalizedPersonMode: persp.normalizedPersonMode,
       perspectiveNormalizationAttempted: persp.perspectiveNormalizationAttempted,
@@ -844,6 +973,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     perspectiveMeta.perspectiveValidationPassed = perspectiveGate.ok;
     perspectiveMeta.finalPersonMode = perspectiveGate.finalPersonMode;
 
+    if (sourceWasEmpty) {
+      // Generation Mode: no source-fact coverage / no-op against empty source.
+      if (!perspectiveGate.ok) {
+        lastRejectStage = 'provider:perspective';
+        lastRejectReason = perspectiveGate.reason || 'experience_generation_failed';
+      } else {
+        const accepted = tryAcceptGeneration(finalNormalizedBullets, providerOrigin, 'provider');
+        if (accepted) {
+          perspectiveMeta.normalizedBulletsUsedForApply = true;
+          perspectiveMeta.meaningfulChangeDetected = true;
+          perspectiveMeta.finalPersonMode = detectExperiencePersonMode(accepted.text, locale);
+          return attachPerspectiveDiag(accepted);
+        }
+      }
+    } else {
     const meaningful = experienceAiHasMeaningfulChange(sourceForCoverage, finalNormalizedBullets, {
       perspectiveApplied: persp.perspectiveNormalizationApplied,
     });
@@ -932,6 +1076,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         });
       }
     }
+    }
   } else {
     providerCoveredFactCount = lastCovered;
     providerRequiredFactCount = lastRequired || sourceFactCount;
@@ -940,6 +1085,42 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   // Provider/server postconditions failed → always attempt client deterministic fallback.
   clientDeterministicFallbackAttempted = true;
   clientDeterministicFallbackReason = lastRejectReason || 'provider_postcondition_failed';
+
+  // Generation Mode: never use source-preserving / canonical FACT LOCK fallbacks.
+  if (sourceWasEmpty) {
+    generationFallbackAttempted = true;
+    const jobCtxFallback = normalizeLocaleText(
+      buildJobContextGenerationFallback({
+        locale,
+        gender,
+        position: exp?.position || cv.personal?.jobTitle,
+        industry: input.industry || jobContext.industryNorm,
+        isPresent,
+      }),
+      locale,
+    );
+    const genAccepted = tryAcceptGeneration(
+      jobCtxFallback,
+      'deterministic_fallback',
+      'job_context_generation_fallback',
+    );
+    if (genAccepted) {
+      perspectiveMeta.normalizedBulletsUsedForApply = true;
+      perspectiveMeta.meaningfulChangeDetected = true;
+      perspectiveMeta.perspectiveValidationPassed = true;
+      perspectiveMeta.finalPersonMode = detectExperiencePersonMode(genAccepted.text, locale);
+      return attachPerspectiveDiag(genAccepted);
+    }
+    return attachPerspectiveDiag({
+      blocked: true,
+      reason: lastRejectReason || 'experience_generation_failed',
+      text: exp?.description || '',
+      origin: 'user',
+      roleDutyConflict,
+      countedAsSuccess: false,
+      diagnostics: baseDiag(),
+    });
+  }
 
   const groundedRaw = normalizeLocaleText(
     deterministicLocalizedBulletsFromCanonical(canonical, locale, gender, { isPresent }) || '',
@@ -1060,7 +1241,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   }
 
   const occupationFallback = normalizeLocaleText(
-    buildOccupationAwareExperienceFallback({
+    buildJobContextGenerationFallback({
+      locale,
+      gender,
+      position: exp?.position || cv.personal?.jobTitle,
+      industry: input.industry || jobContext.industryNorm,
+      isPresent,
+    }) || buildOccupationAwareExperienceFallback({
       locale,
       gender,
       position: exp?.position,
@@ -1073,40 +1260,51 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     grounding?.staleGeneratedContentExcluded
     || (input.industry && input.industry !== 'general')
     || jobContext.positionClass === 'pharmacist_pharmacy'
-    || jobContext.positionClass === 'software_tech',
+    || jobContext.positionClass === 'software_tech'
+    || sourceWasEmpty,
   );
   if (
     occupationFallback.trim()
     && allowOccupationFallback
-    && (canonical.length === 0 || grounding?.staleGeneratedContentExcluded)
+    && (canonical.length === 0 || grounding?.staleGeneratedContentExcluded || sourceWasEmpty)
   ) {
-    // Occupation fallback only when there are no user source facts to preserve.
+    // Occupation / job-context fallback only when there are no user source facts to preserve.
     if (!sourceForCoverage.trim()) {
       clientDeterministicFallbackBulletCount = splitExperienceBullets(occupationFallback).filter(Boolean).length;
       clientDeterministicFallbackScripts = detectBulletScripts(occupationFallback);
-      return {
-        blocked: false,
-        text: occupationFallback,
-        origin: 'deterministic_fallback',
-        roleDutyConflict,
-        countedAsSuccess: true,
-        diagnostics: {
-          ...baseDiag(),
-          fallbackApplied: true,
-          fallbackBulletCount: clientDeterministicFallbackBulletCount,
-          finalBulletCount: clientDeterministicFallbackBulletCount,
-          finalBulletScripts: clientDeterministicFallbackScripts,
-          rejectionStage: undefined,
-          typedFailureReason: undefined,
+      if (sourceWasEmpty) {
+        generationFallbackAttempted = true;
+        const genAccepted = tryAcceptGeneration(
+          occupationFallback,
+          'deterministic_fallback',
+          'occupation_fallback',
+        );
+        if (genAccepted) return attachPerspectiveDiag(genAccepted);
+      } else {
+        return {
+          blocked: false,
+          text: occupationFallback,
+          origin: 'deterministic_fallback',
+          roleDutyConflict,
           countedAsSuccess: true,
-          clientDeterministicFallbackAttempted: true,
-          clientDeterministicFallbackApplied: true,
-          clientDeterministicFallbackBulletCount,
-          clientDeterministicFallbackScripts,
-          clientDeterministicFallbackCoveredFactCount: 0,
-          clientDeterministicFallbackRequiredFactCount: 0,
-        },
-      };
+          diagnostics: {
+            ...baseDiag(),
+            fallbackApplied: true,
+            fallbackBulletCount: clientDeterministicFallbackBulletCount,
+            finalBulletCount: clientDeterministicFallbackBulletCount,
+            finalBulletScripts: clientDeterministicFallbackScripts,
+            rejectionStage: undefined,
+            typedFailureReason: undefined,
+            countedAsSuccess: true,
+            clientDeterministicFallbackAttempted: true,
+            clientDeterministicFallbackApplied: true,
+            clientDeterministicFallbackBulletCount,
+            clientDeterministicFallbackScripts,
+            clientDeterministicFallbackCoveredFactCount: 0,
+            clientDeterministicFallbackRequiredFactCount: 0,
+          },
+        };
+      }
     }
   }
 
@@ -1189,6 +1387,7 @@ export function applyFinalizedBulletsToCv(
     description: finalized.text,
     descriptionOrigin,
     jobContext,
+    confirmGeneratedAsGrounding: Boolean(finalized.diagnostics?.sourceWasEmpty),
   });
 
   const exp = (next.experience || []).find((e) => e.id === experienceId)

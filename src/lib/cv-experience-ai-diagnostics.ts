@@ -192,6 +192,20 @@ export type ExperienceAiDiagnosticTrace = {
   clientDeterministicFallbackCoveredFactCount: number;
   clientDeterministicFallbackApplied: boolean;
   clientDeterministicFallbackUncoveredFactIds: string[];
+  operationMode: 'generate_from_job_context' | 'enhance_existing_description' | null;
+  sourceWasEmpty: boolean;
+  sourceFactCount: number;
+  generationContextPresent: boolean;
+  generationProviderAttempted: boolean;
+  generationRepairAttempted: boolean;
+  generationFallbackAttempted: boolean;
+  generationFallbackApplied: boolean;
+  generatedBulletCount: number;
+  generatedBulletScripts: ExperienceScriptClass[];
+  relevanceValidationPassed: boolean;
+  /** Alias kept alongside perspectiveValidationPassed for generation mode. */
+  tenseValidationPassed: boolean;
+  visibleApplySucceeded: boolean;
   finalBulletCount: number;
   finalBulletScripts: ExperienceScriptClass[];
   finalTypedFailureReason: string | null;
@@ -586,6 +600,19 @@ export class ExperienceAiDiagnosticSession {
       clientDeterministicFallbackCoveredFactCount: 0,
       clientDeterministicFallbackApplied: false,
       clientDeterministicFallbackUncoveredFactIds: [],
+      operationMode: null,
+      sourceWasEmpty: false,
+      sourceFactCount: 0,
+      generationContextPresent: false,
+      generationProviderAttempted: false,
+      generationRepairAttempted: false,
+      generationFallbackAttempted: false,
+      generationFallbackApplied: false,
+      generatedBulletCount: 0,
+      generatedBulletScripts: [],
+      relevanceValidationPassed: false,
+      tenseValidationPassed: false,
+      visibleApplySucceeded: false,
       finalBulletCount: 0,
       finalBulletScripts: [],
       finalTypedFailureReason: null,
@@ -839,6 +866,28 @@ export class ExperienceAiDiagnosticSession {
       clientDeterministicFallbackCoveredFactCount: clientCovered,
       clientDeterministicFallbackApplied: clientFallbackApplied,
       clientDeterministicFallbackUncoveredFactIds: clientUncovered,
+      operationMode: (diag.operationMode as ExperienceAiDiagnosticTrace['operationMode']) || null,
+      sourceWasEmpty: Boolean(diag.sourceWasEmpty),
+      sourceFactCount: diag.sourceFactCount ?? this.draft.sourceFactIdentityCount ?? 0,
+      generationContextPresent: Boolean(
+        diag.sourceWasEmpty
+        || diag.operationMode === 'generate_from_job_context',
+      ),
+      generationProviderAttempted: Boolean(
+        diag.sourceWasEmpty && (apiResponseKind === 'provider' || apiResponseKind === 'repair' || apiResponseKind === 'fallback'),
+      ),
+      generationRepairAttempted: Boolean(diag.sourceWasEmpty && apiResponseKind === 'repair'),
+      generationFallbackAttempted: Boolean(diag.generationFallbackAttempted),
+      generationFallbackApplied: Boolean(diag.generationFallbackApplied),
+      generatedBulletCount: diag.generatedBulletCount ?? (diag.sourceWasEmpty ? bullets.length : 0),
+      generatedBulletScripts: diag.sourceWasEmpty ? scriptsFromBullets(text) : [],
+      relevanceValidationPassed: Boolean(diag.relevanceValidationPassed),
+      tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? diag.tenseMode),
+      unsupportedClaimCount: Math.max(
+        diag.unsupportedClaimCount ?? 0,
+        reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
+      ),
+      visibleApplySucceeded: Boolean(finalized.countedAsSuccess && !blocked),
       finalBulletCount: diag.finalBulletCount ?? bullets.length,
       finalBulletScripts: scriptsFromBullets(text),
       tenseMode: diag.tenseMode || this.draft.tenseMode || 'unknown',
@@ -864,8 +913,6 @@ export class ExperienceAiDiagnosticSession {
         reason === 'locale_mismatch' || reason === 'wrong_language'
           ? reason
           : this.draft.providerLocaleValidationReason,
-      unsupportedClaimCount:
-        reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
     });
 
     const localeFail = reason === 'locale_mismatch' || reason === 'wrong_language';

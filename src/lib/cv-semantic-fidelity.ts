@@ -1072,6 +1072,9 @@ export function validateLocalizedExperienceBullets(
   }
 
   for (const matched of collectMatches(joined, UNSUPPORTED_DUTY_PATTERNS)) {
+    // Generation Mode (no canonical duties): ordinary role vocabulary such as
+    // "documentation" is allowed — high-risk inventions are gated elsewhere.
+    if (canonical.length === 0) continue;
     if (dutySupportedByCanonical(matched, corpus)) continue;
     violations.push({
       kind: 'unsupported_duty',
@@ -1082,7 +1085,11 @@ export function validateLocalizedExperienceBullets(
   }
 
   // Recipe inventions when canonical corpus has no recipe claim.
-  if (RECIPE_INVENTION.test(joined) && !/recip|recept/iu.test(corpus)) {
+  if (
+    canonical.length > 0
+    && RECIPE_INVENTION.test(joined)
+    && !/recip|recept/iu.test(corpus)
+  ) {
     violations.push({
       kind: 'unsupported_duty',
       matched: 'recipe-invention',

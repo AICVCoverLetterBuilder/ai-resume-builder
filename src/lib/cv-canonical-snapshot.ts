@@ -675,6 +675,8 @@ type AcceptValidatedAiContentOptions = {
   summaryOrigin?: import('./types').CvSummaryOrigin;
   descriptionOrigin?: CvExperienceDescriptionOrigin;
   jobContext?: import('./cv-experience-job-context').ExperienceJobContext;
+  /** Generation Mode: empty prior grounding → confirm applied bullets as facts. */
+  confirmGeneratedAsGrounding?: boolean;
 };
 
 /**
@@ -759,6 +761,7 @@ export function acceptValidatedAiContent(
           locale: options.locale,
           origin: isAiDescriptionOrigin(origin) ? origin : 'ai_generated',
           jobContext: options.jobContext,
+          confirmGeneratedAsGrounding: options.confirmGeneratedAsGrounding,
         });
       }),
     };

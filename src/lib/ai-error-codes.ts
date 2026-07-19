@@ -18,6 +18,19 @@ export const AI_ERROR_CODES = [
   'circuit_breaker_open',
   'generation_validation_failed',
   'experience_description_required',
+  'experience_generation_failed',
+  'experience_generation_not_relevant',
+  'experience_generation_locale_invalid',
+  'experience_generation_unsafe_claims',
+  'experience_enhancement_fact_coverage_incomplete',
+  'summary_generation_failed',
+  'summary_grounding_failed',
+  'summary_rewrite_failed',
+  'cover_letter_generation_failed',
+  'cover_letter_regeneration_failed',
+  'stronger_content_generation_failed',
+  'ai_noop',
+  'ai_request_stale',
 ] as const;
 
 export type AiErrorCode = (typeof AI_ERROR_CODES)[number];
@@ -212,6 +225,159 @@ const EXPERIENCE_DESCRIPTION_REQUIRED: MsgMap = {
   ja: '先に職歴の説明を入力してください。',
 };
 
+const EXPERIENCE_GENERATION_FAILED: MsgMap = {
+  en: 'Could not generate experience duties from the job details. Please try again.',
+  sr: 'Nije moguće generisati dužnosti iz podataka o poslu. Pokušajte ponovo.',
+  hr: 'Nije moguće generirati dužnosti iz podataka o poslu. Pokušajte ponovno.',
+  hi: 'पद विवरण से अनुभव कर्तव्य उत्पन्न नहीं हो सके। कृपया पुनः प्रयास करें।',
+  de: 'Aufgaben konnten aus den Stellenangaben nicht erzeugt werden. Bitte erneut versuchen.',
+  es: 'No se pudieron generar las funciones a partir del puesto. Inténtalo de nuevo.',
+  ar: 'تعذّر إنشاء مهام الخبرة من تفاصيل الوظيفة. يُرجى المحاولة مجددًا.',
+  ja: '職種情報から職務内容を生成できませんでした。もう一度お試しください。',
+  ru: 'Не удалось сформировать обязанности из данных о должности. Повторите попытку.',
+  'pt-BR': 'Não foi possível gerar as funções a partir do cargo. Tente novamente.',
+  fr: 'Impossible de générer les missions à partir du poste. Réessayez.',
+  it: 'Impossibile generare le mansioni dal ruolo. Riprova.',
+};
+
+const EXPERIENCE_GENERATION_NOT_RELEVANT: MsgMap = {
+  en: 'Generated duties were not relevant to the job title and were not applied.',
+  sr: 'Generisane dužnosti nisu bile relevantne za poziciju i nisu primenjene.',
+  hr: 'Generirane dužnosti nisu bile relevantne za poziciju i nisu primijenjene.',
+  hi: 'उत्पन्न कर्तव्य पद से संबंधित नहीं थे और लागू नहीं किए गए।',
+  de: 'Erzeugte Aufgaben passten nicht zur Stelle und wurden nicht übernommen.',
+  es: 'Las funciones generadas no eran relevantes al puesto y no se aplicaron.',
+  ar: 'المهام المُنشأة غير مرتبطة بالمسمى الوظيفي ولم تُطبَّق.',
+  ja: '生成された職務が職種と関連しないため適用されませんでした。',
+  ru: 'Сформированные обязанности не соответствуют должности и не применены.',
+  'pt-BR': 'As funções geradas não eram relevantes ao cargo e não foram aplicadas.',
+  fr: 'Les missions générées n’étaient pas pertinentes et n’ont pas été appliquées.',
+  it: 'Le mansioni generate non erano pertinenti e non sono state applicate.',
+};
+
+const EXPERIENCE_GENERATION_LOCALE_INVALID: MsgMap = {
+  en: 'Generated duties were not in the requested language and were not applied.',
+  sr: 'Generisane dužnosti nisu bile na traženom jeziku i nisu primenjene.',
+  hr: 'Generirane dužnosti nisu bile na traženom jeziku i nisu primijenjene.',
+  hi: 'उत्पन्न कर्तव्य अनुरोधित भाषा में नहीं थे और लागू नहीं किए गए।',
+  de: 'Erzeugte Aufgaben waren nicht in der gewünschten Sprache und wurden nicht übernommen.',
+  es: 'Las funciones generadas no estaban en el idioma solicitado y no se aplicaron.',
+  ar: 'المهام المُنشأة ليست باللغة المطلوبة ولم تُطبَّق.',
+  ja: '生成された職務が指定言語ではなかったため適用されませんでした。',
+  ru: 'Сформированные обязанности не на нужном языке и не применены.',
+  'pt-BR': 'As funções geradas não estavam no idioma solicitado e não foram aplicadas.',
+  fr: 'Les missions générées n’étaient pas dans la langue demandée et n’ont pas été appliquées.',
+  it: 'Le mansioni generate non erano nella lingua richiesta e non sono state applicate.',
+};
+
+const EXPERIENCE_GENERATION_UNSAFE: MsgMap = {
+  en: 'Generated duties included unsupported claims and were not applied.',
+  sr: 'Generisane dužnosti su sadržale nepodržane tvrdnje i nisu primenjene.',
+  hr: 'Generirane dužnosti sadržavale su nepodržane tvrdnje i nisu primijenjene.',
+  hi: 'उत्पन्न कर्तव्यों में असमर्थित दावे थे और लागू नहीं किए गए।',
+  de: 'Erzeugte Aufgaben enthielten unzulässige Angaben und wurden nicht übernommen.',
+  es: 'Las funciones generadas incluían afirmaciones no admitidas y no se aplicaron.',
+  ar: 'تضمنت المهام المُنشأة ادعاءات غير مدعومة ولم تُطبَّق.',
+  ja: '生成された職務に根拠のない記述が含まれていたため適用されませんでした。',
+  ru: 'В сформированных обязанностях были недопустимые утверждения — не применены.',
+  'pt-BR': 'As funções geradas incluíam alegações não suportadas e não foram aplicadas.',
+  fr: 'Les missions générées contenaient des affirmations non prises en charge et n’ont pas été appliquées.',
+  it: 'Le mansioni generate contenevano affermazioni non supportate e non sono state applicate.',
+};
+
+const EXPERIENCE_ENHANCEMENT_COVERAGE: MsgMap = {
+  en: 'AI could not preserve every duty from your description and was not applied.',
+  sr: 'AI nije sačuvao sve dužnosti iz vašeg opisa i nije primenjen.',
+  hr: 'AI nije sačuvao sve dužnosti iz vašeg opisa i nije primijenjen.',
+  hi: 'AI आपके विवरण की हर ड्यूटी सुरक्षित नहीं रख सका और लागू नहीं किया गया।',
+  de: 'Die KI konnte nicht alle Aufgaben Ihrer Beschreibung erhalten und wurde nicht übernommen.',
+  es: 'La IA no pudo conservar todas las funciones de tu descripción y no se aplicó.',
+  ar: 'تعذّر على الذكاء الاصطناعي الحفاظ على كل المهام من وصفك ولم يُطبَّق.',
+  ja: '説明文の職務をすべて保持できなかったため適用されませんでした。',
+  ru: 'ИИ не сохранил все обязанности из описания и не был применён.',
+  'pt-BR': 'A IA não conseguiu preservar todas as funções da sua descrição e não foi aplicada.',
+  fr: 'L’IA n’a pas pu conserver toutes les missions de votre description et n’a pas été appliquée.',
+  it: 'L’IA non ha potuto conservare tutte le mansioni della descrizione e non è stata applicata.',
+};
+
+const SUMMARY_GENERATION_FAILED: MsgMap = {
+  en: 'Could not generate a professional summary from your CV details. Please try again.',
+  sr: 'Nije moguće generisati profesionalni rezime iz podataka CV-a. Pokušajte ponovo.',
+  hi: 'CV विवरण से पेशेवर सारांश उत्पन्न नहीं हो सका। कृपया पुनः प्रयास करें।',
+  de: 'Die berufliche Zusammenfassung konnte nicht erzeugt werden. Bitte erneut versuchen.',
+  ja: 'CV情報から職務要約を生成できませんでした。もう一度お試しください。',
+};
+
+const SUMMARY_GROUNDING_FAILED: MsgMap = {
+  en: 'The summary could not be grounded in your experience and was not applied.',
+  sr: 'Rezime nije mogao da se usidri u vaše iskustvo i nije primenjen.',
+  hi: 'सारांश आपके अनुभव पर आधारित नहीं हो सका और लागू नहीं किया गया।',
+  de: 'Die Zusammenfassung konnte nicht an Ihre Erfahrung gebunden werden und wurde nicht übernommen.',
+  ja: '要約を職歴に根拠付けできなかったため適用されませんでした。',
+};
+
+const SUMMARY_REWRITE_FAILED: MsgMap = {
+  en: 'Could not rewrite the professional summary safely. Please try again.',
+  sr: 'Nije moguće bezbedno prepraviti profesionalni rezime. Pokušajte ponovo.',
+  hi: 'पेशेवर सारांश को सुरक्षित रूप से पुनर्लेखित नहीं किया जा सका। कृपया पुनः प्रयास करें।',
+  de: 'Die berufliche Zusammenfassung konnte nicht sicher umgeschrieben werden. Bitte erneut versuchen.',
+  ja: '職務要約を安全に書き直せませんでした。もう一度お試しください。',
+  hr: 'Nije moguće sigurno prepraviti profesionalni sažetak. Pokušajte ponovno.',
+  es: 'No se pudo reescribir el resumen profesional de forma segura. Inténtalo de nuevo.',
+  fr: 'Impossible de réécrire le résumé professionnel en toute sécurité. Réessayez.',
+  it: 'Impossibile riscrivere in sicurezza il riepilogo professionale. Riprova.',
+  ar: 'تعذّر إعادة صياغة الملخص المهني بأمان. يُرجى المحاولة مجددًا.',
+  ru: 'Не удалось безопасно переписать профессиональное резюме. Повторите попытку.',
+  'pt-BR': 'Não foi possível reescrever o resumo profissional com segurança. Tente novamente.',
+};
+
+const COVER_LETTER_GENERATION_FAILED: MsgMap = {
+  en: 'Could not generate a cover letter from your CV facts. Please try again.',
+  sr: 'Nije moguće generisati propratno pismo iz činjenica CV-a. Pokušajte ponovo.',
+  hi: 'CV तथ्यों से कवर लेटर उत्पन्न नहीं हो सका। कृपया पुनः प्रयास करें।',
+  de: 'Das Anschreiben konnte nicht aus Ihren CV-Fakten erzeugt werden. Bitte erneut versuchen.',
+  ja: 'CVの事実からカバーレターを生成できませんでした。もう一度お試しください。',
+};
+
+const COVER_LETTER_REGENERATION_FAILED: MsgMap = {
+  en: 'Could not regenerate the cover letter safely. Please try again.',
+  sr: 'Nije moguće bezbedno regenerisati propratno pismo. Pokušajte ponovo.',
+  hi: 'कवर लेटर को सुरक्षित रूप से पुनः उत्पन्न नहीं किया जा सका। कृपया पुनः प्रयास करें।',
+  de: 'Das Anschreiben konnte nicht sicher neu erzeugt werden. Bitte erneut versuchen.',
+  ja: 'カバーレターを安全に再生成できませんでした。もう一度お試しください。',
+  hr: 'Nije moguće sigurno regenerirati propratno pismo. Pokušajte ponovno.',
+  es: 'No se pudo regenerar la carta de presentación de forma segura. Inténtalo de nuevo.',
+  fr: 'Impossible de régénérer la lettre de motivation en toute sécurité. Réessayez.',
+  it: 'Impossibile rigenerare in sicurezza la lettera di presentazione. Riprova.',
+  ar: 'تعذّر إعادة إنشاء خطاب التغطية بأمان. يُرجى المحاولة مجددًا.',
+  ru: 'Не удалось безопасно пересоздать сопроводительное письмо. Повторите попытку.',
+  'pt-BR': 'Não foi possível regenerar a carta de apresentação com segurança. Tente novamente.',
+};
+
+const STRONGER_CONTENT_FAILED: MsgMap = {
+  en: 'Could not strengthen the content safely. Please try again.',
+  sr: 'Nije moguće bezbedno ojačati sadržaj. Pokušajte ponovo.',
+  hi: 'सामग्री को सुरक्षित रूप से मजबूत नहीं किया जा सका। कृपया पुनः प्रयास करें।',
+  de: 'Der Inhalt konnte nicht sicher verstärkt werden. Bitte erneut versuchen.',
+  ja: '内容を安全に強化できませんでした。もう一度お試しください。',
+};
+
+const AI_NOOP: MsgMap = {
+  en: 'No meaningful change was produced, so nothing was applied.',
+  sr: 'Nije proizvedena suštinska promena, pa ništa nije primenjeno.',
+  hi: 'कोई सार्थक परिवर्तन नहीं हुआ, इसलिए कुछ लागू नहीं किया गया।',
+  de: 'Es wurde keine sinnvolle Änderung erzeugt, daher wurde nichts übernommen.',
+  ja: '意味のある変更がなかったため適用されませんでした。',
+};
+
+const AI_REQUEST_STALE: MsgMap = {
+  en: 'Your CV changed while AI was running. Please try again.',
+  sr: 'CV se promenio dok je AI radio. Pokušajte ponovo.',
+  hi: 'AI चलते समय आपका CV बदल गया। कृपया पुनः प्रयास करें।',
+  de: 'Ihr CV hat sich während der KI-Anfrage geändert. Bitte erneut versuchen.',
+  ja: 'AIの処理中にCVが変更されました。もう一度お試しください。',
+};
+
 function pick(map: MsgMap, locale: Locale | string): string {
   return map[locale as Locale] ?? map.en ?? '';
 }
@@ -254,7 +420,75 @@ export function aiErrorMessage(
       return pick(VALIDATION, locale);
     case 'experience_description_required':
       return pick(EXPERIENCE_DESCRIPTION_REQUIRED, locale);
+    case 'experience_generation_failed':
+      return pick(EXPERIENCE_GENERATION_FAILED, locale);
+    case 'experience_generation_not_relevant':
+      return pick(EXPERIENCE_GENERATION_NOT_RELEVANT, locale);
+    case 'experience_generation_locale_invalid':
+      return pick(EXPERIENCE_GENERATION_LOCALE_INVALID, locale);
+    case 'experience_generation_unsafe_claims':
+      return pick(EXPERIENCE_GENERATION_UNSAFE, locale);
+    case 'experience_enhancement_fact_coverage_incomplete':
+      return pick(EXPERIENCE_ENHANCEMENT_COVERAGE, locale);
+    case 'summary_generation_failed':
+      return pick(SUMMARY_GENERATION_FAILED, locale);
+    case 'summary_grounding_failed':
+      return pick(SUMMARY_GROUNDING_FAILED, locale);
+    case 'summary_rewrite_failed':
+      return pick(SUMMARY_REWRITE_FAILED, locale);
+    case 'cover_letter_generation_failed':
+      return pick(COVER_LETTER_GENERATION_FAILED, locale);
+    case 'cover_letter_regeneration_failed':
+      return pick(COVER_LETTER_REGENERATION_FAILED, locale);
+    case 'stronger_content_generation_failed':
+      return pick(STRONGER_CONTENT_FAILED, locale);
+    case 'ai_noop':
+      return pick(AI_NOOP, locale);
+    case 'ai_request_stale':
+      return pick(AI_REQUEST_STALE, locale);
     default:
       return pick(PROVIDER_UNAVAILABLE, locale);
+  }
+}
+
+/** Map finalize / Experience AI typed failure reasons onto AI error codes. */
+export function mapExperienceAiFailureToErrorCode(
+  reason: string | null | undefined,
+): AiErrorCode {
+  // Lazy import avoided — keep mapping local + aligned with universal contract.
+  switch (reason) {
+    case 'experience_generation_failed':
+      return 'experience_generation_failed';
+    case 'experience_generation_not_relevant':
+      return 'experience_generation_not_relevant';
+    case 'experience_generation_locale_invalid':
+    case 'ai_output_locale_invalid':
+      return 'experience_generation_locale_invalid';
+    case 'experience_generation_unsafe_claims':
+    case 'ai_output_unsafe_claims':
+      return 'experience_generation_unsafe_claims';
+    case 'experience_enhancement_fact_coverage_incomplete':
+    case 'experience_material_fact_coverage_incomplete':
+    case 'experience_enhancement_failed':
+      return 'experience_enhancement_fact_coverage_incomplete';
+    case 'summary_generation_failed':
+      return 'summary_generation_failed';
+    case 'summary_grounding_failed':
+      return 'summary_grounding_failed';
+    case 'summary_rewrite_failed':
+      return 'summary_rewrite_failed';
+    case 'cover_letter_generation_failed':
+      return 'cover_letter_generation_failed';
+    case 'cover_letter_regeneration_failed':
+      return 'cover_letter_regeneration_failed';
+    case 'stronger_content_generation_failed':
+      return 'stronger_content_generation_failed';
+    case 'ai_noop':
+    case 'experience_ai_noop':
+      return 'ai_noop';
+    case 'ai_request_stale':
+      return 'ai_request_stale';
+    default:
+      return 'generation_validation_failed';
   }
 }
