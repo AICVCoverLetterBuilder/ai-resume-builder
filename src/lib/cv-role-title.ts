@@ -125,8 +125,33 @@ export function localizeWarehouseEmployee(locale: Locale, gender?: string): stri
   return 'Warehouse Employee';
 }
 
-const WAREHOUSE_TITLE_RE =
-  /(?:warehouse\s*(?:employee|worker|operator|associate)?|warehouse|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर|वर्कर))?|skladištar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|radnik\s+u\s+magacinu)/iu;
+/** Fold Latin diacritics so skladištu / skladistu match the same occupation rules. */
+export function foldLatinDiacritics(value: string): string {
+  return (value || '')
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase();
+}
+
+/**
+ * Warehouse / logistics title cues — Serbian gendered + magacin/skladište forms.
+ * Prefer matchesWarehouseOccupationalTitle so diacritic folding is always applied.
+ */
+const WAREHOUSE_TITLE_CORE_RE =
+  /(?:warehouse\s*(?:employee|worker|operator|associate)?|\bwarehouse\b|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर))?|skladistar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|radni(?:k|ca)\s+u\s+(?:magacinu|skladistu)|u\s+skladistu)/iu;
+
+/** True when title/blob denotes warehouse/logistics work (diacritic-aware). */
+export function matchesWarehouseOccupationalTitle(text: string): boolean {
+  const raw = (text || '').trim();
+  if (!raw) return false;
+  if (WAREHOUSE_TITLE_CORE_RE.test(raw)) return true;
+  const folded = foldLatinDiacritics(raw);
+  return WAREHOUSE_TITLE_CORE_RE.test(folded);
+}
+
+/** Devanagari/Latin warehouse duty cues — never use ASCII `\\b` around माल. */
+const WAREHOUSE_DUTY_CUE_RE =
+  /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|skladišt|incoming\s+goods|माल)/iu;
 
 const BAKER_TITLE_RE =
   /(?:^|[^a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ])(baker|bäcker(?:in)?|boulanger(?:e)?|panader[oa]|panettier[ae]|padeir[oa]|пекар(?:ка)?|pekar(?:ka)?)(?:[^a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ]|$)|बेकर|خباز|ベイカー/iu;
@@ -171,7 +196,8 @@ const TITLE_CATEGORY_RULES: Array<{ category: OccupationCategory; re: RegExp; co
   },
   {
     category: 'logistics',
-    re: /\b(warehouse|skladišt|logist|forklift|viličar|magazinier|lagerist)\b/iu,
+    // Avoid ASCII \\b around skladišt* — "skladištu" must match.
+    re: /(?:warehouse|skladišt|skladist|logist|forklift|viličar|magazinier|lagerist|magacin|magacioner|radni(?:k|ca)\s+u\s+(?:magacinu|skladišt))/iu,
     confidence: 'high',
   },
   {
@@ -410,7 +436,7 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
     return localizeCook(locale, gender);
   }
   // Warehouse before falling through to generic "पेशेवर" for non-English locales.
-  if (WAREHOUSE_TITLE_RE.test(normalized)) {
+  if (matchesWarehouseOccupationalTitle(normalized)) {
     return localizeWarehouseEmployee(locale, gender);
   }
   if (/(?:graphic\s+designer|grafi[cč]ki\s+dizajn\w*|ग्राफिक\s*डिज़ाइनर)/i.test(normalized)) {
@@ -485,10 +511,7 @@ export function ensureConcreteSummaryRole(
   const isGeneric = !role || /^(?:पेशेवर|professional)$/iu.test(role);
   if (!isGeneric) return role;
   const blob = `${options.profileJobTitle || ''} ${options.currentExperienceTitle || ''} ${options.dutiesText || ''}`;
-  if (
-    WAREHOUSE_TITLE_RE.test(blob)
-    || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|incoming\s+goods|\bमाल\b)/iu.test(blob)
-  ) {
+  if (matchesWarehouseOccupationalTitle(blob) || WAREHOUSE_DUTY_CUE_RE.test(blob)) {
     return localizeWarehouseEmployee(options.locale, options.gender);
   }
   return role || getOccupationalTitleFallback(options.locale, options.gender);

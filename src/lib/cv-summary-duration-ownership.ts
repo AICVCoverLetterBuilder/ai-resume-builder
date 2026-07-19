@@ -55,6 +55,8 @@ export type SummaryDurationOwnershipDiagnostics = {
   finalDurationHybridDetected?: boolean;
   durationSemanticValueMonths?: number | null;
   durationRepresentationAgreement?: boolean;
+  /** Non-PII revision from the duration finalizer implementation that ran. */
+  summaryDurationFinalizerRevision?: string;
 };
 
 /**

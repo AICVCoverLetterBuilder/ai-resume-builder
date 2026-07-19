@@ -132,7 +132,7 @@ export function classifyExperiencePosition(position?: string | null): Experience
   if (/software|developer|engineer|programer|programator|devops|frontend|backend/.test(t)) {
     return 'software_tech';
   }
-  if (/driver|warehouse|skladi|logist|courier|dostavlja/.test(t)) {
+  if (/driver|warehouse|skladi|skladist|logist|courier|dostavlja|magacin|magacioner|lagerist/.test(t)) {
     return 'logistics';
   }
   if (/nurse|doctor|physician|medic|terapeut|лијеч|врач/.test(t)) {

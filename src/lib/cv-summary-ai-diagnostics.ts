@@ -132,6 +132,11 @@ export type SummaryAiDiagnosticTrace = {
   duplicatedPriorRoleFactCount: number | null;
   priorRoleSemanticDuplicationDetected: boolean | null;
   finalUnitRoleSlots: string[] | null;
+  summaryPipelineRevision: string | null;
+  summaryBuilderRevision: string | null;
+  summaryUnitSplitterRevision: string | null;
+  summaryGroundingRevision: string | null;
+  summaryDurationFinalizerRevision: string | null;
   perspectiveMode: string | null;
   sourcePerspectiveMode: string | null;
   providerPerspectiveMode: string | null;
@@ -302,6 +307,11 @@ export class SummaryAiDiagnosticSession {
       duplicatedPriorRoleFactCount: null,
       priorRoleSemanticDuplicationDetected: null,
       finalUnitRoleSlots: null,
+      summaryPipelineRevision: null,
+      summaryBuilderRevision: null,
+      summaryUnitSplitterRevision: null,
+      summaryGroundingRevision: null,
+      summaryDurationFinalizerRevision: null,
       perspectiveMode: null,
       sourcePerspectiveMode: null,
       providerPerspectiveMode: null,
@@ -526,6 +536,11 @@ export class SummaryAiDiagnosticSession {
       duplicatedPriorRoleFactCount: diag.duplicatedPriorRoleFactCount ?? null,
       priorRoleSemanticDuplicationDetected: diag.priorRoleSemanticDuplicationDetected ?? null,
       finalUnitRoleSlots: diag.finalUnitRoleSlots ?? null,
+      summaryPipelineRevision: diag.summaryPipelineRevision ?? null,
+      summaryBuilderRevision: diag.summaryBuilderRevision ?? null,
+      summaryUnitSplitterRevision: diag.summaryUnitSplitterRevision ?? null,
+      summaryGroundingRevision: diag.summaryGroundingRevision ?? null,
+      summaryDurationFinalizerRevision: diag.summaryDurationFinalizerRevision ?? null,
       nearDuplicateSentenceCount: diag.repeatedEmploymentFactCount ?? 0,
       repeatedClauseCount: Math.max(
         diag.repeatedEmploymentFactCount ?? 0,

@@ -28,6 +28,9 @@ import {
   localizeOccupationalTitleForProjection,
   resolveOccupationalTitleForSummary,
 } from './cv-role-title';
+
+/** Runtime revision — returned by the duration finalizer that executed. */
+export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-double-pass-v1' as const;
 import { deduplicateSkillsForExport } from './cv-skills-projection';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
@@ -648,6 +651,7 @@ export function injectHindiDurationWithOpening(
   duration: ExperienceDuration,
   context: DurationIntegrationContext,
 ): string {
+  void SUMMARY_DURATION_FINALIZER_REVISION;
   const trimmed = (summary || '').trim();
   // Idempotent path: when the Summary already has a single well-placed duration
   // claim and an employment intro, do not rebuild a weaker generic opening
@@ -797,6 +801,7 @@ export function resolveSummaryWithDurationPolicy(
   violation?: 'experience_duration_mismatch';
   durationDiagnostics?: SummaryDurationOwnershipDiagnostics;
 } {
+  void SUMMARY_DURATION_FINALIZER_REVISION;
   const requireClaim = Boolean(options?.forceDurationPhrase || options?.requireDurationClaim);
   const context = options?.context;
 
@@ -808,7 +813,10 @@ export function resolveSummaryWithDurationPolicy(
     injectFn: (text, dur, loc, ctx) => injectDurationPhrase(text, dur, loc, ctx),
   });
   let working = owned.summary;
-  const durationDiagnostics = owned.diagnostics;
+  const durationDiagnostics: SummaryDurationOwnershipDiagnostics = {
+    ...owned.diagnostics,
+    summaryDurationFinalizerRevision: SUMMARY_DURATION_FINALIZER_REVISION,
+  };
 
   // A previously-saved or independently produced summary may already carry the duration
   // claim but as a standalone leading/trailing fragment — repair the structure first.

@@ -81,6 +81,22 @@ const hasButton = blob.includes(RESET_BUTTON);
 const hasChannel = blob.includes(CHANNEL_LABEL);
 const hasStatus = blob.includes(STATUS_LABEL);
 
+const SUMMARY_RUNTIME_REVISION = 'summary-runtime-279-v1';
+const SUMMARY_SPLITTER_REVISION = 'hindi-decimal-safe-split-v1';
+const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v1';
+const SUMMARY_DURATION_REVISION = 'duration-double-pass-v1';
+for (const marker of [
+  SUMMARY_RUNTIME_REVISION,
+  SUMMARY_SPLITTER_REVISION,
+  SUMMARY_GROUNDING_REVISION,
+  SUMMARY_DURATION_REVISION,
+]) {
+  if (!blob.includes(marker)) {
+    fail(`missing Summary runtime revision marker "${marker}"`);
+  }
+}
+log('OK Summary runtime revision markers present');
+
 if (expect === 'enabled') {
   if (!hasMarker) fail(`missing marker ${MARKER}`);
   if (!hasButton) fail(`missing button text "${RESET_BUTTON}"`);
@@ -107,7 +123,7 @@ if (expect === 'enabled') {
   if (!blob.includes(SUMMARY_AI_COPY)) {
     fail(`missing "${SUMMARY_AI_COPY}"`);
   }
-  log('OK enabled assets contain marker, button, build-channel labels, and Experience AI + Summary AI trace markers');
+  log('OK enabled assets contain marker, button, build-channel labels, Experience AI + Summary AI trace markers, and Summary runtime revision markers');
 } else if (hasMarker) {
   fail(`enabled marker must be absent in disabled assets (${MARKER})`);
 } else if (blob.includes(EXPERIENCE_AI_TRACE_MARKER)) {
@@ -115,5 +131,5 @@ if (expect === 'enabled') {
 } else if (blob.includes(SUMMARY_AI_TRACE_MARKER)) {
   fail(`Summary AI trace marker must be absent in disabled assets (${SUMMARY_AI_TRACE_MARKER})`);
 } else {
-  log(`OK disabled assets: marker absent (button=${hasButton}, channel=${hasChannel}, status=${hasStatus})`);
+  log(`OK disabled assets: marker absent (button=${hasButton}, channel=${hasChannel}, status=${hasStatus}); Summary runtime revisions still present`);
 }

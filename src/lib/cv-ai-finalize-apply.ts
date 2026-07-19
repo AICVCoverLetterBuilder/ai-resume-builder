@@ -27,9 +27,13 @@ import {
   resolveSummaryWithDurationPolicy,
   stripUnsupportedSummaryFluff,
   normalizeHindiSummaryPerspective,
+  SUMMARY_DURATION_FINALIZER_REVISION,
   type DurationIntegrationContext,
 } from './cv-content-quality';
-import { analyzeHindiSummaryEmploymentQuality } from './cv-summary-grounding';
+import {
+  analyzeHindiSummaryEmploymentQuality,
+  SUMMARY_BUILDER_REVISION,
+} from './cv-summary-grounding';
 import {
   deterministicLocalizedBulletsFromCanonical,
   deterministicLocalizedSummaryFromCanonical,
@@ -77,8 +81,12 @@ import {
 } from './cv-experience-perspective';
 import {
   evaluateRoleDutyConsistency,
+  matchesWarehouseOccupationalTitle,
   resolveOccupationalTitleForSummary,
 } from './cv-role-title';
+
+/** Runtime revision for the production Summary finalize → apply orchestration. */
+export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-279-v1' as const;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -351,6 +359,11 @@ export type FinalizeCvAiFieldResult = {
     finalUnitRoleSlots?: string[];
     hindiFiniteKaAnubhavCollision?: boolean;
     durationFinalizerIdempotent?: boolean;
+    summaryPipelineRevision?: string;
+    summaryBuilderRevision?: string;
+    summaryUnitSplitterRevision?: string;
+    summaryGroundingRevision?: string;
+    summaryDurationFinalizerRevision?: string;
   };
 };
 
@@ -792,8 +805,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const coverageHardFail = Boolean(
       empQ
       && empQ.currentRoleConcreteFactCoverage < 2
-      && /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist)/iu.test(
-        `${context.role || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.currentEntryDuties || ''}`,
+      && (
+        matchesWarehouseOccupationalTitle(
+          `${context.role || ''} ${entryDuties.currentRoleTitle || ''}`,
+        )
+        || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल)/iu.test(
+          entryDuties.currentEntryDuties || '',
+        )
       ),
     );
     // Real second-pass idempotence: duration finalizer must not mutate accepted text.
@@ -809,7 +827,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           context,
         },
       );
-      durationFinalizerIdempotent = secondPass.summary.trim() === result.text.trim();
+      const normalizeForIdempotence = (s: string) => s.replace(/\s+/g, ' ').trim();
+      durationFinalizerIdempotent = normalizeForIdempotence(secondPass.summary)
+        === normalizeForIdempotence(result.text);
     }
     const blockedForDuration = Boolean(
       result.countedAsSuccess && (!durationValidationPassed || !durationFinalizerIdempotent),
@@ -927,6 +947,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalUnitRoleSlots: empQ?.finalUnitRoleSlots,
         hindiFiniteKaAnubhavCollision: empQ?.hindiFiniteKaAnubhavCollision,
         durationFinalizerIdempotent,
+        summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
+        summaryBuilderRevision: SUMMARY_BUILDER_REVISION,
+        summaryUnitSplitterRevision: empQ?.summaryUnitSplitterRevision,
+        summaryGroundingRevision: empQ?.summaryGroundingRevision,
+        summaryDurationFinalizerRevision:
+          owned?.summaryDurationFinalizerRevision
+          || SUMMARY_DURATION_FINALIZER_REVISION,
         rejectionStage: blockedForDuration
           ? 'independent_final_duration_verification'
           : blockedForPerspective

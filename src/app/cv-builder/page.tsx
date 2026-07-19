@@ -931,6 +931,12 @@ export default function CVBuilderPage() {
     const previousContentLocale = liveCvAtPress.canonicalSnapshot?.canonicalLocale ?? null;
     latestSummaryRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
+    const primaryExpForJobCtx = (liveCvAtPress.experience || []).find((e) => e.isPresent)
+      || (liveCvAtPress.experience || [])[0];
+    const summaryJobContext = buildExperienceJobContext({
+      position: primaryExpForJobCtx?.position || liveCvAtPress.personal?.jobTitle,
+      locale: requestedLocale,
+    });
     const summaryDiag = new SummaryAiDiagnosticSession({
       uiLocale: locale,
       requestedLocale,
@@ -940,6 +946,7 @@ export default function CVBuilderPage() {
       requestId: reqCtx.requestId,
       usageCountBefore: countBefore,
       operationMode,
+      jobContextHash: summaryJobContext.key,
     });
     summaryDiag.recordCvSnapshot(liveCvAtPress, liveSummaryAtPress);
     try {
@@ -1085,6 +1092,37 @@ export default function CVBuilderPage() {
         await summaryDiag.resolveVersions();
         summaryDiag.commit();
         toast.error(msg ?? aiErrorMessage(failCode, locale));
+        return;
+      }
+      const finalizedText = (finalizedGate.text || '').trim();
+      const identicalNoop = Boolean(finalizedText && finalizedText === liveSummaryAtPress);
+      if (identicalNoop) {
+        finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: null,
+          fallbackUsed: finalizedGate.origin === 'deterministic_fallback',
+          responseSource: 'blocked',
+        });
+        summaryDiag.recordFinalizeResult(finalizedGate);
+        summaryDiag.recordVisibleApply(true, countBefore, finalizedText);
+        await summaryDiag.resolveVersions();
+        summaryDiag.commit();
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: 'summary_generate',
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: true,
+          reason: 'summary_ai_noop_identical',
+          newContentLocale: requestedLocale,
+        });
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));

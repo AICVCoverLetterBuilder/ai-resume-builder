@@ -31,6 +31,11 @@ import {
 
 export const SUMMARY_MAX_WORDS = 90;
 
+/** Runtime revision — returned by the splitter/grounding/builder that executed. */
+export const SUMMARY_UNIT_SPLITTER_REVISION = 'hindi-decimal-safe-split-v1' as const;
+export const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v1' as const;
+export const SUMMARY_BUILDER_REVISION = 'entry-owned-grounding-v1' as const;
+
 /** Unsupported summary inventions (always reject — hygiene ≠ health/quality claims). */
 const UNSUPPORTED_SUMMARY_CLAIM_PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /\bhigh[- ]?quality\s+dishes?\b/iu, label: 'high-quality dishes' },
@@ -280,6 +285,7 @@ const HINDI_MONTH_FROM_RE =
 
 /** Split Summary units on Hindi danda / ! / ? / non-decimal periods. */
 export function splitHindiSummaryUnits(text: string): string[] {
+  void SUMMARY_UNIT_SPLITTER_REVISION;
   const units: string[] = [];
   let buf = '';
   const s = (text || '').replace(/\s+/g, ' ').trim();
@@ -332,6 +338,9 @@ export type HindiSummaryEmploymentQuality = {
   priorRoleSemanticDuplicationDetected: boolean;
   hindiFiniteKaAnubhavCollision: boolean;
   finalUnitRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
+  /** Non-PII revision markers from the grounding/splitter implementations that ran. */
+  summaryUnitSplitterRevision: typeof SUMMARY_UNIT_SPLITTER_REVISION;
+  summaryGroundingRevision: typeof SUMMARY_GROUNDING_REVISION;
 };
 
 /** Resolve which Experience index owns the current (Present) role in a fact set. */
@@ -584,6 +593,8 @@ export function analyzeHindiSummaryEmploymentQuality(
     priorRoleSemanticDuplicationDetected,
     hindiFiniteKaAnubhavCollision,
     finalUnitRoleSlots,
+    summaryUnitSplitterRevision: SUMMARY_UNIT_SPLITTER_REVISION,
+    summaryGroundingRevision: SUMMARY_GROUNDING_REVISION,
   };
 }
 
@@ -1184,6 +1195,9 @@ export function buildConciseGroundedSummary(
   duration?: ExperienceDuration,
   options?: { includeSkills?: boolean },
 ): string {
+  // Marker must be reachable from the production builder path (not diagnostics-only).
+  const builderRevision = SUMMARY_BUILDER_REVISION;
+  void builderRevision;
   const g = tone(gender);
   const genderNorm = normalizeCoverLetterGender(gender);
   const profileTitle = factSet.facts.find((f) => f.type === 'job_title')?.value || '';
