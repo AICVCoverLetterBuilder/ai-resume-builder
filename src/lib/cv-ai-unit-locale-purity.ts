@@ -112,6 +112,15 @@ export function stripLatinProperNounIslands(text: string): string {
 }
 
 export function detectAiContentScript(text: string): AiContentScript {
+  const raw = (text || '').trim();
+  // Devanagari + Serbian/Croatian diacritic Latin (e.g. job title injected into Hindi)
+  // is mixed prose — do not treat the Latin span as a brand island.
+  if (DEVANAGARI.test(raw) && SC_DIACRITIC.test(raw)) {
+    return 'mixed';
+  }
+  if (DEVANAGARI.test(raw) && LATIN_LETTER.test(raw) && SR_CLAUSE_RE.test(raw)) {
+    return 'mixed';
+  }
   // Prefer script after removing brands/tech so "Hindi + Ztrew" is still Hindi.
   const t = stripLatinProperNounIslands(text) || stripNeutralAiTokens(text);
   if (!t) return 'unknown';

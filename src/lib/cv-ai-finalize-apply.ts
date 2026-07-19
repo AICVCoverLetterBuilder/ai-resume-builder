@@ -1036,10 +1036,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     stage: string,
   ): FinalizeCvAiFieldResult | null => {
     const candidate = (text || '').trim();
+    const purityProbe = candidate
+      ? validateAiUnitLocalePurity(candidate, locale, {
+        kind: 'experience_bullet',
+        requireUnits: true,
+      })
+      : null;
     if (!candidate) {
       lastRejectStage = stage;
-      lastRejectReason = 'experience_generation_failed';
-      if (stage.includes('fallback')) generationFallbackFailureReason = 'empty_fallback';
+      lastRejectReason = stage.includes('fallback')
+        ? 'empty_generation_fallback'
+        : 'experience_generation_failed';
+      if (stage.includes('fallback')) generationFallbackFailureReason = 'empty_generation_fallback';
       else {
         generationProviderValidationPassed = false;
         generationProviderRejectionReason = 'experience_generation_failed';
@@ -1087,7 +1095,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || pass.reason === 'mixed_language'
       )
         && textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')
-        && !isWrongLanguageAiOutput(candidate, locale);
+        && !isWrongLanguageAiOutput(candidate, locale)
+        && Boolean(purityProbe?.ok);
       if (!enhancementOnly && !localeSoftOk) {
         lastRejectStage = stage;
         lastRejectReason = pass.reason === 'locale_mismatch' || pass.reason === 'wrong_language' || pass.reason === 'wrong_script' || pass.reason === 'mixed_language'
@@ -1116,6 +1125,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       return null;
     }
     const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
+    const purity = purityProbe || validateAiUnitLocalePurity(candidate, locale, {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    });
     const isClientFallback = origin === 'deterministic_fallback';
     if (isClientFallback) {
       fallbackApplied = true;
@@ -1145,6 +1158,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         requiredFactCount: 0,
         finalBulletCount: bulletCount,
         finalBulletScripts: detectBulletScripts(candidate),
+        detectedLocaleByBullet: purity.detectedLocaleByUnit,
+        detectedScriptByBullet: purity.detectedScriptByUnit,
+        wrongLocaleBulletCount: purity.wrongLocaleUnitCount,
+        wrongScriptBulletCount: purity.wrongScriptUnitCount,
+        mixedLanguageBulletCount: purity.mixedLanguageUnitCount,
+        sourceLanguageLeakageDetected: purity.sourceLanguageLeakageDetected,
+        targetLocalePurityPassed: purity.targetLocalePurityPassed,
+        targetLocale: locale,
+        targetScript: resolveTargetScriptForLocale(locale),
         rejectionStage: undefined,
         typedFailureReason: undefined,
         countedAsSuccess: true,
@@ -1152,6 +1174,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         relevanceValidationPassed: true,
         generationFallbackAttempted: isClientFallback || generationFallbackAttempted,
         generationFallbackApplied: isClientFallback,
+        contentLocaleUpdatedAfterApply: true,
+        contentLocaleAfterApply: locale,
       },
     };
   };
@@ -1645,8 +1669,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : '';
     const jobCtxFallback = normalizeLocaleText(universalFallback || catalogueFallback, locale);
     if (!jobCtxFallback.trim()) {
-      generationFallbackFailureReason = 'empty_fallback';
-      lastRejectReason = 'experience_generation_failed';
+      generationFallbackFailureReason = 'empty_generation_fallback';
+      lastRejectReason = 'empty_generation_fallback';
       lastRejectStage = 'job_context_generation_fallback';
     }
     let genAccepted = tryAcceptGeneration(
@@ -1833,10 +1857,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           });
         }
       }
-      lastRejectReason = translatedGate.ok
-        ? 'locale_mismatch'
-        : (translatedGate.reason || 'experience_cv_perspective_first_person');
-      lastRejectStage = 'cross_locale_translation_fallback';
+      // Preserve the first blocking reason from tryAccept (e.g. semantic coverage);
+      // only invent locale_mismatch when tryAccept never ran or left no reason.
+      if (!lastRejectReason) {
+        lastRejectReason = translatedGate.ok
+          ? 'locale_mismatch'
+          : (translatedGate.reason || 'experience_cv_perspective_first_person');
+      }
+      if (!lastRejectStage || lastRejectStage === 'init') {
+        lastRejectStage = 'cross_locale_translation_fallback';
+      }
       // Do not fall through to same-language source-preserving for a different target.
     } else {
     const built = buildSourcePreservingExperienceBulletsWithProvenance(

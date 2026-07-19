@@ -191,8 +191,58 @@ export function freeTextTitleStems(position: string): string[] {
 }
 
 /**
+ * Soft semantic domain from an arbitrary free-text job title.
+ * Not an occupation catalogue — only coarse action-frame families for
+ * generation relevance and locale-pure fallback shells.
+ */
+export type FreeTextJobDomain =
+  | 'design'
+  | 'warehouse'
+  | 'software'
+  | 'hospitality'
+  | 'healthcare'
+  | 'documentation'
+  | 'general';
+
+export function classifyFreeTextJobDomain(position?: string | null): FreeTextJobDomain {
+  const t = foldAiTextToken(position || '');
+  if (!t) return 'general';
+  if (/(dizajn|design|grafick|graphic|visual|vizuel|ui\b|ux\b|일러스트|デザイン|تصميم|डिज़ाइन)/.test(t)) {
+    return 'design';
+  }
+  if (/(skladist|warehouse|magacin|lager|logist|inventar|inventory|robu|goods)/.test(t)) {
+    return 'warehouse';
+  }
+  if (/(software|developer|programer|engineer|frontend|backend|devops|coder)/.test(t)) {
+    return 'software';
+  }
+  if (/(cook|chef|kuvar|kuhar|bartender|waiter|konobar|baker|pekar|restaurant)/.test(t)) {
+    return 'hospitality';
+  }
+  if (/(nurse|doctor|physician|medic|terapeut|pharmacist|apotekar)/.test(t)) {
+    return 'healthcare';
+  }
+  if (/(administr|document|dokument|office|računovod|accounting|sekretar|assistant|توثيق|وثائق)/.test(t)) {
+    return 'documentation';
+  }
+  return 'general';
+}
+
+const DOMAIN_CUE_RE: Record<FreeTextJobDomain, RegExp> = {
+  design: /(?:vizuel|visual|grafick|graphic|dizajn|design|identitet|identity|materijal|material|format|ekran|screen|platform|दृश्य|ग्राफिक|डिज़ाइन|تصميم|بصرية|رسومية|ビジュアル|グラフィック|визуал|графическ|дизайн)/iu,
+  warehouse: /(?:skladist|warehouse|rob\w*|goods|inventar|inventory|dokument|document|गोदाम|माल|مستودع|بضائع|倉庫|商品|товар|склад)/iu,
+  software: /(?:code|api|feature|aplikativ|software|developer|開発|विकास)/iu,
+  hospitality: /(?:jel\w*|dish|cuisine|kitchen|kuhinj|bar|guest|hygiene|व्यंजन|रसोई)/iu,
+  healthcare: /(?:patient|pacijen|care|nurs|record|chart|пациент)/iu,
+  documentation: /(?:dokument|document|evidenc|record|status|информац|दस्तावे|रिकॉर्ड|توثيق|وثائق|سجلات|書類|文書|記録|документ|запис)/iu,
+  general: /(?:dokument|document|record|информац|coord|koordin|update|ažur|समन्वय|अद्यतन|تحدّث|وثائق|سجلات|日常|記録|文書|документ|запис)/iu,
+};
+
+/**
  * Soft relevance: generated text should share ≥1 stem with the free-text title
  * when stems exist. Empty title → pass (context may be industry/level only).
+ * Cross-script titles (e.g. Serbian Latin title → Hindi Devanagari bullets)
+ * use semantic domain cues instead of literal stem overlap.
  */
 export function textLooksRelevantToFreeTextTitle(
   text: string,
@@ -202,10 +252,32 @@ export function textLooksRelevantToFreeTextTitle(
   if (!stems.length) return true;
   const folded = foldAiTextToken(text);
   if (!folded) return false;
-  return stems.some((stem) => {
+  if (stems.some((stem) => {
     const needle = stem.slice(0, Math.min(stem.length, Math.max(4, Math.floor(stem.length * 0.75))));
     return needle.length >= 2 && folded.includes(needle);
-  });
+  })) {
+    return true;
+  }
+  const domain = classifyFreeTextJobDomain(position);
+  return DOMAIN_CUE_RE[domain].test(text) || DOMAIN_CUE_RE[domain].test(folded);
+}
+
+/** True when `position` uses a script family incompatible with embedding in `locale` prose. */
+export function jobTitleScriptConflictsWithLocale(position: string, locale: Locale): boolean {
+  const p = (position || '').trim();
+  if (!p) return false;
+  const hasDev = /[\u0900-\u097F]/u.test(p);
+  const hasAr = /[\u0600-\u06FF]/u.test(p);
+  const hasCjk = /[\u3040-\u30FF\u3400-\u9FFF]/u.test(p);
+  const hasCyr = /[\u0400-\u04FF]/u.test(p);
+  const hasLat = /[A-Za-zÀ-ÖØ-öø-ÿŠšŽžĆćČčĐđ]/u.test(p);
+  if (locale === 'hi') return hasLat || hasAr || hasCjk || hasCyr;
+  if (locale === 'ar') return hasLat || hasDev || hasCjk || hasCyr;
+  if (locale === 'ja') return hasLat || hasDev || hasAr || hasCyr;
+  if (locale === 'ru') return hasDev || hasAr || hasCjk || (hasLat && /[čćžšđ]/iu.test(p));
+  // Latin targets: non-Latin titles should not be pasted into prose.
+  if (hasDev || hasAr || hasCjk) return true;
+  return false;
 }
 
 const GENERIC_FILLER_RE =

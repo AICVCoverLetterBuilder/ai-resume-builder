@@ -14,12 +14,15 @@ import { hasUnsupportedRegulatedPharmacyClaims } from './cv-experience-job-conte
 import {
   aiOutputLooksGenericFillerOnly,
   aiOutputRepeatsFullTitleUnnaturally,
+  classifyFreeTextJobDomain,
   countAiUnsafeInventionClaims,
   freeTextTitleStems,
+  jobTitleScriptConflictsWithLocale,
   resolveAiOperationMode,
   textLooksRelevantToFreeTextTitle,
   toExperienceAiOperationModeCompat,
   type ExperienceAiOperationModeCompat,
+  type FreeTextJobDomain,
 } from './cv-ai-operation-contract';
 
 export type ExperienceAiOperationMode = ExperienceAiOperationModeCompat;
@@ -124,6 +127,22 @@ export function validateExperienceGenerationOutput(
       unsupportedClaimCount: 0,
     };
   }
+  const titleDomain = classifyFreeTextJobDomain(options.position || '');
+  // Cross-domain leakage: design titles must not absorb warehouse/goods duties.
+  if (
+    titleDomain === 'design'
+    && /(?:warehouse|skladist|incoming\s+goods|deliver\s+goods|गोदाम|माल और|आवाजाही|robu|isporuč|inventar)/iu.test(text)
+  ) {
+    return {
+      ok: false,
+      reason: 'experience_generation_not_relevant',
+      generatedBulletCount,
+      relevanceValidationPassed: false,
+      perspectiveValidationPassed: true,
+      tenseValidationPassed: true,
+      unsupportedClaimCount: 0,
+    };
+  }
   const relevanceValidationPassed = generationTextLooksRelevantToTitle(
     text,
     options.position || '',
@@ -189,7 +208,7 @@ export function validateExperienceGenerationOutput(
 
 function roleLabel(position: string, female: boolean, locale: Locale): string {
   const p = (position || '').trim();
-  if (p) return p;
+  if (p && !jobTitleScriptConflictsWithLocale(p, locale)) return p;
   if (locale === 'sr' || locale === 'hr') return female ? 'profesionalka' : 'profesionalac';
   if (locale === 'hi') return 'पेशेवर';
   if (locale === 'ar') return 'المهني';
@@ -204,17 +223,17 @@ function roleLabel(position: string, female: boolean, locale: Locale): string {
 }
 
 /**
- * Soft domain phrasing from free-text title — strips common role prefixes so
- * fallback bullets stay title-relevant without repeating the full title thrice.
+ * Soft domain phrasing from free-text title — never returns a foreign-script
+ * title for injection into a different target locale's prose.
  */
-function softDomainFromTitle(position: string): string {
+function softDomainFromTitle(position: string, locale: Locale): string {
   const raw = (position || '').trim();
   if (!raw) return '';
+  if (jobTitleScriptConflictsWithLocale(raw, locale)) return '';
   const stripped = raw.replace(
     /^(koordinator(?:ka)?|coordinator|specijalista|specialist|analitičar(?:ka)?|analyst|menadžer(?:ka)?|manager|saradnik(?:ca)?|assistant|responsável|coordenador(?:a)?|responsable|radnik(?:ca)?|radnica|worker|associate)\s+/iu,
     '',
   ).trim();
-  // Prefer the domain after common prepositions (u skladištu → skladišta-style phrase).
   const afterPrep = stripped.match(/\b(?:u|za|za|in|for)\s+(.+)$/iu)?.[1]?.trim();
   if (afterPrep && afterPrep.length >= 4 && afterPrep.length < stripped.length) {
     return afterPrep;
@@ -222,10 +241,195 @@ function softDomainFromTitle(position: string): string {
   return stripped || raw;
 }
 
+type DutyTriple = [string, string, string];
+
+/** Locale-pure shells keyed by soft semantic domain — no raw foreign titles. */
+function domainShells(
+  domain: FreeTextJobDomain,
+  locale: Locale,
+  present: boolean,
+  female: boolean,
+): DutyTriple | null {
+  if (locale === 'hi') {
+    if (domain === 'design') {
+      if (present) {
+        return female
+          ? [
+            'विभिन्न परियोजनाओं के लिए दृश्य सामग्री और ग्राफिक तत्व तैयार करती है।',
+            'आवश्यकताओं के अनुसार डिज़ाइन सामग्री की समीक्षा और अनुकूलन करती है।',
+            'अंतिम डिज़ाइन फ़ाइलें तैयार करती है और उन्हें विभिन्न प्रारूपों के लिए अनुकूलित करती है।',
+          ]
+          : [
+            'विभिन्न परियोजनाओं के लिए दृश्य सामग्री और ग्राफिक तत्व तैयार करता है।',
+            'आवश्यकताओं के अनुसार डिज़ाइन सामग्री की समीक्षा और अनुकूलन करता है।',
+            'अंतिम डिज़ाइन फ़ाइलें तैयार करता है और उन्हें विभिन्न प्रारूपों के लिए अनुकूलित करता है।',
+          ];
+      }
+      return [
+        'विभिन्न परियोजनाओं के लिए दृश्य सामग्री और ग्राफिक तत्व तैयार किए।',
+        'आवश्यकताओं के अनुसार डिज़ाइन सामग्री की समीक्षा और अनुकूलन किया।',
+        'अंतिम डिज़ाइन फ़ाइलें तैयार कीं और उन्हें विभिन्न प्रारूपों के लिए अनुकूलित किया।',
+      ];
+    }
+    if (domain === 'warehouse') {
+      if (present) {
+        return female
+          ? [
+            'आने वाले माल और संबंधित दस्तावेज़ों की जाँच कर सही रिकॉर्ड सुनिश्चित करती है।',
+            'गोदाम के रिकॉर्ड अद्यतन करती है और सामान को व्यवस्थित रखती है।',
+            'सहकर्मियों के साथ माल की तैयारी और आवाजाही का समन्वय करती है।',
+          ]
+          : [
+            'आने वाले माल और संबंधित दस्तावेज़ों की जाँच कर सही रिकॉर्ड सुनिश्चित करता है।',
+            'गोदाम के रिकॉर्ड अद्यतन करता है और सामान को व्यवस्थित रखता है।',
+            'सहकर्मियों के साथ माल की तैयारी और आवाजाही का समन्वय करता है।',
+          ];
+      }
+      return [
+        'आने वाले माल और संबंधित दस्तावेज़ों की जाँच कर सही रिकॉर्ड सुनिश्चित किया।',
+        'गोदाम के रिकॉर्ड अद्यतन किए और सामान को व्यवस्थित रखा।',
+        'सहकर्मियों के साथ माल की तैयारी और आवाजाही का समन्वय किया।',
+      ];
+    }
+    if (present) {
+      return female
+        ? [
+          'दैनिक कार्य रिकॉर्ड की समीक्षा करती है और डेटा की पूर्णता सुनिश्चित करती है।',
+          'कार्य दस्तावेज़ अद्यतन करती है और खुली मदों की स्थिति पर नज़र रखती है।',
+          'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करती है।',
+        ]
+        : [
+          'दैनिक कार्य रिकॉर्ड की समीक्षा करता है और डेटा की पूर्णता सुनिश्चित करता है।',
+          'कार्य दस्तावेज़ अद्यतन करता है और खुली मदों की स्थिति पर नज़र रखता है।',
+          'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करता है।',
+        ];
+    }
+    return [
+      'दैनिक कार्य रिकॉर्ड की समीक्षा की और डेटा की पूर्णता सुनिश्चित की।',
+      'कार्य दस्तावेज़ अद्यतन किए और खुली मदों की स्थिति पर नज़र रखी।',
+      'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा किया।',
+    ];
+  }
+
+  if (locale === 'en') {
+    if (domain === 'design') {
+      return present
+        ? [
+          'Create visual materials and graphic elements for digital products and platforms.',
+          'Review and adapt design materials according to project requirements.',
+          'Prepare final design files and adjust formats for different screens.',
+        ]
+        : [
+          'Created visual materials and graphic elements for digital products and platforms.',
+          'Reviewed and adapted design materials according to project requirements.',
+          'Prepared final design files and adjusted formats for different screens.',
+        ];
+    }
+    if (domain === 'warehouse') {
+      return present
+        ? [
+          'Check incoming goods and related documentation for accurate recording.',
+          'Update warehouse records and keep goods orderly.',
+          'Coordinate preparation and movement of goods with colleagues.',
+        ]
+        : [
+          'Checked incoming goods and related documentation for accurate recording.',
+          'Updated warehouse records and kept goods orderly.',
+          'Coordinated preparation and movement of goods with colleagues.',
+        ];
+    }
+  }
+
+  if (locale === 'ar') {
+    if (domain === 'design') {
+      return [
+        'تعدّ مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
+        'تراجع وتكيّف مواد التصميم وفق متطلبات المشروع.',
+        'تعدّ ملفات التصميم النهائية وتضبط الصيغ لشاشات مختلفة.',
+      ];
+    }
+    if (domain === 'warehouse') {
+      return [
+        'تتحقق من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
+        'تحدّث سجلات المستودع وتحافظ على ترتيب البضائع.',
+        'تنسّق إعداد البضائع وحركتها مع الزملاء.',
+      ];
+    }
+  }
+
+  if (locale === 'ja') {
+    if (domain === 'design') {
+      return [
+        'デジタル製品やプラットフォーム向けにビジュアル素材とグラフィック要素を作成する。',
+        '要件に合わせてデザイン素材を確認し調整する。',
+        '最終デザインファイルを準備し、画面ごとに形式を調整する。',
+      ];
+    }
+    if (domain === 'warehouse') {
+      return [
+        '入荷した商品と関連書類の正確性を確認する。',
+        '倉庫記録を更新し、保管品の整然とした配置を維持する。',
+        '同僚と連携して商品の準備と移動を調整する。',
+      ];
+    }
+  }
+
+  if (locale === 'ru') {
+    if (domain === 'design') {
+      return present
+        ? [
+          'Создаёт визуальные материалы и графические элементы для цифровых продуктов и платформ.',
+          'Проверяет и адаптирует дизайн-материалы в соответствии с требованиями проекта.',
+          'Готовит итоговые дизайн-файлы и настраивает форматы для разных экранов.',
+        ]
+        : [
+          'Создавал визуальные материалы и графические элементы для цифровых продуктов и платформ.',
+          'Проверял и адаптировал дизайн-материалы в соответствии с требованиями проекта.',
+          'Готовил итоговые дизайн-файлы и настраивал форматы для разных экранов.',
+        ];
+    }
+    if (domain === 'warehouse') {
+      return present
+        ? [
+          'Проверяет поступающие товары и сопроводительные документы для точного учёта.',
+          'Обновляет складские записи и поддерживает порядок хранения товаров.',
+          'Согласовывает подготовку и перемещение товаров с коллегами.',
+        ]
+        : [
+          'Проверял поступающие товары и сопроводительные документы для точного учёта.',
+          'Обновлял складские записи и поддерживал порядок хранения товаров.',
+          'Согласовывал подготовку и перемещение товаров с коллегами.',
+        ];
+    }
+  }
+
+  if ((locale === 'sr' || locale === 'hr') && domain === 'design') {
+    return present
+      ? [
+        'Kreira vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.',
+        'Pregleda i prilagođava dizajn materijale prema zahtevima projekta.',
+        'Priprema finalne dizajn fajlove i prilagođava formate za različite ekrane.',
+      ]
+      : [
+        female
+          ? 'Kreirala je vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.'
+          : 'Kreirao je vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.',
+        female
+          ? 'Pregledala je i prilagođavala dizajn materijale prema zahtevima projekta.'
+          : 'Pregledao je i prilagođavao dizajn materijale prema zahtevima projekta.',
+        female
+          ? 'Pripremala je finalne dizajn fajlove i prilagođavala formate za različite ekrane.'
+          : 'Pripremao je finalne dizajn fajlove i prilagođavao formate za različite ekrane.',
+      ];
+  }
+
+  return null;
+}
+
 /**
  * Deterministic job-context generation fallback (not source-preserving).
- * Grounds arbitrary free-text titles without occupation catalogues or keyword
- * branches. Separate from source-preserving enhancement fallback.
+ * Grounds arbitrary free-text titles without occupation catalogues.
+ * Never injects foreign-script job titles into target-locale prose.
  */
 export function buildJobContextGenerationFallback(options: {
   locale: Locale;
@@ -238,21 +442,30 @@ export function buildJobContextGenerationFallback(options: {
   const present = options.isPresent !== false;
   const g = String(options.gender || '').toLowerCase();
   const female = g === 'female' || g === 'f' || g === 'ženski' || g === 'zenski';
+  const domain = classifyFreeTextJobDomain(options.position || '');
+  void options.industry;
+
+  const specialized = domainShells(domain, locale, present, female);
+  if (specialized) {
+    return formatExperienceBullets([...specialized]);
+  }
+
+  // Safe domain phrase only when script-compatible with the target locale.
+  const domainPhrase = softDomainFromTitle(options.position || '', locale);
   const role = roleLabel(options.position || '', female, locale);
-  const domain = softDomainFromTitle(options.position || '') || role;
-  void options.industry; // available for future soft framing; not a catalogue key
+  const domainOrRole = domainPhrase || role;
 
   if (locale === 'sr' || locale === 'hr') {
     const lines = present
       ? [
-        `Pregleda dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domain} i proverava potpunost podataka.`,
+        `Pregleda dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domainOrRole} i proverava potpunost podataka.`,
         'Ažurira evidenciju i prati status dokumentacije u skladu sa potrebama radnog mesta.',
         'Koordiniše razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.',
       ]
       : [
         female
-          ? `Pregledala je dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domain} i proveravala potpunost podataka.`
-          : `Pregledao je dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domain} i proveravao potpunost podataka.`,
+          ? `Pregledala je dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domainOrRole} i proveravala potpunost podataka.`
+          : `Pregledao je dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domainOrRole} i proveravao potpunost podataka.`,
         female
           ? 'Ažurirala je evidenciju i pratila status dokumentacije u skladu sa potrebama radnog mesta.'
           : 'Ažurirao je evidenciju i pratio status dokumentacije u skladu sa potrebama radnog mesta.',
@@ -266,28 +479,35 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'en') {
     return formatExperienceBullets(present
       ? [
-        `Review day-to-day records related to ${domain} and verify data completeness.`,
+        `Review day-to-day records related to ${domainOrRole} and verify data completeness.`,
         'Update work documentation and track open items according to role needs.',
         'Coordinate information sharing with colleagues to complete documentation on time.',
       ]
       : [
-        `Reviewed day-to-day records related to ${domain} and verified data completeness.`,
+        `Reviewed day-to-day records related to ${domainOrRole} and verified data completeness.`,
         'Updated work documentation and tracked open items according to role needs.',
         'Coordinated information sharing with colleagues to complete documentation on time.',
       ]);
   }
 
   if (locale === 'hi') {
-    return formatExperienceBullets([
-      `${domain} से जुड़े दैनिक रिकॉर्ड की समीक्षा करता है और डेटा की पूर्णता जाँचता है।`,
-      'कार्य दस्तावेज़ अपडेट करता है और खुली मदों की स्थिति पर नज़र रखता है।',
-      'सहयोगियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करता है।',
-    ]);
+    // Domain shells above cover design/warehouse; generic Hindi never embeds Latin titles.
+    return formatExperienceBullets(present
+      ? [
+        'दैनिक कार्य रिकॉर्ड की समीक्षा करती है और डेटा की पूर्णता सुनिश्चित करती है।',
+        'कार्य दस्तावेज़ अद्यतन करती है और खुली मदों की स्थिति पर नज़र रखती है।',
+        'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करती है।',
+      ]
+      : [
+        'दैनिक कार्य रिकॉर्ड की समीक्षा की और डेटा की पूर्णता सुनिश्चित की।',
+        'कार्य दस्तावेज़ अद्यतन किए और खुली मदों की स्थिति पर नज़र रखी।',
+        'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा किया।',
+      ]);
   }
 
   if (locale === 'ar') {
     return formatExperienceBullets([
-      `يراجع السجلات اليومية المرتبطة بـ ${domain} ويتحقق من اكتمال البيانات.`,
+      'يراجع السجلات اليومية المرتبطة بالدور ويتحقق من اكتمال البيانات.',
       'يحدّث وثائق العمل ويتابع البنود المفتوحة وفق احتياجات الدور.',
       'ينسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
     ]);
@@ -295,7 +515,7 @@ export function buildJobContextGenerationFallback(options: {
 
   if (locale === 'ja') {
     return formatExperienceBullets([
-      `${domain}に関する日常記録を確認し、データの完全性を検証する。`,
+      '日常業務に関する記録を確認し、データの完全性を検証する。',
       '業務文書を更新し、未完了項目の状況を確認する。',
       '関係者と情報を調整し、文書を期限内に完了させる。',
     ]);
@@ -304,12 +524,12 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'de') {
     return formatExperienceBullets(present
       ? [
-        `Prüft tägliche Unterlagen im Bereich ${domain} und kontrolliert die Vollständigkeit der Daten.`,
+        `Prüft tägliche Unterlagen im Bereich ${domainOrRole} und kontrolliert die Vollständigkeit der Daten.`,
         'Aktualisiert Arbeitsdokumentation und verfolgt offene Vorgänge.',
         'Koordiniert den Informationsaustausch mit Kolleginnen und Kollegen zur fristgerechten Fertigstellung.',
       ]
       : [
-        `Prüfte tägliche Unterlagen im Bereich ${domain} und kontrollierte die Vollständigkeit der Daten.`,
+        `Prüfte tägliche Unterlagen im Bereich ${domainOrRole} und kontrollierte die Vollständigkeit der Daten.`,
         'Aktualisierte Arbeitsdokumentation und verfolgte offene Vorgänge.',
         'Koordinierte den Informationsaustausch mit Kolleginnen und Kollegen zur fristgerechten Fertigstellung.',
       ]);
@@ -318,12 +538,12 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'es') {
     return formatExperienceBullets(present
       ? [
-        `Revisa registros diarios relacionados con ${domain} y verifica la integridad de los datos.`,
+        `Revisa registros diarios relacionados con ${domainOrRole} y verifica la integridad de los datos.`,
         'Actualiza la documentación de trabajo y sigue asuntos abiertos.',
         'Coordina el intercambio de información con colegas para completar la documentación a tiempo.',
       ]
       : [
-        `Revisó registros diarios relacionados con ${domain} y verificó la integridad de los datos.`,
+        `Revisó registros diarios relacionados con ${domainOrRole} y verificó la integridad de los datos.`,
         'Actualizó la documentación de trabajo y siguió asuntos abiertos.',
         'Coordinó el intercambio de información con colegas para completar la documentación a tiempo.',
       ]);
@@ -332,12 +552,12 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'fr') {
     return formatExperienceBullets(present
       ? [
-        `Examine les dossiers quotidiens liés à ${domain} et vérifie l’exhaustivité des données.`,
+        `Examine les dossiers quotidiens liés à ${domainOrRole} et vérifie l’exhaustivité des données.`,
         'Met à jour la documentation de travail et suit les dossiers ouverts.',
         'Coordonne l’échange d’informations avec les collègues pour finaliser la documentation.',
       ]
       : [
-        `Examinait les dossiers quotidiens liés à ${domain} et vérifiait l’exhaustivité des données.`,
+        `Examinait les dossiers quotidiens liés à ${domainOrRole} et vérifiait l’exhaustivité des données.`,
         'Mettait à jour la documentation de travail et suivait les dossiers ouverts.',
         'Coordonnait l’échange d’informations avec les collègues pour finaliser la documentation.',
       ]);
@@ -346,12 +566,12 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'it') {
     return formatExperienceBullets(present
       ? [
-        `Esamina i registri quotidiani relativi a ${domain} e verifica la completezza dei dati.`,
+        `Esamina i registri quotidiani relativi a ${domainOrRole} e verifica la completezza dei dati.`,
         'Aggiorna la documentazione di lavoro e segue le pratiche aperte.',
         'Coordina lo scambio di informazioni con i colleghi per completare la documentazione.',
       ]
       : [
-        `Esaminava i registri quotidiani relativi a ${domain} e verificava la completezza dei dati.`,
+        `Esaminava i registri quotidiani relativi a ${domainOrRole} e verificava la completezza dei dati.`,
         'Aggiornava la documentazione di lavoro e seguiva le pratiche aperte.',
         'Coordinava lo scambio di informazioni con i colleghi per completare la documentazione.',
       ]);
@@ -360,12 +580,12 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'ru') {
     return formatExperienceBullets(present
       ? [
-        `Проверяет повседневные записи по направлению ${domain} и полноту данных.`,
+        'Проверяет повседневные рабочие записи и полноту данных.',
         'Обновляет рабочую документацию и отслеживает открытые пункты.',
         'Согласовывает обмен информацией с коллегами для своевременного завершения документации.',
       ]
       : [
-        `Проверял повседневные записи по направлению ${domain} и полноту данных.`,
+        'Проверял повседневные рабочие записи и полноту данных.',
         'Обновлял рабочую документацию и отслеживал открытые пункты.',
         'Согласовывал обмен информацией с коллегами для своевременного завершения документации.',
       ]);
@@ -374,25 +594,26 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'pt-BR') {
     return formatExperienceBullets(present
       ? [
-        `Revisa registros diários relacionados a ${domain} e verifica a completude dos dados.`,
+        `Revisa registros diários relacionados a ${domainOrRole} e verifica a completude dos dados.`,
         'Atualiza a documentação de trabalho e acompanha itens em aberto.',
         'Coordena a troca de informações com colegas para concluir a documentação no prazo.',
       ]
       : [
-        `Revisava registros diários relacionados a ${domain} e verificava a completude dos dados.`,
+        `Revisava registros diários relacionados a ${domainOrRole} e verificava a completude dos dados.`,
         'Atualizava a documentação de trabalho e acompanhava itens em aberto.',
         'Coordenava a troca de informações com colegas para concluir a documentação no prazo.',
       ]);
   }
 
+  // Final layer: always three useful English CV bullets (never empty).
   return formatExperienceBullets(present
     ? [
-      `Review day-to-day records related to ${domain} and verify data completeness.`,
+      'Review day-to-day work records and verify data completeness.',
       'Update work documentation and track open items according to role needs.',
       'Coordinate information sharing with colleagues to complete documentation on time.',
     ]
     : [
-      `Reviewed day-to-day records related to ${domain} and verified data completeness.`,
+      'Reviewed day-to-day work records and verified data completeness.',
       'Updated work documentation and tracked open items according to role needs.',
       'Coordinated information sharing with colleagues to complete documentation on time.',
     ]);

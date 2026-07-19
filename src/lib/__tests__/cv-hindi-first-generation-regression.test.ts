@@ -477,10 +477,10 @@ describe('18-19. Usage counting: failed Hindi attempt does not increment; succes
 });
 
 describe('20. Final contentLocale becomes hi after a successful first Hindi apply', () => {
-  it('acceptValidatedAiContent seals/updates canonicalLocale/display to hi when hi is (or becomes) canonical', async () => {
+  it('acceptValidatedAiContent sets locale metadata from user grounding without promoting AI summary to canonical', async () => {
     const { durationMod, summaryMod, canonicalMod } = await freshPipeline();
-    // Cold state: no canonical snapshot exists yet, so the first successful
-    // AI apply becomes canonical for whichever locale it is applied in.
+    // Cold state: no canonical snapshot exists yet. AI may set display summary
+    // and snapshot locale metadata, but must not write AI text into canonicalSummary.
     const cv = forkliftCv();
     const durationSnapshot = durationMod.buildExperienceDurationSnapshot(cv.experience, REF);
     const hi = summaryMod.finalizeClientAiSummary(cv.summary, cv, 'hi', durationSnapshot);
@@ -488,6 +488,8 @@ describe('20. Final contentLocale becomes hi after a successful first Hindi appl
     const next = canonicalMod.acceptValidatedAiContent(cv, { locale: 'hi', summary: hi.summary, summaryOrigin: hi.origin });
     expect(next.summary).toBe(hi.summary);
     expect(next.canonicalSnapshot?.canonicalLocale).toBe('hi');
+    // AI Hindi prose must not become the sealed canonical summary fact.
+    expect(next.canonicalSummary || '').not.toBe(hi.summary);
   });
 });
 

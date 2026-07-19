@@ -31,8 +31,16 @@ function fold(s: string): string {
 function classifyActionFrame(unit: string): ActionFrame {
   const t = fold(unit);
   if (/(vizuel|grafick|dizajn|visual|design|identitet|identity|platform|ビジュアル|تصميم|डिज़ाइन)/.test(t)) {
-    if (/(saradj|collabor|timov|team|produkt|product|razvoj|develop|تطوير|विकास|開発)/.test(t)) {
+    // Collaboration only — do not treat bare "product/platform" as collaborate
+    // (those appear in ordinary design-creation shells).
+    if (/(saradj|collabor|timov|\bteam\b|konsistenc|consistency|تطوير فريق|टीम|チーム)/.test(t)) {
       return 'collaborate_visual';
+    }
+    if (/(ažur|azur|update|status|reviz|revision|track|ажурир|تحدّث|अद्यतन|更新)/.test(t)) {
+      return 'update_records';
+    }
+    if (/(prover|pregled|review|adapt|prilagod|verif|samic|समीक्षा|راجع|確認)/.test(t)) {
+      return 'check_records';
     }
     return 'prepare_materials';
   }
@@ -858,11 +866,11 @@ export function validateCrossLocaleSemanticCoverage(
         if (usedB.has(bi)) continue;
         const got = candFrames[bi];
         const soft = (want === 'generic_duty' || got === 'generic_duty')
-          || (want === 'prepare_materials' && (got === 'coordinate_info' || got === 'check_records' || got === 'update_records'))
-          || (want === 'check_records' && (got === 'prepare_materials' || got === 'update_records' || got === 'coordinate_info'))
+          || (want === 'prepare_materials' && (got === 'coordinate_info' || got === 'check_records' || got === 'update_records' || got === 'collaborate_visual'))
+          || (want === 'check_records' && (got === 'prepare_materials' || got === 'update_records' || got === 'coordinate_info' || got === 'collaborate_visual'))
           || (want === 'coordinate_info' && (got === 'prepare_materials' || got === 'collaborate_visual' || got === 'check_records'))
-          || (want === 'update_records' && (got === 'check_records' || got === 'prepare_materials'))
-          || (want === 'collaborate_visual' && (got === 'coordinate_info' || got === 'prepare_materials'));
+          || (want === 'update_records' && (got === 'check_records' || got === 'prepare_materials' || got === 'collaborate_visual'))
+          || (want === 'collaborate_visual' && (got === 'coordinate_info' || got === 'prepare_materials' || got === 'check_records'));
         if (soft) {
           matched = bi;
           break;
