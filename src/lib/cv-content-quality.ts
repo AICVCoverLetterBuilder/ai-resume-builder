@@ -648,8 +648,28 @@ export function injectHindiDurationWithOpening(
   duration: ExperienceDuration,
   context: DurationIntegrationContext,
 ): string {
-  const opening = buildHindiIntegratedDurationSentence(duration, context);
   const trimmed = (summary || '').trim();
+  // Idempotent path: when the Summary already has a single well-placed duration
+  // claim and an employment intro, do not rebuild a weaker generic opening
+  // (e.g. context.role = पेशेवर) that drops the structured warehouse title.
+  if (
+    trimmed
+    && countSummaryDurationExpressions(trimmed, 'hi') === 1
+    && /कार्यरत/u.test(trimmed)
+    && hindiDurationPlacementOk(trimmed, 'hi')
+    && !hasMisplacedHindiDuration(trimmed)
+    && !hasLeadingOrTrailingFragment(trimmed)
+  ) {
+    const contextRoleGeneric = !context.role
+      || /^(?:पेशेवर|professional)$/iu.test(context.role.trim());
+    const hasConcreteRoleForm = /के\s+रूप\s+में/u.test(trimmed)
+      && !/पेशेवर\s+के\s+रूप\s+में/u.test(trimmed);
+    if (!contextRoleGeneric || hasConcreteRoleForm) {
+      return normalizeHindiSummaryPerspective(trimmed);
+    }
+  }
+
+  const opening = buildHindiIntegratedDurationSentence(duration, context);
   if (!trimmed) return opening;
 
   const sentences = trimmed.split(/(?<=[।.!?])\s+/u).map((s) => s.trim()).filter(Boolean);

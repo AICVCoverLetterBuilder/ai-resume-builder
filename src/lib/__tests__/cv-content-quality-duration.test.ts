@@ -440,10 +440,12 @@ describe('residual fix: never a standalone Hindi duration fragment', () => {
         gender: 'female',
       },
     });
+    // Neutral CV opening (not first-person cover-letter voice).
     expect(result.summary).toBe(
-      'मैं लगभग पाँच वर्षों के अनुभव वाली कॉल सेंटर एजेंट हूँ और मई 2021 से Zrewq में कार्यरत हूँ।',
+      'मई 2021 से Zrewq में कॉल सेंटर एजेंट के रूप में कार्यरत, लगभग पाँच वर्षों का संयुक्त अनुभव रखने वाली पेशेवर।',
     );
     expect(result.summary.startsWith('लगभग')).toBe(false);
+    expect(result.summary).not.toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ/u);
     expect(validateSummaryCompleteness(result.summary, { locale: 'hi' }).valid).toBe(true);
   });
 
@@ -525,8 +527,10 @@ describe('residual fix: never a standalone Hindi duration fragment', () => {
     const q = applyCvContentQuality(cv, 'hi', { referenceDate: REF, gender: 'female' });
     expect(validateSummaryCompleteness(q.cv.summary, { locale: 'hi' }).valid).toBe(true);
     expect(hasMisplacedHindiDuration(q.cv.summary)).toBe(false);
-    expect(q.cv.summary).toMatch(/^मैं\s+लगभग\s+पाँच/);
+    expect(q.cv.summary).toMatch(/मई\s+2021\s+से\s+Zrewq\s+में/);
+    expect(q.cv.summary).toMatch(/लगभग\s+पाँच\s+वर्षों\s+का\s+संयुक्त\s+अनुभव/);
     expect(q.cv.summary).not.toMatch(/,\s*लगभग\s+पाँच\s+वर्षों\s+के\s+अनुभव\s+के\s+साथ।/);
+    expect(q.cv.summary).not.toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ/u);
     expect(q.cv.summary).toMatch(/पाँच|पांच/);
     expect(q.violations).not.toContain('experience_duration_mismatch');
   });
@@ -605,11 +609,13 @@ describe('residual fix: Hindi trailing duration + Serbian female agreement', () 
       ],
     });
     const q = applyCvContentQuality(cv, 'hi', { referenceDate: REF, gender: 'female' });
-    expect(q.cv.summary).toMatch(/^मैं\s+लगभग\s+पाँच\s+वर्षों\s+के\s+अनुभव\s+वाली/);
+    expect(q.cv.summary).toMatch(/मई\s+2021\s+से\s+Zrewq\s+में/);
+    expect(q.cv.summary).toMatch(/लगभग\s+पाँच\s+वर्षों\s+का\s+संयुक्त\s+अनुभव/);
     expect(q.cv.summary).not.toMatch(/,\s*लगभग\s+पाँच\s+वर्षों\s+के\s+अनुभव\s+के\s+साथ।/);
+    expect(q.cv.summary).not.toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ/u);
     expect(hasMisplacedHindiDuration(q.cv.summary)).toBe(false);
     expect(validateSummaryCompleteness(q.cv.summary, { locale: 'hi' }).valid).toBe(true);
-    expect(q.cv.summary).toMatch(/समयबद्ध जानकारी प्रदान करती हूँ/);
+    expect(q.cv.summary).toMatch(/समयबद्ध जानकारी प्रदान करती/);
   });
 
   it('repairs Serbian female vrednim članom to vrednom članicom', () => {

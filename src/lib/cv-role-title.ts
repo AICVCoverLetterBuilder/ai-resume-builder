@@ -413,6 +413,11 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
   if (WAREHOUSE_TITLE_RE.test(normalized)) {
     return localizeWarehouseEmployee(locale, gender);
   }
+  if (/(?:graphic\s+designer|grafi[cč]ki\s+dizajn\w*|ग्राफिक\s*डिज़ाइनर)/i.test(normalized)) {
+    if (locale === 'hi') return 'ग्राफिक डिज़ाइनर';
+    if (locale === 'en') return 'Graphic Designer';
+    if (locale === 'sr' || locale === 'hr') return normalized;
+  }
   if (locale === 'sr' || locale === 'hr') return normalized;
   const isAsciiTitle = /^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2;
   if (locale === 'en') {
@@ -462,6 +467,33 @@ export function getOccupationalTitleFallback(locale: Locale, gender?: string): s
   return 'professional';
 }
 
+/**
+ * Prefer a concrete warehouse localization whenever structured title/duties show
+ * warehouse work — never leave Hindi Summary context on generic `पेशेवर`.
+ */
+export function ensureConcreteSummaryRole(
+  resolved: string,
+  options: {
+    profileJobTitle?: string;
+    currentExperienceTitle?: string;
+    dutiesText?: string;
+    locale: Locale;
+    gender?: string;
+  },
+): string {
+  const role = (resolved || '').trim();
+  const isGeneric = !role || /^(?:पेशेवर|professional)$/iu.test(role);
+  if (!isGeneric) return role;
+  const blob = `${options.profileJobTitle || ''} ${options.currentExperienceTitle || ''} ${options.dutiesText || ''}`;
+  if (
+    WAREHOUSE_TITLE_RE.test(blob)
+    || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|incoming\s+goods|\bमाल\b)/iu.test(blob)
+  ) {
+    return localizeWarehouseEmployee(options.locale, options.gender);
+  }
+  return role || getOccupationalTitleFallback(options.locale, options.gender);
+}
+
 export function resolveOccupationalTitleForSummary(options: {
   profileJobTitle?: string;
   currentExperienceTitle?: string;
@@ -476,7 +508,10 @@ export function resolveOccupationalTitleForSummary(options: {
       dutiesText: options.dutiesText,
     })
   ) {
-    return getOccupationalTitleFallback(options.locale, options.gender);
+    return ensureConcreteSummaryRole(
+      getOccupationalTitleFallback(options.locale, options.gender),
+      options,
+    );
   }
   const candidates = [options.profileJobTitle, options.currentExperienceTitle];
   for (const raw of candidates) {
@@ -484,5 +519,8 @@ export function resolveOccupationalTitleForSummary(options: {
     const localized = localizeKnownTitle(raw!.trim(), options.locale, options.gender);
     if (localized) return localized;
   }
-  return getOccupationalTitleFallback(options.locale, options.gender);
+  return ensureConcreteSummaryRole(
+    getOccupationalTitleFallback(options.locale, options.gender),
+    options,
+  );
 }

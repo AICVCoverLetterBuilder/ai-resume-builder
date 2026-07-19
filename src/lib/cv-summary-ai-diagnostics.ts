@@ -412,7 +412,10 @@ export class SummaryAiDiagnosticSession {
       && diag.durationValidationPassed !== false
     );
     // Never report idempotent/PASS when visible text has ≠ 1 duration claim.
-    const durationFinalizerIdempotent = durationValidationPassed && after === 1;
+    // Prefer finalize-computed double-pass idempotence when present.
+    const durationFinalizerIdempotent = typeof diag.durationFinalizerIdempotent === 'boolean'
+      ? diag.durationFinalizerIdempotent && durationValidationPassed && after === 1
+      : durationValidationPassed && after === 1;
     const sentenceCount = text ? text.split(/[.!?।]/u).filter((s) => s.trim()).length : 0;
     const fallbackApplied = Boolean(
       finalized.origin === 'deterministic_fallback' || diag.fallbackApplied,

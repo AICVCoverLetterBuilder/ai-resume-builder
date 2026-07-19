@@ -275,6 +275,38 @@ const WAREHOUSE_FACT_CUE_RE =
 const FINITE_THEN_KA_ANUBHAV_RE =
   /(?:करती|करता|किए|किया|की|थीं|थे|था|हैं|है|हूँ|हूं)(?:\s+(?:हैं|है|थीं|थे|था|हूँ|हूं))?\s+का\s+अनुभव/u;
 
+const HINDI_MONTH_FROM_RE =
+  /(?:जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्तूबर|नवंबर|दिसंबर)(?:\s+\d{4})?\s+से/u;
+
+/** Split Summary units on Hindi danda / ! / ? / non-decimal periods. */
+export function splitHindiSummaryUnits(text: string): string[] {
+  const units: string[] = [];
+  let buf = '';
+  const s = (text || '').replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i]!;
+    buf += ch;
+    if (ch === '।' || ch === '!' || ch === '?') {
+      const t = buf.replace(/[।.!?]+$/u, '').trim();
+      if (t) units.push(t);
+      buf = '';
+      continue;
+    }
+    if (ch === '.') {
+      const prev = s[i - 1] || '';
+      const next = s[i + 1] || '';
+      // Keep decimal numbers like 6.5 inside the same unit.
+      if (/\d/.test(prev) && /\d/.test(next)) continue;
+      const t = buf.replace(/[।.!?]+$/u, '').trim();
+      if (t) units.push(t);
+      buf = '';
+    }
+  }
+  const rest = buf.replace(/[।.!?]+$/u, '').trim();
+  if (rest) units.push(rest);
+  return units;
+}
+
 /**
  * Semantic employment-fact / professional-label quality for Hindi Summary postconditions.
  * Compares structured company/role/current/start predicates across clauses — not token overlap alone.
@@ -299,7 +331,7 @@ export type HindiSummaryEmploymentQuality = {
   priorRoleSemanticFactMentionCount: number;
   priorRoleSemanticDuplicationDetected: boolean;
   hindiFiniteKaAnubhavCollision: boolean;
-  finalUnitRoleSlots: Array<'current_intro' | 'current_duty' | 'prior' | 'other'>;
+  finalUnitRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
 };
 
 /** Resolve which Experience index owns the current (Present) role in a fact set. */
@@ -336,30 +368,52 @@ export function analyzeHindiSummaryEmploymentQuality(
     /** Duties owned by prior/completed Experience entries. */
     priorEntryDuties?: string;
     structuredRole?: string;
+    /** Prior employer name for slot ownership (optional). */
+    priorCompany?: string;
   } = {},
 ): HindiSummaryEmploymentQuality {
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const company = (options.company || '').trim();
+  const priorCompany = (options.priorCompany || '').trim();
   const structuredRole = (options.structuredRole || options.role || '').trim();
   const currentEntryDuties = (options.currentEntryDuties || '').trim();
   const priorEntryDuties = (options.priorEntryDuties || '').trim();
   const source = currentEntryDuties || (options.sourceDuties || '');
   const companyEsc = company ? company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
+  const priorCompanyEsc = priorCompany
+    ? priorCompany.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    : '';
 
-  const sentences = text.split(/[।.!?]+/u).map((s) => s.trim()).filter(Boolean);
+  const sentences = splitHindiSummaryUnits(text);
   const finalUnitRoleSlots: HindiSummaryEmploymentQuality['finalUnitRoleSlots'] = [];
   let priorClauseSeen = false;
   for (const sentence of sentences) {
-    if (/इससे\s+पहले/u.test(sentence)) {
+    if (
+      /इससे\s+पहले/u.test(sentence)
+      || (priorCompanyEsc
+        && new RegExp(priorCompanyEsc, 'iu').test(sentence)
+        && !(companyEsc && new RegExp(companyEsc, 'iu').test(sentence)))
+    ) {
       priorClauseSeen = true;
-      finalUnitRoleSlots.push('prior');
+      finalUnitRoleSlots.push('prior_role');
+      continue;
+    }
+    const hasCompany = companyEsc ? new RegExp(companyEsc, 'iu').test(sentence) : false;
+    const hasMonthFrom = HINDI_MONTH_FROM_RE.test(sentence) || /\d{4}\s+से/u.test(sentence);
+    const hasEmployed = /(?:कार्यरत|वर्तमान\s+में)/u.test(sentence);
+    if ((hasCompany && (hasEmployed || hasMonthFrom || /के\s+रूप\s+में/u.test(sentence)))
+      || (hasMonthFrom && hasEmployed)
+      || (hasMonthFrom && hasCompany)) {
+      finalUnitRoleSlots.push('current_intro');
       continue;
     }
     if (
-      (companyEsc && new RegExp(companyEsc, 'iu').test(sentence) && /(?:कार्यरत|के\s+रूप\s+में)/u.test(sentence))
-      || /(?:जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्तूबर|नवंबर|दिसंबर|\d{4})\s+से/u.test(sentence)
+      /(?:लगभग|करीब)\s+(?:साढ़े\s*)?(?:\d+(?:[.,]\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|ढाई|डेढ़)\s*वर्ष/u.test(sentence)
+      && !DESIGN_FACT_CUE_RE.test(sentence)
+      && !WAREHOUSE_FACT_CUE_RE.test(sentence)
+      && !hasEmployed
     ) {
-      finalUnitRoleSlots.push('current_intro');
+      finalUnitRoleSlots.push('duration');
       continue;
     }
     if (!priorClauseSeen) {
@@ -370,15 +424,15 @@ export function analyzeHindiSummaryEmploymentQuality(
   }
 
   let currentEmploymentIntroductionCount = 0;
-  if (companyEsc) {
-    for (const sentence of sentences) {
-      if (!new RegExp(companyEsc, 'iu').test(sentence)) continue;
-      const isEmploymentIntro = /(?:कार्यरत|के\s+रूप\s+में|वर्तमान\s+में)/u.test(sentence)
-        || /(?:जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्तूबर|नवंबर|दिसंबर|\d{4})\s+से/u.test(sentence);
-      if (isEmploymentIntro) currentEmploymentIntroductionCount += 1;
-    }
-  } else if (/वर्तमान\s+में|कार्यरत/u.test(text)) {
-    currentEmploymentIntroductionCount = 1;
+  for (const sentence of sentences) {
+    const hasCompany = companyEsc ? new RegExp(companyEsc, 'iu').test(sentence) : false;
+    const hasMonthFrom = HINDI_MONTH_FROM_RE.test(sentence) || /\d{4}\s+से/u.test(sentence);
+    const hasEmployed = /(?:कार्यरत|वर्तमान\s+में)/u.test(sentence);
+    const hasRoleForm = /के\s+रूप\s+में/u.test(sentence);
+    const isEmploymentIntro = companyEsc
+      ? (hasCompany && (hasEmployed || hasRoleForm || hasMonthFrom))
+      : hasEmployed || (hasMonthFrom && hasRoleForm);
+    if (isEmploymentIntro) currentEmploymentIntroductionCount += 1;
   }
 
   const repeatedEmploymentFactCount = Math.max(0, currentEmploymentIntroductionCount - 1);
@@ -408,19 +462,33 @@ export function analyzeHindiSummaryEmploymentQuality(
   const roleEsc = structuredRole && !/^(?:पेशेवर|professional)$/iu.test(structuredRole)
     ? structuredRole.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     : '';
-  const currentRoleTitlePresent = Boolean(
-    roleEsc
-      ? new RegExp(roleEsc, 'iu').test(text)
-      : /वेयरहाउस\s*कर्मचारी|warehouse\s*employee/iu.test(text) || !requireWarehouseCoverage,
-  );
-  const currentRoleTitleMatchesStructuredRole = Boolean(
-    !roleEsc
-      || new RegExp(`${roleEsc}\\s+के\\s+रूप\\s+में`, 'iu').test(text)
-      || (roleLooksWarehouse && /वेयरहाउस\s*कर्मचारी\s+के\s+रूप\s+में/u.test(text)),
-  );
-  const currentRoleOmittedDetected = Boolean(
-    roleEsc && !currentRoleTitlePresent,
-  );
+  const structuredIsGeneric = !structuredRole
+    || /^(?:पेशेवर|professional)$/iu.test(structuredRole);
+  const warehouseTitlePresent = /वेयरहाउस\s*कर्मचारी/u.test(text);
+  const warehouseTitleAsRole = /वेयरहाउस\s*कर्मचारी\s+के\s+रूप\s+में/u.test(text);
+
+  // Generic `पेशेवर` must never satisfy structured warehouse title matching.
+  let currentRoleTitlePresent: boolean;
+  let currentRoleTitleMatchesStructuredRole: boolean;
+  let currentRoleOmittedDetected: boolean;
+  if (requireWarehouseCoverage || roleLooksWarehouse) {
+    currentRoleTitlePresent = warehouseTitlePresent;
+    currentRoleTitleMatchesStructuredRole = warehouseTitleAsRole;
+    currentRoleOmittedDetected = !warehouseTitlePresent;
+  } else if (structuredIsGeneric) {
+    // Generic `पेशेवर के रूप में` is never a structured title match.
+    // Other free-text roles may open with company+कार्यरत without a localized title.
+    const professionalAsRole = /पेशेवर\s+के\s+रूप\s+में/u.test(text);
+    currentRoleTitlePresent = !professionalAsRole;
+    currentRoleTitleMatchesStructuredRole = !professionalAsRole;
+    currentRoleOmittedDetected = professionalAsRole;
+  } else {
+    currentRoleTitlePresent = Boolean(roleEsc && new RegExp(roleEsc, 'iu').test(text));
+    currentRoleTitleMatchesStructuredRole = Boolean(
+      roleEsc && new RegExp(`${roleEsc}\\s+के\\s+रूप\\s+में`, 'iu').test(text),
+    );
+    currentRoleOmittedDetected = Boolean(roleEsc && !currentRoleTitlePresent);
+  }
 
   const currentLooksDesign = DESIGN_FACT_CUE_RE.test(currentEntryDuties)
     || /(?:design|dizajn|ग्राफिक|डिज़ाइन|graphic)/iu.test(structuredRole);
@@ -445,7 +513,7 @@ export function analyzeHindiSummaryEmploymentQuality(
         currentSlotForeignFactCount += 1;
       }
     }
-    if (slot === 'prior') {
+    if (slot === 'prior_role') {
       if (hasDesign) priorRoleSemanticFactMentionCount += 1;
       // Warehouse facts in a design-owned prior clause (or vice versa) are foreign.
       if (hasWarehouse && priorLooksDesign && !priorLooksWarehouse) {
@@ -462,7 +530,7 @@ export function analyzeHindiSummaryEmploymentQuality(
     finalUnitRoleSlots[i] === 'current_duty' && DESIGN_FACT_CUE_RE.test(s)
   ));
   const designInPrior = sentences.some((s, i) => (
-    finalUnitRoleSlots[i] === 'prior' && DESIGN_FACT_CUE_RE.test(s)
+    finalUnitRoleSlots[i] === 'prior_role' && DESIGN_FACT_CUE_RE.test(s)
   ));
   const duplicatedPriorRoleFactCount = (
     designInCurrentDuty && designInPrior && requireWarehouseCoverage && !currentLooksDesign
@@ -484,7 +552,7 @@ export function analyzeHindiSummaryEmploymentQuality(
     && repeatedProfessionalLabelCount === 0
     && currentEmploymentIntroductionCount === 1
     && currentRoleTitlePresent
-    && (currentRoleTitleMatchesStructuredRole || !roleEsc)
+    && currentRoleTitleMatchesStructuredRole
     && (!requireWarehouseCoverage || currentRoleConcreteFactCoverage >= 2)
     && currentSlotForeignFactCount === 0
     && !semanticCrossEntryLeakageDetected
@@ -506,7 +574,7 @@ export function analyzeHindiSummaryEmploymentQuality(
     crossDomainLeakageDetected: semanticCrossEntryLeakageDetected,
     groundingValidationPassed: groundingOk,
     currentRoleTitlePresent,
-    currentRoleTitleMatchesStructuredRole: currentRoleTitleMatchesStructuredRole || !roleEsc,
+    currentRoleTitleMatchesStructuredRole,
     currentRoleOmittedDetected,
     currentSlotForeignFactCount,
     priorSlotForeignFactCount,
@@ -1182,8 +1250,23 @@ export function buildConciseGroundedSummary(
   let text = '';
   if (locale === 'hi') {
     const roleRaw = (role || 'पेशेवर').trim();
-    const roleIsGeneric = !roleRaw || /^(?:पेशेवर|professional)$/iu.test(roleRaw);
-    const rolePart = roleIsGeneric ? '' : roleRaw;
+    let roleIsGeneric = !roleRaw || /^(?:पेशेवर|professional)$/iu.test(roleRaw);
+    // Curated warehouse noun-phrase fragments from the CURRENT entry only.
+    const whFrags = [...new Set(
+      dutyFacts
+        .flatMap((f) => {
+          const keys = classifyMaterialDutyKeys(f.sourceText || f.value)
+            .filter((k) => k.startsWith('warehouse_'));
+          return keys.map((k) => warehouseSummaryFragment(k, locale)).filter(Boolean);
+        }),
+    )];
+    // Never omit the warehouse title when current-entry warehouse facts exist.
+    if (roleIsGeneric && whFrags.length >= 1) {
+      roleIsGeneric = false;
+    }
+    const rolePart = roleIsGeneric
+      ? ''
+      : (/^(?:पेशेवर|professional)$/iu.test(roleRaw) ? 'वेयरहाउस कर्मचारी' : roleRaw);
     const company = employer;
     const startMatch = /^(\d{4})-(\d{2})/.exec(datesValue);
     const hindiMonths: Record<string, string> = {
@@ -1209,15 +1292,6 @@ export function buildConciseGroundedSummary(
           ? `${employmentHead}, ${durationPhrase} रखने वाला पेशेवर।`
           : `${employmentHead}, ${durationPhrase}।`)
       : `${employmentHead}।`;
-    // Curated warehouse noun-phrase fragments from the CURRENT entry only.
-    const whFrags = [...new Set(
-      dutyFacts
-        .flatMap((f) => {
-          const keys = classifyMaterialDutyKeys(f.sourceText || f.value)
-            .filter((k) => k.startsWith('warehouse_'));
-          return keys.map((k) => warehouseSummaryFragment(k, locale)).filter(Boolean);
-        }),
-    )];
     // Prefer warehouse frames when the current entry owns them; otherwise use
     // current-entry fragments only (already entry-scoped — never prior design/warehouse).
     const seedFrags = whFrags.length >= 1 ? whFrags : uniqueFragments;

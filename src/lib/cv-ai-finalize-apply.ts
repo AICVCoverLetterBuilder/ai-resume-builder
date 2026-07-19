@@ -350,6 +350,7 @@ export type FinalizeCvAiFieldResult = {
     priorRoleSemanticDuplicationDetected?: boolean;
     finalUnitRoleSlots?: string[];
     hindiFiniteKaAnubhavCollision?: boolean;
+    durationFinalizerIdempotent?: boolean;
   };
 };
 
@@ -366,6 +367,8 @@ function currentAndPriorDutiesFromCv(cv: CVData): {
   priorEntryDuties: string;
   currentEntryId: string | null;
   currentRoleTitle: string;
+  priorCompany: string;
+  currentCompany: string;
 } {
   const exps = cv.experience || [];
   const current = exps.find((e) => e.isPresent) || exps[0] || null;
@@ -375,6 +378,8 @@ function currentAndPriorDutiesFromCv(cv: CVData): {
     priorEntryDuties: prior ? freezeExperienceAiDescription(prior) : '',
     currentEntryId: current?.id || null,
     currentRoleTitle: (current?.position || cv.personal?.jobTitle || '').trim(),
+    priorCompany: (prior?.company || '').trim(),
+    currentCompany: (current?.company || '').trim(),
   };
 }
 
@@ -708,6 +713,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       sourceDuties: dutiesText,
       currentEntryDuties: entryDuties.currentEntryDuties,
       priorEntryDuties: entryDuties.priorEntryDuties,
+      priorCompany: entryDuties.priorCompany,
       structuredRole: context.role || entryDuties.currentRoleTitle,
     });
     // Duplicate Atlas/current-role intros or genericized warehouse duties force rebuild.
@@ -771,12 +777,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const entryDuties = currentAndPriorDutiesFromCv(cv);
     const empQ = locale === 'hi'
       ? analyzeHindiSummaryEmploymentQuality(result.text, {
-        company: context.company,
+        company: context.company || entryDuties.currentCompany,
         role: context.role,
         startDate: context.startDate,
         sourceDuties: dutiesText,
         currentEntryDuties: entryDuties.currentEntryDuties,
         priorEntryDuties: entryDuties.priorEntryDuties,
+        priorCompany: entryDuties.priorCompany,
         structuredRole: context.role || entryDuties.currentRoleTitle,
       })
       : null;
@@ -789,7 +796,24 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         `${context.role || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.currentEntryDuties || ''}`,
       ),
     );
-    const blockedForDuration = Boolean(result.countedAsSuccess && !durationValidationPassed);
+    // Real second-pass idempotence: duration finalizer must not mutate accepted text.
+    let durationFinalizerIdempotent = durationValidationPassed;
+    if (locale === 'hi' && result.text.trim() && durationSnapshot.total.hasValidDates) {
+      const secondPass = resolveSummaryWithDurationPolicy(
+        result.text,
+        durationSnapshot.total,
+        locale,
+        {
+          forceDurationPhrase: true,
+          requireDurationClaim: true,
+          context,
+        },
+      );
+      durationFinalizerIdempotent = secondPass.summary.trim() === result.text.trim();
+    }
+    const blockedForDuration = Boolean(
+      result.countedAsSuccess && (!durationValidationPassed || !durationFinalizerIdempotent),
+    );
     const blockedForPerspective = Boolean(
       result.countedAsSuccess && locale === 'hi' && !perspectiveValidationPassed,
     );
@@ -805,6 +829,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       || blockedForGrounding;
     const success = result.countedAsSuccess
       && durationValidationPassed
+      && durationFinalizerIdempotent
       && perspectiveValidationPassed
       && groundingValidationPassed
       && !coverageHardFail;
@@ -879,7 +904,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ?? empQ?.crossDomainLeakageDetected
           ?? false,
         currentRoleTitlePresent: empQ?.currentRoleTitlePresent,
-        currentRoleTitleSource: context.role || entryDuties.currentRoleTitle || null,
+        currentRoleTitleSource: (() => {
+          const role = (context.role || '').trim();
+          if (/^(?:पेशेवर|professional)$/iu.test(role) || !role) {
+            return empQ?.currentRoleTitleMatchesStructuredRole
+              ? 'structured_current_role'
+              : 'generic_professional';
+          }
+          return 'structured_current_role';
+        })(),
         currentRoleTitleEntryIdHash: entryDuties.currentEntryId
           ? hashExperienceEntryId(entryDuties.currentEntryId)
           : null,
@@ -893,6 +926,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         priorRoleSemanticDuplicationDetected: empQ?.priorRoleSemanticDuplicationDetected,
         finalUnitRoleSlots: empQ?.finalUnitRoleSlots,
         hindiFiniteKaAnubhavCollision: empQ?.hindiFiniteKaAnubhavCollision,
+        durationFinalizerIdempotent,
         rejectionStage: blockedForDuration
           ? 'independent_final_duration_verification'
           : blockedForPerspective
