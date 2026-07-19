@@ -1159,35 +1159,6 @@ export default function CVBuilderPage() {
       level,
     });
 
-    // Authoritative Experience AI source: live user-edited textarea beats stale canonical.
-    const authoritative = resolveExperienceAiAuthoritativeSource(exp);
-    const expFrozen = ensureExperienceAiSourceFrozen(exp);
-    const aiGrounding = resolveExperienceAiGrounding(
-      expFrozen,
-      requestContext,
-      freezeExperienceAiDescription,
-    );
-    // Prefer the explicit authoritative resolution (includes kind + shadow fields).
-    // Never re-inject duties after job-context exclusion (Baker → Pharmacist).
-    if (!aiGrounding.staleGeneratedContentExcluded && authoritative.text.trim()) {
-      aiGrounding.sourceDescription = authoritative.text;
-      aiGrounding.experienceForAi = {
-        ...authoritative.experienceForAi,
-        generationJobContextKey: expFrozen.generationJobContextKey,
-        groundingJobContextKey: expFrozen.groundingJobContextKey,
-        previousGenerationJobContextKey: expFrozen.previousGenerationJobContextKey,
-      };
-      aiGrounding.groundingSource = 'genuine_user';
-    }
-
-    // Empty-description guard: require either valid grounding or a position for
-    // occupation-aware generation. Never block solely because stale AI duties
-    // were excluded after an occupation change.
-    if (!aiGrounding.sourceDescription.trim() && !String(exp.position || '').trim()) {
-      toast.error(aiErrorMessage('experience_description_required', locale));
-      return;
-    }
-
     const proToken = getCurrentProTokenOrToast(() => setAiImprovementsModal(true));
     if (!proToken) return;
 
@@ -1210,7 +1181,8 @@ export default function CVBuilderPage() {
     };
     const countBefore = getProAiUsageCount();
 
-    // One immutable operation source for this Experience AI request.
+    // Freeze the live textarea first — empty live means Generation Mode and must
+    // not resurrect generatedDescription/canonical into the payload.
     const operationSnapshot = createExperienceAiOperationSnapshot({
       liveText: liveDescription,
       canonicalText: exp.canonicalDescription || '',
@@ -1219,15 +1191,57 @@ export default function CVBuilderPage() {
       requestId: reqCtx.requestId,
       jobContextHash: requestContext.key,
     });
-    if (operationSnapshot.normalizedSourceText.trim() && !aiGrounding.staleGeneratedContentExcluded) {
-      aiGrounding.sourceDescription = operationSnapshot.normalizedSourceText;
+    const liveSourceEmpty = !operationSnapshot.normalizedSourceText.trim();
+
+    // Authoritative Experience AI source: live user-edited textarea beats stale canonical.
+    // Empty live → resolve returns none (generation); never promote historical AI text.
+    const authoritative = resolveExperienceAiAuthoritativeSource({
+      ...exp,
+      description: liveDescription,
+    });
+    const expFrozen = ensureExperienceAiSourceFrozen(exp);
+    const aiGrounding = resolveExperienceAiGrounding(
+      expFrozen,
+      requestContext,
+      freezeExperienceAiDescription,
+    );
+    const generatedDescriptionPreexisted = Boolean((exp.generatedDescription || '').trim());
+    if (liveSourceEmpty) {
+      // Generation Mode: force empty request source + clear shadow grounding.
+      aiGrounding.sourceDescription = '';
       aiGrounding.experienceForAi = {
-        ...applyOperationSnapshotToExperience(aiGrounding.experienceForAi, operationSnapshot),
+        ...authoritative.experienceForAi,
+        description: '',
+        originalUserDescription: '',
+        canonicalDescription: '',
+        generatedDescription: '',
         generationJobContextKey: expFrozen.generationJobContextKey,
         groundingJobContextKey: expFrozen.groundingJobContextKey,
         previousGenerationJobContextKey: expFrozen.previousGenerationJobContextKey,
       };
       aiGrounding.groundingSource = 'genuine_user';
+      aiGrounding.staleGeneratedContentExcluded = generatedDescriptionPreexisted
+        || Boolean((exp.canonicalDescription || '').trim())
+        || aiGrounding.staleGeneratedContentExcluded;
+    } else if (!aiGrounding.staleGeneratedContentExcluded && authoritative.text.trim()) {
+      aiGrounding.sourceDescription = operationSnapshot.normalizedSourceText || authoritative.text;
+      aiGrounding.experienceForAi = {
+        ...applyOperationSnapshotToExperience(authoritative.experienceForAi, operationSnapshot),
+        generationJobContextKey: expFrozen.generationJobContextKey,
+        groundingJobContextKey: expFrozen.groundingJobContextKey,
+        previousGenerationJobContextKey: expFrozen.previousGenerationJobContextKey,
+      };
+      aiGrounding.groundingSource = 'genuine_user';
+    }
+
+    // Empty-description guard: require either valid grounding or a position for
+    // occupation-aware generation. Never block solely because stale AI duties
+    // were excluded after an occupation change.
+    if (!aiGrounding.sourceDescription.trim() && !String(exp.position || '').trim()) {
+      clearTimeout(timer);
+      setGeneratingBulletsId(null);
+      toast.error(aiErrorMessage('experience_description_required', locale));
+      return;
     }
 
     const diagSession = new ExperienceAiDiagnosticSession({
@@ -1252,18 +1266,20 @@ export default function CVBuilderPage() {
       aiGrounding,
       {
         requestedLocale,
-        selectedSourceKindHint: operationSnapshot.provenanceOrigin === 'currentTextarea'
-          ? 'currentTextarea'
-          : authoritative.kind === 'description'
-            ? 'description'
-            : authoritative.kind === 'originalUserDescription'
-              ? 'originalUserDescription'
-              : authoritative.kind === 'canonicalDescription'
-                ? 'canonicalDescription'
-                : authoritative.kind === 'generatedDescription'
-                  ? 'generatedDescription'
-                  : 'unknown',
+        selectedSourceKindHint: liveSourceEmpty
+          ? 'jobContext'
+          : operationSnapshot.provenanceOrigin === 'currentTextarea'
+            ? 'currentTextarea'
+            : authoritative.kind === 'description'
+              ? 'description'
+              : 'unknown',
         operationalContentLocale,
+        generationSourceKind: liveSourceEmpty ? 'jobContext' : 'liveSource',
+        generatedDescriptionPreexisted,
+        staleGeneratedDescriptionIgnored: liveSourceEmpty && generatedDescriptionPreexisted,
+        factLockReason: liveSourceEmpty
+          ? 'generation_mode_empty_live'
+          : (aiGrounding.sourceDescription.trim() ? 'non_empty_source' : 'no_source'),
       },
     );
     diagSession.recordPayloadBuilt({
@@ -1956,8 +1972,12 @@ export default function CVBuilderPage() {
       lastExportRawCvRef.current = sourceCv;
       try {
         // Single export-ready snapshot for all templates/formats before branching.
+        const primaryExpId = (sourceCv.experience || []).find((e) => e.isPresent)?.id
+          || (sourceCv.experience || [])[0]?.id;
         const prepared = prepareExportReadyCv(sourceCv, locale, sourceCv.templateId, {
           gender: sourceCv.personal?.gender,
+          industry: primaryExpId ? (expIndustry[primaryExpId] ?? 'general') : 'general',
+          level: primaryExpId ? (expLevel[primaryExpId] ?? 'mid') : 'mid',
         });
         lastExportPrepareRef.current = prepared;
         if (!prepared.ok) {

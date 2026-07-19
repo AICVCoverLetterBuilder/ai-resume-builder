@@ -90,17 +90,6 @@ export type ExperienceAiAuthoritativeSourceResult = {
   experienceForAi: WorkExperience;
 };
 
-function recoveredDutiesText(exp: WorkExperience): string {
-  return (exp.recoveredSemanticDuties || [])
-    .map((d) => {
-      const row = d as { label?: string; text?: string; key?: string };
-      return row.label || row.text || '';
-    })
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-}
-
 function scriptLooksEnglishLatin(text: string): boolean {
   const t = (text || '').trim();
   if (!t) return false;
@@ -153,21 +142,18 @@ function inferSelectedLanguageScript(text: string): {
  *
  * Priority for Experience AI Improvement:
  * 1. Non-empty latest visible textarea (always) — even when equivalent to canonical
- * 2. Genuine originalUserDescription when live is empty
- * 3. Canonical when live is empty
- * 4. Generated / recovered / legacy only when no live or user source exists
+ * 2. Empty live textarea → Generation Mode with NO source promotion
+ *    (never resurrect generatedDescription / canonical / original / recovered)
  *
- * Canonical formatting (bullets / CRLF) must never replace a non-empty live value.
+ * Historical generated/canonical fields may remain stored for other CV entries
+ * or diagnostics, but must not become the source of an empty-field generation.
  * Export grounding continues to use `resolveExperienceGroundingDescription`.
  */
 export function resolveExperienceAiAuthoritativeSource(
   exp: WorkExperience,
 ): ExperienceAiAuthoritativeSourceResult {
   const live = (exp.description || '').trim();
-  const original = (exp.originalUserDescription || '').trim();
   const canonical = (exp.canonicalDescription || '').trim();
-  const generated = (exp.generatedDescription || '').trim();
-  const recovered = recoveredDutiesText(exp);
 
   const liveEqualsCanonical = Boolean(
     live && canonical && experienceAiSourcesEquivalent(live, canonical),
@@ -191,6 +177,8 @@ export function resolveExperienceAiAuthoritativeSource(
       : selected;
     const normalizedSelected = normalizeExperienceAiSourceText(authoritativeText);
     const unitText = experienceAiSourceUnits(authoritativeText).join('\n') || normalizedSelected;
+    // Empty selection (Generation Mode): shadow request Experience so historical
+    // generated/canonical/original duties cannot re-enter FACT LOCK / factSet.
     const experienceForAi: WorkExperience = unitText
       ? {
         ...exp,
@@ -201,7 +189,16 @@ export function resolveExperienceAiAuthoritativeSource(
         recoveredSemanticDuties: undefined,
         groundingRecoverySource: undefined,
       }
-      : { ...exp };
+      : {
+        ...exp,
+        description: '',
+        originalUserDescription: '',
+        canonicalDescription: '',
+        generatedDescription: '',
+        recoveredSemanticDuties: undefined,
+        groundingRecoverySource: undefined,
+        descriptionOrigin: 'user',
+      };
 
     const liveSelected = Boolean(
       live
@@ -257,29 +254,10 @@ export function resolveExperienceAiAuthoritativeSource(
     return build(live, 'currentTextarea');
   }
 
-  // 2. Genuine original when live is empty.
-  if (original) {
-    return build(original, 'originalUserDescription');
-  }
-
-  // 3. Canonical when live is empty.
-  if (canonical) {
-    return build(canonical, 'canonicalDescription');
-  }
-
-  // 4. Generated display only when no stronger current-context source exists.
-  if (generated) {
-    return build(generated, 'generatedDescription');
-  }
-
-  // 5. Legacy / recovered.
-  if (recovered) {
-    return build(recovered, 'recovered_semantic_duties');
-  }
-  if (exp.groundingRecoverySource) {
-    const legacy = (canonical || original || live).trim();
-    if (legacy) return build(legacy, 'legacy_grounding');
-  }
+  // 2. Empty live textarea → Generation Mode. Do NOT promote historical
+  // generated/canonical/original/recovered text into the request source.
+  // Those fields stay on the persisted Experience for other consumers, but
+  // experienceForAi must carry an empty description so FACT LOCK stays off.
   return build('', 'none');
 }
 

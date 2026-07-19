@@ -6,7 +6,7 @@
  * state, cvRef, autosave, preview, PDF, or DOCX. Raw provider/repair text must
  * never be applied after this function.
  */
-import type { CVData, CvSummaryOrigin } from './types';
+import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
 import type { CoverLetterGender } from './cover-letter-gender';
 import {
@@ -208,6 +208,11 @@ export type FinalizeCvAiFieldResult = {
     relevanceValidationPassed?: boolean;
     tenseValidationPassed?: boolean;
     unsupportedClaimCount?: number;
+    generationProviderValidationPassed?: boolean | null;
+    generationProviderRejectionReason?: string | null;
+    generationFinalPostconditionPassed?: boolean | null;
+    generationFallbackBuilderKind?: string | null;
+    generationFallbackFailureReason?: string | null;
   };
 };
 
@@ -584,39 +589,58 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     locale,
     level: input.level,
   });
+  const snapshot = input.operationSnapshot;
   const grounding = exp
     ? resolveExperienceAiGrounding(exp, jobContext, freezeExperienceAiDescription)
     : null;
-  const cvForFacts: CVData = exp && grounding
+  // Mode follows the immutable live snapshot when present (empty live → generation).
+  // Without a snapshot: treat context-excluded stale display as empty operational
+  // source so baker→pharmacist (and similar) can occupation-fallback — never use
+  // raw stale cooking/pharmacy display to force enhancement coverage.
+  const liveOperationSource = (snapshot
+    ? (snapshot.normalizedSourceText || snapshot.liveRawText || '')
+    : (grounding?.staleGeneratedContentExcluded
+      ? ''
+      : (exp?.description || ''))).trim();
+  const operationMode = resolveExperienceAiOperationMode(liveOperationSource);
+  const sourceWasEmpty = operationMode === 'generate_from_job_context';
+  const shadowedExpForFacts: WorkExperience | null = exp
+    ? (sourceWasEmpty
+      ? {
+        ...exp,
+        description: '',
+        originalUserDescription: '',
+        canonicalDescription: '',
+        generatedDescription: '',
+        recoveredSemanticDuties: undefined,
+        groundingRecoverySource: undefined,
+      }
+      : (grounding?.experienceForAi || exp))
+    : null;
+  const cvForFacts: CVData = shadowedExpForFacts
     ? {
       ...cv,
       experience: (cv.experience || []).map((e) =>
-        (e.id === exp.id ? grounding.experienceForAi : e)),
+        (e.id === exp!.id ? shadowedExpForFacts : e)),
     }
     : cv;
   const factSet = buildCvCanonicalFactSet(cvForFacts);
   // After occupation/context exclusion, never re-read live/canonical cooking via
   // freezeExperienceAiDescription — that would resurrect stale FACT LOCK duties.
-  const snapshot = input.operationSnapshot;
-  const dutiesText = grounding?.staleGeneratedContentExcluded
+  const dutiesText = sourceWasEmpty
     ? ''
-    : (snapshot?.normalizedSourceText
-      || grounding?.sourceDescription
-      || dutiesTextFromCv(cvForFacts, input.experienceId));
+    : (grounding?.staleGeneratedContentExcluded
+      ? ''
+      : (snapshot?.normalizedSourceText
+        || grounding?.sourceDescription
+        || dutiesTextFromCv(cvForFacts, input.experienceId)));
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: cv.personal?.jobTitle,
     experienceTitle: exp?.position,
     dutiesText,
   });
   const roleDutyConflict = consistency.conflict;
-  const canonical = bulletsForExperience(factSet, experienceIndex);
-  // Mode follows the immutable live snapshot (empty live → generation).
-  // Do not resurrect canonical into enhancement coverage when live is empty.
-  const liveOperationSource = (snapshot
-    ? (snapshot.normalizedSourceText || snapshot.liveRawText || '')
-    : dutiesText).trim();
-  const operationMode = resolveExperienceAiOperationMode(liveOperationSource);
-  const sourceWasEmpty = operationMode === 'generate_from_job_context';
+  const canonical = sourceWasEmpty ? [] : bulletsForExperience(factSet, experienceIndex);
   const sourceForCoverage = sourceWasEmpty
     ? ''
     : (liveOperationSource
@@ -628,6 +652,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : extractSourceDutyUnits(sourceForCoverage));
   const sourceFactCount = sourceUnits.length;
   const providerBulletCount = splitExperienceBullets(input.candidate || '').filter(Boolean).length;
+  let generationProviderValidationPassed: boolean | null = null;
+  let generationProviderRejectionReason: string | null = null;
+  let generationFinalPostconditionPassed: boolean | null = null;
+  let generationFallbackBuilderKind: string | null = null;
+  let generationFallbackFailureReason: string | null = null;
 
   let lastRejectStage = 'init';
   let lastRejectReason = sourceWasEmpty
@@ -699,6 +728,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     perspectiveValidationPassed: generationValidationMeta.perspectiveValidationPassed,
     tenseValidationPassed: generationValidationMeta.tenseValidationPassed,
     unsupportedClaimCount: generationValidationMeta.unsupportedClaimCount,
+    generationProviderValidationPassed,
+    generationProviderRejectionReason,
+    generationFinalPostconditionPassed,
+    generationFallbackBuilderKind,
+    generationFallbackFailureReason,
   });
 
   const tryAcceptGeneration = (
@@ -710,6 +744,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     if (!candidate) {
       lastRejectStage = stage;
       lastRejectReason = 'experience_generation_failed';
+      if (stage.includes('fallback')) generationFallbackFailureReason = 'empty_fallback';
+      else {
+        generationProviderValidationPassed = false;
+        generationProviderRejectionReason = 'experience_generation_failed';
+      }
+      generationFinalPostconditionPassed = false;
       return null;
     }
     const gen = validateExperienceGenerationOutput(candidate, {
@@ -727,18 +767,33 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     if (!gen.ok) {
       lastRejectStage = stage;
       lastRejectReason = gen.reason || 'experience_generation_failed';
+      if (stage.includes('fallback')) generationFallbackFailureReason = lastRejectReason;
+      else {
+        generationProviderValidationPassed = false;
+        generationProviderRejectionReason = lastRejectReason;
+      }
+      generationFinalPostconditionPassed = false;
       return null;
     }
+    // Generation mode: locale/script safety only — never require canonical duties
+    // or enhancement-only missing_canonical_duty postconditions.
     const pass = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
     if (!pass.ok) {
-      // Free-text occupations may be any script; embedding them into a locale
-      // template must not become a generation dead-end after gen validation passed.
+      const enhancementOnly = pass.reason === 'missing_canonical_duty'
+        || pass.reason === 'material_duty_removed'
+        || pass.reason === 'unsupported_generated_duty';
       const titleScriptExempt = pass.reason === 'locale_mismatch' || pass.reason === 'wrong_language';
-      if (!titleScriptExempt) {
+      if (!enhancementOnly && !titleScriptExempt) {
         lastRejectStage = stage;
         lastRejectReason = pass.reason === 'locale_mismatch'
           ? 'experience_generation_locale_invalid'
           : (pass.reason || 'experience_generation_failed');
+        if (stage.includes('fallback')) generationFallbackFailureReason = lastRejectReason;
+        else {
+          generationProviderValidationPassed = false;
+          generationProviderRejectionReason = lastRejectReason;
+        }
+        generationFinalPostconditionPassed = false;
         return null;
       }
     }
@@ -751,7 +806,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       clientDeterministicFallbackBulletCount = bulletCount;
       clientDeterministicFallbackScripts = detectBulletScripts(candidate);
       generationFallbackApplied = true;
+      generationFallbackBuilderKind = 'job_context_generation';
+      generationFallbackFailureReason = null;
+      // Do not keep a prior provider rejection as the fallback "reason" when fallback succeeds.
+      clientDeterministicFallbackReason = undefined;
+    } else {
+      generationProviderValidationPassed = true;
+      generationProviderRejectionReason = null;
     }
+    generationFinalPostconditionPassed = true;
     return {
       blocked: false,
       text: candidate,
@@ -768,6 +831,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         typedFailureReason: undefined,
         countedAsSuccess: true,
         generatedBulletCount: bulletCount,
+        relevanceValidationPassed: true,
+        generationFallbackAttempted: isClientFallback || generationFallbackAttempted,
+        generationFallbackApplied: isClientFallback,
       },
     };
   };
@@ -1089,27 +1155,62 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   // Generation Mode: never use source-preserving / canonical FACT LOCK fallbacks.
   if (sourceWasEmpty) {
     generationFallbackAttempted = true;
-    const jobCtxFallback = normalizeLocaleText(
-      buildJobContextGenerationFallback({
+    generationFallbackBuilderKind = 'job_context_generation';
+    // Universal job-context first (arbitrary titles). Known catalogue occupations
+    // may refine via occupation-aware only when job-context validation rejects.
+    const universalFallback = buildJobContextGenerationFallback({
+      locale,
+      gender,
+      position: exp?.position || cv.personal?.jobTitle,
+      industry: input.industry || jobContext.industryNorm,
+      isPresent,
+    });
+    const catalogueFallback = (
+      jobContext.positionClass === 'pharmacist_pharmacy'
+      || jobContext.industryNorm === 'pharmacy'
+      || jobContext.positionClass === 'baker_food'
+      || jobContext.positionClass === 'hospitality_service'
+    )
+      ? buildOccupationAwareExperienceFallback({
         locale,
         gender,
         position: exp?.position || cv.personal?.jobTitle,
         industry: input.industry || jobContext.industryNorm,
         isPresent,
-      }),
-      locale,
-    );
-    const genAccepted = tryAcceptGeneration(
+      })
+      : '';
+    const jobCtxFallback = normalizeLocaleText(universalFallback || catalogueFallback, locale);
+    if (!jobCtxFallback.trim()) {
+      generationFallbackFailureReason = 'empty_fallback';
+      lastRejectReason = 'experience_generation_failed';
+      lastRejectStage = 'job_context_generation_fallback';
+    }
+    let genAccepted = tryAcceptGeneration(
       jobCtxFallback,
       'deterministic_fallback',
       'job_context_generation_fallback',
     );
+    if (!genAccepted && catalogueFallback.trim() && catalogueFallback.trim() !== jobCtxFallback.trim()) {
+      generationFallbackBuilderKind = 'occupation_aware_generation';
+      genAccepted = tryAcceptGeneration(
+        normalizeLocaleText(catalogueFallback, locale),
+        'deterministic_fallback',
+        'job_context_generation_fallback',
+      );
+    }
     if (genAccepted) {
       perspectiveMeta.normalizedBulletsUsedForApply = true;
       perspectiveMeta.meaningfulChangeDetected = true;
       perspectiveMeta.perspectiveValidationPassed = true;
       perspectiveMeta.finalPersonMode = detectExperiencePersonMode(genAccepted.text, locale);
       return attachPerspectiveDiag(genAccepted);
+    }
+    // Prefer a generation-specific typed reason — never leave enhancement-only codes.
+    if (
+      lastRejectReason === 'missing_canonical_duty'
+      || lastRejectReason === 'experience_material_fact_coverage_incomplete'
+    ) {
+      lastRejectReason = generationFallbackFailureReason || 'experience_generation_failed';
     }
     return attachPerspectiveDiag({
       blocked: true,
@@ -1241,19 +1342,39 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   }
 
   const occupationFallback = normalizeLocaleText(
-    buildJobContextGenerationFallback({
-      locale,
-      gender,
-      position: exp?.position || cv.personal?.jobTitle,
-      industry: input.industry || jobContext.industryNorm,
-      isPresent,
-    }) || buildOccupationAwareExperienceFallback({
-      locale,
-      gender,
-      position: exp?.position,
-      industry: input.industry || jobContext.industryNorm,
-      isPresent,
-    }),
+    (
+      jobContext.positionClass === 'pharmacist_pharmacy'
+      || jobContext.industryNorm === 'pharmacy'
+      || jobContext.positionClass === 'baker_food'
+      || jobContext.positionClass === 'hospitality_service'
+      || jobContext.positionClass === 'software_tech'
+    )
+      ? (buildOccupationAwareExperienceFallback({
+        locale,
+        gender,
+        position: exp?.position,
+        industry: input.industry || jobContext.industryNorm,
+        isPresent,
+      }) || buildJobContextGenerationFallback({
+        locale,
+        gender,
+        position: exp?.position || cv.personal?.jobTitle,
+        industry: input.industry || jobContext.industryNorm,
+        isPresent,
+      }))
+      : (buildJobContextGenerationFallback({
+        locale,
+        gender,
+        position: exp?.position || cv.personal?.jobTitle,
+        industry: input.industry || jobContext.industryNorm,
+        isPresent,
+      }) || buildOccupationAwareExperienceFallback({
+        locale,
+        gender,
+        position: exp?.position,
+        industry: input.industry || jobContext.industryNorm,
+        isPresent,
+      })),
     locale,
   );
   const allowOccupationFallback = Boolean(

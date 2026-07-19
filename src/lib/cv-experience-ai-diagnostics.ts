@@ -87,6 +87,7 @@ export type ExperienceSelectedSourceKind =
   | 'legacy_grounding'
   | 'deterministic_fallback_source'
   | 'grounding_resolution'
+  | 'jobContext'
   | 'none'
   | 'unknown';
 
@@ -149,6 +150,15 @@ export type ExperienceAiDiagnosticTrace = {
   payloadSourceDutyCount: number;
   payloadJobContextHash: string;
   factLockEnabled: boolean;
+  factLockReason: string | null;
+  generationSourceKind: 'jobContext' | 'liveSource' | 'none' | null;
+  generatedDescriptionPreexisted: boolean;
+  staleGeneratedDescriptionIgnored: boolean;
+  generationProviderValidationPassed: boolean | null;
+  generationProviderRejectionReason: string | null;
+  generationFinalPostconditionPassed: boolean | null;
+  generationFallbackBuilderKind: string | null;
+  generationFallbackFailureReason: string | null;
   apiHostClass: ExperienceApiHostClass;
   providerHttpStatus: number | null;
   providerResponseKind: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown';
@@ -358,8 +368,11 @@ export function diagnoseExperienceSourceSelection(
 
   let selectedSourceKind: ExperienceSelectedSourceKind =
     options?.selectedSourceKindHint || match?.kind || 'unknown';
-  if (!selected) selectedSourceKind = 'none';
-  else if (!match && !options?.selectedSourceKindHint) {
+  if (!selected) {
+    selectedSourceKind = options?.selectedSourceKindHint === 'jobContext'
+      ? 'jobContext'
+      : 'none';
+  } else if (!match && !options?.selectedSourceKindHint) {
     if (groundingSource === 'excluded_stale') selectedSourceKind = 'none';
     else if (groundingSource === 'genuine_user' || groundingSource === 'same_context_generated') {
       selectedSourceKind = 'grounding_resolution';
@@ -558,6 +571,15 @@ export class ExperienceAiDiagnosticSession {
       payloadSourceDutyCount: 0,
       payloadJobContextHash: input.jobContextHash,
       factLockEnabled: false,
+      factLockReason: null,
+      generationSourceKind: null,
+      generatedDescriptionPreexisted: false,
+      staleGeneratedDescriptionIgnored: false,
+      generationProviderValidationPassed: null,
+      generationProviderRejectionReason: null,
+      generationFinalPostconditionPassed: null,
+      generationFallbackBuilderKind: null,
+      generationFallbackFailureReason: null,
       apiHostClass: classifyApiHostForDiagnostics(),
       providerHttpStatus: null,
       providerResponseKind: 'unknown',
@@ -672,11 +694,18 @@ export class ExperienceAiDiagnosticSession {
       requestedLocale?: string | null;
       selectedSourceKindHint?: ExperienceSelectedSourceKind;
       operationalContentLocale?: string | null;
+      generationSourceKind?: ExperienceAiDiagnosticTrace['generationSourceKind'];
+      generatedDescriptionPreexisted?: boolean;
+      staleGeneratedDescriptionIgnored?: boolean;
+      factLockReason?: string | null;
     },
   ): void {
     const selected = (grounding.sourceDescription || '').trim();
     const units = extractSourceDutyUnits(selected);
     const identities = sourceFactIdentitiesFromDescription(selected);
+    const generationMode = options?.selectedSourceKindHint === 'jobContext'
+      || options?.generationSourceKind === 'jobContext'
+      || !selected;
     const selection = diagnoseExperienceSourceSelection(
       exp,
       selected,
@@ -686,6 +715,13 @@ export class ExperienceAiDiagnosticSession {
         selectedSourceKindHint: options?.selectedSourceKindHint,
       },
     );
+    const rejectedStale: ExperienceSelectedSourceKind[] = [
+      ...(selection.rejectedStaleSourceKinds || []),
+    ];
+    if (options?.staleGeneratedDescriptionIgnored) {
+      if (!rejectedStale.includes('generatedDescription')) rejectedStale.push('generatedDescription');
+      if (!rejectedStale.includes('canonicalDescription')) rejectedStale.push('canonicalDescription');
+    }
     this.patch({
       sourceDescriptionPresent: Boolean(selected),
       sourceDescriptionLength: selected.length,
@@ -697,21 +733,36 @@ export class ExperienceAiDiagnosticSession {
       sourceFactIdentityCount: identities.length,
       requiredFactCount: identities.length,
       ...selection,
+      operationSnapshotSourceKind: generationMode && !selected
+        ? (options?.selectedSourceKindHint === 'jobContext' ? 'jobContext' : 'none')
+        : selection.operationSnapshotSourceKind,
+      rejectedStaleSourceKinds: rejectedStale,
       factLockEnabled: Boolean(selected),
+      factLockReason: options?.factLockReason
+        ?? (selected ? 'non_empty_source' : 'generation_mode_empty_live'),
+      generationSourceKind: options?.generationSourceKind
+        ?? (selected ? 'liveSource' : 'jobContext'),
+      generatedDescriptionPreexisted: Boolean(options?.generatedDescriptionPreexisted),
+      staleGeneratedDescriptionIgnored: Boolean(options?.staleGeneratedDescriptionIgnored),
       payloadSourceDescriptionLength: selected.length,
       payloadSourceDescriptionHash: fingerprintText(selected),
       payloadSourceScript: classifyExperienceScript(selected),
       payloadSourceDutyCount: units.length,
+      sourceWasEmpty: !selected,
+      operationMode: selected ? 'enhance_existing_description' : 'generate_from_job_context',
+      generationContextPresent: !selected,
       ...(options?.operationalContentLocale
         ? { contentLocale: options.operationalContentLocale }
         : {}),
     });
     this.stage(
       'source_description_selected',
-      selected || grounding.groundingSource === 'excluded_stale' ? 'ok' : 'fail',
+      selected || generationMode || grounding.groundingSource === 'excluded_stale' ? 'ok' : 'fail',
       selected
         ? undefined
-        : (grounding.groundingSource === 'excluded_stale' ? 'excluded_stale' : 'no_source'),
+        : (generationMode
+          ? 'generation_job_context'
+          : (grounding.groundingSource === 'excluded_stale' ? 'excluded_stale' : 'no_source')),
     );
     this.stage(
       'source_units_split',
@@ -913,7 +964,34 @@ export class ExperienceAiDiagnosticSession {
         reason === 'locale_mismatch' || reason === 'wrong_language'
           ? reason
           : this.draft.providerLocaleValidationReason,
+      generationProviderValidationPassed: diag.generationProviderValidationPassed
+        ?? (diag.sourceWasEmpty && !blocked && !diag.generationFallbackApplied
+          ? true
+          : diag.generationProviderValidationPassed ?? null),
+      generationProviderRejectionReason: blocked && diag.sourceWasEmpty && !diag.generationFallbackApplied
+        ? (diag.generationProviderRejectionReason || reason || null)
+        : (diag.generationProviderRejectionReason ?? null),
+      generationFinalPostconditionPassed: diag.generationFinalPostconditionPassed
+        ?? (diag.sourceWasEmpty ? Boolean(finalized.countedAsSuccess && !blocked) : null),
+      generationFallbackBuilderKind: diag.generationFallbackBuilderKind
+        ?? (diag.generationFallbackApplied ? 'job_context_generation' : null),
+      generationFallbackFailureReason: diag.generationFallbackFailureReason
+        ?? (diag.generationFallbackAttempted && !diag.generationFallbackApplied
+          ? (reason || 'empty_fallback')
+          : null),
     });
+
+    // Never report experience_generation_not_relevant when relevance actually passed.
+    if (
+      this.draft.relevanceValidationPassed
+      && this.draft.fallbackReason === 'experience_generation_not_relevant'
+    ) {
+      this.patch({
+        fallbackReason: this.draft.generationFallbackApplied
+          ? null
+          : (diag.clientDeterministicFallbackReason || this.draft.finalTypedFailureReason),
+      });
+    }
 
     const localeFail = reason === 'locale_mismatch' || reason === 'wrong_language';
     this.stage(

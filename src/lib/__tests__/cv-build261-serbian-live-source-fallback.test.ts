@@ -374,8 +374,9 @@ describe('build 261 — source-selection matrix', () => {
       descriptionOrigin: 'user',
     });
     const auth = resolveExperienceAiAuthoritativeSource(exp);
-    expect(auth.text).toBe(SR_BLOCK);
-    expect(auth.kind === 'canonicalDescription' || auth.kind === 'originalUserDescription').toBe(true);
+    // Empty live → Generation Mode: never promote canonical/generated into AI source.
+    expect(auth.text).toBe('');
+    expect(auth.kind).toBe('none');
   });
 
   it('D: position/industry change excludes stale AI via job context', () => {

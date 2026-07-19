@@ -226,11 +226,14 @@ function projectExperienceDisplayFromSemanticDuties(
   requestedLocale: Locale,
   gender: string,
   cv: CVData,
+  exportContext?: { industry?: string; level?: string },
 ): string {
   const current = (exp.description || '').trim();
   const jobCtx = buildExperienceJobContext({
     position: exp.position || cv.personal?.jobTitle,
     locale: requestedLocale,
+    industry: exportContext?.industry,
+    level: exportContext?.level,
   });
   const authoritativeSourceRaw = (
     exp.originalUserDescription
@@ -394,10 +397,25 @@ export function prepareExportReadyCv(
   rawCv: CVData,
   requestedLocale: Locale,
   templateId?: TemplateId | string,
-  options?: { gender?: string; referenceDate?: Date | string },
+  options?: {
+    gender?: string;
+    referenceDate?: Date | string;
+    /** UI industry token used when Experience AI stamped generationJobContextKey. */
+    industry?: string;
+    /** UI level token used when Experience AI stamped generationJobContextKey. */
+    level?: string;
+  },
 ): PrepareExportReadyResult {
   const selectedTemplateId = templateId || rawCv.templateId;
   const gender = options?.gender || rawCv.personal?.gender || '';
+  const exportIndustry = options?.industry;
+  const exportLevel = options?.level;
+  const jobContextForExport = (position?: string) => buildExperienceJobContext({
+    position,
+    locale: requestedLocale,
+    industry: exportIndustry,
+    level: exportLevel,
+  });
   let stage: ExportReadyStage = 'normalize_runtime';
 
   const baseDiagnostics = (): ExportReadyDiagnostics => ({
@@ -428,10 +446,7 @@ export function prepareExportReadyCv(
   let staleSummaryExcluded = false;
 
   const nextExperience: WorkExperience[] = (cv.experience || []).map((exp) => {
-    const jobCtx = buildExperienceJobContext({
-      position: exp.position || cv.personal?.jobTitle,
-      locale: requestedLocale,
-    });
+    const jobCtx = jobContextForExport(exp.position || cv.personal?.jobTitle);
     let grounding = resolveExperienceSemanticGrounding(exp);
     summaryFactKeysBefore.push(...semanticDutyKeys(grounding));
     const filteredDuties = filterSemanticDutiesForJobContext(grounding.duties, jobCtx);
@@ -513,10 +528,7 @@ export function prepareExportReadyCv(
   ));
   const allKeys = [...groundingById.values()].flatMap((g) => semanticDutyKeys(g));
   const hasContextSafeEmptyDutyDisplay = (cv.experience || []).some((exp) => {
-    const jobCtx = buildExperienceJobContext({
-      position: exp.position || cv.personal?.jobTitle,
-      locale: requestedLocale,
-    });
+    const jobCtx = jobContextForExport(exp.position || cv.personal?.jobTitle);
     const desc = (exp.description || '').trim();
     if (!desc) return false;
     if (
@@ -542,10 +554,7 @@ export function prepareExportReadyCv(
     return experienceBulletsMatchRequestedLocale(desc, requestedLocale, cv);
   });
   const hasMaterialSourceFacts = (cv.experience || []).some((exp) => {
-    const jobCtx = buildExperienceJobContext({
-      position: exp.position || cv.personal?.jobTitle,
-      locale: requestedLocale,
-    });
+    const jobCtx = jobContextForExport(exp.position || cv.personal?.jobTitle);
     const source = (exp.originalUserDescription || exp.canonicalDescription || '').trim();
     if (!source) return false;
     // Cooking material under a non-food role is not a safe export grounding source.
@@ -585,6 +594,7 @@ export function prepareExportReadyCv(
         requestedLocale,
         gender,
         cv,
+        { industry: exportIndustry, level: exportLevel },
       );
       return { ...exp, description: projected };
     }),
@@ -636,10 +646,7 @@ export function prepareExportReadyCv(
   );
 
   const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
-  const primaryJobCtx = buildExperienceJobContext({
-    position: primaryExp?.position || cv.personal?.jobTitle,
-    locale: requestedLocale,
-  });
+  const primaryJobCtx = jobContextForExport(primaryExp?.position || cv.personal?.jobTitle);
   const summaryContextMatch = Boolean(
     cv.summaryGenerationContextKey
     && cv.summaryGenerationContextKey === primaryJobCtx.key,
@@ -940,10 +947,7 @@ export function prepareExportReadyCv(
   // Summary↔Experience parity: material facts present in Summary grounding must
   // still survive in finalized Experience (Summary must not be the only copy).
   for (const exp of cv.experience || []) {
-    const jobCtx = buildExperienceJobContext({
-      position: exp.position || cv.personal?.jobTitle,
-      locale: requestedLocale,
-    });
+    const jobCtx = jobContextForExport(exp.position || cv.personal?.jobTitle);
     const source = (exp.originalUserDescription || exp.canonicalDescription || '').trim();
     if (!source) continue;
     if (
@@ -1048,7 +1052,12 @@ export function unwrapExportReadyCv(result: PrepareExportReadyResult): CVData {
 export function prepareLegacyRecoveredFinalLocaleSafeCv(
   sourceCv: CVData,
   locale: Locale,
-  options?: { gender?: string; referenceDate?: Date | string },
+  options?: {
+    gender?: string;
+    referenceDate?: Date | string;
+    industry?: string;
+    level?: string;
+  },
 ): {
   cv: CVData;
   diagnostics: {

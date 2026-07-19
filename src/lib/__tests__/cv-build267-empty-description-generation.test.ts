@@ -312,8 +312,8 @@ describe('build 267 — exact empty Serbian fixture', () => {
       expect(b).not.toMatch(/\bExcel\b|\bKPI\b|tim od|increased revenue/i);
       expect(b).not.toMatch(/Obavlja dodeljene profesionalne/i);
     });
-    // Universal title-grounded output embeds the free-text role (no per-title template).
-    expect(result.finalized.text).toMatch(/Koordinator terenske dokumentacije/i);
+    // Title-relevant without repeating the full job title in every bullet.
+    expect(result.finalized.text).toMatch(/terenske dokumentacije/i);
     expect(bullets[0]).toMatch(/^(Obavlja|Pregleda|Ažurira)/);
     expect(result.finalized.text).toBe(
       buildJobContextGenerationFallback({
@@ -439,7 +439,7 @@ describe('build 267 — control matrix', () => {
     expect(r.finalized.countedAsSuccess).toBe(true);
     const text = r.finalized.text;
     expect(splitExperienceBullets(text)).toHaveLength(3);
-    expect(text).toMatch(/Analitičar logističkih tokova/i);
+    expect(text).toMatch(/logističkih tokova/i);
     expect(text).not.toMatch(/Obavlja dodeljene profesionalne zadatke/i);
   });
 
@@ -463,7 +463,7 @@ describe('build 267 — control matrix', () => {
     });
     expect(r.finalized.countedAsSuccess).toBe(true);
     expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).toMatch(/Koordinator terenske dokumentacije/i);
+    expect(r.finalized.text).toMatch(/terenske dokumentacije/i);
     expect(r.finalized.text).not.toMatch(/koktel|bara|gostiju/i);
   });
 
@@ -529,7 +529,7 @@ describe('build 267 — reload / Summary / PDF / DOCX', () => {
 
     const reloaded: CVData = JSON.parse(JSON.stringify(nextCv));
     expect(splitExperienceBullets(reloaded.experience[0].description || '')).toHaveLength(3);
-    expect(reloaded.experience[0].description).toMatch(/Koordinator terenske dokumentacije/i);
+    expect(reloaded.experience[0].description).toMatch(/terenske dokumentacije|Pregleda|Ažurira|Koordin/i);
 
     // Summary finalize path can read confirmed Experience facts.
     const summaryCandidate = [
@@ -563,7 +563,7 @@ describe('build 267 — reload / Summary / PDF / DOCX', () => {
     if (!prepared.ok) return;
     const pdf = await buildModernMinimalPdfBlob(prepared.cv, 'sr');
     const pdfFlat = extractPdfUnicodeText(Buffer.from(await pdf.arrayBuffer())).replace(/\u0000/g, '');
-    expect(pdfFlat).toMatch(/Koordinator terenske dokumentacije|Obavlja|Ažurira|Koordin/i);
+    expect(pdfFlat).toMatch(/terenske dokumentacije|Pregleda|Ažurira|Koordin/i);
     await exportToDOCX(prepared.cv, 'cv-267', 'sr', 'modern-minimal');
     expect(getProAiUsageCount()).toBe(beforeExport);
   });

@@ -192,9 +192,23 @@ function roleLabel(position: string, female: boolean, locale: Locale): string {
 }
 
 /**
+ * Soft domain phrasing from free-text title — strips common role prefixes so
+ * fallback bullets stay title-relevant without repeating the full title thrice.
+ */
+function softDomainFromTitle(position: string): string {
+  const raw = (position || '').trim();
+  if (!raw) return '';
+  const stripped = raw.replace(
+    /^(koordinator(?:ka)?|coordinator|specijalista|specialist|analitičar(?:ka)?|analyst|menadžer(?:ka)?|manager|saradnik(?:ca)?|assistant|responsável|coordenador(?:a)?|responsable)\s+/iu,
+    '',
+  ).trim();
+  return stripped || raw;
+}
+
+/**
  * Deterministic job-context generation fallback (not source-preserving).
- * Embeds the free-text title into locale templates — no occupation catalogue
- * and no per-title keyword branches.
+ * Grounds arbitrary free-text titles without occupation catalogues or keyword
+ * branches. Separate from source-preserving enhancement fallback.
  */
 export function buildJobContextGenerationFallback(options: {
   locale: Locale;
@@ -208,159 +222,160 @@ export function buildJobContextGenerationFallback(options: {
   const g = String(options.gender || '').toLowerCase();
   const female = g === 'female' || g === 'f' || g === 'ženski' || g === 'zenski';
   const role = roleLabel(options.position || '', female, locale);
+  const domain = softDomainFromTitle(options.position || '') || role;
   void options.industry; // available for future soft framing; not a catalogue key
 
   if (locale === 'sr' || locale === 'hr') {
     return formatExperienceBullets(present
       ? [
-        `Obavlja svakodnevne zadatke u ulozi ${role} uz proveru tačnosti podataka.`,
-        `Ažurira evidenciju i prati status stavki vezanih za rad kao ${role}.`,
-        'Koordiniše razmenu informacija sa kolegama radi blagovremenog zatvaranja zadataka.',
+        `Pregleda dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domain} i proverava potpunost podataka.`,
+        'Ažurira evidenciju i prati status dokumentacije u skladu sa potrebama radnog mesta.',
+        'Koordiniše razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.',
       ]
       : [
         female
-          ? `Obavljala je svakodnevne zadatke u ulozi ${role} uz proveru tačnosti podataka.`
-          : `Obavljao je svakodnevne zadatke u ulozi ${role} uz proveru tačnosti podataka.`,
+          ? `Pregledala je dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domain} i proveravala potpunost podataka.`
+          : `Pregledao je dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domain} i proveravao potpunost podataka.`,
         female
-          ? `Ažurirala je evidenciju i pratila status stavki vezanih za rad kao ${role}.`
-          : `Ažurirao je evidenciju i pratio status stavki vezanih za rad kao ${role}.`,
+          ? 'Ažurirala je evidenciju i pratila status dokumentacije u skladu sa potrebama radnog mesta.'
+          : 'Ažurirao je evidenciju i pratio status dokumentacije u skladu sa potrebama radnog mesta.',
         female
-          ? 'Koordinisala je razmenu informacija sa kolegama radi blagovremenog zatvaranja zadataka.'
-          : 'Koordinisao je razmenu informacija sa kolegama radi blagovremenog zatvaranja zadataka.',
+          ? 'Koordinisala je razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.'
+          : 'Koordinisao je razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.',
       ]);
   }
 
   if (locale === 'en') {
     return formatExperienceBullets(present
       ? [
-        `Perform day-to-day duties as ${role} with attention to data accuracy.`,
-        `Update work records and track open items related to the ${role} role.`,
-        'Coordinate information sharing with colleagues to close tasks on time.',
+        `Review day-to-day records related to ${domain} and verify data completeness.`,
+        'Update work documentation and track open items according to role needs.',
+        'Coordinate information sharing with colleagues to complete documentation on time.',
       ]
       : [
-        `Performed day-to-day duties as ${role} with attention to data accuracy.`,
-        `Updated work records and tracked open items related to the ${role} role.`,
-        'Coordinated information sharing with colleagues to close tasks on time.',
+        `Reviewed day-to-day records related to ${domain} and verified data completeness.`,
+        'Updated work documentation and tracked open items according to role needs.',
+        'Coordinated information sharing with colleagues to complete documentation on time.',
       ]);
   }
 
   if (locale === 'hi') {
     return formatExperienceBullets([
-      `भूमिका ${role} में दैनिक कार्य सटीकता के साथ पूरा करता है।`,
-      `${role} से जुड़े कार्य रिकॉर्ड अपडेट करता है और खुली मदों की स्थिति पर नज़र रखता है।`,
-      'कार्य समय पर पूरा करने के लिए सहयोगियों के साथ जानकारी का समन्वय करता है।',
+      `${domain} से जुड़े दैनिक रिकॉर्ड की समीक्षा करता है और डेटा की पूर्णता जाँचता है।`,
+      'कार्य दस्तावेज़ अपडेट करता है और खुली मदों की स्थिति पर नज़र रखता है।',
+      'सहयोगियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करता है।',
     ]);
   }
 
   if (locale === 'ar') {
     return formatExperienceBullets([
-      `ينجز المهام اليومية في دور ${role} مع التحقق من دقة البيانات.`,
-      `يحدّث سجلات العمل المرتبطة بدور ${role} ويتابع البنود المفتوحة.`,
-      'ينسّق تبادل المعلومات مع الزملاء لإغلاق المهام في الوقت المناسب.',
+      `يراجع السجلات اليومية المرتبطة بـ ${domain} ويتحقق من اكتمال البيانات.`,
+      'يحدّث وثائق العمل ويتابع البنود المفتوحة وفق احتياجات الدور.',
+      'ينسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
     ]);
   }
 
   if (locale === 'ja') {
     return formatExperienceBullets([
-      `${role}として日常業務を正確に遂行する。`,
-      `${role}に関する業務記録を更新し、未完了項目の状況を確認する。`,
-      '関係者と情報を調整し、業務を期限内に完了させる。',
+      `${domain}に関する日常記録を確認し、データの完全性を検証する。`,
+      '業務文書を更新し、未完了項目の状況を確認する。',
+      '関係者と情報を調整し、文書を期限内に完了させる。',
     ]);
   }
 
   if (locale === 'de') {
     return formatExperienceBullets(present
       ? [
-        `Erledigt tägliche Aufgaben als ${role} und prüft die Datenqualität.`,
-        `Aktualisiert Arbeitsnachweise für die Rolle ${role} und verfolgt offene Vorgänge.`,
-        'Koordiniert den Informationsaustausch mit Kolleginnen und Kollegen.',
+        `Prüft tägliche Unterlagen im Bereich ${domain} und kontrolliert die Vollständigkeit der Daten.`,
+        'Aktualisiert Arbeitsdokumentation und verfolgt offene Vorgänge.',
+        'Koordiniert den Informationsaustausch mit Kolleginnen und Kollegen zur fristgerechten Fertigstellung.',
       ]
       : [
-        `Erledigte tägliche Aufgaben als ${role} und prüfte die Datenqualität.`,
-        `Aktualisierte Arbeitsnachweise für die Rolle ${role} und verfolgte offene Vorgänge.`,
-        'Koordinierte den Informationsaustausch mit Kolleginnen und Kollegen.',
+        `Prüfte tägliche Unterlagen im Bereich ${domain} und kontrollierte die Vollständigkeit der Daten.`,
+        'Aktualisierte Arbeitsdokumentation und verfolgte offene Vorgänge.',
+        'Koordinierte den Informationsaustausch mit Kolleginnen und Kollegen zur fristgerechten Fertigstellung.',
       ]);
   }
 
   if (locale === 'es') {
     return formatExperienceBullets(present
       ? [
-        `Realiza tareas diarias como ${role} y verifica la exactitud de los datos.`,
-        `Actualiza registros de trabajo del rol ${role} y sigue asuntos abiertos.`,
-        'Coordina el intercambio de información con colegas para cerrar tareas a tiempo.',
+        `Revisa registros diarios relacionados con ${domain} y verifica la integridad de los datos.`,
+        'Actualiza la documentación de trabajo y sigue asuntos abiertos.',
+        'Coordina el intercambio de información con colegas para completar la documentación a tiempo.',
       ]
       : [
-        `Realizó tareas diarias como ${role} y verificó la exactitud de los datos.`,
-        `Actualizó registros de trabajo del rol ${role} y siguió asuntos abiertos.`,
-        'Coordinó el intercambio de información con colegas para cerrar tareas a tiempo.',
+        `Revisó registros diarios relacionados con ${domain} y verificó la integridad de los datos.`,
+        'Actualizó la documentación de trabajo y siguió asuntos abiertos.',
+        'Coordinó el intercambio de información con colegas para completar la documentación a tiempo.',
       ]);
   }
 
   if (locale === 'fr') {
     return formatExperienceBullets(present
       ? [
-        `Assure les tâches quotidiennes en tant que ${role} avec contrôle de l’exactitude des données.`,
-        `Met à jour les registres liés au rôle de ${role} et suit les dossiers ouverts.`,
-        'Coordonne l’échange d’informations avec les collègues pour clôturer les tâches.',
+        `Examine les dossiers quotidiens liés à ${domain} et vérifie l’exhaustivité des données.`,
+        'Met à jour la documentation de travail et suit les dossiers ouverts.',
+        'Coordonne l’échange d’informations avec les collègues pour finaliser la documentation.',
       ]
       : [
-        `Assurait les tâches quotidiennes en tant que ${role} avec contrôle de l’exactitude des données.`,
-        `Mettait à jour les registres liés au rôle de ${role} et suivait les dossiers ouverts.`,
-        'Coordonnait l’échange d’informations avec les collègues pour clôturer les tâches.',
+        `Examinait les dossiers quotidiens liés à ${domain} et vérifiait l’exhaustivité des données.`,
+        'Mettait à jour la documentation de travail et suivait les dossiers ouverts.',
+        'Coordonnait l’échange d’informations avec les collègues pour finaliser la documentation.',
       ]);
   }
 
   if (locale === 'it') {
     return formatExperienceBullets(present
       ? [
-        `Svolge i compiti quotidiani come ${role} verificando l’accuratezza dei dati.`,
-        `Aggiorna i registri relativi al ruolo di ${role} e segue le pratiche aperte.`,
-        'Coordina lo scambio di informazioni con i colleghi per chiudere le attività.',
+        `Esamina i registri quotidiani relativi a ${domain} e verifica la completezza dei dati.`,
+        'Aggiorna la documentazione di lavoro e segue le pratiche aperte.',
+        'Coordina lo scambio di informazioni con i colleghi per completare la documentazione.',
       ]
       : [
-        `Svolgeva i compiti quotidiani come ${role} verificando l’accuratezza dei dati.`,
-        `Aggiornava i registri relativi al ruolo di ${role} e seguiva le pratiche aperte.`,
-        'Coordinava lo scambio di informazioni con i colleghi per chiudere le attività.',
+        `Esaminava i registri quotidiani relativi a ${domain} e verificava la completezza dei dati.`,
+        'Aggiornava la documentazione di lavoro e seguiva le pratiche aperte.',
+        'Coordinava lo scambio di informazioni con i colleghi per completare la documentazione.',
       ]);
   }
 
   if (locale === 'ru') {
     return formatExperienceBullets(present
       ? [
-        `Выполняет повседневные задачи в роли ${role} с проверкой точности данных.`,
-        `Обновляет рабочие записи по роли ${role} и отслеживает открытые пункты.`,
-        'Согласовывает обмен информацией с коллегами для своевременного закрытия задач.',
+        `Проверяет повседневные записи по направлению ${domain} и полноту данных.`,
+        'Обновляет рабочую документацию и отслеживает открытые пункты.',
+        'Согласовывает обмен информацией с коллегами для своевременного завершения документации.',
       ]
       : [
-        `Выполнял повседневные задачи в роли ${role} с проверкой точности данных.`,
-        `Обновлял рабочие записи по роли ${role} и отслеживал открытые пункты.`,
-        'Согласовывал обмен информацией с коллегами для своевременного закрытия задач.',
+        `Проверял повседневные записи по направлению ${domain} и полноту данных.`,
+        'Обновлял рабочую документацию и отслеживал открытые пункты.',
+        'Согласовывал обмен информацией с коллегами для своевременного завершения документации.',
       ]);
   }
 
   if (locale === 'pt-BR') {
     return formatExperienceBullets(present
       ? [
-        `Executa tarefas diárias como ${role} com verificação da precisão dos dados.`,
-        `Atualiza registros do papel ${role} e acompanha itens em aberto.`,
-        'Coordena a troca de informações com colegas para fechar tarefas no prazo.',
+        `Revisa registros diários relacionados a ${domain} e verifica a completude dos dados.`,
+        'Atualiza a documentação de trabalho e acompanha itens em aberto.',
+        'Coordena a troca de informações com colegas para concluir a documentação no prazo.',
       ]
       : [
-        `Executava tarefas diárias como ${role} com verificação da precisão dos dados.`,
-        `Atualizava registros do papel ${role} e acompanhava itens em aberto.`,
-        'Coordenava a troca de informações com colegas para fechar tarefas no prazo.',
+        `Revisava registros diários relacionados a ${domain} e verificava a completude dos dados.`,
+        'Atualizava a documentação de trabalho e acompanhava itens em aberto.',
+        'Coordenava a troca de informações com colegas para concluir a documentação no prazo.',
       ]);
   }
 
   return formatExperienceBullets(present
     ? [
-      `Perform day-to-day duties as ${role} with attention to accuracy.`,
-      `Update work records for the ${role} role and track open items.`,
-      'Coordinate information sharing with colleagues to complete tasks.',
+      `Review day-to-day records related to ${domain} and verify data completeness.`,
+      'Update work documentation and track open items according to role needs.',
+      'Coordinate information sharing with colleagues to complete documentation on time.',
     ]
     : [
-      `Performed day-to-day duties as ${role} with attention to accuracy.`,
-      `Updated work records for the ${role} role and tracked open items.`,
-      'Coordinated information sharing with colleagues to complete tasks.',
+      `Reviewed day-to-day records related to ${domain} and verified data completeness.`,
+      'Updated work documentation and tracked open items according to role needs.',
+      'Coordinated information sharing with colleagues to complete documentation on time.',
     ]);
 }
