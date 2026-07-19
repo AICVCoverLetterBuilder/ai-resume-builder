@@ -807,18 +807,13 @@ function classifyGenericDutyIntent(text: string): GenericDutyIntent | null {
     startsWord('plan', 'planning', 'coordinat', 'coordination', 'koordin', 'planir')
     || includesAny('योजना', 'समन्वय')
   ) return 'planning';
-  // Warehouse / driving / delivery duties (e.g. forklift operators, drivers,
-  // couriers) never matched any bucket above — every generic-duty CV outside
-  // an office/hospitality context fell through to an empty translation for
-  // every non-English locale (see `GENERIC_DUTY_FALLBACK` below for the
-  // remaining catch-all once even this bucket doesn't match).
+  // Warehouse / driving / delivery duties — never match design "deliverables".
   if (
-    startsWord(
-      'transport', 'deliver', 'delivery', 'load', 'unload', 'warehouse',
-      'utovar', 'istovar', 'vozi', 'vožnj', 'voz', 'rukovan', 'viličar', 'vilicar',
-      'sklad', 'isporuč', 'isporuc', 'prevoz', 'tovar',
+    (
+      /\b(?!deliverables?\b)(?:transport|deliver(?:y|ed|ing)?|load(?:ing|ed)?|unload(?:ing|ed)?|warehouse|utovar|istovar|vozi|vožnj|voz|rukovan|viličar|vilicar|sklad|isporuč|isporuc|prevoz|tovar)[a-zčćžšđ]*\b/iu.test(t)
+      || includesAny('परिवहन', 'गोदाम', 'डिलीवरी', 'लोडिंग')
     )
-    || includesAny('परिवहन', 'गोदाम', 'डिलीवरी', 'लोडिंग')
+    && !/\bdeliverables?\b/i.test(t)
   ) return 'logistics';
   return null;
 }
@@ -1119,16 +1114,20 @@ function localizedBulletForFact(
     if (cooked.trim()) return cooked.trim();
   }
 
-  const sourceIsNonEnglish = /[čćžšđČĆŽŠĐа-яА-Я\u0900-\u097F\u0600-\u06FF]/.test(source);
   const sameLocaleSource = sourceUsableInLocale(source, locale);
+  // Treat undiacritic Serbian/Croatian Latin as non-English even without čćžšđ.
+  const sourceIsNonEnglish = !sourceUsableInLocale(source, 'en');
 
   // Optional material-key templates — never required for free-text correctness.
-  const materialKeys = classifyMaterialDutyKeys(source).filter((k) =>
-    k.startsWith('logistics_')
-    || k.startsWith('software_')
-    || k.startsWith('sales_')
-    || k.startsWith('cs_'),
-  );
+  // Logistics shells are warehouse-domain only: do not project "deliverables" or
+  // generic English into goods-delivery Serbian (build 271 designer leak).
+  const materialKeys = classifyMaterialDutyKeys(source).filter((k) => {
+    if (k.startsWith('software_') || k.startsWith('sales_') || k.startsWith('cs_')) return true;
+    if (k.startsWith('logistics_')) {
+      return /\b(?:warehouse|skladist|goods|rob[aeu]|shipment|isporuč|utovar|transport|prevoz|magacin|lager)\b/iu.test(source);
+    }
+    return false;
+  });
   for (const key of materialKeys) {
     const materialLine = localizedMaterialDutyBullet(key, locale, g, isPresent);
     if (!materialLine) continue;
@@ -1238,17 +1237,32 @@ function localizedBulletForFact(
       const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
       return fallbackTable(g).trim();
     }
-    if (!sourceIsNonEnglish && universal) return universal;
+    // Never preserve English (or other non-target) source under a different
+    // target locale — that produced mixed EN+SR Experience entries (build 271).
+    // (This block is only reached for non-English `locale`.)
+    if (!sourceIsNonEnglish && universal) {
+      if (sameLocaleSource) return universal;
+      if (options?.useGenericCatchAll) {
+        const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
+        return fallbackTable(g).trim();
+      }
+      return '';
+    }
     if (locale === 'hi' && /\p{Script=Devanagari}/u.test(universal)) return universal;
-    if ((locale === 'sr' || locale === 'hr') && (/[čćžšđČĆŽŠĐ]/u.test(universal) || universal)) {
+    if ((locale === 'sr' || locale === 'hr') && (/[čćžšđČĆŽŠĐ]/.test(universal) || universal)) {
       return universal || source;
     }
     if (locale === 'ru' && /[\u0400-\u04FF]/.test(universal)) return universal;
     if (locale === 'ar' && /[\u0600-\u06FF]/.test(universal)) return universal;
     if (locale === 'ja' && /[\u3040-\u30FF\u3400-\u9FFF]/.test(universal)) return universal;
     if (sameLocaleSource) return universal || source;
-    const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
-    return fallbackTable(g).trim();
+    // Fail closed for unmapped cross-locale duties. Soft shells require
+    // useGenericCatchAll (AI recovery / summary shells only — not export).
+    if (options?.useGenericCatchAll) {
+      const fallbackTable = GENERIC_DUTY_FALLBACK[locale] || GENERIC_DUTY_FALLBACK.en;
+      return fallbackTable(g).trim();
+    }
+    return '';
   }
 
   if (
@@ -1274,7 +1288,7 @@ export function localizeCanonicalBulletLine(
   sourceText: string,
   locale: Locale,
   gender?: CoverLetterGender | string,
-  options?: { isPresent?: boolean },
+  options?: { isPresent?: boolean; useGenericCatchAll?: boolean },
 ): string {
   const fact: CvCanonicalFact = {
     id: 'tmp',
@@ -1399,7 +1413,13 @@ export function buildSourcePreservingExperienceBulletsWithProvenance(
       }) || sourceText.replace(/^[•\-\*\u2022]\s*/u, '').trim();
       transformationKind = 'universal_preserve_tense';
     } else {
-      text = localizeCanonicalBulletLine(sourceText, locale, gender, options);
+      text = localizeCanonicalBulletLine(sourceText, locale, gender, {
+        ...options,
+        // AI / source-preserving rebuild may use a soft shell when no intent
+        // matched. Export paths call localizeCanonicalBulletLine directly
+        // without this flag and stay fail-closed.
+        useGenericCatchAll: true,
+      });
       transformationKind = 'localize_projection';
     }
     if (!text.trim() || !identity) continue;

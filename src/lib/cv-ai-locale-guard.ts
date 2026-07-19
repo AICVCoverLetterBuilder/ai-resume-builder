@@ -27,6 +27,19 @@ const LATIN = /[A-Za-zÀ-ÖØ-öø-ÿŠšŽžĆćČčĐđ]/g;
 /** Distinctive to Serbian/Croatian/Bosnian; never used by de/es/fr/it/en/pt-BR. */
 const SERBO_CROATIAN_DIACRITICS = /[čćžšđČĆŽŠĐ]/u;
 
+const EN_CLAUSE_RE =
+  /\b(?:the|and|with|for|from|that|this|these|those|was|were|are|is|been|being|have|has|had|will|would|should|could|created|reviewed|updated|coordinated|delivered|developed|prepared|maintained|ensured|supported|managed|worked|using|across|during|within)\b/iu;
+
+/** Strip Latin brand/domain islands so they do not trip SC-diacritic checks under hi/ar/ja/ru. */
+function stripLatinDomainIslands(text: string): string {
+  return (text || '')
+    .replace(/\b[\p{Script=Latin}][\p{Script=Latin}0-9.&'’-]{0,48}\b/gu, (tok) => (
+      EN_CLAUSE_RE.test(tok) ? tok : ' '
+    ))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Scripted locales that require their own script to dominate prose output. */
 const SCRIPT_LOCALE_PATTERN: Partial<Record<Locale, RegExp>> = {
   hi: DEVANAGARI,
@@ -47,38 +60,56 @@ export function isWrongLanguageAiOutput(text: string, locale: Locale): boolean {
 
   const scriptRe = SCRIPT_LOCALE_PATTERN[locale];
   if (scriptRe) {
-    const scriptCount = (value.match(scriptRe) || []).length;
-    const latinCount = (value.match(LATIN) || []).length;
+    // Strip brand / free-text domain labels (may carry Serbian diacritics like
+    // "logističkih") before judging script purity — those are not SC prose.
+    const prose = stripLatinDomainIslands(value) || value;
+    const scriptCount = (prose.match(scriptRe) || []).length;
+    const latinCount = (prose.match(LATIN) || []).length;
     const total = Math.max(1, scriptCount + latinCount);
     // Neutral proper nouns / acronyms may keep some Latin letters, but the
     // requested script must clearly dominate the generated prose.
     if (!(scriptCount >= 4 && scriptCount / total >= 0.35)) return true;
-    // A leaked Serbian/Croatian sentence (e.g. spliced in by duration-repair
-    // logic that only strips known duration fragments, not whole foreign
-    // sentences) counts toward `latinCount` above, so it can be diluted by a
-    // long-enough requested-script opening and slip past the ratio check.
-    // These diacritics never legitimately occur in hi/ar/ja/ru prose, so any
-    // occurrence — regardless of overall script ratio — is still a reliable,
-    // unambiguous wrong-language signal.
-    if (SERBO_CROATIAN_DIACRITICS.test(value)) return true;
+    // A leaked Serbian/Croatian *sentence* (English/Latin clause with SC
+    // diacritics) is still wrong under hi/ar/ja/ru. Domain labels already
+    // stripped above.
+    if (SERBO_CROATIAN_DIACRITICS.test(prose)) return true;
     return false;
   }
 
-  // Latin-script requested locale (en, de, es, fr, it, pt-BR): a non-Latin
-  // script appearing at all means the wrong provider language leaked through.
-  // Serbian/Croatian are dual-script (Latin + Cyrillic) — allow Cyrillic, reject
-  // unrelated scripts only (build-259 Cyrillic Experience preserve).
+  // Serbian/Croatian: reject non-Latin scripts unrelated to SC, and reject
+  // English-dominated AI prose (build 271 mixed EN bullets under sr target).
   if (locale === 'sr' || locale === 'hr') {
-    if (/[\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/u.test(value)) return true;
+    // Allow free-text title islands in other scripts; keep Serbian Cyrillic
+    // (do NOT strip \u0400-\u04FF — that wrongly emptied Cyrillic Serbian prose).
+    const scProse = (value || '')
+      .replace(/[\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]{2,}/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (/[\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]{8,}/u.test(scProse)) return true;
+    const hasSc = SERBO_CROATIAN_DIACRITICS.test(scProse)
+      || /\p{Script=Cyrillic}/u.test(scProse)
+      || /\b(?:je|su|sam|radi|proverav|ažurir|koordin|kreiral|sarađiv|pripremal|isporuč|robu|skladišt|godin|iskustv)\w*\b/iu.test(scProse);
+    const enHits = (scProse.match(
+      /\b(?:the|and|with|for|from|that|this|created|reviewed|updated|coordinated|delivered|developed|prepared|maintained|visual|materials|graphic|design|platforms?|specifications?)\b/giu,
+    ) || []).length;
+    if (enHits >= 3 && !hasSc) return true;
     return false;
   }
-  if (NON_LATIN_SCRIPT_ANY.test(value)) return true;
+  // Latin targets may embed free-text title islands in non-Latin scripts.
+  const withoutForeignTitles = value
+    .replace(/[\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF\u0400-\u04FF]{2,}/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (/[\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]{8,}/u.test(withoutForeignTitles)) {
+    return true;
+  }
 
-  // The most common real-world cross-locale regression: Serbian/Croatian source
-  // content echoed back when a *different* target locale was requested. These
-  // diacritics never occur in en/de/es/fr/it/pt-BR, so any occurrence is reliable.
-  // (sr/hr already returned above.)
-  if (SERBO_CROATIAN_DIACRITICS.test(value)) {
+  // Serbian/Croatian *prose* under en/de/es/… — not a single title-domain token
+  // like "logističkih" inside otherwise-correct German/English bullets.
+  const scTokens = withoutForeignTitles.match(/\b\w*[čćžšđČĆŽŠĐ]\w*\b/gu) || [];
+  const scClause = /\b(?:je|su|sam|si|smo|ste|sa|za|od|do|na|radi|proverav\w*|ažurir\w*|azurir\w*|kreiral\w*|sarađiv\w*|saradnja|pripremal\w*|isporuč\w*|skladišt\w*|robu|godin\w*|timovima|projekata)\b/iu
+    .test(withoutForeignTitles);
+  if (scTokens.length >= 2 || (scTokens.length >= 1 && scClause)) {
     return true;
   }
   return false;

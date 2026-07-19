@@ -66,6 +66,22 @@ export function InternalSummaryAiDiagnosticsPanel({
             <dd className="inline">{summary.durationCount}</dd>
           </div>
           <div>
+            <dt className="inline font-medium text-foreground">independent final duration: </dt>
+            <dd className="inline">{summary.independentFinalDurationClaimCount}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium text-foreground">visible duration after apply: </dt>
+            <dd className="inline">{summary.visibleDurationClaimCountAfterApply ?? 'n/a'}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium text-foreground">duration validation: </dt>
+            <dd className="inline">{summary.durationValidationPassed ? 'pass' : 'fail'}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium text-foreground">race guard: </dt>
+            <dd className="inline">{summary.raceGuardResult}</dd>
+          </div>
+          <div>
             <dt className="inline font-medium text-foreground">typed failure reason: </dt>
             <dd className="inline">{summary.typedFailureReason}</dd>
           </div>

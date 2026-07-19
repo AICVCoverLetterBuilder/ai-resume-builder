@@ -243,6 +243,36 @@ export type ExperienceAiDiagnosticTrace = {
   countedAsSuccess: boolean;
   usageCountBefore: number;
   usageCountAfter: number;
+  /** Entry / locale purity (build 271/272) — hashed IDs only. */
+  selectedExperienceEntryIdHash: string | null;
+  operationSnapshotExperienceEntryIdHash: string | null;
+  appliedExperienceEntryIdHash: string | null;
+  sourceFactsEntryIdHash: string | null;
+  canonicalFactsEntryIdHash: string | null;
+  fallbackFactsEntryIdHash: string | null;
+  providerTargetEntryIdHash: string | null;
+  arrayIndexAtRequest: number | null;
+  arrayIndexAtApply: number | null;
+  stableEntryIdentityMatched: boolean | null;
+  targetEntryStillExists: boolean | null;
+  entryContextMatchedAtApply: boolean | null;
+  targetLocale: string | null;
+  targetScript: string | null;
+  detectedLocaleByBullet: Array<string | null>;
+  detectedScriptByBullet: string[];
+  wrongLocaleBulletCount: number;
+  wrongScriptBulletCount: number;
+  mixedLanguageBulletCount: number;
+  sourceLanguageLeakageDetected: boolean;
+  targetLocalePurityPassed: boolean | null;
+  crossEntryCandidateFactCount: number;
+  crossEntryLeakageDetected: boolean;
+  crossDomainLeakageDetected: boolean;
+  leakedFromExperienceEntryIdHashes: string[];
+  entryScopedCanonicalStorageUsed: boolean | null;
+  responseRejectedForEntryMismatch: boolean;
+  responseRejectedForLocaleImpurity: boolean;
+  responseRejectedForDomainMismatch: boolean;
   stages: ExperienceAiDiagStage[];
   requestIdHash: string;
   originalRequestJobContextHash: string;
@@ -710,6 +740,35 @@ export class ExperienceAiDiagnosticSession {
       countedAsSuccess: false,
       usageCountBefore: input.usageCountBefore,
       usageCountAfter: input.usageCountBefore,
+      selectedExperienceEntryIdHash: null,
+      operationSnapshotExperienceEntryIdHash: null,
+      appliedExperienceEntryIdHash: null,
+      sourceFactsEntryIdHash: null,
+      canonicalFactsEntryIdHash: null,
+      fallbackFactsEntryIdHash: null,
+      providerTargetEntryIdHash: null,
+      arrayIndexAtRequest: null,
+      arrayIndexAtApply: null,
+      stableEntryIdentityMatched: null,
+      targetEntryStillExists: null,
+      entryContextMatchedAtApply: null,
+      targetLocale: null,
+      targetScript: null,
+      detectedLocaleByBullet: [],
+      detectedScriptByBullet: [],
+      wrongLocaleBulletCount: 0,
+      wrongScriptBulletCount: 0,
+      mixedLanguageBulletCount: 0,
+      sourceLanguageLeakageDetected: false,
+      targetLocalePurityPassed: null,
+      crossEntryCandidateFactCount: 0,
+      crossEntryLeakageDetected: false,
+      crossDomainLeakageDetected: false,
+      leakedFromExperienceEntryIdHashes: [],
+      entryScopedCanonicalStorageUsed: null,
+      responseRejectedForEntryMismatch: false,
+      responseRejectedForLocaleImpurity: false,
+      responseRejectedForDomainMismatch: false,
       requestIdHash,
       originalRequestJobContextHash: input.jobContextHash,
       currentJobContextHash: input.jobContextHash,
@@ -1085,6 +1144,59 @@ export class ExperienceAiDiagnosticSession {
       ),
       contentLocaleUpdatedAfterApply: Boolean(
         diag.contentLocaleUpdatedAfterApply ?? (finalized.countedAsSuccess && !blocked),
+      ),
+      selectedExperienceEntryIdHash: (diag.selectedExperienceEntryIdHash as string | undefined) ?? null,
+      operationSnapshotExperienceEntryIdHash:
+        (diag.operationSnapshotExperienceEntryIdHash as string | undefined) ?? null,
+      appliedExperienceEntryIdHash: (diag.appliedExperienceEntryIdHash as string | undefined)
+        ?? (finalized.countedAsSuccess
+          ? ((diag.selectedExperienceEntryIdHash as string | undefined) ?? null)
+          : null),
+      sourceFactsEntryIdHash: (diag.sourceFactsEntryIdHash as string | undefined) ?? null,
+      canonicalFactsEntryIdHash: (diag.canonicalFactsEntryIdHash as string | undefined) ?? null,
+      fallbackFactsEntryIdHash: (diag.fallbackFactsEntryIdHash as string | undefined) ?? null,
+      providerTargetEntryIdHash: (diag.providerTargetEntryIdHash as string | undefined) ?? null,
+      arrayIndexAtRequest: (diag.arrayIndexAtRequest as number | undefined) ?? null,
+      arrayIndexAtApply: (diag.arrayIndexAtApply as number | undefined) ?? null,
+      stableEntryIdentityMatched: diag.stableEntryIdentityMatched ?? null,
+      targetEntryStillExists: diag.targetEntryStillExists ?? null,
+      entryContextMatchedAtApply: diag.entryContextMatchedAtApply ?? null,
+      targetLocale: (diag.targetLocale as string | undefined)
+        ?? (diag.requestedTargetLocale as string | undefined)
+        ?? this.draft.requestedLocale
+        ?? null,
+      targetScript: (diag.targetScript as string | undefined) ?? null,
+      detectedLocaleByBullet: (diag.detectedLocaleByBullet as Array<string | null> | undefined) || [],
+      detectedScriptByBullet: (diag.detectedScriptByBullet as string[] | undefined) || [],
+      wrongLocaleBulletCount: diag.wrongLocaleBulletCount ?? 0,
+      wrongScriptBulletCount: diag.wrongScriptBulletCount ?? 0,
+      mixedLanguageBulletCount: diag.mixedLanguageBulletCount ?? 0,
+      sourceLanguageLeakageDetected: Boolean(diag.sourceLanguageLeakageDetected),
+      targetLocalePurityPassed: diag.targetLocalePurityPassed
+        ?? ((reason === 'locale_mismatch' || reason === 'wrong_language' || reason === 'locale_impurity')
+          ? false
+          : (finalized.countedAsSuccess ? true : null)),
+      crossEntryCandidateFactCount: diag.crossEntryCandidateFactCount ?? 0,
+      crossEntryLeakageDetected: Boolean(diag.crossEntryLeakageDetected),
+      crossDomainLeakageDetected: Boolean(diag.crossDomainLeakageDetected),
+      leakedFromExperienceEntryIdHashes:
+        (diag.leakedFromExperienceEntryIdHashes as string[] | undefined) || [],
+      entryScopedCanonicalStorageUsed: diag.entryScopedCanonicalStorageUsed ?? null,
+      responseRejectedForEntryMismatch: Boolean(
+        diag.responseRejectedForEntryMismatch
+        || reason === 'experience_entry_mismatch'
+        || reason === 'experience_entry_missing',
+      ),
+      responseRejectedForLocaleImpurity: Boolean(
+        diag.responseRejectedForLocaleImpurity
+        || reason === 'locale_mismatch'
+        || reason === 'wrong_language'
+        || reason === 'locale_impurity',
+      ),
+      responseRejectedForDomainMismatch: Boolean(
+        diag.responseRejectedForDomainMismatch
+        || reason === 'cross_entry_fact_leakage'
+        || reason === 'cross_domain_leakage',
       ),
       providerLocaleValidationReason:
         reason === 'locale_mismatch' || reason === 'wrong_language'

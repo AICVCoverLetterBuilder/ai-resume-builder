@@ -81,6 +81,7 @@ import {
 } from './cv-semantic-fidelity';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
+import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 import {
   hasSuspiciousHindiMergedTokens,
   normalizeHindiGeneratedWhitespace,
@@ -101,6 +102,9 @@ import {
 import {
   countSummaryDurationExpressions,
   summaryDurationPostconditionFailed,
+  verifyIndependentFinalDurationCount,
+  summarizeDurationClaimBreakdown,
+  type SummaryDurationOwnershipDiagnostics,
 } from './cv-summary-duration-ownership';
 import { acceptValidatedAiContent } from './cv-canonical-snapshot';
 import { applyCvContentQuality } from './cv-content-quality';
@@ -185,6 +189,16 @@ export type FinalizeCvAiFieldResult = {
     fallbackBulletCount?: number;
     finalBulletCount?: number;
     finalBulletScripts?: string[];
+    detectedLocaleByBullet?: Array<string | null>;
+    detectedScriptByBullet?: string[];
+    wrongLocaleBulletCount?: number;
+    wrongScriptBulletCount?: number;
+    mixedLanguageBulletCount?: number;
+    sourceLanguageLeakageDetected?: boolean;
+    targetLocalePurityPassed?: boolean;
+    responseRejectedForLocaleImpurity?: boolean;
+    responseRejectedForDomainMismatch?: boolean;
+    crossDomainLeakageDetected?: boolean;
     tenseMode?: 'present' | 'past' | 'unknown';
     perspectiveMode?: 'cv_third_person';
     sourcePersonMode?: ExperiencePersonMode;
@@ -221,6 +235,18 @@ export type FinalizeCvAiFieldResult = {
     conflictingDurationDetected?: boolean;
     duplicateDurationRemoved?: boolean;
     finalDurationExpressionCount?: number;
+    durationClaimCountBeforeStrip?: number;
+    numericDurationClaimCount?: number;
+    writtenDurationClaimCount?: number;
+    durationClaimsRemovedBeforeInsert?: number;
+    durationClaimCountAfterInsert?: number;
+    independentFinalDurationClaimCount?: number;
+    visibleDurationClaimCountAfterApply?: number;
+    visibleDurationMatchesFinalizedCount?: boolean;
+    durationDetectorAgreement?: boolean;
+    durationValidationPassed?: boolean;
+    contentLocaleBeforeRequest?: string | null;
+    contentLocaleAfterApply?: string | null;
     operationMode?: ExperienceAiOperationMode;
     sourceWasEmpty?: boolean;
     generationFallbackAttempted?: boolean;
@@ -263,6 +289,9 @@ export type FinalizeCvAiFieldResult = {
     arrayIndexAtApply?: number | null;
     stableEntryIdentityMatched?: boolean;
     targetEntryStillExists?: boolean;
+    entryContextMatchedAtApply?: boolean;
+    targetLocale?: string | null;
+    targetScript?: string | null;
     crossEntryCandidateFactCount?: number;
     crossEntryLeakageDetected?: boolean;
     leakedFromExperienceEntryIdHashes?: string[];
@@ -361,6 +390,17 @@ function summaryPasses(
   if (isWrongLanguageAiOutput(summary, locale)) {
     return { ok: false, reason: 'wrong_language' };
   }
+  const summaryPurity = validateAiUnitLocalePurity(summary, locale, {
+    kind: 'summary_sentence',
+    requireUnits: true,
+  });
+  if (!summaryPurity.ok) {
+    // Proper nouns / brands can trip per-unit guesses; whole-field guards above
+    // are authoritative when no mixed-language units remain.
+    if (summaryPurity.mixedLanguageUnitCount > 0) {
+      return { ok: false, reason: summaryPurity.reason || 'wrong_language' };
+    }
+  }
   if (locale === 'hi' && hasSuspiciousHindiMergedTokens(summary)) {
     return { ok: false, reason: 'hindi_merged_tokens' };
   }
@@ -416,6 +456,13 @@ function bulletsPass(
   }
   if (isWrongLanguageAiOutput(description, locale)) {
     return { ok: false, reason: 'wrong_language' };
+  }
+  const unitPurity = validateAiUnitLocalePurity(description, locale, {
+    kind: 'experience_bullet',
+    requireUnits: true,
+  });
+  if (!unitPurity.ok) {
+    return { ok: false, reason: unitPurity.reason || 'wrong_language' };
   }
   if (locale === 'hi' && hasSuspiciousHindiMergedTokens(description)) {
     return { ok: false, reason: 'hindi_merged_tokens' };
@@ -495,6 +542,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   );
   candidate = normalizeLocaleText(durationResolved.summary, locale);
   // Idempotent duration ownership: second pass must not grow claim count.
+  let durationDiag = durationResolved.durationDiagnostics;
   {
     const second = resolveSummaryWithDurationPolicy(
       candidate,
@@ -507,6 +555,34 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       },
     );
     candidate = normalizeLocaleText(second.summary, locale);
+    if (second.durationDiagnostics) {
+      durationDiag = {
+        ...durationResolved.durationDiagnostics!,
+        ...second.durationDiagnostics,
+        // Preserve pre-strip counts from the first ownership pass.
+        durationClaimCountBeforeStrip:
+          durationResolved.durationDiagnostics?.durationClaimCountBeforeStrip
+          ?? second.durationDiagnostics.durationClaimCountBeforeStrip,
+        summaryDurationExpressionCount:
+          durationResolved.durationDiagnostics?.summaryDurationExpressionCount
+          ?? second.durationDiagnostics.summaryDurationExpressionCount,
+        numericDurationClaimCount:
+          durationResolved.durationDiagnostics?.numericDurationClaimCount
+          ?? second.durationDiagnostics.numericDurationClaimCount,
+        writtenDurationClaimCount:
+          durationResolved.durationDiagnostics?.writtenDurationClaimCount
+          ?? second.durationDiagnostics.writtenDurationClaimCount,
+        durationClaimsRemovedBeforeInsert:
+          Math.max(
+            durationResolved.durationDiagnostics?.durationClaimsRemovedBeforeInsert ?? 0,
+            second.durationDiagnostics.durationClaimsRemovedBeforeInsert ?? 0,
+          ),
+        duplicateDurationRemoved: Boolean(
+          durationResolved.durationDiagnostics?.duplicateDurationRemoved
+          || second.durationDiagnostics.duplicateDurationRemoved,
+        ),
+      };
+    }
   }
   if (locale === 'sr' || locale === 'hr') {
     candidate = preserveSerbianSummaryFactForms(candidate, dutiesText);
@@ -534,7 +610,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     candidate = dedupeSummarySentences(candidate);
   }
 
-  const durationDiag = durationResolved.durationDiagnostics;
+  const durationDiagFinal = durationDiag;
   if (
     summaryDurationPostconditionFailed(candidate, durationSnapshot.total, locale, {
       requireDurationClaim: true,
@@ -553,23 +629,65 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   const attachSummaryDiag = (
     result: FinalizeCvAiFieldResult,
-  ): FinalizeCvAiFieldResult => ({
-    ...result,
-    diagnostics: {
-      ...result.diagnostics,
-      operationMode: summaryGenerate
-        ? 'generate_from_job_context'
-        : 'enhance_existing_description',
-      sourceWasEmpty: summaryGenerate,
-      summaryDurationExpressionCount: durationDiag?.summaryDurationExpressionCount,
-      authoritativeDurationMonths: durationDiag?.authoritativeDurationMonths ?? undefined,
-      authoritativeDurationBucket: durationDiag?.authoritativeDurationBucket ?? undefined,
-      providerDurationDetected: durationDiag?.providerDurationDetected,
-      conflictingDurationDetected: durationDiag?.conflictingDurationDetected,
-      duplicateDurationRemoved: durationDiag?.duplicateDurationRemoved,
-      finalDurationExpressionCount: countSummaryDurationExpressions(result.text, locale),
-    },
-  });
+  ): FinalizeCvAiFieldResult => {
+    const independent = verifyIndependentFinalDurationCount(result.text, locale, {
+      requireExactlyOne: true,
+    });
+    const breakdown = summarizeDurationClaimBreakdown(result.text, locale);
+    const owned = durationDiagFinal as SummaryDurationOwnershipDiagnostics | undefined;
+    const durationOk = independent.ok && independent.count === 1;
+    const detectorAgreement = independent.count
+      === (owned?.durationClaimCountAfterInsert ?? independent.count);
+    const durationValidationPassed = Boolean(
+      durationOk
+      && detectorAgreement
+      && (owned?.durationValidationPassed !== false),
+    );
+    const blockedForDuration = Boolean(result.countedAsSuccess && !durationValidationPassed);
+    return {
+      ...result,
+      blocked: result.blocked || blockedForDuration,
+      countedAsSuccess: result.countedAsSuccess && durationValidationPassed,
+      reason: blockedForDuration
+        ? 'experience_duration_mismatch'
+        : result.reason,
+      diagnostics: {
+        ...result.diagnostics,
+        operationMode: summaryGenerate
+          ? 'generate_from_job_context'
+          : 'enhance_existing_description',
+        sourceWasEmpty: summaryGenerate,
+        summaryDurationExpressionCount: owned?.summaryDurationExpressionCount
+          ?? independent.count,
+        authoritativeDurationMonths: owned?.authoritativeDurationMonths ?? undefined,
+        authoritativeDurationBucket: owned?.authoritativeDurationBucket ?? undefined,
+        providerDurationDetected: owned?.providerDurationDetected,
+        conflictingDurationDetected: owned?.conflictingDurationDetected,
+        duplicateDurationRemoved: owned?.duplicateDurationRemoved,
+        finalDurationExpressionCount: independent.count,
+        durationClaimCountBeforeStrip: owned?.durationClaimCountBeforeStrip,
+        numericDurationClaimCount: owned?.numericDurationClaimCount ?? breakdown.numeric,
+        writtenDurationClaimCount: owned?.writtenDurationClaimCount ?? breakdown.written,
+        durationClaimsRemovedBeforeInsert: owned?.durationClaimsRemovedBeforeInsert,
+        durationClaimCountAfterInsert: owned?.durationClaimCountAfterInsert ?? independent.count,
+        independentFinalDurationClaimCount: independent.count,
+        visibleDurationClaimCountAfterApply: independent.count,
+        visibleDurationMatchesFinalizedCount: durationValidationPassed,
+        durationDetectorAgreement: detectorAgreement,
+        durationValidationPassed,
+        contentLocaleBeforeRequest: cv.contentLocale || null,
+        contentLocaleAfterApply: result.countedAsSuccess && durationValidationPassed
+          ? locale
+          : (cv.contentLocale || null),
+        rejectionStage: blockedForDuration
+          ? 'independent_final_duration_verification'
+          : result.diagnostics?.rejectionStage,
+        typedFailureReason: blockedForDuration
+          ? 'experience_duration_mismatch'
+          : result.diagnostics?.typedFailureReason,
+      },
+    };
+  };
 
   const first = summaryPasses(
     candidate,
@@ -940,15 +1058,25 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     // Generation mode: locale/script safety only — never require canonical duties
     // or enhancement-only missing_canonical_duty postconditions.
+    // Never exempt wrong_language / locale_mismatch (build 271 mixed EN+SR).
     const pass = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
     if (!pass.ok) {
       const enhancementOnly = pass.reason === 'missing_canonical_duty'
         || pass.reason === 'material_duty_removed'
         || pass.reason === 'unsupported_generated_duty';
-      const titleScriptExempt = pass.reason === 'locale_mismatch' || pass.reason === 'wrong_language';
-      if (!enhancementOnly && !titleScriptExempt) {
+      // Free-text title domain labels (any script) can trip per-unit locale
+      // guesses during generation. If whole-field locale guards pass, accept.
+      const localeSoftOk = (
+        pass.reason === 'wrong_language'
+        || pass.reason === 'locale_mismatch'
+        || pass.reason === 'wrong_script'
+        || pass.reason === 'mixed_language'
+      )
+        && textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')
+        && !isWrongLanguageAiOutput(candidate, locale);
+      if (!enhancementOnly && !localeSoftOk) {
         lastRejectStage = stage;
-        lastRejectReason = pass.reason === 'locale_mismatch'
+        lastRejectReason = pass.reason === 'locale_mismatch' || pass.reason === 'wrong_language' || pass.reason === 'wrong_script' || pass.reason === 'mixed_language'
           ? 'experience_generation_locale_invalid'
           : (pass.reason || 'experience_generation_failed');
         if (stage.includes('fallback')) generationFallbackFailureReason = lastRejectReason;
@@ -959,6 +1087,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         generationFinalPostconditionPassed = false;
         return null;
       }
+    }
+    // Entry isolation also applies to empty-source generation / occupation fallback.
+    const leakage = validateCrossEntryExperienceLeakage({
+      cv,
+      targetExperienceId: exp.id,
+      candidate,
+      targetPosition: exp.position,
+    });
+    if (!leakage.ok) {
+      lastRejectStage = `${stage}:cross_entry_leakage`;
+      lastRejectReason = leakage.reason || 'cross_entry_fact_leakage';
+      generationFinalPostconditionPassed = false;
+      return null;
     }
     const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
     const isClientFallback = origin === 'deterministic_fallback';
@@ -1026,6 +1167,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (isWrongLanguageAiOutput(candidate, locale)) {
         lastRejectStage = stage;
         lastRejectReason = 'wrong_language';
+        return null;
+      }
+      const unitPurity = validateAiUnitLocalePurity(candidate, locale, {
+        kind: 'experience_bullet',
+        requireUnits: true,
+      });
+      if (!unitPurity.ok) {
+        lastRejectStage = `${stage}:locale_purity`;
+        lastRejectReason = unitPurity.reason || 'wrong_language';
         return null;
       }
       if (hasAiProtocolMarker(candidate) || hasCvMetaFallbackText(candidate)) {
@@ -1107,6 +1257,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
     }
     const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
+    const purity = validateAiUnitLocalePurity(candidate, locale, {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    });
     const isClientFallback = origin === 'deterministic_fallback'
       && (
         stage === 'canonical_fallback'
@@ -1144,6 +1298,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         fallbackBulletCount: isClientFallback ? bulletCount : fallbackBulletCount,
         finalBulletCount: bulletCount,
         finalBulletScripts: detectBulletScripts(candidate),
+        detectedLocaleByBullet: purity.detectedLocaleByUnit,
+        detectedScriptByBullet: purity.detectedScriptByUnit,
+        wrongLocaleBulletCount: purity.wrongLocaleUnitCount,
+        wrongScriptBulletCount: purity.wrongScriptUnitCount,
+        mixedLanguageBulletCount: purity.mixedLanguageUnitCount,
+        sourceLanguageLeakageDetected: purity.sourceLanguageLeakageDetected,
+        targetLocalePurityPassed: purity.targetLocalePurityPassed,
+        responseRejectedForLocaleImpurity: false,
+        crossDomainLeakageDetected: false,
         rejectionStage: undefined,
         typedFailureReason: undefined,
         fallbackApplied: isClientFallback,
@@ -1727,29 +1890,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
         if (genAccepted) return attachPerspectiveDiag(genAccepted);
       } else {
-        return {
-          blocked: false,
-          text: occupationFallback,
-          origin: 'deterministic_fallback',
-          roleDutyConflict,
-          countedAsSuccess: true,
-          diagnostics: {
-            ...baseDiag(),
-            fallbackApplied: true,
-            fallbackBulletCount: clientDeterministicFallbackBulletCount,
-            finalBulletCount: clientDeterministicFallbackBulletCount,
-            finalBulletScripts: clientDeterministicFallbackScripts,
-            rejectionStage: undefined,
-            typedFailureReason: undefined,
-            countedAsSuccess: true,
-            clientDeterministicFallbackAttempted: true,
-            clientDeterministicFallbackApplied: true,
-            clientDeterministicFallbackBulletCount,
-            clientDeterministicFallbackScripts,
-            clientDeterministicFallbackCoveredFactCount: 0,
-            clientDeterministicFallbackRequiredFactCount: 0,
-          },
-        };
+        const acceptedOcc = tryAccept(
+          occupationFallback,
+          'deterministic_fallback',
+          'occupation_fallback',
+        );
+        if (acceptedOcc) return attachPerspectiveDiag(acceptedOcc);
       }
     }
   }

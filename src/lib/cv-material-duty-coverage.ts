@@ -65,8 +65,11 @@ const DUTY_RULES: DutyRule[] = [
   },
   {
     key: 'logistics_delivery',
-    source: /\b(deliver(?:y|ed|ing)?|isporuč|isporuk|डिलीवरी|safe(?:ly)?\s+deliver)/iu,
-    localized: /(deliver|isporuč|डिलीवरी|Auslieferung|entrega|livraison|consegna|تسليم|доставк|配送|sigurno\s+isporuč)/iu,
+    // Require real goods/shipment delivery — never match design "deliverables".
+    // Non-Latin delivery tokens (डिलीवरी / تسليم / 配送 / доставк) must not rely on
+    // ASCII `\b` or letter lookbehinds — they often sit after native letters.
+    source: /(?:\b(?!deliverables?\b)deliver(?:y|ed|ing)?\b|\bisporuč\w*|\bisporuk\w*|डिलीवरी)|safe(?:ly)?\s+deliver(?!able)/iu,
+    localized: /(?:\b(?!deliverables?\b)deliver(?:y|ed|ing)?\b|\bisporuč\w*|\bAuslieferung\b|\bentrega\b|\blivraison\b|\bconsegna\b|تسليم|доставк\w*|配送|डिलीवरी|sigurno\s+isporuč\w*)/iu,
   },
   {
     key: 'process_internal',

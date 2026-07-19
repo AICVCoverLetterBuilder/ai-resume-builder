@@ -1082,6 +1082,7 @@ export default function CVBuilderPage() {
         });
         summaryDiag.recordFinalizeResult(finalizedGate);
         summaryDiag.recordVisibleApply(false, countBefore);
+        await summaryDiag.resolveVersions();
         summaryDiag.commit();
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
@@ -1099,7 +1100,8 @@ export default function CVBuilderPage() {
         responseSource: finalizedGate.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider',
       });
       summaryDiag.recordFinalizeResult(finalizedGate);
-      summaryDiag.recordVisibleApply(true, countBefore + 1);
+      summaryDiag.recordVisibleApply(true, countBefore + 1, finalizedGate.text);
+      await summaryDiag.resolveVersions();
       summaryDiag.commit();
       logAiLocaleTransitionDiagnostics({
         requestId: reqCtx.requestId,

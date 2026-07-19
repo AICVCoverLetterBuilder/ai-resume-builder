@@ -39,6 +39,7 @@ import {
   enforceAuthoritativeSummaryDuration,
   countSummaryDurationExpressions,
   stripAllSummaryDurationExpressions,
+  verifyIndependentFinalDurationCount,
   type SummaryDurationOwnershipDiagnostics,
 } from './cv-summary-duration-ownership';
 import {
@@ -47,6 +48,7 @@ import {
   enrichSerbianSummaryEmploymentGrounding,
 } from './cv-serbian-latin-script';
 import { normalizeSerbianDurationGrammar } from './cv-serbian-grammar';
+import { sourceUsableInLocale } from './cv-source-fact-identity';
 
 /** Structured context used to build a natural, non-fragment duration sentence. */
 export type DurationIntegrationContext = {
@@ -397,11 +399,21 @@ export function normalizeExperienceBulletsForQuality(
       // Keep already-valid locale display (e.g. Corporate Navy security Hindi)
       // instead of re-projecting through identical catch-all shells.
       // Latin locales: ASCII English must NOT count as already-localized Serbian/Croatian.
+      // Undiacritic Serbian (Kreirala sam…) must still count as localized — diacritics alone
+      // are too strict and previously wiped design duties into Obavljam shells.
       const displayAlreadyLocalized =
         Boolean(text.trim())
         && (
           (locale === 'hi' && /[\u0900-\u097F]/.test(text) && !/[čćžšđ]/i.test(text))
-          || ((locale === 'sr' || locale === 'hr') && /[čćžšđČĆŽŠĐ]/.test(text))
+          || (
+            (locale === 'sr' || locale === 'hr')
+            && (
+              /[čćžšđČĆŽŠĐ]/.test(text)
+              || /\p{Script=Cyrillic}/u.test(text)
+              || sourceUsableInLocale(text, locale)
+              || /\bsam\b|\bсам\b/u.test(text)
+            )
+          )
         );
       if (!displayAlreadyLocalized) {
         const localized = localizeCanonicalBulletLine(sourceText, locale, gender);
@@ -749,9 +761,13 @@ export function resolveSummaryWithDurationPolicy(
     requireDurationClaim: requireClaim,
     locale,
   });
+  const independentOk = verifyIndependentFinalDurationCount(working, locale, {
+    requireExactlyOne: Boolean(requireClaim && duration.hasValidDates),
+  }).ok;
   if (
     initial.valid
-    && countSummaryDurationExpressions(working, locale) <= 1
+    && independentOk
+    && durationDiagnostics.durationValidationPassed !== false
     && (!requireClaim || (!hasLeadingOrTrailingFragment(working) && hindiDurationPlacementOk(working, locale)))
   ) {
     return {
@@ -760,6 +776,8 @@ export function resolveSummaryWithDurationPolicy(
       durationDiagnostics: {
         ...durationDiagnostics,
         finalDurationExpressionCount: countSummaryDurationExpressions(working, locale),
+        independentFinalDurationClaimCount: countSummaryDurationExpressions(working, locale),
+        durationValidationPassed: true,
       },
     };
   }

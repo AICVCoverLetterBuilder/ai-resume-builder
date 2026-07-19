@@ -23,6 +23,7 @@ import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic
 import {
   dutyToEnglishGerundFragment,
   sanitizeSummaryListMarkers,
+  sourceUsableInLocale,
   stripDutyListPrefix,
   summaryContainsListMarkerLeakage,
   validateSummarySourceFactCoverage,
@@ -496,11 +497,9 @@ function universalSummaryDutyFragment(
   if (!cleaned) return '';
 
   if (locale === 'en') {
-    // English Summary paraphrases English/Latin source only — never Serbian/Hindi dumps.
-    if (
-      /\p{Script=Devanagari}|\p{Script=Arabic}|\p{Script=Cyrillic}/u.test(cleaned)
-      || /[čćžšđČĆŽŠĐ]/.test(cleaned)
-    ) {
+    // English Summary paraphrases English source only — never Serbian/Hindi dumps
+    // (including undiacritic Serbian Latin such as "Planiranje i koordinacija…").
+    if (!sourceUsableInLocale(cleaned, 'en')) {
       return '';
     }
     return dutyToEnglishGerundFragment(cleaned);
@@ -778,9 +777,9 @@ export function buildConciseGroundedSummary(
     ));
   // Deduplicate identical fragments while preserving first-seen order.
   const uniqueFragments = [...new Set(fragments.map((f) => f.trim()).filter(Boolean))];
-  // Non-English: when duties exist but none could be safely localized into
-  // concise fragments, defer to the legacy localized shell.
-  if (locale !== 'en' && dutyFacts.length > 0 && uniqueFragments.length === 0) {
+  // When duties exist but none could be safely localized into concise fragments,
+  // defer to the legacy localized shell (all locales, including English).
+  if (dutyFacts.length > 0 && uniqueFragments.length === 0) {
     return '';
   }
   const durationPhrase = formatDurationForSummary(duration, locale);
@@ -872,10 +871,23 @@ export function buildConciseGroundedSummary(
     ].filter(Boolean).join('').replace(/\s+/g, '').trim();
   } else {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
+    // Duty fragments are often prepositional/noun phrases (e.g. RU "приготовлении…").
+    // Keep them in the same sentence — never start a new sentence after a period.
+    const dutyConnector =
+      locale === 'ru' ? 'в'
+        : locale === 'de' || locale === 'it' ? 'in'
+          : locale === 'es' || locale === 'pt-BR' ? 'en'
+            : locale === 'fr' ? 'dans'
+              : locale === 'ar' ? 'في'
+                : '';
     const open = dutyJoin
       ? (durationPhrase
-        ? `${role || 'Professional'} ${durationPhrase}. ${dutyJoin}`
-        : `${role || 'Professional'}. ${dutyJoin}`)
+        ? (dutyConnector
+          ? `${role || 'Professional'} ${durationPhrase} ${dutyConnector} ${dutyJoin}`
+          : `${role || 'Professional'} ${durationPhrase}, ${dutyJoin}`)
+        : (dutyConnector
+          ? `${role || 'Professional'} ${dutyConnector} ${dutyJoin}`
+          : `${role || 'Professional'} ${dutyJoin}`))
       : (durationPhrase
         ? `${role || 'Professional'} ${durationPhrase}`
         : `${role || 'Professional'}`);

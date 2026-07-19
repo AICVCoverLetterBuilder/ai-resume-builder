@@ -185,12 +185,17 @@ export function sourceUsableInLocale(text: string, locale: Locale): boolean {
   const t = text || '';
   if (!t.trim()) return false;
   // Lazy import avoided — use inline Serbian Latin lexicon so undiacritic SR
-  // is never treated as already-English.
+  // is never treated as already-English / already-pt / already-de / …
   const looksSerbianLatin = /[čćžšđČĆŽŠĐ]/u.test(t)
-    || /\b(?:obavlja|ažurira|azurira|koordiniše|koordinise|proverava|pregleda|evidencij\w*|kolegama|dokumentacij\w*|skladišt\w*|skladist\w*|zadat(?:ak|ke)|radnog\s+mesta)\b/iu.test(t)
+    || /\b(?:obavlja|ažurira|azurira|koordiniše|koordinise|proverava|pregleda|evidencij\w*|kolegama|dokumentacij\w*|skladišt\w*|skladist\w*|zadat(?:ak|ke)|radnog\s+mesta|planiranj\w*|koordinacij\w*|aktivnost\w*|odeljen\w*|razvoj|implementacij\w*|saradn\w*|analiz\w*|priprem\w*|izveštaj\w*|izvestaj\w*|rukovodst\w*|procesa\b|timovima|izvršenj\w*|izvrsenj\w*|projekat\w*|projekata\b|poslovn\w*|podataka\b|podatke\b|međufunkcionaln\w*|medjufunkcionaln\w*|internih\b|kreiral\w*|pratil\w*|izrađiv\w*|izradiv\w*|sarađuj\w*|saraduj\w*)\b/iu.test(t)
     || (
       /\b\p{L}+(?:am|em|šem)\b/u.test(t)
       && /\b(?:sa|za|na|u|kada|kad|radi|uz)\b/u.test(t)
+    )
+    // South-Slavic deverbal nouns (-anje/-enje) with a short SC preposition/conjunction.
+    || (
+      /\b\p{L}+(?:anje|enje)\b/iu.test(t)
+      && /\b(?:i|sa|za|na|u|pri|prema)\b/iu.test(t)
     );
   if (locale === 'hi') return /\p{Script=Devanagari}/u.test(t);
   if (locale === 'ar') return /\p{Script=Arabic}/u.test(t);

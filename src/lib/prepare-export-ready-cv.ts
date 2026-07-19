@@ -18,6 +18,7 @@ import {
   localizeCanonicalBulletLine,
   buildSourcePreservingExperienceBullets,
 } from './cv-localized-fallback';
+import { buildCrossLocaleExperienceFallback } from './cv-cross-locale-experience';
 import { buildSummaryCompositionDiagnostics } from './cv-summary-grounding';
 import { buildExperienceDurationSnapshot, formatApproximateDurationPhrase } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
@@ -25,6 +26,9 @@ import {
   textMatchesRequestedFieldLocale,
   validateFinalLocalizedCvFields,
 } from './cv-field-locale-integrity';
+import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
+import { auditCvExportIntegrity } from './cv-export-integrity-audit';
+import { detectTextLocale, isCrossLocaleOperation } from './cv-content-locale';
 import { CvExportFailure } from './cv-export-error-message';
 import { LEGACY_RECOVERED_DISPLAY_DUTIES } from './cv-legacy-grounding-recovery';
 import {
@@ -122,6 +126,10 @@ export type ExportReadyDiagnostics = {
   summarySkillsCompositionMode?: 'grammatical_sentence' | 'omitted' | 'none';
   summaryFallbackReason?: string;
   summaryMaterialCoverageResult?: 'complete' | 'incomplete' | 'empty_source';
+  /** Non-mutating export integrity audit (build 271/272). */
+  exportIntegrityOk?: boolean;
+  exportIntegrityReasons?: string[];
+  exportIntegrityMarker?: string;
   stage: ExportReadyStage;
 };
 
@@ -192,6 +200,7 @@ function stripStructuredProperNouns(text: string, cv: CVData): string {
 /**
  * Material final Experience bullets must match requested locale.
  * en / mixed / empty after proper-noun strip ⇒ incomplete projection.
+ * Per-bullet target-locale purity (build 271/272) — one English bullet fails sr.
  */
 function experienceBulletsMatchRequestedLocale(
   description: string,
@@ -212,6 +221,11 @@ function experienceBulletsMatchRequestedLocale(
       return false;
     }
   }
+  const purity = validateAiUnitLocalePurity(description, requestedLocale, {
+    kind: 'experience_bullet',
+    requireUnits: true,
+  });
+  if (!purity.ok) return false;
   return true;
 }
 
@@ -253,8 +267,31 @@ function projectExperienceDisplayFromSemanticDuties(
     ? ''
     : authoritativeSourceRaw;
 
-  // Never keep a locale-matching display that dropped/replaced user material facts
-  // (e.g. three identical hospitality shells replacing contact-center duties).
+  // Prefer domain-aware cross-locale shells over line-localizers that can
+  // mis-map generic verbs into the wrong occupation domain.
+  if (current && !experienceBulletsMatchRequestedLocale(current, requestedLocale, cv)) {
+    const sourceLocale = detectTextLocale(authoritativeSource || current, {
+      storedLocale: exp.generatedLocale || cv.contentLocale,
+      generatedLocale: exp.generatedLocale,
+    });
+    if (isCrossLocaleOperation(sourceLocale, requestedLocale) || sourceLocale === 'unknown') {
+      const translated = buildCrossLocaleExperienceFallback({
+        sourceDescription: authoritativeSource || current,
+        sourceLocale: sourceLocale === 'unknown' ? (exp.generatedLocale || null) : sourceLocale,
+        targetLocale: requestedLocale,
+        gender,
+        isPresent: Boolean(exp.isPresent),
+        position: exp.position || cv.personal?.jobTitle,
+      });
+      if (
+        translated
+        && experienceBulletsMatchRequestedLocale(translated, requestedLocale, cv)
+      ) {
+        return translated;
+      }
+    }
+  }
+
   if (authoritativeSource) {
     const post = validateExperienceApplyMaterialPostcondition(authoritativeSource, current);
     if (!post.ok || !current) {
@@ -584,6 +621,36 @@ export function prepareExportReadyCv(
   }
 
   stage = 'produce_localized_display';
+  // Fail closed on impure AI-managed units before any export rewrite/projection.
+  {
+    const preIntegrity = auditCvExportIntegrity(cv, requestedLocale, {
+      requireSummaryDuration: false,
+    });
+    const hardEntries = preIntegrity.entries.filter((e) =>
+      !e.ok
+      && (
+        e.mixedLanguageBulletCount > 0
+        || e.crossDomainLeakageDetected
+        || e.crossEntryLeakageDetected
+      ));
+    // Do not hard-fail Summary impurity here — Summary recovery may rebuild it.
+    if (hardEntries.length) {
+      const diagnostics = baseDiagnostics();
+      diagnostics.recoveryInvoked = recoveryInvoked;
+      diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+      diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+      diagnostics.exportIntegrityOk = false;
+      diagnostics.exportIntegrityReasons = preIntegrity.reasons;
+      diagnostics.exportIntegrityMarker = preIntegrity.marker;
+      return fail(
+        hardEntries[0]?.reasons[0]
+          || preIntegrity.reasons[0]
+          || 'export_integrity_failed',
+        'validate_locale_integrity',
+        diagnostics,
+      );
+    }
+  }
   cv = {
     ...cv,
     experience: (cv.experience || []).map((exp) => {
@@ -958,6 +1025,22 @@ export function prepareExportReadyCv(
     ) {
       continue;
     }
+    // Material-key overlap is same-locale. After a partial locale switch, source
+    // facts may still be Serbian while the display is English (or vice versa).
+    const sourceLocale = detectTextLocale(source, {
+      storedLocale: exp.generatedLocale || cv.contentLocale,
+      generatedLocale: exp.generatedLocale,
+    });
+    const displayLocale = detectTextLocale(exp.description || '', {
+      storedLocale: exp.generatedLocale || requestedLocale,
+      generatedLocale: exp.generatedLocale,
+    });
+    if (
+      isCrossLocaleOperation(sourceLocale, displayLocale)
+      || isCrossLocaleOperation(sourceLocale, requestedLocale)
+    ) {
+      continue;
+    }
     const required = materialDutyKeysFromDescription(source).filter((k) => k !== 'generic_duty');
     if (!required.length) continue;
     const coverage = validateMaterialDutyCoverage(source, exp.description || '');
@@ -1010,6 +1093,34 @@ export function prepareExportReadyCv(
     stage,
   };
   void summaryContextMatch;
+
+  // Non-mutating integrity audit — never rewrite; fail closed on mixed/cross-domain AI units.
+  const integrity = auditCvExportIntegrity(cv, requestedLocale, {
+    requireSummaryDuration: Boolean(cv.summaryOrigin && cv.summaryOrigin !== 'user'),
+  });
+  diagnostics.exportIntegrityOk = integrity.ok;
+  diagnostics.exportIntegrityReasons = integrity.reasons;
+  diagnostics.exportIntegrityMarker = integrity.marker;
+  const hardEntries = integrity.entries.filter((e) =>
+    !e.ok
+    && (
+      e.mixedLanguageBulletCount > 0
+      || e.crossDomainLeakageDetected
+      || e.crossEntryLeakageDetected
+    ));
+  const hardSummary = (!integrity.summaryOk && (
+    integrity.reasons.includes('summary_locale_impurity')
+    || integrity.reasons.includes('summary_duration_count')
+  ));
+  if (hardEntries.length || hardSummary) {
+    return fail(
+      hardEntries[0]?.reasons[0]
+        || integrity.reasons[0]
+        || 'export_integrity_failed',
+      'validate_locale_integrity',
+      diagnostics,
+    );
+  }
 
   return { ok: true, cv, diagnostics };
 }

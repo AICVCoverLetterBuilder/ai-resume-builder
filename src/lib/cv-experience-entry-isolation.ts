@@ -25,7 +25,7 @@ export type SemanticCluster =
 const CLUSTER_PATTERNS: Array<{ cluster: SemanticCluster; re: RegExp }> = [
   {
     cluster: 'warehouse_goods',
-    re: /\b(?:skladist|warehouse|inventar|inventory|rob[aeu]|goods|stock|incoming\s+goods|movement\s+of\s+goods|raspored\s+robe|kretanje\s+robe|пристигл|робе|товара|مستودع|गोदाम|倉庫)\b/iu,
+    re: /\b(?:skladist|warehouse|inventar|inventory|rob[aeu]|goods|stock|incoming\s+goods|movement\s+of\s+goods|raspored\s+robe|kretanje\s+robe|isporuč|isporuk|odredišt|deliver(?:y|ed|ing)?(?!able)|пристигл|робе|товара|مستودع|गोदाम|倉庫)\b/iu,
   },
   {
     cluster: 'visual_design',

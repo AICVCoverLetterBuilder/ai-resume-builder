@@ -45,8 +45,9 @@ const SR_1SG_STEM_CYR_RE =
   /(?:прегледам|означавам|ажурирам|координишем|припремам|организујем|проверавам|уносим|комуницирам|сарађујем|водим|радим)/u;
 
 const SR_1SG_PRONOUN_RE = /(?:^|[^\p{L}])(ja|ја)(?=[^\p{L}]|$)/iu;
+/** Participle + sam, or sam + participle (e.g. Sigurno sam isporučivala). */
 const SR_1SG_PAST_AUX_RE =
-  /(?:^|[^\p{L}])(\p{L}+(?:ao|ala|io|ila|eo|ela|sao|sala|ао|ала|ио|ила|ео|ела|сао|сала))\s+(sam|сам)(?=[^\p{L}]|$)/iu;
+  /(?:^|[^\p{L}])(?:(\p{L}+(?:ao|ala|io|ila|eo|ela|sao|sala|ао|ала|ио|ила|ео|ела|сао|сала))\s+(sam|сам)|(sam|сам)\s+(\p{L}+(?:ao|ala|io|ila|eo|ela|sao|sala|ао|ала|ио|ила|ео|ела|сао|сала)))(?=[^\p{L}]|$)/iu;
 
 // Require capital "I" / contractions — never match Serbian conjunction "i".
 const EN_1SG_RE = /(?:^|[^\p{L}])(I(?:'m|'ve|’m|’ve)?|my)\b/u;
@@ -124,6 +125,10 @@ export function stripSerbianFirstPersonPastAuxiliary(line: string): string {
     .replace(
       /(^|[^\p{L}])(\p{L}+(?:ao|ala|io|ila|eo|ela|sao|sala|ао|ала|ио|ила|ео|ела|сао|сала))\s+(sam|сам)(?=[^\p{L}]|$)/giu,
       '$1$2',
+    )
+    .replace(
+      /(^|[^\p{L}])(sam|сам)\s+(\p{L}+(?:ao|ala|io|ila|eo|ela|sao|sala|ао|ала|ио|ила|ео|ела|сао|сала))(?=[^\p{L}]|$)/giu,
+      '$1$3',
     )
     .replace(/\s+/g, ' ')
     .trim();

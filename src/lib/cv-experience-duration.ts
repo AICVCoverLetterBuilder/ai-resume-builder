@@ -296,7 +296,9 @@ function yearsEqual(a: number, b: number): boolean {
 
 /** Extract approximate year numbers claimed in a summary (empty if no duration claim). */
 export function extractSummaryYearClaims(text: string): number[] {
-  const raw = text || '';
+  const raw = (text || '')
+    .replace(/(\d),(\d)/g, '$1.$2')
+    .replace(/\s+/g, ' ');
   const claims: number[] = [];
 
   // Half-year phrases (checked before bare "two years" / "दो वर्षों").
@@ -304,9 +306,11 @@ export function extractSummaryYearClaims(text: string): number[] {
     [/\btwo\s+and\s+a\s+half\s+years?\b/giu, 2.5],
     [/\bone\s+and\s+a\s+half\s+years?\b/giu, 1.5],
     [/\bthree\s+and\s+a\s+half\s+years?\b/giu, 3.5],
+    [/\bsix\s+and\s+a\s+half\s+years?\b/giu, 6.5],
     [/\bdve\s+i\s+po\s+godin/giu, 2.5],
     [/\bdvije\s+i\s+po\s+godin/giu, 2.5],
     [/\bjedne\s+i\s+po\s+godin/giu, 1.5],
+    [/\bšest\s+i\s+po\s+godin|\bsest\s+i\s+po\s+godin/giu, 6.5],
     [/\bgodinu\s+i\s+po\b/giu, 1.5],
     [/ढाई\s*वर्ष/gu, 2.5],
     [/डेढ़\s*वर्ष|डेढ\s*वर्ष/gu, 1.5],
@@ -336,8 +340,9 @@ export function extractSummaryYearClaims(text: string): number[] {
   const patterns: RegExp[] = [
     /\b(?:around|about|approximately|over|nearly)?\s*(\d+(?:\.\d+)?)\s*\+?\s*years?\b/giu,
     /\b(?:around|about|approximately)\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+years?\b/giu,
-    /\b(?:oko|od|približno|vise od|više od)\s+(jedne?|dvije?|dve|tri|četiri|cetiri|pet|šest|sest|\d+)\s+godin/giu,
-    /(?:लगभग|करीब)?\s*(\d+|एक|दो|तीन|चार|पाँच|पांच|छह|ढाई|डेढ़|डेढ)\s*वर्ष/giu,
+    /\b(?:oko|od|približno|otprilike|vise od|više od)\s+(jedne?|dvije?|dve|tri|četiri|cetiri|pet|šest|sest|sedam|osam|devet|deset|\d+(?:\.\d+)?)\s+godin/giu,
+    /\b(\d+(?:\.\d+)?)\s+godin(?:a|e|u)(?:\s+radnog)?(?:\s+iskustva)?\b/giu,
+    /(?:लगभग|करीब)?\s*(\d+(?:\.\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|ढाई|डेढ़|डेढ)\s*वर्ष/giu,
     // German: "mit etwa vier Jahren Erfahrung" / "Vier Jahre Erfahrung" (Jahr|Jahre|Jahren).
     /\b(?:etwa|rund|ca\.?|ungefähr)?\s*(ein|eine|einem|einen|einer|zwei|drei|vier|fünf|funf|sechs|sieben|acht|neun|zehn|\d+(?:\.\d+)?)\s*\+?\s*Jahre?n?\b/giu,
     // Spanish: "con alrededor de cuatro años de experiencia".
@@ -349,7 +354,8 @@ export function extractSummaryYearClaims(text: string): number[] {
     // Portuguese (BR): "com cerca de quatro anos de experiência".
     /\b(?:cerca de|aproximadamente)?\s*(um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|\d+(?:\.\d+)?)\s*\+?\s*anos?\b/giu,
     // Russian: "с опытом около четырёх лет" / "четыре года опыта".
-    /\b(?:около|примерно)?\s*(один|одного|одна|два|двух|три|трёх|трех|четыре|четырёх|четырех|пять|пяти|шесть|шести|семь|семи|восемь|восьми|девять|девяти|десять|десяти|\d+(?:\.\d+)?)\s*(?:лет|года|год)\b/giu,
+    // JS `\b` is ASCII-only — use Unicode letter lookarounds for Cyrillic.
+    /(?<!\p{L})(?:около|примерно)?\s*(один|одного|одна|два|двух|три|трёх|трех|четыре|четырёх|четырех|пять|пяти|шесть|шести|семь|семи|восемь|восьми|девять|девяти|десять|десяти|\d+(?:\.\d+)?)(?:\s+с\s+половиной)?\s*(?:лет|года|год)(?!\p{L})/giu,
     // Arabic: "سنة واحدة" / "سنتين" are already complete one/two-year phrases.
     /(سنة واحدة|سنتين)/giu,
     // Arabic: "مع حوالي أربع سنوات من الخبرة" (number word 3-10 + سنوات).
@@ -455,19 +461,21 @@ export function yearWordForLocale(locale: Locale, n: number): string {
 }
 
 export function summaryHasDurationClaim(text: string): boolean {
-  return extractSummaryYearClaims(text).length > 0
+  const normalized = (text || '').replace(/(\d),(\d)/g, '$1.$2');
+  return extractSummaryYearClaims(normalized).length > 0
     // Jahre?n? covers Jahr / Jahre / Jahren — the plural nominative "Jahre" (no
     // trailing "n") was previously missed, rejecting natural German phrasing such
     // as "Vier Jahre Erfahrung" that never uses the dative "Jahren" form.
-    || /\b(years? of experience|godina iskustva|godinu(?:\s+i\s+po)?(?:\s+dana)?(?:\s+iskustva)?|profesionalnog iskustva|Jahre?n?\s*(?:Berufs)?[Ee]rfahrung|años de experiencia|ans d'expérience|anni di esperienza|anos de experiência|वर्षों के अनुभव|वर्ष के अनुभव|वर्षों?\s*का\s*अनुभव)\b/iu.test(text)
-    || /\b(?:around|about|approximately)\s+[\w-]+\s+years?\b/iu.test(text)
-    || /\boko\s+\S+(?:\s+\S+)?\s+godin/iu.test(text)
-    || /\boko\s+godinu\b/iu.test(text)
-    || /लगभग\s+\S+\s+वर्ष/u.test(text)
-    || /約\s*\d+\s*年/u.test(text)
-    || /\d+\s*年の経験/u.test(text)
-    || /سنوات|سنة|خبرة/u.test(text)
-    || /лет опыта|годом опыта|года опыта/u.test(text);
+    || /\b(years? of experience|godina iskustva|godinu(?:\s+i\s+po)?(?:\s+dana)?(?:\s+iskustva)?|profesionalnog iskustva|Jahre?n?\s*(?:Berufs)?[Ee]rfahrung|años de experiencia|ans d'expérience|anni di esperienza|anos de experiência|वर्षों के अनुभव|वर्ष के अनुभव|वर्षों?\s*का\s*अनुभव)\b/iu.test(normalized)
+    || /\b(?:around|about|approximately)\s+[\w-]+\s+years?\b/iu.test(normalized)
+    || /\b(?:oko|približno|otprilike)\s+\S+(?:\s+\S+)?\s+godin/iu.test(normalized)
+    || /\boko\s+godinu\b/iu.test(normalized)
+    || /\d+(?:\.\d+)?\s+godin(?:a|e|u)(?:\s+radnog)?(?:\s+iskustva)/iu.test(normalized)
+    || /लगभग\s+\S+\s+वर्ष/u.test(normalized)
+    || /約\s*\d+\s*年/u.test(normalized)
+    || /\d+\s*年の経験/u.test(normalized)
+    || /سنوات|سنة|خبرة/u.test(normalized)
+    || /лет опыта|годом опыта|года опыта/u.test(normalized);
 }
 
 /** Escapes regex metacharacters so locale word forms can be embedded safely. */

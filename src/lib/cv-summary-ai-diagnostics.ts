@@ -2,13 +2,16 @@
  * Release-safe, non-PII Professional Summary AI diagnostics.
  * Mirrors Experience AI diagnostics pattern — observation only.
  */
-import { fingerprintText, resolveNextBuildId } from './cv-export-diagnostics';
+import { fingerprintText, resolveAppVersionInfo, resolveNextBuildId } from './cv-export-diagnostics';
 import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { CVData } from './types';
 import {
   countSummaryDurationExpressions,
+  summarizeDurationClaimBreakdown,
+  verifyIndependentFinalDurationCount,
 } from './cv-summary-duration-ownership';
+import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 
 export const SUMMARY_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const SUMMARY_AI_DIAG_STORAGE_KEY = 'cvpro-summary-ai-diag-v1';
@@ -60,10 +63,20 @@ export type SummaryAiDiagnosticTrace = {
   providerDurationClaimCount: number;
   sourceDurationClaimCount: number;
   fallbackDurationClaimCount: number;
+  durationClaimCountBeforeStrip: number;
+  numericDurationClaimCount: number;
+  writtenDurationClaimCount: number;
   durationClaimsRemovedBeforeInsert: number;
+  durationClaimCountAfterInsert: number;
   durationClaimCountAfterFinalize: number;
+  independentFinalDurationClaimCount: number;
+  visibleDurationClaimCountAfterApply: number | null;
+  visibleDurationMatchesFinalizedCount: boolean | null;
+  durationDetectorAgreement: boolean;
   durationInsertedExactlyOnce: boolean;
   durationFinalizerIdempotent: boolean;
+  contentLocaleBeforeRequest: string | null;
+  contentLocaleAfterApply: string | null;
   providerHttpStatus: number | null;
   providerResponseKind: string | null;
   providerLocaleValidationPassed: boolean | null;
@@ -93,6 +106,17 @@ export type SummaryAiDiagnosticTrace = {
   grammarValidationPassed: boolean;
   durationValidationPassed: boolean;
   groundingValidationPassed: boolean;
+  /** Per-sentence target-locale purity (build 271/272). */
+  unitCount: number;
+  detectedLocaleByUnit: Array<string | null>;
+  detectedScriptByUnit: string[];
+  wrongLocaleUnitCount: number;
+  wrongScriptUnitCount: number;
+  mixedLanguageUnitCount: number;
+  sourceLanguageLeakageDetected: boolean;
+  unexpectedLocaleCodes: string[];
+  targetLocalePurityPassed: boolean;
+  targetScript: string | null;
   finalPostconditionsPassed: boolean;
   raceGuardResult: 'ok' | 'fail' | 'skipped';
   visibleApplySucceeded: boolean;
@@ -171,10 +195,20 @@ export class SummaryAiDiagnosticSession {
       providerDurationClaimCount: 0,
       sourceDurationClaimCount: 0,
       fallbackDurationClaimCount: 0,
+      durationClaimCountBeforeStrip: 0,
+      numericDurationClaimCount: 0,
+      writtenDurationClaimCount: 0,
       durationClaimsRemovedBeforeInsert: 0,
+      durationClaimCountAfterInsert: 0,
       durationClaimCountAfterFinalize: 0,
+      independentFinalDurationClaimCount: 0,
+      visibleDurationClaimCountAfterApply: null,
+      visibleDurationMatchesFinalizedCount: null,
+      durationDetectorAgreement: false,
       durationInsertedExactlyOnce: false,
       durationFinalizerIdempotent: false,
+      contentLocaleBeforeRequest: input.contentLocale ?? null,
+      contentLocaleAfterApply: null,
       providerHttpStatus: null,
       providerResponseKind: null,
       providerLocaleValidationPassed: null,
@@ -204,6 +238,16 @@ export class SummaryAiDiagnosticSession {
       grammarValidationPassed: false,
       durationValidationPassed: false,
       groundingValidationPassed: false,
+      unitCount: 0,
+      detectedLocaleByUnit: [],
+      detectedScriptByUnit: [],
+      wrongLocaleUnitCount: 0,
+      wrongScriptUnitCount: 0,
+      mixedLanguageUnitCount: 0,
+      sourceLanguageLeakageDetected: false,
+      unexpectedLocaleCodes: [],
+      targetLocalePurityPassed: false,
+      targetScript: null,
       finalPostconditionsPassed: false,
       raceGuardResult: 'skipped',
       visibleApplySucceeded: false,
@@ -267,15 +311,57 @@ export class SummaryAiDiagnosticSession {
   recordFinalizeResult(finalized: FinalizeCvAiFieldResult): void {
     const diag = finalized.diagnostics || {};
     const text = (finalized.text || '').trim();
-    const after = countSummaryDurationExpressions(text);
-    const beforeProvider = diag.summaryDurationExpressionCount ?? 0;
-    const idempotent = after <= 1;
+    const independent = verifyIndependentFinalDurationCount(text, (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale, {
+      requireExactlyOne: Boolean(finalized.countedAsSuccess),
+    });
+    const after = independent.count;
+    const breakdown = summarizeDurationClaimBreakdown(
+      text,
+      (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
+    );
+    const beforeStrip = diag.durationClaimCountBeforeStrip
+      ?? diag.summaryDurationExpressionCount
+      ?? this.draft.sourceDurationClaimCount
+      ?? 0;
+    const removed = diag.durationClaimsRemovedBeforeInsert
+      ?? (diag.duplicateDurationRemoved ? Math.max(0, beforeStrip - 1) : 0);
+    const afterInsert = diag.durationClaimCountAfterInsert ?? after;
+    const detectorAgreement = afterInsert === after;
+    // Independent re-scan is authoritative — never trust mutator bookkeeping alone.
+    const durationValidationPassed = Boolean(
+      independent.ok
+      && after === 1
+      && detectorAgreement
+      && diag.durationValidationPassed !== false
+    );
+    // Never report idempotent/PASS when visible text has ≠ 1 duration claim.
+    const durationFinalizerIdempotent = durationValidationPassed && after === 1;
+    const purity = validateAiUnitLocalePurity(
+      text,
+      (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
+      { kind: 'summary_sentence', requireUnits: Boolean(text) },
+    );
+    const finalPostconditionsPassed = Boolean(
+      finalized.countedAsSuccess
+      && !finalized.blocked
+      && durationValidationPassed
+      && purity.targetLocalePurityPassed,
+    );
     this.patch({
-      providerDurationClaimCount: beforeProvider,
-      durationClaimsRemovedBeforeInsert: diag.duplicateDurationRemoved ? 1 : 0,
-      durationClaimCountAfterFinalize: diag.finalDurationExpressionCount ?? after,
-      durationInsertedExactlyOnce: (diag.finalDurationExpressionCount ?? after) === 1,
-      durationFinalizerIdempotent: idempotent,
+      providerDurationClaimCount: diag.summaryDurationExpressionCount ?? beforeStrip,
+      sourceDurationClaimCount: this.draft.sourceDurationClaimCount ?? beforeStrip,
+      durationClaimCountBeforeStrip: beforeStrip,
+      numericDurationClaimCount: diag.numericDurationClaimCount ?? breakdown.numeric,
+      writtenDurationClaimCount: diag.writtenDurationClaimCount ?? breakdown.written,
+      durationClaimsRemovedBeforeInsert: removed,
+      durationClaimCountAfterInsert: afterInsert,
+      durationClaimCountAfterFinalize: after,
+      independentFinalDurationClaimCount: after,
+      visibleDurationClaimCountAfterApply: null,
+      visibleDurationMatchesFinalizedCount: null,
+      durationDetectorAgreement: detectorAgreement,
+      durationInsertedExactlyOnce: after === 1 && durationValidationPassed,
+      durationFinalizerIdempotent,
       structuredDurationMonths: diag.authoritativeDurationMonths ?? null,
       localizedDurationPhraseHash: text
         ? fingerprintText(`dur:${diag.finalDurationExpressionCount ?? after}`)
@@ -288,43 +374,107 @@ export class SummaryAiDiagnosticSession {
       fallbackSentenceCount: text ? text.split(/[.!?।]/u).filter((s) => s.trim()).length : 0,
       providerSentenceCount: text ? text.split(/[.!?।]/u).filter((s) => s.trim()).length : 0,
       perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed ?? true),
-      localeValidationPassed: finalized.reason !== 'locale_mismatch',
-      durationValidationPassed: (diag.finalDurationExpressionCount ?? after) <= 1,
+      localeValidationPassed: purity.targetLocalePurityPassed && finalized.reason !== 'locale_mismatch',
+      durationValidationPassed,
       groundingValidationPassed: !finalized.blocked,
-      finalPostconditionsPassed: Boolean(finalized.countedAsSuccess && !finalized.blocked),
-      countedAsSuccess: Boolean(finalized.countedAsSuccess),
-      finalTypedFailureReason: finalized.blocked ? (finalized.reason || null) : null,
-      rejectionStage: finalized.blocked ? (diag.rejectionStage || 'final_apply') : null,
+      finalPostconditionsPassed,
+      unitCount: purity.unitCount,
+      detectedLocaleByUnit: purity.detectedLocaleByUnit,
+      detectedScriptByUnit: purity.detectedScriptByUnit,
+      wrongLocaleUnitCount: purity.wrongLocaleUnitCount,
+      wrongScriptUnitCount: purity.wrongScriptUnitCount,
+      mixedLanguageUnitCount: purity.mixedLanguageUnitCount,
+      sourceLanguageLeakageDetected: purity.sourceLanguageLeakageDetected,
+      unexpectedLocaleCodes: purity.unexpectedLocaleCodes,
+      targetLocalePurityPassed: purity.targetLocalePurityPassed,
+      targetScript: purity.detectedScriptByUnit[0] || null,
+      countedAsSuccess: Boolean(
+        finalized.countedAsSuccess && durationValidationPassed && purity.targetLocalePurityPassed,
+      ),
+      finalTypedFailureReason: finalized.blocked || !durationValidationPassed || !purity.targetLocalePurityPassed
+        ? (finalized.reason || (!purity.targetLocalePurityPassed ? 'locale_impurity' : 'experience_duration_mismatch'))
+        : null,
+      rejectionStage: finalized.blocked || !durationValidationPassed || !purity.targetLocalePurityPassed
+        ? (diag.rejectionStage || (!purity.targetLocalePurityPassed ? 'locale_purity' : 'independent_final_duration_verification'))
+        : null,
       genderValidationPassed: true,
       tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? true),
       grammarValidationPassed: finalized.reason !== 'malformed_serbian_token',
       unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
       duplicateSentenceCount: 0,
+      contentLocaleBeforeRequest: diag.contentLocaleBeforeRequest
+        ?? this.draft.contentLocaleBeforeRequest
+        ?? this.draft.storedContentLocale
+        ?? null,
+      contentLocaleAfterApply: diag.contentLocaleAfterApply ?? null,
+      detectedSourceLocale: this.draft.detectedSourceLocale,
     });
     this.stage(
       'duration_validation',
-      (diag.finalDurationExpressionCount ?? after) <= 1 ? 'ok' : 'fail',
+      durationValidationPassed ? 'ok' : 'fail',
+    );
+    this.stage(
+      'independent_final_duration_verification',
+      independent.ok && after === 1 ? 'ok' : 'fail',
+      `count=${after}`,
     );
     this.stage(
       'final_postconditions',
-      finalized.countedAsSuccess && !finalized.blocked ? 'ok' : 'fail',
+      finalPostconditionsPassed ? 'ok' : 'fail',
       finalized.reason || undefined,
     );
   }
 
-  recordVisibleApply(ok: boolean, usageAfter: number): void {
+  recordVisibleApply(ok: boolean, usageAfter: number, visibleText?: string): void {
+    const locale = (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale;
+    const visibleCount = typeof visibleText === 'string'
+      ? countSummaryDurationExpressions(visibleText, locale)
+      : (ok ? (this.draft.independentFinalDurationClaimCount ?? null) : null);
+    const finalizedCount = this.draft.independentFinalDurationClaimCount ?? null;
+    const matches = visibleCount != null && finalizedCount != null
+      ? visibleCount === finalizedCount && visibleCount === 1
+      : null;
+    const durationStillOk = !ok
+      || (visibleCount === 1 && matches === true);
     this.patch({
-      visibleApplySucceeded: ok,
-      contentLocaleUpdatedAfterApply: ok,
+      visibleApplySucceeded: ok && durationStillOk,
+      contentLocaleUpdatedAfterApply: ok && durationStillOk,
+      contentLocaleAfterApply: ok && durationStillOk
+        ? (this.draft.requestedLocale || this.draft.contentLocaleAfterApply || null)
+        : this.draft.contentLocaleAfterApply,
       usageCountAfter: usageAfter,
-      visibleSummaryMatchesFinalHash: ok,
+      visibleSummaryMatchesFinalHash: ok && durationStillOk,
+      visibleDurationClaimCountAfterApply: visibleCount,
+      visibleDurationMatchesFinalizedCount: matches,
+      // Applied summaries use an explicit race/context result of ok (sync finalize path).
+      raceGuardResult: ok && durationStillOk ? 'ok' : (ok ? 'fail' : this.draft.raceGuardResult || 'skipped'),
+      durationValidationPassed: durationStillOk
+        ? this.draft.durationValidationPassed
+        : false,
+      finalPostconditionsPassed: ok && durationStillOk
+        ? this.draft.finalPostconditionsPassed
+        : false,
+      durationFinalizerIdempotent: ok && durationStillOk
+        ? this.draft.durationFinalizerIdempotent
+        : false,
+      countedAsSuccess: ok && durationStillOk,
     });
-    this.stage('visible_apply', ok ? 'ok' : 'fail');
+    this.stage('visible_apply', ok && durationStillOk ? 'ok' : 'fail');
+    this.stage('race_guard', ok && durationStillOk ? 'ok' : (ok ? 'fail' : 'skipped'));
   }
 
   recordRaceGuard(result: 'ok' | 'fail' | 'skipped'): void {
     this.patch({ raceGuardResult: result });
     this.stage('race_guard', result === 'fail' ? 'fail' : 'ok');
+  }
+
+  async resolveVersions(): Promise<void> {
+    const info = await resolveAppVersionInfo();
+    this.patch({
+      appVersionCode: info.versionCode,
+      appVersionName: info.versionName,
+      nextBuildId: this.draft.nextBuildId || resolveNextBuildId(),
+    });
   }
 
   commit(): SummaryAiDiagnosticTrace {
@@ -396,6 +546,10 @@ export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | n
   finalStage: string;
   typedFailureReason: string;
   durationCount: number;
+  independentFinalDurationClaimCount: number;
+  visibleDurationClaimCountAfterApply: number | null;
+  durationValidationPassed: boolean;
+  raceGuardResult: string;
   applied: boolean;
 } | null {
   if (!trace) return null;
@@ -405,7 +559,12 @@ export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | n
     locale: trace.requestedLocale,
     finalStage: last?.name || 'unknown',
     typedFailureReason: trace.finalTypedFailureReason || 'none',
-    durationCount: trace.durationClaimCountAfterFinalize,
+    durationCount: trace.independentFinalDurationClaimCount
+      ?? trace.durationClaimCountAfterFinalize,
+    independentFinalDurationClaimCount: trace.independentFinalDurationClaimCount,
+    visibleDurationClaimCountAfterApply: trace.visibleDurationClaimCountAfterApply,
+    durationValidationPassed: trace.durationValidationPassed,
+    raceGuardResult: trace.raceGuardResult,
     applied: trace.visibleApplySucceeded,
   };
 }
