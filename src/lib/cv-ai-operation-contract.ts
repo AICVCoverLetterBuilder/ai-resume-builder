@@ -209,10 +209,29 @@ export function textLooksRelevantToFreeTextTitle(
 }
 
 const GENERIC_FILLER_RE =
-  /obavlja\s+dodeljene\s+profesionalne\s+(?:poslove|zadatke)|carry\s+out\s+assigned\s+professional\s+duties|सौंपे\s+गए\s+पेशेवर\s+कार्य|führt\s+zugewiesene\s+aufgaben|realiza\s+tareas\s+asignadas|exécute\s+les\s+tâches\s+assignées/iu;
+  /obavlja\s+dodeljene\s+profesionalne\s+(?:poslove|zadatke)|obavlja\s+svakodnevne\s+zadatke|u\s+ulozi\s+\p{L}|vezanih\s+za\s+rad\s+kao|blagovremen(?:o|og)?\s+zatvaranja?\s+zadataka|carry\s+out\s+assigned\s+professional\s+duties|सौंपे\s+गए\s+पेशेवर\s+कार्य|führt\s+zugewiesene\s+aufgaben|realiza\s+tareas\s+asignadas|exécute\s+les\s+tâches\s+assignées/iu;
 
 const UNSAFE_INVENTION_RE =
   /(?:\bKPI\b|\bOKR\b|\bExcel\b|\bSalesforce\b|\bSAP\b|\bCRM\b|\bJira\b|\bSlack\b|%\s*(?:poveć|increase|growth|steigerung)|lead(?:ership|er)?\s+team|managed\s+\d+|tim\s+od\s+\d+|team\s+of\s+\d+|klijent(?:ima|e)|clients?|achievement|nagrada|award|certificat|ISO\s*\d+|increased\s+revenue)/iu;
+
+/** Full job title repeated unnaturally across multiple bullets. */
+export function aiOutputRepeatsFullTitleUnnaturally(
+  text: string,
+  position?: string,
+): boolean {
+  const title = (position || '').trim();
+  if (title.length < 6) return false;
+  const foldedTitle = foldAiTextToken(title);
+  if (foldedTitle.length < 6) return false;
+  const lines = (text || '')
+    .split(/\r?\n|•/)
+    .map((l) => l.replace(/^[•\-\*]\s*/, '').trim())
+    .filter(Boolean);
+  if (lines.length < 2) return false;
+  const hits = lines.filter((l) => foldAiTextToken(l).includes(foldedTitle)).length;
+  if (hits >= 2) return true;
+  return /u\s+ulozi\s+/iu.test(text) || /vezanih\s+za\s+rad\s+kao\s+/iu.test(text);
+}
 
 export function aiOutputLooksGenericFillerOnly(text: string): boolean {
   const lines = (text || '')
@@ -220,7 +239,10 @@ export function aiOutputLooksGenericFillerOnly(text: string): boolean {
     .map((l) => l.replace(/^[•\-\*]\s*/, '').trim())
     .filter(Boolean);
   if (!lines.length) return true;
-  return lines.every((l) => GENERIC_FILLER_RE.test(l));
+  if (lines.every((l) => GENERIC_FILLER_RE.test(l))) return true;
+  // Title-as-filler patterns count as generic even when not every line matches.
+  const fillerHits = lines.filter((l) => GENERIC_FILLER_RE.test(l)).length;
+  return fillerHits >= 2;
 }
 
 export function countAiUnsafeInventionClaims(text: string): number {

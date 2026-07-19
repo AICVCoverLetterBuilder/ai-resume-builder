@@ -1,0 +1,521 @@
+/**
+ * Translation-aware Experience fallback for cross-locale enhance operations.
+ * Preserves source fact units while emitting target-locale CV bullets.
+ * Not occupation-catalogue-driven; derives soft action frames from source verbs.
+ */
+import type { Locale } from './i18n/translations';
+import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
+import { detectTextLocale, isCrossLocaleOperation } from './cv-content-locale';
+import { applyEnglishEmploymentTense } from './cv-material-duty-coverage';
+import {
+  applySerbianCvEmploymentTense,
+  extractSourceDutyUnits,
+  stripDutyListPrefix,
+} from './cv-source-fact-identity';
+
+type ActionFrame =
+  | 'check_records'
+  | 'update_records'
+  | 'coordinate_info'
+  | 'prepare_materials'
+  | 'collaborate_visual'
+  | 'generic_duty';
+
+function fold(s: string): string {
+  return (s || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function classifyActionFrame(unit: string): ActionFrame {
+  const t = fold(unit);
+  if (/(vizuel|grafick|dizajn|visual|design|identitet|identity|platform|ビジュアル|تصميم|डिज़ाइन)/.test(t)) {
+    if (/(saradj|collabor|timov|team|produkt|product|razvoj|develop|تطوير|विकास|開発)/.test(t)) {
+      return 'collaborate_visual';
+    }
+    return 'prepare_materials';
+  }
+  if (/(prover|pregled|check|verif|tačnost|tacnost|potpunost|dokument|провера|проверя|تتحقق|जाँच|確認)/.test(t)) {
+    return 'check_records';
+  }
+  if (/(ažur|azur|update|evidenc|record|status|raspored|ажурир|обновл|تحدّث|अपडेट|更新)/.test(t)) {
+    return 'update_records';
+  }
+  if (/(koordin|coord|razmen|exchange|koleg|colleague|inform|координ|تنسّق|समन्वय|調整)/.test(t)) {
+    return 'coordinate_info';
+  }
+  if (/(priprem|prepar|kreir|creat|finaln|format|ekran|screen|готови|أعد|तैयार|準備)/.test(t)) {
+    return 'prepare_materials';
+  }
+  return 'generic_duty';
+}
+
+function domainHintFromUnits(units: string[]): string {
+  const joined = fold(units.join(' '));
+  if (/(skladist|склад|warehouse|rob[aeu]|робе|робу|товара|goods|inventar|inventory|مستودع|गोदाम|倉庫|armaz)/.test(joined)) {
+    return 'warehouse';
+  }
+  if (/(grafick|dizajn|vizuel|design|visual|ビジュアル|تصميم|डिज़ाइन)/.test(joined)) {
+    return 'design';
+  }
+  if (/(dokument|document|evidenc|record|وثائق|दस्तावेज़|書類)/.test(joined)) {
+    return 'documentation';
+  }
+  return 'work';
+}
+
+function englishBullet(
+  frame: ActionFrame,
+  domain: string,
+  isPresent: boolean,
+): string {
+  const past = !isPresent;
+  switch (frame) {
+    case 'check_records':
+      return past
+        ? 'Checked incoming goods and related documentation for accurate recording.'
+        : 'Checks incoming goods and related documentation for accurate recording.';
+    case 'update_records':
+      if (domain === 'warehouse') {
+        return past
+          ? 'Updated warehouse records and maintained orderly arrangement of goods.'
+          : 'Updates warehouse records and maintains orderly arrangement of goods.';
+      }
+      return past
+        ? 'Updated work records and tracked the status of open items.'
+        : 'Updates work records and tracks the status of open items.';
+    case 'coordinate_info':
+      if (domain === 'warehouse') {
+        return past
+          ? 'Coordinated preparation and movement of goods with colleagues.'
+          : 'Coordinates preparation and movement of goods with colleagues.';
+      }
+      return past
+        ? 'Coordinated information sharing with colleagues to complete documentation on time.'
+        : 'Coordinates information sharing with colleagues to complete documentation on time.';
+    case 'collaborate_visual':
+      return past
+        ? 'Collaborated with product and development teams to keep visual identity consistent.'
+        : 'Collaborates with product and development teams to keep visual identity consistent.';
+    case 'prepare_materials':
+      if (domain === 'design') {
+        return past
+          ? 'Created visual materials and graphic elements for digital products and platforms.'
+          : 'Creates visual materials and graphic elements for digital products and platforms.';
+      }
+      return past
+        ? 'Prepared work materials and adjusted outputs to required formats.'
+        : 'Prepares work materials and adjusts outputs to required formats.';
+    default:
+      return past
+        ? 'Carried out day-to-day role duties while checking accuracy of related records.'
+        : 'Performs day-to-day role duties while checking accuracy of related records.';
+  }
+}
+
+function serbianBullet(
+  frame: ActionFrame,
+  domain: string,
+  isPresent: boolean,
+  female: boolean,
+): string {
+  const pastF = female;
+  switch (frame) {
+    case 'check_records':
+      if (domain === 'warehouse') {
+        return isPresent
+          ? 'Proverava pristiglu robu i prateću dokumentaciju radi tačnog evidentiranja.'
+          : (pastF
+            ? 'Proveravala je pristiglu robu i prateću dokumentaciju radi tačnog evidentiranja.'
+            : 'Proveravao je pristiglu robu i prateću dokumentaciju radi tačnog evidentiranja.');
+      }
+      return isPresent
+        ? 'Pregleda dokumentaciju i proverava potpunost podataka.'
+        : (pastF
+          ? 'Pregledala je dokumentaciju i proveravala potpunost podataka.'
+          : 'Pregledao je dokumentaciju i proveravao potpunost podataka.');
+    case 'update_records':
+      if (domain === 'warehouse') {
+        return isPresent
+          ? 'Ažurira skladišnu evidenciju i vodi računa o urednom rasporedu robe.'
+          : (pastF
+            ? 'Ažurirala je skladišnu evidenciju i vodila računa o urednom rasporedu robe.'
+            : 'Ažurirao je skladišnu evidenciju i vodio računa o urednom rasporedu robe.');
+      }
+      return isPresent
+        ? 'Ažurira evidenciju i prati status dokumentacije u skladu sa potrebama radnog mesta.'
+        : (pastF
+          ? 'Ažurirala je evidenciju i pratila status dokumentacije.'
+          : 'Ažurirao je evidenciju i pratio status dokumentacije.');
+    case 'coordinate_info':
+      if (domain === 'warehouse') {
+        return isPresent
+          ? 'Koordiniše pripremu i kretanje robe u saradnji sa kolegama.'
+          : (pastF
+            ? 'Koordinisala je pripremu i kretanje robe u saradnji sa kolegama.'
+            : 'Koordinisao je pripremu i kretanje robe u saradnji sa kolegama.');
+      }
+      return isPresent
+        ? 'Koordiniše razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.'
+        : (pastF
+          ? 'Koordinisala je razmenu informacija sa kolegama.'
+          : 'Koordinisao je razmenu informacija sa kolegama.');
+    case 'collaborate_visual':
+      return isPresent
+        ? 'Sarađuje sa timovima za proizvod i razvoj radi očuvanja doslednog vizuelnog identiteta.'
+        : (pastF
+          ? 'Sarađivala je sa timovima za proizvod i razvoj radi očuvanja doslednog vizuelnog identiteta.'
+          : 'Sarađivao je sa timovima za proizvod i razvoj radi očuvanja doslednog vizuelnog identiteta.');
+    case 'prepare_materials':
+      if (domain === 'design') {
+        return isPresent
+          ? 'Kreira vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.'
+          : (pastF
+            ? 'Kreirala je vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.'
+            : 'Kreirao je vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.');
+      }
+      return isPresent
+        ? 'Priprema radne materijale i prilagođava izlaze potrebnim formatima.'
+        : (pastF
+          ? 'Pripremala je radne materijale i prilagođavala izlaze potrebnim formatima.'
+          : 'Pripremao je radne materijale i prilagođavao izlaze potrebnim formatima.');
+    default:
+      return isPresent
+        ? 'Obavlja svakodnevne dužnosti uz proveru tačnosti povezanih podataka.'
+        : (pastF
+          ? 'Obavljala je svakodnevne dužnosti uz proveru tačnosti povezanih podataka.'
+          : 'Obavljao je svakodnevne dužnosti uz proveru tačnosti povezanih podataka.');
+  }
+}
+
+/** Soft target-locale shells keyed by action frame (not occupation catalogues). */
+function localizedShellBullet(locale: Locale, frame: ActionFrame, isPresent: boolean): string | null {
+  const past = !isPresent;
+  const table: Partial<Record<Locale, Record<ActionFrame, [string, string]>>> = {
+    de: {
+      check_records: [
+        'Prüft eingehende Waren und Begleitdokumente auf korrekte Erfassung.',
+        'Prüfte eingehende Waren und Begleitdokumente auf korrekte Erfassung.',
+      ],
+      update_records: [
+        'Aktualisiert Lagerunterlagen und achtet auf eine geordnete Lagerung.',
+        'Aktualisierte Lagerunterlagen und achtete auf eine geordnete Lagerung.',
+      ],
+      coordinate_info: [
+        'Koordiniert Vorbereitung und Bewegung von Waren mit Kolleginnen und Kollegen.',
+        'Koordinierte Vorbereitung und Bewegung von Waren mit Kolleginnen und Kollegen.',
+      ],
+      prepare_materials: [
+        'Bereitet Arbeitsmaterialien vor und passt Ausgaben an erforderliche Formate an.',
+        'Bereitete Arbeitsmaterialien vor und passte Ausgaben an erforderliche Formate an.',
+      ],
+      collaborate_visual: [
+        'Arbeitet mit Produkt- und Entwicklungsteams zusammen, um die visuelle Identität konsistent zu halten.',
+        'Arbeitete mit Produkt- und Entwicklungsteams zusammen, um die visuelle Identität konsistent zu halten.',
+      ],
+      generic_duty: [
+        'Erledigt die täglichen Aufgaben der Rolle und prüft die Genauigkeit zugehöriger Unterlagen.',
+        'Erledigte die täglichen Aufgaben der Rolle und prüfte die Genauigkeit zugehöriger Unterlagen.',
+      ],
+    },
+    hi: {
+      check_records: [
+        'आने वाली वस्तुओं और संबंधित दस्तावेज़ों की जाँच करती है ताकि रिकॉर्ड सही रहें।',
+        'आने वाली वस्तुओं और संबंधित दस्तावेज़ों की जाँच की ताकि रिकॉर्ड सही रहें।',
+      ],
+      update_records: [
+        'कार्य रिकॉर्ड अपडेट करती है और खुली स्थितियों की प्रगति ट्रैक करती है।',
+        'कार्य रिकॉर्ड अपडेट किए और खुली स्थितियों की प्रगति ट्रैक की।',
+      ],
+      coordinate_info: [
+        'सहकर्मियों के साथ जानकारी साझा कर काम के समय पर पूरा होने का समन्वय करती है।',
+        'सहकर्मियों के साथ जानकारी साझा कर काम के समय पर पूरा होने का समन्वय किया।',
+      ],
+      prepare_materials: [
+        'कार्य सामग्री तैयार करती है और आउटपुट को आवश्यक प्रारूपों में समायोजित करती है।',
+        'कार्य सामग्री तैयार की और आउटपुट को आवश्यक प्रारूपों में समायोजित किया।',
+      ],
+      collaborate_visual: [
+        'दृश्य पहचान की निरंतरता बनाए रखने के लिए उत्पाद और विकास टीमों के साथ सहयोग करती है।',
+        'दृश्य पहचान की निरंतरता बनाए रखने के लिए उत्पाद और विकास टीमों के साथ सहयोग किया।',
+      ],
+      generic_duty: [
+        'भूमिका के दैनिक कर्तव्य पूरे करती है और सौंपे गए कार्यों की सटीकता सुनिश्चित करती है।',
+        'भूमिका के दैनिक कर्तव्य पूरे किए और सौंपे गए कार्यों की सटीकता सुनिश्चित की।',
+      ],
+    },
+    ar: {
+      check_records: [
+        'تتحقق من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
+        'تحققت من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
+      ],
+      update_records: [
+        'تحدّث سجلات المستودع وتحافظ على ترتيب البضائع.',
+        'حدّثت سجلات المستودع وحافظت على ترتيب البضائع.',
+      ],
+      coordinate_info: [
+        'تنسّق إعداد البضائع وحركتها مع الزملاء.',
+        'نسّقت إعداد البضائع وحركتها مع الزملاء.',
+      ],
+      prepare_materials: [
+        'تُعدّ مواد العمل وتضبط المخرجات وفق الصيغ المطلوبة.',
+        'أعدّت مواد العمل وضبطت المخرجات وفق الصيغ المطلوبة.',
+      ],
+      collaborate_visual: [
+        'تتعاون مع فرق المنتج والتطوير للحفاظ على اتساق الهوية البصرية.',
+        'تعاونت مع فرق المنتج والتطوير للحفاظ على اتساق الهوية البصرية.',
+      ],
+      generic_duty: [
+        'تؤدي المهام اليومية للدور مع التحقق من دقة السجلات ذات الصلة.',
+        'أدّت المهام اليومية للدور مع التحقق من دقة السجلات ذات الصلة.',
+      ],
+    },
+    ja: {
+      check_records: [
+        '入荷した商品と関連書類の正確性を確認する。',
+        '入荷した商品と関連書類の正確性を確認した。',
+      ],
+      update_records: [
+        '倉庫記録を更新し、保管品の整然とした配置を維持する。',
+        '倉庫記録を更新し、保管品の整然とした配置を維持した。',
+      ],
+      coordinate_info: [
+        '同僚と連携して商品の準備と移動を調整する。',
+        '同僚と連携して商品の準備と移動を調整した。',
+      ],
+      prepare_materials: [
+        '作業資料を準備し、必要な形式に合わせて成果物を調整する。',
+        '作業資料を準備し、必要な形式に合わせて成果物を調整した。',
+      ],
+      collaborate_visual: [
+        'ビジュアルアイデンティティの一貫性を保つため、製品・開発チームと連携する。',
+        'ビジュアルアイデンティティの一貫性を保つため、製品・開発チームと連携した。',
+      ],
+      generic_duty: [
+        '関連記録の正確性を確認しながら日常業務を遂行する。',
+        '関連記録の正確性を確認しながら日常業務を遂行した。',
+      ],
+    },
+    ru: {
+      check_records: [
+        'Проверяет поступившие товары и сопроводительные документы для точного учёта.',
+        'Проверяла поступившие товары и сопроводительные документы для точного учёта.',
+      ],
+      update_records: [
+        'Обновляет складской учёт и поддерживает упорядоченное размещение товаров.',
+        'Обновляла складской учёт и поддерживала упорядоченное размещение товаров.',
+      ],
+      coordinate_info: [
+        'Координирует подготовку и перемещение товаров совместно с коллегами.',
+        'Координировала подготовку и перемещение товаров совместно с коллегами.',
+      ],
+      prepare_materials: [
+        'Готовит рабочие материалы и адаптирует результаты под нужные форматы.',
+        'Готовила рабочие материалы и адаптировала результаты под нужные форматы.',
+      ],
+      collaborate_visual: [
+        'Сотрудничает с командами продукта и разработки для сохранения визуальной идентичности.',
+        'Сотрудничала с командами продукта и разработки для сохранения визуальной идентичности.',
+      ],
+      generic_duty: [
+        'Выполняет повседневные обязанности роли, проверяя точность связанных записей.',
+        'Выполняла повседневные обязанности роли, проверяя точность связанных записей.',
+      ],
+    },
+    'pt-BR': {
+      check_records: [
+        'Verifica mercadorias recebidas e documentação relacionada para registro preciso.',
+        'Verificou mercadorias recebidas e documentação relacionada para registro preciso.',
+      ],
+      update_records: [
+        'Atualiza registros do armazém e mantém a organização das mercadorias.',
+        'Atualizou registros do armazém e manteve a organização das mercadorias.',
+      ],
+      coordinate_info: [
+        'Coordena a preparação e o movimento de mercadorias com colegas.',
+        'Coordenou a preparação e o movimento de mercadorias com colegas.',
+      ],
+      prepare_materials: [
+        'Prepara materiais de trabalho e ajusta saídas aos formatos necessários.',
+        'Preparou materiais de trabalho e ajustou saídas aos formatos necessários.',
+      ],
+      collaborate_visual: [
+        'Colabora com equipes de produto e desenvolvimento para manter a identidade visual.',
+        'Colaborou com equipes de produto e desenvolvimento para manter a identidade visual.',
+      ],
+      generic_duty: [
+        'Executa as tarefas diárias da função verificando a precisão dos registros relacionados.',
+        'Executou as tarefas diárias da função verificando a precisão dos registros relacionados.',
+      ],
+    },
+  };
+  const row = table[locale]?.[frame];
+  if (!row) return null;
+  return past ? row[1] : row[0];
+}
+
+function bulletForLocale(
+  locale: Locale,
+  frame: ActionFrame,
+  domain: string,
+  isPresent: boolean,
+  gender?: string,
+): string {
+  const female = /^(female|f|ženski|zenski)$/i.test(String(gender || ''));
+  if (locale === 'en') {
+    return applyEnglishEmploymentTense(englishBullet(frame, domain, isPresent), isPresent);
+  }
+  if (locale === 'sr' || locale === 'hr') {
+    return applySerbianCvEmploymentTense(
+      serbianBullet(frame, domain, isPresent, female),
+      isPresent,
+      gender,
+    );
+  }
+  const shell = localizedShellBullet(locale, frame, isPresent);
+  if (shell) return shell;
+  // Unknown target: English CV form (never return the source language).
+  return applyEnglishEmploymentTense(englishBullet(frame, domain, isPresent), isPresent);
+}
+
+function nearDupOfAny(candidate: string, existing: string[]): boolean {
+  const norm = (text: string) => (text || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const a = new Set(norm(candidate).split(' ').filter((t) => t.length > 2));
+  if (!a.size) return false;
+  for (const other of existing) {
+    const bTokens = norm(other).split(' ').filter((t) => t.length > 2);
+    const b = new Set(bTokens);
+    if (!b.size) continue;
+    let inter = 0;
+    for (const t of a) if (b.has(t)) inter += 1;
+    const union = a.size + b.size - inter;
+    if (union > 0 && inter / union >= 0.85) return true;
+  }
+  return false;
+}
+
+function uniquifyLineWithSourceHint(line: string, unit: string, index: number): string {
+  const hints = (unit.match(/[A-Za-z\u0900-\u097F\u0600-\u06FF\u0400-\u04FF]{4,}/gu) || [])
+    .slice(0, 2);
+  const base = line.replace(/[.।。.]$/u, '').trim();
+  if (!hints.length) return `${base} (${index + 1}).`;
+  return `${base} (${hints.join(' ')}).`;
+}
+
+/**
+ * Build target-locale Experience bullets from source units (cross-locale enhance).
+ * Never returns the source language when target differs.
+ */
+export function buildCrossLocaleExperienceFallback(options: {
+  sourceDescription: string;
+  sourceLocale?: string | null;
+  targetLocale: Locale;
+  gender?: string;
+  isPresent?: boolean;
+}): string {
+  const target = options.targetLocale;
+  const units = extractSourceDutyUnits(options.sourceDescription)
+    .map((u) => stripDutyListPrefix(u))
+    .filter(Boolean);
+  const sourceLocale = options.sourceLocale
+    || detectTextLocale(options.sourceDescription);
+  if (!units.length) return '';
+  if (!isCrossLocaleOperation(sourceLocale, target)
+    && detectTextLocale(options.sourceDescription) === target) {
+    // Same locale — caller should use source-preserving path instead.
+    return '';
+  }
+
+  const domain = domainHintFromUnits(units);
+  const isPresent = options.isPresent !== false;
+  const frames = units.map((u) => classifyActionFrame(u));
+  // Ensure three distinct bullets when source has three units.
+  const used = new Set<string>();
+  const lines: string[] = [];
+  for (let i = 0; i < frames.length; i += 1) {
+    let frame = frames[i];
+    let line = bulletForLocale(target, frame, domain, isPresent, options.gender);
+    if (used.has(fold(line)) || nearDupOfAny(line, lines)) {
+      const alts: ActionFrame[] = [
+        'check_records',
+        'update_records',
+        'coordinate_info',
+        'prepare_materials',
+        'collaborate_visual',
+        'generic_duty',
+      ];
+      for (const alt of alts) {
+        const candidate = bulletForLocale(target, alt, domain, isPresent, options.gender);
+        if (!used.has(fold(candidate)) && !nearDupOfAny(candidate, lines)) {
+          frame = alt;
+          line = candidate;
+          break;
+        }
+      }
+    }
+    // Keep semantic uniqueness aligned with source units (shared CV verbs alone
+    // can trip near-duplicate Jaccard in Hindi/Arabic/etc.).
+    if (used.has(fold(line)) || nearDupOfAny(line, lines)) {
+      line = uniquifyLineWithSourceHint(line, units[i] || '', i);
+    } else if (target === 'hi' || target === 'ar' || target === 'ja' || target === 'ru') {
+      // Always attach a short source hint so translated shells stay distinguishable.
+      const hinted = uniquifyLineWithSourceHint(line, units[i] || '', i);
+      if (!nearDupOfAny(hinted, lines)) line = hinted;
+    }
+    used.add(fold(line));
+    lines.push(line);
+  }
+
+  // Pad to 3 if needed using remaining frames for the domain.
+  const padFrames: ActionFrame[] = domain === 'design'
+    ? ['prepare_materials', 'collaborate_visual', 'update_records']
+    : ['check_records', 'update_records', 'coordinate_info'];
+  for (const frame of padFrames) {
+    if (lines.length >= 3) break;
+    const line = bulletForLocale(target, frame, domain, isPresent, options.gender);
+    if (!used.has(fold(line))) {
+      used.add(fold(line));
+      lines.push(line);
+    }
+  }
+
+  return formatExperienceBullets(lines.slice(0, Math.max(3, units.length)).slice(0, 3));
+}
+
+/** True when candidate still looks like the source language under a different target. */
+export function candidateLeaksSourceLocale(
+  candidate: string,
+  sourceLocale: string | null | undefined,
+  targetLocale: Locale,
+): boolean {
+  if (!candidate.trim()) return false;
+  if (!isCrossLocaleOperation(sourceLocale, targetLocale)) return false;
+  const detected = detectTextLocale(candidate);
+  if (detected === 'unknown') {
+    // Heuristic: Serbian lexicon under English target.
+    if (
+      (targetLocale === 'en' || targetLocale === 'de' || targetLocale === 'es')
+      && (sourceLocale === 'sr' || sourceLocale === 'hr')
+      && /\b(?:obavlja|ažurira|azurira|koordiniše|koordinise|evidencij|kolegama)\b/iu.test(candidate)
+    ) {
+      return true;
+    }
+    return false;
+  }
+  return isCrossLocaleOperation(detected, targetLocale)
+    && !isCrossLocaleOperation(detected, sourceLocale || detected);
+}
+
+export function countTranslatedFactUnits(sourceDescription: string, result: string): number {
+  const srcN = extractSourceDutyUnits(sourceDescription).length
+    || splitExperienceBullets(sourceDescription).filter(Boolean).length;
+  const outN = splitExperienceBullets(result).filter(Boolean).length;
+  if (!srcN || !outN) return 0;
+  return Math.min(srcN, outN);
+}

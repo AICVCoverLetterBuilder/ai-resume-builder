@@ -13,6 +13,7 @@ import {
 import { hasUnsupportedRegulatedPharmacyClaims } from './cv-experience-job-context';
 import {
   aiOutputLooksGenericFillerOnly,
+  aiOutputRepeatsFullTitleUnnaturally,
   countAiUnsafeInventionClaims,
   freeTextTitleStems,
   resolveAiOperationMode,
@@ -112,6 +113,17 @@ export function validateExperienceGenerationOutput(
       unsupportedClaimCount: 0,
     };
   }
+  if (aiOutputRepeatsFullTitleUnnaturally(text, options.position || '')) {
+    return {
+      ok: false,
+      reason: 'experience_generation_not_relevant',
+      generatedBulletCount,
+      relevanceValidationPassed: false,
+      perspectiveValidationPassed: true,
+      tenseValidationPassed: true,
+      unsupportedClaimCount: 0,
+    };
+  }
   const relevanceValidationPassed = generationTextLooksRelevantToTitle(
     text,
     options.position || '',
@@ -199,9 +211,14 @@ function softDomainFromTitle(position: string): string {
   const raw = (position || '').trim();
   if (!raw) return '';
   const stripped = raw.replace(
-    /^(koordinator(?:ka)?|coordinator|specijalista|specialist|analitičar(?:ka)?|analyst|menadžer(?:ka)?|manager|saradnik(?:ca)?|assistant|responsável|coordenador(?:a)?|responsable)\s+/iu,
+    /^(koordinator(?:ka)?|coordinator|specijalista|specialist|analitičar(?:ka)?|analyst|menadžer(?:ka)?|manager|saradnik(?:ca)?|assistant|responsável|coordenador(?:a)?|responsable|radnik(?:ca)?|radnica|worker|associate)\s+/iu,
     '',
   ).trim();
+  // Prefer the domain after common prepositions (u skladištu → skladišta-style phrase).
+  const afterPrep = stripped.match(/\b(?:u|za|za|in|for)\s+(.+)$/iu)?.[1]?.trim();
+  if (afterPrep && afterPrep.length >= 4 && afterPrep.length < stripped.length) {
+    return afterPrep;
+  }
   return stripped || raw;
 }
 
@@ -226,7 +243,7 @@ export function buildJobContextGenerationFallback(options: {
   void options.industry; // available for future soft framing; not a catalogue key
 
   if (locale === 'sr' || locale === 'hr') {
-    return formatExperienceBullets(present
+    const lines = present
       ? [
         `Pregleda dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domain} i proverava potpunost podataka.`,
         'Ažurira evidenciju i prati status dokumentacije u skladu sa potrebama radnog mesta.',
@@ -242,7 +259,8 @@ export function buildJobContextGenerationFallback(options: {
         female
           ? 'Koordinisala je razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.'
           : 'Koordinisao je razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.',
-      ]);
+      ];
+    return formatExperienceBullets(lines);
   }
 
   if (locale === 'en') {

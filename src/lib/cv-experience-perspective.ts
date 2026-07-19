@@ -48,7 +48,8 @@ const SR_1SG_PRONOUN_RE = /(?:^|[^\p{L}])(ja|ја)(?=[^\p{L}]|$)/iu;
 const SR_1SG_PAST_AUX_RE =
   /(?:^|[^\p{L}])(\p{L}+(?:ao|ala|io|ila|eo|ela|sao|sala|ао|ала|ио|ила|ео|ела|сао|сала))\s+(sam|сам)(?=[^\p{L}]|$)/iu;
 
-const EN_1SG_RE = /(?:^|[^\p{L}])(i|i'm|i’m|i’ve|i've|my)\b/iu;
+// Require capital "I" / contractions — never match Serbian conjunction "i".
+const EN_1SG_RE = /(?:^|[^\p{L}])(I(?:'m|'ve|’m|’ve)?|my)\b/u;
 
 function leadingTokenLooks1sg(token: string): boolean {
   const t = (token || '').trim();

@@ -17,6 +17,7 @@ import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
 import {
   experienceAiSourcesEquivalent,
 } from './cv-experience-ai-operation-snapshot';
+import { detectTextLocale } from './cv-content-locale';
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const EXPERIENCE_AI_DIAG_STORAGE_KEY = 'cvpro-experience-ai-diag-v1';
@@ -124,6 +125,24 @@ export type ExperienceAiDiagnosticTrace = {
   selectedSourceLocale: string | null;
   selectedSourceHash: string;
   rejectedStaleSourceKinds: ExperienceSelectedSourceKind[];
+  /** True only when the declared selected kind is also listed as rejected (should be rare/false). */
+  selectedSourceActuallyRejected: boolean;
+  detectedSourceLocale: string | null;
+  storedSourceLocale: string | null;
+  requestedTargetLocale: string | null;
+  crossLocaleOperation: boolean;
+  translationProviderAttempted: boolean;
+  translationRepairAttempted: boolean;
+  translationFallbackAttempted: boolean;
+  translationFallbackApplied: boolean;
+  translatedFactCount: number | null;
+  targetLocaleValidationPassed: boolean | null;
+  sourcePerspectiveMode: string | null;
+  targetPerspectiveMode: string | null;
+  targetContentApplied: boolean;
+  contentLocaleUpdatedAfterApply: boolean;
+  providerCoverageCount: number | null;
+  fallbackCoverageCount: number | null;
   englishSourceStillAuthoritative: boolean;
   /** Explicit replacement for the misnamed englishSourceStillAuthoritative flag. */
   staleForeignLocaleSourceAuthoritative: boolean;
@@ -293,7 +312,7 @@ export function inferLocaleHintFromScript(
     case 'cjk': return 'ja';
     case 'cyrillic': return 'sr|ru';
     case 'latin_diacritic': return 'sr|latin';
-    case 'latin': return 'en|latin';
+    case 'latin': return loc ? `${loc}|latin` : null;
     default: return null;
   }
 }
@@ -337,6 +356,9 @@ export function diagnoseExperienceSourceSelection(
   groundingSource: AiGroundingResolution['groundingSource'],
   options?: {
     requestedLocale?: string | null;
+    storedContentLocale?: string | null;
+    contentLocale?: string | null;
+    generatedLocale?: string | null;
     selectedSourceKindHint?: ExperienceSelectedSourceKind;
   },
 ): Pick<
@@ -388,12 +410,6 @@ export function diagnoseExperienceSourceSelection(
     textarea && selected && (textareaHash === selectedHash || equivalentNormalized),
   );
 
-  const rejectedStaleSourceKinds = [...new Set(
-    candidates
-      .filter((c) => fingerprintText(c.text) !== selectedHash)
-      .map((c) => c.kind),
-  )];
-
   // Formatting-only differences (bullets / CRLF) are NOT overrides.
   const currentTextareaIgnoredOrOverridden = Boolean(
     textarea
@@ -418,7 +434,17 @@ export function diagnoseExperienceSourceSelection(
 
   let selectedSourceLanguage: string | null = null;
   let selectedSourceScript: string | null = null;
-  const localeHint = inferLocaleHintFromScript(selectedScript, options?.requestedLocale);
+  // Detect from actual selected text — never label Serbian Latin as English merely
+  // because the UI/requested locale switched to en.
+  const detectedFromText = detectTextLocale(selected, {
+    storedLocale: options?.storedContentLocale || options?.contentLocale || null,
+    generatedLocale: options?.generatedLocale || null,
+  });
+  const localeForHint =
+    detectedFromText !== 'unknown'
+      ? detectedFromText
+      : (options?.storedContentLocale || options?.contentLocale || options?.requestedLocale || null);
+  const localeHint = inferLocaleHintFromScript(selectedScript, localeForHint);
   if (localeHint?.includes('|')) {
     const [lang, script] = localeHint.split('|');
     selectedSourceLanguage = lang || null;
@@ -427,11 +453,16 @@ export function diagnoseExperienceSourceSelection(
     selectedSourceLanguage = 'hi';
     selectedSourceScript = 'devanagari';
   } else if (selectedScript === 'latin_diacritic') {
-    selectedSourceLanguage = options?.requestedLocale || 'sr';
+    selectedSourceLanguage =
+      detectedFromText !== 'unknown'
+        ? detectedFromText
+        : (options?.storedContentLocale || options?.requestedLocale || 'sr');
     selectedSourceScript = 'latin';
   } else if (selectedScript === 'latin') {
-    // Latin without diacritics under sr request is still Serbian when live matched.
-    selectedSourceLanguage = options?.requestedLocale || 'en';
+    selectedSourceLanguage =
+      detectedFromText !== 'unknown'
+        ? detectedFromText
+        : (options?.storedContentLocale || options?.requestedLocale || null);
     selectedSourceScript = 'latin';
   }
 
@@ -454,6 +485,25 @@ export function diagnoseExperienceSourceSelection(
   } else {
     selectedSourceDiffReason = 'none';
   }
+
+  // Rejected = material competitors only. Never list the winning kind, and treat
+  // currentTextarea/description aliases of the same live text as selected when
+  // the live textarea matches the authoritative selection.
+  const rejectedStaleSourceKinds = [...new Set(
+    candidates
+      .filter((c) => {
+        if (fingerprintText(c.text) === selectedHash) return false;
+        if (experienceAiSourcesEquivalent(c.text, selected)) return false;
+        if (
+          selectedSourceMatchesLiveText
+          && (c.kind === 'currentTextarea' || c.kind === 'description')
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .map((c) => c.kind),
+  )].filter((k) => k !== selectedSourceKind);
 
   return {
     selectedSourceKind,
@@ -546,6 +596,23 @@ export class ExperienceAiDiagnosticSession {
       selectedSourceLocale: null,
       selectedSourceHash: 'empty',
       rejectedStaleSourceKinds: [],
+      selectedSourceActuallyRejected: false,
+      detectedSourceLocale: null,
+      storedSourceLocale: null,
+      requestedTargetLocale: null,
+      crossLocaleOperation: false,
+      translationProviderAttempted: false,
+      translationRepairAttempted: false,
+      translationFallbackAttempted: false,
+      translationFallbackApplied: false,
+      translatedFactCount: null,
+      targetLocaleValidationPassed: null,
+      sourcePerspectiveMode: null,
+      targetPerspectiveMode: null,
+      targetContentApplied: false,
+      contentLocaleUpdatedAfterApply: false,
+      providerCoverageCount: null,
+      fallbackCoverageCount: null,
       englishSourceStillAuthoritative: false,
       staleForeignLocaleSourceAuthoritative: false,
       selectedSourceLanguage: null,
@@ -712,6 +779,9 @@ export class ExperienceAiDiagnosticSession {
       grounding.groundingSource,
       {
         requestedLocale: options?.requestedLocale || this.draft.requestedLocale,
+        storedContentLocale: options?.operationalContentLocale || this.draft.contentLocale,
+        contentLocale: this.draft.contentLocale,
+        generatedLocale: (exp as WorkExperience & { generatedLocale?: string }).generatedLocale || null,
         selectedSourceKindHint: options?.selectedSourceKindHint,
       },
     );
@@ -732,11 +802,22 @@ export class ExperienceAiDiagnosticSession {
       sourceUnitHashes: units.map((u) => fingerprintText(u)),
       sourceFactIdentityCount: identities.length,
       requiredFactCount: identities.length,
+      sourceFactCount: identities.length,
       ...selection,
       operationSnapshotSourceKind: generationMode && !selected
         ? (options?.selectedSourceKindHint === 'jobContext' ? 'jobContext' : 'none')
         : selection.operationSnapshotSourceKind,
       rejectedStaleSourceKinds: rejectedStale,
+      selectedSourceActuallyRejected: rejectedStale.includes(selection.selectedSourceKind),
+      detectedSourceLocale: selection.selectedSourceLanguage,
+      storedSourceLocale: options?.operationalContentLocale || this.draft.contentLocale || null,
+      requestedTargetLocale: options?.requestedLocale || this.draft.requestedLocale || null,
+      crossLocaleOperation: Boolean(
+        selection.selectedSourceLanguage
+        && (options?.requestedLocale || this.draft.requestedLocale)
+        && selection.selectedSourceLanguage
+          !== (options?.requestedLocale || this.draft.requestedLocale),
+      ),
       factLockEnabled: Boolean(selected),
       factLockReason: options?.factLockReason
         ?? (selected ? 'non_empty_source' : 'generation_mode_empty_live'),
@@ -960,6 +1041,51 @@ export class ExperienceAiDiagnosticSession {
       rejectionStage: blocked
         ? (diag.rejectionStage || this.draft.rejectionStage || 'final_apply_postcondition')
         : null,
+      providerCoverageCount: diag.providerCoveredFactCount
+        ?? diag.coveredFactCount
+        ?? this.draft.providerCoverageCount
+        ?? null,
+      fallbackCoverageCount: clientCovered || (diag.fallbackCoverageCount ?? null),
+      detectedSourceLocale: (diag.detectedSourceLocale as string | undefined)
+        ?? this.draft.detectedSourceLocale
+        ?? null,
+      storedSourceLocale: (diag.storedSourceLocale as string | undefined)
+        ?? this.draft.storedSourceLocale
+        ?? this.draft.contentLocale
+        ?? null,
+      requestedTargetLocale: (diag.requestedTargetLocale as string | undefined)
+        ?? this.draft.requestedLocale
+        ?? null,
+      crossLocaleOperation: Boolean(
+        diag.crossLocaleOperation ?? this.draft.crossLocaleOperation,
+      ),
+      translationProviderAttempted: Boolean(diag.translationProviderAttempted),
+      translationRepairAttempted: Boolean(diag.translationRepairAttempted),
+      translationFallbackAttempted: Boolean(
+        diag.translationFallbackAttempted
+        || diag.clientDeterministicFallbackReason === 'cross_locale_translation_fallback',
+      ),
+      translationFallbackApplied: Boolean(
+        diag.translationFallbackApplied
+        || (clientFallbackApplied && diag.clientDeterministicFallbackReason === 'cross_locale_translation_fallback'),
+      ),
+      translatedFactCount: diag.translatedFactCount ?? null,
+      targetLocaleValidationPassed: diag.targetLocaleValidationPassed
+        ?? ((reason === 'locale_mismatch' || reason === 'wrong_language')
+          ? false
+          : (finalized.countedAsSuccess ? true : null)),
+      sourcePerspectiveMode: (diag.sourcePerspectiveMode as string | undefined)
+        ?? (diag.sourcePersonMode as string | undefined)
+        ?? null,
+      targetPerspectiveMode: (diag.targetPerspectiveMode as string | undefined)
+        ?? (diag.finalPersonMode as string | undefined)
+        ?? null,
+      targetContentApplied: Boolean(
+        diag.targetContentApplied ?? (finalized.countedAsSuccess && !blocked),
+      ),
+      contentLocaleUpdatedAfterApply: Boolean(
+        diag.contentLocaleUpdatedAfterApply ?? (finalized.countedAsSuccess && !blocked),
+      ),
       providerLocaleValidationReason:
         reason === 'locale_mismatch' || reason === 'wrong_language'
           ? reason

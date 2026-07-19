@@ -1172,8 +1172,8 @@ export default function CVBuilderPage() {
     const previousContentLocale = liveCv.canonicalSnapshot?.canonicalLocale
       ?? liveCv.contentLocale
       ?? null;
-    // Operation content locale follows the selected authoritative source + request.
-    const operationalContentLocale = requestedLocale;
+    // Requested UI locale is the TARGET. Stored content locale stays until apply.
+    const operationalContentLocale = previousContentLocale || requestedLocale;
     latestBulletsRequestIdRef.current = { ...latestBulletsRequestIdRef.current, [expId]: reqCtx.requestId };
     latestBulletsContextKeyRef.current = {
       ...latestBulletsContextKeyRef.current,

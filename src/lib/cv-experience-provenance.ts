@@ -96,11 +96,18 @@ function scriptLooksEnglishLatin(text: string): boolean {
   if (/[čćžšđČĆŽŠĐ]/.test(t) || /\p{Script=Cyrillic}/u.test(t)) return false;
   if (/\p{Script=Devanagari}/u.test(t) || /\p{Script=Arabic}/u.test(t)) return false;
   if (/[\u3040-\u30ff\u3400-\u9fff]/.test(t)) return false;
-  // Serbian/Croatian 1sg verbs without diacritics still count as local Latin.
-  if (/\b\p{L}+(?:am|em|im|šem)\b/u.test(t) && /\b(?:i|sa|za|na|u|kada|kad)\b/u.test(t)) {
+  // Serbian/Croatian CV Latin (with or without diacritics) is not English.
+  if (
+    /\b(?:obavlja|ažurira|azurira|koordiniše|koordinise|proverava|pregleda|evidencij\w*|kolegama|dokumentacij\w*|skladišt\w*|skladist\w*)\b/iu.test(t)
+  ) {
     return false;
   }
-  return /[A-Za-z]/.test(t);
+  // Serbian/Croatian 1sg verbs without diacritics still count as local Latin.
+  if (/\b\p{L}+(?:am|em|šem)\b/u.test(t) && /\b(?:sa|za|na|u|kada|kad|radi|uz)\b/u.test(t)) {
+    return false;
+  }
+  return /[A-Za-z]/.test(t)
+    && /\b(?:the|and|with|for|from|performs?|updates?|coordinates?|reviews?)\b/i.test(t);
 }
 
 function scriptLooksNonEnglish(text: string): boolean {
@@ -127,13 +134,19 @@ function inferSelectedLanguageScript(text: string): {
   if (/\p{Script=Cyrillic}/u.test(t)) return { language: 'sr', script: 'cyrillic' };
   if (/[čćžšđČĆŽŠĐ]/.test(t)) return { language: 'sr', script: 'latin' };
   if (
-    /\b\p{L}+(?:am|em|im|šem)\b/u.test(t)
-    && /\b(?:i|sa|za|na|u|kada|kad)\b/u.test(t)
+    /\b(?:obavlja|ažurira|azurira|koordiniše|koordinise|proverava|pregleda|evidencij\w*|kolegama|dokumentacij\w*)\b/iu.test(t)
+  ) {
+    return { language: 'sr', script: 'latin' };
+  }
+  if (
+    /\b\p{L}+(?:am|em|šem)\b/u.test(t)
+    && /\b(?:sa|za|na|u|kada|kad|radi|uz)\b/u.test(t)
   ) {
     return { language: 'sr', script: 'latin' };
   }
   if (/[äöüßÄÖÜ]/.test(t)) return { language: 'de', script: 'latin' };
-  if (/[A-Za-z]/.test(t)) return { language: 'en', script: 'latin' };
+  if (scriptLooksEnglishLatin(t)) return { language: 'en', script: 'latin' };
+  if (/[A-Za-z]/.test(t)) return { language: null, script: 'latin' };
   return { language: null, script: null };
 }
 

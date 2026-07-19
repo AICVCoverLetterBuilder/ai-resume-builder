@@ -145,6 +145,21 @@ export function applySerbianCvEmploymentTense(
   };
 
   const transformVerb = (verb: string): string => {
+    // Never tense-shift adjectives / case endings (e.g. razvojnim → razvojnila).
+    if (
+      /(?:nim|kim|skim|čkim|ćkim|jim|ovim|evim|ijim|tom|ima|ama|ним|ким|ским)$/iu.test(verb)
+    ) {
+      return verb;
+    }
+    // Only finite 1sg-looking verbs — not every token ending in -im.
+    if (
+      !/(?:avam|iram|ujem|ijem|šem|ćem|авам|ирам|ујем|ијем|шем|ћем)$/iu.test(verb)
+      && !/(?:pregledam|označavam|oznacavam|ažuriram|azuriram|koordinišem|koordinisem|pripremam|proveravam|obavljam|sarađujem|saradujem|vodim|radim|unosim)$/iu.test(verb)
+    ) {
+      if (!/(am|em|ам|ем)$/iu.test(verb)) return verb;
+      // Bare -im is too ambiguous (instrumental adjectives); skip.
+      if (/(im|им)$/iu.test(verb)) return verb;
+    }
     if (!/(am|em|im|šem|ćem|ijem|ujem|avam|ам|ем|им|шем|ћем|ијем|ујем|авам)$/iu.test(verb)) {
       return verb;
     }
@@ -169,29 +184,36 @@ export function applySerbianCvEmploymentTense(
 export function sourceUsableInLocale(text: string, locale: Locale): boolean {
   const t = text || '';
   if (!t.trim()) return false;
+  // Lazy import avoided — use inline Serbian Latin lexicon so undiacritic SR
+  // is never treated as already-English.
+  const looksSerbianLatin = /[čćžšđČĆŽŠĐ]/u.test(t)
+    || /\b(?:obavlja|ažurira|azurira|koordiniše|koordinise|proverava|pregleda|evidencij\w*|kolegama|dokumentacij\w*|skladišt\w*|skladist\w*|zadat(?:ak|ke)|radnog\s+mesta)\b/iu.test(t)
+    || (
+      /\b\p{L}+(?:am|em|šem)\b/u.test(t)
+      && /\b(?:sa|za|na|u|kada|kad|radi|uz)\b/u.test(t)
+    );
   if (locale === 'hi') return /\p{Script=Devanagari}/u.test(t);
   if (locale === 'ar') return /\p{Script=Arabic}/u.test(t);
   if (locale === 'ja') return /[\u3040-\u30ff\u3400-\u9fff]/u.test(t);
   if (locale === 'ru') return /\p{Script=Cyrillic}/u.test(t);
   if (locale === 'sr' || locale === 'hr') {
     if (/\p{Script=Devanagari}|\p{Script=Arabic}/u.test(t)) return false;
-    // Cyrillic Serbian
     if (/\p{Script=Cyrillic}/u.test(t)) return true;
-    // Latin Serbian/Croatian with diacritics or typical 1sg verb endings
-    if (/[čćžšđČĆŽŠĐ]/u.test(t)) return true;
-    if (/\b\p{L}+(?:am|em|im|šem)\b/u.test(t) && /\b(?:i|sa|za|na|u|kada|kad)\b/u.test(t)) {
-      return true;
-    }
+    if (looksSerbianLatin) return true;
     return false;
   }
   if (locale === 'en') {
-    return !/\p{Script=Devanagari}|\p{Script=Arabic}|\p{Script=Cyrillic}/u.test(t)
-      && !/[čćžšđČĆŽŠĐ]/u.test(t);
+    if (/\p{Script=Devanagari}|\p{Script=Arabic}|\p{Script=Cyrillic}/u.test(t)) return false;
+    if (/[čćžšđČĆŽŠĐ]/u.test(t)) return false;
+    // Undiacritic Serbian Latin must not count as English-usable.
+    if (looksSerbianLatin) return false;
+    return /[A-Za-z]/.test(t);
   }
   // Other Latin locales (de/es/fr/it/pt-BR): accept Latin text but NEVER treat
-  // Serbian/Croatian diacritic or Cyrillic source as already-localized — that
-  // would preserve sr wording under a de/es request (cross-locale regressions).
-  if (/[čćžšđČĆŽŠĐ]/u.test(t) || /\p{Script=Cyrillic}/u.test(t)) return false;
+  // Serbian/Croatian (diacritic or lexicon) or Cyrillic as already-localized.
+  if (/[čćžšđČĆŽŠĐ]/u.test(t) || /\p{Script=Cyrillic}/u.test(t) || looksSerbianLatin) {
+    return false;
+  }
   return !/\p{Script=Devanagari}|\p{Script=Arabic}/u.test(t);
 }
 /** Strip leading list syntax only (bullets / numbered prefixes). */

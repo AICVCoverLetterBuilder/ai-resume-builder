@@ -34,6 +34,15 @@ import {
   buildSourcePreservingExperienceBulletsWithProvenance,
 } from './cv-localized-fallback';
 import {
+  buildCrossLocaleExperienceFallback,
+  candidateLeaksSourceLocale,
+  countTranslatedFactUnits,
+} from './cv-cross-locale-experience';
+import {
+  detectTextLocale,
+  isCrossLocaleOperation,
+} from './cv-content-locale';
+import {
   validateSourceFactIdentityCoverage,
   validateProvenancedDeterministicFallbackCoverage,
   validateSourceUnitsMateriallyPreserved,
@@ -70,7 +79,13 @@ import {
   hasSuspiciousHindiMergedTokens,
   normalizeHindiGeneratedWhitespace,
 } from './cv-hindi-normalize';
-import { normalizeSerbianDurationGrammar } from './cv-serbian-grammar';
+import {
+  normalizeSerbianDurationGrammar,
+  repairMalformedSerbianGeneratedTokens,
+  hasMalformedSerbianGeneratedToken,
+  hasMixedSerbianSummaryPerspective,
+  dedupeSummarySentences,
+} from './cv-serbian-grammar';
 import {
   normalizeSerbianLatinConfusables,
   preserveSerbianSummaryFactForms,
@@ -213,6 +228,24 @@ export type FinalizeCvAiFieldResult = {
     generationFinalPostconditionPassed?: boolean | null;
     generationFallbackBuilderKind?: string | null;
     generationFallbackFailureReason?: string | null;
+    detectedSourceLocale?: string | null;
+    storedSourceLocale?: string | null;
+    requestedTargetLocale?: string | null;
+    uiLocale?: string | null;
+    crossLocaleOperation?: boolean;
+    translationProviderAttempted?: boolean;
+    translationRepairAttempted?: boolean;
+    translationFallbackAttempted?: boolean;
+    translationFallbackApplied?: boolean;
+    translatedFactCount?: number;
+    targetLocaleValidationPassed?: boolean | null;
+    sourcePerspectiveMode?: string | null;
+    targetPerspectiveMode?: string | null;
+    targetContentApplied?: boolean;
+    contentLocaleUpdatedAfterApply?: boolean;
+    selectedSourceActuallyRejected?: boolean;
+    providerCoverageCount?: number;
+    fallbackCoverageCount?: number;
   };
 };
 
@@ -286,6 +319,7 @@ function normalizeLocaleText(text: string, locale: Locale): string {
   }
   if (locale === 'sr' || locale === 'hr') {
     out = normalizeSerbianDurationGrammar(out);
+    out = repairMalformedSerbianGeneratedTokens(out);
     // Serbian Latin Summary must not retain confusable Cyrillic letters (pregledа).
     out = normalizeSerbianLatinConfusables(out);
   }
@@ -443,11 +477,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (locale === 'sr' || locale === 'hr') {
     candidate = preserveSerbianSummaryFactForms(candidate, dutiesText);
     candidate = normalizeSerbianLatinConfusables(candidate);
+    candidate = repairMalformedSerbianGeneratedTokens(candidate);
+    candidate = dedupeSummarySentences(candidate);
+    // Drop first-person inventory/management fluff not grounded in Experience.
+    if (!/\b(?:zalih|inventar|snabdevanj|nabavk)\w*\b/iu.test(dutiesText)) {
+      candidate = candidate
+        .replace(/[^.!?]*\b(?:upravljala|upravljao)\s+sam\s+nivoima\s+zaliha[^.!?]*[.!?]/giu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+    if (!/\b(?:jel\w*|kuhinj|restoran|koktel|hrana)\b/iu.test(dutiesText)) {
+      candidate = candidate
+        .replace(/[^.!?]*\bpriprema\s+jela\b[^.!?]*[.!?]/giu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
     candidate = enrichSerbianSummaryEmploymentGrounding(candidate, {
       role: context.role,
       company: context.company,
       startDate: context.startDate,
     });
+    candidate = dedupeSummarySentences(candidate);
   }
 
   const durationDiag = durationResolved.durationDiagnostics;
@@ -456,6 +506,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       requireDurationClaim: true,
     })
     || (locale === 'sr' && hasSerbianLatinMixedScriptToken(candidate))
+    || (locale === 'sr' && hasMalformedSerbianGeneratedToken(candidate))
+    || (locale === 'sr' && hasMixedSerbianSummaryPerspective(candidate))
   ) {
     // Force deterministic grounded rebuild when postcondition still fails.
     candidate = '';
@@ -527,11 +579,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     if (locale === 'sr' || locale === 'hr') {
       groundedText = preserveSerbianSummaryFactForms(groundedText, dutiesText);
       groundedText = normalizeSerbianLatinConfusables(groundedText);
+      groundedText = repairMalformedSerbianGeneratedTokens(groundedText);
+      groundedText = dedupeSummarySentences(groundedText);
+      if (!/\b(?:zalih|inventar|snabdevanj|nabavk)\w*\b/iu.test(dutiesText)) {
+        groundedText = groundedText
+          .replace(/[^.!?]*\b(?:upravljala|upravljao)\s+sam\s+nivoima\s+zaliha[^.!?]*[.!?]/giu, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+      // Never invent restaurant/food shells when Experience has no cooking duties.
+      if (!/\b(?:jel\w*|kuhinj|restoran|koktel|hrana)\b/iu.test(dutiesText)) {
+        groundedText = groundedText
+          .replace(/[^.!?]*\bpriprema\s+jela\b[^.!?]*[.!?]/giu, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
       groundedText = enrichSerbianSummaryEmploymentGrounding(groundedText, {
         role: context.role,
         company: context.company,
         startDate: context.startDate,
       });
+      groundedText = dedupeSummarySentences(groundedText);
     }
     const second = summaryPasses(
       groundedText,
@@ -853,13 +921,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       lastRejectReason = 'empty_bullets';
       return null;
     }
-    const pass = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
-    if (!pass.ok) {
-      lastRejectStage = stage;
-      lastRejectReason = pass.reason || 'fidelity_failed';
-      return null;
+    const crossLocaleAccept = stage === 'cross_locale_translation_fallback';
+    if (crossLocaleAccept) {
+      if (!textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')) {
+        lastRejectStage = stage;
+        lastRejectReason = 'locale_mismatch';
+        return null;
+      }
+      if (isWrongLanguageAiOutput(candidate, locale)) {
+        lastRejectStage = stage;
+        lastRejectReason = 'wrong_language';
+        return null;
+      }
+      if (hasAiProtocolMarker(candidate) || hasCvMetaFallbackText(candidate)) {
+        lastRejectStage = stage;
+        lastRejectReason = 'meta_fallback_text';
+        return null;
+      }
+    } else {
+      const pass = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
+      if (!pass.ok) {
+        lastRejectStage = stage;
+        lastRejectReason = pass.reason || 'fidelity_failed';
+        return null;
+      }
     }
-    if (sourceForCoverage) {
+    if (sourceForCoverage && !crossLocaleAccept) {
       const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate);
       if (!post.ok) {
         lastRejectStage = `${stage}:material_postcondition`;
@@ -901,10 +988,25 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           return null;
         }
       }
+    } else if (crossLocaleAccept && sourceForCoverage) {
+      // Cross-locale: semantic unit count, not literal token overlap.
+      const translatedCount = countTranslatedFactUnits(sourceForCoverage, candidate);
+      lastRequired = sourceFactCount;
+      lastCovered = translatedCount;
+      if (translatedCount < Math.min(3, sourceFactCount || 3)) {
+        lastRejectStage = `${stage}:translated_fact_count`;
+        lastRejectReason = 'experience_material_fact_coverage_incomplete';
+        return null;
+      }
     }
     const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
     const isClientFallback = origin === 'deterministic_fallback'
-      && (stage === 'canonical_fallback' || stage === 'source_preserving_fallback' || stage === 'occupation_fallback');
+      && (
+        stage === 'canonical_fallback'
+        || stage === 'source_preserving_fallback'
+        || stage === 'occupation_fallback'
+        || stage === 'cross_locale_translation_fallback'
+      );
     if (isClientFallback) {
       fallbackApplied = true;
       fallbackBulletCount = bulletCount;
@@ -1270,6 +1372,102 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   // Identities are captured from immutable source units before tense transforms.
   // Do not skip because the API response was already labelled server `fallback`.
   if (sourceForCoverage && !grounding?.staleGeneratedContentExcluded) {
+    const storedSourceLocale = (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
+      || cv.contentLocale
+      || null;
+    const detectedSourceLocale = detectTextLocale(sourceForCoverage, {
+      storedLocale: storedSourceLocale,
+      generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale,
+    });
+    const crossLocale = isCrossLocaleOperation(detectedSourceLocale, locale)
+      || !sourceUsableInLocale(sourceForCoverage, locale);
+
+    // Cross-locale: never return same-language source-preserving text for a
+    // different target — use translation-aware fallback instead.
+    if (crossLocale) {
+      const translated = normalizeLocaleText(
+        buildCrossLocaleExperienceFallback({
+          sourceDescription: sourceForCoverage,
+          sourceLocale: detectedSourceLocale === 'unknown' ? storedSourceLocale : detectedSourceLocale,
+          targetLocale: locale,
+          gender,
+          isPresent,
+        }),
+        locale,
+      );
+      const translatedGate = validateExperienceCvPerspective(translated, locale);
+      const translatedOk = Boolean(translated.trim())
+        && translatedGate.ok
+        && !candidateLeaksSourceLocale(
+          translated,
+          detectedSourceLocale === 'unknown' ? 'sr' : detectedSourceLocale,
+          locale,
+        )
+        && sourceUsableInLocale(translated, locale);
+      clientDeterministicFallbackAttempted = true;
+      clientDeterministicFallbackBulletCount = splitExperienceBullets(translated).filter(Boolean).length;
+      clientDeterministicFallbackScripts = detectBulletScripts(translated);
+      clientDeterministicFallbackRequiredFactCount = sourceFactCount;
+      clientDeterministicFallbackCoveredFactCount = countTranslatedFactUnits(
+        sourceForCoverage,
+        translated,
+      );
+      if (translatedOk) {
+        const accepted = tryAccept(
+          translated,
+          'deterministic_fallback',
+          'cross_locale_translation_fallback',
+        );
+        if (accepted) {
+          perspectiveMeta = {
+            ...perspectiveMeta,
+            sourcePersonMode: detectExperiencePersonMode(
+              sourceForCoverage,
+              (detectedSourceLocale === 'sr' || detectedSourceLocale === 'hr')
+                ? detectedSourceLocale
+                : locale,
+            ),
+            perspectiveNormalizationAttempted: true,
+            perspectiveNormalizationApplied: true,
+            perspectiveValidationPassed: true,
+            normalizedPersonMode: detectExperiencePersonMode(translated, locale),
+            finalPersonMode: detectExperiencePersonMode(translated, locale),
+            meaningfulChangeDetected: true,
+            noOpRejected: false,
+          };
+          return attachPerspectiveDiag({
+            ...accepted,
+            diagnostics: {
+              ...accepted.diagnostics,
+              detectedSourceLocale:
+                detectedSourceLocale === 'unknown' ? storedSourceLocale : detectedSourceLocale,
+              storedSourceLocale,
+              requestedTargetLocale: locale,
+              uiLocale: locale,
+              crossLocaleOperation: true,
+              translationFallbackAttempted: true,
+              translationFallbackApplied: true,
+              translatedFactCount: countTranslatedFactUnits(sourceForCoverage, translated),
+              targetLocaleValidationPassed: true,
+              sourcePerspectiveMode: perspectiveMeta.sourcePersonMode,
+              targetPerspectiveMode: detectExperiencePersonMode(translated, locale),
+              targetContentApplied: true,
+              contentLocaleUpdatedAfterApply: true,
+              fallbackCoverageCount: countTranslatedFactUnits(sourceForCoverage, translated),
+              clientDeterministicFallbackAttempted: true,
+              clientDeterministicFallbackApplied: true,
+              clientDeterministicFallbackBulletCount:
+                splitExperienceBullets(translated).filter(Boolean).length,
+            },
+          });
+        }
+      }
+      lastRejectReason = translatedGate.ok
+        ? 'locale_mismatch'
+        : (translatedGate.reason || 'experience_cv_perspective_first_person');
+      lastRejectStage = 'cross_locale_translation_fallback';
+      // Do not fall through to same-language source-preserving for a different target.
+    } else {
     const built = buildSourcePreservingExperienceBulletsWithProvenance(
       sourceForCoverage,
       locale,
@@ -1338,6 +1536,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     } else if (!preservedGate.ok) {
       lastRejectReason = preservedGate.reason || 'experience_cv_perspective_first_person';
       lastRejectStage = 'source_preserving_fallback:perspective';
+    }
     }
   }
 

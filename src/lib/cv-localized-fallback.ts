@@ -122,48 +122,28 @@ const BULLET_BY_CATEGORY: Record<
       'إعداد الأطباق وفقاً لمعايير المطعم والمطبخ المعتمدة.',
   },
   sr: {
-    beverage_service: (g) =>
-      g === 'male'
-        ? 'Pripremao sam i služio širok spektar koktela, žestokih pića i napitaka.'
-        : 'Pripremala sam i služila širok spektar koktela, žestokih pića i napitaka.',
-    hygiene_safety: (g) =>
-      g === 'male'
-        ? 'Održavao sam čist i organizovan prostor šanka uz standarde higijene i bezbednosti.'
-        : 'Održavala sam čist i organizovan prostor šanka uz standarde higijene i bezbednosti.',
-    customer_service_guest_relationship: (g) =>
-      g === 'male'
-        ? 'Pružao sam pažljivu uslugu gostima i gradio odnos poverenja sa klijentima.'
-        : 'Pružala sam pažljivu uslugu gostima i gradila odnos poverenja sa klijentima.',
-    inventory_stock: (g) =>
-      g === 'male'
-        ? 'Upravljao sam nivoima zaliha, pomagao pri inventaru i javljao potrebe snabdevanja menadžmentu.'
-        : 'Upravljala sam nivoima zaliha, pomagala pri inventaru i javljala potrebe snabdevanja menadžmentu.',
-    food_preparation: (g) =>
-      g === 'male'
-        ? 'Pripremao sam jela u skladu sa utvrđenim standardima restorana i kuhinje.'
-        : 'Pripremala sam jela u skladu sa utvrđenim standardima restorana i kuhinje.',
+    beverage_service: () =>
+      'Priprema i služi širok spektar koktela, žestokih pića i napitaka.',
+    hygiene_safety: () =>
+      'Održava čist i organizovan prostor šanka uz standarde higijene i bezbednosti.',
+    customer_service_guest_relationship: () =>
+      'Pruža pažljivu uslugu gostima i gradi odnos poverenja sa klijentima.',
+    inventory_stock: () =>
+      'Upravlja nivoima zaliha, pomaže pri inventaru i javlja potrebe snabdevanja menadžmentu.',
+    food_preparation: () =>
+      'Priprema jela u skladu sa utvrđenim standardima restorana i kuhinje.',
   },
   hr: {
-    beverage_service: (g) =>
-      g === 'male'
-        ? 'Pripremao sam i posluživao širok spektar koktela, žestokih pića i napitaka.'
-        : 'Pripremala sam i posluživala širok spektar koktela, žestokih pića i napitaka.',
-    hygiene_safety: (g) =>
-      g === 'male'
-        ? 'Održavao sam čist i organiziran prostor šanka uz standarde higijene i sigurnosti.'
-        : 'Održavala sam čist i organiziran prostor šanka uz standarde higijene i sigurnosti.',
-    customer_service_guest_relationship: (g) =>
-      g === 'male'
-        ? 'Pružao sam pažljivu uslugu gostima i gradio odnos povjerenja s klijentima.'
-        : 'Pružala sam pažljivu uslugu gostima i gradila odnos povjerenja s klijentima.',
-    inventory_stock: (g) =>
-      g === 'male'
-        ? 'Upravljao sam razinama zaliha, pomagao pri inventuri i javljao potrebe nabave menadžmentu.'
-        : 'Upravljala sam razinama zaliha, pomagala pri inventuri i javljala potrebe nabave menadžmentu.',
-    food_preparation: (g) =>
-      g === 'male'
-        ? 'Pripremao sam jela u skladu s utvrđenim standardima restorana i kuhinje.'
-        : 'Pripremala sam jela u skladu s utvrđenim standardima restorana i kuhinje.',
+    beverage_service: () =>
+      'Priprema i poslužuje širok spektar koktela, žestokih pića i napitaka.',
+    hygiene_safety: () =>
+      'Održava čist i organiziran prostor šanka uz standarde higijene i sigurnosti.',
+    customer_service_guest_relationship: () =>
+      'Pruža pažljivu uslugu gostima i gradi odnos povjerenja s klijentima.',
+    inventory_stock: () =>
+      'Upravlja razinama zaliha, pomaže pri inventuri i javlja potrebe nabave menadžmentu.',
+    food_preparation: () =>
+      'Priprema jela u skladu s utvrđenim standardima restorana i kuhinje.',
   },
   ru: {
     beverage_service: (g) =>
@@ -1408,7 +1388,10 @@ export function buildSourcePreservingExperienceBulletsWithProvenance(
     const identity = identities[i];
     let text = '';
     let transformationKind: ProvenancedFallbackBullet['transformationKind'] = 'identity';
-    if (locale === 'en' || sourceUsableInLocale(sourceText, locale)) {
+    // Never treat "target is English" as license to preserve non-English source.
+    // Cross-locale must localize; same-locale may preserve with tense only.
+    const sourceAlreadyTarget = sourceUsableInLocale(sourceText, locale);
+    if (sourceAlreadyTarget) {
       text = universalPreserveSourceUnit(sourceText, {
         isPresent,
         locale,
