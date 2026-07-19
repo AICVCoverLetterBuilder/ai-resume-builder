@@ -107,6 +107,27 @@ export function localizeBaker(locale: Locale, gender?: string): string {
   return 'Baker';
 }
 
+/** Warehouse / logistics occupation — never collapse to generic "पेशेवर". */
+export function localizeWarehouseEmployee(locale: Locale, gender?: string): string {
+  const g = normalizeCoverLetterGender(gender);
+  if (locale === 'hi') return 'वेयरहाउस कर्मचारी';
+  if (locale === 'sr' || locale === 'hr') {
+    return g === 'female' ? 'Radnica u magacinu' : 'Radnik u magacinu';
+  }
+  if (locale === 'de') return g === 'female' ? 'Lagerarbeiterin' : 'Lagerarbeiter';
+  if (locale === 'fr') return g === 'female' ? 'Employée d’entrepôt' : 'Employé d’entrepôt';
+  if (locale === 'es') return g === 'female' ? 'Empleada de almacén' : 'Empleado de almacén';
+  if (locale === 'it') return g === 'female' ? 'Addetta al magazzino' : 'Addetto al magazzino';
+  if (locale === 'pt-BR') return g === 'female' ? 'Funcionária de armazém' : 'Funcionário de armazém';
+  if (locale === 'ru') return g === 'female' ? 'Кладовщица' : 'Кладовщик';
+  if (locale === 'ar') return 'موظف مستودع';
+  if (locale === 'ja') return '倉庫作業員';
+  return 'Warehouse Employee';
+}
+
+const WAREHOUSE_TITLE_RE =
+  /(?:warehouse\s*(?:employee|worker|operator|associate)?|warehouse|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर|वर्कर))?|skladištar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|radnik\s+u\s+magacinu)/iu;
+
 const BAKER_TITLE_RE =
   /(?:^|[^a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ])(baker|bäcker(?:in)?|boulanger(?:e)?|panader[oa]|panettier[ae]|padeir[oa]|пекар(?:ка)?|pekar(?:ka)?)(?:[^a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ]|$)|बेकर|خباز|ベイカー/iu;
 
@@ -387,6 +408,10 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
   }
   if (TITLE_CATEGORY_RULES[0].re.test(normalized)) {
     return localizeCook(locale, gender);
+  }
+  // Warehouse before falling through to generic "पेशेवर" for non-English locales.
+  if (WAREHOUSE_TITLE_RE.test(normalized)) {
+    return localizeWarehouseEmployee(locale, gender);
   }
   if (locale === 'sr' || locale === 'hr') return normalized;
   const isAsciiTitle = /^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2;

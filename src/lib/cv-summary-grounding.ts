@@ -268,6 +268,104 @@ const WAREHOUSE_SUMMARY_KEYS = new Set([
 const GENERICIZED_WAREHOUSE_RE =
   /(?:दैनिक\s*रिकॉर्ड|कार्य\s*दस्तावेज़|जानकारी\s*का\s*समन्वय|daily\s+records?|work\s+documents?|coordinates?\s+information)/iu;
 
+/**
+ * Semantic employment-fact / professional-label quality for Hindi Summary postconditions.
+ * Compares structured company/role/current/start predicates across clauses — not token overlap alone.
+ */
+export type HindiSummaryEmploymentQuality = {
+  currentEmploymentIntroductionCount: number;
+  repeatedEmploymentFactCount: number;
+  repeatedProfessionalLabelCount: number;
+  professionalLabelCount: number;
+  currentRoleConcreteFactCoverage: number;
+  genericizedMaterialFactCount: number;
+  priorRoleGroundingPassed: boolean;
+  crossDomainLeakageDetected: boolean;
+  groundingValidationPassed: boolean;
+};
+
+export function analyzeHindiSummaryEmploymentQuality(
+  summary: string,
+  options: {
+    company?: string;
+    role?: string;
+    startDate?: string;
+    sourceDuties?: string;
+  } = {},
+): HindiSummaryEmploymentQuality {
+  const text = (summary || '').replace(/\s+/g, ' ').trim();
+  const company = (options.company || '').trim();
+  const source = options.sourceDuties || '';
+  const companyEsc = company ? company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
+
+  // Count sentences that introduce current employment (company + employed/role/currently).
+  // A single clause may match several token patterns — sentence granularity avoids inflation.
+  let currentEmploymentIntroductionCount = 0;
+  if (companyEsc) {
+    const sentences = text.split(/[।.!?]+/u).map((s) => s.trim()).filter(Boolean);
+    for (const sentence of sentences) {
+      if (!new RegExp(companyEsc, 'iu').test(sentence)) continue;
+      const isEmploymentIntro = /(?:कार्यरत|के\s+रूप\s+में|वर्तमान\s+में)/u.test(sentence)
+        || /(?:जनवरी|फ़रवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्तूबर|नवंबर|दिसंबर|\d{4})\s+से/u.test(sentence);
+      // Duty-only sentences that mention the company without employment predicates stay out.
+      if (isEmploymentIntro) currentEmploymentIntroductionCount += 1;
+    }
+  } else if (/वर्तमान\s+में|कार्यरत/u.test(text)) {
+    currentEmploymentIntroductionCount = 1;
+  }
+
+  const repeatedEmploymentFactCount = Math.max(0, currentEmploymentIntroductionCount - 1);
+
+  const professionalMatches = text.match(/पेशेवर/gu) || [];
+  const professionalLabelCount = professionalMatches.length;
+  const repeatedProfessionalLabelCount = Math.max(0, professionalLabelCount - 1);
+
+  const summaryWhKeys = [...new Set(
+    classifyMaterialDutyKeys(text).filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k)),
+  )];
+  const currentRoleConcreteFactCoverage = summaryWhKeys.length;
+
+  const sourceWh = [...new Set(
+    classifyMaterialDutyKeys(source).filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k)),
+  )];
+  const hasGeneric = GENERICIZED_WAREHOUSE_RE.test(text);
+  const genericizedMaterialFactCount = hasGeneric && currentRoleConcreteFactCoverage < 2
+    ? Math.max(1, sourceWh.length)
+    : 0;
+
+  const hasPriorDesignCue = /(?:इससे\s+पहले|Rewitu|ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|ब्रांड)/u.test(text);
+  const priorDesignFacts = /(?:प्रिंट|डिजिटल|दृश्य|ग्राफिक|डिज़ाइन|ब्रांड)/u.test(text);
+  const sourceHasDesign = /(?:ग्राफिक|डिज़ाइन|दृश्य|dizajn|design|print|digital|प्रिंट|डिजिटल|ब्रांड)/iu.test(source);
+  // When Experience includes a prior design role, Summary must keep at least one design fact.
+  const priorRoleGroundingPassed = sourceHasDesign
+    ? priorDesignFacts
+    : (!hasPriorDesignCue || priorDesignFacts);
+
+  const warehouseInDesignClause = /इससे\s+पहले[^।]*?(?:माल|गोदाम|आवाजाही)/u.test(text);
+  const designInWarehouseDuty = /(?:आने\s+वाले\s+माल|गोदाम)[^।]*?(?:ग्राफिक|डिज़ाइन|ब्रांड)/u.test(text);
+  const crossDomainLeakageDetected = warehouseInDesignClause || designInWarehouseDuty;
+
+  const groundingValidationPassed = repeatedEmploymentFactCount === 0
+    && repeatedProfessionalLabelCount === 0
+    && currentEmploymentIntroductionCount <= 1
+    && (sourceWh.length < 2 || currentRoleConcreteFactCoverage >= 2)
+    && genericizedMaterialFactCount === 0
+    && priorRoleGroundingPassed
+    && !crossDomainLeakageDetected;
+
+  return {
+    currentEmploymentIntroductionCount,
+    repeatedEmploymentFactCount,
+    repeatedProfessionalLabelCount,
+    professionalLabelCount,
+    currentRoleConcreteFactCoverage,
+    genericizedMaterialFactCount,
+    priorRoleGroundingPassed,
+    crossDomainLeakageDetected,
+    groundingValidationPassed,
+  };
+}
+
 /** Bare Title-Case skill list as its own sentence (not "Key skills include …"). */
 export function summaryHasMalformedSkillsFragment(summary: string): boolean {
   const t = (summary || '').trim();
@@ -340,20 +438,29 @@ export function validateSummaryMaterialFacts(
   )];
 
   // Concrete warehouse Experience must not be genericized into records/docs/info prose,
-  // and must retain at least one concrete warehouse cue when warehouse duties exist.
+  // and must retain at least two concrete warehouse action-object frames.
   if (sourceWarehouse.length >= 1) {
-    const hasConcrete = /(?:माल|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар)/iu.test(summary);
-    if (
-      GENERICIZED_WAREHOUSE_RE.test(summary)
-      && !hasConcrete
-    ) {
+    const summaryWhKeys = [...new Set(
+      classifyMaterialDutyKeys(summary).filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k)),
+    )];
+    const hasConcreteCue = /(?:माल|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар)/iu.test(summary);
+    const hasGeneric = GENERICIZED_WAREHOUSE_RE.test(summary);
+    // Generic records/docs/info alone (or with <2 concrete frames) must fail.
+    if (hasGeneric && summaryWhKeys.length < 2) {
       violations.push({
         kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
         matched: 'warehouse_genericized',
         section: 'summary',
-        evidence: `genericizedMaterialFactCount=${sourceWarehouse.length}`,
+        evidence: `genericizedMaterialFactCount=${sourceWarehouse.length};concrete=${summaryWhKeys.length}`,
       });
-    } else if (!hasConcrete && sourceWarehouse.length >= 2) {
+    } else if (summaryWhKeys.length < 2 && sourceWarehouse.length >= 2) {
+      violations.push({
+        kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
+        matched: 'warehouse_facts_absent',
+        section: 'summary',
+        evidence: `requiredSummaryFactCount=2;covered=${summaryWhKeys.length};cue=${hasConcreteCue}`,
+      });
+    } else if (!hasConcreteCue && sourceWarehouse.length >= 2) {
       violations.push({
         kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
         matched: 'warehouse_facts_absent',
@@ -903,7 +1010,9 @@ export function buildConciseGroundedSummary(
 
   let text = '';
   if (locale === 'hi') {
-    const rolePart = role || 'पेशेवर';
+    const roleRaw = (role || 'पेशेवर').trim();
+    const roleIsGeneric = !roleRaw || /^(?:पेशेवर|professional)$/iu.test(roleRaw);
+    const rolePart = roleIsGeneric ? '' : roleRaw;
     const company = employer;
     const startMatch = /^(\d{4})-(\d{2})/.exec(datesValue);
     const hindiMonths: Record<string, string> = {
@@ -914,10 +1023,14 @@ export function buildConciseGroundedSummary(
       ? `${hindiMonths[startMatch[2]]} ${startMatch[1]}`
       : '';
     const employmentHead = monthYear && company
-      ? `${monthYear} से ${company} में ${rolePart} के रूप में कार्यरत`
+      ? (rolePart
+        ? `${monthYear} से ${company} में ${rolePart} के रूप में कार्यरत`
+        : `${monthYear} से ${company} में कार्यरत`)
       : company
-        ? `${company} में ${rolePart} के रूप में कार्यरत`
-        : `${rolePart} के रूप में कार्यरत`;
+        ? (rolePart
+          ? `${company} में ${rolePart} के रूप में कार्यरत`
+          : `${company} में कार्यरत`)
+        : (rolePart ? `${rolePart} के रूप में कार्यरत` : 'कार्यरत');
     const open = durationPhrase
       ? (g === 'female'
         ? `${employmentHead}, ${durationPhrase} रखने वाली पेशेवर।`
@@ -925,7 +1038,18 @@ export function buildConciseGroundedSummary(
           ? `${employmentHead}, ${durationPhrase} रखने वाला पेशेवर।`
           : `${employmentHead}, ${durationPhrase}।`)
       : `${employmentHead}।`;
-    const cookingFrags = uniqueFragments;
+    // Prefer curated warehouse noun-phrase fragments (never finite-verb dumps + का अनुभव).
+    const whFrags = [...new Set(
+      dutyFacts
+        .flatMap((f) => {
+          const keys = classifyMaterialDutyKeys(f.sourceText || f.value)
+            .filter((k) => k.startsWith('warehouse_'));
+          return keys.map((k) => warehouseSummaryFragment(k, locale)).filter(Boolean);
+        }),
+    )];
+    const cookingFrags = whFrags.length >= 2 ? whFrags : uniqueFragments.filter((f) =>
+      !/(?:करती|करता|किया|की)\s*(?:है|हैं)?$/u.test(f.trim())
+    );
     let dutySentence = '';
     if (cookingFrags.length >= 3) {
       dutySentence = `${cookingFrags[0]}, ${cookingFrags[1]} तथा ${cookingFrags[2]} का अनुभव।`;

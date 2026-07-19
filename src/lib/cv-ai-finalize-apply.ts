@@ -29,6 +29,7 @@ import {
   normalizeHindiSummaryPerspective,
   type DurationIntegrationContext,
 } from './cv-content-quality';
+import { analyzeHindiSummaryEmploymentQuality } from './cv-summary-grounding';
 import {
   deterministicLocalizedBulletsFromCanonical,
   deterministicLocalizedSummaryFromCanonical,
@@ -326,6 +327,16 @@ export type FinalizeCvAiFieldResult = {
     leakedFromExperienceEntryIdHashes?: string[];
     entryScopedCanonicalStorageUsed?: boolean;
     responseRejectedForEntryMismatch?: boolean;
+    /** Hindi Summary employment / warehouse grounding postconditions (build 275). */
+    groundingValidationPassed?: boolean;
+    currentEmploymentIntroductionCount?: number;
+    repeatedEmploymentFactCount?: number;
+    repeatedProfessionalLabelCount?: number;
+    currentRoleConcreteFactCoverage?: number;
+    genericizedMaterialFactCount?: number;
+    priorRoleGroundingPassed?: boolean;
+    fallbackCandidatePresent?: boolean;
+    providerSentenceCount?: number;
   };
 };
 
@@ -655,6 +666,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (locale === 'hi') {
     candidate = normalizeHindiSummaryPerspective(candidate);
     candidate = dedupeSummarySentences(candidate);
+    const empQuality = analyzeHindiSummaryEmploymentQuality(candidate, {
+      company: context.company,
+      role: context.role,
+      startDate: context.startDate,
+      sourceDuties: dutiesText,
+    });
+    // Duplicate Atlas/current-role intros or genericized warehouse duties force rebuild.
+    if (!empQuality.groundingValidationPassed && candidate.trim()) {
+      candidate = '';
+    }
   }
 
   // After duration ownership, if warehouse duties were dropped, force grounded rebuild.
@@ -709,12 +730,30 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(result.text);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
     const perspectiveValidationPassed = locale === 'hi' ? !firstPerson : true;
+    const empQ = locale === 'hi'
+      ? analyzeHindiSummaryEmploymentQuality(result.text, {
+        company: context.company,
+        role: context.role,
+        startDate: context.startDate,
+        sourceDuties: dutiesText,
+      })
+      : null;
+    const groundingValidationPassed = empQ ? empQ.groundingValidationPassed : !result.blocked;
     const blockedForDuration = Boolean(result.countedAsSuccess && !durationValidationPassed);
     const blockedForPerspective = Boolean(
       result.countedAsSuccess && locale === 'hi' && !perspectiveValidationPassed,
     );
-    const blocked = result.blocked || blockedForDuration || blockedForPerspective;
-    const success = result.countedAsSuccess && durationValidationPassed && perspectiveValidationPassed;
+    const blockedForGrounding = Boolean(
+      result.countedAsSuccess && locale === 'hi' && empQ && !empQ.groundingValidationPassed,
+    );
+    const blocked = result.blocked
+      || blockedForDuration
+      || blockedForPerspective
+      || blockedForGrounding;
+    const success = result.countedAsSuccess
+      && durationValidationPassed
+      && perspectiveValidationPassed
+      && groundingValidationPassed;
     return {
       ...result,
       blocked,
@@ -723,7 +762,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? 'experience_duration_mismatch'
         : blockedForPerspective
           ? 'summary_perspective_invalid'
-          : result.reason,
+          : blockedForGrounding
+            ? 'summary_grounding_failed'
+            : result.reason,
       diagnostics: {
         ...result.diagnostics,
         operationMode: summaryGenerate
@@ -765,6 +806,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalCandidateSource: result.origin,
         providerCandidatePresent: Boolean((input.candidate || '').trim()),
         deterministicCandidatePresent: result.origin === 'deterministic_fallback',
+        fallbackCandidatePresent: result.origin === 'deterministic_fallback',
         perspectiveMode,
         finalPerspectiveMode: perspectiveMode,
         sourcePerspectiveMode: firstPerson ? 'first_person' : 'neutral_cv',
@@ -772,16 +814,28 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         perspectiveNormalizationAttempted: locale === 'hi',
         perspectiveNormalizationApplied: locale === 'hi' && !firstPerson,
         perspectiveValidationPassed,
+        groundingValidationPassed,
+        currentEmploymentIntroductionCount: empQ?.currentEmploymentIntroductionCount,
+        repeatedEmploymentFactCount: empQ?.repeatedEmploymentFactCount,
+        repeatedProfessionalLabelCount: empQ?.repeatedProfessionalLabelCount,
+        currentRoleConcreteFactCoverage: empQ?.currentRoleConcreteFactCoverage,
+        genericizedMaterialFactCount: empQ?.genericizedMaterialFactCount,
+        priorRoleGroundingPassed: empQ?.priorRoleGroundingPassed,
+        crossEntryLeakageDetected: empQ?.crossDomainLeakageDetected ?? false,
         rejectionStage: blockedForDuration
           ? 'independent_final_duration_verification'
           : blockedForPerspective
             ? 'perspective_validation'
-            : result.diagnostics?.rejectionStage,
+            : blockedForGrounding
+              ? 'summary_grounding'
+              : result.diagnostics?.rejectionStage,
         typedFailureReason: blockedForDuration
           ? 'experience_duration_mismatch'
           : blockedForPerspective
             ? 'summary_perspective_invalid'
-            : result.diagnostics?.typedFailureReason,
+            : blockedForGrounding
+              ? 'summary_grounding_failed'
+              : result.diagnostics?.typedFailureReason,
       },
     };
   };

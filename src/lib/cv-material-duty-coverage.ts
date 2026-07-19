@@ -180,10 +180,11 @@ const DUTY_RULES: DutyRule[] = [
   },
   {
     key: 'warehouse_records',
+    // Hindi often places the object before the verb (रिकॉर्ड अद्यतन / सामान … व्यवस्थित).
     source:
-      /(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट).{0,48}(?:evidenc|skladišt|skladist|warehouse|record|रिकॉर्ड|गोदाम)|(?:uredn\w*|orderly|व्यवस्थित).{0,40}(?:raspored|arrang|सामान|rob\w*|goods)/iu,
+      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट).{0,48}(?:evidenc|skladišt|skladist|warehouse|record|रिकॉर्ड|गोदाम)|(?:evidenc|record|रिकॉर्ड|गोदाम|skladišt|warehouse).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट)|(?:uredn\w*|orderly|व्यवस्थित).{0,40}(?:raspored|arrang|सामान|rob\w*|goods)|(?:सामान|rob\w*|goods).{0,40}(?:uredn\w*|orderly|व्यवस्थित))/iu,
     localized:
-      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|обновл|更新).{0,48}(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|skladist|warehouse|गोदाम|مستودع|склад|倉庫)|(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|warehouse|गोदाम).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|обновл|更新)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|товар))/iu,
+      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|обновл|更新).{0,48}(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|skladist|warehouse|गोदाम|مستودع|склад|倉庫)|(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|warehouse|गोदाम).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|обновл|更新)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|товар)|(?:सामान|rob\w*|goods|товар).{0,40}(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч))/iu,
   },
   {
     key: 'warehouse_movement',

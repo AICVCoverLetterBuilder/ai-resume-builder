@@ -210,6 +210,7 @@ const WRITTEN_HINT_RE =
 export type DurationRepresentationKind =
   | 'numeric'
   | 'written'
+  | 'written_half_year'
   | 'months'
   | 'hybrid'
   | 'none'
@@ -313,6 +314,12 @@ export function analyzeDurationRepresentations(
     representationKind = 'hybrid';
   } else if (monthsRepresentationCount > 0) {
     representationKind = 'months';
+  } else if (
+    writtenRepresentationCount > 0
+    && /साढ़े\s*(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस)/u.test(normalized)
+    && !/\d+(?:[.,]\d+)?\s*वर्ष/u.test(normalized)
+  ) {
+    representationKind = 'written_half_year';
   } else if (writtenRepresentationCount > 0) {
     representationKind = 'written';
   } else if (numericRepresentationCount > 0) {

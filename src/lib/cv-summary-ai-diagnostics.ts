@@ -75,8 +75,24 @@ export type SummaryAiDiagnosticTrace = {
   durationDetectorAgreement: boolean;
   durationInsertedExactlyOnce: boolean;
   durationFinalizerIdempotent: boolean;
+  /** Duration representation diagnostics (build 275). */
+  finalDurationRepresentationKind: string | null;
+  finalDurationRepresentationCount: number | null;
+  finalDurationHybridDetected: boolean | null;
+  visibleDurationRepresentationKind: string | null;
+  visibleDurationRepresentationCount: number | null;
+  visibleDurationHybridDetected: boolean | null;
+  durationSemanticValueMonths: number | null;
+  durationRepresentationAgreement: boolean | null;
   contentLocaleBeforeRequest: string | null;
   contentLocaleAfterApply: string | null;
+  storedContentLocaleBeforeRequest: string | null;
+  detectedVisibleContentLocaleBeforeRequest: string | null;
+  finalContentLocaleAfterApply: string | null;
+  finalCandidateSource: string | null;
+  providerCandidatePresent: boolean;
+  deterministicCandidatePresent: boolean;
+  fallbackCandidatePresent: boolean;
   providerHttpStatus: number | null;
   providerResponseKind: string | null;
   providerLocaleValidationPassed: boolean | null;
@@ -90,6 +106,7 @@ export type SummaryAiDiagnosticTrace = {
   fallbackApplied: boolean;
   fallbackKind: string | null;
   fallbackSentenceCount: number;
+  deterministicCandidateSentenceCount: number;
   canonicalGroundingEnabled: boolean;
   authoritativeEntryCount: number;
   staleFactCandidateCount: number;
@@ -98,7 +115,18 @@ export type SummaryAiDiagnosticTrace = {
   duplicateSentenceCount: number;
   nearDuplicateSentenceCount: number;
   repeatedClauseCount: number;
+  currentEmploymentIntroductionCount: number | null;
+  repeatedEmploymentFactCount: number | null;
+  repeatedProfessionalLabelCount: number | null;
+  currentRoleConcreteFactCoverage: number | null;
+  genericizedMaterialFactCount: number | null;
+  priorRoleGroundingPassed: boolean | null;
   perspectiveMode: string | null;
+  sourcePerspectiveMode: string | null;
+  providerPerspectiveMode: string | null;
+  finalPerspectiveMode: string | null;
+  perspectiveNormalizationAttempted: boolean | null;
+  perspectiveNormalizationApplied: boolean | null;
   perspectiveValidationPassed: boolean;
   genderValidationPassed: boolean;
   tenseValidationPassed: boolean;
@@ -207,8 +235,23 @@ export class SummaryAiDiagnosticSession {
       durationDetectorAgreement: false,
       durationInsertedExactlyOnce: false,
       durationFinalizerIdempotent: false,
+      finalDurationRepresentationKind: null,
+      finalDurationRepresentationCount: null,
+      finalDurationHybridDetected: null,
+      visibleDurationRepresentationKind: null,
+      visibleDurationRepresentationCount: null,
+      visibleDurationHybridDetected: null,
+      durationSemanticValueMonths: null,
+      durationRepresentationAgreement: null,
       contentLocaleBeforeRequest: input.contentLocale ?? null,
       contentLocaleAfterApply: null,
+      storedContentLocaleBeforeRequest: input.contentLocale ?? null,
+      detectedVisibleContentLocaleBeforeRequest: null,
+      finalContentLocaleAfterApply: null,
+      finalCandidateSource: null,
+      providerCandidatePresent: false,
+      deterministicCandidatePresent: false,
+      fallbackCandidatePresent: false,
       providerHttpStatus: null,
       providerResponseKind: null,
       providerLocaleValidationPassed: null,
@@ -222,6 +265,7 @@ export class SummaryAiDiagnosticSession {
       fallbackApplied: false,
       fallbackKind: null,
       fallbackSentenceCount: 0,
+      deterministicCandidateSentenceCount: 0,
       canonicalGroundingEnabled: true,
       authoritativeEntryCount: 0,
       staleFactCandidateCount: 0,
@@ -230,7 +274,18 @@ export class SummaryAiDiagnosticSession {
       duplicateSentenceCount: 0,
       nearDuplicateSentenceCount: 0,
       repeatedClauseCount: 0,
+      currentEmploymentIntroductionCount: null,
+      repeatedEmploymentFactCount: null,
+      repeatedProfessionalLabelCount: null,
+      currentRoleConcreteFactCoverage: null,
+      genericizedMaterialFactCount: null,
+      priorRoleGroundingPassed: null,
       perspectiveMode: null,
+      sourcePerspectiveMode: null,
+      providerPerspectiveMode: null,
+      finalPerspectiveMode: null,
+      perspectiveNormalizationAttempted: null,
+      perspectiveNormalizationApplied: null,
       perspectiveValidationPassed: false,
       genderValidationPassed: false,
       tenseValidationPassed: false,
@@ -336,16 +391,35 @@ export class SummaryAiDiagnosticSession {
     );
     // Never report idempotent/PASS when visible text has ≠ 1 duration claim.
     const durationFinalizerIdempotent = durationValidationPassed && after === 1;
+    const sentenceCount = text ? text.split(/[.!?।]/u).filter((s) => s.trim()).length : 0;
+    const fallbackApplied = Boolean(
+      finalized.origin === 'deterministic_fallback' || diag.fallbackApplied,
+    );
+    const fallbackAttempted = Boolean(
+      diag.fallbackApplied
+      || diag.clientDeterministicFallbackAttempted
+      || fallbackApplied,
+    );
+    // Never report fallbackSentenceCount as provider length when no fallback ran.
+    const fallbackSentenceCount = fallbackApplied || fallbackAttempted
+      ? sentenceCount
+      : 0;
+    const deterministicSentenceCount = finalized.origin === 'deterministic_fallback'
+      ? sentenceCount
+      : (diag.deterministicCandidatePresent ? sentenceCount : 0);
     const purity = validateAiUnitLocalePurity(
       text,
       (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
       { kind: 'summary_sentence', requireUnits: Boolean(text) },
     );
+    const groundingValidationPassed = diag.groundingValidationPassed
+      ?? (!finalized.blocked && finalized.countedAsSuccess);
     const finalPostconditionsPassed = Boolean(
       finalized.countedAsSuccess
       && !finalized.blocked
       && durationValidationPassed
-      && purity.targetLocalePurityPassed,
+      && purity.targetLocalePurityPassed
+      && groundingValidationPassed
     );
     this.patch({
       providerDurationClaimCount: diag.summaryDurationExpressionCount ?? beforeStrip,
@@ -366,17 +440,61 @@ export class SummaryAiDiagnosticSession {
       localizedDurationPhraseHash: text
         ? fingerprintText(`dur:${diag.finalDurationExpressionCount ?? after}`)
         : null,
-      fallbackAttempted: Boolean(diag.fallbackApplied || diag.clientDeterministicFallbackAttempted),
-      fallbackApplied: Boolean(
-        finalized.origin === 'deterministic_fallback' || diag.fallbackApplied,
-      ),
+      finalDurationRepresentationKind: diag.finalDurationRepresentationKind ?? null,
+      finalDurationRepresentationCount: diag.finalDurationRepresentationCount ?? null,
+      finalDurationHybridDetected: diag.finalDurationHybridDetected ?? null,
+      visibleDurationRepresentationKind: diag.visibleDurationRepresentationKind ?? null,
+      visibleDurationRepresentationCount: diag.visibleDurationRepresentationCount ?? null,
+      visibleDurationHybridDetected: diag.visibleDurationHybridDetected ?? null,
+      durationSemanticValueMonths: diag.durationSemanticValueMonths ?? null,
+      durationRepresentationAgreement: diag.durationRepresentationAgreement ?? null,
+      fallbackAttempted,
+      fallbackApplied,
       fallbackKind: finalized.origin === 'deterministic_fallback' ? 'deterministic' : null,
-      fallbackSentenceCount: text ? text.split(/[.!?।]/u).filter((s) => s.trim()).length : 0,
-      providerSentenceCount: text ? text.split(/[.!?।]/u).filter((s) => s.trim()).length : 0,
-      perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed ?? true),
+      fallbackSentenceCount,
+      deterministicCandidateSentenceCount: deterministicSentenceCount,
+      providerSentenceCount: diag.providerCandidatePresent === false
+        ? 0
+        : (typeof diag.providerSentenceCount === 'number' ? diag.providerSentenceCount : sentenceCount),
+      storedContentLocaleBeforeRequest: diag.storedContentLocaleBeforeRequest
+        ?? this.draft.storedContentLocaleBeforeRequest
+        ?? this.draft.storedContentLocale
+        ?? null,
+      detectedVisibleContentLocaleBeforeRequest:
+        diag.detectedVisibleContentLocaleBeforeRequest
+        ?? this.draft.requestedLocale
+        ?? null,
+      finalContentLocaleAfterApply: diag.finalContentLocaleAfterApply ?? null,
+      finalCandidateSource: diag.finalCandidateSource ?? finalized.origin ?? null,
+      providerCandidatePresent: Boolean(diag.providerCandidatePresent),
+      deterministicCandidatePresent: Boolean(
+        diag.deterministicCandidatePresent
+        || finalized.origin === 'deterministic_fallback',
+      ),
+      fallbackCandidatePresent: Boolean(
+        diag.fallbackCandidatePresent || fallbackApplied,
+      ),
+      perspectiveMode: diag.finalPerspectiveMode ?? diag.perspectiveMode ?? null,
+      sourcePerspectiveMode: diag.sourcePerspectiveMode ?? null,
+      providerPerspectiveMode: diag.providerPerspectiveMode ?? null,
+      finalPerspectiveMode: diag.finalPerspectiveMode ?? null,
+      perspectiveNormalizationAttempted: diag.perspectiveNormalizationAttempted ?? null,
+      perspectiveNormalizationApplied: diag.perspectiveNormalizationApplied ?? null,
+      perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed ?? false),
       localeValidationPassed: purity.targetLocalePurityPassed && finalized.reason !== 'locale_mismatch',
       durationValidationPassed,
-      groundingValidationPassed: !finalized.blocked,
+      groundingValidationPassed: Boolean(groundingValidationPassed),
+      currentEmploymentIntroductionCount: diag.currentEmploymentIntroductionCount ?? null,
+      repeatedEmploymentFactCount: diag.repeatedEmploymentFactCount ?? null,
+      repeatedProfessionalLabelCount: diag.repeatedProfessionalLabelCount ?? null,
+      currentRoleConcreteFactCoverage: diag.currentRoleConcreteFactCoverage ?? null,
+      genericizedMaterialFactCount: diag.genericizedMaterialFactCount ?? null,
+      priorRoleGroundingPassed: diag.priorRoleGroundingPassed ?? null,
+      nearDuplicateSentenceCount: diag.repeatedEmploymentFactCount ?? 0,
+      repeatedClauseCount: Math.max(
+        diag.repeatedEmploymentFactCount ?? 0,
+        diag.repeatedProfessionalLabelCount ?? 0,
+      ),
       finalPostconditionsPassed,
       unitCount: purity.unitCount,
       detectedLocaleByUnit: purity.detectedLocaleByUnit,

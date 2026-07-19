@@ -490,14 +490,18 @@ function buildHindiIntegratedDurationSentence(
     ? yearWordForLocale('hi', duration.approxYears)
     : String(duration.totalMonths);
   const unitWord = duration.unit === 'years' ? 'वर्षों' : 'महीनों';
-  const role = (context.role || 'पेशेवर').trim();
+  const roleRaw = (context.role || 'पेशेवर').trim();
+  const roleIsGeneric = !roleRaw || /^(?:पेशेवर|professional)$/iu.test(roleRaw);
+  const role = roleIsGeneric ? '' : roleRaw;
   const company = (context.company || '').trim();
   const monthYear = formatHindiMonthYear(context.startDate);
   const employmentClause = monthYear && company
-    ? `${monthYear} से ${company} में ${role} के रूप में कार्यरत`
+    ? (role
+      ? `${monthYear} से ${company} में ${role} के रूप में कार्यरत`
+      : `${monthYear} से ${company} में कार्यरत`)
     : company
-      ? `${company} में ${role} के रूप में कार्यरत`
-      : `${role} के रूप में कार्यरत`;
+      ? (role ? `${company} में ${role} के रूप में कार्यरत` : `${company} में कार्यरत`)
+      : (role ? `${role} के रूप में कार्यरत` : 'कार्यरत');
   const gender = normalizeCoverLetterGender(context.gender);
   const durationClause = `लगभग ${word} ${unitWord} का संयुक्त अनुभव`;
   if (gender === 'female') {
@@ -557,15 +561,37 @@ function stripHindiEmploymentDuplicate(text: string, context: DurationIntegratio
         ),
       );
     }
+    // "वर्तमान में Atlas में वेयरहाउस वर्कर के रूप में …" reintroduces current employment.
     patterns.push(
+      new RegExp(
+        `वर्तमान\\s+में\\s+${companyEsc}\\s+में\\s+(?:[^।.!?]*?)(?:के\\s+रूप\\s+में\\s+)?`,
+        'giu',
+      ),
+      new RegExp(`वर्तमान\\s+में\\s+${companyEsc}`, 'giu'),
       new RegExp(`${companyEsc}\\s+में\\s+(?:कार्यरत\\s+)?(?:हूँ|है|हैं)`, 'giu'),
+      new RegExp(
+        `${companyEsc}\\s+में\\s+(?:वेयरहाउस\\s*(?:कर्मचारी|वर्कर)|पेशेवर|[^\\s]{2,40})\\s+के\\s+रूप\\s+में`,
+        'giu',
+      ),
     );
     for (const re of patterns) out = out.replace(re, ' ');
   }
 
-  if (role) {
+  if (role && !/^(?:पेशेवर|professional)$/iu.test(role)) {
     out = out.replace(new RegExp(`${escapeRegExp(role)}\\s+के\\s+रूप\\s+में`, 'giu'), '');
     out = out.replace(new RegExp(`(?:मैं\\s+)?${escapeRegExp(role)}\\s+हूँ`, 'giu'), '');
+  }
+
+  // Drop a whole remainder sentence that only restates current employment at company.
+  if (company) {
+    const companyEsc = escapeRegExp(company);
+    out = out.replace(
+      new RegExp(
+        `(?:^|[।.!?]\\s*)(?:वर्तमान\\s+में\\s+)?${companyEsc}\\s+में[^।.!?]*?(?:कार्यरत|के\\s+रूप\\s+में)[^।.!?]*[।.!?]?`,
+        'giu',
+      ),
+      (m, offset) => (offset === 0 ? m : ' '),
+    );
   }
 
   return out.replace(/\s+/g, ' ').replace(/^[,\s]+|[,\s]+$/gu, '').trim();
