@@ -279,14 +279,12 @@ describe('build 275 Hindi Summary employment/warehouse quality', () => {
         expect(fin.countedAsSuccess, c.label).toBe(true);
         expect(fin.blocked, c.label).toBe(false);
         assertValidBuild275Summary(fin.text);
+      } else if (fin.countedAsSuccess) {
+        // Rejected candidates may be repaired into a valid grounded Summary.
+        assertValidBuild275Summary(fin.text);
+        expect(fin.text === c.candidate, `${c.label} must not apply invalid text unchanged`).toBe(false);
       } else {
-        // Rejected (+0) or repaired into a valid grounded Summary.
-        if (fin.countedAsSuccess) {
-          assertValidBuild275Summary(fin.text);
-          expect(fin.text).not.toBe(c.candidate);
-        } else {
-          expect(fin.blocked || !fin.countedAsSuccess, c.label).toBe(true);
-        }
+        expect(fin.blocked || !fin.countedAsSuccess, c.label).toBe(true);
       }
     }
   });

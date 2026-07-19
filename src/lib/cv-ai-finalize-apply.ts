@@ -337,6 +337,19 @@ export type FinalizeCvAiFieldResult = {
     priorRoleGroundingPassed?: boolean;
     fallbackCandidatePresent?: boolean;
     providerSentenceCount?: number;
+    currentRoleTitlePresent?: boolean;
+    currentRoleTitleSource?: string | null;
+    currentRoleTitleEntryIdHash?: string | null;
+    currentRoleTitleMatchesStructuredRole?: boolean;
+    currentRoleOmittedDetected?: boolean;
+    currentSlotForeignFactCount?: number;
+    priorSlotForeignFactCount?: number;
+    semanticCrossEntryLeakageDetected?: boolean;
+    duplicatedPriorRoleFactCount?: number;
+    priorRoleSemanticFactMentionCount?: number;
+    priorRoleSemanticDuplicationDetected?: boolean;
+    finalUnitRoleSlots?: string[];
+    hindiFiniteKaAnubhavCollision?: boolean;
   };
 };
 
@@ -346,6 +359,23 @@ function dutiesTextFromCv(cv: CVData, experienceId?: string): string {
   // Immutable user/source duties only — never prefer a later AI rewrite in `description`
   // when `canonicalDescription` is already frozen.
   return scoped.map((e) => freezeExperienceAiDescription(e)).join('\n');
+}
+
+function currentAndPriorDutiesFromCv(cv: CVData): {
+  currentEntryDuties: string;
+  priorEntryDuties: string;
+  currentEntryId: string | null;
+  currentRoleTitle: string;
+} {
+  const exps = cv.experience || [];
+  const current = exps.find((e) => e.isPresent) || exps[0] || null;
+  const prior = exps.find((e) => current && e.id !== current.id) || null;
+  return {
+    currentEntryDuties: current ? freezeExperienceAiDescription(current) : '',
+    priorEntryDuties: prior ? freezeExperienceAiDescription(prior) : '',
+    currentEntryId: current?.id || null,
+    currentRoleTitle: (current?.position || cv.personal?.jobTitle || '').trim(),
+  };
 }
 
 function prepareCandidate(raw: string, locale: Locale, field: 'summary' | 'experience_description'): string {
@@ -382,14 +412,16 @@ function prepareCandidate(raw: string, locale: Locale, field: 'summary' | 'exper
 function buildDurationContext(cv: CVData, locale: Locale): DurationIntegrationContext {
   const primaryExp = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
   const gender = cv.personal?.gender || '';
-  const dutiesText = dutiesTextFromCv(cv);
+  // Role/title conflict checks must use current-entry duties only — prior cook/design
+  // facts must not neutralize the structured current warehouse/cook title.
+  const currentDuties = primaryExp ? freezeExperienceAiDescription(primaryExp) : '';
   return {
     role: resolveOccupationalTitleForSummary({
       profileJobTitle: cv.personal?.jobTitle,
       currentExperienceTitle: primaryExp?.position,
       locale,
       gender,
-      dutiesText,
+      dutiesText: currentDuties,
     }),
     company: primaryExp?.company || '',
     startDate: primaryExp?.startDate || '',
@@ -472,8 +504,9 @@ function summaryPasses(
   const forcedTitle = validateSummaryForcedConflictingTitle(summary, {
     locale,
     profileJobTitle: cv.personal?.jobTitle,
-    experienceTitle: (cv.experience || [])[0]?.position,
-    dutiesText: dutiesTextFromCv(cv),
+    experienceTitle: (cv.experience || []).find((e) => e.isPresent)?.position
+      || (cv.experience || [])[0]?.position,
+    dutiesText: currentAndPriorDutiesFromCv(cv).currentEntryDuties || dutiesTextFromCv(cv),
     roleDutyConflict,
   });
   if (forcedTitle.length) {
@@ -557,11 +590,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const summaryGenerate = resolveAiOperationMode({
     targetContent: liveSummary,
   }) === 'generate_from_context';
+  const entryDutiesForRole = currentAndPriorDutiesFromCv(cv);
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: cv.personal?.jobTitle,
     experienceTitle: (cv.experience || []).find((e) => e.isPresent)?.position
       || (cv.experience || [])[0]?.position,
-    dutiesText,
+    dutiesText: entryDutiesForRole.currentEntryDuties || dutiesText,
   });
   const roleDutyConflict = consistency.conflict;
   const context = buildDurationContext(cv, locale);
@@ -666,11 +700,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (locale === 'hi') {
     candidate = normalizeHindiSummaryPerspective(candidate);
     candidate = dedupeSummarySentences(candidate);
+    const entryDuties = currentAndPriorDutiesFromCv(cv);
     const empQuality = analyzeHindiSummaryEmploymentQuality(candidate, {
       company: context.company,
       role: context.role,
       startDate: context.startDate,
       sourceDuties: dutiesText,
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      structuredRole: context.role || entryDuties.currentRoleTitle,
     });
     // Duplicate Atlas/current-role intros or genericized warehouse duties force rebuild.
     if (!empQuality.groundingValidationPassed && candidate.trim()) {
@@ -730,21 +768,36 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(result.text);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
     const perspectiveValidationPassed = locale === 'hi' ? !firstPerson : true;
+    const entryDuties = currentAndPriorDutiesFromCv(cv);
     const empQ = locale === 'hi'
       ? analyzeHindiSummaryEmploymentQuality(result.text, {
         company: context.company,
         role: context.role,
         startDate: context.startDate,
         sourceDuties: dutiesText,
+        currentEntryDuties: entryDuties.currentEntryDuties,
+        priorEntryDuties: entryDuties.priorEntryDuties,
+        structuredRole: context.role || entryDuties.currentRoleTitle,
       })
       : null;
     const groundingValidationPassed = empQ ? empQ.groundingValidationPassed : !result.blocked;
+    // Hard postcondition: coverage 0 with a warehouse current role can never pass.
+    const coverageHardFail = Boolean(
+      empQ
+      && empQ.currentRoleConcreteFactCoverage < 2
+      && /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist)/iu.test(
+        `${context.role || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.currentEntryDuties || ''}`,
+      ),
+    );
     const blockedForDuration = Boolean(result.countedAsSuccess && !durationValidationPassed);
     const blockedForPerspective = Boolean(
       result.countedAsSuccess && locale === 'hi' && !perspectiveValidationPassed,
     );
     const blockedForGrounding = Boolean(
-      result.countedAsSuccess && locale === 'hi' && empQ && !empQ.groundingValidationPassed,
+      result.countedAsSuccess
+      && locale === 'hi'
+      && empQ
+      && (!empQ.groundingValidationPassed || coverageHardFail),
     );
     const blocked = result.blocked
       || blockedForDuration
@@ -753,7 +806,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const success = result.countedAsSuccess
       && durationValidationPassed
       && perspectiveValidationPassed
-      && groundingValidationPassed;
+      && groundingValidationPassed
+      && !coverageHardFail;
     return {
       ...result,
       blocked,
@@ -821,7 +875,24 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         currentRoleConcreteFactCoverage: empQ?.currentRoleConcreteFactCoverage,
         genericizedMaterialFactCount: empQ?.genericizedMaterialFactCount,
         priorRoleGroundingPassed: empQ?.priorRoleGroundingPassed,
-        crossEntryLeakageDetected: empQ?.crossDomainLeakageDetected ?? false,
+        crossEntryLeakageDetected: empQ?.semanticCrossEntryLeakageDetected
+          ?? empQ?.crossDomainLeakageDetected
+          ?? false,
+        currentRoleTitlePresent: empQ?.currentRoleTitlePresent,
+        currentRoleTitleSource: context.role || entryDuties.currentRoleTitle || null,
+        currentRoleTitleEntryIdHash: entryDuties.currentEntryId
+          ? hashExperienceEntryId(entryDuties.currentEntryId)
+          : null,
+        currentRoleTitleMatchesStructuredRole: empQ?.currentRoleTitleMatchesStructuredRole,
+        currentRoleOmittedDetected: empQ?.currentRoleOmittedDetected,
+        currentSlotForeignFactCount: empQ?.currentSlotForeignFactCount,
+        priorSlotForeignFactCount: empQ?.priorSlotForeignFactCount,
+        semanticCrossEntryLeakageDetected: empQ?.semanticCrossEntryLeakageDetected,
+        duplicatedPriorRoleFactCount: empQ?.duplicatedPriorRoleFactCount,
+        priorRoleSemanticFactMentionCount: empQ?.priorRoleSemanticFactMentionCount,
+        priorRoleSemanticDuplicationDetected: empQ?.priorRoleSemanticDuplicationDetected,
+        finalUnitRoleSlots: empQ?.finalUnitRoleSlots,
+        hindiFiniteKaAnubhavCollision: empQ?.hindiFiniteKaAnubhavCollision,
         rejectionStage: blockedForDuration
           ? 'independent_final_duration_verification'
           : blockedForPerspective

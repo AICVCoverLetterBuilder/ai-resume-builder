@@ -188,10 +188,11 @@ const DUTY_RULES: DutyRule[] = [
   },
   {
     key: 'warehouse_movement',
+    // Hindi often places समन्वय after the objects (तैयारी और आवाजाही का समन्वय).
     source:
-      /(?:koordin\w*|coord\w*|समन्वय).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी)|(?:priprem\w*|prepar\w*).{0,40}(?:kretanj|movement|rob\w*|goods|माल)|(?:koleg\w*|colleague\w*|सहकर्मी).{0,40}(?:rob\w*|goods|माल|kretanj|movement)/iu,
+      /(?:(?:koordin\w*|coord\w*|समन्वय).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:आवाजाही|kretanj|movement).{0,24}(?:समन्वय|koordin|coord)|(?:माल|rob\w*|goods).{0,40}(?:तैयारी|priprem|prepar|आवाजाही)|(?:koleg\w*|colleague\w*|सहकर्मी).{0,40}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|समन्वय))/iu,
     localized:
-      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|rob\w*|goods|माल|koleg|colleague|सहकर्मी)|(?:priprem|prepar|तैयारी|kretanj|movement|आवाजाही|rob\w*|goods|माल|koleg|colleague|सहकर्मी).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,40}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही))/iu,
+      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|rob\w*|goods|माल|koleg|colleague|सहकर्मी)|(?:priprem|prepar|तैयारी|kretanj|movement|आवाजाही|rob\w*|goods|माल|koleg|colleague|सहकर्मी).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:आवाजाही|kretanj|movement).{0,24}(?:समन्वय|koordin|coord)|(?:माल|rob\w*|goods).{0,40}(?:तैयारी|आवाजाही)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,40}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|समन्वय))/iu,
   },
 ];
 

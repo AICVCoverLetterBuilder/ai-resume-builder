@@ -121,6 +121,17 @@ export type SummaryAiDiagnosticTrace = {
   currentRoleConcreteFactCoverage: number | null;
   genericizedMaterialFactCount: number | null;
   priorRoleGroundingPassed: boolean | null;
+  currentRoleTitlePresent: boolean | null;
+  currentRoleTitleSource: string | null;
+  currentRoleTitleEntryIdHash: string | null;
+  currentRoleTitleMatchesStructuredRole: boolean | null;
+  currentRoleOmittedDetected: boolean | null;
+  currentSlotForeignFactCount: number | null;
+  priorSlotForeignFactCount: number | null;
+  semanticCrossEntryLeakageDetected: boolean | null;
+  duplicatedPriorRoleFactCount: number | null;
+  priorRoleSemanticDuplicationDetected: boolean | null;
+  finalUnitRoleSlots: string[] | null;
   perspectiveMode: string | null;
   sourcePerspectiveMode: string | null;
   providerPerspectiveMode: string | null;
@@ -280,6 +291,17 @@ export class SummaryAiDiagnosticSession {
       currentRoleConcreteFactCoverage: null,
       genericizedMaterialFactCount: null,
       priorRoleGroundingPassed: null,
+      currentRoleTitlePresent: null,
+      currentRoleTitleSource: null,
+      currentRoleTitleEntryIdHash: null,
+      currentRoleTitleMatchesStructuredRole: null,
+      currentRoleOmittedDetected: null,
+      currentSlotForeignFactCount: null,
+      priorSlotForeignFactCount: null,
+      semanticCrossEntryLeakageDetected: null,
+      duplicatedPriorRoleFactCount: null,
+      priorRoleSemanticDuplicationDetected: null,
+      finalUnitRoleSlots: null,
       perspectiveMode: null,
       sourcePerspectiveMode: null,
       providerPerspectiveMode: null,
@@ -490,6 +512,17 @@ export class SummaryAiDiagnosticSession {
       currentRoleConcreteFactCoverage: diag.currentRoleConcreteFactCoverage ?? null,
       genericizedMaterialFactCount: diag.genericizedMaterialFactCount ?? null,
       priorRoleGroundingPassed: diag.priorRoleGroundingPassed ?? null,
+      currentRoleTitlePresent: diag.currentRoleTitlePresent ?? null,
+      currentRoleTitleSource: diag.currentRoleTitleSource ?? null,
+      currentRoleTitleEntryIdHash: diag.currentRoleTitleEntryIdHash ?? null,
+      currentRoleTitleMatchesStructuredRole: diag.currentRoleTitleMatchesStructuredRole ?? null,
+      currentRoleOmittedDetected: diag.currentRoleOmittedDetected ?? null,
+      currentSlotForeignFactCount: diag.currentSlotForeignFactCount ?? null,
+      priorSlotForeignFactCount: diag.priorSlotForeignFactCount ?? null,
+      semanticCrossEntryLeakageDetected: diag.semanticCrossEntryLeakageDetected ?? null,
+      duplicatedPriorRoleFactCount: diag.duplicatedPriorRoleFactCount ?? null,
+      priorRoleSemanticDuplicationDetected: diag.priorRoleSemanticDuplicationDetected ?? null,
+      finalUnitRoleSlots: diag.finalUnitRoleSlots ?? null,
       nearDuplicateSentenceCount: diag.repeatedEmploymentFactCount ?? 0,
       repeatedClauseCount: Math.max(
         diag.repeatedEmploymentFactCount ?? 0,
