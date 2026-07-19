@@ -13,7 +13,7 @@ import {
   yearWordForLocale,
   type ExperienceDuration,
 } from './cv-experience-duration';
-import { validateMaterialDutyCoverage } from './cv-material-duty-coverage';
+import { classifyMaterialDutyKeys, validateMaterialDutyCoverage } from './cv-material-duty-coverage';
 import {
   localizeBaker,
   resolveOccupationalTitleForSummary,
@@ -258,6 +258,16 @@ const COOKING_SUMMARY_KEYS = new Set([
   'kitchen_collaboration',
 ]);
 
+const WAREHOUSE_SUMMARY_KEYS = new Set([
+  'warehouse_inbound_check',
+  'warehouse_records',
+  'warehouse_movement',
+]);
+
+/** Generic records/docs/info language that must not replace concrete warehouse facts. */
+const GENERICIZED_WAREHOUSE_RE =
+  /(?:दैनिक\s*रिकॉर्ड|कार्य\s*दस्तावेज़|जानकारी\s*का\s*समन्वय|daily\s+records?|work\s+documents?|coordinates?\s+information)/iu;
+
 /** Bare Title-Case skill list as its own sentence (not "Key skills include …"). */
 export function summaryHasMalformedSkillsFragment(summary: string): boolean {
   const t = (summary || '').trim();
@@ -321,6 +331,38 @@ export function validateSummaryMaterialFacts(
 
   // Keep cooking triad hard-require for Baker/Cook fixtures (legacy kind).
   const coverage = validateMaterialDutyCoverage(source, summary);
+  const bulletTexts = factSet.facts
+    .filter((f) => f.type === 'experience_bullet')
+    .map((f) => f.sourceText || f.value);
+  const sourceWarehouse = [...new Set(
+    bulletTexts.flatMap((b) => classifyMaterialDutyKeys(b))
+      .filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k)),
+  )];
+
+  // Concrete warehouse Experience must not be genericized into records/docs/info prose,
+  // and must retain at least one concrete warehouse cue when warehouse duties exist.
+  if (sourceWarehouse.length >= 1) {
+    const hasConcrete = /(?:माल|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар)/iu.test(summary);
+    if (
+      GENERICIZED_WAREHOUSE_RE.test(summary)
+      && !hasConcrete
+    ) {
+      violations.push({
+        kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
+        matched: 'warehouse_genericized',
+        section: 'summary',
+        evidence: `genericizedMaterialFactCount=${sourceWarehouse.length}`,
+      });
+    } else if (!hasConcrete && sourceWarehouse.length >= 2) {
+      violations.push({
+        kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
+        matched: 'warehouse_facts_absent',
+        section: 'summary',
+        evidence: `requiredSummaryFactCount=${sourceWarehouse.length}`,
+      });
+    }
+  }
+
   if (!coverage.valid) {
     const requiredCooking = coverage.required.filter((k) => COOKING_SUMMARY_KEYS.has(k));
     if (requiredCooking.length >= 2) {
@@ -331,6 +373,20 @@ export function validateSummaryMaterialFacts(
           matched: key,
           section: 'summary',
         });
+      }
+    }
+    const requiredWarehouse = coverage.required.filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k));
+    if (requiredWarehouse.length >= 2) {
+      const missingWarehouse = coverage.missing.filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k));
+      // Require at least 2 warehouse material frames for the headline current role.
+      if (missingWarehouse.length > requiredWarehouse.length - 2) {
+        for (const key of missingWarehouse) {
+          violations.push({
+            kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
+            matched: key,
+            section: 'summary',
+          });
+        }
       }
     }
   }
@@ -389,10 +445,16 @@ type CookingIntent = 'cuisine_prep' | 'workplace_hygiene' | 'kitchen_collab';
 function cookingIntentsInSource(text: string): CookingIntent[] {
   const t = text.toLowerCase().normalize('NFKC');
   const kitchenCtx = /(kuhinj|kitchen|jel\w*|cuisine|dish(?:es)?|restaurant|food|व्यंजन|रसोई|namirnic)/iu.test(t);
+  // Warehouse goods preparation must never classify as cuisine.
+  if (/(?:माल|गोदाम|goods|warehouse|skladist)/iu.test(t) && !kitchenCtx) {
+    return [];
+  }
   const intents: CookingIntent[] = [];
   // Dish prep against restaurant standards — require food/dish/restaurant anchors.
+  // Bare Hindi तैयार/तैयारी is not enough (warehouse "तैयारी" collision).
   if (
-    /(priprem\w*.{0,40}(jel|hran|obrok|dish)|(?:prepare|prepared|preparing)\s+(?:dishes|food|meals?)|restaurant\s+standards?|prema\s+standardima\s+restorana|व्यंजन|तैयार)/iu.test(t)
+    /(priprem\w*.{0,40}(jel|hran|obrok|dish)|(?:prepare|prepared|preparing)\s+(?:dishes|food|meals?)|restaurant\s+standards?|prema\s+standardima\s+restorana|व्यंजन)/iu.test(t)
+    || (kitchenCtx && /तैयार/u.test(t))
   ) {
     intents.push('cuisine_prep');
   }
@@ -487,6 +549,35 @@ function summaryFragmentForIntent(
  * Cooking intents keep curated fragments; everything else preserves source meaning
  * without inventing tools, metrics, or role stereotypes.
  */
+function warehouseSummaryFragment(
+  key: string,
+  locale: Locale,
+): string {
+  if (locale === 'hi') {
+    if (key === 'warehouse_inbound_check') {
+      return 'आने वाले माल और संबंधित दस्तावेज़ों की जाँच';
+    }
+    if (key === 'warehouse_records') {
+      return 'गोदाम रिकॉर्ड के अद्यतन तथा सामान की व्यवस्थित व्यवस्था';
+    }
+    if (key === 'warehouse_movement') {
+      return 'सहकर्मियों के साथ माल की तैयारी और आवाजाही के समन्वय';
+    }
+  }
+  if (locale === 'en') {
+    if (key === 'warehouse_inbound_check') {
+      return 'checking incoming goods and accompanying documentation';
+    }
+    if (key === 'warehouse_records') {
+      return 'updating warehouse records and keeping goods orderly';
+    }
+    if (key === 'warehouse_movement') {
+      return 'coordinating preparation and movement of goods with colleagues';
+    }
+  }
+  return '';
+}
+
 function universalSummaryDutyFragment(
   source: string,
   locale: Locale,
@@ -495,6 +586,14 @@ function universalSummaryDutyFragment(
 ): string {
   const cleaned = stripDutyListPrefix(source || '').replace(/[.。۔।!?…]\s*$/u, '').trim();
   if (!cleaned) return '';
+
+  const keys = classifyMaterialDutyKeys(cleaned);
+  for (const key of keys) {
+    if (key.startsWith('warehouse_')) {
+      const frag = warehouseSummaryFragment(key, locale);
+      if (frag) return frag;
+    }
+  }
 
   if (locale === 'en') {
     // English Summary paraphrases English source only — never Serbian/Hindi dumps
@@ -511,6 +610,10 @@ function universalSummaryDutyFragment(
   }
   if (locale === 'hi') {
     if (!/\p{Script=Devanagari}/u.test(cleaned)) return '';
+    // Prefer concrete warehouse/design fragments over generic documentation shells.
+    if (GENERICIZED_WAREHOUSE_RE.test(cleaned) && !/(?:माल|गोदाम)/u.test(cleaned)) {
+      return '';
+    }
     return cleaned;
   }
   // de/fr/es/it/pt-BR/ja/ar/ru/…: never embed raw source units — cooking
@@ -539,6 +642,13 @@ function summaryDutyFragmentsFromSource(
   g: GenderTone,
   isPresent = true,
 ): string[] {
+  // Warehouse material keys win over cooking false-positives (तैयारी/तैयार).
+  const whKeys = classifyMaterialDutyKeys(source).filter((k) => k.startsWith('warehouse_'));
+  if (whKeys.length) {
+    return whKeys
+      .map((k) => warehouseSummaryFragment(k, locale))
+      .filter(Boolean);
+  }
   const intents = cookingIntentsInSource(source);
   if (intents.length === 0) {
     const single = summaryDutyFragment(source, locale, g, isPresent);
@@ -723,7 +833,7 @@ function formatDurationForSummary(duration: ExperienceDuration | undefined, loca
     }
     if (locale === 'hi') {
       const word = yearWordForLocale('hi', duration.approxYears);
-      return `लगभग ${word} वर्षों के अनुभव`;
+      return `लगभग ${word} वर्षों का संयुक्त अनुभव`;
     }
   }
   if ((locale === 'sr' || locale === 'hr') && duration.unit === 'years' && duration.approxYears > 0) {
@@ -803,26 +913,40 @@ export function buildConciseGroundedSummary(
     const monthYear = startMatch && hindiMonths[startMatch[2]]
       ? `${hindiMonths[startMatch[2]]} ${startMatch[1]}`
       : '';
-    const employmentClause = monthYear && company
-      ? ` और ${monthYear} से ${company} में कार्यरत हूँ`
+    const employmentHead = monthYear && company
+      ? `${monthYear} से ${company} में ${rolePart} के रूप में कार्यरत`
       : company
-        ? ` और ${company} में कार्यरत हूँ`
-        : '';
+        ? `${company} में ${rolePart} के रूप में कार्यरत`
+        : `${rolePart} के रूप में कार्यरत`;
     const open = durationPhrase
       ? (g === 'female'
-        ? `मैं ${durationPhrase} वाली ${rolePart} हूँ${employmentClause}।`
-        : `मैं ${durationPhrase} वाला ${rolePart} हूँ${employmentClause}।`)
-      : `मैं ${rolePart} हूँ${employmentClause}।`;
+        ? `${employmentHead}, ${durationPhrase} रखने वाली पेशेवर।`
+        : g === 'male'
+          ? `${employmentHead}, ${durationPhrase} रखने वाला पेशेवर।`
+          : `${employmentHead}, ${durationPhrase}।`)
+      : `${employmentHead}।`;
     const cookingFrags = uniqueFragments;
     let dutySentence = '';
     if (cookingFrags.length >= 3) {
-      dutySentence = `मैं ${cookingFrags[0]}, ${cookingFrags[1]} और ${cookingFrags[2]}।`;
+      dutySentence = `${cookingFrags[0]}, ${cookingFrags[1]} तथा ${cookingFrags[2]} का अनुभव।`;
     } else if (cookingFrags.length === 2) {
-      dutySentence = `मैं ${cookingFrags[0]} और ${cookingFrags[1]}।`;
+      dutySentence = `${cookingFrags[0]} तथा ${cookingFrags[1]} का अनुभव।`;
     } else if (cookingFrags.length === 1) {
-      dutySentence = `मैं ${cookingFrags[0]}।`;
+      dutySentence = `${cookingFrags[0]} का अनुभव।`;
     }
-    text = [open, dutySentence, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    // Prior completed role (design etc.) when present in fact set.
+    const priorRole = factSet.facts.find((f) => f.type === 'role' && f.value !== experienceTitle)?.value || '';
+    const priorEmployer = factSet.facts.find((f) => f.type === 'employer' && f.value !== employer)?.value || '';
+    let priorSentence = '';
+    if (priorRole && /dizajn|design|ग्राफिक|डिज़ाइन|visual|दृश्य/i.test(`${priorRole} ${sourceDuties}`)) {
+      const priorLabel = /dizajn|design|grafick/i.test(priorRole)
+        ? 'ग्राफिक डिज़ाइनर'
+        : priorRole;
+      priorSentence = priorEmployer
+        ? `इससे पहले ${priorEmployer} में ${priorLabel} के रूप में प्रिंट और डिजिटल सामग्री तैयार की और ब्रांड की दृश्य पहचान बनाए रखी।`
+        : `इससे पहले ${priorLabel} के रूप में प्रिंट और डिजिटल सामग्री तैयार की और ब्रांड की दृश्य पहचान बनाए रखी।`;
+    }
+    text = [open, dutySentence, priorSentence, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'sr' || locale === 'hr') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin

@@ -119,10 +119,10 @@ export function hasMixedSerbianSummaryPerspective(text: string): boolean {
   return firstPerson && thirdPerson;
 }
 
-/** Collapse near-duplicate sentences in Summary prose. */
+/** Collapse near-duplicate sentences in Summary prose (Latin `.` and Hindi `।`). */
 export function dedupeSummarySentences(text: string): string {
   const parts = (text || '')
-    .split(/(?<=[.!?…])\s+/)
+    .split(/(?<=[.!?…।])\s+/u)
     .map((s) => s.trim())
     .filter(Boolean);
   if (parts.length <= 1) return text || '';
@@ -143,6 +143,23 @@ export function dedupeSummarySentences(text: string): string {
         if (Math.min(prev.length, key.length) >= 24) {
           near = true;
           break;
+        }
+      }
+    }
+    // Semantic employment near-dup: same company + year + employed-at clause.
+    if (!near) {
+      const company = part.match(/\b([A-Z][A-Za-z0-9&.-]{2,})\b/);
+      const year = part.match(/\b(20\d{2})\b/);
+      if (company && year && /कार्यरत|employed|works?\s+at|radi\s+u/iu.test(part)) {
+        for (const prevPart of out) {
+          if (
+            prevPart.includes(company[1])
+            && prevPart.includes(year[1])
+            && /कार्यरत|employed|works?\s+at|radi\s+u/iu.test(prevPart)
+          ) {
+            near = true;
+            break;
+          }
         }
       }
     }

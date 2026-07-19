@@ -427,8 +427,9 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
   },
   hi: {
     1: 'एक', 1.5: 'डेढ़', 2: 'दो', 2.5: 'ढाई', 3: 'तीन', 3.5: 'साढ़े तीन',
-    4: 'चार', 4.5: 'साढ़े चार', 5: 'पाँच', 5.5: 'साढ़े पाँच', 6: 'छह',
-    7: 'सात', 8: 'आठ', 9: 'नौ', 10: 'दस',
+    4: 'चार', 4.5: 'साढ़े चार', 5: 'पाँच', 5.5: 'साढ़े पाँच', 6: 'छह', 6.5: 'साढ़े छह',
+    7: 'सात', 7.5: 'साढ़े सात', 8: 'आठ', 8.5: 'साढ़े आठ', 9: 'नौ', 9.5: 'साढ़े नौ',
+    10: 'दस', 10.5: 'साढ़े दस',
   },
   ja: {
     1: '1', 1.5: '1.5', 2: '2', 2.5: '2.5', 3: '3', 3.5: '3.5',
@@ -510,9 +511,17 @@ export function summaryIncludesDurationPhrase(
   // Locale digit/word forms of the expected approx years.
   if (duration.unit === 'years' && duration.approxYears > 0) {
     const n = duration.approxYears;
-    const word = YEAR_WORD_BY_LOCALE[locale]?.[n] || String(n);
+    const word = yearWordForLocale(locale, n);
     if (locale === 'ja' && new RegExp(`約\\s*${n}\\s*年`).test(summary)) return true;
-    if (locale === 'hi' && summary.includes(word) && /वर्ष/.test(summary)) return true;
+    if (locale === 'hi' && summary.includes(word) && /वर्ष/.test(summary)) {
+      // Reject hybrid written+numeric forms (e.g. साढ़े 6.5).
+      if (/साढ़े\s*\d+(?:[.,]\d+)/u.test(summary)) return false;
+      if (/साढ़े\s*(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस)/u.test(summary)
+        && /\d+(?:[.,]\d+)\s*वर्ष/u.test(summary)) {
+        return false;
+      }
+      return true;
+    }
     if ((locale === 'sr' || locale === 'hr') && new RegExp(
       `\\boko\\s+${escapeRegExpToken(word)}\\s+godin`,
       'iu',
@@ -589,7 +598,7 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     case 'hr':
       return `s oko ${word} ${srYearNoun} iskustva`;
     case 'hi':
-      return `लगभग ${word} वर्षों के अनुभव के साथ`;
+      return `लगभग ${word} वर्षों का संयुक्त अनुभव`;
     case 'de':
       return isHalf
         ? `mit etwa ${word} Jahren Erfahrung`
@@ -652,10 +661,12 @@ export function repairSummaryDuration(
     /\b(oko|približno|sa\s+oko|s\s+oko)\s+(jedne(?:\s+i\s+po)?|dvije?(?:\s+i\s+po)?|dve(?:\s+i\s+po)?|tri(?:\s+i\s+po)?|četiri|cetiri|pet|šest|sest|\d+(?:\.\d+)?)\s+godin\w*/giu,
     `$1 ${YEAR_WORD_BY_LOCALE.sr[target] || target} ${srNoun}`,
   );
-  // Hindi — including half-year forms (ढाई / डेढ़)
+  // Hindi — replace full duration spans including साढ़े compounds BEFORE bare digits,
+  // otherwise "साढ़े छह" becomes "साढ़े 6.5" when only "छह" is substituted.
+  const hiWord = yearWordForLocale('hi', target);
   out = out.replace(
-    /(लगभग|करीब)?\s*(\d+(?:\.\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|ढाई|डेढ़|डेढ)\s*वर्षों?/giu,
-    (_m, pref) => `${pref ? `${pref} ` : ''}${word} वर्षों`.trim(),
+    /(लगभग|करीब)?\s*(?:साढ़े\s*(?:\d+(?:[.,]\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस)|(?:\d+(?:[.,]\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|डेढ))\s*वर्षों?(?:\s*के\s*(?:कार्य\s*)?अनुभव(?:\s*के\s*साथ)?)?/gu,
+    (_m, pref) => `${pref ? `${pref} ` : ''}${hiWord} वर्षों`.trim(),
   );
 
   // If still mismatched and has a claim, append/replace with locale phrase is too aggressive —

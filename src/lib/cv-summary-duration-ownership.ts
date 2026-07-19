@@ -50,6 +50,11 @@ export type SummaryDurationOwnershipDiagnostics = {
   independentFinalDurationClaimCount: number;
   durationDetectorAgreement: boolean;
   durationValidationPassed: boolean;
+  finalDurationRepresentationKind?: DurationRepresentationKind;
+  finalDurationRepresentationCount?: number;
+  finalDurationHybridDetected?: boolean;
+  durationSemanticValueMonths?: number | null;
+  durationRepresentationAgreement?: boolean;
 };
 
 /**
@@ -154,11 +159,13 @@ const DURATION_EXPRESSION_RES: RegExp[] = [
     'giu',
   ),
 
-  // Hindi
+  // Hindi — written (साढ़े छह), numeric (6.5), and hybrid (साढ़े 6.5) forms
   new RegExp(
-    String.raw`(?:लगभग|करीब)?\s*(?:${NUM}|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|डेढ|साढ़े\s*\d+)\s*वर्षों?(?:\s*के\s*(?:कार्य\s*)?अनुभव(?:\s*के\s*साथ)?)?`,
+    String.raw`(?:लगभग|करीब)?\s*(?:साढ़े\s*(?:\d+(?:[.,]\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस)|(?:${NUM}|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|डेढ))\s*वर्षों?(?:\s*(?:का|के)\s*(?:संयुक्त\s*)?(?:कार्य\s*)?अनुभव(?:\s*के\s*साथ|\s*रखने)?)?`,
     'gu',
   ),
+  // Hindi months-based: छह वर्ष छह महीने
+  /(?:लगभग|करीब)?\s*(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*वर्ष(?:ों)?\s*(?:और\s*)?(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*महीन[ेों]/gu,
 
   // Japanese
   new RegExp(String.raw`約\s*${NUM}\s*年の(?:勤務)?経験`, 'gu'),
@@ -197,7 +204,154 @@ const DURATION_STRIP_RES: RegExp[] = DURATION_EXPRESSION_RES.map((re) =>
 
 const NUMERIC_HINT_RE = /\d/;
 const WRITTEN_HINT_RE =
-  /(?:one|two|three|four|five|six|seven|eight|nine|ten|and\s+a\s+half|jedne|dve|dvije|tri|četiri|cetiri|pet|šest|sest|sedam|osam|devet|deset|\bi\s+po\b|anderthalb|años|ans|anni|anos|один|одного|два|двух|три|трёх|четыре|четырёх|пять|шесть|семь|восемь|девять|десять|с\s+половиной|एक|दो|तीन|चार|पाँच|छह|ढाई|डेढ़)/iu;
+  /(?:one|two|three|four|five|six|seven|eight|nine|ten|and\s+a\s+half|jedne|dve|dvije|tri|četiri|cetiri|pet|šest|sest|sedam|osam|devet|deset|\bi\s+po\b|anderthalb|años|ans|anni|anos|один|одного|два|двух|три|трёх|четыре|четырёх|пять|шесть|семь|восемь|девять|десять|с\s+половиной|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|साढ़े)/iu;
+
+/** Representation styles inside a single duration claim. */
+export type DurationRepresentationKind =
+  | 'numeric'
+  | 'written'
+  | 'months'
+  | 'hybrid'
+  | 'none'
+  | 'unknown';
+
+export type DurationRepresentationAnalysis = {
+  semanticClaimCount: number;
+  numericRepresentationCount: number;
+  writtenRepresentationCount: number;
+  monthsRepresentationCount: number;
+  hybridRepresentationCount: number;
+  duplicateEquivalentDurationCount: number;
+  representationKind: DurationRepresentationKind;
+  representationCount: number;
+  hybridDetected: boolean;
+  agreement: boolean;
+};
+
+/**
+ * Detect hybrid / multi-representation duration claims such as:
+ * - साढ़े 6.5 वर्ष (written half-marker + decimal)
+ * - six and a half 6.5 years
+ * - 6.5 years, that is six and a half years
+ */
+export function analyzeDurationRepresentations(
+  text: string,
+  _locale?: Locale,
+): DurationRepresentationAnalysis {
+  const raw = text || '';
+  const normalized = normalizeDurationScanText(raw);
+  const claims = scanSummaryDurationClaims(normalized);
+  let numericRepresentationCount = 0;
+  let writtenRepresentationCount = 0;
+  let monthsRepresentationCount = 0;
+  let hybridRepresentationCount = 0;
+
+  const hiHybrid = /साढ़े\s*\d+(?:[.,]\d+)/u.test(normalized)
+    || (/साढ़े\s*(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस)/u.test(normalized)
+      && /\d+(?:[.,]\d+)\s*वर्ष/u.test(normalized))
+    || (/\d+(?:[.,]\d+)\s*वर्ष/u.test(normalized)
+      && /(?:यानी|अर्थात्|अर्थात)\s*साढ़े/u.test(normalized));
+
+  // Months-based "छह वर्ष छह महीने" is a single valid representation, not a hybrid.
+  const hiMonthsBased = /(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*वर्ष(?:ों)?\s*(?:और\s*)?(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*महीन/u.test(normalized);
+
+  const enHybrid = /(?:six|two|three|four|five|one)\s+and\s+a\s+half\s+\d+(?:[.,]\d+)\s+years?/iu.test(normalized)
+    || (/\d+(?:[.,]\d+)\s+years?/iu.test(normalized)
+      && /(?:that\s+is|i\.e\.|or)\s+(?:six|two|three|four|five|one)\s+and\s+a\s+half/iu.test(normalized));
+
+  const srHybrid = /(?:šest|sest|dve|dvije|tri|pet)\s+i\s+po\s+\d+(?:[.,]\d+)\s+godin/iu.test(normalized)
+    || (/\d+(?:[.,]\d+)\s+godin/iu.test(normalized)
+      && /(?:odnosno|tj\.|to\s+jest)\s+(?:šest|sest|dve|dvije)\s+i\s+po/iu.test(normalized));
+
+  const ruHybrid = /(?:шести|двух|трёх|трех)\s+с\s+половиной\s+\d+(?:[.,]\d+)\s*лет/iu.test(normalized);
+  const arHybrid = /(?:ست|سنتين|ثلاث)\s+ونصف\s+\d+(?:[.,]\d+)/u.test(normalized);
+  const jaHybrid = /約?\s*\d+(?:[.,]\d+)\s*年.*(?:半年|半)/u.test(normalized)
+    || /(?:半年|半).*\d+(?:[.,]\d+)\s*年/u.test(normalized);
+
+  if ((hiHybrid && !hiMonthsBased) || enHybrid || srHybrid || ruHybrid || arHybrid || jaHybrid) {
+    hybridRepresentationCount += 1;
+  }
+
+  for (const h of claims) {
+    const m = h.matched;
+    if (/महीन|months?/iu.test(m) && /वर्ष|years?|godin/iu.test(m)) {
+      monthsRepresentationCount += 1;
+      continue;
+    }
+    if (h.kind === 'mixed' || (/साढ़े/.test(m) && /\d+(?:[.,]\d+)/.test(m))) {
+      hybridRepresentationCount += 1;
+    } else if (h.kind === 'numeric') {
+      numericRepresentationCount += 1;
+    } else if (h.kind === 'written') {
+      writtenRepresentationCount += 1;
+    }
+  }
+
+  // Dual equivalent claims in one text (numeric + written of same duration).
+  // Skip when the only written cue is months-based (years+months is one representation).
+  const hasNumeric = /\d+(?:[.,]\d+)?\s*(?:years?|godin|Jahre|años|ans|anni|anos|лет|سنة|سنوات|वर्ष|年)/iu.test(normalized);
+  const hasWritten = /(?:and\s+a\s+half|i\s+po|с\s+половиной|साढ़े|डेढ़|ढाई|anderthalb|y\s+medio|et\s+demi|e\s+mezzo|e\s+meio)/iu.test(normalized)
+    || /(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+years?/iu.test(normalized);
+  let duplicateEquivalentDurationCount = 0;
+  if (!hiMonthsBased && claims.length >= 2 && hasNumeric && hasWritten) {
+    duplicateEquivalentDurationCount = claims.length - 1;
+  }
+  if (hybridRepresentationCount > 0) {
+    duplicateEquivalentDurationCount = Math.max(duplicateEquivalentDurationCount, 1);
+  }
+
+  const stylesPresent = [
+    numericRepresentationCount > 0,
+    writtenRepresentationCount > 0 && !hiMonthsBased,
+    monthsRepresentationCount > 0 || hiMonthsBased,
+  ].filter(Boolean).length;
+
+  let representationKind: DurationRepresentationKind = 'none';
+  if (hiMonthsBased) {
+    representationKind = 'months';
+  } else if (hybridRepresentationCount > 0 || (stylesPresent > 1 && claims.length >= 1)) {
+    representationKind = 'hybrid';
+  } else if (monthsRepresentationCount > 0) {
+    representationKind = 'months';
+  } else if (writtenRepresentationCount > 0) {
+    representationKind = 'written';
+  } else if (numericRepresentationCount > 0) {
+    representationKind = 'numeric';
+  } else if (claims.length > 0) {
+    representationKind = 'unknown';
+  }
+
+  const representationCount = hiMonthsBased
+    ? 1
+    : Math.max(
+      claims.length,
+      hybridRepresentationCount > 0 ? 2 : 0,
+      stylesPresent,
+    );
+  const hybridDetected = !hiMonthsBased
+    && (representationKind === 'hybrid' || hybridRepresentationCount > 0);
+  const agreement = !hybridDetected
+    && (hiMonthsBased || claims.length <= 1)
+    && (hiMonthsBased || stylesPresent <= 1)
+    && duplicateEquivalentDurationCount === 0;
+
+  return {
+    semanticClaimCount: claims.length,
+    numericRepresentationCount,
+    writtenRepresentationCount,
+    monthsRepresentationCount,
+    hybridRepresentationCount,
+    duplicateEquivalentDurationCount,
+    representationKind,
+    representationCount: hybridDetected ? Math.max(2, representationCount) : Math.max(claims.length, stylesPresent || 0),
+    hybridDetected,
+    agreement,
+  };
+}
+
+export function hasHybridDurationRepresentation(text: string, locale?: Locale): boolean {
+  return analyzeDurationRepresentations(text, locale).hybridDetected;
+}
 
 function cloneRes(): RegExp[] {
   return DURATION_EXPRESSION_RES.map((re) => new RegExp(re.source, re.flags));
@@ -206,6 +360,8 @@ function cloneRes(): RegExp[] {
 function classifyClaim(matched: string): SummaryDurationClaimKind {
   const hasNum = NUMERIC_HINT_RE.test(matched);
   const hasWritten = WRITTEN_HINT_RE.test(matched);
+  // साढ़े + arabic digits (esp. decimals) is a hybrid representation.
+  if (/साढ़े/.test(matched) && /\d/.test(matched)) return 'mixed';
   if (hasNum && hasWritten) return 'mixed';
   if (hasNum) return 'numeric';
   if (hasWritten) return 'written';
@@ -291,11 +447,13 @@ export function verifyIndependentFinalDurationCount(
   text: string,
   locale: Locale,
   options?: { requireExactlyOne?: boolean },
-): { ok: boolean; count: number; breakdown: DurationClaimBreakdown } {
+): { ok: boolean; count: number; breakdown: DurationClaimBreakdown; representation: DurationRepresentationAnalysis } {
   const breakdown = summarizeDurationClaimBreakdown(text, locale);
+  const representation = analyzeDurationRepresentations(text, locale);
   const requireOne = options?.requireExactlyOne !== false;
-  const ok = requireOne ? breakdown.total === 1 : breakdown.total <= 1;
-  return { ok, count: breakdown.total, breakdown };
+  const countOk = requireOne ? breakdown.total === 1 : breakdown.total <= 1;
+  const ok = countOk && representation.agreement && !representation.hybridDetected;
+  return { ok, count: breakdown.total, breakdown, representation };
 }
 
 /** Strip every recognized duration expression, cleaning leftover commas/spaces. */
@@ -308,6 +466,15 @@ export function stripAllSummaryDurationExpressions(text: string, _locale?: Local
   // Residual numeric forms with decimal comma/point + year/experience (all locales).
   out = out.replace(
     /\b(?:sa\s+|with\s+|con\s+|mit\s+|avec\s+|com\s+)?(?:oko|približno|otprilike|around|about|approximately|environ|circa|cerca\s+de|etwa|rund|ungefähr)?\s*\d+[.,]\d+\s+(?:godin(?:a|e|u)|years?|Jahre?n?|años?|ans?|anni?|anos?)(?:\s+(?:radnog\s+)?(?:iskustva|of\s+(?:work\s+)?experience|Erfahrung|de\s+experiencia|d['']expérience|di\s+esperienza|de\s+experiência))?\b/giu,
+    ' ',
+  );
+  // Residual hybrid / dual-representation forms (numeric + यानी + written).
+  out = out.replace(
+    /\d+(?:[.,]\d+)?\s*वर्ष(?:ों)?\s*(?:यानी|अर्थात्|अर्थात)\s*साढ़े\s*(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*वर्ष(?:ों)?/gu,
+    ' ',
+  );
+  out = out.replace(
+    /साढ़े\s*(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस)\s*वर्ष(?:ों)?\s*(?:यानी|अर्थात्|अर्थात)\s*\d+(?:[.,]\d+)?\s*वर्ष(?:ों)?/gu,
     ' ',
   );
   out = out
@@ -402,8 +569,9 @@ export function enforceAuthoritativeSummaryDuration(
       durationClaimsRemovedBeforeInsert = beforeCount;
     }
   } else if (requireClaim) {
-    // Idempotent fast path: already exactly one authoritative claim — do not rewrite.
-    if (beforeCount === 1 && hasAuthoritative) {
+    // Idempotent fast path: already exactly one authoritative, non-hybrid claim.
+    const beforeRep = analyzeDurationRepresentations(summary, locale);
+    if (beforeCount === 1 && hasAuthoritative && beforeRep.agreement && !beforeRep.hybridDetected) {
       durationClaimsRemovedBeforeInsert = 0;
       duplicateDurationRemoved = false;
       working = summary || '';
@@ -411,7 +579,7 @@ export function enforceAuthoritativeSummaryDuration(
       // Strip every detected claim, then insert exactly one authoritative phrase.
       const stripped = stripAll(working);
       durationClaimsRemovedBeforeInsert = beforeCount;
-      duplicateDurationRemoved = beforeCount > 0;
+      duplicateDurationRemoved = beforeCount > 0 || beforeRep.hybridDetected;
       working = stripped;
       if (phrase) {
         if (options?.injectFn) {
@@ -421,7 +589,7 @@ export function enforceAuthoritativeSummaryDuration(
         }
       }
     }
-  } else if (beforeCount > 1) {
+  } else if (beforeCount > 1 || analyzeDurationRepresentations(summary, locale).hybridDetected) {
     const stripped = stripAll(working);
     duplicateDurationRemoved = true;
     durationClaimsRemovedBeforeInsert = beforeCount;
@@ -449,12 +617,36 @@ export function enforceAuthoritativeSummaryDuration(
   const independent = verifyIndependentFinalDurationCount(working, locale, {
     requireExactlyOne: requireClaim && duration.hasValidDates,
   });
-  const detectorAgreement = independent.count === afterInsertCount;
+  const finalRep = independent.representation;
+  const detectorAgreement = independent.count === afterInsertCount
+    && finalRep.agreement
+    && !finalRep.hybridDetected;
   const durationValidationPassed = Boolean(
     independent.ok
     && detectorAgreement
+    && !finalRep.hybridDetected
     && (!requireClaim || !duration.hasValidDates || independent.count === 1),
   );
+
+  // If hybrid survived, force one more strip+insert of the canonical phrase.
+  if (requireClaim && duration.hasValidDates && phrase && finalRep.hybridDetected) {
+    working = mergePhraseIntoFirstSentence(stripAll(working), phrase, locale)
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (options?.injectFn) {
+      working = options.injectFn(stripAll(working), duration, locale, options.context);
+    }
+    const repaired = verifyIndependentFinalDurationCount(working, locale, {
+      requireExactlyOne: true,
+    });
+    Object.assign(independent, repaired);
+    afterInsertCount = repaired.count;
+  }
+
+  const finalRep2 = analyzeDurationRepresentations(working, locale);
+  const independentFinal = verifyIndependentFinalDurationCount(working, locale, {
+    requireExactlyOne: requireClaim && duration.hasValidDates,
+  });
 
   const diagnostics: SummaryDurationOwnershipDiagnostics = {
     summaryDurationExpressionCount: beforeCount,
@@ -467,15 +659,25 @@ export function enforceAuthoritativeSummaryDuration(
     providerDurationDetected,
     conflictingDurationDetected: Boolean(conflictingDurationDetected),
     duplicateDurationRemoved,
-    finalDurationExpressionCount: independent.count,
+    finalDurationExpressionCount: independentFinal.count,
     durationClaimCountBeforeStrip: beforeCount,
     numericDurationClaimCount: beforeBreakdown.numeric + beforeBreakdown.mixed,
     writtenDurationClaimCount: beforeBreakdown.written + beforeBreakdown.mixed,
     durationClaimsRemovedBeforeInsert,
     durationClaimCountAfterInsert: afterInsertCount,
-    independentFinalDurationClaimCount: independent.count,
-    durationDetectorAgreement: detectorAgreement,
-    durationValidationPassed,
+    independentFinalDurationClaimCount: independentFinal.count,
+    durationDetectorAgreement: independentFinal.count === afterInsertCount && finalRep2.agreement,
+    durationValidationPassed: Boolean(
+      independentFinal.ok
+      && !finalRep2.hybridDetected
+      && finalRep2.agreement
+      && (!requireClaim || !duration.hasValidDates || independentFinal.count === 1),
+    ),
+    finalDurationRepresentationKind: finalRep2.representationKind,
+    finalDurationRepresentationCount: finalRep2.representationCount,
+    finalDurationHybridDetected: finalRep2.hybridDetected,
+    durationSemanticValueMonths: duration.hasValidDates ? duration.totalMonths : null,
+    durationRepresentationAgreement: finalRep2.agreement,
   };
 
   return {

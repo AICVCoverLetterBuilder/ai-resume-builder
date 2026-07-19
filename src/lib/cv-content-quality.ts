@@ -479,8 +479,8 @@ function formatHindiMonthYear(startDate?: string): string {
 /**
  * Deterministic, gender-aware Hindi sentence that integrates the duration claim into a
  * single complete sentence (never a standalone "लगभग ... के साथ।" fragment).
- * Female/male prefer the direct subject-led form; unspecified gender uses a neutral
- * restructuring without वाला/वाली, per project policy (never infer gender from name/photo).
+ * Neutral CV perspective (no first-person मैं/हूँ); female/male use वाला/वाली on the
+ * professional noun phrase only.
  */
 function buildHindiIntegratedDurationSentence(
   duration: ExperienceDuration,
@@ -494,18 +494,19 @@ function buildHindiIntegratedDurationSentence(
   const company = (context.company || '').trim();
   const monthYear = formatHindiMonthYear(context.startDate);
   const employmentClause = monthYear && company
-    ? ` और ${monthYear} से ${company} में कार्यरत हूँ`
+    ? `${monthYear} से ${company} में ${role} के रूप में कार्यरत`
     : company
-      ? ` और ${company} में कार्यरत हूँ`
-      : '';
+      ? `${company} में ${role} के रूप में कार्यरत`
+      : `${role} के रूप में कार्यरत`;
   const gender = normalizeCoverLetterGender(context.gender);
+  const durationClause = `लगभग ${word} ${unitWord} का संयुक्त अनुभव`;
   if (gender === 'female') {
-    return `मैं लगभग ${word} ${unitWord} के अनुभव वाली ${role} हूँ${employmentClause}।`;
+    return `${employmentClause}, ${durationClause} रखने वाली पेशेवर।`;
   }
   if (gender === 'male') {
-    return `मैं लगभग ${word} ${unitWord} के अनुभव वाला ${role} हूँ${employmentClause}।`;
+    return `${employmentClause}, ${durationClause} रखने वाला पेशेवर।`;
   }
-  return `${role} के क्षेत्र में लगभग ${word} ${unitWord} का अनुभव है${employmentClause}।`;
+  return `${employmentClause}, ${durationClause}।`;
 }
 
 function escapeRegExp(value: string): string {
@@ -516,13 +517,14 @@ function escapeRegExp(value: string): string {
 function stripHindiDurationClauses(text: string): string {
   let out = (text || '').trim();
   out = out.replace(
-    /,\s*(?:लगभग|करीब)\s*(?:\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्षों?\s*(?:के\s+अनुभव)?\s*के\s+साथ\s*/gu,
+    /,\s*(?:लगभग|करीब)\s*(?:साढ़े\s*)?(?:\d+(?:[.,]\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|ढाई|डेढ़)\s*वर्षों?\s*(?:का|के)?\s*(?:संयुक्त\s*)?(?:अनुभव)?\s*(?:के\s+साथ|रखने)?\s*/gu,
     '',
   );
   out = out.replace(
-    /(?:^|\s)(?:लगभग|करीब)\s*(?:\d+|एक|दो|तीन|चार|पाँच|पांच|छह)\s*वर्षों?\s*(?:के\s+अनुभव)?\s*के\s+साथ\s*/gu,
+    /(?:^|\s)(?:लगभग|करीब)\s*(?:साढ़े\s*)?(?:\d+(?:[.,]\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|ढाई|डेढ़)\s*वर्षों?\s*(?:का|के)?\s*(?:संयुक्त\s*)?(?:अनुभव)?\s*(?:के\s+साथ|रखने)?\s*/gu,
     ' ',
   );
+  out = out.replace(/साढ़े\s*\d+(?:[.,]\d+)?\s*वर्षों?/gu, ' ');
   return out.replace(/\s+/g, ' ').replace(/\s+([,।])/gu, '$1').trim();
 }
 
@@ -532,19 +534,32 @@ function stripHindiEmploymentDuplicate(text: string, context: DurationIntegratio
   const company = (context.company || '').trim();
   const monthYear = formatHindiMonthYear(context.startDate);
   const role = (context.role || '').trim();
+  const yearOnly = /^(\d{4})/.exec((context.startDate || '').trim())?.[1] || '';
 
-  if (monthYear && company) {
-    const patterns = [
-      new RegExp(
-        `(?:और\\s+)?${escapeRegExp(monthYear)}\\s+से\\s+${escapeRegExp(company)}\\s+में\\s+(?:कार्यरत\\s+)?(?:हूँ|है)`,
-        'giu',
-      ),
-      new RegExp(
-        `${escapeRegExp(monthYear)}\\s+से\\s+${escapeRegExp(company)}\\s+में\\s+${escapeRegExp(role)}\\s+के\\s+रूप\\s+में`,
-        'giu',
-      ),
-      new RegExp(`${escapeRegExp(monthYear)}\\s+से\\s+${escapeRegExp(company)}`, 'giu'),
-    ];
+  if (company) {
+    const companyEsc = escapeRegExp(company);
+    const patterns: RegExp[] = [];
+    if (monthYear) {
+      patterns.push(
+        new RegExp(
+          `(?:(?:मैं|और)\\s+)?${escapeRegExp(monthYear)}\\s+से\\s+${companyEsc}\\s+में\\s+(?:${escapeRegExp(role)}\\s+के\\s+रूप\\s+में\\s+)?(?:कार्यरत\\s+)?(?:हूँ|है|हैं)?`,
+          'giu',
+        ),
+        new RegExp(`${escapeRegExp(monthYear)}\\s+से\\s+${companyEsc}`, 'giu'),
+      );
+    }
+    if (yearOnly) {
+      // "2023 से Atlas में … कार्यरत" overlaps "जनवरी 2023 से Atlas"
+      patterns.push(
+        new RegExp(
+          `(?:(?:मैं|और)\\s+)?${yearOnly}\\s+से\\s+${companyEsc}\\s+में\\s+(?:${role ? `${escapeRegExp(role)}\\s+के\\s+रूप\\s+में\\s+` : ''})?(?:कार्यरत\\s+)?(?:हूँ|है|हैं)?`,
+          'giu',
+        ),
+      );
+    }
+    patterns.push(
+      new RegExp(`${companyEsc}\\s+में\\s+(?:कार्यरत\\s+)?(?:हूँ|है|हैं)`, 'giu'),
+    );
     for (const re of patterns) out = out.replace(re, ' ');
   }
 
@@ -562,10 +577,40 @@ function sentenceOverlapsOpening(sentence: string, opening: string): boolean {
   const o = norm(opening);
   if (!s || s.length < 12) return true;
   if (o.includes(s)) return true;
-  if (/^(?:मैं\s+)?(?:लगभग|करीब)\s+\S+\s+वर्ष/u.test(s) && /कार्यरत\s+हूँ/u.test(s) && s.length <= o.length + 24) {
+  if (/^(?:मैं\s+)?(?:लगभग|करीब)\s+\S+\s+वर्ष/u.test(s) && /कार्यरत/u.test(s) && s.length <= o.length + 24) {
     return true;
   }
+  // Semantic employment overlap: same company + (month-year or year) + employed-at.
+  const companyInBoth = /(?:Atlas|Rewitu|[A-Z][A-Za-z0-9&.-]{2,})/.exec(s);
+  if (companyInBoth && o.includes(companyInBoth[0]) && /कार्यरत/u.test(s) && /कार्यरत/u.test(o)) {
+    const yearS = s.match(/\b(20\d{2})\b/);
+    const yearO = o.match(/\b(20\d{2})\b/);
+    if (yearS && yearO && yearS[1] === yearO[1]) return true;
+  }
   return false;
+}
+
+/** Normalize Hindi Summary from cover-letter first person into neutral CV prose. */
+export function normalizeHindiSummaryPerspective(text: string): string {
+  let out = (text || '').trim();
+  if (!out) return out;
+  out = out
+    .replace(/मैंने\s+/gu, '')
+    .replace(/मैं\s+/gu, '')
+    .replace(/\s+हूँ।/gu, '।')
+    .replace(/\s+हूँ,/gu, ',')
+    .replace(/\s+हूँ\s+/gu, ' ')
+    .replace(/\s+हूँ$/gu, '')
+    .replace(/\s+है।/gu, '।')
+    .replace(/करती हूँ/gu, 'करती है')
+    .replace(/करता हूँ/gu, 'करता है')
+    .replace(/रखती हूँ/gu, 'रखती है')
+    .replace(/रखता हूँ/gu, 'रखता है')
+    .replace(/कार्यरत हूँ/gu, 'कार्यरत')
+    .replace(/जहाँ\s+/gu, 'जहाँ ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return out;
 }
 
 /**
@@ -597,7 +642,8 @@ export function injectHindiDurationWithOpening(
   }
 
   if (!remainderParts.length) return opening;
-  return `${opening} ${remainderParts.join(' ')}`.replace(/\s+/g, ' ').trim();
+  const remainder = normalizeHindiSummaryPerspective(remainderParts.join(' '));
+  return normalizeHindiSummaryPerspective(`${opening} ${remainder}`.replace(/\s+/g, ' ').trim());
 }
 
 /**

@@ -215,7 +215,12 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
   if (keys.some((k) => k.startsWith('warehouse_'))) {
     return keys.filter(
       (k) => k.startsWith('warehouse_')
-        || (!k.startsWith('cs_') && k !== 'generic_duty' && k !== 'team_collaboration'),
+        || (!k.startsWith('cs_')
+          && k !== 'generic_duty'
+          && k !== 'team_collaboration'
+          && k !== 'food_prep'
+          && k !== 'hygiene_workplace'
+          && k !== 'kitchen_collaboration'),
     );
   }
   // Prefer CS contact-center keys over bare team_collaboration when both match.

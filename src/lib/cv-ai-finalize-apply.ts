@@ -26,6 +26,7 @@ import {
 import {
   resolveSummaryWithDurationPolicy,
   stripUnsupportedSummaryFluff,
+  normalizeHindiSummaryPerspective,
   type DurationIntegrationContext,
 } from './cv-content-quality';
 import {
@@ -108,6 +109,7 @@ import {
   summaryDurationPostconditionFailed,
   verifyIndependentFinalDurationCount,
   summarizeDurationClaimBreakdown,
+  analyzeDurationRepresentations,
   type SummaryDurationOwnershipDiagnostics,
 } from './cv-summary-duration-ownership';
 import { acceptValidatedAiContent } from './cv-canonical-snapshot';
@@ -206,7 +208,9 @@ export type FinalizeCvAiFieldResult = {
     responseRejectedForDomainMismatch?: boolean;
     crossDomainLeakageDetected?: boolean;
     tenseMode?: 'present' | 'past' | 'unknown';
-    perspectiveMode?: 'cv_third_person';
+    perspectiveMode?: 'cv_third_person' | 'first_person' | 'neutral_cv';
+    finalPerspectiveMode?: 'cv_third_person' | 'first_person' | 'neutral_cv';
+    providerPerspectiveMode?: 'cv_third_person' | 'first_person' | 'neutral_cv';
     sourcePersonMode?: ExperiencePersonMode;
     providerPersonMode?: ExperiencePersonMode;
     normalizedPersonMode?: ExperiencePersonMode;
@@ -214,6 +218,20 @@ export type FinalizeCvAiFieldResult = {
     perspectiveNormalizationAttempted?: boolean;
     perspectiveNormalizationApplied?: boolean;
     perspectiveValidationPassed?: boolean;
+    finalDurationRepresentationKind?: string;
+    finalDurationRepresentationCount?: number;
+    finalDurationHybridDetected?: boolean;
+    visibleDurationRepresentationKind?: string;
+    visibleDurationRepresentationCount?: number;
+    visibleDurationHybridDetected?: boolean;
+    durationSemanticValueMonths?: number | null;
+    durationRepresentationAgreement?: boolean;
+    storedContentLocaleBeforeRequest?: string | null;
+    detectedVisibleContentLocaleBeforeRequest?: string | null;
+    finalContentLocaleAfterApply?: string | null;
+    finalCandidateSource?: string;
+    providerCandidatePresent?: boolean;
+    deterministicCandidatePresent?: boolean;
     normalizedBulletsUsedForApply?: boolean;
     finalMatchesProviderOutput?: boolean;
     finalMatchesSourceAfterNormalization?: boolean;
@@ -277,7 +295,7 @@ export type FinalizeCvAiFieldResult = {
     translationFallbackApplied?: boolean;
     translatedFactCount?: number;
     targetLocaleValidationPassed?: boolean | null;
-    sourcePerspectiveMode?: string | null;
+    sourcePerspectiveMode?: string | null | 'cv_third_person' | 'first_person' | 'neutral_cv';
     targetPerspectiveMode?: string | null;
     targetContentApplied?: boolean;
     contentLocaleUpdatedAfterApply?: boolean;
@@ -541,6 +559,20 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (hasAiProtocolMarker(candidate)) {
     candidate = '';
   }
+  // Empty Summary generation: seed from grounded Experience facts before duration
+  // ownership, so injectHindiDurationWithOpening does not emit a duration-only shell.
+  if (!candidate.trim() && !liveSummary.trim()) {
+    candidate = prepareCandidate(
+      deterministicLocalizedSummaryFromCanonical(
+        factSet,
+        locale,
+        gender,
+        durationSnapshot.total,
+      ) || '',
+      locale,
+      'summary',
+    );
+  }
   const durationResolved = resolveSummaryWithDurationPolicy(
     candidate,
     durationSnapshot.total,
@@ -620,6 +652,22 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     });
     candidate = dedupeSummarySentences(candidate);
   }
+  if (locale === 'hi') {
+    candidate = normalizeHindiSummaryPerspective(candidate);
+    candidate = dedupeSummarySentences(candidate);
+  }
+
+  // After duration ownership, if warehouse duties were dropped, force grounded rebuild.
+  // Do not blank the candidate when dutiesText is English "goods" only — require Devanagari cues
+  // in the Experience corpus before demanding माल/गोदाम in the Summary.
+  if (
+    locale === 'hi'
+    && /माल|गोदाम/.test(dutiesText)
+    && candidate.trim()
+    && !/माल|गोदाम/.test(candidate)
+  ) {
+    candidate = '';
+  }
 
   const durationDiagFinal = durationDiag;
   if (
@@ -646,22 +694,36 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     });
     const breakdown = summarizeDurationClaimBreakdown(result.text, locale);
     const owned = durationDiagFinal as SummaryDurationOwnershipDiagnostics | undefined;
-    const durationOk = independent.ok && independent.count === 1;
+    const rep = independent.representation
+      || analyzeDurationRepresentations(result.text, locale);
+    const durationOk = independent.ok && independent.count === 1 && !rep.hybridDetected;
     const detectorAgreement = independent.count
-      === (owned?.durationClaimCountAfterInsert ?? independent.count);
+      === (owned?.durationClaimCountAfterInsert ?? independent.count)
+      && rep.agreement;
     const durationValidationPassed = Boolean(
       durationOk
       && detectorAgreement
-      && (owned?.durationValidationPassed !== false),
+      && (owned?.durationValidationPassed !== false)
+      && (owned?.finalDurationHybridDetected !== true),
     );
+    const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(result.text);
+    const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
+    const perspectiveValidationPassed = locale === 'hi' ? !firstPerson : true;
     const blockedForDuration = Boolean(result.countedAsSuccess && !durationValidationPassed);
+    const blockedForPerspective = Boolean(
+      result.countedAsSuccess && locale === 'hi' && !perspectiveValidationPassed,
+    );
+    const blocked = result.blocked || blockedForDuration || blockedForPerspective;
+    const success = result.countedAsSuccess && durationValidationPassed && perspectiveValidationPassed;
     return {
       ...result,
-      blocked: result.blocked || blockedForDuration,
-      countedAsSuccess: result.countedAsSuccess && durationValidationPassed,
+      blocked,
+      countedAsSuccess: success,
       reason: blockedForDuration
         ? 'experience_duration_mismatch'
-        : result.reason,
+        : blockedForPerspective
+          ? 'summary_perspective_invalid'
+          : result.reason,
       diagnostics: {
         ...result.diagnostics,
         operationMode: summaryGenerate
@@ -686,16 +748,40 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         visibleDurationMatchesFinalizedCount: durationValidationPassed,
         durationDetectorAgreement: detectorAgreement,
         durationValidationPassed,
+        finalDurationRepresentationKind: rep.representationKind,
+        finalDurationRepresentationCount: rep.representationCount,
+        finalDurationHybridDetected: rep.hybridDetected,
+        visibleDurationRepresentationKind: rep.representationKind,
+        visibleDurationRepresentationCount: rep.representationCount,
+        visibleDurationHybridDetected: rep.hybridDetected,
+        durationSemanticValueMonths: owned?.durationSemanticValueMonths
+          ?? durationSnapshot.total.totalMonths,
+        durationRepresentationAgreement: rep.agreement,
+        storedContentLocaleBeforeRequest: cv.contentLocale || null,
+        detectedVisibleContentLocaleBeforeRequest: locale,
         contentLocaleBeforeRequest: cv.contentLocale || null,
-        contentLocaleAfterApply: result.countedAsSuccess && durationValidationPassed
-          ? locale
-          : (cv.contentLocale || null),
+        contentLocaleAfterApply: success ? locale : (cv.contentLocale || null),
+        finalContentLocaleAfterApply: success ? locale : null,
+        finalCandidateSource: result.origin,
+        providerCandidatePresent: Boolean((input.candidate || '').trim()),
+        deterministicCandidatePresent: result.origin === 'deterministic_fallback',
+        perspectiveMode,
+        finalPerspectiveMode: perspectiveMode,
+        sourcePerspectiveMode: firstPerson ? 'first_person' : 'neutral_cv',
+        providerPerspectiveMode: firstPerson ? 'first_person' : 'neutral_cv',
+        perspectiveNormalizationAttempted: locale === 'hi',
+        perspectiveNormalizationApplied: locale === 'hi' && !firstPerson,
+        perspectiveValidationPassed,
         rejectionStage: blockedForDuration
           ? 'independent_final_duration_verification'
-          : result.diagnostics?.rejectionStage,
+          : blockedForPerspective
+            ? 'perspective_validation'
+            : result.diagnostics?.rejectionStage,
         typedFailureReason: blockedForDuration
           ? 'experience_duration_mismatch'
-          : result.diagnostics?.typedFailureReason,
+          : blockedForPerspective
+            ? 'summary_perspective_invalid'
+            : result.diagnostics?.typedFailureReason,
       },
     };
   };
@@ -739,6 +825,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       },
     );
     let groundedText = normalizeLocaleText(groundedResolved.summary, locale);
+    if (locale === 'hi') {
+      groundedText = normalizeHindiSummaryPerspective(groundedText);
+      groundedText = dedupeSummarySentences(groundedText);
+    }
     if (locale === 'sr' || locale === 'hr') {
       groundedText = preserveSerbianSummaryFactForms(groundedText, dutiesText);
       groundedText = normalizeSerbianLatinConfusables(groundedText);

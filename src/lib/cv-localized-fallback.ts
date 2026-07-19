@@ -270,12 +270,16 @@ const SUMMARY_SHELL: Record<Locale, (role: string, duties: string, g: GenderTone
     durationPhrase
       ? `${role || 'Profissional'} ${durationPhrase}. ${duties}`.trim()
       : `${role || 'Profissional'} com experiência relevante. ${duties}`.trim(),
-  hi: (role, duties, _g, durationPhrase) =>
-    durationPhrase && role
-      ? `मैं ${durationPhrase} वाली ${role} हूँ। ${duties}`.trim()
-      : role
-        ? `${role} के रूप में ${duties}`.trim()
-        : duties,
+  hi: (role, duties, g, durationPhrase) => {
+    const head = role || 'पेशेवर';
+    const dur = durationPhrase || 'प्रासंगिक अनुभव';
+    const gendered = g === 'female'
+      ? `${head} के रूप में कार्यरत, ${dur} रखने वाली पेशेवर।`
+      : g === 'male'
+        ? `${head} के रूप में कार्यरत, ${dur} रखने वाला पेशेवर।`
+        : `${head} के रूप में कार्यरत, ${dur}।`;
+    return `${gendered} ${duties}`.trim();
+  },
   ja: (role, duties, _g, durationPhrase) =>
     durationPhrase
       ? `${role || 'プロフェッショナル'}${durationPhrase}。${duties}`.trim()
