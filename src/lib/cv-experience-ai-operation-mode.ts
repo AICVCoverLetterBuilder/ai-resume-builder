@@ -24,6 +24,7 @@ import {
   type ExperienceAiOperationModeCompat,
   type FreeTextJobDomain,
 } from './cv-ai-operation-contract';
+import { validateArabicExperienceEmploymentTense } from './cv-arabic-experience-tense';
 
 export type ExperienceAiOperationMode = ExperienceAiOperationModeCompat;
 
@@ -67,6 +68,12 @@ export type GenerationValidationResult = {
   perspectiveValidationPassed: boolean;
   tenseValidationPassed: boolean;
   unsupportedClaimCount: number;
+  providerTensePassed?: boolean;
+  normalizedTensePassed?: boolean;
+  finalTensePassed?: boolean;
+  finalEmploymentState?: 'current' | 'completed';
+  finalGenderAgreementPassed?: boolean;
+  finalArabicVerbForms?: string[];
 };
 
 /**
@@ -78,6 +85,7 @@ export function validateExperienceGenerationOutput(
     locale: Locale;
     position?: string;
     isPresent?: boolean;
+    gender?: string;
   },
 ): GenerationValidationResult {
   const bullets = splitExperienceBullets(text || '').filter(Boolean);
@@ -171,7 +179,32 @@ export function validateExperienceGenerationOutput(
     };
   }
   const person = detectExperiencePersonMode(text, options.locale);
-  const tenseValidationPassed = person !== 'first_singular';
+  let tenseValidationPassed = person !== 'first_singular';
+  if (options.locale === 'ar') {
+    const employmentTense = validateArabicExperienceEmploymentTense(text, {
+      isPresent: options.isPresent !== false,
+      gender: options.gender,
+    });
+    tenseValidationPassed = tenseValidationPassed && employmentTense.finalTensePassed
+      && employmentTense.finalGenderAgreementPassed;
+    if (!tenseValidationPassed) {
+      return {
+        ok: false,
+        reason: employmentTense.reason || 'experience_generation_failed',
+        generatedBulletCount,
+        relevanceValidationPassed: true,
+        perspectiveValidationPassed: perspective.ok,
+        tenseValidationPassed: false,
+        unsupportedClaimCount: 0,
+        providerTensePassed: employmentTense.providerTensePassed,
+        normalizedTensePassed: employmentTense.normalizedTensePassed,
+        finalTensePassed: employmentTense.finalTensePassed,
+        finalEmploymentState: employmentTense.finalEmploymentState,
+        finalGenderAgreementPassed: employmentTense.finalGenderAgreementPassed,
+        finalArabicVerbForms: employmentTense.finalArabicVerbForms,
+      };
+    }
+  }
   if (!tenseValidationPassed) {
     return {
       ok: false,
@@ -196,6 +229,12 @@ export function validateExperienceGenerationOutput(
       unsupportedClaimCount,
     };
   }
+  const arOk = options.locale === 'ar'
+    ? validateArabicExperienceEmploymentTense(text, {
+      isPresent: options.isPresent !== false,
+      gender: options.gender,
+    })
+    : null;
   return {
     ok: true,
     generatedBulletCount,
@@ -203,6 +242,14 @@ export function validateExperienceGenerationOutput(
     perspectiveValidationPassed: true,
     tenseValidationPassed: true,
     unsupportedClaimCount: 0,
+    ...(arOk ? {
+      providerTensePassed: arOk.providerTensePassed,
+      normalizedTensePassed: arOk.normalizedTensePassed,
+      finalTensePassed: arOk.finalTensePassed,
+      finalEmploymentState: arOk.finalEmploymentState,
+      finalGenderAgreementPassed: arOk.finalGenderAgreementPassed,
+      finalArabicVerbForms: arOk.finalArabicVerbForms,
+    } : {}),
   };
 }
 
@@ -342,18 +389,56 @@ function domainShells(
 
   if (locale === 'ar') {
     if (domain === 'design') {
-      return [
-        'تعدّ مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
-        'تراجع وتكيّف مواد التصميم وفق متطلبات المشروع.',
-        'تعدّ ملفات التصميم النهائية وتضبط الصيغ لشاشات مختلفة.',
-      ];
+      if (present) {
+        return female
+          ? [
+            'تعدّ مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
+            'تراجع وتكيّف مواد التصميم وفق متطلبات المشروع.',
+            'تعدّ ملفات التصميم النهائية وتضبط الصيغ لشاشات مختلفة.',
+          ]
+          : [
+            'يعدّ مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
+            'يراجع ويكيّف مواد التصميم وفق متطلبات المشروع.',
+            'يعدّ ملفات التصميم النهائية ويضبط الصيغ لشاشات مختلفة.',
+          ];
+      }
+      return female
+        ? [
+          'أعدّت مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
+          'راجعت وكيّفت مواد التصميم وفق متطلبات المشروع.',
+          'أعدّت ملفات التصميم النهائية وضبطت الصيغ لشاشات مختلفة.',
+        ]
+        : [
+          'أعدّ مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
+          'راجع وكيّف مواد التصميم وفق متطلبات المشروع.',
+          'أعدّ ملفات التصميم النهائية وضبط الصيغ لشاشات مختلفة.',
+        ];
     }
     if (domain === 'warehouse') {
-      return [
-        'تتحقق من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
-        'تحدّث سجلات المستودع وتحافظ على ترتيب البضائع.',
-        'تنسّق إعداد البضائع وحركتها مع الزملاء.',
-      ];
+      if (present) {
+        return female
+          ? [
+            'تتحقق من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
+            'تحدّث سجلات المستودع وتحافظ على ترتيب البضائع.',
+            'تنسّق إعداد البضائع وحركتها مع الزملاء.',
+          ]
+          : [
+            'يتحقق من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
+            'يحدّث سجلات المستودع ويحافظ على ترتيب البضائع.',
+            'ينسّق إعداد البضائع وحركتها مع الزملاء.',
+          ];
+      }
+      return female
+        ? [
+          'تحقّقت من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
+          'حدّثت سجلات المستودع وحافظت على ترتيب البضائع.',
+          'نسّقت إعداد البضائع وحركتها مع الزملاء.',
+        ]
+        : [
+          'تحقّق من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
+          'حدّث سجلات المستودع وحافظ على ترتيب البضائع.',
+          'نسّق إعداد البضائع وحركتها مع الزملاء.',
+        ];
     }
   }
 
@@ -506,11 +591,30 @@ export function buildJobContextGenerationFallback(options: {
   }
 
   if (locale === 'ar') {
-    return formatExperienceBullets([
-      'يراجع السجلات اليومية المرتبطة بالدور ويتحقق من اكتمال البيانات.',
-      'يحدّث وثائق العمل ويتابع البنود المفتوحة وفق احتياجات الدور.',
-      'ينسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
-    ]);
+    if (present) {
+      return formatExperienceBullets(female
+        ? [
+          'تراجع السجلات اليومية المرتبطة بالدور وتتحقق من اكتمال البيانات.',
+          'تحدّث وثائق العمل وتتابع البنود المفتوحة وفق احتياجات الدور.',
+          'تنسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
+        ]
+        : [
+          'يراجع السجلات اليومية المرتبطة بالدور ويتحقق من اكتمال البيانات.',
+          'يحدّث وثائق العمل ويتابع البنود المفتوحة وفق احتياجات الدور.',
+          'ينسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
+        ]);
+    }
+    return formatExperienceBullets(female
+      ? [
+        'راجعت السجلات اليومية المرتبطة بالدور وتحقّقت من اكتمال البيانات.',
+        'حدّثت وثائق العمل وتابعت البنود المفتوحة وفق احتياجات الدور.',
+        'نسّقت تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
+      ]
+      : [
+        'راجع السجلات اليومية المرتبطة بالدور وتحقّق من اكتمال البيانات.',
+        'حدّث وثائق العمل وتابع البنود المفتوحة وفق احتياجات الدور.',
+        'نسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
+      ]);
   }
 
   if (locale === 'ja') {

@@ -16,8 +16,25 @@ import {
 import { classifyMaterialDutyKeys, validateMaterialDutyCoverage, hindiWarehouseCueKeysFromUnit } from './cv-material-duty-coverage';
 import {
   localizeBaker,
+  localizeWarehouseEmployee,
   resolveOccupationalTitleForSummary,
 } from './cv-role-title';
+import {
+  analyzeArabicSummaryEmploymentQuality,
+  buildArabicEntryOwnedSummary,
+  arabicWarehouseSummaryFragment,
+  SUMMARY_BUILDER_REVISION_AR,
+  SUMMARY_GROUNDING_REVISION_AR,
+  SUMMARY_UNIT_SPLITTER_REVISION_AR,
+} from './cv-arabic-summary-grounding';
+
+export {
+  analyzeArabicSummaryEmploymentQuality,
+  splitArabicSummaryUnits,
+  SUMMARY_BUILDER_REVISION_AR,
+  SUMMARY_GROUNDING_REVISION_AR,
+  SUMMARY_UNIT_SPLITTER_REVISION_AR,
+} from './cv-arabic-summary-grounding';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';
 import {
@@ -275,9 +292,9 @@ const GENERICIZED_WAREHOUSE_RE =
   /(?:दैनिक\s*रिकॉर्ड|कार्य\s*दस्तावेज़|जानकारी\s*का\s*समन्वय|daily\s+records?|work\s+documents?|coordinates?\s+information)/iu;
 
 const DESIGN_FACT_CUE_RE =
-  /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|दृश्य|ब्रांड|दिशानिर्देश|graphic|design|print|digital|visual\s+identity|brand\s+guidelines?)/iu;
+  /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|दृश्य|ब्रांड|दिशानिर्देश|graphic|design|print|digital|visual\s+identity|brand\s+guidelines?|مواد\s*بصرية|عناصر\s*رسومية|جرافيك|تصميم|هوية\s*بصرية)/iu;
 const WAREHOUSE_FACT_CUE_RE =
-  /(?:माल|गोदाम|आवाजाही|सामान|incoming\s+goods|warehouse|goods\b|orderly)/iu;
+  /(?:माल|गोदाम|आवाजाही|सामान|incoming\s+goods|warehouse|goods\b|orderly|بضائع|وثائق|مستودع|سجلات|واردة)/iu;
 const FINITE_THEN_KA_ANUBHAV_RE =
   /(?:करती|करता|किए|किया|की|थीं|थे|था|हैं|है|हूँ|हूं)(?:\s+(?:हैं|है|थीं|थे|था|हूँ|हूं))?\s+का\s+अनुभव/u;
 
@@ -923,6 +940,9 @@ function warehouseSummaryFragment(
       return 'सहकर्मियों के साथ माल की तैयारी और आवाजाही के समन्वय';
     }
   }
+  if (locale === 'ar') {
+    return arabicWarehouseSummaryFragment(key);
+  }
   if (locale === 'en') {
     if (key === 'warehouse_inbound_check') {
       return 'checking incoming goods and accompanying documentation';
@@ -975,7 +995,14 @@ function universalSummaryDutyFragment(
     }
     return cleaned;
   }
-  // de/fr/es/it/pt-BR/ja/ar/ru/…: never embed raw source units — cooking
+  if (locale === 'ar') {
+    if (!/\p{Script=Arabic}/u.test(cleaned)) return '';
+    if (GENERICIZED_WAREHOUSE_RE.test(cleaned) && !/(?:بضائع|مستودع)/u.test(cleaned)) {
+      return '';
+    }
+    return cleaned;
+  }
+  // de/fr/es/it/pt-BR/ja/ru/…: never embed raw source units — cooking
   // curated fragments still apply; otherwise defer to the legacy shell.
   return '';
 }
@@ -1392,6 +1419,34 @@ export function buildConciseGroundedSummary(
         : `इससे पहले ${priorLabel} के रूप में व्यंजन तैयार किए और रसोई की स्वच्छता बनाए रखी।`;
     }
     text = [open, dutySentence, priorSentence, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  } else if (locale === 'ar') {
+    void SUMMARY_BUILDER_REVISION_AR;
+    void SUMMARY_UNIT_SPLITTER_REVISION_AR;
+    void SUMMARY_GROUNDING_REVISION_AR;
+    void analyzeArabicSummaryEmploymentQuality;
+    const arRole = /(?:warehouse|مستودع|skladist|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+      ? localizeWarehouseEmployee('ar', genderNorm || '')
+      : (role || localizeWarehouseEmployee('ar', genderNorm || ''));
+    text = buildArabicEntryOwnedSummary({
+      role: arRole,
+      employer,
+      datesValue,
+      gender: genderNorm || '',
+      durationPhrase: durationPhrase || undefined,
+      dutyFacts,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      priorEmployer: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+        : '',
+      priorSourceDuties,
+      locale: 'ar',
+    });
+    // Skills optional — entry-owned Arabic package prefers three slots without skill dump.
+    if (skillSentence && text) {
+      text = `${text} ${skillSentence}`.replace(/\s+/g, ' ').trim();
+    }
   } else if (locale === 'sr' || locale === 'hr') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin

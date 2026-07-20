@@ -191,10 +191,12 @@ const DURATION_EXPRESSION_RES: RegExp[] = [
     'giu',
   ),
 
-  // Arabic
+  // Arabic — written RTL-safe phrases (نحو / حوالي + years + الخبرة المشتركة)
+  /نحو\s+.+\s+من\s+الخبرة(?:\s+المشتركة)?/gu,
   /مع\s+حوالي\s+.+\s+من\s+(?:خبرة\s+العمل|الخبرة)/gu,
+  /حوالي\s+.+\s+من\s+(?:خبرة\s+العمل|الخبرة(?:\s+المشتركة)?)/gu,
   new RegExp(
-    String.raw`حوالي\s+${NUM}\s+(?:سنوات|سنة)(?:\s+من\s+(?:خبرة\s+العمل|الخبرة))?`,
+    String.raw`(?:نحو|حوالي)\s+(?:سنة\s*ونصف|سنتين(?:\s*ونصف)?|سنة واحدة|(?:ثلاث|أربع|خمس|ست|سبع|ثمان(?:ي)?|تسع|عشر)\s*سنوات(?:\s*ونصف)?|${NUM}\s*(?:سنوات|سنة))(?:\s+من\s+(?:خبرة\s+العمل|الخبرة(?:\s+المشتركة)?))?`,
     'gu',
   ),
 ];
@@ -206,7 +208,7 @@ const DURATION_STRIP_RES: RegExp[] = DURATION_EXPRESSION_RES.map((re) =>
 
 const NUMERIC_HINT_RE = /\d/;
 const WRITTEN_HINT_RE =
-  /(?:one|two|three|four|five|six|seven|eight|nine|ten|and\s+a\s+half|jedne|dve|dvije|tri|četiri|cetiri|pet|šest|sest|sedam|osam|devet|deset|\bi\s+po\b|anderthalb|años|ans|anni|anos|один|одного|два|двух|три|трёх|четыре|четырёх|пять|шесть|семь|восемь|девять|десять|с\s+половиной|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|साढ़े)/iu;
+  /(?:one|two|three|four|five|six|seven|eight|nine|ten|and\s+a\s+half|jedne|dve|dvije|tri|četiri|cetiri|pet|šest|sest|sedam|osam|devet|deset|\bi\s+po\b|anderthalb|años|ans|anni|anos|один|одного|два|двух|три|трёх|четыре|четырёх|пять|шесть|семь|восемь|девять|десять|с\s+половиной|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|साढ़े|ثلاث|أربع|خمس|ست|سبع|ثمان|تسع|عشر|سنة|سنتين|ونصف|نحو|حوالي)/iu;
 
 /** Representation styles inside a single duration claim. */
 export type DurationRepresentationKind =

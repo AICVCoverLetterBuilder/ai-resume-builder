@@ -165,6 +165,21 @@ const COOKING_TRIAD: SemanticDutyKey[] = [
   'kitchen_team_collaboration',
 ];
 
+/** Unsupported Summary claims for non-food / non-logistics Experience packages. */
+function summaryHasUnsupportedDomainClaims(summary: string, experienceBlob: string): boolean {
+  const s = (summary || '').normalize('NFKC');
+  if (!s.trim()) return false;
+  const src = (experienceBlob || '').normalize('NFKC');
+  const cookingClaim = /(?:restaurant\s+standard|kitchen\s+standard|إعداد\s*الأطباق|تحضير\s*(?:الأطباق|الطعام)|طبق|أطباق|طعام|مطبخ|مطعم|dish(?:es)?|cuisine|jel\w*|kuhinj)/iu.test(s);
+  const cookingSupport = /(?:restaurant|kitchen|dish|cuisine|jel\w*|kuhinj|مطبخ|مطعم|طبق|أطباق|طعام|व्यंजन|रसोई)/iu.test(src);
+  if (cookingClaim && !cookingSupport) return true;
+  const transportClaim = /(?:transport(?:ing|ed)?|loading|deliver(?:y|ing|ed)?|نقل|تحميل|تسليم|تحميل\s*البضائع|توصيل)/iu.test(s)
+    && !/(?:design\s+deliver|deliverable)/iu.test(s);
+  const transportSupport = /(?:transport|loading|deliver(?!able)|نقل|تحميل|تسليم|prevoz|isporuč|परिवहन|डिलीवरी)/iu.test(src);
+  if (transportClaim && !transportSupport) return true;
+  return false;
+}
+
 function structuredExemptions(cv: CVData) {
   return {
     fullName: cv.personal?.fullName || '',
@@ -728,6 +743,19 @@ export function prepareExportReadyCv(
   );
 
   stage = 'validate_summary';
+  const experienceBlobForSummary = (cv.experience || [])
+    .map((e) => `${e.position || ''}\n${e.description || ''}`)
+    .join('\n');
+  if (summaryHasUnsupportedDomainClaims(cv.summary || '', experienceBlobForSummary)) {
+    return fail(
+      'summary_unsupported_domain_claims',
+      stage,
+      {
+        ...baseDiagnostics(),
+        summaryFactKeysBefore: [...new Set(summaryFactKeysBefore)],
+      },
+    );
+  }
   let initialSummaryValidation = validateSummaryExportCandidate(
     cv.summary || '',
     factSet,
@@ -841,6 +869,17 @@ export function prepareExportReadyCv(
       cv,
       durationSnapshot.total,
     );
+    if (summaryHasUnsupportedDomainClaims(recovered, experienceBlobForSummary)) {
+      return fail(
+        'summary_unsupported_domain_claims',
+        stage,
+        {
+          ...baseDiagnostics(),
+          summaryRecoverySource,
+          summaryRecoveryReason: 'recovered_summary_unsupported_domain_claims',
+        },
+      );
+    }
     summaryRecoveryReason = recoveryValidation.reason;
     // Occupation-generic rebuild is authoritative after context change even when
     // semantic validator is strict about missing duty shells.

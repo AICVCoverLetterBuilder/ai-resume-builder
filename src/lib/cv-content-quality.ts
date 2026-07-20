@@ -31,6 +31,9 @@ import {
 
 /** Runtime revision — returned by the duration finalizer that executed. */
 export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
+/** Arabic duration finalizer revision — keep Hindi marker present for asset scans. */
+export const SUMMARY_DURATION_FINALIZER_REVISION_AR = 'arabic-duration-idempotent-v1' as const;
+void SUMMARY_DURATION_FINALIZER_REVISION_AR;
 
 /** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
 function splitHindiSummaryUnitsLocal(text: string): string[] {

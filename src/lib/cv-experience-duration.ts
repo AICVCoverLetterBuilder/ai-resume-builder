@@ -314,10 +314,23 @@ export function extractSummaryYearClaims(text: string): number[] {
     [/\bgodinu\s+i\s+po\b/giu, 1.5],
     [/ढाई\s*वर्ष/gu, 2.5],
     [/डेढ़\s*वर्ष|डेढ\s*वर्ष/gu, 1.5],
+    // Arabic written half-years (must beat bare "ست سنوات" → 6).
+    [/سنة\s*ونصف/gu, 1.5],
+    [/سنتين\s*ونصف/gu, 2.5],
+    [/ثلاث\s*سنوات\s*ونصف/gu, 3.5],
+    [/أربع\s*سنوات\s*ونصف/gu, 4.5],
+    [/خمس\s*سنوات\s*ونصف/gu, 5.5],
+    [/ست\s*سنوات\s*ونصف/gu, 6.5],
+    [/سبع\s*سنوات\s*ونصف/gu, 7.5],
+    [/ثمان(?:ي)?\s*سنوات\s*ونصف/gu, 8.5],
+    [/تسع\s*سنوات\s*ونصف/gu, 9.5],
+    [/عشر\s*سنوات\s*ونصف/gu, 10.5],
   ];
   for (const [re, years] of halfRes) {
     if (re.test(raw)) claims.push(years);
   }
+  // When an Arabic half-year phrase matched, skip the bare "ست سنوات" integer capture.
+  const arabicHalfMatched = /(?:سنة|سنتين|ثلاث|أربع|خمس|ست|سبع|ثمان(?:ي)?|تسع|عشر)\s*(?:سنوات\s*)?ونصف/u.test(raw);
   // Freestyle Serbian "oko godinu dana" ≈ 1 year (provider often invents this).
   if (/\boko\s+godinu(?:\s+dana)?(?:\s+iskustva)?\b/iu.test(raw) && !/\bgodinu\s+i\s+po\b/iu.test(raw)) {
     claims.push(1);
@@ -357,9 +370,12 @@ export function extractSummaryYearClaims(text: string): number[] {
     // JS `\b` is ASCII-only — use Unicode letter lookarounds for Cyrillic.
     /(?<!\p{L})(?:около|примерно)?\s*(один|одного|одна|два|двух|три|трёх|трех|четыре|четырёх|четырех|пять|пяти|шесть|шести|семь|семи|восемь|восьми|девять|девяти|десять|десяти|\d+(?:\.\d+)?)(?:\s+с\s+половиной)?\s*(?:лет|года|год)(?!\p{L})/giu,
     // Arabic: "سنة واحدة" / "سنتين" are already complete one/two-year phrases.
-    /(سنة واحدة|سنتين)/giu,
+    /(سنة واحدة|سنتين)(?!\s*ونصف)/giu,
     // Arabic: "مع حوالي أربع سنوات من الخبرة" (number word 3-10 + سنوات).
-    /(ثلاث|أربع|خمس|ست|سبع|ثمان|تسع|عشر)\s*سنوات/giu,
+    // Skip when "… سنوات ونصف" already counted as a half-year claim.
+    ...(arabicHalfMatched
+      ? []
+      : [/(ثلاث|أربع|خمس|ست|سبع|ثمان|تسع|عشر)\s*سنوات(?!\s*ونصف)/giu]),
     // Arabic: digit + سنوات/سنة.
     /(\d+(?:\.\d+)?)\s*(?:سنوات|سنة)/giu,
   ];
@@ -401,9 +417,10 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
     7: 'sette', 8: 'otto', 9: 'nove', 10: 'dieci',
   },
   ar: {
-    1: 'سنة واحدة', 1.5: 'سنة ونصف', 2: 'سنتين', 2.5: 'سنتين ونصف', 3: 'ثلاث', 3.5: 'ثلاث ونصف',
-    4: 'أربع', 4.5: 'أربع ونصف', 5: 'خمس', 5.5: 'خمس ونصف', 6: 'ست',
-    7: 'سبع', 8: 'ثمان', 9: 'تسع', 10: 'عشر',
+    1: 'سنة', 1.5: 'سنة ونصف', 2: 'سنتين', 2.5: 'سنتين ونصف', 3: 'ثلاث سنوات', 3.5: 'ثلاث سنوات ونصف',
+    4: 'أربع سنوات', 4.5: 'أربع سنوات ونصف', 5: 'خمس سنوات', 5.5: 'خمس سنوات ونصف',
+    6: 'ست سنوات', 6.5: 'ست سنوات ونصف',
+    7: 'سبع سنوات', 8: 'ثماني سنوات', 9: 'تسع سنوات', 10: 'عشر سنوات',
   },
   sr: {
     1: 'jedne', 1.5: 'jedne i po', 2: 'dve', 2.5: 'dve i po', 3: 'tri', 3.5: 'tri i po',
@@ -457,7 +474,13 @@ export function yearWordForLocale(locale: Locale, n: number): string {
   if (locale === 'it') return `${wholeWord} anni e mezzo`;
   if (locale === 'pt-BR') return `${wholeWord} e meio`;
   if (locale === 'ru') return `${wholeWord} с половиной`;
-  // ja/ar and other numeral-friendly locales may keep a decimal.
+  if (locale === 'ar') {
+    // Prefer written half-years — never emit bidi-fragile decimals like 6.5.
+    if (whole === 1) return 'سنة ونصف';
+    if (whole === 2) return 'سنتين ونصف';
+    return `${wholeWord} ونصف`;
+  }
+  // ja and other numeral-friendly locales may keep a decimal.
   return String(n);
 }
 
@@ -617,7 +640,11 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     case 'pt-BR':
       return `com cerca de ${word} anos de experiência`;
     case 'ar':
-      return `مع حوالي ${word} من الخبرة`;
+      // Single written RTL-safe duration — never numeric hybrids like 6.5.
+      if (/سنوات|سنة|سنتين/.test(word)) {
+        return `نحو ${word} من الخبرة المشتركة`;
+      }
+      return `نحو ${word} سنوات من الخبرة المشتركة`;
     case 'ja':
       return `約${word}年の経験`;
     default:

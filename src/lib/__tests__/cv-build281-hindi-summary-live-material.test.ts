@@ -158,7 +158,7 @@ function runOrchestration(cv: CVData, candidate: string) {
 
 describe('build 281 Hindi Summary live material + duration idempotence', () => {
   it('exposes runtime-281 revision markers', () => {
-    expect(SUMMARY_PIPELINE_REVISION).toBe('summary-runtime-281-v1');
+    expect(SUMMARY_PIPELINE_REVISION).toBe('summary-runtime-282-v1');
     expect(SUMMARY_BUILDER_REVISION).toBe('live-hindi-material-rebuild-v3');
     expect(SUMMARY_UNIT_SPLITTER_REVISION).toBe('hindi-three-sentence-slots-v3');
     expect(SUMMARY_GROUNDING_REVISION).toBe('entry-owned-grounding-v3');
@@ -218,7 +218,7 @@ describe('build 281 Hindi Summary live material + duration idempotence', () => {
     expect(d.durationPass2CandidateHash).toBe(d.groundingInputCandidateHash);
     expect(d.deterministicCandidateHash).toBe(d.durationPass1CandidateHash);
     expect(d.durationFinalizerIdempotent).toBe(true);
-    expect(d.summaryPipelineRevision).toBe('summary-runtime-281-v1');
+    expect(d.summaryPipelineRevision).toBe('summary-runtime-282-v1');
     expect(d.summaryBuilderRevision).toBe('live-hindi-material-rebuild-v3');
     expect(d.summaryUnitSplitterRevision).toBe('hindi-three-sentence-slots-v3');
     expect(d.summaryGroundingRevision).toBe('entry-owned-grounding-v3');

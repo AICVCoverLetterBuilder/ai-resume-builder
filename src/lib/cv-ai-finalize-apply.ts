@@ -28,12 +28,17 @@ import {
   stripUnsupportedSummaryFluff,
   normalizeHindiSummaryPerspective,
   SUMMARY_DURATION_FINALIZER_REVISION,
+  SUMMARY_DURATION_FINALIZER_REVISION_AR,
   type DurationIntegrationContext,
 } from './cv-content-quality';
 import {
   analyzeHindiSummaryEmploymentQuality,
+  analyzeArabicSummaryEmploymentQuality,
   splitHindiSummaryUnits,
   SUMMARY_BUILDER_REVISION,
+  SUMMARY_BUILDER_REVISION_AR,
+  SUMMARY_UNIT_SPLITTER_REVISION_AR,
+  SUMMARY_GROUNDING_REVISION_AR,
 } from './cv-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
@@ -47,6 +52,7 @@ import {
   countTranslatedFactUnits,
   validateCrossLocaleSemanticCoverage,
 } from './cv-cross-locale-experience';
+import { validateArabicExperienceEmploymentTense } from './cv-arabic-experience-tense';
 import {
   resolveTargetScriptForLocale,
   validateAiUnitLocalePurity,
@@ -73,6 +79,8 @@ import {
   materialDutyKeysFromDescription,
   diagnoseCurrentSourceUnitMaterial,
   hindiWarehouseCueKeysFromUnit,
+  arabicWarehouseCueKeysFromUnit,
+  arabicDesignCueKeysFromUnit,
   validateExperienceApplyMaterialPostcondition,
 } from './cv-material-duty-coverage';
 import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
@@ -88,10 +96,18 @@ import {
   evaluateRoleDutyConsistency,
   matchesWarehouseOccupationalTitle,
   resolveOccupationalTitleForSummary,
+  localizeOccupationalTitleForProjection,
 } from './cv-role-title';
 
 /** Runtime revision for the production Summary finalize → apply orchestration. */
-export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-281-v1' as const;
+export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-282-v1' as const;
+/** Retained Hindi package marker — must remain present in packaged assets. */
+export const SUMMARY_PIPELINE_REVISION_HI = 'summary-runtime-281-v1' as const;
+/** Both markers must survive production minification for asset verification. */
+export const SUMMARY_RUNTIME_MARKER_SET = [
+  SUMMARY_PIPELINE_REVISION_HI,
+  SUMMARY_PIPELINE_REVISION,
+] as const;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -365,6 +381,7 @@ export type FinalizeCvAiFieldResult = {
     hindiFiniteKaAnubhavCollision?: boolean;
     durationFinalizerIdempotent?: boolean;
     summaryPipelineRevision?: string;
+    summaryRuntimeMarkerSet?: string[];
     summaryBuilderRevision?: string;
     summaryUnitSplitterRevision?: string;
     summaryGroundingRevision?: string;
@@ -759,7 +776,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const currentEntryMaterialKeys: string[] = (() => {
     const fromUnits = materialDutyKeysFromDescription(entryDutiesForRole.currentEntryDuties)
       .filter((k) => k !== 'generic_duty');
-    const cues = hindiWarehouseCueKeysFromUnit(entryDutiesForRole.currentEntryDuties);
+    const cues = [
+      ...hindiWarehouseCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
+      ...(locale === 'ar'
+        ? [
+          ...arabicWarehouseCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
+          ...arabicDesignCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
+        ]
+        : []),
+    ];
     const merged = [...new Set([...fromUnits, ...cues])];
     return merged.length ? merged : ['generic_duty'];
   })();
@@ -770,13 +795,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : null,
   );
   // Design prior duties often contain Hindi तैयार which falsely hits food_prep.
-  const priorDesignCue = /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|दृश्य|ब्रांड|graphic|design|print|digital|visual)/iu
+  const priorDesignCue = /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटل|दृश्य|ब्रांड|graphic|design|print|digital|visual|مواد\s*بصرية|عناصر\s*رسومية|جرافيك|تصميم)/iu
     .test(entryDutiesForRole.priorEntryDuties || '');
   const priorEntryMaterialKeys: string[] = [...new Set(
-    classifyMaterialDutyKeys(entryDutiesForRole.priorEntryDuties)
-      .filter((k) => !(priorDesignCue && k === 'food_prep')),
+    [
+      ...classifyMaterialDutyKeys(entryDutiesForRole.priorEntryDuties)
+        .filter((k) => !(priorDesignCue && k === 'food_prep')),
+      ...(locale === 'ar' ? arabicDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties) : []),
+    ],
   )];
-  if (priorDesignCue && priorEntryMaterialKeys.length === 0) {
+  if (priorDesignCue && priorEntryMaterialKeys.filter((k) => k !== 'generic_duty').length === 0) {
     priorEntryMaterialKeys.push('design_visual_identity');
   }
   // Empty Summary generation: seed from grounded Experience facts before duration
@@ -891,6 +919,24 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       candidate = '';
     }
   }
+  if (locale === 'ar') {
+    candidate = dedupeSummarySentences(candidate);
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const empQuality = analyzeArabicSummaryEmploymentQuality(candidate, {
+      company: context.company,
+      role: context.role,
+      startDate: context.startDate,
+      sourceDuties: dutiesText,
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      priorCompany: entryDuties.priorCompany,
+      structuredRole: context.role || entryDuties.currentRoleTitle,
+      gender,
+    });
+    if (!empQuality.groundingValidationPassed && candidate.trim()) {
+      candidate = '';
+    }
+  }
 
   // After duration ownership, if warehouse duties were dropped, force grounded rebuild.
   // Do not blank the candidate when dutiesText is English "goods" only — require Devanagari cues
@@ -945,7 +991,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
-    const perspectiveValidationPassed = locale === 'hi' ? !firstPerson : true;
+    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar') ? !firstPerson : true;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const empQ = locale === 'hi'
       ? analyzeHindiSummaryEmploymentQuality(analyzedText, {
@@ -958,7 +1004,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         priorCompany: entryDuties.priorCompany,
         structuredRole: context.role || entryDuties.currentRoleTitle,
       })
-      : null;
+      : locale === 'ar'
+        ? analyzeArabicSummaryEmploymentQuality(analyzedText, {
+          company: context.company || entryDuties.currentCompany,
+          role: context.role,
+          startDate: context.startDate,
+          sourceDuties: dutiesText,
+          currentEntryDuties: entryDuties.currentEntryDuties,
+          priorEntryDuties: entryDuties.priorEntryDuties,
+          priorCompany: entryDuties.priorCompany,
+          structuredRole: context.role || entryDuties.currentRoleTitle,
+          gender,
+        })
+        : null;
     // Candidate fields — never treat structured context alone as a passing intro/title.
     const candidateCurrentRoleTitlePresent = empQ?.currentRoleTitlePresent ?? null;
     const candidateCurrentRoleTitleMatchesStructuredRole =
@@ -975,7 +1033,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         matchesWarehouseOccupationalTitle(
           `${context.role || ''} ${entryDuties.currentRoleTitle || ''}`,
         )
-        || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल)/iu.test(
+        || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल|بضائع|مستودع)/iu.test(
           entryDuties.currentEntryDuties || '',
         )
       ),
@@ -983,7 +1041,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     // Real second-pass idempotence on the candidate under evaluation.
     let durationFinalizerIdempotent = durationValidationPassed;
     let localPass2Hash = durationPass2CandidateHash;
-    if (locale === 'hi' && analyzedText.trim() && durationSnapshot.total.hasValidDates) {
+    if (
+      (locale === 'hi' || locale === 'ar')
+      && analyzedText.trim()
+      && durationSnapshot.total.hasValidDates
+    ) {
       const secondPass = resolveSummaryWithDurationPolicy(
         analyzedText,
         durationSnapshot.total,
@@ -1022,11 +1084,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       result.countedAsSuccess && (!durationValidationPassed || !durationFinalizerIdempotent),
     );
     const blockedForPerspective = Boolean(
-      result.countedAsSuccess && locale === 'hi' && !perspectiveValidationPassed,
+      result.countedAsSuccess
+      && (locale === 'hi' || locale === 'ar')
+      && !perspectiveValidationPassed,
     );
     const blockedForGrounding = Boolean(
       result.countedAsSuccess
-      && locale === 'hi'
+      && (locale === 'hi' || locale === 'ar')
       && empQ
       && (!empQ.groundingValidationPassed || coverageHardFail),
     );
@@ -1137,12 +1201,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         hindiFiniteKaAnubhavCollision: empQ?.hindiFiniteKaAnubhavCollision,
         durationFinalizerIdempotent,
         summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
-        summaryBuilderRevision: SUMMARY_BUILDER_REVISION,
-        summaryUnitSplitterRevision: empQ?.summaryUnitSplitterRevision,
-        summaryGroundingRevision: empQ?.summaryGroundingRevision,
+        summaryRuntimeMarkerSet: [...SUMMARY_RUNTIME_MARKER_SET],
+        summaryBuilderRevision: locale === 'ar'
+          ? SUMMARY_BUILDER_REVISION_AR
+          : SUMMARY_BUILDER_REVISION,
+        summaryUnitSplitterRevision: empQ?.summaryUnitSplitterRevision
+          || (locale === 'ar' ? SUMMARY_UNIT_SPLITTER_REVISION_AR : undefined),
+        summaryGroundingRevision: empQ?.summaryGroundingRevision
+          || (locale === 'ar' ? SUMMARY_GROUNDING_REVISION_AR : undefined),
         summaryDurationFinalizerRevision:
           owned?.summaryDurationFinalizerRevision
-          || SUMMARY_DURATION_FINALIZER_REVISION,
+          || (locale === 'ar'
+            ? SUMMARY_DURATION_FINALIZER_REVISION_AR
+            : SUMMARY_DURATION_FINALIZER_REVISION),
         providerCandidateHash,
         providerCandidateNormalizedHash,
         deterministicCandidateHash,
@@ -1664,6 +1735,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       locale,
       position: exp?.position || cv.personal?.jobTitle || '',
       isPresent,
+      gender: cv.personal?.gender || input.gender || '',
     });
     generationValidationMeta = {
       relevanceValidationPassed: gen.relevanceValidationPassed,
@@ -1931,6 +2003,25 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (!semantic.ok) {
         lastRejectStage = `${stage}:translated_fact_count`;
         lastRejectReason = semantic.reason || 'experience_material_fact_coverage_incomplete';
+        return null;
+      }
+    }
+    // Arabic: never apply when employment tense or gender postconditions fail —
+    // including cross-locale enhance/fallback paths that skip generation validation.
+    if (locale === 'ar') {
+      const arTense = validateArabicExperienceEmploymentTense(candidate, {
+        isPresent,
+        gender: cv.personal?.gender || input.gender || '',
+      });
+      generationValidationMeta = {
+        ...generationValidationMeta,
+        tenseValidationPassed: arTense.finalTensePassed && arTense.finalGenderAgreementPassed,
+        relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed
+          || Boolean(lastCovered),
+      };
+      if (!arTense.finalTensePassed || !arTense.finalGenderAgreementPassed) {
+        lastRejectStage = `${stage}:arabic_employment_tense`;
+        lastRejectReason = arTense.reason || 'arabic_employment_tense_mismatch';
         return null;
       }
     }
@@ -2746,6 +2837,27 @@ export function applyFinalizedBulletsToCv(
     jobContext,
     confirmGeneratedAsGrounding: Boolean(finalized.diagnostics?.sourceWasEmpty),
   });
+
+  // Cross-locale Experience apply: localize the applied entry's structured
+  // free-text title into the target locale when recognized (warehouse / design).
+  // Do not rewrite unrelated personal.jobTitle — export projection handles display.
+  {
+    const gender = next.personal?.gender || '';
+    next = {
+      ...next,
+      experience: (next.experience || []).map((e) => {
+        if (e.id !== experienceId) return e;
+        const localized = localizeOccupationalTitleForProjection(
+          e.position || '',
+          locale,
+          gender,
+        );
+        return localized && localized !== e.position
+          ? { ...e, position: localized }
+          : e;
+      }),
+    };
+  }
 
   const exp = (next.experience || []).find((e) => e.id === experienceId)
     || (next.experience || [])[0];

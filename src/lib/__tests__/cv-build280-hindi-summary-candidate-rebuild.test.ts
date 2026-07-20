@@ -169,7 +169,7 @@ function runOrchestration(cv: CVData, candidate: string) {
 
 describe('build 280 Hindi Summary persisted-state rebuild', () => {
   it('exposes runtime-281 revision markers from executing modules', () => {
-    expect(SUMMARY_PIPELINE_REVISION).toBe('summary-runtime-281-v1');
+    expect(SUMMARY_PIPELINE_REVISION).toBe('summary-runtime-282-v1');
     expect(SUMMARY_BUILDER_REVISION).toBe('live-hindi-material-rebuild-v3');
     expect(SUMMARY_UNIT_SPLITTER_REVISION).toBe('hindi-three-sentence-slots-v3');
     expect(SUMMARY_GROUNDING_REVISION).toBe('entry-owned-grounding-v3');

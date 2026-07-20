@@ -120,9 +120,28 @@ export function localizeWarehouseEmployee(locale: Locale, gender?: string): stri
   if (locale === 'it') return g === 'female' ? 'Addetta al magazzino' : 'Addetto al magazzino';
   if (locale === 'pt-BR') return g === 'female' ? 'Funcionária de armazém' : 'Funcionário de armazém';
   if (locale === 'ru') return g === 'female' ? 'Кладовщица' : 'Кладовщик';
-  if (locale === 'ar') return 'موظف مستودع';
+  if (locale === 'ar') return g === 'female' ? 'موظفة مستودع' : 'موظف مستودع';
   if (locale === 'ja') return '倉庫作業員';
   return 'Warehouse Employee';
+}
+
+/** Graphic / visual designer — gendered Arabic forms. */
+export function localizeGraphicDesigner(locale: Locale, gender?: string): string {
+  const g = normalizeCoverLetterGender(gender);
+  if (locale === 'hi') return 'ग्राफिक डिज़ाइनर';
+  if (locale === 'en') return 'Graphic Designer';
+  if (locale === 'sr' || locale === 'hr') {
+    return g === 'female' ? 'Grafička dizajnerka' : 'Grafički dizajner';
+  }
+  if (locale === 'de') return g === 'female' ? 'Grafikdesignerin' : 'Grafikdesigner';
+  if (locale === 'fr') return g === 'female' ? 'Graphiste' : 'Graphiste';
+  if (locale === 'es') return g === 'female' ? 'Diseñadora gráfica' : 'Diseñador gráfico';
+  if (locale === 'it') return g === 'female' ? 'Graphic designer' : 'Graphic designer';
+  if (locale === 'pt-BR') return g === 'female' ? 'Designer gráfica' : 'Designer gráfico';
+  if (locale === 'ru') return g === 'female' ? 'Графический дизайнер' : 'Графический дизайнер';
+  if (locale === 'ar') return g === 'female' ? 'مصممة جرافيك' : 'مصمم جرافيك';
+  if (locale === 'ja') return 'グラフィックデザイナー';
+  return 'Graphic Designer';
 }
 
 /** Fold Latin diacritics so skladištu / skladistu match the same occupation rules. */
@@ -138,7 +157,7 @@ export function foldLatinDiacritics(value: string): string {
  * Prefer matchesWarehouseOccupationalTitle so diacritic folding is always applied.
  */
 const WAREHOUSE_TITLE_CORE_RE =
-  /(?:warehouse\s*(?:employee|worker|operator|associate)?|\bwarehouse\b|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर))?|skladistar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|radni(?:k|ca)\s+u\s+(?:magacinu|skladistu)|u\s+skladistu)/iu;
+  /(?:warehouse\s*(?:employee|worker|operator|associate)?|\bwarehouse\b|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर))?|موظف(?:ة)?\s*مستودع|skladistar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|radni(?:k|ca)\s+u\s+(?:magacinu|skladistu)|u\s+skladistu)/iu;
 
 /** True when title/blob denotes warehouse/logistics work (diacritic-aware). */
 export function matchesWarehouseOccupationalTitle(text: string): boolean {
@@ -439,10 +458,13 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
   if (matchesWarehouseOccupationalTitle(normalized)) {
     return localizeWarehouseEmployee(locale, gender);
   }
-  if (/(?:graphic\s+designer|grafi[cč]ki\s+dizajn\w*|ग्राफिक\s*डिज़ाइनर)/i.test(normalized)) {
-    if (locale === 'hi') return 'ग्राफिक डिज़ाइनर';
-    if (locale === 'en') return 'Graphic Designer';
-    if (locale === 'sr' || locale === 'hr') return normalized;
+  if (/(?:graphic\s+designer|grafi[cč]ki\s+dizajn\w*|گرافिक\s*डिज़ाइनर|ग्राफिक\s*डिज़ाइनर|مصمم(?:ة)?\s*جرافيك)/i.test(normalized)
+    || /(?:^|[^a-zA-Z])dizajner(?:ka)?(?:[^a-zA-Z]|$)/i.test(foldLatinDiacritics(normalized))) {
+    // Prefer concrete graphic-designer localization for recognized design titles.
+    if (/(?:graphic|grafi|ग्राफिक|جرافيك|vizuel|visual)/i.test(normalized)
+      || /graficki\s+dizajn/i.test(foldLatinDiacritics(normalized))) {
+      return localizeGraphicDesigner(locale, gender);
+    }
   }
   if (locale === 'sr' || locale === 'hr') return normalized;
   const isAsciiTitle = /^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2;
@@ -486,7 +508,7 @@ export function getOccupationalTitleFallback(locale: Locale, gender?: string): s
   if (locale === 'hi') return 'पेशेवर';
   if (locale === 'sr' || locale === 'hr') return g === 'female' ? 'profesionalka' : 'profesionalac';
   if (locale === 'de') return 'Fachkraft';
-  if (locale === 'ar') return 'محترف';
+  if (locale === 'ar') return g === 'female' ? 'محترفة' : 'محترف';
   if (locale === 'ja') return 'プロフェッショナル';
   if (locale === 'ru') return g === 'female' ? 'специалистка' : 'специалист';
   if (locale === 'pt-BR') return 'profissional';

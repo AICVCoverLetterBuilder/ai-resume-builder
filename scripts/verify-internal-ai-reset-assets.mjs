@@ -81,17 +81,27 @@ const hasButton = blob.includes(RESET_BUTTON);
 const hasChannel = blob.includes(CHANNEL_LABEL);
 const hasStatus = blob.includes(STATUS_LABEL);
 
-const SUMMARY_RUNTIME_REVISION = 'summary-runtime-281-v1';
+const SUMMARY_RUNTIME_REVISION_HI = 'summary-runtime-281-v1';
+const SUMMARY_RUNTIME_REVISION = 'summary-runtime-282-v1';
 const SUMMARY_SPLITTER_REVISION = 'hindi-three-sentence-slots-v3';
 const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v3';
 const SUMMARY_DURATION_REVISION = 'duration-idempotent-v3';
 const SUMMARY_BUILDER_REVISION = 'live-hindi-material-rebuild-v3';
+const SUMMARY_SPLITTER_REVISION_AR = 'arabic-three-sentence-slots-v1';
+const SUMMARY_GROUNDING_REVISION_AR = 'entry-owned-arabic-grounding-v1';
+const SUMMARY_DURATION_REVISION_AR = 'arabic-duration-idempotent-v1';
+const SUMMARY_BUILDER_REVISION_AR = 'entry-owned-arabic-rebuild-v1';
 for (const marker of [
+  SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
   SUMMARY_SPLITTER_REVISION,
   SUMMARY_GROUNDING_REVISION,
   SUMMARY_DURATION_REVISION,
   SUMMARY_BUILDER_REVISION,
+  SUMMARY_SPLITTER_REVISION_AR,
+  SUMMARY_GROUNDING_REVISION_AR,
+  SUMMARY_DURATION_REVISION_AR,
+  SUMMARY_BUILDER_REVISION_AR,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

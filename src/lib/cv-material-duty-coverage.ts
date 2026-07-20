@@ -32,6 +32,10 @@ export type MaterialDutyKey =
   | 'warehouse_inbound_check'
   | 'warehouse_records'
   | 'warehouse_movement'
+  | 'design_visual_materials'
+  | 'design_review_adapt'
+  | 'design_brand_identity'
+  | 'design_files_formats'
   | 'generic_duty';
 
 type DutyRule = {
@@ -179,26 +183,54 @@ const DUTY_RULES: DutyRule[] = [
     // Hindi object-before-verb: माल … जाँच/जांच. Never use ASCII \b around Devanagari.
     // जाँच (chandrabindu) and जांच (anusvara) are both live Android spellings.
     source:
-      /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:rob\w*|goods?|माल|товар|بضائع|商品).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच)|(?:pristigl\w*|incoming|inbound|आने\s*वाल).{0,40}(?:rob\w*|goods?|माल)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित).{0,40}(?:dokument|document|दस्तावे)|(?:dokument|document|दस्तावे).{0,40}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|संबंधित)/iu,
+      /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:rob\w*|goods?|माल|товар|بضائع|واردة|وثائق|商品).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة).{0,40}(?:rob\w*|goods?|माल|بضائع)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित|مرفق).{0,40}(?:dokument|document|दस्तावे|وثائق)|(?:dokument|document|दस्तावे|وثائق).{0,40}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|فحص|संबंधित|مرفق)/iu,
     localized:
-      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|проверя).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|商品|dokument|document|दस्तावे|وثائق|書類)|(?:rob\w*|goods?|माल|वस्तु|товар|商品|dokument|document|दस्तावे).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल).{0,40}(?:rob\w*|goods?|माल)|(?:prateć\w*|accompany\w*|संबंधित).{0,40}(?:dokument|document|दस्तावे))/iu,
+      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|يتحقق|فحص|проверя).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|書類)|(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|فحص|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة).{0,40}(?:rob\w*|goods?|माल|بضائع)|(?:prateć\w*|accompany\w*|संबंधित|مرفق).{0,40}(?:dokument|document|दस्तावे|وثائق))/iu,
   },
   {
     key: 'warehouse_records',
     // Hindi often places the object before the verb (रिकॉर्ड अद्यतन / सामान … व्यवस्थित).
     source:
-      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट).{0,48}(?:evidenc|skladišt|skladist|warehouse|record|रिकॉर्ड|गोदाम)|(?:evidenc|record|रिकॉर्ड|गोदाम|skladišt|warehouse).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट)|(?:uredn\w*|orderly|व्यवस्थित).{0,40}(?:raspored|arrang|सामान|rob\w*|goods)|(?:सामान|rob\w*|goods).{0,40}(?:uredn\w*|orderly|व्यवस्थित))/iu,
+      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث).{0,48}(?:evidenc|skladišt|skladist|warehouse|record|रिकॉर्ड|गोदाम|سجلات|مستودع)|(?:evidenc|record|रिकॉर्ड|गोदाम|سجلات|مستودع|skladišt|warehouse).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|تحافظ|حافظت?).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|بضائع)|(?:सामान|rob\w*|goods|بضائع).{0,40}(?:uredn\w*|orderly|व्यवस्थित|ترتيب))/iu,
     localized:
-      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|обновл|更新).{0,48}(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|skladist|warehouse|गोदाम|مستودع|склад|倉庫)|(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|warehouse|गोदाम).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|обновл|更新)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|товар)|(?:सामान|rob\w*|goods|товар).{0,40}(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч))/iu,
+      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث|تحديث|обновл|更新).{0,48}(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|skladist|warehouse|गोदाम|مستودع|склад|倉庫)|(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|warehouse|गोदाम|مستودع).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث|تحديث|обновл|更新)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч|تحافظ|حافظت?).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|بضائع|товар)|(?:सामान|rob\w*|goods|بضائع|товар).{0,40}(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч))/iu,
   },
   {
     key: 'warehouse_movement',
     // Hindi often places समन्वय after the objects (तैयारी और आवाजाही का समन्वय).
     // सहकर्मियों (oblique plural) must match — do not require ASCII \b.
     source:
-      /(?:(?:koordin\w*|coord\w*|समन्वय).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:आवाजाही|kretanj|movement).{0,24}(?:समन्वय|koordin|coord)|(?:माल|rob\w*|goods).{0,40}(?:तैयारी|priprem|prepar|आवाजाही)|(?:koleg\w*|colleague\w*|सहकर्मी).{0,48}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|समन्वय)|(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी).{0,48}(?:koleg\w*|colleague\w*|सहकर्मी|समन्वय))/iu,
+      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|إعداد|تجهيز|حركة|بضائع)|(?:priprem\w*|prepar\w*|तैयारी|إعداد|تجهيز).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल|حركة|بضائع)|(?:आवाजाही|kretanj|movement|حركة).{0,24}(?:समन्वय|koordin|coord|تنسّق)|(?:माल|rob\w*|goods|بضائع).{0,40}(?:तैयारी|priprem|prepar|आवाजाही|إعداد|حركة)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء).{0,48}(?:rob\w*|goods|माल|بضائع|kretanj|movement|आवाजाही|तैयारी|समन्वय|إعداد|حركة)|(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी).{0,48}(?:koleg\w*|colleague\w*|सहकर्मी|समन्वय))/iu,
     localized:
-      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|rob\w*|goods|माल|koleg|colleague|सहकर्मी)|(?:priprem|prepar|तैयारी|kretanj|movement|आवाजाही|rob\w*|goods|माल|koleg|colleague|सहकर्मी).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:आवाजाही|kretanj|movement).{0,24}(?:समन्वय|koordin|coord)|(?:माल|rob\w*|goods).{0,40}(?:तैयारी|आवाजाही)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,48}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|समन्वय))/iu,
+      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق|تنسيق|координ|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|إعداد|تجهيز|حركة|rob\w*|goods|माल|بضائع|koleg|colleague|सहकर्मी|زملاء)|(?:priprem|prepar|तैयारी|إعداد|تجهيز|kretanj|movement|आवाजाही|حركة|rob\w*|goods|माल|بضائع|koleg|colleague|सहकर्मी|زملاء).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق|تنسيق|координ|調整)|(?:priprem\w*|prepar\w*|तैयारी|إعداد|تجهيز).{0,40}(?:kretanj|movement|आवाजाही|حركة|rob\w*|goods|माल|بضائع)|(?:आवाजाही|kretanj|movement|حركة).{0,24}(?:समन्वय|koordin|coord|تنسّق|تنسيق)|(?:माल|rob\w*|goods|بضائع).{0,40}(?:तैयारी|إعداد|आवाजाही|حركة)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,48}(?:rob\w*|goods|माल|بضائع|kretanj|movement|आواजाही|तैयारी|समन्वय|إعداد|حركة))/iu,
+  },
+  {
+    key: 'design_visual_materials',
+    source:
+      /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة\s*ورقمية|print\s+and\s+digital)/iu,
+    localized:
+      /(?:visual\s+materials?|graphic\s+elements?|vizueln|grafi[cč]k|दृश्य|ग्राफिक|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة|رقمية)/iu,
+  },
+  {
+    key: 'design_review_adapt',
+    source:
+      /(?:review\w*.{0,40}(?:design|dizajn)|adapt\w*.{0,40}(?:design|dizajn)|आवश्यकताओं.{0,40}डिज़ाइन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|requirements?.{0,40}design)/iu,
+    localized:
+      /(?:review|adapt|pregled|prilago[dđ]|समीक्षा|अनुकूलन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?)/iu,
+  },
+  {
+    key: 'design_brand_identity',
+    source:
+      /(?:visual\s+identity|brand\s+(?:guidelines?|identity)|दृश्य\s*पहचान|ब्रांड|الهوية\s*البصرية|إرشادات\s*العلامة)/iu,
+    localized:
+      /(?:visual\s+identity|brand|दृश्य\s*पहचान|ब्रांड|الهوية\s*البصرية|إرشادات\s*العلامة)/iu,
+  },
+  {
+    key: 'design_files_formats',
+    source:
+      /(?:design\s+files?|final\s+design|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|formats?\s+for\s+different)/iu,
+    localized:
+      /(?:design\s+files?|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ)/iu,
   },
 ];
 
@@ -232,6 +264,55 @@ export function hindiWarehouseCueKeysFromUnit(unit: string): WarehouseMaterialCu
   return out;
 }
 
+/** Fine-grained Arabic warehouse cues for per-unit diagnostics. */
+const ARABIC_WAREHOUSE_CUE_RULES: Array<{ key: WarehouseMaterialCueKey; re: RegExp }> = [
+  { key: 'warehouse_inbound_check', re: /(?:البضائع\s*الواردة|واردة)|(?:تتحقق|تحقّقت|فحص).{0,40}(?:بضائع|وثائق)|(?:بضائع|وثائق).{0,40}(?:تتحقق|تحقّقت|فحص|تسجيل)/u },
+  { key: 'warehouse_document_check', re: /الوثائق\s*المرفقة|وثائق.{0,24}مرفق|مرفق.{0,24}وثائق/u },
+  { key: 'warehouse_records', re: /سجلات\s*المستودع|(?:تحدّث|حدّثت).{0,40}سجلات|سجلات.{0,40}(?:تحدّث|حدّثت|تحديث)/u },
+  { key: 'warehouse_orderly_goods', re: /ترتيب\s*البضائع|(?:تحافظ|حافظت).{0,40}ترتيب/u },
+  { key: 'warehouse_preparation', re: /(?:إعداد|تجهيز)\s*البضائع|البضائع.{0,24}(?:إعداد|تجهيز)/u },
+  { key: 'warehouse_movement', re: /حركة\s*البضائع|حركتها|(?:البضائع).{0,24}حركة/u },
+  { key: 'warehouse_colleague_coordination', re: /(?:تنسّق|نسّقت).{0,48}زملاء|زملاء.{0,48}(?:تنسّق|نسّقت|تنسيق)/u },
+];
+
+export function arabicWarehouseCueKeysFromUnit(unit: string): WarehouseMaterialCueKey[] {
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  const out: WarehouseMaterialCueKey[] = [];
+  for (const rule of ARABIC_WAREHOUSE_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
+export type DesignMaterialCueKey =
+  | 'design_visual_materials'
+  | 'design_review_adapt'
+  | 'design_brand_identity'
+  | 'design_files_formats'
+  | 'design_team_collaboration';
+
+const ARABIC_DESIGN_CUE_RULES: Array<{ key: DesignMaterialCueKey; re: RegExp }> = [
+  { key: 'design_visual_materials', re: /مواد\s*بصرية|عناصر\s*رسومية|مواد\s*مطبوعة|رقمية/u },
+  { key: 'design_review_adapt', re: /مراجعة|تكيّف|راجعت|كيّفت|متطلبات\s*المشروع/u },
+  { key: 'design_brand_identity', re: /الهوية\s*البصرية|إرشادات\s*العلامة/u },
+  { key: 'design_files_formats', re: /ملفات\s*التصميم|صيغ\s*التصميم/u },
+  { key: 'design_team_collaboration', re: /(?:تعاون|تنسيق|نسّقت).{0,40}(?:فريق|زملاء)|(?:فريق|زملاء).{0,40}(?:تعاون|تنسيق)/u },
+];
+
+export function arabicDesignCueKeysFromUnit(unit: string): DesignMaterialCueKey[] {
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  const out: DesignMaterialCueKey[] = [];
+  for (const rule of ARABIC_DESIGN_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
+const ARABIC_ACTION_CUES = /تتحقق|تحقّقت|تحدّث|حدّثت|تنسّق|نسّقت|تعدّ|أعدّت|تراجع|راجعت|تكيّف|كيّفت|تحافظ|حافظت|فحص|تسجيل|تحديث|ترتيب|إعداد|تجهيز/gu;
+const ARABIC_OBJECT_CUES = /بضائع|وثائق|سجلات|مستودع|زملاء|مواد|عناصر|تصميم|هوية|إرشادات|ملفات|صيغ/gu;
+
 const HINDI_ACTION_CUES = /जाँच|जांच|जाच|अद्यतन|अपडेट|व्यवस्थित|तैयारी|आवाजाही|समन्वय/gu;
 const HINDI_OBJECT_CUES = /माल|दस्तावे|रिकॉर्ड|गोदाम|सामान|सहकर्मी/gu;
 
@@ -259,7 +340,11 @@ export function diagnoseCurrentSourceUnitMaterial(
     const normalized = unit.normalize('NFKC').replace(/\s+/g, ' ').trim();
     currentSourceUnitHashes.push(fingerprintText(normalized));
     const keys = classifyMaterialDutyKeys(unit).filter((k) => k !== 'generic_duty');
-    const cues = hindiWarehouseCueKeysFromUnit(unit);
+    const cues = [
+      ...hindiWarehouseCueKeysFromUnit(unit),
+      ...arabicWarehouseCueKeysFromUnit(unit),
+      ...arabicDesignCueKeysFromUnit(unit),
+    ];
     const keySet = new Set<string>(keys);
     const merged = [
       ...keys,
@@ -268,9 +353,17 @@ export function diagnoseCurrentSourceUnitMaterial(
     currentSourceUnitMaterialKeys.push(
       merged.length ? merged : ['generic_duty'],
     );
-    currentSourceUnitActionKeys.push([...(normalized.match(HINDI_ACTION_CUES) || [])]);
-    currentSourceUnitObjectKeys.push([...(normalized.match(HINDI_OBJECT_CUES) || [])]);
-    currentSourceUnitWarehouseCueCount.push(cues.length);
+    currentSourceUnitActionKeys.push([
+      ...(normalized.match(HINDI_ACTION_CUES) || []),
+      ...(normalized.match(ARABIC_ACTION_CUES) || []),
+    ]);
+    currentSourceUnitObjectKeys.push([
+      ...(normalized.match(HINDI_OBJECT_CUES) || []),
+      ...(normalized.match(ARABIC_OBJECT_CUES) || []),
+    ]);
+    currentSourceUnitWarehouseCueCount.push(
+      hindiWarehouseCueKeysFromUnit(unit).length + arabicWarehouseCueKeysFromUnit(unit).length,
+    );
   }
   return {
     currentSourceUnitHashes,
@@ -298,6 +391,18 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
   }
   if (keys.includes('healthcare_team')) {
     return keys.filter((k) => k !== 'team_collaboration' && k !== 'generic_duty' && !k.startsWith('cs_'));
+  }
+  // Design material keys — prefer over CS / food false-hits.
+  if (keys.some((k) => k.startsWith('design_'))) {
+    return keys.filter(
+      (k) => k.startsWith('design_')
+        || (!k.startsWith('cs_')
+          && k !== 'generic_duty'
+          && k !== 'food_prep'
+          && k !== 'hygiene_workplace'
+          && k !== 'kitchen_collaboration'
+          && k !== 'team_collaboration'),
+    );
   }
   // Warehouse inbound/records/movement — prefer over CS false-hits (koleg+coord).
   if (keys.some((k) => k.startsWith('warehouse_'))) {
