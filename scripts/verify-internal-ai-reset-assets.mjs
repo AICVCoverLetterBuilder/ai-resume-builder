@@ -92,6 +92,11 @@ const SUMMARY_GROUNDING_REVISION_AR = 'entry-owned-arabic-grounding-v1';
 const SUMMARY_DURATION_REVISION_AR = 'arabic-duration-idempotent-v1';
 const SUMMARY_BUILDER_REVISION_AR = 'entry-owned-arabic-rebuild-v1';
 const ARABIC_MODERN_MINIMAL_PDF_RTL = 'arabic-modern-minimal-pdf-rtl-283-v1';
+const RUSSIAN_EXPERIENCE_MATERIAL = 'russian-experience-material-v1';
+const SUMMARY_SPLITTER_REVISION_RU = 'russian-three-sentence-slots-v1';
+const SUMMARY_GROUNDING_REVISION_RU = 'entry-owned-russian-grounding-v1';
+const SUMMARY_DURATION_REVISION_RU = 'russian-duration-idempotent-v1';
+const SUMMARY_BUILDER_REVISION_RU = 'entry-owned-russian-rebuild-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -104,6 +109,11 @@ for (const marker of [
   SUMMARY_DURATION_REVISION_AR,
   SUMMARY_BUILDER_REVISION_AR,
   ARABIC_MODERN_MINIMAL_PDF_RTL,
+  RUSSIAN_EXPERIENCE_MATERIAL,
+  SUMMARY_SPLITTER_REVISION_RU,
+  SUMMARY_GROUNDING_REVISION_RU,
+  SUMMARY_DURATION_REVISION_RU,
+  SUMMARY_BUILDER_REVISION_RU,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

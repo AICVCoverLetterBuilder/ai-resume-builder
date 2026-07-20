@@ -33,7 +33,9 @@ import {
 export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
 /** Arabic duration finalizer revision — keep Hindi marker present for asset scans. */
 export const SUMMARY_DURATION_FINALIZER_REVISION_AR = 'arabic-duration-idempotent-v1' as const;
+export const SUMMARY_DURATION_FINALIZER_REVISION_RU = 'russian-duration-idempotent-v1' as const;
 void SUMMARY_DURATION_FINALIZER_REVISION_AR;
+void SUMMARY_DURATION_FINALIZER_REVISION_RU;
 
 /** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
 function splitHindiSummaryUnitsLocal(text: string): string[] {
@@ -866,7 +868,9 @@ export function resolveSummaryWithDurationPolicy(
     ...owned.diagnostics,
     summaryDurationFinalizerRevision: locale === 'ar'
       ? SUMMARY_DURATION_FINALIZER_REVISION_AR
-      : SUMMARY_DURATION_FINALIZER_REVISION,
+      : locale === 'ru'
+        ? SUMMARY_DURATION_FINALIZER_REVISION_RU
+        : SUMMARY_DURATION_FINALIZER_REVISION,
   };
 
   // A previously-saved or independently produced summary may already carry the duration
@@ -908,7 +912,9 @@ export function resolveSummaryWithDurationPolicy(
     Object.assign(durationDiagnostics, again.diagnostics);
     durationDiagnostics.summaryDurationFinalizerRevision = locale === 'ar'
       ? SUMMARY_DURATION_FINALIZER_REVISION_AR
-      : SUMMARY_DURATION_FINALIZER_REVISION;
+      : locale === 'ru'
+        ? SUMMARY_DURATION_FINALIZER_REVISION_RU
+        : SUMMARY_DURATION_FINALIZER_REVISION;
   }
 
   const initial = validateSummaryDuration(working, duration, {

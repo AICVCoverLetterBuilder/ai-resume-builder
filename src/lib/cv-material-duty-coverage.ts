@@ -183,57 +183,60 @@ const DUTY_RULES: DutyRule[] = [
     // Hindi object-before-verb: माल … जाँच/जांच. Never use ASCII \b around Devanagari.
     // जाँच (chandrabindu) and जांच (anusvara) are both live Android spellings.
     source:
-      /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:rob\w*|goods?|माल|товар|بضائع|واردة|وثائق|商品).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة).{0,40}(?:rob\w*|goods?|माल|بضائع)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित|مرفق).{0,40}(?:dokument|document|दस्तावे|وثائق)|(?:dokument|document|दस्तावे|وثائق).{0,40}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|فحص|संबंधित|مرفق)/iu,
+      /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل|проверя).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:rob\w*|goods?|माल|товар|بضائع|واردة|وثائق|商品|документ|сопроводительн).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ).{0,40}(?:rob\w*|goods?|माल|بضائع|товар)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित|مرفق|сопроводительн).{0,40}(?:dokument|document|दस्तावे|وثائق|документ)|(?:dokument|document|दस्तावे|وثائق|документ).{0,40}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|فحص|संबंधित|مرفق|проверя|сопроводительн)/iu,
     localized:
-      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|يتحقق|فحص|проверя).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|書類)|(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|فحص|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة).{0,40}(?:rob\w*|goods?|माल|بضائع)|(?:prateć\w*|accompany\w*|संबंधित|مرفق).{0,40}(?:dokument|document|दस्तावे|وثائق))/iu,
+      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|يتحقق|فحص|проверя).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|書類|сопроводительн)|(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|сопроводительн).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|فحص|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ).{0,40}(?:rob\w*|goods?|माल|بضائع|товар)|(?:prateć\w*|accompany\w*|संबंधित|مرفق|сопроводительн).{0,40}(?:dokument|document|दस्तावे|وثائق|документ))/iu,
   },
   {
     key: 'warehouse_records',
     // Hindi often places the object before the verb (रिकॉर्ड अद्यतन / सामान … व्यवस्थित).
     source:
-      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث).{0,48}(?:evidenc|skladišt|skladist|warehouse|record|रिकॉर्ड|गोदाम|سجلات|مستودع)|(?:evidenc|record|रिकॉर्ड|गोदाम|سجلات|مستودع|skladišt|warehouse).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|تحافظ|حافظت?).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|بضائع)|(?:सामान|rob\w*|goods|بضائع).{0,40}(?:uredn\w*|orderly|व्यवस्थित|ترتيب))/iu,
+      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث|обновл|поддержива).{0,48}(?:evidenc|skladišt|skladist|warehouse|record|रिकॉर्ड|गोदाम|سجلات|مستودع|складск|запис|учёт|учет|поряд)|(?:evidenc|record|रिकॉर्ड|गोदाम|سجلات|مستودع|skladišt|warehouse|складск|запис).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|обновл|поддержива)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|تحافظ|حافظت?|поряд|размещен).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|بضائع|товар)|(?:सामान|rob\w*|goods|بضائع|товар).{0,40}(?:uredn\w*|orderly|व्यवस्थित|ترتيب|поряд|размещен))/iu,
     localized:
-      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث|تحديث|обновл|更新).{0,48}(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|skladist|warehouse|गोदाम|مستودع|склад|倉庫)|(?:evidenc|record|रिकॉर्ड|سجلات|учёт|記録|skladišt|warehouse|गोदाम|مستودع).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث|تحديث|обновл|更新)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч|تحافظ|حافظت?).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|بضائع|товар)|(?:सामान|rob\w*|goods|بضائع|товар).{0,40}(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч))/iu,
+      /(?:(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث|تحديث|обновл|更新|поддержива).{0,48}(?:evidenc|record|रिकॉर्ड|سجلات|учёт|учет|запись|записи|запис|記録|skladišt|skladist|warehouse|गोदाम|مستودع|склад|倉庫|поряд)|(?:evidenc|record|रिकॉर्ड|سجلات|учёт|учет|запись|записи|запис|記録|skladišt|warehouse|गोदाम|مستودع|складск).{0,48}(?:ažur\w*|azur\w*|update\w*|अद्यतन|अपडेट|تحدّث|حدّثت?|يحدّث|تحديث|обновл|更新|поддержива)|(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч|تحافظ|حافظت?|поряд|размещен).{0,40}(?:raspored|arrang|सामान|rob\w*|goods|بضائع|товар)|(?:सामान|rob\w*|goods|بضائع|товар).{0,40}(?:uredn\w*|orderly|व्यवस्थित|ترتيب|упорядоч|поряд|размещен))/iu,
   },
   {
     key: 'warehouse_movement',
     // Hindi often places समन्वय after the objects (तैयारी और आवाजाही का समन्वय).
     // सहकर्मियों (oblique plural) must match — do not require ASCII \b.
     source:
-      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|إعداد|تجهيز|حركة|بضائع)|(?:priprem\w*|prepar\w*|तैयारी|إعداد|تجهيز).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल|حركة|بضائع)|(?:आवाजाही|kretanj|movement|حركة).{0,24}(?:समन्वय|koordin|coord|تنسّق)|(?:माल|rob\w*|goods|بضائع).{0,40}(?:तैयारी|priprem|prepar|आवाजाही|إعداد|حركة)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء).{0,48}(?:rob\w*|goods|माल|بضائع|kretanj|movement|आवाजाही|तैयारी|समन्वय|إعداد|حركة)|(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी).{0,48}(?:koleg\w*|colleague\w*|सहकर्मी|समन्वय))/iu,
+      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق|координир|согласов).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|إعداد|تجهيز|حركة|بضائع|подготов|перемещен|коллег|товар)|(?:priprem\w*|prepar\w*|तैयारी|إعداد|تجهيز|подготов).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल|حركة|بضائع|товар|перемещен)|(?:आवाजाही|kretanj|movement|حركة|перемещен).{0,24}(?:समन्वय|koordin|coord|تنسّق|координир)|(?:माल|rob\w*|goods|بضائع|товар).{0,40}(?:तैयारी|priprem|prepar|आवाजाही|إعداد|حركة|подготов|перемещен)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,48}(?:rob\w*|goods|माल|بضائع|kretanj|movement|आवाजाही|तैयारी|समन्वय|إعداد|حركة|подготов|перемещен|координир)|(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|подготов|перемещен).{0,48}(?:koleg\w*|colleague\w*|सहकर्मी|समन्वय|коллег))/iu,
     localized:
-      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق|تنسيق|координ|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|إعداد|تجهيز|حركة|rob\w*|goods|माल|بضائع|koleg|colleague|सहकर्मी|زملاء)|(?:priprem|prepar|तैयारी|إعداد|تجهيز|kretanj|movement|आवाजाही|حركة|rob\w*|goods|माल|بضائع|koleg|colleague|सहकर्मी|زملاء).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق|تنسيق|координ|調整)|(?:priprem\w*|prepar\w*|तैयारी|إعداد|تجهيز).{0,40}(?:kretanj|movement|आवाजाही|حركة|rob\w*|goods|माल|بضائع)|(?:आवाजाही|kretanj|movement|حركة).{0,24}(?:समन्वय|koordin|coord|تنسّق|تنسيق)|(?:माल|rob\w*|goods|بضائع).{0,40}(?:तैयारी|إعداد|आवाजाही|حركة)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,48}(?:rob\w*|goods|माल|بضائع|kretanj|movement|आواजाही|तैयारी|समन्वय|إعداد|حركة))/iu,
+      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق|تنسيق|координ|согласов|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|إعداد|تجهيز|حركة|rob\w*|goods|माल|بضائع|koleg|colleague|सहकर्मी|زملاء|подготов|перемещен|коллег)|(?:priprem|prepar|तैयारी|إعداد|تجهيز|kretanj|movement|आवाजाही|حركة|rob\w*|goods|माल|بضائع|koleg|colleague|सहकर्मी|زملاء|подготов|перемещен|коллег).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|نسّقت?|ينسّق|تنسيق|координ|согласов|調整)|(?:priprem\w*|prepar\w*|तैयारी|إعداد|تجهيز|подготов).{0,40}(?:kretanj|movement|आवाजाही|حركة|rob\w*|goods|माल|بضائع|товар|перемещен)|(?:आवाजाही|kretanj|movement|حركة|перемещен).{0,24}(?:समन्वय|koordin|coord|تنسّق|تنسيق|координ)|(?:माल|rob\w*|goods|بضائع|товар).{0,40}(?:तैयारी|إعداد|आवाजाही|حركة|подготов|перемещен)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,48}(?:rob\w*|goods|माल|بضائع|kretanj|movement|आवाजाही|तैयारी|समन्वय|إعداد|حركة|подготов|перемещен))/iu,
   },
   {
     key: 'design_visual_materials',
     source:
-      /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة\s*ورقمية|print\s+and\s+digital)/iu,
+      /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة\s*ورقمية|print\s+and\s+digital|визуальн[а-яёА-ЯЁ]*\s+материал|графическ[а-яёА-ЯЁ]*\s+элемент)/iu,
     localized:
-      /(?:visual\s+materials?|graphic\s+elements?|vizueln|grafi[cč]k|दृश्य|ग्राफिक|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة|رقمية)/iu,
+      /(?:visual\s+materials?|graphic\s+elements?|vizueln|grafi[cč]k|दृश्य|ग्राफिक|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة|رقمية|визуальн|графическ|дизайн-?материал)/iu,
   },
   {
     key: 'design_review_adapt',
     source:
-      /(?:review\w*.{0,40}(?:design|dizajn)|adapt\w*.{0,40}(?:design|dizajn)|आवश्यकताओं.{0,40}डिज़ाइन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|requirements?.{0,40}design)/iu,
+      /(?:review\w*.{0,40}(?:design|dizajn)|adapt\w*.{0,40}(?:design|dizajn)|आवश्यकताओं.{0,40}डिज़ाइन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|requirements?.{0,40}design|проверя\w*.{0,40}адаптир|адаптир\w*.{0,40}(?:дизайн|требовани)|требовани\w*\s+проекта)/iu,
     localized:
-      /(?:review|adapt|pregled|prilago[dđ]|समीक्षा|अनुकूलन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?)/iu,
+      /(?:review|adapt|pregled|prilago[dđ]|समीक्षा|अनुकूलन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|проверя|адаптир|требовани)/iu,
   },
   {
     key: 'design_brand_identity',
     source:
       /(?:visual\s+identity|brand\s+(?:guidelines?|identity)|दृश्य\s*पहचान|ब्रांड|الهوية\s*البصرية|إرشادات\s*العلامة)/iu,
     localized:
-      /(?:visual\s+identity|brand|दृश्य\s*पहचान|ब्रांड|الهوية\s*البصرية|إرشادات\s*العلامة)/iu,
+      /(?:visual\s+identity|brand|दृश्य\s*पहचान|ब्रांड|الهوية\s*البصرية|إرشادات\s*العلامة|бренд|визуальн(?:ая|ой)?\s+идентичн)/iu,
   },
   {
     key: 'design_files_formats',
     source:
-      /(?:design\s+files?|final\s+design|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|formats?\s+for\s+different)/iu,
+      /(?:design\s+files?|final\s+design|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|formats?\s+for\s+different|дизайн-?файл|финальн\w*\s+дизайн|формат\w*.{0,40}экран|подготавлива\w*.{0,40}файл)/iu,
     localized:
-      /(?:design\s+files?|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ)/iu,
+      /(?:design\s+files?|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ|дизайн-?файл|файл(?:ы|ов)?.{0,24}дизайн|формат.{0,24}экран|экран)/iu,
   },
 ];
 
+/** Runtime marker — Russian Experience material model (must remain in packaged assets). */
+export const RUSSIAN_EXPERIENCE_MATERIAL_REVISION = 'russian-experience-material-v1' as const;
+void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
 /** Fine-grained Hindi warehouse cues for per-unit diagnostics (aliases of the 3 keys). */
 export type WarehouseMaterialCueKey =
   | 'warehouse_inbound_check'
@@ -285,6 +288,49 @@ export function arabicWarehouseCueKeysFromUnit(unit: string): WarehouseMaterialC
   return out;
 }
 
+/** Fine-grained Russian warehouse cues (morphology-aware). */
+const RUSSIAN_WAREHOUSE_CUE_RULES: Array<{ key: WarehouseMaterialCueKey; re: RegExp }> = [
+  {
+    key: 'warehouse_inbound_check',
+    re: /(?:поступающ\w*.{0,24}товар|товар\w*.{0,24}поступающ|проверя\w*.{0,40}(?:товар|документ)|(?:товар|документ).{0,40}проверя)/iu,
+  },
+  {
+    key: 'warehouse_document_check',
+    re: /сопроводительн\w*\s+документ|документ\w*.{0,24}сопроводительн/iu,
+  },
+  {
+    key: 'warehouse_records',
+    re: /(?:обновл\w*.{0,40}(?:складск\w*\s+)?запис|складск\w*\s+запис|запис\w*.{0,40}обновл|учёт|учет)/iu,
+  },
+  {
+    key: 'warehouse_orderly_goods',
+    re: /(?:поддержива\w*.{0,40}поряд|поряд\w*.{0,40}(?:размещен|товар)|организованн\w*\s+размещен|упорядоч)/iu,
+  },
+  {
+    key: 'warehouse_preparation',
+    re: /(?:подготов\w*.{0,40}товар|товар\w*.{0,40}подготов)/iu,
+  },
+  {
+    key: 'warehouse_movement',
+    re: /перемещен\w*(?:.{0,40}товар|.{0,40}склад)|товар\w*.{0,40}перемещен/iu,
+  },
+  {
+    key: 'warehouse_colleague_coordination',
+    re: /(?:координир\w*|согласов\w*).{0,48}коллег|коллег\w*.{0,48}(?:координир|согласов|подготов|перемещен)/iu,
+  },
+];
+
+export function russianWarehouseCueKeysFromUnit(unit: string): WarehouseMaterialCueKey[] {
+  void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  const out: WarehouseMaterialCueKey[] = [];
+  for (const rule of RUSSIAN_WAREHOUSE_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
 export type DesignMaterialCueKey =
   | 'design_visual_materials'
   | 'design_review_adapt'
@@ -310,11 +356,44 @@ export function arabicDesignCueKeysFromUnit(unit: string): DesignMaterialCueKey[
   return out;
 }
 
+const RUSSIAN_DESIGN_CUE_RULES: Array<{ key: DesignMaterialCueKey; re: RegExp }> = [
+  {
+    key: 'design_visual_materials',
+    re: /визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+элемент|дизайн-?материал/iu,
+  },
+  {
+    key: 'design_review_adapt',
+    re: /(?:проверя[а-яё]*.{0,40}адаптир|адаптир[а-яё]*.{0,40}(?:дизайн|требовани)|требовани[а-яё]*\s+проекта)/iu,
+  },
+  {
+    key: 'design_files_formats',
+    re: /(?:финальн[а-яё]*\s+)?дизайн-?файл|файл[а-яё]*.{0,40}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,24}формат|подготавлива[а-яё]*.{0,40}файл/iu,
+  },
+  {
+    key: 'design_brand_identity',
+    re: /бренд|визуальн[а-яё]*\s+идентичн|айдентик/iu,
+  },
+];
+
+export function russianDesignCueKeysFromUnit(unit: string): DesignMaterialCueKey[] {
+  void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  const out: DesignMaterialCueKey[] = [];
+  for (const rule of RUSSIAN_DESIGN_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
 const ARABIC_ACTION_CUES = /تتحقق|تحقّقت|تحدّث|حدّثت|تنسّق|نسّقت|تعدّ|أعدّت|تراجع|راجعت|تكيّف|كيّفت|تحافظ|حافظت|فحص|تسجيل|تحديث|ترتيب|إعداد|تجهيز/gu;
 const ARABIC_OBJECT_CUES = /بضائع|وثائق|سجلات|مستودع|زملاء|مواد|عناصر|تصميم|هوية|إرشادات|ملفات|صيغ/gu;
 
 const HINDI_ACTION_CUES = /जाँच|जांच|जाच|अद्यतन|अपडेट|व्यवस्थित|तैयारी|आवाजाही|समन्वय/gu;
 const HINDI_OBJECT_CUES = /माल|दस्तावे|रिकॉर्ड|गोदाम|सामान|सहकर्मी/gu;
+
+const RUSSIAN_ACTION_CUES = /проверя|обновл|поддержива|координир|согласов|созда[её]|адаптир|подготавли|подготов/gu;
+const RUSSIAN_OBJECT_CUES = /товар|документ|запис|склад|коллег|материал|элемент|файл|экран|дизайн/gu;
 
 export type CurrentSourceUnitMaterialDiag = {
   currentSourceUnitHashes: string[];
@@ -344,6 +423,8 @@ export function diagnoseCurrentSourceUnitMaterial(
       ...hindiWarehouseCueKeysFromUnit(unit),
       ...arabicWarehouseCueKeysFromUnit(unit),
       ...arabicDesignCueKeysFromUnit(unit),
+      ...russianWarehouseCueKeysFromUnit(unit),
+      ...russianDesignCueKeysFromUnit(unit),
     ];
     const keySet = new Set<string>(keys);
     const merged = [
@@ -356,13 +437,17 @@ export function diagnoseCurrentSourceUnitMaterial(
     currentSourceUnitActionKeys.push([
       ...(normalized.match(HINDI_ACTION_CUES) || []),
       ...(normalized.match(ARABIC_ACTION_CUES) || []),
+      ...(normalized.match(RUSSIAN_ACTION_CUES) || []),
     ]);
     currentSourceUnitObjectKeys.push([
       ...(normalized.match(HINDI_OBJECT_CUES) || []),
       ...(normalized.match(ARABIC_OBJECT_CUES) || []),
+      ...(normalized.match(RUSSIAN_OBJECT_CUES) || []),
     ]);
     currentSourceUnitWarehouseCueCount.push(
-      hindiWarehouseCueKeysFromUnit(unit).length + arabicWarehouseCueKeysFromUnit(unit).length,
+      hindiWarehouseCueKeysFromUnit(unit).length
+        + arabicWarehouseCueKeysFromUnit(unit).length
+        + russianWarehouseCueKeysFromUnit(unit).length,
     );
   }
   return {

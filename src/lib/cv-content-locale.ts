@@ -100,13 +100,32 @@ export function analyzeContentLocale(
     };
   }
   if (script === 'cyrillic') {
-    const loc: Locale = /\b(?:опыт|бармен|коктейл|работал|работала)\b/iu.test(raw) ? 'ru' : 'sr';
+    // Serbian-specific Cyrillic letters are decisive. Shared CV stems alone must
+    // not classify complete Russian warehouse/design bullets as Serbian.
+    const hasSrCyrLetters = /[јљњћђџЈЉЊЋЂЏ]/u.test(raw);
+    const hasRuLetters = /[ёыэъщЁЫЭЪЩ]/u.test(raw);
+    const hasRuCv =
+      /(?:проверя|обновл|поддержива|координир|согласов|созда[её]|адаптир|подготавли|подготов|поступающ|сопроводительн|складск|товар(?:ов|ы|а)?|документ|запис|файл|экран|визуальн|графическ|дизайн|работал|работала|выполнял|имеет\s+опыт|общим\s+опытом|лет\s+(?:общего\s+)?опыта|кладовщ|обеспечивая|размещен|перемещен)/iu.test(raw);
+    const hasSrCvDistinct =
+      /(?:преглед|ажурир|извешта|одељен|евиденц|пристигл|означав|непотпун|заједнич|сарађ|припремал|креирал|искуств)/iu.test(raw);
+    let loc: Locale = 'ru';
+    if (hasSrCyrLetters && !hasRuLetters) {
+      loc = 'sr';
+    } else if (hasRuLetters || hasRuCv) {
+      loc = 'ru';
+    } else if (hasSrCvDistinct && !hasRuCv) {
+      loc = 'sr';
+    } else {
+      // Ambiguous shared Cyrillic — prefer Russian over Serbian (Russian is the
+      // primary Cyrillic CV package; SC Latin is the default Serbian mode).
+      loc = 'ru';
+    }
     return {
       detectedLocale: loc,
       script,
       hasSerbianDiacritics,
-      hasSerbianLexicon: true,
-      confidence: 'high',
+      hasSerbianLexicon: hasSrCyrLetters || hasSrCvDistinct,
+      confidence: hasSrCyrLetters || hasRuLetters || hasRuCv || hasSrCvDistinct ? 'high' : 'medium',
     };
   }
 

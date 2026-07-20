@@ -27,14 +27,33 @@ import {
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,
 } from './cv-arabic-summary-grounding';
+import {
+  analyzeRussianSummaryEmploymentQuality,
+  buildRussianEntryOwnedSummary,
+  russianWarehouseSummaryFragment,
+  SUMMARY_BUILDER_REVISION_RU,
+  SUMMARY_GROUNDING_REVISION_RU,
+  SUMMARY_UNIT_SPLITTER_REVISION_RU,
+} from './cv-russian-summary-grounding';
 
 export {
   analyzeArabicSummaryEmploymentQuality,
+  buildArabicEntryOwnedSummary,
+  arabicWarehouseSummaryFragment,
   splitArabicSummaryUnits,
   SUMMARY_BUILDER_REVISION_AR,
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,
 } from './cv-arabic-summary-grounding';
+export {
+  analyzeRussianSummaryEmploymentQuality,
+  buildRussianEntryOwnedSummary,
+  russianWarehouseSummaryFragment,
+  splitRussianSummaryUnits,
+  SUMMARY_BUILDER_REVISION_RU,
+  SUMMARY_GROUNDING_REVISION_RU,
+  SUMMARY_UNIT_SPLITTER_REVISION_RU,
+} from './cv-russian-summary-grounding';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';
 import {
@@ -1301,8 +1320,15 @@ export function buildConciseGroundedSummary(
   // Deduplicate identical fragments while preserving first-seen order.
   const uniqueFragments = [...new Set(fragments.map((f) => f.trim()).filter(Boolean))];
   // When duties exist but none could be safely localized into concise fragments,
-  // defer to the legacy localized shell (all locales, including English).
-  if (dutyFacts.length > 0 && uniqueFragments.length === 0) {
+  // defer to the legacy localized shell — except dedicated entry-owned packages
+  // (Hindi/Arabic/Russian) which rebuild from material keys, not fragments.
+  if (
+    dutyFacts.length > 0
+    && uniqueFragments.length === 0
+    && locale !== 'hi'
+    && locale !== 'ar'
+    && locale !== 'ru'
+  ) {
     return '';
   }
   const durationPhrase = formatDurationForSummary(duration, locale);
@@ -1454,6 +1480,33 @@ export function buildConciseGroundedSummary(
     // Strict three-slot Arabic package: never append a fourth skills sentence.
     skillSentence = '';
     void skillSentence;
+  } else if (locale === 'ru') {
+    void SUMMARY_BUILDER_REVISION_RU;
+    void SUMMARY_UNIT_SPLITTER_REVISION_RU;
+    void SUMMARY_GROUNDING_REVISION_RU;
+    void analyzeRussianSummaryEmploymentQuality;
+    void russianWarehouseSummaryFragment;
+    const ruRole = /(?:warehouse|склад|кладов|skladist|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+      ? localizeWarehouseEmployee('ru', genderNorm || '')
+      : (role || localizeWarehouseEmployee('ru', genderNorm || ''));
+    text = buildRussianEntryOwnedSummary({
+      role: ruRole,
+      employer,
+      datesValue,
+      gender: genderNorm || '',
+      durationPhrase: durationPhrase || undefined,
+      dutyFacts,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      priorEmployer: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+        : '',
+      priorSourceDuties,
+      locale: 'ru',
+    });
+    skillSentence = '';
+    void skillSentence;
   } else if (locale === 'sr' || locale === 'hr') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin
@@ -1505,12 +1558,11 @@ export function buildConciseGroundedSummary(
     // Duty fragments are often prepositional/noun phrases (e.g. RU "приготовлении…").
     // Keep them in the same sentence — never start a new sentence after a period.
     const dutyConnector =
-      locale === 'ru' ? 'в'
-        : locale === 'de' || locale === 'it' ? 'in'
-          : locale === 'es' || locale === 'pt-BR' ? 'en'
-            : locale === 'fr' ? 'dans'
-              : locale === 'ar' ? 'في'
-                : '';
+      locale === 'de' || locale === 'it' ? 'in'
+        : locale === 'es' || locale === 'pt-BR' ? 'en'
+          : locale === 'fr' ? 'dans'
+            : locale === 'ar' ? 'في'
+              : '';
     const open = dutyJoin
       ? (durationPhrase
         ? (dutyConnector

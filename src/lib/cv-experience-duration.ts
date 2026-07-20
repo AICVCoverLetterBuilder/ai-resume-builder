@@ -435,6 +435,7 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
   ru: {
     1: 'одного', 1.5: 'полутора', 2: 'двух', 2.5: 'двух с половиной', 3: 'трёх', 3.5: 'трёх с половиной',
     4: 'четырёх', 4.5: 'четырёх с половиной', 5: 'пяти', 5.5: 'пяти с половиной', 6: 'шести',
+    6.5: 'шести с половиной',
     7: 'семи', 8: 'восьми', 9: 'девяти', 10: 'десяти',
   },
   'pt-BR': {
@@ -499,7 +500,7 @@ export function summaryHasDurationClaim(text: string): boolean {
     || /約\s*\d+\s*年/u.test(normalized)
     || /\d+\s*年の経験/u.test(normalized)
     || /سنوات|سنة|خبرة/u.test(normalized)
-    || /лет опыта|годом опыта|года опыта/u.test(normalized);
+    || /лет опыта|годом опыта|года опыта|общим опытом|общего опыта/u.test(normalized);
 }
 
 /** Escapes regex metacharacters so locale word forms can be embedded safely. */
@@ -636,7 +637,8 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
       if (isHalf && /anni|anno/.test(word)) return `con circa ${word} di esperienza`;
       return `con circa ${word} anni di esperienza`;
     case 'ru':
-      return `с опытом около ${word} лет`;
+      // Single written duration — never numeric hybrids like 6.5.
+      return `с общим опытом около ${word} лет`;
     case 'pt-BR':
       return `com cerca de ${word} anos de experiência`;
     case 'ar':

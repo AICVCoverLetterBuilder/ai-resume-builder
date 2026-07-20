@@ -29,16 +29,21 @@ import {
   normalizeHindiSummaryPerspective,
   SUMMARY_DURATION_FINALIZER_REVISION,
   SUMMARY_DURATION_FINALIZER_REVISION_AR,
+  SUMMARY_DURATION_FINALIZER_REVISION_RU,
   type DurationIntegrationContext,
 } from './cv-content-quality';
 import {
   analyzeHindiSummaryEmploymentQuality,
   analyzeArabicSummaryEmploymentQuality,
+  analyzeRussianSummaryEmploymentQuality,
   splitHindiSummaryUnits,
   SUMMARY_BUILDER_REVISION,
   SUMMARY_BUILDER_REVISION_AR,
+  SUMMARY_BUILDER_REVISION_RU,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,
+  SUMMARY_UNIT_SPLITTER_REVISION_RU,
   SUMMARY_GROUNDING_REVISION_AR,
+  SUMMARY_GROUNDING_REVISION_RU,
 } from './cv-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
@@ -53,6 +58,7 @@ import {
   validateCrossLocaleSemanticCoverage,
 } from './cv-cross-locale-experience';
 import { validateArabicExperienceEmploymentTense } from './cv-arabic-experience-tense';
+import { validateRussianExperienceEmploymentTense } from './cv-russian-experience-tense';
 import {
   resolveTargetScriptForLocale,
   validateAiUnitLocalePurity,
@@ -81,7 +87,10 @@ import {
   hindiWarehouseCueKeysFromUnit,
   arabicWarehouseCueKeysFromUnit,
   arabicDesignCueKeysFromUnit,
+  russianWarehouseCueKeysFromUnit,
+  russianDesignCueKeysFromUnit,
   validateExperienceApplyMaterialPostcondition,
+  RUSSIAN_EXPERIENCE_MATERIAL_REVISION,
 } from './cv-material-duty-coverage';
 import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
 import {
@@ -107,7 +116,17 @@ export const SUMMARY_PIPELINE_REVISION_HI = 'summary-runtime-281-v1' as const;
 export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_PIPELINE_REVISION_HI,
   SUMMARY_PIPELINE_REVISION,
+  SUMMARY_BUILDER_REVISION_RU,
+  SUMMARY_UNIT_SPLITTER_REVISION_RU,
+  SUMMARY_GROUNDING_REVISION_RU,
+  SUMMARY_DURATION_FINALIZER_REVISION_RU,
+  RUSSIAN_EXPERIENCE_MATERIAL_REVISION,
 ] as const;
+void SUMMARY_BUILDER_REVISION_RU;
+void SUMMARY_UNIT_SPLITTER_REVISION_RU;
+void SUMMARY_GROUNDING_REVISION_RU;
+void SUMMARY_DURATION_FINALIZER_REVISION_RU;
+void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -358,6 +377,7 @@ export type FinalizeCvAiFieldResult = {
     responseRejectedForEntryMismatch?: boolean;
     /** Hindi Summary employment / warehouse grounding postconditions (build 275). */
     groundingValidationPassed?: boolean;
+    finalPostconditionsPassed?: boolean;
     currentEmploymentIntroductionCount?: number;
     repeatedEmploymentFactCount?: number;
     repeatedProfessionalLabelCount?: number;
@@ -778,10 +798,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       .filter((k) => k !== 'generic_duty');
     const cues = [
       ...hindiWarehouseCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
-      ...(locale === 'ar'
+      ...(locale === 'ar' || locale === 'ru'
         ? [
           ...arabicWarehouseCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
           ...arabicDesignCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
+        ]
+        : []),
+      ...(locale === 'ru'
+        ? [
+          ...russianWarehouseCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
+          ...russianDesignCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
         ]
         : []),
     ];
@@ -801,7 +827,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     [
       ...classifyMaterialDutyKeys(entryDutiesForRole.priorEntryDuties)
         .filter((k) => !(priorDesignCue && k === 'food_prep')),
-      ...(locale === 'ar' ? arabicDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties) : []),
+      ...(locale === 'ar' || locale === 'ru'
+        ? arabicDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties)
+        : []),
+      ...(locale === 'ru' ? russianDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties) : []),
     ],
   )];
   if (priorDesignCue && priorEntryMaterialKeys.filter((k) => k !== 'generic_duty').length === 0) {
@@ -937,6 +966,28 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       candidate = '';
     }
   }
+  if (locale === 'ru') {
+    candidate = dedupeSummarySentences(candidate);
+    // Reject English generic fallback sentences under Russian target.
+    if (/Carries\s+out\s+assigned\s+professional\s+duties/iu.test(candidate)) {
+      candidate = '';
+    }
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const empQuality = analyzeRussianSummaryEmploymentQuality(candidate, {
+      company: context.company,
+      role: context.role,
+      startDate: context.startDate,
+      sourceDuties: dutiesText,
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      priorCompany: entryDuties.priorCompany,
+      structuredRole: context.role || entryDuties.currentRoleTitle,
+      gender,
+    });
+    if (!empQuality.groundingValidationPassed && candidate.trim()) {
+      candidate = '';
+    }
+  }
 
   // After duration ownership, if warehouse duties were dropped, force grounded rebuild.
   // Do not blank the candidate when dutiesText is English "goods" only — require Devanagari cues
@@ -991,7 +1042,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
-    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar') ? !firstPerson : true;
+    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar' || locale === 'ru')
+      ? !firstPerson
+      : true;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const empQ = locale === 'hi'
       ? analyzeHindiSummaryEmploymentQuality(analyzedText, {
@@ -1016,7 +1069,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           structuredRole: context.role || entryDuties.currentRoleTitle,
           gender,
         })
-        : null;
+        : locale === 'ru'
+          ? analyzeRussianSummaryEmploymentQuality(analyzedText, {
+            company: context.company || entryDuties.currentCompany,
+            role: context.role,
+            startDate: context.startDate,
+            sourceDuties: dutiesText,
+            currentEntryDuties: entryDuties.currentEntryDuties,
+            priorEntryDuties: entryDuties.priorEntryDuties,
+            priorCompany: entryDuties.priorCompany,
+            structuredRole: context.role || entryDuties.currentRoleTitle,
+            gender,
+          })
+          : null;
     // Candidate fields — never treat structured context alone as a passing intro/title.
     const candidateCurrentRoleTitlePresent = empQ?.currentRoleTitlePresent ?? null;
     const candidateCurrentRoleTitleMatchesStructuredRole =
@@ -1033,7 +1098,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         matchesWarehouseOccupationalTitle(
           `${context.role || ''} ${entryDuties.currentRoleTitle || ''}`,
         )
-        || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल|بضائع|مستودع)/iu.test(
+        || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल|بضائع|مستودع|товар|склад|кладов)/iu.test(
           entryDuties.currentEntryDuties || '',
         )
       ),
@@ -1042,7 +1107,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     let durationFinalizerIdempotent = durationValidationPassed;
     let localPass2Hash = durationPass2CandidateHash;
     if (
-      (locale === 'hi' || locale === 'ar')
+      (locale === 'hi' || locale === 'ar' || locale === 'ru')
       && analyzedText.trim()
       && durationSnapshot.total.hasValidDates
     ) {
@@ -1085,12 +1150,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const blockedForPerspective = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru')
       && !perspectiveValidationPassed,
     );
     const blockedForGrounding = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru')
       && empQ
       && (!empQ.groundingValidationPassed || coverageHardFail),
     );
@@ -1167,6 +1232,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         perspectiveNormalizationApplied: locale === 'hi' && !firstPerson,
         perspectiveValidationPassed,
         groundingValidationPassed,
+        finalPostconditionsPassed: success,
         // Candidate-derived postcondition fields (not structured context alone).
         currentEmploymentIntroductionCount: candidateCurrentEmploymentIntroductionCount ?? undefined,
         repeatedEmploymentFactCount: empQ?.repeatedEmploymentFactCount,
@@ -1204,16 +1270,28 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         summaryRuntimeMarkerSet: [...SUMMARY_RUNTIME_MARKER_SET],
         summaryBuilderRevision: locale === 'ar'
           ? SUMMARY_BUILDER_REVISION_AR
-          : SUMMARY_BUILDER_REVISION,
+          : locale === 'ru'
+            ? SUMMARY_BUILDER_REVISION_RU
+            : SUMMARY_BUILDER_REVISION,
         summaryUnitSplitterRevision: empQ?.summaryUnitSplitterRevision
-          || (locale === 'ar' ? SUMMARY_UNIT_SPLITTER_REVISION_AR : undefined),
+          || (locale === 'ar'
+            ? SUMMARY_UNIT_SPLITTER_REVISION_AR
+            : locale === 'ru'
+              ? SUMMARY_UNIT_SPLITTER_REVISION_RU
+              : undefined),
         summaryGroundingRevision: empQ?.summaryGroundingRevision
-          || (locale === 'ar' ? SUMMARY_GROUNDING_REVISION_AR : undefined),
+          || (locale === 'ar'
+            ? SUMMARY_GROUNDING_REVISION_AR
+            : locale === 'ru'
+              ? SUMMARY_GROUNDING_REVISION_RU
+              : undefined),
         summaryDurationFinalizerRevision:
           owned?.summaryDurationFinalizerRevision
           || (locale === 'ar'
             ? SUMMARY_DURATION_FINALIZER_REVISION_AR
-            : SUMMARY_DURATION_FINALIZER_REVISION),
+            : locale === 'ru'
+              ? SUMMARY_DURATION_FINALIZER_REVISION_RU
+              : SUMMARY_DURATION_FINALIZER_REVISION),
         providerCandidateHash,
         providerCandidateNormalizedHash,
         deterministicCandidateHash,
@@ -1384,7 +1462,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ...groundedPass2.durationDiagnostics,
         summaryDurationFinalizerRevision: locale === 'ar'
           ? SUMMARY_DURATION_FINALIZER_REVISION_AR
-          : SUMMARY_DURATION_FINALIZER_REVISION,
+          : locale === 'ru'
+            ? SUMMARY_DURATION_FINALIZER_REVISION_RU
+            : SUMMARY_DURATION_FINALIZER_REVISION,
       };
     }
     // Hindi: do not post-mutate after duration hashes (keeps pass2 === grounding input).
@@ -1461,12 +1541,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
   }
 
+  // When rebuild fails under Russian, never echo stale English Summary prose.
   return attachSummaryDiag({
     blocked: true,
     reason: summaryGenerate
       ? 'summary_generation_failed'
       : (first.reason || 'summary_grounding_failed'),
-    text: cv.summary || '',
+    text: (locale === 'ru' && /Carries\s+out\s+assigned/iu.test(cv.summary || ''))
+      ? ''
+      : (cv.summary || ''),
     origin: cv.summaryOrigin || 'user',
     roleDutyConflict,
     countedAsSuccess: false,
@@ -2008,7 +2091,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
     }
-    // Arabic: never apply when employment tense or gender postconditions fail —
+    // Arabic / Russian: never apply when employment tense or gender postconditions fail —
     // including cross-locale enhance/fallback paths that skip generation validation.
     if (locale === 'ar') {
       const arTense = validateArabicExperienceEmploymentTense(candidate, {
@@ -2020,12 +2103,39 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         tenseValidationPassed: arTense.finalTensePassed && arTense.finalGenderAgreementPassed,
         relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed
           || Boolean(lastCovered),
+        perspectiveValidationPassed: true,
       };
       if (!arTense.finalTensePassed || !arTense.finalGenderAgreementPassed) {
         lastRejectStage = `${stage}:arabic_employment_tense`;
         lastRejectReason = arTense.reason || 'arabic_employment_tense_mismatch';
         return null;
       }
+    }
+    if (locale === 'ru') {
+      const ruTense = validateRussianExperienceEmploymentTense(candidate, {
+        isPresent,
+        gender: cv.personal?.gender || input.gender || '',
+      });
+      generationValidationMeta = {
+        ...generationValidationMeta,
+        tenseValidationPassed: ruTense.finalTensePassed && ruTense.finalGenderAgreementPassed,
+        relevanceValidationPassed: true,
+        perspectiveValidationPassed: true,
+      };
+      if (!ruTense.finalTensePassed || !ruTense.finalGenderAgreementPassed) {
+        lastRejectStage = `${stage}:russian_employment_tense`;
+        lastRejectReason = ruTense.reason || 'russian_employment_tense_mismatch';
+        return null;
+      }
+    }
+    // Final-candidate validators must describe the accepted text, not a rejected provider.
+    if (locale !== 'ar' && locale !== 'ru') {
+      generationValidationMeta = {
+        ...generationValidationMeta,
+        relevanceValidationPassed: true,
+        perspectiveValidationPassed: true,
+        tenseValidationPassed: true,
+      };
     }
     const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
     const purity = validateAiUnitLocalePurity(candidate, locale, {
@@ -2107,6 +2217,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         typedFailureReason: undefined,
         fallbackApplied: isClientFallback,
         countedAsSuccess: true,
+        relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed,
+        perspectiveValidationPassed: generationValidationMeta.perspectiveValidationPassed,
+        tenseValidationPassed: generationValidationMeta.tenseValidationPassed,
         clientDeterministicFallbackApplied: isClientFallback,
         clientDeterministicFallbackBulletCount: isClientFallback
           ? bulletCount

@@ -698,6 +698,8 @@ export function buildOccupationAwareSummaryFallback(options: {
   }
 
   return scrubOrphanDurationFragments(
-    `${options.position || 'Professional'}${duration ? ` ${duration}` : ''}. Carries out assigned professional duties with accuracy and professional communication.`,
+    locale === 'ru'
+      ? `${options.position || 'специалист'}${duration ? ` ${duration}` : ''}. Выполняет профессиональные задачи с точностью и деловой коммуникацией.`
+      : `${options.position || 'Professional'}${duration ? ` ${duration}` : ''}. Carries out assigned professional duties with accuracy and professional communication.`,
   );
 }

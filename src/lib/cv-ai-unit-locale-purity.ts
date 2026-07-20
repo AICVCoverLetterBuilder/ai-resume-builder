@@ -226,13 +226,19 @@ export function guessUnitLocale(text: string, targetLocale?: Locale): string | n
   }
   if (ARABIC.test(t)) return 'ar';
   if (CJK.test(t)) return 'ja';
-  // Cyrillic: prefer Serbian when SC morphology is present; otherwise Russian.
+  // Cyrillic: Serbian-specific letters win; otherwise Russian CV morphology /
+  // target-locale context. Never classify Russian bullets as Serbian merely
+  // because they share stems like координ/припрем/статус with Serbian.
   if (CYRILLIC.test(t)) {
-    if (
-      /(?:преглед|ажурир|координ|извешта|одељен|евиденц|пристигл|означав|непотпун|заједнич|статус|информац|сарађ|припрем|креир|искуств|годин)/iu.test(t)
-    ) {
-      return 'sr';
-    }
+    const hasSrLetters = /[јљњћђџЈЉЊЋЂЏ]/u.test(t);
+    const hasRuLetters = /[ёыэъщЁЫЭЪЩ]/u.test(t);
+    const hasRuCv =
+      /(?:проверя|обновл|поддержива|координир|согласов|созда[её]|адаптир|подготавли|подготов|поступающ|сопроводительн|складск|товар|документ|запис|файл|экран|визуальн|графическ|дизайн|работал|работала|выполнял|имеет\s+опыт|кладовщ|обеспечивая|размещен|перемещен|учёт|учет)/iu.test(t);
+    const hasSrDistinct =
+      /(?:преглед|ажурир|извешта|одељен|евиденц|пристигл|означав|непотпун|заједнич|сарађ)/iu.test(t);
+    if (hasSrLetters && !hasRuLetters && !hasRuCv) return 'sr';
+    if (hasRuLetters || hasRuCv || targetLocale === 'ru') return 'ru';
+    if (hasSrDistinct) return 'sr';
     return 'ru';
   }
   // Prefer SC diacritics / clear stems over short function words (which false-hit English).
@@ -306,6 +312,20 @@ function unitWrongLocale(text: string, target: Locale): boolean {
   if (target === 'en') {
     if (guessed === 'sr' || guessed === 'hr') return true;
     if (['hi', 'ar', 'ja', 'ru'].includes(guessed)) return true;
+    return false;
+  }
+
+  if (target === 'ru') {
+    // Accept Russian; reject clear Serbian Cyrillic letters / Latin SC prose.
+    if (guessed === 'ru') return false;
+    if (guessed === 'sr' || guessed === 'hr') {
+      if (/[јљњћђџЈЉЊЋЂЏ]/u.test(text)) return true;
+      if (SC_DIACRITIC.test(text) && !CYRILLIC.test(text)) return true;
+      // Soft SR guess from shared stems under Russian target is not a reject.
+      return false;
+    }
+    if (guessed === 'en' && EN_CLAUSE_RE.test(stripped) && !CYRILLIC.test(text)) return true;
+    if (['hi', 'ar', 'ja'].includes(guessed)) return true;
     return false;
   }
 
