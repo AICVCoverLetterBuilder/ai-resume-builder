@@ -97,6 +97,7 @@ const SUMMARY_SPLITTER_REVISION_RU = 'russian-three-sentence-slots-v1';
 const SUMMARY_GROUNDING_REVISION_RU = 'entry-owned-russian-grounding-v1';
 const SUMMARY_DURATION_REVISION_RU = 'russian-duration-idempotent-v1';
 const SUMMARY_BUILDER_REVISION_RU = 'entry-owned-russian-rebuild-v1';
+const RUSSIAN_DESIGN_FAMILIES = 'russian-design-families-286-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -114,6 +115,7 @@ for (const marker of [
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_DURATION_REVISION_RU,
   SUMMARY_BUILDER_REVISION_RU,
+  RUSSIAN_DESIGN_FAMILIES,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

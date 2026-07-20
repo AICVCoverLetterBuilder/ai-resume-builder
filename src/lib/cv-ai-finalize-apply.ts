@@ -91,6 +91,10 @@ import {
   russianDesignCueKeysFromUnit,
   validateExperienceApplyMaterialPostcondition,
   RUSSIAN_EXPERIENCE_MATERIAL_REVISION,
+  collectDesignMaterialKeysFromDescription,
+  validateRussianDesignFactFamilies,
+  sourceRequiresRussianDesignFamilies,
+  RUSSIAN_DESIGN_FAMILIES_REVISION,
 } from './cv-material-duty-coverage';
 import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
 import {
@@ -121,12 +125,14 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_DURATION_FINALIZER_REVISION_RU,
   RUSSIAN_EXPERIENCE_MATERIAL_REVISION,
+  RUSSIAN_DESIGN_FAMILIES_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
 void SUMMARY_GROUNDING_REVISION_RU;
 void SUMMARY_DURATION_FINALIZER_REVISION_RU;
 void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
+void RUSSIAN_DESIGN_FAMILIES_REVISION;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -508,6 +514,7 @@ function currentAndPriorDutiesFromCv(cv: CVData, locale?: Locale): {
   priorEntryDuties: string;
   currentEntryId: string | null;
   currentRoleTitle: string;
+  priorRoleTitle: string;
   priorCompany: string;
   currentCompany: string;
 } {
@@ -530,6 +537,7 @@ function currentAndPriorDutiesFromCv(cv: CVData, locale?: Locale): {
     priorEntryDuties: prior ? liveDuties(prior) : '',
     currentEntryId: current?.id || null,
     currentRoleTitle: (current?.position || cv.personal?.jobTitle || '').trim(),
+    priorRoleTitle: (prior?.position || '').trim(),
     priorCompany: (prior?.company || '').trim(),
     currentCompany: (current?.company || '').trim(),
   };
@@ -821,21 +829,40 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : null,
   );
   // Design prior duties often contain Hindi तैयार which falsely hits food_prep.
-  const priorDesignCue = /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटل|दृश्य|ब्रांड|graphic|design|print|digital|visual|مواد\s*بصرية|عناصر\s*رسومية|جرافيك|تصميم)/iu
-    .test(entryDutiesForRole.priorEntryDuties || '');
-  const priorEntryMaterialKeys: string[] = [...new Set(
-    [
-      ...classifyMaterialDutyKeys(entryDutiesForRole.priorEntryDuties)
+  const priorDesignCue = /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|दृश्य|ब्रांड|graphic|design|print|digital|visual|مواد\s*بصرية|عناصر\s*رسومية|جرافيك|تصميم|визуальн|графическ|дизайн)/iu
+    .test(`${entryDutiesForRole.priorEntryDuties || ''} ${entryDutiesForRole.priorRoleTitle || ''}`);
+  const priorEntryMaterialKeys: string[] = (() => {
+    const merged = [
+      ...materialDutyKeysFromDescription(entryDutiesForRole.priorEntryDuties)
+        .filter((k) => k !== 'generic_duty' && !(priorDesignCue && k === 'food_prep')),
+      ...collectDesignMaterialKeysFromDescription(entryDutiesForRole.priorEntryDuties)
         .filter((k) => !(priorDesignCue && k === 'food_prep')),
-      ...(locale === 'ar' || locale === 'ru'
-        ? arabicDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties)
-        : []),
-      ...(locale === 'ru' ? russianDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties) : []),
-    ],
-  )];
-  if (priorDesignCue && priorEntryMaterialKeys.filter((k) => k !== 'generic_duty').length === 0) {
-    priorEntryMaterialKeys.push('design_visual_identity');
-  }
+    ];
+    const unique = [...new Set(merged)];
+    // Russian Summary design-prior template grounds all three fact families when
+    // the prior entry is design-owned — report those keys for diagnostics.
+    const priorLooksDesignForRu = locale === 'ru' && (
+      priorDesignCue
+      || /dizajn|design|графическ|дизайнер|visual|визуальн|مواد\s*بصرية|عناصر\s*رسومية/i
+        .test(`${entryDutiesForRole.priorRoleTitle || ''} ${entryDutiesForRole.priorEntryDuties || ''}`)
+    );
+    if (priorLooksDesignForRu) {
+      for (const k of [
+        'design_visual_materials',
+        'design_graphic_elements',
+        'design_review_adapt',
+        'design_project_requirements',
+        'design_files_formats',
+        'design_different_screens',
+      ]) {
+        if (!unique.includes(k)) unique.push(k);
+      }
+    }
+    if (priorDesignCue && unique.filter((k) => k !== 'generic_duty').length === 0) {
+      unique.push('design_visual_identity');
+    }
+    return unique.length ? unique : ['generic_duty'];
+  })();
   // Empty Summary generation: seed from grounded Experience facts before duration
   // ownership, so injectHindiDurationWithOpening does not emit a duration-only shell.
   if (!candidate.trim() && !liveSummary.trim()) {
@@ -2016,12 +2043,38 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     if (sourceForCoverage && crossLocaleOp && (crossLocaleAccept || stage === 'provider')) {
       // Locale purity already validated above. Prefer semantic frames across
       // languages; material keys are a secondary signal when present.
+      // Russian design: never accept on soft frame matching alone — require
+      // distinct material families (creation / review-adapt / final files).
       const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
-      const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate);
+      const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate, {
+        targetLocale: locale,
+      });
+      const needsRuDesignFamilies = locale === 'ru'
+        && sourceRequiresRussianDesignFamilies(sourceForCoverage);
+      const ruDesign = needsRuDesignFamilies
+        ? validateRussianDesignFactFamilies(candidate)
+        : null;
       lastRequired = semantic.requiredCount || sourceFactCount;
       lastCovered = semantic.coveredCount;
-      if (semantic.ok) {
-        // ok
+      if (needsRuDesignFamilies && ruDesign && !ruDesign.ok) {
+        lastRejectStage = `${stage}:russian_design_families`;
+        lastRejectReason = ruDesign.reason || 'russian_design_family_coverage_incomplete';
+        lastRequired = Math.max(3, post.required?.length || sourceFactCount);
+        lastCovered = ruDesign.coveredFamilies.length;
+        return null;
+      }
+      if (needsRuDesignFamilies && !post.ok) {
+        lastRejectStage = `${stage}:material_postcondition`;
+        lastRejectReason = post.reason || 'experience_material_fact_coverage_incomplete';
+        lastRequired = post.required?.length ?? sourceFactCount;
+        lastCovered = post.covered?.length ?? 0;
+        return null;
+      }
+      if (semantic.ok && (!needsRuDesignFamilies || (post.ok && ruDesign?.ok))) {
+        if (post.ok && (post.covered?.length || 0) > 0) {
+          lastRequired = post.required?.length ?? lastRequired;
+          lastCovered = post.covered?.length ?? lastCovered;
+        }
       } else if (post.ok && (post.covered?.length || 0) >= Math.min(3, post.required?.length || sourceFactCount || 3)) {
         lastRequired = post.required?.length ?? sourceFactCount;
         lastCovered = post.covered?.length ?? 0;
@@ -2037,7 +2090,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
     } else if (sourceForCoverage && !crossLocaleAccept) {
-      const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate);
+      const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate, {
+        targetLocale: locale,
+      });
       if (!post.ok) {
         lastRejectStage = `${stage}:material_postcondition`;
         lastRejectReason = post.reason || 'experience_material_fact_coverage_incomplete';
@@ -2668,6 +2723,49 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           });
         }
       }
+      // Russian design family rebuild when frame-based or provider text failed.
+      if (locale === 'ru' && sourceRequiresRussianDesignFamilies(sourceForCoverage)) {
+        const designFamilyFallback = normalizeLocaleText(
+          buildJobContextGenerationFallback({
+            locale,
+            gender,
+            position: exp?.position || cv.personal?.jobTitle || 'design',
+            industry: 'design',
+            isPresent,
+          }),
+          locale,
+        );
+        if (designFamilyFallback.trim()) {
+          const acceptedDesign = tryAccept(
+            designFamilyFallback,
+            'deterministic_fallback',
+            'cross_locale_translation_fallback',
+          );
+          if (acceptedDesign) {
+            perspectiveMeta = {
+              ...perspectiveMeta,
+              perspectiveNormalizationAttempted: true,
+              perspectiveNormalizationApplied: true,
+              perspectiveValidationPassed: true,
+              meaningfulChangeDetected: true,
+              noOpRejected: false,
+              finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
+            };
+            return attachPerspectiveDiag({
+              ...acceptedDesign,
+              diagnostics: {
+                ...acceptedDesign.diagnostics,
+                crossLocaleOperation: true,
+                translationFallbackAttempted: true,
+                translationFallbackApplied: true,
+                clientDeterministicFallbackAttempted: true,
+                clientDeterministicFallbackApplied: true,
+                clientDeterministicFallbackReason: 'russian_design_family_rebuild',
+              },
+            });
+          }
+        }
+      }
       // Preserve the first blocking reason from tryAccept (e.g. semantic coverage);
       // only invent locale_mismatch when tryAccept never ran or left no reason.
       if (!lastRejectReason) {
@@ -2827,6 +2925,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ? validateExperienceApplyMaterialPostcondition(
       sourceForCoverage,
       candidate || grounded || '',
+      { targetLocale: locale },
     )
     : null;
   if (coverageFail && !coverageFail.ok) {

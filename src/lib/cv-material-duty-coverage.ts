@@ -209,14 +209,15 @@ const DUTY_RULES: DutyRule[] = [
     source:
       /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة\s*ورقمية|print\s+and\s+digital|визуальн[а-яёА-ЯЁ]*\s+материал|графическ[а-яёА-ЯЁ]*\s+элемент)/iu,
     localized:
-      /(?:visual\s+materials?|graphic\s+elements?|vizueln|grafi[cč]k|दृश्य|ग्राफिक|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة|رقمية|визуальн|графическ|дизайн-?материал)/iu,
+      /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+элемент|дизайн-?материал)/iu,
   },
   {
     key: 'design_review_adapt',
     source:
       /(?:review\w*.{0,40}(?:design|dizajn)|adapt\w*.{0,40}(?:design|dizajn)|आवश्यकताओं.{0,40}डिज़ाइन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|requirements?.{0,40}design|проверя\w*.{0,40}адаптир|адаптир\w*.{0,40}(?:дизайн|требовани)|требовани\w*\s+проекта)/iu,
+    // Never treat bare "проверя/review" as adaptation — require adapt / project-requirements evidence.
     localized:
-      /(?:review|adapt|pregled|prilago[dđ]|समीक्षा|अनुकूलन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|проверя|адаптир|требовани)/iu,
+      /(?:adapt\w*.{0,40}(?:design|dizajn|материал)|prilago[dđ]|अनुकूलन|تكيّف|كيّفت?|адаптир\w*.{0,40}(?:дизайн|требовани|материал)|(?:проверя\w*|review\w*|pregled\w*|समीक्षा|مراجعة|راجع(?:ت)?).{0,48}адаптир|(?:требовани\w*\s+проекта|project\s+requirements?|متطلبات\s*المشروع|आवश्यकताओं))/iu,
   },
   {
     key: 'design_brand_identity',
@@ -229,14 +230,18 @@ const DUTY_RULES: DutyRule[] = [
     key: 'design_files_formats',
     source:
       /(?:design\s+files?|final\s+design|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|formats?\s+for\s+different|дизайн-?файл|финальн\w*\s+дизайн|формат\w*.{0,40}экран|подготавлива\w*.{0,40}файл)/iu,
+    // Bare "экран" / generic "материалы" must not satisfy final files/formats.
     localized:
-      /(?:design\s+files?|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ|дизайн-?файл|файл(?:ы|ов)?.{0,24}дизайн|формат.{0,24}экран|экран)/iu,
+      /(?:design\s+files?|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|дизайн-?файл|финальн[а-яё]*\s+дизайн-?файл|файл[а-яё]*.{0,32}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,32}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат)/iu,
   },
 ];
 
 /** Runtime marker — Russian Experience material model (must remain in packaged assets). */
 export const RUSSIAN_EXPERIENCE_MATERIAL_REVISION = 'russian-experience-material-v1' as const;
 void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
+/** Runtime marker — Russian design three-family coverage (build 286). */
+export const RUSSIAN_DESIGN_FAMILIES_REVISION = 'russian-design-families-286-v1' as const;
+void RUSSIAN_DESIGN_FAMILIES_REVISION;
 /** Fine-grained Hindi warehouse cues for per-unit diagnostics (aliases of the 3 keys). */
 export type WarehouseMaterialCueKey =
   | 'warehouse_inbound_check'
@@ -333,16 +338,22 @@ export function russianWarehouseCueKeysFromUnit(unit: string): WarehouseMaterial
 
 export type DesignMaterialCueKey =
   | 'design_visual_materials'
+  | 'design_graphic_elements'
   | 'design_review_adapt'
+  | 'design_project_requirements'
   | 'design_brand_identity'
   | 'design_files_formats'
+  | 'design_different_screens'
   | 'design_team_collaboration';
 
 const ARABIC_DESIGN_CUE_RULES: Array<{ key: DesignMaterialCueKey; re: RegExp }> = [
   { key: 'design_visual_materials', re: /مواد\s*بصرية|عناصر\s*رسومية|مواد\s*مطبوعة|رقمية/u },
+  { key: 'design_graphic_elements', re: /عناصر\s*رسومية/u },
   { key: 'design_review_adapt', re: /مراجعة|تكيّف|راجعت|كيّفت|متطلبات\s*المشروع/u },
+  { key: 'design_project_requirements', re: /متطلبات\s*المشروع/u },
   { key: 'design_brand_identity', re: /الهوية\s*البصرية|إرشادات\s*العلامة/u },
   { key: 'design_files_formats', re: /ملفات\s*التصميم|صيغ\s*التصميم/u },
+  { key: 'design_different_screens', re: /شاشات\s*مختلفة|لشاشات/u },
   { key: 'design_team_collaboration', re: /(?:تعاون|تنسيق|نسّقت).{0,40}(?:فريق|زملاء)|(?:فريق|زملاء).{0,40}(?:تعاون|تنسيق)/u },
 ];
 
@@ -359,15 +370,27 @@ export function arabicDesignCueKeysFromUnit(unit: string): DesignMaterialCueKey[
 const RUSSIAN_DESIGN_CUE_RULES: Array<{ key: DesignMaterialCueKey; re: RegExp }> = [
   {
     key: 'design_visual_materials',
-    re: /визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+элемент|дизайн-?материал/iu,
+    re: /визуальн[а-яё]*\s+материал|дизайн-?материал/iu,
+  },
+  {
+    key: 'design_graphic_elements',
+    re: /графическ[а-яё]*\s+элемент/iu,
   },
   {
     key: 'design_review_adapt',
-    re: /(?:проверя[а-яё]*.{0,40}адаптир|адаптир[а-яё]*.{0,40}(?:дизайн|требовани)|требовани[а-яё]*\s+проекта)/iu,
+    re: /(?:проверя[а-яё]*.{0,40}адаптир|адаптир[а-яё]*.{0,40}(?:дизайн|требовани|материал)|требовани[а-яё]*\s+проекта)/iu,
+  },
+  {
+    key: 'design_project_requirements',
+    re: /требовани[а-яё]*\s+проекта|в\s+соответствии\s+с\s+требованиями/iu,
   },
   {
     key: 'design_files_formats',
-    re: /(?:финальн[а-яё]*\s+)?дизайн-?файл|файл[а-яё]*.{0,40}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,24}формат|подготавлива[а-яё]*.{0,40}файл/iu,
+    re: /(?:финальн[а-яё]*\s+)?дизайн-?файл|файл[а-яё]*.{0,40}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,24}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат/iu,
+  },
+  {
+    key: 'design_different_screens',
+    re: /(?:разн[а-яё]*|различн[а-яё]*)\s+экран|экран[а-яё]*.{0,24}формат|формат[а-яё]*.{0,40}экран/iu,
   },
   {
     key: 'design_brand_identity',
@@ -375,15 +398,224 @@ const RUSSIAN_DESIGN_CUE_RULES: Array<{ key: DesignMaterialCueKey; re: RegExp }>
   },
 ];
 
+/** Generic Russian design prose that must not satisfy authoritative design families. */
+const RUSSIAN_GENERIC_DESIGN_DUTY_RE =
+  /повседневн[а-яё]*\s+дизайн|повседневн[а-яё]*\s+обязан|выполнял[а-яё]*\s+дизайн-?задач|дизайн-?задач|сопутствующ[а-яё]*\s+материал|точност[а-яё]*.{0,24}сопутствующ|обеспечивал[а-яё]*\s+точност[а-яё]*.{0,24}материал/iu;
+
+const RUSSIAN_DESIGN_CREATION_RE =
+  /визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+элемент|цифров[а-яё]*\s+продукт|платформ/iu;
+
+const RUSSIAN_DESIGN_REVIEW_ADAPT_RE =
+  /(?:проверя[а-яё]*.{0,40}адаптир|адаптир[а-яё]*.{0,48}(?:дизайн|требовани|материал)|требовани[а-яё]*\s+проекта|в\s+соответствии\s+с\s+требованиями)/iu;
+
+const RUSSIAN_DESIGN_FINAL_DELIVERY_RE =
+  /(?:финальн[а-яё]*\s+)?дизайн-?файл|файл[а-яё]*.{0,40}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,32}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат/iu;
+
+const RUSSIAN_VISUAL_MATERIAL_CORE_RE =
+  /визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+(?:элемент|материал)|дизайн-?материал/iu;
+
 export function russianDesignCueKeysFromUnit(unit: string): DesignMaterialCueKey[] {
   void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
   const t = (unit || '').normalize('NFKC');
   if (!t.trim()) return [];
+  if (isRussianGenericDesignDutyUnit(t) && !RUSSIAN_DESIGN_CREATION_RE.test(t)
+    && !RUSSIAN_DESIGN_REVIEW_ADAPT_RE.test(t)
+    && !RUSSIAN_DESIGN_FINAL_DELIVERY_RE.test(t)) {
+    return [];
+  }
   const out: DesignMaterialCueKey[] = [];
   for (const rule of RUSSIAN_DESIGN_CUE_RULES) {
     if (rule.re.test(t)) out.push(rule.key);
   }
   return out;
+}
+
+export function isRussianGenericDesignDutyUnit(unit: string): boolean {
+  return RUSSIAN_GENERIC_DESIGN_DUTY_RE.test((unit || '').normalize('NFKC'));
+}
+
+export type RussianDesignFactFamily =
+  | 'creation'
+  | 'review_adaptation'
+  | 'final_delivery_formats';
+
+export type RussianDesignFamilyCoverage = {
+  ok: boolean;
+  creationCovered: boolean;
+  reviewAdaptationCovered: boolean;
+  finalDeliveryCovered: boolean;
+  coveredFamilies: RussianDesignFactFamily[];
+  missingFamilies: RussianDesignFactFamily[];
+  genericDutyUnitCount: number;
+  genericOnlyMaterialCoverageCount: number;
+  semanticVisualMaterialDuplicateCount: number;
+  reason?:
+    | 'russian_design_family_coverage_incomplete'
+    | 'russian_design_generic_duty'
+    | 'russian_design_semantic_duplicate';
+};
+
+/**
+ * Distinct Russian design fact families for Experience apply.
+ * Generic daily-design prose contributes zero family coverage.
+ */
+export function validateRussianDesignFactFamilies(
+  candidateDescription: string,
+): RussianDesignFamilyCoverage {
+  void RUSSIAN_DESIGN_FAMILIES_REVISION;
+  const bullets = splitExperienceBullets(candidateDescription || '')
+    .map((b) => b.trim())
+    .filter(Boolean);
+  let creationCovered = false;
+  let reviewAdaptationCovered = false;
+  let finalDeliveryCovered = false;
+  let genericDutyUnitCount = 0;
+  let genericOnlyMaterialCoverageCount = 0;
+  let visualCoreBulletCount = 0;
+
+  for (const bullet of bullets) {
+    const generic = isRussianGenericDesignDutyUnit(bullet);
+    if (generic) {
+      genericDutyUnitCount += 1;
+      // Generic-only units cover zero authoritative families.
+      if (
+        !RUSSIAN_DESIGN_REVIEW_ADAPT_RE.test(bullet)
+        && !RUSSIAN_DESIGN_FINAL_DELIVERY_RE.test(bullet)
+        && !(
+          /визуальн[а-яё]*\s+материал/iu.test(bullet)
+          && /графическ[а-яё]*\s+элемент/iu.test(bullet)
+        )
+      ) {
+        genericOnlyMaterialCoverageCount += 1;
+      }
+    }
+
+    const creationHit = !generic
+      && /визуальн[а-яё]*\s+материал/iu.test(bullet)
+      && /графическ[а-яё]*\s+элемент/iu.test(bullet);
+    if (creationHit) creationCovered = true;
+
+    if (!generic && RUSSIAN_DESIGN_REVIEW_ADAPT_RE.test(bullet)) {
+      reviewAdaptationCovered = true;
+    }
+    if (!generic && RUSSIAN_DESIGN_FINAL_DELIVERY_RE.test(bullet)) {
+      finalDeliveryCovered = true;
+    }
+
+    if (RUSSIAN_VISUAL_MATERIAL_CORE_RE.test(bullet)) {
+      visualCoreBulletCount += 1;
+    }
+  }
+
+  // Semantic duplication: two+ bullets centered on visual materials without
+  // each contributing a distinct non-creation family.
+  let semanticVisualMaterialDuplicateCount = 0;
+  const visualOnlyBullets = bullets.filter((b) => {
+    if (!RUSSIAN_VISUAL_MATERIAL_CORE_RE.test(b)) return false;
+    const hasAdapt = RUSSIAN_DESIGN_REVIEW_ADAPT_RE.test(b);
+    const hasFinal = RUSSIAN_DESIGN_FINAL_DELIVERY_RE.test(b);
+    return !hasAdapt && !hasFinal;
+  });
+  if (visualOnlyBullets.length >= 2) {
+    semanticVisualMaterialDuplicateCount = visualOnlyBullets.length - 1;
+  } else if (visualCoreBulletCount >= 2 && !reviewAdaptationCovered && !finalDeliveryCovered) {
+    semanticVisualMaterialDuplicateCount = visualCoreBulletCount - 1;
+  }
+
+  const coveredFamilies: RussianDesignFactFamily[] = [];
+  if (creationCovered) coveredFamilies.push('creation');
+  if (reviewAdaptationCovered) coveredFamilies.push('review_adaptation');
+  if (finalDeliveryCovered) coveredFamilies.push('final_delivery_formats');
+  const allFamilies: RussianDesignFactFamily[] = [
+    'creation',
+    'review_adaptation',
+    'final_delivery_formats',
+  ];
+  const missingFamilies = allFamilies.filter((f) => !coveredFamilies.includes(f));
+
+  if (genericDutyUnitCount > 0 && coveredFamilies.length < 3) {
+    return {
+      ok: false,
+      creationCovered,
+      reviewAdaptationCovered,
+      finalDeliveryCovered,
+      coveredFamilies,
+      missingFamilies,
+      genericDutyUnitCount,
+      genericOnlyMaterialCoverageCount: Math.max(
+        genericOnlyMaterialCoverageCount,
+        genericDutyUnitCount,
+      ),
+      semanticVisualMaterialDuplicateCount,
+      reason: 'russian_design_generic_duty',
+    };
+  }
+  if (semanticVisualMaterialDuplicateCount > 0 && missingFamilies.length > 0) {
+    return {
+      ok: false,
+      creationCovered,
+      reviewAdaptationCovered,
+      finalDeliveryCovered,
+      coveredFamilies,
+      missingFamilies,
+      genericDutyUnitCount,
+      genericOnlyMaterialCoverageCount,
+      semanticVisualMaterialDuplicateCount,
+      reason: 'russian_design_semantic_duplicate',
+    };
+  }
+  if (missingFamilies.length > 0) {
+    return {
+      ok: false,
+      creationCovered,
+      reviewAdaptationCovered,
+      finalDeliveryCovered,
+      coveredFamilies,
+      missingFamilies,
+      genericDutyUnitCount,
+      genericOnlyMaterialCoverageCount,
+      semanticVisualMaterialDuplicateCount,
+      reason: 'russian_design_family_coverage_incomplete',
+    };
+  }
+  return {
+    ok: true,
+    creationCovered,
+    reviewAdaptationCovered,
+    finalDeliveryCovered,
+    coveredFamilies,
+    missingFamilies: [],
+    genericDutyUnitCount,
+    genericOnlyMaterialCoverageCount,
+    semanticVisualMaterialDuplicateCount: 0,
+  };
+}
+
+/** Per-unit design material keys for Summary/Experience diagnostics (no collapse). */
+export function collectDesignMaterialKeysFromDescription(description: string): string[] {
+  const units = splitExperienceBullets(description || '');
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  const push = (k: string) => {
+    if (!k || k === 'generic_duty' || seen.has(k)) return;
+    seen.add(k);
+    ordered.push(k);
+  };
+  for (const unit of units.length ? units : [description || '']) {
+    for (const k of classifyMaterialDutyKeys(unit)) push(k);
+    for (const k of arabicDesignCueKeysFromUnit(unit)) push(k);
+    for (const k of russianDesignCueKeysFromUnit(unit)) push(k);
+  }
+  return ordered;
+}
+
+export function sourceRequiresRussianDesignFamilies(sourceDescription: string): boolean {
+  const keys = materialDutyKeysFromDescription(sourceDescription)
+    .filter((k) => k.startsWith('design_'));
+  if (keys.length >= 2) return true;
+  const cues = collectDesignMaterialKeysFromDescription(sourceDescription)
+    .filter((k) => k.startsWith('design_'));
+  return cues.length >= 2;
 }
 
 const ARABIC_ACTION_CUES = /تتحقق|تحقّقت|تحدّث|حدّثت|تنسّق|نسّقت|تعدّ|أعدّت|تراجع|راجعت|تكيّف|كيّفت|تحافظ|حافظت|فحص|تسجيل|تحديث|ترتيب|إعداد|تجهيز/gu;
@@ -813,11 +1045,19 @@ export function applyEnglishEmploymentTense(line: string, isPresent: boolean): s
 
 export type ExperienceApplyCoverageCheck = {
   ok: boolean;
-  reason?: 'experience_material_fact_coverage_incomplete' | 'exact_duplicate_bullets' | 'near_duplicate_bullets' | 'unsupported_generated_duty';
+  reason?:
+    | 'experience_material_fact_coverage_incomplete'
+    | 'exact_duplicate_bullets'
+    | 'near_duplicate_bullets'
+    | 'unsupported_generated_duty'
+    | 'russian_design_family_coverage_incomplete'
+    | 'russian_design_generic_duty'
+    | 'russian_design_semantic_duplicate';
   required: MaterialDutyKey[];
   covered: MaterialDutyKey[];
   distinctSemanticBulletCount: number;
   finalBulletCount: number;
+  russianDesignFamilies?: RussianDesignFamilyCoverage;
 };
 
 /**
@@ -829,6 +1069,7 @@ export type ExperienceApplyCoverageCheck = {
 export function validateExperienceApplyMaterialPostcondition(
   sourceDescription: string,
   candidateDescription: string,
+  options?: { targetLocale?: string | null },
 ): ExperienceApplyCoverageCheck {
   const sourceKeys = materialDutyKeysFromDescription(sourceDescription)
     .filter((k) => k !== 'generic_duty');
@@ -882,6 +1123,33 @@ export function validateExperienceApplyMaterialPostcondition(
       finalBulletCount,
     };
   }
+
+  const targetLocale = options?.targetLocale || null;
+  const needsRuDesign = (targetLocale === 'ru' || /[а-яё]/iu.test(candidateDescription))
+    && sourceRequiresRussianDesignFamilies(sourceDescription);
+  if (needsRuDesign) {
+    const families = validateRussianDesignFactFamilies(candidateDescription);
+    if (!families.ok) {
+      return {
+        ok: false,
+        reason: families.reason || 'russian_design_family_coverage_incomplete',
+        required: sourceKeys,
+        covered,
+        distinctSemanticBulletCount: dup.distinctCount,
+        finalBulletCount,
+        russianDesignFamilies: families,
+      };
+    }
+    return {
+      ok: true,
+      required: sourceKeys,
+      covered,
+      distinctSemanticBulletCount: dup.distinctCount,
+      finalBulletCount,
+      russianDesignFamilies: families,
+    };
+  }
+
   return {
     ok: true,
     required: sourceKeys,
