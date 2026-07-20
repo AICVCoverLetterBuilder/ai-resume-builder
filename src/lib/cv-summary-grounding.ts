@@ -13,7 +13,7 @@ import {
   yearWordForLocale,
   type ExperienceDuration,
 } from './cv-experience-duration';
-import { classifyMaterialDutyKeys, validateMaterialDutyCoverage } from './cv-material-duty-coverage';
+import { classifyMaterialDutyKeys, validateMaterialDutyCoverage, hindiWarehouseCueKeysFromUnit } from './cv-material-duty-coverage';
 import {
   localizeBaker,
   resolveOccupationalTitleForSummary,
@@ -33,9 +33,9 @@ import { fingerprintText } from './cv-export-diagnostics';
 export const SUMMARY_MAX_WORDS = 90;
 
 /** Runtime revision — returned by the splitter/grounding/builder that executed. */
-export const SUMMARY_UNIT_SPLITTER_REVISION = 'hindi-sentence-slot-split-v2' as const;
-export const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v2' as const;
-export const SUMMARY_BUILDER_REVISION = 'entry-owned-candidate-rebuild-v2' as const;
+export const SUMMARY_UNIT_SPLITTER_REVISION = 'hindi-three-sentence-slots-v3' as const;
+export const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v3' as const;
+export const SUMMARY_BUILDER_REVISION = 'live-hindi-material-rebuild-v3' as const;
 
 /** Unsupported summary inventions (always reject — hygiene ≠ health/quality claims). */
 const UNSUPPORTED_SUMMARY_CLAIM_PATTERNS: Array<{ re: RegExp; label: string }> = [
@@ -1292,8 +1292,11 @@ export function buildConciseGroundedSummary(
           return keys.map((k) => warehouseSummaryFragment(k, locale)).filter(Boolean);
         }),
     )];
+    const cueKeyUnion = [...new Set(
+      dutyFacts.flatMap((f) => hindiWarehouseCueKeysFromUnit(f.sourceText || f.value)),
+    )];
     // Never omit the warehouse title when current-entry warehouse facts exist.
-    if (roleIsGeneric && whFrags.length >= 1) {
+    if (roleIsGeneric && (whFrags.length >= 1 || cueKeyUnion.length >= 1)) {
       roleIsGeneric = false;
     }
     const rolePart = roleIsGeneric
@@ -1326,7 +1329,16 @@ export function buildConciseGroundedSummary(
       : `${employmentHead}।`;
     // Prefer warehouse frames when the current entry owns them; otherwise use
     // current-entry fragments only (already entry-scoped — never prior design/warehouse).
-    const seedFrags = whFrags.length >= 1 ? whFrags : uniqueFragments;
+    // Never emit a generic current-duty sentence when only generic_duty was detected.
+    const onlyGenericCurrent = dutyFacts.length > 0
+      && dutyFacts.every((f) => {
+        const keys = classifyMaterialDutyKeys(f.sourceText || f.value);
+        return keys.length === 1 && keys[0] === 'generic_duty';
+      })
+      && cueKeyUnion.length === 0;
+    const seedFrags = whFrags.length >= 1
+      ? whFrags
+      : (onlyGenericCurrent ? [] : uniqueFragments);
     const nominalFrags = seedFrags
       .map((f) => f
         // Strip trailing finite Hindi verbs so we can safely append `का अनुभव`.
@@ -1341,6 +1353,9 @@ export function buildConciseGroundedSummary(
       dutySentence = `${nominalFrags[0]} तथा ${nominalFrags[1]} का अनुभव।`;
     } else if (nominalFrags.length === 1) {
       dutySentence = `${nominalFrags[0]} का अनुभव।`;
+    } else if (onlyGenericCurrent) {
+      // Fail closed — do not invent a generic duty clause or fall into legacy flatten.
+      return '';
     }
     // Prior completed role — domain-specific clause from the prior entry only.
     const priorRole = typeof priorIndex === 'number'

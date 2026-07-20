@@ -1494,14 +1494,27 @@ export function deterministicLocalizedSummaryFromCanonical(
     || factSet.facts.find((f) => f.type === 'role')?.value
     || '';
   const profileTitle = factSet.facts.find((f) => f.type === 'job_title')?.value || '';
+  // Hindi: never flatten prior-entry bullets into the legacy shell (that produced
+  // six current_duty slots on build-280). Scope to Present/current index only.
+  const currentIndex = locale === 'hi'
+    ? (() => {
+      const dateFacts = factSet.facts.filter((f) => f.type === 'dates' && typeof f.experienceIndex === 'number');
+      const present = dateFacts.find((d) => /present|current|danas|сегодня|ปัจจุบัน/i.test(d.value || ''));
+      if (typeof present?.experienceIndex === 'number') return present.experienceIndex;
+      const roleFacts = factSet.facts.filter((f) => f.type === 'role' && typeof f.experienceIndex === 'number');
+      return typeof roleFacts[0]?.experienceIndex === 'number' ? roleFacts[0].experienceIndex : 0;
+    })()
+    : null;
   const sourceDuties = factSet.facts
-    .filter((f) => f.type === 'experience_bullet')
+    .filter((f) => f.type === 'experience_bullet'
+      && (currentIndex == null || f.experienceIndex === currentIndex))
     .map((f) => f.sourceText || f.value)
     .join('\n');
   const role = localizeRoleLabel(rawRole, locale, g, profileTitle, sourceDuties);
   const bullets = factSet.facts
-    .filter((f) => f.type === 'experience_bullet')
-    .slice(0, 5)
+    .filter((f) => f.type === 'experience_bullet'
+      && (currentIndex == null || f.experienceIndex === currentIndex))
+    .slice(0, 3)
     .map((f) => {
       const line = localizedBulletForFact(f, locale, gender, { useGenericCatchAll: true })
         .replace(/^[•\-\u2013\u2014\*\u2022\u25CF\u25E6]\s*/u, '')
@@ -1510,7 +1523,11 @@ export function deterministicLocalizedSummaryFromCanonical(
       return line.trim();
     });
   if (bullets.some((b) => !b.trim()) && !role) return '';
-  const duties = bullets.filter((b) => b.trim()).join(locale === 'ja' ? '。' : locale === 'hi' ? '। ' : '. ');
+  // Hindi: join with commas inside one duty sentence — never `। ` between bullets
+  // (that created N current_duty slots with no employment intro company/month).
+  const duties = locale === 'hi'
+    ? bullets.filter((b) => b.trim()).join(' तथा ')
+    : bullets.filter((b) => b.trim()).join(locale === 'ja' ? '。' : '. ');
   const shell = SUMMARY_SHELL[locale] || SUMMARY_SHELL.en;
   const durationPhrase = duration?.hasValidDates
     ? formatApproximateDurationPhrase(duration, locale)

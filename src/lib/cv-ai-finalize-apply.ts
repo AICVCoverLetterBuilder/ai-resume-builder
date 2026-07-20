@@ -71,6 +71,8 @@ import {
 import {
   classifyMaterialDutyKeys,
   materialDutyKeysFromDescription,
+  diagnoseCurrentSourceUnitMaterial,
+  hindiWarehouseCueKeysFromUnit,
   validateExperienceApplyMaterialPostcondition,
 } from './cv-material-duty-coverage';
 import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
@@ -89,7 +91,7 @@ import {
 } from './cv-role-title';
 
 /** Runtime revision for the production Summary finalize → apply orchestration. */
-export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-280-v1' as const;
+export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-281-v1' as const;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -398,6 +400,12 @@ export type FinalizeCvAiFieldResult = {
     deterministicPriorEntryIdHashes?: string[];
     currentEntryMaterialKeys?: string[];
     priorEntryMaterialKeys?: string[];
+    currentSourceUnitHashes?: string[];
+    currentSourceUnitMaterialKeys?: string[][];
+    currentSourceUnitActionKeys?: string[][];
+    currentSourceUnitObjectKeys?: string[][];
+    currentSourceUnitWarehouseCueCount?: number[];
+    currentSourceUnitFactOwnerEntryIdHash?: string | null;
     flattenedFactArrayUsed?: boolean;
     previousSummaryTextUsedByDeterministicFallback?: boolean;
     providerTextUsedByDeterministicFallback?: boolean;
@@ -458,7 +466,7 @@ function dutiesTextFromCv(cv: CVData, experienceId?: string): string {
   return scoped.map((e) => freezeExperienceAiDescription(e)).join('\n');
 }
 
-function currentAndPriorDutiesFromCv(cv: CVData): {
+function currentAndPriorDutiesFromCv(cv: CVData, locale?: Locale): {
   currentEntryDuties: string;
   priorEntryDuties: string;
   currentEntryId: string | null;
@@ -469,9 +477,20 @@ function currentAndPriorDutiesFromCv(cv: CVData): {
   const exps = cv.experience || [];
   const current = exps.find((e) => e.isPresent) || exps[0] || null;
   const prior = exps.find((e) => current && e.id !== current.id) || null;
+  const liveDuties = (exp: NonNullable<typeof current>) => {
+    if (locale === 'hi') {
+      const liveDisplay = (exp.description || '').trim();
+      const liveAi = freezeExperienceAiDescription(exp).trim();
+      return liveDisplay
+        || liveAi
+        || (exp.originalUserDescription || '').trim()
+        || (exp.canonicalDescription || '').trim();
+    }
+    return freezeExperienceAiDescription(exp);
+  };
   return {
-    currentEntryDuties: current ? freezeExperienceAiDescription(current) : '',
-    priorEntryDuties: prior ? freezeExperienceAiDescription(prior) : '',
+    currentEntryDuties: current ? liveDuties(current) : '',
+    priorEntryDuties: prior ? liveDuties(prior) : '',
     currentEntryId: current?.id || null,
     currentRoleTitle: (current?.position || cv.personal?.jobTitle || '').trim(),
     priorCompany: (prior?.company || '').trim(),
@@ -607,7 +626,7 @@ function summaryPasses(
     profileJobTitle: cv.personal?.jobTitle,
     experienceTitle: (cv.experience || []).find((e) => e.isPresent)?.position
       || (cv.experience || [])[0]?.position,
-    dutiesText: currentAndPriorDutiesFromCv(cv).currentEntryDuties || dutiesTextFromCv(cv),
+    dutiesText: currentAndPriorDutiesFromCv(cv, locale).currentEntryDuties || dutiesTextFromCv(cv),
     roleDutyConflict,
   });
   if (forcedTitle.length) {
@@ -692,7 +711,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const summaryGenerate = resolveAiOperationMode({
     targetContent: liveSummary,
   }) === 'generate_from_context';
-  const entryDutiesForRole = currentAndPriorDutiesFromCv(cv);
+  const entryDutiesForRole = currentAndPriorDutiesFromCv(cv, locale);
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: cv.personal?.jobTitle,
     experienceTitle: (cv.experience || []).find((e) => e.isPresent)?.position
@@ -737,9 +756,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const deterministicPriorEntryIdHashes: string[] = (cv.experience || [])
     .filter((e) => e.id && e.id !== entryDutiesForRole.currentEntryId)
     .map((e) => hashExperienceEntryId(e.id));
-  const currentEntryMaterialKeys: string[] = [...new Set(
-    classifyMaterialDutyKeys(entryDutiesForRole.currentEntryDuties),
-  )];
+  const currentEntryMaterialKeys: string[] = (() => {
+    const fromUnits = materialDutyKeysFromDescription(entryDutiesForRole.currentEntryDuties)
+      .filter((k) => k !== 'generic_duty');
+    const cues = hindiWarehouseCueKeysFromUnit(entryDutiesForRole.currentEntryDuties);
+    const merged = [...new Set([...fromUnits, ...cues])];
+    return merged.length ? merged : ['generic_duty'];
+  })();
+  const currentSourceUnitDiag = diagnoseCurrentSourceUnitMaterial(
+    entryDutiesForRole.currentEntryDuties,
+    entryDutiesForRole.currentEntryId
+      ? hashExperienceEntryId(entryDutiesForRole.currentEntryId)
+      : null,
+  );
   // Design prior duties often contain Hindi तैयार which falsely hits food_prep.
   const priorDesignCue = /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|दृश्य|ब्रांड|graphic|design|print|digital|visual)/iu
     .test(entryDutiesForRole.priorEntryDuties || '');
@@ -846,7 +875,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (locale === 'hi') {
     candidate = normalizeHindiSummaryPerspective(candidate);
     candidate = dedupeSummarySentences(candidate);
-    const entryDuties = currentAndPriorDutiesFromCv(cv);
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const empQuality = analyzeHindiSummaryEmploymentQuality(candidate, {
       company: context.company,
       role: context.role,
@@ -917,7 +946,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
     const perspectiveValidationPassed = locale === 'hi' ? !firstPerson : true;
-    const entryDuties = currentAndPriorDutiesFromCv(cv);
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const empQ = locale === 'hi'
       ? analyzeHindiSummaryEmploymentQuality(analyzedText, {
         company: context.company || entryDuties.currentCompany,
@@ -968,18 +997,26 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const normalizeForIdempotence = (s: string) => s.replace(/\s+/g, ' ').trim();
       const before = normalizeForIdempotence(analyzedText);
       const after = normalizeForIdempotence(secondPass.summary);
-      durationFinalizerIdempotent = before === after;
-      localPass2Hash = hashSummaryCandidate(secondPass.summary);
-      if (durationSecondPassChanged == null) {
-        durationSecondPassChanged = before !== after;
-        durationSecondPassChangeReason = before === after
-          ? null
-          : 'duration_finalizer_mutated_candidate';
-      }
-      if (!durationPass1CandidateHash) {
+      const analysisPassChanged = before !== after;
+      durationFinalizerIdempotent = !analysisPassChanged;
+      // Do not overwrite rebuild pass hashes with a third analysis pass when
+      // rebuild already recorded truthful pass1/pass2. Only fill gaps.
+      if (durationPass1CandidateHash == null) {
         durationPass1CandidateHash = hashSummaryCandidate(analyzedText);
       }
-      durationPass2CandidateHash = localPass2Hash;
+      if (durationPass2CandidateHash == null) {
+        localPass2Hash = hashSummaryCandidate(secondPass.summary);
+        durationPass2CandidateHash = localPass2Hash;
+      }
+      // Always keep the changed flag truthful against the latest observed mutation.
+      if (analysisPassChanged) {
+        durationSecondPassChanged = true;
+        durationSecondPassChangeReason = durationSecondPassChangeReason
+          || 'duration_finalizer_mutated_candidate';
+      } else if (durationSecondPassChanged == null) {
+        durationSecondPassChanged = false;
+        durationSecondPassChangeReason = null;
+      }
     }
     const blockedForDuration = Boolean(
       result.countedAsSuccess && (!durationValidationPassed || !durationFinalizerIdempotent),
@@ -1152,6 +1189,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         deterministicPriorEntryIdHashes,
         currentEntryMaterialKeys,
         priorEntryMaterialKeys,
+        currentSourceUnitHashes: currentSourceUnitDiag.currentSourceUnitHashes,
+        currentSourceUnitMaterialKeys: currentSourceUnitDiag.currentSourceUnitMaterialKeys,
+        currentSourceUnitActionKeys: currentSourceUnitDiag.currentSourceUnitActionKeys,
+        currentSourceUnitObjectKeys: currentSourceUnitDiag.currentSourceUnitObjectKeys,
+        currentSourceUnitWarehouseCueCount: currentSourceUnitDiag.currentSourceUnitWarehouseCueCount,
+        currentSourceUnitFactOwnerEntryIdHash:
+          currentSourceUnitDiag.currentSourceUnitFactOwnerEntryIdHash,
         flattenedFactArrayUsed,
         previousSummaryTextUsedByDeterministicFallback,
         providerTextUsedByDeterministicFallback,
@@ -1232,15 +1276,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         context,
       },
     );
-    let groundedText = normalizeLocaleText(groundedPass1.summary, locale);
-    durationPass1CandidateHash = hashSummaryCandidate(groundedText);
-    durationPass1SentenceCount = countSummaryCandidateSentences(groundedText, locale);
+    const pass1Text = normalizeLocaleText(groundedPass1.summary, locale);
+    durationPass1CandidateHash = hashSummaryCandidate(pass1Text);
+    durationPass1SentenceCount = countSummaryCandidateSentences(pass1Text, locale);
     // Authoritative duration diagnostics must come from the rebuild pass.
     if (groundedPass1.durationDiagnostics) {
       durationDiagFinal = groundedPass1.durationDiagnostics;
     }
     const groundedPass2 = resolveSummaryWithDurationPolicy(
-      groundedText,
+      pass1Text,
       durationSnapshot.total,
       locale,
       {
@@ -1249,14 +1293,20 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         context,
       },
     );
-    const pass2Text = normalizeLocaleText(groundedPass2.summary, locale);
-    durationPass2CandidateHash = hashSummaryCandidate(pass2Text);
-    durationPass2SentenceCount = countSummaryCandidateSentences(pass2Text, locale);
-    durationSecondPassChanged = durationPass1CandidateHash !== durationPass2CandidateHash;
+    const pass2Raw = normalizeLocaleText(groundedPass2.summary, locale);
+    const normalizeForDuration = (s: string) => s.replace(/\s+/g, ' ').trim();
+    durationSecondPassChanged = normalizeForDuration(pass1Text) !== normalizeForDuration(pass2Raw);
     durationSecondPassChangeReason = durationSecondPassChanged
-      ? 'duration_finalizer_mutated_candidate'
+      ? (
+        normalizeForDuration(pass1Text).length !== normalizeForDuration(pass2Raw).length
+          ? `duration_finalizer_mutated_length_${normalizeForDuration(pass1Text).length}_to_${normalizeForDuration(pass2Raw).length}`
+          : 'duration_finalizer_mutated_candidate'
+      )
       : null;
-    groundedText = pass2Text;
+    // Truthful pass2 hash (raw). Never feed a mutated pass2 into grounding.
+    durationPass2CandidateHash = hashSummaryCandidate(pass2Raw);
+    durationPass2SentenceCount = countSummaryCandidateSentences(pass2Raw, locale);
+    let groundedText = durationSecondPassChanged ? pass1Text : pass2Raw;
     if (groundedPass2.durationDiagnostics) {
       durationDiagFinal = {
         ...durationDiagFinal,
@@ -1264,11 +1314,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         summaryDurationFinalizerRevision: SUMMARY_DURATION_FINALIZER_REVISION,
       };
     }
+    // Hindi: do not post-mutate after duration hashes (keeps pass2 === grounding input).
     if (locale === 'hi') {
-      groundedText = normalizeHindiSummaryPerspective(groundedText);
-      groundedText = dedupeSummarySentences(groundedText);
-    }
-    if (locale === 'sr' || locale === 'hr') {
+      groundedText = normalizeForDuration(groundedText);
+    } else if (locale === 'sr' || locale === 'hr') {
       groundedText = preserveSerbianSummaryFactForms(groundedText, dutiesText);
       groundedText = normalizeSerbianLatinConfusables(groundedText);
       groundedText = repairMalformedSerbianGeneratedTokens(groundedText);
@@ -1295,6 +1344,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     groundingInputCandidateHash = hashSummaryCandidate(groundedText);
     groundingInputSentenceCount = countSummaryCandidateSentences(groundedText, locale);
+    const durationHashChainOk = Boolean(
+      deterministicCandidateHash
+      && durationPass1CandidateHash
+      && durationPass2CandidateHash
+      && groundingInputCandidateHash
+      && deterministicCandidateHash === durationPass1CandidateHash
+      && durationPass1CandidateHash === durationPass2CandidateHash
+      && durationPass2CandidateHash === groundingInputCandidateHash
+      && !durationSecondPassChanged,
+    );
     const second = summaryPasses(
       groundedText,
       factSet,
@@ -1303,7 +1362,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       durationSnapshot.total,
       roleDutyConflict,
     );
-    if (second.ok) {
+    if (second.ok && (locale !== 'hi' || durationHashChainOk)) {
       return attachSummaryDiag({
         blocked: false,
         text: groundedText,
@@ -1318,7 +1377,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     if (locale === 'hi' && groundedText.trim()) {
       return attachSummaryDiag({
         blocked: true,
-        reason: second.reason || first.reason || 'summary_grounding_failed',
+        reason: !durationHashChainOk
+          ? 'experience_duration_mismatch'
+          : (second.reason || first.reason || 'summary_grounding_failed'),
         text: groundedText,
         origin: 'deterministic_fallback',
         roleDutyConflict,

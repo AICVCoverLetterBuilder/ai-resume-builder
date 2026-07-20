@@ -81,11 +81,11 @@ const hasButton = blob.includes(RESET_BUTTON);
 const hasChannel = blob.includes(CHANNEL_LABEL);
 const hasStatus = blob.includes(STATUS_LABEL);
 
-const SUMMARY_RUNTIME_REVISION = 'summary-runtime-280-v1';
-const SUMMARY_SPLITTER_REVISION = 'hindi-sentence-slot-split-v2';
-const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v2';
-const SUMMARY_DURATION_REVISION = 'duration-double-pass-v2';
-const SUMMARY_BUILDER_REVISION = 'entry-owned-candidate-rebuild-v2';
+const SUMMARY_RUNTIME_REVISION = 'summary-runtime-281-v1';
+const SUMMARY_SPLITTER_REVISION = 'hindi-three-sentence-slots-v3';
+const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v3';
+const SUMMARY_DURATION_REVISION = 'duration-idempotent-v3';
+const SUMMARY_BUILDER_REVISION = 'live-hindi-material-rebuild-v3';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION,
   SUMMARY_SPLITTER_REVISION,

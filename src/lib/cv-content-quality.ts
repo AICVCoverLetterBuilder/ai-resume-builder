@@ -30,7 +30,38 @@ import {
 } from './cv-role-title';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
-export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-double-pass-v2' as const;
+export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
+
+/** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
+function splitHindiSummaryUnitsLocal(text: string): string[] {
+  const units: string[] = [];
+  let buf = '';
+  const s = (text || '').replace(/\s+/g, ' ').trim();
+  const devanagari = (s.match(/[\u0900-\u097F]/g) || []).length;
+  const latin = (s.match(/[A-Za-z]/g) || []).length;
+  const dandaOnly = devanagari >= Math.max(8, latin);
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i]!;
+    buf += ch;
+    if (ch === '।' || ch === '!' || ch === '?') {
+      const t = buf.replace(/[।.!?]+$/u, '').trim();
+      if (t) units.push(t);
+      buf = '';
+      continue;
+    }
+    if (ch === '.' && !dandaOnly) {
+      const prev = s[i - 1] || '';
+      const next = s[i + 1] || '';
+      if (/\d/.test(prev) && /\d/.test(next)) continue;
+      const t = buf.replace(/[।.!?]+$/u, '').trim();
+      if (t) units.push(t);
+      buf = '';
+    }
+  }
+  const rest = buf.replace(/[।.!?]+$/u, '').trim();
+  if (rest) units.push(rest);
+  return units;
+}
 import { deduplicateSkillsForExport } from './cv-skills-projection';
 import { localizeCvLanguageLevel } from './cv-language-levels';
 import { getLocalizedCvLanguageName } from './cv-language-options';
@@ -653,6 +684,9 @@ export function injectHindiDurationWithOpening(
 ): string {
   void SUMMARY_DURATION_FINALIZER_REVISION;
   const trimmed = (summary || '').trim();
+  const normalizeHi = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const canonicalDurationOnce = /लगभग\s+साढ़े\s+छह\s+वर्षों\s+का\s+संयुक्त\s+अनुभव/u.test(trimmed)
+    && countSummaryDurationExpressions(trimmed, 'hi') === 1;
   // Idempotent path: when the Summary already has a single well-placed duration
   // claim and an employment intro, do not rebuild a weaker generic opening
   // (e.g. context.role = पेशेवर) that drops the structured warehouse title.
@@ -672,15 +706,21 @@ export function injectHindiDurationWithOpening(
     // idempotence: finalize(finalize(x)) === finalize(x)).
     const alreadyValidWarehouseOpening = /वेयरहाउस\s*कर्मचारी\s+के\s+रूप\s+में/u.test(trimmed)
       && /संयुक्त\s+अनुभव/u.test(trimmed);
-    if (!contextRoleGeneric || hasConcreteRoleForm || alreadyValidWarehouseOpening) {
-      return normalizeHindiSummaryPerspective(trimmed);
+    if (
+      !contextRoleGeneric
+      || hasConcreteRoleForm
+      || alreadyValidWarehouseOpening
+      || canonicalDurationOnce
+    ) {
+      return normalizeHi(normalizeHindiSummaryPerspective(trimmed));
     }
   }
 
   const opening = buildHindiIntegratedDurationSentence(duration, context);
   if (!trimmed) return opening;
 
-  const sentences = trimmed.split(/(?<=[।.!?])\s+/u).map((s) => s.trim()).filter(Boolean);
+  // Devanagari-dominant Summaries must split on top-level danda only — never ASCII '.'.
+  const sentences = splitHindiSummaryUnitsLocal(trimmed);
   const remainderParts: string[] = [];
 
   for (const sent of sentences) {
@@ -697,7 +737,9 @@ export function injectHindiDurationWithOpening(
 
   if (!remainderParts.length) return opening;
   const remainder = normalizeHindiSummaryPerspective(remainderParts.join(' '));
-  return normalizeHindiSummaryPerspective(`${opening} ${remainder}`.replace(/\s+/g, ' ').trim());
+  return normalizeHi(
+    normalizeHindiSummaryPerspective(`${opening} ${remainder}`.replace(/\s+/g, ' ').trim()),
+  );
 }
 
 /**

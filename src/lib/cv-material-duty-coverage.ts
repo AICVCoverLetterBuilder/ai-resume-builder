@@ -3,6 +3,7 @@
  * Every distinct source duty meaning must survive localization unless duplicate.
  */
 import { splitExperienceBullets } from './cv-canonical-facts';
+import { fingerprintText } from './cv-export-diagnostics';
 
 export type MaterialDutyKey =
   | 'food_prep'
@@ -43,7 +44,9 @@ const DUTY_RULES: DutyRule[] = [
   {
     key: 'food_prep',
     // Avoid bare "prepare/prepar*" — that matches "prepare reports" and similar.
-    source: /priprem\w*.{0,40}(jel|hran|obrok)|jel\w*|dish(?:es)?|cuisine|restaurant\s+standard|prema\s+standardima\s+restorana|व्यंजन|तैयार|(?:zubereit|prépar)\w*.{0,40}(gericht|plat|dish)|(?:prepare|prepared|preparing)\s+(?:dishes|food|meals?|cuisine)/iu,
+    // Hindi तैयारी (warehouse goods prep) must NOT match — require food anchors or
+    // तैयार not followed by ी (तैयारी).
+    source: /priprem\w*.{0,40}(jel|hran|obrok)|jel\w*|dish(?:es)?|cuisine|restaurant\s+standard|prema\s+standardima\s+restorana|व्यंजन|तैयार(?!ी)|(?:zubereit|prépar)\w*.{0,40}(gericht|plat|dish)|(?:prepare|prepared|preparing)\s+(?:dishes|food|meals?|cuisine)/iu,
     localized: /(dish|cuisine|restaurant|jel|kuhinj|व्यंजन|तैयार|रसोई|zubereit|gerichte|plat|piatto|piatti|preparazione|طبق|أطباق|إعداد|блюд|prato|料理|prépar|cook|Gerichten|jela)/iu,
   },
   {
@@ -173,10 +176,12 @@ const DUTY_RULES: DutyRule[] = [
   },
   {
     key: 'warehouse_inbound_check',
+    // Hindi object-before-verb: माल … जाँच/जांच. Never use ASCII \b around Devanagari.
+    // जाँच (chandrabindu) and जांच (anusvara) are both live Android spellings.
     source:
-      /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जाच).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:pristigl\w*|incoming|inbound|आने\s*वाल).{0,40}(?:rob\w*|goods?|माल)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित).{0,24}(?:dokument|document|दस्तावे)/iu,
+      /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:rob\w*|goods?|माल|товар|بضائع|商品).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच)|(?:pristigl\w*|incoming|inbound|आने\s*वाल).{0,40}(?:rob\w*|goods?|माल)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित).{0,40}(?:dokument|document|दस्तावे)|(?:dokument|document|दस्तावे).{0,40}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|संबंधित)/iu,
     localized:
-      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जाच|確認|تتحقق|проверя).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|商品|dokument|document|दस्तावे|وثائق|書類)|(?:rob\w*|goods?|माल|वस्तु|товар|商品|dokument|document|दस्तावे).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जाच|確認|تتحقق|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल).{0,40}(?:rob\w*|goods?|माल)|(?:prateć\w*|accompany\w*|संबंधित).{0,24}(?:dokument|document|दस्तावे))/iu,
+      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|проверя).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|商品|dokument|document|दस्तावे|وثائق|書類)|(?:rob\w*|goods?|माल|वस्तु|товар|商品|dokument|document|दस्तावे).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल).{0,40}(?:rob\w*|goods?|माल)|(?:prateć\w*|accompany\w*|संबंधित).{0,40}(?:dokument|document|दस्तावे))/iu,
   },
   {
     key: 'warehouse_records',
@@ -189,12 +194,93 @@ const DUTY_RULES: DutyRule[] = [
   {
     key: 'warehouse_movement',
     // Hindi often places समन्वय after the objects (तैयारी और आवाजाही का समन्वय).
+    // सहकर्मियों (oblique plural) must match — do not require ASCII \b.
     source:
-      /(?:(?:koordin\w*|coord\w*|समन्वय).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:आवाजाही|kretanj|movement).{0,24}(?:समन्वय|koordin|coord)|(?:माल|rob\w*|goods).{0,40}(?:तैयारी|priprem|prepar|आवाजाही)|(?:koleg\w*|colleague\w*|सहकर्मी).{0,40}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|समन्वय))/iu,
+      /(?:(?:koordin\w*|coord\w*|समन्वय).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:आवाजाही|kretanj|movement).{0,24}(?:समन्वय|koordin|coord)|(?:माल|rob\w*|goods).{0,40}(?:तैयारी|priprem|prepar|आवाजाही)|(?:koleg\w*|colleague\w*|सहकर्मी).{0,48}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|समन्वय)|(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी).{0,48}(?:koleg\w*|colleague\w*|सहकर्मी|समन्वय))/iu,
     localized:
-      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|rob\w*|goods|माल|koleg|colleague|सहकर्मी)|(?:priprem|prepar|तैयारी|kretanj|movement|आवाजाही|rob\w*|goods|माल|koleg|colleague|सहकर्मी).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:आवाजाही|kretanj|movement).{0,24}(?:समन्वय|koordin|coord)|(?:माल|rob\w*|goods).{0,40}(?:तैयारी|आवाजाही)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,40}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|समन्वय))/iu,
+      /(?:(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整).{0,56}(?:priprem|prepar|kretanj|movement|आवाजाही|तैयारी|rob\w*|goods|माल|koleg|colleague|सहकर्मी)|(?:priprem|prepar|तैयारी|kretanj|movement|आवाजाही|rob\w*|goods|माल|koleg|colleague|सहकर्मी).{0,56}(?:koordin\w*|coord\w*|समन्वय|تنسّق|координ|調整)|(?:priprem\w*|prepar\w*|तैयारी).{0,40}(?:kretanj|movement|आवाजाही|rob\w*|goods|माल)|(?:आवाजाही|kretanj|movement).{0,24}(?:समन्वय|koordin|coord)|(?:माल|rob\w*|goods).{0,40}(?:तैयारी|आवाजाही)|(?:koleg\w*|colleague\w*|सहकर्मी|زملاء|коллег).{0,48}(?:rob\w*|goods|माल|kretanj|movement|आवाजाही|तैयारी|समन्वय))/iu,
   },
 ];
+
+/** Fine-grained Hindi warehouse cues for per-unit diagnostics (aliases of the 3 keys). */
+export type WarehouseMaterialCueKey =
+  | 'warehouse_inbound_check'
+  | 'warehouse_document_check'
+  | 'warehouse_records'
+  | 'warehouse_orderly_goods'
+  | 'warehouse_preparation'
+  | 'warehouse_movement'
+  | 'warehouse_colleague_coordination';
+
+const HINDI_WAREHOUSE_CUE_RULES: Array<{ key: WarehouseMaterialCueKey; re: RegExp }> = [
+  { key: 'warehouse_inbound_check', re: /(?:आने\s*वाल).{0,40}माल|(?:माल).{0,40}(?:जाँच|जांच|जाच)|(?:जाँच|जांच|जाच).{0,40}माल/u },
+  { key: 'warehouse_document_check', re: /(?:संबंधित).{0,40}दस्तावे|(?:दस्तावे).{0,40}(?:जाँच|जांच|जाच|संबंधित)/u },
+  { key: 'warehouse_records', re: /(?:गोदाम).{0,48}(?:रिकॉर्ड|अद्यतन)|(?:रिकॉर्ड).{0,48}अद्यतन|अद्यतन.{0,48}(?:रिकॉर्ड|गोदाम)/u },
+  { key: 'warehouse_orderly_goods', re: /(?:सामान).{0,40}व्यवस्थित|व्यवस्थित.{0,40}सामान/u },
+  { key: 'warehouse_preparation', re: /(?:माल).{0,40}तैयारी|तैयारी.{0,40}(?:माल|आवाजाही)/u },
+  { key: 'warehouse_movement', re: /आवाजाही|(?:माल).{0,40}आवाजाही/u },
+  { key: 'warehouse_colleague_coordination', re: /सहकर्मी[\u0900-\u097F]{0,12}.{0,80}समन्वय|समन्वय.{0,80}सहकर्मी/u },
+];
+
+export function hindiWarehouseCueKeysFromUnit(unit: string): WarehouseMaterialCueKey[] {
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  const out: WarehouseMaterialCueKey[] = [];
+  for (const rule of HINDI_WAREHOUSE_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
+const HINDI_ACTION_CUES = /जाँच|जांच|जाच|अद्यतन|अपडेट|व्यवस्थित|तैयारी|आवाजाही|समन्वय/gu;
+const HINDI_OBJECT_CUES = /माल|दस्तावे|रिकॉर्ड|गोदाम|सामान|सहकर्मी/gu;
+
+export type CurrentSourceUnitMaterialDiag = {
+  currentSourceUnitHashes: string[];
+  currentSourceUnitMaterialKeys: string[][];
+  currentSourceUnitActionKeys: string[][];
+  currentSourceUnitObjectKeys: string[][];
+  currentSourceUnitWarehouseCueCount: number[];
+  currentSourceUnitFactOwnerEntryIdHash: string | null;
+};
+
+/** Per-bullet non-PII material diagnostics for the current Experience entry. */
+export function diagnoseCurrentSourceUnitMaterial(
+  description: string,
+  entryIdHash: string | null,
+): CurrentSourceUnitMaterialDiag {
+  const units = splitExperienceBullets(description);
+  const currentSourceUnitHashes: string[] = [];
+  const currentSourceUnitMaterialKeys: string[][] = [];
+  const currentSourceUnitActionKeys: string[][] = [];
+  const currentSourceUnitObjectKeys: string[][] = [];
+  const currentSourceUnitWarehouseCueCount: number[] = [];
+  for (const unit of units) {
+    const normalized = unit.normalize('NFKC').replace(/\s+/g, ' ').trim();
+    currentSourceUnitHashes.push(fingerprintText(normalized));
+    const keys = classifyMaterialDutyKeys(unit).filter((k) => k !== 'generic_duty');
+    const cues = hindiWarehouseCueKeysFromUnit(unit);
+    const keySet = new Set<string>(keys);
+    const merged = [
+      ...keys,
+      ...cues.filter((c) => !keySet.has(c)),
+    ];
+    currentSourceUnitMaterialKeys.push(
+      merged.length ? merged : ['generic_duty'],
+    );
+    currentSourceUnitActionKeys.push([...(normalized.match(HINDI_ACTION_CUES) || [])]);
+    currentSourceUnitObjectKeys.push([...(normalized.match(HINDI_OBJECT_CUES) || [])]);
+    currentSourceUnitWarehouseCueCount.push(cues.length);
+  }
+  return {
+    currentSourceUnitHashes,
+    currentSourceUnitMaterialKeys,
+    currentSourceUnitActionKeys,
+    currentSourceUnitObjectKeys,
+    currentSourceUnitWarehouseCueCount,
+    currentSourceUnitFactOwnerEntryIdHash: entryIdHash,
+  };
+}
 
 /** Prefer more specific keys first; skip generic when a specific key matches. */
 export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
