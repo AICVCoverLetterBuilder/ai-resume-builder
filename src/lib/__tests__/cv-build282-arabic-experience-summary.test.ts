@@ -178,7 +178,7 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
     const factSet = buildCvCanonicalFactSet(cv);
     const duration = buildExperienceDurationSnapshot(cv.experience || [], '2026-07-20').total;
     const text = buildConciseGroundedSummary(factSet, 'ar', 'female', duration, {
-      includeSkills: false,
+      includeSkills: true,
     });
     expect(text).toMatch(/موظفة\s*مستودع/);
     expect(text).toMatch(/Atlas/);
@@ -188,6 +188,8 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
     expect(text).toMatch(/سبق\s+لها\s+العمل/);
     expect(text).toMatch(/مصممة\s*جرافيك|Rewitu/);
     expect(text).not.toMatch(/Grafički|Carries\s+out|dish|مطبخ|تحميل/);
+    expect(text).not.toMatch(/تشمل\s+المهارات/);
+    expect(text).not.toMatch(/و القدرة/);
 
     const q = analyzeArabicSummaryEmploymentQuality(text, {
       company: 'Atlas',
@@ -204,6 +206,7 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
     expect(q.priorRoleGroundingPassed).toBe(true);
     expect(q.semanticCrossEntryLeakageDetected).toBe(false);
     expect(q.finalUnitRoleSlots).toEqual(['current_intro', 'current_duty', 'prior_role']);
+    expect(q.finalUnitRoleSlots).not.toContain('other');
     expect(q.groundingValidationPassed).toBe(true);
   });
 
@@ -288,9 +291,18 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
       .toBe('summary-runtime-282-v1');
     expect(summaryPipe.finalized.diagnostics?.summaryBuilderRevision)
       .toBe('entry-owned-arabic-rebuild-v1');
+    expect(summaryPipe.finalized.diagnostics?.summaryDurationFinalizerRevision)
+      .toBe('arabic-duration-idempotent-v1');
+    expect(summaryPipe.finalized.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
+    expect(summaryPipe.finalized.diagnostics?.finalUnitRoleSlots).toEqual([
+      'current_intro',
+      'current_duty',
+      'prior_role',
+    ]);
     cv = summaryPipe.stateCv;
     expect(cv.summary).toMatch(/موظفة\s*مستودع/);
     expect(cv.summary).not.toMatch(/6\.5/);
+    expect(cv.summary).not.toMatch(/تشمل\s+المهارات/);
   });
 
   it('export rejects unsupported cooking/transport Summary; parity for grounded Arabic', () => {

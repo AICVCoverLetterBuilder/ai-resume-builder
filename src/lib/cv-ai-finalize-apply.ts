@@ -1382,7 +1382,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       durationDiagFinal = {
         ...durationDiagFinal,
         ...groundedPass2.durationDiagnostics,
-        summaryDurationFinalizerRevision: SUMMARY_DURATION_FINALIZER_REVISION,
+        summaryDurationFinalizerRevision: locale === 'ar'
+          ? SUMMARY_DURATION_FINALIZER_REVISION_AR
+          : SUMMARY_DURATION_FINALIZER_REVISION,
       };
     }
     // Hindi: do not post-mutate after duration hashes (keeps pass2 === grounding input).

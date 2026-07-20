@@ -1192,6 +1192,15 @@ function skillsLabelSentence(skills: string[], locale: Locale): string {
   if (!list.length) return '';
   const and = andWord(locale);
   let cleanJoined = list[0];
+  if (locale === 'ar') {
+    // Arabic punctuation: Arabic comma، and و attached (والقدرة, not و القدرة).
+    if (list.length === 2) cleanJoined = `${list[0]} و${list[1]}`;
+    else if (list.length > 2) {
+      cleanJoined = `${list.slice(0, -1).join('، ')} و${list[list.length - 1]}`;
+    }
+    cleanJoined = cleanJoined.replace(/\s+/g, ' ').replace(/و\s+/g, 'و').trim();
+    return `تشمل المهارات الرئيسية ${cleanJoined}.`;
+  }
   if (list.length === 2) cleanJoined = `${list[0]} ${and} ${list[1]}`;
   else if (list.length > 2) {
     cleanJoined = `${list.slice(0, -1).join(', ')} ${and} ${list[list.length - 1]}`;
@@ -1206,7 +1215,6 @@ function skillsLabelSentence(skills: string[], locale: Locale): string {
   if (locale === 'pt-BR') return `As competências principais incluem ${cleanJoined.toLowerCase()}.`;
   if (locale === 'ru') return `Ключевые навыки включают ${cleanJoined.toLowerCase()}.`;
   if (locale === 'hi') return `मेरे प्रमुख कौशलों में ${cleanJoined} शामिल हैं।`;
-  if (locale === 'ar') return `تشمل المهارات الرئيسية ${cleanJoined}.`;
   if (locale === 'ja') return `主なスキルは${cleanJoined}です。`;
   return `Key skills include ${cleanJoined}.`;
 }
@@ -1443,10 +1451,9 @@ export function buildConciseGroundedSummary(
       priorSourceDuties,
       locale: 'ar',
     });
-    // Skills optional — entry-owned Arabic package prefers three slots without skill dump.
-    if (skillSentence && text) {
-      text = `${text} ${skillSentence}`.replace(/\s+/g, ' ').trim();
-    }
+    // Strict three-slot Arabic package: never append a fourth skills sentence.
+    skillSentence = '';
+    void skillSentence;
   } else if (locale === 'sr' || locale === 'hr') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin

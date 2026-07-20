@@ -10,6 +10,8 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
 import {
+  beginPdfI18nPlacementTracking,
+  endPdfI18nPlacementTracking,
   isRtlLocale,
   pdfI18nCtxApplyStyle,
   pdfI18nCtxDraw,
@@ -17,12 +19,23 @@ import {
   pdfI18nCtxTextWidth,
   registerPdfI18nFonts,
   shouldApplyLatinPdfSentenceFixes,
+  type PdfI18nPlacementRecord,
   type PdfI18nRegistry,
 } from './pdf-i18n-text';
+import { CvExportFailure } from './cv-export-error-message';
 import { regionSettings, type CVData } from './types';
 
 const A4_W = 210;
 const A4_H = 297;
+const A4_WIDTH_PT = A4_W * (72 / 25.4);
+const A4_HEIGHT_PT = A4_H * (72 / 25.4);
+
+/**
+ * Android proof marker — must remain reachable from the Arabic Modern Minimal
+ * PDF implementation path (not diagnostics-only).
+ */
+export const ARABIC_MODERN_MINIMAL_PDF_RTL_MARKER =
+  'arabic-modern-minimal-pdf-rtl-283-v1' as const;
 
 type Pdf = InstanceType<typeof import('jspdf').jsPDF>;
 
@@ -165,12 +178,14 @@ function drawText(
   style: TextStyle,
   extra: { align?: 'left' | 'center' | 'right' } = {},
 ): void {
+  // Page coordinates stay left-origin LTR. RTL only shapes Arabic runs — never
+  // default align:'right' at the left margin (that pushes glyphs off-page).
   pdfI18nCtxDraw(ctx, text, x, y, {
     size: style.size,
     color: style.color,
     bold: style.bold,
     rtl: isRtlLocale(ctx.locale),
-    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+    align: extra.align ?? 'left',
   });
 }
 
@@ -471,7 +486,9 @@ function drawExperienceLead(ctx: ModernMinimalPdfContext, entry: CVData['experie
     const dateStyle: TextStyle = { size: 8, color: MUTED, lineH: 3.2 };
     applyStyle(ctx, dateStyle, date);
     const dateW = pdfI18nCtxTextWidth(ctx, date, { size: dateStyle.size, bold: false });
-    drawText(ctx, date, ctx.contentX + ctx.contentW - dateW, startY + 3, dateStyle, { align: 'right' });
+    // Left-edge placement at the date column (do not combine right-edge x with
+    // align:'right' — that double-shifts RTL shaped runs).
+    drawText(ctx, date, ctx.contentX + ctx.contentW - dateW, startY + 3, dateStyle);
   }
 
   if (entry.company) {
@@ -606,7 +623,7 @@ export function mmDrawEducationSection(ctx: ModernMinimalPdfContext): void {
       const dateStyle: TextStyle = { size: 8, color: MUTED, lineH: 3.2 };
       applyStyle(ctx, dateStyle, date);
       const dateW = pdfI18nCtxTextWidth(ctx, date, { size: dateStyle.size, bold: false });
-      drawText(ctx, date, ctx.contentX + ctx.contentW - dateW, startY + 3, dateStyle, { align: 'right' });
+      drawText(ctx, date, ctx.contentX + ctx.contentW - dateW, startY + 3, dateStyle);
     }
     ctx.y = lineY + 1.2;
 
@@ -819,6 +836,97 @@ function mmDrawCertifications(ctx: ModernMinimalPdfContext): void {
   }
 }
 
+export type ArabicModernMinimalPdfGeometryDiagnostics = {
+  pageWidthPt: number;
+  pageHeightPt: number;
+  contentOriginXMm: number;
+  contentWidthMm: number;
+  rtlRootDirection: 'rtl' | 'ltr';
+  rtlRootTransform: 'none';
+  pdfImageXPt: number;
+  pdfImageWidthPt: number;
+  searchableLayerMinXPt: number;
+  searchableLayerMaxXPt: number;
+  searchableLayerOutOfBoundsCount: number;
+  rasterVisibleBoundsLeftPt: number;
+  rasterVisibleBoundsRightPt: number;
+  rasterOutOfBoundsCount: number;
+  marker: typeof ARABIC_MODERN_MINIMAL_PDF_RTL_MARKER;
+};
+
+export function analyzeArabicModernMinimalPdfGeometry(
+  placements: PdfI18nPlacementRecord[],
+  options?: { contentXMm?: number; contentWMm?: number },
+): ArabicModernMinimalPdfGeometryDiagnostics & { ok: boolean; reasons: string[] } {
+  const contentXMm = options?.contentXMm ?? MARGIN_X;
+  const contentWMm = options?.contentWMm ?? (A4_W - MARGIN_X * 2);
+  const epsilon = 1.5; // pt tolerance for measurement/rounding
+  let searchableMin = Number.POSITIVE_INFINITY;
+  let searchableMax = Number.NEGATIVE_INFINITY;
+  let rasterMin = Number.POSITIVE_INFINITY;
+  let rasterMax = Number.NEGATIVE_INFINITY;
+  let searchableOut = 0;
+  let rasterOut = 0;
+
+  for (const p of placements) {
+    const left = p.leftPt;
+    const right = p.rightPt;
+    if (p.kind === 'shaped-raster') {
+      rasterMin = Math.min(rasterMin, left);
+      rasterMax = Math.max(rasterMax, right);
+      if (left < -epsilon || right > A4_WIDTH_PT + epsilon) rasterOut += 1;
+    } else {
+      searchableMin = Math.min(searchableMin, left);
+      searchableMax = Math.max(searchableMax, right);
+      if (left < -epsilon || right > A4_WIDTH_PT + epsilon) searchableOut += 1;
+    }
+  }
+
+  if (!Number.isFinite(searchableMin)) searchableMin = 0;
+  if (!Number.isFinite(searchableMax)) searchableMax = 0;
+  if (!Number.isFinite(rasterMin)) rasterMin = 0;
+  if (!Number.isFinite(rasterMax)) rasterMax = 0;
+
+  const spanPt = Math.max(rasterMax - rasterMin, searchableMax - searchableMin);
+  const expectedContentSpanPt = contentWMm * (72 / 25.4);
+  const reasons: string[] = [];
+  if (searchableOut > 0) reasons.push('searchable_layer_out_of_bounds');
+  if (rasterOut > 0) reasons.push('raster_out_of_bounds');
+  // Implausibly narrow left-edge strip while content should span A4 width.
+  if (placements.length > 0 && spanPt < expectedContentSpanPt * 0.35) {
+    reasons.push('implausible_narrow_horizontal_strip');
+  }
+  if (rasterMin < -epsilon || searchableMin < -epsilon) {
+    reasons.push('negative_horizontal_origin');
+  }
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    pageWidthPt: A4_WIDTH_PT,
+    pageHeightPt: A4_HEIGHT_PT,
+    contentOriginXMm: contentXMm,
+    contentWidthMm: contentWMm,
+    rtlRootDirection: 'rtl',
+    rtlRootTransform: 'none',
+    pdfImageXPt: 0,
+    pdfImageWidthPt: A4_WIDTH_PT,
+    searchableLayerMinXPt: searchableMin,
+    searchableLayerMaxXPt: searchableMax,
+    searchableLayerOutOfBoundsCount: searchableOut,
+    rasterVisibleBoundsLeftPt: rasterMin,
+    rasterVisibleBoundsRightPt: rasterMax,
+    rasterOutOfBoundsCount: rasterOut,
+    marker: ARABIC_MODERN_MINIMAL_PDF_RTL_MARKER,
+  };
+}
+
+let lastArabicModernMinimalPdfGeometry: ReturnType<typeof analyzeArabicModernMinimalPdfGeometry> | null = null;
+
+export function getLastArabicModernMinimalPdfGeometry() {
+  return lastArabicModernMinimalPdfGeometry;
+}
+
 export async function buildModernMinimalPagedPdfBlob(
   cv: CVData,
   locale: Locale,
@@ -828,12 +936,34 @@ export async function buildModernMinimalPagedPdfBlob(
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
   const ctx = mmCreateContext(pdf, cv, locale, i18n);
+  const trackArabicGeometry = locale === 'ar';
+  if (trackArabicGeometry) {
+    void ARABIC_MODERN_MINIMAL_PDF_RTL_MARKER;
+    beginPdfI18nPlacementTracking();
+  }
 
   mmDrawHeader(ctx, options.photoDataUrl ?? null);
   mmDrawSummary(ctx);
   mmDrawExperienceSection(ctx);
   mmDrawLowerSections(ctx);
   mmDrawCertifications(ctx);
+
+  if (trackArabicGeometry) {
+    const placements = endPdfI18nPlacementTracking();
+    const geometry = analyzeArabicModernMinimalPdfGeometry(placements, {
+      contentXMm: ctx.contentX,
+      contentWMm: ctx.contentW,
+    });
+    lastArabicModernMinimalPdfGeometry = geometry;
+    if (!geometry.ok) {
+      throw new CvExportFailure(
+        `arabic_modern_minimal_pdf_geometry_invalid:${geometry.reasons.join(',')}`,
+        `Arabic Modern Minimal PDF geometry failed (${geometry.reasons.join(', ')})`,
+      );
+    }
+  } else {
+    lastArabicModernMinimalPdfGeometry = null;
+  }
 
   const out = pdf.output('blob');
   return out instanceof Blob ? out : new Blob([out], { type: 'application/pdf' });

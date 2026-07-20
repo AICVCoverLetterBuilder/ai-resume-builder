@@ -91,6 +91,7 @@ const SUMMARY_SPLITTER_REVISION_AR = 'arabic-three-sentence-slots-v1';
 const SUMMARY_GROUNDING_REVISION_AR = 'entry-owned-arabic-grounding-v1';
 const SUMMARY_DURATION_REVISION_AR = 'arabic-duration-idempotent-v1';
 const SUMMARY_BUILDER_REVISION_AR = 'entry-owned-arabic-rebuild-v1';
+const ARABIC_MODERN_MINIMAL_PDF_RTL = 'arabic-modern-minimal-pdf-rtl-283-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -102,6 +103,7 @@ for (const marker of [
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_DURATION_REVISION_AR,
   SUMMARY_BUILDER_REVISION_AR,
+  ARABIC_MODERN_MINIMAL_PDF_RTL,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

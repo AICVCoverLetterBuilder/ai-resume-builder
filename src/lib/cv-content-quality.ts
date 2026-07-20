@@ -864,7 +864,9 @@ export function resolveSummaryWithDurationPolicy(
   let working = owned.summary;
   const durationDiagnostics: SummaryDurationOwnershipDiagnostics = {
     ...owned.diagnostics,
-    summaryDurationFinalizerRevision: SUMMARY_DURATION_FINALIZER_REVISION,
+    summaryDurationFinalizerRevision: locale === 'ar'
+      ? SUMMARY_DURATION_FINALIZER_REVISION_AR
+      : SUMMARY_DURATION_FINALIZER_REVISION,
   };
 
   // A previously-saved or independently produced summary may already carry the duration
@@ -904,6 +906,9 @@ export function resolveSummaryWithDurationPolicy(
     });
     working = again.summary;
     Object.assign(durationDiagnostics, again.diagnostics);
+    durationDiagnostics.summaryDurationFinalizerRevision = locale === 'ar'
+      ? SUMMARY_DURATION_FINALIZER_REVISION_AR
+      : SUMMARY_DURATION_FINALIZER_REVISION;
   }
 
   const initial = validateSummaryDuration(working, duration, {

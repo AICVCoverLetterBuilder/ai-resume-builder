@@ -471,6 +471,73 @@ export function pdfI18nSplitTextToSize(
   return Array.isArray(result) ? result.map(String) : [String(result)];
 }
 
+/** mm → PDF points (jsPDF user space when unit is mm). */
+function mmToPt(mm: number): number {
+  return mm * (72 / 25.4);
+}
+
+export type PdfI18nPlacementKind = 'shaped-raster' | 'unicode-invisible' | 'unicode-visible';
+
+export type PdfI18nPlacementRecord = {
+  kind: PdfI18nPlacementKind;
+  /** Left edge of the run in page points (origin top-left of page media). */
+  leftPt: number;
+  /** Right edge of the run in page points. */
+  rightPt: number;
+  yPt: number;
+  widthPt: number;
+};
+
+let pdfI18nPlacementSink: PdfI18nPlacementRecord[] | null = null;
+
+/** Begin recording shaped/Unicode draw rectangles (non-PII geometry only). */
+export function beginPdfI18nPlacementTracking(): void {
+  pdfI18nPlacementSink = [];
+}
+
+export function endPdfI18nPlacementTracking(): PdfI18nPlacementRecord[] {
+  const out = pdfI18nPlacementSink || [];
+  pdfI18nPlacementSink = null;
+  return out;
+}
+
+export function getPdfI18nPlacementTracking(): PdfI18nPlacementRecord[] {
+  return pdfI18nPlacementSink ? [...pdfI18nPlacementSink] : [];
+}
+
+function recordPdfI18nPlacement(
+  kind: PdfI18nPlacementKind,
+  leftMm: number,
+  widthMm: number,
+  yMm: number,
+): void {
+  if (!pdfI18nPlacementSink) return;
+  const leftPt = mmToPt(leftMm);
+  const widthPt = mmToPt(Math.max(0, widthMm));
+  pdfI18nPlacementSink.push({
+    kind,
+    leftPt,
+    rightPt: leftPt + widthPt,
+    yPt: mmToPt(yMm),
+    widthPt,
+  });
+}
+
+/**
+ * Resolve the geometric left edge for a draw.
+ * Page coordinates stay LTR: `x` is the left edge unless align is center/right.
+ * RTL only affects shaping (`direction` / bidi), never horizontal page mirrors.
+ */
+function resolveDrawLeftMm(
+  x: number,
+  widthMm: number,
+  align: 'left' | 'center' | 'right' | undefined,
+): number {
+  if (align === 'center') return x - widthMm / 2;
+  if (align === 'right') return x - widthMm;
+  return x;
+}
+
 export function pdfI18nDrawText(
   pdf: Pdf,
   registry: PdfI18nRegistry | null | undefined,
@@ -482,40 +549,46 @@ export function pdfI18nDrawText(
 ): void {
   if (!text) return;
 
+  // Geometric align is independent of RTL shaping. Never treat `rtl` as
+  // "subtract width from x" — that double-shifts Arabic off the left page edge
+  // when callers already pass the left margin as x.
+  const align = options.align ?? 'left';
+
   if (needsShapedTextFallback(locale, text)) {
     const shaped = shapedTextToDataUrl(text, locale, options);
     if (shaped) {
-      const drawX = options.align === 'center'
-        ? x - shaped.widthMm / 2
-        : options.align === 'right' || options.rtl
-          ? x - shaped.widthMm
-          : x;
+      const drawX = resolveDrawLeftMm(x, shaped.widthMm, align);
       const drawY = y - shaped.heightMm * 0.78;
       try {
         pdf.addImage(shaped.dataUrl, 'PNG', drawX, drawY, shaped.widthMm, shaped.heightMm, undefined, 'FAST');
       } catch {
         pdf.addImage(shaped.dataUrl, 'PNG', drawX, drawY, shaped.widthMm, shaped.heightMm);
       }
-      // Hybrid ATS layer: shaped PNG for correct conjuncts + invisible Unicode
-      // text at the same baseline/reading position (not a page-end dump).
-      drawInvisibleUnicodeTextLayer(pdf, registry, locale, text, x, y, options);
+      recordPdfI18nPlacement('shaped-raster', drawX, shaped.widthMm, y);
+      // Hybrid ATS layer: same left-edge geometry as the shaped raster (align left
+      // at drawX) so searchable text sits over the visible glyphs, not off-page.
+      drawInvisibleUnicodeTextLayer(pdf, registry, locale, text, drawX, y, {
+        ...options,
+        align: 'left',
+      });
+      recordPdfI18nPlacement('unicode-invisible', drawX, shaped.widthMm, y);
       return;
     }
   }
 
   applyPdfI18nTextStyle(pdf, registry, locale, options, text);
-  const rtl = options.rtl ?? isRtlLocale(locale);
-  const textOpts = options.align
-    ? { align: options.align }
-  : rtl
-      ? { align: 'right' as const }
-      : undefined;
-
+  const widthMm = pdfI18nGetTextWidth(pdf, registry, locale, text, {
+    size: options.size,
+    bold: options.bold,
+  });
+  const leftMm = resolveDrawLeftMm(x, widthMm, align);
+  const textOpts = align === 'left' ? undefined : { align };
   if (textOpts) {
     pdf.text(text, x, y, textOpts);
   } else {
     pdf.text(text, x, y);
   }
+  recordPdfI18nPlacement('unicode-visible', leftMm, widthMm, y);
 }
 
 /** Detect known broken PDF text patterns from Android artifacts. */
