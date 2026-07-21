@@ -94,7 +94,12 @@ import {
   collectDesignMaterialKeysFromDescription,
   validateRussianDesignFactFamilies,
   sourceRequiresRussianDesignFamilies,
+  experienceNeedsRussianDesignFamilyRebuild,
+  isRussianDesignFamilyRejectionReason,
   RUSSIAN_DESIGN_FAMILIES_REVISION,
+  RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION,
+  RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+  RUSSIAN_AUTHORITATIVE_DESIGN_MATERIAL_KEYS,
 } from './cv-material-duty-coverage';
 import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
 import {
@@ -126,6 +131,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_DURATION_FINALIZER_REVISION_RU,
   RUSSIAN_EXPERIENCE_MATERIAL_REVISION,
   RUSSIAN_DESIGN_FAMILIES_REVISION,
+  RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -133,6 +139,8 @@ void SUMMARY_GROUNDING_REVISION_RU;
 void SUMMARY_DURATION_FINALIZER_REVISION_RU;
 void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
 void RUSSIAN_DESIGN_FAMILIES_REVISION;
+void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
+void RUSSIAN_AUTHORITATIVE_DESIGN_MATERIAL_KEYS;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -189,7 +197,10 @@ import {
   validateExperienceGenerationOutput,
   type ExperienceAiOperationMode,
 } from './cv-experience-ai-operation-mode';
-import { resolveAiOperationMode } from './cv-ai-operation-contract';
+import {
+  classifyFreeTextJobDomain,
+  resolveAiOperationMode,
+} from './cv-ai-operation-contract';
 
 export type CvAiFinalizeAction =
   | 'summary_generate'
@@ -301,6 +312,13 @@ export type FinalizeCvAiFieldResult = {
     serverFallbackUsed?: boolean;
     clientDeterministicFallbackAttempted?: boolean;
     clientDeterministicFallbackReason?: string;
+    /** Provider rejection reason retained separately from fallback routing reason. */
+    providerRejectionReason?: string;
+    providerRejectionStage?: string;
+    providerDetectedMaterialFamilyCount?: number;
+    authoritativeRequiredFamilyCount?: number;
+    fallbackCoveredFamilyCount?: number;
+    finalSelectedCoveredFamilyCount?: number;
     clientDeterministicFallbackBulletCount?: number;
     clientDeterministicFallbackScripts?: string[];
     clientDeterministicFallbackRequiredFactCount?: number;
@@ -1750,6 +1768,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let fallbackApplied = false;
   let clientDeterministicFallbackAttempted = false;
   let clientDeterministicFallbackReason: string | undefined = undefined;
+  let providerRejectionReason: string | undefined = undefined;
+  let providerRejectionStage: string | undefined = undefined;
+  let providerDetectedMaterialFamilyCount = 0;
+  let authoritativeRequiredFamilyCount = 0;
+  let fallbackCoveredFamilyCount = 0;
+  let finalSelectedCoveredFamilyCount = 0;
   let clientDeterministicFallbackBulletCount = 0;
   let clientDeterministicFallbackScripts: string[] = [];
   let clientDeterministicFallbackRequiredFactCount = sourceFactCount;
@@ -1796,6 +1820,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     serverFallbackUsed,
     clientDeterministicFallbackAttempted,
     clientDeterministicFallbackReason,
+    providerRejectionReason,
+    providerRejectionStage,
+    providerDetectedMaterialFamilyCount,
+    authoritativeRequiredFamilyCount,
+    fallbackCoveredFamilyCount,
+    finalSelectedCoveredFamilyCount,
     clientDeterministicFallbackBulletCount,
     clientDeterministicFallbackScripts,
     clientDeterministicFallbackRequiredFactCount,
@@ -1985,6 +2015,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       return null;
     }
     const crossLocaleAccept = stage === 'cross_locale_translation_fallback';
+    const russianDesignRebuild = stage === 'russian_design_family_rebuild';
     const crossLocaleOp = Boolean(
       sourceForCoverage
       && (
@@ -1995,7 +2026,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     // Cross-locale provider + translation fallback: locale/script purity first,
     // then semantic frame coverage (never Serbian↔Hindi token overlap).
-    if (crossLocaleOp && (crossLocaleAccept || stage === 'provider')) {
+    // Russian design rebuild also skips English/canonical fidelity — shells are
+    // entry-owned job-context facts, not translations of poisoned textarea.
+    if (
+      (crossLocaleOp && (crossLocaleAccept || stage === 'provider'))
+      || russianDesignRebuild
+    ) {
       if (!textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')) {
         lastRejectStage = stage;
         lastRejectReason = 'locale_mismatch';
@@ -2021,6 +2057,28 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
     } else {
+      // Same-locale Russian design: family/generic-duty gate before canonical
+      // fidelity so provider rejection stays russian_design_* (not missing_canonical_duty).
+      if (
+        locale === 'ru'
+        && stage === 'provider'
+        && experienceNeedsRussianDesignFamilyRebuild({
+          locale,
+          sourceDescription: sourceForCoverage,
+          position: exp?.position || cv.personal?.jobTitle,
+        })
+      ) {
+        const fam = validateRussianDesignFactFamilies(candidate);
+        providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
+        authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+        if (!fam.ok) {
+          lastRejectStage = `${stage}:russian_design_families`;
+          lastRejectReason = fam.reason || 'russian_design_family_coverage_incomplete';
+          lastRequired = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+          lastCovered = fam.coveredFamilies.length;
+          return null;
+        }
+      }
       const pass = bulletsPass(candidate, factSet, cvForFacts, locale, experienceIndex, isPresent);
       if (!pass.ok) {
         lastRejectStage = stage;
@@ -2040,7 +2098,46 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       lastRejectReason = leakage.reason || 'cross_entry_fact_leakage';
       return null;
     }
-    if (sourceForCoverage && crossLocaleOp && (crossLocaleAccept || stage === 'provider')) {
+    // Russian design family rebuild: validate against authoritative three-family
+    // shells — never against poisoned live textarea / source-preserving prose.
+    if (russianDesignRebuild && locale === 'ru') {
+      void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
+      const authoritativeDesignSource = normalizeLocaleText(
+        buildJobContextGenerationFallback({
+          locale: 'ru',
+          gender,
+          position: exp?.position || cv.personal?.jobTitle || 'design',
+          industry: 'design',
+          isPresent,
+        }),
+        locale,
+      );
+      const post = validateExperienceApplyMaterialPostcondition(
+        authoritativeDesignSource || candidate,
+        candidate,
+        { targetLocale: 'ru' },
+      );
+      const fam = validateRussianDesignFactFamilies(candidate);
+      authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+      fallbackCoveredFamilyCount = fam.coveredFamilies.length;
+      finalSelectedCoveredFamilyCount = fam.ok ? fam.coveredFamilies.length : 0;
+      lastRequired = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+      lastCovered = fam.coveredFamilies.length;
+      clientDeterministicFallbackRequiredFactCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+      clientDeterministicFallbackCoveredFactCount = fam.coveredFamilies.length;
+      if (!fam.ok || !post.ok) {
+        lastRejectStage = `${stage}:russian_design_families`;
+        lastRejectReason = fam.reason
+          || post.reason
+          || 'russian_design_family_rebuild_failed';
+        return null;
+      }
+      if (!textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')) {
+        lastRejectStage = `${stage}:locale_purity`;
+        lastRejectReason = 'locale_mismatch';
+        return null;
+      }
+    } else if (sourceForCoverage && crossLocaleOp && (crossLocaleAccept || stage === 'provider')) {
       // Locale purity already validated above. Prefer semantic frames across
       // languages; material keys are a secondary signal when present.
       // Russian design: never accept on soft frame matching alone — require
@@ -2203,6 +2300,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || stage === 'source_preserving_fallback'
         || stage === 'occupation_fallback'
         || stage === 'cross_locale_translation_fallback'
+        || stage === 'russian_design_family_rebuild'
       );
     if (isClientFallback) {
       fallbackApplied = true;
@@ -2467,10 +2565,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             },
           });
         }
+        // Keep tryAccept's typed material/design rejection — do not overwrite with
+        // stale locale_mismatch when locale/script purity already passed.
+        providerRejectionReason = lastRejectReason;
+        providerRejectionStage = lastRejectStage;
+        if (locale === 'ru') {
+          const fam = validateRussianDesignFactFamilies(finalNormalizedBullets);
+          providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
+        }
+      } else {
+        // Cross-locale unchanged provider text → continue to localized fallback.
+        lastRejectStage = 'provider:cross_locale_or_noop';
+        lastRejectReason = 'locale_mismatch';
+        providerRejectionReason = 'locale_mismatch';
+        providerRejectionStage = lastRejectStage;
       }
-      // Cross-locale unchanged provider text → continue to localized fallback.
-      lastRejectStage = 'provider:cross_locale_or_noop';
-      lastRejectReason = 'locale_mismatch';
     } else if (!perspectiveGate.ok) {
       lastRejectStage = 'provider:perspective';
       lastRejectReason = perspectiveGate.reason || 'experience_cv_perspective_first_person';
@@ -2495,6 +2604,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           },
         });
       }
+      providerRejectionReason = lastRejectReason;
+      providerRejectionStage = lastRejectStage;
+      if (locale === 'ru') {
+        const fam = validateRussianDesignFactFamilies(finalNormalizedBullets);
+        providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
+        if (isRussianDesignFamilyRejectionReason(lastRejectReason)
+          || sourceRequiresRussianDesignFamilies(sourceForCoverage)
+          || classifyFreeTextJobDomain(exp?.position || '') === 'design') {
+          authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+          lastRequired = Math.max(lastRequired, RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT);
+        }
+      }
     }
     }
   } else {
@@ -2504,7 +2625,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   // Provider/server postconditions failed → always attempt client deterministic fallback.
   clientDeterministicFallbackAttempted = true;
-  clientDeterministicFallbackReason = lastRejectReason || 'provider_postcondition_failed';
+  if (!providerRejectionReason) {
+    providerRejectionReason = lastRejectReason || 'provider_postcondition_failed';
+    providerRejectionStage = lastRejectStage;
+  }
+  // Fallback routing reason must not inherit stale locale_mismatch from material rejects.
+  clientDeterministicFallbackReason = isRussianDesignFamilyRejectionReason(providerRejectionReason)
+    ? 'russian_design_family_rebuild'
+    : (lastRejectReason && lastRejectReason !== 'locale_mismatch'
+      ? lastRejectReason
+      : (providerRejectionReason || 'provider_postcondition_failed'));
 
   // Generation Mode: never use source-preserving / canonical FACT LOCK fallbacks.
   if (sourceWasEmpty) {
@@ -2574,6 +2704,96 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       roleDutyConflict,
       countedAsSuccess: false,
       diagnostics: baseDiag(),
+    });
+  }
+
+  // Russian graphic-design: route family/generic-duty rejects to concrete three-family
+  // rebuild. Never source-preserve poisoned live textarea; never label as locale_mismatch.
+  const needsRussianDesignRebuild = experienceNeedsRussianDesignFamilyRebuild({
+    locale,
+    sourceDescription: sourceForCoverage,
+    position: exp?.position || cv.personal?.jobTitle,
+    rejectReason: providerRejectionReason || lastRejectReason,
+  });
+  if (needsRussianDesignRebuild) {
+    void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
+    clientDeterministicFallbackReason = 'russian_design_family_rebuild';
+    authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+    const designFamilyFallback = normalizeLocaleText(
+      buildJobContextGenerationFallback({
+        locale: 'ru',
+        gender,
+        position: exp?.position || cv.personal?.jobTitle || 'design',
+        industry: 'design',
+        isPresent,
+      }),
+      locale,
+    );
+    clientDeterministicFallbackBulletCount = splitExperienceBullets(designFamilyFallback)
+      .filter(Boolean).length;
+    clientDeterministicFallbackScripts = detectBulletScripts(designFamilyFallback);
+    if (designFamilyFallback.trim()) {
+      const acceptedDesign = tryAccept(
+        designFamilyFallback,
+        'deterministic_fallback',
+        'russian_design_family_rebuild',
+      );
+      if (acceptedDesign) {
+        perspectiveMeta = {
+          ...perspectiveMeta,
+          perspectiveNormalizationAttempted: true,
+          perspectiveNormalizationApplied: true,
+          perspectiveValidationPassed: true,
+          meaningfulChangeDetected: true,
+          noOpRejected: false,
+          normalizedBulletsUsedForApply: true,
+          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
+        };
+        finalSelectedCoveredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+        fallbackCoveredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+        return attachPerspectiveDiag({
+          ...acceptedDesign,
+          diagnostics: {
+            ...acceptedDesign.diagnostics,
+            clientDeterministicFallbackAttempted: true,
+            clientDeterministicFallbackApplied: true,
+            clientDeterministicFallbackReason: 'russian_design_family_rebuild',
+            providerRejectionReason,
+            providerRejectionStage,
+            providerDetectedMaterialFamilyCount,
+            authoritativeRequiredFamilyCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+            fallbackCoveredFamilyCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+            finalSelectedCoveredFamilyCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+            fallbackCoverageCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+            requiredFactCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+            coveredFactCount: providerCoveredFactCount,
+            rejectionStage: undefined,
+            typedFailureReason: undefined,
+          },
+        });
+      }
+    }
+    // Fail closed: never reapply bad provider or source-preserving generic prose.
+    lastRejectReason = lastRejectReason || 'russian_design_family_rebuild_failed';
+    lastRejectStage = 'russian_design_family_rebuild';
+    clientDeterministicFallbackReason = 'russian_design_family_rebuild';
+    return attachPerspectiveDiag({
+      blocked: true,
+      reason: lastRejectReason,
+      text: exp?.description || '',
+      origin: 'user',
+      roleDutyConflict,
+      countedAsSuccess: false,
+      diagnostics: {
+        ...baseDiag(),
+        providerRejectionReason,
+        providerRejectionStage,
+        clientDeterministicFallbackReason: 'russian_design_family_rebuild',
+        clientDeterministicFallbackApplied: false,
+        authoritativeRequiredFamilyCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+        typedFailureReason: lastRejectReason,
+        rejectionStage: 'russian_design_family_rebuild',
+      },
     });
   }
 
@@ -2739,7 +2959,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           const acceptedDesign = tryAccept(
             designFamilyFallback,
             'deterministic_fallback',
-            'cross_locale_translation_fallback',
+            'russian_design_family_rebuild',
           );
           if (acceptedDesign) {
             perspectiveMeta = {
@@ -2761,6 +2981,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 clientDeterministicFallbackAttempted: true,
                 clientDeterministicFallbackApplied: true,
                 clientDeterministicFallbackReason: 'russian_design_family_rebuild',
+                providerRejectionReason,
+                providerRejectionStage,
+                authoritativeRequiredFamilyCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+                fallbackCoveredFamilyCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
+                finalSelectedCoveredFamilyCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
               },
             });
           }

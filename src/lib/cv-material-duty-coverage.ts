@@ -242,6 +242,31 @@ void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
 /** Runtime marker — Russian design three-family coverage (build 286). */
 export const RUSSIAN_DESIGN_FAMILIES_REVISION = 'russian-design-families-286-v1' as const;
 void RUSSIAN_DESIGN_FAMILIES_REVISION;
+/** Runtime marker — Russian design fallback routing (rebuild, not source-preserving). */
+export const RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION =
+  'russian-design-fallback-routing-287-v1' as const;
+void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
+
+/** Authoritative design material keys used by Summary/Experience family accounting. */
+export const RUSSIAN_AUTHORITATIVE_DESIGN_MATERIAL_KEYS = [
+  'design_visual_materials',
+  'design_graphic_elements',
+  'design_review_adapt',
+  'design_project_requirements',
+  'design_files_formats',
+  'design_different_screens',
+] as const;
+
+export const RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT = 3 as const;
+
+export function isRussianDesignFamilyRejectionReason(reason: string | null | undefined): boolean {
+  const r = String(reason || '');
+  return r === 'russian_design_generic_duty'
+    || r === 'russian_design_family_coverage_incomplete'
+    || r === 'russian_design_family_incomplete'
+    || r === 'russian_design_semantic_duplicate'
+    || r === 'russian_design_family_rebuild_failed';
+}
 /** Fine-grained Hindi warehouse cues for per-unit diagnostics (aliases of the 3 keys). */
 export type WarehouseMaterialCueKey =
   | 'warehouse_inbound_check'
@@ -616,6 +641,34 @@ export function sourceRequiresRussianDesignFamilies(sourceDescription: string): 
   const cues = collectDesignMaterialKeysFromDescription(sourceDescription)
     .filter((k) => k.startsWith('design_'));
   return cues.length >= 2;
+}
+
+/**
+ * Whether a Russian Experience operation must rebuild the concrete three design
+ * families instead of preserving poisoned live textarea / soft frame shells.
+ */
+export function experienceNeedsRussianDesignFamilyRebuild(options: {
+  locale: string;
+  sourceDescription?: string | null;
+  position?: string | null;
+  rejectReason?: string | null;
+}): boolean {
+  void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
+  if (options.locale !== 'ru') return false;
+  if (isRussianDesignFamilyRejectionReason(options.rejectReason)) return true;
+  const source = options.sourceDescription || '';
+  if (sourceRequiresRussianDesignFamilies(source)) {
+    return !validateRussianDesignFactFamilies(source).ok;
+  }
+  // Position-classified graphic design with incomplete/generic live prose.
+  const position = String(options.position || '');
+  if (/(dizajn|design|grafick|graphic|visual|vizuel|дизайн|графическ|تصميم|डिज़ाइन)/i.test(position)) {
+    if (!source.trim()) return true;
+    return !validateRussianDesignFactFamilies(source).ok
+      || isRussianGenericDesignDutyUnit(source)
+      || validateRussianDesignFactFamilies(source).coveredFamilies.length < 3;
+  }
+  return false;
 }
 
 const ARABIC_ACTION_CUES = /تتحقق|تحقّقت|تحدّث|حدّثت|تنسّق|نسّقت|تعدّ|أعدّت|تراجع|راجعت|تكيّف|كيّفت|تحافظ|حافظت|فحص|تسجيل|تحديث|ترتيب|إعداد|تجهيز/gu;
