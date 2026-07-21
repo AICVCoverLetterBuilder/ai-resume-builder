@@ -159,7 +159,9 @@ describe('cv-build293 Experience AI no-op recovery + entry targeting', () => {
     expect(recovered.finalized.diagnostics?.deterministicFallbackAppliedAfterNoOp).toBe(true);
     expect(recovered.finalized.diagnostics?.finalCandidateSource).toBe('deterministic_fallback');
     expect(experienceAiHasMeaningfulChange(HR_WH_EXACT, recovered.finalized.text)).toBe(true);
-    expect(recovered.finalized.text).toMatch(/Provjerava|Ažurira|Surađuje|te održava|kolegama/);
+    expect(recovered.finalized.text).toMatch(/Provjerava|Ažurira|Surađuje|preglednom rasporedu|kolegama/);
+    expect(recovered.finalized.text).toContain('urednom i preglednom rasporedu');
+    expect(recovered.finalized.text).not.toMatch(/pregledom rasporedu|urednom i pregledom/i);
     // Single apply path — usage counted once by client when countedAsSuccess.
     expect(recovered.finalized.countedAsSuccess).toBe(true);
   });
@@ -364,7 +366,9 @@ describe('cv-build293 Experience AI no-op recovery + entry targeting', () => {
       noOpRepairAttempted: true,
     });
     expect(recovered.blocked).toBe(false);
-    expect(recovered.finalized.text).toMatch(/Provjeravala je|Ažurirala je|Surađivala je/);
+    expect(recovered.finalized.text).toMatch(/Provjeravala je|Ažurirala je|ažurirala|Surađivala je|skrbila/);
+    expect(recovered.finalized.text).toContain('urednom i preglednom rasporedu');
+    expect(recovered.finalized.text).not.toMatch(/pregledom rasporedu|urednom i pregledom/i);
     expect(recovered.finalized.text).not.toMatch(/^• Provjerava /m);
   });
 });

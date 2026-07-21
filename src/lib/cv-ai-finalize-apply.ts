@@ -150,6 +150,7 @@ import {
   EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
   buildExperienceAiNoOpStylisticFallback,
   experienceAiNoOpFallbackIsSafe,
+  polishCroatianExperienceAiText,
 } from './cv-experience-ai-noop-recovery';
 import {
   evaluateRoleDutyConsistency,
@@ -2947,7 +2948,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       finalPersonMode: persp.normalizedPersonMode,
     };
     // Authoritative finalNormalizedBullets — validate and apply this array only.
-    const finalNormalizedBullets = persp.text;
+    // After employment-tense / perspective normalization, apply Croatian warehouse
+    // locative grammar polish (preglednom, not pregledom) without skipping no-op
+    // detection on unchanged present-tense echoes.
+    const finalNormalizedBullets = locale === 'hr' && persp.perspectiveNormalizationApplied
+      ? polishCroatianExperienceAiText(persp.text)
+      : persp.text;
     const perspectiveGate = validateExperienceCvPerspective(finalNormalizedBullets, locale);
     perspectiveMeta.perspectiveValidationPassed = perspectiveGate.ok;
     perspectiveMeta.finalPersonMode = perspectiveGate.finalPersonMode;

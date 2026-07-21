@@ -80,23 +80,62 @@ export function buildExperienceAiNoOpRepairPrompt(options: {
 }
 
 /**
+ * Locative singular masculine of *pregledan* is *preglednom* (o preglednom rasporedu).
+ * Never emit instrumental-looking *pregledom* with locative *rasporedu*.
+ */
+export function sanitizeCroatianWarehouseLocativeAgreement(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/\burednom i pregledom rasporedu\b/giu, 'urednom i preglednom rasporedu')
+    .replace(/\bpregledom rasporedu\b/giu, 'preglednom rasporedu')
+    .replace(/\bo uredan rasporedu\b/giu, 'o urednom rasporedu')
+    .replace(/\buredan i preglednom rasporedu\b/giu, 'uredan i pregledan raspored')
+    .replace(/\burednom i pregledan rasporedu\b/giu, 'urednom i preglednom rasporedu');
+}
+
+/** True when Croatian warehouse locative adjectives are malformed. */
+export function hasMalformedCroatianWarehouseLocative(text: string): boolean {
+  const t = text || '';
+  return /\bpregledom rasporedu\b/iu.test(t)
+    || /\burednom i pregledom\b/iu.test(t)
+    || /\bo uredan rasporedu\b/iu.test(t)
+    || /\buredan i preglednom rasporedu\b/iu.test(t);
+}
+
+/**
  * Light professional polish for South Slavic CV bullets — wording must change
  * under normalizeSourceFactText, without inventing duties.
  */
 function polishSouthSlavicUnit(unit: string): string {
   let t = stripDutyListPrefix(unit || '').trim();
   if (!t) return t;
+  // Fix known malformed locative agreement before / after stylistic rewrites.
+  t = sanitizeCroatianWarehouseLocativeAgreement(t);
   t = t
     .replace(/\bkolegicama i kolegama\b/giu, 'kolegama')
     .replace(/\bna koordinaciji pripreme i premještanja\b/giu, 'pri pripremi i premještanju')
     .replace(/\bna koordinaciji\b/giu, 'pri')
+    // Present: records + orderly goods → approved locative adjective agreement.
     .replace(
-      /\bskladišne evidencije i održava urednu raspoređenost uskladištene robe\b/giu,
-      'skladišnu evidenciju te održava uredno i organizirano skladištenje robe',
+      /\b(?:Redovito\s+)?(?:Ažurira|ažurira)\s+skladišne evidencije(?:\s+(?:i|te)\s+(?:održava urednu raspoređenost|skrbi o urednom i pregledn(?:om|im) rasporedu))\s+uskladištene robe\b/giu,
+      'Redovito ažurira skladišne evidencije te skrbi o urednom i preglednom rasporedu uskladištene robe',
+    )
+    .replace(
+      /\b(?:Redovito\s+)?(?:Ažurira|ažurira)\s+skladišne evidencije i održava urednu raspoređenost uskladištene robe\b/giu,
+      'Redovito ažurira skladišne evidencije te skrbi o urednom i preglednom rasporedu uskladištene robe',
+    )
+    // Completed female / male past after employment-tense normalization.
+    .replace(
+      /\b(?:Redovito\s+(?:je\s+)?)?(?:Ažurirala je|ažurirala je)\s+skladišne evidencije(?:\s+(?:i|te)\s+(?:održavala urednu raspoređenost|skrbila(?:\s+je)? o urednom i pregledn(?:om|im) rasporedu))\s+uskladištene robe\b/giu,
+      'Redovito je ažurirala skladišne evidencije te skrbila o urednom i preglednom rasporedu uskladištene robe',
+    )
+    .replace(
+      /\b(?:Redovito\s+(?:je\s+)?)?(?:Ažurirao je|ažurirao je)\s+skladišne evidencije(?:\s+(?:i|te)\s+(?:održavao urednu raspoređenost|skrbio(?:\s+je)? o urednom i pregledn(?:om|im) rasporedu))\s+uskladištene robe\b/giu,
+      'Redovito je ažurirao skladišne evidencije te skrbio o urednom i preglednom rasporedu uskladištene robe',
     )
     .replace(
       /\bskladisne evidencije i odrzava urednu rasporedjenost uskladistene robe\b/giu,
-      'skladisnu evidenciju te odrzava uredno i organizirano skladistenje robe',
+      'Redovito azurira skladisne evidencije te skrbi o urednom i preglednom rasporedu uskladistene robe',
     )
     .replace(/\bi održava\b/giu, ' te održava')
     .replace(/\bi odrzava\b/giu, ' te odrzava')
@@ -109,12 +148,19 @@ function polishSouthSlavicUnit(unit: string): string {
     .replace(
       /\bSurađuje s kolegama pri pripremi i premještanju robe\b/giu,
       'Surađuje s kolegama na pripremi i premještanju robe unutar skladišta',
-    );
+    )
+    // Employment-tense over-eager stem cut: surađuje → surađujela (invalid).
+    .replace(/\bSurađujela\b/gu, 'Surađivala')
+    .replace(/\bsurađujela\b/gu, 'surađivala')
+    .replace(/\bSurađujelo\b/gu, 'Surađivao')
+    .replace(/\bSarađujela\b/gu, 'Sarađivala')
+    .replace(/\bsarađujela\b/gu, 'sarađivala');
   // Prefer "te" once between major coordinated clauses when still " i ".
   if (/\bi\b/i.test(t) && !/\bte\b/i.test(t)) {
     t = t.replace(/\bi\b/i, 'te');
   }
-  return t.replace(/\s+/g, ' ').trim();
+  // Final pass: locative agreement must survive any connector rewrite.
+  return sanitizeCroatianWarehouseLocativeAgreement(t.replace(/\s+/g, ' ').trim());
 }
 
 function polishEnglishUnit(unit: string): string {
@@ -148,6 +194,20 @@ function polishUnit(unit: string, locale: Locale): string {
     else t = `${t} as part of day-to-day role duties.`;
   }
   return t.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Apply Croatian Experience AI warehouse grammar polish to already-tensed
+ * bullet text (does not re-apply employment tense).
+ */
+export function polishCroatianExperienceAiText(text: string): string {
+  const units = extractSourceDutyUnits(text);
+  if (!units.length) return sanitizeCroatianWarehouseLocativeAgreement(text || '');
+  const lines = units.map((unit) => {
+    const polished = polishSouthSlavicUnit(unit);
+    return polished || stripDutyListPrefix(unit);
+  });
+  return sanitizeCroatianWarehouseLocativeAgreement(formatExperienceBullets(lines));
 }
 
 /**
