@@ -169,9 +169,12 @@ const DURATION_EXPRESSION_RES: RegExp[] = [
   // Hindi months-based: छह वर्ष छह महीने
   /(?:लगभग|करीब)?\s*(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*वर्ष(?:ों)?\s*(?:और\s*)?(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*महीन[ेों]/gu,
 
-  // Japanese
+  // Japanese — written (通算約六年半) and numeric (約6.5年); never treat decimals as preferred.
+  /通算約?(?:一年半|二年半|三年半|四年半|五年半|六年半|七年半|八年半|九年半|十年半|一年|二年|三年|四年|五年|六年|七年|八年|九年|十年)(?:の実務経験|の(?:勤務)?経験|を有する)?/gu,
+  /約(?:一年半|二年半|三年半|四年半|五年半|六年半|七年半|八年半|九年半|十年半|一年|二年|三年|四年|五年|六年|七年|八年|九年|十年)(?:の実務経験|の(?:勤務)?経験)?/gu,
   new RegExp(String.raw`約\s*${NUM}\s*年の(?:勤務)?経験`, 'gu'),
   new RegExp(String.raw`${NUM}\s*年の(?:勤務)?経験`, 'gu'),
+  new RegExp(String.raw`約\s*${NUM}\s*年`, 'gu'),
 
   // Russian — JS `\b`/`\w` are ASCII-only; use Unicode letter lookarounds.
   new RegExp(
@@ -208,7 +211,7 @@ const DURATION_STRIP_RES: RegExp[] = DURATION_EXPRESSION_RES.map((re) =>
 
 const NUMERIC_HINT_RE = /\d/;
 const WRITTEN_HINT_RE =
-  /(?:one|two|three|four|five|six|seven|eight|nine|ten|and\s+a\s+half|jedne|dve|dvije|tri|četiri|cetiri|pet|šest|sest|sedam|osam|devet|deset|\bi\s+po\b|anderthalb|años|ans|anni|anos|один|одного|два|двух|три|трёх|четыре|четырёх|пять|шесть|семь|восемь|девять|десять|с\s+половиной|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|साढ़े|ثلاث|أربع|خمس|ست|سبع|ثمان|تسع|عشر|سنة|سنتين|ونصف|نحو|حوالي)/iu;
+  /(?:one|two|three|four|five|six|seven|eight|nine|ten|and\s+a\s+half|jedne|dve|dvije|tri|četiri|cetiri|pet|šest|sest|sedam|osam|devet|deset|\bi\s+po\b|anderthalb|años|ans|anni|anos|один|одного|два|двух|три|трёх|четыре|четырёх|пять|шесть|семь|восемь|девять|десять|с\s+половиной|एक|दो|तीन|चार|पाँच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|साढ़े|ثلاث|أربع|خمس|ست|سبع|ثمان|تسع|عشر|سنة|سنتين|ونصف|نحو|حوالي|通算約|六年半|五年半|四年半|三年半|二年半|一年半|一年|二年|三年|四年|五年|六年|七年|八年|九年|十年)/iu;
 
 /** Representation styles inside a single duration claim. */
 export type DurationRepresentationKind =
@@ -295,7 +298,7 @@ export function analyzeDurationRepresentations(
   // Dual equivalent claims in one text (numeric + written of same duration).
   // Skip when the only written cue is months-based (years+months is one representation).
   const hasNumeric = /\d+(?:[.,]\d+)?\s*(?:years?|godin|Jahre|años|ans|anni|anos|лет|سنة|سنوات|वर्ष|年)/iu.test(normalized);
-  const hasWritten = /(?:and\s+a\s+half|i\s+po|с\s+половиной|साढ़े|डेढ़|ढाई|anderthalb|y\s+medio|et\s+demi|e\s+mezzo|e\s+meio)/iu.test(normalized)
+  const hasWritten = /(?:and\s+a\s+half|i\s+po|с\s+половиной|साढ़े|डेढ़|ढाई|anderthalb|y\s+medio|et\s+demi|e\s+mezzo|e\s+meio|通算約|六年半|五年半|四年半|三年半|二年半|一年半)/iu.test(normalized)
     || /(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+years?/iu.test(normalized);
   let duplicateEquivalentDurationCount = 0;
   if (!hiMonthsBased && claims.length >= 2 && hasNumeric && hasWritten) {

@@ -34,8 +34,10 @@ export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as c
 /** Arabic duration finalizer revision — keep Hindi marker present for asset scans. */
 export const SUMMARY_DURATION_FINALIZER_REVISION_AR = 'arabic-duration-idempotent-v1' as const;
 export const SUMMARY_DURATION_FINALIZER_REVISION_RU = 'russian-duration-idempotent-v1' as const;
+export const SUMMARY_DURATION_FINALIZER_REVISION_JA = 'japanese-duration-idempotent-v1' as const;
 void SUMMARY_DURATION_FINALIZER_REVISION_AR;
 void SUMMARY_DURATION_FINALIZER_REVISION_RU;
+void SUMMARY_DURATION_FINALIZER_REVISION_JA;
 
 /** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
 function splitHindiSummaryUnitsLocal(text: string): string[] {
@@ -870,7 +872,9 @@ export function resolveSummaryWithDurationPolicy(
       ? SUMMARY_DURATION_FINALIZER_REVISION_AR
       : locale === 'ru'
         ? SUMMARY_DURATION_FINALIZER_REVISION_RU
-        : SUMMARY_DURATION_FINALIZER_REVISION,
+        : locale === 'ja'
+          ? SUMMARY_DURATION_FINALIZER_REVISION_JA
+          : SUMMARY_DURATION_FINALIZER_REVISION,
   };
 
   // A previously-saved or independently produced summary may already carry the duration
@@ -914,7 +918,9 @@ export function resolveSummaryWithDurationPolicy(
       ? SUMMARY_DURATION_FINALIZER_REVISION_AR
       : locale === 'ru'
         ? SUMMARY_DURATION_FINALIZER_REVISION_RU
-        : SUMMARY_DURATION_FINALIZER_REVISION;
+        : locale === 'ja'
+          ? SUMMARY_DURATION_FINALIZER_REVISION_JA
+          : SUMMARY_DURATION_FINALIZER_REVISION;
   }
 
   const initial = validateSummaryDuration(working, duration, {
@@ -1016,7 +1022,8 @@ export function resolveSummaryWithDurationPolicy(
     } else if (locale === 'sr' || locale === 'hr') {
       fallback = phrase ? `Profesionalka ${phrase}.` : 'Profesionalka sa relevantnim iskustvom.';
     } else if (locale === 'ja') {
-      fallback = phrase ? `プロフェッショナル${phrase}。` : 'プロフェッショナルとして関連経験があります。';
+      // Fail-closed: never emit mixed Russian/English generic shells for Japanese.
+      fallback = '';
     } else {
       fallback = phrase ? `Professional ${phrase}.` : 'Professional with relevant experience.';
     }

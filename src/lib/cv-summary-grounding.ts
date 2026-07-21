@@ -35,6 +35,14 @@ import {
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_UNIT_SPLITTER_REVISION_RU,
 } from './cv-russian-summary-grounding';
+import {
+  analyzeJapaneseSummaryEmploymentQuality,
+  buildJapaneseEntryOwnedSummary,
+  japaneseWarehouseSummaryFragment,
+  SUMMARY_BUILDER_REVISION_JA,
+  SUMMARY_GROUNDING_REVISION_JA,
+  SUMMARY_UNIT_SPLITTER_REVISION_JA,
+} from './cv-japanese-summary-grounding';
 
 export {
   analyzeArabicSummaryEmploymentQuality,
@@ -54,6 +62,15 @@ export {
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_UNIT_SPLITTER_REVISION_RU,
 } from './cv-russian-summary-grounding';
+export {
+  analyzeJapaneseSummaryEmploymentQuality,
+  buildJapaneseEntryOwnedSummary,
+  japaneseWarehouseSummaryFragment,
+  splitJapaneseSummaryUnits,
+  SUMMARY_BUILDER_REVISION_JA,
+  SUMMARY_GROUNDING_REVISION_JA,
+  SUMMARY_UNIT_SPLITTER_REVISION_JA,
+} from './cv-japanese-summary-grounding';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';
 import {
@@ -166,8 +183,8 @@ export function countSummaryWords(text: string, locale?: string): number {
   const t = (text || '').replace(/\s+/g, ' ').trim();
   if (!t) return 0;
   if (locale === 'ja') {
-    // Approximate: CJK characters count ~0.5 “words” for length budgeting.
-    return Math.ceil([...t.replace(/\s/g, '')].length / 2);
+    // CJK length budget: ~1 word per 3 characters (professional Japanese Summary).
+    return Math.ceil([...t.replace(/\s/g, '')].length / 3);
   }
   return t.split(/\s+/).filter(Boolean).length;
 }
@@ -731,7 +748,7 @@ export function validateSummaryMaterialFacts(
     const summaryWhKeys = [...new Set(
       classifyMaterialDutyKeys(summary).filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k)),
     )];
-    const hasConcreteCue = /(?:माल|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар)/iu.test(summary);
+    const hasConcreteCue = /(?:माल|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар|入荷|商品|倉庫|品物)/iu.test(summary);
     const hasGeneric = GENERICIZED_WAREHOUSE_RE.test(summary);
     // Generic records/docs/info alone (or with <2 concrete frames) must fail.
     if (hasGeneric && summaryWhKeys.length < 2) {
@@ -1328,6 +1345,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'hi'
     && locale !== 'ar'
     && locale !== 'ru'
+    && locale !== 'ja'
   ) {
     return '';
   }
@@ -1546,13 +1564,32 @@ export function buildConciseGroundedSummary(
     }
     text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'ja') {
-    const dutyJoin = joinDutyFragments(uniqueFragments, locale);
-    text = [
-      durationPhrase
-        ? `${role || 'プロフェッショナル'}${durationPhrase}${dutyJoin ? `。${dutyJoin}` : ''}。`
-        : `${role || 'プロフェッショナル'}${dutyJoin ? `。${dutyJoin}` : ''}。`,
-      skillSentence,
-    ].filter(Boolean).join('').replace(/\s+/g, '').trim();
+    void SUMMARY_BUILDER_REVISION_JA;
+    void SUMMARY_UNIT_SPLITTER_REVISION_JA;
+    void SUMMARY_GROUNDING_REVISION_JA;
+    void analyzeJapaneseSummaryEmploymentQuality;
+    void japaneseWarehouseSummaryFragment;
+    const jaRole = /(?:warehouse|倉庫|skladist|magacin|radnic|кладов|مستودع)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+      ? localizeWarehouseEmployee('ja', genderNorm || '')
+      : (role || localizeWarehouseEmployee('ja', genderNorm || ''));
+    text = buildJapaneseEntryOwnedSummary({
+      role: jaRole,
+      employer,
+      datesValue,
+      gender: genderNorm || '',
+      durationPhrase: durationPhrase || undefined,
+      dutyFacts,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      priorEmployer: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+        : '',
+      priorSourceDuties,
+      locale: 'ja',
+    });
+    skillSentence = '';
+    void skillSentence;
   } else {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     // Duty fragments are often prepositional/noun phrases (e.g. RU "приготовлении…").

@@ -450,9 +450,9 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
     10: 'दस', 10.5: 'साढ़े दस',
   },
   ja: {
-    1: '1', 1.5: '1.5', 2: '2', 2.5: '2.5', 3: '3', 3.5: '3.5',
-    4: '4', 4.5: '4.5', 5: '5', 5.5: '5.5', 6: '6',
-    7: '7', 8: '8', 9: '9', 10: '10',
+    1: '一年', 1.5: '一年半', 2: '二年', 2.5: '二年半', 3: '三年', 3.5: '三年半',
+    4: '四年', 4.5: '四年半', 5: '五年', 5.5: '五年半', 6: '六年', 6.5: '六年半',
+    7: '七年', 8: '八年', 9: '九年', 10: '十年',
   },
 };
 
@@ -481,7 +481,13 @@ export function yearWordForLocale(locale: Locale, n: number): string {
     if (whole === 2) return 'سنتين ونصف';
     return `${wholeWord} ونصف`;
   }
-  // ja and other numeral-friendly locales may keep a decimal.
+  if (locale === 'ja') {
+    // Prefer written forms (六年半) — never emit decimals like 6.5.
+    const kanji = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+    if (whole >= 1 && whole <= 10) {
+      return half ? `${kanji[whole]}年半` : `${kanji[whole]}年`;
+    }
+  }
   return String(n);
 }
 
@@ -499,6 +505,8 @@ export function summaryHasDurationClaim(text: string): boolean {
     || /लगभग\s+\S+\s+वर्ष/u.test(normalized)
     || /約\s*\d+\s*年/u.test(normalized)
     || /\d+\s*年の経験/u.test(normalized)
+    || /通算約.+年/u.test(normalized)
+    || /六年半|五年半|四年半|三年半|二年半|一年半/u.test(normalized)
     || /سنوات|سنة|خبرة/u.test(normalized)
     || /лет опыта|годом опыта|года опыта|общим опытом|общего опыта/u.test(normalized);
 }
@@ -648,7 +656,10 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
       }
       return `نحو ${word} سنوات من الخبرة المشتركة`;
     case 'ja':
-      return `約${word}年の経験`;
+      // Single written duration — never numeric hybrids like 約6.5年.
+      // word already includes 年 / 年半 (e.g. 六年半).
+      if (/年/.test(word)) return `通算約${word}`;
+      return `通算約${word}年`;
     default:
       return `with approximately ${word} years of experience`;
   }

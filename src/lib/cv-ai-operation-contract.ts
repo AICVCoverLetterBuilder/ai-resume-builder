@@ -210,7 +210,7 @@ export function classifyFreeTextJobDomain(position?: string | null): FreeTextJob
   if (/(dizajn|design|grafick|graphic|visual|vizuel|ui\b|ux\b|일러스트|デザイン|تصميم|डिज़ाइन|дизайн|графическ)/.test(t)) {
     return 'design';
   }
-  if (/(skladist|warehouse|magacin|lager|logist|inventar|inventory|robu|goods|кладов|склад)/.test(t)) {
+  if (/(skladist|warehouse|magacin|lager|logist|inventar|inventory|robu|goods|кладов|склад|倉庫|入荷)/.test(t)) {
     return 'warehouse';
   }
   if (/(software|developer|programer|engineer|frontend|backend|devops|coder)/.test(t)) {

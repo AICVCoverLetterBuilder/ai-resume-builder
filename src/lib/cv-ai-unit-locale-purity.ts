@@ -9,6 +9,7 @@
 import type { Locale } from './i18n/translations';
 import { splitExperienceBullets } from './cv-canonical-facts';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
+import { splitJapaneseSummaryUnits } from './cv-japanese-summary-grounding';
 
 export type AiContentScript =
   | 'latin'
@@ -329,6 +330,16 @@ function unitWrongLocale(text: string, target: Locale): boolean {
     return false;
   }
 
+  if (target === 'ja') {
+    if (guessed === 'ja') return false;
+    // Full Russian or English clauses must never pass under Japanese.
+    if (CYRILLIC.test(text)) return true;
+    if (guessed === 'en' && EN_CLAUSE_RE.test(stripped)) return true;
+    if (guessed === 'ru' || guessed === 'hi' || guessed === 'ar') return true;
+    if (guessed === 'sr' || guessed === 'hr') return true;
+    return false;
+  }
+
   if (guessed === 'sr' || guessed === 'hr') return true;
   if (['hi', 'ar', 'ja', 'ru'].includes(guessed) && !['hi', 'ar', 'ja', 'ru'].includes(target)) {
     return true;
@@ -385,6 +396,16 @@ export function splitAiSemanticUnits(
   }
   if (kind === 'cover_letter_paragraph') {
     return raw.split(/\n{2,}/).map((p) => p.trim()).filter((p) => p.length > 0);
+  }
+  // Japanese Summary does not use spaces — split on 。！？.
+  if (/[。！？]/.test(raw) && /[\u3040-\u30FF\u3400-\u9FFF]/.test(raw)) {
+    return splitJapaneseSummaryUnits(raw);
+  }
+  if (/[।]/.test(raw) && /\p{Script=Devanagari}/u.test(raw)) {
+    return raw
+      .split(/(?<=[।.!?])\s*/u)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
   }
   return raw
     .split(/(?<=[.!?।۔])\s+/u)

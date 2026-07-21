@@ -144,7 +144,7 @@ const DUTY_RULES: DutyRule[] = [
   {
     key: 'healthcare_records',
     source: /\b(medical\s+record|evidenc|chart)\b/iu,
-    localized: /(record|evidenc|chart|記録)/iu,
+    localized: /(medical\s+record|診療記録|カルテ|chart|медицинск)/iu,
   },
   {
     key: 'healthcare_team',
@@ -184,8 +184,9 @@ const DUTY_RULES: DutyRule[] = [
     // जाँच (chandrabindu) and जांच (anusvara) are both live Android spellings.
     source:
       /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل|проверя).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:rob\w*|goods?|माल|товар|بضائع|واردة|وثائق|商品|документ|сопроводительн).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ).{0,40}(?:rob\w*|goods?|माल|بضائع|товар)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित|مرفق|сопроводительн).{0,40}(?:dokument|document|दस्तावे|وثائق|документ)|(?:dokument|document|दस्तावे|وثائق|документ).{0,40}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|فحص|संबंधित|مرفق|проверя|сопроводительн)/iu,
-    localized:
-      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|يتحقق|فحص|проверя).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|書類|сопроводительн)|(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|сопроводительн).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|فحص|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ).{0,40}(?:rob\w*|goods?|माल|بضائع|товар)|(?:prateć\w*|accompany\w*|संबंधित|مرفق|сопроводительн).{0,40}(?:dokument|document|दस्तावे|وثائق|документ))/iu,
+  // Japanese warehouse cues in DUTY_RULES localized patterns
+  localized:
+      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|يتحقق|فحص|проверя|入荷).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|書類|сопроводительн|関連書類|添付書類)|(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|сопроводительн|関連書類|添付書類).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|فحص|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ|入荷).{0,40}(?:rob\w*|goods?|माल|بضائع|товар|商品)|(?:prateć\w*|accompany\w*|संबंधित|مرفق|сопроводительн|関連書類|添付書類).{0,40}(?:dokument|document|दस्तावे|وثائق|документ))/iu,
   },
   {
     key: 'warehouse_records',
@@ -209,7 +210,7 @@ const DUTY_RULES: DutyRule[] = [
     source:
       /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة\s*ورقمية|print\s+and\s+digital|визуальн[а-яёА-ЯЁ]*\s+материал|графическ[а-яёА-ЯЁ]*\s+элемент)/iu,
     localized:
-      /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+элемент|дизайн-?материал)/iu,
+      /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+элемент|дизайн-?материал|ビジュアル素材|視覚素材|グラフィック要素|デザイン素材)/iu,
   },
   {
     key: 'design_review_adapt',
@@ -217,7 +218,7 @@ const DUTY_RULES: DutyRule[] = [
       /(?:review\w*.{0,40}(?:design|dizajn)|adapt\w*.{0,40}(?:design|dizajn)|आवश्यकताओं.{0,40}डिज़ाइन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|requirements?.{0,40}design|проверя\w*.{0,40}адаптир|адаптир\w*.{0,40}(?:дизайн|требовани)|требовани\w*\s+проекта)/iu,
     // Never treat bare "проверя/review" as adaptation — require adapt / project-requirements evidence.
     localized:
-      /(?:adapt\w*.{0,40}(?:design|dizajn|материал)|prilago[dđ]|अनुकूलन|تكيّف|كيّفت?|адаптир\w*.{0,40}(?:дизайн|требовани|материал)|(?:проверя\w*|review\w*|pregled\w*|समीक्षा|مراجعة|راجع(?:ت)?).{0,48}адаптир|(?:требовани\w*\s+проекта|project\s+requirements?|متطلبات\s*المشروع|आवश्यकताओं))/iu,
+      /(?:adapt\w*.{0,40}(?:design|dizajn|материал)|prilago[dđ]|अनुकूलन|تكيّف|كيّفت?|адаптир\w*.{0,40}(?:дизайн|требовани|материал)|(?:проверя\w*|review\w*|pregled\w*|समीक्षा|مراجعة|راجع(?:ت)?).{0,48}адаптир|(?:требовани\w*\s+проекта|project\s+requirements?|متطلبات\s*المشروع|आवश्यकताओं)|(?:確認|レビュー).{0,24}(?:調整|適合)|要件に合わせて)/iu,
   },
   {
     key: 'design_brand_identity',
@@ -232,13 +233,16 @@ const DUTY_RULES: DutyRule[] = [
       /(?:design\s+files?|final\s+design|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|formats?\s+for\s+different|дизайн-?файл|финальн\w*\s+дизайн|формат\w*.{0,40}экран|подготавлива\w*.{0,40}файл)/iu,
     // Bare "экран" / generic "материалы" must not satisfy final files/formats.
     localized:
-      /(?:design\s+files?|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|дизайн-?файл|финальн[а-яё]*\s+дизайн-?файл|файл[а-яё]*.{0,32}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,32}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат)/iu,
+      /(?:design\s+files?|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|дизайн-?файл|финальн[а-яё]*\s+дизайн-?файл|файл[а-яё]*.{0,32}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,32}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат|最終(?:デザイン)?ファイル|デザインファイル|形式|フォーマット|画面)/iu,
   },
 ];
 
 /** Runtime marker — Russian Experience material model (must remain in packaged assets). */
 export const RUSSIAN_EXPERIENCE_MATERIAL_REVISION = 'russian-experience-material-v1' as const;
 void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
+/** Runtime marker — Japanese Experience material model (must remain in packaged assets). */
+export const JAPANESE_EXPERIENCE_MATERIAL_REVISION = 'japanese-experience-material-v1' as const;
+void JAPANESE_EXPERIENCE_MATERIAL_REVISION;
 /** Runtime marker — Russian design three-family coverage (build 286). */
 export const RUSSIAN_DESIGN_FAMILIES_REVISION = 'russian-design-families-286-v1' as const;
 void RUSSIAN_DESIGN_FAMILIES_REVISION;
@@ -361,6 +365,49 @@ export function russianWarehouseCueKeysFromUnit(unit: string): WarehouseMaterial
   return out;
 }
 
+/** Fine-grained Japanese warehouse cues. */
+const JAPANESE_WAREHOUSE_CUE_RULES: Array<{ key: WarehouseMaterialCueKey; re: RegExp }> = [
+  {
+    key: 'warehouse_inbound_check',
+    re: /入荷|関連書類|添付書類|(?:商品|品物).{0,24}(?:確認|正確)|(?:書類).{0,16}確認|正確性/u,
+  },
+  {
+    key: 'warehouse_document_check',
+    re: /関連書類|添付書類|書類確認|書類の照合/u,
+  },
+  {
+    key: 'warehouse_records',
+    re: /倉庫記録|在庫記録|(?:記録).{0,12}更新|(?:更新).{0,12}(?:記録|倉庫)/u,
+  },
+  {
+    key: 'warehouse_orderly_goods',
+    re: /整理|配置|保管|(?:整然).{0,16}(?:配置|保管)|保管状態/u,
+  },
+  {
+    key: 'warehouse_preparation',
+    re: /(?:商品|品物).{0,16}準備|準備.{0,16}(?:商品|品物)/u,
+  },
+  {
+    key: 'warehouse_movement',
+    re: /移動|倉庫内|(?:商品|品物).{0,16}移動/u,
+  },
+  {
+    key: 'warehouse_colleague_coordination',
+    re: /同僚.{0,24}(?:連携|調整)|(?:連携|調整).{0,24}同僚/u,
+  },
+];
+
+export function japaneseWarehouseCueKeysFromUnit(unit: string): WarehouseMaterialCueKey[] {
+  void JAPANESE_EXPERIENCE_MATERIAL_REVISION;
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  const out: WarehouseMaterialCueKey[] = [];
+  for (const rule of JAPANESE_WAREHOUSE_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
 export type DesignMaterialCueKey =
   | 'design_visual_materials'
   | 'design_graphic_elements'
@@ -450,6 +497,44 @@ export function russianDesignCueKeysFromUnit(unit: string): DesignMaterialCueKey
   }
   const out: DesignMaterialCueKey[] = [];
   for (const rule of RUSSIAN_DESIGN_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
+const JAPANESE_DESIGN_CUE_RULES: Array<{ key: DesignMaterialCueKey; re: RegExp }> = [
+  {
+    key: 'design_visual_materials',
+    re: /ビジュアル素材|視覚素材|デザイン素材/u,
+  },
+  {
+    key: 'design_graphic_elements',
+    re: /グラフィック要素/u,
+  },
+  {
+    key: 'design_review_adapt',
+    re: /(?:確認|レビュー).{0,24}(?:調整|適合)|(?:調整|適合).{0,24}(?:要件|デザイン)|要件に合わせて/u,
+  },
+  {
+    key: 'design_project_requirements',
+    re: /プロジェクト要件|要件に合わせ|要件/u,
+  },
+  {
+    key: 'design_files_formats',
+    re: /最終(?:デザイン)?ファイル|デザインファイル|形式|フォーマット/u,
+  },
+  {
+    key: 'design_different_screens',
+    re: /画面|端末|デバイス|画面ごと|画面別/u,
+  },
+];
+
+export function japaneseDesignCueKeysFromUnit(unit: string): DesignMaterialCueKey[] {
+  void JAPANESE_EXPERIENCE_MATERIAL_REVISION;
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  const out: DesignMaterialCueKey[] = [];
+  for (const rule of JAPANESE_DESIGN_CUE_RULES) {
     if (rule.re.test(t)) out.push(rule.key);
   }
   return out;
@@ -630,6 +715,7 @@ export function collectDesignMaterialKeysFromDescription(description: string): s
     for (const k of classifyMaterialDutyKeys(unit)) push(k);
     for (const k of arabicDesignCueKeysFromUnit(unit)) push(k);
     for (const k of russianDesignCueKeysFromUnit(unit)) push(k);
+    for (const k of japaneseDesignCueKeysFromUnit(unit)) push(k);
   }
   return ordered;
 }
@@ -680,6 +766,9 @@ const HINDI_OBJECT_CUES = /माल|दस्तावे|रिकॉर्ड
 const RUSSIAN_ACTION_CUES = /проверя|обновл|поддержива|координир|согласов|созда[её]|адаптир|подготавли|подготов/gu;
 const RUSSIAN_OBJECT_CUES = /товар|документ|запис|склад|коллег|материал|элемент|файл|экран|дизайн/gu;
 
+const JAPANESE_ACTION_CUES = /確認|更新|整理|配置|保管|準備|移動|連携|調整|照合|作成|レビュー/gu;
+const JAPANESE_OBJECT_CUES = /入荷|商品|品物|書類|倉庫|記録|在庫|同僚|ビジュアル|グラフィック|デザイン|ファイル|形式|画面/gu;
+
 export type CurrentSourceUnitMaterialDiag = {
   currentSourceUnitHashes: string[];
   currentSourceUnitMaterialKeys: string[][];
@@ -710,6 +799,8 @@ export function diagnoseCurrentSourceUnitMaterial(
       ...arabicDesignCueKeysFromUnit(unit),
       ...russianWarehouseCueKeysFromUnit(unit),
       ...russianDesignCueKeysFromUnit(unit),
+      ...japaneseWarehouseCueKeysFromUnit(unit),
+      ...japaneseDesignCueKeysFromUnit(unit),
     ];
     const keySet = new Set<string>(keys);
     const merged = [
@@ -723,16 +814,19 @@ export function diagnoseCurrentSourceUnitMaterial(
       ...(normalized.match(HINDI_ACTION_CUES) || []),
       ...(normalized.match(ARABIC_ACTION_CUES) || []),
       ...(normalized.match(RUSSIAN_ACTION_CUES) || []),
+      ...(normalized.match(JAPANESE_ACTION_CUES) || []),
     ]);
     currentSourceUnitObjectKeys.push([
       ...(normalized.match(HINDI_OBJECT_CUES) || []),
       ...(normalized.match(ARABIC_OBJECT_CUES) || []),
       ...(normalized.match(RUSSIAN_OBJECT_CUES) || []),
+      ...(normalized.match(JAPANESE_OBJECT_CUES) || []),
     ]);
     currentSourceUnitWarehouseCueCount.push(
       hindiWarehouseCueKeysFromUnit(unit).length
         + arabicWarehouseCueKeysFromUnit(unit).length
-        + russianWarehouseCueKeysFromUnit(unit).length,
+        + russianWarehouseCueKeysFromUnit(unit).length
+        + japaneseWarehouseCueKeysFromUnit(unit).length,
     );
   }
   return {
@@ -752,6 +846,18 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
   const keys: MaterialDutyKey[] = [];
   for (const rule of DUTY_RULES) {
     if (rule.source.test(t)) keys.push(rule.key);
+  }
+  // Japanese CJK prose: also accept localized DUTY_RULES + fine-grained JA cues.
+  if (/[\u3040-\u30FF\u3400-\u9FFF]/.test(t)) {
+    for (const rule of DUTY_RULES) {
+      if (rule.localized.test(t) && !keys.includes(rule.key)) keys.push(rule.key);
+    }
+    for (const k of japaneseWarehouseCueKeysFromUnit(t)) {
+      if (!keys.includes(k as MaterialDutyKey)) keys.push(k as MaterialDutyKey);
+    }
+    for (const k of japaneseDesignCueKeysFromUnit(t)) {
+      if (!keys.includes(k as MaterialDutyKey)) keys.push(k as MaterialDutyKey);
+    }
   }
   // Kitchen / care team collaboration must not inherit contact-center CS keys.
   if (keys.includes('kitchen_collaboration')) {
