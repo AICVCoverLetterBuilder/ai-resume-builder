@@ -19,6 +19,7 @@ import {
 } from './cv-experience-ai-operation-snapshot';
 import { detectTextLocale } from './cv-content-locale';
 import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
+import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { Locale } from './i18n/translations';
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
@@ -164,7 +165,7 @@ export type ExperienceAiDiagnosticTrace = {
   payloadLocale: string;
   payloadIndustryNorm: string;
   payloadLevelNorm: string;
-  payloadEmploymentState: 'current' | 'completed';
+  payloadEmploymentState: 'current' | 'completed' | 'unknown';
   payloadSourceDescriptionLength: number;
   payloadSourceDescriptionHash: string;
   payloadSourceScript: ExperienceScriptClass;
@@ -205,6 +206,15 @@ export type ExperienceAiDiagnosticTrace = {
   finalMatchesSourceAfterNormalization: boolean;
   meaningfulChangeDetected: boolean;
   noOpRejected: boolean;
+  providerNoOpDetected: boolean;
+  noOpRepairAttempted: boolean;
+  noOpRepairHttpStatus: number | null;
+  noOpRepairValidationPassed: boolean | null;
+  noOpRepairMeaningfulChangeDetected: boolean | null;
+  noOpRepairApplied: boolean;
+  deterministicFallbackAttemptedAfterNoOp: boolean;
+  deterministicFallbackAppliedAfterNoOp: boolean;
+  finalCandidateSource: string | null;
   visibleTextareaMatchesFinalNormalizedHash: boolean | null;
   /** @deprecated Prefer apiResponseKind + clientDeterministicFallback* */
   fallbackSelected: boolean;
@@ -246,6 +256,9 @@ export type ExperienceAiDiagnosticTrace = {
   usageCountBefore: number;
   usageCountAfter: number;
   /** Entry / locale purity (build 271/272) — hashed IDs only. */
+  clickedExperienceEntryIdHash: string | null;
+  snapshotExperienceEntryIdHash: string | null;
+  payloadExperienceEntryIdHash: string | null;
   selectedExperienceEntryIdHash: string | null;
   operationSnapshotExperienceEntryIdHash: string | null;
   appliedExperienceEntryIdHash: string | null;
@@ -253,6 +266,9 @@ export type ExperienceAiDiagnosticTrace = {
   canonicalFactsEntryIdHash: string | null;
   fallbackFactsEntryIdHash: string | null;
   providerTargetEntryIdHash: string | null;
+  fallbackTargetEntryIdHash: string | null;
+  clickedEmploymentState: 'current' | 'completed' | 'unknown' | null;
+  appliedEmploymentState: 'current' | 'completed' | 'unknown' | null;
   arrayIndexAtRequest: number | null;
   arrayIndexAtApply: number | null;
   stableEntryIdentityMatched: boolean | null;
@@ -704,6 +720,15 @@ export class ExperienceAiDiagnosticSession {
       finalMatchesSourceAfterNormalization: false,
       meaningfulChangeDetected: false,
       noOpRejected: false,
+      providerNoOpDetected: false,
+      noOpRepairAttempted: false,
+      noOpRepairHttpStatus: null,
+      noOpRepairValidationPassed: null,
+      noOpRepairMeaningfulChangeDetected: null,
+      noOpRepairApplied: false,
+      deterministicFallbackAttemptedAfterNoOp: false,
+      deterministicFallbackAppliedAfterNoOp: false,
+      finalCandidateSource: null,
       visibleTextareaMatchesFinalNormalizedHash: null,
       fallbackSelected: false,
       fallbackReason: null,
@@ -742,6 +767,9 @@ export class ExperienceAiDiagnosticSession {
       countedAsSuccess: false,
       usageCountBefore: input.usageCountBefore,
       usageCountAfter: input.usageCountBefore,
+      clickedExperienceEntryIdHash: null,
+      snapshotExperienceEntryIdHash: null,
+      payloadExperienceEntryIdHash: null,
       selectedExperienceEntryIdHash: null,
       operationSnapshotExperienceEntryIdHash: null,
       appliedExperienceEntryIdHash: null,
@@ -749,6 +777,9 @@ export class ExperienceAiDiagnosticSession {
       canonicalFactsEntryIdHash: null,
       fallbackFactsEntryIdHash: null,
       providerTargetEntryIdHash: null,
+      fallbackTargetEntryIdHash: null,
+      clickedEmploymentState: null,
+      appliedEmploymentState: null,
       arrayIndexAtRequest: null,
       arrayIndexAtApply: null,
       stableEntryIdentityMatched: null,
@@ -807,12 +838,48 @@ export class ExperienceAiDiagnosticSession {
   }
 
   recordLiveExperience(_exp: WorkExperience, isPresent: boolean): void {
+    const entryHash = hashExperienceEntryId(_exp?.id);
+    const employmentState = isPresent ? 'current' as const : 'completed' as const;
     this.patch({
-      employmentState: isPresent ? 'current' : 'completed',
+      employmentState,
       tenseMode: isPresent ? 'present' : 'past',
-      payloadEmploymentState: isPresent ? 'current' : 'completed',
+      payloadEmploymentState: employmentState,
+      clickedEmploymentState: employmentState,
+      clickedExperienceEntryIdHash: entryHash,
+      snapshotExperienceEntryIdHash: entryHash,
+      payloadExperienceEntryIdHash: entryHash,
+      selectedExperienceEntryIdHash: entryHash,
+      sourceFactsEntryIdHash: entryHash,
+      providerTargetEntryIdHash: entryHash,
+      fallbackTargetEntryIdHash: entryHash,
     });
     this.stage('live_experience_read', 'ok');
+  }
+
+  recordExperienceEntryTarget(opts: {
+    experienceEntryId: string;
+    isPresent: boolean;
+    arrayIndexAtRequest?: number | null;
+  }): void {
+    const entryHash = hashExperienceEntryId(opts.experienceEntryId);
+    const employmentState = opts.isPresent ? 'current' as const : 'completed' as const;
+    this.patch({
+      clickedExperienceEntryIdHash: entryHash,
+      snapshotExperienceEntryIdHash: entryHash,
+      payloadExperienceEntryIdHash: entryHash,
+      selectedExperienceEntryIdHash: entryHash,
+      sourceFactsEntryIdHash: entryHash,
+      canonicalFactsEntryIdHash: entryHash,
+      fallbackFactsEntryIdHash: entryHash,
+      providerTargetEntryIdHash: entryHash,
+      fallbackTargetEntryIdHash: entryHash,
+      operationSnapshotExperienceEntryIdHash: entryHash,
+      clickedEmploymentState: employmentState,
+      payloadEmploymentState: employmentState,
+      employmentState,
+      tenseMode: opts.isPresent ? 'present' : 'past',
+      arrayIndexAtRequest: opts.arrayIndexAtRequest ?? this.draft.arrayIndexAtRequest,
+    });
   }
 
   recordSourceSelection(
@@ -1097,6 +1164,36 @@ export class ExperienceAiDiagnosticSession {
       finalMatchesSourceAfterNormalization: Boolean(diag.finalMatchesSourceAfterNormalization),
       meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
       noOpRejected: Boolean(diag.noOpRejected),
+      providerNoOpDetected: Boolean(
+        diag.providerNoOpDetected
+        || diag.noOpRejected
+        || reason === 'ai_no_meaningful_change'
+        || reason === 'experience_ai_noop',
+      ),
+      noOpRepairAttempted: Boolean(diag.noOpRepairAttempted),
+      noOpRepairValidationPassed: diag.noOpRepairValidationPassed ?? null,
+      noOpRepairMeaningfulChangeDetected: diag.noOpRepairMeaningfulChangeDetected ?? null,
+      noOpRepairApplied: Boolean(diag.noOpRepairApplied),
+      deterministicFallbackAttemptedAfterNoOp: Boolean(
+        diag.deterministicFallbackAttemptedAfterNoOp
+        || (
+          (diag.providerNoOpDetected || diag.noOpRejected)
+          && clientFallbackAttempted
+        ),
+      ),
+      deterministicFallbackAppliedAfterNoOp: Boolean(
+        diag.deterministicFallbackAppliedAfterNoOp
+        || (
+          (diag.providerNoOpDetected || diag.noOpRejected)
+          && clientFallbackApplied
+        ),
+      ),
+      finalCandidateSource: (diag.finalCandidateSource as string | undefined)
+        ?? (finalized.countedAsSuccess
+          ? (clientFallbackApplied
+            ? 'deterministic_fallback'
+            : (diag.noOpRepairApplied ? 'noop_repair' : 'provider'))
+          : 'none'),
       countedAsSuccess: Boolean(finalized.countedAsSuccess),
       finalTypedFailureReason: blocked ? reason : null,
       rejectionStage: blocked
@@ -1147,18 +1244,51 @@ export class ExperienceAiDiagnosticSession {
       contentLocaleUpdatedAfterApply: Boolean(
         diag.contentLocaleUpdatedAfterApply ?? (finalized.countedAsSuccess && !blocked),
       ),
-      selectedExperienceEntryIdHash: (diag.selectedExperienceEntryIdHash as string | undefined) ?? null,
+      selectedExperienceEntryIdHash: (diag.selectedExperienceEntryIdHash as string | undefined)
+        ?? this.draft.selectedExperienceEntryIdHash
+        ?? null,
       operationSnapshotExperienceEntryIdHash:
-        (diag.operationSnapshotExperienceEntryIdHash as string | undefined) ?? null,
+        (diag.operationSnapshotExperienceEntryIdHash as string | undefined)
+        ?? this.draft.operationSnapshotExperienceEntryIdHash
+        ?? this.draft.snapshotExperienceEntryIdHash
+        ?? null,
+      clickedExperienceEntryIdHash: this.draft.clickedExperienceEntryIdHash
+        ?? (diag.selectedExperienceEntryIdHash as string | undefined)
+        ?? null,
+      snapshotExperienceEntryIdHash: this.draft.snapshotExperienceEntryIdHash
+        ?? (diag.operationSnapshotExperienceEntryIdHash as string | undefined)
+        ?? null,
+      payloadExperienceEntryIdHash: this.draft.payloadExperienceEntryIdHash
+        ?? (diag.selectedExperienceEntryIdHash as string | undefined)
+        ?? null,
       appliedExperienceEntryIdHash: (diag.appliedExperienceEntryIdHash as string | undefined)
         ?? (finalized.countedAsSuccess
-          ? ((diag.selectedExperienceEntryIdHash as string | undefined) ?? null)
+          ? ((diag.selectedExperienceEntryIdHash as string | undefined)
+            ?? this.draft.selectedExperienceEntryIdHash
+            ?? null)
           : null),
-      sourceFactsEntryIdHash: (diag.sourceFactsEntryIdHash as string | undefined) ?? null,
-      canonicalFactsEntryIdHash: (diag.canonicalFactsEntryIdHash as string | undefined) ?? null,
-      fallbackFactsEntryIdHash: (diag.fallbackFactsEntryIdHash as string | undefined) ?? null,
-      providerTargetEntryIdHash: (diag.providerTargetEntryIdHash as string | undefined) ?? null,
-      arrayIndexAtRequest: (diag.arrayIndexAtRequest as number | undefined) ?? null,
+      sourceFactsEntryIdHash: (diag.sourceFactsEntryIdHash as string | undefined)
+        ?? this.draft.sourceFactsEntryIdHash
+        ?? null,
+      canonicalFactsEntryIdHash: (diag.canonicalFactsEntryIdHash as string | undefined)
+        ?? this.draft.canonicalFactsEntryIdHash
+        ?? null,
+      fallbackFactsEntryIdHash: (diag.fallbackFactsEntryIdHash as string | undefined)
+        ?? this.draft.fallbackFactsEntryIdHash
+        ?? null,
+      providerTargetEntryIdHash: (diag.providerTargetEntryIdHash as string | undefined)
+        ?? this.draft.providerTargetEntryIdHash
+        ?? null,
+      fallbackTargetEntryIdHash: this.draft.fallbackTargetEntryIdHash
+        ?? (diag.fallbackFactsEntryIdHash as string | undefined)
+        ?? (diag.selectedExperienceEntryIdHash as string | undefined)
+        ?? null,
+      appliedEmploymentState: finalized.countedAsSuccess
+        ? (this.draft.payloadEmploymentState || this.draft.clickedEmploymentState || null)
+        : null,
+      arrayIndexAtRequest: (diag.arrayIndexAtRequest as number | undefined)
+        ?? this.draft.arrayIndexAtRequest
+        ?? null,
       arrayIndexAtApply: (diag.arrayIndexAtApply as number | undefined) ?? null,
       stableEntryIdentityMatched: diag.stableEntryIdentityMatched ?? null,
       targetEntryStillExists: diag.targetEntryStillExists ?? null,

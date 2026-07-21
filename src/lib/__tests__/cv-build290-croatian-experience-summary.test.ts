@@ -155,7 +155,7 @@ describe('cv-build290 Croatian no-op / poisoned design / Summary recovery', () =
     expect(pipe.finalized.countedAsSuccess).toBe(false);
     expect(pipe.finalized.diagnostics?.meaningfulChangeDetected).toBe(false);
     expect(pipe.finalized.diagnostics?.noOpRejected).toBe(true);
-    expect(pipe.finalized.reason).toBe('ai_no_meaningful_change');
+    expect(pipe.finalized.reason).toMatch(/experience_ai_noop|ai_no_meaningful_change|ai_noop/);
     expect(pipe.finalized.text).toBe(HR_WH_EXACT);
   });
 

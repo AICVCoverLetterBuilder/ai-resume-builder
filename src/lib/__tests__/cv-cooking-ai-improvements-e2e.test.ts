@@ -345,6 +345,7 @@ describe('Serbian cooking → English AI Improvements apply pipeline', () => {
       action: 'experience_bullets',
       candidate: duties,
       experienceId: 'exp-cook-1',
+      noOpRepairAttempted: true,
     });
     expect(pipeline.blocked).toBe(false);
     expect(pipeline.stateCv.experience[0].description).toMatch(/React|TypeScript/);

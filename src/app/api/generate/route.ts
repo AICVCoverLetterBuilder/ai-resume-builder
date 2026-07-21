@@ -1208,6 +1208,9 @@ ${sourceFactsText || '(none)'}`
       const employmentTenseNote = isPresentRole
         ? 'EMPLOYMENT STATUS: current role (Present). Describe ongoing duties in natural present / habitual-present CV tense for the target language. Do NOT use completed-past forms that present the role as finished.'
         : 'EMPLOYMENT STATUS: past role (ended). Describe duties in natural past tense for the target language.';
+      const noopRepairRequested = params.noopRepair === true
+        || params.noopRepair === 'true'
+        || Boolean(params.repairPromptHint);
       const factLockNote = hasCanonical
         ? `FACT LOCK: You are given immutable SOURCE BULLETS (original/confirmed user duties) with stable IDs and semantic categories. Preserve EVERY material duty — do not drop, merge-away, or replace any duty. Prefer one bullet per source duty (same order). Translate/polish grammar only. Preserve each bullet's category meaning (guest service stays guest/customer service — never replace with colleague cooperation; inventory counts/management communication must stay; do not invent standard/custom recipes or cuisine types unless present in SOURCE). Do NOT invent adjacent industry duties (e.g. do not add ingredient/material storage to workplace hygiene; do not add route planning to delivery; do not add documentation to testing). Do NOT invent allergy checks, muddling, syrups, wastage, kitchen cooperation, evening shifts, inventory shortages, leadership, metrics, or any duty absent from SOURCE BULLETS. Output CV bullets only — never explain grounding, never mention source duties/role duties/canonical facts/validation. Serbian must use natural forms (koktele not kokteile; barmen/bartending not barteninga; level phrases must match stored enums — never "srednje naprednom").`
         : `GENERATION MODE: The user supplied no duties. Infer exactly 3 ordinary role responsibilities from job title, industry, and seniority only. Company name is display context only — never invent company-specific facts. Use third-person CV style where the language requires it. No tools/software, metrics/KPIs, years of experience, achievements, clients, team size, leadership, certifications, or regulated claims. No generic filler like "carry out assigned professional duties". No English when the target language is not English.`;
@@ -1220,12 +1223,37 @@ ${sourceFactsText || '(none)'}`
       let aiResult = '';
       let generationRepairAttempted = false;
       try {
+        const noopSystem = `You are an expert CV writer performing a NO-OP REPAIR rewrite in ${localeInfo.languageName}.
+The previous output was rejected because it was materially identical to the source.
+Rules:
+- Output ONLY bullet points, each starting with "•"
+- Make a real stylistic and professional improvement (wording/structure), not punctuation/whitespace/bullet-marker/capitalization-only changes
+- Preserve EVERY source duty — do NOT add duties, tools, achievements, metrics, numbers, or facts
+- ${employmentTenseNote}
+- CRITICAL LANGUAGE RULE: Every word must be in ${localeInfo.languageName}. Only keep universal acronyms when genuinely used.${genderNote}
+- LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`;
+        const noopUser = typeof params.repairPromptHint === 'string' && params.repairPromptHint.trim()
+          ? String(params.repairPromptHint).slice(0, 6000)
+          : `Rewrite these SOURCE FACTS into improved ${localeInfo.languageName} CV bullets for ${levelDesc} ${roleLabel}${atCompany}.
+${employmentTenseNote}
+Gender: ${gender || 'unspecified'}.
+Industry: ${industry || 'general'}. Level: ${levelDesc}.
+
+SOURCE FACTS:
+${sourceDescription.slice(0, 2500)}
+
+Previous rejected output (do not echo unchanged):
+${String(params.previousOutput || sourceDescription).slice(0, 2500)}
+
+Output only "•" bullet lines, same duty count/order.`;
         const response = await callWithRetry({
           model: MODEL,
           max_tokens: 450,
-          temperature: hasCanonical ? 0.35 : 0.55,
+          temperature: noopRepairRequested ? 0.55 : (hasCanonical ? 0.35 : 0.55),
           stream: false,
-          system: `You are an expert CV writer creating work experience bullet points in ${localeInfo.languageName}.
+          system: noopRepairRequested
+            ? noopSystem
+            : `You are an expert CV writer creating work experience bullet points in ${localeInfo.languageName}.
 Rules:
 - Output ONLY bullet points, each starting with "•"
 - Each bullet: exactly 1 sentence, clear and direct, under 22 words
@@ -1237,7 +1265,9 @@ Rules:
           messages: [
             {
               role: 'user',
-              content: hasCanonical
+              content: noopRepairRequested
+                ? noopUser
+                : hasCanonical
                 ? `Localize the following canonical work bullets into ${localeInfo.languageName} for ${levelDesc} ${roleLabel}${atCompany}.
 ${employmentTenseNote}
 Gender: ${gender || 'unspecified'}.

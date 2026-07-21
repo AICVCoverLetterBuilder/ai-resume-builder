@@ -151,12 +151,25 @@ export function applySerbianCvEmploymentTense(
     ) {
       return verb;
     }
+    // Already CV past participle — leave as-is (Provjeravala / Ažurirao).
+    if (/(?:ala|ao|ela|eo|ila|io|ала|ао|ела|ео|ила|ио)$/u.test(verb)) {
+      return verb;
+    }
     // Only finite 1sg-looking verbs — not every token ending in -im.
     if (
       !/(?:avam|iram|ujem|ijem|šem|ćem|авам|ирам|ујем|ијем|шем|ћем)$/iu.test(verb)
       && !/(?:pregledam|označavam|oznacavam|ažuriram|azuriram|koordinišem|koordinisem|pripremam|proveravam|obavljam|sarađujem|saradujem|vodim|radim|unosim)$/iu.test(verb)
     ) {
-      if (!/(am|em|ам|ем)$/iu.test(verb)) return verb;
+      if (!/(am|em|ам|ем)$/iu.test(verb)) {
+        // Already 3sg present (Provjerava / Ažurira / Surađuje) → past when completed.
+        if (
+          !isPresent
+          && /^(?:provjerava|proverava|ažurira|azurira|surađuje|sarađuje|saraduje|održava|odrzava|pregleda|priprema|koordinira|obavlja|prati|vodi|radi)$/iu.test(verb)
+        ) {
+          return toPast(verb);
+        }
+        return verb;
+      }
       // Bare -im is too ambiguous (instrumental adjectives); skip.
       if (/(im|им)$/iu.test(verb)) return verb;
     }
@@ -169,14 +182,35 @@ export function applySerbianCvEmploymentTense(
   // Leading verb
   t = t.replace(/^(\p{L}+)/u, (_m, verb: string) => {
     const next = transformVerb(verb);
-    return verb[0] === verb[0].toUpperCase()
+    const capped = verb[0] === verb[0].toUpperCase()
       ? next.charAt(0).toUpperCase() + next.slice(1)
       : next;
+    // Completed-role CV style: "Provjeravala je …" (not bare participle).
+    if (
+      !isPresent
+      && capped !== verb
+      && /(?:ala|ao|ela|eo|ila|io|ала|ао|ела|ео|ила|ио)$/u.test(capped)
+      && !/\bje\b/i.test(t.slice(verb.length, verb.length + 4))
+    ) {
+      return `${capped} je`;
+    }
+    return capped;
   });
   // Coordinated verbs: "… i označavam …" / "… и означавам …"
   // Avoid \\b — it does not treat Cyrillic letters as word characters in JS.
-  t = t.replace(/(^|[^\p{L}])(i|и)\s+(\p{L}+)/gu, (_m, pre: string, conj: string, verb: string) =>
-    `${pre}${conj} ${transformVerb(verb)}`);
+  t = t.replace(/(^|[^\p{L}])(i|и|te|те)\s+(\p{L}+)/gu, (_m, pre: string, conj: string, verb: string) => {
+    const next = transformVerb(verb);
+    if (
+      !isPresent
+      && next !== verb
+      && /(?:ala|ao|ela|eo|ila|io)$/u.test(next)
+      && !/^je\b/i.test(t)
+    ) {
+      // Keep coordinated past without repeating "je" on every clause.
+      return `${pre}${conj} ${next}`;
+    }
+    return `${pre}${conj} ${next}`;
+  });
   return t;
 }
 

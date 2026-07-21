@@ -147,6 +147,11 @@ import {
   type ExperiencePersonMode,
 } from './cv-experience-perspective';
 import {
+  EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
+  buildExperienceAiNoOpStylisticFallback,
+  experienceAiNoOpFallbackIsSafe,
+} from './cv-experience-ai-noop-recovery';
+import {
   evaluateRoleDutyConsistency,
   matchesWarehouseOccupationalTitle,
   resolveOccupationalTitleForSummary,
@@ -319,6 +324,12 @@ export type FinalizeCvAiFieldInput = {
    * When present, source facts / fallback provenance must use this only.
    */
   operationSnapshot?: ExperienceAiOperationSnapshot;
+  /**
+   * True after the client already attempted the dedicated Experience AI no-op
+   * repair rewrite. When set, a provider echo falls through to deterministic
+   * stylistic fallback instead of terminating as a hard no-op.
+   */
+  noOpRepairAttempted?: boolean;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -383,6 +394,13 @@ export type FinalizeCvAiFieldResult = {
     finalMatchesSourceAfterNormalization?: boolean;
     meaningfulChangeDetected?: boolean;
     noOpRejected?: boolean;
+    providerNoOpDetected?: boolean;
+    noOpRepairAttempted?: boolean;
+    noOpRepairValidationPassed?: boolean;
+    noOpRepairMeaningfulChangeDetected?: boolean;
+    noOpRepairApplied?: boolean;
+    deterministicFallbackAttemptedAfterNoOp?: boolean;
+    deterministicFallbackAppliedAfterNoOp?: boolean;
     rejectionStage?: string;
     typedFailureReason?: string;
     /** @deprecated Prefer clientDeterministicFallbackApplied. */
@@ -2097,6 +2115,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let clientDeterministicFallbackUncoveredFactIds: string[] = [];
   let generationFallbackAttempted = false;
   let generationFallbackApplied = false;
+  let providerNoOpDetected = false;
+  const noOpRepairAttemptedFlag = Boolean(input.noOpRepairAttempted);
+  let noOpRepairValidationPassed: boolean | null = null;
+  let noOpRepairMeaningfulChangeDetected: boolean | null = null;
+  let noOpRepairApplied = false;
+  let deterministicFallbackAttemptedAfterNoOp = false;
+  let deterministicFallbackAppliedAfterNoOp = false;
+  let finalCandidateSource: string | undefined = undefined;
   let generationValidationMeta = {
     relevanceValidationPassed: false,
     perspectiveValidationPassed: false,
@@ -2161,6 +2187,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     generationFinalPostconditionPassed,
     generationFallbackBuilderKind,
     generationFallbackFailureReason,
+    providerNoOpDetected,
+    noOpRepairAttempted: noOpRepairAttemptedFlag,
+    noOpRepairValidationPassed: noOpRepairValidationPassed ?? undefined,
+    noOpRepairMeaningfulChangeDetected: noOpRepairMeaningfulChangeDetected ?? undefined,
+    noOpRepairApplied,
+    deterministicFallbackAttemptedAfterNoOp,
+    deterministicFallbackAppliedAfterNoOp,
+    finalCandidateSource,
   });
 
   const tryAcceptGeneration = (
@@ -2828,41 +2862,65 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   const attachPerspectiveDiag = (
     result: FinalizeCvAiFieldResult,
-  ): FinalizeCvAiFieldResult => ({
-    ...result,
-    diagnostics: {
-      ...result.diagnostics,
-      ...perspectiveMeta,
-      tenseMode,
-      selectedExperienceEntryIdHash,
-      operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
-        ? hashExperienceEntryId(snapshot.experienceEntryId)
-        : null,
-      appliedExperienceEntryIdHash: result.countedAsSuccess
-        ? selectedExperienceEntryIdHash
-        : null,
-      sourceFactsEntryIdHash: selectedExperienceEntryIdHash,
-      canonicalFactsEntryIdHash: selectedExperienceEntryIdHash,
-      fallbackFactsEntryIdHash: selectedExperienceEntryIdHash,
-      providerTargetEntryIdHash: selectedExperienceEntryIdHash,
-      arrayIndexAtRequest,
-      arrayIndexAtApply: experienceIndexForIdStrict(cv, exp.id),
-      stableEntryIdentityMatched: true,
-      targetEntryStillExists: Boolean(findExperienceById(cv, exp.id)),
-      entryScopedCanonicalStorageUsed: true,
-      responseRejectedForEntryMismatch: false,
-      crossEntryLeakageDetected: Boolean(result.diagnostics?.crossEntryLeakageDetected),
-      entryContextMatchedAtApply: Boolean(
-        exp?.id
-        && findExperienceById(cv, exp.id)
-        && (
-          !snapshot?.experienceEntryId
-          || snapshot.experienceEntryId === exp.id
+  ): FinalizeCvAiFieldResult => {
+    if (
+      providerNoOpDetected
+      && result.countedAsSuccess
+      && result.origin === 'deterministic_fallback'
+    ) {
+      deterministicFallbackAttemptedAfterNoOp = true;
+      deterministicFallbackAppliedAfterNoOp = true;
+      if (!finalCandidateSource) finalCandidateSource = 'deterministic_fallback';
+    }
+    return {
+      ...result,
+      diagnostics: {
+        ...result.diagnostics,
+        ...perspectiveMeta,
+        tenseMode,
+        selectedExperienceEntryIdHash,
+        operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
+          ? hashExperienceEntryId(snapshot.experienceEntryId)
+          : null,
+        appliedExperienceEntryIdHash: result.countedAsSuccess
+          ? selectedExperienceEntryIdHash
+          : null,
+        sourceFactsEntryIdHash: selectedExperienceEntryIdHash,
+        canonicalFactsEntryIdHash: selectedExperienceEntryIdHash,
+        fallbackFactsEntryIdHash: selectedExperienceEntryIdHash,
+        providerTargetEntryIdHash: selectedExperienceEntryIdHash,
+        arrayIndexAtRequest,
+        arrayIndexAtApply: experienceIndexForIdStrict(cv, exp.id),
+        providerNoOpDetected,
+        noOpRepairAttempted: noOpRepairAttemptedFlag,
+        noOpRepairValidationPassed: noOpRepairValidationPassed ?? undefined,
+        noOpRepairMeaningfulChangeDetected: noOpRepairMeaningfulChangeDetected ?? undefined,
+        noOpRepairApplied,
+        deterministicFallbackAttemptedAfterNoOp,
+        deterministicFallbackAppliedAfterNoOp,
+        finalCandidateSource: finalCandidateSource
+          ?? (result.countedAsSuccess
+            ? (result.origin === 'deterministic_fallback'
+              ? 'deterministic_fallback'
+              : (noOpRepairApplied ? 'noop_repair' : 'provider'))
+            : 'none'),
+        stableEntryIdentityMatched: true,
+        targetEntryStillExists: Boolean(findExperienceById(cv, exp.id)),
+        entryScopedCanonicalStorageUsed: true,
+        responseRejectedForEntryMismatch: false,
+        crossEntryLeakageDetected: Boolean(result.diagnostics?.crossEntryLeakageDetected),
+        entryContextMatchedAtApply: Boolean(
+          exp?.id
+          && findExperienceById(cv, exp.id)
+          && (
+            !snapshot?.experienceEntryId
+            || snapshot.experienceEntryId === exp.id
+          ),
         ),
-      ),
-      visibleTextareaMatchesFinalNormalizedHash: Boolean(result.countedAsSuccess),
-    },
-  });
+        visibleTextareaMatchesFinalNormalizedHash: Boolean(result.countedAsSuccess),
+      },
+    };
+  };
 
   if (candidate.trim()) {
     const persp = normalizeExperienceBulletsPerspective(candidate, {
@@ -2964,32 +3022,51 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         // Skip tryAccept of the unchanged poisoned/incomplete provider text.
       } else if (!persp.perspectiveNormalizationApplied && sourceOkForLocale) {
         // Universal contract: whitespace/bullet/normalization-only equals no-op.
+        // Recoverable: client must attempt one dedicated repair first; only after
+        // that repair do we fall through to deterministic stylistic fallback.
+        void EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
+        void CROATIAN_NOOP_USAGE_REVISION;
+        providerNoOpDetected = true;
         perspectiveMeta.noOpRejected = true;
         perspectiveMeta.meaningfulChangeDetected = false;
         perspectiveMeta.finalMatchesSourceAfterNormalization = true;
         lastRejectStage = 'provider:noop';
-        lastRejectReason = 'ai_no_meaningful_change';
+        lastRejectReason = sourceNeedsPerspective
+          ? 'experience_ai_noop'
+          : 'ai_no_meaningful_change';
         providerCoveredFactCount = lastCovered;
         providerRequiredFactCount = lastRequired || sourceFactCount;
-        void CROATIAN_NOOP_USAGE_REVISION;
-        return attachPerspectiveDiag({
-          blocked: true,
-          reason: 'ai_no_meaningful_change',
-          text: exp?.description || '',
-          origin: 'user',
-          roleDutyConflict,
-          countedAsSuccess: false,
-          diagnostics: {
-            ...baseDiag(),
-            typedFailureReason: sourceNeedsPerspective
-              ? 'experience_ai_noop'
-              : 'ai_no_meaningful_change',
-            rejectionStage: 'provider:noop',
-            meaningfulChangeDetected: false,
-            noOpRejected: true,
-            finalMatchesSourceAfterNormalization: true,
-          },
-        });
+        providerRejectionReason = lastRejectReason;
+        providerRejectionStage = lastRejectStage;
+        if (!noOpRepairAttemptedFlag) {
+          return attachPerspectiveDiag({
+            blocked: true,
+            reason: 'experience_ai_noop',
+            text: exp?.description || '',
+            origin: 'user',
+            roleDutyConflict,
+            countedAsSuccess: false,
+            diagnostics: {
+              ...baseDiag(),
+              typedFailureReason: sourceNeedsPerspective
+                ? 'experience_ai_noop'
+                : 'ai_noop',
+              rejectionStage: 'provider:noop',
+              meaningfulChangeDetected: false,
+              noOpRejected: true,
+              providerNoOpDetected: true,
+              noOpRepairAttempted: false,
+              finalMatchesSourceAfterNormalization: true,
+              finalCandidateSource: 'none',
+            },
+          });
+        }
+        // Repair already attempted and still a no-op → continue to fallback.
+        noOpRepairValidationPassed = false;
+        noOpRepairMeaningfulChangeDetected = false;
+        deterministicFallbackAttemptedAfterNoOp = true;
+        clientDeterministicFallbackReason = 'experience_ai_noop_recovery';
+        // Do not tryAccept the unchanged provider/repair echo.
       } else if (!sourceOkForLocale) {
         // Cross-locale unchanged provider text → continue to localized fallback.
         lastRejectStage = 'provider:cross_locale_or_noop';
@@ -3001,28 +3078,41 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastRejectReason = perspectiveGate.reason || 'experience_cv_perspective_first_person';
       } else {
         // Perspective-only normalization of already-valid same-locale text → no-op.
+        void EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
+        void CROATIAN_NOOP_USAGE_REVISION;
+        providerNoOpDetected = true;
         perspectiveMeta.noOpRejected = true;
         perspectiveMeta.meaningfulChangeDetected = false;
         perspectiveMeta.finalMatchesSourceAfterNormalization = true;
         lastRejectStage = 'provider:noop';
         lastRejectReason = 'ai_no_meaningful_change';
-        void CROATIAN_NOOP_USAGE_REVISION;
-        return attachPerspectiveDiag({
-          blocked: true,
-          reason: 'ai_no_meaningful_change',
-          text: exp?.description || '',
-          origin: 'user',
-          roleDutyConflict,
-          countedAsSuccess: false,
-          diagnostics: {
-            ...baseDiag(),
-            typedFailureReason: 'ai_no_meaningful_change',
-            rejectionStage: 'provider:noop',
-            meaningfulChangeDetected: false,
-            noOpRejected: true,
-            finalMatchesSourceAfterNormalization: true,
-          },
-        });
+        providerRejectionReason = lastRejectReason;
+        providerRejectionStage = lastRejectStage;
+        if (!noOpRepairAttemptedFlag) {
+          return attachPerspectiveDiag({
+            blocked: true,
+            reason: 'experience_ai_noop',
+            text: exp?.description || '',
+            origin: 'user',
+            roleDutyConflict,
+            countedAsSuccess: false,
+            diagnostics: {
+              ...baseDiag(),
+              typedFailureReason: 'ai_noop',
+              rejectionStage: 'provider:noop',
+              meaningfulChangeDetected: false,
+              noOpRejected: true,
+              providerNoOpDetected: true,
+              noOpRepairAttempted: false,
+              finalMatchesSourceAfterNormalization: true,
+              finalCandidateSource: 'none',
+            },
+          });
+        }
+        noOpRepairValidationPassed = false;
+        noOpRepairMeaningfulChangeDetected = false;
+        deterministicFallbackAttemptedAfterNoOp = true;
+        clientDeterministicFallbackReason = 'experience_ai_noop_recovery';
       }
     } else if (!perspectiveGate.ok) {
       lastRejectStage = 'provider:perspective';
@@ -3038,6 +3128,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (firstAccepted) {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
         perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
+        if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {
+          noOpRepairApplied = true;
+          noOpRepairValidationPassed = true;
+          noOpRepairMeaningfulChangeDetected = true;
+          providerNoOpDetected = true;
+          finalCandidateSource = 'noop_repair';
+          perspectiveMeta.noOpRejected = false;
+        } else {
+          finalCandidateSource = providerOrigin === 'ai_repaired' ? 'noop_repair' : 'provider';
+        }
         return attachPerspectiveDiag({
           ...firstAccepted,
           diagnostics: {
@@ -3045,6 +3145,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             coveredFactCount: lastCovered || sourceFactCount,
             providerCoveredFactCount: lastCovered || sourceFactCount,
             providerRequiredFactCount: lastRequired || sourceFactCount,
+            providerNoOpDetected,
+            noOpRepairAttempted: noOpRepairAttemptedFlag,
+            noOpRepairApplied,
+            noOpRepairValidationPassed: noOpRepairValidationPassed ?? undefined,
+            noOpRepairMeaningfulChangeDetected: noOpRepairMeaningfulChangeDetected ?? undefined,
+            finalCandidateSource,
           },
         });
       }
@@ -3393,11 +3499,20 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           noOpRejected: false,
         };
       }
+      const groundedMeaningful = experienceAiHasMeaningfulChange(sourceForCoverage, grounded);
+      if (providerNoOpDetected && !groundedMeaningful) {
+        // No-op recovery must not accept canonical shells identical to source.
+      } else {
       const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
       if (secondAccepted) {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
         perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale);
+        if (providerNoOpDetected) {
+          perspectiveMeta.meaningfulChangeDetected = true;
+          perspectiveMeta.noOpRejected = false;
+        }
         return attachPerspectiveDiag(secondAccepted);
+      }
       }
     }
   }
@@ -3599,6 +3714,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     // Fallback after provider failure is always an allowed repair path — even when
     // the rebuilt CV text matches the source after perspective (provider was empty
     // or incomplete). No-op rejection applies only to unchanged provider output.
+    // Exception: after a recoverable provider no-op, identical source-preserving
+    // text is not a meaningful recovery — require stylistic fallback instead.
     perspectiveMeta = {
       ...perspectiveMeta,
       perspectiveNormalizationAttempted: true,
@@ -3610,7 +3727,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || experienceAiHasMeaningfulChange(sourceForCoverage, preserved),
       noOpRejected: false,
     };
-    if (preservedGate.ok && provenanceCoverage.ok) {
+    const preservedMeaningful = experienceAiHasMeaningfulChange(sourceForCoverage, preserved);
+    if (
+      preservedGate.ok
+      && provenanceCoverage.ok
+      && (!providerNoOpDetected || preservedMeaningful)
+    ) {
       const preservedAccepted = tryAccept(
         preserved,
         'deterministic_fallback',
@@ -3620,12 +3742,93 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (preservedAccepted) {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
         perspectiveMeta.finalPersonMode = detectExperiencePersonMode(preservedAccepted.text, locale);
-        return attachPerspectiveDiag(preservedAccepted);
+        if (providerNoOpDetected) {
+          deterministicFallbackAttemptedAfterNoOp = true;
+          deterministicFallbackAppliedAfterNoOp = true;
+          finalCandidateSource = 'deterministic_fallback';
+        } else {
+          finalCandidateSource = 'deterministic_fallback';
+        }
+        return attachPerspectiveDiag({
+          ...preservedAccepted,
+          diagnostics: {
+            ...preservedAccepted.diagnostics,
+            finalCandidateSource,
+            deterministicFallbackAttemptedAfterNoOp,
+            deterministicFallbackAppliedAfterNoOp,
+            providerNoOpDetected,
+            noOpRepairAttempted: noOpRepairAttemptedFlag,
+          },
+        });
       }
     } else if (!preservedGate.ok) {
       lastRejectReason = preservedGate.reason || 'experience_cv_perspective_first_person';
       lastRejectStage = 'source_preserving_fallback:perspective';
+    } else if (providerNoOpDetected && !preservedMeaningful) {
+      lastRejectStage = 'source_preserving_fallback:noop';
+      lastRejectReason = 'ai_no_meaningful_change';
     }
+    }
+
+    // Dedicated stylistic fallback after provider/repair no-op when preserve == source.
+    if (providerNoOpDetected && sourceForCoverage && !grounding?.staleGeneratedContentExcluded) {
+      void EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
+      deterministicFallbackAttemptedAfterNoOp = true;
+      clientDeterministicFallbackAttempted = true;
+      clientDeterministicFallbackReason = clientDeterministicFallbackReason
+        || 'experience_ai_noop_recovery';
+      const stylistic = normalizeLocaleText(
+        buildExperienceAiNoOpStylisticFallback({
+          sourceDescription: sourceForCoverage,
+          locale,
+          isPresent,
+          gender,
+        }),
+        locale,
+      );
+      const stylisticGate = validateExperienceCvPerspective(stylistic, locale);
+      clientDeterministicFallbackBulletCount = splitExperienceBullets(stylistic).filter(Boolean).length;
+      clientDeterministicFallbackScripts = detectBulletScripts(stylistic);
+      if (
+        stylisticGate.ok
+        && experienceAiNoOpFallbackIsSafe({
+          sourceDescription: sourceForCoverage,
+          candidate: stylistic,
+        })
+      ) {
+        const stylisticAccepted = tryAccept(
+          stylistic,
+          'deterministic_fallback',
+          'source_preserving_fallback',
+        );
+        if (stylisticAccepted) {
+          perspectiveMeta = {
+            ...perspectiveMeta,
+            meaningfulChangeDetected: true,
+            noOpRejected: false,
+            perspectiveValidationPassed: true,
+            normalizedBulletsUsedForApply: true,
+            finalPersonMode: detectExperiencePersonMode(stylisticAccepted.text, locale),
+          };
+          deterministicFallbackAppliedAfterNoOp = true;
+          finalCandidateSource = 'deterministic_fallback';
+          return attachPerspectiveDiag({
+            ...stylisticAccepted,
+            diagnostics: {
+              ...stylisticAccepted.diagnostics,
+              clientDeterministicFallbackReason: 'experience_ai_noop_recovery',
+              finalCandidateSource,
+              deterministicFallbackAttemptedAfterNoOp: true,
+              deterministicFallbackAppliedAfterNoOp: true,
+              providerNoOpDetected: true,
+              noOpRepairAttempted: noOpRepairAttemptedFlag,
+              noOpRepairApplied: false,
+              meaningfulChangeDetected: true,
+              noOpRejected: false,
+            },
+          });
+        }
+      }
     }
   }
 
@@ -3852,10 +4055,13 @@ export function applyFinalizedBulletsToCv(
     };
   }
 
-  const exp = (next.experience || []).find((e) => e.id === experienceId)
-    || (next.experience || [])[0];
+  const exp = (next.experience || []).find((e) => e.id === experienceId);
+  if (!exp) {
+    // Stable ID is authoritative — never fall back to array index 0 / current role.
+    return next;
+  }
   const ctx = jobContext || buildExperienceJobContext({
-    position: exp?.position || next.personal?.jobTitle,
+    position: exp.position || next.personal?.jobTitle,
     locale,
   });
   const summaryText = next.summary || '';
@@ -3911,6 +4117,9 @@ export function runCvAiApplyPipeline(options: {
   industry?: string;
   level?: string;
   jobContext?: ExperienceJobContext;
+  originHint?: CvAiFinalizeOrigin;
+  noOpRepairAttempted?: boolean;
+  operationSnapshot?: ExperienceAiOperationSnapshot;
 }): {
   blocked: boolean;
   reason?: string;
@@ -3925,7 +4134,11 @@ export function runCvAiApplyPipeline(options: {
     : 'summary';
   const exp = options.experienceId
     ? (options.cv.experience || []).find((e) => e.id === options.experienceId)
-    : (options.cv.experience || [])[0];
+    : (options.action === 'experience_bullets'
+      ? undefined
+      : (options.cv.experience || [])[0]);
+  // Never silently bind Experience AI to array index 0 when a stable ID was expected.
+  // Summary may still inspect the current role for grounding context.
   const jobContext = options.jobContext || (options.action === 'experience_bullets'
     ? buildExperienceJobContext({
       position: exp?.position,
@@ -3947,6 +4160,9 @@ export function runCvAiApplyPipeline(options: {
     industry: options.industry,
     level: options.level,
     jobContext,
+    originHint: options.originHint,
+    noOpRepairAttempted: options.noOpRepairAttempted,
+    operationSnapshot: options.operationSnapshot,
   });
 
   if (finalized.blocked || !finalized.countedAsSuccess) {

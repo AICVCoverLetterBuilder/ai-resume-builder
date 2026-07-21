@@ -109,6 +109,10 @@ import {
   applyOperationSnapshotToExperience,
 } from '@/lib/cv-experience-ai-operation-snapshot';
 import {
+  buildExperienceAiNoOpRepairPrompt,
+  isRecoverableExperienceProviderNoOp,
+} from '@/lib/cv-experience-ai-noop-recovery';
+import {
   localizeCvLanguageLevel,
   normalizeCvLanguagesProficiency,
   normalizeLanguageProficiencyToCanonical,
@@ -1191,17 +1195,25 @@ export default function CVBuilderPage() {
   };
 
   const handleGenBullets = async (expId: string) => {
+    // Snapshot the clicked stable entry ID immediately — never re-bind to
+    // array index 0 or the globally current role while the request runs.
+    const clickedExperienceEntryId = String(expId || '').trim();
+    if (!clickedExperienceEntryId) return;
+
     // Always read the latest committed CV — never a stale closure snapshot.
     const liveCv = cvRef.current;
-    const expFromState = liveCv.experience.find(e => e.id === expId);
+    const expFromState = liveCv.experience.find(e => e.id === clickedExperienceEntryId);
     if (!expFromState) return;
     if (generatingBulletsId) return; // Prevent multiple concurrent requests
 
     // Prefer the visible DOM textarea value over any lagged React/cvRef snapshot.
     let liveDescription = (expFromState.description || '').trim();
     if (typeof document !== 'undefined') {
+      const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(clickedExperienceEntryId)
+        : clickedExperienceEntryId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       const domField = document.querySelector(
-        `[data-experience-description-id="${expId}"]`,
+        `[data-experience-description-id="${escapedId}"]`,
       ) as HTMLTextAreaElement | null;
       if (domField && typeof domField.value === 'string') {
         liveDescription = domField.value;
@@ -1211,8 +1223,8 @@ export default function CVBuilderPage() {
       ? expFromState
       : { ...expFromState, description: liveDescription };
 
-    const industry = expIndustry[expId] ?? 'general';
-    const level = expLevel[expId] ?? 'mid';
+    const industry = expIndustry[clickedExperienceEntryId] ?? 'general';
+    const level = expLevel[clickedExperienceEntryId] ?? 'mid';
     const requestContext = buildExperienceJobContext({
       position: exp.position,
       industry,
@@ -1223,7 +1235,7 @@ export default function CVBuilderPage() {
     const proToken = getCurrentProTokenOrToast(() => setAiImprovementsModal(true));
     if (!proToken) return;
 
-    setGeneratingBulletsId(expId);
+    setGeneratingBulletsId(clickedExperienceEntryId);
     const controller = new AbortController();
     const clientTimeoutMs = resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS);
     const timer = setTimeout(() => controller.abort(), clientTimeoutMs);
@@ -1235,10 +1247,10 @@ export default function CVBuilderPage() {
       ?? null;
     // Requested UI locale is the TARGET. Stored content locale stays until apply.
     const operationalContentLocale = previousContentLocale || requestedLocale;
-    latestBulletsRequestIdRef.current = { ...latestBulletsRequestIdRef.current, [expId]: reqCtx.requestId };
+    latestBulletsRequestIdRef.current = { ...latestBulletsRequestIdRef.current, [clickedExperienceEntryId]: reqCtx.requestId };
     latestBulletsContextKeyRef.current = {
       ...latestBulletsContextKeyRef.current,
-      [expId]: requestContext.key,
+      [clickedExperienceEntryId]: requestContext.key,
     };
     const countBefore = getProAiUsageCount();
 
@@ -1251,7 +1263,7 @@ export default function CVBuilderPage() {
       locale: requestedLocale,
       requestId: reqCtx.requestId,
       jobContextHash: requestContext.key,
-      experienceEntryId: expId,
+      experienceEntryId: clickedExperienceEntryId,
     });
     const liveSourceEmpty = !operationSnapshot.normalizedSourceText.trim();
 
@@ -1320,6 +1332,11 @@ export default function CVBuilderPage() {
     });
     diagSession.stage('button_pressed', 'ok');
     diagSession.recordLiveExperience(exp, Boolean(exp.isPresent));
+    diagSession.recordExperienceEntryTarget({
+      experienceEntryId: clickedExperienceEntryId,
+      isPresent: Boolean(exp.isPresent),
+      arrayIndexAtRequest: liveCv.experience.findIndex((e) => e.id === clickedExperienceEntryId),
+    });
     diagSession.recordSourceSelection(
       {
         ...exp,
@@ -1406,16 +1423,10 @@ export default function CVBuilderPage() {
         commitCvUpdate((prev) => ({
           ...prev,
           experience: prev.experience.map((e) =>
-            e.id === expId ? ensureCanonicalExperienceFrozen(e) : e,
+            e.id === clickedExperienceEntryId ? ensureCanonicalExperienceFrozen(e) : e,
           ),
         }));
       }
-      const requestCv = {
-        ...liveCv,
-        experience: liveCv.experience.map((e) =>
-          e.id === expId ? aiGrounding.experienceForAi : e,
-        ),
-      };
       const requestBody = {
         action: 'bullets',
         proToken,
@@ -1428,6 +1439,8 @@ export default function CVBuilderPage() {
         // Never send stale AI/legacy cooking duties after occupation change.
         sourceDescription: aiGrounding.sourceDescription,
         jobContextKey: requestContext.key,
+        // Stable clicked entry ID — authoritative even if array order changes mid-flight.
+        experienceEntryId: clickedExperienceEntryId,
         // Structured date status is authoritative for employment tense.
         isPresent: Boolean(exp.isPresent),
         endDate: exp.isPresent ? 'present' : (exp.endDate || ''),
@@ -1491,15 +1504,15 @@ export default function CVBuilderPage() {
       }
 
       // Stale-response guard: requestId + job-context must both still match.
-      const latestId = latestBulletsRequestIdRef.current[expId];
-      const latestCtx = latestBulletsContextKeyRef.current[expId];
+      const latestId = latestBulletsRequestIdRef.current[clickedExperienceEntryId];
+      const latestCtx = latestBulletsContextKeyRef.current[clickedExperienceEntryId];
       const liveNow = cvRef.current;
-      const expNow = liveNow.experience.find((e) => e.id === expId);
+      const expNow = liveNow.experience.find((e) => e.id === clickedExperienceEntryId);
       const liveContext = buildExperienceJobContext({
         position: expNow?.position,
-        industry: expIndustry[expId] ?? industry,
+        industry: expIndustry[clickedExperienceEntryId] ?? industry,
         locale,
-        level: expLevel[expId] ?? level,
+        level: expLevel[clickedExperienceEntryId] ?? level,
       });
       diagSession.recordApiResponse({
         httpStatus: res.status,
@@ -1537,30 +1550,123 @@ export default function CVBuilderPage() {
       }
       diagSession.recordRaceCheck(true, undefined, liveContext.key);
       const newDescription = bulletsData.result || '';
-      const finalizedBullets = finalizeCvAiFieldForApply({
-        action: 'experience_bullets',
-        field: 'experience_description',
+      const finalizeInputBase = {
+        action: 'experience_bullets' as const,
+        field: 'experience_description' as const,
         requestedLocale,
         gender: liveNow.personal.gender || '',
         cv: {
           ...liveNow,
           experience: liveNow.experience.map((e) =>
-            e.id === expId ? aiGrounding.experienceForAi : e,
+            e.id === clickedExperienceEntryId ? aiGrounding.experienceForAi : e,
           ),
         },
-        candidate: newDescription,
-        experienceId: expId,
+        experienceId: clickedExperienceEntryId,
         industry,
         level,
         jobContext: requestContext,
         operationSnapshot,
+      };
+      let finalizedBullets = finalizeCvAiFieldForApply({
+        ...finalizeInputBase,
+        candidate: newDescription,
         originHint: bulletsData.fallbackUsed
           ? 'deterministic_fallback'
           : bulletsData.repairAttempted
             ? 'ai_repaired'
             : 'ai_generated',
       });
+
+      // Recoverable provider echo: one dedicated no-op repair, then deterministic fallback.
+      let noOpRepairAttempted = false;
+      let noOpRepairHttpStatus: number | null = null;
+      if (isRecoverableExperienceProviderNoOp(finalizedBullets)) {
+        diagSession.patch({
+          providerNoOpDetected: true,
+          noOpRejected: true,
+        });
+        noOpRepairAttempted = true;
+        diagSession.patch({ noOpRepairAttempted: true });
+        try {
+          const repairPrompt = buildExperienceAiNoOpRepairPrompt({
+            locale: requestedLocale,
+            sourceDescription: aiGrounding.sourceDescription || liveDescription,
+            previousOutput: newDescription,
+            isPresent: Boolean(exp.isPresent),
+            gender: liveNow.personal.gender || '',
+            industry,
+            level,
+            position: exp.position,
+          });
+          const { data: repairData, response: repairRes } = await apiFetch<{
+            result?: string;
+            error?: string;
+            code?: string;
+            repairAttempted?: boolean;
+            fallbackUsed?: boolean;
+          }>('/api/generate', {
+            body: {
+              ...requestBody,
+              noopRepair: true,
+              previousOutput: newDescription,
+              repairPromptHint: repairPrompt,
+            },
+            signal: controller.signal,
+          });
+          noOpRepairHttpStatus = repairRes.status;
+          diagSession.patch({ noOpRepairHttpStatus });
+          const repairText = (repairData?.result || '').trim();
+          if (repairRes.ok && repairText && !repairData?.error) {
+            finalizedBullets = finalizeCvAiFieldForApply({
+              ...finalizeInputBase,
+              candidate: repairText,
+              noOpRepairAttempted: true,
+              originHint: 'ai_repaired',
+            });
+          } else {
+            finalizedBullets = finalizeCvAiFieldForApply({
+              ...finalizeInputBase,
+              candidate: newDescription,
+              noOpRepairAttempted: true,
+              originHint: bulletsData.fallbackUsed
+                ? 'deterministic_fallback'
+                : 'ai_generated',
+            });
+          }
+        } catch {
+          finalizedBullets = finalizeCvAiFieldForApply({
+            ...finalizeInputBase,
+            candidate: newDescription,
+            noOpRepairAttempted: true,
+            originHint: 'ai_generated',
+          });
+        }
+        diagSession.patch({
+          noOpRepairAttempted: true,
+          noOpRepairHttpStatus,
+          noOpRepairApplied: Boolean(finalizedBullets.diagnostics?.noOpRepairApplied),
+          noOpRepairValidationPassed:
+            finalizedBullets.diagnostics?.noOpRepairValidationPassed ?? null,
+          noOpRepairMeaningfulChangeDetected:
+            finalizedBullets.diagnostics?.noOpRepairMeaningfulChangeDetected ?? null,
+          deterministicFallbackAttemptedAfterNoOp: Boolean(
+            finalizedBullets.diagnostics?.deterministicFallbackAttemptedAfterNoOp,
+          ),
+          deterministicFallbackAppliedAfterNoOp: Boolean(
+            finalizedBullets.diagnostics?.deterministicFallbackAppliedAfterNoOp,
+          ),
+          finalCandidateSource:
+            (finalizedBullets.diagnostics?.finalCandidateSource as string | undefined) || null,
+        });
+      }
+
       diagSession.recordFinalizeResult(finalizedBullets);
+      // Re-assert stable clicked entry targeting after finalize (never inherit prior card).
+      diagSession.recordExperienceEntryTarget({
+        experienceEntryId: clickedExperienceEntryId,
+        isPresent: Boolean(exp.isPresent),
+        arrayIndexAtRequest: liveNow.experience.findIndex((e) => e.id === clickedExperienceEntryId),
+      });
       if (
         finalizedBullets.countedAsSuccess
         && candidateConflictsWithJobContext(finalizedBullets.text, requestContext)
@@ -1625,13 +1731,19 @@ export default function CVBuilderPage() {
         showExperienceAiRejectToast(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
-      commitCvUpdate((prev) => applyFinalizedBulletsToCv(
-        prev,
-        requestedLocale,
-        expId,
-        finalizedBullets,
-        requestContext,
-      ));
+      commitCvUpdate((prev) => {
+        // Stable ID apply — find the clicked entry even if array order changed.
+        if (!prev.experience.some((e) => e.id === clickedExperienceEntryId)) {
+          return prev;
+        }
+        return applyFinalizedBulletsToCv(
+          prev,
+          requestedLocale,
+          clickedExperienceEntryId,
+          finalizedBullets,
+          requestContext,
+        );
+      });
       recordProAiSuccess();
       finishAiClientRequest({
         ctx: reqCtx,
@@ -1640,11 +1752,14 @@ export default function CVBuilderPage() {
         countAfter: countBefore + 1,
         httpStatus: res.status,
         error: null,
-        automaticRepairCount: bulletsData.repairAttempted ? 1 : 0,
-        fallbackUsed: Boolean(bulletsData.fallbackUsed) || finalizedBullets.origin === 'deterministic_fallback',
-        responseSource: finalizedBullets.origin === 'deterministic_fallback' || bulletsData.fallbackUsed
+        automaticRepairCount: (bulletsData.repairAttempted ? 1 : 0) + (noOpRepairAttempted ? 1 : 0),
+        fallbackUsed: Boolean(bulletsData.fallbackUsed)
+          || finalizedBullets.origin === 'deterministic_fallback',
+        responseSource: finalizedBullets.origin === 'deterministic_fallback'
+          || bulletsData.fallbackUsed
+          || finalizedBullets.diagnostics?.deterministicFallbackAppliedAfterNoOp
           ? 'deterministic_fallback'
-          : bulletsData.repairAttempted
+          : (finalizedBullets.diagnostics?.noOpRepairApplied || bulletsData.repairAttempted)
             ? 'repair'
             : 'provider',
       });
@@ -2789,7 +2904,7 @@ export default function CVBuilderPage() {
                           </div>
                           <PremiumAIButton
                             onClick={() => handleGenBullets(exp.id)}
-                            disabled={generatingBulletsId === exp.id}
+                            disabled={Boolean(generatingBulletsId)}
                             className="w-full"
                             icon={Wand2}
                             label={generatingBulletsId === exp.id ? t.common.loading : t.cv.aiBullets}
