@@ -28,16 +28,20 @@ import {
   localizeOccupationalTitleForProjection,
   resolveOccupationalTitleForSummary,
 } from './cv-role-title';
+import { injectJapaneseDurationIntoCurrentIntro } from './cv-japanese-summary-grounding';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
 export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
 /** Arabic duration finalizer revision — keep Hindi marker present for asset scans. */
 export const SUMMARY_DURATION_FINALIZER_REVISION_AR = 'arabic-duration-idempotent-v1' as const;
 export const SUMMARY_DURATION_FINALIZER_REVISION_RU = 'russian-duration-idempotent-v1' as const;
-export const SUMMARY_DURATION_FINALIZER_REVISION_JA = 'japanese-duration-idempotent-v1' as const;
+export const SUMMARY_DURATION_FINALIZER_REVISION_JA = 'japanese-duration-idempotent-v2' as const;
+/** Retained build-287/288 marker — must remain present in packaged assets. */
+export const SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY = 'japanese-duration-idempotent-v1' as const;
 void SUMMARY_DURATION_FINALIZER_REVISION_AR;
 void SUMMARY_DURATION_FINALIZER_REVISION_RU;
 void SUMMARY_DURATION_FINALIZER_REVISION_JA;
+void SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY;
 
 /** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
 function splitHindiSummaryUnitsLocal(text: string): string[] {
@@ -758,7 +762,7 @@ function findFirstSentenceSplit(text: string): { head: string; delim: string; re
   const s = text || '';
   for (let i = 0; i < s.length; i += 1) {
     const ch = s[i];
-    if (ch === '।' || ch === '!' || ch === '?') {
+    if (ch === '。' || ch === '।' || ch === '!' || ch === '?') {
       const head = s.slice(0, i);
       if (!head.trim()) continue;
       return { head, delim: ch, rest: s.slice(i + 1).trim() };
@@ -768,6 +772,8 @@ function findFirstSentenceSplit(text: string): { head: string; delim: string; re
       if (i > 0 && /\d/.test(s[i - 1]!)) continue;
       // Ellipsis / decimal continuation
       if (s[i + 1] === '.') continue;
+      // Prefer Japanese full stop when CJK prose is present — never Latin-splice.
+      if (/[\u3040-\u30FF\u3400-\u9FFF]/.test(s)) continue;
       const head = s.slice(0, i);
       if (!head.trim()) continue;
       return { head, delim: '.', rest: s.slice(i + 1).trim() };
@@ -786,6 +792,8 @@ function mergeDurationPhraseIntoFirstSentence(text: string, phrase: string, loca
   const trimmed = (text || '').trim();
   // Hindi must never use comma-splice — use injectHindiDurationWithOpening instead.
   if (locale === 'hi') return trimmed;
+  // Japanese uses dedicated intro weave — never Latin ", phrase." after 。.
+  if (locale === 'ja') return trimmed;
   const terminal = '.';
   if (!trimmed) {
     return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
@@ -795,7 +803,7 @@ function mergeDurationPhraseIntoFirstSentence(text: string, phrase: string, loca
     const merged = `${split.head.trim()}, ${phrase}${split.delim}`.replace(/\s+/g, ' ').trim();
     return split.rest ? `${merged} ${split.rest}`.replace(/\s+/g, ' ').trim() : merged;
   }
-  const withoutTrailingPunct = trimmed.replace(/[.।!?]+\s*$/u, '');
+  const withoutTrailingPunct = trimmed.replace(/[.。।!?]+\s*$/u, '');
   return `${withoutTrailingPunct}, ${phrase}${terminal}`.replace(/\s+/g, ' ').trim();
 }
 
@@ -999,6 +1007,8 @@ export function resolveSummaryWithDurationPolicy(
   let fallback = '';
   if (locale === 'hi' && context) {
     fallback = injectHindiDurationWithOpening(stripped || working, duration, context);
+  } else if (locale === 'ja' && phrase) {
+    fallback = injectJapaneseDurationIntoCurrentIntro(stripped || working, duration, context);
   } else if (phrase && stripped) {
     fallback = mergeDurationPhraseIntoFirstSentence(stripped, phrase, locale);
   } else if (phrase) {
@@ -1057,6 +1067,9 @@ export function injectDurationPhrase(
   const text = (summary || '').trim();
   if (locale === 'hi' && duration.hasValidDates) {
     return injectHindiDurationWithOpening(text, duration, context || {});
+  }
+  if (locale === 'ja' && duration.hasValidDates) {
+    return injectJapaneseDurationIntoCurrentIntro(text, duration, context);
   }
   const phrase = formatApproximateDurationPhrase(duration, locale);
   if (!phrase) return text;

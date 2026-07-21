@@ -42,8 +42,12 @@ import {
   SUMMARY_BUILDER_REVISION_JA,
   SUMMARY_GROUNDING_REVISION_JA,
   SUMMARY_UNIT_SPLITTER_REVISION_JA,
+  JAPANESE_DURATION_IN_INTRO_MARKER,
+  JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 } from './cv-japanese-summary-grounding';
 
+void JAPANESE_DURATION_IN_INTRO_MARKER;
+void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 export {
   analyzeArabicSummaryEmploymentQuality,
   buildArabicEntryOwnedSummary,
@@ -70,6 +74,11 @@ export {
   SUMMARY_BUILDER_REVISION_JA,
   SUMMARY_GROUNDING_REVISION_JA,
   SUMMARY_UNIT_SPLITTER_REVISION_JA,
+  JAPANESE_DURATION_IN_INTRO_MARKER,
+  JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  isJapaneseGenericSkillsUnit,
+  countJapaneseUnsupportedSummaryClaims,
+  injectJapaneseDurationIntoCurrentIntro,
 } from './cv-japanese-summary-grounding';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';

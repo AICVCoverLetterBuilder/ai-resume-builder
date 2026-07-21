@@ -102,8 +102,11 @@ const RUSSIAN_DESIGN_FALLBACK_ROUTING = 'russian-design-fallback-routing-287-v1'
 const JAPANESE_EXPERIENCE_MATERIAL = 'japanese-experience-material-v1';
 const SUMMARY_SPLITTER_REVISION_JA = 'japanese-three-sentence-slots-v1';
 const SUMMARY_GROUNDING_REVISION_JA = 'entry-owned-japanese-grounding-v1';
-const SUMMARY_DURATION_REVISION_JA = 'japanese-duration-idempotent-v1';
+const SUMMARY_DURATION_REVISION_JA = 'japanese-duration-idempotent-v2';
+const SUMMARY_DURATION_REVISION_JA_LEGACY = 'japanese-duration-idempotent-v1';
 const SUMMARY_BUILDER_REVISION_JA = 'entry-owned-japanese-rebuild-v1';
+const JAPANESE_DURATION_IN_INTRO = 'japanese-duration-in-intro-289-v1';
+const JAPANESE_SUMMARY_STRICT_POSTCONDITIONS = 'japanese-summary-strict-postconditions-289-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -127,7 +130,10 @@ for (const marker of [
   SUMMARY_SPLITTER_REVISION_JA,
   SUMMARY_GROUNDING_REVISION_JA,
   SUMMARY_DURATION_REVISION_JA,
+  SUMMARY_DURATION_REVISION_JA_LEGACY,
   SUMMARY_BUILDER_REVISION_JA,
+  JAPANESE_DURATION_IN_INTRO,
+  JAPANESE_SUMMARY_STRICT_POSTCONDITIONS,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

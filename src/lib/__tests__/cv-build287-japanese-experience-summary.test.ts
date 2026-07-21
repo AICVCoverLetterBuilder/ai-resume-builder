@@ -34,7 +34,10 @@ import {
   formatApproximateDurationPhrase,
   yearWordForLocale,
 } from '../cv-experience-duration';
-import { SUMMARY_DURATION_FINALIZER_REVISION_JA } from '../cv-content-quality';
+import {
+  SUMMARY_DURATION_FINALIZER_REVISION_JA,
+  SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY,
+} from '../cv-content-quality';
 import { validateAiUnitLocalePurity, guessUnitLocale } from '../cv-ai-unit-locale-purity';
 import {
   countSummaryDurationExpressions,
@@ -117,14 +120,18 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
     expect(SUMMARY_BUILDER_REVISION_JA).toBe('entry-owned-japanese-rebuild-v1');
     expect(SUMMARY_UNIT_SPLITTER_REVISION_JA).toBe('japanese-three-sentence-slots-v1');
     expect(SUMMARY_GROUNDING_REVISION_JA).toBe('entry-owned-japanese-grounding-v1');
-    expect(SUMMARY_DURATION_FINALIZER_REVISION_JA).toBe('japanese-duration-idempotent-v1');
+    expect(SUMMARY_DURATION_FINALIZER_REVISION_JA).toBe('japanese-duration-idempotent-v2');
+    expect(SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY).toBe('japanese-duration-idempotent-v1');
     expect(JAPANESE_EXPERIENCE_MATERIAL_REVISION).toBe('japanese-experience-material-v1');
     expect(SUMMARY_RUNTIME_MARKER_SET).toEqual(expect.arrayContaining([
       SUMMARY_BUILDER_REVISION_JA,
       SUMMARY_UNIT_SPLITTER_REVISION_JA,
       SUMMARY_GROUNDING_REVISION_JA,
       SUMMARY_DURATION_FINALIZER_REVISION_JA,
+      SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY,
       JAPANESE_EXPERIENCE_MATERIAL_REVISION,
+      'japanese-duration-in-intro-289-v1',
+      'japanese-summary-strict-postconditions-289-v1',
     ]));
   });
 

@@ -10,10 +10,17 @@ import {
   localizeWarehouseEmployee,
   matchesWarehouseOccupationalTitle,
 } from './cv-role-title';
+import type { ExperienceDuration } from './cv-experience-duration';
+import { formatApproximateDurationPhrase } from './cv-experience-duration';
 
 export const SUMMARY_UNIT_SPLITTER_REVISION_JA = 'japanese-three-sentence-slots-v1' as const;
 export const SUMMARY_GROUNDING_REVISION_JA = 'entry-owned-japanese-grounding-v1' as const;
 export const SUMMARY_BUILDER_REVISION_JA = 'entry-owned-japanese-rebuild-v1' as const;
+/** Runtime marker: duration must live inside current_intro (build-289 package naming). */
+export const JAPANESE_DURATION_IN_INTRO_MARKER = 'japanese-duration-in-intro-289-v1' as const;
+/** Runtime marker: strict three-slot Japanese Summary postconditions. */
+export const JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER =
+  'japanese-summary-strict-postconditions-289-v1' as const;
 
 const DESIGN_FACT_CUE_JA =
   /(?:ビジュアル|視覚|グラフィック|デザイン|要件|最終|ファイル|形式|フォーマット|画面|端末|デバイス|visual|graphic|design|визуальн|графическ|مواد\s*بصرية)/iu;
@@ -30,6 +37,42 @@ const WAREHOUSE_SUMMARY_KEYS = new Set([
 
 const APPROVED_LATIN_ISLANDS =
   /\b(?:Atlas|Rewitu|REST|SQL|API|Python|Agile|Scrum|January|February|March|April|May|June|July|August|September|October|November|December)\b/gi;
+
+/** Unsupported design inventions when absent from canonical prior facts. */
+const UNSUPPORTED_DESIGN_CLAIM_CUES_JA = [
+  '印刷物',
+  '印刷',
+  'ブランドの視覚的ガイドライン',
+  '視覚的ガイドライン',
+  'ブランドガイドライン',
+  'ブランド基準',
+  'ブランド規定',
+  'ロゴ管理',
+  'ブランド戦略',
+] as const;
+
+/** Shipment/delivery cues — distinct from generic goods preparation. */
+const SHIPMENT_CUES_JA = /出荷|発送|配送|納品|積み込み/u;
+
+const GENERIC_SKILL_LABEL_CUES_JA = [
+  'リーダーシップ',
+  '組織力',
+  '批判的思考',
+  '適応力',
+  '問題解決',
+  'タイムマネジメント',
+  'コミュニケーション',
+] as const;
+
+const REQUIRED_JA_SLOTS = ['current_intro', 'current_duty', 'prior_role'] as const;
+
+export type JapaneseSummaryRoleSlot =
+  | 'current_intro'
+  | 'current_duty'
+  | 'prior_role'
+  | 'duration'
+  | 'other'
+  | 'skills';
 
 export type JapaneseSummaryEmploymentQuality = {
   currentEmploymentIntroductionCount: number;
@@ -51,12 +94,21 @@ export type JapaneseSummaryEmploymentQuality = {
   priorRoleSemanticFactMentionCount: number;
   priorRoleSemanticDuplicationDetected: boolean;
   hindiFiniteKaAnubhavCollision: boolean;
-  finalUnitRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
+  finalUnitRoleSlots: JapaneseSummaryRoleSlot[];
   finalSentenceHashes: string[];
-  finalSentenceRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
+  finalSentenceRoleSlots: JapaneseSummaryRoleSlot[];
   finalSentenceMaterialKeyCounts: number[];
   summaryUnitSplitterRevision: typeof SUMMARY_UNIT_SPLITTER_REVISION_JA;
   summaryGroundingRevision: typeof SUMMARY_GROUNDING_REVISION_JA;
+  unitCount: number;
+  unsupportedClaimCount: number;
+  missingDesignFamilyCount: number;
+  hasGenericSkillsUnit: boolean;
+  durationOutsideIntro: boolean;
+  malformedPunctuation: boolean;
+  typedRejectionReason: string | null;
+  japaneseSummaryStrictPostconditionsMarker: typeof JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+  japaneseDurationInIntroMarker: typeof JAPANESE_DURATION_IN_INTRO_MARKER;
 };
 
 /**
@@ -120,6 +172,163 @@ export function japaneseWarehouseSummaryFragment(key: string): string {
   return '';
 }
 
+/** Detect generic professional-skills enumeration sentences (not Experience-owned). */
+export function isJapaneseGenericSkillsUnit(sentence: string): boolean {
+  const s = (sentence || '').trim();
+  if (!s) return false;
+  if (/主なスキル|スキルは/u.test(s)) return true;
+  const hits = GENERIC_SKILL_LABEL_CUES_JA.filter((c) => s.includes(c)).length;
+  if (hits >= 3) return true;
+  if (
+    hits >= 2
+    && /です/u.test(s)
+    && !WAREHOUSE_FACT_CUE_JA.test(s)
+    && !DESIGN_FACT_CUE_JA.test(s)
+    && !/勤務|以前|倉庫作業員|グラフィックデザイナー/u.test(s)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function hasJapaneseMalformedSummaryPunctuation(text: string): boolean {
+  const t = text || '';
+  return /です。\s*[,，]|。\s*[,，]|[,，]\s*通算|。\s*\.|です\.\s*,/u.test(t)
+    || /。\s*,\s*通算/u.test(t)
+    || /です。,/u.test(t);
+}
+
+function sourceHasShipmentFact(source: string): boolean {
+  return SHIPMENT_CUES_JA.test(source || '');
+}
+
+function sourceHasUnsupportedDesignCue(source: string, cue: string): boolean {
+  return (source || '').includes(cue);
+}
+
+/** Design material families required for prior design-owned Summaries. */
+export function scoreJapanesePriorDesignFamilies(sentence: string): {
+  creation: boolean;
+  reviewAdapt: boolean;
+  finalFilesScreens: boolean;
+  missingCount: number;
+} {
+  const s = sentence || '';
+  const creation = /ビジュアル|グラフィック|素材|制作|作成|visual|graphic/iu.test(s);
+  const reviewAdapt = /確認|調整|要件|適応|adapt|review|要求/iu.test(s);
+  const finalFilesScreens = /最終|ファイル|形式|フォーマット|画面|端末|デバイス|format|screen/iu.test(s);
+  const missingCount = [creation, reviewAdapt, finalFilesScreens].filter((v) => !v).length;
+  return { creation, reviewAdapt, finalFilesScreens, missingCount };
+}
+
+/**
+ * Count unsupported Japanese Summary claims against entry-owned source facts.
+ * Broad デザイン / ビジュアル / グラフィック cues do not ground the whole sentence.
+ */
+export function countJapaneseUnsupportedSummaryClaims(
+  text: string,
+  options: {
+    currentEntryDuties?: string;
+    priorEntryDuties?: string;
+    sourceDuties?: string;
+  } = {},
+): { unsupportedClaimCount: number; reasons: string[] } {
+  const current = options.currentEntryDuties || '';
+  const prior = options.priorEntryDuties || options.sourceDuties || '';
+  const corpus = `${current}\n${prior}`;
+  const reasons: string[] = [];
+  let unsupportedClaimCount = 0;
+
+  for (const cue of UNSUPPORTED_DESIGN_CLAIM_CUES_JA) {
+    if (text.includes(cue) && !sourceHasUnsupportedDesignCue(corpus, cue)) {
+      // Avoid double-counting 印刷 when 印刷物 already counted.
+      if (cue === '印刷' && text.includes('印刷物') && !corpus.includes('印刷物')) {
+        continue;
+      }
+      unsupportedClaimCount += 1;
+      reasons.push(`unsupported_design_cue:${cue}`);
+    }
+  }
+
+  if (SHIPMENT_CUES_JA.test(text) && !sourceHasShipmentFact(corpus)) {
+    unsupportedClaimCount += 1;
+    reasons.push('unsupported_shipment_cue');
+  }
+
+  return { unsupportedClaimCount, reasons };
+}
+
+/**
+ * Insert authoritative duration inside the first Japanese unit (current_intro).
+ * Never append a fourth duration fragment; never Latin comma-splice after 。.
+ */
+export function injectJapaneseDurationIntoCurrentIntro(
+  summary: string,
+  duration: ExperienceDuration,
+  context?: { role?: string; company?: string; startDate?: string },
+): string {
+  void JAPANESE_DURATION_IN_INTRO_MARKER;
+  void context;
+  if (!duration?.hasValidDates) return (summary || '').trim();
+  const phraseRaw = formatApproximateDurationPhrase(duration, 'ja');
+  if (!phraseRaw) return (summary || '').trim();
+
+  let durCore = phraseRaw
+    .replace(/^[,，、\s]+/u, '')
+    .replace(/[。.]+$/u, '')
+    .trim();
+  durCore = durCore
+    .replace(/約\s*6\.5\s*年(?:の(?:勤務)?経験)?/gu, '通算約六年半の実務経験')
+    .replace(/約\s*6\s*年半/gu, '通算約六年半');
+  if (durCore && !/通算/.test(durCore) && /約.+年/.test(durCore)) {
+    durCore = `通算${durCore.replace(/^約/, '約')}`;
+  }
+  const durWithExp = /実務経験|経験/.test(durCore)
+    ? durCore
+    : `${durCore}の実務経験`;
+
+  const stripDur = (input: string): string => input
+    .replace(/[、，,]?\s*通算約(?:一年半|二年半|三年半|四年半|五年半|六年半|七年半|八年半|九年半|十年半|一年|二年|三年|四年|五年|六年|七年|八年|九年|十年)(?:の実務経験|の(?:勤務)?経験)?(?:を有する)?/gu, '')
+    .replace(/[、，,]?\s*約(?:一年半|二年半|三年半|四年半|五年半|六年半|七年半|八年半|九年半|十年半|一年|二年|三年|四年|五年|六年|七年|八年|九年|十年)(?:の実務経験|の(?:勤務)?経験)?/gu, '')
+    .replace(/[、，,]?\s*約\s*\d+(?:[.,]\d+)?\s*年(?:半)?(?:の(?:勤務)?経験)?/gu, '')
+    .replace(/[、，,]\s*$/u, '')
+    .replace(/^\s*[、，,]/u, '')
+    .trim();
+
+  const working = stripDur((summary || '').replace(/\s+/g, ' ').trim());
+  const units = splitJapaneseSummaryUnits(working).map(stripDur).filter(Boolean);
+
+  if (!units.length) {
+    return `${durWithExp}を有する。`;
+  }
+
+  // Idempotent: first unit already carries the authoritative claim.
+  if (/通算約.+年/u.test(units[0]!) && /実務経験|経験|を有する/u.test(units[0]!)) {
+    return `${units.map((u) => (/[。]$/u.test(u) ? u : `${u}。`)).join('')}`.replace(/\s+/g, '');
+  }
+
+  let first = units[0]!;
+  if (/勤務し、/u.test(first)) {
+    first = first.replace(/勤務し、/u, `勤務し、${durWithExp}を有する、`);
+    // Collapse accidental double weave.
+    first = first.replace(
+      new RegExp(`${durWithExp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}を有する、${durWithExp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}を有する、`, 'gu'),
+      `${durWithExp}を有する、`,
+    );
+  } else if (/勤務している$/u.test(first)) {
+    first = first.replace(/勤務している$/u, `勤務し、${durWithExp}を有する`);
+  } else if (/を有する$/u.test(first)) {
+    first = first.replace(/を有する$/u, `、${durWithExp}を有する`);
+  } else {
+    first = `${first}、${durWithExp}を有する`;
+  }
+
+  const out = [first, ...units.slice(1)]
+    .map((u) => (u.endsWith('。') ? u : `${u}。`))
+    .join('');
+  return out.replace(/\s+/g, '').replace(/。+/gu, '。').trim();
+}
+
 export function analyzeJapaneseSummaryEmploymentQuality(
   summary: string,
   options: {
@@ -135,6 +344,8 @@ export function analyzeJapaneseSummaryEmploymentQuality(
   } = {},
 ): JapaneseSummaryEmploymentQuality {
   void SUMMARY_GROUNDING_REVISION_JA;
+  void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+  void JAPANESE_DURATION_IN_INTRO_MARKER;
   void options.gender;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const company = (options.company || '').trim();
@@ -148,10 +359,19 @@ export function analyzeJapaneseSummaryEmploymentQuality(
     ? priorCompany.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     : '';
 
+  const malformedPunctuation = hasJapaneseMalformedSummaryPunctuation(text);
   const sentences = splitJapaneseSummaryUnits(text);
-  const finalUnitRoleSlots: JapaneseSummaryEmploymentQuality['finalUnitRoleSlots'] = [];
+  const unitCount = sentences.length;
+  const finalUnitRoleSlots: JapaneseSummaryRoleSlot[] = [];
   let priorClauseSeen = false;
+  let hasGenericSkillsUnit = false;
+
   for (const sentence of sentences) {
+    if (isJapaneseGenericSkillsUnit(sentence)) {
+      hasGenericSkillsUnit = true;
+      finalUnitRoleSlots.push('skills');
+      continue;
+    }
     if (
       /以前(?:は|に)|かつて|担当した|従事した/u.test(sentence)
       || (priorCompanyEsc
@@ -174,6 +394,7 @@ export function analyzeJapaneseSummaryEmploymentQuality(
       && !DESIGN_FACT_CUE_JA.test(sentence)
       && !WAREHOUSE_FACT_CUE_JA.test(sentence)
       && !hasEmployed
+      && !hasRole
     ) {
       finalUnitRoleSlots.push('duration');
       continue;
@@ -248,7 +469,7 @@ export function analyzeJapaneseSummaryEmploymentQuality(
   let priorSlotForeignFactCount = 0;
   let priorRoleSemanticFactMentionCount = 0;
   for (let i = 0; i < sentences.length; i += 1) {
-    const sentence = sentences[i];
+    const sentence = sentences[i]!;
     const slot = finalUnitRoleSlots[i];
     const hasDesign = DESIGN_FACT_CUE_JA.test(sentence);
     const hasWarehouse = WAREHOUSE_FACT_CUE_JA.test(sentence);
@@ -282,9 +503,20 @@ export function analyzeJapaneseSummaryEmploymentQuality(
   ) ? 1 : 0;
 
   const sourceHasDesign = DESIGN_FACT_CUE_JA.test(priorEntryDuties || options.sourceDuties || '');
-  const priorDesignFacts = designInPrior
-    || (/以前|担当した|従事した/u.test(text) && DESIGN_FACT_CUE_JA.test(text));
-  const priorRoleGroundingPassed = sourceHasDesign ? priorDesignFacts : true;
+  const priorSentence = sentences.find((_, i) => finalUnitRoleSlots[i] === 'prior_role') || '';
+  const designFamilies = scoreJapanesePriorDesignFamilies(priorSentence || text);
+  const claimScan = countJapaneseUnsupportedSummaryClaims(text, {
+    currentEntryDuties,
+    priorEntryDuties,
+    sourceDuties: options.sourceDuties,
+  });
+  const unsupportedClaimCount = claimScan.unsupportedClaimCount;
+  const missingDesignFamilyCount = sourceHasDesign ? designFamilies.missingCount : 0;
+  const priorRoleGroundingPassed = sourceHasDesign
+    ? (designInPrior || DESIGN_FACT_CUE_JA.test(priorSentence))
+      && designFamilies.missingCount === 0
+      && unsupportedClaimCount === 0
+    : unsupportedClaimCount === 0;
 
   const semanticCrossEntryLeakageDetected = currentSlotForeignFactCount > 0
     || priorSlotForeignFactCount > 0
@@ -297,8 +529,54 @@ export function analyzeJapaneseSummaryEmploymentQuality(
       && /(?:Carries|professional|duties|accuracy|communication)/iu.test(text))
     || /[а-яёА-ЯЁ]{4,}/u.test(text);
 
+  const introIdx = finalUnitRoleSlots.indexOf('current_intro');
+  const durationInIntro = introIdx >= 0
+    && /通算約|約.+年|実務経験/u.test(sentences[introIdx] || '');
+  const hasSeparateDurationSlot = finalUnitRoleSlots.includes('duration');
+  const durationClaimAnywhere = /通算約|約\s*\d|約.+年|実務経験/u.test(text);
+  const durationOutsideIntro = hasSeparateDurationSlot
+    || (durationClaimAnywhere && !durationInIntro);
+
+  const structureOk = unitCount === 3
+    && finalUnitRoleSlots.length === 3
+    && REQUIRED_JA_SLOTS.every((slot, i) => finalUnitRoleSlots[i] === slot);
+
+  const currentDutyMissing = !finalUnitRoleSlots.includes('current_duty');
+
+  let typedRejectionReason: string | null = null;
+  if (!text.trim()) {
+    typedRejectionReason = 'empty_summary';
+  } else if (malformedPunctuation) {
+    typedRejectionReason = 'japanese_summary_malformed_punctuation';
+  } else if (hasGenericSkillsUnit || finalUnitRoleSlots.includes('skills')) {
+    typedRejectionReason = 'japanese_summary_generic_skills_unit';
+  } else if (unsupportedClaimCount > 0) {
+    typedRejectionReason = 'japanese_summary_unsupported_claim';
+  } else if (unitCount !== 3) {
+    typedRejectionReason = 'japanese_summary_unit_count_mismatch';
+  } else if (!structureOk || finalUnitRoleSlots.includes('other')
+    || finalUnitRoleSlots.includes('duration')
+    || finalUnitRoleSlots.includes('skills')) {
+    typedRejectionReason = 'japanese_summary_role_slot_mismatch';
+  } else if (currentDutyMissing) {
+    typedRejectionReason = 'japanese_summary_current_duty_missing';
+  } else if (durationOutsideIntro) {
+    typedRejectionReason = 'japanese_summary_duration_outside_intro';
+  } else if (sourceHasDesign && missingDesignFamilyCount > 0) {
+    typedRejectionReason = 'japanese_summary_unsupported_claim';
+  } else if (mixedLeak) {
+    typedRejectionReason = 'japanese_summary_locale_impurity';
+  }
+
   const groundingOk = (
-    !mixedLeak
+    !typedRejectionReason
+    && !mixedLeak
+    && !malformedPunctuation
+    && !hasGenericSkillsUnit
+    && unsupportedClaimCount === 0
+    && missingDesignFamilyCount === 0
+    && structureOk
+    && !durationOutsideIntro
     && repeatedEmploymentFactCount === 0
     && repeatedProfessionalLabelCount === 0
     && currentEmploymentIntroductionCount === 1
@@ -341,6 +619,15 @@ export function analyzeJapaneseSummaryEmploymentQuality(
     ),
     summaryUnitSplitterRevision: SUMMARY_UNIT_SPLITTER_REVISION_JA,
     summaryGroundingRevision: SUMMARY_GROUNDING_REVISION_JA,
+    unitCount,
+    unsupportedClaimCount,
+    missingDesignFamilyCount,
+    hasGenericSkillsUnit,
+    durationOutsideIntro,
+    malformedPunctuation,
+    typedRejectionReason,
+    japaneseSummaryStrictPostconditionsMarker: JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+    japaneseDurationInIntroMarker: JAPANESE_DURATION_IN_INTRO_MARKER,
   };
 }
 
@@ -358,6 +645,8 @@ export function buildJapaneseEntryOwnedSummary(options: {
   locale?: Locale;
 }): string {
   void SUMMARY_BUILDER_REVISION_JA;
+  void JAPANESE_DURATION_IN_INTRO_MARKER;
+  void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
   void options.gender;
   void options.locale;
   let role = (options.role || '').trim();

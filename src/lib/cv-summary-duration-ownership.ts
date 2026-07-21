@@ -514,17 +514,27 @@ function mergePhraseIntoFirstSentence(text: string, phrase: string, locale: Loca
     if (!trimmed) return `${phrase}।`;
     return `${trimmed.replace(/[।.!?]+$/u, '')} ${phrase}।`.replace(/\s+/g, ' ').trim();
   }
+  if (locale === 'ja') {
+    // Fail-closed: never Latin-comma-splice Japanese. Callers must use injectFn.
+    return trimmed;
+  }
   if (!trimmed) {
     return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
   }
-  const match = trimmed.match(/^(.+?)([.!?۔])(\s+.*)?$/u);
+  const match = trimmed.match(/^(.+?)([.!?。۔])(\s+.*)?$/u);
   if (match) {
     const head = match[1].trim().replace(/[, ،]+$/u, '');
     const rest = (match[3] || '').trim();
-    const merged = `${head}, ${phrase}${match[2]}`.replace(/\s+/g, ' ').trim();
+    const delim = match[2] === '。' ? '。' : match[2];
+    if (delim === '。') {
+      // Should not reach here for ja (handled above); keep CJK-safe.
+      const merged = `${head}、${phrase}${delim}`.replace(/\s+/g, '').trim();
+      return rest ? `${merged}${rest}` : merged;
+    }
+    const merged = `${head}, ${phrase}${delim}`.replace(/\s+/g, ' ').trim();
     return rest ? `${merged} ${rest}`.replace(/\s+/g, ' ').trim() : merged;
   }
-  const withoutTrailingPunct = trimmed.replace(/[.!?۔]+\s*$/u, '');
+  const withoutTrailingPunct = trimmed.replace(/[.!?。۔]+\s*$/u, '');
   return `${withoutTrailingPunct}, ${phrase}.`.replace(/\s+/g, ' ').trim();
 }
 
@@ -620,9 +630,11 @@ export function enforceAuthoritativeSummaryDuration(
 
   // Repair loop if independent scan still sees ≠ 1 when required.
   if (requireClaim && duration.hasValidDates && phrase && afterInsertCount !== 1) {
-    working = mergePhraseIntoFirstSentence(stripAll(working), phrase, locale)
-      .replace(/\s+/g, ' ')
-      .trim();
+    const stripped = stripAll(working);
+    working = options?.injectFn
+      ? options.injectFn(stripped, duration, locale, options.context)
+      : mergePhraseIntoFirstSentence(stripped, phrase, locale);
+    working = working.replace(/\s+/g, ' ').trim();
     duplicateDurationRemoved = true;
     afterInsertCount = summarizeDurationClaimBreakdown(working, locale).total;
   }
@@ -644,12 +656,11 @@ export function enforceAuthoritativeSummaryDuration(
 
   // If hybrid survived, force one more strip+insert of the canonical phrase.
   if (requireClaim && duration.hasValidDates && phrase && finalRep.hybridDetected) {
-    working = mergePhraseIntoFirstSentence(stripAll(working), phrase, locale)
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (options?.injectFn) {
-      working = options.injectFn(stripAll(working), duration, locale, options.context);
-    }
+    const stripped = stripAll(working);
+    working = options?.injectFn
+      ? options.injectFn(stripped, duration, locale, options.context)
+      : mergePhraseIntoFirstSentence(stripped, phrase, locale);
+    working = working.replace(/\s+/g, ' ').trim();
     const repaired = verifyIndependentFinalDurationCount(working, locale, {
       requireExactlyOne: true,
     });

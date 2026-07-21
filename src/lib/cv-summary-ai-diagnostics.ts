@@ -673,6 +673,9 @@ export class SummaryAiDiagnosticSession {
       tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? true),
       grammarValidationPassed: finalized.reason !== 'malformed_serbian_token',
       unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
+      providerUnsupportedClaimCount: typeof diag.providerUnsupportedClaimCount === 'number'
+        ? diag.providerUnsupportedClaimCount
+        : (this.draft.providerUnsupportedClaimCount ?? 0),
       duplicateSentenceCount: 0,
       contentLocaleBeforeRequest: diag.contentLocaleBeforeRequest
         ?? this.draft.contentLocaleBeforeRequest

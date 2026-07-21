@@ -31,6 +31,7 @@ import {
   SUMMARY_DURATION_FINALIZER_REVISION_AR,
   SUMMARY_DURATION_FINALIZER_REVISION_RU,
   SUMMARY_DURATION_FINALIZER_REVISION_JA,
+  SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY,
   type DurationIntegrationContext,
 } from './cv-content-quality';
 import {
@@ -52,6 +53,8 @@ import {
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_GROUNDING_REVISION_JA,
+  JAPANESE_DURATION_IN_INTRO_MARKER,
+  JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 } from './cv-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
@@ -147,7 +150,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_UNIT_SPLITTER_REVISION_JA,
   SUMMARY_GROUNDING_REVISION_JA,
   SUMMARY_DURATION_FINALIZER_REVISION_JA,
+  SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY,
   JAPANESE_EXPERIENCE_MATERIAL_REVISION,
+  JAPANESE_DURATION_IN_INTRO_MARKER,
+  JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -161,7 +167,10 @@ void SUMMARY_BUILDER_REVISION_JA;
 void SUMMARY_UNIT_SPLITTER_REVISION_JA;
 void SUMMARY_GROUNDING_REVISION_JA;
 void SUMMARY_DURATION_FINALIZER_REVISION_JA;
+void SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY;
 void JAPANESE_EXPERIENCE_MATERIAL_REVISION;
+void JAPANESE_DURATION_IN_INTRO_MARKER;
+void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -336,6 +345,7 @@ export type FinalizeCvAiFieldResult = {
     /** Provider rejection reason retained separately from fallback routing reason. */
     providerRejectionReason?: string;
     providerRejectionStage?: string;
+    providerUnsupportedClaimCount?: number | null;
     providerDetectedMaterialFamilyCount?: number;
     authoritativeRequiredFamilyCount?: number;
     fallbackCoveredFamilyCount?: number;
@@ -719,6 +729,27 @@ function summaryPasses(
   if (forcedTitle.length) {
     return { ok: false, reason: 'forced_conflicting_title' };
   }
+  if (locale === 'ja') {
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+    const empQ = analyzeJapaneseSummaryEmploymentQuality(summary, {
+      company: primary?.company || '',
+      role: primary?.position || cv.personal?.jobTitle || '',
+      startDate: primary?.startDate || '',
+      sourceDuties: entryDuties.currentEntryDuties,
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      priorCompany: entryDuties.priorCompany,
+      structuredRole: primary?.position || entryDuties.currentRoleTitle,
+      gender: cv.personal?.gender || '',
+    });
+    if (!empQ.groundingValidationPassed) {
+      return {
+        ok: false,
+        reason: empQ.typedRejectionReason || 'japanese_summary_grounding_failed',
+      };
+    }
+  }
   return { ok: true };
 }
 
@@ -837,6 +868,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let previousSummaryTextUsedByDeterministicFallback = false;
   let providerTextUsedByDeterministicFallback = false;
   let flattenedFactArrayUsed = false;
+  let japaneseProviderRejectionReason: string | null = null;
+  let japaneseProviderUnsupportedClaimCount: number | null = null;
   const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
     ? hashExperienceEntryId(entryDutiesForRole.currentEntryId)
     : null;
@@ -1079,22 +1112,31 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       || /Графический\s+дизайнер/iu.test(candidate)
       || /[а-яёА-ЯЁ]{4,}/u.test(candidate)
     ) {
+      if (candidate.trim()) {
+        japaneseProviderRejectionReason = japaneseProviderRejectionReason
+          || 'japanese_summary_locale_impurity';
+      }
       candidate = '';
     }
-    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
-    const empQuality = analyzeJapaneseSummaryEmploymentQuality(candidate, {
-      company: context.company,
-      role: context.role,
-      startDate: context.startDate,
-      sourceDuties: dutiesText,
-      currentEntryDuties: entryDuties.currentEntryDuties,
-      priorEntryDuties: entryDuties.priorEntryDuties,
-      priorCompany: entryDuties.priorCompany,
-      structuredRole: context.role || entryDuties.currentRoleTitle,
-      gender,
-    });
-    if (!empQuality.groundingValidationPassed && candidate.trim()) {
-      candidate = '';
+    if (candidate.trim()) {
+      const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+      const empQuality = analyzeJapaneseSummaryEmploymentQuality(candidate, {
+        company: context.company,
+        role: context.role,
+        startDate: context.startDate,
+        sourceDuties: dutiesText,
+        currentEntryDuties: entryDuties.currentEntryDuties,
+        priorEntryDuties: entryDuties.priorEntryDuties,
+        priorCompany: entryDuties.priorCompany,
+        structuredRole: context.role || entryDuties.currentRoleTitle,
+        gender,
+      });
+      if (!empQuality.groundingValidationPassed) {
+        japaneseProviderRejectionReason = empQuality.typedRejectionReason
+          || 'japanese_summary_grounding_failed';
+        japaneseProviderUnsupportedClaimCount = empQuality.unsupportedClaimCount;
+        candidate = '';
+      }
     }
   }
 
@@ -1386,6 +1428,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalSentenceHashes: empQ?.finalSentenceHashes,
         finalSentenceRoleSlots: empQ?.finalSentenceRoleSlots,
         hindiFiniteKaAnubhavCollision: empQ?.hindiFiniteKaAnubhavCollision,
+        unsupportedClaimCount: locale === 'ja'
+          ? (empQ && 'unsupportedClaimCount' in empQ
+            ? (empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0
+            : 0)
+          : result.diagnostics?.unsupportedClaimCount,
+        providerRejectionReason: japaneseProviderRejectionReason
+          || result.diagnostics?.providerRejectionReason,
+        providerUnsupportedClaimCount: japaneseProviderUnsupportedClaimCount
+          ?? result.diagnostics?.providerUnsupportedClaimCount,
         durationFinalizerIdempotent,
         summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
         summaryRuntimeMarkerSet: [...SUMMARY_RUNTIME_MARKER_SET],
