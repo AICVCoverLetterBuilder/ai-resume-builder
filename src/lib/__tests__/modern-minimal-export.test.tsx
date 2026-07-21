@@ -1430,7 +1430,9 @@ describe('Modern Minimal preview/export parity', () => {
     if (changedFiles.includes('src/lib/types.ts')) {
       const typesDiff = execFileSync('git', ['diff', '--', 'src/lib/types.ts'], { encoding: 'utf8' });
       expect(typesDiff).not.toMatch(/recommendTemplate|ProfessionCategory|templateInfo/);
-      expect(typesDiff).toMatch(/canonicalDescription|canonicalSummary|generationJobContextKey|summaryGenerationContextKey/);
+      expect(typesDiff).toMatch(
+        /canonicalDescription|canonicalSummary|generationJobContextKey|summaryGenerationContextKey|positionProvenance|positionUserEdited|positionSourceLocale|positionSourceKey/,
+      );
     }
     expect(changedFiles).not.toContain('src/lib/ai.ts');
   });

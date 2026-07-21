@@ -468,13 +468,8 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
   if (matchesWarehouseOccupationalTitle(normalized)) {
     return localizeWarehouseEmployee(locale, gender);
   }
-  if (/(?:graphic\s+designer|grafi[cč]ki\s+dizajn\w*|گرافिक\s*डिज़ाइनर|ग्राफिक\s*डिज़ाइनर|مصمم(?:ة)?\s*جرافيك)/i.test(normalized)
-    || /(?:^|[^a-zA-Z])dizajner(?:ka)?(?:[^a-zA-Z]|$)/i.test(foldLatinDiacritics(normalized))) {
-    // Prefer concrete graphic-designer localization for recognized design titles.
-    if (/(?:graphic|grafi|ग्राफिक|جرافيك|vizuel|visual)/i.test(normalized)
-      || /graficki\s+dizajn/i.test(foldLatinDiacritics(normalized))) {
-      return localizeGraphicDesigner(locale, gender);
-    }
+  if (matchesGraphicDesignerOccupationalTitle(normalized)) {
+    return localizeGraphicDesigner(locale, gender);
   }
   if (locale === 'sr' || locale === 'hr') return normalized;
   const isAsciiTitle = /^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2;
@@ -484,6 +479,74 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
   return null;
 }
 
+/** Packaged asset marker — Experience title projection / provenance (AAB 296). */
+export const EXPERIENCE_TITLE_PROJECTION_REVISION =
+  'experience-title-projection-296-v1' as const;
+
+/** Graphic / visual designer title cues — Latin + JP + Cyrillic + AR/HI. */
+const GRAPHIC_DESIGNER_TITLE_CORE_RE =
+  /(?:graphic\s*designer|grafi[cč]k\w*\s+dizajn\w*|グラフィック\s*デザイナー|グラフィックデザイナー|графическ\p{L}*\s*дизайнер|گرافیک\s*डिज़ाइनर|ग्राफिक\s*डिज़ाइनर|مصمم(?:ة)?\s*جرافيك)/iu;
+
+/** True when title/blob denotes graphic/visual designer (not arbitrary free text). */
+export function matchesGraphicDesignerOccupationalTitle(text: string): boolean {
+  const raw = (text || '').trim();
+  if (!raw) return false;
+  if (GRAPHIC_DESIGNER_TITLE_CORE_RE.test(raw)) return true;
+  const folded = foldLatinDiacritics(raw);
+  if (GRAPHIC_DESIGNER_TITLE_CORE_RE.test(folded)) return true;
+  // Latin "dizajner" alone is ambiguous — require a graphic/visual cue.
+  if (/(?:^|[^a-zA-Z])dizajner(?:ka|ica)?(?:[^a-zA-Z]|$)/i.test(folded)
+    && /(?:graphic|grafi|vizuel|visual|grafick)/i.test(folded)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Authoritative Experience title for preview / PDF / DOCX.
+ * Preserves explicit manual free-text; re-projects app-localized known occupations.
+ * CV heading capitalization: dictionary forms like "grafička…" become "Grafička…".
+ */
+export function resolveExperienceTitleForDisplay(
+  exp: {
+    position?: string;
+    positionProvenance?: string;
+    positionUserEdited?: boolean;
+    positionSourceLocale?: string;
+  },
+  locale: Locale,
+  gender?: string,
+): string {
+  void EXPERIENCE_TITLE_PROJECTION_REVISION;
+  const raw = (exp.position || '').trim();
+  if (!raw) return raw;
+
+  const provenance = exp.positionProvenance || 'legacy_unknown';
+  const userEdited = Boolean(exp.positionUserEdited);
+
+  // Explicit user text wins — including intentional foreign-script titles.
+  if (userEdited || provenance === 'manual') {
+    return raw;
+  }
+
+  return capitalizeExperienceTitleHeading(
+    localizeOccupationalTitleForProjection(raw, locale, gender),
+    locale,
+  );
+}
+
+/** Capitalize the first letter for CV Experience/job-title headings (hr/sr). */
+export function capitalizeExperienceTitleHeading(title: string, locale: Locale): string {
+  const t = (title || '').trim();
+  if (!t) return t;
+  if (locale !== 'hr' && locale !== 'sr') return t;
+  const loc = locale === 'hr' ? 'hr-HR' : 'sr-Latn';
+  const first = t.charAt(0);
+  const upper = first.toLocaleUpperCase(loc);
+  if (first === upper) return t;
+  return upper + t.slice(1);
+}
+
 export function localizeOccupationalTitleForProjection(
   title: string,
   locale: Locale,
@@ -491,6 +554,19 @@ export function localizeOccupationalTitleForProjection(
 ): string {
   if (!isValidOccupationalTitle(title)) return title;
   return localizeKnownTitle(title.trim(), locale, gender) || title;
+}
+
+/** Personal jobTitle projection — same dictionary + heading capitalization. */
+export function resolvePersonalJobTitleForDisplay(
+  title: string,
+  locale: Locale,
+  gender?: string,
+): string {
+  void EXPERIENCE_TITLE_PROJECTION_REVISION;
+  return capitalizeExperienceTitleHeading(
+    localizeOccupationalTitleForProjection(title, locale, gender),
+    locale,
+  );
 }
 
 /** True when two titles are the same occupation across locales (e.g. Baker ↔ बेकर). */

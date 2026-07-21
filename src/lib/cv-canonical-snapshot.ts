@@ -603,6 +603,22 @@ export function applyCanonicalExperienceEdit(
           : {}),
       };
     }
+    if (field === 'position' && typeof value === 'string') {
+      const prev = (e.position || '').trim();
+      const nextTitle = value.trim();
+      const materialTitleEdit = prev.localeCompare(nextTitle, undefined, { sensitivity: 'accent' }) !== 0;
+      return {
+        ...e,
+        position: value,
+        ...(materialTitleEdit
+          ? {
+            positionProvenance: 'manual' as const,
+            positionUserEdited: true,
+            positionSourceLocale: uiLocale,
+          }
+          : {}),
+      };
+    }
     return { ...e, [field]: value };
   });
   const next = { ...cv, experience: nextExp, updatedAt: new Date().toISOString() };

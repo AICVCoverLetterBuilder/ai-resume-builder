@@ -159,6 +159,7 @@ import {
   type ExperienceUnsupportedClaimKind,
 } from './cv-experience-unsupported-claims';
 import {
+  EXPERIENCE_TITLE_PROJECTION_REVISION,
   evaluateRoleDutyConsistency,
   matchesWarehouseOccupationalTitle,
   resolveOccupationalTitleForSummary,
@@ -204,6 +205,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
   EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
   EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
+  EXPERIENCE_TITLE_PROJECTION_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -237,6 +239,7 @@ void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 void EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
 void EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION;
+void EXPERIENCE_TITLE_PROJECTION_REVISION;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -4184,20 +4187,29 @@ export function applyFinalizedBulletsToCv(
 
   // Cross-locale Experience apply: localize the applied entry's structured
   // free-text title into the target locale when recognized (warehouse / design).
-  // Do not rewrite unrelated personal.jobTitle — export projection handles display.
+  // Never overwrite an explicit manual title the user typed.
   {
     const gender = next.personal?.gender || '';
     next = {
       ...next,
       experience: (next.experience || []).map((e) => {
         if (e.id !== experienceId) return e;
+        if (e.positionUserEdited || e.positionProvenance === 'manual') {
+          return e;
+        }
         const localized = localizeOccupationalTitleForProjection(
           e.position || '',
           locale,
           gender,
         );
         return localized && localized !== e.position
-          ? { ...e, position: localized }
+          ? {
+            ...e,
+            position: localized,
+            positionProvenance: 'localized_generated' as const,
+            positionSourceLocale: locale,
+            positionUserEdited: false,
+          }
           : e;
       }),
     };

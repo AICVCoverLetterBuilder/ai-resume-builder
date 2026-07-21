@@ -34,6 +34,23 @@ export interface WorkExperience {
   id: string;
   company: string;
   position: string;
+  /**
+   * How `position` was authored. Display/export may re-project app-localized
+   * occupation titles into the active content locale, but must preserve exact
+   * manual free-text (including intentional foreign-script titles).
+   */
+  positionProvenance?:
+    | 'manual'
+    | 'occupation_option'
+    | 'ai_generated'
+    | 'localized_generated'
+    | 'legacy_unknown';
+  /** True when the user materially edited the position field in the form. */
+  positionUserEdited?: boolean;
+  /** Locale in which the app last generated or localized `position`, when known. */
+  positionSourceLocale?: string;
+  /** Optional stable occupation key when selected from localized options. */
+  positionSourceKey?: string;
   startDate: string;
   endDate: string;
   isPresent: boolean;

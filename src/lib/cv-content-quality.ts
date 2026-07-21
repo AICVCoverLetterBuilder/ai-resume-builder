@@ -25,7 +25,8 @@ import {
   validateSummaryCompleteness,
 } from './cv-semantic-fidelity';
 import {
-  localizeOccupationalTitleForProjection,
+  resolveExperienceTitleForDisplay,
+  resolvePersonalJobTitleForDisplay,
   resolveOccupationalTitleForSummary,
 } from './cv-role-title';
 import { injectJapaneseDurationIntoCurrentIntro } from './cv-japanese-summary-grounding';
@@ -1284,7 +1285,7 @@ export function applyCvContentQuality(
   const localizedSkills = deduplicateSkillsForExport(cv.skills || [], locale);
   const localizedExperience = experience.map((exp) => ({
     ...exp,
-    position: localizeOccupationalTitleForProjection(exp.position || '', locale, gender),
+    position: resolveExperienceTitleForDisplay(exp, locale, gender),
   }));
 
   return {
@@ -1292,7 +1293,7 @@ export function applyCvContentQuality(
       ...cv,
       personal: {
         ...cv.personal,
-        jobTitle: localizeOccupationalTitleForProjection(
+        jobTitle: resolvePersonalJobTitleForDisplay(
           cv.personal?.jobTitle || '',
           locale,
           gender,
