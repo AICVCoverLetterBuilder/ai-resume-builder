@@ -311,6 +311,7 @@ export function extractSummaryYearClaims(text: string): number[] {
     [/\bdvije\s+i\s+po\s+godin/giu, 2.5],
     [/\bjedne\s+i\s+po\s+godin/giu, 1.5],
     [/\bšest\s+i\s+po\s+godin|\bsest\s+i\s+po\s+godin/giu, 6.5],
+    [/\bšest\s+i\s+pol\s+godin|\bsest\s+i\s+pol\s+godin/giu, 6.5],
     [/\bgodinu\s+i\s+po\b/giu, 1.5],
     [/ढाई\s*वर्ष/gu, 2.5],
     [/डेढ़\s*वर्ष|डेढ\s*वर्ष/gu, 1.5],
@@ -428,8 +429,8 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
     7: 'sedam', 8: 'osam', 9: 'devet', 10: 'deset',
   },
   hr: {
-    1: 'jedne', 1.5: 'jedne i po', 2: 'dvije', 2.5: 'dvije i po', 3: 'tri', 3.5: 'tri i po',
-    4: 'četiri', 4.5: 'četiri i po', 5: 'pet', 5.5: 'pet i po', 6: 'šest', 6.5: 'šest i po',
+    1: 'jedne', 1.5: 'jedne i pol', 2: 'dvije', 2.5: 'dvije i pol', 3: 'tri', 3.5: 'tri i pol',
+    4: 'četiri', 4.5: 'četiri i pol', 5: 'pet', 5.5: 'pet i pol', 6: 'šest', 6.5: 'šest i pol',
     7: 'sedam', 8: 'osam', 9: 'devet', 10: 'deset',
   },
   ru: {
@@ -467,7 +468,8 @@ export function yearWordForLocale(locale: Locale, n: number): string {
   if (!half) return String(n);
   const wholeWord = map?.[whole] ?? String(whole);
   if (locale === 'en') return `${wholeWord} and a half`;
-  if (locale === 'sr' || locale === 'hr') return `${wholeWord} i po`;
+  if (locale === 'hr') return `${wholeWord} i pol`;
+  if (locale === 'sr') return `${wholeWord} i po`;
   if (locale === 'hi') return whole >= 3 ? `साढ़े ${wholeWord}` : String(n);
   if (locale === 'de') return `${whole},5`;
   if (locale === 'es') return `${wholeWord} y medio`;
@@ -628,7 +630,8 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     case 'sr':
       return `sa oko ${word} ${srYearNoun} iskustva`;
     case 'hr':
-      return `s oko ${word} ${srYearNoun} iskustva`;
+      // Prefer written half-years: "oko šest i pol godina" (never 6.5).
+      return `s ukupno oko ${word} godina iskustva`;
     case 'hi':
       return `लगभग ${word} वर्षों का संयुक्त अनुभव`;
     case 'de':

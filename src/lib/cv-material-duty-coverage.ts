@@ -233,7 +233,7 @@ const DUTY_RULES: DutyRule[] = [
       /(?:design\s+files?|final\s+design|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|formats?\s+for\s+different|дизайн-?файл|финальн\w*\s+дизайн|формат\w*.{0,40}экран|подготавлива\w*.{0,40}файл)/iu,
     // Bare "экран" / generic "материалы" must not satisfy final files/formats.
     localized:
-      /(?:design\s+files?|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|дизайн-?файл|финальн[а-яё]*\s+дизайн-?файл|файл[а-яё]*.{0,32}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,32}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат|最終(?:デザイン)?ファイル|デザインファイル|形式|フォーマット|画面)/iu,
+      /(?:design\s+files?|dizajn\s*fajl|završn\w*\s+(?:dizajnersk\w*\s+)?datotek|datotek\w*.{0,40}format|format\w*.{0,40}(?:zaslon|ekran)|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|дизайн-?файл|финальн[а-яё]*\s+дизайн-?файл|файл[а-яё]*.{0,32}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,32}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат|最終(?:デザイン)?ファイル|デザインファイル|形式|フォーマット|画面)/iu,
   },
 ];
 
@@ -243,6 +243,13 @@ void RUSSIAN_EXPERIENCE_MATERIAL_REVISION;
 /** Runtime marker — Japanese Experience material model (must remain in packaged assets). */
 export const JAPANESE_EXPERIENCE_MATERIAL_REVISION = 'japanese-experience-material-v1' as const;
 void JAPANESE_EXPERIENCE_MATERIAL_REVISION;
+/** Runtime marker — Croatian Experience material model. */
+export const CROATIAN_EXPERIENCE_MATERIAL_REVISION = 'croatian-experience-material-v1' as const;
+void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+/** Runtime marker — Croatian vs Serbian locale discrimination. */
+export const CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION =
+  'croatian-serbian-locale-discrimination-v1' as const;
+void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
 /** Runtime marker — Russian design three-family coverage (build 286). */
 export const RUSSIAN_DESIGN_FAMILIES_REVISION = 'russian-design-families-286-v1' as const;
 void RUSSIAN_DESIGN_FAMILIES_REVISION;
@@ -540,6 +547,198 @@ export function japaneseDesignCueKeysFromUnit(unit: string): DesignMaterialCueKe
   return out;
 }
 
+/** Fine-grained Croatian warehouse cues. */
+const CROATIAN_WAREHOUSE_CUE_RULES: Array<{ key: WarehouseMaterialCueKey; re: RegExp }> = [
+  {
+    key: 'warehouse_inbound_check',
+    re: /(?:zaprimljen|primljen|ulazn)\w*\s+rob|provjer\w*.{0,40}(?:rob|dokument)|(?:rob|dokument).{0,40}provjer|točnost.{0,24}(?:rob|dokument)/iu,
+  },
+  {
+    key: 'warehouse_document_check',
+    re: /(?:prateć|popratn)\w*\s+dokument|dokument\w*.{0,24}(?:prateć|popratn)/iu,
+  },
+  {
+    key: 'warehouse_records',
+    re: /skladišn\w*\s+(?:evidencij|zapis)|ažurir\w*.{0,40}(?:evidencij|zapis|skladiš)|(?:evidencij|zapis).{0,40}ažurir/iu,
+  },
+  {
+    key: 'warehouse_orderly_goods',
+    re: /(?:uredn|organiziran)\w*.{0,40}(?:skladišt|raspored|rob)|raspoređenost|skladištenje\s+rob/iu,
+  },
+  {
+    key: 'warehouse_preparation',
+    re: /priprem\w*.{0,40}rob|rob\w*.{0,40}priprem/iu,
+  },
+  {
+    key: 'warehouse_movement',
+    re: /premještanj\w*|kretanj\w*\s+rob|rob\w*.{0,40}(?:premješt|kretanj)|unutar\s+skladišt/iu,
+  },
+  {
+    key: 'warehouse_colleague_coordination',
+    re: /(?:surađ|koordin)\w*.{0,48}koleg|koleg\w*.{0,48}(?:surađ|koordin|priprem|premješt)/iu,
+  },
+];
+
+export function croatianWarehouseCueKeysFromUnit(unit: string): WarehouseMaterialCueKey[] {
+  void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  const out: WarehouseMaterialCueKey[] = [];
+  for (const rule of CROATIAN_WAREHOUSE_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
+const CROATIAN_DESIGN_CUE_RULES: Array<{ key: DesignMaterialCueKey; re: RegExp }> = [
+  {
+    key: 'design_visual_materials',
+    re: /vizualn\w*\s+materijal|dizajnersk\w*\s+materijal/iu,
+  },
+  {
+    key: 'design_graphic_elements',
+    re: /grafičk\w*\s+element/iu,
+  },
+  {
+    key: 'design_review_adapt',
+    re: /(?:pregledav|provjerav|prilagođav)\w*.{0,48}(?:dizajn|materijal|zahtjev)|zahtjev\w*\s+projekt/iu,
+  },
+  {
+    key: 'design_project_requirements',
+    re: /zahtjev\w*\s+projekt|prema\s+zahtjev/iu,
+  },
+  {
+    key: 'design_files_formats',
+    re: /završn\w*\s+(?:dizajnersk\w*\s+)?datotek|datotek\w*.{0,40}(?:format|dizajn)|format\w*.{0,40}(?:zaslon|ekran|datotek)/iu,
+  },
+  {
+    key: 'design_different_screens',
+    re: /(?:različit\w*\s+)?(?:zaslon|ekran)/iu,
+  },
+];
+
+/** Generic Croatian/Serbian design prose that must not satisfy design families. */
+const CROATIAN_GENERIC_DESIGN_DUTY_RE =
+  /svakodnevn\w*\s+dužnost|profesionaln\w*\s+zadat|razmjen\w*\s+informacij|razmen\w*\s+informacij|pregled\w*\s+dokumentacij|provjer\w*\s+(?:potpunost\s+)?podat|prover\w*\s+(?:potpunost\s+)?podat/iu;
+
+const CROATIAN_DESIGN_CREATION_RE =
+  /vizualn\w*\s+materijal|grafičk\w*\s+element|digitaln\w*\s+proizvod|platform/iu;
+
+const CROATIAN_DESIGN_REVIEW_ADAPT_RE =
+  /(?:pregledav|provjerav|prilagođav)\w*.{0,48}(?:dizajn|materijal|zahtjev)|zahtjev\w*\s+projekt/iu;
+
+const CROATIAN_DESIGN_FINAL_DELIVERY_RE =
+  /završn\w*\s+(?:dizajnersk\w*\s+)?datotek|format\w*.{0,40}(?:zaslon|ekran)|(?:zaslon|ekran)\w*.{0,40}format/iu;
+
+export function croatianDesignCueKeysFromUnit(unit: string): DesignMaterialCueKey[] {
+  void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+  const t = (unit || '').normalize('NFKC');
+  if (!t.trim()) return [];
+  if (
+    isCroatianGenericDesignDutyUnit(t)
+    && !CROATIAN_DESIGN_CREATION_RE.test(t)
+    && !CROATIAN_DESIGN_REVIEW_ADAPT_RE.test(t)
+    && !CROATIAN_DESIGN_FINAL_DELIVERY_RE.test(t)
+  ) {
+    return [];
+  }
+  const out: DesignMaterialCueKey[] = [];
+  for (const rule of CROATIAN_DESIGN_CUE_RULES) {
+    if (rule.re.test(t)) out.push(rule.key);
+  }
+  return out;
+}
+
+export function isCroatianGenericDesignDutyUnit(unit: string): boolean {
+  return CROATIAN_GENERIC_DESIGN_DUTY_RE.test((unit || '').normalize('NFKC'));
+}
+
+export type CroatianDesignFactFamily =
+  | 'creation'
+  | 'review_adaptation'
+  | 'final_delivery_formats';
+
+export type CroatianDesignFamilyCoverage = {
+  ok: boolean;
+  creationCovered: boolean;
+  reviewAdaptationCovered: boolean;
+  finalDeliveryCovered: boolean;
+  coveredFamilies: CroatianDesignFactFamily[];
+  missingFamilies: CroatianDesignFactFamily[];
+  genericDutyUnitCount: number;
+  reason?:
+    | 'croatian_design_material_coverage_incomplete'
+    | 'croatian_design_generic_duty'
+    | 'croatian_experience_domain_mismatch';
+};
+
+export function validateCroatianDesignFactFamilies(
+  candidateDescription: string,
+): CroatianDesignFamilyCoverage {
+  void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+  const bullets = splitExperienceBullets(candidateDescription || '')
+    .map((b) => b.trim())
+    .filter(Boolean);
+  let creationCovered = false;
+  let reviewAdaptationCovered = false;
+  let finalDeliveryCovered = false;
+  let genericDutyUnitCount = 0;
+
+  for (const bullet of bullets) {
+    const generic = isCroatianGenericDesignDutyUnit(bullet);
+    if (generic) genericDutyUnitCount += 1;
+
+    if (
+      !generic
+      && /vizualn\w*\s+materijal/iu.test(bullet)
+      && /grafičk\w*\s+element/iu.test(bullet)
+    ) {
+      creationCovered = true;
+    }
+    if (!generic && CROATIAN_DESIGN_REVIEW_ADAPT_RE.test(bullet)) {
+      reviewAdaptationCovered = true;
+    }
+    if (!generic && CROATIAN_DESIGN_FINAL_DELIVERY_RE.test(bullet)) {
+      finalDeliveryCovered = true;
+    }
+  }
+
+  const coveredFamilies: CroatianDesignFactFamily[] = [];
+  if (creationCovered) coveredFamilies.push('creation');
+  if (reviewAdaptationCovered) coveredFamilies.push('review_adaptation');
+  if (finalDeliveryCovered) coveredFamilies.push('final_delivery_formats');
+  const missingFamilies: CroatianDesignFactFamily[] = (
+    ['creation', 'review_adaptation', 'final_delivery_formats'] as const
+  ).filter((f) => !coveredFamilies.includes(f));
+
+  let reason: CroatianDesignFamilyCoverage['reason'];
+  if (genericDutyUnitCount > 0 && coveredFamilies.length === 0) {
+    reason = 'croatian_design_generic_duty';
+  } else if (missingFamilies.length > 0) {
+    reason = 'croatian_design_material_coverage_incomplete';
+  }
+
+  return {
+    ok: missingFamilies.length === 0 && genericDutyUnitCount === 0,
+    creationCovered,
+    reviewAdaptationCovered,
+    finalDeliveryCovered,
+    coveredFamilies,
+    missingFamilies,
+    genericDutyUnitCount,
+    reason,
+  };
+}
+
+export function isCroatianDesignFamilyRejectionReason(reason: string | null | undefined): boolean {
+  const r = String(reason || '');
+  return r === 'croatian_design_generic_duty'
+    || r === 'croatian_design_material_coverage_incomplete'
+    || r === 'croatian_experience_domain_mismatch'
+    || r === 'croatian_experience_cross_entry_fallback'
+    || r === 'croatian_serbian_locale_leakage';
+}
+
 export function isRussianGenericDesignDutyUnit(unit: string): boolean {
   return RUSSIAN_GENERIC_DESIGN_DUTY_RE.test((unit || '').normalize('NFKC'));
 }
@@ -716,8 +915,45 @@ export function collectDesignMaterialKeysFromDescription(description: string): s
     for (const k of arabicDesignCueKeysFromUnit(unit)) push(k);
     for (const k of russianDesignCueKeysFromUnit(unit)) push(k);
     for (const k of japaneseDesignCueKeysFromUnit(unit)) push(k);
+    for (const k of croatianDesignCueKeysFromUnit(unit)) push(k);
   }
   return ordered;
+}
+
+export function sourceRequiresCroatianDesignFamilies(sourceDescription: string): boolean {
+  const keys = materialDutyKeysFromDescription(sourceDescription)
+    .filter((k) => k.startsWith('design_'));
+  if (keys.length >= 2) return true;
+  const cues = collectDesignMaterialKeysFromDescription(sourceDescription)
+    .filter((k) => k.startsWith('design_'));
+  return cues.length >= 2;
+}
+
+/**
+ * Whether a Croatian Experience operation must rebuild concrete design families
+ * instead of preserving Serbian-generic or cross-domain poisoned prose.
+ */
+export function experienceNeedsCroatianDesignFamilyRebuild(options: {
+  locale: string;
+  sourceDescription?: string | null;
+  position?: string | null;
+  rejectReason?: string | null;
+}): boolean {
+  void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+  if (options.locale !== 'hr') return false;
+  if (isCroatianDesignFamilyRejectionReason(options.rejectReason)) return true;
+  const source = options.sourceDescription || '';
+  if (sourceRequiresCroatianDesignFamilies(source)) {
+    return !validateCroatianDesignFactFamilies(source).ok;
+  }
+  const position = String(options.position || '');
+  if (/(dizajn|design|grafick|graphic|visual|vizuel|ビジュアル|デザイン)/i.test(position)) {
+    if (!source.trim()) return true;
+    return !validateCroatianDesignFactFamilies(source).ok
+      || isCroatianGenericDesignDutyUnit(source)
+      || validateCroatianDesignFactFamilies(source).coveredFamilies.length < 3;
+  }
+  return false;
 }
 
 export function sourceRequiresRussianDesignFamilies(sourceDescription: string): boolean {
@@ -801,6 +1037,8 @@ export function diagnoseCurrentSourceUnitMaterial(
       ...russianDesignCueKeysFromUnit(unit),
       ...japaneseWarehouseCueKeysFromUnit(unit),
       ...japaneseDesignCueKeysFromUnit(unit),
+      ...croatianWarehouseCueKeysFromUnit(unit),
+      ...croatianDesignCueKeysFromUnit(unit),
     ];
     const keySet = new Set<string>(keys);
     const merged = [
@@ -826,7 +1064,8 @@ export function diagnoseCurrentSourceUnitMaterial(
       hindiWarehouseCueKeysFromUnit(unit).length
         + arabicWarehouseCueKeysFromUnit(unit).length
         + russianWarehouseCueKeysFromUnit(unit).length
-        + japaneseWarehouseCueKeysFromUnit(unit).length,
+        + japaneseWarehouseCueKeysFromUnit(unit).length
+        + croatianWarehouseCueKeysFromUnit(unit).length,
     );
   }
   return {
@@ -856,6 +1095,17 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
       if (!keys.includes(k as MaterialDutyKey)) keys.push(k as MaterialDutyKey);
     }
     for (const k of japaneseDesignCueKeysFromUnit(t)) {
+      if (!keys.includes(k as MaterialDutyKey)) keys.push(k as MaterialDutyKey);
+    }
+  }
+  // Croatian / shared SC Latin: fine-grained warehouse + design cues.
+  if (
+    /(?:skladišt|zaprimljen|primljen|ulazn\w*\s+rob|prateć|popratn|provjer|točnost|vizualn|grafičk|dizajn|prilagođ|zaslon|zahtjev\w*\s+projekt)/iu.test(t)
+  ) {
+    for (const k of croatianWarehouseCueKeysFromUnit(t)) {
+      if (!keys.includes(k as MaterialDutyKey)) keys.push(k as MaterialDutyKey);
+    }
+    for (const k of croatianDesignCueKeysFromUnit(t)) {
       if (!keys.includes(k as MaterialDutyKey)) keys.push(k as MaterialDutyKey);
     }
   }
@@ -927,8 +1177,14 @@ export function materialDutyKeysFromDescription(description: string): MaterialDu
 function localizedHasDuty(key: MaterialDutyKey, localized: string): boolean {
   if (key === 'generic_duty') return true;
   const rule = DUTY_RULES.find((r) => r.key === key);
+  if (rule?.localized.test(localized)) return true;
+  // Fine-grained locale cue keys (HR/JA/RU/AR) may be present without a DUTY_RULE hit.
+  if (croatianDesignCueKeysFromUnit(localized).includes(key as DesignMaterialCueKey)) return true;
+  if (croatianWarehouseCueKeysFromUnit(localized).includes(key as WarehouseMaterialCueKey)) return true;
+  if (japaneseDesignCueKeysFromUnit(localized).includes(key as DesignMaterialCueKey)) return true;
+  if (japaneseWarehouseCueKeysFromUnit(localized).includes(key as WarehouseMaterialCueKey)) return true;
   if (!rule) return true;
-  return rule.localized.test(localized);
+  return false;
 }
 
 export type MaterialDutyCoverageResult = {
@@ -1211,12 +1467,18 @@ export type ExperienceApplyCoverageCheck = {
     | 'unsupported_generated_duty'
     | 'russian_design_family_coverage_incomplete'
     | 'russian_design_generic_duty'
-    | 'russian_design_semantic_duplicate';
+    | 'russian_design_semantic_duplicate'
+    | 'croatian_design_material_coverage_incomplete'
+    | 'croatian_design_generic_duty'
+    | 'croatian_experience_domain_mismatch'
+    | 'croatian_experience_cross_entry_fallback'
+    | 'croatian_serbian_locale_leakage';
   required: MaterialDutyKey[];
   covered: MaterialDutyKey[];
   distinctSemanticBulletCount: number;
   finalBulletCount: number;
   russianDesignFamilies?: RussianDesignFamilyCoverage;
+  croatianDesignFamilies?: CroatianDesignFamilyCoverage;
 };
 
 /**
@@ -1284,6 +1546,22 @@ export function validateExperienceApplyMaterialPostcondition(
   }
 
   const targetLocale = options?.targetLocale || null;
+  const needsHrDesign = targetLocale === 'hr'
+    && sourceRequiresCroatianDesignFamilies(sourceDescription);
+  if (needsHrDesign) {
+    const families = validateCroatianDesignFactFamilies(candidateDescription);
+    if (!families.ok) {
+      return {
+        ok: false,
+        reason: families.reason || 'croatian_design_material_coverage_incomplete',
+        required: sourceKeys,
+        covered,
+        distinctSemanticBulletCount: dup.distinctCount,
+        finalBulletCount,
+        croatianDesignFamilies: families,
+      };
+    }
+  }
   const needsRuDesign = (targetLocale === 'ru' || /[а-яё]/iu.test(candidateDescription))
     && sourceRequiresRussianDesignFamilies(sourceDescription);
   if (needsRuDesign) {

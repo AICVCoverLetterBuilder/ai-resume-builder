@@ -249,7 +249,7 @@ const MATERIAL_DUTY_ANCHORS: Array<{ source: RegExp; localized: RegExp; label: s
 
 const SUMMARY_CATEGORY_MARKERS: Record<Exclude<CvDutyCategory, 'generic'>, RegExp> = {
   inventory_stock:
-    /(stock\s*level|inventory\s*count|supply\s*need|zalih|inventar|skladišt|स्टॉक|इन्वेंटरी|आपूर्ति|مخزون|replenish|dopun)/iu,
+    /(stock\s*level|inventory\s*count|supply\s*need|zalih|inventar|स्टॉक|इन्वेंटरी|आपूर्ति|مخزون|replenish|dopun)/iu,
   beverage_service:
     /(bartend|cocktail|koktel|bar\s+service|कॉकटेल|पेय\s+तैयार)/iu,
   customer_service_guest_relationship:

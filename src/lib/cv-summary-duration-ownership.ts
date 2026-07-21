@@ -94,11 +94,11 @@ const DURATION_EXPRESSION_RES: RegExp[] = [
   // Serbian / Croatian — approximators, numeric (decimal comma normalized), written, radnog
   // Use (?<!\p{L}) instead of \b so diacritic-initial tokens (šest, četiri, približno) match.
   new RegExp(
-    String.raw`(?<!\p{L})(?:sa\s+)?(?:oko|približno|otprilike|s\s+oko)\s+(?:jedne?(?:\s+i\s+po)?|dvije?(?:\s+i\s+po)?|dve(?:\s+i\s+po)?|tri(?:\s+i\s+po)?|četiri(?:\s+i\s+po)?|cetiri(?:\s+i\s+po)?|pet(?:\s+i\s+po)?|šest(?:\s+i\s+po)?|sest(?:\s+i\s+po)?|sedam(?:\s+i\s+po)?|osam(?:\s+i\s+po)?|devet(?:\s+i\s+po)?|deset(?:\s+i\s+po)?|${NUM}(?:\s+i\s+po)?)\s+godin(?:a|e|u)(?:\s+radnog)?(?:\s+iskustva)?(?!\p{L})`,
+    String.raw`(?<!\p{L})(?:sa\s+|s\s+)?(?:ukupno\s+)?(?:oko|približno|otprilike|s\s+oko)\s+(?:jedne?(?:\s+i\s+po[l]?)?|dvije?(?:\s+i\s+po[l]?)?|dve(?:\s+i\s+po[l]?)?|tri(?:\s+i\s+po[l]?)?|četiri(?:\s+i\s+po[l]?)?|cetiri(?:\s+i\s+po[l]?)?|pet(?:\s+i\s+po[l]?)?|šest(?:\s+i\s+po[l]?)?|sest(?:\s+i\s+po[l]?)?|sedam(?:\s+i\s+po[l]?)?|osam(?:\s+i\s+po[l]?)?|devet(?:\s+i\s+po[l]?)?|deset(?:\s+i\s+po[l]?)?|${NUM}(?:\s+i\s+po[l]?)?)\s+godin(?:a|e|u)(?:\s+radnog)?(?:\s+iskustva)?(?!\p{L})`,
     'giu',
   ),
-  /(?<!\p{L})(?:sa\s+)?(?:oko|približno|otprilike|s\s+oko)\s+godinu(?:\s+i\s+po)?(?:\s+dana)?(?:\s+(?:radnog\s+)?iskustva)?(?!\p{L})/giu,
-  /(?<!\p{L})(?:jedne?\s+i\s+po|dve\s+i\s+po|dvije\s+i\s+po|tri\s+i\s+po|četiri\s+i\s+po|cetiri\s+i\s+po|pet\s+i\s+po|šest\s+i\s+po|sest\s+i\s+po|sedam\s+i\s+po|osam\s+i\s+po|devet\s+i\s+po|deset\s+i\s+po)\s+godin(?:a|e|u)(?:\s+radnog)?(?:\s+iskustva)?(?!\p{L})/giu,
+  /(?<!\p{L})(?:sa\s+|s\s+)?(?:ukupno\s+)?(?:oko|približno|otprilike|s\s+oko)\s+godinu(?:\s+i\s+po[l]?)?(?:\s+dana)?(?:\s+(?:radnog\s+)?iskustva)?(?!\p{L})/giu,
+  /(?<!\p{L})(?:jedne?\s+i\s+po[l]?|dve\s+i\s+po[l]?|dvije\s+i\s+po[l]?|tri\s+i\s+po[l]?|četiri\s+i\s+po[l]?|cetiri\s+i\s+po[l]?|pet\s+i\s+po[l]?|šest\s+i\s+po[l]?|sest\s+i\s+po[l]?|sedam\s+i\s+po[l]?|osam\s+i\s+po[l]?|devet\s+i\s+po[l]?|deset\s+i\s+po[l]?)\s+godin(?:a|e|u)(?:\s+radnog)?(?:\s+iskustva)?(?!\p{L})/giu,
   new RegExp(
     String.raw`(?<!\p{L})${NUM}\s+godin(?:a|e|u)(?:\s+radnog)?(?:\s+iskustva)(?!\p{L})`,
     'giu',
@@ -516,6 +516,10 @@ function mergePhraseIntoFirstSentence(text: string, phrase: string, locale: Loca
   }
   if (locale === 'ja') {
     // Fail-closed: never Latin-comma-splice Japanese. Callers must use injectFn.
+    return trimmed;
+  }
+  if (locale === 'hr') {
+    // Fail-closed: never Latin-comma-splice Croatian when dedicated inject exists.
     return trimmed;
   }
   if (!trimmed) {

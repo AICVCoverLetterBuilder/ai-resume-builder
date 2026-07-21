@@ -107,6 +107,13 @@ const SUMMARY_DURATION_REVISION_JA_LEGACY = 'japanese-duration-idempotent-v1';
 const SUMMARY_BUILDER_REVISION_JA = 'entry-owned-japanese-rebuild-v1';
 const JAPANESE_DURATION_IN_INTRO = 'japanese-duration-in-intro-289-v1';
 const JAPANESE_SUMMARY_STRICT_POSTCONDITIONS = 'japanese-summary-strict-postconditions-289-v1';
+const CROATIAN_EXPERIENCE_MATERIAL = 'croatian-experience-material-v1';
+const CROATIAN_SERBIAN_LOCALE = 'croatian-serbian-locale-discrimination-v1';
+const SUMMARY_SPLITTER_REVISION_HR = 'croatian-three-sentence-slots-v1';
+const SUMMARY_GROUNDING_REVISION_HR = 'entry-owned-croatian-grounding-v1';
+const SUMMARY_DURATION_REVISION_HR = 'croatian-duration-idempotent-v1';
+const SUMMARY_BUILDER_REVISION_HR = 'entry-owned-croatian-rebuild-v1';
+const CROATIAN_SUMMARY_STRICT_POSTCONDITIONS = 'croatian-summary-strict-postconditions-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -134,6 +141,13 @@ for (const marker of [
   SUMMARY_BUILDER_REVISION_JA,
   JAPANESE_DURATION_IN_INTRO,
   JAPANESE_SUMMARY_STRICT_POSTCONDITIONS,
+  CROATIAN_EXPERIENCE_MATERIAL,
+  CROATIAN_SERBIAN_LOCALE,
+  SUMMARY_SPLITTER_REVISION_HR,
+  SUMMARY_GROUNDING_REVISION_HR,
+  SUMMARY_DURATION_REVISION_HR,
+  SUMMARY_BUILDER_REVISION_HR,
+  CROATIAN_SUMMARY_STRICT_POSTCONDITIONS,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

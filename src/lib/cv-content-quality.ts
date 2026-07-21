@@ -29,6 +29,10 @@ import {
   resolveOccupationalTitleForSummary,
 } from './cv-role-title';
 import { injectJapaneseDurationIntoCurrentIntro } from './cv-japanese-summary-grounding';
+import {
+  injectCroatianDurationIntoCurrentIntro,
+  SUMMARY_DURATION_FINALIZER_REVISION_HR,
+} from './cv-croatian-summary-grounding';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
 export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
@@ -38,10 +42,12 @@ export const SUMMARY_DURATION_FINALIZER_REVISION_RU = 'russian-duration-idempote
 export const SUMMARY_DURATION_FINALIZER_REVISION_JA = 'japanese-duration-idempotent-v2' as const;
 /** Retained build-287/288 marker — must remain present in packaged assets. */
 export const SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY = 'japanese-duration-idempotent-v1' as const;
+export { SUMMARY_DURATION_FINALIZER_REVISION_HR };
 void SUMMARY_DURATION_FINALIZER_REVISION_AR;
 void SUMMARY_DURATION_FINALIZER_REVISION_RU;
 void SUMMARY_DURATION_FINALIZER_REVISION_JA;
 void SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY;
+void SUMMARY_DURATION_FINALIZER_REVISION_HR;
 
 /** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
 function splitHindiSummaryUnitsLocal(text: string): string[] {
@@ -794,6 +800,7 @@ function mergeDurationPhraseIntoFirstSentence(text: string, phrase: string, loca
   if (locale === 'hi') return trimmed;
   // Japanese uses dedicated intro weave — never Latin ", phrase." after 。.
   if (locale === 'ja') return trimmed;
+  if (locale === 'hr') return trimmed;
   const terminal = '.';
   if (!trimmed) {
     return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
@@ -882,7 +889,9 @@ export function resolveSummaryWithDurationPolicy(
         ? SUMMARY_DURATION_FINALIZER_REVISION_RU
         : locale === 'ja'
           ? SUMMARY_DURATION_FINALIZER_REVISION_JA
-          : SUMMARY_DURATION_FINALIZER_REVISION,
+          : locale === 'hr'
+            ? SUMMARY_DURATION_FINALIZER_REVISION_HR
+            : SUMMARY_DURATION_FINALIZER_REVISION,
   };
 
   // A previously-saved or independently produced summary may already carry the duration
@@ -928,7 +937,9 @@ export function resolveSummaryWithDurationPolicy(
         ? SUMMARY_DURATION_FINALIZER_REVISION_RU
         : locale === 'ja'
           ? SUMMARY_DURATION_FINALIZER_REVISION_JA
-          : SUMMARY_DURATION_FINALIZER_REVISION;
+          : locale === 'hr'
+            ? SUMMARY_DURATION_FINALIZER_REVISION_HR
+            : SUMMARY_DURATION_FINALIZER_REVISION;
   }
 
   const initial = validateSummaryDuration(working, duration, {
@@ -1009,6 +1020,8 @@ export function resolveSummaryWithDurationPolicy(
     fallback = injectHindiDurationWithOpening(stripped || working, duration, context);
   } else if (locale === 'ja' && phrase) {
     fallback = injectJapaneseDurationIntoCurrentIntro(stripped || working, duration, context);
+  } else if (locale === 'hr' && phrase) {
+    fallback = injectCroatianDurationIntoCurrentIntro(stripped || working, duration, context);
   } else if (phrase && stripped) {
     fallback = mergeDurationPhraseIntoFirstSentence(stripped, phrase, locale);
   } else if (phrase) {
@@ -1029,7 +1042,9 @@ export function resolveSummaryWithDurationPolicy(
       fallback = duration.hasValidDates
         ? buildHindiIntegratedDurationSentence(duration, context || {})
         : buildHindiIntegratedDurationSentence(duration, context || { role: 'पेशेवर' });
-    } else if (locale === 'sr' || locale === 'hr') {
+    } else if (locale === 'hr') {
+      fallback = phrase ? `Radnica u skladištu ${phrase}.` : 'Radnica u skladištu s relevantnim iskustvom.';
+    } else if (locale === 'sr') {
       fallback = phrase ? `Profesionalka ${phrase}.` : 'Profesionalka sa relevantnim iskustvom.';
     } else if (locale === 'ja') {
       // Fail-closed: never emit mixed Russian/English generic shells for Japanese.
@@ -1070,6 +1085,9 @@ export function injectDurationPhrase(
   }
   if (locale === 'ja' && duration.hasValidDates) {
     return injectJapaneseDurationIntoCurrentIntro(text, duration, context);
+  }
+  if (locale === 'hr' && duration.hasValidDates) {
+    return injectCroatianDurationIntoCurrentIntro(text, duration, context);
   }
   const phrase = formatApproximateDurationPhrase(duration, locale);
   if (!phrase) return text;
@@ -1178,7 +1196,13 @@ export function applyCvContentQuality(
     summary = applyHindiCurrentRoleTense(summary);
     summary = stripUnsupportedSummaryFluff(summary, locale);
     if (summary !== before) repaired = true;
-  } else if (locale === 'sr' || locale === 'hr') {
+  } else if (locale === 'hr') {
+    const before = summary;
+    summary = scrubOrphanDurationFragments(summary);
+    summary = stripUnsupportedSummaryFluff(summary, locale);
+    summary = scrubOrphanDurationFragments(summary);
+    if (summary !== before) repaired = true;
+  } else if (locale === 'sr') {
     const before = summary;
     summary = scrubOrphanDurationFragments(summary);
     summary = normalizeSerbianRolePhrase(summary);

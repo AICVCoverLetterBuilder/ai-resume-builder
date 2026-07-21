@@ -45,9 +45,21 @@ import {
   JAPANESE_DURATION_IN_INTRO_MARKER,
   JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 } from './cv-japanese-summary-grounding';
+import {
+  analyzeCroatianSummaryEmploymentQuality,
+  buildCroatianEntryOwnedSummary,
+  croatianWarehouseSummaryFragment,
+  SUMMARY_BUILDER_REVISION_HR,
+  SUMMARY_GROUNDING_REVISION_HR,
+  SUMMARY_UNIT_SPLITTER_REVISION_HR,
+  SUMMARY_DURATION_FINALIZER_REVISION_HR,
+  CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+} from './cv-croatian-summary-grounding';
 
 void JAPANESE_DURATION_IN_INTRO_MARKER;
 void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+void SUMMARY_DURATION_FINALIZER_REVISION_HR;
+void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 export {
   analyzeArabicSummaryEmploymentQuality,
   buildArabicEntryOwnedSummary,
@@ -80,6 +92,18 @@ export {
   countJapaneseUnsupportedSummaryClaims,
   injectJapaneseDurationIntoCurrentIntro,
 } from './cv-japanese-summary-grounding';
+export {
+  analyzeCroatianSummaryEmploymentQuality,
+  buildCroatianEntryOwnedSummary,
+  croatianWarehouseSummaryFragment,
+  splitCroatianSummaryUnits,
+  SUMMARY_BUILDER_REVISION_HR,
+  SUMMARY_GROUNDING_REVISION_HR,
+  SUMMARY_UNIT_SPLITTER_REVISION_HR,
+  SUMMARY_DURATION_FINALIZER_REVISION_HR,
+  CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  injectCroatianDurationIntoCurrentIntro,
+} from './cv-croatian-summary-grounding';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';
 import {
@@ -757,7 +781,7 @@ export function validateSummaryMaterialFacts(
     const summaryWhKeys = [...new Set(
       classifyMaterialDutyKeys(summary).filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k)),
     )];
-    const hasConcreteCue = /(?:माल|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар|入荷|商品|倉庫|品物)/iu.test(summary);
+    const hasConcreteCue = /(?:माल|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар|入荷|商品|倉庫|品物|zaprimljen|primljen|ulazn\w*\s+rob|skladišt|prateć|robe)/iu.test(summary);
     const hasGeneric = GENERICIZED_WAREHOUSE_RE.test(summary);
     // Generic records/docs/info alone (or with <2 concrete frames) must fail.
     if (hasGeneric && summaryWhKeys.length < 2) {
@@ -1355,6 +1379,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'ar'
     && locale !== 'ru'
     && locale !== 'ja'
+    && locale !== 'hr'
   ) {
     return '';
   }
@@ -1534,7 +1559,34 @@ export function buildConciseGroundedSummary(
     });
     skillSentence = '';
     void skillSentence;
-  } else if (locale === 'sr' || locale === 'hr') {
+  } else if (locale === 'hr') {
+    void SUMMARY_BUILDER_REVISION_HR;
+    void SUMMARY_UNIT_SPLITTER_REVISION_HR;
+    void SUMMARY_GROUNDING_REVISION_HR;
+    void analyzeCroatianSummaryEmploymentQuality;
+    void croatianWarehouseSummaryFragment;
+    const hrRole = /(?:warehouse|skladišt|magacin|radnic|倉庫|кладов|مستودع)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+      ? localizeWarehouseEmployee('hr', genderNorm || '')
+      : (role || localizeWarehouseEmployee('hr', genderNorm || ''));
+    text = buildCroatianEntryOwnedSummary({
+      role: hrRole,
+      employer,
+      datesValue,
+      gender: genderNorm || '',
+      durationPhrase: durationPhrase || undefined,
+      dutyFacts,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      priorEmployer: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+        : '',
+      priorSourceDuties,
+      locale: 'hr',
+    });
+    skillSentence = '';
+    void skillSentence;
+  } else if (locale === 'sr') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin
       ? (durationPhrase

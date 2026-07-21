@@ -43,18 +43,25 @@ import {
   splitArabicSummaryUnits,
   splitRussianSummaryUnits,
   splitJapaneseSummaryUnits,
+  splitCroatianSummaryUnits,
+  analyzeCroatianSummaryEmploymentQuality,
   SUMMARY_BUILDER_REVISION,
   SUMMARY_BUILDER_REVISION_AR,
   SUMMARY_BUILDER_REVISION_RU,
   SUMMARY_BUILDER_REVISION_JA,
+  SUMMARY_BUILDER_REVISION_HR,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,
   SUMMARY_UNIT_SPLITTER_REVISION_RU,
   SUMMARY_UNIT_SPLITTER_REVISION_JA,
+  SUMMARY_UNIT_SPLITTER_REVISION_HR,
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_GROUNDING_REVISION_JA,
+  SUMMARY_GROUNDING_REVISION_HR,
+  SUMMARY_DURATION_FINALIZER_REVISION_HR,
   JAPANESE_DURATION_IN_INTRO_MARKER,
   JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 } from './cv-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
@@ -73,6 +80,7 @@ import { validateRussianExperienceEmploymentTense } from './cv-russian-experienc
 import {
   resolveTargetScriptForLocale,
   validateAiUnitLocalePurity,
+  analyzeCroatianSerbianLocaleEvidence,
 } from './cv-ai-unit-locale-purity';
 import {
   experienceIndexForIdStrict,
@@ -92,7 +100,6 @@ import {
   sourceUsableInLocale,
 } from './cv-source-fact-identity';
 import {
-  classifyMaterialDutyKeys,
   materialDutyKeysFromDescription,
   diagnoseCurrentSourceUnitMaterial,
   hindiWarehouseCueKeysFromUnit,
@@ -105,11 +112,16 @@ import {
   validateExperienceApplyMaterialPostcondition,
   RUSSIAN_EXPERIENCE_MATERIAL_REVISION,
   JAPANESE_EXPERIENCE_MATERIAL_REVISION,
+  CROATIAN_EXPERIENCE_MATERIAL_REVISION,
+  CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION,
   collectDesignMaterialKeysFromDescription,
   validateRussianDesignFactFamilies,
   sourceRequiresRussianDesignFamilies,
   experienceNeedsRussianDesignFamilyRebuild,
   isRussianDesignFamilyRejectionReason,
+  validateCroatianDesignFactFamilies,
+  experienceNeedsCroatianDesignFamilyRebuild,
+  isCroatianDesignFamilyRejectionReason,
   RUSSIAN_DESIGN_FAMILIES_REVISION,
   RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION,
   RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
@@ -154,6 +166,13 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   JAPANESE_EXPERIENCE_MATERIAL_REVISION,
   JAPANESE_DURATION_IN_INTRO_MARKER,
   JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  SUMMARY_BUILDER_REVISION_HR,
+  SUMMARY_UNIT_SPLITTER_REVISION_HR,
+  SUMMARY_GROUNDING_REVISION_HR,
+  SUMMARY_DURATION_FINALIZER_REVISION_HR,
+  CROATIAN_EXPERIENCE_MATERIAL_REVISION,
+  CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION,
+  CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -171,6 +190,13 @@ void SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY;
 void JAPANESE_EXPERIENCE_MATERIAL_REVISION;
 void JAPANESE_DURATION_IN_INTRO_MARKER;
 void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+void SUMMARY_BUILDER_REVISION_HR;
+void SUMMARY_UNIT_SPLITTER_REVISION_HR;
+void SUMMARY_GROUNDING_REVISION_HR;
+void SUMMARY_DURATION_FINALIZER_REVISION_HR;
+void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
+void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -521,6 +547,7 @@ function countSummaryCandidateSentences(text: string, locale: Locale): number {
   if (locale === 'ar') return splitArabicSummaryUnits(t).length;
   if (locale === 'ru') return splitRussianSummaryUnits(t).length;
   if (locale === 'ja') return splitJapaneseSummaryUnits(t).length;
+  if (locale === 'hr') return splitCroatianSummaryUnits(t).length;
   return t.split(/[.!?।]/u).filter((s) => s.trim()).length;
 }
 
@@ -750,6 +777,27 @@ function summaryPasses(
       };
     }
   }
+  if (locale === 'hr') {
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+    const empQ = analyzeCroatianSummaryEmploymentQuality(summary, {
+      company: primary?.company || '',
+      role: primary?.position || cv.personal?.jobTitle || '',
+      startDate: primary?.startDate || '',
+      sourceDuties: entryDuties.currentEntryDuties,
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      priorCompany: entryDuties.priorCompany,
+      structuredRole: primary?.position || entryDuties.currentRoleTitle,
+      gender: cv.personal?.gender || '',
+    });
+    if (!empQ.groundingValidationPassed) {
+      return {
+        ok: false,
+        reason: empQ.typedRejectionReason || 'croatian_summary_grounding_failed',
+      };
+    }
+  }
   return { ok: true };
 }
 
@@ -774,6 +822,12 @@ function bulletsPass(
   });
   if (!unitPurity.ok) {
     return { ok: false, reason: unitPurity.reason || 'wrong_language' };
+  }
+  if (locale === 'hr') {
+    const evidence = analyzeCroatianSerbianLocaleEvidence(description);
+    if (evidence.serbianLeakageDetected) {
+      return { ok: false, reason: 'croatian_serbian_locale_leakage' };
+    }
   }
   if (locale === 'hi' && hasSuspiciousHindiMergedTokens(description)) {
     return { ok: false, reason: 'hindi_merged_tokens' };
@@ -870,6 +924,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let flattenedFactArrayUsed = false;
   let japaneseProviderRejectionReason: string | null = null;
   let japaneseProviderUnsupportedClaimCount: number | null = null;
+  let croatianProviderRejectionReason: string | null = null;
   const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
     ? hashExperienceEntryId(entryDutiesForRole.currentEntryId)
     : null;
@@ -1139,6 +1194,41 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
     }
   }
+  if (locale === 'hr') {
+    candidate = dedupeSummarySentences(candidate);
+    if (
+      /Carries\s+out\s+assigned\s+professional\s+duties/iu.test(candidate)
+      || /グラフィックデザイナー/u.test(candidate)
+      || /[\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)
+      || /[\u0400-\u04FF]/.test(candidate)
+      || analyzeCroatianSerbianLocaleEvidence(candidate).serbianLeakageDetected
+    ) {
+      if (candidate.trim()) {
+        croatianProviderRejectionReason = croatianProviderRejectionReason
+          || 'croatian_summary_serbian_leakage';
+      }
+      candidate = '';
+    }
+    if (candidate.trim()) {
+      const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+      const empQuality = analyzeCroatianSummaryEmploymentQuality(candidate, {
+        company: context.company,
+        role: context.role,
+        startDate: context.startDate,
+        sourceDuties: dutiesText,
+        currentEntryDuties: entryDuties.currentEntryDuties,
+        priorEntryDuties: entryDuties.priorEntryDuties,
+        priorCompany: entryDuties.priorCompany,
+        structuredRole: context.role || entryDuties.currentRoleTitle,
+        gender,
+      });
+      if (!empQuality.groundingValidationPassed) {
+        croatianProviderRejectionReason = empQuality.typedRejectionReason
+          || 'croatian_summary_grounding_failed';
+        candidate = '';
+      }
+    }
+  }
 
   // After duration ownership, if warehouse duties were dropped, force grounded rebuild.
   // Do not blank the candidate when dutiesText is English "goods" only — require Devanagari cues
@@ -1193,7 +1283,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
-    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja')
+    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr')
       ? !firstPerson
       : true;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
@@ -1244,6 +1334,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               structuredRole: context.role || entryDuties.currentRoleTitle,
               gender,
             })
+            : locale === 'hr'
+              ? analyzeCroatianSummaryEmploymentQuality(analyzedText, {
+                company: context.company || entryDuties.currentCompany,
+                role: context.role,
+                startDate: context.startDate,
+                sourceDuties: dutiesText,
+                currentEntryDuties: entryDuties.currentEntryDuties,
+                priorEntryDuties: entryDuties.priorEntryDuties,
+                priorCompany: entryDuties.priorCompany,
+                structuredRole: context.role || entryDuties.currentRoleTitle,
+                gender,
+              })
             : null;
     // Candidate fields — never treat structured context alone as a passing intro/title.
     const candidateCurrentRoleTitlePresent = empQ?.currentRoleTitlePresent ?? null;
@@ -1270,7 +1372,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     let durationFinalizerIdempotent = durationValidationPassed;
     let localPass2Hash = durationPass2CandidateHash;
     if (
-      (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja')
+      (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr')
       && analyzedText.trim()
       && durationSnapshot.total.hasValidDates
     ) {
@@ -1313,12 +1415,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const blockedForPerspective = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr')
       && !perspectiveValidationPassed,
     );
     const blockedForGrounding = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr')
       && empQ
       && (!empQ.groundingValidationPassed || coverageHardFail),
     );
@@ -1433,7 +1535,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? (empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0
             : 0)
           : result.diagnostics?.unsupportedClaimCount,
-        providerRejectionReason: japaneseProviderRejectionReason
+        providerRejectionReason: croatianProviderRejectionReason
+          || japaneseProviderRejectionReason
           || result.diagnostics?.providerRejectionReason,
         providerUnsupportedClaimCount: japaneseProviderUnsupportedClaimCount
           ?? result.diagnostics?.providerUnsupportedClaimCount,
@@ -1446,7 +1549,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? SUMMARY_BUILDER_REVISION_RU
             : locale === 'ja'
               ? SUMMARY_BUILDER_REVISION_JA
-              : SUMMARY_BUILDER_REVISION,
+              : locale === 'hr'
+                ? SUMMARY_BUILDER_REVISION_HR
+                : SUMMARY_BUILDER_REVISION,
         summaryUnitSplitterRevision: empQ?.summaryUnitSplitterRevision
           || (locale === 'ar'
             ? SUMMARY_UNIT_SPLITTER_REVISION_AR
@@ -1454,7 +1559,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? SUMMARY_UNIT_SPLITTER_REVISION_RU
               : locale === 'ja'
                 ? SUMMARY_UNIT_SPLITTER_REVISION_JA
-                : undefined),
+                : locale === 'hr'
+                  ? SUMMARY_UNIT_SPLITTER_REVISION_HR
+                  : undefined),
         summaryGroundingRevision: empQ?.summaryGroundingRevision
           || (locale === 'ar'
             ? SUMMARY_GROUNDING_REVISION_AR
@@ -1462,7 +1569,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? SUMMARY_GROUNDING_REVISION_RU
               : locale === 'ja'
                 ? SUMMARY_GROUNDING_REVISION_JA
-                : undefined),
+                : locale === 'hr'
+                  ? SUMMARY_GROUNDING_REVISION_HR
+                  : undefined),
         summaryDurationFinalizerRevision:
           owned?.summaryDurationFinalizerRevision
           || (locale === 'ar'
@@ -1471,7 +1580,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? SUMMARY_DURATION_FINALIZER_REVISION_RU
               : locale === 'ja'
                 ? SUMMARY_DURATION_FINALIZER_REVISION_JA
-                : SUMMARY_DURATION_FINALIZER_REVISION),
+                : locale === 'hr'
+                  ? SUMMARY_DURATION_FINALIZER_REVISION_HR
+                  : SUMMARY_DURATION_FINALIZER_REVISION),
         providerCandidateHash,
         providerCandidateNormalizedHash,
         deterministicCandidateHash,
@@ -1646,13 +1757,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? SUMMARY_DURATION_FINALIZER_REVISION_RU
             : locale === 'ja'
               ? SUMMARY_DURATION_FINALIZER_REVISION_JA
-              : SUMMARY_DURATION_FINALIZER_REVISION,
+              : locale === 'hr'
+                ? SUMMARY_DURATION_FINALIZER_REVISION_HR
+                : SUMMARY_DURATION_FINALIZER_REVISION,
       };
     }
     // Hindi: do not post-mutate after duration hashes (keeps pass2 === grounding input).
     if (locale === 'hi') {
       groundedText = normalizeForDuration(groundedText);
-    } else if (locale === 'sr' || locale === 'hr') {
+    } else if (locale === 'hr') {
+      groundedText = dedupeSummarySentences(groundedText);
+    } else if (locale === 'sr') {
       groundedText = preserveSerbianSummaryFactForms(groundedText, dutiesText);
       groundedText = normalizeSerbianLatinConfusables(groundedText);
       groundedText = repairMalformedSerbianGeneratedTokens(groundedText);
@@ -1729,8 +1844,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     reason: summaryGenerate
       ? 'summary_generation_failed'
       : (first.reason || 'summary_grounding_failed'),
-    text: ((locale === 'ru' || locale === 'ja') && /Carries\s+out\s+assigned/iu.test(cv.summary || ''))
+    text: ((locale === 'ru' || locale === 'ja' || locale === 'hr') && /Carries\s+out\s+assigned/iu.test(cv.summary || ''))
       || (locale === 'ja' && /Графический|Carries\s+out|[а-яёА-ЯЁ]{4,}/iu.test(cv.summary || ''))
+      || (locale === 'hr' && (/グラフィック|[\u3040-\u30FF\u3400-\u9FFF]|proverav|koordinisala|razmenu|dodeljene|radnog\s+mesta|januara/iu.test(cv.summary || '')))
       ? ''
       : (cv.summary || ''),
     origin: cv.summaryOrigin || 'user',
@@ -2154,6 +2270,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     const crossLocaleAccept = stage === 'cross_locale_translation_fallback';
     const russianDesignRebuild = stage === 'russian_design_family_rebuild';
+    const croatianDesignRebuild = stage === 'croatian_design_family_rebuild';
     const crossLocaleOp = Boolean(
       sourceForCoverage
       && (
@@ -2164,11 +2281,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     // Cross-locale provider + translation fallback: locale/script purity first,
     // then semantic frame coverage (never Serbian↔Hindi token overlap).
-    // Russian design rebuild also skips English/canonical fidelity — shells are
+    // Russian/Croatian design rebuild also skips English/canonical fidelity — shells are
     // entry-owned job-context facts, not translations of poisoned textarea.
     if (
       (crossLocaleOp && (crossLocaleAccept || stage === 'provider'))
       || russianDesignRebuild
+      || croatianDesignRebuild
     ) {
       if (!textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')) {
         lastRejectStage = stage;
@@ -2214,6 +2332,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           lastRejectReason = fam.reason || 'russian_design_family_coverage_incomplete';
           lastRequired = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
           lastCovered = fam.coveredFamilies.length;
+          return null;
+        }
+      }
+      if (
+        locale === 'hr'
+        && stage === 'provider'
+        && experienceNeedsCroatianDesignFamilyRebuild({
+          locale,
+          sourceDescription: sourceForCoverage,
+          position: exp?.position || cv.personal?.jobTitle,
+        })
+      ) {
+        const fam = validateCroatianDesignFactFamilies(candidate);
+        providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
+        authoritativeRequiredFamilyCount = 3;
+        if (!fam.ok) {
+          lastRejectStage = `${stage}:croatian_design_families`;
+          lastRejectReason = fam.reason || 'croatian_design_material_coverage_incomplete';
+          lastRequired = 3;
+          lastCovered = fam.coveredFamilies.length;
+          return null;
+        }
+        const evidence = analyzeCroatianSerbianLocaleEvidence(candidate);
+        if (evidence.serbianLeakageDetected) {
+          lastRejectStage = `${stage}:croatian_serbian_locale`;
+          lastRejectReason = 'croatian_serbian_locale_leakage';
           return null;
         }
       }
@@ -2268,6 +2412,51 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastRejectReason = fam.reason
           || post.reason
           || 'russian_design_family_rebuild_failed';
+        return null;
+      }
+      if (!textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')) {
+        lastRejectStage = `${stage}:locale_purity`;
+        lastRejectReason = 'locale_mismatch';
+        return null;
+      }
+    } else if (croatianDesignRebuild && locale === 'hr') {
+      void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+      const authoritativeDesignSource = normalizeLocaleText(
+        buildJobContextGenerationFallback({
+          locale: 'hr',
+          gender,
+          position: 'graphic designer',
+          industry: 'design',
+          isPresent,
+        }),
+        locale,
+      );
+      const post = validateExperienceApplyMaterialPostcondition(
+        authoritativeDesignSource || candidate,
+        candidate,
+        { targetLocale: 'hr' },
+      );
+      const fam = validateCroatianDesignFactFamilies(candidate);
+      const evidence = analyzeCroatianSerbianLocaleEvidence(candidate);
+      authoritativeRequiredFamilyCount = 3;
+      fallbackCoveredFamilyCount = fam.coveredFamilies.length;
+      finalSelectedCoveredFamilyCount = fam.ok ? fam.coveredFamilies.length : 0;
+      lastRequired = 3;
+      lastCovered = fam.coveredFamilies.length;
+      clientDeterministicFallbackRequiredFactCount = 3;
+      clientDeterministicFallbackCoveredFactCount = fam.coveredFamilies.length;
+      if (!fam.ok || !post.ok || evidence.serbianLeakageDetected) {
+        lastRejectStage = `${stage}:croatian_design_families`;
+        lastRejectReason = evidence.serbianLeakageDetected
+          ? 'croatian_serbian_locale_leakage'
+          : (fam.reason || post.reason || 'croatian_design_material_coverage_incomplete');
+        return null;
+      }
+      // Cross-domain: warehouse families must not appear on design rebuild.
+      if (/zaprimljen|skladišn|premještanj|magacin/iu.test(candidate)
+        && !/vizualn|grafičk|dizajn/iu.test(candidate)) {
+        lastRejectStage = `${stage}:croatian_domain_mismatch`;
+        lastRejectReason = 'croatian_experience_domain_mismatch';
         return null;
       }
       if (!textMatchesRequestedFieldLocale(candidate, locale, 'experience_bullet')) {
@@ -2439,6 +2628,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || stage === 'occupation_fallback'
         || stage === 'cross_locale_translation_fallback'
         || stage === 'russian_design_family_rebuild'
+        || stage === 'croatian_design_family_rebuild'
       );
     if (isClientFallback) {
       fallbackApplied = true;
@@ -2663,7 +2853,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || (locale === 'en' && sourceUsableInLocale(sourceForCoverage, 'en'));
       const sourceNeedsPerspective = experienceRequiresCvThirdPerson(locale)
         && detectExperiencePersonMode(sourceForCoverage, locale) === 'first_singular';
-      if (sourceOkForLocale && (sourceNeedsPerspective || locale === 'sr' || locale === 'hr')) {
+      if (sourceOkForLocale && (sourceNeedsPerspective || locale === 'sr')) {
         perspectiveMeta.noOpRejected = true;
         lastRejectStage = 'provider:noop';
         lastRejectReason = 'experience_ai_noop';
@@ -2683,6 +2873,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           },
         });
       }
+      // Croatian: never short-circuit Serbian-poisoned live prose as a no-op —
+      // fall through to design-family rebuild / deterministic fallback.
       if (sourceOkForLocale) {
         // Already CV-compatible same-locale source re-sent: allow apply for legacy controls.
         perspectiveMeta.finalMatchesSourceAfterNormalization = true;
@@ -2770,6 +2962,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   // Fallback routing reason must not inherit stale locale_mismatch from material rejects.
   clientDeterministicFallbackReason = isRussianDesignFamilyRejectionReason(providerRejectionReason)
     ? 'russian_design_family_rebuild'
+    : isCroatianDesignFamilyRejectionReason(providerRejectionReason)
+      ? 'croatian_design_family_rebuild'
     : (lastRejectReason && lastRejectReason !== 'locale_mismatch'
       ? lastRejectReason
       : (providerRejectionReason || 'provider_postcondition_failed'));
@@ -2931,6 +3125,94 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         authoritativeRequiredFamilyCount: RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
         typedFailureReason: lastRejectReason,
         rejectionStage: 'russian_design_family_rebuild',
+      },
+    });
+  }
+
+  const needsCroatianDesignRebuild = experienceNeedsCroatianDesignFamilyRebuild({
+    locale,
+    sourceDescription: sourceForCoverage,
+    position: exp?.position || cv.personal?.jobTitle,
+    rejectReason: providerRejectionReason || lastRejectReason,
+  });
+  if (needsCroatianDesignRebuild) {
+    void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+    void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
+    clientDeterministicFallbackReason = 'croatian_design_family_rebuild';
+    authoritativeRequiredFamilyCount = 3;
+    const designFamilyFallback = normalizeLocaleText(
+      buildJobContextGenerationFallback({
+        locale: 'hr',
+        gender,
+        position: 'graphic designer',
+        industry: 'design',
+        isPresent,
+      }),
+      locale,
+    );
+    clientDeterministicFallbackBulletCount = splitExperienceBullets(designFamilyFallback)
+      .filter(Boolean).length;
+    clientDeterministicFallbackScripts = detectBulletScripts(designFamilyFallback);
+    if (designFamilyFallback.trim()) {
+      const acceptedDesign = tryAccept(
+        designFamilyFallback,
+        'deterministic_fallback',
+        'croatian_design_family_rebuild',
+      );
+      if (acceptedDesign) {
+        perspectiveMeta = {
+          ...perspectiveMeta,
+          perspectiveNormalizationAttempted: true,
+          perspectiveNormalizationApplied: true,
+          perspectiveValidationPassed: true,
+          meaningfulChangeDetected: true,
+          noOpRejected: false,
+          normalizedBulletsUsedForApply: true,
+          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
+        };
+        finalSelectedCoveredFamilyCount = 3;
+        fallbackCoveredFamilyCount = 3;
+        return attachPerspectiveDiag({
+          ...acceptedDesign,
+          diagnostics: {
+            ...acceptedDesign.diagnostics,
+            clientDeterministicFallbackAttempted: true,
+            clientDeterministicFallbackApplied: true,
+            clientDeterministicFallbackReason: 'croatian_design_family_rebuild',
+            providerRejectionReason,
+            providerRejectionStage,
+            providerDetectedMaterialFamilyCount,
+            authoritativeRequiredFamilyCount: 3,
+            fallbackCoveredFamilyCount: 3,
+            finalSelectedCoveredFamilyCount: 3,
+            fallbackCoverageCount: 3,
+            requiredFactCount: 3,
+            coveredFactCount: providerCoveredFactCount,
+            rejectionStage: undefined,
+            typedFailureReason: undefined,
+          },
+        });
+      }
+    }
+    lastRejectReason = lastRejectReason || 'croatian_design_material_coverage_incomplete';
+    lastRejectStage = 'croatian_design_family_rebuild';
+    clientDeterministicFallbackReason = 'croatian_design_family_rebuild';
+    return attachPerspectiveDiag({
+      blocked: true,
+      reason: lastRejectReason,
+      text: exp?.description || '',
+      origin: 'user',
+      roleDutyConflict,
+      countedAsSuccess: false,
+      diagnostics: {
+        ...baseDiag(),
+        providerRejectionReason,
+        providerRejectionStage,
+        clientDeterministicFallbackReason: 'croatian_design_family_rebuild',
+        clientDeterministicFallbackApplied: false,
+        authoritativeRequiredFamilyCount: 3,
+        typedFailureReason: lastRejectReason,
+        rejectionStage: 'croatian_design_family_rebuild',
       },
     });
   }

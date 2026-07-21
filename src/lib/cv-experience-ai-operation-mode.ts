@@ -503,6 +503,25 @@ function domainShells(
   }
 
   if ((locale === 'sr' || locale === 'hr') && domain === 'design') {
+    if (locale === 'hr') {
+      return present
+        ? [
+          'Izrađuje vizualne materijale i grafičke elemente za digitalne proizvode i platforme.',
+          'Pregledava i prilagođava dizajnerske materijale zahtjevima projekta.',
+          'Priprema završne dizajnerske datoteke i prilagođava formate različitim zaslonima.',
+        ]
+        : [
+          female
+            ? 'Izrađivala je vizualne materijale i grafičke elemente za digitalne proizvode i platforme.'
+            : 'Izrađivao je vizualne materijale i grafičke elemente za digitalne proizvode i platforme.',
+          female
+            ? 'Pregledavala je i prilagođavala dizajnerske materijale zahtjevima projekta.'
+            : 'Pregledavao je i prilagođavao dizajnerske materijale zahtjevima projekta.',
+          female
+            ? 'Pripremala je završne dizajnerske datoteke i prilagođavala formate različitim zaslonima.'
+            : 'Pripremao je završne dizajnerske datoteke i prilagođavao formate različitim zaslonima.',
+        ];
+    }
     return present
       ? [
         'Kreira vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.',
@@ -519,6 +538,27 @@ function domainShells(
         female
           ? 'Pripremala je finalne dizajn fajlove i prilagođavala formate za različite ekrane.'
           : 'Pripremao je finalne dizajn fajlove i prilagođavao formate za različite ekrane.',
+      ];
+  }
+
+  if (locale === 'hr' && domain === 'warehouse') {
+    if (present) {
+      return [
+        'Provjerava točnost zaprimljene robe i prateće dokumentacije.',
+        'Ažurira skladišnu evidenciju te održava uredno i organizirano skladištenje robe.',
+        'Surađuje s kolegama pri pripremi i premještanju robe unutar skladišta.',
+      ];
+    }
+    return female
+      ? [
+        'Provjeravala je točnost zaprimljene robe i prateće dokumentacije.',
+        'Ažurirala je skladišnu evidenciju te održavala uredno i organizirano skladištenje robe.',
+        'Surađivala je s kolegama pri pripremi i premještanju robe unutar skladišta.',
+      ]
+      : [
+        'Provjeravao je točnost zaprimljene robe i prateće dokumentacije.',
+        'Ažurirao je skladišnu evidenciju te održavao uredno i organizirano skladištenje robe.',
+        'Surađivao je s kolegama pri pripremi i premještanju robe unutar skladišta.',
       ];
   }
 
@@ -554,7 +594,28 @@ export function buildJobContextGenerationFallback(options: {
   const role = roleLabel(options.position || '', female, locale);
   const domainOrRole = domainPhrase || role;
 
-  if (locale === 'sr' || locale === 'hr') {
+  if (locale === 'hr') {
+    const lines = present
+      ? [
+        `Pregledava dokumentaciju povezanu sa svakodnevnim zadacima u području ${domainOrRole} i provjerava potpunost podataka.`,
+        'Ažurira evidenciju i prati status dokumentacije u skladu s potrebama radnog mjesta.',
+        'Koordinira razmjenu informacija s kolegama radi pravovremenog dovršavanja dokumentacije.',
+      ]
+      : [
+        female
+          ? `Pregledavala je dokumentaciju povezanu sa svakodnevnim zadacima u području ${domainOrRole} i provjeravala potpunost podataka.`
+          : `Pregledavao je dokumentaciju povezanu sa svakodnevnim zadacima u području ${domainOrRole} i provjeravao potpunost podataka.`,
+        female
+          ? 'Ažurirala je evidenciju i pratila status dokumentacije u skladu s potrebama radnog mjesta.'
+          : 'Ažurirao je evidenciju i pratio status dokumentacije u skladu s potrebama radnog mjesta.',
+        female
+          ? 'Koordinirala je razmjenu informacija s kolegama radi pravovremenog dovršavanja dokumentacije.'
+          : 'Koordinirao je razmjenu informacija s kolegama radi pravovremenog dovršavanja dokumentacije.',
+      ];
+    return formatExperienceBullets(lines);
+  }
+
+  if (locale === 'sr') {
     const lines = present
       ? [
         `Pregleda dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domainOrRole} i proverava potpunost podataka.`,

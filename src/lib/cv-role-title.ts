@@ -111,7 +111,12 @@ export function localizeBaker(locale: Locale, gender?: string): string {
 export function localizeWarehouseEmployee(locale: Locale, gender?: string): string {
   const g = normalizeCoverLetterGender(gender);
   if (locale === 'hi') return 'वेयरहाउस कर्मचारी';
-  if (locale === 'sr' || locale === 'hr') {
+  if (locale === 'hr') {
+    if (g === 'female') return 'Radnica u skladištu';
+    if (g === 'male') return 'Radnik u skladištu';
+    return 'Radnik u skladištu';
+  }
+  if (locale === 'sr') {
     return g === 'female' ? 'Radnica u magacinu' : 'Radnik u magacinu';
   }
   if (locale === 'de') return g === 'female' ? 'Lagerarbeiterin' : 'Lagerarbeiter';
@@ -130,7 +135,12 @@ export function localizeGraphicDesigner(locale: Locale, gender?: string): string
   const g = normalizeCoverLetterGender(gender);
   if (locale === 'hi') return 'ग्राफिक डिज़ाइनर';
   if (locale === 'en') return 'Graphic Designer';
-  if (locale === 'sr' || locale === 'hr') {
+  if (locale === 'hr') {
+    if (g === 'female') return 'grafička dizajnerica';
+    if (g === 'male') return 'grafički dizajner';
+    return 'grafički dizajner';
+  }
+  if (locale === 'sr') {
     return g === 'female' ? 'Grafička dizajnerka' : 'Grafički dizajner';
   }
   if (locale === 'de') return g === 'female' ? 'Grafikdesignerin' : 'Grafikdesigner';

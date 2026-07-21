@@ -10,6 +10,9 @@ import type { Locale } from './i18n/translations';
 import { splitExperienceBullets } from './cv-canonical-facts';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 import { splitJapaneseSummaryUnits } from './cv-japanese-summary-grounding';
+import { CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION } from './cv-material-duty-coverage';
+
+void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
 
 export type AiContentScript =
   | 'latin'
@@ -44,6 +47,10 @@ export type UnitLocalePurityResult = {
   targetLocalePurityPassed: boolean;
   units: UnitLocalePurityHit[];
   reason?: string;
+  croatianExclusiveCueCount?: number;
+  serbianExclusiveCueCount?: number;
+  croatianLocaleEvidencePassed?: boolean;
+  serbianLeakageDetected?: boolean;
 };
 
 /** Approved neutral / technical tokens that must not trigger mixed-language. */
@@ -60,6 +67,40 @@ const CJK = /[\u3040-\u30FF\u3400-\u9FFF]/u;
 const CYRILLIC = /[\u0400-\u04FF]/u;
 const SC_DIACRITIC = /[čćžšđČĆŽŠĐ]/u;
 const LATIN_LETTER = /[A-Za-zÀ-ÖØ-öø-ÿ]/u;
+
+/** Serbian-preferred forms that must not dominate under requested locale `hr`. */
+const SERBIAN_EXCLUSIVE_CUE_RE =
+  /(?:\bprover(?:a|u|ava|avala|avao|avati)\b|\bkoordinisa(?:la|o|ti)\b|\brazmen(?:a|u|e)\b|\bdodeljen\w*\b|\bradnog\s+mesta\b|\bradno\s+mesto\b|\bmagacin\w*\b|\bjanuar(?:a|u)?\b|\bkompanij\w*\b|\bsarađiv\w*\b)/iu;
+
+/** Croatian-preferred forms for positive evidence under `hr`. */
+const CROATIAN_EXCLUSIVE_CUE_RE =
+  /(?:\bprovjer(?:a|u|ava|avala|avao|avati)\b|\btočnost\w*\b|\bkoordinira(?:la|o|ti)?\b|\brazmjen(?:a|u|e)\b|\bdodijeljen\w*\b|\bradnog\s+mjesta\b|\bradno\s+mjesto\b|\bskladišt\w*\b|\bsiječn(?:jaj|ja|ju)?\b|\btvrtk\w*\b|\bsurađ\w*\b|\bprilagođav\w*\b|\bzaprimljen\w*\b)/iu;
+
+export type CroatianSerbianLocaleEvidence = {
+  croatianExclusiveCueCount: number;
+  serbianExclusiveCueCount: number;
+  croatianLocaleEvidencePassed: boolean;
+  serbianLeakageDetected: boolean;
+  croatianSerbianLocaleDiscriminationRevision: typeof CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
+};
+
+export function analyzeCroatianSerbianLocaleEvidence(text: string): CroatianSerbianLocaleEvidence {
+  void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
+  const t = text || '';
+  const croatianExclusiveCueCount = (t.match(new RegExp(CROATIAN_EXCLUSIVE_CUE_RE.source, 'giu')) || []).length;
+  const serbianExclusiveCueCount = (t.match(new RegExp(SERBIAN_EXCLUSIVE_CUE_RE.source, 'giu')) || []).length;
+  const serbianLeakageDetected = serbianExclusiveCueCount > 0
+    && serbianExclusiveCueCount >= croatianExclusiveCueCount;
+  const croatianLocaleEvidencePassed = !serbianLeakageDetected
+    && (croatianExclusiveCueCount > 0 || !SERBIAN_EXCLUSIVE_CUE_RE.test(t));
+  return {
+    croatianExclusiveCueCount,
+    serbianExclusiveCueCount,
+    croatianLocaleEvidencePassed,
+    serbianLeakageDetected,
+    croatianSerbianLocaleDiscriminationRevision: CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION,
+  };
+}
 
 /** Distinctive English function-word clauses (complete foreign sentence cue). */
 const EN_CLAUSE_RE =
@@ -159,8 +200,9 @@ function expectedScriptsForLocale(locale: Locale): AiContentScript[] {
     case 'ru':
       return ['cyrillic'];
     case 'sr':
-    case 'hr':
       return ['latin', 'latin_diacritic_sc', 'cyrillic'];
+    case 'hr':
+      return ['latin', 'latin_diacritic_sc'];
     default:
       return ['latin'];
   }
@@ -182,7 +224,7 @@ export function resolveTargetScriptForLocale(locale: Locale): AiContentScript {
       return 'cyrillic';
     case 'sr':
     case 'hr':
-      // Serbian/Croatian default export script is Latin; Cyrillic is also valid.
+      // Serbian/Croatian default export script is Latin; Cyrillic is also valid for sr.
       return 'latin';
     default:
       return 'latin';
@@ -246,8 +288,24 @@ export function guessUnitLocale(text: string, targetLocale?: Locale): string | n
   // Avoid international stems like "koordin" (German Koordinierte, French coordonne).
   if (
     SC_DIACRITIC.test(t)
-    || /(?:proverav|ažurir|azurir|kreiral|sarađiv|saradiv|pripremal|isporuč|isporuc|skladišt|godin\w*\s+iskustv)/iu.test(t)
+    || /(?:proverav|provjerav|ažurir|azurir|kreiral|sarađiv|surađiv|saradiv|pripremal|isporuč|isporuc|skladišt|godin\w*\s+iskustv)/iu.test(t)
   ) {
+    const hrEvidence = analyzeCroatianSerbianLocaleEvidence(t);
+    if (targetLocale === 'hr') {
+      if (hrEvidence.serbianLeakageDetected) return 'sr';
+      if (hrEvidence.croatianExclusiveCueCount > 0) return 'hr';
+      return 'hr';
+    }
+    if (targetLocale === 'sr') {
+      if (hrEvidence.croatianExclusiveCueCount > hrEvidence.serbianExclusiveCueCount
+        && hrEvidence.croatianExclusiveCueCount > 0
+        && hrEvidence.serbianExclusiveCueCount === 0) {
+        return 'hr';
+      }
+      return 'sr';
+    }
+    if (hrEvidence.serbianExclusiveCueCount > hrEvidence.croatianExclusiveCueCount) return 'sr';
+    if (hrEvidence.croatianExclusiveCueCount > 0) return 'hr';
     return 'sr';
   }
   if (DE_CLAUSE_RE.test(t) && !EN_CLAUSE_RE.test(t)) return 'de';
@@ -292,8 +350,28 @@ function unitWrongLocale(text: string, target: Locale): boolean {
     return false;
   }
 
-  if (target === 'sr' || target === 'hr') {
-    // Complete English prose under Serbian/Croatian target.
+  if (target === 'hr') {
+    const evidence = analyzeCroatianSerbianLocaleEvidence(text);
+    if (evidence.serbianLeakageDetected) return true;
+    if (guessed === 'sr') return true;
+    if (
+      guessed === 'en'
+      && EN_CLAUSE_RE.test(stripped)
+      && !SC_DIACRITIC.test(text)
+      && !SR_CLAUSE_RE.test(stripped)
+      && !CROATIAN_EXCLUSIVE_CUE_RE.test(stripped)
+    ) {
+      return true;
+    }
+    if (guessed === 'en' && EN_CLAUSE_RE.test(stripped)) return true;
+    if (guessed === 'ru' && CYRILLIC.test(text)) return true;
+    if (['hi', 'ar', 'ja', 'de', 'es', 'fr', 'it', 'pt-BR', 'ru'].includes(guessed)) return true;
+    if (guessed === 'hr') return false;
+    return false;
+  }
+
+  if (target === 'sr') {
+    // Complete English prose under Serbian target.
     if (
       guessed === 'en'
       && EN_CLAUSE_RE.test(stripped)
@@ -303,7 +381,7 @@ function unitWrongLocale(text: string, target: Locale): boolean {
       return true;
     }
     if (guessed === 'en' && EN_CLAUSE_RE.test(stripped)) return true;
-    // Serbian Cyrillic is a valid sr/hr script mode — never treat as Russian leakage.
+    // Serbian Cyrillic is a valid sr script mode — never treat as Russian leakage.
     if (guessed === 'ru' && CYRILLIC.test(text)) return false;
     if (['hi', 'ar', 'ja', 'de', 'es', 'fr', 'it', 'pt-BR'].includes(guessed)) return true;
     if (guessed === 'ru') return true;
@@ -449,7 +527,6 @@ export function validateAiUnitLocalePurity(
       detectedLocale
       && detectedLocale !== targetLocale
       && !(targetLocale === 'sr' && detectedLocale === 'hr')
-      && !(targetLocale === 'hr' && detectedLocale === 'sr')
     ) {
       unexpected.add(detectedLocale);
     }
@@ -464,12 +541,22 @@ export function validateAiUnitLocalePurity(
     });
   }
 
-  const sourceLanguageLeakageDetected = wrongLocaleUnitCount > 0 || mixedLanguageUnitCount > 0;
+  const hrEvidence = targetLocale === 'hr'
+    ? analyzeCroatianSerbianLocaleEvidence(text)
+    : null;
+  if (hrEvidence?.serbianLeakageDetected) {
+    wrongLocaleUnitCount = Math.max(wrongLocaleUnitCount, 1);
+  }
+
+  const sourceLanguageLeakageDetected = wrongLocaleUnitCount > 0
+    || mixedLanguageUnitCount > 0
+    || Boolean(hrEvidence?.serbianLeakageDetected);
   const targetLocalePurityPassed = units.length === 0
     ? options?.requireUnits === false
     : wrongLocaleUnitCount === 0
       && wrongScriptUnitCount === 0
-      && mixedLanguageUnitCount === 0;
+      && mixedLanguageUnitCount === 0
+      && !hrEvidence?.serbianLeakageDetected;
 
   return {
     ok: targetLocalePurityPassed,
@@ -483,11 +570,17 @@ export function validateAiUnitLocalePurity(
     unexpectedLocaleCodes: [...unexpected],
     targetLocalePurityPassed,
     units: hits,
+    croatianExclusiveCueCount: hrEvidence?.croatianExclusiveCueCount,
+    serbianExclusiveCueCount: hrEvidence?.serbianExclusiveCueCount,
+    croatianLocaleEvidencePassed: hrEvidence?.croatianLocaleEvidencePassed,
+    serbianLeakageDetected: hrEvidence?.serbianLeakageDetected,
     reason: targetLocalePurityPassed
       ? undefined
-      : (wrongLocaleUnitCount > 0
-        ? 'wrong_language'
-        : (wrongScriptUnitCount > 0 ? 'wrong_script' : 'mixed_language')),
+      : (hrEvidence?.serbianLeakageDetected
+        ? 'croatian_serbian_locale_leakage'
+        : (wrongLocaleUnitCount > 0
+          ? 'wrong_language'
+          : (wrongScriptUnitCount > 0 ? 'wrong_script' : 'mixed_language'))),
   };
 }
 
