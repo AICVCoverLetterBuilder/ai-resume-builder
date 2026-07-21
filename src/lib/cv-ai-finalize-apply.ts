@@ -153,6 +153,12 @@ import {
   polishCroatianExperienceAiText,
 } from './cv-experience-ai-noop-recovery';
 import {
+  detectExperienceUnsupportedClaimExpansion,
+  experienceUnsupportedClaimRejectionReason,
+  EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
+  type ExperienceUnsupportedClaimKind,
+} from './cv-experience-unsupported-claims';
+import {
   evaluateRoleDutyConsistency,
   matchesWarehouseOccupationalTitle,
   resolveOccupationalTitleForSummary,
@@ -197,6 +203,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
   EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
+  EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -229,6 +236,7 @@ void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 void EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
+void EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -402,8 +410,17 @@ export type FinalizeCvAiFieldResult = {
     noOpRepairValidationPassed?: boolean;
     noOpRepairMeaningfulChangeDetected?: boolean;
     noOpRepairApplied?: boolean;
+    noOpRepairUnsupportedClaimCount?: number;
+    noOpRepairUnsupportedClaimKinds?: string[];
+    noOpRepairScopeExpansionDetected?: boolean;
+    noOpRepairUniversalQuantifierDetected?: boolean;
+    noOpRepairResponsibilityEscalationDetected?: boolean;
+    noOpRepairRejectionReason?: string | null;
+    finalUnsupportedClaimCount?: number;
+    finalUnsupportedClaimKinds?: string[];
     /** Packaged asset marker — must survive minification. */
     experienceAiNoOpRecoveryRevision?: typeof EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
+    experienceAiUnsupportedExpansionRevision?: typeof EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION;
     deterministicFallbackAttemptedAfterNoOp?: boolean;
     deterministicFallbackAppliedAfterNoOp?: boolean;
     rejectionStage?: string;
@@ -2125,6 +2142,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let noOpRepairValidationPassed: boolean | null = null;
   let noOpRepairMeaningfulChangeDetected: boolean | null = null;
   let noOpRepairApplied = false;
+  let noOpRepairUnsupportedClaimCount = 0;
+  let noOpRepairUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
+  let noOpRepairScopeExpansionDetected = false;
+  let noOpRepairUniversalQuantifierDetected = false;
+  let noOpRepairResponsibilityEscalationDetected = false;
+  let noOpRepairRejectionReason: string | null = null;
+  let finalUnsupportedClaimCount = 0;
+  let finalUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
+  let lastUnsupportedClaimCount = 0;
+  let lastUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
+  let lastScopeExpansionDetected = false;
+  let lastUniversalQuantifierDetected = false;
+  let lastResponsibilityEscalationDetected = false;
   let deterministicFallbackAttemptedAfterNoOp = false;
   let deterministicFallbackAppliedAfterNoOp = false;
   let finalCandidateSource: string | undefined = undefined;
@@ -2197,7 +2227,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     noOpRepairValidationPassed: noOpRepairValidationPassed ?? undefined,
     noOpRepairMeaningfulChangeDetected: noOpRepairMeaningfulChangeDetected ?? undefined,
     noOpRepairApplied,
+    noOpRepairUnsupportedClaimCount,
+    noOpRepairUnsupportedClaimKinds,
+    noOpRepairScopeExpansionDetected,
+    noOpRepairUniversalQuantifierDetected,
+    noOpRepairResponsibilityEscalationDetected,
+    noOpRepairRejectionReason,
+    finalUnsupportedClaimCount,
+    finalUnsupportedClaimKinds,
     experienceAiNoOpRecoveryRevision: EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
+    experienceAiUnsupportedExpansionRevision: EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
     deterministicFallbackAttemptedAfterNoOp,
     deterministicFallbackAppliedAfterNoOp,
     finalCandidateSource,
@@ -2623,6 +2662,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastRejectReason = post.reason || 'experience_material_fact_coverage_incomplete';
         lastRequired = post.required?.length ?? sourceFactCount;
         lastCovered = post.covered?.length ?? 0;
+        if (post.reason === 'unsupported_generated_duty') {
+          lastUnsupportedClaimCount = post.unsupportedClaimCount
+            || post.unsupportedClaimKinds?.length
+            || 1;
+          lastUnsupportedClaimKinds = post.unsupportedClaimKinds || [];
+          lastScopeExpansionDetected = Boolean(post.scopeExpansionDetected);
+          lastUniversalQuantifierDetected = Boolean(post.universalQuantifierDetected);
+          lastResponsibilityEscalationDetected = Boolean(post.responsibilityEscalationDetected);
+          generationValidationMeta = {
+            ...generationValidationMeta,
+            unsupportedClaimCount: Math.max(
+              generationValidationMeta.unsupportedClaimCount,
+              lastUnsupportedClaimCount,
+            ),
+          };
+        }
         return null;
       }
       const identity = options?.provenancedIdentity
@@ -2902,6 +2957,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         noOpRepairValidationPassed: noOpRepairValidationPassed ?? undefined,
         noOpRepairMeaningfulChangeDetected: noOpRepairMeaningfulChangeDetected ?? undefined,
         noOpRepairApplied,
+        noOpRepairUnsupportedClaimCount,
+        noOpRepairUnsupportedClaimKinds,
+        noOpRepairScopeExpansionDetected,
+        noOpRepairUniversalQuantifierDetected,
+        noOpRepairResponsibilityEscalationDetected,
+        noOpRepairRejectionReason,
+        finalUnsupportedClaimCount,
+        finalUnsupportedClaimKinds,
+        unsupportedClaimCount: Math.max(
+          generationValidationMeta.unsupportedClaimCount,
+          finalUnsupportedClaimCount,
+          noOpRepairUnsupportedClaimCount,
+        ),
         deterministicFallbackAttemptedAfterNoOp,
         deterministicFallbackAppliedAfterNoOp,
         finalCandidateSource: finalCandidateSource
@@ -3145,9 +3213,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           noOpRepairMeaningfulChangeDetected = true;
           providerNoOpDetected = true;
           finalCandidateSource = 'noop_repair';
+          finalUnsupportedClaimCount = 0;
+          finalUnsupportedClaimKinds = [];
           perspectiveMeta.noOpRejected = false;
         } else {
           finalCandidateSource = providerOrigin === 'ai_repaired' ? 'noop_repair' : 'provider';
+          finalUnsupportedClaimCount = 0;
+          finalUnsupportedClaimKinds = [];
         }
         return attachPerspectiveDiag({
           ...firstAccepted,
@@ -3161,12 +3233,64 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             noOpRepairApplied,
             noOpRepairValidationPassed: noOpRepairValidationPassed ?? undefined,
             noOpRepairMeaningfulChangeDetected: noOpRepairMeaningfulChangeDetected ?? undefined,
+            noOpRepairUnsupportedClaimCount,
+            noOpRepairUnsupportedClaimKinds,
+            noOpRepairScopeExpansionDetected,
+            noOpRepairUniversalQuantifierDetected,
+            noOpRepairResponsibilityEscalationDetected,
+            noOpRepairRejectionReason,
+            finalUnsupportedClaimCount,
+            finalUnsupportedClaimKinds,
+            unsupportedClaimCount: finalUnsupportedClaimCount,
             finalCandidateSource,
           },
         });
       }
       providerRejectionReason = lastRejectReason;
       providerRejectionStage = lastRejectStage;
+      if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {
+        // Unsafe or otherwise invalid repair: never apply; unlock stylistic fallback.
+        const repairScan = lastUnsupportedClaimCount > 0
+          ? {
+            count: lastUnsupportedClaimCount,
+            kinds: lastUnsupportedClaimKinds,
+            scopeExpansionDetected: lastScopeExpansionDetected,
+            universalQuantifierDetected: lastUniversalQuantifierDetected,
+            responsibilityEscalationDetected: lastResponsibilityEscalationDetected,
+          }
+          : detectExperienceUnsupportedClaimExpansion(
+            sourceForCoverage,
+            finalNormalizedBullets,
+          );
+        noOpRepairValidationPassed = false;
+        noOpRepairApplied = false;
+        noOpRepairMeaningfulChangeDetected = Boolean(perspectiveMeta.meaningfulChangeDetected);
+        noOpRepairUnsupportedClaimCount = repairScan.count;
+        noOpRepairUnsupportedClaimKinds = repairScan.kinds;
+        noOpRepairScopeExpansionDetected = repairScan.scopeExpansionDetected;
+        noOpRepairUniversalQuantifierDetected = repairScan.universalQuantifierDetected;
+        noOpRepairResponsibilityEscalationDetected = repairScan.responsibilityEscalationDetected;
+        noOpRepairRejectionReason = experienceUnsupportedClaimRejectionReason({
+          kinds: repairScan.kinds,
+          count: repairScan.count,
+          labels: repairScan.kinds,
+          scopeExpansionDetected: repairScan.scopeExpansionDetected,
+          universalQuantifierDetected: repairScan.universalQuantifierDetected,
+          responsibilityEscalationDetected: repairScan.responsibilityEscalationDetected,
+        }) || lastRejectReason || 'unsupported_generated_duty';
+        finalUnsupportedClaimCount = repairScan.count;
+        finalUnsupportedClaimKinds = repairScan.kinds;
+        generationValidationMeta = {
+          ...generationValidationMeta,
+          unsupportedClaimCount: Math.max(
+            generationValidationMeta.unsupportedClaimCount,
+            repairScan.count,
+          ),
+        };
+        providerNoOpDetected = true;
+        deterministicFallbackAttemptedAfterNoOp = true;
+        clientDeterministicFallbackReason = 'experience_ai_noop_recovery';
+      }
       if (locale === 'ru') {
         const fam = validateRussianDesignFactFamilies(finalNormalizedBullets);
         providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
@@ -3823,6 +3947,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           };
           deterministicFallbackAppliedAfterNoOp = true;
           finalCandidateSource = 'deterministic_fallback';
+          finalUnsupportedClaimCount = 0;
+          finalUnsupportedClaimKinds = [];
           return attachPerspectiveDiag({
             ...stylisticAccepted,
             diagnostics: {
@@ -3834,6 +3960,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               providerNoOpDetected: true,
               noOpRepairAttempted: noOpRepairAttemptedFlag,
               noOpRepairApplied: false,
+              noOpRepairValidationPassed: noOpRepairValidationPassed ?? undefined,
+              noOpRepairMeaningfulChangeDetected: noOpRepairMeaningfulChangeDetected ?? undefined,
+              noOpRepairUnsupportedClaimCount,
+              noOpRepairUnsupportedClaimKinds,
+              noOpRepairScopeExpansionDetected,
+              noOpRepairUniversalQuantifierDetected,
+              noOpRepairResponsibilityEscalationDetected,
+              noOpRepairRejectionReason,
+              finalUnsupportedClaimCount: 0,
+              finalUnsupportedClaimKinds: [],
+              unsupportedClaimCount: noOpRepairUnsupportedClaimCount,
               meaningfulChangeDetected: true,
               noOpRejected: false,
             },

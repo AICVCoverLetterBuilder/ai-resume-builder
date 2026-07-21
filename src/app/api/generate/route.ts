@@ -1228,7 +1228,9 @@ The previous output was rejected because it was materially identical to the sour
 Rules:
 - Output ONLY bullet points, each starting with "•"
 - Make a real stylistic and professional improvement (wording/structure), not punctuation/whitespace/bullet-marker/capitalization-only changes
-- Preserve EVERY source duty — do NOT add duties, tools, achievements, metrics, numbers, or facts
+- Preserve EVERY source duty and the exact factual scope — do NOT add duties, tools, achievements, metrics, numbers, or facts
+- Do NOT invent quality inspection/control, standards/compliance/regulations/procedures/policies, safety, audits, certifications, supervision, leadership, or organization when the source only states collaboration
+- Do NOT add universal quantifiers (all/every/entire/svih/svu/cjelokupne) unless SOURCE FACTS establish that scope
 - ${employmentTenseNote}
 - CRITICAL LANGUAGE RULE: Every word must be in ${localeInfo.languageName}. Only keep universal acronyms when genuinely used.${genderNote}
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`;

@@ -4,6 +4,10 @@
  */
 import { splitExperienceBullets } from './cv-canonical-facts';
 import { fingerprintText } from './cv-export-diagnostics';
+import {
+  detectExperienceUnsupportedClaimExpansion,
+  type ExperienceUnsupportedClaimKind,
+} from './cv-experience-unsupported-claims';
 
 export type MaterialDutyKey =
   | 'food_prep'
@@ -1381,12 +1385,43 @@ const EXTRA_DUTY_CLAIMS: Array<{ label: string; claim: RegExp; support: RegExp }
     claim: /\b(managed a team|leadership|led a team)\b/iu,
     support: /\b(managed a team|leadership|led a team|team lead)\b/iu,
   },
+  // Croatian / multilingual warehouse expansions (AAB-294 grounding).
+  {
+    label: 'quality_claim',
+    claim: /(?:provjer\w*|prover\w*|pregled\w*|kontrola?|check(?:s|ing)?|inspect(?:s|ion|ing)?).{0,24}(?:kvalitet|quality)|(?:kvalitet|quality).{0,24}(?:provjer|prover|pregled|kontrol|check|inspect)|(?:kontrola?\s+kvalitet|quality\s+(?:control|inspection|assurance)|provjer\w*\s+kvalitet|prover\w*\s+kvalitet)/iu,
+    support: /(?:kvalitet|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b)/iu,
+  },
+  {
+    label: 'standards_compliance_claim',
+    claim: /(?:usklađenost.{0,48}(?:standard|propis|regulacij|procedur|politik)|(?:važeć\w*|važeći|važećim)\s+standard\w*|s\s+važećim\s+standardima|poštuje.{0,24}standard|osigurava\s+usklađenost|compliance|regulacij\w*|propisima|prema\s+(?:važeć\w*\s+)?standard)/iu,
+    support: /(?:\bstandard|compliance|regulacij|propis|procedur|politik|važeć\w*\s+standard)/iu,
+  },
+  {
+    label: 'universal_scope_claim',
+    claim: /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:stored\s+)?(?:item|good|document)\b|\bentire\s+(?:warehouse|inventory|stock)\b)/iu,
+    support: /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala|uskladišten)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:item|good|document)\b|\bentire\s+)/iu,
+  },
+  {
+    label: 'organization_responsibility_claim',
+    // Verb stems only — do not treat adjective "organizirano" as escalation.
+    claim: /\b(?:organizira(?:la|lo|li|ju)?|organizuje|organizovala|organizovao|organises?|organizes?)\b/iu,
+    support: /\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organise[ds]?|organizes?|organising|organizing)\b/iu,
+  },
+  {
+    label: 'leadership_claim',
+    claim: /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)\b|nadzire\s+(?:rad|koleg|skladišt)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion)\b)/iu,
+    support: /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion))\b/iu,
+  },
 ];
 
 export type ExtraGeneratedDutyResult = {
   valid: boolean;
   extras: string[];
+  kinds?: ExperienceUnsupportedClaimKind[];
   reason?: 'unsupported_generated_duty';
+  scopeExpansionDetected?: boolean;
+  universalQuantifierDetected?: boolean;
+  responsibilityEscalationDetected?: boolean;
 };
 
 /**
@@ -1406,8 +1441,30 @@ export function validateNoExtraGeneratedDuties(
       extras.push(row.label);
     }
   }
+  const scan = detectExperienceUnsupportedClaimExpansion(source, joined);
+  for (const label of scan.labels) {
+    if (!extras.includes(label)) extras.push(label);
+  }
   if (extras.length) {
-    return { valid: false, extras, reason: 'unsupported_generated_duty' };
+    return {
+      valid: false,
+      extras,
+      kinds: scan.kinds.length
+        ? scan.kinds
+        : (extras.filter((e): e is ExperienceUnsupportedClaimKind =>
+          e === 'quality_claim'
+          || e === 'standards_compliance_claim'
+          || e === 'universal_scope_claim'
+          || e === 'organization_responsibility_claim'
+          || e === 'leadership_claim'
+          || e === 'unsupported_tool_claim'
+          || e === 'unsupported_metric_claim'
+          || e === 'unsupported_generated_duty')),
+      reason: 'unsupported_generated_duty',
+      scopeExpansionDetected: scan.scopeExpansionDetected,
+      universalQuantifierDetected: scan.universalQuantifierDetected,
+      responsibilityEscalationDetected: scan.responsibilityEscalationDetected,
+    };
   }
   return { valid: true, extras: [] };
 }
@@ -1569,6 +1626,11 @@ export type ExperienceApplyCoverageCheck = {
   finalBulletCount: number;
   russianDesignFamilies?: RussianDesignFamilyCoverage;
   croatianDesignFamilies?: CroatianDesignFamilyCoverage;
+  unsupportedClaimKinds?: ExperienceUnsupportedClaimKind[];
+  unsupportedClaimCount?: number;
+  scopeExpansionDetected?: boolean;
+  universalQuantifierDetected?: boolean;
+  responsibilityEscalationDetected?: boolean;
 };
 
 /**
@@ -1610,6 +1672,11 @@ export function validateExperienceApplyMaterialPostcondition(
       covered,
       distinctSemanticBulletCount: dup.distinctCount,
       finalBulletCount,
+      unsupportedClaimKinds: extras.kinds,
+      unsupportedClaimCount: extras.kinds?.length || extras.extras.length,
+      scopeExpansionDetected: extras.scopeExpansionDetected,
+      universalQuantifierDetected: extras.universalQuantifierDetected,
+      responsibilityEscalationDetected: extras.responsibilityEscalationDetected,
     };
   }
   if (sourceKeys.length > 0 && !coverage.valid) {

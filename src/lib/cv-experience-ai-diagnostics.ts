@@ -212,9 +212,17 @@ export type ExperienceAiDiagnosticTrace = {
   noOpRepairValidationPassed: boolean | null;
   noOpRepairMeaningfulChangeDetected: boolean | null;
   noOpRepairApplied: boolean;
+  noOpRepairUnsupportedClaimCount: number;
+  noOpRepairUnsupportedClaimKinds: string[];
+  noOpRepairScopeExpansionDetected: boolean;
+  noOpRepairUniversalQuantifierDetected: boolean;
+  noOpRepairResponsibilityEscalationDetected: boolean;
+  noOpRepairRejectionReason: string | null;
   deterministicFallbackAttemptedAfterNoOp: boolean;
   deterministicFallbackAppliedAfterNoOp: boolean;
   finalCandidateSource: string | null;
+  finalUnsupportedClaimCount: number;
+  finalUnsupportedClaimKinds: string[];
   visibleTextareaMatchesFinalNormalizedHash: boolean | null;
   /** @deprecated Prefer apiResponseKind + clientDeterministicFallback* */
   fallbackSelected: boolean;
@@ -726,9 +734,17 @@ export class ExperienceAiDiagnosticSession {
       noOpRepairValidationPassed: null,
       noOpRepairMeaningfulChangeDetected: null,
       noOpRepairApplied: false,
+      noOpRepairUnsupportedClaimCount: 0,
+      noOpRepairUnsupportedClaimKinds: [],
+      noOpRepairScopeExpansionDetected: false,
+      noOpRepairUniversalQuantifierDetected: false,
+      noOpRepairResponsibilityEscalationDetected: false,
+      noOpRepairRejectionReason: null,
       deterministicFallbackAttemptedAfterNoOp: false,
       deterministicFallbackAppliedAfterNoOp: false,
       finalCandidateSource: null,
+      finalUnsupportedClaimCount: 0,
+      finalUnsupportedClaimKinds: [],
       visibleTextareaMatchesFinalNormalizedHash: null,
       fallbackSelected: false,
       fallbackReason: null,
@@ -1174,6 +1190,21 @@ export class ExperienceAiDiagnosticSession {
       noOpRepairValidationPassed: diag.noOpRepairValidationPassed ?? null,
       noOpRepairMeaningfulChangeDetected: diag.noOpRepairMeaningfulChangeDetected ?? null,
       noOpRepairApplied: Boolean(diag.noOpRepairApplied),
+      noOpRepairUnsupportedClaimCount: Math.max(
+        Number(diag.noOpRepairUnsupportedClaimCount ?? 0),
+        Array.isArray(diag.noOpRepairUnsupportedClaimKinds)
+          ? diag.noOpRepairUnsupportedClaimKinds.length
+          : 0,
+      ),
+      noOpRepairUnsupportedClaimKinds: Array.isArray(diag.noOpRepairUnsupportedClaimKinds)
+        ? diag.noOpRepairUnsupportedClaimKinds.map(String)
+        : [],
+      noOpRepairScopeExpansionDetected: Boolean(diag.noOpRepairScopeExpansionDetected),
+      noOpRepairUniversalQuantifierDetected: Boolean(diag.noOpRepairUniversalQuantifierDetected),
+      noOpRepairResponsibilityEscalationDetected: Boolean(
+        diag.noOpRepairResponsibilityEscalationDetected,
+      ),
+      noOpRepairRejectionReason: (diag.noOpRepairRejectionReason as string | null | undefined) ?? null,
       deterministicFallbackAttemptedAfterNoOp: Boolean(
         diag.deterministicFallbackAttemptedAfterNoOp
         || (
@@ -1194,6 +1225,16 @@ export class ExperienceAiDiagnosticSession {
             ? 'deterministic_fallback'
             : (diag.noOpRepairApplied ? 'noop_repair' : 'provider'))
           : 'none'),
+      finalUnsupportedClaimCount: Math.max(
+        Number(diag.finalUnsupportedClaimCount ?? 0),
+        Array.isArray(diag.finalUnsupportedClaimKinds)
+          ? diag.finalUnsupportedClaimKinds.length
+          : 0,
+        reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
+      ),
+      finalUnsupportedClaimKinds: Array.isArray(diag.finalUnsupportedClaimKinds)
+        ? diag.finalUnsupportedClaimKinds.map(String)
+        : [],
       countedAsSuccess: Boolean(finalized.countedAsSuccess),
       finalTypedFailureReason: blocked ? reason : null,
       rejectionStage: blocked

@@ -11,6 +11,7 @@ import {
 import {
   experienceAiHasMeaningfulChange,
 } from './cv-experience-perspective';
+import { validateNoExtraGeneratedDuties } from './cv-material-duty-coverage';
 import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
@@ -64,8 +65,13 @@ export function buildExperienceAiNoOpRepairPrompt(options: {
     `Rewrite the experience bullets in ${options.locale}.`,
     'The previous model output was rejected because it was materially identical to the source.',
     'Make a real stylistic and professional improvement while preserving EVERY source duty.',
-    'Do NOT add new duties, tools, achievements, metrics, numbers, employers, or facts.',
+    'Preserve the exact factual scope of SOURCE FACTS — do not broaden responsibility.',
+    'Do NOT add quality inspection/control, standards, compliance, regulations, procedures, policies,',
+    'safety, audits, certifications, supervision, leadership, organization (when source only collaborates),',
+    'achievements, metrics, tools/software, employers, customers/suppliers, or any new facts.',
+    'Do NOT add universal quantifiers such as all/every/entire/svih/svu/cjelokupne unless SOURCE FACTS state that scope.',
     'Do NOT drop, merge-away, or replace any material duty.',
+    'Keep the requested locale and employment tense. Produce a meaningful wording/structure improvement.',
     `Employment state tense: ${tense}.`,
     options.gender ? `Gender grammar: ${options.gender}.` : '',
     options.industry ? `Industry context: ${options.industry}.` : '',
@@ -262,5 +268,7 @@ export function experienceAiNoOpFallbackIsSafe(options: {
   const srcCount = extractSourceDutyUnits(options.sourceDescription).length;
   const outCount = splitExperienceBullets(candidate).filter(Boolean).length;
   if (srcCount > 0 && outCount > 0 && outCount < srcCount) return false;
+  // Same grounding contract as provider/repair: no unsupported expansions.
+  if (!validateNoExtraGeneratedDuties(options.sourceDescription, candidate).valid) return false;
   return true;
 }
