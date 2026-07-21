@@ -195,6 +195,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
+  EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -226,6 +227,7 @@ void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
+void EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -399,6 +401,8 @@ export type FinalizeCvAiFieldResult = {
     noOpRepairValidationPassed?: boolean;
     noOpRepairMeaningfulChangeDetected?: boolean;
     noOpRepairApplied?: boolean;
+    /** Packaged asset marker — must survive minification. */
+    experienceAiNoOpRecoveryRevision?: typeof EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
     deterministicFallbackAttemptedAfterNoOp?: boolean;
     deterministicFallbackAppliedAfterNoOp?: boolean;
     rejectionStage?: string;
@@ -2192,6 +2196,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     noOpRepairValidationPassed: noOpRepairValidationPassed ?? undefined,
     noOpRepairMeaningfulChangeDetected: noOpRepairMeaningfulChangeDetected ?? undefined,
     noOpRepairApplied,
+    experienceAiNoOpRecoveryRevision: EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
     deterministicFallbackAttemptedAfterNoOp,
     deterministicFallbackAppliedAfterNoOp,
     finalCandidateSource,
