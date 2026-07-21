@@ -57,6 +57,7 @@ import {
   CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
+  CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
 } from './cv-croatian-summary-grounding';
 
 void JAPANESE_DURATION_IN_INTRO_MARKER;
@@ -66,6 +67,7 @@ void SUMMARY_DURATION_FINALIZER_REVISION_HR_V2;
 void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
+void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 export {
   analyzeArabicSummaryEmploymentQuality,
   buildArabicEntryOwnedSummary,
@@ -111,7 +113,11 @@ export {
   CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
+  CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
   injectCroatianDurationIntoCurrentIntro,
+  formatCroatianCompanyLocative,
+  validateCroatianSummaryIntroGrammar,
+  ensureCroatianDurationExperienceNoun,
 } from './cv-croatian-summary-grounding';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';

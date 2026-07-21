@@ -221,9 +221,10 @@ describe('cv-build290 Croatian no-op / poisoned design / Summary recovery', () =
     expect(pipe.finalized.countedAsSuccess).toBe(true);
     const text = pipe.finalized.text;
     expect(text).toMatch(/Radnica u skladištu/);
-    expect(text).toMatch(/Atlas/);
+    expect(text).toMatch(/u tvrtki Atlas/);
+    expect(text).not.toMatch(/(?:zaposlena|zaposlen|radi)\s+u\s+Atlas\b/i);
     expect(text).toMatch(/siječnja 2023/);
-    expect(text).toMatch(/oko šest i pol godina/);
+    expect(text).toMatch(/oko šest i pol godina iskustva/);
     expect(text).toMatch(/Rewitu/);
     expect(text).toMatch(/grafička dizajnerica/);
     expect(text).not.toMatch(/proveru|koordinisala|razmenu|warehouse_inbound/i);
@@ -231,6 +232,9 @@ describe('cv-build290 Croatian no-op / poisoned design / Summary recovery', () =
     expect(units.length).toBe(3);
     expect(pipe.finalized.diagnostics?.finalUnitRoleSlots)
       .toEqual(['current_intro', 'current_duty', 'prior_role']);
+    expect(pipe.finalized.diagnostics?.summaryDurationFinalizerRevision)
+      .toBe('croatian-duration-idempotent-v2');
+    expect(pipe.finalized.diagnostics?.grammarValidationPassed).toBe(true);
     expect(pipe.finalized.diagnostics?.priorEntryMaterialKeys)
       .toEqual(expect.arrayContaining([
         'design_visual_materials',

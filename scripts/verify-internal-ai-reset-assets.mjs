@@ -120,6 +120,7 @@ const CROATIAN_DESIGN_POISONED = 'croatian-design-poisoned-source-recovery-291-v
 const CROATIAN_DESIGN_FALLBACK_ROUTING = 'croatian-design-fallback-routing-291-v1';
 const CROATIAN_ROLE_AWARE_MATERIAL = 'croatian-role-aware-material-classifier-291-v1';
 const CROATIAN_SUMMARY_CANONICAL_RECOVERY = 'croatian-summary-canonical-recovery-291-v1';
+const CROATIAN_SUMMARY_INTRO_GRAMMAR = 'croatian-summary-intro-grammar-292-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -160,6 +161,7 @@ for (const marker of [
   CROATIAN_DESIGN_FALLBACK_ROUTING,
   CROATIAN_ROLE_AWARE_MATERIAL,
   CROATIAN_SUMMARY_CANONICAL_RECOVERY,
+  CROATIAN_SUMMARY_INTRO_GRAMMAR,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

@@ -671,7 +671,9 @@ export class SummaryAiDiagnosticSession {
         : null,
       genderValidationPassed: true,
       tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? true),
-      grammarValidationPassed: finalized.reason !== 'malformed_serbian_token',
+      grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'
+        ? diag.grammarValidationPassed
+        : finalized.reason !== 'malformed_serbian_token',
       unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
       providerUnsupportedClaimCount: typeof diag.providerUnsupportedClaimCount === 'number'
         ? diag.providerUnsupportedClaimCount

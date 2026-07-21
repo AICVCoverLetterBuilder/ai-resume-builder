@@ -65,6 +65,7 @@ import {
   CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
+  CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
 } from './cv-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
@@ -188,6 +189,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
+  CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -218,6 +220,7 @@ void CROATIAN_DESIGN_FALLBACK_ROUTING_REVISION;
 void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
+void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -429,6 +432,7 @@ export type FinalizeCvAiFieldResult = {
     generatedBulletCount?: number;
     relevanceValidationPassed?: boolean;
     tenseValidationPassed?: boolean;
+    grammarValidationPassed?: boolean;
     unsupportedClaimCount?: number;
     generationProviderValidationPassed?: boolean | null;
     generationProviderRejectionReason?: string | null;
@@ -1633,7 +1637,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               : locale === 'ja'
                 ? SUMMARY_DURATION_FINALIZER_REVISION_JA
                 : locale === 'hr'
-                  ? SUMMARY_DURATION_FINALIZER_REVISION_HR
+                  ? SUMMARY_DURATION_FINALIZER_REVISION_HR_V2
                   : SUMMARY_DURATION_FINALIZER_REVISION),
         providerCandidateHash,
         providerCandidateNormalizedHash,
@@ -1703,8 +1707,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : blockedForPerspective
             ? 'summary_perspective_invalid'
             : blockedForGrounding
-              ? 'summary_grounding_failed'
+              ? (empQ && 'typedRejectionReason' in empQ && empQ.typedRejectionReason
+                ? empQ.typedRejectionReason
+                : 'summary_grounding_failed')
               : result.diagnostics?.typedFailureReason,
+        grammarValidationPassed: locale === 'hr' && empQ && 'grammarValidationPassed' in empQ
+          ? Boolean((empQ as { grammarValidationPassed?: boolean }).grammarValidationPassed)
+          : result.diagnostics?.grammarValidationPassed,
       },
     };
   };
@@ -1810,7 +1819,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             : locale === 'ja'
               ? SUMMARY_DURATION_FINALIZER_REVISION_JA
               : locale === 'hr'
-                ? SUMMARY_DURATION_FINALIZER_REVISION_HR
+                ? SUMMARY_DURATION_FINALIZER_REVISION_HR_V2
                 : SUMMARY_DURATION_FINALIZER_REVISION,
       };
     }

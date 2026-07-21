@@ -32,6 +32,7 @@ import { injectJapaneseDurationIntoCurrentIntro } from './cv-japanese-summary-gr
 import {
   injectCroatianDurationIntoCurrentIntro,
   SUMMARY_DURATION_FINALIZER_REVISION_HR,
+  SUMMARY_DURATION_FINALIZER_REVISION_HR_V2,
 } from './cv-croatian-summary-grounding';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
@@ -42,12 +43,13 @@ export const SUMMARY_DURATION_FINALIZER_REVISION_RU = 'russian-duration-idempote
 export const SUMMARY_DURATION_FINALIZER_REVISION_JA = 'japanese-duration-idempotent-v2' as const;
 /** Retained build-287/288 marker — must remain present in packaged assets. */
 export const SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY = 'japanese-duration-idempotent-v1' as const;
-export { SUMMARY_DURATION_FINALIZER_REVISION_HR };
+export { SUMMARY_DURATION_FINALIZER_REVISION_HR, SUMMARY_DURATION_FINALIZER_REVISION_HR_V2 };
 void SUMMARY_DURATION_FINALIZER_REVISION_AR;
 void SUMMARY_DURATION_FINALIZER_REVISION_RU;
 void SUMMARY_DURATION_FINALIZER_REVISION_JA;
 void SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR;
+void SUMMARY_DURATION_FINALIZER_REVISION_HR_V2;
 
 /** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
 function splitHindiSummaryUnitsLocal(text: string): string[] {
@@ -890,7 +892,7 @@ export function resolveSummaryWithDurationPolicy(
         : locale === 'ja'
           ? SUMMARY_DURATION_FINALIZER_REVISION_JA
           : locale === 'hr'
-            ? SUMMARY_DURATION_FINALIZER_REVISION_HR
+            ? SUMMARY_DURATION_FINALIZER_REVISION_HR_V2
             : SUMMARY_DURATION_FINALIZER_REVISION,
   };
 
@@ -938,7 +940,7 @@ export function resolveSummaryWithDurationPolicy(
         : locale === 'ja'
           ? SUMMARY_DURATION_FINALIZER_REVISION_JA
           : locale === 'hr'
-            ? SUMMARY_DURATION_FINALIZER_REVISION_HR
+            ? SUMMARY_DURATION_FINALIZER_REVISION_HR_V2
             : SUMMARY_DURATION_FINALIZER_REVISION;
   }
 
