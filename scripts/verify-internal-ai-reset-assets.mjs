@@ -112,8 +112,14 @@ const CROATIAN_SERBIAN_LOCALE = 'croatian-serbian-locale-discrimination-v1';
 const SUMMARY_SPLITTER_REVISION_HR = 'croatian-three-sentence-slots-v1';
 const SUMMARY_GROUNDING_REVISION_HR = 'entry-owned-croatian-grounding-v1';
 const SUMMARY_DURATION_REVISION_HR = 'croatian-duration-idempotent-v1';
+const SUMMARY_DURATION_REVISION_HR_V2 = 'croatian-duration-idempotent-v2';
 const SUMMARY_BUILDER_REVISION_HR = 'entry-owned-croatian-rebuild-v1';
 const CROATIAN_SUMMARY_STRICT_POSTCONDITIONS = 'croatian-summary-strict-postconditions-v1';
+const CROATIAN_NOOP_USAGE = 'croatian-noop-usage-291-v1';
+const CROATIAN_DESIGN_POISONED = 'croatian-design-poisoned-source-recovery-291-v1';
+const CROATIAN_DESIGN_FALLBACK_ROUTING = 'croatian-design-fallback-routing-291-v1';
+const CROATIAN_ROLE_AWARE_MATERIAL = 'croatian-role-aware-material-classifier-291-v1';
+const CROATIAN_SUMMARY_CANONICAL_RECOVERY = 'croatian-summary-canonical-recovery-291-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -146,8 +152,14 @@ for (const marker of [
   SUMMARY_SPLITTER_REVISION_HR,
   SUMMARY_GROUNDING_REVISION_HR,
   SUMMARY_DURATION_REVISION_HR,
+  SUMMARY_DURATION_REVISION_HR_V2,
   SUMMARY_BUILDER_REVISION_HR,
   CROATIAN_SUMMARY_STRICT_POSTCONDITIONS,
+  CROATIAN_NOOP_USAGE,
+  CROATIAN_DESIGN_POISONED,
+  CROATIAN_DESIGN_FALLBACK_ROUTING,
+  CROATIAN_ROLE_AWARE_MATERIAL,
+  CROATIAN_SUMMARY_CANONICAL_RECOVERY,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

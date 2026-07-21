@@ -182,11 +182,12 @@ const DUTY_RULES: DutyRule[] = [
     key: 'warehouse_inbound_check',
     // Hindi object-before-verb: माल … जाँच/जांच. Never use ASCII \b around Devanagari.
     // जाँच (chandrabindu) and जांच (anusvara) are both live Android spellings.
+    // Require goods/receipt/warehouse evidence — bare document/data checking is not warehouse.
     source:
-      /(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل|проверя).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品)|(?:rob\w*|goods?|माल|товар|بضائع|واردة|وثائق|商品|документ|сопроводительн).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ).{0,40}(?:rob\w*|goods?|माल|بضائع|товар)|(?:prateć\w*|pratec\w*|accompany\w*|संबंधित|مرفق|сопроводительн).{0,40}(?:dokument|document|दस्तावे|وثائق|документ)|(?:dokument|document|दस्तावे|وثائق|документ).{0,40}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|فحص|संबंधित|مرفق|проверя|сопроводительн)/iu,
+      /(?:(?:prover\w*|provjer\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل|проверя).{0,48}(?:rob\w*|goods?|माल|товар|بضائع|商品|zaprimljen\w*|ulazn\w*\s+rob)|(?:rob\w*|goods?|माल|товар|بضائع|واردة|商品|zaprimljen\w*|сопроводительн).{0,48}(?:prover\w*|provjer\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|تحقّقت|يتحقق|فحص|تسجيل|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ|zaprimljen\w*).{0,40}(?:rob\w*|goods?|माल|بضائع|товар)|(?:(?:prateć\w*|pratec\w*|popratn\w*|accompany\w*|संबंधित|مرفق|сопроводительн).{0,40}(?:dokument|document|दस्तावे|وثائق|документ))|(?:(?:dokument|document|दस्तावे|وثائق|документ).{0,40}(?:prover\w*|provjer\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|تتحقق|فحص|संबंधित|مرفق|проверя|сопроводительн).{0,32}(?:rob\w*|goods?|zaprimljen\w*|skladišt\w*|warehouse|माल|بضائع|товар|商品)))/iu,
   // Japanese warehouse cues in DUTY_RULES localized patterns
   localized:
-      /(?:(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|يتحقق|فحص|проверя|入荷).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|書類|сопроводительн|関連書類|添付書類)|(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|dokument|document|दस्तावे|وثائق|сопроводительн|関連書類|添付書類).{0,48}(?:prover\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|فحص|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ|入荷).{0,40}(?:rob\w*|goods?|माल|بضائع|товар|商品)|(?:prateć\w*|accompany\w*|संबंधित|مرفق|сопроводительн|関連書類|添付書類).{0,40}(?:dokument|document|दस्तावे|وثائق|документ))/iu,
+      /(?:(?:prover\w*|provjer\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|يتحقق|فحص|проверя|入荷).{0,48}(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|zaprimljen\w*|skladišt\w*|сопроводительн|関連書類|添付書類)|(?:rob\w*|goods?|माल|वस्तु|товар|بضائع|واردة|商品|zaprimljen\w*|skladišt\w*|сопроводительн|関連書類|添付書類).{0,48}(?:prover\w*|provjer\w*|pregled\w*|check\w*|verif\w*|जाँच|जांच|जाच|確認|تتحقق|تحقّقت|فحص|проверя)|(?:pristigl\w*|incoming|inbound|आने\s*वाल|واردة|поступающ|入荷|zaprimljen\w*).{0,40}(?:rob\w*|goods?|माल|بضائع|товар|商品)|(?:prateć\w*|popratn\w*|accompany\w*|संबंधित|مرفق|сопроводительн|関連書類|添付書類).{0,40}(?:dokument|document|दस्तावे|وثائق|документ))/iu,
   },
   {
     key: 'warehouse_records',
@@ -250,6 +251,18 @@ void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
 export const CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION =
   'croatian-serbian-locale-discrimination-v1' as const;
 void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
+/** Runtime marker — role/domain-aware material classification (build 291). */
+export const CROATIAN_ROLE_AWARE_MATERIAL_CLASSIFIER_REVISION =
+  'croatian-role-aware-material-classifier-291-v1' as const;
+void CROATIAN_ROLE_AWARE_MATERIAL_CLASSIFIER_REVISION;
+/** Runtime marker — poisoned Serbian live design source recovery. */
+export const CROATIAN_DESIGN_POISONED_SOURCE_RECOVERY_REVISION =
+  'croatian-design-poisoned-source-recovery-291-v1' as const;
+void CROATIAN_DESIGN_POISONED_SOURCE_RECOVERY_REVISION;
+/** Runtime marker — Croatian design family rebuild routing. */
+export const CROATIAN_DESIGN_FALLBACK_ROUTING_REVISION =
+  'croatian-design-fallback-routing-291-v1' as const;
+void CROATIAN_DESIGN_FALLBACK_ROUTING_REVISION;
 /** Runtime marker — Russian design three-family coverage (build 286). */
 export const RUSSIAN_DESIGN_FAMILIES_REVISION = 'russian-design-families-286-v1' as const;
 void RUSSIAN_DESIGN_FAMILIES_REVISION;
@@ -736,7 +749,68 @@ export function isCroatianDesignFamilyRejectionReason(reason: string | null | un
     || r === 'croatian_design_material_coverage_incomplete'
     || r === 'croatian_experience_domain_mismatch'
     || r === 'croatian_experience_cross_entry_fallback'
-    || r === 'croatian_serbian_locale_leakage';
+    || r === 'croatian_serbian_locale_leakage'
+    || r === 'croatian_design_poisoned_live_source';
+}
+
+const CROATIAN_DESIGN_POSITION_RE =
+  /(?:dizajn|design|grafick|graphic|visual|vizuel|ビジュアル|デザイン|デザイナー|グラフィック|グラフォ|تصميم|डिज़ाइन|дизайн|графическ)/i;
+
+const CROATIAN_WAREHOUSE_GOODS_EVIDENCE_RE =
+  /(?:rob\w*|goods?|zaprimljen\w*|ulazn\w*\s+rob|skladišt\w*|warehouse|magacin|prateć\w*|popratn\w*|माल|بضائع|товар|商品|倉庫|入荷)/iu;
+
+/**
+ * Serbian-generic live textarea that must never authorize Croatian design rebuild facts.
+ */
+export function isCroatianDesignPoisonedLiveSource(
+  text: string,
+  position?: string | null,
+): boolean {
+  void CROATIAN_DESIGN_POISONED_SOURCE_RECOVERY_REVISION;
+  const t = (text || '').trim();
+  if (!t) return false;
+  const positionLooksDesign = CROATIAN_DESIGN_POSITION_RE.test(String(position || ''));
+  const fam = validateCroatianDesignFactFamilies(t);
+  if (fam.ok && fam.coveredFamilies.length >= 3) return false;
+  const serbianGeneric = /svakodnevn\w*\s+dužnost/iu.test(t)
+    && /(?:prover\w*\s+tačnost|koordinisa\w*|razmen\w*)/iu.test(t)
+    && /(?:pregled\w*\s+dokument|proverav\w*\s+potpunost)/iu.test(t);
+  const noDesignFamilies = !fam.creationCovered
+    && !fam.reviewAdaptationCovered
+    && !fam.finalDeliveryCovered;
+  const srHits = (t.match(/\b(?:prover(?:a|u|ava|avala)|tačnost\w*|koordinisa\w*|razmen\w*|dodeljen\w*|radnog\s+mesta|magacin)\b/giu) || []).length;
+  const hrHits = (t.match(/\b(?:provjer(?:a|u|ava)|točnost\w*|surađ\w*|zaprimljen\w*|skladišt\w*|premještanj\w*|prateć\w*)\b/giu) || []).length;
+  const serbianDominant = srHits > 0 && srHits >= hrHits;
+  return Boolean(
+    (serbianGeneric || (noDesignFamilies && isCroatianGenericDesignDutyUnit(t)))
+    && (positionLooksDesign || serbianGeneric)
+    && serbianDominant
+  );
+}
+
+/**
+ * Role/domain-aware material keys — design roles never inherit warehouse from
+ * generic check/document language alone.
+ */
+export function classifyMaterialDutyKeysForRole(
+  text: string,
+  position?: string | null,
+): MaterialDutyKey[] {
+  void CROATIAN_ROLE_AWARE_MATERIAL_CLASSIFIER_REVISION;
+  const keys = classifyMaterialDutyKeys(text);
+  const domain = CROATIAN_DESIGN_POSITION_RE.test(String(position || ''))
+    ? 'design'
+    : /(?:skladist|warehouse|magacin|skladišt|倉庫|кладов|مستودع)/i.test(String(position || ''))
+      ? 'warehouse'
+      : 'other';
+  if (domain === 'design') {
+    const hasGoods = CROATIAN_WAREHOUSE_GOODS_EVIDENCE_RE.test(text || '');
+    return keys.filter((k) => {
+      if (!k.startsWith('warehouse_')) return true;
+      return hasGoods;
+    });
+  }
+  return keys;
 }
 
 export function isRussianGenericDesignDutyUnit(unit: string): boolean {
@@ -940,18 +1014,34 @@ export function experienceNeedsCroatianDesignFamilyRebuild(options: {
   rejectReason?: string | null;
 }): boolean {
   void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
+  void CROATIAN_DESIGN_FALLBACK_ROUTING_REVISION;
   if (options.locale !== 'hr') return false;
-  if (isCroatianDesignFamilyRejectionReason(options.rejectReason)) return true;
   const source = options.sourceDescription || '';
+  const position = String(options.position || '');
+  const positionLooksDesign = CROATIAN_DESIGN_POSITION_RE.test(position);
+  const poisoned = isCroatianDesignPoisonedLiveSource(source, position);
+  if (poisoned && positionLooksDesign) return true;
+  if (isCroatianDesignFamilyRejectionReason(options.rejectReason)) {
+    // Family-specific rejects always rebuild. Locale rejects rebuild only for design.
+    return true;
+  }
+  // Provider wrong_language must not fall through to source-preserving when the
+  // target is a design entry (poisoned Serbian live text or design position).
+  if (
+    (options.rejectReason === 'wrong_language' || options.rejectReason === 'locale_mismatch')
+    && (positionLooksDesign || poisoned || sourceRequiresCroatianDesignFamilies(source))
+  ) {
+    return true;
+  }
   if (sourceRequiresCroatianDesignFamilies(source)) {
     return !validateCroatianDesignFactFamilies(source).ok;
   }
-  const position = String(options.position || '');
-  if (/(dizajn|design|grafick|graphic|visual|vizuel|ビジュアル|デザイン)/i.test(position)) {
+  if (positionLooksDesign) {
     if (!source.trim()) return true;
     return !validateCroatianDesignFactFamilies(source).ok
       || isCroatianGenericDesignDutyUnit(source)
-      || validateCroatianDesignFactFamilies(source).coveredFamilies.length < 3;
+      || validateCroatianDesignFactFamilies(source).coveredFamilies.length < 3
+      || poisoned;
   }
   return false;
 }

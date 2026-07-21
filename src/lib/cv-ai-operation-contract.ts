@@ -205,12 +205,19 @@ export type FreeTextJobDomain =
   | 'general';
 
 export function classifyFreeTextJobDomain(position?: string | null): FreeTextJobDomain {
-  const t = foldAiTextToken(position || '');
-  if (!t) return 'general';
-  if (/(dizajn|design|grafick|graphic|visual|vizuel|ui\b|ux\b|일러스트|デザイン|تصميم|डिज़ाइन|дизайн|графическ)/.test(t)) {
+  const raw = position || '';
+  const t = foldAiTextToken(raw);
+  if (!t && !raw.trim()) return 'general';
+  // Match against both folded Latin and raw CJK — NFKD dakuten stripping turns
+  // グラフィック/デザイン into クラフィック/テサイン and must not miss design titles.
+  const designRe =
+    /(?:dizajn|design|grafick|graphic|visual|vizuel|ui\b|ux\b|일러스트|デザイン|デザイナー|グラフィック|グラフォ|クラフィック|テサイナ|تصميم|डिज़ाइन|дизайн|графическ)/i;
+  if (designRe.test(t) || designRe.test(raw)) {
     return 'design';
   }
-  if (/(skladist|warehouse|magacin|lager|logist|inventar|inventory|robu|goods|кладов|склад|倉庫|入荷)/.test(t)) {
+  const warehouseRe =
+    /(?:skladist|warehouse|magacin|lager|logist|inventar|inventory|robu|goods|кладов|склад|倉庫|入荷)/i;
+  if (warehouseRe.test(t) || warehouseRe.test(raw)) {
     return 'warehouse';
   }
   if (/(software|developer|programer|engineer|frontend|backend|devops|coder)/.test(t)) {

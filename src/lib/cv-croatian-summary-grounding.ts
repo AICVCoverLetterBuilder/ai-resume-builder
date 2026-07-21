@@ -6,6 +6,7 @@ import type { Locale } from './i18n/translations';
 import {
   classifyMaterialDutyKeys,
   CROATIAN_EXPERIENCE_MATERIAL_REVISION,
+  isCroatianDesignPoisonedLiveSource,
   validateCroatianDesignFactFamilies,
 } from './cv-material-duty-coverage';
 import { fingerprintText } from './cv-export-diagnostics';
@@ -24,8 +25,13 @@ export const SUMMARY_UNIT_SPLITTER_REVISION_HR = 'croatian-three-sentence-slots-
 export const SUMMARY_GROUNDING_REVISION_HR = 'entry-owned-croatian-grounding-v1' as const;
 export const SUMMARY_BUILDER_REVISION_HR = 'entry-owned-croatian-rebuild-v1' as const;
 export const SUMMARY_DURATION_FINALIZER_REVISION_HR = 'croatian-duration-idempotent-v1' as const;
+/** Build-291 Croatian duration finalizer (idempotent v2). */
+export const SUMMARY_DURATION_FINALIZER_REVISION_HR_V2 = 'croatian-duration-idempotent-v2' as const;
 export const CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER =
   'croatian-summary-strict-postconditions-v1' as const;
+export const CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION =
+  'croatian-summary-canonical-recovery-291-v1' as const;
+export const CROATIAN_NOOP_USAGE_REVISION = 'croatian-noop-usage-291-v1' as const;
 
 void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
 
@@ -464,6 +470,7 @@ export function injectCroatianDurationIntoCurrentIntro(
   context?: { role?: string; company?: string; startDate?: string },
 ): string {
   void SUMMARY_DURATION_FINALIZER_REVISION_HR;
+  void SUMMARY_DURATION_FINALIZER_REVISION_HR_V2;
   void context;
   if (!duration?.hasValidDates) return (summary || '').trim();
   const phraseRaw = formatApproximateDurationPhrase(duration, 'hr');
@@ -471,24 +478,37 @@ export function injectCroatianDurationIntoCurrentIntro(
   const phrase = phraseRaw
     .replace(/^[,，]\s*/u, '')
     .replace(/\.$/u, '')
+    .trim()
+    // Prefer the compact written form recognized by every duration detector.
+    .replace(/^s\s+ukupno\s+/iu, '')
+    .replace(/\s+iskustva$/iu, '')
     .trim();
+  const phraseForIntro = /^(?:s\s+)?ukupno\s+/iu.test(phraseRaw)
+    ? `s ukupno ${phrase.replace(/^s\s+/iu, '').replace(/^oko\s+/iu, 'oko ')}`.replace(/\s+/g, ' ').trim()
+    : phrase;
+  // Normalize to "s ukupno oko šest i pol godina" while detectors also accept "oko šest i pol godina".
+  const wovenPhrase = /oko\s+/iu.test(phraseForIntro)
+    ? phraseForIntro.replace(/^(?:s\s+)?(?:ukupno\s+)?/iu, 's ukupno ').replace(/\s+/g, ' ').trim()
+    : phraseForIntro;
   const units = splitCroatianSummaryUnits(summary);
   if (!units.length) {
-    return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
+    return `${wovenPhrase.charAt(0).toUpperCase()}${wovenPhrase.slice(1)}.`;
   }
   const stripDur = (input: string): string => input
     .replace(/,?\s*(?:s\s+)?(?:ukupno\s+)?oko\s+[^,.]+godin\w*(?:\s+iskustva)?/giu, '')
     .replace(/,\s*$/u, '')
     .trim();
   const cleaned = units.map(stripDur).filter(Boolean);
-  if (!cleaned.length) return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
+  if (!cleaned.length) {
+    return `${wovenPhrase.charAt(0).toUpperCase()}${wovenPhrase.slice(1)}.`;
+  }
   // Idempotent: first unit already carries one authoritative claim.
   if (/oko\s+.+godin/iu.test(units[0] || '') && !/,?\s*(?:s\s+)?(?:ukupno\s+)?oko\s+[^,.]+godin\w*.*,\s*(?:s\s+)?(?:ukupno\s+)?oko/iu.test(units[0] || '')) {
     const onlyOne = (summary.match(/oko\s+.+godin/giu) || []).length === 1;
     if (onlyOne) return units.join(' ').replace(/\s+/g, ' ').trim();
   }
   const intro = cleaned[0]!.replace(/\.$/u, '').trim();
-  const woven = `${intro}, ${phrase}`.replace(/\s+/g, ' ').trim();
+  const woven = `${intro}, ${wovenPhrase}`.replace(/\s+/g, ' ').trim();
   cleaned[0] = /[.]$/u.test(woven) ? woven : `${woven}.`;
   return cleaned.join(' ').replace(/\s+/g, ' ').trim();
 }
@@ -510,6 +530,7 @@ export function buildCroatianEntryOwnedSummary(options: {
   void SUMMARY_UNIT_SPLITTER_REVISION_HR;
   void SUMMARY_GROUNDING_REVISION_HR;
   void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+  void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
   void options.locale;
 
   const g = String(options.gender || '').toLowerCase();
@@ -540,6 +561,8 @@ export function buildCroatianEntryOwnedSummary(options: {
   if (durRaw && !/ukupno/iu.test(durRaw) && /oko\s+/iu.test(durRaw)) {
     durRaw = durRaw.replace(/^(?:s\s+)?oko/iu, 's ukupno oko');
   }
+  // Keep "s ukupno oko šest i pol godina" — strip trailing "iskustva" for intro weave.
+  durRaw = durRaw.replace(/\s+iskustva$/iu, '').trim();
 
   let intro = '';
   if (company && monthYear && durRaw) {
@@ -599,8 +622,16 @@ export function buildCroatianEntryOwnedSummary(options: {
   const priorRole = (options.priorRole || '').trim();
   const priorEmployer = (options.priorEmployer || '').trim();
   const priorDuties = options.priorSourceDuties || '';
+  const priorLooksDesign = /(?:dizajn|design|grafič|grafick|visual|vizuel|vizualn|ビジュアル|デザイン|デザイナー|グラフィック|графическ|визуальн|تصميم|डिज़ाइन)/i
+    .test(`${priorRole} ${priorDuties}`);
+  const priorPoisonedSerbian = isCroatianDesignPoisonedLiveSource(priorDuties, priorRole)
+    || (
+      /(?:prover\w*\s+tačnost|koordinisa\w*|razmen\w*|svakodnevn\w*\s+dužnost)/iu.test(priorDuties)
+      && !/(?:vizualn|grafičk|dizajn|zaslon|datotek)/iu.test(priorDuties)
+    );
   let priorSentence = '';
-  if (priorRole && /dizajn|design|grafič|visual|ビジュアル|デザイン|графическ|визуальн/i.test(`${priorRole} ${priorDuties}`)) {
+  if (priorRole && (priorLooksDesign || priorPoisonedSerbian)) {
+    void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
     const priorLabel = localizeGraphicDesigner('hr', options.gender);
     const worked = female ? 'radila' : 'radio';
     const pastPrep = female

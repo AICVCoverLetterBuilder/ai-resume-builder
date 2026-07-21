@@ -3,10 +3,11 @@
  * Distinguishes source vs target locale without treating Serbian Latin as English.
  */
 import type { Locale } from './i18n/translations';
+import { analyzeCroatianSerbianLocaleEvidence } from './cv-ai-unit-locale-purity';
 
 /** High-signal Serbian/Croatian Latin lexicon (works with or without diacritics). */
 const SR_HR_LATIN_LEXICON_RE =
-  /\b(?:obavlja|obavljao|obavljala|ažurira|azurira|ažurirao|azurirao|ažurirala|azurirala|koordiniše|koordinise|koordinira|koordinirao|koordinirala|proverava|proveravao|proveravala|pregleda|pregledao|pregledala|priprema|pripremao|pripremala|sarađuje|saradjuje|sarađivala|saradjivala|evidencij\w*|dokumentacij\w*|kolegama|kolege|zadat(?:ak|ke|aka)|skladišt\w*|skladist\w*|robe|robu|radnog\s+mesta|radnom\s+mestu|blagovremen\w*|potpunost|tačnost|tacnost|vizueln\w*|grafičk\w*|grafick\w*|dizajn\w*|iskustva|godine|godina|poslove|posao|timovima|timovima|proizvod|razvoj)\b/iu;
+  /\b(?:obavlja|obavljao|obavljala|ažurira|azurira|ažurirao|azurirao|ažurirala|azurirala|koordiniše|koordinise|koordinira|koordinirao|koordinirala|proverava|proveravao|proveravala|provjerava|provjeravala|pregleda|pregledao|pregledala|priprema|pripremao|pripremala|sarađuje|saradjuje|sarađivala|saradjivala|surađuje|surađivala|evidencij\w*|dokumentacij\w*|kolegama|kolege|kolegicama|zadat(?:ak|ke|aka)|skladišt\w*|skladist\w*|robe|robu|radnog\s+mesta|radnom\s+mestu|radnog\s+mjesta|blagovremen\w*|potpunost|tačnost|tacnost|točnost|tocnost|vizueln\w*|vizualn\w*|grafičk\w*|grafick\w*|dizajn\w*|iskustva|godine|godina|poslove|posao|timovima|proizvod|razvoj|zaprimljen\w*|premještanj\w*|prateć\w*|popratn\w*)\b/iu;
 
 const SR_HR_FUNCTION_WORDS_RE =
   /\b(?:sa|za|na|od|do|kod|pri|pre|posle|kako|radi|uz|bez|ili|te|pa|jer|dok|kad|kada|što|sto|koji|koja|koje|svojim|svoje|svakodnevn\w*)\b/iu;
@@ -130,8 +131,36 @@ export function analyzeContentLocale(
   }
 
   if (hasSerbianDiacritics || (hasSerbianLexicon && hasSrFunction) || hasSerbianLexicon) {
+    // Discriminate Croatian vs Serbian — shared SC Latin must not default to sr
+    // when exclusive Croatian forms dominate (Provjerava / točnost / zaprimljene…).
+    const hrEvidence = analyzeCroatianSerbianLocaleEvidence(raw);
+    const storedHint = (hints?.storedLocale || hints?.generatedLocale || '').trim();
+    let loc: Locale = 'sr';
+    if (hrEvidence.serbianLeakageDetected) {
+      loc = 'sr';
+    } else if (
+      hrEvidence.croatianExclusiveCueCount > 0
+      && hrEvidence.croatianExclusiveCueCount >= hrEvidence.serbianExclusiveCueCount
+    ) {
+      loc = 'hr';
+    } else if (
+      storedHint === 'hr'
+      && hrEvidence.serbianExclusiveCueCount === 0
+      && hrEvidence.croatianLocaleEvidencePassed
+    ) {
+      loc = 'hr';
+    } else if (
+      storedHint === 'sr'
+      && hrEvidence.croatianExclusiveCueCount === 0
+    ) {
+      loc = 'sr';
+    } else if (
+      hrEvidence.croatianExclusiveCueCount > hrEvidence.serbianExclusiveCueCount
+    ) {
+      loc = 'hr';
+    }
     return {
-      detectedLocale: 'sr',
+      detectedLocale: loc,
       script: hasSerbianDiacritics ? 'latin_diacritic' : 'latin',
       hasSerbianDiacritics,
       hasSerbianLexicon: true,

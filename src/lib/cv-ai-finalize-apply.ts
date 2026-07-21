@@ -59,9 +59,12 @@ import {
   SUMMARY_GROUNDING_REVISION_JA,
   SUMMARY_GROUNDING_REVISION_HR,
   SUMMARY_DURATION_FINALIZER_REVISION_HR,
+  SUMMARY_DURATION_FINALIZER_REVISION_HR_V2,
   JAPANESE_DURATION_IN_INTRO_MARKER,
   JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
+  CROATIAN_NOOP_USAGE_REVISION,
 } from './cv-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
@@ -109,11 +112,15 @@ import {
   russianDesignCueKeysFromUnit,
   japaneseWarehouseCueKeysFromUnit,
   japaneseDesignCueKeysFromUnit,
+  croatianDesignCueKeysFromUnit,
   validateExperienceApplyMaterialPostcondition,
   RUSSIAN_EXPERIENCE_MATERIAL_REVISION,
   JAPANESE_EXPERIENCE_MATERIAL_REVISION,
   CROATIAN_EXPERIENCE_MATERIAL_REVISION,
   CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION,
+  CROATIAN_ROLE_AWARE_MATERIAL_CLASSIFIER_REVISION,
+  CROATIAN_DESIGN_POISONED_SOURCE_RECOVERY_REVISION,
+  CROATIAN_DESIGN_FALLBACK_ROUTING_REVISION,
   collectDesignMaterialKeysFromDescription,
   validateRussianDesignFactFamilies,
   sourceRequiresRussianDesignFamilies,
@@ -122,6 +129,8 @@ import {
   validateCroatianDesignFactFamilies,
   experienceNeedsCroatianDesignFamilyRebuild,
   isCroatianDesignFamilyRejectionReason,
+  isCroatianDesignPoisonedLiveSource,
+  classifyMaterialDutyKeysForRole,
   RUSSIAN_DESIGN_FAMILIES_REVISION,
   RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION,
   RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT,
@@ -170,9 +179,15 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_UNIT_SPLITTER_REVISION_HR,
   SUMMARY_GROUNDING_REVISION_HR,
   SUMMARY_DURATION_FINALIZER_REVISION_HR,
+  SUMMARY_DURATION_FINALIZER_REVISION_HR_V2,
   CROATIAN_EXPERIENCE_MATERIAL_REVISION,
   CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION,
+  CROATIAN_ROLE_AWARE_MATERIAL_CLASSIFIER_REVISION,
+  CROATIAN_DESIGN_POISONED_SOURCE_RECOVERY_REVISION,
+  CROATIAN_DESIGN_FALLBACK_ROUTING_REVISION,
   CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
+  CROATIAN_NOOP_USAGE_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -194,9 +209,15 @@ void SUMMARY_BUILDER_REVISION_HR;
 void SUMMARY_UNIT_SPLITTER_REVISION_HR;
 void SUMMARY_GROUNDING_REVISION_HR;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR;
+void SUMMARY_DURATION_FINALIZER_REVISION_HR_V2;
 void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
 void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
+void CROATIAN_ROLE_AWARE_MATERIAL_CLASSIFIER_REVISION;
+void CROATIAN_DESIGN_POISONED_SOURCE_RECOVERY_REVISION;
+void CROATIAN_DESIGN_FALLBACK_ROUTING_REVISION;
 void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
+void CROATIAN_NOOP_USAGE_REVISION;
 import {
   validateLocalizedExperienceBullets,
   validateLocalizedSummary,
@@ -430,6 +451,8 @@ export type FinalizeCvAiFieldResult = {
     targetContentApplied?: boolean;
     contentLocaleUpdatedAfterApply?: boolean;
     selectedSourceActuallyRejected?: boolean;
+    rejectedSourceReason?: string | null;
+    currentTextareaIgnoredOrOverridden?: boolean;
     providerCoverageCount?: number;
     fallbackCoverageCount?: number;
     providerLocalePurityPassed?: boolean | null;
@@ -449,6 +472,7 @@ export type FinalizeCvAiFieldResult = {
     stableEntryIdentityMatched?: boolean;
     targetEntryStillExists?: boolean;
     entryContextMatchedAtApply?: boolean;
+    visibleTextareaMatchesFinalNormalizedHash?: boolean;
     targetLocale?: string | null;
     targetScript?: string | null;
     crossEntryCandidateFactCount?: number;
@@ -608,6 +632,22 @@ function currentAndPriorDutiesFromCv(cv: CVData, locale?: Locale): {
         || liveAi
         || (exp.originalUserDescription || '').trim()
         || (exp.canonicalDescription || '').trim();
+    }
+    if (locale === 'hr') {
+      const live = (exp.description || '').trim() || freezeExperienceAiDescription(exp).trim();
+      const canonical = (exp.originalUserDescription || '').trim()
+        || (exp.canonicalDescription || '').trim();
+      // Reject Serbian-poisoned design live text as material authority — prefer
+      // entry-owned canonical design facts when the role is graphic design.
+      if (
+        isCroatianDesignPoisonedLiveSource(live, exp.position)
+        && canonical
+        && canonical !== live
+      ) {
+        void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
+        return canonical;
+      }
+      return live || canonical;
     }
     return freezeExperienceAiDescription(exp);
   };
@@ -970,27 +1010,39 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const priorDesignCue = /(?:ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|दृश्य|ब्रांड|graphic|design|print|digital|visual|مواد\s*بصرية|عناصر\s*رسومية|جرافيك|تصميم|визуальн|графическ|дизайн|ビジュアル|視覚|グラフィック|デザイン)/iu
     .test(`${entryDutiesForRole.priorEntryDuties || ''} ${entryDutiesForRole.priorRoleTitle || ''}`);
   const priorEntryMaterialKeys: string[] = (() => {
+    const roleAware = classifyMaterialDutyKeysForRole(
+      entryDutiesForRole.priorEntryDuties,
+      entryDutiesForRole.priorRoleTitle,
+    ).filter((k) => k !== 'generic_duty' && !(priorDesignCue && k === 'food_prep'));
     const merged = [
+      ...roleAware,
       ...materialDutyKeysFromDescription(entryDutiesForRole.priorEntryDuties)
         .filter((k) => k !== 'generic_duty' && !(priorDesignCue && k === 'food_prep')),
       ...collectDesignMaterialKeysFromDescription(entryDutiesForRole.priorEntryDuties)
         .filter((k) => !(priorDesignCue && k === 'food_prep')),
-      ...(locale === 'ja'
+      ...(locale === 'ja' || locale === 'hr'
         ? japaneseDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties)
         : []),
-      ...(locale === 'ja'
+      ...(locale === 'ja' || locale === 'hr'
         ? russianDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties)
+        : []),
+      ...(locale === 'hr'
+        ? croatianDesignCueKeysFromUnit(entryDutiesForRole.priorEntryDuties)
         : []),
     ];
     const unique = [...new Set(merged)];
     // Russian/Japanese Summary design-prior template grounds all three fact families when
     // the prior entry is design-owned — report those keys for diagnostics.
-    const priorLooksDesignForLocale = (locale === 'ru' || locale === 'ja') && (
+    const priorLooksDesignForLocale = (locale === 'ru' || locale === 'ja' || locale === 'hr') && (
       priorDesignCue
-      || /dizajn|design|グラフィック|デザイナー|графическ|дизайнер|visual|визуальн|ビジュアル|デザイン|مواد\s*بصرية|عناصر\s*رسومية/i
+      || /dizajn|design|グラフィック|デザイナー|グラフィックデザイナー|графическ|дизайнер|visual|визуальн|ビジュアル|デザイン|مواد\s*بصرية|عناصر\s*رسومية|grafičk/i
         .test(`${entryDutiesForRole.priorRoleTitle || ''} ${entryDutiesForRole.priorEntryDuties || ''}`)
     );
     if (priorLooksDesignForLocale) {
+      // Never report warehouse keys for a design prior (poisoned Serbian live text).
+      for (let i = unique.length - 1; i >= 0; i -= 1) {
+        if (String(unique[i]).startsWith('warehouse_')) unique.splice(i, 1);
+      }
       for (const k of [
         'design_visual_materials',
         'design_graphic_elements',
@@ -2791,6 +2843,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       entryScopedCanonicalStorageUsed: true,
       responseRejectedForEntryMismatch: false,
       crossEntryLeakageDetected: Boolean(result.diagnostics?.crossEntryLeakageDetected),
+      entryContextMatchedAtApply: Boolean(
+        exp?.id
+        && findExperienceById(cv, exp.id)
+        && (
+          !snapshot?.experienceEntryId
+          || snapshot.experienceEntryId === exp.id
+        ),
+      ),
+      visibleTextareaMatchesFinalNormalizedHash: Boolean(result.countedAsSuccess),
     },
   });
 
@@ -2845,70 +2906,114 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       || (persp.perspectiveNormalizationApplied === false
         && experienceAiHasMeaningfulChange(providerRawForCompare, finalNormalizedBullets) === false);
 
-    if (!meaningful && !persp.perspectiveNormalizationApplied) {
-      // Same-locale first-person (or Serbian) source reapplied unchanged → no-op.
-      // Cross-locale "same text" (e.g. Serbian source for an English request) must
-      // fall through to localized deterministic fallback — not count as success.
+    if (!meaningful) {
+      // Same-locale source reapplied unchanged → universal no-op (never +1 usage),
+      // EXCEPT when the live source is poisoned / incomplete for a design rebuild
+      // (Russian/Croatian design family rebuild must still run).
+      // Cross-locale "same text" must fall through to localized deterministic fallback.
       const sourceOkForLocale = sourceUsableInLocale(sourceForCoverage, locale)
         || (locale === 'en' && sourceUsableInLocale(sourceForCoverage, 'en'));
       const sourceNeedsPerspective = experienceRequiresCvThirdPerson(locale)
         && detectExperiencePersonMode(sourceForCoverage, locale) === 'first_singular';
-      if (sourceOkForLocale && (sourceNeedsPerspective || locale === 'sr')) {
+      const needsDesignFamilyRebuild = experienceNeedsRussianDesignFamilyRebuild({
+        locale,
+        sourceDescription: sourceForCoverage,
+        position: exp?.position || cv.personal?.jobTitle,
+        rejectReason: lastRejectReason,
+      }) || experienceNeedsCroatianDesignFamilyRebuild({
+        locale,
+        sourceDescription: sourceForCoverage,
+        position: exp?.position || cv.personal?.jobTitle,
+        rejectReason: lastRejectReason,
+      }) || (
+        locale === 'hr'
+        && isCroatianDesignPoisonedLiveSource(
+          sourceForCoverage,
+          exp?.position || cv.personal?.jobTitle,
+        )
+      );
+      if (needsDesignFamilyRebuild) {
+        lastRejectStage = 'provider:design_rebuild_required';
+        if (locale === 'hr') {
+          lastRejectReason = isCroatianDesignPoisonedLiveSource(
+            sourceForCoverage,
+            exp?.position || cv.personal?.jobTitle,
+          )
+            ? 'croatian_design_poisoned_live_source'
+            : (
+              isCroatianDesignFamilyRejectionReason(lastRejectReason)
+                ? lastRejectReason
+                : 'croatian_design_material_coverage_incomplete'
+            );
+        } else {
+          lastRejectReason = isRussianDesignFamilyRejectionReason(lastRejectReason)
+            ? lastRejectReason
+            : 'russian_design_generic_duty';
+        }
+        providerRejectionReason = lastRejectReason;
+        providerRejectionStage = lastRejectStage;
+        // Skip tryAccept of the unchanged poisoned/incomplete provider text.
+      } else if (!persp.perspectiveNormalizationApplied && sourceOkForLocale) {
+        // Universal contract: whitespace/bullet/normalization-only equals no-op.
         perspectiveMeta.noOpRejected = true;
+        perspectiveMeta.meaningfulChangeDetected = false;
+        perspectiveMeta.finalMatchesSourceAfterNormalization = true;
         lastRejectStage = 'provider:noop';
-        lastRejectReason = 'experience_ai_noop';
+        lastRejectReason = 'ai_no_meaningful_change';
         providerCoveredFactCount = lastCovered;
         providerRequiredFactCount = lastRequired || sourceFactCount;
+        void CROATIAN_NOOP_USAGE_REVISION;
         return attachPerspectiveDiag({
           blocked: true,
-          reason: 'experience_ai_noop',
+          reason: 'ai_no_meaningful_change',
           text: exp?.description || '',
           origin: 'user',
           roleDutyConflict,
           countedAsSuccess: false,
           diagnostics: {
             ...baseDiag(),
-            typedFailureReason: 'experience_ai_noop',
+            typedFailureReason: sourceNeedsPerspective
+              ? 'experience_ai_noop'
+              : 'ai_no_meaningful_change',
             rejectionStage: 'provider:noop',
+            meaningfulChangeDetected: false,
+            noOpRejected: true,
+            finalMatchesSourceAfterNormalization: true,
           },
         });
-      }
-      // Croatian: never short-circuit Serbian-poisoned live prose as a no-op —
-      // fall through to design-family rebuild / deterministic fallback.
-      if (sourceOkForLocale) {
-        // Already CV-compatible same-locale source re-sent: allow apply for legacy controls.
-        perspectiveMeta.finalMatchesSourceAfterNormalization = true;
-        const firstAccepted = tryAccept(finalNormalizedBullets, providerOrigin, 'provider');
-        providerCoveredFactCount = lastCovered;
-        providerRequiredFactCount = lastRequired || sourceFactCount;
-        if (firstAccepted) {
-          perspectiveMeta.normalizedBulletsUsedForApply = true;
-          perspectiveMeta.meaningfulChangeDetected = false;
-          perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
-          return attachPerspectiveDiag({
-            ...firstAccepted,
-            diagnostics: {
-              ...firstAccepted.diagnostics,
-              coveredFactCount: lastCovered || sourceFactCount,
-              providerCoveredFactCount: lastCovered || sourceFactCount,
-              providerRequiredFactCount: lastRequired || sourceFactCount,
-            },
-          });
-        }
-        // Keep tryAccept's typed material/design rejection — do not overwrite with
-        // stale locale_mismatch when locale/script purity already passed.
-        providerRejectionReason = lastRejectReason;
-        providerRejectionStage = lastRejectStage;
-        if (locale === 'ru') {
-          const fam = validateRussianDesignFactFamilies(finalNormalizedBullets);
-          providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
-        }
-      } else {
+      } else if (!sourceOkForLocale) {
         // Cross-locale unchanged provider text → continue to localized fallback.
         lastRejectStage = 'provider:cross_locale_or_noop';
         lastRejectReason = 'locale_mismatch';
         providerRejectionReason = 'locale_mismatch';
         providerRejectionStage = lastRejectStage;
+      } else if (!perspectiveGate.ok) {
+        lastRejectStage = 'provider:perspective';
+        lastRejectReason = perspectiveGate.reason || 'experience_cv_perspective_first_person';
+      } else {
+        // Perspective-only normalization of already-valid same-locale text → no-op.
+        perspectiveMeta.noOpRejected = true;
+        perspectiveMeta.meaningfulChangeDetected = false;
+        perspectiveMeta.finalMatchesSourceAfterNormalization = true;
+        lastRejectStage = 'provider:noop';
+        lastRejectReason = 'ai_no_meaningful_change';
+        void CROATIAN_NOOP_USAGE_REVISION;
+        return attachPerspectiveDiag({
+          blocked: true,
+          reason: 'ai_no_meaningful_change',
+          text: exp?.description || '',
+          origin: 'user',
+          roleDutyConflict,
+          countedAsSuccess: false,
+          diagnostics: {
+            ...baseDiag(),
+            typedFailureReason: 'ai_no_meaningful_change',
+            rejectionStage: 'provider:noop',
+            meaningfulChangeDetected: false,
+            noOpRejected: true,
+            finalMatchesSourceAfterNormalization: true,
+          },
+        });
       }
     } else if (!perspectiveGate.ok) {
       lastRejectStage = 'provider:perspective';
@@ -2962,7 +3067,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   // Fallback routing reason must not inherit stale locale_mismatch from material rejects.
   clientDeterministicFallbackReason = isRussianDesignFamilyRejectionReason(providerRejectionReason)
     ? 'russian_design_family_rebuild'
-    : isCroatianDesignFamilyRejectionReason(providerRejectionReason)
+    : (
+      isCroatianDesignFamilyRejectionReason(providerRejectionReason)
+      || experienceNeedsCroatianDesignFamilyRebuild({
+        locale,
+        sourceDescription: sourceForCoverage,
+        position: exp?.position || cv.personal?.jobTitle,
+        rejectReason: providerRejectionReason || lastRejectReason,
+      })
+    )
       ? 'croatian_design_family_rebuild'
     : (lastRejectReason && lastRejectReason !== 'locale_mismatch'
       ? lastRejectReason
@@ -3138,6 +3251,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (needsCroatianDesignRebuild) {
     void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
     void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
+    void CROATIAN_DESIGN_FALLBACK_ROUTING_REVISION;
+    void CROATIAN_DESIGN_POISONED_SOURCE_RECOVERY_REVISION;
+    const liveTextarea = (exp?.description || '').trim();
+    const poisonedLive = isCroatianDesignPoisonedLiveSource(
+      liveTextarea || sourceForCoverage,
+      exp?.position || cv.personal?.jobTitle,
+    );
     clientDeterministicFallbackReason = 'croatian_design_family_rebuild';
     authoritativeRequiredFamilyCount = 3;
     const designFamilyFallback = normalizeLocaleText(
@@ -3190,6 +3310,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             coveredFactCount: providerCoveredFactCount,
             rejectionStage: undefined,
             typedFailureReason: undefined,
+            selectedSourceActuallyRejected: poisonedLive,
+            rejectedSourceReason: poisonedLive
+              ? 'croatian_design_poisoned_live_source'
+              : undefined,
+            currentTextareaIgnoredOrOverridden: poisonedLive,
           },
         });
       }
