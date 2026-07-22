@@ -84,11 +84,14 @@ function assertValidBuild277(text: string) {
   expect(text).not.toMatch(/पेशेवर\s+के\s+रूप\s+में/);
   expect(text).toMatch(/साढ़े\s*छह/);
   expect(text).toMatch(/माल|गोदाम/);
-  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|प्रिंट/);
+  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|दृश्य|डिजिटल/);
   const beforePrior = text.split(/इससे\s+पहले/)[0] || text;
   const dutyPart = beforePrior.replace(/^[^।]*।\s*/, '');
   expect(dutyPart).not.toMatch(/ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|ब्रांड/);
-  expect(text).not.toMatch(/करती\s+थीं\s+का\s+अनुभव/);
+  // Digital-only prior facts must not invent print media.
+  expect(text).not.toMatch(/प्रिंट|मुद्रित|मुद्रण|छपाई/);
+  expect(text).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
+  expect(text).not.toMatch(/करती थीं\s+का\s+अनुभव/);
 }
 
 describe('build 277 Hindi Summary deterministic repair', () => {

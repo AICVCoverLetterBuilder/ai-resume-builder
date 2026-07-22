@@ -85,7 +85,9 @@ function assertValidBuild276(text: string) {
   expect(text).toMatch(/साढ़े\s*छह/);
   expect(text).not.toMatch(/साढ़े\s*6\.5|6\.5/);
   expect(text).toMatch(/माल|गोदाम/);
-  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|प्रिंट/);
+  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|दृश्य|डिजिटल/);
+  expect(text).not.toMatch(/प्रिंट|मुद्रित|मुद्रण|छपाई/);
+  expect(text).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
   // Design must not occupy the current-duty slot before prior clause.
   const beforePrior = text.split(/इससे\s+पहले/)[0] || text;
   const dutyPart = beforePrior.replace(/^[^।]*।\s*/, '');

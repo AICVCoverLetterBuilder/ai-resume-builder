@@ -709,6 +709,7 @@ Rules:
 - Prefer occupation + approximate experience + grounded responsibilities in sentence 1; optional skills label list in sentence 2.
 - Company name: omit unless needed to distinguish employment.
 - COMPLETENESS: Finish every sentence. Never stop mid-word.
+- For Hindi: never invent print/मुद्रण/छपाई unless SOURCE FACTS contain print; close current-role sentences with हैं/है (never bare पेशेवर। or करती।); avoid orphan जहाँ clauses.
 - PERSPECTIVE: One consistent perspective (first OR third person).
 - GENDER: Use natural gendered occupational forms and grammar for the selected gender where the language requires it (e.g. Serbian female Baker = Pekarka, never Pekara).
 - LANGUAGE QUALITY: ${localeInfo.nativeQualityNote}`,
@@ -806,7 +807,18 @@ Output the summary only — nothing else. Max 90 words.${genderNote}`,
                 max_tokens: 600,
                 temperature: 0.3,
                 stream: false,
-                system: `You rewrite complete CV summaries in ${localeInfo.languageName}. Finish every sentence. Never invent duties. Plain text only. Never prefix with labels like "CORRECTED PROFESSIONAL SUMMARY:".`,
+                system: resolvedLocale === 'hi'
+                  ? `You rewrite complete CV professional summaries in Hindi (Devanagari).
+Rules:
+- Preserve exact factual scope from SOURCE FACTS only — never invent print/मुद्रण/छपाई, branding, marketing, tools, achievements, education, or certifications unless present in facts.
+- Prefer digital/visual/graphic/screens/files wording when those appear in facts; do not add print media.
+- Exactly three complete sentences: current intro, current duties, prior role.
+- Current intro must end with a finite copula (e.g. पेशेवर हैं। / कार्यरत हैं।), never a bare nominal पेशेवर।
+- Current duty sentences must use complete finite forms (करती हैं / अद्यतन करती हैं), never bare करती। or orphan जहाँ fragments.
+- Prior completed role uses natural past forms (तैयार करती थीं / तैयार कीं).
+- Preserve Atlas, Rewitu and structured roles; exactly one combined duration claim.
+- Finish every sentence. Plain text only. Never prefix with labels.`
+                  : `You rewrite complete CV summaries in ${localeInfo.languageName}. Finish every sentence. Never invent duties. Plain text only. Never prefix with labels like "CORRECTED PROFESSIONAL SUMMARY:".`,
                 messages: [{ role: 'user', content: prompt }],
               }, deadlineAt);
               repairFinishedAt = Date.now();

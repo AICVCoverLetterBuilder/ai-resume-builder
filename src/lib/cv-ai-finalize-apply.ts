@@ -66,6 +66,7 @@ import {
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
 } from './cv-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
@@ -203,6 +204,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
   EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
   EXPERIENCE_TITLE_PROJECTION_REVISION,
@@ -237,6 +239,7 @@ void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
+void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
 void EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
 void EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION;
 void EXPERIENCE_TITLE_PROJECTION_REVISION;
@@ -477,6 +480,20 @@ export type FinalizeCvAiFieldResult = {
     tenseValidationPassed?: boolean;
     grammarValidationPassed?: boolean;
     unsupportedClaimCount?: number;
+    providerUnsupportedDesignMediumCount?: number;
+    providerUnsupportedDesignMediumKinds?: string[];
+    providerPrintClaimDetected?: boolean;
+    finalUnsupportedDesignMediumCount?: number;
+    finalUnsupportedDesignMediumKinds?: string[];
+    hindiCurrentIntroFiniteVerbPresent?: boolean;
+    hindiCurrentDutyAuxiliaryPresent?: boolean;
+    hindiStandaloneJahanFragmentDetected?: boolean;
+    hindiIncompleteSentenceCount?: number;
+    hindiGrammarRejectionReason?: string | null;
+    summaryRepairAttempted?: boolean;
+    summaryRepairValidationPassed?: boolean | null;
+    summaryRepairApplied?: boolean;
+    summaryDurationRepairApplied?: boolean;
     generationProviderValidationPassed?: boolean | null;
     generationProviderRejectionReason?: string | null;
     generationFinalPostconditionPassed?: boolean | null;
@@ -882,6 +899,33 @@ function summaryPasses(
       return {
         ok: false,
         reason: empQ.typedRejectionReason || 'croatian_summary_grounding_failed',
+      };
+    }
+  }
+  if (locale === 'hi') {
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+    const localizedRole = resolveOccupationalTitleForSummary({
+      profileJobTitle: cv.personal?.jobTitle,
+      currentExperienceTitle: primary?.position || entryDuties.currentRoleTitle,
+      locale,
+      gender: cv.personal?.gender || '',
+      dutiesText: entryDuties.currentEntryDuties,
+    });
+    const empQ = analyzeHindiSummaryEmploymentQuality(summary, {
+      company: primary?.company || '',
+      role: localizedRole || primary?.position || cv.personal?.jobTitle || '',
+      startDate: primary?.startDate || '',
+      sourceDuties: entryDuties.currentEntryDuties,
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      priorCompany: entryDuties.priorCompany,
+      structuredRole: localizedRole || primary?.position || entryDuties.currentRoleTitle,
+    });
+    if (!empQ.groundingValidationPassed) {
+      return {
+        ok: false,
+        reason: empQ.typedRejectionReason || 'hindi_summary_grounding_failed',
       };
     }
   }
@@ -1355,7 +1399,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   }
 
   let origin: CvAiFinalizeOrigin = input.originHint || 'ai_generated';
-  if (durationResolved.status === 'repaired') origin = 'ai_repaired';
+  /** True when the API/activation path already marked the candidate as repaired. */
+  const summaryRepairAttempted = input.originHint === 'ai_repaired';
+  const durationRepairApplied = durationResolved.status === 'repaired';
+  if (durationRepairApplied) origin = 'ai_repaired';
+  // Duration-policy "repaired" sets finalCandidateSource to ai_repaired. That is
+  // distinct from provider-activation repair (summaryRepairAttempted/Applied).
   // Do NOT treat duration-policy "fallback" status as a Summary deterministic
   // rebuild — that alias made provider prose look like entry-owned repair.
 
@@ -1629,11 +1678,62 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalSentenceHashes: empQ?.finalSentenceHashes,
         finalSentenceRoleSlots: empQ?.finalSentenceRoleSlots,
         hindiFiniteKaAnubhavCollision: empQ?.hindiFiniteKaAnubhavCollision,
-        unsupportedClaimCount: locale === 'ja'
+        unsupportedClaimCount: locale === 'ja' || locale === 'hi'
           ? (empQ && 'unsupportedClaimCount' in empQ
             ? (empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0
             : 0)
           : result.diagnostics?.unsupportedClaimCount,
+        providerUnsupportedDesignMediumCount: locale === 'hi' && empQ
+          && 'providerUnsupportedDesignMediumCount' in empQ
+          ? (empQ as { providerUnsupportedDesignMediumCount?: number })
+            .providerUnsupportedDesignMediumCount
+          : undefined,
+        providerUnsupportedDesignMediumKinds: locale === 'hi' && empQ
+          && 'providerUnsupportedDesignMediumKinds' in empQ
+          ? (empQ as { providerUnsupportedDesignMediumKinds?: string[] })
+            .providerUnsupportedDesignMediumKinds
+          : undefined,
+        providerPrintClaimDetected: locale === 'hi' && empQ
+          && 'providerPrintClaimDetected' in empQ
+          ? Boolean((empQ as { providerPrintClaimDetected?: boolean }).providerPrintClaimDetected)
+          : undefined,
+        finalUnsupportedDesignMediumCount: locale === 'hi' && empQ
+          && 'finalUnsupportedDesignMediumCount' in empQ
+          ? (empQ as { finalUnsupportedDesignMediumCount?: number })
+            .finalUnsupportedDesignMediumCount
+          : undefined,
+        finalUnsupportedDesignMediumKinds: locale === 'hi' && empQ
+          && 'finalUnsupportedDesignMediumKinds' in empQ
+          ? (empQ as { finalUnsupportedDesignMediumKinds?: string[] })
+            .finalUnsupportedDesignMediumKinds
+          : undefined,
+        hindiCurrentIntroFiniteVerbPresent: locale === 'hi' && empQ
+          && 'hindiCurrentIntroFiniteVerbPresent' in empQ
+          ? Boolean((empQ as { hindiCurrentIntroFiniteVerbPresent?: boolean })
+            .hindiCurrentIntroFiniteVerbPresent)
+          : undefined,
+        hindiCurrentDutyAuxiliaryPresent: locale === 'hi' && empQ
+          && 'hindiCurrentDutyAuxiliaryPresent' in empQ
+          ? Boolean((empQ as { hindiCurrentDutyAuxiliaryPresent?: boolean })
+            .hindiCurrentDutyAuxiliaryPresent)
+          : undefined,
+        hindiStandaloneJahanFragmentDetected: locale === 'hi' && empQ
+          && 'hindiStandaloneJahanFragmentDetected' in empQ
+          ? Boolean((empQ as { hindiStandaloneJahanFragmentDetected?: boolean })
+            .hindiStandaloneJahanFragmentDetected)
+          : undefined,
+        hindiIncompleteSentenceCount: locale === 'hi' && empQ
+          && 'hindiIncompleteSentenceCount' in empQ
+          ? (empQ as { hindiIncompleteSentenceCount?: number }).hindiIncompleteSentenceCount
+          : undefined,
+        hindiGrammarRejectionReason: locale === 'hi' && empQ
+          && 'hindiGrammarRejectionReason' in empQ
+          ? (empQ as { hindiGrammarRejectionReason?: string | null }).hindiGrammarRejectionReason
+          : undefined,
+        summaryRepairAttempted,
+        summaryRepairApplied: summaryRepairAttempted && success,
+        summaryRepairValidationPassed: summaryRepairAttempted ? success : null,
+        summaryDurationRepairApplied: durationRepairApplied,
         providerRejectionReason: croatianProviderRejectionReason
           || japaneseProviderRejectionReason
           || result.diagnostics?.providerRejectionReason,
@@ -1754,7 +1854,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 ? empQ.typedRejectionReason
                 : 'summary_grounding_failed')
               : result.diagnostics?.typedFailureReason,
-        grammarValidationPassed: locale === 'hr' && empQ && 'grammarValidationPassed' in empQ
+        grammarValidationPassed: (locale === 'hr' || locale === 'hi')
+          && empQ
+          && 'grammarValidationPassed' in empQ
           ? Boolean((empQ as { grammarValidationPassed?: boolean }).grammarValidationPassed)
           : result.diagnostics?.grammarValidationPassed,
       },

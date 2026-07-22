@@ -274,9 +274,9 @@ const SUMMARY_SHELL: Record<Locale, (role: string, duties: string, g: GenderTone
     const head = role || 'पेशेवर';
     const dur = durationPhrase || 'प्रासंगिक अनुभव';
     const gendered = g === 'female'
-      ? `${head} के रूप में कार्यरत, ${dur} रखने वाली पेशेवर।`
+      ? `${head} के रूप में कार्यरत, ${dur} रखने वाली पेशेवर हैं।`
       : g === 'male'
-        ? `${head} के रूप में कार्यरत, ${dur} रखने वाला पेशेवर।`
+        ? `${head} के रूप में कार्यरत, ${dur} रखने वाला पेशेवर है।`
         : `${head} के रूप में कार्यरत, ${dur}।`;
     return `${gendered} ${duties}`.trim();
   },

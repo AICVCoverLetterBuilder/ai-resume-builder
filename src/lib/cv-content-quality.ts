@@ -559,10 +559,10 @@ function buildHindiIntegratedDurationSentence(
   const gender = normalizeCoverLetterGender(context.gender);
   const durationClause = `लगभग ${word} ${unitWord} का संयुक्त अनुभव`;
   if (gender === 'female') {
-    return `${employmentClause}, ${durationClause} रखने वाली पेशेवर।`;
+    return `${employmentClause}, ${durationClause} रखने वाली पेशेवर हैं।`;
   }
   if (gender === 'male') {
-    return `${employmentClause}, ${durationClause} रखने वाला पेशेवर।`;
+    return `${employmentClause}, ${durationClause} रखने वाला पेशेवर है।`;
   }
   return `${employmentClause}, ${durationClause}।`;
 }
@@ -677,17 +677,33 @@ export function normalizeHindiSummaryPerspective(text: string): string {
   out = out
     .replace(/मैंने\s+/gu, '')
     .replace(/मैं\s+/gu, '')
-    .replace(/\s+हूँ।/gu, '।')
-    .replace(/\s+हूँ,/gu, ',')
-    .replace(/\s+हूँ\s+/gu, ' ')
-    .replace(/\s+हूँ$/gu, '')
-    .replace(/\s+है।/gu, '।')
-    .replace(/करती हूँ/gu, 'करती है')
+    // Preserve finite auxiliaries — never strip है/हैं to bare danda (AAB-296).
+    .replace(/करती हूँ/gu, 'करती हैं')
     .replace(/करता हूँ/gu, 'करता है')
-    .replace(/रखती हूँ/gu, 'रखती है')
+    .replace(/रखती हूँ/gu, 'रखती हैं')
     .replace(/रखता हूँ/gu, 'रखता है')
-    .replace(/कार्यरत हूँ/gu, 'कार्यरत')
-    .replace(/जहाँ\s+/gu, 'जहाँ ')
+    .replace(/अद्यतन करती हूँ/gu, 'अद्यतन करती हैं')
+    .replace(/अद्यतन करता हूँ/gu, 'अद्यतन करता है')
+    .replace(/कार्यरत हूँ/gu, 'कार्यरत हैं')
+    .replace(/पेशेवर हूँ/gu, 'पेशेवर हैं')
+    .replace(/\s+हूँ।/gu, ' हैं।')
+    .replace(/\s+हूं।/gu, ' हैं।')
+    .replace(/\s+हूँ,/gu, ' हैं,')
+    .replace(/\s+हूं,/gu, ' हैं,')
+    .replace(/\s+हूँ\s+/gu, ' ')
+    .replace(/\s+हूं\s+/gu, ' ')
+    .replace(/\s+हूँ$/gu, ' हैं')
+    .replace(/\s+हूं$/gu, ' हैं')
+    // Fold orphan जहाँ … करती/करता without auxiliary into finite third person.
+    .replace(/जहाँ\s+/gu, '')
+    .replace(/(करती|करता|रखती|रखता)(?=\s*[।.!?]|$)/gu, (m) => {
+      if (/करती|रखती/u.test(m)) return `${m} हैं`;
+      return `${m} है`;
+    })
+    // Repair doubled auxiliaries from the fold above.
+    .replace(/(?:हैं|है)\s+(?:हैं|है)/gu, (m) => (m.includes('हैं') ? 'हैं' : 'है'))
+    .replace(/(करती|रखती)\s+हैं\s+हैं/gu, '$1 हैं')
+    .replace(/(करता|रखता)\s+है\s+है/gu, '$1 है')
     .replace(/\s{2,}/g, ' ')
     .trim();
   return out;

@@ -442,7 +442,7 @@ describe('residual fix: never a standalone Hindi duration fragment', () => {
     });
     // Neutral CV opening (not first-person cover-letter voice).
     expect(result.summary).toBe(
-      'मई 2021 से Zrewq में कॉल सेंटर एजेंट के रूप में कार्यरत, लगभग पाँच वर्षों का संयुक्त अनुभव रखने वाली पेशेवर।',
+      'मई 2021 से Zrewq में कॉल सेंटर एजेंट के रूप में कार्यरत, लगभग पाँच वर्षों का संयुक्त अनुभव रखने वाली पेशेवर हैं।',
     );
     expect(result.summary.startsWith('लगभग')).toBe(false);
     expect(result.summary).not.toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ/u);

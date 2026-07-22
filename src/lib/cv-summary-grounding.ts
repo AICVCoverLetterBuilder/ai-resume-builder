@@ -59,7 +59,15 @@ import {
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
 } from './cv-croatian-summary-grounding';
+import {
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
+  buildHindiPriorDesignSentence,
+  scanHindiUnsupportedDesignMediumClaims,
+  validateHindiSummaryFiniteGrammar,
+  type HindiUnsupportedDesignMediumKind,
+} from './cv-hindi-summary-medium-grammar';
 
+void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
 void JAPANESE_DURATION_IN_INTRO_MARKER;
 void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR;
@@ -119,6 +127,14 @@ export {
   validateCroatianSummaryIntroGrammar,
   ensureCroatianDurationExperienceNoun,
 } from './cv-croatian-summary-grounding';
+export {
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
+  buildHindiPriorDesignSentence,
+  scanHindiUnsupportedDesignMediumClaims,
+  validateHindiSummaryFiniteGrammar,
+  sourceSupportsHindiPrintMedium,
+  HINDI_PRINT_CLAIM_RE,
+} from './cv-hindi-summary-medium-grammar';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import type { CvFidelityViolation, CvFidelityViolationKind } from './cv-semantic-fidelity';
 import {
@@ -447,6 +463,20 @@ export type HindiSummaryEmploymentQuality = {
   priorRoleSemanticFactMentionCount: number;
   priorRoleSemanticDuplicationDetected: boolean;
   hindiFiniteKaAnubhavCollision: boolean;
+  unsupportedClaimCount: number;
+  unsupportedClaimKinds: HindiUnsupportedDesignMediumKind[];
+  providerUnsupportedDesignMediumCount: number;
+  providerUnsupportedDesignMediumKinds: HindiUnsupportedDesignMediumKind[];
+  providerPrintClaimDetected: boolean;
+  finalUnsupportedDesignMediumCount: number;
+  finalUnsupportedDesignMediumKinds: HindiUnsupportedDesignMediumKind[];
+  grammarValidationPassed: boolean;
+  hindiCurrentIntroFiniteVerbPresent: boolean;
+  hindiCurrentDutyAuxiliaryPresent: boolean;
+  hindiStandaloneJahanFragmentDetected: boolean;
+  hindiIncompleteSentenceCount: number;
+  hindiGrammarRejectionReason: string | null;
+  typedRejectionReason: string | null;
   finalUnitRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
   /** Sentence-level (not comma-fragment) ownership diagnostics — hashes only. */
   finalSentenceHashes: string[];
@@ -512,7 +542,7 @@ export function analyzeHindiSummaryEmploymentQuality(
   let priorClauseSeen = false;
   for (const sentence of sentences) {
     if (
-      /इससे\s+पहले/u.test(sentence)
+      /इससे\s+(?:पहले|पूर्व)/u.test(sentence)
       || (priorCompanyEsc
         && new RegExp(priorCompanyEsc, 'iu').test(sentence)
         && !(companyEsc && new RegExp(companyEsc, 'iu').test(sentence)))
@@ -670,6 +700,31 @@ export function analyzeHindiSummaryEmploymentQuality(
 
   const hindiFiniteKaAnubhavCollision = FINITE_THEN_KA_ANUBHAV_RE.test(text);
 
+  const mediumScan = scanHindiUnsupportedDesignMediumClaims(
+    text,
+    priorEntryDuties || options.sourceDuties || '',
+  );
+  const grammar = validateHindiSummaryFiniteGrammar(sentences, finalUnitRoleSlots);
+
+  const unsupportedClaimKinds = mediumScan.finalUnsupportedDesignMediumKinds;
+  const unsupportedClaimCount = mediumScan.finalUnsupportedDesignMediumCount
+    + (hindiFiniteKaAnubhavCollision ? 1 : 0);
+
+  let typedRejectionReason: string | null = null;
+  if (mediumScan.finalUnsupportedDesignMediumCount > 0) {
+    typedRejectionReason = mediumScan.finalUnsupportedDesignMediumKinds[0]
+      || 'unsupported_print_medium';
+  } else if (!grammar.ok) {
+    typedRejectionReason = grammar.hindiGrammarRejectionReason
+      || 'hindi_summary_grammar_invalid';
+  } else if (hindiFiniteKaAnubhavCollision) {
+    typedRejectionReason = 'hindi_finite_ka_anubhav_collision';
+  } else if (!priorRoleGroundingPassed) {
+    typedRejectionReason = 'hindi_summary_prior_role_ungrounded';
+  } else if (semanticCrossEntryLeakageDetected) {
+    typedRejectionReason = 'hindi_summary_cross_entry_leakage';
+  }
+
   const groundingOk = (
     repeatedEmploymentFactCount === 0
     && repeatedProfessionalLabelCount === 0
@@ -684,6 +739,8 @@ export function analyzeHindiSummaryEmploymentQuality(
     && genericizedMaterialFactCount === 0
     && !currentRoleOmittedDetected
     && !hindiFiniteKaAnubhavCollision
+    && mediumScan.finalUnsupportedDesignMediumCount === 0
+    && grammar.ok
   );
 
   return {
@@ -706,6 +763,20 @@ export function analyzeHindiSummaryEmploymentQuality(
     priorRoleSemanticFactMentionCount,
     priorRoleSemanticDuplicationDetected,
     hindiFiniteKaAnubhavCollision,
+    unsupportedClaimCount,
+    unsupportedClaimKinds,
+    providerUnsupportedDesignMediumCount: mediumScan.providerUnsupportedDesignMediumCount,
+    providerUnsupportedDesignMediumKinds: mediumScan.providerUnsupportedDesignMediumKinds,
+    providerPrintClaimDetected: mediumScan.providerPrintClaimDetected,
+    finalUnsupportedDesignMediumCount: mediumScan.finalUnsupportedDesignMediumCount,
+    finalUnsupportedDesignMediumKinds: mediumScan.finalUnsupportedDesignMediumKinds,
+    grammarValidationPassed: grammar.ok,
+    hindiCurrentIntroFiniteVerbPresent: grammar.hindiCurrentIntroFiniteVerbPresent,
+    hindiCurrentDutyAuxiliaryPresent: grammar.hindiCurrentDutyAuxiliaryPresent,
+    hindiStandaloneJahanFragmentDetected: grammar.hindiStandaloneJahanFragmentDetected,
+    hindiIncompleteSentenceCount: grammar.hindiIncompleteSentenceCount,
+    hindiGrammarRejectionReason: grammar.hindiGrammarRejectionReason,
+    typedRejectionReason,
     finalUnitRoleSlots,
     finalSentenceHashes: sentences.map((s) => fingerprintText(s)),
     finalSentenceRoleSlots: [...finalUnitRoleSlots],
@@ -1423,13 +1494,29 @@ export function buildConciseGroundedSummary(
     const cueKeyUnion = [...new Set(
       dutyFacts.flatMap((f) => hindiWarehouseCueKeysFromUnit(f.sourceText || f.value)),
     )];
+    const designKeyUnion = [...new Set(
+      dutyFacts.flatMap((f) => classifyMaterialDutyKeys(f.sourceText || f.value)
+        .filter((k) => k.startsWith('design_'))),
+    )];
     // Never omit the warehouse title when current-entry warehouse facts exist.
     if (roleIsGeneric && (whFrags.length >= 1 || cueKeyUnion.length >= 1)) {
       roleIsGeneric = false;
     }
+    // Same for design — never emit a bare "कार्यरत" open when design facts exist.
+    if (roleIsGeneric && designKeyUnion.length >= 1) {
+      roleIsGeneric = false;
+    }
     const rolePart = roleIsGeneric
       ? ''
-      : (/^(?:पेशेवर|professional)$/iu.test(roleRaw) ? 'वेयरहाउस कर्मचारी' : roleRaw);
+      : (/^(?:पेशेवर|professional)$/iu.test(roleRaw)
+        ? (designKeyUnion.length >= 1 && whFrags.length === 0 && cueKeyUnion.length === 0
+          ? 'ग्राफिक डिज़ाइनर'
+          : 'वेयरहाउस कर्मचारी')
+        : /(?:graphic\s*design|grafi[cč]k\w*\s+dizajn|デザイナー)/iu.test(roleRaw)
+          ? 'ग्राफिक डिज़ाइनर'
+          : /(?:warehouse|वेयरहाउस)/iu.test(roleRaw)
+            ? 'वेयरहाउस कर्मचारी'
+            : roleRaw);
     const company = employer;
     const startMatch = /^(\d{4})-(\d{2})/.exec(datesValue);
     const hindiMonths: Record<string, string> = {
@@ -1450,11 +1537,15 @@ export function buildConciseGroundedSummary(
         : (rolePart ? `${rolePart} के रूप में कार्यरत` : 'कार्यरत');
     const open = durationPhrase
       ? (g === 'female'
-        ? `${employmentHead}, ${durationPhrase} रखने वाली पेशेवर।`
+        ? `${employmentHead}, ${durationPhrase} रखने वाली पेशेवर हैं।`
         : g === 'male'
-          ? `${employmentHead}, ${durationPhrase} रखने वाला पेशेवर।`
+          ? `${employmentHead}, ${durationPhrase} रखने वाला पेशेवर है।`
           : `${employmentHead}, ${durationPhrase}।`)
-      : `${employmentHead}।`;
+      : (g === 'female'
+        ? `${employmentHead} हैं।`
+        : g === 'male'
+          ? `${employmentHead} है।`
+          : `${employmentHead}।`);
     // Prefer warehouse frames when the current entry owns them; otherwise use
     // current-entry fragments only (already entry-scoped — never prior design/warehouse).
     // Never emit a generic current-duty sentence when only generic_duty was detected.
@@ -1494,12 +1585,11 @@ export function buildConciseGroundedSummary(
       : '';
     let priorSentence = '';
     if (priorRole && /dizajn|design|ग्राफिक|डिज़ाइन|visual|दृश्य|grafick/i.test(`${priorRole} ${priorSourceDuties}`)) {
-      const priorLabel = /dizajn|design|grafick/i.test(priorRole)
-        ? 'ग्राफिक डिज़ाइनर'
-        : priorRole;
-      priorSentence = priorEmployer
-        ? `इससे पहले ${priorEmployer} में ${priorLabel} के रूप में प्रिंट और डिजिटल सामग्री तैयार की और ब्रांड की दृश्य पहचान बनाए रखी।`
-        : `इससे पहले ${priorLabel} के रूप में प्रिंट और डिजिटल सामग्री तैयार की और ब्रांड की दृश्य पहचान बनाए रखी।`;
+      priorSentence = buildHindiPriorDesignSentence({
+        priorRole,
+        priorEmployer,
+        priorSourceDuties,
+      });
     } else if (
       priorRole
       && /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist)/i.test(`${priorRole} ${priorSourceDuties}`)

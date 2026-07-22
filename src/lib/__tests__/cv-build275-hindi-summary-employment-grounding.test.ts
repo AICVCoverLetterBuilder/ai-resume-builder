@@ -92,12 +92,18 @@ function assertValidBuild275Summary(text: string) {
   expect(text).toMatch(/माल|गोदाम/);
   expect(text).not.toMatch(/दैनिक\s*रिकॉर्ड|कार्य\s*दस्तावेज़|जानकारी\s*का\s*समन्वय/);
   expect(text).not.toMatch(/वर्तमान\s+में\s+Atlas/);
-  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|ब्रांड/);
+  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|दृश्य|डिजिटल/);
+  expect(text).not.toMatch(/प्रिंट|मुद्रित|मुद्रण|छपाई/);
+  expect(text).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
   const q = analyzeHindiSummaryEmploymentQuality(text, {
     company: 'Atlas',
     role: 'वेयरहाउस कर्मचारी',
     startDate: '2023-01',
     sourceDuties: WH_HI,
+    currentEntryDuties: WH_HI,
+    priorEntryDuties: GD_HI,
+    priorCompany: 'Rewitu',
+    structuredRole: 'वेयरहाउस कर्मचारी',
   });
   expect(q.currentEmploymentIntroductionCount).toBe(1);
   expect(q.repeatedEmploymentFactCount).toBe(0);
