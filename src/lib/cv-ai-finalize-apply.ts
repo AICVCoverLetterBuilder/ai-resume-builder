@@ -67,6 +67,8 @@ import {
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
+  HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
 } from './cv-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
@@ -204,6 +206,8 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
+  HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
   EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
@@ -240,6 +244,8 @@ void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
+void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297;
+void HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
 void EXPERIENCE_AI_NOOP_RECOVERY_REVISION;
 void EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION;
 void EXPERIENCE_TITLE_PROJECTION_REVISION;
@@ -488,6 +494,8 @@ export type FinalizeCvAiFieldResult = {
     hindiCurrentIntroFiniteVerbPresent?: boolean;
     hindiCurrentDutyAuxiliaryPresent?: boolean;
     hindiStandaloneJahanFragmentDetected?: boolean;
+    hindiNominalExperienceFragmentDetected?: boolean;
+    hindiSentenceHasFiniteCopulaOrVerb?: boolean[];
     hindiIncompleteSentenceCount?: number;
     hindiGrammarRejectionReason?: string | null;
     summaryRepairAttempted?: boolean;
@@ -1721,6 +1729,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           && 'hindiStandaloneJahanFragmentDetected' in empQ
           ? Boolean((empQ as { hindiStandaloneJahanFragmentDetected?: boolean })
             .hindiStandaloneJahanFragmentDetected)
+          : undefined,
+        hindiNominalExperienceFragmentDetected: locale === 'hi' && empQ
+          && 'hindiNominalExperienceFragmentDetected' in empQ
+          ? Boolean((empQ as { hindiNominalExperienceFragmentDetected?: boolean })
+            .hindiNominalExperienceFragmentDetected)
+          : undefined,
+        hindiSentenceHasFiniteCopulaOrVerb: locale === 'hi' && empQ
+          && 'hindiSentenceHasFiniteCopulaOrVerb' in empQ
+          ? (empQ as { hindiSentenceHasFiniteCopulaOrVerb?: boolean[] })
+            .hindiSentenceHasFiniteCopulaOrVerb
           : undefined,
         hindiIncompleteSentenceCount: locale === 'hi' && empQ
           && 'hindiIncompleteSentenceCount' in empQ

@@ -7,7 +7,11 @@ import {
   getLatestCvExportDiagnostic,
   type CvExportFormat,
 } from '@/lib/cv-export-diagnostics';
-import { INTERNAL_AI_RESET_ENABLED } from '@/lib/build-channel';
+import {
+  INTERNAL_AI_RESET_ENABLED,
+  INTERNAL_AI_DIAGNOSTICS_REVISION,
+  INTERNAL_AI_RESET_BUNDLE_MARKER,
+} from '@/lib/build-channel';
 
 /**
  * Release-safe "Copy diagnostics" control for CV export failures.
@@ -170,6 +174,8 @@ export function CvExportDiagnosticsModal({
         >
           {INTERNAL_AI_RESET_ENABLED && EnabledPanel ? (
             <div className="mb-4 border-b border-border pb-4">
+              <span className="sr-only">{INTERNAL_AI_RESET_BUNDLE_MARKER}</span>
+              <span className="sr-only">{INTERNAL_AI_DIAGNOSTICS_REVISION}</span>
               <EnabledPanel refreshToken={panelTick} />
             </div>
           ) : null}

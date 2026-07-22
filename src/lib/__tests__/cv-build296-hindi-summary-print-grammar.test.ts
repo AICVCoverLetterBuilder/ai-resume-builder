@@ -95,7 +95,7 @@ function fixtureCv(options: {
 
 describe('AAB 296 Hindi Summary print medium + finite grammar', () => {
   it('exposes runtime medium/grammar revision marker', () => {
-    expect(HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION).toBe('hindi-summary-medium-grammar-297-v1');
+    expect(HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION).toBe('hindi-summary-nominal-grammar-298-v1');
   });
 
   it('A: exact DEVICE_296 is rejected — print + incomplete grammar; no apply; usage +0', () => {
@@ -334,6 +334,16 @@ describe('AAB 296 Hindi Summary print medium + finite grammar', () => {
       ['प्राप्त माल की जाँच करती'],
       ['current_duty'],
     ).hindiGrammarRejectionReason).toBe('current_duty_auxiliary_missing');
+
+    expect(validateHindiSummaryFiniteGrammar(
+      ['आने वाले माल के समन्वय का अनुभव'],
+      ['current_duty'],
+    ).hindiGrammarRejectionReason).toBe('nominal_experience_fragment');
+
+    expect(validateHindiSummaryFiniteGrammar(
+      ['माल की जाँच का अनुभव रखती हैं'],
+      ['current_duty'],
+    ).ok).toBe(true);
 
     expect(validateHindiSummaryFiniteGrammar(
       ['कार्यरत'],

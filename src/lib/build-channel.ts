@@ -43,6 +43,12 @@ export const INTERNAL_AI_RESET_BUNDLE_MARKER = INTERNAL_AI_RESET_ENABLED
   ? 'CVPRO_INTERNAL_AI_RESET_ENABLED_V1'
   : '';
 
+/** AAB-298 internal diagnostics packaging revision — empty in production DCE. */
+export const INTERNAL_AI_DIAGNOSTICS_REVISION = INTERNAL_AI_RESET_ENABLED
+  ? 'internal-ai-diagnostics-298-v1'
+  : '';
+void INTERNAL_AI_DIAGNOSTICS_REVISION;
+
 /** Visible labels — empty when disabled so production assets omit the strings. */
 export const INTERNAL_AI_RESET_CHANNEL_LABEL = INTERNAL_AI_RESET_ENABLED
   ? 'Build channel: internal'

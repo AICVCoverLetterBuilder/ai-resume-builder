@@ -3,8 +3,17 @@
  * Rejects unsupported print/branding/marketing expansion and incomplete CV prose.
  */
 
-export const HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION =
+/** Retained AAB-297 medium/grammar package marker (must survive packaging). */
+export const HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297 =
   'hindi-summary-medium-grammar-297-v1' as const;
+/** AAB-298: bare nominal Summary fragment rejection (`का अनुभव।` etc.). */
+export const HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION =
+  'hindi-summary-nominal-grammar-298-v1' as const;
+/** Active Hindi Summary medium+grammar revision (points at latest package). */
+export const HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION =
+  HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
+void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297;
+void HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
 
 export type HindiUnsupportedDesignMediumKind =
@@ -79,17 +88,22 @@ export type HindiSummaryRoleSlot =
   | 'duration'
   | 'other';
 
+export type HindiSummaryGrammarRejectionReason =
+  | 'current_intro_copula_missing'
+  | 'current_duty_auxiliary_missing'
+  | 'standalone_relative_fragment'
+  | 'nominal_experience_fragment';
+
 export type HindiSummaryGrammarValidation = {
   ok: boolean;
   hindiCurrentIntroFiniteVerbPresent: boolean;
   hindiCurrentDutyAuxiliaryPresent: boolean;
   hindiStandaloneJahanFragmentDetected: boolean;
+  hindiNominalExperienceFragmentDetected: boolean;
+  /** Per-unit: sentence closes with a finite copula (है/हैं/…) or finite verb. */
+  hindiSentenceHasFiniteCopulaOrVerb: boolean[];
   hindiIncompleteSentenceCount: number;
-  hindiGrammarRejectionReason:
-    | 'current_intro_copula_missing'
-    | 'current_duty_auxiliary_missing'
-    | 'standalone_relative_fragment'
-    | null;
+  hindiGrammarRejectionReason: HindiSummaryGrammarRejectionReason | null;
 };
 
 const INTRO_NOMINAL_PROFESSIONAL_RE =
@@ -101,8 +115,23 @@ const INTRO_WORKS_FINITE_RE = /कार्यरत\s+(?:हैं|है|ह�
 const BARE_PARTICIPLE_END_RE =
   /(?:जाँच\s+)?(?:करती|करता|रखती|रखता|अद्यतन\s+करती|अद्यतन\s+करता|समन्वय\s+करती|समन्वय\s+करता|कार्य\s+करती|कार्य\s+करता)\s*$/u;
 
-const DUTY_NOMINAL_EXPERIENCE_RE = /का\s+अनुभव\s*$/u;
-const DUTY_FINITE_AUX_RE = /(?:हैं|है|थीं|थे|था|हूँ|हूं|किया|की|कीं|किए)\s*$/u;
+/**
+ * Bare nominal Professional Summary closings — NOT complete finite sentences.
+ * Do not globally ban these phrases; only reject when they end the unit without
+ * a following finite copula / finite verb.
+ */
+const BARE_NOMINAL_SUMMARY_END_RE =
+  /(?:का\s+अनुभव|का\s+कार्य|की\s+जिम्मेदारी|की\s+ज़िम्मेदारी|में\s+दक्षता)\s*$/u;
+
+/** Accepted finite completions of experience/duty nominals. */
+const FINITE_NOMINAL_EXPERIENCE_RE =
+  /(?:का\s+(?:व्यापक\s+)?अनुभव|का\s+कार्य|की\s+जिम्मेदारी|की\s+ज़िम्मेदारी|में\s+दक्षता)\s+(?:है|हैं|रखती\s+हैं|रखता\s+है|रखते\s+हैं)\s*$/u;
+
+const DUTY_FINITE_AUX_RE =
+  /(?:हैं|है|थीं|थे|था|हूँ|हूं|किया|की|कीं|किए|करती\s+हैं|करता\s+है|करते\s+हैं|रखती\s+हैं|रखता\s+है)\s*$/u;
+
+const ANY_FINITE_END_RE =
+  /(?:हैं|है|हूँ|हूं|थीं|थे|था|किया|की|कीं|किए|करती\s+हैं|करता\s+है|करते\s+हैं|रखती\s+हैं|रखता\s+है|रखते\s+हैं)\s*$/u;
 
 const STANDALONE_JAHAN_RE = /^जहाँ(?:\s|$)/u;
 const VALID_JAHAN_WAHAN_RE = /जहाँ[\s\S]{0,120}वहाँ/u;
@@ -115,20 +144,43 @@ export function validateHindiSummaryFiniteGrammar(
   let hindiCurrentIntroFiniteVerbPresent = true;
   let hindiCurrentDutyAuxiliaryPresent = true;
   let hindiStandaloneJahanFragmentDetected = false;
+  let hindiNominalExperienceFragmentDetected = false;
   let hindiIncompleteSentenceCount = 0;
-  let hindiGrammarRejectionReason: HindiSummaryGrammarValidation['hindiGrammarRejectionReason'] = null;
+  let hindiGrammarRejectionReason: HindiSummaryGrammarRejectionReason | null = null;
+  const hindiSentenceHasFiniteCopulaOrVerb: boolean[] = [];
 
   for (let i = 0; i < units.length; i += 1) {
     const raw = (units[i] || '').replace(/\s+/g, ' ').trim();
-    if (!raw) continue;
+    if (!raw) {
+      hindiSentenceHasFiniteCopulaOrVerb.push(true);
+      continue;
+    }
     const slot = slots[i] || 'other';
     const hasValidJahanWahan = VALID_JAHAN_WAHAN_RE.test(raw);
+    const hasFiniteEnd = ANY_FINITE_END_RE.test(raw) || FINITE_NOMINAL_EXPERIENCE_RE.test(raw);
+    hindiSentenceHasFiniteCopulaOrVerb.push(hasFiniteEnd);
 
     if (STANDALONE_JAHAN_RE.test(raw) && !hasValidJahanWahan) {
       hindiStandaloneJahanFragmentDetected = true;
       hindiIncompleteSentenceCount += 1;
       if (!hindiGrammarRejectionReason) {
         hindiGrammarRejectionReason = 'standalone_relative_fragment';
+      }
+    }
+
+    // Bare `… का अनुभव` / `… का कार्य` / etc. — reject for Summary prose slots.
+    if (
+      (slot === 'current_duty' || slot === 'current_intro' || slot === 'other')
+      && BARE_NOMINAL_SUMMARY_END_RE.test(raw)
+      && !FINITE_NOMINAL_EXPERIENCE_RE.test(raw)
+    ) {
+      hindiNominalExperienceFragmentDetected = true;
+      hindiCurrentDutyAuxiliaryPresent = slot === 'current_duty'
+        ? false
+        : hindiCurrentDutyAuxiliaryPresent;
+      hindiIncompleteSentenceCount += 1;
+      if (!hindiGrammarRejectionReason) {
+        hindiGrammarRejectionReason = 'nominal_experience_fragment';
       }
     }
 
@@ -154,10 +206,6 @@ export function validateHindiSummaryFiniteGrammar(
     }
 
     if (slot === 'current_duty') {
-      if (DUTY_NOMINAL_EXPERIENCE_RE.test(raw)) {
-        // `… का अनुभव।` is an accepted complete nominal duty construction.
-        continue;
-      }
       if (BARE_PARTICIPLE_END_RE.test(raw) && !DUTY_FINITE_AUX_RE.test(raw)) {
         hindiCurrentDutyAuxiliaryPresent = false;
         hindiIncompleteSentenceCount += 1;
@@ -171,13 +219,16 @@ export function validateHindiSummaryFiniteGrammar(
   const ok = hindiIncompleteSentenceCount === 0
     && hindiCurrentIntroFiniteVerbPresent
     && hindiCurrentDutyAuxiliaryPresent
-    && !hindiStandaloneJahanFragmentDetected;
+    && !hindiStandaloneJahanFragmentDetected
+    && !hindiNominalExperienceFragmentDetected;
 
   return {
     ok,
     hindiCurrentIntroFiniteVerbPresent,
     hindiCurrentDutyAuxiliaryPresent,
     hindiStandaloneJahanFragmentDetected,
+    hindiNominalExperienceFragmentDetected,
+    hindiSentenceHasFiniteCopulaOrVerb,
     hindiIncompleteSentenceCount,
     hindiGrammarRejectionReason: ok ? null : hindiGrammarRejectionReason,
   };

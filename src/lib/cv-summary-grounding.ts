@@ -61,6 +61,8 @@ import {
 } from './cv-croatian-summary-grounding';
 import {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
+  HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
   buildHindiPriorDesignSentence,
   scanHindiUnsupportedDesignMediumClaims,
   validateHindiSummaryFiniteGrammar,
@@ -68,6 +70,8 @@ import {
 } from './cv-hindi-summary-medium-grammar';
 
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
+void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297;
+void HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
 void JAPANESE_DURATION_IN_INTRO_MARKER;
 void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR;
@@ -129,6 +133,8 @@ export {
 } from './cv-croatian-summary-grounding';
 export {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
+  HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
   buildHindiPriorDesignSentence,
   scanHindiUnsupportedDesignMediumClaims,
   validateHindiSummaryFiniteGrammar,
@@ -474,6 +480,8 @@ export type HindiSummaryEmploymentQuality = {
   hindiCurrentIntroFiniteVerbPresent: boolean;
   hindiCurrentDutyAuxiliaryPresent: boolean;
   hindiStandaloneJahanFragmentDetected: boolean;
+  hindiNominalExperienceFragmentDetected: boolean;
+  hindiSentenceHasFiniteCopulaOrVerb: boolean[];
   hindiIncompleteSentenceCount: number;
   hindiGrammarRejectionReason: string | null;
   typedRejectionReason: string | null;
@@ -774,6 +782,8 @@ export function analyzeHindiSummaryEmploymentQuality(
     hindiCurrentIntroFiniteVerbPresent: grammar.hindiCurrentIntroFiniteVerbPresent,
     hindiCurrentDutyAuxiliaryPresent: grammar.hindiCurrentDutyAuxiliaryPresent,
     hindiStandaloneJahanFragmentDetected: grammar.hindiStandaloneJahanFragmentDetected,
+    hindiNominalExperienceFragmentDetected: grammar.hindiNominalExperienceFragmentDetected,
+    hindiSentenceHasFiniteCopulaOrVerb: grammar.hindiSentenceHasFiniteCopulaOrVerb,
     hindiIncompleteSentenceCount: grammar.hindiIncompleteSentenceCount,
     hindiGrammarRejectionReason: grammar.hindiGrammarRejectionReason,
     typedRejectionReason,
@@ -1560,18 +1570,40 @@ export function buildConciseGroundedSummary(
       : (onlyGenericCurrent ? [] : uniqueFragments);
     const nominalFrags = seedFrags
       .map((f) => f
-        // Strip trailing finite Hindi verbs so we can safely append `का अनुभव`.
+        // Strip trailing finite Hindi verbs so we can safely append a finite closer.
         .replace(/(?:करती|करता|किए|किया|की|बनाए\s+रखती|बनाए\s+रखता)\s*(?:हैं|है|थीं|थे|था|हूँ|हूं)?$/u, '')
         .replace(/\s+/g, ' ')
         .trim())
       .filter((f) => f.length >= 8 && !FINITE_THEN_KA_ANUBHAV_RE.test(`${f} का अनुभव`));
     let dutySentence = '';
+    // Prefer concrete finite duty verbs for warehouse fragments; otherwise close
+    // with a finite experience copula (`का अनुभव है/रखती हैं`) — never bare `का अनुभव।`.
+    const dutyFiniteCloser = g === 'female'
+      ? 'का अनुभव रखती हैं।'
+      : g === 'male'
+        ? 'का अनुभव रखता है।'
+        : 'का अनुभव है।';
+    const dutyVerbCloser = g === 'female'
+      ? 'करती हैं।'
+      : g === 'male'
+        ? 'करता है।'
+        : 'करते हैं।';
+    const useWarehouseVerbClose = whFrags.length >= 1
+      && nominalFrags.every((f) => /(?:जाँच|अद्यतन|समन्वय|व्यवस्था)/u.test(f));
     if (nominalFrags.length >= 3) {
-      dutySentence = `${nominalFrags[0]}, ${nominalFrags[1]} तथा ${nominalFrags[2]} का अनुभव।`;
+      const body = `${nominalFrags[0]}, ${nominalFrags[1]} तथा ${nominalFrags[2]}`;
+      dutySentence = useWarehouseVerbClose
+        ? `${body} ${dutyVerbCloser}`
+        : `${body} ${dutyFiniteCloser}`;
     } else if (nominalFrags.length === 2) {
-      dutySentence = `${nominalFrags[0]} तथा ${nominalFrags[1]} का अनुभव।`;
+      const body = `${nominalFrags[0]} तथा ${nominalFrags[1]}`;
+      dutySentence = useWarehouseVerbClose
+        ? `${body} ${dutyVerbCloser}`
+        : `${body} ${dutyFiniteCloser}`;
     } else if (nominalFrags.length === 1) {
-      dutySentence = `${nominalFrags[0]} का अनुभव।`;
+      dutySentence = useWarehouseVerbClose
+        ? `${nominalFrags[0]} ${dutyVerbCloser}`
+        : `${nominalFrags[0]} ${dutyFiniteCloser}`;
     } else if (onlyGenericCurrent) {
       // Fail closed — do not invent a generic duty clause or fall into legacy flatten.
       return '';

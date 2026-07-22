@@ -121,6 +121,12 @@ const CROATIAN_DESIGN_FALLBACK_ROUTING = 'croatian-design-fallback-routing-291-v
 const CROATIAN_ROLE_AWARE_MATERIAL = 'croatian-role-aware-material-classifier-291-v1';
 const CROATIAN_SUMMARY_CANONICAL_RECOVERY = 'croatian-summary-canonical-recovery-291-v1';
 const CROATIAN_SUMMARY_INTRO_GRAMMAR = 'croatian-summary-intro-grammar-292-v1';
+const HINDI_SUMMARY_MEDIUM_GRAMMAR_297 = 'hindi-summary-medium-grammar-297-v1';
+const HINDI_SUMMARY_NOMINAL_GRAMMAR = 'hindi-summary-nominal-grammar-298-v1';
+const INTERNAL_AI_DIAGNOSTICS_298 = 'internal-ai-diagnostics-298-v1';
+const EXPERIENCE_AI_NOOP_RECOVERY = 'experience-ai-noop-recovery-293-v1';
+const EXPERIENCE_AI_UNSUPPORTED_EXPANSION = 'experience-ai-unsupported-expansion-295-v1';
+const EXPERIENCE_TITLE_PROJECTION = 'experience-title-projection-296-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -162,6 +168,11 @@ for (const marker of [
   CROATIAN_ROLE_AWARE_MATERIAL,
   CROATIAN_SUMMARY_CANONICAL_RECOVERY,
   CROATIAN_SUMMARY_INTRO_GRAMMAR,
+  HINDI_SUMMARY_MEDIUM_GRAMMAR_297,
+  HINDI_SUMMARY_NOMINAL_GRAMMAR,
+  EXPERIENCE_AI_NOOP_RECOVERY,
+  EXPERIENCE_AI_UNSUPPORTED_EXPANSION,
+  EXPERIENCE_TITLE_PROJECTION,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);
@@ -170,6 +181,10 @@ for (const marker of [
 log('OK Summary runtime revision markers present');
 
 if (expect === 'enabled') {
+  if (!blob.includes(INTERNAL_AI_DIAGNOSTICS_298)) {
+    fail(`missing internal diagnostics revision "${INTERNAL_AI_DIAGNOSTICS_298}"`);
+  }
+  log('OK internal-ai-diagnostics-298-v1 present');
   if (!hasMarker) fail(`missing marker ${MARKER}`);
   if (!hasButton) fail(`missing button text "${RESET_BUTTON}"`);
   if (!hasChannel) fail(`missing "${CHANNEL_LABEL}"`);
@@ -202,6 +217,8 @@ if (expect === 'enabled') {
   fail(`Experience AI trace marker must be absent in disabled assets (${EXPERIENCE_AI_TRACE_MARKER})`);
 } else if (blob.includes(SUMMARY_AI_TRACE_MARKER)) {
   fail(`Summary AI trace marker must be absent in disabled assets (${SUMMARY_AI_TRACE_MARKER})`);
+} else if (blob.includes(INTERNAL_AI_DIAGNOSTICS_298)) {
+  fail(`internal diagnostics revision must be absent in disabled assets (${INTERNAL_AI_DIAGNOSTICS_298})`);
 } else {
   log(`OK disabled assets: marker absent (button=${hasButton}, channel=${hasChannel}, status=${hasStatus}); Summary runtime revisions still present`);
 }
