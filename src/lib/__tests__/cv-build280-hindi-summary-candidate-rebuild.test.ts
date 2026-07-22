@@ -271,7 +271,9 @@ describe('build 280 Hindi Summary persisted-state rebuild', () => {
       candidate: live,
       referenceDateIso: '2026-07-19',
     });
-    expect(secondFin.blocked).toBe(false);
+    expect(secondFin.blocked).toBe(true);
+    expect(secondFin.countedAsSuccess).toBe(false);
+    expect(secondFin.reason).toBe('summary_noop_after_normalization');
     expect(secondFin.text.trim()).toBe(live);
     expect(live === secondFin.text.trim()).toBe(true);
 

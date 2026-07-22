@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CVData } from '../types';
 import { formatExperienceBullets } from '../cv-canonical-facts';
-import { finalizeCvAiFieldForApply } from '../cv-ai-finalize-apply';
+import { finalizeCvAiFieldForApply, evaluateSummaryMeaningfulChange, SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION } from '../cv-ai-finalize-apply';
 import {
   analyzeHindiSummaryEmploymentQuality,
   scanHindiUnsupportedDesignMediumClaims,
@@ -32,6 +32,7 @@ import {
   clearCvAiDiagnosticHistory,
   CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
   CV_AI_DIAGNOSTIC_MAX_PAYLOAD_CHARS,
+  dedupeStableStrings,
   getCvAiDiagnosticHistory,
   maybeTruncateDiagnosticPayload,
 } from '../cv-ai-diagnostics-contract';
@@ -214,7 +215,7 @@ describe('cv-ai-diagnostics-v2 contract', () => {
       ]),
     );
 
-    const { trace } = runSummaryDiag(PROVIDER_TWO_SENTENCE);
+    const { fin, trace } = runSummaryDiag(PROVIDER_TWO_SENTENCE);
     expect(trace.diagnosticContractRevision).toBe(CV_AI_DIAGNOSTIC_CONTRACT_REVISION);
     expect(trace.finalCandidateSource).toBe('deterministic_fallback');
     expect(trace.diagnosticCompletenessPassed).toBe(true);
@@ -224,6 +225,10 @@ describe('cv-ai-diagnostics-v2 contract', () => {
     expect(typeof trace.deterministicUnsupportedDesignMediumCount).toBe('number');
     expect(Array.isArray(trace.hindiSentenceGrammarRecords)).toBe(true);
     expect(trace.cvAiDiagnosticsV2299Revision).toBe('cv-ai-diagnostics-v2-299-v1');
+    expect(fin.diagnostics?.summaryNoopSuccessContractRevision)
+      .toBe(SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION);
+    expect(trace.summaryNoopSuccessContractRevision)
+      .toBe(SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION);
     expect(trace.missingRequiredDiagnosticFields || []).toHaveLength(0);
   });
 
@@ -243,7 +248,11 @@ describe('cv-ai-diagnostics-v2 contract', () => {
       (c: { candidateKind?: string }) => c.candidateKind === 'client_deterministic',
     );
     expect(det).toBeTruthy();
-    expect(trace.providerOutcome).toMatch(/rejected_|server_deterministic/);
+    expect(trace.providerOutcome).toMatch(/rejected_/);
+    expect(trace.providerOutcome).not.toBe('server_deterministic_fallback');
+    expect(trace.serverFallbackUsed).toBe(false);
+    expect(trace.clientFallbackUsed).toBe(true);
+    expect(trace.clientFallbackKind).toBe('deterministic');
   });
 
   it('C: unsupported print — provider detected; final medium count 0', () => {
@@ -567,6 +576,187 @@ describe('cv-ai-diagnostics-v2 contract', () => {
     expect(trace.independentFinalDurationClaimCount).toBe(1);
     expect(trace.usageCountAfter).toBe(1);
     expect(trace.usageCountBefore).toBe(0);
+    expect(trace.meaningfulChangeDetected).toBe(true);
+    expect(trace.diagnosticInvariantCheckPassed).toBe(true);
+  });
+
+  it('T: AAB-299 device no-op — identical deterministic enhance is not success', () => {
+    clearSummaryAiDiagnosticsForTests();
+    // First build the deterministic safe Summary (generate from empty).
+    const emptyCv = fixtureCv({ summary: '' });
+    const generated = finalizeCvAiFieldForApply({
+      action: 'summary_generate',
+      field: 'summary',
+      requestedLocale: 'hi',
+      gender: 'female',
+      cv: emptyCv,
+      candidate: '',
+      referenceDateIso: '2026-07-19',
+    });
+    expect(generated.countedAsSuccess).toBe(true);
+    const safeSummary = (generated.text || '').trim();
+    expect(safeSummary.length).toBeGreaterThan(40);
+
+    const enhanceCv = fixtureCv({ summary: safeSummary });
+    const session = new SummaryAiDiagnosticSession({
+      uiLocale: 'en',
+      requestedLocale: 'hi',
+      contentLocale: 'hi',
+      templateId: 'modern',
+      requestId: 'aab299-noop',
+      usageCountBefore: 0,
+      gender: 'female',
+      operationMode: 'enhance_existing_content',
+    });
+    session.recordCvSnapshot(enhanceCv, safeSummary);
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_generate',
+      field: 'summary',
+      requestedLocale: 'hi',
+      gender: 'female',
+      cv: enhanceCv,
+      candidate: PROVIDER_WITH_PRINT,
+      referenceDateIso: '2026-07-19',
+    });
+    expect(fin.blocked).toBe(true);
+    expect(fin.countedAsSuccess).toBe(false);
+    expect(fin.reason).toBe('summary_noop_after_normalization');
+    expect((fin.text || '').trim()).toBe(safeSummary);
+    expect(fin.diagnostics?.providerPrintClaimDetected).toBe(true);
+    expect(fin.diagnostics?.noOpDetected).toBe(true);
+    expect(fin.diagnostics?.meaningfulChangeDetected).toBe(false);
+    expect(fin.diagnostics?.serverFallbackUsed).toBe(false);
+    expect(fin.diagnostics?.clientFallbackUsed).toBe(true);
+    expect(fin.diagnostics?.providerOutcome).toMatch(/rejected_/);
+    expect(fin.diagnostics?.providerOutcome).not.toBe('server_deterministic_fallback');
+    expect(fin.diagnostics?.hindiGrammarRejectionReason == null
+      || !String(fin.diagnostics?.hindiGrammarRejectionReason).includes('print')).toBe(true);
+
+    session.recordFinalizeResult(fin);
+    session.recordVisibleApply(false, 0);
+    const trace = session.commit();
+    expect(trace.visibleApplySucceeded).toBe(false);
+    expect(trace.countedAsSuccess).toBe(false);
+    expect(trace.usageCountBefore).toBe(0);
+    expect(trace.usageCountAfter).toBe(0);
+    expect(trace.noOpDetected).toBe(true);
+    expect(trace.diagnosticInvariantCheckPassed).toBe(true);
+    expect(trace.diagnosticCompletenessPassed).toBe(true);
+    expect(trace.capacitorServerUrlConfigured).toBe(false);
+    expect(typeof trace.apiBaseUrlConfigured).toBe('boolean');
+    expect(trace.sourceCommitStatus === 'embedded'
+      || trace.sourceCommitStatus === 'unavailable_by_contract').toBe(true);
+    const det = (trace.candidateLineage || []).find((c) => c.candidateKind === 'client_deterministic');
+    expect(det?.noOpDetected).toBe(true);
+    expect(det?.accepted).toBe(false);
+    const finalSel = (trace.candidateLineage || []).find((c) => c.candidateKind === 'final_selected');
+    expect(finalSel?.present).toBe(false);
+    expect(finalSel?.accepted).toBe(false);
+  });
+
+  it('U: formatting-only difference is a no-op; material wording is meaningful', () => {
+    const base = 'जनवरी 2023 से Atlas में वेयरहाउस कर्मचारी के रूप में कार्यरत हैं।';
+    const whitespaceOnly = `  ${base.replace(/।/g, '।  ')} \n`;
+    const fmt = evaluateSummaryMeaningfulChange(base, whitespaceOnly);
+    expect(fmt.noOpDetected).toBe(true);
+    expect(fmt.meaningfulChangeDetected).toBe(false);
+    expect(fmt.noOpRejectionReason).toBe('summary_noop_after_normalization');
+
+    const material = `${base} आने वाले माल की जाँच करती हैं।`;
+    const changed = evaluateSummaryMeaningfulChange(base, material);
+    expect(changed.meaningfulChangeDetected).toBe(true);
+    expect(changed.noOpDetected).toBe(false);
+  });
+
+  it('V: generate_empty accepts deterministic content without enhance no-op', () => {
+    const cv = fixtureCv({ summary: '' });
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_generate',
+      field: 'summary',
+      requestedLocale: 'hi',
+      gender: 'female',
+      cv,
+      candidate: '',
+      referenceDateIso: '2026-07-19',
+    });
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.blocked).toBe(false);
+    expect((fin.text || '').trim().length).toBeGreaterThan(20);
+    expect(fin.diagnostics?.noOpDetected).toBe(false);
+  });
+
+  it('W: rejection reasons are stably deduplicated', () => {
+    expect(dedupeStableStrings([
+      'unsupported_print_medium',
+      'unsupported_branding_claim',
+      'unsupported_print_medium',
+    ])).toEqual([
+      'unsupported_print_medium',
+      'unsupported_branding_claim',
+    ]);
+  });
+
+  it('X: completeness fails on unitCount/unitHashes mismatch and null commit without status', () => {
+    const bad = {
+      ...aab298IncompletePayload(),
+      diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+      meaningfulChangeDetected: true,
+      noOpDetected: false,
+      apiResponseKind: 'provider',
+      serverFallbackUsed: false,
+      clientFallbackUsed: true,
+      apiBaseUrlConfigured: true,
+      capacitorServerUrlConfigured: false,
+      sourceCommitStatus: 'embedded',
+      sourceCommitShort: null,
+      internalDiagnosticsEnabled: true,
+      candidateLineage: [{
+        candidateKind: 'provider',
+        present: true,
+        unitCount: 3,
+        unitHashes: [],
+        accepted: false,
+        rejectionReasons: [],
+      }],
+    };
+    const check = checkSummaryDiagnosticCompleteness(bad);
+    expect(check.passed).toBe(false);
+    expect(
+      check.nullRequiredDiagnosticFields.join(' ')
+      + check.missingRequiredDiagnosticFields.join(' '),
+    ).toMatch(/unitHashes|sourceCommitShort|hindi/);
+  });
+
+  it('Y: provider safe meaningful change selects provider', () => {
+    clearSummaryAiDiagnosticsForTests();
+    const baseCv = fixtureCv({ summary: 'पुराना अलग सारांश।' });
+    // Build a known-good deterministic text first, then use it as provider candidate.
+    const emptyCv = fixtureCv({ summary: '' });
+    const generated = finalizeCvAiFieldForApply({
+      action: 'summary_generate',
+      field: 'summary',
+      requestedLocale: 'hi',
+      gender: 'female',
+      cv: emptyCv,
+      candidate: '',
+      referenceDateIso: '2026-07-19',
+    });
+    expect(generated.countedAsSuccess).toBe(true);
+    const good = (generated.text || '').trim();
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_generate',
+      field: 'summary',
+      requestedLocale: 'hi',
+      gender: 'female',
+      cv: baseCv,
+      candidate: good,
+      referenceDateIso: '2026-07-19',
+    });
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.origin).toBe('ai_generated');
+    expect(fin.diagnostics?.meaningfulChangeDetected).toBe(true);
+    expect(fin.diagnostics?.clientFallbackUsed).toBe(false);
+    expect(fin.diagnostics?.providerOutcome).toBe('accepted');
   });
 });
 

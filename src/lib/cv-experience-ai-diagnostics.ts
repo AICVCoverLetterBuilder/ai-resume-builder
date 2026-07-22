@@ -27,7 +27,9 @@ import {
   buildCvAiDiagnosticBuildIdentity,
   checkExperienceDiagnosticCompleteness,
   checkExperienceDiagnosticInvariants,
+  classifyApiHostClass,
   CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+  CV_AI_DIAGNOSTICS_V2_299_REVISION,
   maybeTruncateDiagnosticPayload,
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
@@ -1592,8 +1594,14 @@ export class ExperienceAiDiagnosticSession {
   }
 
   commit(): ExperienceAiDiagnosticTrace {
+    const apiBase = getApiBaseUrl();
     const identity = buildCvAiDiagnosticBuildIdentity({
-      serverUrlConfigured: Boolean(getApiBaseUrl()),
+      assetRevision: INTERNAL_AI_RESET_ENABLED
+        ? CV_AI_DIAGNOSTICS_V2_299_REVISION
+        : null,
+      apiBaseUrlConfigured: Boolean(apiBase),
+      capacitorServerUrlConfigured: false,
+      apiHostClass: classifyApiHostClass(apiBase),
       internalBuildContractUsed: INTERNAL_AI_RESET_ENABLED ? true : false,
     });
     const base = {
@@ -1602,6 +1610,7 @@ export class ExperienceAiDiagnosticSession {
       marker: '',
       ...identity,
       diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+      cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
       operationKind: 'experience' as const,
       visibleDescriptionMatchesFinalHash:
         this.draft.visibleTextareaMatchesFinalNormalizedHash ?? null,

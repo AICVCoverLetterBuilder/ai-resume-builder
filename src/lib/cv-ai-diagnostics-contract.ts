@@ -127,17 +127,27 @@ export type CvAiCandidateLineageRecord = {
   hindiIncompleteSentenceCount?: number | null;
   hindiGrammarRejectionReasons?: string[];
   sentenceGrammarRecords?: CvAiDiagnosticSentenceGrammarRecord[];
+  meaningfulChangeDetected?: boolean | null;
+  finalMatchesSourceAfterNormalization?: boolean | null;
+  noOpDetected?: boolean | null;
+  noOpRejectionReason?: string | null;
 };
 
 export type CvAiDiagnosticBuildIdentity = {
   diagnosticContractRevision: typeof CV_AI_DIAGNOSTIC_CONTRACT_REVISION;
   compiledDiagnosticMarker: typeof CV_AI_DIAGNOSTIC_BUNDLE_MARKER;
   assetRevision: string;
+  cvAiDiagnosticsV2299Revision?: typeof CV_AI_DIAGNOSTICS_V2_299_REVISION;
   internalDiagnosticsEnabled: boolean;
   internalResetEnabled: boolean;
   internalBuildContractUsed: boolean | null;
+  /** @deprecated Prefer apiBaseUrlConfigured — historically aliased API base, not Capacitor server.url. */
   serverUrlConfigured: boolean;
+  apiBaseUrlConfigured: boolean;
+  capacitorServerUrlConfigured: boolean;
+  apiHostClass: 'production' | 'preview' | 'relative' | 'none' | 'unknown';
   sourceCommitShort: string | null;
+  sourceCommitStatus: 'embedded' | 'unavailable_by_contract';
 };
 
 export type CvAiDiagnosticInvariantFailure = {
@@ -163,22 +173,106 @@ export type CvAiDiagnosticHistoryItem = {
 export const CV_AI_DIAG_HISTORY_STORAGE_KEY = 'cvpro-cv-ai-diag-history-v1';
 const HISTORY_MAX_PER_KIND = 5;
 
+const GRAMMAR_REJECTION_CATEGORY_RE =
+  /^(nominal_experience_fragment|standalone_relative_fragment|missing_finite_copula|missing_finite_auxiliary|incomplete_sentence|current_intro_copula_missing|current_duty_auxiliary_missing|invalid_tense|invalid_gender_form|invalid_perspective)$/;
+const MEDIUM_OR_GROUNDING_REJECTION_RE =
+  /unsupported_(?:print|branding|marketing|design)_|unsupported_claim|cross_entry|cross_domain|stale_fact|hindi_summary_grounding|summary_grounding/;
+
+/** Stable first-seen dedupe for typed rejection / kind arrays. */
+export function dedupeStableStrings(values: readonly string[] | null | undefined): string[] {
+  if (!values || !values.length) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const v = String(raw || '').trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+export function isGrammarRejectionCategory(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return GRAMMAR_REJECTION_CATEGORY_RE.test(String(value));
+}
+
+export function isMediumOrGroundingRejectionCategory(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return MEDIUM_OR_GROUNDING_REJECTION_RE.test(String(value));
+}
+
+export function resolveSourceCommitShort(): {
+  sourceCommitShort: string | null;
+  sourceCommitStatus: 'embedded' | 'unavailable_by_contract';
+} {
+  const raw = (process.env.NEXT_PUBLIC_SOURCE_COMMIT_SHORT || '').trim();
+  if (/^[0-9a-f]{7,40}$/i.test(raw)) {
+    return { sourceCommitShort: raw.slice(0, 7).toLowerCase(), sourceCommitStatus: 'embedded' };
+  }
+  return { sourceCommitShort: null, sourceCommitStatus: 'unavailable_by_contract' };
+}
+
+export function classifyApiHostClass(apiBaseUrl: string): CvAiDiagnosticBuildIdentity['apiHostClass'] {
+  const base = (apiBaseUrl || '').trim();
+  if (!base) return 'relative';
+  try {
+    const host = new URL(base).hostname;
+    if (!host) return 'unknown';
+    if (host.includes('-git-') && host.endsWith('.vercel.app')) return 'preview';
+    if (host.endsWith('.vercel.app') || host.includes('ai-resume') || host.includes('cv')) {
+      return 'production';
+    }
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export function buildCvAiDiagnosticBuildIdentity(options?: {
   assetRevision?: string | null;
   sourceCommitShort?: string | null;
+  sourceCommitStatus?: 'embedded' | 'unavailable_by_contract';
+  /** @deprecated Use apiBaseUrlConfigured. */
   serverUrlConfigured?: boolean;
+  apiBaseUrlConfigured?: boolean;
+  capacitorServerUrlConfigured?: boolean;
+  apiHostClass?: CvAiDiagnosticBuildIdentity['apiHostClass'];
   internalBuildContractUsed?: boolean | null;
 }): CvAiDiagnosticBuildIdentity {
+  const commit = options?.sourceCommitShort != null
+    ? {
+      sourceCommitShort: options.sourceCommitShort,
+      sourceCommitStatus: options.sourceCommitStatus
+        || (options.sourceCommitShort ? 'embedded' as const : 'unavailable_by_contract' as const),
+    }
+    : resolveSourceCommitShort();
+  const apiConfigured = options?.apiBaseUrlConfigured
+    ?? options?.serverUrlConfigured
+    ?? false;
+  const capacitorConfigured = options?.capacitorServerUrlConfigured ?? false;
+  const assetRevision = options?.assetRevision
+    || (INTERNAL_AI_RESET_ENABLED ? CV_AI_DIAGNOSTICS_V2_299_REVISION : '')
+    || INTERNAL_AI_DIAGNOSTICS_REVISION
+    || 'unknown';
   return {
     diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
     compiledDiagnosticMarker: CV_AI_DIAGNOSTIC_BUNDLE_MARKER,
-    assetRevision: options?.assetRevision || INTERNAL_AI_DIAGNOSTICS_REVISION || 'unknown',
+    assetRevision,
+    cvAiDiagnosticsV2299Revision: INTERNAL_AI_RESET_ENABLED
+      ? CV_AI_DIAGNOSTICS_V2_299_REVISION
+      : undefined,
     internalDiagnosticsEnabled: Boolean(INTERNAL_AI_RESET_ENABLED),
     internalResetEnabled: Boolean(INTERNAL_AI_RESET_ENABLED),
     internalBuildContractUsed: options?.internalBuildContractUsed
       ?? (INTERNAL_AI_RESET_ENABLED ? true : false),
-    serverUrlConfigured: Boolean(options?.serverUrlConfigured),
-    sourceCommitShort: options?.sourceCommitShort ?? null,
+    serverUrlConfigured: Boolean(apiConfigured),
+    apiBaseUrlConfigured: Boolean(apiConfigured),
+    capacitorServerUrlConfigured: Boolean(capacitorConfigured),
+    apiHostClass: options?.apiHostClass
+      || (apiConfigured ? 'production' : (capacitorConfigured ? 'unknown' : 'relative')),
+    sourceCommitShort: commit.sourceCommitShort,
+    sourceCommitStatus: commit.sourceCommitStatus,
   };
 }
 
@@ -218,7 +312,9 @@ export function buildHindiSentenceGrammarRecords(input: {
       reasons.push('missing_finite_auxiliary');
     }
     if (!hasFinite && reasons.length === 0 && input.hindiGrammarRejectionReason) {
-      reasons.push(input.hindiGrammarRejectionReason);
+      if (isGrammarRejectionCategory(input.hindiGrammarRejectionReason)) {
+        reasons.push(input.hindiGrammarRejectionReason);
+      }
     }
     records.push({
       sentenceHash: hashes[i] || fingerprintText(`unit:${i}`),
@@ -229,7 +325,7 @@ export function buildHindiSentenceGrammarRecords(input: {
       nominalFragmentDetected: nominal,
       standaloneRelativeFragmentDetected: jahan,
       grammarPassed: hasFinite && reasons.length === 0,
-      grammarReasons: reasons,
+      grammarReasons: dedupeStableStrings(reasons),
     });
   }
   return records;
@@ -249,6 +345,8 @@ type SummaryLike = {
   grammarValidationPassed?: boolean;
   hindiIncompleteSentenceCount?: number | null;
   hindiNominalExperienceFragmentDetected?: boolean | null;
+  hindiGrammarRejectionReason?: string | null;
+  hindiGrammarRejectionReasons?: string[] | null;
   groundingValidationPassed?: boolean;
   unsupportedClaimCount?: number;
   finalUnsupportedDesignMediumCount?: number | null;
@@ -268,6 +366,27 @@ type SummaryLike = {
   internalDiagnosticsEnabled?: boolean;
   internalResetEnabled?: boolean;
   requestedLocale?: string;
+  operationMode?: string | null;
+  meaningfulChangeDetected?: boolean | null;
+  finalMatchesSourceAfterNormalization?: boolean | null;
+  noOpDetected?: boolean | null;
+  serverFallbackUsed?: boolean | null;
+  providerOutcome?: string | null;
+  clientFallbackUsed?: boolean | null;
+  candidateLineage?: Array<{
+    candidateKind?: string;
+    present?: boolean;
+    accepted?: boolean;
+    unitCount?: number;
+    unitHashes?: string[];
+    rejectionReasons?: string[];
+    diagnosticPayloadTruncated?: boolean;
+  }> | null;
+  sourceCommitShort?: string | null;
+  sourceCommitStatus?: string | null;
+  capacitorServerUrlConfigured?: boolean | null;
+  apiBaseUrlConfigured?: boolean | null;
+  diagnosticPayloadTruncated?: boolean | null;
 };
 
 export function checkSummaryDiagnosticInvariants(
@@ -388,6 +507,104 @@ export function checkSummaryDiagnosticInvariants(
     }
   }
 
+  const enhanceMode = String(trace.operationMode || '').includes('enhance');
+  if (enhanceMode && trace.countedAsSuccess && trace.meaningfulChangeDetected === false) {
+    push('enhance_success_without_meaningful_change', {
+      countedAsSuccess: true,
+      meaningfulChangeDetected: false,
+    });
+  }
+  if (enhanceMode
+    && trace.visibleApplySucceeded
+    && trace.finalMatchesSourceAfterNormalization === true) {
+    push('enhance_visible_apply_equals_source', {
+      visibleApplySucceeded: true,
+      finalMatchesSourceAfterNormalization: true,
+    });
+  }
+  if (trace.noOpDetected && (trace.usageCountAfter ?? 0) !== (trace.usageCountBefore ?? 0)) {
+    push('usage_changed_after_noop', {
+      usageCountBefore: trace.usageCountBefore ?? 0,
+      usageCountAfter: trace.usageCountAfter ?? 0,
+    });
+  }
+  if (trace.providerOutcome === 'server_deterministic_fallback'
+    && trace.serverFallbackUsed === false) {
+    push('provider_outcome_server_fallback_mismatch', {
+      providerOutcome: 'server_deterministic_fallback',
+      serverFallbackUsed: false,
+    });
+  }
+  const grammarReason = trace.hindiGrammarRejectionReason;
+  if (grammarReason && isMediumOrGroundingRejectionCategory(grammarReason)) {
+    push('grammar_reason_category_mismatch', {
+      hindiGrammarRejectionReason: grammarReason,
+    });
+  }
+  for (const r of trace.hindiGrammarRejectionReasons || []) {
+    if (isMediumOrGroundingRejectionCategory(r)) {
+      push('grammar_reason_category_mismatch', { hindiGrammarRejectionReason: r });
+      break;
+    }
+  }
+  for (const cand of trace.candidateLineage || []) {
+    const reasons = cand.rejectionReasons || [];
+    if (reasons.length !== dedupeStableStrings(reasons).length) {
+      push('duplicate_rejection_reason', {
+        candidateKind: cand.candidateKind || 'unknown',
+        rejectionReasonCount: reasons.length,
+      });
+    }
+    const unitCount = cand.unitCount ?? 0;
+    const hashes = cand.unitHashes || [];
+    if (cand.present && unitCount > 0 && hashes.length !== unitCount
+      && !trace.diagnosticPayloadTruncated) {
+      push('candidate_unit_hash_count_mismatch', {
+        candidateKind: cand.candidateKind || 'unknown',
+        unitCount,
+        unitHashCount: hashes.length,
+      });
+    }
+    if (cand.candidateKind === 'final_selected' && cand.present && cand.accepted === false) {
+      push('final_selected_not_accepted', {
+        candidateKind: 'final_selected',
+        accepted: false,
+      });
+    }
+    if (enhanceMode
+      && cand.candidateKind === 'final_selected'
+      && cand.present
+      && cand.accepted
+      && trace.noOpDetected) {
+      push('noop_candidate_selected_as_final', {
+        noOpDetected: true,
+        accepted: true,
+      });
+    }
+  }
+  if (trace.internalDiagnosticsEnabled
+    && trace.sourceCommitStatus !== 'unavailable_by_contract'
+    && (trace.sourceCommitShort == null || trace.sourceCommitShort === '')) {
+    push('required_build_identity_missing', {
+      sourceCommitShort: null,
+    });
+  }
+  if (trace.capacitorServerUrlConfigured === true
+    && trace.apiBaseUrlConfigured === false
+    && trace.serverFallbackUsed === false) {
+    // Capacitor remote URL true while API base false is allowed; mismatch is
+    // only when packaging claims Capacitor server.url is set but verifier says
+    // otherwise — handled by capacitor_server_url_state_mismatch when both set.
+  }
+  if (trace.countedAsSuccess
+    && (!trace.visibleApplySucceeded || !trace.finalCandidateSource)) {
+    push('success_without_final_selected_and_apply', {
+      countedAsSuccess: true,
+      visibleApplySucceeded: Boolean(trace.visibleApplySucceeded),
+      finalCandidateSource: trace.finalCandidateSource || null,
+    });
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -418,6 +635,14 @@ export function checkSummaryDiagnosticCompleteness(
   require('visibleApplySucceeded');
   require('usageCountBefore');
   require('usageCountAfter');
+  require('meaningfulChangeDetected');
+  require('noOpDetected');
+  require('apiResponseKind');
+  require('serverFallbackUsed');
+  require('clientFallbackUsed');
+  require('apiBaseUrlConfigured');
+  require('capacitorServerUrlConfigured');
+  require('sourceCommitStatus');
   const locale = String(trace.requestedLocale || '');
   if (locale === 'hi') {
     require('hindiNominalExperienceFragmentDetected');
@@ -438,10 +663,53 @@ export function checkSummaryDiagnosticCompleteness(
     require('summaryRepairAttempted');
   }
 
+  // Internal builds must not silently pass a required null commit without status.
+  if (trace.internalDiagnosticsEnabled === true) {
+    require('sourceCommitStatus');
+    if (trace.sourceCommitStatus === 'embedded') {
+      require('sourceCommitShort');
+    }
+    require('cvAiDiagnosticsV2299Revision');
+  }
+
+  const lineage = Array.isArray(trace.candidateLineage)
+    ? trace.candidateLineage as Array<Record<string, unknown>>
+    : [];
+  for (const cand of lineage) {
+    const unitCount = Number(cand.unitCount ?? 0);
+    const hashes = Array.isArray(cand.unitHashes) ? cand.unitHashes : null;
+    if (cand.present && unitCount > 0) {
+      if (!hashes) {
+        nullish.push(`candidateLineage.${String(cand.candidateKind || 'unknown')}.unitHashes`);
+      } else if (hashes.length !== unitCount && trace.diagnosticPayloadTruncated !== true) {
+        nullish.push(
+          `candidateLineage.${String(cand.candidateKind || 'unknown')}.unitHashes.length`,
+        );
+      }
+    }
+    if (cand.candidateKind === 'final_selected' || cand.candidateKind === 'client_deterministic') {
+      const sentenceCount = Number(cand.sentenceCount ?? unitCount);
+      const sentenceHashes = Array.isArray(cand.sentenceHashes) ? cand.sentenceHashes : null;
+      const slots = Array.isArray(cand.sentenceRoleSlots) ? cand.sentenceRoleSlots : null;
+      if (sentenceCount > 0 && sentenceHashes && sentenceHashes.length !== sentenceCount
+        && trace.diagnosticPayloadTruncated !== true) {
+        nullish.push(
+          `candidateLineage.${String(cand.candidateKind)}.sentenceHashes.length`,
+        );
+      }
+      if (sentenceCount > 0 && slots && slots.length !== sentenceCount
+        && trace.diagnosticPayloadTruncated !== true) {
+        nullish.push(
+          `candidateLineage.${String(cand.candidateKind)}.sentenceRoleSlots.length`,
+        );
+      }
+    }
+  }
+
   return {
     passed: missing.length === 0 && nullish.length === 0,
-    missingRequiredDiagnosticFields: missing,
-    nullRequiredDiagnosticFields: nullish,
+    missingRequiredDiagnosticFields: dedupeStableStrings(missing),
+    nullRequiredDiagnosticFields: dedupeStableStrings(nullish),
   };
 }
 

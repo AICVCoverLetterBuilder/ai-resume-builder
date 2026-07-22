@@ -368,6 +368,13 @@ const AI_NOOP: MsgMap = {
   hi: 'कोई सार्थक परिवर्तन नहीं हुआ, इसलिए कुछ लागू नहीं किया गया।',
   de: 'Es wurde keine sinnvolle Änderung erzeugt, daher wurde nichts übernommen.',
   ja: '意味のある変更がなかったため適用されませんでした。',
+  hr: 'Nije proizvedena smislena promjena, pa ništa nije primijenjeno.',
+  es: 'No se produjo ningún cambio significativo, así que no se aplicó nada.',
+  fr: 'Aucun changement significatif n’a été produit, donc rien n’a été appliqué.',
+  it: 'Non è stata prodotta alcuna modifica significativa, quindi non è stato applicato nulla.',
+  ar: 'لم يُنتَج أي تغيير ذي معنى، لذلك لم يُطبَّق شيء.',
+  ru: 'Существенных изменений не было, поэтому ничего не применено.',
+  'pt-BR': 'Nenhuma alteração significativa foi produzida, então nada foi aplicado.',
 };
 
 const AI_REQUEST_STALE: MsgMap = {
@@ -485,6 +492,7 @@ export function mapExperienceAiFailureToErrorCode(
       return 'stronger_content_generation_failed';
     case 'ai_noop':
     case 'experience_ai_noop':
+    case 'summary_noop_after_normalization':
       return 'ai_noop';
     case 'ai_request_stale':
       return 'ai_request_stale';

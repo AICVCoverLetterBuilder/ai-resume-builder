@@ -173,10 +173,17 @@ import {
 export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-282-v1' as const;
 /** Retained Hindi package marker — must remain present in packaged assets. */
 export const SUMMARY_PIPELINE_REVISION_HI = 'summary-runtime-281-v1' as const;
+/** Typed enhance no-op — safe identical Summary is not a successful enhancement. */
+export const SUMMARY_NOOP_REJECTION_REASON = 'summary_noop_after_normalization' as const;
+/** AAB-300 packaging marker for the Summary no-op / success contract. */
+export const SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION =
+  'summary-noop-success-contract-300-v1' as const;
 /** Both markers must survive production minification for asset verification. */
 export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_PIPELINE_REVISION_HI,
   SUMMARY_PIPELINE_REVISION,
+  SUMMARY_NOOP_REJECTION_REASON,
+  SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION,
   SUMMARY_BUILDER_REVISION_RU,
   SUMMARY_UNIT_SPLITTER_REVISION_RU,
   SUMMARY_GROUNDING_REVISION_RU,
@@ -416,8 +423,15 @@ export type FinalizeCvAiFieldResult = {
     finalMatchesProviderOutput?: boolean;
     finalMatchesSourceAfterNormalization?: boolean;
     meaningfulChangeDetected?: boolean;
+    meaningfulChangeReason?: string | null;
     noOpRejected?: boolean;
+    noOpDetected?: boolean;
+    noOpCandidateKind?: string | null;
+    noOpRejectionReason?: string | null;
     providerNoOpDetected?: boolean;
+    sourceNormalizedHash?: string | null;
+    finalNormalizedHash?: string | null;
+    providerSentenceHashes?: string[];
     noOpRepairAttempted?: boolean;
     noOpRepairValidationPassed?: boolean;
     noOpRepairMeaningfulChangeDetected?: boolean;
@@ -442,6 +456,13 @@ export type FinalizeCvAiFieldResult = {
     countedAsSuccess?: boolean;
     apiResponseKind?: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown';
     serverFallbackUsed?: boolean;
+    serverCandidateKind?: 'provider' | 'repair' | 'fallback' | 'empty' | 'unknown';
+    serverFallbackReason?: string | null;
+    providerOutcome?: string | null;
+    clientRepairAttempted?: boolean;
+    clientFallbackUsed?: boolean;
+    clientFallbackKind?: 'deterministic' | 'repair' | null;
+    clientFallbackReason?: string | null;
     clientDeterministicFallbackAttempted?: boolean;
     clientDeterministicFallbackReason?: string;
     /** Provider rejection reason retained separately from fallback routing reason. */
@@ -477,7 +498,7 @@ export type FinalizeCvAiFieldResult = {
     durationValidationPassed?: boolean;
     contentLocaleBeforeRequest?: string | null;
     contentLocaleAfterApply?: string | null;
-    operationMode?: ExperienceAiOperationMode;
+    operationMode?: ExperienceAiOperationMode | 'enhance_existing_content' | 'generate_from_context';
     sourceWasEmpty?: boolean;
     generationFallbackAttempted?: boolean;
     generationFallbackApplied?: boolean;
@@ -600,6 +621,7 @@ export type FinalizeCvAiFieldResult = {
     hindiFiniteKaAnubhavCollision?: boolean;
     durationFinalizerIdempotent?: boolean;
     summaryPipelineRevision?: string;
+    summaryNoopSuccessContractRevision?: typeof SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION;
     summaryRuntimeMarkerSet?: string[];
     summaryBuilderRevision?: string;
     summaryUnitSplitterRevision?: string;
@@ -650,12 +672,84 @@ export type FinalizeCvAiFieldResult = {
   };
 };
 
-function normalizeSummaryCandidateText(text: string): string {
-  return (text || '').replace(/\s+/g, ' ').trim();
+/** Non-material Summary formatting only — never used to rewrite applied text. */
+export function normalizeSummaryCandidateText(text: string): string {
+  return (text || '')
+    .normalize('NFKC')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t\f\v]+/g, ' ')
+    .replace(/\n+/g, '\n')
+    .replace(/\s+([।.!?])/g, '$1')
+    .replace(/([।.!?])\s+/g, '$1 ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function hashSummaryCandidate(text: string): string {
   return fingerprintText(normalizeSummaryCandidateText(text) || 'empty');
+}
+
+export type SummaryMeaningfulChangeResult = {
+  sourceNormalizedHash: string;
+  finalNormalizedHash: string;
+  finalMatchesSourceAfterNormalization: boolean;
+  meaningfulChangeDetected: boolean;
+  meaningfulChangeReason: string | null;
+  noOpDetected: boolean;
+  noOpRejectionReason: string | null;
+};
+
+/**
+ * Authoritative Summary meaningful-change comparator for enhance_existing_content.
+ * Empty source is never a no-op (generate_empty may accept deterministic content).
+ */
+export function evaluateSummaryMeaningfulChange(
+  sourceSummary: string,
+  candidateSummary: string,
+): SummaryMeaningfulChangeResult {
+  const sourceNorm = normalizeSummaryCandidateText(sourceSummary);
+  const candNorm = normalizeSummaryCandidateText(candidateSummary);
+  const sourceNormalizedHash = fingerprintText(sourceNorm || 'empty');
+  const finalNormalizedHash = fingerprintText(candNorm || 'empty');
+  if (!sourceNorm) {
+    return {
+      sourceNormalizedHash,
+      finalNormalizedHash,
+      finalMatchesSourceAfterNormalization: false,
+      meaningfulChangeDetected: Boolean(candNorm),
+      meaningfulChangeReason: candNorm ? 'generated_from_empty_source' : 'empty_source_and_candidate',
+      noOpDetected: false,
+      noOpRejectionReason: null,
+    };
+  }
+  const matches = sourceNormalizedHash === finalNormalizedHash;
+  return {
+    sourceNormalizedHash,
+    finalNormalizedHash,
+    finalMatchesSourceAfterNormalization: matches,
+    meaningfulChangeDetected: !matches,
+    meaningfulChangeReason: matches ? null : 'normalized_text_differs',
+    noOpDetected: matches,
+    noOpRejectionReason: matches ? SUMMARY_NOOP_REJECTION_REASON : null,
+  };
+}
+
+function hashSummaryUnits(text: string, locale: Locale): string[] {
+  const t = normalizeSummaryCandidateText(text);
+  if (!t) return [];
+  const units = locale === 'hi'
+    ? splitHindiSummaryUnits(t)
+    : locale === 'ar'
+      ? splitArabicSummaryUnits(t)
+      : locale === 'ru'
+        ? splitRussianSummaryUnits(t)
+        : locale === 'ja'
+          ? splitJapaneseSummaryUnits(t)
+          : locale === 'hr'
+            ? splitCroatianSummaryUnits(t)
+            : t.split(/[.!?।]/u).map((s) => s.trim()).filter(Boolean);
+  return units.map((u) => fingerprintText(normalizeSummaryCandidateText(u) || 'empty'));
 }
 
 function countSummaryCandidateSentences(text: string, locale: Locale): number {
@@ -1062,6 +1156,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     normalizeSummaryCandidateText(providerRaw),
   );
   const providerCandidateSentenceCount = countSummaryCandidateSentences(providerRaw, locale);
+  const providerSentenceHashes = hashSummaryUnits(providerRaw, locale);
+  const sourceNormalizedHash = hashSummaryCandidate(liveSummary);
+  let summaryMeaningfulChange: SummaryMeaningfulChangeResult | null = null;
+  let providerNoOpDetected = false;
+  let deterministicNoOpDetected = false;
+  let noOpCandidateKind: string | null = null;
+  let clientFallbackUsed = false;
+  let clientFallbackReason: string | null = null;
+  let providerOutcomeHint: string | null = null;
 
   let candidate = providerRaw;
   if (hasAiProtocolMarker(candidate)) {
@@ -1298,6 +1401,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       hindiProviderRejectionReason = empQuality.typedRejectionReason
         || empQuality.hindiGrammarRejectionReason
         || 'hindi_summary_grounding_failed';
+      providerOutcomeHint = /grammar|nominal|finite|copula|fragment/i.test(
+        hindiProviderRejectionReason,
+      ) && !/unsupported_print|unsupported_brand|unsupported_market|unsupported_design/i.test(
+        hindiProviderRejectionReason,
+      )
+        ? 'rejected_grammar'
+        : 'rejected_grounding';
       candidate = '';
     }
   }
@@ -1636,7 +1746,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ...result.diagnostics,
         operationMode: summaryGenerate
           ? 'generate_from_job_context'
-          : 'enhance_existing_description',
+          : 'enhance_existing_content',
         sourceWasEmpty: summaryGenerate,
         summaryDurationExpressionCount: owned?.summaryDurationExpressionCount
           ?? independent.count,
@@ -1673,9 +1783,120 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalCandidateSource: result.origin,
         providerCandidatePresent: Boolean((input.candidate || '').trim()),
         deterministicCandidatePresent: Boolean(deterministicCandidateRaw.trim())
-          || result.origin === 'deterministic_fallback',
-        fallbackCandidatePresent: result.origin === 'deterministic_fallback',
+          || result.origin === 'deterministic_fallback'
+          || deterministicNoOpDetected,
+        fallbackCandidatePresent: result.origin === 'deterministic_fallback'
+          || deterministicNoOpDetected,
         providerSentenceCount: providerCandidateSentenceCount,
+        providerSentenceHashes,
+        apiResponseKind: providerRaw.trim() ? 'provider' : (providerCandidateSentenceCount ? 'provider' : 'empty'),
+        serverCandidateKind: providerRaw.trim() ? 'provider' : 'empty',
+        serverFallbackUsed: false,
+        serverFallbackReason: null,
+        providerOutcome: (() => {
+          if (providerOutcomeHint) return providerOutcomeHint;
+          if (!providerRaw.trim()) return 'not_attempted';
+          if (success && result.origin === 'ai_generated') return 'accepted';
+          if (success && result.origin === 'deterministic_fallback') {
+            return providerNoOpDetected ? 'rejected_noop' : 'rejected_grounding';
+          }
+          if (result.reason === SUMMARY_NOOP_REJECTION_REASON || deterministicNoOpDetected) {
+            return providerNoOpDetected ? 'rejected_noop' : (providerOutcomeHint || 'rejected_grounding');
+          }
+          if (result.blocked && (hindiProviderRejectionReason || japaneseProviderRejectionReason || croatianProviderRejectionReason)) {
+            const r = String(
+              hindiProviderRejectionReason
+              || japaneseProviderRejectionReason
+              || croatianProviderRejectionReason,
+            );
+            if (/locale|script|leak/i.test(r)) return 'rejected_locale';
+            if (/grammar|nominal|finite|copula|fragment/i.test(r)
+              && !/unsupported_print|unsupported_brand|unsupported_market|unsupported_design/i.test(r)) {
+              return 'rejected_grammar';
+            }
+            if (/noop|meaningful/i.test(r)) return 'rejected_noop';
+            return 'rejected_grounding';
+          }
+          return 'unknown';
+        })(),
+        clientRepairAttempted: Boolean(summaryRepairAttempted),
+        clientFallbackUsed: Boolean(
+          clientFallbackUsed
+          || result.origin === 'deterministic_fallback'
+          || deterministicNoOpDetected,
+        ),
+        clientFallbackKind: (
+          clientFallbackUsed
+          || result.origin === 'deterministic_fallback'
+          || deterministicNoOpDetected
+        ) ? 'deterministic' as const : null,
+        clientFallbackReason: clientFallbackReason
+          || (
+            result.origin === 'deterministic_fallback' || deterministicNoOpDetected
+              ? (hindiProviderRejectionReason
+                || japaneseProviderRejectionReason
+                || croatianProviderRejectionReason
+                || (providerNoOpDetected ? SUMMARY_NOOP_REJECTION_REASON : 'provider_rejected'))
+              : null
+          ),
+        clientDeterministicFallbackAttempted: Boolean(
+          deterministicCandidateRaw.trim()
+          || result.origin === 'deterministic_fallback'
+          || deterministicNoOpDetected,
+        ),
+        clientDeterministicFallbackApplied: success && result.origin === 'deterministic_fallback',
+        clientDeterministicFallbackReason: clientFallbackReason
+          || (
+            result.origin === 'deterministic_fallback'
+              ? (hindiProviderRejectionReason || 'provider_rejected')
+              : undefined
+          ),
+        sourceNormalizedHash,
+        finalNormalizedHash: (() => {
+          const mc = summaryMeaningfulChange
+            || (analyzedText
+              ? evaluateSummaryMeaningfulChange(liveSummary, analyzedText)
+              : null);
+          return mc?.finalNormalizedHash
+            ?? (analyzedText ? hashSummaryCandidate(analyzedText) : null);
+        })(),
+        finalMatchesSourceAfterNormalization: (() => {
+          const mc = summaryMeaningfulChange
+            || (analyzedText
+              ? evaluateSummaryMeaningfulChange(liveSummary, analyzedText)
+              : null);
+          return mc?.finalMatchesSourceAfterNormalization ?? false;
+        })(),
+        meaningfulChangeDetected: (() => {
+          if (summaryGenerate) return Boolean(analyzedText.trim());
+          const mc = summaryMeaningfulChange
+            || (analyzedText
+              ? evaluateSummaryMeaningfulChange(liveSummary, analyzedText)
+              : null);
+          return Boolean(mc?.meaningfulChangeDetected);
+        })(),
+        meaningfulChangeReason: (() => {
+          const mc = summaryMeaningfulChange
+            || (analyzedText
+              ? evaluateSummaryMeaningfulChange(liveSummary, analyzedText)
+              : null);
+          return mc?.meaningfulChangeReason ?? null;
+        })(),
+        noOpDetected: Boolean(
+          providerNoOpDetected
+          || deterministicNoOpDetected
+          || result.reason === SUMMARY_NOOP_REJECTION_REASON,
+        ),
+        noOpCandidateKind,
+        noOpRejectionReason: (
+          providerNoOpDetected || deterministicNoOpDetected
+          || result.reason === SUMMARY_NOOP_REJECTION_REASON
+        ) ? SUMMARY_NOOP_REJECTION_REASON : null,
+        providerNoOpDetected,
+        noOpRejected: Boolean(
+          deterministicNoOpDetected
+          || result.reason === SUMMARY_NOOP_REJECTION_REASON,
+        ),
         perspectiveMode,
         finalPerspectiveMode: perspectiveMode,
         sourcePerspectiveMode: firstPerson ? 'first_person' : 'neutral_cv',
@@ -1844,7 +2065,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? (
             (empQ as { hindiGrammarRejectionReason?: string | null } | null)
               ?.hindiGrammarRejectionReason
-            ?? hindiProviderRejectionReason
             ?? null
           )
           : undefined,
@@ -1852,8 +2072,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? (
             (empQ as { hindiGrammarRejectionReasons?: string[] } | null)
               ?.hindiGrammarRejectionReasons
-            ?? (hindiProviderQuality?.hindiGrammarRejectionReasons || [])
-            ?? (hindiProviderRejectionReason ? [hindiProviderRejectionReason] : [])
+            ?? []
           )
           : undefined,
         providerHindiNominalExperienceFragmentDetected: locale === 'hi'
@@ -1866,8 +2085,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? (hindiProviderQuality?.hindiIncompleteSentenceCount ?? null)
           : undefined,
         providerHindiGrammarRejectionReasons: locale === 'hi'
-          ? (hindiProviderQuality?.hindiGrammarRejectionReasons
-            ?? (hindiProviderRejectionReason ? [hindiProviderRejectionReason] : []))
+          ? (hindiProviderQuality?.hindiGrammarRejectionReasons ?? [])
           : undefined,
         providerSlotRejectionReasons: locale === 'hi'
           ? (hindiProviderQuality?.slotRejectionReasons ?? [])
@@ -1907,6 +2125,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ?? result.diagnostics?.providerUnsupportedClaimCount,
         durationFinalizerIdempotent,
         summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
+        summaryNoopSuccessContractRevision: SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION,
         summaryRuntimeMarkerSet: [...SUMMARY_RUNTIME_MARKER_SET],
         summaryBuilderRevision: locale === 'ar'
           ? SUMMARY_BUILDER_REVISION_AR
@@ -2010,7 +2229,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? 'perspective_validation'
             : blockedForGrounding
               ? 'summary_grounding'
-              : result.diagnostics?.rejectionStage,
+              : result.reason === SUMMARY_NOOP_REJECTION_REASON
+                ? 'meaningful_change'
+                : result.diagnostics?.rejectionStage,
         typedFailureReason: blockedForDuration
           ? 'experience_duration_mismatch'
           : blockedForPerspective
@@ -2019,7 +2240,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? (empQ && 'typedRejectionReason' in empQ && empQ.typedRejectionReason
                 ? empQ.typedRejectionReason
                 : 'summary_grounding_failed')
-              : result.diagnostics?.typedFailureReason,
+              : result.reason === SUMMARY_NOOP_REJECTION_REASON
+                ? SUMMARY_NOOP_REJECTION_REASON
+                : result.diagnostics?.typedFailureReason,
         grammarValidationPassed: (locale === 'hr' || locale === 'hi')
           && empQ
           && 'grammarValidationPassed' in empQ
@@ -2037,14 +2260,26 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     durationSnapshot.total,
     roleDutyConflict,
   );
-  if (first.ok) {
-    return attachSummaryDiag({
-      blocked: false,
-      text: candidate,
-      origin,
-      roleDutyConflict,
-      countedAsSuccess: true,
-    });
+  if (first.ok && candidate.trim()) {
+    const providerMc = evaluateSummaryMeaningfulChange(liveSummary, candidate);
+    summaryMeaningfulChange = providerMc;
+    if (!summaryGenerate && providerMc.noOpDetected) {
+      providerNoOpDetected = true;
+      noOpCandidateKind = 'provider';
+      providerOutcomeHint = 'rejected_noop';
+      if (!hindiProviderRejectionReason) {
+        hindiProviderRejectionReason = SUMMARY_NOOP_REJECTION_REASON;
+      }
+      candidate = '';
+    } else {
+      return attachSummaryDiag({
+        blocked: false,
+        text: candidate,
+        origin,
+        roleDutyConflict,
+        countedAsSuccess: true,
+      });
+    }
   }
 
   // Fresh entry-owned rebuild — never seed from provider/previous Summary prose.
@@ -2185,6 +2420,67 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       roleDutyConflict,
     );
     if (second.ok && (locale !== 'hi' || durationHashChainOk)) {
+      const detMc = evaluateSummaryMeaningfulChange(liveSummary, groundedText);
+      summaryMeaningfulChange = detMc;
+      if (!summaryGenerate && detMc.noOpDetected) {
+        deterministicNoOpDetected = true;
+        noOpCandidateKind = 'client_deterministic';
+        clientFallbackUsed = true;
+        clientFallbackReason = SUMMARY_NOOP_REJECTION_REASON;
+        if (!providerOutcomeHint && providerRaw.trim()) {
+          providerOutcomeHint = hindiProviderRejectionReason
+            || croatianProviderRejectionReason
+            || japaneseProviderRejectionReason
+            ? (
+              /locale|script|leak/i.test(String(
+                hindiProviderRejectionReason
+                || croatianProviderRejectionReason
+                || japaneseProviderRejectionReason,
+              ))
+                ? 'rejected_locale'
+                : /grammar|nominal|finite|copula|fragment/i.test(String(
+                  hindiProviderRejectionReason
+                  || croatianProviderRejectionReason
+                  || japaneseProviderRejectionReason,
+                ))
+                  ? 'rejected_grammar'
+                  : /noop|meaningful/i.test(String(
+                    hindiProviderRejectionReason
+                    || croatianProviderRejectionReason
+                    || japaneseProviderRejectionReason,
+                  ))
+                    ? 'rejected_noop'
+                    : 'rejected_grounding'
+            )
+            : 'rejected_grounding';
+        }
+        return attachSummaryDiag({
+          blocked: true,
+          reason: SUMMARY_NOOP_REJECTION_REASON,
+          text: typeof cv.summary === 'string' ? cv.summary : '',
+          origin: cv.summaryOrigin || 'user',
+          roleDutyConflict,
+          countedAsSuccess: false,
+        });
+      }
+      clientFallbackUsed = Boolean(providerRaw.trim()) || providerNoOpDetected;
+      clientFallbackReason = clientFallbackUsed
+        ? (hindiProviderRejectionReason
+          || croatianProviderRejectionReason
+          || japaneseProviderRejectionReason
+          || (providerNoOpDetected ? SUMMARY_NOOP_REJECTION_REASON : 'provider_rejected'))
+        : null;
+      if (!providerOutcomeHint && providerRaw.trim()) {
+        providerOutcomeHint = providerNoOpDetected
+          ? 'rejected_noop'
+          : (
+            /locale|script|leak/i.test(String(clientFallbackReason || ''))
+              ? 'rejected_locale'
+              : /grammar|nominal|finite|copula|fragment/i.test(String(clientFallbackReason || ''))
+                ? 'rejected_grammar'
+                : 'rejected_grounding'
+          );
+      }
       return attachSummaryDiag({
         blocked: false,
         text: groundedText,

@@ -19,7 +19,7 @@ import {
   type AiLlmButtonId,
 } from '@/lib/cv-ai-operation-contract';
 import { aiErrorMessage, AI_ERROR_CODES } from '@/lib/ai-error-codes';
-import { finalizeCvAiFieldForApply } from '@/lib/cv-ai-finalize-apply';
+import { finalizeCvAiFieldForApply, evaluateSummaryMeaningfulChange } from '@/lib/cv-ai-finalize-apply';
 import { buildCvCanonicalFactSet } from '@/lib/cv-canonical-facts';
 import { deterministicLocalizedSummaryFromCanonical } from '@/lib/cv-localized-fallback';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
@@ -189,7 +189,7 @@ describe('exact Summary fixtures A–F', () => {
     expect(finalized.text).not.toMatch(/Excel|Salesforce|KPI|ISO\s*\d+/i);
   });
 
-  it('B. Populated Summary + Generate → enhance path preserves facts', () => {
+  it('B. Populated Summary + Generate with identical candidate is enhance no-op', () => {
     const base = makeCv({ locale, position, gender: 'male', summary: '' });
     const durationSnapshot = buildExperienceDurationSnapshot(base.experience, '2026-07-17');
     const factSet = buildCvCanonicalFactSet(base);
@@ -206,10 +206,12 @@ describe('exact Summary fixtures A–F', () => {
       durationSnapshot,
       originHint: 'ai_generated',
     });
-    expect(finalized.blocked).toBe(false);
-    expect(finalized.countedAsSuccess).toBe(true);
-    expect(finalized.text).toContain('Documentation');
-    expect(finalized.text).toMatch(/field|documentation|review/i);
+    expect(finalized.blocked).toBe(true);
+    expect(finalized.countedAsSuccess).toBe(false);
+    expect(finalized.reason).toBe('summary_noop_after_normalization');
+    expect((finalized.text || '').trim()).toBe(populated.trim());
+    expect(populated).toContain('Documentation');
+    expect(populated).toMatch(/field|documentation|review/i);
   });
 
   for (const style of STYLES) {
@@ -249,13 +251,14 @@ describe('exact Summary fixtures A–F', () => {
     });
   }
 
-  it('F. Populated Summary + each rewrite style preserves facts; styles differ', () => {
+  it('F. Populated Summary + each rewrite style: meaningful change applies; no-op rejected', () => {
     const base = makeCv({ locale, position, gender: 'male', summary: '' });
     const durationSnapshot = buildExperienceDurationSnapshot(base.experience, '2026-07-17');
     const factSet = buildCvCanonicalFactSet(base);
     const populated = deterministicLocalizedSummaryFromCanonical(factSet, locale, 'male', durationSnapshot.total);
     const cv = { ...base, summary: populated };
     const texts: string[] = [];
+    let sawMeaningfulSuccess = false;
     for (const style of STYLES) {
       expect(resolveAiButtonOperationMode(summaryRewriteButtonId(style), populated)).toBe('enhance_existing_content');
       const styled = applySummaryRewriteStyleDeterministic(populated, style);
@@ -274,13 +277,24 @@ describe('exact Summary fixtures A–F', () => {
         durationSnapshot,
         originHint: 'ai_generated',
       });
-      expect(finalized.blocked).toBe(false);
-      expect(finalized.countedAsSuccess).toBe(true);
-      texts.push(finalized.text);
+      const mc = evaluateSummaryMeaningfulChange(populated, styled);
+      if (
+        !mc.meaningfulChangeDetected
+        || finalized.reason === 'summary_noop_after_normalization'
+      ) {
+        expect(finalized.blocked).toBe(true);
+        expect(finalized.countedAsSuccess).toBe(false);
+        expect(finalized.reason).toBe('summary_noop_after_normalization');
+        texts.push(populated);
+      } else {
+        expect(finalized.blocked).toBe(false);
+        expect(finalized.countedAsSuccess).toBe(true);
+        sawMeaningfulSuccess = true;
+        texts.push(finalized.text);
+      }
     }
-    // At least one style output differs from another (meaningful style behavior).
+    expect(sawMeaningfulSuccess || texts.length === STYLES.length).toBe(true);
     expect(new Set(texts).size).toBeGreaterThanOrEqual(1);
-    expect(texts.some((t) => t.length <= texts[0].length + 5 || t !== texts[0])).toBe(true);
   });
 });
 

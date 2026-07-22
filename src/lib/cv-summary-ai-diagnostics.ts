@@ -19,12 +19,16 @@ import {
   buildHindiSentenceGrammarRecords,
   checkSummaryDiagnosticCompleteness,
   checkSummaryDiagnosticInvariants,
+  classifyApiHostClass,
   CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
   CV_AI_DIAGNOSTICS_V2_299_REVISION,
+  dedupeStableStrings,
+  isGrammarRejectionCategory,
   maybeTruncateDiagnosticPayload,
   type CvAiCandidateLineageRecord,
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
+import { getApiBaseUrl } from './api';
 
 export const SUMMARY_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const SUMMARY_AI_DIAG_STORAGE_KEY = 'cvpro-summary-ai-diag-v1';
@@ -228,7 +232,24 @@ export type SummaryAiDiagnosticTrace = {
   operationKind?: 'summary';
   apiResponseKind?: string | null;
   serverFallbackUsed?: boolean | null;
+  serverCandidateKind?: string | null;
+  serverFallbackReason?: string | null;
   providerOutcome?: string | null;
+  clientFallbackUsed?: boolean | null;
+  clientFallbackKind?: string | null;
+  clientFallbackReason?: string | null;
+  sourceNormalizedHash?: string | null;
+  finalNormalizedHash?: string | null;
+  finalMatchesSourceAfterNormalization?: boolean | null;
+  meaningfulChangeDetected?: boolean | null;
+  meaningfulChangeReason?: string | null;
+  noOpDetected?: boolean | null;
+  noOpCandidateKind?: string | null;
+  noOpRejectionReason?: string | null;
+  apiBaseUrlConfigured?: boolean;
+  capacitorServerUrlConfigured?: boolean;
+  apiHostClass?: string | null;
+  sourceCommitStatus?: string | null;
   providerRejectionReason?: string | null;
   providerTypedRejectionReason?: string | null;
   providerSlotRejectionReasons?: string[] | null;
@@ -245,6 +266,7 @@ export type SummaryAiDiagnosticTrace = {
   finalUnsupportedDesignMediumCount?: number | null;
   finalUnsupportedDesignMediumKinds?: string[] | null;
   cvAiDiagnosticsV2299Revision?: string | null;
+  summaryNoopSuccessContractRevision?: string | null;
   hindiCurrentIntroFiniteVerbPresent?: boolean | null;
   hindiCurrentIntroCopulaPresent?: boolean | null;
   hindiCurrentDutyFiniteVerbPresent?: boolean | null;
@@ -804,6 +826,7 @@ export class SummaryAiDiagnosticSession {
       finalUnsupportedDesignMediumCount: diag.finalUnsupportedDesignMediumCount ?? null,
       finalUnsupportedDesignMediumKinds: diag.finalUnsupportedDesignMediumKinds ?? null,
       cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
+      summaryNoopSuccessContractRevision: diag.summaryNoopSuccessContractRevision ?? null,
       hindiCurrentIntroFiniteVerbPresent: diag.hindiCurrentIntroFiniteVerbPresent ?? null,
       hindiCurrentIntroCopulaPresent: diag.hindiCurrentIntroCopulaPresent
         ?? diag.hindiCurrentIntroFiniteVerbPresent
@@ -815,16 +838,25 @@ export class SummaryAiDiagnosticSession {
       hindiNominalExperienceFragmentDetected: diag.hindiNominalExperienceFragmentDetected ?? null,
       hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb ?? null,
       hindiIncompleteSentenceCount: diag.hindiIncompleteSentenceCount ?? null,
-      hindiGrammarRejectionReason: diag.hindiGrammarRejectionReason ?? null,
-      hindiGrammarRejectionReasons: diag.hindiGrammarRejectionReasons
-        ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : null),
+      hindiGrammarRejectionReason: (() => {
+        const raw = diag.hindiGrammarRejectionReason ?? null;
+        return raw && isGrammarRejectionCategory(raw) ? raw : null;
+      })(),
+      hindiGrammarRejectionReasons: dedupeStableStrings(
+        (diag.hindiGrammarRejectionReasons
+          ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []))
+          .filter((r) => isGrammarRejectionCategory(r)),
+      ),
       hindiSentenceGrammarRecords: buildHindiSentenceGrammarRecords({
         sentenceHashes: diag.finalSentenceHashes,
         sentenceRoleSlots: diag.finalSentenceRoleSlots ?? diag.finalUnitRoleSlots,
         hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb,
         hindiNominalExperienceFragmentDetected: diag.hindiNominalExperienceFragmentDetected,
         hindiStandaloneJahanFragmentDetected: diag.hindiStandaloneJahanFragmentDetected,
-        hindiGrammarRejectionReason: diag.hindiGrammarRejectionReason,
+        hindiGrammarRejectionReason: (
+          diag.hindiGrammarRejectionReason
+          && isGrammarRejectionCategory(diag.hindiGrammarRejectionReason)
+        ) ? diag.hindiGrammarRejectionReason : null,
         hindiCurrentIntroFiniteVerbPresent: diag.hindiCurrentIntroFiniteVerbPresent,
         hindiCurrentDutyAuxiliaryPresent: diag.hindiCurrentDutyAuxiliaryPresent,
       }),
@@ -834,8 +866,10 @@ export class SummaryAiDiagnosticSession {
         diag.providerHindiSentenceHasFiniteCopulaOrVerb ?? null,
       providerHindiIncompleteSentenceCount:
         diag.providerHindiIncompleteSentenceCount ?? null,
-      providerHindiGrammarRejectionReasons:
-        diag.providerHindiGrammarRejectionReasons ?? null,
+      providerHindiGrammarRejectionReasons: dedupeStableStrings(
+        (diag.providerHindiGrammarRejectionReasons ?? [])
+          .filter((r) => isGrammarRejectionCategory(r)),
+      ),
       currentIntroSlotPresent: diag.currentIntroSlotPresent
         ?? (Array.isArray(diag.finalUnitRoleSlots)
           ? diag.finalUnitRoleSlots.includes('current_intro')
@@ -849,60 +883,109 @@ export class SummaryAiDiagnosticSession {
           ? diag.finalUnitRoleSlots.includes('prior_role')
           : null),
       slotValidationPassed: diag.slotValidationPassed ?? null,
-      slotRejectionReasons: diag.slotRejectionReasons ?? null,
+      slotRejectionReasons: dedupeStableStrings(diag.slotRejectionReasons ?? []),
       summaryRepairAttempted: diag.summaryRepairAttempted ?? null,
       repairAttempted: Boolean(diag.summaryRepairAttempted),
       repairApplied: Boolean(diag.summaryRepairApplied),
       apiResponseKind: diag.apiResponseKind
         ?? (diag.providerCandidatePresent ? 'provider' : 'unknown'),
-      serverFallbackUsed: Boolean(diag.serverFallbackUsed),
-      providerOutcome: (() => {
-        if (finalized.origin === 'deterministic_fallback') {
-          return diag.providerCandidatePresent === false
-            ? 'not_attempted'
-            : 'server_deterministic_fallback';
-        }
-        if (finalized.blocked || finalized.reason) {
-          if (diag.providerRejectionReason || diag.providerTypedRejectionReason) {
-            const r = String(diag.providerTypedRejectionReason || diag.providerRejectionReason || '');
-            if (/locale|script|leak/i.test(r)) return 'rejected_locale';
-            if (/ground|unsupported|medium|print/i.test(r)) return 'rejected_grounding';
-            if (/grammar|nominal|finite|copula|fragment/i.test(r)) return 'rejected_grammar';
-            if (/noop|no_op|meaningful/i.test(r)) return 'rejected_noop';
-            return 'unknown';
-          }
+      serverCandidateKind: diag.serverCandidateKind
+        ?? (diag.providerCandidatePresent ? 'provider' : 'empty'),
+      serverFallbackUsed: false,
+      serverFallbackReason: diag.serverFallbackReason ?? null,
+      clientFallbackUsed: Boolean(
+        diag.clientFallbackUsed
+        || finalized.origin === 'deterministic_fallback'
+        || diag.noOpDetected,
+      ),
+      clientFallbackKind: diag.clientFallbackKind
+        ?? (
+          (diag.clientFallbackUsed || finalized.origin === 'deterministic_fallback')
+            ? 'deterministic'
+            : null
+        ),
+      clientFallbackReason: diag.clientFallbackReason ?? null,
+      sourceNormalizedHash: diag.sourceNormalizedHash ?? null,
+      finalNormalizedHash: diag.finalNormalizedHash ?? null,
+      finalMatchesSourceAfterNormalization:
+        diag.finalMatchesSourceAfterNormalization ?? false,
+      meaningfulChangeDetected: diag.meaningfulChangeDetected
+        ?? (finalized.countedAsSuccess ? true : false),
+      meaningfulChangeReason: diag.meaningfulChangeReason ?? null,
+      noOpDetected: Boolean(
+        diag.noOpDetected
+        || diag.noOpRejected
+        || finalized.reason === 'summary_noop_after_normalization',
+      ),
+      noOpCandidateKind: diag.noOpCandidateKind ?? null,
+      noOpRejectionReason: diag.noOpRejectionReason
+        ?? (
+          finalized.reason === 'summary_noop_after_normalization'
+            ? 'summary_noop_after_normalization'
+            : null
+        ),
+      providerOutcome: diag.providerOutcome ?? (() => {
+        if (!diag.providerCandidatePresent && !diag.providerCandidateHash) {
+          return 'not_attempted';
         }
         if (finalized.countedAsSuccess && finalized.origin === 'ai_generated') return 'accepted';
+        if (diag.providerNoOpDetected || /noop|meaningful/i.test(String(diag.providerRejectionReason || ''))) {
+          return 'rejected_noop';
+        }
+        if (diag.providerRejectionReason || diag.providerTypedRejectionReason) {
+          const r = String(diag.providerTypedRejectionReason || diag.providerRejectionReason || '');
+          if (/locale|script|leak/i.test(r)) return 'rejected_locale';
+          if (/grammar|nominal|finite|copula|fragment/i.test(r)
+            && !/unsupported_print|unsupported_brand|unsupported_market|unsupported_design/i.test(r)) {
+            return 'rejected_grammar';
+          }
+          if (/ground|unsupported|medium|print|brand/i.test(r)) return 'rejected_grounding';
+          return 'rejected_grounding';
+        }
+        if (finalized.origin === 'deterministic_fallback') return 'rejected_grounding';
         return 'unknown';
       })(),
       candidateLineage: (() => {
         const lineage: CvAiCandidateLineageRecord[] = [];
         const providerPresent = Boolean(diag.providerCandidatePresent);
+        const providerUnitCount = typeof diag.providerCandidateSentenceCount === 'number'
+          ? diag.providerCandidateSentenceCount
+          : (typeof diag.providerSentenceCount === 'number' ? diag.providerSentenceCount : 0);
+        const providerHashes = Array.isArray(diag.providerSentenceHashes)
+          ? diag.providerSentenceHashes
+          : [];
+        const providerRejected = Boolean(
+          !finalized.countedAsSuccess
+          || finalized.origin === 'deterministic_fallback'
+          || diag.providerNoOpDetected
+          || diag.providerRejectionReason
+          || (diag.providerUnsupportedDesignMediumCount ?? 0) > 0,
+        );
+        const providerMc = Boolean(
+          diag.providerCandidateNormalizedHash
+          && diag.sourceNormalizedHash
+          && diag.providerCandidateNormalizedHash !== diag.sourceNormalizedHash,
+        );
         lineage.push({
           candidateKind: 'provider',
           present: providerPresent,
           hash: diag.providerCandidateHash ?? null,
           normalizedHash: diag.providerCandidateNormalizedHash ?? null,
-          unitCount: typeof diag.providerCandidateSentenceCount === 'number'
-            ? diag.providerCandidateSentenceCount
-            : (typeof diag.providerSentenceCount === 'number' ? diag.providerSentenceCount : 0),
-          unitHashes: [],
-          sentenceCount: typeof diag.providerCandidateSentenceCount === 'number'
-            ? diag.providerCandidateSentenceCount
-            : undefined,
+          unitCount: providerUnitCount,
+          unitHashes: providerHashes,
+          sentenceCount: providerUnitCount,
+          sentenceHashes: providerHashes,
           accepted: finalized.origin === 'ai_generated' && Boolean(finalized.countedAsSuccess),
           rejectionStage: diag.providerRejectionStage
-            ?? (finalized.origin === 'deterministic_fallback' && providerPresent
-              ? 'provider_validation'
-              : null),
-          rejectionReasons: [
+            ?? (providerRejected && providerPresent ? 'provider_validation' : null),
+          rejectionReasons: dedupeStableStrings([
             ...(diag.providerHindiGrammarRejectionReasons || []),
             ...(diag.providerSlotRejectionReasons || []),
             ...(diag.providerUnsupportedDesignMediumKinds || []),
             ...(diag.providerTypedRejectionReason
               ? [diag.providerTypedRejectionReason]
               : (diag.providerRejectionReason ? [diag.providerRejectionReason] : [])),
-          ].filter(Boolean),
+          ]),
           grammarValidationPassed: providerPresent
             ? (diag.providerHindiIncompleteSentenceCount != null
               ? diag.providerHindiIncompleteSentenceCount === 0
@@ -923,33 +1006,61 @@ export class SummaryAiDiagnosticSession {
           unsupportedClaimCount: diag.providerUnsupportedClaimCount ?? 0,
           unsupportedClaimKinds: [],
           unsupportedDesignMediumCount: diag.providerUnsupportedDesignMediumCount ?? 0,
-          unsupportedDesignMediumKinds: diag.providerUnsupportedDesignMediumKinds ?? [],
+          unsupportedDesignMediumKinds: dedupeStableStrings(
+            diag.providerUnsupportedDesignMediumKinds ?? [],
+          ),
           printClaimDetected: diag.providerPrintClaimDetected ?? false,
           hindiNominalExperienceFragmentDetected:
             diag.providerHindiNominalExperienceFragmentDetected ?? null,
           hindiSentenceHasFiniteCopulaOrVerb:
             diag.providerHindiSentenceHasFiniteCopulaOrVerb ?? null,
           hindiIncompleteSentenceCount: diag.providerHindiIncompleteSentenceCount ?? null,
-          hindiGrammarRejectionReasons: diag.providerHindiGrammarRejectionReasons ?? [],
+          hindiGrammarRejectionReasons: dedupeStableStrings(
+            (diag.providerHindiGrammarRejectionReasons ?? [])
+              .filter((r) => isGrammarRejectionCategory(r)),
+          ),
+          meaningfulChangeDetected: providerPresent ? providerMc : null,
+          finalMatchesSourceAfterNormalization: providerPresent ? !providerMc : null,
+          noOpDetected: Boolean(diag.providerNoOpDetected) || (providerPresent && !providerMc
+            && Boolean(diag.sourceNormalizedHash)),
+          noOpRejectionReason: diag.providerNoOpDetected
+            ? 'summary_noop_after_normalization'
+            : null,
         });
         const detPresent = Boolean(
           diag.deterministicCandidatePresent
-          || finalized.origin === 'deterministic_fallback',
+          || finalized.origin === 'deterministic_fallback'
+          || diag.noOpDetected,
         );
+        const detNoOp = Boolean(
+          diag.noOpDetected
+          || diag.noOpRejected
+          || (
+            detPresent
+            && diag.deterministicCandidateNormalizedHash
+            && diag.sourceNormalizedHash
+            && diag.deterministicCandidateNormalizedHash === diag.sourceNormalizedHash
+          ),
+        );
+        const detAccepted = finalized.origin === 'deterministic_fallback'
+          && Boolean(finalized.countedAsSuccess)
+          && !detNoOp;
+        const detHashes = diag.finalSentenceHashes || [];
         lineage.push({
           candidateKind: 'client_deterministic',
           present: detPresent,
           hash: diag.deterministicCandidateHash ?? null,
           normalizedHash: diag.deterministicCandidateNormalizedHash ?? null,
           unitCount: deterministicSentenceCount,
-          unitHashes: diag.finalSentenceHashes || [],
+          unitHashes: detHashes,
           sentenceCount: deterministicSentenceCount,
-          sentenceHashes: diag.finalSentenceHashes || [],
+          sentenceHashes: detHashes,
           sentenceRoleSlots: diag.finalSentenceRoleSlots || diag.finalUnitRoleSlots || [],
-          accepted: finalized.origin === 'deterministic_fallback'
-            && Boolean(finalized.countedAsSuccess),
-          rejectionStage: null,
-          rejectionReasons: [],
+          accepted: detAccepted,
+          rejectionStage: detNoOp ? 'meaningful_change' : null,
+          rejectionReasons: dedupeStableStrings(
+            detNoOp ? ['summary_noop_after_normalization'] : [],
+          ),
           grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'
             ? diag.grammarValidationPassed
             : null,
@@ -960,45 +1071,99 @@ export class SummaryAiDiagnosticSession {
           unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
           unsupportedClaimKinds: [],
           unsupportedDesignMediumCount: diag.finalUnsupportedDesignMediumCount ?? 0,
-          unsupportedDesignMediumKinds: diag.finalUnsupportedDesignMediumKinds ?? [],
+          unsupportedDesignMediumKinds: dedupeStableStrings(
+            diag.finalUnsupportedDesignMediumKinds ?? [],
+          ),
           printClaimDetected: false,
           hindiNominalExperienceFragmentDetected:
             diag.hindiNominalExperienceFragmentDetected ?? null,
           hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb ?? null,
           hindiIncompleteSentenceCount: diag.hindiIncompleteSentenceCount ?? null,
-          hindiGrammarRejectionReasons: diag.hindiGrammarRejectionReasons
-            ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []),
+          hindiGrammarRejectionReasons: dedupeStableStrings(
+            (diag.hindiGrammarRejectionReasons
+              ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []))
+              .filter((r) => isGrammarRejectionCategory(r)),
+          ),
+          meaningfulChangeDetected: detPresent ? !detNoOp : null,
+          finalMatchesSourceAfterNormalization: detPresent ? detNoOp : null,
+          noOpDetected: detNoOp,
+          noOpRejectionReason: detNoOp ? 'summary_noop_after_normalization' : null,
         });
+        const finalSelected = Boolean(
+          finalized.countedAsSuccess && text && !detNoOp
+          && !(diag.noOpDetected && !finalized.countedAsSuccess),
+        );
         lineage.push({
           candidateKind: 'final_selected',
-          present: Boolean(text),
-          hash: diag.finalValidatedCandidateHash ?? null,
-          normalizedHash: diag.finalValidatedCandidateHash ?? null,
-          unitCount: sentenceCount,
-          unitHashes: diag.finalSentenceHashes || [],
-          sentenceCount,
-          sentenceHashes: diag.finalSentenceHashes || [],
-          sentenceRoleSlots: diag.finalSentenceRoleSlots || diag.finalUnitRoleSlots || [],
-          accepted: Boolean(finalized.countedAsSuccess),
-          rejectionStage: finalized.blocked ? (diag.rejectionStage || 'final') : null,
-          rejectionReasons: finalized.reason ? [finalized.reason] : [],
-          grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'
-            ? diag.grammarValidationPassed
+          present: finalSelected,
+          hash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
+          normalizedHash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
+          unitCount: finalSelected ? sentenceCount : 0,
+          unitHashes: finalSelected ? (diag.finalSentenceHashes || []) : [],
+          sentenceCount: finalSelected ? sentenceCount : 0,
+          sentenceHashes: finalSelected ? (diag.finalSentenceHashes || []) : [],
+          sentenceRoleSlots: finalSelected
+            ? (diag.finalSentenceRoleSlots || diag.finalUnitRoleSlots || [])
+            : [],
+          accepted: finalSelected,
+          rejectionStage: finalSelected ? null : (
+            diag.noOpDetected || finalized.reason === 'summary_noop_after_normalization'
+              ? 'meaningful_change'
+              : (finalized.reason || null)
+          ),
+          rejectionReasons: dedupeStableStrings(
+            finalSelected
+              ? []
+              : [
+                finalized.reason || '',
+                diag.typedFailureReason || '',
+                diag.noOpRejectionReason || '',
+              ].filter(Boolean),
+          ),
+          grammarValidationPassed: finalSelected
+            ? (typeof diag.grammarValidationPassed === 'boolean'
+              ? diag.grammarValidationPassed
+              : null)
             : null,
-          groundingValidationPassed: Boolean(groundingValidationPassed),
-          durationValidationPassed,
-          slotValidationPassed: diag.slotValidationPassed ?? null,
-          localeValidationPassed: purity.targetLocalePurityPassed,
-          unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
+          groundingValidationPassed: finalSelected ? Boolean(groundingValidationPassed) : null,
+          durationValidationPassed: finalSelected ? durationValidationPassed : null,
+          slotValidationPassed: finalSelected ? (diag.slotValidationPassed ?? null) : null,
+          localeValidationPassed: finalSelected ? purity.targetLocalePurityPassed : null,
+          unsupportedClaimCount: finalSelected ? (diag.unsupportedClaimCount ?? 0) : 0,
           unsupportedClaimKinds: [],
-          unsupportedDesignMediumCount: diag.finalUnsupportedDesignMediumCount ?? 0,
-          unsupportedDesignMediumKinds: diag.finalUnsupportedDesignMediumKinds ?? [],
-          hindiNominalExperienceFragmentDetected:
-            diag.hindiNominalExperienceFragmentDetected ?? null,
-          hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb ?? null,
-          hindiIncompleteSentenceCount: diag.hindiIncompleteSentenceCount ?? null,
-          hindiGrammarRejectionReasons: diag.hindiGrammarRejectionReasons
-            ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []),
+          unsupportedDesignMediumCount: finalSelected
+            ? (diag.finalUnsupportedDesignMediumCount ?? 0)
+            : 0,
+          unsupportedDesignMediumKinds: finalSelected
+            ? dedupeStableStrings(diag.finalUnsupportedDesignMediumKinds ?? [])
+            : [],
+          printClaimDetected: false,
+          hindiNominalExperienceFragmentDetected: finalSelected
+            ? (diag.hindiNominalExperienceFragmentDetected ?? null)
+            : null,
+          hindiSentenceHasFiniteCopulaOrVerb: finalSelected
+            ? (diag.hindiSentenceHasFiniteCopulaOrVerb ?? null)
+            : null,
+          hindiIncompleteSentenceCount: finalSelected
+            ? (diag.hindiIncompleteSentenceCount ?? null)
+            : null,
+          hindiGrammarRejectionReasons: finalSelected
+            ? dedupeStableStrings(
+              (diag.hindiGrammarRejectionReasons
+                ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []))
+                .filter((r) => isGrammarRejectionCategory(r)),
+            )
+            : [],
+          meaningfulChangeDetected: finalSelected
+            ? Boolean(diag.meaningfulChangeDetected ?? true)
+            : false,
+          finalMatchesSourceAfterNormalization: finalSelected
+            ? Boolean(diag.finalMatchesSourceAfterNormalization)
+            : true,
+          noOpDetected: !finalSelected && Boolean(diag.noOpDetected),
+          noOpRejectionReason: !finalSelected && diag.noOpDetected
+            ? 'summary_noop_after_normalization'
+            : null,
         });
         return lineage;
       })(),
@@ -1082,9 +1247,14 @@ export class SummaryAiDiagnosticSession {
   }
 
   commit(): SummaryAiDiagnosticTrace {
+    const apiBase = getApiBaseUrl();
     const identity = buildCvAiDiagnosticBuildIdentity({
-      assetRevision: null,
-      serverUrlConfigured: true,
+      assetRevision: INTERNAL_AI_RESET_ENABLED
+        ? CV_AI_DIAGNOSTICS_V2_299_REVISION
+        : null,
+      apiBaseUrlConfigured: Boolean(apiBase),
+      capacitorServerUrlConfigured: false,
+      apiHostClass: classifyApiHostClass(apiBase),
       internalBuildContractUsed: INTERNAL_AI_RESET_ENABLED ? true : false,
     });
     const base = {
@@ -1093,9 +1263,12 @@ export class SummaryAiDiagnosticSession {
       marker: 'SUMMARY_AI_DIAG_V1',
       ...identity,
       diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+      cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
       operationKind: 'summary' as const,
     };
-    const invariants = checkSummaryDiagnosticInvariants(base);
+    const invariants = checkSummaryDiagnosticInvariants(
+      base as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
+    );
     const withInvariants = {
       ...base,
       diagnosticInvariantCheckPassed: invariants.passed,

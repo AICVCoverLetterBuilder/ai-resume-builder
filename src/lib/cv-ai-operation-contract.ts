@@ -383,6 +383,7 @@ export function mapAiOperationFailureToErrorCode(
       return 'stronger_content_generation_failed';
     case 'ai_noop':
     case 'experience_ai_noop':
+    case 'summary_noop_after_normalization':
       return 'ai_noop';
     case 'ai_request_stale':
       return 'ai_request_stale';

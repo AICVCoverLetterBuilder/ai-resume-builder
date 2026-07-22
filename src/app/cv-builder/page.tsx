@@ -1099,20 +1099,49 @@ export default function CVBuilderPage() {
         return;
       }
       const finalizedText = (finalizedGate.text || '').trim();
-      const identicalNoop = Boolean(finalizedText && finalizedText === liveSummaryAtPress);
-      if (identicalNoop) {
-        finishAiClientRequest({
+      const identicalNoop = Boolean(
+        finalizedText
+        && (
+          finalizedText === liveSummaryAtPress
+          || finalizedGate.reason === 'summary_noop_after_normalization'
+          || finalizedGate.diagnostics?.noOpDetected
+          || (
+            liveSummaryAtPress
+            && finalizedGate.diagnostics?.finalMatchesSourceAfterNormalization
+            && finalizedGate.diagnostics?.meaningfulChangeDetected === false
+          )
+        ),
+      );
+      if (identicalNoop || finalizedGate.reason === 'summary_noop_after_normalization') {
+        const failCode = mapExperienceAiFailureToErrorCode(
+          finalizedGate.reason || 'summary_noop_after_normalization',
+        );
+        const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
           countBefore,
           countAfter: countBefore,
           httpStatus: res.status,
-          error: null,
-          fallbackUsed: finalizedGate.origin === 'deterministic_fallback',
+          error: { code: failCode, httpStatus: 422 },
           responseSource: 'blocked',
         });
-        summaryDiag.recordFinalizeResult(finalizedGate);
-        summaryDiag.recordVisibleApply(true, countBefore, finalizedText);
+        summaryDiag.recordFinalizeResult({
+          ...finalizedGate,
+          blocked: true,
+          countedAsSuccess: false,
+          reason: finalizedGate.reason || 'summary_noop_after_normalization',
+          diagnostics: {
+            ...finalizedGate.diagnostics,
+            countedAsSuccess: false,
+            noOpDetected: true,
+            noOpRejectionReason: 'summary_noop_after_normalization',
+            meaningfulChangeDetected: false,
+            finalMatchesSourceAfterNormalization: true,
+            typedFailureReason: 'summary_noop_after_normalization',
+            rejectionStage: 'meaningful_change',
+          },
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
         await summaryDiag.resolveVersions();
         summaryDiag.commit();
         logAiLocaleTransitionDiagnostics({
@@ -1123,10 +1152,11 @@ export default function CVBuilderPage() {
           previousContentLocale,
           apiLocale: requestedLocale,
           finalValidationLocale: requestedLocale,
-          applied: true,
+          applied: false,
           reason: 'summary_ai_noop_identical',
           newContentLocale: requestedLocale,
         });
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));

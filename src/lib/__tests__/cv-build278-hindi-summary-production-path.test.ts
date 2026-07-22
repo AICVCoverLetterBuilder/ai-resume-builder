@@ -309,7 +309,7 @@ describe('build 278 Hindi Summary production-path wiring', () => {
     expect(first.applied).toBe(true);
     expect(first.usageAfter).toBe(1);
 
-    // Mirrors handleGenSummary identical-text no-op: finalize succeeds, usage stays +0.
+    // Mirrors handleGenSummary identical-text no-op: finalize rejects unchanged enhance.
     const live = (first.stateCv.summary || '').trim();
     const secondFin = finalizeCvAiFieldForApply({
       action: 'summary_generate',
@@ -320,10 +320,11 @@ describe('build 278 Hindi Summary production-path wiring', () => {
       candidate: live,
       referenceDateIso: '2026-07-19',
     });
-    expect(secondFin.blocked).toBe(false);
-    expect(secondFin.countedAsSuccess).toBe(true);
-    expect(secondFin.text.trim()).toBe(live);
-    const identicalNoop = secondFin.text.trim() === live;
+    expect(secondFin.blocked).toBe(true);
+    expect(secondFin.countedAsSuccess).toBe(false);
+    expect(secondFin.reason).toBe('summary_noop_after_normalization');
+    expect((secondFin.text || '').trim()).toBe(live);
+    const identicalNoop = (secondFin.text || '').trim() === live;
     expect(identicalNoop).toBe(true);
     const usageAfterNoop = identicalNoop ? 1 : 2; // countBefore was already 1
     expect(usageAfterNoop).toBe(1);

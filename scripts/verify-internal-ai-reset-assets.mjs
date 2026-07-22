@@ -134,6 +134,16 @@ const DIAG_FIELD_INVARIANT = 'diagnosticInvariantCheckPassed';
 const DIAG_FIELD_COMPLETENESS = 'diagnosticCompletenessPassed';
 const DIAG_FIELD_LINEAGE = 'candidateLineage';
 const DIAG_FIELD_SENTENCE_GRAMMAR = 'hindiSentenceGrammarRecords';
+const DIAG_FIELD_MEANINGFUL = 'meaningfulChangeDetected';
+const DIAG_FIELD_NOOP = 'noOpDetected';
+const DIAG_FIELD_CLIENT_FALLBACK = 'clientFallbackUsed';
+const DIAG_FIELD_CAPACITOR_URL = 'capacitorServerUrlConfigured';
+const DIAG_FIELD_API_BASE = 'apiBaseUrlConfigured';
+const DIAG_FIELD_SOURCE_COMMIT_STATUS = 'sourceCommitStatus';
+const DIAG_INVARIANT_ENHANCE_NOOP = 'enhance_success_without_meaningful_change';
+const DIAG_INVARIANT_PROVIDER_OUTCOME = 'provider_outcome_server_fallback_mismatch';
+const SUMMARY_NOOP_SUCCESS_CONTRACT_300 = 'summary-noop-success-contract-300-v1';
+const SUMMARY_NOOP_TYPED_REASON = 'summary_noop_after_normalization';
 const EXPERIENCE_AI_NOOP_RECOVERY = 'experience-ai-noop-recovery-293-v1';
 const EXPERIENCE_AI_UNSUPPORTED_EXPANSION = 'experience-ai-unsupported-expansion-295-v1';
 const EXPERIENCE_TITLE_PROJECTION = 'experience-title-projection-296-v1';
@@ -231,6 +241,16 @@ if (expect === 'enabled') {
     DIAG_FIELD_COMPLETENESS,
     DIAG_FIELD_LINEAGE,
     DIAG_FIELD_SENTENCE_GRAMMAR,
+    DIAG_FIELD_MEANINGFUL,
+    DIAG_FIELD_NOOP,
+    DIAG_FIELD_CLIENT_FALLBACK,
+    DIAG_FIELD_CAPACITOR_URL,
+    DIAG_FIELD_API_BASE,
+    DIAG_FIELD_SOURCE_COMMIT_STATUS,
+    DIAG_INVARIANT_ENHANCE_NOOP,
+    DIAG_INVARIANT_PROVIDER_OUTCOME,
+    SUMMARY_NOOP_SUCCESS_CONTRACT_300,
+    SUMMARY_NOOP_TYPED_REASON,
   ]) {
     if (!blob.includes(field)) {
       fail(`missing cv-ai-diagnostics-v2 field/marker "${field}"`);

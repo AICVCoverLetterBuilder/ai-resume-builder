@@ -266,7 +266,9 @@ describe('build 281 Hindi Summary live material + duration idempotence', () => {
       candidate: live,
       referenceDateIso: '2026-07-19',
     });
-    expect(secondFin.blocked).toBe(false);
+    expect(secondFin.blocked).toBe(true);
+    expect(secondFin.countedAsSuccess).toBe(false);
+    expect(secondFin.reason).toBe('summary_noop_after_normalization');
     expect(secondFin.text.trim()).toBe(live);
 
     const restarted = structuredClone(first.stateCv);
