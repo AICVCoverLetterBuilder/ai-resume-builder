@@ -8,10 +8,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  clearExperienceAiDiagnostics,
   copyExperienceAiDiagnosticsToClipboard,
   getLatestExperienceAiDiagnostic,
   summarizeExperienceAiDiagnostic,
 } from '@/lib/cv-experience-ai-diagnostics';
+import {
+  clearCvAiDiagnosticHistory,
+  getCvAiDiagnosticHistory,
+} from '@/lib/cv-ai-diagnostics-contract';
 import {
   EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL,
   EXPERIENCE_AI_COPY_FAIL,
@@ -37,9 +42,14 @@ export function InternalExperienceAiDiagnosticsPanel({
   refreshToken: number;
 }) {
   const [summary, setSummary] = useState<ReturnType<typeof summarizeExperienceAiDiagnostic>>(null);
+  const [full, setFull] = useState(getLatestExperienceAiDiagnostic());
+  const [history, setHistory] = useState(() => getCvAiDiagnosticHistory('experience'));
 
   useEffect(() => {
-    setSummary(summarizeExperienceAiDiagnostic(getLatestExperienceAiDiagnostic()));
+    const latest = getLatestExperienceAiDiagnostic();
+    setFull(latest);
+    setSummary(summarizeExperienceAiDiagnostic(latest));
+    setHistory(getCvAiDiagnosticHistory('experience'));
   }, [refreshToken]);
 
   const onCopy = useCallback(async () => {
@@ -48,6 +58,34 @@ export function InternalExperienceAiDiagnosticsPanel({
       ok ? EXPERIENCE_AI_COPY_OK : EXPERIENCE_AI_COPY_FAIL,
     );
   }, []);
+
+  const onClear = useCallback(() => {
+    clearExperienceAiDiagnostics();
+    setFull(null);
+    setSummary(null);
+    toast.success('Experience diagnostics cleared');
+  }, []);
+
+  const onClearHistory = useCallback(() => {
+    clearCvAiDiagnosticHistory('experience');
+    setHistory([]);
+    toast.success('Experience diagnostic history cleared');
+  }, []);
+
+  const warnings: string[] = [];
+  if (full) {
+    if (full.diagnosticInvariantCheckPassed === false) warnings.push('invariant check failed');
+    if (full.diagnosticCompletenessPassed === false) warnings.push('completeness check failed');
+    if (full.visibleApplySucceeded === false && full.countedAsSuccess) {
+      warnings.push('final apply failed');
+    }
+    if (full.stableEntryIdentityMatched === false) warnings.push('target entry mismatch');
+    if ((full.wrongLocaleBulletCount || 0) > 0) warnings.push('wrong locale');
+    if ((full.unsupportedClaimCount || 0) > 0) warnings.push('unsupported claim');
+    if ((full.usageCountAfter ?? 0) !== (full.usageCountBefore ?? 0) + (full.countedAsSuccess ? 1 : 0)) {
+      warnings.push('usage mismatch');
+    }
+  }
 
   return (
     <div
@@ -58,12 +96,33 @@ export function InternalExperienceAiDiagnosticsPanel({
       <span className="sr-only">{EXPERIENCE_AI_FIELD_FINAL_REASON}</span>
       <span className="sr-only">{EXPERIENCE_AI_FIELD_SOURCE_KIND}</span>
       <span className="sr-only">{EXPERIENCE_AI_FIELD_FALLBACK_COVERED}</span>
+      <span className="sr-only">cv-ai-diagnostics-v2</span>
       <h3 className="text-sm font-semibold">{EXPERIENCE_AI_SECTION_TITLE}</h3>
+      {warnings.length > 0 && (
+        <p
+          className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-300"
+          data-testid="experience-ai-diagnostics-warnings"
+        >
+          Warning: {warnings.join('; ')}
+        </p>
+      )}
       {summary ? (
         <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
           <div>
+            <dt className="inline font-medium text-foreground">operation: </dt>
+            <dd className="inline">experience</dd>
+          </div>
+          <div>
             <dt className="inline font-medium text-foreground">timestamp: </dt>
             <dd className="inline">{summary.timestamp}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium text-foreground">success: </dt>
+            <dd className="inline">{summary.success ? 'yes' : 'no'}</dd>
+          </div>
+          <div>
+            <dt className="inline font-medium text-foreground">final candidate source: </dt>
+            <dd className="inline">{summary.finalCandidateSource || 'n/a'}</dd>
           </div>
           <div>
             <dt className="inline font-medium text-foreground">locale: </dt>
@@ -94,6 +153,20 @@ export function InternalExperienceAiDiagnosticsPanel({
             <dd className="inline">{summary.finalScripts}</dd>
           </div>
           <div>
+            <dt className="inline font-medium text-foreground">invariant: </dt>
+            <dd className="inline">
+              {summary.invariantPassed == null ? 'n/a' : (summary.invariantPassed ? 'pass' : 'fail')}
+            </dd>
+          </div>
+          <div>
+            <dt className="inline font-medium text-foreground">completeness: </dt>
+            <dd className="inline">
+              {summary.completenessPassed == null
+                ? 'n/a'
+                : (summary.completenessPassed ? 'pass' : 'fail')}
+            </dd>
+          </div>
+          <div>
             <dt className="inline font-medium text-foreground">countedAsSuccess: </dt>
             <dd className="inline">{String(summary.countedAsSuccess)}</dd>
           </div>
@@ -103,6 +176,19 @@ export function InternalExperienceAiDiagnosticsPanel({
           No Experience AI attempt recorded yet. Run AI Improvements on Experience once.
         </p>
       )}
+      {history.length > 0 && (
+        <div className="mt-2 text-xs text-muted-foreground" data-testid="experience-ai-diag-history">
+          <p className="font-medium text-foreground">Recent Experience ops ({history.length}/5)</p>
+          <ul className="mt-1 list-disc pl-4">
+            {history.map((h) => (
+              <li key={`${h.timestamp}-${h.requestIdHash}`}>
+                {h.timestamp.slice(0, 19)} · {h.targetLocale} · {h.success ? 'ok' : 'fail'} ·{' '}
+                {h.finalCandidateSource || 'n/a'}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <button
         type="button"
         data-testid="experience-ai-diagnostics-copy"
@@ -110,6 +196,22 @@ export function InternalExperienceAiDiagnosticsPanel({
         onClick={onCopy}
       >
         {EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL}
+      </button>
+      <button
+        type="button"
+        data-testid="experience-ai-diagnostics-clear"
+        className="mt-2 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+        onClick={onClear}
+      >
+        Clear diagnostics
+      </button>
+      <button
+        type="button"
+        data-testid="experience-ai-diagnostics-clear-history"
+        className="mt-2 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+        onClick={onClearHistory}
+      >
+        Clear diagnostic history
       </button>
     </div>
   );

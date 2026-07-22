@@ -486,18 +486,40 @@ export type FinalizeCvAiFieldResult = {
     tenseValidationPassed?: boolean;
     grammarValidationPassed?: boolean;
     unsupportedClaimCount?: number;
+    sourcePrintFactPresent?: boolean;
+    sourceBrandingFactPresent?: boolean;
+    sourceMarketingFactPresent?: boolean;
     providerUnsupportedDesignMediumCount?: number;
     providerUnsupportedDesignMediumKinds?: string[];
     providerPrintClaimDetected?: boolean;
+    providerBrandingClaimDetected?: boolean;
+    providerMarketingClaimDetected?: boolean;
     finalUnsupportedDesignMediumCount?: number;
     finalUnsupportedDesignMediumKinds?: string[];
+    deterministicUnsupportedDesignMediumCount?: number;
+    deterministicUnsupportedDesignMediumKinds?: string[];
     hindiCurrentIntroFiniteVerbPresent?: boolean;
+    hindiCurrentIntroCopulaPresent?: boolean;
+    hindiCurrentDutyFiniteVerbPresent?: boolean;
     hindiCurrentDutyAuxiliaryPresent?: boolean;
+    hindiPriorRoleFiniteVerbPresent?: boolean;
     hindiStandaloneJahanFragmentDetected?: boolean;
     hindiNominalExperienceFragmentDetected?: boolean;
     hindiSentenceHasFiniteCopulaOrVerb?: boolean[];
     hindiIncompleteSentenceCount?: number;
     hindiGrammarRejectionReason?: string | null;
+    hindiGrammarRejectionReasons?: string[];
+    providerHindiNominalExperienceFragmentDetected?: boolean;
+    providerHindiSentenceHasFiniteCopulaOrVerb?: boolean[] | null;
+    providerHindiIncompleteSentenceCount?: number | null;
+    providerHindiGrammarRejectionReasons?: string[];
+    providerSlotRejectionReasons?: string[];
+    providerTypedRejectionReason?: string | null;
+    currentIntroSlotPresent?: boolean;
+    currentDutySlotPresent?: boolean;
+    priorRoleSlotPresent?: boolean;
+    slotValidationPassed?: boolean;
+    slotRejectionReasons?: string[];
     summaryRepairAttempted?: boolean;
     summaryRepairValidationPassed?: boolean | null;
     summaryRepairApplied?: boolean;
@@ -1064,6 +1086,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let japaneseProviderRejectionReason: string | null = null;
   let japaneseProviderUnsupportedClaimCount: number | null = null;
   let croatianProviderRejectionReason: string | null = null;
+  let hindiProviderQuality: ReturnType<typeof analyzeHindiSummaryEmploymentQuality> | null = null;
+  let hindiProviderRejectionReason: string | null = null;
   const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
     ? hashExperienceEntryId(entryDutiesForRole.currentEntryId)
     : null;
@@ -1267,6 +1291,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     });
     // Duplicate Atlas/current-role intros or genericized warehouse duties force rebuild.
     if (!empQuality.groundingValidationPassed && candidate.trim()) {
+      // Preserve provider-candidate validation for diagnostics before blanking.
+      // Contradiction fix: provider* medium/grammar fields must describe providerRaw,
+      // not the eventual deterministic final text.
+      hindiProviderQuality = empQuality;
+      hindiProviderRejectionReason = empQuality.typedRejectionReason
+        || empQuality.hindiGrammarRejectionReason
+        || 'hindi_summary_grounding_failed';
       candidate = '';
     }
   }
@@ -1691,19 +1722,56 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? (empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0
             : 0)
           : result.diagnostics?.unsupportedClaimCount,
-        providerUnsupportedDesignMediumCount: locale === 'hi' && empQ
-          && 'providerUnsupportedDesignMediumCount' in empQ
-          ? (empQ as { providerUnsupportedDesignMediumCount?: number })
-            .providerUnsupportedDesignMediumCount
+        // Provider-candidate medium/grammar (truthful lineage — not final text).
+        sourcePrintFactPresent: locale === 'hi'
+          ? Boolean(
+            hindiProviderQuality?.sourcePrintFactPresent
+            ?? (empQ as { sourcePrintFactPresent?: boolean } | null)?.sourcePrintFactPresent,
+          )
           : undefined,
-        providerUnsupportedDesignMediumKinds: locale === 'hi' && empQ
-          && 'providerUnsupportedDesignMediumKinds' in empQ
-          ? (empQ as { providerUnsupportedDesignMediumKinds?: string[] })
-            .providerUnsupportedDesignMediumKinds
+        sourceBrandingFactPresent: locale === 'hi'
+          ? Boolean(
+            hindiProviderQuality?.sourceBrandingFactPresent
+            ?? (empQ as { sourceBrandingFactPresent?: boolean } | null)?.sourceBrandingFactPresent,
+          )
           : undefined,
-        providerPrintClaimDetected: locale === 'hi' && empQ
-          && 'providerPrintClaimDetected' in empQ
-          ? Boolean((empQ as { providerPrintClaimDetected?: boolean }).providerPrintClaimDetected)
+        sourceMarketingFactPresent: locale === 'hi'
+          ? Boolean(
+            hindiProviderQuality?.sourceMarketingFactPresent
+            ?? (empQ as { sourceMarketingFactPresent?: boolean } | null)?.sourceMarketingFactPresent,
+          )
+          : undefined,
+        providerUnsupportedDesignMediumCount: locale === 'hi'
+          ? (hindiProviderQuality?.providerUnsupportedDesignMediumCount
+            ?? (empQ as { providerUnsupportedDesignMediumCount?: number } | null)
+              ?.providerUnsupportedDesignMediumCount
+            ?? 0)
+          : undefined,
+        providerUnsupportedDesignMediumKinds: locale === 'hi'
+          ? (hindiProviderQuality?.providerUnsupportedDesignMediumKinds
+            ?? (empQ as { providerUnsupportedDesignMediumKinds?: string[] } | null)
+              ?.providerUnsupportedDesignMediumKinds
+            ?? [])
+          : undefined,
+        providerPrintClaimDetected: locale === 'hi'
+          ? Boolean(
+            hindiProviderQuality?.providerPrintClaimDetected
+            ?? (empQ as { providerPrintClaimDetected?: boolean } | null)?.providerPrintClaimDetected,
+          )
+          : undefined,
+        providerBrandingClaimDetected: locale === 'hi'
+          ? Boolean(
+            hindiProviderQuality?.providerBrandingClaimDetected
+            ?? (empQ as { providerBrandingClaimDetected?: boolean } | null)
+              ?.providerBrandingClaimDetected,
+          )
+          : undefined,
+        providerMarketingClaimDetected: locale === 'hi'
+          ? Boolean(
+            hindiProviderQuality?.providerMarketingClaimDetected
+            ?? (empQ as { providerMarketingClaimDetected?: boolean } | null)
+              ?.providerMarketingClaimDetected,
+          )
           : undefined,
         finalUnsupportedDesignMediumCount: locale === 'hi' && empQ
           && 'finalUnsupportedDesignMediumCount' in empQ
@@ -1715,15 +1783,43 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? (empQ as { finalUnsupportedDesignMediumKinds?: string[] })
             .finalUnsupportedDesignMediumKinds
           : undefined,
+        deterministicUnsupportedDesignMediumCount: locale === 'hi'
+          && result.origin === 'deterministic_fallback'
+          && empQ
+          && 'finalUnsupportedDesignMediumCount' in empQ
+          ? (empQ as { finalUnsupportedDesignMediumCount?: number })
+            .finalUnsupportedDesignMediumCount
+          : undefined,
+        deterministicUnsupportedDesignMediumKinds: locale === 'hi'
+          && result.origin === 'deterministic_fallback'
+          && empQ
+          && 'finalUnsupportedDesignMediumKinds' in empQ
+          ? (empQ as { finalUnsupportedDesignMediumKinds?: string[] })
+            .finalUnsupportedDesignMediumKinds
+          : undefined,
         hindiCurrentIntroFiniteVerbPresent: locale === 'hi' && empQ
           && 'hindiCurrentIntroFiniteVerbPresent' in empQ
           ? Boolean((empQ as { hindiCurrentIntroFiniteVerbPresent?: boolean })
             .hindiCurrentIntroFiniteVerbPresent)
           : undefined,
+        hindiCurrentIntroCopulaPresent: locale === 'hi' && empQ
+          ? Boolean((empQ as { hindiCurrentIntroCopulaPresent?: boolean })
+            .hindiCurrentIntroCopulaPresent
+            ?? (empQ as { hindiCurrentIntroFiniteVerbPresent?: boolean })
+              .hindiCurrentIntroFiniteVerbPresent)
+          : undefined,
+        hindiCurrentDutyFiniteVerbPresent: locale === 'hi' && empQ
+          ? Boolean((empQ as { hindiCurrentDutyFiniteVerbPresent?: boolean })
+            .hindiCurrentDutyFiniteVerbPresent)
+          : undefined,
         hindiCurrentDutyAuxiliaryPresent: locale === 'hi' && empQ
           && 'hindiCurrentDutyAuxiliaryPresent' in empQ
           ? Boolean((empQ as { hindiCurrentDutyAuxiliaryPresent?: boolean })
             .hindiCurrentDutyAuxiliaryPresent)
+          : undefined,
+        hindiPriorRoleFiniteVerbPresent: locale === 'hi' && empQ
+          ? Boolean((empQ as { hindiPriorRoleFiniteVerbPresent?: boolean })
+            .hindiPriorRoleFiniteVerbPresent)
           : undefined,
         hindiStandaloneJahanFragmentDetected: locale === 'hi' && empQ
           && 'hindiStandaloneJahanFragmentDetected' in empQ
@@ -1744,15 +1840,67 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           && 'hindiIncompleteSentenceCount' in empQ
           ? (empQ as { hindiIncompleteSentenceCount?: number }).hindiIncompleteSentenceCount
           : undefined,
-        hindiGrammarRejectionReason: locale === 'hi' && empQ
-          && 'hindiGrammarRejectionReason' in empQ
-          ? (empQ as { hindiGrammarRejectionReason?: string | null }).hindiGrammarRejectionReason
+        hindiGrammarRejectionReason: locale === 'hi'
+          ? (
+            (empQ as { hindiGrammarRejectionReason?: string | null } | null)
+              ?.hindiGrammarRejectionReason
+            ?? hindiProviderRejectionReason
+            ?? null
+          )
+          : undefined,
+        hindiGrammarRejectionReasons: locale === 'hi'
+          ? (
+            (empQ as { hindiGrammarRejectionReasons?: string[] } | null)
+              ?.hindiGrammarRejectionReasons
+            ?? (hindiProviderQuality?.hindiGrammarRejectionReasons || [])
+            ?? (hindiProviderRejectionReason ? [hindiProviderRejectionReason] : [])
+          )
+          : undefined,
+        providerHindiNominalExperienceFragmentDetected: locale === 'hi'
+          ? Boolean(hindiProviderQuality?.hindiNominalExperienceFragmentDetected)
+          : undefined,
+        providerHindiSentenceHasFiniteCopulaOrVerb: locale === 'hi'
+          ? (hindiProviderQuality?.hindiSentenceHasFiniteCopulaOrVerb ?? null)
+          : undefined,
+        providerHindiIncompleteSentenceCount: locale === 'hi'
+          ? (hindiProviderQuality?.hindiIncompleteSentenceCount ?? null)
+          : undefined,
+        providerHindiGrammarRejectionReasons: locale === 'hi'
+          ? (hindiProviderQuality?.hindiGrammarRejectionReasons
+            ?? (hindiProviderRejectionReason ? [hindiProviderRejectionReason] : []))
+          : undefined,
+        providerSlotRejectionReasons: locale === 'hi'
+          ? (hindiProviderQuality?.slotRejectionReasons ?? [])
+          : undefined,
+        providerTypedRejectionReason: locale === 'hi'
+          ? (hindiProviderRejectionReason
+            || hindiProviderQuality?.typedRejectionReason
+            || null)
+          : (croatianProviderRejectionReason
+            || japaneseProviderRejectionReason
+            || result.diagnostics?.providerRejectionReason
+            || null),
+        currentIntroSlotPresent: locale === 'hi' && empQ
+          ? Boolean((empQ as { currentIntroSlotPresent?: boolean }).currentIntroSlotPresent)
+          : undefined,
+        currentDutySlotPresent: locale === 'hi' && empQ
+          ? Boolean((empQ as { currentDutySlotPresent?: boolean }).currentDutySlotPresent)
+          : undefined,
+        priorRoleSlotPresent: locale === 'hi' && empQ
+          ? Boolean((empQ as { priorRoleSlotPresent?: boolean }).priorRoleSlotPresent)
+          : undefined,
+        slotValidationPassed: locale === 'hi' && empQ
+          ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed)
+          : undefined,
+        slotRejectionReasons: locale === 'hi' && empQ
+          ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
           : undefined,
         summaryRepairAttempted,
         summaryRepairApplied: summaryRepairAttempted && success,
         summaryRepairValidationPassed: summaryRepairAttempted ? success : null,
         summaryDurationRepairApplied: durationRepairApplied,
-        providerRejectionReason: croatianProviderRejectionReason
+        providerRejectionReason: hindiProviderRejectionReason
+          || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
           || result.diagnostics?.providerRejectionReason,
         providerUnsupportedClaimCount: japaneseProviderUnsupportedClaimCount

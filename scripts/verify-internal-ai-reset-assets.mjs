@@ -124,6 +124,16 @@ const CROATIAN_SUMMARY_INTRO_GRAMMAR = 'croatian-summary-intro-grammar-292-v1';
 const HINDI_SUMMARY_MEDIUM_GRAMMAR_297 = 'hindi-summary-medium-grammar-297-v1';
 const HINDI_SUMMARY_NOMINAL_GRAMMAR = 'hindi-summary-nominal-grammar-298-v1';
 const INTERNAL_AI_DIAGNOSTICS_298 = 'internal-ai-diagnostics-298-v1';
+const CV_AI_DIAGNOSTICS_V2 = 'cv-ai-diagnostics-v2';
+const CV_AI_DIAGNOSTICS_V2_299 = 'cv-ai-diagnostics-v2-299-v1';
+const DIAG_FIELD_HINDI_NOMINAL = 'hindiNominalExperienceFragmentDetected';
+const DIAG_FIELD_HINDI_FINITE = 'hindiSentenceHasFiniteCopulaOrVerb';
+const DIAG_FIELD_FINAL_MEDIUM = 'finalUnsupportedDesignMediumCount';
+const DIAG_FIELD_DET_MEDIUM = 'deterministicUnsupportedDesignMediumCount';
+const DIAG_FIELD_INVARIANT = 'diagnosticInvariantCheckPassed';
+const DIAG_FIELD_COMPLETENESS = 'diagnosticCompletenessPassed';
+const DIAG_FIELD_LINEAGE = 'candidateLineage';
+const DIAG_FIELD_SENTENCE_GRAMMAR = 'hindiSentenceGrammarRecords';
 const EXPERIENCE_AI_NOOP_RECOVERY = 'experience-ai-noop-recovery-293-v1';
 const EXPERIENCE_AI_UNSUPPORTED_EXPANSION = 'experience-ai-unsupported-expansion-295-v1';
 const EXPERIENCE_TITLE_PROJECTION = 'experience-title-projection-296-v1';
@@ -210,7 +220,23 @@ if (expect === 'enabled') {
   if (!blob.includes(SUMMARY_AI_COPY)) {
     fail(`missing "${SUMMARY_AI_COPY}"`);
   }
-  log('OK enabled assets contain marker, button, build-channel labels, Experience AI + Summary AI trace markers, and Summary runtime revision markers');
+  for (const field of [
+    CV_AI_DIAGNOSTICS_V2,
+    CV_AI_DIAGNOSTICS_V2_299,
+    DIAG_FIELD_HINDI_NOMINAL,
+    DIAG_FIELD_HINDI_FINITE,
+    DIAG_FIELD_FINAL_MEDIUM,
+    DIAG_FIELD_DET_MEDIUM,
+    DIAG_FIELD_INVARIANT,
+    DIAG_FIELD_COMPLETENESS,
+    DIAG_FIELD_LINEAGE,
+    DIAG_FIELD_SENTENCE_GRAMMAR,
+  ]) {
+    if (!blob.includes(field)) {
+      fail(`missing cv-ai-diagnostics-v2 field/marker "${field}"`);
+    }
+  }
+  log('OK enabled assets contain marker, button, build-channel labels, Experience AI + Summary AI trace markers, Summary runtime revision markers, and cv-ai-diagnostics-v2 completeness fields');
 } else if (hasMarker) {
   fail(`enabled marker must be absent in disabled assets (${MARKER})`);
 } else if (blob.includes(EXPERIENCE_AI_TRACE_MARKER)) {

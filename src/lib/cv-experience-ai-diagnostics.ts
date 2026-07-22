@@ -21,6 +21,16 @@ import { detectTextLocale } from './cv-content-locale';
 import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { Locale } from './i18n/translations';
+import {
+  appendCvAiDiagnosticHistory,
+  assertCvAiDiagnosticPrivacy,
+  buildCvAiDiagnosticBuildIdentity,
+  checkExperienceDiagnosticCompleteness,
+  checkExperienceDiagnosticInvariants,
+  CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+  maybeTruncateDiagnosticPayload,
+} from './cv-ai-diagnostics-contract';
+import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const EXPERIENCE_AI_DIAG_STORAGE_KEY = 'cvpro-experience-ai-diag-v1';
@@ -303,6 +313,31 @@ export type ExperienceAiDiagnosticTrace = {
   requestIdHash: string;
   originalRequestJobContextHash: string;
   currentJobContextHash: string | null;
+  /** cv-ai-diagnostics-v2 additive */
+  diagnosticContractRevision?: string;
+  compiledDiagnosticMarker?: string;
+  assetRevision?: string;
+  internalDiagnosticsEnabled?: boolean;
+  internalResetEnabled?: boolean;
+  internalBuildContractUsed?: boolean | null;
+  serverUrlConfigured?: boolean;
+  sourceCommitShort?: string | null;
+  operationKind?: 'experience';
+  buildChannel?: string | null;
+  diagnosticInvariantCheckPassed?: boolean;
+  diagnosticInvariantFailureCount?: number;
+  diagnosticInvariantFailures?: Array<{
+    invariantCode: string;
+    observed: Record<string, string | number | boolean | null>;
+  }>;
+  diagnosticCompletenessPassed?: boolean;
+  missingRequiredDiagnosticFields?: string[];
+  nullRequiredDiagnosticFields?: string[];
+  diagnosticPayloadByteSize?: number;
+  diagnosticPayloadTruncated?: boolean;
+  privacyCheckPassed?: boolean;
+  diagnosticPrivacyViolations?: string[];
+  visibleDescriptionMatchesFinalHash?: boolean | null;
 };
 
 let latestTrace: ExperienceAiDiagnosticTrace | null = null;
@@ -1557,12 +1592,62 @@ export class ExperienceAiDiagnosticSession {
   }
 
   commit(): ExperienceAiDiagnosticTrace {
-    const trace = {
+    const identity = buildCvAiDiagnosticBuildIdentity({
+      serverUrlConfigured: Boolean(getApiBaseUrl()),
+      internalBuildContractUsed: INTERNAL_AI_RESET_ENABLED ? true : false,
+    });
+    const base = {
       ...this.draft,
       stages: [...this.stages],
       marker: '',
-    } as ExperienceAiDiagnosticTrace;
+      ...identity,
+      diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+      operationKind: 'experience' as const,
+      visibleDescriptionMatchesFinalHash:
+        this.draft.visibleTextareaMatchesFinalNormalizedHash ?? null,
+    };
+    const invariants = checkExperienceDiagnosticInvariants(base);
+    const withInvariants = {
+      ...base,
+      diagnosticInvariantCheckPassed: invariants.passed,
+      diagnosticInvariantFailureCount: invariants.failures.length,
+      diagnosticInvariantFailures: invariants.failures,
+    };
+    const completeness = checkExperienceDiagnosticCompleteness(
+      withInvariants as Record<string, unknown>,
+    );
+    const withCompleteness = {
+      ...withInvariants,
+      diagnosticCompletenessPassed: completeness.passed,
+      missingRequiredDiagnosticFields: completeness.missingRequiredDiagnosticFields,
+      nullRequiredDiagnosticFields: completeness.nullRequiredDiagnosticFields,
+    };
+    const privacy = assertCvAiDiagnosticPrivacy(withCompleteness);
+    const sized = maybeTruncateDiagnosticPayload({
+      ...withCompleteness,
+      diagnosticPrivacyViolations: privacy,
+      privacyCheckPassed: privacy.length === 0,
+    } as Record<string, unknown>);
+    const trace = sized as unknown as ExperienceAiDiagnosticTrace;
     persistExperienceAiDiagnostic(trace);
+    try {
+      appendCvAiDiagnosticHistory({
+        timestamp: trace.capturedAt || new Date().toISOString(),
+        requestIdHash: trace.requestIdHash || '',
+        operationKind: 'experience',
+        operationMode: trace.operationMode,
+        targetLocale: trace.requestedLocale,
+        success: Boolean(trace.countedAsSuccess),
+        finalCandidateSource: trace.finalCandidateSource,
+        finalTypedFailureReason: trace.finalTypedFailureReason,
+        invariantPassed: Boolean(trace.diagnosticInvariantCheckPassed),
+        completenessPassed: Boolean(trace.diagnosticCompletenessPassed),
+        usageCountBefore: trace.usageCountBefore,
+        usageCountAfter: trace.usageCountAfter,
+      });
+    } catch {
+      /* ignore */
+    }
     return trace;
   }
 }
@@ -1650,6 +1735,11 @@ export function clearExperienceAiDiagnosticsForTests(): void {
   }
 }
 
+/** Clear Experience diagnostics only — does not reset AI usage. */
+export function clearExperienceAiDiagnostics(): void {
+  clearExperienceAiDiagnosticsForTests();
+}
+
 /** Summary lines for the internal diagnostics modal (non-PII). */
 export function summarizeExperienceAiDiagnostic(
   trace: ExperienceAiDiagnosticTrace | null,
@@ -1663,6 +1753,11 @@ export function summarizeExperienceAiDiagnostic(
   providerFallbackCounts: string;
   finalScripts: string;
   countedAsSuccess: boolean;
+  finalCandidateSource: string | null;
+  invariantPassed: boolean | null;
+  completenessPassed: boolean | null;
+  success: boolean;
+  operationKind: string;
 } | null {
   if (!trace) return null;
   const failed = [...trace.stages].reverse().find((s) => s.result === 'fail');
@@ -1679,5 +1774,10 @@ export function summarizeExperienceAiDiagnostic(
     providerFallbackCounts: `${trace.providerBulletCount}/${trace.fallbackBulletCount}`,
     finalScripts: (trace.finalBulletScripts || []).join(',') || 'none',
     countedAsSuccess: trace.countedAsSuccess,
+    finalCandidateSource: trace.finalCandidateSource,
+    invariantPassed: trace.diagnosticInvariantCheckPassed ?? null,
+    completenessPassed: trace.diagnosticCompletenessPassed ?? null,
+    success: Boolean(trace.countedAsSuccess),
+    operationKind: 'experience',
   };
 }

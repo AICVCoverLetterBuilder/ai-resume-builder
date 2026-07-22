@@ -12,6 +12,19 @@ import {
   verifyIndependentFinalDurationCount,
 } from './cv-summary-duration-ownership';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
+import {
+  appendCvAiDiagnosticHistory,
+  assertCvAiDiagnosticPrivacy,
+  buildCvAiDiagnosticBuildIdentity,
+  buildHindiSentenceGrammarRecords,
+  checkSummaryDiagnosticCompleteness,
+  checkSummaryDiagnosticInvariants,
+  CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+  CV_AI_DIAGNOSTICS_V2_299_REVISION,
+  maybeTruncateDiagnosticPayload,
+  type CvAiCandidateLineageRecord,
+} from './cv-ai-diagnostics-contract';
+import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
 
 export const SUMMARY_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const SUMMARY_AI_DIAG_STORAGE_KEY = 'cvpro-summary-ai-diag-v1';
@@ -203,6 +216,82 @@ export type SummaryAiDiagnosticTrace = {
   finalTypedFailureReason: string | null;
   rejectionStage: string | null;
   stages: SummaryAiDiagStage[];
+  /** cv-ai-diagnostics-v2 additive contract fields */
+  diagnosticContractRevision?: string;
+  compiledDiagnosticMarker?: string;
+  assetRevision?: string;
+  internalDiagnosticsEnabled?: boolean;
+  internalResetEnabled?: boolean;
+  internalBuildContractUsed?: boolean | null;
+  serverUrlConfigured?: boolean;
+  sourceCommitShort?: string | null;
+  operationKind?: 'summary';
+  apiResponseKind?: string | null;
+  serverFallbackUsed?: boolean | null;
+  providerOutcome?: string | null;
+  providerRejectionReason?: string | null;
+  providerTypedRejectionReason?: string | null;
+  providerSlotRejectionReasons?: string[] | null;
+  sourcePrintFactPresent?: boolean | null;
+  sourceBrandingFactPresent?: boolean | null;
+  sourceMarketingFactPresent?: boolean | null;
+  providerUnsupportedDesignMediumCount?: number | null;
+  providerUnsupportedDesignMediumKinds?: string[] | null;
+  providerPrintClaimDetected?: boolean | null;
+  providerBrandingClaimDetected?: boolean | null;
+  providerMarketingClaimDetected?: boolean | null;
+  deterministicUnsupportedDesignMediumCount?: number | null;
+  deterministicUnsupportedDesignMediumKinds?: string[] | null;
+  finalUnsupportedDesignMediumCount?: number | null;
+  finalUnsupportedDesignMediumKinds?: string[] | null;
+  cvAiDiagnosticsV2299Revision?: string | null;
+  hindiCurrentIntroFiniteVerbPresent?: boolean | null;
+  hindiCurrentIntroCopulaPresent?: boolean | null;
+  hindiCurrentDutyFiniteVerbPresent?: boolean | null;
+  hindiCurrentDutyAuxiliaryPresent?: boolean | null;
+  hindiPriorRoleFiniteVerbPresent?: boolean | null;
+  hindiStandaloneJahanFragmentDetected?: boolean | null;
+  hindiNominalExperienceFragmentDetected?: boolean | null;
+  hindiSentenceHasFiniteCopulaOrVerb?: boolean[] | null;
+  hindiIncompleteSentenceCount?: number | null;
+  hindiGrammarRejectionReason?: string | null;
+  hindiGrammarRejectionReasons?: string[] | null;
+  hindiSentenceGrammarRecords?: Array<{
+    sentenceHash: string;
+    roleSlot: string;
+    hasFiniteVerb: boolean;
+    hasFiniteCopula: boolean;
+    hasRequiredAuxiliary: boolean;
+    nominalFragmentDetected: boolean;
+    standaloneRelativeFragmentDetected: boolean;
+    grammarPassed: boolean;
+    grammarReasons: string[];
+  }> | null;
+  providerHindiNominalExperienceFragmentDetected?: boolean | null;
+  providerHindiSentenceHasFiniteCopulaOrVerb?: boolean[] | null;
+  providerHindiIncompleteSentenceCount?: number | null;
+  providerHindiGrammarRejectionReasons?: string[] | null;
+  currentIntroSlotPresent?: boolean | null;
+  currentDutySlotPresent?: boolean | null;
+  priorRoleSlotPresent?: boolean | null;
+  slotValidationPassed?: boolean | null;
+  slotRejectionReasons?: string[] | null;
+  summaryRepairAttempted?: boolean | null;
+  candidateLineage?: unknown[] | null;
+  diagnosticInvariantCheckPassed?: boolean;
+  diagnosticInvariantFailureCount?: number;
+  diagnosticInvariantFailures?: Array<{
+    invariantCode: string;
+    observed: Record<string, string | number | boolean | null>;
+  }>;
+  diagnosticCompletenessPassed?: boolean;
+  missingRequiredDiagnosticFields?: string[];
+  nullRequiredDiagnosticFields?: string[];
+  unexpectedDiagnosticFieldTypes?: string[];
+  diagnosticPayloadByteSize?: number;
+  diagnosticPayloadTruncated?: boolean;
+  diagnosticPrivacyViolations?: string[];
+  privacyCheckPassed?: boolean;
 };
 
 let latestSummaryTrace: SummaryAiDiagnosticTrace | null = null;
@@ -685,6 +774,234 @@ export class SummaryAiDiagnosticSession {
         ?? null,
       contentLocaleAfterApply: diag.contentLocaleAfterApply ?? null,
       detectedSourceLocale: this.draft.detectedSourceLocale,
+      // cv-ai-diagnostics-v2 — propagate finalize Hindi/medium/slot lineage
+      operationKind: 'summary',
+      providerRejectionReason: diag.providerRejectionReason ?? null,
+      providerTypedRejectionReason: diag.providerTypedRejectionReason
+        ?? diag.providerRejectionReason
+        ?? null,
+      providerSlotRejectionReasons: diag.providerSlotRejectionReasons ?? null,
+      sourcePrintFactPresent: diag.sourcePrintFactPresent ?? null,
+      sourceBrandingFactPresent: diag.sourceBrandingFactPresent ?? null,
+      sourceMarketingFactPresent: diag.sourceMarketingFactPresent ?? null,
+      providerUnsupportedDesignMediumCount: diag.providerUnsupportedDesignMediumCount ?? null,
+      providerUnsupportedDesignMediumKinds: diag.providerUnsupportedDesignMediumKinds ?? null,
+      providerPrintClaimDetected: diag.providerPrintClaimDetected ?? null,
+      providerBrandingClaimDetected: diag.providerBrandingClaimDetected ?? null,
+      providerMarketingClaimDetected: diag.providerMarketingClaimDetected ?? null,
+      // When final is deterministic, final medium fields ARE the deterministic record.
+      // Never alias provider* from final text.
+      deterministicUnsupportedDesignMediumCount: (
+        (diag.finalCandidateSource ?? finalized.origin) === 'deterministic_fallback'
+          ? (diag.finalUnsupportedDesignMediumCount ?? 0)
+          : (diag.deterministicUnsupportedDesignMediumCount ?? null)
+      ),
+      deterministicUnsupportedDesignMediumKinds: (
+        (diag.finalCandidateSource ?? finalized.origin) === 'deterministic_fallback'
+          ? (diag.finalUnsupportedDesignMediumKinds ?? [])
+          : (diag.deterministicUnsupportedDesignMediumKinds ?? null)
+      ),
+      finalUnsupportedDesignMediumCount: diag.finalUnsupportedDesignMediumCount ?? null,
+      finalUnsupportedDesignMediumKinds: diag.finalUnsupportedDesignMediumKinds ?? null,
+      cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
+      hindiCurrentIntroFiniteVerbPresent: diag.hindiCurrentIntroFiniteVerbPresent ?? null,
+      hindiCurrentIntroCopulaPresent: diag.hindiCurrentIntroCopulaPresent
+        ?? diag.hindiCurrentIntroFiniteVerbPresent
+        ?? null,
+      hindiCurrentDutyFiniteVerbPresent: diag.hindiCurrentDutyFiniteVerbPresent ?? null,
+      hindiCurrentDutyAuxiliaryPresent: diag.hindiCurrentDutyAuxiliaryPresent ?? null,
+      hindiPriorRoleFiniteVerbPresent: diag.hindiPriorRoleFiniteVerbPresent ?? null,
+      hindiStandaloneJahanFragmentDetected: diag.hindiStandaloneJahanFragmentDetected ?? null,
+      hindiNominalExperienceFragmentDetected: diag.hindiNominalExperienceFragmentDetected ?? null,
+      hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb ?? null,
+      hindiIncompleteSentenceCount: diag.hindiIncompleteSentenceCount ?? null,
+      hindiGrammarRejectionReason: diag.hindiGrammarRejectionReason ?? null,
+      hindiGrammarRejectionReasons: diag.hindiGrammarRejectionReasons
+        ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : null),
+      hindiSentenceGrammarRecords: buildHindiSentenceGrammarRecords({
+        sentenceHashes: diag.finalSentenceHashes,
+        sentenceRoleSlots: diag.finalSentenceRoleSlots ?? diag.finalUnitRoleSlots,
+        hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb,
+        hindiNominalExperienceFragmentDetected: diag.hindiNominalExperienceFragmentDetected,
+        hindiStandaloneJahanFragmentDetected: diag.hindiStandaloneJahanFragmentDetected,
+        hindiGrammarRejectionReason: diag.hindiGrammarRejectionReason,
+        hindiCurrentIntroFiniteVerbPresent: diag.hindiCurrentIntroFiniteVerbPresent,
+        hindiCurrentDutyAuxiliaryPresent: diag.hindiCurrentDutyAuxiliaryPresent,
+      }),
+      providerHindiNominalExperienceFragmentDetected:
+        diag.providerHindiNominalExperienceFragmentDetected ?? null,
+      providerHindiSentenceHasFiniteCopulaOrVerb:
+        diag.providerHindiSentenceHasFiniteCopulaOrVerb ?? null,
+      providerHindiIncompleteSentenceCount:
+        diag.providerHindiIncompleteSentenceCount ?? null,
+      providerHindiGrammarRejectionReasons:
+        diag.providerHindiGrammarRejectionReasons ?? null,
+      currentIntroSlotPresent: diag.currentIntroSlotPresent
+        ?? (Array.isArray(diag.finalUnitRoleSlots)
+          ? diag.finalUnitRoleSlots.includes('current_intro')
+          : null),
+      currentDutySlotPresent: diag.currentDutySlotPresent
+        ?? (Array.isArray(diag.finalUnitRoleSlots)
+          ? diag.finalUnitRoleSlots.includes('current_duty')
+          : null),
+      priorRoleSlotPresent: diag.priorRoleSlotPresent
+        ?? (Array.isArray(diag.finalUnitRoleSlots)
+          ? diag.finalUnitRoleSlots.includes('prior_role')
+          : null),
+      slotValidationPassed: diag.slotValidationPassed ?? null,
+      slotRejectionReasons: diag.slotRejectionReasons ?? null,
+      summaryRepairAttempted: diag.summaryRepairAttempted ?? null,
+      repairAttempted: Boolean(diag.summaryRepairAttempted),
+      repairApplied: Boolean(diag.summaryRepairApplied),
+      apiResponseKind: diag.apiResponseKind
+        ?? (diag.providerCandidatePresent ? 'provider' : 'unknown'),
+      serverFallbackUsed: Boolean(diag.serverFallbackUsed),
+      providerOutcome: (() => {
+        if (finalized.origin === 'deterministic_fallback') {
+          return diag.providerCandidatePresent === false
+            ? 'not_attempted'
+            : 'server_deterministic_fallback';
+        }
+        if (finalized.blocked || finalized.reason) {
+          if (diag.providerRejectionReason || diag.providerTypedRejectionReason) {
+            const r = String(diag.providerTypedRejectionReason || diag.providerRejectionReason || '');
+            if (/locale|script|leak/i.test(r)) return 'rejected_locale';
+            if (/ground|unsupported|medium|print/i.test(r)) return 'rejected_grounding';
+            if (/grammar|nominal|finite|copula|fragment/i.test(r)) return 'rejected_grammar';
+            if (/noop|no_op|meaningful/i.test(r)) return 'rejected_noop';
+            return 'unknown';
+          }
+        }
+        if (finalized.countedAsSuccess && finalized.origin === 'ai_generated') return 'accepted';
+        return 'unknown';
+      })(),
+      candidateLineage: (() => {
+        const lineage: CvAiCandidateLineageRecord[] = [];
+        const providerPresent = Boolean(diag.providerCandidatePresent);
+        lineage.push({
+          candidateKind: 'provider',
+          present: providerPresent,
+          hash: diag.providerCandidateHash ?? null,
+          normalizedHash: diag.providerCandidateNormalizedHash ?? null,
+          unitCount: typeof diag.providerCandidateSentenceCount === 'number'
+            ? diag.providerCandidateSentenceCount
+            : (typeof diag.providerSentenceCount === 'number' ? diag.providerSentenceCount : 0),
+          unitHashes: [],
+          sentenceCount: typeof diag.providerCandidateSentenceCount === 'number'
+            ? diag.providerCandidateSentenceCount
+            : undefined,
+          accepted: finalized.origin === 'ai_generated' && Boolean(finalized.countedAsSuccess),
+          rejectionStage: diag.providerRejectionStage
+            ?? (finalized.origin === 'deterministic_fallback' && providerPresent
+              ? 'provider_validation'
+              : null),
+          rejectionReasons: [
+            ...(diag.providerHindiGrammarRejectionReasons || []),
+            ...(diag.providerSlotRejectionReasons || []),
+            ...(diag.providerUnsupportedDesignMediumKinds || []),
+            ...(diag.providerTypedRejectionReason
+              ? [diag.providerTypedRejectionReason]
+              : (diag.providerRejectionReason ? [diag.providerRejectionReason] : [])),
+          ].filter(Boolean),
+          grammarValidationPassed: providerPresent
+            ? (diag.providerHindiIncompleteSentenceCount != null
+              ? diag.providerHindiIncompleteSentenceCount === 0
+                && !diag.providerHindiNominalExperienceFragmentDetected
+              : null)
+            : null,
+          groundingValidationPassed: providerPresent
+            ? ((diag.providerUnsupportedDesignMediumCount ?? 0) === 0
+              && (diag.providerUnsupportedClaimCount ?? 0) === 0
+              ? true
+              : false)
+            : null,
+          durationValidationPassed: null,
+          slotValidationPassed: providerPresent
+            ? ((diag.providerSlotRejectionReasons || []).length === 0 ? true : false)
+            : null,
+          localeValidationPassed: null,
+          unsupportedClaimCount: diag.providerUnsupportedClaimCount ?? 0,
+          unsupportedClaimKinds: [],
+          unsupportedDesignMediumCount: diag.providerUnsupportedDesignMediumCount ?? 0,
+          unsupportedDesignMediumKinds: diag.providerUnsupportedDesignMediumKinds ?? [],
+          printClaimDetected: diag.providerPrintClaimDetected ?? false,
+          hindiNominalExperienceFragmentDetected:
+            diag.providerHindiNominalExperienceFragmentDetected ?? null,
+          hindiSentenceHasFiniteCopulaOrVerb:
+            diag.providerHindiSentenceHasFiniteCopulaOrVerb ?? null,
+          hindiIncompleteSentenceCount: diag.providerHindiIncompleteSentenceCount ?? null,
+          hindiGrammarRejectionReasons: diag.providerHindiGrammarRejectionReasons ?? [],
+        });
+        const detPresent = Boolean(
+          diag.deterministicCandidatePresent
+          || finalized.origin === 'deterministic_fallback',
+        );
+        lineage.push({
+          candidateKind: 'client_deterministic',
+          present: detPresent,
+          hash: diag.deterministicCandidateHash ?? null,
+          normalizedHash: diag.deterministicCandidateNormalizedHash ?? null,
+          unitCount: deterministicSentenceCount,
+          unitHashes: diag.finalSentenceHashes || [],
+          sentenceCount: deterministicSentenceCount,
+          sentenceHashes: diag.finalSentenceHashes || [],
+          sentenceRoleSlots: diag.finalSentenceRoleSlots || diag.finalUnitRoleSlots || [],
+          accepted: finalized.origin === 'deterministic_fallback'
+            && Boolean(finalized.countedAsSuccess),
+          rejectionStage: null,
+          rejectionReasons: [],
+          grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'
+            ? diag.grammarValidationPassed
+            : null,
+          groundingValidationPassed: Boolean(groundingValidationPassed),
+          durationValidationPassed,
+          slotValidationPassed: diag.slotValidationPassed ?? null,
+          localeValidationPassed: purity.targetLocalePurityPassed,
+          unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
+          unsupportedClaimKinds: [],
+          unsupportedDesignMediumCount: diag.finalUnsupportedDesignMediumCount ?? 0,
+          unsupportedDesignMediumKinds: diag.finalUnsupportedDesignMediumKinds ?? [],
+          printClaimDetected: false,
+          hindiNominalExperienceFragmentDetected:
+            diag.hindiNominalExperienceFragmentDetected ?? null,
+          hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb ?? null,
+          hindiIncompleteSentenceCount: diag.hindiIncompleteSentenceCount ?? null,
+          hindiGrammarRejectionReasons: diag.hindiGrammarRejectionReasons
+            ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []),
+        });
+        lineage.push({
+          candidateKind: 'final_selected',
+          present: Boolean(text),
+          hash: diag.finalValidatedCandidateHash ?? null,
+          normalizedHash: diag.finalValidatedCandidateHash ?? null,
+          unitCount: sentenceCount,
+          unitHashes: diag.finalSentenceHashes || [],
+          sentenceCount,
+          sentenceHashes: diag.finalSentenceHashes || [],
+          sentenceRoleSlots: diag.finalSentenceRoleSlots || diag.finalUnitRoleSlots || [],
+          accepted: Boolean(finalized.countedAsSuccess),
+          rejectionStage: finalized.blocked ? (diag.rejectionStage || 'final') : null,
+          rejectionReasons: finalized.reason ? [finalized.reason] : [],
+          grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'
+            ? diag.grammarValidationPassed
+            : null,
+          groundingValidationPassed: Boolean(groundingValidationPassed),
+          durationValidationPassed,
+          slotValidationPassed: diag.slotValidationPassed ?? null,
+          localeValidationPassed: purity.targetLocalePurityPassed,
+          unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
+          unsupportedClaimKinds: [],
+          unsupportedDesignMediumCount: diag.finalUnsupportedDesignMediumCount ?? 0,
+          unsupportedDesignMediumKinds: diag.finalUnsupportedDesignMediumKinds ?? [],
+          hindiNominalExperienceFragmentDetected:
+            diag.hindiNominalExperienceFragmentDetected ?? null,
+          hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb ?? null,
+          hindiIncompleteSentenceCount: diag.hindiIncompleteSentenceCount ?? null,
+          hindiGrammarRejectionReasons: diag.hindiGrammarRejectionReasons
+            ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []),
+        });
+        return lineage;
+      })(),
     });
     this.stage(
       'duration_validation',
@@ -765,16 +1082,66 @@ export class SummaryAiDiagnosticSession {
   }
 
   commit(): SummaryAiDiagnosticTrace {
-    const trace = {
+    const identity = buildCvAiDiagnosticBuildIdentity({
+      assetRevision: null,
+      serverUrlConfigured: true,
+      internalBuildContractUsed: INTERNAL_AI_RESET_ENABLED ? true : false,
+    });
+    const base = {
       ...this.draft,
       stages: this.stages,
       marker: 'SUMMARY_AI_DIAG_V1',
-    } as SummaryAiDiagnosticTrace;
+      ...identity,
+      diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+      operationKind: 'summary' as const,
+    };
+    const invariants = checkSummaryDiagnosticInvariants(base);
+    const withInvariants = {
+      ...base,
+      diagnosticInvariantCheckPassed: invariants.passed,
+      diagnosticInvariantFailureCount: invariants.failures.length,
+      diagnosticInvariantFailures: invariants.failures,
+    };
+    const completeness = checkSummaryDiagnosticCompleteness(
+      withInvariants as Record<string, unknown>,
+    );
+    const withCompleteness = {
+      ...withInvariants,
+      diagnosticCompletenessPassed: completeness.passed,
+      missingRequiredDiagnosticFields: completeness.missingRequiredDiagnosticFields,
+      nullRequiredDiagnosticFields: completeness.nullRequiredDiagnosticFields,
+      unexpectedDiagnosticFieldTypes: [],
+    };
+    const privacy = assertCvAiDiagnosticPrivacy(withCompleteness);
+    const sized = maybeTruncateDiagnosticPayload({
+      ...withCompleteness,
+      diagnosticPrivacyViolations: privacy,
+      privacyCheckPassed: privacy.length === 0,
+    } as Record<string, unknown>);
+    const trace = sized as unknown as SummaryAiDiagnosticTrace;
     latestSummaryTrace = trace;
     try {
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem(SUMMARY_AI_DIAG_STORAGE_KEY, JSON.stringify(trace));
       }
+    } catch {
+      /* ignore */
+    }
+    try {
+      appendCvAiDiagnosticHistory({
+        timestamp: trace.capturedAt || new Date().toISOString(),
+        requestIdHash: trace.requestIdHash || '',
+        operationKind: 'summary',
+        operationMode: trace.operationMode,
+        targetLocale: trace.requestedLocale,
+        success: Boolean(trace.countedAsSuccess),
+        finalCandidateSource: trace.finalCandidateSource,
+        finalTypedFailureReason: trace.finalTypedFailureReason,
+        invariantPassed: Boolean(trace.diagnosticInvariantCheckPassed),
+        completenessPassed: Boolean(trace.diagnosticCompletenessPassed),
+        usageCountBefore: trace.usageCountBefore,
+        usageCountAfter: trace.usageCountAfter,
+      });
     } catch {
       /* ignore */
     }
@@ -827,6 +1194,11 @@ export function clearSummaryAiDiagnosticsForTests(): void {
   }
 }
 
+/** Clear persisted Summary diagnostics only — does not reset AI usage. */
+export function clearSummaryAiDiagnostics(): void {
+  clearSummaryAiDiagnosticsForTests();
+}
+
 export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | null): {
   timestamp: string;
   locale: string;
@@ -838,6 +1210,11 @@ export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | n
   durationValidationPassed: boolean;
   raceGuardResult: string;
   applied: boolean;
+  finalCandidateSource: string | null;
+  invariantPassed: boolean | null;
+  completenessPassed: boolean | null;
+  success: boolean;
+  operationKind: string;
 } | null {
   if (!trace) return null;
   const last = trace.stages[trace.stages.length - 1];
@@ -853,6 +1230,11 @@ export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | n
     durationValidationPassed: trace.durationValidationPassed,
     raceGuardResult: trace.raceGuardResult,
     applied: trace.visibleApplySucceeded,
+    finalCandidateSource: trace.finalCandidateSource,
+    invariantPassed: trace.diagnosticInvariantCheckPassed ?? null,
+    completenessPassed: trace.diagnosticCompletenessPassed ?? null,
+    success: Boolean(trace.countedAsSuccess),
+    operationKind: 'summary',
   };
 }
 

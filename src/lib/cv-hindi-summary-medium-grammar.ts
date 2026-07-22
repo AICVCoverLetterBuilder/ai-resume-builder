@@ -22,9 +22,14 @@ export type HindiUnsupportedDesignMediumKind =
   | 'unsupported_marketing_claim';
 
 export type HindiDesignMediumScan = {
+  sourcePrintFactPresent: boolean;
+  sourceBrandingFactPresent: boolean;
+  sourceMarketingFactPresent: boolean;
   providerUnsupportedDesignMediumCount: number;
   providerUnsupportedDesignMediumKinds: HindiUnsupportedDesignMediumKind[];
   providerPrintClaimDetected: boolean;
+  providerBrandingClaimDetected: boolean;
+  providerMarketingClaimDetected: boolean;
   finalUnsupportedDesignMediumCount: number;
   finalUnsupportedDesignMediumKinds: HindiUnsupportedDesignMediumKind[];
 };
@@ -73,9 +78,14 @@ export function scanHindiUnsupportedDesignMediumClaims(
   }
   const unique = [...new Set(kinds)];
   return {
+    sourcePrintFactPresent: sourceSupportsHindiPrintMedium(corpus),
+    sourceBrandingFactPresent: HINDI_BRANDING_SOURCE_SUPPORT_RE.test(corpus),
+    sourceMarketingFactPresent: HINDI_MARKETING_SOURCE_SUPPORT_RE.test(corpus),
     providerUnsupportedDesignMediumCount: unique.length,
     providerUnsupportedDesignMediumKinds: unique,
     providerPrintClaimDetected: printClaimDetected,
+    providerBrandingClaimDetected: HINDI_BRANDING_CLAIM_RE.test(text),
+    providerMarketingClaimDetected: HINDI_MARKETING_CLAIM_RE.test(text),
     finalUnsupportedDesignMediumCount: unique.length,
     finalUnsupportedDesignMediumKinds: unique,
   };

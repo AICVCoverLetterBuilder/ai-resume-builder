@@ -471,21 +471,35 @@ export type HindiSummaryEmploymentQuality = {
   hindiFiniteKaAnubhavCollision: boolean;
   unsupportedClaimCount: number;
   unsupportedClaimKinds: HindiUnsupportedDesignMediumKind[];
+  sourcePrintFactPresent: boolean;
+  sourceBrandingFactPresent: boolean;
+  sourceMarketingFactPresent: boolean;
   providerUnsupportedDesignMediumCount: number;
   providerUnsupportedDesignMediumKinds: HindiUnsupportedDesignMediumKind[];
   providerPrintClaimDetected: boolean;
+  providerBrandingClaimDetected: boolean;
+  providerMarketingClaimDetected: boolean;
   finalUnsupportedDesignMediumCount: number;
   finalUnsupportedDesignMediumKinds: HindiUnsupportedDesignMediumKind[];
   grammarValidationPassed: boolean;
   hindiCurrentIntroFiniteVerbPresent: boolean;
+  hindiCurrentDutyFiniteVerbPresent: boolean;
+  hindiCurrentIntroCopulaPresent: boolean;
   hindiCurrentDutyAuxiliaryPresent: boolean;
+  hindiPriorRoleFiniteVerbPresent: boolean;
   hindiStandaloneJahanFragmentDetected: boolean;
   hindiNominalExperienceFragmentDetected: boolean;
   hindiSentenceHasFiniteCopulaOrVerb: boolean[];
   hindiIncompleteSentenceCount: number;
   hindiGrammarRejectionReason: string | null;
+  hindiGrammarRejectionReasons: string[];
   typedRejectionReason: string | null;
   finalUnitRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
+  currentIntroSlotPresent: boolean;
+  currentDutySlotPresent: boolean;
+  priorRoleSlotPresent: boolean;
+  slotValidationPassed: boolean;
+  slotRejectionReasons: string[];
   /** Sentence-level (not comma-fragment) ownership diagnostics — hashes only. */
   finalSentenceHashes: string[];
   finalSentenceRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
@@ -773,21 +787,54 @@ export function analyzeHindiSummaryEmploymentQuality(
     hindiFiniteKaAnubhavCollision,
     unsupportedClaimCount,
     unsupportedClaimKinds,
+    sourcePrintFactPresent: mediumScan.sourcePrintFactPresent,
+    sourceBrandingFactPresent: mediumScan.sourceBrandingFactPresent,
+    sourceMarketingFactPresent: mediumScan.sourceMarketingFactPresent,
     providerUnsupportedDesignMediumCount: mediumScan.providerUnsupportedDesignMediumCount,
     providerUnsupportedDesignMediumKinds: mediumScan.providerUnsupportedDesignMediumKinds,
     providerPrintClaimDetected: mediumScan.providerPrintClaimDetected,
+    providerBrandingClaimDetected: mediumScan.providerBrandingClaimDetected,
+    providerMarketingClaimDetected: mediumScan.providerMarketingClaimDetected,
     finalUnsupportedDesignMediumCount: mediumScan.finalUnsupportedDesignMediumCount,
     finalUnsupportedDesignMediumKinds: mediumScan.finalUnsupportedDesignMediumKinds,
     grammarValidationPassed: grammar.ok,
     hindiCurrentIntroFiniteVerbPresent: grammar.hindiCurrentIntroFiniteVerbPresent,
+    hindiCurrentDutyFiniteVerbPresent: Boolean(
+      grammar.hindiSentenceHasFiniteCopulaOrVerb[
+        finalUnitRoleSlots.indexOf('current_duty')
+      ],
+    ),
+    hindiCurrentIntroCopulaPresent: grammar.hindiCurrentIntroFiniteVerbPresent,
     hindiCurrentDutyAuxiliaryPresent: grammar.hindiCurrentDutyAuxiliaryPresent,
+    hindiPriorRoleFiniteVerbPresent: Boolean(
+      grammar.hindiSentenceHasFiniteCopulaOrVerb[
+        finalUnitRoleSlots.indexOf('prior_role')
+      ],
+    ),
     hindiStandaloneJahanFragmentDetected: grammar.hindiStandaloneJahanFragmentDetected,
     hindiNominalExperienceFragmentDetected: grammar.hindiNominalExperienceFragmentDetected,
     hindiSentenceHasFiniteCopulaOrVerb: grammar.hindiSentenceHasFiniteCopulaOrVerb,
     hindiIncompleteSentenceCount: grammar.hindiIncompleteSentenceCount,
     hindiGrammarRejectionReason: grammar.hindiGrammarRejectionReason,
+    hindiGrammarRejectionReasons: grammar.hindiGrammarRejectionReason
+      ? [grammar.hindiGrammarRejectionReason]
+      : [],
     typedRejectionReason,
     finalUnitRoleSlots,
+    currentIntroSlotPresent: finalUnitRoleSlots.includes('current_intro'),
+    currentDutySlotPresent: finalUnitRoleSlots.includes('current_duty'),
+    priorRoleSlotPresent: finalUnitRoleSlots.includes('prior_role'),
+    slotValidationPassed: finalUnitRoleSlots.includes('current_intro')
+      && finalUnitRoleSlots.includes('current_duty')
+      && finalUnitRoleSlots.includes('prior_role'),
+    slotRejectionReasons: [
+      ...(!finalUnitRoleSlots.includes('current_intro') ? ['missing_current_intro_slot'] : []),
+      ...(!finalUnitRoleSlots.includes('current_duty') ? ['missing_current_duty_slot'] : []),
+      ...(!finalUnitRoleSlots.includes('prior_role') ? ['missing_prior_role_slot'] : []),
+      ...(finalUnitRoleSlots.filter((s) => s === 'current_intro').length > 1
+        ? ['duplicate_role_slot']
+        : []),
+    ],
     finalSentenceHashes: sentences.map((s) => fingerprintText(s)),
     finalSentenceRoleSlots: [...finalUnitRoleSlots],
     finalSentenceMaterialKeyCounts: sentences.map(
