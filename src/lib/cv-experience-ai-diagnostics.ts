@@ -33,9 +33,13 @@ import {
   maybeTruncateDiagnosticPayload,
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
+import {
+  emitCvAiDiagnosticsChanged,
+  EXPERIENCE_AI_DIAG_STORAGE_KEY as EXPERIENCE_AI_DIAG_STORAGE_KEY_CANON,
+} from './cv-ai-diagnostics-lifecycle';
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
-export const EXPERIENCE_AI_DIAG_STORAGE_KEY = 'cvpro-experience-ai-diag-v1';
+export const EXPERIENCE_AI_DIAG_STORAGE_KEY = EXPERIENCE_AI_DIAG_STORAGE_KEY_CANON;
 
 /**
  * Marker / UI strings for Experience AI diagnostics live only in
@@ -654,6 +658,7 @@ export type ExperienceAiDiagSessionInput = {
  */
 export class ExperienceAiDiagnosticSession {
   private stages: ExperienceAiDiagStage[] = [];
+  private committedTrace: ExperienceAiDiagnosticTrace | null = null;
   private draft: Partial<ExperienceAiDiagnosticTrace> & {
     schemaVersion: typeof EXPERIENCE_AI_TRACE_SCHEMA_VERSION;
     capturedAt: string;
@@ -1594,6 +1599,7 @@ export class ExperienceAiDiagnosticSession {
   }
 
   commit(): ExperienceAiDiagnosticTrace {
+    if (this.committedTrace) return this.committedTrace;
     const apiBase = getApiBaseUrl();
     const identity = buildCvAiDiagnosticBuildIdentity({
       assetRevision: INTERNAL_AI_RESET_ENABLED
@@ -1638,6 +1644,7 @@ export class ExperienceAiDiagnosticSession {
       privacyCheckPassed: privacy.length === 0,
     } as Record<string, unknown>);
     const trace = sized as unknown as ExperienceAiDiagnosticTrace;
+    this.committedTrace = trace;
     persistExperienceAiDiagnostic(trace);
     try {
       appendCvAiDiagnosticHistory({
@@ -1654,6 +1661,11 @@ export class ExperienceAiDiagnosticSession {
         usageCountBefore: trace.usageCountBefore,
         usageCountAfter: trace.usageCountAfter,
       });
+    } catch {
+      /* ignore */
+    }
+    try {
+      emitCvAiDiagnosticsChanged({ kind: 'experience', action: 'commit' });
     } catch {
       /* ignore */
     }
@@ -1676,8 +1688,18 @@ function readStoredExperienceAiDiagnostic(): ExperienceAiDiagnosticTrace | null 
   try {
     const raw = localStorage.getItem(EXPERIENCE_AI_DIAG_STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as ExperienceAiDiagnosticTrace;
+    const parsed = JSON.parse(raw) as ExperienceAiDiagnosticTrace;
+    if (!parsed || typeof parsed !== 'object') {
+      localStorage.removeItem(EXPERIENCE_AI_DIAG_STORAGE_KEY);
+      return null;
+    }
+    return parsed;
   } catch {
+    try {
+      localStorage.removeItem(EXPERIENCE_AI_DIAG_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
     return null;
   }
 }
@@ -1747,6 +1769,11 @@ export function clearExperienceAiDiagnosticsForTests(): void {
 /** Clear Experience diagnostics only — does not reset AI usage. */
 export function clearExperienceAiDiagnostics(): void {
   clearExperienceAiDiagnosticsForTests();
+  try {
+    emitCvAiDiagnosticsChanged({ kind: 'experience', action: 'clear_latest' });
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Summary lines for the internal diagnostics modal (non-PII). */

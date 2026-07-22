@@ -3,7 +3,7 @@
 /**
  * Internal-only Summary AI diagnostics UI. Same DCE pattern as Experience panel.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import {
   clearSummaryAiDiagnostics,
@@ -15,6 +15,11 @@ import {
   clearCvAiDiagnosticHistory,
   getCvAiDiagnosticHistory,
 } from '@/lib/cv-ai-diagnostics-contract';
+import {
+  CV_AI_DIAGNOSTICS_LIFECYCLE_MARKER,
+  getCvAiDiagnosticsLifecycleRevision,
+  subscribeCvAiDiagnosticsChanged,
+} from '@/lib/cv-ai-diagnostics-lifecycle';
 import {
   SUMMARY_AI_COPY_DIAGNOSTICS_LABEL,
   SUMMARY_AI_COPY_FAIL,
@@ -31,21 +36,35 @@ export {
   SUMMARY_AI_COPY_FAIL,
 };
 
+function subscribeSummaryDiagnostics(onStoreChange: () => void): () => void {
+  return subscribeCvAiDiagnosticsChanged(onStoreChange, { kind: 'summary' });
+}
+
+function getSummaryDiagnosticsRevision(): number {
+  return getCvAiDiagnosticsLifecycleRevision();
+}
+
 export function InternalSummaryAiDiagnosticsPanel({
   refreshToken,
 }: {
   refreshToken: number;
 }) {
-  const [summary, setSummary] = useState<ReturnType<typeof summarizeSummaryAiDiagnostic>>(null);
-  const [full, setFull] = useState(getLatestSummaryAiDiagnostic());
-  const [history, setHistory] = useState(() => getCvAiDiagnosticHistory('summary'));
-
-  useEffect(() => {
-    const latest = getLatestSummaryAiDiagnostic();
-    setFull(latest);
-    setSummary(summarizeSummaryAiDiagnostic(latest));
-    setHistory(getCvAiDiagnosticHistory('summary'));
-  }, [refreshToken]);
+  const rev = useSyncExternalStore(
+    subscribeSummaryDiagnostics,
+    getSummaryDiagnosticsRevision,
+    () => 0,
+  );
+  const full = useMemo(() => {
+    void refreshToken;
+    void rev;
+    return getLatestSummaryAiDiagnostic();
+  }, [refreshToken, rev]);
+  const summary = useMemo(() => summarizeSummaryAiDiagnostic(full), [full]);
+  const history = useMemo(() => {
+    void rev;
+    void refreshToken;
+    return getCvAiDiagnosticHistory('summary');
+  }, [rev, refreshToken]);
 
   const onCopy = useCallback(async () => {
     const ok = await copySummaryAiDiagnosticsToClipboard();
@@ -56,14 +75,11 @@ export function InternalSummaryAiDiagnosticsPanel({
 
   const onClear = useCallback(() => {
     clearSummaryAiDiagnostics();
-    setFull(null);
-    setSummary(null);
     toast.success('Summary diagnostics cleared');
   }, []);
 
   const onClearHistory = useCallback(() => {
     clearCvAiDiagnosticHistory('summary');
-    setHistory([]);
     toast.success('Summary diagnostic history cleared');
   }, []);
 
@@ -88,6 +104,7 @@ export function InternalSummaryAiDiagnosticsPanel({
     >
       <span className="sr-only">{SUMMARY_AI_TRACE_BUNDLE_MARKER}</span>
       <span className="sr-only">cv-ai-diagnostics-v2</span>
+      <span className="sr-only">{CV_AI_DIAGNOSTICS_LIFECYCLE_MARKER}</span>
       <h3 className="text-sm font-semibold">{SUMMARY_AI_SECTION_TITLE}</h3>
       {warnings.length > 0 && (
         <p
@@ -180,14 +197,16 @@ export function InternalSummaryAiDiagnosticsPanel({
           </ul>
         </div>
       )}
-      <button
-        type="button"
-        data-testid="summary-ai-diagnostics-copy"
-        className="mt-3 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
-        onClick={onCopy}
-      >
-        {SUMMARY_AI_COPY_DIAGNOSTICS_LABEL}
-      </button>
+      {full ? (
+        <button
+          type="button"
+          data-testid="summary-ai-diagnostics-copy"
+          className="mt-3 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+          onClick={onCopy}
+        >
+          {SUMMARY_AI_COPY_DIAGNOSTICS_LABEL}
+        </button>
+      ) : null}
       <button
         type="button"
         data-testid="summary-ai-diagnostics-clear"
@@ -209,15 +228,15 @@ export function InternalSummaryAiDiagnosticsPanel({
 }
 
 export function InternalSummaryAiCopyLink() {
-  const [hasTrace, setHasTrace] = useState(false);
-
-  useEffect(() => {
-    setHasTrace(Boolean(getLatestSummaryAiDiagnostic()));
-    const id = window.setInterval(() => {
-      setHasTrace(Boolean(getLatestSummaryAiDiagnostic()));
-    }, 800);
-    return () => window.clearInterval(id);
-  }, []);
+  const rev = useSyncExternalStore(
+    subscribeSummaryDiagnostics,
+    getSummaryDiagnosticsRevision,
+    () => 0,
+  );
+  const hasTrace = useMemo(() => {
+    void rev;
+    return Boolean(getLatestSummaryAiDiagnostic());
+  }, [rev]);
 
   if (!hasTrace) return null;
 

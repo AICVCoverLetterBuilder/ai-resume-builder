@@ -1000,6 +1000,13 @@ export default function CVBuilderPage() {
             httpStatus: res.status,
             error: payload,
           });
+          summaryDiag.stage('api_response', 'fail', 'http_403');
+          summaryDiag.patch({
+            finalTypedFailureReason: payload.code || 'http_403',
+            rejectionStage: 'api_response',
+            countedAsSuccess: false,
+          });
+          summaryDiag.recordVisibleApply(false, countBefore);
           if (getAiGate().status !== 'free') toast.error(msg ?? t.common.proAuthorizationUnavailable);
           else setSummaryAiModal(true);
           return;
@@ -1013,6 +1020,13 @@ export default function CVBuilderPage() {
           httpStatus: res.status,
           error: payload,
         });
+        summaryDiag.stage('api_response', 'fail', payload.code || 'http_error');
+        summaryDiag.patch({
+          finalTypedFailureReason: payload.code || 'http_error',
+          rejectionStage: 'api_response',
+          countedAsSuccess: false,
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
         toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
         return;
       }
@@ -1031,6 +1045,14 @@ export default function CVBuilderPage() {
           applied: false,
           reason: 'stale_request_superseded',
         });
+        summaryDiag.stage('race_guard', 'fail', 'stale_request_superseded');
+        summaryDiag.patch({
+          raceGuardResult: 'fail',
+          finalTypedFailureReason: 'stale_request_superseded',
+          rejectionStage: 'race_guard',
+          countedAsSuccess: false,
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
         return;
       }
       const liveNow = cvRef.current;
@@ -1055,6 +1077,14 @@ export default function CVBuilderPage() {
           applied: false,
           reason: 'stale_summary_edited_in_flight',
         });
+        summaryDiag.stage('race_guard', 'fail', 'stale_summary_edited_in_flight');
+        summaryDiag.patch({
+          raceGuardResult: 'fail',
+          finalTypedFailureReason: 'stale_summary_edited_in_flight',
+          rejectionStage: 'race_guard',
+          countedAsSuccess: false,
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
         return;
       }
       const nextSummary = (summaryData?.result ?? '').trim();
@@ -1093,8 +1123,6 @@ export default function CVBuilderPage() {
         });
         summaryDiag.recordFinalizeResult(finalizedGate);
         summaryDiag.recordVisibleApply(false, countBefore);
-        await summaryDiag.resolveVersions();
-        summaryDiag.commit();
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
@@ -1142,8 +1170,6 @@ export default function CVBuilderPage() {
           },
         });
         summaryDiag.recordVisibleApply(false, countBefore);
-        await summaryDiag.resolveVersions();
-        summaryDiag.commit();
         logAiLocaleTransitionDiagnostics({
           requestId: reqCtx.requestId,
           action: 'summary_generate',
@@ -1173,8 +1199,6 @@ export default function CVBuilderPage() {
       });
       summaryDiag.recordFinalizeResult(finalizedGate);
       summaryDiag.recordVisibleApply(true, countBefore + 1, finalizedGate.text);
-      await summaryDiag.resolveVersions();
-      summaryDiag.commit();
       logAiLocaleTransitionDiagnostics({
         requestId: reqCtx.requestId,
         action: 'summary_generate',
@@ -1217,8 +1241,21 @@ export default function CVBuilderPage() {
         applied: false,
         reason: payload.code,
       });
+      summaryDiag.stage('api_response', 'fail', payload.code || 'network_error');
+      summaryDiag.patch({
+        finalTypedFailureReason: payload.code || 'network_error',
+        rejectionStage: 'api_response',
+        countedAsSuccess: false,
+      });
+      summaryDiag.recordVisibleApply(false, countBefore);
       toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {
+      try {
+        await summaryDiag.resolveVersions();
+        summaryDiag.commit();
+      } catch {
+        /* never break the user-facing Summary operation */
+      }
       clearTimeout(timer);
       setIsSummaryGenerating(false);
     }
@@ -1859,6 +1896,12 @@ export default function CVBuilderPage() {
         msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale),
       );
     } finally {
+      try {
+        await diagSession.resolveVersions();
+        diagSession.commit();
+      } catch {
+        /* never break Experience UX */
+      }
       clearTimeout(timer);
       setGeneratingBulletsId(null);
     }

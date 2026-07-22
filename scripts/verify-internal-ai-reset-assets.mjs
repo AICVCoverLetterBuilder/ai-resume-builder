@@ -144,6 +144,10 @@ const DIAG_INVARIANT_ENHANCE_NOOP = 'enhance_success_without_meaningful_change';
 const DIAG_INVARIANT_PROVIDER_OUTCOME = 'provider_outcome_server_fallback_mismatch';
 const SUMMARY_NOOP_SUCCESS_CONTRACT_300 = 'summary-noop-success-contract-300-v1';
 const SUMMARY_NOOP_TYPED_REASON = 'summary_noop_after_normalization';
+const DIAGNOSTICS_LIFECYCLE_V1 = 'internal-diagnostics-lifecycle-v1';
+const DIAGNOSTICS_CHANGED_EVENT = 'cvpro-cv-ai-diagnostics-changed';
+const CLEAR_DIAGNOSTICS_LABEL = 'Clear diagnostics';
+const CLEAR_HISTORY_LABEL = 'Clear diagnostic history';
 const EXPERIENCE_AI_NOOP_RECOVERY = 'experience-ai-noop-recovery-293-v1';
 const EXPERIENCE_AI_UNSUPPORTED_EXPANSION = 'experience-ai-unsupported-expansion-295-v1';
 const EXPERIENCE_TITLE_PROJECTION = 'experience-title-projection-296-v1';
@@ -251,6 +255,10 @@ if (expect === 'enabled') {
     DIAG_INVARIANT_PROVIDER_OUTCOME,
     SUMMARY_NOOP_SUCCESS_CONTRACT_300,
     SUMMARY_NOOP_TYPED_REASON,
+    DIAGNOSTICS_LIFECYCLE_V1,
+    DIAGNOSTICS_CHANGED_EVENT,
+    CLEAR_DIAGNOSTICS_LABEL,
+    CLEAR_HISTORY_LABEL,
   ]) {
     if (!blob.includes(field)) {
       fail(`missing cv-ai-diagnostics-v2 field/marker "${field}"`);

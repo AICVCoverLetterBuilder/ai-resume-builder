@@ -8,6 +8,7 @@ import {
   INTERNAL_AI_DIAGNOSTICS_REVISION,
   INTERNAL_AI_RESET_BUNDLE_MARKER,
 } from './build-channel';
+import { emitCvAiDiagnosticsChanged } from './cv-ai-diagnostics-lifecycle';
 
 /** Stable contract revision — must survive minification in internal builds. */
 export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as const;
@@ -907,9 +908,20 @@ export function getCvAiDiagnosticHistory(
 export function clearCvAiDiagnosticHistory(kind?: CvAiDiagnosticOperationKind): void {
   if (!kind) {
     writeHistory([]);
+    try {
+      emitCvAiDiagnosticsChanged({ kind: 'summary', action: 'clear_history' });
+      emitCvAiDiagnosticsChanged({ kind: 'experience', action: 'clear_history' });
+    } catch {
+      /* ignore */
+    }
     return;
   }
   writeHistory(readHistory().filter((h) => h.operationKind !== kind));
+  try {
+    emitCvAiDiagnosticsChanged({ kind, action: 'clear_history' });
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Retain marker strings for asset verification (internal builds). */

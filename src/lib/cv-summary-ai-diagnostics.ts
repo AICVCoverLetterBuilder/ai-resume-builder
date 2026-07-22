@@ -29,9 +29,13 @@ import {
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
 import { getApiBaseUrl } from './api';
+import {
+  emitCvAiDiagnosticsChanged,
+  SUMMARY_AI_DIAG_STORAGE_KEY as SUMMARY_AI_DIAG_STORAGE_KEY_CANON,
+} from './cv-ai-diagnostics-lifecycle';
 
 export const SUMMARY_AI_TRACE_SCHEMA_VERSION = 1 as const;
-export const SUMMARY_AI_DIAG_STORAGE_KEY = 'cvpro-summary-ai-diag-v1';
+export const SUMMARY_AI_DIAG_STORAGE_KEY = SUMMARY_AI_DIAG_STORAGE_KEY_CANON;
 
 export type SummaryAiDiagStage = {
   name: string;
@@ -333,6 +337,7 @@ export type SummaryAiDiagSessionInput = {
 
 export class SummaryAiDiagnosticSession {
   private stages: SummaryAiDiagStage[] = [];
+  private committedTrace: SummaryAiDiagnosticTrace | null = null;
   private draft: Partial<SummaryAiDiagnosticTrace> & {
     schemaVersion: typeof SUMMARY_AI_TRACE_SCHEMA_VERSION;
     capturedAt: string;
@@ -1247,6 +1252,7 @@ export class SummaryAiDiagnosticSession {
   }
 
   commit(): SummaryAiDiagnosticTrace {
+    if (this.committedTrace) return this.committedTrace;
     const apiBase = getApiBaseUrl();
     const identity = buildCvAiDiagnosticBuildIdentity({
       assetRevision: INTERNAL_AI_RESET_ENABLED
@@ -1292,6 +1298,7 @@ export class SummaryAiDiagnosticSession {
       privacyCheckPassed: privacy.length === 0,
     } as Record<string, unknown>);
     const trace = sized as unknown as SummaryAiDiagnosticTrace;
+    this.committedTrace = trace;
     latestSummaryTrace = trace;
     try {
       if (typeof localStorage !== 'undefined') {
@@ -1318,6 +1325,11 @@ export class SummaryAiDiagnosticSession {
     } catch {
       /* ignore */
     }
+    try {
+      emitCvAiDiagnosticsChanged({ kind: 'summary', action: 'commit' });
+    } catch {
+      /* ignore */
+    }
     return trace;
   }
 }
@@ -1327,8 +1339,20 @@ function readStored(): SummaryAiDiagnosticTrace | null {
     if (typeof localStorage === 'undefined') return null;
     const raw = localStorage.getItem(SUMMARY_AI_DIAG_STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as SummaryAiDiagnosticTrace;
+    const parsed = JSON.parse(raw) as SummaryAiDiagnosticTrace;
+    if (!parsed || typeof parsed !== 'object') {
+      localStorage.removeItem(SUMMARY_AI_DIAG_STORAGE_KEY);
+      return null;
+    }
+    return parsed;
   } catch {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(SUMMARY_AI_DIAG_STORAGE_KEY);
+      }
+    } catch {
+      /* ignore */
+    }
     return null;
   }
 }
@@ -1370,6 +1394,11 @@ export function clearSummaryAiDiagnosticsForTests(): void {
 /** Clear persisted Summary diagnostics only — does not reset AI usage. */
 export function clearSummaryAiDiagnostics(): void {
   clearSummaryAiDiagnosticsForTests();
+  try {
+    emitCvAiDiagnosticsChanged({ kind: 'summary', action: 'clear_latest' });
+  } catch {
+    /* ignore */
+  }
 }
 
 export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | null): {

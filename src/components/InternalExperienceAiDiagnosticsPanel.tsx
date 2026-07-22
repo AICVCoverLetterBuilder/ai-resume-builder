@@ -5,7 +5,7 @@
  * compile-time enabled branch of CvExportDiagnosticsControls so production
  * DCE can drop this chunk (and its marker strings) from disabled builds.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { toast } from 'sonner';
 import {
   clearExperienceAiDiagnostics,
@@ -17,6 +17,11 @@ import {
   clearCvAiDiagnosticHistory,
   getCvAiDiagnosticHistory,
 } from '@/lib/cv-ai-diagnostics-contract';
+import {
+  CV_AI_DIAGNOSTICS_LIFECYCLE_MARKER,
+  getCvAiDiagnosticsLifecycleRevision,
+  subscribeCvAiDiagnosticsChanged,
+} from '@/lib/cv-ai-diagnostics-lifecycle';
 import {
   EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL,
   EXPERIENCE_AI_COPY_FAIL,
@@ -36,21 +41,35 @@ export {
   EXPERIENCE_AI_COPY_FAIL,
 };
 
+function subscribeExperienceDiagnostics(onStoreChange: () => void): () => void {
+  return subscribeCvAiDiagnosticsChanged(onStoreChange, { kind: 'experience' });
+}
+
+function getExperienceDiagnosticsRevision(): number {
+  return getCvAiDiagnosticsLifecycleRevision();
+}
+
 export function InternalExperienceAiDiagnosticsPanel({
   refreshToken,
 }: {
   refreshToken: number;
 }) {
-  const [summary, setSummary] = useState<ReturnType<typeof summarizeExperienceAiDiagnostic>>(null);
-  const [full, setFull] = useState(getLatestExperienceAiDiagnostic());
-  const [history, setHistory] = useState(() => getCvAiDiagnosticHistory('experience'));
-
-  useEffect(() => {
-    const latest = getLatestExperienceAiDiagnostic();
-    setFull(latest);
-    setSummary(summarizeExperienceAiDiagnostic(latest));
-    setHistory(getCvAiDiagnosticHistory('experience'));
-  }, [refreshToken]);
+  const rev = useSyncExternalStore(
+    subscribeExperienceDiagnostics,
+    getExperienceDiagnosticsRevision,
+    () => 0,
+  );
+  const full = useMemo(() => {
+    void refreshToken;
+    void rev;
+    return getLatestExperienceAiDiagnostic();
+  }, [refreshToken, rev]);
+  const summary = useMemo(() => summarizeExperienceAiDiagnostic(full), [full]);
+  const history = useMemo(() => {
+    void rev;
+    void refreshToken;
+    return getCvAiDiagnosticHistory('experience');
+  }, [rev, refreshToken]);
 
   const onCopy = useCallback(async () => {
     const ok = await copyExperienceAiDiagnosticsToClipboard();
@@ -61,14 +80,11 @@ export function InternalExperienceAiDiagnosticsPanel({
 
   const onClear = useCallback(() => {
     clearExperienceAiDiagnostics();
-    setFull(null);
-    setSummary(null);
     toast.success('Experience diagnostics cleared');
   }, []);
 
   const onClearHistory = useCallback(() => {
     clearCvAiDiagnosticHistory('experience');
-    setHistory([]);
     toast.success('Experience diagnostic history cleared');
   }, []);
 
@@ -97,6 +113,7 @@ export function InternalExperienceAiDiagnosticsPanel({
       <span className="sr-only">{EXPERIENCE_AI_FIELD_SOURCE_KIND}</span>
       <span className="sr-only">{EXPERIENCE_AI_FIELD_FALLBACK_COVERED}</span>
       <span className="sr-only">cv-ai-diagnostics-v2</span>
+      <span className="sr-only">{CV_AI_DIAGNOSTICS_LIFECYCLE_MARKER}</span>
       <h3 className="text-sm font-semibold">{EXPERIENCE_AI_SECTION_TITLE}</h3>
       {warnings.length > 0 && (
         <p
@@ -189,14 +206,16 @@ export function InternalExperienceAiDiagnosticsPanel({
           </ul>
         </div>
       )}
-      <button
-        type="button"
-        data-testid="experience-ai-diagnostics-copy"
-        className="mt-3 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
-        onClick={onCopy}
-      >
-        {EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL}
-      </button>
+      {full ? (
+        <button
+          type="button"
+          data-testid="experience-ai-diagnostics-copy"
+          className="mt-3 min-h-11 w-full rounded-md border border-border px-3 py-2 text-left text-xs font-medium pointer-events-auto"
+          onClick={onCopy}
+        >
+          {EXPERIENCE_AI_COPY_DIAGNOSTICS_LABEL}
+        </button>
+      ) : null}
       <button
         type="button"
         data-testid="experience-ai-diagnostics-clear"
@@ -218,15 +237,15 @@ export function InternalExperienceAiDiagnosticsPanel({
 }
 
 export function InternalExperienceAiCopyLink() {
-  const [hasTrace, setHasTrace] = useState(false);
-
-  useEffect(() => {
-    setHasTrace(Boolean(getLatestExperienceAiDiagnostic()));
-    const id = window.setInterval(() => {
-      setHasTrace(Boolean(getLatestExperienceAiDiagnostic()));
-    }, 800);
-    return () => window.clearInterval(id);
-  }, []);
+  const rev = useSyncExternalStore(
+    subscribeExperienceDiagnostics,
+    getExperienceDiagnosticsRevision,
+    () => 0,
+  );
+  const hasTrace = useMemo(() => {
+    void rev;
+    return Boolean(getLatestExperienceAiDiagnostic());
+  }, [rev]);
 
   if (!hasTrace) return null;
 

@@ -367,6 +367,22 @@ describe('Build 260 Experience AI non-PII diagnostics', () => {
   it('modal section is absent when gate disabled; present strings only when enabled', async () => {
     const React = await import('react');
     const mod = await import('@/components/CvExportDiagnosticsControls');
+    if (INTERNAL_AI_RESET_ENABLED) {
+      const { ExperienceAiDiagnosticSession } = await import('@/lib/cv-experience-ai-diagnostics');
+      const session = new ExperienceAiDiagnosticSession({
+        uiLocale: 'en',
+        requestedLocale: 'en',
+        contentLocale: 'en',
+        templateId: 't',
+        gender: '',
+        requestId: 'modal-seed',
+        usageCountBefore: 0,
+        jobContextHash: 'job-modal-seed',
+      });
+      session.recordVisibleApply(false, 0);
+      session.patch({ finalTypedFailureReason: 'seed' });
+      session.commit();
+    }
     render(
       React.createElement(mod.CvExportDiagnosticsModal, {
         open: true,
