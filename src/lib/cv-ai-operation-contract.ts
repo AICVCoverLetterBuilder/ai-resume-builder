@@ -237,7 +237,7 @@ export function classifyFreeTextJobDomain(position?: string | null): FreeTextJob
 
 const DOMAIN_CUE_RE: Record<FreeTextJobDomain, RegExp> = {
   design: /(?:vizuel|visual|grafick|graphic|dizajn|design|identitet|identity|materijal|material|format|ekran|screen|platform|दृश्य|ग्राफिक|डिज़ाइन|تصميم|بصرية|رسومية|ビジュアル|グラフィック|визуал|графическ|дизайн)/iu,
-  warehouse: /(?:skladist|warehouse|rob\w*|goods|inventar|inventory|dokument|document|गोदाम|माल|مستودع|بضائع|倉庫|商品|товар|склад)/iu,
+  warehouse: /(?:skladist|warehouse|rob\w*|goods|inventar|inventory|dokument|document|गोदाम|माल|مستودع|بضائع|倉庫|商品|товар|склад|Waren|Wareneingang|Lager|Unterlagen|Aufzeichnungen|Kolleg)/iu,
   software: /(?:code|api|feature|aplikativ|software|developer|開発|विकास)/iu,
   hospitality: /(?:jel\w*|dish|cuisine|kitchen|kuhinj|bar|guest|hygiene|व्यंजन|रसोई)/iu,
   healthcare: /(?:patient|pacijen|care|nurs|record|chart|пациент)/iu,

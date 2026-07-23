@@ -155,6 +155,7 @@ const EXPERIENCE_AI_DIAG_MARKER = 'EXPERIENCE_AI_DIAG_V1';
 const SUMMARY_AI_DIAG_MARKER = 'SUMMARY_AI_DIAG_V1';
 const EXPERIENCE_DIAGNOSTIC_MARKER_302 = 'experience-diagnostic-marker-302-v1';
 const GERMAN_CV_AI_302 = 'german-cv-ai-302-v1';
+const GERMAN_EXPERIENCE_GROUNDING_303 = 'german-experience-grounding-303-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -205,6 +206,7 @@ for (const marker of [
   SUMMARY_AI_DIAG_MARKER,
   EXPERIENCE_DIAGNOSTIC_MARKER_302,
   GERMAN_CV_AI_302,
+  GERMAN_EXPERIENCE_GROUNDING_303,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

@@ -73,6 +73,13 @@ import {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
   HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
 } from './cv-summary-grounding';
+import {
+  GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
+  sourceRequiresGermanWarehouseFactCoverage,
+  validateGermanWarehouseExperienceCoverage,
+  detectGermanExperienceUnsupportedExpansion,
+  buildGermanWarehouseExperienceFallback,
+} from './cv-german-experience-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
   deterministicLocalizedBulletsFromCanonical,
@@ -255,6 +262,7 @@ void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 void GERMAN_CV_AI_302_REVISION;
 void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297;
 void HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
@@ -3203,6 +3211,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // languages; material keys are a secondary signal when present.
       // Russian design: never accept on soft frame matching alone — require
       // distinct material families (creation / review-adapt / final files).
+      // German warehouse: soft frames alone are insufficient — require object-
+      // level coverage (incoming goods / documents / prep+movement).
+      void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
       const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
       const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate, {
         targetLocale: locale,
@@ -3212,8 +3223,48 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const ruDesign = needsRuDesignFamilies
         ? validateRussianDesignFactFamilies(candidate)
         : null;
+      const needsDeWarehouse = locale === 'de'
+        && sourceRequiresGermanWarehouseFactCoverage(sourceForCoverage);
+      const deWarehouse = needsDeWarehouse
+        ? validateGermanWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const deExpansion = locale === 'de'
+        ? detectGermanExperienceUnsupportedExpansion(sourceForCoverage, candidate)
+        : null;
       lastRequired = semantic.requiredCount || sourceFactCount;
       lastCovered = semantic.coveredCount;
+      if (deExpansion && deExpansion.count > 0) {
+        lastRejectStage = `${stage}:german_unsupported_expansion`;
+        lastRejectReason = deExpansion.labels[0] || 'unsupported_generated_duty';
+        lastUnsupportedClaimCount = deExpansion.count;
+        lastUnsupportedClaimKinds = deExpansion.kinds;
+        lastScopeExpansionDetected = deExpansion.scopeExpansionDetected;
+        generationValidationMeta = {
+          ...generationValidationMeta,
+          unsupportedClaimCount: Math.max(
+            generationValidationMeta.unsupportedClaimCount,
+            deExpansion.count,
+          ),
+        };
+        if (deWarehouse) {
+          lastRequired = deWarehouse.required.length || lastRequired;
+          lastCovered = deWarehouse.covered.length;
+          clientDeterministicFallbackUncoveredFactIds = deWarehouse.uncovered.map(
+            (id) => `de_wh_${id}`,
+          );
+        }
+        return null;
+      }
+      if (needsDeWarehouse && deWarehouse && !deWarehouse.ok) {
+        lastRejectStage = `${stage}:german_warehouse_facts`;
+        lastRejectReason = deWarehouse.reason || 'german_experience_warehouse_fact_coverage_incomplete';
+        lastRequired = deWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = deWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = deWarehouse.uncovered.map(
+          (id) => `de_wh_${id}`,
+        );
+        return null;
+      }
       if (needsRuDesignFamilies && ruDesign && !ruDesign.ok) {
         lastRejectStage = `${stage}:russian_design_families`;
         lastRejectReason = ruDesign.reason || 'russian_design_family_coverage_incomplete';
@@ -3228,7 +3279,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastCovered = post.covered?.length ?? 0;
         return null;
       }
-      if (semantic.ok && (!needsRuDesignFamilies || (post.ok && ruDesign?.ok))) {
+      if (needsDeWarehouse && deWarehouse?.ok) {
+        lastRequired = deWarehouse.required.length;
+        lastCovered = deWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (semantic.ok && (!needsRuDesignFamilies || (post.ok && ruDesign?.ok))) {
         if (post.ok && (post.covered?.length || 0) > 0) {
           lastRequired = post.required?.length ?? lastRequired;
           lastCovered = post.covered?.length ?? lastCovered;
@@ -3248,6 +3303,45 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
     } else if (sourceForCoverage && !crossLocaleAccept) {
+      if (locale === 'de') {
+        void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
+        const deExpansion = detectGermanExperienceUnsupportedExpansion(sourceForCoverage, candidate);
+        if (deExpansion.count > 0) {
+          lastRejectStage = `${stage}:german_unsupported_expansion`;
+          lastRejectReason = deExpansion.labels[0] || 'unsupported_generated_duty';
+          lastUnsupportedClaimCount = deExpansion.count;
+          lastUnsupportedClaimKinds = deExpansion.kinds;
+          lastScopeExpansionDetected = deExpansion.scopeExpansionDetected;
+          generationValidationMeta = {
+            ...generationValidationMeta,
+            unsupportedClaimCount: Math.max(
+              generationValidationMeta.unsupportedClaimCount,
+              deExpansion.count,
+            ),
+          };
+          return null;
+        }
+        if (sourceRequiresGermanWarehouseFactCoverage(sourceForCoverage)) {
+          const deWarehouse = validateGermanWarehouseExperienceCoverage(
+            sourceForCoverage,
+            candidate,
+          );
+          if (!deWarehouse.ok) {
+            lastRejectStage = `${stage}:german_warehouse_facts`;
+            lastRejectReason = deWarehouse.reason
+              || 'german_experience_warehouse_fact_coverage_incomplete';
+            lastRequired = deWarehouse.required.length || sourceFactCount;
+            lastCovered = deWarehouse.covered.length;
+            clientDeterministicFallbackUncoveredFactIds = deWarehouse.uncovered.map(
+              (id) => `de_wh_${id}`,
+            );
+            return null;
+          }
+          lastRequired = deWarehouse.required.length;
+          lastCovered = deWarehouse.covered.length;
+          clientDeterministicFallbackUncoveredFactIds = [];
+        }
+      }
       const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate, {
         targetLocale: locale,
       });
@@ -3793,7 +3887,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     } else {
       const firstAccepted = tryAccept(
         finalNormalizedBullets,
-        providerOrigin,
+        serverFallbackUsed ? 'deterministic_fallback' : providerOrigin,
         'provider',
       );
       providerCoveredFactCount = lastCovered;
@@ -3810,6 +3904,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           finalUnsupportedClaimCount = 0;
           finalUnsupportedClaimKinds = [];
           perspectiveMeta.noOpRejected = false;
+        } else if (serverFallbackUsed) {
+          finalCandidateSource = 'server_fallback';
+          finalUnsupportedClaimCount = 0;
+          finalUnsupportedClaimKinds = [];
+          fallbackApplied = true;
         } else {
           finalCandidateSource = providerOrigin === 'ai_repaired' ? 'noop_repair' : 'provider';
           finalUnsupportedClaimCount = 0;
@@ -3817,6 +3916,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return attachPerspectiveDiag({
           ...firstAccepted,
+          origin: serverFallbackUsed ? 'deterministic_fallback' : firstAccepted.origin,
           diagnostics: {
             ...firstAccepted.diagnostics,
             coveredFactCount: lastCovered || sourceFactCount,
@@ -3837,6 +3937,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             finalUnsupportedClaimKinds,
             unsupportedClaimCount: finalUnsupportedClaimCount,
             finalCandidateSource,
+            serverFallbackUsed,
+            apiResponseKind,
+            fallbackApplied: serverFallbackUsed ? true : firstAccepted.diagnostics?.fallbackApplied,
           },
         });
       }
@@ -4263,17 +4366,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     // Cross-locale: never return same-language source-preserving text for a
     // different target — use translation-aware fallback instead.
     if (crossLocale) {
-      const translated = normalizeLocaleText(
-        buildCrossLocaleExperienceFallback({
-          sourceDescription: sourceForCoverage,
-          sourceLocale: detectedSourceLocale === 'unknown' ? storedSourceLocale : detectedSourceLocale,
-          targetLocale: locale,
-          gender,
-          isPresent,
-          position: exp.position,
-        }),
-        locale,
-      );
+      let translated = '';
+      if (locale === 'de' && sourceRequiresGermanWarehouseFactCoverage(sourceForCoverage)) {
+        void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
+        translated = normalizeLocaleText(
+          buildGermanWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()) {
+        translated = normalizeLocaleText(
+          buildCrossLocaleExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            sourceLocale: detectedSourceLocale === 'unknown' ? storedSourceLocale : detectedSourceLocale,
+            targetLocale: locale,
+            gender,
+            isPresent,
+            position: exp.position,
+          }),
+          locale,
+        );
+      }
       const translatedGate = validateExperienceCvPerspective(translated, locale);
       const translatedOk = Boolean(translated.trim())
         && translatedGate.ok

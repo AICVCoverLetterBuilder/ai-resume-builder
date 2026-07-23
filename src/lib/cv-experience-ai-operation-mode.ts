@@ -562,6 +562,21 @@ function domainShells(
       ];
   }
 
+  if (locale === 'de' && domain === 'warehouse') {
+    if (present) {
+      return [
+        'Prüft eingehende Waren.',
+        'Kontrolliert die dazugehörigen Unterlagen und Aufzeichnungen.',
+        'Koordiniert mit Kolleginnen und Kollegen die Vorbereitung und Bewegung der Waren.',
+      ];
+    }
+    return [
+      'Prüfte eingehende Waren.',
+      'Kontrollierte die dazugehörigen Unterlagen und Aufzeichnungen.',
+      'Koordinierte mit Kolleginnen und Kollegen die Vorbereitung und Bewegung der Waren.',
+    ];
+  }
+
   return null;
 }
 

@@ -6,12 +6,16 @@
 import type { Locale } from './i18n/translations';
 import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
 import { detectTextLocale, isCrossLocaleOperation } from './cv-content-locale';
-import { applyEnglishEmploymentTense } from './cv-material-duty-coverage';
+import {
+  applyEnglishEmploymentTense,
+  materialDutyKeysFromDescription,
+} from './cv-material-duty-coverage';
 import {
   applySerbianCvEmploymentTense,
   extractSourceDutyUnits,
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
+import { sourceRequiresGermanWarehouseFactCoverage } from './cv-german-experience-grounding';
 
 type ActionFrame =
   | 'check_records'
@@ -74,7 +78,7 @@ function domainHintFromUnits(units: string[], position?: string): string {
   if (/(grafick|dizajn|vizuel|design|visual|ビジュアル|تصميم|डिज़ाइन)/.test(joined)) {
     return 'design';
   }
-  if (/(skladist|склад|warehouse|rob[aeu]|робе|робу|товара|goods|inventar|inventory|مستودع|गोदाम|倉庫|armaz)/.test(joined)) {
+  if (/(skladist|склад|warehouse|rob[aeu]|робе|робу|товара|goods|inventar|inventory|مستودع|गोदाम|倉庫|armaz|माल|आवाजाही|तैयारी)/.test(joined)) {
     return 'warehouse';
   }
   if (/(dokument|document|evidenc|record|وثائق|दस्तावेज़|書類)/.test(joined)) {
@@ -876,6 +880,9 @@ export function validateCrossLocaleSemanticCoverage(
   const candFrames = bullets.map((b) => classifyActionFrame(b));
   const usedB = new Set<number>();
   let covered = 0;
+  const warehouseSource = sourceRequiresGermanWarehouseFactCoverage(sourceDescription)
+    || materialDutyKeysFromDescription(sourceDescription)
+      .some((k) => k.startsWith('warehouse_'));
   for (let si = 0; si < srcFrames.length; si += 1) {
     const want = srcFrames[si];
     let matched = -1;
@@ -887,7 +894,8 @@ export function validateCrossLocaleSemanticCoverage(
       }
     }
     // Soft: near-equivalent frames when shells remap documentation↔design verbs.
-    if (matched < 0) {
+    // Warehouse sources must not soft-match office docs/info-exchange frames.
+    if (matched < 0 && !warehouseSource) {
       for (let bi = 0; bi < candFrames.length; bi += 1) {
         if (usedB.has(bi)) continue;
         const got = candFrames[bi];
