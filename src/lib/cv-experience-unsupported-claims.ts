@@ -23,7 +23,17 @@ export type ExperienceUnsupportedClaimKind =
   | 'outcome_ownership'
   | 'quality_guarantee'
   | 'completeness_guarantee'
-  | 'compliance_guarantee';
+  | 'compliance_guarantee'
+  | 'efficiency_claim'
+  | 'performance_claim'
+  | 'optimization_claim'
+  | 'productivity_claim'
+  | 'speed_claim'
+  | 'accuracy_claim'
+  | 'error_free_claim'
+  | 'object_scope_expansion'
+  | 'logistics_scope_expansion'
+  | 'unsupported_object_expansion';
 
 export type ExperienceUnsupportedClaimScan = {
   kinds: ExperienceUnsupportedClaimKind[];

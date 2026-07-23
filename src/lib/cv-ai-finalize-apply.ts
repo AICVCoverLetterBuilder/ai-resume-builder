@@ -87,11 +87,13 @@ import {
   buildSpanishWarehouseExperienceFallback,
   sourceRequiresSpanishWarehouseFactCoverage,
   validateSpanishWarehouseExperienceCoverage,
-  stripSpanishExperienceGuaranteeEscalation,
+  stripSpanishExperienceUnsupportedEscalation,
   SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
+  SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
 } from './cv-spanish-experience-grounding';
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
 import {
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
@@ -105,6 +107,10 @@ import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextarea
 export const EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION =
   'experience-diagnostics-final-candidate-305-v1' as const;
 void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
+/** AAB-309 — unsupported-claim repair lineage (distinct from no-op repair). */
+export const EXPERIENCE_REPAIR_LINEAGE_309_REVISION =
+  'experience-repair-lineage-309-v1' as const;
+void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
 import {
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
 } from './cv-summary-final-candidate-diagnostics-306';
@@ -268,6 +274,8 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
   SPANISH_CV_AI_305_REVISION,
   SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
+  SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
+  EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
@@ -310,6 +318,8 @@ void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
+void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
@@ -513,6 +523,22 @@ export type FinalizeCvAiFieldResult = {
     noOpRepairUniversalQuantifierDetected?: boolean;
     noOpRepairResponsibilityEscalationDetected?: boolean;
     noOpRepairRejectionReason?: string | null;
+    unsupportedClaimRepairAttempted?: boolean;
+    unsupportedClaimRepairKind?: string | null;
+    unsupportedClaimRepairValidationPassed?: boolean | null;
+    unsupportedClaimRepairApplied?: boolean;
+    unsupportedClaimRepairRejectionReason?: string | null;
+    unsupportedClaimRepairUnsupportedClaimCount?: number;
+    unsupportedClaimRepairUnsupportedClaimKinds?: string[];
+    unsupportedClaimRepairResidualUnsupportedClaimCount?: number;
+    unsupportedClaimRepairResidualUnsupportedClaimKinds?: string[];
+    unsupportedClaimRepairCoverageRequiredCount?: number | null;
+    unsupportedClaimRepairCoverageCoveredCount?: number | null;
+    unsupportedClaimRepairUncoveredFactIdentityHashes?: string[];
+    unsupportedClaimRepairHash?: string | null;
+    unsupportedClaimRepairNormalizedHash?: string | null;
+    experienceRepairLineageRevision?: typeof EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+    spanishExperienceRepairGroundingRevision?: typeof SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
     finalUnsupportedClaimCount?: number;
     finalUnsupportedClaimKinds?: string[];
     /** Packaged asset marker — must survive minification. */
@@ -3077,6 +3103,20 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let noOpRepairUniversalQuantifierDetected = false;
   let noOpRepairResponsibilityEscalationDetected = false;
   let noOpRepairRejectionReason: string | null = null;
+  let unsupportedClaimRepairAttempted = false;
+  let unsupportedClaimRepairKind: string | null = null;
+  let unsupportedClaimRepairValidationPassed: boolean | null = null;
+  let unsupportedClaimRepairApplied = false;
+  let unsupportedClaimRepairRejectionReason: string | null = null;
+  let unsupportedClaimRepairUnsupportedClaimCount = 0;
+  let unsupportedClaimRepairUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
+  let unsupportedClaimRepairResidualUnsupportedClaimCount = 0;
+  let unsupportedClaimRepairResidualUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
+  let unsupportedClaimRepairCoverageRequiredCount: number | null = null;
+  let unsupportedClaimRepairCoverageCoveredCount: number | null = null;
+  let unsupportedClaimRepairUncoveredFactIdentityHashes: string[] = [];
+  let unsupportedClaimRepairHash: string | null = null;
+  let unsupportedClaimRepairNormalizedHash: string | null = null;
   let finalUnsupportedClaimCount = 0;
   let finalUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
   let lastUnsupportedClaimCount = 0;
@@ -3168,6 +3208,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     noOpRepairUniversalQuantifierDetected,
     noOpRepairResponsibilityEscalationDetected,
     noOpRepairRejectionReason,
+    unsupportedClaimRepairAttempted,
+    unsupportedClaimRepairKind,
+    unsupportedClaimRepairValidationPassed,
+    unsupportedClaimRepairApplied,
+    unsupportedClaimRepairRejectionReason,
+    unsupportedClaimRepairUnsupportedClaimCount,
+    unsupportedClaimRepairUnsupportedClaimKinds,
+    unsupportedClaimRepairResidualUnsupportedClaimCount,
+    unsupportedClaimRepairResidualUnsupportedClaimKinds,
+    unsupportedClaimRepairCoverageRequiredCount,
+    unsupportedClaimRepairCoverageCoveredCount,
+    unsupportedClaimRepairUncoveredFactIdentityHashes,
+    unsupportedClaimRepairHash,
+    unsupportedClaimRepairNormalizedHash,
+    experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
+    spanishExperienceRepairGroundingRevision: SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
     finalUnsupportedClaimCount,
     finalUnsupportedClaimKinds,
     experienceAiNoOpRecoveryRevision: EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
@@ -4148,7 +4204,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ?? (result.countedAsSuccess
             ? (result.origin === 'deterministic_fallback'
               ? 'deterministic_fallback'
-              : (noOpRepairApplied ? 'noop_repair' : 'provider'))
+              : (unsupportedClaimRepairApplied
+                ? 'unsupported_claim_repair'
+                : (noOpRepairApplied ? 'noop_repair' : 'provider')))
             : 'none'),
         providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
         providerAccepted: result.diagnostics?.providerAccepted === false
@@ -4159,6 +4217,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               || result.diagnostics?.clientDeterministicFallbackApplied
               || finalCandidateSource === 'deterministic_fallback'
               || finalCandidateSource === 'server_fallback'
+              || finalCandidateSource === 'unsupported_claim_repair'
+              || unsupportedClaimRepairApplied
               || (
                 (providerUnsupportedClaimCount ?? 0) > 0
                 && (noOpRepairApplied
@@ -4166,6 +4226,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                   || result.origin === 'ai_repaired')
               ))
           ),
+        unsupportedClaimRepairAttempted,
+        unsupportedClaimRepairKind,
+        unsupportedClaimRepairValidationPassed,
+        unsupportedClaimRepairApplied,
+        unsupportedClaimRepairRejectionReason,
+        unsupportedClaimRepairUnsupportedClaimCount,
+        unsupportedClaimRepairUnsupportedClaimKinds,
+        unsupportedClaimRepairResidualUnsupportedClaimCount,
+        unsupportedClaimRepairResidualUnsupportedClaimKinds,
+        unsupportedClaimRepairCoverageRequiredCount,
+        unsupportedClaimRepairCoverageCoveredCount,
+        unsupportedClaimRepairUncoveredFactIdentityHashes,
+        unsupportedClaimRepairHash,
+        unsupportedClaimRepairNormalizedHash,
+        experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
+        spanishExperienceRepairGroundingRevision: SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
         providerRejectionReason: result.diagnostics?.providerRejectionReason
           ?? providerRejectionReason,
         providerRejectionStage: result.diagnostics?.providerRejectionStage
@@ -4463,7 +4539,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       providerRejectionReason = lastRejectReason;
       providerRejectionStage = lastRejectStage;
-      // AAB-308: at most one scoped Spanish guarantee-strip repair before fallback.
+      // AAB-309: at most one source-constrained unsupported-claim repair (not no-op).
       if (
         locale === 'es'
         && lastUnsupportedClaimCount > 0
@@ -4474,75 +4550,136 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || k === 'outcome_ownership'
           || k === 'quality_guarantee'
           || k === 'completeness_guarantee'
-          || k === 'compliance_guarantee')
+          || k === 'compliance_guarantee'
+          || k === 'efficiency_claim'
+          || k === 'performance_claim'
+          || k === 'optimization_claim'
+          || k === 'productivity_claim'
+          || k === 'speed_claim'
+          || k === 'accuracy_claim'
+          || k === 'error_free_claim'
+          || k === 'object_scope_expansion'
+          || k === 'logistics_scope_expansion'
+          || k === 'unsupported_object_expansion')
       ) {
         void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
-        const repairedEs = stripSpanishExperienceGuaranteeEscalation(
+        void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
+        void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+        unsupportedClaimRepairAttempted = true;
+        unsupportedClaimRepairKind = 'spanish_unsupported_claim_strip';
+        unsupportedClaimRepairUnsupportedClaimCount = lastUnsupportedClaimCount;
+        unsupportedClaimRepairUnsupportedClaimKinds = [...lastUnsupportedClaimKinds];
+        const repairedEs = stripSpanishExperienceUnsupportedEscalation(
           finalNormalizedBullets,
           sourceForCoverage,
         );
         const repairedNorm = repairedEs.replace(/\s+/g, ' ').trim();
         const providerNorm = finalNormalizedBullets.replace(/\s+/g, ' ').trim();
-        if (
+        unsupportedClaimRepairHash = repairedNorm
+          ? fingerprintText(repairedNorm)
+          : null;
+        unsupportedClaimRepairNormalizedHash = unsupportedClaimRepairHash;
+        const repairMeaningful = Boolean(
           repairedNorm
           && repairedNorm !== providerNorm
           && experienceAiHasMeaningfulChange(sourceForCoverage, repairedEs, {
             perspectiveApplied: false,
-          })
-        ) {
-          const repairScan = detectSpanishExperienceUnsupportedExpansion(
+          }),
+        );
+        const repairScan = repairedNorm
+          ? detectSpanishExperienceUnsupportedExpansion(sourceForCoverage, repairedEs)
+          : { count: lastUnsupportedClaimCount, kinds: lastUnsupportedClaimKinds };
+        unsupportedClaimRepairResidualUnsupportedClaimCount = repairScan.count;
+        unsupportedClaimRepairResidualUnsupportedClaimKinds = [...repairScan.kinds];
+        if (sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage) && repairedNorm) {
+          const cov = validateSpanishWarehouseExperienceCoverage(
             sourceForCoverage,
             repairedEs,
           );
-          if (repairScan.count === 0) {
-            const repairAccepted = tryAccept(
-              repairedEs,
-              'ai_repaired',
-              'spanish_guarantee_repair',
+          unsupportedClaimRepairCoverageRequiredCount = cov.required.length;
+          unsupportedClaimRepairCoverageCoveredCount = cov.covered.length;
+          unsupportedClaimRepairUncoveredFactIdentityHashes = cov.uncovered.map(
+            (id) => `es_wh_${id}`,
+          );
+        }
+        if (
+          repairMeaningful
+          && repairScan.count === 0
+        ) {
+          const repairAccepted = tryAccept(
+            repairedEs,
+            'ai_repaired',
+            'spanish_unsupported_claim_repair',
+          );
+          if (repairAccepted) {
+            providerAccepted = false;
+            // Distinct from no-op repair lineage.
+            noOpRepairApplied = false;
+            noOpRepairValidationPassed = null;
+            unsupportedClaimRepairValidationPassed = true;
+            unsupportedClaimRepairApplied = true;
+            unsupportedClaimRepairRejectionReason = null;
+            finalUnsupportedClaimCount = 0;
+            finalUnsupportedClaimKinds = [];
+            finalCandidateSource = 'unsupported_claim_repair';
+            perspectiveMeta.normalizedBulletsUsedForApply = true;
+            perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
+              repairAccepted.text,
+              locale,
             );
-            if (repairAccepted) {
-              providerAccepted = false;
-              noOpRepairApplied = true;
-              noOpRepairValidationPassed = true;
-              noOpRepairMeaningfulChangeDetected = true;
-              noOpRepairUnsupportedClaimCount = 0;
-              noOpRepairUnsupportedClaimKinds = [];
-              finalUnsupportedClaimCount = 0;
-              finalUnsupportedClaimKinds = [];
-              finalCandidateSource = 'noop_repair';
-              perspectiveMeta.normalizedBulletsUsedForApply = true;
-              perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
-                repairAccepted.text,
-                locale,
-              );
-              perspectiveMeta.meaningfulChangeDetected = true;
-              perspectiveMeta.noOpRejected = false;
-              return attachPerspectiveDiag({
-                ...repairAccepted,
-                origin: 'ai_repaired',
-                diagnostics: {
-                  ...repairAccepted.diagnostics,
-                  providerAccepted: false,
-                  providerRejectionReason,
-                  providerRejectionStage: providerRejectionStage || 'unsupported_claim_validation',
-                  providerUnsupportedClaimCount,
-                  providerUnsupportedClaimKinds: [...providerUnsupportedClaimKinds],
-                  providerCoveredFactCount: providerCoveredFactCount || lastCovered || sourceFactCount,
-                  providerRequiredFactCount: providerRequiredFactCount || lastRequired || sourceFactCount,
-                  coveredFactCount: lastCovered || sourceFactCount,
-                  noOpRepairApplied: true,
-                  noOpRepairValidationPassed: true,
-                  noOpRepairMeaningfulChangeDetected: true,
-                  finalUnsupportedClaimCount: 0,
-                  finalUnsupportedClaimKinds: [],
-                  unsupportedClaimCount: 0,
-                  finalCandidateSource: 'noop_repair',
-                  experienceAiUnsupportedExpansionRevision:
-                    EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
-                },
-              });
-            }
+            perspectiveMeta.meaningfulChangeDetected = true;
+            perspectiveMeta.noOpRejected = false;
+            return attachPerspectiveDiag({
+              ...repairAccepted,
+              origin: 'ai_repaired',
+              diagnostics: {
+                ...repairAccepted.diagnostics,
+                providerAccepted: false,
+                providerRejectionReason,
+                providerRejectionStage: providerRejectionStage || 'unsupported_claim_validation',
+                providerUnsupportedClaimCount,
+                providerUnsupportedClaimKinds: [...providerUnsupportedClaimKinds],
+                providerCoveredFactCount: providerCoveredFactCount || lastCovered || sourceFactCount,
+                providerRequiredFactCount: providerRequiredFactCount || lastRequired || sourceFactCount,
+                coveredFactCount: lastCovered || sourceFactCount,
+                noOpRepairAttempted: false,
+                noOpRepairApplied: false,
+                noOpRepairValidationPassed: undefined,
+                unsupportedClaimRepairAttempted: true,
+                unsupportedClaimRepairKind,
+                unsupportedClaimRepairValidationPassed: true,
+                unsupportedClaimRepairApplied: true,
+                unsupportedClaimRepairResidualUnsupportedClaimCount: 0,
+                unsupportedClaimRepairResidualUnsupportedClaimKinds: [],
+                unsupportedClaimRepairCoverageRequiredCount,
+                unsupportedClaimRepairCoverageCoveredCount,
+                unsupportedClaimRepairUncoveredFactIdentityHashes,
+                unsupportedClaimRepairHash,
+                unsupportedClaimRepairNormalizedHash,
+                finalUnsupportedClaimCount: 0,
+                finalUnsupportedClaimKinds: [],
+                unsupportedClaimCount: 0,
+                finalCandidateSource: 'unsupported_claim_repair',
+                experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
+                spanishExperienceRepairGroundingRevision:
+                  SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
+                experienceAiUnsupportedExpansionRevision:
+                  EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
+              },
+            });
           }
+          unsupportedClaimRepairValidationPassed = false;
+          unsupportedClaimRepairApplied = false;
+          unsupportedClaimRepairRejectionReason = lastRejectReason
+            || 'unsupported_claim_repair_rejected';
+        } else {
+          unsupportedClaimRepairValidationPassed = false;
+          unsupportedClaimRepairApplied = false;
+          unsupportedClaimRepairRejectionReason = repairScan.count > 0
+            ? (repairScan.kinds[0] || 'residual_unsupported_claims')
+            : (!repairMeaningful
+              ? 'unsupported_claim_repair_noop_or_identical'
+              : 'unsupported_claim_repair_invalid');
         }
       }
       if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {

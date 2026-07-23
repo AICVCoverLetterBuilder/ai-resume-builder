@@ -47,7 +47,7 @@ const BAD_AAB307 = formatExperienceBullets([
 
 const GOOD_SAFE = formatExperienceBullets([
   'Revisa la mercancía entrante en el almacén.',
-  'Comprueba la documentación relacionada con los envíos recibidos.',
+  'Comprueba la documentación relacionada con la mercancía recibida.',
   'Coordina con sus compañeros la preparación y el movimiento de la mercancía.',
 ]);
 
@@ -299,7 +299,7 @@ describe('Spanish Experience guarantee grounding (AAB-308)', () => {
     expect(fin.text).toMatch(/movimiento/i);
     expect(fin.diagnostics?.providerAccepted).toBe(false);
     expect(fin.diagnostics?.finalUnsupportedClaimCount ?? 0).toBe(0);
-    expect(['noop_repair', 'deterministic_fallback']).toContain(
+    expect(['unsupported_claim_repair', 'deterministic_fallback', 'noop_repair']).toContain(
       fin.diagnostics?.finalCandidateSource,
     );
     expect(fin.countedAsSuccess).toBe(true);
@@ -522,7 +522,7 @@ describe('Spanish Experience guarantee grounding (AAB-308)', () => {
     expect(fin.text).not.toMatch(/garantiz|asegur|correcta recepción/i);
     expect(validateSpanishWarehouseExperienceCoverage(WH_ES, fin.text).ok).toBe(true);
     expect(fin.diagnostics?.finalUnsupportedClaimCount ?? 0).toBe(0);
-    expect(['noop_repair', 'deterministic_fallback']).toContain(
+    expect(['unsupported_claim_repair', 'deterministic_fallback', 'noop_repair']).toContain(
       fin.diagnostics?.finalCandidateSource,
     );
   });

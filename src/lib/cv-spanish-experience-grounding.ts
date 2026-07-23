@@ -19,9 +19,13 @@ export const SPANISH_CV_AI_305_REVISION = 'spanish-cv-ai-305-v1' as const;
 /** AAB-308 — Spanish Experience guarantee/assurance escalation grounding. */
 export const SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION =
   'spanish-experience-guarantee-grounding-308-v1' as const;
+/** AAB-309 — Spanish Experience post-repair performance/object grounding. */
+export const SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION =
+  'spanish-experience-repair-grounding-309-v1' as const;
 
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
 
 const WAREHOUSE_KEYS: MaterialDutyKey[] = [
   'warehouse_inbound_check',
@@ -216,28 +220,176 @@ function sourceSupportsSpanishResponsibility(source: string): boolean {
     .test(source || '');
 }
 
+/** Performance / efficiency / optimization modifiers (source-gated). */
+const EFFICIENCY_CLAIM_ES =
+  /\b(?:eficiente(?:mente)?|eficaz(?:mente)?|[oó]ptim[oa]s?|de\s+forma\s+[oó]ptima|de\s+manera\s+eficiente|de\s+forma\s+eficiente|con\s+eficiencia|con\s+eficacia)\b/iu;
+const OPTIMIZATION_CLAIM_ES =
+  /\b(?:agiliz(?:a|ó|ar)|optimiz(?:a|ó|ar)|mejora\s+(?:el\s+)?rendimiento|mejora\s+(?:la\s+)?productividad|reduce\s+(?:los\s+)?tiempos|minimiza\s+(?:los\s+)?errores)\b/iu;
+const SPEED_CLAIM_ES =
+  /\b(?:de\s+forma\s+r[aá]pida|r[aá]pidamente|con\s+rapidez|puntualmente)\b/iu;
+const ACCURACY_CLAIM_ES =
+  /\b(?:con\s+precisi[oó]n|con\s+exactitud|de\s+forma\s+precisa)\b/iu;
+const ERROR_FREE_CLAIM_ES =
+  /\b(?:sin\s+errores|libre\s+de\s+errores|cero\s+errores)\b/iu;
+
+function sourceSupportsSpanishEfficiency(source: string): boolean {
+  return EFFICIENCY_CLAIM_ES.test(source || '')
+    || OPTIMIZATION_CLAIM_ES.test(source || '')
+    || SPEED_CLAIM_ES.test(source || '');
+}
+
+function sourceSupportsSpanishAccuracy(source: string): boolean {
+  return ACCURACY_CLAIM_ES.test(source || '')
+    || /\b(?:precisi[oó]n|exactitud)\b/iu.test(source || '');
+}
+
 /**
- * Strip candidate-added Spanish guarantee/assurance purpose clauses when the
- * source does not authorize the same strength. Preserves ordinary operational
- * facts (revisar / comprobar / coordinar).
+ * Material logistics objects that require explicit source support.
+ * Safe equivalents (mercancía/productos, documentación/documentos, compañeros/equipo)
+ * are excluded from this list.
  */
-export function stripSpanishExperienceGuaranteeEscalation(
+const MATERIAL_OBJECT_PATTERNS: Array<{
+  id: string;
+  re: RegExp;
+  sourceSupport: RegExp;
+}> = [
+  {
+    id: 'entregas',
+    re: /\bentregas?\b/iu,
+    sourceSupport: /\bentregas?\b/iu,
+  },
+  {
+    id: 'envios',
+    re: /\benv[ií]os?\b/iu,
+    sourceSupport: /\benv[ií]os?\b/iu,
+  },
+  {
+    id: 'pedidos',
+    re: /\bpedidos?\b/iu,
+    sourceSupport: /\bpedidos?\b/iu,
+  },
+  {
+    id: 'expediciones',
+    re: /\bexpediciones?\b|\bexpedici[oó]n\b/iu,
+    sourceSupport: /\bexpedici/iu,
+  },
+  {
+    id: 'devoluciones',
+    re: /\bdevoluciones?\b/iu,
+    sourceSupport: /\bdevoluciones?\b/iu,
+  },
+  {
+    id: 'proveedores',
+    re: /\bproveedores?\b/iu,
+    sourceSupport: /\bproveedores?\b/iu,
+  },
+  {
+    id: 'clientes',
+    re: /\bclientes?\b/iu,
+    sourceSupport: /\bclientes?\b/iu,
+  },
+  {
+    id: 'inventario',
+    re: /\b(?:inventario|existencias|stock)\b/iu,
+    sourceSupport: /\b(?:inventario|existencias|stock)\b/iu,
+  },
+  {
+    id: 'facturas',
+    re: /\bfacturas?\b/iu,
+    sourceSupport: /\bfacturas?\b/iu,
+  },
+  {
+    id: 'albaranes',
+    re: /\balbaranes?\b/iu,
+    sourceSupport: /\balbaranes?\b/iu,
+  },
+  {
+    id: 'registros',
+    // Safe equivalent: documentación/documentos ↔ registros when source has docs.
+    re: /\bregistros?\b/iu,
+    sourceSupport: /\b(?:registros?|documentaci[oó]n|documentos?)\b/iu,
+  },
+  {
+    id: 'rutas',
+    re: /\brutas?\b/iu,
+    sourceSupport: /\brutas?\b/iu,
+  },
+  {
+    id: 'transporte',
+    re: /\btransporte\b/iu,
+    sourceSupport: /\btransporte\b/iu,
+  },
+  {
+    id: 'distribucion',
+    re: /\bdistribuci[oó]n\b/iu,
+    sourceSupport: /\bdistribuci[oó]n\b/iu,
+  },
+  {
+    id: 'calidad',
+    re: /\bcalidad\b/iu,
+    sourceSupport: /\bcalidad\b/iu,
+  },
+  {
+    id: 'cumplimiento',
+    re: /\bcumplimiento\b/iu,
+    sourceSupport: /\bcumplimiento\b/iu,
+  },
+  {
+    id: 'plazos',
+    re: /\bplazos?\b/iu,
+    sourceSupport: /\bplazos?\b/iu,
+  },
+];
+
+function detectSpanishObjectScopeExpansion(
+  source: string,
+  candidate: string,
+): ExperienceUnsupportedClaimKind[] {
+  const kinds: ExperienceUnsupportedClaimKind[] = [];
+  // Conjunction expansion: envíos y entregas (or similar dual logistics lists).
+  if (
+    /env[ií]os?\s+y\s+entregas?/iu.test(candidate)
+    && !(/env[ií]os?/iu.test(source) && /entregas?/iu.test(source))
+  ) {
+    kinds.push('logistics_scope_expansion');
+    kinds.push('object_scope_expansion');
+    kinds.push('unsupported_object_expansion');
+  }
+  for (const entry of MATERIAL_OBJECT_PATTERNS) {
+    if (entry.re.test(candidate) && !entry.sourceSupport.test(source)) {
+      kinds.push('object_scope_expansion');
+      kinds.push('unsupported_object_expansion');
+      if (/env[ií]o|entrega|pedido|expedici|devoluci|proveedor|cliente|inventario|stock|factura|albar[aá]n|ruta|transporte|distribuci/iu
+        .test(entry.id)) {
+        kinds.push('logistics_scope_expansion');
+      }
+      break;
+    }
+  }
+  return [...new Set(kinds)];
+}
+
+/**
+ * Strip candidate-added Spanish unsupported escalations (guarantee, efficiency,
+ * material-object expansions) when the source does not authorize them.
+ * Source-constrained: remove rejected spans; do not freely rewrite bullets.
+ */
+export function stripSpanishExperienceUnsupportedEscalation(
   candidateDescription: string,
   sourceDescription = '',
 ): string {
   void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+  void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
   const bullets = splitExperienceBullets(candidateDescription || '');
   const allowGuarantee = sourceSupportsSpanishGuarantee(sourceDescription);
   const allowResponsibility = sourceSupportsSpanishResponsibility(sourceDescription);
-  if (allowGuarantee && allowResponsibility) {
-    return candidateDescription || '';
-  }
+  const allowEfficiency = sourceSupportsSpanishEfficiency(sourceDescription);
+  const allowAccuracy = sourceSupportsSpanishAccuracy(sourceDescription);
   const cleaned = bullets.map((b) => {
     let row = (b || '').trim();
     if (!row) return row;
     if (!allowGuarantee) {
       row = row.replace(GUARANTEE_PURPOSE_CLAUSE_ES, '');
-      // Mid-clause ownership fragments without ordinary action remaining.
       if (GUARANTEE_PREDICATE_ES.test(row) && !ORDINARY_ACTION_ES.test(row)) {
         return '';
       }
@@ -262,10 +414,78 @@ export function stripSpanishExperienceGuaranteeEscalation(
         .replace(/(?:\s*,?\s*)?hacerse\s+cargo\s+de\s+[^.]*/giu, '')
         .trim();
     }
+    if (!allowEfficiency) {
+      row = row
+        .replace(/\s+eficiente(?:mente)?\b/giu, '')
+        .replace(/\s+eficaz(?:mente)?\b/giu, '')
+        .replace(/\s+de\s+forma\s+(?:eficiente|[oó]ptima)\b/giu, '')
+        .replace(/\s+de\s+manera\s+eficiente\b/giu, '')
+        .replace(/\s+con\s+(?:eficiencia|eficacia)\b/giu, '')
+        .replace(/\s+[oó]ptim[oa]s?\b/giu, '')
+        .replace(/\b(?:agiliz\w*|optimiz\w*)\s+/giu, '')
+        .replace(/\s+mejora\s+(?:el\s+)?rendimiento\b/giu, '')
+        .replace(/\s+mejora\s+(?:la\s+)?productividad\b/giu, '')
+        .replace(/\s+reduce\s+(?:los\s+)?tiempos?\b/giu, '')
+        .replace(/\s+minimiza\s+(?:los\s+)?errores?\b/giu, '')
+        .replace(/\s+de\s+forma\s+r[aá]pida\b/giu, '')
+        .replace(/\s+r[aá]pidamente\b/giu, '')
+        .trim();
+    }
+    if (!allowAccuracy) {
+      row = row
+        .replace(/\s+con\s+(?:precisi[oó]n|exactitud)\b/giu, '')
+        .replace(/\s+sin\s+errores\b/giu, '')
+        .replace(/\s+libre\s+de\s+errores\b/giu, '')
+        .trim();
+    }
+    // Object/scope: strip unsupported logistics objects and dual conjunctions.
+    for (const entry of MATERIAL_OBJECT_PATTERNS) {
+      if (entry.re.test(row) && !entry.sourceSupport.test(sourceDescription)) {
+        // Prefer reducing "con los envíos y entregas…" → "con la mercancía recibida"
+        // when the bullet is a document check over related docs.
+        if (/documentaci[oó]n|documentos|registros/iu.test(row)) {
+          row = row
+            .replace(
+              /\s+con\s+(?:los\s+|las\s+|el\s+|la\s+)?(?:env[ií]os?(?:\s+y\s+entregas?)?|entregas?|pedidos?|facturas?|albaranes?)(?:\s+(?:de\s+)?(?:mercanc\w*|recibid\w*|clientes?))?/giu,
+              ' con la mercancía recibida',
+            )
+            .replace(
+              /\s+y\s+entregas?(?:\s+de\s+mercanc\w*)?/giu,
+              '',
+            )
+            .replace(entry.re, '')
+            .trim();
+        } else {
+          row = row
+            .replace(/\s+y\s+entregas?(?:\s+de\s+mercanc\w*)?/giu, '')
+            .replace(
+              new RegExp(`\\s+(?:de\\s+|con\\s+)?(?:los\\s+|las\\s+|el\\s+|la\\s+)?${entry.re.source}`, 'giu'),
+              '',
+            )
+            .trim();
+        }
+      }
+    }
+    row = row
+      .replace(/\s{2,}/g, ' ')
+      .replace(/\s+([.,;:])/g, '$1')
+      .replace(/\b(el|la|los|las|de|con|y)\s*\./giu, '.')
+      .trim();
     if (row && !/[.!?]$/u.test(row)) row = `${row}.`;
     return row.replace(/\s{2,}/g, ' ').trim();
   }).filter(Boolean);
   return formatExperienceBullets(cleaned);
+}
+
+/** @deprecated Prefer stripSpanishExperienceUnsupportedEscalation (AAB-309). */
+export function stripSpanishExperienceGuaranteeEscalation(
+  candidateDescription: string,
+  sourceDescription = '',
+): string {
+  return stripSpanishExperienceUnsupportedEscalation(
+    candidateDescription,
+    sourceDescription,
+  );
 }
 
 /**
@@ -278,6 +498,7 @@ export function detectSpanishExperienceUnsupportedExpansion(
 ): SpanishExperienceExpansionScan {
   void SPANISH_CV_AI_305_REVISION;
   void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+  void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
   const source = sourceDescription || '';
   const joined = candidateDescription || '';
   const kinds: ExperienceUnsupportedClaimKind[] = [];
@@ -409,6 +630,49 @@ export function detectSpanishExperienceUnsupportedExpansion(
     }
   }
 
+  // Performance / efficiency / optimization (AAB-309).
+  if (EFFICIENCY_CLAIM_ES.test(joined) && !sourceSupportsSpanishEfficiency(source)) {
+    kinds.push('efficiency_claim');
+    labels.push('efficiency_claim');
+    kinds.push('performance_claim');
+    labels.push('performance_claim');
+  }
+  if (OPTIMIZATION_CLAIM_ES.test(joined) && !sourceSupportsSpanishEfficiency(source)) {
+    kinds.push('optimization_claim');
+    labels.push('optimization_claim');
+    if (/productividad|rendimiento/iu.test(joined)) {
+      kinds.push('productivity_claim');
+      labels.push('productivity_claim');
+    }
+    kinds.push('performance_claim');
+    labels.push('performance_claim');
+  }
+  if (SPEED_CLAIM_ES.test(joined) && !sourceSupportsSpanishEfficiency(source)) {
+    kinds.push('speed_claim');
+    labels.push('speed_claim');
+  }
+  if (ACCURACY_CLAIM_ES.test(joined) && !sourceSupportsSpanishAccuracy(source)) {
+    kinds.push('accuracy_claim');
+    labels.push('accuracy_claim');
+  }
+  if (ERROR_FREE_CLAIM_ES.test(joined) && !ERROR_FREE_CLAIM_ES.test(source)) {
+    kinds.push('error_free_claim');
+    labels.push('error_free_claim');
+  }
+  // Outcome adverb "correctamente" as unsupported outcome when source lacks it.
+  if (/\bcorrectamente\b/iu.test(joined)
+    && !/\bcorrectamente\b|\bcorrect[ao]\b/iu.test(source)
+    && !sourceSupportsSpanishGuarantee(source)) {
+    kinds.push('outcome_ownership');
+    labels.push('unsupported_outcome_adverb');
+  }
+
+  // Material object / logistics scope expansion (AAB-309).
+  for (const k of detectSpanishObjectScopeExpansion(source, joined)) {
+    kinds.push(k);
+    labels.push(k);
+  }
+
   const warehouseSource = sourceRequiresSpanishWarehouseFactCoverage(source);
   if (warehouseSource
     && /(?:intercambio\s+de\s+informaci[oó]n|coordina\w*\s+(?:el\s+)?intercambio\s+de\s+informaci[oó]n|coordina\w*\s+la\s+comunicaci[oó]n|asegurar?\s+la\s+comunicaci[oó]n|procesos?\s+generales?\s+coordina)/iu
@@ -440,7 +704,10 @@ export function detectSpanishExperienceUnsupportedExpansion(
       || uniqueKinds.includes('quality_claim')
       || uniqueKinds.includes('guarantee_escalation')
       || uniqueKinds.includes('assurance_escalation')
-      || uniqueKinds.includes('outcome_ownership'),
+      || uniqueKinds.includes('outcome_ownership')
+      || uniqueKinds.includes('efficiency_claim')
+      || uniqueKinds.includes('object_scope_expansion')
+      || uniqueKinds.includes('logistics_scope_expansion'),
     deadlineClaimDetected,
     documentationExpansionDetected,
     malformedRolePhraseDetected,
@@ -464,8 +731,8 @@ export function buildSpanishWarehouseExperienceFallback(options: {
         : 'Revisó la mercancía entrante en el almacén.');
     } else if (fact === 'document_check') {
       lines.push(present
-        ? 'Comprueba la documentación relacionada con los envíos recibidos.'
-        : 'Comprobó la documentación relacionada con los envíos recibidos.');
+        ? 'Comprueba la documentación relacionada con la mercancía recibida.'
+        : 'Comprobó la documentación relacionada con la mercancía recibida.');
     } else if (fact === 'goods_prep_movement_colleagues') {
       lines.push(present
         ? 'Coordina con sus compañeros la preparación y el movimiento de la mercancía.'
@@ -476,12 +743,12 @@ export function buildSpanishWarehouseExperienceFallback(options: {
     return formatExperienceBullets(present
       ? [
         'Revisa la mercancía entrante en el almacén.',
-        'Comprueba la documentación relacionada con los envíos recibidos.',
+        'Comprueba la documentación relacionada con la mercancía recibida.',
         'Coordina con sus compañeros la preparación y el movimiento de la mercancía.',
       ]
       : [
         'Revisó la mercancía entrante en el almacén.',
-        'Comprobó la documentación relacionada con los envíos recibidos.',
+        'Comprobó la documentación relacionada con la mercancía recibida.',
         'Coordinó con sus compañeros la preparación y el movimiento de la mercancía.',
       ]);
   }
