@@ -830,6 +830,17 @@ type ExperienceLike = {
   unsupportedClaimRepairNormalizedHash?: string | null;
   candidateAddedPredicateCount?: number | null;
   repairResidualAddedPredicateCount?: number | null;
+  currentTextareaProvenance?: string | null;
+  lastAiOutputHashMatched?: boolean | null;
+  materialUserEditDetected?: boolean | null;
+  visibleComparisonUsedForNoOp?: boolean | null;
+  semanticNoOpDetected?: boolean | null;
+  degradationDetected?: boolean | null;
+  materialImprovementDetected?: boolean | null;
+  finalSourceUnitPredicateCoveragePassed?: boolean | null;
+  finalComplianceScopeExpansionDetected?: boolean | null;
+  operationMode?: string | null;
+  field?: string | null;
   candidateLineage?: Array<{
     candidateKind?: string;
     accepted?: boolean | null;
@@ -1076,6 +1087,71 @@ export function checkExperienceDiagnosticInvariants(
         countedAsSuccess: true,
       });
     }
+  }
+  // AAB-311 dual-source / predicate-phase / no-op invariants.
+  if (
+    trace.currentTextareaProvenance === 'ai_generated_unedited'
+    && trace.lastAiOutputHashMatched === true
+    && trace.materialUserEditDetected === false
+    && trace.visibleComparisonUsedForNoOp !== true
+    && (trace.operationMode === 'enhance_existing' || trace.field === 'experience_description')
+  ) {
+    push('ai_unedited_rerun_missing_visible_noop_baseline', {
+      currentTextareaProvenance: trace.currentTextareaProvenance,
+      visibleComparisonUsedForNoOp: trace.visibleComparisonUsedForNoOp ?? null,
+    });
+  }
+  if (
+    trace.semanticNoOpDetected === true
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+  ) {
+    push('semantic_noop_with_usage_or_apply', {
+      semanticNoOpDetected: true,
+      countedAsSuccess: trace.countedAsSuccess ?? false,
+      visibleApplySucceeded: trace.visibleApplySucceeded ?? false,
+    });
+  }
+  if (
+    trace.degradationDetected === true
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+  ) {
+    push('degradation_with_usage_or_apply', {
+      degradationDetected: true,
+      countedAsSuccess: trace.countedAsSuccess ?? false,
+      visibleApplySucceeded: trace.visibleApplySucceeded ?? false,
+    });
+  }
+  if (
+    (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+    && trace.finalSourceUnitPredicateCoveragePassed === false
+  ) {
+    push('accepted_with_final_predicate_coverage_false', {
+      finalSourceUnitPredicateCoveragePassed: false,
+      countedAsSuccess: trace.countedAsSuccess ?? false,
+    });
+  }
+  if (
+    (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+    && trace.finalComplianceScopeExpansionDetected === true
+  ) {
+    push('accepted_with_final_compliance_expansion', {
+      finalComplianceScopeExpansionDetected: true,
+    });
+  }
+  if (
+    trace.countedAsSuccess === true
+    && trace.visibleApplySucceeded === true
+    && trace.materialImprovementDetected === false
+    && trace.semanticNoOpDetected !== true
+    && trace.operationMode === 'enhance_existing'
+    && trace.visibleComparisonUsedForNoOp === true
+    && (trace.currentTextareaProvenance === 'ai_generated_unedited'
+      || trace.lastAiOutputHashMatched === true)
+  ) {
+    push('usage_without_material_improvement', {
+      materialImprovementDetected: false,
+      countedAsSuccess: true,
+    });
   }
   return { passed: failures.length === 0, failures };
 }

@@ -213,6 +213,7 @@ import {
   RUSSIAN_AUTHORITATIVE_DESIGN_MATERIAL_KEYS,
 } from './cv-material-duty-coverage';
 import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
+import { experienceAiSourcesEquivalent } from './cv-experience-ai-operation-snapshot';
 import {
   normalizeExperienceBulletsPerspective,
   validateExperienceCvPerspective,
@@ -4342,6 +4343,41 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     // provider, repair, and deterministic fallback accept paths alike.
     if (result.countedAsSuccess && useVisibleForNoOp && (result.text || '').trim()) {
       void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+      const isEs = (locale || '').toLowerCase().startsWith('es');
+      if (!isEs) {
+        // Non-Spanish: only exact/normalized visible equivalence is a no-op.
+        // Do not apply Spanish compliance/semantic degradation heuristics.
+        if (experienceAiSourcesEquivalent(visibleComparisonText, result.text)) {
+          providerAccepted = false;
+          unsupportedClaimRepairApplied = false;
+          clientDeterministicFallbackApplied = false;
+          finalCandidateSource = 'none';
+          return {
+            blocked: true,
+            reason: 'experience_ai_noop',
+            text: exp?.description || visibleComparisonText || '',
+            origin: 'user',
+            roleDutyConflict,
+            countedAsSuccess: false,
+            diagnostics: {
+              ...baseDiag(),
+              ...perspectiveMeta,
+              meaningfulChangeDetected: false,
+              noOpRejected: true,
+              noOpDetected: true,
+              typedFailureReason: 'ai_noop',
+              rejectionStage: 'visible_comparison_noop',
+              finalCandidateSource: 'none',
+              semanticNoOpDetected: true,
+              materialImprovementDetected: false,
+              visibleComparisonUsedForNoOp: true,
+              experienceVisibleNoopAuthorityRevision:
+                EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+              countedAsSuccess: false,
+            },
+          };
+        }
+      } else {
       const postVis = evaluateExperienceVisibleComparison({
         factAuthorityText: sourceForCoverage,
         visibleComparisonText: visibleComparisonText,
@@ -4401,6 +4437,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             countedAsSuccess: false,
           },
         };
+      }
       }
     }
     if (

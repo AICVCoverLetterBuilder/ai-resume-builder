@@ -313,6 +313,44 @@ export type ExperienceAiDiagnosticTrace = {
   sourceUnitPredicateCoveragePassed: boolean | null;
   repairResidualAddedPredicateCount: number;
   repairResidualAddedPredicateIdentityHashes: string[];
+  providerSourcePredicateIdentityCount: number;
+  providerCandidatePredicateIdentityCount: number;
+  providerCandidateAddedPredicateCount: number;
+  providerCandidateAddedPredicateIdentityHashes: string[];
+  providerCoordinatedPredicateExpansionDetected: boolean;
+  providerSourceUnitPredicateCoveragePassed: boolean | null;
+  repairCandidatePredicateIdentityCount: number;
+  repairCoordinatedPredicateExpansionDetected: boolean;
+  repairSourceUnitPredicateCoveragePassed: boolean | null;
+  finalCandidatePredicateIdentityCount: number;
+  finalAddedPredicateCount: number;
+  finalAddedPredicateIdentityHashes: string[];
+  finalCoordinatedPredicateExpansionDetected: boolean;
+  finalSourceUnitPredicateCoveragePassed: boolean | null;
+  providerComplianceScopeExpansionDetected: boolean;
+  providerComplianceExpansionKindCount: number;
+  repairResidualComplianceScopeExpansionDetected: boolean;
+  finalComplianceScopeExpansionDetected: boolean;
+  factAuthorityKind: string | null;
+  visibleComparisonSourceKind: string | null;
+  visibleComparisonHash: string | null;
+  visibleComparisonNormalizedHash: string | null;
+  visibleComparisonUnitCount: number;
+  visibleComparisonProvenance: string | null;
+  visibleComparisonMatchedLastAiOutput: boolean;
+  visibleComparisonUsedForNoOp: boolean;
+  visibleComparisonUsedForDegradationCheck: boolean;
+  finalMatchesVisibleComparisonAfterNormalization: boolean;
+  finalSemanticallyEquivalentToVisibleComparison: boolean;
+  semanticNoOpDetected: boolean;
+  semanticNoOpReason: string | null;
+  materialImprovementDetected: boolean;
+  materialImprovementKinds: string[];
+  degradationDetected: boolean;
+  degradationKinds: string[];
+  experienceVisibleNoopAuthorityRevision: string | null;
+  spanishExperienceComplianceGroundingRevision: string | null;
+  experiencePredicatePhaseDiagnosticsRevision: string | null;
   deterministicFallbackAttemptedAfterNoOp: boolean;
   deterministicFallbackAppliedAfterNoOp: boolean;
   finalCandidateSource: string | null;
@@ -893,6 +931,44 @@ export class ExperienceAiDiagnosticSession {
       sourceUnitPredicateCoveragePassed: null,
       repairResidualAddedPredicateCount: 0,
       repairResidualAddedPredicateIdentityHashes: [],
+      providerSourcePredicateIdentityCount: 0,
+      providerCandidatePredicateIdentityCount: 0,
+      providerCandidateAddedPredicateCount: 0,
+      providerCandidateAddedPredicateIdentityHashes: [],
+      providerCoordinatedPredicateExpansionDetected: false,
+      providerSourceUnitPredicateCoveragePassed: null,
+      repairCandidatePredicateIdentityCount: 0,
+      repairCoordinatedPredicateExpansionDetected: false,
+      repairSourceUnitPredicateCoveragePassed: null,
+      finalCandidatePredicateIdentityCount: 0,
+      finalAddedPredicateCount: 0,
+      finalAddedPredicateIdentityHashes: [],
+      finalCoordinatedPredicateExpansionDetected: false,
+      finalSourceUnitPredicateCoveragePassed: null,
+      providerComplianceScopeExpansionDetected: false,
+      providerComplianceExpansionKindCount: 0,
+      repairResidualComplianceScopeExpansionDetected: false,
+      finalComplianceScopeExpansionDetected: false,
+      factAuthorityKind: null,
+      visibleComparisonSourceKind: null,
+      visibleComparisonHash: null,
+      visibleComparisonNormalizedHash: null,
+      visibleComparisonUnitCount: 0,
+      visibleComparisonProvenance: null,
+      visibleComparisonMatchedLastAiOutput: false,
+      visibleComparisonUsedForNoOp: false,
+      visibleComparisonUsedForDegradationCheck: false,
+      finalMatchesVisibleComparisonAfterNormalization: false,
+      finalSemanticallyEquivalentToVisibleComparison: false,
+      semanticNoOpDetected: false,
+      semanticNoOpReason: null,
+      materialImprovementDetected: false,
+      materialImprovementKinds: [],
+      degradationDetected: false,
+      degradationKinds: [],
+      experienceVisibleNoopAuthorityRevision: null,
+      spanishExperienceComplianceGroundingRevision: null,
+      experiencePredicatePhaseDiagnosticsRevision: null,
       deterministicFallbackAttemptedAfterNoOp: false,
       deterministicFallbackAppliedAfterNoOp: false,
       finalCandidateSource: null,
@@ -1505,6 +1581,102 @@ export class ExperienceAiDiagnosticSession {
       )
         ? diag.repairResidualAddedPredicateIdentityHashes.map(String)
         : [],
+      providerSourcePredicateIdentityCount: Number(
+        diag.providerSourcePredicateIdentityCount ?? diag.sourcePredicateIdentityCount ?? 0,
+      ),
+      providerCandidatePredicateIdentityCount: Number(
+        diag.providerCandidatePredicateIdentityCount
+        ?? diag.candidatePredicateIdentityCount
+        ?? 0,
+      ),
+      providerCandidateAddedPredicateCount: Number(
+        diag.providerCandidateAddedPredicateCount ?? diag.candidateAddedPredicateCount ?? 0,
+      ),
+      providerCandidateAddedPredicateIdentityHashes: Array.isArray(
+        diag.providerCandidateAddedPredicateIdentityHashes,
+      )
+        ? diag.providerCandidateAddedPredicateIdentityHashes.map(String)
+        : (Array.isArray(diag.candidateAddedPredicateIdentityHashes)
+          ? diag.candidateAddedPredicateIdentityHashes.map(String)
+          : []),
+      providerCoordinatedPredicateExpansionDetected: Boolean(
+        diag.providerCoordinatedPredicateExpansionDetected
+        ?? diag.coordinatedPredicateExpansionDetected,
+      ),
+      providerSourceUnitPredicateCoveragePassed:
+        diag.providerSourceUnitPredicateCoveragePassed
+        ?? diag.sourceUnitPredicateCoveragePassed
+        ?? null,
+      repairCandidatePredicateIdentityCount: Number(
+        diag.repairCandidatePredicateIdentityCount ?? 0,
+      ),
+      repairCoordinatedPredicateExpansionDetected: Boolean(
+        diag.repairCoordinatedPredicateExpansionDetected,
+      ),
+      repairSourceUnitPredicateCoveragePassed:
+        diag.repairSourceUnitPredicateCoveragePassed ?? null,
+      finalCandidatePredicateIdentityCount: Number(
+        diag.finalCandidatePredicateIdentityCount ?? 0,
+      ),
+      finalAddedPredicateCount: Number(diag.finalAddedPredicateCount ?? 0),
+      finalAddedPredicateIdentityHashes: Array.isArray(diag.finalAddedPredicateIdentityHashes)
+        ? diag.finalAddedPredicateIdentityHashes.map(String)
+        : [],
+      finalCoordinatedPredicateExpansionDetected: Boolean(
+        diag.finalCoordinatedPredicateExpansionDetected,
+      ),
+      finalSourceUnitPredicateCoveragePassed:
+        diag.finalSourceUnitPredicateCoveragePassed ?? null,
+      providerComplianceScopeExpansionDetected: Boolean(
+        diag.providerComplianceScopeExpansionDetected,
+      ),
+      providerComplianceExpansionKindCount: Number(
+        diag.providerComplianceExpansionKindCount ?? 0,
+      ),
+      repairResidualComplianceScopeExpansionDetected: Boolean(
+        diag.repairResidualComplianceScopeExpansionDetected,
+      ),
+      finalComplianceScopeExpansionDetected: Boolean(
+        diag.finalComplianceScopeExpansionDetected,
+      ),
+      factAuthorityKind: (diag.factAuthorityKind as string | null | undefined) ?? null,
+      visibleComparisonSourceKind:
+        (diag.visibleComparisonSourceKind as string | null | undefined) ?? null,
+      visibleComparisonHash: (diag.visibleComparisonHash as string | null | undefined) ?? null,
+      visibleComparisonNormalizedHash:
+        (diag.visibleComparisonNormalizedHash as string | null | undefined) ?? null,
+      visibleComparisonUnitCount: Number(diag.visibleComparisonUnitCount ?? 0),
+      visibleComparisonProvenance:
+        (diag.visibleComparisonProvenance as string | null | undefined) ?? null,
+      visibleComparisonMatchedLastAiOutput: Boolean(
+        diag.visibleComparisonMatchedLastAiOutput,
+      ),
+      visibleComparisonUsedForNoOp: Boolean(diag.visibleComparisonUsedForNoOp),
+      visibleComparisonUsedForDegradationCheck: Boolean(
+        diag.visibleComparisonUsedForDegradationCheck,
+      ),
+      finalMatchesVisibleComparisonAfterNormalization: Boolean(
+        diag.finalMatchesVisibleComparisonAfterNormalization,
+      ),
+      finalSemanticallyEquivalentToVisibleComparison: Boolean(
+        diag.finalSemanticallyEquivalentToVisibleComparison,
+      ),
+      semanticNoOpDetected: Boolean(diag.semanticNoOpDetected),
+      semanticNoOpReason: (diag.semanticNoOpReason as string | null | undefined) ?? null,
+      materialImprovementDetected: Boolean(diag.materialImprovementDetected),
+      materialImprovementKinds: Array.isArray(diag.materialImprovementKinds)
+        ? diag.materialImprovementKinds.map(String)
+        : [],
+      degradationDetected: Boolean(diag.degradationDetected),
+      degradationKinds: Array.isArray(diag.degradationKinds)
+        ? diag.degradationKinds.map(String)
+        : [],
+      experienceVisibleNoopAuthorityRevision:
+        (diag.experienceVisibleNoopAuthorityRevision as string | null | undefined) ?? null,
+      spanishExperienceComplianceGroundingRevision:
+        (diag.spanishExperienceComplianceGroundingRevision as string | null | undefined) ?? null,
+      experiencePredicatePhaseDiagnosticsRevision:
+        (diag.experiencePredicatePhaseDiagnosticsRevision as string | null | undefined) ?? null,
       deterministicFallbackAttemptedAfterNoOp: Boolean(
         diag.deterministicFallbackAttemptedAfterNoOp
         || (
