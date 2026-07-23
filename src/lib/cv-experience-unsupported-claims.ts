@@ -33,7 +33,13 @@ export type ExperienceUnsupportedClaimKind =
   | 'error_free_claim'
   | 'object_scope_expansion'
   | 'logistics_scope_expansion'
-  | 'unsupported_object_expansion';
+  | 'unsupported_object_expansion'
+  | 'action_scope_expansion'
+  | 'coordinated_predicate_expansion'
+  | 'document_management_expansion'
+  | 'workflow_expansion'
+  | 'approval_authority_expansion'
+  | 'supervision_expansion';
 
 export type ExperienceUnsupportedClaimScan = {
   kinds: ExperienceUnsupportedClaimKind[];

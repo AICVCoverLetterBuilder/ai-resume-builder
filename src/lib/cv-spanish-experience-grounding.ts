@@ -22,10 +22,14 @@ export const SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION =
 /** AAB-309 — Spanish Experience post-repair performance/object grounding. */
 export const SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION =
   'spanish-experience-repair-grounding-309-v1' as const;
+/** AAB-310 — Spanish Experience candidate-added predicate grounding. */
+export const SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION =
+  'spanish-experience-predicate-grounding-310-v1' as const;
 
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
+void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
 
 const WAREHOUSE_KEYS: MaterialDutyKey[] = [
   'warehouse_inbound_check',
@@ -185,6 +189,14 @@ export type SpanishExperienceExpansionScan = {
   documentationExpansionDetected: boolean;
   malformedRolePhraseDetected: boolean;
   informationExchangeSubstitutionDetected: boolean;
+  /** AAB-310 privacy-safe predicate grounding evidence. */
+  sourcePredicateIdentityCount?: number;
+  candidatePredicateIdentityCount?: number;
+  candidateAddedPredicateCount?: number;
+  candidateAddedPredicateIdentityHashes?: string[];
+  unsupportedPredicateKindCount?: number;
+  coordinatedPredicateExpansionDetected?: boolean;
+  sourceUnitPredicateCoveragePassed?: boolean;
 };
 
 function sourceHas(source: string, re: RegExp): boolean {
@@ -241,6 +253,352 @@ function sourceSupportsSpanishEfficiency(source: string): boolean {
 function sourceSupportsSpanishAccuracy(source: string): boolean {
   return ACCURACY_CLAIM_ES.test(source || '')
     || /\b(?:precisi[oó]n|exactitud)\b/iu.test(source || '');
+}
+
+/**
+ * Spanish Experience predicate families (AAB-310).
+ * Safe verification synonyms share one family; stronger material actions do not.
+ */
+export type SpanishPredicateFamily =
+  | 'verify'
+  | 'prepare'
+  | 'move'
+  | 'coordinate'
+  | 'create'
+  | 'adapt'
+  | 'manage_docs'
+  | 'archive'
+  | 'register'
+  | 'report'
+  | 'approve'
+  | 'supervise'
+  | 'guarantee'
+  | 'receive'
+  | 'dispatch'
+  | 'distribute'
+  | 'store'
+  | 'inventory'
+  | 'other';
+
+export type SpanishPredicateStrength = 'ordinary' | 'broader' | 'authority' | 'ownership';
+
+type SpanishPredicateLemma = {
+  surface: string;
+  family: SpanishPredicateFamily;
+  strength: SpanishPredicateStrength;
+  identity: string;
+};
+
+const VERIFY_LEMMA_RE =
+  /\b(?:revis(?:a|ó|ar|ando)|comprob(?:a|ó|ar|ando)|verific(?:a|ó|ar|ando)|inspeccion(?:a|ó|ar|ando)|examin(?:a|ó|ar|ando)|control(?:a|ó|ar|ando))\b/giu;
+const PREPARE_LEMMA_RE =
+  /\b(?:prepar(?:a|ó|ar|ando)|dispon(?:e|ía|er|iendo))\b/giu;
+const MOVE_LEMMA_RE =
+  /\b(?:muev(?:e|o)|mov(?:ió|er|iendo)|traslad(?:a|ó|ar|ando)|desplaz(?:a|ó|ar|ando))\b/giu;
+const COORDINATE_LEMMA_RE =
+  /\b(?:coordin(?:a|ó|ar|ando)|colabor(?:a|ó|ar|ando))\b/giu;
+const CREATE_LEMMA_RE = /\b(?:cre(?:a|ó|ar|ando))\b/giu;
+const ADAPT_LEMMA_RE = /\b(?:adapt(?:a|ó|ar|ando))\b/giu;
+const MANAGE_DOCS_LEMMA_RE =
+  /\b(?:gestion(?:a|ó|ar|ando)|administr(?:a|ó|ar|ando)|tramit(?:a|ó|ar|ando)|proces(?:a|ó|ar|ando)|manej(?:a|ó|ar|ando)|manten(?:er|iendo|ía)|organiz(?:a|ó|ar|ando)\s+(?:la\s+)?document|clasific(?:a|ó|ar|ando)\s+(?:document|archivo)|custodi(?:a|ó|ar|ando)|document(?:a|ó|ar|ando))\b/giu;
+const ARCHIVE_LEMMA_RE = /\b(?:archiv(?:a|ó|ar|ando))\b/giu;
+const REGISTER_LEMMA_RE =
+  /\b(?:registr(?:a|ó|ar|ando)|actualiz(?:a|ó|ar|ando)\s+(?:los\s+|las\s+|el\s+|la\s+)?registros?)\b/giu;
+const REPORT_LEMMA_RE =
+  /\b(?:(?:prepar|elabor)(?:a|ó|ar|ando)\s+(?:informes?|reportes?))\b/giu;
+const APPROVE_LEMMA_RE =
+  /\b(?:aprueb(?:a|o|an|as|e|en)?|aprob(?:ó|ar|ando|ado)|autoriz(?:a|ó|ar|ando)|certific(?:a|ó|ar|ando)|firm(?:a|ó|ar|ando)|acept(?:a|ó|ar|ando)|rechaz(?:a|ó|ar|ando)|decid(?:e|ió|ir|iendo)|resolv(?:er|iendo|ió)|dar\s+conformidad|valid(?:a|ó|ar|ando)\s+definitiv)/giu;
+const SUPERVISE_LEMMA_RE =
+  /\b(?:supervis(?:a|ó|ar|ando)|dirig(?:e|ió|ir|iendo)|lider(?:a|ó|ar|ando)|responsabiliz(?:arse|a|ó)|hacerse\s+cargo|control(?:a|ó|ar)\s+el\s+proceso)\b/giu;
+const GUARANTEE_LEMMA_RE =
+  /\b(?:garantiz(?:a|ó|ar|ando)|asegur(?:a|ó|ar|ando))\b/giu;
+const RECEIVE_LEMMA_RE = /\b(?:recib(?:e|ió|ir|iendo))\b/giu;
+const DISPATCH_LEMMA_RE =
+  /\b(?:despach(?:a|ó|ar|ando)|exped(?:e|ió|ir|iendo)|envi(?:a|ó|ar|ando)|entreg(?:a|ó|ar|ando))\b/giu;
+const DISTRIBUTE_LEMMA_RE =
+  /\b(?:distribuy(?:e|ó)|distribu(?:ir|yendo)|transport(?:a|ó|ar|ando))\b/giu;
+const STORE_LEMMA_RE = /\b(?:almacen(?:a|ó|ar|ando))\b/giu;
+const INVENTORY_LEMMA_RE =
+  /\b(?:inventari(?:a|ó|ar|ando)|repon(?:e|ía|er|iendo))\b/giu;
+
+const PREDICATE_FAMILY_PATTERNS: Array<{
+  family: SpanishPredicateFamily;
+  strength: SpanishPredicateStrength;
+  re: RegExp;
+}> = [
+  { family: 'manage_docs', strength: 'broader', re: MANAGE_DOCS_LEMMA_RE },
+  { family: 'archive', strength: 'broader', re: ARCHIVE_LEMMA_RE },
+  { family: 'register', strength: 'broader', re: REGISTER_LEMMA_RE },
+  { family: 'report', strength: 'broader', re: REPORT_LEMMA_RE },
+  { family: 'approve', strength: 'authority', re: APPROVE_LEMMA_RE },
+  { family: 'supervise', strength: 'authority', re: SUPERVISE_LEMMA_RE },
+  { family: 'guarantee', strength: 'ownership', re: GUARANTEE_LEMMA_RE },
+  { family: 'receive', strength: 'broader', re: RECEIVE_LEMMA_RE },
+  { family: 'dispatch', strength: 'broader', re: DISPATCH_LEMMA_RE },
+  { family: 'distribute', strength: 'broader', re: DISTRIBUTE_LEMMA_RE },
+  { family: 'store', strength: 'broader', re: STORE_LEMMA_RE },
+  { family: 'inventory', strength: 'broader', re: INVENTORY_LEMMA_RE },
+  { family: 'verify', strength: 'ordinary', re: VERIFY_LEMMA_RE },
+  { family: 'prepare', strength: 'ordinary', re: PREPARE_LEMMA_RE },
+  { family: 'move', strength: 'ordinary', re: MOVE_LEMMA_RE },
+  { family: 'coordinate', strength: 'ordinary', re: COORDINATE_LEMMA_RE },
+  { family: 'create', strength: 'ordinary', re: CREATE_LEMMA_RE },
+  { family: 'adapt', strength: 'ordinary', re: ADAPT_LEMMA_RE },
+];
+
+const VERIFY_SYNONYM_STACK_RE =
+  /\b((?:revisa|revisó|comprueba|comprobó|verifica|verificó|controla|controló))\s+y\s+(?:revisa|revisó|comprueba|comprobó|verifica|verificó|controla|controló)\b/giu;
+
+function predicateIdentity(family: SpanishPredicateFamily, surface: string): string {
+  const norm = (surface || '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '');
+  let h = 2166136261;
+  const key = `${family}:${norm}`;
+  for (let i = 0; i < key.length; i += 1) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `es_pred_${family}_${(h >>> 0).toString(16)}`;
+}
+
+/** Extract material Spanish predicates from one Experience unit (all finite verbs). */
+export function extractSpanishExperiencePredicates(unit: string): SpanishPredicateLemma[] {
+  void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+  const text = unit || '';
+  const found: SpanishPredicateLemma[] = [];
+  const seen = new Set<string>();
+  for (const entry of PREDICATE_FAMILY_PATTERNS) {
+    entry.re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = entry.re.exec(text)) !== null) {
+      const surface = (m[0] || '').trim();
+      if (!surface) continue;
+      // Avoid treating "organizar documentación" twice via organize alone — already in manage_docs.
+      const id = predicateIdentity(entry.family, surface);
+      const key = `${entry.family}:${surface.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push({
+        surface,
+        family: entry.family,
+        strength: entry.strength,
+        identity: id,
+      });
+    }
+  }
+  return found;
+}
+
+function unitObjectTokens(unit: string): Set<string> {
+  const tokens = (unit || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .split(/[^a-z0-9ñ]+/i)
+    .filter((t) => t.length > 3);
+  return new Set(tokens);
+}
+
+function alignCandidateUnitToSource(
+  sourceUnits: string[],
+  candidateUnit: string,
+): number {
+  const candPreds = new Set(extractSpanishExperiencePredicates(candidateUnit).map((p) => p.family));
+  const candObj = unitObjectTokens(candidateUnit);
+  let best = -1;
+  let bestScore = -1;
+  for (let i = 0; i < sourceUnits.length; i += 1) {
+    const src = sourceUnits[i] || '';
+    const srcPreds = extractSpanishExperiencePredicates(src);
+    const srcObj = unitObjectTokens(src);
+    let score = 0;
+    for (const p of srcPreds) {
+      if (candPreds.has(p.family)) score += 3;
+    }
+    for (const t of candObj) {
+      if (srcObj.has(t)) score += 1;
+    }
+    if (/document/iu.test(src) && /document/iu.test(candidateUnit)) score += 2;
+    if (/mercanc/iu.test(src) && /mercanc/iu.test(candidateUnit)) score += 2;
+    if (/prepar|movim/iu.test(src) && /prepar|movim/iu.test(candidateUnit)) score += 2;
+    if (score > bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  }
+  return best;
+}
+
+function familySupportedBySourceUnit(
+  family: SpanishPredicateFamily,
+  sourceUnit: string,
+): boolean {
+  const preds = extractSpanishExperiencePredicates(sourceUnit);
+  if (preds.some((p) => p.family === family)) return true;
+  // Safe verify synonym family: any verify lemma in source covers other verify lemmas.
+  if (family === 'verify' && preds.some((p) => p.family === 'verify')) return true;
+  return false;
+}
+
+function kindForAddedFamily(family: SpanishPredicateFamily): ExperienceUnsupportedClaimKind[] {
+  switch (family) {
+    case 'manage_docs':
+    case 'archive':
+    case 'register':
+    case 'report':
+      return ['action_scope_expansion', 'document_management_expansion', 'coordinated_predicate_expansion'];
+    case 'approve':
+      return ['action_scope_expansion', 'approval_authority_expansion', 'coordinated_predicate_expansion'];
+    case 'supervise':
+      return ['action_scope_expansion', 'supervision_expansion', 'responsibility_escalation', 'coordinated_predicate_expansion'];
+    case 'guarantee':
+      return ['action_scope_expansion', 'guarantee_escalation', 'coordinated_predicate_expansion'];
+    case 'receive':
+    case 'dispatch':
+    case 'distribute':
+    case 'store':
+    case 'inventory':
+      return ['action_scope_expansion', 'workflow_expansion', 'coordinated_predicate_expansion'];
+    default:
+      return ['action_scope_expansion', 'coordinated_predicate_expansion'];
+  }
+}
+
+export type SpanishPredicateGroundingResult = {
+  sourcePredicateIdentityCount: number;
+  candidatePredicateIdentityCount: number;
+  candidateAddedPredicateCount: number;
+  candidateAddedPredicateIdentityHashes: string[];
+  unsupportedKinds: ExperienceUnsupportedClaimKind[];
+  coordinatedPredicateExpansionDetected: boolean;
+  sourceUnitPredicateCoveragePassed: boolean;
+};
+
+/**
+ * Per aligned source-unit predicate grounding.
+ * Coverage of the original verb is not enough when a coordinated material
+ * action is added (e.g. "comprueba y gestiona").
+ */
+export function detectSpanishExperiencePredicateExpansion(
+  sourceDescription: string,
+  candidateDescription: string,
+): SpanishPredicateGroundingResult {
+  void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+  const sourceUnits = splitExperienceBullets(sourceDescription || '').filter(Boolean);
+  const candidateUnits = splitExperienceBullets(candidateDescription || '').filter(Boolean);
+  const addedHashes: string[] = [];
+  const kinds: ExperienceUnsupportedClaimKind[] = [];
+  let coordinated = false;
+  let allUnitsCovered = true;
+  let sourcePredCount = 0;
+  let candPredCount = 0;
+
+  for (const su of sourceUnits) {
+    sourcePredCount += extractSpanishExperiencePredicates(su).length;
+  }
+
+  for (const cu of candidateUnits) {
+    const candPreds = extractSpanishExperiencePredicates(cu);
+    candPredCount += candPreds.length;
+    const alignIdx = alignCandidateUnitToSource(sourceUnits, cu);
+    const aligned = alignIdx >= 0 ? (sourceUnits[alignIdx] || '') : '';
+    if (!aligned) {
+      allUnitsCovered = false;
+      continue;
+    }
+    const alignedFamilies = new Set(
+      extractSpanishExperiencePredicates(aligned).map((p) => p.family),
+    );
+    // Coordinated multi-verb constructions on the candidate unit.
+    if (/\b\w+\s+y\s+\w+/iu.test(cu) || /,\s*\w+\s+y\s+/iu.test(cu)
+      || /\bantes\s+de\s+\w+/iu.test(cu) || /\bpara\s+(?:aprob|autoriz|certific)/iu.test(cu)
+      || /\badem[aá]s\s+de\s+\w+/iu.test(cu)) {
+      if (candPreds.length > 1) coordinated = true;
+    }
+    const supportedFamilies = new Set<SpanishPredicateFamily>();
+    for (const p of candPreds) {
+      if (familySupportedBySourceUnit(p.family, aligned)) {
+        supportedFamilies.add(p.family);
+        continue;
+      }
+      // Distinct material family not in the aligned source unit — never authorize
+      // from a different source bullet's predicates.
+      if (!alignedFamilies.has(p.family)) {
+        addedHashes.push(p.identity);
+        for (const k of kindForAddedFamily(p.family)) kinds.push(k);
+      }
+    }
+    // If aligned source has only verify and candidate stacks verify synonyms only,
+    // that is not an added material action (handled by synonym collapse in repair).
+    void supportedFamilies;
+  }
+
+  const uniqueHashes = [...new Set(addedHashes)];
+  const uniqueKinds = [...new Set(kinds)];
+  if (uniqueHashes.length > 0 && coordinated) {
+    if (!uniqueKinds.includes('coordinated_predicate_expansion')) {
+      uniqueKinds.push('coordinated_predicate_expansion');
+    }
+  }
+  return {
+    sourcePredicateIdentityCount: sourcePredCount,
+    candidatePredicateIdentityCount: candPredCount,
+    candidateAddedPredicateCount: uniqueHashes.length,
+    candidateAddedPredicateIdentityHashes: uniqueHashes,
+    unsupportedKinds: uniqueKinds,
+    coordinatedPredicateExpansionDetected: coordinated && uniqueHashes.length > 0,
+    sourceUnitPredicateCoveragePassed: allUnitsCovered && uniqueHashes.length === 0,
+  };
+}
+
+function stripUnsupportedCoordinatedPredicates(
+  row: string,
+  sourceUnit: string,
+): string {
+  let out = row;
+  const unsupportedSurfaces: Array<{ re: RegExp; family: SpanishPredicateFamily }> = [
+    { family: 'manage_docs', re: /\s+y\s+(?:gestiona|administra|tramita|procesa|maneja|mantiene|documenta)\b/giu },
+    { family: 'archive', re: /\s+y\s+archiva\b/giu },
+    { family: 'register', re: /\s+y\s+(?:registra|actualiza)\b/giu },
+    { family: 'approve', re: /\s+y\s+(?:aprueba|apruebo|autoriza|certifica|firma|acepta|rechaza)\b/giu },
+    { family: 'supervise', re: /\s+y\s+(?:supervisa|dirige|lidera)\b/giu },
+    { family: 'distribute', re: /\s+y\s+(?:distribuye|transporta|expide|despacha|env[ií]a|entrega)\b/giu },
+    { family: 'receive', re: /\s+y\s+recibe\b/giu },
+    { family: 'store', re: /\s+y\s+almacena\b/giu },
+    { family: 'inventory', re: /\s+y\s+(?:inventaria|reponer|reponte|repon)\b/giu },
+  ];
+  for (const entry of unsupportedSurfaces) {
+    if (!familySupportedBySourceUnit(entry.family, sourceUnit)) {
+      out = out.replace(entry.re, '');
+    }
+  }
+  // Purpose / sequential authority expansions: "comprueba antes de autorizar", "verifica para certificar"
+  if (!familySupportedBySourceUnit('approve', sourceUnit)) {
+    out = out
+      .replace(/\s+antes\s+de\s+(?:aprobar|autorizar|certificar|firmar|aceptar|rechazar)\b[^.]*/giu, '')
+      .replace(/\s+para\s+(?:aprobar|autorizar|certificar|firmar)\b[^.]*/giu, '');
+  }
+  if (!familySupportedBySourceUnit('supervise', sourceUnit)) {
+    out = out.replace(/\s+y\s+supervisa\s+integralmente\b/giu, '');
+  }
+  // Standalone broader document-management verbs when aligned source is verify-only.
+  if (
+    familySupportedBySourceUnit('verify', sourceUnit)
+    && !familySupportedBySourceUnit('manage_docs', sourceUnit)
+    && /^(?:gestiona|administra|tramita|procesa)\b/iu.test(out)
+  ) {
+    const verifySurface = sourceUnit.match(
+      /\b(comprueba|revisa|verifica|comprobó|revisó|verificó)\b/iu,
+    )?.[1] || 'Comprueba';
+    out = out.replace(
+      /^(?:gestiona|administra|tramita|procesa)\b/iu,
+      verifySurface.charAt(0).toUpperCase() + verifySurface.slice(1).toLowerCase(),
+    );
+  }
+  return out;
+}
+
+function collapseRedundantVerifySynonyms(row: string): string {
+  return row.replace(VERIFY_SYNONYM_STACK_RE, '$1');
 }
 
 /**
@@ -380,7 +738,9 @@ export function stripSpanishExperienceUnsupportedEscalation(
 ): string {
   void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
   void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
+  void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
   const bullets = splitExperienceBullets(candidateDescription || '');
+  const sourceUnits = splitExperienceBullets(sourceDescription || '').filter(Boolean);
   const allowGuarantee = sourceSupportsSpanishGuarantee(sourceDescription);
   const allowResponsibility = sourceSupportsSpanishResponsibility(sourceDescription);
   const allowEfficiency = sourceSupportsSpanishEfficiency(sourceDescription);
@@ -388,6 +748,8 @@ export function stripSpanishExperienceUnsupportedEscalation(
   const cleaned = bullets.map((b) => {
     let row = (b || '').trim();
     if (!row) return row;
+    const alignIdx = alignCandidateUnitToSource(sourceUnits, row);
+    const alignedSource = alignIdx >= 0 ? (sourceUnits[alignIdx] || sourceDescription) : sourceDescription;
     if (!allowGuarantee) {
       row = row.replace(GUARANTEE_PURPOSE_CLAUSE_ES, '');
       if (GUARANTEE_PREDICATE_ES.test(row) && !ORDINARY_ACTION_ES.test(row)) {
@@ -466,6 +828,10 @@ export function stripSpanishExperienceUnsupportedEscalation(
         }
       }
     }
+    // AAB-310: strip candidate-added coordinated / broader predicates.
+    row = stripUnsupportedCoordinatedPredicates(row, alignedSource);
+    // Collapse redundant verification synonym stacks (revisa y verifica → revisa).
+    row = collapseRedundantVerifySynonyms(row);
     row = row
       .replace(/\s{2,}/g, ' ')
       .replace(/\s+([.,;:])/g, '$1')
@@ -499,6 +865,7 @@ export function detectSpanishExperienceUnsupportedExpansion(
   void SPANISH_CV_AI_305_REVISION;
   void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
   void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
+  void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
   const source = sourceDescription || '';
   const joined = candidateDescription || '';
   const kinds: ExperienceUnsupportedClaimKind[] = [];
@@ -673,6 +1040,28 @@ export function detectSpanishExperienceUnsupportedExpansion(
     labels.push(k);
   }
 
+  // Candidate-added material predicates / coordinated actions (AAB-310).
+  // Same-locale Spanish only — cross-locale Hindi/etc. → Spanish uses coverage/fallback
+  // grounding and must not treat translated verbs as candidate-added actions.
+  const sourceHasSpanishPredicates = extractSpanishExperiencePredicates(source).length > 0
+    || /(?:revisa|comprueba|coordina|mercanc[ií]a|documentaci[oó]n|preparaci[oó]n|compa[nñ]er)/iu
+      .test(source);
+  const predicateScan = sourceHasSpanishPredicates
+    ? detectSpanishExperiencePredicateExpansion(source, joined)
+    : {
+      sourcePredicateIdentityCount: 0,
+      candidatePredicateIdentityCount: 0,
+      candidateAddedPredicateCount: 0,
+      candidateAddedPredicateIdentityHashes: [] as string[],
+      unsupportedKinds: [] as ExperienceUnsupportedClaimKind[],
+      coordinatedPredicateExpansionDetected: false,
+      sourceUnitPredicateCoveragePassed: true,
+    };
+  for (const k of predicateScan.unsupportedKinds) {
+    kinds.push(k);
+    labels.push(k);
+  }
+
   const warehouseSource = sourceRequiresSpanishWarehouseFactCoverage(source);
   if (warehouseSource
     && /(?:intercambio\s+de\s+informaci[oó]n|coordina\w*\s+(?:el\s+)?intercambio\s+de\s+informaci[oó]n|coordina\w*\s+la\s+comunicaci[oó]n|asegurar?\s+la\s+comunicaci[oó]n|procesos?\s+generales?\s+coordina)/iu
@@ -707,11 +1096,23 @@ export function detectSpanishExperienceUnsupportedExpansion(
       || uniqueKinds.includes('outcome_ownership')
       || uniqueKinds.includes('efficiency_claim')
       || uniqueKinds.includes('object_scope_expansion')
-      || uniqueKinds.includes('logistics_scope_expansion'),
+      || uniqueKinds.includes('logistics_scope_expansion')
+      || uniqueKinds.includes('action_scope_expansion')
+      || uniqueKinds.includes('document_management_expansion')
+      || uniqueKinds.includes('coordinated_predicate_expansion'),
     deadlineClaimDetected,
     documentationExpansionDetected,
     malformedRolePhraseDetected,
     informationExchangeSubstitutionDetected,
+    sourcePredicateIdentityCount: predicateScan.sourcePredicateIdentityCount,
+    candidatePredicateIdentityCount: predicateScan.candidatePredicateIdentityCount,
+    candidateAddedPredicateCount: predicateScan.candidateAddedPredicateCount,
+    candidateAddedPredicateIdentityHashes:
+      predicateScan.candidateAddedPredicateIdentityHashes,
+    unsupportedPredicateKindCount: predicateScan.unsupportedKinds.length,
+    coordinatedPredicateExpansionDetected:
+      predicateScan.coordinatedPredicateExpansionDetected,
+    sourceUnitPredicateCoveragePassed: predicateScan.sourceUnitPredicateCoveragePassed,
   };
 }
 

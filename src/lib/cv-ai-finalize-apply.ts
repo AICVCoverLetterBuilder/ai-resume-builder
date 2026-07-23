@@ -90,10 +90,12 @@ import {
   stripSpanishExperienceUnsupportedEscalation,
   SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
   SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
+  SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
 } from './cv-spanish-experience-grounding';
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
+void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
 import {
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
@@ -111,6 +113,10 @@ void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 export const EXPERIENCE_REPAIR_LINEAGE_309_REVISION =
   'experience-repair-lineage-309-v1' as const;
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+/** AAB-310 — predicate repair lineage evidence. */
+export const EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION =
+  'experience-predicate-repair-lineage-310-v1' as const;
+void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
 import {
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
 } from './cv-summary-final-candidate-diagnostics-306';
@@ -276,6 +282,8 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
   SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
   EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
+  SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
+  EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
@@ -320,6 +328,8 @@ void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
@@ -537,8 +547,21 @@ export type FinalizeCvAiFieldResult = {
     unsupportedClaimRepairUncoveredFactIdentityHashes?: string[];
     unsupportedClaimRepairHash?: string | null;
     unsupportedClaimRepairNormalizedHash?: string | null;
-    experienceRepairLineageRevision?: typeof EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
-    spanishExperienceRepairGroundingRevision?: typeof SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
+    experienceRepairLineageRevision?: typeof EXPERIENCE_REPAIR_LINEAGE_309_REVISION
+      | typeof EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
+    spanishExperienceRepairGroundingRevision?: typeof SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION
+      | typeof SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+    experiencePredicateRepairLineageRevision?: typeof EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
+    spanishExperiencePredicateGroundingRevision?: typeof SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+    sourcePredicateIdentityCount?: number;
+    candidatePredicateIdentityCount?: number;
+    candidateAddedPredicateCount?: number;
+    candidateAddedPredicateIdentityHashes?: string[];
+    unsupportedPredicateKindCount?: number;
+    coordinatedPredicateExpansionDetected?: boolean;
+    sourceUnitPredicateCoveragePassed?: boolean | null;
+    repairResidualAddedPredicateCount?: number;
+    repairResidualAddedPredicateIdentityHashes?: string[];
     finalUnsupportedClaimCount?: number;
     finalUnsupportedClaimKinds?: string[];
     /** Packaged asset marker — must survive minification. */
@@ -3117,6 +3140,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let unsupportedClaimRepairUncoveredFactIdentityHashes: string[] = [];
   let unsupportedClaimRepairHash: string | null = null;
   let unsupportedClaimRepairNormalizedHash: string | null = null;
+  let sourcePredicateIdentityCount = 0;
+  let candidatePredicateIdentityCount = 0;
+  let candidateAddedPredicateCount = 0;
+  let candidateAddedPredicateIdentityHashes: string[] = [];
+  let unsupportedPredicateKindCount = 0;
+  let coordinatedPredicateExpansionDetected = false;
+  let sourceUnitPredicateCoveragePassed: boolean | null = null;
+  let repairResidualAddedPredicateCount = 0;
+  let repairResidualAddedPredicateIdentityHashes: string[] = [];
   let finalUnsupportedClaimCount = 0;
   let finalUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
   let lastUnsupportedClaimCount = 0;
@@ -3224,6 +3256,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     unsupportedClaimRepairNormalizedHash,
     experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
     spanishExperienceRepairGroundingRevision: SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
+    experiencePredicateRepairLineageRevision: EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
+    spanishExperiencePredicateGroundingRevision: SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
+    sourcePredicateIdentityCount,
+    candidatePredicateIdentityCount,
+    candidateAddedPredicateCount,
+    candidateAddedPredicateIdentityHashes,
+    unsupportedPredicateKindCount,
+    coordinatedPredicateExpansionDetected,
+    sourceUnitPredicateCoveragePassed,
+    repairResidualAddedPredicateCount,
+    repairResidualAddedPredicateIdentityHashes,
     finalUnsupportedClaimCount,
     finalUnsupportedClaimKinds,
     experienceAiNoOpRecoveryRevision: EXPERIENCE_AI_NOOP_RECOVERY_REVISION,
@@ -3665,6 +3708,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastUnsupportedClaimCount = esExpansion.count;
         lastUnsupportedClaimKinds = esExpansion.kinds;
         lastScopeExpansionDetected = esExpansion.scopeExpansionDetected;
+        sourcePredicateIdentityCount = esExpansion.sourcePredicateIdentityCount ?? 0;
+        candidatePredicateIdentityCount = esExpansion.candidatePredicateIdentityCount ?? 0;
+        candidateAddedPredicateCount = esExpansion.candidateAddedPredicateCount ?? 0;
+        candidateAddedPredicateIdentityHashes = [
+          ...(esExpansion.candidateAddedPredicateIdentityHashes || []),
+        ];
+        unsupportedPredicateKindCount = esExpansion.unsupportedPredicateKindCount ?? 0;
+        coordinatedPredicateExpansionDetected = Boolean(
+          esExpansion.coordinatedPredicateExpansionDetected,
+        );
+        sourceUnitPredicateCoveragePassed =
+          esExpansion.sourceUnitPredicateCoveragePassed ?? null;
         if (stage === 'provider') {
           providerUnsupportedClaimCount = esExpansion.count;
           providerUnsupportedClaimKinds = [...esExpansion.kinds];
@@ -3819,6 +3874,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           lastUnsupportedClaimCount = esExpansion.count;
           lastUnsupportedClaimKinds = esExpansion.kinds;
           lastScopeExpansionDetected = esExpansion.scopeExpansionDetected;
+          sourcePredicateIdentityCount = esExpansion.sourcePredicateIdentityCount ?? 0;
+          candidatePredicateIdentityCount = esExpansion.candidatePredicateIdentityCount ?? 0;
+          candidateAddedPredicateCount = esExpansion.candidateAddedPredicateCount ?? 0;
+          candidateAddedPredicateIdentityHashes = [
+            ...(esExpansion.candidateAddedPredicateIdentityHashes || []),
+          ];
+          unsupportedPredicateKindCount = esExpansion.unsupportedPredicateKindCount ?? 0;
+          coordinatedPredicateExpansionDetected = Boolean(
+            esExpansion.coordinatedPredicateExpansionDetected,
+          );
+          sourceUnitPredicateCoveragePassed =
+            esExpansion.sourceUnitPredicateCoveragePassed ?? null;
           if (esWarehouseProbe) {
             lastRequired = esWarehouseProbe.required.length || lastRequired;
             lastCovered = esWarehouseProbe.covered.length;
@@ -4560,11 +4627,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || k === 'error_free_claim'
           || k === 'object_scope_expansion'
           || k === 'logistics_scope_expansion'
-          || k === 'unsupported_object_expansion')
+          || k === 'unsupported_object_expansion'
+          || k === 'action_scope_expansion'
+          || k === 'coordinated_predicate_expansion'
+          || k === 'document_management_expansion'
+          || k === 'workflow_expansion'
+          || k === 'approval_authority_expansion'
+          || k === 'supervision_expansion')
       ) {
         void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
         void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
+        void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
         void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+        void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
         unsupportedClaimRepairAttempted = true;
         unsupportedClaimRepairKind = 'spanish_unsupported_claim_strip';
         unsupportedClaimRepairUnsupportedClaimCount = lastUnsupportedClaimCount;
@@ -4591,6 +4666,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : { count: lastUnsupportedClaimCount, kinds: lastUnsupportedClaimKinds };
         unsupportedClaimRepairResidualUnsupportedClaimCount = repairScan.count;
         unsupportedClaimRepairResidualUnsupportedClaimKinds = [...repairScan.kinds];
+        repairResidualAddedPredicateCount =
+          ('candidateAddedPredicateCount' in repairScan
+            ? Number(repairScan.candidateAddedPredicateCount ?? 0)
+            : 0);
+        repairResidualAddedPredicateIdentityHashes = Array.isArray(
+          (repairScan as { candidateAddedPredicateIdentityHashes?: string[] })
+            .candidateAddedPredicateIdentityHashes,
+        )
+          ? [...(repairScan as { candidateAddedPredicateIdentityHashes: string[] })
+            .candidateAddedPredicateIdentityHashes]
+          : [];
         if (sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage) && repairedNorm) {
           const cov = validateSpanishWarehouseExperienceCoverage(
             sourceForCoverage,
@@ -4605,6 +4691,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (
           repairMeaningful
           && repairScan.count === 0
+          && repairResidualAddedPredicateCount === 0
         ) {
           const repairAccepted = tryAccept(
             repairedEs,
@@ -4663,6 +4750,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
                 spanishExperienceRepairGroundingRevision:
                   SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
+                experiencePredicateRepairLineageRevision:
+                  EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
+                spanishExperiencePredicateGroundingRevision:
+                  SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
+                sourcePredicateIdentityCount,
+                candidatePredicateIdentityCount,
+                candidateAddedPredicateCount,
+                candidateAddedPredicateIdentityHashes,
+                unsupportedPredicateKindCount,
+                coordinatedPredicateExpansionDetected,
+                sourceUnitPredicateCoveragePassed,
+                repairResidualAddedPredicateCount: 0,
+                repairResidualAddedPredicateIdentityHashes: [],
                 experienceAiUnsupportedExpansionRevision:
                   EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
               },
