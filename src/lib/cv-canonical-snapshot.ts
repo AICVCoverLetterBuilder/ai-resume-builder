@@ -26,6 +26,7 @@ import {
   normalizeExperienceProvenance,
   resolveExperienceGroundingDescription,
 } from './cv-experience-provenance';
+import { refreshProvenanceAfterMaterialUserEdit } from './cv-experience-ai-output-provenance';
 import type { CvExperienceDescriptionOrigin } from './types';
 import { buildExperienceJobContext } from './cv-experience-job-context';
 
@@ -585,7 +586,7 @@ export function applyCanonicalExperienceEdit(
       const nextOrigin = previousWasAi
         ? 'user_confirmed_ai_edit' as const
         : 'user' as const;
-      return {
+      const baseNext = {
         ...e,
         description: value,
         descriptionOrigin: nextOrigin,
@@ -602,6 +603,9 @@ export function applyCanonicalExperienceEdit(
           }
           : {}),
       };
+      return materialEdit
+        ? refreshProvenanceAfterMaterialUserEdit(baseNext, value)
+        : baseNext;
     }
     if (field === 'position' && typeof value === 'string') {
       const prev = (e.position || '').trim();

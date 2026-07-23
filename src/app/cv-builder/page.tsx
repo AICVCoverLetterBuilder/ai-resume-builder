@@ -105,6 +105,11 @@ import {
   resolveExperienceAiAuthoritativeSource,
 } from '@/lib/cv-experience-provenance';
 import {
+  resolveExperienceTextareaProvenance,
+  EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
+} from '@/lib/cv-experience-ai-output-provenance';
+void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
+import {
   createExperienceAiOperationSnapshot,
   applyOperationSnapshotToExperience,
 } from '@/lib/cv-experience-ai-operation-snapshot';
@@ -1323,6 +1328,15 @@ export default function CVBuilderPage() {
 
     // Freeze the live textarea first — empty live means Generation Mode and must
     // not resurrect generatedDescription/canonical into the payload.
+    // Unedited prior AI output: fact authority is pre-AI / original / canonical.
+    const textareaProvenance = resolveExperienceTextareaProvenance({
+      ...exp,
+      description: liveDescription,
+    });
+    const authoritative = resolveExperienceAiAuthoritativeSource({
+      ...exp,
+      description: liveDescription,
+    });
     const operationSnapshot = createExperienceAiOperationSnapshot({
       liveText: liveDescription,
       canonicalText: exp.canonicalDescription || '',
@@ -1331,22 +1345,37 @@ export default function CVBuilderPage() {
       requestId: reqCtx.requestId,
       jobContextHash: requestContext.key,
       experienceEntryId: clickedExperienceEntryId,
+      ...(textareaProvenance.currentTextareaProvenance === 'ai_generated_unedited'
+        && textareaProvenance.authoritativeFactText.trim()
+        ? {
+          authoritativeTextOverride: textareaProvenance.authoritativeFactText,
+          provenanceOriginOverride: (
+            textareaProvenance.authoritativeFactSourceKind === 'canonical'
+              ? 'canonicalDescription'
+              : 'originalUserDescription'
+          ) as 'canonicalDescription' | 'originalUserDescription',
+        }
+        : {}),
     });
-    const liveSourceEmpty = !operationSnapshot.normalizedSourceText.trim();
+    const liveSourceEmpty = !operationSnapshot.liveRawText.trim();
 
     // Authoritative Experience AI source: live user-edited textarea beats stale canonical.
     // Empty live → resolve returns none (generation); never promote historical AI text.
-    const authoritative = resolveExperienceAiAuthoritativeSource({
-      ...exp,
-      description: liveDescription,
-    });
+    // Unedited AI → pre-AI snapshot (already resolved above).
     const expFrozen = ensureExperienceAiSourceFrozen(exp);
     const aiGrounding = resolveExperienceAiGrounding(
       expFrozen,
       requestContext,
       freezeExperienceAiDescription,
     );
-    const generatedDescriptionPreexisted = Boolean((exp.generatedDescription || '').trim());
+    const generatedDescriptionPreexisted = Boolean(
+      (exp.generatedDescription || '').trim()
+      || exp.aiOutputProvenance?.lastAiOutputNormalizedHash
+      || textareaProvenance.generatedDescriptionPreexisted,
+    );
+    const staleGeneratedDescriptionIgnored = liveSourceEmpty
+      ? generatedDescriptionPreexisted
+      : textareaProvenance.staleGeneratedDescriptionIgnored;
     if (liveSourceEmpty) {
       // Generation Mode: force empty request source + clear shadow grounding.
       aiGrounding.sourceDescription = '';
@@ -1414,18 +1443,32 @@ export default function CVBuilderPage() {
         requestedLocale,
         selectedSourceKindHint: liveSourceEmpty
           ? 'jobContext'
-          : operationSnapshot.provenanceOrigin === 'currentTextarea'
-            ? 'currentTextarea'
-            : authoritative.kind === 'description'
-              ? 'description'
-              : 'unknown',
+          : operationSnapshot.provenanceOrigin === 'originalUserDescription'
+            ? 'originalUserDescription'
+            : operationSnapshot.provenanceOrigin === 'canonicalDescription'
+              ? 'canonicalDescription'
+              : operationSnapshot.provenanceOrigin === 'currentTextarea'
+                ? 'currentTextarea'
+                : authoritative.kind === 'description'
+                  ? 'description'
+                  : authoritative.kind === 'originalUserDescription'
+                    ? 'originalUserDescription'
+                    : authoritative.kind === 'canonicalDescription'
+                      ? 'canonicalDescription'
+                      : 'unknown',
         operationalContentLocale,
         generationSourceKind: liveSourceEmpty ? 'jobContext' : 'liveSource',
         generatedDescriptionPreexisted,
-        staleGeneratedDescriptionIgnored: liveSourceEmpty && generatedDescriptionPreexisted,
+        staleGeneratedDescriptionIgnored,
         factLockReason: liveSourceEmpty
           ? 'generation_mode_empty_live'
           : (aiGrounding.sourceDescription.trim() ? 'non_empty_source' : 'no_source'),
+        currentTextareaProvenance: textareaProvenance.currentTextareaProvenance,
+        authoritativeFactSourceKind: textareaProvenance.authoritativeFactSourceKind,
+        currentTextareaUsedForFactExtraction:
+          textareaProvenance.currentTextareaUsedForFactExtraction,
+        lastAiOutputHashMatched: textareaProvenance.lastAiOutputHashMatched,
+        materialUserEditDetected: textareaProvenance.materialUserEditDetected,
       },
     );
     diagSession.recordPayloadBuilt({

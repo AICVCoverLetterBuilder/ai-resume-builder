@@ -153,11 +153,18 @@ export type CreateExperienceAiOperationSnapshotInput = {
   jobContextHash: string;
   /** Stable WorkExperience.id — required for entry-scoped apply diagnostics. */
   experienceEntryId?: string;
+  /**
+   * When set (e.g. unedited prior AI output), freeze fact authority from this
+   * text instead of the live textarea. Live remains recorded for no-op/display.
+   */
+  authoritativeTextOverride?: string;
+  provenanceOriginOverride?: ExperienceAiSnapshotSourceKind;
 };
 
 /**
  * Freeze one immutable operation source at Experience AI button press.
- * Non-empty live textarea always wins.
+ * Non-empty live textarea wins unless an authoritative override is provided
+ * (unedited AI output → pre-AI / original / canonical snapshot).
  * Empty live textarea means Generation Mode — do NOT promote canonical/original
  * (those would incorrectly force Enhancement Mode against resurrected duties).
  */
@@ -166,11 +173,15 @@ export function createExperienceAiOperationSnapshot(
 ): ExperienceAiOperationSnapshot {
   const liveRawText = (input.liveText || '').trimEnd();
   const liveTrimmed = liveRawText.trim();
+  const override = (input.authoritativeTextOverride || '').trim();
 
   let authoritativeRawText = '';
   let provenanceOrigin: ExperienceAiSnapshotSourceKind = 'none';
 
-  if (liveTrimmed) {
+  if (override && liveTrimmed) {
+    authoritativeRawText = input.authoritativeTextOverride || override;
+    provenanceOrigin = input.provenanceOriginOverride || 'originalUserDescription';
+  } else if (liveTrimmed) {
     authoritativeRawText = liveRawText;
     provenanceOrigin = 'currentTextarea';
   }

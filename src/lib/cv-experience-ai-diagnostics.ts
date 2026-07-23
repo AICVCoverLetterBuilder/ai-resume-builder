@@ -199,6 +199,12 @@ export type ExperienceAiDiagnosticTrace = {
   generationSourceKind: 'jobContext' | 'liveSource' | 'none' | null;
   generatedDescriptionPreexisted: boolean;
   staleGeneratedDescriptionIgnored: boolean;
+  /** AAB-304: live textarea provenance vs last AI output. */
+  currentTextareaProvenance?: string | null;
+  authoritativeFactSourceKind?: string | null;
+  currentTextareaUsedForFactExtraction?: boolean | null;
+  lastAiOutputHashMatched?: boolean | null;
+  materialUserEditDetected?: boolean | null;
   generationProviderValidationPassed: boolean | null;
   generationProviderRejectionReason: string | null;
   generationFinalPostconditionPassed: boolean | null;
@@ -747,6 +753,11 @@ export class ExperienceAiDiagnosticSession {
       generationSourceKind: null,
       generatedDescriptionPreexisted: false,
       staleGeneratedDescriptionIgnored: false,
+      currentTextareaProvenance: null,
+      authoritativeFactSourceKind: null,
+      currentTextareaUsedForFactExtraction: null,
+      lastAiOutputHashMatched: null,
+      materialUserEditDetected: null,
       generationProviderValidationPassed: null,
       generationProviderRejectionReason: null,
       generationFinalPostconditionPassed: null,
@@ -965,6 +976,11 @@ export class ExperienceAiDiagnosticSession {
       generatedDescriptionPreexisted?: boolean;
       staleGeneratedDescriptionIgnored?: boolean;
       factLockReason?: string | null;
+      currentTextareaProvenance?: string | null;
+      authoritativeFactSourceKind?: string | null;
+      currentTextareaUsedForFactExtraction?: boolean | null;
+      lastAiOutputHashMatched?: boolean | null;
+      materialUserEditDetected?: boolean | null;
     },
   ): void {
     const selected = (grounding.sourceDescription || '').trim();
@@ -1025,6 +1041,12 @@ export class ExperienceAiDiagnosticSession {
         ?? (selected ? 'liveSource' : 'jobContext'),
       generatedDescriptionPreexisted: Boolean(options?.generatedDescriptionPreexisted),
       staleGeneratedDescriptionIgnored: Boolean(options?.staleGeneratedDescriptionIgnored),
+      currentTextareaProvenance: options?.currentTextareaProvenance ?? null,
+      authoritativeFactSourceKind: options?.authoritativeFactSourceKind ?? null,
+      currentTextareaUsedForFactExtraction:
+        options?.currentTextareaUsedForFactExtraction ?? null,
+      lastAiOutputHashMatched: options?.lastAiOutputHashMatched ?? null,
+      materialUserEditDetected: options?.materialUserEditDetected ?? null,
       payloadSourceDescriptionLength: selected.length,
       payloadSourceDescriptionHash: fingerprintText(selected),
       payloadSourceScript: classifyExperienceScript(selected),

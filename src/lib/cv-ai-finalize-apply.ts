@@ -80,6 +80,7 @@ import {
   detectGermanExperienceUnsupportedExpansion,
   buildGermanWarehouseExperienceFallback,
 } from './cv-german-experience-grounding';
+import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
 import { fingerprintText } from './cv-export-diagnostics';
 import {
   deterministicLocalizedBulletsFromCanonical,
@@ -231,6 +232,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   EXPERIENCE_TITLE_PROJECTION_REVISION,
   GERMAN_CV_AI_302_REVISION,
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
+  EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -265,6 +267,7 @@ void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 void GERMAN_CV_AI_302_REVISION;
 void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
+void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297;
 void HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
@@ -2650,17 +2653,31 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const grounding = exp
     ? resolveExperienceAiGrounding(exp, jobContext, freezeExperienceAiDescription)
     : null;
+  const textareaProvenance = exp ? resolveExperienceTextareaProvenance(exp) : null;
   // Mode follows the immutable live snapshot when present (empty live → generation).
   // Without a snapshot: treat context-excluded stale display as empty operational
   // source so baker→pharmacist (and similar) can occupation-fallback — never use
   // raw stale cooking/pharmacy display to force enhancement coverage.
   const liveOperationSource = (snapshot
-    ? (snapshot.normalizedSourceText || snapshot.liveRawText || '')
+    ? (snapshot.liveRawText || snapshot.normalizedSourceText || '')
     : (grounding?.staleGeneratedContentExcluded
       ? ''
       : (exp?.description || ''))).trim();
   const operationMode = resolveExperienceAiOperationMode(liveOperationSource);
   const sourceWasEmpty = operationMode === 'generate_from_job_context';
+  // Fact authority: operation snapshot override, else unedited-AI pre-AI snapshot,
+  // else live/grounding. Never treat unedited prior AI output as sole fact source.
+  const authoritativeFactSource = (
+    snapshot?.normalizedSourceText
+    || (
+      textareaProvenance?.currentTextareaProvenance === 'ai_generated_unedited'
+        && (textareaProvenance.authoritativeFactText || '').trim()
+        ? textareaProvenance.authoritativeFactText
+        : ''
+    )
+    || grounding?.sourceDescription
+    || ''
+  ).trim();
   const shadowedExpForFacts: WorkExperience | null = exp
     ? (sourceWasEmpty
       ? {
@@ -2672,7 +2689,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         recoveredSemanticDuties: undefined,
         groundingRecoverySource: undefined,
       }
-      : (grounding?.experienceForAi || exp))
+      : (authoritativeFactSource
+        ? {
+          ...(grounding?.experienceForAi || exp),
+          description: authoritativeFactSource,
+          originalUserDescription:
+            (exp.originalUserDescription || '').trim() || authoritativeFactSource,
+          canonicalDescription:
+            (exp.canonicalDescription || '').trim() || authoritativeFactSource,
+          descriptionOrigin: 'user' as const,
+        }
+        : (grounding?.experienceForAi || exp)))
     : null;
   const cvForFacts: CVData = shadowedExpForFacts
     ? {
@@ -2688,8 +2715,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ? ''
     : (grounding?.staleGeneratedContentExcluded
       ? ''
-      : (snapshot?.normalizedSourceText
-        || grounding?.sourceDescription
+      : (authoritativeFactSource
         || dutiesTextFromCv(cvForFacts, input.experienceId)));
   const consistency = evaluateRoleDutyConsistency({
     profileJobTitle: cv.personal?.jobTitle,
@@ -2700,7 +2726,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const canonical = sourceWasEmpty ? [] : bulletsForExperience(factSet, experienceIndex);
   const sourceForCoverage = sourceWasEmpty
     ? ''
-    : (liveOperationSource
+    : (authoritativeFactSource
+      || liveOperationSource
       || canonical.map((f) => f.sourceText || f.value).join('\n'));
   const sourceUnits = sourceWasEmpty
     ? []

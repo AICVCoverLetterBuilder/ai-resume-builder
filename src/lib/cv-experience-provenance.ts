@@ -14,6 +14,12 @@ import {
   experienceAiSourceUnits,
   normalizeExperienceAiSourceText,
 } from './cv-experience-ai-operation-snapshot';
+import {
+  buildExperienceAiOutputProvenance,
+  EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
+  resolveExperienceTextareaProvenance,
+} from './cv-experience-ai-output-provenance';
+void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
 
 export type CvExperienceDescriptionOrigin =
   | 'user'
@@ -154,8 +160,10 @@ function inferSelectedLanguageScript(text: string): {
  * Experience AI authoritative source policy (request-time only).
  *
  * Priority for Experience AI Improvement:
- * 1. Non-empty latest visible textarea (always) — even when equivalent to canonical
- * 2. Empty live textarea → Generation Mode with NO source promotion
+ * 1. Non-empty live textarea that is unedited prior AI output → use pre-AI /
+ *    original/canonical fact snapshot (never trust contaminated AI text alone)
+ * 2. Non-empty materially user-authored / user-edited textarea → live text
+ * 3. Empty live textarea → Generation Mode with NO source promotion
  *    (never resurrect generatedDescription / canonical / original / recovered)
  *
  * Historical generated/canonical fields may remain stored for other CV entries
@@ -167,6 +175,7 @@ export function resolveExperienceAiAuthoritativeSource(
 ): ExperienceAiAuthoritativeSourceResult {
   const live = (exp.description || '').trim();
   const canonical = (exp.canonicalDescription || '').trim();
+  const provenance = resolveExperienceTextareaProvenance(exp);
 
   const liveEqualsCanonical = Boolean(
     live && canonical && experienceAiSourcesEquivalent(live, canonical),
@@ -176,11 +185,12 @@ export function resolveExperienceAiAuthoritativeSource(
     && canonical
     && liveEqualsCanonical
     && live !== canonical,
-  );
+  ) || provenance.formattingOnlyDifference;
 
   const build = (
     text: string,
     kind: ExperienceAiAuthoritativeSourceKind,
+    options?: { preserveGroundingFields?: boolean },
   ): ExperienceAiAuthoritativeSourceResult => {
     const selected = (text || '').trim();
     // Always snapshot from live wording when live is the chosen source so
@@ -192,16 +202,28 @@ export function resolveExperienceAiAuthoritativeSource(
     const unitText = experienceAiSourceUnits(authoritativeText).join('\n') || normalizedSelected;
     // Empty selection (Generation Mode): shadow request Experience so historical
     // generated/canonical/original duties cannot re-enter FACT LOCK / factSet.
+    // When overriding unedited AI with pre-AI facts, keep persisted grounding
+    // fields on the request copy rather than shadowing live AI into them.
     const experienceForAi: WorkExperience = unitText
-      ? {
-        ...exp,
-        description: unitText,
-        originalUserDescription: unitText,
-        canonicalDescription: unitText,
-        descriptionOrigin: 'user',
-        recoveredSemanticDuties: undefined,
-        groundingRecoverySource: undefined,
-      }
+      ? options?.preserveGroundingFields
+        ? {
+          ...exp,
+          description: unitText,
+          originalUserDescription: (exp.originalUserDescription || '').trim() || unitText,
+          canonicalDescription: (exp.canonicalDescription || '').trim() || unitText,
+          descriptionOrigin: 'user',
+          recoveredSemanticDuties: undefined,
+          groundingRecoverySource: undefined,
+        }
+        : {
+          ...exp,
+          description: unitText,
+          originalUserDescription: unitText,
+          canonicalDescription: unitText,
+          descriptionOrigin: 'user',
+          recoveredSemanticDuties: undefined,
+          groundingRecoverySource: undefined,
+        }
       : {
         ...exp,
         description: '',
@@ -225,6 +247,9 @@ export function resolveExperienceAiAuthoritativeSource(
       live
       && selected
       && !experienceAiSourcesEquivalent(live, selected),
+    ) || (
+      provenance.currentTextareaProvenance === 'ai_generated_unedited'
+      && provenance.currentTextareaIgnoredOrOverridden
     );
     const lang = inferSelectedLanguageScript(selected);
     const staleForeign = Boolean(
@@ -262,12 +287,29 @@ export function resolveExperienceAiAuthoritativeSource(
     };
   };
 
-  // 1. Non-empty live textarea is always the Experience AI operation source.
+  // 1. Unedited prior AI output: fact authority is the pre-AI snapshot / original.
+  if (
+    live
+    && provenance.currentTextareaProvenance === 'ai_generated_unedited'
+    && provenance.authoritativeFactText.trim()
+  ) {
+    const kind: ExperienceAiAuthoritativeSourceKind =
+      provenance.authoritativeFactSourceKind === 'canonical'
+        ? 'canonicalDescription'
+        : provenance.authoritativeFactSourceKind === 'pre_ai_snapshot'
+          ? 'originalUserDescription'
+          : provenance.authoritativeFactSourceKind === 'generated_from_empty'
+            ? 'originalUserDescription'
+            : 'originalUserDescription';
+    return build(provenance.authoritativeFactText, kind, { preserveGroundingFields: true });
+  }
+
+  // 2. Non-empty live textarea that is user-authored or materially edited AI.
   if (live) {
     return build(live, 'currentTextarea');
   }
 
-  // 2. Empty live textarea → Generation Mode. Do NOT promote historical
+  // 3. Empty live textarea → Generation Mode. Do NOT promote historical
   // generated/canonical/original/recovered text into the request source.
   // Those fields stay on the persisted Experience for other consumers, but
   // experienceForAi must carry an empty description so FACT LOCK stays off.
@@ -426,12 +468,22 @@ export function applyGeneratedExperienceDescription(
      * bullets as grounding so Summary/export treat them as Experience facts.
      */
     confirmGeneratedAsGrounding?: boolean;
+    /** Optional request hash for provenance diagnostics (never raw text). */
+    requestHash?: string | null;
+    operationMode?: string;
+    sourceLocale?: string;
   },
 ): WorkExperience {
   const preserved = captureUserGroundingBeforeAi(exp);
+  const priorSnapshot = (preserved.aiOutputProvenance?.preAiFactSnapshotText || '').trim();
   const hadNoGrounding = !(preserved.originalUserDescription || '').trim()
     && !(preserved.canonicalDescription || '').trim()
-    && !(resolveExperienceGroundingDescription(preserved) || '').trim();
+    && !(resolveExperienceGroundingDescription(preserved) || '').trim()
+    && !priorSnapshot;
+  const preAiFactText = priorSnapshot
+    || (preserved.originalUserDescription || '').trim()
+    || (preserved.canonicalDescription || '').trim()
+    || resolveExperienceGroundingDescription(preserved).trim();
   let next: WorkExperience = {
     ...preserved,
     description: generated,
@@ -450,6 +502,26 @@ export function applyGeneratedExperienceDescription(
       canonicalDescription: confirmed,
     };
   }
+  const snapshotForProvenance = options.confirmGeneratedAsGrounding && hadNoGrounding
+    ? (generated || '').trim()
+    : preAiFactText;
+  next = {
+    ...next,
+    aiOutputProvenance: buildExperienceAiOutputProvenance({
+      experienceEntryId: exp.id,
+      appliedOutput: generated,
+      preAiFactText: snapshotForProvenance,
+      sourceLocale: options.sourceLocale || options.locale,
+      targetLocale: options.locale,
+      operationMode: options.operationMode
+        || (options.confirmGeneratedAsGrounding && hadNoGrounding ? 'generate_empty' : 'enhance'),
+      sourceAuthorityKind: options.confirmGeneratedAsGrounding && hadNoGrounding
+        ? 'generated_from_empty'
+        : (priorSnapshot ? 'pre_ai_snapshot' : 'original_user'),
+      requestHash: options.requestHash ?? null,
+      generatedFromEmpty: Boolean(options.confirmGeneratedAsGrounding && hadNoGrounding),
+    }),
+  };
   if (options.jobContext) {
     next = stampExperienceGenerationContext(next, options.jobContext);
   }

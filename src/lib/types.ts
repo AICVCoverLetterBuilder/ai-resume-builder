@@ -73,6 +73,11 @@ export interface WorkExperience {
   /** Locale of `generatedDescription` / last AI apply for this experience. */
   generatedLocale?: string;
   /**
+   * Per-entry AI output provenance (stable Experience.id ownership).
+   * Unedited AI output hashes + pre-AI fact snapshot for later operations.
+   */
+  aiOutputProvenance?: import('./cv-experience-ai-output-provenance').ExperienceAiOutputProvenanceRecord;
+  /**
    * Marks originalUserDescription/canonicalDescription that were recovered from
    * classified legacy display text (not ordinary user-confirmed typing).
    */
