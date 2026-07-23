@@ -19,9 +19,13 @@ import { fingerprintText } from './cv-export-diagnostics';
 
 export const SPANISH_SUMMARY_GROUNDING_306_REVISION =
   'spanish-summary-grounding-306-v1' as const;
+/** AAB-307 — prior-role slot realization across source locales. */
+export const SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION =
+  'spanish-summary-prior-slot-307-v1' as const;
 
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
+void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
 
 const SPANISH_MONTHS: Record<string, string> = {
   '01': 'enero',
@@ -76,8 +80,82 @@ const TOOL_CUES_ES =
 const WAREHOUSE_FACT_CUE_ES =
   /(?:mercanc[ií]a\s+entrant|recepci[oó]n\s+de\s+mercanc|documentaci[oó]n(?:\s+relacionada)?|documentos(?:\s+relacionados)?|registros(?:\s+relacionados)?|preparaci[oó]n|movimiento|traslado|compa[nñ]er|\brevisa\b|\bcomprueba\b|\bcontrola\b|\bcoordina\b|almac[eé]n)/iu;
 
+/** Spanish + cross-locale design cues (Hindi/DE/SR/HR/JA/AR/RU source entries). */
 const DESIGN_FACT_CUE_ES =
-  /(?:visual|gr[aá]fic|dise[nñ]o|archivo(?:s)?\s+(?:finales?\s+)?(?:de\s+)?dise[nñ]o|pantalla|formato|elemento)/iu;
+  /(?:visual|gr[aá]fic|dise[nñ]o|archivo(?:s)?\s+(?:finales?\s+)?(?:de\s+)?dise[nñ]o|pantalla|formato|elemento|design|dizajn|grafik|vizuel|visuell|デザイン|グラフィック|ग्राफिक|डिज़ाइन|दृश्य|تصميم|дизайн|графич|grafič|vizualn|gestaltung|layout)/iu;
+
+/** Entry-owned material fact identities shared by builder + validator. */
+export type SpanishEntryOwnedFactId =
+  | 'incoming_goods_check'
+  | 'related_documents_check'
+  | 'colleague_coordination'
+  | 'goods_preparation'
+  | 'goods_movement'
+  | 'visual_material_creation'
+  | 'graphic_element_creation'
+  | 'design_material_review'
+  | 'design_material_adaptation'
+  | 'final_design_file_preparation'
+  | 'multi_format_preparation'
+  | 'screen_preparation';
+
+const CURRENT_OWNED_FACT_IDS: SpanishEntryOwnedFactId[] = [
+  'incoming_goods_check',
+  'related_documents_check',
+  'colleague_coordination',
+  'goods_preparation',
+  'goods_movement',
+];
+
+const PRIOR_OWNED_FACT_IDS: SpanishEntryOwnedFactId[] = [
+  'visual_material_creation',
+  'graphic_element_creation',
+  'design_material_review',
+  'design_material_adaptation',
+  'final_design_file_preparation',
+  'multi_format_preparation',
+  'screen_preparation',
+];
+
+export function extractSpanishEntryOwnedFactIds(text: string): SpanishEntryOwnedFactId[] {
+  void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
+  const t = String(text || '');
+  const out: SpanishEntryOwnedFactId[] = [];
+  const push = (id: SpanishEntryOwnedFactId, re: RegExp) => {
+    if (re.test(t) && !out.includes(id)) out.push(id);
+  };
+  push('incoming_goods_check', /(?:mercanc[ií]a\s+entrant|incoming\s+goods|आने\s+वाले\s+माल|eingehende[rn]?\s+Waren|zaprimljen|入荷)/iu);
+  push('related_documents_check', /(?:documentaci[oó]n|documentos|registros|documents?|records?|दस्तावेज़|Unterlagen|документац|関連書類)/iu);
+  push('colleague_coordination', /(?:compa[nñ]er|colleague|सहकर्मी|Kolleg|koleg|同僚)/iu);
+  push('goods_preparation', /(?:preparaci[oó]n|preparation|तैयारी|Vorbereitung|priprem|準備)/iu);
+  push('goods_movement', /(?:movimiento|movement|traslado|आवाजाही|Bewegung|premješt|移動)/iu);
+  push('visual_material_creation', /(?:material(?:es)?\s+visual|visual\s+material|दृश्य\s+सामग्री|visuelle[sn]?\s+Material|vizualn|ビジュアル)/iu);
+  push('graphic_element_creation', /(?:elemento(?:s)?\s+gr[aá]fic|graphic\s+element|ग्राफिक\s+तत्व|grafische[sn]?\s+Element|grafičk|グラフィック)/iu);
+  push('design_material_review', /(?:revis(?:ó|a|ar)|review|समीक्षा|prüft|pregled|確認)/iu);
+  push('design_material_adaptation', /(?:adapt(?:ó|a|ar)|adapt|अनुकूलन|anpass|prilagod|調整)/iu);
+  push('final_design_file_preparation', /(?:archivo(?:s)?\s+final|final\s+(?:design\s+)?file|अंतिम(?:\s+\S+){0,3}\s+फ़ाइल|Enddatei|konačn|最終)/iu);
+  push('multi_format_preparation', /(?:formato|format|प्रारूप|Formate|formatima|形式)/iu);
+  push('screen_preparation', /(?:pantalla|screen|स्क्रीन|Bildschirm|zaslon|画面)/iu);
+  return out;
+}
+
+export function spanishPriorEntryRequiresRoleSlot(options: {
+  priorRole?: string;
+  priorEmployer?: string;
+  priorDuties?: string;
+}): boolean {
+  void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
+  const role = String(options.priorRole || '').trim();
+  const employer = String(options.priorEmployer || '').trim();
+  const duties = String(options.priorDuties || '').trim();
+  if (!role && !employer && !duties) return false;
+  if (DESIGN_FACT_CUE_ES.test(`${role} ${duties}`)) return true;
+  if (/dise[nñ]ador|graphic\s+design|ग्राफिक|디자이너|Grafikdesigner|grafičk/iu.test(role)) {
+    return true;
+  }
+  // Any completed prior with role or employer + material duty text is required.
+  return Boolean((role || employer) && duties);
+}
 
 /** Finite main-clause verbs for prose Summary units. */
 const FINITE_VERB_ES =
@@ -482,7 +560,7 @@ function sourceRequiresCurrentWarehouseFacts(duties: string, role: string): bool
 
 function sourceRequiresPriorDesignFacts(duties: string, role: string): boolean {
   return DESIGN_FACT_CUE_ES.test(`${duties} ${role}`)
-    || /dise[nñ]o|design|gr[aá]fic/i.test(`${role} ${duties}`);
+    || /dise[nñ]o|design|gr[aá]fic|ग्राफिक|डिज़ाइन|दृश्य|Grafik|grafič/i.test(`${role} ${duties}`);
 }
 
 export function analyzeSpanishSummaryEmploymentQuality(
@@ -490,6 +568,7 @@ export function analyzeSpanishSummaryEmploymentQuality(
   options: {
     company?: string;
     role?: string;
+    priorRole?: string;
     priorCompany?: string;
     currentEntryDuties?: string;
     priorEntryDuties?: string;
@@ -500,6 +579,7 @@ export function analyzeSpanishSummaryEmploymentQuality(
 ): SpanishSummaryEmploymentQuality {
   void SPANISH_CV_AI_305_REVISION;
   void SPANISH_SUMMARY_GROUNDING_306_REVISION;
+  void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const units = splitSpanishSummaryUnits(text);
   const introGrammar = validateSpanishSummaryIntroGrammar(text, { company: options.company });
@@ -512,6 +592,7 @@ export function analyzeSpanishSummaryEmploymentQuality(
     && !DESIGN_UNSUPPORTED_ES.test(`${options.currentEntryDuties || ''} ${options.priorEntryDuties || ''}`);
   const company = (options.company || '').trim();
   const priorCompany = (options.priorCompany || '').trim();
+  const priorRole = (options.priorRole || '').trim();
   const companyEsc = company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const priorEsc = priorCompany.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const structuredRole = (options.structuredRole || options.role || '').trim();
@@ -561,9 +642,16 @@ export function analyzeSpanishSummaryEmploymentQuality(
   const currentDuties = options.currentEntryDuties || '';
   const priorDuties = options.priorEntryDuties || '';
   const warehouseDomain = sourceRequiresCurrentWarehouseFacts(currentDuties, structuredRole);
-  const designDomain = sourceRequiresPriorDesignFacts(priorDuties, options.role || '');
+  const designDomain = sourceRequiresPriorDesignFacts(priorDuties, priorRole);
+  const priorSlotRequired = spanishPriorEntryRequiresRoleSlot({
+    priorRole,
+    priorEmployer: priorCompany,
+    priorDuties,
+  });
 
   const detectedFacts = detectSpanishSummaryFactIds(text);
+  void detectedFacts;
+  void extractSpanishEntryOwnedFactIds(`${currentDuties}\n${priorDuties}`);
   // Intro-only warehouse cues do not satisfy duty coverage when no duty slot exists.
   const dutyUnitText = units
     .filter((_, i) => slots[i] === 'current_duty')
@@ -627,19 +715,21 @@ export function analyzeSpanishSummaryEmploymentQuality(
     reason = 'spanish_summary_unsupported_design_medium';
   } else if (!introGrammar.ok) {
     reason = introGrammar.reason;
-  } else if ((warehouseDomain || designDomain) && units.length < 3) {
+  } else if ((warehouseDomain || priorSlotRequired) && units.length < 3) {
     reason = 'spanish_summary_incomplete_slots';
   } else if (warehouseDomain && (!currentIntroSlotPresent || !currentDutySlotPresent)) {
-    reason = 'spanish_summary_missing_current_duty_slot';
-  } else if (designDomain && priorDuties.trim() && !priorRoleSlotPresent) {
-    reason = 'spanish_summary_missing_prior_slot';
+    reason = !currentIntroSlotPresent
+      ? 'spanish_summary_missing_current_intro_slot'
+      : 'spanish_summary_missing_current_duty_slot';
+  } else if (priorSlotRequired && !priorRoleSlotPresent) {
+    reason = 'spanish_summary_missing_prior_role_slot';
   } else if (warehouseDomain && currentCoverage < requiredCurrentMin) {
     reason = 'spanish_summary_current_fact_coverage_incomplete';
   } else if (warehouseDomain && currentMissing.length > 0 && currentCoverage < 4) {
     // Fail when material warehouse clusters are missing.
     reason = 'spanish_summary_current_fact_coverage_incomplete';
   } else if (!priorRoleGroundingPassed) {
-    reason = 'spanish_summary_prior_fact_coverage_incomplete';
+    reason = 'spanish_summary_prior_role_grounding_incomplete';
   } else if (priorCompany && !priorCompanyPresent) {
     reason = 'spanish_summary_prior_employer_missing';
   } else if (company && companyEsc && !new RegExp(companyEsc, 'iu').test(text)) {
@@ -656,13 +746,13 @@ export function analyzeSpanishSummaryEmploymentQuality(
   }
 
   const grammarValidationPassed = introGrammar.ok && !hasGenericSkillsUnit;
-  const slotValidationPassed = !(warehouseDomain || designDomain)
-    || (
-      currentIntroSlotPresent
-      && (!warehouseDomain || currentDutySlotPresent)
-      && (!designDomain || !priorDuties.trim() || priorRoleSlotPresent)
-      && !slots.includes('skills')
-    );
+  // Slot requirements are derived from the authoritative snapshot before validation.
+  // A missing required prior slot can never pass slot validation.
+  const slotValidationPassed = (
+    (!warehouseDomain || (currentIntroSlotPresent && currentDutySlotPresent))
+    && (!priorSlotRequired || priorRoleSlotPresent)
+    && !slots.includes('skills')
+  );
   const groundingOk = reason == null
     && grammarValidationPassed
     && slotValidationPassed
@@ -726,6 +816,7 @@ export function buildSpanishEntryOwnedSummary(options: {
 }): string {
   void SPANISH_CV_AI_305_REVISION;
   void SPANISH_SUMMARY_GROUNDING_306_REVISION;
+  void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
   void options.locale;
 
   const g = String(options.gender || '').toLowerCase();
@@ -786,7 +877,13 @@ export function buildSpanishEntryOwnedSummary(options: {
   }
   if (!/[.]$/u.test(intro)) intro = `${intro}.`;
 
-  const dutySentence = warehouseRole
+  const currentOwned = extractSpanishEntryOwnedFactIds(
+    [
+      ...(options.dutyFacts || []).map((f) => f.sourceText || f.value),
+      role,
+    ].join('\n'),
+  );
+  const dutySentence = warehouseRole || currentOwned.some((id) => CURRENT_OWNED_FACT_IDS.includes(id))
     ? 'Revisa la mercancía entrante y la documentación relacionada, y coordina con sus compañeros la preparación y el movimiento de las mercancías.'
     : '';
 
@@ -794,17 +891,31 @@ export function buildSpanishEntryOwnedSummary(options: {
   const priorEmployer = (options.priorEmployer || '').trim();
   const priorEn = formatSpanishEmployerPhrase(priorEmployer);
   const priorDuties = options.priorSourceDuties || '';
-  const priorLooksDesign = /(?:dizajn|design|grafik|dise[nñ]o|visual|vizuel|visuell|デザイン|gr[aá]fic)/i
-    .test(`${priorRole} ${priorDuties}`);
+  const priorOwned = extractSpanishEntryOwnedFactIds(`${priorRole}\n${priorDuties}`);
+  const priorLooksDesign = sourceRequiresPriorDesignFacts(priorDuties, priorRole)
+    || priorOwned.some((id) => PRIOR_OWNED_FACT_IDS.includes(id));
+  const priorRequired = spanishPriorEntryRequiresRoleSlot({
+    priorRole,
+    priorEmployer,
+    priorDuties,
+  });
   let priorSentence = '';
-  if ((priorRole || priorLooksDesign) && priorLooksDesign) {
-    const priorLabel = unspecified
-      ? 'diseño gráfico'
-      : localizeGraphicDesigner('es', options.gender);
-    const designFacts = 'donde creó materiales visuales y elementos gráficos, revisó y adaptó materiales de diseño y preparó archivos finales de diseño para distintos formatos y pantallas';
-    priorSentence = priorEn
-      ? `Anteriormente trabajó como ${priorLabel} ${priorEn}, ${designFacts}.`
-      : `Anteriormente trabajó como ${priorLabel}, ${designFacts}.`;
+  if (priorRequired || priorLooksDesign) {
+    if (priorLooksDesign) {
+      const priorLabel = unspecified
+        ? 'diseño gráfico'
+        : localizeGraphicDesigner('es', options.gender);
+      const designFacts = 'donde creó materiales visuales y elementos gráficos, revisó y adaptó materiales de diseño y preparó archivos finales de diseño para distintos formatos y pantallas';
+      priorSentence = priorEn
+        ? `Anteriormente trabajó como ${priorLabel} ${priorEn}, ${designFacts}.`
+        : `Anteriormente trabajó como ${priorLabel}, ${designFacts}.`;
+    } else if (priorRole || priorEmployer) {
+      // Non-design prior: still emit a completed-role unit without inventing duties.
+      const priorLabel = priorRole || 'profesional';
+      priorSentence = priorEn
+        ? `Anteriormente trabajó como ${priorLabel} ${priorEn}.`
+        : `Anteriormente trabajó como ${priorLabel}.`;
+    }
   }
 
   return [intro, dutySentence, priorSentence]

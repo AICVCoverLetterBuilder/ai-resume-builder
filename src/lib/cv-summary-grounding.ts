@@ -74,6 +74,7 @@ import {
   analyzeSpanishSummaryEmploymentQuality,
   buildSpanishEntryOwnedSummary,
   spanishWarehouseSummaryFragment,
+  SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
 } from './cv-spanish-summary-grounding';
 import { SPANISH_CV_AI_305_REVISION } from './cv-spanish-experience-grounding';
 import {
@@ -181,9 +182,14 @@ export {
   splitSpanishSummaryUnits,
   formatSpanishEmployerPhrase,
   validateSpanishSummaryIntroGrammar,
+  extractSpanishEntryOwnedFactIds,
+  spanishPriorEntryRequiresRoleSlot,
 } from './cv-spanish-summary-grounding';
 export { SPANISH_CV_AI_305_REVISION } from './cv-spanish-experience-grounding';
-export { SPANISH_SUMMARY_GROUNDING_306_REVISION } from './cv-spanish-summary-grounding';
+export {
+  SPANISH_SUMMARY_GROUNDING_306_REVISION,
+  SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
+} from './cv-spanish-summary-grounding';
 export {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
@@ -1538,9 +1544,13 @@ export function buildConciseGroundedSummary(
   const dutyFacts = factsForExperienceIndex(factSet, currentIndex, 'experience_bullet').slice(0, 5);
   const sourceDuties = dutyFacts.map((f) => f.sourceText || f.value).join('\n');
   const priorDutyFacts = typeof priorIndex === 'number'
-    ? factsForExperienceIndex(factSet, priorIndex, 'experience_bullet').slice(0, 5)
+    ? factsForExperienceIndex(factSet, priorIndex, 'experience_bullet')
+      .slice(0, locale === 'es' ? 12 : 5)
     : [];
   const priorSourceDuties = priorDutyFacts.map((f) => f.sourceText || f.value).join('\n');
+  if (locale === 'es') {
+    void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
+  }
 
   let role = resolveOccupationalTitleForSummary({
     profileJobTitle: profileTitle,

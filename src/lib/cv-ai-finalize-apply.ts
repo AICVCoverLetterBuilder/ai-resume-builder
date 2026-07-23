@@ -88,8 +88,13 @@ import {
   detectSpanishExperienceUnsupportedExpansion,
   buildSpanishWarehouseExperienceFallback,
 } from './cv-spanish-experience-grounding';
-import { SPANISH_SUMMARY_GROUNDING_306_REVISION } from './cv-spanish-summary-grounding';
+import {
+  SPANISH_SUMMARY_GROUNDING_306_REVISION,
+  SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
+  extractSpanishEntryOwnedFactIds,
+} from './cv-spanish-summary-grounding';
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
+void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
 import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
 
 /** Packaging proof — final-candidate diagnostic truthfulness (AAB-305). */
@@ -254,6 +259,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
   SPANISH_CV_AI_305_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
+  SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
   EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
@@ -293,6 +299,7 @@ void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
+void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
 void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
 void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
@@ -1020,6 +1027,7 @@ function summaryPasses(
         currentEntryDuties: entryDuties.currentEntryDuties,
         priorEntryDuties: entryDuties.priorEntryDuties,
         priorCompany: entryDuties.priorCompany,
+        priorRole: entryDuties.priorRoleTitle,
         gender: cv.personal?.gender || '',
       });
       if (!empQ.groundingValidationPassed) {
@@ -1289,6 +1297,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const currentEntryMaterialKeys: string[] = (() => {
     const fromUnits = materialDutyKeysFromDescription(entryDutiesForRole.currentEntryDuties)
       .filter((k) => k !== 'generic_duty');
+    const spanishOwned = locale === 'es'
+      ? extractSpanishEntryOwnedFactIds(
+        `${entryDutiesForRole.currentEntryDuties}\n${entryDutiesForRole.currentRoleTitle || ''}`,
+      )
+      : [];
     const cues = [
       ...hindiWarehouseCueKeysFromUnit(entryDutiesForRole.currentEntryDuties),
       ...(locale === 'ar' || locale === 'ru' || locale === 'ja'
@@ -1312,7 +1325,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ]
         : []),
     ];
-    const merged = [...new Set([...fromUnits, ...cues])];
+    const merged = [...new Set([...fromUnits, ...spanishOwned, ...cues])];
     return merged.length ? merged : ['generic_duty'];
   })();
   const currentSourceUnitDiag = diagnoseCurrentSourceUnitMaterial(
@@ -1329,8 +1342,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       entryDutiesForRole.priorEntryDuties,
       entryDutiesForRole.priorRoleTitle,
     ).filter((k) => k !== 'generic_duty' && !(priorDesignCue && k === 'food_prep'));
+    const spanishOwned = locale === 'es'
+      ? extractSpanishEntryOwnedFactIds(
+        `${entryDutiesForRole.priorEntryDuties}\n${entryDutiesForRole.priorRoleTitle || ''}`,
+      )
+      : [];
     const merged = [
       ...roleAware,
+      ...spanishOwned,
       ...materialDutyKeysFromDescription(entryDutiesForRole.priorEntryDuties)
         .filter((k) => k !== 'generic_duty' && !(priorDesignCue && k === 'food_prep')),
       ...collectDesignMaterialKeysFromDescription(entryDutiesForRole.priorEntryDuties)
@@ -1346,11 +1365,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : []),
     ];
     const unique = [...new Set(merged)];
-    // Russian/Japanese Summary design-prior template grounds all three fact families when
+    // Russian/Japanese/Spanish Summary design-prior template grounds fact families when
     // the prior entry is design-owned — report those keys for diagnostics.
-    const priorLooksDesignForLocale = (locale === 'ru' || locale === 'ja' || locale === 'hr') && (
+    const priorLooksDesignForLocale = (locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es') && (
       priorDesignCue
-      || /dizajn|design|グラフィック|デザイナー|グラフィックデザイナー|графическ|дизайнер|visual|визуальн|ビジュアル|デザイン|مواد\s*بصرية|عناصر\s*رسومية|grafičk/i
+      || /dizajn|design|グラフィック|デザイナー|グラフィックデザイナー|графическ|дизайнер|visual|визуальн|ビジュアル|デザイン|مواد\s*بصرية|عناصر\s*رسومية|grafičk|ग्राफिक|डिज़ाइन|दृश्य|dise[nñ]o|gr[aá]fic/i
         .test(`${entryDutiesForRole.priorRoleTitle || ''} ${entryDutiesForRole.priorEntryDuties || ''}`)
     );
     if (priorLooksDesignForLocale) {
@@ -1365,6 +1384,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         'design_project_requirements',
         'design_files_formats',
         'design_different_screens',
+        ...(locale === 'es'
+          ? [
+            'visual_material_creation',
+            'graphic_element_creation',
+            'design_material_review',
+            'design_material_adaptation',
+            'final_design_file_preparation',
+            'multi_format_preparation',
+            'screen_preparation',
+          ]
+          : []),
       ]) {
         if (!unique.includes(k)) unique.push(k);
       }
@@ -1653,6 +1683,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         currentEntryDuties: entryDuties.currentEntryDuties,
         priorEntryDuties: entryDuties.priorEntryDuties,
         priorCompany: entryDuties.priorCompany,
+        priorRole: entryDuties.priorRoleTitle,
         gender,
         structuredRole: context.role || entryDuties.currentRoleTitle,
         structuredSkills: (cv.skills || [])
@@ -1802,6 +1833,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                   currentEntryDuties: entryDuties.currentEntryDuties,
                   priorEntryDuties: entryDuties.priorEntryDuties,
                   priorCompany: entryDuties.priorCompany,
+                  priorRole: entryDuties.priorRoleTitle,
                   structuredRole: context.role || entryDuties.currentRoleTitle,
                   gender,
                   structuredSkills: (cv.skills || [])

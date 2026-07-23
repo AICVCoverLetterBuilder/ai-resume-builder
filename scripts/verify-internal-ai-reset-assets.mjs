@@ -158,6 +158,7 @@ const GERMAN_CV_AI_302 = 'german-cv-ai-302-v1';
 const GERMAN_EXPERIENCE_GROUNDING_303 = 'german-experience-grounding-303-v1';
 const SPANISH_CV_AI_305 = 'spanish-cv-ai-305-v1';
 const SPANISH_SUMMARY_GROUNDING_306 = 'spanish-summary-grounding-306-v1';
+const SPANISH_SUMMARY_PRIOR_SLOT_307 = 'spanish-summary-prior-slot-307-v1';
 const SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306 =
   'summary-final-candidate-diagnostics-306-v1';
 const EXPERIENCE_AI_OUTPUT_PROVENANCE_304 = 'experience-ai-output-provenance-304-v1';
@@ -216,6 +217,7 @@ for (const marker of [
   GERMAN_EXPERIENCE_GROUNDING_303,
   SPANISH_CV_AI_305,
   SPANISH_SUMMARY_GROUNDING_306,
+  SPANISH_SUMMARY_PRIOR_SLOT_307,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304,
   EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305,
