@@ -88,6 +88,8 @@ import {
   detectSpanishExperienceUnsupportedExpansion,
   buildSpanishWarehouseExperienceFallback,
 } from './cv-spanish-experience-grounding';
+import { SPANISH_SUMMARY_GROUNDING_306_REVISION } from './cv-spanish-summary-grounding';
+void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
 
 /** Packaging proof — final-candidate diagnostic truthfulness (AAB-305). */
@@ -246,6 +248,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_CV_AI_302_REVISION,
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
   SPANISH_CV_AI_305_REVISION,
+  SPANISH_SUMMARY_GROUNDING_306_REVISION,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
   EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
 ] as const;
@@ -283,6 +286,7 @@ void GERMAN_CV_AI_302_REVISION;
 void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void SPANISH_CV_AI_305_REVISION;
+void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
 void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
@@ -1620,6 +1624,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   }
   if (locale === 'es') {
     void SPANISH_CV_AI_305_REVISION;
+    void SPANISH_SUMMARY_GROUNDING_306_REVISION;
     candidate = dedupeSummarySentences(candidate);
     if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
       candidate = '';
@@ -1633,6 +1638,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         priorEntryDuties: entryDuties.priorEntryDuties,
         priorCompany: entryDuties.priorCompany,
         gender,
+        structuredRole: context.role || entryDuties.currentRoleTitle,
+        structuredSkills: (cv.skills || [])
+          .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
+          .filter(Boolean),
       });
       if (!empQuality.groundingValidationPassed) {
         candidate = '';
@@ -1698,7 +1707,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
-    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr')
+    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
       ? !firstPerson
       : true;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
@@ -1761,6 +1770,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 structuredRole: context.role || entryDuties.currentRoleTitle,
                 gender,
               })
+              : locale === 'es'
+                ? analyzeSpanishSummaryEmploymentQuality(analyzedText, {
+                  company: context.company || entryDuties.currentCompany,
+                  role: context.role,
+                  currentEntryDuties: entryDuties.currentEntryDuties,
+                  priorEntryDuties: entryDuties.priorEntryDuties,
+                  priorCompany: entryDuties.priorCompany,
+                  structuredRole: context.role || entryDuties.currentRoleTitle,
+                  gender,
+                  structuredSkills: (cv.skills || [])
+                    .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
+                    .filter(Boolean),
+                })
             : null;
     // Candidate fields — never treat structured context alone as a passing intro/title.
     const candidateCurrentRoleTitlePresent = empQ?.currentRoleTitlePresent ?? null;
@@ -1778,7 +1800,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         matchesWarehouseOccupationalTitle(
           `${context.role || ''} ${entryDuties.currentRoleTitle || ''}`,
         )
-        || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल|بضائع|مستودع|товар|склад|кладов|倉庫|入荷|商品)/iu.test(
+        || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल|بضائع|مستودع|товар|склад|кладов|倉庫|入荷|商品|almac[eé]n|mercanc[ií]a)/iu.test(
           entryDuties.currentEntryDuties || '',
         )
       ),
@@ -1830,12 +1852,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const blockedForPerspective = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
       && !perspectiveValidationPassed,
     );
     const blockedForGrounding = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
       && empQ
       && (!empQ.groundingValidationPassed || coverageHardFail),
     );

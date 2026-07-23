@@ -183,6 +183,7 @@ export {
   validateSpanishSummaryIntroGrammar,
 } from './cv-spanish-summary-grounding';
 export { SPANISH_CV_AI_305_REVISION } from './cv-spanish-experience-grounding';
+export { SPANISH_SUMMARY_GROUNDING_306_REVISION } from './cv-spanish-summary-grounding';
 export {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
