@@ -54,6 +54,15 @@ export type ExperienceAiOperationSnapshot = {
   unitSequenceHash: string;
   sourceUnitCount: number;
   sourceFactIds: string[];
+  /**
+   * Immutable request-time visible comparison (AAB-312).
+   * Always derived from liveRawText — never from fact authority override.
+   */
+  visibleComparisonRawText: string;
+  visibleComparisonHash: string | null;
+  visibleComparisonNormalizedHash: string | null;
+  visibleComparisonUnitCount: number;
+  visibleComparisonCapturedAtRequest: true;
 };
 
 export type ExperienceAiSourceStructureDiag = {
@@ -210,6 +219,8 @@ export function createExperienceAiOperationSnapshot(
 
   const normalizedSourceText = units.map((u) => u.rawUnit).join('\n');
   const unitSequenceHash = experienceAiUnitSequenceHash(authoritativeRawText);
+  const visibleUnits = liveTrimmed ? experienceAiSourceUnits(liveTrimmed) : [];
+  const visibleNormalized = normalizeExperienceAiSourceText(liveTrimmed);
 
   return {
     operationSnapshotId,
@@ -225,6 +236,13 @@ export function createExperienceAiOperationSnapshot(
     unitSequenceHash,
     sourceUnitCount: units.length,
     sourceFactIds: units.map((u) => u.sourceUnitId),
+    visibleComparisonRawText: liveRawText,
+    visibleComparisonHash: liveTrimmed ? fingerprintText(liveTrimmed) : null,
+    visibleComparisonNormalizedHash: visibleNormalized
+      ? fingerprintText(visibleNormalized)
+      : null,
+    visibleComparisonUnitCount: visibleUnits.length,
+    visibleComparisonCapturedAtRequest: true,
   };
 }
 

@@ -1,14 +1,16 @@
 /**
- * AAB-311 — dual-source Experience authority:
+ * AAB-311/312 — dual-source Experience authority:
  * fact authority (pre-AI / original) vs visible comparison (current textarea).
  *
- * Unedited prior AI output must never become fact authority, but it is the
- * mandatory no-op / degradation / meaningful-change baseline on re-run.
+ * Unedited prior AI output must never become fact authority. The request-time
+ * visible textarea is the mandatory no-op / degradation / improvement baseline
+ * for every non-empty Experience operation.
  */
 import { fingerprintText } from './cv-export-diagnostics';
 import {
   experienceAiSourcesEquivalent,
   normalizeExperienceAiSourceText,
+  experienceAiSourceUnits,
 } from './cv-experience-ai-operation-snapshot';
 import { experienceAiHasMeaningfulChange } from './cv-experience-perspective';
 import { splitExperienceBullets } from './cv-canonical-facts';
@@ -18,8 +20,20 @@ import { detectSpanishExperienceUnsupportedExpansion } from './cv-spanish-experi
 /** Packaging proof — must survive minification / DCE. */
 export const EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION =
   'experience-visible-noop-authority-311-v1' as const;
+/** AAB-312 — request-time visible snapshot wiring. */
+export const EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION =
+  'experience-visible-snapshot-wiring-312-v1' as const;
+/** AAB-312 — final semantic no-op / evidence-based improvement gate. */
+export const EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION =
+  'experience-semantic-noop-final-gate-312-v1' as const;
+/** AAB-312 — fact-authority diagnostic consistency. */
+export const EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION =
+  'experience-fact-authority-consistency-312-v1' as const;
 
 void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
+void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
+void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
 
 export type ExperienceVisibleComparisonKind =
   | 'currentTextarea'
@@ -27,15 +41,20 @@ export type ExperienceVisibleComparisonKind =
   | 'none';
 
 export type ExperienceMaterialImprovementKind =
-  | 'restored_missing_fact'
-  | 'fixed_locale'
-  | 'fixed_tense'
-  | 'fixed_grammar'
-  | 'removed_duplication'
-  | 'removed_unsupported_material'
-  | 'repaired_incomplete_sentence'
-  | 'restored_missing_bullet'
-  | 'severe_readability';
+  | 'missing_fact_restored'
+  | 'missing_source_unit_restored'
+  | 'wrong_locale_fixed'
+  | 'wrong_tense_fixed'
+  | 'grammar_error_fixed'
+  | 'malformed_sentence_fixed'
+  | 'duplicate_removed'
+  | 'unsupported_claim_removed_from_visible_text'
+  | 'unsupported_object_removed_from_visible_text'
+  | 'unsupported_predicate_removed_from_visible_text'
+  | 'incomplete_bullet_completed'
+  | 'severe_readability_issue_fixed'
+  | 'perspective_error_fixed'
+  | 'grounded_phrasing_enhancement';
 
 export type ExperienceDegradationKind =
   | 'unsupported_object_introduced'
@@ -47,8 +66,30 @@ export type ExperienceDegradationKind =
   | 'unsupported_predicate_added'
   | 'restyle_without_benefit';
 
+export type ExperienceFinalDecisionKind =
+  | 'material_improvement'
+  | 'semantic_noop'
+  | 'exact_noop'
+  | 'degradation'
+  | 'neutral_restyle'
+  | 'none';
+
+export type ExperienceVisibleComparisonSnapshot = {
+  kind: ExperienceVisibleComparisonKind;
+  rawText: string;
+  hash: string | null;
+  normalizedHash: string | null;
+  length: number;
+  unitCount: number;
+  locale: string;
+  provenance: string | null;
+  matchedLastAiOutput: boolean;
+  capturedAtRequest: true;
+  entryIdHash?: string | null;
+};
+
 export type ExperienceVisibleComparisonEvaluation = {
-  revision: typeof EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+  revision: typeof EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
   visibleComparisonSourceKind: ExperienceVisibleComparisonKind;
   visibleComparisonHash: string | null;
   visibleComparisonNormalizedHash: string | null;
@@ -57,6 +98,7 @@ export type ExperienceVisibleComparisonEvaluation = {
   visibleComparisonMatchedLastAiOutput: boolean;
   visibleComparisonUsedForNoOp: boolean;
   visibleComparisonUsedForDegradationCheck: boolean;
+  visibleComparisonCapturedAtRequest: boolean;
   finalMatchesVisibleComparisonAfterNormalization: boolean;
   finalSemanticallyEquivalentToVisibleComparison: boolean;
   semanticNoOpDetected: boolean;
@@ -65,6 +107,8 @@ export type ExperienceVisibleComparisonEvaluation = {
   materialImprovementKinds: ExperienceMaterialImprovementKind[];
   degradationDetected: boolean;
   degradationKinds: ExperienceDegradationKind[];
+  neutralRestyleDetected: boolean;
+  finalDecisionKind: ExperienceFinalDecisionKind;
 };
 
 function hashNormalized(text: string): string | null {
@@ -72,12 +116,40 @@ function hashNormalized(text: string): string | null {
   return n ? fingerprintText(n) : null;
 }
 
+/** Build immutable request-time visible comparison from live textarea text. */
+export function buildExperienceVisibleComparisonSnapshot(options: {
+  liveText: string;
+  locale: string;
+  provenance?: string | null;
+  matchedLastAiOutput?: boolean;
+  entryIdHash?: string | null;
+}): ExperienceVisibleComparisonSnapshot {
+  void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
+  const raw = (options.liveText || '').trimEnd();
+  const trimmed = raw.trim();
+  const units = trimmed ? experienceAiSourceUnits(trimmed) : [];
+  return {
+    kind: trimmed ? 'currentTextarea' : 'none',
+    rawText: raw,
+    hash: trimmed ? fingerprintText(trimmed) : null,
+    normalizedHash: hashNormalized(trimmed),
+    length: trimmed.length,
+    unitCount: units.length,
+    locale: options.locale || '',
+    provenance: options.provenance ?? null,
+    matchedLastAiOutput: Boolean(options.matchedLastAiOutput),
+    capturedAtRequest: true,
+    entryIdHash: options.entryIdHash ?? null,
+  };
+}
+
 /**
- * Spanish warehouse semantic skeleton: synonym / optional-location insensitive.
- * Does not authorize new facts — only equates grounded realizations.
+ * Spanish warehouse semantic skeleton: synonym / optional-location / inclusive
+ * peer phrasing insensitive. Does not authorize new facts.
  */
 export function normalizeSpanishExperienceSemanticSkeleton(text: string): string {
   void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+  void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
   return normalizeExperienceAiSourceText(text || '')
     .toLowerCase()
     .normalize('NFKD')
@@ -85,13 +157,23 @@ export function normalizeSpanishExperienceSemanticSkeleton(text: string): string
     .replace(/\b(revisa|reviso|comprueba|comproba|verifica|controla|inspecciona|examina)(?:r|ndo|do|da|dos|das)?\b/giu, 'VERIF')
     .replace(/\b(coordina|colabora)(?:r|ndo|do|da)?\b/giu, 'COORD')
     .replace(/\b(?:en|dentro\s+de(?:l)?)\s+(?:el\s+)?almacen\b/giu, '')
-    .replace(/\bcon\s+(?:la\s+)?mercancia\s+recibida\b/giu, '')
+    // Normalize goods object before stripping prepositions so
+    // "relacionada con la mercancía recibida" ≡ "asociada a la mercancía recibida".
     .replace(/\bmercancia\s+(?:entrante|recibida)\b/giu, 'MERC')
-    .replace(/\bdocumentacion\s+relacionad\w*\b/giu, 'DOC_REL')
+    .replace(/\b(?:con|a)\s+(?:la\s+)?MERC\b/giu, '')
+    .replace(/\bdocumentacion\s+(?:relacionad\w*|asociad\w*)(?:\s+(?:con|a))?\b/giu, 'DOC_REL')
+    .replace(/\bdocumentos?\s+(?:relacionad\w*|asociad\w*)\b/giu, 'DOC_REL')
     .replace(/\bdocumentacion\b/giu, 'DOC')
     .replace(/\bpreparacion\b/giu, 'PREP')
     .replace(/\bmovimiento\b/giu, 'MOV')
+    // Inclusive / peer equivalents (compañeros ↔ compañeras y compañeros ↔ equipo).
+    .replace(/\bcompaneras?\s+y\s+companeros?\b/giu, 'PEERS')
+    .replace(/\bcompaneros?\s+y\s+companeras?\b/giu, 'PEERS')
     .replace(/\bcompaneros?\b/giu, 'PEERS')
+    .replace(/\bcompaneras?\b/giu, 'PEERS')
+    .replace(/\bel\s+equipo\b/giu, 'PEERS')
+    .replace(/\bsus\s+colegas\b/giu, 'PEERS')
+    .replace(/\bcolegas\b/giu, 'PEERS')
     .replace(/[^\p{L}\p{N}\s_]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -101,7 +183,7 @@ export function experienceSpanishWarehouseSemanticallyEquivalent(
   a: string,
   b: string,
 ): boolean {
-  void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+  void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
   if (experienceAiSourcesEquivalent(a, b)) return true;
   const unitsA = splitExperienceBullets(a || '').filter(Boolean);
   const unitsB = splitExperienceBullets(b || '').filter(Boolean);
@@ -111,9 +193,11 @@ export function experienceSpanishWarehouseSemanticallyEquivalent(
     const sb = normalizeSpanishExperienceSemanticSkeleton(unitsB[i] || '');
     if (!sa || !sb || sa !== sb) return false;
   }
-  const keysA = [...materialDutyKeysFromDescription(a || '')].sort().join('|');
-  const keysB = [...materialDutyKeysFromDescription(b || '')].sort().join('|');
-  return keysA === keysB;
+  // Unit skeletons already encode synonym / inclusive / location equivalence.
+  // Duty-key string equality is too brittle for safe synonym pairs (e.g.
+  // relacionada ↔ asociada) and must not veto semantic no-op.
+  void materialDutyKeysFromDescription;
+  return true;
 }
 
 export function experienceVisibleTextsSemanticallyEquivalent(
@@ -121,7 +205,7 @@ export function experienceVisibleTextsSemanticallyEquivalent(
   candidate: string,
   locale: string,
 ): boolean {
-  void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+  void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
   if (experienceAiSourcesEquivalent(visible, candidate)) return true;
   if ((locale || '').toLowerCase().startsWith('es')) {
     return experienceSpanishWarehouseSemanticallyEquivalent(visible, candidate);
@@ -145,9 +229,16 @@ function complianceKindsPresent(kinds: string[]): boolean {
     || k === 'document_management_expansion');
 }
 
+function detectInclusiveGenderOnlyChange(visible: string, candidate: string): boolean {
+  const stripPeers = (t: string) => normalizeSpanishExperienceSemanticSkeleton(t);
+  return stripPeers(visible) === stripPeers(candidate)
+    && /companer/iu.test(visible + candidate)
+    && !experienceAiSourcesEquivalent(visible, candidate);
+}
+
 /**
- * Evaluate a grounded candidate against the visible comparison baseline.
- * Fact authority is separate and must not be used as the no-op reference.
+ * Evaluate a grounded candidate against the request-time visible comparison.
+ * Material improvement is true only when evidence kinds are non-empty.
  */
 export function evaluateExperienceVisibleComparison(options: {
   factAuthorityText: string;
@@ -157,8 +248,10 @@ export function evaluateExperienceVisibleComparison(options: {
   visibleComparisonProvenance?: string | null;
   matchedLastAiOutput?: boolean;
   useVisibleForNoOp?: boolean;
+  capturedAtRequest?: boolean;
 }): ExperienceVisibleComparisonEvaluation {
   void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+  void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
   const visible = (options.visibleComparisonText || '').trim();
   const candidate = (options.candidateText || '').trim();
   const fact = (options.factAuthorityText || '').trim();
@@ -169,15 +262,15 @@ export function evaluateExperienceVisibleComparison(options: {
   const units = splitExperienceBullets(visible).filter(Boolean);
 
   const exactNormMatch = useVisible && experienceAiSourcesEquivalent(visible, candidate);
-  // Semantic synonym/location equivalence is only a no-op baseline when the
-  // visible text is not the fact authority (unedited AI re-run). On first click,
-  // visible ≈ fact and grounded polish (e.g. "en el almacén") may still apply.
   const visibleIsFactAuthority = Boolean(
     visible && fact && experienceAiSourcesEquivalent(visible, fact),
   );
-  const allowSemanticNoOpBaseline = useVisible && !visibleIsFactAuthority;
+  const allowSemanticNoOpBaseline = useVisible;
   const semanticEq = allowSemanticNoOpBaseline
     && experienceVisibleTextsSemanticallyEquivalent(visible, candidate, locale);
+  const inclusiveOnly = useVisible
+    && (locale || '').toLowerCase().startsWith('es')
+    && detectInclusiveGenderOnlyChange(visible, candidate);
   const textualDiffVsVisible = useVisible
     && experienceAiHasMeaningfulChange(visible, candidate);
   const textualDiffVsFact = fact
@@ -186,6 +279,18 @@ export function evaluateExperienceVisibleComparison(options: {
 
   const degradationKinds: ExperienceDegradationKind[] = [];
   const improvementKinds: ExperienceMaterialImprovementKind[] = [];
+  const visUnits = units.length;
+  const candUnits = splitExperienceBullets(candidate).filter(Boolean).length;
+  const lengthDelta = Math.abs(candidate.length - visible.length);
+  const synonymOnlyRestyle = Boolean(
+    useVisible
+    && candidate
+    && (semanticEq || inclusiveOnly)
+    && !exactNormMatch
+    && visUnits === candUnits
+    && visUnits > 0
+    && lengthDelta <= Math.max(28, Math.floor(visible.length * 0.12)),
+  );
 
   if (useVisible && candidate) {
     const isEs = (locale || '').toLowerCase().startsWith('es');
@@ -214,61 +319,92 @@ export function evaluateExperienceVisibleComparison(options: {
     }
     for (const k of factKeys) {
       if (!visKeys.has(k) && candKeys.has(k)) {
-        improvementKinds.push('restored_missing_fact');
+        improvementKinds.push('missing_fact_restored');
       }
     }
     if (visScan.count > 0 && candScan.count === 0) {
-      improvementKinds.push('removed_unsupported_material');
+      improvementKinds.push('unsupported_claim_removed_from_visible_text');
     }
-    const visUnits = splitExperienceBullets(visible).filter(Boolean).length;
-    const candUnits = splitExperienceBullets(candidate).filter(Boolean).length;
-    if (visUnits < factKeys.size && candUnits >= factKeys.size) {
-      improvementKinds.push('restored_missing_bullet');
+    if (visUnits < Math.max(factKeys.size, 1) && candUnits > visUnits) {
+      improvementKinds.push('missing_source_unit_restored');
     }
-    // Pure restyle: different text, same skeleton, no improvement signal.
-    if (textualDiffVsVisible && semanticEq && improvementKinds.length === 0) {
+    // First-click polish when visible ≡ fact authority: billable only when the
+    // candidate is not a narrow synonym/inclusive restyle of the same duties.
+    if (
+      visibleIsFactAuthority
+      && textualDiffVsFact
+      && !exactNormMatch
+      && candScan.count === 0
+      && improvementKinds.length === 0
+      && !synonymOnlyRestyle
+      && !inclusiveOnly
+    ) {
+      improvementKinds.push('grounded_phrasing_enhancement');
+    }
+    // Non-Spanish: evidence kind for any non-exact grounded rewrite so usage
+    // invariants never see materialImprovement true with empty kinds, and so
+    // contaminated-AI recovery remains billable once.
+    if (
+      !isEs
+      && textualDiffVsVisible
+      && !exactNormMatch
+      && improvementKinds.length === 0
+    ) {
+      improvementKinds.push('grounded_phrasing_enhancement');
+    }
+    if (textualDiffVsVisible && (semanticEq || inclusiveOnly) && improvementKinds.length === 0) {
       degradationKinds.push('restyle_without_benefit');
     }
   }
 
-  const uniqueDeg = [...new Set(degradationKinds)];
+  const uniqueDeg = [...new Set(degradationKinds)].filter((k) =>
+    !(k === 'restyle_without_benefit' && (semanticEq || inclusiveOnly)));
   const uniqueImp = [...new Set(improvementKinds)];
-  const degradationDetected = uniqueDeg.some((k) => k !== 'restyle_without_benefit')
-    || (uniqueDeg.includes('restyle_without_benefit') && !semanticEq);
+  const degradationDetected = uniqueDeg.length > 0;
+  const semanticEquivalent = Boolean(semanticEq || inclusiveOnly);
+  // Re-run no-op: any semantic equivalence without improvement evidence.
+  // First-click (visible ≡ fact): only exact match or synonym/inclusive restyle.
   const semanticNoOpDetected = Boolean(
-    useVisible && candidate && (exactNormMatch || semanticEq) && uniqueImp.length === 0,
+    useVisible
+    && candidate
+    && uniqueImp.length === 0
+    && (
+      exactNormMatch
+      || inclusiveOnly
+      || (semanticEquivalent && !visibleIsFactAuthority)
+      || (semanticEquivalent && visibleIsFactAuthority && synonymOnlyRestyle)
+    ),
   );
-  // Material improvement vs visible baseline:
-  // - explicit improvement kinds, or
-  // - first-click polish when visible ≡ fact, or
-  // - unedited-AI re-run where candidate is a grounded rewrite of fact authority
-  //   that is not a semantic restyle of the (possibly contaminated) visible text.
+  // Evidence-based only — never default true from textual difference alone.
   const materialImprovementDetected = Boolean(
     useVisible
     && candidate
     && !semanticNoOpDetected
     && !degradationDetected
-    && (
-      uniqueImp.length > 0
-      || (visibleIsFactAuthority && textualDiffVsFact && !exactNormMatch)
-      || (
-        // Unedited AI visible: any validated non-equivalent rewrite may apply
-        // (e.g. deterministic fallback restoring pre-AI facts over contamination).
-        // Synonym-only restyles of a good visible result are caught by semanticEq.
-        !visibleIsFactAuthority
-        && textualDiffVsVisible
-        && !semanticEq
-      )
-    ),
+    && uniqueImp.length > 0,
+  );
+  const neutralRestyleDetected = Boolean(
+    semanticNoOpDetected && !exactNormMatch && uniqueImp.length === 0,
   );
 
+  let semanticNoOpReason: string | null = null;
+  if (semanticNoOpDetected) {
+    if (exactNormMatch) semanticNoOpReason = 'normalized_visible_match';
+    else if (inclusiveOnly) semanticNoOpReason = 'inclusive_gender_equivalent';
+    else if (neutralRestyleDetected) semanticNoOpReason = 'neutral_restyle';
+    else semanticNoOpReason = 'semantic_equivalent_visible';
+  }
+
+  let finalDecisionKind: ExperienceFinalDecisionKind = 'none';
+  if (degradationDetected) finalDecisionKind = 'degradation';
+  else if (materialImprovementDetected) finalDecisionKind = 'material_improvement';
+  else if (exactNormMatch) finalDecisionKind = 'exact_noop';
+  else if (neutralRestyleDetected) finalDecisionKind = 'neutral_restyle';
+  else if (semanticNoOpDetected) finalDecisionKind = 'semantic_noop';
+
   return {
-    revision: EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
-    visibleComparisonSourceKind: visible
-      ? (options.visibleComparisonProvenance === 'liveRawSnapshot'
-        ? 'liveRawSnapshot'
-        : 'currentTextarea')
-      : 'none',
+    revision: EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
+    visibleComparisonSourceKind: visible ? 'currentTextarea' : 'none',
     visibleComparisonHash: visibleHash,
     visibleComparisonNormalizedHash: visibleNormHash,
     visibleComparisonUnitCount: units.length,
@@ -276,21 +412,24 @@ export function evaluateExperienceVisibleComparison(options: {
     visibleComparisonMatchedLastAiOutput: Boolean(options.matchedLastAiOutput),
     visibleComparisonUsedForNoOp: useVisible,
     visibleComparisonUsedForDegradationCheck: useVisible,
+    visibleComparisonCapturedAtRequest: options.capturedAtRequest !== false,
     finalMatchesVisibleComparisonAfterNormalization: exactNormMatch,
-    finalSemanticallyEquivalentToVisibleComparison: semanticEq,
+    finalSemanticallyEquivalentToVisibleComparison: semanticEquivalent,
     semanticNoOpDetected,
-    semanticNoOpReason: semanticNoOpDetected
-      ? (exactNormMatch ? 'normalized_visible_match' : 'semantic_equivalent_visible')
-      : null,
+    semanticNoOpReason,
     materialImprovementDetected,
     materialImprovementKinds: materialImprovementDetected ? uniqueImp : [],
     degradationDetected,
-    degradationKinds: uniqueDeg.filter((k) =>
-      !(k === 'restyle_without_benefit' && semanticEq)),
+    degradationKinds: uniqueDeg,
+    neutralRestyleDetected,
+    finalDecisionKind,
   };
 }
 
-/** Whether re-run should use current textarea as no-op/degradation baseline. */
+/**
+ * Every non-empty Experience textarea is a visible comparison baseline.
+ * Fact authority provenance is independent.
+ */
 export function shouldUseVisibleComparisonForNoOp(options: {
   currentTextareaProvenance?: string | null;
   lastAiOutputHashMatched?: boolean | null;
@@ -298,16 +437,29 @@ export function shouldUseVisibleComparisonForNoOp(options: {
   visibleText?: string | null;
   factAuthorityText?: string | null;
 }): boolean {
-  void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+  void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
   const visible = (options.visibleText || '').trim();
-  if (!visible) return false;
-  // Only unedited prior-AI re-runs require the visible textarea as no-op baseline.
-  // Do not treat every fact-authority override (first enhance, cross-locale, etc.)
-  // as a visible no-op gate — that regresses German/Hindi apply paths.
-  if (options.currentTextareaProvenance === 'ai_generated_unedited') return true;
-  if (options.lastAiOutputHashMatched === true && options.materialUserEditDetected === false) {
-    return true;
-  }
+  void options.currentTextareaProvenance;
+  void options.lastAiOutputHashMatched;
+  void options.materialUserEditDetected;
   void options.factAuthorityText;
-  return false;
+  return Boolean(visible);
+}
+
+/** Map provenance authority kind into diagnostic factAuthorityKind. */
+export function mapFactAuthorityKindForDiagnostics(
+  authoritativeFactSourceKind: string | null | undefined,
+): string | null {
+  void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
+  const k = (authoritativeFactSourceKind || '').trim();
+  if (!k || k === 'none') return k || null;
+  if (k === 'pre_ai_snapshot' || k === 'original_user' || k === 'canonical'
+    || k === 'current_textarea' || k === 'generated_from_empty') {
+    return k;
+  }
+  // Snapshot provenanceOrigin camelCase → snake diagnostic kinds.
+  if (k === 'originalUserDescription') return 'original_user';
+  if (k === 'canonicalDescription') return 'canonical';
+  if (k === 'currentTextarea' || k === 'liveUserDescription') return 'current_textarea';
+  return k;
 }

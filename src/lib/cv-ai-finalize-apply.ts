@@ -100,13 +100,24 @@ void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
 void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
 import {
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+  EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
+  EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
+  EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
   evaluateExperienceVisibleComparison,
   shouldUseVisibleComparisonForNoOp,
+  mapFactAuthorityKindForDiagnostics,
   type ExperienceVisibleComparisonEvaluation,
 } from './cv-experience-visible-noop-authority';
-export { EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION };
+export {
+  EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+  EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
+  EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
+  EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
+};
 void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
-export { SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION };
+void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
+void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
+void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
 import {
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
@@ -213,7 +224,11 @@ import {
   RUSSIAN_AUTHORITATIVE_DESIGN_MATERIAL_KEYS,
 } from './cv-material-duty-coverage';
 import type { ExperienceAiOperationSnapshot } from './cv-experience-ai-operation-snapshot';
-import { experienceAiSourcesEquivalent } from './cv-experience-ai-operation-snapshot';
+import {
+  experienceAiSourcesEquivalent,
+  experienceAiSourceUnits,
+  normalizeExperienceAiSourceText,
+} from './cv-experience-ai-operation-snapshot';
 import {
   normalizeExperienceBulletsPerspective,
   validateExperienceCvPerspective,
@@ -301,6 +316,9 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
   EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+  EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
+  EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
+  EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
   SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
   EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
@@ -350,6 +368,9 @@ void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
 void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
 void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
 void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
+void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
+void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
 void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
 void EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
@@ -622,7 +643,15 @@ export type FinalizeCvAiFieldResult = {
     materialImprovementKinds?: string[];
     degradationDetected?: boolean;
     degradationKinds?: string[];
+    neutralRestyleDetected?: boolean;
+    finalDecisionKind?: string | null;
+    factAuthorityNormalizedHash?: string | null;
+    factAuthorityMatchesAuthoritativeSourceKind?: boolean;
+    visibleComparisonCapturedAtRequest?: boolean;
     experienceVisibleNoopAuthorityRevision?: typeof EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+    experienceVisibleSnapshotWiringRevision?: typeof EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
+    experienceSemanticNoopFinalGateRevision?: typeof EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
+    experienceFactAuthorityConsistencyRevision?: typeof EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
     spanishExperienceComplianceGroundingRevision?: typeof SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
     experiencePredicatePhaseDiagnosticsRevision?: typeof EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION;
     finalUnsupportedClaimCount?: number;
@@ -3137,8 +3166,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     : (authoritativeFactSource
       || liveOperationSource
       || canonical.map((f) => f.sourceText || f.value).join('\n'));
-  // Dual-source contract (AAB-311): fact authority ≠ visible no-op comparison.
-  const visibleComparisonText = (liveOperationSource || '').trim();
+  // Dual-source contract (AAB-311/312): fact authority ≠ visible no-op comparison.
+  // Prefer immutable request-time snapshot fields — never rebuild from post-async state.
+  void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
+  const visibleComparisonText = (
+    snapshot?.visibleComparisonRawText
+    || snapshot?.liveRawText
+    || liveOperationSource
+    || ''
+  ).trim();
   const useVisibleForNoOp = shouldUseVisibleComparisonForNoOp({
     currentTextareaProvenance: textareaProvenance?.currentTextareaProvenance,
     lastAiOutputHashMatched: textareaProvenance?.lastAiOutputHashMatched,
@@ -3147,6 +3183,156 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     factAuthorityText: authoritativeFactSource || sourceForCoverage,
   });
   let lastVisibleComparisonEval: ExperienceVisibleComparisonEvaluation | null = null;
+  const resolveFactAuthorityKindDiag = (): string | null => {
+    void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
+    return mapFactAuthorityKindForDiagnostics(
+      textareaProvenance?.authoritativeFactSourceKind
+      || (snapshot?.provenanceOrigin === 'originalUserDescription'
+        ? 'pre_ai_snapshot'
+        : snapshot?.provenanceOrigin === 'canonicalDescription'
+          ? 'canonical'
+          : snapshot?.provenanceOrigin === 'currentTextarea'
+            ? 'current_textarea'
+            : null),
+    );
+  };
+  const buildVisibleComparisonDiagFields = (
+    vis: ExperienceVisibleComparisonEvaluation | null,
+    candidateText?: string,
+  ): Record<string, unknown> => {
+    void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
+    const evalVis = vis || (visibleComparisonText
+      ? evaluateExperienceVisibleComparison({
+        factAuthorityText: sourceForCoverage,
+        visibleComparisonText,
+        candidateText: candidateText || visibleComparisonText,
+        locale,
+        visibleComparisonProvenance:
+          textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
+        matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+        useVisibleForNoOp: useVisibleForNoOp || Boolean(visibleComparisonText),
+        capturedAtRequest: true,
+      })
+      : null);
+    const factKind = resolveFactAuthorityKindDiag();
+    const factText = (authoritativeFactSource || sourceForCoverage || '').trim();
+    const factUnits = factText ? experienceAiSourceUnits(factText) : [];
+    if (!evalVis) {
+      return {
+        factAuthorityKind: factKind,
+        factAuthorityHash: factText ? fingerprintText(factText) : null,
+        factAuthorityNormalizedHash: factText
+          ? fingerprintText(normalizeExperienceAiSourceText(factText))
+          : null,
+        factAuthorityUnitCount: factUnits.length,
+        factAuthorityMatchesAuthoritativeSourceKind: Boolean(
+          factKind
+          && textareaProvenance?.authoritativeFactSourceKind
+          && (
+            factKind === textareaProvenance.authoritativeFactSourceKind
+            || (
+              factKind === 'pre_ai_snapshot'
+              && (
+                textareaProvenance.authoritativeFactSourceKind === 'pre_ai_snapshot'
+                || textareaProvenance.authoritativeFactSourceKind === 'original_user'
+              )
+            )
+          ),
+        ),
+        visibleComparisonSourceKind: visibleComparisonText ? 'currentTextarea' : 'none',
+        visibleComparisonHash: snapshot?.visibleComparisonHash
+          ?? (visibleComparisonText ? fingerprintText(visibleComparisonText) : null),
+        visibleComparisonNormalizedHash: snapshot?.visibleComparisonNormalizedHash
+          ?? (visibleComparisonText
+            ? fingerprintText(normalizeExperienceAiSourceText(visibleComparisonText))
+            : null),
+        visibleComparisonUnitCount: snapshot?.visibleComparisonUnitCount
+          ?? (visibleComparisonText
+            ? experienceAiSourceUnits(visibleComparisonText).length
+            : 0),
+        visibleComparisonProvenance:
+          textareaProvenance?.currentTextareaProvenance || null,
+        visibleComparisonMatchedLastAiOutput: Boolean(
+          textareaProvenance?.lastAiOutputHashMatched,
+        ),
+        visibleComparisonUsedForNoOp: Boolean(visibleComparisonText),
+        visibleComparisonUsedForDegradationCheck: Boolean(visibleComparisonText),
+        visibleComparisonCapturedAtRequest: true,
+        materialImprovementDetected: false,
+        materialImprovementKinds: [],
+        semanticNoOpDetected: false,
+        degradationDetected: false,
+        degradationKinds: [],
+        neutralRestyleDetected: false,
+        finalDecisionKind: 'none',
+        experienceVisibleNoopAuthorityRevision:
+          EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+        experienceVisibleSnapshotWiringRevision:
+          EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
+        experienceSemanticNoopFinalGateRevision:
+          EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
+        experienceFactAuthorityConsistencyRevision:
+          EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
+      };
+    }
+    return {
+      factAuthorityKind: factKind,
+      factAuthorityHash: factText ? fingerprintText(factText) : null,
+      factAuthorityNormalizedHash: factText
+        ? fingerprintText(normalizeExperienceAiSourceText(factText))
+        : null,
+      factAuthorityUnitCount: factUnits.length,
+      factAuthorityMatchesAuthoritativeSourceKind: Boolean(
+        factKind
+        && textareaProvenance?.authoritativeFactSourceKind
+        && (
+          factKind === textareaProvenance.authoritativeFactSourceKind
+          || (
+            factKind === 'pre_ai_snapshot'
+            && (
+              textareaProvenance.authoritativeFactSourceKind === 'pre_ai_snapshot'
+              || textareaProvenance.authoritativeFactSourceKind === 'original_user'
+            )
+          )
+        ),
+      ),
+      visibleComparisonSourceKind: evalVis.visibleComparisonSourceKind,
+      visibleComparisonHash: snapshot?.visibleComparisonHash ?? evalVis.visibleComparisonHash,
+      visibleComparisonNormalizedHash:
+        snapshot?.visibleComparisonNormalizedHash ?? evalVis.visibleComparisonNormalizedHash,
+      visibleComparisonUnitCount:
+        snapshot?.visibleComparisonUnitCount ?? evalVis.visibleComparisonUnitCount,
+      visibleComparisonProvenance:
+        evalVis.visibleComparisonProvenance
+        || textareaProvenance?.currentTextareaProvenance
+        || null,
+      visibleComparisonMatchedLastAiOutput: evalVis.visibleComparisonMatchedLastAiOutput,
+      visibleComparisonUsedForNoOp: evalVis.visibleComparisonUsedForNoOp,
+      visibleComparisonUsedForDegradationCheck:
+        evalVis.visibleComparisonUsedForDegradationCheck,
+      visibleComparisonCapturedAtRequest: true,
+      finalMatchesVisibleComparisonAfterNormalization:
+        evalVis.finalMatchesVisibleComparisonAfterNormalization,
+      finalSemanticallyEquivalentToVisibleComparison:
+        evalVis.finalSemanticallyEquivalentToVisibleComparison,
+      semanticNoOpDetected: evalVis.semanticNoOpDetected,
+      semanticNoOpReason: evalVis.semanticNoOpReason,
+      materialImprovementDetected: evalVis.materialImprovementDetected,
+      materialImprovementKinds: [...evalVis.materialImprovementKinds],
+      degradationDetected: evalVis.degradationDetected,
+      degradationKinds: [...evalVis.degradationKinds],
+      neutralRestyleDetected: evalVis.neutralRestyleDetected,
+      finalDecisionKind: evalVis.finalDecisionKind,
+      experienceVisibleNoopAuthorityRevision:
+        EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+      experienceVisibleSnapshotWiringRevision:
+        EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
+      experienceSemanticNoopFinalGateRevision:
+        EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
+      experienceFactAuthorityConsistencyRevision:
+        EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
+    };
+  };
   const sourceUnits = sourceWasEmpty
     ? []
     : (snapshot?.units.length
@@ -4339,10 +4525,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const attachPerspectiveDiag = (
     result: FinalizeCvAiFieldResult,
   ): FinalizeCvAiFieldResult => {
-    // Final visible no-op / degradation gate for unedited AI re-runs — applies to
-    // provider, repair, and deterministic fallback accept paths alike.
+    // Final visible no-op / degradation gate — every non-empty Experience path.
     if (result.countedAsSuccess && useVisibleForNoOp && (result.text || '').trim()) {
       void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+      void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
       const isEs = (locale || '').toLowerCase().startsWith('es');
       if (!isEs) {
         // Non-Spanish: only exact/normalized visible equivalence is a no-op.
@@ -4352,6 +4538,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           unsupportedClaimRepairApplied = false;
           clientDeterministicFallbackApplied = false;
           finalCandidateSource = 'none';
+          const noopVis = evaluateExperienceVisibleComparison({
+            factAuthorityText: sourceForCoverage,
+            visibleComparisonText,
+            candidateText: result.text,
+            locale,
+            visibleComparisonProvenance:
+              textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
+            matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+            useVisibleForNoOp: true,
+            capturedAtRequest: true,
+          });
+          lastVisibleComparisonEval = noopVis;
           return {
             blocked: true,
             reason: 'experience_ai_noop',
@@ -4362,82 +4560,69 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             diagnostics: {
               ...baseDiag(),
               ...perspectiveMeta,
+              ...buildVisibleComparisonDiagFields(noopVis, result.text),
               meaningfulChangeDetected: false,
               noOpRejected: true,
               noOpDetected: true,
               typedFailureReason: 'ai_noop',
               rejectionStage: 'visible_comparison_noop',
               finalCandidateSource: 'none',
-              semanticNoOpDetected: true,
-              materialImprovementDetected: false,
-              visibleComparisonUsedForNoOp: true,
-              experienceVisibleNoopAuthorityRevision:
-                EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
               countedAsSuccess: false,
             },
           };
         }
       } else {
-      const postVis = evaluateExperienceVisibleComparison({
-        factAuthorityText: sourceForCoverage,
-        visibleComparisonText: visibleComparisonText,
-        candidateText: result.text,
-        locale,
-        visibleComparisonProvenance:
-          textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
-        matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
-        useVisibleForNoOp: true,
-      });
-      lastVisibleComparisonEval = postVis;
-      if (
-        postVis.semanticNoOpDetected
-        || postVis.degradationDetected
-        || !postVis.materialImprovementDetected
-      ) {
-        providerAccepted = false;
-        unsupportedClaimRepairApplied = false;
-        clientDeterministicFallbackApplied = false;
-        finalCandidateSource = 'none';
-        return {
-          blocked: true,
-          reason: postVis.degradationDetected && !postVis.semanticNoOpDetected
-            ? 'experience_ai_degradation'
-            : 'experience_ai_noop',
-          text: exp?.description || visibleComparisonText || '',
-          origin: 'user',
-          roleDutyConflict,
-          countedAsSuccess: false,
-          diagnostics: {
-            ...baseDiag(),
-            ...perspectiveMeta,
-            meaningfulChangeDetected: false,
-            noOpRejected: true,
-            noOpDetected: postVis.semanticNoOpDetected,
-            noOpCandidateKind: result.diagnostics?.finalCandidateSource
-              || result.origin
-              || 'provider',
-            typedFailureReason: postVis.degradationDetected && !postVis.semanticNoOpDetected
+        const postVis = evaluateExperienceVisibleComparison({
+          factAuthorityText: sourceForCoverage,
+          visibleComparisonText: visibleComparisonText,
+          candidateText: result.text,
+          locale,
+          visibleComparisonProvenance:
+            textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
+          matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+          useVisibleForNoOp: true,
+          capturedAtRequest: true,
+        });
+        lastVisibleComparisonEval = postVis;
+        const kindsOk = postVis.materialImprovementDetected
+          && postVis.materialImprovementKinds.length > 0;
+        if (
+          postVis.semanticNoOpDetected
+          || postVis.degradationDetected
+          || !kindsOk
+        ) {
+          providerAccepted = false;
+          unsupportedClaimRepairApplied = false;
+          clientDeterministicFallbackApplied = false;
+          finalCandidateSource = 'none';
+          return {
+            blocked: true,
+            reason: postVis.degradationDetected && !postVis.semanticNoOpDetected
               ? 'experience_ai_degradation'
-              : 'ai_noop',
-            rejectionStage: 'visible_comparison_noop',
-            finalCandidateSource: 'none',
-            semanticNoOpDetected: postVis.semanticNoOpDetected,
-            semanticNoOpReason: postVis.semanticNoOpReason,
-            materialImprovementDetected: false,
-            degradationDetected: postVis.degradationDetected,
-            degradationKinds: [...postVis.degradationKinds],
-            visibleComparisonUsedForNoOp: true,
-            visibleComparisonMatchedLastAiOutput: postVis.visibleComparisonMatchedLastAiOutput,
-            visibleComparisonHash: postVis.visibleComparisonHash,
-            visibleComparisonNormalizedHash: postVis.visibleComparisonNormalizedHash,
-            factAuthorityKind: textareaProvenance?.authoritativeFactSourceKind
-              || 'pre_ai_snapshot',
-            experienceVisibleNoopAuthorityRevision:
-              EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+              : 'experience_ai_noop',
+            text: exp?.description || visibleComparisonText || '',
+            origin: 'user',
+            roleDutyConflict,
             countedAsSuccess: false,
-          },
-        };
-      }
+            diagnostics: {
+              ...baseDiag(),
+              ...perspectiveMeta,
+              ...buildVisibleComparisonDiagFields(postVis, result.text),
+              meaningfulChangeDetected: false,
+              noOpRejected: true,
+              noOpDetected: postVis.semanticNoOpDetected,
+              noOpCandidateKind: result.diagnostics?.finalCandidateSource
+                || result.origin
+                || 'provider',
+              typedFailureReason: postVis.degradationDetected && !postVis.semanticNoOpDetected
+                ? 'experience_ai_degradation'
+                : 'ai_noop',
+              rejectionStage: 'visible_comparison_noop',
+              finalCandidateSource: 'none',
+              countedAsSuccess: false,
+            },
+          };
+        }
       }
     }
     if (
@@ -4468,11 +4653,70 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ? matchesProvider && acceptedText === providerCompare
       : matchesProvider;
     void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
+    // Always re-evaluate against the FINAL accepted text — never reuse a stale
+    // provider-phase comparison that could mark semanticNoOp while fallback applies.
+    const successVis = (useVisibleForNoOp || Boolean(visibleComparisonText))
+      ? evaluateExperienceVisibleComparison({
+        factAuthorityText: sourceForCoverage,
+        visibleComparisonText,
+        candidateText: result.text || '',
+        locale,
+        visibleComparisonProvenance:
+          textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
+        matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+        useVisibleForNoOp: useVisibleForNoOp || Boolean(visibleComparisonText),
+        capturedAtRequest: true,
+      })
+      : null;
+    if (successVis) lastVisibleComparisonEval = successVis;
+    const successVisFields = buildVisibleComparisonDiagFields(
+      successVis,
+      result.text,
+    );
+    // Evidence gate: never bill with materialImprovement true and empty kinds.
+    if (
+      result.countedAsSuccess
+      && useVisibleForNoOp
+      && (
+        successVisFields.materialImprovementDetected !== true
+        || !Array.isArray(successVisFields.materialImprovementKinds)
+        || (successVisFields.materialImprovementKinds as string[]).length === 0
+      )
+      && (locale || '').toLowerCase().startsWith('es')
+    ) {
+      providerAccepted = false;
+      unsupportedClaimRepairApplied = false;
+      clientDeterministicFallbackApplied = false;
+      finalCandidateSource = 'none';
+      return {
+        blocked: true,
+        reason: 'experience_ai_noop',
+        text: exp?.description || visibleComparisonText || '',
+        origin: 'user',
+        roleDutyConflict,
+        countedAsSuccess: false,
+        diagnostics: {
+          ...baseDiag(),
+          ...perspectiveMeta,
+          ...successVisFields,
+          materialImprovementDetected: false,
+          materialImprovementKinds: [],
+          meaningfulChangeDetected: false,
+          noOpRejected: true,
+          noOpDetected: true,
+          typedFailureReason: 'ai_noop',
+          rejectionStage: 'visible_comparison_noop',
+          finalCandidateSource: 'none',
+          countedAsSuccess: false,
+        },
+      };
+    }
     return {
       ...result,
       diagnostics: {
         ...result.diagnostics,
         ...perspectiveMeta,
+        ...successVisFields,
         finalMatchesProviderOutput: finalMatchesProvider,
         tenseMode,
         selectedExperienceEntryIdHash,
@@ -4650,17 +4894,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       useVisibleForNoOp: true,
     });
     const visEval = lastVisibleComparisonEval;
-    // Drive tryAccept / coverage using fact-authority meaningful change so
-    // contaminated AI echoes that differ from pre-AI facts still reach
-    // validation → repair/fallback. Visible no-op is enforced after accept.
+    // Drive tryAccept / coverage using fact-authority meaningful change.
+    // Visible no-op / improvement is enforced only in attachPerspectiveDiag.
     const meaningful = meaningfulVsAuthority;
-    perspectiveMeta.meaningfulChangeDetected = useVisibleForNoOp
-      ? Boolean(
-        visEval.materialImprovementDetected
-        && !visEval.semanticNoOpDetected
-        && !visEval.degradationDetected,
-      )
-      : meaningful;
+    perspectiveMeta.meaningfulChangeDetected = meaningfulVsAuthority
+      && !(useVisibleForNoOp && visEval.semanticNoOpDetected)
+      && !(useVisibleForNoOp && visEval.degradationDetected);
     perspectiveMeta.finalMatchesSourceAfterNormalization = !meaningfulVsAuthority
       && !persp.perspectiveNormalizationApplied;
     perspectiveMeta.finalMatchesProviderOutput = finalNormalizedBullets.replace(/\s+/g, ' ').trim()
@@ -4823,6 +5062,46 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (firstAccepted) {
         if (useVisibleForNoOp) {
           void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+          const isEsVis = (locale || '').toLowerCase().startsWith('es');
+          if (!isEsVis) {
+            // Non-Spanish: only exact/normalized visible equivalence is a no-op.
+            if (experienceAiSourcesEquivalent(visibleComparisonText, firstAccepted.text)) {
+              providerAccepted = false;
+              return attachPerspectiveDiag({
+                blocked: true,
+                reason: 'experience_ai_noop',
+                text: exp?.description || visibleComparisonText || '',
+                origin: 'user',
+                roleDutyConflict,
+                countedAsSuccess: false,
+                diagnostics: {
+                  ...baseDiag(),
+                  typedFailureReason: 'ai_noop',
+                  rejectionStage: 'provider:visible_noop',
+                  meaningfulChangeDetected: false,
+                  noOpRejected: true,
+                  noOpDetected: true,
+                  finalCandidateSource: 'none',
+                  semanticNoOpDetected: true,
+                  materialImprovementDetected: false,
+                  visibleComparisonUsedForNoOp: true,
+                  experienceVisibleNoopAuthorityRevision:
+                    EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+                },
+              });
+            }
+            lastVisibleComparisonEval = evaluateExperienceVisibleComparison({
+              factAuthorityText: sourceForCoverage,
+              visibleComparisonText,
+              candidateText: firstAccepted.text,
+              locale,
+              visibleComparisonProvenance:
+                textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
+              matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+              useVisibleForNoOp: true,
+              capturedAtRequest: true,
+            });
+          } else {
           const postVis = evaluateExperienceVisibleComparison({
             factAuthorityText: sourceForCoverage,
             visibleComparisonText: visibleComparisonText,
@@ -4832,12 +5111,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
             matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
             useVisibleForNoOp: true,
+            capturedAtRequest: true,
           });
           lastVisibleComparisonEval = postVis;
           if (
             postVis.semanticNoOpDetected
             || postVis.degradationDetected
             || !postVis.materialImprovementDetected
+            || postVis.materialImprovementKinds.length === 0
           ) {
             providerAccepted = false;
             return attachPerspectiveDiag({
@@ -4851,6 +5132,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               countedAsSuccess: false,
               diagnostics: {
                 ...baseDiag(),
+                ...buildVisibleComparisonDiagFields(postVis, firstAccepted.text),
                 typedFailureReason: postVis.degradationDetected && !postVis.semanticNoOpDetected
                   ? 'experience_ai_degradation'
                   : 'ai_noop',
@@ -4860,19 +5142,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 noOpDetected: postVis.semanticNoOpDetected,
                 noOpCandidateKind: serverFallbackUsed ? 'fallback' : 'provider',
                 finalCandidateSource: 'none',
-                semanticNoOpDetected: postVis.semanticNoOpDetected,
-                semanticNoOpReason: postVis.semanticNoOpReason,
                 materialImprovementDetected: false,
-                degradationDetected: postVis.degradationDetected,
-                degradationKinds: [...postVis.degradationKinds],
-                visibleComparisonUsedForNoOp: true,
-                visibleComparisonMatchedLastAiOutput: postVis.visibleComparisonMatchedLastAiOutput,
-                factAuthorityKind: textareaProvenance?.authoritativeFactSourceKind
-                  || 'pre_ai_snapshot',
-                experienceVisibleNoopAuthorityRevision:
-                  EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+                countedAsSuccess: false,
               },
             });
+          }
           }
         }
         perspectiveMeta.normalizedBulletsUsedForApply = true;
@@ -5038,11 +5312,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           useVisibleForNoOp: true,
         });
         lastVisibleComparisonEval = repairVisEval;
-        const repairMeaningful = useVisibleForNoOp
-          ? (repairVisEval.materialImprovementDetected
-            && !repairVisEval.semanticNoOpDetected
-            && !repairVisEval.degradationDetected)
-          : repairMeaningfulVsAuthority;
+        const repairMeaningful = repairMeaningfulVsAuthority
+          && !(useVisibleForNoOp && repairVisEval.semanticNoOpDetected)
+          && !(useVisibleForNoOp && repairVisEval.degradationDetected);
         if (sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage) && repairedNorm) {
           const cov = validateSpanishWarehouseExperienceCoverage(
             sourceForCoverage,
@@ -5227,13 +5499,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 providerComplianceExpansionKindCount,
                 repairResidualComplianceScopeExpansionDetected: false,
                 finalComplianceScopeExpansionDetected: false,
-                materialImprovementDetected: true,
-                semanticNoOpDetected: false,
-                degradationDetected: false,
-                factAuthorityKind: textareaProvenance?.authoritativeFactSourceKind
-                  || 'pre_ai_snapshot',
-                visibleComparisonSourceKind: repairVisEval.visibleComparisonSourceKind,
-                visibleComparisonUsedForNoOp: useVisibleForNoOp,
+                ...buildVisibleComparisonDiagFields(repairVisEval, repairedEs),
+                materialImprovementDetected: repairVisEval.materialImprovementDetected
+                  && repairVisEval.materialImprovementKinds.length > 0,
+                materialImprovementKinds: repairVisEval.materialImprovementDetected
+                  ? [...repairVisEval.materialImprovementKinds]
+                  : [],
+                semanticNoOpDetected: repairVisEval.semanticNoOpDetected,
+                degradationDetected: repairVisEval.degradationDetected,
                 experienceAiUnsupportedExpansionRevision:
                   EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
               },
