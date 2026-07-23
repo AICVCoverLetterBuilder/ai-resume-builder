@@ -89,6 +89,8 @@ describe('German Experience grounding (AAB-303)', () => {
 
   it('exposes german-experience-grounding-303-v1 packaging marker', () => {
     expect(GERMAN_EXPERIENCE_GROUNDING_303_REVISION).toBe('german-experience-grounding-303-v1');
+    const cov = validateGermanWarehouseExperienceCoverage(HI_WH, GOOD_DE);
+    expect(cov.revision).toBe('german-experience-grounding-303-v1');
   });
 
   it('1. Exact AAB-302 bad server fallback is rejected', () => {

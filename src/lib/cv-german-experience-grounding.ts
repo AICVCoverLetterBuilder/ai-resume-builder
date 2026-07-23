@@ -54,6 +54,8 @@ export type GermanWarehouseCoverageResult = {
   covered: GermanWarehouseFactId[];
   uncovered: GermanWarehouseFactId[];
   reason: string | null;
+  /** Packaging proof — kept as a live field so the revision survives minification. */
+  revision: typeof GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 };
 
 function sourceWarehouseFacts(sourceDescription: string): GermanWarehouseFactId[] {
@@ -124,7 +126,6 @@ export function validateGermanWarehouseExperienceCoverage(
   sourceDescription: string,
   candidateDescription: string,
 ): GermanWarehouseCoverageResult {
-  void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
   const required = sourceWarehouseFacts(sourceDescription);
   if (!required.length) {
     return {
@@ -133,6 +134,7 @@ export function validateGermanWarehouseExperienceCoverage(
       covered: [],
       uncovered: [],
       reason: null,
+      revision: GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
     };
   }
   const bullets = splitExperienceBullets(candidateDescription || '')
@@ -162,6 +164,7 @@ export function validateGermanWarehouseExperienceCoverage(
     covered,
     uncovered,
     reason: ok ? null : 'german_experience_warehouse_fact_coverage_incomplete',
+    revision: GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
   };
 }
 
