@@ -328,18 +328,37 @@ export function evaluateExperienceVisibleComparison(options: {
     if (visUnits < Math.max(factKeys.size, 1) && candUnits > visUnits) {
       improvementKinds.push('missing_source_unit_restored');
     }
-    // First-click polish when visible ≡ fact authority: billable only when the
-    // candidate is not a narrow synonym/inclusive restyle of the same duties.
+    // Cross-locale / wrong-script visible → valid Spanish candidate.
     if (
-      visibleIsFactAuthority
+      isEs
+      && visible
+      && candidate
+      && candScan.count === 0
+      && (
+        /[\u0900-\u097F]/.test(visible)
+        || /[\u0400-\u04FF]/.test(visible)
+        || /[\u0600-\u06FF]/.test(visible)
+        || /[\u3040-\u30ff\u3400-\u9fff]/.test(visible)
+      )
+      && !/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30ff\u3400-\u9fff]/.test(candidate)
+      && /[áéíóúñü¿¡]|\b(?:revisa|comprueba|coordina|mercanc|documentaci)/iu.test(candidate)
+    ) {
+      improvementKinds.push('wrong_locale_fixed');
+    }
+    // First-click Spanish: abbreviated source → natural completion of the same
+    // duties (not a synonym restyle). Explicit kind — never generic phrasing.
+    if (
+      isEs
+      && visibleIsFactAuthority
       && textualDiffVsFact
       && !exactNormMatch
       && candScan.count === 0
       && improvementKinds.length === 0
       && !synonymOnlyRestyle
       && !inclusiveOnly
+      && lengthDelta > Math.max(28, Math.floor(visible.length * 0.12))
     ) {
-      improvementKinds.push('grounded_phrasing_enhancement');
+      improvementKinds.push('incomplete_bullet_completed');
     }
     // Non-Spanish: evidence kind for any non-exact grounded rewrite so usage
     // invariants never see materialImprovement true with empty kinds, and so

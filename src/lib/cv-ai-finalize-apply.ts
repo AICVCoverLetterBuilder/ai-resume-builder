@@ -93,11 +93,31 @@ import {
   SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
   SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
 } from './cv-spanish-experience-grounding';
+import {
+  EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
+  SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
+  EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
+  EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
+  validateSpanishExperienceSurfaceForm,
+  repairSpanishExperienceCandidateStructured,
+  decideSpanishExperienceFinalCandidate,
+  type ExperienceCanonicalFinalDecision,
+} from './cv-experience-canonical-finalization';
+export {
+  EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
+  SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
+  EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
+  EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
+};
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
 void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
 void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
+void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
+void SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
+void EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION;
+void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
 import {
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
   EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
@@ -321,6 +341,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
   SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
   EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION,
+  EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
+  SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
+  EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
+  EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
@@ -580,6 +604,10 @@ export type FinalizeCvAiFieldResult = {
     unsupportedClaimRepairKind?: string | null;
     unsupportedClaimRepairValidationPassed?: boolean | null;
     unsupportedClaimRepairApplied?: boolean;
+    unsupportedClaimRepairCandidateProduced?: boolean;
+    unsupportedClaimRepairCandidateValid?: boolean | null;
+    unsupportedClaimRepairSelectedForComparison?: boolean;
+    unsupportedClaimRepairVisibleApplyPerformed?: boolean;
     unsupportedClaimRepairRejectionReason?: string | null;
     unsupportedClaimRepairUnsupportedClaimCount?: number;
     unsupportedClaimRepairUnsupportedClaimKinds?: string[];
@@ -641,10 +669,17 @@ export type FinalizeCvAiFieldResult = {
     semanticNoOpReason?: string | null;
     materialImprovementDetected?: boolean;
     materialImprovementKinds?: string[];
+    materialImprovementEvidenceCount?: number;
+    candidateSurfaceFormPassed?: boolean | null;
+    candidateSurfaceFailureKinds?: string[];
     degradationDetected?: boolean;
     degradationKinds?: string[];
     neutralRestyleDetected?: boolean;
     finalDecisionKind?: string | null;
+    experienceCanonicalFinalizationRevision?: typeof EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
+    spanishExperienceSurfaceFormGateRevision?: typeof SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
+    experienceEvidenceBasedImprovementRevision?: typeof EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION;
+    experienceSingleDecisionApplyGateRevision?: typeof EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
     factAuthorityNormalizedHash?: string | null;
     factAuthorityMatchesAuthoritativeSourceKind?: boolean;
     visibleComparisonCapturedAtRequest?: boolean;
@@ -3317,12 +3352,45 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         evalVis.finalSemanticallyEquivalentToVisibleComparison,
       semanticNoOpDetected: evalVis.semanticNoOpDetected,
       semanticNoOpReason: evalVis.semanticNoOpReason,
-      materialImprovementDetected: evalVis.materialImprovementDetected,
-      materialImprovementKinds: [...evalVis.materialImprovementKinds],
+      materialImprovementDetected: (() => {
+        const isEs = (locale || '').toLowerCase().startsWith('es');
+        const kinds = isEs
+          ? evalVis.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
+          : evalVis.materialImprovementKinds;
+        return evalVis.materialImprovementDetected && kinds.length > 0;
+      })(),
+      materialImprovementKinds: (() => {
+        const isEs = (locale || '').toLowerCase().startsWith('es');
+        const kinds = isEs
+          ? evalVis.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
+          : evalVis.materialImprovementKinds;
+        return evalVis.materialImprovementDetected ? [...kinds] : [];
+      })(),
+      materialImprovementEvidenceCount: (() => {
+        const isEs = (locale || '').toLowerCase().startsWith('es');
+        const kinds = isEs
+          ? evalVis.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
+          : evalVis.materialImprovementKinds;
+        return evalVis.materialImprovementDetected ? kinds.length : 0;
+      })(),
       degradationDetected: evalVis.degradationDetected,
       degradationKinds: [...evalVis.degradationKinds],
       neutralRestyleDetected: evalVis.neutralRestyleDetected,
       finalDecisionKind: evalVis.finalDecisionKind,
+      candidateSurfaceFormPassed,
+      candidateSurfaceFailureKinds: [...candidateSurfaceFailureKinds],
+      unsupportedClaimRepairCandidateProduced,
+      unsupportedClaimRepairCandidateValid,
+      unsupportedClaimRepairSelectedForComparison,
+      unsupportedClaimRepairVisibleApplyPerformed,
+      experienceCanonicalFinalizationRevision:
+        EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
+      spanishExperienceSurfaceFormGateRevision:
+        SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
+      experienceEvidenceBasedImprovementRevision:
+        EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
+      experienceSingleDecisionApplyGateRevision:
+        EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
       experienceVisibleNoopAuthorityRevision:
         EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
       experienceVisibleSnapshotWiringRevision:
@@ -3389,7 +3457,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let unsupportedClaimRepairKind: string | null = null;
   let unsupportedClaimRepairValidationPassed: boolean | null = null;
   let unsupportedClaimRepairApplied = false;
+  let unsupportedClaimRepairCandidateProduced = false;
+  let unsupportedClaimRepairCandidateValid: boolean | null = null;
+  let unsupportedClaimRepairSelectedForComparison = false;
+  let unsupportedClaimRepairVisibleApplyPerformed = false;
   let unsupportedClaimRepairRejectionReason: string | null = null;
+  let candidateSurfaceFormPassed: boolean | null = null;
+  let candidateSurfaceFailureKinds: string[] = [];
+  let lastCanonicalDecision: ExperienceCanonicalFinalDecision | null = null;
+  let materialImprovementEvidenceCount = 0;
   let unsupportedClaimRepairUnsupportedClaimCount = 0;
   let unsupportedClaimRepairUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
   let unsupportedClaimRepairResidualUnsupportedClaimCount = 0;
@@ -4572,6 +4648,50 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           };
         }
       } else {
+        void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
+        void SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
+        void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
+        const surface = validateSpanishExperienceSurfaceForm(result.text || '');
+        candidateSurfaceFormPassed = surface.passed;
+        candidateSurfaceFailureKinds = [...surface.kinds];
+        if (!surface.passed) {
+          providerAccepted = false;
+          unsupportedClaimRepairApplied = false;
+          unsupportedClaimRepairVisibleApplyPerformed = false;
+          clientDeterministicFallbackApplied = false;
+          finalCandidateSource = 'none';
+          return {
+            blocked: true,
+            reason: 'experience_ai_degradation',
+            text: exp?.description || visibleComparisonText || '',
+            origin: 'user',
+            roleDutyConflict,
+            countedAsSuccess: false,
+            diagnostics: {
+              ...baseDiag(),
+              ...perspectiveMeta,
+              ...buildVisibleComparisonDiagFields(null, result.text),
+              candidateSurfaceFormPassed: false,
+              candidateSurfaceFailureKinds: [...surface.kinds],
+              meaningfulChangeDetected: false,
+              noOpRejected: true,
+              noOpDetected: false,
+              typedFailureReason: 'experience_ai_degradation',
+              rejectionStage: 'spanish_surface_form_gate',
+              finalCandidateSource: 'none',
+              countedAsSuccess: false,
+              materialImprovementDetected: false,
+              materialImprovementKinds: [],
+              degradationDetected: true,
+              degradationKinds: ['clarity_reduced'],
+              finalDecisionKind: 'degradation_rejected',
+              experienceCanonicalFinalizationRevision:
+                EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
+              spanishExperienceSurfaceFormGateRevision:
+                SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
+            },
+          };
+        }
         const postVis = evaluateExperienceVisibleComparison({
           factAuthorityText: sourceForCoverage,
           visibleComparisonText: visibleComparisonText,
@@ -4584,20 +4704,59 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           capturedAtRequest: true,
         });
         lastVisibleComparisonEval = postVis;
-        const kindsOk = postVis.materialImprovementDetected
-          && postVis.materialImprovementKinds.length > 0;
+        // AAB-313: never bill Spanish on generic grounded_phrasing alone.
+        const esKinds = (postVis.materialImprovementKinds || []).filter(
+          (k) => k !== 'grounded_phrasing_enhancement',
+        );
+        const kindsOk = postVis.materialImprovementDetected && esKinds.length > 0;
+        const crossLocaleVisibleFix = esKinds.includes('wrong_locale_fixed');
+        const canonical = decideSpanishExperienceFinalCandidate({
+          factAuthorityText: sourceForCoverage,
+          visibleComparisonText,
+          candidateText: result.text || '',
+          candidateOrigin: String(
+            result.diagnostics?.finalCandidateSource
+            || result.origin
+            || 'provider',
+          ),
+          repairProduced: unsupportedClaimRepairCandidateProduced,
+          repairValid: unsupportedClaimRepairCandidateValid === true,
+          repairSelectedForComparison: unsupportedClaimRepairSelectedForComparison,
+        });
+        lastCanonicalDecision = canonical;
+        materialImprovementEvidenceCount = Math.max(
+          canonical.materialImprovementEvidence.length,
+          esKinds.length,
+        );
+        // Cross-locale first click (e.g. Hindi visible → Spanish candidate): the
+        // shared validator may not treat non-Spanish fact authority as a
+        // warehouse source. Allow apply when wrong_locale_fixed is proven and
+        // surface form passes.
+        const allowCrossLocaleApply = Boolean(
+          crossLocaleVisibleFix
+          && surface.passed
+          && kindsOk
+          && !postVis.degradationDetected
+          && !postVis.semanticNoOpDetected
+        );
         if (
-          postVis.semanticNoOpDetected
+          !(allowCrossLocaleApply || canonical.shouldApply)
+          || postVis.semanticNoOpDetected
           || postVis.degradationDetected
           || !kindsOk
+          || (
+            !allowCrossLocaleApply
+            && canonical.finalDecisionKind !== 'material_improvement'
+          )
         ) {
           providerAccepted = false;
           unsupportedClaimRepairApplied = false;
+          unsupportedClaimRepairVisibleApplyPerformed = false;
           clientDeterministicFallbackApplied = false;
           finalCandidateSource = 'none';
           return {
             blocked: true,
-            reason: postVis.degradationDetected && !postVis.semanticNoOpDetected
+            reason: canonical.degradation && !canonical.semanticNoOp
               ? 'experience_ai_degradation'
               : 'experience_ai_noop',
             text: exp?.description || visibleComparisonText || '',
@@ -4608,18 +4767,37 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ...baseDiag(),
               ...perspectiveMeta,
               ...buildVisibleComparisonDiagFields(postVis, result.text),
+              materialImprovementDetected: false,
+              materialImprovementKinds: [],
+              materialImprovementEvidenceCount: 0,
+              candidateSurfaceFormPassed: true,
+              candidateSurfaceFailureKinds: [],
               meaningfulChangeDetected: false,
               noOpRejected: true,
-              noOpDetected: postVis.semanticNoOpDetected,
+              noOpDetected: canonical.semanticNoOp || postVis.semanticNoOpDetected,
               noOpCandidateKind: result.diagnostics?.finalCandidateSource
                 || result.origin
                 || 'provider',
-              typedFailureReason: postVis.degradationDetected && !postVis.semanticNoOpDetected
+              typedFailureReason: canonical.degradation && !canonical.semanticNoOp
                 ? 'experience_ai_degradation'
                 : 'ai_noop',
               rejectionStage: 'visible_comparison_noop',
               finalCandidateSource: 'none',
               countedAsSuccess: false,
+              finalDecisionKind: canonical.finalDecisionKind,
+              semanticNoOpDetected: canonical.semanticNoOp,
+              neutralRestyleDetected: canonical.neutralRestyle,
+              degradationDetected: canonical.degradation,
+              unsupportedClaimRepairCandidateProduced,
+              unsupportedClaimRepairCandidateValid,
+              unsupportedClaimRepairSelectedForComparison,
+              unsupportedClaimRepairVisibleApplyPerformed: false,
+              experienceCanonicalFinalizationRevision:
+                EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
+              experienceSingleDecisionApplyGateRevision:
+                EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
+              experienceEvidenceBasedImprovementRevision:
+                EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
             },
           };
         }
@@ -4782,6 +4960,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         unsupportedClaimRepairKind,
         unsupportedClaimRepairValidationPassed,
         unsupportedClaimRepairApplied,
+        unsupportedClaimRepairCandidateProduced,
+        unsupportedClaimRepairCandidateValid,
+        unsupportedClaimRepairSelectedForComparison,
+        unsupportedClaimRepairVisibleApplyPerformed:
+          Boolean(result.countedAsSuccess && unsupportedClaimRepairApplied),
         unsupportedClaimRepairRejectionReason,
         unsupportedClaimRepairUnsupportedClaimCount,
         unsupportedClaimRepairUnsupportedClaimKinds,
@@ -4792,6 +4975,24 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         unsupportedClaimRepairUncoveredFactIdentityHashes,
         unsupportedClaimRepairHash,
         unsupportedClaimRepairNormalizedHash,
+        candidateSurfaceFormPassed,
+        candidateSurfaceFailureKinds: [...candidateSurfaceFailureKinds],
+        materialImprovementEvidenceCount:
+          materialImprovementEvidenceCount
+          || (Array.isArray(successVisFields.materialImprovementKinds)
+            ? (successVisFields.materialImprovementKinds as string[]).length
+            : 0),
+        finalDecisionKind: lastCanonicalDecision?.finalDecisionKind
+          ?? successVisFields.finalDecisionKind
+          ?? (result.countedAsSuccess ? 'material_improvement' : 'none'),
+        experienceCanonicalFinalizationRevision:
+          EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
+        spanishExperienceSurfaceFormGateRevision:
+          SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
+        experienceEvidenceBasedImprovementRevision:
+          EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
+        experienceSingleDecisionApplyGateRevision:
+          EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
         experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
         spanishExperienceRepairGroundingRevision: SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
         providerRejectionReason: result.diagnostics?.providerRejectionReason
@@ -5245,29 +5446,63 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
         void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
         unsupportedClaimRepairAttempted = true;
-        unsupportedClaimRepairKind = 'spanish_unsupported_claim_strip';
+        unsupportedClaimRepairKind = 'spanish_structured_clause_repair';
         unsupportedClaimRepairUnsupportedClaimCount = lastUnsupportedClaimCount;
         unsupportedClaimRepairUnsupportedClaimKinds = [...lastUnsupportedClaimKinds];
-        const repairedEs = stripSpanishExperienceUnsupportedEscalation(
-          finalNormalizedBullets,
-          sourceForCoverage,
-        );
+        void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
+        void SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
+        const structuredRepair = repairSpanishExperienceCandidateStructured({
+          factAuthorityText: sourceForCoverage,
+          candidateText: finalNormalizedBullets,
+        });
+        const repairedEs = structuredRepair.repairedText;
         const repairedNorm = repairedEs.replace(/\s+/g, ' ').trim();
         const providerNorm = finalNormalizedBullets.replace(/\s+/g, ' ').trim();
+        unsupportedClaimRepairCandidateProduced = structuredRepair.produced;
+        unsupportedClaimRepairCandidateValid = structuredRepair.valid;
         unsupportedClaimRepairHash = repairedNorm
           ? fingerprintText(repairedNorm)
           : null;
         unsupportedClaimRepairNormalizedHash = unsupportedClaimRepairHash;
+        candidateSurfaceFormPassed = structuredRepair.validation.surfaceFormPassed;
+        candidateSurfaceFailureKinds = [
+          ...structuredRepair.validation.surfaceFailureKinds,
+        ];
         const repairMeaningfulVsAuthority = Boolean(
           repairedNorm
           && repairedNorm !== providerNorm
+          && structuredRepair.valid
           && experienceAiHasMeaningfulChange(sourceForCoverage, repairedEs, {
             perspectiveApplied: false,
           }),
         );
-        const repairScan = repairedNorm
+        const repairScan = repairedNorm && structuredRepair.valid
           ? detectSpanishExperienceUnsupportedExpansion(sourceForCoverage, repairedEs)
-          : { count: lastUnsupportedClaimCount, kinds: lastUnsupportedClaimKinds };
+          : (repairedNorm
+            ? {
+              count: Math.max(1, lastUnsupportedClaimCount),
+              kinds: [...lastUnsupportedClaimKinds],
+              candidateAddedPredicateCount:
+                structuredRepair.validation.addedPredicateCount,
+              sourceUnitPredicateCoveragePassed:
+                structuredRepair.validation.predicateCoveragePassed,
+            }
+            : { count: lastUnsupportedClaimCount, kinds: lastUnsupportedClaimKinds });
+        if (!structuredRepair.validation.surfaceFormPassed) {
+          unsupportedClaimRepairValidationPassed = false;
+          unsupportedClaimRepairApplied = false;
+          unsupportedClaimRepairSelectedForComparison = false;
+          unsupportedClaimRepairVisibleApplyPerformed = false;
+          unsupportedClaimRepairRejectionReason = 'malformed_surface_form';
+          unsupportedClaimRepairResidualUnsupportedClaimCount = Math.max(
+            1,
+            repairScan.count,
+          );
+          unsupportedClaimRepairResidualUnsupportedClaimKinds = [
+            ...lastUnsupportedClaimKinds,
+          ];
+          // Fall through to deterministic recovery — never apply malformed repair.
+        } else {
         unsupportedClaimRepairResidualUnsupportedClaimCount = repairScan.count;
         unsupportedClaimRepairResidualUnsupportedClaimKinds = [...repairScan.kinds];
         repairResidualAddedPredicateCount =
@@ -5334,61 +5569,45 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           && repairSourceUnitPredicateCoveragePassed === true
           && (repairVisEval.semanticNoOpDetected || !repairMeaningful)
         ) {
+          // Valid repair that does not improve visible text: do not apply it,
+          // but continue to deterministic recovery (AAB-313). A stripped
+          // near-source repair can be a no-op while the deterministic rebuild
+          // still proves incomplete_bullet_completed vs abbreviated visible.
           unsupportedClaimRepairValidationPassed = true;
           unsupportedClaimRepairApplied = false;
+          unsupportedClaimRepairSelectedForComparison = true;
+          unsupportedClaimRepairVisibleApplyPerformed = false;
           unsupportedClaimRepairRejectionReason = 'semantic_noop_vs_visible';
-          return attachPerspectiveDiag({
-            blocked: true,
-            reason: 'experience_ai_noop',
-            text: exp?.description || visibleComparisonText || '',
-            origin: 'user',
-            roleDutyConflict,
-            countedAsSuccess: false,
-            diagnostics: {
-              ...baseDiag(),
-              typedFailureReason: 'ai_noop',
-              rejectionStage: 'unsupported_claim_repair:noop',
-              meaningfulChangeDetected: false,
-              noOpRejected: true,
-              noOpDetected: true,
-              noOpCandidateKind: 'unsupported_claim_repair',
-              finalCandidateSource: 'none',
-              unsupportedClaimRepairAttempted: true,
-              unsupportedClaimRepairKind,
-              unsupportedClaimRepairValidationPassed: true,
-              unsupportedClaimRepairApplied: false,
-              unsupportedClaimRepairRejectionReason: 'semantic_noop_vs_visible',
-              unsupportedClaimRepairResidualUnsupportedClaimCount: 0,
-              unsupportedClaimRepairResidualUnsupportedClaimKinds: [],
-              unsupportedClaimRepairHash,
-              unsupportedClaimRepairNormalizedHash,
-              semanticNoOpDetected: true,
-              semanticNoOpReason: repairVisEval.semanticNoOpReason,
-              materialImprovementDetected: false,
-              degradationDetected: false,
-              visibleComparisonUsedForNoOp: true,
-              finalSemanticallyEquivalentToVisibleComparison:
-                repairVisEval.finalSemanticallyEquivalentToVisibleComparison,
-              factAuthorityKind: textareaProvenance?.authoritativeFactSourceKind
-                || 'pre_ai_snapshot',
-              experienceVisibleNoopAuthorityRevision:
-                EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
-              spanishExperienceComplianceGroundingRevision:
-                SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
-              repairSourceUnitPredicateCoveragePassed,
-              repairResidualAddedPredicateCount: 0,
-              finalSourceUnitPredicateCoveragePassed:
-                repairSourceUnitPredicateCoveragePassed,
-            },
-          });
-        }
-        if (
+        } else if (
           repairMeaningful
           && repairScan.count === 0
           && repairResidualAddedPredicateCount === 0
           && repairSourceUnitPredicateCoveragePassed === true
           && !repairResidualComplianceScopeExpansionDetected
         ) {
+          unsupportedClaimRepairSelectedForComparison = true;
+          void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
+          const repairDecision = decideSpanishExperienceFinalCandidate({
+            factAuthorityText: sourceForCoverage,
+            visibleComparisonText: useVisibleForNoOp
+              ? visibleComparisonText
+              : sourceForCoverage,
+            candidateText: repairedEs,
+            candidateOrigin: 'unsupported_claim_repair',
+            repairProduced: true,
+            repairValid: true,
+            repairSelectedForComparison: true,
+          });
+          lastCanonicalDecision = repairDecision;
+          if (!repairDecision.shouldApply) {
+            // Structurally valid repair that is not a proven visible improvement:
+            // keep lineage flags and continue to deterministic recovery.
+            unsupportedClaimRepairValidationPassed = true;
+            unsupportedClaimRepairApplied = false;
+            unsupportedClaimRepairVisibleApplyPerformed = false;
+            unsupportedClaimRepairRejectionReason = repairDecision.finalTypedReason
+              || 'repair_not_material_vs_visible';
+          } else {
           const repairAccepted = tryAccept(
             repairedEs,
             'ai_repaired',
@@ -5401,6 +5620,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             noOpRepairValidationPassed = null;
             unsupportedClaimRepairValidationPassed = true;
             unsupportedClaimRepairApplied = true;
+            unsupportedClaimRepairVisibleApplyPerformed = true;
             unsupportedClaimRepairRejectionReason = null;
             finalUnsupportedClaimCount = 0;
             finalUnsupportedClaimKinds = [];
@@ -5443,6 +5663,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 unsupportedClaimRepairKind,
                 unsupportedClaimRepairValidationPassed: true,
                 unsupportedClaimRepairApplied: true,
+                unsupportedClaimRepairCandidateProduced: true,
+                unsupportedClaimRepairCandidateValid: true,
+                unsupportedClaimRepairSelectedForComparison: true,
+                unsupportedClaimRepairVisibleApplyPerformed: true,
                 unsupportedClaimRepairResidualUnsupportedClaimCount: 0,
                 unsupportedClaimRepairResidualUnsupportedClaimKinds: [],
                 unsupportedClaimRepairCoverageRequiredCount,
@@ -5450,6 +5674,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 unsupportedClaimRepairUncoveredFactIdentityHashes,
                 unsupportedClaimRepairHash,
                 unsupportedClaimRepairNormalizedHash,
+                candidateSurfaceFormPassed: true,
+                candidateSurfaceFailureKinds: [],
+                experienceCanonicalFinalizationRevision:
+                  EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
+                spanishExperienceSurfaceFormGateRevision:
+                  SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
+                experienceSingleDecisionApplyGateRevision:
+                  EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
+                experienceEvidenceBasedImprovementRevision:
+                  EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
                 finalUnsupportedClaimCount: 0,
                 finalUnsupportedClaimKinds: [],
                 unsupportedClaimCount: 0,
@@ -5500,11 +5734,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 repairResidualComplianceScopeExpansionDetected: false,
                 finalComplianceScopeExpansionDetected: false,
                 ...buildVisibleComparisonDiagFields(repairVisEval, repairedEs),
-                materialImprovementDetected: repairVisEval.materialImprovementDetected
-                  && repairVisEval.materialImprovementKinds.length > 0,
-                materialImprovementKinds: repairVisEval.materialImprovementDetected
-                  ? [...repairVisEval.materialImprovementKinds]
-                  : [],
+                materialImprovementDetected: (() => {
+                  const kinds = (repairVisEval.materialImprovementKinds || [])
+                    .filter((k) => k !== 'grounded_phrasing_enhancement');
+                  return repairVisEval.materialImprovementDetected && kinds.length > 0;
+                })(),
+                materialImprovementKinds: (() => {
+                  const kinds = (repairVisEval.materialImprovementKinds || [])
+                    .filter((k) => k !== 'grounded_phrasing_enhancement');
+                  return repairVisEval.materialImprovementDetected ? [...kinds] : [];
+                })(),
+                materialImprovementEvidenceCount: (() => {
+                  const kinds = (repairVisEval.materialImprovementKinds || [])
+                    .filter((k) => k !== 'grounded_phrasing_enhancement');
+                  return repairVisEval.materialImprovementDetected ? kinds.length : 0;
+                })(),
                 semanticNoOpDetected: repairVisEval.semanticNoOpDetected,
                 degradationDetected: repairVisEval.degradationDetected,
                 experienceAiUnsupportedExpansionRevision:
@@ -5516,6 +5760,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           unsupportedClaimRepairApplied = false;
           unsupportedClaimRepairRejectionReason = lastRejectReason
             || 'unsupported_claim_repair_rejected';
+          } // end repairDecision.shouldApply
         } else {
           unsupportedClaimRepairValidationPassed = false;
           unsupportedClaimRepairApplied = false;
@@ -5527,6 +5772,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 ? 'unsupported_claim_repair_noop_or_identical'
                 : 'unsupported_claim_repair_invalid'));
         }
+        } // end surface-form-passed else (AAB-313)
       }
       if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {
         // Unsafe or otherwise invalid repair: never apply; unlock stylistic fallback.
@@ -5917,6 +6163,37 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const groundedMeaningful = experienceAiHasMeaningfulChange(sourceForCoverage, grounded);
       if (providerNoOpDetected && !groundedMeaningful) {
         // No-op recovery must not accept canonical shells identical to source.
+      } else if (
+        (locale || '').toLowerCase().startsWith('es')
+        && sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage)
+        && useVisibleForNoOp
+        && (visibleComparisonText || '').trim()
+      ) {
+        // AAB-313: never accept a same-locale canonical shell that is only an
+        // exact/semantic no-op vs the visible comparison — continue to the
+        // Spanish warehouse deterministic rebuild which can still prove
+        // incomplete_bullet_completed.
+        void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
+        const groundedDecision = decideSpanishExperienceFinalCandidate({
+          factAuthorityText: sourceForCoverage,
+          visibleComparisonText,
+          candidateText: grounded,
+          candidateOrigin: 'deterministic_fallback',
+        });
+        if (!groundedDecision.shouldApply) {
+          // Fall through to spanish warehouse fallback / later recovery.
+        } else {
+          const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
+          if (secondAccepted) {
+            perspectiveMeta.normalizedBulletsUsedForApply = true;
+            perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale);
+            if (providerNoOpDetected) {
+              perspectiveMeta.meaningfulChangeDetected = true;
+              perspectiveMeta.noOpRejected = false;
+            }
+            return attachPerspectiveDiag(secondAccepted);
+          }
+        }
       } else {
       const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
       if (secondAccepted) {

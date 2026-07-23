@@ -941,13 +941,22 @@ export function stripSpanishExperienceUnsupportedEscalation(
         }
       }
     }
-    // AAB-311: strip unsupported compliance / conformity / certification objects.
+    // AAB-311/313: strip unsupported compliance spans at CLAUSE level — never
+    // delete only the noun and leave dangling "cada de" / "a cada de".
     void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
     for (const entry of COMPLIANCE_OBJECT_PATTERNS) {
       if (entry.re.test(row) && !entry.sourceSupport.test(sourceDescription)) {
         row = row
           .replace(
-            /\s+con\s+(?:cada\s+)?conformidad(?:es)?\b/giu,
+            /\s+(?:asociad\w*|relacionad\w*)\s+(?:a|con)\s+cada\s+conformidad(?:es)?(?:\s+de\s+\w+)?/giu,
+            '',
+          )
+          .replace(
+            /\s+con\s+(?:cada\s+)?conformidad(?:es)?(?:\s+de\s+\w+)?/giu,
+            '',
+          )
+          .replace(
+            /\s+a\s+(?:cada\s+)?conformidad(?:es)?(?:\s+de\s+\w+)?/giu,
             '',
           )
           .replace(
@@ -958,7 +967,15 @@ export function stripSpanishExperienceUnsupportedEscalation(
             /\s+con\s+(?:el\s+|la\s+|los\s+|las\s+)?(?:cumplimiento(?:\s+normativo)?|normativa|requisitos?\s+normativos?|certificaci[oó]n(?:es)?|aprobaci[oó]n(?:es)?|autorizaci[oó]n(?:es)?|validaci[oó]n(?:es)?|homologaci[oó]n(?:es)?|controles?\s+de\s+calidad|requisitos?\s+de\s+calidad|incidencias?\s+de\s+calidad|no\s+conformidad(?:es)?)\b/giu,
             '',
           )
+          // Full quantified NP: "cada conformidad de mercancía…"
+          .replace(
+            /\bcada\s+conformidad(?:es)?(?:\s+de\s+(?:la\s+|el\s+|los\s+|las\s+)?\w+(?:\s+\w+){0,4})?/giu,
+            '',
+          )
           .replace(entry.re, '')
+          // Orphan leftovers from partial historic strips.
+          .replace(/\b(?:a|con|de|para)\s+cada\s+de\b/giu, '')
+          .replace(/\bcada\s+de(?:l)?\b/giu, '')
           .trim();
       }
     }
@@ -979,8 +996,15 @@ export function stripSpanishExperienceUnsupportedEscalation(
       .replace(/\s{2,}/g, ' ')
       .replace(/\s+([.,;:])/g, '$1')
       .replace(/\b(el|la|los|las|de|con|y)\s*\./giu, '.')
+      .replace(/\b(?:a|con|de|para)\s+cada\s+de\b/giu, '')
+      .replace(/\bcada\s+de(?:l)?\b/giu, '')
+      .replace(/\s{2,}/g, ' ')
       .trim();
     if (row && !/[.!?]$/u.test(row)) row = `${row}.`;
+    // Drop units that still carry orphan post-strip fragments (AAB-313).
+    if (/\bcada\s+de(?:l)?\b/iu.test(row) || /\b(?:a|con|de|para)\s+de\b/iu.test(row)) {
+      return '';
+    }
     return row.replace(/\s{2,}/g, ' ').trim();
   }).filter(Boolean);
   return formatExperienceBullets(cleaned);
