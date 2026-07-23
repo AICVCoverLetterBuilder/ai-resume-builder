@@ -834,9 +834,16 @@ type ExperienceLike = {
   lastAiOutputHashMatched?: boolean | null;
   materialUserEditDetected?: boolean | null;
   visibleComparisonUsedForNoOp?: boolean | null;
+  visibleComparisonHash?: string | null;
+  visibleComparisonNormalizedHash?: string | null;
+  visibleComparisonUnitCount?: number | null;
   semanticNoOpDetected?: boolean | null;
   degradationDetected?: boolean | null;
   materialImprovementDetected?: boolean | null;
+  materialImprovementKinds?: string[] | null;
+  neutralRestyleDetected?: boolean | null;
+  authoritativeFactSourceKind?: string | null;
+  factAuthorityKind?: string | null;
   finalSourceUnitPredicateCoveragePassed?: boolean | null;
   finalComplianceScopeExpansionDetected?: boolean | null;
   operationMode?: string | null;
@@ -1151,6 +1158,71 @@ export function checkExperienceDiagnosticInvariants(
     push('usage_without_material_improvement', {
       materialImprovementDetected: false,
       countedAsSuccess: true,
+    });
+  }
+  // AAB-312 — visible snapshot / evidence / authority consistency.
+  if (
+    (trace.operationMode === 'enhance_existing' || trace.field === 'experience_description')
+    && typeof trace.visibleComparisonUnitCount === 'number'
+    && Number(trace.visibleComparisonUnitCount) > 0
+    && (trace.visibleComparisonHash == null || trace.visibleComparisonNormalizedHash == null)
+  ) {
+    push('missing_visible_comparison_snapshot_hashes', {
+      visibleComparisonUnitCount: trace.visibleComparisonUnitCount,
+      visibleComparisonHash: trace.visibleComparisonHash ?? null,
+      visibleComparisonNormalizedHash: trace.visibleComparisonNormalizedHash ?? null,
+    });
+  }
+  if (
+    trace.materialImprovementDetected === true
+    && (!Array.isArray(trace.materialImprovementKinds)
+      || (trace.materialImprovementKinds as unknown[]).length === 0)
+  ) {
+    push('material_improvement_without_kinds', {
+      materialImprovementDetected: true,
+      materialImprovementKindsCount: Array.isArray(trace.materialImprovementKinds)
+        ? trace.materialImprovementKinds.length
+        : 0,
+    });
+  }
+  if (
+    trace.materialImprovementDetected === true
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+    && (trace.visibleComparisonHash == null || trace.visibleComparisonUsedForNoOp !== true)
+  ) {
+    push('material_improvement_apply_without_visible_snapshot', {
+      visibleComparisonHash: trace.visibleComparisonHash ?? null,
+      visibleComparisonUsedForNoOp: trace.visibleComparisonUsedForNoOp ?? null,
+    });
+  }
+  if (
+    trace.authoritativeFactSourceKind === 'pre_ai_snapshot'
+    && trace.factAuthorityKind != null
+    && trace.factAuthorityKind !== 'pre_ai_snapshot'
+    && trace.factAuthorityKind !== 'original_user'
+  ) {
+    push('fact_authority_kind_contradicts_authoritative_source', {
+      authoritativeFactSourceKind: trace.authoritativeFactSourceKind,
+      factAuthorityKind: trace.factAuthorityKind,
+    });
+  }
+  if (
+    trace.neutralRestyleDetected === true
+    && trace.semanticNoOpDetected !== true
+  ) {
+    push('neutral_restyle_without_semantic_noop', {
+      neutralRestyleDetected: true,
+      semanticNoOpDetected: trace.semanticNoOpDetected ?? false,
+    });
+  }
+  if (
+    (trace.semanticNoOpDetected === true || trace.neutralRestyleDetected === true)
+    && (trace.usageCountAfter != null && trace.usageCountBefore != null)
+    && Number(trace.usageCountAfter) > Number(trace.usageCountBefore)
+  ) {
+    push('semantic_noop_usage_increment', {
+      usageCountBefore: trace.usageCountBefore,
+      usageCountAfter: trace.usageCountAfter,
     });
   }
   return { passed: failures.length === 0, failures };

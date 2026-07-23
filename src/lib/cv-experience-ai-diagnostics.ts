@@ -332,6 +332,10 @@ export type ExperienceAiDiagnosticTrace = {
   repairResidualComplianceScopeExpansionDetected: boolean;
   finalComplianceScopeExpansionDetected: boolean;
   factAuthorityKind: string | null;
+  factAuthorityHash: string | null;
+  factAuthorityNormalizedHash: string | null;
+  factAuthorityUnitCount: number;
+  factAuthorityMatchesAuthoritativeSourceKind: boolean;
   visibleComparisonSourceKind: string | null;
   visibleComparisonHash: string | null;
   visibleComparisonNormalizedHash: string | null;
@@ -340,6 +344,7 @@ export type ExperienceAiDiagnosticTrace = {
   visibleComparisonMatchedLastAiOutput: boolean;
   visibleComparisonUsedForNoOp: boolean;
   visibleComparisonUsedForDegradationCheck: boolean;
+  visibleComparisonCapturedAtRequest: boolean;
   finalMatchesVisibleComparisonAfterNormalization: boolean;
   finalSemanticallyEquivalentToVisibleComparison: boolean;
   semanticNoOpDetected: boolean;
@@ -348,7 +353,12 @@ export type ExperienceAiDiagnosticTrace = {
   materialImprovementKinds: string[];
   degradationDetected: boolean;
   degradationKinds: string[];
+  neutralRestyleDetected: boolean;
+  finalDecisionKind: string | null;
   experienceVisibleNoopAuthorityRevision: string | null;
+  experienceVisibleSnapshotWiringRevision: string | null;
+  experienceSemanticNoopFinalGateRevision: string | null;
+  experienceFactAuthorityConsistencyRevision: string | null;
   spanishExperienceComplianceGroundingRevision: string | null;
   experiencePredicatePhaseDiagnosticsRevision: string | null;
   deterministicFallbackAttemptedAfterNoOp: boolean;
@@ -950,6 +960,10 @@ export class ExperienceAiDiagnosticSession {
       repairResidualComplianceScopeExpansionDetected: false,
       finalComplianceScopeExpansionDetected: false,
       factAuthorityKind: null,
+      factAuthorityHash: null,
+      factAuthorityNormalizedHash: null,
+      factAuthorityUnitCount: 0,
+      factAuthorityMatchesAuthoritativeSourceKind: false,
       visibleComparisonSourceKind: null,
       visibleComparisonHash: null,
       visibleComparisonNormalizedHash: null,
@@ -958,6 +972,7 @@ export class ExperienceAiDiagnosticSession {
       visibleComparisonMatchedLastAiOutput: false,
       visibleComparisonUsedForNoOp: false,
       visibleComparisonUsedForDegradationCheck: false,
+      visibleComparisonCapturedAtRequest: false,
       finalMatchesVisibleComparisonAfterNormalization: false,
       finalSemanticallyEquivalentToVisibleComparison: false,
       semanticNoOpDetected: false,
@@ -966,7 +981,12 @@ export class ExperienceAiDiagnosticSession {
       materialImprovementKinds: [],
       degradationDetected: false,
       degradationKinds: [],
+      neutralRestyleDetected: false,
+      finalDecisionKind: null,
       experienceVisibleNoopAuthorityRevision: null,
+      experienceVisibleSnapshotWiringRevision: null,
+      experienceSemanticNoopFinalGateRevision: null,
+      experienceFactAuthorityConsistencyRevision: null,
       spanishExperienceComplianceGroundingRevision: null,
       experiencePredicatePhaseDiagnosticsRevision: null,
       deterministicFallbackAttemptedAfterNoOp: false,
@@ -1640,6 +1660,13 @@ export class ExperienceAiDiagnosticSession {
         diag.finalComplianceScopeExpansionDetected,
       ),
       factAuthorityKind: (diag.factAuthorityKind as string | null | undefined) ?? null,
+      factAuthorityHash: (diag.factAuthorityHash as string | null | undefined) ?? null,
+      factAuthorityNormalizedHash:
+        (diag.factAuthorityNormalizedHash as string | null | undefined) ?? null,
+      factAuthorityUnitCount: Number(diag.factAuthorityUnitCount ?? 0),
+      factAuthorityMatchesAuthoritativeSourceKind: Boolean(
+        diag.factAuthorityMatchesAuthoritativeSourceKind,
+      ),
       visibleComparisonSourceKind:
         (diag.visibleComparisonSourceKind as string | null | undefined) ?? null,
       visibleComparisonHash: (diag.visibleComparisonHash as string | null | undefined) ?? null,
@@ -1654,6 +1681,9 @@ export class ExperienceAiDiagnosticSession {
       visibleComparisonUsedForNoOp: Boolean(diag.visibleComparisonUsedForNoOp),
       visibleComparisonUsedForDegradationCheck: Boolean(
         diag.visibleComparisonUsedForDegradationCheck,
+      ),
+      visibleComparisonCapturedAtRequest: Boolean(
+        diag.visibleComparisonCapturedAtRequest,
       ),
       finalMatchesVisibleComparisonAfterNormalization: Boolean(
         diag.finalMatchesVisibleComparisonAfterNormalization,
@@ -1671,8 +1701,16 @@ export class ExperienceAiDiagnosticSession {
       degradationKinds: Array.isArray(diag.degradationKinds)
         ? diag.degradationKinds.map(String)
         : [],
+      neutralRestyleDetected: Boolean(diag.neutralRestyleDetected),
+      finalDecisionKind: (diag.finalDecisionKind as string | null | undefined) ?? null,
       experienceVisibleNoopAuthorityRevision:
         (diag.experienceVisibleNoopAuthorityRevision as string | null | undefined) ?? null,
+      experienceVisibleSnapshotWiringRevision:
+        (diag.experienceVisibleSnapshotWiringRevision as string | null | undefined) ?? null,
+      experienceSemanticNoopFinalGateRevision:
+        (diag.experienceSemanticNoopFinalGateRevision as string | null | undefined) ?? null,
+      experienceFactAuthorityConsistencyRevision:
+        (diag.experienceFactAuthorityConsistencyRevision as string | null | undefined) ?? null,
       spanishExperienceComplianceGroundingRevision:
         (diag.spanishExperienceComplianceGroundingRevision as string | null | undefined) ?? null,
       experiencePredicatePhaseDiagnosticsRevision:
