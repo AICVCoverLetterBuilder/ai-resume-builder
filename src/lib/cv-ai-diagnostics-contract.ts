@@ -796,6 +796,7 @@ export function checkSummaryDiagnosticCompleteness(
 type ExperienceLike = {
   finalCandidateSource?: string | null;
   providerAttempted?: boolean;
+  providerAccepted?: boolean | null;
   clientDeterministicFallbackAttempted?: boolean;
   clientDeterministicFallbackApplied?: boolean;
   fallbackSelected?: boolean;
@@ -813,12 +814,36 @@ type ExperienceLike = {
   coveredFactCount?: number | null;
   uncoveredFactIdentityHashes?: string[] | null;
   unsupportedClaimCount?: number | null;
+  finalUnsupportedClaimCount?: number | null;
   finalUnsupportedClaimKinds?: string[] | null;
   finalNormalizedHash?: string | null;
   providerUncoveredFactIdentityHashes?: string[] | null;
   providerCoveredFactCount?: number | null;
   providerRequiredFactCount?: number | null;
   relevanceValidationPassed?: boolean | null;
+  noOpRepairAttempted?: boolean | null;
+  noOpRepairApplied?: boolean | null;
+  unsupportedClaimRepairAttempted?: boolean | null;
+  unsupportedClaimRepairApplied?: boolean | null;
+  unsupportedClaimRepairValidationPassed?: boolean | null;
+  unsupportedClaimRepairHash?: string | null;
+  unsupportedClaimRepairNormalizedHash?: string | null;
+  candidateLineage?: Array<{
+    candidateKind?: string;
+    accepted?: boolean | null;
+    hash?: string | null;
+    normalizedHash?: string | null;
+  }> | null;
+  stages?: Array<{
+    stage?: string;
+    result?: string;
+    typedReason?: string | null;
+  }> | null;
+  stageLog?: Array<{
+    stage?: string;
+    result?: string;
+    typedReason?: string | null;
+  }> | null;
 };
 
 export function checkExperienceDiagnosticInvariants(
@@ -952,6 +977,83 @@ export function checkExperienceDiagnosticInvariants(
       providerRequiredFactCount: trace.providerRequiredFactCount,
       providerUncoveredFactIdentityHashCount: 0,
     });
+  }
+  // AAB-309 repair lineage invariants.
+  if (trace.providerAccepted === false) {
+    const stageRows = Array.isArray(trace.stages)
+      ? trace.stages
+      : (Array.isArray(trace.stageLog) ? trace.stageLog : []);
+    const skipStages = stageRows.filter((s) =>
+      s?.stage === 'deterministic_fallback_started' && s?.result === 'skipped');
+    for (const s of skipStages) {
+      if (s?.typedReason === 'provider_accepted') {
+        push('provider_rejected_but_fallback_skip_provider_accepted', {
+          providerAccepted: false,
+          typedReason: 'provider_accepted',
+        });
+      }
+    }
+  }
+  if (trace.noOpRepairApplied === true && trace.noOpRepairAttempted !== true) {
+    push('noop_repair_applied_without_attempt', {
+      noOpRepairApplied: true,
+      noOpRepairAttempted: trace.noOpRepairAttempted ?? false,
+    });
+  }
+  if (trace.unsupportedClaimRepairApplied === true) {
+    if (trace.unsupportedClaimRepairAttempted !== true) {
+      push('unsupported_repair_applied_without_attempt', {
+        unsupportedClaimRepairApplied: true,
+        unsupportedClaimRepairAttempted: trace.unsupportedClaimRepairAttempted ?? false,
+      });
+    }
+    if (trace.unsupportedClaimRepairValidationPassed !== true) {
+      push('unsupported_repair_applied_without_validation', {
+        unsupportedClaimRepairApplied: true,
+        unsupportedClaimRepairValidationPassed:
+          trace.unsupportedClaimRepairValidationPassed ?? null,
+      });
+    }
+    if ((trace.finalUnsupportedClaimCount ?? 0) > 0) {
+      push('unsupported_repair_applied_with_final_unsupported', {
+        unsupportedClaimRepairApplied: true,
+        finalUnsupportedClaimCount: trace.finalUnsupportedClaimCount ?? 0,
+      });
+    }
+  }
+  if (trace.finalCandidateSource === 'unsupported_claim_repair') {
+    const repairHash = trace.unsupportedClaimRepairNormalizedHash
+      || trace.unsupportedClaimRepairHash
+      || null;
+    if (repairHash && trace.finalNormalizedHash && repairHash !== trace.finalNormalizedHash) {
+      push('unsupported_repair_final_hash_mismatch', {
+        finalCandidateSource: 'unsupported_claim_repair',
+        unsupportedClaimRepairHash: repairHash,
+        finalNormalizedHash: trace.finalNormalizedHash,
+      });
+    }
+    if (trace.unsupportedClaimRepairApplied !== true) {
+      push('unsupported_repair_final_source_not_applied', {
+        finalCandidateSource: 'unsupported_claim_repair',
+        unsupportedClaimRepairApplied: false,
+      });
+    }
+  }
+  if (
+    trace.finalCandidateSource === 'unsupported_claim_repair'
+    && Array.isArray(trace.candidateLineage)
+  ) {
+    const invalidSelected = trace.candidateLineage.find((c) =>
+      c?.candidateKind === 'unsupported_claim_repair'
+      && c?.accepted === false
+      && trace.countedAsSuccess);
+    if (invalidSelected) {
+      push('invalid_repair_marked_final_selected', {
+        finalCandidateSource: 'unsupported_claim_repair',
+        repairAccepted: false,
+        countedAsSuccess: true,
+      });
+    }
   }
   return { passed: failures.length === 0, failures };
 }

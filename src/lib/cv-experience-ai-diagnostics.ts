@@ -14,9 +14,11 @@ import { splitExperienceBullets } from './cv-canonical-facts';
 import { getApiBaseUrl } from './api';
 import type { AiGroundingResolution } from './cv-experience-job-context';
 import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
+import { EXPERIENCE_REPAIR_LINEAGE_309_REVISION } from './cv-ai-finalize-apply';
 import {
   experienceAiSourcesEquivalent,
 } from './cv-experience-ai-operation-snapshot';
+void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
 import { detectTextLocale } from './cv-content-locale';
 import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
@@ -280,6 +282,22 @@ export type ExperienceAiDiagnosticTrace = {
   noOpRepairUniversalQuantifierDetected: boolean;
   noOpRepairResponsibilityEscalationDetected: boolean;
   noOpRepairRejectionReason: string | null;
+  unsupportedClaimRepairAttempted: boolean;
+  unsupportedClaimRepairKind: string | null;
+  unsupportedClaimRepairValidationPassed: boolean | null;
+  unsupportedClaimRepairApplied: boolean;
+  unsupportedClaimRepairRejectionReason: string | null;
+  unsupportedClaimRepairUnsupportedClaimCount: number;
+  unsupportedClaimRepairUnsupportedClaimKinds: string[];
+  unsupportedClaimRepairResidualUnsupportedClaimCount: number;
+  unsupportedClaimRepairResidualUnsupportedClaimKinds: string[];
+  unsupportedClaimRepairCoverageRequiredCount: number | null;
+  unsupportedClaimRepairCoverageCoveredCount: number | null;
+  unsupportedClaimRepairUncoveredFactIdentityHashes: string[];
+  unsupportedClaimRepairHash: string | null;
+  unsupportedClaimRepairNormalizedHash: string | null;
+  experienceRepairLineageRevision: string | null;
+  spanishExperienceRepairGroundingRevision: string | null;
   deterministicFallbackAttemptedAfterNoOp: boolean;
   deterministicFallbackAppliedAfterNoOp: boolean;
   finalCandidateSource: string | null;
@@ -833,6 +851,22 @@ export class ExperienceAiDiagnosticSession {
       noOpRepairUniversalQuantifierDetected: false,
       noOpRepairResponsibilityEscalationDetected: false,
       noOpRepairRejectionReason: null,
+      unsupportedClaimRepairAttempted: false,
+      unsupportedClaimRepairKind: null,
+      unsupportedClaimRepairValidationPassed: null,
+      unsupportedClaimRepairApplied: false,
+      unsupportedClaimRepairRejectionReason: null,
+      unsupportedClaimRepairUnsupportedClaimCount: 0,
+      unsupportedClaimRepairUnsupportedClaimKinds: [],
+      unsupportedClaimRepairResidualUnsupportedClaimCount: 0,
+      unsupportedClaimRepairResidualUnsupportedClaimKinds: [],
+      unsupportedClaimRepairCoverageRequiredCount: null,
+      unsupportedClaimRepairCoverageCoveredCount: null,
+      unsupportedClaimRepairUncoveredFactIdentityHashes: [],
+      unsupportedClaimRepairHash: null,
+      unsupportedClaimRepairNormalizedHash: null,
+      experienceRepairLineageRevision: null,
+      spanishExperienceRepairGroundingRevision: null,
       deterministicFallbackAttemptedAfterNoOp: false,
       deterministicFallbackAppliedAfterNoOp: false,
       finalCandidateSource: null,
@@ -1376,6 +1410,51 @@ export class ExperienceAiDiagnosticSession {
         diag.noOpRepairResponsibilityEscalationDetected,
       ),
       noOpRepairRejectionReason: (diag.noOpRepairRejectionReason as string | null | undefined) ?? null,
+      unsupportedClaimRepairAttempted: Boolean(diag.unsupportedClaimRepairAttempted),
+      unsupportedClaimRepairKind: (diag.unsupportedClaimRepairKind as string | null | undefined) ?? null,
+      unsupportedClaimRepairValidationPassed: diag.unsupportedClaimRepairValidationPassed ?? null,
+      unsupportedClaimRepairApplied: Boolean(diag.unsupportedClaimRepairApplied),
+      unsupportedClaimRepairRejectionReason:
+        (diag.unsupportedClaimRepairRejectionReason as string | null | undefined) ?? null,
+      unsupportedClaimRepairUnsupportedClaimCount: Math.max(
+        Number(diag.unsupportedClaimRepairUnsupportedClaimCount ?? 0),
+        Array.isArray(diag.unsupportedClaimRepairUnsupportedClaimKinds)
+          ? diag.unsupportedClaimRepairUnsupportedClaimKinds.length
+          : 0,
+      ),
+      unsupportedClaimRepairUnsupportedClaimKinds: Array.isArray(
+        diag.unsupportedClaimRepairUnsupportedClaimKinds,
+      )
+        ? diag.unsupportedClaimRepairUnsupportedClaimKinds.map(String)
+        : [],
+      unsupportedClaimRepairResidualUnsupportedClaimCount: Math.max(
+        Number(diag.unsupportedClaimRepairResidualUnsupportedClaimCount ?? 0),
+        Array.isArray(diag.unsupportedClaimRepairResidualUnsupportedClaimKinds)
+          ? diag.unsupportedClaimRepairResidualUnsupportedClaimKinds.length
+          : 0,
+      ),
+      unsupportedClaimRepairResidualUnsupportedClaimKinds: Array.isArray(
+        diag.unsupportedClaimRepairResidualUnsupportedClaimKinds,
+      )
+        ? diag.unsupportedClaimRepairResidualUnsupportedClaimKinds.map(String)
+        : [],
+      unsupportedClaimRepairCoverageRequiredCount:
+        diag.unsupportedClaimRepairCoverageRequiredCount ?? null,
+      unsupportedClaimRepairCoverageCoveredCount:
+        diag.unsupportedClaimRepairCoverageCoveredCount ?? null,
+      unsupportedClaimRepairUncoveredFactIdentityHashes: Array.isArray(
+        diag.unsupportedClaimRepairUncoveredFactIdentityHashes,
+      )
+        ? diag.unsupportedClaimRepairUncoveredFactIdentityHashes.map(String)
+        : [],
+      unsupportedClaimRepairHash: (diag.unsupportedClaimRepairHash as string | null | undefined) ?? null,
+      unsupportedClaimRepairNormalizedHash:
+        (diag.unsupportedClaimRepairNormalizedHash as string | null | undefined) ?? null,
+      experienceRepairLineageRevision:
+        (diag.experienceRepairLineageRevision as string | null | undefined)
+        ?? EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
+      spanishExperienceRepairGroundingRevision:
+        (diag.spanishExperienceRepairGroundingRevision as string | null | undefined) ?? null,
       deterministicFallbackAttemptedAfterNoOp: Boolean(
         diag.deterministicFallbackAttemptedAfterNoOp
         || (
@@ -1394,7 +1473,9 @@ export class ExperienceAiDiagnosticSession {
         ?? (finalized.countedAsSuccess
           ? (clientFallbackApplied
             ? 'deterministic_fallback'
-            : (diag.noOpRepairApplied ? 'noop_repair' : 'provider'))
+            : (diag.unsupportedClaimRepairApplied
+              ? 'unsupported_claim_repair'
+              : (diag.noOpRepairApplied ? 'noop_repair' : 'provider')))
           : 'none'),
       finalUnsupportedClaimCount: Math.max(
         Number(diag.finalUnsupportedClaimCount ?? 0),
@@ -1632,6 +1713,63 @@ export class ExperienceAiDiagnosticSession {
         meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
       });
     }
+    const repairAttempted = Boolean(diag.unsupportedClaimRepairAttempted);
+    const repairApplied = Boolean(diag.unsupportedClaimRepairApplied);
+    if (repairAttempted || repairApplied || diag.finalCandidateSource === 'unsupported_claim_repair') {
+      void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+      const repairResidualKinds = Array.isArray(
+        diag.unsupportedClaimRepairResidualUnsupportedClaimKinds,
+      )
+        ? diag.unsupportedClaimRepairResidualUnsupportedClaimKinds.map(String)
+        : [];
+      const repairKinds = Array.isArray(diag.unsupportedClaimRepairUnsupportedClaimKinds)
+        ? diag.unsupportedClaimRepairUnsupportedClaimKinds.map(String)
+        : [];
+      lineage.push({
+        candidateKind: 'unsupported_claim_repair',
+        present: true,
+        accepted: repairApplied && Boolean(finalized.countedAsSuccess),
+        hash: (diag.unsupportedClaimRepairHash as string | null | undefined) ?? null,
+        normalizedHash:
+          (diag.unsupportedClaimRepairNormalizedHash as string | null | undefined)
+          ?? (diag.unsupportedClaimRepairHash as string | null | undefined)
+          ?? null,
+        coverageRequiredCount: diag.unsupportedClaimRepairCoverageRequiredCount
+          ?? finalRequired,
+        coverageCoveredCount: diag.unsupportedClaimRepairCoverageCoveredCount ?? null,
+        uncoveredFactIdentityHashes: Array.isArray(
+          diag.unsupportedClaimRepairUncoveredFactIdentityHashes,
+        )
+          ? diag.unsupportedClaimRepairUncoveredFactIdentityHashes.map(String)
+          : [],
+        unsupportedClaimCount: repairApplied
+          ? Number(diag.finalUnsupportedClaimCount ?? 0)
+          : Math.max(
+            Number(diag.unsupportedClaimRepairResidualUnsupportedClaimCount ?? 0),
+            repairResidualKinds.length,
+            Number(diag.unsupportedClaimRepairUnsupportedClaimCount ?? 0),
+          ),
+        unsupportedClaimKinds: repairApplied
+          ? (Array.isArray(diag.finalUnsupportedClaimKinds)
+            ? diag.finalUnsupportedClaimKinds.map(String)
+            : [])
+          : (repairResidualKinds.length ? repairResidualKinds : repairKinds),
+        rejectionStage: repairApplied
+          ? null
+          : (diag.unsupportedClaimRepairRejectionReason
+            || 'unsupported_claim_repair_rejected'),
+        rejectionReasons: repairApplied
+          ? []
+          : ([
+            diag.unsupportedClaimRepairRejectionReason
+            || 'unsupported_claim_repair_rejected',
+          ].filter(Boolean) as string[]),
+        localeValidationPassed: !localeFail,
+        tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? diag.tenseMode),
+        perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed),
+        meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
+      });
+    }
     if (clientFallbackAttempted || clientFallbackApplied) {
       lineage.push({
         candidateKind: 'deterministic_fallback',
@@ -1786,6 +1924,29 @@ export class ExperienceAiDiagnosticSession {
       );
     } else if (blocked) {
       this.stage('deterministic_fallback_started', 'skipped', 'provider_path_rejected_or_fallback_absent');
+      this.stage('fallback_output_built', 'skipped');
+      this.stage('fallback_locale_validation', 'skipped');
+      this.stage('fallback_material_coverage', 'skipped');
+    } else if (diag.unsupportedClaimRepairApplied || diag.finalCandidateSource === 'unsupported_claim_repair') {
+      void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+      this.stage('deterministic_fallback_started', 'skipped', 'unsupported_claim_repair_accepted');
+      this.stage('fallback_output_built', 'skipped');
+      this.stage('fallback_locale_validation', 'skipped');
+      this.stage('fallback_material_coverage', 'skipped');
+    } else if (diag.noOpRepairApplied || diag.finalCandidateSource === 'noop_repair') {
+      this.stage('deterministic_fallback_started', 'skipped', 'noop_repair_accepted');
+      this.stage('fallback_output_built', 'skipped');
+      this.stage('fallback_locale_validation', 'skipped');
+      this.stage('fallback_material_coverage', 'skipped');
+    } else if (diag.providerAccepted === false) {
+      // Provider rejected without attempted/applied fallback — never claim provider_accepted.
+      this.stage(
+        'deterministic_fallback_started',
+        'skipped',
+        diag.unsupportedClaimRepairAttempted
+          ? (diag.unsupportedClaimRepairRejectionReason || 'unsupported_claim_repair_rejected')
+          : 'provider_path_rejected_or_fallback_absent',
+      );
       this.stage('fallback_output_built', 'skipped');
       this.stage('fallback_locale_validation', 'skipped');
       this.stage('fallback_material_coverage', 'skipped');
