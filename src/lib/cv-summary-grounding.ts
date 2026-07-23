@@ -60,6 +60,17 @@ import {
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
 } from './cv-croatian-summary-grounding';
 import {
+  analyzeGermanSummaryEmploymentQuality,
+  buildGermanEntryOwnedSummary,
+  germanWarehouseSummaryFragment,
+  GERMAN_CV_AI_302_REVISION,
+  SUMMARY_BUILDER_REVISION_DE,
+  SUMMARY_GROUNDING_REVISION_DE,
+  SUMMARY_UNIT_SPLITTER_REVISION_DE,
+  SUMMARY_DURATION_FINALIZER_REVISION_DE,
+  GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+} from './cv-german-summary-grounding';
+import {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
   HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
@@ -80,6 +91,14 @@ void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
+void GERMAN_CV_AI_302_REVISION;
+void SUMMARY_BUILDER_REVISION_DE;
+void SUMMARY_GROUNDING_REVISION_DE;
+void SUMMARY_UNIT_SPLITTER_REVISION_DE;
+void SUMMARY_DURATION_FINALIZER_REVISION_DE;
+void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+void analyzeGermanSummaryEmploymentQuality;
+void germanWarehouseSummaryFragment;
 export {
   analyzeArabicSummaryEmploymentQuality,
   buildArabicEntryOwnedSummary,
@@ -131,6 +150,21 @@ export {
   validateCroatianSummaryIntroGrammar,
   ensureCroatianDurationExperienceNoun,
 } from './cv-croatian-summary-grounding';
+export {
+  analyzeGermanSummaryEmploymentQuality,
+  buildGermanEntryOwnedSummary,
+  germanWarehouseSummaryFragment,
+  splitGermanSummaryUnits,
+  formatGermanEmployerPrepositional,
+  validateGermanSummaryIntroGrammar,
+  GERMAN_CV_AI_302_REVISION,
+  SUMMARY_BUILDER_REVISION_DE,
+  SUMMARY_GROUNDING_REVISION_DE,
+  SUMMARY_UNIT_SPLITTER_REVISION_DE,
+  SUMMARY_DURATION_FINALIZER_REVISION_DE,
+  GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  GERMAN_SUMMARY_EMPLOYER_PREPOSITION_REVISION,
+} from './cv-german-summary-grounding';
 export {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
@@ -1523,6 +1557,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'ru'
     && locale !== 'ja'
     && locale !== 'hr'
+    && locale !== 'de'
   ) {
     return '';
   }
@@ -1770,6 +1805,51 @@ export function buildConciseGroundedSummary(
     });
     skillSentence = '';
     void skillSentence;
+  } else if (locale === 'de') {
+    void SUMMARY_BUILDER_REVISION_DE;
+    void SUMMARY_UNIT_SPLITTER_REVISION_DE;
+    void SUMMARY_GROUNDING_REVISION_DE;
+    void analyzeGermanSummaryEmploymentQuality;
+    void germanWarehouseSummaryFragment;
+    void GERMAN_CV_AI_302_REVISION;
+    const isGermanWarehouseDomain = /(?:warehouse|lager|skladist|magacin|radnic|кладов|مستودع)/i
+      .test(`${role} ${experienceTitle} ${sourceDuties}`)
+      || dutyFacts.some((f) => classifyMaterialDutyKeys(f.sourceText || f.value)
+        .some((k) => k.startsWith('warehouse_')));
+    if (isGermanWarehouseDomain) {
+      const deRole = /(?:warehouse|lager|skladist|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+        ? localizeWarehouseEmployee('de', genderNorm || '')
+        : (role || localizeWarehouseEmployee('de', genderNorm || ''));
+      text = buildGermanEntryOwnedSummary({
+        role: deRole,
+        employer,
+        datesValue,
+        gender: genderNorm || '',
+        durationPhrase: durationPhrase || undefined,
+        dutyFacts,
+        priorRole: typeof priorIndex === 'number'
+          ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+          : '',
+        priorEmployer: typeof priorIndex === 'number'
+          ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+          : '',
+        priorSourceDuties,
+        locale: 'de',
+      });
+      skillSentence = '';
+      void skillSentence;
+    } else {
+      // Non-warehouse German (baker, engineer, …): keep generic Latin-duty path.
+      const dutyJoin = joinDutyFragments(uniqueFragments, locale);
+      const open = dutyJoin
+        ? (durationPhrase
+          ? `${role || 'Fachkraft'} ${durationPhrase} in ${dutyJoin}`
+          : `${role || 'Fachkraft'} in ${dutyJoin}`)
+        : (durationPhrase
+          ? `${role || 'Fachkraft'} ${durationPhrase}`
+          : `${role || 'Fachkraft'}`);
+      text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    }
   } else if (locale === 'sr') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin
@@ -1840,7 +1920,7 @@ export function buildConciseGroundedSummary(
     // Duty fragments are often prepositional/noun phrases (e.g. RU "приготовлении…").
     // Keep them in the same sentence — never start a new sentence after a period.
     const dutyConnector =
-      locale === 'de' || locale === 'it' ? 'in'
+      locale === 'it' ? 'in'
         : locale === 'es' || locale === 'pt-BR' ? 'en'
           : locale === 'fr' ? 'dans'
             : locale === 'ar' ? 'في'

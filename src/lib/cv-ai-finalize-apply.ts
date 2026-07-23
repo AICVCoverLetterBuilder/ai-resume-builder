@@ -66,6 +66,9 @@ import {
   CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION,
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
+  analyzeGermanSummaryEmploymentQuality,
+  GERMAN_CV_AI_302_REVISION,
+  GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
   HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
@@ -250,6 +253,8 @@ void CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
+void GERMAN_CV_AI_302_REVISION;
+void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297;
 void HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
@@ -1517,6 +1522,28 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (!empQuality.groundingValidationPassed) {
         croatianProviderRejectionReason = empQuality.typedRejectionReason
           || 'croatian_summary_grounding_failed';
+        candidate = '';
+      }
+    }
+  }
+  if (locale === 'de') {
+    void GERMAN_CV_AI_302_REVISION;
+    void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+    candidate = dedupeSummarySentences(candidate);
+    if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
+      candidate = '';
+    }
+    if (candidate.trim()) {
+      const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+      const empQuality = analyzeGermanSummaryEmploymentQuality(candidate, {
+        company: context.company,
+        role: context.role,
+        currentEntryDuties: entryDuties.currentEntryDuties,
+        priorEntryDuties: entryDuties.priorEntryDuties,
+        priorCompany: entryDuties.priorCompany,
+        gender,
+      });
+      if (!empQuality.groundingValidationPassed) {
         candidate = '';
       }
     }

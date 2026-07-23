@@ -33,28 +33,28 @@ function norm(text: string): string {
 }
 
 function hasQualitySupport(source: string): boolean {
-  return /(?:kvalitet|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b)/iu
+  return /(?:kvalitet|Qualität|qualit(?:y|ät)|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b|Qualitäts(?:kontrolle|prüfung|sicherung))/iu
     .test(source);
 }
 
 function hasStandardsSupport(source: string): boolean {
-  return /(?:\bstandard|compliance|regulacij|propis|procedur|politik|važeć\w*\s+standard)/iu
+  return /(?:\bstandard|compliance|regulacij|propis|procedur|politik|važeć\w*\s+standard|Vorschrift|Richtlinie)/iu
     .test(source);
 }
 
 function hasUniversalScopeSupport(source: string): boolean {
-  return /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala|uskladišten)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:item|good|document)\b|\bentire\s+)/iu
+  return /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala|uskladišten)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:item|good|document)\b|\bentire\s+|\bsämtlich\w*\b|\balle\s+(?:Prozesse|Waren|Bereiche|Unterlagen)\b|\bunternehmensweit\b|\bdurchgängig\b)/iu
     .test(source);
 }
 
 function hasOrganizationVerbSupport(source: string): boolean {
   // Verb stems only — adjective "organiziran(o)" is not ownership escalation.
-  return /\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organise[ds]?|organizes?|organising|organizing)\b/iu
+  return /\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organise[ds]?|organizes?|organising|organizing|verantwortlich\s+für|Steuerung|Überwachung)\b/iu
     .test(source);
 }
 
 function hasLeadershipSupport(source: string): boolean {
-  return /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion))\b/iu
+  return /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion)|Leitung|Führung|führt\s+das\s+Team|leitet\s+das\s+Team)\b/iu
     .test(source);
 }
 
@@ -88,7 +88,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Quality inspection / QC — distinct from ispravnost / condition / correctness.
   if (
-    /(?:provjer\w*|prover\w*|pregled\w*|kontrola?|check(?:s|ing)?|inspect(?:s|ion|ing)?).{0,24}(?:kvalitet|quality)|(?:kvalitet|quality).{0,24}(?:provjer|prover|pregled|kontrol|check|inspect)|(?:kontrola?\s+kvalitet|quality\s+(?:control|inspection|assurance)|provjer\w*\s+kvalitet|prover\w*\s+kvalitet)/iu
+    /(?:provjer\w*|prover\w*|pregled\w*|kontrola?|check(?:s|ing)?|inspect(?:s|ion|ing)?|prüf\w*|kontroll\w*).{0,24}(?:kvalitet|quality|Qualität)|(?:kvalitet|quality|Qualität).{0,24}(?:provjer|prover|pregled|kontrol|check|inspect|prüf|kontroll)|(?:kontrola?\s+kvalitet|quality\s+(?:control|inspection|assurance)|Qualitäts(?:kontrolle|prüfung|sicherung|steigerung)|höchste\s+Qualität|hervorragende\s+Qualität|Sicherstellung\s+höchster\s+Standards)/iu
       .test(joined)
     && !hasQualitySupport(source)
   ) {
@@ -98,7 +98,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Standards / compliance / regulations — not "usklađuje aktivnosti s timom".
   if (
-    /(?:usklađenost.{0,48}(?:standard|propis|regulacij|procedur|politik)|(?:važeć\w*|važeći|važećim)\s+standard\w*|s\s+važećim\s+standardima|poštuje.{0,24}standard|osigurava\s+usklađenost|compliance|regulacij\w*|propisima|prema\s+(?:važeć\w*\s+)?standard)/iu
+    /(?:usklađenost.{0,48}(?:standard|propis|regulacij|procedur|politik)|(?:važeć\w*|važeći|važećim)\s+standard\w*|s\s+važećim\s+standardima|poštuje.{0,24}standard|osigurava\s+usklađenost|compliance|regulacij\w*|propisima|prema\s+(?:važeć\w*\s+)?standard|Sicherstellung\s+höchster\s+Standards|nach\s+(?:geltenden\s+)?Standards?|Vorschriften)/iu
       .test(joined)
     && !hasStandardsSupport(source)
   ) {
@@ -108,7 +108,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Universal quantifiers that expand factual scope.
   if (
-    /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:stored\s+)?(?:item|good|document)\b|\bentire\s+(?:warehouse|inventory|stock)\b)/iu
+    /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:stored\s+)?(?:item|good|document)\b|\bentire\s+(?:warehouse|inventory|stock)\b|\bsämtlich\w*\b|\balle\s+Prozesse\b|\bin\s+allen\s+Bereichen\b|\bunternehmensweit\b|\bdurchgängig\b)/iu
       .test(joined)
     && !hasUniversalScopeSupport(source)
   ) {
@@ -118,7 +118,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Organization verb escalation (not adjective "organizirano skladištenje").
   if (
-    /\b(?:organizira(?:la|lo|li|ju)?|organizuje|organizovala|organizovao|organises?|organizes?)\b/iu
+    /\b(?:organizira(?:la|lo|li|ju)?|organizuje|organizovala|organizovao|organises?|organizes?|verantwortlich\s+für\s+den\s+gesamten|vollständige\s+Verantwortung|Steuerung\s+des\s+gesamten|Überwachung\s+aller)\b/iu
       .test(joined)
     && !hasOrganizationVerbSupport(source)
   ) {
@@ -128,7 +128,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Leadership / supervision / managing a team.
   if (
-    /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)\b|nadzire\s+(?:rad|koleg|skladišt)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion)\b)/iu
+    /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)\b|nadzire\s+(?:rad|koleg|skladišt)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion)\b|\bLeitung\b|\bFührung\b|führt\s+das\s+Team|leitet\s+das\s+Team)/iu
       .test(joined)
     && !hasLeadershipSupport(source)
   ) {
@@ -136,7 +136,7 @@ export function detectExperienceUnsupportedClaimExpansion(
     labels.push('leadership_claim');
   }
 
-  for (const tool of ['Excel', 'Salesforce', 'Slack', 'Jira', 'SAP', 'Tableau'] as const) {
+  for (const tool of ['Excel', 'Salesforce', 'Slack', 'Jira', 'SAP', 'Tableau', 'Photoshop', 'Illustrator', 'InDesign', 'Adobe'] as const) {
     if (new RegExp(`\\b${tool}\\b`, 'iu').test(joined) && !hasToolSupport(source, tool)) {
       kinds.push('unsupported_tool_claim');
       labels.push('unsupported_tool_claim');
@@ -144,7 +144,10 @@ export function detectExperienceUnsupportedClaimExpansion(
     }
   }
 
-  if (/\b(?:KPI|OKRs?|ROI)\b/iu.test(joined) && !/\b(?:KPI|OKRs?|ROI)\b/iu.test(source)) {
+  if (
+    (/\b(?:KPI|OKRs?|ROI)\b/iu.test(joined) || /\d+\s*%|\bProduktivitätssteigerung\b|\bEinsparungen?\b/iu.test(joined))
+    && !(/\b(?:KPI|OKRs?|ROI)\b/iu.test(source) || /\d+\s*%/.test(source))
+  ) {
     kinds.push('unsupported_metric_claim');
     labels.push('unsupported_metric_claim');
   }

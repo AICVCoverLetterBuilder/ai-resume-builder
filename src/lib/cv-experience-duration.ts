@@ -398,9 +398,9 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
     7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten',
   },
   de: {
-    1: 'einem', 1.5: 'anderthalb', 2: 'zwei', 2.5: 'zweieinhalb', 3: 'drei', 3.5: 'dreiereinhalb',
-    4: 'vier', 4.5: 'viereinhalb', 5: 'fünf', 5.5: 'fünfeinhalb', 6: 'sechs',
-    7: 'sieben', 8: 'acht', 9: 'neun', 10: 'zehn',
+    1: 'einem', 1.5: 'anderthalb', 2: 'zwei', 2.5: 'zweieinhalb', 3: 'drei', 3.5: 'dreieinhalb',
+    4: 'vier', 4.5: 'viereinhalb', 5: 'fünf', 5.5: 'fünfeinhalb', 6: 'sechs', 6.5: 'sechseinhalb',
+    7: 'sieben', 7.5: 'siebeneinhalb', 8: 'acht', 9: 'neun', 10: 'zehn',
   },
   es: {
     1: 'un', 1.5: 'uno y medio', 2: 'dos', 2.5: 'dos y medio', 3: 'tres', 3.5: 'tres y medio',
@@ -711,6 +711,15 @@ export function repairSummaryDuration(
     /(लगभग|करीब)?\s*(?:साढ़े\s*(?:\d+(?:[.,]\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस)|(?:\d+(?:[.,]\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|ढाई|डेढ़|डेढ))\s*वर्षों?(?:\s*के\s*(?:कार्य\s*)?अनुभव(?:\s*के\s*साथ)?)?/gu,
     (_m, pref) => `${pref ? `${pref} ` : ''}${hiWord} वर्षों`.trim(),
   );
+  // German — prefer written half-years (sechseinhalb), strip hybrid numeric forms.
+  if (locale === 'de') {
+    const deWord = yearWordForLocale('de', target);
+    out = out.replace(
+      /\b(?:mit\s+)?(?:etwa|rund|ca\.?|ungefähr)?\s*\d+[.,]\d+\s+Jahre?n?(?:\s+(?:Berufs)?[Ee]rfahrung)?\b/giu,
+      `mit etwa ${deWord} Jahren Erfahrung`,
+    );
+    out = out.replace(/\bdreiereinhalb\b/giu, 'dreieinhalb');
+  }
 
   // If still mismatched and has a claim, append/replace with locale phrase is too aggressive —
   // prefer light substitution then verify.

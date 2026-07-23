@@ -108,7 +108,7 @@ const DURATION_EXPRESSION_RES: RegExp[] = [
 
   // German
   new RegExp(
-    String.raw`\b(?:mit\s+)?(?:etwa|rund|ca\.?|ungefähr)\s+(?:anderthalb|zweieinhalb|dreieinhalb|[\wäöü]+|${NUM})\s+Jahre?n?(?:\s+(?:Berufs)?[Ee]rfahrung)?\b`,
+    String.raw`\b(?:mit\s+)?(?:etwa|rund|ca\.?|ungefähr)\s+(?:anderthalb|zweieinhalb|dreieinhalb|viereinhalb|fünfeinhalb|sechseinhalb|siebeneinhalb|[\wäöü]+|${NUM})\s+Jahre?n?(?:\s+(?:Berufs)?[Ee]rfahrung)?\b`,
     'giu',
   ),
   new RegExp(
@@ -298,7 +298,7 @@ export function analyzeDurationRepresentations(
   // Dual equivalent claims in one text (numeric + written of same duration).
   // Skip when the only written cue is months-based (years+months is one representation).
   const hasNumeric = /\d+(?:[.,]\d+)?\s*(?:years?|godin|Jahre|años|ans|anni|anos|лет|سنة|سنوات|वर्ष|年)/iu.test(normalized);
-  const hasWritten = /(?:and\s+a\s+half|i\s+po|с\s+половиной|साढ़े|डेढ़|ढाई|anderthalb|y\s+medio|et\s+demi|e\s+mezzo|e\s+meio|通算約|六年半|五年半|四年半|三年半|二年半|一年半)/iu.test(normalized)
+  const hasWritten = /(?:and\s+a\s+half|i\s+po|с\s+половиной|साढ़े|डेढ़|ढाई|anderthalb|zweieinhalb|dreieinhalb|viereinhalb|fünfeinhalb|sechseinhalb|siebeneinhalb|y\s+medio|et\s+demi|e\s+mezzo|e\s+meio|通算約|六年半|五年半|四年半|三年半|二年半|一年半)/iu.test(normalized)
     || /(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+years?/iu.test(normalized);
   let duplicateEquivalentDurationCount = 0;
   if (!hiMonthsBased && claims.length >= 2 && hasNumeric && hasWritten) {

@@ -119,7 +119,7 @@ export function localizeWarehouseEmployee(locale: Locale, gender?: string): stri
   if (locale === 'sr') {
     return g === 'female' ? 'Radnica u magacinu' : 'Radnik u magacinu';
   }
-  if (locale === 'de') return g === 'female' ? 'Lagerarbeiterin' : 'Lagerarbeiter';
+  if (locale === 'de') return g === 'female' ? 'Lagermitarbeiterin' : 'Lagermitarbeiter';
   if (locale === 'fr') return g === 'female' ? 'Employée d’entrepôt' : 'Employé d’entrepôt';
   if (locale === 'es') return g === 'female' ? 'Empleada de almacén' : 'Empleado de almacén';
   if (locale === 'it') return g === 'female' ? 'Addetta al magazzino' : 'Addetto al magazzino';
