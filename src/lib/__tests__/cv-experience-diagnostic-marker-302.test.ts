@@ -50,8 +50,20 @@ function commitExperience(opts?: {
     clickedExperienceEntryIdHash: 'fnv1a_entry',
   });
   if (opts?.success) {
-    session.recordApiResponse({ httpStatus: 200, resultText: 'Duty one.\nDuty two.\nDuty three.' });
-    session.recordVisibleApply(true, 4);
+    const appliedText = 'Duty one.\nDuty two.\nDuty three.';
+    session.recordApiResponse({ httpStatus: 200, resultText: appliedText });
+    session.patch({
+      finalCandidateSource: 'provider',
+      finalNormalizedHash: 'fnv1a_final_ok',
+      providerAccepted: true,
+      requiredFactCount: 0,
+      coveredFactCount: 0,
+      uncoveredFactIdentityHashes: [],
+    });
+    session.recordVisibleApply(true, 4, {
+      visibleDescription: appliedText,
+      finalNormalizedText: appliedText,
+    });
   } else {
     session.recordApiResponse({ httpStatus: 500, errorCode: 'network_error' });
     session.patch({

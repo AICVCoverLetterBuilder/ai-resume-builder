@@ -359,8 +359,9 @@ export function extractSummaryYearClaims(text: string): number[] {
     /(?:लगभग|करीब)?\s*(\d+(?:\.\d+)?|एक|दो|तीन|चार|पाँच|पांच|छह|ढाई|डेढ़|डेढ)\s*वर्ष/giu,
     // German: "mit etwa vier Jahren Erfahrung" / "Vier Jahre Erfahrung" (Jahr|Jahre|Jahren).
     /\b(?:etwa|rund|ca\.?|ungefähr)?\s*(ein|eine|einem|einen|einer|zwei|drei|vier|fünf|funf|sechs|sieben|acht|neun|zehn|\d+(?:\.\d+)?)\s*\+?\s*Jahre?n?\b/giu,
-    // Spanish: "con alrededor de cuatro años de experiencia".
-    /\b(?:alrededor de|circa|unos?|unas?)?\s*(un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\d+(?:\.\d+)?)\s*\+?\s*años?\b/giu,
+    // Spanish: "con alrededor de cuatro años de experiencia" /
+    // "con alrededor de seis años y medio de experiencia".
+    /\b(?:alrededor de|cerca de|aproximadamente|unos?|unas?)?\s*(un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\d+(?:[.,]\d+)?)\s*(?:años?\s+y\s+medio|y\s+medio\s+años?|años?)\b/giu,
     // French: "avec environ quatre ans d'expérience".
     /\b(?:environ|à peu près)?\s*(un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\d+(?:\.\d+)?)\s*\+?\s*ans?\b/giu,
     // Italian: "con circa quattro anni di esperienza".
@@ -639,6 +640,11 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
         ? `mit etwa ${word} Jahren Erfahrung`
         : `mit etwa ${word} Jahren Erfahrung`;
     case 'es':
+      // Prefer natural "seis años y medio" — never "seis y medio años".
+      if (isHalf && /\by\s+medio\b/iu.test(word) && !/\baños?\b/iu.test(word)) {
+        const whole = word.replace(/\s+y\s+medio\s*$/iu, '').trim();
+        return `con alrededor de ${whole} años y medio de experiencia`;
+      }
       return `con alrededor de ${word} años de experiencia`;
     case 'fr':
       // French half phrases already include "ans".

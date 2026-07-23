@@ -16,6 +16,7 @@ import {
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
 import { sourceRequiresGermanWarehouseFactCoverage } from './cv-german-experience-grounding';
+import { sourceRequiresSpanishWarehouseFactCoverage } from './cv-spanish-experience-grounding';
 
 type ActionFrame =
   | 'check_records'
@@ -73,12 +74,12 @@ export function classifyExperienceActionFrame(unit: string): ActionFrame {
 function domainHintFromUnits(units: string[], position?: string): string {
   const title = fold(position || '');
   if (/(dizajn|design|grafick|visual|ui\b|ux\b)/.test(title)) return 'design';
-  if (/(skladist|warehouse|magacin|lager)/.test(title)) return 'warehouse';
+  if (/(skladist|warehouse|magacin|lager|almacen)/.test(title)) return 'warehouse';
   const joined = fold(units.join(' '));
   if (/(grafick|dizajn|vizuel|design|visual|ビジュアル|تصميم|डिज़ाइन)/.test(joined)) {
     return 'design';
   }
-  if (/(skladist|склад|warehouse|rob[aeu]|робе|робу|товара|goods|inventar|inventory|مستودع|गोदाम|倉庫|armaz|माल|आवाजाही|तैयारी)/.test(joined)) {
+  if (/(skladist|склад|warehouse|rob[aeu]|робе|робу|товара|goods|inventar|inventory|مستودع|गोदाम|倉庫|armaz|almac[eé]n|mercanc[ií]a|माल|आवाजाही|तैयारी)/.test(joined)) {
     return 'warehouse';
   }
   if (/(dokument|document|evidenc|record|وثائق|दस्तावेज़|書類)/.test(joined)) {
@@ -303,6 +304,32 @@ function localizedShellBullet(
           'Erledigte die täglichen Designaufgaben und prüfte die Genauigkeit zugehöriger Materialien.',
         ],
       },
+      es: {
+        check_records: [
+          'Revisa materiales visuales y especificaciones de diseño para garantizar la coherencia.',
+          'Revisó materiales visuales y especificaciones de diseño para garantizar la coherencia.',
+        ],
+        update_records: [
+          'Actualiza archivos de diseño y hace seguimiento del estado de revisión de las entregas.',
+          'Actualizó archivos de diseño y hizo seguimiento del estado de revisión de las entregas.',
+        ],
+        coordinate_info: [
+          'Coordina las entregas de diseño con sus compañeros para cumplir los plazos.',
+          'Coordinó las entregas de diseño con sus compañeros para cumplir los plazos.',
+        ],
+        prepare_materials: [
+          'Crea materiales visuales y elementos gráficos para productos y plataformas digitales.',
+          'Creó materiales visuales y elementos gráficos para productos y plataformas digitales.',
+        ],
+        collaborate_visual: [
+          'Colabora con equipos de producto y desarrollo para mantener la identidad visual.',
+          'Colaboró con equipos de producto y desarrollo para mantener la identidad visual.',
+        ],
+        generic_duty: [
+          'Realiza las tareas diarias de diseño y comprueba la exactitud de los materiales relacionados.',
+          'Realizó las tareas diarias de diseño y comprobó la exactitud de los materiales relacionados.',
+        ],
+      },
       hi: {
         check_records: [
           'दृश्य सामग्री और डिज़ाइन विनिर्देशों की संगति की जाँच करती है।',
@@ -483,6 +510,32 @@ function localizedShellBullet(
       generic_duty: [
         'Erledigt die täglichen Aufgaben der Rolle und prüft die Genauigkeit zugehöriger Unterlagen.',
         'Erledigte die täglichen Aufgaben der Rolle und prüfte die Genauigkeit zugehöriger Unterlagen.',
+      ],
+    },
+    es: {
+      check_records: [
+        'Revisa la mercancía entrante y la documentación relacionada.',
+        'Revisó la mercancía entrante y la documentación relacionada.',
+      ],
+      update_records: [
+        'Comprueba la documentación relacionada y mantiene el orden de la mercancía.',
+        'Comprobó la documentación relacionada y mantuvo el orden de la mercancía.',
+      ],
+      coordinate_info: [
+        'Coordina con sus compañeros la preparación y el movimiento de la mercancía.',
+        'Coordinó con sus compañeros la preparación y el movimiento de la mercancía.',
+      ],
+      prepare_materials: [
+        'Prepara materiales de trabajo y ajusta las salidas a los formatos necesarios.',
+        'Preparó materiales de trabajo y ajustó las salidas a los formatos necesarios.',
+      ],
+      collaborate_visual: [
+        'Colabora con equipos de producto y desarrollo para mantener la identidad visual.',
+        'Colaboró con equipos de producto y desarrollo para mantener la identidad visual.',
+      ],
+      generic_duty: [
+        'Realiza las tareas diarias del rol y comprueba la exactitud de los registros relacionados.',
+        'Realizó las tareas diarias del rol y comprobó la exactitud de los registros relacionados.',
       ],
     },
     hi: {
@@ -881,6 +934,7 @@ export function validateCrossLocaleSemanticCoverage(
   const usedB = new Set<number>();
   let covered = 0;
   const warehouseSource = sourceRequiresGermanWarehouseFactCoverage(sourceDescription)
+    || sourceRequiresSpanishWarehouseFactCoverage(sourceDescription)
     || materialDutyKeysFromDescription(sourceDescription)
       .some((k) => k.startsWith('warehouse_'));
   for (let si = 0; si < srcFrames.length; si += 1) {

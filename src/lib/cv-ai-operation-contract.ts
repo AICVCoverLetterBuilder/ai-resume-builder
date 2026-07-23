@@ -216,7 +216,7 @@ export function classifyFreeTextJobDomain(position?: string | null): FreeTextJob
     return 'design';
   }
   const warehouseRe =
-    /(?:skladist|warehouse|magacin|lager|logist|inventar|inventory|robu|goods|кладов|склад|倉庫|入荷)/i;
+    /(?:skladist|warehouse|magacin|lager|logist|inventar|inventory|robu|goods|кладов|склад|倉庫|入荷|almacen|almacén|empleado de almacen|empleada de almacen|trabajador de almacen|trabajadora de almacen|mozo de almacen|moza de almacen)/i;
   if (warehouseRe.test(t) || warehouseRe.test(raw)) {
     return 'warehouse';
   }
@@ -237,7 +237,7 @@ export function classifyFreeTextJobDomain(position?: string | null): FreeTextJob
 
 const DOMAIN_CUE_RE: Record<FreeTextJobDomain, RegExp> = {
   design: /(?:vizuel|visual|grafick|graphic|dizajn|design|identitet|identity|materijal|material|format|ekran|screen|platform|दृश्य|ग्राफिक|डिज़ाइन|تصميم|بصرية|رسومية|ビジュアル|グラフィック|визуал|графическ|дизайн)/iu,
-  warehouse: /(?:skladist|warehouse|rob\w*|goods|inventar|inventory|dokument|document|गोदाम|माल|مستودع|بضائع|倉庫|商品|товар|склад|Waren|Wareneingang|Lager|Unterlagen|Aufzeichnungen|Kolleg)/iu,
+  warehouse: /(?:skladist|warehouse|rob\w*|goods|inventar|inventory|dokument|document|गोदाम|माल|مستودع|بضائع|倉庫|商品|товар|склад|Waren|Wareneingang|Lager|Unterlagen|Aufzeichnungen|Kolleg|almac[eé]n|mercanc[ií]a|documentaci[oó]n|compa[nñ]er)/iu,
   software: /(?:code|api|feature|aplikativ|software|developer|開発|विकास)/iu,
   hospitality: /(?:jel\w*|dish|cuisine|kitchen|kuhinj|bar|guest|hygiene|व्यंजन|रसोई)/iu,
   healthcare: /(?:patient|pacijen|care|nurs|record|chart|пациент)/iu,

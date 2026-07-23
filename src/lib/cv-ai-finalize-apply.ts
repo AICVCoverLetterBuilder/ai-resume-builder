@@ -67,6 +67,7 @@ import {
   CROATIAN_NOOP_USAGE_REVISION,
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
   analyzeGermanSummaryEmploymentQuality,
+  analyzeSpanishSummaryEmploymentQuality,
   GERMAN_CV_AI_302_REVISION,
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
@@ -80,6 +81,13 @@ import {
   detectGermanExperienceUnsupportedExpansion,
   buildGermanWarehouseExperienceFallback,
 } from './cv-german-experience-grounding';
+import {
+  SPANISH_CV_AI_305_REVISION,
+  sourceRequiresSpanishWarehouseFactCoverage,
+  validateSpanishWarehouseExperienceCoverage,
+  detectSpanishExperienceUnsupportedExpansion,
+  buildSpanishWarehouseExperienceFallback,
+} from './cv-spanish-experience-grounding';
 import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
 
 /** Packaging proof — final-candidate diagnostic truthfulness (AAB-305). */
@@ -237,6 +245,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   EXPERIENCE_TITLE_PROJECTION_REVISION,
   GERMAN_CV_AI_302_REVISION,
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
+  SPANISH_CV_AI_305_REVISION,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
   EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
 ] as const;
@@ -273,6 +282,7 @@ void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 void GERMAN_CV_AI_302_REVISION;
 void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
+void SPANISH_CV_AI_305_REVISION;
 void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
 void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
@@ -983,14 +993,50 @@ function summaryPasses(
   if (!validateSummaryCompleteness(summary, { locale }).valid) {
     return { ok: false, reason: 'incomplete_summary' };
   }
-  const fidelity = validateLocalizedSummary(summary, factSet, {
-    locale,
-    gender: cv.personal?.gender || '',
-    expectedDuration: duration,
-    stage: 'client-final-apply',
-  });
-  if (!fidelity.valid) {
-    return { ok: false, reason: fidelity.violations[0]?.kind || 'fidelity_failed' };
+  if (locale === 'es') {
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+    const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''}`;
+    const spanishWarehouseOrDesignDomain = /(?:almac[eé]n|warehouse|mercanc[ií]a|dise[nñ]o|gr[aá]fic|visual)/iu
+      .test(dutiesCorpus)
+      || /almac[eé]n|warehouse|moz[oa]|trabajador(?:a)?\s+de\s+almac/iu
+        .test(`${primary?.position || ''} ${cv.personal?.jobTitle || ''}`);
+    if (spanishWarehouseOrDesignDomain) {
+      const empQ = analyzeSpanishSummaryEmploymentQuality(summary, {
+        company: primary?.company || '',
+        role: primary?.position || cv.personal?.jobTitle || '',
+        currentEntryDuties: entryDuties.currentEntryDuties,
+        priorEntryDuties: entryDuties.priorEntryDuties,
+        priorCompany: entryDuties.priorCompany,
+        gender: cv.personal?.gender || '',
+      });
+      if (!empQ.groundingValidationPassed) {
+        return {
+          ok: false,
+          reason: empQ.typedRejectionReason || 'spanish_summary_grounding_failed',
+        };
+      }
+    } else {
+      const fidelity = validateLocalizedSummary(summary, factSet, {
+        locale,
+        gender: cv.personal?.gender || '',
+        expectedDuration: duration,
+        stage: 'client-final-apply',
+      });
+      if (!fidelity.valid) {
+        return { ok: false, reason: fidelity.violations[0]?.kind || 'fidelity_failed' };
+      }
+    }
+  } else {
+    const fidelity = validateLocalizedSummary(summary, factSet, {
+      locale,
+      gender: cv.personal?.gender || '',
+      expectedDuration: duration,
+      stage: 'client-final-apply',
+    });
+    if (!fidelity.valid) {
+      return { ok: false, reason: fidelity.violations[0]?.kind || 'fidelity_failed' };
+    }
   }
   const grammar = validateSerbianDurationGrammar(summary, locale);
   if (!grammar.valid) {
@@ -1560,6 +1606,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     if (candidate.trim()) {
       const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
       const empQuality = analyzeGermanSummaryEmploymentQuality(candidate, {
+        company: context.company,
+        role: context.role,
+        currentEntryDuties: entryDuties.currentEntryDuties,
+        priorEntryDuties: entryDuties.priorEntryDuties,
+        priorCompany: entryDuties.priorCompany,
+        gender,
+      });
+      if (!empQuality.groundingValidationPassed) {
+        candidate = '';
+      }
+    }
+  }
+  if (locale === 'es') {
+    void SPANISH_CV_AI_305_REVISION;
+    candidate = dedupeSummarySentences(candidate);
+    if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
+      candidate = '';
+    }
+    if (candidate.trim()) {
+      const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+      const empQuality = analyzeSpanishSummaryEmploymentQuality(candidate, {
         company: context.company,
         role: context.role,
         currentEntryDuties: entryDuties.currentEntryDuties,
@@ -3257,7 +3324,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // distinct material families (creation / review-adapt / final files).
       // German warehouse: soft frames alone are insufficient — require object-
       // level coverage (incoming goods / documents / prep+movement).
+      // Spanish warehouse: same object-level coverage contract.
       void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
+      void SPANISH_CV_AI_305_REVISION;
       const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
       const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate, {
         targetLocale: locale,
@@ -3274,6 +3343,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : null;
       const deExpansion = locale === 'de'
         ? detectGermanExperienceUnsupportedExpansion(sourceForCoverage, candidate)
+        : null;
+      const needsEsWarehouse = locale === 'es'
+        && sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage);
+      const esWarehouse = needsEsWarehouse
+        ? validateSpanishWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const esExpansion = locale === 'es'
+        ? detectSpanishExperienceUnsupportedExpansion(sourceForCoverage, candidate)
         : null;
       lastRequired = semantic.requiredCount || sourceFactCount;
       lastCovered = semantic.coveredCount;
@@ -3304,6 +3381,33 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (esExpansion && esExpansion.count > 0) {
+        lastRejectStage = `${stage}:spanish_unsupported_expansion`;
+        lastRejectReason = esExpansion.labels[0] || 'unsupported_generated_duty';
+        lastUnsupportedClaimCount = esExpansion.count;
+        lastUnsupportedClaimKinds = esExpansion.kinds;
+        lastScopeExpansionDetected = esExpansion.scopeExpansionDetected;
+        generationValidationMeta = {
+          ...generationValidationMeta,
+          unsupportedClaimCount: Math.max(
+            generationValidationMeta.unsupportedClaimCount,
+            esExpansion.count,
+          ),
+        };
+        if (esWarehouse) {
+          lastRequired = esWarehouse.required.length || lastRequired;
+          lastCovered = esWarehouse.covered.length;
+          clientDeterministicFallbackUncoveredFactIds = esWarehouse.uncovered.map(
+            (id) => `es_wh_${id}`,
+          );
+          if (stage === 'provider') {
+            providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+            providerCoveredFactCount = lastCovered;
+            providerRequiredFactCount = lastRequired || Math.max(3, sourceFactCount);
+          }
+        }
+        return null;
+      }
       if (needsDeWarehouse && deWarehouse && !deWarehouse.ok) {
         lastRejectStage = `${stage}:german_warehouse_facts`;
         lastRejectReason = deWarehouse.reason || 'german_experience_warehouse_fact_coverage_incomplete';
@@ -3311,6 +3415,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastCovered = deWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = deWarehouse.uncovered.map(
           (id) => `de_wh_${id}`,
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
+      if (needsEsWarehouse && esWarehouse && !esWarehouse.ok) {
+        lastRejectStage = `${stage}:spanish_warehouse_facts`;
+        lastRejectReason = esWarehouse.reason || 'spanish_experience_warehouse_fact_coverage_incomplete';
+        lastRequired = esWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = esWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = esWarehouse.uncovered.map(
+          (id) => `es_wh_${id}`,
         );
         if (stage === 'provider') {
           providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
@@ -3336,6 +3455,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (needsDeWarehouse && deWarehouse?.ok) {
         lastRequired = deWarehouse.required.length;
         lastCovered = deWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsEsWarehouse && esWarehouse?.ok) {
+        lastRequired = esWarehouse.required.length;
+        lastCovered = esWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (semantic.ok && (!needsRuDesignFamilies || (post.ok && ruDesign?.ok))) {
         if (post.ok && (post.covered?.length || 0) > 0) {
@@ -3398,6 +3521,50 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }
           lastRequired = deWarehouse.required.length;
           lastCovered = deWarehouse.covered.length;
+          clientDeterministicFallbackUncoveredFactIds = [];
+        }
+      }
+      if (locale === 'es') {
+        void SPANISH_CV_AI_305_REVISION;
+        const esExpansion = detectSpanishExperienceUnsupportedExpansion(sourceForCoverage, candidate);
+        if (esExpansion.count > 0) {
+          lastRejectStage = `${stage}:spanish_unsupported_expansion`;
+          lastRejectReason = esExpansion.labels[0] || 'unsupported_generated_duty';
+          lastUnsupportedClaimCount = esExpansion.count;
+          lastUnsupportedClaimKinds = esExpansion.kinds;
+          lastScopeExpansionDetected = esExpansion.scopeExpansionDetected;
+          generationValidationMeta = {
+            ...generationValidationMeta,
+            unsupportedClaimCount: Math.max(
+              generationValidationMeta.unsupportedClaimCount,
+              esExpansion.count,
+            ),
+          };
+          return null;
+        }
+        if (sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage)) {
+          const esWarehouse = validateSpanishWarehouseExperienceCoverage(
+            sourceForCoverage,
+            candidate,
+          );
+          if (!esWarehouse.ok) {
+            lastRejectStage = `${stage}:spanish_warehouse_facts`;
+            lastRejectReason = esWarehouse.reason
+              || 'spanish_experience_warehouse_fact_coverage_incomplete';
+            lastRequired = esWarehouse.required.length || sourceFactCount;
+            lastCovered = esWarehouse.covered.length;
+            clientDeterministicFallbackUncoveredFactIds = esWarehouse.uncovered.map(
+              (id) => `es_wh_${id}`,
+            );
+            if (stage === 'provider') {
+              providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+              providerCoveredFactCount = lastCovered;
+              providerRequiredFactCount = lastRequired;
+            }
+            return null;
+          }
+          lastRequired = esWarehouse.required.length;
+          lastCovered = esWarehouse.covered.length;
           clientDeterministicFallbackUncoveredFactIds = [];
         }
       }
@@ -4458,6 +4625,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
         translated = normalizeLocaleText(
           buildGermanWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
+        && locale === 'es'
+        && sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage)) {
+        void SPANISH_CV_AI_305_REVISION;
+        translated = normalizeLocaleText(
+          buildSpanishWarehouseExperienceFallback({
             sourceDescription: sourceForCoverage,
             isPresent,
           }),

@@ -354,6 +354,16 @@ describe('cv-ai-diagnostics-v2 contract', () => {
       countedAsSuccess: true,
       visibleApplySucceeded: true,
       usageCountAfter: 1,
+      finalCandidateSource: 'provider',
+      providerCandidatePresent: true,
+      providerAccepted: true,
+      finalNormalizedHash: 'fnv1a_final_stable',
+      visibleTextareaMatchesFinalNormalizedHash: true,
+      visibleDescriptionMatchesFinalHash: true,
+      requiredFactCount: 0,
+      coveredFactCount: 0,
+      uncoveredFactIdentityHashes: [],
+      finalMatchesProviderOutput: true,
     });
     const trace = session.commit();
     expect(trace.diagnosticContractRevision).toBe(CV_AI_DIAGNOSTIC_CONTRACT_REVISION);

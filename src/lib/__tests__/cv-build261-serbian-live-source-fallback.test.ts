@@ -270,7 +270,10 @@ describe('build 261 — Serbian live source + client fallback', () => {
     expect(trace.providerResponseKind).toBe('fallback');
     expect(trace.apiResponseKind).toBe('fallback');
     expect(trace.serverFallbackUsed).toBe(true);
-    expect(trace.coveredFactCount).toBeLessThan(3);
+    // Provider incomplete; top-level coveredFactCount describes final selected candidate (3/3).
+    expect((trace.providerCoveredFactCount ?? 0)).toBeLessThan(3);
+    expect(trace.coveredFactCount).toBe(3);
+    expect(trace.uncoveredFactIdentityHashes || []).toEqual([]);
 
     expect(finalized.countedAsSuccess).toBe(true);
     expect(finalized.blocked).toBe(false);

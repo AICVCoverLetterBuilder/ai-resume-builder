@@ -71,6 +71,12 @@ import {
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 } from './cv-german-summary-grounding';
 import {
+  analyzeSpanishSummaryEmploymentQuality,
+  buildSpanishEntryOwnedSummary,
+  spanishWarehouseSummaryFragment,
+} from './cv-spanish-summary-grounding';
+import { SPANISH_CV_AI_305_REVISION } from './cv-spanish-experience-grounding';
+import {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
   HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
@@ -92,6 +98,7 @@ void CROATIAN_SUMMARY_CANONICAL_RECOVERY_REVISION;
 void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 void GERMAN_CV_AI_302_REVISION;
+void SPANISH_CV_AI_305_REVISION;
 void SUMMARY_BUILDER_REVISION_DE;
 void SUMMARY_GROUNDING_REVISION_DE;
 void SUMMARY_UNIT_SPLITTER_REVISION_DE;
@@ -99,6 +106,8 @@ void SUMMARY_DURATION_FINALIZER_REVISION_DE;
 void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void analyzeGermanSummaryEmploymentQuality;
 void germanWarehouseSummaryFragment;
+void analyzeSpanishSummaryEmploymentQuality;
+void spanishWarehouseSummaryFragment;
 export {
   analyzeArabicSummaryEmploymentQuality,
   buildArabicEntryOwnedSummary,
@@ -165,6 +174,15 @@ export {
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   GERMAN_SUMMARY_EMPLOYER_PREPOSITION_REVISION,
 } from './cv-german-summary-grounding';
+export {
+  analyzeSpanishSummaryEmploymentQuality,
+  buildSpanishEntryOwnedSummary,
+  spanishWarehouseSummaryFragment,
+  splitSpanishSummaryUnits,
+  formatSpanishEmployerPhrase,
+  validateSpanishSummaryIntroGrammar,
+} from './cv-spanish-summary-grounding';
+export { SPANISH_CV_AI_305_REVISION } from './cv-spanish-experience-grounding';
 export {
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
@@ -1558,6 +1576,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'ja'
     && locale !== 'hr'
     && locale !== 'de'
+    && locale !== 'es'
   ) {
     return '';
   }
@@ -1850,6 +1869,48 @@ export function buildConciseGroundedSummary(
           : `${role || 'Fachkraft'}`);
       text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
     }
+  } else if (locale === 'es') {
+    void SPANISH_CV_AI_305_REVISION;
+    void analyzeSpanishSummaryEmploymentQuality;
+    void spanishWarehouseSummaryFragment;
+    const isSpanishWarehouseDomain = /(?:warehouse|almac[eé]n|mercanc[ií]a|skladist|magacin|lager|radnic|кладов|مستودع|emplead[oa]\s+de\s+almac|trabajador(?:a)?\s+de\s+almac|moz[oa]\s+de\s+almac)/i
+      .test(`${role} ${experienceTitle} ${sourceDuties}`)
+      || dutyFacts.some((f) => classifyMaterialDutyKeys(f.sourceText || f.value)
+        .some((k) => k.startsWith('warehouse_')));
+    if (isSpanishWarehouseDomain) {
+      const esRole = /(?:warehouse|almac[eé]n|mercanc[ií]a|skladist|magacin|lager|emplead[oa]|trabajador|moz[oa])/i
+        .test(`${role} ${experienceTitle} ${sourceDuties}`)
+        ? localizeWarehouseEmployee('es', genderNorm || '')
+        : (role || localizeWarehouseEmployee('es', genderNorm || ''));
+      text = buildSpanishEntryOwnedSummary({
+        role: esRole,
+        employer,
+        datesValue,
+        gender: genderNorm || '',
+        durationPhrase: durationPhrase || undefined,
+        dutyFacts,
+        priorRole: typeof priorIndex === 'number'
+          ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+          : '',
+        priorEmployer: typeof priorIndex === 'number'
+          ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+          : '',
+        priorSourceDuties,
+        locale: 'es',
+      });
+      skillSentence = '';
+      void skillSentence;
+    } else {
+      const dutyJoin = joinDutyFragments(uniqueFragments, locale);
+      const open = dutyJoin
+        ? (durationPhrase
+          ? `${role || 'Profesional'} ${durationPhrase} en ${dutyJoin}`
+          : `${role || 'Profesional'} en ${dutyJoin}`)
+        : (durationPhrase
+          ? `${role || 'Profesional'} ${durationPhrase}`
+          : `${role || 'Profesional'}`);
+      text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    }
   } else if (locale === 'sr') {
     const dutyJoin = joinDutyFragments(uniqueFragments, locale);
     const open = dutyJoin
@@ -1921,7 +1982,7 @@ export function buildConciseGroundedSummary(
     // Keep them in the same sentence — never start a new sentence after a period.
     const dutyConnector =
       locale === 'it' ? 'in'
-        : locale === 'es' || locale === 'pt-BR' ? 'en'
+        : locale === 'pt-BR' ? 'en'
           : locale === 'fr' ? 'dans'
             : locale === 'ar' ? 'في'
               : '';

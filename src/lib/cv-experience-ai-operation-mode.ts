@@ -577,6 +577,42 @@ function domainShells(
     ];
   }
 
+  if (locale === 'es' && domain === 'warehouse') {
+    if (present) {
+      return [
+        'Revisa la mercancía entrante.',
+        'Comprueba la documentación relacionada.',
+        'Coordina con sus compañeros la preparación y el movimiento de la mercancía.',
+      ];
+    }
+    return [
+      'Revisó la mercancía entrante.',
+      'Comprobó la documentación relacionada.',
+      'Coordinó con sus compañeros la preparación y el movimiento de la mercancía.',
+    ];
+  }
+
+  if (locale === 'es' && domain === 'design') {
+    if (present) {
+      return female
+        ? [
+          'Crea materiales visuales y elementos gráficos para proyectos digitales.',
+          'Revisa y adapta materiales de diseño según los requisitos del proyecto.',
+          'Prepara archivos finales de diseño y los ajusta a distintos formatos y pantallas.',
+        ]
+        : [
+          'Crea materiales visuales y elementos gráficos para proyectos digitales.',
+          'Revisa y adapta materiales de diseño según los requisitos del proyecto.',
+          'Prepara archivos finales de diseño y los ajusta a distintos formatos y pantallas.',
+        ];
+    }
+    return [
+      'Creó materiales visuales y elementos gráficos para proyectos digitales.',
+      'Revisó y adaptó materiales de diseño según los requisitos del proyecto.',
+      'Preparó archivos finales de diseño y los ajustó a distintos formatos y pantallas.',
+    ];
+  }
+
   return null;
 }
 

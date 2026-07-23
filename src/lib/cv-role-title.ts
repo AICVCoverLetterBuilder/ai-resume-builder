@@ -167,7 +167,7 @@ export function foldLatinDiacritics(value: string): string {
  * Prefer matchesWarehouseOccupationalTitle so diacritic folding is always applied.
  */
 const WAREHOUSE_TITLE_CORE_RE =
-  /(?:warehouse\s*(?:employee|worker|operator|associate)?|\bwarehouse\b|倉庫作業員|倉庫|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर))?|موظف(?:ة)?\s*مستودع|кладовщ(?:иц[аыуе]|ик(?:а|ом|у)?)?|skladistar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|radni(?:k|ca)\s+u\s+(?:magacinu|skladistu)|u\s+skladistu)/iu;
+  /(?:warehouse\s*(?:employee|worker|operator|associate)?|\bwarehouse\b|倉庫作業員|倉庫|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर))?|موظف(?:ة)?\s*مستودع|кладовщ(?:иц[аыуе]|ик(?:а|ом|у)?)?|skladistar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|lagermitarbeiter(?:in)?|radni(?:k|ca)\s+u\s+(?:magacinu|skladistu)|u\s+skladistu|emplead[oa]\s+de\s+almac[eé]n|trabajador(?:a)?\s+de\s+almac[eé]n|moz[oa]\s+de\s+almac[eé]n|\balmac[eé]n\b)/iu;
 
 /** True when title/blob denotes warehouse/logistics work (diacritic-aware). */
 export function matchesWarehouseOccupationalTitle(text: string): boolean {
@@ -180,7 +180,7 @@ export function matchesWarehouseOccupationalTitle(text: string): boolean {
 
 /** Devanagari/Latin warehouse duty cues — never use ASCII `\\b` around माल. */
 const WAREHOUSE_DUTY_CUE_RE =
-  /(?:warehouse|倉庫|入荷|商品|वेयरहाウス|गोदाम|magacin|skladist|skladišt|incoming\s+goods|माल|товар|склад|кладов|بضائع|مستودع)/iu;
+  /(?:warehouse|倉庫|入荷|商品|वेयरहाウス|गोदाम|magacin|skladist|skladišt|incoming\s+goods|माल|товар|склад|кладов|بضائع|مستودع|almac[eé]n|mercanc[ií]a)/iu;
 
 const BAKER_TITLE_RE =
   /(?:^|[^a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ])(baker|bäcker(?:in)?|boulanger(?:e)?|panader[oa]|panettier[ae]|padeir[oa]|пекар(?:ка)?|pekar(?:ka)?)(?:[^a-zA-Zа-яА-ЯčćžšđČĆŽŠĐ]|$)|बेकर|خباز|ベイカー/iu;

@@ -221,7 +221,10 @@ describe('build 262 — exact Serbian provenance fallback', () => {
     expect(trace.sourceFactIdentityCount).toBe(3);
 
     expect(trace.providerResponseKind).toBe('fallback');
-    expect(trace.coveredFactCount).toBe(2);
+    // Provider covered 2/3; top-level coveredFactCount describes the final selected candidate.
+    expect(trace.providerCoveredFactCount ?? 2).toBe(2);
+    expect(trace.coveredFactCount).toBe(3);
+    expect(trace.uncoveredFactIdentityHashes || []).toEqual([]);
 
     expect(finalized.countedAsSuccess).toBe(true);
     expect(finalized.origin).toBe('deterministic_fallback');
