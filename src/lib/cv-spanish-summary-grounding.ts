@@ -548,6 +548,7 @@ export type SpanishSummaryEmploymentQuality = {
   currentIntroSlotPresent: boolean;
   currentDutySlotPresent: boolean;
   priorRoleSlotPresent: boolean;
+  slotRejectionReasons: string[];
   summaryGroundingRevision: typeof SPANISH_SUMMARY_GROUNDING_306_REVISION;
 };
 
@@ -748,11 +749,20 @@ export function analyzeSpanishSummaryEmploymentQuality(
   const grammarValidationPassed = introGrammar.ok && !hasGenericSkillsUnit;
   // Slot requirements are derived from the authoritative snapshot before validation.
   // A missing required prior slot can never pass slot validation.
-  const slotValidationPassed = (
-    (!warehouseDomain || (currentIntroSlotPresent && currentDutySlotPresent))
-    && (!priorSlotRequired || priorRoleSlotPresent)
-    && !slots.includes('skills')
-  );
+  const slotRejectionReasons: string[] = [];
+  if (warehouseDomain && !currentIntroSlotPresent) {
+    slotRejectionReasons.push('spanish_summary_missing_current_intro_slot');
+  }
+  if (warehouseDomain && !currentDutySlotPresent) {
+    slotRejectionReasons.push('spanish_summary_missing_current_duty_slot');
+  }
+  if (priorSlotRequired && !priorRoleSlotPresent) {
+    slotRejectionReasons.push('spanish_summary_missing_prior_role_slot');
+  }
+  if (slots.includes('skills')) {
+    slotRejectionReasons.push('spanish_summary_generic_skills_unit');
+  }
+  const slotValidationPassed = slotRejectionReasons.length === 0;
   const groundingOk = reason == null
     && grammarValidationPassed
     && slotValidationPassed
@@ -797,8 +807,15 @@ export function analyzeSpanishSummaryEmploymentQuality(
     currentIntroSlotPresent,
     currentDutySlotPresent,
     priorRoleSlotPresent,
+    slotRejectionReasons,
     summaryGroundingRevision: SPANISH_SUMMARY_GROUNDING_306_REVISION,
   };
+}
+
+/** Test-only: omit prior-role unit to exercise fail-closed diagnostics. */
+let omitSpanishPriorRoleSlotForTests = false;
+export function setOmitSpanishPriorRoleSlotForTests(value: boolean): void {
+  omitSpanishPriorRoleSlotForTests = Boolean(value);
 }
 
 export function buildSpanishEntryOwnedSummary(options: {
@@ -900,7 +917,7 @@ export function buildSpanishEntryOwnedSummary(options: {
     priorDuties,
   });
   let priorSentence = '';
-  if (priorRequired || priorLooksDesign) {
+  if (!omitSpanishPriorRoleSlotForTests && (priorRequired || priorLooksDesign)) {
     if (priorLooksDesign) {
       const priorLabel = unspecified
         ? 'diseño gráfico'

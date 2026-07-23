@@ -7,6 +7,9 @@ import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
 import { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION } from './cv-summary-final-candidate-diagnostics-306';
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
 export { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION } from './cv-summary-final-candidate-diagnostics-306';
+import { SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION } from './cv-summary-localized-failure-diagnostics-307';
+void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
+export { SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION } from './cv-summary-localized-failure-diagnostics-307';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { CVData } from './types';
 import {
@@ -613,11 +616,20 @@ export class SummaryAiDiagnosticSession {
       && detectorAgreement
       && diag.durationValidationPassed !== false
     );
-    // Never report idempotent/PASS when visible text has ≠ 1 duration claim.
-    // Prefer finalize-computed double-pass idempotence when present.
-    const durationFinalizerIdempotent = typeof diag.durationFinalizerIdempotent === 'boolean'
-      ? diag.durationFinalizerIdempotent && durationValidationPassed && after === 1
-      : durationValidationPassed && after === 1;
+    // Never report idempotent/PASS when visible text has ≠ 1 duration claim —
+    // except equal pass hashes with no second-pass change remain truthful.
+    void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
+    const passHashesEqual = Boolean(
+      diag.durationPass1CandidateHash
+      && diag.durationPass2CandidateHash
+      && diag.durationPass1CandidateHash === diag.durationPass2CandidateHash
+      && diag.durationSecondPassChanged === false,
+    );
+    const durationFinalizerIdempotent = passHashesEqual
+      ? true
+      : (typeof diag.durationFinalizerIdempotent === 'boolean'
+        ? diag.durationFinalizerIdempotent && durationValidationPassed && after === 1
+        : durationValidationPassed && after === 1);
     const sentenceCount = text ? text.split(/[.!?।]/u).filter((s) => s.trim()).length : 0;
     const finalHashesFromDiag = Array.isArray(diag.finalSentenceHashes)
       ? diag.finalSentenceHashes.filter(Boolean)
@@ -641,12 +653,22 @@ export class SummaryAiDiagnosticSession {
         ? Array.from({ length: resolvedFinalUnitCount }, () => 'summary_unit')
         : []);
     void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
+    void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
+    // "Applied" means visibly accepted — never merely selected for validation.
     const fallbackApplied = Boolean(
-      finalized.origin === 'deterministic_fallback' || diag.fallbackApplied,
+      finalized.countedAsSuccess
+      && !finalized.blocked
+      && (
+        finalized.origin === 'deterministic_fallback'
+        || diag.fallbackApplied
+      ),
     );
     const fallbackAttempted = Boolean(
-      diag.fallbackApplied
-      || diag.clientDeterministicFallbackAttempted
+      diag.clientDeterministicFallbackAttempted
+      || diag.fallbackCandidatePresent
+      || diag.deterministicCandidatePresent
+      || finalized.origin === 'deterministic_fallback'
+      || diag.fallbackApplied
       || fallbackApplied,
     );
     // Prefer stage-specific counts from finalize — never alias provider as fallback.
@@ -718,7 +740,15 @@ export class SummaryAiDiagnosticSession {
         ?? this.draft.requestedLocale
         ?? null,
       finalContentLocaleAfterApply: diag.finalContentLocaleAfterApply ?? null,
-      finalCandidateSource: diag.finalCandidateSource ?? finalized.origin ?? null,
+      finalCandidateSource: (() => {
+        void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
+        if (finalized.countedAsSuccess && !finalized.blocked) {
+          return diag.finalCandidateSource ?? finalized.origin ?? null;
+        }
+        // Terminal failure — never label a rejected deterministic attempt as final.
+        if (diag.finalCandidateSource === 'none') return 'none';
+        return 'none';
+      })(),
       providerCandidatePresent: Boolean(diag.providerCandidatePresent),
       deterministicCandidatePresent: Boolean(
         diag.deterministicCandidatePresent
@@ -874,39 +904,62 @@ export class SummaryAiDiagnosticSession {
       finalUnsupportedDesignMediumKinds: diag.finalUnsupportedDesignMediumKinds ?? null,
       cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
       summaryNoopSuccessContractRevision: diag.summaryNoopSuccessContractRevision ?? null,
-      hindiCurrentIntroFiniteVerbPresent: diag.hindiCurrentIntroFiniteVerbPresent ?? null,
-      hindiCurrentIntroCopulaPresent: diag.hindiCurrentIntroCopulaPresent
-        ?? diag.hindiCurrentIntroFiniteVerbPresent
-        ?? null,
-      hindiCurrentDutyFiniteVerbPresent: diag.hindiCurrentDutyFiniteVerbPresent ?? null,
-      hindiCurrentDutyAuxiliaryPresent: diag.hindiCurrentDutyAuxiliaryPresent ?? null,
-      hindiPriorRoleFiniteVerbPresent: diag.hindiPriorRoleFiniteVerbPresent ?? null,
-      hindiStandaloneJahanFragmentDetected: diag.hindiStandaloneJahanFragmentDetected ?? null,
-      hindiNominalExperienceFragmentDetected: diag.hindiNominalExperienceFragmentDetected ?? null,
-      hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb ?? null,
-      hindiIncompleteSentenceCount: diag.hindiIncompleteSentenceCount ?? null,
+      hindiCurrentIntroFiniteVerbPresent: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiCurrentIntroFiniteVerbPresent ?? null)
+        : null,
+      hindiCurrentIntroCopulaPresent: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiCurrentIntroCopulaPresent
+          ?? diag.hindiCurrentIntroFiniteVerbPresent
+          ?? null)
+        : null,
+      hindiCurrentDutyFiniteVerbPresent: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiCurrentDutyFiniteVerbPresent ?? null)
+        : null,
+      hindiCurrentDutyAuxiliaryPresent: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiCurrentDutyAuxiliaryPresent ?? null)
+        : null,
+      hindiPriorRoleFiniteVerbPresent: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiPriorRoleFiniteVerbPresent ?? null)
+        : null,
+      hindiStandaloneJahanFragmentDetected: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiStandaloneJahanFragmentDetected ?? null)
+        : null,
+      hindiNominalExperienceFragmentDetected: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiNominalExperienceFragmentDetected ?? null)
+        : null,
+      hindiSentenceHasFiniteCopulaOrVerb: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiSentenceHasFiniteCopulaOrVerb ?? null)
+        : null,
+      hindiIncompleteSentenceCount: this.draft.requestedLocale === 'hi'
+        ? (diag.hindiIncompleteSentenceCount ?? null)
+        : null,
       hindiGrammarRejectionReason: (() => {
+        if (this.draft.requestedLocale !== 'hi') return null;
         const raw = diag.hindiGrammarRejectionReason ?? null;
         return raw && isGrammarRejectionCategory(raw) ? raw : null;
       })(),
-      hindiGrammarRejectionReasons: dedupeStableStrings(
-        (diag.hindiGrammarRejectionReasons
-          ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []))
-          .filter((r) => isGrammarRejectionCategory(r)),
-      ),
-      hindiSentenceGrammarRecords: buildHindiSentenceGrammarRecords({
-        sentenceHashes: diag.finalSentenceHashes,
-        sentenceRoleSlots: diag.finalSentenceRoleSlots ?? diag.finalUnitRoleSlots,
-        hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb,
-        hindiNominalExperienceFragmentDetected: diag.hindiNominalExperienceFragmentDetected,
-        hindiStandaloneJahanFragmentDetected: diag.hindiStandaloneJahanFragmentDetected,
-        hindiGrammarRejectionReason: (
-          diag.hindiGrammarRejectionReason
-          && isGrammarRejectionCategory(diag.hindiGrammarRejectionReason)
-        ) ? diag.hindiGrammarRejectionReason : null,
-        hindiCurrentIntroFiniteVerbPresent: diag.hindiCurrentIntroFiniteVerbPresent,
-        hindiCurrentDutyAuxiliaryPresent: diag.hindiCurrentDutyAuxiliaryPresent,
-      }),
+      hindiGrammarRejectionReasons: this.draft.requestedLocale === 'hi'
+        ? dedupeStableStrings(
+          (diag.hindiGrammarRejectionReasons
+            ?? (diag.hindiGrammarRejectionReason ? [diag.hindiGrammarRejectionReason] : []))
+            .filter((r) => isGrammarRejectionCategory(r)),
+        )
+        : [],
+      hindiSentenceGrammarRecords: (this.draft.requestedLocale === 'hi')
+        ? buildHindiSentenceGrammarRecords({
+          sentenceHashes: diag.finalSentenceHashes,
+          sentenceRoleSlots: diag.finalSentenceRoleSlots ?? diag.finalUnitRoleSlots,
+          hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb,
+          hindiNominalExperienceFragmentDetected: diag.hindiNominalExperienceFragmentDetected,
+          hindiStandaloneJahanFragmentDetected: diag.hindiStandaloneJahanFragmentDetected,
+          hindiGrammarRejectionReason: (
+            diag.hindiGrammarRejectionReason
+            && isGrammarRejectionCategory(diag.hindiGrammarRejectionReason)
+          ) ? diag.hindiGrammarRejectionReason : null,
+          hindiCurrentIntroFiniteVerbPresent: diag.hindiCurrentIntroFiniteVerbPresent,
+          hindiCurrentDutyAuxiliaryPresent: diag.hindiCurrentDutyAuxiliaryPresent,
+        })
+        : [],
       providerHindiNominalExperienceFragmentDetected:
         diag.providerHindiNominalExperienceFragmentDetected ?? null,
       providerHindiSentenceHasFiniteCopulaOrVerb:
@@ -942,12 +995,18 @@ export class SummaryAiDiagnosticSession {
       serverFallbackReason: diag.serverFallbackReason ?? null,
       clientFallbackUsed: Boolean(
         diag.clientFallbackUsed
-        || finalized.origin === 'deterministic_fallback'
-        || diag.noOpDetected,
+        || diag.noOpDetected
+        || (
+          finalized.countedAsSuccess
+          && !finalized.blocked
+          && finalized.origin === 'deterministic_fallback'
+        ),
       ),
       clientFallbackKind: diag.clientFallbackKind
         ?? (
-          (diag.clientFallbackUsed || finalized.origin === 'deterministic_fallback')
+          (diag.clientFallbackUsed
+            || diag.noOpDetected
+            || (finalized.countedAsSuccess && finalized.origin === 'deterministic_fallback'))
             ? 'deterministic'
             : null
         ),
@@ -1126,9 +1185,23 @@ export class SummaryAiDiagnosticSession {
               : (diag.finalSentenceRoleSlots || diag.finalUnitRoleSlots || []))
             : [],
           accepted: detAccepted,
-          rejectionStage: detNoOp ? 'meaningful_change' : null,
+          rejectionStage: detAccepted
+            ? null
+            : (detNoOp
+              ? 'meaningful_change'
+              : (diag.rejectionStage
+                || (diag.slotValidationPassed === false ? 'slot_validation' : null)
+                || (groundingValidationPassed === false ? 'summary_grounding' : null)
+                || (detPresent ? 'summary_grounding' : null))),
           rejectionReasons: dedupeStableStrings(
-            detNoOp ? ['summary_noop_after_normalization'] : [],
+            detAccepted
+              ? []
+              : [
+                ...(detNoOp ? ['summary_noop_after_normalization'] : []),
+                ...(diag.slotRejectionReasons ?? []),
+                ...(diag.typedFailureReason ? [diag.typedFailureReason] : []),
+                ...(finalized.reason && !finalized.countedAsSuccess ? [finalized.reason] : []),
+              ].filter(Boolean),
           ),
           grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'
             ? diag.grammarValidationPassed
@@ -1290,9 +1363,20 @@ export class SummaryAiDiagnosticSession {
       finalPostconditionsPassed: ok && durationStillOk
         ? this.draft.finalPostconditionsPassed
         : false,
-      durationFinalizerIdempotent: ok && durationStillOk
-        ? this.draft.durationFinalizerIdempotent
-        : false,
+      // Duration idempotence is independent of visible apply success.
+      durationFinalizerIdempotent: (() => {
+        void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
+        const passHashesEqual = Boolean(
+          this.draft.durationPass1CandidateHash
+          && this.draft.durationPass2CandidateHash
+          && this.draft.durationPass1CandidateHash === this.draft.durationPass2CandidateHash
+          && this.draft.durationSecondPassChanged === false,
+        );
+        if (passHashesEqual) return true;
+        return ok && durationStillOk
+          ? this.draft.durationFinalizerIdempotent
+          : this.draft.durationFinalizerIdempotent;
+      })(),
       countedAsSuccess: ok && durationStillOk,
     });
     this.stage('visible_apply', ok && durationStillOk ? 'ok' : 'fail');

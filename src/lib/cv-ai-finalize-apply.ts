@@ -106,6 +106,11 @@ import {
 } from './cv-summary-final-candidate-diagnostics-306';
 export { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION };
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
+import {
+  SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION,
+} from './cv-summary-localized-failure-diagnostics-307';
+export { SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION };
+void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
 import { fingerprintText } from './cv-export-diagnostics';
 import {
   deterministicLocalizedBulletsFromCanonical,
@@ -261,6 +266,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
+  SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
   EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
 ] as const;
@@ -301,6 +307,7 @@ void SPANISH_CV_AI_305_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
+void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
 void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
 void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
@@ -1866,10 +1873,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     let durationFinalizerIdempotent = durationValidationPassed;
     let localPass2Hash = durationPass2CandidateHash;
     if (
-      (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr')
+      (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
       && analyzedText.trim()
       && durationSnapshot.total.hasValidDates
     ) {
+      void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
       const secondPass = resolveSummaryWithDurationPolicy(
         analyzedText,
         durationSnapshot.total,
@@ -1884,7 +1892,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const before = normalizeForIdempotence(analyzedText);
       const after = normalizeForIdempotence(secondPass.summary);
       const analysisPassChanged = before !== after;
-      durationFinalizerIdempotent = !analysisPassChanged;
+      // Prefer rebuild pass hashes when already recorded — do not fail closed
+      // solely because a tertiary analysis pass rewrites whitespace/punctuation.
+      if (
+        durationPass1CandidateHash
+        && durationPass2CandidateHash
+        && durationPass1CandidateHash === durationPass2CandidateHash
+        && durationSecondPassChanged === false
+      ) {
+        durationFinalizerIdempotent = true;
+      } else {
+        durationFinalizerIdempotent = !analysisPassChanged;
+      }
       // Do not overwrite rebuild pass hashes with a third analysis pass when
       // rebuild already recorded truthful pass1/pass2. Only fill gaps.
       if (durationPass1CandidateHash == null) {
@@ -1896,13 +1915,31 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       // Always keep the changed flag truthful against the latest observed mutation.
       if (analysisPassChanged) {
-        durationSecondPassChanged = true;
-        durationSecondPassChangeReason = durationSecondPassChangeReason
-          || 'duration_finalizer_mutated_candidate';
+        if (!(
+          durationPass1CandidateHash
+          && durationPass2CandidateHash
+          && durationPass1CandidateHash === durationPass2CandidateHash
+          && durationSecondPassChanged === false
+        )) {
+          durationSecondPassChanged = true;
+          durationSecondPassChangeReason = durationSecondPassChangeReason
+            || 'duration_finalizer_mutated_candidate';
+        }
       } else if (durationSecondPassChanged == null) {
         durationSecondPassChanged = false;
         durationSecondPassChangeReason = null;
       }
+    }
+    // Equal normalized pass hashes + no second-pass change ⇒ idempotent,
+    // independent of visible apply success.
+    if (
+      durationPass1CandidateHash
+      && durationPass2CandidateHash
+      && durationPass1CandidateHash === durationPass2CandidateHash
+      && durationSecondPassChanged === false
+    ) {
+      void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
+      durationFinalizerIdempotent = true;
     }
     const blockedForDuration = Boolean(
       result.countedAsSuccess && (!durationValidationPassed || !durationFinalizerIdempotent),
@@ -1977,13 +2014,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         contentLocaleBeforeRequest: cv.contentLocale || null,
         contentLocaleAfterApply: success ? locale : (cv.contentLocale || null),
         finalContentLocaleAfterApply: success ? locale : null,
-        finalCandidateSource: result.origin,
+        finalCandidateSource: success
+          ? result.origin
+          : 'none',
         providerCandidatePresent: Boolean((input.candidate || '').trim()),
         deterministicCandidatePresent: Boolean(deterministicCandidateRaw.trim())
           || result.origin === 'deterministic_fallback'
           || deterministicNoOpDetected,
         fallbackCandidatePresent: result.origin === 'deterministic_fallback'
-          || deterministicNoOpDetected,
+          || deterministicNoOpDetected
+          || Boolean(deterministicCandidateRaw.trim()),
+        fallbackApplied: Boolean(
+          success && result.origin === 'deterministic_fallback',
+        ),
         providerSentenceCount: providerCandidateSentenceCount,
         providerSentenceHashes,
         apiResponseKind: providerRaw.trim() ? 'provider' : (providerCandidateSentenceCount ? 'provider' : 'empty'),
@@ -2041,8 +2084,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         })(),
         clientRepairAttempted: Boolean(summaryRepairAttempted),
         clientFallbackUsed: Boolean(
-          clientFallbackUsed
-          || result.origin === 'deterministic_fallback'
+          (success && (
+            clientFallbackUsed
+            || result.origin === 'deterministic_fallback'
+          ))
           || deterministicNoOpDetected,
         ),
         clientFallbackKind: (

@@ -314,6 +314,13 @@ const SUMMARY_GROUNDING_FAILED: MsgMap = {
   hi: 'सारांश आपके अनुभव पर आधारित नहीं हो सका और लागू नहीं किया गया।',
   de: 'Die Zusammenfassung konnte nicht an Ihre Erfahrung gebunden werden und wurde nicht übernommen.',
   ja: '要約を職歴に根拠付けできなかったため適用されませんでした。',
+  hr: 'Sažetak nije bilo moguće utemeljiti u vaše iskustvo i nije primijenjen.',
+  es: 'No se pudo generar un resumen basado fielmente en tu experiencia, por lo que no se aplicó ningún cambio.',
+  fr: 'Le résumé n’a pas pu être ancré dans votre expérience et n’a pas été appliqué.',
+  it: 'Il riepilogo non è stato ancorato alla tua esperienza e non è stato applicato.',
+  ar: 'تعذّر تأسيس الملخص على خبرتك ولم يُطبَّق.',
+  ru: 'Не удалось обосновать резюме вашим опытом — изменения не применены.',
+  'pt-BR': 'O resumo não pôde ser fundamentado na sua experiência e não foi aplicado.',
 };
 
 const SUMMARY_REWRITE_FAILED: MsgMap = {
