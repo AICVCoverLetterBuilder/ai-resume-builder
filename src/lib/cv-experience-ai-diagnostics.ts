@@ -30,13 +30,20 @@ import {
   classifyApiHostClass,
   CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
   CV_AI_DIAGNOSTICS_V2_299_REVISION,
+  EXPERIENCE_AI_DIAG_MARKER,
+  EXPERIENCE_DIAGNOSTIC_MARKER_302_REVISION,
   maybeTruncateDiagnosticPayload,
+  sanitizeCvAiDiagnosticMarkerPatch,
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
 import {
   emitCvAiDiagnosticsChanged,
   EXPERIENCE_AI_DIAG_STORAGE_KEY as EXPERIENCE_AI_DIAG_STORAGE_KEY_CANON,
 } from './cv-ai-diagnostics-lifecycle';
+
+/** Retain for AAB asset verification (must survive minification). */
+void EXPERIENCE_DIAGNOSTIC_MARKER_302_REVISION;
+void EXPERIENCE_AI_DIAG_MARKER;
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const EXPERIENCE_AI_DIAG_STORAGE_KEY = EXPERIENCE_AI_DIAG_STORAGE_KEY_CANON;
@@ -670,7 +677,7 @@ export class ExperienceAiDiagnosticSession {
     const requestIdHash = hashRequestId(input.requestId);
     this.draft = {
       schemaVersion: EXPERIENCE_AI_TRACE_SCHEMA_VERSION,
-      marker: '',
+      marker: EXPERIENCE_AI_DIAG_MARKER,
       capturedAt: new Date().toISOString(),
       appVersionCode: null,
       appVersionName: null,
@@ -892,7 +899,14 @@ export class ExperienceAiDiagnosticSession {
   }
 
   patch(partial: Partial<ExperienceAiDiagnosticTrace>): void {
-    Object.assign(this.draft, partial);
+    const { marker: _ignoredMarker, ...safe } = partial;
+    Object.assign(this.draft, safe);
+    const markerPatch = sanitizeCvAiDiagnosticMarkerPatch('experience', partial);
+    if (markerPatch.marker) this.draft.marker = markerPatch.marker;
+    // Stable Experience marker is local-owned; never accept empty/foreign markers.
+    if (!this.draft.marker || this.draft.marker !== EXPERIENCE_AI_DIAG_MARKER) {
+      this.draft.marker = EXPERIENCE_AI_DIAG_MARKER;
+    }
   }
 
   recordLiveExperience(_exp: WorkExperience, isPresent: boolean): void {
@@ -1613,11 +1627,12 @@ export class ExperienceAiDiagnosticSession {
     const base = {
       ...this.draft,
       stages: [...this.stages],
-      marker: '',
       ...identity,
       diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
       cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
       operationKind: 'experience' as const,
+      // Local-owned stable marker — never leave empty after metadata merges.
+      marker: EXPERIENCE_AI_DIAG_MARKER,
       visibleDescriptionMatchesFinalHash:
         this.draft.visibleTextareaMatchesFinalNormalizedHash ?? null,
     };

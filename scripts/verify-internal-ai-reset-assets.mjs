@@ -151,6 +151,9 @@ const CLEAR_HISTORY_LABEL = 'Clear diagnostic history';
 const EXPERIENCE_AI_NOOP_RECOVERY = 'experience-ai-noop-recovery-293-v1';
 const EXPERIENCE_AI_UNSUPPORTED_EXPANSION = 'experience-ai-unsupported-expansion-295-v1';
 const EXPERIENCE_TITLE_PROJECTION = 'experience-title-projection-296-v1';
+const EXPERIENCE_AI_DIAG_MARKER = 'EXPERIENCE_AI_DIAG_V1';
+const SUMMARY_AI_DIAG_MARKER = 'SUMMARY_AI_DIAG_V1';
+const EXPERIENCE_DIAGNOSTIC_MARKER_302 = 'experience-diagnostic-marker-302-v1';
 for (const marker of [
   SUMMARY_RUNTIME_REVISION_HI,
   SUMMARY_RUNTIME_REVISION,
@@ -197,6 +200,9 @@ for (const marker of [
   EXPERIENCE_AI_NOOP_RECOVERY,
   EXPERIENCE_AI_UNSUPPORTED_EXPANSION,
   EXPERIENCE_TITLE_PROJECTION,
+  EXPERIENCE_AI_DIAG_MARKER,
+  SUMMARY_AI_DIAG_MARKER,
+  EXPERIENCE_DIAGNOSTIC_MARKER_302,
 ]) {
   if (!blob.includes(marker)) {
     fail(`missing Summary runtime revision marker "${marker}"`);

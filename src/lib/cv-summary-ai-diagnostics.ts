@@ -25,6 +25,8 @@ import {
   dedupeStableStrings,
   isGrammarRejectionCategory,
   maybeTruncateDiagnosticPayload,
+  sanitizeCvAiDiagnosticMarkerPatch,
+  SUMMARY_AI_DIAG_MARKER,
   type CvAiCandidateLineageRecord,
 } from './cv-ai-diagnostics-contract';
 import { INTERNAL_AI_RESET_ENABLED } from './build-channel';
@@ -33,6 +35,8 @@ import {
   emitCvAiDiagnosticsChanged,
   SUMMARY_AI_DIAG_STORAGE_KEY as SUMMARY_AI_DIAG_STORAGE_KEY_CANON,
 } from './cv-ai-diagnostics-lifecycle';
+
+void SUMMARY_AI_DIAG_MARKER;
 
 export const SUMMARY_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const SUMMARY_AI_DIAG_STORAGE_KEY = SUMMARY_AI_DIAG_STORAGE_KEY_CANON;
@@ -347,7 +351,7 @@ export class SummaryAiDiagnosticSession {
   constructor(input: SummaryAiDiagSessionInput) {
     this.draft = {
       schemaVersion: SUMMARY_AI_TRACE_SCHEMA_VERSION,
-      marker: '',
+      marker: SUMMARY_AI_DIAG_MARKER,
       capturedAt: new Date().toISOString(),
       appVersionCode: null,
       appVersionName: null,
@@ -532,7 +536,13 @@ export class SummaryAiDiagnosticSession {
   }
 
   patch(partial: Partial<SummaryAiDiagnosticTrace>): void {
-    Object.assign(this.draft, partial);
+    const { marker: _ignoredMarker, ...safe } = partial;
+    Object.assign(this.draft, safe);
+    const markerPatch = sanitizeCvAiDiagnosticMarkerPatch('summary', partial);
+    if (markerPatch.marker) this.draft.marker = markerPatch.marker;
+    if (!this.draft.marker || this.draft.marker !== SUMMARY_AI_DIAG_MARKER) {
+      this.draft.marker = SUMMARY_AI_DIAG_MARKER;
+    }
   }
 
   recordCvSnapshot(cv: CVData, liveSummary: string): void {
@@ -1266,11 +1276,11 @@ export class SummaryAiDiagnosticSession {
     const base = {
       ...this.draft,
       stages: this.stages,
-      marker: 'SUMMARY_AI_DIAG_V1',
       ...identity,
       diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
       cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
       operationKind: 'summary' as const,
+      marker: SUMMARY_AI_DIAG_MARKER,
     };
     const invariants = checkSummaryDiagnosticInvariants(
       base as Parameters<typeof checkSummaryDiagnosticInvariants>[0],

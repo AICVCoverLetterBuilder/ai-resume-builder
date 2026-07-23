@@ -15,14 +15,88 @@ export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as cons
 export const CV_AI_DIAGNOSTIC_BUNDLE_MARKER = 'cv-ai-diagnostics-v2' as const;
 /** AAB-299 packaging proof marker for the v2 diagnostics contract. */
 export const CV_AI_DIAGNOSTICS_V2_299_REVISION = 'cv-ai-diagnostics-v2-299-v1' as const;
+/** Stable per-operation diagnostic schema markers (Copy / persist / completeness). */
+export const SUMMARY_AI_DIAG_MARKER = 'SUMMARY_AI_DIAG_V1' as const;
+export const EXPERIENCE_AI_DIAG_MARKER = 'EXPERIENCE_AI_DIAG_V1' as const;
+/** AAB-302 packaging proof: Experience marker must never be empty or overwritten. */
+export const EXPERIENCE_DIAGNOSTIC_MARKER_302_REVISION =
+  'experience-diagnostic-marker-302-v1' as const;
 void CV_AI_DIAGNOSTIC_CONTRACT_REVISION;
 void CV_AI_DIAGNOSTIC_BUNDLE_MARKER;
 void CV_AI_DIAGNOSTICS_V2_299_REVISION;
+void SUMMARY_AI_DIAG_MARKER;
+void EXPERIENCE_AI_DIAG_MARKER;
+void EXPERIENCE_DIAGNOSTIC_MARKER_302_REVISION;
 
 /** Soft byte budget for copied diagnostic JSON (UTF-16 code units ≈ bytes for ASCII). */
 export const CV_AI_DIAGNOSTIC_MAX_PAYLOAD_CHARS = 120_000;
 
 export type CvAiDiagnosticOperationKind = 'experience' | 'summary';
+
+export function expectedCvAiDiagnosticMarker(
+  operationKind: CvAiDiagnosticOperationKind | string | null | undefined,
+): typeof SUMMARY_AI_DIAG_MARKER | typeof EXPERIENCE_AI_DIAG_MARKER | null {
+  if (operationKind === 'summary') return SUMMARY_AI_DIAG_MARKER;
+  if (operationKind === 'experience') return EXPERIENCE_AI_DIAG_MARKER;
+  return null;
+}
+
+/**
+ * Validate operation-kind-aware diagnostic `marker`.
+ * Empty / whitespace / null / wrong-kind markers fail completeness.
+ */
+export function validateCvAiDiagnosticMarkerField(
+  trace: Record<string, unknown>,
+): {
+  ok: boolean;
+  missingRequiredDiagnosticFields: string[];
+  nullRequiredDiagnosticFields: string[];
+} {
+  const missing: string[] = [];
+  const nullish: string[] = [];
+  if (!('marker' in trace)) {
+    missing.push('marker');
+    return { ok: false, missingRequiredDiagnosticFields: missing, nullRequiredDiagnosticFields: nullish };
+  }
+  const raw = trace.marker;
+  if (raw === null || raw === undefined) {
+    nullish.push('marker');
+    return { ok: false, missingRequiredDiagnosticFields: missing, nullRequiredDiagnosticFields: nullish };
+  }
+  if (typeof raw !== 'string') {
+    nullish.push('invalid_marker');
+    return { ok: false, missingRequiredDiagnosticFields: missing, nullRequiredDiagnosticFields: nullish };
+  }
+  if (!raw.trim()) {
+    nullish.push('marker_empty');
+    return { ok: false, missingRequiredDiagnosticFields: missing, nullRequiredDiagnosticFields: nullish };
+  }
+  const kind = String(trace.operationKind || '');
+  const expected = expectedCvAiDiagnosticMarker(kind);
+  if (!expected) {
+    nullish.push('invalid_marker');
+    return { ok: false, missingRequiredDiagnosticFields: missing, nullRequiredDiagnosticFields: nullish };
+  }
+  if (raw.trim() !== expected) {
+    nullish.push('marker_operation_kind_mismatch');
+    return { ok: false, missingRequiredDiagnosticFields: missing, nullRequiredDiagnosticFields: nullish };
+  }
+  return { ok: true, missingRequiredDiagnosticFields: missing, nullRequiredDiagnosticFields: nullish };
+}
+
+/** Reject empty/whitespace/unknown marker overwrites from response metadata merges. */
+export function sanitizeCvAiDiagnosticMarkerPatch(
+  operationKind: CvAiDiagnosticOperationKind,
+  partial: { marker?: unknown },
+): { marker?: string } {
+  if (!('marker' in partial)) return {};
+  const expected = expectedCvAiDiagnosticMarker(operationKind);
+  if (!expected) return {};
+  const raw = partial.marker;
+  if (typeof raw !== 'string') return {};
+  if (raw.trim() !== expected) return {};
+  return { marker: expected };
+}
 
 export type CvAiDiagnosticRejectionCategory =
   | 'wrong_target_locale'
@@ -625,7 +699,6 @@ export function checkSummaryDiagnosticCompleteness(
 
   require('diagnosticContractRevision');
   require('schemaVersion');
-  require('marker');
   require('finalCandidateSource');
   require('providerCandidatePresent');
   require('deterministicCandidatePresent');
@@ -644,6 +717,12 @@ export function checkSummaryDiagnosticCompleteness(
   require('apiBaseUrlConfigured');
   require('capacitorServerUrlConfigured');
   require('sourceCommitStatus');
+  const markerCheck = validateCvAiDiagnosticMarkerField({
+    ...trace,
+    operationKind: trace.operationKind || 'summary',
+  });
+  missing.push(...markerCheck.missingRequiredDiagnosticFields);
+  nullish.push(...markerCheck.nullRequiredDiagnosticFields);
   const locale = String(trace.requestedLocale || '');
   if (locale === 'hi') {
     require('hindiNominalExperienceFragmentDetected');
@@ -802,10 +881,16 @@ export function checkExperienceDiagnosticCompleteness(
   require('usageCountAfter');
   require('selectedSourceKind');
   require('clickedExperienceEntryIdHash');
+  const markerCheck = validateCvAiDiagnosticMarkerField({
+    ...trace,
+    operationKind: trace.operationKind || 'experience',
+  });
+  missing.push(...markerCheck.missingRequiredDiagnosticFields);
+  nullish.push(...markerCheck.nullRequiredDiagnosticFields);
   return {
-    passed: missing.length === 0,
-    missingRequiredDiagnosticFields: missing,
-    nullRequiredDiagnosticFields: nullish,
+    passed: missing.length === 0 && nullish.length === 0,
+    missingRequiredDiagnosticFields: dedupeStableStrings(missing),
+    nullRequiredDiagnosticFields: dedupeStableStrings(nullish),
   };
 }
 
@@ -929,6 +1014,9 @@ export const CV_AI_DIAGNOSTIC_REQUIRED_ASSET_STRINGS = [
   CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
   CV_AI_DIAGNOSTIC_BUNDLE_MARKER,
   CV_AI_DIAGNOSTICS_V2_299_REVISION,
+  SUMMARY_AI_DIAG_MARKER,
+  EXPERIENCE_AI_DIAG_MARKER,
+  EXPERIENCE_DIAGNOSTIC_MARKER_302_REVISION,
   'hindiNominalExperienceFragmentDetected',
   'hindiSentenceHasFiniteCopulaOrVerb',
   'finalUnsupportedDesignMediumCount',
