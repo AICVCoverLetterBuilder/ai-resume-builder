@@ -91,11 +91,22 @@ import {
   SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
   SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
   SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
+  SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
 } from './cv-spanish-experience-grounding';
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
 void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
+import {
+  EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+  evaluateExperienceVisibleComparison,
+  shouldUseVisibleComparisonForNoOp,
+  type ExperienceVisibleComparisonEvaluation,
+} from './cv-experience-visible-noop-authority';
+export { EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION };
+void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+export { SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION };
 import {
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
@@ -117,6 +128,10 @@ void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
 export const EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION =
   'experience-predicate-repair-lineage-310-v1' as const;
 void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
+/** AAB-311 — phase-scoped predicate diagnostics. */
+export const EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION =
+  'experience-predicate-phase-diagnostics-311-v1' as const;
+void EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION;
 import {
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
 } from './cv-summary-final-candidate-diagnostics-306';
@@ -284,6 +299,9 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
   SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
   EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
+  EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+  SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
+  EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
@@ -330,6 +348,9 @@ void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
 void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
 void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
+void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
+void EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
@@ -550,7 +571,8 @@ export type FinalizeCvAiFieldResult = {
     experienceRepairLineageRevision?: typeof EXPERIENCE_REPAIR_LINEAGE_309_REVISION
       | typeof EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
     spanishExperienceRepairGroundingRevision?: typeof SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION
-      | typeof SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+      | typeof SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION
+      | typeof SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
     experiencePredicateRepairLineageRevision?: typeof EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
     spanishExperiencePredicateGroundingRevision?: typeof SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
     sourcePredicateIdentityCount?: number;
@@ -562,6 +584,46 @@ export type FinalizeCvAiFieldResult = {
     sourceUnitPredicateCoveragePassed?: boolean | null;
     repairResidualAddedPredicateCount?: number;
     repairResidualAddedPredicateIdentityHashes?: string[];
+    providerSourcePredicateIdentityCount?: number;
+    providerCandidatePredicateIdentityCount?: number;
+    providerCandidateAddedPredicateCount?: number;
+    providerCandidateAddedPredicateIdentityHashes?: string[];
+    providerCoordinatedPredicateExpansionDetected?: boolean;
+    providerSourceUnitPredicateCoveragePassed?: boolean | null;
+    repairCandidatePredicateIdentityCount?: number;
+    repairCoordinatedPredicateExpansionDetected?: boolean;
+    repairSourceUnitPredicateCoveragePassed?: boolean | null;
+    finalCandidatePredicateIdentityCount?: number;
+    finalAddedPredicateCount?: number;
+    finalAddedPredicateIdentityHashes?: string[];
+    finalCoordinatedPredicateExpansionDetected?: boolean;
+    finalSourceUnitPredicateCoveragePassed?: boolean | null;
+    providerComplianceScopeExpansionDetected?: boolean;
+    providerComplianceExpansionKindCount?: number;
+    repairResidualComplianceScopeExpansionDetected?: boolean;
+    finalComplianceScopeExpansionDetected?: boolean;
+    factAuthorityKind?: string | null;
+    factAuthorityHash?: string | null;
+    factAuthorityUnitCount?: number;
+    visibleComparisonSourceKind?: string | null;
+    visibleComparisonHash?: string | null;
+    visibleComparisonNormalizedHash?: string | null;
+    visibleComparisonUnitCount?: number;
+    visibleComparisonProvenance?: string | null;
+    visibleComparisonMatchedLastAiOutput?: boolean;
+    visibleComparisonUsedForNoOp?: boolean;
+    visibleComparisonUsedForDegradationCheck?: boolean;
+    finalMatchesVisibleComparisonAfterNormalization?: boolean;
+    finalSemanticallyEquivalentToVisibleComparison?: boolean;
+    semanticNoOpDetected?: boolean;
+    semanticNoOpReason?: string | null;
+    materialImprovementDetected?: boolean;
+    materialImprovementKinds?: string[];
+    degradationDetected?: boolean;
+    degradationKinds?: string[];
+    experienceVisibleNoopAuthorityRevision?: typeof EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+    spanishExperienceComplianceGroundingRevision?: typeof SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
+    experiencePredicatePhaseDiagnosticsRevision?: typeof EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION;
     finalUnsupportedClaimCount?: number;
     finalUnsupportedClaimKinds?: string[];
     /** Packaged asset marker — must survive minification. */
@@ -3074,6 +3136,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     : (authoritativeFactSource
       || liveOperationSource
       || canonical.map((f) => f.sourceText || f.value).join('\n'));
+  // Dual-source contract (AAB-311): fact authority ≠ visible no-op comparison.
+  const visibleComparisonText = (liveOperationSource || '').trim();
+  const useVisibleForNoOp = shouldUseVisibleComparisonForNoOp({
+    currentTextareaProvenance: textareaProvenance?.currentTextareaProvenance,
+    lastAiOutputHashMatched: textareaProvenance?.lastAiOutputHashMatched,
+    materialUserEditDetected: textareaProvenance?.materialUserEditDetected,
+    visibleText: visibleComparisonText,
+    factAuthorityText: authoritativeFactSource || sourceForCoverage,
+  });
+  let lastVisibleComparisonEval: ExperienceVisibleComparisonEvaluation | null = null;
   const sourceUnits = sourceWasEmpty
     ? []
     : (snapshot?.units.length
@@ -3149,6 +3221,25 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let sourceUnitPredicateCoveragePassed: boolean | null = null;
   let repairResidualAddedPredicateCount = 0;
   let repairResidualAddedPredicateIdentityHashes: string[] = [];
+  // AAB-311 phase-scoped predicate evidence (provider / repair / final).
+  let providerSourcePredicateIdentityCount = 0;
+  let providerCandidatePredicateIdentityCount = 0;
+  let providerCandidateAddedPredicateCount = 0;
+  let providerCandidateAddedPredicateIdentityHashes: string[] = [];
+  let providerCoordinatedPredicateExpansionDetected = false;
+  let providerSourceUnitPredicateCoveragePassed: boolean | null = null;
+  let repairCandidatePredicateIdentityCount = 0;
+  let repairCoordinatedPredicateExpansionDetected = false;
+  let repairSourceUnitPredicateCoveragePassed: boolean | null = null;
+  let finalCandidatePredicateIdentityCount = 0;
+  let finalAddedPredicateCount = 0;
+  let finalAddedPredicateIdentityHashes: string[] = [];
+  let finalCoordinatedPredicateExpansionDetected = false;
+  let finalSourceUnitPredicateCoveragePassed: boolean | null = null;
+  let providerComplianceScopeExpansionDetected = false;
+  let providerComplianceExpansionKindCount = 0;
+  let repairResidualComplianceScopeExpansionDetected = false;
+  let finalComplianceScopeExpansionDetected = false;
   let finalUnsupportedClaimCount = 0;
   let finalUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
   let lastUnsupportedClaimCount = 0;
@@ -3723,6 +3814,27 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (stage === 'provider') {
           providerUnsupportedClaimCount = esExpansion.count;
           providerUnsupportedClaimKinds = [...esExpansion.kinds];
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerCoordinatedPredicateExpansionDetected =
+            coordinatedPredicateExpansionDetected;
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+          providerComplianceScopeExpansionDetected = esExpansion.kinds.some((k) =>
+            k === 'compliance_scope_expansion'
+            || k === 'conformity_object_expansion'
+            || k === 'certification_scope_expansion'
+            || k === 'approval_scope_expansion'
+            || k === 'quality_scope_expansion');
+          providerComplianceExpansionKindCount = esExpansion.kinds.filter((k) =>
+            k === 'compliance_scope_expansion'
+            || k === 'conformity_object_expansion'
+            || k === 'certification_scope_expansion'
+            || k === 'approval_scope_expansion'
+            || k === 'quality_scope_expansion').length;
         }
         generationValidationMeta = {
           ...generationValidationMeta,
@@ -3864,28 +3976,55 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (locale === 'es') {
         void SPANISH_CV_AI_305_REVISION;
         void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+        void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
         const esExpansion = detectSpanishExperienceUnsupportedExpansion(sourceForCoverage, candidate);
         const esWarehouseProbe = sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage)
           ? validateSpanishWarehouseExperienceCoverage(sourceForCoverage, candidate)
           : null;
-        if (esExpansion.count > 0) {
-          lastRejectStage = 'unsupported_claim_validation';
-          lastRejectReason = esExpansion.labels[0] || 'guarantee_escalation';
-          lastUnsupportedClaimCount = esExpansion.count;
-          lastUnsupportedClaimKinds = esExpansion.kinds;
-          lastScopeExpansionDetected = esExpansion.scopeExpansionDetected;
-          sourcePredicateIdentityCount = esExpansion.sourcePredicateIdentityCount ?? 0;
-          candidatePredicateIdentityCount = esExpansion.candidatePredicateIdentityCount ?? 0;
-          candidateAddedPredicateCount = esExpansion.candidateAddedPredicateCount ?? 0;
-          candidateAddedPredicateIdentityHashes = [
-            ...(esExpansion.candidateAddedPredicateIdentityHashes || []),
+        sourcePredicateIdentityCount = esExpansion.sourcePredicateIdentityCount ?? 0;
+        candidatePredicateIdentityCount = esExpansion.candidatePredicateIdentityCount ?? 0;
+        candidateAddedPredicateCount = esExpansion.candidateAddedPredicateCount ?? 0;
+        candidateAddedPredicateIdentityHashes = [
+          ...(esExpansion.candidateAddedPredicateIdentityHashes || []),
+        ];
+        unsupportedPredicateKindCount = esExpansion.unsupportedPredicateKindCount ?? 0;
+        coordinatedPredicateExpansionDetected = Boolean(
+          esExpansion.coordinatedPredicateExpansionDetected,
+        );
+        sourceUnitPredicateCoveragePassed =
+          esExpansion.sourceUnitPredicateCoveragePassed ?? null;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
           ];
-          unsupportedPredicateKindCount = esExpansion.unsupportedPredicateKindCount ?? 0;
-          coordinatedPredicateExpansionDetected = Boolean(
-            esExpansion.coordinatedPredicateExpansionDetected,
-          );
-          sourceUnitPredicateCoveragePassed =
-            esExpansion.sourceUnitPredicateCoveragePassed ?? null;
+          providerCoordinatedPredicateExpansionDetected =
+            coordinatedPredicateExpansionDetected;
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+          providerComplianceScopeExpansionDetected = esExpansion.kinds.some((k) =>
+            k === 'compliance_scope_expansion'
+            || k === 'conformity_object_expansion'
+            || k === 'certification_scope_expansion'
+            || k === 'approval_scope_expansion'
+            || k === 'quality_scope_expansion');
+          providerComplianceExpansionKindCount = esExpansion.kinds.filter((k) =>
+            k === 'compliance_scope_expansion'
+            || k === 'conformity_object_expansion'
+            || k === 'certification_scope_expansion'
+            || k === 'approval_scope_expansion'
+            || k === 'quality_scope_expansion').length;
+        }
+        if (esExpansion.count > 0
+          || esExpansion.sourceUnitPredicateCoveragePassed === false) {
+          lastRejectStage = 'unsupported_claim_validation';
+          lastRejectReason = esExpansion.count > 0
+            ? (esExpansion.labels[0] || 'guarantee_escalation')
+            : 'source_unit_predicate_coverage_failed';
+          lastUnsupportedClaimCount = esExpansion.count;
+          lastUnsupportedClaimKinds = [...esExpansion.kinds];
+          lastScopeExpansionDetected = esExpansion.scopeExpansionDetected;
           if (esWarehouseProbe) {
             lastRequired = esWarehouseProbe.required.length || lastRequired;
             lastCovered = esWarehouseProbe.covered.length;
@@ -4199,6 +4338,71 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const attachPerspectiveDiag = (
     result: FinalizeCvAiFieldResult,
   ): FinalizeCvAiFieldResult => {
+    // Final visible no-op / degradation gate for unedited AI re-runs — applies to
+    // provider, repair, and deterministic fallback accept paths alike.
+    if (result.countedAsSuccess && useVisibleForNoOp && (result.text || '').trim()) {
+      void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+      const postVis = evaluateExperienceVisibleComparison({
+        factAuthorityText: sourceForCoverage,
+        visibleComparisonText: visibleComparisonText,
+        candidateText: result.text,
+        locale,
+        visibleComparisonProvenance:
+          textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
+        matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+        useVisibleForNoOp: true,
+      });
+      lastVisibleComparisonEval = postVis;
+      if (
+        postVis.semanticNoOpDetected
+        || postVis.degradationDetected
+        || !postVis.materialImprovementDetected
+      ) {
+        providerAccepted = false;
+        unsupportedClaimRepairApplied = false;
+        clientDeterministicFallbackApplied = false;
+        finalCandidateSource = 'none';
+        return {
+          blocked: true,
+          reason: postVis.degradationDetected && !postVis.semanticNoOpDetected
+            ? 'experience_ai_degradation'
+            : 'experience_ai_noop',
+          text: exp?.description || visibleComparisonText || '',
+          origin: 'user',
+          roleDutyConflict,
+          countedAsSuccess: false,
+          diagnostics: {
+            ...baseDiag(),
+            ...perspectiveMeta,
+            meaningfulChangeDetected: false,
+            noOpRejected: true,
+            noOpDetected: postVis.semanticNoOpDetected,
+            noOpCandidateKind: result.diagnostics?.finalCandidateSource
+              || result.origin
+              || 'provider',
+            typedFailureReason: postVis.degradationDetected && !postVis.semanticNoOpDetected
+              ? 'experience_ai_degradation'
+              : 'ai_noop',
+            rejectionStage: 'visible_comparison_noop',
+            finalCandidateSource: 'none',
+            semanticNoOpDetected: postVis.semanticNoOpDetected,
+            semanticNoOpReason: postVis.semanticNoOpReason,
+            materialImprovementDetected: false,
+            degradationDetected: postVis.degradationDetected,
+            degradationKinds: [...postVis.degradationKinds],
+            visibleComparisonUsedForNoOp: true,
+            visibleComparisonMatchedLastAiOutput: postVis.visibleComparisonMatchedLastAiOutput,
+            visibleComparisonHash: postVis.visibleComparisonHash,
+            visibleComparisonNormalizedHash: postVis.visibleComparisonNormalizedHash,
+            factAuthorityKind: textareaProvenance?.authoritativeFactSourceKind
+              || 'pre_ai_snapshot',
+            experienceVisibleNoopAuthorityRevision:
+              EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+            countedAsSuccess: false,
+          },
+        };
+      }
+    }
     if (
       providerNoOpDetected
       && result.countedAsSuccess
@@ -4388,11 +4592,39 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
       }
     } else {
-    const meaningful = experienceAiHasMeaningfulChange(sourceForCoverage, finalNormalizedBullets, {
-      perspectiveApplied: persp.perspectiveNormalizationApplied,
+    // Fact-authority textual change (coverage grounding). Visible no-op uses a
+    // separate baseline when the live textarea is unedited prior AI output.
+    const meaningfulVsAuthority = experienceAiHasMeaningfulChange(
+      sourceForCoverage,
+      finalNormalizedBullets,
+      { perspectiveApplied: persp.perspectiveNormalizationApplied },
+    );
+    lastVisibleComparisonEval = evaluateExperienceVisibleComparison({
+      factAuthorityText: sourceForCoverage,
+      visibleComparisonText: useVisibleForNoOp
+        ? visibleComparisonText
+        : sourceForCoverage,
+      candidateText: finalNormalizedBullets,
+      locale,
+      visibleComparisonProvenance: useVisibleForNoOp
+        ? (textareaProvenance?.currentTextareaProvenance || 'currentTextarea')
+        : 'fact_authority',
+      matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+      useVisibleForNoOp: true,
     });
-    perspectiveMeta.meaningfulChangeDetected = meaningful;
-    perspectiveMeta.finalMatchesSourceAfterNormalization = !meaningful
+    const visEval = lastVisibleComparisonEval;
+    // Drive tryAccept / coverage using fact-authority meaningful change so
+    // contaminated AI echoes that differ from pre-AI facts still reach
+    // validation → repair/fallback. Visible no-op is enforced after accept.
+    const meaningful = meaningfulVsAuthority;
+    perspectiveMeta.meaningfulChangeDetected = useVisibleForNoOp
+      ? Boolean(
+        visEval.materialImprovementDetected
+        && !visEval.semanticNoOpDetected
+        && !visEval.degradationDetected,
+      )
+      : meaningful;
+    perspectiveMeta.finalMatchesSourceAfterNormalization = !meaningfulVsAuthority
       && !persp.perspectiveNormalizationApplied;
     perspectiveMeta.finalMatchesProviderOutput = finalNormalizedBullets.replace(/\s+/g, ' ').trim()
       === providerRawForCompare.replace(/\s+/g, ' ').trim()
@@ -4552,6 +4784,60 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       providerCoveredFactCount = lastCovered;
       providerRequiredFactCount = lastRequired || sourceFactCount;
       if (firstAccepted) {
+        if (useVisibleForNoOp) {
+          void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
+          const postVis = evaluateExperienceVisibleComparison({
+            factAuthorityText: sourceForCoverage,
+            visibleComparisonText: visibleComparisonText,
+            candidateText: firstAccepted.text,
+            locale,
+            visibleComparisonProvenance:
+              textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
+            matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+            useVisibleForNoOp: true,
+          });
+          lastVisibleComparisonEval = postVis;
+          if (
+            postVis.semanticNoOpDetected
+            || postVis.degradationDetected
+            || !postVis.materialImprovementDetected
+          ) {
+            providerAccepted = false;
+            return attachPerspectiveDiag({
+              blocked: true,
+              reason: postVis.degradationDetected && !postVis.semanticNoOpDetected
+                ? 'experience_ai_degradation'
+                : 'experience_ai_noop',
+              text: exp?.description || visibleComparisonText || '',
+              origin: 'user',
+              roleDutyConflict,
+              countedAsSuccess: false,
+              diagnostics: {
+                ...baseDiag(),
+                typedFailureReason: postVis.degradationDetected && !postVis.semanticNoOpDetected
+                  ? 'experience_ai_degradation'
+                  : 'ai_noop',
+                rejectionStage: 'provider:visible_noop',
+                meaningfulChangeDetected: false,
+                noOpRejected: true,
+                noOpDetected: postVis.semanticNoOpDetected,
+                noOpCandidateKind: serverFallbackUsed ? 'fallback' : 'provider',
+                finalCandidateSource: 'none',
+                semanticNoOpDetected: postVis.semanticNoOpDetected,
+                semanticNoOpReason: postVis.semanticNoOpReason,
+                materialImprovementDetected: false,
+                degradationDetected: postVis.degradationDetected,
+                degradationKinds: [...postVis.degradationKinds],
+                visibleComparisonUsedForNoOp: true,
+                visibleComparisonMatchedLastAiOutput: postVis.visibleComparisonMatchedLastAiOutput,
+                factAuthorityKind: textareaProvenance?.authoritativeFactSourceKind
+                  || 'pre_ai_snapshot',
+                experienceVisibleNoopAuthorityRevision:
+                  EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+              },
+            });
+          }
+        }
         perspectiveMeta.normalizedBulletsUsedForApply = true;
         perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
         providerAccepted = true;
@@ -4633,13 +4919,20 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || k === 'document_management_expansion'
           || k === 'workflow_expansion'
           || k === 'approval_authority_expansion'
-          || k === 'supervision_expansion')
+          || k === 'supervision_expansion'
+          || k === 'compliance_scope_expansion'
+          || k === 'conformity_object_expansion'
+          || k === 'certification_scope_expansion'
+          || k === 'approval_scope_expansion'
+          || k === 'quality_scope_expansion')
       ) {
         void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
         void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
         void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+        void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
         void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
         void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
+        void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
         unsupportedClaimRepairAttempted = true;
         unsupportedClaimRepairKind = 'spanish_unsupported_claim_strip';
         unsupportedClaimRepairUnsupportedClaimCount = lastUnsupportedClaimCount;
@@ -4654,7 +4947,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? fingerprintText(repairedNorm)
           : null;
         unsupportedClaimRepairNormalizedHash = unsupportedClaimRepairHash;
-        const repairMeaningful = Boolean(
+        const repairMeaningfulVsAuthority = Boolean(
           repairedNorm
           && repairedNorm !== providerNorm
           && experienceAiHasMeaningfulChange(sourceForCoverage, repairedEs, {
@@ -4677,6 +4970,42 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? [...(repairScan as { candidateAddedPredicateIdentityHashes: string[] })
             .candidateAddedPredicateIdentityHashes]
           : [];
+        repairCandidatePredicateIdentityCount = Number(
+          (repairScan as { candidatePredicateIdentityCount?: number })
+            .candidatePredicateIdentityCount ?? 0,
+        );
+        repairCoordinatedPredicateExpansionDetected = Boolean(
+          (repairScan as { coordinatedPredicateExpansionDetected?: boolean })
+            .coordinatedPredicateExpansionDetected,
+        );
+        repairSourceUnitPredicateCoveragePassed =
+          (repairScan as { sourceUnitPredicateCoveragePassed?: boolean | null })
+            .sourceUnitPredicateCoveragePassed ?? null;
+        repairResidualComplianceScopeExpansionDetected = repairScan.kinds.some((k) =>
+          k === 'compliance_scope_expansion'
+          || k === 'conformity_object_expansion'
+          || k === 'certification_scope_expansion'
+          || k === 'approval_scope_expansion'
+          || k === 'quality_scope_expansion');
+        const repairVisEval = evaluateExperienceVisibleComparison({
+          factAuthorityText: sourceForCoverage,
+          visibleComparisonText: useVisibleForNoOp
+            ? visibleComparisonText
+            : sourceForCoverage,
+          candidateText: repairedEs,
+          locale,
+          visibleComparisonProvenance: useVisibleForNoOp
+            ? (textareaProvenance?.currentTextareaProvenance || 'currentTextarea')
+            : 'fact_authority',
+          matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+          useVisibleForNoOp: true,
+        });
+        lastVisibleComparisonEval = repairVisEval;
+        const repairMeaningful = useVisibleForNoOp
+          ? (repairVisEval.materialImprovementDetected
+            && !repairVisEval.semanticNoOpDetected
+            && !repairVisEval.degradationDetected)
+          : repairMeaningfulVsAuthority;
         if (sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage) && repairedNorm) {
           const cov = validateSpanishWarehouseExperienceCoverage(
             sourceForCoverage,
@@ -4689,9 +5018,67 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           );
         }
         if (
+          useVisibleForNoOp
+          && repairedNorm
+          && repairScan.count === 0
+          && repairResidualAddedPredicateCount === 0
+          && repairSourceUnitPredicateCoveragePassed === true
+          && (repairVisEval.semanticNoOpDetected || !repairMeaningful)
+        ) {
+          unsupportedClaimRepairValidationPassed = true;
+          unsupportedClaimRepairApplied = false;
+          unsupportedClaimRepairRejectionReason = 'semantic_noop_vs_visible';
+          return attachPerspectiveDiag({
+            blocked: true,
+            reason: 'experience_ai_noop',
+            text: exp?.description || visibleComparisonText || '',
+            origin: 'user',
+            roleDutyConflict,
+            countedAsSuccess: false,
+            diagnostics: {
+              ...baseDiag(),
+              typedFailureReason: 'ai_noop',
+              rejectionStage: 'unsupported_claim_repair:noop',
+              meaningfulChangeDetected: false,
+              noOpRejected: true,
+              noOpDetected: true,
+              noOpCandidateKind: 'unsupported_claim_repair',
+              finalCandidateSource: 'none',
+              unsupportedClaimRepairAttempted: true,
+              unsupportedClaimRepairKind,
+              unsupportedClaimRepairValidationPassed: true,
+              unsupportedClaimRepairApplied: false,
+              unsupportedClaimRepairRejectionReason: 'semantic_noop_vs_visible',
+              unsupportedClaimRepairResidualUnsupportedClaimCount: 0,
+              unsupportedClaimRepairResidualUnsupportedClaimKinds: [],
+              unsupportedClaimRepairHash,
+              unsupportedClaimRepairNormalizedHash,
+              semanticNoOpDetected: true,
+              semanticNoOpReason: repairVisEval.semanticNoOpReason,
+              materialImprovementDetected: false,
+              degradationDetected: false,
+              visibleComparisonUsedForNoOp: true,
+              finalSemanticallyEquivalentToVisibleComparison:
+                repairVisEval.finalSemanticallyEquivalentToVisibleComparison,
+              factAuthorityKind: textareaProvenance?.authoritativeFactSourceKind
+                || 'pre_ai_snapshot',
+              experienceVisibleNoopAuthorityRevision:
+                EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+              spanishExperienceComplianceGroundingRevision:
+                SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
+              repairSourceUnitPredicateCoveragePassed,
+              repairResidualAddedPredicateCount: 0,
+              finalSourceUnitPredicateCoveragePassed:
+                repairSourceUnitPredicateCoveragePassed,
+            },
+          });
+        }
+        if (
           repairMeaningful
           && repairScan.count === 0
           && repairResidualAddedPredicateCount === 0
+          && repairSourceUnitPredicateCoveragePassed === true
+          && !repairResidualComplianceScopeExpansionDetected
         ) {
           const repairAccepted = tryAccept(
             repairedEs,
@@ -4709,6 +5096,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             finalUnsupportedClaimCount = 0;
             finalUnsupportedClaimKinds = [];
             finalCandidateSource = 'unsupported_claim_repair';
+            finalCandidatePredicateIdentityCount = repairCandidatePredicateIdentityCount;
+            finalAddedPredicateCount = 0;
+            finalAddedPredicateIdentityHashes = [];
+            finalCoordinatedPredicateExpansionDetected = false;
+            finalSourceUnitPredicateCoveragePassed = true;
+            finalComplianceScopeExpansionDetected = false;
+            // Keep provider-phase top-level fields; update final-phase only.
+            sourceUnitPredicateCoveragePassed = true;
+            coordinatedPredicateExpansionDetected = false;
+            candidateAddedPredicateCount = 0;
+            candidateAddedPredicateIdentityHashes = [];
             perspectiveMeta.normalizedBulletsUsedForApply = true;
             perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
               repairAccepted.text,
@@ -4754,15 +5152,51 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                   EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
                 spanishExperiencePredicateGroundingRevision:
                   SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
-                sourcePredicateIdentityCount,
-                candidatePredicateIdentityCount,
-                candidateAddedPredicateCount,
-                candidateAddedPredicateIdentityHashes,
+                spanishExperienceComplianceGroundingRevision:
+                  SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
+                experienceVisibleNoopAuthorityRevision:
+                  EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+                experiencePredicatePhaseDiagnosticsRevision:
+                  EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION,
+                sourcePredicateIdentityCount: providerSourcePredicateIdentityCount
+                  || sourcePredicateIdentityCount,
+                candidatePredicateIdentityCount: providerCandidatePredicateIdentityCount
+                  || candidatePredicateIdentityCount,
+                candidateAddedPredicateCount: providerCandidateAddedPredicateCount,
+                candidateAddedPredicateIdentityHashes:
+                  providerCandidateAddedPredicateIdentityHashes,
                 unsupportedPredicateKindCount,
-                coordinatedPredicateExpansionDetected,
-                sourceUnitPredicateCoveragePassed,
+                coordinatedPredicateExpansionDetected:
+                  providerCoordinatedPredicateExpansionDetected,
+                sourceUnitPredicateCoveragePassed:
+                  providerSourceUnitPredicateCoveragePassed,
+                providerSourcePredicateIdentityCount,
+                providerCandidatePredicateIdentityCount,
+                providerCandidateAddedPredicateCount,
+                providerCandidateAddedPredicateIdentityHashes,
+                providerCoordinatedPredicateExpansionDetected,
+                providerSourceUnitPredicateCoveragePassed,
+                repairCandidatePredicateIdentityCount,
                 repairResidualAddedPredicateCount: 0,
                 repairResidualAddedPredicateIdentityHashes: [],
+                repairCoordinatedPredicateExpansionDetected: false,
+                repairSourceUnitPredicateCoveragePassed: true,
+                finalCandidatePredicateIdentityCount,
+                finalAddedPredicateCount: 0,
+                finalAddedPredicateIdentityHashes: [],
+                finalCoordinatedPredicateExpansionDetected: false,
+                finalSourceUnitPredicateCoveragePassed: true,
+                providerComplianceScopeExpansionDetected,
+                providerComplianceExpansionKindCount,
+                repairResidualComplianceScopeExpansionDetected: false,
+                finalComplianceScopeExpansionDetected: false,
+                materialImprovementDetected: true,
+                semanticNoOpDetected: false,
+                degradationDetected: false,
+                factAuthorityKind: textareaProvenance?.authoritativeFactSourceKind
+                  || 'pre_ai_snapshot',
+                visibleComparisonSourceKind: repairVisEval.visibleComparisonSourceKind,
+                visibleComparisonUsedForNoOp: useVisibleForNoOp,
                 experienceAiUnsupportedExpansionRevision:
                   EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
               },
@@ -4777,9 +5211,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           unsupportedClaimRepairApplied = false;
           unsupportedClaimRepairRejectionReason = repairScan.count > 0
             ? (repairScan.kinds[0] || 'residual_unsupported_claims')
-            : (!repairMeaningful
-              ? 'unsupported_claim_repair_noop_or_identical'
-              : 'unsupported_claim_repair_invalid');
+            : (repairSourceUnitPredicateCoveragePassed === false
+              ? 'final_predicate_coverage_failed'
+              : (!repairMeaningful
+                ? 'unsupported_claim_repair_noop_or_identical'
+                : 'unsupported_claim_repair_invalid'));
         }
       }
       if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {

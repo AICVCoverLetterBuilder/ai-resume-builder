@@ -25,11 +25,15 @@ export const SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION =
 /** AAB-310 — Spanish Experience candidate-added predicate grounding. */
 export const SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION =
   'spanish-experience-predicate-grounding-310-v1' as const;
+/** AAB-311 — Spanish Experience compliance/conformity object grounding. */
+export const SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION =
+  'spanish-experience-compliance-grounding-311-v1' as const;
 
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
 void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
 
 const WAREHOUSE_KEYS: MaterialDutyKey[] = [
   'warehouse_inbound_check',
@@ -290,7 +294,7 @@ type SpanishPredicateLemma = {
 };
 
 const VERIFY_LEMMA_RE =
-  /\b(?:revis(?:a|ó|ar|ando)|comprob(?:a|ó|ar|ando)|verific(?:a|ó|ar|ando)|inspeccion(?:a|ó|ar|ando)|examin(?:a|ó|ar|ando)|control(?:a|ó|ar|ando))\b/giu;
+  /\b(?:revis(?:a|ó|ar|ando)|comprueb(?:a|o|an|as)|comprob(?:ó|ar|ando)|verific(?:a|ó|ar|ando)|inspeccion(?:a|ó|ar|ando)|examin(?:a|ó|ar|ando)|control(?:a|ó|ar|ando))\b/giu;
 const PREPARE_LEMMA_RE =
   /\b(?:prepar(?:a|ó|ar|ando)|dispon(?:e|ía|er|iendo))\b/giu;
 const MOVE_LEMMA_RE =
@@ -489,12 +493,26 @@ export function detectSpanishExperiencePredicateExpansion(
   const kinds: ExperienceUnsupportedClaimKind[] = [];
   let coordinated = false;
   let allUnitsCovered = true;
+  /** Required source action units (one material finite-verb unit = one identity). */
   let sourcePredCount = 0;
   let candPredCount = 0;
+  const sourcePrimaryByUnit: Array<SpanishPredicateFamily | null> = [];
 
   for (const su of sourceUnits) {
-    sourcePredCount += extractSpanishExperiencePredicates(su).length;
+    const preds = extractSpanishExperiencePredicates(su);
+    // Count units with ≥1 material predicate — not unique families across units
+    // (verify+verify+coordinate must be 3, not 2).
+    if (preds.length > 0) {
+      sourcePredCount += 1;
+      // Prefer ordinary/authority primary over incidental broader lemmas.
+      const ordinary = preds.find((p) => p.strength === 'ordinary' || p.strength === 'authority');
+      sourcePrimaryByUnit.push((ordinary || preds[0]).family);
+    } else {
+      sourcePrimaryByUnit.push(null);
+    }
   }
+
+  const coveredSourceUnitIndexes = new Set<number>();
 
   for (const cu of candidateUnits) {
     const candPreds = extractSpanishExperiencePredicates(cu);
@@ -527,9 +545,19 @@ export function detectSpanishExperiencePredicateExpansion(
         for (const k of kindForAddedFamily(p.family)) kinds.push(k);
       }
     }
+    const primary = sourcePrimaryByUnit[alignIdx];
+    if (primary && candPreds.some((p) => p.family === primary)) {
+      coveredSourceUnitIndexes.add(alignIdx);
+    }
     // If aligned source has only verify and candidate stacks verify synonyms only,
     // that is not an added material action (handled by synonym collapse in repair).
     void supportedFamilies;
+  }
+
+  for (let i = 0; i < sourceUnits.length; i += 1) {
+    if (sourcePrimaryByUnit[i] && !coveredSourceUnitIndexes.has(i)) {
+      allUnitsCovered = false;
+    }
   }
 
   const uniqueHashes = [...new Set(addedHashes)];
@@ -699,6 +727,83 @@ const MATERIAL_OBJECT_PATTERNS: Array<{
   },
 ];
 
+/** Compliance / conformity / certification / approval objects (AAB-311). */
+const COMPLIANCE_OBJECT_PATTERNS: Array<{
+  id: string;
+  re: RegExp;
+  sourceSupport: RegExp;
+  kinds: ExperienceUnsupportedClaimKind[];
+}> = [
+  {
+    id: 'conformidad',
+    re: /\b(?:cada\s+)?conformidad(?:es)?\b|\bdeclaraci[oó]n(?:es)?\s+de\s+conformidad\b|\bcertificado(?:s)?\s+de\s+conformidad\b|\bno\s+conformidad(?:es)?\b/iu,
+    sourceSupport: /\bconformidad|\bdeclaraci[oó]n(?:es)?\s+de\s+conformidad|\bcertificado(?:s)?\s+de\s+conformidad|\bno\s+conformidad/iu,
+    kinds: [
+      'conformity_object_expansion',
+      'compliance_scope_expansion',
+      'unsupported_object_expansion',
+      'object_scope_expansion',
+    ],
+  },
+  {
+    id: 'cumplimiento_normativo',
+    re: /\bcumplimiento(?:\s+normativo)?\b|\bdocumentaci[oó]n\s+de\s+cumplimiento\b|\brequisitos?\s+normativos?\b|\bnormativa\b|\bnormas?\b(?!\s+intern)/iu,
+    sourceSupport: /\bcumplimiento|\bnormativ|\bnormas?\b|\brequisitos?\s+normativos?/iu,
+    kinds: [
+      'compliance_scope_expansion',
+      'unsupported_object_expansion',
+      'object_scope_expansion',
+    ],
+  },
+  {
+    id: 'certificacion',
+    re: /\bcertificaci[oó]n(?:es)?\b|\bcertificados?\b(?!\s+de\s+entrega)/iu,
+    sourceSupport: /\bcertificaci[oó]n|\bcertificados?\b/iu,
+    kinds: [
+      'certification_scope_expansion',
+      'compliance_scope_expansion',
+      'unsupported_object_expansion',
+      'object_scope_expansion',
+    ],
+  },
+  {
+    id: 'aprobacion',
+    re: /\baprobaci[oó]n(?:es)?\b|\bautorizaci[oó]n(?:es)?\b|\bhomologaci[oó]n(?:es)?\b/iu,
+    sourceSupport: /\baprobaci[oó]n|\bautorizaci[oó]n|\bhomologaci[oó]n/iu,
+    kinds: [
+      'approval_scope_expansion',
+      'compliance_scope_expansion',
+      'unsupported_object_expansion',
+      'object_scope_expansion',
+    ],
+  },
+  {
+    id: 'validacion_calidad',
+    re: /\bvalidaci[oó]n(?:es)?\b|\bcontroles?\s+de\s+calidad\b|\brequisitos?\s+de\s+calidad\b|\bincidencias?\s+de\s+calidad\b/iu,
+    sourceSupport: /\bvalidaci[oó]n|\bcontroles?\s+de\s+calidad|\brequisitos?\s+de\s+calidad|\bincidencias?\s+de\s+calidad/iu,
+    kinds: [
+      'quality_scope_expansion',
+      'compliance_scope_expansion',
+      'unsupported_object_expansion',
+      'object_scope_expansion',
+    ],
+  },
+];
+
+function detectSpanishComplianceScopeExpansion(
+  source: string,
+  candidate: string,
+): ExperienceUnsupportedClaimKind[] {
+  void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
+  const kinds: ExperienceUnsupportedClaimKind[] = [];
+  for (const entry of COMPLIANCE_OBJECT_PATTERNS) {
+    if (entry.re.test(candidate) && !entry.sourceSupport.test(source)) {
+      for (const k of entry.kinds) kinds.push(k);
+    }
+  }
+  return [...new Set(kinds)];
+}
+
 function detectSpanishObjectScopeExpansion(
   source: string,
   candidate: string,
@@ -714,6 +819,9 @@ function detectSpanishObjectScopeExpansion(
     kinds.push('unsupported_object_expansion');
   }
   for (const entry of MATERIAL_OBJECT_PATTERNS) {
+    // Compliance terms are handled by dedicated AAB-311 detector (avoid double-count
+    // and allow contextual source support for certificados de conformidad).
+    if (entry.id === 'cumplimiento') continue;
     if (entry.re.test(candidate) && !entry.sourceSupport.test(source)) {
       kinds.push('object_scope_expansion');
       kinds.push('unsupported_object_expansion');
@@ -723,6 +831,9 @@ function detectSpanishObjectScopeExpansion(
       }
       break;
     }
+  }
+  for (const k of detectSpanishComplianceScopeExpansion(source, candidate)) {
+    kinds.push(k);
   }
   return [...new Set(kinds)];
 }
@@ -739,6 +850,7 @@ export function stripSpanishExperienceUnsupportedEscalation(
   void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
   void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
   void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+  void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
   const bullets = splitExperienceBullets(candidateDescription || '');
   const sourceUnits = splitExperienceBullets(sourceDescription || '').filter(Boolean);
   const allowGuarantee = sourceSupportsSpanishGuarantee(sourceDescription);
@@ -802,6 +914,7 @@ export function stripSpanishExperienceUnsupportedEscalation(
     }
     // Object/scope: strip unsupported logistics objects and dual conjunctions.
     for (const entry of MATERIAL_OBJECT_PATTERNS) {
+      if (entry.id === 'cumplimiento') continue;
       if (entry.re.test(row) && !entry.sourceSupport.test(sourceDescription)) {
         // Prefer reducing "con los envíos y entregas…" → "con la mercancía recibida"
         // when the bullet is a document check over related docs.
@@ -827,6 +940,36 @@ export function stripSpanishExperienceUnsupportedEscalation(
             .trim();
         }
       }
+    }
+    // AAB-311: strip unsupported compliance / conformity / certification objects.
+    void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
+    for (const entry of COMPLIANCE_OBJECT_PATTERNS) {
+      if (entry.re.test(row) && !entry.sourceSupport.test(sourceDescription)) {
+        row = row
+          .replace(
+            /\s+con\s+(?:cada\s+)?conformidad(?:es)?\b/giu,
+            '',
+          )
+          .replace(
+            /\s+con\s+(?:los\s+|las\s+|el\s+|la\s+)?(?:certificados?|declaraciones?)\s+de\s+conformidad\b/giu,
+            '',
+          )
+          .replace(
+            /\s+con\s+(?:el\s+|la\s+|los\s+|las\s+)?(?:cumplimiento(?:\s+normativo)?|normativa|requisitos?\s+normativos?|certificaci[oó]n(?:es)?|aprobaci[oó]n(?:es)?|autorizaci[oó]n(?:es)?|validaci[oó]n(?:es)?|homologaci[oó]n(?:es)?|controles?\s+de\s+calidad|requisitos?\s+de\s+calidad|incidencias?\s+de\s+calidad|no\s+conformidad(?:es)?)\b/giu,
+            '',
+          )
+          .replace(entry.re, '')
+          .trim();
+      }
+    }
+    // Drop unsupported warehouse-location fillers absent from the aligned source.
+    if (
+      /\b(?:en|dentro\s+de(?:l)?)\s+(?:el\s+)?almac[eé]n\b/iu.test(row)
+      && !/\balmac[eé]n\b/iu.test(alignedSource)
+    ) {
+      row = row
+        .replace(/\s+(?:en|dentro\s+de(?:l)?)\s+(?:el\s+)?almac[eé]n\b/giu, '')
+        .trim();
     }
     // AAB-310: strip candidate-added coordinated / broader predicates.
     row = stripUnsupportedCoordinatedPredicates(row, alignedSource);
@@ -1099,7 +1242,12 @@ export function detectSpanishExperienceUnsupportedExpansion(
       || uniqueKinds.includes('logistics_scope_expansion')
       || uniqueKinds.includes('action_scope_expansion')
       || uniqueKinds.includes('document_management_expansion')
-      || uniqueKinds.includes('coordinated_predicate_expansion'),
+      || uniqueKinds.includes('coordinated_predicate_expansion')
+      || uniqueKinds.includes('compliance_scope_expansion')
+      || uniqueKinds.includes('conformity_object_expansion')
+      || uniqueKinds.includes('certification_scope_expansion')
+      || uniqueKinds.includes('approval_scope_expansion')
+      || uniqueKinds.includes('quality_scope_expansion'),
     deadlineClaimDetected,
     documentationExpansionDetected,
     malformedRolePhraseDetected,

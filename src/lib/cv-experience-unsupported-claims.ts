@@ -39,7 +39,12 @@ export type ExperienceUnsupportedClaimKind =
   | 'document_management_expansion'
   | 'workflow_expansion'
   | 'approval_authority_expansion'
-  | 'supervision_expansion';
+  | 'supervision_expansion'
+  | 'compliance_scope_expansion'
+  | 'conformity_object_expansion'
+  | 'certification_scope_expansion'
+  | 'approval_scope_expansion'
+  | 'quality_scope_expansion';
 
 export type ExperienceUnsupportedClaimScan = {
   kinds: ExperienceUnsupportedClaimKind[];
