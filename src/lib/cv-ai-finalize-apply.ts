@@ -96,6 +96,11 @@ import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextarea
 export const EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION =
   'experience-diagnostics-final-candidate-305-v1' as const;
 void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
+import {
+  SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
+} from './cv-summary-final-candidate-diagnostics-306';
+export { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION };
+void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
 import { fingerprintText } from './cv-export-diagnostics';
 import {
   deterministicLocalizedBulletsFromCanonical,
@@ -249,6 +254,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
   SPANISH_CV_AI_305_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
+  SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
   EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
 ] as const;
@@ -287,6 +293,7 @@ void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
+void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
 void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
 void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
@@ -421,6 +428,7 @@ export type FinalizeCvAiFieldResult = {
     providerRequiredFactCount?: number;
     providerAccepted?: boolean;
     experienceDiagnosticsFinalCandidateRevision?: typeof EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
+    summaryFinalCandidateDiagnosticsRevision?: typeof SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
     providerPrimaryRejectionReason?: string | null;
     providerBulletCount?: number;
     /** @deprecated Prefer clientDeterministicFallback* fields. */
@@ -1268,6 +1276,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let japaneseProviderRejectionReason: string | null = null;
   let japaneseProviderUnsupportedClaimCount: number | null = null;
   let croatianProviderRejectionReason: string | null = null;
+  let spanishProviderRejectionReason: string | null = null;
+  let spanishProviderUnsupportedClaimCount: number | null = null;
   let hindiProviderQuality: ReturnType<typeof analyzeHindiSummaryEmploymentQuality> | null = null;
   let hindiProviderRejectionReason: string | null = null;
   const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
@@ -1366,6 +1376,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   })();
   // Empty Summary generation: seed from grounded Experience facts before duration
   // ownership, so injectHindiDurationWithOpening does not emit a duration-only shell.
+  let emptySummarySeededFromCanonical = false;
   if (!candidate.trim() && !liveSummary.trim()) {
     candidate = prepareCandidate(
       deterministicLocalizedSummaryFromCanonical(
@@ -1377,6 +1388,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       locale,
       'summary',
     );
+    emptySummarySeededFromCanonical = Boolean(candidate.trim());
   }
   const durationResolved = resolveSummaryWithDurationPolicy(
     candidate,
@@ -1627,6 +1639,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     void SPANISH_SUMMARY_GROUNDING_306_REVISION;
     candidate = dedupeSummarySentences(candidate);
     if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
+      if (candidate.trim() && providerRaw.trim()) {
+        spanishProviderRejectionReason = spanishProviderRejectionReason
+          || 'spanish_summary_foreign_script';
+      }
       candidate = '';
     }
     if (candidate.trim()) {
@@ -1644,6 +1660,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           .filter(Boolean),
       });
       if (!empQuality.groundingValidationPassed) {
+        if (providerRaw.trim()) {
+          spanishProviderRejectionReason = empQuality.typedRejectionReason
+            || 'spanish_summary_grounding_failed';
+          spanishProviderUnsupportedClaimCount = empQuality.unsupportedClaimCount;
+        }
         candidate = '';
       }
     }
@@ -1678,11 +1699,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   /** True when the API/activation path already marked the candidate as repaired. */
   const summaryRepairAttempted = input.originHint === 'ai_repaired';
   const durationRepairApplied = durationResolved.status === 'repaired';
-  if (durationRepairApplied) origin = 'ai_repaired';
-  // Duration-policy "repaired" sets finalCandidateSource to ai_repaired. That is
-  // distinct from provider-activation repair (summaryRepairAttempted/Applied).
-  // Do NOT treat duration-policy "fallback" status as a Summary deterministic
-  // rebuild — that alias made provider prose look like entry-owned repair.
+  // Only mark content origin as ai_repaired when an actual repair candidate was
+  // activated — never alias duration-policy normalization as content repair.
+  if (summaryRepairAttempted) {
+    origin = 'ai_repaired';
+  } else if (emptySummarySeededFromCanonical && !providerRaw.trim()) {
+    // Entry-owned empty generate is client deterministic — never claim provider.
+    origin = 'deterministic_fallback';
+  }
+  // durationRepairApplied is recorded separately as summaryDurationRepairApplied.
 
   const attachSummaryDiag = (
     result: FinalizeCvAiFieldResult,
@@ -1934,20 +1959,39 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         serverFallbackUsed: false,
         serverFallbackReason: null,
         providerOutcome: (() => {
+          void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
           if (providerOutcomeHint) return providerOutcomeHint;
           if (!providerRaw.trim()) return 'not_attempted';
           if (success && result.origin === 'ai_generated') return 'accepted';
+          if (success && result.origin === 'ai_repaired') {
+            // Content repair accepted — still report provider as rejected when
+            // the provider body was blanked before repair activation.
+            return summaryRepairAttempted && !providerRaw.trim()
+              ? 'not_attempted'
+              : (spanishProviderRejectionReason
+                || hindiProviderRejectionReason
+                || japaneseProviderRejectionReason
+                || croatianProviderRejectionReason
+                ? 'rejected_grounding'
+                : 'accepted');
+          }
           if (success && result.origin === 'deterministic_fallback') {
             return providerNoOpDetected ? 'rejected_noop' : 'rejected_grounding';
           }
           if (result.reason === SUMMARY_NOOP_REJECTION_REASON || deterministicNoOpDetected) {
             return providerNoOpDetected ? 'rejected_noop' : (providerOutcomeHint || 'rejected_grounding');
           }
-          if (result.blocked && (hindiProviderRejectionReason || japaneseProviderRejectionReason || croatianProviderRejectionReason)) {
+          if (result.blocked && (
+            hindiProviderRejectionReason
+            || japaneseProviderRejectionReason
+            || croatianProviderRejectionReason
+            || spanishProviderRejectionReason
+          )) {
             const r = String(
               hindiProviderRejectionReason
               || japaneseProviderRejectionReason
-              || croatianProviderRejectionReason,
+              || croatianProviderRejectionReason
+              || spanishProviderRejectionReason,
             );
             if (/locale|script|leak/i.test(r)) return 'rejected_locale';
             if (/grammar|nominal|finite|copula|fragment/i.test(r)
@@ -1957,7 +2001,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             if (/noop|meaningful/i.test(r)) return 'rejected_noop';
             return 'rejected_grounding';
           }
-          return 'unknown';
+          // Completed request with a provider body must never remain unknown.
+          if (providerRaw.trim() || providerCandidateSentenceCount) {
+            return 'rejected_grounding';
+          }
+          return 'not_attempted';
         })(),
         clientRepairAttempted: Boolean(summaryRepairAttempted),
         clientFallbackUsed: Boolean(
@@ -1976,6 +2024,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? (hindiProviderRejectionReason
                 || japaneseProviderRejectionReason
                 || croatianProviderRejectionReason
+                || spanishProviderRejectionReason
                 || (providerNoOpDetected ? SUMMARY_NOOP_REJECTION_REASON : 'provider_rejected'))
               : null
           ),
@@ -1988,7 +2037,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackReason: clientFallbackReason
           || (
             result.origin === 'deterministic_fallback'
-              ? (hindiProviderRejectionReason || 'provider_rejected')
+              ? (hindiProviderRejectionReason
+                || japaneseProviderRejectionReason
+                || croatianProviderRejectionReason
+                || spanishProviderRejectionReason
+                || 'provider_rejected')
               : undefined
           ),
         sourceNormalizedHash,
@@ -2048,13 +2101,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalPostconditionsPassed: success,
         // Candidate-derived postcondition fields (not structured context alone).
         currentEmploymentIntroductionCount: candidateCurrentEmploymentIntroductionCount ?? undefined,
-        repeatedEmploymentFactCount: empQ?.repeatedEmploymentFactCount,
-        repeatedProfessionalLabelCount: empQ?.repeatedProfessionalLabelCount,
+        repeatedEmploymentFactCount: empQ && 'repeatedEmploymentFactCount' in empQ
+          ? (empQ as { repeatedEmploymentFactCount?: number }).repeatedEmploymentFactCount
+          : undefined,
+        repeatedProfessionalLabelCount: empQ && 'repeatedProfessionalLabelCount' in empQ
+          ? (empQ as { repeatedProfessionalLabelCount?: number }).repeatedProfessionalLabelCount
+          : undefined,
         currentRoleConcreteFactCoverage: empQ?.currentRoleConcreteFactCoverage,
-        genericizedMaterialFactCount: empQ?.genericizedMaterialFactCount,
+        genericizedMaterialFactCount: empQ && 'genericizedMaterialFactCount' in empQ
+          ? (empQ as { genericizedMaterialFactCount?: number }).genericizedMaterialFactCount
+          : undefined,
         priorRoleGroundingPassed: empQ?.priorRoleGroundingPassed,
-        crossEntryLeakageDetected: empQ?.semanticCrossEntryLeakageDetected
-          ?? empQ?.crossDomainLeakageDetected
+        crossEntryLeakageDetected: (
+          empQ && 'semanticCrossEntryLeakageDetected' in empQ
+            ? Boolean((empQ as { semanticCrossEntryLeakageDetected?: boolean }).semanticCrossEntryLeakageDetected)
+            : undefined
+        )
+          ?? (
+            empQ && 'crossDomainLeakageDetected' in empQ
+              ? Boolean((empQ as { crossDomainLeakageDetected?: boolean }).crossDomainLeakageDetected)
+              : false
+          )
           ?? false,
         currentRoleTitlePresent: candidateCurrentRoleTitlePresent ?? undefined,
         currentRoleTitleSource: candidateCurrentRoleTitleMatchesStructuredRole
@@ -2068,17 +2135,31 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         currentRoleTitleMatchesStructuredRole:
           candidateCurrentRoleTitleMatchesStructuredRole ?? undefined,
         currentRoleOmittedDetected: candidateCurrentRoleOmittedDetected ?? undefined,
-        currentSlotForeignFactCount: empQ?.currentSlotForeignFactCount,
-        priorSlotForeignFactCount: empQ?.priorSlotForeignFactCount,
-        semanticCrossEntryLeakageDetected: empQ?.semanticCrossEntryLeakageDetected,
-        duplicatedPriorRoleFactCount: empQ?.duplicatedPriorRoleFactCount,
-        priorRoleSemanticFactMentionCount: empQ?.priorRoleSemanticFactMentionCount,
-        priorRoleSemanticDuplicationDetected: empQ?.priorRoleSemanticDuplicationDetected,
+        currentSlotForeignFactCount: empQ && 'currentSlotForeignFactCount' in empQ
+          ? (empQ as { currentSlotForeignFactCount?: number }).currentSlotForeignFactCount
+          : undefined,
+        priorSlotForeignFactCount: empQ && 'priorSlotForeignFactCount' in empQ
+          ? (empQ as { priorSlotForeignFactCount?: number }).priorSlotForeignFactCount
+          : undefined,
+        semanticCrossEntryLeakageDetected: empQ && 'semanticCrossEntryLeakageDetected' in empQ
+          ? (empQ as { semanticCrossEntryLeakageDetected?: boolean }).semanticCrossEntryLeakageDetected
+          : undefined,
+        duplicatedPriorRoleFactCount: empQ && 'duplicatedPriorRoleFactCount' in empQ
+          ? (empQ as { duplicatedPriorRoleFactCount?: number }).duplicatedPriorRoleFactCount
+          : undefined,
+        priorRoleSemanticFactMentionCount: empQ && 'priorRoleSemanticFactMentionCount' in empQ
+          ? (empQ as { priorRoleSemanticFactMentionCount?: number }).priorRoleSemanticFactMentionCount
+          : undefined,
+        priorRoleSemanticDuplicationDetected: empQ && 'priorRoleSemanticDuplicationDetected' in empQ
+          ? (empQ as { priorRoleSemanticDuplicationDetected?: boolean }).priorRoleSemanticDuplicationDetected
+          : undefined,
         finalUnitRoleSlots: empQ?.finalUnitRoleSlots,
         finalSentenceHashes: empQ?.finalSentenceHashes,
         finalSentenceRoleSlots: empQ?.finalSentenceRoleSlots,
-        hindiFiniteKaAnubhavCollision: empQ?.hindiFiniteKaAnubhavCollision,
-        unsupportedClaimCount: locale === 'ja' || locale === 'hi'
+        hindiFiniteKaAnubhavCollision: empQ && 'hindiFiniteKaAnubhavCollision' in empQ
+          ? (empQ as { hindiFiniteKaAnubhavCollision?: boolean }).hindiFiniteKaAnubhavCollision
+          : undefined,
+        unsupportedClaimCount: locale === 'ja' || locale === 'hi' || locale === 'es'
           ? (empQ && 'unsupportedClaimCount' in empQ
             ? (empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0
             : 0)
@@ -2236,21 +2317,22 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || null)
           : (croatianProviderRejectionReason
             || japaneseProviderRejectionReason
+            || spanishProviderRejectionReason
             || result.diagnostics?.providerRejectionReason
             || null),
-        currentIntroSlotPresent: locale === 'hi' && empQ
+        currentIntroSlotPresent: (locale === 'hi' || locale === 'es') && empQ
           ? Boolean((empQ as { currentIntroSlotPresent?: boolean }).currentIntroSlotPresent)
           : undefined,
-        currentDutySlotPresent: locale === 'hi' && empQ
+        currentDutySlotPresent: (locale === 'hi' || locale === 'es') && empQ
           ? Boolean((empQ as { currentDutySlotPresent?: boolean }).currentDutySlotPresent)
           : undefined,
-        priorRoleSlotPresent: locale === 'hi' && empQ
+        priorRoleSlotPresent: (locale === 'hi' || locale === 'es') && empQ
           ? Boolean((empQ as { priorRoleSlotPresent?: boolean }).priorRoleSlotPresent)
           : undefined,
-        slotValidationPassed: locale === 'hi' && empQ
+        slotValidationPassed: (locale === 'hi' || locale === 'es') && empQ
           ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed)
           : undefined,
-        slotRejectionReasons: locale === 'hi' && empQ
+        slotRejectionReasons: (locale === 'hi' || locale === 'es') && empQ
           ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
           : undefined,
         summaryRepairAttempted,
@@ -2260,9 +2342,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerRejectionReason: hindiProviderRejectionReason
           || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
+          || spanishProviderRejectionReason
           || result.diagnostics?.providerRejectionReason,
         providerUnsupportedClaimCount: japaneseProviderUnsupportedClaimCount
+          ?? spanishProviderUnsupportedClaimCount
           ?? result.diagnostics?.providerUnsupportedClaimCount,
+        summaryFinalCandidateDiagnosticsRevision:
+          SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
         durationFinalizerIdempotent,
         summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
         summaryNoopSuccessContractRevision: SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION,
@@ -2276,7 +2362,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               : locale === 'hr'
                 ? SUMMARY_BUILDER_REVISION_HR
                 : SUMMARY_BUILDER_REVISION,
-        summaryUnitSplitterRevision: empQ?.summaryUnitSplitterRevision
+        summaryUnitSplitterRevision: (
+          empQ && 'summaryUnitSplitterRevision' in empQ
+            ? (empQ as { summaryUnitSplitterRevision?: string }).summaryUnitSplitterRevision
+            : undefined
+        )
           || (locale === 'ar'
             ? SUMMARY_UNIT_SPLITTER_REVISION_AR
             : locale === 'ru'
@@ -2286,7 +2376,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 : locale === 'hr'
                   ? SUMMARY_UNIT_SPLITTER_REVISION_HR
                   : undefined),
-        summaryGroundingRevision: empQ?.summaryGroundingRevision
+        summaryGroundingRevision: (
+          empQ && 'summaryGroundingRevision' in empQ
+            ? (empQ as { summaryGroundingRevision?: string }).summaryGroundingRevision
+            : undefined
+        )
           || (locale === 'ar'
             ? SUMMARY_GROUNDING_REVISION_AR
             : locale === 'ru'
@@ -2295,7 +2389,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 ? SUMMARY_GROUNDING_REVISION_JA
                 : locale === 'hr'
                   ? SUMMARY_GROUNDING_REVISION_HR
-                  : undefined),
+                  : locale === 'es'
+                    ? SPANISH_SUMMARY_GROUNDING_306_REVISION
+                    : undefined),
         summaryDurationFinalizerRevision:
           owned?.summaryDurationFinalizerRevision
           || (locale === 'ar'
@@ -2383,7 +2479,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               : result.reason === SUMMARY_NOOP_REJECTION_REASON
                 ? SUMMARY_NOOP_REJECTION_REASON
                 : result.diagnostics?.typedFailureReason,
-        grammarValidationPassed: (locale === 'hr' || locale === 'hi')
+        grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es')
           && empQ
           && 'grammarValidationPassed' in empQ
           ? Boolean((empQ as { grammarValidationPassed?: boolean }).grammarValidationPassed)
@@ -2412,6 +2508,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       candidate = '';
     } else {
+      if (emptySummarySeededFromCanonical && !providerRaw.trim()) {
+        origin = 'deterministic_fallback';
+        deterministicCandidateRaw = candidate;
+        deterministicCandidateHash = hashSummaryCandidate(candidate);
+        deterministicCandidateNormalizedHash = hashSummaryCandidate(
+          normalizeSummaryCandidateText(candidate),
+        );
+        deterministicCandidateSentenceCount = countSummaryCandidateSentences(candidate, locale);
+        clientFallbackUsed = true;
+        clientFallbackReason = 'empty_summary_canonical_seed';
+      }
       return attachSummaryDiag({
         blocked: false,
         text: candidate,
@@ -2571,23 +2678,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerOutcomeHint = hindiProviderRejectionReason
             || croatianProviderRejectionReason
             || japaneseProviderRejectionReason
+            || spanishProviderRejectionReason
             ? (
               /locale|script|leak/i.test(String(
                 hindiProviderRejectionReason
                 || croatianProviderRejectionReason
-                || japaneseProviderRejectionReason,
+                || japaneseProviderRejectionReason
+                || spanishProviderRejectionReason,
               ))
                 ? 'rejected_locale'
                 : /grammar|nominal|finite|copula|fragment/i.test(String(
                   hindiProviderRejectionReason
                   || croatianProviderRejectionReason
-                  || japaneseProviderRejectionReason,
+                  || japaneseProviderRejectionReason
+                  || spanishProviderRejectionReason,
                 ))
                   ? 'rejected_grammar'
                   : /noop|meaningful/i.test(String(
                     hindiProviderRejectionReason
                     || croatianProviderRejectionReason
-                    || japaneseProviderRejectionReason,
+                    || japaneseProviderRejectionReason
+                    || spanishProviderRejectionReason,
                   ))
                     ? 'rejected_noop'
                     : 'rejected_grounding'
@@ -2608,6 +2719,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? (hindiProviderRejectionReason
           || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
+          || spanishProviderRejectionReason
           || (providerNoOpDetected ? SUMMARY_NOOP_REJECTION_REASON : 'provider_rejected'))
         : null;
       if (!providerOutcomeHint && providerRaw.trim()) {
