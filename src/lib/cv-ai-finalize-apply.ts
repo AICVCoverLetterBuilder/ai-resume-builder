@@ -4982,9 +4982,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || (Array.isArray(successVisFields.materialImprovementKinds)
             ? (successVisFields.materialImprovementKinds as string[]).length
             : 0),
-        finalDecisionKind: lastCanonicalDecision?.finalDecisionKind
-          ?? successVisFields.finalDecisionKind
-          ?? (result.countedAsSuccess ? 'material_improvement' : 'none'),
+        finalDecisionKind: (lastCanonicalDecision?.finalDecisionKind
+          ?? (typeof successVisFields.finalDecisionKind === 'string'
+            ? successVisFields.finalDecisionKind
+            : null)
+          ?? (result.countedAsSuccess ? 'material_improvement' : 'none')) as string,
         experienceCanonicalFinalizationRevision:
           EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
         spanishExperienceSurfaceFormGateRevision:

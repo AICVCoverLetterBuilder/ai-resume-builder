@@ -841,6 +841,16 @@ type ExperienceLike = {
   degradationDetected?: boolean | null;
   materialImprovementDetected?: boolean | null;
   materialImprovementKinds?: string[] | null;
+  materialImprovementEvidenceCount?: number | null;
+  candidateSurfaceFormPassed?: boolean | null;
+  candidateSurfaceFailureKinds?: string[] | null;
+  finalDecisionKind?: string | null;
+  finalText?: string | null;
+  requestedLocale?: string | null;
+  unsupportedClaimRepairCandidateProduced?: boolean | null;
+  unsupportedClaimRepairCandidateValid?: boolean | null;
+  unsupportedClaimRepairSelectedForComparison?: boolean | null;
+  unsupportedClaimRepairVisibleApplyPerformed?: boolean | null;
   neutralRestyleDetected?: boolean | null;
   authoritativeFactSourceKind?: string | null;
   factAuthorityKind?: string | null;
@@ -1225,6 +1235,79 @@ export function checkExperienceDiagnosticInvariants(
       usageCountAfter: trace.usageCountAfter,
     });
   }
+  // AAB-313 — surface-form / decision / evidence invariants.
+  if (
+    Array.isArray(trace.candidateSurfaceFailureKinds)
+    && (trace.candidateSurfaceFailureKinds as unknown[]).length > 0
+    && (
+      trace.countedAsSuccess === true
+      || trace.visibleApplySucceeded === true
+      || trace.materialImprovementDetected === true
+    )
+  ) {
+    push('malformed_surface_form_accepted', {
+      candidateSurfaceFailureKindsCount: Array.isArray(trace.candidateSurfaceFailureKinds)
+        ? trace.candidateSurfaceFailureKinds.length
+        : 0,
+      countedAsSuccess: trace.countedAsSuccess ?? null,
+    });
+  }
+  if (
+    typeof trace.finalText === 'string'
+    && /\bcada\s+de\b/iu.test(trace.finalText)
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+  ) {
+    push('cada_de_malformed_accepted', {
+      finalTextPreview: String(trace.finalText).slice(0, 80),
+    });
+  }
+  if (
+    Array.isArray(trace.materialImprovementKinds)
+    && (trace.materialImprovementKinds as string[]).length === 1
+    && (trace.materialImprovementKinds as string[])[0] === 'grounded_phrasing_enhancement'
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+    && String(trace.requestedLocale || '').toLowerCase().startsWith('es')
+  ) {
+    push('grounded_phrasing_alone_cannot_apply', {
+      materialImprovementKindsCount: 1,
+    });
+  }
+  if (
+    trace.materialImprovementDetected === true
+    && typeof trace.materialImprovementEvidenceCount === 'number'
+    && Number(trace.materialImprovementEvidenceCount) <= 0
+    && Array.isArray(trace.materialImprovementKinds)
+    && (trace.materialImprovementKinds as unknown[]).length > 0
+  ) {
+    push('improvement_without_evidence', {
+      materialImprovementEvidenceCount: Number(trace.materialImprovementEvidenceCount),
+      materialImprovementKindsCount: Array.isArray(trace.materialImprovementKinds)
+        ? trace.materialImprovementKinds.length
+        : 0,
+    });
+  }
+  if (
+    (trace.semanticNoOpDetected === true || trace.neutralRestyleDetected === true)
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+  ) {
+    push('noop_visible_apply', {
+      semanticNoOpDetected: trace.semanticNoOpDetected ?? null,
+      neutralRestyleDetected: trace.neutralRestyleDetected ?? null,
+      countedAsSuccess: trace.countedAsSuccess ?? null,
+    });
+  }
+  if (
+    trace.candidateSurfaceFormPassed === false
+    && (
+      trace.finalDecisionKind === 'material_improvement'
+      || trace.countedAsSuccess === true
+    )
+  ) {
+    push('surface_form_failure_selected', {
+      candidateSurfaceFormPassed: false,
+      finalDecisionKind: trace.finalDecisionKind ?? null,
+    });
+  }
   return { passed: failures.length === 0, failures };
 }
 
@@ -1272,6 +1355,43 @@ export function checkExperienceDiagnosticCompleteness(
       || trace.finalNormalizedHash === ''
     ) {
       nullish.push('finalNormalizedHash');
+    }
+  }
+  // AAB-313 — decision-object completeness for Spanish Experience outcomes.
+  if (
+    (trace.operationMode === 'enhance_existing' || trace.field === 'experience_description')
+    && String(trace.requestedLocale || '').toLowerCase().startsWith('es')
+  ) {
+    if (
+      trace.finalDecisionKind === 'material_improvement'
+      || trace.finalDecisionKind === 'semantic_noop'
+      || trace.finalDecisionKind === 'neutral_restyle_noop'
+      || trace.finalDecisionKind === 'degradation_rejected'
+      || trace.finalDecisionKind === 'invalid_candidate_rejected'
+      || trace.finalDecisionKind === 'exact_noop'
+      || trace.finalDecisionKind === 'normalized_noop'
+      || trace.finalDecisionKind === 'race_rejected'
+      || trace.finalDecisionKind === 'terminal_failure'
+    ) {
+      require('finalDecisionKind');
+      if (!('materialImprovementDetected' in trace)) missing.push('materialImprovementDetected');
+      if (!('semanticNoOpDetected' in trace)) missing.push('semanticNoOpDetected');
+      if (!('degradationDetected' in trace)) missing.push('degradationDetected');
+    }
+    if (trace.materialImprovementDetected === true) {
+      if (!('materialImprovementKinds' in trace)) missing.push('materialImprovementKinds');
+      if (!('materialImprovementEvidenceCount' in trace)) {
+        missing.push('materialImprovementEvidenceCount');
+      }
+    }
+    if ('unsupportedClaimRepairAttempted' in trace
+      && trace.unsupportedClaimRepairAttempted === true) {
+      if (!('unsupportedClaimRepairCandidateProduced' in trace)) {
+        missing.push('unsupportedClaimRepairCandidateProduced');
+      }
+      if (!('unsupportedClaimRepairVisibleApplyPerformed' in trace)) {
+        missing.push('unsupportedClaimRepairVisibleApplyPerformed');
+      }
     }
   }
   const markerCheck = validateCvAiDiagnosticMarkerField({
