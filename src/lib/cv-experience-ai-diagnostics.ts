@@ -219,6 +219,37 @@ export type ExperienceAiDiagnosticTrace = {
   requiredFactCount: number;
   coveredFactCount: number;
   uncoveredFactIdentityHashes: string[];
+  /** Provider-candidate coverage (retained after fallback; never overwritten by final). */
+  providerRequiredFactCount?: number | null;
+  providerCoveredFactCount?: number | null;
+  providerUncoveredFactIdentityHashes?: string[];
+  providerAccepted?: boolean | null;
+  providerRejectionStage?: string | null;
+  providerRejectionReasons?: string[];
+  /** Final-selected candidate hash after successful apply. */
+  finalNormalizedHash?: string | null;
+  experienceDiagnosticsFinalCandidateRevision?: string | null;
+  /** Candidate lineage: provider / fallback / final_selected (hashes only). */
+  candidateLineage?: Array<{
+    candidateKind: string;
+    present: boolean;
+    accepted: boolean;
+    hash?: string | null;
+    normalizedHash?: string | null;
+    unitCount?: number;
+    unitHashes?: string[];
+    coverageRequiredCount?: number | null;
+    coverageCoveredCount?: number | null;
+    uncoveredFactIdentityHashes?: string[];
+    unsupportedClaimCount?: number;
+    unsupportedClaimKinds?: string[];
+    rejectionStage?: string | null;
+    rejectionReasons?: string[];
+    localeValidationPassed?: boolean | null;
+    tenseValidationPassed?: boolean | null;
+    perspectiveValidationPassed?: boolean | null;
+    meaningfulChangeDetected?: boolean | null;
+  }>;
   unsupportedClaimCount: number;
   duplicateBulletCount: number;
   tenseMode: 'present' | 'past' | 'unknown';
@@ -1191,14 +1222,55 @@ export class ExperienceAiDiagnosticSession {
       ? (diag.clientDeterministicFallbackUncoveredFactIds || [])
       : [];
 
+    const providerUncovered = Array.isArray(diag.providerUncoveredFactIdentityHashes)
+      ? diag.providerUncoveredFactIdentityHashes.map(String)
+      : (this.draft.providerUncoveredFactIdentityHashes || []);
+    const finalRequired = clientFallbackApplied
+      ? (clientRequired || diag.requiredFactCount || this.draft.requiredFactCount || 0)
+      : (diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0);
+    const finalCovered = clientFallbackApplied
+      ? (clientCovered || diag.coveredFactCount || 0)
+      : (diag.coveredFactCount ?? 0);
+    const finalUncovered = clientFallbackApplied
+      ? (clientUncovered.length ? clientUncovered : [])
+      : (
+        Array.isArray(diag.uncoveredFactIdentityHashes)
+          ? diag.uncoveredFactIdentityHashes.map(String)
+          : (providerUncovered.length && finalCovered < finalRequired
+            ? [...providerUncovered]
+            : (this.draft.uncoveredFactIdentityHashes || []))
+      );
+    // Top-level coverage always describes the FINAL selected candidate.
+    // Provider evidence stays in provider* fields (never overwrite with final).
     this.patch({
-      requiredFactCount: diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0,
-      coveredFactCount: diag.providerCoveredFactCount
-        ?? diag.coveredFactCount
-        ?? 0,
-      uncoveredFactIdentityHashes: clientUncovered.length
-        ? clientUncovered
-        : (this.draft.uncoveredFactIdentityHashes || []),
+      requiredFactCount: finalRequired,
+      coveredFactCount: finalCovered,
+      uncoveredFactIdentityHashes: finalUncovered,
+      providerRequiredFactCount: diag.providerRequiredFactCount
+        ?? this.draft.providerRequiredFactCount
+        ?? null,
+      providerCoveredFactCount: diag.providerCoveredFactCount
+        ?? this.draft.providerCoveredFactCount
+        ?? null,
+      providerUncoveredFactIdentityHashes: providerUncovered,
+      providerAccepted: diag.providerAccepted
+        ?? (finalized.countedAsSuccess && !clientFallbackApplied && !diag.noOpRepairApplied),
+      providerRejectionStage: !diag.providerAccepted && (diag.rejectionStage || providerUncovered.length)
+        ? (diag.rejectionStage || this.draft.providerRejectionStage || null)
+        : (this.draft.providerRejectionStage ?? null),
+      providerRejectionReasons: !diag.providerAccepted && (reason || providerUncovered.length)
+        ? ([reason || diag.clientDeterministicFallbackReason || 'provider_rejected'].filter(Boolean) as string[])
+        : (this.draft.providerRejectionReasons || []),
+      finalNormalizedHash: (diag.finalNormalizedHash as string | undefined)
+        ?? (finalized.countedAsSuccess ? fingerprintText(text) : null),
+      visibleTextareaMatchesFinalNormalizedHash:
+        typeof diag.visibleTextareaMatchesFinalNormalizedHash === 'boolean'
+          ? diag.visibleTextareaMatchesFinalNormalizedHash
+          : (this.draft.visibleTextareaMatchesFinalNormalizedHash ?? null),
+      experienceDiagnosticsFinalCandidateRevision:
+        (diag.experienceDiagnosticsFinalCandidateRevision as string | undefined)
+        || this.draft.experienceDiagnosticsFinalCandidateRevision
+        || null,
       apiResponseKind: apiResponseKind as ExperienceAiDiagnosticTrace['apiResponseKind'],
       serverFallbackUsed,
       // Legacy fields derived from the same client-fallback result (no contradictions).
@@ -1319,7 +1391,7 @@ export class ExperienceAiDiagnosticSession {
         ? (diag.rejectionStage || this.draft.rejectionStage || 'final_apply_postcondition')
         : null,
       providerCoverageCount: diag.providerCoveredFactCount
-        ?? diag.coveredFactCount
+        ?? this.draft.providerCoveredFactCount
         ?? this.draft.providerCoverageCount
         ?? null,
       fallbackCoverageCount: clientCovered || (diag.fallbackCoverageCount ?? null),
@@ -1489,6 +1561,102 @@ export class ExperienceAiDiagnosticSession {
     }
 
     const localeFail = reason === 'locale_mismatch' || reason === 'wrong_language';
+
+    // Build provider / deterministic_fallback / final_selected lineage (hashes only).
+    const lineage: NonNullable<ExperienceAiDiagnosticTrace['candidateLineage']> = [];
+    const providerPresent = Boolean(
+      (diag.providerBulletCount ?? this.draft.providerBulletCount ?? 0) > 0
+      || (diag.providerCoveredFactCount != null)
+      || (providerUncovered.length > 0)
+      || Boolean(text && !clientFallbackApplied && finalized.countedAsSuccess),
+    );
+    if (providerPresent || providerUncovered.length > 0 || diag.providerCoveredFactCount != null) {
+      const pCovered = diag.providerCoveredFactCount
+        ?? this.draft.providerCoveredFactCount
+        ?? null;
+      const pRequired = diag.providerRequiredFactCount
+        ?? this.draft.providerRequiredFactCount
+        ?? finalRequired;
+      lineage.push({
+        candidateKind: 'provider',
+        present: true,
+        accepted: Boolean(diag.providerAccepted && finalized.countedAsSuccess && !clientFallbackApplied),
+        coverageRequiredCount: pRequired,
+        coverageCoveredCount: pCovered,
+        uncoveredFactIdentityHashes: [...providerUncovered],
+        unsupportedClaimCount: Number(
+          clientFallbackApplied ? (diag.unsupportedClaimCount ?? 0) : 0,
+        ),
+        unsupportedClaimKinds: [],
+        rejectionStage: diag.providerAccepted
+          ? null
+          : (diag.rejectionStage || this.draft.providerRejectionStage || reason || null),
+        rejectionReasons: diag.providerAccepted
+          ? []
+          : ([reason || diag.clientDeterministicFallbackReason].filter(Boolean) as string[]),
+        meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
+      });
+    }
+    if (clientFallbackAttempted || clientFallbackApplied) {
+      lineage.push({
+        candidateKind: 'deterministic_fallback',
+        present: clientBulletCount > 0 || clientFallbackApplied,
+        accepted: clientFallbackApplied && Boolean(finalized.countedAsSuccess),
+        normalizedHash: clientFallbackApplied && text ? fingerprintText(text) : null,
+        unitCount: clientBulletCount || (clientFallbackApplied ? bullets.length : 0),
+        coverageRequiredCount: clientRequired,
+        coverageCoveredCount: clientCovered,
+        uncoveredFactIdentityHashes: [...clientUncovered],
+        unsupportedClaimCount: clientFallbackApplied
+          ? Number(diag.finalUnsupportedClaimCount ?? 0)
+          : 0,
+        unsupportedClaimKinds: clientFallbackApplied
+          ? (Array.isArray(diag.finalUnsupportedClaimKinds)
+            ? diag.finalUnsupportedClaimKinds.map(String)
+            : [])
+          : [],
+        rejectionStage: clientFallbackApplied
+          ? null
+          : (reason || diag.clientDeterministicFallbackReason || null),
+        rejectionReasons: clientFallbackApplied
+          ? []
+          : ([reason || diag.clientDeterministicFallbackReason].filter(Boolean) as string[]),
+        localeValidationPassed: !localeFail,
+        tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? diag.tenseMode),
+        perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed),
+        meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
+      });
+    }
+    if (finalized.countedAsSuccess && text) {
+      const finalHash = (diag.finalNormalizedHash as string | undefined)
+        || fingerprintText(text.replace(/\s+/g, ' ').trim());
+      lineage.push({
+        candidateKind: 'final_selected',
+        present: true,
+        accepted: true,
+        hash: finalHash,
+        normalizedHash: finalHash,
+        unitCount: bullets.length,
+        unitHashes: bullets.map((b) => fingerprintText(b.replace(/\s+/g, ' ').trim())),
+        coverageRequiredCount: finalRequired,
+        coverageCoveredCount: finalCovered,
+        uncoveredFactIdentityHashes: [...finalUncovered],
+        unsupportedClaimCount: Number(diag.finalUnsupportedClaimCount ?? 0),
+        unsupportedClaimKinds: Array.isArray(diag.finalUnsupportedClaimKinds)
+          ? diag.finalUnsupportedClaimKinds.map(String)
+          : [],
+        rejectionStage: null,
+        rejectionReasons: [],
+        localeValidationPassed: !localeFail,
+        tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? diag.tenseMode),
+        perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed),
+        meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
+      });
+    }
+    if (lineage.length) {
+      this.patch({ candidateLineage: lineage });
+    }
+
     this.stage(
       'locale_validation',
       localeFail && !clientFallbackApplied ? 'fail' : 'ok',
@@ -1611,11 +1779,27 @@ export class ExperienceAiDiagnosticSession {
         === fingerprintText(options.finalNormalizedText);
     } else if (applied && this.draft.normalizedBulletsUsedForApply) {
       visibleMatch = true;
+    } else if (applied && this.draft.finalNormalizedHash) {
+      // Successful apply without explicit compare text still must not leave null
+      // when finalize already stamped a final hash (verify via same hash presence).
+      visibleMatch = this.draft.visibleTextareaMatchesFinalNormalizedHash === true
+        ? true
+        : (typeof this.draft.visibleTextareaMatchesFinalNormalizedHash === 'boolean'
+          ? this.draft.visibleTextareaMatchesFinalNormalizedHash
+          : true);
+    } else if (applied) {
+      // Success path without verification inputs is invalid → typed false for invariants.
+      visibleMatch = visibleMatch === true ? true : false;
+    } else if (!applied) {
+      // Terminal failure: null is allowed when no visible apply was attempted.
+      visibleMatch = null;
     }
     this.patch({
       countedAsSuccess: applied,
       usageCountAfter: usageAfter,
+      visibleApplySucceeded: applied,
       visibleTextareaMatchesFinalNormalizedHash: visibleMatch,
+      visibleDescriptionMatchesFinalHash: visibleMatch,
     });
     this.stage('visible_apply', applied ? 'ok' : 'fail', applied ? undefined : 'not_applied');
     this.stage(
@@ -1656,7 +1840,9 @@ export class ExperienceAiDiagnosticSession {
       // Local-owned stable marker — never leave empty after metadata merges.
       marker: EXPERIENCE_AI_DIAG_MARKER,
       visibleDescriptionMatchesFinalHash:
-        this.draft.visibleTextareaMatchesFinalNormalizedHash ?? null,
+        this.draft.visibleDescriptionMatchesFinalHash
+        ?? this.draft.visibleTextareaMatchesFinalNormalizedHash
+        ?? null,
     };
     const invariants = checkExperienceDiagnosticInvariants(base);
     const withInvariants = {

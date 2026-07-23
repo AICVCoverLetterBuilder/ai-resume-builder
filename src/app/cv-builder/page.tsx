@@ -1900,7 +1900,10 @@ export default function CVBuilderPage() {
         semanticDutyKeysUsed: [],
         ...(finalizedBullets.diagnostics || {}),
       });
-      diagSession.recordVisibleApply(true, countBefore + 1);
+      diagSession.recordVisibleApply(true, countBefore + 1, {
+        visibleDescription: finalizedBullets.text,
+        finalNormalizedText: finalizedBullets.text,
+      });
       diagSession.commit();
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {

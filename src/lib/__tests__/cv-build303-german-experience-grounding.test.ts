@@ -390,7 +390,15 @@ describe('German Experience grounding (AAB-303)', () => {
     if (fin.blocked) {
       session.recordVisibleApply(false, 8);
     } else {
-      session.recordVisibleApply(true, 9);
+      session.patch({
+        finalNormalizedHash: 'fnv1a_test_final_303',
+        visibleTextareaMatchesFinalNormalizedHash: true,
+        visibleDescriptionMatchesFinalHash: true,
+      });
+      session.recordVisibleApply(true, 9, {
+        visibleDescription: fin.text || GOOD_DE,
+        finalNormalizedText: fin.text || GOOD_DE,
+      });
     }
     const trace = session.commit();
     expect(trace.marker).toBe(EXPERIENCE_AI_DIAG_MARKER);

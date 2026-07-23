@@ -798,6 +798,7 @@ type ExperienceLike = {
   providerAttempted?: boolean;
   clientDeterministicFallbackAttempted?: boolean;
   clientDeterministicFallbackApplied?: boolean;
+  fallbackSelected?: boolean;
   visibleApplySucceeded?: boolean;
   countedAsSuccess?: boolean;
   usageCountBefore?: number;
@@ -806,6 +807,18 @@ type ExperienceLike = {
   stableEntryIdentityMatched?: boolean | null;
   targetEntryStillExists?: boolean | null;
   visibleDescriptionMatchesFinalHash?: boolean | null;
+  visibleTextareaMatchesFinalNormalizedHash?: boolean | null;
+  finalMatchesProviderOutput?: boolean | null;
+  requiredFactCount?: number | null;
+  coveredFactCount?: number | null;
+  uncoveredFactIdentityHashes?: string[] | null;
+  unsupportedClaimCount?: number | null;
+  finalUnsupportedClaimKinds?: string[] | null;
+  finalNormalizedHash?: string | null;
+  providerUncoveredFactIdentityHashes?: string[] | null;
+  providerCoveredFactCount?: number | null;
+  providerRequiredFactCount?: number | null;
+  relevanceValidationPassed?: boolean | null;
 };
 
 export function checkExperienceDiagnosticInvariants(
@@ -849,11 +862,95 @@ export function checkExperienceDiagnosticInvariants(
       visibleDescriptionMatchesFinalHash: false,
     });
   }
+  if (trace.visibleApplySucceeded
+    && trace.visibleTextareaMatchesFinalNormalizedHash === false) {
+    push('visible_textarea_hash_mismatch', {
+      visibleApplySucceeded: true,
+      visibleTextareaMatchesFinalNormalizedHash: false,
+    });
+  }
+  if (trace.countedAsSuccess
+    && trace.visibleApplySucceeded
+    && (
+      trace.visibleTextareaMatchesFinalNormalizedHash === false
+      || trace.visibleDescriptionMatchesFinalHash === false
+    )) {
+    push('success_with_failed_visible_hash', {
+      countedAsSuccess: true,
+      visibleTextareaMatchesFinalNormalizedHash:
+        trace.visibleTextareaMatchesFinalNormalizedHash ?? null,
+      visibleDescriptionMatchesFinalHash: trace.visibleDescriptionMatchesFinalHash ?? null,
+    });
+  }
   if (trace.finalCandidateSource === 'deterministic_fallback'
     && trace.clientDeterministicFallbackApplied === false) {
     push('final_source_deterministic_but_not_applied', {
       finalCandidateSource: 'deterministic_fallback',
       clientDeterministicFallbackApplied: false,
+    });
+  }
+  if (trace.finalCandidateSource === 'deterministic_fallback'
+    && trace.fallbackSelected === false) {
+    push('final_source_deterministic_but_fallback_not_selected', {
+      finalCandidateSource: 'deterministic_fallback',
+      fallbackSelected: false,
+    });
+  }
+  const required = trace.requiredFactCount ?? 0;
+  const covered = trace.coveredFactCount ?? 0;
+  const uncovered = Array.isArray(trace.uncoveredFactIdentityHashes)
+    ? trace.uncoveredFactIdentityHashes
+    : [];
+  if (required > 0 && covered < required && uncovered.length === 0) {
+    push('incomplete_coverage_with_empty_uncovered_hashes', {
+      requiredFactCount: required,
+      coveredFactCount: covered,
+      uncoveredFactIdentityHashCount: 0,
+    });
+  }
+  const unsupportedKinds = Array.isArray(trace.finalUnsupportedClaimKinds)
+    ? trace.finalUnsupportedClaimKinds
+    : [];
+  if ((trace.unsupportedClaimCount ?? 0) === 0 && unsupportedKinds.length > 0) {
+    push('unsupported_count_zero_with_nonempty_kinds', {
+      unsupportedClaimCount: 0,
+      finalUnsupportedClaimKindCount: unsupportedKinds.length,
+    });
+  }
+  if (
+    trace.countedAsSuccess
+    && required > 0
+    && covered < required
+  ) {
+    push('final_success_with_incomplete_coverage', {
+      countedAsSuccess: true,
+      requiredFactCount: required,
+      coveredFactCount: covered,
+    });
+  }
+  if (
+    trace.countedAsSuccess
+    && trace.visibleApplySucceeded
+    && !trace.finalNormalizedHash
+  ) {
+    push('success_apply_missing_final_hash', {
+      countedAsSuccess: true,
+      finalNormalizedHash: null,
+    });
+  }
+  if (
+    (trace.providerCoveredFactCount != null)
+    && (trace.providerRequiredFactCount != null)
+    && trace.providerCoveredFactCount < trace.providerRequiredFactCount
+    && Array.isArray(trace.providerUncoveredFactIdentityHashes)
+    && trace.providerUncoveredFactIdentityHashes.length === 0
+    && (trace.finalCandidateSource === 'deterministic_fallback'
+      || trace.clientDeterministicFallbackApplied)
+  ) {
+    push('provider_rejection_evidence_overwritten', {
+      providerCoveredFactCount: trace.providerCoveredFactCount,
+      providerRequiredFactCount: trace.providerRequiredFactCount,
+      providerUncoveredFactIdentityHashCount: 0,
     });
   }
   return { passed: failures.length === 0, failures };
@@ -881,6 +978,30 @@ export function checkExperienceDiagnosticCompleteness(
   require('usageCountAfter');
   require('selectedSourceKind');
   require('clickedExperienceEntryIdHash');
+  if (trace.countedAsSuccess === true && trace.visibleApplySucceeded === true) {
+    if (
+      !('visibleTextareaMatchesFinalNormalizedHash' in trace)
+      || trace.visibleTextareaMatchesFinalNormalizedHash === null
+      || trace.visibleTextareaMatchesFinalNormalizedHash === undefined
+    ) {
+      nullish.push('visibleTextareaMatchesFinalNormalizedHash');
+    }
+    if (
+      !('visibleDescriptionMatchesFinalHash' in trace)
+      || trace.visibleDescriptionMatchesFinalHash === null
+      || trace.visibleDescriptionMatchesFinalHash === undefined
+    ) {
+      nullish.push('visibleDescriptionMatchesFinalHash');
+    }
+    if (
+      !('finalNormalizedHash' in trace)
+      || trace.finalNormalizedHash === null
+      || trace.finalNormalizedHash === undefined
+      || trace.finalNormalizedHash === ''
+    ) {
+      nullish.push('finalNormalizedHash');
+    }
+  }
   const markerCheck = validateCvAiDiagnosticMarkerField({
     ...trace,
     operationKind: trace.operationKind || 'experience',

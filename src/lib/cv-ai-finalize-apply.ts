@@ -81,6 +81,11 @@ import {
   buildGermanWarehouseExperienceFallback,
 } from './cv-german-experience-grounding';
 import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
+
+/** Packaging proof — final-candidate diagnostic truthfulness (AAB-305). */
+export const EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION =
+  'experience-diagnostics-final-candidate-305-v1' as const;
+void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 import { fingerprintText } from './cv-export-diagnostics';
 import {
   deterministicLocalizedBulletsFromCanonical,
@@ -233,6 +238,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_CV_AI_302_REVISION,
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
+  EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -268,6 +274,7 @@ void GERMAN_CV_AI_302_REVISION;
 void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
+void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297;
 void HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
@@ -395,7 +402,11 @@ export type FinalizeCvAiFieldResult = {
     coveredFactCount?: number;
     providerCoveredFactCount?: number;
     providerUncoveredFactCount?: number;
+    providerUncoveredFactIdentityHashes?: string[];
+    uncoveredFactIdentityHashes?: string[];
     providerRequiredFactCount?: number;
+    providerAccepted?: boolean;
+    experienceDiagnosticsFinalCandidateRevision?: typeof EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
     providerPrimaryRejectionReason?: string | null;
     providerBulletCount?: number;
     /** @deprecated Prefer clientDeterministicFallback* fields. */
@@ -605,7 +616,7 @@ export type FinalizeCvAiFieldResult = {
     stableEntryIdentityMatched?: boolean;
     targetEntryStillExists?: boolean;
     entryContextMatchedAtApply?: boolean;
-    visibleTextareaMatchesFinalNormalizedHash?: boolean;
+    visibleTextareaMatchesFinalNormalizedHash?: boolean | null;
     targetLocale?: string | null;
     targetScript?: string | null;
     crossEntryCandidateFactCount?: number;
@@ -2750,6 +2761,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let lastRequired = sourceFactCount;
   let providerCoveredFactCount = 0;
   let providerRequiredFactCount = sourceFactCount;
+  let providerUncoveredFactIdentityHashes: string[] = [];
+  let providerAccepted = false;
   let fallbackBulletCount = 0;
   let fallbackApplied = false;
   let clientDeterministicFallbackAttempted = false;
@@ -2810,10 +2823,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     targetScript: resolveTargetScriptForLocale(locale),
     sourceFactCount,
     requiredFactCount: lastRequired,
-    coveredFactCount: providerCoveredFactCount || lastCovered,
+    coveredFactCount: lastCovered,
     providerCoveredFactCount,
     providerRequiredFactCount,
-    providerUncoveredFactCount: Math.max(0, (providerRequiredFactCount || lastRequired) - (providerCoveredFactCount || lastCovered)),
+    providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
+    providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+    providerAccepted,
     providerBulletCount,
     fallbackBulletCount,
     finalBulletCount: 0,
@@ -3281,6 +3296,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           clientDeterministicFallbackUncoveredFactIds = deWarehouse.uncovered.map(
             (id) => `de_wh_${id}`,
           );
+          if (stage === 'provider') {
+            providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+            providerCoveredFactCount = lastCovered;
+            providerRequiredFactCount = lastRequired || Math.max(3, sourceFactCount);
+          }
         }
         return null;
       }
@@ -3292,6 +3312,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackUncoveredFactIds = deWarehouse.uncovered.map(
           (id) => `de_wh_${id}`,
         );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
         return null;
       }
       if (needsRuDesignFamilies && ruDesign && !ruDesign.ok) {
@@ -3364,6 +3389,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             clientDeterministicFallbackUncoveredFactIds = deWarehouse.uncovered.map(
               (id) => `de_wh_${id}`,
             );
+            if (stage === 'provider') {
+              providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+              providerCoveredFactCount = lastCovered;
+              providerRequiredFactCount = lastRequired;
+            }
             return null;
           }
           lastRequired = deWarehouse.required.length;
@@ -3512,7 +3542,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       clientDeterministicFallbackCoveredFactCount = lastCovered || sourceFactCount;
       clientDeterministicFallbackRequiredFactCount = lastRequired || sourceFactCount;
       clientDeterministicFallbackUncoveredFactIds = [];
+      if (!finalCandidateSource) finalCandidateSource = 'deterministic_fallback';
     }
+    void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
     return {
       blocked: false,
       text: candidate,
@@ -3521,28 +3553,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       countedAsSuccess: true,
       diagnostics: {
         ...baseDiag(),
-        // Keep provider coverage distinct from client fallback coverage.
-        coveredFactCount: isClientFallback
-          ? providerCoveredFactCount
-          : (lastCovered || sourceFactCount),
-        requiredFactCount: isClientFallback
-          ? providerRequiredFactCount
-          : (lastRequired || sourceFactCount),
-        providerCoveredFactCount: isClientFallback
-          ? providerCoveredFactCount
-          : (lastCovered || sourceFactCount),
-        providerRequiredFactCount: isClientFallback
-          ? providerRequiredFactCount
-          : (lastRequired || sourceFactCount),
-        providerCoverageCount: isClientFallback
-          ? providerCoveredFactCount
-          : (lastCovered || sourceFactCount),
-        providerUncoveredFactCount: isClientFallback
-          ? Math.max(0, providerRequiredFactCount - providerCoveredFactCount)
-          : Math.max(0, (lastRequired || sourceFactCount) - lastCovered),
+        // Top-level coverage describes the FINAL selected candidate.
+        coveredFactCount: lastCovered || sourceFactCount,
+        requiredFactCount: lastRequired || sourceFactCount,
+        providerCoveredFactCount,
+        providerRequiredFactCount,
+        providerCoverageCount: providerCoveredFactCount,
+        providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
+        providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+        providerAccepted: isClientFallback ? false : true,
         fallbackBulletCount: isClientFallback ? bulletCount : fallbackBulletCount,
         finalBulletCount: bulletCount,
         finalBulletScripts: detectBulletScripts(candidate),
+        finalNormalizedHash: fingerprintText(candidate.replace(/\s+/g, ' ').trim()),
         detectedLocaleByBullet: purity.detectedLocaleByUnit,
         detectedScriptByBullet: purity.detectedScriptByUnit,
         wrongLocaleBulletCount: purity.wrongLocaleUnitCount,
@@ -3556,7 +3579,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         crossDomainLeakageDetected: false,
         providerLocalePurityPassed: isClientFallback ? undefined : purity.targetLocalePurityPassed,
         providerSemanticCoveragePassed: isClientFallback
-          ? undefined
+          ? (providerCoveredFactCount >= Math.min(3, providerRequiredFactCount || 3))
           : (lastCovered >= Math.min(3, lastRequired || sourceFactCount || 3)),
         fallbackLocalePurityPassed: isClientFallback ? purity.targetLocalePurityPassed : undefined,
         fallbackSemanticCoveragePassed: isClientFallback
@@ -3590,6 +3613,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackUncoveredFactIds: isClientFallback
           ? []
           : clientDeterministicFallbackUncoveredFactIds,
+        experienceDiagnosticsFinalCandidateRevision:
+          EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
       },
     };
   };
@@ -3650,11 +3675,31 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       deterministicFallbackAppliedAfterNoOp = true;
       if (!finalCandidateSource) finalCandidateSource = 'deterministic_fallback';
     }
+    const acceptedText = (result.text || '').replace(/\s+/g, ' ').trim();
+    const providerCompare = (providerRawForCompare || '').replace(/\s+/g, ' ').trim();
+    const matchesProvider = Boolean(
+      result.countedAsSuccess
+      && acceptedText
+      && providerCompare
+      && (
+        acceptedText === providerCompare
+        || experienceAiHasMeaningfulChange(providerCompare, acceptedText) === false
+      ),
+    );
+    // Never inherit a pre-fallback provider-equality flag after selecting fallback.
+    const finalMatchesProvider = result.origin === 'deterministic_fallback'
+      || result.diagnostics?.clientDeterministicFallbackApplied
+      || finalCandidateSource === 'deterministic_fallback'
+      || finalCandidateSource === 'server_fallback'
+      ? matchesProvider && acceptedText === providerCompare
+      : matchesProvider;
+    void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
     return {
       ...result,
       diagnostics: {
         ...result.diagnostics,
         ...perspectiveMeta,
+        finalMatchesProviderOutput: finalMatchesProvider,
         tenseMode,
         selectedExperienceEntryIdHash,
         operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
@@ -3695,6 +3740,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? 'deterministic_fallback'
               : (noOpRepairApplied ? 'noop_repair' : 'provider'))
             : 'none'),
+        providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+        providerAccepted: result.countedAsSuccess
+          && !(result.origin === 'deterministic_fallback'
+            || result.diagnostics?.clientDeterministicFallbackApplied
+            || finalCandidateSource === 'deterministic_fallback'
+            || finalCandidateSource === 'server_fallback'),
+        finalNormalizedHash: result.countedAsSuccess
+          ? fingerprintText(acceptedText)
+          : (result.diagnostics?.finalNormalizedHash ?? null),
         stableEntryIdentityMatched: true,
         targetEntryStillExists: Boolean(findExperienceById(cv, exp.id)),
         entryScopedCanonicalStorageUsed: true,
@@ -3708,7 +3762,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || snapshot.experienceEntryId === exp.id
           ),
         ),
-        visibleTextareaMatchesFinalNormalizedHash: Boolean(result.countedAsSuccess),
+        visibleTextareaMatchesFinalNormalizedHash: result.countedAsSuccess ? true : null,
+        experienceDiagnosticsFinalCandidateRevision:
+          EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
       },
     };
   };
@@ -3924,6 +3980,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (firstAccepted) {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
         perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
+        providerAccepted = true;
+        providerUncoveredFactIdentityHashes = [];
         if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {
           noOpRepairApplied = true;
           noOpRepairValidationPassed = true;
@@ -4859,8 +4917,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       translationFallbackApplied: false,
       translatedFactCount: providerCoveredFactCount || lastCovered,
       providerCoverageCount: providerCoveredFactCount,
-      coveredFactCount: providerCoveredFactCount || lastCovered,
-      requiredFactCount: providerRequiredFactCount || lastRequired || sourceFactCount,
+      // On terminal failure, top-level coverage still reflects the last evaluated
+      // (usually provider) candidate; provider* fields remain the authority.
+      coveredFactCount: lastCovered,
+      requiredFactCount: lastRequired || providerRequiredFactCount || sourceFactCount,
+      uncoveredFactIdentityHashes: providerUncoveredFactIdentityHashes.length
+        ? [...providerUncoveredFactIdentityHashes]
+        : [...clientDeterministicFallbackUncoveredFactIds],
+      providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+      providerAccepted: false,
+      experienceDiagnosticsFinalCandidateRevision:
+        EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
     },
   });
 }
