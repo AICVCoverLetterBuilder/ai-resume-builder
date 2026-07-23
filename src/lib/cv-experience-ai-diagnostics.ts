@@ -14,11 +14,15 @@ import { splitExperienceBullets } from './cv-canonical-facts';
 import { getApiBaseUrl } from './api';
 import type { AiGroundingResolution } from './cv-experience-job-context';
 import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
-import { EXPERIENCE_REPAIR_LINEAGE_309_REVISION } from './cv-ai-finalize-apply';
+import {
+  EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
+  EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
+} from './cv-ai-finalize-apply';
 import {
   experienceAiSourcesEquivalent,
 } from './cv-experience-ai-operation-snapshot';
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
 import { detectTextLocale } from './cv-content-locale';
 import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
@@ -298,6 +302,17 @@ export type ExperienceAiDiagnosticTrace = {
   unsupportedClaimRepairNormalizedHash: string | null;
   experienceRepairLineageRevision: string | null;
   spanishExperienceRepairGroundingRevision: string | null;
+  experiencePredicateRepairLineageRevision: string | null;
+  spanishExperiencePredicateGroundingRevision: string | null;
+  sourcePredicateIdentityCount: number;
+  candidatePredicateIdentityCount: number;
+  candidateAddedPredicateCount: number;
+  candidateAddedPredicateIdentityHashes: string[];
+  unsupportedPredicateKindCount: number;
+  coordinatedPredicateExpansionDetected: boolean;
+  sourceUnitPredicateCoveragePassed: boolean | null;
+  repairResidualAddedPredicateCount: number;
+  repairResidualAddedPredicateIdentityHashes: string[];
   deterministicFallbackAttemptedAfterNoOp: boolean;
   deterministicFallbackAppliedAfterNoOp: boolean;
   finalCandidateSource: string | null;
@@ -867,6 +882,17 @@ export class ExperienceAiDiagnosticSession {
       unsupportedClaimRepairNormalizedHash: null,
       experienceRepairLineageRevision: null,
       spanishExperienceRepairGroundingRevision: null,
+      experiencePredicateRepairLineageRevision: null,
+      spanishExperiencePredicateGroundingRevision: null,
+      sourcePredicateIdentityCount: 0,
+      candidatePredicateIdentityCount: 0,
+      candidateAddedPredicateCount: 0,
+      candidateAddedPredicateIdentityHashes: [],
+      unsupportedPredicateKindCount: 0,
+      coordinatedPredicateExpansionDetected: false,
+      sourceUnitPredicateCoveragePassed: null,
+      repairResidualAddedPredicateCount: 0,
+      repairResidualAddedPredicateIdentityHashes: [],
       deterministicFallbackAttemptedAfterNoOp: false,
       deterministicFallbackAppliedAfterNoOp: false,
       finalCandidateSource: null,
@@ -1455,6 +1481,30 @@ export class ExperienceAiDiagnosticSession {
         ?? EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
       spanishExperienceRepairGroundingRevision:
         (diag.spanishExperienceRepairGroundingRevision as string | null | undefined) ?? null,
+      experiencePredicateRepairLineageRevision:
+        (diag.experiencePredicateRepairLineageRevision as string | null | undefined)
+        ?? EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
+      spanishExperiencePredicateGroundingRevision:
+        (diag.spanishExperiencePredicateGroundingRevision as string | null | undefined) ?? null,
+      sourcePredicateIdentityCount: Number(diag.sourcePredicateIdentityCount ?? 0),
+      candidatePredicateIdentityCount: Number(diag.candidatePredicateIdentityCount ?? 0),
+      candidateAddedPredicateCount: Number(diag.candidateAddedPredicateCount ?? 0),
+      candidateAddedPredicateIdentityHashes: Array.isArray(
+        diag.candidateAddedPredicateIdentityHashes,
+      )
+        ? diag.candidateAddedPredicateIdentityHashes.map(String)
+        : [],
+      unsupportedPredicateKindCount: Number(diag.unsupportedPredicateKindCount ?? 0),
+      coordinatedPredicateExpansionDetected: Boolean(
+        diag.coordinatedPredicateExpansionDetected,
+      ),
+      sourceUnitPredicateCoveragePassed: diag.sourceUnitPredicateCoveragePassed ?? null,
+      repairResidualAddedPredicateCount: Number(diag.repairResidualAddedPredicateCount ?? 0),
+      repairResidualAddedPredicateIdentityHashes: Array.isArray(
+        diag.repairResidualAddedPredicateIdentityHashes,
+      )
+        ? diag.repairResidualAddedPredicateIdentityHashes.map(String)
+        : [],
       deterministicFallbackAttemptedAfterNoOp: Boolean(
         diag.deterministicFallbackAttemptedAfterNoOp
         || (

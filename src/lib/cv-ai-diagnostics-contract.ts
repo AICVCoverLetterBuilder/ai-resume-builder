@@ -828,6 +828,8 @@ type ExperienceLike = {
   unsupportedClaimRepairValidationPassed?: boolean | null;
   unsupportedClaimRepairHash?: string | null;
   unsupportedClaimRepairNormalizedHash?: string | null;
+  candidateAddedPredicateCount?: number | null;
+  repairResidualAddedPredicateCount?: number | null;
   candidateLineage?: Array<{
     candidateKind?: string;
     accepted?: boolean | null;
@@ -1020,6 +1022,26 @@ export function checkExperienceDiagnosticInvariants(
         finalUnsupportedClaimCount: trace.finalUnsupportedClaimCount ?? 0,
       });
     }
+    if ((trace.repairResidualAddedPredicateCount ?? 0) > 0) {
+      push('unsupported_repair_applied_with_residual_predicates', {
+        unsupportedClaimRepairApplied: true,
+        repairResidualAddedPredicateCount: trace.repairResidualAddedPredicateCount ?? 0,
+      });
+    }
+  }
+  if (
+    (trace.candidateAddedPredicateCount ?? 0) > 0
+    && trace.countedAsSuccess
+    && trace.visibleApplySucceeded
+    && (trace.finalUnsupportedClaimCount ?? 0) === 0
+    && !trace.unsupportedClaimRepairApplied
+    && !trace.clientDeterministicFallbackApplied
+  ) {
+    // Accepted provider with residual added predicates is invalid unless repair/fallback cleaned them.
+    push('accepted_with_candidate_added_predicates', {
+      candidateAddedPredicateCount: trace.candidateAddedPredicateCount ?? 0,
+      countedAsSuccess: true,
+    });
   }
   if (trace.finalCandidateSource === 'unsupported_claim_repair') {
     const repairHash = trace.unsupportedClaimRepairNormalizedHash
