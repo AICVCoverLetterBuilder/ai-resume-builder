@@ -16,7 +16,14 @@ export type ExperienceUnsupportedClaimKind =
   | 'leadership_claim'
   | 'unsupported_tool_claim'
   | 'unsupported_metric_claim'
-  | 'unsupported_generated_duty';
+  | 'unsupported_generated_duty'
+  | 'guarantee_escalation'
+  | 'assurance_escalation'
+  | 'responsibility_escalation'
+  | 'outcome_ownership'
+  | 'quality_guarantee'
+  | 'completeness_guarantee'
+  | 'compliance_guarantee';
 
 export type ExperienceUnsupportedClaimScan = {
   kinds: ExperienceUnsupportedClaimKind[];

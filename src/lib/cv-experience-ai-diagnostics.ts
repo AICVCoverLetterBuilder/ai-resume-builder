@@ -226,6 +226,8 @@ export type ExperienceAiDiagnosticTrace = {
   providerAccepted?: boolean | null;
   providerRejectionStage?: string | null;
   providerRejectionReasons?: string[];
+  providerUnsupportedClaimCount?: number | null;
+  providerUnsupportedClaimKinds?: string[];
   /** Final-selected candidate hash after successful apply. */
   finalNormalizedHash?: string | null;
   experienceDiagnosticsFinalCandidateRevision?: string | null;
@@ -1255,12 +1257,31 @@ export class ExperienceAiDiagnosticSession {
       providerUncoveredFactIdentityHashes: providerUncovered,
       providerAccepted: diag.providerAccepted
         ?? (finalized.countedAsSuccess && !clientFallbackApplied && !diag.noOpRepairApplied),
-      providerRejectionStage: !diag.providerAccepted && (diag.rejectionStage || providerUncovered.length)
-        ? (diag.rejectionStage || this.draft.providerRejectionStage || null)
-        : (this.draft.providerRejectionStage ?? null),
-      providerRejectionReasons: !diag.providerAccepted && (reason || providerUncovered.length)
-        ? ([reason || diag.clientDeterministicFallbackReason || 'provider_rejected'].filter(Boolean) as string[])
+      providerRejectionStage: (typeof diag.providerRejectionStage === 'string'
+        && diag.providerRejectionStage)
+        || (!diag.providerAccepted && (diag.rejectionStage || providerUncovered.length)
+          ? (diag.rejectionStage || this.draft.providerRejectionStage || null)
+          : (this.draft.providerRejectionStage ?? null)),
+      providerRejectionReasons: !diag.providerAccepted && (
+        reason
+        || providerUncovered.length
+        || (typeof diag.providerRejectionReason === 'string' && diag.providerRejectionReason)
+        || (Array.isArray(diag.providerUnsupportedClaimKinds)
+          && diag.providerUnsupportedClaimKinds.length > 0)
+      )
+        ? ([
+          reason
+          || diag.providerRejectionReason
+          || diag.clientDeterministicFallbackReason
+          || 'provider_rejected',
+        ].filter(Boolean) as string[])
         : (this.draft.providerRejectionReasons || []),
+      providerUnsupportedClaimCount: typeof diag.providerUnsupportedClaimCount === 'number'
+        ? diag.providerUnsupportedClaimCount
+        : (this.draft.providerUnsupportedClaimCount ?? null),
+      providerUnsupportedClaimKinds: Array.isArray(diag.providerUnsupportedClaimKinds)
+        ? diag.providerUnsupportedClaimKinds.map(String)
+        : (this.draft.providerUnsupportedClaimKinds || []),
       finalNormalizedHash: (diag.finalNormalizedHash as string | undefined)
         ?? (finalized.countedAsSuccess ? fingerprintText(text) : null),
       visibleTextareaMatchesFinalNormalizedHash:
@@ -1584,16 +1605,30 @@ export class ExperienceAiDiagnosticSession {
         coverageRequiredCount: pRequired,
         coverageCoveredCount: pCovered,
         uncoveredFactIdentityHashes: [...providerUncovered],
-        unsupportedClaimCount: Number(
-          clientFallbackApplied ? (diag.unsupportedClaimCount ?? 0) : 0,
-        ),
-        unsupportedClaimKinds: [],
+        unsupportedClaimCount: typeof diag.providerUnsupportedClaimCount === 'number'
+          ? diag.providerUnsupportedClaimCount
+          : Number(
+            Array.isArray(diag.providerUnsupportedClaimKinds)
+              ? diag.providerUnsupportedClaimKinds.length
+              : (diag.unsupportedClaimCount ?? 0),
+          ),
+        unsupportedClaimKinds: Array.isArray(diag.providerUnsupportedClaimKinds)
+          ? diag.providerUnsupportedClaimKinds.map(String)
+          : [],
         rejectionStage: diag.providerAccepted
           ? null
-          : (diag.rejectionStage || this.draft.providerRejectionStage || reason || null),
+          : (diag.providerRejectionStage
+            || diag.rejectionStage
+            || this.draft.providerRejectionStage
+            || reason
+            || null),
         rejectionReasons: diag.providerAccepted
           ? []
-          : ([reason || diag.clientDeterministicFallbackReason].filter(Boolean) as string[]),
+          : ([
+            diag.providerRejectionReason
+            || reason
+            || diag.clientDeterministicFallbackReason,
+          ].filter(Boolean) as string[]),
         meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
       });
     }

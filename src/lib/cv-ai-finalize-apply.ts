@@ -83,11 +83,15 @@ import {
 } from './cv-german-experience-grounding';
 import {
   SPANISH_CV_AI_305_REVISION,
-  sourceRequiresSpanishWarehouseFactCoverage,
-  validateSpanishWarehouseExperienceCoverage,
   detectSpanishExperienceUnsupportedExpansion,
   buildSpanishWarehouseExperienceFallback,
+  sourceRequiresSpanishWarehouseFactCoverage,
+  validateSpanishWarehouseExperienceCoverage,
+  stripSpanishExperienceGuaranteeEscalation,
+  SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
 } from './cv-spanish-experience-grounding';
+void SPANISH_CV_AI_305_REVISION;
+void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 import {
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
@@ -263,6 +267,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_CV_AI_302_REVISION,
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
   SPANISH_CV_AI_305_REVISION,
+  SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
@@ -304,6 +309,7 @@ void GERMAN_CV_AI_302_REVISION;
 void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void SPANISH_CV_AI_305_REVISION;
+void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
@@ -534,6 +540,7 @@ export type FinalizeCvAiFieldResult = {
     providerRejectionReason?: string;
     providerRejectionStage?: string;
     providerUnsupportedClaimCount?: number | null;
+    providerUnsupportedClaimKinds?: string[];
     providerDetectedMaterialFamilyCount?: number;
     authoritativeRequiredFamilyCount?: number;
     fallbackCoveredFamilyCount?: number;
@@ -3074,6 +3081,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let finalUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
   let lastUnsupportedClaimCount = 0;
   let lastUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
+  let providerUnsupportedClaimCount: number | null = null;
+  let providerUnsupportedClaimKinds: ExperienceUnsupportedClaimKind[] = [];
   let lastScopeExpansionDetected = false;
   let lastUniversalQuantifierDetected = false;
   let lastResponsibilityEscalationDetected = false;
@@ -3122,6 +3131,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     clientDeterministicFallbackReason,
     providerRejectionReason,
     providerRejectionStage,
+    providerUnsupportedClaimCount,
+    providerUnsupportedClaimKinds: [...providerUnsupportedClaimKinds],
     providerDetectedMaterialFamilyCount,
     authoritativeRequiredFamilyCount,
     fallbackCoveredFamilyCount,
@@ -3593,11 +3604,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
       if (esExpansion && esExpansion.count > 0) {
-        lastRejectStage = `${stage}:spanish_unsupported_expansion`;
-        lastRejectReason = esExpansion.labels[0] || 'unsupported_generated_duty';
+        lastRejectStage = 'unsupported_claim_validation';
+        lastRejectReason = esExpansion.labels[0] || 'guarantee_escalation';
         lastUnsupportedClaimCount = esExpansion.count;
         lastUnsupportedClaimKinds = esExpansion.kinds;
         lastScopeExpansionDetected = esExpansion.scopeExpansionDetected;
+        if (stage === 'provider') {
+          providerUnsupportedClaimCount = esExpansion.count;
+          providerUnsupportedClaimKinds = [...esExpansion.kinds];
+        }
         generationValidationMeta = {
           ...generationValidationMeta,
           unsupportedClaimCount: Math.max(
@@ -3737,13 +3752,29 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       if (locale === 'es') {
         void SPANISH_CV_AI_305_REVISION;
+        void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
         const esExpansion = detectSpanishExperienceUnsupportedExpansion(sourceForCoverage, candidate);
+        const esWarehouseProbe = sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage)
+          ? validateSpanishWarehouseExperienceCoverage(sourceForCoverage, candidate)
+          : null;
         if (esExpansion.count > 0) {
-          lastRejectStage = `${stage}:spanish_unsupported_expansion`;
-          lastRejectReason = esExpansion.labels[0] || 'unsupported_generated_duty';
+          lastRejectStage = 'unsupported_claim_validation';
+          lastRejectReason = esExpansion.labels[0] || 'guarantee_escalation';
           lastUnsupportedClaimCount = esExpansion.count;
           lastUnsupportedClaimKinds = esExpansion.kinds;
           lastScopeExpansionDetected = esExpansion.scopeExpansionDetected;
+          if (esWarehouseProbe) {
+            lastRequired = esWarehouseProbe.required.length || lastRequired;
+            lastCovered = esWarehouseProbe.covered.length;
+          }
+          if (stage === 'provider') {
+            providerUnsupportedClaimCount = esExpansion.count;
+            providerUnsupportedClaimKinds = [...esExpansion.kinds];
+            if (esWarehouseProbe) {
+              providerCoveredFactCount = lastCovered;
+              providerRequiredFactCount = lastRequired || Math.max(3, sourceFactCount);
+            }
+          }
           generationValidationMeta = {
             ...generationValidationMeta,
             unsupportedClaimCount: Math.max(
@@ -3910,6 +3941,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || stage === 'cross_locale_translation_fallback'
         || stage === 'russian_design_family_rebuild'
         || stage === 'croatian_design_family_rebuild'
+        || stage === 'spanish_warehouse_fallback'
       );
     if (isClientFallback) {
       fallbackApplied = true;
@@ -4119,11 +4151,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               : (noOpRepairApplied ? 'noop_repair' : 'provider'))
             : 'none'),
         providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
-        providerAccepted: result.countedAsSuccess
-          && !(result.origin === 'deterministic_fallback'
-            || result.diagnostics?.clientDeterministicFallbackApplied
-            || finalCandidateSource === 'deterministic_fallback'
-            || finalCandidateSource === 'server_fallback'),
+        providerAccepted: result.diagnostics?.providerAccepted === false
+          ? false
+          : (
+            result.countedAsSuccess
+            && !(result.origin === 'deterministic_fallback'
+              || result.diagnostics?.clientDeterministicFallbackApplied
+              || finalCandidateSource === 'deterministic_fallback'
+              || finalCandidateSource === 'server_fallback'
+              || (
+                (providerUnsupportedClaimCount ?? 0) > 0
+                && (noOpRepairApplied
+                  || finalCandidateSource === 'noop_repair'
+                  || result.origin === 'ai_repaired')
+              ))
+          ),
+        providerRejectionReason: result.diagnostics?.providerRejectionReason
+          ?? providerRejectionReason,
+        providerRejectionStage: result.diagnostics?.providerRejectionStage
+          ?? providerRejectionStage,
+        providerUnsupportedClaimCount: result.diagnostics?.providerUnsupportedClaimCount
+          ?? providerUnsupportedClaimCount,
+        providerUnsupportedClaimKinds: Array.isArray(
+          result.diagnostics?.providerUnsupportedClaimKinds,
+        )
+          ? result.diagnostics.providerUnsupportedClaimKinds
+          : [...providerUnsupportedClaimKinds],
         finalNormalizedHash: result.countedAsSuccess
           ? fingerprintText(acceptedText)
           : (result.diagnostics?.finalNormalizedHash ?? null),
@@ -4410,6 +4463,88 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       providerRejectionReason = lastRejectReason;
       providerRejectionStage = lastRejectStage;
+      // AAB-308: at most one scoped Spanish guarantee-strip repair before fallback.
+      if (
+        locale === 'es'
+        && lastUnsupportedClaimCount > 0
+        && lastUnsupportedClaimKinds.some((k) =>
+          k === 'guarantee_escalation'
+          || k === 'assurance_escalation'
+          || k === 'responsibility_escalation'
+          || k === 'outcome_ownership'
+          || k === 'quality_guarantee'
+          || k === 'completeness_guarantee'
+          || k === 'compliance_guarantee')
+      ) {
+        void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+        const repairedEs = stripSpanishExperienceGuaranteeEscalation(
+          finalNormalizedBullets,
+          sourceForCoverage,
+        );
+        const repairedNorm = repairedEs.replace(/\s+/g, ' ').trim();
+        const providerNorm = finalNormalizedBullets.replace(/\s+/g, ' ').trim();
+        if (
+          repairedNorm
+          && repairedNorm !== providerNorm
+          && experienceAiHasMeaningfulChange(sourceForCoverage, repairedEs, {
+            perspectiveApplied: false,
+          })
+        ) {
+          const repairScan = detectSpanishExperienceUnsupportedExpansion(
+            sourceForCoverage,
+            repairedEs,
+          );
+          if (repairScan.count === 0) {
+            const repairAccepted = tryAccept(
+              repairedEs,
+              'ai_repaired',
+              'spanish_guarantee_repair',
+            );
+            if (repairAccepted) {
+              providerAccepted = false;
+              noOpRepairApplied = true;
+              noOpRepairValidationPassed = true;
+              noOpRepairMeaningfulChangeDetected = true;
+              noOpRepairUnsupportedClaimCount = 0;
+              noOpRepairUnsupportedClaimKinds = [];
+              finalUnsupportedClaimCount = 0;
+              finalUnsupportedClaimKinds = [];
+              finalCandidateSource = 'noop_repair';
+              perspectiveMeta.normalizedBulletsUsedForApply = true;
+              perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
+                repairAccepted.text,
+                locale,
+              );
+              perspectiveMeta.meaningfulChangeDetected = true;
+              perspectiveMeta.noOpRejected = false;
+              return attachPerspectiveDiag({
+                ...repairAccepted,
+                origin: 'ai_repaired',
+                diagnostics: {
+                  ...repairAccepted.diagnostics,
+                  providerAccepted: false,
+                  providerRejectionReason,
+                  providerRejectionStage: providerRejectionStage || 'unsupported_claim_validation',
+                  providerUnsupportedClaimCount,
+                  providerUnsupportedClaimKinds: [...providerUnsupportedClaimKinds],
+                  providerCoveredFactCount: providerCoveredFactCount || lastCovered || sourceFactCount,
+                  providerRequiredFactCount: providerRequiredFactCount || lastRequired || sourceFactCount,
+                  coveredFactCount: lastCovered || sourceFactCount,
+                  noOpRepairApplied: true,
+                  noOpRepairValidationPassed: true,
+                  noOpRepairMeaningfulChangeDetected: true,
+                  finalUnsupportedClaimCount: 0,
+                  finalUnsupportedClaimKinds: [],
+                  unsupportedClaimCount: 0,
+                  finalCandidateSource: 'noop_repair',
+                  experienceAiUnsupportedExpansionRevision:
+                    EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
+                },
+              });
+            }
+          }
+        }
+      }
       if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {
         // Unsafe or otherwise invalid repair: never apply; unlock stylistic fallback.
         const repairScan = lastUnsupportedClaimCount > 0
@@ -4994,6 +5129,69 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       // Do not fall through to same-language source-preserving for a different target.
     } else {
+    // Same-locale Spanish warehouse: grounded deterministic recovery when provider
+    // was rejected (e.g. guarantee escalation) and strip-repair did not apply.
+    if (
+      locale === 'es'
+      && sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage)
+    ) {
+      void SPANISH_CV_AI_305_REVISION;
+      void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+      const esWarehouseFallback = normalizeLocaleText(
+        buildSpanishWarehouseExperienceFallback({
+          sourceDescription: sourceForCoverage,
+          isPresent,
+        }),
+        locale,
+      );
+      if (esWarehouseFallback.trim()) {
+        clientDeterministicFallbackAttempted = true;
+        clientDeterministicFallbackReason = clientDeterministicFallbackReason
+          || 'spanish_warehouse_deterministic_fallback';
+        clientDeterministicFallbackBulletCount = splitExperienceBullets(esWarehouseFallback)
+          .filter(Boolean).length;
+        const esFbAccepted = tryAccept(
+          esWarehouseFallback,
+          'deterministic_fallback',
+          'spanish_warehouse_fallback',
+        );
+        if (esFbAccepted) {
+          providerAccepted = false;
+          finalCandidateSource = 'deterministic_fallback';
+          finalUnsupportedClaimCount = 0;
+          finalUnsupportedClaimKinds = [];
+          perspectiveMeta = {
+            ...perspectiveMeta,
+            perspectiveNormalizationAttempted: true,
+            perspectiveNormalizationApplied: true,
+            perspectiveValidationPassed: true,
+            meaningfulChangeDetected: true,
+            noOpRejected: false,
+            finalPersonMode: detectExperiencePersonMode(esFbAccepted.text, locale),
+            normalizedBulletsUsedForApply: true,
+          };
+          return attachPerspectiveDiag({
+            ...esFbAccepted,
+            diagnostics: {
+              ...esFbAccepted.diagnostics,
+              providerAccepted: false,
+              providerRejectionReason,
+              providerRejectionStage,
+              providerUnsupportedClaimCount,
+              providerUnsupportedClaimKinds: [...providerUnsupportedClaimKinds],
+              finalCandidateSource: 'deterministic_fallback',
+              finalUnsupportedClaimCount: 0,
+              finalUnsupportedClaimKinds: [],
+              unsupportedClaimCount: 0,
+              clientDeterministicFallbackAttempted: true,
+              clientDeterministicFallbackApplied: true,
+              clientDeterministicFallbackReason: 'spanish_warehouse_deterministic_fallback',
+              fallbackApplied: true,
+            },
+          });
+        }
+      }
+    }
     const built = buildSourcePreservingExperienceBulletsWithProvenance(
       sourceForCoverage,
       locale,

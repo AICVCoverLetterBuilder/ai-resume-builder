@@ -16,8 +16,12 @@ import type { ExperienceUnsupportedClaimKind } from './cv-experience-unsupported
 
 /** Packaging proof — must survive minification in web / Android / AAB assets. */
 export const SPANISH_CV_AI_305_REVISION = 'spanish-cv-ai-305-v1' as const;
+/** AAB-308 — Spanish Experience guarantee/assurance escalation grounding. */
+export const SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION =
+  'spanish-experience-guarantee-grounding-308-v1' as const;
 
 void SPANISH_CV_AI_305_REVISION;
+void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 
 const WAREHOUSE_KEYS: MaterialDutyKey[] = [
   'warehouse_inbound_check',
@@ -183,6 +187,87 @@ function sourceHas(source: string, re: RegExp): boolean {
   return re.test(source || '');
 }
 
+/** Ordinary operational Spanish predicates (not outcome ownership). */
+const ORDINARY_ACTION_ES =
+  /(?:revisa|revisó|revisar|comprueba|comprobó|comprobar|verifica|verificó|verificar|controla|controló|controlar|prepara|preparó|preparar|mueve|movió|mover|coordina|coordinó|coordinar|organiza|organizó|organizar|registra|registró|registrar|clasifica|clasificó|clasificar|crea|creó|crear|adapta|adaptó|adaptar)/iu;
+
+/** Stronger guarantee / assurance / responsibility predicates. */
+const GUARANTEE_PREDICATE_ES =
+  /(?:garantiz(?:ar|a|ó|ando)|garant[ií]a|asegur(?:ar|a|ó|ando)|vel(?:ar|a|ó)\s+por|cerciorarse\s+de|se\s+asegura\s+de|responsabilizarse\s+de|hacerse\s+cargo\s+de|ser\s+responsable\s+de|certific(?:ar|a|ó)|aprob(?:ar|a|ó)\s+definitivamente)/iu;
+
+const OUTCOME_QUALITY_OBJECT_ES =
+  /(?:correct[ao]|adecuad[ao]|exactitud|precis(?:i[oó]n|a)|integridad|completitud|calidad|cumplimiento|ejecuci[oó]n\s+correcta|recepci[oó]n\s+correcta|procesamiento\s+correcto|gesti[oó]n\s+correcta|movimiento\s+correcto)/iu;
+
+/** Purpose/outcome clause only — leave location phrases (e.g. en el almacén). */
+const GUARANTEE_PURPOSE_CLAUSE_ES =
+  /(?:\s*,?\s*)?(?:para\s+)?(?:garantiz(?:ar|ando)|asegur(?:ar|ando)|velar\s+por|cerciorarse\s+de)\s+(?:su\s+|la\s+|el\s+|una?\s+|tod[ao]s?\s+)?(?:correct[ao]\s+|adecuad[ao]\s+)?(?:recepci[oó]n|procesamiento|gesti[oó]n|integridad|exactitud|completitud|calidad|cumplimiento|ejecuci[oó]n|preparaci[oó]n|movimiento)(?:\s+de\s+(?:la\s+|los\s+|el\s+|las\s+)?\w+)?/giu;
+
+function sourceSupportsSpanishGuarantee(source: string): boolean {
+  return GUARANTEE_PREDICATE_ES.test(source || '')
+    && (
+      OUTCOME_QUALITY_OBJECT_ES.test(source || '')
+      || /(?:garantiz|asegur).{0,48}(?:recepci|integridad|calidad|cumplimiento|exactitud|completitud|procesamiento|gesti[oó]n)/iu
+        .test(source || '')
+    );
+}
+
+function sourceSupportsSpanishResponsibility(source: string): boolean {
+  return /(?:responsabilizarse\s+de|ser\s+responsable\s+de|hacerse\s+cargo\s+de|responsable\s+de\s+(?:la|el|toda|todo))/iu
+    .test(source || '');
+}
+
+/**
+ * Strip candidate-added Spanish guarantee/assurance purpose clauses when the
+ * source does not authorize the same strength. Preserves ordinary operational
+ * facts (revisar / comprobar / coordinar).
+ */
+export function stripSpanishExperienceGuaranteeEscalation(
+  candidateDescription: string,
+  sourceDescription = '',
+): string {
+  void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+  const bullets = splitExperienceBullets(candidateDescription || '');
+  const allowGuarantee = sourceSupportsSpanishGuarantee(sourceDescription);
+  const allowResponsibility = sourceSupportsSpanishResponsibility(sourceDescription);
+  if (allowGuarantee && allowResponsibility) {
+    return candidateDescription || '';
+  }
+  const cleaned = bullets.map((b) => {
+    let row = (b || '').trim();
+    if (!row) return row;
+    if (!allowGuarantee) {
+      row = row.replace(GUARANTEE_PURPOSE_CLAUSE_ES, '');
+      // Mid-clause ownership fragments without ordinary action remaining.
+      if (GUARANTEE_PREDICATE_ES.test(row) && !ORDINARY_ACTION_ES.test(row)) {
+        return '';
+      }
+      if (GUARANTEE_PREDICATE_ES.test(row) && ORDINARY_ACTION_ES.test(row)) {
+        row = row
+          .replace(GUARANTEE_PURPOSE_CLAUSE_ES, '')
+          .replace(
+            /(?:\s*,?\s*)?(?:para\s+)?(?:garantiz\w*|asegur\w*|vela\s+por|cerciorarse\s+de)\b(?:\s+(?:su|la|el|una?|tod[ao]s?|correct\w*|adecuad\w*|recepci\w*|procesamiento|gesti\w*|integridad|exactitud|completitud|calidad|cumplimiento|ejecuci\w*|preparaci\w*|movimiento|de)\b)*/giu,
+            '',
+          )
+          .replace(/\s{2,}/g, ' ')
+          .replace(/\s+([.,;:])/g, '$1')
+          .trim();
+      }
+    }
+    if (!allowResponsibility) {
+      row = row
+        .replace(
+          /(?:\s*,?\s*)?(?:se\s+)?responsabiliza(?:rse)?\s+de\s+(?:toda|todo|la|el)\s+[^.]*/giu,
+          '',
+        )
+        .replace(/(?:\s*,?\s*)?hacerse\s+cargo\s+de\s+[^.]*/giu, '')
+        .trim();
+    }
+    if (row && !/[.!?]$/u.test(row)) row = `${row}.`;
+    return row.replace(/\s{2,}/g, ' ').trim();
+  }).filter(Boolean);
+  return formatExperienceBullets(cleaned);
+}
+
 /**
  * Contextual Spanish unsupported expansions vs authoritative source.
  * Does not blacklist valid user facts that already contain the same claims.
@@ -192,6 +277,7 @@ export function detectSpanishExperienceUnsupportedExpansion(
   candidateDescription: string,
 ): SpanishExperienceExpansionScan {
   void SPANISH_CV_AI_305_REVISION;
+  void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
   const source = sourceDescription || '';
   const joined = candidateDescription || '';
   const kinds: ExperienceUnsupportedClaimKind[] = [];
@@ -263,6 +349,66 @@ export function detectSpanishExperienceUnsupportedExpansion(
     labels.push('unsupported_responsibility_claim');
   }
 
+  // Guarantee / assurance / responsibility escalation — ordinary verbs like
+  // "revisar" do not authorize stronger "garantizar"/"asegurar" outcomes.
+  const candidateHasGuarantee = GUARANTEE_PREDICATE_ES.test(joined)
+    || /para\s+garantiz|para\s+asegur|vela\s+por\s+la\s+correct/iu.test(joined);
+  if (candidateHasGuarantee && !sourceSupportsSpanishGuarantee(source)) {
+    const hasQualityOutcome = /(?:calidad|integridad|exactitud|precis)/iu.test(joined);
+    const hasCompleteness = /completitud/iu.test(joined);
+    const hasCompliance = /cumplimiento/iu.test(joined);
+    const hasAssuranceVerb = /(?:asegur(?:ar|a|ó|ando)|vela\s+por|cerciorarse|se\s+asegura)/iu
+      .test(joined);
+    if (hasQualityOutcome) {
+      kinds.push('quality_guarantee');
+      labels.push('quality_guarantee');
+    }
+    if (hasCompleteness) {
+      kinds.push('completeness_guarantee');
+      labels.push('completeness_guarantee');
+    }
+    if (hasCompliance) {
+      kinds.push('compliance_guarantee');
+      labels.push('compliance_guarantee');
+    }
+    if (hasAssuranceVerb) {
+      kinds.push('assurance_escalation');
+      labels.push('assurance_escalation');
+    }
+    kinds.push('guarantee_escalation');
+    labels.push('guarantee_escalation');
+    kinds.push('outcome_ownership');
+    labels.push('outcome_ownership');
+  }
+  if (
+    /(?:responsabilizarse\s+de|se\s+responsabiliza\s+de|hacerse\s+cargo\s+de\s+(?:toda|todo)|ser\s+responsable\s+de\s+(?:toda|todo|la\s+recepci))/iu
+      .test(joined)
+    && !sourceSupportsSpanishResponsibility(source)
+  ) {
+    kinds.push('responsibility_escalation');
+    labels.push('responsibility_escalation');
+    if (!kinds.includes('organization_responsibility_claim')) {
+      kinds.push('organization_responsibility_claim');
+    }
+  }
+  // Action-strength: ordinary source action + stronger candidate predicate on
+  // a similar object still fails (object similarity is not enough).
+  if (
+    ORDINARY_ACTION_ES.test(source)
+    && !GUARANTEE_PREDICATE_ES.test(source)
+    && GUARANTEE_PREDICATE_ES.test(joined)
+    && /(?:mercanc|document|recepci|preparaci|movimiento|env[ií]o)/iu.test(joined)
+  ) {
+    if (!kinds.includes('guarantee_escalation')) {
+      kinds.push('guarantee_escalation');
+      labels.push('guarantee_escalation');
+    }
+    if (!kinds.includes('outcome_ownership')) {
+      kinds.push('outcome_ownership');
+      labels.push('action_strength_escalation');
+    }
+  }
+
   const warehouseSource = sourceRequiresSpanishWarehouseFactCoverage(source);
   if (warehouseSource
     && /(?:intercambio\s+de\s+informaci[oó]n|coordina\w*\s+(?:el\s+)?intercambio\s+de\s+informaci[oó]n|coordina\w*\s+la\s+comunicaci[oó]n|asegurar?\s+la\s+comunicaci[oó]n|procesos?\s+generales?\s+coordina)/iu
@@ -291,7 +437,10 @@ export function detectSpanishExperienceUnsupportedExpansion(
     count: uniqueKinds.length,
     labels: uniqueLabels,
     scopeExpansionDetected: uniqueKinds.includes('universal_scope_claim')
-      || uniqueKinds.includes('quality_claim'),
+      || uniqueKinds.includes('quality_claim')
+      || uniqueKinds.includes('guarantee_escalation')
+      || uniqueKinds.includes('assurance_escalation')
+      || uniqueKinds.includes('outcome_ownership'),
     deadlineClaimDetected,
     documentationExpansionDetected,
     malformedRolePhraseDetected,
@@ -311,12 +460,12 @@ export function buildSpanishWarehouseExperienceFallback(options: {
   for (const fact of facts) {
     if (fact === 'incoming_goods_check') {
       lines.push(present
-        ? 'Revisa la mercancía entrante.'
-        : 'Revisó la mercancía entrante.');
+        ? 'Revisa la mercancía entrante en el almacén.'
+        : 'Revisó la mercancía entrante en el almacén.');
     } else if (fact === 'document_check') {
       lines.push(present
-        ? 'Comprueba la documentación relacionada.'
-        : 'Comprobó la documentación relacionada.');
+        ? 'Comprueba la documentación relacionada con los envíos recibidos.'
+        : 'Comprobó la documentación relacionada con los envíos recibidos.');
     } else if (fact === 'goods_prep_movement_colleagues') {
       lines.push(present
         ? 'Coordina con sus compañeros la preparación y el movimiento de la mercancía.'
@@ -326,13 +475,13 @@ export function buildSpanishWarehouseExperienceFallback(options: {
   if (!lines.length) {
     return formatExperienceBullets(present
       ? [
-        'Revisa la mercancía entrante.',
-        'Comprueba la documentación relacionada.',
+        'Revisa la mercancía entrante en el almacén.',
+        'Comprueba la documentación relacionada con los envíos recibidos.',
         'Coordina con sus compañeros la preparación y el movimiento de la mercancía.',
       ]
       : [
-        'Revisó la mercancía entrante.',
-        'Comprobó la documentación relacionada.',
+        'Revisó la mercancía entrante en el almacén.',
+        'Comprobó la documentación relacionada con los envíos recibidos.',
         'Coordinó con sus compañeros la preparación y el movimiento de la mercancía.',
       ]);
   }
