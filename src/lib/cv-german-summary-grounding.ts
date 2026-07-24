@@ -36,6 +36,22 @@ import {
   primaryRolesToLegacySlots,
   type GermanSummaryUnitSemanticAnalysis,
 } from './cv-german-summary-role-slots';
+import {
+  GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
+  GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
+  analyzeGermanCurrentRoleCoverage,
+  analyzeGermanPriorRoleCoverage,
+  repairGermanSummaryEmployerStatus,
+  type GermanCurrentRoleCoverage,
+  type GermanPriorRoleCoverage,
+} from './cv-german-summary-employer-status';
+export {
+  GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
+  GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
+  analyzeGermanCurrentRoleCoverage,
+  analyzeGermanPriorRoleCoverage,
+  repairGermanSummaryEmployerStatus,
+} from './cv-german-summary-employer-status';
 export {
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
@@ -88,6 +104,8 @@ void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
 void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
+void GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION;
+void GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION;
 
 const GERMAN_MONTHS: Record<string, string> = {
   '01': 'Januar',
@@ -233,6 +251,23 @@ export type GermanSummaryEmploymentQuality = {
   currentEmploymentIntroductionCount: number | null;
   finalSentenceHashes?: string[];
   finalSentenceRoleSlots?: GermanSummaryRoleSlot[];
+  currentRoleCoverage?: GermanCurrentRoleCoverage;
+  priorRoleCoverage?: GermanPriorRoleCoverage;
+  finalCurrentRoleTitlePresent?: boolean;
+  finalCurrentEmployerPresent?: boolean;
+  finalCurrentEmploymentStateExpressed?: boolean;
+  finalCurrentRoleIntroValidationPassed?: boolean;
+  finalCurrentDutyCoveragePassed?: boolean;
+  finalPriorRoleTitlePresent?: boolean;
+  finalPriorEmployerPresent?: boolean;
+  finalPriorEmploymentStateExpressed?: boolean;
+  finalPriorRoleIntroValidationPassed?: boolean;
+  finalPriorDutyCoveragePassed?: boolean;
+  finalTotalDurationSlotPresent?: boolean;
+  finalSlotValidationPassed?: boolean;
+  finalSlotRejectionReasons?: string[];
+  finalUnitSemanticRolesByUnit?: string[][];
+  employerCrossEntryLeakageDetected?: boolean;
 };
 
 export function analyzeGermanSummaryEmploymentQuality(
@@ -240,6 +275,7 @@ export function analyzeGermanSummaryEmploymentQuality(
   options: {
     company?: string;
     role?: string;
+    startDate?: string;
     priorCompany?: string;
     priorRole?: string;
     currentEntryDuties?: string;
@@ -256,6 +292,8 @@ export function analyzeGermanSummaryEmploymentQuality(
   void SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION;
   void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
   void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
+  void GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION;
+  void GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const units = splitGermanSummaryUnits(text);
   const introGrammar = validateGermanSummaryIntroGrammar(text, { company: options.company });
@@ -279,6 +317,37 @@ export function analyzeGermanSummaryEmploymentQuality(
   });
   const slots = primaryRolesToLegacySlots(unitSemanticAnalyses) as GermanSummaryRoleSlot[];
   const finalSentenceHashes = unitSemanticAnalyses.map((a) => a.unitHash);
+  const finalUnitSemanticRolesByUnit = unitSemanticAnalyses.map((a) => [
+    ...a.detectedSemanticRoles,
+  ]);
+
+  const currentRoleCoverage = analyzeGermanCurrentRoleCoverage(text, {
+    company: options.company,
+    role: options.role,
+    startDate: options.startDate,
+  });
+  const priorRoleCoverage = analyzeGermanPriorRoleCoverage(text, {
+    priorCompany: options.priorCompany,
+    priorRole: options.priorRole,
+  });
+  const employerCrossEntryLeakageDetected = Boolean(
+    (options.company || '').trim()
+    && (options.priorCompany || '').trim()
+    && options.company !== options.priorCompany
+    && unitSemanticAnalyses.some((a) => (
+      (a.employerEntryMatches && a.priorEmployerEntryMatches)
+      || (
+        a.detectedSemanticRoles.includes('current_role_intro')
+        && a.priorEmployerEntryMatches
+        && !a.employerEntryMatches
+      )
+      || (
+        a.detectedSemanticRoles.includes('prior_role_intro')
+        && a.employerEntryMatches
+        && !a.priorEmployerEntryMatches
+      )
+    )),
+  );
 
   let reason: string | null = null;
   const dutiesCorpus = `${options.currentEntryDuties || ''} ${options.priorEntryDuties || ''} ${options.role || ''}`;
@@ -289,17 +358,20 @@ export function analyzeGermanSummaryEmploymentQuality(
     || /grafik|design/i.test(`${options.role || ''} ${options.priorEntryDuties || ''}`);
   const requireSlots = warehouseDomain || designDomain;
 
-  const currentIntroSlotPresent = unitSemanticAnalyses.some((a) => (
+  const semanticCurrentIntro = unitSemanticAnalyses.some((a) => (
     a.detectedSemanticRoles.includes('current_role_intro')
   ));
   const currentDutySlotPresent = unitSemanticAnalyses.some((a) => (
     a.detectedSemanticRoles.includes('current_role_duties')
     || (a.detectedSemanticRoles.includes('current_role_intro') && a.currentDutyFactMatches)
   ));
-  const priorRoleSlotPresent = unitSemanticAnalyses.some((a) => (
+  const semanticPriorRole = unitSemanticAnalyses.some((a) => (
     a.detectedSemanticRoles.includes('prior_role_intro')
     || a.detectedSemanticRoles.includes('prior_role_duties')
   ));
+  // AAB-321: when structured prior employer exists, prior slot presence requires it.
+  const priorRoleSlotPresent = semanticPriorRole
+    && (!priorRoleCoverage.priorEmployerRequired || priorRoleCoverage.priorEmployerPresent);
   const totalDurationSlotPresent = unitSemanticAnalyses.some((a) => (
     a.detectedSemanticRoles.includes('total_duration')
   ));
@@ -307,12 +379,38 @@ export function analyzeGermanSummaryEmploymentQuality(
     a.primaryRole === 'explicit_skills'
   )) && competencyScan.unsupportedCompetencyCount === 0;
 
-  const slotRejectionReasons = buildGermanSlotRejectionReasons(unitSemanticAnalyses, {
-    requireCurrent: requireSlots,
-    requirePrior: Boolean(options.priorCompany || options.priorEntryDuties || designDomain),
-    requireDuration: DURATION_CUE_PRESENT(text) || requireSlots,
-  });
-  const slotValidationPassed = !requireSlots || slotRejectionReasons.length === 0;
+  // Intro slot presence for gate purposes requires validated current intro when
+  // structured employer/status evidence is available — title+duties alone is insufficient.
+  const currentIntroSlotPresent = semanticCurrentIntro
+    && (
+      !currentRoleCoverage.currentEmployerRequired
+      || currentRoleCoverage.currentRoleIntroValidationPassed
+    );
+
+  const slotRejectionReasons = [
+    ...buildGermanSlotRejectionReasons(unitSemanticAnalyses, {
+      requireCurrent: requireSlots,
+      requirePrior: Boolean(options.priorCompany || options.priorEntryDuties || designDomain),
+      requireDuration: DURATION_CUE_PRESENT(text) || requireSlots,
+    }),
+    ...currentRoleCoverage.currentRoleIntroRejectionReasons,
+    ...priorRoleCoverage.priorRoleIntroRejectionReasons,
+    ...(employerCrossEntryLeakageDetected ? ['employer_cross_entry_leakage'] : []),
+  ];
+  // Deduplicate while preserving order.
+  const dedupedSlotRejectionReasons = [...new Set(slotRejectionReasons)];
+  const employerStatusOk = currentRoleCoverage.currentRoleIntroValidationPassed
+    && priorRoleCoverage.priorRoleIntroValidationPassed
+    && !employerCrossEntryLeakageDetected;
+  const baseSlotOk = !requireSlots
+    || buildGermanSlotRejectionReasons(unitSemanticAnalyses, {
+      requireCurrent: requireSlots,
+      requirePrior: Boolean(options.priorCompany || options.priorEntryDuties || designDomain),
+      requireDuration: DURATION_CUE_PRESENT(text) || requireSlots,
+    }).length === 0;
+  const slotValidationPassed = baseSlotOk && employerStatusOk;
+  const finalSlotRejectionReasons = dedupedSlotRejectionReasons;
+  const finalSlotValidationPassed = slotValidationPassed;
 
   if (!text) reason = 'empty_summary';
   else if (unsupportedDesignMedium) reason = 'german_summary_unsupported_design_medium';
@@ -321,7 +419,7 @@ export function analyzeGermanSummaryEmploymentQuality(
   } else if (!durationScope.finalDurationScopeValidationPassed && DURATION_CUE_PRESENT(text)) {
     reason = durationScope.durationScopeRejectionReason || 'duration_scope_mismatch';
   } else if (!slotValidationPassed) {
-    reason = slotRejectionReasons[0] || 'invalid_role_slot_classification';
+    reason = finalSlotRejectionReasons[0] || 'invalid_role_slot_classification';
   } else if (!introGrammar.ok) reason = introGrammar.reason;
   else if (requireSlots && units.length < 2) {
     reason = 'german_summary_incomplete_slots';
@@ -351,7 +449,16 @@ export function analyzeGermanSummaryEmploymentQuality(
       return Math.max(n, 3);
     }
     return n;
-  }, currentIntroSlotPresent && currentDutySlotPresent ? 3 : (currentIntroSlotPresent ? 1 : 0));
+  }, semanticCurrentIntro && currentDutySlotPresent ? 3 : (semanticCurrentIntro ? 1 : 0));
+
+  // Count only intros that express current employment state (AAB-321 invariant 7).
+  const currentEmploymentIntroductionCount = (
+    semanticCurrentIntro
+    && (
+      !currentRoleCoverage.currentStatusMarkerRequired
+      || currentRoleCoverage.currentEmploymentStateExpressed
+    )
+  ) ? 1 : 0;
 
   return {
     ok: groundingOk,
@@ -373,18 +480,36 @@ export function analyzeGermanSummaryEmploymentQuality(
     totalDurationSlotPresent,
     explicitSkillsSlotPresent,
     slotValidationPassed,
-    slotRejectionReasons,
+    slotRejectionReasons: finalSlotRejectionReasons,
     unitSemanticAnalyses,
     currentRoleTitlePresent: rolePresent,
     currentRoleTitleMatchesStructuredRole: rolePresent,
     currentRoleOmittedDetected: requireSlots && !rolePresent,
     currentRoleConcreteFactCoverage: dutyCoverage,
     priorRoleGroundingPassed: Boolean(
-      priorRoleSlotPresent || !(options.priorCompany || options.priorEntryDuties),
-    ),
-    currentEmploymentIntroductionCount: currentIntroSlotPresent ? 1 : 0,
+      priorRoleSlotPresent
+      && priorRoleCoverage.priorRoleIntroValidationPassed
+    ) || !(options.priorCompany || options.priorEntryDuties),
+    currentEmploymentIntroductionCount,
     finalSentenceHashes,
     finalSentenceRoleSlots: slots,
+    currentRoleCoverage,
+    priorRoleCoverage,
+    finalCurrentRoleTitlePresent: currentRoleCoverage.currentRoleTitlePresent,
+    finalCurrentEmployerPresent: currentRoleCoverage.currentEmployerPresent,
+    finalCurrentEmploymentStateExpressed: currentRoleCoverage.currentEmploymentStateExpressed,
+    finalCurrentRoleIntroValidationPassed: currentRoleCoverage.currentRoleIntroValidationPassed,
+    finalCurrentDutyCoveragePassed: currentDutySlotPresent,
+    finalPriorRoleTitlePresent: priorRoleCoverage.priorRoleTitlePresent,
+    finalPriorEmployerPresent: priorRoleCoverage.priorEmployerPresent,
+    finalPriorEmploymentStateExpressed: priorRoleCoverage.priorEmploymentStateExpressed,
+    finalPriorRoleIntroValidationPassed: priorRoleCoverage.priorRoleIntroValidationPassed,
+    finalPriorDutyCoveragePassed: semanticPriorRole,
+    finalTotalDurationSlotPresent: totalDurationSlotPresent,
+    finalSlotValidationPassed,
+    finalSlotRejectionReasons,
+    finalUnitSemanticRolesByUnit,
+    employerCrossEntryLeakageDetected,
   };
 }
 

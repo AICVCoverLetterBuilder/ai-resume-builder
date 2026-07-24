@@ -182,6 +182,8 @@ export {
   GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
   SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
   SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
+  GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
+  GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   scanGermanSummaryCompetencyClaims,
   analyzeGermanSummaryDurationScope,
@@ -194,6 +196,9 @@ export {
   analyzeGermanSummaryUnitSemantics,
   buildGermanSlotRejectionReasons,
   primaryRolesToLegacySlots,
+  analyzeGermanCurrentRoleCoverage,
+  analyzeGermanPriorRoleCoverage,
+  repairGermanSummaryEmployerStatus,
 } from './cv-german-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,

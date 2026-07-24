@@ -78,10 +78,13 @@ import {
   SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
   SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
   SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
+  GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
+  GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
   HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
+  repairGermanSummaryEmployerStatus,
 } from './cv-summary-grounding';
 import {
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
@@ -478,6 +481,8 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
   SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
   SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
+  GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
+  GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -1007,6 +1012,28 @@ export type FinalizeCvAiFieldResult = {
     summaryRepairValidationPassed?: boolean | null;
     summaryRepairApplied?: boolean;
     summaryDurationRepairApplied?: boolean;
+    repairCandidatePresent?: boolean;
+    repairAccepted?: boolean;
+    repairCandidateHash?: string | null;
+    repairTransformationKinds?: string[];
+    repairRejectionReasons?: string[];
+    germanEmployerStatusRepairAttempted?: boolean;
+    germanEmployerStatusRepairApplied?: boolean;
+    finalCurrentRoleTitlePresent?: boolean;
+    finalCurrentEmployerPresent?: boolean;
+    finalCurrentEmploymentStateExpressed?: boolean;
+    finalCurrentRoleIntroValidationPassed?: boolean;
+    finalCurrentDutyCoveragePassed?: boolean;
+    finalPriorRoleTitlePresent?: boolean;
+    finalPriorEmployerPresent?: boolean;
+    finalPriorEmploymentStateExpressed?: boolean;
+    finalPriorRoleIntroValidationPassed?: boolean;
+    finalPriorDutyCoveragePassed?: boolean;
+    finalTotalDurationSlotPresent?: boolean;
+    finalSlotValidationPassed?: boolean;
+    finalSlotRejectionReasons?: string[];
+    finalUnitSemanticRolesByUnit?: string[][] | null;
+    employerCrossEntryLeakageDetected?: boolean;
     generationProviderValidationPassed?: boolean | null;
     generationProviderRejectionReason?: string | null;
     generationFinalPostconditionPassed?: boolean | null;
@@ -1738,6 +1765,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let germanProviderUnsupportedClaimCount: number | null = null;
   let germanProviderSlotRejectionReasons: string[] = [];
   let germanClientRepairAttempted = false;
+  let germanMaterialRepairApplied = false;
+  let germanEmployerStatusRepairAttempted = false;
+  let germanEmployerStatusRepairApplied = false;
+  let germanEmployerStatusRepairTransformations: string[] = [];
+  let germanEmployerStatusRepairRejectionReasons: string[] = [];
+  let germanRepairCandidateHash: string | null = null;
   let hindiProviderQuality: ReturnType<typeof analyzeHindiSummaryEmploymentQuality> | null = null;
   let hindiProviderRejectionReason: string | null = null;
   const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
@@ -2102,6 +2135,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     void SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION;
     void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
     void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
+    void GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION;
+    void GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION;
     candidate = dedupeSummarySentences(candidate);
     if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
       if (candidate.trim() && providerRaw.trim()) {
@@ -2118,6 +2153,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const analyzeDe = (text: string) => analyzeGermanSummaryEmploymentQuality(text, {
         company: context.company,
         role: context.role,
+        startDate: context.startDate,
         currentEntryDuties: entryDuties.currentEntryDuties,
         priorEntryDuties: entryDuties.priorEntryDuties,
         priorCompany: entryDuties.priorCompany,
@@ -2137,7 +2173,41 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             if (repaired.groundingValidationPassed && repaired.slotValidationPassed) {
               candidate = stripped;
               empQuality = repaired;
+              germanMaterialRepairApplied = true;
+            } else {
+              candidate = stripped;
+              empQuality = repaired;
             }
+          }
+        }
+        // AAB-321: narrow employer/status restoration when roles+duties exist.
+        if (!empQuality.groundingValidationPassed || !empQuality.slotValidationPassed) {
+          const employerRepair = repairGermanSummaryEmployerStatus(candidate, {
+            company: context.company || entryDuties.currentCompany,
+            role: context.role || entryDuties.currentRoleTitle,
+            startDate: context.startDate,
+            priorCompany: entryDuties.priorCompany,
+            priorRole: entryDuties.priorRoleTitle,
+            gender,
+          });
+          germanEmployerStatusRepairAttempted = employerRepair.attempted;
+          germanEmployerStatusRepairTransformations = employerRepair.transformationKinds;
+          if (employerRepair.attempted && employerRepair.applied && employerRepair.text.trim()) {
+            const repairedEmp = analyzeDe(employerRepair.text);
+            if (repairedEmp.groundingValidationPassed && repairedEmp.slotValidationPassed) {
+              candidate = employerRepair.text;
+              empQuality = repairedEmp;
+              germanMaterialRepairApplied = true;
+              germanEmployerStatusRepairApplied = true;
+              germanRepairCandidateHash = hashSummaryCandidate(employerRepair.text);
+            } else {
+              germanEmployerStatusRepairRejectionReasons = [
+                ...employerRepair.rejectionReasons,
+                ...(repairedEmp.slotRejectionReasons || []),
+              ];
+            }
+          } else if (employerRepair.attempted) {
+            germanEmployerStatusRepairRejectionReasons = employerRepair.rejectionReasons;
           }
         }
       }
@@ -2153,6 +2223,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         // Blank so deterministic German rebuild runs — never terminate here.
         candidate = '';
+      } else if (germanMaterialRepairApplied && providerRaw.trim()) {
+        // Provider body was materially repaired — keep typed rejection for lineage.
+        const providerEmp = analyzeDe(providerRaw);
+        if (!providerEmp.groundingValidationPassed || !providerEmp.slotValidationPassed) {
+          germanProviderSlotRejectionReasons = providerEmp.slotRejectionReasons || [];
+          germanProviderRejectionReason = providerEmp.typedRejectionReason
+            || germanProviderSlotRejectionReasons[0]
+            || 'employer_status_validation';
+        }
       }
     }
   }
@@ -2224,7 +2303,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const durationRepairApplied = durationResolved.status === 'repaired';
   // Only mark content origin as ai_repaired when an actual repair candidate was
   // activated — never alias duration-policy normalization as content repair.
-  if (summaryRepairAttempted) {
+  if (summaryRepairAttempted || germanMaterialRepairApplied) {
     origin = 'ai_repaired';
   } else if (emptySummarySeededFromCanonical && !providerRaw.trim()) {
     // Entry-owned empty generate is client deterministic — never claim provider.
@@ -2336,6 +2415,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                   ? analyzeGermanSummaryEmploymentQuality(analyzedText, {
                     company: context.company || entryDuties.currentCompany,
                     role: context.role,
+                    startDate: context.startDate,
                     currentEntryDuties: entryDuties.currentEntryDuties,
                     priorEntryDuties: entryDuties.priorEntryDuties,
                     priorCompany: entryDuties.priorCompany,
@@ -2581,9 +2661,91 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         contentLocaleAfterApply: success ? locale : (cv.contentLocale || null),
         finalContentLocaleAfterApply: success ? locale : null,
         finalCandidateSource: success
-          ? result.origin
+          ? (germanMaterialRepairApplied
+            ? 'repaired_provider'
+            : result.origin)
           : 'none',
         finalCandidatePresent: Boolean(success && analyzedText.trim()),
+        providerAccepted: success
+          ? !(
+            germanMaterialRepairApplied
+            || result.origin === 'deterministic_fallback'
+            || Boolean(germanProviderRejectionReason)
+            || Boolean(spanishProviderRejectionReason)
+            || Boolean(hindiProviderRejectionReason)
+          )
+          : false,
+        repairCandidatePresent: Boolean(
+          germanEmployerStatusRepairAttempted || germanMaterialRepairApplied,
+        ),
+        repairAccepted: Boolean(success && germanMaterialRepairApplied),
+        repairCandidateHash: germanRepairCandidateHash,
+        repairTransformationKinds: germanEmployerStatusRepairTransformations.length
+          ? germanEmployerStatusRepairTransformations
+          : undefined,
+        repairRejectionReasons: germanEmployerStatusRepairRejectionReasons.length
+          ? germanEmployerStatusRepairRejectionReasons
+          : (germanEmployerStatusRepairAttempted && !germanEmployerStatusRepairApplied
+            ? ['employer_status_repair_failed']
+            : undefined),
+        germanEmployerStatusRepairAttempted,
+        germanEmployerStatusRepairApplied: Boolean(
+          success && germanEmployerStatusRepairApplied,
+        ),
+        finalCurrentRoleTitlePresent: locale === 'de' && empQ
+          ? Boolean((empQ as { finalCurrentRoleTitlePresent?: boolean }).finalCurrentRoleTitlePresent)
+          : undefined,
+        finalCurrentEmployerPresent: locale === 'de' && empQ
+          ? Boolean((empQ as { finalCurrentEmployerPresent?: boolean }).finalCurrentEmployerPresent)
+          : undefined,
+        finalCurrentEmploymentStateExpressed: locale === 'de' && empQ
+          ? Boolean((empQ as { finalCurrentEmploymentStateExpressed?: boolean })
+            .finalCurrentEmploymentStateExpressed)
+          : undefined,
+        finalCurrentRoleIntroValidationPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { finalCurrentRoleIntroValidationPassed?: boolean })
+            .finalCurrentRoleIntroValidationPassed)
+          : undefined,
+        finalCurrentDutyCoveragePassed: locale === 'de' && empQ
+          ? Boolean((empQ as { finalCurrentDutyCoveragePassed?: boolean })
+            .finalCurrentDutyCoveragePassed)
+          : undefined,
+        finalPriorRoleTitlePresent: locale === 'de' && empQ
+          ? Boolean((empQ as { finalPriorRoleTitlePresent?: boolean }).finalPriorRoleTitlePresent)
+          : undefined,
+        finalPriorEmployerPresent: locale === 'de' && empQ
+          ? Boolean((empQ as { finalPriorEmployerPresent?: boolean }).finalPriorEmployerPresent)
+          : undefined,
+        finalPriorEmploymentStateExpressed: locale === 'de' && empQ
+          ? Boolean((empQ as { finalPriorEmploymentStateExpressed?: boolean })
+            .finalPriorEmploymentStateExpressed)
+          : undefined,
+        finalPriorRoleIntroValidationPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { finalPriorRoleIntroValidationPassed?: boolean })
+            .finalPriorRoleIntroValidationPassed)
+          : undefined,
+        finalPriorDutyCoveragePassed: locale === 'de' && empQ
+          ? Boolean((empQ as { finalPriorDutyCoveragePassed?: boolean })
+            .finalPriorDutyCoveragePassed)
+          : undefined,
+        finalTotalDurationSlotPresent: locale === 'de' && empQ
+          ? Boolean((empQ as { finalTotalDurationSlotPresent?: boolean })
+            .finalTotalDurationSlotPresent)
+          : undefined,
+        finalSlotValidationPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { finalSlotValidationPassed?: boolean }).finalSlotValidationPassed)
+          : undefined,
+        finalSlotRejectionReasons: locale === 'de' && empQ
+          ? ((empQ as { finalSlotRejectionReasons?: string[] }).finalSlotRejectionReasons ?? [])
+          : undefined,
+        finalUnitSemanticRolesByUnit: locale === 'de' && empQ
+          ? ((empQ as { finalUnitSemanticRolesByUnit?: string[][] }).finalUnitSemanticRolesByUnit
+            ?? null)
+          : undefined,
+        employerCrossEntryLeakageDetected: locale === 'de' && empQ
+          ? Boolean((empQ as { employerCrossEntryLeakageDetected?: boolean })
+            .employerCrossEntryLeakageDetected)
+          : undefined,
         finalCandidateUnitCount: success
           ? (empQ?.finalSentenceHashes?.length
             || empQ?.finalUnitRoleSlots?.length
@@ -2609,10 +2771,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
           if (providerOutcomeHint) return providerOutcomeHint;
           if (!providerRaw.trim()) return 'not_attempted';
-          if (success && result.origin === 'ai_generated') return 'accepted';
-          if (success && result.origin === 'ai_repaired') {
+          if (success && result.origin === 'ai_generated' && !germanMaterialRepairApplied) {
+            return 'accepted';
+          }
+          if (success && (result.origin === 'ai_repaired' || germanMaterialRepairApplied)) {
             // Content repair accepted — still report provider as rejected when
-            // the provider body was blanked before repair activation.
+            // the provider body was blanked before repair activation or material
+            // employer/status repair changed the candidate.
+            if (germanMaterialRepairApplied) return 'rejected_grounding';
             return summaryRepairAttempted && !providerRaw.trim()
               ? 'not_attempted'
               : (spanishProviderRejectionReason
