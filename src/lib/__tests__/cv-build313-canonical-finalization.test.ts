@@ -313,7 +313,7 @@ describe('cv-build313 canonical finalization', () => {
     });
     if (decision.candidateValid && decision.materialImprovement) {
       expect(decision.materialImprovementKinds.length).toBeGreaterThan(0);
-      expect(decision.materialImprovementEvidence.length).toBe(
+      expect(decision.materialImprovementEvidence.length).toBeGreaterThanOrEqual(
         decision.materialImprovementKinds.length,
       );
       expect(
@@ -538,18 +538,17 @@ describe('cv-build313 canonical finalization', () => {
   });
 
   it('wrong-tense visible can classify wrong_tense_fixed when candidate corrects it', () => {
-    // Control: past visible vs present candidate on a present role.
     const evalResult = evaluateExperienceVisibleComparison({
-      factAuthorityText: WH_ES_SHORT,
+      factAuthorityText: WH_ES_PAST_WRONG,
       visibleComparisonText: WH_ES_PAST_WRONG,
       candidateText: WH_ES_VISIBLE,
       locale: 'es',
       useVisibleForNoOp: true,
+      isPresent: true,
     });
-    // May or may not auto-detect tense kind depending on scanner; never bill without kinds.
-    if (evalResult.materialImprovementDetected) {
-      expect(evalResult.materialImprovementKinds.length).toBeGreaterThan(0);
-      expect(evalResult.materialImprovementKinds).not.toContain('grounded_phrasing_enhancement');
-    }
+    expect(evalResult.materialImprovementDetected).toBe(true);
+    expect(evalResult.materialImprovementKinds).toEqual(['wrong_tense_fixed']);
+    expect(evalResult.materialImprovementKinds).not.toContain('incomplete_bullet_completed');
+    expect(evalResult.materialImprovementKinds).not.toContain('grounded_phrasing_enhancement');
   });
 });

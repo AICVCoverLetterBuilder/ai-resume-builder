@@ -842,6 +842,25 @@ type ExperienceLike = {
   materialImprovementDetected?: boolean | null;
   materialImprovementKinds?: string[] | null;
   materialImprovementEvidenceCount?: number | null;
+  everyImprovementKindHasEvidence?: boolean | null;
+  canonicalAcceptancePassed?: boolean | null;
+  expectedEmploymentTense?: string | null;
+  sourceDetectedTense?: string | null;
+  sourceTenseMismatchCount?: number | null;
+  candidateDetectedTense?: string | null;
+  candidateTenseMismatchCount?: number | null;
+  wrongTenseFixedUnitCount?: number | null;
+  tenseOnlyCorrectionDetected?: boolean | null;
+  tenseOnlySourceLength?: number | null;
+  tenseOnlyCandidateLength?: number | null;
+  tenseOnlyUnexpectedExpansionDetected?: boolean | null;
+  tenseOnlyPreservationPassed?: boolean | null;
+  sourcePredicateIdentityCount?: number | null;
+  sourcePredicateExtractionPassed?: boolean | null;
+  sourceUnitCount?: number | null;
+  sourceUnitPredicateCoveragePassed?: boolean | null;
+  sourceIncompleteUnitCount?: number | null;
+  finalCandidatePredicateIdentityCount?: number | null;
   candidateSurfaceFormPassed?: boolean | null;
   candidateSurfaceFailureKinds?: string[] | null;
   finalDecisionKind?: string | null;
@@ -1308,6 +1327,114 @@ export function checkExperienceDiagnosticInvariants(
       finalDecisionKind: trace.finalDecisionKind ?? null,
     });
   }
+  // AAB-314 — Spanish morphology / tense / non-vacuous predicate invariants.
+  const isEsEnhance = String(trace.requestedLocale || '').toLowerCase().startsWith('es')
+    && (trace.operationMode === 'enhance_existing' || trace.field === 'experience_description');
+  if (isEsEnhance) {
+    if (
+      Number(trace.sourcePredicateIdentityCount ?? -1) === 0
+      && Number(trace.sourceUnitCount ?? 0) > 0
+      && (
+        trace.sourceUnitPredicateCoveragePassed === true
+        || trace.finalSourceUnitPredicateCoveragePassed === true
+      )
+    ) {
+      push('vacuous_predicate_coverage_pass', {
+        sourcePredicateIdentityCount: trace.sourcePredicateIdentityCount ?? null,
+        sourceUnitPredicateCoveragePassed: trace.sourceUnitPredicateCoveragePassed ?? null,
+      });
+    }
+    if (
+      Number(trace.sourcePredicateIdentityCount ?? -1) === 0
+      && Number(trace.sourceUnitCount ?? 0) > 0
+      && (
+        trace.countedAsSuccess === true
+        || trace.visibleApplySucceeded === true
+        || Number(trace.usageCountAfter) > Number(trace.usageCountBefore)
+      )
+    ) {
+      push('zero_source_predicates_applied', {
+        sourcePredicateIdentityCount: 0,
+        countedAsSuccess: trace.countedAsSuccess ?? null,
+      });
+    }
+    if (
+      (
+        trace.finalSourceUnitPredicateCoveragePassed == null
+        || Number(trace.finalCandidatePredicateIdentityCount ?? 0) === 0
+      )
+      && (
+        trace.countedAsSuccess === true
+        || trace.visibleApplySucceeded === true
+      )
+    ) {
+      push('null_or_zero_final_predicate_apply', {
+        finalSourceUnitPredicateCoveragePassed:
+          trace.finalSourceUnitPredicateCoveragePassed ?? null,
+        finalCandidatePredicateIdentityCount:
+          trace.finalCandidatePredicateIdentityCount ?? null,
+      });
+    }
+    if (
+      Array.isArray(trace.materialImprovementKinds)
+      && (trace.materialImprovementKinds as string[]).includes('incomplete_bullet_completed')
+      && Number(trace.sourceIncompleteUnitCount ?? 0) === 0
+      && (
+        trace.countedAsSuccess === true
+        || (trace.materialImprovementKinds as string[]).includes('wrong_tense_fixed')
+      )
+    ) {
+      push('false_incomplete_bullet_completed', {
+        materialImprovementKindsCount: Array.isArray(trace.materialImprovementKinds)
+          ? trace.materialImprovementKinds.length
+          : 0,
+      });
+    }
+    if (
+      Array.isArray(trace.materialImprovementKinds)
+      && (trace.materialImprovementKinds as string[]).includes('wrong_tense_fixed')
+      && Number(trace.sourceTenseMismatchCount ?? 0) <= 0
+      && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+    ) {
+      push('wrong_tense_without_mismatch', {
+        sourceTenseMismatchCount: trace.sourceTenseMismatchCount ?? null,
+      });
+    }
+    if (
+      trace.tenseOnlyCorrectionDetected === true
+      && trace.tenseOnlyUnexpectedExpansionDetected === true
+      && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+    ) {
+      push('tense_only_unexpected_expansion_applied', {
+        tenseOnlySourceLength: trace.tenseOnlySourceLength ?? null,
+        tenseOnlyCandidateLength: trace.tenseOnlyCandidateLength ?? null,
+      });
+    }
+    if (
+      (trace.countedAsSuccess === true || Number(trace.usageCountAfter) > Number(trace.usageCountBefore))
+      && trace.canonicalAcceptancePassed === false
+    ) {
+      push('usage_without_canonical_acceptance', {
+        canonicalAcceptancePassed: false,
+        countedAsSuccess: trace.countedAsSuccess ?? null,
+      });
+    }
+    if (
+      trace.materialImprovementDetected === true
+      && Array.isArray(trace.materialImprovementKinds)
+      && (trace.materialImprovementKinds as unknown[]).length > 0
+      && (
+        Number(trace.materialImprovementEvidenceCount ?? 0)
+          < (trace.materialImprovementKinds as unknown[]).length
+        || trace.everyImprovementKindHasEvidence === false
+      )
+    ) {
+      push('improvement_kind_missing_evidence', {
+        materialImprovementEvidenceCount: trace.materialImprovementEvidenceCount ?? null,
+        materialImprovementKindsCount: (trace.materialImprovementKinds as unknown[]).length,
+      });
+    }
+  }
   return { passed: failures.length === 0, failures };
 }
 
@@ -1382,6 +1509,34 @@ export function checkExperienceDiagnosticCompleteness(
       if (!('materialImprovementKinds' in trace)) missing.push('materialImprovementKinds');
       if (!('materialImprovementEvidenceCount' in trace)) {
         missing.push('materialImprovementEvidenceCount');
+      }
+      if (!('everyImprovementKindHasEvidence' in trace)) {
+        missing.push('everyImprovementKindHasEvidence');
+      }
+    }
+    // AAB-314 — decision-critical tense / predicate evidence fields.
+    if (
+      trace.countedAsSuccess === true
+      || trace.visibleApplySucceeded === true
+      || trace.finalDecisionKind === 'material_improvement'
+    ) {
+      for (const key of [
+        'sourcePredicateIdentityCount',
+        'finalCandidatePredicateIdentityCount',
+        'finalSourceUnitPredicateCoveragePassed',
+        'canonicalAcceptancePassed',
+      ] as const) {
+        if (!(key in trace)) missing.push(key);
+      }
+    }
+    if (trace.tenseOnlyCorrectionDetected === true) {
+      for (const key of [
+        'expectedEmploymentTense',
+        'sourceTenseMismatchCount',
+        'tenseOnlyPreservationPassed',
+        'tenseOnlyUnexpectedExpansionDetected',
+      ] as const) {
+        if (!(key in trace)) missing.push(key);
       }
     }
     if ('unsupportedClaimRepairAttempted' in trace
