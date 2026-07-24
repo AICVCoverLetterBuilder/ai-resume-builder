@@ -1,6 +1,6 @@
 /**
- * AAB-323 — German Summary per-fact current-duty serialization + coverage +
- * controlled case-grammar validation.
+ * AAB-323/324 — German Summary per-fact current-duty serialization + coverage +
+ * controlled case-grammar validation + authoritative/required fact parity.
  *
  * Material keys may group related duties, but each canonical fact remains
  * independently required for final/visible acceptance.
@@ -13,11 +13,23 @@ export const GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION =
   'german-summary-controlled-case-grammar-323-v1' as const;
 export const SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION =
   'summary-repair-selection-truth-323-v1' as const;
+export const GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION =
+  'german-summary-third-current-duty-324-v1' as const;
+export const SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION =
+  'summary-authoritative-duty-parity-324-v1' as const;
+export const SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION =
+  'summary-visible-duty-parity-324-v1' as const;
+export const SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION =
+  'summary-duty-parity-apply-gate-324-v1' as const;
 
 void GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION;
 void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
 void GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION;
 void SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION;
+void GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION;
+void SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION;
+void SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION;
+void SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION;
 
 export type GermanCurrentDutyFactId =
   | 'incoming_goods_check'
@@ -62,9 +74,13 @@ function detectDutySourceLocale(text: string): string | null {
   return null;
 }
 
-const INCOMING_RE = /(?:eingehend\w*\s+Waren|Wareneingang|Warenannahme|(?:Prüfung|Kontrolle|prüfen|kontroll)\w*.{0,40}(?:eingehend|Wareneingang)|(?:incoming|inbound)\s+goods|mercanc[ií]as?\s+entrant(?:es)?|(?:verifica|comprueba|revisa|controla)\w*.{0,40}mercanc|(?:prüf|kontroll)\w*.{0,24}Waren)/iu;
-const DOCUMENT_RE = /(?:zugehörig\w*\s+(?:Dokumentation|Unterlagen|Dokumente|Belege)|Dokumentenprüfung|(?:Prüfung|Kontrolle)\w*.{0,40}(?:Dokumentation|Unterlagen|Dokumente|Belege)|(?:Dokumentation|Unterlagen|Dokumente|Belege).{0,40}(?:Prüfung|Kontrolle|prüfen|kontroll)|(?:documentaci[oó]n|documentos|registros).{0,40}(?:relacionad|asociad|acompañ)|(?:verifica|comprueba|revisa|controla|prüf|kontroll)\w*.{0,40}(?:documentaci|documentos|Dokumentation|Unterlagen)|(?:documentaci|documentos|Unterlagen|Dokumentation).{0,40}(?:verifica|comprueba|revisa|controla|prüf|kontroll)|related\s+document)/iu;
-const COORD_RE = /(?:Abstimmung|Koordination).{0,80}(?:Kolleg|Vorbereitung|Bewegung|Transport)|(?:Kolleg\w*).{0,80}(?:Vorbereitung|Bewegung|Transport|Abstimmung|vorbereiten|bewegen)|(?:coordina|koordin)\w*.{0,80}(?:prepar|movim|mercanc|coleg|Kolleg|Vorbereitung|Bewegung)|(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+von\s+Waren)|(?:Waren).{0,40}(?:Kolleg\w*).{0,40}(?:vorbereit|beweg|Transport)|(?:Kolleg\w*).{0,40}(?:Waren).{0,40}(?:vorbereit|beweg|Transport)|(?:vorbereiten\s+und\s+bewegen)/iu;
+const INCOMING_RE = /(?:eingehend\w*\s+Waren|Wareneingang|Warenannahme|(?:Prüfung|Kontrolle|prüfen|kontroll)\w*.{0,40}(?:eingehend|Wareneingang)|(?:incoming|inbound)\s+goods|mercanc[ií]as?\s+entrant(?:es)?|(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó])\w*.{0,40}mercanc|(?:prüf|kontroll)\w*.{0,24}Waren)/iu;
+const DOCUMENT_RE = /(?:zugehörig\w*\s+(?:Dokumentation|Unterlagen|Dokumente|Belege)|Dokumentenprüfung|(?:Prüfung|Kontrolle)\w*.{0,40}(?:Dokumentation|Unterlagen|Dokumente|Belege)|(?:Dokumentation|Unterlagen|Dokumente|Belege).{0,40}(?:Prüfung|Kontrolle|prüfen|kontroll)|(?:documentaci[oó]n|documentos|registros).{0,40}(?:relacionad|asociad|acompañ)|(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó]|prüf|kontroll)\w*.{0,40}(?:documentaci|documentos|Dokumentation|Unterlagen)|(?:documentaci|documentos|Unterlagen|Dokumentation).{0,40}(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó]|prüf|kontroll)|related\s+document)/iu;
+/**
+ * AAB-324: Spanish past-tense Coordinó (ó) must match — bare `coordina` does not.
+ * Also accept compañeros / colleagues as coordination participants.
+ */
+const COORD_RE = /(?:Abstimmung|Koordination).{0,80}(?:Kolleg|Vorbereitung|Bewegung|Transport)|(?:Kolleg\w*).{0,80}(?:Vorbereitung|Bewegung|Transport|Abstimmung|vorbereiten|bewegen)|(?:coordin[aoó]|koordin)\w*.{0,100}(?:prepar|movim|mercanc|coleg|compa[nñ]er|colleague|Kolleg|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:compa[nñ]er\w*|colleague\w*|Kolleg\w*).{0,100}(?:prepar|movim|mercanc|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+von\s+Waren)|(?:Waren).{0,40}(?:Kolleg\w*).{0,40}(?:vorbereit|beweg|Transport)|(?:Kolleg\w*).{0,40}(?:Waren).{0,40}(?:vorbereit|beweg|Transport)|(?:vorbereiten\s+und\s+bewegen)/iu;
 
 function splitDutyBullets(text: string): string[] {
   return (text || '')
@@ -76,12 +92,16 @@ function splitDutyBullets(text: string): string[] {
 /**
  * Extract ordered canonical current warehouse duties from entry source text.
  * One material category may appear on multiple facts; each fact stays distinct.
+ *
+ * AAB-324: Spanish past-tense Coordinó must classify as
+ * colleague_coordination_goods_preparation_movement — never silently drop it.
  */
 export function extractGermanCurrentWarehouseDutyFacts(options: {
   currentEntryDuties?: string;
   entryId?: string | null;
 }): GermanCurrentDutyFact[] {
   void GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION;
+  void GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION;
   const raw = (options.currentEntryDuties || '').trim();
   const bullets = splitDutyBullets(raw);
   const corpus = bullets.join('\n') || raw;
@@ -156,6 +176,156 @@ export function extractGermanCurrentWarehouseDutyFacts(options: {
     });
   }
   return out;
+}
+
+export type AuthoritativeCurrentDutyParityResult = {
+  authoritativeCurrentDutyFactCount: number;
+  authoritativeCanonicalCurrentDutyFactCount: number;
+  requiredCurrentDutyFactCount: number;
+  classifiedRequiredCurrentDutyFactCount: number;
+  unclassifiedAuthoritativeCurrentDutyFactCount: number;
+  requiredFactSetMatchesAuthoritativeFactSet: boolean;
+  currentDutyRequiredFactParityPassed: boolean;
+  currentMaterialCategoryCount: number;
+  authoritativeBulletHashes: string[];
+  classifiedFactIds: GermanCurrentDutyFactId[];
+  unclassifiedAuthoritativeBulletHashes: string[];
+  currentDutyFactClassificationKindsByFactHash: Record<string, string>;
+  rejectionReason: 'current_duty_required_fact_parity_failed'
+    | 'authoritative_current_duty_unclassified'
+    | null;
+};
+
+/**
+ * Count authoritative warehouse duty bullets that must appear in the required set.
+ * AAB-324: do not shrink this list to whatever the classifier already knows —
+ * Spanish Coordinó-style bullets remain authoritative even when a detector misses.
+ */
+export function listAuthoritativeCurrentWarehouseDutyBullets(
+  currentEntryDuties?: string,
+): string[] {
+  const bullets = splitDutyBullets(currentEntryDuties || '');
+  const warehouseish = (b: string) => (
+    INCOMING_RE.test(b)
+    || DOCUMENT_RE.test(b)
+    || COORD_RE.test(b)
+    || /(?:mercanc|Waren|Wareneingang|goods|almac[eé]n|Lager|warehouse|documentaci|Dokumentation|Unterlagen|coordin|Kolleg|colleague|compa[nñ]er|preparaci|Vorbereitung|movim|Bewegung|Transport|Abstimmung)/iu
+      .test(b)
+  );
+  if (!bullets.some(warehouseish)) return [];
+  return bullets.filter(warehouseish);
+}
+
+/**
+ * Authoritative source/canonical/required parity for current warehouse duties.
+ * Fail closed when any authoritative bullet lacks a classified required identity.
+ */
+export function analyzeCurrentDutyRequiredFactParity(options: {
+  currentEntryDuties?: string;
+  requiredFacts?: GermanCurrentDutyFact[];
+  entryId?: string | null;
+}): AuthoritativeCurrentDutyParityResult {
+  void SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION;
+  void SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION;
+  const authoritativeBullets = listAuthoritativeCurrentWarehouseDutyBullets(
+    options.currentEntryDuties,
+  );
+  const requiredFacts = options.requiredFacts
+    ?? extractGermanCurrentWarehouseDutyFacts({
+      currentEntryDuties: options.currentEntryDuties,
+      entryId: options.entryId,
+    });
+  const classified = requiredFacts.filter((f) => f.requiredForSummary);
+  const classifiedIds = classified.map((f) => f.canonicalFactId);
+  const classificationKinds: Record<string, string> = {};
+  for (const f of classified) {
+    classificationKinds[f.sourceFactHash] = f.canonicalFactId;
+  }
+
+  // Prefer specific family detectors; fall back to exclusive assignment order.
+  const claimed = new Set<GermanCurrentDutyFactId>();
+  const unclassifiedHashes: string[] = [];
+  for (const bullet of authoritativeBullets) {
+    let kind: GermanCurrentDutyFactId | null = null;
+    if (COORD_RE.test(bullet) && !claimed.has('colleague_coordination_goods_preparation_movement')) {
+      // Check coordination before inbound: Spanish coordination bullets mention mercancías.
+      kind = 'colleague_coordination_goods_preparation_movement';
+    } else if (
+      DOCUMENT_RE.test(bullet)
+      && !INCOMING_RE.test(bullet)
+      && !claimed.has('related_documentation_check')
+    ) {
+      kind = 'related_documentation_check';
+    } else if (
+      INCOMING_RE.test(bullet)
+      && !claimed.has('incoming_goods_check')
+    ) {
+      kind = 'incoming_goods_check';
+    } else if (
+      DOCUMENT_RE.test(bullet)
+      && !claimed.has('related_documentation_check')
+    ) {
+      kind = 'related_documentation_check';
+    } else if (
+      !claimed.has('incoming_goods_check')
+      && /(?:entrant|eingehend|incoming|inbound|Wareneingang)/iu.test(bullet)
+    ) {
+      kind = 'incoming_goods_check';
+    } else if (
+      !claimed.has('related_documentation_check')
+      && /(?:documentaci|Dokumentation|Unterlagen|document)/iu.test(bullet)
+    ) {
+      kind = 'related_documentation_check';
+    } else if (
+      !claimed.has('colleague_coordination_goods_preparation_movement')
+      && /(?:coordin|Abstimmung|Kolleg|compa[nñ]er|colleague|prepar|movim|Bewegung)/iu.test(bullet)
+    ) {
+      kind = 'colleague_coordination_goods_preparation_movement';
+    }
+    if (kind && classifiedIds.includes(kind)) {
+      claimed.add(kind);
+    } else if (kind && !classifiedIds.includes(kind)) {
+      unclassifiedHashes.push(hashOpaque(bullet));
+    } else {
+      unclassifiedHashes.push(hashOpaque(bullet));
+    }
+  }
+
+  const authoritativeCount = authoritativeBullets.length;
+  const authoritativeCanonicalCount = claimed.size;
+  const requiredCount = classified.length;
+  const classifiedRequiredCount = classified.length;
+  const parityOk = unclassifiedHashes.length === 0
+    && authoritativeCount === requiredCount
+    && authoritativeCanonicalCount === requiredCount
+    && requiredCount === classifiedRequiredCount
+    && authoritativeCount === authoritativeCanonicalCount;
+  const matches = parityOk;
+
+  let rejectionReason: AuthoritativeCurrentDutyParityResult['rejectionReason'] = null;
+  if (!parityOk) {
+    rejectionReason = unclassifiedHashes.length > 0 || authoritativeCount > requiredCount
+      ? 'authoritative_current_duty_unclassified'
+      : 'current_duty_required_fact_parity_failed';
+  }
+
+  const categories = new Set(classified.map((f) => f.materialCategory));
+
+  return {
+    authoritativeCurrentDutyFactCount: authoritativeCount,
+    authoritativeCanonicalCurrentDutyFactCount: authoritativeCanonicalCount,
+    requiredCurrentDutyFactCount: requiredCount,
+    classifiedRequiredCurrentDutyFactCount: classifiedRequiredCount,
+    unclassifiedAuthoritativeCurrentDutyFactCount: unclassifiedHashes.length,
+    requiredFactSetMatchesAuthoritativeFactSet: matches,
+    currentDutyRequiredFactParityPassed: parityOk,
+    currentMaterialCategoryCount: categories.size,
+    authoritativeBulletHashes: authoritativeBullets.map((b) => hashOpaque(b)),
+    classifiedFactIds: classifiedIds,
+    unclassifiedAuthoritativeBulletHashes: unclassifiedHashes,
+    currentDutyFactClassificationKindsByFactHash: classificationKinds,
+    rejectionReason,
+  };
 }
 
 /** Compose "mit Erfahrung in …" using compatible dative NPs. */
@@ -321,6 +491,7 @@ export function verifyVisibleSummaryCurrentDutyCoverage(options: {
   visibleCurrentDutyCoveragePassed: boolean;
   visibleCurrentDutyFactMatchCountsByFactHash: Record<string, number>;
 } {
+  void SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION;
   const base = validateSummaryEntryDutyCoverage({
     requiredFacts: options.requiredFacts,
     candidateText: options.visibleSummary,

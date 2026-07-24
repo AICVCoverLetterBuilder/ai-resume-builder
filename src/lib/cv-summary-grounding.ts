@@ -194,6 +194,10 @@ export {
   SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
   GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
   SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+  GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION,
+  SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
+  SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
+  SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   scanGermanSummaryCompetencyClaims,
   analyzeGermanSummaryDurationScope,
@@ -219,6 +223,7 @@ export {
   validateGermanGeneratedCaseGrammar,
   validateSummaryEntryDutyCoverage,
   verifyVisibleSummaryCurrentDutyCoverage,
+  analyzeCurrentDutyRequiredFactParity,
 } from './cv-german-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,

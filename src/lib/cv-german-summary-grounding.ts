@@ -63,12 +63,18 @@ import {
   SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
   GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
   SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+  GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION,
+  SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
+  SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
+  SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
   extractGermanCurrentWarehouseDutyFacts,
   buildGermanCurrentDutyExperiencePhrase,
   validateGermanGeneratedCaseGrammar,
   validateSummaryEntryDutyCoverage,
   verifyVisibleSummaryCurrentDutyCoverage,
+  analyzeCurrentDutyRequiredFactParity,
   type SummaryEntryDutyCoverageResult,
+  type AuthoritativeCurrentDutyParityResult,
 } from './cv-german-summary-current-duty-coverage';
 export {
   GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
@@ -92,11 +98,20 @@ export {
   SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
   GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
   SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+  GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION,
+  SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
+  SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
+  SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
   extractGermanCurrentWarehouseDutyFacts,
   buildGermanCurrentDutyExperiencePhrase,
   validateGermanGeneratedCaseGrammar,
   validateSummaryEntryDutyCoverage,
   verifyVisibleSummaryCurrentDutyCoverage,
+  analyzeCurrentDutyRequiredFactParity,
+} from './cv-german-summary-current-duty-coverage';
+export type {
+  SummaryEntryDutyCoverageResult,
+  AuthoritativeCurrentDutyParityResult,
 } from './cv-german-summary-current-duty-coverage';
 export {
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
@@ -337,11 +352,20 @@ export type GermanSummaryEmploymentQuality = {
   currentDutyFactMatchCountsByFactHash?: Record<string, number>;
   currentMaterialCategoryMatchCount?: number;
   currentCanonicalDutyFactMatchCount?: number;
-    materialCategoryCoverageUsedForFinalAcceptance?: false;
-    germanControlledCaseGrammarPassed?: boolean;
-    finalGermanGrammarValidationPassed?: boolean;
-    requiredCurrentDutyFactIds?: string[];
-    currentDutyCoverage?: SummaryEntryDutyCoverageResult;
+  materialCategoryCoverageUsedForFinalAcceptance?: false;
+  germanControlledCaseGrammarPassed?: boolean;
+  finalGermanGrammarValidationPassed?: boolean;
+  requiredCurrentDutyFactIds?: string[];
+  currentDutyCoverage?: SummaryEntryDutyCoverageResult;
+  currentDutyParity?: AuthoritativeCurrentDutyParityResult;
+  authoritativeCurrentDutyFactCount?: number;
+  authoritativeCanonicalCurrentDutyFactCount?: number;
+  classifiedRequiredCurrentDutyFactCount?: number;
+  unclassifiedAuthoritativeCurrentDutyFactCount?: number;
+  requiredFactSetMatchesAuthoritativeFactSet?: boolean;
+  currentDutyRequiredFactParityPassed?: boolean;
+  currentMaterialCategoryCount?: number;
+  currentDutyFactClassificationKindsByFactHash?: Record<string, string>;
 };
 
 export function analyzeGermanSummaryEmploymentQuality(
@@ -438,6 +462,11 @@ export function analyzeGermanSummaryEmploymentQuality(
 
   const requiredCurrentDutyFacts = extractGermanCurrentWarehouseDutyFacts({
     currentEntryDuties: options.currentEntryDuties,
+    entryId: options.currentEntryId,
+  });
+  const currentDutyParity = analyzeCurrentDutyRequiredFactParity({
+    currentEntryDuties: options.currentEntryDuties,
+    requiredFacts: requiredCurrentDutyFacts,
     entryId: options.currentEntryId,
   });
   const currentDutyCoverage = validateSummaryEntryDutyCoverage({
@@ -541,12 +570,17 @@ export function analyzeGermanSummaryEmploymentQuality(
     && structuredRoleLocale.structuredRoleLocaleValidationPassed
     && (requiredCurrentDutyFacts.length === 0
       || currentDutyCoverage.finalCurrentDutyCoveragePassed)
+    && currentDutyParity.currentDutyRequiredFactParityPassed
     && caseGrammar.germanControlledCaseGrammarPassed;
   const finalSlotRejectionReasons = [
     ...dedupedSlotRejectionReasons,
     ...(requiredCurrentDutyFacts.length > 0
       && !currentDutyCoverage.finalCurrentDutyCoveragePassed
       ? ['current_duty_fact_coverage_incomplete']
+      : []),
+    ...(!currentDutyParity.currentDutyRequiredFactParityPassed
+      && currentDutyParity.rejectionReason
+      ? [currentDutyParity.rejectionReason]
       : []),
     ...caseGrammar.failureKinds,
   ];
@@ -560,6 +594,8 @@ export function analyzeGermanSummaryEmploymentQuality(
     reason = durationScope.durationScopeRejectionReason || 'duration_scope_mismatch';
   } else if (!structuredRoleLocale.structuredRoleLocaleValidationPassed) {
     reason = structuredRoleLocale.failureKinds[0] || 'foreign_prior_role_title';
+  } else if (!currentDutyParity.currentDutyRequiredFactParityPassed) {
+    reason = currentDutyParity.rejectionReason || 'current_duty_required_fact_parity_failed';
   } else if (
     requiredCurrentDutyFacts.length > 0
     && !currentDutyCoverage.finalCurrentDutyCoveragePassed
@@ -582,6 +618,7 @@ export function analyzeGermanSummaryEmploymentQuality(
     && competencyScan.unsupportedCompetencyCount === 0
     && slotValidationPassed
     && structuredRoleLocale.structuredRoleLocaleValidationPassed
+    && currentDutyParity.currentDutyRequiredFactParityPassed
     && (requiredCurrentDutyFacts.length === 0
       || currentDutyCoverage.finalCurrentDutyCoveragePassed)
     && caseGrammar.germanControlledCaseGrammarPassed
@@ -689,6 +726,21 @@ export function analyzeGermanSummaryEmploymentQuality(
       && introGrammar.ok,
     requiredCurrentDutyFactIds: requiredCurrentDutyFacts.map((f) => f.canonicalFactId),
     currentDutyCoverage,
+    currentDutyParity,
+    authoritativeCurrentDutyFactCount: currentDutyParity.authoritativeCurrentDutyFactCount,
+    authoritativeCanonicalCurrentDutyFactCount:
+      currentDutyParity.authoritativeCanonicalCurrentDutyFactCount,
+    classifiedRequiredCurrentDutyFactCount:
+      currentDutyParity.classifiedRequiredCurrentDutyFactCount,
+    unclassifiedAuthoritativeCurrentDutyFactCount:
+      currentDutyParity.unclassifiedAuthoritativeCurrentDutyFactCount,
+    requiredFactSetMatchesAuthoritativeFactSet:
+      currentDutyParity.requiredFactSetMatchesAuthoritativeFactSet,
+    currentDutyRequiredFactParityPassed:
+      currentDutyParity.currentDutyRequiredFactParityPassed,
+    currentMaterialCategoryCount: currentDutyParity.currentMaterialCategoryCount,
+    currentDutyFactClassificationKindsByFactHash:
+      currentDutyParity.currentDutyFactClassificationKindsByFactHash,
   };
 }
 
