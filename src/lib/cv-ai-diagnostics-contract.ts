@@ -22,6 +22,10 @@ import {
   SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
   SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
 } from './cv-summary-structured-role-localization';
+import {
+  SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+} from './cv-german-summary-current-duty-coverage';
+export { SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION } from './cv-german-summary-current-duty-coverage';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
@@ -29,6 +33,7 @@ void SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION;
 void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
 void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
 void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
+void SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION;
 
 /** Stable contract revision — must survive minification in internal builds. */
 export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as const;
@@ -433,7 +438,6 @@ type SummaryLike = {
   finalCandidateSource?: string | null;
   providerCandidatePresent?: boolean;
   deterministicCandidatePresent?: boolean;
-  repairApplied?: boolean;
   fallbackApplied?: boolean;
   visibleApplySucceeded?: boolean;
   visibleSummaryMatchesFinalHash?: boolean | null;
@@ -499,6 +503,19 @@ type SummaryLike = {
   repairCandidateHash?: string | null;
   providerAccepted?: boolean | null;
   providerCandidateHash?: string | null;
+  repairSelected?: boolean | null;
+  repairApplied?: boolean | null;
+  repairAcceptedTransformationKinds?: string[] | null;
+  repairAppliedTransformationKinds?: string[] | null;
+  repairAttemptedTransformationKinds?: string[] | null;
+  repairRoleLocalizationTransformationKinds?: string[] | null;
+  deterministicAccepted?: boolean | null;
+  requiredCurrentDutyFactCount?: number | null;
+  coveredCurrentDutyFactCount?: number | null;
+  currentRoleConcreteFactCoverage?: number | null;
+  finalCurrentDutyCoveragePassed?: boolean | null;
+  germanControlledCaseGrammarPassed?: boolean | null;
+  finalPostconditionsPassed?: boolean | null;
   structuredRoleLocaleValidationPassed?: boolean | null;
   currentRoleLocalizationValidationPassed?: boolean | null;
   priorRoleLocalizationValidationPassed?: boolean | null;
@@ -511,7 +528,6 @@ type SummaryLike = {
   providerForeignRoleTitleCount?: number | null;
   repairStructuredRoleLocaleValidationPassed?: boolean | null;
   repairForeignRoleTitleCount?: number | null;
-  repairRoleLocalizationTransformationKinds?: string[] | null;
   finalForeignRoleTitleCount?: number | null;
   visibleStructuredRoleLocaleValidationPassed?: boolean | null;
   visibleWrongLocaleStructuredRoleCount?: number | null;
@@ -720,6 +736,73 @@ export function checkSummaryDiagnosticInvariants(
     push('role_localization_must_change_repair_hash', {
       repairCandidateHash: trace.repairCandidateHash ?? null,
       providerCandidateHash: trace.providerCandidateHash ?? null,
+    });
+  }
+  // AAB-323: repair selection / apply truth.
+  void SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION;
+  if (trace.repairApplied === true && trace.repairAccepted !== true) {
+    push('repair_applied_requires_accepted', {
+      repairApplied: true,
+      repairAccepted: trace.repairAccepted ?? null,
+    });
+  }
+  if (trace.repairApplied === true && trace.repairSelected !== true
+    && trace.finalCandidateSource !== 'repaired_provider') {
+    push('repair_applied_requires_selected', {
+      repairApplied: true,
+      repairSelected: trace.repairSelected ?? null,
+      finalCandidateSource: trace.finalCandidateSource || null,
+    });
+  }
+  if (
+    trace.finalCandidateSource === 'deterministic_fallback'
+    && trace.repairApplied === true
+  ) {
+    push('deterministic_forbids_repair_applied', {
+      finalCandidateSource: 'deterministic_fallback',
+      repairApplied: true,
+    });
+  }
+  if (
+    trace.finalCandidateSource === 'deterministic_fallback'
+    && trace.repairSelected === true
+  ) {
+    push('deterministic_forbids_repair_selected', {
+      finalCandidateSource: 'deterministic_fallback',
+      repairSelected: true,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && trace.finalCurrentDutyCoveragePassed === true
+    && typeof trace.requiredCurrentDutyFactCount === 'number'
+    && typeof trace.coveredCurrentDutyFactCount === 'number'
+    && trace.coveredCurrentDutyFactCount !== trace.requiredCurrentDutyFactCount
+  ) {
+    push('duty_coverage_pass_requires_full_count', {
+      coveredCurrentDutyFactCount: trace.coveredCurrentDutyFactCount,
+      requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && typeof trace.currentRoleConcreteFactCoverage === 'number'
+    && typeof trace.coveredCurrentDutyFactCount === 'number'
+    && trace.currentRoleConcreteFactCoverage !== trace.coveredCurrentDutyFactCount
+  ) {
+    push('concrete_coverage_must_equal_covered_duty_facts', {
+      currentRoleConcreteFactCoverage: trace.currentRoleConcreteFactCoverage,
+      coveredCurrentDutyFactCount: trace.coveredCurrentDutyFactCount,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && trace.finalPostconditionsPassed === true
+    && trace.germanControlledCaseGrammarPassed === false
+  ) {
+    push('postconditions_require_controlled_german_grammar', {
+      finalPostconditionsPassed: true,
+      germanControlledCaseGrammarPassed: false,
     });
   }
   if (src === 'deterministic_fallback') {
@@ -1123,6 +1206,16 @@ export function checkSummaryDiagnosticCompleteness(
     require('rawSourceRoleLeakageDetected');
     require('finalWrongLocaleStructuredRoleCount');
     require('finalStructuredRoleLocaleValidationPassed');
+    // AAB-323: current duty + repair selection completeness.
+    require('requiredCurrentDutyFactCount');
+    require('coveredCurrentDutyFactCount');
+    require('finalCurrentDutyCoveragePassed');
+    require('germanControlledCaseGrammarPassed');
+    require('materialCategoryCoverageUsedForFinalAcceptance');
+    require('repairAttempted');
+    require('repairAccepted');
+    require('repairSelected');
+    require('repairApplied');
   }
 
   if (trace.finalCandidateSource === 'deterministic_fallback') {

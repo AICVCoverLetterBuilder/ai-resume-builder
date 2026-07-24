@@ -1035,9 +1035,15 @@ export type FinalizeCvAiFieldResult = {
     summaryDurationRepairApplied?: boolean;
     repairCandidatePresent?: boolean;
     repairAccepted?: boolean;
+    repairSelected?: boolean;
+    repairApplied?: boolean;
     repairCandidateHash?: string | null;
     repairTransformationKinds?: string[];
+    repairAttemptedTransformationKinds?: string[];
+    repairAcceptedTransformationKinds?: string[];
+    repairAppliedTransformationKinds?: string[];
     repairRejectionReasons?: string[];
+    deterministicAccepted?: boolean;
     germanEmployerStatusRepairAttempted?: boolean;
     germanEmployerStatusRepairApplied?: boolean;
     finalCurrentRoleTitlePresent?: boolean;
@@ -1052,6 +1058,7 @@ export type FinalizeCvAiFieldResult = {
     currentMaterialCategoryMatchCount?: number;
     currentCanonicalDutyFactMatchCount?: number;
     materialCategoryCoverageUsedForFinalAcceptance?: boolean;
+    requiredCurrentDutyFactIds?: string[];
     germanControlledCaseGrammarPassed?: boolean;
     finalGermanGrammarValidationPassed?: boolean;
     finalPriorRoleTitlePresent?: boolean;
@@ -2777,9 +2784,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         contentLocaleAfterApply: success ? locale : (cv.contentLocale || null),
         finalContentLocaleAfterApply: success ? locale : null,
         finalCandidateSource: success
-          ? (germanMaterialRepairApplied
-            ? 'repaired_provider'
-            : result.origin)
+          ? (
+            germanMaterialRepairApplied && result.origin !== 'deterministic_fallback'
+              ? 'repaired_provider'
+              : result.origin
+          )
           : 'none',
         finalCandidatePresent: Boolean(success && analyzedText.trim()),
         providerAccepted: success
@@ -2792,13 +2801,58 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           )
           : false,
         repairCandidatePresent: Boolean(
-          germanEmployerStatusRepairAttempted || germanMaterialRepairApplied,
+          germanEmployerStatusRepairAttempted
+          || germanMaterialRepairApplied
+          || germanClientRepairAttempted
         ),
-        repairAccepted: Boolean(success && germanMaterialRepairApplied),
-        repairCandidateHash: germanRepairCandidateHash,
+        repairAccepted: Boolean(
+          success
+          && germanMaterialRepairApplied
+          && result.origin !== 'deterministic_fallback'
+        ),
+        repairSelected: Boolean(
+          success
+          && germanMaterialRepairApplied
+          && result.origin !== 'deterministic_fallback'
+        ),
+        repairApplied: Boolean(
+          success
+          && germanMaterialRepairApplied
+          && result.origin !== 'deterministic_fallback'
+        ),
+        repairCandidateHash: (
+          success
+          && germanMaterialRepairApplied
+          && result.origin !== 'deterministic_fallback'
+        )
+          ? germanRepairCandidateHash
+          : (germanEmployerStatusRepairAttempted ? germanRepairCandidateHash : null),
+        repairAttemptedTransformationKinds: germanEmployerStatusRepairTransformations.length
+          ? [...germanEmployerStatusRepairTransformations]
+          : undefined,
+        repairAcceptedTransformationKinds: (
+          success
+          && germanMaterialRepairApplied
+          && result.origin !== 'deterministic_fallback'
+          && germanEmployerStatusRepairTransformations.length
+        )
+          ? [...germanEmployerStatusRepairTransformations]
+          : [],
+        repairAppliedTransformationKinds: (
+          success
+          && germanMaterialRepairApplied
+          && result.origin !== 'deterministic_fallback'
+          && germanEmployerStatusRepairTransformations.length
+        )
+          ? [...germanEmployerStatusRepairTransformations]
+          : [],
+        // Legacy alias: attempted transformations only (never imply applied).
         repairTransformationKinds: germanEmployerStatusRepairTransformations.length
           ? germanEmployerStatusRepairTransformations
           : undefined,
+        deterministicAccepted: Boolean(
+          success && result.origin === 'deterministic_fallback',
+        ),
         repairRejectionReasons: germanEmployerStatusRepairRejectionReasons.length
           ? germanEmployerStatusRepairRejectionReasons
           : (germanEmployerStatusRepairAttempted && !germanEmployerStatusRepairApplied
@@ -2806,7 +2860,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             : undefined),
         germanEmployerStatusRepairAttempted,
         germanEmployerStatusRepairApplied: Boolean(
-          success && germanEmployerStatusRepairApplied,
+          success
+          && germanEmployerStatusRepairApplied
+          && germanMaterialRepairApplied
+          && result.origin !== 'deterministic_fallback'
         ),
         finalCurrentRoleTitlePresent: locale === 'de' && empQ
           ? Boolean((empQ as { finalCurrentRoleTitlePresent?: boolean }).finalCurrentRoleTitlePresent)
@@ -2852,6 +2909,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : undefined,
         materialCategoryCoverageUsedForFinalAcceptance: locale === 'de' && empQ
           ? false
+          : undefined,
+        requiredCurrentDutyFactIds: locale === 'de' && empQ
+          ? ((empQ as { requiredCurrentDutyFactIds?: string[] }).requiredCurrentDutyFactIds
+            ?? undefined)
           : undefined,
         germanControlledCaseGrammarPassed: locale === 'de' && empQ
           ? Boolean((empQ as { germanControlledCaseGrammarPassed?: boolean })
@@ -3407,9 +3468,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
           : undefined,
         summaryRepairAttempted: Boolean(summaryRepairAttempted || germanClientRepairAttempted),
-        summaryRepairApplied: (summaryRepairAttempted || germanClientRepairAttempted) && success,
+        // AAB-323: repairApplied only when a repaired candidate was actually selected.
+        summaryRepairApplied: Boolean(
+          success
+          && germanMaterialRepairApplied
+          && result.origin !== 'deterministic_fallback'
+        ),
         summaryRepairValidationPassed: (summaryRepairAttempted || germanClientRepairAttempted)
-          ? success
+          ? Boolean(
+            success
+            && germanMaterialRepairApplied
+            && result.origin !== 'deterministic_fallback'
+          )
           : null,
         summaryDurationRepairApplied: durationRepairApplied,
         providerRejectionReason: hindiProviderRejectionReason

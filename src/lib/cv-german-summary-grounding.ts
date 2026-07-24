@@ -337,10 +337,11 @@ export type GermanSummaryEmploymentQuality = {
   currentDutyFactMatchCountsByFactHash?: Record<string, number>;
   currentMaterialCategoryMatchCount?: number;
   currentCanonicalDutyFactMatchCount?: number;
-  materialCategoryCoverageUsedForFinalAcceptance?: false;
-  germanControlledCaseGrammarPassed?: boolean;
-  finalGermanGrammarValidationPassed?: boolean;
-  currentDutyCoverage?: SummaryEntryDutyCoverageResult;
+    materialCategoryCoverageUsedForFinalAcceptance?: false;
+    germanControlledCaseGrammarPassed?: boolean;
+    finalGermanGrammarValidationPassed?: boolean;
+    requiredCurrentDutyFactIds?: string[];
+    currentDutyCoverage?: SummaryEntryDutyCoverageResult;
 };
 
 export function analyzeGermanSummaryEmploymentQuality(
@@ -686,6 +687,7 @@ export function analyzeGermanSummaryEmploymentQuality(
     germanControlledCaseGrammarPassed: caseGrammar.germanControlledCaseGrammarPassed,
     finalGermanGrammarValidationPassed: caseGrammar.germanControlledCaseGrammarPassed
       && introGrammar.ok,
+    requiredCurrentDutyFactIds: requiredCurrentDutyFacts.map((f) => f.canonicalFactId),
     currentDutyCoverage,
   };
 }

@@ -25,6 +25,57 @@ import {
 } from './cv-summary-structured-role-localization';
 void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
 void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
+import {
+  SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+  GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
+  SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
+  validateGermanGeneratedCaseGrammar,
+  validateSummaryEntryDutyCoverage,
+  germanCurrentDutyDativeClause,
+  type GermanCurrentDutyFact,
+  type GermanCurrentDutyFactId,
+} from './cv-german-summary-current-duty-coverage';
+void SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION;
+void GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION;
+void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
+
+function rebuildGermanDutyFactsFromIds(ids: string[] | null | undefined): GermanCurrentDutyFact[] {
+  const known: GermanCurrentDutyFactId[] = [
+    'incoming_goods_check',
+    'related_documentation_check',
+    'colleague_coordination_goods_preparation_movement',
+  ];
+  const selected = (ids || []).filter((id): id is GermanCurrentDutyFactId =>
+    known.includes(id as GermanCurrentDutyFactId));
+  return selected.map((id) => {
+    const clause = germanCurrentDutyDativeClause(id);
+    return {
+      canonicalFactId: id,
+      sourceEntryIdHash: null,
+      sourceFactHash: `id_${id}`,
+      sourceLocale: null,
+      targetLocale: 'de' as const,
+      semanticKind: id,
+      materialCategory: id === 'incoming_goods_check'
+        ? 'warehouse_inbound' as const
+        : id === 'related_documentation_check'
+          ? 'warehouse_records' as const
+          : 'warehouse_movement' as const,
+      localizedClauseHash: `clause_${id}`,
+      requiredForSummary: true,
+      dativeClause: clause,
+      matchRes: [
+        new RegExp(clause.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'),
+        id === 'incoming_goods_check'
+          ? /Prüfung\s+eingehender\s+Waren|Warenannahme|Wareneingang/iu
+          : id === 'related_documentation_check'
+            ? /zugehörigen\s+Dokumentation|Dokumentenprüfung/iu
+            : /Abstimmung\s+mit\s+Kolleg|Koordination\s+mit\s+Kolleg/iu,
+      ],
+    };
+  });
+}
+
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { CVData } from './types';
 import {
@@ -149,6 +200,13 @@ export type SummaryAiDiagnosticTrace = {
   providerCrossEntryLeakageCount: number;
   repairAttempted: boolean;
   repairApplied: boolean;
+  repairSelected?: boolean | null;
+  repairCandidatePresent?: boolean | null;
+  repairAccepted?: boolean | null;
+  repairAttemptedTransformationKinds?: string[] | null;
+  repairAcceptedTransformationKinds?: string[] | null;
+  repairAppliedTransformationKinds?: string[] | null;
+  deterministicAccepted?: boolean | null;
   fallbackAttempted: boolean;
   fallbackApplied: boolean;
   fallbackKind: string | null;
@@ -165,6 +223,20 @@ export type SummaryAiDiagnosticTrace = {
   currentEmploymentIntroductionCount: number | null;
   repeatedEmploymentFactCount: number | null;
   repeatedProfessionalLabelCount: number | null;
+  finalCurrentDutyCoveragePassed?: boolean | null;
+  requiredCurrentDutyFactCount?: number | null;
+  coveredCurrentDutyFactCount?: number | null;
+  missingCurrentDutyFactCount?: number | null;
+  missingCurrentDutyFactIdHashes?: string[] | null;
+  materialCategoryCoverageUsedForFinalAcceptance?: boolean | null;
+  germanControlledCaseGrammarPassed?: boolean | null;
+  finalGermanGrammarValidationPassed?: boolean | null;
+  visibleRequiredCurrentDutyFactCount?: number | null;
+  visibleCoveredCurrentDutyFactCount?: number | null;
+  visibleMissingCurrentDutyFactCount?: number | null;
+  visibleCurrentDutyCoveragePassed?: boolean | null;
+  visibleGermanGrammarValidationPassed?: boolean | null;
+  requiredCurrentDutyFactIds?: string[] | null;
   currentRoleConcreteFactCoverage: number | null;
   genericizedMaterialFactCount: number | null;
   priorRoleGroundingPassed: boolean | null;
@@ -186,12 +258,9 @@ export type SummaryAiDiagnosticTrace = {
   finalPriorEmploymentStateExpressed?: boolean | null;
   finalCurrentRoleIntroValidationPassed?: boolean | null;
   finalPriorRoleIntroValidationPassed?: boolean | null;
-  finalCurrentDutyCoveragePassed?: boolean | null;
   finalPriorDutyCoveragePassed?: boolean | null;
   finalSlotValidationPassed?: boolean | null;
   finalSlotRejectionReasons?: string[] | null;
-  repairCandidatePresent?: boolean | null;
-  repairAccepted?: boolean | null;
   repairCandidateHash?: string | null;
   repairTransformationKinds?: string[] | null;
   repairRejectionReasons?: string[] | null;
@@ -860,6 +929,16 @@ export class SummaryAiDiagnosticSession {
       repeatedEmploymentFactCount: diag.repeatedEmploymentFactCount ?? null,
       repeatedProfessionalLabelCount: diag.repeatedProfessionalLabelCount ?? null,
       currentRoleConcreteFactCoverage: diag.currentRoleConcreteFactCoverage ?? null,
+      requiredCurrentDutyFactCount: diag.requiredCurrentDutyFactCount ?? null,
+      coveredCurrentDutyFactCount: diag.coveredCurrentDutyFactCount ?? null,
+      missingCurrentDutyFactCount: diag.missingCurrentDutyFactCount ?? null,
+      missingCurrentDutyFactIdHashes: diag.missingCurrentDutyFactIdHashes ?? null,
+      materialCategoryCoverageUsedForFinalAcceptance:
+        diag.materialCategoryCoverageUsedForFinalAcceptance ?? null,
+      germanControlledCaseGrammarPassed: diag.germanControlledCaseGrammarPassed ?? null,
+      finalGermanGrammarValidationPassed: diag.finalGermanGrammarValidationPassed ?? null,
+      requiredCurrentDutyFactIds: diag.requiredCurrentDutyFactIds ?? null,
+      finalCurrentDutyCoveragePassed: diag.finalCurrentDutyCoveragePassed ?? null,
       genericizedMaterialFactCount: diag.genericizedMaterialFactCount ?? null,
       priorRoleGroundingPassed: diag.priorRoleGroundingPassed ?? null,
       currentRoleTitlePresent: diag.currentRoleTitlePresent ?? null,
@@ -884,12 +963,9 @@ export class SummaryAiDiagnosticSession {
       finalPriorEmploymentStateExpressed: diag.finalPriorEmploymentStateExpressed ?? null,
       finalCurrentRoleIntroValidationPassed: diag.finalCurrentRoleIntroValidationPassed ?? null,
       finalPriorRoleIntroValidationPassed: diag.finalPriorRoleIntroValidationPassed ?? null,
-      finalCurrentDutyCoveragePassed: diag.finalCurrentDutyCoveragePassed ?? null,
       finalPriorDutyCoveragePassed: diag.finalPriorDutyCoveragePassed ?? null,
       finalSlotValidationPassed: diag.finalSlotValidationPassed ?? diag.slotValidationPassed ?? null,
       finalSlotRejectionReasons: diag.finalSlotRejectionReasons ?? diag.slotRejectionReasons ?? null,
-      repairCandidatePresent: diag.repairCandidatePresent ?? null,
-      repairAccepted: diag.repairAccepted ?? null,
       repairCandidateHash: diag.repairCandidateHash ?? null,
       repairTransformationKinds: diag.repairTransformationKinds ?? null,
       repairRejectionReasons: diag.repairRejectionReasons ?? null,
@@ -1160,8 +1236,34 @@ export class SummaryAiDiagnosticSession {
       competencyInferenceFromRoleForbidden: diag.competencyInferenceFromRoleForbidden
         ?? (this.draft.requestedLocale === 'de' ? true : null),
       summaryRepairAttempted: diag.summaryRepairAttempted ?? null,
-      repairAttempted: Boolean(diag.summaryRepairAttempted),
-      repairApplied: Boolean(diag.summaryRepairApplied),
+      repairAttempted: Boolean(
+        diag.summaryRepairAttempted
+        || diag.germanEmployerStatusRepairAttempted
+        || diag.repairCandidatePresent
+      ),
+      repairCandidatePresent: Boolean(diag.repairCandidatePresent),
+      repairAccepted: Boolean(diag.repairAccepted),
+      repairSelected: Boolean(
+        diag.repairSelected
+        ?? (diag.finalCandidateSource === 'repaired_provider'),
+      ),
+      // AAB-323: never alias "repair code ran" as repairApplied.
+      repairApplied: Boolean(
+        diag.repairApplied
+        ?? (
+          diag.summaryRepairApplied
+          && diag.finalCandidateSource === 'repaired_provider'
+        ),
+      ),
+      repairAttemptedTransformationKinds: diag.repairAttemptedTransformationKinds
+        ?? diag.repairTransformationKinds
+        ?? null,
+      repairAcceptedTransformationKinds: diag.repairAcceptedTransformationKinds ?? [],
+      repairAppliedTransformationKinds: diag.repairAppliedTransformationKinds ?? [],
+      deterministicAccepted: Boolean(
+        diag.deterministicAccepted
+        ?? (diag.finalCandidateSource === 'deterministic_fallback' && finalized.countedAsSuccess),
+      ),
       apiResponseKind: diag.apiResponseKind
         ?? (diag.providerCandidatePresent ? 'provider' : 'unknown'),
       serverCandidateKind: diag.serverCandidateKind
@@ -1610,6 +1712,10 @@ export class SummaryAiDiagnosticSession {
     void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
     let visibleRoleOk = true;
     let visibleWrongRoleCount = 0;
+    let visibleDutyOk = true;
+    let visibleGrammarOk = true;
+    let visibleDutyCovered = 0;
+    let visibleDutyRequired = 0;
     if (ok && durationStillOk && locale === 'de' && typeof visibleText === 'string') {
       const roleCheck = verifyVisibleSummaryStructuredRoleLocale({
         visibleSummary: visibleText,
@@ -1630,8 +1736,21 @@ export class SummaryAiDiagnosticSession {
       ) {
         visibleRoleOk = false;
       }
+      void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
+      const facts = rebuildGermanDutyFactsFromIds(this.draft.requiredCurrentDutyFactIds);
+      if (facts.length > 0) {
+        const duty = validateSummaryEntryDutyCoverage({
+          requiredFacts: facts,
+          candidateText: visibleText,
+        });
+        visibleDutyRequired = duty.requiredCurrentDutyFactCount;
+        visibleDutyCovered = duty.coveredCurrentDutyFactCount;
+        visibleDutyOk = duty.finalCurrentDutyCoveragePassed;
+      }
+      const grammar = validateGermanGeneratedCaseGrammar(visibleText);
+      visibleGrammarOk = grammar.germanControlledCaseGrammarPassed;
     }
-    const applyOk = ok && durationStillOk && visibleRoleOk;
+    const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk && visibleGrammarOk;
     this.patch({
       visibleApplySucceeded: applyOk,
       contentLocaleUpdatedAfterApply: applyOk,
@@ -1655,6 +1774,17 @@ export class SummaryAiDiagnosticSession {
       visibleWrongLocaleStructuredRoleCount: locale === 'de'
         ? visibleWrongRoleCount
         : null,
+      visibleRequiredCurrentDutyFactCount: locale === 'de' ? visibleDutyRequired : null,
+      visibleCoveredCurrentDutyFactCount: locale === 'de' ? visibleDutyCovered : null,
+      visibleMissingCurrentDutyFactCount: locale === 'de'
+        ? Math.max(0, visibleDutyRequired - visibleDutyCovered)
+        : null,
+      visibleCurrentDutyCoveragePassed: locale === 'de'
+        ? (typeof visibleText === 'string' ? visibleDutyOk : null)
+        : null,
+      visibleGermanGrammarValidationPassed: locale === 'de'
+        ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
+        : null,
       // Applied summaries use an explicit race/context result of ok (sync finalize path).
       raceGuardResult: applyOk ? 'ok' : (ok ? 'fail' : this.draft.raceGuardResult || 'skipped'),
       durationValidationPassed: durationStillOk
@@ -1663,9 +1793,13 @@ export class SummaryAiDiagnosticSession {
       finalPostconditionsPassed: applyOk
         ? this.draft.finalPostconditionsPassed
         : false,
-      finalTypedFailureReason: !visibleRoleOk && ok && durationStillOk
-        ? 'visible_role_localization_mismatch'
-        : this.draft.finalTypedFailureReason,
+      finalTypedFailureReason: !visibleDutyOk && ok && durationStillOk
+        ? 'visible_current_duty_coverage_failed'
+        : (!visibleGrammarOk && ok && durationStillOk
+          ? 'visible_german_grammar_failed'
+          : (!visibleRoleOk && ok && durationStillOk
+            ? 'visible_role_localization_mismatch'
+            : this.draft.finalTypedFailureReason)),
       // Duration idempotence is independent of visible apply success.
       durationFinalizerIdempotent: (() => {
         void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
