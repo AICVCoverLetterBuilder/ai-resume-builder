@@ -6810,14 +6810,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                     tenseDecision.everyImprovementKindHasEvidence,
                   finalTenseValidationPassed: true,
                   finalCandidatePredicateIdentityCount:
-                    tenseDecision.finalCandidatePredicateIdentityCount,
+                    tenseDecision.finalCandidatePredicateIdentityCount ?? undefined,
                   finalSourceUnitPredicateCoveragePassed:
                     tenseDecision.finalSourceUnitPredicateCoveragePassed,
                   sourcePredicateIdentityCount:
                     tenseDecision.sourcePredicateIdentityCount
                     ?? visibleSourceAnalysis.sourcePredicateIdentityCount,
                   candidatePredicateIdentityCount:
-                    tenseDecision.finalCandidatePredicateIdentityCount,
+                    tenseDecision.finalCandidatePredicateIdentityCount ?? undefined,
                   providerCoveredFactCount: providerCoveredFactCount || sourceFactCount,
                   providerRequiredFactCount: providerRequiredFactCount || sourceFactCount,
                   experienceSourceDefectFirstDecisionRevision:

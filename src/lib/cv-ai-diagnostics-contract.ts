@@ -866,6 +866,22 @@ type ExperienceLike = {
   finalDecisionKind?: string | null;
   finalText?: string | null;
   requestedLocale?: string | null;
+  sourceAlreadyValidForTarget?: boolean | null;
+  sourceTenseValidationPassed?: boolean | null;
+  providerNoOpDetected?: boolean | null;
+  providerNoOpEligibleAsFinal?: boolean | null;
+  providerNoOpBlockedBySourceDefect?: boolean | null;
+  providerUnresolvedSourceDefectKinds?: string[] | null;
+  deterministicTenseNormalizerAttempted?: boolean | null;
+  deterministicTenseNormalizerProducedCandidate?: boolean | null;
+  deterministicTenseNormalizerValidationPassed?: boolean | null;
+  deterministicFixesSourceDefect?: boolean | null;
+  shouldApply?: boolean | null;
+  shouldIncrementUsage?: boolean | null;
+  perspectiveNormalizationApplied?: boolean | null;
+  perspectiveValidationPassed?: boolean | null;
+  rejectionStage?: string | null;
+  typedFailureReason?: string | null;
   unsupportedClaimRepairCandidateProduced?: boolean | null;
   unsupportedClaimRepairCandidateValid?: boolean | null;
   unsupportedClaimRepairSelectedForComparison?: boolean | null;
@@ -1434,6 +1450,105 @@ export function checkExperienceDiagnosticInvariants(
         materialImprovementKindsCount: (trace.materialImprovementKinds as unknown[]).length,
       });
     }
+    // AAB-315 — source-defect-first decision / provider no-op blocking.
+    if (
+      trace.sourceAlreadyValidForTarget === false
+      && (
+        trace.finalDecisionKind === 'exact_noop'
+        || trace.finalDecisionKind === 'normalized_noop'
+        || trace.finalDecisionKind === 'semantic_noop'
+      )
+      && (
+        Number(trace.sourceTenseMismatchCount ?? 0) > 0
+        || (Array.isArray(trace.providerUnresolvedSourceDefectKinds)
+          && (trace.providerUnresolvedSourceDefectKinds as unknown[]).length > 0)
+      )
+      && trace.deterministicTenseNormalizerAttempted !== true
+    ) {
+      push('final_noop_before_source_defect_recovery', {
+        sourceAlreadyValidForTarget: false,
+        finalDecisionKind: trace.finalDecisionKind ?? null,
+        sourceTenseMismatchCount: trace.sourceTenseMismatchCount ?? null,
+      });
+    }
+    if (
+      trace.providerNoOpDetected === true
+      && trace.sourceAlreadyValidForTarget === false
+      && Number(trace.sourceTenseMismatchCount ?? 0) > 0
+      && trace.providerNoOpBlockedBySourceDefect !== true
+      && (
+        trace.finalDecisionKind === 'exact_noop'
+        || trace.finalDecisionKind === 'normalized_noop'
+        || trace.finalDecisionKind === 'semantic_noop'
+        || (
+          trace.countedAsSuccess !== true
+          && trace.deterministicTenseNormalizerAttempted !== true
+        )
+      )
+    ) {
+      push('provider_noop_not_blocked_by_wrong_tense', {
+        providerNoOpBlockedBySourceDefect: trace.providerNoOpBlockedBySourceDefect ?? null,
+        sourceTenseMismatchCount: trace.sourceTenseMismatchCount ?? null,
+      });
+    }
+    if (
+      (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+      && Array.isArray(trace.materialImprovementKinds)
+      && (trace.materialImprovementKinds as string[]).includes('wrong_tense_fixed')
+      && Number(trace.wrongTenseFixedUnitCount ?? 0) <= 0
+    ) {
+      push('wrong_tense_fixed_missing_unit_count', {
+        wrongTenseFixedUnitCount: trace.wrongTenseFixedUnitCount ?? null,
+      });
+    }
+    if (
+      (trace.countedAsSuccess === true || Number(trace.usageCountAfter) > Number(trace.usageCountBefore))
+      && trace.shouldApply === false
+    ) {
+      push('usage_without_should_apply', {
+        shouldApply: false,
+        countedAsSuccess: trace.countedAsSuccess ?? null,
+      });
+    }
+    if (
+      Number(trace.usageCountAfter) > Number(trace.usageCountBefore)
+      && trace.visibleApplySucceeded !== true
+      && trace.countedAsSuccess !== true
+    ) {
+      push('usage_without_visible_apply', {
+        visibleApplySucceeded: trace.visibleApplySucceeded ?? null,
+        usageCountBefore: trace.usageCountBefore ?? null,
+        usageCountAfter: trace.usageCountAfter ?? null,
+      });
+    }
+    if (
+      (
+        trace.finalDecisionKind === 'exact_noop'
+        || trace.finalDecisionKind === 'normalized_noop'
+        || trace.finalDecisionKind === 'semantic_noop'
+        || trace.finalDecisionKind === 'neutral_restyle_noop'
+      )
+      && (
+        trace.countedAsSuccess === true
+        || Number(trace.usageCountAfter) > Number(trace.usageCountBefore)
+      )
+    ) {
+      push('noop_decision_with_apply_or_usage', {
+        finalDecisionKind: trace.finalDecisionKind ?? null,
+        countedAsSuccess: trace.countedAsSuccess ?? null,
+      });
+    }
+    if (
+      trace.perspectiveNormalizationApplied === false
+      && trace.perspectiveValidationPassed === true
+      && String(trace.rejectionStage || '') === 'provider:noop'
+      && String(trace.typedFailureReason || '').includes('perspective')
+    ) {
+      push('noop_mislabeled_as_perspective_failure', {
+        rejectionStage: trace.rejectionStage ?? null,
+        typedFailureReason: trace.typedFailureReason ?? null,
+      });
+    }
   }
   return { passed: failures.length === 0, failures };
 }
@@ -1538,6 +1653,48 @@ export function checkExperienceDiagnosticCompleteness(
       ] as const) {
         if (!(key in trace)) missing.push(key);
       }
+    }
+    // AAB-315 — source-defect-first / phase tense decision fields.
+    for (const key of [
+      'sourceAlreadyValidForTarget',
+      'expectedEmploymentTense',
+      'sourceTenseMismatchCount',
+      'sourceTenseValidationPassed',
+      'providerNoOpEligibleAsFinal',
+      'providerNoOpBlockedBySourceDefect',
+    ] as const) {
+      if (!(key in trace)) missing.push(key);
+    }
+    if (
+      trace.providerNoOpBlockedBySourceDefect === true
+      || Number(trace.sourceTenseMismatchCount ?? 0) > 0
+    ) {
+      for (const key of [
+        'deterministicTenseNormalizerAttempted',
+        'providerUnresolvedSourceDefectKinds',
+      ] as const) {
+        if (!(key in trace)) missing.push(key);
+      }
+    }
+    if (
+      trace.countedAsSuccess === true
+      || trace.visibleApplySucceeded === true
+      || trace.finalDecisionKind === 'material_improvement'
+    ) {
+      for (const key of [
+        'shouldApply',
+        'shouldIncrementUsage',
+        'wrongTenseFixedUnitCount',
+      ] as const) {
+        if (!(key in trace) && (
+          Array.isArray(trace.materialImprovementKinds)
+          && (trace.materialImprovementKinds as string[]).includes('wrong_tense_fixed')
+        )) {
+          missing.push(key);
+        }
+      }
+      if (!('shouldApply' in trace)) missing.push('shouldApply');
+      if (!('shouldIncrementUsage' in trace)) missing.push('shouldIncrementUsage');
     }
     if ('unsupportedClaimRepairAttempted' in trace
       && trace.unsupportedClaimRepairAttempted === true) {
