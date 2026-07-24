@@ -90,6 +90,10 @@ import {
   SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
   GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
   SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+  GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION,
+  SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
+  SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
+  SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
@@ -504,6 +508,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
   GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
   SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+  GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION,
+  SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
+  SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
+  SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -1059,6 +1067,14 @@ export type FinalizeCvAiFieldResult = {
     currentCanonicalDutyFactMatchCount?: number;
     materialCategoryCoverageUsedForFinalAcceptance?: boolean;
     requiredCurrentDutyFactIds?: string[];
+    authoritativeCurrentDutyFactCount?: number;
+    authoritativeCanonicalCurrentDutyFactCount?: number;
+    classifiedRequiredCurrentDutyFactCount?: number;
+    unclassifiedAuthoritativeCurrentDutyFactCount?: number;
+    requiredFactSetMatchesAuthoritativeFactSet?: boolean;
+    currentDutyRequiredFactParityPassed?: boolean;
+    currentMaterialCategoryCount?: number;
+    currentDutyFactClassificationKindsByFactHash?: Record<string, string>;
     germanControlledCaseGrammarPassed?: boolean;
     finalGermanGrammarValidationPassed?: boolean;
     finalPriorRoleTitlePresent?: boolean;
@@ -2913,6 +2929,38 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         requiredCurrentDutyFactIds: locale === 'de' && empQ
           ? ((empQ as { requiredCurrentDutyFactIds?: string[] }).requiredCurrentDutyFactIds
             ?? undefined)
+          : undefined,
+        authoritativeCurrentDutyFactCount: locale === 'de' && empQ
+          ? ((empQ as { authoritativeCurrentDutyFactCount?: number })
+            .authoritativeCurrentDutyFactCount ?? undefined)
+          : undefined,
+        authoritativeCanonicalCurrentDutyFactCount: locale === 'de' && empQ
+          ? ((empQ as { authoritativeCanonicalCurrentDutyFactCount?: number })
+            .authoritativeCanonicalCurrentDutyFactCount ?? undefined)
+          : undefined,
+        classifiedRequiredCurrentDutyFactCount: locale === 'de' && empQ
+          ? ((empQ as { classifiedRequiredCurrentDutyFactCount?: number })
+            .classifiedRequiredCurrentDutyFactCount ?? undefined)
+          : undefined,
+        unclassifiedAuthoritativeCurrentDutyFactCount: locale === 'de' && empQ
+          ? ((empQ as { unclassifiedAuthoritativeCurrentDutyFactCount?: number })
+            .unclassifiedAuthoritativeCurrentDutyFactCount ?? undefined)
+          : undefined,
+        requiredFactSetMatchesAuthoritativeFactSet: locale === 'de' && empQ
+          ? Boolean((empQ as { requiredFactSetMatchesAuthoritativeFactSet?: boolean })
+            .requiredFactSetMatchesAuthoritativeFactSet)
+          : undefined,
+        currentDutyRequiredFactParityPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { currentDutyRequiredFactParityPassed?: boolean })
+            .currentDutyRequiredFactParityPassed)
+          : undefined,
+        currentMaterialCategoryCount: locale === 'de' && empQ
+          ? ((empQ as { currentMaterialCategoryCount?: number })
+            .currentMaterialCategoryCount ?? undefined)
+          : undefined,
+        currentDutyFactClassificationKindsByFactHash: locale === 'de' && empQ
+          ? ((empQ as { currentDutyFactClassificationKindsByFactHash?: Record<string, string> })
+            .currentDutyFactClassificationKindsByFactHash ?? undefined)
           : undefined,
         germanControlledCaseGrammarPassed: locale === 'de' && empQ
           ? Boolean((empQ as { germanControlledCaseGrammarPassed?: boolean })

@@ -515,6 +515,12 @@ type SummaryLike = {
   currentRoleConcreteFactCoverage?: number | null;
   finalCurrentDutyCoveragePassed?: boolean | null;
   germanControlledCaseGrammarPassed?: boolean | null;
+  authoritativeCurrentDutyFactCount?: number | null;
+  authoritativeCanonicalCurrentDutyFactCount?: number | null;
+  classifiedRequiredCurrentDutyFactCount?: number | null;
+  unclassifiedAuthoritativeCurrentDutyFactCount?: number | null;
+  requiredFactSetMatchesAuthoritativeFactSet?: boolean | null;
+  currentDutyRequiredFactParityPassed?: boolean | null;
   finalPostconditionsPassed?: boolean | null;
   structuredRoleLocaleValidationPassed?: boolean | null;
   currentRoleLocalizationValidationPassed?: boolean | null;
@@ -736,6 +742,35 @@ export function checkSummaryDiagnosticInvariants(
     push('role_localization_must_change_repair_hash', {
       repairCandidateHash: trace.repairCandidateHash ?? null,
       providerCandidateHash: trace.providerCandidateHash ?? null,
+    });
+  }
+  if (
+    typeof trace.requiredCurrentDutyFactCount === 'number'
+    && typeof trace.authoritativeCurrentDutyFactCount === 'number'
+    && trace.authoritativeCurrentDutyFactCount > 0
+    && trace.requiredCurrentDutyFactCount < trace.authoritativeCurrentDutyFactCount
+  ) {
+    push('required_duty_count_below_authoritative', {
+      requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount,
+      authoritativeCurrentDutyFactCount: trace.authoritativeCurrentDutyFactCount,
+    });
+  }
+  if (
+    trace.currentDutyRequiredFactParityPassed === false
+    && trace.finalPostconditionsPassed === true
+  ) {
+    push('parity_failure_forbids_final_postconditions', {
+      currentDutyRequiredFactParityPassed: false,
+      finalPostconditionsPassed: true,
+    });
+  }
+  if (
+    trace.requiredFactSetMatchesAuthoritativeFactSet === false
+    && trace.visibleApplySucceeded === true
+  ) {
+    push('parity_mismatch_forbids_visible_apply', {
+      requiredFactSetMatchesAuthoritativeFactSet: false,
+      visibleApplySucceeded: true,
     });
   }
   // AAB-323: repair selection / apply truth.
@@ -1216,6 +1251,13 @@ export function checkSummaryDiagnosticCompleteness(
     require('repairAccepted');
     require('repairSelected');
     require('repairApplied');
+    // AAB-324: authoritative/required duty parity completeness.
+    require('authoritativeCurrentDutyFactCount');
+    require('authoritativeCanonicalCurrentDutyFactCount');
+    require('classifiedRequiredCurrentDutyFactCount');
+    require('unclassifiedAuthoritativeCurrentDutyFactCount');
+    require('requiredFactSetMatchesAuthoritativeFactSet');
+    require('currentDutyRequiredFactParityPassed');
   }
 
   if (trace.finalCandidateSource === 'deterministic_fallback') {

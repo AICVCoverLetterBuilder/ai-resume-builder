@@ -237,6 +237,14 @@ export type SummaryAiDiagnosticTrace = {
   visibleCurrentDutyCoveragePassed?: boolean | null;
   visibleGermanGrammarValidationPassed?: boolean | null;
   requiredCurrentDutyFactIds?: string[] | null;
+  authoritativeCurrentDutyFactCount?: number | null;
+  authoritativeCanonicalCurrentDutyFactCount?: number | null;
+  classifiedRequiredCurrentDutyFactCount?: number | null;
+  unclassifiedAuthoritativeCurrentDutyFactCount?: number | null;
+  requiredFactSetMatchesAuthoritativeFactSet?: boolean | null;
+  currentDutyRequiredFactParityPassed?: boolean | null;
+  currentMaterialCategoryCount?: number | null;
+  currentDutyFactClassificationKindsByFactHash?: Record<string, string> | null;
   currentRoleConcreteFactCoverage: number | null;
   genericizedMaterialFactCount: number | null;
   priorRoleGroundingPassed: boolean | null;
@@ -938,6 +946,20 @@ export class SummaryAiDiagnosticSession {
       germanControlledCaseGrammarPassed: diag.germanControlledCaseGrammarPassed ?? null,
       finalGermanGrammarValidationPassed: diag.finalGermanGrammarValidationPassed ?? null,
       requiredCurrentDutyFactIds: diag.requiredCurrentDutyFactIds ?? null,
+      authoritativeCurrentDutyFactCount: diag.authoritativeCurrentDutyFactCount ?? null,
+      authoritativeCanonicalCurrentDutyFactCount:
+        diag.authoritativeCanonicalCurrentDutyFactCount ?? null,
+      classifiedRequiredCurrentDutyFactCount:
+        diag.classifiedRequiredCurrentDutyFactCount ?? null,
+      unclassifiedAuthoritativeCurrentDutyFactCount:
+        diag.unclassifiedAuthoritativeCurrentDutyFactCount ?? null,
+      requiredFactSetMatchesAuthoritativeFactSet:
+        diag.requiredFactSetMatchesAuthoritativeFactSet ?? null,
+      currentDutyRequiredFactParityPassed:
+        diag.currentDutyRequiredFactParityPassed ?? null,
+      currentMaterialCategoryCount: diag.currentMaterialCategoryCount ?? null,
+      currentDutyFactClassificationKindsByFactHash:
+        diag.currentDutyFactClassificationKindsByFactHash ?? null,
       finalCurrentDutyCoveragePassed: diag.finalCurrentDutyCoveragePassed ?? null,
       genericizedMaterialFactCount: diag.genericizedMaterialFactCount ?? null,
       priorRoleGroundingPassed: diag.priorRoleGroundingPassed ?? null,
