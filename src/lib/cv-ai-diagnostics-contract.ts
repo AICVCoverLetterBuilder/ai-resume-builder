@@ -13,10 +13,16 @@ import {
   SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
   SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
 } from './cv-summary-explicit-skill-authority';
-import { GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION } from './cv-german-summary-role-slots';
+import {
+  GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
+  SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION,
+  SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION,
+} from './cv-german-summary-role-slots';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
+void SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION;
+void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
 
 /** Stable contract revision — must survive minification in internal builds. */
 export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as const;
@@ -165,6 +171,7 @@ export type CvAiDiagnosticRejectionCategory =
 export type CvAiCandidateKind =
   | 'provider'
   | 'provider_repair'
+  | 'repaired_provider'
   | 'server_fallback'
   | 'client_repair'
   | 'client_deterministic'
@@ -214,6 +221,8 @@ export type CvAiCandidateLineageRecord = {
   finalMatchesSourceAfterNormalization?: boolean | null;
   noOpDetected?: boolean | null;
   noOpRejectionReason?: string | null;
+  transformationKinds?: string[];
+  selectedSource?: string | null;
 };
 
 export type CvAiDiagnosticBuildIdentity = {
@@ -472,6 +481,19 @@ type SummaryLike = {
   finalDurationOwnerDetected?: string | null;
   visibleDurationOwnerDetected?: string | null;
   competencyInferenceFromRoleForbidden?: boolean | null;
+  finalUnitSemanticRolesByUnit?: string[][] | null;
+  finalCurrentEmployerPresent?: boolean | null;
+  finalPriorEmployerPresent?: boolean | null;
+  finalCurrentEmploymentStateExpressed?: boolean | null;
+  finalPriorEmploymentStateExpressed?: boolean | null;
+  finalCurrentRoleIntroValidationPassed?: boolean | null;
+  finalPriorRoleIntroValidationPassed?: boolean | null;
+  finalSlotValidationPassed?: boolean | null;
+  repairAccepted?: boolean | null;
+  repairCandidatePresent?: boolean | null;
+  repairCandidateHash?: string | null;
+  providerAccepted?: boolean | null;
+  providerCandidateHash?: string | null;
   candidateLineage?: Array<{
     candidateKind?: string;
     present?: boolean;
@@ -505,10 +527,99 @@ export function checkSummaryDiagnosticInvariants(
       });
     }
   }
-  if (src.includes('repair') || src === 'ai_repaired') {
+  if (src.includes('repair') || src === 'ai_repaired' || src === 'repaired_provider') {
     if (trace.repairApplied === false && trace.fallbackApplied !== true) {
       // duration-only ai_repaired is allowed without summary repairApplied
     }
+  }
+  // AAB-321: material repair forbids finalCandidateSource ai_generated.
+  if (
+    (trace.repairAccepted === true || src === 'repaired_provider')
+    && src === 'ai_generated'
+  ) {
+    push('material_repair_forbids_ai_generated_final_source', {
+      finalCandidateSource: src,
+      repairAccepted: true,
+    });
+  }
+  if (
+    src === 'repaired_provider'
+    && trace.providerAccepted === true
+  ) {
+    push('repaired_provider_requires_provider_rejected', {
+      finalCandidateSource: src,
+      providerAccepted: true,
+    });
+  }
+  if (
+    src === 'repaired_provider'
+    && trace.repairCandidatePresent === false
+    && trace.repairAccepted !== true
+  ) {
+    push('repaired_provider_requires_repair_candidate', {
+      finalCandidateSource: src,
+      repairCandidatePresent: false,
+    });
+  }
+  if (
+    Array.isArray(trace.finalUnitSemanticRolesByUnit)
+    && trace.finalUnitSemanticRolesByUnit.length > 0
+  ) {
+    void SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION;
+    const roles = trace.finalUnitSemanticRolesByUnit;
+    const hasCurrent = roles.some((r) => r.includes('current_role_intro'));
+    const hasDuty = roles.some((r) => r.includes('current_role_duties'));
+    const hasPrior = roles.some((r) => (
+      r.includes('prior_role_intro') || r.includes('prior_role_duties')
+    ));
+    if (trace.currentIntroSlotPresent === true && !hasCurrent) {
+      push('slot_boolean_not_derivable_from_semantic_roles', {
+        currentIntroSlotPresent: true,
+        hasCurrentRoleIntroInSemanticRoles: false,
+      });
+    }
+    if (trace.currentDutySlotPresent === true && !hasDuty && !hasCurrent) {
+      push('slot_boolean_not_derivable_from_semantic_roles', {
+        currentDutySlotPresent: true,
+        hasCurrentDutyInSemanticRoles: false,
+      });
+    }
+    if (trace.priorRoleSlotPresent === true && !hasPrior) {
+      push('slot_boolean_not_derivable_from_semantic_roles', {
+        priorRoleSlotPresent: true,
+        hasPriorInSemanticRoles: false,
+      });
+    }
+  }
+  if (
+    trace.countedAsSuccess
+    && String(trace.requestedLocale || '') === 'de'
+    && trace.finalSlotValidationPassed === false
+  ) {
+    push('german_success_requires_final_slot_validation', {
+      countedAsSuccess: true,
+      finalSlotValidationPassed: false,
+    });
+  }
+  if (
+    trace.countedAsSuccess
+    && String(trace.requestedLocale || '') === 'de'
+    && trace.finalCurrentRoleIntroValidationPassed === false
+  ) {
+    push('german_success_requires_current_role_intro_validation', {
+      countedAsSuccess: true,
+      finalCurrentRoleIntroValidationPassed: false,
+    });
+  }
+  if (
+    trace.countedAsSuccess
+    && String(trace.requestedLocale || '') === 'de'
+    && trace.finalPriorRoleIntroValidationPassed === false
+  ) {
+    push('german_success_requires_prior_role_intro_validation', {
+      countedAsSuccess: true,
+      finalPriorRoleIntroValidationPassed: false,
+    });
   }
   if (src === 'deterministic_fallback') {
     if (trace.deterministicCandidatePresent === false) {
@@ -894,6 +1005,14 @@ export function checkSummaryDiagnosticCompleteness(
     require('finalDurationCurrentRoleAttachmentRisk');
     require('finalDurationTotalCareerMarkerPresent');
     require('competencyInferenceFromRoleForbidden');
+    require('finalUnitSemanticRolesByUnit');
+    require('finalCurrentEmployerPresent');
+    require('finalPriorEmployerPresent');
+    require('finalCurrentEmploymentStateExpressed');
+    require('finalPriorEmploymentStateExpressed');
+    require('finalCurrentRoleIntroValidationPassed');
+    require('finalPriorRoleIntroValidationPassed');
+    require('finalSlotValidationPassed');
   }
 
   if (trace.finalCandidateSource === 'deterministic_fallback') {

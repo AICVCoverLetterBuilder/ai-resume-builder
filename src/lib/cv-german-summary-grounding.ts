@@ -31,6 +31,8 @@ import {
 import {
   GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
   GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
+  SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION,
+  SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION,
   analyzeGermanSummaryUnitSemantics,
   buildGermanSlotRejectionReasons,
   primaryRolesToLegacySlots,
@@ -73,9 +75,12 @@ export {
 export {
   GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
   GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
+  SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION,
+  SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION,
   analyzeGermanSummaryUnitSemantics,
   buildGermanSlotRejectionReasons,
   primaryRolesToLegacySlots,
+  deriveGermanSlotPresenceFromSemanticRoles,
 } from './cv-german-summary-role-slots';
 
 /** Packaging proof — must survive minification in internal Android/AAB assets. */
@@ -106,6 +111,8 @@ void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION;
 void GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION;
+void SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION;
+void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
 
 const GERMAN_MONTHS: Record<string, string> = {
   '01': 'Januar',
@@ -369,23 +376,22 @@ export function analyzeGermanSummaryEmploymentQuality(
     a.detectedSemanticRoles.includes('prior_role_intro')
     || a.detectedSemanticRoles.includes('prior_role_duties')
   ));
-  // AAB-321: when structured prior employer exists, prior slot presence requires it.
-  const priorRoleSlotPresent = semanticPriorRole
-    && (!priorRoleCoverage.priorEmployerRequired || priorRoleCoverage.priorEmployerPresent);
-  const totalDurationSlotPresent = unitSemanticAnalyses.some((a) => (
-    a.detectedSemanticRoles.includes('total_duration')
+  // AAB-321: slot presence derives from serialized semantic roles (not a hidden
+  // classifier). Employer/status remain separate gate fields for slotValidationPassed.
+  const currentIntroSlotPresent = finalUnitSemanticRolesByUnit.some((roles) => (
+    roles.includes('current_role_intro')
+  ));
+  const priorRoleSlotPresent = finalUnitSemanticRolesByUnit.some((roles) => (
+    roles.includes('prior_role_intro') || roles.includes('prior_role_duties')
+  ));
+  // When structured prior employer exists, priorRoleSlotPresent alone is insufficient
+  // for grounding — priorRoleIntroValidationPassed / slotValidationPassed enforce it.
+  const totalDurationSlotPresent = finalUnitSemanticRolesByUnit.some((roles) => (
+    roles.includes('total_duration')
   ));
   const explicitSkillsSlotPresent = unitSemanticAnalyses.some((a) => (
     a.primaryRole === 'explicit_skills'
   )) && competencyScan.unsupportedCompetencyCount === 0;
-
-  // Intro slot presence for gate purposes requires validated current intro when
-  // structured employer/status evidence is available — title+duties alone is insufficient.
-  const currentIntroSlotPresent = semanticCurrentIntro
-    && (
-      !currentRoleCoverage.currentEmployerRequired
-      || currentRoleCoverage.currentRoleIntroValidationPassed
-    );
 
   const slotRejectionReasons = [
     ...buildGermanSlotRejectionReasons(unitSemanticAnalyses, {

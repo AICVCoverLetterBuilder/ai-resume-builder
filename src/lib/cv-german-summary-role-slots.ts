@@ -8,9 +8,15 @@ export const GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION =
   'german-summary-role-slot-classifier-320-v1' as const;
 export const GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION =
   'german-summary-recovery-dispatch-320-v1' as const;
+export const SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION =
+  'summary-multi-role-slot-diagnostics-321-v1' as const;
+export const SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION =
+  'summary-repaired-provider-lineage-321-v1' as const;
 
 void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
+void SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION;
+void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
 
 export type GermanSummarySemanticRole =
   | 'current_role_intro'
@@ -201,6 +207,26 @@ export function primaryRolesToLegacySlots(
     if (a.primaryRole === 'explicit_skills') return 'skills';
     return 'other';
   });
+}
+
+export function deriveGermanSlotPresenceFromSemanticRoles(
+  rolesByUnit: string[][],
+): {
+  currentIntroSlotPresent: boolean;
+  currentDutySlotPresent: boolean;
+  priorRoleSlotPresent: boolean;
+  totalDurationSlotPresent: boolean;
+} {
+  void SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION;
+  const flat = rolesByUnit || [];
+  return {
+    currentIntroSlotPresent: flat.some((r) => r.includes('current_role_intro')),
+    currentDutySlotPresent: flat.some((r) => r.includes('current_role_duties')),
+    priorRoleSlotPresent: flat.some((r) => (
+      r.includes('prior_role_intro') || r.includes('prior_role_duties')
+    )),
+    totalDurationSlotPresent: flat.some((r) => r.includes('total_duration')),
+  };
 }
 
 export function buildGermanSlotRejectionReasons(

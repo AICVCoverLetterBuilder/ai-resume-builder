@@ -16,6 +16,8 @@ import {
 } from './cv-summary-explicit-skill-authority';
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
+import { SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION } from './cv-german-summary-role-slots';
+void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { CVData } from './types';
 import {
@@ -170,6 +172,25 @@ export type SummaryAiDiagnosticTrace = {
   duplicatedPriorRoleFactCount: number | null;
   priorRoleSemanticDuplicationDetected: boolean | null;
   finalUnitRoleSlots: string[] | null;
+  finalUnitSemanticRolesByUnit?: string[][] | null;
+  finalCurrentEmployerPresent?: boolean | null;
+  finalPriorEmployerPresent?: boolean | null;
+  finalCurrentEmploymentStateExpressed?: boolean | null;
+  finalPriorEmploymentStateExpressed?: boolean | null;
+  finalCurrentRoleIntroValidationPassed?: boolean | null;
+  finalPriorRoleIntroValidationPassed?: boolean | null;
+  finalCurrentDutyCoveragePassed?: boolean | null;
+  finalPriorDutyCoveragePassed?: boolean | null;
+  finalSlotValidationPassed?: boolean | null;
+  finalSlotRejectionReasons?: string[] | null;
+  repairCandidatePresent?: boolean | null;
+  repairAccepted?: boolean | null;
+  repairCandidateHash?: string | null;
+  repairTransformationKinds?: string[] | null;
+  repairRejectionReasons?: string[] | null;
+  germanEmployerStatusRepairAttempted?: boolean | null;
+  germanEmployerStatusRepairApplied?: boolean | null;
+  providerAccepted?: boolean | null;
   summaryPipelineRevision: string | null;
   summaryBuilderRevision: string | null;
   summaryUnitSplitterRevision: string | null;
@@ -819,6 +840,27 @@ export class SummaryAiDiagnosticSession {
       finalUnitRoleSlots: finalCandidateSelected
         ? (diag.finalUnitRoleSlots ?? null)
         : [],
+      finalUnitSemanticRolesByUnit: finalCandidateSelected
+        ? (diag.finalUnitSemanticRolesByUnit ?? null)
+        : null,
+      finalCurrentEmployerPresent: diag.finalCurrentEmployerPresent ?? null,
+      finalPriorEmployerPresent: diag.finalPriorEmployerPresent ?? null,
+      finalCurrentEmploymentStateExpressed: diag.finalCurrentEmploymentStateExpressed ?? null,
+      finalPriorEmploymentStateExpressed: diag.finalPriorEmploymentStateExpressed ?? null,
+      finalCurrentRoleIntroValidationPassed: diag.finalCurrentRoleIntroValidationPassed ?? null,
+      finalPriorRoleIntroValidationPassed: diag.finalPriorRoleIntroValidationPassed ?? null,
+      finalCurrentDutyCoveragePassed: diag.finalCurrentDutyCoveragePassed ?? null,
+      finalPriorDutyCoveragePassed: diag.finalPriorDutyCoveragePassed ?? null,
+      finalSlotValidationPassed: diag.finalSlotValidationPassed ?? diag.slotValidationPassed ?? null,
+      finalSlotRejectionReasons: diag.finalSlotRejectionReasons ?? diag.slotRejectionReasons ?? null,
+      repairCandidatePresent: diag.repairCandidatePresent ?? null,
+      repairAccepted: diag.repairAccepted ?? null,
+      repairCandidateHash: diag.repairCandidateHash ?? null,
+      repairTransformationKinds: diag.repairTransformationKinds ?? null,
+      repairRejectionReasons: diag.repairRejectionReasons ?? null,
+      germanEmployerStatusRepairAttempted: diag.germanEmployerStatusRepairAttempted ?? null,
+      germanEmployerStatusRepairApplied: diag.germanEmployerStatusRepairApplied ?? null,
+      providerAccepted: diag.providerAccepted ?? null,
       summaryPipelineRevision: diag.summaryPipelineRevision ?? null,
       summaryBuilderRevision: diag.summaryBuilderRevision ?? null,
       summaryUnitSplitterRevision: diag.summaryUnitSplitterRevision ?? null,
@@ -1145,9 +1187,16 @@ export class SummaryAiDiagnosticSession {
           : (providerUnitCount > 0 && providerHashesRaw.length === 0
             ? Array.from({ length: providerUnitCount }, (_, i) => fingerprintText(`provider_unit_${i}`))
             : providerHashesRaw);
+        const materialRepairSelected = Boolean(
+          diag.finalCandidateSource === 'repaired_provider'
+          || diag.germanEmployerStatusRepairApplied
+          || diag.repairAccepted,
+        );
+        void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
         const providerRejected = Boolean(
           !finalized.countedAsSuccess
           || finalized.origin === 'deterministic_fallback'
+          || materialRepairSelected
           || diag.providerNoOpDetected
           || diag.providerRejectionReason
           || (diag.providerUnsupportedDesignMediumCount ?? 0) > 0
@@ -1167,9 +1216,13 @@ export class SummaryAiDiagnosticSession {
           unitHashes: providerHashes,
           sentenceCount: providerUnitCount,
           sentenceHashes: providerHashes,
-          accepted: finalized.origin === 'ai_generated' && Boolean(finalized.countedAsSuccess),
+          accepted: finalized.origin === 'ai_generated'
+            && Boolean(finalized.countedAsSuccess)
+            && !materialRepairSelected,
           rejectionStage: diag.providerRejectionStage
-            ?? (providerRejected && providerPresent ? 'provider_validation' : null),
+            ?? (providerRejected && providerPresent
+              ? (materialRepairSelected ? 'employer_status_validation' : 'provider_validation')
+              : null),
           rejectionReasons: dedupeStableStrings([
             ...(diag.providerHindiGrammarRejectionReasons || []),
             ...(diag.providerSlotRejectionReasons || []),
@@ -1219,10 +1272,64 @@ export class SummaryAiDiagnosticSession {
             ? 'summary_noop_after_normalization'
             : null,
         });
+        // AAB-321: immutable repaired-provider phase when material repair was attempted.
+        const repairAttempted = Boolean(
+          diag.repairCandidatePresent
+          || diag.germanEmployerStatusRepairAttempted
+          || diag.summaryRepairAttempted
+          || materialRepairSelected,
+        );
+        const repairAccepted = Boolean(
+          materialRepairSelected && finalized.countedAsSuccess,
+        );
+        if (repairAttempted || materialRepairSelected) {
+          lineage.push({
+            candidateKind: 'repaired_provider',
+            present: Boolean(diag.repairCandidatePresent || materialRepairSelected),
+            hash: diag.repairCandidateHash
+              ?? (repairAccepted ? (diag.finalValidatedCandidateHash ?? null) : null),
+            normalizedHash: diag.repairCandidateHash
+              ?? (repairAccepted ? (diag.finalValidatedCandidateHash ?? null) : null),
+            unitCount: repairAccepted ? resolvedFinalUnitCount : 0,
+            unitHashes: repairAccepted ? resolvedFinalHashes : [],
+            sentenceCount: repairAccepted ? resolvedFinalUnitCount : 0,
+            sentenceHashes: repairAccepted ? resolvedFinalHashes : [],
+            sentenceRoleSlots: repairAccepted ? resolvedFinalRoleSlots : [],
+            accepted: repairAccepted,
+            rejectionStage: repairAccepted
+              ? null
+              : (diag.repairRejectionReasons?.length ? 'employer_status_validation' : null),
+            rejectionReasons: dedupeStableStrings(diag.repairRejectionReasons || []),
+            grammarValidationPassed: repairAccepted ? true : null,
+            groundingValidationPassed: repairAccepted ? true : false,
+            durationValidationPassed: repairAccepted ? durationValidationPassed : null,
+            slotValidationPassed: repairAccepted ? (diag.slotValidationPassed ?? null) : false,
+            localeValidationPassed: repairAccepted ? purity.targetLocalePurityPassed : null,
+            unsupportedClaimCount: 0,
+            unsupportedClaimKinds: [],
+            unsupportedDesignMediumCount: 0,
+            unsupportedDesignMediumKinds: [],
+            printClaimDetected: false,
+            hindiNominalExperienceFragmentDetected: null,
+            hindiSentenceHasFiniteCopulaOrVerb: null,
+            hindiIncompleteSentenceCount: null,
+            hindiGrammarRejectionReasons: [],
+            meaningfulChangeDetected: repairAttempted ? true : null,
+            finalMatchesSourceAfterNormalization: false,
+            noOpDetected: false,
+            noOpRejectionReason: null,
+            transformationKinds: Array.isArray(diag.repairTransformationKinds)
+              ? diag.repairTransformationKinds
+              : undefined,
+          } as CvAiCandidateLineageRecord);
+        }
         const detPresent = Boolean(
-          diag.deterministicCandidatePresent
-          || finalized.origin === 'deterministic_fallback'
-          || diag.noOpDetected,
+          (
+            diag.deterministicCandidatePresent
+            || finalized.origin === 'deterministic_fallback'
+            || diag.noOpDetected
+          )
+          && !materialRepairSelected,
         );
         const detNoOp = Boolean(
           diag.noOpDetected
@@ -1339,6 +1446,13 @@ export class SummaryAiDiagnosticSession {
           sentenceHashes: finalSelected ? resolvedFinalHashes : [],
           sentenceRoleSlots: finalSelected ? resolvedFinalRoleSlots : [],
           accepted: finalSelected,
+          selectedSource: finalSelected
+            ? (materialRepairSelected
+              ? 'repaired_provider'
+              : (finalized.origin === 'deterministic_fallback'
+                ? 'client_deterministic'
+                : (diag.finalCandidateSource || finalized.origin || null)))
+            : null,
           rejectionStage: finalSelected ? null : (
             diag.noOpDetected || finalized.reason === 'summary_noop_after_normalization'
               ? 'meaningful_change'
