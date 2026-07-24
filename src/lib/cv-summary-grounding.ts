@@ -178,6 +178,8 @@ export {
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
   SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
   SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
+  GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
+  GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   scanGermanSummaryCompetencyClaims,
   analyzeGermanSummaryDurationScope,
@@ -186,6 +188,9 @@ export {
   extractGermanSummaryCompetencyClaims,
   buildSummaryExplicitSkillAuthority,
   splitGermanCompetencyListItems,
+  analyzeGermanSummaryUnitSemantics,
+  buildGermanSlotRejectionReasons,
+  primaryRolesToLegacySlots,
 } from './cv-german-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,

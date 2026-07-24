@@ -72,6 +72,8 @@ import {
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
+  GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
+  GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
   SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
   SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
   stripGermanUnsupportedCompetencyUnits,
@@ -470,6 +472,8 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
   SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
   SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
+  GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
+  GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -1437,6 +1441,50 @@ function summaryPasses(
         return { ok: false, reason: fidelity.violations[0]?.kind || 'fidelity_failed' };
       }
     }
+  } else if (locale === 'de') {
+    void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
+    void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+    const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''}`;
+    const germanWarehouseOrDesignDomain = /(?:lager|warehouse|waren|grafik|design|visuell)/iu
+      .test(dutiesCorpus)
+      || /lager|warehouse|grafik|design/iu
+        .test(`${primary?.position || ''} ${cv.personal?.jobTitle || ''}`);
+    if (germanWarehouseOrDesignDomain) {
+      const structuredSkills = (cv.skills || [])
+        .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
+        .filter(Boolean);
+      const empQ = analyzeGermanSummaryEmploymentQuality(summary, {
+        company: primary?.company || '',
+        role: primary?.position || cv.personal?.jobTitle || '',
+        currentEntryDuties: entryDuties.currentEntryDuties,
+        priorEntryDuties: entryDuties.priorEntryDuties,
+        priorCompany: entryDuties.priorCompany,
+        priorRole: entryDuties.priorRoleTitle,
+        gender: cv.personal?.gender || '',
+        structuredSkills,
+        expectedDurationOwner: 'total_professional_experience',
+      });
+      if (!empQ.groundingValidationPassed || !empQ.slotValidationPassed) {
+        return {
+          ok: false,
+          reason: empQ.typedRejectionReason
+            || empQ.slotRejectionReasons[0]
+            || 'german_summary_grounding_failed',
+        };
+      }
+    } else {
+      const fidelity = validateLocalizedSummary(summary, factSet, {
+        locale,
+        gender: cv.personal?.gender || '',
+        expectedDuration: duration,
+        stage: 'client-final-apply',
+      });
+      if (!fidelity.valid) {
+        return { ok: false, reason: fidelity.violations[0]?.kind || 'fidelity_failed' };
+      }
+    }
   } else {
     const fidelity = validateLocalizedSummary(summary, factSet, {
       locale,
@@ -1678,6 +1726,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let spanishProviderUnsupportedClaimCount: number | null = null;
   let germanProviderRejectionReason: string | null = null;
   let germanProviderUnsupportedClaimCount: number | null = null;
+  let germanProviderSlotRejectionReasons: string[] = [];
+  let germanClientRepairAttempted = false;
   let hindiProviderQuality: ReturnType<typeof analyzeHindiSummaryEmploymentQuality> | null = null;
   let hindiProviderRejectionReason: string | null = null;
   const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
@@ -2040,6 +2090,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     void GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION;
     void SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION;
     void SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION;
+    void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
+    void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
     candidate = dedupeSummarySentences(candidate);
     if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
       if (candidate.trim() && providerRaw.trim()) {
@@ -2059,29 +2111,37 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         currentEntryDuties: entryDuties.currentEntryDuties,
         priorEntryDuties: entryDuties.priorEntryDuties,
         priorCompany: entryDuties.priorCompany,
+        priorRole: entryDuties.priorRoleTitle,
         gender,
         structuredSkills,
         expectedDurationOwner: 'total_professional_experience',
       });
       let empQuality = analyzeDe(candidate);
-      if (!empQuality.groundingValidationPassed && empQuality.competencyScan.unsupportedCompetencyCount > 0) {
-        // Safe unit-level repair: remove whole unsupported competency sentences.
-        const stripped = stripGermanUnsupportedCompetencyUnits(candidate);
-        if (stripped.trim() && stripped !== candidate) {
-          const repaired = analyzeDe(stripped);
-          if (repaired.groundingValidationPassed) {
-            candidate = stripped;
-            empQuality = repaired;
+      // Recoverable provider rejection: attempt safe unit repair before blanking.
+      if (!empQuality.groundingValidationPassed || !empQuality.slotValidationPassed) {
+        germanClientRepairAttempted = true;
+        if (empQuality.competencyScan.unsupportedCompetencyCount > 0) {
+          const stripped = stripGermanUnsupportedCompetencyUnits(candidate);
+          if (stripped.trim() && stripped !== candidate) {
+            const repaired = analyzeDe(stripped);
+            if (repaired.groundingValidationPassed && repaired.slotValidationPassed) {
+              candidate = stripped;
+              empQuality = repaired;
+            }
           }
         }
       }
-      if (!empQuality.groundingValidationPassed) {
+      if (!empQuality.groundingValidationPassed || !empQuality.slotValidationPassed) {
         if (providerRaw.trim()) {
+          const slotReasons = empQuality.slotRejectionReasons || [];
+          germanProviderSlotRejectionReasons = slotReasons;
           germanProviderRejectionReason = empQuality.typedRejectionReason
+            || slotReasons[0]
             || empQuality.competencyScan.providerRejectionStage
             || 'german_summary_grounding_failed';
           germanProviderUnsupportedClaimCount = empQuality.unsupportedClaimCount;
         }
+        // Blank so deterministic German rebuild runs — never terminate here.
         candidate = '';
       }
     }
@@ -2269,6 +2329,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                     currentEntryDuties: entryDuties.currentEntryDuties,
                     priorEntryDuties: entryDuties.priorEntryDuties,
                     priorCompany: entryDuties.priorCompany,
+                    priorRole: entryDuties.priorRoleTitle,
                     gender,
                     structuredSkills: (cv.skills || [])
                       .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
@@ -2381,7 +2442,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       result.countedAsSuccess
       && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
       && empQ
-      && (!empQ.groundingValidationPassed || coverageHardFail),
+      && (
+        !empQ.groundingValidationPassed
+        || coverageHardFail
+        || (
+          locale === 'de'
+          && 'slotValidationPassed' in empQ
+          && (empQ as { slotValidationPassed?: boolean }).slotValidationPassed === false
+        )
+      ),
     );
     const blocked = result.blocked
       || blockedForDuration
@@ -2392,7 +2461,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && durationFinalizerIdempotent
       && perspectiveValidationPassed
       && groundingValidationPassed
-      && !coverageHardFail;
+      && !coverageHardFail
+      && !(
+        locale === 'de'
+        && empQ
+        && 'slotValidationPassed' in empQ
+        && (empQ as { slotValidationPassed?: boolean }).slotValidationPassed === false
+      );
     return {
       ...result,
       blocked,
@@ -2566,7 +2641,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }
           return 'not_attempted';
         })(),
-        clientRepairAttempted: Boolean(summaryRepairAttempted),
+        clientRepairAttempted: Boolean(summaryRepairAttempted || germanClientRepairAttempted),
         clientFallbackUsed: Boolean(
           (success && (
             clientFallbackUsed
@@ -2586,6 +2661,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 || japaneseProviderRejectionReason
                 || croatianProviderRejectionReason
                 || spanishProviderRejectionReason
+                || germanProviderRejectionReason
                 || (providerNoOpDetected ? SUMMARY_NOOP_REJECTION_REASON : 'provider_rejected'))
               : null
           ),
@@ -2871,7 +2947,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : undefined,
         providerSlotRejectionReasons: locale === 'hi'
           ? (hindiProviderQuality?.slotRejectionReasons ?? [])
-          : undefined,
+          : locale === 'de'
+            ? germanProviderSlotRejectionReasons
+            : undefined,
         providerTypedRejectionReason: locale === 'hi'
           ? (hindiProviderRejectionReason
             || hindiProviderQuality?.typedRejectionReason
@@ -2897,9 +2975,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         slotRejectionReasons: (locale === 'hi' || locale === 'es' || locale === 'de') && empQ
           ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
           : undefined,
-        summaryRepairAttempted,
-        summaryRepairApplied: summaryRepairAttempted && success,
-        summaryRepairValidationPassed: summaryRepairAttempted ? success : null,
+        summaryRepairAttempted: Boolean(summaryRepairAttempted || germanClientRepairAttempted),
+        summaryRepairApplied: (summaryRepairAttempted || germanClientRepairAttempted) && success,
+        summaryRepairValidationPassed: (summaryRepairAttempted || germanClientRepairAttempted)
+          ? success
+          : null,
         summaryDurationRepairApplied: durationRepairApplied,
         providerRejectionReason: hindiProviderRejectionReason
           || croatianProviderRejectionReason
@@ -3284,6 +3364,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
           || spanishProviderRejectionReason
+          || germanProviderRejectionReason
           || (providerNoOpDetected ? SUMMARY_NOOP_REJECTION_REASON : 'provider_rejected'))
         : null;
       if (!providerOutcomeHint && providerRaw.trim()) {

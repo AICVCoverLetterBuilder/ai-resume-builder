@@ -26,6 +26,14 @@ import {
   type GermanDurationScopeAnalysis,
   type GermanSummaryCompetencyScan,
 } from './cv-german-summary-competency-grounding';
+import {
+  GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
+  GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
+  analyzeGermanSummaryUnitSemantics,
+  buildGermanSlotRejectionReasons,
+  primaryRolesToLegacySlots,
+  type GermanSummaryUnitSemanticAnalysis,
+} from './cv-german-summary-role-slots';
 export {
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
@@ -41,6 +49,13 @@ export {
   formatGermanTotalProfessionalDurationSentence,
   injectGermanTotalDurationSentence,
 } from './cv-german-summary-competency-grounding';
+export {
+  GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
+  GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
+  analyzeGermanSummaryUnitSemantics,
+  buildGermanSlotRejectionReasons,
+  primaryRolesToLegacySlots,
+} from './cv-german-summary-role-slots';
 
 /** Packaging proof — must survive minification in internal Android/AAB assets. */
 export const GERMAN_CV_AI_302_REVISION = 'german-cv-ai-302-v1' as const;
@@ -64,6 +79,8 @@ void GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION;
 void GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION;
 void SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION;
 void SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION;
+void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
+void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
 
 const GERMAN_MONTHS: Record<string, string> = {
   '01': 'Januar',
@@ -199,6 +216,8 @@ export type GermanSummaryEmploymentQuality = {
   totalDurationSlotPresent: boolean;
   explicitSkillsSlotPresent: boolean;
   slotValidationPassed: boolean;
+  slotRejectionReasons: string[];
+  unitSemanticAnalyses: GermanSummaryUnitSemanticAnalysis[];
   currentRoleTitlePresent: boolean | null;
   currentRoleTitleMatchesStructuredRole: boolean | null;
   currentRoleOmittedDetected: boolean | null;
@@ -215,6 +234,7 @@ export function analyzeGermanSummaryEmploymentQuality(
     company?: string;
     role?: string;
     priorCompany?: string;
+    priorRole?: string;
     currentEntryDuties?: string;
     priorEntryDuties?: string;
     gender?: string;
@@ -227,6 +247,8 @@ export function analyzeGermanSummaryEmploymentQuality(
   void GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION;
   void GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION;
   void SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION;
+  void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
+  void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const units = splitGermanSummaryUnits(text);
   const introGrammar = validateGermanSummaryIntroGrammar(text, { company: options.company });
@@ -239,36 +261,17 @@ export function analyzeGermanSummaryEmploymentQuality(
     role: options.role,
     expectedOwner: options.expectedDurationOwner || 'total_professional_experience',
   });
-  const company = (options.company || '').trim();
-  const companyEsc = company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const slots: GermanSummaryRoleSlot[] = [];
-  for (let i = 0; i < units.length; i += 1) {
-    const sentence = units[i]!;
-    if (isGermanGenericCompetencyUnit(sentence)) {
-      slots.push('skills');
-      continue;
-    }
-    const hasCompany = companyEsc ? new RegExp(companyEsc, 'iu').test(sentence) : false;
-    const hasDuration = /(?:etwa|rund|ca\.?|ungefähr|insgesamt).{0,40}Jahre|Jahre(?:n)?\s+(?:Berufs)?[Ee]rfahrung|(?:anderthalb|zweieinhalb|dreieinhalb|sechseinhalb)\s+Jahre/iu
-      .test(sentence);
-    const hasTotalMarker = /\binsgesamt\b|\bgesamte\s+Berufserfahrung\b/iu.test(sentence);
-    const hasPrior = /(?:zuvor|früher|vorher|davor)\b/iu.test(sentence) || DESIGN_FACT_CUE_DE.test(sentence);
-    const hasDuty = WAREHOUSE_FACT_CUE_DE.test(sentence);
-    if (hasTotalMarker && hasDuration && !hasCompany) {
-      slots.push('total_duration');
-    } else if (i === 0 && (hasCompany || (hasDuration && !hasTotalMarker))) {
-      slots.push('current_intro');
-    } else if (hasPrior) {
-      // Prefer prior over duty cues — design "Unterlagen" must not steal prior slot.
-      slots.push('prior_role');
-    } else if (hasDuty) {
-      slots.push('current_duty');
-    } else if (hasTotalMarker || (hasDuration && i > 0)) {
-      slots.push('total_duration');
-    } else {
-      slots.push('other');
-    }
-  }
+
+  const unitSemanticAnalyses = analyzeGermanSummaryUnitSemantics(units, {
+    company: options.company,
+    role: options.role,
+    priorCompany: options.priorCompany,
+    priorRole: options.priorRole,
+    currentEntryDuties: options.currentEntryDuties,
+    priorEntryDuties: options.priorEntryDuties,
+  });
+  const slots = primaryRolesToLegacySlots(unitSemanticAnalyses) as GermanSummaryRoleSlot[];
+  const finalSentenceHashes = unitSemanticAnalyses.map((a) => a.unitHash);
 
   let reason: string | null = null;
   const dutiesCorpus = `${options.currentEntryDuties || ''} ${options.priorEntryDuties || ''} ${options.role || ''}`;
@@ -277,6 +280,32 @@ export function analyzeGermanSummaryEmploymentQuality(
     || /lager|warehouse/i.test(options.role || '');
   const designDomain = DESIGN_FACT_CUE_DE.test(dutiesCorpus)
     || /grafik|design/i.test(`${options.role || ''} ${options.priorEntryDuties || ''}`);
+  const requireSlots = warehouseDomain || designDomain;
+
+  const currentIntroSlotPresent = unitSemanticAnalyses.some((a) => (
+    a.detectedSemanticRoles.includes('current_role_intro')
+  ));
+  const currentDutySlotPresent = unitSemanticAnalyses.some((a) => (
+    a.detectedSemanticRoles.includes('current_role_duties')
+    || (a.detectedSemanticRoles.includes('current_role_intro') && a.currentDutyFactMatches)
+  ));
+  const priorRoleSlotPresent = unitSemanticAnalyses.some((a) => (
+    a.detectedSemanticRoles.includes('prior_role_intro')
+    || a.detectedSemanticRoles.includes('prior_role_duties')
+  ));
+  const totalDurationSlotPresent = unitSemanticAnalyses.some((a) => (
+    a.detectedSemanticRoles.includes('total_duration')
+  ));
+  const explicitSkillsSlotPresent = unitSemanticAnalyses.some((a) => (
+    a.primaryRole === 'explicit_skills'
+  )) && competencyScan.unsupportedCompetencyCount === 0;
+
+  const slotRejectionReasons = buildGermanSlotRejectionReasons(unitSemanticAnalyses, {
+    requireCurrent: requireSlots,
+    requirePrior: Boolean(options.priorCompany || options.priorEntryDuties || designDomain),
+    requireDuration: DURATION_CUE_PRESENT(text) || requireSlots,
+  });
+  const slotValidationPassed = !requireSlots || slotRejectionReasons.length === 0;
 
   if (!text) reason = 'empty_summary';
   else if (unsupportedDesignMedium) reason = 'german_summary_unsupported_design_medium';
@@ -284,27 +313,20 @@ export function analyzeGermanSummaryEmploymentQuality(
     reason = competencyScan.providerRejectionStage || 'competency_grounding_validation';
   } else if (!durationScope.finalDurationScopeValidationPassed && DURATION_CUE_PRESENT(text)) {
     reason = durationScope.durationScopeRejectionReason || 'duration_scope_mismatch';
+  } else if (!slotValidationPassed) {
+    reason = slotRejectionReasons[0] || 'invalid_role_slot_classification';
   } else if (!introGrammar.ok) reason = introGrammar.reason;
-  else if ((warehouseDomain || designDomain) && units.length < 2) {
+  else if (requireSlots && units.length < 2) {
     reason = 'german_summary_incomplete_slots';
   } else if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(text)) {
     reason = 'german_summary_foreign_script';
   }
 
-  const currentIntroSlotPresent = slots.includes('current_intro');
-  const currentDutySlotPresent = slots.includes('current_duty')
-    || (currentIntroSlotPresent && WAREHOUSE_FACT_CUE_DE.test(units[0] || ''));
-  const priorRoleSlotPresent = slots.includes('prior_role');
-  const totalDurationSlotPresent = slots.includes('total_duration');
-  const explicitSkillsSlotPresent = slots.includes('skills')
-    && competencyScan.unsupportedCompetencyCount === 0;
-  const slotValidationPassed = !(warehouseDomain || designDomain)
-    || (currentIntroSlotPresent && (currentDutySlotPresent || units.length >= 2) && priorRoleSlotPresent);
-
   const groundingOk = reason == null
     && introGrammar.ok
     && !unsupportedDesignMedium
     && competencyScan.unsupportedCompetencyCount === 0
+    && slotValidationPassed
     && (durationScope.finalDurationScopeValidationPassed || !DURATION_CUE_PRESENT(text));
 
   const rolePresent = Boolean(
@@ -314,6 +336,15 @@ export function analyzeGermanSummaryEmploymentQuality(
       'iu',
     ).test(text),
   );
+
+  const dutyCoverage = unitSemanticAnalyses.reduce((n, a) => {
+    if (a.detectedSemanticRoles.includes('current_role_duties') || (
+      a.detectedSemanticRoles.includes('current_role_intro') && a.currentDutyFactMatches
+    )) {
+      return Math.max(n, 3);
+    }
+    return n;
+  }, currentIntroSlotPresent && currentDutySlotPresent ? 3 : (currentIntroSlotPresent ? 1 : 0));
 
   return {
     ok: groundingOk,
@@ -335,14 +366,18 @@ export function analyzeGermanSummaryEmploymentQuality(
     totalDurationSlotPresent,
     explicitSkillsSlotPresent,
     slotValidationPassed,
+    slotRejectionReasons,
+    unitSemanticAnalyses,
     currentRoleTitlePresent: rolePresent,
     currentRoleTitleMatchesStructuredRole: rolePresent,
-    currentRoleOmittedDetected: (warehouseDomain || designDomain) && !rolePresent,
-    currentRoleConcreteFactCoverage: currentDutySlotPresent || currentIntroSlotPresent ? 3 : 0,
+    currentRoleOmittedDetected: requireSlots && !rolePresent,
+    currentRoleConcreteFactCoverage: dutyCoverage,
     priorRoleGroundingPassed: Boolean(
       priorRoleSlotPresent || !(options.priorCompany || options.priorEntryDuties),
     ),
     currentEmploymentIntroductionCount: currentIntroSlotPresent ? 1 : 0,
+    finalSentenceHashes,
+    finalSentenceRoleSlots: slots,
   };
 }
 
