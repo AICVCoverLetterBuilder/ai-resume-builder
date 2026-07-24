@@ -18,6 +18,13 @@ void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 import { SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION } from './cv-german-summary-role-slots';
 void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
+import {
+  SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
+  SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
+  verifyVisibleSummaryStructuredRoleLocale,
+} from './cv-summary-structured-role-localization';
+void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
+void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { CVData } from './types';
 import {
@@ -251,6 +258,23 @@ export type SummaryAiDiagnosticTrace = {
   unexpectedLocaleCodes: string[];
   targetLocalePurityPassed: boolean;
   targetScript: string | null;
+  structuredRoleLocaleValidationPassed?: boolean | null;
+  currentRoleLocalizationValidationPassed?: boolean | null;
+  priorRoleLocalizationValidationPassed?: boolean | null;
+  foreignStructuredRoleTitleCount?: number | null;
+  foreignPriorRoleTitleCount?: number | null;
+  foreignCurrentRoleTitleDetected?: boolean | null;
+  rawSourceRoleLeakageDetected?: boolean | null;
+  finalWrongLocaleStructuredRoleCount?: number | null;
+  finalStructuredRoleLocaleValidationPassed?: boolean | null;
+  finalForeignRoleTitleCount?: number | null;
+  providerStructuredRoleLocaleValidationPassed?: boolean | null;
+  providerForeignRoleTitleCount?: number | null;
+  repairStructuredRoleLocaleValidationPassed?: boolean | null;
+  repairForeignRoleTitleCount?: number | null;
+  repairRoleLocalizationTransformationKinds?: string[] | null;
+  visibleStructuredRoleLocaleValidationPassed?: boolean | null;
+  visibleWrongLocaleStructuredRoleCount?: number | null;
   finalPostconditionsPassed: boolean;
   raceGuardResult: 'ok' | 'fail' | 'skipped';
   visibleApplySucceeded: boolean;
@@ -739,13 +763,24 @@ export class SummaryAiDiagnosticSession {
       (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
       { kind: 'summary_sentence', requireUnits: Boolean(text) },
     );
+    void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
+    const structuredRolePassed = typeof diag.structuredRoleLocaleValidationPassed === 'boolean'
+      ? diag.structuredRoleLocaleValidationPassed
+      : true;
+    const rawRoleLeak = Boolean(diag.rawSourceRoleLeakageDetected);
+    const foreignRoleCount = Number(diag.foreignStructuredRoleTitleCount ?? 0);
+    const entityAwarePurityPassed = purity.targetLocalePurityPassed
+      && structuredRolePassed
+      && !rawRoleLeak
+      && foreignRoleCount === 0;
+    const entityAwareLeakage = purity.sourceLanguageLeakageDetected || rawRoleLeak;
     const groundingValidationPassed = diag.groundingValidationPassed
       ?? (!finalized.blocked && finalized.countedAsSuccess);
     const finalPostconditionsPassed = Boolean(
       finalized.countedAsSuccess
       && !finalized.blocked
       && durationValidationPassed
-      && purity.targetLocalePurityPassed
+      && entityAwarePurityPassed
       && groundingValidationPassed
     );
     this.patch({
@@ -927,18 +962,45 @@ export class SummaryAiDiagnosticSession {
       wrongLocaleUnitCount: purity.wrongLocaleUnitCount,
       wrongScriptUnitCount: purity.wrongScriptUnitCount,
       mixedLanguageUnitCount: purity.mixedLanguageUnitCount,
-      sourceLanguageLeakageDetected: purity.sourceLanguageLeakageDetected,
+      sourceLanguageLeakageDetected: entityAwareLeakage,
       unexpectedLocaleCodes: purity.unexpectedLocaleCodes,
-      targetLocalePurityPassed: purity.targetLocalePurityPassed,
+      targetLocalePurityPassed: entityAwarePurityPassed,
       targetScript: purity.detectedScriptByUnit[0] || null,
+      structuredRoleLocaleValidationPassed: diag.structuredRoleLocaleValidationPassed ?? null,
+      currentRoleLocalizationValidationPassed:
+        diag.currentRoleLocalizationValidationPassed ?? null,
+      priorRoleLocalizationValidationPassed:
+        diag.priorRoleLocalizationValidationPassed ?? null,
+      foreignStructuredRoleTitleCount: diag.foreignStructuredRoleTitleCount ?? null,
+      foreignPriorRoleTitleCount: diag.foreignPriorRoleTitleCount ?? null,
+      foreignCurrentRoleTitleDetected: diag.foreignCurrentRoleTitleDetected ?? null,
+      rawSourceRoleLeakageDetected: diag.rawSourceRoleLeakageDetected ?? null,
+      finalWrongLocaleStructuredRoleCount: diag.finalWrongLocaleStructuredRoleCount
+        ?? diag.foreignStructuredRoleTitleCount
+        ?? null,
+      finalStructuredRoleLocaleValidationPassed:
+        diag.finalStructuredRoleLocaleValidationPassed
+        ?? diag.structuredRoleLocaleValidationPassed
+        ?? null,
+      finalForeignRoleTitleCount: diag.finalForeignRoleTitleCount
+        ?? diag.foreignStructuredRoleTitleCount
+        ?? null,
+      providerStructuredRoleLocaleValidationPassed:
+        diag.providerStructuredRoleLocaleValidationPassed ?? null,
+      providerForeignRoleTitleCount: diag.providerForeignRoleTitleCount ?? null,
+      repairStructuredRoleLocaleValidationPassed:
+        diag.repairStructuredRoleLocaleValidationPassed ?? null,
+      repairForeignRoleTitleCount: diag.repairForeignRoleTitleCount ?? null,
+      repairRoleLocalizationTransformationKinds:
+        diag.repairRoleLocalizationTransformationKinds ?? null,
       countedAsSuccess: Boolean(
-        finalized.countedAsSuccess && durationValidationPassed && purity.targetLocalePurityPassed,
+        finalized.countedAsSuccess && durationValidationPassed && entityAwarePurityPassed,
       ),
-      finalTypedFailureReason: finalized.blocked || !durationValidationPassed || !purity.targetLocalePurityPassed
-        ? (finalized.reason || (!purity.targetLocalePurityPassed ? 'locale_impurity' : 'experience_duration_mismatch'))
+      finalTypedFailureReason: finalized.blocked || !durationValidationPassed || !entityAwarePurityPassed
+        ? (finalized.reason || (!entityAwarePurityPassed ? 'locale_impurity' : 'experience_duration_mismatch'))
         : null,
-      rejectionStage: finalized.blocked || !durationValidationPassed || !purity.targetLocalePurityPassed
-        ? (diag.rejectionStage || (!purity.targetLocalePurityPassed ? 'locale_purity' : 'independent_final_duration_verification'))
+      rejectionStage: finalized.blocked || !durationValidationPassed || !entityAwarePurityPassed
+        ? (diag.rejectionStage || (!entityAwarePurityPassed ? 'locale_purity' : 'independent_final_duration_verification'))
         : null,
       genderValidationPassed: true,
       tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? true),
@@ -1545,31 +1607,65 @@ export class SummaryAiDiagnosticSession {
     const visibleHash = typeof visibleText === 'string' && visibleText.trim()
       ? fingerprintText(visibleText.replace(/\s+/g, ' ').trim())
       : null;
+    void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
+    let visibleRoleOk = true;
+    let visibleWrongRoleCount = 0;
+    if (ok && durationStillOk && locale === 'de' && typeof visibleText === 'string') {
+      const roleCheck = verifyVisibleSummaryStructuredRoleLocale({
+        visibleSummary: visibleText,
+        targetLocale: locale,
+        finalStructuredRoleLocaleValidationPassed:
+          this.draft.finalStructuredRoleLocaleValidationPassed
+          ?? this.draft.structuredRoleLocaleValidationPassed,
+      });
+      visibleWrongRoleCount = roleCheck.visibleWrongLocaleStructuredRoleCount;
+      if (
+        /diseñador(?:a)?\s+gráfic(?:a|o)|disenador(?:a)?\s+grafic(?:a|o)/iu.test(visibleText)
+      ) {
+        visibleRoleOk = false;
+        visibleWrongRoleCount = Math.max(visibleWrongRoleCount, 1);
+      } else if (
+        this.draft.structuredRoleLocaleValidationPassed === true
+        && !roleCheck.visibleStructuredRoleLocaleValidationPassed
+      ) {
+        visibleRoleOk = false;
+      }
+    }
+    const applyOk = ok && durationStillOk && visibleRoleOk;
     this.patch({
-      visibleApplySucceeded: ok && durationStillOk,
-      contentLocaleUpdatedAfterApply: ok && durationStillOk,
-      contentLocaleAfterApply: ok && durationStillOk
+      visibleApplySucceeded: applyOk,
+      contentLocaleUpdatedAfterApply: applyOk,
+      contentLocaleAfterApply: applyOk
         ? (this.draft.requestedLocale || this.draft.contentLocaleAfterApply || null)
         : this.draft.contentLocaleAfterApply,
       usageCountAfter: usageAfter,
       visibleCandidateHashAfterApply: visibleHash,
-      visibleSummaryMatchesFinalHash: ok && durationStillOk
+      visibleSummaryMatchesFinalHash: applyOk
         ? (
           visibleHash != null
           && this.draft.finalValidatedCandidateHash != null
           && visibleHash === this.draft.finalValidatedCandidateHash
         )
-        : (ok && durationStillOk),
+        : applyOk,
       visibleDurationClaimCountAfterApply: visibleCount,
       visibleDurationMatchesFinalizedCount: matches,
+      visibleStructuredRoleLocaleValidationPassed: locale === 'de'
+        ? (typeof visibleText === 'string' ? visibleRoleOk : null)
+        : null,
+      visibleWrongLocaleStructuredRoleCount: locale === 'de'
+        ? visibleWrongRoleCount
+        : null,
       // Applied summaries use an explicit race/context result of ok (sync finalize path).
-      raceGuardResult: ok && durationStillOk ? 'ok' : (ok ? 'fail' : this.draft.raceGuardResult || 'skipped'),
+      raceGuardResult: applyOk ? 'ok' : (ok ? 'fail' : this.draft.raceGuardResult || 'skipped'),
       durationValidationPassed: durationStillOk
         ? this.draft.durationValidationPassed
         : false,
-      finalPostconditionsPassed: ok && durationStillOk
+      finalPostconditionsPassed: applyOk
         ? this.draft.finalPostconditionsPassed
         : false,
+      finalTypedFailureReason: !visibleRoleOk && ok && durationStillOk
+        ? 'visible_role_localization_mismatch'
+        : this.draft.finalTypedFailureReason,
       // Duration idempotence is independent of visible apply success.
       durationFinalizerIdempotent: (() => {
         void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
@@ -1584,10 +1680,10 @@ export class SummaryAiDiagnosticSession {
           ? this.draft.durationFinalizerIdempotent
           : this.draft.durationFinalizerIdempotent;
       })(),
-      countedAsSuccess: ok && durationStillOk,
+      countedAsSuccess: applyOk,
     });
-    this.stage('visible_apply', ok && durationStillOk ? 'ok' : 'fail');
-    this.stage('race_guard', ok && durationStillOk ? 'ok' : (ok ? 'fail' : 'skipped'));
+    this.stage('visible_apply', applyOk ? 'ok' : 'fail');
+    this.stage('race_guard', applyOk ? 'ok' : (ok ? 'fail' : 'skipped'));
   }
 
   recordRaceGuard(result: 'ok' | 'fail' | 'skipped'): void {

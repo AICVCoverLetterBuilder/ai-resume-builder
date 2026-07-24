@@ -1047,6 +1047,21 @@ export type FinalizeCvAiFieldResult = {
     finalSlotRejectionReasons?: string[];
     finalUnitSemanticRolesByUnit?: string[][] | null;
     employerCrossEntryLeakageDetected?: boolean;
+    structuredRoleLocaleValidationPassed?: boolean;
+    currentRoleLocalizationValidationPassed?: boolean;
+    priorRoleLocalizationValidationPassed?: boolean;
+    foreignStructuredRoleTitleCount?: number;
+    foreignPriorRoleTitleCount?: number;
+    foreignCurrentRoleTitleDetected?: boolean;
+    rawSourceRoleLeakageDetected?: boolean;
+    finalWrongLocaleStructuredRoleCount?: number;
+    finalStructuredRoleLocaleValidationPassed?: boolean;
+    finalForeignRoleTitleCount?: number;
+    providerStructuredRoleLocaleValidationPassed?: boolean;
+    providerForeignRoleTitleCount?: number;
+    repairStructuredRoleLocaleValidationPassed?: boolean;
+    repairForeignRoleTitleCount?: number;
+    repairRoleLocalizationTransformationKinds?: string[];
     generationProviderValidationPassed?: boolean | null;
     generationProviderRejectionReason?: string | null;
     generationFinalPostconditionPassed?: boolean | null;
@@ -2849,9 +2864,60 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         foreignPriorRoleTitleCount: locale === 'de' && empQ
           ? ((empQ as { foreignPriorRoleTitleCount?: number }).foreignPriorRoleTitleCount ?? 0)
           : undefined,
+        foreignCurrentRoleTitleDetected: locale === 'de' && empQ
+          ? Boolean((empQ as { foreignCurrentRoleTitleDetected?: boolean })
+            .foreignCurrentRoleTitleDetected)
+          : undefined,
         rawSourceRoleLeakageDetected: locale === 'de' && empQ
           ? Boolean((empQ as { rawSourceRoleLeakageDetected?: boolean })
             .rawSourceRoleLeakageDetected)
+          : undefined,
+        finalWrongLocaleStructuredRoleCount: locale === 'de' && empQ
+          ? ((empQ as { finalWrongLocaleStructuredRoleCount?: number })
+            .finalWrongLocaleStructuredRoleCount
+            ?? (empQ as { foreignStructuredRoleTitleCount?: number })
+              .foreignStructuredRoleTitleCount
+            ?? 0)
+          : undefined,
+        finalStructuredRoleLocaleValidationPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { structuredRoleLocaleValidationPassed?: boolean })
+            .structuredRoleLocaleValidationPassed)
+          : undefined,
+        finalForeignRoleTitleCount: locale === 'de' && empQ
+          ? ((empQ as { foreignStructuredRoleTitleCount?: number })
+            .foreignStructuredRoleTitleCount ?? 0)
+          : undefined,
+        providerStructuredRoleLocaleValidationPassed: locale === 'de'
+          ? (germanEmployerStatusRepairTransformations.some((k) =>
+            /role_title_localized|foreign_role_title_replaced/.test(String(k)))
+            ? false
+            : (empQ
+              ? Boolean((empQ as { structuredRoleLocaleValidationPassed?: boolean })
+                .structuredRoleLocaleValidationPassed)
+              : undefined))
+          : undefined,
+        providerForeignRoleTitleCount: locale === 'de'
+          ? (germanEmployerStatusRepairTransformations.some((k) =>
+            /role_title_localized|foreign_role_title_replaced/.test(String(k)))
+            ? Math.max(
+              1,
+              Number((empQ as { foreignStructuredRoleTitleCount?: number } | null)
+                ?.foreignStructuredRoleTitleCount ?? 0),
+            )
+            : ((empQ as { foreignStructuredRoleTitleCount?: number } | null)
+              ?.foreignStructuredRoleTitleCount ?? 0))
+          : undefined,
+        repairStructuredRoleLocaleValidationPassed: locale === 'de' && germanMaterialRepairApplied
+          ? Boolean((empQ as { structuredRoleLocaleValidationPassed?: boolean } | null)
+            ?.structuredRoleLocaleValidationPassed)
+          : undefined,
+        repairForeignRoleTitleCount: locale === 'de' && germanMaterialRepairApplied
+          ? ((empQ as { foreignStructuredRoleTitleCount?: number } | null)
+            ?.foreignStructuredRoleTitleCount ?? 0)
+          : undefined,
+        repairRoleLocalizationTransformationKinds: locale === 'de'
+          ? germanEmployerStatusRepairTransformations.filter((k) =>
+            /role_title_localized|foreign_role_title_replaced/.test(String(k)))
           : undefined,
         sourceLanguageLeakageDetected: locale === 'de' && empQ
           ? Boolean((empQ as { rawSourceRoleLeakageDetected?: boolean })

@@ -55,6 +55,7 @@ import {
   resolveLocalizedSummaryRole,
   validateSummaryStructuredRoleLocale,
   repairGermanSummaryStructuredRoleLocales,
+  verifyVisibleSummaryStructuredRoleLocale,
   type StructuredRoleLocaleValidation,
 } from './cv-summary-structured-role-localization';
 export {
@@ -72,6 +73,7 @@ export {
   resolveLocalizedSummaryRole,
   validateSummaryStructuredRoleLocale,
   repairGermanSummaryStructuredRoleLocales,
+  verifyVisibleSummaryStructuredRoleLocale,
 } from './cv-summary-structured-role-localization';
 export {
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
@@ -300,6 +302,8 @@ export type GermanSummaryEmploymentQuality = {
   priorRoleLocalizationValidationPassed?: boolean;
   foreignStructuredRoleTitleCount?: number;
   foreignPriorRoleTitleCount?: number;
+  foreignCurrentRoleTitleDetected?: boolean;
+  finalWrongLocaleStructuredRoleCount?: number;
   rawSourceRoleLeakageDetected?: boolean;
 };
 
@@ -596,6 +600,9 @@ export function analyzeGermanSummaryEmploymentQuality(
       structuredRoleLocale.priorRoleLocalizationValidationPassed,
     foreignStructuredRoleTitleCount: structuredRoleLocale.foreignStructuredRoleTitleCount,
     foreignPriorRoleTitleCount: structuredRoleLocale.foreignPriorRoleTitleCount,
+    foreignCurrentRoleTitleDetected: structuredRoleLocale.foreignCurrentRoleTitleDetected,
+    finalWrongLocaleStructuredRoleCount:
+      structuredRoleLocale.finalWrongLocaleStructuredRoleCount,
     rawSourceRoleLeakageDetected: structuredRoleLocale.rawSourceRoleLeakageDetected,
   };
 }

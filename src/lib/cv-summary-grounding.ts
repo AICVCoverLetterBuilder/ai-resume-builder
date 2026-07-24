@@ -209,6 +209,7 @@ export {
   resolveLocalizedSummaryRole,
   validateSummaryStructuredRoleLocale,
   repairGermanSummaryStructuredRoleLocales,
+  verifyVisibleSummaryStructuredRoleLocale,
 } from './cv-german-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,

@@ -18,11 +18,17 @@ import {
   SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION,
   SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION,
 } from './cv-german-summary-role-slots';
+import {
+  SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
+  SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
+} from './cv-summary-structured-role-localization';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
 void SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION;
 void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
+void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
+void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
 
 /** Stable contract revision — must survive minification in internal builds. */
 export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as const;
@@ -453,7 +459,6 @@ type SummaryLike = {
   currentIntroSlotPresent?: boolean | null;
   currentDutySlotPresent?: boolean | null;
   priorRoleSlotPresent?: boolean | null;
-  targetLocalePurityPassed?: boolean;
   wrongLocaleUnitCount?: number;
   internalDiagnosticsEnabled?: boolean;
   internalResetEnabled?: boolean;
@@ -494,6 +499,24 @@ type SummaryLike = {
   repairCandidateHash?: string | null;
   providerAccepted?: boolean | null;
   providerCandidateHash?: string | null;
+  structuredRoleLocaleValidationPassed?: boolean | null;
+  currentRoleLocalizationValidationPassed?: boolean | null;
+  priorRoleLocalizationValidationPassed?: boolean | null;
+  foreignStructuredRoleTitleCount?: number | null;
+  foreignPriorRoleTitleCount?: number | null;
+  rawSourceRoleLeakageDetected?: boolean | null;
+  finalWrongLocaleStructuredRoleCount?: number | null;
+  finalStructuredRoleLocaleValidationPassed?: boolean | null;
+  providerStructuredRoleLocaleValidationPassed?: boolean | null;
+  providerForeignRoleTitleCount?: number | null;
+  repairStructuredRoleLocaleValidationPassed?: boolean | null;
+  repairForeignRoleTitleCount?: number | null;
+  repairRoleLocalizationTransformationKinds?: string[] | null;
+  finalForeignRoleTitleCount?: number | null;
+  visibleStructuredRoleLocaleValidationPassed?: boolean | null;
+  visibleWrongLocaleStructuredRoleCount?: number | null;
+  sourceLanguageLeakageDetected?: boolean | null;
+  targetLocalePurityPassed?: boolean | null;
   candidateLineage?: Array<{
     candidateKind?: string;
     present?: boolean;
@@ -619,6 +642,84 @@ export function checkSummaryDiagnosticInvariants(
     push('german_success_requires_prior_role_intro_validation', {
       countedAsSuccess: true,
       finalPriorRoleIntroValidationPassed: false,
+    });
+  }
+  // AAB-322: structured role locale purity.
+  void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && trace.targetLocalePurityPassed === true
+    && (trace.foreignStructuredRoleTitleCount ?? 0) > 0
+  ) {
+    push('target_purity_forbids_foreign_structured_roles', {
+      targetLocalePurityPassed: true,
+      foreignStructuredRoleTitleCount: trace.foreignStructuredRoleTitleCount ?? 0,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && trace.sourceLanguageLeakageDetected === false
+    && trace.rawSourceRoleLeakageDetected === true
+  ) {
+    push('source_leakage_false_with_raw_role_alias', {
+      sourceLanguageLeakageDetected: false,
+      rawSourceRoleLeakageDetected: true,
+    });
+  }
+  if (
+    trace.countedAsSuccess
+    && String(trace.requestedLocale || '') === 'de'
+    && trace.structuredRoleLocaleValidationPassed === false
+  ) {
+    push('german_success_requires_structured_role_locale', {
+      countedAsSuccess: true,
+      structuredRoleLocaleValidationPassed: false,
+    });
+  }
+  if (
+    trace.countedAsSuccess
+    && String(trace.requestedLocale || '') === 'de'
+    && (trace.foreignPriorRoleTitleCount ?? 0) > 0
+  ) {
+    push('german_success_forbids_foreign_prior_role', {
+      countedAsSuccess: true,
+      foreignPriorRoleTitleCount: trace.foreignPriorRoleTitleCount ?? 0,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && (trace.wrongLocaleUnitCount ?? 0) === 0
+    && (trace.foreignStructuredRoleTitleCount ?? 0) > 0
+    && trace.targetLocalePurityPassed === true
+  ) {
+    push('unit_locale_ok_cannot_hide_foreign_structured_role', {
+      wrongLocaleUnitCount: 0,
+      foreignStructuredRoleTitleCount: trace.foreignStructuredRoleTitleCount ?? 0,
+      targetLocalePurityPassed: true,
+    });
+  }
+  if (
+    trace.visibleApplySucceeded
+    && String(trace.requestedLocale || '') === 'de'
+    && trace.visibleStructuredRoleLocaleValidationPassed === false
+  ) {
+    push('visible_apply_requires_structured_role_locale', {
+      visibleApplySucceeded: true,
+      visibleStructuredRoleLocaleValidationPassed: false,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && Array.isArray(trace.repairRoleLocalizationTransformationKinds)
+    && (trace.repairRoleLocalizationTransformationKinds as string[]).some((k) =>
+      /role_title_localized|foreign_role_title_replaced/.test(String(k)))
+    && (trace.repairCandidateHash || '')
+    && (trace.providerCandidateHash || '')
+    && trace.repairCandidateHash === trace.providerCandidateHash
+  ) {
+    push('role_localization_must_change_repair_hash', {
+      repairCandidateHash: trace.repairCandidateHash ?? null,
+      providerCandidateHash: trace.providerCandidateHash ?? null,
     });
   }
   if (src === 'deterministic_fallback') {
@@ -1013,6 +1114,15 @@ export function checkSummaryDiagnosticCompleteness(
     require('finalCurrentRoleIntroValidationPassed');
     require('finalPriorRoleIntroValidationPassed');
     require('finalSlotValidationPassed');
+    // AAB-322: structured-role locale diagnostic completeness.
+    require('structuredRoleLocaleValidationPassed');
+    require('currentRoleLocalizationValidationPassed');
+    require('priorRoleLocalizationValidationPassed');
+    require('foreignStructuredRoleTitleCount');
+    require('foreignPriorRoleTitleCount');
+    require('rawSourceRoleLeakageDetected');
+    require('finalWrongLocaleStructuredRoleCount');
+    require('finalStructuredRoleLocaleValidationPassed');
   }
 
   if (trace.finalCandidateSource === 'deterministic_fallback') {

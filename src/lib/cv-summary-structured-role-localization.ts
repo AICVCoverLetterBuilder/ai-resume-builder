@@ -419,6 +419,48 @@ export type GermanRoleLocaleRepairResult = {
   rejectionReasons: string[];
 };
 
+/** Post-apply: visible Summary must match final structured-role locale purity. */
+export function verifyVisibleSummaryStructuredRoleLocale(options: {
+  visibleSummary: string;
+  targetLocale: Locale;
+  gender?: string;
+  currentRole?: string;
+  priorRole?: string;
+  currentEntryId?: string | null;
+  priorEntryId?: string | null;
+  finalStructuredRoleLocaleValidationPassed?: boolean | null;
+}): {
+  visibleStructuredRoleLocaleValidationPassed: boolean;
+  visibleWrongLocaleStructuredRoleCount: number;
+  visibleRoleLocalizationMismatch: boolean;
+  failureKind: string | null;
+} {
+  void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
+  const validation = validateSummaryStructuredRoleLocale({
+    summary: options.visibleSummary,
+    targetLocale: options.targetLocale,
+    gender: options.gender,
+    currentRole: options.currentRole,
+    priorRole: options.priorRole,
+    currentEntryId: options.currentEntryId,
+    priorEntryId: options.priorEntryId,
+  });
+  const mismatch = options.finalStructuredRoleLocaleValidationPassed === true
+    && !validation.structuredRoleLocaleValidationPassed;
+  return {
+    visibleStructuredRoleLocaleValidationPassed:
+      validation.structuredRoleLocaleValidationPassed,
+    visibleWrongLocaleStructuredRoleCount:
+      validation.finalWrongLocaleStructuredRoleCount,
+    visibleRoleLocalizationMismatch: mismatch,
+    failureKind: mismatch
+      ? 'visible_role_localization_mismatch'
+      : (validation.structuredRoleLocaleValidationPassed
+        ? null
+        : (validation.failureKinds[0] || 'structured_role_locale_failed')),
+  };
+}
+
 /**
  * Narrow repair: replace foreign structured role-title spans with validated
  * target-locale labels. Does not invent duties/employers/status.
