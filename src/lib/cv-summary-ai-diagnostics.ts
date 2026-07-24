@@ -10,6 +10,12 @@ export { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION } from './cv-summary-f
 import { SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION } from './cv-summary-localized-failure-diagnostics-307';
 void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
 export { SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION } from './cv-summary-localized-failure-diagnostics-307';
+import {
+  SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
+  SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
+} from './cv-summary-explicit-skill-authority';
+void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
+void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { CVData } from './types';
 import {
@@ -652,23 +658,35 @@ export class SummaryAiDiagnosticSession {
     const finalRoleSlotsFromDiag = Array.isArray(diag.finalSentenceRoleSlots)
       ? diag.finalSentenceRoleSlots
       : (Array.isArray(diag.finalUnitRoleSlots) ? diag.finalUnitRoleSlots : []);
+    const finalCandidateSelected = Boolean(
+      finalized.countedAsSuccess
+      && !finalized.blocked
+      && diag.finalCandidateSource
+      && diag.finalCandidateSource !== 'none',
+    );
     // Prefer authoritative unit hashes from finalize — never leave empty arrays
     // when a successful final candidate has a positive sentence count.
-    const resolvedFinalUnitCount = finalHashesFromDiag.length > 0
-      ? finalHashesFromDiag.length
-      : sentenceCount;
-    const resolvedFinalHashes = finalHashesFromDiag.length > 0
-      ? finalHashesFromDiag
-      : (sentenceCount > 0 && text
-        ? text.split(/[.!?।]/u).filter((s) => s.trim()).map((s) => fingerprintText(s.trim()))
-        : []);
-    const resolvedFinalRoleSlots = finalRoleSlotsFromDiag.length === resolvedFinalUnitCount
-      ? finalRoleSlotsFromDiag
-      : (resolvedFinalUnitCount > 0
-        ? Array.from({ length: resolvedFinalUnitCount }, () => 'summary_unit')
-        : []);
+    // Never populate final* hashes from a rejected evaluated candidate.
+    const resolvedFinalUnitCount = finalCandidateSelected
+      ? (finalHashesFromDiag.length > 0 ? finalHashesFromDiag.length : sentenceCount)
+      : 0;
+    const resolvedFinalHashes = finalCandidateSelected
+      ? (finalHashesFromDiag.length > 0
+        ? finalHashesFromDiag
+        : (sentenceCount > 0 && text
+          ? text.split(/[.!?।]/u).filter((s) => s.trim()).map((s) => fingerprintText(s.trim()))
+          : []))
+      : [];
+    const resolvedFinalRoleSlots = finalCandidateSelected
+      ? (finalRoleSlotsFromDiag.length === resolvedFinalUnitCount
+        ? finalRoleSlotsFromDiag
+        : (resolvedFinalUnitCount > 0
+          ? Array.from({ length: resolvedFinalUnitCount }, () => 'summary_unit')
+          : []))
+      : [];
     void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
     void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
+    void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
     // "Applied" means visibly accepted — never merely selected for validation.
     const fallbackApplied = Boolean(
       finalized.countedAsSuccess
@@ -798,7 +816,9 @@ export class SummaryAiDiagnosticSession {
       semanticCrossEntryLeakageDetected: diag.semanticCrossEntryLeakageDetected ?? null,
       duplicatedPriorRoleFactCount: diag.duplicatedPriorRoleFactCount ?? null,
       priorRoleSemanticDuplicationDetected: diag.priorRoleSemanticDuplicationDetected ?? null,
-      finalUnitRoleSlots: diag.finalUnitRoleSlots ?? null,
+      finalUnitRoleSlots: finalCandidateSelected
+        ? (diag.finalUnitRoleSlots ?? null)
+        : [],
       summaryPipelineRevision: diag.summaryPipelineRevision ?? null,
       summaryBuilderRevision: diag.summaryBuilderRevision ?? null,
       summaryUnitSplitterRevision: diag.summaryUnitSplitterRevision ?? null,
@@ -813,7 +833,9 @@ export class SummaryAiDiagnosticSession {
       durationPass1Hash: diag.durationPass1Hash ?? diag.durationPass1CandidateHash ?? null,
       durationPass2Hash: diag.durationPass2Hash ?? diag.durationPass2CandidateHash ?? null,
       groundingInputCandidateHash: diag.groundingInputCandidateHash ?? null,
-      finalValidatedCandidateHash: diag.finalValidatedCandidateHash ?? null,
+      finalValidatedCandidateHash: finalCandidateSelected
+        ? (diag.finalValidatedCandidateHash ?? null)
+        : null,
       providerCandidateEqualsDeterministicCandidate:
         diag.providerCandidateEqualsDeterministicCandidate ?? null,
       deterministicCandidateEqualsGroundingInput:
@@ -834,12 +856,16 @@ export class SummaryAiDiagnosticSession {
       deterministicPriorEntryIdHashes: diag.deterministicPriorEntryIdHashes ?? null,
       currentEntryMaterialKeys: diag.currentEntryMaterialKeys ?? null,
       priorEntryMaterialKeys: diag.priorEntryMaterialKeys ?? null,
-      finalSentenceHashes: resolvedFinalHashes.length > 0
-        ? resolvedFinalHashes
-        : (diag.finalSentenceHashes ?? null),
-      finalSentenceRoleSlots: resolvedFinalRoleSlots.length > 0
-        ? resolvedFinalRoleSlots
-        : (diag.finalSentenceRoleSlots ?? null),
+      finalSentenceHashes: finalCandidateSelected
+        ? (resolvedFinalHashes.length > 0
+          ? resolvedFinalHashes
+          : (diag.finalSentenceHashes ?? []))
+        : [],
+      finalSentenceRoleSlots: finalCandidateSelected
+        ? (resolvedFinalRoleSlots.length > 0
+          ? resolvedFinalRoleSlots
+          : (diag.finalSentenceRoleSlots ?? []))
+        : [],
       summaryFinalCandidateDiagnosticsRevision:
         SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
       flattenedFactArrayUsed: diag.flattenedFactArrayUsed ?? null,
@@ -962,8 +988,12 @@ export class SummaryAiDiagnosticSession {
         : [],
       hindiSentenceGrammarRecords: (this.draft.requestedLocale === 'hi')
         ? buildHindiSentenceGrammarRecords({
-          sentenceHashes: diag.finalSentenceHashes,
-          sentenceRoleSlots: diag.finalSentenceRoleSlots ?? diag.finalUnitRoleSlots,
+          sentenceHashes: finalCandidateSelected
+            ? (diag.finalSentenceHashes ?? resolvedFinalHashes)
+            : (diag.evaluatedSentenceHashes ?? diag.finalSentenceHashes),
+          sentenceRoleSlots: finalCandidateSelected
+            ? (diag.finalSentenceRoleSlots ?? diag.finalUnitRoleSlots)
+            : (diag.evaluatedUnitRoleSlots ?? diag.finalUnitRoleSlots),
           hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb,
           hindiNominalExperienceFragmentDetected: diag.hindiNominalExperienceFragmentDetected,
           hindiStandaloneJahanFragmentDetected: diag.hindiStandaloneJahanFragmentDetected,
@@ -1053,7 +1083,9 @@ export class SummaryAiDiagnosticSession {
         ),
       clientFallbackReason: diag.clientFallbackReason ?? null,
       sourceNormalizedHash: diag.sourceNormalizedHash ?? null,
-      finalNormalizedHash: diag.finalNormalizedHash ?? null,
+      finalNormalizedHash: finalCandidateSelected
+        ? (diag.finalNormalizedHash ?? null)
+        : null,
       finalMatchesSourceAfterNormalization:
         diag.finalMatchesSourceAfterNormalization ?? false,
       meaningfulChangeDetected: diag.meaningfulChangeDetected
@@ -1205,12 +1237,36 @@ export class SummaryAiDiagnosticSession {
         const detAccepted = finalized.origin === 'deterministic_fallback'
           && Boolean(finalized.countedAsSuccess)
           && !detNoOp;
-        const detHashes = resolvedFinalHashes.length > 0
-          ? resolvedFinalHashes
-          : (diag.finalSentenceHashes || []);
-        const detUnitCount = detHashes.length > 0
-          ? detHashes.length
+        // Deterministic lineage must NOT borrow final* hashes — phase separation.
+        const detSentenceCount = typeof diag.deterministicCandidateSentenceCount === 'number'
+          ? diag.deterministicCandidateSentenceCount
           : deterministicSentenceCount;
+        const evaluatedHashes = Array.isArray(diag.evaluatedSentenceHashes)
+          ? diag.evaluatedSentenceHashes.filter(Boolean)
+          : [];
+        const detHashes = (() => {
+          if (evaluatedHashes.length > 0
+            && (detSentenceCount <= 0 || evaluatedHashes.length === detSentenceCount)) {
+            return evaluatedHashes;
+          }
+          if (detPresent && detSentenceCount > 0) {
+            const base = diag.deterministicCandidateHash || 'deterministic_candidate';
+            return Array.from(
+              { length: detSentenceCount },
+              (_, i) => fingerprintText(`${base}:unit:${i}`),
+            );
+          }
+          return [];
+        })();
+        const detUnitCount = detPresent
+          ? (detHashes.length > 0 ? detHashes.length : detSentenceCount)
+          : 0;
+        const detRoleSlots = Array.isArray(diag.evaluatedUnitRoleSlots)
+          && diag.evaluatedUnitRoleSlots.length === detUnitCount
+          ? diag.evaluatedUnitRoleSlots
+          : (detUnitCount > 0
+            ? Array.from({ length: detUnitCount }, () => 'summary_unit')
+            : []);
         lineage.push({
           candidateKind: 'client_deterministic',
           present: detPresent,
@@ -1220,11 +1276,7 @@ export class SummaryAiDiagnosticSession {
           unitHashes: detPresent ? detHashes : [],
           sentenceCount: detPresent ? detUnitCount : 0,
           sentenceHashes: detPresent ? detHashes : [],
-          sentenceRoleSlots: detPresent
-            ? (resolvedFinalRoleSlots.length > 0
-              ? resolvedFinalRoleSlots
-              : (diag.finalSentenceRoleSlots || diag.finalUnitRoleSlots || []))
-            : [],
+          sentenceRoleSlots: detPresent ? detRoleSlots : [],
           accepted: detAccepted,
           rejectionStage: detAccepted
             ? null

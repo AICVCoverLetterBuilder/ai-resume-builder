@@ -76,6 +76,8 @@ import {
   GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
   SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
   SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
+  SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
+  SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
@@ -474,6 +476,8 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
   GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
   GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION,
+  SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
+  SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -710,6 +714,12 @@ export type FinalizeCvAiFieldResult = {
     finalContentLocaleAfterApply?: string | null;
     finalCandidateSource?: string;
     finalCandidatePresent?: boolean;
+    finalCandidateUnitCount?: number;
+    evaluatedCandidateUnitCount?: number | null;
+    evaluatedUnitRoleSlots?: string[] | null;
+    evaluatedSentenceHashes?: string[] | null;
+    evaluatedSlotValidationPassed?: boolean | null;
+    evaluatedSlotRejectionReasons?: string[] | null;
     finalCandidateValidationApplicable?: boolean;
     finalCandidatePredicateValidationApplicable?: boolean;
     finalCandidateBulletCount?: number;
@@ -2512,23 +2522,23 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         durationSemanticValueMonths: owned?.durationSemanticValueMonths
           ?? durationSnapshot.total.totalMonths,
         durationRepresentationAgreement: rep.agreement,
-        finalDurationOwnerExpected: locale === 'de' && empQ && 'durationScope' in empQ
+        finalDurationOwnerExpected: success && locale === 'de' && empQ && 'durationScope' in empQ
           ? (empQ as { durationScope?: { finalDurationOwnerExpected?: string } }).durationScope
             ?.finalDurationOwnerExpected
           : undefined,
-        finalDurationOwnerDetected: locale === 'de' && empQ && 'durationScope' in empQ
+        finalDurationOwnerDetected: success && locale === 'de' && empQ && 'durationScope' in empQ
           ? (empQ as { durationScope?: { finalDurationOwnerDetected?: string } }).durationScope
             ?.finalDurationOwnerDetected
           : undefined,
-        finalDurationScopeValidationPassed: locale === 'de' && empQ && 'durationScope' in empQ
+        finalDurationScopeValidationPassed: success && locale === 'de' && empQ && 'durationScope' in empQ
           ? (empQ as { durationScope?: { finalDurationScopeValidationPassed?: boolean } })
             .durationScope?.finalDurationScopeValidationPassed
           : undefined,
-        finalDurationCurrentRoleAttachmentRisk: locale === 'de' && empQ && 'durationScope' in empQ
+        finalDurationCurrentRoleAttachmentRisk: success && locale === 'de' && empQ && 'durationScope' in empQ
           ? (empQ as { durationScope?: { finalDurationCurrentRoleAttachmentRisk?: boolean } })
             .durationScope?.finalDurationCurrentRoleAttachmentRisk
           : undefined,
-        finalDurationTotalCareerMarkerPresent: locale === 'de' && empQ && 'durationScope' in empQ
+        finalDurationTotalCareerMarkerPresent: success && locale === 'de' && empQ && 'durationScope' in empQ
           ? (empQ as { durationScope?: { finalDurationTotalCareerMarkerPresent?: boolean } })
             .durationScope?.finalDurationTotalCareerMarkerPresent
           : undefined,
@@ -2554,16 +2564,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? (empQ as { competencyScan?: { explicitSkillFactCount?: number } }).competencyScan
             ?.explicitSkillFactCount
           : undefined,
-        finalCompetencyClaimCount: locale === 'de' && empQ && 'competencyScan' in empQ
+        finalCompetencyClaimCount: success && locale === 'de' && empQ && 'competencyScan' in empQ
           ? (empQ as { competencyScan?: { competencyClaimCount?: number } }).competencyScan
             ?.competencyClaimCount
-          : undefined,
-        finalUnsupportedCompetencyCount: locale === 'de' && empQ
+          : (success ? undefined : 0),
+        finalUnsupportedCompetencyCount: success && locale === 'de' && empQ
           ? ((empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0)
-          : undefined,
-        finalUnsupportedCompetencyKinds: locale === 'de' && empQ
+          : (success ? undefined : 0),
+        finalUnsupportedCompetencyKinds: success && locale === 'de' && empQ
           ? ((empQ as { unsupportedClaimKinds?: string[] }).unsupportedClaimKinds ?? [])
-          : undefined,
+          : [],
         competencyInferenceFromRoleForbidden: locale === 'de' ? true : undefined,
         storedContentLocaleBeforeRequest: cv.contentLocale || null,
         detectedVisibleContentLocaleBeforeRequest: locale,
@@ -2573,6 +2583,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalCandidateSource: success
           ? result.origin
           : 'none',
+        finalCandidatePresent: Boolean(success && analyzedText.trim()),
+        finalCandidateUnitCount: success
+          ? (empQ?.finalSentenceHashes?.length
+            || empQ?.finalUnitRoleSlots?.length
+            || countSummaryCandidateSentences(analyzedText, locale))
+          : 0,
         providerCandidatePresent: Boolean((input.candidate || '').trim()),
         deterministicCandidatePresent: Boolean(deterministicCandidateRaw.trim())
           || result.origin === 'deterministic_fallback'
@@ -2682,14 +2698,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               : undefined
           ),
         sourceNormalizedHash,
-        finalNormalizedHash: (() => {
-          const mc = summaryMeaningfulChange
-            || (analyzedText
-              ? evaluateSummaryMeaningfulChange(liveSummary, analyzedText)
-              : null);
-          return mc?.finalNormalizedHash
-            ?? (analyzedText ? hashSummaryCandidate(analyzedText) : null);
-        })(),
+        finalNormalizedHash: success
+          ? (() => {
+            const mc = summaryMeaningfulChange
+              || (analyzedText
+                ? evaluateSummaryMeaningfulChange(liveSummary, analyzedText)
+                : null);
+            return mc?.finalNormalizedHash
+              ?? (analyzedText ? hashSummaryCandidate(analyzedText) : null);
+          })()
+          : null,
         finalMatchesSourceAfterNormalization: (() => {
           const mc = summaryMeaningfulChange
             || (analyzedText
@@ -2790,9 +2808,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         priorRoleSemanticDuplicationDetected: empQ && 'priorRoleSemanticDuplicationDetected' in empQ
           ? (empQ as { priorRoleSemanticDuplicationDetected?: boolean }).priorRoleSemanticDuplicationDetected
           : undefined,
-        finalUnitRoleSlots: empQ?.finalUnitRoleSlots,
-        finalSentenceHashes: empQ?.finalSentenceHashes,
-        finalSentenceRoleSlots: empQ?.finalSentenceRoleSlots,
+        finalUnitRoleSlots: success ? (empQ?.finalUnitRoleSlots || []) : [],
+        finalSentenceHashes: success ? (empQ?.finalSentenceHashes || []) : [],
+        finalSentenceRoleSlots: success ? (empQ?.finalSentenceRoleSlots || []) : [],
+        // Evaluated (possibly rejected) candidate — never alias into final*.
+        evaluatedCandidateUnitCount: empQ && 'unitCount' in empQ
+          ? ((empQ as { unitCount?: number }).unitCount ?? null)
+          : null,
+        evaluatedUnitRoleSlots: empQ?.finalUnitRoleSlots ?? null,
+        evaluatedSentenceHashes: empQ?.finalSentenceHashes ?? null,
+        evaluatedSlotValidationPassed: empQ && 'slotValidationPassed' in empQ
+          ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed)
+          : null,
+        evaluatedSlotRejectionReasons: empQ && 'slotRejectionReasons' in empQ
+          ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
+          : null,
         hindiFiniteKaAnubhavCollision: empQ && 'hindiFiniteKaAnubhavCollision' in empQ
           ? (empQ as { hindiFiniteKaAnubhavCollision?: boolean }).hindiFiniteKaAnubhavCollision
           : undefined,

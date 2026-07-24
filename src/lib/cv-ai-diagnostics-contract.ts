@@ -9,6 +9,14 @@ import {
   INTERNAL_AI_RESET_BUNDLE_MARKER,
 } from './build-channel';
 import { emitCvAiDiagnosticsChanged } from './cv-ai-diagnostics-lifecycle';
+import {
+  SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
+  SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
+} from './cv-summary-explicit-skill-authority';
+import { GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION } from './cv-german-summary-role-slots';
+void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
+void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
+void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
 
 /** Stable contract revision — must survive minification in internal builds. */
 export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as const;
@@ -448,7 +456,16 @@ type SummaryLike = {
   serverFallbackUsed?: boolean | null;
   providerOutcome?: string | null;
   providerUnsupportedClaimCount?: number | null;
+  providerRejectionReason?: string | null;
+  providerTypedRejectionReason?: string | null;
+  providerSlotRejectionReasons?: string[] | null;
   clientFallbackUsed?: boolean | null;
+  clientDeterministicFallbackAttempted?: boolean | null;
+  clientRepairAttempted?: boolean | null;
+  summaryRepairAttempted?: boolean | null;
+  sourceWasEmpty?: boolean | null;
+  finalSentenceHashes?: string[] | null;
+  unitCount?: number | null;
   finalDurationScopeValidationPassed?: boolean | null;
   finalDurationCurrentRoleAttachmentRisk?: boolean | null;
   finalDurationOwnerExpected?: string | null;
@@ -646,6 +663,70 @@ export function checkSummaryDiagnosticInvariants(
     push('german_provider_accepted_with_unsupported_competency', {
       providerUnsupportedClaimCount: trace.providerUnsupportedClaimCount ?? 0,
       providerOutcome: 'accepted',
+    });
+  }
+
+  // AAB-320 — recovery / provenance / phase-separation invariants.
+  void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
+  void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
+  void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && trace.providerCandidatePresent
+    && trace.providerOutcome
+    && String(trace.providerOutcome).startsWith('rejected')
+    && !trace.providerRejectionReason
+    && !(Array.isArray(trace.providerSlotRejectionReasons)
+      && trace.providerSlotRejectionReasons.length > 0)
+    && !trace.providerTypedRejectionReason
+  ) {
+    push('german_provider_rejected_without_reason', {
+      providerOutcome: String(trace.providerOutcome),
+      providerRejectionReason: null,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && trace.providerCandidatePresent
+    && String(trace.providerOutcome || '').startsWith('rejected')
+    && !trace.clientDeterministicFallbackAttempted
+    && !trace.summaryRepairAttempted
+    && !trace.clientRepairAttempted
+    && trace.sourceWasEmpty === true
+    && !trace.noOpDetected
+  ) {
+    push('german_recoverable_rejection_without_recovery', {
+      providerOutcome: String(trace.providerOutcome),
+      clientDeterministicFallbackAttempted: false,
+    });
+  }
+  if (
+    (trace.finalCandidateSource === 'none' || !trace.finalCandidateSource)
+    && !trace.countedAsSuccess
+    && !trace.noOpDetected
+  ) {
+    const finalHashes = Array.isArray(trace.finalSentenceHashes)
+      ? trace.finalSentenceHashes.filter(Boolean)
+      : [];
+    if (finalHashes.length > 0) {
+      push('final_hashes_populated_without_final_candidate', {
+        finalCandidateSource: trace.finalCandidateSource || 'none',
+        finalSentenceHashCount: finalHashes.length,
+      });
+    }
+  }
+  if (
+    trace.countedAsSuccess
+    && trace.finalCandidateSource
+    && trace.finalCandidateSource !== 'none'
+    && Array.isArray(trace.finalSentenceHashes)
+    && trace.finalSentenceHashes.filter(Boolean).length === 0
+    && (trace.unitCount ?? 0) > 0
+    && String(trace.requestedLocale || '') === 'de'
+  ) {
+    push('final_candidate_missing_sentence_hashes', {
+      finalCandidateSource: String(trace.finalCandidateSource),
+      unitCount: trace.unitCount ?? 0,
     });
   }
 

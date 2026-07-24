@@ -36,6 +36,25 @@ export type SummaryCompetencyClaimUnit = {
   sourceSentence: string;
 };
 
+import {
+  SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
+  SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
+  buildSummaryExplicitSkillAuthorityFacts,
+  buildSummaryExplicitSkillAuthorityReport,
+  resolveCanonicalSkillId,
+  normalizeSummarySkillLabel,
+  type SummaryExplicitSkillAuthorityReport,
+  type SummarySkillAuthorityInput,
+} from './cv-summary-explicit-skill-authority';
+
+export {
+  SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
+  SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
+  buildSummaryExplicitSkillAuthorityReport,
+  resolveCanonicalSkillId,
+  normalizeSummarySkillLabel,
+};
+
 export type SummaryExplicitSkillFact = {
   canonicalId: string;
   sourceLabel: string;
@@ -241,38 +260,28 @@ const SKILL_FAMILIES_DE: SkillFamily[] = [
 ];
 
 function normalizeSkillLabel(label: string): string {
-  return (label || '')
-    .normalize('NFKC')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+  return normalizeSummarySkillLabel(label);
 }
 
 /** Build explicit-skill authority from CV Skills section labels. */
 export function buildSummaryExplicitSkillAuthority(
-  structuredSkills: string[] | undefined | null,
+  structuredSkills: string[] | SummarySkillAuthorityInput[] | undefined | null,
 ): SummaryExplicitSkillFact[] {
   void SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION;
-  const out: SummaryExplicitSkillFact[] = [];
-  for (const raw of structuredSkills || []) {
-    const sourceLabel = String(raw || '').trim();
-    if (!sourceLabel) continue;
-    const norm = normalizeSkillLabel(sourceLabel);
-    let canonicalId = `skill:${norm}`;
-    for (const fam of SKILL_FAMILIES_DE) {
-      if (fam.authorizeLabels.some((a) => norm === a || norm.includes(a) || a.includes(norm))) {
-        canonicalId = fam.canonicalId;
-        break;
-      }
-    }
-    out.push({
-      canonicalId,
-      sourceLabel,
-      localizedLabel: sourceLabel,
-      explicitUserFact: true,
-    });
-  }
-  return out;
+  void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
+  return buildSummaryExplicitSkillAuthorityFacts(structuredSkills);
+}
+
+/** Provenance report — authoritativeExplicitSkillCount is the true explicitSkillFactCount. */
+export function buildGermanSummarySkillAuthorityReport(
+  structuredSkills: string[] | SummarySkillAuthorityInput[] | undefined | null,
+  options: { targetLocale?: string | null; sourceLocale?: string | null } = {},
+): SummaryExplicitSkillAuthorityReport {
+  void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
+  return buildSummaryExplicitSkillAuthorityReport(structuredSkills, {
+    targetLocale: options.targetLocale || 'de',
+    sourceLocale: options.sourceLocale || null,
+  });
 }
 
 function skillAuthorized(
@@ -417,11 +426,15 @@ export type GermanSummaryCompetencyScan = {
 export function scanGermanSummaryCompetencyClaims(
   text: string,
   options: {
-    structuredSkills?: string[] | null;
+    structuredSkills?: string[] | SummarySkillAuthorityInput[] | null;
   } = {},
 ): GermanSummaryCompetencyScan {
   void GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION;
   void SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION;
+  void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
+  const skillReport = buildGermanSummarySkillAuthorityReport(options.structuredSkills, {
+    targetLocale: 'de',
+  });
   const authority = buildSummaryExplicitSkillAuthority(options.structuredSkills);
   const claims = extractGermanSummaryCompetencyClaims(text);
   const unsupportedKinds = new Set<string>();
@@ -474,7 +487,8 @@ export function scanGermanSummaryCompetencyClaims(
     providerRejectionStage: unsupportedCompetencyCount > 0
       ? 'competency_grounding_validation'
       : null,
-    explicitSkillFactCount: authority.length,
+    // explicitSkillFactCount MUST equal authoritativeExplicitSkillCount.
+    explicitSkillFactCount: skillReport.authoritativeExplicitSkillCount,
     competencyInferenceFromRoleForbidden: true,
   };
 }

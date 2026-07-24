@@ -19,6 +19,8 @@ import {
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
   SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
   SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
+  SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
+  SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
   analyzeGermanSummaryDurationScope,
   formatGermanTotalProfessionalDurationSentence,
   isGermanGenericCompetencyUnit,
@@ -39,15 +41,18 @@ export {
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
   SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
   SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
+  stripGermanUnsupportedCompetencyUnits,
+  scanGermanSummaryCompetencyClaims,
   analyzeGermanSummaryDurationScope,
   isGermanGenericCompetencyUnit,
-  scanGermanSummaryCompetencyClaims,
-  stripGermanUnsupportedCompetencyUnits,
   extractGermanSummaryCompetencyClaims,
   buildSummaryExplicitSkillAuthority,
+  buildGermanSummarySkillAuthorityReport,
   splitGermanCompetencyListItems,
   formatGermanTotalProfessionalDurationSentence,
   injectGermanTotalDurationSentence,
+  SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION,
+  SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
 } from './cv-german-summary-competency-grounding';
 export {
   GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION,
@@ -81,6 +86,8 @@ void SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION;
 void SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
 void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
+void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
+void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 
 const GERMAN_MONTHS: Record<string, string> = {
   '01': 'Januar',
