@@ -36,6 +36,12 @@ import {
   SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
   EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION,
 } from './cv-spanish-experience-morphology';
+import {
+  EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION,
+  SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION,
+} from './cv-spanish-experience-semantic-delta';
+void EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION;
+void SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION;
 
 /** Packaging proof — must survive minification / DCE. */
 export const EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION =
@@ -482,6 +488,9 @@ export function decideSpanishExperienceFinalCandidate(options: {
   repairValid?: boolean;
   repairSelectedForComparison?: boolean;
   tenseOnlyMeta?: ReturnType<typeof normalizeSpanishExperienceTenseOnly> | null;
+  /** When true, billable material improvement requires a concrete defect-fixing kind. */
+  sourceAlreadyValidForTarget?: boolean;
+  sourceCorrectableDefectCount?: number;
 }): ExperienceCanonicalFinalDecision {
   void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
   void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
@@ -527,11 +536,11 @@ export function decideSpanishExperienceFinalCandidate(options: {
   ) as ExperienceMaterialImprovementKind[];
 
   const improvementKinds: ExperienceMaterialImprovementKind[] = [...rawKinds];
-  // Complete tense-mismatched bullets must never claim incomplete_bullet_completed.
+  // Complete bullets must never claim incomplete_bullet_completed (AAB-314/316).
+  // Length growth alone is never evidence of incompleteness.
   if (
     improvementKinds.includes('incomplete_bullet_completed')
     && countIncompleteSpanishUnits(visible) === 0
-    && tenseAnalysis.sourceTenseMismatchCount > 0
   ) {
     const idx = improvementKinds.indexOf('incomplete_bullet_completed');
     if (idx >= 0) improvementKinds.splice(idx, 1);
@@ -566,16 +575,44 @@ export function decideSpanishExperienceFinalCandidate(options: {
   }
 
   const uniqueImp = [...new Set(improvementKinds)];
-  const evidence = evidenceForKinds(uniqueImp, visible, candidate, {
+  // AAB-316: already-valid source cannot be billably restyled. Only when the
+  // request-time analysis explicitly marks the source valid (or zero defects)
+  // do we strip non-defect improvement kinds. Do not infer validity solely from
+  // tense/incomplete/surface — short but fact-incomplete sources must still
+  // allow missing_fact_restored / repair apply.
+  const DEFECT_FIX_KINDS = new Set<ExperienceMaterialImprovementKind>([
+    'wrong_tense_fixed',
+    'wrong_locale_fixed',
+    'malformed_sentence_fixed',
+    'missing_fact_restored',
+    'missing_source_unit_restored',
+    'incomplete_bullet_completed',
+  ]);
+  const sourceAlreadyValid = options.sourceAlreadyValidForTarget === true
+    || (
+      options.sourceCorrectableDefectCount === 0
+      && options.sourceAlreadyValidForTarget !== false
+      && countIncompleteSpanishUnits(visible) === 0
+      && tenseAnalysis.sourceTenseMismatchCount === 0
+      && visSurface.passed
+    );
+  const uniqueImpFinal: ExperienceMaterialImprovementKind[] = sourceAlreadyValid
+    ? uniqueImp.filter((k) => DEFECT_FIX_KINDS.has(k)
+      && (k !== 'incomplete_bullet_completed'
+        || countIncompleteSpanishUnits(visible) > 0)
+      && (k !== 'wrong_tense_fixed'
+        || tenseAnalysis.sourceTenseMismatchCount > 0))
+    : uniqueImp;
+  const evidence = evidenceForKinds(uniqueImpFinal, visible, candidate, {
     isPresent,
     tenseAnalysis,
   });
-  const everyKindHasEvidence = uniqueImp.every((k) =>
+  const everyKindHasEvidence = uniqueImpFinal.every((k) =>
     evidence.some((e) => e.kind === k && e.validationPassed !== false));
   const evidenceValidated = evidence.length > 0
     && evidence.every((e) => e.validationPassed !== false)
     && everyKindHasEvidence
-    && evidence.length >= uniqueImp.length;
+    && evidence.length >= uniqueImpFinal.length;
 
   const degradationKinds: ExperienceDegradationKind[] = [
     ...visEval.degradationKinds,
@@ -592,8 +629,8 @@ export function decideSpanishExperienceFinalCandidate(options: {
 
   const tenseOnlyMeta = options.tenseOnlyMeta || null;
   const tenseOnlyCorrectionDetected = Boolean(
-    uniqueImp.length === 1
-    && uniqueImp[0] === 'wrong_tense_fixed'
+    uniqueImpFinal.length === 1
+    && uniqueImpFinal[0] === 'wrong_tense_fixed'
     && tenseAnalysis.sourceTenseMismatchCount > 0
     && tenseAnalysis.candidateTenseMismatchCount === 0,
   );
@@ -618,7 +655,7 @@ export function decideSpanishExperienceFinalCandidate(options: {
   const semanticNoOp = Boolean(
     validation.candidateValid
     && visibleAvailable
-    && uniqueImp.length === 0
+    && uniqueImpFinal.length === 0
     && (exactNoOp || normalizedNoOp || semanticEq || visEval.semanticNoOpDetected),
   );
   const neutralRestyle = Boolean(
@@ -629,7 +666,7 @@ export function decideSpanishExperienceFinalCandidate(options: {
     && validation.surfaceFormPassed
     && !degradation
     && !semanticNoOp
-    && uniqueImp.length > 0
+    && uniqueImpFinal.length > 0
     && evidenceValidated,
   );
   const materialImprovement = Boolean(
@@ -647,7 +684,7 @@ export function decideSpanishExperienceFinalCandidate(options: {
     && (validation.candidatePredicateIdentityCount ?? 0) > 0
     && validation.sourcePredicateExtractionPassed !== false
     && validation.unsupportedCount === 0
-    && uniqueImp.length > 0
+    && uniqueImpFinal.length > 0
     && evidenceValidated
     && (!tenseOnlyCorrectionDetected || tenseOnlyPreservationPassed === true),
   );
@@ -705,7 +742,7 @@ export function decideSpanishExperienceFinalCandidate(options: {
     semanticNoOp,
     neutralRestyle,
     materialImprovement: shouldApply,
-    materialImprovementKinds: shouldApply ? uniqueImp : [],
+    materialImprovementKinds: shouldApply ? uniqueImpFinal : [],
     materialImprovementEvidence: shouldApply ? evidence : [],
     degradation: Boolean(degradation && !shouldApply),
     degradationKinds: shouldApply ? [] : uniqueDeg,
@@ -758,6 +795,8 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
   providerCandidateText: string;
   isPresent?: boolean;
   locale?: string;
+  sourceAlreadyValidForTarget?: boolean;
+  sourceCorrectableDefectCount?: number;
 }): {
   decision: ExperienceCanonicalFinalDecision;
   providerValidation: ExperienceCanonicalCandidateValidation;
@@ -771,6 +810,10 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
   const provider = (options.providerCandidateText || '').trim();
   const isPresent = options.isPresent !== false;
   const baseline = visible || fact;
+  const decideOpts = {
+    sourceAlreadyValidForTarget: options.sourceAlreadyValidForTarget,
+    sourceCorrectableDefectCount: options.sourceCorrectableDefectCount,
+  };
   const sourceTense = analyzeSpanishExperienceTenseAlignment({
     sourceText: baseline,
     candidateText: baseline,
@@ -803,6 +846,7 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
         candidateText: provider,
         candidateOrigin: 'provider',
         isPresent,
+        ...decideOpts,
       });
       if (decision.shouldApply || !pureTenseDefect) {
         return {
@@ -830,6 +874,7 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
       repairProduced: repair.produced,
       repairValid: repair.valid,
       repairSelectedForComparison: true,
+      ...decideOpts,
     });
     if (decision.shouldApply) {
       return { decision, providerValidation, repair, deterministic: null };
@@ -862,6 +907,7 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
           tenseOnlyMeta: tenseNorm,
           repairProduced: repair.produced,
           repairValid: repair.valid,
+          ...decideOpts,
         });
         if (decision.shouldApply) {
           return {
@@ -895,6 +941,7 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
         repairProduced: repair.produced,
         repairValid: repair.valid,
         repairSelectedForComparison: true,
+        ...decideOpts,
       });
       return { decision: noopDecision, providerValidation, repair, deterministic };
     }
@@ -943,8 +990,17 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
     repairProduced: repair.produced,
     repairValid: repair.valid,
     repairSelectedForComparison: false,
+    ...decideOpts,
   });
   return { decision, providerValidation, repair, deterministic };
+}
+
+/** AAB-316 alias — sole Spanish Experience finalization entrypoint. */
+export function finalizeSpanishExperienceCandidate(
+  options: Parameters<typeof finalizeSpanishExperienceCandidateConservatively>[0],
+): ReturnType<typeof finalizeSpanishExperienceCandidateConservatively> {
+  void EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION;
+  return finalizeSpanishExperienceCandidateConservatively(options);
 }
 
 function validationExtractionReason(

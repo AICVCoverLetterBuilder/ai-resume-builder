@@ -198,7 +198,7 @@ describe('cv-build311 visible no-op authority + compliance grounding', () => {
     expect(experienceSpanishWarehouseSemanticallyEquivalent(WH_ES_GOOD, shorter)).toBe(true);
   });
 
-  it('AAB-310 Test A regression: gestiona strip still applies from short source', () => {
+  it('AAB-310 Test A regression: unsupported gestiona is rejected; already-valid short source preserved', () => {
     const cv = spanishFixture({ currentDesc: WH_ES_SHORT });
     const snap = createExperienceAiOperationSnapshot({
       experience: cv.experience[0],
@@ -218,13 +218,14 @@ describe('cv-build311 visible no-op authority + compliance grounding', () => {
       referenceDateIso: REF,
       operationSnapshot: snap,
     });
-    expect(result.countedAsSuccess).toBe(true);
+    // AAB-316: complete present short source is already valid — unsupported
+    // provider must not bill a restyle/warehouse expansion.
+    expect(result.countedAsSuccess).toBe(false);
+    expect(result.blocked).toBe(true);
+    expect(result.text.trim()).toBe(WH_ES_SHORT.trim());
     expect(result.text.toLowerCase()).not.toMatch(/gestiona/);
     expect(result.text.toLowerCase()).not.toMatch(/garantiz/);
-    expect(['unsupported_claim_repair', 'deterministic_fallback']).toContain(
-      result.diagnostics?.finalCandidateSource,
-    );
-    expect(result.diagnostics?.finalUnsupportedClaimCount ?? 0).toBe(0);
+    expect(result.diagnostics?.providerUnsupportedClaimCount ?? 0).toBeGreaterThan(0);
   });
 
   it('AAB-310 Test B: unedited AI re-run with conformidad is no-op / no usage', () => {

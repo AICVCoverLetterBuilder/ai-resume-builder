@@ -398,7 +398,15 @@ describe('Spanish CV AI (AAB-305)', () => {
       experienceId: 'exp-atlas',
       referenceDateIso: REF,
     });
-    expect(improve.countedAsSuccess).toBe(true);
+    // AAB-316: morphologically complete weak source is already-valid → no billable restyle.
+    // Unsupported expansions must still be rejected (never applied).
+    if (improve.countedAsSuccess) {
+      expect(improve.text).toMatch(/mercanc/i);
+      expect(improve.text).not.toMatch(/garantiz|SAP|Photoshop/i);
+    } else {
+      expect(improve.blocked).toBe(true);
+      expect(improve.text.trim()).toBe(WH_ES_WEAK.trim());
+    }
 
     const badQuality = [
       'Revisa la mercancía entrante con máxima calidad.',
@@ -471,9 +479,12 @@ describe('Spanish CV AI (AAB-305)', () => {
       experienceId: 'exp-rewitu',
       referenceDateIso: REF,
     });
-    expect(fin.countedAsSuccess).toBe(true);
+    // AAB-316: completed Rewitu already valid → reject project/requirements restyle.
+    expect(fin.countedAsSuccess).toBe(false);
+    expect(fin.blocked).toBe(true);
     expect(fin.text).toMatch(/Creó|Revisó|adaptó|Preparó|material|dise[nñ]o|formato|pantalla/i);
     expect(fin.text).not.toMatch(/print|branding|Photoshop|lideró/i);
+    expect(fin.text).not.toMatch(/distintos proyectos|según los requisitos/i);
   });
 
   it('stable entry identity: wrong entry not updated; no cross-entry leakage', () => {
@@ -492,7 +503,8 @@ describe('Spanish CV AI (AAB-305)', () => {
       experienceId: 'exp-atlas',
       referenceDateIso: REF,
     });
-    expect(fin.countedAsSuccess).toBe(true);
+    // AAB-316: already-valid Atlas source → no billable restyle; still no cross-entry leakage.
+    expect(fin.countedAsSuccess).toBe(false);
     expect(fin.text).not.toMatch(/Rewitu|diseñadora|visuales/i);
     expect(fin.diagnostics?.selectedExperienceEntryIdHash || true).toBeTruthy();
   });

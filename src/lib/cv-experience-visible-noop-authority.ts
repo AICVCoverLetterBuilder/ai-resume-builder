@@ -375,8 +375,8 @@ export function evaluateExperienceVisibleComparison(options: {
         degradationKinds.push('tense_regressed');
       }
     }
-    // Incomplete / abbreviated first-click completion — never for pure tense fixes
-    // on grammatically complete past/present sentences (AAB-314).
+    // Incomplete / abbreviated completion — ONLY when morphology proves incompleteness.
+    // Length growth alone must never authorize incomplete_bullet_completed (AAB-316).
     const incompleteVisible = isEs ? countIncompleteSpanishUnits(visible) : 0;
     if (
       isEs
@@ -389,8 +389,7 @@ export function evaluateExperienceVisibleComparison(options: {
       && improvementKinds.length === 0
       && !synonymOnlyRestyle
       && !inclusiveOnly
-      && lengthDelta > Math.max(28, Math.floor(visible.length * 0.12))
-      && (incompleteVisible > 0 || visibleIsFactAuthority)
+      && incompleteVisible > 0
     ) {
       improvementKinds.push('incomplete_bullet_completed');
     }

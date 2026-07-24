@@ -475,7 +475,8 @@ describe('Spanish Experience repair grounding (AAB-309)', () => {
       experienceId: 'exp-rewitu',
       referenceDateIso: REF,
     });
-    expect(fin.countedAsSuccess).toBe(true);
+    // AAB-316: already-valid completed past → no-op; tense stays past.
+    expect(fin.countedAsSuccess).toBe(false);
     expect(fin.text).toMatch(/creó|revisó|preparó/i);
     expect(fin.text).not.toMatch(/\bcrea\b|\brevisa\b|\bprepara\b/i);
     expect(fin.text).not.toMatch(/garantiz|asegur|eficiente|print|branding|Photoshop|lider/i);

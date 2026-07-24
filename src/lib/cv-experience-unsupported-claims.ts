@@ -44,7 +44,11 @@ export type ExperienceUnsupportedClaimKind =
   | 'conformity_object_expansion'
   | 'certification_scope_expansion'
   | 'approval_scope_expansion'
-  | 'quality_scope_expansion';
+  | 'quality_scope_expansion'
+  | 'project_scope_expansion'
+  | 'requirements_scope_expansion'
+  | 'standards_scope_expansion'
+  | 'unsupported_modifier_expansion';
 
 export type ExperienceUnsupportedClaimScan = {
   kinds: ExperienceUnsupportedClaimKind[];

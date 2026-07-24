@@ -13,6 +13,11 @@ import {
 } from './cv-source-fact-identity';
 import { splitExperienceBullets, formatExperienceBullets } from './cv-canonical-facts';
 import type { ExperienceUnsupportedClaimKind } from './cv-experience-unsupported-claims';
+import { detectSpanishExperienceSemanticDelta } from './cv-spanish-experience-semantic-delta';
+import {
+  SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION,
+} from './cv-spanish-experience-semantic-delta';
+void SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION;
 import {
   esWordRe,
   textLooksSpanishExperience,
@@ -245,7 +250,7 @@ function sourceSupportsSpanishResponsibility(source: string): boolean {
 const EFFICIENCY_CLAIM_ES =
   /\b(?:eficiente(?:mente)?|eficaz(?:mente)?|[oó]ptim[oa]s?|de\s+forma\s+[oó]ptima|de\s+manera\s+eficiente|de\s+forma\s+eficiente|con\s+eficiencia|con\s+eficacia)\b/iu;
 const OPTIMIZATION_CLAIM_ES =
-  /\b(?:agiliz(?:a|ó|ar)|optimiz(?:a|ó|ar)|mejora\s+(?:el\s+)?rendimiento|mejora\s+(?:la\s+)?productividad|reduce\s+(?:los\s+)?tiempos|minimiza\s+(?:los\s+)?errores)\b/iu;
+  /\b(?:agiliz(?:a|ó|ar|ado|ados|ada|adas)?|optimiz(?:a|ó|ar|ado|ados|ada|adas|ando)?|mejora\s+(?:el\s+)?rendimiento|mejora\s+(?:la\s+)?productividad|reduce\s+(?:los\s+)?tiempos|minimiza\s+(?:los\s+)?errores)\b/iu;
 const SPEED_CLAIM_ES =
   /\b(?:de\s+forma\s+r[aá]pida|r[aá]pidamente|con\s+rapidez|puntualmente)\b/iu;
 const ACCURACY_CLAIM_ES =
@@ -891,6 +896,11 @@ export function stripSpanishExperienceUnsupportedEscalation(
   void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
   void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
   void SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION;
+  void SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION;
+  const PROJECT_SCOPE_RE =
+    /\b(?:diversos|diversas|m[uú]ltiples|varios|varias|distintos|distintas|diferentes)\s+proyectos?\b/iu;
+  const REQUIREMENTS_SCOPE_RE =
+    /\bseg[uú]n\s+los\s+requisitos?|\bconforme\s+a\s+los\s+requisitos?|\bespecificaciones?\b|\best[aá]ndares?\b/iu;
   const bullets = splitExperienceBullets(candidateDescription || '');
   const sourceUnits = splitExperienceBullets(sourceDescription || '').filter(Boolean);
   const allowGuarantee = sourceSupportsSpanishGuarantee(sourceDescription);
@@ -937,12 +947,35 @@ export function stripSpanishExperienceUnsupportedEscalation(
         .replace(/\s+con\s+(?:eficiencia|eficacia)\b/giu, '')
         .replace(/\s+[oó]ptim[oa]s?\b/giu, '')
         .replace(/\b(?:agiliz\w*|optimiz\w*)\s+/giu, '')
+        .replace(/\s+optimiz(?:ado|ados|ada|adas)\b/giu, '')
         .replace(/\s+mejora\s+(?:el\s+)?rendimiento\b/giu, '')
         .replace(/\s+mejora\s+(?:la\s+)?productividad\b/giu, '')
         .replace(/\s+reduce\s+(?:los\s+)?tiempos?\b/giu, '')
         .replace(/\s+minimiza\s+(?:los\s+)?errores?\b/giu, '')
         .replace(/\s+de\s+forma\s+r[aá]pida\b/giu, '')
         .replace(/\s+r[aá]pidamente\b/giu, '')
+        .trim();
+    }
+    // AAB-316: strip candidate-only project / requirements / standards scope clauses.
+    if (
+      !PROJECT_SCOPE_RE.test(alignedSource)
+      && !PROJECT_SCOPE_RE.test(sourceDescription)
+    ) {
+      row = row
+        .replace(/\s+para\s+(?:diversos|diversas|m[uú]ltiples|varios|varias|distintos|distintas|diferentes)\s+proyectos?(?:\s+de\s+\w+)?/giu, '')
+        .replace(/\s+(?:diversos|diversas|m[uú]ltiples|varios|varias|distintos|distintas)\s+proyectos?(?:\s+de\s+\w+)?/giu, '')
+        .trim();
+    }
+    if (
+      !REQUIREMENTS_SCOPE_RE.test(alignedSource)
+      && !REQUIREMENTS_SCOPE_RE.test(sourceDescription)
+    ) {
+      row = row
+        .replace(/\s+seg[uú]n\s+los\s+requisitos?(?:\s+establecidos?)?/giu, '')
+        .replace(/\s+conforme\s+a\s+los\s+requisitos?/giu, '')
+        .replace(/\s+de\s+acuerdo\s+con\s+las\s+especificaciones?/giu, '')
+        .replace(/\s+cumpliendo\s+los\s+est[aá]ndares?/giu, '')
+        .replace(/\s+seg[uú]n\s+las\s+normas?\s+definidas?/giu, '')
         .trim();
     }
     if (!allowAccuracy) {
@@ -1204,7 +1237,7 @@ export function detectSpanishExperienceUnsupportedExpansion(
     }
   }
 
-  // Performance / efficiency / optimization (AAB-309).
+  // Performance / efficiency / optimization (AAB-309 / AAB-316 participial forms).
   if (EFFICIENCY_CLAIM_ES.test(joined) && !sourceSupportsSpanishEfficiency(source)) {
     kinds.push('efficiency_claim');
     labels.push('efficiency_claim');
@@ -1220,6 +1253,13 @@ export function detectSpanishExperienceUnsupportedExpansion(
     }
     kinds.push('performance_claim');
     labels.push('performance_claim');
+  }
+  // Generic semantic-delta: project scope, requirements/standards, modifier expansions.
+  void SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION;
+  const semanticDelta = detectSpanishExperienceSemanticDelta(source, joined);
+  for (const k of semanticDelta.kinds) {
+    kinds.push(k);
+    labels.push(k);
   }
   if (SPEED_CLAIM_ES.test(joined) && !sourceSupportsSpanishEfficiency(source)) {
     kinds.push('speed_claim');

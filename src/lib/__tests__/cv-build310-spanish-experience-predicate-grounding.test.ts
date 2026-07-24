@@ -316,9 +316,13 @@ describe('Spanish Experience predicate grounding (AAB-310)', () => {
       experienceId: 'exp-rewitu',
       referenceDateIso: REF,
     });
-    expect(fin.countedAsSuccess).toBe(true);
+    // AAB-316: completed Rewitu source is already valid — provider restyle/scope
+    // additions must not apply or bill.
+    expect(fin.countedAsSuccess).toBe(false);
+    expect(fin.blocked).toBe(true);
     expect(fin.text).toMatch(/creó|revisó|preparó/i);
     expect(fin.text).not.toMatch(/gestiona|supervisa|aprueba|garantiz|eficiente/i);
+    expect(fin.text).not.toMatch(/requisitos del proyecto/i);
 
     const empty = finalizeCvAiFieldForApply({
       action: 'experience_bullets',

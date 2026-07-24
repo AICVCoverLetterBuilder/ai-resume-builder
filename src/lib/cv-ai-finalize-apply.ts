@@ -102,6 +102,7 @@ import {
   repairSpanishExperienceCandidateStructured,
   decideSpanishExperienceFinalCandidate,
   buildSpanishExperienceDeterministicCandidate,
+  finalizeSpanishExperienceCandidateConservatively,
   type ExperienceCanonicalFinalDecision,
 } from './cv-experience-canonical-finalization';
 export {
@@ -138,6 +139,18 @@ export {
   SPANISH_EXPERIENCE_FINAL_TENSE_ACCEPTANCE_315_REVISION,
   EXPERIENCE_TENSE_DECISION_DIAGNOSTICS_315_REVISION,
 };
+import {
+  EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION,
+  SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION,
+  SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION,
+  EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
+} from './cv-spanish-experience-semantic-delta';
+export {
+  EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION,
+  SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION,
+  SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION,
+  EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
+};
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
@@ -154,6 +167,10 @@ void EXPERIENCE_SOURCE_DEFECT_FIRST_DECISION_315_REVISION;
 void SPANISH_EXPERIENCE_PROVIDER_NOOP_TENSE_RECOVERY_315_REVISION;
 void SPANISH_EXPERIENCE_FINAL_TENSE_ACCEPTANCE_315_REVISION;
 void EXPERIENCE_TENSE_DECISION_DIAGNOSTICS_315_REVISION;
+void EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION;
+void SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION;
+void SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION;
+void EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION;
 import {
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
   EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
@@ -388,6 +405,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SPANISH_EXPERIENCE_PROVIDER_NOOP_TENSE_RECOVERY_315_REVISION,
   SPANISH_EXPERIENCE_FINAL_TENSE_ACCEPTANCE_315_REVISION,
   EXPERIENCE_TENSE_DECISION_DIAGNOSTICS_315_REVISION,
+  EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION,
+  SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION,
+  SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION,
+  EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
@@ -3438,10 +3459,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       visibleComparisonUnitCount:
         snapshot?.visibleComparisonUnitCount ?? evalVis.visibleComparisonUnitCount,
       visibleComparisonProvenance:
-        evalVis.visibleComparisonProvenance
-        || textareaProvenance?.currentTextareaProvenance
+        textareaProvenance?.currentTextareaProvenance
+        || evalVis.visibleComparisonProvenance
         || null,
-      visibleComparisonMatchedLastAiOutput: evalVis.visibleComparisonMatchedLastAiOutput,
+      visibleComparisonMatchedLastAiOutput: Boolean(
+        textareaProvenance?.lastAiOutputHashMatched
+        ?? evalVis.visibleComparisonMatchedLastAiOutput,
+      ),
       visibleComparisonUsedForNoOp: evalVis.visibleComparisonUsedForNoOp,
       visibleComparisonUsedForDegradationCheck:
         evalVis.visibleComparisonUsedForDegradationCheck,
@@ -4857,6 +4881,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           repairProduced: unsupportedClaimRepairCandidateProduced,
           repairValid: unsupportedClaimRepairCandidateValid === true,
           repairSelectedForComparison: unsupportedClaimRepairSelectedForComparison,
+          sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
+          sourceCorrectableDefectCount: visibleSourceAnalysis.correctableDefectCount,
         });
         // Keep a previously proven tense-normalizer decision if the re-decide
         // loses tenseOnlyMeta context but still has wrong_tense evidence.
@@ -5669,6 +5695,141 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }
         }
         if (!providerNoOpBlockedBySourceDefect) {
+        // AAB-316: every Spanish Experience candidate must pass the single
+        // canonical finalizer — no direct provider apply bypass.
+        if ((locale || '').toLowerCase().startsWith('es')) {
+          void EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION;
+          void SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION;
+          const cons = finalizeSpanishExperienceCandidateConservatively({
+            factAuthorityText: sourceForCoverage,
+            visibleComparisonText: useVisibleForNoOp
+              ? visibleComparisonText
+              : sourceForCoverage,
+            providerCandidateText: firstAccepted.text,
+            isPresent,
+            sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
+            sourceCorrectableDefectCount: visibleSourceAnalysis.correctableDefectCount,
+          });
+          lastCanonicalDecision = cons.decision;
+          if (!cons.decision.shouldApply) {
+            providerAccepted = false;
+            providerUnsupportedClaimCount = Math.max(
+              providerUnsupportedClaimCount,
+              cons.providerValidation.unsupportedCount,
+            );
+            providerUnsupportedClaimKinds = [
+              ...new Set([
+                ...providerUnsupportedClaimKinds,
+                ...cons.providerValidation.unsupportedKinds,
+              ]),
+            ];
+            finalUnsupportedClaimCount = cons.providerValidation.unsupportedCount;
+            finalUnsupportedClaimKinds = [...cons.providerValidation.unsupportedKinds];
+            // Already-valid / zero-defect source: preserve visible text (+0).
+            // Sources with correctable defects continue to dedicated recovery.
+            if (
+              visibleSourceAnalysis.sourceAlreadyValidForTarget
+              || visibleSourceAnalysis.correctableDefectCount === 0
+            ) {
+              return attachPerspectiveDiag({
+                blocked: true,
+                reason: cons.decision.degradation && !cons.decision.semanticNoOp
+                  ? 'experience_ai_degradation'
+                  : 'experience_ai_noop',
+                text: exp?.description || visibleComparisonText || '',
+                origin: 'user',
+                roleDutyConflict,
+                countedAsSuccess: false,
+                diagnostics: {
+                  ...baseDiag(),
+                  typedFailureReason: cons.decision.finalTypedReason || 'ai_noop',
+                  rejectionStage: 'canonical_finalizer',
+                  meaningfulChangeDetected: false,
+                  noOpRejected: true,
+                  noOpDetected: Boolean(cons.decision.semanticNoOp || cons.decision.neutralRestyle),
+                  finalCandidateSource: 'none',
+                  materialImprovementDetected: false,
+                  materialImprovementKinds: [],
+                  countedAsSuccess: false,
+                  providerAccepted: false,
+                  providerUnsupportedClaimCount: cons.providerValidation.unsupportedCount,
+                  providerUnsupportedClaimKinds: [...cons.providerValidation.unsupportedKinds],
+                  finalUnsupportedClaimCount: cons.providerValidation.unsupportedCount,
+                  finalUnsupportedClaimKinds: [...cons.providerValidation.unsupportedKinds],
+                  finalDecisionKind: cons.decision.finalDecisionKind,
+                  canonicalAcceptancePassed: false,
+                  shouldApply: false,
+                  sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
+                  experienceSingleCanonicalFinalizerRevision:
+                    EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION,
+                  spanishExperienceValidSourceNoopRevision:
+                    SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION,
+                  spanishExperienceSemanticDeltaGroundingRevision:
+                    SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION,
+                },
+              });
+            }
+            // Fall through for unresolved source-defect recovery.
+            providerNoOpBlockedBySourceDefect = true;
+            providerNoOpDetected = true;
+            lastRejectStage = 'canonical_finalizer:deferred_to_recovery';
+            lastRejectReason = cons.decision.finalTypedReason
+              || providerUnresolvedSourceDefectReason(visibleSourceAnalysis);
+          } else {
+            const finalOrigin = cons.decision.candidateOrigin === 'provider'
+              ? (serverFallbackUsed ? 'deterministic_fallback' : providerOrigin)
+              : (cons.decision.candidateOrigin as FinalizeCvAiFieldResult['origin']);
+            const finalAccepted = tryAccept(
+              cons.decision.selectedText,
+              finalOrigin,
+              cons.decision.candidateOrigin === 'provider' ? 'provider' : 'canonical_finalizer',
+            );
+            if (finalAccepted) {
+              perspectiveMeta.normalizedBulletsUsedForApply = true;
+              perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
+                finalAccepted.text,
+                locale,
+              );
+              providerAccepted = cons.decision.candidateOrigin === 'provider'
+                || cons.decision.candidateOrigin === 'ai_repaired';
+              finalCandidateSource = cons.decision.candidateOrigin === 'provider'
+                ? (serverFallbackUsed ? 'server_fallback' : 'provider')
+                : cons.decision.candidateOrigin;
+              finalUnsupportedClaimCount = 0;
+              finalUnsupportedClaimKinds = [];
+              if (cons.decision.candidateOrigin === 'deterministic_tense_normalizer'
+                || cons.decision.candidateOrigin === 'deterministic_fallback') {
+                clientDeterministicFallbackApplied = true;
+                fallbackApplied = true;
+              }
+              return attachPerspectiveDiag({
+                ...finalAccepted,
+                origin: finalOrigin,
+                diagnostics: {
+                  ...finalAccepted.diagnostics,
+                  coveredFactCount: lastCovered || sourceFactCount,
+                  providerCoveredFactCount: lastCovered || sourceFactCount,
+                  providerRequiredFactCount: lastRequired || sourceFactCount,
+                  finalUnsupportedClaimCount: 0,
+                  finalUnsupportedClaimKinds: [],
+                  unsupportedClaimCount: 0,
+                  finalCandidateSource,
+                  serverFallbackUsed,
+                  apiResponseKind,
+                  finalDecisionKind: cons.decision.finalDecisionKind,
+                  canonicalAcceptancePassed: cons.decision.canonicalAcceptancePassed,
+                  shouldApply: true,
+                  materialImprovementDetected: true,
+                  materialImprovementKinds: cons.decision.materialImprovementKinds,
+                  experienceSingleCanonicalFinalizerRevision:
+                    EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION,
+                },
+              });
+            }
+            providerAccepted = false;
+            providerNoOpBlockedBySourceDefect = true;
+          }
+        } else {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
         perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
         providerAccepted = true;
@@ -5720,6 +5881,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             fallbackApplied: serverFallbackUsed ? true : firstAccepted.diagnostics?.fallbackApplied,
           },
         });
+        }
         } // end if (!providerNoOpBlockedBySourceDefect)
       }
       providerRejectionReason = lastRejectReason;
@@ -5743,6 +5905,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || k === 'speed_claim'
           || k === 'accuracy_claim'
           || k === 'error_free_claim'
+          || k === 'project_scope_expansion'
+          || k === 'requirements_scope_expansion'
+          || k === 'standards_scope_expansion'
+          || k === 'unsupported_modifier_expansion'
           || k === 'object_scope_expansion'
           || k === 'logistics_scope_expansion'
           || k === 'unsupported_object_expansion'
@@ -6766,6 +6932,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             if (acceptedTense) {
               clientDeterministicFallbackAttempted = true;
               clientDeterministicFallbackApplied = true;
+              clientDeterministicFallbackBulletCount = splitExperienceBullets(tenseDet.text)
+                .filter(Boolean).length;
+              clientDeterministicFallbackCoveredFactCount =
+                tenseDet.validation.unitCount
+                || clientDeterministicFallbackBulletCount
+                || sourceFactCount;
+              fallbackBulletCount = clientDeterministicFallbackBulletCount;
               finalCandidateSource = 'deterministic_tense_normalizer';
               return attachPerspectiveDiag({
                 ...acceptedTense,
@@ -6775,6 +6948,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                   finalDecisionKind: 'material_improvement',
                   clientDeterministicFallbackAttempted: true,
                   clientDeterministicFallbackApplied: true,
+                  clientDeterministicFallbackBulletCount,
+                  clientDeterministicFallbackCoveredFactCount,
+                  fallbackBulletCount: clientDeterministicFallbackBulletCount,
+                  fallbackCoveredFactCount: clientDeterministicFallbackCoveredFactCount,
                   clientDeterministicFallbackReason: 'spanish_tense_normalizer',
                   materialImprovementDetected: true,
                   materialImprovementKinds: tenseDecision.materialImprovementKinds,
@@ -6828,6 +7005,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                     SPANISH_EXPERIENCE_FINAL_TENSE_ACCEPTANCE_315_REVISION,
                   experienceTenseDecisionDiagnosticsRevision:
                     EXPERIENCE_TENSE_DECISION_DIAGNOSTICS_315_REVISION,
+                  experienceSingleCanonicalFinalizerRevision:
+                    EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION,
+                  experienceFinalDecisionTruthRevision:
+                    EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
                 },
               });
             }
