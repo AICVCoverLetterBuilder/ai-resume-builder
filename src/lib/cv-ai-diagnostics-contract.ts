@@ -512,6 +512,11 @@ type SummaryLike = {
   deterministicAccepted?: boolean | null;
   requiredCurrentDutyFactCount?: number | null;
   coveredCurrentDutyFactCount?: number | null;
+  requiredPriorDutyFactCount?: number | null;
+  coveredPriorDutyFactCount?: number | null;
+  finalPriorDutyCoveragePassed?: boolean | null;
+  priorRoleGroundingPassed?: boolean | null;
+  currentRoleTitlePresent?: boolean | null;
   currentRoleConcreteFactCoverage?: number | null;
   finalCurrentDutyCoveragePassed?: boolean | null;
   germanControlledCaseGrammarPassed?: boolean | null;
@@ -539,6 +544,14 @@ type SummaryLike = {
   visibleWrongLocaleStructuredRoleCount?: number | null;
   sourceLanguageLeakageDetected?: boolean | null;
   targetLocalePurityPassed?: boolean | null;
+  detectedLocaleByUnit?: string[] | null;
+  unexpectedLocaleCodes?: string[] | null;
+  finalUnsupportedCompetencyCount?: number | null;
+  finalCurrentIntroSlotPresent?: boolean | null;
+  finalCurrentDutySlotPresent?: boolean | null;
+  finalPriorIntroSlotPresent?: boolean | null;
+  finalPriorDutySlotPresent?: boolean | null;
+  finalTotalDurationSlotPresent?: boolean | null;
   candidateLineage?: Array<{
     candidateKind?: string;
     present?: boolean;
@@ -985,6 +998,109 @@ export function checkSummaryDiagnosticInvariants(
       });
     }
   }
+
+  // AAB-325 — English Summary shared final-gate invariants.
+  if (String(trace.requestedLocale || '') === 'en') {
+    const detected = Array.isArray(trace.detectedLocaleByUnit)
+      ? (trace.detectedLocaleByUnit as unknown[])
+      : [];
+    const unexpected = Array.isArray(trace.unexpectedLocaleCodes)
+      ? (trace.unexpectedLocaleCodes as unknown[]).map(String)
+      : [];
+    if (detected.includes('es') || unexpected.includes('es')) {
+      if (trace.targetLocalePurityPassed === true) {
+        push('english_es_detected_but_locale_purity_passed', {
+          targetLocalePurityPassed: true,
+          unexpectedLocaleCodes: unexpected.join(','),
+        });
+      }
+      if ((trace.wrongLocaleUnitCount ?? 0) < 1) {
+        push('english_es_detected_but_wrong_locale_count_zero', {
+          wrongLocaleUnitCount: trace.wrongLocaleUnitCount ?? 0,
+        });
+      }
+      if (trace.sourceLanguageLeakageDetected === false) {
+        push('english_es_detected_but_leakage_false', {
+          sourceLanguageLeakageDetected: false,
+        });
+      }
+      if (trace.countedAsSuccess) {
+        push('english_success_with_spanish_unit', {
+          countedAsSuccess: true,
+        });
+      }
+    }
+    if (trace.countedAsSuccess) {
+      if ((trace.finalUnsupportedCompetencyCount ?? trace.unsupportedClaimCount ?? 0) > 0) {
+        push('english_success_with_unsupported_competency', {
+          finalUnsupportedCompetencyCount:
+            trace.finalUnsupportedCompetencyCount ?? trace.unsupportedClaimCount ?? 0,
+        });
+      }
+      if (trace.finalDurationCurrentRoleAttachmentRisk === true) {
+        push('english_success_with_current_role_duration_attachment', {
+          finalDurationCurrentRoleAttachmentRisk: true,
+        });
+      }
+      if (trace.finalDurationScopeValidationPassed === false) {
+        push('english_success_with_duration_scope_fail', {
+          finalDurationScopeValidationPassed: false,
+        });
+      }
+      const slots = Array.isArray(trace.finalUnitRoleSlots)
+        ? (trace.finalUnitRoleSlots as string[])
+        : [];
+      const semantic = Array.isArray(trace.finalUnitSemanticRolesByUnit)
+        ? (trace.finalUnitSemanticRolesByUnit as string[][])
+        : [];
+      const hasSemantic = semantic.some((u) =>
+        u.includes('current_role_intro')
+        || u.includes('prior_role_intro')
+        || u.includes('total_duration'));
+      if (
+        slots.length > 0
+        && slots.every((s) => s === 'summary_unit' || s === 'ambiguous' || s === 'ai_generated')
+        && !hasSemantic
+      ) {
+        push('english_success_with_generic_only_slots', {
+          finalUnitRoleSlots: slots.join(','),
+        });
+      }
+      if (!slots.includes('current_intro') && !hasSemantic) {
+        push('english_success_missing_current_intro_slot', {
+          finalUnitRoleSlots: slots.join(','),
+        });
+      }
+      if (
+        Number(trace.requiredPriorDutyFactCount ?? 0) > 0
+        && trace.finalPriorDutyCoveragePassed !== true
+      ) {
+        push('english_success_with_prior_duty_coverage_fail', {
+          finalPriorDutyCoveragePassed: trace.finalPriorDutyCoveragePassed ?? null,
+        });
+      }
+      const nullCritical = [
+        'currentRoleConcreteFactCoverage',
+        'priorRoleGroundingPassed',
+        'currentRoleTitlePresent',
+        'finalUnitSemanticRolesByUnit',
+        'finalCurrentEmployerPresent',
+        'finalPriorEmployerPresent',
+        'finalCurrentDutyCoveragePassed',
+        'finalPriorDutyCoveragePassed',
+        'finalSlotValidationPassed',
+        'structuredRoleLocaleValidationPassed',
+        'finalUnsupportedCompetencyCount',
+        'finalDurationOwnerDetected',
+        'finalDurationScopeValidationPassed',
+      ].filter((k) => (trace as Record<string, unknown>)[k] == null);
+      if (nullCritical.length > 0) {
+        push('english_success_with_null_decision_fields', {
+          nullFields: nullCritical.join(','),
+        });
+      }
+    }
+  }
   if (
     String(trace.requestedLocale || '') === 'de'
     && trace.providerOutcome === 'accepted'
@@ -1258,6 +1374,37 @@ export function checkSummaryDiagnosticCompleteness(
     require('unclassifiedAuthoritativeCurrentDutyFactCount');
     require('requiredFactSetMatchesAuthoritativeFactSet');
     require('currentDutyRequiredFactParityPassed');
+  }
+  if (locale === 'en' && trace.countedAsSuccess === true) {
+    require('finalUnitRoleSlots');
+    require('finalUnitSemanticRolesByUnit');
+    require('currentIntroSlotPresent');
+    require('currentDutySlotPresent');
+    require('priorRoleSlotPresent');
+    require('currentRoleConcreteFactCoverage');
+    require('priorRoleGroundingPassed');
+    require('currentRoleTitlePresent');
+    require('finalCurrentEmployerPresent');
+    require('finalPriorEmployerPresent');
+    require('finalCurrentEmploymentStateExpressed');
+    require('finalPriorEmploymentStateExpressed');
+    require('finalCurrentDutyCoveragePassed');
+    require('finalPriorDutyCoveragePassed');
+    require('requiredCurrentDutyFactCount');
+    require('requiredPriorDutyFactCount');
+    require('finalSlotValidationPassed');
+    require('structuredRoleLocaleValidationPassed');
+    require('finalUnsupportedCompetencyCount');
+    require('finalDurationOwnerDetected');
+    require('finalDurationScopeValidationPassed');
+    require('competencyInferenceFromRoleForbidden');
+    // Visible gates are required only after a real visible apply recorded a hash.
+    if (trace.visibleApplySucceeded === true && trace.visibleCandidateHashAfterApply != null) {
+      require('visibleCurrentDutyCoveragePassed');
+      require('visiblePriorDutyCoveragePassed');
+      require('visibleStructuredRoleLocaleValidationPassed');
+      require('visibleDurationScopeValidationPassed');
+    }
   }
 
   if (trace.finalCandidateSource === 'deterministic_fallback') {

@@ -1139,6 +1139,25 @@ export default function CVBuilderPage() {
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
+      summaryDiag.recordFinalizeResult(finalizedGate);
+      const preApplyGate = summaryDiag.evaluatePreApplyDecisionGates();
+      if (!preApplyGate.passed) {
+        const failCode = mapExperienceAiFailureToErrorCode(
+          preApplyGate.reason || 'diagnostic_invariant_failed',
+        );
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: failCode, httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
+        return;
+      }
       const finalizedText = (finalizedGate.text || '').trim();
       const identicalNoop = Boolean(
         finalizedText
@@ -1210,7 +1229,6 @@ export default function CVBuilderPage() {
         fallbackUsed: finalizedGate.origin === 'deterministic_fallback',
         responseSource: finalizedGate.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider',
       });
-      summaryDiag.recordFinalizeResult(finalizedGate);
       summaryDiag.recordVisibleApply(true, countBefore + 1, finalizedGate.text);
       logAiLocaleTransitionDiagnostics({
         requestId: reqCtx.requestId,

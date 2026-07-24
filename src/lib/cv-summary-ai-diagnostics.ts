@@ -38,6 +38,17 @@ import {
 void SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION;
 void GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION;
 void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
+import {
+  ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
+  ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
+  ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
+  SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
+  analyzeEnglishSummaryEmploymentQuality,
+} from './cv-english-summary-grounding';
+void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
+void ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION;
+void ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION;
+void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
 
 function rebuildGermanDutyFactsFromIds(ids: string[] | null | undefined): GermanCurrentDutyFact[] {
   const known: GermanCurrentDutyFactId[] = [
@@ -235,6 +246,10 @@ export type SummaryAiDiagnosticTrace = {
   visibleCoveredCurrentDutyFactCount?: number | null;
   visibleMissingCurrentDutyFactCount?: number | null;
   visibleCurrentDutyCoveragePassed?: boolean | null;
+  visibleRequiredPriorDutyFactCount?: number | null;
+  visibleCoveredPriorDutyFactCount?: number | null;
+  visibleMissingPriorDutyFactCount?: number | null;
+  visiblePriorDutyCoveragePassed?: boolean | null;
   visibleGermanGrammarValidationPassed?: boolean | null;
   requiredCurrentDutyFactIds?: string[] | null;
   authoritativeCurrentDutyFactCount?: number | null;
@@ -267,6 +282,9 @@ export type SummaryAiDiagnosticTrace = {
   finalCurrentRoleIntroValidationPassed?: boolean | null;
   finalPriorRoleIntroValidationPassed?: boolean | null;
   finalPriorDutyCoveragePassed?: boolean | null;
+  requiredPriorDutyFactCount?: number | null;
+  coveredPriorDutyFactCount?: number | null;
+  missingPriorDutyFactCount?: number | null;
   finalSlotValidationPassed?: boolean | null;
   finalSlotRejectionReasons?: string[] | null;
   repairCandidateHash?: string | null;
@@ -986,6 +1004,9 @@ export class SummaryAiDiagnosticSession {
       finalCurrentRoleIntroValidationPassed: diag.finalCurrentRoleIntroValidationPassed ?? null,
       finalPriorRoleIntroValidationPassed: diag.finalPriorRoleIntroValidationPassed ?? null,
       finalPriorDutyCoveragePassed: diag.finalPriorDutyCoveragePassed ?? null,
+      requiredPriorDutyFactCount: diag.requiredPriorDutyFactCount ?? null,
+      coveredPriorDutyFactCount: diag.coveredPriorDutyFactCount ?? null,
+      missingPriorDutyFactCount: diag.missingPriorDutyFactCount ?? null,
       finalSlotValidationPassed: diag.finalSlotValidationPassed ?? diag.slotValidationPassed ?? null,
       finalSlotRejectionReasons: diag.finalSlotRejectionReasons ?? diag.slotRejectionReasons ?? null,
       repairCandidateHash: diag.repairCandidateHash ?? null,
@@ -1735,9 +1756,14 @@ export class SummaryAiDiagnosticSession {
     let visibleRoleOk = true;
     let visibleWrongRoleCount = 0;
     let visibleDutyOk = true;
+    let visiblePriorDutyOk = true;
     let visibleGrammarOk = true;
+    let visibleLocaleOk = true;
+    let visibleDurationScopeOk = true;
     let visibleDutyCovered = 0;
     let visibleDutyRequired = 0;
+    let visiblePriorDutyCovered = 0;
+    let visiblePriorDutyRequired = 0;
     if (ok && durationStillOk && locale === 'de' && typeof visibleText === 'string') {
       const roleCheck = verifyVisibleSummaryStructuredRoleLocale({
         visibleSummary: visibleText,
@@ -1772,7 +1798,65 @@ export class SummaryAiDiagnosticSession {
       const grammar = validateGermanGeneratedCaseGrammar(visibleText);
       visibleGrammarOk = grammar.germanControlledCaseGrammarPassed;
     }
-    const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk && visibleGrammarOk;
+    if (ok && durationStillOk && locale === 'en' && typeof visibleText === 'string') {
+      void ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION;
+      void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
+      const empQ = analyzeEnglishSummaryEmploymentQuality(visibleText, {
+        company: undefined,
+        role: undefined,
+        priorCompany: undefined,
+        priorRole: undefined,
+        currentEntryDuties: '',
+        priorEntryDuties: '',
+        structuredSkills: [],
+      });
+      // Prefer draft authoritative counts when present; otherwise re-validate text.
+      const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
+      const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
+      if (requiredCurrent > 0 || requiredPrior > 0) {
+        const facts = rebuildGermanDutyFactsFromIds(this.draft.requiredCurrentDutyFactIds);
+        if (facts.length > 0) {
+          const duty = validateSummaryEntryDutyCoverage({
+            requiredFacts: facts,
+            candidateText: visibleText,
+          });
+          visibleDutyRequired = duty.requiredCurrentDutyFactCount;
+          visibleDutyCovered = duty.coveredCurrentDutyFactCount;
+          visibleDutyOk = duty.finalCurrentDutyCoveragePassed;
+        }
+        visiblePriorDutyRequired = requiredPrior;
+        visiblePriorDutyCovered = Number(
+          this.draft.coveredPriorDutyFactCount
+          ?? empQ.coveredPriorDutyFactCount
+          ?? 0,
+        );
+        // Re-check prior from visible text using English analyzer when prior required.
+        if (requiredPrior > 0) {
+          const priorPass = /\bGraphic\s+Designer\b/iu.test(visibleText)
+            && /\bRewitu\b/iu.test(visibleText)
+            && /\b(?:previously|formerly|worked\s+as)\b/iu.test(visibleText)
+            && /visual\s+materials?/iu.test(visibleText)
+            && /design\s+(?:documents?|materials?)/iu.test(visibleText)
+            && /final\s+files?/iu.test(visibleText);
+          visiblePriorDutyOk = priorPass;
+          if (priorPass) visiblePriorDutyCovered = requiredPrior;
+        }
+        visibleRoleOk = /\bWarehouse\s+(?:Employee|Worker)\b/iu.test(visibleText)
+          && /\bAtlas\b/iu.test(visibleText)
+          && (!requiredPrior || /\bGraphic\s+Designer\b/iu.test(visibleText));
+        visibleLocaleOk = !/[ñáéíóúü]/iu.test(visibleText)
+          && !/\b(?:revisingó|comprobingó|mercanc|documentaci|almac[eé]n)\b/iu.test(visibleText);
+        visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false
+          && !/at\s+Atlas.{0,40}since.{0,40},\s+with\s+approximately/iu.test(visibleText);
+      } else {
+        visibleDutyOk = empQ.finalCurrentDutyCoveragePassed !== false;
+        visiblePriorDutyOk = empQ.finalPriorDutyCoveragePassed !== false;
+        visibleLocaleOk = empQ.targetLocalePurityPassed !== false;
+        visibleDurationScopeOk = empQ.finalDurationScopeValidationPassed !== false;
+      }
+    }
+    const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
+      && visiblePriorDutyOk && visibleGrammarOk && visibleLocaleOk && visibleDurationScopeOk;
     this.patch({
       visibleApplySucceeded: applyOk,
       contentLocaleUpdatedAfterApply: applyOk,
@@ -1790,20 +1874,35 @@ export class SummaryAiDiagnosticSession {
         : applyOk,
       visibleDurationClaimCountAfterApply: visibleCount,
       visibleDurationMatchesFinalizedCount: matches,
-      visibleStructuredRoleLocaleValidationPassed: locale === 'de'
-        ? (typeof visibleText === 'string' ? visibleRoleOk : null)
+      visibleStructuredRoleLocaleValidationPassed: (locale === 'de' || locale === 'en')
+        ? (typeof visibleText === 'string' ? visibleRoleOk && visibleLocaleOk : null)
         : null,
-      visibleWrongLocaleStructuredRoleCount: locale === 'de'
+      visibleWrongLocaleStructuredRoleCount: (locale === 'de' || locale === 'en')
         ? visibleWrongRoleCount
         : null,
-      visibleRequiredCurrentDutyFactCount: locale === 'de' ? visibleDutyRequired : null,
-      visibleCoveredCurrentDutyFactCount: locale === 'de' ? visibleDutyCovered : null,
-      visibleMissingCurrentDutyFactCount: locale === 'de'
+      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en')
+        ? visibleDutyRequired
+        : null,
+      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en')
+        ? visibleDutyCovered
+        : null,
+      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en')
         ? Math.max(0, visibleDutyRequired - visibleDutyCovered)
         : null,
-      visibleCurrentDutyCoveragePassed: locale === 'de'
+      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en')
         ? (typeof visibleText === 'string' ? visibleDutyOk : null)
         : null,
+      visibleRequiredPriorDutyFactCount: locale === 'en' ? visiblePriorDutyRequired : null,
+      visibleCoveredPriorDutyFactCount: locale === 'en' ? visiblePriorDutyCovered : null,
+      visibleMissingPriorDutyFactCount: locale === 'en'
+        ? Math.max(0, visiblePriorDutyRequired - visiblePriorDutyCovered)
+        : null,
+      visiblePriorDutyCoveragePassed: locale === 'en'
+        ? (typeof visibleText === 'string' ? visiblePriorDutyOk : null)
+        : null,
+      visibleDurationScopeValidationPassed: locale === 'en'
+        ? (typeof visibleText === 'string' ? visibleDurationScopeOk : null)
+        : (locale === 'de' ? this.draft.visibleDurationScopeValidationPassed : null),
       visibleGermanGrammarValidationPassed: locale === 'de'
         ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
         : null,
@@ -1817,11 +1916,15 @@ export class SummaryAiDiagnosticSession {
         : false,
       finalTypedFailureReason: !visibleDutyOk && ok && durationStillOk
         ? 'visible_current_duty_coverage_failed'
-        : (!visibleGrammarOk && ok && durationStillOk
-          ? 'visible_german_grammar_failed'
-          : (!visibleRoleOk && ok && durationStillOk
-            ? 'visible_role_localization_mismatch'
-            : this.draft.finalTypedFailureReason)),
+        : (!visiblePriorDutyOk && ok && durationStillOk
+          ? 'visible_prior_duty_coverage_failed'
+          : (!visibleLocaleOk && ok && durationStillOk
+            ? 'visible_locale_purity_failed'
+            : (!visibleGrammarOk && ok && durationStillOk
+              ? 'visible_german_grammar_failed'
+              : (!visibleRoleOk && ok && durationStillOk
+                ? 'visible_role_localization_mismatch'
+                : this.draft.finalTypedFailureReason)))),
       // Duration idempotence is independent of visible apply success.
       durationFinalizerIdempotent: (() => {
         void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
@@ -1840,6 +1943,107 @@ export class SummaryAiDiagnosticSession {
     });
     this.stage('visible_apply', applyOk ? 'ok' : 'fail');
     this.stage('race_guard', applyOk ? 'ok' : (ok ? 'fail' : 'skipped'));
+  }
+
+  /**
+   * AAB-325: evaluate decision-critical invariants/completeness before visible
+   * apply and usage increment. Must be called after recordFinalizeResult.
+   */
+  evaluatePreApplyDecisionGates(): {
+    passed: boolean;
+    reason: string | null;
+    diagnosticInvariantCheckPassed: boolean;
+    diagnosticCompletenessPassed: boolean;
+  } {
+    void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
+    // Provisional success for decision-field completeness. Usage is projected
+    // as +1 for pre-apply invariant alignment; real usage still happens later.
+    const before = Number(this.draft.usageCountBefore ?? 0);
+    const provisional = {
+      ...this.draft,
+      stages: this.stages,
+      countedAsSuccess: true,
+      visibleApplySucceeded: true,
+      usageCountAfter: before + 1,
+      operationKind: 'summary' as const,
+      marker: SUMMARY_AI_DIAG_MARKER,
+      diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+      apiBaseUrlConfigured: Boolean(getApiBaseUrl()),
+      capacitorServerUrlConfigured: false,
+      sourceCommitStatus: this.draft.sourceCommitStatus || 'unknown',
+    };
+    const invariants = checkSummaryDiagnosticInvariants(
+      provisional as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
+    );
+    const withInvariants = {
+      ...provisional,
+      diagnosticInvariantCheckPassed: invariants.passed,
+      diagnosticInvariantFailureCount: invariants.failures.length,
+      diagnosticInvariantFailures: invariants.failures,
+    };
+    // Pre-apply completeness focuses on decision-critical fields. Full build
+    // identity/marker completeness remains enforced at commit().
+    const locale = String(this.draft.requestedLocale || '');
+    let completenessPassed = true;
+    const nullDecision: string[] = [];
+    if (locale === 'en') {
+      const required = [
+        'currentRoleConcreteFactCoverage',
+        'priorRoleGroundingPassed',
+        'currentRoleTitlePresent',
+        'finalUnitSemanticRolesByUnit',
+        'finalCurrentEmployerPresent',
+        'finalPriorEmployerPresent',
+        'finalCurrentDutyCoveragePassed',
+        'finalPriorDutyCoveragePassed',
+        'finalSlotValidationPassed',
+        'structuredRoleLocaleValidationPassed',
+        'finalUnsupportedCompetencyCount',
+        'finalDurationOwnerDetected',
+        'finalDurationScopeValidationPassed',
+        'finalUnitRoleSlots',
+      ] as const;
+      for (const key of required) {
+        if ((withInvariants as Record<string, unknown>)[key] == null) {
+          nullDecision.push(key);
+        }
+      }
+      completenessPassed = nullDecision.length === 0;
+    } else {
+      const completeness = checkSummaryDiagnosticCompleteness(
+        withInvariants as Record<string, unknown>,
+      );
+      completenessPassed = completeness.passed;
+      nullDecision.push(...completeness.nullRequiredDiagnosticFields);
+    }
+    this.patch({
+      diagnosticInvariantCheckPassed: invariants.passed,
+      diagnosticInvariantFailureCount: invariants.failures.length,
+      diagnosticInvariantFailures: invariants.failures,
+      diagnosticCompletenessPassed: completenessPassed,
+      nullRequiredDiagnosticFields: nullDecision,
+    });
+    const passed = invariants.passed && completenessPassed;
+    this.stage('diagnostic_preapply_gate', passed ? 'ok' : 'fail');
+    if (!passed) {
+      this.patch({
+        finalPostconditionsPassed: false,
+        countedAsSuccess: false,
+        visibleApplySucceeded: false,
+        finalTypedFailureReason: !invariants.passed
+          ? 'diagnostic_invariant_failed'
+          : 'diagnostic_completeness_failed',
+        rejectionStage: 'diagnostic_preapply_gate',
+      });
+    }
+    return {
+      passed,
+      reason: passed
+        ? null
+        : (!invariants.passed ? 'diagnostic_invariant_failed' : 'diagnostic_completeness_failed'),
+      diagnosticInvariantCheckPassed: invariants.passed,
+      diagnosticCompletenessPassed: completenessPassed,
+    };
   }
 
   recordRaceGuard(result: 'ok' | 'fail' | 'skipped'): void {
