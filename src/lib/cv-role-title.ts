@@ -483,9 +483,9 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
 export const EXPERIENCE_TITLE_PROJECTION_REVISION =
   'experience-title-projection-296-v1' as const;
 
-/** Graphic / visual designer title cues — Latin + JP + Cyrillic + AR/HI. */
+/** Graphic / visual designer title cues — Latin + JP + Cyrillic + AR/HI + ES/PT/FR/DE. */
 const GRAPHIC_DESIGNER_TITLE_CORE_RE =
-  /(?:graphic\s*designer|grafi[cč]k\w*\s+dizajn\w*|グラフィック\s*デザイナー|グラフィックデザイナー|графическ\p{L}*\s*дизайнер|گرافیک\s*डिज़ाइनर|ग्राफिक\s*डिज़ाइनर|مصمم(?:ة)?\s*جرافيك)/iu;
+  /(?:graphic\s*designer|grafikdesigner(?:in)?|grafi[cč]k\w*\s+dizajn\w*|diseñador(?:a)?\s+gráfic(?:a|o)|disenador(?:a)?\s+grafic(?:a|o)|designer\s+gráfic(?:a|o)|graphiste|グラフィック\s*デザイナー|グラフィックデザイナー|графическ\p{L}*\s*дизайнер|گرافیک\s*डिज़ाइनर|ग्राफिक\s*डिज़ाइनर|مصمم(?:ة)?\s*جرافيك)/iu;
 
 /** True when title/blob denotes graphic/visual designer (not arbitrary free text). */
 export function matchesGraphicDesignerOccupationalTitle(text: string): boolean {

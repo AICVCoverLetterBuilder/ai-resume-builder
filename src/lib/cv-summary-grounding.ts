@@ -186,6 +186,10 @@ export {
   SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION,
   GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
   GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
+  GERMAN_SUMMARY_STRUCTURED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
+  SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   scanGermanSummaryCompetencyClaims,
   analyzeGermanSummaryDurationScope,
@@ -202,6 +206,9 @@ export {
   analyzeGermanCurrentRoleCoverage,
   analyzeGermanPriorRoleCoverage,
   repairGermanSummaryEmployerStatus,
+  resolveLocalizedSummaryRole,
+  validateSummaryStructuredRoleLocale,
+  repairGermanSummaryStructuredRoleLocales,
 } from './cv-german-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,

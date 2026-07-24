@@ -4,6 +4,8 @@
  * Current/prior intros must not pass from role title + duties alone when
  * structured employers and employment state are available in the snapshot.
  */
+import { resolveLocalizedSummaryRole } from './cv-summary-structured-role-localization';
+
 export const GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION =
   'german-summary-employer-coverage-321-v1' as const;
 export const GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION =
@@ -311,8 +313,29 @@ export function repairGermanSummaryEmployerStatus(
   const male = g === 'male' || g === 'm' || g === 'männlich';
   const pronoun = female ? 'sie' : male ? 'er' : 'die Fachkraft';
 
-  const role = (options.role || '').trim() || 'Fachkraft';
-  const priorRole = (options.priorRole || '').trim() || 'Grafikdesignerin';
+  const currentRoleResolved = resolveLocalizedSummaryRole({
+    role: options.role || '',
+    targetLocale: 'de',
+    gender: options.gender,
+  });
+  const priorRoleResolved = resolveLocalizedSummaryRole({
+    role: options.priorRole || '',
+    targetLocale: 'de',
+    gender: options.gender,
+  });
+  const role = currentRoleResolved.localizationValidationPassed
+    ? currentRoleResolved.localizedTargetRoleLabel
+    : ((options.role || '').trim() || 'Fachkraft');
+  const priorRole = priorRoleResolved.localizationValidationPassed
+    ? priorRoleResolved.localizedTargetRoleLabel
+    : ((options.priorRole || '').trim() || 'Grafikdesignerin');
+  if (
+    priorRoleResolved.localizationValidationPassed
+    && (options.priorRole || '').trim()
+    && priorRole !== (options.priorRole || '').trim()
+  ) {
+    // Recorded after other transforms below.
+  }
   const company = (options.company || '').trim();
   const priorCompany = (options.priorCompany || '').trim();
   const beiCompany = formatGermanEmployerPrepositional(company);
@@ -368,6 +391,22 @@ export function repairGermanSummaryEmployerStatus(
     transformations.push('prior_status_restored');
   }
   transformations.push('employment_units_split');
+  if (
+    currentRoleResolved.localizationValidationPassed
+    && (options.role || '').trim()
+    && role !== (options.role || '').trim()
+  ) {
+    transformations.push('current_role_title_localized');
+    transformations.push('foreign_role_title_replaced');
+  }
+  if (
+    priorRoleResolved.localizationValidationPassed
+    && (options.priorRole || '').trim()
+    && priorRole !== (options.priorRole || '').trim()
+  ) {
+    transformations.push('prior_role_title_localized');
+    transformations.push('foreign_role_title_replaced');
+  }
 
   let currentUnit = role;
   if (beiCompany) currentUnit = `${currentUnit} ${beiCompany}`;

@@ -82,11 +82,16 @@ import {
   GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
   SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION,
   SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION,
+  GERMAN_SUMMARY_STRUCTURED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
+  SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
   HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
   repairGermanSummaryEmployerStatus,
+  repairGermanSummaryStructuredRoleLocales,
 } from './cv-summary-grounding';
 import {
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
@@ -487,6 +492,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
   SUMMARY_MULTI_ROLE_SLOT_DIAGNOSTICS_321_REVISION,
   SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION,
+  GERMAN_SUMMARY_STRUCTURED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
+  SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -2205,13 +2214,84 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               germanEmployerStatusRepairApplied = true;
               germanRepairCandidateHash = hashSummaryCandidate(employerRepair.text);
             } else {
-              germanEmployerStatusRepairRejectionReasons = [
-                ...employerRepair.rejectionReasons,
-                ...(repairedEmp.slotRejectionReasons || []),
+              // Employer restored but role locale may still fail — try role localization.
+              const roleRepair = repairGermanSummaryStructuredRoleLocales(employerRepair.text, {
+                currentRole: context.role || entryDuties.currentRoleTitle,
+                priorRole: entryDuties.priorRoleTitle,
+                gender,
+                currentEntryId: entryDuties.currentEntryId,
+                priorEntryId: (cv.experience || []).find((e) => e.id !== entryDuties.currentEntryId)?.id
+                  || null,
+              });
+              germanEmployerStatusRepairTransformations = [
+                ...germanEmployerStatusRepairTransformations,
+                ...roleRepair.transformationKinds,
               ];
+              if (roleRepair.applied && roleRepair.text.trim()) {
+                const repairedBoth = analyzeDe(roleRepair.text);
+                if (repairedBoth.groundingValidationPassed && repairedBoth.slotValidationPassed) {
+                  candidate = roleRepair.text;
+                  empQuality = repairedBoth;
+                  germanMaterialRepairApplied = true;
+                  germanEmployerStatusRepairApplied = true;
+                  germanRepairCandidateHash = hashSummaryCandidate(roleRepair.text);
+                } else {
+                  germanEmployerStatusRepairRejectionReasons = [
+                    ...employerRepair.rejectionReasons,
+                    ...roleRepair.rejectionReasons,
+                    ...(repairedBoth.slotRejectionReasons || []),
+                  ];
+                }
+              } else {
+                germanEmployerStatusRepairRejectionReasons = [
+                  ...employerRepair.rejectionReasons,
+                  ...(repairedEmp.slotRejectionReasons || []),
+                  ...roleRepair.rejectionReasons,
+                ];
+              }
             }
           } else if (employerRepair.attempted) {
             germanEmployerStatusRepairRejectionReasons = employerRepair.rejectionReasons;
+          }
+        }
+        // AAB-322: localize foreign structured role titles even when employer/status already pass.
+        if (!empQuality.groundingValidationPassed || !empQuality.slotValidationPassed) {
+          const roleOnlyRepair = repairGermanSummaryStructuredRoleLocales(candidate, {
+            currentRole: context.role || entryDuties.currentRoleTitle,
+            priorRole: entryDuties.priorRoleTitle,
+            gender,
+            currentEntryId: entryDuties.currentEntryId,
+            priorEntryId: (cv.experience || []).find((e) => e.id !== entryDuties.currentEntryId)?.id
+              || null,
+          });
+          if (roleOnlyRepair.attempted) {
+            germanClientRepairAttempted = true;
+            germanEmployerStatusRepairAttempted = true;
+            germanEmployerStatusRepairTransformations = [
+              ...germanEmployerStatusRepairTransformations,
+              ...roleOnlyRepair.transformationKinds,
+            ];
+            if (roleOnlyRepair.applied && roleOnlyRepair.text.trim()) {
+              const repairedRole = analyzeDe(roleOnlyRepair.text);
+              if (repairedRole.groundingValidationPassed && repairedRole.slotValidationPassed) {
+                candidate = roleOnlyRepair.text;
+                empQuality = repairedRole;
+                germanMaterialRepairApplied = true;
+                germanEmployerStatusRepairApplied = true;
+                germanRepairCandidateHash = hashSummaryCandidate(roleOnlyRepair.text);
+              } else {
+                germanEmployerStatusRepairRejectionReasons = [
+                  ...germanEmployerStatusRepairRejectionReasons,
+                  ...roleOnlyRepair.rejectionReasons,
+                  ...(repairedRole.slotRejectionReasons || []),
+                ];
+              }
+            } else {
+              germanEmployerStatusRepairRejectionReasons = [
+                ...germanEmployerStatusRepairRejectionReasons,
+                ...roleOnlyRepair.rejectionReasons,
+              ];
+            }
           }
         }
       }
@@ -2749,6 +2829,39 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         employerCrossEntryLeakageDetected: locale === 'de' && empQ
           ? Boolean((empQ as { employerCrossEntryLeakageDetected?: boolean })
             .employerCrossEntryLeakageDetected)
+          : undefined,
+        structuredRoleLocaleValidationPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { structuredRoleLocaleValidationPassed?: boolean })
+            .structuredRoleLocaleValidationPassed)
+          : undefined,
+        currentRoleLocalizationValidationPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { currentRoleLocalizationValidationPassed?: boolean })
+            .currentRoleLocalizationValidationPassed)
+          : undefined,
+        priorRoleLocalizationValidationPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { priorRoleLocalizationValidationPassed?: boolean })
+            .priorRoleLocalizationValidationPassed)
+          : undefined,
+        foreignStructuredRoleTitleCount: locale === 'de' && empQ
+          ? ((empQ as { foreignStructuredRoleTitleCount?: number })
+            .foreignStructuredRoleTitleCount ?? 0)
+          : undefined,
+        foreignPriorRoleTitleCount: locale === 'de' && empQ
+          ? ((empQ as { foreignPriorRoleTitleCount?: number }).foreignPriorRoleTitleCount ?? 0)
+          : undefined,
+        rawSourceRoleLeakageDetected: locale === 'de' && empQ
+          ? Boolean((empQ as { rawSourceRoleLeakageDetected?: boolean })
+            .rawSourceRoleLeakageDetected)
+          : undefined,
+        sourceLanguageLeakageDetected: locale === 'de' && empQ
+          ? Boolean((empQ as { rawSourceRoleLeakageDetected?: boolean })
+            .rawSourceRoleLeakageDetected)
+          : undefined,
+        targetLocalePurityPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { structuredRoleLocaleValidationPassed?: boolean })
+            .structuredRoleLocaleValidationPassed)
+            && !Boolean((empQ as { rawSourceRoleLeakageDetected?: boolean })
+              .rawSourceRoleLeakageDetected)
           : undefined,
         finalCandidateUnitCount: success
           ? (empQ?.finalSentenceHashes?.length

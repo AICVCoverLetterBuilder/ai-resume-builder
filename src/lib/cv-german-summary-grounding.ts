@@ -47,6 +47,16 @@ import {
   type GermanCurrentRoleCoverage,
   type GermanPriorRoleCoverage,
 } from './cv-german-summary-employer-status';
+import {
+  GERMAN_SUMMARY_STRUCTURED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
+  SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
+  resolveLocalizedSummaryRole,
+  validateSummaryStructuredRoleLocale,
+  repairGermanSummaryStructuredRoleLocales,
+  type StructuredRoleLocaleValidation,
+} from './cv-summary-structured-role-localization';
 export {
   GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
   GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
@@ -54,6 +64,15 @@ export {
   analyzeGermanPriorRoleCoverage,
   repairGermanSummaryEmployerStatus,
 } from './cv-german-summary-employer-status';
+export {
+  GERMAN_SUMMARY_STRUCTURED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION,
+  SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
+  SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
+  resolveLocalizedSummaryRole,
+  validateSummaryStructuredRoleLocale,
+  repairGermanSummaryStructuredRoleLocales,
+} from './cv-summary-structured-role-localization';
 export {
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
@@ -275,6 +294,13 @@ export type GermanSummaryEmploymentQuality = {
   finalSlotRejectionReasons?: string[];
   finalUnitSemanticRolesByUnit?: string[][];
   employerCrossEntryLeakageDetected?: boolean;
+  structuredRoleLocale?: StructuredRoleLocaleValidation;
+  structuredRoleLocaleValidationPassed?: boolean;
+  currentRoleLocalizationValidationPassed?: boolean;
+  priorRoleLocalizationValidationPassed?: boolean;
+  foreignStructuredRoleTitleCount?: number;
+  foreignPriorRoleTitleCount?: number;
+  rawSourceRoleLeakageDetected?: boolean;
 };
 
 export function analyzeGermanSummaryEmploymentQuality(
@@ -290,6 +316,8 @@ export function analyzeGermanSummaryEmploymentQuality(
     gender?: string;
     structuredSkills?: string[];
     expectedDurationOwner?: 'total_professional_experience' | 'current_role_duration';
+    currentEntryId?: string | null;
+    priorEntryId?: string | null;
   } = {},
 ): GermanSummaryEmploymentQuality {
   void GERMAN_CV_AI_302_REVISION;
@@ -301,6 +329,9 @@ export function analyzeGermanSummaryEmploymentQuality(
   void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
   void GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION;
   void GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION;
+  void GERMAN_SUMMARY_STRUCTURED_ROLE_LOCALIZATION_322_REVISION;
+  void SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION;
+  void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const units = splitGermanSummaryUnits(text);
   const introGrammar = validateGermanSummaryIntroGrammar(text, { company: options.company });
@@ -308,17 +339,37 @@ export function analyzeGermanSummaryEmploymentQuality(
   const competencyScan = scanGermanSummaryCompetencyClaims(text, {
     structuredSkills: options.structuredSkills,
   });
+
+  const currentLocalized = resolveLocalizedSummaryRole({
+    role: options.role || '',
+    targetLocale: 'de',
+    gender: options.gender,
+    entryId: options.currentEntryId,
+  });
+  const priorLocalized = resolveLocalizedSummaryRole({
+    role: options.priorRole || '',
+    targetLocale: 'de',
+    gender: options.gender,
+    entryId: options.priorEntryId,
+  });
+  const localizedCurrentRole = currentLocalized.localizationValidationPassed
+    ? currentLocalized.localizedTargetRoleLabel
+    : (options.role || '');
+  const localizedPriorRole = priorLocalized.localizationValidationPassed
+    ? priorLocalized.localizedTargetRoleLabel
+    : (options.priorRole || '');
+
   const durationScope = analyzeGermanSummaryDurationScope(text, {
     company: options.company,
-    role: options.role,
+    role: localizedCurrentRole || options.role,
     expectedOwner: options.expectedDurationOwner || 'total_professional_experience',
   });
 
   const unitSemanticAnalyses = analyzeGermanSummaryUnitSemantics(units, {
     company: options.company,
-    role: options.role,
+    role: localizedCurrentRole || options.role,
     priorCompany: options.priorCompany,
-    priorRole: options.priorRole,
+    priorRole: localizedPriorRole || options.priorRole,
     currentEntryDuties: options.currentEntryDuties,
     priorEntryDuties: options.priorEntryDuties,
   });
@@ -328,14 +379,26 @@ export function analyzeGermanSummaryEmploymentQuality(
     ...a.detectedSemanticRoles,
   ]);
 
+  const structuredRoleLocale = validateSummaryStructuredRoleLocale({
+    summary: text,
+    targetLocale: 'de',
+    gender: options.gender,
+    currentRole: options.role,
+    priorRole: options.priorRole,
+    currentEntryId: options.currentEntryId,
+    priorEntryId: options.priorEntryId,
+    currentLocalized,
+    priorLocalized,
+  });
+
   const currentRoleCoverage = analyzeGermanCurrentRoleCoverage(text, {
     company: options.company,
-    role: options.role,
+    role: localizedCurrentRole || options.role,
     startDate: options.startDate,
   });
   const priorRoleCoverage = analyzeGermanPriorRoleCoverage(text, {
     priorCompany: options.priorCompany,
-    priorRole: options.priorRole,
+    priorRole: localizedPriorRole || options.priorRole,
   });
   const employerCrossEntryLeakageDetected = Boolean(
     (options.company || '').trim()
@@ -362,7 +425,9 @@ export function analyzeGermanSummaryEmploymentQuality(
     || matchesWarehouseOccupationalTitle(options.role || '')
     || /lager|warehouse/i.test(options.role || '');
   const designDomain = DESIGN_FACT_CUE_DE.test(dutiesCorpus)
-    || /grafik|design/i.test(`${options.role || ''} ${options.priorEntryDuties || ''}`);
+    || /grafik|design|diseñ|dizajn/i.test(
+      `${options.role || ''} ${options.priorRole || ''} ${options.priorEntryDuties || ''}`,
+    );
   const requireSlots = warehouseDomain || designDomain;
 
   const semanticCurrentIntro = unitSemanticAnalyses.some((a) => (
@@ -402,6 +467,7 @@ export function analyzeGermanSummaryEmploymentQuality(
     ...currentRoleCoverage.currentRoleIntroRejectionReasons,
     ...priorRoleCoverage.priorRoleIntroRejectionReasons,
     ...(employerCrossEntryLeakageDetected ? ['employer_cross_entry_leakage'] : []),
+    ...structuredRoleLocale.failureKinds,
   ];
   // Deduplicate while preserving order.
   const dedupedSlotRejectionReasons = [...new Set(slotRejectionReasons)];
@@ -414,7 +480,9 @@ export function analyzeGermanSummaryEmploymentQuality(
       requirePrior: Boolean(options.priorCompany || options.priorEntryDuties || designDomain),
       requireDuration: DURATION_CUE_PRESENT(text) || requireSlots,
     }).length === 0;
-  const slotValidationPassed = baseSlotOk && employerStatusOk;
+  const slotValidationPassed = baseSlotOk
+    && employerStatusOk
+    && structuredRoleLocale.structuredRoleLocaleValidationPassed;
   const finalSlotRejectionReasons = dedupedSlotRejectionReasons;
   const finalSlotValidationPassed = slotValidationPassed;
 
@@ -424,6 +492,8 @@ export function analyzeGermanSummaryEmploymentQuality(
     reason = competencyScan.providerRejectionStage || 'competency_grounding_validation';
   } else if (!durationScope.finalDurationScopeValidationPassed && DURATION_CUE_PRESENT(text)) {
     reason = durationScope.durationScopeRejectionReason || 'duration_scope_mismatch';
+  } else if (!structuredRoleLocale.structuredRoleLocaleValidationPassed) {
+    reason = structuredRoleLocale.failureKinds[0] || 'foreign_prior_role_title';
   } else if (!slotValidationPassed) {
     reason = finalSlotRejectionReasons[0] || 'invalid_role_slot_classification';
   } else if (!introGrammar.ok) reason = introGrammar.reason;
@@ -438,12 +508,13 @@ export function analyzeGermanSummaryEmploymentQuality(
     && !unsupportedDesignMedium
     && competencyScan.unsupportedCompetencyCount === 0
     && slotValidationPassed
+    && structuredRoleLocale.structuredRoleLocaleValidationPassed
     && (durationScope.finalDurationScopeValidationPassed || !DURATION_CUE_PRESENT(text));
 
   const rolePresent = Boolean(
-    (options.role || '').trim()
+    (localizedCurrentRole || options.role || '').trim()
     && new RegExp(
-      (options.role || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+      (localizedCurrentRole || options.role || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
       'iu',
     ).test(text),
   );
@@ -516,6 +587,16 @@ export function analyzeGermanSummaryEmploymentQuality(
     finalSlotRejectionReasons,
     finalUnitSemanticRolesByUnit,
     employerCrossEntryLeakageDetected,
+    structuredRoleLocale,
+    structuredRoleLocaleValidationPassed:
+      structuredRoleLocale.structuredRoleLocaleValidationPassed,
+    currentRoleLocalizationValidationPassed:
+      structuredRoleLocale.currentRoleLocalizationValidationPassed,
+    priorRoleLocalizationValidationPassed:
+      structuredRoleLocale.priorRoleLocalizationValidationPassed,
+    foreignStructuredRoleTitleCount: structuredRoleLocale.foreignStructuredRoleTitleCount,
+    foreignPriorRoleTitleCount: structuredRoleLocale.foreignPriorRoleTitleCount,
+    rawSourceRoleLeakageDetected: structuredRoleLocale.rawSourceRoleLeakageDetected,
   };
 }
 
@@ -623,13 +704,20 @@ export function buildGermanEntryOwnedSummary(options: {
   const priorEmployer = (options.priorEmployer || '').trim();
   const priorBei = formatGermanEmployerPrepositional(priorEmployer);
   const priorDuties = options.priorSourceDuties || '';
-  const priorLooksDesign = /(?:dizajn|design|grafik|visual|vizuel|visuell|デザイン)/i
+  const priorLooksDesign = /(?:dizajn|design|grafik|visual|vizuel|visuell|デザイン|diseñ)/i
     .test(`${priorRole} ${priorDuties}`);
   let priorSentence = '';
   if (priorRole && priorLooksDesign) {
-    const priorLabel = unspecified
-      ? 'Grafikdesign'
-      : localizeGraphicDesigner('de', options.gender);
+    const priorResolved = resolveLocalizedSummaryRole({
+      role: priorRole,
+      targetLocale: 'de',
+      gender: options.gender,
+    });
+    const priorLabel = priorResolved.localizationValidationPassed
+      ? priorResolved.localizedTargetRoleLabel
+      : (unspecified
+        ? 'Grafikdesign'
+        : localizeGraphicDesigner('de', options.gender));
     const designFacts = female
       ? 'und erstellte visuelle Materialien, überarbeitete Designunterlagen und bereitete finale Dateien für verschiedene Formate und Bildschirme vor'
       : male
