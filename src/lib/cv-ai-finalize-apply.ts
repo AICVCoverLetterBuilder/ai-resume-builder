@@ -692,6 +692,18 @@ export type FinalizeCvAiFieldResult = {
     detectedVisibleContentLocaleBeforeRequest?: string | null;
     finalContentLocaleAfterApply?: string | null;
     finalCandidateSource?: string;
+    finalCandidatePresent?: boolean;
+    finalCandidateValidationApplicable?: boolean;
+    finalCandidatePredicateValidationApplicable?: boolean;
+    finalCandidateBulletCount?: number;
+    finalCandidateBulletScripts?: string[];
+    appliedFinalBulletCount?: number;
+    appliedFinalBulletScripts?: string[];
+    providerAttempted?: boolean;
+    providerHttpStatus?: number | null;
+    providerResponseKind?: string;
+    earlyNoOpPreflightPassed?: boolean;
+    earlyNoOpPreflightEvaluated?: boolean;
     providerCandidatePresent?: boolean;
     deterministicCandidatePresent?: boolean;
     normalizedBulletsUsedForApply?: boolean;
@@ -861,7 +873,7 @@ export type FinalizeCvAiFieldResult = {
     /** @deprecated Prefer clientDeterministicFallbackApplied. */
     fallbackApplied?: boolean;
     countedAsSuccess?: boolean;
-    apiResponseKind?: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown';
+    apiResponseKind?: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown' | 'not_attempted';
     serverFallbackUsed?: boolean;
     serverCandidateKind?: 'provider' | 'repair' | 'fallback' | 'empty' | 'unknown';
     serverFallbackReason?: string | null;

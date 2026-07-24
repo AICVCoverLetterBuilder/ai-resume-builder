@@ -796,7 +796,14 @@ export function checkSummaryDiagnosticCompleteness(
 type ExperienceLike = {
   finalCandidateSource?: string | null;
   providerAttempted?: boolean | null;
+  providerHttpStatus?: number | null;
+  providerResponseKind?: string | null;
+  apiResponseKind?: string | null;
   providerAccepted?: boolean | null;
+  finalBulletCount?: number | null;
+  finalBulletScripts?: unknown[] | null;
+  appVersionCode?: string | null;
+  appVersionName?: string | null;
   clientDeterministicFallbackAttempted?: boolean;
   clientDeterministicFallbackApplied?: boolean;
   fallbackSelected?: boolean;

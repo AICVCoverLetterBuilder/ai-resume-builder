@@ -363,6 +363,13 @@ export type ExperienceAiDiagnosticTrace = {
   appliedFinalBulletCount?: number | null;
   appliedFinalBulletScripts?: string[] | null;
   sourceAlreadyValidForTarget?: boolean | null;
+  preflightNoOpDetected?: boolean | null;
+  applyAttempted?: boolean | null;
+  applyNotAttemptedReason?: string | null;
+  visibleApplyApplicable?: boolean | null;
+  raceGuardApplicable?: boolean | null;
+  shouldIncrementUsage?: boolean | null;
+  usageIncrementAttempted?: boolean | null;
   sourceTenseMismatchCount?: number | null;
   sourceTenseValidationPassed?: boolean | null;
   expectedEmploymentTense?: string | null;
@@ -1435,7 +1442,7 @@ export class ExperienceAiDiagnosticSession {
         EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
       experienceTerminalDiagnosticConsistencyRevision:
         EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
-    } as Partial<ExperienceAiDiagnosticTrace>);
+    } as unknown as Partial<ExperienceAiDiagnosticTrace>);
 
     for (const step of EXPERIENCE_CLEAN_NOOP_STAGE_PLAN) {
       this.stage(
@@ -1452,12 +1459,13 @@ export class ExperienceAiDiagnosticSession {
    */
   recordFinalizeResult(finalized: FinalizeCvAiFieldResult): void {
     const diag = finalized.diagnostics || {};
-    const earlyCleanNoOp = diag.earlyNoOpPreflightPassed === true
+    const diagRec = diag as Record<string, unknown>;
+    const earlyCleanNoOp = diagRec.earlyNoOpPreflightPassed === true
       || (
         finalized.reason === 'experience_ai_noop'
         && finalized.blocked !== true
         && finalized.countedAsSuccess !== true
-        && diag.providerAttempted === false
+        && diagRec.providerAttempted === false
       );
     if (earlyCleanNoOp) {
       this.recordCleanNoOpTerminal(finalized);
@@ -1962,10 +1970,18 @@ export class ExperienceAiDiagnosticSession {
             uneditedRerunDetected: Boolean(
               (diag as Record<string, unknown>).uneditedRerunDetected,
             ),
-            providerAttempted: Boolean(
+            // Do not force providerAttempted false — provider evidence may exist
+            // without an explicit client httpStatus stamp in unit tests.
+            ...(
               (diag as Record<string, unknown>).providerAttempted === true
               || this.draft.providerAttempted === true
-              || this.draft.providerHttpStatus != null,
+              || this.draft.providerHttpStatus != null
+                ? { providerAttempted: true }
+                : (
+                  (diag as Record<string, unknown>).providerAttempted === false
+                    ? { providerAttempted: false }
+                    : {}
+                )
             ),
             finalCandidatePresent:
               (diag as Record<string, unknown>).finalCandidatePresent === true,
@@ -2263,19 +2279,40 @@ export class ExperienceAiDiagnosticSession {
 
     // Build provider / deterministic_fallback / final_selected lineage (hashes only).
     const lineage: NonNullable<ExperienceAiDiagnosticTrace['candidateLineage']> = [];
-    const providerWasAttempted = Boolean(
-      this.draft.providerAttempted === true
-      || diag.providerAttempted === true
-      || this.draft.providerHttpStatus != null
-      || diag.providerHttpStatus != null,
+    const providerExplicitlyNotAttempted = (
+      String(diag.apiResponseKind || '') === 'not_attempted'
+      || String(diag.providerResponseKind || '') === 'not_attempted'
+      || (
+        (diag.providerAttempted === false || this.draft.providerAttempted === false)
+        && this.draft.providerHttpStatus == null
+        && diag.providerHttpStatus == null
+        && diag.providerCoveredFactCount == null
+        && Number(diag.providerBulletCount ?? 0) === 0
+        && providerUncovered.length === 0
+        && diag.providerAccepted !== false
+        && !diag.providerRejectionStage
+      )
     );
-    const providerPresent = providerWasAttempted && Boolean(
+    const providerEvidencePresent = Boolean(
       (diag.providerBulletCount ?? this.draft.providerBulletCount ?? 0) > 0
       || (diag.providerCoveredFactCount != null)
       || (providerUncovered.length > 0)
-      || Boolean(text && !clientFallbackApplied && finalized.countedAsSuccess),
+      || Boolean(text && !clientFallbackApplied && finalized.countedAsSuccess)
+      || diag.providerAccepted === false
+      || Boolean(diag.providerRejectionStage)
     );
+    const providerWasAttempted = !providerExplicitlyNotAttempted && (
+      this.draft.providerAttempted === true
+      || diag.providerAttempted === true
+      || this.draft.providerHttpStatus != null
+      || diag.providerHttpStatus != null
+      || providerEvidencePresent
+    );
+    const providerPresent = providerWasAttempted && providerEvidencePresent;
     if (providerWasAttempted && (providerPresent || providerUncovered.length > 0 || diag.providerCoveredFactCount != null)) {
+      if (this.draft.providerAttempted !== true) {
+        this.patch({ providerAttempted: true });
+      }
       const pCovered = diag.providerCoveredFactCount
         ?? this.draft.providerCoveredFactCount
         ?? null;
