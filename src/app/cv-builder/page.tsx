@@ -114,6 +114,14 @@ import {
   applyOperationSnapshotToExperience,
 } from '@/lib/cv-experience-ai-operation-snapshot';
 import {
+  buildExperienceOperationSourceBundle,
+  evaluateUneditedRerunEarlyNoOpPreflight,
+  resolveExperienceFactAuthorityText,
+  EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
+} from '@/lib/cv-experience-operation-source-bundle';
+import { analyzeExperienceVisibleSource } from '@/lib/cv-experience-visible-source-analysis';
+void EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION;
+import {
   buildExperienceAiNoOpRepairPrompt,
   isRecoverableExperienceProviderNoOp,
 } from '@/lib/cv-experience-ai-noop-recovery';
@@ -1537,6 +1545,86 @@ export default function CVBuilderPage() {
           ),
         }));
       }
+      // AAB-317: unedited valid AI output → early no-op before provider.
+      const factAuthorityForPreflight = resolveExperienceFactAuthorityText({
+        textareaProvenance,
+        snapshot: operationSnapshot,
+        groundingSourceDescription: aiGrounding.sourceDescription,
+      });
+      const sourceBundleForPreflight = buildExperienceOperationSourceBundle({
+        textareaProvenance,
+        snapshot: operationSnapshot,
+        factAuthorityText: factAuthorityForPreflight,
+        visibleSourceText: liveDescription,
+        locale: requestedLocale,
+        isPresent: Boolean(exp.isPresent),
+        experienceEntryId: clickedExperienceEntryId,
+        jobContextHash: requestContext.key,
+        exp: { ...exp, description: liveDescription },
+      });
+      const visibleAnalysisForPreflight = analyzeExperienceVisibleSource({
+        visibleText: liveDescription,
+        targetLocale: requestedLocale,
+        isPresent: Boolean(exp.isPresent),
+        storedLocale: operationalContentLocale || requestedLocale,
+      });
+      const earlyNoOp = evaluateUneditedRerunEarlyNoOpPreflight({
+        bundle: sourceBundleForPreflight,
+        visibleSourceAnalysis: visibleAnalysisForPreflight,
+        sourceWasEmpty: liveSourceEmpty,
+        raceOrStaleDetected: false,
+      });
+      if (earlyNoOp.earlyNoOpPreflightPassed) {
+        clearTimeout(timer);
+        const earlyFinalized = finalizeCvAiFieldForApply({
+          action: 'experience_bullets',
+          field: 'experience_description',
+          requestedLocale,
+          gender: liveCv.personal.gender || '',
+          cv: liveCv,
+          candidate: '',
+          experienceId: clickedExperienceEntryId,
+          industry,
+          level,
+          jobContext: requestContext,
+          operationSnapshot,
+          jobContextHash: requestContext.key,
+          earlyUneditedRerunNoOp: true,
+        });
+        finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: null,
+          error: null,
+          responseSource: 'blocked',
+        });
+        diagSession.recordFinalizeResult(earlyFinalized);
+        diagSession.patch({
+          providerAttempted: false,
+          earlyNoOpPreflightPassed: true,
+          uneditedRerunDetected: true,
+          semanticNoOpDetected: true,
+          semanticNoOpReason: 'unedited_ai_output_already_valid',
+          degradationDetected: false,
+          degradationKinds: [],
+          finalDecisionKind: 'semantic_noop',
+          finalOutcomeReason: 'experience_ai_noop',
+          rejectionStage: null,
+          finalTypedFailureReason: null,
+        });
+        diagSession.recordVisibleApply(false, countBefore);
+        diagSession.commit();
+        logExperienceAiTrace({
+          resultApplied: false,
+          rejectedReason: 'experience_ai_noop',
+          aiUsageIncremented: false,
+        });
+        setGeneratingBulletsId(null);
+        return;
+      }
+
       const requestBody = {
         action: 'bullets',
         proToken,
@@ -1548,6 +1636,9 @@ export default function CVBuilderPage() {
         gender: liveCv.personal.gender || '',
         // Never send stale AI/legacy cooking duties after occupation change.
         sourceDescription: aiGrounding.sourceDescription,
+        // Dual-source: fact authority for grounding; visible for rewrite base.
+        factAuthorityDescription: factAuthorityForPreflight,
+        visibleDescription: liveDescription,
         jobContextKey: requestContext.key,
         // Stable clicked entry ID — authoritative even if array order changes mid-flight.
         experienceEntryId: clickedExperienceEntryId,

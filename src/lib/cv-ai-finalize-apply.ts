@@ -151,6 +151,23 @@ export {
   SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION,
   EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
 };
+import {
+  EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION,
+  EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
+  EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION,
+  EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION,
+  buildExperienceOperationSourceBundle,
+  evaluateUneditedRerunEarlyNoOpPreflight,
+  resolveExperienceFactAuthorityText,
+  type ExperienceOperationSourceBundle,
+  type UneditedRerunEarlyNoOpPreflight,
+} from './cv-experience-operation-source-bundle';
+export {
+  EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION,
+  EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
+  EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION,
+  EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION,
+};
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
@@ -171,6 +188,10 @@ void EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION;
 void SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION;
 void SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION;
 void EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION;
+void EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION;
+void EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION;
+void EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION;
+void EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION;
 import {
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
   EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
@@ -409,6 +430,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION,
   SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION,
   EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
+  EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION,
+  EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
+  EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION,
+  EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
@@ -577,6 +602,13 @@ export type FinalizeCvAiFieldInput = {
    * stylistic fallback instead of terminating as a hard no-op.
    */
   noOpRepairAttempted?: boolean;
+  /**
+   * AAB-317: client already evaluated unedited-rerun early no-op preflight and
+   * skipped the provider. Finalize must emit clean no-op diagnostics.
+   */
+  earlyUneditedRerunNoOp?: boolean;
+  /** Optional job-context hash for source-bundle / preflight diagnostics. */
+  jobContextHash?: string | null;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -3244,19 +3276,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : (exp?.description || ''))).trim();
   const operationMode = resolveExperienceAiOperationMode(liveOperationSource);
   const sourceWasEmpty = operationMode === 'generate_from_job_context';
-  // Fact authority: operation snapshot override, else unedited-AI pre-AI snapshot,
-  // else live/grounding. Never treat unedited prior AI output as sole fact source.
-  const authoritativeFactSource = (
-    snapshot?.normalizedSourceText
-    || (
-      textareaProvenance?.currentTextareaProvenance === 'ai_generated_unedited'
-        && (textareaProvenance.authoritativeFactText || '').trim()
-        ? textareaProvenance.authoritativeFactText
-        : ''
-    )
-    || grounding?.sourceDescription
-    || ''
-  ).trim();
+  // Fact authority: unedited-AI pre-AI snapshot first, else operation snapshot /
+  // grounding. Never treat unedited prior AI output as sole fact source.
+  void EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION;
+  const authoritativeFactSource = resolveExperienceFactAuthorityText({
+    textareaProvenance,
+    snapshot,
+    groundingSourceDescription: grounding?.sourceDescription,
+  });
   const shadowedExpForFacts: WorkExperience | null = exp
     ? (sourceWasEmpty
       ? {
@@ -3308,7 +3335,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     : (authoritativeFactSource
       || liveOperationSource
       || canonical.map((f) => f.sourceText || f.value).join('\n'));
-  // Dual-source contract (AAB-311/312): fact authority ≠ visible no-op comparison.
+  // Dual-source contract (AAB-311/312/317): fact authority ≠ visible no-op comparison.
   // Prefer immutable request-time snapshot fields — never rebuild from post-async state.
   void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
   const visibleComparisonText = (
@@ -3324,18 +3351,39 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     visibleText: visibleComparisonText,
     factAuthorityText: authoritativeFactSource || sourceForCoverage,
   });
-  // AAB-315: source-defect analysis precedes any provider no-op classification.
+  const sourceBundle: ExperienceOperationSourceBundle = buildExperienceOperationSourceBundle({
+    textareaProvenance,
+    snapshot,
+    factAuthorityText: authoritativeFactSource || sourceForCoverage,
+    visibleSourceText: visibleComparisonText,
+    locale,
+    isPresent,
+    experienceEntryId: exp?.id || input.experienceId || '',
+    jobContextHash: String(
+      input.jobContextHash
+      || snapshot?.jobContextHash
+      || jobContext?.key
+      || '',
+    ),
+    exp,
+  });
+  // AAB-315/317: visible-source analysis MUST use current textarea, never pre-AI facts.
   void EXPERIENCE_SOURCE_DEFECT_FIRST_DECISION_315_REVISION;
   const visibleSourceAnalysis: ExperienceVisibleSourceAnalysis = analyzeExperienceVisibleSource({
-    visibleText: (useVisibleForNoOp && visibleComparisonText)
-      ? visibleComparisonText
-      : (sourceForCoverage || visibleComparisonText),
+    visibleText: visibleComparisonText || '',
     targetLocale: locale,
     isPresent,
     storedLocale: (exp as WorkExperience & { contentLocale?: string })?.contentLocale
       || cv.contentLocale
       || locale,
   });
+  const earlyNoOpPreflight: UneditedRerunEarlyNoOpPreflight =
+    evaluateUneditedRerunEarlyNoOpPreflight({
+      bundle: sourceBundle,
+      visibleSourceAnalysis,
+      sourceWasEmpty,
+      raceOrStaleDetected: false,
+    });
   let providerNoOpBlockedBySourceDefect = false;
   let providerNoOpEligibleAsFinalFlag = providerNoOpEligibleAsFinal(visibleSourceAnalysis);
   let deterministicTenseNormalizerAttempted = false;
@@ -3345,76 +3393,280 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let lastVisibleComparisonEval: ExperienceVisibleComparisonEvaluation | null = null;
   const resolveFactAuthorityKindDiag = (): string | null => {
     void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
-    return mapFactAuthorityKindForDiagnostics(
-      textareaProvenance?.authoritativeFactSourceKind
-      || (snapshot?.provenanceOrigin === 'originalUserDescription'
-        ? 'pre_ai_snapshot'
-        : snapshot?.provenanceOrigin === 'canonicalDescription'
-          ? 'canonical'
-          : snapshot?.provenanceOrigin === 'currentTextarea'
-            ? 'current_textarea'
-            : null),
-    );
+    void EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION;
+    // Always prefer immutable request-time bundle — never snapshot live origin alone.
+    return sourceBundle.factAuthorityKind
+      ?? mapFactAuthorityKindForDiagnostics(
+        textareaProvenance?.authoritativeFactSourceKind
+        || (snapshot?.provenanceOrigin === 'originalUserDescription'
+          ? 'pre_ai_snapshot'
+          : snapshot?.provenanceOrigin === 'canonicalDescription'
+            ? 'canonical'
+            : snapshot?.provenanceOrigin === 'currentTextarea'
+              ? 'current_textarea'
+              : null),
+      );
   };
+  const buildEarlyNoOpDiagFields = (): Record<string, unknown> => {
+    void EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION;
+    void EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION;
+    void EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION;
+    const factKind = resolveFactAuthorityKindDiag();
+    const authKind = sourceBundle.authoritativeFactSourceKind;
+    return {
+      factAuthorityKind: factKind,
+      factAuthorityHash: sourceBundle.factAuthorityHash,
+      factAuthorityNormalizedHash: sourceBundle.factAuthorityNormalizedHash,
+      factAuthorityUnitCount: sourceBundle.factAuthorityUnitCount,
+      authoritativeFactSourceKind: authKind,
+      factAuthorityMatchesAuthoritativeSourceKind: Boolean(
+        factKind
+        && authKind
+        && factKind === mapFactAuthorityKindForDiagnostics(String(authKind)),
+      ),
+      factAuthoritySeparatedFromVisibleSource:
+        sourceBundle.factAuthoritySeparatedFromVisibleSource,
+      visibleOperationSourceKind: sourceBundle.visibleOperationSourceKind,
+      visibleSourceAnalysisKind: 'currentTextarea',
+      providerRewriteBaseKind: sourceBundle.providerRewriteBaseKind,
+      visibleComparisonSourceKind: sourceBundle.visibleComparisonSourceKind,
+      visibleComparisonHash: sourceBundle.visibleSourceHash,
+      visibleComparisonNormalizedHash: sourceBundle.visibleSourceNormalizedHash,
+      visibleComparisonUnitCount: sourceBundle.visibleSourceUnitCount,
+      visibleComparisonProvenance: sourceBundle.visibleSourceProvenance,
+      visibleComparisonMatchedLastAiOutput: sourceBundle.visibleSourceMatchedLastAiOutput,
+      visibleComparisonUsedForNoOp: true,
+      visibleComparisonUsedForDegradationCheck: true,
+      visibleComparisonCapturedAtRequest: true,
+      currentTextareaProvenance: sourceBundle.visibleSourceProvenance,
+      lastAiOutputHashMatched: sourceBundle.visibleSourceMatchedLastAiOutput,
+      materialUserEditDetected: sourceBundle.visibleSourceMateriallyEdited,
+      uneditedRerunDetected: earlyNoOpPreflight.uneditedRerunDetected,
+      earlyNoOpPreflightEvaluated: earlyNoOpPreflight.earlyNoOpPreflightEvaluated,
+      earlyNoOpPreflightPassed: earlyNoOpPreflight.earlyNoOpPreflightPassed,
+      earlyNoOpPreflightFailureReasons: [...earlyNoOpPreflight.earlyNoOpPreflightFailureReasons],
+      employmentStateMatchesLastAiOutput:
+        earlyNoOpPreflight.employmentStateMatchesLastAiOutput,
+      localeMatchesLastAiOutput: earlyNoOpPreflight.localeMatchesLastAiOutput,
+      entryIdentityMatchesLastAiOutput:
+        earlyNoOpPreflight.entryIdentityMatchesLastAiOutput,
+      jobContextMatchesLastAiOutput: earlyNoOpPreflight.jobContextMatchesLastAiOutput,
+      visibleHashMatchesLastAiOutput: earlyNoOpPreflight.visibleHashMatchesLastAiOutput,
+      visibleSourceAlreadyValidForTarget:
+        earlyNoOpPreflight.visibleSourceAlreadyValidForTarget,
+      sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
+      sourceTenseMismatchCount: visibleSourceAnalysis.tenseMismatchCount,
+      sourceTenseValidationPassed: visibleSourceAnalysis.sourceTenseValidationPassed,
+      expectedEmploymentTense: visibleSourceAnalysis.expectedEmploymentTense,
+      sourceDetectedTense: visibleSourceAnalysis.sourceDetectedTense,
+      semanticNoOpDetected: true,
+      semanticNoOpReason: earlyNoOpPreflight.semanticNoOpReason
+        || 'unedited_ai_output_already_valid',
+      materialImprovementDetected: false,
+      materialImprovementKinds: [],
+      materialImprovementEvidenceCount: 0,
+      degradationDetected: false,
+      degradationKinds: [],
+      neutralRestyleDetected: false,
+      finalDecisionKind: 'semantic_noop',
+      finalOutcomeReason: 'experience_ai_noop',
+      finalTypedFailureReason: null,
+      typedFailureReason: null,
+      rejectionStage: null,
+      finalCandidateSource: 'none',
+      finalCandidatePresent: false,
+      finalCandidatePredicateValidationApplicable: false,
+      finalCandidatePredicateIdentityCount: null,
+      finalSourceUnitPredicateCoveragePassed: null,
+      finalCandidateBulletCount: 0,
+      finalCandidateBulletScripts: [],
+      appliedFinalBulletCount: 0,
+      appliedFinalBulletScripts: [],
+      providerBulletCount: 0,
+      providerBulletScripts: [],
+      evaluatedCandidateBulletCount: 0,
+      evaluatedCandidateBulletScripts: [],
+      finalBulletCount: 0,
+      finalBulletScripts: [],
+      shouldApply: false,
+      visibleApplySucceeded: false,
+      shouldIncrementUsage: false,
+      countedAsSuccess: false,
+      providerAttempted: false,
+      providerAccepted: false,
+      meaningfulChangeDetected: false,
+      noOpRejected: false,
+      providerNoOpDetected: false,
+      canonicalAcceptancePassed: false,
+      candidateLineage: [{
+        candidateKind: 'visible_current_text',
+        candidateOrigin: 'request_time_visible_source',
+        present: true,
+        accepted: false,
+        selectionRole: 'no_op_authority',
+        sourceAlreadyValidForTarget: true,
+        meaningfulChangeDetected: false,
+        finalDecisionRelevance: 'caused_early_noop',
+        hash: sourceBundle.visibleSourceHash,
+        normalizedHash: sourceBundle.visibleSourceNormalizedHash,
+        unitCount: sourceBundle.visibleSourceUnitCount,
+      }],
+      experienceFactVisibleSourceSeparationRevision:
+        EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION,
+      experienceUneditedRerunPreflightRevision:
+        EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
+      experienceNoopDegradationOrderRevision:
+        EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION,
+      experienceUneditedRerunDiagnosticTruthRevision:
+        EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION,
+      experienceVisibleNoopAuthorityRevision:
+        EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
+      experienceVisibleSnapshotWiringRevision:
+        EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
+      experienceSemanticNoopFinalGateRevision:
+        EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
+      experienceFactAuthorityConsistencyRevision:
+        EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
+      spanishExperienceValidSourceNoopRevision:
+        SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION,
+      experienceFinalDecisionTruthRevision:
+        EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
+    };
+  };
+  if (
+    earlyNoOpPreflight.earlyNoOpPreflightPassed
+    || input.earlyUneditedRerunNoOp === true
+  ) {
+    return {
+      text: exp?.description || visibleComparisonText || '',
+      origin: 'user',
+      blocked: false,
+      countedAsSuccess: false,
+      reason: 'experience_ai_noop',
+      roleDutyConflict,
+      diagnostics: {
+        ...baseDiagStubForEarlyNoOp(),
+        ...buildEarlyNoOpDiagFields(),
+      },
+    };
+  }
+  function baseDiagStubForEarlyNoOp(): Record<string, unknown> {
+    return {
+      sourceLocale: locale,
+      targetLocale: locale,
+      targetScript: resolveTargetScriptForLocale(locale),
+      sourceFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
+      requiredFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
+      coveredFactCount: 0,
+      providerCoveredFactCount: 0,
+      providerRequiredFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
+      providerUncoveredFactCount: 0,
+      providerUncoveredFactIdentityHashes: [],
+      tenseMode,
+      fallbackApplied: false,
+      countedAsSuccess: false,
+      apiResponseKind: 'provider' as const,
+      serverFallbackUsed: false,
+      operationMode,
+      sourceWasEmpty,
+    };
+  }
   const buildVisibleComparisonDiagFields = (
     vis: ExperienceVisibleComparisonEvaluation | null,
     candidateText?: string,
   ): Record<string, unknown> => {
     void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
+    void EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION;
+    void EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION;
     const evalVis = vis || (visibleComparisonText
       ? evaluateExperienceVisibleComparison({
         factAuthorityText: sourceForCoverage,
         visibleComparisonText,
         candidateText: candidateText || visibleComparisonText,
         locale,
+        isPresent,
         visibleComparisonProvenance:
-          textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
-        matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+          sourceBundle.visibleSourceProvenance
+          || textareaProvenance?.currentTextareaProvenance
+          || null,
+        matchedLastAiOutput: Boolean(
+          sourceBundle.visibleSourceMatchedLastAiOutput
+          || textareaProvenance?.lastAiOutputHashMatched,
+        ),
         useVisibleForNoOp: useVisibleForNoOp || Boolean(visibleComparisonText),
         capturedAtRequest: true,
       })
       : null);
     const factKind = resolveFactAuthorityKindDiag();
-    const factText = (authoritativeFactSource || sourceForCoverage || '').trim();
+    const authKind = sourceBundle.authoritativeFactSourceKind
+      || textareaProvenance?.authoritativeFactSourceKind
+      || null;
+    const factText = (
+      sourceBundle.factAuthorityText
+      || authoritativeFactSource
+      || sourceForCoverage
+      || ''
+    ).trim();
     const factUnits = factText ? experienceAiSourceUnits(factText) : [];
+    const authorityMatch = Boolean(
+      factKind
+      && authKind
+      && factKind === mapFactAuthorityKindForDiagnostics(String(authKind)),
+    );
+    const visibleProv = sourceBundle.visibleSourceProvenance
+      || textareaProvenance?.currentTextareaProvenance
+      || null;
+    const visibleMatched = Boolean(
+      sourceBundle.visibleSourceMatchedLastAiOutput
+      || textareaProvenance?.lastAiOutputHashMatched,
+    );
+    const preflightFields = {
+      uneditedRerunDetected: earlyNoOpPreflight.uneditedRerunDetected,
+      earlyNoOpPreflightEvaluated: earlyNoOpPreflight.earlyNoOpPreflightEvaluated,
+      earlyNoOpPreflightPassed: earlyNoOpPreflight.earlyNoOpPreflightPassed,
+      earlyNoOpPreflightFailureReasons: [...earlyNoOpPreflight.earlyNoOpPreflightFailureReasons],
+      factAuthoritySeparatedFromVisibleSource:
+        sourceBundle.factAuthoritySeparatedFromVisibleSource,
+      visibleOperationSourceKind: sourceBundle.visibleOperationSourceKind,
+      visibleSourceAnalysisKind: 'currentTextarea' as const,
+      providerRewriteBaseKind: sourceBundle.providerRewriteBaseKind,
+      authoritativeFactSourceKind: authKind,
+      experienceFactVisibleSourceSeparationRevision:
+        EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION,
+      experienceUneditedRerunPreflightRevision:
+        EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
+      experienceNoopDegradationOrderRevision:
+        EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION,
+      experienceUneditedRerunDiagnosticTruthRevision:
+        EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION,
+    };
     if (!evalVis) {
       return {
         factAuthorityKind: factKind,
-        factAuthorityHash: factText ? fingerprintText(factText) : null,
-        factAuthorityNormalizedHash: factText
-          ? fingerprintText(normalizeExperienceAiSourceText(factText))
-          : null,
-        factAuthorityUnitCount: factUnits.length,
-        factAuthorityMatchesAuthoritativeSourceKind: Boolean(
-          factKind
-          && textareaProvenance?.authoritativeFactSourceKind
-          && (
-            factKind === textareaProvenance.authoritativeFactSourceKind
-            || (
-              factKind === 'pre_ai_snapshot'
-              && (
-                textareaProvenance.authoritativeFactSourceKind === 'pre_ai_snapshot'
-                || textareaProvenance.authoritativeFactSourceKind === 'original_user'
-              )
-            )
-          ),
-        ),
-        visibleComparisonSourceKind: visibleComparisonText ? 'currentTextarea' : 'none',
-        visibleComparisonHash: snapshot?.visibleComparisonHash
+        factAuthorityHash: sourceBundle.factAuthorityHash
+          ?? (factText ? fingerprintText(factText) : null),
+        factAuthorityNormalizedHash: sourceBundle.factAuthorityNormalizedHash
+          ?? (factText
+            ? fingerprintText(normalizeExperienceAiSourceText(factText))
+            : null),
+        factAuthorityUnitCount: sourceBundle.factAuthorityUnitCount || factUnits.length,
+        factAuthorityMatchesAuthoritativeSourceKind: authorityMatch,
+        visibleComparisonSourceKind: sourceBundle.visibleComparisonSourceKind,
+        visibleComparisonHash: sourceBundle.visibleSourceHash
+          ?? snapshot?.visibleComparisonHash
           ?? (visibleComparisonText ? fingerprintText(visibleComparisonText) : null),
-        visibleComparisonNormalizedHash: snapshot?.visibleComparisonNormalizedHash
+        visibleComparisonNormalizedHash: sourceBundle.visibleSourceNormalizedHash
+          ?? snapshot?.visibleComparisonNormalizedHash
           ?? (visibleComparisonText
             ? fingerprintText(normalizeExperienceAiSourceText(visibleComparisonText))
             : null),
-        visibleComparisonUnitCount: snapshot?.visibleComparisonUnitCount
-          ?? (visibleComparisonText
+        visibleComparisonUnitCount: sourceBundle.visibleSourceUnitCount
+          || snapshot?.visibleComparisonUnitCount
+          || (visibleComparisonText
             ? experienceAiSourceUnits(visibleComparisonText).length
             : 0),
-        visibleComparisonProvenance:
-          textareaProvenance?.currentTextareaProvenance || null,
-        visibleComparisonMatchedLastAiOutput: Boolean(
-          textareaProvenance?.lastAiOutputHashMatched,
-        ),
+        visibleComparisonProvenance: visibleProv,
+        visibleComparisonMatchedLastAiOutput: visibleMatched,
         visibleComparisonUsedForNoOp: Boolean(visibleComparisonText),
         visibleComparisonUsedForDegradationCheck: Boolean(visibleComparisonText),
         visibleComparisonCapturedAtRequest: true,
@@ -3425,6 +3677,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         degradationKinds: [],
         neutralRestyleDetected: false,
         finalDecisionKind: 'none',
+        ...preflightFields,
         experienceVisibleNoopAuthorityRevision:
           EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
         experienceVisibleSnapshotWiringRevision:
@@ -3435,82 +3688,93 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
       };
     }
+    let safeEval = evalVis;
+    if (
+      visibleSourceAnalysis.sourceAlreadyValidForTarget
+      && (
+        !candidateText
+        || experienceAiSourcesEquivalent(candidateText, visibleComparisonText)
+      )
+    ) {
+      const exact = experienceAiSourcesEquivalent(
+        candidateText || visibleComparisonText,
+        visibleComparisonText,
+      );
+      safeEval = {
+        ...evalVis,
+        degradationDetected: false,
+        degradationKinds: evalVis.degradationKinds.filter((k) => k !== 'tense_regressed'),
+        finalDecisionKind: exact
+          ? 'exact_noop'
+          : (evalVis.semanticNoOpDetected ? 'semantic_noop' : evalVis.finalDecisionKind),
+        semanticNoOpDetected: exact || evalVis.semanticNoOpDetected,
+      };
+    }
     return {
       factAuthorityKind: factKind,
-      factAuthorityHash: factText ? fingerprintText(factText) : null,
-      factAuthorityNormalizedHash: factText
-        ? fingerprintText(normalizeExperienceAiSourceText(factText))
-        : null,
-      factAuthorityUnitCount: factUnits.length,
-      factAuthorityMatchesAuthoritativeSourceKind: Boolean(
-        factKind
-        && textareaProvenance?.authoritativeFactSourceKind
-        && (
-          factKind === textareaProvenance.authoritativeFactSourceKind
-          || (
-            factKind === 'pre_ai_snapshot'
-            && (
-              textareaProvenance.authoritativeFactSourceKind === 'pre_ai_snapshot'
-              || textareaProvenance.authoritativeFactSourceKind === 'original_user'
-            )
-          )
-        ),
-      ),
-      visibleComparisonSourceKind: evalVis.visibleComparisonSourceKind,
-      visibleComparisonHash: snapshot?.visibleComparisonHash ?? evalVis.visibleComparisonHash,
-      visibleComparisonNormalizedHash:
-        snapshot?.visibleComparisonNormalizedHash ?? evalVis.visibleComparisonNormalizedHash,
-      visibleComparisonUnitCount:
-        snapshot?.visibleComparisonUnitCount ?? evalVis.visibleComparisonUnitCount,
-      visibleComparisonProvenance:
-        textareaProvenance?.currentTextareaProvenance
-        || evalVis.visibleComparisonProvenance
-        || null,
-      visibleComparisonMatchedLastAiOutput: Boolean(
-        textareaProvenance?.lastAiOutputHashMatched
-        ?? evalVis.visibleComparisonMatchedLastAiOutput,
-      ),
-      visibleComparisonUsedForNoOp: evalVis.visibleComparisonUsedForNoOp,
+      factAuthorityHash: sourceBundle.factAuthorityHash
+        ?? (factText ? fingerprintText(factText) : null),
+      factAuthorityNormalizedHash: sourceBundle.factAuthorityNormalizedHash
+        ?? (factText
+          ? fingerprintText(normalizeExperienceAiSourceText(factText))
+          : null),
+      factAuthorityUnitCount: sourceBundle.factAuthorityUnitCount || factUnits.length,
+      factAuthorityMatchesAuthoritativeSourceKind: authorityMatch,
+      visibleComparisonSourceKind: sourceBundle.visibleComparisonSourceKind
+        || safeEval.visibleComparisonSourceKind,
+      visibleComparisonHash: sourceBundle.visibleSourceHash
+        ?? snapshot?.visibleComparisonHash
+        ?? safeEval.visibleComparisonHash,
+      visibleComparisonNormalizedHash: sourceBundle.visibleSourceNormalizedHash
+        ?? snapshot?.visibleComparisonNormalizedHash
+        ?? safeEval.visibleComparisonNormalizedHash,
+      visibleComparisonUnitCount: sourceBundle.visibleSourceUnitCount
+        || snapshot?.visibleComparisonUnitCount
+        || safeEval.visibleComparisonUnitCount,
+      visibleComparisonProvenance: visibleProv || safeEval.visibleComparisonProvenance,
+      visibleComparisonMatchedLastAiOutput: visibleMatched,
+      visibleComparisonUsedForNoOp: safeEval.visibleComparisonUsedForNoOp,
       visibleComparisonUsedForDegradationCheck:
-        evalVis.visibleComparisonUsedForDegradationCheck,
+        safeEval.visibleComparisonUsedForDegradationCheck,
       visibleComparisonCapturedAtRequest: true,
       finalMatchesVisibleComparisonAfterNormalization:
-        evalVis.finalMatchesVisibleComparisonAfterNormalization,
+        safeEval.finalMatchesVisibleComparisonAfterNormalization,
       finalSemanticallyEquivalentToVisibleComparison:
-        evalVis.finalSemanticallyEquivalentToVisibleComparison,
-      semanticNoOpDetected: evalVis.semanticNoOpDetected,
-      semanticNoOpReason: evalVis.semanticNoOpReason,
+        safeEval.finalSemanticallyEquivalentToVisibleComparison,
+      semanticNoOpDetected: safeEval.semanticNoOpDetected,
+      semanticNoOpReason: safeEval.semanticNoOpReason,
       materialImprovementDetected: (() => {
         const isEs = (locale || '').toLowerCase().startsWith('es');
         const kinds = isEs
-          ? evalVis.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
-          : evalVis.materialImprovementKinds;
-        return evalVis.materialImprovementDetected && kinds.length > 0;
+          ? safeEval.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
+          : safeEval.materialImprovementKinds;
+        return safeEval.materialImprovementDetected && kinds.length > 0;
       })(),
       materialImprovementKinds: (() => {
         const isEs = (locale || '').toLowerCase().startsWith('es');
         const kinds = isEs
-          ? evalVis.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
-          : evalVis.materialImprovementKinds;
-        return evalVis.materialImprovementDetected ? [...kinds] : [];
+          ? safeEval.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
+          : safeEval.materialImprovementKinds;
+        return safeEval.materialImprovementDetected ? [...kinds] : [];
       })(),
       materialImprovementEvidenceCount: (() => {
         const isEs = (locale || '').toLowerCase().startsWith('es');
         const kinds = isEs
-          ? evalVis.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
-          : evalVis.materialImprovementKinds;
-        return evalVis.materialImprovementDetected ? kinds.length : 0;
+          ? safeEval.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
+          : safeEval.materialImprovementKinds;
+        return safeEval.materialImprovementDetected ? kinds.length : 0;
       })(),
-      degradationDetected: evalVis.degradationDetected,
-      degradationKinds: [...evalVis.degradationKinds],
-      neutralRestyleDetected: evalVis.neutralRestyleDetected,
-      finalDecisionKind: evalVis.finalDecisionKind,
+      degradationDetected: safeEval.degradationDetected,
+      degradationKinds: [...safeEval.degradationKinds],
+      neutralRestyleDetected: safeEval.neutralRestyleDetected,
+      finalDecisionKind: safeEval.finalDecisionKind,
       candidateSurfaceFormPassed,
       candidateSurfaceFailureKinds: [...candidateSurfaceFailureKinds],
       unsupportedClaimRepairCandidateProduced,
       unsupportedClaimRepairCandidateValid,
       unsupportedClaimRepairSelectedForComparison,
       unsupportedClaimRepairVisibleApplyPerformed,
+      ...preflightFields,
       experienceCanonicalFinalizationRevision:
         EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
       spanishExperienceSurfaceFormGateRevision:
