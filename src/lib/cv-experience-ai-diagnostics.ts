@@ -2143,16 +2143,23 @@ export class ExperienceAiDiagnosticSession {
       (finalized.diagnostics as { noOpRejected?: boolean } | undefined)?.noOpRejected,
     );
     if (perspAttempted || noOp || reason === 'experience_cv_perspective_first_person' || reason === 'experience_ai_noop') {
+      // AAB-316: no-op must not be reported as perspective_normalization fail.
+      const perspectiveStatus = (() => {
+        if (noOp || reason === 'experience_ai_noop') {
+          if (!perspAttempted) return 'skipped' as const;
+          return perspPassed ? 'ok' as const : 'skipped' as const;
+        }
+        if (!finalized.countedAsSuccess && reason === 'experience_cv_perspective_first_person') {
+          return 'fail' as const;
+        }
+        return (perspPassed || finalized.countedAsSuccess) ? 'ok' as const : 'fail' as const;
+      })();
       this.stage(
         'perspective_normalization',
-        !finalized.countedAsSuccess && (noOp || reason === 'experience_cv_perspective_first_person' || reason === 'experience_ai_noop')
-          ? 'fail'
-          : (perspPassed || finalized.countedAsSuccess ? 'ok' : 'fail'),
-        noOp
-          ? 'experience_ai_noop'
-          : (!perspPassed && !finalized.countedAsSuccess
-            ? (reason || 'experience_cv_perspective_first_person')
-            : (perspApplied ? undefined : undefined)),
+        perspectiveStatus,
+        perspectiveStatus === 'fail'
+          ? (reason || 'experience_cv_perspective_first_person')
+          : (noOp ? 'experience_ai_noop' : (perspApplied ? undefined : undefined)),
       );
     }
 
@@ -2162,13 +2169,15 @@ export class ExperienceAiDiagnosticSession {
         'ok',
         diag.clientDeterministicFallbackReason || diag.rejectionStage || undefined,
       );
+      const tenseNormOk = diag.finalCandidateSource === 'deterministic_tense_normalizer'
+        && Boolean(finalized.countedAsSuccess);
       const fbCount = diag.clientDeterministicFallbackBulletCount
         ?? diag.fallbackBulletCount
-        ?? (clientFallbackApplied ? bullets.length : 0);
+        ?? (clientFallbackApplied || tenseNormOk ? bullets.length : 0);
       this.stage(
         'fallback_output_built',
-        fbCount > 0 ? 'ok' : 'fail',
-        fbCount > 0 ? undefined : 'empty_fallback',
+        fbCount > 0 || tenseNormOk ? 'ok' : 'fail',
+        fbCount > 0 || tenseNormOk ? undefined : 'empty_fallback',
       );
       this.stage(
         'fallback_locale_validation',

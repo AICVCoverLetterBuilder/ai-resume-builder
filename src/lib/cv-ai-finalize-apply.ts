@@ -756,6 +756,10 @@ export type FinalizeCvAiFieldResult = {
     spanishExperienceProviderNoopTenseRecoveryRevision?: typeof SPANISH_EXPERIENCE_PROVIDER_NOOP_TENSE_RECOVERY_315_REVISION;
     spanishExperienceFinalTenseAcceptanceRevision?: typeof SPANISH_EXPERIENCE_FINAL_TENSE_ACCEPTANCE_315_REVISION;
     experienceTenseDecisionDiagnosticsRevision?: typeof EXPERIENCE_TENSE_DECISION_DIAGNOSTICS_315_REVISION;
+    experienceSingleCanonicalFinalizerRevision?: typeof EXPERIENCE_SINGLE_CANONICAL_FINALIZER_316_REVISION;
+    spanishExperienceSemanticDeltaGroundingRevision?: typeof SPANISH_EXPERIENCE_SEMANTIC_DELTA_GROUNDING_316_REVISION;
+    spanishExperienceValidSourceNoopRevision?: typeof SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION;
+    experienceFinalDecisionTruthRevision?: typeof EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION;
     sourceAlreadyValidForTarget?: boolean | null;
     sourceTenseValidationPassed?: boolean | null;
     sourcePastUnitCount?: number | null;
@@ -5714,7 +5718,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           if (!cons.decision.shouldApply) {
             providerAccepted = false;
             providerUnsupportedClaimCount = Math.max(
-              providerUnsupportedClaimCount,
+              providerUnsupportedClaimCount ?? 0,
               cons.providerValidation.unsupportedCount,
             );
             providerUnsupportedClaimKinds = [
@@ -5722,9 +5726,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 ...providerUnsupportedClaimKinds,
                 ...cons.providerValidation.unsupportedKinds,
               ]),
-            ];
+            ] as ExperienceUnsupportedClaimKind[];
             finalUnsupportedClaimCount = cons.providerValidation.unsupportedCount;
-            finalUnsupportedClaimKinds = [...cons.providerValidation.unsupportedKinds];
+            finalUnsupportedClaimKinds = [
+              ...cons.providerValidation.unsupportedKinds,
+            ] as ExperienceUnsupportedClaimKind[];
             // Already-valid / zero-defect source: preserve visible text (+0).
             // Sources with correctable defects continue to dedicated recovery.
             if (
@@ -6951,7 +6957,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                   clientDeterministicFallbackBulletCount,
                   clientDeterministicFallbackCoveredFactCount,
                   fallbackBulletCount: clientDeterministicFallbackBulletCount,
-                  fallbackCoveredFactCount: clientDeterministicFallbackCoveredFactCount,
                   clientDeterministicFallbackReason: 'spanish_tense_normalizer',
                   materialImprovementDetected: true,
                   materialImprovementKinds: tenseDecision.materialImprovementKinds,
