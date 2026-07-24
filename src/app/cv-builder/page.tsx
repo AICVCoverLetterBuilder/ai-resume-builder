@@ -1485,7 +1485,8 @@ export default function CVBuilderPage() {
       levelNorm: requestContext.levelNorm,
       isPresent: Boolean(exp.isPresent),
     });
-    void diagSession.resolveVersions();
+    // Capture immutable build metadata before provenance/preflight/any early return.
+    await diagSession.resolveVersions();
 
     const showExperienceAiRejectToast = (message: string) => {
       if (INTERNAL_AI_RESET_ENABLED) {
@@ -1601,6 +1602,8 @@ export default function CVBuilderPage() {
           responseSource: 'blocked',
         });
         diagSession.recordFinalizeResult(earlyFinalized);
+        // Clean no-op terminalizer already set stages — do not call recordVisibleApply(false).
+        await diagSession.resolveVersions();
         diagSession.patch({
           providerAttempted: false,
           earlyNoOpPreflightPassed: true,
@@ -1613,8 +1616,12 @@ export default function CVBuilderPage() {
           finalOutcomeReason: 'experience_ai_noop',
           rejectionStage: null,
           finalTypedFailureReason: null,
+          finalBulletCount: 0,
+          finalBulletScripts: [],
+          providerNoOpDetected: false,
+          apiResponseKind: 'not_attempted',
+          providerResponseKind: 'not_attempted',
         });
-        diagSession.recordVisibleApply(false, countBefore);
         diagSession.commit();
         logExperienceAiTrace({
           resultApplied: false,

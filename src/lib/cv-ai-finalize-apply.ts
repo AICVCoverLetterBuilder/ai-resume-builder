@@ -168,6 +168,23 @@ export {
   EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION,
   EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION,
 };
+import {
+  EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION,
+  EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION,
+  EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
+  EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
+  buildExperienceCleanNoOpTerminalFields,
+} from './cv-experience-terminal-outcome';
+export {
+  EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION,
+  EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION,
+  EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
+  EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
+};
+void EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION;
+void EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION;
+void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
+void EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION;
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
 void SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION;
@@ -434,6 +451,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
   EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION,
   EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION,
+  EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION,
+  EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION,
+  EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
+  EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
@@ -3411,9 +3432,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     void EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION;
     void EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION;
     void EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION;
+    void EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION;
+    void EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION;
     const factKind = resolveFactAuthorityKindDiag();
     const authKind = sourceBundle.authoritativeFactSourceKind;
+    const cleanTerminal = buildExperienceCleanNoOpTerminalFields({
+      decisionKind: 'semantic_noop',
+      semanticNoOpReason: earlyNoOpPreflight.semanticNoOpReason
+        || 'unedited_ai_output_already_valid',
+      visibleSourceAlreadyValid: true,
+      visibleComparisonHash: sourceBundle.visibleSourceHash,
+      visibleComparisonNormalizedHash: sourceBundle.visibleSourceNormalizedHash,
+      visibleComparisonUnitCount: sourceBundle.visibleSourceUnitCount,
+    });
     return {
+      ...cleanTerminal,
       factAuthorityKind: factKind,
       factAuthorityHash: sourceBundle.factAuthorityHash,
       factAuthorityNormalizedHash: sourceBundle.factAuthorityNormalizedHash,
@@ -3551,6 +3584,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     };
   }
   function baseDiagStubForEarlyNoOp(): Record<string, unknown> {
+    void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
     return {
       sourceLocale: locale,
       targetLocale: locale,
@@ -3558,15 +3592,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       sourceFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
       requiredFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
       coveredFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
-      providerCoveredFactCount: 0,
-      providerRequiredFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
-      providerUncoveredFactCount: 0,
+      // Provider never ran — do not seed coverage counts that synthesize lineage.
+      providerCoveredFactCount: null,
+      providerRequiredFactCount: null,
+      providerUncoveredFactCount: null,
       providerUncoveredFactIdentityHashes: [],
       uncoveredFactIdentityHashes: [],
       tenseMode,
       fallbackApplied: false,
       countedAsSuccess: false,
-      apiResponseKind: 'provider' as const,
+      apiResponseKind: 'not_attempted' as const,
+      providerResponseKind: 'not_attempted' as const,
+      providerHttpStatus: null,
+      providerAttempted: false,
       serverFallbackUsed: false,
       operationMode,
       sourceWasEmpty,
@@ -7216,6 +7254,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 diagnostics: {
                   ...acceptedTense.diagnostics,
                   finalCandidateSource: 'deterministic_tense_normalizer',
+                  finalCandidatePresent: true,
+                  finalCandidateValidationApplicable: true,
+                  finalCandidatePredicateValidationApplicable: true,
+                  finalCandidateBulletCount: clientDeterministicFallbackBulletCount,
+                  finalCandidateBulletScripts: splitExperienceBullets(tenseDet.text)
+                    .filter(Boolean)
+                    .map((b) => (detectBulletScripts(b)[0] || 'latin')),
+                  appliedFinalBulletCount: clientDeterministicFallbackBulletCount,
+                  appliedFinalBulletScripts: splitExperienceBullets(tenseDet.text)
+                    .filter(Boolean)
+                    .map((b) => (detectBulletScripts(b)[0] || 'latin')),
+                  finalBulletCount: clientDeterministicFallbackBulletCount,
+                  finalBulletScripts: splitExperienceBullets(tenseDet.text)
+                    .filter(Boolean)
+                    .map((b) => (detectBulletScripts(b)[0] || 'latin')),
+                  providerAttempted: true,
                   finalDecisionKind: 'material_improvement',
                   clientDeterministicFallbackAttempted: true,
                   clientDeterministicFallbackApplied: true,

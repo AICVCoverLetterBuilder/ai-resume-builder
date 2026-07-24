@@ -19,10 +19,22 @@ import {
   EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
 } from './cv-ai-finalize-apply';
 import {
+  EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION,
+  EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION,
+  EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
+  EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
+  EXPERIENCE_CLEAN_NOOP_STAGE_PLAN,
+  buildExperienceCleanNoOpTerminalFields,
+} from './cv-experience-terminal-outcome';
+import {
   experienceAiSourcesEquivalent,
 } from './cv-experience-ai-operation-snapshot';
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
 void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
+void EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION;
+void EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION;
+void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
+void EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION;
 import { detectTextLocale } from './cv-content-locale';
 import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
@@ -68,6 +80,8 @@ export type ExperienceAiDiagStageName =
   | 'job_context_built'
   | 'request_payload_built'
   | 'request_started'
+  | 'unedited_rerun_preflight'
+  | 'provider_request_started'
   | 'api_response_received'
   | 'provider_output_parsed'
   | 'locale_validation'
@@ -218,7 +232,7 @@ export type ExperienceAiDiagnosticTrace = {
   generationFallbackFailureReason: string | null;
   apiHostClass: ExperienceApiHostClass;
   providerHttpStatus: number | null;
-  providerResponseKind: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown';
+  providerResponseKind: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown' | 'not_attempted';
   providerBulletCount: number;
   providerBulletScripts: ExperienceScriptClass[];
   providerLocaleValidationReason: string | null;
@@ -268,7 +282,7 @@ export type ExperienceAiDiagnosticTrace = {
   finalPersonMode: string | null;
   perspectiveNormalizationAttempted: boolean;
   perspectiveNormalizationApplied: boolean;
-  perspectiveValidationPassed: boolean;
+  perspectiveValidationPassed: boolean | null;
   normalizedBulletsUsedForApply: boolean;
   finalMatchesProviderOutput: boolean;
   finalMatchesSourceAfterNormalization: boolean;
@@ -390,7 +404,7 @@ export type ExperienceAiDiagnosticTrace = {
   fallbackBulletScripts: ExperienceScriptClass[];
   fallbackRequiredFactCount: number;
   fallbackCoveredFactCount: number;
-  apiResponseKind: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown';
+  apiResponseKind: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown' | 'not_attempted';
   serverFallbackUsed: boolean;
   clientDeterministicFallbackAttempted: boolean;
   clientDeterministicFallbackReason: string | null;
@@ -410,7 +424,7 @@ export type ExperienceAiDiagnosticTrace = {
   generationFallbackApplied: boolean;
   generatedBulletCount: number;
   generatedBulletScripts: ExperienceScriptClass[];
-  relevanceValidationPassed: boolean;
+  relevanceValidationPassed: boolean | null;
   /** Alias kept alongside perspectiveValidationPassed for generation mode. */
   tenseValidationPassed: boolean;
   visibleApplySucceeded: boolean;
@@ -418,7 +432,7 @@ export type ExperienceAiDiagnosticTrace = {
   finalBulletScripts: ExperienceScriptClass[];
   finalTypedFailureReason: string | null;
   rejectionStage: string | null;
-  raceGuardResult: 'ok' | 'fail' | 'skipped';
+  raceGuardResult: 'ok' | 'fail' | 'skipped' | 'not_required';
   countedAsSuccess: boolean;
   usageCountBefore: number;
   usageCountAfter: number;
@@ -1318,6 +1332,7 @@ export class ExperienceAiDiagnosticSession {
 
     this.patch({
       providerHttpStatus: opts.httpStatus,
+      providerAttempted: opts.httpStatus != null,
       providerResponseKind: kind,
       apiResponseKind: kind,
       serverFallbackUsed: kind === 'fallback',
@@ -1351,11 +1366,103 @@ export class ExperienceAiDiagnosticSession {
   }
 
   /**
+   * Dedicated clean no-op terminalizer for early unedited-rerun preflight.
+   * Must not reuse rejected-apply / failure stage semantics.
+   */
+  recordCleanNoOpTerminal(finalized: FinalizeCvAiFieldResult): void {
+    void EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION;
+    void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
+    void EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION;
+    void EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION;
+    const diag = (finalized.diagnostics || {}) as Record<string, unknown>;
+    const clean = buildExperienceCleanNoOpTerminalFields({
+      decisionKind: (diag.finalDecisionKind === 'exact_noop' ? 'exact_noop' : 'semantic_noop'),
+      semanticNoOpReason: typeof diag.semanticNoOpReason === 'string'
+        ? diag.semanticNoOpReason
+        : 'unedited_ai_output_already_valid',
+      visibleSourceAlreadyValid: true,
+      visibleComparisonHash: (diag.visibleComparisonHash as string | null | undefined) ?? null,
+      visibleComparisonNormalizedHash:
+        (diag.visibleComparisonNormalizedHash as string | null | undefined) ?? null,
+      visibleComparisonUnitCount: Number(diag.visibleComparisonUnitCount ?? 0),
+    });
+    // Preserve dual-source / preflight truth from finalize, then force clean terminal fields.
+    this.patch({
+      ...diag,
+      ...clean,
+      finalTypedFailureReason: null,
+      rejectionStage: null,
+      typedFailureReason: null,
+      providerNoOpDetected: false,
+      providerAttempted: false,
+      providerHttpStatus: null,
+      providerResponseKind: 'not_attempted',
+      apiResponseKind: 'not_attempted',
+      providerCoveredFactCount: null,
+      providerRequiredFactCount: null,
+      providerRejectionReasons: [],
+      providerRejectionStage: null,
+      providerAccepted: false,
+      providerBulletCount: 0,
+      providerBulletScripts: [],
+      finalBulletCount: 0,
+      finalBulletScripts: [],
+      finalCandidatePresent: false,
+      finalCandidateSource: 'none',
+      finalCandidateBulletCount: 0,
+      finalCandidateBulletScripts: [],
+      appliedFinalBulletCount: 0,
+      appliedFinalBulletScripts: [],
+      countedAsSuccess: false,
+      visibleApplySucceeded: false,
+      shouldIncrementUsage: false,
+      usageIncrementAttempted: false,
+      applyAttempted: false,
+      raceGuardApplicable: false,
+      raceGuardResult: 'not_required',
+      usageCountAfter: this.draft.usageCountBefore,
+      relevanceValidationPassed: null,
+      perspectiveValidationPassed: null,
+      // Visible-source preflight proved tense/locale validity.
+      tenseValidationPassed: true,
+      localeValidationPassed: true,
+      candidateLineage: clean.candidateLineage as ExperienceAiDiagnosticTrace['candidateLineage'],
+      experienceCleanNoopTerminalOutcomeRevision:
+        EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION,
+      experiencePreflightBuildMetadataRevision:
+        EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION,
+      experienceProviderNotAttemptedTruthRevision:
+        EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
+      experienceTerminalDiagnosticConsistencyRevision:
+        EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
+    } as Partial<ExperienceAiDiagnosticTrace>);
+
+    for (const step of EXPERIENCE_CLEAN_NOOP_STAGE_PLAN) {
+      this.stage(
+        step.stage as ExperienceAiDiagStageName,
+        step.result,
+        step.typedReason,
+      );
+    }
+  }
+
+  /**
    * Map finalize result into validation / fallback / apply stages without
    * re-running validators (uses finalize diagnostics + reason only).
    */
   recordFinalizeResult(finalized: FinalizeCvAiFieldResult): void {
     const diag = finalized.diagnostics || {};
+    const earlyCleanNoOp = diag.earlyNoOpPreflightPassed === true
+      || (
+        finalized.reason === 'experience_ai_noop'
+        && finalized.blocked !== true
+        && finalized.countedAsSuccess !== true
+        && diag.providerAttempted === false
+      );
+    if (earlyCleanNoOp) {
+      this.recordCleanNoOpTerminal(finalized);
+      return;
+    }
     const text = (finalized.text || '').trim();
     const bullets = splitExperienceBullets(text).filter(Boolean);
     const clientFallbackApplied = Boolean(
@@ -1367,6 +1474,7 @@ export class ExperienceAiDiagnosticSession {
       || clientFallbackApplied
       || diag.fallbackApplied,
     );
+    // Clean no-op already returned — do not treat !countedAsSuccess as blocked failure.
     const blocked = Boolean(finalized.blocked || !finalized.countedAsSuccess);
     const reason = finalized.reason || diag.typedFailureReason || null;
     const apiResponseKind = diag.apiResponseKind || this.draft.providerResponseKind || 'unknown';
@@ -1413,6 +1521,25 @@ export class ExperienceAiDiagnosticSession {
           : (providerUncovered.length && finalCovered < finalRequired
             ? [...providerUncovered]
             : (this.draft.uncoveredFactIdentityHashes || []))
+      );
+    const appliedSuccess = Boolean(finalized.countedAsSuccess && !finalized.blocked);
+    const appliedScripts = appliedSuccess ? scriptsFromBullets(text) : [];
+    const appliedCount = appliedSuccess ? bullets.length : 0;
+    const legacyFinalCount = appliedSuccess
+      ? Number(diag.finalBulletCount ?? bullets.length)
+      : Number(diag.finalBulletCount ?? 0);
+    const legacyFinalScripts = appliedSuccess
+      ? (
+        Array.isArray(diag.finalBulletScripts)
+        && (diag.finalBulletScripts as unknown[]).length === legacyFinalCount
+          ? (diag.finalBulletScripts as ExperienceScriptClass[])
+          : appliedScripts
+      )
+      : (
+        Array.isArray(diag.finalBulletScripts)
+        && Number(diag.finalBulletCount ?? 0) === (diag.finalBulletScripts as unknown[]).length
+          ? (diag.finalBulletScripts as ExperienceScriptClass[])
+          : []
       );
     // Top-level coverage always describes the FINAL selected candidate.
     // Provider evidence stays in provider* fields (never overwrite with final).
@@ -1500,15 +1627,19 @@ export class ExperienceAiDiagnosticSession {
       generationFallbackApplied: Boolean(diag.generationFallbackApplied),
       generatedBulletCount: diag.generatedBulletCount ?? (diag.sourceWasEmpty ? bullets.length : 0),
       generatedBulletScripts: diag.sourceWasEmpty ? scriptsFromBullets(text) : [],
-      relevanceValidationPassed: Boolean(diag.relevanceValidationPassed),
-      tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? diag.tenseMode),
+      relevanceValidationPassed: typeof diag.relevanceValidationPassed === 'boolean'
+        ? diag.relevanceValidationPassed
+        : (appliedSuccess ? true : Boolean(diag.relevanceValidationPassed)),
+      tenseValidationPassed: typeof diag.tenseValidationPassed === 'boolean'
+        ? diag.tenseValidationPassed
+        : Boolean(diag.tenseValidationPassed ?? diag.tenseMode),
       unsupportedClaimCount: Math.max(
         diag.unsupportedClaimCount ?? 0,
         reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
       ),
       visibleApplySucceeded: Boolean(finalized.countedAsSuccess && !blocked),
-      finalBulletCount: diag.finalBulletCount ?? bullets.length,
-      finalBulletScripts: scriptsFromBullets(text),
+      finalBulletCount: legacyFinalCount,
+      finalBulletScripts: legacyFinalScripts,
       tenseMode: diag.tenseMode || this.draft.tenseMode || 'unknown',
       perspectiveMode: (diag.perspectiveMode as ExperienceAiDiagnosticTrace['perspectiveMode']) || 'cv_third_person',
       sourcePersonMode: (diag.sourcePersonMode as string | undefined) || null,
@@ -1517,7 +1648,9 @@ export class ExperienceAiDiagnosticSession {
       finalPersonMode: (diag.finalPersonMode as string | undefined) || null,
       perspectiveNormalizationAttempted: Boolean(diag.perspectiveNormalizationAttempted),
       perspectiveNormalizationApplied: Boolean(diag.perspectiveNormalizationApplied),
-      perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed),
+      perspectiveValidationPassed: typeof diag.perspectiveValidationPassed === 'boolean'
+        ? diag.perspectiveValidationPassed
+        : (appliedSuccess ? true : Boolean(diag.perspectiveValidationPassed)),
       normalizedBulletsUsedForApply: Boolean(diag.normalizedBulletsUsedForApply),
       finalMatchesProviderOutput: Boolean(diag.finalMatchesProviderOutput),
       finalMatchesSourceAfterNormalization: Boolean(diag.finalMatchesSourceAfterNormalization),
@@ -1526,8 +1659,7 @@ export class ExperienceAiDiagnosticSession {
       providerNoOpDetected: Boolean(
         diag.providerNoOpDetected
         || diag.noOpRejected
-        || reason === 'ai_no_meaningful_change'
-        || reason === 'experience_ai_noop',
+        || reason === 'ai_no_meaningful_change',
       ),
       noOpRepairAttempted: Boolean(diag.noOpRepairAttempted),
       noOpRepairValidationPassed: diag.noOpRepairValidationPassed ?? null,
@@ -1712,42 +1844,25 @@ export class ExperienceAiDiagnosticSession {
         }
         : {}),
       ...(typeof (diag as Record<string, unknown>).earlyNoOpPreflightPassed === 'boolean'
+        && (diag as Record<string, unknown>).earlyNoOpPreflightPassed === true
         ? {
-          earlyNoOpPreflightPassed:
-            (diag as Record<string, unknown>).earlyNoOpPreflightPassed as boolean,
+          earlyNoOpPreflightPassed: true,
           earlyNoOpPreflightEvaluated: Boolean(
             (diag as Record<string, unknown>).earlyNoOpPreflightEvaluated,
           ),
           uneditedRerunDetected: Boolean(
             (diag as Record<string, unknown>).uneditedRerunDetected,
           ),
-          providerAttempted: (diag as Record<string, unknown>).providerAttempted === true,
+          providerAttempted: false,
           finalOutcomeReason:
             ((diag as Record<string, unknown>).finalOutcomeReason as string | null | undefined)
-            ?? null,
-          finalCandidatePresent:
-            (diag as Record<string, unknown>).finalCandidatePresent === true,
-          finalCandidatePredicateValidationApplicable:
-            (diag as Record<string, unknown>).finalCandidatePredicateValidationApplicable
-            === true,
-          finalCandidateBulletCount: Number(
-            (diag as Record<string, unknown>).finalCandidateBulletCount ?? 0,
-          ),
-          finalCandidateBulletScripts: Array.isArray(
-            (diag as Record<string, unknown>).finalCandidateBulletScripts,
-          )
-            ? ((diag as Record<string, unknown>).finalCandidateBulletScripts as unknown[])
-              .map(String)
-            : [],
-          appliedFinalBulletCount: Number(
-            (diag as Record<string, unknown>).appliedFinalBulletCount ?? 0,
-          ),
-          appliedFinalBulletScripts: Array.isArray(
-            (diag as Record<string, unknown>).appliedFinalBulletScripts,
-          )
-            ? ((diag as Record<string, unknown>).appliedFinalBulletScripts as unknown[])
-              .map(String)
-            : [],
+            ?? 'experience_ai_noop',
+          finalCandidatePresent: false,
+          finalCandidatePredicateValidationApplicable: false,
+          finalCandidateBulletCount: 0,
+          finalCandidateBulletScripts: [],
+          appliedFinalBulletCount: 0,
+          appliedFinalBulletScripts: [],
           sourceAlreadyValidForTarget:
             typeof (diag as Record<string, unknown>).sourceAlreadyValidForTarget === 'boolean'
               ? (diag as Record<string, unknown>).sourceAlreadyValidForTarget as boolean
@@ -1764,7 +1879,131 @@ export class ExperienceAiDiagnosticSession {
             ((diag as Record<string, unknown>).expectedEmploymentTense as string | null | undefined)
             ?? null,
         }
-        : {}),
+        : appliedSuccess
+          ? {
+            earlyNoOpPreflightPassed:
+              typeof (diag as Record<string, unknown>).earlyNoOpPreflightPassed === 'boolean'
+                ? (diag as Record<string, unknown>).earlyNoOpPreflightPassed as boolean
+                : false,
+            earlyNoOpPreflightEvaluated: Boolean(
+              (diag as Record<string, unknown>).earlyNoOpPreflightEvaluated,
+            ),
+            providerAttempted: Boolean(
+              (diag as Record<string, unknown>).providerAttempted === true
+              || this.draft.providerAttempted === true
+              || this.draft.providerHttpStatus != null
+              || diag.providerHttpStatus != null,
+            ),
+            finalCandidatePresent: true,
+            finalCandidateSource: (diag.finalCandidateSource as string | undefined)
+              ?? (clientFallbackApplied
+                ? (diag.finalCandidateSource === 'deterministic_tense_normalizer'
+                  ? 'deterministic_tense_normalizer'
+                  : 'deterministic_fallback')
+                : (diag.unsupportedClaimRepairApplied
+                  ? 'unsupported_claim_repair'
+                  : (diag.noOpRepairApplied ? 'noop_repair' : 'provider'))),
+            finalCandidateValidationApplicable: true,
+            finalCandidatePredicateValidationApplicable: true,
+            finalCandidateBulletCount: Number(
+              (diag as Record<string, unknown>).finalCandidateBulletCount
+              ?? appliedCount
+              ?? bullets.length,
+            ),
+            finalCandidateBulletScripts: Array.isArray(
+              (diag as Record<string, unknown>).finalCandidateBulletScripts,
+            )
+              && ((diag as Record<string, unknown>).finalCandidateBulletScripts as unknown[])
+                .length === Number(
+                (diag as Record<string, unknown>).finalCandidateBulletCount ?? appliedCount,
+              )
+              ? ((diag as Record<string, unknown>).finalCandidateBulletScripts as unknown[])
+                .map(String)
+              : appliedScripts,
+            appliedFinalBulletCount: Number(
+              (diag as Record<string, unknown>).appliedFinalBulletCount
+              ?? appliedCount
+              ?? bullets.length,
+            ),
+            appliedFinalBulletScripts: Array.isArray(
+              (diag as Record<string, unknown>).appliedFinalBulletScripts,
+            )
+              && ((diag as Record<string, unknown>).appliedFinalBulletScripts as unknown[])
+                .length === Number(
+                (diag as Record<string, unknown>).appliedFinalBulletCount ?? appliedCount,
+              )
+              ? ((diag as Record<string, unknown>).appliedFinalBulletScripts as unknown[])
+                .map(String)
+              : appliedScripts,
+            applyAttempted: true,
+            visibleApplyApplicable: true,
+            sourceAlreadyValidForTarget:
+              typeof (diag as Record<string, unknown>).sourceAlreadyValidForTarget === 'boolean'
+                ? (diag as Record<string, unknown>).sourceAlreadyValidForTarget as boolean
+                : null,
+            sourceTenseMismatchCount:
+              typeof (diag as Record<string, unknown>).sourceTenseMismatchCount === 'number'
+                ? (diag as Record<string, unknown>).sourceTenseMismatchCount as number
+                : null,
+            sourceTenseValidationPassed:
+              typeof (diag as Record<string, unknown>).sourceTenseValidationPassed === 'boolean'
+                ? (diag as Record<string, unknown>).sourceTenseValidationPassed as boolean
+                : null,
+            expectedEmploymentTense:
+              ((diag as Record<string, unknown>).expectedEmploymentTense as string | null | undefined)
+              ?? null,
+          }
+        : typeof (diag as Record<string, unknown>).earlyNoOpPreflightPassed === 'boolean'
+          ? {
+            earlyNoOpPreflightPassed: false,
+            earlyNoOpPreflightEvaluated: Boolean(
+              (diag as Record<string, unknown>).earlyNoOpPreflightEvaluated,
+            ),
+            uneditedRerunDetected: Boolean(
+              (diag as Record<string, unknown>).uneditedRerunDetected,
+            ),
+            providerAttempted: Boolean(
+              (diag as Record<string, unknown>).providerAttempted === true
+              || this.draft.providerAttempted === true
+              || this.draft.providerHttpStatus != null,
+            ),
+            finalCandidatePresent:
+              (diag as Record<string, unknown>).finalCandidatePresent === true,
+            finalCandidateBulletCount: Number(
+              (diag as Record<string, unknown>).finalCandidateBulletCount ?? 0,
+            ),
+            finalCandidateBulletScripts: Array.isArray(
+              (diag as Record<string, unknown>).finalCandidateBulletScripts,
+            )
+              ? ((diag as Record<string, unknown>).finalCandidateBulletScripts as unknown[])
+                .map(String)
+              : [],
+            appliedFinalBulletCount: Number(
+              (diag as Record<string, unknown>).appliedFinalBulletCount ?? 0,
+            ),
+            appliedFinalBulletScripts: Array.isArray(
+              (diag as Record<string, unknown>).appliedFinalBulletScripts,
+            )
+              ? ((diag as Record<string, unknown>).appliedFinalBulletScripts as unknown[])
+                .map(String)
+              : [],
+            sourceAlreadyValidForTarget:
+              typeof (diag as Record<string, unknown>).sourceAlreadyValidForTarget === 'boolean'
+                ? (diag as Record<string, unknown>).sourceAlreadyValidForTarget as boolean
+                : null,
+            sourceTenseMismatchCount:
+              typeof (diag as Record<string, unknown>).sourceTenseMismatchCount === 'number'
+                ? (diag as Record<string, unknown>).sourceTenseMismatchCount as number
+                : null,
+            sourceTenseValidationPassed:
+              typeof (diag as Record<string, unknown>).sourceTenseValidationPassed === 'boolean'
+                ? (diag as Record<string, unknown>).sourceTenseValidationPassed as boolean
+                : null,
+            expectedEmploymentTense:
+              ((diag as Record<string, unknown>).expectedEmploymentTense as string | null | undefined)
+              ?? null,
+          }
+          : {}),
       visibleComparisonSourceKind:
         (diag.visibleComparisonSourceKind as string | null | undefined) ?? null,
       visibleComparisonHash: (diag.visibleComparisonHash as string | null | undefined) ?? null,
@@ -2024,13 +2263,19 @@ export class ExperienceAiDiagnosticSession {
 
     // Build provider / deterministic_fallback / final_selected lineage (hashes only).
     const lineage: NonNullable<ExperienceAiDiagnosticTrace['candidateLineage']> = [];
-    const providerPresent = Boolean(
+    const providerWasAttempted = Boolean(
+      this.draft.providerAttempted === true
+      || diag.providerAttempted === true
+      || this.draft.providerHttpStatus != null
+      || diag.providerHttpStatus != null,
+    );
+    const providerPresent = providerWasAttempted && Boolean(
       (diag.providerBulletCount ?? this.draft.providerBulletCount ?? 0) > 0
       || (diag.providerCoveredFactCount != null)
       || (providerUncovered.length > 0)
       || Boolean(text && !clientFallbackApplied && finalized.countedAsSuccess),
     );
-    if (providerPresent || providerUncovered.length > 0 || diag.providerCoveredFactCount != null) {
+    if (providerWasAttempted && (providerPresent || providerUncovered.length > 0 || diag.providerCoveredFactCount != null)) {
       const pCovered = diag.providerCoveredFactCount
         ?? this.draft.providerCoveredFactCount
         ?? null;
@@ -2336,6 +2581,27 @@ export class ExperienceAiDiagnosticSession {
     usageAfter: number,
     options?: { visibleDescription?: string; finalNormalizedText?: string },
   ): void {
+    // Clean no-op already terminalized — do not overwrite with rejected-apply stages.
+    if (
+      this.draft.earlyNoOpPreflightPassed === true
+      && !applied
+      && (
+        this.draft.finalDecisionKind === 'semantic_noop'
+        || this.draft.finalDecisionKind === 'exact_noop'
+        || this.draft.preflightNoOpDetected === true
+      )
+    ) {
+      this.patch({
+        countedAsSuccess: false,
+        usageCountAfter: usageAfter,
+        visibleApplySucceeded: false,
+        visibleTextareaMatchesFinalNormalizedHash: null,
+        visibleDescriptionMatchesFinalHash: null,
+        finalTypedFailureReason: null,
+        rejectionStage: null,
+      });
+      return;
+    }
     let visibleMatch: boolean | null = this.draft.visibleTextareaMatchesFinalNormalizedHash ?? null;
     if (options?.visibleDescription != null && options?.finalNormalizedText != null) {
       visibleMatch = fingerprintText(options.visibleDescription)

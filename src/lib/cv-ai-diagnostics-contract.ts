@@ -1409,6 +1409,148 @@ export function checkExperienceDiagnosticInvariants(
       finalTypedFailureReason: trace.finalTypedFailureReason ?? null,
     });
   }
+  // AAB-318 — clean no-op / provider-not-attempted / count-script consistency.
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && (
+      trace.finalTypedFailureReason != null
+      || trace.rejectionStage != null
+    )
+  ) {
+    push('clean_noop_has_failure_or_rejection_fields', {
+      finalTypedFailureReason: trace.finalTypedFailureReason ?? null,
+      rejectionStage: trace.rejectionStage ?? null,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && Array.isArray(trace.stages)
+    && (trace.stages as Array<{ result?: string }>).some((s) => s?.result === 'fail')
+  ) {
+    push('clean_noop_has_failed_stages', {
+      earlyNoOpPreflightPassed: true,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && trace.providerAttempted !== false
+  ) {
+    push('clean_noop_provider_attempted_not_false', {
+      providerAttempted: trace.providerAttempted ?? null,
+    });
+  }
+  if (
+    trace.providerAttempted === false
+    && (
+      trace.providerHttpStatus != null
+      || (
+        Array.isArray(trace.candidateLineage)
+        && (trace.candidateLineage as Array<{ candidateKind?: string }>).some(
+          (c) => c?.candidateKind === 'provider',
+        )
+      )
+    )
+  ) {
+    push('provider_not_attempted_but_provider_evidence_present', {
+      providerHttpStatus: trace.providerHttpStatus ?? null,
+      providerLineagePresent: Array.isArray(trace.candidateLineage)
+        && (trace.candidateLineage as Array<{ candidateKind?: string }>).some(
+          (c) => c?.candidateKind === 'provider',
+        ),
+    });
+  }
+  if (
+    trace.providerAttempted === false
+    && trace.providerResponseKind != null
+    && trace.providerResponseKind !== 'not_attempted'
+    && (
+      trace.earlyNoOpPreflightPassed === true
+      || trace.apiResponseKind === 'not_attempted'
+    )
+  ) {
+    push('provider_not_attempted_response_kind_invalid', {
+      providerResponseKind: trace.providerResponseKind,
+      apiResponseKind: trace.apiResponseKind ?? null,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && trace.providerNoOpDetected === true
+  ) {
+    push('clean_noop_overloads_provider_noop_detected', {
+      providerNoOpDetected: true,
+    });
+  }
+  if (
+    typeof trace.finalBulletCount === 'number'
+    && Array.isArray(trace.finalBulletScripts)
+    && Number(trace.finalBulletCount) !== (trace.finalBulletScripts as unknown[]).length
+  ) {
+    push('legacy_final_bullet_count_script_mismatch', {
+      finalBulletCount: trace.finalBulletCount,
+      finalBulletScriptsLength: (trace.finalBulletScripts as unknown[]).length,
+    });
+  }
+  if (
+    typeof trace.appliedFinalBulletCount === 'number'
+    && Array.isArray(trace.appliedFinalBulletScripts)
+    && Number(trace.appliedFinalBulletCount)
+      !== (trace.appliedFinalBulletScripts as unknown[]).length
+  ) {
+    push('applied_final_bullet_count_script_mismatch', {
+      appliedFinalBulletCount: trace.appliedFinalBulletCount,
+      appliedFinalBulletScriptsLength:
+        (trace.appliedFinalBulletScripts as unknown[]).length,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && (
+      Number(trace.finalBulletCount ?? 0) !== 0
+      || (Array.isArray(trace.finalBulletScripts)
+        && (trace.finalBulletScripts as unknown[]).length > 0)
+      || Number(trace.finalCandidateBulletCount ?? 0) !== 0
+      || Number(trace.appliedFinalBulletCount ?? 0) !== 0
+    )
+  ) {
+    push('clean_noop_has_nonzero_final_bullet_fields', {
+      finalBulletCount: trace.finalBulletCount ?? null,
+      finalCandidateBulletCount: trace.finalCandidateBulletCount ?? null,
+      appliedFinalBulletCount: trace.appliedFinalBulletCount ?? null,
+    });
+  }
+  if (
+    (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+    && 'finalCandidatePresent' in trace
+    && trace.finalCandidatePresent === false
+  ) {
+    push('successful_apply_without_final_candidate', {
+      countedAsSuccess: trace.countedAsSuccess ?? null,
+      visibleApplySucceeded: trace.visibleApplySucceeded ?? null,
+      finalCandidatePresent: false,
+    });
+  }
+  if (
+    (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+    && 'appliedFinalBulletCount' in trace
+    && Number(trace.appliedFinalBulletCount ?? 0) <= 0
+    && Number(trace.finalBulletCount ?? 0) <= 0
+  ) {
+    push('successful_apply_without_applied_bullets', {
+      appliedFinalBulletCount: trace.appliedFinalBulletCount ?? null,
+      finalBulletCount: trace.finalBulletCount ?? null,
+    });
+  }
+  if (
+    typeof trace.appVersionCode === 'string'
+    && trace.appVersionCode.length > 0
+    && (trace.appVersionName == null || String(trace.appVersionName).length === 0)
+  ) {
+    push('app_version_code_without_version_name', {
+      appVersionCode: trace.appVersionCode,
+      appVersionName: trace.appVersionName ?? null,
+    });
+  }
   if (
     typeof trace.finalCandidateBulletCount === 'number'
     && Array.isArray(trace.finalCandidateBulletScripts)
@@ -1858,8 +2000,40 @@ export function checkExperienceDiagnosticCompleteness(
         'semanticNoOpDetected',
         'degradationDetected',
         'finalDecisionKind',
+        'providerAttempted',
+        'finalTypedFailureReason',
+        'rejectionStage',
+        'finalCandidatePresent',
+        'finalBulletCount',
+        'finalBulletScripts',
       ] as const) {
         if (!(key in trace)) missing.push(key);
+      }
+      // AAB-318 — semantic consistency for clean no-op.
+      if (trace.earlyNoOpPreflightPassed === true) {
+        if (trace.providerAttempted !== false) {
+          nullish.push('providerAttempted_must_be_false_on_preflight_noop');
+        }
+        if (trace.finalTypedFailureReason != null) {
+          nullish.push('finalTypedFailureReason_must_be_null_on_clean_noop');
+        }
+        if (trace.rejectionStage != null) {
+          nullish.push('rejectionStage_must_be_null_on_clean_noop');
+        }
+        if (
+          typeof trace.finalBulletCount === 'number'
+          && Array.isArray(trace.finalBulletScripts)
+          && Number(trace.finalBulletCount)
+            !== (trace.finalBulletScripts as unknown[]).length
+        ) {
+          nullish.push('finalBulletCount_scripts_length_mismatch');
+        }
+        if (
+          Array.isArray(trace.stages)
+          && (trace.stages as Array<{ result?: string }>).some((s) => s?.result === 'fail')
+        ) {
+          nullish.push('clean_noop_stages_must_not_fail');
+        }
       }
       // Null final-candidate predicate fields are valid when no candidate present.
       if (trace.finalCandidatePresent === false
@@ -2060,6 +2234,10 @@ export const CV_AI_DIAGNOSTIC_REQUIRED_ASSET_STRINGS = [
   'diagnosticCompletenessPassed',
   'candidateLineage',
   'hindiSentenceGrammarRecords',
+  'experience-preflight-build-metadata-318-v1',
+  'experience-clean-noop-terminal-outcome-318-v1',
+  'experience-provider-not-attempted-truth-318-v1',
+  'experience-terminal-diagnostic-consistency-318-v1',
   INTERNAL_AI_RESET_BUNDLE_MARKER || 'CVPRO_INTERNAL_AI_RESET_ENABLED_V1',
 ] as const;
 void CV_AI_DIAGNOSTIC_REQUIRED_ASSET_STRINGS;
