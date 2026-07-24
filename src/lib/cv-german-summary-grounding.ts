@@ -200,9 +200,13 @@ export type GermanSummaryEmploymentQuality = {
   explicitSkillsSlotPresent: boolean;
   slotValidationPassed: boolean;
   currentRoleTitlePresent: boolean | null;
+  currentRoleTitleMatchesStructuredRole: boolean | null;
+  currentRoleOmittedDetected: boolean | null;
   currentRoleConcreteFactCoverage: number;
-  priorRoleGroundingPassed: boolean | null;
+  priorRoleGroundingPassed: boolean;
   currentEmploymentIntroductionCount: number | null;
+  finalSentenceHashes?: string[];
+  finalSentenceRoleSlots?: GermanSummaryRoleSlot[];
 };
 
 export function analyzeGermanSummaryEmploymentQuality(
@@ -254,12 +258,11 @@ export function analyzeGermanSummaryEmploymentQuality(
       slots.push('total_duration');
     } else if (i === 0 && (hasCompany || (hasDuration && !hasTotalMarker))) {
       slots.push('current_intro');
-    } else if (hasPrior && !hasDuty) {
+    } else if (hasPrior) {
+      // Prefer prior over duty cues — design "Unterlagen" must not steal prior slot.
       slots.push('prior_role');
     } else if (hasDuty) {
       slots.push('current_duty');
-    } else if (hasPrior) {
-      slots.push('prior_role');
     } else if (hasTotalMarker || (hasDuration && i > 0)) {
       slots.push('total_duration');
     } else {
@@ -333,8 +336,12 @@ export function analyzeGermanSummaryEmploymentQuality(
     explicitSkillsSlotPresent,
     slotValidationPassed,
     currentRoleTitlePresent: rolePresent,
+    currentRoleTitleMatchesStructuredRole: rolePresent,
+    currentRoleOmittedDetected: (warehouseDomain || designDomain) && !rolePresent,
     currentRoleConcreteFactCoverage: currentDutySlotPresent || currentIntroSlotPresent ? 3 : 0,
-    priorRoleGroundingPassed: priorRoleSlotPresent || !(options.priorCompany || options.priorEntryDuties),
+    priorRoleGroundingPassed: Boolean(
+      priorRoleSlotPresent || !(options.priorCompany || options.priorEntryDuties),
+    ),
     currentEmploymentIntroductionCount: currentIntroSlotPresent ? 1 : 0,
   };
 }

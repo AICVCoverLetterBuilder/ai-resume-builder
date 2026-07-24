@@ -447,7 +447,14 @@ type SummaryLike = {
   noOpDetected?: boolean | null;
   serverFallbackUsed?: boolean | null;
   providerOutcome?: string | null;
+  providerUnsupportedClaimCount?: number | null;
   clientFallbackUsed?: boolean | null;
+  finalDurationScopeValidationPassed?: boolean | null;
+  finalDurationCurrentRoleAttachmentRisk?: boolean | null;
+  finalDurationOwnerExpected?: string | null;
+  finalDurationOwnerDetected?: string | null;
+  visibleDurationOwnerDetected?: string | null;
+  competencyInferenceFromRoleForbidden?: boolean | null;
   candidateLineage?: Array<{
     candidateKind?: string;
     present?: boolean;
@@ -575,11 +582,71 @@ export function checkSummaryDiagnosticInvariants(
   }
   if (trace.countedAsSuccess && Array.isArray(trace.finalUnitRoleSlots)) {
     const slots = trace.finalUnitRoleSlots;
-    if (!slots.includes('current_intro') || !slots.includes('current_duty')) {
+    const dutyOk = slots.includes('current_duty') || trace.currentDutySlotPresent === true;
+    if (!slots.includes('current_intro') || !dutyOk) {
       push('three_slot_incomplete_on_success', {
         finalUnitRoleSlots: slots.join(','),
       });
     }
+  }
+
+  // AAB-319 — German Summary competency + duration-scope acceptance invariants.
+  if (String(trace.requestedLocale || '') === 'de' && trace.countedAsSuccess) {
+    if ((trace.unsupportedClaimCount ?? 0) > 0) {
+      push('german_success_with_unsupported_competency', {
+        unsupportedClaimCount: trace.unsupportedClaimCount ?? 0,
+      });
+    }
+    if (trace.finalDurationScopeValidationPassed === false) {
+      push('german_success_with_duration_scope_fail', {
+        finalDurationScopeValidationPassed: false,
+      });
+    }
+    if (trace.finalDurationCurrentRoleAttachmentRisk === true) {
+      push('german_success_with_current_role_duration_attachment', {
+        finalDurationCurrentRoleAttachmentRisk: true,
+      });
+    }
+    if (
+      trace.finalDurationOwnerExpected === 'total_professional_experience'
+      && trace.finalDurationOwnerDetected
+      && trace.finalDurationOwnerDetected !== 'total_professional_experience'
+    ) {
+      push('german_duration_owner_mismatch', {
+        finalDurationOwnerExpected: String(trace.finalDurationOwnerExpected),
+        finalDurationOwnerDetected: String(trace.finalDurationOwnerDetected),
+      });
+    }
+    if (
+      trace.visibleDurationOwnerDetected
+      && trace.finalDurationOwnerDetected
+      && trace.visibleDurationOwnerDetected !== trace.finalDurationOwnerDetected
+    ) {
+      push('german_visible_duration_owner_mismatch', {
+        finalDurationOwnerDetected: String(trace.finalDurationOwnerDetected),
+        visibleDurationOwnerDetected: String(trace.visibleDurationOwnerDetected),
+      });
+    }
+    if (trace.competencyInferenceFromRoleForbidden === false) {
+      push('german_competency_inference_allowed', {
+        competencyInferenceFromRoleForbidden: false,
+      });
+    }
+    if (Array.isArray(trace.finalUnitRoleSlots) && trace.finalUnitRoleSlots.length === 0) {
+      push('german_final_role_slots_empty', {
+        finalUnitRoleSlots: '',
+      });
+    }
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && trace.providerOutcome === 'accepted'
+    && (trace.providerUnsupportedClaimCount ?? 0) > 0
+  ) {
+    push('german_provider_accepted_with_unsupported_competency', {
+      providerUnsupportedClaimCount: trace.providerUnsupportedClaimCount ?? 0,
+      providerOutcome: 'accepted',
+    });
   }
 
   const enhanceMode = String(trace.operationMode || '').includes('enhance');
@@ -733,6 +800,19 @@ export function checkSummaryDiagnosticCompleteness(
     require('providerPrintClaimDetected');
     require('hindiSentenceGrammarRecords');
     require('sourcePrintFactPresent');
+  }
+  if (locale === 'de' && trace.countedAsSuccess === true) {
+    require('finalUnitRoleSlots');
+    require('currentIntroSlotPresent');
+    require('currentDutySlotPresent');
+    require('priorRoleSlotPresent');
+    require('unsupportedClaimCount');
+    require('finalDurationOwnerExpected');
+    require('finalDurationOwnerDetected');
+    require('finalDurationScopeValidationPassed');
+    require('finalDurationCurrentRoleAttachmentRisk');
+    require('finalDurationTotalCareerMarkerPresent');
+    require('competencyInferenceFromRoleForbidden');
   }
 
   if (trace.finalCandidateSource === 'deterministic_fallback') {

@@ -226,8 +226,17 @@ const SKILL_FAMILIES_DE: SkillFamily[] = [
     canonicalId: 'project_management',
     kind: 'methodology',
     unsupportedKind: 'unsupported_methodology_claim',
-    patterns: [/\bProjektmanagement\b/iu],
-    authorizeLabels: ['projektmanagement'],
+    patterns: [/\bProjektmanagement\b/iu, /\bProject\s*Management\b/iu],
+    authorizeLabels: [
+      'projektmanagement',
+      'project management',
+      'projectmanagement',
+      'upravljanje projektima',
+      'upravljanje projektom',
+      'gestión de proyectos',
+      'gestion de projets',
+      'gestione progetti',
+    ],
   },
 ];
 

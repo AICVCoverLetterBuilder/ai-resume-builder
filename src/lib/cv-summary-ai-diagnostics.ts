@@ -311,8 +311,23 @@ export type SummaryAiDiagnosticTrace = {
   currentIntroSlotPresent?: boolean | null;
   currentDutySlotPresent?: boolean | null;
   priorRoleSlotPresent?: boolean | null;
+  totalDurationSlotPresent?: boolean | null;
+  explicitSkillsSlotPresent?: boolean | null;
   slotValidationPassed?: boolean | null;
   slotRejectionReasons?: string[] | null;
+  finalDurationOwnerExpected?: string | null;
+  finalDurationOwnerDetected?: string | null;
+  finalDurationScopeValidationPassed?: boolean | null;
+  finalDurationCurrentRoleAttachmentRisk?: boolean | null;
+  finalDurationTotalCareerMarkerPresent?: boolean | null;
+  visibleDurationOwnerDetected?: string | null;
+  visibleDurationScopeValidationPassed?: boolean | null;
+  durationScopeRejectionReason?: string | null;
+  explicitSkillFactCount?: number | null;
+  finalCompetencyClaimCount?: number | null;
+  finalUnsupportedCompetencyCount?: number | null;
+  finalUnsupportedCompetencyKinds?: string[] | null;
+  competencyInferenceFromRoleForbidden?: boolean | null;
   summaryRepairAttempted?: boolean | null;
   candidateLineage?: unknown[] | null;
   diagnosticInvariantCheckPassed?: boolean;
@@ -982,8 +997,34 @@ export class SummaryAiDiagnosticSession {
         ?? (Array.isArray(diag.finalUnitRoleSlots)
           ? diag.finalUnitRoleSlots.includes('prior_role')
           : null),
+      totalDurationSlotPresent: diag.totalDurationSlotPresent
+        ?? (Array.isArray(diag.finalUnitRoleSlots)
+          ? diag.finalUnitRoleSlots.includes('total_duration')
+          : null),
+      explicitSkillsSlotPresent: diag.explicitSkillsSlotPresent ?? null,
       slotValidationPassed: diag.slotValidationPassed ?? null,
       slotRejectionReasons: dedupeStableStrings(diag.slotRejectionReasons ?? []),
+      finalDurationOwnerExpected: diag.finalDurationOwnerExpected ?? null,
+      finalDurationOwnerDetected: diag.finalDurationOwnerDetected ?? null,
+      finalDurationScopeValidationPassed: diag.finalDurationScopeValidationPassed ?? null,
+      finalDurationCurrentRoleAttachmentRisk:
+        diag.finalDurationCurrentRoleAttachmentRisk ?? null,
+      finalDurationTotalCareerMarkerPresent:
+        diag.finalDurationTotalCareerMarkerPresent ?? null,
+      visibleDurationOwnerDetected: diag.visibleDurationOwnerDetected
+        ?? diag.finalDurationOwnerDetected
+        ?? null,
+      visibleDurationScopeValidationPassed: diag.visibleDurationScopeValidationPassed
+        ?? diag.finalDurationScopeValidationPassed
+        ?? null,
+      durationScopeRejectionReason: diag.durationScopeRejectionReason ?? null,
+      explicitSkillFactCount: diag.explicitSkillFactCount ?? null,
+      finalCompetencyClaimCount: diag.finalCompetencyClaimCount ?? null,
+      finalUnsupportedCompetencyCount: diag.finalUnsupportedCompetencyCount
+        ?? (typeof diag.unsupportedClaimCount === 'number' ? diag.unsupportedClaimCount : null),
+      finalUnsupportedCompetencyKinds: diag.finalUnsupportedCompetencyKinds ?? null,
+      competencyInferenceFromRoleForbidden: diag.competencyInferenceFromRoleForbidden
+        ?? (this.draft.requestedLocale === 'de' ? true : null),
       summaryRepairAttempted: diag.summaryRepairAttempted ?? null,
       repairAttempted: Boolean(diag.summaryRepairAttempted),
       repairApplied: Boolean(diag.summaryRepairApplied),

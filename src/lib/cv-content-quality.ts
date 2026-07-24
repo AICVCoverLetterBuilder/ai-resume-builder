@@ -35,7 +35,10 @@ import {
   SUMMARY_DURATION_FINALIZER_REVISION_HR,
   SUMMARY_DURATION_FINALIZER_REVISION_HR_V2,
 } from './cv-croatian-summary-grounding';
-import { injectGermanTotalDurationSentence } from './cv-german-summary-competency-grounding';
+import {
+  injectGermanTotalDurationSentence,
+  analyzeGermanSummaryDurationScope,
+} from './cv-german-summary-competency-grounding';
 import { SUMMARY_DURATION_FINALIZER_REVISION_DE } from './cv-german-summary-grounding';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
@@ -917,6 +920,22 @@ export function resolveSummaryWithDurationPolicy(
               ? SUMMARY_DURATION_FINALIZER_REVISION_DE
             : SUMMARY_DURATION_FINALIZER_REVISION,
   };
+
+  // AAB-319 — German total-duration must not remain attached to the current-role clause.
+  if (locale === 'de' && requireClaim && duration.hasValidDates && working.trim()) {
+    void SUMMARY_DURATION_FINALIZER_REVISION_DE;
+    const scope = analyzeGermanSummaryDurationScope(working, {
+      company: context?.company,
+      role: context?.role,
+      expectedOwner: 'total_professional_experience',
+    });
+    if (!scope.finalDurationScopeValidationPassed) {
+      const phraseDe = formatApproximateDurationPhrase(duration, 'de');
+      const strippedDe = stripAllSummaryDurationExpressions(working, locale);
+      working = injectGermanTotalDurationSentence(strippedDe || working, phraseDe, context?.gender);
+      durationDiagnostics.duplicateDurationRemoved = true;
+    }
+  }
 
   // A previously-saved or independently produced summary may already carry the duration
   // claim but as a standalone leading/trailing fragment — repair the structure first.
