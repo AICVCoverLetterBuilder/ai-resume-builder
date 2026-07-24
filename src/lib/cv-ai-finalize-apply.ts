@@ -86,6 +86,10 @@ import {
   SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION,
   SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
   SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
+  GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION,
+  SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
+  GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
+  SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
@@ -496,6 +500,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION,
   SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
   SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
+  GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION,
+  SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
+  GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
+  SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -1037,6 +1045,15 @@ export type FinalizeCvAiFieldResult = {
     finalCurrentEmploymentStateExpressed?: boolean;
     finalCurrentRoleIntroValidationPassed?: boolean;
     finalCurrentDutyCoveragePassed?: boolean;
+    requiredCurrentDutyFactCount?: number;
+    coveredCurrentDutyFactCount?: number;
+    missingCurrentDutyFactCount?: number;
+    missingCurrentDutyFactIdHashes?: string[];
+    currentMaterialCategoryMatchCount?: number;
+    currentCanonicalDutyFactMatchCount?: number;
+    materialCategoryCoverageUsedForFinalAcceptance?: boolean;
+    germanControlledCaseGrammarPassed?: boolean;
+    finalGermanGrammarValidationPassed?: boolean;
     finalPriorRoleTitlePresent?: boolean;
     finalPriorEmployerPresent?: boolean;
     finalPriorEmploymentStateExpressed?: boolean;
@@ -2808,6 +2825,41 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalCurrentDutyCoveragePassed: locale === 'de' && empQ
           ? Boolean((empQ as { finalCurrentDutyCoveragePassed?: boolean })
             .finalCurrentDutyCoveragePassed)
+          : undefined,
+        requiredCurrentDutyFactCount: locale === 'de' && empQ
+          ? ((empQ as { requiredCurrentDutyFactCount?: number }).requiredCurrentDutyFactCount
+            ?? undefined)
+          : undefined,
+        coveredCurrentDutyFactCount: locale === 'de' && empQ
+          ? ((empQ as { coveredCurrentDutyFactCount?: number }).coveredCurrentDutyFactCount
+            ?? undefined)
+          : undefined,
+        missingCurrentDutyFactCount: locale === 'de' && empQ
+          ? ((empQ as { missingCurrentDutyFactCount?: number }).missingCurrentDutyFactCount
+            ?? undefined)
+          : undefined,
+        missingCurrentDutyFactIdHashes: locale === 'de' && empQ
+          ? ((empQ as { missingCurrentDutyFactIdHashes?: string[] })
+            .missingCurrentDutyFactIdHashes ?? undefined)
+          : undefined,
+        currentMaterialCategoryMatchCount: locale === 'de' && empQ
+          ? ((empQ as { currentMaterialCategoryMatchCount?: number })
+            .currentMaterialCategoryMatchCount ?? undefined)
+          : undefined,
+        currentCanonicalDutyFactMatchCount: locale === 'de' && empQ
+          ? ((empQ as { currentCanonicalDutyFactMatchCount?: number })
+            .currentCanonicalDutyFactMatchCount ?? undefined)
+          : undefined,
+        materialCategoryCoverageUsedForFinalAcceptance: locale === 'de' && empQ
+          ? false
+          : undefined,
+        germanControlledCaseGrammarPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { germanControlledCaseGrammarPassed?: boolean })
+            .germanControlledCaseGrammarPassed)
+          : undefined,
+        finalGermanGrammarValidationPassed: locale === 'de' && empQ
+          ? Boolean((empQ as { finalGermanGrammarValidationPassed?: boolean })
+            .finalGermanGrammarValidationPassed)
           : undefined,
         finalPriorRoleTitlePresent: locale === 'de' && empQ
           ? Boolean((empQ as { finalPriorRoleTitlePresent?: boolean }).finalPriorRoleTitlePresent)

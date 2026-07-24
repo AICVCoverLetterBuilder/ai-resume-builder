@@ -58,6 +58,18 @@ import {
   verifyVisibleSummaryStructuredRoleLocale,
   type StructuredRoleLocaleValidation,
 } from './cv-summary-structured-role-localization';
+import {
+  GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION,
+  SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
+  GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
+  SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+  extractGermanCurrentWarehouseDutyFacts,
+  buildGermanCurrentDutyExperiencePhrase,
+  validateGermanGeneratedCaseGrammar,
+  validateSummaryEntryDutyCoverage,
+  verifyVisibleSummaryCurrentDutyCoverage,
+  type SummaryEntryDutyCoverageResult,
+} from './cv-german-summary-current-duty-coverage';
 export {
   GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
   GERMAN_SUMMARY_EMPLOYMENT_STATE_321_REVISION,
@@ -75,6 +87,17 @@ export {
   repairGermanSummaryStructuredRoleLocales,
   verifyVisibleSummaryStructuredRoleLocale,
 } from './cv-summary-structured-role-localization';
+export {
+  GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION,
+  SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
+  GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
+  SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
+  extractGermanCurrentWarehouseDutyFacts,
+  buildGermanCurrentDutyExperiencePhrase,
+  validateGermanGeneratedCaseGrammar,
+  validateSummaryEntryDutyCoverage,
+  verifyVisibleSummaryCurrentDutyCoverage,
+} from './cv-german-summary-current-duty-coverage';
 export {
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
   GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
@@ -175,17 +198,19 @@ export function formatGermanEmployerPrepositional(employer: string): string | nu
 }
 
 export function germanWarehouseSummaryFragment(key: string): string {
+  // AAB-323: each warehouse fact family has a distinct dative-ready clause.
+  // Do not merge inbound + documentation into one shared string.
   switch (key) {
     case 'warehouse_inbound_check':
+      return 'der Prüfung eingehender Waren';
     case 'warehouse_document_check':
-      return 'die Prüfung eingehender Waren und zugehöriger Unterlagen';
     case 'warehouse_records':
     case 'warehouse_orderly_goods':
-      return 'die Prüfung und Pflege zugehöriger Unterlagen und Belege';
+      return 'der Prüfung der zugehörigen Dokumentation';
     case 'warehouse_movement':
     case 'warehouse_preparation':
     case 'warehouse_colleague_coordination':
-      return 'die Abstimmung der Vorbereitung und Bewegung von Waren mit Kolleginnen und Kollegen';
+      return 'der Abstimmung mit Kolleginnen und Kollegen bei der Vorbereitung und Bewegung von Waren';
     default:
       return '';
   }
@@ -305,6 +330,17 @@ export type GermanSummaryEmploymentQuality = {
   foreignCurrentRoleTitleDetected?: boolean;
   finalWrongLocaleStructuredRoleCount?: number;
   rawSourceRoleLeakageDetected?: boolean;
+  requiredCurrentDutyFactCount?: number;
+  coveredCurrentDutyFactCount?: number;
+  missingCurrentDutyFactCount?: number;
+  missingCurrentDutyFactIdHashes?: string[];
+  currentDutyFactMatchCountsByFactHash?: Record<string, number>;
+  currentMaterialCategoryMatchCount?: number;
+  currentCanonicalDutyFactMatchCount?: number;
+  materialCategoryCoverageUsedForFinalAcceptance?: false;
+  germanControlledCaseGrammarPassed?: boolean;
+  finalGermanGrammarValidationPassed?: boolean;
+  currentDutyCoverage?: SummaryEntryDutyCoverageResult;
 };
 
 export function analyzeGermanSummaryEmploymentQuality(
@@ -383,6 +419,10 @@ export function analyzeGermanSummaryEmploymentQuality(
     ...a.detectedSemanticRoles,
   ]);
 
+  void GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION;
+  void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
+  void GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION;
+
   const structuredRoleLocale = validateSummaryStructuredRoleLocale({
     summary: text,
     targetLocale: 'de',
@@ -394,6 +434,17 @@ export function analyzeGermanSummaryEmploymentQuality(
     currentLocalized,
     priorLocalized,
   });
+
+  const requiredCurrentDutyFacts = extractGermanCurrentWarehouseDutyFacts({
+    currentEntryDuties: options.currentEntryDuties,
+    entryId: options.currentEntryId,
+  });
+  const currentDutyCoverage = validateSummaryEntryDutyCoverage({
+    requiredFacts: requiredCurrentDutyFacts,
+    candidateText: text,
+    entryId: options.currentEntryId,
+  });
+  const caseGrammar = validateGermanGeneratedCaseGrammar(text);
 
   const currentRoleCoverage = analyzeGermanCurrentRoleCoverage(text, {
     company: options.company,
@@ -486,8 +537,18 @@ export function analyzeGermanSummaryEmploymentQuality(
     }).length === 0;
   const slotValidationPassed = baseSlotOk
     && employerStatusOk
-    && structuredRoleLocale.structuredRoleLocaleValidationPassed;
-  const finalSlotRejectionReasons = dedupedSlotRejectionReasons;
+    && structuredRoleLocale.structuredRoleLocaleValidationPassed
+    && (requiredCurrentDutyFacts.length === 0
+      || currentDutyCoverage.finalCurrentDutyCoveragePassed)
+    && caseGrammar.germanControlledCaseGrammarPassed;
+  const finalSlotRejectionReasons = [
+    ...dedupedSlotRejectionReasons,
+    ...(requiredCurrentDutyFacts.length > 0
+      && !currentDutyCoverage.finalCurrentDutyCoveragePassed
+      ? ['current_duty_fact_coverage_incomplete']
+      : []),
+    ...caseGrammar.failureKinds,
+  ];
   const finalSlotValidationPassed = slotValidationPassed;
 
   if (!text) reason = 'empty_summary';
@@ -498,6 +559,13 @@ export function analyzeGermanSummaryEmploymentQuality(
     reason = durationScope.durationScopeRejectionReason || 'duration_scope_mismatch';
   } else if (!structuredRoleLocale.structuredRoleLocaleValidationPassed) {
     reason = structuredRoleLocale.failureKinds[0] || 'foreign_prior_role_title';
+  } else if (
+    requiredCurrentDutyFacts.length > 0
+    && !currentDutyCoverage.finalCurrentDutyCoveragePassed
+  ) {
+    reason = 'current_duty_fact_coverage_incomplete';
+  } else if (!caseGrammar.germanControlledCaseGrammarPassed) {
+    reason = caseGrammar.failureKinds[0] || 'german_controlled_case_grammar_failed';
   } else if (!slotValidationPassed) {
     reason = finalSlotRejectionReasons[0] || 'invalid_role_slot_classification';
   } else if (!introGrammar.ok) reason = introGrammar.reason;
@@ -513,6 +581,9 @@ export function analyzeGermanSummaryEmploymentQuality(
     && competencyScan.unsupportedCompetencyCount === 0
     && slotValidationPassed
     && structuredRoleLocale.structuredRoleLocaleValidationPassed
+    && (requiredCurrentDutyFacts.length === 0
+      || currentDutyCoverage.finalCurrentDutyCoveragePassed)
+    && caseGrammar.germanControlledCaseGrammarPassed
     && (durationScope.finalDurationScopeValidationPassed || !DURATION_CUE_PRESENT(text));
 
   const rolePresent = Boolean(
@@ -523,14 +594,9 @@ export function analyzeGermanSummaryEmploymentQuality(
     ).test(text),
   );
 
-  const dutyCoverage = unitSemanticAnalyses.reduce((n, a) => {
-    if (a.detectedSemanticRoles.includes('current_role_duties') || (
-      a.detectedSemanticRoles.includes('current_role_intro') && a.currentDutyFactMatches
-    )) {
-      return Math.max(n, 3);
-    }
-    return n;
-  }, semanticCurrentIntro && currentDutySlotPresent ? 3 : (semanticCurrentIntro ? 1 : 0));
+  // AAB-323: concrete coverage is distinct matched facts — never source count or
+  // a hard-coded 3 from coarse duty-slot presence.
+  const dutyCoverage = currentDutyCoverage.currentRoleConcreteFactCoverage;
 
   // Count only intros that express current employment state (AAB-321 invariant 7).
   const currentEmploymentIntroductionCount = (
@@ -580,7 +646,9 @@ export function analyzeGermanSummaryEmploymentQuality(
     finalCurrentEmployerPresent: currentRoleCoverage.currentEmployerPresent,
     finalCurrentEmploymentStateExpressed: currentRoleCoverage.currentEmploymentStateExpressed,
     finalCurrentRoleIntroValidationPassed: currentRoleCoverage.currentRoleIntroValidationPassed,
-    finalCurrentDutyCoveragePassed: currentDutySlotPresent,
+    finalCurrentDutyCoveragePassed: requiredCurrentDutyFacts.length === 0
+      ? currentDutySlotPresent
+      : currentDutyCoverage.finalCurrentDutyCoveragePassed,
     finalPriorRoleTitlePresent: priorRoleCoverage.priorRoleTitlePresent,
     finalPriorEmployerPresent: priorRoleCoverage.priorEmployerPresent,
     finalPriorEmploymentStateExpressed: priorRoleCoverage.priorEmploymentStateExpressed,
@@ -604,6 +672,21 @@ export function analyzeGermanSummaryEmploymentQuality(
     finalWrongLocaleStructuredRoleCount:
       structuredRoleLocale.finalWrongLocaleStructuredRoleCount,
     rawSourceRoleLeakageDetected: structuredRoleLocale.rawSourceRoleLeakageDetected,
+    requiredCurrentDutyFactCount: currentDutyCoverage.requiredCurrentDutyFactCount,
+    coveredCurrentDutyFactCount: currentDutyCoverage.coveredCurrentDutyFactCount,
+    missingCurrentDutyFactCount: currentDutyCoverage.missingCurrentDutyFactCount,
+    missingCurrentDutyFactIdHashes: currentDutyCoverage.missingCurrentDutyFactIdHashes,
+    currentDutyFactMatchCountsByFactHash:
+      currentDutyCoverage.currentDutyFactMatchCountsByFactHash,
+    currentMaterialCategoryMatchCount:
+      currentDutyCoverage.currentMaterialCategoryMatchCount,
+    currentCanonicalDutyFactMatchCount:
+      currentDutyCoverage.currentCanonicalDutyFactMatchCount,
+    materialCategoryCoverageUsedForFinalAcceptance: false,
+    germanControlledCaseGrammarPassed: caseGrammar.germanControlledCaseGrammarPassed,
+    finalGermanGrammarValidationPassed: caseGrammar.germanControlledCaseGrammarPassed
+      && introGrammar.ok,
+    currentDutyCoverage,
   };
 }
 
@@ -690,20 +773,34 @@ export function buildGermanEntryOwnedSummary(options: {
       return keys.map((k) => germanWarehouseSummaryFragment(k)).filter(Boolean);
     }),
   )];
-  const preferred = [
-    germanWarehouseSummaryFragment('warehouse_inbound_check'),
-    germanWarehouseSummaryFragment('warehouse_records'),
-    germanWarehouseSummaryFragment('warehouse_movement'),
-  ].filter((frag) => whFrags.includes(frag));
-  const dutyFrags = preferred.length >= 2 ? preferred : whFrags.slice(0, 3);
-  if (dutyFrags.length >= 2) {
-    intro = `${intro} mit Erfahrung in ${dutyFrags[0]}, ${dutyFrags[1]}${
-      dutyFrags[2] ? ` sowie in ${dutyFrags[2]}` : ''
-    }`;
-  } else if (dutyFrags.length === 1) {
-    intro = `${intro} mit Erfahrung in ${dutyFrags[0]}`;
-  } else if (warehouseRole) {
-    intro = `${intro} mit Erfahrung in der Prüfung eingehender Waren und der zugehörigen Dokumentation sowie in der Koordination der Vorbereitung und Bewegung von Waren`;
+  // AAB-323: prefer ordered per-fact canonical duties over collapsed material keys.
+  const canonicalCurrentFacts = extractGermanCurrentWarehouseDutyFacts({
+    currentEntryDuties: options.dutyFacts
+      .map((f) => f.sourceText || f.value)
+      .filter(Boolean)
+      .join('\n'),
+  });
+  const experiencePhrase = canonicalCurrentFacts.length > 0
+    ? buildGermanCurrentDutyExperiencePhrase(canonicalCurrentFacts)
+    : '';
+  if (experiencePhrase) {
+    intro = `${intro} ${experiencePhrase}`;
+  } else {
+    const preferred = [
+      germanWarehouseSummaryFragment('warehouse_inbound_check'),
+      germanWarehouseSummaryFragment('warehouse_records'),
+      germanWarehouseSummaryFragment('warehouse_movement'),
+    ].filter((frag) => whFrags.includes(frag));
+    const dutyFrags = preferred.length >= 2 ? preferred : whFrags.slice(0, 3);
+    if (dutyFrags.length >= 2) {
+      intro = `${intro} mit Erfahrung in ${dutyFrags[0]}${
+        dutyFrags[1] ? ` und ${dutyFrags[1]}` : ''
+      }${dutyFrags[2] ? ` sowie in ${dutyFrags[2]}` : ''}`;
+    } else if (dutyFrags.length === 1) {
+      intro = `${intro} mit Erfahrung in ${dutyFrags[0]}`;
+    } else if (warehouseRole) {
+      intro = `${intro} mit Erfahrung in der Prüfung eingehender Waren und der Prüfung der zugehörigen Dokumentation sowie in der Abstimmung mit Kolleginnen und Kollegen bei der Vorbereitung und Bewegung von Waren`;
+    }
   }
   if (!/[.]$/u.test(intro)) intro = `${intro}.`;
 

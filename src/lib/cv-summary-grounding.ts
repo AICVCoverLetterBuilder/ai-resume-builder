@@ -190,6 +190,10 @@ export {
   SUMMARY_SHARED_ROLE_LOCALIZATION_322_REVISION,
   SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION,
   SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION,
+  GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION,
+  SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION,
+  GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION,
+  SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   scanGermanSummaryCompetencyClaims,
   analyzeGermanSummaryDurationScope,
@@ -210,6 +214,11 @@ export {
   validateSummaryStructuredRoleLocale,
   repairGermanSummaryStructuredRoleLocales,
   verifyVisibleSummaryStructuredRoleLocale,
+  extractGermanCurrentWarehouseDutyFacts,
+  buildGermanCurrentDutyExperiencePhrase,
+  validateGermanGeneratedCaseGrammar,
+  validateSummaryEntryDutyCoverage,
+  verifyVisibleSummaryCurrentDutyCoverage,
 } from './cv-german-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,
