@@ -391,6 +391,11 @@ function unitWrongLocale(text: string, target: Locale): boolean {
   if (target === 'en') {
     if (guessed === 'sr' || guessed === 'hr') return true;
     if (['hi', 'ar', 'ja', 'ru'].includes(guessed)) return true;
+    // AAB-325: Spanish units are wrong under English target.
+    if (guessed === 'es') return true;
+    if (guessed === 'de' || guessed === 'fr' || guessed === 'it' || guessed === 'pt-BR') {
+      return true;
+    }
     return false;
   }
 
@@ -550,13 +555,21 @@ export function validateAiUnitLocalePurity(
 
   const sourceLanguageLeakageDetected = wrongLocaleUnitCount > 0
     || mixedLanguageUnitCount > 0
-    || Boolean(hrEvidence?.serbianLeakageDetected);
+    || Boolean(hrEvidence?.serbianLeakageDetected)
+    // AAB-325: unexpected Spanish under English is leakage even if a soft guess.
+    || (targetLocale === 'en' && unexpected.has('es'));
   const targetLocalePurityPassed = units.length === 0
     ? options?.requireUnits === false
     : wrongLocaleUnitCount === 0
       && wrongScriptUnitCount === 0
       && mixedLanguageUnitCount === 0
-      && !hrEvidence?.serbianLeakageDetected;
+      && !hrEvidence?.serbianLeakageDetected
+      && !(targetLocale === 'en' && unexpected.has('es'));
+
+  // Ensure wrongLocaleUnitCount reflects unexpected Spanish under English.
+  if (targetLocale === 'en' && unexpected.has('es')) {
+    wrongLocaleUnitCount = Math.max(wrongLocaleUnitCount, 1);
+  }
 
   return {
     ok: targetLocalePurityPassed,

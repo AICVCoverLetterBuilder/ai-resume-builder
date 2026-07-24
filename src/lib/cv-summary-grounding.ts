@@ -71,6 +71,28 @@ import {
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 } from './cv-german-summary-grounding';
 import {
+  analyzeEnglishSummaryEmploymentQuality,
+  buildEnglishEntryOwnedSummary,
+  isEnglishStructuredSummaryDomain,
+  ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
+  ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
+  ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
+  SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
+  stripEnglishUnsupportedCompetencyUnits,
+  detectEnglishMixedLanguageMorphology,
+} from './cv-english-summary-grounding';
+export {
+  analyzeEnglishSummaryEmploymentQuality,
+  buildEnglishEntryOwnedSummary,
+  isEnglishStructuredSummaryDomain,
+  ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
+  ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
+  ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
+  SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
+  stripEnglishUnsupportedCompetencyUnits,
+  detectEnglishMixedLanguageMorphology,
+} from './cv-english-summary-grounding';
+import {
   analyzeSpanishSummaryEmploymentQuality,
   buildSpanishEntryOwnedSummary,
   spanishWarehouseSummaryFragment,
@@ -1983,33 +2005,69 @@ export function buildConciseGroundedSummary(
         : `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')}`);
     text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'en') {
-    const dutyJoin = joinDutyFragments(uniqueFragments, locale);
-    const ym = /^(\d{4})-(\d{2})/.exec(datesValue);
-    const named = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i.exec(datesValue);
-    let sinceClause = '';
-    if (isPresent) {
-      if (ym) {
-        const months = [
-          '', 'January', 'February', 'March', 'April', 'May', 'June',
-          'July', 'August', 'September', 'October', 'November', 'December',
-        ];
-        const mi = Number(ym[2]);
-        if (months[mi]) sinceClause = ` since ${months[mi]} ${ym[1]}`;
-      } else if (named) {
-        sinceClause = ` since ${named[1]} ${named[2]}`;
+    void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
+    void analyzeEnglishSummaryEmploymentQuality;
+    void buildEnglishEntryOwnedSummary;
+    const domainCorpus = `${experienceTitle} ${profileTitle} ${sourceDuties} ${priorSourceDuties}`;
+    const isEnglishWarehouseOrDesignDomain = isEnglishStructuredSummaryDomain(domainCorpus);
+    // Prefer the entry-owned English builder when source duties are not already English
+    // (Spanish/German Atlas fixtures). Native English warehouse duties keep the legacy
+    // gerund path so source-fact coverage remains exact. Do not key domain off the
+    // already-localized English role label (Warehouse Employee) — that poisoned sr→en.
+    const sourceNeedsEnglishLocalization = Boolean(sourceDuties.trim())
+      && !sourceUsableInLocale(sourceDuties.split(/\n+/)[0] || sourceDuties, 'en');
+    if (isEnglishWarehouseOrDesignDomain && sourceNeedsEnglishLocalization) {
+      const enRole = /(?:warehouse|almac[eé]n|Lager(?:mitarbeiter|arbeiter)|emplead)/i
+        .test(`${role} ${experienceTitle} ${sourceDuties}`)
+        ? localizeWarehouseEmployee('en', genderNorm || '')
+        : (role || localizeWarehouseEmployee('en', genderNorm || ''));
+      text = buildEnglishEntryOwnedSummary({
+        role: enRole,
+        employer,
+        datesValue,
+        gender: genderNorm || '',
+        durationPhrase: durationPhrase || undefined,
+        dutyFacts,
+        priorRole: typeof priorIndex === 'number'
+          ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+          : '',
+        priorEmployer: typeof priorIndex === 'number'
+          ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+          : '',
+        priorSourceDuties,
+        locale: 'en',
+      });
+      skillSentence = '';
+      void skillSentence;
+    } else {
+      const dutyJoin = joinDutyFragments(uniqueFragments, locale);
+      const ym = /^(\d{4})-(\d{2})/.exec(datesValue);
+      const named = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i.exec(datesValue);
+      let sinceClause = '';
+      if (isPresent) {
+        if (ym) {
+          const months = [
+            '', 'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December',
+          ];
+          const mi = Number(ym[2]);
+          if (months[mi]) sinceClause = ` since ${months[mi]} ${ym[1]}`;
+        } else if (named) {
+          sinceClause = ` since ${named[1]} ${named[2]}`;
+        }
       }
+      const roleHead = role || 'Professional';
+      const companyClause = employer ? ` at ${employer}` : '';
+      let open = `${roleHead}${companyClause}${sinceClause}`;
+      if (dutyJoin && durationPhrase) {
+        open = `${open}, ${durationPhrase} ${dutyJoin}`;
+      } else if (dutyJoin) {
+        open = `${open} with experience ${dutyJoin}`;
+      } else if (durationPhrase) {
+        open = `${open} ${durationPhrase}`;
+      }
+      text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
     }
-    const roleHead = role || 'Professional';
-    const companyClause = employer ? ` at ${employer}` : '';
-    let open = `${roleHead}${companyClause}${sinceClause}`;
-    if (dutyJoin && durationPhrase) {
-      open = `${open}, ${durationPhrase} ${dutyJoin}`;
-    } else if (dutyJoin) {
-      open = `${open} with experience ${dutyJoin}`;
-    } else if (durationPhrase) {
-      open = `${open} ${durationPhrase}`;
-    }
-    text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'ja') {
     void SUMMARY_BUILDER_REVISION_JA;
     void SUMMARY_UNIT_SPLITTER_REVISION_JA;

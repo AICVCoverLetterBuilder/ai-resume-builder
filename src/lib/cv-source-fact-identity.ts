@@ -246,6 +246,11 @@ export function sourceUsableInLocale(text: string, locale: Locale): boolean {
     if (/[čćžšđČĆŽŠĐ]/u.test(t)) return false;
     // Undiacritic Serbian Latin must not count as English-usable.
     if (looksSerbianLatin) return false;
+    // AAB-325: Spanish source duties must never be treated as already-English.
+    if (/[ñáéíóúü¿¡]/iu.test(t)) return false;
+    if (/\b(?:mercanc[ií]a|documentaci[oó]n|almac[eé]n|compa[nñ]eros?|revis[oó]|comprob[oó]|coordin[oó]|emplead[oa]|diseñadora?)\b/iu.test(t)) {
+      return false;
+    }
     return /[A-Za-z]/.test(t);
   }
   // Other Latin locales (de/es/fr/it/pt-BR): accept Latin text but NEVER treat
@@ -856,6 +861,14 @@ export function dutyToEnglishGerundFragment(sourceUnit: string): string {
   if (!t) return '';
   t = t.replace(/^(I|We)\s+/i, '');
 
+  // AAB-325: never invent English morphology on Spanish (or other non-English) verbs.
+  // That produced device defects like "revisingó" / "comprobingó".
+  if (!sourceUsableInLocale(t, 'en')) {
+    return '';
+  }
+  if (/[ñáéíóúü]/iu.test(t) || /\b(?:mercanc|documentaci|almac[eé]n|compa[nñ]er)\w*/iu.test(t)) {
+    return '';
+  }
   const toGerundWord = (verb: string): string => {
     let gerund = verb.toLowerCase();
     if (/ing$/i.test(gerund)) return gerund;
