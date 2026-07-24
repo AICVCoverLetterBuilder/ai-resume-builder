@@ -70,6 +70,11 @@ import {
   analyzeSpanishSummaryEmploymentQuality,
   GERMAN_CV_AI_302_REVISION,
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
+  GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
+  SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
+  SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
+  stripGermanUnsupportedCompetencyUnits,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
   HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION,
@@ -461,6 +466,10 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
   EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
+  GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
+  GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
+  SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
+  SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -494,6 +503,10 @@ void CROATIAN_NOOP_USAGE_REVISION;
 void CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION;
 void GERMAN_CV_AI_302_REVISION;
 void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+void GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION;
+void GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION;
+void SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION;
+void SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
@@ -1648,6 +1661,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let croatianProviderRejectionReason: string | null = null;
   let spanishProviderRejectionReason: string | null = null;
   let spanishProviderUnsupportedClaimCount: number | null = null;
+  let germanProviderRejectionReason: string | null = null;
+  let germanProviderUnsupportedClaimCount: number | null = null;
   let hindiProviderQuality: ReturnType<typeof analyzeHindiSummaryEmploymentQuality> | null = null;
   let hindiProviderRejectionReason: string | null = null;
   const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
@@ -2007,21 +2022,51 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (locale === 'de') {
     void GERMAN_CV_AI_302_REVISION;
     void GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
+    void GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION;
+    void SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION;
+    void SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION;
     candidate = dedupeSummarySentences(candidate);
     if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
+      if (candidate.trim() && providerRaw.trim()) {
+        germanProviderRejectionReason = germanProviderRejectionReason
+          || 'german_summary_foreign_script';
+      }
       candidate = '';
     }
     if (candidate.trim()) {
       const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
-      const empQuality = analyzeGermanSummaryEmploymentQuality(candidate, {
+      const structuredSkills = (cv.skills || [])
+        .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
+        .filter(Boolean);
+      const analyzeDe = (text: string) => analyzeGermanSummaryEmploymentQuality(text, {
         company: context.company,
         role: context.role,
         currentEntryDuties: entryDuties.currentEntryDuties,
         priorEntryDuties: entryDuties.priorEntryDuties,
         priorCompany: entryDuties.priorCompany,
         gender,
+        structuredSkills,
+        expectedDurationOwner: 'total_professional_experience',
       });
+      let empQuality = analyzeDe(candidate);
+      if (!empQuality.groundingValidationPassed && empQuality.competencyScan.unsupportedCompetencyCount > 0) {
+        // Safe unit-level repair: remove whole unsupported competency sentences.
+        const stripped = stripGermanUnsupportedCompetencyUnits(candidate);
+        if (stripped.trim() && stripped !== candidate) {
+          const repaired = analyzeDe(stripped);
+          if (repaired.groundingValidationPassed) {
+            candidate = stripped;
+            empQuality = repaired;
+          }
+        }
+      }
       if (!empQuality.groundingValidationPassed) {
+        if (providerRaw.trim()) {
+          germanProviderRejectionReason = empQuality.typedRejectionReason
+            || empQuality.competencyScan.providerRejectionStage
+            || 'german_summary_grounding_failed';
+          germanProviderUnsupportedClaimCount = empQuality.unsupportedClaimCount;
+        }
         candidate = '';
       }
     }
@@ -2125,7 +2170,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
-    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
+    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
       ? !firstPerson
       : true;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
@@ -2202,6 +2247,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                     .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
                     .filter(Boolean),
                 })
+                : locale === 'de'
+                  ? analyzeGermanSummaryEmploymentQuality(analyzedText, {
+                    company: context.company || entryDuties.currentCompany,
+                    role: context.role,
+                    currentEntryDuties: entryDuties.currentEntryDuties,
+                    priorEntryDuties: entryDuties.priorEntryDuties,
+                    priorCompany: entryDuties.priorCompany,
+                    gender,
+                    structuredSkills: (cv.skills || [])
+                      .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
+                      .filter(Boolean),
+                    expectedDurationOwner: 'total_professional_experience',
+                  })
             : null;
     // Candidate fields — never treat structured context alone as a passing intro/title.
     const candidateCurrentRoleTitlePresent = empQ?.currentRoleTitlePresent ?? null;
@@ -2228,7 +2286,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     let durationFinalizerIdempotent = durationValidationPassed;
     let localPass2Hash = durationPass2CandidateHash;
     if (
-      (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
+      (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
       && analyzedText.trim()
       && durationSnapshot.total.hasValidDates
     ) {
@@ -2301,12 +2359,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const blockedForPerspective = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
       && !perspectiveValidationPassed,
     );
     const blockedForGrounding = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
       && empQ
       && (!empQ.groundingValidationPassed || coverageHardFail),
     );
@@ -2364,6 +2422,59 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         durationSemanticValueMonths: owned?.durationSemanticValueMonths
           ?? durationSnapshot.total.totalMonths,
         durationRepresentationAgreement: rep.agreement,
+        finalDurationOwnerExpected: locale === 'de' && empQ && 'durationScope' in empQ
+          ? (empQ as { durationScope?: { finalDurationOwnerExpected?: string } }).durationScope
+            ?.finalDurationOwnerExpected
+          : undefined,
+        finalDurationOwnerDetected: locale === 'de' && empQ && 'durationScope' in empQ
+          ? (empQ as { durationScope?: { finalDurationOwnerDetected?: string } }).durationScope
+            ?.finalDurationOwnerDetected
+          : undefined,
+        finalDurationScopeValidationPassed: locale === 'de' && empQ && 'durationScope' in empQ
+          ? (empQ as { durationScope?: { finalDurationScopeValidationPassed?: boolean } })
+            .durationScope?.finalDurationScopeValidationPassed
+          : undefined,
+        finalDurationCurrentRoleAttachmentRisk: locale === 'de' && empQ && 'durationScope' in empQ
+          ? (empQ as { durationScope?: { finalDurationCurrentRoleAttachmentRisk?: boolean } })
+            .durationScope?.finalDurationCurrentRoleAttachmentRisk
+          : undefined,
+        finalDurationTotalCareerMarkerPresent: locale === 'de' && empQ && 'durationScope' in empQ
+          ? (empQ as { durationScope?: { finalDurationTotalCareerMarkerPresent?: boolean } })
+            .durationScope?.finalDurationTotalCareerMarkerPresent
+          : undefined,
+        visibleDurationOwnerDetected: locale === 'de' && empQ && 'durationScope' in empQ
+          ? (empQ as { durationScope?: { finalDurationOwnerDetected?: string } }).durationScope
+            ?.finalDurationOwnerDetected
+          : undefined,
+        visibleDurationScopeValidationPassed: locale === 'de' && empQ && 'durationScope' in empQ
+          ? (empQ as { durationScope?: { finalDurationScopeValidationPassed?: boolean } })
+            .durationScope?.finalDurationScopeValidationPassed
+          : undefined,
+        durationScopeRejectionReason: locale === 'de' && empQ && 'durationScope' in empQ
+          ? (empQ as { durationScope?: { durationScopeRejectionReason?: string | null } })
+            .durationScope?.durationScopeRejectionReason
+          : undefined,
+        totalDurationSlotPresent: locale === 'de' && empQ
+          ? Boolean((empQ as { totalDurationSlotPresent?: boolean }).totalDurationSlotPresent)
+          : undefined,
+        explicitSkillsSlotPresent: locale === 'de' && empQ
+          ? Boolean((empQ as { explicitSkillsSlotPresent?: boolean }).explicitSkillsSlotPresent)
+          : undefined,
+        explicitSkillFactCount: locale === 'de' && empQ && 'competencyScan' in empQ
+          ? (empQ as { competencyScan?: { explicitSkillFactCount?: number } }).competencyScan
+            ?.explicitSkillFactCount
+          : undefined,
+        finalCompetencyClaimCount: locale === 'de' && empQ && 'competencyScan' in empQ
+          ? (empQ as { competencyScan?: { competencyClaimCount?: number } }).competencyScan
+            ?.competencyClaimCount
+          : undefined,
+        finalUnsupportedCompetencyCount: locale === 'de' && empQ
+          ? ((empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0)
+          : undefined,
+        finalUnsupportedCompetencyKinds: locale === 'de' && empQ
+          ? ((empQ as { unsupportedClaimKinds?: string[] }).unsupportedClaimKinds ?? [])
+          : undefined,
+        competencyInferenceFromRoleForbidden: locale === 'de' ? true : undefined,
         storedContentLocaleBeforeRequest: cv.contentLocale || null,
         detectedVisibleContentLocaleBeforeRequest: locale,
         contentLocaleBeforeRequest: cv.contentLocale || null,
@@ -2399,6 +2510,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             return summaryRepairAttempted && !providerRaw.trim()
               ? 'not_attempted'
               : (spanishProviderRejectionReason
+                || germanProviderRejectionReason
                 || hindiProviderRejectionReason
                 || japaneseProviderRejectionReason
                 || croatianProviderRejectionReason
@@ -2416,12 +2528,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || japaneseProviderRejectionReason
             || croatianProviderRejectionReason
             || spanishProviderRejectionReason
+            || germanProviderRejectionReason
           )) {
             const r = String(
               hindiProviderRejectionReason
               || japaneseProviderRejectionReason
               || croatianProviderRejectionReason
-              || spanishProviderRejectionReason,
+              || spanishProviderRejectionReason
+              || germanProviderRejectionReason,
             );
             if (/locale|script|leak/i.test(r)) return 'rejected_locale';
             if (/grammar|nominal|finite|copula|fragment/i.test(r)
@@ -2591,7 +2705,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         hindiFiniteKaAnubhavCollision: empQ && 'hindiFiniteKaAnubhavCollision' in empQ
           ? (empQ as { hindiFiniteKaAnubhavCollision?: boolean }).hindiFiniteKaAnubhavCollision
           : undefined,
-        unsupportedClaimCount: locale === 'ja' || locale === 'hi' || locale === 'es'
+        unsupportedClaimCount: locale === 'ja' || locale === 'hi' || locale === 'es' || locale === 'de'
           ? (empQ && 'unsupportedClaimCount' in empQ
             ? (empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0
             : 0)
@@ -2750,21 +2864,22 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : (croatianProviderRejectionReason
             || japaneseProviderRejectionReason
             || spanishProviderRejectionReason
+            || germanProviderRejectionReason
             || result.diagnostics?.providerRejectionReason
             || null),
-        currentIntroSlotPresent: (locale === 'hi' || locale === 'es') && empQ
+        currentIntroSlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de') && empQ
           ? Boolean((empQ as { currentIntroSlotPresent?: boolean }).currentIntroSlotPresent)
           : undefined,
-        currentDutySlotPresent: (locale === 'hi' || locale === 'es') && empQ
+        currentDutySlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de') && empQ
           ? Boolean((empQ as { currentDutySlotPresent?: boolean }).currentDutySlotPresent)
           : undefined,
-        priorRoleSlotPresent: (locale === 'hi' || locale === 'es') && empQ
+        priorRoleSlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de') && empQ
           ? Boolean((empQ as { priorRoleSlotPresent?: boolean }).priorRoleSlotPresent)
           : undefined,
-        slotValidationPassed: (locale === 'hi' || locale === 'es') && empQ
+        slotValidationPassed: (locale === 'hi' || locale === 'es' || locale === 'de') && empQ
           ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed)
           : undefined,
-        slotRejectionReasons: (locale === 'hi' || locale === 'es') && empQ
+        slotRejectionReasons: (locale === 'hi' || locale === 'es' || locale === 'de') && empQ
           ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
           : undefined,
         summaryRepairAttempted,
@@ -2775,9 +2890,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
           || spanishProviderRejectionReason
+          || germanProviderRejectionReason
           || result.diagnostics?.providerRejectionReason,
         providerUnsupportedClaimCount: japaneseProviderUnsupportedClaimCount
           ?? spanishProviderUnsupportedClaimCount
+          ?? germanProviderUnsupportedClaimCount
           ?? result.diagnostics?.providerUnsupportedClaimCount,
         summaryFinalCandidateDiagnosticsRevision:
           SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,

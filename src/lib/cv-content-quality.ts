@@ -35,6 +35,8 @@ import {
   SUMMARY_DURATION_FINALIZER_REVISION_HR,
   SUMMARY_DURATION_FINALIZER_REVISION_HR_V2,
 } from './cv-croatian-summary-grounding';
+import { injectGermanTotalDurationSentence } from './cv-german-summary-competency-grounding';
+import { SUMMARY_DURATION_FINALIZER_REVISION_DE } from './cv-german-summary-grounding';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
 export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
@@ -51,6 +53,7 @@ void SUMMARY_DURATION_FINALIZER_REVISION_JA;
 void SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR_V2;
+void SUMMARY_DURATION_FINALIZER_REVISION_DE;
 
 /** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
 function splitHindiSummaryUnitsLocal(text: string): string[] {
@@ -910,6 +913,8 @@ export function resolveSummaryWithDurationPolicy(
           ? SUMMARY_DURATION_FINALIZER_REVISION_JA
           : locale === 'hr'
             ? SUMMARY_DURATION_FINALIZER_REVISION_HR_V2
+            : locale === 'de'
+              ? SUMMARY_DURATION_FINALIZER_REVISION_DE
             : SUMMARY_DURATION_FINALIZER_REVISION,
   };
 
@@ -958,7 +963,9 @@ export function resolveSummaryWithDurationPolicy(
           ? SUMMARY_DURATION_FINALIZER_REVISION_JA
           : locale === 'hr'
             ? SUMMARY_DURATION_FINALIZER_REVISION_HR_V2
-            : SUMMARY_DURATION_FINALIZER_REVISION;
+            : locale === 'de'
+              ? SUMMARY_DURATION_FINALIZER_REVISION_DE
+              : SUMMARY_DURATION_FINALIZER_REVISION;
   }
 
   const initial = validateSummaryDuration(working, duration, {
@@ -1041,6 +1048,8 @@ export function resolveSummaryWithDurationPolicy(
     fallback = injectJapaneseDurationIntoCurrentIntro(stripped || working, duration, context);
   } else if (locale === 'hr' && phrase) {
     fallback = injectCroatianDurationIntoCurrentIntro(stripped || working, duration, context);
+  } else if (locale === 'de' && phrase) {
+    fallback = injectGermanTotalDurationSentence(stripped || working, phrase, context?.gender);
   } else if (phrase && stripped) {
     fallback = mergeDurationPhraseIntoFirstSentence(stripped, phrase, locale);
   } else if (phrase) {
@@ -1107,6 +1116,11 @@ export function injectDurationPhrase(
   }
   if (locale === 'hr' && duration.hasValidDates) {
     return injectCroatianDurationIntoCurrentIntro(text, duration, context);
+  }
+  if (locale === 'de' && duration.hasValidDates) {
+    void SUMMARY_DURATION_FINALIZER_REVISION_DE;
+    const phrase = formatApproximateDurationPhrase(duration, 'de');
+    return injectGermanTotalDurationSentence(text, phrase, context?.gender);
   }
   const phrase = formatApproximateDurationPhrase(duration, locale);
   if (!phrase) return text;

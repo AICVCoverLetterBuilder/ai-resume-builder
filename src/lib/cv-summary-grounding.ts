@@ -174,6 +174,18 @@ export {
   SUMMARY_DURATION_FINALIZER_REVISION_DE,
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   GERMAN_SUMMARY_EMPLOYER_PREPOSITION_REVISION,
+  GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
+  GERMAN_SUMMARY_DURATION_SCOPE_319_REVISION,
+  SUMMARY_EXPLICIT_SKILL_AUTHORITY_319_REVISION,
+  SUMMARY_FINAL_CLAIM_ACCEPTANCE_319_REVISION,
+  stripGermanUnsupportedCompetencyUnits,
+  scanGermanSummaryCompetencyClaims,
+  analyzeGermanSummaryDurationScope,
+  formatGermanTotalProfessionalDurationSentence,
+  injectGermanTotalDurationSentence,
+  extractGermanSummaryCompetencyClaims,
+  buildSummaryExplicitSkillAuthority,
+  splitGermanCompetencyListItems,
 } from './cv-german-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,
