@@ -795,7 +795,7 @@ export function checkSummaryDiagnosticCompleteness(
 
 type ExperienceLike = {
   finalCandidateSource?: string | null;
-  providerAttempted?: boolean;
+  providerAttempted?: boolean | null;
   providerAccepted?: boolean | null;
   clientDeterministicFallbackAttempted?: boolean;
   clientDeterministicFallbackApplied?: boolean;
@@ -839,6 +839,7 @@ type ExperienceLike = {
   visibleComparisonUnitCount?: number | null;
   semanticNoOpDetected?: boolean | null;
   degradationDetected?: boolean | null;
+  degradationKinds?: string[] | null;
   materialImprovementDetected?: boolean | null;
   materialImprovementKinds?: string[] | null;
   materialImprovementEvidenceCount?: number | null;
@@ -889,10 +890,26 @@ type ExperienceLike = {
   neutralRestyleDetected?: boolean | null;
   authoritativeFactSourceKind?: string | null;
   factAuthorityKind?: string | null;
+  factAuthorityMatchesAuthoritativeSourceKind?: boolean | null;
   finalSourceUnitPredicateCoveragePassed?: boolean | null;
   finalComplianceScopeExpansionDetected?: boolean | null;
   operationMode?: string | null;
   field?: string | null;
+  earlyNoOpPreflightPassed?: boolean | null;
+  earlyNoOpPreflightEvaluated?: boolean | null;
+  uneditedRerunDetected?: boolean | null;
+  visibleComparisonProvenance?: string | null;
+  visibleComparisonMatchedLastAiOutput?: boolean | null;
+  finalCandidatePresent?: boolean | null;
+  finalCandidatePredicateValidationApplicable?: boolean | null;
+  finalOutcomeReason?: string | null;
+  finalTypedFailureReason?: string | null;
+  finalCandidateBulletCount?: number | null;
+  finalCandidateBulletScripts?: string[] | null;
+  appliedFinalBulletCount?: number | null;
+  appliedFinalBulletScripts?: string[] | null;
+  providerBulletCount?: number | null;
+  providerBulletScripts?: string[] | null;
   candidateLineage?: Array<{
     candidateKind?: string;
     accepted?: boolean | null;
@@ -991,7 +1008,12 @@ export function checkExperienceDiagnosticInvariants(
   const uncovered = Array.isArray(trace.uncoveredFactIdentityHashes)
     ? trace.uncoveredFactIdentityHashes
     : [];
-  if (required > 0 && covered < required && uncovered.length === 0) {
+  if (required > 0 && covered < required && uncovered.length === 0
+    && trace.earlyNoOpPreflightPassed !== true
+    && !(
+      trace.finalDecisionKind === 'exact_noop'
+      || trace.finalDecisionKind === 'semantic_noop'
+    )) {
     push('incomplete_coverage_with_empty_uncovered_hashes', {
       requiredFactCount: required,
       coveredFactCount: covered,
@@ -1249,6 +1271,165 @@ export function checkExperienceDiagnosticInvariants(
     push('fact_authority_kind_contradicts_authoritative_source', {
       authoritativeFactSourceKind: trace.authoritativeFactSourceKind,
       factAuthorityKind: trace.factAuthorityKind,
+    });
+  }
+  // AAB-317 — dual-source / unedited-rerun diagnostic truth.
+  if (
+    trace.factAuthorityMatchesAuthoritativeSourceKind === true
+    && trace.factAuthorityKind != null
+    && trace.authoritativeFactSourceKind != null
+    && String(trace.factAuthorityKind) !== String(trace.authoritativeFactSourceKind)
+    // Allow original_user ↔ pre_ai_snapshot only when both represent user facts —
+    // but the consistency boolean must not stay true across current_textarea drift.
+    && !(
+      (trace.factAuthorityKind === 'pre_ai_snapshot'
+        && trace.authoritativeFactSourceKind === 'original_user')
+      || (trace.factAuthorityKind === 'original_user'
+        && trace.authoritativeFactSourceKind === 'pre_ai_snapshot')
+    )
+  ) {
+    push('fact_authority_match_flag_inconsistent_with_kinds', {
+      factAuthorityMatchesAuthoritativeSourceKind: true,
+      factAuthorityKind: trace.factAuthorityKind,
+      authoritativeFactSourceKind: trace.authoritativeFactSourceKind,
+    });
+  }
+  if (
+    trace.currentTextareaProvenance != null
+    && trace.visibleComparisonProvenance != null
+    && String(trace.currentTextareaProvenance) !== String(trace.visibleComparisonProvenance)
+    && (trace.operationMode === 'enhance_existing'
+      || trace.operationMode === 'enhance_existing_description'
+      || trace.field === 'experience_description')
+  ) {
+    push('visible_comparison_provenance_mismatch_request_time', {
+      currentTextareaProvenance: trace.currentTextareaProvenance,
+      visibleComparisonProvenance: trace.visibleComparisonProvenance,
+    });
+  }
+  if (
+    typeof trace.lastAiOutputHashMatched === 'boolean'
+    && typeof trace.visibleComparisonMatchedLastAiOutput === 'boolean'
+    && trace.lastAiOutputHashMatched !== trace.visibleComparisonMatchedLastAiOutput
+    && (trace.operationMode === 'enhance_existing'
+      || trace.operationMode === 'enhance_existing_description'
+      || trace.field === 'experience_description')
+  ) {
+    push('visible_comparison_hash_match_mismatch_request_time', {
+      lastAiOutputHashMatched: trace.lastAiOutputHashMatched,
+      visibleComparisonMatchedLastAiOutput: trace.visibleComparisonMatchedLastAiOutput,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && trace.materialUserEditDetected === true
+  ) {
+    push('early_noop_preflight_passed_after_material_edit', {
+      earlyNoOpPreflightPassed: true,
+      materialUserEditDetected: true,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && trace.sourceAlreadyValidForTarget !== true
+  ) {
+    push('early_noop_preflight_passed_without_valid_visible_source', {
+      earlyNoOpPreflightPassed: true,
+      sourceAlreadyValidForTarget: trace.sourceAlreadyValidForTarget ?? null,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && trace.providerAttempted === true
+  ) {
+    push('early_noop_preflight_passed_but_provider_attempted', {
+      earlyNoOpPreflightPassed: true,
+      providerAttempted: true,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && (
+      trace.degradationDetected === true
+      || (Array.isArray(trace.degradationKinds)
+        && (trace.degradationKinds as unknown[]).length > 0)
+    )
+  ) {
+    push('early_noop_preflight_passed_with_degradation', {
+      earlyNoOpPreflightPassed: true,
+      degradationDetected: trace.degradationDetected ?? null,
+      degradationKindsCount: Array.isArray(trace.degradationKinds)
+        ? trace.degradationKinds.length
+        : 0,
+    });
+  }
+  if (
+    trace.earlyNoOpPreflightPassed === true
+    && (
+      trace.materialImprovementDetected === true
+      || trace.visibleApplySucceeded === true
+      || trace.countedAsSuccess === true
+      || (
+        trace.usageCountAfter != null
+        && trace.usageCountBefore != null
+        && Number(trace.usageCountAfter) > Number(trace.usageCountBefore)
+      )
+    )
+  ) {
+    push('early_noop_preflight_passed_with_apply_or_usage', {
+      earlyNoOpPreflightPassed: true,
+      materialImprovementDetected: trace.materialImprovementDetected ?? null,
+      visibleApplySucceeded: trace.visibleApplySucceeded ?? null,
+      countedAsSuccess: trace.countedAsSuccess ?? null,
+    });
+  }
+  if (
+    Array.isArray(trace.degradationKinds)
+    && (trace.degradationKinds as string[]).includes('tense_regressed')
+    && trace.finalCandidatePresent === false
+    && trace.earlyNoOpPreflightPassed === true
+  ) {
+    push('tense_regressed_without_evaluated_candidate', {
+      degradationKindsCount: Array.isArray(trace.degradationKinds)
+        ? (trace.degradationKinds as string[]).length
+        : 0,
+      finalCandidatePresent: false,
+    });
+  }
+  if (
+    (trace.finalDecisionKind === 'exact_noop' || trace.finalDecisionKind === 'semantic_noop')
+    && (trace.rejectionStage === 'provider:visible_noop'
+      || trace.rejectionStage === 'provider:noop'
+      || trace.finalTypedFailureReason === 'ai_noop')
+    && trace.earlyNoOpPreflightPassed === true
+  ) {
+    push('clean_noop_uses_failure_stage_semantics', {
+      finalDecisionKind: trace.finalDecisionKind,
+      rejectionStage: trace.rejectionStage ?? null,
+      finalTypedFailureReason: trace.finalTypedFailureReason ?? null,
+    });
+  }
+  if (
+    typeof trace.finalCandidateBulletCount === 'number'
+    && Array.isArray(trace.finalCandidateBulletScripts)
+    && Number(trace.finalCandidateBulletCount)
+      !== (trace.finalCandidateBulletScripts as unknown[]).length
+  ) {
+    push('final_candidate_bullet_count_script_mismatch', {
+      finalCandidateBulletCount: trace.finalCandidateBulletCount,
+      finalCandidateBulletScriptsLength:
+        (trace.finalCandidateBulletScripts as unknown[]).length,
+    });
+  }
+  if (
+    typeof trace.providerBulletCount === 'number'
+    && Array.isArray(trace.providerBulletScripts)
+    && Number(trace.providerBulletCount)
+      !== (trace.providerBulletScripts as unknown[]).length
+  ) {
+    push('provider_bullet_count_script_mismatch', {
+      providerBulletCount: trace.providerBulletCount,
+      providerBulletScriptsLength: (trace.providerBulletScripts as unknown[]).length,
     });
   }
   if (
@@ -1664,6 +1845,35 @@ export function checkExperienceDiagnosticCompleteness(
       'providerNoOpBlockedBySourceDefect',
     ] as const) {
       if (!(key in trace)) missing.push(key);
+    }
+    // AAB-317 — early no-op / final-candidate N/A completeness.
+    if (trace.earlyNoOpPreflightPassed === true
+      || trace.finalDecisionKind === 'exact_noop'
+      || trace.finalDecisionKind === 'semantic_noop') {
+      for (const key of [
+        'factAuthorityKind',
+        'authoritativeFactSourceKind',
+        'visibleComparisonProvenance',
+        'visibleComparisonMatchedLastAiOutput',
+        'semanticNoOpDetected',
+        'degradationDetected',
+        'finalDecisionKind',
+      ] as const) {
+        if (!(key in trace)) missing.push(key);
+      }
+      // Null final-candidate predicate fields are valid when no candidate present.
+      if (trace.finalCandidatePresent === false
+        || trace.finalCandidateSource === 'none'
+        || !('finalCandidatePresent' in trace)) {
+        // Accept null N/A semantics — do not require positive predicate counts.
+      } else if (trace.finalCandidatePresent === true) {
+        for (const key of [
+          'finalCandidatePredicateIdentityCount',
+          'finalSourceUnitPredicateCoveragePassed',
+        ] as const) {
+          if (!(key in trace)) missing.push(key);
+        }
+      }
     }
     if (
       trace.providerNoOpBlockedBySourceDefect === true

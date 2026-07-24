@@ -336,6 +336,22 @@ export type ExperienceAiDiagnosticTrace = {
   factAuthorityNormalizedHash: string | null;
   factAuthorityUnitCount: number;
   factAuthorityMatchesAuthoritativeSourceKind: boolean;
+  /** AAB-317 dual-source / early no-op diagnostic fields. */
+  earlyNoOpPreflightPassed?: boolean | null;
+  earlyNoOpPreflightEvaluated?: boolean | null;
+  uneditedRerunDetected?: boolean | null;
+  providerAttempted?: boolean | null;
+  finalOutcomeReason?: string | null;
+  finalCandidatePresent?: boolean | null;
+  finalCandidatePredicateValidationApplicable?: boolean | null;
+  finalCandidateBulletCount?: number | null;
+  finalCandidateBulletScripts?: string[] | null;
+  appliedFinalBulletCount?: number | null;
+  appliedFinalBulletScripts?: string[] | null;
+  sourceAlreadyValidForTarget?: boolean | null;
+  sourceTenseMismatchCount?: number | null;
+  sourceTenseValidationPassed?: boolean | null;
+  expectedEmploymentTense?: string | null;
   visibleComparisonSourceKind: string | null;
   visibleComparisonHash: string | null;
   visibleComparisonNormalizedHash: string | null;
@@ -1667,6 +1683,88 @@ export class ExperienceAiDiagnosticSession {
       factAuthorityMatchesAuthoritativeSourceKind: Boolean(
         diag.factAuthorityMatchesAuthoritativeSourceKind,
       ),
+      ...(typeof (diag as Record<string, unknown>).authoritativeFactSourceKind === 'string'
+        && this.draft.authoritativeFactSourceKind == null
+        ? {
+          authoritativeFactSourceKind:
+            String((diag as Record<string, unknown>).authoritativeFactSourceKind),
+        }
+        : {}),
+      ...(typeof (diag as Record<string, unknown>).currentTextareaProvenance === 'string'
+        && this.draft.currentTextareaProvenance == null
+        ? {
+          currentTextareaProvenance:
+            String((diag as Record<string, unknown>).currentTextareaProvenance),
+        }
+        : {}),
+      ...(typeof (diag as Record<string, unknown>).lastAiOutputHashMatched === 'boolean'
+        && this.draft.lastAiOutputHashMatched == null
+        ? {
+          lastAiOutputHashMatched:
+            (diag as Record<string, unknown>).lastAiOutputHashMatched as boolean,
+        }
+        : {}),
+      ...(typeof (diag as Record<string, unknown>).materialUserEditDetected === 'boolean'
+        && this.draft.materialUserEditDetected == null
+        ? {
+          materialUserEditDetected:
+            (diag as Record<string, unknown>).materialUserEditDetected as boolean,
+        }
+        : {}),
+      ...(typeof (diag as Record<string, unknown>).earlyNoOpPreflightPassed === 'boolean'
+        ? {
+          earlyNoOpPreflightPassed:
+            (diag as Record<string, unknown>).earlyNoOpPreflightPassed as boolean,
+          earlyNoOpPreflightEvaluated: Boolean(
+            (diag as Record<string, unknown>).earlyNoOpPreflightEvaluated,
+          ),
+          uneditedRerunDetected: Boolean(
+            (diag as Record<string, unknown>).uneditedRerunDetected,
+          ),
+          providerAttempted: (diag as Record<string, unknown>).providerAttempted === true,
+          finalOutcomeReason:
+            ((diag as Record<string, unknown>).finalOutcomeReason as string | null | undefined)
+            ?? null,
+          finalCandidatePresent:
+            (diag as Record<string, unknown>).finalCandidatePresent === true,
+          finalCandidatePredicateValidationApplicable:
+            (diag as Record<string, unknown>).finalCandidatePredicateValidationApplicable
+            === true,
+          finalCandidateBulletCount: Number(
+            (diag as Record<string, unknown>).finalCandidateBulletCount ?? 0,
+          ),
+          finalCandidateBulletScripts: Array.isArray(
+            (diag as Record<string, unknown>).finalCandidateBulletScripts,
+          )
+            ? ((diag as Record<string, unknown>).finalCandidateBulletScripts as unknown[])
+              .map(String)
+            : [],
+          appliedFinalBulletCount: Number(
+            (diag as Record<string, unknown>).appliedFinalBulletCount ?? 0,
+          ),
+          appliedFinalBulletScripts: Array.isArray(
+            (diag as Record<string, unknown>).appliedFinalBulletScripts,
+          )
+            ? ((diag as Record<string, unknown>).appliedFinalBulletScripts as unknown[])
+              .map(String)
+            : [],
+          sourceAlreadyValidForTarget:
+            typeof (diag as Record<string, unknown>).sourceAlreadyValidForTarget === 'boolean'
+              ? (diag as Record<string, unknown>).sourceAlreadyValidForTarget as boolean
+              : null,
+          sourceTenseMismatchCount:
+            typeof (diag as Record<string, unknown>).sourceTenseMismatchCount === 'number'
+              ? (diag as Record<string, unknown>).sourceTenseMismatchCount as number
+              : null,
+          sourceTenseValidationPassed:
+            typeof (diag as Record<string, unknown>).sourceTenseValidationPassed === 'boolean'
+              ? (diag as Record<string, unknown>).sourceTenseValidationPassed as boolean
+              : null,
+          expectedEmploymentTense:
+            ((diag as Record<string, unknown>).expectedEmploymentTense as string | null | undefined)
+            ?? null,
+        }
+        : {}),
       visibleComparisonSourceKind:
         (diag.visibleComparisonSourceKind as string | null | undefined) ?? null,
       visibleComparisonHash: (diag.visibleComparisonHash as string | null | undefined) ?? null,

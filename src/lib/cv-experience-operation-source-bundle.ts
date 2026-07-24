@@ -117,8 +117,12 @@ function employmentState(isPresent: boolean | undefined): 'current' | 'completed
 }
 
 /**
- * Prefer pre-AI / provenance fact text over snapshot live text so unedited AI
- * never becomes fact authority merely because the snapshot froze the textarea.
+ * Resolve fact-authority text for an Experience AI operation.
+ *
+ * Prefer the immutable request-time snapshot when it already froze an
+ * authoritative override. Otherwise fall back to unedited pre-AI provenance,
+ * then grounding. Never treat unedited prior AI output as sole fact source
+ * when a distinct pre-AI snapshot exists on the operation snapshot.
  */
 export function resolveExperienceFactAuthorityText(options: {
   textareaProvenance: ExperienceTextareaProvenanceResolution | null | undefined;
@@ -127,14 +131,14 @@ export function resolveExperienceFactAuthorityText(options: {
 }): string {
   void EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION;
   const prov = options.textareaProvenance;
-  if (
-    prov?.currentTextareaProvenance === 'ai_generated_unedited'
-    && (prov.authoritativeFactText || '').trim()
-  ) {
-    return prov.authoritativeFactText.trim();
-  }
   return (
     options.snapshot?.normalizedSourceText
+    || (
+      prov?.currentTextareaProvenance === 'ai_generated_unedited'
+        && (prov.authoritativeFactText || '').trim()
+        ? prov.authoritativeFactText
+        : ''
+    )
     || options.groundingSourceDescription
     || ''
   ).trim();
@@ -262,7 +266,14 @@ export function evaluateUneditedRerunEarlyNoOpPreflight(options: {
     && bundle.visibleSourceMatchedLastAiOutput
     && !bundle.visibleSourceMateriallyEdited;
 
-  if (options.sourceWasEmpty) failures.push('source_was_empty');
+  const isSpanishTarget = String(options.bundle.targetLocale || '')
+    .toLowerCase()
+    .startsWith('es');
+  // Morphological "already valid" is authoritative for Spanish only.
+  // Other locales only check locale match — never short-circuit them here.
+  if (!isSpanishTarget) {
+    failures.push('early_noop_preflight_spanish_only');
+  }
   if (bundle.visibleSourceProvenance !== 'ai_generated_unedited') {
     failures.push('provenance_not_ai_generated_unedited');
   }

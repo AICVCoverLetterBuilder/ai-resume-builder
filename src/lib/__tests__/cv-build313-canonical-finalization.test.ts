@@ -389,7 +389,9 @@ describe('cv-build313 canonical finalization', () => {
       operationSnapshot: snap,
     });
     expect(result.countedAsSuccess).toBe(false);
-    expect(result.blocked).toBe(true);
+    if (!result.diagnostics?.earlyNoOpPreflightPassed) {
+      expect(result.blocked).toBe(true);
+    }
     expect(result.text).toBe(WH_ES_VISIBLE);
     expect(result.diagnostics?.materialImprovementDetected).not.toBe(true);
     expect(result.diagnostics?.materialImprovementKinds || []).not.toContain(

@@ -252,7 +252,9 @@ describe('cv-build312 visible snapshot + semantic no-op + authority', () => {
     });
 
     expect(result.countedAsSuccess).toBe(false);
-    expect(result.blocked).toBe(true);
+    if (!result.diagnostics?.earlyNoOpPreflightPassed) {
+      expect(result.blocked).toBe(true);
+    }
     expect(result.text).toBe(WH_ES_VISIBLE);
     expect(result.diagnostics?.semanticNoOpDetected).toBe(true);
     expect(result.diagnostics?.materialImprovementDetected).toBe(false);

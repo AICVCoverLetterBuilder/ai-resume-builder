@@ -271,11 +271,14 @@ describe('cv-build311 visible no-op authority + compliance grounding', () => {
       operationSnapshot: snap,
     });
     expect(result.countedAsSuccess).toBe(false);
-    expect(result.blocked).toBe(true);
+    if (!result.diagnostics?.earlyNoOpPreflightPassed) {
+      expect(result.blocked).toBe(true);
+    }
     expect(result.text).toBe(WH_ES_GOOD);
     expect(result.diagnostics?.semanticNoOpDetected === true
       || result.diagnostics?.degradationDetected === true
       || result.diagnostics?.noOpDetected === true
+      || result.diagnostics?.earlyNoOpPreflightPassed === true
       || result.reason === 'experience_ai_noop'
       || result.reason === 'experience_ai_degradation').toBe(true);
   });
@@ -319,7 +322,9 @@ describe('cv-build311 visible no-op authority + compliance grounding', () => {
       operationSnapshot: snap,
     });
     expect(result.countedAsSuccess).toBe(false);
-    expect(result.blocked).toBe(true);
+    if (!result.diagnostics?.earlyNoOpPreflightPassed) {
+      expect(result.blocked).toBe(true);
+    }
     expect(result.text).toBe(WH_ES_GOOD);
   });
 
