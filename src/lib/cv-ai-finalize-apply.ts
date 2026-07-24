@@ -101,6 +101,7 @@ import {
   validateSpanishExperienceSurfaceForm,
   repairSpanishExperienceCandidateStructured,
   decideSpanishExperienceFinalCandidate,
+  buildSpanishExperienceDeterministicCandidate,
   type ExperienceCanonicalFinalDecision,
 } from './cv-experience-canonical-finalization';
 export {
@@ -108,6 +109,18 @@ export {
   SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
   EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
   EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
+};
+import {
+  SPANISH_EXPERIENCE_MORPHOLOGY_314_REVISION,
+  SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
+  EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION,
+  analyzeSpanishExperienceTenseAlignment,
+  countIncompleteSpanishUnits,
+} from './cv-spanish-experience-morphology';
+export {
+  SPANISH_EXPERIENCE_MORPHOLOGY_314_REVISION,
+  SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
+  EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION,
 };
 void SPANISH_CV_AI_305_REVISION;
 void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
@@ -118,6 +131,9 @@ void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
 void SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
 void EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION;
 void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
+void SPANISH_EXPERIENCE_MORPHOLOGY_314_REVISION;
+void SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
+void EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION;
 import {
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
   EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
@@ -670,6 +686,24 @@ export type FinalizeCvAiFieldResult = {
     materialImprovementDetected?: boolean;
     materialImprovementKinds?: string[];
     materialImprovementEvidenceCount?: number;
+    everyImprovementKindHasEvidence?: boolean;
+    canonicalAcceptancePassed?: boolean | null;
+    expectedEmploymentTense?: string | null;
+    sourceDetectedTense?: string | null;
+    sourceTenseMismatchCount?: number | null;
+    candidateDetectedTense?: string | null;
+    candidateTenseMismatchCount?: number | null;
+    wrongTenseFixedUnitCount?: number | null;
+    tenseOnlyCorrectionDetected?: boolean;
+    tenseOnlySourceLength?: number | null;
+    tenseOnlyCandidateLength?: number | null;
+    tenseOnlyUnexpectedExpansionDetected?: boolean;
+    tenseOnlyPreservationPassed?: boolean | null;
+    sourcePredicateExtractionPassed?: boolean | null;
+    sourceIncompleteUnitCount?: number | null;
+    spanishExperienceMorphologyRevision?: typeof SPANISH_EXPERIENCE_MORPHOLOGY_314_REVISION;
+    spanishExperienceTenseEvidenceRevision?: typeof SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
+    experienceNonvacuousPredicateGateRevision?: typeof EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION;
     candidateSurfaceFormPassed?: boolean | null;
     candidateSurfaceFailureKinds?: string[];
     degradationDetected?: boolean;
@@ -4702,6 +4736,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
           useVisibleForNoOp: true,
           capturedAtRequest: true,
+          isPresent,
         });
         lastVisibleComparisonEval = postVis;
         // AAB-313: never bill Spanish on generic grounded_phrasing alone.
@@ -4719,6 +4754,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || result.origin
             || 'provider',
           ),
+          isPresent,
           repairProduced: unsupportedClaimRepairCandidateProduced,
           repairValid: unsupportedClaimRepairCandidateValid === true,
           repairSelectedForComparison: unsupportedClaimRepairSelectedForComparison,
@@ -4979,9 +5015,44 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         candidateSurfaceFailureKinds: [...candidateSurfaceFailureKinds],
         materialImprovementEvidenceCount:
           materialImprovementEvidenceCount
+          || lastCanonicalDecision?.materialImprovementEvidenceCount
           || (Array.isArray(successVisFields.materialImprovementKinds)
             ? (successVisFields.materialImprovementKinds as string[]).length
             : 0),
+        everyImprovementKindHasEvidence:
+          lastCanonicalDecision?.everyImprovementKindHasEvidence
+          ?? (materialImprovementEvidenceCount > 0),
+        canonicalAcceptancePassed:
+          lastCanonicalDecision?.canonicalAcceptancePassed
+          ?? (result.countedAsSuccess ? true : null),
+        expectedEmploymentTense: lastCanonicalDecision?.expectedEmploymentTense ?? null,
+        sourceDetectedTense: lastCanonicalDecision?.sourceDetectedTense ?? null,
+        sourceTenseMismatchCount: lastCanonicalDecision?.sourceTenseMismatchCount ?? null,
+        candidateDetectedTense: lastCanonicalDecision?.candidateDetectedTense ?? null,
+        candidateTenseMismatchCount:
+          lastCanonicalDecision?.candidateTenseMismatchCount ?? null,
+        wrongTenseFixedUnitCount: lastCanonicalDecision?.wrongTenseFixedUnitCount ?? null,
+        tenseOnlyCorrectionDetected:
+          lastCanonicalDecision?.tenseOnlyCorrectionDetected ?? false,
+        tenseOnlySourceLength: lastCanonicalDecision?.tenseOnlySourceLength ?? null,
+        tenseOnlyCandidateLength: lastCanonicalDecision?.tenseOnlyCandidateLength ?? null,
+        tenseOnlyUnexpectedExpansionDetected:
+          lastCanonicalDecision?.tenseOnlyUnexpectedExpansionDetected ?? false,
+        tenseOnlyPreservationPassed:
+          lastCanonicalDecision?.tenseOnlyPreservationPassed ?? null,
+        sourcePredicateExtractionPassed:
+          lastCanonicalDecision?.sourcePredicateExtractionPassed
+          ?? (typeof sourcePredicateIdentityCount === 'number'
+            ? sourcePredicateIdentityCount > 0
+            : null),
+        sourceIncompleteUnitCount: (locale || '').toLowerCase().startsWith('es')
+          ? countIncompleteSpanishUnits(visibleComparisonText || sourceForCoverage || '')
+          : null,
+        spanishExperienceMorphologyRevision: SPANISH_EXPERIENCE_MORPHOLOGY_314_REVISION,
+        spanishExperienceTenseEvidenceRevision:
+          SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
+        experienceNonvacuousPredicateGateRevision:
+          EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION,
         finalDecisionKind: (lastCanonicalDecision?.finalDecisionKind
           ?? (typeof successVisFields.finalDecisionKind === 'string'
             ? successVisFields.finalDecisionKind
@@ -5596,6 +5667,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               : sourceForCoverage,
             candidateText: repairedEs,
             candidateOrigin: 'unsupported_claim_repair',
+            isPresent,
             repairProduced: true,
             repairValid: true,
             repairSelectedForComparison: true,
@@ -6181,6 +6253,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           visibleComparisonText,
           candidateText: grounded,
           candidateOrigin: 'deterministic_fallback',
+          isPresent,
         });
         if (!groundedDecision.shouldApply) {
           // Fall through to spanish warehouse fallback / later recovery.
@@ -6391,6 +6464,79 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       // Do not fall through to same-language source-preserving for a different target.
     } else {
+    // Same-locale Spanish: pure tense defect → minimal normalizer before warehouse shells.
+    if (
+      locale === 'es'
+      && sourceForCoverage
+    ) {
+      const tenseBaseline = (useVisibleForNoOp && (visibleComparisonText || '').trim())
+        ? visibleComparisonText.trim()
+        : sourceForCoverage;
+      const tenseProbe = analyzeSpanishExperienceTenseAlignment({
+        sourceText: tenseBaseline,
+        candidateText: tenseBaseline,
+        isPresent,
+      });
+      if (
+        tenseProbe.sourceTenseMismatchCount > 0
+        && countIncompleteSpanishUnits(tenseBaseline) === 0
+      ) {
+        void SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
+        const tenseDet = buildSpanishExperienceDeterministicCandidate({
+          factAuthorityText: tenseBaseline,
+          isPresent,
+          preferTenseOnly: true,
+        });
+        if (
+          tenseDet.tenseOnly
+          && tenseDet.validation.candidateValid
+          && tenseDet.text.trim()
+        ) {
+          const tenseDecision = decideSpanishExperienceFinalCandidate({
+            factAuthorityText: sourceForCoverage,
+            visibleComparisonText: useVisibleForNoOp
+              ? (visibleComparisonText || tenseBaseline)
+              : tenseBaseline,
+            candidateText: tenseDet.text,
+            candidateOrigin: 'deterministic_tense_normalizer',
+            isPresent,
+            tenseOnlyMeta: tenseDet.tenseOnly,
+          });
+          lastCanonicalDecision = tenseDecision;
+          if (tenseDecision.shouldApply) {
+            const acceptedTense = tryAccept(
+              normalizeLocaleText(tenseDet.text, locale),
+              'deterministic_fallback',
+              'spanish_tense_normalizer',
+            );
+            if (acceptedTense) {
+              clientDeterministicFallbackAttempted = true;
+              clientDeterministicFallbackApplied = true;
+              finalCandidateSource = 'deterministic_tense_normalizer';
+              return attachPerspectiveDiag({
+                ...acceptedTense,
+                diagnostics: {
+                  ...acceptedTense.diagnostics,
+                  clientDeterministicFallbackAttempted: true,
+                  clientDeterministicFallbackApplied: true,
+                  clientDeterministicFallbackReason: 'spanish_tense_normalizer',
+                  materialImprovementKinds: tenseDecision.materialImprovementKinds,
+                  materialImprovementEvidenceCount:
+                    tenseDecision.materialImprovementEvidenceCount,
+                  tenseOnlyCorrectionDetected: true,
+                  tenseOnlyPreservationPassed:
+                    tenseDecision.tenseOnlyPreservationPassed,
+                  canonicalAcceptancePassed:
+                    tenseDecision.canonicalAcceptancePassed,
+                  expectedEmploymentTense: tenseDecision.expectedEmploymentTense,
+                  sourceTenseMismatchCount: tenseDecision.sourceTenseMismatchCount,
+                },
+              });
+            }
+          }
+        }
+      }
+    }
     // Same-locale Spanish warehouse: grounded deterministic recovery when provider
     // was rejected (e.g. guarantee escalation) and strip-repair did not apply.
     if (
@@ -6399,6 +6545,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ) {
       void SPANISH_CV_AI_305_REVISION;
       void SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION;
+      // Skip broad warehouse expansion when the only defect is tense.
+      const tenseOnlySkipWarehouse = (() => {
+        const baseline = (useVisibleForNoOp && (visibleComparisonText || '').trim())
+          ? visibleComparisonText.trim()
+          : sourceForCoverage;
+        const t = analyzeSpanishExperienceTenseAlignment({
+          sourceText: baseline,
+          candidateText: baseline,
+          isPresent,
+        });
+        return t.sourceTenseMismatchCount > 0
+          && countIncompleteSpanishUnits(baseline) === 0;
+      })();
+      if (tenseOnlySkipWarehouse) {
+        // Already attempted tense normalizer above; do not expand via warehouse.
+      } else {
       const esWarehouseFallback = normalizeLocaleText(
         buildSpanishWarehouseExperienceFallback({
           sourceDescription: sourceForCoverage,
@@ -6453,6 +6615,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           });
         }
       }
+      } // end else !tenseOnlySkipWarehouse
     }
     const built = buildSourcePreservingExperienceBulletsWithProvenance(
       sourceForCoverage,

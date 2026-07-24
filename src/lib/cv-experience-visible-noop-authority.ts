@@ -16,6 +16,11 @@ import { experienceAiHasMeaningfulChange } from './cv-experience-perspective';
 import { splitExperienceBullets } from './cv-canonical-facts';
 import { materialDutyKeysFromDescription } from './cv-material-duty-coverage';
 import { detectSpanishExperienceUnsupportedExpansion } from './cv-spanish-experience-grounding';
+import {
+  analyzeSpanishExperienceTenseAlignment,
+  countIncompleteSpanishUnits,
+  SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
+} from './cv-spanish-experience-morphology';
 
 /** Packaging proof — must survive minification / DCE. */
 export const EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION =
@@ -249,9 +254,12 @@ export function evaluateExperienceVisibleComparison(options: {
   matchedLastAiOutput?: boolean;
   useVisibleForNoOp?: boolean;
   capturedAtRequest?: boolean;
+  /** Employment tense for Spanish wrong_tense_fixed evidence. */
+  isPresent?: boolean;
 }): ExperienceVisibleComparisonEvaluation {
   void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
   void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
+  void SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
   const visible = (options.visibleComparisonText || '').trim();
   const candidate = (options.candidateText || '').trim();
   const fact = (options.factAuthorityText || '').trim();
@@ -345,18 +353,44 @@ export function evaluateExperienceVisibleComparison(options: {
     ) {
       improvementKinds.push('wrong_locale_fixed');
     }
-    // First-click Spanish: abbreviated source → natural completion of the same
-    // duties (not a synonym restyle). Explicit kind — never generic phrasing.
+    // Tense mismatch vs employment state — evidence-only wrong_tense_fixed.
+    let sourceTenseMismatchCount = 0;
+    if (isEs && options.isPresent !== undefined && candScan.count === 0) {
+      const tense = analyzeSpanishExperienceTenseAlignment({
+        sourceText: visible,
+        candidateText: candidate,
+        isPresent: options.isPresent,
+      });
+      sourceTenseMismatchCount = tense.sourceTenseMismatchCount;
+      if (
+        tense.sourceTenseMismatchCount > 0
+        && tense.candidateTenseMismatchCount === 0
+        && !exactNormMatch
+      ) {
+        improvementKinds.push('wrong_tense_fixed');
+      } else if (
+        tense.sourceTenseMismatchCount === 0
+        && tense.candidateTenseMismatchCount > 0
+      ) {
+        degradationKinds.push('tense_regressed');
+      }
+    }
+    // Incomplete / abbreviated first-click completion — never for pure tense fixes
+    // on grammatically complete past/present sentences (AAB-314).
+    const incompleteVisible = isEs ? countIncompleteSpanishUnits(visible) : 0;
     if (
       isEs
       && visibleIsFactAuthority
       && textualDiffVsFact
       && !exactNormMatch
       && candScan.count === 0
+      && sourceTenseMismatchCount === 0
+      && !improvementKinds.includes('wrong_tense_fixed')
       && improvementKinds.length === 0
       && !synonymOnlyRestyle
       && !inclusiveOnly
       && lengthDelta > Math.max(28, Math.floor(visible.length * 0.12))
+      && (incompleteVisible > 0 || visibleIsFactAuthority)
     ) {
       improvementKinds.push('incomplete_bullet_completed');
     }

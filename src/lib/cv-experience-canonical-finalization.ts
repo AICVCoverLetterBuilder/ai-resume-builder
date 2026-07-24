@@ -28,6 +28,14 @@ import {
   type ExperienceMaterialImprovementKind,
   type ExperienceDegradationKind,
 } from './cv-experience-visible-noop-authority';
+import {
+  analyzeSpanishExperienceTenseAlignment,
+  countIncompleteSpanishUnits,
+  normalizeSpanishExperienceTenseOnly,
+  SPANISH_EXPERIENCE_MORPHOLOGY_314_REVISION,
+  SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
+  EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION,
+} from './cv-spanish-experience-morphology';
 
 /** Packaging proof — must survive minification / DCE. */
 export const EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION =
@@ -43,6 +51,9 @@ void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
 void SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
 void EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION;
 void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
+void SPANISH_EXPERIENCE_MORPHOLOGY_314_REVISION;
+void SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
+void EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION;
 
 export type ExperienceSurfaceFailureKind =
   | 'malformed_surface_form'
@@ -69,7 +80,12 @@ export type ExperienceCanonicalDecisionKind =
 export type ExperienceImprovementEvidence = {
   kind: ExperienceMaterialImprovementKind;
   unitHash: string | null;
+  affectedUnitHash?: string | null;
   previousDefectKind: string | null;
+  beforeDefect?: string | null;
+  expectedState?: string | null;
+  finalState?: string | null;
+  validationPassed?: boolean;
   corrected: true;
 };
 
@@ -86,6 +102,10 @@ export type ExperienceCanonicalCandidateValidation = {
   addedPredicateCount: number;
   alignmentAmbiguous: boolean;
   unitCount: number;
+  sourcePredicateIdentityCount?: number;
+  candidatePredicateIdentityCount?: number;
+  sourcePredicateExtractionPassed?: boolean;
+  sourcePredicateExtractionFailureReason?: string | null;
 };
 
 export type ExperienceCanonicalFinalDecision = {
@@ -112,6 +132,25 @@ export type ExperienceCanonicalFinalDecision = {
   unsupportedClaimRepairCandidateValid: boolean;
   unsupportedClaimRepairSelectedForComparison: boolean;
   unsupportedClaimRepairVisibleApplyPerformed: boolean;
+  /** AAB-314 — tense / acceptance diagnostics serialized from same decision. */
+  canonicalAcceptancePassed?: boolean;
+  expectedEmploymentTense?: 'present' | 'past' | null;
+  sourceDetectedTense?: string | null;
+  sourceTenseMismatchCount?: number | null;
+  candidateDetectedTense?: string | null;
+  candidateTenseMismatchCount?: number | null;
+  wrongTenseFixedUnitCount?: number | null;
+  tenseOnlyCorrectionDetected?: boolean;
+  tenseOnlySourceLength?: number | null;
+  tenseOnlyCandidateLength?: number | null;
+  tenseOnlyUnexpectedExpansionDetected?: boolean;
+  tenseOnlyPreservationPassed?: boolean | null;
+  everyImprovementKindHasEvidence?: boolean;
+  materialImprovementEvidenceCount?: number;
+  finalCandidatePredicateIdentityCount?: number | null;
+  finalSourceUnitPredicateCoveragePassed?: boolean | null;
+  sourcePredicateIdentityCount?: number | null;
+  sourcePredicateExtractionPassed?: boolean | null;
 };
 
 /** Spanish surface-form gate — rejects malformed post-strip / post-repair text. */
@@ -232,6 +271,18 @@ export function validateSpanishExperienceCandidate(options: {
     && needsWh
     && cov.uncovered.length > 0
     && scan.count === 0;
+  void EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION;
+  const extractionOk = pred.sourcePredicateExtractionPassed !== false;
+  const factUnits = splitExperienceBullets(fact).filter(Boolean).length;
+  const predCoverageStrict = factUnits === 0
+    ? (pred.candidateAddedPredicateCount ?? 0) === 0
+    : (
+      pred.sourceUnitPredicateCoveragePassed === true
+      && (pred.candidateAddedPredicateCount ?? 0) === 0
+      && extractionOk
+      && (pred.sourcePredicateIdentityCount ?? 0) > 0
+      && (pred.candidatePredicateIdentityCount ?? 0) > 0
+    );
   const candidateValid = Boolean(
     candidate
     && units.length > 0
@@ -239,7 +290,8 @@ export function validateSpanishExperienceCandidate(options: {
     && scan.count === 0
     && (pred.candidateAddedPredicateCount ?? 0) === 0
     && cov.ok
-    && pred.sourceUnitPredicateCoveragePassed !== false,
+    && predCoverageStrict
+    && extractionOk,
   );
   return {
     revision: EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
@@ -248,13 +300,16 @@ export function validateSpanishExperienceCandidate(options: {
     surfaceFormPassed: surface.passed,
     surfaceFailureKinds: [...surface.kinds],
     factCoveragePassed: cov.ok,
-    predicateCoveragePassed: pred.sourceUnitPredicateCoveragePassed !== false
-      && (pred.candidateAddedPredicateCount ?? 0) === 0,
+    predicateCoveragePassed: predCoverageStrict,
     unsupportedCount: scan.count,
     unsupportedKinds: [...scan.kinds],
     addedPredicateCount: pred.candidateAddedPredicateCount ?? 0,
     alignmentAmbiguous,
     unitCount: units.length,
+    sourcePredicateIdentityCount: pred.sourcePredicateIdentityCount,
+    candidatePredicateIdentityCount: pred.candidatePredicateIdentityCount,
+    sourcePredicateExtractionPassed: pred.sourcePredicateExtractionPassed,
+    sourcePredicateExtractionFailureReason: pred.sourcePredicateExtractionFailureReason,
   };
 }
 
@@ -297,21 +352,41 @@ export function repairSpanishExperienceCandidateStructured(options: {
   };
 }
 
-/** Deterministic rebuild from authoritative source (warehouse when applicable). */
+/** Deterministic rebuild: tense-only normalizer first, then warehouse shells. */
 export function buildSpanishExperienceDeterministicCandidate(options: {
   factAuthorityText: string;
   isPresent?: boolean;
+  preferTenseOnly?: boolean;
 }): {
   text: string;
   validation: ExperienceCanonicalCandidateValidation;
+  tenseOnly?: ReturnType<typeof normalizeSpanishExperienceTenseOnly> | null;
 } {
   void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
+  void SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
   const fact = (options.factAuthorityText || '').trim();
+  const isPresent = options.isPresent !== false;
+  const tenseOnly = normalizeSpanishExperienceTenseOnly({
+    sourceText: fact,
+    isPresent,
+  });
+  const tenseDefect = tenseOnly.analysis.sourceTenseMismatchCount > 0
+    && countIncompleteSpanishUnits(fact) === 0;
   let text = '';
-  if (sourceRequiresSpanishWarehouseFactCoverage(fact)) {
+  let usedTense = false;
+  if (
+    (options.preferTenseOnly !== false)
+    && tenseDefect
+    && tenseOnly.changed
+    && tenseOnly.tenseOnlyPreservationPassed
+    && !tenseOnly.tenseOnlyUnexpectedExpansionDetected
+  ) {
+    text = tenseOnly.text;
+    usedTense = true;
+  } else if (sourceRequiresSpanishWarehouseFactCoverage(fact)) {
     text = buildSpanishWarehouseExperienceFallback({
       sourceDescription: fact,
-      isPresent: options.isPresent !== false,
+      isPresent,
     });
   } else {
     const units = experienceAiSourceUnits(fact);
@@ -325,31 +400,71 @@ export function buildSpanishExperienceDeterministicCandidate(options: {
   const validation = validateSpanishExperienceCandidate({
     factAuthorityText: fact,
     candidateText: text,
-    candidateOrigin: 'deterministic_fallback',
+    candidateOrigin: usedTense ? 'deterministic_tense_normalizer' : 'deterministic_fallback',
   });
-  return { text, validation };
+  return { text, validation, tenseOnly: usedTense ? tenseOnly : null };
 }
 
 function evidenceForKinds(
   kinds: ExperienceMaterialImprovementKind[],
   visible: string,
   candidate: string,
+  options?: {
+    isPresent?: boolean;
+    tenseAnalysis?: ReturnType<typeof analyzeSpanishExperienceTenseAlignment> | null;
+  },
 ): ExperienceImprovementEvidence[] {
   void EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION;
+  void SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
   const candUnits = splitExperienceBullets(candidate).filter(Boolean);
-  void visible;
-  return kinds.map((kind, i) => ({
-    kind,
-    unitHash: fingerprintText(
-      (candUnits[Math.min(i, Math.max(0, candUnits.length - 1))] || candidate).trim(),
-    ),
-    previousDefectKind: kind === 'malformed_sentence_fixed'
-      ? 'malformed_surface_form'
-      : (kind === 'missing_source_unit_restored' || kind === 'missing_fact_restored'
-        ? 'missing_source_unit'
-        : (kind.startsWith('unsupported') ? 'unsupported_visible_content' : null)),
-    corrected: true as const,
-  })).filter((e) => e.unitHash);
+  const visUnits = splitExperienceBullets(visible).filter(Boolean);
+  const out: ExperienceImprovementEvidence[] = [];
+  for (const kind of kinds) {
+    if (kind === 'wrong_tense_fixed') {
+      const hashes = options?.tenseAnalysis?.mismatchedSourceUnitHashes?.length
+        ? options.tenseAnalysis.mismatchedSourceUnitHashes
+        : visUnits.map((u) => fingerprintText(u.trim()));
+      const expected = options?.isPresent === false ? 'past' : 'present';
+      const before = expected === 'present' ? 'past_tense_in_current_employment' : 'present_tense_in_completed_employment';
+      for (const h of hashes) {
+        out.push({
+          kind,
+          unitHash: h,
+          affectedUnitHash: h,
+          previousDefectKind: 'wrong_tense',
+          beforeDefect: before,
+          expectedState: expected,
+          finalState: expected,
+          validationPassed: true,
+          corrected: true,
+        });
+      }
+      continue;
+    }
+    const i = out.length;
+    out.push({
+      kind,
+      unitHash: fingerprintText(
+        (candUnits[Math.min(i, Math.max(0, candUnits.length - 1))] || candidate).trim(),
+      ),
+      affectedUnitHash: fingerprintText(
+        (candUnits[Math.min(i, Math.max(0, candUnits.length - 1))] || candidate).trim(),
+      ),
+      previousDefectKind: kind === 'malformed_sentence_fixed'
+        ? 'malformed_surface_form'
+        : (kind === 'missing_source_unit_restored' || kind === 'missing_fact_restored'
+          ? 'missing_source_unit'
+          : (kind === 'incomplete_bullet_completed'
+            ? 'incomplete_visible_unit'
+            : (kind.startsWith('unsupported') ? 'unsupported_visible_content' : null))),
+      beforeDefect: kind === 'incomplete_bullet_completed' ? 'incomplete_unit' : null,
+      expectedState: null,
+      finalState: null,
+      validationPassed: true,
+      corrected: true as const,
+    });
+  }
+  return out.filter((e) => e.unitHash);
 }
 
 /**
@@ -362,17 +477,22 @@ export function decideSpanishExperienceFinalCandidate(options: {
   candidateText: string;
   candidateOrigin: string;
   locale?: string;
+  isPresent?: boolean;
   repairProduced?: boolean;
   repairValid?: boolean;
   repairSelectedForComparison?: boolean;
+  tenseOnlyMeta?: ReturnType<typeof normalizeSpanishExperienceTenseOnly> | null;
 }): ExperienceCanonicalFinalDecision {
   void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
   void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
   void EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION;
+  void SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
+  void EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION;
 
   const fact = (options.factAuthorityText || '').trim();
   const visible = (options.visibleComparisonText || '').trim();
   const candidate = (options.candidateText || '').trim();
+  const isPresent = options.isPresent !== false;
   const validation = validateSpanishExperienceCandidate({
     factAuthorityText: fact,
     candidateText: candidate,
@@ -386,6 +506,11 @@ export function decideSpanishExperienceFinalCandidate(options: {
     && experienceAiSourcesEquivalent(visible, candidate);
   const semanticEq = visibleAvailable
     && experienceVisibleTextsSemanticallyEquivalent(visible, candidate, 'es');
+  const tenseAnalysis = analyzeSpanishExperienceTenseAlignment({
+    sourceText: visible || fact,
+    candidateText: candidate,
+    isPresent,
+  });
   const visEval = evaluateExperienceVisibleComparison({
     factAuthorityText: fact,
     visibleComparisonText: visible,
@@ -393,6 +518,7 @@ export function decideSpanishExperienceFinalCandidate(options: {
     locale: 'es',
     useVisibleForNoOp: visibleAvailable,
     capturedAtRequest: true,
+    isPresent,
   });
 
   // Spanish: never accept generic grounded_phrasing as sole billable reason.
@@ -401,6 +527,15 @@ export function decideSpanishExperienceFinalCandidate(options: {
   ) as ExperienceMaterialImprovementKind[];
 
   const improvementKinds: ExperienceMaterialImprovementKind[] = [...rawKinds];
+  // Complete tense-mismatched bullets must never claim incomplete_bullet_completed.
+  if (
+    improvementKinds.includes('incomplete_bullet_completed')
+    && countIncompleteSpanishUnits(visible) === 0
+    && tenseAnalysis.sourceTenseMismatchCount > 0
+  ) {
+    const idx = improvementKinds.indexOf('incomplete_bullet_completed');
+    if (idx >= 0) improvementKinds.splice(idx, 1);
+  }
   const visSurface = validateSpanishExperienceSurfaceForm(visible);
   const candSurface = validateSpanishExperienceSurfaceForm(candidate);
   if (!visSurface.passed && candSurface.passed && validation.candidateValid) {
@@ -431,7 +566,17 @@ export function decideSpanishExperienceFinalCandidate(options: {
   }
 
   const uniqueImp = [...new Set(improvementKinds)];
-  const evidence = evidenceForKinds(uniqueImp, visible, candidate);
+  const evidence = evidenceForKinds(uniqueImp, visible, candidate, {
+    isPresent,
+    tenseAnalysis,
+  });
+  const everyKindHasEvidence = uniqueImp.every((k) =>
+    evidence.some((e) => e.kind === k && e.validationPassed !== false));
+  const evidenceValidated = evidence.length > 0
+    && evidence.every((e) => e.validationPassed !== false)
+    && everyKindHasEvidence
+    && evidence.length >= uniqueImp.length;
+
   const degradationKinds: ExperienceDegradationKind[] = [
     ...visEval.degradationKinds,
   ];
@@ -445,6 +590,31 @@ export function decideSpanishExperienceFinalCandidate(options: {
   const degradation = !validation.candidateValid || uniqueDeg.length > 0
     || !validation.surfaceFormPassed;
 
+  const tenseOnlyMeta = options.tenseOnlyMeta || null;
+  const tenseOnlyCorrectionDetected = Boolean(
+    uniqueImp.length === 1
+    && uniqueImp[0] === 'wrong_tense_fixed'
+    && tenseAnalysis.sourceTenseMismatchCount > 0
+    && tenseAnalysis.candidateTenseMismatchCount === 0,
+  );
+  const srcLen = (visible || fact).replace(/\s+/g, ' ').trim().length;
+  const candLen = candidate.replace(/\s+/g, ' ').trim().length;
+  const tenseOnlySourceLength = tenseOnlyMeta?.tenseOnlySourceLength ?? srcLen;
+  const tenseOnlyCandidateLength = tenseOnlyMeta?.tenseOnlyCandidateLength ?? candLen;
+  const tenseOnlyUnexpectedExpansionDetected = tenseOnlyCorrectionDetected
+    && (
+      tenseOnlyMeta?.tenseOnlyUnexpectedExpansionDetected
+      ?? ((candLen - srcLen) > Math.max(24, Math.floor(srcLen * 0.12)))
+    );
+  const tenseOnlyPreservationPassed = tenseOnlyCorrectionDetected
+    ? (
+      tenseOnlyMeta?.tenseOnlyPreservationPassed
+      ?? (!tenseOnlyUnexpectedExpansionDetected
+        && splitExperienceBullets(candidate).filter(Boolean).length
+          === splitExperienceBullets(visible || fact).filter(Boolean).length)
+    )
+    : null;
+
   const semanticNoOp = Boolean(
     validation.candidateValid
     && visibleAvailable
@@ -454,35 +624,62 @@ export function decideSpanishExperienceFinalCandidate(options: {
   const neutralRestyle = Boolean(
     semanticNoOp && !exactNoOp && !normalizedNoOp,
   );
-  const materialImprovement = Boolean(
+  const materialImprovementBase = Boolean(
     validation.candidateValid
     && validation.surfaceFormPassed
     && !degradation
     && !semanticNoOp
     && uniqueImp.length > 0
-    && evidence.length === uniqueImp.length,
+    && evidenceValidated,
+  );
+  const materialImprovement = Boolean(
+    materialImprovementBase
+    && (!tenseOnlyCorrectionDetected || tenseOnlyPreservationPassed === true)
+    && !tenseOnlyUnexpectedExpansionDetected,
+  );
+
+  const canonicalAcceptancePassed = Boolean(
+    materialImprovement
+    && validation.candidateValid
+    && validation.surfaceFormPassed
+    && validation.predicateCoveragePassed === true
+    && (validation.sourcePredicateIdentityCount ?? 0) > 0
+    && (validation.candidatePredicateIdentityCount ?? 0) > 0
+    && validation.sourcePredicateExtractionPassed !== false
+    && validation.unsupportedCount === 0
+    && uniqueImp.length > 0
+    && evidenceValidated
+    && (!tenseOnlyCorrectionDetected || tenseOnlyPreservationPassed === true),
   );
 
   let finalDecisionKind: ExperienceCanonicalDecisionKind = 'none';
   if (!candidate) finalDecisionKind = 'terminal_failure';
-  else if (!validation.candidateValid || !validation.surfaceFormPassed) {
+  else if (validation.sourcePredicateExtractionPassed === false) {
+    finalDecisionKind = 'invalid_candidate_rejected';
+  } else if (!validation.candidateValid || !validation.surfaceFormPassed) {
     finalDecisionKind = validation.surfaceFormPassed
       ? 'invalid_candidate_rejected'
       : 'degradation_rejected';
   } else if (degradation && !materialImprovement) {
     finalDecisionKind = 'degradation_rejected';
-  } else if (materialImprovement) finalDecisionKind = 'material_improvement';
-  else if (exactNoOp) finalDecisionKind = 'exact_noop';
+  } else if (materialImprovement && canonicalAcceptancePassed) {
+    finalDecisionKind = 'material_improvement';
+  } else if (materialImprovement && !canonicalAcceptancePassed) {
+    finalDecisionKind = 'invalid_candidate_rejected';
+  } else if (exactNoOp) finalDecisionKind = 'exact_noop';
   else if (normalizedNoOp) finalDecisionKind = 'normalized_noop';
   else if (neutralRestyle) finalDecisionKind = 'neutral_restyle_noop';
   else if (semanticNoOp) finalDecisionKind = 'semantic_noop';
   else finalDecisionKind = 'invalid_candidate_rejected';
 
-  const shouldApply = finalDecisionKind === 'material_improvement';
+  const shouldApply = finalDecisionKind === 'material_improvement'
+    && canonicalAcceptancePassed;
 
   let finalTypedReason: string | null = null;
   if (shouldApply) finalTypedReason = null;
-  else if (finalDecisionKind === 'degradation_rejected') {
+  else if (validation.sourcePredicateExtractionPassed === false) {
+    finalTypedReason = 'source_predicate_extraction_failed';
+  } else if (finalDecisionKind === 'degradation_rejected') {
     finalTypedReason = validation.surfaceFailureKinds[0]
       || uniqueDeg[0]
       || 'experience_ai_degradation';
@@ -507,11 +704,11 @@ export function decideSpanishExperienceFinalCandidate(options: {
     normalizedNoOp,
     semanticNoOp,
     neutralRestyle,
-    materialImprovement,
-    materialImprovementKinds: materialImprovement ? uniqueImp : [],
-    materialImprovementEvidence: materialImprovement ? evidence : [],
-    degradation: Boolean(degradation && !materialImprovement),
-    degradationKinds: materialImprovement ? [] : uniqueDeg,
+    materialImprovement: shouldApply,
+    materialImprovementKinds: shouldApply ? uniqueImp : [],
+    materialImprovementEvidence: shouldApply ? evidence : [],
+    degradation: Boolean(degradation && !shouldApply),
+    degradationKinds: shouldApply ? [] : uniqueDeg,
     finalDecisionKind,
     shouldApply,
     shouldIncrementUsage: shouldApply,
@@ -525,12 +722,35 @@ export function decideSpanishExperienceFinalCandidate(options: {
     unsupportedClaimRepairVisibleApplyPerformed: Boolean(
       shouldApply && options.candidateOrigin === 'unsupported_claim_repair',
     ),
+    canonicalAcceptancePassed,
+    expectedEmploymentTense: tenseAnalysis.expectedEmploymentTense,
+    sourceDetectedTense: tenseAnalysis.sourceDetectedTense,
+    sourceTenseMismatchCount: tenseAnalysis.sourceTenseMismatchCount,
+    candidateDetectedTense: tenseAnalysis.candidateDetectedTense,
+    candidateTenseMismatchCount: tenseAnalysis.candidateTenseMismatchCount,
+    wrongTenseFixedUnitCount: tenseAnalysis.wrongTenseFixedUnitCount,
+    tenseOnlyCorrectionDetected,
+    tenseOnlySourceLength,
+    tenseOnlyCandidateLength,
+    tenseOnlyUnexpectedExpansionDetected: Boolean(tenseOnlyUnexpectedExpansionDetected),
+    tenseOnlyPreservationPassed,
+    everyImprovementKindHasEvidence: everyKindHasEvidence,
+    materialImprovementEvidenceCount: shouldApply ? evidence.length : 0,
+    finalCandidatePredicateIdentityCount:
+      validation.candidatePredicateIdentityCount ?? null,
+    finalSourceUnitPredicateCoveragePassed: validation.predicateCoveragePassed,
+    sourcePredicateIdentityCount: validation.sourcePredicateIdentityCount ?? null,
+    sourcePredicateExtractionPassed: validation.sourcePredicateExtractionPassed ?? null,
   };
 }
 
 /**
- * Conservative Spanish recovery: validate provider → one structured repair →
- * deterministic rebuild → decide vs visible comparison.
+ * Conservative Spanish recovery:
+ * 1) validate provider (reject tense-only over-expansion)
+ * 2) one structured repair
+ * 3) minimal deterministic tense normalizer when pure tense defect
+ * 4) warehouse / deterministic rebuild
+ * 5) decide vs visible comparison
  */
 export function finalizeSpanishExperienceCandidateConservatively(options: {
   factAuthorityText: string;
@@ -545,40 +765,68 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
   deterministic: ReturnType<typeof buildSpanishExperienceDeterministicCandidate> | null;
 } {
   void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
+  void SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION;
   const fact = (options.factAuthorityText || '').trim();
   const visible = (options.visibleComparisonText || '').trim();
   const provider = (options.providerCandidateText || '').trim();
+  const isPresent = options.isPresent !== false;
+  const baseline = visible || fact;
+  const sourceTense = analyzeSpanishExperienceTenseAlignment({
+    sourceText: baseline,
+    candidateText: baseline,
+    isPresent,
+  });
+  const pureTenseDefect = sourceTense.sourceTenseMismatchCount > 0
+    && countIncompleteSpanishUnits(baseline) === 0;
 
   const providerValidation = validateSpanishExperienceCandidate({
     factAuthorityText: fact,
     candidateText: provider,
     candidateOrigin: 'provider',
   });
-  if (providerValidation.candidateValid) {
-    const decision = decideSpanishExperienceFinalCandidate({
-      factAuthorityText: fact,
-      visibleComparisonText: visible,
+  if (providerValidation.candidateValid && provider.trim()) {
+    const providerTense = analyzeSpanishExperienceTenseAlignment({
+      sourceText: baseline,
       candidateText: provider,
-      candidateOrigin: 'provider',
+      isPresent,
     });
-    return {
-      decision,
-      providerValidation,
-      repair: null,
-      deterministic: null,
-    };
+    const srcLen = baseline.replace(/\s+/g, ' ').trim().length;
+    const candLen = provider.replace(/\s+/g, ' ').trim().length;
+    const overExpanded = pureTenseDefect
+      && (candLen - srcLen) > Math.max(24, Math.floor(srcLen * 0.12));
+    const providerFixesTense = providerTense.candidateTenseMismatchCount === 0
+      && providerTense.sourceTenseMismatchCount > 0;
+    if (!(pureTenseDefect && (overExpanded || !providerFixesTense))) {
+      const decision = decideSpanishExperienceFinalCandidate({
+        factAuthorityText: fact,
+        visibleComparisonText: visible,
+        candidateText: provider,
+        candidateOrigin: 'provider',
+        isPresent,
+      });
+      if (decision.shouldApply || !pureTenseDefect) {
+        return {
+          decision,
+          providerValidation,
+          repair: null,
+          deterministic: null,
+        };
+      }
+    }
+    // Pure tense defect with unsafe/over-expanded provider → tense normalizer.
   }
 
   const repair = repairSpanishExperienceCandidateStructured({
     factAuthorityText: fact,
     candidateText: provider,
   });
-  if (repair.valid && repair.repairedText.trim()) {
+  if (repair.valid && repair.repairedText.trim() && !pureTenseDefect) {
     const decision = decideSpanishExperienceFinalCandidate({
       factAuthorityText: fact,
       visibleComparisonText: visible,
       candidateText: repair.repairedText,
       candidateOrigin: 'unsupported_claim_repair',
+      isPresent,
       repairProduced: repair.produced,
       repairValid: repair.valid,
       repairSelectedForComparison: true,
@@ -586,22 +834,64 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
     if (decision.shouldApply) {
       return { decision, providerValidation, repair, deterministic: null };
     }
-    // Valid repair that is only a no-op vs visible: still attempt deterministic
-    // rebuild, which may prove incomplete_bullet_completed / malformed fix.
+  }
+
+  // Pure tense: minimal conjugation-preserving normalizer before warehouse shells.
+  if (pureTenseDefect) {
+    const tenseNorm = normalizeSpanishExperienceTenseOnly({
+      sourceText: baseline,
+      isPresent,
+    });
+    if (
+      tenseNorm.changed
+      && tenseNorm.tenseOnlyPreservationPassed
+      && !tenseNorm.tenseOnlyUnexpectedExpansionDetected
+    ) {
+      const tenseValidation = validateSpanishExperienceCandidate({
+        factAuthorityText: fact || baseline,
+        candidateText: tenseNorm.text,
+        candidateOrigin: 'deterministic_tense_normalizer',
+      });
+      if (tenseValidation.candidateValid) {
+        const decision = decideSpanishExperienceFinalCandidate({
+          factAuthorityText: fact || baseline,
+          visibleComparisonText: visible || baseline,
+          candidateText: tenseNorm.text,
+          candidateOrigin: 'deterministic_tense_normalizer',
+          isPresent,
+          tenseOnlyMeta: tenseNorm,
+          repairProduced: repair.produced,
+          repairValid: repair.valid,
+        });
+        if (decision.shouldApply) {
+          return {
+            decision,
+            providerValidation,
+            repair,
+            deterministic: {
+              text: tenseNorm.text,
+              validation: tenseValidation,
+              tenseOnly: tenseNorm,
+            },
+          };
+        }
+      }
+    }
   }
 
   const deterministic = buildSpanishExperienceDeterministicCandidate({
-    factAuthorityText: fact,
-    isPresent: options.isPresent,
+    factAuthorityText: fact || baseline,
+    isPresent,
+    preferTenseOnly: pureTenseDefect,
   });
   if (!deterministic.validation.candidateValid || !deterministic.text.trim()) {
-    // Prefer repair no-op decision when repair was valid but not applied.
     if (repair.valid && repair.repairedText.trim()) {
       const noopDecision = decideSpanishExperienceFinalCandidate({
         factAuthorityText: fact,
         visibleComparisonText: visible,
         candidateText: repair.repairedText,
         candidateOrigin: 'unsupported_claim_repair',
+        isPresent,
         repairProduced: repair.produced,
         repairValid: repair.valid,
         repairSelectedForComparison: true,
@@ -627,12 +917,14 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
         finalDecisionKind: visible ? 'semantic_noop' : 'terminal_failure',
         shouldApply: false,
         shouldIncrementUsage: false,
-        finalTypedReason: visible ? 'ai_noop' : 'experience_generation_failed',
+        finalTypedReason: validationExtractionReason(deterministic)
+          || (visible ? 'ai_noop' : 'experience_generation_failed'),
         selectedText: visible,
         unsupportedClaimRepairCandidateProduced: repair.produced,
         unsupportedClaimRepairCandidateValid: repair.valid,
         unsupportedClaimRepairSelectedForComparison: false,
         unsupportedClaimRepairVisibleApplyPerformed: false,
+        canonicalAcceptancePassed: false,
       },
       providerValidation,
       repair,
@@ -640,15 +932,28 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
     };
   }
   const decision = decideSpanishExperienceFinalCandidate({
-    factAuthorityText: fact,
+    factAuthorityText: fact || baseline,
     visibleComparisonText: visible,
     candidateText: deterministic.text,
-    candidateOrigin: 'deterministic_fallback',
+    candidateOrigin: deterministic.tenseOnly
+      ? 'deterministic_tense_normalizer'
+      : 'deterministic_fallback',
+    isPresent,
+    tenseOnlyMeta: deterministic.tenseOnly,
     repairProduced: repair.produced,
     repairValid: repair.valid,
     repairSelectedForComparison: false,
   });
   return { decision, providerValidation, repair, deterministic };
+}
+
+function validationExtractionReason(
+  deterministic: ReturnType<typeof buildSpanishExperienceDeterministicCandidate>,
+): string | null {
+  if (deterministic.validation.sourcePredicateExtractionPassed === false) {
+    return 'source_predicate_extraction_failed';
+  }
+  return null;
 }
 
 export function spanishExperienceTextsSemanticallyEquivalentAligned(

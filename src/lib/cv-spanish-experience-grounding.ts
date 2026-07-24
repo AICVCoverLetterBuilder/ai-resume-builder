@@ -13,6 +13,11 @@ import {
 } from './cv-source-fact-identity';
 import { splitExperienceBullets, formatExperienceBullets } from './cv-canonical-facts';
 import type { ExperienceUnsupportedClaimKind } from './cv-experience-unsupported-claims';
+import {
+  esWordRe,
+  textLooksSpanishExperience,
+  EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION,
+} from './cv-spanish-experience-morphology';
 
 /** Packaging proof — must survive minification in web / Android / AAB assets. */
 export const SPANISH_CV_AI_305_REVISION = 'spanish-cv-ai-305-v1' as const;
@@ -293,37 +298,51 @@ type SpanishPredicateLemma = {
   identity: string;
 };
 
-const VERIFY_LEMMA_RE =
-  /\b(?:revis(?:a|ó|ar|ando)|comprueb(?:a|o|an|as)|comprob(?:ó|ar|ando)|verific(?:a|ó|ar|ando)|inspeccion(?:a|ó|ar|ando)|examin(?:a|ó|ar|ando)|control(?:a|ó|ar|ando))\b/giu;
-const PREPARE_LEMMA_RE =
-  /\b(?:prepar(?:a|ó|ar|ando)|dispon(?:e|ía|er|iendo))\b/giu;
-const MOVE_LEMMA_RE =
-  /\b(?:muev(?:e|o)|mov(?:ió|er|iendo)|traslad(?:a|ó|ar|ando)|desplaz(?:a|ó|ar|ando))\b/giu;
-const COORDINATE_LEMMA_RE =
-  /\b(?:coordin(?:a|ó|ar|ando)|colabor(?:a|ó|ar|ando))\b/giu;
-const CREATE_LEMMA_RE = /\b(?:cre(?:a|ó|ar|ando))\b/giu;
-const ADAPT_LEMMA_RE = /\b(?:adapt(?:a|ó|ar|ando))\b/giu;
-const MANAGE_DOCS_LEMMA_RE =
-  /\b(?:gestion(?:a|ó|ar|ando)|administr(?:a|ó|ar|ando)|tramit(?:a|ó|ar|ando)|proces(?:a|ó|ar|ando)|manej(?:a|ó|ar|ando)|manten(?:er|iendo|ía)|organiz(?:a|ó|ar|ando)\s+(?:la\s+)?document|clasific(?:a|ó|ar|ando)\s+(?:document|archivo)|custodi(?:a|ó|ar|ando)|document(?:a|ó|ar|ando))\b/giu;
-const ARCHIVE_LEMMA_RE = /\b(?:archiv(?:a|ó|ar|ando))\b/giu;
-const REGISTER_LEMMA_RE =
-  /\b(?:registr(?:a|ó|ar|ando)|actualiz(?:a|ó|ar|ando)\s+(?:los\s+|las\s+|el\s+|la\s+)?registros?)\b/giu;
-const REPORT_LEMMA_RE =
-  /\b(?:(?:prepar|elabor)(?:a|ó|ar|ando)\s+(?:informes?|reportes?))\b/giu;
-const APPROVE_LEMMA_RE =
-  /\b(?:aprueb(?:a|o|an|as|e|en)?|aprob(?:ó|ar|ando|ado)|autoriz(?:a|ó|ar|ando)|certific(?:a|ó|ar|ando)|firm(?:a|ó|ar|ando)|acept(?:a|ó|ar|ando)|rechaz(?:a|ó|ar|ando)|decid(?:e|ió|ir|iendo)|resolv(?:er|iendo|ió)|dar\s+conformidad|valid(?:a|ó|ar|ando)\s+definitiv)/giu;
-const SUPERVISE_LEMMA_RE =
-  /\b(?:supervis(?:a|ó|ar|ando)|dirig(?:e|ió|ir|iendo)|lider(?:a|ó|ar|ando)|responsabiliz(?:arse|a|ó)|hacerse\s+cargo|control(?:a|ó|ar)\s+el\s+proceso)\b/giu;
-const GUARANTEE_LEMMA_RE =
-  /\b(?:garantiz(?:a|ó|ar|ando)|asegur(?:a|ó|ar|ando))\b/giu;
-const RECEIVE_LEMMA_RE = /\b(?:recib(?:e|ió|ir|iendo))\b/giu;
-const DISPATCH_LEMMA_RE =
-  /\b(?:despach(?:a|ó|ar|ando)|exped(?:e|ió|ir|iendo)|envi(?:a|ó|ar|ando)|entreg(?:a|ó|ar|ando))\b/giu;
-const DISTRIBUTE_LEMMA_RE =
-  /\b(?:distribuy(?:e|ó)|distribu(?:ir|yendo)|transport(?:a|ó|ar|ando))\b/giu;
-const STORE_LEMMA_RE = /\b(?:almacen(?:a|ó|ar|ando))\b/giu;
-const INVENTORY_LEMMA_RE =
-  /\b(?:inventari(?:a|ó|ar|ando)|repon(?:e|ía|er|iendo))\b/giu;
+/** Unicode-safe bounds — ASCII `\b` fails after accented preterite (Revisó). */
+const VERIFY_LEMMA_RE = esWordRe(
+  'revis(?:a|ó|aba|aron|ar|ando|ado)?|comprueb(?:a|o|an|as)|comprob(?:ó|aba|aron|ar|ando|ado)?|verific(?:a|ó|aba|aron|ar|ando|ado)?|inspeccion(?:a|ó|aba|aron|ar|ando|ado)?|examin(?:a|ó|aba|aron|ar|ando|ado)?|control(?:a|ó|aba|aron|ar|ando|ado)?',
+);
+const PREPARE_LEMMA_RE = esWordRe(
+  'prepar(?:a|ó|aba|aron|ar|ando|ado)?|dispon(?:e|ía|er|iendo)',
+);
+const MOVE_LEMMA_RE = esWordRe(
+  'muev(?:e|o|en)|mov(?:ió|ía|ieron|er|iendo|ido)?|traslad(?:a|ó|aba|aron|ar|ando|ado)?|desplaz(?:a|ó|aba|aron|ar|ando|ado)?',
+);
+const COORDINATE_LEMMA_RE = esWordRe(
+  'coordin(?:a|ó|aba|aron|ar|ando|ado)?|colabor(?:a|ó|aba|aron|ar|ando|ado)?',
+);
+const CREATE_LEMMA_RE = esWordRe('cre(?:a|ó|aba|aron|ar|ando|ado)?');
+const ADAPT_LEMMA_RE = esWordRe('adapt(?:a|ó|aba|aron|ar|ando|ado)?');
+const MANAGE_DOCS_LEMMA_RE = esWordRe(
+  'gestion(?:a|ó|aba|aron|ar|ando|ado)?|administr(?:a|ó|aba|aron|ar|ando|ado)?|tramit(?:a|ó|aba|aron|ar|ando|ado)?|proces(?:a|ó|aba|aron|ar|ando|ado)?|manej(?:a|ó|aba|aron|ar|ando|ado)?|manten(?:er|iendo|ía)|organiz(?:a|ó|aba|aron|ar|ando|ado)?\\s+(?:la\\s+)?document|clasific(?:a|ó|aba|aron|ar|ando|ado)?\\s+(?:document|archivo)|custodi(?:a|ó|aba|aron|ar|ando|ado)?|document(?:a|ó|aba|aron|ar|ando|ado)?',
+);
+const ARCHIVE_LEMMA_RE = esWordRe('archiv(?:a|ó|aba|aron|ar|ando|ado)?');
+const REGISTER_LEMMA_RE = esWordRe(
+  'registr(?:a|ó|aba|aron|ar|ando|ado)?|actualiz(?:a|ó|aba|aron|ar|ando|ado)?\\s+(?:los\\s+|las\\s+|el\\s+|la\\s+)?registros?',
+);
+const REPORT_LEMMA_RE = esWordRe(
+  '(?:prepar|elabor)(?:a|ó|aba|aron|ar|ando|ado)?\\s+(?:informes?|reportes?)',
+);
+const APPROVE_LEMMA_RE = esWordRe(
+  'aprueb(?:a|o|an|as|e|en)?|aprob(?:ó|aba|aron|ar|ando|ado)|autoriz(?:a|ó|aba|aron|ar|ando|ado)?|certific(?:a|ó|aba|aron|ar|ando|ado)?|firm(?:a|ó|aba|aron|ar|ando|ado)?|acept(?:a|ó|aba|aron|ar|ando|ado)?|rechaz(?:a|ó|aba|aron|ar|ando|ado)?|decid(?:e|ió|ir|iendo)|resolv(?:er|iendo|ió)|dar\\s+conformidad|valid(?:a|ó|aba|aron|ar|ando|ado)?\\s+definitiv',
+);
+const SUPERVISE_LEMMA_RE = esWordRe(
+  'supervis(?:a|ó|aba|aron|ar|ando|ado)?|dirig(?:e|ió|ía|ieron|ir|iendo)|lider(?:a|ó|aba|aron|ar|ando|ado)?|responsabiliz(?:arse|a|ó)|hacerse\\s+cargo|control(?:a|ó|ar)\\s+el\\s+proceso',
+);
+const GUARANTEE_LEMMA_RE = esWordRe(
+  'garantiz(?:a|ó|aba|aron|ar|ando|ado)?|asegur(?:a|ó|aba|aron|ar|ando|ado)?',
+);
+const RECEIVE_LEMMA_RE = esWordRe('recib(?:e|ió|ía|ieron|ir|iendo)');
+const DISPATCH_LEMMA_RE = esWordRe(
+  'despach(?:a|ó|aba|aron|ar|ando|ado)?|exped(?:e|ió|ir|iendo)|envi(?:a|ó|aba|aron|ar|ando|ado)?|entreg(?:a|ó|aba|aron|ar|ando|ado)?',
+);
+const DISTRIBUTE_LEMMA_RE = esWordRe(
+  'distribuy(?:e|ó)|distribu(?:ir|yendo)|transport(?:a|ó|aba|aron|ar|ando|ado)?',
+);
+const STORE_LEMMA_RE = esWordRe('almacen(?:a|ó|aba|aron|ar|ando|ado)?');
+const INVENTORY_LEMMA_RE = esWordRe(
+  'inventari(?:a|ó|aba|aron|ar|ando|ado)?|repon(?:e|ía|er|iendo)',
+);
 
 const PREDICATE_FAMILY_PATTERNS: Array<{
   family: SpanishPredicateFamily;
@@ -350,8 +369,9 @@ const PREDICATE_FAMILY_PATTERNS: Array<{
   { family: 'adapt', strength: 'ordinary', re: ADAPT_LEMMA_RE },
 ];
 
-const VERIFY_SYNONYM_STACK_RE =
-  /\b((?:revisa|revisó|comprueba|comprobó|verifica|verificó|controla|controló))\s+y\s+(?:revisa|revisó|comprueba|comprobó|verifica|verificó|controla|controló)\b/giu;
+const VERIFY_SYNONYM_STACK_RE = esWordRe(
+  '((?:revisa|revisó|comprueba|comprobó|verifica|verificó|controla|controló))\\s+y\\s+(?:revisa|revisó|comprueba|comprobó|verifica|verificó|controla|controló)',
+);
 
 function predicateIdentity(family: SpanishPredicateFamily, surface: string): string {
   const norm = (surface || '').toLowerCase().normalize('NFKD').replace(/\p{M}/gu, '');
@@ -475,6 +495,10 @@ export type SpanishPredicateGroundingResult = {
   unsupportedKinds: ExperienceUnsupportedClaimKind[];
   coordinatedPredicateExpansionDetected: boolean;
   sourceUnitPredicateCoveragePassed: boolean;
+  sourcePredicateExtractionPassed: boolean;
+  sourceUnitsWithPredicateCount: number;
+  sourceUnitsMissingPredicateCount: number;
+  sourcePredicateExtractionFailureReason: string | null;
 };
 
 /**
@@ -567,6 +591,16 @@ export function detectSpanishExperiencePredicateExpansion(
       uniqueKinds.push('coordinated_predicate_expansion');
     }
   }
+  void EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION;
+  const missingPredUnits = sourcePrimaryByUnit.filter((p) => p == null).length;
+  const extractionPassed = sourceUnits.length === 0 || sourcePredCount > 0;
+  // Non-vacuous: never treat "0/0 predicates covered" as a pass for non-empty Spanish.
+  const coveragePassed = sourceUnits.length === 0
+    ? uniqueHashes.length === 0
+    : (extractionPassed
+      && sourcePredCount > 0
+      && allUnitsCovered
+      && uniqueHashes.length === 0);
   return {
     sourcePredicateIdentityCount: sourcePredCount,
     candidatePredicateIdentityCount: candPredCount,
@@ -574,7 +608,13 @@ export function detectSpanishExperiencePredicateExpansion(
     candidateAddedPredicateIdentityHashes: uniqueHashes,
     unsupportedKinds: uniqueKinds,
     coordinatedPredicateExpansionDetected: coordinated && uniqueHashes.length > 0,
-    sourceUnitPredicateCoveragePassed: allUnitsCovered && uniqueHashes.length === 0,
+    sourceUnitPredicateCoveragePassed: coveragePassed,
+    sourcePredicateExtractionPassed: extractionPassed,
+    sourceUnitsWithPredicateCount: sourcePredCount,
+    sourceUnitsMissingPredicateCount: missingPredUnits,
+    sourcePredicateExtractionFailureReason: extractionPassed
+      ? null
+      : 'source_predicate_extraction_failed',
   };
 }
 
@@ -1207,11 +1247,13 @@ export function detectSpanishExperienceUnsupportedExpansion(
     labels.push(k);
   }
 
-  // Candidate-added material predicates / coordinated actions (AAB-310).
+  // Candidate-added material predicates / coordinated actions (AAB-310 / 314).
   // Same-locale Spanish only — cross-locale Hindi/etc. → Spanish uses coverage/fallback
   // grounding and must not treat translated verbs as candidate-added actions.
+  // Accented preterite / morphology must count as Spanish predicates (never vacuous pass).
   const sourceHasSpanishPredicates = extractSpanishExperiencePredicates(source).length > 0
-    || /(?:revisa|comprueba|coordina|mercanc[ií]a|documentaci[oó]n|preparaci[oó]n|compa[nñ]er)/iu
+    || textLooksSpanishExperience(source)
+    || /(?:revisa|revisó|revisaba|comprueba|comprobó|coordina|coordinó|mercanc[ií]a|documentaci[oó]n|preparaci[oó]n|compa[nñ]er)/iu
       .test(source);
   const predicateScan = sourceHasSpanishPredicates
     ? detectSpanishExperiencePredicateExpansion(source, joined)
@@ -1223,6 +1265,10 @@ export function detectSpanishExperienceUnsupportedExpansion(
       unsupportedKinds: [] as ExperienceUnsupportedClaimKind[],
       coordinatedPredicateExpansionDetected: false,
       sourceUnitPredicateCoveragePassed: true,
+      sourcePredicateExtractionPassed: true,
+      sourceUnitsWithPredicateCount: 0,
+      sourceUnitsMissingPredicateCount: 0,
+      sourcePredicateExtractionFailureReason: null as string | null,
     };
   for (const k of predicateScan.unsupportedKinds) {
     kinds.push(k);

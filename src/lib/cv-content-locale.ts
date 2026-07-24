@@ -1,9 +1,15 @@
 /**
  * Universal content-locale detection and cross-locale operation helpers.
  * Distinguishes source vs target locale without treating Serbian Latin as English.
+ * Latin script alone must never classify Spanish (incl. accented preterite) as English.
  */
 import type { Locale } from './i18n/translations';
 import { analyzeCroatianSerbianLocaleEvidence } from './cv-ai-unit-locale-purity';
+import {
+  ES_EXPERIENCE_LEXICON_RE,
+  ES_FUNCTION_WORDS_RE,
+  textLooksSpanishExperience,
+} from './cv-spanish-experience-morphology';
 
 /** High-signal Serbian/Croatian Latin lexicon (works with or without diacritics). */
 const SR_HR_LATIN_LEXICON_RE =
@@ -16,7 +22,8 @@ const EN_LEXICON_RE =
   /\b(?:performs?|updates?|coordinates?|reviews?|checks?|maintains?|prepares?|collaborates?|warehouse|records?|colleagues?|duties|experience|according|management|inventory|design|visual|identity)\b/i;
 
 const DE_LEXICON_RE = /\b(?:prüft|aktualisiert|koordiniert|Erfahrung|Tätigkeit|verantwortlich)\b/iu;
-const ES_LEXICON_RE = /\b(?:revisa|actualiza|coordina|experiencia|clientes)\b/iu;
+/** Present + past Experience forms; ASCII `\b` fails after ó — use morphology lexicon. */
+const ES_LEXICON_RE = ES_EXPERIENCE_LEXICON_RE;
 const FR_LEXICON_RE = /\b(?:examine|met\s+à\s+jour|coordonne|expérience)\b/iu;
 const IT_LEXICON_RE = /\b(?:esamina|aggiorna|coordina|esperienza)\b/iu;
 const PT_LEXICON_RE = /\b(?:revisa|atualiza|coordena|experiência)\b/iu;
@@ -177,13 +184,23 @@ export function analyzeContentLocale(
       confidence: 'medium',
     };
   }
-  if (ES_LEXICON_RE.test(raw)) {
+  // Spanish before English/stored fallback: accented preterite + Experience lexicon
+  // must not classify as en merely because both use Latin script.
+  if (
+    ES_LEXICON_RE.test(raw)
+    || textLooksSpanishExperience(raw)
+    || (
+      /[áéíóúñüÁÉÍÓÚÑÜ¿¡]/.test(raw)
+      && ES_FUNCTION_WORDS_RE.test(raw)
+      && !EN_LEXICON_RE.test(raw)
+    )
+  ) {
     return {
       detectedLocale: 'es',
-      script: 'latin',
+      script: /[áéíóúñüÁÉÍÓÚÑÜ]/.test(raw) ? 'latin_diacritic' : 'latin',
       hasSerbianDiacritics,
       hasSerbianLexicon,
-      confidence: 'medium',
+      confidence: 'high',
     };
   }
   if (FR_LEXICON_RE.test(raw)) {
