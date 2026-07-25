@@ -26,6 +26,10 @@ import {
   SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION,
 } from './cv-german-summary-current-duty-coverage';
 export { SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION } from './cv-german-summary-current-duty-coverage';
+import {
+  experienceFactAuthorityKindsEquivalent,
+  EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
+} from './cv-experience-authority-snapshot-327';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
@@ -34,6 +38,7 @@ void SUMMARY_REPAIRED_PROVIDER_LINEAGE_321_REVISION;
 void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
 void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
 void SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION;
+void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
 
 /** Stable contract revision — must survive minification in internal builds. */
 export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as const;
@@ -1729,6 +1734,8 @@ type ExperienceLike = {
   fallbackSelected?: boolean;
   visibleApplySucceeded?: boolean;
   countedAsSuccess?: boolean;
+  diagnosticInvariantCheckPassed?: boolean | null;
+  diagnosticCompletenessPassed?: boolean | null;
   usageCountBefore?: number;
   usageCountAfter?: number;
   raceGuardResult?: string | null;
@@ -1866,6 +1873,26 @@ export function checkExperienceDiagnosticInvariants(
     push('success_counted_but_apply_failed', {
       countedAsSuccess: true,
       visibleApplySucceeded: false,
+    });
+  }
+  // AAB-327 — decision-critical invariant/completeness failure forbids success.
+  if (
+    trace.diagnosticInvariantCheckPassed === false
+    && (trace.countedAsSuccess === true || trace.visibleApplySucceeded === true)
+  ) {
+    push('diagnostic_invariant_failed_but_success_counted', {
+      diagnosticInvariantCheckPassed: false,
+      countedAsSuccess: trace.countedAsSuccess ?? null,
+      visibleApplySucceeded: trace.visibleApplySucceeded ?? null,
+    });
+  }
+  if (
+    trace.diagnosticCompletenessPassed === false
+    && trace.countedAsSuccess === true
+  ) {
+    push('diagnostic_completeness_failed_but_success_counted', {
+      diagnosticCompletenessPassed: false,
+      countedAsSuccess: true,
     });
   }
   if (trace.countedAsSuccess && trace.visibleApplySucceeded) {
@@ -2192,8 +2219,10 @@ export function checkExperienceDiagnosticInvariants(
   if (
     trace.authoritativeFactSourceKind === 'pre_ai_snapshot'
     && trace.factAuthorityKind != null
-    && trace.factAuthorityKind !== 'pre_ai_snapshot'
-    && trace.factAuthorityKind !== 'original_user'
+    && !experienceFactAuthorityKindsEquivalent(
+      String(trace.factAuthorityKind),
+      'pre_ai_snapshot',
+    )
   ) {
     push('fact_authority_kind_contradicts_authoritative_source', {
       authoritativeFactSourceKind: trace.authoritativeFactSourceKind,
@@ -2205,14 +2234,9 @@ export function checkExperienceDiagnosticInvariants(
     trace.factAuthorityMatchesAuthoritativeSourceKind === true
     && trace.factAuthorityKind != null
     && trace.authoritativeFactSourceKind != null
-    && String(trace.factAuthorityKind) !== String(trace.authoritativeFactSourceKind)
-    // Allow original_user ↔ pre_ai_snapshot only when both represent user facts —
-    // but the consistency boolean must not stay true across current_textarea drift.
-    && !(
-      (trace.factAuthorityKind === 'pre_ai_snapshot'
-        && trace.authoritativeFactSourceKind === 'original_user')
-      || (trace.factAuthorityKind === 'original_user'
-        && trace.authoritativeFactSourceKind === 'pre_ai_snapshot')
+    && !experienceFactAuthorityKindsEquivalent(
+      String(trace.factAuthorityKind),
+      String(trace.authoritativeFactSourceKind),
     )
   ) {
     push('fact_authority_match_flag_inconsistent_with_kinds', {

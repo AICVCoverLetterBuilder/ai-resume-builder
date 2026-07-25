@@ -135,6 +135,7 @@ import {
 import {
   ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION,
   sourceRequiresEnglishWarehouseFactCoverage,
+  sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
   countEnglishWarehouseTranslatedFacts,
@@ -266,16 +267,29 @@ import {
   mapFactAuthorityKindForDiagnostics,
   type ExperienceVisibleComparisonEvaluation,
 } from './cv-experience-visible-noop-authority';
+import {
+  EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
+  EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION,
+  EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION,
+  experienceFactAuthorityKindsEquivalent,
+  resolveCanonicalFactAuthorityKind,
+} from './cv-experience-authority-snapshot-327';
 export {
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
   EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
   EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
   EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
+  EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
+  EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION,
+  EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION,
 };
 void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
 void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
 void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
+void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+void EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION;
+void EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION;
 import {
   SPANISH_SUMMARY_GROUNDING_306_REVISION,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
@@ -737,6 +751,7 @@ export type FinalizeCvAiFieldResult = {
     providerRequiredFactCount?: number;
     providerAccepted?: boolean;
     experienceDiagnosticsFinalCandidateRevision?: typeof EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
+    englishExperienceThreeFactCoverageRevision?: typeof ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
     summaryFinalCandidateDiagnosticsRevision?: typeof SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
     providerPrimaryRejectionReason?: string | null;
     providerBulletCount?: number;
@@ -4433,18 +4448,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const resolveFactAuthorityKindDiag = (): string | null => {
     void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
     void EXPERIENCE_UNEDITED_RERUN_DIAGNOSTIC_TRUTH_317_REVISION;
+    void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
     // Always prefer immutable request-time bundle — never snapshot live origin alone.
     return sourceBundle.factAuthorityKind
-      ?? mapFactAuthorityKindForDiagnostics(
-        textareaProvenance?.authoritativeFactSourceKind
-        || (snapshot?.provenanceOrigin === 'originalUserDescription'
-          ? 'pre_ai_snapshot'
-          : snapshot?.provenanceOrigin === 'canonicalDescription'
-            ? 'canonical'
-            : snapshot?.provenanceOrigin === 'currentTextarea'
-              ? 'current_textarea'
-              : null),
-      );
+      ?? resolveCanonicalFactAuthorityKind({
+        textareaProvenance,
+        authoritativeFactSourceKind: textareaProvenance?.authoritativeFactSourceKind,
+        snapshotProvenanceOrigin: snapshot?.provenanceOrigin,
+      });
   };
   const buildEarlyNoOpDiagFields = (): Record<string, unknown> => {
     void EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION;
@@ -4473,7 +4484,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       factAuthorityMatchesAuthoritativeSourceKind: Boolean(
         factKind
         && authKind
-        && factKind === mapFactAuthorityKindForDiagnostics(String(authKind)),
+        && experienceFactAuthorityKindsEquivalent(factKind, String(authKind)),
       ),
       factAuthoritySeparatedFromVisibleSource:
         sourceBundle.factAuthoritySeparatedFromVisibleSource,
@@ -4668,7 +4679,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const authorityMatch = Boolean(
       factKind
       && authKind
-      && factKind === mapFactAuthorityKindForDiagnostics(String(authKind)),
+      && experienceFactAuthorityKindsEquivalent(factKind, String(authKind)),
     );
     const visibleProv = sourceBundle.visibleSourceProvenance
       || textareaProvenance?.currentTextareaProvenance
@@ -5510,7 +5521,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? detectSpanishExperienceUnsupportedExpansion(sourceForCoverage, candidate)
         : null;
       const needsEnWarehouse = locale === 'en'
-        && sourceRequiresEnglishWarehouseFactCoverage(sourceForCoverage);
+        && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
         ? validateEnglishWarehouseExperienceCoverage(sourceForCoverage, candidate)
         : null;
@@ -5876,7 +5887,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       if (locale === 'en') {
         void ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
-        if (sourceRequiresEnglishWarehouseFactCoverage(sourceForCoverage)) {
+        if (sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
           const enWarehouse = validateEnglishWarehouseExperienceCoverage(
             sourceForCoverage,
             candidate,
@@ -6001,7 +6012,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     } else if (crossLocaleAccept && sourceForCoverage) {
       if (
         locale === 'en'
-        && sourceRequiresEnglishWarehouseFactCoverage(sourceForCoverage)
+        && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)
       ) {
         void ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
         const enWarehouse = validateEnglishWarehouseExperienceCoverage(
@@ -6182,7 +6193,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ?? providerSourceUnitPredicateCoveragePassed
           ?? undefined,
         finalCandidatePredicateValidationApplicable:
-          locale === 'en' && sourceRequiresEnglishWarehouseFactCoverage(sourceForCoverage || '')
+          locale === 'en' && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage || '')
             ? true
             : undefined,
         englishExperienceThreeFactCoverageRevision:
@@ -6278,8 +6289,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             candidateText: result.text,
             locale,
             visibleComparisonProvenance:
-              textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
-            matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+              (sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null),
+            matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
             useVisibleForNoOp: true,
             capturedAtRequest: true,
           });
@@ -6356,8 +6367,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           candidateText: result.text,
           locale,
           visibleComparisonProvenance:
-            textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
-          matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+            (sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null),
+          matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
           useVisibleForNoOp: true,
           capturedAtRequest: true,
           isPresent,
@@ -6519,8 +6530,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         candidateText: result.text || '',
         locale,
         visibleComparisonProvenance:
-          textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
-        matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+          (sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null),
+        matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
         useVisibleForNoOp: useVisibleForNoOp || Boolean(visibleComparisonText),
         capturedAtRequest: true,
         isPresent,
@@ -6870,9 +6881,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       candidateText: finalNormalizedBullets,
       locale,
       visibleComparisonProvenance: useVisibleForNoOp
-        ? (textareaProvenance?.currentTextareaProvenance || 'currentTextarea')
+        ? ((sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null))
         : 'fact_authority',
-      matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+      matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
       useVisibleForNoOp: true,
       isPresent,
     });
@@ -7123,8 +7134,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               candidateText: firstAccepted.text,
               locale,
               visibleComparisonProvenance:
-                textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
-              matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+                (sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null),
+              matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
               useVisibleForNoOp: true,
               capturedAtRequest: true,
             });
@@ -7135,8 +7146,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             candidateText: firstAccepted.text,
             locale,
             visibleComparisonProvenance:
-              textareaProvenance?.currentTextareaProvenance || 'currentTextarea',
-            matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+              (sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null),
+            matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
             useVisibleForNoOp: true,
             capturedAtRequest: true,
             isPresent,
@@ -7533,9 +7544,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           candidateText: repairedEs,
           locale,
           visibleComparisonProvenance: useVisibleForNoOp
-            ? (textareaProvenance?.currentTextareaProvenance || 'currentTextarea')
+            ? ((sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null))
             : 'fact_authority',
-          matchedLastAiOutput: Boolean(textareaProvenance?.lastAiOutputHashMatched),
+          matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
           useVisibleForNoOp: true,
         });
         lastVisibleComparisonEval = repairVisEval;

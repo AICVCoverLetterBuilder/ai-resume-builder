@@ -1922,6 +1922,33 @@ export default function CVBuilderPage() {
         isPresent: Boolean(exp.isPresent),
         arrayIndexAtRequest: liveNow.experience.findIndex((e) => e.id === clickedExperienceEntryId),
       });
+      if (finalizedBullets.countedAsSuccess) {
+        const preApplyGate = diagSession.evaluatePreApplyDecisionGates();
+        if (!preApplyGate.passed) {
+          const failCode = mapExperienceAiFailureToErrorCode(
+            preApplyGate.reason || 'diagnostic_invariant_failed',
+          );
+          const msg = finishAiClientRequest({
+            ctx: reqCtx,
+            isProVerified: true,
+            countBefore,
+            countAfter: countBefore,
+            httpStatus: res.status,
+            error: { code: failCode, httpStatus: 422 },
+            responseSource: 'blocked',
+          });
+          logExperienceAiTrace({
+            resultApplied: false,
+            rejectedReason: preApplyGate.reason || 'diagnostic_invariant_failed',
+            aiUsageIncremented: false,
+            ...(finalizedBullets.diagnostics || {}),
+          });
+          diagSession.recordVisibleApply(false, countBefore);
+          diagSession.commit();
+          showExperienceAiRejectToast(msg ?? aiErrorMessage(failCode, locale));
+          return;
+        }
+      }
       if (
         finalizedBullets.countedAsSuccess
         && candidateConflictsWithJobContext(finalizedBullets.text, requestContext)

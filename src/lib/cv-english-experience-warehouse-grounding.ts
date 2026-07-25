@@ -92,6 +92,24 @@ export function sourceRequiresEnglishWarehouseFactCoverage(sourceDescription: st
       .test(sourceDescription || '');
 }
 
+/**
+ * Strict English 3-fact warehouse gate applies to Spanish→English (and English
+ * Atlas-style) sources. Serbian/Hindi/etc. soft cross-locale paths keep the
+ * existing semantic/material coverage contract.
+ */
+export function sourceRequiresStrictEnglishWarehouseFactCoverage(
+  sourceDescription: string,
+): boolean {
+  void ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
+  if (!sourceRequiresEnglishWarehouseFactCoverage(sourceDescription || '')) return false;
+  const src = sourceDescription || '';
+  const spanishWarehouse = /(?:mercanc[ií]a|almac[eé]n|documentaci[oó]n|compa[nñ]er|revis[oó]|comprob[oó]|coordina)/iu
+    .test(src);
+  const englishAtlas = /(?:incoming\s+(?:merchandise|goods)|received\s+goods|documentation\s+associated|coordinates?\s+with\s+colleagues)/iu
+    .test(src);
+  return spanishWarehouse || englishAtlas;
+}
+
 function sourceWarehouseFacts(sourceDescription: string): EnglishWarehouseFactId[] {
   const keys = new Set(materialDutyKeysFromDescription(sourceDescription || ''));
   const units = extractSourceDutyUnits(sourceDescription || '')

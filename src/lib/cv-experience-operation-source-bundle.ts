@@ -15,14 +15,21 @@ import {
   normalizeExperienceAiSourceText,
   type ExperienceAiOperationSnapshot,
 } from './cv-experience-ai-operation-snapshot';
-import {
-  mapFactAuthorityKindForDiagnostics,
-} from './cv-experience-visible-noop-authority';
 import type {
   ExperienceAuthoritativeFactSourceKind,
   ExperienceTextareaProvenanceKind,
   ExperienceTextareaProvenanceResolution,
 } from './cv-experience-ai-output-provenance';
+import {
+  EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
+  EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION,
+  experienceFactAuthorityKindsEquivalent,
+  resolveCanonicalFactAuthorityKind,
+  captureExperienceRequestVisibleComparisonSnapshot,
+  normalizeExperienceFactAuthorityKind,
+} from './cv-experience-authority-snapshot-327';
+void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+void EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION;
 import type { ExperienceVisibleSourceAnalysis } from './cv-experience-visible-source-analysis';
 
 export const EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION =
@@ -156,6 +163,8 @@ export function buildExperienceOperationSourceBundle(options: {
   exp?: WorkExperience | null;
 }): ExperienceOperationSourceBundle {
   void EXPERIENCE_FACT_VISIBLE_SOURCE_SEPARATION_317_REVISION;
+  void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+  void EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION;
   const prov = options.textareaProvenance;
   const snap = options.snapshot;
   const factText = (options.factAuthorityText || '').trim();
@@ -164,21 +173,19 @@ export function buildExperienceOperationSourceBundle(options: {
     || options.visibleSourceText
     || ''
   ).trim();
-  const authKindRaw = (prov?.authoritativeFactSourceKind
-    || (snap?.provenanceOrigin === 'originalUserDescription'
-      ? 'pre_ai_snapshot'
-      : snap?.provenanceOrigin === 'canonicalDescription'
-        ? 'canonical'
-        : snap?.provenanceOrigin === 'currentTextarea'
-          ? 'current_textarea'
-          : null)) as ExperienceAuthoritativeFactSourceKind | string | null;
-  const factKind = mapFactAuthorityKindForDiagnostics(authKindRaw);
-  const serializedAuthKind = factKind;
-  const matches = Boolean(
-    factKind
-    && serializedAuthKind
-    && factKind === serializedAuthKind,
+  const factKind = resolveCanonicalFactAuthorityKind({
+    textareaProvenance: prov,
+    authoritativeFactSourceKind: prov?.authoritativeFactSourceKind,
+    snapshotProvenanceOrigin: snap?.provenanceOrigin,
+  });
+  const authKindRaw = (
+    normalizeExperienceFactAuthorityKind(prov?.authoritativeFactSourceKind)
+    || factKind
   );
+  const matches = experienceFactAuthorityKindsEquivalent(factKind, authKindRaw);
+  const visibleSnap = captureExperienceRequestVisibleComparisonSnapshot({
+    textareaProvenance: prov,
+  });
   const preAiText = (prov?.authoritativeFactText || '').trim();
   const lastHash = options.exp?.aiOutputProvenance?.lastAiOutputNormalizedHash || null;
   const lastLocale = options.exp?.aiOutputProvenance?.targetLocale || null;
@@ -203,7 +210,7 @@ export function buildExperienceOperationSourceBundle(options: {
     authoritativeFactSourceKind: authKindRaw,
     factAuthorityMatchesAuthoritativeSourceKind: matches
       && Boolean(factKind)
-      && factKind === mapFactAuthorityKindForDiagnostics(authKindRaw),
+      && Boolean(authKindRaw),
     visibleSourceKind: visibleKind,
     visibleSourceText: visibleText,
     visibleSourceHash: snap?.visibleComparisonHash ?? textHash(visibleText),
@@ -212,10 +219,9 @@ export function buildExperienceOperationSourceBundle(options: {
     visibleSourceUnitCount:
       snap?.visibleComparisonUnitCount
       ?? (visibleText ? experienceAiSourceUnits(visibleText).length : 0),
-    visibleSourceProvenance: prov?.currentTextareaProvenance ?? null,
-    visibleSourceMatchedLastAiOutput: Boolean(prov?.lastAiOutputHashMatched),
-    visibleSourceMateriallyEdited: Boolean(prov?.materialUserEditDetected),
-    visibleSourceEmploymentState: targetEmp,
+    visibleSourceProvenance: visibleSnap.provenance,
+    visibleSourceMatchedLastAiOutput: visibleSnap.matchedLastAiOutput,
+    visibleSourceMateriallyEdited: visibleSnap.materialUserEditDetected,    visibleSourceEmploymentState: targetEmp,
     visibleSourceLocale: String(options.locale || ''),
     visibleSourceContextHash: String(options.jobContextHash || snap?.jobContextHash || ''),
     lastAiOutputPresent: Boolean(lastHash),

@@ -27,6 +27,18 @@ import {
   buildExperienceCleanNoOpTerminalFields,
 } from './cv-experience-terminal-outcome';
 import {
+  EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
+  EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION,
+  EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION,
+  experienceFactAuthorityKindsEquivalent,
+  normalizeExperienceFactAuthorityKind,
+  resolveCanonicalFactAuthorityKind,
+} from './cv-experience-authority-snapshot-327';
+import type {
+  ExperienceAuthoritativeFactSourceKind,
+  ExperienceTextareaProvenanceKind,
+} from './cv-experience-ai-output-provenance';
+import {
   experienceAiSourcesEquivalent,
 } from './cv-experience-ai-operation-snapshot';
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
@@ -35,6 +47,9 @@ void EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION;
 void EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION;
 void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
 void EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION;
+void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+void EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION;
+void EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION;
 import { detectTextLocale } from './cv-content-locale';
 import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
@@ -95,6 +110,7 @@ export type ExperienceAiDiagStageName =
   | 'fallback_output_built'
   | 'fallback_locale_validation'
   | 'fallback_material_coverage'
+  | 'diagnostic_preapply_gate'
   | 'final_apply_postcondition'
   | 'race_context_check'
   | 'visible_apply'
@@ -378,7 +394,7 @@ export type ExperienceAiDiagnosticTrace = {
   visibleComparisonNormalizedHash: string | null;
   visibleComparisonUnitCount: number;
   visibleComparisonProvenance: string | null;
-  visibleComparisonMatchedLastAiOutput: boolean;
+  visibleComparisonMatchedLastAiOutput: boolean | null;
   visibleComparisonUsedForNoOp: boolean;
   visibleComparisonUsedForDegradationCheck: boolean;
   visibleComparisonCapturedAtRequest: boolean;
@@ -396,6 +412,9 @@ export type ExperienceAiDiagnosticTrace = {
   experienceVisibleSnapshotWiringRevision: string | null;
   experienceSemanticNoopFinalGateRevision: string | null;
   experienceFactAuthorityConsistencyRevision: string | null;
+  experienceFactAuthorityTruthRevision?: string | null;
+  experienceVisibleSnapshotTruthRevision?: string | null;
+  experienceInvariantPreapplyGateRevision?: string | null;
   spanishExperienceComplianceGroundingRevision: string | null;
   experiencePredicatePhaseDiagnosticsRevision: string | null;
   deterministicFallbackAttemptedAfterNoOp: boolean;
@@ -1268,11 +1287,22 @@ export class ExperienceAiDiagnosticSession {
       generatedDescriptionPreexisted: Boolean(options?.generatedDescriptionPreexisted),
       staleGeneratedDescriptionIgnored: Boolean(options?.staleGeneratedDescriptionIgnored),
       currentTextareaProvenance: options?.currentTextareaProvenance ?? null,
-      authoritativeFactSourceKind: options?.authoritativeFactSourceKind ?? null,
+      authoritativeFactSourceKind: options?.authoritativeFactSourceKind
+        ? (normalizeExperienceFactAuthorityKind(options.authoritativeFactSourceKind)
+          || options.authoritativeFactSourceKind)
+        : null,
       currentTextareaUsedForFactExtraction:
         options?.currentTextareaUsedForFactExtraction ?? null,
       lastAiOutputHashMatched: options?.lastAiOutputHashMatched ?? null,
       materialUserEditDetected: options?.materialUserEditDetected ?? null,
+      // AAB-327 — request-time visible comparison snapshot (immutable).
+      visibleComparisonProvenance: options?.currentTextareaProvenance ?? undefined,
+      visibleComparisonMatchedLastAiOutput:
+        typeof options?.lastAiOutputHashMatched === 'boolean'
+          ? options.lastAiOutputHashMatched
+          : undefined,
+      experienceFactAuthorityTruthRevision: EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
+      experienceVisibleSnapshotTruthRevision: EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION,
       payloadSourceDescriptionLength: selected.length,
       payloadSourceDescriptionHash: fingerprintText(selected),
       payloadSourceScript: classifyExperienceScript(selected),
@@ -1815,19 +1845,89 @@ export class ExperienceAiDiagnosticSession {
       finalComplianceScopeExpansionDetected: Boolean(
         diag.finalComplianceScopeExpansionDetected,
       ),
-      factAuthorityKind: (diag.factAuthorityKind as string | null | undefined) ?? null,
+      factAuthorityKind: (() => {
+        void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+        const fromDiag = (diag.factAuthorityKind as string | null | undefined) ?? null;
+        const lockedAuth = this.draft.authoritativeFactSourceKind;
+        const unusedTextarea = this.draft.currentTextareaUsedForFactExtraction === false;
+        if (unusedTextarea && lockedAuth) {
+          const canonical = resolveCanonicalFactAuthorityKind({
+            authoritativeFactSourceKind: lockedAuth,
+            textareaProvenance: {
+              currentTextareaProvenance:
+                (this.draft.currentTextareaProvenance as ExperienceTextareaProvenanceKind)
+                || 'unknown',
+              authoritativeFactSourceKind: lockedAuth as ExperienceAuthoritativeFactSourceKind,
+              authoritativeFactText: '',
+              currentTextareaUsedForFactExtraction: false,
+              currentTextareaIgnoredOrOverridden: true,
+              generatedDescriptionPreexisted: Boolean(this.draft.generatedDescriptionPreexisted),
+              staleGeneratedDescriptionIgnored: Boolean(this.draft.staleGeneratedDescriptionIgnored),
+              lastAiOutputHashMatched: Boolean(this.draft.lastAiOutputHashMatched),
+              materialUserEditDetected: Boolean(this.draft.materialUserEditDetected),
+              formattingOnlyDifference: false,
+              revision: 'experience-ai-output-provenance-304-v1',
+            },
+          });
+          if (canonical && canonical !== 'current_textarea') return canonical;
+        }
+        if (
+          unusedTextarea
+          && fromDiag === 'current_textarea'
+          && lockedAuth
+        ) {
+          return normalizeExperienceFactAuthorityKind(lockedAuth) || fromDiag;
+        }
+        return fromDiag;
+      })(),
       factAuthorityHash: (diag.factAuthorityHash as string | null | undefined) ?? null,
       factAuthorityNormalizedHash:
         (diag.factAuthorityNormalizedHash as string | null | undefined) ?? null,
       factAuthorityUnitCount: Number(diag.factAuthorityUnitCount ?? 0),
-      factAuthorityMatchesAuthoritativeSourceKind: Boolean(
-        diag.factAuthorityMatchesAuthoritativeSourceKind,
-      ),
+      factAuthorityMatchesAuthoritativeSourceKind: (() => {
+        void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+        const fromDiag = (diag.factAuthorityKind as string | null | undefined) ?? null;
+        const lockedAuth = this.draft.authoritativeFactSourceKind;
+        const unusedTextarea = this.draft.currentTextareaUsedForFactExtraction === false;
+        let kind = fromDiag;
+        if (unusedTextarea && lockedAuth) {
+          const canonical = resolveCanonicalFactAuthorityKind({
+            authoritativeFactSourceKind: lockedAuth,
+            textareaProvenance: {
+              currentTextareaProvenance:
+                (this.draft.currentTextareaProvenance as ExperienceTextareaProvenanceKind)
+                || 'unknown',
+              authoritativeFactSourceKind: lockedAuth as ExperienceAuthoritativeFactSourceKind,
+              authoritativeFactText: '',
+              currentTextareaUsedForFactExtraction: false,
+              currentTextareaIgnoredOrOverridden: true,
+              generatedDescriptionPreexisted: Boolean(this.draft.generatedDescriptionPreexisted),
+              staleGeneratedDescriptionIgnored: Boolean(this.draft.staleGeneratedDescriptionIgnored),
+              lastAiOutputHashMatched: Boolean(this.draft.lastAiOutputHashMatched),
+              materialUserEditDetected: Boolean(this.draft.materialUserEditDetected),
+              formattingOnlyDifference: false,
+              revision: 'experience-ai-output-provenance-304-v1',
+            },
+          });
+          if (canonical && canonical !== 'current_textarea') kind = canonical;
+          else if (fromDiag === 'current_textarea') {
+            kind = normalizeExperienceFactAuthorityKind(lockedAuth) || fromDiag;
+          }
+        }
+        const auth = lockedAuth
+          ?? (typeof (diag as Record<string, unknown>).authoritativeFactSourceKind === 'string'
+            ? String((diag as Record<string, unknown>).authoritativeFactSourceKind)
+            : null);
+        return experienceFactAuthorityKindsEquivalent(kind, auth);
+      })(),
       ...(typeof (diag as Record<string, unknown>).authoritativeFactSourceKind === 'string'
         && this.draft.authoritativeFactSourceKind == null
         ? {
           authoritativeFactSourceKind:
-            String((diag as Record<string, unknown>).authoritativeFactSourceKind),
+            normalizeExperienceFactAuthorityKind(
+              String((diag as Record<string, unknown>).authoritativeFactSourceKind),
+            )
+            || String((diag as Record<string, unknown>).authoritativeFactSourceKind),
         }
         : {}),
       ...(typeof (diag as Record<string, unknown>).currentTextareaProvenance === 'string'
@@ -2026,10 +2126,17 @@ export class ExperienceAiDiagnosticSession {
       visibleComparisonNormalizedHash:
         (diag.visibleComparisonNormalizedHash as string | null | undefined) ?? null,
       visibleComparisonUnitCount: Number(diag.visibleComparisonUnitCount ?? 0),
-      visibleComparisonProvenance:
-        (diag.visibleComparisonProvenance as string | null | undefined) ?? null,
-      visibleComparisonMatchedLastAiOutput: Boolean(
-        diag.visibleComparisonMatchedLastAiOutput,
+      // AAB-327 — request-time snapshot wins over finalize recompute.
+      visibleComparisonProvenance: this.draft.visibleComparisonProvenance
+        ?? this.draft.currentTextareaProvenance
+        ?? (diag.visibleComparisonProvenance as string | null | undefined)
+        ?? null,
+      visibleComparisonMatchedLastAiOutput: (
+        this.draft.visibleComparisonMatchedLastAiOutput
+        ?? this.draft.lastAiOutputHashMatched
+        ?? (typeof diag.visibleComparisonMatchedLastAiOutput === 'boolean'
+          ? diag.visibleComparisonMatchedLastAiOutput
+          : null)
       ),
       visibleComparisonUsedForNoOp: Boolean(diag.visibleComparisonUsedForNoOp),
       visibleComparisonUsedForDegradationCheck: Boolean(
@@ -2611,6 +2718,75 @@ export class ExperienceAiDiagnosticSession {
       blocked ? 'fail' : 'ok',
       blocked ? reason || 'blocked' : undefined,
     );
+  }
+
+  /**
+   * AAB-327: evaluate decision-critical invariants/completeness before visible
+   * apply and usage increment. Must be called after recordFinalizeResult.
+   */
+  evaluatePreApplyDecisionGates(): {
+    passed: boolean;
+    reason: string | null;
+    diagnosticInvariantCheckPassed: boolean;
+    diagnosticCompletenessPassed: boolean;
+  } {
+    void EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION;
+    const before = Number(this.draft.usageCountBefore ?? 0);
+    const provisional = {
+      ...this.draft,
+      stages: this.stages,
+      countedAsSuccess: true,
+      visibleApplySucceeded: true,
+      usageCountAfter: before + 1,
+      operationKind: 'experience' as const,
+      marker: EXPERIENCE_AI_DIAG_MARKER,
+      diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
+      apiBaseUrlConfigured: Boolean(getApiBaseUrl()),
+      capacitorServerUrlConfigured: false,
+      sourceCommitShort: this.draft.sourceCommitShort || 'unknown',
+    };
+    const invariants = checkExperienceDiagnosticInvariants(provisional);
+    const withInvariants = {
+      ...provisional,
+      diagnosticInvariantCheckPassed: invariants.passed,
+      diagnosticInvariantFailureCount: invariants.failures.length,
+      diagnosticInvariantFailures: invariants.failures,
+    };
+    const completeness = checkExperienceDiagnosticCompleteness(
+      withInvariants as Record<string, unknown>,
+    );
+    this.patch({
+      diagnosticInvariantCheckPassed: invariants.passed,
+      diagnosticInvariantFailureCount: invariants.failures.length,
+      diagnosticInvariantFailures: invariants.failures,
+      diagnosticCompletenessPassed: completeness.passed,
+      missingRequiredDiagnosticFields: completeness.missingRequiredDiagnosticFields,
+      nullRequiredDiagnosticFields: completeness.nullRequiredDiagnosticFields,
+      experienceInvariantPreapplyGateRevision:
+        EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION,
+      experienceFactAuthorityTruthRevision: EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
+      experienceVisibleSnapshotTruthRevision: EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION,
+    });
+    const passed = invariants.passed && completeness.passed;
+    this.stage('diagnostic_preapply_gate', passed ? 'ok' : 'fail');
+    if (!passed) {
+      this.patch({
+        countedAsSuccess: false,
+        visibleApplySucceeded: false,
+        finalTypedFailureReason: !invariants.passed
+          ? 'diagnostic_invariant_failed'
+          : 'diagnostic_completeness_failed',
+        rejectionStage: 'diagnostic_preapply_gate',
+      });
+    }
+    return {
+      passed,
+      reason: passed
+        ? null
+        : (!invariants.passed ? 'diagnostic_invariant_failed' : 'diagnostic_completeness_failed'),
+      diagnosticInvariantCheckPassed: invariants.passed,
+      diagnosticCompletenessPassed: completeness.passed,
+    };
   }
 
   recordVisibleApply(

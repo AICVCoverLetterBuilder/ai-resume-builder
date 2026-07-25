@@ -21,6 +21,11 @@ import {
   countIncompleteSpanishUnits,
   SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
 } from './cv-spanish-experience-morphology';
+import {
+  EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
+  normalizeExperienceFactAuthorityKind,
+} from './cv-experience-authority-snapshot-327';
+void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
 
 /** Packaging proof — must survive minification / DCE. */
 export const EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION =
@@ -503,15 +508,6 @@ export function mapFactAuthorityKindForDiagnostics(
   authoritativeFactSourceKind: string | null | undefined,
 ): string | null {
   void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
-  const k = (authoritativeFactSourceKind || '').trim();
-  if (!k || k === 'none') return k || null;
-  if (k === 'pre_ai_snapshot' || k === 'original_user' || k === 'canonical'
-    || k === 'current_textarea' || k === 'generated_from_empty') {
-    return k;
-  }
-  // Snapshot provenanceOrigin camelCase → snake diagnostic kinds.
-  if (k === 'originalUserDescription') return 'original_user';
-  if (k === 'canonicalDescription') return 'canonical';
-  if (k === 'currentTextarea' || k === 'liveUserDescription') return 'current_textarea';
-  return k;
+  void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+  return normalizeExperienceFactAuthorityKind(authoritativeFactSourceKind);
 }

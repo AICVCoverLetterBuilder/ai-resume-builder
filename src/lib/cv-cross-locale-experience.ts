@@ -19,6 +19,7 @@ import { sourceRequiresGermanWarehouseFactCoverage } from './cv-german-experienc
 import { sourceRequiresSpanishWarehouseFactCoverage } from './cv-spanish-experience-grounding';
 import {
   sourceRequiresEnglishWarehouseFactCoverage,
+  sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
   validateEnglishWarehouseExperienceCoverage,
 } from './cv-english-experience-warehouse-grounding';
@@ -897,7 +898,7 @@ export function candidateLeaksSourceLocale(
 export function countTranslatedFactUnits(sourceDescription: string, result: string): number {
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.
-  if (sourceRequiresEnglishWarehouseFactCoverage(sourceDescription || '')) {
+  if (sourceRequiresStrictEnglishWarehouseFactCoverage(sourceDescription || '')) {
     return countEnglishWarehouseTranslatedFacts(sourceDescription, result);
   }
   const coverage = validateCrossLocaleSemanticCoverage(sourceDescription, result);
