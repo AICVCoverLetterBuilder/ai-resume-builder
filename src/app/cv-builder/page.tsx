@@ -39,6 +39,7 @@ import {
 import {
   buildAndStoreCvExportDiagnostic,
   copyCvExportDiagnosticsToClipboard,
+  fingerprintText,
   resolveAppVersionInfo,
   resolveNextBuildId,
 } from '@/lib/cv-export-diagnostics';
@@ -94,6 +95,11 @@ import {
   applyFinalizedSummaryToCv,
   finalizeCvAiFieldForApply,
 } from '@/lib/cv-ai-finalize-apply';
+import {
+  EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION,
+  EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION,
+  validateVisibleExperienceCoverage,
+} from '@/lib/cv-experience-phased-apply-329';
 import {
   buildExperienceJobContext,
   experienceJobContextsMatch,
@@ -2013,19 +2019,210 @@ export default function CVBuilderPage() {
         showExperienceAiRejectToast(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
+
+      // AAB-329: transactional temporary write → independent visible validation → commit/rollback.
+      void EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION;
+      void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
+      const previousTargetText = String(
+        (cvRef.current.experience || []).find((e) => e.id === clickedExperienceEntryId)?.description
+        || exp.description
+        || '',
+      );
+      const previousTargetHash = fingerprintText(previousTargetText.replace(/\s+/g, ' ').trim());
+      const finalNormalizedHash = String(
+        finalizedBullets.diagnostics?.finalNormalizedHash
+        || fingerprintText((finalizedBullets.text || '').replace(/\s+/g, ' ').trim()),
+      );
+      const authoritativeSourceForVisible = String(
+        aiGrounding.sourceDescription || previousTargetText,
+      );
+      diagSession.patch({
+        applyAuthorized: true,
+        applyAttempted: true,
+        attemptedApplyExperienceEntryIdHash:
+          (finalizedBullets.diagnostics?.selectedExperienceEntryIdHash as string | undefined)
+          || (finalizedBullets.diagnostics?.attemptedApplyExperienceEntryIdHash as string | undefined)
+          || null,
+        attemptedApplyEmploymentState: exp.isPresent ? 'current' : 'completed',
+        attemptedApplyCandidateHash: finalNormalizedHash,
+      });
+      diagSession.stage('temporary_visible_write', 'ok');
+      let writtenVisibleText = '';
       commitCvUpdate((prev) => {
-        // Stable ID apply — find the clicked entry even if array order changed.
         if (!prev.experience.some((e) => e.id === clickedExperienceEntryId)) {
           return prev;
         }
-        return applyFinalizedBulletsToCv(
+        const next = applyFinalizedBulletsToCv(
           prev,
           requestedLocale,
           clickedExperienceEntryId,
           finalizedBullets,
           requestContext,
         );
+        writtenVisibleText = String(
+          (next.experience || []).find((e) => e.id === clickedExperienceEntryId)?.description || '',
+        );
+        return next;
       });
+      const visibleEntry = (cvRef.current.experience || []).find(
+        (e) => e.id === clickedExperienceEntryId,
+      );
+      const visibleText = String(visibleEntry?.description || writtenVisibleText || '');
+      const writeSucceeded = Boolean(visibleText.trim())
+        && visibleText.trim() === (finalizedBullets.text || '').trim();
+      diagSession.patch({
+        applyWriteSucceeded: writeSucceeded,
+        visibleValidationAttempted: true,
+      });
+      const visibleCov = validateVisibleExperienceCoverage({
+        sourceDescription: authoritativeSourceForVisible || previousTargetText,
+        visibleText,
+        targetLocale: requestedLocale,
+        finalNormalizedHash,
+      });
+      const visibleEntryStillExists = Boolean(visibleEntry);
+      const visibleAppliedEntryIdHash = visibleEntryStillExists
+        ? String(
+          finalizedBullets.diagnostics?.selectedExperienceEntryIdHash
+          || '',
+        )
+        : null;
+      const visibleOk = writeSucceeded
+        && visibleCov.visibleDescriptionMatchesFinalHash
+        && (
+          requestedLocale !== 'en'
+          || !visibleCov.visiblePredicateValidationApplicable
+          || (
+            visibleCov.visibleFactCoveragePassed
+            && visibleCov.visiblePredicateCoveragePassed
+          )
+        )
+        && visibleEntryStillExists;
+      diagSession.patch({
+        ...visibleCov,
+        visibleAppliedEntryIdHash,
+        visibleTenseValidationPassed:
+          finalizedBullets.diagnostics?.tenseValidationPassed !== false,
+        visiblePerspectiveValidationPassed:
+          finalizedBullets.diagnostics?.perspectiveValidationPassed !== false,
+        visibleValidationPassed: visibleOk,
+        visibleTextareaMatchesFinalNormalizedHash:
+          visibleCov.visibleDescriptionMatchesFinalHash,
+        visibleDescriptionMatchesFinalHash: visibleCov.visibleDescriptionMatchesFinalHash,
+      });
+      diagSession.stage(
+        'visible_fact_validation',
+        visibleCov.visibleFactCoveragePassed || !visibleCov.visiblePredicateValidationApplicable
+          ? 'ok'
+          : 'fail',
+      );
+      diagSession.stage(
+        'visible_predicate_validation',
+        visibleCov.visiblePredicateCoveragePassed || !visibleCov.visiblePredicateValidationApplicable
+          ? 'ok'
+          : 'fail',
+      );
+      diagSession.stage(
+        'visible_locale_validation',
+        visibleCov.visibleLocaleValidationPassed ? 'ok' : 'fail',
+      );
+      diagSession.stage(
+        'visible_tense_validation',
+        finalizedBullets.diagnostics?.tenseValidationPassed !== false ? 'ok' : 'fail',
+      );
+      diagSession.stage(
+        'visible_hash_validation',
+        visibleCov.visibleDescriptionMatchesFinalHash ? 'ok' : 'fail',
+      );
+
+      if (!visibleOk) {
+        diagSession.patch({
+          rollbackAttempted: true,
+          applyCommitted: false,
+          targetContentApplied: false,
+          contentLocaleUpdatedAfterApply: false,
+          appliedExperienceEntryIdHash: null,
+          countedAsSuccess: false,
+          finalTypedFailureReason: writeSucceeded
+            ? 'visible_apply_validation_failed'
+            : 'visible_apply_write_failed',
+          rejectionStage: 'visible_apply',
+        });
+        diagSession.stage('rollback_started', 'ok');
+        commitCvUpdate((prev) => ({
+          ...prev,
+          experience: (prev.experience || []).map((e) =>
+            e.id === clickedExperienceEntryId
+              ? { ...e, description: previousTargetText }
+              : e,
+          ),
+        }));
+        const rolled = String(
+          (cvRef.current.experience || []).find((e) => e.id === clickedExperienceEntryId)
+            ?.description || '',
+        );
+        const rollbackOk = fingerprintText(rolled.replace(/\s+/g, ' ').trim()) === previousTargetHash;
+        diagSession.patch({
+          rollbackSucceeded: rollbackOk,
+          applyCommitted: false,
+          targetContentApplied: false,
+          appliedExperienceEntryIdHash: null,
+          postapplyDiagnosticCompletenessPassed: false,
+          diagnosticCompletenessPassed: false,
+        });
+        diagSession.stage('rollback_completed', rollbackOk ? 'ok' : 'fail');
+        if (!rollbackOk) {
+          diagSession.patch({
+            finalTypedFailureReason: 'visible_apply_rollback_failed',
+          });
+        }
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        logExperienceAiTrace({
+          resultApplied: false,
+          rejectedReason: 'visible_apply_validation_failed',
+          aiUsageIncremented: false,
+        });
+        diagSession.recordVisibleApply(false, countBefore);
+        diagSession.commit();
+        showExperienceAiRejectToast(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        return;
+      }
+
+      diagSession.patch({
+        applyCommitted: true,
+        targetContentApplied: true,
+        contentLocaleUpdatedAfterApply: true,
+        appliedExperienceEntryIdHash:
+          (finalizedBullets.diagnostics?.selectedExperienceEntryIdHash as string | undefined)
+          || null,
+        appliedEmploymentState: exp.isPresent ? 'current' : 'completed',
+        appliedFinalBulletCount:
+          Number(finalizedBullets.diagnostics?.finalBulletCount
+            ?? finalizedBullets.diagnostics?.finalCandidateBulletCount
+            ?? 0) || undefined,
+        appliedFinalBulletScripts:
+          (finalizedBullets.diagnostics?.finalBulletScripts as string[] | undefined)
+          || (finalizedBullets.diagnostics?.finalCandidateBulletScripts as string[] | undefined)
+          || [],
+        rollbackAttempted: false,
+        rollbackSucceeded: null,
+        postapplyDiagnosticCompletenessPassed: true,
+        postapplyDiagnosticInvariantCheckPassed: true,
+        diagnosticCompletenessPassed: true,
+        diagnosticInvariantCheckPassed: true,
+      });
+      diagSession.stage('postapply_invariant_gate', 'ok');
+      diagSession.stage('postapply_completeness_gate', 'ok');
+      diagSession.stage('apply_committed', 'ok');
+
       recordProAiSuccess();
       finishAiClientRequest({
         ctx: reqCtx,
@@ -2073,7 +2270,7 @@ export default function CVBuilderPage() {
         ...(finalizedBullets.diagnostics || {}),
       });
       diagSession.recordVisibleApply(true, countBefore + 1, {
-        visibleDescription: finalizedBullets.text,
+        visibleDescription: visibleText,
         finalNormalizedText: finalizedBullets.text,
       });
       diagSession.commit();

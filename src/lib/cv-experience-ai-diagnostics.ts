@@ -44,6 +44,17 @@ import {
   legacySourceAlreadyValidForTargetMeaning,
   isExperienceLocaleRejectionReason,
 } from './cv-experience-locale-rejection-truth-328';
+import {
+  EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
+  EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION,
+  EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION,
+  EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION,
+  checkExperiencePreapplyDiagnosticCompleteness,
+  checkExperiencePreapplyDiagnosticInvariants,
+  checkExperiencePostapplyDiagnosticCompleteness,
+  combineExperienceDiagnosticCompleteness,
+  buildExperiencePreapplyDecisionSnapshot,
+} from './cv-experience-phased-apply-329';
 import type {
   ExperienceAuthoritativeFactSourceKind,
   ExperienceTextareaProvenanceKind,
@@ -62,6 +73,10 @@ void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
 void EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION;
 void EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION;
 void EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION;
+void EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION;
+void EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION;
+void EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION;
+void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
 import { detectTextLocale } from './cv-content-locale';
 import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
@@ -123,6 +138,24 @@ export type ExperienceAiDiagStageName =
   | 'fallback_locale_validation'
   | 'fallback_material_coverage'
   | 'diagnostic_preapply_gate'
+  | 'final_candidate_postconditions'
+  | 'final_candidate_fact_validation'
+  | 'final_candidate_predicate_validation'
+  | 'preapply_invariant_gate'
+  | 'preapply_completeness_gate'
+  | 'apply_authorized'
+  | 'temporary_visible_write'
+  | 'visible_fact_validation'
+  | 'visible_predicate_validation'
+  | 'visible_locale_validation'
+  | 'visible_tense_validation'
+  | 'visible_hash_validation'
+  | 'postapply_invariant_gate'
+  | 'postapply_completeness_gate'
+  | 'apply_committed'
+  | 'rollback_started'
+  | 'rollback_completed'
+  /** @deprecated Renamed to final_candidate_postconditions (AAB-329). */
   | 'final_apply_postcondition'
   | 'race_context_check'
   | 'visible_apply'
@@ -402,6 +435,62 @@ export type ExperienceAiDiagnosticTrace = {
   preflightNoOpDetected?: boolean | null;
   applyAttempted?: boolean | null;
   applyNotAttemptedReason?: string | null;
+  /** AAB-329 phased apply / completeness. */
+  applyAuthorized?: boolean | null;
+  applyWriteSucceeded?: boolean | null;
+  visibleValidationAttempted?: boolean | null;
+  visibleValidationPassed?: boolean | null;
+  rollbackAttempted?: boolean | null;
+  rollbackSucceeded?: boolean | null;
+  applyCommitted?: boolean | null;
+  attemptedApplyExperienceEntryIdHash?: string | null;
+  attemptedApplyEmploymentState?: string | null;
+  attemptedApplyCandidateHash?: string | null;
+  preapplyDecisionSnapshotHash?: string | null;
+  preapplyDecisionCandidateHash?: string | null;
+  preapplyDecisionTargetEntryIdHash?: string | null;
+  preapplyDecisionCreated?: boolean | null;
+  preapplyDecisionUsedForApplyAuthorization?: boolean | null;
+  preapplyDiagnosticInvariantCheckPassed?: boolean | null;
+  preapplyDiagnosticInvariantFailures?: Array<{
+    invariantCode: string;
+    observed: Record<string, string | number | boolean | null>;
+  }> | null;
+  preapplyDiagnosticCompletenessPassed?: boolean | null;
+  preapplyMissingRequiredDiagnosticFields?: string[] | null;
+  preapplyNullRequiredDiagnosticFields?: string[] | null;
+  postapplyDiagnosticInvariantCheckPassed?: boolean | null;
+  postapplyDiagnosticInvariantFailures?: Array<{
+    invariantCode: string;
+    observed: Record<string, string | number | boolean | null>;
+  }> | null;
+  postapplyDiagnosticCompletenessPassed?: boolean | null;
+  postapplyMissingRequiredDiagnosticFields?: string[] | null;
+  postapplyNullRequiredDiagnosticFields?: string[] | null;
+  finalRequiredFactCount?: number | null;
+  finalCoveredFactCount?: number | null;
+  finalUncoveredFactIdentityHashes?: string[] | null;
+  finalRequiredFactSetHash?: string | null;
+  finalFactCoveragePassed?: boolean | null;
+  visibleRequiredFactCount?: number | null;
+  visibleCoveredFactCount?: number | null;
+  visibleUncoveredFactIdentityHashes?: string[] | null;
+  visibleFactCoveragePassed?: boolean | null;
+  visibleRequiredFactSetHash?: string | null;
+  visiblePredicateValidationApplicable?: boolean | null;
+  visibleRequiredPredicateCount?: number | null;
+  visibleCoveredPredicateCount?: number | null;
+  visibleMissingPredicateIdentityHashes?: string[] | null;
+  visiblePredicateCoveragePassed?: boolean | null;
+  visibleNormalizedHash?: string | null;
+  visibleLocaleValidationPassed?: boolean | null;
+  visibleTenseValidationPassed?: boolean | null;
+  visiblePerspectiveValidationPassed?: boolean | null;
+  visibleAppliedEntryIdHash?: string | null;
+  experienceSelectedFinalCoverageRevision?: string | null;
+  experiencePhasedDiagnosticCompletenessRevision?: string | null;
+  experienceTransactionalApplyTruthRevision?: string | null;
+  experienceFinalVisiblePredicateTruthRevision?: string | null;
   visibleApplyApplicable?: boolean | null;
   raceGuardApplicable?: boolean | null;
   shouldIncrementUsage?: boolean | null;
@@ -1842,17 +1931,68 @@ export class ExperienceAiDiagnosticSession {
       repairSourceUnitPredicateCoveragePassed:
         diag.repairSourceUnitPredicateCoveragePassed ?? null,
       finalCandidatePredicateIdentityCount: Number(
-        diag.finalCandidatePredicateIdentityCount ?? 0,
+        diag.finalCandidatePredicateIdentityCount
+        ?? diag.candidatePredicateIdentityCount
+        ?? 0,
       ),
-      finalAddedPredicateCount: Number(diag.finalAddedPredicateCount ?? 0),
+      finalAddedPredicateCount: Number(
+        diag.finalAddedPredicateCount ?? diag.candidateAddedPredicateCount ?? 0,
+      ),
       finalAddedPredicateIdentityHashes: Array.isArray(diag.finalAddedPredicateIdentityHashes)
         ? diag.finalAddedPredicateIdentityHashes.map(String)
-        : [],
+        : (Array.isArray(diag.candidateAddedPredicateIdentityHashes)
+          ? diag.candidateAddedPredicateIdentityHashes.map(String)
+          : []),
       finalCoordinatedPredicateExpansionDetected: Boolean(
         diag.finalCoordinatedPredicateExpansionDetected,
       ),
       finalSourceUnitPredicateCoveragePassed:
-        diag.finalSourceUnitPredicateCoveragePassed ?? null,
+        diag.finalSourceUnitPredicateCoveragePassed
+        ?? diag.sourceUnitPredicateCoveragePassed
+        ?? null,
+      finalRequiredFactCount: Number(
+        (diagRec.finalRequiredFactCount as number | undefined)
+        ?? diag.requiredFactCount
+        ?? finalRequired
+        ?? 0,
+      ),
+      finalCoveredFactCount: Number(
+        (diagRec.finalCoveredFactCount as number | undefined)
+        ?? diag.coveredFactCount
+        ?? finalCovered
+        ?? 0,
+      ),
+      finalUncoveredFactIdentityHashes: Array.isArray(diagRec.finalUncoveredFactIdentityHashes)
+        ? (diagRec.finalUncoveredFactIdentityHashes as unknown[]).map(String)
+        : (Array.isArray(finalUncovered) ? finalUncovered.map(String) : []),
+      finalRequiredFactSetHash:
+        (diagRec.finalRequiredFactSetHash as string | undefined) ?? null,
+      finalFactCoveragePassed: typeof diagRec.finalFactCoveragePassed === 'boolean'
+        ? diagRec.finalFactCoveragePassed
+        : (
+          Number(
+            (diagRec.finalRequiredFactCount as number | undefined)
+            ?? diag.requiredFactCount
+            ?? finalRequired
+            ?? 0,
+          ) > 0
+          && Number(
+            (diagRec.finalCoveredFactCount as number | undefined)
+            ?? diag.coveredFactCount
+            ?? finalCovered
+            ?? 0,
+          ) === Number(
+            (diagRec.finalRequiredFactCount as number | undefined)
+            ?? diag.requiredFactCount
+            ?? finalRequired
+            ?? 0,
+          )
+        ),
+      experienceSelectedFinalCoverageRevision:
+        (diagRec.experienceSelectedFinalCoverageRevision as string | undefined)
+        ?? EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
+      experienceFinalVisiblePredicateTruthRevision:
+        EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION,
       providerComplianceScopeExpansionDetected: Boolean(
         diag.providerComplianceScopeExpansionDetected,
       ),
@@ -2341,12 +2481,8 @@ export class ExperienceAiDiagnosticSession {
       targetPerspectiveMode: (diag.targetPerspectiveMode as string | undefined)
         ?? (diag.finalPersonMode as string | undefined)
         ?? null,
-      targetContentApplied: Boolean(
-        diag.targetContentApplied ?? (finalized.countedAsSuccess && !blocked),
-      ),
-      contentLocaleUpdatedAfterApply: Boolean(
-        diag.contentLocaleUpdatedAfterApply ?? (finalized.countedAsSuccess && !blocked),
-      ),
+      targetContentApplied: false,
+      contentLocaleUpdatedAfterApply: false,
       selectedExperienceEntryIdHash: (diag.selectedExperienceEntryIdHash as string | undefined)
         ?? this.draft.selectedExperienceEntryIdHash
         ?? null,
@@ -2364,7 +2500,10 @@ export class ExperienceAiDiagnosticSession {
       payloadExperienceEntryIdHash: this.draft.payloadExperienceEntryIdHash
         ?? (diag.selectedExperienceEntryIdHash as string | undefined)
         ?? null,
-      appliedExperienceEntryIdHash: (diag.appliedExperienceEntryIdHash as string | undefined)
+      // AAB-329: applied* only after applyCommitted — never from finalize countedAsSuccess.
+      appliedExperienceEntryIdHash: null,
+      attemptedApplyExperienceEntryIdHash:
+        (diagRec.attemptedApplyExperienceEntryIdHash as string | undefined)
         ?? (finalized.countedAsSuccess
           ? ((diag.selectedExperienceEntryIdHash as string | undefined)
             ?? this.draft.selectedExperienceEntryIdHash
@@ -2386,9 +2525,9 @@ export class ExperienceAiDiagnosticSession {
         ?? (diag.fallbackFactsEntryIdHash as string | undefined)
         ?? (diag.selectedExperienceEntryIdHash as string | undefined)
         ?? null,
-      appliedEmploymentState: finalized.countedAsSuccess
-        ? (this.draft.payloadEmploymentState || this.draft.clickedEmploymentState || null)
-        : null,
+      appliedEmploymentState: null,
+      appliedFinalBulletCount: 0,
+      appliedFinalBulletScripts: [],
       arrayIndexAtRequest: (diag.arrayIndexAtRequest as number | undefined)
         ?? this.draft.arrayIndexAtRequest
         ?? null,
@@ -2859,15 +2998,26 @@ export class ExperienceAiDiagnosticSession {
     }
 
     this.stage(
-      'final_apply_postcondition',
+      'final_candidate_postconditions',
+      blocked ? 'fail' : 'ok',
+      blocked ? reason || 'blocked' : undefined,
+    );
+    this.stage(
+      'final_candidate_fact_validation',
+      blocked ? 'fail' : 'ok',
+      blocked ? reason || 'blocked' : undefined,
+    );
+    this.stage(
+      'final_candidate_predicate_validation',
       blocked ? 'fail' : 'ok',
       blocked ? reason || 'blocked' : undefined,
     );
   }
 
   /**
-   * AAB-327: evaluate decision-critical invariants/completeness before visible
+   * AAB-327/329: evaluate decision-critical invariants/completeness before visible
    * apply and usage increment. Must be called after recordFinalizeResult.
+   * Pre-apply must NOT require post-apply visible fields.
    */
   evaluatePreApplyDecisionGates(): {
     passed: boolean;
@@ -2876,13 +3026,19 @@ export class ExperienceAiDiagnosticSession {
     diagnosticCompletenessPassed: boolean;
   } {
     void EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION;
+    void EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION;
     const before = Number(this.draft.usageCountBefore ?? 0);
+    // Immutable decision view — never invent provisional visible success.
     const provisional = {
       ...this.draft,
       stages: this.stages,
-      countedAsSuccess: true,
-      visibleApplySucceeded: true,
-      usageCountAfter: before + 1,
+      countedAsSuccess: false,
+      visibleApplySucceeded: false,
+      usageCountAfter: before,
+      applyAuthorized: false,
+      applyAttempted: false,
+      applyCommitted: false,
+      targetContentApplied: false,
       operationKind: 'experience' as const,
       marker: EXPERIENCE_AI_DIAG_MARKER,
       diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
@@ -2890,35 +3046,71 @@ export class ExperienceAiDiagnosticSession {
       capacitorServerUrlConfigured: false,
       sourceCommitShort: this.draft.sourceCommitShort || 'unknown',
     };
-    const invariants = checkExperienceDiagnosticInvariants(provisional);
+    const preapplyInvariants = checkExperiencePreapplyDiagnosticInvariants(
+      provisional as Record<string, unknown>,
+    );
+    const sharedInvariants = checkExperienceDiagnosticInvariants(provisional);
+    const invariantFailures = [
+      ...preapplyInvariants.failures,
+      ...sharedInvariants.failures,
+    ];
+    const invariantsPassed = preapplyInvariants.passed && sharedInvariants.passed;
     const withInvariants = {
       ...provisional,
-      diagnosticInvariantCheckPassed: invariants.passed,
-      diagnosticInvariantFailureCount: invariants.failures.length,
-      diagnosticInvariantFailures: invariants.failures,
+      diagnosticInvariantCheckPassed: invariantsPassed,
+      diagnosticInvariantFailureCount: invariantFailures.length,
+      diagnosticInvariantFailures: invariantFailures,
+      preapplyDiagnosticInvariantCheckPassed: preapplyInvariants.passed,
+      preapplyDiagnosticInvariantFailures: preapplyInvariants.failures,
     };
-    const completeness = checkExperienceDiagnosticCompleteness(
+    const completeness = checkExperiencePreapplyDiagnosticCompleteness(
       withInvariants as Record<string, unknown>,
     );
+    const decisionSnap = buildExperiencePreapplyDecisionSnapshot(
+      withInvariants as Record<string, unknown>,
+    );
+    const passed = invariantsPassed && completeness.passed;
     this.patch({
-      diagnosticInvariantCheckPassed: invariants.passed,
-      diagnosticInvariantFailureCount: invariants.failures.length,
-      diagnosticInvariantFailures: invariants.failures,
-      diagnosticCompletenessPassed: completeness.passed,
+      ...decisionSnap,
+      diagnosticInvariantCheckPassed: invariantsPassed,
+      diagnosticInvariantFailureCount: invariantFailures.length,
+      diagnosticInvariantFailures: invariantFailures,
+      preapplyDiagnosticInvariantCheckPassed: preapplyInvariants.passed,
+      preapplyDiagnosticInvariantFailures: preapplyInvariants.failures,
+      preapplyDiagnosticCompletenessPassed: completeness.passed,
+      preapplyMissingRequiredDiagnosticFields: completeness.missingRequiredDiagnosticFields,
+      preapplyNullRequiredDiagnosticFields: completeness.nullRequiredDiagnosticFields,
+      // Overall completeness requires post-apply too — false until commit.
+      diagnosticCompletenessPassed: false,
       missingRequiredDiagnosticFields: completeness.missingRequiredDiagnosticFields,
       nullRequiredDiagnosticFields: completeness.nullRequiredDiagnosticFields,
+      postapplyDiagnosticCompletenessPassed: null,
+      applyAuthorized: passed,
       experienceInvariantPreapplyGateRevision:
         EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION,
       experienceFactAuthorityTruthRevision: EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
       experienceVisibleSnapshotTruthRevision: EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION,
+      experiencePhasedDiagnosticCompletenessRevision:
+        EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION,
+      experienceTransactionalApplyTruthRevision:
+        EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION,
     });
-    const passed = invariants.passed && completeness.passed;
+    this.stage('preapply_invariant_gate', preapplyInvariants.passed ? 'ok' : 'fail');
+    this.stage('preapply_completeness_gate', completeness.passed ? 'ok' : 'fail');
     this.stage('diagnostic_preapply_gate', passed ? 'ok' : 'fail');
+    this.stage('apply_authorized', passed ? 'ok' : 'skipped', passed ? undefined : 'preapply_blocked');
     if (!passed) {
       this.patch({
         countedAsSuccess: false,
         visibleApplySucceeded: false,
-        finalTypedFailureReason: !invariants.passed
+        applyAuthorized: false,
+        applyAttempted: false,
+        applyCommitted: false,
+        targetContentApplied: false,
+        appliedExperienceEntryIdHash: null,
+        diagnosticCompletenessPassed: false,
+        postapplyDiagnosticCompletenessPassed: null,
+        finalTypedFailureReason: !invariantsPassed
           ? 'diagnostic_invariant_failed'
           : 'diagnostic_completeness_failed',
         rejectionStage: 'diagnostic_preapply_gate',
@@ -2928,8 +3120,8 @@ export class ExperienceAiDiagnosticSession {
       passed,
       reason: passed
         ? null
-        : (!invariants.passed ? 'diagnostic_invariant_failed' : 'diagnostic_completeness_failed'),
-      diagnosticInvariantCheckPassed: invariants.passed,
+        : (!invariantsPassed ? 'diagnostic_invariant_failed' : 'diagnostic_completeness_failed'),
+      diagnosticInvariantCheckPassed: invariantsPassed,
       diagnosticCompletenessPassed: completeness.passed,
     };
   }
@@ -2987,8 +3179,64 @@ export class ExperienceAiDiagnosticSession {
       visibleApplySucceeded: applied,
       visibleTextareaMatchesFinalNormalizedHash: visibleMatch,
       visibleDescriptionMatchesFinalHash: visibleMatch,
+      // AAB-329: committed apply fields only when visible apply succeeds.
+      ...(applied
+        ? {
+          applyCommitted: true,
+          applyAuthorized: this.draft.applyAuthorized ?? true,
+          applyAttempted: true,
+          applyWriteSucceeded: true,
+          visibleValidationAttempted: true,
+          visibleValidationPassed: true,
+          targetContentApplied: true,
+          contentLocaleUpdatedAfterApply: true,
+          appliedExperienceEntryIdHash:
+            this.draft.appliedExperienceEntryIdHash
+            || this.draft.selectedExperienceEntryIdHash
+            || this.draft.clickedExperienceEntryIdHash
+            || null,
+          appliedEmploymentState:
+            this.draft.appliedEmploymentState
+            || this.draft.payloadEmploymentState
+            || this.draft.clickedEmploymentState
+            || null,
+          appliedFinalBulletCount:
+            Number(this.draft.appliedFinalBulletCount || 0) > 0
+              ? Number(this.draft.appliedFinalBulletCount)
+              : Number(
+                this.draft.finalCandidateBulletCount
+                ?? this.draft.finalBulletCount
+                ?? 0,
+              ),
+          appliedFinalBulletScripts:
+            (this.draft.appliedFinalBulletScripts
+              && this.draft.appliedFinalBulletScripts.length > 0)
+              ? this.draft.appliedFinalBulletScripts
+              : (
+                this.draft.finalCandidateBulletScripts
+                || this.draft.finalBulletScripts
+                || []
+              ),
+          // Do not force AAB-329 postapply completeness on legacy sessions.
+          postapplyDiagnosticCompletenessPassed:
+            typeof this.draft.preapplyDiagnosticCompletenessPassed === 'boolean'
+              ? true
+              : this.draft.postapplyDiagnosticCompletenessPassed,
+        }
+        : {
+          applyCommitted: false,
+          targetContentApplied: false,
+          contentLocaleUpdatedAfterApply: false,
+          appliedExperienceEntryIdHash: null,
+          appliedEmploymentState: null,
+          appliedFinalBulletCount: 0,
+          appliedFinalBulletScripts: [],
+        }),
     });
     this.stage('visible_apply', applied ? 'ok' : 'fail', applied ? undefined : 'not_applied');
+    if (applied) {
+      this.stage('apply_committed', 'ok');
+    }
     this.stage(
       'usage_increment',
       applied ? 'ok' : 'skipped',
@@ -3031,21 +3279,112 @@ export class ExperienceAiDiagnosticSession {
         ?? this.draft.visibleTextareaMatchesFinalNormalizedHash
         ?? null,
     };
+
+    // AAB-329: never overwrite a failed pre-apply completeness decision.
+    const preapplyCompletenessLocked = this.draft.preapplyDiagnosticCompletenessPassed;
+    const preapplyInvariantLocked = this.draft.preapplyDiagnosticInvariantCheckPassed;
+    let postapplyCompletenessPassed: boolean | null =
+      this.draft.postapplyDiagnosticCompletenessPassed ?? null;
+    let postapplyMissing: string[] =
+      (this.draft.postapplyMissingRequiredDiagnosticFields as string[] | undefined) || [];
+    let postapplyNullish: string[] =
+      (this.draft.postapplyNullRequiredDiagnosticFields as string[] | undefined) || [];
+
+    const aab329PreapplyEvaluated = typeof preapplyCompletenessLocked === 'boolean';
+
+    if (this.draft.applyCommitted === true && preapplyCompletenessLocked === true) {
+      const post = checkExperiencePostapplyDiagnosticCompleteness(
+        base as Record<string, unknown>,
+      );
+      postapplyCompletenessPassed = post.passed;
+      postapplyMissing = post.missingRequiredDiagnosticFields;
+      postapplyNullish = post.nullRequiredDiagnosticFields;
+    } else if (preapplyCompletenessLocked === false) {
+      postapplyCompletenessPassed = null;
+    }
+
     const invariants = checkExperienceDiagnosticInvariants(base);
+    // Only enforce AAB-329 preapply invariants when that phase actually ran.
+    const preapplyInv = typeof preapplyInvariantLocked === 'boolean'
+      ? {
+        passed: preapplyInvariantLocked,
+        failures: this.draft.preapplyDiagnosticInvariantFailures || [],
+      }
+      : { passed: true, failures: [] as Array<{
+        invariantCode: string;
+        observed: Record<string, string | number | boolean | null>;
+      }> };
+    const combinedInvariantPassed = preapplyInv.passed && invariants.passed
+      && (this.draft.postapplyDiagnosticInvariantCheckPassed !== false);
     const withInvariants = {
       ...base,
-      diagnosticInvariantCheckPassed: invariants.passed,
-      diagnosticInvariantFailureCount: invariants.failures.length,
-      diagnosticInvariantFailures: invariants.failures,
+      diagnosticInvariantCheckPassed: combinedInvariantPassed,
+      diagnosticInvariantFailureCount:
+        (preapplyInv.failures?.length || 0) + invariants.failures.length,
+      diagnosticInvariantFailures: [
+        ...(Array.isArray(preapplyInv.failures) ? preapplyInv.failures : []),
+        ...invariants.failures,
+      ],
+      preapplyDiagnosticInvariantCheckPassed:
+        typeof preapplyInvariantLocked === 'boolean' ? preapplyInv.passed : null,
     };
-    const completeness = checkExperienceDiagnosticCompleteness(
-      withInvariants as Record<string, unknown>,
-    );
+
+    let completenessPassed: boolean;
+    let missingFields: string[];
+    let nullFields: string[];
+    if (preapplyCompletenessLocked === false) {
+      completenessPassed = false;
+      missingFields = (this.draft.preapplyMissingRequiredDiagnosticFields as string[] | undefined)
+        || (this.draft.missingRequiredDiagnosticFields as string[] | undefined)
+        || [];
+      nullFields = (this.draft.preapplyNullRequiredDiagnosticFields as string[] | undefined)
+        || (this.draft.nullRequiredDiagnosticFields as string[] | undefined)
+        || [];
+    } else if (aab329PreapplyEvaluated && this.draft.applyCommitted === true) {
+      completenessPassed = combineExperienceDiagnosticCompleteness({
+        preapplyPassed: true,
+        postapplyPassed: postapplyCompletenessPassed,
+        postapplyApplicable: true,
+      });
+      missingFields = postapplyMissing;
+      nullFields = postapplyNullish;
+    } else if (
+      this.draft.finalTypedFailureReason === 'diagnostic_completeness_failed'
+      || this.draft.finalTypedFailureReason === 'diagnostic_invariant_failed'
+      || this.draft.rejectionStage === 'diagnostic_preapply_gate'
+    ) {
+      completenessPassed = false;
+      missingFields = (this.draft.preapplyMissingRequiredDiagnosticFields as string[] | undefined)
+        || [];
+      nullFields = (this.draft.preapplyNullRequiredDiagnosticFields as string[] | undefined)
+        || [];
+    } else {
+      // Legacy / clean-noop / non-AAB-329 paths: original completeness contract.
+      const completeness = checkExperienceDiagnosticCompleteness(
+        withInvariants as Record<string, unknown>,
+      );
+      completenessPassed = completeness.passed;
+      missingFields = completeness.missingRequiredDiagnosticFields;
+      nullFields = completeness.nullRequiredDiagnosticFields;
+    }
+
     const withCompleteness = {
       ...withInvariants,
-      diagnosticCompletenessPassed: completeness.passed,
-      missingRequiredDiagnosticFields: completeness.missingRequiredDiagnosticFields,
-      nullRequiredDiagnosticFields: completeness.nullRequiredDiagnosticFields,
+      preapplyDiagnosticCompletenessPassed:
+        preapplyCompletenessLocked ?? this.draft.preapplyDiagnosticCompletenessPassed ?? null,
+      postapplyDiagnosticCompletenessPassed: postapplyCompletenessPassed,
+      postapplyMissingRequiredDiagnosticFields: postapplyMissing,
+      postapplyNullRequiredDiagnosticFields: postapplyNullish,
+      diagnosticCompletenessPassed: completenessPassed,
+      missingRequiredDiagnosticFields: missingFields,
+      nullRequiredDiagnosticFields: nullFields,
+      experiencePhasedDiagnosticCompletenessRevision:
+        EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION,
+      experienceTransactionalApplyTruthRevision:
+        EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION,
+      experienceSelectedFinalCoverageRevision:
+        this.draft.experienceSelectedFinalCoverageRevision
+        || EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
     };
     const privacy = assertCvAiDiagnosticPrivacy(withCompleteness);
     const sized = maybeTruncateDiagnosticPayload({

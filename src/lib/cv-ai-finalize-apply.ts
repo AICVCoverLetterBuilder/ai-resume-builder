@@ -6275,7 +6275,25 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ?? null,
           });
           finalCandidatePredicateIdentityCount = selectedFinal.candidatePredicateIdentityCount;
-          return selectedFinalSnapshotToDiagnostics(selectedFinal);
+          const diag = selectedFinalSnapshotToDiagnostics(selectedFinal);
+          // Non-EN warehouse paths must not invent false predicate coverage.
+          if (!(locale === 'en'
+            && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage || ''))) {
+            delete diag.finalSourceUnitPredicateCoveragePassed;
+            delete diag.finalCandidatePredicateValidationApplicable;
+            if (!selectedFinal.candidatePredicateIdentityCount) {
+              delete diag.finalCandidatePredicateIdentityCount;
+              delete diag.finalAddedPredicateCount;
+              delete diag.finalAddedPredicateIdentityHashes;
+            }
+            // Preserve prior phase-local predicate pass (never coerce to false).
+            const priorPass = sourceUnitPredicateCoveragePassed
+              ?? providerSourceUnitPredicateCoveragePassed;
+            if (typeof priorPass === 'boolean') {
+              diag.finalSourceUnitPredicateCoveragePassed = priorPass;
+            }
+          }
+          return diag;
         })(),
         finalUnsupportedClaimCount: generationValidationMeta.unsupportedClaimCount || 0,
         englishExperienceThreeFactCoverageRevision:
