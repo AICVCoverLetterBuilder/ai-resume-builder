@@ -1827,6 +1827,8 @@ type ExperienceLike = {
   selectedSourceLocale?: string | null;
   detectedSourceLocale?: string | null;
   requestedTargetLocale?: string | null;
+  targetLocale?: string | null;
+  uiLocale?: string | null;
   sourceTenseValidationPassed?: boolean | null;
   providerNoOpDetected?: boolean | null;
   providerNoOpEligibleAsFinal?: boolean | null;
@@ -2304,6 +2306,40 @@ export function checkExperienceDiagnosticInvariants(
         providerLocaleValidationReason: trace.providerLocaleValidationReason ?? null,
         finalTypedFailureReason: trace.finalTypedFailureReason ?? null,
       });
+    }
+    // AAB-333 — purity-pass forbids explicit foreign bullet locales.
+    {
+      const target = String(
+        trace.requestedTargetLocale
+        || trace.targetLocale
+        || trace.uiLocale
+        || trace.requestedLocale
+        || '',
+      ).toLowerCase();
+      const bullets = Array.isArray(trace.detectedLocaleByBullet)
+        ? trace.detectedLocaleByBullet
+        : [];
+      if (
+        trace.targetLocalePurityPassed === true
+        && Number(trace.wrongLocaleBulletCount ?? 0) === 0
+        && Number(trace.mixedLanguageBulletCount ?? 0) === 0
+        && target
+        && bullets.length > 0
+      ) {
+        const foreign = bullets
+          .map((b, i) => ({ locale: b == null ? null : String(b).toLowerCase(), index: i }))
+          .filter((b) => b.locale && b.locale !== 'unknown' && b.locale !== target);
+        if (foreign.length > 0) {
+          push('purity_pass_with_foreign_detected_bullet_locale', {
+            targetLocale: target,
+            foreignDetectedLocales: foreign.map((f) => f.locale).join(','),
+            foreignBulletIndexes: foreign.map((f) => f.index).join(','),
+            wrongLocaleBulletCount: 0,
+            mixedLanguageBulletCount: 0,
+            targetLocalePurityPassed: true,
+          });
+        }
+      }
     }
     if (
       isExperienceCoverageRejectionReason(trace.providerRejectionReason)

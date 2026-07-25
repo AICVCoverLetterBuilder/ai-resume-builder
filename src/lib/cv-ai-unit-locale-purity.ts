@@ -111,10 +111,72 @@ const SR_CLAUSE_RE =
   /\b(?:(?:je|su|sam|si|smo|ste|sa|za|od|do|na|u|koji|koja|koje|te|ili|da|kako|oko)\b|(?:radi|prilikom|tokom|približno|godin|iskustv|proverav|ažurir|azurir|koordin|kreiral|sarađiv|saradiv|pripremal|isporučiv|isporuciv|robu|skladišt)\w*)/iu;
 
 const DE_CLAUSE_RE = /\b(?:und|der|die|das|mit|für|von|bei|wurde|wurden|eine|einen|einem|einer|während|sowie)\b/iu;
+/**
+ * Spanish clause cues. Prefer exclusive forms over shared articles (`la`/`una`)
+ * that also appear in French — shared articles alone + Latin accents must not
+ * classify French text as Spanish (AAB-333: `la` + `é` in "ses collègues…la
+ * préparation" false-hit `es` before French ran).
+ */
+const ES_EXCLUSIVE_CLAUSE_RE =
+  /(?<![\p{L}\p{N}_])(?:el|los|las|con|para|por|unos|durante|seg[uú]n|tambi[eé]n|revisa|revis[oó]|comprueba|comprob[oó]|coordina|coordin[oó]|mercanc[ií]a|documentaci[oó]n|compa[nñ]er\w*)(?![\p{L}\p{N}_])/iu;
+const ES_SHARED_ARTICLE_RE = /(?<![\p{L}\p{N}_])(?:la|una)(?![\p{L}\p{N}_])/iu;
+/** Spanish-exclusive orthography — not French acute `é` alone. */
+const ES_EXCLUSIVE_MARK_RE = /[ñ¿¡]/u;
 const ES_CLAUSE_RE = /\b(?:el|la|los|las|con|para|por|una|unos|durante|según|también)\b/iu;
+/**
+ * French exclusive cues. Includes warehouse CV verbs so target-locale French
+ * bullets classify as `fr` even when a shared article (`la`) is present.
+ */
+const FR_EXCLUSIVE_CLAUSE_RE =
+  /(?<![\p{L}\p{N}_])(?:le|les|des|avec|pour|dans|pendant|[eé]galement|ainsi|contr[oô]le|contr[oô]l[eé]|v[eé]rifie|v[eé]rifi[eé]|coordonne|coordonn[eé]|marchandises?|coll[eè]gues?|entrep[oô]t|préparation|déplacement)(?![\p{L}\p{N}_])/iu;
 const FR_CLAUSE_RE = /\b(?:le|la|les|des|une|avec|pour|dans|pendant|également|ainsi)\b/iu;
+const FR_ACCENT_RE = /[àâçéèêëïîôùûüÿœ]/iu;
 const IT_CLAUSE_RE = /\b(?:il|lo|la|gli|con|per|durante|anche|nonché)\b/iu;
 const PT_CLAUSE_RE = /\b(?:o|os|as|uma|com|para|durante|também|através)\b/iu;
+
+/** Unicode-aware whole-token match — short cues must not hit inside longer words. */
+export function tokenHasExactCue(text: string, cue: string): boolean {
+  const escaped = cue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'iu');
+  return re.test(text || '');
+}
+
+function spanishEvidenceScore(text: string): number {
+  const t = text || '';
+  let score = 0;
+  if (ES_EXCLUSIVE_CLAUSE_RE.test(t)) score += 2;
+  if (ES_EXCLUSIVE_MARK_RE.test(t)) score += 2;
+  if (ES_SHARED_ARTICLE_RE.test(t)) score += 1;
+  return score;
+}
+
+function frenchEvidenceScore(text: string): number {
+  const t = text || '';
+  let score = 0;
+  if (FR_EXCLUSIVE_CLAUSE_RE.test(t)) score += 2;
+  if (FR_ACCENT_RE.test(t)) score += 1;
+  if (FR_CLAUSE_RE.test(t)) score += 1;
+  return score;
+}
+
+function looksConfidentSpanish(text: string): boolean {
+  const t = text || '';
+  if (ES_EXCLUSIVE_MARK_RE.test(t) && (ES_EXCLUSIVE_CLAUSE_RE.test(t) || ES_SHARED_ARTICLE_RE.test(t))) {
+    return true;
+  }
+  if (ES_EXCLUSIVE_CLAUSE_RE.test(t)) return true;
+  // Shared article alone is never enough — need a second exclusive Spanish cue.
+  return false;
+}
+
+function looksConfidentFrench(text: string): boolean {
+  const t = text || '';
+  if (FR_EXCLUSIVE_CLAUSE_RE.test(t)) return true;
+  if (FR_CLAUSE_RE.test(t) && FR_ACCENT_RE.test(t) && !ES_EXCLUSIVE_CLAUSE_RE.test(t)) {
+    return true;
+  }
+  return false;
+}
 
 function fingerprintPreview(text: string): string {
   const t = (text || '').trim().slice(0, 48);
@@ -309,8 +371,23 @@ export function guessUnitLocale(text: string, targetLocale?: Locale): string | n
     return 'sr';
   }
   if (DE_CLAUSE_RE.test(t) && !EN_CLAUSE_RE.test(t)) return 'de';
-  if (ES_CLAUSE_RE.test(t) && /[áéíóúñ¿¡]/iu.test(t)) return 'es';
-  if (FR_CLAUSE_RE.test(t) && /[àâçéèêëïîôùûüÿœ]/iu.test(t)) return 'fr';
+  // AAB-333 — classify French before Spanish. Shared `la` + French `é` must not
+  // return `es` (false positive on "…avec ses collègues la préparation…").
+  const frScore = frenchEvidenceScore(t);
+  const esScore = spanishEvidenceScore(t);
+  if (looksConfidentFrench(t) && (targetLocale === 'fr' || frScore >= esScore)) {
+    return 'fr';
+  }
+  if (looksConfidentSpanish(t) && esScore > frScore) {
+    return 'es';
+  }
+  if (looksConfidentFrench(t)) return 'fr';
+  if (looksConfidentSpanish(t)) return 'es';
+  // Ambiguous shared-article Latin: prefer target when it matches, else unknown.
+  if (targetLocale === 'fr' && (FR_CLAUSE_RE.test(t) || FR_ACCENT_RE.test(t))) return 'fr';
+  if (targetLocale === 'es' && (ES_CLAUSE_RE.test(t) || ES_EXCLUSIVE_MARK_RE.test(t) || /[áéíóú]/iu.test(t))) {
+    return 'es';
+  }
   if (IT_CLAUSE_RE.test(t) && /[àèéìòù]/iu.test(t)) return 'it';
   if (PT_CLAUSE_RE.test(t) && /[áàâãéêíóôõúç]/iu.test(t)) return 'pt-BR';
   if (EN_CLAUSE_RE.test(t)) return 'en';
