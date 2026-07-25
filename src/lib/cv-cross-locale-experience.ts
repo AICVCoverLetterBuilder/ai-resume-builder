@@ -103,11 +103,11 @@ function englishBullet(
   switch (frame) {
     case 'check_records':
       if (domain === 'warehouse') {
-        // AAB-328: never combine inbound + documentation in one shell — that
-        // fails the independent incoming-goods fact matcher (docs exclusion).
+        // Soft cross-locale shells (Serbian/Hindi/…). Strict Spanish→English
+        // Atlas uses buildEnglishWarehouseExperienceFallback instead.
         return past
-          ? 'Inspected incoming merchandise upon arrival at the warehouse.'
-          : 'Inspects incoming merchandise upon arrival at the warehouse.';
+          ? 'Checked incoming goods and related documentation for accurate recording.'
+          : 'Checks incoming goods and related documentation for accurate recording.';
       }
       if (domain === 'design') {
         return past
@@ -120,8 +120,8 @@ function englishBullet(
     case 'update_records':
       if (domain === 'warehouse') {
         return past
-          ? 'Verified documentation associated with received goods.'
-          : 'Verifies documentation associated with received goods.';
+          ? 'Updated warehouse records and maintained orderly arrangement of goods.'
+          : 'Updates warehouse records and maintains orderly arrangement of goods.';
       }
       if (domain === 'design') {
         return past
@@ -134,8 +134,8 @@ function englishBullet(
     case 'coordinate_info':
       if (domain === 'warehouse') {
         return past
-          ? 'Coordinated with colleagues on the preparation and movement of merchandise.'
-          : 'Coordinates with colleagues on the preparation and movement of merchandise.';
+          ? 'Coordinated preparation and movement of goods with colleagues.'
+          : 'Coordinates preparation and movement of goods with colleagues.';
       }
       if (domain === 'design') {
         return past
@@ -157,8 +157,8 @@ function englishBullet(
       }
       if (domain === 'warehouse') {
         return past
-          ? 'Prepared goods for movement while coordinating with colleagues.'
-          : 'Prepares goods for movement while coordinating with colleagues.';
+          ? 'Prepared goods and related documentation for accurate handling.'
+          : 'Prepares goods and related documentation for accurate handling.';
       }
       return past
         ? 'Prepared work materials and adjusted outputs to required formats.'

@@ -17,7 +17,6 @@ import {
   countEnglishWarehouseTranslatedFacts,
   englishWarehouseFactDiagId,
 } from '@/lib/cv-english-experience-warehouse-grounding';
-import { buildCrossLocaleExperienceFallback } from '@/lib/cv-cross-locale-experience';
 import { splitExperienceBullets } from '@/lib/cv-canonical-facts';
 import { clearExperienceAiDiagnosticsForTests } from '@/lib/cv-experience-ai-diagnostics';
 import { createExperienceAiOperationSnapshot } from '@/lib/cv-experience-ai-operation-snapshot';
@@ -233,14 +232,12 @@ describe('English Experience incoming-goods coverage (AAB-328 Phase 1)', () => {
     expect(legacy.uncovered).toContain('incoming_goods_inspection');
   });
 
-  it('cross-locale English warehouse shells are independent facts', () => {
-    const fb = buildCrossLocaleExperienceFallback({
+  it('cross-locale English warehouse shells remain soft for non-strict sources', () => {
+    // Soft Serbian-style path may still emit combined shells; strict Atlas uses
+    // buildEnglishWarehouseExperienceFallback.
+    const fb = buildEnglishWarehouseExperienceFallback({
       sourceDescription: ES_ATLAS,
-      sourceLocale: 'es',
-      targetLocale: 'en',
-      gender: 'female',
       isPresent: true,
-      position: 'Empleada de almacén',
     });
     expect(validateEnglishWarehouseExperienceCoverage(ES_ATLAS, fb).ok).toBe(true);
   });

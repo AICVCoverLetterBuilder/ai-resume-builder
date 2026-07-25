@@ -30,6 +30,13 @@ import {
   experienceFactAuthorityKindsEquivalent,
   EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
 } from './cv-experience-authority-snapshot-327';
+import {
+  EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
+  EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
+  evaluateExperiencePhaseLocaleValidation,
+  isExperienceLocaleRejectionReason,
+  isExperienceCoverageRejectionReason,
+} from './cv-experience-locale-rejection-truth-328';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
@@ -39,6 +46,8 @@ void SUMMARY_STRUCTURED_ENTITY_LOCALE_VALIDATION_322_REVISION;
 void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
 void SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
+void EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION;
 
 /** Stable contract revision — must survive minification in internal builds. */
 export const CV_AI_DIAGNOSTIC_CONTRACT_REVISION = 'cv-ai-diagnostics-v2' as const;
@@ -1802,6 +1811,22 @@ type ExperienceLike = {
   finalText?: string | null;
   requestedLocale?: string | null;
   sourceAlreadyValidForTarget?: boolean | null;
+  authoritativeSourceAlreadyTargetLocale?: boolean | null;
+  visibleTextareaAlreadyTargetLocale?: boolean | null;
+  sourceAlreadyValidForTargetMeaning?: string | null;
+  targetLocaleValidationPassed?: boolean | null;
+  targetLocalePurityPassed?: boolean | null;
+  providerLocaleValidationReason?: string | null;
+  responseRejectedForLocaleImpurity?: boolean | null;
+  wrongLocaleBulletCount?: number | null;
+  wrongScriptBulletCount?: number | null;
+  mixedLanguageBulletCount?: number | null;
+  sourceLanguageLeakageDetected?: boolean | null;
+  providerRejectionReason?: string | null;
+  detectedLocaleByBullet?: Array<string | null> | null;
+  selectedSourceLocale?: string | null;
+  detectedSourceLocale?: string | null;
+  requestedTargetLocale?: string | null;
   sourceTenseValidationPassed?: boolean | null;
   providerNoOpDetected?: boolean | null;
   providerNoOpEligibleAsFinal?: boolean | null;
@@ -1849,6 +1874,7 @@ type ExperienceLike = {
     accepted?: boolean | null;
     hash?: string | null;
     normalizedHash?: string | null;
+    rejectionReasons?: string[] | null;
   }> | null;
   stages?: Array<{
     stage?: string;
@@ -2228,6 +2254,100 @@ export function checkExperienceDiagnosticInvariants(
       authoritativeFactSourceKind: trace.authoritativeFactSourceKind,
       factAuthorityKind: trace.factAuthorityKind,
     });
+  }
+  // AAB-328 — locale purity vs wrong_language consistency.
+  {
+    void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
+    void EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION;
+    const localeEval = evaluateExperiencePhaseLocaleValidation({
+      wrongLocaleBulletCount: trace.wrongLocaleBulletCount,
+      wrongScriptBulletCount: trace.wrongScriptBulletCount,
+      mixedLanguageBulletCount: trace.mixedLanguageBulletCount,
+      sourceLanguageLeakageDetected: trace.sourceLanguageLeakageDetected,
+      targetLocalePurityPassed: trace.targetLocalePurityPassed,
+      detectedLocaleByBullet: trace.detectedLocaleByBullet,
+    });
+    if (
+      localeEval.passed
+      && (
+        trace.providerLocaleValidationReason === 'wrong_language'
+        || trace.finalTypedFailureReason === 'wrong_language'
+        || trace.responseRejectedForLocaleImpurity === true
+      )
+      && (
+        Number(trace.wrongLocaleBulletCount ?? 0) === 0
+        && Number(trace.mixedLanguageBulletCount ?? 0) === 0
+        && !trace.sourceLanguageLeakageDetected
+        && trace.targetLocalePurityPassed !== false
+      )
+    ) {
+      push('wrong_language_without_locale_evidence', {
+        providerLocaleValidationReason: trace.providerLocaleValidationReason ?? null,
+        finalTypedFailureReason: trace.finalTypedFailureReason ?? null,
+        targetLocalePurityPassed: trace.targetLocalePurityPassed ?? null,
+        wrongLocaleBulletCount: trace.wrongLocaleBulletCount ?? 0,
+      });
+    }
+    if (
+      trace.targetLocalePurityPassed === true
+      && Number(trace.wrongLocaleBulletCount ?? 0) === 0
+      && Number(trace.mixedLanguageBulletCount ?? 0) === 0
+      && !trace.sourceLanguageLeakageDetected
+      && (
+        isExperienceLocaleRejectionReason(trace.providerLocaleValidationReason)
+        || (trace.responseRejectedForLocaleImpurity === true
+          && isExperienceLocaleRejectionReason(trace.finalTypedFailureReason))
+      )
+    ) {
+      push('locale_purity_true_but_wrong_language_reported', {
+        targetLocalePurityPassed: true,
+        providerLocaleValidationReason: trace.providerLocaleValidationReason ?? null,
+        finalTypedFailureReason: trace.finalTypedFailureReason ?? null,
+      });
+    }
+    if (
+      isExperienceCoverageRejectionReason(trace.providerRejectionReason)
+      && isExperienceLocaleRejectionReason(trace.providerLocaleValidationReason)
+    ) {
+      push('coverage_failure_reported_as_locale_reason', {
+        providerRejectionReason: trace.providerRejectionReason ?? null,
+        providerLocaleValidationReason: trace.providerLocaleValidationReason ?? null,
+      });
+    }
+    const lineage = Array.isArray(trace.candidateLineage) ? trace.candidateLineage : [];
+    const providerLine = lineage.find((l) => l && (l as { candidateKind?: string }).candidateKind === 'provider') as
+      | { rejectionReasons?: string[]; accepted?: boolean | null }
+      | undefined;
+    if (
+      providerLine
+      && providerLine.accepted === false
+      && trace.providerRejectionReason
+      && Array.isArray(providerLine.rejectionReasons)
+      && providerLine.rejectionReasons.length > 0
+      && providerLine.rejectionReasons[0] !== trace.providerRejectionReason
+      && !providerLine.rejectionReasons.includes(String(trace.providerRejectionReason))
+    ) {
+      push('provider_lineage_primary_reason_mismatch', {
+        providerRejectionReason: trace.providerRejectionReason,
+        lineagePrimary: providerLine.rejectionReasons[0] ?? null,
+      });
+    }
+    if (
+      typeof trace.authoritativeSourceAlreadyTargetLocale === 'boolean'
+      && typeof trace.visibleTextareaAlreadyTargetLocale === 'boolean'
+      && trace.selectedSourceLocale
+      && trace.requestedTargetLocale
+    ) {
+      const auth = String(trace.selectedSourceLocale).toLowerCase().startsWith('es')
+        && String(trace.requestedTargetLocale).toLowerCase().startsWith('en');
+      if (auth && trace.authoritativeSourceAlreadyTargetLocale === true) {
+        push('authoritative_source_already_target_locale_false_positive', {
+          selectedSourceLocale: trace.selectedSourceLocale,
+          requestedTargetLocale: trace.requestedTargetLocale,
+          authoritativeSourceAlreadyTargetLocale: true,
+        });
+      }
+    }
   }
   // AAB-317 — dual-source / unedited-rerun diagnostic truth.
   if (

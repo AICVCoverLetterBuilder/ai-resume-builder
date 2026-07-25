@@ -145,6 +145,13 @@ import {
   buildEnglishWarehouseExperienceFallback,
 } from './cv-english-experience-warehouse-grounding';
 import {
+  EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
+  EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
+  computeAuthoritativeSourceAlreadyTargetLocale,
+  computeVisibleTextareaAlreadyTargetLocale,
+  legacySourceAlreadyValidForTargetMeaning,
+} from './cv-experience-locale-rejection-truth-328';
+import {
   EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
   SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
   EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
@@ -935,6 +942,11 @@ export type FinalizeCvAiFieldResult = {
     spanishExperienceValidSourceNoopRevision?: typeof SPANISH_EXPERIENCE_VALID_SOURCE_NOOP_316_REVISION;
     experienceFinalDecisionTruthRevision?: typeof EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION;
     sourceAlreadyValidForTarget?: boolean | null;
+    authoritativeSourceAlreadyTargetLocale?: boolean | null;
+    visibleTextareaAlreadyTargetLocale?: boolean | null;
+    sourceAlreadyValidForTargetMeaning?: 'visible_textarea_already_target_locale' | null;
+    experiencePhaseLocaleTruthRevision?: typeof EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION | string | null;
+    experienceRejectionLineageTruthRevision?: typeof EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION | string | null;
     sourceTenseValidationPassed?: boolean | null;
     sourcePastUnitCount?: number | null;
     sourcePresentUnitCount?: number | null;
@@ -5056,6 +5068,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : generationValidationMeta.tenseValidationPassed,
     sourceTenseValidationPassed: visibleSourceAnalysis.sourceTenseValidationPassed,
     sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
+    authoritativeSourceAlreadyTargetLocale: computeAuthoritativeSourceAlreadyTargetLocale({
+      authoritativeSourceLocale: detectTextLocale(sourceForCoverage || '', {
+        storedLocale: locale,
+      }),
+      requestedTargetLocale: locale,
+    }),
+    visibleTextareaAlreadyTargetLocale: computeVisibleTextareaAlreadyTargetLocale({
+      visibleTextareaLocale: visibleSourceAnalysis.sourceLocale || locale,
+      requestedTargetLocale: locale,
+    }),
+    sourceAlreadyValidForTargetMeaning: legacySourceAlreadyValidForTargetMeaning(),
+    experiencePhaseLocaleTruthRevision: EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
+    experienceRejectionLineageTruthRevision: EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
     expectedEmploymentTense: visibleSourceAnalysis.expectedEmploymentTense,
     sourceDetectedTense: visibleSourceAnalysis.sourceDetectedTense,
     sourcePastUnitCount: visibleSourceAnalysis.sourcePastUnitCount,

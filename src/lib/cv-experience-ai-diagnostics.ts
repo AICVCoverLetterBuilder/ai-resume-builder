@@ -34,6 +34,16 @@ import {
   normalizeExperienceFactAuthorityKind,
   resolveCanonicalFactAuthorityKind,
 } from './cv-experience-authority-snapshot-327';
+import {
+  EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
+  EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
+  evaluateExperiencePhaseLocaleValidation,
+  reconcileExperienceTerminalRejectionReason,
+  computeAuthoritativeSourceAlreadyTargetLocale,
+  computeVisibleTextareaAlreadyTargetLocale,
+  legacySourceAlreadyValidForTargetMeaning,
+  isExperienceLocaleRejectionReason,
+} from './cv-experience-locale-rejection-truth-328';
 import type {
   ExperienceAuthoritativeFactSourceKind,
   ExperienceTextareaProvenanceKind,
@@ -48,6 +58,8 @@ void EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION;
 void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
 void EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
+void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
+void EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION;
 void EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION;
 void EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION;
 import { detectTextLocale } from './cv-content-locale';
@@ -379,6 +391,14 @@ export type ExperienceAiDiagnosticTrace = {
   appliedFinalBulletCount?: number | null;
   appliedFinalBulletScripts?: string[] | null;
   sourceAlreadyValidForTarget?: boolean | null;
+  /** AAB-328 — authoritative (pre-AI) source already in target locale. */
+  authoritativeSourceAlreadyTargetLocale?: boolean | null;
+  /** AAB-328 — request-time visible textarea already in target locale. */
+  visibleTextareaAlreadyTargetLocale?: boolean | null;
+  /** AAB-328 — documents what legacy sourceAlreadyValidForTarget means. */
+  sourceAlreadyValidForTargetMeaning?: 'visible_textarea_already_target_locale' | null;
+  experiencePhaseLocaleTruthRevision?: string | null;
+  experienceRejectionLineageTruthRevision?: string | null;
   preflightNoOpDetected?: boolean | null;
   applyAttempted?: boolean | null;
   applyNotAttemptedReason?: string | null;
@@ -1975,6 +1995,33 @@ export class ExperienceAiDiagnosticSession {
             typeof (diag as Record<string, unknown>).sourceAlreadyValidForTarget === 'boolean'
               ? (diag as Record<string, unknown>).sourceAlreadyValidForTarget as boolean
               : null,
+          authoritativeSourceAlreadyTargetLocale:
+            typeof (diag as Record<string, unknown>).authoritativeSourceAlreadyTargetLocale === 'boolean'
+              ? (diag as Record<string, unknown>).authoritativeSourceAlreadyTargetLocale as boolean
+              : computeAuthoritativeSourceAlreadyTargetLocale({
+                authoritativeSourceLocale:
+                  ((diag as Record<string, unknown>).selectedSourceLocale as string | undefined)
+                  || (diag.detectedSourceLocale as string | undefined)
+                  || this.draft.detectedSourceLocale,
+                requestedTargetLocale:
+                  (diag.requestedTargetLocale as string | undefined)
+                  || this.draft.requestedLocale,
+              }),
+          visibleTextareaAlreadyTargetLocale:
+            typeof (diag as Record<string, unknown>).visibleTextareaAlreadyTargetLocale === 'boolean'
+              ? (diag as Record<string, unknown>).visibleTextareaAlreadyTargetLocale as boolean
+              : computeVisibleTextareaAlreadyTargetLocale({
+                visibleTextareaLocale:
+                  ((diag as Record<string, unknown>).currentTextareaLocale as string | undefined)
+                  || ((diag as Record<string, unknown>).visibleTextareaLocale as string | undefined)
+                  || this.draft.requestedLocale,
+                requestedTargetLocale:
+                  (diag.requestedTargetLocale as string | undefined)
+                  || this.draft.requestedLocale,
+              }),
+          sourceAlreadyValidForTargetMeaning: legacySourceAlreadyValidForTargetMeaning(),
+          experiencePhaseLocaleTruthRevision: EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
+          experienceRejectionLineageTruthRevision: EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
           sourceTenseMismatchCount:
             typeof (diag as Record<string, unknown>).sourceTenseMismatchCount === 'number'
               ? (diag as Record<string, unknown>).sourceTenseMismatchCount as number
@@ -2208,7 +2255,29 @@ export class ExperienceAiDiagnosticSession {
         ? diag.finalUnsupportedClaimKinds.map(String)
         : [],
       countedAsSuccess: Boolean(finalized.countedAsSuccess),
-      finalTypedFailureReason: blocked ? reason : null,
+      finalTypedFailureReason: blocked
+        ? (reconcileExperienceTerminalRejectionReason({
+          terminalReason: reason,
+          providerRejectionReason: (diag.providerRejectionReason as string | undefined) || null,
+          fallbackRejectionReason: (diag.clientDeterministicFallbackReason as string | undefined)
+            || null,
+          localeEvidence: {
+            wrongLocaleBulletCount: diag.wrongLocaleBulletCount
+              ?? this.draft.wrongLocaleBulletCount,
+            wrongScriptBulletCount: diag.wrongScriptBulletCount
+              ?? this.draft.wrongScriptBulletCount,
+            mixedLanguageBulletCount: diag.mixedLanguageBulletCount
+              ?? this.draft.mixedLanguageBulletCount,
+            sourceLanguageLeakageDetected: diag.sourceLanguageLeakageDetected
+              ?? this.draft.sourceLanguageLeakageDetected,
+            targetLocalePurityPassed: diag.targetLocalePurityPassed
+              ?? this.draft.targetLocalePurityPassed,
+            detectedLocaleByBullet:
+              (diag.detectedLocaleByBullet as Array<string | null> | undefined)
+              || this.draft.detectedLocaleByBullet,
+          },
+        }) || reason)
+        : null,
       rejectionStage: blocked
         ? (diag.rejectionStage || this.draft.rejectionStage || 'final_apply_postcondition')
         : null,
@@ -2241,10 +2310,31 @@ export class ExperienceAiDiagnosticSession {
         || (clientFallbackApplied && diag.clientDeterministicFallbackReason === 'cross_locale_translation_fallback'),
       ),
       translatedFactCount: diag.translatedFactCount ?? null,
-      targetLocaleValidationPassed: diag.targetLocaleValidationPassed
-        ?? ((reason === 'locale_mismatch' || reason === 'wrong_language')
-          ? false
-          : (finalized.countedAsSuccess ? true : null)),
+      targetLocaleValidationPassed: (() => {
+        void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
+        const localeEval = evaluateExperiencePhaseLocaleValidation({
+          wrongLocaleBulletCount: diag.wrongLocaleBulletCount
+            ?? this.draft.wrongLocaleBulletCount,
+          wrongScriptBulletCount: diag.wrongScriptBulletCount
+            ?? this.draft.wrongScriptBulletCount,
+          mixedLanguageBulletCount: diag.mixedLanguageBulletCount
+            ?? this.draft.mixedLanguageBulletCount,
+          sourceLanguageLeakageDetected: diag.sourceLanguageLeakageDetected
+            ?? this.draft.sourceLanguageLeakageDetected,
+          targetLocalePurityPassed: diag.targetLocalePurityPassed
+            ?? this.draft.targetLocalePurityPassed,
+          detectedLocaleByBullet: (diag.detectedLocaleByBullet as Array<string | null> | undefined)
+            || this.draft.detectedLocaleByBullet,
+        }, { explicitReason: reason });
+        if (typeof diag.targetLocaleValidationPassed === 'boolean') {
+          // Prefer explicit phase-local value when it agrees with purity evidence.
+          if (diag.targetLocaleValidationPassed === localeEval.passed) {
+            return diag.targetLocaleValidationPassed;
+          }
+          return localeEval.passed;
+        }
+        return localeEval.passed;
+      })(),
       sourcePerspectiveMode: (diag.sourcePerspectiveMode as string | undefined)
         ?? (diag.sourcePersonMode as string | undefined)
         ?? null,
@@ -2323,10 +2413,24 @@ export class ExperienceAiDiagnosticSession {
       wrongScriptBulletCount: diag.wrongScriptBulletCount ?? 0,
       mixedLanguageBulletCount: diag.mixedLanguageBulletCount ?? 0,
       sourceLanguageLeakageDetected: Boolean(diag.sourceLanguageLeakageDetected),
-      targetLocalePurityPassed: diag.targetLocalePurityPassed
-        ?? ((reason === 'locale_mismatch' || reason === 'wrong_language' || reason === 'locale_impurity')
-          ? false
-          : (finalized.countedAsSuccess ? true : null)),
+      targetLocalePurityPassed: (() => {
+        const localeEval = evaluateExperiencePhaseLocaleValidation({
+          wrongLocaleBulletCount: diag.wrongLocaleBulletCount
+            ?? this.draft.wrongLocaleBulletCount,
+          wrongScriptBulletCount: diag.wrongScriptBulletCount
+            ?? this.draft.wrongScriptBulletCount,
+          mixedLanguageBulletCount: diag.mixedLanguageBulletCount
+            ?? this.draft.mixedLanguageBulletCount,
+          sourceLanguageLeakageDetected: diag.sourceLanguageLeakageDetected
+            ?? this.draft.sourceLanguageLeakageDetected,
+          targetLocalePurityPassed: diag.targetLocalePurityPassed
+            ?? this.draft.targetLocalePurityPassed,
+        }, { explicitReason: reason });
+        if (typeof diag.targetLocalePurityPassed === 'boolean') {
+          return diag.targetLocalePurityPassed;
+        }
+        return localeEval.passed;
+      })(),
       crossEntryCandidateFactCount: diag.crossEntryCandidateFactCount ?? 0,
       crossEntryLeakageDetected: Boolean(diag.crossEntryLeakageDetected),
       crossDomainLeakageDetected: Boolean(diag.crossDomainLeakageDetected),
@@ -2338,21 +2442,48 @@ export class ExperienceAiDiagnosticSession {
         || reason === 'experience_entry_mismatch'
         || reason === 'experience_entry_missing',
       ),
-      responseRejectedForLocaleImpurity: Boolean(
-        diag.responseRejectedForLocaleImpurity
-        || reason === 'locale_mismatch'
-        || reason === 'wrong_language'
-        || reason === 'locale_impurity',
-      ),
+      responseRejectedForLocaleImpurity: (() => {
+        const localeEval = evaluateExperiencePhaseLocaleValidation({
+          wrongLocaleBulletCount: diag.wrongLocaleBulletCount
+            ?? this.draft.wrongLocaleBulletCount,
+          wrongScriptBulletCount: diag.wrongScriptBulletCount
+            ?? this.draft.wrongScriptBulletCount,
+          mixedLanguageBulletCount: diag.mixedLanguageBulletCount
+            ?? this.draft.mixedLanguageBulletCount,
+          sourceLanguageLeakageDetected: diag.sourceLanguageLeakageDetected
+            ?? this.draft.sourceLanguageLeakageDetected,
+          targetLocalePurityPassed: diag.targetLocalePurityPassed
+            ?? this.draft.targetLocalePurityPassed,
+        }, { explicitReason: reason });
+        return localeEval.responseRejectedForLocaleImpurity;
+      })(),
       responseRejectedForDomainMismatch: Boolean(
         diag.responseRejectedForDomainMismatch
         || reason === 'cross_entry_fact_leakage'
         || reason === 'cross_domain_leakage',
       ),
-      providerLocaleValidationReason:
-        reason === 'locale_mismatch' || reason === 'wrong_language'
-          ? reason
-          : this.draft.providerLocaleValidationReason,
+      providerLocaleValidationReason: (() => {
+        const localeEval = evaluateExperiencePhaseLocaleValidation({
+          wrongLocaleBulletCount: diag.wrongLocaleBulletCount
+            ?? this.draft.wrongLocaleBulletCount,
+          wrongScriptBulletCount: diag.wrongScriptBulletCount
+            ?? this.draft.wrongScriptBulletCount,
+          mixedLanguageBulletCount: diag.mixedLanguageBulletCount
+            ?? this.draft.mixedLanguageBulletCount,
+          sourceLanguageLeakageDetected: diag.sourceLanguageLeakageDetected
+            ?? this.draft.sourceLanguageLeakageDetected,
+          targetLocalePurityPassed: diag.targetLocalePurityPassed
+            ?? this.draft.targetLocalePurityPassed,
+        }, {
+          explicitReason: (diag.providerRejectionReason as string | undefined) || reason,
+        });
+        // Coverage failures must never populate providerLocaleValidationReason.
+        if (localeEval.passed) return null;
+        return localeEval.reason
+          || (isExperienceLocaleRejectionReason(diag.providerRejectionReason as string)
+            ? String(diag.providerRejectionReason)
+            : null);
+      })(),
       generationProviderValidationPassed: diag.generationProviderValidationPassed
         ?? (diag.sourceWasEmpty && !blocked && !diag.generationFallbackApplied
           ? true
@@ -2382,7 +2513,16 @@ export class ExperienceAiDiagnosticSession {
       });
     }
 
-    const localeFail = reason === 'locale_mismatch' || reason === 'wrong_language';
+    const localeFail = (() => {
+      const localeEval = evaluateExperiencePhaseLocaleValidation({
+        wrongLocaleBulletCount: this.draft.wrongLocaleBulletCount,
+        wrongScriptBulletCount: this.draft.wrongScriptBulletCount,
+        mixedLanguageBulletCount: this.draft.mixedLanguageBulletCount,
+        sourceLanguageLeakageDetected: this.draft.sourceLanguageLeakageDetected,
+        targetLocalePurityPassed: this.draft.targetLocalePurityPassed,
+      }, { explicitReason: this.draft.finalTypedFailureReason || reason });
+      return !localeEval.passed;
+    })();
 
     // Build provider / deterministic_fallback / final_selected lineage (hashes only).
     const lineage: NonNullable<ExperienceAiDiagnosticTrace['candidateLineage']> = [];
@@ -2453,7 +2593,12 @@ export class ExperienceAiDiagnosticSession {
         rejectionReasons: diag.providerAccepted
           ? []
           : ([
+            // Prefer phase-local provider rejection over terminal reason so a
+            // later fallback locale field cannot rewrite coverage lineage.
             diag.providerRejectionReason
+            || (Array.isArray(this.draft.providerRejectionReasons)
+              ? this.draft.providerRejectionReasons[0]
+              : null)
             || reason
             || diag.clientDeterministicFallbackReason,
           ].filter(Boolean) as string[]),
