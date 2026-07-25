@@ -132,7 +132,10 @@ describe('English Experience three-fact coverage (AAB-327)', () => {
     expect(keys.length).toBeLessThanOrEqual(3);
     expect(cov.required.length).toBe(3);
     expect(cov.ok).toBe(true);
-    expect(cov.revision).toBe('english-experience-three-fact-coverage-327-v1');
+    expect(
+      cov.revision === 'english-experience-three-fact-coverage-327-v1'
+      || cov.revision === 'english-experience-incoming-goods-matcher-328-v1',
+    ).toBe(true);
   });
 
   it('7. Exact AAB-326 bullets cover 3/3', () => {
@@ -261,7 +264,7 @@ describe('English Experience three-fact coverage (AAB-327)', () => {
       .toBe('english-experience-three-fact-coverage-327-v1');
   });
 
-  it('8b. Incoming-only provider candidate is rejected', () => {
+  it('8b. Incoming-only provider recovers via deterministic 3/3 fallback', () => {
     const visibleEs = ES_ATLAS;
     const cv = atlasCv();
     cv.experience[0]!.description = visibleEs;
@@ -279,8 +282,11 @@ describe('English Experience three-fact coverage (AAB-327)', () => {
       originHint: 'provider',
       operationSnapshot: atlasSnap(visibleEs, ES_ATLAS),
     });
-    expect(fin.countedAsSuccess).toBe(false);
-    expect((fin.diagnostics?.coveredFactCount ?? 0)).toBeLessThan(3);
+    // AAB-328: incomplete provider must not apply as-is; dedicated fallback may complete 3/3.
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.origin).toBe('deterministic_fallback');
+    expect(fin.diagnostics?.requiredFactCount ?? 0).toBe(3);
+    expect(fin.diagnostics?.coveredFactCount ?? 0).toBe(3);
     expect(
       fin.diagnostics?.providerRequiredFactCount
       ?? fin.diagnostics?.requiredFactCount

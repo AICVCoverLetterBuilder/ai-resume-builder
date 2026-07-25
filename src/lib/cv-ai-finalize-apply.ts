@@ -134,12 +134,15 @@ import {
 } from './cv-spanish-experience-grounding';
 import {
   ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION,
+  ENGLISH_EXPERIENCE_INCOMING_GOODS_MATCHER_328_REVISION,
+  ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION,
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
   countEnglishWarehouseTranslatedFacts,
   englishWarehouseFactDiagId,
+  buildEnglishWarehouseExperienceFallback,
 } from './cv-english-experience-warehouse-grounding';
 import {
   EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
@@ -4229,14 +4232,26 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 }
 
 function detectBulletScripts(text: string): string[] {
-  const scripts: string[] = [];
-  if (/[A-Za-z]/.test(text)) scripts.push('latin');
-  if (/[čćžšđČĆŽŠĐ]/.test(text)) scripts.push('latin_diacritic');
-  if (/\p{Script=Cyrillic}/u.test(text)) scripts.push('cyrillic');
-  if (/\p{Script=Devanagari}/u.test(text)) scripts.push('devanagari');
-  if (/\p{Script=Arabic}/u.test(text)) scripts.push('arabic');
-  if (/[\u3040-\u30ff\u3400-\u9fff]/.test(text)) scripts.push('cjk');
-  return scripts;
+  // Per-bullet script classes (AAB-328): one entry per bullet unit.
+  const bullets = splitExperienceBullets(text || '').map((b) => b.trim()).filter(Boolean);
+  if (!bullets.length) {
+    const scripts: string[] = [];
+    if (/[A-Za-z]/.test(text || '')) scripts.push('latin');
+    if (/[čćžšđČĆŽŠĐ]/.test(text || '')) scripts.push('latin_diacritic');
+    if (/\p{Script=Cyrillic}/u.test(text || '')) scripts.push('cyrillic');
+    if (/\p{Script=Devanagari}/u.test(text || '')) scripts.push('devanagari');
+    if (/\p{Script=Arabic}/u.test(text || '')) scripts.push('arabic');
+    if (/[\u3040-\u30ff\u3400-\u9fff]/.test(text || '')) scripts.push('cjk');
+    return scripts;
+  }
+  return bullets.map((b) => {
+    if (/\p{Script=Devanagari}/u.test(b)) return 'devanagari';
+    if (/\p{Script=Arabic}/u.test(b)) return 'arabic';
+    if (/[\u3040-\u30ff\u3400-\u9fff]/.test(b)) return 'cjk';
+    if (/\p{Script=Cyrillic}/u.test(b)) return 'cyrillic';
+    if (/[čćžšđČĆŽŠĐ]/.test(b)) return 'latin_diacritic';
+    return 'latin';
+  });
 }
 
 function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult {
@@ -5491,10 +5506,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // German warehouse: soft frames alone are insufficient — require object-
       // level coverage (incoming goods / documents / prep+movement).
       // Spanish warehouse: same object-level coverage contract.
-      // English warehouse (AAB-327): per-source-unit identities, not material keys.
+      // English warehouse (AAB-327/328): per-source-unit identities, not material keys.
       void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
       void SPANISH_CV_AI_305_REVISION;
       void ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
+      void ENGLISH_EXPERIENCE_INCOMING_GOODS_MATCHER_328_REVISION;
+      void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
       const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
       const post = validateExperienceApplyMaterialPostcondition(sourceForCoverage, candidate, {
         targetLocale: locale,
@@ -8248,6 +8265,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         void SPANISH_CV_AI_305_REVISION;
         translated = normalizeLocaleText(
           buildSpanishWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
+        && locale === 'en'
+        && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
+        void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
+        translated = normalizeLocaleText(
+          buildEnglishWarehouseExperienceFallback({
             sourceDescription: sourceForCoverage,
             isPresent,
           }),

@@ -103,9 +103,11 @@ function englishBullet(
   switch (frame) {
     case 'check_records':
       if (domain === 'warehouse') {
+        // AAB-328: never combine inbound + documentation in one shell — that
+        // fails the independent incoming-goods fact matcher (docs exclusion).
         return past
-          ? 'Checked incoming goods and related documentation for accurate recording.'
-          : 'Checks incoming goods and related documentation for accurate recording.';
+          ? 'Inspected incoming merchandise upon arrival at the warehouse.'
+          : 'Inspects incoming merchandise upon arrival at the warehouse.';
       }
       if (domain === 'design') {
         return past
@@ -118,8 +120,8 @@ function englishBullet(
     case 'update_records':
       if (domain === 'warehouse') {
         return past
-          ? 'Updated warehouse records and maintained orderly arrangement of goods.'
-          : 'Updates warehouse records and maintains orderly arrangement of goods.';
+          ? 'Verified documentation associated with received goods.'
+          : 'Verifies documentation associated with received goods.';
       }
       if (domain === 'design') {
         return past
@@ -132,8 +134,8 @@ function englishBullet(
     case 'coordinate_info':
       if (domain === 'warehouse') {
         return past
-          ? 'Coordinated preparation and movement of goods with colleagues.'
-          : 'Coordinates preparation and movement of goods with colleagues.';
+          ? 'Coordinated with colleagues on the preparation and movement of merchandise.'
+          : 'Coordinates with colleagues on the preparation and movement of merchandise.';
       }
       if (domain === 'design') {
         return past
@@ -155,8 +157,8 @@ function englishBullet(
       }
       if (domain === 'warehouse') {
         return past
-          ? 'Prepared goods and related documentation for accurate handling.'
-          : 'Prepares goods and related documentation for accurate handling.';
+          ? 'Prepared goods for movement while coordinating with colleagues.'
+          : 'Prepares goods for movement while coordinating with colleagues.';
       }
       return past
         ? 'Prepared work materials and adjusted outputs to required formats.'
