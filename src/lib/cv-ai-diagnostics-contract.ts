@@ -37,6 +37,7 @@ import {
   isExperienceLocaleRejectionReason,
   isExperienceCoverageRejectionReason,
 } from './cv-experience-locale-rejection-truth-328';
+import { localesEquivalent, normalizeLocaleKey } from './cv-content-locale';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
@@ -1740,6 +1741,8 @@ type ExperienceLike = {
   appVersionName?: string | null;
   clientDeterministicFallbackAttempted?: boolean;
   clientDeterministicFallbackApplied?: boolean;
+  clientDeterministicFallbackSelected?: boolean;
+  clientDeterministicFallbackUsedForFinalCandidate?: boolean;
   fallbackSelected?: boolean;
   visibleApplySucceeded?: boolean;
   countedAsSuccess?: boolean;
@@ -1977,10 +1980,14 @@ export function checkExperienceDiagnosticInvariants(
     });
   }
   if (trace.finalCandidateSource === 'deterministic_fallback'
-    && trace.clientDeterministicFallbackApplied === false) {
+    && trace.clientDeterministicFallbackApplied === false
+    && trace.clientDeterministicFallbackSelected !== true
+    && (trace as { clientDeterministicFallbackUsedForFinalCandidate?: boolean })
+      .clientDeterministicFallbackUsedForFinalCandidate !== true) {
     push('final_source_deterministic_but_not_applied', {
       finalCandidateSource: 'deterministic_fallback',
       clientDeterministicFallbackApplied: false,
+      clientDeterministicFallbackSelected: false,
     });
   }
   if (trace.finalCandidateSource === 'deterministic_fallback'
@@ -2313,14 +2320,16 @@ export function checkExperienceDiagnosticInvariants(
       });
     }
     // AAB-333 — purity-pass forbids explicit foreign bullet locales.
+    // AAB-335 — compare via alias-aware keys (pt ≡ pt-BR ≡ pt-br).
     {
-      const target = String(
+      const targetRaw = String(
         trace.requestedTargetLocale
         || trace.targetLocale
         || trace.uiLocale
         || trace.requestedLocale
         || '',
-      ).toLowerCase();
+      );
+      const target = normalizeLocaleKey(targetRaw);
       const bullets = Array.isArray(trace.detectedLocaleByBullet)
         ? trace.detectedLocaleByBullet
         : [];
@@ -2332,11 +2341,14 @@ export function checkExperienceDiagnosticInvariants(
         && bullets.length > 0
       ) {
         const foreign = bullets
-          .map((b, i) => ({ locale: b == null ? null : String(b).toLowerCase(), index: i }))
-          .filter((b) => b.locale && b.locale !== 'unknown' && b.locale !== target);
+          .map((b, i) => ({ locale: b == null ? null : String(b), index: i }))
+          .filter((b) => {
+            if (!b.locale || b.locale === 'unknown') return false;
+            return !localesEquivalent(b.locale, targetRaw);
+          });
         if (foreign.length > 0) {
           push('purity_pass_with_foreign_detected_bullet_locale', {
-            targetLocale: target,
+            targetLocale: targetRaw || target,
             foreignDetectedLocales: foreign.map((f) => f.locale).join(','),
             foreignBulletIndexes: foreign.map((f) => f.index).join(','),
             wrongLocaleBulletCount: 0,

@@ -4,6 +4,7 @@
  * Latin script alone must never classify Spanish (incl. accented preterite) as English.
  */
 import type { Locale } from './i18n/translations';
+import { resolveLocaleCandidate } from './i18n/translations';
 import { analyzeCroatianSerbianLocaleEvidence } from './cv-ai-unit-locale-purity';
 import {
   ES_EXPERIENCE_LEXICON_RE,
@@ -42,7 +43,36 @@ const IT_LEXICON_RE =
   /\b(?:documentazione|magazzino|colleghi|movimentazione|merci)\b/iu;
 const IT_EXCLUSIVE_WAREHOUSE_RE =
   /(?:controlla\s+le\s+merci|merci\s+in\s+entrata|documentazione\s+relativa|merci\s+ricevute|si\s+coordina\s+con\s+i\s+colleghi|movimentazione\s+delle\s+merci|nel\s+magazzino)/iu;
-const PT_LEXICON_RE = /\b(?:revisa|atualiza|coordena|experiência)\b/iu;
+/**
+ * Brazilian Portuguese Experience lexicon — warehouse-specific exclusive cues.
+ * Prefer over shared Romance cognates (`verifica`/`coordena`) that also appear
+ * in Italian/Spanish, and over German article `das` colliding with PT `das`.
+ */
+const PT_LEXICON_RE =
+  /\b(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|recebidas|colegas|prepara[cç][aã]o|movimenta[cç][aã]o|confere|atualiza|experiência)\b/iu;
+const PT_EXCLUSIVE_WAREHOUSE_RE =
+  /(?:verifica\s+as\s+mercadorias|mercadorias?\s+que\s+chegam|ao\s+armaz[eé]m|confere\s+a\s+documenta[cç][aã]o|documenta[cç][aã]o\s+relacionada|mercadorias?\s+recebidas|coordena\s+com\s+os\s+colegas|prepara[cç][aã]o\s+e\s+a\s+movimenta[cç][aã]o|movimenta[cç][aã]o\s+das\s+mercadorias)/iu;
+
+/** True when locale string is Brazilian Portuguese (any supported alias). */
+export function isPortugueseBrazilLocale(locale: string | null | undefined): boolean {
+  const resolved = resolveLocaleCandidate(locale);
+  if (resolved === 'pt-BR') return true;
+  const key = String(locale || '').trim().toLowerCase().replace(/_/g, '-');
+  return key === 'pt-br' || key === 'pt' || key === 'pt-brs';
+}
+
+/**
+ * Canonical public locale form for diagnostics / persistence.
+ * Maps pt / pt-br / pt_BR / pt-BR → `pt-BR`.
+ */
+export function canonicalizeContentLocale(
+  locale: string | null | undefined,
+): Locale | string {
+  const resolved = resolveLocaleCandidate(locale);
+  if (resolved) return resolved;
+  const raw = String(locale || '').trim();
+  return raw || 'unknown';
+}
 
 export type DetectedContentLocale = Locale | 'unknown';
 
@@ -221,6 +251,17 @@ export function analyzeContentLocale(
       confidence: 'high',
     };
   }
+  // AAB-335 — Brazilian Portuguese warehouse exclusive cues before Spanish /
+  // English. Soft shells and hard triad share mercadorias/armazém/documentação.
+  if (PT_EXCLUSIVE_WAREHOUSE_RE.test(raw) || PT_LEXICON_RE.test(raw)) {
+    return {
+      detectedLocale: 'pt-BR',
+      script: /[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]/.test(raw) ? 'latin_diacritic' : 'latin',
+      hasSerbianDiacritics,
+      hasSerbianLexicon,
+      confidence: 'high',
+    };
+  }
   // Spanish before English/stored fallback: accented preterite + Experience lexicon
   // must not classify as en merely because both use Latin script.
   if (
@@ -238,15 +279,6 @@ export function analyzeContentLocale(
       hasSerbianDiacritics,
       hasSerbianLexicon,
       confidence: 'high',
-    };
-  }
-  if (PT_LEXICON_RE.test(raw)) {
-    return {
-      detectedLocale: 'pt-BR',
-      script: 'latin',
-      hasSerbianDiacritics,
-      hasSerbianLexicon,
-      confidence: 'medium',
     };
   }
 
@@ -301,8 +333,28 @@ export function detectTextLocale(
   return analyzeContentLocale(text, hints).detectedLocale;
 }
 
+/**
+ * Comparison key for locale equality. Aliases `pt`, `pt-br`, `pt_BR`, `pt-BR`
+ * all normalize to `pt-br` so casing/separator differences cannot bypass
+ * cross-locale / purity / persistence checks.
+ */
 export function normalizeLocaleKey(locale: string | null | undefined): string {
-  return String(locale || '').trim().toLowerCase();
+  const resolved = resolveLocaleCandidate(locale);
+  if (resolved) return resolved.toLowerCase();
+  return String(locale || '').trim().toLowerCase().replace(/_/g, '-');
+}
+
+/** Alias-aware locale equality (pt ≡ pt-BR ≡ pt-br ≡ pt_BR). */
+export function localesEquivalent(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const ka = normalizeLocaleKey(a);
+  const kb = normalizeLocaleKey(b);
+  if (!ka || !kb || ka === 'unknown' || kb === 'unknown') return false;
+  if (ka === kb) return true;
+  if ((ka === 'sr' || ka === 'hr') && (kb === 'sr' || kb === 'hr')) return true;
+  return false;
 }
 
 /** True when source language differs from requested target (cross-locale AI). */
@@ -313,14 +365,13 @@ export function isCrossLocaleOperation(
   const src = normalizeLocaleKey(sourceLocale);
   const tgt = normalizeLocaleKey(targetLocale);
   if (!src || !tgt || src === 'unknown') return false;
-  if (src === tgt) return false;
-  // sr/hr treated as same family for same-language preserve.
-  if ((src === 'sr' || src === 'hr') && (tgt === 'sr' || tgt === 'hr')) return false;
+  if (localesEquivalent(sourceLocale, targetLocale)) return false;
   return true;
 }
 
 export function localeFamily(locale: string | null | undefined): string {
   const loc = normalizeLocaleKey(locale);
   if (loc === 'sr' || loc === 'hr') return 'sr_hr';
+  if (loc === 'pt-br' || loc === 'pt') return 'pt_br';
   return loc || 'unknown';
 }

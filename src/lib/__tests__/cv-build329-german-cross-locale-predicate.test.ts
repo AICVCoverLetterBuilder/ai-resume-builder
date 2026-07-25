@@ -197,6 +197,7 @@ describe('AAB-329 German cross-locale Experience predicate + degradation truth',
     expect(
       fin.origin === 'deterministic_fallback'
       || fin.diagnostics?.clientDeterministicFallbackApplied === true
+      || fin.diagnostics?.clientDeterministicFallbackSelected === true
       || fin.diagnostics?.translationFallbackApplied === true,
     ).toBe(true);
     expect(fin.diagnostics?.providerCoveredFactCount).toBe(2);

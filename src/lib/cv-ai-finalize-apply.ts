@@ -162,6 +162,14 @@ import {
   italianWarehouseFactDiagId,
 } from './cv-italian-experience-grounding';
 import {
+  PORTUGUESE_EXPERIENCE_GROUNDING_335_REVISION,
+  sourceRequiresPortugueseWarehouseFactCoverage,
+  validatePortugueseWarehouseExperienceCoverage,
+  buildPortugueseWarehouseExperienceFallback,
+  scanPortugueseWarehousePredicates,
+  portugueseWarehouseFactDiagId,
+} from './cv-portuguese-experience-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -386,6 +394,8 @@ import {
 import {
   detectTextLocale,
   isCrossLocaleOperation,
+  isPortugueseBrazilLocale,
+  canonicalizeContentLocale,
 } from './cv-content-locale';
 import {
   validateSourceFactIdentityCoverage,
@@ -1042,6 +1052,13 @@ export type FinalizeCvAiFieldResult = {
     clientDeterministicFallbackRequiredFactCount?: number;
     clientDeterministicFallbackCoveredFactCount?: number;
     clientDeterministicFallbackApplied?: boolean;
+    /**
+     * True when a client deterministic fallback was selected as the final
+     * candidate. Distinct from Applied, which requires a committed visible write.
+     */
+    clientDeterministicFallbackSelected?: boolean;
+    /** Alias of Selected — final candidate used the client deterministic path. */
+    clientDeterministicFallbackUsedForFinalCandidate?: boolean;
     clientDeterministicFallbackUncoveredFactIds?: string[];
     summaryDurationExpressionCount?: number;
     authoritativeDurationMonths?: number | null;
@@ -5770,6 +5787,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const needsPtWarehouse = isPortugueseBrazilLocale(locale)
+        && sourceRequiresPortugueseWarehouseFactCoverage(sourceForCoverage);
+      const ptWarehouse = needsPtWarehouse
+        ? validatePortugueseWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const ptPredicates = needsPtWarehouse
+        ? scanPortugueseWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (ptPredicates) {
+        sourcePredicateIdentityCount = ptPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = ptPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = ptPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...ptPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = ptPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsEnWarehouse = locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
@@ -5986,6 +6029,29 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (needsPtWarehouse && ptWarehouse && (
+        !ptWarehouse.ok
+        || (ptPredicates && (
+          ptPredicates.sourceUnitPredicateCoveragePassed === false
+          || ptPredicates.candidateAddedPredicateCount > 0
+        ))
+      )) {
+        lastRejectStage = `${stage}:portuguese_warehouse_facts`;
+        lastRejectReason = !ptWarehouse.ok
+          ? (ptWarehouse.reason || 'portuguese_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
+        lastRequired = ptWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = ptWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = ptWarehouse.uncovered.map(
+          (id) => portugueseWarehouseFactDiagId(id),
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
       if (needsEnWarehouse && enWarehouse && (
         !enWarehouse.ok
         || (enPredicates && (
@@ -6038,6 +6104,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       } else if (needsItWarehouse && itWarehouse?.ok) {
         lastRequired = itWarehouse.required.length;
         lastCovered = itWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsPtWarehouse && ptWarehouse?.ok) {
+        lastRequired = ptWarehouse.required.length;
+        lastCovered = ptWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (needsEnWarehouse && enWarehouse?.ok) {
         lastRequired = enWarehouse.required.length;
@@ -6596,9 +6666,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresFrenchWarehouseFactCoverage(sourceForCoverage || '');
           const isItWarehouse = locale === 'it'
             && sourceRequiresItalianWarehouseFactCoverage(sourceForCoverage || '');
-          // EN/DE/ES/FR/IT warehouse selected-final snapshots independently recompute
+          const isPtWarehouse = isPortugueseBrazilLocale(locale)
+            && sourceRequiresPortugueseWarehouseFactCoverage(sourceForCoverage || '');
+          // EN/DE/ES/FR/IT/PT warehouse selected-final snapshots independently recompute
           // predicate truth. Other locales must not invent false predicate coverage.
-          if (!isEnWarehouse && !isDeWarehouse && !isEsWarehouse && !isFrWarehouse && !isItWarehouse) {
+          if (
+            !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
+            && !isFrWarehouse && !isItWarehouse && !isPtWarehouse
+          ) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
             delete diag.finalCandidatePredicateValidationApplicable;
             if (!selectedFinal.candidatePredicateIdentityCount) {
@@ -6620,7 +6695,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed,
         perspectiveValidationPassed: generationValidationMeta.perspectiveValidationPassed,
         tenseValidationPassed: generationValidationMeta.tenseValidationPassed,
-        clientDeterministicFallbackApplied: isClientFallback,
+        clientDeterministicFallbackSelected: isClientFallback,
+        clientDeterministicFallbackUsedForFinalCandidate: isClientFallback,
+        // Cross-locale translation fallback: Applied only after committed write.
+        // Other deterministic paths keep Applied=true at selection for compatibility.
+        clientDeterministicFallbackApplied: isClientFallback && !crossLocaleAccept,
         clientDeterministicFallbackBulletCount: isClientFallback
           ? bulletCount
           : clientDeterministicFallbackBulletCount,
@@ -8780,6 +8859,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       if (!translated.trim()
+        && isPortugueseBrazilLocale(locale)
+        && sourceRequiresPortugueseWarehouseFactCoverage(sourceForCoverage)) {
+        void PORTUGUESE_EXPERIENCE_GROUNDING_335_REVISION;
+        translated = normalizeLocaleText(
+          buildPortugueseWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
         && locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
         void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
@@ -8845,6 +8936,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastRequired = clientDeterministicFallbackRequiredFactCount;
         lastCovered = clientDeterministicFallbackCoveredFactCount;
       }
+      if (
+        isPortugueseBrazilLocale(locale)
+        && sourceRequiresPortugueseWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        const ptFb = validatePortugueseWarehouseExperienceCoverage(sourceForCoverage, translated);
+        clientDeterministicFallbackRequiredFactCount = ptFb.required.length || Math.max(3, sourceFactCount);
+        clientDeterministicFallbackCoveredFactCount = ptFb.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = ptFb.uncovered.map(
+          (id) => portugueseWarehouseFactDiagId(id),
+        );
+        lastRequired = clientDeterministicFallbackRequiredFactCount;
+        lastCovered = clientDeterministicFallbackCoveredFactCount;
+      }
       if (translatedOk) {
         const accepted = tryAccept(
           translated,
@@ -8875,8 +8979,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               detectedSourceLocale:
                 detectedSourceLocale === 'unknown' ? storedSourceLocale : detectedSourceLocale,
               storedSourceLocale,
-              requestedTargetLocale: locale,
-              uiLocale: locale,
+              requestedTargetLocale: canonicalizeContentLocale(locale) as typeof locale,
+              uiLocale: canonicalizeContentLocale(locale) as typeof locale,
               crossLocaleOperation: true,
               translationFallbackAttempted: true,
               translationFallbackSelected: true,
@@ -8890,7 +8994,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               contentLocaleUpdatedAfterApply: false,
               fallbackCoverageCount: countTranslatedFactUnits(sourceForCoverage, translated),
               clientDeterministicFallbackAttempted: true,
-              clientDeterministicFallbackApplied: true,
+              clientDeterministicFallbackSelected: true,
+              clientDeterministicFallbackUsedForFinalCandidate: true,
+              // Applied only after committed visible write.
+              clientDeterministicFallbackApplied: false,
               clientDeterministicFallbackBulletCount:
                 splitExperienceBullets(translated).filter(Boolean).length,
             },

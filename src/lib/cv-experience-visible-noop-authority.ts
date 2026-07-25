@@ -37,12 +37,17 @@ import {
   scanItalianWarehousePredicates,
 } from './cv-italian-experience-grounding';
 import {
+  sourceRequiresPortugueseWarehouseFactCoverage,
+  validatePortugueseWarehouseExperienceCoverage,
+  scanPortugueseWarehousePredicates,
+} from './cv-portuguese-experience-grounding';
+import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
 } from './cv-english-experience-warehouse-grounding';
 import { validateCrossLocaleSemanticCoverage } from './cv-cross-locale-experience';
-import { detectTextLocale } from './cv-content-locale';
+import { detectTextLocale, isPortugueseBrazilLocale } from './cv-content-locale';
 import {
   analyzeSpanishExperienceTenseAlignment,
   countIncompleteSpanishUnits,
@@ -390,14 +395,19 @@ export function evaluateExperienceVisibleComparison(options: {
         if (/(?:prüft|kontrolliert|koordiniert|waren|unterlagen|kolleg)/iu.test(v)) {
           return validateGermanWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
-        if (/(?:revis[ao]|comprob|coordin|mercanc[ií]a|documentaci|compa[nñ]er)/iu.test(v)) {
-          return validateSpanishWarehouseExperienceCoverage(auth, v).uncovered.length;
+        // Italian / Portuguese before Spanish: `documentaci` is a prefix of
+        // Italian `documentazione` and must not steal IT/PT visible scoring.
+        if (/(?:controlla|documentazione|magazzino|colleghi|movimentazione|merci\s+in\s+entrata)/iu.test(v)) {
+          return validateItalianWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
+        if (/(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|colegas|movimenta[cç][aã]o|confere)/iu.test(v)) {
+          return validatePortugueseWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
         if (/(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(v)) {
           return validateFrenchWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
-        if (/(?:controlla|documentazione|magazzino|colleghi|movimentazione|merci\s+in\s+entrata)/iu.test(v)) {
-          return validateItalianWarehouseExperienceCoverage(auth, v).uncovered.length;
+        if (/(?:revis[ao]|comprob|coordin|mercanc[ií]a|documentaci[oó]n|compa[nñ]er)/iu.test(v)) {
+          return validateSpanishWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
         if (sourceRequiresStrictEnglishWarehouseFactCoverage(auth)) {
           return validateEnglishWarehouseExperienceCoverage(auth, v).uncovered.length;
@@ -458,6 +468,22 @@ export function evaluateExperienceVisibleComparison(options: {
       ) {
         const cov = validateItalianWarehouseExperienceCoverage(auth, candidate);
         const pred = scanItalianWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
+        isPortugueseBrazilLocale(target)
+        && sourceRequiresPortugueseWarehouseFactCoverage(auth)
+      ) {
+        const cov = validatePortugueseWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanPortugueseWarehousePredicates(auth, candidate);
         if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
           degradationKinds.push('fact_lost');
         } else if (pred.candidateAddedPredicateCount > 0) {

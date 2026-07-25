@@ -32,6 +32,10 @@ import {
   validateItalianWarehouseExperienceCoverage,
 } from './cv-italian-experience-grounding';
 import {
+  sourceRequiresPortugueseWarehouseFactCoverage,
+  validatePortugueseWarehouseExperienceCoverage,
+} from './cv-portuguese-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -295,7 +299,11 @@ function localizedShellBullet(
   const past = !isPresent;
   // Never emit English under a non-English target. Warehouse locale tables below
   // are warehouse-only; design/docs/work must not inherit goods/incoming wording.
-  if (locale === 'en') {
+  // Canonicalize pt / pt-br / pt_BR aliases onto the `pt-BR` shell table.
+  const shellLocale: Locale = (String(locale || '').toLowerCase().replace(/_/g, '-').startsWith('pt')
+    ? 'pt-BR'
+    : locale);
+  if (shellLocale === 'en') {
     return englishBullet(frame, domain, isPresent);
   }
   if (domain !== 'warehouse') {
@@ -483,13 +491,13 @@ function localizedShellBullet(
         ],
       },
     };
-    if (domain === 'design' && designTable[locale]?.[frame]) {
-      const row = designTable[locale]![frame]!;
+    if (domain === 'design' && designTable[shellLocale]?.[frame]) {
+      const row = designTable[shellLocale]![frame]!;
       return past ? row[1] : row[0];
     }
-    if (domain !== 'design' && designTable[locale]) {
+    if (domain !== 'design' && designTable[shellLocale]) {
       // Documentation / generic work: avoid goods wording; use soft generic shells.
-      const loc = designTable[locale]!;
+      const loc = designTable[shellLocale]!;
       const generic = loc.generic_duty;
       const map: Record<ActionFrame, [string, string]> = {
         check_records: loc.check_records,
@@ -691,7 +699,7 @@ function localizedShellBullet(
       ],
     },
   };
-  const row = table[locale]?.[frame];
+  const row = table[shellLocale]?.[frame];
   if (!row) return null;
   return past ? row[1] : row[0];
 }
@@ -954,6 +962,18 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (itCovered > 0) return itCovered;
+  }
+  // AAB-335 — Brazilian Portuguese warehouse result (incl. IT-visible→pt-BR).
+  if (
+    sourceRequiresPortugueseWarehouseFactCoverage(sourceDescription || '')
+    && /(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|colegas|movimenta[cç][aã]o|confere)/iu
+      .test(result || '')
+  ) {
+    const ptCovered = validatePortugueseWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (ptCovered > 0) return ptCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.

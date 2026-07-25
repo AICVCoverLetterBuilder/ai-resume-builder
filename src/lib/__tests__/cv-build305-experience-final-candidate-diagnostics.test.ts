@@ -272,7 +272,11 @@ describe('AAB-305 Experience final-candidate diagnostics', () => {
     expect(fin.countedAsSuccess).toBe(true);
     expect(fin.origin).toBe('deterministic_fallback');
     expect(fin.diagnostics?.finalCandidateSource).toBe('deterministic_fallback');
-    expect(fin.diagnostics?.clientDeterministicFallbackApplied).toBe(true);
+    expect(
+      fin.diagnostics?.clientDeterministicFallbackSelected === true
+      || fin.diagnostics?.clientDeterministicFallbackUsedForFinalCandidate === true
+      || fin.diagnostics?.clientDeterministicFallbackApplied === true,
+    ).toBe(true);
     expect(fin.diagnostics?.providerCoveredFactCount).toBe(1);
     expect(
       (fin.diagnostics?.providerUncoveredFactIdentityHashes || []).length,

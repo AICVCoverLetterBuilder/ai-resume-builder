@@ -139,7 +139,15 @@ const IT_EXCLUSIVE_CLAUSE_RE =
   /(?<![\p{L}\p{N}_])(?:il|lo|gli|nel|delle|dei|controlla|controllato|verifica|verificato|documentazione|magazzino|colleghi|movimentazione|merci)(?![\p{L}\p{N}_])/iu;
 const IT_CLAUSE_RE = /\b(?:il|lo|la|gli|con|per|durante|anche|nonché|nel|delle)\b/iu;
 const IT_ACCENT_RE = /[àèéìòù]/iu;
-const PT_CLAUSE_RE = /\b(?:o|os|as|uma|com|para|durante|também|através)\b/iu;
+/**
+ * Brazilian Portuguese exclusive warehouse / CV cues. Prefer over:
+ * - Italian bare `verifica` (shared Romance cognate)
+ * - German article `das` colliding with Portuguese contraction `das`
+ */
+const PT_EXCLUSIVE_CLAUSE_RE =
+  /(?<![\p{L}\p{N}_])(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|recebidas|colegas|prepara[cç][aã]o|movimenta[cç][aã]o|confere|conferiu|chegam|atualiza|às|aos)(?![\p{L}\p{N}_])/iu;
+const PT_CLAUSE_RE = /\b(?:o|os|as|uma|com|para|durante|também|através|às|aos)\b/iu;
+const PT_ACCENT_RE = /[áàâãéêíóôõúç]/iu;
 
 /** Unicode-aware whole-token match — short cues must not hit inside longer words. */
 export function tokenHasExactCue(text: string, cue: string): boolean {
@@ -175,6 +183,15 @@ function italianEvidenceScore(text: string): number {
   return score;
 }
 
+function portugueseEvidenceScore(text: string): number {
+  const t = text || '';
+  let score = 0;
+  if (PT_EXCLUSIVE_CLAUSE_RE.test(t)) score += 3;
+  if (PT_ACCENT_RE.test(t)) score += 1;
+  if (PT_CLAUSE_RE.test(t)) score += 1;
+  return score;
+}
+
 function looksConfidentSpanish(text: string): boolean {
   const t = text || '';
   if (ES_EXCLUSIVE_MARK_RE.test(t) && (ES_EXCLUSIVE_CLAUSE_RE.test(t) || ES_SHARED_ARTICLE_RE.test(t))) {
@@ -196,13 +213,17 @@ function looksConfidentFrench(text: string): boolean {
 
 function looksConfidentItalian(text: string): boolean {
   const t = text || '';
-  if (IT_EXCLUSIVE_CLAUSE_RE.test(t)) return true;
-  if (
-    IT_CLAUSE_RE.test(t)
-    && IT_ACCENT_RE.test(t)
-    && !ES_EXCLUSIVE_CLAUSE_RE.test(t)
-    && !FR_EXCLUSIVE_CLAUSE_RE.test(t)
-  ) {
+  if (IT_EXCLUSIVE_CLAUSE_RE.test(t) && !PT_EXCLUSIVE_CLAUSE_RE.test(t)) return true;
+  if (IT_CLAUSE_RE.test(t) && IT_ACCENT_RE.test(t) && !PT_EXCLUSIVE_CLAUSE_RE.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+function looksConfidentPortuguese(text: string): boolean {
+  const t = text || '';
+  if (PT_EXCLUSIVE_CLAUSE_RE.test(t)) return true;
+  if (PT_CLAUSE_RE.test(t) && PT_ACCENT_RE.test(t) && !IT_EXCLUSIVE_CLAUSE_RE.test(t)) {
     return true;
   }
   return false;
@@ -400,26 +421,38 @@ export function guessUnitLocale(text: string, targetLocale?: Locale): string | n
     if (hrEvidence.croatianExclusiveCueCount > 0) return 'hr';
     return 'sr';
   }
-  if (DE_CLAUSE_RE.test(t) && !EN_CLAUSE_RE.test(t)) return 'de';
+  if (DE_CLAUSE_RE.test(t) && !EN_CLAUSE_RE.test(t) && !looksConfidentPortuguese(t) && !PT_EXCLUSIVE_CLAUSE_RE.test(t)) {
+    return 'de';
+  }
   // AAB-333 — classify French before Spanish. Shared `la` + French `é` must not
   // return `es` (false positive on "…avec ses collègues la préparation…").
   // AAB-334 — Italian exclusive warehouse cues before ambiguous Romance.
+  // AAB-335 — Brazilian Portuguese warehouse cues before Italian `verifica` and
+  // German `das` collisions.
   const frScore = frenchEvidenceScore(t);
   const esScore = spanishEvidenceScore(t);
   const itScore = italianEvidenceScore(t);
-  if (looksConfidentItalian(t) && (targetLocale === 'it' || itScore >= frScore && itScore >= esScore)) {
+  const ptScore = portugueseEvidenceScore(t);
+  if (looksConfidentPortuguese(t) && (targetLocale === 'pt-BR' || ptScore >= itScore && ptScore >= frScore && ptScore >= esScore)) {
+    return 'pt-BR';
+  }
+  if (looksConfidentItalian(t) && (targetLocale === 'it' || itScore >= frScore && itScore >= esScore && itScore > ptScore)) {
     return 'it';
   }
   if (looksConfidentFrench(t) && (targetLocale === 'fr' || frScore >= esScore)) {
     return 'fr';
   }
-  if (looksConfidentSpanish(t) && esScore > frScore && esScore > itScore) {
+  if (looksConfidentSpanish(t) && esScore > frScore && esScore > itScore && esScore > ptScore) {
     return 'es';
   }
+  if (looksConfidentPortuguese(t)) return 'pt-BR';
   if (looksConfidentItalian(t)) return 'it';
   if (looksConfidentFrench(t)) return 'fr';
   if (looksConfidentSpanish(t)) return 'es';
   // Ambiguous shared-article Latin: prefer target when it matches, else unknown.
+  if (targetLocale === 'pt-BR' && (PT_CLAUSE_RE.test(t) || PT_ACCENT_RE.test(t) || PT_EXCLUSIVE_CLAUSE_RE.test(t))) {
+    return 'pt-BR';
+  }
   if (targetLocale === 'it' && (IT_CLAUSE_RE.test(t) || IT_ACCENT_RE.test(t) || IT_EXCLUSIVE_CLAUSE_RE.test(t))) {
     return 'it';
   }
@@ -427,8 +460,8 @@ export function guessUnitLocale(text: string, targetLocale?: Locale): string | n
   if (targetLocale === 'es' && (ES_CLAUSE_RE.test(t) || ES_EXCLUSIVE_MARK_RE.test(t) || /[áéíóú]/iu.test(t))) {
     return 'es';
   }
-  if (IT_CLAUSE_RE.test(t) && /[àèéìòù]/iu.test(t)) return 'it';
-  if (PT_CLAUSE_RE.test(t) && /[áàâãéêíóôõúç]/iu.test(t)) return 'pt-BR';
+  if (IT_CLAUSE_RE.test(t) && /[àèéìòù]/iu.test(t) && !PT_EXCLUSIVE_CLAUSE_RE.test(t)) return 'it';
+  if (PT_CLAUSE_RE.test(t) && PT_ACCENT_RE.test(t)) return 'pt-BR';
   if (EN_CLAUSE_RE.test(t)) return 'en';
   // Soft SR: several exact function words without English clause cues.
   if (SR_CLAUSE_RE.test(t) && !EN_CLAUSE_RE.test(t) && !DE_CLAUSE_RE.test(t)) return 'sr';

@@ -571,6 +571,9 @@ export type ExperienceAiDiagnosticTrace = {
   clientDeterministicFallbackRequiredFactCount: number;
   clientDeterministicFallbackCoveredFactCount: number;
   clientDeterministicFallbackApplied: boolean;
+  /** Selected as final candidate — not yet a committed write. */
+  clientDeterministicFallbackSelected: boolean;
+  clientDeterministicFallbackUsedForFinalCandidate: boolean;
   clientDeterministicFallbackUncoveredFactIds: string[];
   operationMode: 'generate_from_job_context' | 'enhance_existing_description' | null;
   sourceWasEmpty: boolean;
@@ -1205,6 +1208,8 @@ export class ExperienceAiDiagnosticSession {
       clientDeterministicFallbackRequiredFactCount: 0,
       clientDeterministicFallbackCoveredFactCount: 0,
       clientDeterministicFallbackApplied: false,
+      clientDeterministicFallbackSelected: false,
+      clientDeterministicFallbackUsedForFinalCandidate: false,
       clientDeterministicFallbackUncoveredFactIds: [],
       operationMode: null,
       sourceWasEmpty: false,
@@ -1642,13 +1647,17 @@ export class ExperienceAiDiagnosticSession {
     }
     const text = (finalized.text || '').trim();
     const bullets = splitExperienceBullets(text).filter(Boolean);
-    const clientFallbackApplied = Boolean(
-      diag.clientDeterministicFallbackApplied
-      || (finalized.origin === 'deterministic_fallback' && finalized.countedAsSuccess),
+    const clientFallbackSelected = Boolean(
+      diag.clientDeterministicFallbackSelected
+      || (diag as Record<string, unknown>).clientDeterministicFallbackUsedForFinalCandidate
+      || diag.clientDeterministicFallbackApplied
+      || (finalized.origin === 'deterministic_fallback' && Boolean(text)),
     );
+    // Backward-compatible alias used for coverage lineage below.
+    const clientFallbackApplied = clientFallbackSelected;
     const clientFallbackAttempted = Boolean(
       diag.clientDeterministicFallbackAttempted
-      || clientFallbackApplied
+      || clientFallbackSelected
       || diag.fallbackApplied,
     );
     // Clean no-op already returned — do not treat !countedAsSuccess as blocked failure.
@@ -1787,7 +1796,10 @@ export class ExperienceAiDiagnosticSession {
       clientDeterministicFallbackScripts: clientScripts,
       clientDeterministicFallbackRequiredFactCount: clientRequired,
       clientDeterministicFallbackCoveredFactCount: clientCovered,
-      clientDeterministicFallbackApplied: clientFallbackApplied,
+      clientDeterministicFallbackSelected: clientFallbackSelected,
+      clientDeterministicFallbackUsedForFinalCandidate: clientFallbackSelected,
+      // Honor explicit Applied from finalize; cross-locale leaves it false until commit.
+      clientDeterministicFallbackApplied: diag.clientDeterministicFallbackApplied === true,
       clientDeterministicFallbackUncoveredFactIds: clientUncovered,
       operationMode: (diag.operationMode as ExperienceAiDiagnosticTrace['operationMode']) || null,
       sourceWasEmpty: Boolean(diag.sourceWasEmpty),
@@ -2478,13 +2490,17 @@ export class ExperienceAiDiagnosticSession {
       translationFallbackSelected: Boolean(
         (diag as Record<string, unknown>).translationFallbackSelected
         || (
-          (diag.clientDeterministicFallbackApplied || diag.finalCandidateSource === 'deterministic_fallback')
+          (
+            diag.clientDeterministicFallbackSelected
+            || (diag as Record<string, unknown>).clientDeterministicFallbackUsedForFinalCandidate
+            || diag.clientDeterministicFallbackApplied
+            || diag.finalCandidateSource === 'deterministic_fallback'
+          )
           && (diag.crossLocaleOperation || diag.translationFallbackAttempted)
         ),
       ),
       translationFallbackApplied: Boolean(
         diag.translationFallbackApplied
-        || (clientFallbackApplied && diag.clientDeterministicFallbackReason === 'cross_locale_translation_fallback'),
       ),
       translatedFactCount: diag.translatedFactCount ?? null,
       authoritativeFactSourceLocale:
@@ -3252,9 +3268,18 @@ export class ExperienceAiDiagnosticSession {
             this.draft.translationFallbackSelected
             || this.draft.translationFallbackAttempted
             || (
-              this.draft.clientDeterministicFallbackApplied
+              (
+                this.draft.clientDeterministicFallbackSelected
+                || this.draft.clientDeterministicFallbackUsedForFinalCandidate
+                || this.draft.clientDeterministicFallbackApplied
+              )
               && this.draft.crossLocaleOperation
             )
+          ),
+          clientDeterministicFallbackApplied: Boolean(
+            this.draft.clientDeterministicFallbackSelected
+            || this.draft.clientDeterministicFallbackUsedForFinalCandidate
+            || this.draft.finalCandidateSource === 'deterministic_fallback'
           ),
           // Post-commit applied locale = re-read patch or requested target.
           // Never retain pre-apply entryGeneratedLocaleBeforeApply / German snapshot.
