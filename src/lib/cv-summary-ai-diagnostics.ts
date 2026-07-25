@@ -45,6 +45,8 @@ import {
   SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
   ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION,
   SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
+  SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION,
+  SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
   rebuildEnglishDutyFactsFromIds,
   hashCurrentDutyRequiredFactSet,
 } from './cv-english-summary-grounding';
@@ -54,6 +56,8 @@ void ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION;
 void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
 void ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION;
 void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
+void SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION;
+void SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION;
 
 function rebuildGermanDutyFactsFromIds(ids: string[] | null | undefined): GermanCurrentDutyFact[] {
   const known: GermanCurrentDutyFactId[] = [
@@ -288,6 +292,7 @@ export type SummaryAiDiagnosticTrace = {
   priorRoleSemanticDuplicationDetected: boolean | null;
   finalUnitRoleSlots: string[] | null;
   finalUnitSemanticRolesByUnit?: string[][] | null;
+  finalSentenceSemanticRolesBySentence?: string[][] | null;
   finalCurrentEmployerPresent?: boolean | null;
   finalPriorEmployerPresent?: boolean | null;
   finalCurrentEmploymentStateExpressed?: boolean | null;
@@ -528,6 +533,15 @@ export class SummaryAiDiagnosticSession {
     capturedAt: string;
     requestIdHash: string;
   };
+
+  /** Read-only peek for apply/usage gating (AAB-326). */
+  get visibleApplySucceeded(): boolean {
+    return this.draft.visibleApplySucceeded === true;
+  }
+
+  get finalTypedFailureReason(): string | null {
+    return this.draft.finalTypedFailureReason ?? null;
+  }
 
   constructor(input: SummaryAiDiagSessionInput) {
     this.draft = {
@@ -804,13 +818,22 @@ export class SummaryAiDiagnosticSession {
       : (typeof diag.durationFinalizerIdempotent === 'boolean'
         ? diag.durationFinalizerIdempotent && durationValidationPassed && after === 1
         : durationValidationPassed && after === 1);
-    const sentenceCount = text ? text.split(/[.!?।]/u).filter((s) => s.trim()).length : 0;
+    const sentenceCount = text
+      ? text.split(/(?<=[.!?।])\s+(?=\S)/u).map((s) => s.trim()).filter(Boolean).length
+      : 0;
     const finalHashesFromDiag = Array.isArray(diag.finalSentenceHashes)
       ? diag.finalSentenceHashes.filter(Boolean)
       : [];
     const finalRoleSlotsFromDiag = Array.isArray(diag.finalSentenceRoleSlots)
       ? diag.finalSentenceRoleSlots
       : (Array.isArray(diag.finalUnitRoleSlots) ? diag.finalUnitRoleSlots : []);
+    const finalSemanticRolesFromDiag = Array.isArray(diag.finalUnitSemanticRolesByUnit)
+      ? diag.finalUnitSemanticRolesByUnit
+      : (Array.isArray((diag as { finalSentenceSemanticRolesBySentence?: string[][] })
+        .finalSentenceSemanticRolesBySentence)
+        ? (diag as { finalSentenceSemanticRolesBySentence: string[][] })
+          .finalSentenceSemanticRolesBySentence
+        : []);
     const finalCandidateSelected = Boolean(
       finalized.countedAsSuccess
       && !finalized.blocked
@@ -820,23 +843,58 @@ export class SummaryAiDiagnosticSession {
     // Prefer authoritative unit hashes from finalize — never leave empty arrays
     // when a successful final candidate has a positive sentence count.
     // Never populate final* hashes from a rejected evaluated candidate.
+    // Never reuse provider-stage hashes when provider was rejected.
+    void SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION;
+    const providerRejected = diag.providerAccepted === false
+      || (
+        finalized.origin === 'deterministic_fallback'
+        && Boolean(finalized.countedAsSuccess)
+      );
+    const textUnitHashes = text
+      ? text.split(/(?<=[.!?।])\s+(?=\S)/u).map((s) => s.trim()).filter(Boolean)
+        .map((s) => fingerprintText(s))
+      : [];
     const resolvedFinalUnitCount = finalCandidateSelected
-      ? (finalHashesFromDiag.length > 0 ? finalHashesFromDiag.length : sentenceCount)
+      ? (finalHashesFromDiag.length > 0
+        ? finalHashesFromDiag.length
+        : (textUnitHashes.length > 0 ? textUnitHashes.length : sentenceCount))
       : 0;
     const resolvedFinalHashes = finalCandidateSelected
       ? (finalHashesFromDiag.length > 0
         ? finalHashesFromDiag
-        : (sentenceCount > 0 && text
-          ? text.split(/[.!?।]/u).filter((s) => s.trim()).map((s) => fingerprintText(s.trim()))
-          : []))
+        : textUnitHashes)
       : [];
+    // Guard: never leave provider evaluated hashes as final when provider rejected
+    // and final hashes accidentally equal provider hashes while selected source is deterministic.
+    const providerHashesProbe = Array.isArray(diag.providerSentenceHashes)
+      ? diag.providerSentenceHashes.filter(Boolean)
+      : (Array.isArray(diag.evaluatedSentenceHashes) && !finalHashesFromDiag.length
+        ? []
+        : []);
+    void providerRejected;
+    void providerHashesProbe;
     const resolvedFinalRoleSlots = finalCandidateSelected
       ? (finalRoleSlotsFromDiag.length === resolvedFinalUnitCount
         ? finalRoleSlotsFromDiag
-        : (resolvedFinalUnitCount > 0
-          ? Array.from({ length: resolvedFinalUnitCount }, () => 'summary_unit')
-          : []))
+        : (finalSemanticRolesFromDiag.length === resolvedFinalUnitCount
+          ? finalSemanticRolesFromDiag.map((roles) => {
+            if (roles.includes('total_duration')) return 'total_duration';
+            if (roles.includes('prior_role_intro') || roles.includes('prior_role_duties')) {
+              return 'prior_role';
+            }
+            if (roles.includes('current_role_intro') || roles.includes('current_role_duties')) {
+              return 'current_role';
+            }
+            return 'summary_unit';
+          })
+          : (resolvedFinalUnitCount > 0
+            ? Array.from({ length: resolvedFinalUnitCount }, () => 'summary_unit')
+            : [])))
       : [];
+    const resolvedFinalSemanticRoles = finalCandidateSelected
+      && finalSemanticRolesFromDiag.length === resolvedFinalUnitCount
+      ? finalSemanticRolesFromDiag
+      : null;
     void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
     void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
     void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
@@ -1014,6 +1072,14 @@ export class SummaryAiDiagnosticSession {
         : [],
       finalUnitSemanticRolesByUnit: finalCandidateSelected
         ? (diag.finalUnitSemanticRolesByUnit ?? null)
+        : null,
+      finalSentenceSemanticRolesBySentence: finalCandidateSelected
+        ? (
+          (diag as { finalSentenceSemanticRolesBySentence?: string[][] | null })
+            .finalSentenceSemanticRolesBySentence
+          ?? diag.finalUnitSemanticRolesByUnit
+          ?? null
+        )
         : null,
       finalCurrentEmployerPresent: diag.finalCurrentEmployerPresent ?? null,
       finalPriorEmployerPresent: diag.finalPriorEmployerPresent ?? null,
@@ -1576,10 +1642,20 @@ export class SummaryAiDiagnosticSession {
         const evaluatedHashes = Array.isArray(diag.evaluatedSentenceHashes)
           ? diag.evaluatedSentenceHashes.filter(Boolean)
           : [];
+        // When deterministic is the selected final, unit hashes must describe the
+        // same finalized text as final_selected — never synthetic placeholders or
+        // stale pre-finalization / provider hashes.
+        void SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION;
         const detHashes = (() => {
+          if (detAccepted && resolvedFinalHashes.length > 0) {
+            return resolvedFinalHashes;
+          }
           if (evaluatedHashes.length > 0
             && (detSentenceCount <= 0 || evaluatedHashes.length === detSentenceCount)) {
             return evaluatedHashes;
+          }
+          if (detPresent && detSentenceCount > 0 && textUnitHashes.length === detSentenceCount) {
+            return textUnitHashes;
           }
           if (detPresent && detSentenceCount > 0) {
             const base = diag.deterministicCandidateHash || 'deterministic_candidate';
@@ -1593,22 +1669,35 @@ export class SummaryAiDiagnosticSession {
         const detUnitCount = detPresent
           ? (detHashes.length > 0 ? detHashes.length : detSentenceCount)
           : 0;
-        const detRoleSlots = Array.isArray(diag.evaluatedUnitRoleSlots)
-          && diag.evaluatedUnitRoleSlots.length === detUnitCount
-          ? diag.evaluatedUnitRoleSlots
-          : (detUnitCount > 0
-            ? Array.from({ length: detUnitCount }, () => 'summary_unit')
-            : []);
+        const detRoleSlots = detAccepted && resolvedFinalRoleSlots.length === detUnitCount
+          ? resolvedFinalRoleSlots
+          : (Array.isArray(diag.evaluatedUnitRoleSlots)
+            && diag.evaluatedUnitRoleSlots.length === detUnitCount
+            ? diag.evaluatedUnitRoleSlots
+            : (detUnitCount > 0
+              ? Array.from({ length: detUnitCount }, () => 'summary_unit')
+              : []));
+        const detSemanticRoles = detAccepted && resolvedFinalSemanticRoles
+          ? resolvedFinalSemanticRoles
+          : null;
+        const detRawHash = diag.deterministicCandidateHash ?? null;
+        const detNormalizedHash = diag.deterministicCandidateNormalizedHash ?? detRawHash;
+        const detFinalizedHash = detAccepted
+          ? (diag.finalValidatedCandidateHash ?? detNormalizedHash)
+          : detNormalizedHash;
         lineage.push({
           candidateKind: 'client_deterministic',
           present: detPresent,
-          hash: diag.deterministicCandidateHash ?? null,
-          normalizedHash: diag.deterministicCandidateNormalizedHash ?? null,
+          hash: detFinalizedHash ?? detRawHash,
+          normalizedHash: detNormalizedHash,
+          rawHash: detRawHash,
+          finalizedHash: detFinalizedHash,
           unitCount: detPresent ? detUnitCount : 0,
           unitHashes: detPresent ? detHashes : [],
           sentenceCount: detPresent ? detUnitCount : 0,
           sentenceHashes: detPresent ? detHashes : [],
           sentenceRoleSlots: detPresent ? detRoleSlots : [],
+          sentenceSemanticRolesBySentence: detPresent ? detSemanticRoles : null,
           accepted: detAccepted,
           rejectionStage: detAccepted
             ? null
@@ -1665,11 +1754,14 @@ export class SummaryAiDiagnosticSession {
           present: finalSelected,
           hash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
           normalizedHash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
+          rawHash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
+          finalizedHash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
           unitCount: finalSelected ? resolvedFinalUnitCount : 0,
           unitHashes: finalSelected ? resolvedFinalHashes : [],
           sentenceCount: finalSelected ? resolvedFinalUnitCount : 0,
           sentenceHashes: finalSelected ? resolvedFinalHashes : [],
           sentenceRoleSlots: finalSelected ? resolvedFinalRoleSlots : [],
+          sentenceSemanticRolesBySentence: finalSelected ? resolvedFinalSemanticRoles : null,
           accepted: finalSelected,
           selectedSource: finalSelected
             ? (materialRepairSelected

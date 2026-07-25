@@ -205,11 +205,16 @@ export type CvAiCandidateLineageRecord = {
   present: boolean;
   hash: string | null;
   normalizedHash: string | null;
+  /** Optional stage hashes — raw / normalized / duration-finalized. */
+  rawHash?: string | null;
+  finalizedHash?: string | null;
   unitCount: number;
   unitHashes: string[];
   sentenceCount?: number;
   sentenceHashes?: string[];
   sentenceRoleSlots?: string[];
+  /** Per-sentence semantic roles for the exact units represented by this record. */
+  sentenceSemanticRolesBySentence?: string[][] | null;
   accepted: boolean;
   rejectionStage: string | null;
   rejectionReasons: string[];
@@ -491,6 +496,7 @@ type SummaryLike = {
   visibleDurationOwnerDetected?: string | null;
   competencyInferenceFromRoleForbidden?: boolean | null;
   finalUnitSemanticRolesByUnit?: string[][] | null;
+  finalSentenceSemanticRolesBySentence?: string[][] | null;
   finalCurrentEmployerPresent?: boolean | null;
   finalPriorEmployerPresent?: boolean | null;
   finalCurrentEmploymentStateExpressed?: boolean | null;
@@ -564,8 +570,11 @@ type SummaryLike = {
     candidateKind?: string;
     present?: boolean;
     accepted?: boolean;
+    hash?: string | null;
     unitCount?: number;
     unitHashes?: string[];
+    sentenceHashes?: string[];
+    selectedSource?: string | null;
     rejectionReasons?: string[];
     diagnosticPayloadTruncated?: boolean;
   }> | null;
@@ -1216,6 +1225,111 @@ export function checkSummaryDiagnosticInvariants(
           visibleCurrentDutyRequiredFactParityPassed:
             trace.visibleCurrentDutyRequiredFactParityPassed ?? null,
         });
+      }
+    }
+    // AAB-326 — lineage hash + semantic role truth.
+    void 0; // markers referenced via runtime imports elsewhere
+    const lineage = Array.isArray(trace.candidateLineage)
+      ? (trace.candidateLineage as Array<Record<string, unknown>>)
+      : [];
+    const detRec = lineage.find((c) => c.candidateKind === 'client_deterministic');
+    const finalRec = lineage.find((c) => c.candidateKind === 'final_selected');
+    if (
+      detRec
+      && finalRec
+      && detRec.accepted === true
+      && finalRec.selectedSource === 'client_deterministic'
+      && typeof detRec.hash === 'string'
+      && typeof finalRec.hash === 'string'
+      && detRec.hash === finalRec.hash
+    ) {
+      const detUnits = Array.isArray(detRec.unitHashes) ? detRec.unitHashes.map(String) : [];
+      const finalUnits = Array.isArray(finalRec.unitHashes) ? finalRec.unitHashes.map(String) : [];
+      if (detUnits.join('|') !== finalUnits.join('|')) {
+        push('selected_deterministic_unit_hash_mismatch', {
+          deterministicHash: String(detRec.hash),
+          finalHash: String(finalRec.hash),
+          detUnitHashCount: detUnits.length,
+          finalUnitHashCount: finalUnits.length,
+        });
+      }
+      const detSent = Array.isArray(detRec.sentenceHashes)
+        ? detRec.sentenceHashes.map(String)
+        : [];
+      const finalSent = Array.isArray(finalRec.sentenceHashes)
+        ? finalRec.sentenceHashes.map(String)
+        : [];
+      if (detSent.join('|') !== finalSent.join('|')) {
+        push('selected_deterministic_sentence_hash_mismatch', {
+          deterministicHash: String(detRec.hash),
+          finalHash: String(finalRec.hash),
+        });
+      }
+    }
+    if (
+      finalRec
+      && finalRec.selectedSource === 'client_deterministic'
+      && trace.providerAccepted === false
+    ) {
+      const providerRec = lineage.find((c) => String(c.candidateKind || '').includes('provider'));
+      const providerUnits = Array.isArray(providerRec?.unitHashes)
+        ? (providerRec!.unitHashes as unknown[]).map(String)
+        : [];
+      const finalUnits = Array.isArray(finalRec.unitHashes)
+        ? finalRec.unitHashes.map(String)
+        : [];
+      if (
+        providerUnits.length > 0
+        && finalUnits.length > 0
+        && providerUnits.join('|') === finalUnits.join('|')
+      ) {
+        push('rejected_provider_unit_hashes_in_final_selected', {
+          providerAccepted: false,
+          selectedSource: 'client_deterministic',
+        });
+      }
+    }
+    if (trace.countedAsSuccess) {
+      const semantic = Array.isArray(trace.finalUnitSemanticRolesByUnit)
+        ? (trace.finalUnitSemanticRolesByUnit as string[][])
+        : (Array.isArray(trace.finalSentenceSemanticRolesBySentence)
+          ? (trace.finalSentenceSemanticRolesBySentence as string[][])
+          : []);
+      const slots = Array.isArray(trace.finalUnitRoleSlots)
+        ? (trace.finalUnitRoleSlots as string[])
+        : [];
+      const hasStructured = semantic.some((u) =>
+        u.includes('current_role_intro')
+        || u.includes('prior_role_intro')
+        || u.includes('total_duration'));
+      if (
+        hasStructured
+        && slots.length > 0
+        && slots.every((s) => s === 'summary_unit')
+      ) {
+        push('generic_summary_unit_slots_with_structured_roles', {
+          finalUnitRoleSlots: slots.join(','),
+        });
+      }
+      if (
+        semantic.length >= 3
+        && !(
+          semantic[0]?.includes('current_role_intro')
+          && semantic[1]?.includes('prior_role_intro')
+          && semantic[2]?.includes('total_duration')
+        )
+      ) {
+        // Soft: only when English structured fixture shape is expected.
+        if (
+          Number(trace.requiredCurrentDutyFactCount ?? 0) >= 3
+          && Number(trace.requiredPriorDutyFactCount ?? 0) >= 3
+        ) {
+          push('english_structured_semantic_role_shape_mismatch', {
+            unit0: (semantic[0] || []).join(','),
+            unit1: (semantic[1] || []).join(','),
+            unit2: (semantic[2] || []).join(','),
+          });
+        }
       }
     }
   }

@@ -1220,9 +1220,9 @@ export default function CVBuilderPage() {
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
       // Visible validation must pass before usage increment (AAB-326).
       summaryDiag.recordVisibleApply(true, countBefore, finalizedGate.text);
-      const visibleOk = summaryDiag.draft.visibleApplySucceeded === true;
+      const visibleOk = summaryDiag.visibleApplySucceeded;
       if (!visibleOk) {
-        const failReason = summaryDiag.draft.finalTypedFailureReason
+        const failReason = summaryDiag.finalTypedFailureReason
           || 'visible_current_duty_coverage_failed';
         const failCode = mapExperienceAiFailureToErrorCode(failReason);
         // Roll back Summary text when visible gates fail after write.

@@ -109,6 +109,8 @@ import {
   SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
   ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION,
   SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
+  SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION,
+  SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
   stripEnglishUnsupportedCompetencyUnits,
 } from './cv-summary-grounding';
 import {
@@ -528,6 +530,8 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
   ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION,
   SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
+  SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION,
+  SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -1106,6 +1110,7 @@ export type FinalizeCvAiFieldResult = {
     finalSlotValidationPassed?: boolean;
     finalSlotRejectionReasons?: string[];
     finalUnitSemanticRolesByUnit?: string[][] | null;
+    finalSentenceSemanticRolesBySentence?: string[][] | null;
     employerCrossEntryLeakageDetected?: boolean;
     structuredRoleLocaleValidationPassed?: boolean;
     currentRoleLocalizationValidationPassed?: boolean;
@@ -2447,8 +2452,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
     void ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION;
     void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
-    void ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION;
-    void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
+    void SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION;
+    void SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION;
     candidate = dedupeSummarySentences(candidate);
     if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
       if (candidate.trim() && providerRaw.trim()) {
@@ -3207,6 +3212,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : undefined,
         finalUnitSemanticRolesByUnit: ((locale === 'de' || locale === 'en') && empQ)
           ? ((empQ as { finalUnitSemanticRolesByUnit?: string[][] }).finalUnitSemanticRolesByUnit
+            ?? null)
+          : undefined,
+        finalSentenceSemanticRolesBySentence: ((locale === 'de' || locale === 'en') && empQ)
+          ? ((empQ as { finalSentenceSemanticRolesBySentence?: string[][] })
+            .finalSentenceSemanticRolesBySentence
+            ?? (empQ as { finalUnitSemanticRolesByUnit?: string[][] }).finalUnitSemanticRolesByUnit
             ?? null)
           : undefined,
         employerCrossEntryLeakageDetected: (locale === 'de' && empQ)

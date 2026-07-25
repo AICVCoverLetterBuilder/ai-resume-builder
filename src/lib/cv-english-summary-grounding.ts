@@ -31,6 +31,7 @@ import {
 } from './cv-german-summary-current-duty-coverage';
 import { buildSummaryExplicitSkillAuthority } from './cv-german-summary-competency-grounding';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
+import { fingerprintText } from './cv-export-diagnostics';
 
 export const ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION =
   'english-summary-shared-final-gate-325-v1' as const;
@@ -46,6 +47,12 @@ export const ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION =
 /** AAB-326 — final vs visible required-fact parity. */
 export const SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION =
   'summary-visible-required-fact-parity-326-v1' as const;
+/** AAB-326 — selected deterministic / final lineage unit-hash truth. */
+export const SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION =
+  'summary-selected-lineage-hash-truth-326-v1' as const;
+/** AAB-326 — sentence semantic role serialization truth. */
+export const SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION =
+  'summary-sentence-semantic-role-truth-326-v1' as const;
 
 /**
  * Strict English Summary domain for the Atlas/Rewitu shared final gate.
@@ -388,9 +395,13 @@ export type EnglishSummaryEmploymentQuality = {
   slotValidationPassed: boolean;
   slotRejectionReasons: string[];
   finalUnitSemanticRolesByUnit: string[][];
+  /** Per-sentence semantic roles (same as finalUnitSemanticRolesByUnit). */
+  finalSentenceSemanticRolesBySentence: string[][];
   finalUnitRoleSlots: EnglishSummaryRoleSlot[];
   finalSentenceHashes?: string[];
   finalSentenceRoleSlots?: string[];
+  /** Legacy flat slot presence list — non-decision-critical when unit roles exist. */
+  finalSentenceRoleSlotsLegacyNonDecisionCritical?: boolean;
   currentIntroSlotPresent: boolean;
   currentDutySlotPresent: boolean;
   priorRoleSlotPresent: boolean;
@@ -693,6 +704,25 @@ export function analyzeEnglishSummaryEmploymentQuality(
 
   const ok = reason == null && slotValidationPassed;
 
+  void SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION;
+  void SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION;
+  // Primary role per sentence (unit-aligned) — never a flat multi-role bag that
+  // desynchronizes from unit count and collapses to generic summary_unit.
+  const primarySlots: EnglishSummaryRoleSlot[] = rolesByUnit.map((roles) => {
+    if (roles.includes('total_duration')) return 'total_duration';
+    if (roles.includes('prior_role_intro') || roles.includes('prior_role_duties')) {
+      return 'prior_role';
+    }
+    if (roles.includes('explicit_skills')) return 'explicit_skills';
+    if (roles.includes('current_role_intro') || roles.includes('current_role_duties')) {
+      return 'current_intro';
+    }
+    if (roles.includes('current_duty') || roles.includes('current_role_duties')) {
+      return 'current_duty';
+    }
+    return 'ambiguous';
+  });
+  // Legacy flat presence list retained for older consumers; marked non-decision-critical.
   const legacySlots: EnglishSummaryRoleSlot[] = [];
   if (currentIntro) legacySlots.push('current_intro');
   if (currentDutiesOk && requireCurrentDuties) legacySlots.push('current_duty');
@@ -702,6 +732,9 @@ export function analyzeEnglishSummaryEmploymentQuality(
     legacySlots.push('explicit_skills');
   }
   if (legacySlots.length === 0 && text) legacySlots.push('ambiguous');
+
+  const finalSentenceHashes = units.map((u) => fingerprintText(u));
+  const decisionSlots = primarySlots.length > 0 ? primarySlots : legacySlots;
 
   const foreignRoleCount = structuredRoleLocale.foreignStructuredRoleTitleCount;
   const competencyScan = {
@@ -723,9 +756,11 @@ export function analyzeEnglishSummaryEmploymentQuality(
     slotValidationPassed,
     slotRejectionReasons: [...new Set(slotRejectionReasons)],
     finalUnitSemanticRolesByUnit: rolesByUnit,
-    finalUnitRoleSlots: legacySlots,
-    finalSentenceHashes: [],
-    finalSentenceRoleSlots: legacySlots.map(String),
+    finalSentenceSemanticRolesBySentence: rolesByUnit,
+    finalUnitRoleSlots: decisionSlots,
+    finalSentenceHashes,
+    finalSentenceRoleSlots: decisionSlots.map(String),
+    finalSentenceRoleSlotsLegacyNonDecisionCritical: true,
     currentIntroSlotPresent: currentIntro,
     currentDutySlotPresent: currentDutiesOk && requireCurrentDuties,
     priorRoleSlotPresent: priorIntro && requirePrior,
