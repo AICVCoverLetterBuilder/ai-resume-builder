@@ -170,6 +170,14 @@ import {
   portugueseWarehouseFactDiagId,
 } from './cv-portuguese-experience-grounding';
 import {
+  RUSSIAN_EXPERIENCE_GROUNDING_337_REVISION,
+  sourceRequiresRussianWarehouseFactCoverage,
+  validateRussianWarehouseExperienceCoverage,
+  buildRussianWarehouseExperienceFallback,
+  scanRussianWarehousePredicates,
+  russianWarehouseFactDiagId,
+} from './cv-russian-experience-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -5814,6 +5822,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const needsRuWarehouse = locale === 'ru'
+        && sourceRequiresRussianWarehouseFactCoverage(sourceForCoverage);
+      const ruWarehouse = needsRuWarehouse
+        ? validateRussianWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const ruPredicates = needsRuWarehouse
+        ? scanRussianWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (ruPredicates) {
+        sourcePredicateIdentityCount = ruPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = ruPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = ruPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...ruPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = ruPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsEnWarehouse = locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
@@ -6053,6 +6087,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (needsRuWarehouse && ruWarehouse && (
+        !ruWarehouse.ok
+        || (ruPredicates && (
+          ruPredicates.sourceUnitPredicateCoveragePassed === false
+          || ruPredicates.candidateAddedPredicateCount > 0
+          || ruPredicates.candidatePredicateIdentityCount <= 0
+        ))
+      )) {
+        lastRejectStage = `${stage}:russian_warehouse_facts`;
+        lastRejectReason = !ruWarehouse.ok
+          ? (ruWarehouse.reason || 'russian_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
+        lastRequired = ruWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = ruWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = ruWarehouse.uncovered.map(
+          (id) => russianWarehouseFactDiagId(id),
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
       if (needsEnWarehouse && enWarehouse && (
         !enWarehouse.ok
         || (enPredicates && (
@@ -6109,6 +6167,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       } else if (needsPtWarehouse && ptWarehouse?.ok) {
         lastRequired = ptWarehouse.required.length;
         lastCovered = ptWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsRuWarehouse && ruWarehouse?.ok) {
+        lastRequired = ruWarehouse.required.length;
+        lastCovered = ruWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (needsEnWarehouse && enWarehouse?.ok) {
         lastRequired = enWarehouse.required.length;
@@ -6669,11 +6731,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresItalianWarehouseFactCoverage(sourceForCoverage || '');
           const isPtWarehouse = isPortugueseBrazilLocale(locale)
             && sourceRequiresPortugueseWarehouseFactCoverage(sourceForCoverage || '');
-          // EN/DE/ES/FR/IT/PT warehouse selected-final snapshots independently recompute
+          const isRuWarehouse = locale === 'ru'
+            && sourceRequiresRussianWarehouseFactCoverage(sourceForCoverage || '');
+          // EN/DE/ES/FR/IT/PT/RU warehouse selected-final snapshots independently recompute
           // predicate truth. Other locales must not invent false predicate coverage.
           if (
             !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
-            && !isFrWarehouse && !isItWarehouse && !isPtWarehouse
+            && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
           ) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
             delete diag.finalCandidatePredicateValidationApplicable;
@@ -7475,6 +7539,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     perspectiveMeta.meaningfulChangeDetected = meaningfulVsAuthority
       && !(useVisibleForNoOp && visEval.semanticNoOpDetected)
       && !(useVisibleForNoOp && visEval.degradationDetected);
+    // Cross-locale warehouse locale fix is a meaningful selected-final change even
+    // when raw authority↔candidate text hashing under-reports Cyrillic/Latin deltas.
+    if (
+      visEval.materialImprovementDetected
+      && Array.isArray(visEval.materialImprovementKinds)
+      && visEval.materialImprovementKinds.includes('wrong_locale_fixed')
+      && !visEval.semanticNoOpDetected
+      && !visEval.degradationDetected
+    ) {
+      perspectiveMeta.meaningfulChangeDetected = true;
+    }
     perspectiveMeta.finalMatchesSourceAfterNormalization = !meaningfulVsAuthority
       && !persp.perspectiveNormalizationApplied;
     perspectiveMeta.finalMatchesProviderOutput = finalNormalizedBullets.replace(/\s+/g, ' ').trim()
@@ -8872,6 +8947,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       if (!translated.trim()
+        && locale === 'ru'
+        && sourceRequiresRussianWarehouseFactCoverage(sourceForCoverage)) {
+        void RUSSIAN_EXPERIENCE_GROUNDING_337_REVISION;
+        translated = normalizeLocaleText(
+          buildRussianWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
         && locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
         void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
@@ -8949,6 +9036,27 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
         lastRequired = clientDeterministicFallbackRequiredFactCount;
         lastCovered = clientDeterministicFallbackCoveredFactCount;
+      }
+      if (
+        locale === 'ru'
+        && sourceRequiresRussianWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        const ruFb = validateRussianWarehouseExperienceCoverage(sourceForCoverage, translated);
+        const ruPredFb = scanRussianWarehousePredicates(sourceForCoverage, translated);
+        clientDeterministicFallbackRequiredFactCount = ruFb.required.length || Math.max(3, sourceFactCount);
+        clientDeterministicFallbackCoveredFactCount = ruFb.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = ruFb.uncovered.map(
+          (id) => russianWarehouseFactDiagId(id),
+        );
+        lastRequired = clientDeterministicFallbackRequiredFactCount;
+        lastCovered = clientDeterministicFallbackCoveredFactCount;
+        sourcePredicateIdentityCount = ruPredFb.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = ruPredFb.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = ruPredFb.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...ruPredFb.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = ruPredFb.sourceUnitPredicateCoveragePassed;
       }
       if (translatedOk) {
         const accepted = tryAccept(

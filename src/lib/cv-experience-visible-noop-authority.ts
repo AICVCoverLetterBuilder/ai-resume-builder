@@ -42,6 +42,11 @@ import {
   scanPortugueseWarehousePredicates,
 } from './cv-portuguese-experience-grounding';
 import {
+  sourceRequiresRussianWarehouseFactCoverage,
+  validateRussianWarehouseExperienceCoverage,
+  scanRussianWarehousePredicates,
+} from './cv-russian-experience-grounding';
+import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
@@ -403,6 +408,9 @@ export function evaluateExperienceVisibleComparison(options: {
         if (/(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|colegas|movimenta[cç][aã]o|confere)/iu.test(v)) {
           return validatePortugueseWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
+        if (/(?:проверяет|координирует|поступающ|документац|коллег|склад|товар)/iu.test(v)) {
+          return validateRussianWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
         if (/(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(v)) {
           return validateFrenchWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
@@ -484,6 +492,22 @@ export function evaluateExperienceVisibleComparison(options: {
       ) {
         const cov = validatePortugueseWarehouseExperienceCoverage(auth, candidate);
         const pred = scanPortugueseWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
+        target.startsWith('ru')
+        && sourceRequiresRussianWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateRussianWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanRussianWarehousePredicates(auth, candidate);
         if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
           degradationKinds.push('fact_lost');
         } else if (pred.candidateAddedPredicateCount > 0) {

@@ -36,6 +36,10 @@ import {
   validatePortugueseWarehouseExperienceCoverage,
 } from './cv-portuguese-experience-grounding';
 import {
+  sourceRequiresRussianWarehouseFactCoverage,
+  validateRussianWarehouseExperienceCoverage,
+} from './cv-russian-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -974,6 +978,18 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (ptCovered > 0) return ptCovered;
+  }
+  // AAB-337 — Russian warehouse result (incl. PT-BR-visible→ru).
+  if (
+    sourceRequiresRussianWarehouseFactCoverage(sourceDescription || '')
+    && /(?:проверяет|координирует|поступающ|документац|коллег|склад|товар)/iu
+      .test(result || '')
+  ) {
+    const ruCovered = validateRussianWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (ruCovered > 0) return ruCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.
