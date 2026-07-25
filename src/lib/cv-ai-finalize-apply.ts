@@ -152,6 +152,12 @@ import {
   legacySourceAlreadyValidForTargetMeaning,
 } from './cv-experience-locale-rejection-truth-328';
 import {
+  EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
+  EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION,
+  buildExperienceSelectedFinalCandidateSnapshot,
+  selectedFinalSnapshotToDiagnostics,
+} from './cv-experience-phased-apply-329';
+import {
   EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
   SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
   EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
@@ -1200,6 +1206,16 @@ export type FinalizeCvAiFieldResult = {
     selectedExperienceEntryIdHash?: string | null;
     operationSnapshotExperienceEntryIdHash?: string | null;
     appliedExperienceEntryIdHash?: string | null;
+    attemptedApplyExperienceEntryIdHash?: string | null;
+    attemptedApplyEmploymentState?: string | null;
+    attemptedApplyCandidateHash?: string | null;
+    finalRequiredFactCount?: number | null;
+    finalCoveredFactCount?: number | null;
+    finalUncoveredFactIdentityHashes?: string[] | null;
+    finalRequiredFactSetHash?: string | null;
+    finalFactCoveragePassed?: boolean | null;
+    experienceSelectedFinalCoverageRevision?: string | null;
+    experienceFinalVisiblePredicateTruthRevision?: string | null;
     sourceFactsEntryIdHash?: string | null;
     canonicalFactsEntryIdHash?: string | null;
     fallbackFactsEntryIdHash?: string | null;
@@ -6230,14 +6246,38 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           sourceUnitPredicateCoveragePassed
           ?? providerSourceUnitPredicateCoveragePassed
           ?? undefined,
-        finalSourceUnitPredicateCoveragePassed:
-          sourceUnitPredicateCoveragePassed
-          ?? providerSourceUnitPredicateCoveragePassed
-          ?? undefined,
-        finalCandidatePredicateValidationApplicable:
-          locale === 'en' && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage || '')
-            ? true
-            : undefined,
+        ...((): Record<string, unknown> => {
+          void EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION;
+          void EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION;
+          const selectedFinal = buildExperienceSelectedFinalCandidateSnapshot({
+            candidateText: candidate,
+            sourceDescription: sourceForCoverage || '',
+            candidateKind: isClientFallback ? 'deterministic_fallback' : 'provider',
+            source: isClientFallback ? 'deterministic_fallback' : 'provider',
+            targetLocale: locale,
+            targetEntryIdHash: selectedExperienceEntryIdHash,
+            employmentState: exp?.isPresent ? 'current' : 'completed',
+            unsupportedClaimCount: generationValidationMeta.unsupportedClaimCount || 0,
+            localeValidationPassed: purity.targetLocalePurityPassed,
+            tenseValidationPassed: generationValidationMeta.tenseValidationPassed,
+            perspectiveValidationPassed: generationValidationMeta.perspectiveValidationPassed,
+            meaningfulChangeDetected: true,
+            requiredFactCountFallback: lastRequired || sourceFactCount,
+            coveredFactCountFallback: lastCovered || sourceFactCount,
+            uncoveredFactIdentityHashesFallback: [],
+            sourcePredicateIdentityCountFallback:
+              sourcePredicateIdentityCount || providerSourcePredicateIdentityCount || 0,
+            candidatePredicateIdentityCountFallback:
+              candidatePredicateIdentityCount || providerCandidatePredicateIdentityCount || 0,
+            predicateCoveragePassedFallback:
+              sourceUnitPredicateCoveragePassed
+              ?? providerSourceUnitPredicateCoveragePassed
+              ?? null,
+          });
+          finalCandidatePredicateIdentityCount = selectedFinal.candidatePredicateIdentityCount;
+          return selectedFinalSnapshotToDiagnostics(selectedFinal);
+        })(),
+        finalUnsupportedClaimCount: generationValidationMeta.unsupportedClaimCount || 0,
         englishExperienceThreeFactCoverageRevision:
           ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION,
         relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed,
@@ -6667,7 +6707,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
           ? hashExperienceEntryId(snapshot.experienceEntryId)
           : null,
-        appliedExperienceEntryIdHash: result.countedAsSuccess
+        appliedExperienceEntryIdHash: null,
+        attemptedApplyExperienceEntryIdHash: result.countedAsSuccess
           ? selectedExperienceEntryIdHash
           : null,
         sourceFactsEntryIdHash: selectedExperienceEntryIdHash,
@@ -8377,8 +8418,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               targetLocaleValidationPassed: true,
               sourcePerspectiveMode: perspectiveMeta.sourcePersonMode,
               targetPerspectiveMode: detectExperiencePersonMode(translated, locale),
-              targetContentApplied: true,
-              contentLocaleUpdatedAfterApply: true,
+              // AAB-329: never mark applied before commit.
+              targetContentApplied: false,
+              contentLocaleUpdatedAfterApply: false,
               fallbackCoverageCount: countTranslatedFactUnits(sourceForCoverage, translated),
               clientDeterministicFallbackAttempted: true,
               clientDeterministicFallbackApplied: true,
