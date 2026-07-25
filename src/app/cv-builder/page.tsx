@@ -2023,10 +2023,21 @@ export default function CVBuilderPage() {
       // AAB-329: transactional temporary write → independent visible validation → commit/rollback.
       void EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION;
       void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
+      const previousTargetEntry = (cvRef.current.experience || []).find(
+        (e) => e.id === clickedExperienceEntryId,
+      );
       const previousTargetText = String(
-        (cvRef.current.experience || []).find((e) => e.id === clickedExperienceEntryId)?.description
+        previousTargetEntry?.description
         || exp.description
         || '',
+      );
+      const previousGeneratedLocale = (
+        previousTargetEntry as { generatedLocale?: string } | undefined
+      )?.generatedLocale || null;
+      const previousGeneratedDescription = String(
+        (previousTargetEntry as { generatedDescription?: string } | undefined)
+          ?.generatedDescription
+        || previousTargetText,
       );
       const previousTargetHash = fingerprintText(previousTargetText.replace(/\s+/g, ' ').trim());
       const finalNormalizedHash = String(
@@ -2045,6 +2056,13 @@ export default function CVBuilderPage() {
           || null,
         attemptedApplyEmploymentState: exp.isPresent ? 'current' : 'completed',
         attemptedApplyCandidateHash: finalNormalizedHash,
+        entryGeneratedLocaleBeforeApply:
+          (finalizedBullets.diagnostics?.entryGeneratedLocaleBeforeApply as string | undefined)
+          || previousGeneratedLocale,
+        visibleTextareaLocaleBeforeApply:
+          (finalizedBullets.diagnostics?.visibleTextareaLocaleBeforeApply as string | undefined)
+          || (finalizedBullets.diagnostics?.visibleTextareaLocale as string | undefined)
+          || null,
       });
       diagSession.stage('temporary_visible_write', 'ok');
       let writtenVisibleText = '';
@@ -2141,6 +2159,8 @@ export default function CVBuilderPage() {
           applyCommitted: false,
           targetContentApplied: false,
           contentLocaleUpdatedAfterApply: false,
+          translationFallbackApplied: false,
+          appliedVisibleContentLocale: null,
           appliedExperienceEntryIdHash: null,
           countedAsSuccess: false,
           finalTypedFailureReason: writeSucceeded
@@ -2153,19 +2173,35 @@ export default function CVBuilderPage() {
           ...prev,
           experience: (prev.experience || []).map((e) =>
             e.id === clickedExperienceEntryId
-              ? { ...e, description: previousTargetText }
+              ? {
+                ...e,
+                description: previousTargetText,
+                generatedDescription: previousGeneratedDescription,
+                ...(previousGeneratedLocale
+                  ? { generatedLocale: previousGeneratedLocale }
+                  : { generatedLocale: undefined }),
+              }
               : e,
           ),
         }));
-        const rolled = String(
-          (cvRef.current.experience || []).find((e) => e.id === clickedExperienceEntryId)
-            ?.description || '',
+        const rolledEntry = (cvRef.current.experience || []).find(
+          (e) => e.id === clickedExperienceEntryId,
         );
-        const rollbackOk = fingerprintText(rolled.replace(/\s+/g, ' ').trim()) === previousTargetHash;
+        const rolled = String(rolledEntry?.description || '');
+        const rolledLocale = (
+          rolledEntry as { generatedLocale?: string } | undefined
+        )?.generatedLocale || null;
+        const rollbackOk = fingerprintText(rolled.replace(/\s+/g, ' ').trim()) === previousTargetHash
+          && (
+            !previousGeneratedLocale
+            || rolledLocale === previousGeneratedLocale
+          );
         diagSession.patch({
           rollbackSucceeded: rollbackOk,
           applyCommitted: false,
           targetContentApplied: false,
+          translationFallbackApplied: false,
+          appliedVisibleContentLocale: null,
           appliedExperienceEntryIdHash: null,
           postapplyDiagnosticCompletenessPassed: false,
           diagnosticCompletenessPassed: false,
@@ -2196,10 +2232,20 @@ export default function CVBuilderPage() {
         return;
       }
 
+      // Re-read committed entry — post-apply locale truth from stored state.
+      const committedEntry = (cvRef.current.experience || []).find(
+        (e) => e.id === clickedExperienceEntryId,
+      );
+      const persistedAppliedLocale = String(
+        (committedEntry as { generatedLocale?: string } | undefined)?.generatedLocale
+        || requestedLocale,
+      ).toLowerCase().split('|')[0] || requestedLocale;
       diagSession.patch({
         applyCommitted: true,
         targetContentApplied: true,
         contentLocaleUpdatedAfterApply: true,
+        appliedVisibleContentLocale: persistedAppliedLocale,
+        contentLocaleDocument: cvRef.current.contentLocale || null,
         appliedExperienceEntryIdHash:
           (finalizedBullets.diagnostics?.selectedExperienceEntryIdHash as string | undefined)
           || null,

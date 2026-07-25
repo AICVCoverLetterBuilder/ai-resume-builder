@@ -381,6 +381,45 @@ export function checkExperiencePreapplyDiagnosticInvariants(
     });
   }
 
+  if (
+    trace.applyCommitted === true
+    && trace.targetContentApplied === true
+    && trace.requestedTargetLocale
+    && trace.appliedVisibleContentLocale
+  ) {
+    const applied = String(trace.appliedVisibleContentLocale).toLowerCase().split('|')[0];
+    const requested = String(trace.requestedTargetLocale).toLowerCase().split('|')[0];
+    if (applied && requested && applied !== requested) {
+      push('applied_visible_locale_mismatch_after_commit', {
+        appliedVisibleContentLocale: String(trace.appliedVisibleContentLocale),
+        requestedTargetLocale: String(trace.requestedTargetLocale),
+      });
+    }
+  }
+
+  if (trace.translationFallbackApplied === true && trace.applyCommitted !== true) {
+    push('translation_fallback_applied_without_commit', {
+      translationFallbackApplied: true,
+      applyCommitted: trace.applyCommitted ?? null,
+    });
+  }
+
+  if (
+    trace.contentLocaleUpdatedAfterApply === true
+    && trace.applyCommitted === true
+    && trace.requestedTargetLocale
+    && trace.appliedVisibleContentLocale
+  ) {
+    const applied = String(trace.appliedVisibleContentLocale).toLowerCase().split('|')[0];
+    const requested = String(trace.requestedTargetLocale).toLowerCase().split('|')[0];
+    if (applied && requested && applied !== requested) {
+      push('content_locale_updated_but_applied_locale_not_target', {
+        appliedVisibleContentLocale: String(trace.appliedVisibleContentLocale),
+        requestedTargetLocale: String(trace.requestedTargetLocale),
+      });
+    }
+  }
+
   return { passed: failures.length === 0, failures };
 }
 

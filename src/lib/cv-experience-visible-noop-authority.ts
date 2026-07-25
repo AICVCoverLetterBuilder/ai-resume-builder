@@ -369,6 +369,25 @@ export function evaluateExperienceVisibleComparison(options: {
       // raw same-language material-key equality vs a prior-locale visible AI snapshot.
       const auth = fact || visible;
       const target = (locale || '').toLowerCase();
+      // Visible-lack check must use a validator that understands the *visible*
+      // language (DE visible cannot be scored by Spanish bullet matchers).
+      const visibleUncoveredCount = ((): number => {
+        const v = visible || '';
+        if (!v.trim()) return Math.max(3, 1);
+        if (
+          /(?:prüft|kontrolliert|koordiniert|waren|unterlagen|kolleg)/iu.test(v)
+          || sourceRequiresGermanWarehouseFactCoverage(v)
+        ) {
+          return validateGermanWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
+        if (/(?:revis[ao]|comprob|coordin|mercanc[ií]a|documentaci|compa[nñ]er)/iu.test(v)) {
+          return validateSpanishWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
+        if (sourceRequiresStrictEnglishWarehouseFactCoverage(auth)) {
+          return validateEnglishWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
+        return validateCrossLocaleSemanticCoverage(auth, v).uncoveredCount;
+      })();
       if (
         target.startsWith('de')
         && sourceRequiresGermanWarehouseFactCoverage(auth)
@@ -381,7 +400,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3) {
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -397,7 +416,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3) {
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -413,7 +432,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3) {
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -428,7 +447,10 @@ export function evaluateExperienceVisibleComparison(options: {
           && visibleLocale !== candidateLocale
         ) {
           improvementKinds.push('wrong_locale_fixed');
-          if (semantic.coveredCount >= Math.min(3, semantic.requiredCount)) {
+          if (
+            semantic.coveredCount >= Math.min(3, semantic.requiredCount)
+            && visibleUncoveredCount > 0
+          ) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -438,9 +460,13 @@ export function evaluateExperienceVisibleComparison(options: {
         if (!candKeys.has(k) && visKeys.has(k)) degradationKinds.push('fact_lost');
       }
     }
-    for (const k of factKeys) {
-      if (!visKeys.has(k) && candKeys.has(k)) {
-        improvementKinds.push('missing_fact_restored');
+    // Same-language material-key restoration only — never across locales
+    // (cross-locale warehouse keys do not align on surface tokens).
+    if (!crossLangSurface) {
+      for (const k of factKeys) {
+        if (!visKeys.has(k) && candKeys.has(k)) {
+          improvementKinds.push('missing_fact_restored');
+        }
       }
     }
     if (visScan.count > 0 && candScan.count === 0) {

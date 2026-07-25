@@ -1196,6 +1196,14 @@ export type FinalizeCvAiFieldResult = {
     authoritativeFactSourceLocale?: string | null;
     visibleTextareaLocale?: string | null;
     contentLocaleDocument?: string | null;
+    /** Entry generatedLocale captured before this apply (pre-apply snapshot). */
+    entryGeneratedLocaleBeforeApply?: string | null;
+    /** Request-time visible textarea locale (alias of visibleTextareaLocale). */
+    visibleTextareaLocaleBeforeApply?: string | null;
+    /**
+     * Post-commit only: locale of the text that was written, validated, and
+     * committed on the target Experience entry. Null until apply commits.
+     */
     appliedVisibleContentLocale?: string | null;
     targetLocaleValidationPassed?: boolean | null;
     sourcePerspectiveMode?: string | null | 'cv_third_person' | 'first_person' | 'neutral_cv';
@@ -5193,9 +5201,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     deterministicFallbackAttemptedAfterNoOp,
     deterministicFallbackAppliedAfterNoOp,
     finalCandidateSource,
-    // Locale triad — do not collapse into contentLocale alone.
-    // contentLocale on the CV document may remain the document/UI locale while
-    // entry.generatedLocale tracks the last applied visible content locale.
+    // Locale model (do not collapse):
+    // - authoritativeFactSourceLocale: provenance fact-authority text locale
+    // - visibleTextareaLocale / visibleTextareaLocaleBeforeApply: request-time
+    //   visible textarea locale (pre-apply snapshot)
+    // - entryGeneratedLocaleBeforeApply: entry.generatedLocale before this apply
+    // - requestedTargetLocale: requested output locale for this operation
+    // - appliedVisibleContentLocale: null until transactional commit; then the
+    //   persisted entry generated/applied locale after successful write
+    // - contentLocaleDocument: CVData.contentLocale at request/finalize time
+    //   (document-level field; may differ from UI/session operational locale)
     authoritativeFactSourceLocale: detectTextLocale(sourceForCoverage || '', {
       storedLocale: locale,
     }),
@@ -5205,10 +5220,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || null,
       generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale,
     }),
+    visibleTextareaLocaleBeforeApply: detectTextLocale(visibleComparisonText || '', {
+      storedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
+        || cv.contentLocale
+        || null,
+      generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale,
+    }),
+    entryGeneratedLocaleBeforeApply:
+      (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null,
     requestedTargetLocale: locale,
     contentLocaleDocument: cv.contentLocale || null,
-    appliedVisibleContentLocale:
-      (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null,
+    // Not yet applied — never stamp pre-apply generated locale as post-apply truth.
+    appliedVisibleContentLocale: null,
   });
 
   const tryAcceptGeneration = (

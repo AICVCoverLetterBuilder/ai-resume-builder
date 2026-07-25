@@ -565,6 +565,9 @@ export function decideSpanishExperienceFinalCandidate(options: {
 
   const improvementKinds: ExperienceMaterialImprovementKind[] = [...rawKinds];
   // Cross-locale warehouse translation with full coverage is a real improvement.
+  // Prefer kinds already proven by visible comparison; only add wrong_locale_fixed
+  // when missing. Never invent missing_fact_restored here — that requires the
+  // visible comparison text to have actually lacked an authoritative fact.
   if (
     options.crossLocaleOperation
     && validation.candidateValid
@@ -572,13 +575,6 @@ export function decideSpanishExperienceFinalCandidate(options: {
     && !improvementKinds.includes('wrong_locale_fixed')
   ) {
     improvementKinds.push('wrong_locale_fixed');
-    if (
-      sourceRequiresSpanishWarehouseFactCoverage(fact)
-      && validateSpanishWarehouseExperienceCoverage(fact, candidate).covered.length >= 3
-      && !improvementKinds.includes('missing_fact_restored')
-    ) {
-      improvementKinds.push('missing_fact_restored');
-    }
   }
   // Complete bullets must never claim incomplete_bullet_completed (AAB-314/316).
   // Length growth alone is never evidence of incompleteness.

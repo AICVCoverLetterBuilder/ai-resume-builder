@@ -238,15 +238,21 @@ export type ExperienceAiDiagnosticTrace = {
   storedSourceLocale: string | null;
   requestedTargetLocale: string | null;
   /**
-   * Locale triad for cross-locale Experience ops (do not collapse into contentLocale):
+   * Locale model for cross-locale Experience ops (do not collapse):
    * - authoritativeFactSourceLocale: fact-authority text locale (often original EN)
-   * - visibleTextareaLocale: currently visible/applied textarea locale
-   * - requestedTargetLocale: UI target for this operation
-   * CV document contentLocale may remain a document-level locale and is not the
-   * sole source of truth for applied Experience content locale (see generatedLocale).
+   * - visibleTextareaLocale / visibleTextareaLocaleBeforeApply: request-time
+   *   visible textarea locale (pre-apply snapshot)
+   * - entryGeneratedLocaleBeforeApply: Experience entry.generatedLocale before apply
+   * - requestedTargetLocale: UI/requested output locale for this operation
+   * - appliedVisibleContentLocale: post-commit persisted applied locale only
+   * - contentLocaleDocument: CVData.contentLocale (document-level field)
+   * Session `contentLocale` may be an operational/UI alias and must not be treated
+   * as appliedVisibleContentLocale.
    */
   authoritativeFactSourceLocale?: string | null;
   visibleTextareaLocale?: string | null;
+  visibleTextareaLocaleBeforeApply?: string | null;
+  entryGeneratedLocaleBeforeApply?: string | null;
   contentLocaleDocument?: string | null;
   appliedVisibleContentLocale?: string | null;
   crossLocaleOperation: boolean;
@@ -1013,6 +1019,8 @@ export class ExperienceAiDiagnosticSession {
       translatedFactCount: null,
       authoritativeFactSourceLocale: null,
       visibleTextareaLocale: null,
+      visibleTextareaLocaleBeforeApply: null,
+      entryGeneratedLocaleBeforeApply: null,
       contentLocaleDocument: null,
       appliedVisibleContentLocale: null,
       targetLocaleValidationPassed: null,
@@ -2482,10 +2490,18 @@ export class ExperienceAiDiagnosticSession {
       visibleTextareaLocale:
         ((diag as Record<string, unknown>).visibleTextareaLocale as string | undefined)
         ?? null,
+      visibleTextareaLocaleBeforeApply:
+        ((diag as Record<string, unknown>).visibleTextareaLocaleBeforeApply as string | undefined)
+        ?? ((diag as Record<string, unknown>).visibleTextareaLocale as string | undefined)
+        ?? null,
+      entryGeneratedLocaleBeforeApply:
+        ((diag as Record<string, unknown>).entryGeneratedLocaleBeforeApply as string | undefined)
+        ?? null,
+      // Document-level CVData.contentLocale only — never fall back to entry generated locale.
       contentLocaleDocument:
         ((diag as Record<string, unknown>).contentLocaleDocument as string | undefined)
-        ?? this.draft.contentLocale
         ?? null,
+      // Post-commit only; finalize leaves this null until recordVisibleApply(true).
       appliedVisibleContentLocale:
         ((diag as Record<string, unknown>).appliedVisibleContentLocale as string | undefined)
         ?? null,
@@ -3237,6 +3253,13 @@ export class ExperienceAiDiagnosticSession {
               && this.draft.crossLocaleOperation
             )
           ),
+          // Post-commit applied locale = re-read patch or requested target.
+          // Never retain pre-apply entryGeneratedLocaleBeforeApply / German snapshot.
+          appliedVisibleContentLocale:
+            this.draft.appliedVisibleContentLocale
+            || this.draft.requestedTargetLocale
+            || this.draft.requestedLocale
+            || null,
           appliedExperienceEntryIdHash:
             this.draft.appliedExperienceEntryIdHash
             || this.draft.selectedExperienceEntryIdHash
@@ -3274,6 +3297,9 @@ export class ExperienceAiDiagnosticSession {
           applyCommitted: false,
           targetContentApplied: false,
           contentLocaleUpdatedAfterApply: false,
+          translationFallbackApplied: false,
+          // Rollback / failed visible apply must not claim target locale.
+          appliedVisibleContentLocale: null,
           appliedExperienceEntryIdHash: null,
           appliedEmploymentState: null,
           appliedFinalBulletCount: 0,

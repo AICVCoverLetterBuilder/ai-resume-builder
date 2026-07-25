@@ -163,6 +163,7 @@ describe('AAB-330 German-visible → Spanish Experience cross-locale', () => {
     expect(evalVis.degradationKinds).toEqual([]);
     expect(evalVis.materialImprovementDetected).toBe(true);
     expect(evalVis.materialImprovementKinds).toContain('wrong_locale_fixed');
+    expect(evalVis.materialImprovementKinds).not.toContain('missing_fact_restored');
 
     // Invariant: degradationDetected ⇒ non-empty kinds
     if (evalVis.degradationDetected) {
@@ -305,8 +306,10 @@ describe('AAB-330 German-visible → Spanish Experience cross-locale', () => {
       authoritativeFactSourceLocale: 'en',
       visibleTextareaLocale: 'de',
       requestedTargetLocale: 'es',
-      appliedVisibleContentLocale: 'de',
+      entryGeneratedLocaleBeforeApply: 'de',
       contentLocaleDocument: 'en',
+      // Pre-commit: must not claim applied locale yet.
+      appliedVisibleContentLocale: null,
     });
     session.recordFinalizeResult(fin);
     session.patch({
