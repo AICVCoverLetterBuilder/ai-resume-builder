@@ -28,6 +28,10 @@ import {
   validateFrenchWarehouseExperienceCoverage,
 } from './cv-french-experience-grounding';
 import {
+  sourceRequiresItalianWarehouseFactCoverage,
+  validateItalianWarehouseExperienceCoverage,
+} from './cv-italian-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -938,6 +942,18 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (frCovered > 0) return frCovered;
+  }
+  // AAB-334 — Italian warehouse result (incl. EN→IT / FR-visible→IT): same.
+  if (
+    sourceRequiresItalianWarehouseFactCoverage(sourceDescription || '')
+    && /(?:controlla|verifica|documentazione|magazzino|colleghi|movimentazione|merci\s+in\s+entrata)/iu
+      .test(result || '')
+  ) {
+    const itCovered = validateItalianWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (itCovered > 0) return itCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.

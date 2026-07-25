@@ -131,7 +131,14 @@ const FR_EXCLUSIVE_CLAUSE_RE =
   /(?<![\p{L}\p{N}_])(?:le|les|des|avec|pour|dans|pendant|[eé]galement|ainsi|contr[oô]le|contr[oô]l[eé]|v[eé]rifie|v[eé]rifi[eé]|coordonne|coordonn[eé]|marchandises?|coll[eè]gues?|entrep[oô]t|préparation|déplacement)(?![\p{L}\p{N}_])/iu;
 const FR_CLAUSE_RE = /\b(?:le|la|les|des|une|avec|pour|dans|pendant|également|ainsi)\b/iu;
 const FR_ACCENT_RE = /[àâçéèêëïîôùûüÿœ]/iu;
-const IT_CLAUSE_RE = /\b(?:il|lo|la|gli|con|per|durante|anche|nonché)\b/iu;
+/**
+ * Italian exclusive warehouse / CV cues. Prefer over shared Romance articles
+ * (`la`/`una`) that also appear in French and Spanish.
+ */
+const IT_EXCLUSIVE_CLAUSE_RE =
+  /(?<![\p{L}\p{N}_])(?:il|lo|gli|nel|delle|dei|controlla|controllato|verifica|verificato|documentazione|magazzino|colleghi|movimentazione|merci)(?![\p{L}\p{N}_])/iu;
+const IT_CLAUSE_RE = /\b(?:il|lo|la|gli|con|per|durante|anche|nonché|nel|delle)\b/iu;
+const IT_ACCENT_RE = /[àèéìòù]/iu;
 const PT_CLAUSE_RE = /\b(?:o|os|as|uma|com|para|durante|também|através)\b/iu;
 
 /** Unicode-aware whole-token match — short cues must not hit inside longer words. */
@@ -159,6 +166,15 @@ function frenchEvidenceScore(text: string): number {
   return score;
 }
 
+function italianEvidenceScore(text: string): number {
+  const t = text || '';
+  let score = 0;
+  if (IT_EXCLUSIVE_CLAUSE_RE.test(t)) score += 2;
+  if (IT_ACCENT_RE.test(t)) score += 1;
+  if (IT_CLAUSE_RE.test(t)) score += 1;
+  return score;
+}
+
 function looksConfidentSpanish(text: string): boolean {
   const t = text || '';
   if (ES_EXCLUSIVE_MARK_RE.test(t) && (ES_EXCLUSIVE_CLAUSE_RE.test(t) || ES_SHARED_ARTICLE_RE.test(t))) {
@@ -173,6 +189,20 @@ function looksConfidentFrench(text: string): boolean {
   const t = text || '';
   if (FR_EXCLUSIVE_CLAUSE_RE.test(t)) return true;
   if (FR_CLAUSE_RE.test(t) && FR_ACCENT_RE.test(t) && !ES_EXCLUSIVE_CLAUSE_RE.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+function looksConfidentItalian(text: string): boolean {
+  const t = text || '';
+  if (IT_EXCLUSIVE_CLAUSE_RE.test(t)) return true;
+  if (
+    IT_CLAUSE_RE.test(t)
+    && IT_ACCENT_RE.test(t)
+    && !ES_EXCLUSIVE_CLAUSE_RE.test(t)
+    && !FR_EXCLUSIVE_CLAUSE_RE.test(t)
+  ) {
     return true;
   }
   return false;
@@ -373,17 +403,26 @@ export function guessUnitLocale(text: string, targetLocale?: Locale): string | n
   if (DE_CLAUSE_RE.test(t) && !EN_CLAUSE_RE.test(t)) return 'de';
   // AAB-333 — classify French before Spanish. Shared `la` + French `é` must not
   // return `es` (false positive on "…avec ses collègues la préparation…").
+  // AAB-334 — Italian exclusive warehouse cues before ambiguous Romance.
   const frScore = frenchEvidenceScore(t);
   const esScore = spanishEvidenceScore(t);
+  const itScore = italianEvidenceScore(t);
+  if (looksConfidentItalian(t) && (targetLocale === 'it' || itScore >= frScore && itScore >= esScore)) {
+    return 'it';
+  }
   if (looksConfidentFrench(t) && (targetLocale === 'fr' || frScore >= esScore)) {
     return 'fr';
   }
-  if (looksConfidentSpanish(t) && esScore > frScore) {
+  if (looksConfidentSpanish(t) && esScore > frScore && esScore > itScore) {
     return 'es';
   }
+  if (looksConfidentItalian(t)) return 'it';
   if (looksConfidentFrench(t)) return 'fr';
   if (looksConfidentSpanish(t)) return 'es';
   // Ambiguous shared-article Latin: prefer target when it matches, else unknown.
+  if (targetLocale === 'it' && (IT_CLAUSE_RE.test(t) || IT_ACCENT_RE.test(t) || IT_EXCLUSIVE_CLAUSE_RE.test(t))) {
+    return 'it';
+  }
   if (targetLocale === 'fr' && (FR_CLAUSE_RE.test(t) || FR_ACCENT_RE.test(t))) return 'fr';
   if (targetLocale === 'es' && (ES_CLAUSE_RE.test(t) || ES_EXCLUSIVE_MARK_RE.test(t) || /[áéíóú]/iu.test(t))) {
     return 'es';

@@ -154,6 +154,14 @@ import {
   scanFrenchWarehousePredicates,
 } from './cv-french-experience-grounding';
 import {
+  ITALIAN_EXPERIENCE_GROUNDING_334_REVISION,
+  sourceRequiresItalianWarehouseFactCoverage,
+  validateItalianWarehouseExperienceCoverage,
+  buildItalianWarehouseExperienceFallback,
+  scanItalianWarehousePredicates,
+  italianWarehouseFactDiagId,
+} from './cv-italian-experience-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -1207,6 +1215,14 @@ export type FinalizeCvAiFieldResult = {
     entryGeneratedLocaleBeforeApply?: string | null;
     /** Request-time visible textarea locale (alias of visibleTextareaLocale). */
     visibleTextareaLocaleBeforeApply?: string | null;
+    /**
+     * True when unedited AI provenance + matched hash show a disagreement
+     * between confident text detection and persisted generatedLocale.
+     * Both raw values are preserved; neither silently replaces the other.
+     */
+    visibleLocaleMetadataMismatchRecorded?: boolean | null;
+    detectedVisibleTextLocale?: string | null;
+    persistedGeneratedLocaleForVisibleMismatch?: string | null;
     /**
      * Post-commit only: locale of the text that was written, validated, and
      * committed on the target Experience entry. Null until apply commits.
@@ -5221,20 +5237,36 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     authoritativeFactSourceLocale: detectTextLocale(sourceForCoverage || '', {
       storedLocale: locale,
     }),
-    visibleTextareaLocale: detectTextLocale(visibleComparisonText || '', {
-      storedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
-        || cv.contentLocale
-        || null,
-      generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale,
-    }),
-    visibleTextareaLocaleBeforeApply: detectTextLocale(visibleComparisonText || '', {
-      storedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
-        || cv.contentLocale
-        || null,
-      generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale,
-    }),
-    entryGeneratedLocaleBeforeApply:
-      (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null,
+    ...(() => {
+      const entryGen =
+        (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null;
+      const detectedVisible = detectTextLocale(visibleComparisonText || '', {
+        storedLocale: entryGen || cv.contentLocale || null,
+        generatedLocale: entryGen,
+      });
+      const uneditedMatched =
+        (textareaProvenance?.currentTextareaProvenance === 'ai_generated_unedited'
+          || sourceBundle.visibleSourceProvenance === 'ai_generated_unedited')
+        && (
+          textareaProvenance?.lastAiOutputHashMatched === true
+          || sourceBundle.visibleSourceMatchedLastAiOutput === true
+        );
+      const mismatchRecorded = Boolean(
+        uneditedMatched
+        && entryGen
+        && detectedVisible
+        && detectedVisible !== 'unknown'
+        && String(detectedVisible).toLowerCase() !== String(entryGen).toLowerCase(),
+      );
+      return {
+        visibleTextareaLocale: detectedVisible,
+        visibleTextareaLocaleBeforeApply: detectedVisible,
+        detectedVisibleTextLocale: detectedVisible,
+        persistedGeneratedLocaleForVisibleMismatch: entryGen,
+        visibleLocaleMetadataMismatchRecorded: mismatchRecorded,
+        entryGeneratedLocaleBeforeApply: entryGen,
+      };
+    })(),
     requestedTargetLocale: locale,
     contentLocaleDocument: cv.contentLocale || null,
     // Not yet applied — never stamp pre-apply generated locale as post-apply truth.
@@ -5712,6 +5744,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const needsItWarehouse = locale === 'it'
+        && sourceRequiresItalianWarehouseFactCoverage(sourceForCoverage);
+      const itWarehouse = needsItWarehouse
+        ? validateItalianWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const itPredicates = needsItWarehouse
+        ? scanItalianWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (itPredicates) {
+        sourcePredicateIdentityCount = itPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = itPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = itPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...itPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = itPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsEnWarehouse = locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
@@ -5905,6 +5963,29 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (needsItWarehouse && itWarehouse && (
+        !itWarehouse.ok
+        || (itPredicates && (
+          itPredicates.sourceUnitPredicateCoveragePassed === false
+          || itPredicates.candidateAddedPredicateCount > 0
+        ))
+      )) {
+        lastRejectStage = `${stage}:italian_warehouse_facts`;
+        lastRejectReason = !itWarehouse.ok
+          ? (itWarehouse.reason || 'italian_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
+        lastRequired = itWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = itWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = itWarehouse.uncovered.map(
+          (id) => italianWarehouseFactDiagId(id),
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
       if (needsEnWarehouse && enWarehouse && (
         !enWarehouse.ok
         || (enPredicates && (
@@ -5953,6 +6034,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       } else if (needsFrWarehouse && frWarehouse?.ok) {
         lastRequired = frWarehouse.required.length;
         lastCovered = frWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsItWarehouse && itWarehouse?.ok) {
+        lastRequired = itWarehouse.required.length;
+        lastCovered = itWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (needsEnWarehouse && enWarehouse?.ok) {
         lastRequired = enWarehouse.required.length;
@@ -6308,6 +6393,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (!semantic.ok) {
           lastRejectStage = `${stage}:translated_fact_count`;
           lastRejectReason = semantic.reason || 'experience_material_fact_coverage_incomplete';
+          // Coverage invariant: covered < required must list missing identities.
+          // Soft cross-locale path has no warehouse IDs — emit stable synthetic
+          // uncovered slots so incomplete_coverage_with_empty_uncovered_hashes
+          // cannot fire with an empty missing list.
+          if (
+            lastRequired > 0
+            && lastCovered < lastRequired
+            && clientDeterministicFallbackUncoveredFactIds.length === 0
+          ) {
+            const missing = Math.max(0, lastRequired - lastCovered);
+            clientDeterministicFallbackUncoveredFactIds = Array.from(
+              { length: missing },
+              (_, i) => `xl_soft_uncovered_${lastCovered + i}`,
+            );
+          }
           return null;
         }
       }
@@ -6494,9 +6594,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage || '');
           const isFrWarehouse = locale === 'fr'
             && sourceRequiresFrenchWarehouseFactCoverage(sourceForCoverage || '');
-          // EN/DE/ES/FR warehouse selected-final snapshots independently recompute
+          const isItWarehouse = locale === 'it'
+            && sourceRequiresItalianWarehouseFactCoverage(sourceForCoverage || '');
+          // EN/DE/ES/FR/IT warehouse selected-final snapshots independently recompute
           // predicate truth. Other locales must not invent false predicate coverage.
-          if (!isEnWarehouse && !isDeWarehouse && !isEsWarehouse && !isFrWarehouse) {
+          if (!isEnWarehouse && !isDeWarehouse && !isEsWarehouse && !isFrWarehouse && !isItWarehouse) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
             delete diag.finalCandidatePredicateValidationApplicable;
             if (!selectedFinal.candidatePredicateIdentityCount) {
@@ -8666,6 +8768,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       if (!translated.trim()
+        && locale === 'it'
+        && sourceRequiresItalianWarehouseFactCoverage(sourceForCoverage)) {
+        void ITALIAN_EXPERIENCE_GROUNDING_334_REVISION;
+        translated = normalizeLocaleText(
+          buildItalianWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
         && locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
         void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
@@ -8715,6 +8829,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackRequiredFactCount = frFb.required.length || Math.max(3, sourceFactCount);
         clientDeterministicFallbackCoveredFactCount = frFb.covered.length;
         clientDeterministicFallbackUncoveredFactIds = frFb.uncovered.map((id) => `fr_wh_${id}`);
+        lastRequired = clientDeterministicFallbackRequiredFactCount;
+        lastCovered = clientDeterministicFallbackCoveredFactCount;
+      }
+      if (
+        locale === 'it'
+        && sourceRequiresItalianWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        const itFb = validateItalianWarehouseExperienceCoverage(sourceForCoverage, translated);
+        clientDeterministicFallbackRequiredFactCount = itFb.required.length || Math.max(3, sourceFactCount);
+        clientDeterministicFallbackCoveredFactCount = itFb.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = itFb.uncovered.map(
+          (id) => italianWarehouseFactDiagId(id),
+        );
         lastRequired = clientDeterministicFallbackRequiredFactCount;
         lastCovered = clientDeterministicFallbackCoveredFactCount;
       }

@@ -24,8 +24,24 @@ const EN_LEXICON_RE =
 const DE_LEXICON_RE = /\b(?:prüft|aktualisiert|koordiniert|Erfahrung|Tätigkeit|verantwortlich)\b/iu;
 /** Present + past Experience forms; ASCII `\b` fails after ó — use morphology lexicon. */
 const ES_LEXICON_RE = ES_EXPERIENCE_LEXICON_RE;
-const FR_LEXICON_RE = /\b(?:examine|met\s+à\s+jour|coordonne|expérience)\b/iu;
-const IT_LEXICON_RE = /\b(?:esamina|aggiorna|coordina|esperienza)\b/iu;
+/**
+ * French Experience lexicon — include warehouse CV verbs so whole-text detection
+ * does not lose to Spanish `la` + acute accents (AAB-334 FR→IT).
+ * Do NOT use `[eé]paration`-style classes that also match English "preparation".
+ */
+const FR_LEXICON_RE =
+  /(?:contr[oô]le|contr[oô]ler|v[eé]rifie(?![a-z])|v[eé]rifier|coordonne|coordonner|marchandises?|coll[eè]gues?|entrep[oô]t|préparation|déplacement|expérience|met\s+[aà]\s+jour|l['']entrep)/iu;
+const FR_EXCLUSIVE_WAREHOUSE_RE =
+  /(?:contr[oô]le\s+les\s+marchandises|v[eé]rifie\s+les\s+documents|coordonne\s+avec\s+(?:ses\s+)?coll[eè]gues|marchandises?\s+entrant|documents?\s+associ[eé]s|l['']entrep[oô]t)/iu;
+/**
+ * Italian Experience lexicon — warehouse-specific exclusive cues for IT target.
+ * Do NOT include bare Romance cognates (`coordina`/`verifica`) that also appear
+ * in Spanish Experience bullets.
+ */
+const IT_LEXICON_RE =
+  /\b(?:documentazione|magazzino|colleghi|movimentazione|merci)\b/iu;
+const IT_EXCLUSIVE_WAREHOUSE_RE =
+  /(?:controlla\s+le\s+merci|merci\s+in\s+entrata|documentazione\s+relativa|merci\s+ricevute|si\s+coordina\s+con\s+i\s+colleghi|movimentazione\s+delle\s+merci|nel\s+magazzino)/iu;
 const PT_LEXICON_RE = /\b(?:revisa|atualiza|coordena|experiência)\b/iu;
 
 export type DetectedContentLocale = Locale | 'unknown';
@@ -184,6 +200,27 @@ export function analyzeContentLocale(
       confidence: 'medium',
     };
   }
+  // AAB-334 — French / Italian exclusive warehouse cues BEFORE Spanish.
+  // Shared Romance article `la` + French acute `é` previously matched
+  // textLooksSpanishExperience and mislabeled the FR triad as `es`.
+  if (FR_EXCLUSIVE_WAREHOUSE_RE.test(raw) || FR_LEXICON_RE.test(raw)) {
+    return {
+      detectedLocale: 'fr',
+      script: /[àâçéèêëïîôùûüÿœÀÂÇÉÈÊËÏÎÔÙÛÜŸŒ]/.test(raw) ? 'latin_diacritic' : 'latin',
+      hasSerbianDiacritics,
+      hasSerbianLexicon,
+      confidence: 'high',
+    };
+  }
+  if (IT_EXCLUSIVE_WAREHOUSE_RE.test(raw) || IT_LEXICON_RE.test(raw)) {
+    return {
+      detectedLocale: 'it',
+      script: /[àèéìòùÀÈÉÌÒÙ]/.test(raw) ? 'latin_diacritic' : 'latin',
+      hasSerbianDiacritics,
+      hasSerbianLexicon,
+      confidence: 'high',
+    };
+  }
   // Spanish before English/stored fallback: accented preterite + Experience lexicon
   // must not classify as en merely because both use Latin script.
   if (
@@ -201,24 +238,6 @@ export function analyzeContentLocale(
       hasSerbianDiacritics,
       hasSerbianLexicon,
       confidence: 'high',
-    };
-  }
-  if (FR_LEXICON_RE.test(raw)) {
-    return {
-      detectedLocale: 'fr',
-      script: 'latin',
-      hasSerbianDiacritics,
-      hasSerbianLexicon,
-      confidence: 'medium',
-    };
-  }
-  if (IT_LEXICON_RE.test(raw)) {
-    return {
-      detectedLocale: 'it',
-      script: 'latin',
-      hasSerbianDiacritics,
-      hasSerbianLexicon,
-      confidence: 'medium',
     };
   }
   if (PT_LEXICON_RE.test(raw)) {

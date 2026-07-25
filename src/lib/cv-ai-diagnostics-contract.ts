@@ -1776,6 +1776,11 @@ type ExperienceLike = {
   currentTextareaProvenance?: string | null;
   lastAiOutputHashMatched?: boolean | null;
   materialUserEditDetected?: boolean | null;
+  entryGeneratedLocaleBeforeApply?: string | null;
+  visibleTextareaLocaleBeforeApply?: string | null;
+  visibleLocaleMetadataMismatchRecorded?: boolean | null;
+  detectedVisibleTextLocale?: string | null;
+  persistedGeneratedLocaleForVisibleMismatch?: string | null;
   visibleComparisonUsedForNoOp?: boolean | null;
   visibleComparisonHash?: string | null;
   visibleComparisonNormalizedHash?: string | null;
@@ -2339,6 +2344,29 @@ export function checkExperienceDiagnosticInvariants(
             targetLocalePurityPassed: true,
           });
         }
+      }
+    }
+    // AAB-334 — unedited AI text: visible locale must match persisted generatedLocale
+    // unless an explicit metadata mismatch was recorded.
+    {
+      const entryGen = String(trace.entryGeneratedLocaleBeforeApply || '').toLowerCase();
+      const visibleBefore = String(trace.visibleTextareaLocaleBeforeApply || '').toLowerCase();
+      const supported = /^(en|de|es|fr|it|pt-br|sr|hr|hi|ar|ja|ru)$/;
+      if (
+        trace.currentTextareaProvenance === 'ai_generated_unedited'
+        && trace.lastAiOutputHashMatched === true
+        && supported.test(entryGen)
+        && visibleBefore
+        && visibleBefore !== 'unknown'
+        && visibleBefore !== entryGen
+        && trace.visibleLocaleMetadataMismatchRecorded !== true
+      ) {
+        push('unedited_ai_visible_locale_mismatch', {
+          visibleTextareaLocaleBeforeApply: visibleBefore,
+          entryGeneratedLocaleBeforeApply: entryGen,
+          visibleLocaleMetadataMismatchRecorded:
+            trace.visibleLocaleMetadataMismatchRecorded ?? false,
+        });
       }
     }
     if (

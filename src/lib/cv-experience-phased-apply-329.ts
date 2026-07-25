@@ -32,6 +32,13 @@ import {
   sourceRequiresFrenchWarehouseFactCoverage,
   FRENCH_EXPERIENCE_GROUNDING_332_REVISION,
 } from './cv-french-experience-grounding';
+import {
+  validateItalianWarehouseExperienceCoverage,
+  scanItalianWarehousePredicates,
+  sourceRequiresItalianWarehouseFactCoverage,
+  italianWarehouseFactDiagId,
+  ITALIAN_EXPERIENCE_GROUNDING_334_REVISION,
+} from './cv-italian-experience-grounding';
 
 export const EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION =
   'experience-selected-final-coverage-329-v1' as const;
@@ -200,6 +207,21 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
+  } else if (locale === 'it' && sourceRequiresItalianWarehouseFactCoverage(source)) {
+    void ITALIAN_EXPERIENCE_GROUNDING_334_REVISION;
+    const cov = validateItalianWarehouseExperienceCoverage(source, text);
+    requiredFactCount = cov.required.length;
+    coveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => italianWarehouseFactDiagId(id));
+    factCoveragePassed = cov.ok;
+    const pred = scanItalianWarehousePredicates(source, text);
+    sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
+    candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
+    addedPredicateCount = pred.candidateAddedPredicateCount;
+    addedPredicateIdentityHashes = [...pred.candidateAddedPredicateIdentityHashes];
+    predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
+      && candidatePredicateIdentityCount > 0;
   }
 
   return {
@@ -228,7 +250,12 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
                 : (
                   locale === 'fr' && sourceRequiresFrenchWarehouseFactCoverage(source)
                     ? validateFrenchWarehouseExperienceCoverage(source, text).required.map((id) => `fr_wh_${id}`)
-                    : Array.from({ length: requiredFactCount }, (_, i) => `req_${i}`)
+                    : (
+                      locale === 'it' && sourceRequiresItalianWarehouseFactCoverage(source)
+                        ? validateItalianWarehouseExperienceCoverage(source, text).required
+                          .map((id) => italianWarehouseFactDiagId(id))
+                        : Array.from({ length: requiredFactCount }, (_, i) => `req_${i}`)
+                    )
                 )
             )
         ),
@@ -775,6 +802,23 @@ export function validateVisibleExperienceCoverage(options: {
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
       && visibleCoveredPredicateCount > 0;
+  } else if (
+    locale === 'it'
+    && sourceRequiresItalianWarehouseFactCoverage(options.sourceDescription)
+  ) {
+    applicable = true;
+    void ITALIAN_EXPERIENCE_GROUNDING_334_REVISION;
+    const cov = validateItalianWarehouseExperienceCoverage(options.sourceDescription, visible);
+    visibleRequiredFactCount = cov.required.length;
+    visibleCoveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => italianWarehouseFactDiagId(id));
+    visibleFactCoveragePassed = cov.ok;
+    const pred = scanItalianWarehousePredicates(options.sourceDescription, visible);
+    visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
+    visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
+    visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
+      && visibleCoveredPredicateCount > 0;
   }
 
   return {
@@ -798,7 +842,12 @@ export function validateVisibleExperienceCoverage(options: {
                   locale === 'fr' && sourceRequiresFrenchWarehouseFactCoverage(options.sourceDescription)
                     ? validateFrenchWarehouseExperienceCoverage(options.sourceDescription, visible)
                       .required.map((id) => `fr_wh_${id}`)
-                    : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+                    : (
+                      locale === 'it' && sourceRequiresItalianWarehouseFactCoverage(options.sourceDescription)
+                        ? validateItalianWarehouseExperienceCoverage(options.sourceDescription, visible)
+                          .required.map((id) => italianWarehouseFactDiagId(id))
+                        : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+                    )
                 )
             )
         ),

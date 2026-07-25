@@ -253,6 +253,9 @@ export type ExperienceAiDiagnosticTrace = {
   visibleTextareaLocale?: string | null;
   visibleTextareaLocaleBeforeApply?: string | null;
   entryGeneratedLocaleBeforeApply?: string | null;
+  visibleLocaleMetadataMismatchRecorded?: boolean | null;
+  detectedVisibleTextLocale?: string | null;
+  persistedGeneratedLocaleForVisibleMismatch?: string | null;
   contentLocaleDocument?: string | null;
   appliedVisibleContentLocale?: string | null;
   crossLocaleOperation: boolean;
