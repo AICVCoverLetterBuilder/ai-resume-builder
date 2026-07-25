@@ -24,6 +24,10 @@ import {
   validateSpanishWarehouseExperienceCoverage,
 } from './cv-spanish-experience-grounding';
 import {
+  sourceRequiresFrenchWarehouseFactCoverage,
+  validateFrenchWarehouseExperienceCoverage,
+} from './cv-french-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -921,6 +925,19 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (esCovered > 0) return esCovered;
+  }
+  // AAB-332 — French warehouse result (incl. EN→FR / ES-visible→FR): same.
+  // Only short-circuit when the result itself looks French so English/Spanish
+  // results of warehouse sources are not miscounted by FR stem overlap.
+  if (
+    sourceRequiresFrenchWarehouseFactCoverage(sourceDescription || '')
+    && /(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(result || '')
+  ) {
+    const frCovered = validateFrenchWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (frCovered > 0) return frCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.

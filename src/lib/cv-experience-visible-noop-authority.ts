@@ -27,6 +27,11 @@ import {
   scanGermanWarehousePredicates,
 } from './cv-german-experience-grounding';
 import {
+  sourceRequiresFrenchWarehouseFactCoverage,
+  validateFrenchWarehouseExperienceCoverage,
+  scanFrenchWarehousePredicates,
+} from './cv-french-experience-grounding';
+import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
@@ -374,14 +379,17 @@ export function evaluateExperienceVisibleComparison(options: {
       const visibleUncoveredCount = ((): number => {
         const v = visible || '';
         if (!v.trim()) return Math.max(3, 1);
-        if (
-          /(?:prüft|kontrolliert|koordiniert|waren|unterlagen|kolleg)/iu.test(v)
-          || sourceRequiresGermanWarehouseFactCoverage(v)
-        ) {
+        // Detect visible *language* from surface cues only — never from
+        // warehouse material-key presence (Spanish/French warehouse text would
+        // otherwise be mis-scored by the German validator via sourceRequires*).
+        if (/(?:prüft|kontrolliert|koordiniert|waren|unterlagen|kolleg)/iu.test(v)) {
           return validateGermanWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
         if (/(?:revis[ao]|comprob|coordin|mercanc[ií]a|documentaci|compa[nñ]er)/iu.test(v)) {
           return validateSpanishWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
+        if (/(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(v)) {
+          return validateFrenchWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
         if (sourceRequiresStrictEnglishWarehouseFactCoverage(auth)) {
           return validateEnglishWarehouseExperienceCoverage(auth, v).uncovered.length;
@@ -410,6 +418,22 @@ export function evaluateExperienceVisibleComparison(options: {
       ) {
         const cov = validateSpanishWarehouseExperienceCoverage(auth, candidate);
         const pred = scanSpanishWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
+        target.startsWith('fr')
+        && sourceRequiresFrenchWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateFrenchWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanFrenchWarehousePredicates(auth, candidate);
         if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
           degradationKinds.push('fact_lost');
         } else if (pred.candidateAddedPredicateCount > 0) {
