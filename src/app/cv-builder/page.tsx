@@ -1218,7 +1218,37 @@ export default function CVBuilderPage() {
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
+      // Visible validation must pass before usage increment (AAB-326).
+      summaryDiag.recordVisibleApply(true, countBefore, finalizedGate.text);
+      const visibleOk = summaryDiag.draft.visibleApplySucceeded === true;
+      if (!visibleOk) {
+        const failReason = summaryDiag.draft.finalTypedFailureReason
+          || 'visible_current_duty_coverage_failed';
+        const failCode = mapExperienceAiFailureToErrorCode(failReason);
+        // Roll back Summary text when visible gates fail after write.
+        commitCvUpdate((prev) => ({
+          ...prev,
+          summary: liveSummaryAtPress,
+        }));
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: failCode, httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        summaryDiag.patch({
+          countedAsSuccess: false,
+          usageCountAfter: countBefore,
+          visibleApplySucceeded: false,
+        });
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
+        return;
+      }
       recordProAiSuccess();
+      summaryDiag.patch({ usageCountAfter: countBefore + 1 });
       finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
@@ -1229,7 +1259,6 @@ export default function CVBuilderPage() {
         fallbackUsed: finalizedGate.origin === 'deterministic_fallback',
         responseSource: finalizedGate.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider',
       });
-      summaryDiag.recordVisibleApply(true, countBefore + 1, finalizedGate.text);
       logAiLocaleTransitionDiagnostics({
         requestId: reqCtx.requestId,
         action: 'summary_generate',

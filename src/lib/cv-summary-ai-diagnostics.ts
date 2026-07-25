@@ -43,12 +43,17 @@ import {
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
   SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
-  analyzeEnglishSummaryEmploymentQuality,
+  ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION,
+  SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
+  rebuildEnglishDutyFactsFromIds,
+  hashCurrentDutyRequiredFactSet,
 } from './cv-english-summary-grounding';
 void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
 void ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION;
 void ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION;
 void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
+void ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION;
+void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
 
 function rebuildGermanDutyFactsFromIds(ids: string[] | null | undefined): GermanCurrentDutyFact[] {
   const known: GermanCurrentDutyFactId[] = [
@@ -246,10 +251,18 @@ export type SummaryAiDiagnosticTrace = {
   visibleCoveredCurrentDutyFactCount?: number | null;
   visibleMissingCurrentDutyFactCount?: number | null;
   visibleCurrentDutyCoveragePassed?: boolean | null;
+  visibleCurrentDutyRequiredFactParityPassed?: boolean | null;
+  visibleCurrentDutyRequiredFactCountMatchesFinal?: boolean | null;
+  visibleCurrentDutyRequiredFactSetHash?: string | null;
+  finalCurrentDutyRequiredFactSetHash?: string | null;
+  visibleCurrentDutyFactMatchCountsByFactHash?: Record<string, number> | null;
+  visibleCurrentDutyFactMatchedUnitHashesByFactHash?: Record<string, string[]> | null;
+  visibleMissingCurrentDutyFactIdHashes?: string[] | null;
   visibleRequiredPriorDutyFactCount?: number | null;
   visibleCoveredPriorDutyFactCount?: number | null;
   visibleMissingPriorDutyFactCount?: number | null;
   visiblePriorDutyCoveragePassed?: boolean | null;
+  visiblePriorDutyRequiredFactParityPassed?: boolean | null;
   visibleGermanGrammarValidationPassed?: boolean | null;
   requiredCurrentDutyFactIds?: string[] | null;
   authoritativeCurrentDutyFactCount?: number | null;
@@ -964,6 +977,11 @@ export class SummaryAiDiagnosticSession {
       germanControlledCaseGrammarPassed: diag.germanControlledCaseGrammarPassed ?? null,
       finalGermanGrammarValidationPassed: diag.finalGermanGrammarValidationPassed ?? null,
       requiredCurrentDutyFactIds: diag.requiredCurrentDutyFactIds ?? null,
+      finalCurrentDutyRequiredFactSetHash:
+        (diag as { finalCurrentDutyRequiredFactSetHash?: string | null })
+          .finalCurrentDutyRequiredFactSetHash
+        ?? hashCurrentDutyRequiredFactSet(diag.requiredCurrentDutyFactIds)
+        ?? null,
       authoritativeCurrentDutyFactCount: diag.authoritativeCurrentDutyFactCount ?? null,
       authoritativeCanonicalCurrentDutyFactCount:
         diag.authoritativeCanonicalCurrentDutyFactCount ?? null,
@@ -1795,65 +1813,153 @@ export class SummaryAiDiagnosticSession {
         visibleDutyCovered = duty.coveredCurrentDutyFactCount;
         visibleDutyOk = duty.finalCurrentDutyCoveragePassed;
       }
+      const requiredCurrentDe = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
+      const authoritativeDe = Number(this.draft.authoritativeCurrentDutyFactCount ?? 0);
+      if ((requiredCurrentDe > 0 || authoritativeDe > 0) && facts.length === 0) {
+        visibleDutyRequired = 0;
+        visibleDutyCovered = 0;
+        visibleDutyOk = false;
+        this.patch({
+          finalTypedFailureReason: 'visible_current_duty_required_set_missing',
+          visibleCurrentDutyRequiredFactParityPassed: false,
+          visibleCurrentDutyRequiredFactCountMatchesFinal: false,
+        });
+      } else {
+        const visibleSetHash = hashCurrentDutyRequiredFactSet(
+          facts.map((f) => f.canonicalFactId),
+        );
+        const finalSetHash = this.draft.finalCurrentDutyRequiredFactSetHash
+          ?? hashCurrentDutyRequiredFactSet(this.draft.requiredCurrentDutyFactIds);
+        const countMatches = visibleDutyRequired === requiredCurrentDe;
+        const setMatches = Boolean(
+          visibleSetHash && finalSetHash && visibleSetHash === finalSetHash,
+        ) || (requiredCurrentDe === 0 && facts.length === 0);
+        const parityOk = countMatches && (requiredCurrentDe === 0 || setMatches);
+        if (!parityOk) visibleDutyOk = false;
+        this.patch({
+          visibleCurrentDutyRequiredFactParityPassed: parityOk,
+          visibleCurrentDutyRequiredFactCountMatchesFinal: countMatches,
+          visibleCurrentDutyRequiredFactSetHash: visibleSetHash,
+          finalCurrentDutyRequiredFactSetHash: finalSetHash,
+        });
+      }
       const grammar = validateGermanGeneratedCaseGrammar(visibleText);
       visibleGrammarOk = grammar.germanControlledCaseGrammarPassed;
     }
     if (ok && durationStillOk && locale === 'en' && typeof visibleText === 'string') {
       void ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION;
+      void ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION;
+      void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
       void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
-      const empQ = analyzeEnglishSummaryEmploymentQuality(visibleText, {
-        company: undefined,
-        role: undefined,
-        priorCompany: undefined,
-        priorRole: undefined,
-        currentEntryDuties: '',
-        priorEntryDuties: '',
-        structuredSkills: [],
-      });
-      // Prefer draft authoritative counts when present; otherwise re-validate text.
       const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
       const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
-      if (requiredCurrent > 0 || requiredPrior > 0) {
-        const facts = rebuildGermanDutyFactsFromIds(this.draft.requiredCurrentDutyFactIds);
-        if (facts.length > 0) {
+      const authoritativeCurrent = Number(this.draft.authoritativeCurrentDutyFactCount ?? 0);
+      const entryIdHash = this.draft.currentRoleTitleEntryIdHash
+        ?? (Array.isArray(this.draft.currentExperienceEntryIdHashes)
+          ? this.draft.currentExperienceEntryIdHashes[0]
+          : null)
+        ?? null;
+      // Same immutable required fact IDs as final candidate validation — never
+      // rebuild from German-only matchers or infer count from matches alone.
+      const facts = rebuildEnglishDutyFactsFromIds(this.draft.requiredCurrentDutyFactIds, {
+        currentEntryId: entryIdHash,
+      });
+      const visibleFactSetHash = hashCurrentDutyRequiredFactSet(
+        facts.map((f) => f.canonicalFactId),
+      );
+      const finalFactSetHash = this.draft.finalCurrentDutyRequiredFactSetHash
+        ?? hashCurrentDutyRequiredFactSet(this.draft.requiredCurrentDutyFactIds);
+      let visibleMatchCounts: Record<string, number> | null = null;
+      let visibleMatchUnits: Record<string, string[]> | null = null;
+      let visibleMissingHashes: string[] | null = null;
+      let typedDutyFailure: string | null = null;
+
+      if (requiredCurrent > 0 || authoritativeCurrent > 0) {
+        if (facts.length === 0) {
+          // Authoritative/final required facts exist but visible required set is missing.
+          visibleDutyRequired = 0;
+          visibleDutyCovered = 0;
+          visibleDutyOk = false;
+          typedDutyFailure = 'visible_current_duty_required_set_missing';
+        } else {
           const duty = validateSummaryEntryDutyCoverage({
             requiredFacts: facts,
             candidateText: visibleText,
+            locale: 'en',
+            entryId: entryIdHash,
           });
           visibleDutyRequired = duty.requiredCurrentDutyFactCount;
           visibleDutyCovered = duty.coveredCurrentDutyFactCount;
-          visibleDutyOk = duty.finalCurrentDutyCoveragePassed;
+          visibleDutyOk = duty.finalCurrentDutyCoveragePassed
+            && visibleDutyRequired > 0
+            && visibleDutyCovered === visibleDutyRequired;
+          visibleMatchCounts = duty.currentDutyFactMatchCountsByFactHash;
+          visibleMatchUnits = duty.currentDutyFactMatchedUnitHashesByFactHash;
+          visibleMissingHashes = duty.missingCurrentDutyFactIdHashes;
+          if (!visibleDutyOk) typedDutyFailure = 'visible_current_duty_coverage_failed';
         }
-        visiblePriorDutyRequired = requiredPrior;
-        visiblePriorDutyCovered = Number(
-          this.draft.coveredPriorDutyFactCount
-          ?? empQ.coveredPriorDutyFactCount
-          ?? 0,
-        );
-        // Re-check prior from visible text using English analyzer when prior required.
-        if (requiredPrior > 0) {
-          const priorPass = /\bGraphic\s+Designer\b/iu.test(visibleText)
-            && /\bRewitu\b/iu.test(visibleText)
-            && /\b(?:previously|formerly|worked\s+as)\b/iu.test(visibleText)
-            && /visual\s+materials?/iu.test(visibleText)
-            && /design\s+(?:documents?|materials?)/iu.test(visibleText)
-            && /final\s+files?/iu.test(visibleText);
-          visiblePriorDutyOk = priorPass;
-          if (priorPass) visiblePriorDutyCovered = requiredPrior;
-        }
-        visibleRoleOk = /\bWarehouse\s+(?:Employee|Worker)\b/iu.test(visibleText)
-          && /\bAtlas\b/iu.test(visibleText)
-          && (!requiredPrior || /\bGraphic\s+Designer\b/iu.test(visibleText));
-        visibleLocaleOk = !/[ñáéíóúü]/iu.test(visibleText)
-          && !/\b(?:revisingó|comprobingó|mercanc|documentaci|almac[eé]n)\b/iu.test(visibleText);
-        visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false
-          && !/at\s+Atlas.{0,40}since.{0,40},\s+with\s+approximately/iu.test(visibleText);
       } else {
-        visibleDutyOk = empQ.finalCurrentDutyCoveragePassed !== false;
-        visiblePriorDutyOk = empQ.finalPriorDutyCoveragePassed !== false;
-        visibleLocaleOk = empQ.targetLocalePurityPassed !== false;
-        visibleDurationScopeOk = empQ.finalDurationScopeValidationPassed !== false;
+        // Empty-set policy: 0/0 is N/A only when no authoritative/required duties.
+        visibleDutyRequired = 0;
+        visibleDutyCovered = 0;
+        visibleDutyOk = true;
       }
+
+      const countMatchesFinal = visibleDutyRequired === requiredCurrent;
+      const setHashMatches = Boolean(
+        visibleFactSetHash
+        && finalFactSetHash
+        && visibleFactSetHash === finalFactSetHash,
+      )
+        || (requiredCurrent === 0 && authoritativeCurrent === 0 && facts.length === 0);
+      const parityOk = countMatchesFinal
+        && (requiredCurrent === 0 || setHashMatches)
+        && !(requiredCurrent > 0 && visibleDutyRequired === 0);
+      if (!parityOk) {
+        visibleDutyOk = false;
+        if (!typedDutyFailure) {
+          typedDutyFailure = visibleDutyRequired === 0 && requiredCurrent > 0
+            ? 'visible_current_duty_required_set_missing'
+            : 'visible_current_duty_required_fact_parity_failed';
+        }
+      }
+      this.patch({
+        visibleCurrentDutyRequiredFactParityPassed: parityOk,
+        visibleCurrentDutyRequiredFactCountMatchesFinal: countMatchesFinal,
+        visibleCurrentDutyRequiredFactSetHash: visibleFactSetHash,
+        finalCurrentDutyRequiredFactSetHash: finalFactSetHash,
+        visibleCurrentDutyFactMatchCountsByFactHash: visibleMatchCounts,
+        visibleCurrentDutyFactMatchedUnitHashesByFactHash: visibleMatchUnits,
+        visibleMissingCurrentDutyFactIdHashes: visibleMissingHashes,
+      });
+      if (typedDutyFailure) {
+        this.patch({ finalTypedFailureReason: typedDutyFailure });
+      }
+
+      visiblePriorDutyRequired = requiredPrior;
+      visiblePriorDutyCovered = Number(this.draft.coveredPriorDutyFactCount ?? 0);
+      if (requiredPrior > 0) {
+        const priorPass = /\bGraphic\s+Designer\b/iu.test(visibleText)
+          && /\bRewitu\b/iu.test(visibleText)
+          && /\b(?:previously|formerly|worked\s+as)\b/iu.test(visibleText)
+          && /visual\s+materials?/iu.test(visibleText)
+          && /design\s+(?:documents?|materials?)/iu.test(visibleText)
+          && /final\s+files?/iu.test(visibleText);
+        visiblePriorDutyOk = priorPass;
+        if (priorPass) visiblePriorDutyCovered = requiredPrior;
+      }
+      const priorParityOk = visiblePriorDutyRequired === requiredPrior
+        && (requiredPrior === 0 || visiblePriorDutyOk);
+      this.patch({ visiblePriorDutyRequiredFactParityPassed: priorParityOk });
+      if (!priorParityOk) visiblePriorDutyOk = false;
+
+      visibleRoleOk = /\bWarehouse\s+(?:Employee|Worker)\b/iu.test(visibleText)
+        && /\bAtlas\b/iu.test(visibleText)
+        && (!requiredPrior || /\bGraphic\s+Designer\b/iu.test(visibleText));
+      visibleLocaleOk = !/[ñáéíóúü]/iu.test(visibleText)
+        && !/\b(?:revisingó|comprobingó|mercanc|documentaci|almac[eé]n)\b/iu.test(visibleText);
+      visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false
+        && !/at\s+Atlas.{0,40}since.{0,40},\s+with\s+approximately/iu.test(visibleText);
     }
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
       && visiblePriorDutyOk && visibleGrammarOk && visibleLocaleOk && visibleDurationScopeOk;
@@ -1914,17 +2020,24 @@ export class SummaryAiDiagnosticSession {
       finalPostconditionsPassed: applyOk
         ? this.draft.finalPostconditionsPassed
         : false,
-      finalTypedFailureReason: !visibleDutyOk && ok && durationStillOk
-        ? 'visible_current_duty_coverage_failed'
-        : (!visiblePriorDutyOk && ok && durationStillOk
-          ? 'visible_prior_duty_coverage_failed'
-          : (!visibleLocaleOk && ok && durationStillOk
-            ? 'visible_locale_purity_failed'
-            : (!visibleGrammarOk && ok && durationStillOk
-              ? 'visible_german_grammar_failed'
-              : (!visibleRoleOk && ok && durationStillOk
-                ? 'visible_role_localization_mismatch'
-                : this.draft.finalTypedFailureReason)))),
+      finalTypedFailureReason: (() => {
+        if (!ok || !durationStillOk) return this.draft.finalTypedFailureReason;
+        // Prefer more specific typed reason already patched during EN visible duty validation.
+        const existing = this.draft.finalTypedFailureReason;
+        if (
+          !visibleDutyOk
+          && typeof existing === 'string'
+          && existing.startsWith('visible_current_duty_')
+        ) {
+          return existing;
+        }
+        if (!visibleDutyOk) return 'visible_current_duty_coverage_failed';
+        if (!visiblePriorDutyOk) return 'visible_prior_duty_coverage_failed';
+        if (!visibleLocaleOk) return 'visible_locale_purity_failed';
+        if (!visibleGrammarOk) return 'visible_german_grammar_failed';
+        if (!visibleRoleOk) return 'visible_role_localization_mismatch';
+        return existing;
+      })(),
       // Duration idempotence is independent of visible apply success.
       durationFinalizerIdempotent: (() => {
         void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;

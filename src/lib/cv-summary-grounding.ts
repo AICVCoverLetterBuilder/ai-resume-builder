@@ -78,8 +78,12 @@ import {
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
   SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
+  ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION,
+  SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
   stripEnglishUnsupportedCompetencyUnits,
   detectEnglishMixedLanguageMorphology,
+  rebuildEnglishDutyFactsFromIds,
+  hashCurrentDutyRequiredFactSet,
 } from './cv-english-summary-grounding';
 export {
   analyzeEnglishSummaryEmploymentQuality,
@@ -89,8 +93,12 @@ export {
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
   SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
+  ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION,
+  SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
   stripEnglishUnsupportedCompetencyUnits,
   detectEnglishMixedLanguageMorphology,
+  rebuildEnglishDutyFactsFromIds,
+  hashCurrentDutyRequiredFactSet,
 } from './cv-english-summary-grounding';
 import {
   analyzeSpanishSummaryEmploymentQuality,

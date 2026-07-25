@@ -41,7 +41,7 @@ export type GermanCurrentDutyFact = {
   sourceEntryIdHash: string | null;
   sourceFactHash: string;
   sourceLocale: string | null;
-  targetLocale: 'de';
+  targetLocale: 'de' | 'en';
   semanticKind: GermanCurrentDutyFactId;
   materialCategory: 'warehouse_movement' | 'warehouse_inbound' | 'warehouse_records';
   localizedClauseHash: string;

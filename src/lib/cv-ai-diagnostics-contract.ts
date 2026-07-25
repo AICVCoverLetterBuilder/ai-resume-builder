@@ -542,6 +542,14 @@ type SummaryLike = {
   finalForeignRoleTitleCount?: number | null;
   visibleStructuredRoleLocaleValidationPassed?: boolean | null;
   visibleWrongLocaleStructuredRoleCount?: number | null;
+  visibleRequiredCurrentDutyFactCount?: number | null;
+  visibleCoveredCurrentDutyFactCount?: number | null;
+  visibleMissingCurrentDutyFactCount?: number | null;
+  visibleCurrentDutyCoveragePassed?: boolean | null;
+  visibleCurrentDutyRequiredFactParityPassed?: boolean | null;
+  visibleCurrentDutyRequiredFactCountMatchesFinal?: boolean | null;
+  visibleCurrentDutyRequiredFactSetHash?: string | null;
+  finalCurrentDutyRequiredFactSetHash?: string | null;
   sourceLanguageLeakageDetected?: boolean | null;
   targetLocalePurityPassed?: boolean | null;
   detectedLocaleByUnit?: string[] | null;
@@ -1100,6 +1108,116 @@ export function checkSummaryDiagnosticInvariants(
         });
       }
     }
+    // AAB-326 — visible current required-fact parity / fail-closed 0/0.
+    // Only after a real visible apply recorded a candidate hash (not pre-apply provisional).
+    const visibleValidated = trace.visibleCandidateHashAfterApply != null
+      && typeof trace.visibleRequiredCurrentDutyFactCount === 'number';
+    if (
+      visibleValidated
+      && (
+        Number(trace.authoritativeCurrentDutyFactCount ?? 0) > 0
+        || Number(trace.requiredCurrentDutyFactCount ?? 0) > 0
+      )
+    ) {
+      if (
+        trace.visibleApplySucceeded === true
+        && Number(trace.visibleRequiredCurrentDutyFactCount ?? 0) === 0
+      ) {
+        push('english_visible_current_required_set_missing', {
+          visibleRequiredCurrentDutyFactCount:
+            trace.visibleRequiredCurrentDutyFactCount ?? 0,
+          requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount ?? 0,
+          authoritativeCurrentDutyFactCount:
+            trace.authoritativeCurrentDutyFactCount ?? 0,
+        });
+      }
+      if (
+        typeof trace.visibleRequiredCurrentDutyFactCount === 'number'
+        && typeof trace.requiredCurrentDutyFactCount === 'number'
+        && trace.visibleRequiredCurrentDutyFactCount !== trace.requiredCurrentDutyFactCount
+      ) {
+        push('english_visible_current_required_count_mismatch', {
+          visibleRequiredCurrentDutyFactCount: trace.visibleRequiredCurrentDutyFactCount,
+          requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount,
+        });
+      }
+      if (
+        trace.visibleCurrentDutyRequiredFactParityPassed === false
+        && (trace.countedAsSuccess || trace.visibleApplySucceeded)
+      ) {
+        push('english_visible_current_required_fact_parity_failed', {
+          visibleCurrentDutyRequiredFactParityPassed: false,
+        });
+      }
+      if (
+        typeof trace.visibleCurrentDutyRequiredFactSetHash === 'string'
+        && typeof trace.finalCurrentDutyRequiredFactSetHash === 'string'
+        && trace.visibleCurrentDutyRequiredFactSetHash
+          !== trace.finalCurrentDutyRequiredFactSetHash
+        && (trace.countedAsSuccess || trace.visibleApplySucceeded)
+      ) {
+        push('english_visible_current_required_fact_set_hash_mismatch', {
+          visibleCurrentDutyRequiredFactSetHash:
+            trace.visibleCurrentDutyRequiredFactSetHash,
+          finalCurrentDutyRequiredFactSetHash:
+            trace.finalCurrentDutyRequiredFactSetHash,
+        });
+      }
+      if (
+        trace.visibleCurrentDutyCoveragePassed === true
+        && (
+          Number(trace.visibleRequiredCurrentDutyFactCount ?? 0) === 0
+          || Number(trace.visibleCoveredCurrentDutyFactCount ?? 0)
+            !== Number(trace.visibleRequiredCurrentDutyFactCount ?? 0)
+          || Number(trace.visibleMissingCurrentDutyFactCount ?? 0) !== 0
+          || trace.visibleCurrentDutyRequiredFactParityPassed === false
+        )
+      ) {
+        push('english_visible_current_coverage_pass_without_proof', {
+          visibleCurrentDutyCoveragePassed: true,
+          visibleRequiredCurrentDutyFactCount:
+            trace.visibleRequiredCurrentDutyFactCount ?? 0,
+          visibleCoveredCurrentDutyFactCount:
+            trace.visibleCoveredCurrentDutyFactCount ?? 0,
+          visibleMissingCurrentDutyFactCount:
+            trace.visibleMissingCurrentDutyFactCount ?? 0,
+          visibleCurrentDutyRequiredFactParityPassed:
+            trace.visibleCurrentDutyRequiredFactParityPassed ?? null,
+        });
+      }
+      if (
+        Number(trace.visibleCoveredCurrentDutyFactCount ?? 0)
+          > Number(trace.visibleRequiredCurrentDutyFactCount ?? 0)
+      ) {
+        push('english_visible_covered_exceeds_required', {
+          visibleCoveredCurrentDutyFactCount:
+            trace.visibleCoveredCurrentDutyFactCount ?? 0,
+          visibleRequiredCurrentDutyFactCount:
+            trace.visibleRequiredCurrentDutyFactCount ?? 0,
+        });
+      }
+      if (
+        trace.visibleApplySucceeded === true
+        && trace.visibleCurrentDutyCoveragePassed !== true
+      ) {
+        push('english_visible_apply_without_current_coverage', {
+          visibleApplySucceeded: true,
+          visibleCurrentDutyCoveragePassed:
+            trace.visibleCurrentDutyCoveragePassed ?? null,
+        });
+      }
+      if (
+        trace.countedAsSuccess
+        && Number(trace.usageCountAfter ?? 0) > Number(trace.usageCountBefore ?? 0)
+        && trace.visibleCurrentDutyRequiredFactParityPassed !== true
+      ) {
+        push('english_usage_without_visible_required_parity', {
+          countedAsSuccess: true,
+          visibleCurrentDutyRequiredFactParityPassed:
+            trace.visibleCurrentDutyRequiredFactParityPassed ?? null,
+        });
+      }
+    }
   }
   if (
     String(trace.requestedLocale || '') === 'de'
@@ -1404,6 +1522,22 @@ export function checkSummaryDiagnosticCompleteness(
       require('visiblePriorDutyCoveragePassed');
       require('visibleStructuredRoleLocaleValidationPassed');
       require('visibleDurationScopeValidationPassed');
+      require('visibleRequiredCurrentDutyFactCount');
+      require('visibleCoveredCurrentDutyFactCount');
+      require('visibleMissingCurrentDutyFactCount');
+      require('visibleCurrentDutyRequiredFactParityPassed');
+      require('visibleCurrentDutyRequiredFactCountMatchesFinal');
+      require('visibleCurrentDutyRequiredFactSetHash');
+      require('finalCurrentDutyRequiredFactSetHash');
+      require('visiblePriorDutyRequiredFactParityPassed');
+      if (Number(trace.requiredCurrentDutyFactCount ?? 0) > 0) {
+        require('visibleCurrentDutyFactMatchCountsByFactHash');
+        require('visibleCurrentDutyFactMatchedUnitHashesByFactHash');
+        require('visibleMissingCurrentDutyFactIdHashes');
+        if (Number(trace.visibleRequiredCurrentDutyFactCount ?? 0) === 0) {
+          nullish.push('visibleRequiredCurrentDutyFactCount');
+        }
+      }
     }
   }
 

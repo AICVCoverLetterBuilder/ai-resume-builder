@@ -25,6 +25,7 @@ import {
   validateSummaryEntryDutyCoverage,
   analyzeCurrentDutyRequiredFactParity,
   type GermanCurrentDutyFact,
+  type GermanCurrentDutyFactId,
   type SummaryEntryDutyCoverageResult,
   type AuthoritativeCurrentDutyParityResult,
 } from './cv-german-summary-current-duty-coverage';
@@ -39,6 +40,12 @@ export const ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION =
   'english-summary-current-prior-coverage-325-v1' as const;
 export const SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION =
   'summary-invariant-preapply-gate-325-v1' as const;
+/** AAB-326 — English visible current-duty coverage uses the same required fact set. */
+export const ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION =
+  'english-summary-visible-current-coverage-326-v1' as const;
+/** AAB-326 — final vs visible required-fact parity. */
+export const SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION =
+  'summary-visible-required-fact-parity-326-v1' as const;
 
 /**
  * Strict English Summary domain for the Atlas/Rewitu shared final gate.
@@ -152,6 +159,67 @@ function withEnglishMatchRes(facts: GermanCurrentDutyFact[]): GermanCurrentDutyF
     ...f,
     matchRes: [...englishCurrentDutyMatchRes(f.canonicalFactId), ...f.matchRes],
   }));
+}
+
+/**
+ * Rebuild the immutable English required current-duty fact set from canonical IDs
+ * (same identities used by final candidate validation). English match overlays only.
+ */
+export function rebuildEnglishDutyFactsFromIds(
+  ids: string[] | null | undefined,
+  options: { currentEntryId?: string | null } = {},
+): GermanCurrentDutyFact[] {
+  void ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION;
+  void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
+  const known: GermanCurrentDutyFactId[] = [
+    'incoming_goods_check',
+    'related_documentation_check',
+    'colleague_coordination_goods_preparation_movement',
+  ];
+  const selected = (ids || []).filter((id): id is GermanCurrentDutyFactId =>
+    known.includes(id as GermanCurrentDutyFactId));
+  const entryHash = options.currentEntryId
+    ? `entry_${String(options.currentEntryId)}`
+    : null;
+  return withEnglishMatchRes(selected.map((id) => ({
+    canonicalFactId: id,
+    sourceEntryIdHash: entryHash,
+    sourceFactHash: `id_${id}`,
+    sourceLocale: null,
+    targetLocale: 'en' as const,
+    semanticKind: id,
+    materialCategory: id === 'incoming_goods_check'
+      ? 'warehouse_inbound' as const
+      : id === 'related_documentation_check'
+        ? 'warehouse_records' as const
+        : 'warehouse_movement' as const,
+    localizedClauseHash: `en_clause_${id}`,
+    requiredForSummary: true,
+    dativeClause: id,
+    matchRes: [],
+  })));
+}
+
+/** Stable hash of a required current-duty fact-set identity (ordered IDs). */
+export function hashCurrentDutyRequiredFactSet(
+  ids: string[] | null | undefined,
+): string | null {
+  void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
+  const known = [
+    'incoming_goods_check',
+    'related_documentation_check',
+    'colleague_coordination_goods_preparation_movement',
+  ];
+  const selected = (ids || []).filter((id) => known.includes(id));
+  if (selected.length === 0) return null;
+  const ordered = known.filter((id) => selected.includes(id));
+  let h = 2166136261;
+  const s = ordered.join('|');
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `fnv1a_${(h >>> 0).toString(16)}`;
 }
 
 export function scanEnglishSummaryCompetencyClaims(
@@ -352,8 +420,14 @@ export type EnglishSummaryEmploymentQuality = {
   finalCurrentDutyCoveragePassed: boolean;
   finalPriorDutyCoveragePassed: boolean;
   requiredCurrentDutyFactCount: number;
+  /** Canonical IDs used by final + visible validators (immutable required set). */
+  requiredCurrentDutyFactIds: string[];
+  finalCurrentDutyRequiredFactSetHash: string | null;
   coveredCurrentDutyFactCount: number;
   missingCurrentDutyFactCount: number;
+  missingCurrentDutyFactIdHashes?: string[];
+  currentDutyFactMatchCountsByFactHash?: Record<string, number>;
+  currentDutyFactMatchedUnitHashesByFactHash?: Record<string, string[]>;
   requiredPriorDutyFactCount: number;
   coveredPriorDutyFactCount: number;
   missingPriorDutyFactCount: number;
@@ -685,8 +759,17 @@ export function analyzeEnglishSummaryEmploymentQuality(
     finalCurrentDutyCoveragePassed: currentDutiesOk,
     finalPriorDutyCoveragePassed: priorDutiesOk,
     requiredCurrentDutyFactCount: currentDutyCoverage.requiredCurrentDutyFactCount,
+    requiredCurrentDutyFactIds: requiredCurrentDutyFacts.map((f) => f.canonicalFactId),
+    finalCurrentDutyRequiredFactSetHash: hashCurrentDutyRequiredFactSet(
+      requiredCurrentDutyFacts.map((f) => f.canonicalFactId),
+    ),
     coveredCurrentDutyFactCount: currentDutyCoverage.coveredCurrentDutyFactCount,
     missingCurrentDutyFactCount: currentDutyCoverage.missingCurrentDutyFactCount,
+    missingCurrentDutyFactIdHashes: currentDutyCoverage.missingCurrentDutyFactIdHashes,
+    currentDutyFactMatchCountsByFactHash:
+      currentDutyCoverage.currentDutyFactMatchCountsByFactHash,
+    currentDutyFactMatchedUnitHashesByFactHash:
+      currentDutyCoverage.currentDutyFactMatchedUnitHashesByFactHash,
     requiredPriorDutyFactCount: priorCov.requiredPriorDutyFactCount,
     coveredPriorDutyFactCount: priorCov.coveredPriorDutyFactCount,
     missingPriorDutyFactCount: priorCov.missingPriorDutyFactCount,

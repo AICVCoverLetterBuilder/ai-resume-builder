@@ -107,6 +107,8 @@ import {
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
   SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
+  ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION,
+  SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
   stripEnglishUnsupportedCompetencyUnits,
 } from './cv-summary-grounding';
 import {
@@ -524,6 +526,8 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
   SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION,
+  ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION,
+  SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
@@ -1079,6 +1083,7 @@ export type FinalizeCvAiFieldResult = {
     currentCanonicalDutyFactMatchCount?: number;
     materialCategoryCoverageUsedForFinalAcceptance?: boolean;
     requiredCurrentDutyFactIds?: string[];
+    finalCurrentDutyRequiredFactSetHash?: string | null;
     authoritativeCurrentDutyFactCount?: number;
     authoritativeCanonicalCurrentDutyFactCount?: number;
     classifiedRequiredCurrentDutyFactCount?: number;
@@ -2440,6 +2445,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     void ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION;
     void ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION;
     void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
+    void ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION;
+    void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
+    void ENGLISH_SUMMARY_VISIBLE_CURRENT_COVERAGE_326_REVISION;
+    void SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION;
     candidate = dedupeSummarySentences(candidate);
     if (/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(candidate)) {
       if (candidate.trim() && providerRaw.trim()) {
@@ -3112,6 +3121,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : undefined,
         requiredCurrentDutyFactIds: ((locale === 'de' || locale === 'en') && empQ)
           ? ((empQ as { requiredCurrentDutyFactIds?: string[] }).requiredCurrentDutyFactIds
+            ?? undefined)
+          : undefined,
+        finalCurrentDutyRequiredFactSetHash: ((locale === 'de' || locale === 'en') && empQ)
+          ? ((empQ as { finalCurrentDutyRequiredFactSetHash?: string | null })
+            .finalCurrentDutyRequiredFactSetHash
             ?? undefined)
           : undefined,
         authoritativeCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
