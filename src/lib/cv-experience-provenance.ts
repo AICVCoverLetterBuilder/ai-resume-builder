@@ -4,6 +4,7 @@
  */
 import type { Locale } from './i18n/translations';
 import type { WorkExperience } from './types';
+import { canonicalizeContentLocale } from './cv-content-locale';
 import {
   stampExperienceGenerationContext,
   type ExperienceJobContext,
@@ -484,11 +485,13 @@ export function applyGeneratedExperienceDescription(
     || (preserved.originalUserDescription || '').trim()
     || (preserved.canonicalDescription || '').trim()
     || resolveExperienceGroundingDescription(preserved).trim();
+  const persistedLocale = (canonicalizeContentLocale(options.locale) as Locale)
+    || options.locale;
   let next: WorkExperience = {
     ...preserved,
     description: generated,
     generatedDescription: generated,
-    generatedLocale: options.locale,
+    generatedLocale: persistedLocale,
     descriptionOrigin: options.origin,
     // Explicitly keep grounding fields unchanged from capture result
     originalUserDescription: preserved.originalUserDescription,

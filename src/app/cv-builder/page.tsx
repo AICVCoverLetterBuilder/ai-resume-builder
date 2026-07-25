@@ -101,6 +101,10 @@ import {
   validateVisibleExperienceCoverage,
 } from '@/lib/cv-experience-phased-apply-329';
 import {
+  canonicalizeContentLocale,
+  resolveCommittedAppliedVisibleContentLocale,
+} from '@/lib/cv-content-locale';
+import {
   buildExperienceJobContext,
   experienceJobContextsMatch,
   resolveExperienceAiGrounding,
@@ -2233,19 +2237,29 @@ export default function CVBuilderPage() {
       }
 
       // Re-read committed entry — post-apply locale truth from stored state.
+      // Public appliedVisibleContentLocale must be canonical (pt-BR), never a
+      // lowercased comparison key (pt-br). Raw persisted value stays separate.
       const committedEntry = (cvRef.current.experience || []).find(
         (e) => e.id === clickedExperienceEntryId,
       );
-      const persistedAppliedLocale = String(
-        (committedEntry as { generatedLocale?: string } | undefined)?.generatedLocale
-        || requestedLocale,
-      ).toLowerCase().split('|')[0] || requestedLocale;
+      const appliedLocaleResolved = resolveCommittedAppliedVisibleContentLocale({
+        persistedGeneratedLocale:
+          (committedEntry as { generatedLocale?: string } | undefined)?.generatedLocale
+          || null,
+        requestedTargetLocale: requestedLocale,
+      });
+      const persistedAppliedLocale = appliedLocaleResolved.appliedVisibleContentLocale;
+      const contentLocaleCanonical = String(
+        canonicalizeContentLocale(cvRef.current.contentLocale || requestedLocale),
+      );
       diagSession.patch({
         applyCommitted: true,
         targetContentApplied: true,
         contentLocaleUpdatedAfterApply: true,
         appliedVisibleContentLocale: persistedAppliedLocale,
-        contentLocaleDocument: cvRef.current.contentLocale || null,
+        appliedVisibleContentLocaleRaw:
+          appliedLocaleResolved.appliedVisibleContentLocaleRaw,
+        contentLocaleDocument: contentLocaleCanonical,
         appliedExperienceEntryIdHash:
           (finalizedBullets.diagnostics?.selectedExperienceEntryIdHash as string | undefined)
           || null,

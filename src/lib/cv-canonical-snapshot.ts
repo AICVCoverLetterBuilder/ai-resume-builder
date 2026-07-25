@@ -18,6 +18,7 @@ import {
   type LocalizedSummaryProvenance,
 } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
+import { canonicalizeContentLocale } from './cv-content-locale';
 import {
   applyGeneratedExperienceDescription,
   experienceProvenanceNeedsRepair,
@@ -735,6 +736,8 @@ export function acceptValidatedAiContent(
   options: AcceptValidatedAiContentOptions,
 ): CVData {
   let next = { ...cv };
+  const persistedLocale = (canonicalizeContentLocale(options.locale) as Locale)
+    || options.locale;
   if (options.summary !== undefined) {
     if (
       !textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary')
@@ -753,8 +756,8 @@ export function acceptValidatedAiContent(
       ...next,
       summary: options.summary,
       summaryOrigin: options.summaryOrigin || 'ai_generated',
-      contentLocale: options.locale,
-      summaryGeneratedLocale: options.locale,
+      contentLocale: persistedLocale,
+      summaryGeneratedLocale: persistedLocale,
       summaryGenerationContextKey: options.summaryOrigin === 'user'
         ? undefined
         : summaryJobKey,
@@ -774,11 +777,11 @@ export function acceptValidatedAiContent(
     const origin: CvExperienceDescriptionOrigin = options.descriptionOrigin || 'ai_generated';
     next = {
       ...next,
-      contentLocale: options.locale,
+      contentLocale: persistedLocale,
       experience: next.experience.map((e) => {
         if (e.id !== options.experienceId) return e;
         return applyGeneratedExperienceDescription(e, options.description!, {
-          locale: options.locale,
+          locale: persistedLocale,
           origin: isAiDescriptionOrigin(origin) ? origin : 'ai_generated',
           jobContext: options.jobContext,
           confirmGeneratedAsGrounding: options.confirmGeneratedAsGrounding,

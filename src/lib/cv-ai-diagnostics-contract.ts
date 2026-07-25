@@ -37,7 +37,8 @@ import {
   isExperienceLocaleRejectionReason,
   isExperienceCoverageRejectionReason,
 } from './cv-experience-locale-rejection-truth-328';
-import { localesEquivalent, normalizeLocaleKey } from './cv-content-locale';
+import { localesEquivalent, normalizeLocaleKey, canonicalizeContentLocale } from './cv-content-locale';
+import { resolveLocaleCandidate } from './i18n/translations';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
@@ -1837,6 +1838,10 @@ type ExperienceLike = {
   requestedTargetLocale?: string | null;
   targetLocale?: string | null;
   uiLocale?: string | null;
+  applyCommitted?: boolean | null;
+  targetContentApplied?: boolean | null;
+  appliedVisibleContentLocale?: string | null;
+  appliedVisibleContentLocaleRaw?: string | null;
   sourceTenseValidationPassed?: boolean | null;
   providerNoOpDetected?: boolean | null;
   providerNoOpEligibleAsFinal?: boolean | null;
@@ -2356,6 +2361,43 @@ export function checkExperienceDiagnosticInvariants(
             targetLocalePurityPassed: true,
           });
         }
+      }
+    }
+    // AAB-336 — committed supported-locale apply: public appliedVisibleContentLocale
+    // must equal canonicalize(requestedTargetLocale) and itself be canonical.
+    if (
+      trace.applyCommitted === true
+      && trace.targetContentApplied === true
+      && trace.requestedTargetLocale
+      && trace.appliedVisibleContentLocale
+    ) {
+      const appliedRaw = String(trace.appliedVisibleContentLocale);
+      const requestedRaw = String(trace.requestedTargetLocale);
+      const appliedCanon = String(canonicalizeContentLocale(appliedRaw));
+      const requestedCanon = String(canonicalizeContentLocale(requestedRaw));
+      if (
+        resolveLocaleCandidate(requestedRaw)
+        && appliedCanon
+        && requestedCanon
+        && !localesEquivalent(appliedCanon, requestedCanon)
+      ) {
+        push('applied_visible_locale_mismatch_after_commit', {
+          appliedVisibleContentLocale: appliedRaw,
+          requestedTargetLocale: requestedRaw,
+          canonicalApplied: appliedCanon,
+          canonicalRequested: requestedCanon,
+        });
+      }
+      if (
+        resolveLocaleCandidate(requestedRaw)
+        && appliedRaw
+        && appliedRaw !== appliedCanon
+      ) {
+        push('applied_visible_locale_not_canonical_after_commit', {
+          appliedVisibleContentLocale: appliedRaw,
+          canonicalAppliedVisibleContentLocale: appliedCanon,
+          requestedTargetLocale: requestedRaw,
+        });
       }
     }
     // AAB-334 — unedited AI text: visible locale must match persisted generatedLocale

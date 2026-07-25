@@ -25,6 +25,7 @@ import {
   localesEquivalent,
   canonicalizeContentLocale,
   isPortugueseBrazilLocale,
+  resolveCommittedAppliedVisibleContentLocale,
 } from '@/lib/cv-content-locale';
 import {
   guessUnitLocale,
@@ -466,7 +467,10 @@ describe('AAB-335 Italian-visible → Brazilian Portuguese Experience cross-loca
       postapplyDiagnosticInvariantCheckPassed: true,
       preapplyDiagnosticCompletenessPassed: true,
       preapplyDiagnosticInvariantCheckPassed: true,
+      contentLocaleDocument: 'pt-BR',
       appliedVisibleContentLocale: 'pt-BR',
+      diagnosticCompletenessPassed: true,
+      diagnosticInvariantCheckPassed: true,
     });
     session.recordVisibleApply(true, usageBefore + 1, {
       visibleDescription: appliedText,
@@ -483,7 +487,8 @@ describe('AAB-335 Italian-visible → Brazilian Portuguese Experience cross-loca
     expect(trace.targetContentApplied).toBe(true);
     expect(trace.contentLocaleUpdatedAfterApply).toBe(true);
     expect(trace.translationFallbackApplied).toBe(true);
-    expect(localesEquivalent(trace.appliedVisibleContentLocale, 'pt-BR')).toBe(true);
+    expect(trace.contentLocaleDocument).toBe('pt-BR');
+    expect(trace.appliedVisibleContentLocale).toBe('pt-BR');
     expect(trace.clientDeterministicFallbackApplied).toBe(true);
     expect(trace.countedAsSuccess).toBe(true);
     expect(trace.usageCountBefore).toBe(usageBefore);
@@ -494,37 +499,60 @@ describe('AAB-335 Italian-visible → Brazilian Portuguese Experience cross-loca
     expect(
       (write.experience![0] as WorkExperience & { generatedLocale?: string }).generatedLocale,
     ).toBe('pt-BR');
+    expect(write.contentLocale).toBe('pt-BR');
     expect(write.experience![1]!.description).toContain('administrative');
 
-    const finAlias = finalizeCvAiFieldForApply({
-      action: 'experience_bullets',
-      field: 'experience_description',
-      requestedLocale: 'pt-br' as never,
-      gender: 'female',
-      cv: atlasItVisiblePtTargetCv(),
-      candidate: EN_PROVIDER_NOOP,
-      experienceId: 'exp-atlas',
-      industry: 'general',
-      level: 'mid',
-      referenceDateIso: REF,
-      operationSnapshot: createExperienceAiOperationSnapshot({
-        liveText: IT_AI_UNEDITED,
-        locale: 'pt-BR',
-        requestId: 'req-it-pt-alias',
-        jobContextHash: 'job-it-pt-alias',
-        experienceEntryId: 'exp-atlas',
-        authoritativeTextOverride: EN_ORIGINAL,
-        provenanceOriginOverride: 'originalUserDescription',
-      }),
-      currentTextareaProvenance: 'ai_generated_unedited',
-      authoritativeFactSourceKind: 'pre_ai_snapshot',
-      currentTextareaUsedForFactExtraction: false,
-      lastAiOutputHashMatched: true,
-      materialUserEditDetected: false,
-      staleGeneratedDescriptionIgnored: true,
-    });
-    expect(finAlias.countedAsSuccess).toBe(true);
-    expect(finAlias.text || '').toContain(EXPECTED_PT_TRIAD[0]!);
+    for (const alias of ['pt', 'pt-br', 'pt_BR', 'pt-BR'] as const) {
+      const finAlias = finalizeCvAiFieldForApply({
+        action: 'experience_bullets',
+        field: 'experience_description',
+        requestedLocale: alias as never,
+        gender: 'female',
+        cv: atlasItVisiblePtTargetCv(),
+        candidate: EN_PROVIDER_NOOP,
+        experienceId: 'exp-atlas',
+        industry: 'general',
+        level: 'mid',
+        referenceDateIso: REF,
+        operationSnapshot: createExperienceAiOperationSnapshot({
+          liveText: IT_AI_UNEDITED,
+          locale: 'pt-BR',
+          requestId: `req-it-pt-alias-${alias}`,
+          jobContextHash: `job-it-pt-alias-${alias}`,
+          experienceEntryId: 'exp-atlas',
+          authoritativeTextOverride: EN_ORIGINAL,
+          provenanceOriginOverride: 'originalUserDescription',
+        }),
+        currentTextareaProvenance: 'ai_generated_unedited',
+        authoritativeFactSourceKind: 'pre_ai_snapshot',
+        currentTextareaUsedForFactExtraction: false,
+        lastAiOutputHashMatched: true,
+        materialUserEditDetected: false,
+        staleGeneratedDescriptionIgnored: true,
+      });
+      expect(finAlias.countedAsSuccess, alias).toBe(true);
+      expect(finAlias.diagnostics?.requestedTargetLocale, alias).toBe('pt-BR');
+      expect(finAlias.text || '', alias).toContain(EXPECTED_PT_TRIAD[0]!);
+      const writeAlias = applyFinalizedBulletsToCv(
+        atlasItVisiblePtTargetCv(),
+        alias as never,
+        'exp-atlas',
+        finAlias,
+      );
+      expect(
+        (writeAlias.experience![0] as WorkExperience & { generatedLocale?: string })
+          .generatedLocale,
+        alias,
+      ).toBe('pt-BR');
+      expect(writeAlias.contentLocale, alias).toBe('pt-BR');
+      const resolved = resolveCommittedAppliedVisibleContentLocale({
+        persistedGeneratedLocale:
+          (writeAlias.experience![0] as WorkExperience & { generatedLocale?: string })
+            .generatedLocale,
+        requestedTargetLocale: alias,
+      });
+      expect(resolved.appliedVisibleContentLocale, alias).toBe('pt-BR');
+    }
     void detectTextLocale;
   });
 });

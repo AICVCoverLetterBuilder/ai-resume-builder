@@ -46,7 +46,12 @@ import {
   portugueseWarehouseFactDiagId,
   PORTUGUESE_EXPERIENCE_GROUNDING_335_REVISION,
 } from './cv-portuguese-experience-grounding';
-import { isPortugueseBrazilLocale } from './cv-content-locale';
+import {
+  isPortugueseBrazilLocale,
+  canonicalizeContentLocale,
+  localesEquivalent,
+} from './cv-content-locale';
+import { resolveLocaleCandidate } from './i18n/translations';
 
 export const EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION =
   'experience-selected-final-coverage-329-v1' as const;
@@ -471,12 +476,27 @@ export function checkExperiencePreapplyDiagnosticInvariants(
     && trace.requestedTargetLocale
     && trace.appliedVisibleContentLocale
   ) {
-    const applied = String(trace.appliedVisibleContentLocale).toLowerCase().split('|')[0];
-    const requested = String(trace.requestedTargetLocale).toLowerCase().split('|')[0];
-    if (applied && requested && applied !== requested) {
+    const appliedRaw = String(trace.appliedVisibleContentLocale);
+    const requestedRaw = String(trace.requestedTargetLocale);
+    const appliedCanon = String(canonicalizeContentLocale(appliedRaw));
+    const requestedCanon = String(canonicalizeContentLocale(requestedRaw));
+    // Alias-equivalent internal keys remain acceptable for mismatch detection.
+    if (appliedCanon && requestedCanon && !localesEquivalent(appliedCanon, requestedCanon)) {
       push('applied_visible_locale_mismatch_after_commit', {
-        appliedVisibleContentLocale: String(trace.appliedVisibleContentLocale),
-        requestedTargetLocale: String(trace.requestedTargetLocale),
+        appliedVisibleContentLocale: appliedRaw,
+        requestedTargetLocale: requestedRaw,
+      });
+    }
+    // Public appliedVisibleContentLocale must itself be the canonical string.
+    if (
+      resolveLocaleCandidate(requestedRaw)
+      && appliedRaw
+      && appliedRaw !== appliedCanon
+    ) {
+      push('applied_visible_locale_not_canonical_after_commit', {
+        appliedVisibleContentLocale: appliedRaw,
+        canonicalAppliedVisibleContentLocale: appliedCanon,
+        requestedTargetLocale: requestedRaw,
       });
     }
   }
@@ -494,9 +514,13 @@ export function checkExperiencePreapplyDiagnosticInvariants(
     && trace.requestedTargetLocale
     && trace.appliedVisibleContentLocale
   ) {
-    const applied = String(trace.appliedVisibleContentLocale).toLowerCase().split('|')[0];
-    const requested = String(trace.requestedTargetLocale).toLowerCase().split('|')[0];
-    if (applied && requested && applied !== requested) {
+    const appliedCanon = String(
+      canonicalizeContentLocale(String(trace.appliedVisibleContentLocale)),
+    );
+    const requestedCanon = String(
+      canonicalizeContentLocale(String(trace.requestedTargetLocale)),
+    );
+    if (appliedCanon && requestedCanon && !localesEquivalent(appliedCanon, requestedCanon)) {
       push('content_locale_updated_but_applied_locale_not_target', {
         appliedVisibleContentLocale: String(trace.appliedVisibleContentLocale),
         requestedTargetLocale: String(trace.requestedTargetLocale),

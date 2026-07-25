@@ -4340,7 +4340,8 @@ function detectBulletScripts(text: string): string[] {
 }
 
 function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult {
-  const locale = input.requestedLocale;
+  const locale = (canonicalizeContentLocale(input.requestedLocale) as Locale)
+    || input.requestedLocale;
   const cv = input.cv;
   const gender = input.gender || cv.personal?.gender || '';
   const experienceIndex = experienceIndexForId(cv, input.experienceId);

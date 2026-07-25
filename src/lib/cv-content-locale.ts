@@ -74,6 +74,31 @@ export function canonicalizeContentLocale(
   return raw || 'unknown';
 }
 
+/**
+ * Post-commit public applied locale for Experience diagnostics.
+ * Internal comparison keys may stay lowercase (`pt-br`); the public
+ * `appliedVisibleContentLocale` must use {@link canonicalizeContentLocale}.
+ * Never publish `.toLowerCase()` of a persisted locale as the public value.
+ */
+export function resolveCommittedAppliedVisibleContentLocale(options: {
+  persistedGeneratedLocale?: string | null;
+  requestedTargetLocale?: string | null;
+}): {
+  appliedVisibleContentLocale: string;
+  appliedVisibleContentLocaleRaw: string;
+} {
+  const raw = String(
+    options.persistedGeneratedLocale
+    || options.requestedTargetLocale
+    || '',
+  ).trim().split('|')[0]?.trim()
+    || String(options.requestedTargetLocale || '').trim();
+  return {
+    appliedVisibleContentLocaleRaw: raw,
+    appliedVisibleContentLocale: String(canonicalizeContentLocale(raw)),
+  };
+}
+
 export type DetectedContentLocale = Locale | 'unknown';
 
 export type ContentLocaleSignals = {

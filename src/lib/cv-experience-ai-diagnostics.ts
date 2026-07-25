@@ -258,6 +258,8 @@ export type ExperienceAiDiagnosticTrace = {
   persistedGeneratedLocaleForVisibleMismatch?: string | null;
   contentLocaleDocument?: string | null;
   appliedVisibleContentLocale?: string | null;
+  /** Raw persisted/requested locale before public canonicalize (debug only). */
+  appliedVisibleContentLocaleRaw?: string | null;
   crossLocaleOperation: boolean;
   translationProviderAttempted: boolean;
   translationRepairAttempted: boolean;
