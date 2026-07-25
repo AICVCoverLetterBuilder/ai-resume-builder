@@ -128,6 +128,7 @@ import {
   sourceRequiresSpanishWarehouseFactCoverage,
   validateSpanishWarehouseExperienceCoverage,
   stripSpanishExperienceUnsupportedEscalation,
+  scanSpanishWarehousePredicates,
   SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
   SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
   SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
@@ -1187,8 +1188,15 @@ export type FinalizeCvAiFieldResult = {
     translationProviderAttempted?: boolean;
     translationRepairAttempted?: boolean;
     translationFallbackAttempted?: boolean;
+    /** True only after transactional visible apply commits the fallback text. */
     translationFallbackApplied?: boolean;
+    /** True when a target-locale deterministic fallback was selected for apply. */
+    translationFallbackSelected?: boolean;
     translatedFactCount?: number;
+    authoritativeFactSourceLocale?: string | null;
+    visibleTextareaLocale?: string | null;
+    contentLocaleDocument?: string | null;
+    appliedVisibleContentLocale?: string | null;
     targetLocaleValidationPassed?: boolean | null;
     sourcePerspectiveMode?: string | null | 'cv_third_person' | 'first_person' | 'neutral_cv';
     targetPerspectiveMode?: string | null;
@@ -5185,6 +5193,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     deterministicFallbackAttemptedAfterNoOp,
     deterministicFallbackAppliedAfterNoOp,
     finalCandidateSource,
+    // Locale triad — do not collapse into contentLocale alone.
+    // contentLocale on the CV document may remain the document/UI locale while
+    // entry.generatedLocale tracks the last applied visible content locale.
+    authoritativeFactSourceLocale: detectTextLocale(sourceForCoverage || '', {
+      storedLocale: locale,
+    }),
+    visibleTextareaLocale: detectTextLocale(visibleComparisonText || '', {
+      storedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
+        || cv.contentLocale
+        || null,
+      generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale,
+    }),
+    requestedTargetLocale: locale,
+    contentLocaleDocument: cv.contentLocale || null,
+    appliedVisibleContentLocale:
+      (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null,
   });
 
   const tryAcceptGeneration = (
@@ -5607,6 +5631,27 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const esWarehouse = needsEsWarehouse
         ? validateSpanishWarehouseExperienceCoverage(sourceForCoverage, candidate)
         : null;
+      const esPredicates = needsEsWarehouse
+        ? scanSpanishWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (esPredicates) {
+        sourcePredicateIdentityCount = esPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = esPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = esPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...esPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = esPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const esExpansion = locale === 'es'
         ? detectSpanishExperienceUnsupportedExpansion(sourceForCoverage, candidate)
         : null;
@@ -5757,9 +5802,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
-      if (needsEsWarehouse && esWarehouse && !esWarehouse.ok) {
+      if (needsEsWarehouse && esWarehouse && (
+        !esWarehouse.ok
+        || (esPredicates && (
+          esPredicates.sourceUnitPredicateCoveragePassed === false
+          || esPredicates.candidateAddedPredicateCount > 0
+        ))
+      )) {
         lastRejectStage = `${stage}:spanish_warehouse_facts`;
-        lastRejectReason = esWarehouse.reason || 'spanish_experience_warehouse_fact_coverage_incomplete';
+        lastRejectReason = !esWarehouse.ok
+          ? (esWarehouse.reason || 'spanish_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
         lastRequired = esWarehouse.required.length || Math.max(3, sourceFactCount);
         lastCovered = esWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = esWarehouse.uncovered.map(
@@ -6290,8 +6343,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : undefined,
         crossLocaleOperation: crossLocaleOp,
         translationProviderAttempted: crossLocaleOp && Boolean((input.candidate || '').trim()),
+        // Attempted/selected at finalize; Applied only after transactional visible commit.
         translationFallbackAttempted: isClientFallback && crossLocaleOp,
-        translationFallbackApplied: isClientFallback && crossLocaleOp,
+        translationFallbackApplied: false,
+        translationFallbackSelected: isClientFallback && crossLocaleOp,
         translatedFactCount: crossLocaleOp
           ? (
             lastCovered
@@ -6351,9 +6406,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage || '');
           const isDeWarehouse = locale === 'de'
             && sourceRequiresGermanWarehouseFactCoverage(sourceForCoverage || '');
-          // Only EN/DE warehouse selected-final snapshots independently recompute
+          const isEsWarehouse = locale === 'es'
+            && sourceRequiresSpanishWarehouseFactCoverage(sourceForCoverage || '');
+          // EN/DE/ES warehouse selected-final snapshots independently recompute
           // predicate truth. Other locales must not invent false predicate coverage.
-          if (!isEnWarehouse && !isDeWarehouse) {
+          if (!isEnWarehouse && !isDeWarehouse && !isEsWarehouse) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
             delete diag.finalCandidatePredicateValidationApplicable;
             if (!selectedFinal.candidatePredicateIdentityCount) {
@@ -6546,14 +6603,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           useVisibleForNoOp: true,
           capturedAtRequest: true,
           isPresent,
+          crossLocaleOperation: crossLocaleOp,
         });
         lastVisibleComparisonEval = postVis;
         // AAB-313: never bill Spanish on generic grounded_phrasing alone.
+        // Cross-locale DE→ES (and any A→ES): wrong_locale_fixed / missing_fact_restored
+        // are billable material improvements even when same-locale phrasing is absent.
         const esKinds = (postVis.materialImprovementKinds || []).filter(
           (k) => k !== 'grounded_phrasing_enhancement',
         );
         const kindsOk = postVis.materialImprovementDetected && esKinds.length > 0;
-        const crossLocaleVisibleFix = esKinds.includes('wrong_locale_fixed');
+        const crossLocaleVisibleFix = esKinds.includes('wrong_locale_fixed')
+          || esKinds.includes('missing_fact_restored');
         const priorCanonical = lastCanonicalDecision;
         const candidateOriginForDecide = String(
           result.diagnostics?.finalCandidateSource
@@ -6572,6 +6633,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           repairSelectedForComparison: unsupportedClaimRepairSelectedForComparison,
           sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
           sourceCorrectableDefectCount: visibleSourceAnalysis.correctableDefectCount,
+          crossLocaleOperation: crossLocaleOp,
         });
         // Keep a previously proven tense-normalizer decision if the re-decide
         // loses tenseOnlyMeta context but still has wrong_tense evidence.
@@ -6588,21 +6650,24 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           effectiveCanonical?.materialImprovementEvidence.length || 0,
           esKinds.length,
         );
-        // Cross-locale first click (e.g. Hindi visible → Spanish candidate): the
-        // shared validator may not treat non-Spanish fact authority as a
-        // warehouse source. Allow apply when wrong_locale_fixed is proven and
-        // surface form passes.
+        // Cross-locale first click (e.g. Hindi/German visible → Spanish candidate):
+        // allow apply when wrong_locale_fixed is proven and surface form passes.
+        // Never treat empty degradationKinds as a degradation block.
+        const postVisDegradationReal = Boolean(
+          postVis.degradationDetected && (postVis.degradationKinds || []).length > 0,
+        );
         const allowCrossLocaleApply = Boolean(
-          crossLocaleVisibleFix
+          crossLocaleOp
+          && crossLocaleVisibleFix
           && surface.passed
           && kindsOk
-          && !postVis.degradationDetected
+          && !postVisDegradationReal
           && !postVis.semanticNoOpDetected
         );
         if (
           !(allowCrossLocaleApply || effectiveCanonical?.shouldApply)
           || postVis.semanticNoOpDetected
-          || postVis.degradationDetected
+          || postVisDegradationReal
           || !kindsOk
           || (
             !allowCrossLocaleApply
@@ -6614,9 +6679,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           unsupportedClaimRepairVisibleApplyPerformed = false;
           clientDeterministicFallbackApplied = false;
           finalCandidateSource = 'none';
+          const degKinds = [
+            ...(effectiveCanonical?.degradationKinds || []),
+            ...(postVis.degradationKinds || []),
+          ].filter((k, i, arr) => arr.indexOf(k) === i);
+          const isDegradationReject = Boolean(
+            (effectiveCanonical?.degradation || postVisDegradationReal)
+            && !effectiveCanonical?.semanticNoOp
+            && degKinds.length > 0
+          );
           return {
             blocked: true,
-            reason: effectiveCanonical?.degradation && !effectiveCanonical?.semanticNoOp
+            reason: isDegradationReject
               ? 'experience_ai_degradation'
               : 'experience_ai_noop',
             text: exp?.description || visibleComparisonText || '',
@@ -6640,8 +6714,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               noOpCandidateKind: result.diagnostics?.finalCandidateSource
                 || result.origin
                 || 'provider',
-              typedFailureReason: effectiveCanonical?.degradation
-                && !effectiveCanonical?.semanticNoOp
+              typedFailureReason: isDegradationReject
                 ? 'experience_ai_degradation'
                 : 'ai_noop',
               rejectionStage: 'visible_comparison_noop',
@@ -6650,7 +6723,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               finalDecisionKind: effectiveCanonical?.finalDecisionKind || 'none',
               semanticNoOpDetected: Boolean(effectiveCanonical?.semanticNoOp),
               neutralRestyleDetected: Boolean(effectiveCanonical?.neutralRestyle),
-              degradationDetected: Boolean(effectiveCanonical?.degradation),
+              degradationDetected: isDegradationReject,
+              degradationKinds: isDegradationReject ? degKinds : [],
               unsupportedClaimRepairCandidateProduced,
               unsupportedClaimRepairCandidateValid,
               unsupportedClaimRepairSelectedForComparison,
@@ -8535,7 +8609,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               uiLocale: locale,
               crossLocaleOperation: true,
               translationFallbackAttempted: true,
-              translationFallbackApplied: true,
+              translationFallbackSelected: true,
+              translationFallbackApplied: false,
               translatedFactCount: countTranslatedFactUnits(sourceForCoverage, translated),
               targetLocaleValidationPassed: true,
               sourcePerspectiveMode: perspectiveMeta.sourcePersonMode,
@@ -8586,7 +8661,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 ...acceptedDesign.diagnostics,
                 crossLocaleOperation: true,
                 translationFallbackAttempted: true,
-                translationFallbackApplied: true,
+                translationFallbackSelected: true,
+                translationFallbackApplied: false,
                 clientDeterministicFallbackAttempted: true,
                 clientDeterministicFallbackApplied: true,
                 clientDeterministicFallbackReason: 'russian_design_family_rebuild',

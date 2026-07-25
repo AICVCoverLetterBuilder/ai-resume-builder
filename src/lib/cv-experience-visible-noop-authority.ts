@@ -15,7 +15,12 @@ import {
 import { experienceAiHasMeaningfulChange } from './cv-experience-perspective';
 import { splitExperienceBullets } from './cv-canonical-facts';
 import { materialDutyKeysFromDescription } from './cv-material-duty-coverage';
-import { detectSpanishExperienceUnsupportedExpansion } from './cv-spanish-experience-grounding';
+import {
+  detectSpanishExperienceUnsupportedExpansion,
+  sourceRequiresSpanishWarehouseFactCoverage,
+  validateSpanishWarehouseExperienceCoverage,
+  scanSpanishWarehousePredicates,
+} from './cv-spanish-experience-grounding';
 import {
   sourceRequiresGermanWarehouseFactCoverage,
   validateGermanWarehouseExperienceCoverage,
@@ -26,6 +31,7 @@ import {
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
 } from './cv-english-experience-warehouse-grounding';
+import { validateCrossLocaleSemanticCoverage } from './cv-cross-locale-experience';
 import { detectTextLocale } from './cv-content-locale';
 import {
   analyzeSpanishExperienceTenseAlignment,
@@ -360,10 +366,11 @@ export function evaluateExperienceVisibleComparison(options: {
       );
     if (crossLangSurface) {
       // Cross-locale: compare candidate against fact-authority identities, never
-      // raw same-language material-key equality vs an English visible AI snapshot.
+      // raw same-language material-key equality vs a prior-locale visible AI snapshot.
       const auth = fact || visible;
+      const target = (locale || '').toLowerCase();
       if (
-        (locale || '').toLowerCase().startsWith('de')
+        target.startsWith('de')
         && sourceRequiresGermanWarehouseFactCoverage(auth)
       ) {
         const cov = validateGermanWarehouseExperienceCoverage(auth, candidate);
@@ -379,17 +386,51 @@ export function evaluateExperienceVisibleComparison(options: {
           }
         }
       } else if (
-        (locale || '').toLowerCase() === 'en'
+        target.startsWith('es')
+        && sourceRequiresSpanishWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateSpanishWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanSpanishWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
+        target === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(auth)
       ) {
         const cov = validateEnglishWarehouseExperienceCoverage(auth, candidate);
         const pred = scanEnglishWarehousePredicates(auth, candidate);
         if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
           degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3) {
+            improvementKinds.push('missing_fact_restored');
+          }
         }
       } else {
-        for (const k of factKeys) {
-          if (!candKeys.has(k)) degradationKinds.push('fact_lost');
+        // Generic cross-locale: semantic frame / identity coverage, not surface keys.
+        const semantic = validateCrossLocaleSemanticCoverage(auth, candidate);
+        if (!semantic.ok || semantic.coveredCount < semantic.requiredCount) {
+          degradationKinds.push('fact_lost');
+        } else if (
+          visibleLocale !== 'unknown'
+          && candidateLocale !== 'unknown'
+          && visibleLocale !== candidateLocale
+        ) {
+          improvementKinds.push('wrong_locale_fixed');
+          if (semantic.coveredCount >= Math.min(3, semantic.requiredCount)) {
+            improvementKinds.push('missing_fact_restored');
+          }
         }
       }
     } else {
@@ -419,11 +460,22 @@ export function evaluateExperienceVisibleComparison(options: {
         || /[\u0400-\u04FF]/.test(visible)
         || /[\u0600-\u06FF]/.test(visible)
         || /[\u3040-\u30ff\u3400-\u9fff]/.test(visible)
+        || (
+          visibleLocale !== 'unknown'
+          && candidateLocale !== 'unknown'
+          && visibleLocale !== candidateLocale
+        )
+        || (
+          /(?:prüft|kontrolliert|koordiniert|waren|unterlagen|kolleg)/iu.test(visible)
+          && /(?:revisa|comprueba|coordina|mercanc|documentaci)/iu.test(candidate)
+        )
       )
       && !/[\u0900-\u097F\u0400-\u04FF\u0600-\u06FF\u3040-\u30ff\u3400-\u9fff]/.test(candidate)
       && /[áéíóúñü¿¡]|\b(?:revisa|comprueba|coordina|mercanc|documentaci)/iu.test(candidate)
     ) {
-      improvementKinds.push('wrong_locale_fixed');
+      if (!improvementKinds.includes('wrong_locale_fixed')) {
+        improvementKinds.push('wrong_locale_fixed');
+      }
     }
     // Tense mismatch vs employment state — evidence-only wrong_tense_fixed.
     let sourceTenseMismatchCount = 0;
@@ -484,6 +536,7 @@ export function evaluateExperienceVisibleComparison(options: {
   const uniqueDeg = [...new Set(degradationKinds)].filter((k) =>
     !(k === 'restyle_without_benefit' && (semanticEq || inclusiveOnly)));
   const uniqueImp = [...new Set(improvementKinds)];
+  // Invariant: degradationDetected requires at least one concrete kind.
   const degradationDetected = uniqueDeg.length > 0;
   const semanticEquivalent = Boolean(semanticEq || inclusiveOnly);
   // Re-run no-op: any semantic equivalence without improvement evidence.

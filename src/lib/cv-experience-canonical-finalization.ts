@@ -20,6 +20,7 @@ import {
   validateSpanishWarehouseExperienceCoverage,
   buildSpanishWarehouseExperienceFallback,
   stripSpanishExperienceUnsupportedEscalation,
+  scanSpanishWarehousePredicates,
 } from './cv-spanish-experience-grounding';
 import {
   evaluateExperienceVisibleComparison,
@@ -268,11 +269,35 @@ export function validateSpanishExperienceCandidate(options: {
   const units = splitExperienceBullets(candidate).filter(Boolean);
   const surface = validateSpanishExperienceSurfaceForm(candidate);
   const scan = detectSpanishExperienceUnsupportedExpansion(fact, candidate);
-  const pred = detectSpanishExperiencePredicateExpansion(fact, candidate);
   const needsWh = sourceRequiresSpanishWarehouseFactCoverage(fact);
   const cov = needsWh
     ? validateSpanishWarehouseExperienceCoverage(fact, candidate)
     : { ok: true, required: [], covered: [], uncovered: [] as string[], reason: null };
+  // Morphology is authoritative for Spanish-locale fact sources (AAB-314: zero
+  // finite verbs ⇒ extraction failure). Warehouse identity scan is only for
+  // cross-locale EN/DE fact authority that lacks Spanish verb morphology.
+  const morphPred = detectSpanishExperiencePredicateExpansion(fact, candidate);
+  const factLooksSpanish = /(?:revis[ao]|comprob\w*|coordin\w*|mercanc[ií]a|documentaci[oó]n|compa[nñ]er|almac[eé]n|registros?\s+relacionad)/iu
+    .test(fact);
+  const foreignWarehouseAuthority = needsWh && !factLooksSpanish;
+  const whPred = foreignWarehouseAuthority
+    ? scanSpanishWarehousePredicates(fact, candidate)
+    : null;
+  const pred = whPred
+    ? {
+      sourcePredicateIdentityCount: whPred.sourcePredicateIdentityCount,
+      candidatePredicateIdentityCount: whPred.candidatePredicateIdentityCount,
+      candidateAddedPredicateCount: whPred.candidateAddedPredicateCount,
+      candidateAddedPredicateIdentityHashes: whPred.candidateAddedPredicateIdentityHashes,
+      sourceUnitPredicateCoveragePassed: whPred.sourceUnitPredicateCoveragePassed,
+      sourcePredicateExtractionPassed: whPred.sourcePredicateIdentityCount > 0,
+      sourcePredicateExtractionFailureReason: whPred.sourcePredicateIdentityCount > 0
+        ? null
+        : 'source_predicate_extraction_failed',
+      unsupportedKinds: [] as string[],
+      coordinatedPredicateExpansionDetected: false,
+    }
+    : morphPred;
   const alignmentAmbiguous = units.length > 0
     && needsWh
     && cov.uncovered.length > 0
@@ -491,6 +516,8 @@ export function decideSpanishExperienceFinalCandidate(options: {
   /** When true, billable material improvement requires a concrete defect-fixing kind. */
   sourceAlreadyValidForTarget?: boolean;
   sourceCorrectableDefectCount?: number;
+  /** EN/DE visible → ES candidate (or other cross-locale) operations. */
+  crossLocaleOperation?: boolean;
 }): ExperienceCanonicalFinalDecision {
   void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
   void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
@@ -528,6 +555,7 @@ export function decideSpanishExperienceFinalCandidate(options: {
     useVisibleForNoOp: visibleAvailable,
     capturedAtRequest: true,
     isPresent,
+    crossLocaleOperation: Boolean(options.crossLocaleOperation),
   });
 
   // Spanish: never accept generic grounded_phrasing as sole billable reason.
@@ -536,6 +564,22 @@ export function decideSpanishExperienceFinalCandidate(options: {
   ) as ExperienceMaterialImprovementKind[];
 
   const improvementKinds: ExperienceMaterialImprovementKind[] = [...rawKinds];
+  // Cross-locale warehouse translation with full coverage is a real improvement.
+  if (
+    options.crossLocaleOperation
+    && validation.candidateValid
+    && validation.factCoveragePassed
+    && !improvementKinds.includes('wrong_locale_fixed')
+  ) {
+    improvementKinds.push('wrong_locale_fixed');
+    if (
+      sourceRequiresSpanishWarehouseFactCoverage(fact)
+      && validateSpanishWarehouseExperienceCoverage(fact, candidate).covered.length >= 3
+      && !improvementKinds.includes('missing_fact_restored')
+    ) {
+      improvementKinds.push('missing_fact_restored');
+    }
+  }
   // Complete bullets must never claim incomplete_bullet_completed (AAB-314/316).
   // Length growth alone is never evidence of incompleteness.
   if (
@@ -623,9 +667,20 @@ export function decideSpanishExperienceFinalCandidate(options: {
   if (!validation.candidateValid && candidate && validation.unsupportedCount > 0) {
     degradationKinds.push('unsupported_object_introduced');
   }
+  if (!validation.candidateValid && candidate && !validation.factCoveragePassed) {
+    degradationKinds.push('fact_lost');
+  }
+  if (
+    !validation.candidateValid
+    && candidate
+    && validation.predicateCoveragePassed === false
+    && !degradationKinds.includes('unsupported_predicate_added')
+  ) {
+    degradationKinds.push('unsupported_predicate_added');
+  }
   const uniqueDeg = [...new Set(degradationKinds)];
-  const degradation = !validation.candidateValid || uniqueDeg.length > 0
-    || !validation.surfaceFormPassed;
+  // Invariant: degradationDetected ⇔ degradationKinds.length > 0
+  const degradation = uniqueDeg.length > 0;
 
   const tenseOnlyMeta = options.tenseOnlyMeta || null;
   const tenseOnlyCorrectionDetected = Boolean(

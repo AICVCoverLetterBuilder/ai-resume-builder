@@ -1413,3 +1413,164 @@ export function buildSpanishWarehouseExperienceFallback(options: {
   }
   return formatExperienceBullets(lines);
 }
+
+export type SpanishWarehousePredicateFamily =
+  | 'inspect_incoming'
+  | 'verify_documentation'
+  | 'coordinate_colleagues';
+
+export type SpanishWarehousePredicateScan = {
+  sourcePredicateIdentityCount: number;
+  candidatePredicateIdentityCount: number;
+  candidateAddedPredicateCount: number;
+  candidateAddedPredicateIdentityHashes: string[];
+  sourceUnitPredicateCoveragePassed: boolean;
+  finalCandidatePredicateValidationApplicable: true;
+  predicateFamiliesSource: SpanishWarehousePredicateFamily[];
+  predicateFamiliesCandidate: SpanishWarehousePredicateFamily[];
+};
+
+function spanishWarehousePredicateIdentity(
+  family: SpanishWarehousePredicateFamily,
+  surface: string,
+): string {
+  let h = 2166136261;
+  const s = `${family}:${(surface || '').toLowerCase()}`;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `es_wh_pred_${family}_${(h >>> 0).toString(16)}`;
+}
+
+function spanishPredicateFamilyFromUnit(unit: string): SpanishWarehousePredicateFamily | null {
+  const t = unit || '';
+  if (bulletCoversFact(t, 'incoming_goods_check')
+    || INCOMING_GOODS_ES.test(t)
+    || /(?:incoming|inbound|eingehend).{0,24}(?:goods|waren|mercanc)|(?:checks?|prüf|kontroll|revisa|comprueba).{0,24}(?:incoming|eingehend|entrant)/iu
+      .test(t)
+    || /(?:checks?\s+incoming\s+goods|prüft\s+eingehende\s+waren)/iu.test(t)) {
+    return 'inspect_incoming';
+  }
+  if (bulletCoversFact(t, 'document_check')
+    || DOCUMENT_CHECK_ES.test(t)
+    || /(?:document|unterlagen|aufzeichnungen|related\s+documents?|documentaci[oó]n|registros?\s+relacionad)/iu
+      .test(t)) {
+    return 'verify_documentation';
+  }
+  if (bulletCoversFact(t, 'goods_prep_movement_colleagues')
+    || (COORDINATE_ES.test(t) && COLLEAGUES_ES.test(t) && GOODS_MOVEMENT_ES.test(t))
+    || /(?:colleague|kolleg|compa[nñ]er|colega).{0,48}(?:prepare|vorbereit|movement|bewegung|movimiento|move\s+goods|mercanc)/iu
+      .test(t)
+    || /(?:works?\s+with\s+colleagues|koordiniert\s+mit\s+kolleg)/iu.test(t)) {
+    return 'coordinate_colleagues';
+  }
+  if (/(?:checks?|inspects?|prüft|revisa).{0,40}incoming\s+goods|incoming\s+goods|eingehende\s+waren/iu.test(t)) {
+    return 'inspect_incoming';
+  }
+  if (/(?:checks?|kontrolliert|comprueba).{0,40}(?:related\s+)?(?:documents?|unterlagen|documentaci)/iu.test(t)) {
+    return 'verify_documentation';
+  }
+  if (/(?:works?\s+with\s+colleagues|koordiniert|coordina).{0,60}(?:prepare|vorbereit|movement|bewegung|movimiento)/iu.test(t)) {
+    return 'coordinate_colleagues';
+  }
+  return null;
+}
+
+/**
+ * Predicate identity coverage for Spanish warehouse Experience.
+ * Source units may be English, German, or Spanish (cross-locale).
+ */
+export function scanSpanishWarehousePredicates(
+  sourceDescription: string,
+  candidateDescription: string,
+): SpanishWarehousePredicateScan {
+  void SPANISH_CV_AI_305_REVISION;
+  void SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION;
+  const sourceUnits = extractSourceDutyUnits(sourceDescription || '')
+    .map((u) => stripDutyListPrefix(u))
+    .filter(Boolean);
+  const candUnits = splitExperienceBullets(candidateDescription || '')
+    .map((b) => b.trim())
+    .filter(Boolean);
+
+  const sourceFamilies: SpanishWarehousePredicateFamily[] = [];
+  const sourceIds: string[] = [];
+  for (const u of sourceUnits) {
+    const fam = spanishPredicateFamilyFromUnit(u);
+    if (fam && !sourceFamilies.includes(fam)) {
+      sourceFamilies.push(fam);
+      sourceIds.push(spanishWarehousePredicateIdentity(fam, u));
+    }
+  }
+  if (sourceUnits.length >= 3 && sourceFamilies.length < 3) {
+    const fallback: SpanishWarehousePredicateFamily[] = [
+      'inspect_incoming',
+      'verify_documentation',
+      'coordinate_colleagues',
+    ];
+    for (let i = 0; i < 3; i += 1) {
+      const fam = fallback[i]!;
+      if (!sourceFamilies.includes(fam)) {
+        sourceFamilies.push(fam);
+        sourceIds.push(spanishWarehousePredicateIdentity(fam, sourceUnits[i] || fam));
+      }
+    }
+  }
+  const requiredFacts = sourceWarehouseFacts(sourceDescription);
+  if (requiredFacts.length >= 3 && sourceFamilies.length < 3) {
+    const map: Record<SpanishWarehouseFactId, SpanishWarehousePredicateFamily> = {
+      incoming_goods_check: 'inspect_incoming',
+      document_check: 'verify_documentation',
+      goods_prep_movement_colleagues: 'coordinate_colleagues',
+    };
+    for (const fact of requiredFacts) {
+      const fam = map[fact];
+      if (fam && !sourceFamilies.includes(fam)) {
+        sourceFamilies.push(fam);
+        sourceIds.push(spanishWarehousePredicateIdentity(fam, fact));
+      }
+    }
+  }
+
+  const candFamilies: SpanishWarehousePredicateFamily[] = [];
+  for (const u of candUnits) {
+    const fam = spanishPredicateFamilyFromUnit(u);
+    if (fam && !candFamilies.includes(fam)) candFamilies.push(fam);
+  }
+  const cov = validateSpanishWarehouseExperienceCoverage(
+    sourceDescription,
+    candidateDescription,
+  );
+  if (cov.ok && candFamilies.length < cov.covered.length) {
+    const map: Record<SpanishWarehouseFactId, SpanishWarehousePredicateFamily> = {
+      incoming_goods_check: 'inspect_incoming',
+      document_check: 'verify_documentation',
+      goods_prep_movement_colleagues: 'coordinate_colleagues',
+    };
+    for (const fact of cov.covered) {
+      const fam = map[fact];
+      if (fam && !candFamilies.includes(fam)) candFamilies.push(fam);
+    }
+  }
+
+  const added: string[] = [];
+  for (const fam of candFamilies) {
+    if (!sourceFamilies.includes(fam)) {
+      added.push(spanishWarehousePredicateIdentity(fam, fam));
+    }
+  }
+  const coverageOk = sourceFamilies.length > 0
+    && sourceFamilies.every((f) => candFamilies.includes(f))
+    && added.length === 0;
+  return {
+    sourcePredicateIdentityCount: sourceFamilies.length || sourceIds.length,
+    candidatePredicateIdentityCount: candFamilies.length,
+    candidateAddedPredicateCount: added.length,
+    candidateAddedPredicateIdentityHashes: added,
+    sourceUnitPredicateCoveragePassed: coverageOk,
+    finalCandidatePredicateValidationApplicable: true,
+    predicateFamiliesSource: sourceFamilies,
+    predicateFamiliesCandidate: candFamilies,
+  };
+}

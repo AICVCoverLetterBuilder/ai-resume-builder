@@ -19,7 +19,10 @@ import {
   sourceRequiresGermanWarehouseFactCoverage,
   validateGermanWarehouseExperienceCoverage,
 } from './cv-german-experience-grounding';
-import { sourceRequiresSpanishWarehouseFactCoverage } from './cv-spanish-experience-grounding';
+import {
+  sourceRequiresSpanishWarehouseFactCoverage,
+  validateSpanishWarehouseExperienceCoverage,
+} from './cv-spanish-experience-grounding';
 import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
@@ -910,6 +913,14 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (deCovered > 0) return deCovered;
+  }
+  // AAB-330 — Spanish warehouse result (incl. EN→ES / DE-visible→ES): same.
+  if (sourceRequiresSpanishWarehouseFactCoverage(sourceDescription || '')) {
+    const esCovered = validateSpanishWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (esCovered > 0) return esCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.

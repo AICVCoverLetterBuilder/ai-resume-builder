@@ -237,11 +237,25 @@ export type ExperienceAiDiagnosticTrace = {
   detectedSourceLocale: string | null;
   storedSourceLocale: string | null;
   requestedTargetLocale: string | null;
+  /**
+   * Locale triad for cross-locale Experience ops (do not collapse into contentLocale):
+   * - authoritativeFactSourceLocale: fact-authority text locale (often original EN)
+   * - visibleTextareaLocale: currently visible/applied textarea locale
+   * - requestedTargetLocale: UI target for this operation
+   * CV document contentLocale may remain a document-level locale and is not the
+   * sole source of truth for applied Experience content locale (see generatedLocale).
+   */
+  authoritativeFactSourceLocale?: string | null;
+  visibleTextareaLocale?: string | null;
+  contentLocaleDocument?: string | null;
+  appliedVisibleContentLocale?: string | null;
   crossLocaleOperation: boolean;
   translationProviderAttempted: boolean;
   translationRepairAttempted: boolean;
   translationFallbackAttempted: boolean;
   translationFallbackApplied: boolean;
+  /** True when a target-locale deterministic fallback was selected (pre-commit). */
+  translationFallbackSelected?: boolean;
   translatedFactCount: number | null;
   targetLocaleValidationPassed: boolean | null;
   sourcePerspectiveMode: string | null;
@@ -995,7 +1009,12 @@ export class ExperienceAiDiagnosticSession {
       translationRepairAttempted: false,
       translationFallbackAttempted: false,
       translationFallbackApplied: false,
+      translationFallbackSelected: false,
       translatedFactCount: null,
+      authoritativeFactSourceLocale: null,
+      visibleTextareaLocale: null,
+      contentLocaleDocument: null,
+      appliedVisibleContentLocale: null,
       targetLocaleValidationPassed: null,
       sourcePerspectiveMode: null,
       targetPerspectiveMode: null,
@@ -2445,11 +2464,31 @@ export class ExperienceAiDiagnosticSession {
         diag.translationFallbackAttempted
         || diag.clientDeterministicFallbackReason === 'cross_locale_translation_fallback',
       ),
+      translationFallbackSelected: Boolean(
+        (diag as Record<string, unknown>).translationFallbackSelected
+        || (
+          (diag.clientDeterministicFallbackApplied || diag.finalCandidateSource === 'deterministic_fallback')
+          && (diag.crossLocaleOperation || diag.translationFallbackAttempted)
+        ),
+      ),
       translationFallbackApplied: Boolean(
         diag.translationFallbackApplied
         || (clientFallbackApplied && diag.clientDeterministicFallbackReason === 'cross_locale_translation_fallback'),
       ),
       translatedFactCount: diag.translatedFactCount ?? null,
+      authoritativeFactSourceLocale:
+        ((diag as Record<string, unknown>).authoritativeFactSourceLocale as string | undefined)
+        ?? null,
+      visibleTextareaLocale:
+        ((diag as Record<string, unknown>).visibleTextareaLocale as string | undefined)
+        ?? null,
+      contentLocaleDocument:
+        ((diag as Record<string, unknown>).contentLocaleDocument as string | undefined)
+        ?? this.draft.contentLocale
+        ?? null,
+      appliedVisibleContentLocale:
+        ((diag as Record<string, unknown>).appliedVisibleContentLocale as string | undefined)
+        ?? null,
       targetLocaleValidationPassed: (() => {
         void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
         const localeEval = evaluateExperiencePhaseLocaleValidation({
@@ -3190,6 +3229,14 @@ export class ExperienceAiDiagnosticSession {
           visibleValidationPassed: true,
           targetContentApplied: true,
           contentLocaleUpdatedAfterApply: true,
+          translationFallbackApplied: Boolean(
+            this.draft.translationFallbackSelected
+            || this.draft.translationFallbackAttempted
+            || (
+              this.draft.clientDeterministicFallbackApplied
+              && this.draft.crossLocaleOperation
+            )
+          ),
           appliedExperienceEntryIdHash:
             this.draft.appliedExperienceEntryIdHash
             || this.draft.selectedExperienceEntryIdHash
