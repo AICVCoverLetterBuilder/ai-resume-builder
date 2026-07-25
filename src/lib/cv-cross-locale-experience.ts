@@ -15,7 +15,10 @@ import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
-import { sourceRequiresGermanWarehouseFactCoverage } from './cv-german-experience-grounding';
+import {
+  sourceRequiresGermanWarehouseFactCoverage,
+  validateGermanWarehouseExperienceCoverage,
+} from './cv-german-experience-grounding';
 import { sourceRequiresSpanishWarehouseFactCoverage } from './cv-spanish-experience-grounding';
 import {
   sourceRequiresEnglishWarehouseFactCoverage,
@@ -898,6 +901,16 @@ export function candidateLeaksSourceLocale(
 }
 
 export function countTranslatedFactUnits(sourceDescription: string, result: string): number {
+  // AAB-329 — German warehouse result (incl. EN→DE): object-level fact coverage.
+  // Must run before the English warehouse short-circuit, otherwise a German
+  // translation of an English warehouse source reports translatedFactCount=0.
+  if (sourceRequiresGermanWarehouseFactCoverage(sourceDescription || '')) {
+    const deCovered = validateGermanWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (deCovered > 0) return deCovered;
+  }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.
   if (sourceRequiresStrictEnglishWarehouseFactCoverage(sourceDescription || '')) {

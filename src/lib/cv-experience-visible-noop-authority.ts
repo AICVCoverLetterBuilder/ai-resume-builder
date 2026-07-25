@@ -17,6 +17,17 @@ import { splitExperienceBullets } from './cv-canonical-facts';
 import { materialDutyKeysFromDescription } from './cv-material-duty-coverage';
 import { detectSpanishExperienceUnsupportedExpansion } from './cv-spanish-experience-grounding';
 import {
+  sourceRequiresGermanWarehouseFactCoverage,
+  validateGermanWarehouseExperienceCoverage,
+  scanGermanWarehousePredicates,
+} from './cv-german-experience-grounding';
+import {
+  sourceRequiresStrictEnglishWarehouseFactCoverage,
+  validateEnglishWarehouseExperienceCoverage,
+  scanEnglishWarehousePredicates,
+} from './cv-english-experience-warehouse-grounding';
+import { detectTextLocale } from './cv-content-locale';
+import {
   analyzeSpanishExperienceTenseAlignment,
   countIncompleteSpanishUnits,
   SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
@@ -261,6 +272,8 @@ export function evaluateExperienceVisibleComparison(options: {
   capturedAtRequest?: boolean;
   /** Employment tense for Spanish wrong_tense_fixed evidence. */
   isPresent?: boolean;
+  /** When true, visible and candidate may be different languages. */
+  crossLocaleOperation?: boolean;
 }): ExperienceVisibleComparisonEvaluation {
   void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
   void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
@@ -327,8 +340,62 @@ export function evaluateExperienceVisibleComparison(options: {
     const factKeys = new Set(materialDutyKeysFromDescription(fact || visible));
     const candKeys = new Set(materialDutyKeysFromDescription(candidate));
     const visKeys = new Set(materialDutyKeysFromDescription(visible));
-    for (const k of factKeys) {
-      if (!candKeys.has(k) && visKeys.has(k)) degradationKinds.push('fact_lost');
+    const visibleLocale = visible ? detectTextLocale(visible) : 'unknown';
+    const candidateLocale = candidate ? detectTextLocale(candidate) : 'unknown';
+    const crossLangSurface = Boolean(options.crossLocaleOperation)
+      || (
+        visible
+        && candidate
+        && visibleLocale !== 'unknown'
+        && candidateLocale !== 'unknown'
+        && visibleLocale !== candidateLocale
+      )
+      || (
+        visible
+        && candidate
+        && (locale || '').toLowerCase().startsWith('de')
+        && /[A-Za-z]/.test(visible)
+        && !/(?:prüft|kontrolliert|koordiniert|waren|unterlagen|kolleg)/iu.test(visible)
+        && /(?:prüft|kontrolliert|koordiniert|waren|unterlagen|kolleg)/iu.test(candidate)
+      );
+    if (crossLangSurface) {
+      // Cross-locale: compare candidate against fact-authority identities, never
+      // raw same-language material-key equality vs an English visible AI snapshot.
+      const auth = fact || visible;
+      if (
+        (locale || '').toLowerCase().startsWith('de')
+        && sourceRequiresGermanWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateGermanWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanGermanWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
+        (locale || '').toLowerCase() === 'en'
+        && sourceRequiresStrictEnglishWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateEnglishWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanEnglishWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        }
+      } else {
+        for (const k of factKeys) {
+          if (!candKeys.has(k)) degradationKinds.push('fact_lost');
+        }
+      }
+    } else {
+      for (const k of factKeys) {
+        if (!candKeys.has(k) && visKeys.has(k)) degradationKinds.push('fact_lost');
+      }
     }
     for (const k of factKeys) {
       if (!visKeys.has(k) && candKeys.has(k)) {

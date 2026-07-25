@@ -14,6 +14,12 @@ import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION,
 } from './cv-english-experience-warehouse-grounding';
+import {
+  validateGermanWarehouseExperienceCoverage,
+  scanGermanWarehousePredicates,
+  sourceRequiresGermanWarehouseFactCoverage,
+  GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
+} from './cv-german-experience-grounding';
 
 export const EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION =
   'experience-selected-final-coverage-329-v1' as const;
@@ -29,6 +35,7 @@ void EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION;
 void EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION;
 void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
 void ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
+void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 
 export type ExperienceSelectedFinalCandidateSnapshot = {
   revision: typeof EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION;
@@ -137,6 +144,20 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
+  } else if (locale === 'de' && sourceRequiresGermanWarehouseFactCoverage(source)) {
+    const cov = validateGermanWarehouseExperienceCoverage(source, text);
+    requiredFactCount = cov.required.length;
+    coveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => `de_wh_${id}`);
+    factCoveragePassed = cov.ok;
+    const pred = scanGermanWarehousePredicates(source, text);
+    sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
+    candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
+    addedPredicateCount = pred.candidateAddedPredicateCount;
+    addedPredicateIdentityHashes = [...pred.candidateAddedPredicateIdentityHashes];
+    predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
+      && candidatePredicateIdentityCount > 0;
   }
 
   return {
@@ -156,7 +177,11 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     requiredFactSetHash: hashFactSet(
       locale === 'en' && sourceRequiresStrictEnglishWarehouseFactCoverage(source)
         ? validateEnglishWarehouseExperienceCoverage(source, text).required.map((id) => `en_wh_${id}`)
-        : Array.from({ length: requiredFactCount }, (_, i) => `req_${i}`),
+        : (
+          locale === 'de' && sourceRequiresGermanWarehouseFactCoverage(source)
+            ? validateGermanWarehouseExperienceCoverage(source, text).required.map((id) => `de_wh_${id}`)
+            : Array.from({ length: requiredFactCount }, (_, i) => `req_${i}`)
+        ),
     ),
     factCoveragePassed,
     sourcePredicateIdentityCount,
@@ -613,6 +638,22 @@ export function validateVisibleExperienceCoverage(options: {
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
       && visibleCoveredPredicateCount > 0;
+  } else if (
+    locale === 'de'
+    && sourceRequiresGermanWarehouseFactCoverage(options.sourceDescription)
+  ) {
+    applicable = true;
+    const cov = validateGermanWarehouseExperienceCoverage(options.sourceDescription, visible);
+    visibleRequiredFactCount = cov.required.length;
+    visibleCoveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => `de_wh_${id}`);
+    visibleFactCoveragePassed = cov.ok;
+    const pred = scanGermanWarehousePredicates(options.sourceDescription, visible);
+    visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
+    visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
+    visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
+      && visibleCoveredPredicateCount > 0;
   }
 
   return {
@@ -624,7 +665,12 @@ export function validateVisibleExperienceCoverage(options: {
       locale === 'en' && sourceRequiresStrictEnglishWarehouseFactCoverage(options.sourceDescription)
         ? validateEnglishWarehouseExperienceCoverage(options.sourceDescription, visible)
           .required.map((id) => `en_wh_${id}`)
-        : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`),
+        : (
+          locale === 'de' && sourceRequiresGermanWarehouseFactCoverage(options.sourceDescription)
+            ? validateGermanWarehouseExperienceCoverage(options.sourceDescription, visible)
+              .required.map((id) => `de_wh_${id}`)
+            : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+        ),
     ),
     visibleRequiredPredicateCount,
     visibleCoveredPredicateCount,
