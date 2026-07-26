@@ -113,7 +113,60 @@ export function detectExperiencePersonMode(text: string, locale?: Locale): Exper
   if (/\b(ich|yo)\b/i.test(raw) && (loc === 'de' || loc === 'es')) {
     return 'first_singular';
   }
+
+  if (loc === 'hi') {
+    return detectHindiExperiencePersonMode(raw);
+  }
+
   return 'neutral';
+}
+
+/** First-person singular present / past auxiliaries (हूँ / हूं). */
+const HI_1SG_RE =
+  /(?:करती|करता|रखती|रखता|बनाए\s+रखती|बनाए\s+रखता|समन्वय\s+करती|समन्वय\s+करता|तैयार\s+करती|तैयार\s+करता)\s+(?:हूँ|हूं)|(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|(?:^|[^\p{L}])(?:हूँ|हूं)(?:[^\p{L}]|$)/u;
+
+/** Third-person / honorific CV present (है / हैं). */
+const HI_3_RE =
+  /(?:करती|करता|करते|रखती|रखता|रखते|बनाए\s+रखती|बनाए\s+रखता|बनाए\s+रखते|समन्वय\s+करती|समन्वय\s+करते|समन्वय\s+करता|तैयार\s+करती|तैयार\s+करते|तैयार\s+करता)\s+(?:हैं|है)/u;
+
+export function detectHindiExperiencePersonMode(text: string): ExperiencePersonMode {
+  const raw = (text || '').trim();
+  if (!raw) return 'unknown';
+  if (HI_1SG_RE.test(raw)) return 'first_singular';
+  if (HI_3_RE.test(raw)) return 'third_singular';
+  if (/[\u0900-\u097F]/.test(raw)) return 'neutral';
+  return 'unknown';
+}
+
+/**
+ * Normalize Hindi Experience bullets to CV third-person / honorific surface.
+ * Preserves facts and predicate identities — only grammatical person changes.
+ */
+export function normalizeHindiExperiencePerspective(text: string): string {
+  let out = (text || '').trim();
+  if (!out) return out;
+  out = out
+    .replace(/मैंने\s+/gu, '')
+    .replace(/मैं\s+/gu, '')
+    .replace(/तैयार\s+करती\s+(?:हूँ|हूं)/gu, 'तैयार करती हैं')
+    .replace(/तैयार\s+करता\s+(?:हूँ|हूं)/gu, 'तैयार करते हैं')
+    .replace(/बनाए\s+रखती\s+(?:हूँ|हूं)/gu, 'बनाए रखती हैं')
+    .replace(/बनाए\s+रखता\s+(?:हूँ|हूं)/gu, 'बनाए रखते हैं')
+    .replace(/समन्वय\s+करती\s+(?:हूँ|हूं)/gu, 'समन्वय करती हैं')
+    .replace(/समन्वय\s+करता\s+(?:हूँ|हूं)/gu, 'समन्वय करते हैं')
+    .replace(/सहयोग\s+करती\s+(?:हूँ|हूं)/gu, 'सहयोग करती हैं')
+    .replace(/सहयोग\s+करता\s+(?:हूँ|हूं)/gu, 'सहयोग करते हैं')
+    .replace(/करती\s+(?:हूँ|हूं)/gu, 'करती हैं')
+    .replace(/करता\s+(?:हूँ|हूं)/gu, 'करते हैं')
+    .replace(/रखती\s+(?:हूँ|हूं)/gu, 'रखती हैं')
+    .replace(/रखता\s+(?:हूँ|हूं)/gu, 'रखते हैं')
+    .replace(/\s+(?:हूँ|हूं)।/gu, ' हैं।')
+    .replace(/\s+(?:हूँ|हूं),/gu, ' हैं,')
+    .replace(/\s+(?:हूँ|हूं)\s+/gu, ' ')
+    .replace(/\s+(?:हूँ|हूं)$/gu, ' हैं')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return out;
 }
 
 /**
@@ -178,11 +231,14 @@ export function normalizeExperienceBulletPerspective(
   if (locale === 'es') {
     return capitalizeLeading(raw.replace(/^yo\s+/i, ''), raw);
   }
+  if (locale === 'hi') {
+    return capitalizeLeading(normalizeHindiExperiencePerspective(raw), raw);
+  }
   return raw;
 }
 
 export function experienceRequiresCvThirdPerson(locale: Locale): boolean {
-  return locale === 'sr' || locale === 'hr' || locale === 'en';
+  return locale === 'sr' || locale === 'hr' || locale === 'en' || locale === 'hi';
 }
 
 /**
@@ -269,17 +325,26 @@ export function normalizeExperienceBulletsPerspective(
 /**
  * Meaningful Experience AI change: not a pure bullet/whitespace no-op of the source.
  * Perspective conversion (1sg → CV 3sg) counts because verb forms differ under
- * shared normalization (pregledam ≠ pregleda).
+ * shared normalization (pregledam ≠ pregleda). Hindi हूँ→हैं is invisible to
+ * normalizeSourceFactText (Mn marks stripped) — surface inequality still counts
+ * when perspectiveApplied.
  */
 export function experienceAiHasMeaningfulChange(
   sourceDescription: string,
   finalText: string,
-  _options?: { perspectiveApplied?: boolean },
+  options?: { perspectiveApplied?: boolean },
 ): boolean {
   const source = (sourceDescription || '').trim();
   const final = (finalText || '').trim();
   if (!final) return false;
   // Pure formatting-only equivalence (bullets / CRLF / whitespace) → no-op.
-  if (experienceAiSourcesEquivalent(source, final)) return false;
+  if (experienceAiSourcesEquivalent(source, final)) {
+    if (options?.perspectiveApplied) {
+      const a = source.replace(/\s+/g, ' ').trim();
+      const b = final.replace(/\s+/g, ' ').trim();
+      if (a !== b) return true;
+    }
+    return false;
+  }
   return true;
 }

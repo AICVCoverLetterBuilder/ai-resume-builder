@@ -12,7 +12,12 @@ import {
   normalizeExperienceAiSourceText,
   experienceAiSourceUnits,
 } from './cv-experience-ai-operation-snapshot';
-import { experienceAiHasMeaningfulChange } from './cv-experience-perspective';
+import {
+  experienceAiHasMeaningfulChange,
+  detectExperiencePersonMode,
+  experienceRequiresCvThirdPerson,
+} from './cv-experience-perspective';
+import type { Locale } from './i18n/translations';
 import { splitExperienceBullets } from './cv-canonical-facts';
 import { materialDutyKeysFromDescription } from './cv-material-duty-coverage';
 import {
@@ -342,7 +347,11 @@ export function evaluateExperienceVisibleComparison(options: {
   const visibleNormHash = hashNormalized(visible);
   const units = splitExperienceBullets(visible).filter(Boolean);
 
-  const exactNormMatch = useVisible && experienceAiSourcesEquivalent(visible, candidate);
+  const exactNormMatch = useVisible
+    && experienceAiSourcesEquivalent(visible, candidate)
+    // Hindi हूँ→हैं (and similar CV person fixes) collapse under Mn-stripped
+    // identity normalization — require whitespace-normalized surface equality.
+    && visible.replace(/\s+/g, ' ').trim() === candidate.replace(/\s+/g, ' ').trim();
   const visibleIsFactAuthority = Boolean(
     visible && fact && experienceAiSourcesEquivalent(visible, fact),
   );
@@ -352,10 +361,20 @@ export function evaluateExperienceVisibleComparison(options: {
   const inclusiveOnly = useVisible
     && (locale || '').toLowerCase().startsWith('es')
     && detectInclusiveGenderOnlyChange(visible, candidate);
+  const perspectiveSurfaceFix = useVisible
+    && Boolean(candidate)
+    && experienceRequiresCvThirdPerson((locale || 'en') as Locale)
+    && detectExperiencePersonMode(visible, (locale || 'en') as Locale) === 'first_singular'
+    && detectExperiencePersonMode(candidate, (locale || 'en') as Locale) !== 'first_singular'
+    && visible.replace(/\s+/g, ' ').trim() !== candidate.replace(/\s+/g, ' ').trim();
   const textualDiffVsVisible = useVisible
-    && experienceAiHasMeaningfulChange(visible, candidate);
+    && experienceAiHasMeaningfulChange(visible, candidate, {
+      perspectiveApplied: perspectiveSurfaceFix,
+    });
   const textualDiffVsFact = fact
-    ? experienceAiHasMeaningfulChange(fact, candidate)
+    ? experienceAiHasMeaningfulChange(fact, candidate, {
+      perspectiveApplied: perspectiveSurfaceFix,
+    })
     : textualDiffVsVisible;
 
   const degradationKinds: ExperienceDegradationKind[] = [];
@@ -458,13 +477,22 @@ export function evaluateExperienceVisibleComparison(options: {
         if (/(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(v)) {
           return validateFrenchWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
-        if (/(?:revis[ao]|comprob|coordin|mercanc[ií]a|documentaci[oó]n|compa[nñ]er)/iu.test(v)) {
+        if (/(?:revis[ao]|comprob[ao]|coordina|coordinaci|mercanc[ií]a|documentaci[oó]n|compa[nñ]er)/iu.test(v)) {
           return validateSpanishWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
         if (sourceRequiresStrictEnglishWarehouseFactCoverage(auth)) {
           return validateEnglishWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
         return validateCrossLocaleSemanticCoverage(auth, v).uncoveredCount;
+      })();
+      // missing_fact_restored only when the visible comparison genuinely lacks an
+      // authoritative fact — use the locale-aware visibleUncoveredCount above,
+      // never a bare English↔target lexical overlap that false-fires on complete
+      // cross-locale warehouse surfaces (DE/AR/… visible that already cover auth).
+      const visibleLacksAuthFact = ((): boolean => {
+        if (!(visible || '').trim()) return true;
+        if (experienceAiSourcesEquivalent(visible, auth)) return false;
+        return visibleUncoveredCount > 0;
       })();
       if (
         target.startsWith('de')
@@ -478,7 +506,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -494,7 +522,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -510,7 +538,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -526,7 +554,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -542,7 +570,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -558,7 +586,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -574,7 +602,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -590,7 +618,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -606,7 +634,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -622,7 +650,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -638,7 +666,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -654,7 +682,7 @@ export function evaluateExperienceVisibleComparison(options: {
           degradationKinds.push('unsupported_predicate_added');
         } else {
           improvementKinds.push('wrong_locale_fixed');
-          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+          if (cov.covered.length >= 3 && visibleLacksAuthFact) {
             improvementKinds.push('missing_fact_restored');
           }
         }
@@ -686,7 +714,7 @@ export function evaluateExperienceVisibleComparison(options: {
           improvementKinds.push('wrong_locale_fixed');
           if (
             semantic.coveredCount >= Math.min(3, semantic.requiredCount)
-            && visibleUncoveredCount > 0
+            && visibleLacksAuthFact
           ) {
             improvementKinds.push('missing_fact_restored');
           }
@@ -707,7 +735,12 @@ export function evaluateExperienceVisibleComparison(options: {
         degradationKinds.push('fact_lost');
       } else if (pred.candidateAddedPredicateCount > 0) {
         degradationKinds.push('unsupported_predicate_added');
-      } else if (cov.covered.length >= 3 && visibleUncovered > 0) {
+      } else if (
+        cov.covered.length >= 3
+        && visibleUncovered > 0
+        && !experienceAiSourcesEquivalent(visible, auth)
+        && validateCrossLocaleSemanticCoverage(auth, visible || '').uncoveredCount > 0
+      ) {
         improvementKinds.push('missing_fact_restored');
       }
     } else {
@@ -797,6 +830,11 @@ export function evaluateExperienceVisibleComparison(options: {
       && incompleteVisible > 0
     ) {
       improvementKinds.push('incomplete_bullet_completed');
+    }
+    // CV person fix (e.g. Hindi हूँ → हैं): surface differs while Mn-stripped
+    // identity units may still match — bill as perspective_error_fixed.
+    if (perspectiveSurfaceFix && !improvementKinds.includes('perspective_error_fixed')) {
+      improvementKinds.push('perspective_error_fixed');
     }
     // Non-Spanish: evidence kind for any non-exact grounded rewrite so usage
     // invariants never see materialImprovement true with empty kinds, and so

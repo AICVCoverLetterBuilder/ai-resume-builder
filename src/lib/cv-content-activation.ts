@@ -34,6 +34,7 @@ import {
   summaryContainsListMarkerLeakage,
 } from './cv-source-fact-identity';
 import { summaryHasMalformedSkillsFragment } from './cv-summary-grounding';
+import { normalizeHindiExperiencePerspective } from './cv-experience-perspective';
 
 export type CvContentActivation = {
   content: string;
@@ -234,7 +235,7 @@ export async function activateCvExperienceBullets(options: {
     }
   }
 
-  const localizedFallback = normalizeHindiGeneratedWhitespace(
+  const localizedFallbackRaw = normalizeHindiGeneratedWhitespace(
     deterministicLocalizedBulletsFromCanonical(
       canonical,
       options.locale,
@@ -243,6 +244,10 @@ export async function activateCvExperienceBullets(options: {
     ) || '',
     options.locale,
   );
+  // Hindi Experience CV surface: normalize 1sg (हूँ) → honorific/third (हैं).
+  const localizedFallback = options.locale === 'hi'
+    ? normalizeHindiExperiencePerspective(localizedFallbackRaw)
+    : localizedFallbackRaw;
   if (
     localizedFallback
     && experiencePasses(localizedFallback, {

@@ -596,6 +596,7 @@ export function decideSpanishExperienceFinalCandidate(options: {
     visEval.degradationDetected === false
     && validation.candidateValid
     && visibleAvailable
+    && !options.crossLocaleOperation
   ) {
     const factKeys = new Set(materialDutyKeysFromDescription(fact || visible));
     const visKeys = new Set(materialDutyKeysFromDescription(visible));

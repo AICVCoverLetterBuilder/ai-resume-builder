@@ -505,6 +505,7 @@ import {
 } from './cv-experience-ai-operation-snapshot';
 import {
   normalizeExperienceBulletsPerspective,
+  normalizeHindiExperiencePerspective,
   validateExperienceCvPerspective,
   experienceAiHasMeaningfulChange,
   detectExperiencePersonMode,
@@ -726,6 +727,7 @@ import {
   validateSummaryCompleteness,
   validateSerbianDurationGrammar,
   validateSummaryForcedConflictingTitle,
+  validateCurrentRoleTenseMix,
 } from './cv-semantic-fidelity';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
@@ -4948,13 +4950,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       visibleSourceAnalysis.sourceAlreadyValidForTarget
       && (
         !candidateText
-        || experienceAiSourcesEquivalent(candidateText, visibleComparisonText)
+        || (
+          experienceAiSourcesEquivalent(candidateText, visibleComparisonText)
+          && (candidateText || '').replace(/\s+/g, ' ').trim()
+            === (visibleComparisonText || '').replace(/\s+/g, ' ').trim()
+        )
       )
     ) {
       const exact = experienceAiSourcesEquivalent(
         candidateText || visibleComparisonText,
         visibleComparisonText,
-      );
+      )
+        && (candidateText || visibleComparisonText || '').replace(/\s+/g, ' ').trim()
+          === (visibleComparisonText || '').replace(/\s+/g, ' ').trim();
       safeEval = {
         ...evalVis,
         degradationDetected: false,
@@ -7083,13 +7091,36 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
     }
+    // Hindi: cross-locale enhance/fallback must reject past surfaces for current roles
+    // (same contract as validateCurrentRoleTenseMix / bulletsPass).
+    if (locale === 'hi') {
+      const hiTenseViolations = validateCurrentRoleTenseMix(candidate, 'hi', isPresent);
+      const hiTenseOk = hiTenseViolations.length === 0;
+      generationValidationMeta = {
+        ...generationValidationMeta,
+        tenseValidationPassed: hiTenseOk,
+        relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed
+          || Boolean(lastCovered),
+      };
+      if (!hiTenseOk) {
+        lastRejectStage = `${stage}:hindi_employment_tense`;
+        lastRejectReason = hiTenseViolations[0]?.matched
+          || 'hindi_employment_tense_mismatch';
+        return null;
+      }
+    }
     // Final-candidate validators must describe the accepted text, not a rejected provider.
-    if (locale !== 'ar' && locale !== 'ru') {
+    if (locale !== 'ar' && locale !== 'ru' && locale !== 'hi') {
       generationValidationMeta = {
         ...generationValidationMeta,
         relevanceValidationPassed: true,
         perspectiveValidationPassed: true,
         tenseValidationPassed: true,
+      };
+    } else if (locale === 'hi') {
+      generationValidationMeta = {
+        ...generationValidationMeta,
+        relevanceValidationPassed: true,
       };
     }
     const bulletCount = splitExperienceBullets(candidate).filter(Boolean).length;
@@ -7393,7 +7424,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       if (!isEs) {
         // Non-Spanish: only exact/normalized visible equivalence is a no-op.
         // Do not apply Spanish compliance/semantic degradation heuristics.
-        if (experienceAiSourcesEquivalent(visibleComparisonText, result.text)) {
+        // Hindi हूँ→हैं collapses under Mn-stripped identity hashes — require
+        // whitespace-normalized surface equality before treating as no-op.
+        const visSurf = (visibleComparisonText || '').replace(/\s+/g, ' ').trim();
+        const resSurf = (result.text || '').replace(/\s+/g, ' ').trim();
+        if (
+          experienceAiSourcesEquivalent(visibleComparisonText, result.text)
+          && visSurf === resSurf
+        ) {
           providerAccepted = false;
           unsupportedClaimRepairApplied = false;
           clientDeterministicFallbackApplied = false;
@@ -7635,13 +7673,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     const acceptedText = (result.text || '').replace(/\s+/g, ' ').trim();
     const providerCompare = (providerRawForCompare || '').replace(/\s+/g, ' ').trim();
+    // Exact surface match only when perspective normalization changed person morphology
+    // (Hindi हूँ→हैं is invisible to normalizeSourceFactText which strips Mn marks).
     const matchesProvider = Boolean(
       result.countedAsSuccess
       && acceptedText
       && providerCompare
       && (
         acceptedText === providerCompare
-        || experienceAiHasMeaningfulChange(providerCompare, acceptedText) === false
+        || (
+          !perspectiveMeta.perspectiveNormalizationApplied
+          && experienceAiHasMeaningfulChange(providerCompare, acceptedText) === false
+        )
       ),
     );
     // Never inherit a pre-fallback provider-equality flag after selecting fallback.
@@ -8388,7 +8431,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           const isEsVis = (locale || '').toLowerCase().startsWith('es');
           if (!isEsVis) {
             // Non-Spanish: only exact/normalized visible equivalence is a no-op.
-            if (experienceAiSourcesEquivalent(visibleComparisonText, firstAccepted.text)) {
+            // Hindi हूँ→हैं collapses under Mn-stripped identity hashes — require
+            // whitespace-normalized surface equality before treating as no-op.
+            const visSurf = (visibleComparisonText || '').replace(/\s+/g, ' ').trim();
+            const accSurf = (firstAccepted.text || '').replace(/\s+/g, ' ').trim();
+            if (
+              experienceAiSourcesEquivalent(visibleComparisonText, firstAccepted.text)
+              && visSurf === accSurf
+            ) {
               providerAccepted = false;
               return attachPerspectiveDiag({
                 blocked: true,
@@ -9604,7 +9654,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           locale,
         );
       }
-      // AAB-344 — cook/hospitality must not inherit warehouse or design soft shells.
+      // AAB-344/345 — cook/hospitality must not inherit warehouse or design soft shells.
+      // Prefer the grounded Hindi cooking triad only when the authoritative source is
+      // the exact EN cook fixture or a 3-unit hospitality set (coverage-preserving).
+      // Longer Serbian cooking lists keep per-unit localize with present + CV person.
       if (!translated.trim()
         && locale === 'hi'
         && !sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage)
@@ -9613,26 +9666,35 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || /(?:\bmeals?\b|\bdishes?\b|\bkitchen\b|\bfood\s+preparation\b|\bjela\b|\bkuhinj)/i
             .test(sourceForCoverage || ''))) {
         void HINDI_COOKING_EXPERIENCE_FALLBACK_344_REVISION;
+        const cookUnits = extractSourceDutyUnits(sourceForCoverage)
+          .map((u) => stripDutyListPrefix(u))
+          .filter(Boolean);
         let cookingFb = '';
-        if (isExactHindiCookingThreeDutySource(sourceForCoverage)) {
+        if (
+          isExactHindiCookingThreeDutySource(sourceForCoverage)
+          || (sourceIsCookingHospitalityWithoutWarehouseEvidence(sourceForCoverage)
+            && cookUnits.length === 3)
+        ) {
           cookingFb = buildHindiCookingExperienceFallback({
             sourceDescription: sourceForCoverage,
             isPresent,
             gender,
           });
-        } else {
-          const cookUnits = extractSourceDutyUnits(sourceForCoverage)
-            .map((u) => stripDutyListPrefix(u))
-            .filter(Boolean);
+        }
+        if (!cookingFb.trim()) {
           const cookLines = cookUnits
             .map((u) => localizeCanonicalBulletLine(u, 'hi', gender, { isPresent }))
+            .map((l) => normalizeHindiExperiencePerspective(l || ''))
             .filter((l) => Boolean(l && l.trim()));
           cookingFb = cookLines.length === cookUnits.length && cookLines.length > 0
             ? formatExperienceBullets(cookLines)
             : '';
         }
         if (cookingFb.trim()) {
-          translated = normalizeLocaleText(cookingFb, locale);
+          translated = normalizeLocaleText(
+            normalizeHindiExperiencePerspective(cookingFb),
+            locale,
+          );
         }
       }
       if (!translated.trim()

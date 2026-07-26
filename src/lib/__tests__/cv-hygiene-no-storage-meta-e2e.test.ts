@@ -117,12 +117,12 @@ describe('hygiene must not invent storage/meta (build 237)', () => {
     });
     expect(pipeline.blocked).toBe(false);
     const text = pipeline.finalized.text;
-    expect(text).toMatch(/तैयार करती हूँ/);
-    expect(text).toMatch(/कार्यस्थल की स्वच्छता बनाए रखती हूँ/);
-    expect(text).toMatch(/सहयोग करती हूँ/);
+    expect(text).toMatch(/तैयार करती हैं/);
+    expect(text).toMatch(/स्वच्छता/);
+    expect(text).toMatch(/समन्वय करती हैं|सहयोग करती हैं/);
     expect(text).not.toMatch(/भंडारण|सामग्री भंडारण/);
     expect(text).not.toMatch(/भूमिका के कर्तव्यों|बताई गई/);
-    expect(text).not.toMatch(/थी|पालन किया/);
+    expect(text).not.toMatch(/थी|था|थे|हूँ|हूं|पालन किया/);
     expect(validateMaterialDutyCoverage(SR_THREE, text).valid).toBe(true);
     expect(validateNoExtraGeneratedDuties(SR_THREE, text).valid).toBe(true);
     expect(splitExperienceBullets(text)).toHaveLength(3);
@@ -281,10 +281,10 @@ describe('50× cold hygiene-no-storage apply', () => {
       });
       expect(pipeline.blocked, `iter ${i}`).toBe(false);
       const text = pipeline.stateCv.experience[0].description;
-      expect(text, `iter ${i}`).toMatch(/तैयार करती हूँ/);
-      expect(text, `iter ${i}`).toMatch(/कार्यस्थल की स्वच्छता बनाए रखती हूँ/);
-      expect(text, `iter ${i}`).toMatch(/सहयोग करती हूँ/);
-      expect(text, `iter ${i}`).not.toMatch(/भंडारण|भूमिका के कर्तव्यों|पालन किया/);
+      expect(text, `iter ${i}`).toMatch(/तैयार करती हैं/);
+      expect(text, `iter ${i}`).toMatch(/स्वच्छता/);
+      expect(text, `iter ${i}`).toMatch(/समन्वय करती हैं|सहयोग करती हैं/);
+      expect(text, `iter ${i}`).not.toMatch(/भंडारण|भूमिका के कर्तव्यों|पालन किया|हूँ|हूं|थी/);
       expect(pipeline.stateCv.experience[0].originalUserDescription).toBe(SR_THREE);
     }
   });

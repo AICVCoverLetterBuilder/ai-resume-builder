@@ -621,10 +621,12 @@ export function validateCurrentRoleTenseMix(
   }
   if (locale === 'hi' && isPresent) {
     // Habitual past and completed perfectives that present ongoing duties as finished.
-    const pastHabitual = /(करती\s+थी|करता\s+था|रखती\s+थी|रखता\s+था|बनाए\s+रखती\s+थी|बनाए\s+रखता\s+था|सहयोग\s+करती\s+थी|सहयोग\s+करता\s+था)/u.test(text);
-    const pastPerfective = /(पालन\s+किया|तैयार\s+किए|तैयार\s+किया|समन्वय\s+किया|प्रबंधन\s+किया|सहायता\s+की|बनाया|परोसे)/u.test(text);
-    const presentProg = /(कर\s+रही\s+हूँ|कर\s+रहा\s+हूँ)/u.test(text);
-    const presentSimple = /(करती\s+हूँ|करता\s+हूँ|रखती\s+हूँ|रखता\s+हूँ|बनाए\s+रखती\s+हूँ|बनाए\s+रखता\s+हूँ|सहयोग\s+करती\s+हूँ|सहयोग\s+करता\s+हूँ)/u.test(text);
+    // Match verb + past auxiliary — never bare थी/था/थे as substrings of unrelated words.
+    const pastHabitual = /(?:करती|करता|करते|रखती|रखता|रखते|बनाती|बनाता|बनाते|बनाए\s+रखती|बनाए\s+रखता|बनाए\s+रखते|सहयोग\s+करती|सहयोग\s+करता|सहयोग\s+करते|समन्वय\s+करती|समन्वय\s+करता|समन्वय\s+करते|तैयार\s+करती|तैयार\s+करता|तैयार\s+करते)\s+(?:थी|था|थे|थीं)/u.test(text);
+    const pastPerfective = /(?:पालन\s+किया|तैयार\s+किए|तैयार\s+किया|तैयार\s+की|समन्वय\s+किया|प्रबंधन\s+किया|सहायता\s+की|बनाया|परोसे|किया\s+था|की\s+थी)/u.test(text);
+    const presentProg = /(?:कर\s+रही|कर\s+रहा|कर\s+रहे)\s+(?:हूँ|हूं|हैं|है)/u.test(text);
+    // CV honorific हैं / है and legacy 1sg हूँ both count as present surfaces.
+    const presentSimple = /(?:करती|करता|करते|रखती|रखता|रखते|बनाए\s+रखती|बनाए\s+रखता|बनाए\s+रखते|सहयोग\s+करती|सहयोग\s+करता|सहयोग\s+करते|समन्वय\s+करती|समन्वय\s+करता|समन्वय\s+करते|तैयार\s+करती|तैयार\s+करता|तैयार\s+करते)\s+(?:हूँ|हूं|हैं|है)/u.test(text);
     if ((pastHabitual || pastPerfective) && (presentProg || presentSimple)) {
       violations.push({
         kind: 'employment_tense_mismatch',
@@ -632,7 +634,7 @@ export function validateCurrentRoleTenseMix(
         section: 'experience',
       });
     } else if ((pastHabitual || pastPerfective) && !presentProg && !presentSimple) {
-      const m = text.match(/(करती\s+थी|करता\s+था|रखती\s+थी|रखता\s+था|पालन\s+किया|तैयार\s+किए|तैयार\s+किया)/u);
+      const m = text.match(/(?:करती|करता|करते|रखती|रखता|रखते|बनाए\s+रखती|बनाए\s+रखता|सहयोग\s+करती|समन्वय\s+करती|तैयार\s+करती)\s+(?:थी|था|थे|थीं)|(?:पालन\s+किया|तैयार\s+किए|तैयार\s+किया|समन्वय\s+किया)/u);
       violations.push({
         kind: 'employment_tense_mismatch',
         matched: m?.[0] || 'hi-past-for-present-role',
