@@ -89,6 +89,14 @@ import {
   CROATIAN_EXPERIENCE_GROUNDING_342_REVISION,
 } from './cv-croatian-experience-grounding';
 import {
+  GENERIC_EXPERIENCE_PREDICATE_343_REVISION,
+  sourceRequiresGenericExperiencePredicates,
+  scanGenericExperiencePredicates,
+} from './cv-generic-experience-predicate-grounding';
+import {
+  validateCrossLocaleSemanticCoverage,
+} from './cv-cross-locale-experience';
+import {
   isPortugueseBrazilLocale,
   canonicalizeContentLocale,
   localesEquivalent,
@@ -112,6 +120,7 @@ void ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void SPANISH_CV_AI_305_REVISION;
 void FRENCH_EXPERIENCE_GROUNDING_332_REVISION;
+void GENERIC_EXPERIENCE_PREDICATE_343_REVISION;
 
 export type ExperienceSelectedFinalCandidateSnapshot = {
   revision: typeof EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION;
@@ -403,6 +412,24 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
+  } else if (sourceRequiresGenericExperiencePredicates(source)) {
+    const pred = scanGenericExperiencePredicates(source, text);
+    sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
+    candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
+    addedPredicateCount = pred.candidateAddedPredicateCount;
+    addedPredicateIdentityHashes = [...pred.candidateAddedPredicateIdentityHashes];
+    predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
+      && candidatePredicateIdentityCount > 0;
+    if (!(requiredFactCount > 0 && coveredFactCount === requiredFactCount && uncovered.length === 0)) {
+      const semantic = validateCrossLocaleSemanticCoverage(source, text);
+      requiredFactCount = semantic.requiredCount;
+      coveredFactCount = semantic.coveredCount;
+      uncovered = [];
+      factCoveragePassed = semantic.ok
+        && semantic.coveredCount === semantic.requiredCount
+        && semantic.requiredCount > 0;
+    }
   }
 
   return {
@@ -1169,6 +1196,22 @@ export function validateVisibleExperienceCoverage(options: {
     uncovered = cov.uncovered.map((id) => croatianWarehouseFactDiagId(id));
     visibleFactCoveragePassed = cov.ok;
     const pred = scanCroatianWarehousePredicates(options.sourceDescription, visible);
+    visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
+    visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
+    visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
+      && visibleCoveredPredicateCount > 0;
+  } else if (sourceRequiresGenericExperiencePredicates(options.sourceDescription)) {
+    applicable = true;
+    void GENERIC_EXPERIENCE_PREDICATE_343_REVISION;
+    const semantic = validateCrossLocaleSemanticCoverage(options.sourceDescription, visible);
+    visibleRequiredFactCount = semantic.requiredCount;
+    visibleCoveredFactCount = semantic.coveredCount;
+    uncovered = [];
+    visibleFactCoveragePassed = semantic.ok
+      && semantic.coveredCount === semantic.requiredCount
+      && semantic.requiredCount > 0;
+    const pred = scanGenericExperiencePredicates(options.sourceDescription, visible);
     visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
     visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed

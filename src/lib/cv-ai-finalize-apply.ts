@@ -218,6 +218,11 @@ import {
   croatianWarehouseFactDiagId,
 } from './cv-croatian-experience-grounding';
 import {
+  GENERIC_EXPERIENCE_PREDICATE_343_REVISION,
+  sourceRequiresGenericExperiencePredicates,
+  scanGenericExperiencePredicates,
+} from './cv-generic-experience-predicate-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -6075,6 +6080,37 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      // Precedence: dedicated warehouse/locale scanners first; shared generic otherwise.
+      const dedicatedWarehousePredicatesApplied = Boolean(
+        dePredicates || esPredicates || frPredicates || itPredicates
+        || ptPredicates || ruPredicates || hiPredicates || jaPredicates
+        || arPredicates || srPredicates || hrPredicates || enPredicates,
+      );
+      void GENERIC_EXPERIENCE_PREDICATE_343_REVISION;
+      const needsGenericPredicates = !dedicatedWarehousePredicatesApplied
+        && sourceRequiresGenericExperiencePredicates(sourceForCoverage);
+      const genericPredicates = needsGenericPredicates
+        ? scanGenericExperiencePredicates(sourceForCoverage, candidate)
+        : null;
+      if (genericPredicates) {
+        sourcePredicateIdentityCount = genericPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = genericPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = genericPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...genericPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed =
+          genericPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       lastRequired = needsEnWarehouse && enWarehouse
         ? (enWarehouse.required.length || sourceFactCount)
         : (semantic.requiredCount || sourceFactCount);
@@ -6453,6 +6489,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerCoveredFactCount = lastCovered;
           providerRequiredFactCount = lastRequired;
         }
+        return null;
+      }
+      if (needsGenericPredicates && genericPredicates && (
+        genericPredicates.sourceUnitPredicateCoveragePassed === false
+        || genericPredicates.candidateAddedPredicateCount > 0
+        || genericPredicates.candidatePredicateIdentityCount <= 0
+        || genericPredicates.sourcePredicateIdentityCount <= 0
+      )) {
+        lastRejectStage = `${stage}:generic_experience_predicates`;
+        lastRejectReason = genericPredicates.reason
+          || 'source_unit_predicate_coverage_failed';
+        lastRequired = Math.max(
+          genericPredicates.sourcePredicateIdentityCount,
+          lastRequired || sourceFactCount,
+        );
+        lastCovered = genericPredicates.candidatePredicateIdentityCount;
         return null;
       }
       if (needsRuDesignFamilies && ruDesign && !ruDesign.ok) {
@@ -7217,13 +7269,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresSerbianWarehouseFactCoverage(sourceForCoverage || '');
           const isHrWarehouse = locale === 'hr'
             && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage || '');
-          // EN/DE/ES/FR/IT/PT/RU/HI/JA/AR/SR/HR warehouse selected-final snapshots independently
-          // recompute predicate truth. Other locales must not invent false predicate coverage.
+          const isGenericPredicates = sourceRequiresGenericExperiencePredicates(
+            sourceForCoverage || '',
+          )
+            && !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
+            && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
+            && !isHiWarehouse && !isJaWarehouse && !isArWarehouse && !isSrWarehouse
+            && !isHrWarehouse;
+          // Warehouse + shared generic selected-final snapshots recompute predicate truth.
+          // Vacuous non-applicable paths must not invent false predicate coverage.
           if (
             !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
             && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
             && !isHiWarehouse && !isJaWarehouse && !isArWarehouse && !isSrWarehouse
             && !isHrWarehouse
+            && !isGenericPredicates
           ) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
             delete diag.finalCandidatePredicateValidationApplicable;

@@ -213,17 +213,17 @@ const DUTY_RULES: DutyRule[] = [
   {
     key: 'design_visual_materials',
     source:
-      /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة\s*ورقمية|print\s+and\s+digital|визуальн[а-яёА-ЯЁ]*\s+материал|графическ[а-яёА-ЯЁ]*\s+элемент)/iu,
+      /(?:visual\s+materials?|graphic\s+elements?|materiales?\s+visuales?|elementos?\s+gr[aá]ficos?|mat[eé]riaux?\s+visuels?|[eé]l[eé]ments?\s+graphiques?|materiali\s+visivi|elementi\s+grafici|materiais?\s+visuais?|visuelle?\s+Materialien|grafische?\s+Elemente|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|مطبوعة\s*ورقمية|print\s+and\s+digital|визуальн[а-яёА-ЯЁ]*\s+материал|графическ[а-яёА-ЯЁ]*\s+элемент)/iu,
     localized:
-      /(?:visual\s+materials?|graphic\s+elements?|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+элемент|дизайн-?материал|ビジュアル素材|視覚素材|グラフィック要素|デザイン素材)/iu,
+      /(?:visual\s+materials?|graphic\s+elements?|materiales?\s+visuales?|elementos?\s+gr[aá]ficos?|mat[eé]riaux?\s+visuels?|[eé]l[eé]ments?\s+graphiques?|materiali\s+visivi|elementi\s+grafici|materiais?\s+visuais?|visuelle?\s+Materialien|grafische?\s+Elemente|vizueln\w*\s+materijal|grafi[cč]k\w*\s+element|दृश्य\s*सामग्री|ग्राफिक\s*तत्व|مواد\s*بصرية|عناصر\s*رسومية|визуальн[а-яё]*\s+материал|графическ[а-яё]*\s+элемент|дизайн-?материал|ビジュアル素材|視覚素材|グラフィック要素|デザイン素材)/iu,
   },
   {
     key: 'design_review_adapt',
     source:
-      /(?:review\w*.{0,40}(?:design|dizajn)|adapt\w*.{0,40}(?:design|dizajn)|आवश्यकताओं.{0,40}डिज़ाइन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|requirements?.{0,40}design|проверя\w*.{0,40}адаптир|адаптир\w*.{0,40}(?:дизайн|требовани)|требовани\w*\s+проекта)/iu,
+      /(?:review\w*.{0,40}(?:design|dizajn|dise[nñ]o)|adapt\w*.{0,40}(?:design|dizajn|dise[nñ]o)|revis\w*.{0,40}(?:dise[nñ]o|design)|adapt\w*.{0,40}materiales?\s+de\s+dise[nñ]o|materiales?\s+de\s+dise[nñ]o|आवश्यकताओं.{0,40}डिज़ाइन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|requirements?.{0,40}design|проверя\w*.{0,40}адаптир|адаптир\w*.{0,40}(?:дизайн|требовани)|требовани\w*\s+проекта)/iu,
     // Never treat bare "проверя/review" as adaptation — require adapt / project-requirements evidence.
     localized:
-      /(?:adapt\w*.{0,40}(?:design|dizajn|материал)|prilago[dđ]|अनुकूलन|تكيّف|كيّفت?|адаптир\w*.{0,40}(?:дизайн|требовани|материал)|(?:проверя\w*|review\w*|pregled\w*|समीक्षा|مراجعة|راجع(?:ت)?).{0,48}адаптир|(?:требовани\w*\s+проекта|project\s+requirements?|متطلبات\s*المشروع|आवश्यकताओं)|(?:確認|レビュー).{0,24}(?:調整|適合)|要件に合わせて)/iu,
+      /(?:adapt\w*.{0,40}(?:design|dizajn|dise[nñ]o|материал|Design)|prilago[dđ]|passte?\s+.{0,40}an|anpasst|revis\w*.{0,40}(?:dise[nñ]o|design)|materiales?\s+de\s+dise[nñ]o|matériaux?\s+de\s+design|materiali\s+di\s+design|अनुकूलन|تكيّف|كيّفت?|адаптир\w*.{0,40}(?:дизайн|требовани|материал)|(?:проверя\w*|review\w*|pregled\w*|समीक्षा|مراجعة|راجع(?:ت)?).{0,48}адаптир|(?:требовани\w*\s+проекта|project\s+requirements?|متطلبات\s*المشروع|आवश्यकताओं|Projektanforderungen)|(?:確認|レビュー).{0,24}(?:調整|適合)|要件に合わせて)/iu,
   },
   {
     key: 'design_brand_identity',
@@ -235,10 +235,10 @@ const DUTY_RULES: DutyRule[] = [
   {
     key: 'design_files_formats',
     source:
-      /(?:design\s+files?|final\s+design|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|formats?\s+for\s+different|дизайн-?файл|финальн\w*\s+дизайн|формат\w*.{0,40}экран|подготавлива\w*.{0,40}файл)/iu,
+      /(?:design\s+files?|final\s+design|archivos?\s+finales?(?:\s+de\s+dise[nñ]o)?|fichiers?\s+finaux|file\s+finali|arquivos?\s+finais|dizajn\s*fajl|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|formats?\s+for\s+different|formatos?\s+y\s+pantallas|дизайн-?файл|финальн\w*\s+дизайн|формат\w*.{0,40}экран|подготавлива\w*.{0,40}файл)/iu,
     // Bare "экран" / generic "материалы" must not satisfy final files/formats.
     localized:
-      /(?:design\s+files?|dizajn\s*fajl|završn\w*\s+(?:dizajnersk\w*\s+)?datotek|datotek\w*.{0,40}format|format\w*.{0,40}(?:zaslon|ekran)|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|дизайн-?файл|финальн[а-яё]*\s+дизайн-?файл|файл[а-яё]*.{0,32}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,32}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат|最終(?:デザイン)?ファイル|デザインファイル|形式|フォーマット|画面)/iu,
+      /(?:design\s+files?|archivos?\s+finales?(?:\s+de\s+dise[nñ]o)?|fichiers?\s+finaux|file\s+finali|arquivos?\s+finais|finale?\s+Designdateien|Designdateien|dizajn\s*fajl|završn\w*\s+(?:dizajnersk\w*\s+)?datotek|datotek\w*.{0,40}format|format\w*.{0,40}(?:zaslon|ekran|Bildschirm|écrans?|schermi|telas?)|डिज़ाइन\s*फ़ाइल|ملفات\s*التصميم|صيغ\s*التصميم|дизайн-?файл|финальн[а-яё]*\s+дизайн-?файл|файл[а-яё]*.{0,32}дизайн|формат[а-яё]*.{0,40}экран|экран[а-яё]*.{0,32}формат|подготавлива[а-яё]*.{0,40}файл|настраива[а-яё]*.{0,40}формат|最終(?:デザイン)?ファイル|デザインファイル|形式|フォーマット|画面)/iu,
   },
 ];
 

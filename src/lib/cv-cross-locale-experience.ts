@@ -83,7 +83,9 @@ function fold(s: string): string {
 
 function classifyActionFrame(unit: string): ActionFrame {
   const t = fold(unit);
-  if (/(vizuel|grafick|dizajn|visual|design|identitet|identity|platform|ビジュアル|تصميم|डिज़ाइन)/.test(t)) {
+  // Include Spanish diseño→diseno and revis* so arbitrary-role Romance sources
+  // get the same design frames as EN/HR shells (generic predicate path).
+  if (/(vizuel|grafick|dizajn|diseno|visual|design|identitet|identity|platform|ビジュアル|تصميم|डिज़ाइन|materiales?\s+visual|elementos?\s+grafic)/.test(t)) {
     // Collaboration only — do not treat bare "product/platform" as collaborate
     // (those appear in ordinary design-creation shells).
     if (/(saradj|collabor|timov|\bteam\b|konsistenc|consistency|تطوير فريق|टीम|チーム)/.test(t)) {
@@ -92,7 +94,7 @@ function classifyActionFrame(unit: string): ActionFrame {
     if (/(ažur|azur|update|status|reviz|revision|track|ажурир|تحدّث|अद्यतन|更新)/.test(t)) {
       return 'update_records';
     }
-    if (/(prover|pregled|review|adapt|prilagod|verif|samic|समीक्षा|راجع|確認)/.test(t)) {
+    if (/(prover|pregled|review|revis|adapt|prilagod|verif|samic|समीक्षा|راجع|確認)/.test(t)) {
       return 'check_records';
     }
     return 'prepare_materials';
@@ -153,8 +155,8 @@ function englishBullet(
       }
       if (domain === 'design') {
         return past
-          ? 'Reviewed visual materials and design specifications for consistency.'
-          : 'Reviews visual materials and design specifications for consistency.';
+          ? 'Reviewed and adapted design materials to project requirements.'
+          : 'Reviews and adapts design materials to project requirements.';
       }
       return past
         ? 'Reviewed documentation and checked completeness of related records.'
@@ -167,8 +169,8 @@ function englishBullet(
       }
       if (domain === 'design') {
         return past
-          ? 'Updated design files and tracked revision status across deliverables.'
-          : 'Updates design files and tracks revision status across deliverables.';
+          ? 'Prepared final design files and set formats for different screens.'
+          : 'Prepares final design files and sets formats for different screens.';
       }
       return past
         ? 'Updated work records and tracked the status of open items.'
@@ -334,12 +336,12 @@ function localizedShellBullet(
     const designTable: Partial<Record<Locale, Record<ActionFrame, [string, string]>>> = {
       de: {
         check_records: [
-          'Prüft visuelle Materialien und Designvorgaben auf Konsistenz.',
-          'Prüfte visuelle Materialien und Designvorgaben auf Konsistenz.',
+          'Prüft und passt Designmaterialien an die Projektanforderungen an.',
+          'Prüfte und passte Designmaterialien an die Projektanforderungen an.',
         ],
         update_records: [
-          'Aktualisiert Designdateien und verfolgt den Revisionsstatus der Liefergegenstände.',
-          'Aktualisierte Designdateien und verfolgte den Revisionsstatus der Liefergegenstände.',
+          'Bereitet finale Designdateien vor und stellt Formate für unterschiedliche Bildschirme ein.',
+          'Bereitete finale Designdateien vor und stellte Formate für unterschiedliche Bildschirme ein.',
         ],
         coordinate_info: [
           'Koordiniert Designübergaben mit Kolleginnen und Kollegen, um Termine einzuhalten.',
@@ -360,12 +362,12 @@ function localizedShellBullet(
       },
       es: {
         check_records: [
-          'Revisa materiales visuales y especificaciones de diseño para garantizar la coherencia.',
-          'Revisó materiales visuales y especificaciones de diseño para garantizar la coherencia.',
+          'Revisa y adapta materiales de diseño según los requisitos del proyecto.',
+          'Revisó y adaptó materiales de diseño según los requisitos del proyecto.',
         ],
         update_records: [
-          'Actualiza archivos de diseño y hace seguimiento del estado de revisión de las entregas.',
-          'Actualizó archivos de diseño y hizo seguimiento del estado de revisión de las entregas.',
+          'Prepara archivos finales de diseño y ajusta formatos para distintas pantallas.',
+          'Preparó archivos finales de diseño y ajustó formatos para distintas pantallas.',
         ],
         coordinate_info: [
           'Coordina las entregas de diseño con sus compañeros para cumplir los plazos.',
@@ -384,14 +386,66 @@ function localizedShellBullet(
           'Realizó las tareas diarias de diseño y comprobó la exactitud de los materiales relacionados.',
         ],
       },
-      hi: {
+      fr: {
         check_records: [
-          'दृश्य सामग्री और डिज़ाइन विनिर्देशों की संगति की जाँच करती है।',
-          'दृश्य सामग्री और डिज़ाइन विनिर्देशों की संगति की जाँच की।',
+          'Revoit et adapte les matériaux de design selon les exigences du projet.',
+          'A revu et adapté les matériaux de design selon les exigences du projet.',
         ],
         update_records: [
-          'डिज़ाइन फ़ाइलें अपडेट करती है और डिलिवरेबल्स का रिवीज़न स्टेटस ट्रैक करती है।',
-          'डिज़ाइन फ़ाइलें अपडेट की और डिलिवरेबल्स का रिवीज़न स्टेटस ट्रैक किया।',
+          'Prépare les fichiers finaux de design et ajuste les formats pour différents écrans.',
+          'A préparé les fichiers finaux de design et ajusté les formats pour différents écrans.',
+        ],
+        coordinate_info: [
+          'Coordonne les livraisons de design avec ses collègues pour respecter les délais.',
+          'A coordonné les livraisons de design avec ses collègues pour respecter les délais.',
+        ],
+        prepare_materials: [
+          'Crée des matériaux visuels et des éléments graphiques pour des produits et plateformes numériques.',
+          'A créé des matériaux visuels et des éléments graphiques pour des produits et plateformes numériques.',
+        ],
+        collaborate_visual: [
+          'Collabore avec les équipes produit et développement pour maintenir l’identité visuelle.',
+          'A collaboré avec les équipes produit et développement pour maintenir l’identité visuelle.',
+        ],
+        generic_duty: [
+          'Assure les tâches quotidiennes de design et vérifie l’exactitude des matériaux associés.',
+          'A assuré les tâches quotidiennes de design et vérifié l’exactitude des matériaux associés.',
+        ],
+      },
+      it: {
+        check_records: [
+          'Rivede e adatta i materiali di design in base ai requisiti del progetto.',
+          'Ha rivisto e adattato i materiali di design in base ai requisiti del progetto.',
+        ],
+        update_records: [
+          'Prepara i file finali di design e regola i formati per schermi diversi.',
+          'Ha preparato i file finali di design e regolato i formati per schermi diversi.',
+        ],
+        coordinate_info: [
+          'Coordina le consegne di design con i colleghi per rispettare le scadenze.',
+          'Ha coordinato le consegne di design con i colleghi per rispettare le scadenze.',
+        ],
+        prepare_materials: [
+          'Crea materiali visivi ed elementi grafici per prodotti e piattaforme digitali.',
+          'Ha creato materiali visivi ed elementi grafici per prodotti e piattaforme digitali.',
+        ],
+        collaborate_visual: [
+          'Collabora con i team di prodotto e sviluppo per mantenere l’identità visiva.',
+          'Ha collaborato con i team di prodotto e sviluppo per mantenere l’identità visiva.',
+        ],
+        generic_duty: [
+          'Svolge i compiti quotidiani di design e verifica l’accuratezza dei materiali correlati.',
+          'Ha svolto i compiti quotidiani di design e verificato l’accuratezza dei materiali correlati.',
+        ],
+      },
+      hi: {
+        check_records: [
+          'प्रोजेक्ट आवश्यकताओं के अनुसार डिज़ाइन सामग्री की समीक्षा और अनुकूलन करती है।',
+          'प्रोजेक्ट आवश्यकताओं के अनुसार डिज़ाइन सामग्री की समीक्षा और अनुकूलन किया।',
+        ],
+        update_records: [
+          'अंतिम डिज़ाइन फ़ाइलें तैयार करती है और विभिन्न स्क्रीन के लिए प्रारूप सेट करती है।',
+          'अंतिम डिज़ाइन फ़ाइलें तैयार कीं और विभिन्न स्क्रीन के लिए प्रारूप सेट किए।',
         ],
         coordinate_info: [
           'सहकर्मियों के साथ डिज़ाइन हैंडऑफ़ का समन्वय करती है ताकि डिलिवरेबल्स समय पर रहें।',
@@ -412,12 +466,12 @@ function localizedShellBullet(
       },
       ar: {
         check_records: [
-          'تراجع المواد البصرية ومواصفات التصميم لضمان الاتساق.',
-          'راجعت المواد البصرية ومواصفات التصميم لضمان الاتساق.',
+          'تراجع وتكيّف مواد التصميم وفق متطلبات المشروع.',
+          'راجعت وكيّفت مواد التصميم وفق متطلبات المشروع.',
         ],
         update_records: [
-          'تحدّث ملفات التصميم وتتابع حالة المراجعات عبر المخرجات.',
-          'حدّثت ملفات التصميم وتابعت حالة المراجعات عبر المخرجات.',
+          'تُعدّ ملفات التصميم النهائية وتضبط الصيغ لشاشات مختلفة.',
+          'أعدت ملفات التصميم النهائية وضبطت الصيغ لشاشات مختلفة.',
         ],
         coordinate_info: [
           'تنسّق تسليمات التصميم مع الزملاء للحفاظ على الجداول.',
@@ -438,12 +492,12 @@ function localizedShellBullet(
       },
       ja: {
         check_records: [
-          'ビジュアル素材とデザイン仕様の整合性を確認する。',
-          'ビジュアル素材とデザイン仕様の整合性を確認した。',
+          'プロジェクト要件に合わせてデザイン素材を確認し適合させる。',
+          'プロジェクト要件に合わせてデザイン素材を確認し適合させた。',
         ],
         update_records: [
-          'デザインファイルを更新し、成果物の改訂状況を追跡する。',
-          'デザインファイルを更新し、成果物の改訂状況を追跡した。',
+          '最終デザインファイルを準備し、異なる画面向けに形式を整える。',
+          '最終デザインファイルを準備し、異なる画面向けに形式を整えた。',
         ],
         coordinate_info: [
           '同僚と連携してデザインの引き渡しを調整し、納期を守る。',
@@ -464,12 +518,12 @@ function localizedShellBullet(
       },
       ru: {
         check_records: [
-          'Проверяет визуальные материалы и дизайн-спецификации на согласованность.',
-          'Проверяла визуальные материалы и дизайн-спецификации на согласованность.',
+          'Проверяет и адаптирует дизайн-материалы в соответствии с требованиями проекта.',
+          'Проверяла и адаптировала дизайн-материалы в соответствии с требованиями проекта.',
         ],
         update_records: [
-          'Обновляет дизайн-файлы и отслеживает статус правок по материалам.',
-          'Обновляла дизайн-файлы и отслеживала статус правок по материалам.',
+          'Подготавливает финальные дизайн-файлы и настраивает форматы для разных экранов.',
+          'Подготавливала финальные дизайн-файлы и настраивала форматы для разных экранов.',
         ],
         coordinate_info: [
           'Координирует передачу дизайн-материалов с коллегами для соблюдения сроков.',
@@ -490,12 +544,12 @@ function localizedShellBullet(
       },
       'pt-BR': {
         check_records: [
-          'Revisa materiais visuais e especificações de design para garantir consistência.',
-          'Revisou materiais visuais e especificações de design para garantir consistência.',
+          'Revisa e adapta materiais de design conforme os requisitos do projeto.',
+          'Revisou e adaptou materiais de design conforme os requisitos do projeto.',
         ],
         update_records: [
-          'Atualiza arquivos de design e acompanha o status de revisão das entregas.',
-          'Atualizou arquivos de design e acompanhou o status de revisão das entregas.',
+          'Prepara arquivos finais de design e ajusta formatos para telas diferentes.',
+          'Preparou arquivos finais de design e ajustou formatos para telas diferentes.',
         ],
         coordinate_info: [
           'Coordena handoffs de design com colegas para manter os prazos.',
@@ -512,6 +566,58 @@ function localizedShellBullet(
         generic_duty: [
           'Executa as tarefas diárias de design verificando a precisão dos materiais relacionados.',
           'Executou as tarefas diárias de design verificando a precisão dos materiais relacionados.',
+        ],
+      },
+      sr: {
+        check_records: [
+          'Pregleda i prilagođava dizajnerske materijale prema zahtevima projekta.',
+          'Pregledala je i prilagođavala dizajnerske materijale prema zahtevima projekta.',
+        ],
+        update_records: [
+          'Priprema završne dizajn fajlove i podešava formate za različite ekrane.',
+          'Pripremala je završne dizajn fajlove i podešavala formate za različite ekrane.',
+        ],
+        coordinate_info: [
+          'Koordinira predaje dizajna sa kolegama kako bi se poštovali rokovi.',
+          'Koordinirala je predaje dizajna sa kolegama kako bi se poštovali rokovi.',
+        ],
+        prepare_materials: [
+          'Kreira vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.',
+          'Kreirala je vizuelne materijale i grafičke elemente za digitalne proizvode i platforme.',
+        ],
+        collaborate_visual: [
+          'Sarađuje sa timovima proizvoda i razvoja kako bi vizuelni identitet ostao dosledan.',
+          'Sarađivala je sa timovima proizvoda i razvoja kako bi vizuelni identitet ostao dosledan.',
+        ],
+        generic_duty: [
+          'Obavlja svakodnevne dizajnerske dužnosti uz proveru tačnosti povezanih materijala.',
+          'Obavljala je svakodnevne dizajnerske dužnosti uz proveru tačnosti povezanih materijala.',
+        ],
+      },
+      hr: {
+        check_records: [
+          'Pregledava i prilagođava dizajnerske materijale prema zahtjevima projekta.',
+          'Pregledavala je i prilagođavala dizajnerske materijale prema zahtjevima projekta.',
+        ],
+        update_records: [
+          'Priprema završne dizajnerske datoteke i podešava formate za različite zaslone.',
+          'Pripremala je završne dizajnerske datoteke i podešavala formate za različite zaslone.',
+        ],
+        coordinate_info: [
+          'Koordinira predaje dizajna s kolegama kako bi se poštovali rokovi.',
+          'Koordinirala je predaje dizajna s kolegama kako bi se poštovali rokovi.',
+        ],
+        prepare_materials: [
+          'Izrađuje vizualne materijale i grafičke elemente za digitalne proizvode i platforme.',
+          'Izrađivala je vizualne materijale i grafičke elemente za digitalne proizvode i platforme.',
+        ],
+        collaborate_visual: [
+          'Surađuje s timovima proizvoda i razvoja kako bi vizualni identitet ostao dosljedan.',
+          'Surađivala je s timovima proizvoda i razvoja kako bi vizualni identitet ostao dosljedan.',
+        ],
+        generic_duty: [
+          'Obavlja svakodnevne dizajnerske dužnosti uz provjeru točnosti povezanih materijala.',
+          'Obavljala je svakodnevne dizajnerske dužnosti uz provjeru točnosti povezanih materijala.',
         ],
       },
     };

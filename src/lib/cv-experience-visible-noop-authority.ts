@@ -72,6 +72,10 @@ import {
   scanCroatianWarehousePredicates,
 } from './cv-croatian-experience-grounding';
 import {
+  sourceRequiresGenericExperiencePredicates,
+  scanGenericExperiencePredicates,
+} from './cv-generic-experience-predicate-grounding';
+import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
@@ -655,10 +659,25 @@ export function evaluateExperienceVisibleComparison(options: {
           }
         }
       } else {
-        // Generic cross-locale: semantic frame / identity coverage, not surface keys.
+        // Generic cross-locale: semantic frame / identity coverage + shared predicates.
         const semantic = validateCrossLocaleSemanticCoverage(auth, candidate);
+        const genPred = sourceRequiresGenericExperiencePredicates(auth)
+          ? scanGenericExperiencePredicates(auth, candidate)
+          : null;
         if (!semantic.ok || semantic.coveredCount < semantic.requiredCount) {
           degradationKinds.push('fact_lost');
+        } else if (
+          genPred
+          && (
+            genPred.sourceUnitPredicateCoveragePassed === false
+            || genPred.candidateAddedPredicateCount > 0
+          )
+        ) {
+          if (genPred.candidateAddedPredicateCount > 0) {
+            degradationKinds.push('unsupported_predicate_added');
+          } else {
+            degradationKinds.push('fact_lost');
+          }
         } else if (
           visibleLocale !== 'unknown'
           && candidateLocale !== 'unknown'
