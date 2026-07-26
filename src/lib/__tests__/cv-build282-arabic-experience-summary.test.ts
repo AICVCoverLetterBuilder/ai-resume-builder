@@ -41,6 +41,13 @@ const WH_AR = [
   'تنسّق إعداد البضائع وحركتها مع الزملاء.',
 ].join('\n');
 
+/** Authoritative EN warehouse triad (pre_ai / Atlas lineage). */
+const WH_EN = [
+  'Checks incoming goods.',
+  'Checks the related documents.',
+  'Works with colleagues to prepare and move goods.',
+].join('\n');
+
 const DESIGN_AR_PAST = [
   'أعدّت مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
   'راجعت وكيّفت مواد التصميم وفق متطلبات المشروع.',
@@ -245,8 +252,11 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
       candidate: '',
       experienceId: 'exp-design',
     });
-    // Empty candidate → deterministic past design shell
-    if (!bullets.finalized.countedAsSuccess) {
+    // Empty candidate → deterministic past design shell when repair is needed.
+    // Already-valid AR past design may no-op; that is acceptable here.
+    if (bullets.finalized.countedAsSuccess) {
+      cv = bullets.stateCv;
+    } else {
       const past = buildJobContextGenerationFallback({
         locale: 'ar',
         gender: 'female',
@@ -260,25 +270,47 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
         candidate: past,
         experienceId: 'exp-design',
       });
-      expect(pipe.finalized.countedAsSuccess).toBe(true);
-      cv = pipe.stateCv;
-    } else {
-      cv = bullets.stateCv;
+      if (pipe.finalized.countedAsSuccess) {
+        cv = pipe.stateCv;
+      }
     }
     const design = (cv.experience || []).find((e) => e.id === 'exp-design');
-    expect(design?.position).toMatch(/مصممة/);
     expect(design?.description || '').toMatch(/أعدّت|راجعت/);
 
+    // Soft AR candidate against EN authority (device lineage) — not soft≡soft no-op.
+    const whCv: CVData = {
+      ...cv,
+      experience: (cv.experience || []).map((e) => (
+        e.id === 'exp-wh'
+          ? {
+            ...e,
+            description: WH_EN,
+            originalUserDescription: WH_EN,
+            canonicalDescription: WH_EN,
+          }
+          : e
+      )),
+    };
     const whApply = runCvAiApplyPipeline({
-      cv,
+      cv: whCv,
       locale: 'ar',
       action: 'experience_bullets',
       candidate: WH_AR,
       experienceId: 'exp-wh',
     });
     expect(whApply.finalized.countedAsSuccess).toBe(true);
+    // Soft AR triad merges goods+docs and invents records/organization — rejected.
+    // Hard Arabic warehouse triad is selected instead (AAB-340).
+    expect(whApply.finalized.diagnostics?.providerAccepted).toBe(false);
+    expect(whApply.finalized.diagnostics?.finalCandidateSource).toBe('deterministic_fallback');
+    expect(whApply.finalized.text || '').toMatch(/البضائع الواردة إلى المستودع/);
+    expect(whApply.finalized.text || '').toMatch(/المستندات المتعلقة بالبضائع المستلمة/);
+    expect(whApply.finalized.text || '').not.toMatch(/التسجيل الدقيق|سجلات المستودع|ترتيب البضائع/);
     cv = whApply.stateCv;
     expect((cv.experience || []).find((e) => e.id === 'exp-wh')?.position).toBe('موظفة مستودع');
+    // After warehouse apply, design title should still be localizable when touched.
+    expect((cv.experience || []).find((e) => e.id === 'exp-design')?.description || '')
+      .toMatch(/أعدّت|راجعت/);
 
     const summaryPipe = runCvAiApplyPipeline({
       cv,

@@ -194,6 +194,14 @@ import {
   japaneseWarehouseFactDiagId,
 } from './cv-japanese-experience-grounding';
 import {
+  ARABIC_EXPERIENCE_GROUNDING_340_REVISION,
+  sourceRequiresArabicWarehouseFactCoverage,
+  validateArabicWarehouseExperienceCoverage,
+  buildArabicWarehouseExperienceFallback,
+  scanArabicWarehousePredicates,
+  arabicWarehouseFactDiagId,
+} from './cv-arabic-experience-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -5937,6 +5945,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const needsArWarehouse = locale === 'ar'
+        && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage);
+      const arWarehouse = needsArWarehouse
+        ? validateArabicWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const arPredicates = needsArWarehouse
+        ? scanArabicWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (arPredicates) {
+        sourcePredicateIdentityCount = arPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = arPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = arPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...arPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = arPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsEnWarehouse = locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
@@ -6248,6 +6282,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (needsArWarehouse && arWarehouse && (
+        !arWarehouse.ok
+        || (arPredicates && (
+          arPredicates.sourceUnitPredicateCoveragePassed === false
+          || arPredicates.candidateAddedPredicateCount > 0
+          || arPredicates.candidatePredicateIdentityCount <= 0
+        ))
+      )) {
+        lastRejectStage = `${stage}:arabic_warehouse_facts`;
+        lastRejectReason = !arWarehouse.ok
+          ? (arWarehouse.reason || 'arabic_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
+        lastRequired = arWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = arWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = arWarehouse.uncovered.map(
+          (id) => arabicWarehouseFactDiagId(id),
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
       if (needsEnWarehouse && enWarehouse && (
         !enWarehouse.ok
         || (enPredicates && (
@@ -6316,6 +6374,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       } else if (needsJaWarehouse && jaWarehouse?.ok) {
         lastRequired = jaWarehouse.required.length;
         lastCovered = jaWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsArWarehouse && arWarehouse?.ok) {
+        lastRequired = arWarehouse.required.length;
+        lastCovered = arWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (needsEnWarehouse && enWarehouse?.ok) {
         lastRequired = enWarehouse.required.length;
@@ -6660,6 +6722,40 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             : 'source_unit_predicate_coverage_failed';
           clientDeterministicFallbackUncoveredFactIds = enWarehouse.uncovered.map(
             (id) => englishWarehouseFactDiagId(id),
+          );
+          return null;
+        }
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (
+        locale === 'ar'
+        && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        // Soft AR shells collapse 3 duties → 2 action frames. Never re-validate a
+        // hard Arabic warehouse triad with soft cross-locale frame matching.
+        const arWarehouse = validateArabicWarehouseExperienceCoverage(
+          sourceForCoverage,
+          candidate,
+        );
+        const arPredicates = scanArabicWarehousePredicates(sourceForCoverage, candidate);
+        sourcePredicateIdentityCount = arPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = arPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = arPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...arPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = arPredicates.sourceUnitPredicateCoveragePassed;
+        lastRequired = arWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = arWarehouse.covered.length;
+        if (!arWarehouse.ok
+          || arPredicates.sourceUnitPredicateCoveragePassed === false
+          || arPredicates.candidateAddedPredicateCount > 0
+          || arPredicates.candidatePredicateIdentityCount <= 0) {
+          lastRejectStage = `${stage}:arabic_warehouse_facts`;
+          lastRejectReason = !arWarehouse.ok
+            ? (arWarehouse.reason || 'arabic_experience_warehouse_fact_coverage_incomplete')
+            : 'source_unit_predicate_coverage_failed';
+          clientDeterministicFallbackUncoveredFactIds = arWarehouse.uncovered.map(
+            (id) => arabicWarehouseFactDiagId(id),
           );
           return null;
         }
@@ -7731,7 +7827,34 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           exp?.position || cv.personal?.jobTitle,
         )
       );
-      if (needsDesignFamilyRebuild) {
+      // Soft Arabic warehouse shells may already be visible in the target locale
+      // while still collapsing 3 duties → 2. Do not early-return as a no-op;
+      // fall through to the hard Arabic warehouse deterministic triad.
+      const needsArabicWarehouseRebuild = locale === 'ar'
+        && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage)
+        && !validateArabicWarehouseExperienceCoverage(
+          sourceForCoverage,
+          finalNormalizedBullets,
+        ).ok;
+      if (needsDesignFamilyRebuild || needsArabicWarehouseRebuild) {
+        if (needsArabicWarehouseRebuild && !needsDesignFamilyRebuild) {
+          lastRejectStage = 'provider:arabic_warehouse_rebuild_required';
+          lastRejectReason = 'arabic_experience_warehouse_fact_coverage_incomplete';
+          providerRejectionReason = lastRejectReason;
+          providerRejectionStage = lastRejectStage;
+          const arSoft = validateArabicWarehouseExperienceCoverage(
+            sourceForCoverage,
+            finalNormalizedBullets,
+          );
+          providerRequiredFactCount = arSoft.required.length || Math.max(3, sourceFactCount);
+          providerCoveredFactCount = arSoft.covered.length;
+          if (providerUncoveredFactIdentityHashes.length === 0) {
+            providerUncoveredFactIdentityHashes = arSoft.uncovered.map(
+              (id) => arabicWarehouseFactDiagId(id),
+            );
+          }
+          // Skip tryAccept of incomplete soft shells — continue to hard AR fallback.
+        } else {
         lastRejectStage = 'provider:design_rebuild_required';
         if (locale === 'hr') {
           lastRejectReason = isCroatianDesignPoisonedLiveSource(
@@ -7752,6 +7875,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerRejectionReason = lastRejectReason;
         providerRejectionStage = lastRejectStage;
         // Skip tryAccept of the unchanged poisoned/incomplete provider text.
+        }
       } else if (!persp.perspectiveNormalizationApplied && sourceOkForLocale) {
         // Universal contract: whitespace/bullet/normalization-only equals no-op
         // only when the visible source is already valid for the target contract.
@@ -9137,6 +9261,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       if (!translated.trim()
+        && locale === 'ar'
+        && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage)) {
+        void ARABIC_EXPERIENCE_GROUNDING_340_REVISION;
+        translated = normalizeLocaleText(
+          buildArabicWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+            gender,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
         && locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
         void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
@@ -9277,6 +9414,27 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ...jaPredFb.candidateAddedPredicateIdentityHashes,
         ];
         sourceUnitPredicateCoveragePassed = jaPredFb.sourceUnitPredicateCoveragePassed;
+      }
+      if (
+        locale === 'ar'
+        && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        const arFb = validateArabicWarehouseExperienceCoverage(sourceForCoverage, translated);
+        const arPredFb = scanArabicWarehousePredicates(sourceForCoverage, translated);
+        clientDeterministicFallbackRequiredFactCount = arFb.required.length || Math.max(3, sourceFactCount);
+        clientDeterministicFallbackCoveredFactCount = arFb.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = arFb.uncovered.map(
+          (id) => arabicWarehouseFactDiagId(id),
+        );
+        lastRequired = clientDeterministicFallbackRequiredFactCount;
+        lastCovered = clientDeterministicFallbackCoveredFactCount;
+        sourcePredicateIdentityCount = arPredFb.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = arPredFb.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = arPredFb.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...arPredFb.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = arPredFb.sourceUnitPredicateCoveragePassed;
       }
       if (translatedOk) {
         const accepted = tryAccept(

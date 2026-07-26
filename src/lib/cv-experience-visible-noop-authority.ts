@@ -57,6 +57,11 @@ import {
   scanJapaneseWarehousePredicates,
 } from './cv-japanese-experience-grounding';
 import {
+  sourceRequiresArabicWarehouseFactCoverage,
+  validateArabicWarehouseExperienceCoverage,
+  scanArabicWarehousePredicates,
+} from './cv-arabic-experience-grounding';
+import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
@@ -427,6 +432,9 @@ export function evaluateExperienceVisibleComparison(options: {
         if (/(?:入荷|関連書類|倉庫|同僚と連携|商品の準備と移動|確認します)/u.test(v)) {
           return validateJapaneseWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
+        if (/(?:البضائع|المستندات|الوثائق|المستودع|الزملاء|الواردة|المستلمة|تفحص|تتحقق|تنسق)/u.test(v)) {
+          return validateArabicWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
         if (/(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(v)) {
           return validateFrenchWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
@@ -567,6 +575,22 @@ export function evaluateExperienceVisibleComparison(options: {
           }
         }
       } else if (
+        target.startsWith('ar')
+        && sourceRequiresArabicWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateArabicWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanArabicWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
         target === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(auth)
       ) {
@@ -600,6 +624,24 @@ export function evaluateExperienceVisibleComparison(options: {
             improvementKinds.push('missing_fact_restored');
           }
         }
+      }
+    } else if (
+      (locale || '').toLowerCase().startsWith('ar')
+      && sourceRequiresArabicWarehouseFactCoverage(fact || visible)
+    ) {
+      // Same-locale Arabic soft→hard repair: score by warehouse fact identities,
+      // never by soft-shell material keys (سجلات / ترتيب) that hard triad omits.
+      const auth = fact || visible;
+      const cov = validateArabicWarehouseExperienceCoverage(auth, candidate);
+      const pred = scanArabicWarehousePredicates(auth, candidate);
+      const visibleUncovered = validateArabicWarehouseExperienceCoverage(auth, visible || '')
+        .uncovered.length;
+      if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+        degradationKinds.push('fact_lost');
+      } else if (pred.candidateAddedPredicateCount > 0) {
+        degradationKinds.push('unsupported_predicate_added');
+      } else if (cov.covered.length >= 3 && visibleUncovered > 0) {
+        improvementKinds.push('missing_fact_restored');
       }
     } else {
       for (const k of factKeys) {

@@ -48,6 +48,10 @@ import {
   validateJapaneseWarehouseExperienceCoverage,
 } from './cv-japanese-experience-grounding';
 import {
+  sourceRequiresArabicWarehouseFactCoverage,
+  validateArabicWarehouseExperienceCoverage,
+} from './cv-arabic-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -1022,6 +1026,18 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (jaCovered > 0) return jaCovered;
+  }
+  // AAB-340 — Arabic warehouse result (incl. JA-visible→ar).
+  if (
+    sourceRequiresArabicWarehouseFactCoverage(sourceDescription || '')
+    && /(?:البضائع|المستندات|الوثائق|المستودع|الزملاء|الواردة|المستلمة|تفحص|تتحقق|تنسق|يفحص|يتحقق|ينسق)/u
+      .test(result || '')
+  ) {
+    const arCovered = validateArabicWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (arCovered > 0) return arCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.
