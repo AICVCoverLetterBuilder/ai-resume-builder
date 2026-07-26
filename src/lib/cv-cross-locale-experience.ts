@@ -44,6 +44,10 @@ import {
   validateHindiWarehouseExperienceCoverage,
 } from './cv-hindi-experience-grounding';
 import {
+  sourceRequiresJapaneseWarehouseFactCoverage,
+  validateJapaneseWarehouseExperienceCoverage,
+} from './cv-japanese-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -1006,6 +1010,18 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (hiCovered > 0) return hiCovered;
+  }
+  // AAB-339 — Japanese warehouse result (incl. HI-visible→ja).
+  if (
+    sourceRequiresJapaneseWarehouseFactCoverage(sourceDescription || '')
+    && /(?:入荷|関連書類|倉庫|同僚|商品の準備|確認します|確認する|確認した)/u
+      .test(result || '')
+  ) {
+    const jaCovered = validateJapaneseWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (jaCovered > 0) return jaCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.

@@ -1796,6 +1796,7 @@ type ExperienceLike = {
   materialImprovementKinds?: string[] | null;
   materialImprovementEvidenceCount?: number | null;
   everyImprovementKindHasEvidence?: boolean | null;
+  meaningfulChangeDetected?: boolean | null;
   canonicalAcceptancePassed?: boolean | null;
   expectedEmploymentTense?: string | null;
   sourceDetectedTense?: string | null;
@@ -1879,6 +1880,9 @@ type ExperienceLike = {
   visibleComparisonMatchedLastAiOutput?: boolean | null;
   finalCandidatePresent?: boolean | null;
   finalCandidatePredicateValidationApplicable?: boolean | null;
+  finalFactCoveragePassed?: boolean | null;
+  finalRequiredFactCount?: number | null;
+  applyAuthorized?: boolean | null;
   finalOutcomeReason?: string | null;
   finalTypedFailureReason?: string | null;
   finalCandidateBulletCount?: number | null;
@@ -2074,6 +2078,45 @@ export function checkExperienceDiagnosticInvariants(
     push('stale_foreign_authoritative_while_textarea_unused_for_facts', {
       currentTextareaUsedForFactExtraction: false,
       staleForeignLocaleSourceAuthoritative: true,
+    });
+  }
+  if (
+    Array.isArray(trace.materialImprovementKinds)
+    && trace.materialImprovementKinds.includes('wrong_locale_fixed')
+    && trace.finalDecisionKind === 'material_improvement'
+    && trace.meaningfulChangeDetected === false
+  ) {
+    push('wrong_locale_fixed_without_meaningful_change', {
+      materialImprovementKinds: 'wrong_locale_fixed',
+      finalDecisionKind: 'material_improvement',
+      meaningfulChangeDetected: false,
+    });
+  }
+  if (
+    (
+      trace.finalCandidatePredicateValidationApplicable === true
+      || (
+        typeof trace.requestedTargetLocale === 'string'
+        && /^(ja|hi|ru|de|es|fr|it|pt)/i.test(trace.requestedTargetLocale)
+        && Number(trace.finalRequiredFactCount ?? 0) >= 3
+      )
+    )
+    && (
+      Number(trace.finalCandidatePredicateIdentityCount ?? 0) === 0
+      || trace.finalSourceUnitPredicateCoveragePassed == null
+    )
+    && (
+      trace.applyAuthorized === true
+      || trace.finalFactCoveragePassed === true
+      || trace.finalCandidateSource === 'provider'
+      || trace.finalCandidateSource === 'deterministic_fallback'
+    )
+  ) {
+    push('final_predicate_coverage_vacuous_or_null', {
+      finalCandidatePredicateIdentityCount:
+        trace.finalCandidatePredicateIdentityCount ?? 0,
+      finalSourceUnitPredicateCoveragePassed:
+        trace.finalSourceUnitPredicateCoveragePassed ?? null,
     });
   }
   // AAB-309 repair lineage invariants.

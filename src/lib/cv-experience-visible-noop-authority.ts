@@ -52,6 +52,11 @@ import {
   scanHindiWarehousePredicates,
 } from './cv-hindi-experience-grounding';
 import {
+  sourceRequiresJapaneseWarehouseFactCoverage,
+  validateJapaneseWarehouseExperienceCoverage,
+  scanJapaneseWarehousePredicates,
+} from './cv-japanese-experience-grounding';
+import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
@@ -419,6 +424,9 @@ export function evaluateExperienceVisibleComparison(options: {
         if (/(?:जाँच|जांच|गोदाम|माल|सहकर्मि|समन्वय|दस्तावे|आवाजाही|स्थानांतरण)/u.test(v)) {
           return validateHindiWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
+        if (/(?:入荷|関連書類|倉庫|同僚と連携|商品の準備と移動|確認します)/u.test(v)) {
+          return validateJapaneseWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
         if (/(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(v)) {
           return validateFrenchWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
@@ -532,6 +540,22 @@ export function evaluateExperienceVisibleComparison(options: {
       ) {
         const cov = validateHindiWarehouseExperienceCoverage(auth, candidate);
         const pred = scanHindiWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
+        target.startsWith('ja')
+        && sourceRequiresJapaneseWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateJapaneseWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanJapaneseWarehousePredicates(auth, candidate);
         if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
           degradationKinds.push('fact_lost');
         } else if (pred.candidateAddedPredicateCount > 0) {

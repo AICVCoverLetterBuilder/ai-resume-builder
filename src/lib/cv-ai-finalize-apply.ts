@@ -186,6 +186,14 @@ import {
   hindiWarehouseFactDiagId,
 } from './cv-hindi-experience-grounding';
 import {
+  JAPANESE_EXPERIENCE_GROUNDING_339_REVISION,
+  sourceRequiresJapaneseWarehouseFactCoverage,
+  validateJapaneseWarehouseExperienceCoverage,
+  buildJapaneseWarehouseExperienceFallback,
+  scanJapaneseWarehousePredicates,
+  japaneseWarehouseFactDiagId,
+} from './cv-japanese-experience-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -5903,6 +5911,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const needsJaWarehouse = locale === 'ja'
+        && sourceRequiresJapaneseWarehouseFactCoverage(sourceForCoverage);
+      const jaWarehouse = needsJaWarehouse
+        ? validateJapaneseWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const jaPredicates = needsJaWarehouse
+        ? scanJapaneseWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (jaPredicates) {
+        sourcePredicateIdentityCount = jaPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = jaPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = jaPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...jaPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = jaPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsEnWarehouse = locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
@@ -6190,6 +6224,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (needsJaWarehouse && jaWarehouse && (
+        !jaWarehouse.ok
+        || (jaPredicates && (
+          jaPredicates.sourceUnitPredicateCoveragePassed === false
+          || jaPredicates.candidateAddedPredicateCount > 0
+          || jaPredicates.candidatePredicateIdentityCount <= 0
+        ))
+      )) {
+        lastRejectStage = `${stage}:japanese_warehouse_facts`;
+        lastRejectReason = !jaWarehouse.ok
+          ? (jaWarehouse.reason || 'japanese_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
+        lastRequired = jaWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = jaWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = jaWarehouse.uncovered.map(
+          (id) => japaneseWarehouseFactDiagId(id),
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
       if (needsEnWarehouse && enWarehouse && (
         !enWarehouse.ok
         || (enPredicates && (
@@ -6254,6 +6312,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       } else if (needsHiWarehouse && hiWarehouse?.ok) {
         lastRequired = hiWarehouse.required.length;
         lastCovered = hiWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsJaWarehouse && jaWarehouse?.ok) {
+        lastRequired = jaWarehouse.required.length;
+        lastCovered = jaWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (needsEnWarehouse && enWarehouse?.ok) {
         lastRequired = enWarehouse.required.length;
@@ -9062,6 +9124,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       if (!translated.trim()
+        && locale === 'ja'
+        && sourceRequiresJapaneseWarehouseFactCoverage(sourceForCoverage)) {
+        void JAPANESE_EXPERIENCE_GROUNDING_339_REVISION;
+        translated = normalizeLocaleText(
+          buildJapaneseWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+            gender,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
         && locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
         void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
@@ -9181,6 +9256,27 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ...hiPredFb.candidateAddedPredicateIdentityHashes,
         ];
         sourceUnitPredicateCoveragePassed = hiPredFb.sourceUnitPredicateCoveragePassed;
+      }
+      if (
+        locale === 'ja'
+        && sourceRequiresJapaneseWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        const jaFb = validateJapaneseWarehouseExperienceCoverage(sourceForCoverage, translated);
+        const jaPredFb = scanJapaneseWarehousePredicates(sourceForCoverage, translated);
+        clientDeterministicFallbackRequiredFactCount = jaFb.required.length || Math.max(3, sourceFactCount);
+        clientDeterministicFallbackCoveredFactCount = jaFb.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = jaFb.uncovered.map(
+          (id) => japaneseWarehouseFactDiagId(id),
+        );
+        lastRequired = clientDeterministicFallbackRequiredFactCount;
+        lastCovered = clientDeterministicFallbackCoveredFactCount;
+        sourcePredicateIdentityCount = jaPredFb.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = jaPredFb.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = jaPredFb.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...jaPredFb.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = jaPredFb.sourceUnitPredicateCoveragePassed;
       }
       if (translatedOk) {
         const accepted = tryAccept(

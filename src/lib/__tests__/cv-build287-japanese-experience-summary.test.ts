@@ -158,9 +158,14 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
     expect(pipe.finalized.diagnostics?.targetLocalePurityPassed).toBe(true);
     expect(pipe.finalized.diagnostics?.relevanceValidationPassed).toBe(true);
     expect(pipe.finalized.diagnostics?.tenseValidationPassed).toBe(true);
-    expect(pipe.finalized.text).toMatch(/入荷/);
-    expect(pipe.finalized.text).toMatch(/倉庫記録/);
-    expect(pipe.finalized.text).toMatch(/同僚/);
+    // Soft JA triad merges goods+docs and invents inventory/placement — rejected.
+    // Hard Japanese warehouse triad is selected instead (AAB-339).
+    expect(pipe.finalized.diagnostics?.providerAccepted).toBe(false);
+    expect(pipe.finalized.diagnostics?.finalCandidateSource).toBe('deterministic_fallback');
+    expect(pipe.finalized.text).toMatch(/倉庫に入荷する商品を確認/);
+    expect(pipe.finalized.text).toMatch(/受領した商品に関連する書類を確認/);
+    expect(pipe.finalized.text).toMatch(/商品の準備と移動について同僚と連携/);
+    expect(pipe.finalized.text).not.toMatch(/倉庫記録を更新|正確性|整然とした配置/);
     expect(pipe.finalized.text).not.toMatch(/loading|delivery|販売|料理|管理/i);
   });
 
