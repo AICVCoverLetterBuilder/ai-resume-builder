@@ -2097,7 +2097,7 @@ export function checkExperienceDiagnosticInvariants(
       trace.finalCandidatePredicateValidationApplicable === true
       || (
         typeof trace.requestedTargetLocale === 'string'
-        && /^(ja|hi|ru|de|es|fr|it|pt)/i.test(trace.requestedTargetLocale)
+        && /^(ja|hi|ru|de|es|fr|it|pt|ar|sr)/i.test(trace.requestedTargetLocale)
         && Number(trace.finalRequiredFactCount ?? 0) >= 3
       )
     )

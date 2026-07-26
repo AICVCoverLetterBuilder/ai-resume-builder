@@ -75,6 +75,13 @@ import {
   ARABIC_EXPERIENCE_GROUNDING_340_REVISION,
 } from './cv-arabic-experience-grounding';
 import {
+  validateSerbianWarehouseExperienceCoverage,
+  scanSerbianWarehousePredicates,
+  sourceRequiresSerbianWarehouseFactCoverage,
+  serbianWarehouseFactDiagId,
+  SERBIAN_EXPERIENCE_GROUNDING_341_REVISION,
+} from './cv-serbian-experience-grounding';
+import {
   isPortugueseBrazilLocale,
   canonicalizeContentLocale,
   localesEquivalent,
@@ -353,6 +360,24 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
+  } else if (
+    locale === 'sr'
+    && sourceRequiresSerbianWarehouseFactCoverage(source)
+  ) {
+    void SERBIAN_EXPERIENCE_GROUNDING_341_REVISION;
+    const cov = validateSerbianWarehouseExperienceCoverage(source, text);
+    requiredFactCount = cov.required.length;
+    coveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => serbianWarehouseFactDiagId(id));
+    factCoveragePassed = cov.ok;
+    const pred = scanSerbianWarehousePredicates(source, text);
+    sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
+    candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
+    addedPredicateCount = pred.candidateAddedPredicateCount;
+    addedPredicateIdentityHashes = [...pred.candidateAddedPredicateIdentityHashes];
+    predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
+      && candidatePredicateIdentityCount > 0;
   }
 
   return {
@@ -410,7 +435,13 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
                                           && sourceRequiresArabicWarehouseFactCoverage(source)
                                             ? validateArabicWarehouseExperienceCoverage(source, text).required
                                               .map((id) => arabicWarehouseFactDiagId(id))
-                                            : Array.from({ length: requiredFactCount }, (_, i) => `req_${i}`)
+                                            : (
+                                              locale === 'sr'
+                                              && sourceRequiresSerbianWarehouseFactCoverage(source)
+                                                ? validateSerbianWarehouseExperienceCoverage(source, text).required
+                                                  .map((id) => serbianWarehouseFactDiagId(id))
+                                                : Array.from({ length: requiredFactCount }, (_, i) => `req_${i}`)
+                                            )
                                         )
                                     )
                                 )
@@ -1084,6 +1115,23 @@ export function validateVisibleExperienceCoverage(options: {
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
       && visibleCoveredPredicateCount > 0;
+  } else if (
+    (options.targetLocale || locale) === 'sr'
+    && sourceRequiresSerbianWarehouseFactCoverage(options.sourceDescription)
+  ) {
+    applicable = true;
+    void SERBIAN_EXPERIENCE_GROUNDING_341_REVISION;
+    const cov = validateSerbianWarehouseExperienceCoverage(options.sourceDescription, visible);
+    visibleRequiredFactCount = cov.required.length;
+    visibleCoveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => serbianWarehouseFactDiagId(id));
+    visibleFactCoveragePassed = cov.ok;
+    const pred = scanSerbianWarehousePredicates(options.sourceDescription, visible);
+    visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
+    visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
+    visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
+      && visibleCoveredPredicateCount > 0;
   }
 
   return {
@@ -1136,7 +1184,13 @@ export function validateVisibleExperienceCoverage(options: {
                                           && sourceRequiresArabicWarehouseFactCoverage(options.sourceDescription)
                                             ? validateArabicWarehouseExperienceCoverage(options.sourceDescription, visible)
                                               .required.map((id) => arabicWarehouseFactDiagId(id))
-                                            : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+                                            : (
+                                              (options.targetLocale || locale) === 'sr'
+                                              && sourceRequiresSerbianWarehouseFactCoverage(options.sourceDescription)
+                                                ? validateSerbianWarehouseExperienceCoverage(options.sourceDescription, visible)
+                                                  .required.map((id) => serbianWarehouseFactDiagId(id))
+                                                : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+                                            )
                                         )
                                     )
                                 )

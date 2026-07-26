@@ -202,6 +202,14 @@ import {
   arabicWarehouseFactDiagId,
 } from './cv-arabic-experience-grounding';
 import {
+  SERBIAN_EXPERIENCE_GROUNDING_341_REVISION,
+  sourceRequiresSerbianWarehouseFactCoverage,
+  validateSerbianWarehouseExperienceCoverage,
+  buildSerbianWarehouseExperienceFallback,
+  scanSerbianWarehousePredicates,
+  serbianWarehouseFactDiagId,
+} from './cv-serbian-experience-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -4378,6 +4386,16 @@ function detectBulletScripts(text: string): string[] {
   });
 }
 
+/** Align purity script labels with ExperienceScriptClass / bullet-script vocabulary. */
+function canonicalizeDetectedScriptByBullet(
+  scripts: Array<string | null | undefined> | undefined,
+): string[] {
+  return (scripts || []).map((s) => {
+    if (s === 'latin_diacritic_sc') return 'latin_diacritic';
+    return String(s || 'unknown');
+  });
+}
+
 function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult {
   const locale = (canonicalizeContentLocale(input.requestedLocale) as Locale)
     || input.requestedLocale;
@@ -5474,7 +5492,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalBulletCount: bulletCount,
         finalBulletScripts: detectBulletScripts(candidate),
         detectedLocaleByBullet: purity.detectedLocaleByUnit,
-        detectedScriptByBullet: purity.detectedScriptByUnit,
+        detectedScriptByBullet: canonicalizeDetectedScriptByBullet(purity.detectedScriptByUnit),
         wrongLocaleBulletCount: purity.wrongLocaleUnitCount,
         wrongScriptBulletCount: purity.wrongScriptUnitCount,
         mixedLanguageBulletCount: purity.mixedLanguageUnitCount,
@@ -5971,6 +5989,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const needsSrWarehouse = locale === 'sr'
+        && sourceRequiresSerbianWarehouseFactCoverage(sourceForCoverage);
+      const srWarehouse = needsSrWarehouse
+        ? validateSerbianWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const srPredicates = needsSrWarehouse
+        ? scanSerbianWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (srPredicates) {
+        sourcePredicateIdentityCount = srPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = srPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = srPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...srPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = srPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsEnWarehouse = locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
@@ -6306,6 +6350,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (needsSrWarehouse && srWarehouse && (
+        !srWarehouse.ok
+        || (srPredicates && (
+          srPredicates.sourceUnitPredicateCoveragePassed === false
+          || srPredicates.candidateAddedPredicateCount > 0
+          || srPredicates.candidatePredicateIdentityCount <= 0
+        ))
+      )) {
+        lastRejectStage = `${stage}:serbian_warehouse_facts`;
+        lastRejectReason = !srWarehouse.ok
+          ? (srWarehouse.reason || 'serbian_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
+        lastRequired = srWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = srWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = srWarehouse.uncovered.map(
+          (id) => serbianWarehouseFactDiagId(id),
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
       if (needsEnWarehouse && enWarehouse && (
         !enWarehouse.ok
         || (enPredicates && (
@@ -6378,6 +6446,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       } else if (needsArWarehouse && arWarehouse?.ok) {
         lastRequired = arWarehouse.required.length;
         lastCovered = arWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsSrWarehouse && srWarehouse?.ok) {
+        lastRequired = srWarehouse.required.length;
+        lastCovered = srWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (needsEnWarehouse && enWarehouse?.ok) {
         lastRequired = enWarehouse.required.length;
@@ -6760,6 +6832,40 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           return null;
         }
         clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (
+        locale === 'sr'
+        && sourceRequiresSerbianWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        // Soft SR shells collapse 3 duties → 2 action frames. Never re-validate a
+        // hard Serbian warehouse triad with soft cross-locale frame matching.
+        const srWarehouse = validateSerbianWarehouseExperienceCoverage(
+          sourceForCoverage,
+          candidate,
+        );
+        const srPredicates = scanSerbianWarehousePredicates(sourceForCoverage, candidate);
+        sourcePredicateIdentityCount = srPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = srPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = srPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...srPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = srPredicates.sourceUnitPredicateCoveragePassed;
+        lastRequired = srWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = srWarehouse.covered.length;
+        if (!srWarehouse.ok
+          || srPredicates.sourceUnitPredicateCoveragePassed === false
+          || srPredicates.candidateAddedPredicateCount > 0
+          || srPredicates.candidatePredicateIdentityCount <= 0) {
+          lastRejectStage = `${stage}:serbian_warehouse_facts`;
+          lastRejectReason = !srWarehouse.ok
+            ? (srWarehouse.reason || 'serbian_experience_warehouse_fact_coverage_incomplete')
+            : 'source_unit_predicate_coverage_failed';
+          clientDeterministicFallbackUncoveredFactIds = srWarehouse.uncovered.map(
+            (id) => serbianWarehouseFactDiagId(id),
+          );
+          return null;
+        }
+        clientDeterministicFallbackUncoveredFactIds = [];
       } else {
         const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
         lastRequired = semantic.requiredCount || sourceFactCount;
@@ -6876,12 +6982,43 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
         providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
         providerAccepted: isClientFallback ? false : true,
+        providerSourcePredicateIdentityCount: isClientFallback
+          ? providerSourcePredicateIdentityCount || undefined
+          : (providerSourcePredicateIdentityCount || sourcePredicateIdentityCount || undefined),
+        providerCandidatePredicateIdentityCount: isClientFallback
+          ? providerCandidatePredicateIdentityCount || undefined
+          : (providerCandidatePredicateIdentityCount
+            || candidatePredicateIdentityCount
+            || undefined),
+        providerCandidateAddedPredicateCount: isClientFallback
+          ? providerCandidateAddedPredicateCount || undefined
+          : (providerCandidateAddedPredicateCount
+            || candidateAddedPredicateCount
+            || undefined),
+        providerCandidateAddedPredicateIdentityHashes: isClientFallback
+          ? (providerCandidateAddedPredicateIdentityHashes.length
+            ? [...providerCandidateAddedPredicateIdentityHashes]
+            : undefined)
+          : (
+            (providerCandidateAddedPredicateIdentityHashes.length
+              ? providerCandidateAddedPredicateIdentityHashes
+              : candidateAddedPredicateIdentityHashes).length
+              ? [...(providerCandidateAddedPredicateIdentityHashes.length
+                ? providerCandidateAddedPredicateIdentityHashes
+                : candidateAddedPredicateIdentityHashes)]
+              : undefined
+          ),
+        providerSourceUnitPredicateCoveragePassed: isClientFallback
+          ? providerSourceUnitPredicateCoveragePassed
+          : (providerSourceUnitPredicateCoveragePassed
+            ?? sourceUnitPredicateCoveragePassed
+            ?? undefined),
         fallbackBulletCount: isClientFallback ? bulletCount : fallbackBulletCount,
         finalBulletCount: bulletCount,
         finalBulletScripts: detectBulletScripts(candidate),
         finalNormalizedHash: fingerprintText(candidate.replace(/\s+/g, ' ').trim()),
         detectedLocaleByBullet: purity.detectedLocaleByUnit,
-        detectedScriptByBullet: purity.detectedScriptByUnit,
+        detectedScriptByBullet: canonicalizeDetectedScriptByBullet(purity.detectedScriptByUnit),
         wrongLocaleBulletCount: purity.wrongLocaleUnitCount,
         wrongScriptBulletCount: purity.wrongScriptUnitCount,
         mixedLanguageBulletCount: purity.mixedLanguageUnitCount,
@@ -6976,12 +7113,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresRussianWarehouseFactCoverage(sourceForCoverage || '');
           const isHiWarehouse = locale === 'hi'
             && sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage || '');
-          // EN/DE/ES/FR/IT/PT/RU/HI warehouse selected-final snapshots independently recompute
-          // predicate truth. Other locales must not invent false predicate coverage.
+          const isJaWarehouse = locale === 'ja'
+            && sourceRequiresJapaneseWarehouseFactCoverage(sourceForCoverage || '');
+          const isArWarehouse = locale === 'ar'
+            && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage || '');
+          const isSrWarehouse = locale === 'sr'
+            && sourceRequiresSerbianWarehouseFactCoverage(sourceForCoverage || '');
+          // EN/DE/ES/FR/IT/PT/RU/HI/JA/AR/SR warehouse selected-final snapshots independently
+          // recompute predicate truth. Other locales must not invent false predicate coverage.
           if (
             !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
             && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
-            && !isHiWarehouse
+            && !isHiWarehouse && !isJaWarehouse && !isArWarehouse && !isSrWarehouse
           ) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
             delete diag.finalCandidatePredicateValidationApplicable;
@@ -7827,17 +7970,23 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           exp?.position || cv.personal?.jobTitle,
         )
       );
-      // Soft Arabic warehouse shells may already be visible in the target locale
-      // while still collapsing 3 duties → 2. Do not early-return as a no-op;
-      // fall through to the hard Arabic warehouse deterministic triad.
+      // Soft Arabic/Serbian warehouse shells may already be visible in the target
+      // locale while still collapsing 3 duties → 2. Do not early-return as a no-op;
+      // fall through to the hard warehouse deterministic triad.
       const needsArabicWarehouseRebuild = locale === 'ar'
         && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage)
         && !validateArabicWarehouseExperienceCoverage(
           sourceForCoverage,
           finalNormalizedBullets,
         ).ok;
-      if (needsDesignFamilyRebuild || needsArabicWarehouseRebuild) {
-        if (needsArabicWarehouseRebuild && !needsDesignFamilyRebuild) {
+      const needsSerbianWarehouseRebuild = locale === 'sr'
+        && sourceRequiresSerbianWarehouseFactCoverage(sourceForCoverage)
+        && !validateSerbianWarehouseExperienceCoverage(
+          sourceForCoverage,
+          finalNormalizedBullets,
+        ).ok;
+      if (needsDesignFamilyRebuild || needsArabicWarehouseRebuild || needsSerbianWarehouseRebuild) {
+        if (needsArabicWarehouseRebuild && !needsDesignFamilyRebuild && !needsSerbianWarehouseRebuild) {
           lastRejectStage = 'provider:arabic_warehouse_rebuild_required';
           lastRejectReason = 'arabic_experience_warehouse_fact_coverage_incomplete';
           providerRejectionReason = lastRejectReason;
@@ -7854,6 +8003,23 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             );
           }
           // Skip tryAccept of incomplete soft shells — continue to hard AR fallback.
+        } else if (needsSerbianWarehouseRebuild && !needsDesignFamilyRebuild) {
+          lastRejectStage = 'provider:serbian_warehouse_rebuild_required';
+          lastRejectReason = 'serbian_experience_warehouse_fact_coverage_incomplete';
+          providerRejectionReason = lastRejectReason;
+          providerRejectionStage = lastRejectStage;
+          const srSoft = validateSerbianWarehouseExperienceCoverage(
+            sourceForCoverage,
+            finalNormalizedBullets,
+          );
+          providerRequiredFactCount = srSoft.required.length || Math.max(3, sourceFactCount);
+          providerCoveredFactCount = srSoft.covered.length;
+          if (providerUncoveredFactIdentityHashes.length === 0) {
+            providerUncoveredFactIdentityHashes = srSoft.uncovered.map(
+              (id) => serbianWarehouseFactDiagId(id),
+            );
+          }
+          // Skip tryAccept of incomplete soft shells — continue to hard SR fallback.
         } else {
         lastRejectStage = 'provider:design_rebuild_required';
         if (locale === 'hr') {
@@ -9274,6 +9440,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       if (!translated.trim()
+        && locale === 'sr'
+        && sourceRequiresSerbianWarehouseFactCoverage(sourceForCoverage)) {
+        void SERBIAN_EXPERIENCE_GROUNDING_341_REVISION;
+        translated = normalizeLocaleText(
+          buildSerbianWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+            gender,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
         && locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
         void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
@@ -9435,6 +9614,27 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ...arPredFb.candidateAddedPredicateIdentityHashes,
         ];
         sourceUnitPredicateCoveragePassed = arPredFb.sourceUnitPredicateCoveragePassed;
+      }
+      if (
+        locale === 'sr'
+        && sourceRequiresSerbianWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        const srFb = validateSerbianWarehouseExperienceCoverage(sourceForCoverage, translated);
+        const srPredFb = scanSerbianWarehousePredicates(sourceForCoverage, translated);
+        clientDeterministicFallbackRequiredFactCount = srFb.required.length || Math.max(3, sourceFactCount);
+        clientDeterministicFallbackCoveredFactCount = srFb.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = srFb.uncovered.map(
+          (id) => serbianWarehouseFactDiagId(id),
+        );
+        lastRequired = clientDeterministicFallbackRequiredFactCount;
+        lastCovered = clientDeterministicFallbackCoveredFactCount;
+        sourcePredicateIdentityCount = srPredFb.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = srPredFb.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = srPredFb.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...srPredFb.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = srPredFb.sourceUnitPredicateCoveragePassed;
       }
       if (translatedOk) {
         const accepted = tryAccept(
@@ -10072,7 +10272,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       targetLocale: locale,
       targetScript: resolveTargetScriptForLocale(locale),
       detectedLocaleByBullet: rejectedPurity?.detectedLocaleByUnit || [],
-      detectedScriptByBullet: rejectedPurity?.detectedScriptByUnit || [],
+      detectedScriptByBullet: canonicalizeDetectedScriptByBullet(
+        rejectedPurity?.detectedScriptByUnit,
+      ),
       wrongLocaleBulletCount: rejectedPurity?.wrongLocaleUnitCount ?? 0,
       wrongScriptBulletCount: rejectedPurity?.wrongScriptUnitCount ?? 0,
       mixedLanguageBulletCount: rejectedPurity?.mixedLanguageUnitCount ?? 0,

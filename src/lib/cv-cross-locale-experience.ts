@@ -52,6 +52,10 @@ import {
   validateArabicWarehouseExperienceCoverage,
 } from './cv-arabic-experience-grounding';
 import {
+  sourceRequiresSerbianWarehouseFactCoverage,
+  validateSerbianWarehouseExperienceCoverage,
+} from './cv-serbian-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -1038,6 +1042,18 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (arCovered > 0) return arCovered;
+  }
+  // AAB-341 — Serbian warehouse result (incl. AR-visible→sr).
+  if (
+    sourceRequiresSerbianWarehouseFactCoverage(sourceDescription || '')
+    && /(?:proverava|pregledava|kontroliše|koordinira|sarađuje|skladišt|pristigl|prateć|kolegama|priprem|premešt|dokumentacij)/iu
+      .test(result || '')
+  ) {
+    const srCovered = validateSerbianWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (srCovered > 0) return srCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.

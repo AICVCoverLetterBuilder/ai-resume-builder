@@ -278,7 +278,26 @@ export function detectAiContentScript(text: string): AiContentScript {
   }
   // Prefer script after removing brands/tech so "Hindi + Ztrew" is still Hindi.
   const t = stripLatinProperNounIslands(text) || stripNeutralAiTokens(text);
-  if (!t) return 'unknown';
+  // Brand-island stripping of pure Serbian/Croatian Latin often leaves only "." —
+  // treat letter-less residue as empty and recover script from the Latin surface.
+  const tHasLetters = /[\p{L}\p{N}]/u.test(t || '');
+  if (!t || !tHasLetters) {
+    // Pure Latin prose (e.g. Serbian/Croatian warehouse bullets) is fully removed by
+    // brand-island stripping. Recover Latin / SC-diacritic from the neutral-stripped
+    // surface so detectedScriptByBullet is not left as unknown while purity still passes.
+    const latinSurface = stripNeutralAiTokens(text);
+    if (!latinSurface) return 'unknown';
+    const nonLatin = DEVANAGARI.test(latinSurface)
+      || ARABIC.test(latinSurface)
+      || CJK.test(latinSurface)
+      || CYRILLIC.test(latinSurface);
+    if (nonLatin) return 'unknown';
+    if (SC_DIACRITIC.test(latinSurface) && LATIN_LETTER.test(latinSurface)) {
+      return 'latin_diacritic_sc';
+    }
+    if (LATIN_LETTER.test(latinSurface)) return 'latin';
+    return 'unknown';
+  }
   const hasDev = DEVANAGARI.test(t);
   const hasAr = ARABIC.test(t);
   const hasCjk = CJK.test(t);
