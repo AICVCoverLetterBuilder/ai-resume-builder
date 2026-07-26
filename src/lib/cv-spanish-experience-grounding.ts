@@ -8,6 +8,9 @@ import {
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
 import {
+  sourceHasWarehouseDomainApplicability,
+} from './cv-warehouse-domain-applicability';
+import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
@@ -64,6 +67,7 @@ const COORDINATE_ES = /(?:coordina|coordinó|coordinar|coordinaci[oó]n)/iu;
 
 /** True when the authoritative source encodes warehouse material duties. */
 export function sourceRequiresSpanishWarehouseFactCoverage(sourceDescription: string): boolean {
+  if (!sourceHasWarehouseDomainApplicability(sourceDescription || '')) return false;
   const keys = materialDutyKeysFromDescription(sourceDescription || '');
   return WAREHOUSE_KEYS.some((k) => keys.includes(k))
     || /(?:warehouse|skladist|magacin|lager|almac[eé]n|mercanc[ií]a|incoming\s+goods|गोदाम|माल|आवाजाही|तैयारी|zaprimljen|robu)/iu

@@ -19,9 +19,14 @@ import {
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
 import {
+  materialDutyKeysFromDescription,
   validateDistinctExperienceBullets,
   validateNoExtraGeneratedDuties,
 } from './cv-material-duty-coverage';
+import {
+  sourceHasWarehouseDomainApplicability,
+  sourceIsCookingHospitalityWithoutWarehouseEvidence,
+} from './cv-warehouse-domain-applicability';
 
 /** Packaging proof — must survive minification in web / Android / AAB assets. */
 export const GENERIC_EXPERIENCE_PREDICATE_343_REVISION =
@@ -171,6 +176,23 @@ export function scanGenericExperiencePredicates(
   // Material keys are advisory for the generic path: Romance/CJK soft shells and
   // cross-locale fallbacks may paraphrase objects while still covering frames 1:1.
   // Unsupported tools/metrics/scope still fail via validateNoExtraGeneratedDuties.
+  // Cross-domain leakage: cooking sources must not accept design/warehouse shells.
+  const srcKeys = materialDutyKeysFromDescription(sourceDescription || '');
+  const candKeys = materialDutyKeysFromDescription(candidateDescription || '');
+  const sourceCooking = sourceIsCookingHospitalityWithoutWarehouseEvidence(
+    sourceDescription || '',
+  )
+    || srcKeys.some((k) => k === 'food_prep'
+      || k === 'hygiene_workplace'
+      || k === 'kitchen_collaboration');
+  const candidateDesign = candKeys.some((k) => k.startsWith('design_'))
+    || /(?:डिज़ाइन|डिजाइन|grafi[cč]k|dise[nñ]o|design\s+handoff|ビジュアル|مواد\s*بصرية)/iu
+      .test(candidateDescription || '');
+  const candidateWarehouseLeak = !sourceHasWarehouseDomainApplicability(sourceDescription || '')
+    && candKeys.some((k) => k.startsWith('warehouse_'))
+    && /(?:गोदाम|माल की तैयारी|skladišt|warehouse|Wareneingang|mercanc[ií]a)/iu
+      .test(candidateDescription || '');
+  const crossDomainLeakage = sourceCooking && (candidateDesign || candidateWarehouseLeak);
 
   const { coveredSi, usedCi } = matchSourceToCandidateUnits(sourceUnits, candUnits);
   const missing = sourceIds.filter((_, i) => !coveredSi.includes(i));
@@ -186,6 +208,12 @@ export function scanGenericExperiencePredicates(
       if (!addedHashes.includes(id)) addedHashes.push(id);
     }
   }
+  if (crossDomainLeakage) {
+    const id = addedPredicateIdentity(
+      candidateDesign ? 'extra:cross_domain_design' : 'extra:cross_domain_warehouse',
+    );
+    if (!addedHashes.includes(id)) addedHashes.push(id);
+  }
 
   const merged = candUnits.length > 0
     && candUnits.length < sourceUnits.length;
@@ -200,12 +228,15 @@ export function scanGenericExperiencePredicates(
     && !merged
     && !splitOrDup
     && !countMismatch
+    && !crossDomainLeakage
     && coveredCount === sourceUnits.length
     && candUnits.length === sourceUnits.length;
 
   let reason: string | null = null;
   if (!ok) {
-    if (merged || (countMismatch && candUnits.length < sourceUnits.length)) {
+    if (crossDomainLeakage) {
+      reason = 'generic_experience_predicate_cross_domain_leakage';
+    } else if (merged || (countMismatch && candUnits.length < sourceUnits.length)) {
       reason = 'generic_experience_predicate_merged_duties';
     } else if (splitOrDup) {
       reason = 'generic_experience_predicate_split_or_duplicate';

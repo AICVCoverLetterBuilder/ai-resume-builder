@@ -15,6 +15,9 @@ import {
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
 import {
+  sourceHasWarehouseDomainApplicability,
+} from './cv-warehouse-domain-applicability';
+import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
@@ -59,6 +62,7 @@ const UNSUPPORTED_HR_SOFT =
  * English (or keyed) triad authority still engages hard grounding.
  */
 export function sourceRequiresCroatianWarehouseFactCoverage(sourceDescription: string): boolean {
+  if (!sourceHasWarehouseDomainApplicability(sourceDescription || '')) return false;
   const text = sourceDescription || '';
   // Soft shells often still extract warehouse_* material keys; exclude by text.
   if (UNSUPPORTED_HR_SOFT.test(text) || MERGED_GOODS_DOCS_SOFT_HR.test(text)) {

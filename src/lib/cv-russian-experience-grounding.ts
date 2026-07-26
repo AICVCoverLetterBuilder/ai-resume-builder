@@ -14,6 +14,9 @@ import {
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
 import {
+  sourceHasWarehouseDomainApplicability,
+} from './cv-warehouse-domain-applicability';
+import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
@@ -49,6 +52,7 @@ const MERGED_GOODS_DOCS_SOFT_RU =
 
 /** True when the authoritative source encodes warehouse material duties. */
 export function sourceRequiresRussianWarehouseFactCoverage(sourceDescription: string): boolean {
+  if (!sourceHasWarehouseDomainApplicability(sourceDescription || '')) return false;
   const keys = materialDutyKeysFromDescription(sourceDescription || '');
   return WAREHOUSE_KEYS.some((k) => keys.includes(k))
     || /(?:warehouse|skladist|magacin|lager|almac[eé]n|entrep[oô]t|magazzino|armaz[eé]m|mercanc[ií]a|marchandise|merci|mercadoria|склад|товар|incoming\s+goods|गोदाम|माल|आवाजाही|तैयारी|zaprimljen|robu)/iu

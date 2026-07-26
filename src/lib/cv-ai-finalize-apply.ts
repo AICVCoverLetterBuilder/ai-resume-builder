@@ -182,9 +182,13 @@ import {
   sourceRequiresHindiWarehouseFactCoverage,
   validateHindiWarehouseExperienceCoverage,
   buildHindiWarehouseExperienceFallback,
+  buildHindiCookingExperienceFallback,
+  isExactHindiCookingThreeDutySource,
   scanHindiWarehousePredicates,
   hindiWarehouseFactDiagId,
+  HINDI_COOKING_EXPERIENCE_FALLBACK_344_REVISION,
 } from './cv-hindi-experience-grounding';
+import { sourceIsCookingHospitalityWithoutWarehouseEvidence } from './cv-warehouse-domain-applicability';
 import {
   JAPANESE_EXPERIENCE_GROUNDING_339_REVISION,
   sourceRequiresJapaneseWarehouseFactCoverage,
@@ -424,6 +428,7 @@ import {
   deterministicLocalizedBulletsFromCanonical,
   deterministicLocalizedSummaryFromCanonical,
   buildSourcePreservingExperienceBulletsWithProvenance,
+  localizeCanonicalBulletLine,
 } from './cv-localized-fallback';
 import {
   buildCrossLocaleExperienceFallback,
@@ -455,6 +460,7 @@ import {
   validateProvenancedDeterministicFallbackCoverage,
   validateSourceUnitsMateriallyPreserved,
   extractSourceDutyUnits,
+  stripDutyListPrefix,
   sourceUsableInLocale,
 } from './cv-source-fact-identity';
 import {
@@ -9597,6 +9603,37 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }),
           locale,
         );
+      }
+      // AAB-344 — cook/hospitality must not inherit warehouse or design soft shells.
+      if (!translated.trim()
+        && locale === 'hi'
+        && !sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage)
+        && (isExactHindiCookingThreeDutySource(sourceForCoverage)
+          || sourceIsCookingHospitalityWithoutWarehouseEvidence(sourceForCoverage)
+          || /(?:\bmeals?\b|\bdishes?\b|\bkitchen\b|\bfood\s+preparation\b|\bjela\b|\bkuhinj)/i
+            .test(sourceForCoverage || ''))) {
+        void HINDI_COOKING_EXPERIENCE_FALLBACK_344_REVISION;
+        let cookingFb = '';
+        if (isExactHindiCookingThreeDutySource(sourceForCoverage)) {
+          cookingFb = buildHindiCookingExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+            gender,
+          });
+        } else {
+          const cookUnits = extractSourceDutyUnits(sourceForCoverage)
+            .map((u) => stripDutyListPrefix(u))
+            .filter(Boolean);
+          const cookLines = cookUnits
+            .map((u) => localizeCanonicalBulletLine(u, 'hi', gender, { isPresent }))
+            .filter((l) => Boolean(l && l.trim()));
+          cookingFb = cookLines.length === cookUnits.length && cookLines.length > 0
+            ? formatExperienceBullets(cookLines)
+            : '';
+        }
+        if (cookingFb.trim()) {
+          translated = normalizeLocaleText(cookingFb, locale);
+        }
       }
       if (!translated.trim()
         && locale === 'ja'

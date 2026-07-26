@@ -65,6 +65,7 @@ import {
   countEnglishWarehouseTranslatedFacts,
   validateEnglishWarehouseExperienceCoverage,
 } from './cv-english-experience-warehouse-grounding';
+import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
 
 type ActionFrame =
   | 'check_records'
@@ -1309,10 +1310,7 @@ export function validateCrossLocaleSemanticCoverage(
   const candFrames = bullets.map((b) => classifyActionFrame(b));
   const usedB = new Set<number>();
   let covered = 0;
-  const warehouseSource = sourceRequiresGermanWarehouseFactCoverage(sourceDescription)
-    || sourceRequiresSpanishWarehouseFactCoverage(sourceDescription)
-    || materialDutyKeysFromDescription(sourceDescription)
-      .some((k) => k.startsWith('warehouse_'));
+  const warehouseSource = sourceHasWarehouseDomainApplicability(sourceDescription);
   for (let si = 0; si < srcFrames.length; si += 1) {
     const want = srcFrames[si];
     let matched = -1;

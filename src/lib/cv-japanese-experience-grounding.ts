@@ -15,6 +15,9 @@ import {
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
 import {
+  sourceHasWarehouseDomainApplicability,
+} from './cv-warehouse-domain-applicability';
+import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
@@ -52,6 +55,7 @@ const UNSUPPORTED_JA_SOFT =
 
 /** True when the authoritative source encodes warehouse material duties. */
 export function sourceRequiresJapaneseWarehouseFactCoverage(sourceDescription: string): boolean {
+  if (!sourceHasWarehouseDomainApplicability(sourceDescription || '')) return false;
   const keys = materialDutyKeysFromDescription(sourceDescription || '');
   return WAREHOUSE_KEYS.some((k) => keys.includes(k))
     || /(?:warehouse|skladist|magacin|lager|almac[eé]n|entrep[oô]t|magazzino|armaz[eé]m|mercanc[ií]a|marchandise|merci|mercadoria|склад|товар|incoming\s+goods|गोदाम|माल|倉庫|入荷|商品|準備と移動|zaprimljen|robu)/iu

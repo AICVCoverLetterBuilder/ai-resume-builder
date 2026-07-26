@@ -8,6 +8,7 @@ import {
   detectExperienceUnsupportedClaimExpansion,
   type ExperienceUnsupportedClaimKind,
 } from './cv-experience-unsupported-claims';
+import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
 
 export type MaterialDutyKey =
   | 'food_prep'
@@ -1203,10 +1204,14 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
       if (!keys.includes(k as MaterialDutyKey)) keys.push(k as MaterialDutyKey);
     }
   }
-  // Kitchen / care team collaboration must not inherit contact-center CS keys.
+  // Kitchen / care team collaboration must not inherit contact-center CS keys
+  // or false-positive warehouse_movement from prep+colleagues (AAB-344).
   if (keys.includes('kitchen_collaboration')) {
     return keys.filter(
-      (k) => k !== 'team_collaboration' && k !== 'generic_duty' && !k.startsWith('cs_'),
+      (k) => k !== 'team_collaboration'
+        && k !== 'generic_duty'
+        && !k.startsWith('cs_')
+        && !k.startsWith('warehouse_'),
     );
   }
   if (keys.includes('healthcare_team')) {
@@ -1225,7 +1230,22 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
     );
   }
   // Warehouse inbound/records/movement — prefer over CS false-hits (koleg+coord).
+  // Cooking/hospitality material keys win over false-positive warehouse_movement
+  // from prep+colleagues (AAB-344). Per-unit Atlas warehouse lines still prefer
+  // warehouse_* when no cooking keys are present.
   if (keys.some((k) => k.startsWith('warehouse_'))) {
+    const cookingMaterial = keys.includes('food_prep')
+      || keys.includes('hygiene_workplace')
+      || keys.includes('kitchen_collaboration')
+      || /(?:\bmeals?\b|\bdishes?\b|\bkitchen\b|\bfood\s+preparation\b|\bhospitality\b)/i.test(t);
+    if (cookingMaterial && !sourceHasWarehouseDomainApplicability(t)) {
+      return keys.filter(
+        (k) => !k.startsWith('warehouse_')
+          && k !== 'team_collaboration'
+          && k !== 'generic_duty'
+          && !k.startsWith('cs_'),
+      );
+    }
     return keys.filter(
       (k) => k.startsWith('warehouse_')
         || (!k.startsWith('cs_')

@@ -9,6 +9,9 @@ import {
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
 import {
+  sourceHasWarehouseDomainApplicability,
+} from './cv-warehouse-domain-applicability';
+import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
@@ -39,6 +42,7 @@ const COORDINATE_FR = /\b(?:coordonne|coordonner|coordonn[eé]|coordination)\b/i
 
 /** True when the authoritative source encodes warehouse material duties. */
 export function sourceRequiresFrenchWarehouseFactCoverage(sourceDescription: string): boolean {
+  if (!sourceHasWarehouseDomainApplicability(sourceDescription || '')) return false;
   const keys = materialDutyKeysFromDescription(sourceDescription || '');
   return WAREHOUSE_KEYS.some((k) => keys.includes(k))
     || /(?:warehouse|skladist|magacin|lager|almac[eé]n|entrep[oô]t|mercanc[ií]a|marchandise|incoming\s+goods|गोदाम|माल|आवाजाही|तैयारी|zaprimljen|robu)/iu

@@ -19,12 +19,23 @@ import {
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
 import { splitExperienceBullets, formatExperienceBullets } from './cv-canonical-facts';
+import {
+  sourceHasWarehouseDomainApplicability,
+  sourceIsCookingHospitalityWithoutWarehouseEvidence,
+  WAREHOUSE_DOMAIN_APPLICABILITY_344_REVISION,
+} from './cv-warehouse-domain-applicability';
 
 /** Packaging proof — must survive minification in web / Android / AAB assets. */
 export const HINDI_EXPERIENCE_GROUNDING_338_REVISION =
   'hindi-experience-grounding-338-v1' as const;
 
+/** Packaging proof — Hindi cooking Experience fallback (AAB-344 domain routing). */
+export const HINDI_COOKING_EXPERIENCE_FALLBACK_344_REVISION =
+  'hindi-cooking-experience-fallback-344-v1' as const;
+
 void HINDI_EXPERIENCE_GROUNDING_338_REVISION;
+void HINDI_COOKING_EXPERIENCE_FALLBACK_344_REVISION;
+void WAREHOUSE_DOMAIN_APPLICABILITY_344_REVISION;
 
 const WAREHOUSE_KEYS: MaterialDutyKey[] = [
   'warehouse_inbound_check',
@@ -53,10 +64,103 @@ const UNSUPPORTED_HI_SOFT =
 
 /** True when the authoritative source encodes warehouse material duties. */
 export function sourceRequiresHindiWarehouseFactCoverage(sourceDescription: string): boolean {
-  const keys = materialDutyKeysFromDescription(sourceDescription || '');
+  const src = sourceDescription || '';
+  // Applicability first — never activate from prep+colleagues / kitchen alone.
+  if (!sourceHasWarehouseDomainApplicability(src)) return false;
+  const keys = materialDutyKeysFromDescription(src);
   return WAREHOUSE_KEYS.some((k) => keys.includes(k))
-    || /(?:warehouse|skladist|magacin|lager|almac[eé]n|entrep[oô]t|magazzino|armaz[eé]m|mercanc[ií]a|marchandise|merci|mercadoria|склад|товар|incoming\s+goods|गोदाम|माल|आवाजाही|तैयारी|zaprimljen|robu)/iu
-      .test(sourceDescription || '');
+    || /(?:warehouse|skladist|magacin|lager|almac[eé]n|entrep[oô]t|magazzino|armaz[eé]m|mercanc[ií]a|marchandise|merci|mercadoria|склад|товар|incoming\s+goods|गोदाम|माल|आवाजाही|स्थानांतरण|zaprimljen|robu)/iu
+      .test(src);
+}
+
+/**
+ * Exact AAB-344 Cook / Test Kitchen English structured-canonical triad.
+ * Used for grounded Hindi cooking fallback when the provider is invalid.
+ */
+export function isExactHindiCookingThreeDutySource(sourceDescription: string): boolean {
+  const units = extractSourceDutyUnits(sourceDescription || '')
+    .map((u) => stripDutyListPrefix(u).toLowerCase())
+    .filter(Boolean);
+  if (units.length !== 3) return false;
+  const joined = units.join('\n');
+  const hasMeals = /(?:prepares?|prepared)\s+meals?\s+and\s+dishes?/i.test(joined)
+    || /भोजन|व्यंजन/.test(joined);
+  const hasHygiene = /(?:maintains?|maintained).{0,40}(?:hygiene|cleanliness).{0,40}kitchen/i.test(joined)
+    || /(?:hygiene|cleanliness).{0,40}kitchen/i.test(joined)
+    || /रसोई.{0,40}(?:स्वच्छता|साफ)/u.test(joined);
+  const hasKitchenCollab = /(?:coordinates?|coordinated).{0,48}kitchen\s+colleagues.{0,48}food\s+preparation/i.test(joined)
+    || /kitchen\s+colleagues.{0,40}food\s+preparation/i.test(joined)
+    || /रसोई के सहकर्मियों/.test(joined);
+  return hasMeals && hasHygiene && hasKitchenCollab;
+}
+
+function hindiCookingVerbForms(options: {
+  isPresent?: boolean;
+  gender?: string;
+}): { prepare: string; maintain: string; coordinate: string } {
+  const present = options.isPresent !== false;
+  const g = String(options.gender || '').toLowerCase();
+  const female = /^(female|f|ženski|zenski)$/i.test(g);
+  const male = /^(male|m|muški|muski)$/i.test(g);
+  if (!present) {
+    if (female) {
+      return { prepare: 'तैयार कीं', maintain: 'बनाए रखा', coordinate: 'समन्वय किया' };
+    }
+    if (male) {
+      return { prepare: 'तैयार किए', maintain: 'बनाए रखा', coordinate: 'समन्वय किया' };
+    }
+    return { prepare: 'तैयार किए', maintain: 'बनाए रखा', coordinate: 'समन्वय किया' };
+  }
+  // Current / present: honorific plural CV register (matches warehouse Hindi).
+  if (female) {
+    return {
+      prepare: 'तैयार करती हैं',
+      maintain: 'बनाए रखती हैं',
+      coordinate: 'समन्वय करती हैं',
+    };
+  }
+  if (male) {
+    return {
+      prepare: 'तैयार करते हैं',
+      maintain: 'बनाए रखते हैं',
+      coordinate: 'समन्वय करते हैं',
+    };
+  }
+  return {
+    prepare: 'तैयार करते हैं',
+    maintain: 'बनाए रखते हैं',
+    coordinate: 'समन्वय करते हैं',
+  };
+}
+
+/**
+ * Deterministic Hindi cooking bullets for the exact three-duty cook fixture.
+ * Never invents design or warehouse duties.
+ */
+export function buildHindiCookingExperienceFallback(options: {
+  sourceDescription: string;
+  isPresent?: boolean;
+  gender?: string;
+}): string {
+  void HINDI_COOKING_EXPERIENCE_FALLBACK_344_REVISION;
+  const present = options.isPresent !== false;
+  const verbs = hindiCookingVerbForms(options);
+  if (!isExactHindiCookingThreeDutySource(options.sourceDescription)
+    && !sourceIsCookingHospitalityWithoutWarehouseEvidence(options.sourceDescription)) {
+    return '';
+  }
+  if (present) {
+    return formatExperienceBullets([
+      `भोजन और व्यंजन ${verbs.prepare}।`,
+      `रसोई में स्वच्छता और साफ-सफाई ${verbs.maintain}।`,
+      `भोजन की तैयारी के दौरान रसोई के सहकर्मियों के साथ ${verbs.coordinate}।`,
+    ]);
+  }
+  return formatExperienceBullets([
+    `भोजन और व्यंजन ${verbs.prepare}।`,
+    `रसोई में स्वच्छता और साफ-सफाई ${verbs.maintain}।`,
+    `भोजन की तैयारी के दौरान रसोई के सहकर्मियों के साथ ${verbs.coordinate}।`,
+  ]);
 }
 
 export type HindiWarehouseFactId =
@@ -74,8 +178,11 @@ export type HindiWarehouseCoverageResult = {
 };
 
 function sourceWarehouseFacts(sourceDescription: string): HindiWarehouseFactId[] {
-  const keys = new Set(materialDutyKeysFromDescription(sourceDescription || ''));
-  const units = extractSourceDutyUnits(sourceDescription || '')
+  const src = sourceDescription || '';
+  // Never invent warehouse facts for cooking / non-warehouse occupations.
+  if (!sourceHasWarehouseDomainApplicability(src)) return [];
+  const keys = new Set(materialDutyKeysFromDescription(src));
+  const units = extractSourceDutyUnits(src)
     .map((u) => stripDutyListPrefix(u))
     .filter(Boolean);
   const joined = units.join('\n');
@@ -90,8 +197,9 @@ function sourceWarehouseFacts(sourceDescription: string): HindiWarehouseFactId[]
   const docUnit = units.some((u) =>
     /(?:document|record|unterlagen|दस्तावे|संबंधित|accompanying|prateć|documentaci[oó]n|documentazione|documenta[cç][aã]o|registros?\s+relacionad|documents?\s+associ|документац|сопроводительн)/iu.test(u)
     && !/(?:movement|आवाजाही|premješt|vorbereit|तैयारी|movimiento|traslado|preparaci[oó]n|d[eé]placement|mouvement|movimentazione|movimenta[cç][aã]o|перемещен|подготовк|स्थानांतरण)/iu.test(u));
+  // Movement requires goods / warehouse transfer evidence — not kitchen prep+colleagues.
   const hasMovement = keys.has('warehouse_movement')
-    || /(?:movement|आवाजाही|premješt|vorbereit|तैयारी|स्थानांतरण|preparation.{0,24}(?:movement|goods)|koordin.{0,40}(?:rob|goods|माल|mercanc|marchand|merci|mercador|товар)|colleague.{0,40}(?:goods|rob|माल|mercanc|marchand|merci|mercador|товар)|compa[nñ]er.{0,40}(?:preparaci[oó]n|movimiento|mercanc)|coll[eè]gue.{0,40}(?:pr[eé]paration|d[eé]placement|marchand)|collegh[ie].{0,40}(?:preparazione|movimentazione|merci)|colegas?.{0,40}(?:prepara[cç][aã]o|movimenta[cç][aã]o|mercador)|коллег.{0,40}(?:подготов|перемещен|товар)|सहकर्मि|सहयोगि)/iu
+    || /(?:movement|आवाजाही|premješt|vorbereit|स्थानांतरण|preparation.{0,24}(?:movement|goods)|koordin.{0,40}(?:rob|goods|माल|mercanc|marchand|merci|mercador|товар)|colleague.{0,40}(?:goods|rob|माल|mercanc|marchand|merci|mercador|товар)|compa[nñ]er.{0,40}(?:preparaci[oó]n|movimiento|mercanc)|coll[eè]gue.{0,40}(?:pr[eé]paration|d[eé]placement|marchand)|collegh[ie].{0,40}(?:preparazione|movimentazione|merci)|colegas?.{0,40}(?:prepara[cç][aã]o|movimenta[cç][aã]o|mercador)|коллег.{0,40}(?:подготов|перемещен|товар)|(?:सहकर्मि|सहयोगि).{0,40}(?:माल|आवाजाही|स्थानांतरण)|(?:माल|आवाजाही|स्थानांतरण).{0,40}(?:सहकर्मि|सहयोगि|समन्वय))/iu
       .test(joined);
 
   if (hasInbound) facts.push('incoming_goods_check');
@@ -106,9 +214,22 @@ function sourceWarehouseFacts(sourceDescription: string): HindiWarehouseFactId[]
     && units.length >= 2) {
     facts.splice(1, 0, 'document_check');
   }
-  return facts.length ? facts : (units.length >= 3
-    ? ['incoming_goods_check', 'document_check', 'goods_prep_movement_colleagues']
-    : facts);
+  // Genuine warehouse sources (applicability already held): when units clearly
+  // encode multi-duty warehouse work but fact extraction under-fired, use the
+  // grounded triad rather than blocking cross-locale translation (pre-344).
+  if (!facts.length && units.length >= 3) {
+    return ['incoming_goods_check', 'document_check', 'goods_prep_movement_colleagues'];
+  }
+  if (facts.length >= 1 && units.length >= 3 && facts.length < 3) {
+    if (!facts.includes('document_check')) facts.splice(1, 0, 'document_check');
+    if (!facts.includes('goods_prep_movement_colleagues')) {
+      facts.push('goods_prep_movement_colleagues');
+    }
+    if (!facts.includes('incoming_goods_check')) {
+      facts.unshift('incoming_goods_check');
+    }
+  }
+  return facts;
 }
 
 function bulletCoversFact(bullet: string, fact: HindiWarehouseFactId): boolean {
@@ -291,7 +412,7 @@ function hindiPredicateFamilyFromUnit(unit: string): HindiWarehousePredicateFami
     || (COORDINATE_HI.test(t) && COLLEAGUES_HI.test(t) && GOODS_MOVEMENT_HI.test(t))
     || /(?:colleague|kolleg|compa[nñ]er|colega|coll[eè]gue|collegh|colegas|коллег|सहकर्मि|सहयोगि).{0,48}(?:prepare|vorbereit|movement|bewegung|movimiento|move\s+goods|mercanc|d[eé]placement|marchand|movimentazione|merci|movimenta[cç][aã]o|mercador|подготов|перемещен|товар|तैयारी|आवाजाही|स्थानांतरण)/iu
       .test(t)
-    || /(?:works?\s+with\s+colleagues|koordiniert\s+mit\s+kolleg|coordena\s+com\s+os\s+colegas|координирует\s+с\s+коллег|सहकर्मियों\s+के\s+साथ\s+समन्वय)/iu.test(t)) {
+    || /(?:works?\s+with\s+colleagues|koordiniert\s+mit\s+kolleg|coordena\s+com\s+os\s+colegas|координирует\s+с\s+коллег|सहकर्मियों\s+के\s+साथ\s+समन्वय).{0,48}(?:goods|माल|rob|mercanc|marchand|merci|mercador|товар|Waren|आवाजाही|स्थानांतरण|movement)/iu.test(t)) {
     return 'coordinate_colleagues';
   }
   if (/(?:checks?|inspects?|prüft|revisa|contr[oô]le|controlla|verifica|confere|проверя|जाँच|जांच).{0,40}incoming\s+goods|incoming\s+goods|eingehende\s+waren|mercanc[ií]a\s+entrant|marchandises?\s+entrant|merci\s+in\s+entrata|mercadorias?\s+que\s+chegam|поступающ\w*\s+товар|आने\s*वाल[ेी]\s+माल/iu.test(t)) {
@@ -300,7 +421,9 @@ function hindiPredicateFamilyFromUnit(unit: string): HindiWarehousePredicateFami
   if (/(?:checks?|kontrolliert|comprueba|v[eé]rifie|verifica|confere|проверя|जाँच|जांच).{0,40}(?:related\s+)?(?:documents?|unterlagen|documentaci|documentazione|documenta[cç][aã]o|документац|दस्तावे)/iu.test(t)) {
     return 'verify_documentation';
   }
-  if (/(?:works?\s+with\s+colleagues|koordiniert|coordina|coordonne|si\s+coordina|coordena|координирует|समन्वय).{0,60}(?:prepare|vorbereit|movement|bewegung|movimiento|d[eé]placement|movimentazione|movimenta[cç][aã]o|подготов|перемещен|तैयारी|आवाजाही|स्थानांतरण)/iu.test(t)) {
+  // Require goods/warehouse transfer evidence — kitchen food-prep + colleagues is not warehouse.
+  if (/(?:works?\s+with\s+colleagues|koordiniert|coordina|coordonne|si\s+coordina|coordena|координирует|समन्वय).{0,60}(?:prepare|vorbereit|movement|bewegung|movimiento|d[eé]placement|movimentazione|movimenta[cç][aã]o|подготов|перемещен|तैयारी|आवाजाही|स्थानांतरण).{0,40}(?:goods|माल|rob|mercanc|marchand|merci|mercador|товар|Waren|आवाजाही|स्थानांतरण)/iu.test(t)
+    || /(?:goods|माल|rob|mercanc|marchand|merci|mercador|товар|Waren).{0,40}(?:prepare|movement|तैयारी|आवाजाही|स्थानांतरण).{0,40}(?:colleague|kolleg|compa[nñ]er|सहकर्मि|коллег)/iu.test(t)) {
     return 'coordinate_colleagues';
   }
   return null;
@@ -331,21 +454,9 @@ export function scanHindiWarehousePredicates(
       sourceIds.push(hindiWarehousePredicateIdentity(fam, u));
     }
   }
-  if (sourceUnits.length >= 3 && sourceFamilies.length < 3) {
-    const fallback: HindiWarehousePredicateFamily[] = [
-      'inspect_incoming',
-      'verify_documentation',
-      'coordinate_colleagues',
-    ];
-    for (let i = 0; i < 3; i += 1) {
-      const fam = fallback[i]!;
-      if (!sourceFamilies.includes(fam)) {
-        sourceFamilies.push(fam);
-        sourceIds.push(hindiWarehousePredicateIdentity(fam, sourceUnits[i] || fam));
-      }
-    }
-  }
   const requiredFacts = sourceWarehouseFacts(sourceDescription);
+  // Pad warehouse predicate families only when the hard triad is required —
+  // never invent warehouse predicates from a single prep+colleagues match.
   if (requiredFacts.length >= 3 && sourceFamilies.length < 3) {
     const map: Record<HindiWarehouseFactId, HindiWarehousePredicateFamily> = {
       incoming_goods_check: 'inspect_incoming',

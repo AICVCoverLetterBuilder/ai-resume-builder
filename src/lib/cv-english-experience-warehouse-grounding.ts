@@ -16,6 +16,9 @@ import {
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
 import {
+  sourceHasWarehouseDomainApplicability,
+} from './cv-warehouse-domain-applicability';
+import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
@@ -121,6 +124,7 @@ export type EnglishWarehousePredicateScan = {
 
 /** True when the authoritative source encodes warehouse material duties. */
 export function sourceRequiresEnglishWarehouseFactCoverage(sourceDescription: string): boolean {
+  if (!sourceHasWarehouseDomainApplicability(sourceDescription || '')) return false;
   void ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
   const keys = materialDutyKeysFromDescription(sourceDescription || '');
   return WAREHOUSE_KEYS.some((k) => keys.includes(k))
