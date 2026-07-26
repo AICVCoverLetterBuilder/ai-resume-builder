@@ -54,6 +54,13 @@ import {
   RUSSIAN_EXPERIENCE_GROUNDING_337_REVISION,
 } from './cv-russian-experience-grounding';
 import {
+  validateHindiWarehouseExperienceCoverage,
+  scanHindiWarehousePredicates,
+  sourceRequiresHindiWarehouseFactCoverage,
+  hindiWarehouseFactDiagId,
+  HINDI_EXPERIENCE_GROUNDING_338_REVISION,
+} from './cv-hindi-experience-grounding';
+import {
   isPortugueseBrazilLocale,
   canonicalizeContentLocale,
   localesEquivalent,
@@ -278,6 +285,24 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
+  } else if (
+    locale === 'hi'
+    && sourceRequiresHindiWarehouseFactCoverage(source)
+  ) {
+    void HINDI_EXPERIENCE_GROUNDING_338_REVISION;
+    const cov = validateHindiWarehouseExperienceCoverage(source, text);
+    requiredFactCount = cov.required.length;
+    coveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => hindiWarehouseFactDiagId(id));
+    factCoveragePassed = cov.ok;
+    const pred = scanHindiWarehousePredicates(source, text);
+    sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
+    candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
+    addedPredicateCount = pred.candidateAddedPredicateCount;
+    addedPredicateIdentityHashes = [...pred.candidateAddedPredicateIdentityHashes];
+    predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
+      && candidatePredicateIdentityCount > 0;
   }
 
   return {
@@ -320,7 +345,13 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
                               && sourceRequiresRussianWarehouseFactCoverage(source)
                                 ? validateRussianWarehouseExperienceCoverage(source, text).required
                                   .map((id) => russianWarehouseFactDiagId(id))
-                                : Array.from({ length: requiredFactCount }, (_, i) => `req_${i}`)
+                                : (
+                                  locale === 'hi'
+                                  && sourceRequiresHindiWarehouseFactCoverage(source)
+                                    ? validateHindiWarehouseExperienceCoverage(source, text).required
+                                      .map((id) => hindiWarehouseFactDiagId(id))
+                                    : Array.from({ length: requiredFactCount }, (_, i) => `req_${i}`)
+                                )
                             )
                         )
                     )
@@ -940,6 +971,23 @@ export function validateVisibleExperienceCoverage(options: {
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
       && visibleCoveredPredicateCount > 0;
+  } else if (
+    (options.targetLocale || locale) === 'hi'
+    && sourceRequiresHindiWarehouseFactCoverage(options.sourceDescription)
+  ) {
+    applicable = true;
+    void HINDI_EXPERIENCE_GROUNDING_338_REVISION;
+    const cov = validateHindiWarehouseExperienceCoverage(options.sourceDescription, visible);
+    visibleRequiredFactCount = cov.required.length;
+    visibleCoveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => hindiWarehouseFactDiagId(id));
+    visibleFactCoveragePassed = cov.ok;
+    const pred = scanHindiWarehousePredicates(options.sourceDescription, visible);
+    visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
+    visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
+    visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
+      && visibleCoveredPredicateCount > 0;
   }
 
   return {
@@ -977,7 +1025,13 @@ export function validateVisibleExperienceCoverage(options: {
                               && sourceRequiresRussianWarehouseFactCoverage(options.sourceDescription)
                                 ? validateRussianWarehouseExperienceCoverage(options.sourceDescription, visible)
                                   .required.map((id) => russianWarehouseFactDiagId(id))
-                                : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+                                : (
+                                  (options.targetLocale || locale) === 'hi'
+                                  && sourceRequiresHindiWarehouseFactCoverage(options.sourceDescription)
+                                    ? validateHindiWarehouseExperienceCoverage(options.sourceDescription, visible)
+                                      .required.map((id) => hindiWarehouseFactDiagId(id))
+                                    : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+                                )
                             )
                         )
                     )

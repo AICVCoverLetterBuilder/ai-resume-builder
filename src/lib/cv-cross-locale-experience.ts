@@ -40,6 +40,10 @@ import {
   validateRussianWarehouseExperienceCoverage,
 } from './cv-russian-experience-grounding';
 import {
+  sourceRequiresHindiWarehouseFactCoverage,
+  validateHindiWarehouseExperienceCoverage,
+} from './cv-hindi-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -990,6 +994,18 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (ruCovered > 0) return ruCovered;
+  }
+  // AAB-338 — Hindi warehouse result (incl. RU-visible→hi).
+  if (
+    sourceRequiresHindiWarehouseFactCoverage(sourceDescription || '')
+    && /(?:जाँच|जांच|गोदाम|माल|सहकर्मि|समन्वय|दस्तावे|आवाजाही|स्थानांतरण)/u
+      .test(result || '')
+  ) {
+    const hiCovered = validateHindiWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (hiCovered > 0) return hiCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.

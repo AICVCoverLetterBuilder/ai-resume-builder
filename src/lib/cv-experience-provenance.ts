@@ -253,17 +253,19 @@ export function resolveExperienceAiAuthoritativeSource(
       && provenance.currentTextareaIgnoredOrOverridden
     );
     const lang = inferSelectedLanguageScript(selected);
-    const staleForeign = Boolean(
+    const englishStillAuth = Boolean(
       ignored
       && selected
       && scriptLooksEnglishLatin(selected)
       && scriptLooksNonEnglish(live),
     );
+    // Foreign live AI text is not authoritative when ignored for fact extraction.
+    const staleForeign = false;
     let diffReason: ExperienceAiAuthoritativeSourceResult['selectedSourceDiffReason'] = 'none';
     if (!live) diffReason = 'live_empty';
     else if (formattingOnly && experienceAiSourcesEquivalent(live, selected)) {
       diffReason = 'canonical_formatting_only';
-    } else if (staleForeign) diffReason = 'foreign_locale_override';
+    } else if (englishStillAuth) diffReason = 'foreign_locale_override';
     else if (ignored) diffReason = 'material_content';
     else if (live && selected && live !== selected && experienceAiSourcesEquivalent(live, selected)) {
       diffReason = 'canonical_formatting_only';
@@ -273,7 +275,7 @@ export function resolveExperienceAiAuthoritativeSource(
       text: unitText || selected,
       kind: selected || unitText ? kind : 'none',
       currentTextareaIgnoredOrOverridden: ignored,
-      englishSourceStillAuthoritative: staleForeign,
+      englishSourceStillAuthoritative: englishStillAuth,
       staleForeignLocaleSourceAuthoritative: staleForeign,
       selectedSourceLanguage: lang.language,
       selectedSourceScript: lang.script,

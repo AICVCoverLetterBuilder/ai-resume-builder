@@ -178,6 +178,14 @@ import {
   russianWarehouseFactDiagId,
 } from './cv-russian-experience-grounding';
 import {
+  HINDI_EXPERIENCE_GROUNDING_338_REVISION,
+  sourceRequiresHindiWarehouseFactCoverage,
+  validateHindiWarehouseExperienceCoverage,
+  buildHindiWarehouseExperienceFallback,
+  scanHindiWarehousePredicates,
+  hindiWarehouseFactDiagId,
+} from './cv-hindi-experience-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -780,6 +788,13 @@ export type FinalizeCvAiFieldInput = {
   earlyUneditedRerunNoOp?: boolean;
   /** Optional job-context hash for source-bundle / preflight diagnostics. */
   jobContextHash?: string | null;
+  /** Dual-source Experience authority diagnostics (AAB-304+). */
+  currentTextareaProvenance?: string | null;
+  currentTextareaUsedForFactExtraction?: boolean | null;
+  authoritativeFactSourceKind?: string | null;
+  lastAiOutputHashMatched?: boolean | null;
+  materialUserEditDetected?: boolean | null;
+  staleGeneratedDescriptionIgnored?: boolean | null;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -5291,6 +5306,20 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         persistedGeneratedLocaleForVisibleMismatch: entryGen,
         visibleLocaleMetadataMismatchRecorded: mismatchRecorded,
         entryGeneratedLocaleBeforeApply: entryGen,
+        // Foreign live AI text is never fact-authoritative when ignored for extraction.
+        staleForeignLocaleSourceAuthoritative: false,
+        englishSourceStillAuthoritative: Boolean(
+          (
+            textareaProvenance?.currentTextareaUsedForFactExtraction === false
+            || input.currentTextareaUsedForFactExtraction === false
+          )
+          && Boolean((sourceForCoverage || '').trim())
+          && Boolean((visibleComparisonText || '').trim())
+          && !experienceAiSourcesEquivalent(
+            sourceForCoverage || '',
+            visibleComparisonText || '',
+          ),
+        ),
       };
     })(),
     requestedTargetLocale: locale,
@@ -5848,6 +5877,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const needsHiWarehouse = locale === 'hi'
+        && sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage);
+      const hiWarehouse = needsHiWarehouse
+        ? validateHindiWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const hiPredicates = needsHiWarehouse
+        ? scanHindiWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (hiPredicates) {
+        sourcePredicateIdentityCount = hiPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = hiPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = hiPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...hiPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = hiPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsEnWarehouse = locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
@@ -6111,6 +6166,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (needsHiWarehouse && hiWarehouse && (
+        !hiWarehouse.ok
+        || (hiPredicates && (
+          hiPredicates.sourceUnitPredicateCoveragePassed === false
+          || hiPredicates.candidateAddedPredicateCount > 0
+          || hiPredicates.candidatePredicateIdentityCount <= 0
+        ))
+      )) {
+        lastRejectStage = `${stage}:hindi_warehouse_facts`;
+        lastRejectReason = !hiWarehouse.ok
+          ? (hiWarehouse.reason || 'hindi_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
+        lastRequired = hiWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = hiWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = hiWarehouse.uncovered.map(
+          (id) => hindiWarehouseFactDiagId(id),
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
       if (needsEnWarehouse && enWarehouse && (
         !enWarehouse.ok
         || (enPredicates && (
@@ -6171,6 +6250,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       } else if (needsRuWarehouse && ruWarehouse?.ok) {
         lastRequired = ruWarehouse.required.length;
         lastCovered = ruWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsHiWarehouse && hiWarehouse?.ok) {
+        lastRequired = hiWarehouse.required.length;
+        lastCovered = hiWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (needsEnWarehouse && enWarehouse?.ok) {
         lastRequired = enWarehouse.required.length;
@@ -6733,11 +6816,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresPortugueseWarehouseFactCoverage(sourceForCoverage || '');
           const isRuWarehouse = locale === 'ru'
             && sourceRequiresRussianWarehouseFactCoverage(sourceForCoverage || '');
-          // EN/DE/ES/FR/IT/PT/RU warehouse selected-final snapshots independently recompute
+          const isHiWarehouse = locale === 'hi'
+            && sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage || '');
+          // EN/DE/ES/FR/IT/PT/RU/HI warehouse selected-final snapshots independently recompute
           // predicate truth. Other locales must not invent false predicate coverage.
           if (
             !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
             && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
+            && !isHiWarehouse
           ) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
             delete diag.finalCandidatePredicateValidationApplicable;
@@ -8490,8 +8576,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     }
   } else {
-    providerCoveredFactCount = lastCovered;
-    providerRequiredFactCount = lastRequired || sourceFactCount;
+    // Freeze provider rejection evidence once warehouse grounding populated it.
+    // Fallback selection must not clear or replace providerUncoveredFactIdentityHashes.
+    if (providerUncoveredFactIdentityHashes.length === 0) {
+      providerCoveredFactCount = lastCovered;
+      providerRequiredFactCount = lastRequired || sourceFactCount;
+    }
   }
 
   // Provider/server postconditions failed → always attempt client deterministic fallback.
@@ -8959,6 +9049,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       if (!translated.trim()
+        && locale === 'hi'
+        && sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage)) {
+        void HINDI_EXPERIENCE_GROUNDING_338_REVISION;
+        translated = normalizeLocaleText(
+          buildHindiWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+            gender,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
         && locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
         void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
@@ -9057,6 +9160,27 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ...ruPredFb.candidateAddedPredicateIdentityHashes,
         ];
         sourceUnitPredicateCoveragePassed = ruPredFb.sourceUnitPredicateCoveragePassed;
+      }
+      if (
+        locale === 'hi'
+        && sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        const hiFb = validateHindiWarehouseExperienceCoverage(sourceForCoverage, translated);
+        const hiPredFb = scanHindiWarehousePredicates(sourceForCoverage, translated);
+        clientDeterministicFallbackRequiredFactCount = hiFb.required.length || Math.max(3, sourceFactCount);
+        clientDeterministicFallbackCoveredFactCount = hiFb.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = hiFb.uncovered.map(
+          (id) => hindiWarehouseFactDiagId(id),
+        );
+        lastRequired = clientDeterministicFallbackRequiredFactCount;
+        lastCovered = clientDeterministicFallbackCoveredFactCount;
+        sourcePredicateIdentityCount = hiPredFb.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = hiPredFb.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = hiPredFb.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...hiPredFb.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = hiPredFb.sourceUnitPredicateCoveragePassed;
       }
       if (translatedOk) {
         const accepted = tryAccept(

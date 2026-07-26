@@ -15,6 +15,10 @@ import {
   validateCrossLocaleSemanticCoverage,
 } from '../cv-cross-locale-experience';
 import {
+  buildHindiWarehouseExperienceFallback,
+  validateHindiWarehouseExperienceCoverage,
+} from '../cv-hindi-experience-grounding';
+import {
   detectAiContentScript,
   guessUnitLocale,
   resolveTargetScriptForLocale,
@@ -141,8 +145,14 @@ describe('build 272 Serbian→Hindi Experience (exact regression)', () => {
       expect(d.mixedLanguageBulletCount).toBe(0);
       expect(d.sourceLanguageLeakageDetected).toBe(false);
       expect(d.targetLocalePurityPassed).toBe(true);
-      expect(d.providerCoveredFactCount ?? d.coveredFactCount).toBe(3);
-      expect(d.requiredFactCount).toBe(3);
+      // Soft HI shells merge goods+docs and invent update/organization duties —
+      // provider must be rejected; hard Hindi 3/3 fallback is selected.
+      expect(d.providerAccepted).toBe(false);
+      expect(Number(d.providerRequiredFactCount ?? d.requiredFactCount)).toBe(3);
+      expect(Number(d.providerCoveredFactCount ?? 0)).toBeLessThan(3);
+      expect(d.finalCandidateSource).toBe('deterministic_fallback');
+      expect(Number(d.finalCoveredFactCount ?? d.coveredFactCount)).toBe(3);
+      expect(Number(d.requiredFactCount)).toBe(3);
       expect(d.crossLocaleOperation).toBe(true);
       expect(d.translationProviderAttempted).toBe(true);
       expect(pipeline.finalized.countedAsSuccess).toBe(true);
@@ -152,6 +162,7 @@ describe('build 272 Serbian→Hindi Experience (exact regression)', () => {
       expect(exp.description).toContain('जाँच');
       expect(exp.description).toContain('गोदाम');
       expect(exp.description).toContain('समन्वय');
+      expect(exp.description).not.toMatch(/सही रिकॉर्ड सुनिश्चित|रिकॉर्ड अद्यतन|व्यवस्थित रख/);
       expect(/[A-Za-zÀ-ÖØ-öø-ÿ]{6,}/.test(exp.description.replace(/\b(?:SAP|SQL|API|Ztrew)\b/g, ''))).toBe(false);
 
       // Restart / reload preserves Hindi content + locale.
@@ -311,9 +322,9 @@ describe('build 272 Serbian→Hindi Experience (exact regression)', () => {
       expect(textMatchesRequestedFieldLocale(timeoutEmpty.text, 'hi', 'experience_bullet')).toBe(true);
       expect(isWrongLanguageAiOutput(timeoutEmpty.text, 'hi')).toBe(false);
       expect(timeoutEmpty.text).not.toMatch(/Proverava|Ažurira|Koordiniše/);
-      const semantic = validateCrossLocaleSemanticCoverage(SR_WH, timeoutEmpty.text);
-      expect(semantic.ok).toBe(true);
-      expect(semantic.coveredCount).toBe(3);
+      const hiCov = validateHindiWarehouseExperienceCoverage(SR_WH, timeoutEmpty.text);
+      expect(hiCov.ok).toBe(true);
+      expect(hiCov.covered.length).toBe(3);
     } else {
       expect(timeoutEmpty.countedAsSuccess).toBe(false);
       expect(cv.experience![0].description).toBe(SR_WH);
@@ -321,13 +332,10 @@ describe('build 272 Serbian→Hindi Experience (exact regression)', () => {
   });
 
   it('target-pure deterministic Hindi fallback (no Latin prose)', () => {
-    const fb = buildCrossLocaleExperienceFallback({
+    const fb = buildHindiWarehouseExperienceFallback({
       sourceDescription: SR_WH,
-      sourceLocale: 'sr',
-      targetLocale: 'hi' as Locale,
-      gender: 'female',
       isPresent: true,
-      position: 'Radnica u skladištu',
+      gender: 'female',
     });
     expect(fb.trim()).toBeTruthy();
     expect(fb).not.toMatch(/Proverava|Ažurira|Koordiniše|pristiglu|skladiš/);
@@ -335,8 +343,20 @@ describe('build 272 Serbian→Hindi Experience (exact regression)', () => {
     const purity = validateAiUnitLocalePurity(fb, 'hi', { kind: 'experience_bullet', requireUnits: true });
     expect(purity.ok).toBe(true);
     expect(purity.detectedScriptByUnit.every((s) => s === 'devanagari')).toBe(true);
-    expect(validateCrossLocaleSemanticCoverage(SR_WH, fb).ok).toBe(true);
+    expect(validateHindiWarehouseExperienceCoverage(SR_WH, fb).ok).toBe(true);
     const bullets = splitExperienceBullets(fb);
     expect(bullets).toHaveLength(3);
+    // Soft cross-locale shells remain available but are no longer the warehouse authority.
+    const soft = buildCrossLocaleExperienceFallback({
+      sourceDescription: SR_WH,
+      sourceLocale: 'sr',
+      targetLocale: 'hi' as Locale,
+      gender: 'female',
+      isPresent: true,
+      position: 'Radnica u skladištu',
+    });
+    expect(validateAiUnitLocalePurity(soft, 'hi', { kind: 'experience_bullet', requireUnits: true }).ok)
+      .toBe(true);
+    void validateCrossLocaleSemanticCoverage;
   });
 });

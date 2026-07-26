@@ -47,6 +47,11 @@ import {
   scanRussianWarehousePredicates,
 } from './cv-russian-experience-grounding';
 import {
+  sourceRequiresHindiWarehouseFactCoverage,
+  validateHindiWarehouseExperienceCoverage,
+  scanHindiWarehousePredicates,
+} from './cv-hindi-experience-grounding';
+import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
@@ -411,6 +416,9 @@ export function evaluateExperienceVisibleComparison(options: {
         if (/(?:проверяет|координирует|поступающ|документац|коллег|склад|товар)/iu.test(v)) {
           return validateRussianWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
+        if (/(?:जाँच|जांच|गोदाम|माल|सहकर्मि|समन्वय|दस्तावे|आवाजाही|स्थानांतरण)/u.test(v)) {
+          return validateHindiWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
         if (/(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(v)) {
           return validateFrenchWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
@@ -508,6 +516,22 @@ export function evaluateExperienceVisibleComparison(options: {
       ) {
         const cov = validateRussianWarehouseExperienceCoverage(auth, candidate);
         const pred = scanRussianWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
+        target.startsWith('hi')
+        && sourceRequiresHindiWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateHindiWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanHindiWarehousePredicates(auth, candidate);
         if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
           degradationKinds.push('fact_lost');
         } else if (pred.candidateAddedPredicateCount > 0) {

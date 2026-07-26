@@ -1863,6 +1863,9 @@ type ExperienceLike = {
   unsupportedClaimRepairVisibleApplyPerformed?: boolean | null;
   neutralRestyleDetected?: boolean | null;
   authoritativeFactSourceKind?: string | null;
+  currentTextareaUsedForFactExtraction?: boolean | null;
+  staleForeignLocaleSourceAuthoritative?: boolean | null;
+  englishSourceStillAuthoritative?: boolean | null;
   factAuthorityKind?: string | null;
   factAuthorityMatchesAuthoritativeSourceKind?: boolean | null;
   finalSourceUnitPredicateCoveragePassed?: boolean | null;
@@ -2062,6 +2065,15 @@ export function checkExperienceDiagnosticInvariants(
       providerCoveredFactCount: trace.providerCoveredFactCount,
       providerRequiredFactCount: trace.providerRequiredFactCount,
       providerUncoveredFactIdentityHashCount: 0,
+    });
+  }
+  if (
+    trace.currentTextareaUsedForFactExtraction === false
+    && trace.staleForeignLocaleSourceAuthoritative === true
+  ) {
+    push('stale_foreign_authoritative_while_textarea_unused_for_facts', {
+      currentTextareaUsedForFactExtraction: false,
+      staleForeignLocaleSourceAuthoritative: true,
     });
   }
   // AAB-309 repair lineage invariants.

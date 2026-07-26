@@ -838,7 +838,9 @@ export function diagnoseExperienceSourceSelection(
   const selectedScript = classifyExperienceScript(selected);
   const liveScript = classifyExperienceScript(textarea);
   // Serbian Latin must never be reported as "English authoritative".
-  const staleForeignLocaleSourceAuthoritative = Boolean(
+  // englishSourceStillAuthoritative: Latin/English selected while non-Latin live
+  // text was ignored for fact extraction (pre_ai / original remains authoritative).
+  const englishSourceStillAuthoritative = Boolean(
     currentTextareaIgnoredOrOverridden
     && selected
     && selectedScript === 'latin'
@@ -847,7 +849,8 @@ export function diagnoseExperienceSourceSelection(
     && liveScript !== 'empty'
     && liveScript !== 'other',
   );
-  const englishSourceStillAuthoritative = staleForeignLocaleSourceAuthoritative;
+  // Foreign live AI text is NOT authoritative when we ignore it for facts.
+  const staleForeignLocaleSourceAuthoritative = false;
 
   let selectedSourceLanguage: string | null = null;
   let selectedSourceScript: string | null = null;
@@ -896,7 +899,7 @@ export function diagnoseExperienceSourceSelection(
   else if (equivalentNormalized && textareaHash !== selectedHash) {
     selectedSourceDiffReason = 'canonical_formatting_only';
   } else if (currentTextareaIgnoredOrOverridden) {
-    selectedSourceDiffReason = staleForeignLocaleSourceAuthoritative
+    selectedSourceDiffReason = englishSourceStillAuthoritative
       ? 'foreign_locale_override'
       : 'material_content';
   } else {
