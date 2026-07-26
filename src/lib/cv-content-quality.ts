@@ -40,6 +40,10 @@ import {
   analyzeGermanSummaryDurationScope,
 } from './cv-german-summary-competency-grounding';
 import { SUMMARY_DURATION_FINALIZER_REVISION_DE } from './cv-german-summary-grounding';
+import {
+  injectEnglishTotalDurationSentence,
+  SUMMARY_DURATION_FINALIZER_REVISION_EN,
+} from './cv-english-summary-grounding';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
 export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
@@ -918,6 +922,8 @@ export function resolveSummaryWithDurationPolicy(
             ? SUMMARY_DURATION_FINALIZER_REVISION_HR_V2
             : locale === 'de'
               ? SUMMARY_DURATION_FINALIZER_REVISION_DE
+            : locale === 'en'
+              ? SUMMARY_DURATION_FINALIZER_REVISION_EN
             : SUMMARY_DURATION_FINALIZER_REVISION,
   };
 
@@ -936,6 +942,11 @@ export function resolveSummaryWithDurationPolicy(
       durationDiagnostics.duplicateDurationRemoved = true;
     }
   }
+
+  // AAB-346 — English inject uses injectEnglishTotalDurationSentence (via injectFn)
+  // for missing/duplicate ownership. Do not wholesale strip+rebuild on legacy
+  // baker/generic "since … with approximately … years" forms — that destroyed
+  // non-warehouse grounded candidates.
 
   // A previously-saved or independently produced summary may already carry the duration
   // claim but as a standalone leading/trailing fragment — repair the structure first.
@@ -1069,6 +1080,9 @@ export function resolveSummaryWithDurationPolicy(
     fallback = injectCroatianDurationIntoCurrentIntro(stripped || working, duration, context);
   } else if (locale === 'de' && phrase) {
     fallback = injectGermanTotalDurationSentence(stripped || working, phrase, context?.gender);
+  } else if (locale === 'en' && phrase) {
+    void SUMMARY_DURATION_FINALIZER_REVISION_EN;
+    fallback = injectEnglishTotalDurationSentence(stripped || working, phrase);
   } else if (phrase && stripped) {
     fallback = mergeDurationPhraseIntoFirstSentence(stripped, phrase, locale);
   } else if (phrase) {
@@ -1140,6 +1154,11 @@ export function injectDurationPhrase(
     void SUMMARY_DURATION_FINALIZER_REVISION_DE;
     const phrase = formatApproximateDurationPhrase(duration, 'de');
     return injectGermanTotalDurationSentence(text, phrase, context?.gender);
+  }
+  if (locale === 'en' && duration.hasValidDates) {
+    void SUMMARY_DURATION_FINALIZER_REVISION_EN;
+    const phrase = formatApproximateDurationPhrase(duration, 'en');
+    return injectEnglishTotalDurationSentence(text, phrase);
   }
   const phrase = formatApproximateDurationPhrase(duration, locale);
   if (!phrase) return text;

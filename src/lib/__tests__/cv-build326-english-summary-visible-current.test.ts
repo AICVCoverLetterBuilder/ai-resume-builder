@@ -30,15 +30,18 @@ const GD_ES = [
   'Prepara archivos de diseño finales para formatos y pantallas',
 ].join('\n');
 
-/** Exact AAB-325 visible English Summary (must remain passing). */
-const AAB325_EN_VISIBLE = [
-  'Warehouse Employee at Atlas since January 2023 with experience checking incoming',
-  'goods and the related documentation, and coordinating with colleagues during the',
-  'preparation and movement of goods. Previously, she worked as a Graphic Designer',
-  'at Rewitu, creating visual materials, revising design documents and preparing',
-  'final files for different formats and screens. Overall, she has approximately',
-  'six and a half years of professional experience.',
+/** AAB-346 first-person finite-clause English Summary (must remain passing). */
+const AAB346_EN_VISIBLE = [
+  'I am a warehouse employee with approximately six and a half years of',
+  'professional experience, currently working at Atlas, where I check incoming',
+  'goods, verify related documentation, and coordinate with colleagues on the',
+  'preparation and movement of goods. Previously, I worked as a graphic designer',
+  'at Rewitu, creating visual materials and graphic elements, reviewing and adapting',
+  'design materials, and preparing final design files for different formats and screens.',
 ].join(' ');
+
+/** Alias retained for AAB-325/326 fixtures that reference the canonical visible text. */
+const AAB325_EN_VISIBLE = AAB346_EN_VISIBLE;
 
 const REQUIRED_IDS = [
   'incoming_goods_check',
@@ -192,16 +195,16 @@ describe('AAB-326 English visible current duty validation', () => {
   it.each([
     {
       name: '7. missing incoming goods',
-      mutate: (t: string) => t.replace(/checking incoming goods and /iu, ''),
+      mutate: (t: string) => t.replace(/check incoming goods,\s*/iu, ''),
     },
     {
       name: '8. missing documentation',
-      mutate: (t: string) => t.replace(/and the related documentation, /iu, ''),
+      mutate: (t: string) => t.replace(/verify related documentation,\s*/iu, ''),
     },
     {
       name: '9. missing coordination',
       mutate: (t: string) => t.replace(
-        /, and coordinating with colleagues during the preparation and movement of goods/iu,
+        /,\s*and coordinate with colleagues on the preparation and movement of goods/iu,
         '',
       ),
     },
@@ -291,7 +294,7 @@ describe('AAB-326 English visible current duty validation', () => {
     session.recordVisibleApply(
       true,
       43,
-      fin.text!.replace(/checking incoming goods and /iu, ''),
+      fin.text!.replace(/check incoming goods,\s*/iu, ''),
     );
     expect(session.draft.coveredCurrentDutyFactCount).toBe(3);
     expect(session.draft.visibleCoveredCurrentDutyFactCount).toBe(2);

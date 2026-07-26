@@ -82,10 +82,15 @@ import {
   SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
   SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION,
   SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
+  SUMMARY_BUILDER_REVISION_EN,
   stripEnglishUnsupportedCompetencyUnits,
   detectEnglishMixedLanguageMorphology,
   rebuildEnglishDutyFactsFromIds,
   hashCurrentDutyRequiredFactSet,
+  validateEnglishSummaryFiniteClauses,
+  detectEnglishSummaryPerspective,
+  ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION,
+  ENGLISH_SUMMARY_PERSPECTIVE_CONTRACT_346,
 } from './cv-english-summary-grounding';
 export {
   analyzeEnglishSummaryEmploymentQuality,
@@ -99,10 +104,15 @@ export {
   SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
   SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION,
   SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
+  SUMMARY_BUILDER_REVISION_EN,
   stripEnglishUnsupportedCompetencyUnits,
   detectEnglishMixedLanguageMorphology,
   rebuildEnglishDutyFactsFromIds,
   hashCurrentDutyRequiredFactSet,
+  validateEnglishSummaryFiniteClauses,
+  detectEnglishSummaryPerspective,
+  ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION,
+  ENGLISH_SUMMARY_PERSPECTIVE_CONTRACT_346,
 } from './cv-english-summary-grounding';
 import {
   analyzeSpanishSummaryEmploymentQuality,
@@ -1672,6 +1682,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'hr'
     && locale !== 'de'
     && locale !== 'es'
+    && locale !== 'en'
   ) {
     return '';
   }
@@ -2020,16 +2031,14 @@ export function buildConciseGroundedSummary(
     void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
     void analyzeEnglishSummaryEmploymentQuality;
     void buildEnglishEntryOwnedSummary;
+    void SUMMARY_BUILDER_REVISION_EN;
     const domainCorpus = `${experienceTitle} ${profileTitle} ${sourceDuties} ${priorSourceDuties}`;
     const isEnglishWarehouseOrDesignDomain = isEnglishStructuredSummaryDomain(domainCorpus);
-    // Prefer the entry-owned English builder when source duties are not already English
-    // (Spanish/German Atlas fixtures). Native English warehouse duties keep the legacy
-    // gerund path so source-fact coverage remains exact. Do not key domain off the
-    // already-localized English role label (Warehouse Employee) — that poisoned sr→en.
-    const sourceNeedsEnglishLocalization = Boolean(sourceDuties.trim())
-      && !sourceUsableInLocale(sourceDuties.split(/\n+/)[0] || sourceDuties, 'en');
-    if (isEnglishWarehouseOrDesignDomain && sourceNeedsEnglishLocalization) {
-      const enRole = /(?:warehouse|almac[eé]n|Lager(?:mitarbeiter|arbeiter)|emplead)/i
+    // Always use the entry-owned English builder for structured warehouse/design
+    // domains — including native English duties. The legacy gerund path omitted
+    // prior-role intro and failed generate_from_context after provider rejection.
+    if (isEnglishWarehouseOrDesignDomain) {
+      const enRole = /(?:warehouse|almac[eé]n|Lager(?:mitarbeiter|arbeiter)|emplead|incoming\s+goods)/i
         .test(`${role} ${experienceTitle} ${sourceDuties}`)
         ? localizeWarehouseEmployee('en', genderNorm || '')
         : (role || localizeWarehouseEmployee('en', genderNorm || ''));
@@ -2048,6 +2057,7 @@ export function buildConciseGroundedSummary(
           : '',
         priorSourceDuties,
         locale: 'en',
+        duration: duration || null,
       });
       skillSentence = '';
       void skillSentence;

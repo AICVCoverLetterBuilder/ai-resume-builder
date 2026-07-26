@@ -1823,7 +1823,7 @@ export class SummaryAiDiagnosticSession {
             : false,
           finalMatchesSourceAfterNormalization: finalSelected
             ? Boolean(diag.finalMatchesSourceAfterNormalization)
-            : true,
+            : false,
           noOpDetected: !finalSelected && Boolean(diag.noOpDetected),
           noOpRejectionReason: !finalSelected && diag.noOpDetected
             ? 'summary_noop_after_normalization'
@@ -2036,7 +2036,7 @@ export class SummaryAiDiagnosticSession {
           && /\b(?:previously|formerly|worked\s+as)\b/iu.test(visibleText)
           && /visual\s+materials?/iu.test(visibleText)
           && /design\s+(?:documents?|materials?)/iu.test(visibleText)
-          && /final\s+files?/iu.test(visibleText);
+          && /final\s+(?:design\s+)?files?/iu.test(visibleText);
         visiblePriorDutyOk = priorPass;
         if (priorPass) visiblePriorDutyCovered = requiredPrior;
       }

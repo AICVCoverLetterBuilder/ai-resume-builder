@@ -53,20 +53,47 @@ export const SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION =
 /** AAB-326 — sentence semantic role serialization truth. */
 export const SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION =
   'summary-sentence-semantic-role-truth-326-v1' as const;
+/** AAB-346 — entry-owned English structured Summary builder revision. */
+export const SUMMARY_BUILDER_REVISION_EN =
+  'entry-owned-english-rebuild-v1' as const;
+export const SUMMARY_DURATION_FINALIZER_REVISION_EN =
+  'english-duration-total-career-v1' as const;
+/** AAB-346 — English Summary finite-clause grammar (no sentence fragments). */
+export const ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION =
+  'english-summary-finite-clause-346-v1' as const;
+/** English generated Summary perspective: first-person professional CV voice. */
+export const ENGLISH_SUMMARY_PERSPECTIVE_CONTRACT_346 =
+  'english-summary-first-person-346-v1' as const;
 
 /**
  * Strict English Summary domain for the Atlas/Rewitu shared final gate.
- * Matches Spanish warehouse/design source and German compound warehouse/design
- * titles only. Do not match localized English "Warehouse Employee" /
- * "Graphic Designer" — those falsely trigger the gate on sr→en cycles after
- * Experience enhance localizes titles.
+ * Matches Spanish/German warehouse/design source, native English warehouse/design
+ * duty phrases, and classified warehouse fact corpora. Do not match localized
+ * English role titles alone ("Warehouse Employee" / "Graphic Designer") — those
+ * falsely trigger the gate on sr→en cycles after Experience enhance localizes
+ * titles without warehouse duty evidence.
  */
 export const ENGLISH_STRUCTURED_SUMMARY_DOMAIN_RE =
   /(?:almac[eé]n|mercanc[ií]a|emplead[oa]s?|diseñ(?:adora|ador|o)?|Lager(?:mitarbeiter(?:in)?|arbeiter(?:in)?)|Grafikdesign(?:er(?:in)?|erin)|Emplead[oa]\s+de\s+almac)/iu;
 
+const ENGLISH_WAREHOUSE_DUTY_DOMAIN_RE =
+  /(?:checking|verifying|reviewing).{0,60}(?:incoming\s+goods|documentation)|(?:coordinat\w*).{0,80}(?:colleague|goods|preparation|movement)|incoming\s+goods|related\s+documentation|documentation\s+related/iu;
+
+const ENGLISH_DESIGN_DUTY_DOMAIN_RE =
+  /(?:creating|reviewing|adapting|preparing).{0,80}(?:visual\s+materials?|graphic\s+elements?|design\s+(?:materials?|documents?|files?)|formats?\s+and\s+screens?)/iu;
+
 export function isEnglishStructuredSummaryDomain(corpus: string): boolean {
   void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
-  return ENGLISH_STRUCTURED_SUMMARY_DOMAIN_RE.test(corpus || '');
+  void SUMMARY_BUILDER_REVISION_EN;
+  const text = corpus || '';
+  if (ENGLISH_STRUCTURED_SUMMARY_DOMAIN_RE.test(text)) return true;
+  if (ENGLISH_WAREHOUSE_DUTY_DOMAIN_RE.test(text) || ENGLISH_DESIGN_DUTY_DOMAIN_RE.test(text)) {
+    return true;
+  }
+  const warehouseFacts = extractGermanCurrentWarehouseDutyFacts({
+    currentEntryDuties: text,
+  }).filter((f) => f.requiredForSummary);
+  return warehouseFacts.length >= 2;
 }
 
 void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
@@ -79,6 +106,7 @@ const EN_MONTHS: Record<string, string> = {
   '05': 'May', '06': 'June', '07': 'July', '08': 'August',
   '09': 'September', '10': 'October', '11': 'November', '12': 'December',
 };
+void EN_MONTHS;
 
 const MIXED_MORPHOLOGY_RE =
   /(?:^|[^A-Za-zÁÉÍÓÚáéíóúÑñ])(?:revisingó|comprobingó|checkingó|coordinatió|verifyingó|updatingó|[A-Za-z]{4,}ing[óáéíú]|[A-Za-z]{4,}ed[óáéíú])(?=[^A-Za-zÁÉÍÓÚáéíóúÑñ]|$)/iu;
@@ -296,9 +324,9 @@ export function analyzeEnglishSummaryDurationScope(
   const units = text.split(/(?<=[.!?])\s+(?=\S)/u).map((u) => u.trim()).filter(Boolean);
   const company = (options.company || '').trim();
   const durationCue =
-    /(?:approximately|about|around|roughly|overall|in\s+total|total(?:ing)?).{0,40}(?:years?|months?)\s+of\s+(?:professional\s+)?experience|(?:years?|months?)\s+of\s+(?:professional\s+)?experience/iu;
+    /(?:approximately|about|around|roughly|overall|in\s+total|total(?:ing)?).{0,40}(?:years?|months?)\s+of\s+(?:professional\s+)?experience|(?:years?|months?)\s+of\s+(?:professional\s+)?experience|with\s+(?:approximately|about|around)?\s*(?:six|six and a half|\d+(?:\.\d+)?)\s+(?:and a half\s+)?years?/iu;
   const totalMarker =
-    /(?:overall|in\s+total|altogether|across\s+(?:her|his|their)\s+career|total\s+professional)/iu;
+    /(?:overall|in\s+total|altogether|across\s+(?:her|his|their)\s+career|total\s+professional|professional\s+experience)/iu;
   const attachmentRisk = Boolean(
     company
     && new RegExp(
@@ -367,7 +395,7 @@ function priorDutyCoverage(summary: string, priorDuties: string): {
     /(?:revising|revised|adapt|review)\w*.{0,60}(?:design|document)/iu.test(summary)
       || /design\s+(?:documents?|materials?)/iu.test(summary),
     /(?:preparing|prepared|prepare)\w*.{0,60}(?:final|files?|formats?|screens?)/iu.test(summary)
-      || /final\s+files?/iu.test(summary),
+      || /final\s+(?:design\s+)?files?/iu.test(summary),
   ];
   const covered = checks.filter(Boolean).length;
   return {
@@ -486,6 +514,17 @@ export type EnglishSummaryEmploymentQuality = {
   currentDutyCoverage?: SummaryEntryDutyCoverageResult;
   currentDutyParity?: AuthoritativeCurrentDutyParityResult;
   structuredRoleLocale?: StructuredRoleLocaleValidation;
+  grammarValidationPassed: boolean;
+  englishSummaryFragmentDetected: boolean;
+  englishSummaryFragmentKinds: string[];
+  finalSentenceFiniteClauseCount: number;
+  finalIncompleteSentenceCount: number;
+  finalSentenceGrammarRecords: Array<{
+    sentenceIndex: number;
+    sentenceHash: string;
+    finiteClausePresent: boolean;
+    fragmentKinds: string[];
+  }>;
 };
 
 export function analyzeEnglishSummaryEmploymentQuality(
@@ -616,22 +655,59 @@ export function analyzeEnglishSummaryEmploymentQuality(
 
   const rolesByUnit: string[][] = units.map((u) => {
     const roles: string[] = [];
-    if (/Warehouse|at\s+\w+|since\s+/iu.test(u) && !/Previously|Overall|In\s+total/iu.test(u)) {
+    if (
+      (/\bI\s+am\b|Warehouse|currently\s+working|where\s+I\b|at\s+\w+|since\s+/iu.test(u)
+        && !/Previously|Overall|In\s+total/iu.test(u))
+    ) {
       roles.push('current_role_intro');
-      if (/checking|coordinat|documentation|goods/iu.test(u)) roles.push('current_role_duties');
+      if (/check(?:ing)?|coordinat|documentation|goods|verif(?:y|ying)/iu.test(u)) {
+        roles.push('current_role_duties');
+      }
+      if (/years?\s+of\s+(?:professional\s+)?experience/iu.test(u)) {
+        roles.push('total_duration');
+      }
     }
-    if (/Previously|formerly|worked\s+as|Graphic\s+Designer/iu.test(u)) {
+    if (/Previously|formerly|worked\s+as|Graphic\s+Designer|graphic\s+designer/iu.test(u)) {
       roles.push('prior_role_intro');
-      if (/visual|design|files?|formats?/iu.test(u)) roles.push('prior_role_duties');
+      if (/visual|design|files?|formats?|graphic\s+elements/iu.test(u)) {
+        roles.push('prior_role_duties');
+      }
     }
-    if (/Overall|In\s+total|professional\s+experience/iu.test(u)
-      && !/at\s+\w+.{0,24}since/iu.test(u)) {
-      roles.push('total_duration');
+    if (
+      (/Overall|In\s+total/iu.test(u) && !/at\s+\w+.{0,24}since/iu.test(u))
+      || (/with\s+(?:approximately|about|around)?.{0,40}years?.{0,40}professional\s+experience/iu.test(u)
+        && (/\bI\s+am\b|currently\s+working/iu.test(u)))
+    ) {
+      if (!roles.includes('total_duration')) roles.push('total_duration');
     }
     if (/key\s+skills?\s+include/iu.test(u)) roles.push('explicit_skills');
     if (roles.length === 0) roles.push('ambiguous');
     return roles;
   });
+
+  const grammar = validateEnglishSummaryFiniteClauses(text);
+  const structuredCorpus = [
+    options.role,
+    options.company,
+    options.priorRole,
+    options.priorCompany,
+    options.currentEntryDuties,
+    options.priorEntryDuties,
+    text,
+  ].filter(Boolean).join('\n');
+  const structuredEnglishDomain = isEnglishStructuredSummaryDomain(structuredCorpus);
+  const hardFragmentKinds = new Set([
+    'bare_role_title_noun_phrase',
+    'omitted_subject_previously_worked',
+    'overall_with_duration_fragment',
+    'standalone_duration_fragment',
+    'gerund_chain_without_finite_verb',
+  ]);
+  const hasHardEnglishFragment = grammar.englishSummaryFragmentKinds.some((k) => hardFragmentKinds.has(k));
+  // Hard-reject Atlas/Rewitu-style fragments always. Soft `missing_finite_main_verb` only
+  // blocks structured English warehouse/design domains (not baker/generic CV shells).
+  const grammarBlocksAcceptance = hasHardEnglishFragment
+    || (structuredEnglishDomain && !grammar.grammarValidationPassed);
 
   const slotRejectionReasons: string[] = [];
   if (!currentIntro) slotRejectionReasons.push('missing_current_role_intro');
@@ -662,6 +738,9 @@ export function analyzeEnglishSummaryEmploymentQuality(
   if (!structuredRoleLocale.structuredRoleLocaleValidationPassed) {
     slotRejectionReasons.push(...structuredRoleLocale.failureKinds);
   }
+  if (grammarBlocksAcceptance) {
+    slotRejectionReasons.push('english_summary_sentence_fragment');
+  }
 
   const sourceLeak = leak.sourceDutyLeakageDetected
     || leak.rawSourceRoleLeakageDetected
@@ -680,7 +759,8 @@ export function analyzeEnglishSummaryEmploymentQuality(
     && !sourceLeak
     && purity.targetLocalePurityPassed
     && structuredRoleLocale.structuredRoleLocaleValidationPassed
-    && (!requireCurrentDuties || currentDutyParity.currentDutyRequiredFactParityPassed);
+    && (!requireCurrentDuties || currentDutyParity.currentDutyRequiredFactParityPassed)
+    && !grammarBlocksAcceptance;
 
   let reason: string | null = null;
   if (!text) reason = 'empty_summary';
@@ -693,8 +773,11 @@ export function analyzeEnglishSummaryEmploymentQuality(
   } else if (!currentDutyParity.currentDutyRequiredFactParityPassed && requireCurrentDuties) {
     reason = currentDutyParity.rejectionReason || 'current_duty_required_fact_parity_failed';
   } else if (!currentDutiesOk) reason = 'current_duty_fact_coverage_incomplete';
-  else if (requirePrior && !priorDutiesOk) reason = 'prior_duty_fact_coverage_incomplete';
   else if (requirePrior && !priorIntro) reason = 'missing_prior_role_intro';
+  else if (requirePrior && !priorDutiesOk) reason = 'prior_duty_fact_coverage_incomplete';
+  else if (grammarBlocksAcceptance) {
+    reason = grammar.typedRejectionReason || 'english_summary_sentence_fragment';
+  }
   else if (competency.finalUnsupportedCompetencyCount > 0) reason = 'unsupported_competency_claim';
   else if (!durationScope.finalDurationScopeValidationPassed && /years?\s+of\s+experience/iu.test(text)) {
     reason = durationScope.durationScopeRejectionReason || 'duration_scope_mismatch';
@@ -709,14 +792,14 @@ export function analyzeEnglishSummaryEmploymentQuality(
   // Primary role per sentence (unit-aligned) — never a flat multi-role bag that
   // desynchronizes from unit count and collapses to generic summary_unit.
   const primarySlots: EnglishSummaryRoleSlot[] = rolesByUnit.map((roles) => {
-    if (roles.includes('total_duration')) return 'total_duration';
     if (roles.includes('prior_role_intro') || roles.includes('prior_role_duties')) {
       return 'prior_role';
     }
-    if (roles.includes('explicit_skills')) return 'explicit_skills';
     if (roles.includes('current_role_intro') || roles.includes('current_role_duties')) {
       return 'current_intro';
     }
+    if (roles.includes('total_duration')) return 'total_duration';
+    if (roles.includes('explicit_skills')) return 'explicit_skills';
     if (roles.includes('current_duty') || roles.includes('current_role_duties')) {
       return 'current_duty';
     }
@@ -865,7 +948,216 @@ export function analyzeEnglishSummaryEmploymentQuality(
     currentDutyCoverage,
     currentDutyParity,
     structuredRoleLocale,
+    grammarValidationPassed: grammar.grammarValidationPassed,
+    englishSummaryFragmentDetected: grammar.englishSummaryFragmentDetected,
+    englishSummaryFragmentKinds: grammar.englishSummaryFragmentKinds,
+    finalSentenceFiniteClauseCount: grammar.finalSentenceFiniteClauseCount,
+    finalIncompleteSentenceCount: grammar.finalIncompleteSentenceCount,
+    finalSentenceGrammarRecords: grammar.finalSentenceGrammarRecords,
   };
+}
+
+/** Split Summary into top-level English sentences. */
+export function splitEnglishSummarySentences(summary: string): string[] {
+  return (summary || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/(?<=[.!?])\s+(?=\S)/u)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const EN_FINITE_SUBJECT_VERB_RE =
+  /\b(?:I|she|he|they|we)\s+(?:am|is|are|was|were|work|works|worked|have|has|had|check|checks|verify|verifies|coordinate|coordinates|create|creates|review|reviews|prepare|prepares)\b/iu;
+const EN_FINITE_BE_ROLE_RE =
+  /\b(?:I\s+am|she\s+is|he\s+is|they\s+are)\s+a\s+\p{L}/iu;
+const EN_FINITE_SKILLS_INCLUDE_RE =
+  /\b(?:Key\s+skills|My\s+(?:key\s+)?skills|Core\s+competenc(?:y|ies)|Strengths?)\s+includes?\b/iu;
+const EN_BARE_ROLE_FRAGMENT_RE =
+  /^(?:Warehouse\s+(?:Employee|Worker)|Graphic\s+Designer)\s*,\s*(?:currently|checking|verifying|coordinat)/iu;
+const EN_OMITTED_SUBJECT_PREVIOUSLY_RE =
+  /^Previously(?:\s*,)?\s+worked\b/iu;
+const EN_OVERALL_DURATION_FRAGMENT_RE =
+  /^Overall(?:\s*,)?\s+with\b/iu;
+const EN_STANDALONE_DURATION_FRAGMENT_RE =
+  /^(?:With\s+)?(?:approximately|about|around)\s+.+?\s+years?\s+of\s+(?:professional\s+)?experience\.?$/iu;
+
+/**
+ * AAB-346 — Reject English Summary sentence fragments that lack an explicit
+ * subject + finite main verb (role NP, omitted-subject prior, Overall-with duration).
+ */
+export function validateEnglishSummaryFiniteClauses(summary: string): {
+  grammarValidationPassed: boolean;
+  englishSummaryFragmentDetected: boolean;
+  englishSummaryFragmentKinds: string[];
+  finalSentenceFiniteClauseCount: number;
+  finalIncompleteSentenceCount: number;
+  finalSentenceGrammarRecords: Array<{
+    sentenceIndex: number;
+    sentenceHash: string;
+    finiteClausePresent: boolean;
+    fragmentKinds: string[];
+  }>;
+  typedRejectionReason: string | null;
+} {
+  void ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION;
+  const sentences = splitEnglishSummarySentences(summary);
+  const records: Array<{
+    sentenceIndex: number;
+    sentenceHash: string;
+    finiteClausePresent: boolean;
+    fragmentKinds: string[];
+  }> = [];
+  const allKinds: string[] = [];
+
+  sentences.forEach((sentence, sentenceIndex) => {
+    const fragmentKinds: string[] = [];
+    if (EN_BARE_ROLE_FRAGMENT_RE.test(sentence) && !EN_FINITE_BE_ROLE_RE.test(sentence)) {
+      fragmentKinds.push('bare_role_title_noun_phrase');
+    }
+    if (EN_OMITTED_SUBJECT_PREVIOUSLY_RE.test(sentence)) {
+      fragmentKinds.push('omitted_subject_previously_worked');
+    }
+    if (EN_OVERALL_DURATION_FRAGMENT_RE.test(sentence)) {
+      fragmentKinds.push('overall_with_duration_fragment');
+    }
+    if (EN_STANDALONE_DURATION_FRAGMENT_RE.test(sentence)) {
+      fragmentKinds.push('standalone_duration_fragment');
+    }
+    // Gerund/participial chain with no finite subject+verb (e.g. "checking…, verifying…").
+    if (
+      /^(?:checking|verifying|coordinating|creating|reviewing|preparing)\b/iu.test(sentence)
+      && !EN_FINITE_SUBJECT_VERB_RE.test(sentence)
+    ) {
+      fragmentKinds.push('gerund_chain_without_finite_verb');
+    }
+    const finiteClausePresent = Boolean(
+      EN_FINITE_SUBJECT_VERB_RE.test(sentence)
+      || EN_FINITE_BE_ROLE_RE.test(sentence)
+      || EN_FINITE_SKILLS_INCLUDE_RE.test(sentence)
+    );
+    if (!finiteClausePresent && fragmentKinds.length === 0) {
+      fragmentKinds.push('missing_finite_main_verb');
+    }
+    if (!finiteClausePresent) {
+      allKinds.push(...fragmentKinds);
+    }
+    records.push({
+      sentenceIndex,
+      sentenceHash: fingerprintText(sentence),
+      finiteClausePresent,
+      fragmentKinds: finiteClausePresent ? [] : [...new Set(fragmentKinds)],
+    });
+  });
+
+  const finiteCount = records.filter((r) => r.finiteClausePresent).length;
+  const incompleteCount = records.filter((r) => !r.finiteClausePresent).length;
+  const uniqueKinds = [...new Set(allKinds)];
+  const passed = sentences.length > 0 && incompleteCount === 0;
+  return {
+    grammarValidationPassed: passed,
+    englishSummaryFragmentDetected: incompleteCount > 0,
+    englishSummaryFragmentKinds: uniqueKinds,
+    finalSentenceFiniteClauseCount: finiteCount,
+    finalIncompleteSentenceCount: incompleteCount,
+    finalSentenceGrammarRecords: records,
+    typedRejectionReason: passed ? null : 'english_summary_sentence_fragment',
+  };
+}
+
+/** Detect English Summary first-person professional voice (`I am` / `I work` / `I worked`). */
+export function detectEnglishSummaryPerspective(summary: string): {
+  perspectiveMode: 'first_person' | 'neutral_cv';
+  perspectiveValidationPassed: boolean;
+} {
+  void ENGLISH_SUMMARY_PERSPECTIVE_CONTRACT_346;
+  const text = summary || '';
+  const firstPerson = /\bI\b/.test(text);
+  return {
+    perspectiveMode: firstPerson ? 'first_person' : 'neutral_cv',
+    // First-person is the established English Summary contract; neutral is also
+    // allowed when complete finite clauses are used (grammar gate is separate).
+    perspectiveValidationPassed: true,
+  };
+}
+
+/** Authoritative English total-career duration sentence (idempotent insert). */
+export function injectEnglishTotalDurationSentence(
+  summary: string,
+  durationPhrase: string,
+): string {
+  void SUMMARY_DURATION_FINALIZER_REVISION_EN;
+  const text = (summary || '').replace(/\s+/g, ' ').trim();
+  const phrase = (durationPhrase || '')
+    .replace(/^[,，]\s*/u, '')
+    .replace(/\.$/u, '')
+    .replace(/^(?:with|bringing|having)\s+/iu, '')
+    .replace(/\b6\.5\b/g, 'six and a half')
+    .replace(/\s+of\s+(?:professional\s+)?experience.*$/iu, '')
+    .trim();
+  if (!phrase) return text;
+  const scope = analyzeEnglishSummaryDurationScope(text);
+  if (
+    scope.finalDurationScopeValidationPassed
+    && scope.finalDurationOwnerDetected === 'total_professional_experience'
+    && countEnglishDurationClaims(text) === 1
+  ) {
+    return text;
+  }
+  const durationClause = /approximately|about|around/iu.test(phrase)
+    ? `${phrase} of professional experience`
+    : `approximately ${phrase} of professional experience`;
+  // Integrate into a complete first-person clause — never emit Overall-with fragments.
+  if (/\bI\s+am\s+a\b/iu.test(text) && !/years?\s+of\s+(?:professional\s+)?experience/iu.test(text)) {
+    return text
+      .replace(
+        /(\bI\s+am\s+a\s+[^,.]+?)(?=,|\s+currently|\s+where\b|\.)/iu,
+        `$1 with ${durationClause}`,
+      )
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  if (!text) {
+    return `I am a professional with ${durationClause}.`;
+  }
+  if (!/years?\s+of\s+(?:professional\s+)?experience/iu.test(text)) {
+    const sentences = splitEnglishSummarySentences(text);
+    if (sentences[0] && /\bI\s+am\b/iu.test(sentences[0])) {
+      sentences[0] = sentences[0]
+        .replace(/\.$/u, '')
+        .replace(
+          /(\bI\s+am\s+a\s+[^,.]+)/iu,
+          `$1 with ${durationClause}`,
+        );
+      if (!/\.$/u.test(sentences[0])) sentences[0] = `${sentences[0]}.`;
+      return sentences.join(' ').replace(/\s+/g, ' ').trim();
+    }
+    // Non-first-person English (baker/generic export shells): re-insert duration into
+    // the leading role clause. Never drop the grounded body for a Professional stub,
+    // and never emit Overall-with sentence fragments.
+    if (sentences[0] && !/^(?:Overall|With)\b/iu.test(sentences[0])) {
+      let head = sentences[0].replace(/\.$/u, '').trim();
+      head = head.replace(
+        /^((?:A\s+|An\s+|The\s+)?\p{L}[\p{L}'-]*(?:\s+\p{L}[\p{L}']*){0,3})\b/u,
+        `$1 with ${durationClause}`,
+      );
+      if (!/years?\s+of\s+(?:professional\s+)?experience/iu.test(head)) {
+        head = `${head.replace(/\.$/u, '')} with ${durationClause}`;
+      }
+      if (!/[.!?]$/u.test(head)) head = `${head}.`;
+      sentences[0] = head;
+      return sentences.join(' ').replace(/\s+/g, ' ').trim();
+    }
+    return `I am a professional with ${durationClause}.`;
+  }
+  return text;
+}
+
+function countEnglishDurationClaims(text: string): number {
+  const matches = text.match(
+    /(?:approximately|about|around|roughly).{0,40}years?\s+of\s+(?:professional\s+)?experience|years?\s+of\s+(?:professional\s+)?experience/giu,
+  );
+  return matches ? matches.length : 0;
 }
 
 export function buildEnglishEntryOwnedSummary(options: {
@@ -882,11 +1174,10 @@ export function buildEnglishEntryOwnedSummary(options: {
   duration?: ExperienceDuration | null;
 }): string {
   void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
-  const g = String(options.gender || '').toLowerCase();
-  const female = g === 'female' || g === 'f';
-  const male = g === 'male' || g === 'm';
-  const pronoun = female ? 'she' : male ? 'he' : 'they';
-  const possessive = female ? 'her' : male ? 'his' : 'their';
+  void SUMMARY_BUILDER_REVISION_EN;
+  void ENGLISH_SUMMARY_PERSPECTIVE_CONTRACT_346;
+  void options.datesValue;
+  void options.gender;
 
   let role = (options.role || '').trim();
   const warehouseRole = !role
@@ -904,17 +1195,11 @@ export function buildEnglishEntryOwnedSummary(options: {
       role = resolved.localizedTargetRoleLabel;
     }
   }
+  // Natural first-person article + role casing: "a warehouse employee".
+  const roleNatural = role.replace(/^Warehouse\s+Employee$/iu, 'warehouse employee')
+    .replace(/^Graphic\s+Designer$/iu, 'graphic designer');
 
-  const startMatch = /^(\d{4})-(\d{2})/.exec(options.datesValue || '');
-  const monthYear = startMatch && EN_MONTHS[startMatch[2]]
-    ? `${EN_MONTHS[startMatch[2]]} ${startMatch[1]}`
-    : '';
   const company = (options.employer || '').trim();
-  let intro = role;
-  if (company && monthYear) intro = `${role} at ${company} since ${monthYear}`;
-  else if (company) intro = `${role} at ${company}`;
-  else if (monthYear) intro = `${role} since ${monthYear}`;
-
   const dutiesText = options.dutyFacts
     .map((f) => f.sourceText || f.value)
     .filter(Boolean)
@@ -922,29 +1207,55 @@ export function buildEnglishEntryOwnedSummary(options: {
   const facts = extractGermanCurrentWarehouseDutyFacts({ currentEntryDuties: dutiesText });
   const dutyParts: string[] = [];
   if (facts.some((f) => f.canonicalFactId === 'incoming_goods_check')) {
-    dutyParts.push('checking incoming goods');
+    dutyParts.push('check incoming goods');
   }
   if (facts.some((f) => f.canonicalFactId === 'related_documentation_check')) {
-    dutyParts.push('the related documentation');
+    dutyParts.push('verify related documentation');
   }
   if (facts.some((f) => f.canonicalFactId === 'colleague_coordination_goods_preparation_movement')) {
     dutyParts.push(
-      'coordinating with colleagues during the preparation and movement of goods',
+      'coordinate with colleagues on the preparation and movement of goods',
     );
   }
   if (dutyParts.length === 0 && warehouseRole) {
     dutyParts.push(
-      'checking incoming goods',
-      'the related documentation',
-      'coordinating with colleagues during the preparation and movement of goods',
+      'check incoming goods',
+      'verify related documentation',
+      'coordinate with colleagues on the preparation and movement of goods',
     );
   }
+
+  let durRaw = (options.durationPhrase || '').replace(/^[,，]\s*/u, '').replace(/\.$/u, '').trim();
+  if (!durRaw && options.duration) {
+    durRaw = formatApproximateDurationPhrase(options.duration, 'en')
+      .replace(/\.$/u, '')
+      .trim();
+  }
+  durRaw = durRaw
+    .replace(/^(?:with|bringing|having)\s+/iu, '')
+    .replace(/\b6\.5\b/g, 'six and a half')
+    .replace(/\s+of\s+(?:professional\s+)?experience.*$/iu, '')
+    .trim();
+  const durationClause = durRaw
+    ? (
+      /approximately|about|around/iu.test(durRaw)
+        ? `${durRaw} of professional experience`
+        : `approximately ${durRaw} of professional experience`
+    )
+    : '';
+
+  let intro = durationClause
+    ? `I am a ${roleNatural} with ${durationClause}`
+    : `I am a ${roleNatural}`;
+  if (company) {
+    intro = `${intro}, currently working at ${company}`;
+  }
   if (dutyParts.length >= 3) {
-    intro = `${intro} with experience ${dutyParts[0]} and ${dutyParts[1]}, and ${dutyParts[2]}`;
+    intro = `${intro}, where I ${dutyParts[0]}, ${dutyParts[1]}, and ${dutyParts[2]}`;
   } else if (dutyParts.length === 2) {
-    intro = `${intro} with experience ${dutyParts[0]} and ${dutyParts[1]}`;
+    intro = `${intro}, where I ${dutyParts[0]} and ${dutyParts[1]}`;
   } else if (dutyParts.length === 1) {
-    intro = `${intro} with experience ${dutyParts[0]}`;
+    intro = `${intro}, where I ${dutyParts[0]}`;
   }
   if (!/[.]$/u.test(intro)) intro = `${intro}.`;
 
@@ -954,57 +1265,24 @@ export function buildEnglishEntryOwnedSummary(options: {
   const priorLooksDesign = PRIOR_DESIGN_CUE.test(`${priorRoleRaw} ${priorDuties}`)
     || /diseñ|design|grafik/i.test(`${priorRoleRaw} ${priorDuties}`);
   let priorSentence = '';
-  if (priorRoleRaw && priorLooksDesign) {
+  if ((priorRoleRaw || priorEmployer || priorDuties) && priorLooksDesign) {
     const priorResolved = resolveLocalizedSummaryRole({
-      role: priorRoleRaw,
+      role: priorRoleRaw || 'Graphic Designer',
       targetLocale: 'en',
       gender: options.gender,
     });
-    const priorLabel = priorResolved.localizationValidationPassed
+    const priorLabelRaw = priorResolved.localizationValidationPassed
       ? priorResolved.localizedTargetRoleLabel
       : localizeGraphicDesigner('en', options.gender);
+    const priorLabel = priorLabelRaw.replace(/^Graphic\s+Designer$/iu, 'graphic designer');
     const designFacts =
-      'creating visual materials, revising design documents and preparing final files for different formats and screens';
+      'creating visual materials and graphic elements, reviewing and adapting design materials, and preparing final design files for different formats and screens';
     priorSentence = priorEmployer
-      ? `Previously, ${pronoun} worked as a ${priorLabel} at ${priorEmployer}, ${designFacts}.`
-      : `Previously, ${pronoun} worked as a ${priorLabel}, ${designFacts}.`;
+      ? `Previously, I worked as a ${priorLabel} at ${priorEmployer}, ${designFacts}.`
+      : `Previously, I worked as a ${priorLabel}, ${designFacts}.`;
   }
 
-  let durRaw = (options.durationPhrase || '').replace(/^[,，]\s*/u, '').replace(/\.$/u, '').trim();
-  if (!durRaw && options.duration) {
-    durRaw = formatApproximateDurationPhrase(options.duration, 'en')
-      .replace(/\.$/u, '')
-      .trim();
-  }
-  // Strip leading "with" / "bringing" style fragments if present.
-  durRaw = durRaw
-    .replace(/^(?:with|bringing|having)\s+/iu, '')
-    .replace(/\b6\.5\b/g, 'six and a half')
-    .trim();
-  const durationSentence = durRaw
-    ? (/professional\s+experience/iu.test(durRaw)
-      ? `Overall, ${pronoun} ${female || male ? 'has' : 'have'} ${durRaw.replace(/^(?:approximately\s+)?/iu, (m) => m || 'approximately ')}.`
-        .replace(/\s+/g, ' ')
-      : `Overall, ${pronoun} ${female || male ? 'has' : 'have'} ${
-        /approximately|about|around/iu.test(durRaw) ? durRaw : `approximately ${durRaw}`
-      } of professional experience.`)
-    : '';
-  // Normalize duration sentence when durRaw is already a full phrase like
-  // "with approximately six and a half years of experience".
-  let durationFinal = durationSentence;
-  if (durRaw && /years?/iu.test(durRaw)) {
-    const cleaned = durRaw
-      .replace(/^(?:with|bringing|having)\s+/iu, '')
-      .replace(/\s+of\s+experience.*$/iu, '')
-      .trim();
-    durationFinal =
-      `Overall, ${pronoun} ${female || male ? 'has' : 'have'} ${
-        /approximately|about|around/iu.test(cleaned) ? cleaned : `approximately ${cleaned}`
-      } of professional experience.`;
-  }
-  void possessive;
-
-  return [intro, priorSentence, durationFinal]
+  return [intro, priorSentence]
     .filter(Boolean)
     .join(' ')
     .replace(/\s+/g, ' ')

@@ -185,7 +185,8 @@ describe('AAB-326 Summary selected lineage and semantic roles', () => {
       .map((s) => s.trim())
       .filter(Boolean);
     const mutated = [...units];
-    mutated[2] = 'Overall, she has approximately seven years of professional experience.';
+    // Mutate the prior sentence (index 1) — duration lives in sentence 0 now.
+    mutated[1] = 'Previously, I worked as a graphic designer at Rewitu for seven years.';
     const q2 = analyzeEnglishSummaryEmploymentQuality(mutated.join(' '), {
       company: 'Atlas',
       role: 'Empleada de almacén',
@@ -196,8 +197,7 @@ describe('AAB-326 Summary selected lineage and semantic roles', () => {
       gender: 'female',
     });
     expect(q1.finalSentenceHashes![0]).toBe(q2.finalSentenceHashes![0]);
-    expect(q1.finalSentenceHashes![1]).toBe(q2.finalSentenceHashes![1]);
-    expect(q1.finalSentenceHashes![2]).not.toBe(q2.finalSentenceHashes![2]);
+    expect(q1.finalSentenceHashes![1]).not.toBe(q2.finalSentenceHashes![1]);
   });
 
   it('28-32. semantic roles map current/prior/duration; generic summary_unit insufficient', () => {
@@ -210,16 +210,18 @@ describe('AAB-326 Summary selected lineage and semantic roles', () => {
       candidate: '',
     });
     const roles = fin.diagnostics?.finalUnitSemanticRolesByUnit || [];
-    expect(roles[0]).toEqual(expect.arrayContaining(['current_role_intro', 'current_role_duties']));
+    expect(roles.length).toBe(2);
+    expect(roles[0]).toEqual(expect.arrayContaining([
+      'current_role_intro',
+      'current_role_duties',
+      'total_duration',
+    ]));
     expect(roles[1]).toEqual(expect.arrayContaining(['prior_role_intro', 'prior_role_duties']));
-    expect(roles[2]).toEqual(expect.arrayContaining(['total_duration']));
     expect(fin.diagnostics?.finalSentenceRoleSlots).toEqual([
       'current_intro',
       'prior_role',
-      'total_duration',
     ]);
     expect(fin.diagnostics?.finalUnitRoleSlots).not.toEqual([
-      'summary_unit',
       'summary_unit',
       'summary_unit',
     ]);

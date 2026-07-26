@@ -292,7 +292,9 @@ describe('AAB-325 English Summary grounding and locale purity', () => {
     expect(/Atlas/i.test(text)).toBe(true);
     expect(/Graphic\s+Designer/i.test(text)).toBe(true);
     expect(/Rewitu/i.test(text)).toBe(true);
-    expect(/Overall/i.test(text)).toBe(true);
+    expect(/^I am a\b/i.test(text)).toBe(true);
+    expect(/approximately six and a half years/i.test(text)).toBe(true);
+    expect(/^Overall,\s+with\b/im.test(text)).toBe(false);
     expect(/revisingó|comprobingó|leadership|adaptability|mercanc/i.test(text)).toBe(false);
     expect(fin.diagnostics?.providerAccepted).toBe(false);
     expect(fin.diagnostics?.finalUnsupportedCompetencyCount).toBe(0);

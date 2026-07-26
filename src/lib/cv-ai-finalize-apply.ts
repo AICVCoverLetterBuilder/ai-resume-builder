@@ -111,6 +111,8 @@ import {
   SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
   SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION,
   SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
+  SUMMARY_BUILDER_REVISION_EN,
+  ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION,
   stripEnglishUnsupportedCompetencyUnits,
 } from './cv-summary-grounding';
 import {
@@ -657,7 +659,11 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_VISIBLE_REQUIRED_FACT_PARITY_326_REVISION,
   SUMMARY_SELECTED_LINEAGE_HASH_TRUTH_326_REVISION,
   SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
+  SUMMARY_BUILDER_REVISION_EN,
+  ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION,
 ] as const;
+void SUMMARY_BUILDER_REVISION_EN;
+void ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
 void SUMMARY_GROUNDING_REVISION_RU;
@@ -1140,6 +1146,9 @@ export type FinalizeCvAiFieldResult = {
     writtenDurationClaimCount?: number;
     durationClaimsRemovedBeforeInsert?: number;
     durationClaimCountAfterInsert?: number;
+    durationClaimCountAfterFinalize?: number;
+    durationInsertedExactlyOnce?: boolean;
+    localizedDurationPhraseHash?: string | null;
     independentFinalDurationClaimCount?: number;
     visibleDurationClaimCountAfterApply?: number;
     visibleDurationMatchesFinalizedCount?: boolean;
@@ -1155,6 +1164,16 @@ export type FinalizeCvAiFieldResult = {
     relevanceValidationPassed?: boolean;
     tenseValidationPassed?: boolean;
     grammarValidationPassed?: boolean;
+    englishSummaryFragmentDetected?: boolean;
+    englishSummaryFragmentKinds?: string[];
+    finalSentenceFiniteClauseCount?: number;
+    finalIncompleteSentenceCount?: number;
+    finalSentenceGrammarRecords?: Array<{
+      sentenceIndex: number;
+      sentenceHash: string;
+      finiteClausePresent: boolean;
+      fragmentKinds: string[];
+    }>;
     unsupportedClaimCount?: number;
     sourcePrintFactPresent?: boolean;
     sourceBrandingFactPresent?: boolean;
@@ -2681,6 +2700,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               } else {
                 candidate = stripped;
                 empQuality = repaired;
+                // Non-empty repair text that still fails grounding — keep hash for lineage.
+                englishRepairCandidateHash = hashSummaryCandidate(stripped);
               }
             }
           }
@@ -2805,11 +2826,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && (owned?.durationValidationPassed !== false)
       && (owned?.finalDurationHybridDetected !== true),
     );
-    const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
+    const firstPerson = locale === 'en'
+      ? /\bI\b/.test(analyzedText)
+      : /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
-    const perspectiveValidationPassed = (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
-      ? !firstPerson
-      : true;
+    // English Summary contract is first-person professional voice; Hindi/etc. require
+    // neutral/honorific CV perspective (no first-person).
+    const perspectiveValidationPassed = locale === 'en'
+      ? true
+      : (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
+        ? !firstPerson
+        : true;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const empQ = locale === 'hi'
       ? analyzeHindiSummaryEmploymentQuality(analyzedText, {
@@ -3079,7 +3106,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         writtenDurationClaimCount: owned?.writtenDurationClaimCount ?? breakdown.written,
         durationClaimsRemovedBeforeInsert: owned?.durationClaimsRemovedBeforeInsert,
         durationClaimCountAfterInsert: owned?.durationClaimCountAfterInsert ?? independent.count,
-        independentFinalDurationClaimCount: independent.count,
+        durationClaimCountAfterFinalize: success ? independent.count : 0,
+        independentFinalDurationClaimCount: success ? independent.count : 0,
+        durationInsertedExactlyOnce: success && independent.count === 1 && durationValidationPassed,
+        localizedDurationPhraseHash: success && analyzedText.trim()
+          ? fingerprintText(`dur:${independent.count}:${durationSnapshot.total.totalMonths}`)
+          : null,
         visibleDurationClaimCountAfterApply: independent.count,
         visibleDurationMatchesFinalizedCount: durationValidationPassed,
         durationDetectorAgreement: detectorAgreement,
@@ -3194,11 +3226,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           )
           : false,
         repairCandidatePresent: Boolean(
-          germanEmployerStatusRepairAttempted
-          || germanMaterialRepairApplied
-          || germanClientRepairAttempted
-          || englishMaterialRepairApplied
-          || englishClientRepairAttempted
+          Boolean(germanRepairCandidateHash)
+          || Boolean(englishRepairCandidateHash)
         ),
         repairAccepted: Boolean(
           success
@@ -3215,13 +3244,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           && (germanMaterialRepairApplied || englishMaterialRepairApplied)
           && result.origin !== 'deterministic_fallback'
         ),
-        repairCandidateHash: (
-          success
-          && (germanMaterialRepairApplied || englishMaterialRepairApplied)
-          && result.origin !== 'deterministic_fallback'
-        )
-          ? (englishRepairCandidateHash || germanRepairCandidateHash)
-          : (germanEmployerStatusRepairAttempted ? germanRepairCandidateHash : null),
+        repairCandidateHash: englishRepairCandidateHash || germanRepairCandidateHash || null,
         repairAttemptedTransformationKinds: germanEmployerStatusRepairTransformations.length
           ? [...germanEmployerStatusRepairTransformations]
           : undefined,
@@ -3968,6 +3991,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? SUMMARY_BUILDER_REVISION_JA
               : locale === 'hr'
                 ? SUMMARY_BUILDER_REVISION_HR
+                : locale === 'en'
+                  ? SUMMARY_BUILDER_REVISION_EN
                 : SUMMARY_BUILDER_REVISION,
         summaryUnitSplitterRevision: (
           empQ && 'summaryUnitSplitterRevision' in empQ
@@ -4086,11 +4111,38 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               : result.reason === SUMMARY_NOOP_REJECTION_REASON
                 ? SUMMARY_NOOP_REJECTION_REASON
                 : result.diagnostics?.typedFailureReason,
-        grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es')
+        grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es' || locale === 'en')
           && empQ
           && 'grammarValidationPassed' in empQ
           ? Boolean((empQ as { grammarValidationPassed?: boolean }).grammarValidationPassed)
           : result.diagnostics?.grammarValidationPassed,
+        englishSummaryFragmentDetected: locale === 'en' && empQ
+          && 'englishSummaryFragmentDetected' in empQ
+          ? Boolean((empQ as { englishSummaryFragmentDetected?: boolean }).englishSummaryFragmentDetected)
+          : undefined,
+        englishSummaryFragmentKinds: locale === 'en' && empQ
+          && 'englishSummaryFragmentKinds' in empQ
+          ? ((empQ as { englishSummaryFragmentKinds?: string[] }).englishSummaryFragmentKinds ?? [])
+          : undefined,
+        finalSentenceFiniteClauseCount: locale === 'en' && empQ
+          && 'finalSentenceFiniteClauseCount' in empQ
+          ? (empQ as { finalSentenceFiniteClauseCount?: number }).finalSentenceFiniteClauseCount
+          : undefined,
+        finalIncompleteSentenceCount: locale === 'en' && empQ
+          && 'finalIncompleteSentenceCount' in empQ
+          ? (empQ as { finalIncompleteSentenceCount?: number }).finalIncompleteSentenceCount
+          : undefined,
+        finalSentenceGrammarRecords: locale === 'en' && empQ
+          && 'finalSentenceGrammarRecords' in empQ
+          ? (empQ as {
+            finalSentenceGrammarRecords?: Array<{
+              sentenceIndex: number;
+              sentenceHash: string;
+              finiteClausePresent: boolean;
+              fragmentKinds: string[];
+            }>;
+          }).finalSentenceGrammarRecords
+          : undefined,
       },
     };
   };
