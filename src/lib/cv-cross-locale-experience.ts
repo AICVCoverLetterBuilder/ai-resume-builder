@@ -56,6 +56,10 @@ import {
   validateSerbianWarehouseExperienceCoverage,
 } from './cv-serbian-experience-grounding';
 import {
+  sourceRequiresCroatianWarehouseFactCoverage,
+  validateCroatianWarehouseExperienceCoverage,
+} from './cv-croatian-experience-grounding';
+import {
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -744,6 +748,83 @@ function hindiWarehouseBullet(frame: ActionFrame, isPresent: boolean): string | 
   }
 }
 
+function croatianBullet(
+  frame: ActionFrame,
+  domain: string,
+  isPresent: boolean,
+  female: boolean,
+): string {
+  const pastF = female;
+  switch (frame) {
+    case 'check_records':
+      if (domain === 'warehouse') {
+        // Soft frame still merges goods+docs — hard HR grounding rejects this and
+        // selects the dedicated three-fact Croatian warehouse fallback instead.
+        return isPresent
+          ? 'Provjerava točnost zaprimljene robe i prateće dokumentacije.'
+          : (pastF
+            ? 'Provjeravala je točnost zaprimljene robe i prateće dokumentacije.'
+            : 'Provjeravao je točnost zaprimljene robe i prateće dokumentacije.');
+      }
+      return isPresent
+        ? 'Pregledava dokumentaciju i provjerava potpunost podataka.'
+        : (pastF
+          ? 'Pregledala je dokumentaciju i provjeravala potpunost podataka.'
+          : 'Pregledao je dokumentaciju i provjeravao potpunost podataka.');
+    case 'update_records':
+      if (domain === 'warehouse') {
+        return isPresent
+          ? 'Ažurira skladišnu evidenciju te održava uredno i organizirano skladištenje robe.'
+          : (pastF
+            ? 'Ažurirala je skladišnu evidenciju te održavala uredno i organizirano skladištenje robe.'
+            : 'Ažurirao je skladišnu evidenciju te održavao uredno i organizirano skladištenje robe.');
+      }
+      return isPresent
+        ? 'Ažurira evidenciju i prati status dokumentacije.'
+        : (pastF
+          ? 'Ažurirala je evidenciju i pratila status dokumentacije.'
+          : 'Ažurirao je evidenciju i pratio status dokumentacije.');
+    case 'coordinate_info':
+      if (domain === 'warehouse') {
+        return isPresent
+          ? 'Surađuje s kolegama na pripremi i premještanju robe.'
+          : (pastF
+            ? 'Surađivala je s kolegama na pripremi i premještanju robe.'
+            : 'Surađivao je s kolegama na pripremi i premještanju robe.');
+      }
+      return isPresent
+        ? 'Koordinira razmjenu informacija s kolegama.'
+        : (pastF
+          ? 'Koordinirala je razmjenu informacija s kolegama.'
+          : 'Koordinirao je razmjenu informacija s kolegama.');
+    case 'collaborate_visual':
+      return isPresent
+        ? 'Surađuje s timovima za proizvod i razvoj radi očuvanja dosljednog vizualnog identiteta.'
+        : (pastF
+          ? 'Surađivala je s timovima za proizvod i razvoj radi očuvanja dosljednog vizualnog identiteta.'
+          : 'Surađivao je s timovima za proizvod i razvoj radi očuvanja dosljednog vizualnog identiteta.');
+    case 'prepare_materials':
+      if (domain === 'design') {
+        return isPresent
+          ? 'Kreira vizualne materijale i grafičke elemente za digitalne proizvode i platforme.'
+          : (pastF
+            ? 'Kreirala je vizualne materijale i grafičke elemente za digitalne proizvode i platforme.'
+            : 'Kreirao je vizualne materijale i grafičke elemente za digitalne proizvode i platforme.');
+      }
+      return isPresent
+        ? 'Priprema radne materijale i prilagođava izlaze potrebnim formatima.'
+        : (pastF
+          ? 'Pripremala je radne materijale i prilagođavala izlaze potrebnim formatima.'
+          : 'Pripremao je radne materijale i prilagođavao izlaze potrebnim formatima.');
+    default:
+      return isPresent
+        ? 'Obavlja svakodnevne dužnosti radnog mjesta.'
+        : (pastF
+          ? 'Obavljala je svakodnevne dužnosti radnog mjesta.'
+          : 'Obavljao je svakodnevne dužnosti radnog mjesta.');
+  }
+}
+
 function bulletForLocale(
   locale: Locale,
   frame: ActionFrame,
@@ -755,9 +836,16 @@ function bulletForLocale(
   if (locale === 'en') {
     return applyEnglishEmploymentTense(englishBullet(frame, domain, isPresent), isPresent);
   }
-  if (locale === 'sr' || locale === 'hr') {
+  if (locale === 'sr') {
     return applySerbianCvEmploymentTense(
       serbianBullet(frame, domain, isPresent, female),
+      isPresent,
+      gender,
+    );
+  }
+  if (locale === 'hr') {
+    return applySerbianCvEmploymentTense(
+      croatianBullet(frame, domain, isPresent, female),
       isPresent,
       gender,
     );
@@ -1054,6 +1142,18 @@ export function countTranslatedFactUnits(sourceDescription: string, result: stri
       result,
     ).covered.length;
     if (srCovered > 0) return srCovered;
+  }
+  // AAB-342 — Croatian warehouse result (incl. SR-visible→hr).
+  if (
+    sourceRequiresCroatianWarehouseFactCoverage(sourceDescription || '')
+    && /(?:provjerava|pregledava|kontrolira|surađuje|skladišt|pristigl|zaprimljen|prateć|kolegama|priprem|premješt|dokumentacij)/iu
+      .test(result || '')
+  ) {
+    const hrCovered = validateCroatianWarehouseExperienceCoverage(
+      sourceDescription,
+      result,
+    ).covered.length;
+    if (hrCovered > 0) return hrCovered;
   }
   // AAB-327 — English warehouse: count distinct source fact identities, not
   // collapsed action-frame / material-category matches.

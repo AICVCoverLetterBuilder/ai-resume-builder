@@ -210,6 +210,14 @@ import {
   serbianWarehouseFactDiagId,
 } from './cv-serbian-experience-grounding';
 import {
+  CROATIAN_EXPERIENCE_GROUNDING_342_REVISION,
+  sourceRequiresCroatianWarehouseFactCoverage,
+  validateCroatianWarehouseExperienceCoverage,
+  buildCroatianWarehouseExperienceFallback,
+  scanCroatianWarehousePredicates,
+  croatianWarehouseFactDiagId,
+} from './cv-croatian-experience-grounding';
+import {
   EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION,
   EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION,
   computeAuthoritativeSourceAlreadyTargetLocale,
@@ -6015,6 +6023,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const needsHrWarehouse = locale === 'hr'
+        && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage);
+      const hrWarehouse = needsHrWarehouse
+        ? validateCroatianWarehouseExperienceCoverage(sourceForCoverage, candidate)
+        : null;
+      const hrPredicates = needsHrWarehouse
+        ? scanCroatianWarehousePredicates(sourceForCoverage, candidate)
+        : null;
+      if (hrPredicates) {
+        sourcePredicateIdentityCount = hrPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = hrPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = hrPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...hrPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = hrPredicates.sourceUnitPredicateCoveragePassed;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [
+            ...candidateAddedPredicateIdentityHashes,
+          ];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsEnWarehouse = locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage);
       const enWarehouse = needsEnWarehouse
@@ -6374,6 +6408,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         return null;
       }
+      if (needsHrWarehouse && hrWarehouse && (
+        !hrWarehouse.ok
+        || (hrPredicates && (
+          hrPredicates.sourceUnitPredicateCoveragePassed === false
+          || hrPredicates.candidateAddedPredicateCount > 0
+          || hrPredicates.candidatePredicateIdentityCount <= 0
+        ))
+      )) {
+        lastRejectStage = `${stage}:croatian_warehouse_facts`;
+        lastRejectReason = !hrWarehouse.ok
+          ? (hrWarehouse.reason || 'croatian_experience_warehouse_fact_coverage_incomplete')
+          : 'source_unit_predicate_coverage_failed';
+        lastRequired = hrWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = hrWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = hrWarehouse.uncovered.map(
+          (id) => croatianWarehouseFactDiagId(id),
+        );
+        if (stage === 'provider') {
+          providerUncoveredFactIdentityHashes = [...clientDeterministicFallbackUncoveredFactIds];
+          providerCoveredFactCount = lastCovered;
+          providerRequiredFactCount = lastRequired;
+        }
+        return null;
+      }
       if (needsEnWarehouse && enWarehouse && (
         !enWarehouse.ok
         || (enPredicates && (
@@ -6450,6 +6508,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       } else if (needsSrWarehouse && srWarehouse?.ok) {
         lastRequired = srWarehouse.required.length;
         lastCovered = srWarehouse.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (needsHrWarehouse && hrWarehouse?.ok) {
+        lastRequired = hrWarehouse.required.length;
+        lastCovered = hrWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (needsEnWarehouse && enWarehouse?.ok) {
         lastRequired = enWarehouse.required.length;
@@ -6866,6 +6928,40 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           return null;
         }
         clientDeterministicFallbackUncoveredFactIds = [];
+      } else if (
+        locale === 'hr'
+        && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        // Soft HR shells collapse 3 duties → 2 action frames. Never re-validate a
+        // hard Croatian warehouse triad with soft cross-locale frame matching.
+        const hrWarehouse = validateCroatianWarehouseExperienceCoverage(
+          sourceForCoverage,
+          candidate,
+        );
+        const hrPredicates = scanCroatianWarehousePredicates(sourceForCoverage, candidate);
+        sourcePredicateIdentityCount = hrPredicates.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = hrPredicates.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = hrPredicates.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...hrPredicates.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = hrPredicates.sourceUnitPredicateCoveragePassed;
+        lastRequired = hrWarehouse.required.length || Math.max(3, sourceFactCount);
+        lastCovered = hrWarehouse.covered.length;
+        if (!hrWarehouse.ok
+          || hrPredicates.sourceUnitPredicateCoveragePassed === false
+          || hrPredicates.candidateAddedPredicateCount > 0
+          || hrPredicates.candidatePredicateIdentityCount <= 0) {
+          lastRejectStage = `${stage}:croatian_warehouse_facts`;
+          lastRejectReason = !hrWarehouse.ok
+            ? (hrWarehouse.reason || 'croatian_experience_warehouse_fact_coverage_incomplete')
+            : 'source_unit_predicate_coverage_failed';
+          clientDeterministicFallbackUncoveredFactIds = hrWarehouse.uncovered.map(
+            (id) => croatianWarehouseFactDiagId(id),
+          );
+          return null;
+        }
+        clientDeterministicFallbackUncoveredFactIds = [];
       } else {
         const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
         lastRequired = semantic.requiredCount || sourceFactCount;
@@ -7119,12 +7215,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage || '');
           const isSrWarehouse = locale === 'sr'
             && sourceRequiresSerbianWarehouseFactCoverage(sourceForCoverage || '');
-          // EN/DE/ES/FR/IT/PT/RU/HI/JA/AR/SR warehouse selected-final snapshots independently
+          const isHrWarehouse = locale === 'hr'
+            && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage || '');
+          // EN/DE/ES/FR/IT/PT/RU/HI/JA/AR/SR/HR warehouse selected-final snapshots independently
           // recompute predicate truth. Other locales must not invent false predicate coverage.
           if (
             !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
             && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
             && !isHiWarehouse && !isJaWarehouse && !isArWarehouse && !isSrWarehouse
+            && !isHrWarehouse
           ) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
             delete diag.finalCandidatePredicateValidationApplicable;
@@ -7985,8 +8084,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           sourceForCoverage,
           finalNormalizedBullets,
         ).ok;
-      if (needsDesignFamilyRebuild || needsArabicWarehouseRebuild || needsSerbianWarehouseRebuild) {
-        if (needsArabicWarehouseRebuild && !needsDesignFamilyRebuild && !needsSerbianWarehouseRebuild) {
+      const needsCroatianWarehouseRebuild = locale === 'hr'
+        && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage)
+        && !validateCroatianWarehouseExperienceCoverage(
+          sourceForCoverage,
+          finalNormalizedBullets,
+        ).ok;
+      if (needsDesignFamilyRebuild || needsArabicWarehouseRebuild || needsSerbianWarehouseRebuild
+        || needsCroatianWarehouseRebuild) {
+        if (needsArabicWarehouseRebuild && !needsDesignFamilyRebuild && !needsSerbianWarehouseRebuild
+          && !needsCroatianWarehouseRebuild) {
           lastRejectStage = 'provider:arabic_warehouse_rebuild_required';
           lastRejectReason = 'arabic_experience_warehouse_fact_coverage_incomplete';
           providerRejectionReason = lastRejectReason;
@@ -8003,7 +8110,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             );
           }
           // Skip tryAccept of incomplete soft shells — continue to hard AR fallback.
-        } else if (needsSerbianWarehouseRebuild && !needsDesignFamilyRebuild) {
+        } else if (needsSerbianWarehouseRebuild && !needsDesignFamilyRebuild
+          && !needsCroatianWarehouseRebuild) {
           lastRejectStage = 'provider:serbian_warehouse_rebuild_required';
           lastRejectReason = 'serbian_experience_warehouse_fact_coverage_incomplete';
           providerRejectionReason = lastRejectReason;
@@ -8020,6 +8128,23 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             );
           }
           // Skip tryAccept of incomplete soft shells — continue to hard SR fallback.
+        } else if (needsCroatianWarehouseRebuild && !needsDesignFamilyRebuild) {
+          lastRejectStage = 'provider:croatian_warehouse_rebuild_required';
+          lastRejectReason = 'croatian_experience_warehouse_fact_coverage_incomplete';
+          providerRejectionReason = lastRejectReason;
+          providerRejectionStage = lastRejectStage;
+          const hrSoft = validateCroatianWarehouseExperienceCoverage(
+            sourceForCoverage,
+            finalNormalizedBullets,
+          );
+          providerRequiredFactCount = hrSoft.required.length || Math.max(3, sourceFactCount);
+          providerCoveredFactCount = hrSoft.covered.length;
+          if (providerUncoveredFactIdentityHashes.length === 0) {
+            providerUncoveredFactIdentityHashes = hrSoft.uncovered.map(
+              (id) => croatianWarehouseFactDiagId(id),
+            );
+          }
+          // Skip tryAccept of incomplete soft shells — continue to hard HR fallback.
         } else {
         lastRejectStage = 'provider:design_rebuild_required';
         if (locale === 'hr') {
@@ -9453,6 +9578,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       if (!translated.trim()
+        && locale === 'hr'
+        && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage)) {
+        void CROATIAN_EXPERIENCE_GROUNDING_342_REVISION;
+        translated = normalizeLocaleText(
+          buildCroatianWarehouseExperienceFallback({
+            sourceDescription: sourceForCoverage,
+            isPresent,
+            gender,
+          }),
+          locale,
+        );
+      }
+      if (!translated.trim()
         && locale === 'en'
         && sourceRequiresStrictEnglishWarehouseFactCoverage(sourceForCoverage)) {
         void ENGLISH_EXPERIENCE_DETERMINISTIC_THREE_FACT_328_REVISION;
@@ -9478,7 +9616,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
       const translatedGate = validateExperienceCvPerspective(translated, locale);
-      const translatedOk = Boolean(translated.trim())
+      let translatedOk = Boolean(translated.trim())
         && translatedGate.ok
         && !candidateLeaksSourceLocale(
           translated,
@@ -9635,6 +9773,43 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ...srPredFb.candidateAddedPredicateIdentityHashes,
         ];
         sourceUnitPredicateCoveragePassed = srPredFb.sourceUnitPredicateCoveragePassed;
+      }
+      if (
+        locale === 'hr'
+        && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage)
+      ) {
+        const hrFb = validateCroatianWarehouseExperienceCoverage(sourceForCoverage, translated);
+        const hrPredFb = scanCroatianWarehousePredicates(sourceForCoverage, translated);
+        clientDeterministicFallbackRequiredFactCount = hrFb.required.length || Math.max(3, sourceFactCount);
+        clientDeterministicFallbackCoveredFactCount = hrFb.covered.length;
+        clientDeterministicFallbackUncoveredFactIds = hrFb.uncovered.map(
+          (id) => croatianWarehouseFactDiagId(id),
+        );
+        lastRequired = clientDeterministicFallbackRequiredFactCount;
+        lastCovered = clientDeterministicFallbackCoveredFactCount;
+        sourcePredicateIdentityCount = hrPredFb.sourcePredicateIdentityCount;
+        candidatePredicateIdentityCount = hrPredFb.candidatePredicateIdentityCount;
+        candidateAddedPredicateCount = hrPredFb.candidateAddedPredicateCount;
+        candidateAddedPredicateIdentityHashes = [
+          ...hrPredFb.candidateAddedPredicateIdentityHashes,
+        ];
+        sourceUnitPredicateCoveragePassed = hrPredFb.sourceUnitPredicateCoveragePassed;
+      }
+      // Build-293C: garbage/unusable source after no-op repair must fail closed.
+      // Dedicated croatianBullet shells are now locale-pure for hr (unlike the
+      // former Serbian-shared soft shells), so purity alone no longer blocks
+      // job-title warehouse invention when the authority text is unusable.
+      if (
+        translatedOk
+        && noOpRepairAttemptedFlag
+        && !sourceWasEmpty
+        && locale === 'hr'
+        && !sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage || '')
+        && (sourceForCoverage || '').trim().length < 8
+      ) {
+        translatedOk = false;
+        lastRejectReason = lastRejectReason || 'experience_ai_noop_recovery';
+        lastRejectStage = lastRejectStage || 'deterministic_fallback:unusable_source';
       }
       if (translatedOk) {
         const accepted = tryAccept(

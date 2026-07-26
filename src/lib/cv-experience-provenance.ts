@@ -4,7 +4,7 @@
  */
 import type { Locale } from './i18n/translations';
 import type { WorkExperience } from './types';
-import { canonicalizeContentLocale } from './cv-content-locale';
+import { canonicalizeContentLocale, detectTextLocale } from './cv-content-locale';
 import {
   stampExperienceGenerationContext,
   type ExperienceJobContext,
@@ -253,11 +253,29 @@ export function resolveExperienceAiAuthoritativeSource(
       && provenance.currentTextareaIgnoredOrOverridden
     );
     const lang = inferSelectedLanguageScript(selected);
+    const selectedLocaleDetected = detectTextLocale(selected, {
+      storedLocale: (exp as WorkExperience & { generatedLocale?: string }).generatedLocale || null,
+    });
+    const liveLocaleDetected = detectTextLocale(live, {
+      storedLocale: (exp as WorkExperience & { generatedLocale?: string }).generatedLocale || null,
+    });
+    const selectedIsEnglishAuthority = selectedLocaleDetected === 'en'
+      || (
+        scriptLooksEnglishLatin(selected)
+        && selectedLocaleDetected === 'unknown'
+        && !/[čćžšđČĆŽŠĐ]/.test(selected || '')
+        && /\b(?:checks?|works?|prepares?|coordinates?|documents?|goods|colleagues)\b/i.test(selected || '')
+      );
+    const liveIsForeignToEnglish = Boolean(
+      live
+      && liveLocaleDetected !== 'en'
+      && liveLocaleDetected !== 'unknown'
+    ) || scriptLooksNonEnglish(live);
     const englishStillAuth = Boolean(
       ignored
       && selected
-      && scriptLooksEnglishLatin(selected)
-      && scriptLooksNonEnglish(live),
+      && selectedIsEnglishAuthority
+      && liveIsForeignToEnglish,
     );
     // Foreign live AI text is not authoritative when ignored for fact extraction.
     const staleForeign = false;

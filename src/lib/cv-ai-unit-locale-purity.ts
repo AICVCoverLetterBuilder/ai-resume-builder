@@ -70,11 +70,11 @@ const LATIN_LETTER = /[A-Za-zÀ-ÖØ-öø-ÿ]/u;
 
 /** Serbian-preferred forms that must not dominate under requested locale `hr`. */
 const SERBIAN_EXCLUSIVE_CUE_RE =
-  /(?:\bprover(?:a|u|ava|avala|avao|avati)\b|\btačnost\w*\b|\bkoordinisa(?:la|o|ti)\b|\brazmen(?:a|u|e)\b|\bdodeljen\w*\b|\bradnog\s+mesta\b|\bradno\s+mesto\b|\bmagacin\w*\b|\bjanuar(?:a|u)?\b|\bkompanij\w*\b|\bsarađiv\w*\b)/iu;
+  /(?:\bprover(?:a|u|ava|avala|avao|avati)\b|\btačnost\w*\b|\bkoordinisa(?:la|o|ti)\b|\brazmen(?:a|u|e)\b|\bdodeljen\w*\b|\bradnog\s+mesta\b|\bradno\s+mesto\b|\bmagacin\w*\b|\bjanuar(?:a|u)?\b|\bkompanij\w*\b|\bsarađ(?:uje|iv)\w*\b|\bsa\s+kolegama\b|\bpremeštanj\w*\b)/iu;
 
 /** Croatian-preferred forms for positive evidence under `hr`. */
 const CROATIAN_EXCLUSIVE_CUE_RE =
-  /(?:\bprovjer(?:a|u|ava|avala|avao|avati)\b|\btočnost\w*\b|\bkoordinira(?:la|o|ti)?\b|\brazmjen(?:a|u|e)\b|\bdodijeljen\w*\b|\bradnog\s+mjesta\b|\bradno\s+mjesto\b|\bskladišt\w*\b|\bsiječn(?:jaj|ja|ju)?\b|\btvrtk\w*\b|\bsurađ\w*\b|\bprilagođav\w*\b|\bzaprimljen\w*\b|\bpremještanj\w*\b|\bkolegicama\b|\bprateć\w*\b|\bpopratn\w*\b)/iu;
+  /(?:\bprovjer(?:a|u|ava|avala|avao|avati)\b|\btočnost\w*\b|\bkoordinira(?:la|o|ti)?\b|\brazmjen(?:a|u|e)\b|\bdodijeljen\w*\b|\bradnog\s+mjesta\b|\bradno\s+mjesto\b|\bskladišt\w*\b|\bsiječn(?:jaj|ja|ju)?\b|\btvrtk\w*\b|\bsurađ\w*\b|\bs\s+kolegama\b|\bprilagođav\w*\b|\bzaprimljen\w*\b|\bpremještanj\w*\b|\bkolegicama\b|\bprateć\w*\b|\bpopratn\w*\b)/iu;
 
 export type CroatianSerbianLocaleEvidence = {
   croatianExclusiveCueCount: number;

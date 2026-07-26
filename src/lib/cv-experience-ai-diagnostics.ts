@@ -837,17 +837,39 @@ export function diagnoseExperienceSourceSelection(
 
   const selectedScript = classifyExperienceScript(selected);
   const liveScript = classifyExperienceScript(textarea);
-  // Serbian Latin must never be reported as "English authoritative".
-  // englishSourceStillAuthoritative: Latin/English selected while non-Latin live
-  // text was ignored for fact extraction (pre_ai / original remains authoritative).
+  const selectedLocaleDetected = detectTextLocale(selected, {
+    storedLocale: options?.storedContentLocale || options?.contentLocale || null,
+    generatedLocale: options?.generatedLocale || null,
+  });
+  const liveLocaleDetected = detectTextLocale(textarea, {
+    storedLocale: options?.storedContentLocale || options?.contentLocale || null,
+    generatedLocale: options?.generatedLocale || null,
+  });
+  // englishSourceStillAuthoritative: EN fact authority remains authoritative while
+  // foreign live textarea (incl. Latin SR/HR) is ignored for fact extraction.
+  // Never mark Serbian/Croatian-selected text as English authoritative.
+  const selectedIsEnglishAuthority = selectedLocaleDetected === 'en'
+    || (
+      selectedScript === 'latin'
+      && selectedLocaleDetected === 'unknown'
+      && !/[čćžšđČĆŽŠĐ]/.test(selected)
+      && /\b(?:checks?|works?|prepares?|coordinates?|documents?|goods|colleagues)\b/i.test(selected)
+    );
+  const liveIsForeignToEnglish = Boolean(
+    textarea
+    && liveLocaleDetected !== 'en'
+    && liveLocaleDetected !== 'unknown'
+  ) || (
+    liveScript !== 'latin'
+    && liveScript !== 'latin_diacritic'
+    && liveScript !== 'empty'
+    && liveScript !== 'other'
+  );
   const englishSourceStillAuthoritative = Boolean(
     currentTextareaIgnoredOrOverridden
     && selected
-    && selectedScript === 'latin'
-    && liveScript !== 'latin'
-    && liveScript !== 'latin_diacritic'
-    && liveScript !== 'empty'
-    && liveScript !== 'other',
+    && selectedIsEnglishAuthority
+    && liveIsForeignToEnglish,
   );
   // Foreign live AI text is NOT authoritative when we ignore it for facts.
   const staleForeignLocaleSourceAuthoritative = false;
@@ -856,10 +878,7 @@ export function diagnoseExperienceSourceSelection(
   let selectedSourceScript: string | null = null;
   // Detect from actual selected text — never label Serbian Latin as English merely
   // because the UI/requested locale switched to en.
-  const detectedFromText = detectTextLocale(selected, {
-    storedLocale: options?.storedContentLocale || options?.contentLocale || null,
-    generatedLocale: options?.generatedLocale || null,
-  });
+  const detectedFromText = selectedLocaleDetected;
   const localeForHint =
     detectedFromText !== 'unknown'
       ? detectedFromText
@@ -2511,6 +2530,43 @@ export class ExperienceAiDiagnosticSession {
       authoritativeFactSourceLocale:
         ((diag as Record<string, unknown>).authoritativeFactSourceLocale as string | undefined)
         ?? null,
+      // EN pre_ai authority + unused foreign textarea must stay authoritative.
+      // Never leave the draft default `false` when finalize/session evidence says EN.
+      englishSourceStillAuthoritative: (() => {
+        const fromDiag = (diag as Record<string, unknown>).englishSourceStillAuthoritative;
+        const authLocale = String(
+          ((diag as Record<string, unknown>).authoritativeFactSourceLocale as string | undefined)
+          ?? this.draft.authoritativeFactSourceLocale
+          ?? '',
+        ).toLowerCase();
+        const authKind = String(
+          this.draft.authoritativeFactSourceKind
+          ?? (diag as Record<string, unknown>).authoritativeFactSourceKind
+          ?? '',
+        );
+        const unused = this.draft.currentTextareaUsedForFactExtraction === false
+          || (diag as Record<string, unknown>).currentTextareaUsedForFactExtraction === false;
+        if (
+          unused
+          && authLocale === 'en'
+          && (
+            authKind === 'pre_ai_snapshot'
+            || authKind === 'originalUserDescription'
+            || authKind === 'original_user_description'
+            || authKind === 'canonicalDescription'
+            || authKind === 'canonical_description'
+          )
+        ) {
+          return true;
+        }
+        if (typeof fromDiag === 'boolean') return fromDiag;
+        return Boolean(this.draft.englishSourceStillAuthoritative);
+      })(),
+      staleForeignLocaleSourceAuthoritative: (() => {
+        const fromDiag = (diag as Record<string, unknown>).staleForeignLocaleSourceAuthoritative;
+        if (typeof fromDiag === 'boolean') return fromDiag;
+        return false;
+      })(),
       visibleTextareaLocale:
         ((diag as Record<string, unknown>).visibleTextareaLocale as string | undefined)
         ?? null,

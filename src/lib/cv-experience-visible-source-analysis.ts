@@ -150,7 +150,7 @@ export function analyzeExperienceVisibleSource(options: {
     const tgt = targetLocale;
     if (!src || src === 'unknown') return 0;
     if (src === tgt) return 0;
-    if ((src === 'sr' || src === 'hr') && (tgt === 'sr' || tgt === 'hr')) return 0;
+    // SR↔HR is a real locale conversion — do not treat as already-valid.
     return 1;
   })();
 

@@ -82,6 +82,13 @@ import {
   SERBIAN_EXPERIENCE_GROUNDING_341_REVISION,
 } from './cv-serbian-experience-grounding';
 import {
+  validateCroatianWarehouseExperienceCoverage,
+  scanCroatianWarehousePredicates,
+  sourceRequiresCroatianWarehouseFactCoverage,
+  croatianWarehouseFactDiagId,
+  CROATIAN_EXPERIENCE_GROUNDING_342_REVISION,
+} from './cv-croatian-experience-grounding';
+import {
   isPortugueseBrazilLocale,
   canonicalizeContentLocale,
   localesEquivalent,
@@ -371,6 +378,24 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     uncovered = cov.uncovered.map((id) => serbianWarehouseFactDiagId(id));
     factCoveragePassed = cov.ok;
     const pred = scanSerbianWarehousePredicates(source, text);
+    sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
+    candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
+    addedPredicateCount = pred.candidateAddedPredicateCount;
+    addedPredicateIdentityHashes = [...pred.candidateAddedPredicateIdentityHashes];
+    predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
+      && candidatePredicateIdentityCount > 0;
+  } else if (
+    locale === 'hr'
+    && sourceRequiresCroatianWarehouseFactCoverage(source)
+  ) {
+    void CROATIAN_EXPERIENCE_GROUNDING_342_REVISION;
+    const cov = validateCroatianWarehouseExperienceCoverage(source, text);
+    requiredFactCount = cov.required.length;
+    coveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => croatianWarehouseFactDiagId(id));
+    factCoveragePassed = cov.ok;
+    const pred = scanCroatianWarehousePredicates(source, text);
     sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
     candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
     addedPredicateCount = pred.candidateAddedPredicateCount;
@@ -1132,6 +1157,23 @@ export function validateVisibleExperienceCoverage(options: {
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
       && visibleCoveredPredicateCount > 0;
+  } else if (
+    (options.targetLocale || locale) === 'hr'
+    && sourceRequiresCroatianWarehouseFactCoverage(options.sourceDescription)
+  ) {
+    applicable = true;
+    void CROATIAN_EXPERIENCE_GROUNDING_342_REVISION;
+    const cov = validateCroatianWarehouseExperienceCoverage(options.sourceDescription, visible);
+    visibleRequiredFactCount = cov.required.length;
+    visibleCoveredFactCount = cov.covered.length;
+    uncovered = cov.uncovered.map((id) => croatianWarehouseFactDiagId(id));
+    visibleFactCoveragePassed = cov.ok;
+    const pred = scanCroatianWarehousePredicates(options.sourceDescription, visible);
+    visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
+    visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
+    visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
+      && visibleCoveredPredicateCount > 0;
   }
 
   return {
@@ -1189,7 +1231,13 @@ export function validateVisibleExperienceCoverage(options: {
                                               && sourceRequiresSerbianWarehouseFactCoverage(options.sourceDescription)
                                                 ? validateSerbianWarehouseExperienceCoverage(options.sourceDescription, visible)
                                                   .required.map((id) => serbianWarehouseFactDiagId(id))
-                                                : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+                                                : (
+                                                  (options.targetLocale || locale) === 'hr'
+                                                  && sourceRequiresCroatianWarehouseFactCoverage(options.sourceDescription)
+                                                    ? validateCroatianWarehouseExperienceCoverage(options.sourceDescription, visible)
+                                                      .required.map((id) => croatianWarehouseFactDiagId(id))
+                                                    : Array.from({ length: visibleRequiredFactCount }, (_, i) => `vis_${i}`)
+                                                )
                                             )
                                         )
                                     )

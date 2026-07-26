@@ -1864,6 +1864,7 @@ type ExperienceLike = {
   unsupportedClaimRepairVisibleApplyPerformed?: boolean | null;
   neutralRestyleDetected?: boolean | null;
   authoritativeFactSourceKind?: string | null;
+  authoritativeFactSourceLocale?: string | null;
   currentTextareaUsedForFactExtraction?: boolean | null;
   staleForeignLocaleSourceAuthoritative?: boolean | null;
   englishSourceStillAuthoritative?: boolean | null;
@@ -2097,7 +2098,7 @@ export function checkExperienceDiagnosticInvariants(
       trace.finalCandidatePredicateValidationApplicable === true
       || (
         typeof trace.requestedTargetLocale === 'string'
-        && /^(ja|hi|ru|de|es|fr|it|pt|ar|sr)/i.test(trace.requestedTargetLocale)
+        && /^(ja|hi|ru|de|es|fr|it|pt|ar|sr|hr)/i.test(trace.requestedTargetLocale)
         && Number(trace.finalRequiredFactCount ?? 0) >= 3
       )
     )
@@ -2117,6 +2118,24 @@ export function checkExperienceDiagnosticInvariants(
         trace.finalCandidatePredicateIdentityCount ?? 0,
       finalSourceUnitPredicateCoveragePassed:
         trace.finalSourceUnitPredicateCoveragePassed ?? null,
+    });
+  }
+  if (
+    (
+      String(trace.factAuthorityKind || trace.authoritativeFactSourceKind || '')
+        === 'pre_ai_snapshot'
+      || String(trace.authoritativeFactSourceKind || '') === 'pre_ai_snapshot'
+    )
+    && String(trace.authoritativeFactSourceLocale || '').toLowerCase() === 'en'
+    && trace.factAuthorityMatchesAuthoritativeSourceKind === true
+    && trace.englishSourceStillAuthoritative === false
+  ) {
+    push('english_source_authority_flag_contradiction', {
+      authoritativeFactSourceKind: trace.authoritativeFactSourceKind ?? null,
+      authoritativeFactSourceLocale: trace.authoritativeFactSourceLocale ?? null,
+      factAuthorityMatchesAuthoritativeSourceKind:
+        trace.factAuthorityMatchesAuthoritativeSourceKind ?? null,
+      englishSourceStillAuthoritative: trace.englishSourceStillAuthoritative ?? null,
     });
   }
   // AAB-309 repair lineage invariants.

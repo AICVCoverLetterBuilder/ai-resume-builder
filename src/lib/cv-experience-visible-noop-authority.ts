@@ -67,6 +67,11 @@ import {
   scanSerbianWarehousePredicates,
 } from './cv-serbian-experience-grounding';
 import {
+  sourceRequiresCroatianWarehouseFactCoverage,
+  validateCroatianWarehouseExperienceCoverage,
+  scanCroatianWarehousePredicates,
+} from './cv-croatian-experience-grounding';
+import {
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   validateEnglishWarehouseExperienceCoverage,
   scanEnglishWarehousePredicates,
@@ -443,6 +448,9 @@ export function evaluateExperienceVisibleComparison(options: {
         if (/(?:proverava|pregledava|kontroliše|koordinira|sarađuje|skladišt|pristigl|prateć|kolegama|priprem|premešt|dokumentacij)/iu.test(v)) {
           return validateSerbianWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
+        if (/(?:provjerava|pregledava|kontrolira|surađuje|skladišt|pristigl|zaprimljen|prateć|kolegama|priprem|premješt|dokumentacij)/iu.test(v)) {
+          return validateCroatianWarehouseExperienceCoverage(auth, v).uncovered.length;
+        }
         if (/(?:contr[oô]le|v[eé]rifie|coordonne|marchandises?|coll[eè]gues?|entrep[oô]t)/iu.test(v)) {
           return validateFrenchWarehouseExperienceCoverage(auth, v).uncovered.length;
         }
@@ -604,6 +612,22 @@ export function evaluateExperienceVisibleComparison(options: {
       ) {
         const cov = validateSerbianWarehouseExperienceCoverage(auth, candidate);
         const pred = scanSerbianWarehousePredicates(auth, candidate);
+        if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
+          degradationKinds.push('fact_lost');
+        } else if (pred.candidateAddedPredicateCount > 0) {
+          degradationKinds.push('unsupported_predicate_added');
+        } else {
+          improvementKinds.push('wrong_locale_fixed');
+          if (cov.covered.length >= 3 && visibleUncoveredCount > 0) {
+            improvementKinds.push('missing_fact_restored');
+          }
+        }
+      } else if (
+        target.startsWith('hr')
+        && sourceRequiresCroatianWarehouseFactCoverage(auth)
+      ) {
+        const cov = validateCroatianWarehouseExperienceCoverage(auth, candidate);
+        const pred = scanCroatianWarehousePredicates(auth, candidate);
         if (!cov.ok || !pred.sourceUnitPredicateCoveragePassed) {
           degradationKinds.push('fact_lost');
         } else if (pred.candidateAddedPredicateCount > 0) {

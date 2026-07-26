@@ -378,7 +378,8 @@ export function localesEquivalent(
   const kb = normalizeLocaleKey(b);
   if (!ka || !kb || ka === 'unknown' || kb === 'unknown') return false;
   if (ka === kb) return true;
-  if ((ka === 'sr' || ka === 'hr') && (kb === 'sr' || kb === 'hr')) return true;
+  // Serbian and Croatian share a Latin script family but are not interchangeable
+  // locales for Experience AI (SR↔HR is a real cross-locale conversion).
   return false;
 }
 
