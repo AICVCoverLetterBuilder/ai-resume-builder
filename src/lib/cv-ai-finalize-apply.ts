@@ -17,6 +17,7 @@ import {
   splitExperienceBullets,
   type CvCanonicalFactSet,
 } from './cv-canonical-facts';
+import { resolveExperienceGroundingDescription } from './cv-experience-provenance';
 import {
   buildExperienceDurationSnapshot,
   formatApproximateDurationPhrase,
@@ -76,6 +77,9 @@ import {
   repairSerbianSummaryProviderCandidate,
   injectSerbianTotalDurationSentence,
   isSerbianStructuredSummaryDomain,
+  evaluateSerbianStructuredDomainGate,
+  detectSerbianPerspective,
+  scanSerbianSummaryUnsupportedClaims,
   SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION,
   SERBIAN_SUMMARY_ROLE_ALIGN_348_REVISION,
   SERBIAN_SUMMARY_DURATION_SCOPE_348_REVISION,
@@ -887,6 +891,8 @@ export type FinalizeCvAiFieldInput = {
   lastAiOutputHashMatched?: boolean | null;
   materialUserEditDetected?: boolean | null;
   staleGeneratedDescriptionIgnored?: boolean | null;
+  /** Summary rewrite style when action is shorter/stronger/professional. */
+  rewriteStyle?: 'shorter' | 'stronger' | 'professional' | string | null;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -1504,6 +1510,25 @@ export type FinalizeCvAiFieldResult = {
     providerTextUsedByDeterministicFallback?: boolean;
     finalSentenceHashes?: string[];
     finalSentenceRoleSlots?: string[];
+    /** Stronger / shorter / professional rewrite style (Summary enhance). */
+    rewriteStyle?: string | null;
+    previousSummaryUsedAsFactSource?: boolean;
+    serbianStructuredDomainGateEvaluated?: boolean;
+    serbianStructuredDomainGatePassed?: boolean;
+    serbianStructuredDomainCurrentRequiredFactCount?: number | null;
+    serbianStructuredDomainCurrentCoveredFactCount?: number | null;
+    serbianStructuredDomainPriorRequiredFactCount?: number | null;
+    serbianStructuredDomainPriorCoveredFactCount?: number | null;
+    serbianStructuredDomainGateFailureReasons?: string[];
+    serbianEntryOwnedBuilderAvailable?: boolean;
+    serbianEntryOwnedBuilderAttempted?: boolean;
+    serbianEntryOwnedBuilderSucceeded?: boolean;
+    serbianEntryOwnedBuilderOutputHash?: string | null;
+    serbianEntryOwnedBuilderOutputLength?: number;
+    serbianEntryOwnedBuilderSentenceCount?: number;
+    serbianEntryOwnedBuilderTypedFailureReason?: string | null;
+    repairSkipped?: boolean;
+    repairSkipReason?: string | null;
   };
 };
 
@@ -1604,27 +1629,45 @@ function countSummaryCandidateSentences(text: string, locale: Locale): number {
  * normal grounding resolution so Serbian/English duration cycles stay stable.
  */
 function buildSummaryFactSetForLocale(cv: CVData, locale: Locale): CvCanonicalFactSet {
-  if (locale !== 'hi') {
-    return buildCvCanonicalFactSet(cv);
+  if (locale === 'hi') {
+    const experience = (cv.experience || []).map((exp) => {
+      const liveDisplay = (exp.description || '').trim();
+      const liveAi = freezeExperienceAiDescription(exp).trim();
+      // Prefer visible live text first — freeze already prefers live, but keep
+      // an explicit description-first order for Hindi entry ownership.
+      const authoritative = liveDisplay
+        || liveAi
+        || (exp.originalUserDescription || '').trim()
+        || (exp.canonicalDescription || '').trim();
+      return {
+        ...exp,
+        description: authoritative,
+        canonicalDescription: authoritative,
+        originalUserDescription: (exp.originalUserDescription || '').trim() || authoritative,
+        descriptionOrigin: 'user' as const,
+      };
+    });
+    return buildCvCanonicalFactSet({ ...cv, experience });
   }
-  const experience = (cv.experience || []).map((exp) => {
-    const liveDisplay = (exp.description || '').trim();
-    const liveAi = freezeExperienceAiDescription(exp).trim();
-    // Prefer visible live text first — freeze already prefers live, but keep
-    // an explicit description-first order for Hindi entry ownership.
-    const authoritative = liveDisplay
-      || liveAi
-      || (exp.originalUserDescription || '').trim()
-      || (exp.canonicalDescription || '').trim();
-    return {
-      ...exp,
-      description: authoritative,
-      canonicalDescription: authoritative,
-      originalUserDescription: (exp.originalUserDescription || '').trim() || authoritative,
-      descriptionOrigin: 'user' as const,
-    };
-  });
-  return buildCvCanonicalFactSet({ ...cv, experience });
+  if (locale === 'sr') {
+    // AAB-349: AI-only Experience rows may have empty canonical while live bullets
+    // still hold the 3+3 warehouse/design facts. Summary rebuild must see them.
+    const experience = (cv.experience || []).map((exp) => {
+      const grounded = resolveExperienceGroundingDescription(exp).trim();
+      const live = (exp.description || '').trim()
+        || freezeExperienceAiDescription(exp).trim();
+      const authoritative = grounded || live
+        || (exp.originalUserDescription || '').trim()
+        || (exp.canonicalDescription || '').trim();
+      return {
+        ...exp,
+        description: authoritative,
+        canonicalDescription: authoritative || (exp.canonicalDescription || ''),
+      };
+    });
+    return buildCvCanonicalFactSet({ ...cv, experience });
+  }
+  return buildCvCanonicalFactSet(cv);
 }
 
 function dutiesTextFromCv(cv: CVData, experienceId?: string): string {
@@ -1671,6 +1714,14 @@ function currentAndPriorDutiesFromCv(cv: CVData, locale?: Locale): {
         return canonical;
       }
       return live || canonical;
+    }
+    if (locale === 'sr') {
+      const grounded = resolveExperienceGroundingDescription(exp).trim();
+      const live = (exp.description || '').trim()
+        || freezeExperienceAiDescription(exp).trim();
+      // Prefer canonical/original grounding; fall back to live AI bullets when
+      // canonical was never seeded (AAB-349 device path).
+      return grounded || live;
     }
     return freezeExperienceAiDescription(exp);
   };
@@ -2001,8 +2052,15 @@ function summaryPasses(
   if (locale === 'sr') {
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
-    const domainCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''}`;
-    if (isSerbianStructuredSummaryDomain(domainCorpus)) {
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      currentRole: primary?.position || entryDuties.currentRoleTitle,
+      priorRole: entryDuties.priorRoleTitle,
+      jobTitle: cv.personal?.jobTitle || '',
+      corpus: summary,
+    });
+    if (gate.passed) {
       const empQ = analyzeSerbianSummaryEmploymentQuality(summary, {
         company: primary?.company || '',
         role: primary?.position || cv.personal?.jobTitle || '',
@@ -2188,7 +2246,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let spanishProviderUnsupportedClaimCount: number | null = null;
   let serbianProviderRejectionReason: string | null = null;
   let serbianClientRepairAttempted = false;
-  let serbianMaterialRepairApplied = false;
+  const serbianMaterialRepairApplied = false;
+  let serbianRepairSkipped = false;
+  let serbianRepairSkipReason: string | null = null;
+  let serbianEntryOwnedBuilderAvailable = false;
+  let serbianEntryOwnedBuilderAttempted = false;
+  let serbianEntryOwnedBuilderSucceeded = false;
+  let serbianEntryOwnedBuilderOutputHash: string | null = null;
+  let serbianEntryOwnedBuilderOutputLength = 0;
+  let serbianEntryOwnedBuilderSentenceCount = 0;
+  let serbianEntryOwnedBuilderTypedFailureReason: string | null = null;
+  let serbianStructuredDomainGate: ReturnType<typeof evaluateSerbianStructuredDomainGate> | null = null;
+  let serbianProviderRejectionReasons: string[] = [];
+  const rewriteStyleDiag: string | null = input.rewriteStyle
+    ? String(input.rewriteStyle)
+    : input.action === 'summary_stronger'
+      ? 'stronger'
+      : input.action === 'summary_shorter'
+        ? 'shorter'
+        : input.action === 'summary_professional'
+          ? 'professional'
+          : null;
   let germanProviderRejectionReason: string | null = null;
   let germanProviderUnsupportedClaimCount: number | null = null;
   let germanProviderSlotRejectionReasons: string[] = [];
@@ -2251,6 +2329,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : []),
     ];
     const merged = [...new Set([...fromUnits, ...spanishOwned, ...cues])];
+    // AAB-349: documentation evidence often collapses into warehouse_inbound_check
+    // in the shared classifier — surface warehouse_document_check for Summary diag.
+    if (
+      locale === 'sr'
+      && /(?:dokument|document).{0,48}(?:received|primljen|pristigl|related|povezan|prateć)/i
+        .test(entryDutiesForRole.currentEntryDuties || '')
+    ) {
+      if (!merged.includes('warehouse_document_check')) {
+        merged.push('warehouse_document_check');
+      }
+    }
     return merged.length ? merged : ['generic_duty'];
   })();
   const currentSourceUnitDiag = diagnoseCurrentSourceUnitMaterial(
@@ -2576,10 +2665,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (locale === 'sr') {
     void SUMMARY_BUILDER_REVISION_SR;
     void SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION;
+    void scanSerbianSummaryUnsupportedClaims;
     candidate = dedupeSummarySentences(candidate);
     const entryDutiesSr = currentAndPriorDutiesFromCv(cv, locale);
-    const domainCorpusSr = `${entryDutiesSr.currentEntryDuties || ''} ${entryDutiesSr.priorEntryDuties || ''} ${context.role || ''} ${cv.personal?.jobTitle || ''}`;
-    if (isSerbianStructuredSummaryDomain(domainCorpusSr) && candidate.trim()) {
+    serbianStructuredDomainGate = evaluateSerbianStructuredDomainGate({
+      currentEntryDuties: entryDutiesSr.currentEntryDuties,
+      priorEntryDuties: entryDutiesSr.priorEntryDuties,
+      currentRole: context.role || entryDutiesSr.currentRoleTitle,
+      priorRole: entryDutiesSr.priorRoleTitle,
+      jobTitle: cv.personal?.jobTitle || '',
+    });
+    serbianEntryOwnedBuilderAvailable = serbianStructuredDomainGate.passed;
+    if (serbianStructuredDomainGate.passed && candidate.trim()) {
       const analyzeSr = (text: string) => analyzeSerbianSummaryEmploymentQuality(text, {
         company: context.company,
         role: context.role,
@@ -2590,30 +2687,46 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         structuredRole: context.role || entryDutiesSr.currentRoleTitle,
         gender,
       });
-      let empQuality = analyzeSr(candidate);
+      const empQuality = analyzeSr(candidate);
       if (!empQuality.groundingValidationPassed) {
         serbianProviderRejectionReason = empQuality.typedRejectionReason
           || 'serbian_summary_grounding_failed';
-        const repair = repairSerbianSummaryProviderCandidate(candidate, {
-          company: context.company,
-          priorCompany: entryDutiesSr.priorCompany,
-          gender,
-          duration: durationSnapshot.total,
-        });
-        serbianClientRepairAttempted = repair.attempted;
-        if (repair.attempted && repair.text.trim()) {
-          const repairedQ = analyzeSr(repair.text);
-          if (repairedQ.groundingValidationPassed) {
-            candidate = repair.text;
-            empQuality = repairedQ;
-            serbianMaterialRepairApplied = true;
-            serbianProviderRejectionReason = null;
-          } else {
-            candidate = '';
-          }
-        } else {
-          candidate = '';
-        }
+        serbianProviderRejectionReasons = [
+          empQuality.typedRejectionReason || 'serbian_summary_grounding_failed',
+          ...empQuality.slotRejectionReasons,
+          ...(empQuality.unsupportedClaimKinds || []),
+        ].filter(Boolean);
+        // Proven Atlas/Rewitu structured domain: skip narrow provider repair and
+        // prefer entry-owned deterministic rebuild (AAB-349 Stronger device path).
+        // Never terminal-reject here — blank candidate so rebuild runs next.
+        serbianRepairSkipped = true;
+        serbianRepairSkipReason = 'structured_domain_deterministic_preferred';
+        serbianClientRepairAttempted = false;
+        candidate = '';
+      }
+    } else if (candidate.trim()) {
+      // Non-structured Serbian: blank only on clear locale leakage so repair/
+      // duration / mixed-script postconditions can still salvage the provider
+      // (build-265 field-coordinator path). Do not blank solely for soft-skill
+      // unsupported tokens — that falsely kills valid provider repair chains.
+      const looseQ = analyzeSerbianSummaryEmploymentQuality(candidate, {
+        company: context.company,
+        role: context.role,
+        currentEntryDuties: entryDutiesSr.currentEntryDuties,
+        priorEntryDuties: entryDutiesSr.priorEntryDuties,
+        priorCompany: entryDutiesSr.priorCompany,
+        priorRole: entryDutiesSr.priorRoleTitle,
+        structuredRole: context.role || entryDutiesSr.currentRoleTitle,
+        gender,
+      });
+      if (looseQ.croatianLeakageDetected || looseQ.usesDizajnerica) {
+        serbianProviderRejectionReason = looseQ.typedRejectionReason
+          || 'serbian_summary_grounding_failed';
+        serbianProviderRejectionReasons = [
+          serbianProviderRejectionReason,
+          ...looseQ.unsupportedClaimKinds,
+        ].filter(Boolean);
+        candidate = '';
       }
     }
   }
@@ -2995,17 +3108,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && (owned?.durationValidationPassed !== false)
       && (owned?.finalDurationHybridDetected !== true),
     );
-    const firstPerson = locale === 'en'
-      ? /\bI\b/.test(analyzedText)
-      : /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
-    const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
-    // English Summary contract is first-person professional voice; Hindi/etc. require
-    // neutral/honorific CV perspective (no first-person).
-    const perspectiveValidationPassed = locale === 'en' || locale === 'sr'
-      ? true
-      : (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
-        ? !firstPerson
-        : true;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const empQ = locale === 'hi'
       ? analyzeHindiSummaryEmploymentQuality(analyzedText, {
@@ -3067,8 +3169,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 gender,
               })
               : locale === 'sr'
-                && isSerbianStructuredSummaryDomain(
-                  `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''} ${analyzedText}`,
+                && (
+                  serbianStructuredDomainGate?.passed
+                  || evaluateSerbianStructuredDomainGate({
+                    currentEntryDuties: entryDuties.currentEntryDuties,
+                    priorEntryDuties: entryDuties.priorEntryDuties,
+                    currentRole: entryDuties.currentRoleTitle || context.role,
+                    priorRole: entryDuties.priorRoleTitle,
+                    jobTitle: cv.personal?.jobTitle || '',
+                    corpus: analyzedText,
+                  }).passed
                 )
                 ? analyzeSerbianSummaryEmploymentQuality(analyzedText, {
                   company: context.company || entryDuties.currentCompany,
@@ -3128,6 +3238,36 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                       currentEntryId: entryDuties.currentEntryId,
                     })
             : null;
+    const srPerspective = locale === 'sr'
+      ? (
+        (empQ && 'perspectiveMode' in empQ
+          ? (empQ as { perspectiveMode?: string }).perspectiveMode
+          : null)
+        || detectSerbianPerspective(analyzedText)
+      )
+      : null;
+    const firstPerson = locale === 'en'
+      ? /\bI\b/.test(analyzedText)
+      : locale === 'sr'
+        ? srPerspective === 'first_person'
+        : /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
+    const perspectiveMode = firstPerson
+      ? 'first_person'
+      : (locale === 'sr' && srPerspective === 'third_person')
+        ? 'cv_third_person'
+        : 'neutral_cv';
+    // English Summary contract is first-person; structured Serbian (Atlas/Rewitu)
+    // also requires first-person. Non-structured Serbian keeps HEAD apply behavior
+    // (third-person CV voice is allowed — e.g. build-265 field coordinator).
+    const perspectiveValidationPassed = locale === 'en'
+      ? true
+      : locale === 'sr'
+        ? (empQ && 'perspectiveValidationPassed' in empQ
+          ? Boolean((empQ as { perspectiveValidationPassed?: boolean }).perspectiveValidationPassed)
+          : true)
+        : (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
+          ? !firstPerson
+          : true;
     // Candidate fields — never treat structured context alone as a passing intro/title.
     const candidateCurrentRoleTitlePresent = empQ?.currentRoleTitlePresent ?? null;
     const candidateCurrentRoleTitleMatchesStructuredRole =
@@ -3522,19 +3662,31 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalCurrentDutyCoveragePassed: ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { finalCurrentDutyCoveragePassed?: boolean })
             .finalCurrentDutyCoveragePassed)
-          : undefined,
+          : (locale === 'sr' && empQ && 'factCoverage' in empQ
+            ? Boolean((empQ as { factCoverage?: { finalCurrentDutyCoveragePassed?: boolean } })
+              .factCoverage?.finalCurrentDutyCoveragePassed)
+            : undefined),
         requiredCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
           ? ((empQ as { requiredCurrentDutyFactCount?: number }).requiredCurrentDutyFactCount
             ?? undefined)
-          : undefined,
+          : (locale === 'sr' && empQ && 'factCoverage' in empQ
+            ? ((empQ as { factCoverage?: { requiredCurrentDutyFactCount?: number } })
+              .factCoverage?.requiredCurrentDutyFactCount ?? undefined)
+            : undefined),
         coveredCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
           ? ((empQ as { coveredCurrentDutyFactCount?: number }).coveredCurrentDutyFactCount
             ?? undefined)
-          : undefined,
+          : (locale === 'sr' && empQ && 'factCoverage' in empQ
+            ? ((empQ as { factCoverage?: { coveredCurrentDutyFactCount?: number } })
+              .factCoverage?.coveredCurrentDutyFactCount ?? undefined)
+            : undefined),
         missingCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
           ? ((empQ as { missingCurrentDutyFactCount?: number }).missingCurrentDutyFactCount
             ?? undefined)
-          : undefined,
+          : (locale === 'sr' && empQ && 'factCoverage' in empQ
+            ? ((empQ as { factCoverage?: { missingCurrentDutyFactCount?: number } })
+              .factCoverage?.missingCurrentDutyFactCount ?? undefined)
+            : undefined),
         missingCurrentDutyFactIdHashes: ((locale === 'de' || locale === 'en') && empQ)
           ? ((empQ as { missingCurrentDutyFactIdHashes?: string[] })
             .missingCurrentDutyFactIdHashes ?? undefined)
@@ -3616,25 +3768,42 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalPriorDutyCoveragePassed: ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { finalPriorDutyCoveragePassed?: boolean })
             .finalPriorDutyCoveragePassed)
-          : undefined,
+          : (locale === 'sr' && empQ && 'factCoverage' in empQ
+            ? Boolean((empQ as { factCoverage?: { finalPriorDutyCoveragePassed?: boolean } })
+              .factCoverage?.finalPriorDutyCoveragePassed)
+            : undefined),
         requiredPriorDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
           ? Number((empQ as { requiredPriorDutyFactCount?: number }).requiredPriorDutyFactCount ?? 0)
-          : undefined,
+          : (locale === 'sr' && empQ && 'factCoverage' in empQ
+            ? Number((empQ as { factCoverage?: { requiredPriorDutyFactCount?: number } })
+              .factCoverage?.requiredPriorDutyFactCount ?? 0)
+            : undefined),
         coveredPriorDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
           ? Number((empQ as { coveredPriorDutyFactCount?: number }).coveredPriorDutyFactCount ?? 0)
-          : undefined,
+          : (locale === 'sr' && empQ && 'factCoverage' in empQ
+            ? Number((empQ as { factCoverage?: { coveredPriorDutyFactCount?: number } })
+              .factCoverage?.coveredPriorDutyFactCount ?? 0)
+            : undefined),
         missingPriorDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
           ? Number((empQ as { missingPriorDutyFactCount?: number }).missingPriorDutyFactCount ?? 0)
-          : undefined,
+          : (locale === 'sr' && empQ && 'factCoverage' in empQ
+            ? Number((empQ as { factCoverage?: { missingPriorDutyFactCount?: number } })
+              .factCoverage?.missingPriorDutyFactCount ?? 0)
+            : undefined),
         finalTotalDurationSlotPresent: ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { finalTotalDurationSlotPresent?: boolean })
             .finalTotalDurationSlotPresent)
+          : (locale === 'sr' && empQ
+            ? Boolean((empQ as { totalDurationSlotPresent?: boolean }).totalDurationSlotPresent)
+            : undefined),
+        finalSlotValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'sr') && empQ)
+          ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed
+            ?? (empQ as { finalSlotValidationPassed?: boolean }).finalSlotValidationPassed)
           : undefined,
-        finalSlotValidationPassed: ((locale === 'de' || locale === 'en') && empQ)
-          ? Boolean((empQ as { finalSlotValidationPassed?: boolean }).finalSlotValidationPassed)
-          : undefined,
-        finalSlotRejectionReasons: ((locale === 'de' || locale === 'en') && empQ)
-          ? ((empQ as { finalSlotRejectionReasons?: string[] }).finalSlotRejectionReasons ?? [])
+        finalSlotRejectionReasons: ((locale === 'de' || locale === 'en' || locale === 'sr') && empQ)
+          ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons
+            ?? (empQ as { finalSlotRejectionReasons?: string[] }).finalSlotRejectionReasons
+            ?? [])
           : undefined,
         finalUnitSemanticRolesByUnit: ((locale === 'de' || locale === 'en') && empQ)
           ? ((empQ as { finalUnitSemanticRolesByUnit?: string[][] }).finalUnitSemanticRolesByUnit
@@ -3914,11 +4083,61 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ),
         perspectiveMode,
         finalPerspectiveMode: perspectiveMode,
-        sourcePerspectiveMode: firstPerson ? 'first_person' : 'neutral_cv',
-        providerPerspectiveMode: firstPerson ? 'first_person' : 'neutral_cv',
+        sourcePerspectiveMode: locale === 'sr'
+          ? (detectSerbianPerspective(liveSummary) === 'first_person' ? 'first_person' : 'neutral_cv')
+          : (firstPerson ? 'first_person' : 'neutral_cv'),
+        providerPerspectiveMode: locale === 'sr'
+          ? (detectSerbianPerspective(providerRaw) === 'first_person' ? 'first_person' : 'neutral_cv')
+          : (firstPerson ? 'first_person' : 'neutral_cv'),
         perspectiveNormalizationAttempted: locale === 'hi',
         perspectiveNormalizationApplied: locale === 'hi' && !firstPerson,
         perspectiveValidationPassed,
+        rewriteStyle: rewriteStyleDiag,
+        previousSummaryUsedAsFactSource: false,
+        serbianStructuredDomainGateEvaluated: locale === 'sr'
+          ? Boolean(serbianStructuredDomainGate?.evaluated)
+          : undefined,
+        serbianStructuredDomainGatePassed: locale === 'sr'
+          ? Boolean(serbianStructuredDomainGate?.passed)
+          : undefined,
+        serbianStructuredDomainCurrentRequiredFactCount: locale === 'sr'
+          ? (serbianStructuredDomainGate?.currentRequiredFactCount ?? null)
+          : undefined,
+        serbianStructuredDomainCurrentCoveredFactCount: locale === 'sr'
+          ? (serbianStructuredDomainGate?.currentCoveredFactCount ?? null)
+          : undefined,
+        serbianStructuredDomainPriorRequiredFactCount: locale === 'sr'
+          ? (serbianStructuredDomainGate?.priorRequiredFactCount ?? null)
+          : undefined,
+        serbianStructuredDomainPriorCoveredFactCount: locale === 'sr'
+          ? (serbianStructuredDomainGate?.priorCoveredFactCount ?? null)
+          : undefined,
+        serbianStructuredDomainGateFailureReasons: locale === 'sr'
+          ? (serbianStructuredDomainGate?.failureReasons ?? [])
+          : undefined,
+        serbianEntryOwnedBuilderAvailable: locale === 'sr'
+          ? serbianEntryOwnedBuilderAvailable
+          : undefined,
+        serbianEntryOwnedBuilderAttempted: locale === 'sr'
+          ? serbianEntryOwnedBuilderAttempted
+          : undefined,
+        serbianEntryOwnedBuilderSucceeded: locale === 'sr'
+          ? serbianEntryOwnedBuilderSucceeded
+          : undefined,
+        serbianEntryOwnedBuilderOutputHash: locale === 'sr'
+          ? serbianEntryOwnedBuilderOutputHash
+          : undefined,
+        serbianEntryOwnedBuilderOutputLength: locale === 'sr'
+          ? serbianEntryOwnedBuilderOutputLength
+          : undefined,
+        serbianEntryOwnedBuilderSentenceCount: locale === 'sr'
+          ? serbianEntryOwnedBuilderSentenceCount
+          : undefined,
+        serbianEntryOwnedBuilderTypedFailureReason: locale === 'sr'
+          ? serbianEntryOwnedBuilderTypedFailureReason
+          : undefined,
+        repairSkipped: locale === 'sr' ? serbianRepairSkipped : undefined,
+        repairSkipReason: locale === 'sr' ? serbianRepairSkipReason : undefined,
         groundingValidationPassed,
         finalPostconditionsPassed: success,
         // Candidate-derived postcondition fields (not structured context alone).
@@ -3993,7 +4212,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         hindiFiniteKaAnubhavCollision: empQ && 'hindiFiniteKaAnubhavCollision' in empQ
           ? (empQ as { hindiFiniteKaAnubhavCollision?: boolean }).hindiFiniteKaAnubhavCollision
           : undefined,
-        unsupportedClaimCount: locale === 'ja' || locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en'
+        unsupportedClaimCount: locale === 'ja' || locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr'
           ? (empQ && 'unsupportedClaimCount' in empQ
             ? (empQ as { unsupportedClaimCount?: number }).unsupportedClaimCount ?? 0
             : 0)
@@ -4144,56 +4363,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : undefined,
         providerSlotRejectionReasons: locale === 'hi'
           ? (hindiProviderQuality?.slotRejectionReasons ?? [])
+          : locale === 'sr' && serbianProviderRejectionReasons.length
+            ? serbianProviderRejectionReasons
           : locale === 'de'
             ? germanProviderSlotRejectionReasons
             : locale === 'en'
               ? englishProviderSlotRejectionReasons
               : undefined,
-        providerTypedRejectionReason: locale === 'hi'
-          ? (hindiProviderRejectionReason
-            || hindiProviderQuality?.typedRejectionReason
-            || null)
-          : (croatianProviderRejectionReason
-            || japaneseProviderRejectionReason
-            || spanishProviderRejectionReason
-            || germanProviderRejectionReason
-            || englishProviderRejectionReason
-            || result.diagnostics?.providerRejectionReason
-            || null),
-        currentIntroSlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en') && empQ
-          ? Boolean((empQ as { currentIntroSlotPresent?: boolean }).currentIntroSlotPresent)
-          : undefined,
-        currentDutySlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en') && empQ
-          ? Boolean((empQ as { currentDutySlotPresent?: boolean }).currentDutySlotPresent)
-          : undefined,
-        priorRoleSlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en') && empQ
-          ? Boolean((empQ as { priorRoleSlotPresent?: boolean }).priorRoleSlotPresent)
-          : undefined,
-        slotValidationPassed: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en') && empQ
-          ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed)
-          : undefined,
-        slotRejectionReasons: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en') && empQ
-          ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
-          : undefined,
-        summaryRepairAttempted: Boolean(
-          summaryRepairAttempted || germanClientRepairAttempted || englishClientRepairAttempted
-        ),
-        // AAB-323: repairApplied only when a repaired candidate was actually selected.
-        summaryRepairApplied: Boolean(
-          success
-          && (germanMaterialRepairApplied || englishMaterialRepairApplied)
-          && result.origin !== 'deterministic_fallback'
-        ),
-        summaryRepairValidationPassed: (
-          summaryRepairAttempted || germanClientRepairAttempted || englishClientRepairAttempted
-        )
-          ? Boolean(
-            success
-            && (germanMaterialRepairApplied || englishMaterialRepairApplied)
-            && result.origin !== 'deterministic_fallback'
-          )
-          : null,
-        summaryDurationRepairApplied: durationRepairApplied,
         providerRejectionReason: hindiProviderRejectionReason
           || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
@@ -4202,6 +4378,59 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || germanProviderRejectionReason
           || englishProviderRejectionReason
           || result.diagnostics?.providerRejectionReason,
+        providerTypedRejectionReason: locale === 'hi'
+          ? (hindiProviderRejectionReason
+            || hindiProviderQuality?.typedRejectionReason
+            || null)
+          : locale === 'sr'
+            ? (serbianProviderRejectionReason || null)
+          : (croatianProviderRejectionReason
+            || japaneseProviderRejectionReason
+            || spanishProviderRejectionReason
+            || germanProviderRejectionReason
+            || englishProviderRejectionReason
+            || result.diagnostics?.providerRejectionReason
+            || null),
+        currentIntroSlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr') && empQ
+          ? Boolean((empQ as { currentIntroSlotPresent?: boolean }).currentIntroSlotPresent)
+          : undefined,
+        currentDutySlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr') && empQ
+          ? Boolean((empQ as { currentDutySlotPresent?: boolean }).currentDutySlotPresent)
+          : undefined,
+        priorRoleSlotPresent: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr') && empQ
+          ? Boolean((empQ as { priorRoleSlotPresent?: boolean }).priorRoleSlotPresent)
+          : undefined,
+        slotValidationPassed: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr') && empQ
+          ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed)
+          : undefined,
+        slotRejectionReasons: (locale === 'hi' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr') && empQ
+          ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
+          : undefined,
+        summaryRepairAttempted: Boolean(
+          summaryRepairAttempted
+          || germanClientRepairAttempted
+          || englishClientRepairAttempted
+          || serbianClientRepairAttempted
+        ),
+        // AAB-323: repairApplied only when a repaired candidate was actually selected.
+        summaryRepairApplied: Boolean(
+          success
+          && (germanMaterialRepairApplied || englishMaterialRepairApplied || serbianMaterialRepairApplied)
+          && result.origin !== 'deterministic_fallback'
+        ),
+        summaryRepairValidationPassed: (
+          summaryRepairAttempted
+          || germanClientRepairAttempted
+          || englishClientRepairAttempted
+          || serbianClientRepairAttempted
+        )
+          ? Boolean(
+            success
+            && (germanMaterialRepairApplied || englishMaterialRepairApplied || serbianMaterialRepairApplied)
+            && result.origin !== 'deterministic_fallback'
+          )
+          : null,
+        summaryDurationRepairApplied: durationRepairApplied,
         providerUnsupportedClaimCount: japaneseProviderUnsupportedClaimCount
           ?? spanishProviderUnsupportedClaimCount
           ?? germanProviderUnsupportedClaimCount
@@ -4421,6 +4650,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   }
 
   // Fresh entry-owned rebuild — never seed from provider/previous Summary prose.
+  serbianEntryOwnedBuilderAttempted = locale === 'sr' && serbianEntryOwnedBuilderAvailable;
   deterministicCandidateRaw = normalizeLocaleText(
     deterministicLocalizedSummaryFromCanonical(
       factSet,
@@ -4430,6 +4660,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ) || '',
     locale,
   );
+  if (locale === 'sr') {
+    serbianEntryOwnedBuilderAttempted = true;
+    serbianEntryOwnedBuilderOutputLength = deterministicCandidateRaw.length;
+    serbianEntryOwnedBuilderSentenceCount = countSummaryCandidateSentences(
+      deterministicCandidateRaw,
+      locale,
+    );
+    serbianEntryOwnedBuilderOutputHash = deterministicCandidateRaw.trim()
+      ? hashSummaryCandidate(deterministicCandidateRaw)
+      : null;
+    serbianEntryOwnedBuilderSucceeded = Boolean(deterministicCandidateRaw.trim());
+    if (!serbianEntryOwnedBuilderSucceeded) {
+      serbianEntryOwnedBuilderTypedFailureReason = 'serbian_entry_owned_builder_empty';
+    }
+  }
   previousSummaryTextUsedByDeterministicFallback = Boolean(
     deterministicCandidateRaw
     && liveSummary
@@ -4669,10 +4914,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     }
     // Deterministic candidate failed postconditions — keep fail-closed visible
     // Summary, but analyze the rebuild attempt (not empty/old prose) for
-    // candidate diagnostics. English mirrors Hindi so validators never see an
+    // candidate diagnostics. English/Hindi/Serbian mirror so validators never see an
     // empty string while a grounded rebuild hash is present.
-    if ((locale === 'hi' || locale === 'en') && groundedText.trim()) {
+    if ((locale === 'hi' || locale === 'en' || locale === 'sr') && groundedText.trim()) {
       void ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION;
+      if (locale === 'sr') {
+        serbianEntryOwnedBuilderSucceeded = false;
+        serbianEntryOwnedBuilderTypedFailureReason = second.reason
+          || first.reason
+          || 'serbian_entry_owned_builder_rejected';
+      }
       return attachSummaryDiag({
         blocked: true,
         reason: locale === 'hi' && !durationHashChainOk

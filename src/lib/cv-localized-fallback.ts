@@ -1483,7 +1483,8 @@ export function deterministicLocalizedSummaryFromCanonical(
   // Concise grounded summary (≤90 words): occupation + duration + duty meanings
   // + optional skill labels. Never invents achievements from skill names.
   const concise = buildConciseGroundedSummary(factSet, locale, gender, duration, {
-    includeSkills: true,
+    // Serbian entry-owned rebuild never invents a skills unit (AAB-349).
+    includeSkills: locale !== 'sr',
   }).trim();
   if (concise) return concise;
 

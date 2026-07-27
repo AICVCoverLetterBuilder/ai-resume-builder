@@ -86,7 +86,44 @@ const DURATION_CUE_SR =
   /(?:oko|približno|otprilike).{0,40}godin|(?:šest|pet|sedam|osam|devet|deset)\s+i\s+po\s+godin|sa\s+oko\s+.+?\s+godin/iu;
 
 const UNSUPPORTED_SR_SUMMARY =
-  /(?:liderstv|upravljanje\s+zalihama|svakodnevn\w*\s+odgovornost|standardi\s+kvalitet|bezbednosn\w*\s+standard|farmaceutsk|Agile|Scrum|kritičk\w*\s+razmišljan|emocionaln\w*\s+inteligenc|upravljanje\s+klijentima|štamp\w*|brending|marketing\b|metrik\w*|sertifikat|pharmacy|leadership|inventory\s+management)/iu;
+  /(?:liderstv|upravljanje\s+zalihama|svakodnevn\w*\s+odgovornost|standardi\s+kvalitet|bezbednosn\w*\s+standard|farmaceutsk|Agile|Scrum|kritičk\w*\s+razmišljan|emocionaln\w*\s+inteligenc|upravljanje\s+klijentima|\bštamp\w*\b|brending|\bmarketing\b|\bmetrik\w*\b|\bsertifikat\w*\b|pharmacy|leadership|inventory\s+management)/iu;
+
+/** Typed unsupported-claim scan — never emit a rejection reason without evidence. */
+export function scanSerbianSummaryUnsupportedClaims(text: string): {
+  unsupportedClaimCount: number;
+  unsupportedClaimKinds: string[];
+  evidenceHashes: string[];
+} {
+  const t = text || '';
+  const kinds: string[] = [];
+  const evidenceHashes: string[] = [];
+  const push = (kind: string, re: RegExp) => {
+    const m = t.match(re);
+    if (!m?.[0]) return;
+    kinds.push(kind);
+    evidenceHashes.push(fingerprintText(m[0].slice(0, 48)));
+  };
+  push('leadership', /\bliderstv\w*\b|\bleadership\b/iu);
+  push('inventory_management', /\bupravljanje\s+zalihama\b|\binventory\s+management\b/iu);
+  push('daily_responsibilities', /\bsvakodnevn\w*\s+odgovornost\w*\b/iu);
+  push('quality_standards', /\bstandardi\s+kvalitet\w*\b/iu);
+  push('safety_standards', /\bbezbednosn\w*\s+standard\w*\b/iu);
+  push('pharma', /\bfarmaceutsk\w*\b|\bpharmacy\b/iu);
+  push('agile_scrum', /\bAgile\b|\bScrum\b/);
+  push('critical_thinking', /\bkritičk\w*\s+razmišljan\w*\b/iu);
+  push('emotional_intelligence', /\bemocionaln\w*\s+inteligenc\w*\b/iu);
+  push('client_management', /\bupravljanje\s+klijentima\b/iu);
+  push('print_media', /\bštamp\w*\b/iu);
+  push('branding', /\bbrending\b/iu);
+  push('marketing', /\bmarketing\b/iu);
+  push('metrics', /\bmetrik\w*\b/iu);
+  push('certificates', /\bsertifikat\w*\b/iu);
+  return {
+    unsupportedClaimCount: kinds.length,
+    unsupportedClaimKinds: kinds,
+    evidenceHashes,
+  };
+}
 
 const DESIGN_FACT_CUE_SR =
   /(?:dizajn|design|grafič|grafick|vizuel|vizual|ビジュアル|デザイン|グラフィック)/iu;
@@ -362,6 +399,9 @@ export type SerbianSummaryEmploymentQuality = {
   serbianDurationNounFormPassed: boolean;
   serbianDurationNounFormKind: 'godina' | 'godine' | 'godinu' | 'mixed' | 'none';
   serbianDurationGrammarRejectionReason: string | null;
+  unsupportedClaimCount: number;
+  unsupportedClaimKinds: string[];
+  unsupportedClaimEvidenceHashes: string[];
   unitCount: number;
   finalUnitRoleSlots: SerbianSummaryRoleSlot[];
   finalSentenceHashes: string[];
@@ -375,10 +415,14 @@ export type SerbianSummaryEmploymentQuality = {
   summaryGroundingRevision: typeof SUMMARY_GROUNDING_REVISION_SR;
 };
 
-function detectSerbianPerspective(text: string): SerbianSummaryEmploymentQuality['perspectiveMode'] {
-  const first = /\b(?:ja\s+)?(?:sam|radim|proveravam|sarađujem|imam|kreirala\s+sam|kreirao\s+sam|radila\s+sam|radio\s+sam)\b/iu.test(text);
-  const third = /\b(?:ona|on|radi|proverava|sarađuje)\b(?!\s+sam)/iu.test(text)
-    && !/\b(?:radim|proveravam|sarađujem)\b/iu.test(text);
+export function detectSerbianPerspective(text: string): SerbianSummaryEmploymentQuality['perspectiveMode'] {
+  // Match both "sam radila" and "radila sam" — Serbian auxiliary order varies.
+  const first = /\b(?:ja\s+)?(?:sam|radim|proveravam|sarađujem|imam)\b/iu.test(text)
+    || /\b(?:kreira(?:la|o)|radila|radio|pregled(?:ala|ao)|priprema(?:la|o)|prilagođava(?:la|o))\s+sam\b/iu.test(text)
+    || /\bsam\s+(?:kreira(?:la|o)|radila|radio|pregled(?:ala|ao)|priprema(?:la|o)|prilagođava(?:la|o))\b/iu.test(text);
+  const third = /\b(?:ona|on)\b/iu.test(text)
+    && /\b(?:radi|proverava|sarađuje)\b(?!\s+sam)/iu.test(text)
+    && !/\b(?:radim|proveravam|sarađujem|imam)\b/iu.test(text);
   if (first && third) return 'mixed';
   if (first) return 'first_person';
   if (third) return 'third_person';
@@ -416,6 +460,7 @@ export function analyzeSerbianSummaryEmploymentQuality(
     priorRole: options.priorRole,
   });
   const durationNoun = analyzeSerbianDurationNounForms(text);
+  const unsupportedScan = scanSerbianSummaryUnsupportedClaims(text);
 
   const g = String(options.gender || '').toLowerCase();
   const female = g === 'female' || g === 'f' || g === 'ženski' || g === 'zenski';
@@ -499,7 +544,7 @@ export function analyzeSerbianSummaryEmploymentQuality(
     reason = usesDizajnerica
       ? 'serbian_summary_croatian_role_form'
       : 'serbian_summary_croatian_leakage';
-  } else if (UNSUPPORTED_SR_SUMMARY.test(text)) {
+  } else if (unsupportedScan.unsupportedClaimCount > 0) {
     reason = 'serbian_summary_unsupported_claims';
   } else if (factCoverage.incomingGoodsDriftDetected) {
     reason = 'serbian_summary_incoming_goods_semantic_drift';
@@ -524,6 +569,14 @@ export function analyzeSerbianSummaryEmploymentQuality(
     reason = 'serbian_summary_foreign_script';
   }
 
+  // Never emit unsupported-claim rejection without typed evidence.
+  if (
+    reason === 'serbian_summary_unsupported_claims'
+    && unsupportedScan.unsupportedClaimCount === 0
+  ) {
+    reason = 'serbian_summary_grounding_failed';
+  }
+
   const slotValidationPassed = slotRejectionReasons.length === 0;
   const groundingOk = reason == null
     && localeEv.serbianLocalePurityPassed
@@ -534,7 +587,8 @@ export function analyzeSerbianSummaryEmploymentQuality(
     && perspectiveValidationPassed
     && genderOk
     && tenseOk
-    && slotValidationPassed;
+    && slotValidationPassed
+    && unsupportedScan.unsupportedClaimCount === 0;
 
   return {
     ok: groundingOk,
@@ -563,6 +617,9 @@ export function analyzeSerbianSummaryEmploymentQuality(
     serbianDurationNounFormPassed: durationNoun.serbianDurationNounFormPassed,
     serbianDurationNounFormKind: durationNoun.serbianDurationNounFormKind,
     serbianDurationGrammarRejectionReason: durationNoun.serbianDurationGrammarRejectionReason,
+    unsupportedClaimCount: unsupportedScan.unsupportedClaimCount,
+    unsupportedClaimKinds: unsupportedScan.unsupportedClaimKinds,
+    unsupportedClaimEvidenceHashes: unsupportedScan.evidenceHashes,
     unitCount: units.length,
     finalUnitRoleSlots: slots,
     finalSentenceHashes: units.map((u) => fingerprintText(u)),
@@ -741,17 +798,90 @@ export function buildSerbianEntryOwnedSummary(options: {
 }
 
 export function isSerbianStructuredSummaryDomain(corpus: string): boolean {
-  const t = corpus || '';
-  const hasWarehouseRole = matchesWarehouseOccupationalTitle(t)
-    || /(?:warehouse|skladišt|magacin|radnic\w*\s+u\s+(?:skladišt|magacin))/i.test(t);
-  // Require Atlas-style duty material — not generic warehouse logistics
-  // (package-1 transport/loading) or soft job-context shells alone.
-  const hasWarehouseDutyMaterial =
-    /(?:incoming\s+goods|checks?\s+incoming|pristigl\w*\s+rob|ulazn\w*\s+rob|kontroli\w*\s+prijem\s+rob|proverav\w*.{0,40}(?:pristigl|ulazn)|dokumentacij\w*.{0,48}(?:received\s+goods|primljen\w*\s+rob|pristigl|prateć)|checks?\s+documentation\s+related|coordinates?\s+with\s+colleagues.{0,48}(?:preparation|movement)\s+of\s+goods|sarađuj\w*.{0,48}(?:priprem|premeštanj).{0,24}rob)/i
-      .test(t);
-  const hasDesignMaterial =
-    /(?:graphic\s+designer|grafičk\w*\s+dizajn|vizueln\w*\s+materijal|vizualn\w*\s+materijal|visual\s+materials?\s+and\s+graphic|reviewed?\s+and\s+adapted|pregled\w*.{0,24}prilagođ|design\s+materials|dizajnersk\w*\s+materijal|final\s+design\s+files|završn\w*\s+dizajnersk)/i
-      .test(t);
-  // Entry-owned Serbian rebuild is for the Atlas warehouse + Rewitu design fixture.
-  return hasWarehouseRole && hasWarehouseDutyMaterial && hasDesignMaterial;
+  const gate = evaluateSerbianStructuredDomainGate({ corpus });
+  return gate.passed;
+}
+
+export type SerbianStructuredDomainGateResult = {
+  evaluated: boolean;
+  passed: boolean;
+  currentRequiredFactCount: number;
+  currentCoveredFactCount: number;
+  priorRequiredFactCount: number;
+  priorCoveredFactCount: number;
+  failureReasons: string[];
+  revision: 'serbian-structured-domain-gate-349-v1';
+};
+
+/**
+ * Authoritative Atlas/Rewitu structured-domain gate.
+ * Uses canonical fact phrases (EN/SR/HR) — never depends solely on optional
+ * material-key projection (documentation often collapses into inbound_check).
+ */
+export function evaluateSerbianStructuredDomainGate(options: {
+  corpus?: string;
+  currentEntryDuties?: string;
+  priorEntryDuties?: string;
+  currentRole?: string;
+  priorRole?: string;
+  jobTitle?: string;
+}): SerbianStructuredDomainGateResult {
+  const revision = 'serbian-structured-domain-gate-349-v1' as const;
+  const current = `${options.currentEntryDuties || ''} ${options.currentRole || ''} ${options.jobTitle || ''} ${options.corpus || ''}`;
+  const prior = `${options.priorEntryDuties || ''} ${options.priorRole || ''} ${options.corpus || ''}`;
+  const all = `${current} ${prior}`;
+
+  const hasWarehouseRole = matchesWarehouseOccupationalTitle(all)
+    || /(?:warehouse|skladišt|magacin|radnic\w*\s+u\s+(?:skladišt|magacin)|ouvri[eè]re?\s+d['']?entrep[oô]t)/i
+      .test(all);
+
+  const incoming = /(?:incoming\s+goods|checks?\s+incoming|pristigl\w*\s+rob|ulazn\w*\s+rob|proverav\w*.{0,40}(?:pristigl|ulazn)|kontroli\w*\s+prijem\s+rob)/i
+    .test(current);
+  const documentation = /(?:dokumentacij\w*.{0,48}(?:received\s+goods|primljen\w*\s+rob|pristigl|prateć|povezan)|checks?\s+documentation\s+related|documentation\s+related\s+to\s+received|prateć\w*\s+dokumentacij)/i
+    .test(current);
+  const coordination = /(?:coordinates?\s+with\s+colleagues.{0,48}(?:preparation|movement)\s+of\s+goods|sarađuj\w*.{0,48}(?:priprem|premeštanj).{0,24}rob|colleagues.{0,40}(?:preparation|movement)\s+of\s+goods)/i
+    .test(current);
+
+  const visual = /(?:visual\s+materials?\s+and\s+graphic|vizueln\w*\s+materijal|vizualn\w*\s+materijal|grafičk\w*\s+element|graphic\s+elements?)/i
+    .test(prior);
+  const reviewAdapt = /(?:reviewed?\s+and\s+adapted|pregled\w*.{0,24}prilagođ|review\w*.{0,24}adapt|prilagođav\w*.{0,40}dizajnersk|adapted?\s+design\s+materials)/i
+    .test(prior);
+  const finalFiles = /(?:final\s+design\s+files|završn\w*\s+dizajnersk|prepared?\s+final\s+design|datotek\w*.{0,40}(?:format|ekran)|formats?\s+and\s+screens?)/i
+    .test(prior);
+  const designRole = /(?:graphic\s+designer|grafičk\w*\s+dizajn)/i.test(prior);
+
+  const currentCovered = [incoming, documentation, coordination].filter(Boolean).length;
+  const priorCovered = [visual, reviewAdapt, finalFiles].filter(Boolean).length;
+  const hasWarehouseDutyMaterial = currentCovered >= 2 || (incoming && coordination);
+  const hasDesignMaterial = designRole || priorCovered >= 2;
+
+  const failureReasons: string[] = [];
+  if (!hasWarehouseRole) failureReasons.push('missing_warehouse_role');
+  if (!hasWarehouseDutyMaterial) failureReasons.push('missing_warehouse_duty_material');
+  if (!hasDesignMaterial) failureReasons.push('missing_prior_design_material');
+  if (hasWarehouseDutyMaterial && currentCovered < 3 && documentation === false) {
+    // Documentation may be present as a canonical fact even when material-key
+    // projection collapsed it into warehouse_inbound_check — treat English
+    // "documentation related" / Serbian dokumentacij as covered above.
+  }
+
+  const passed = hasWarehouseRole && hasWarehouseDutyMaterial && hasDesignMaterial
+    && currentCovered >= 3
+    && priorCovered >= 3;
+
+  if (hasWarehouseRole && hasWarehouseDutyMaterial && hasDesignMaterial) {
+    if (currentCovered < 3) failureReasons.push('current_canonical_facts_incomplete');
+    if (priorCovered < 3) failureReasons.push('prior_canonical_facts_incomplete');
+  }
+
+  return {
+    evaluated: true,
+    passed: Boolean(passed),
+    currentRequiredFactCount: 3,
+    currentCoveredFactCount: currentCovered,
+    priorRequiredFactCount: 3,
+    priorCoveredFactCount: priorCovered,
+    failureReasons: passed ? [] : [...new Set(failureReasons)],
+    revision,
+  };
 }

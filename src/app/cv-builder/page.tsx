@@ -2407,6 +2407,29 @@ export default function CVBuilderPage() {
     const previousContentLocale = liveCvAtPress.canonicalSnapshot?.canonicalLocale ?? null;
     latestRewriteRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
+    const primaryExpForRewrite = (liveCvAtPress.experience || []).find((e) => e.isPresent)
+      || (liveCvAtPress.experience || [])[0];
+    const rewriteJobContext = buildExperienceJobContext({
+      position: primaryExpForRewrite?.position || liveCvAtPress.personal?.jobTitle,
+      locale: requestedLocale,
+    });
+    const summaryDiag = new SummaryAiDiagnosticSession({
+      uiLocale: locale,
+      requestedLocale,
+      contentLocale: previousContentLocale || liveCvAtPress.contentLocale || null,
+      templateId: String(liveCvAtPress.templateId || ''),
+      gender: liveCvAtPress.personal.gender || '',
+      requestId: reqCtx.requestId,
+      usageCountBefore: countBefore,
+      operationMode,
+      rewriteStyle: style,
+      jobContextHash: rewriteJobContext.key,
+    });
+    summaryDiag.recordCvSnapshot(liveCvAtPress, liveSummaryAtPress);
+    summaryDiag.patch({
+      previousSummaryUsedAsFactSource: false,
+      rewriteStyle: style,
+    });
     try {
       const { data: rewriteData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
         body: {
@@ -2505,12 +2528,14 @@ export default function CVBuilderPage() {
         cv: liveNow,
         candidate: (rewriteData.result ?? liveSummaryAtPress).trim(),
         durationSnapshot,
+        rewriteStyle: style,
         originHint: rewriteData.fallbackUsed
           ? 'deterministic_fallback'
           : rewriteData.repairAttempted
             ? 'ai_repaired'
             : 'ai_generated',
       });
+      summaryDiag.recordFinalizeResult(finalizedGate);
       if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
         const failCode = mapExperienceAiFailureToErrorCode(
           finalizedGate.reason
@@ -2537,11 +2562,40 @@ export default function CVBuilderPage() {
           applied: false,
           reason: finalizedGate.reason || failCode,
         });
+        summaryDiag.recordVisibleApply(false, countBefore);
+        try {
+          await summaryDiag.resolveVersions();
+          summaryDiag.commit();
+        } catch { /* ignore diag commit failures */ }
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
+        return;
+      }
+      const preApplyGate = summaryDiag.evaluatePreApplyDecisionGates();
+      if (!preApplyGate.passed) {
+        const failCode = mapExperienceAiFailureToErrorCode(
+          preApplyGate.reason || 'diagnostic_invariant_failed',
+        );
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: failCode, httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
+        try {
+          await summaryDiag.resolveVersions();
+          summaryDiag.commit();
+        } catch { /* ignore */ }
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
       recordProAiSuccess();
+      summaryDiag.recordVisibleApply(true, countBefore, finalizedGate.text);
+      summaryDiag.patch({ usageCountAfter: countBefore + 1 });
       finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
@@ -2577,6 +2631,10 @@ export default function CVBuilderPage() {
         clientAborted: false,
         applied: true,
       });
+      try {
+        await summaryDiag.resolveVersions();
+        summaryDiag.commit();
+      } catch { /* ignore */ }
       toast.success(`${t.cv.rewriteSuccess} (${t.cv[style === 'shorter' ? 'short' : style === 'stronger' ? 'strong' : 'professional']})`);
     } catch (err) {
       const payload = resolveAiHttpFailure({ response: null, error: err });
@@ -2588,6 +2646,12 @@ export default function CVBuilderPage() {
         httpStatus: null,
         error: payload,
       });
+      summaryDiag.stage('api_response', 'fail', payload.code || 'network_error');
+      summaryDiag.recordVisibleApply(false, countBefore);
+      try {
+        await summaryDiag.resolveVersions();
+        summaryDiag.commit();
+      } catch { /* ignore */ }
       logAiClientRequestTiming({
         requestId: reqCtx.requestId,
         action: `rewrite_${style}`,

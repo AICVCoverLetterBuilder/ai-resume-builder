@@ -1385,6 +1385,7 @@ export class SummaryAiDiagnosticSession {
         diag.summaryRepairAttempted
         || diag.germanEmployerStatusRepairAttempted
         || diag.repairCandidatePresent
+        || diag.clientRepairAttempted
       ),
       repairCandidatePresent: Boolean(diag.repairCandidatePresent),
       repairAccepted: Boolean(diag.repairAccepted),
