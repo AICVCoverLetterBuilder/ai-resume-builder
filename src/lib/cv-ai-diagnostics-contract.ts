@@ -27,6 +27,9 @@ import {
 } from './cv-german-summary-current-duty-coverage';
 export { SUMMARY_REPAIR_SELECTION_TRUTH_323_REVISION } from './cv-german-summary-current-duty-coverage';
 import {
+  SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION,
+} from './cv-english-summary-grounding';
+import {
   experienceFactAuthorityKindsEquivalent,
   EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
 } from './cv-experience-authority-snapshot-327';
@@ -479,6 +482,10 @@ type SummaryLike = {
   structuredDurationMonths?: number | null;
   raceGuardResult?: string | null;
   finalValidatedCandidateHash?: string | null;
+  groundingInputCandidateHash?: string | null;
+  deterministicCandidateHash?: string | null;
+  deterministicCandidateSentenceCount?: number | null;
+  groundingInputEqualsFinalValidatedCandidate?: boolean | null;
   visibleCandidateHashAfterApply?: string | null;
   finalUnitRoleSlots?: string[] | null;
   currentIntroSlotPresent?: boolean | null;
@@ -522,6 +529,15 @@ type SummaryLike = {
   finalSlotValidationPassed?: boolean | null;
   repairAccepted?: boolean | null;
   repairCandidatePresent?: boolean | null;
+  repairRawCandidatePresent?: boolean | null;
+  repairRawCandidateHash?: string | null;
+  repairRawCandidateLength?: number | null;
+  repairParseAttempted?: boolean | null;
+  repairParseSucceeded?: boolean | null;
+  repairParsedUnitCount?: number | null;
+  repairParsedSentenceCount?: number | null;
+  repairUsableCandidatePresent?: boolean | null;
+  repairTypedFailureReason?: string | null;
   repairCandidateHash?: string | null;
   providerAccepted?: boolean | null;
   providerCandidateHash?: string | null;
@@ -1279,6 +1295,50 @@ export function checkSummaryDiagnosticInvariants(
         push('selected_deterministic_sentence_hash_mismatch', {
           deterministicHash: String(detRec.hash),
           finalHash: String(finalRec.hash),
+        });
+      }
+    }
+    // AAB-347 — selected candidate projection agreement (no 34-char placeholders).
+    if (
+      String(trace.requestedLocale || '') === 'en'
+      && trace.countedAsSuccess === true
+      && trace.deterministicAccepted === true
+    ) {
+      void SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION;
+      const finalHash = String(trace.finalValidatedCandidateHash || '');
+      const groundHash = String(trace.groundingInputCandidateHash || '');
+      const detHash = String(trace.deterministicCandidateHash || '');
+      if (finalHash && groundHash && finalHash !== groundHash) {
+        push('projection_grounding_final_hash_mismatch', {
+          groundingInputCandidateHash: groundHash,
+          finalValidatedCandidateHash: finalHash,
+        });
+      }
+      if (finalHash && detHash && finalHash !== detHash
+        && trace.groundingInputEqualsFinalValidatedCandidate !== true) {
+        push('projection_deterministic_final_hash_mismatch', {
+          deterministicCandidateHash: detHash,
+          finalValidatedCandidateHash: finalHash,
+        });
+      }
+      const sent = Array.isArray(trace.finalSentenceHashes)
+        ? trace.finalSentenceHashes.map(String)
+        : [];
+      const placeholder = sent.some((h) => /_l34_/.test(h) || /:unit:\d/.test(h));
+      if (placeholder) {
+        push('projection_placeholder_sentence_hashes', {
+          finalSentenceHashes: sent.join(','),
+        });
+      }
+      if (
+        typeof trace.deterministicCandidateSentenceCount === 'number'
+        && trace.deterministicCandidateSentenceCount > 0
+        && sent.length > 0
+        && sent.length !== trace.deterministicCandidateSentenceCount
+      ) {
+        push('projection_sentence_count_mismatch', {
+          deterministicCandidateSentenceCount: trace.deterministicCandidateSentenceCount,
+          finalSentenceHashCount: sent.length,
         });
       }
     }

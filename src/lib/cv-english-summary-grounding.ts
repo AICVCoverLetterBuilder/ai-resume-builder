@@ -64,6 +64,15 @@ export const ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION =
 /** English generated Summary perspective: first-person professional CV voice. */
 export const ENGLISH_SUMMARY_PERSPECTIVE_CONTRACT_346 =
   'english-summary-first-person-346-v1' as const;
+/** AAB-347 — summaryPasses role must match localized builder / attachSummaryDiag. */
+export const ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION =
+  'english-summary-validation-role-align-347-v1' as const;
+/** AAB-347 — never validate empty Summary while grounded rebuild text exists. */
+export const ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION =
+  'english-summary-grounded-failclosed-347-v1' as const;
+/** AAB-347 — candidate projection hash agreement across validation stages. */
+export const SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION =
+  'summary-candidate-projection-invariant-347-v1' as const;
 
 /**
  * Strict English Summary domain for the Atlas/Rewitu shared final gate.

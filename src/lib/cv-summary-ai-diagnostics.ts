@@ -306,6 +306,15 @@ export type SummaryAiDiagnosticTrace = {
   finalSlotValidationPassed?: boolean | null;
   finalSlotRejectionReasons?: string[] | null;
   repairCandidateHash?: string | null;
+  repairRawCandidatePresent?: boolean | null;
+  repairRawCandidateHash?: string | null;
+  repairRawCandidateLength?: number | null;
+  repairParseAttempted?: boolean | null;
+  repairParseSucceeded?: boolean | null;
+  repairParsedUnitCount?: number | null;
+  repairParsedSentenceCount?: number | null;
+  repairUsableCandidatePresent?: boolean | null;
+  repairTypedFailureReason?: string | null;
   repairTransformationKinds?: string[] | null;
   repairRejectionReasons?: string[] | null;
   germanEmployerStatusRepairAttempted?: boolean | null;
@@ -1094,6 +1103,15 @@ export class SummaryAiDiagnosticSession {
       finalSlotValidationPassed: diag.finalSlotValidationPassed ?? diag.slotValidationPassed ?? null,
       finalSlotRejectionReasons: diag.finalSlotRejectionReasons ?? diag.slotRejectionReasons ?? null,
       repairCandidateHash: diag.repairCandidateHash ?? null,
+      repairRawCandidatePresent: diag.repairRawCandidatePresent ?? null,
+      repairRawCandidateHash: diag.repairRawCandidateHash ?? diag.repairCandidateHash ?? null,
+      repairRawCandidateLength: diag.repairRawCandidateLength ?? null,
+      repairParseAttempted: diag.repairParseAttempted ?? null,
+      repairParseSucceeded: diag.repairParseSucceeded ?? null,
+      repairParsedUnitCount: diag.repairParsedUnitCount ?? null,
+      repairParsedSentenceCount: diag.repairParsedSentenceCount ?? null,
+      repairUsableCandidatePresent: diag.repairUsableCandidatePresent ?? null,
+      repairTypedFailureReason: diag.repairTypedFailureReason ?? null,
       repairTransformationKinds: diag.repairTransformationKinds ?? null,
       repairRejectionReasons: diag.repairRejectionReasons ?? null,
       germanEmployerStatusRepairAttempted: diag.germanEmployerStatusRepairAttempted ?? null,
@@ -1574,23 +1592,40 @@ export class SummaryAiDiagnosticSession {
           materialRepairSelected && finalized.countedAsSuccess,
         );
         if (repairAttempted || materialRepairSelected) {
+          const repairUsable = Boolean(
+            diag.repairUsableCandidatePresent
+            ?? (materialRepairSelected && finalized.countedAsSuccess),
+          );
+          const repairRawPresent = Boolean(
+            diag.repairRawCandidatePresent
+            ?? diag.repairCandidatePresent
+            ?? materialRepairSelected,
+          );
           lineage.push({
             candidateKind: 'repaired_provider',
-            present: Boolean(diag.repairCandidatePresent || materialRepairSelected),
+            present: repairRawPresent,
             hash: diag.repairCandidateHash
+              ?? diag.repairRawCandidateHash
               ?? (repairAccepted ? (diag.finalValidatedCandidateHash ?? null) : null),
             normalizedHash: diag.repairCandidateHash
+              ?? diag.repairRawCandidateHash
               ?? (repairAccepted ? (diag.finalValidatedCandidateHash ?? null) : null),
-            unitCount: repairAccepted ? resolvedFinalUnitCount : 0,
-            unitHashes: repairAccepted ? resolvedFinalHashes : [],
-            sentenceCount: repairAccepted ? resolvedFinalUnitCount : 0,
-            sentenceHashes: repairAccepted ? resolvedFinalHashes : [],
-            sentenceRoleSlots: repairAccepted ? resolvedFinalRoleSlots : [],
+            // Usable/accepted repair only — raw-but-unusable must not claim unitCount>0
+            // with empty unitHashes (candidate_unit_hash_count_mismatch).
+            unitCount: repairUsable && repairAccepted ? resolvedFinalUnitCount : 0,
+            unitHashes: repairUsable && repairAccepted ? resolvedFinalHashes : [],
+            sentenceCount: repairUsable && repairAccepted ? resolvedFinalUnitCount : 0,
+            sentenceHashes: repairUsable && repairAccepted ? resolvedFinalHashes : [],
+            sentenceRoleSlots: repairUsable && repairAccepted ? resolvedFinalRoleSlots : [],
             accepted: repairAccepted,
             rejectionStage: repairAccepted
               ? null
-              : (diag.repairRejectionReasons?.length ? 'employer_status_validation' : null),
-            rejectionReasons: dedupeStableStrings(diag.repairRejectionReasons || []),
+              : (diag.repairTypedFailureReason
+                || (diag.repairRejectionReasons?.length ? 'employer_status_validation' : null)),
+            rejectionReasons: dedupeStableStrings([
+              ...(diag.repairRejectionReasons || []),
+              ...(diag.repairTypedFailureReason ? [diag.repairTypedFailureReason] : []),
+            ]),
             grammarValidationPassed: repairAccepted ? true : null,
             groundingValidationPassed: repairAccepted ? true : false,
             durationValidationPassed: repairAccepted ? durationValidationPassed : null,

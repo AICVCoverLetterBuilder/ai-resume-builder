@@ -184,6 +184,9 @@ describe('AAB-346 English Summary empty-generation', () => {
     expect(ENGLISH_SUMMARY_PERSPECTIVE_CONTRACT_346).toBe('english-summary-first-person-346-v1');
     expect(SUMMARY_RUNTIME_MARKER_SET).toContain(SUMMARY_BUILDER_REVISION_EN);
     expect(SUMMARY_RUNTIME_MARKER_SET).toContain(ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION);
+    expect(SUMMARY_RUNTIME_MARKER_SET).toContain('english-summary-validation-role-align-347-v1');
+    expect(SUMMARY_RUNTIME_MARKER_SET).toContain('english-summary-grounded-failclosed-347-v1');
+    expect(SUMMARY_RUNTIME_MARKER_SET).toContain('summary-candidate-projection-invariant-347-v1');
   });
 
   it('exact device empty-generation: provider missing prior → empty repair → deterministic apply', () => {
@@ -597,5 +600,130 @@ describe('AAB-346 English Summary empty-generation', () => {
     const failTrace = failSession.commit();
     expect(failTrace.usageCountAfter).toBe(21);
     expect(failTrace.visibleApplySucceeded).toBe(false);
+  });
+
+  it('AAB-347: French structured role + HR Experience still selects full EN deterministic', () => {
+    const FR = "Employ\u00e9e d'entrep\u00f4t";
+    const WH_HR = [
+      'Provjerava ulaznu robu.',
+      'Provjerava dokumentaciju povezanu s primljenom robom.',
+      'Koordinira s kolegama pripremu i kretanje robe.',
+    ].join('\n');
+    const GD_HR = [
+      'Stvara vizualne materijale i grafičke elemente.',
+      'Pregledava i prilagođava dizajnerske materijale.',
+      'Priprema konačne dizajnerske datoteke za različite formate i ekrane.',
+    ].join('\n');
+    const EXPECTED_HASH = 'fnv1a_ac83446e_l465_b73_e46';
+    const SENT0 = 'fnv1a_2b446a2a_l254_b73_e46';
+    const SENT1 = 'fnv1a_2339b7c1_l210_b80_e46';
+    const PLACEHOLDER0 = 'fnv1a_d1fd75c5_l34_b102_e48';
+    const PLACEHOLDER1 = 'fnv1a_d0fd7432_l34_b102_e49';
+
+    const cv = {
+      personal: {
+        fullName: 'Test User',
+        email: 't@example.com',
+        phone: '',
+        location: '',
+        jobTitle: FR,
+        gender: 'female',
+      },
+      summary: '',
+      contentLocale: 'hi',
+      experience: [
+        {
+          id: 'atlas',
+          position: FR,
+          company: 'Atlas',
+          startDate: '2023-01',
+          endDate: '',
+          isPresent: true,
+          description: WH_HR,
+          canonicalDescription: WH_EN,
+          originalUserDescription: WH_EN,
+          generatedDescription: WH_HR,
+          generatedLocale: 'hr',
+          descriptionOrigin: 'ai_generated',
+        },
+        {
+          id: 'rewitu',
+          position: 'Graphic Designer',
+          company: 'Rewitu',
+          startDate: '2020-01',
+          endDate: '2022-12',
+          isPresent: false,
+          description: GD_HR,
+          canonicalDescription: GD_EN,
+          originalUserDescription: GD_EN,
+          generatedDescription: GD_HR,
+          generatedLocale: 'hr',
+          descriptionOrigin: 'ai_generated',
+        },
+      ],
+      education: [],
+      skills: [],
+      languages: [],
+    } as CVData;
+
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_generate',
+      field: 'summary',
+      requestedLocale: 'en',
+      gender: 'female',
+      cv,
+      candidate: PROVIDER_MISSING_PRIOR,
+      referenceDateIso: '2026-07-20',
+    });
+
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.blocked).toBe(false);
+    expect(fin.origin).toBe('deterministic_fallback');
+    expect((fin.text || '').length).toBe(465);
+    expect(fin.diagnostics?.deterministicCandidateHash).toBe(EXPECTED_HASH);
+    expect(fin.diagnostics?.groundingInputCandidateHash).toBe(EXPECTED_HASH);
+    expect(fin.diagnostics?.finalValidatedCandidateHash).toBe(EXPECTED_HASH);
+    expect(fin.diagnostics?.groundingInputEqualsFinalValidatedCandidate).toBe(true);
+    expect(fin.diagnostics?.evaluatedSentenceHashes).toEqual([SENT0, SENT1]);
+    expect(fin.diagnostics?.evaluatedSentenceHashes).not.toEqual([PLACEHOLDER0, PLACEHOLDER1]);
+    expect(fin.diagnostics?.coveredCurrentDutyFactCount).toBe(3);
+    expect(fin.diagnostics?.coveredPriorDutyFactCount).toBe(3);
+    expect(fin.diagnostics?.grammarValidationPassed).toBe(true);
+    expect(fin.diagnostics?.slotValidationPassed).toBe(true);
+    expect(fin.diagnostics?.durationClaimCountAfterFinalize).toBe(1);
+    expect(fin.diagnostics?.englishSummaryFragmentDetected).toBe(false);
+    expect(fin.diagnostics?.slotRejectionReasons || []).not.toContain('target_locale_unit_mismatch');
+    expect(fin.diagnostics?.slotRejectionReasons || []).not.toContain('english_summary_sentence_fragment');
+    expect(fin.diagnostics?.deterministicAccepted).toBe(true);
+    expect(fin.diagnostics?.finalCandidateSource).toBe('deterministic_fallback');
+
+    const session = new SummaryAiDiagnosticSession({
+      uiLocale: 'en',
+      requestedLocale: 'en',
+      contentLocale: 'hi',
+      templateId: 't',
+      gender: 'female',
+      requestId: 'req-347-fr',
+      usageCountBefore: 21,
+      operationMode: 'generate_from_context',
+      jobContextHash: 'j',
+    });
+    session.recordCvSnapshot(cv, '');
+    session.recordFinalizeResult(fin);
+    const pre = session.evaluatePreApplyDecisionGates();
+    expect(pre.passed).toBe(true);
+    session.recordVisibleApply(true, 22, fin.text);
+    const trace = session.commit();
+    expect(trace.visibleApplySucceeded).toBe(true);
+    expect(trace.countedAsSuccess).toBe(true);
+    expect(trace.usageCountAfter).toBe(22);
+    const det = (trace.candidateLineage || [])
+      .find((c) => c.candidateKind === 'client_deterministic');
+    expect(det?.unitHashes).toEqual([SENT0, SENT1]);
+    expect(det?.unitHashes).not.toEqual([PLACEHOLDER0, PLACEHOLDER1]);
+    const finalSel = (trace.candidateLineage || [])
+      .find((c) => c.candidateKind === 'final_selected');
+    expect(finalSel?.present).toBe(true);
+    expect(finalSel?.accepted).toBe(true);
   });
 });

@@ -113,6 +113,9 @@ import {
   SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
   SUMMARY_BUILDER_REVISION_EN,
   ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION,
+  ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION,
+  ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION,
+  SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION,
   stripEnglishUnsupportedCompetencyUnits,
 } from './cv-summary-grounding';
 import {
@@ -661,9 +664,15 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_SENTENCE_SEMANTIC_ROLE_TRUTH_326_REVISION,
   SUMMARY_BUILDER_REVISION_EN,
   ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION,
+  ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION,
+  ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION,
+  SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_EN;
 void ENGLISH_SUMMARY_FINITE_CLAUSE_346_REVISION;
+void ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION;
+void ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION;
+void SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION;
 void SUMMARY_BUILDER_REVISION_RU;
 void SUMMARY_UNIT_SPLITTER_REVISION_RU;
 void SUMMARY_GROUNDING_REVISION_RU;
@@ -1229,6 +1238,15 @@ export type FinalizeCvAiFieldResult = {
     summaryRepairApplied?: boolean;
     summaryDurationRepairApplied?: boolean;
     repairCandidatePresent?: boolean;
+    repairRawCandidatePresent?: boolean;
+    repairRawCandidateHash?: string | null;
+    repairRawCandidateLength?: number | null;
+    repairParseAttempted?: boolean;
+    repairParseSucceeded?: boolean;
+    repairParsedUnitCount?: number | null;
+    repairParsedSentenceCount?: number | null;
+    repairUsableCandidatePresent?: boolean;
+    repairTypedFailureReason?: string | null;
     repairAccepted?: boolean;
     repairSelected?: boolean;
     repairApplied?: boolean;
@@ -1817,17 +1835,30 @@ function summaryPasses(
     }
   } else if (locale === 'en') {
     void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
+    void ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
-    const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''}`;
+    // Include the candidate itself so foreign live Experience display cannot
+    // drop a correct English warehouse/design Summary out of the structured gate.
+    const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''} ${summary || ''}`;
     const englishStructuredDomain = isEnglishStructuredSummaryDomain(dutiesCorpus);
     if (englishStructuredDomain) {
       const structuredSkills = (cv.skills || [])
         .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
         .filter(Boolean);
+      // Must match buildDurationContext / attachSummaryDiag — never validate
+      // English visible prose against raw foreign structured titles (e.g. FR
+      // Employée d'entrepôt) while the builder emits localized Warehouse Employee.
+      const localizedRole = resolveOccupationalTitleForSummary({
+        profileJobTitle: cv.personal?.jobTitle,
+        currentExperienceTitle: primary?.position,
+        locale: 'en',
+        gender: cv.personal?.gender || '',
+        dutiesText: entryDuties.currentEntryDuties,
+      });
       const empQ = analyzeEnglishSummaryEmploymentQuality(summary, {
         company: primary?.company || '',
-        role: primary?.position || cv.personal?.jobTitle || '',
+        role: localizedRole || primary?.position || cv.personal?.jobTitle || '',
         currentEntryDuties: entryDuties.currentEntryDuties,
         priorEntryDuties: entryDuties.priorEntryDuties,
         priorCompany: entryDuties.priorCompany,
@@ -2110,6 +2141,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let englishClientRepairAttempted = false;
   let englishMaterialRepairApplied = false;
   let englishRepairCandidateHash: string | null = null;
+  let englishRepairRawText = '';
+  let englishRepairParseAttempted = false;
+  let englishRepairParseSucceeded = false;
+  let englishRepairParsedUnitCount = 0;
+  let englishRepairParsedSentenceCount = 0;
+  let englishRepairTypedFailureReason: string | null = null;
   let hindiProviderQuality: ReturnType<typeof analyzeHindiSummaryEmploymentQuality> | null = null;
   let hindiProviderRejectionReason: string | null = null;
   const deterministicCurrentEntryIdHash: string | null = entryDutiesForRole.currentEntryId
@@ -2666,7 +2703,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
       // Use raw CV role titles — never localized context.role (Warehouse Employee),
       // which falsely activates the Spanish/German Atlas gate on Serbian cycles.
-      const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''}`;
+      const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''} ${candidate || ''}`;
       const englishStructuredDomain = isEnglishStructuredSummaryDomain(dutiesCorpus);
       // Only apply the strict Atlas/Rewitu-class gate for structured warehouse/design domains.
       if (englishStructuredDomain) {
@@ -2691,17 +2728,35 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           if (empQuality.competencyScan.unsupportedCompetencyCount > 0) {
             const stripped = stripEnglishUnsupportedCompetencyUnits(candidate);
             if (stripped.trim() && stripped !== candidate) {
+              englishRepairRawText = stripped.replace(/\s+/g, ' ').trim();
+              englishRepairCandidateHash = hashSummaryCandidate(stripped);
+              englishRepairParseAttempted = true;
               const repaired = analyzeEn(stripped);
-              if (repaired.groundingValidationPassed && repaired.slotValidationPassed) {
+              const repairedUnits = (stripped || '')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .split(/(?<=[.!?])\s+(?=\S)/u)
+                .map((u) => u.trim())
+                .filter(Boolean);
+              englishRepairParsedUnitCount = repairedUnits.length;
+              englishRepairParsedSentenceCount = repaired.finalSentenceHashes?.length
+                ?? repairedUnits.length;
+              englishRepairParseSucceeded = Boolean(
+                repaired.groundingValidationPassed
+                && repaired.slotValidationPassed
+                && englishRepairParsedUnitCount > 0
+                && englishRepairParsedSentenceCount > 0,
+              );
+              if (englishRepairParseSucceeded) {
                 candidate = stripped;
                 empQuality = repaired;
                 englishMaterialRepairApplied = true;
-                englishRepairCandidateHash = hashSummaryCandidate(stripped);
               } else {
                 candidate = stripped;
                 empQuality = repaired;
-                // Non-empty repair text that still fails grounding — keep hash for lineage.
-                englishRepairCandidateHash = hashSummaryCandidate(stripped);
+                englishRepairTypedFailureReason = repaired.typedRejectionReason
+                  || repaired.slotRejectionReasons[0]
+                  || 'english_repair_unusable';
               }
             }
           }
@@ -2928,7 +2983,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                   })
                   : locale === 'en'
                     && isEnglishStructuredSummaryDomain(
-                      `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''}`,
+                      `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''} ${analyzedText}`,
                     )
                     ? analyzeEnglishSummaryEmploymentQuality(analyzedText, {
                       company: context.company || entryDuties.currentCompany,
@@ -3229,6 +3284,34 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           Boolean(germanRepairCandidateHash)
           || Boolean(englishRepairCandidateHash)
         ),
+        repairRawCandidatePresent: Boolean(
+          englishRepairRawText.trim() || germanRepairCandidateHash,
+        ),
+        repairRawCandidateHash: englishRepairCandidateHash || germanRepairCandidateHash || null,
+        repairRawCandidateLength: englishRepairRawText.trim()
+          ? englishRepairRawText.trim().length
+          : null,
+        repairParseAttempted: Boolean(
+          englishRepairParseAttempted || germanEmployerStatusRepairAttempted,
+        ),
+        repairParseSucceeded: Boolean(
+          englishRepairParseSucceeded
+          || (germanMaterialRepairApplied && germanRepairCandidateHash),
+        ),
+        repairParsedUnitCount: englishRepairParseAttempted
+          ? englishRepairParsedUnitCount
+          : (germanMaterialRepairApplied ? null : 0),
+        repairParsedSentenceCount: englishRepairParseAttempted
+          ? englishRepairParsedSentenceCount
+          : (germanMaterialRepairApplied ? null : 0),
+        repairUsableCandidatePresent: Boolean(
+          (englishMaterialRepairApplied && englishRepairParseSucceeded)
+          || germanMaterialRepairApplied,
+        ),
+        repairTypedFailureReason: englishRepairTypedFailureReason
+          || (englishRepairParseAttempted && !englishRepairParseSucceeded
+            ? 'repair_unusable_zero_units'
+            : null),
         repairAccepted: Boolean(
           success
           && (germanMaterialRepairApplied || englishMaterialRepairApplied)
@@ -4403,12 +4486,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       });
     }
     // Deterministic candidate failed postconditions — keep fail-closed visible
-    // Summary, but analyze the rebuild attempt (not provider/old prose) for
-    // candidate diagnostics when Hindi grounding is the failure mode.
-    if (locale === 'hi' && groundedText.trim()) {
+    // Summary, but analyze the rebuild attempt (not empty/old prose) for
+    // candidate diagnostics. English mirrors Hindi so validators never see an
+    // empty string while a grounded rebuild hash is present.
+    if ((locale === 'hi' || locale === 'en') && groundedText.trim()) {
+      void ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION;
       return attachSummaryDiag({
         blocked: true,
-        reason: !durationHashChainOk
+        reason: locale === 'hi' && !durationHashChainOk
           ? 'experience_duration_mismatch'
           : (second.reason || first.reason || 'summary_grounding_failed'),
         text: groundedText,
