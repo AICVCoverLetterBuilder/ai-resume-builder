@@ -60,6 +60,38 @@ import {
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
 } from './cv-croatian-summary-grounding';
 import {
+  analyzeSerbianSummaryEmploymentQuality,
+  buildSerbianEntryOwnedSummary,
+  isSerbianStructuredSummaryDomain,
+  injectSerbianTotalDurationSentence,
+  SUMMARY_BUILDER_REVISION_SR,
+  SUMMARY_GROUNDING_REVISION_SR,
+  SUMMARY_UNIT_SPLITTER_REVISION_SR,
+  SUMMARY_DURATION_FINALIZER_REVISION_SR,
+  SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION,
+  SERBIAN_SUMMARY_ROLE_ALIGN_348_REVISION,
+  SERBIAN_SUMMARY_DURATION_SCOPE_348_REVISION,
+  SERBIAN_SUMMARY_FACT_FIDELITY_348_REVISION,
+} from './cv-serbian-summary-grounding';
+export {
+  analyzeSerbianSummaryEmploymentQuality,
+  buildSerbianEntryOwnedSummary,
+  isSerbianStructuredSummaryDomain,
+  injectSerbianTotalDurationSentence,
+  analyzeSerbianCroatianLocaleEvidence,
+  analyzeSerbianSummaryDurationScope,
+  analyzeSerbianSummaryFactCoverage,
+  repairSerbianSummaryProviderCandidate,
+  SUMMARY_BUILDER_REVISION_SR,
+  SUMMARY_GROUNDING_REVISION_SR,
+  SUMMARY_UNIT_SPLITTER_REVISION_SR,
+  SUMMARY_DURATION_FINALIZER_REVISION_SR,
+  SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION,
+  SERBIAN_SUMMARY_ROLE_ALIGN_348_REVISION,
+  SERBIAN_SUMMARY_DURATION_SCOPE_348_REVISION,
+  SERBIAN_SUMMARY_FACT_FIDELITY_348_REVISION,
+} from './cv-serbian-summary-grounding';
+import {
   analyzeGermanSummaryEmploymentQuality,
   buildGermanEntryOwnedSummary,
   germanWarehouseSummaryFragment,
@@ -1677,7 +1709,7 @@ export function buildConciseGroundedSummary(
   const uniqueFragments = [...new Set(fragments.map((f) => f.trim()).filter(Boolean))];
   // When duties exist but none could be safely localized into concise fragments,
   // defer to the legacy localized shell — except dedicated entry-owned packages
-  // (Hindi/Arabic/Russian) which rebuild from material keys, not fragments.
+  // (Hindi/Arabic/Russian/Serbian/…) which rebuild from material keys, not fragments.
   if (
     dutyFacts.length > 0
     && uniqueFragments.length === 0
@@ -1689,6 +1721,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'de'
     && locale !== 'es'
     && locale !== 'en'
+    && locale !== 'sr'
   ) {
     return '';
   }
@@ -2024,15 +2057,51 @@ export function buildConciseGroundedSummary(
       text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
     }
   } else if (locale === 'sr') {
-    const dutyJoin = joinDutyFragments(uniqueFragments, locale);
-    const open = dutyJoin
-      ? (durationPhrase
-        ? `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')} ${durationPhrase} u ${dutyJoin}`
-        : `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')} sa iskustvom u ${dutyJoin}`)
-      : (durationPhrase
-        ? `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')} ${durationPhrase}`
-        : `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')}`);
-    text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    void SUMMARY_BUILDER_REVISION_SR;
+    void SUMMARY_GROUNDING_REVISION_SR;
+    void SUMMARY_UNIT_SPLITTER_REVISION_SR;
+    void SUMMARY_DURATION_FINALIZER_REVISION_SR;
+    void SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION;
+    void SERBIAN_SUMMARY_ROLE_ALIGN_348_REVISION;
+    void SERBIAN_SUMMARY_DURATION_SCOPE_348_REVISION;
+    void SERBIAN_SUMMARY_FACT_FIDELITY_348_REVISION;
+    void analyzeSerbianSummaryEmploymentQuality;
+    void injectSerbianTotalDurationSentence;
+    const domainCorpus = `${experienceTitle} ${profileTitle} ${sourceDuties} ${priorSourceDuties}`;
+    if (isSerbianStructuredSummaryDomain(domainCorpus)) {
+      const srRole = /(?:warehouse|skladišt|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+        ? role || 'Warehouse Employee'
+        : (role || 'Warehouse Employee');
+      text = buildSerbianEntryOwnedSummary({
+        role: srRole,
+        employer,
+        datesValue,
+        gender: genderNorm || '',
+        durationPhrase: durationPhrase || undefined,
+        dutyFacts,
+        priorRole: typeof priorIndex === 'number'
+          ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+          : '',
+        priorEmployer: typeof priorIndex === 'number'
+          ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+          : '',
+        priorSourceDuties,
+        locale: 'sr',
+        duration: duration || null,
+      });
+      skillSentence = '';
+      void skillSentence;
+    } else {
+      const dutyJoin = joinDutyFragments(uniqueFragments, locale);
+      const open = dutyJoin
+        ? (durationPhrase
+          ? `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')} ${durationPhrase} u ${dutyJoin}`
+          : `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')} sa iskustvom u ${dutyJoin}`)
+        : (durationPhrase
+          ? `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')} ${durationPhrase}`
+          : `${role || (g === 'female' ? 'Profesionalka' : 'Profesionalac')}`);
+      text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    }
   } else if (locale === 'en') {
     void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
     void analyzeEnglishSummaryEmploymentQuality;

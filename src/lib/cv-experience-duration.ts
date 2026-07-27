@@ -4,6 +4,7 @@
  */
 import type { WorkExperience } from './types';
 import type { Locale } from './i18n/translations';
+import { serbianYearNounForApproxYears } from './cv-serbian-grammar';
 
 export type ExperienceDuration = {
   totalMonths: number;
@@ -427,7 +428,10 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
   sr: {
     1: 'jedne', 1.5: 'jedne i po', 2: 'dve', 2.5: 'dve i po', 3: 'tri', 3.5: 'tri i po',
     4: 'četiri', 4.5: 'četiri i po', 5: 'pet', 5.5: 'pet i po', 6: 'šest', 6.5: 'šest i po',
-    7: 'sedam', 8: 'osam', 9: 'devet', 10: 'deset',
+    7: 'sedam', 7.5: 'sedam i po', 8: 'osam', 8.5: 'osam i po', 9: 'devet', 9.5: 'devet i po',
+    10: 'deset', 10.5: 'deset i po', 11: 'jedanaest', 11.5: 'jedanaest i po',
+    12: 'dvanaest', 12.5: 'dvanaest i po',
+    21: 'dvadeset jedne', 21.5: 'dvadeset jedne i po',
   },
   hr: {
     1: 'jedne', 1.5: 'jedne i pol', 2: 'dvije', 2.5: 'dvije i pol', 3: 'tri', 3.5: 'tri i pol',
@@ -625,8 +629,9 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
   const n = duration.approxYears;
   const word = yearWordForLocale(locale, n);
   const isHalf = !Number.isInteger(n);
-  // Serbian/Croatian: 1 godina, 2–4 godine, 5+ godina; half-years use godine.
-  const srYearNoun = isHalf || (n >= 2 && n <= 4) ? 'godine' : n === 1 ? 'godina' : 'godina';
+  // Serbian: half-years follow the whole-number paucal/genitive rule
+  // (2.5–4.5 → godine; 5.5+ → godina). Croatian Summary prefers invariant godina.
+  const srYearNoun = serbianYearNounForApproxYears(n);
   switch (locale) {
     case 'sr':
       return `sa oko ${word} ${srYearNoun} iskustva`;
@@ -702,12 +707,11 @@ export function repairSummaryDuration(
       return _m;
     },
   );
-  // Serbian / Croatian — preserve correct year-noun declension (incl. "dve i po")
-  const srNoun = (!Number.isInteger(target) || (target >= 2 && target <= 4))
-    ? 'godine'
-    : target === 1 ? 'godina' : 'godina';
+  // Serbian — correct year-noun declension for integers and half-years
+  // (šest i po godina, dve i po godine). Croatian keep mapped word + godina.
+  const srNoun = serbianYearNounForApproxYears(target);
   out = out.replace(
-    /\b(oko|približno|sa\s+oko|s\s+oko)\s+(jedne(?:\s+i\s+po)?|dvije?(?:\s+i\s+po)?|dve(?:\s+i\s+po)?|tri(?:\s+i\s+po)?|četiri|cetiri|pet|šest|sest|\d+(?:\.\d+)?)\s+godin\w*/giu,
+    /\b(oko|približno|sa\s+oko|s\s+oko)\s+(jedne(?:\s+i\s+po)?|dvije?(?:\s+i\s+po)?|dve(?:\s+i\s+po)?|tri(?:\s+i\s+po)?|četiri(?:\s+i\s+po)?|cetiri(?:\s+i\s+po)?|pet(?:\s+i\s+po)?|šest(?:\s+i\s+po)?|sest(?:\s+i\s+po)?|jedanaest(?:\s+i\s+po)?|dvanaest(?:\s+i\s+po)?|\d+(?:[.,]\d+)?)\s+godin\w*/giu,
     `$1 ${YEAR_WORD_BY_LOCALE.sr[target] || target} ${srNoun}`,
   );
   // Hindi — replace full duration spans including साढ़े compounds BEFORE bare digits,

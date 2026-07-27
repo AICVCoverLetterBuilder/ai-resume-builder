@@ -44,6 +44,12 @@ import {
   injectEnglishTotalDurationSentence,
   SUMMARY_DURATION_FINALIZER_REVISION_EN,
 } from './cv-english-summary-grounding';
+import {
+  injectSerbianTotalDurationSentence,
+  SUMMARY_DURATION_FINALIZER_REVISION_SR,
+  analyzeSerbianSummaryDurationScope,
+  isSerbianStructuredSummaryDomain,
+} from './cv-serbian-summary-grounding';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
 export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
@@ -54,6 +60,7 @@ export const SUMMARY_DURATION_FINALIZER_REVISION_JA = 'japanese-duration-idempot
 /** Retained build-287/288 marker — must remain present in packaged assets. */
 export const SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY = 'japanese-duration-idempotent-v1' as const;
 export { SUMMARY_DURATION_FINALIZER_REVISION_HR, SUMMARY_DURATION_FINALIZER_REVISION_HR_V2 };
+export { SUMMARY_DURATION_FINALIZER_REVISION_SR };
 void SUMMARY_DURATION_FINALIZER_REVISION_AR;
 void SUMMARY_DURATION_FINALIZER_REVISION_RU;
 void SUMMARY_DURATION_FINALIZER_REVISION_JA;
@@ -61,6 +68,7 @@ void SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR_V2;
 void SUMMARY_DURATION_FINALIZER_REVISION_DE;
+void SUMMARY_DURATION_FINALIZER_REVISION_SR;
 
 /** Local danda-aware split — avoid importing cv-summary-grounding (cycle via fallback). */
 function splitHindiSummaryUnitsLocal(text: string): string[] {
@@ -1160,6 +1168,22 @@ export function injectDurationPhrase(
     const phrase = formatApproximateDurationPhrase(duration, 'en');
     return injectEnglishTotalDurationSentence(text, phrase);
   }
+  if (locale === 'sr' && duration.hasValidDates) {
+    void SUMMARY_DURATION_FINALIZER_REVISION_SR;
+    const phrase = formatApproximateDurationPhrase(duration, 'sr');
+    // Preserve entry-owned total-career Serbian summaries; only relocate when
+    // duration is missing or attached to the current-role clause.
+    const scope = analyzeSerbianSummaryDurationScope(text);
+    if (scope.finalDurationScopeValidationPassed) {
+      return text;
+    }
+    if (
+      isSerbianStructuredSummaryDomain(text)
+      || /skladišt|warehouse|dizajnerk|dizajneric|pristigl\w*\s+rob/i.test(text)
+    ) {
+      return injectSerbianTotalDurationSentence(text, phrase);
+    }
+  }
   const phrase = formatApproximateDurationPhrase(duration, locale);
   if (!phrase) return text;
   return mergeDurationPhraseIntoFirstSentence(text, phrase, locale);
@@ -1282,11 +1306,15 @@ export function applyCvContentQuality(
     summary = normalizeSerbianDurationGrammar(summary);
     summary = normalizeSerbianLatinConfusables(summary);
     summary = preserveSerbianSummaryFactForms(summary, dutiesText);
-    summary = enrichSerbianSummaryEmploymentGrounding(summary, {
-      role: durationContext.role,
-      company: durationContext.company,
-      startDate: durationContext.startDate,
-    });
+    if (!isSerbianStructuredSummaryDomain(
+      `${summary} ${durationContext.role || ''} ${dutiesText}`,
+    )) {
+      summary = enrichSerbianSummaryEmploymentGrounding(summary, {
+        role: durationContext.role,
+        company: durationContext.company,
+        startDate: durationContext.startDate,
+      });
+    }
     summary = stripUnsupportedSummaryFluff(summary, locale);
     summary = scrubOrphanDurationFragments(summary);
     if (summary !== before) repaired = true;

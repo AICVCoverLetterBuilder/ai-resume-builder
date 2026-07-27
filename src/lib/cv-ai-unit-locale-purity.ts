@@ -11,6 +11,7 @@ import { splitExperienceBullets } from './cv-canonical-facts';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 import { splitJapaneseSummaryUnits } from './cv-japanese-summary-grounding';
 import { CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION } from './cv-material-duty-coverage';
+import { analyzeSerbianCroatianLocaleEvidence } from './cv-serbian-summary-grounding';
 
 void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
 
@@ -539,6 +540,8 @@ function unitWrongLocale(text: string, target: Locale): boolean {
   }
 
   if (target === 'sr') {
+    const evidence = analyzeSerbianCroatianLocaleEvidence(text);
+    if (evidence.croatianLeakageDetected) return true;
     // Complete English prose under Serbian target.
     if (
       guessed === 'en'
@@ -553,6 +556,7 @@ function unitWrongLocale(text: string, target: Locale): boolean {
     if (guessed === 'ru' && CYRILLIC.test(text)) return false;
     if (['hi', 'ar', 'ja', 'de', 'es', 'fr', 'it', 'pt-BR'].includes(guessed)) return true;
     if (guessed === 'ru') return true;
+    if (guessed === 'hr' && evidence.croatianLeakageDetected) return true;
     return false;
   }
 

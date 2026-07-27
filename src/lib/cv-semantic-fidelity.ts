@@ -584,7 +584,7 @@ export function validateSerbianDurationGrammar(
     valid: false,
     violations: [{
       kind: 'locale_quality',
-      matched: 'serbian-duration-declension',
+      matched: 'serbian_duration_noun_form_invalid',
       section: 'summary',
     }],
   };

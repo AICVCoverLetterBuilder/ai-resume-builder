@@ -50,16 +50,20 @@ import {
   SUMMARY_BUILDER_REVISION_RU,
   SUMMARY_BUILDER_REVISION_JA,
   SUMMARY_BUILDER_REVISION_HR,
+  SUMMARY_BUILDER_REVISION_SR,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,
   SUMMARY_UNIT_SPLITTER_REVISION_RU,
   SUMMARY_UNIT_SPLITTER_REVISION_JA,
   SUMMARY_UNIT_SPLITTER_REVISION_HR,
+  SUMMARY_UNIT_SPLITTER_REVISION_SR,
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_GROUNDING_REVISION_JA,
   SUMMARY_GROUNDING_REVISION_HR,
+  SUMMARY_GROUNDING_REVISION_SR,
   SUMMARY_DURATION_FINALIZER_REVISION_HR,
   SUMMARY_DURATION_FINALIZER_REVISION_HR_V2,
+  SUMMARY_DURATION_FINALIZER_REVISION_SR,
   JAPANESE_DURATION_IN_INTRO_MARKER,
   JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   CROATIAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
@@ -68,6 +72,14 @@ import {
   CROATIAN_SUMMARY_INTRO_GRAMMAR_REVISION,
   analyzeGermanSummaryEmploymentQuality,
   analyzeSpanishSummaryEmploymentQuality,
+  analyzeSerbianSummaryEmploymentQuality,
+  repairSerbianSummaryProviderCandidate,
+  injectSerbianTotalDurationSentence,
+  isSerbianStructuredSummaryDomain,
+  SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION,
+  SERBIAN_SUMMARY_ROLE_ALIGN_348_REVISION,
+  SERBIAN_SUMMARY_DURATION_SCOPE_348_REVISION,
+  SERBIAN_SUMMARY_FACT_FIDELITY_348_REVISION,
   GERMAN_CV_AI_302_REVISION,
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
@@ -572,6 +584,15 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_GROUNDING_REVISION_HR,
   SUMMARY_DURATION_FINALIZER_REVISION_HR,
   SUMMARY_DURATION_FINALIZER_REVISION_HR_V2,
+  SUMMARY_BUILDER_REVISION_SR,
+  SUMMARY_UNIT_SPLITTER_REVISION_SR,
+  SUMMARY_GROUNDING_REVISION_SR,
+  SUMMARY_DURATION_FINALIZER_REVISION_SR,
+  SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION,
+  SERBIAN_SUMMARY_ROLE_ALIGN_348_REVISION,
+  SERBIAN_SUMMARY_DURATION_SCOPE_348_REVISION,
+  SERBIAN_SUMMARY_FACT_FIDELITY_348_REVISION,
+  SERBIAN_DURATION_NOUN_FORM_349_REVISION,
   CROATIAN_EXPERIENCE_MATERIAL_REVISION,
   CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION,
   CROATIAN_ROLE_AWARE_MATERIAL_CLASSIFIER_REVISION,
@@ -694,6 +715,15 @@ void SUMMARY_UNIT_SPLITTER_REVISION_HR;
 void SUMMARY_GROUNDING_REVISION_HR;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR_V2;
+void SUMMARY_BUILDER_REVISION_SR;
+void SUMMARY_UNIT_SPLITTER_REVISION_SR;
+void SUMMARY_GROUNDING_REVISION_SR;
+void SUMMARY_DURATION_FINALIZER_REVISION_SR;
+void SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION;
+void SERBIAN_SUMMARY_ROLE_ALIGN_348_REVISION;
+void SERBIAN_SUMMARY_DURATION_SCOPE_348_REVISION;
+void SERBIAN_SUMMARY_FACT_FIDELITY_348_REVISION;
+void SERBIAN_DURATION_NOUN_FORM_349_REVISION;
 void CROATIAN_EXPERIENCE_MATERIAL_REVISION;
 void CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION;
 void CROATIAN_ROLE_AWARE_MATERIAL_CLASSIFIER_REVISION;
@@ -756,6 +786,8 @@ import {
   hasMalformedSerbianGeneratedToken,
   hasMixedSerbianSummaryPerspective,
   dedupeSummarySentences,
+  analyzeSerbianDurationNounForms,
+  SERBIAN_DURATION_NOUN_FORM_349_REVISION,
 } from './cv-serbian-grammar';
 import {
   normalizeSerbianLatinConfusables,
@@ -1163,6 +1195,9 @@ export type FinalizeCvAiFieldResult = {
     visibleDurationMatchesFinalizedCount?: boolean;
     durationDetectorAgreement?: boolean;
     durationValidationPassed?: boolean;
+    serbianDurationNounFormPassed?: boolean;
+    serbianDurationNounFormKind?: 'godina' | 'godine' | 'godinu' | 'mixed' | 'none';
+    serbianDurationGrammarRejectionReason?: string | null;
     contentLocaleBeforeRequest?: string | null;
     contentLocaleAfterApply?: string | null;
     operationMode?: ExperienceAiOperationMode | 'enhance_existing_content' | 'generate_from_context';
@@ -1899,7 +1934,10 @@ function summaryPasses(
   }
   const grammar = validateSerbianDurationGrammar(summary, locale);
   if (!grammar.valid) {
-    return { ok: false, reason: 'serbian_duration_grammar' };
+    return {
+      ok: false,
+      reason: grammar.violations[0]?.matched || 'serbian_duration_noun_form_invalid',
+    };
   }
   if (countSummaryDurationExpressions(summary, locale) > 1) {
     return { ok: false, reason: 'summary_duplicate_duration' };
@@ -1958,6 +1996,29 @@ function summaryPasses(
         ok: false,
         reason: empQ.typedRejectionReason || 'croatian_summary_grounding_failed',
       };
+    }
+  }
+  if (locale === 'sr') {
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+    const domainCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''}`;
+    if (isSerbianStructuredSummaryDomain(domainCorpus)) {
+      const empQ = analyzeSerbianSummaryEmploymentQuality(summary, {
+        company: primary?.company || '',
+        role: primary?.position || cv.personal?.jobTitle || '',
+        currentEntryDuties: entryDuties.currentEntryDuties,
+        priorEntryDuties: entryDuties.priorEntryDuties,
+        priorCompany: entryDuties.priorCompany,
+        priorRole: entryDuties.priorRoleTitle,
+        structuredRole: primary?.position || entryDuties.currentRoleTitle,
+        gender: cv.personal?.gender || '',
+      });
+      if (!empQ.groundingValidationPassed) {
+        return {
+          ok: false,
+          reason: empQ.typedRejectionReason || 'serbian_summary_grounding_failed',
+        };
+      }
     }
   }
   if (locale === 'hi') {
@@ -2125,6 +2186,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let croatianProviderRejectionReason: string | null = null;
   let spanishProviderRejectionReason: string | null = null;
   let spanishProviderUnsupportedClaimCount: number | null = null;
+  let serbianProviderRejectionReason: string | null = null;
+  let serbianClientRepairAttempted = false;
+  let serbianMaterialRepairApplied = false;
   let germanProviderRejectionReason: string | null = null;
   let germanProviderUnsupportedClaimCount: number | null = null;
   let germanProviderSlotRejectionReasons: string[] = [];
@@ -2353,11 +2417,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         .replace(/\s+/g, ' ')
         .trim();
     }
-    candidate = enrichSerbianSummaryEmploymentGrounding(candidate, {
-      role: context.role,
-      company: context.company,
-      startDate: context.startDate,
-    });
+    // Structured warehouse/design Serbian rebuild already scopes company + duties.
+    // Do not splice start-date into a total-career duration sentence (AAB-348 / build271).
+    if (locale !== 'sr' || !isSerbianStructuredSummaryDomain(
+      `${candidate} ${context.role || ''} ${dutiesText}`,
+    )) {
+      candidate = enrichSerbianSummaryEmploymentGrounding(candidate, {
+        role: context.role,
+        company: context.company,
+        startDate: context.startDate,
+      });
+    }
     candidate = dedupeSummarySentences(candidate);
   }
   if (locale === 'hi') {
@@ -2500,6 +2570,50 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         croatianProviderRejectionReason = empQuality.typedRejectionReason
           || 'croatian_summary_grounding_failed';
         candidate = '';
+      }
+    }
+  }
+  if (locale === 'sr') {
+    void SUMMARY_BUILDER_REVISION_SR;
+    void SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION;
+    candidate = dedupeSummarySentences(candidate);
+    const entryDutiesSr = currentAndPriorDutiesFromCv(cv, locale);
+    const domainCorpusSr = `${entryDutiesSr.currentEntryDuties || ''} ${entryDutiesSr.priorEntryDuties || ''} ${context.role || ''} ${cv.personal?.jobTitle || ''}`;
+    if (isSerbianStructuredSummaryDomain(domainCorpusSr) && candidate.trim()) {
+      const analyzeSr = (text: string) => analyzeSerbianSummaryEmploymentQuality(text, {
+        company: context.company,
+        role: context.role,
+        currentEntryDuties: entryDutiesSr.currentEntryDuties,
+        priorEntryDuties: entryDutiesSr.priorEntryDuties,
+        priorCompany: entryDutiesSr.priorCompany,
+        priorRole: entryDutiesSr.priorRoleTitle,
+        structuredRole: context.role || entryDutiesSr.currentRoleTitle,
+        gender,
+      });
+      let empQuality = analyzeSr(candidate);
+      if (!empQuality.groundingValidationPassed) {
+        serbianProviderRejectionReason = empQuality.typedRejectionReason
+          || 'serbian_summary_grounding_failed';
+        const repair = repairSerbianSummaryProviderCandidate(candidate, {
+          company: context.company,
+          priorCompany: entryDutiesSr.priorCompany,
+          gender,
+          duration: durationSnapshot.total,
+        });
+        serbianClientRepairAttempted = repair.attempted;
+        if (repair.attempted && repair.text.trim()) {
+          const repairedQ = analyzeSr(repair.text);
+          if (repairedQ.groundingValidationPassed) {
+            candidate = repair.text;
+            empQuality = repairedQ;
+            serbianMaterialRepairApplied = true;
+            serbianProviderRejectionReason = null;
+          } else {
+            candidate = '';
+          }
+        } else {
+          candidate = '';
+        }
       }
     }
   }
@@ -2852,7 +2966,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const durationRepairApplied = durationResolved.status === 'repaired';
   // Only mark content origin as ai_repaired when an actual repair candidate was
   // activated — never alias duration-policy normalization as content repair.
-  if (summaryRepairAttempted || germanMaterialRepairApplied) {
+  if (summaryRepairAttempted || germanMaterialRepairApplied || serbianMaterialRepairApplied) {
     origin = 'ai_repaired';
   } else if (emptySummarySeededFromCanonical && !providerRaw.trim()) {
     // Entry-owned empty generate is client deterministic — never claim provider.
@@ -2887,7 +3001,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const perspectiveMode = firstPerson ? 'first_person' : 'neutral_cv';
     // English Summary contract is first-person professional voice; Hindi/etc. require
     // neutral/honorific CV perspective (no first-person).
-    const perspectiveValidationPassed = locale === 'en'
+    const perspectiveValidationPassed = locale === 'en' || locale === 'sr'
       ? true
       : (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
         ? !firstPerson
@@ -2952,6 +3066,20 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 structuredRole: context.role || entryDuties.currentRoleTitle,
                 gender,
               })
+              : locale === 'sr'
+                && isSerbianStructuredSummaryDomain(
+                  `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''} ${analyzedText}`,
+                )
+                ? analyzeSerbianSummaryEmploymentQuality(analyzedText, {
+                  company: context.company || entryDuties.currentCompany,
+                  role: context.role,
+                  currentEntryDuties: entryDuties.currentEntryDuties,
+                  priorEntryDuties: entryDuties.priorEntryDuties,
+                  priorCompany: entryDuties.priorCompany,
+                  priorRole: entryDuties.priorRoleTitle,
+                  structuredRole: context.role || entryDuties.currentRoleTitle,
+                  gender,
+                })
               : locale === 'es'
                 ? analyzeSpanishSummaryEmploymentQuality(analyzedText, {
                   company: context.company || entryDuties.currentCompany,
@@ -3025,7 +3153,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     let durationFinalizerIdempotent = durationValidationPassed;
     let localPass2Hash = durationPass2CandidateHash;
       if (
-        (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
+        (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de' || locale === 'sr')
         && analyzedText.trim()
         && durationSnapshot.total.hasValidDates
       ) {
@@ -3103,13 +3231,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const blockedForGrounding = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de' || locale === 'en')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr')
       && empQ
       && (
         !empQ.groundingValidationPassed
         || coverageHardFail
         || (
-          (locale === 'de' || locale === 'en')
+          (locale === 'de' || locale === 'en' || locale === 'sr')
           && 'slotValidationPassed' in empQ
           && (empQ as { slotValidationPassed?: boolean }).slotValidationPassed === false
         )
@@ -3171,6 +3299,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         visibleDurationMatchesFinalizedCount: durationValidationPassed,
         durationDetectorAgreement: detectorAgreement,
         durationValidationPassed,
+        ...(locale === 'sr'
+          ? (() => {
+            const nounDiag = analyzeSerbianDurationNounForms(analyzedText);
+            return {
+              serbianDurationNounFormPassed: nounDiag.serbianDurationNounFormPassed,
+              serbianDurationNounFormKind: nounDiag.serbianDurationNounFormKind,
+              serbianDurationGrammarRejectionReason: nounDiag.serbianDurationGrammarRejectionReason,
+            };
+          })()
+          : {}),
         finalDurationRepresentationKind: rep.representationKind,
         finalDurationRepresentationCount: rep.representationCount,
         finalDurationHybridDetected: rep.hybridDetected,
@@ -3277,6 +3415,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || Boolean(germanProviderRejectionReason)
             || Boolean(englishProviderRejectionReason)
             || Boolean(spanishProviderRejectionReason)
+            || Boolean(serbianProviderRejectionReason)
             || Boolean(hindiProviderRejectionReason)
           )
           : false,
@@ -3652,6 +3791,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || japaneseProviderRejectionReason
             || croatianProviderRejectionReason
             || spanishProviderRejectionReason
+            || serbianProviderRejectionReason
             || germanProviderRejectionReason
             || englishProviderRejectionReason
           )) {
@@ -3660,6 +3800,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               || japaneseProviderRejectionReason
               || croatianProviderRejectionReason
               || spanishProviderRejectionReason
+              || serbianProviderRejectionReason
               || germanProviderRejectionReason
               || englishProviderRejectionReason,
             );
@@ -3677,7 +3818,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }
           return 'not_attempted';
         })(),
-        clientRepairAttempted: Boolean(summaryRepairAttempted || germanClientRepairAttempted || englishClientRepairAttempted),
+        clientRepairAttempted: Boolean(
+          summaryRepairAttempted
+          || germanClientRepairAttempted
+          || englishClientRepairAttempted
+          || serbianClientRepairAttempted
+        ),
         clientFallbackUsed: Boolean(
           (success && (
             clientFallbackUsed
@@ -4052,6 +4198,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
           || spanishProviderRejectionReason
+          || serbianProviderRejectionReason
           || germanProviderRejectionReason
           || englishProviderRejectionReason
           || result.diagnostics?.providerRejectionReason,
@@ -4074,6 +4221,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? SUMMARY_BUILDER_REVISION_JA
               : locale === 'hr'
                 ? SUMMARY_BUILDER_REVISION_HR
+                : locale === 'sr'
+                  ? SUMMARY_BUILDER_REVISION_SR
                 : locale === 'en'
                   ? SUMMARY_BUILDER_REVISION_EN
                 : SUMMARY_BUILDER_REVISION,
@@ -4315,9 +4464,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const pass1Text = normalizeLocaleText(groundedPass1.summary, locale);
     durationPass1CandidateHash = hashSummaryCandidate(pass1Text);
     durationPass1SentenceCount = countSummaryCandidateSentences(pass1Text, locale);
-    // Authoritative duration diagnostics must come from the rebuild pass.
+    // Authoritative final duration counts come from the rebuild pass, but preserve
+    // provider pre-strip / removed counts when the provider had competing claims
+    // (build 271 decimal-comma + written dual-claim diagnostics).
     if (groundedPass1.durationDiagnostics) {
-      durationDiagFinal = groundedPass1.durationDiagnostics;
+      const prevBefore = durationDiagFinal?.durationClaimCountBeforeStrip ?? 0;
+      const prevRemoved = durationDiagFinal?.durationClaimsRemovedBeforeInsert ?? 0;
+      durationDiagFinal = {
+        ...groundedPass1.durationDiagnostics,
+        durationClaimCountBeforeStrip: Math.max(
+          prevBefore,
+          groundedPass1.durationDiagnostics.durationClaimCountBeforeStrip ?? 0,
+        ),
+        durationClaimsRemovedBeforeInsert: Math.max(
+          prevRemoved,
+          groundedPass1.durationDiagnostics.durationClaimsRemovedBeforeInsert ?? 0,
+        ),
+        summaryDurationExpressionCount: Math.max(
+          durationDiagFinal?.summaryDurationExpressionCount ?? 0,
+          groundedPass1.durationDiagnostics.summaryDurationExpressionCount ?? 0,
+        ),
+      };
     }
     const groundedPass2 = resolveSummaryWithDurationPolicy(
       pass1Text,
@@ -4347,6 +4514,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       durationDiagFinal = {
         ...durationDiagFinal,
         ...groundedPass2.durationDiagnostics,
+        // Keep the highest pre-strip / removed evidence from provider or rebuild.
+        durationClaimCountBeforeStrip: Math.max(
+          durationDiagFinal?.durationClaimCountBeforeStrip ?? 0,
+          groundedPass2.durationDiagnostics.durationClaimCountBeforeStrip ?? 0,
+        ),
+        durationClaimsRemovedBeforeInsert: Math.max(
+          durationDiagFinal?.durationClaimsRemovedBeforeInsert ?? 0,
+          groundedPass2.durationDiagnostics.durationClaimsRemovedBeforeInsert ?? 0,
+        ),
         summaryDurationFinalizerRevision: locale === 'ar'
           ? SUMMARY_DURATION_FINALIZER_REVISION_AR
           : locale === 'ru'
@@ -4381,11 +4557,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           .replace(/\s+/g, ' ')
           .trim();
       }
-      groundedText = enrichSerbianSummaryEmploymentGrounding(groundedText, {
-        role: context.role,
-        company: context.company,
-        startDate: context.startDate,
-      });
+      // Entry-owned Serbian warehouse/design rebuild already carries company + duties.
+      // Do not splice start-date into the total-career duration sentence (AAB-348).
+      if (!isSerbianStructuredSummaryDomain(
+        `${groundedText} ${context.role || ''} ${dutiesText}`,
+      )) {
+        groundedText = enrichSerbianSummaryEmploymentGrounding(groundedText, {
+          role: context.role,
+          company: context.company,
+          startDate: context.startDate,
+        });
+      }
       groundedText = dedupeSummarySentences(groundedText);
     }
     groundingInputCandidateHash = hashSummaryCandidate(groundedText);
