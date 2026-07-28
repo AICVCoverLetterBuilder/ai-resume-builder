@@ -102,9 +102,9 @@ function baseCv(order: 'normal' | 'reversed' = 'normal'): CVData {
 describe('cv-build282 Arabic Experience/Summary package', () => {
   it('exposes Arabic runtime markers', () => {
     expect(SUMMARY_PIPELINE_REVISION).toBe('summary-runtime-282-v1');
-    expect(SUMMARY_BUILDER_REVISION_AR).toBe('entry-owned-arabic-rebuild-v1');
+    expect(SUMMARY_BUILDER_REVISION_AR).toBe('entry-owned-arabic-rebuild-354-v2');
     expect(SUMMARY_UNIT_SPLITTER_REVISION_AR).toBe('arabic-three-sentence-slots-v1');
-    expect(SUMMARY_GROUNDING_REVISION_AR).toBe('entry-owned-arabic-grounding-v1');
+    expect(SUMMARY_GROUNDING_REVISION_AR).toBe('entry-owned-arabic-grounding-354-v2');
     expect(SUMMARY_DURATION_FINALIZER_REVISION_AR).toBe('arabic-duration-idempotent-v1');
   });
 
@@ -189,10 +189,10 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
     });
     expect(text).toMatch(/موظفة\s*مستودع/);
     expect(text).toMatch(/Atlas/);
-    expect(text).toMatch(/نحو\s+ست\s+سنوات\s+ونصف\s+من\s+الخبرة\s+المشتركة/);
+    expect(text).toMatch(/نحو\s+ست\s+سنوات\s+ونصف\s+من\s+الخبرة\s*المهنية\s*الإجمالية/);
     expect(text).not.toMatch(/6\.5/);
     expect(text).toMatch(/بضائع|وثائق|سجلات|مستودع/);
-    expect(text).toMatch(/سبق\s+لها\s+العمل/);
+    expect(text).toMatch(/سبق\s+أن\s+عملت/);
     expect(text).toMatch(/مصممة\s*جرافيك|Rewitu/);
     expect(text).not.toMatch(/Grafički|Carries\s+out|dish|مطبخ|تحميل/);
     expect(text).not.toMatch(/تشمل\s+المهارات/);
@@ -212,7 +212,7 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
     expect(q.currentRoleConcreteFactCoverage).toBeGreaterThanOrEqual(2);
     expect(q.priorRoleGroundingPassed).toBe(true);
     expect(q.semanticCrossEntryLeakageDetected).toBe(false);
-    expect(q.finalUnitRoleSlots).toEqual(['current_intro', 'current_duty', 'prior_role']);
+    expect(q.finalUnitRoleSlots).toEqual(['duration', 'current_intro', 'prior_role']);
     expect(q.finalUnitRoleSlots).not.toContain('other');
     expect(q.groundingValidationPassed).toBe(true);
   });
@@ -322,17 +322,18 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
     expect(summaryPipe.finalized.diagnostics?.summaryPipelineRevision)
       .toBe('summary-runtime-282-v1');
     expect(summaryPipe.finalized.diagnostics?.summaryBuilderRevision)
-      .toBe('entry-owned-arabic-rebuild-v1');
+      .toBe('entry-owned-arabic-rebuild-354-v2');
     expect(summaryPipe.finalized.diagnostics?.summaryDurationFinalizerRevision)
       .toBe('arabic-duration-idempotent-v1');
     expect(summaryPipe.finalized.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
     expect(summaryPipe.finalized.diagnostics?.finalUnitRoleSlots).toEqual([
+      'duration',
       'current_intro',
-      'current_duty',
       'prior_role',
     ]);
     cv = summaryPipe.stateCv;
     expect(cv.summary).toMatch(/موظفة\s*مستودع/);
+    expect(cv.summary).toMatch(/لدي\s+نحو|أعمل\s+حاليا/);
     expect(cv.summary).not.toMatch(/6\.5/);
     expect(cv.summary).not.toMatch(/تشمل\s+المهارات/);
   });
@@ -390,7 +391,7 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
       });
       expect(text, `run ${i}`).toMatch(/موظفة\s*مستودع/);
       expect(text, `run ${i}`).toMatch(/نحو\s+ست\s+سنوات\s+ونصف/);
-      expect(text, `run ${i}`).toMatch(/سبق\s+لها\s+العمل/);
+      expect(text, `run ${i}`).toMatch(/سبق\s+أن\s+عملت/);
       const q = analyzeArabicSummaryEmploymentQuality(text, {
         company: 'Atlas',
         priorCompany: 'Rewitu',
@@ -401,8 +402,8 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
       });
       expect(q.groundingValidationPassed, `run ${i}`).toBe(true);
       expect(q.finalUnitRoleSlots, `run ${i}`).toEqual([
+        'duration',
         'current_intro',
-        'current_duty',
         'prior_role',
       ]);
     }

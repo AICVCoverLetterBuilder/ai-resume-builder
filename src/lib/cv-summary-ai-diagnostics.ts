@@ -2300,6 +2300,59 @@ export class SummaryAiDiagnosticSession {
         visibleDutyOk = false;
       }
     }
+    if (ok && durationStillOk && locale === 'ar' && typeof visibleText === 'string') {
+      const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
+      const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
+      visibleDutyRequired = requiredCurrent;
+      visibleDutyCovered = Number(this.draft.coveredCurrentDutyFactCount ?? 0);
+      visiblePriorDutyRequired = requiredPrior;
+      visiblePriorDutyCovered = Number(this.draft.coveredPriorDutyFactCount ?? 0);
+      if (requiredCurrent >= 3) {
+        const incomingOk = /البضائع\s*الواردة/u.test(visibleText);
+        const docsOk = /(?:الوثائق|المستندات)/u.test(visibleText)
+          && /(?:المتعلق|المرفقة|المستلمة)/u.test(visibleText)
+          && !(/البضائع\s*الواردة\s*والوثائق/u.test(visibleText)
+            && !/(?:الوثائق\s*المتعلق|المستندات\s*المتعلق)/u.test(visibleText));
+        const coordOk = /(?:الزملاء|أنسق|تنسيق)/u.test(visibleText)
+          && /(?:إعداد|تجهيز|حركة)/u.test(visibleText);
+        const warehouseCovered = [incomingOk, docsOk, coordOk].filter(Boolean).length;
+        const warehouseOk = warehouseCovered === 3
+          && /موظفة\s*مستودع|موظف\s*مستودع/u.test(visibleText)
+          && /أعمل\s+حاليا|لدي\s+نحو/u.test(visibleText);
+        if (warehouseOk) {
+          visibleDutyCovered = 3;
+          visibleDutyOk = true;
+        } else {
+          const foodOk = /أطباق|معايير\s*المطعم/u.test(visibleText);
+          const hygieneOk = /نظافة\s*مكان\s*العمل/u.test(visibleText);
+          const collabOk = /فريق\s*المطبخ|أتعاون|تعاونت/u.test(visibleText);
+          visibleDutyCovered = [foodOk, hygieneOk, collabOk].filter(Boolean).length;
+          visibleDutyOk = visibleDutyCovered >= requiredCurrent
+            && /أعمل\s+حاليا/u.test(visibleText)
+            && !/موظفة\s*مستودع|موظف\s*مستودع/u.test(visibleText);
+        }
+      } else if (requiredCurrent > 0) {
+        visibleDutyOk = visibleDutyCovered >= requiredCurrent
+          && /أعمل\s+حاليا/u.test(visibleText);
+      }
+      if (requiredPrior >= 3) {
+        const creationOk = /مواد\s*بصرية/u.test(visibleText) && /عناصر\s*رسومية/u.test(visibleText);
+        const reviewOk = /(?:راجع|راجعت)/u.test(visibleText)
+          && /(?:كيّف|كيّفت|تكييف)/u.test(visibleText);
+        const filesOk = /ملفات\s*التصميم/u.test(visibleText)
+          && /(?:صيغ|الصيغ)/u.test(visibleText)
+          && /(?:شاشات|الشاشات)/u.test(visibleText);
+        visiblePriorDutyCovered = [creationOk, reviewOk, filesOk].filter(Boolean).length;
+        visiblePriorDutyOk = visiblePriorDutyCovered === 3;
+      } else {
+        visiblePriorDutyOk = true;
+      }
+      visibleDurationScopeOk = /لدي\s+نحو[\s\S]{0,80}الخبرة\s*المهنية\s*الإجمالية/u.test(visibleText)
+        && this.draft.finalDurationScopeValidationPassed !== false;
+      if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrent >= 3) {
+        visibleDutyOk = false;
+      }
+    }
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
       && visiblePriorDutyOk && visibleGrammarOk && visibleLocaleOk && visibleDurationScopeOk;
     this.patch({
@@ -2325,33 +2378,33 @@ export class SummaryAiDiagnosticSession {
       visibleWrongLocaleStructuredRoleCount: (locale === 'de' || locale === 'en')
         ? visibleWrongRoleCount
         : null,
-      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi')
+      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
         ? visibleDutyRequired
         : null,
-      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi')
+      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
         ? visibleDutyCovered
         : null,
-      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi')
+      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
         ? Math.max(0, visibleDutyRequired - visibleDutyCovered)
         : null,
-      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'hi')
+      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
         ? (typeof visibleText === 'string' ? visibleDutyOk : null)
         : null,
-      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'hi')
+      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar')
         ? visiblePriorDutyRequired
         : null,
-      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'hi')
+      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar')
         ? visiblePriorDutyCovered
         : null,
-      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'hi')
+      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar')
         ? Math.max(0, visiblePriorDutyRequired - visiblePriorDutyCovered)
         : null,
-      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'hi')
+      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'hi' || locale === 'ar')
         ? (typeof visibleText === 'string' ? visiblePriorDutyOk : null)
         : null,
       visibleDurationScopeValidationPassed: locale === 'en'
         ? (typeof visibleText === 'string' ? visibleDurationScopeOk : null)
-        : (locale === 'de' || locale === 'hi'
+        : (locale === 'de' || locale === 'hi' || locale === 'ar'
           ? (typeof visibleText === 'string' ? visibleDurationScopeOk : this.draft.visibleDurationScopeValidationPassed)
           : null),
       visibleGermanGrammarValidationPassed: locale === 'de'

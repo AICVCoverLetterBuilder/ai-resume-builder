@@ -50,6 +50,10 @@ import {
   analyzeSerbianSummaryDurationScope,
   isSerbianStructuredSummaryDomain,
 } from './cv-serbian-summary-grounding';
+import {
+  injectArabicTotalDurationSentence,
+  analyzeArabicSummaryDurationScope,
+} from './cv-arabic-summary-grounding';
 
 /** Runtime revision — returned by the duration finalizer that executed. */
 export const SUMMARY_DURATION_FINALIZER_REVISION = 'duration-idempotent-v3' as const;
@@ -960,6 +964,16 @@ export function resolveSummaryWithDurationPolicy(
     }
   }
 
+  // AAB-354 — Arabic total-career duration must stay a dedicated first slot.
+  if (locale === 'ar' && requireClaim && duration.hasValidDates && working.trim()) {
+    void SUMMARY_DURATION_FINALIZER_REVISION_AR;
+    const scopeAr = analyzeArabicSummaryDurationScope(working, { company: context?.company });
+    if (!scopeAr.finalDurationScopeValidationPassed) {
+      working = injectArabicTotalDurationSentence(working, duration);
+      durationDiagnostics.duplicateDurationRemoved = true;
+    }
+  }
+
   // AAB-346 — English inject uses injectEnglishTotalDurationSentence (via injectFn)
   // for missing/duplicate ownership. Do not wholesale strip+rebuild on legacy
   // baker/generic "since … with approximately … years" forms — that destroyed
@@ -1160,6 +1174,12 @@ export function injectDurationPhrase(
   const text = (summary || '').trim();
   if (locale === 'hi' && duration.hasValidDates) {
     return injectHindiDurationWithOpening(text, duration, context || {});
+  }
+  if (locale === 'ar' && duration.hasValidDates) {
+    void SUMMARY_DURATION_FINALIZER_REVISION_AR;
+    const scope = analyzeArabicSummaryDurationScope(text, { company: context?.company });
+    if (scope.finalDurationScopeValidationPassed) return text;
+    return injectArabicTotalDurationSentence(text, duration);
   }
   if (locale === 'ja' && duration.hasValidDates) {
     return injectJapaneseDurationIntoCurrentIntro(text, duration, context);

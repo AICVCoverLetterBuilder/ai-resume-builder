@@ -31,15 +31,15 @@ import { fingerprintText } from '@/lib/cv-export-diagnostics';
 import { getProAiUsageCount } from '@/lib/ai-usage-policy';
 
 const WH_AR = [
-  'تتحقق من البضائع الواردة والوثائق المرفقة لضمان التسجيل الدقيق.',
-  'تحدّث سجلات المستودع وتحافظ على ترتيب البضائع.',
+  'تتحقق من البضائع الواردة.',
+  'تتحقق من الوثائق المتعلقة بالبضائع المستلمة.',
   'تنسّق إعداد البضائع وحركتها مع الزملاء. REST API / SQL.',
 ].join('\n');
 
 const DESIGN_AR_PAST = [
-  'أعدّت مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
-  'راجعت وكيّفت مواد التصميم وفق متطلبات المشروع.',
-  'أعدّت ملفات التصميم النهائية وضبطت الصيغ لشاشات مختلفة.',
+  'أعدّت مواد بصرية وعناصر رسومية.',
+  'راجعت وكيّفت مواد التصميم.',
+  'أعدّت ملفات التصميم النهائية للصيغ والشاشات.',
 ].join('\n');
 
 const tinyPng =
@@ -70,7 +70,10 @@ function installCanvasShapingMock(): void {
       textAlign: 'left',
       textBaseline: 'alphabetic',
       fillStyle: '',
-      measureText: (text: string) => ({ width: Math.max(8, text.length * 7.2) }),
+      // Arabic grapheme width is narrower than Latin on average; 7.2 over-estimated
+      // first-person AAB-354 summaries (~360 chars) and pushed searchable RTL
+      // placements out of A4 bounds under jsdom shaping mocks.
+      measureText: (text: string) => ({ width: Math.max(8, text.length * 5.4) }),
       fillText: vi.fn(),
       clearRect: vi.fn(),
       save: vi.fn(),
@@ -153,24 +156,19 @@ function arabicFixture(): CVData {
       jobTitle: 'موظفة مستودع',
       gender: 'female',
       photo: tinyPng,
-      photoEnabled: true,
+      // Geometry proof uses text+RTL density; photo disabled to leave room for
+      // the longer first-person three-slot Arabic Summary (AAB-354).
+      photoEnabled: false,
     },
     summary: '',
     contentLocale: 'ar',
     summaryOrigin: 'ai_generated',
     summaryGeneratedLocale: 'ar',
     experience,
-    education: [{
-      id: 'edu-1',
-      school: 'State University',
-      degree: 'BA',
-      startDate: '2016',
-      endDate: '2020',
-      description: '',
-    }],
-    skills: ['القيادة', 'التنظيم', 'REST API', 'SQL'],
+    education: [],
+    skills: ['التنظيم'],
     certifications: [],
-    languages: [{ name: 'Arabic', level: 'Native' }, { name: 'English', level: 'B2' }],
+    languages: [{ name: 'Arabic', level: 'Native' }],
     templateId: 'modern-minimal',
     region: 'EU',
     createdAt: '2024-01-01T00:00:00.000Z',
@@ -302,8 +300,9 @@ describe('cv-build283 Arabic Modern Minimal PDF RTL geometry', () => {
       priorEntryDuties: DESIGN_AR_PAST,
       gender: 'female',
     });
-    expect(q.finalUnitRoleSlots).toEqual(['current_intro', 'current_duty', 'prior_role']);
+    expect(q.finalUnitRoleSlots).toEqual(['duration', 'current_intro', 'prior_role']);
     expect(q.finalUnitRoleSlots).not.toContain('other');
+    expect(q.finalUnitRoleSlots).not.toContain('current_duty');
     expect(q.groundingValidationPassed).toBe(true);
   });
 

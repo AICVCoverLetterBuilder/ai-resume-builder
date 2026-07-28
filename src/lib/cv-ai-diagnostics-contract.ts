@@ -1024,6 +1024,70 @@ export function checkSummaryDiagnosticInvariants(
         deterministicCandidatePresent: false,
       });
     }
+    // AAB-354 — present without top-level hash (device packaging contradiction).
+    if (
+      trace.deterministicCandidatePresent === true
+      && (trace.deterministicCandidateHash == null || trace.deterministicCandidateHash === '')
+    ) {
+      push('deterministic_present_without_hash', {
+        deterministicCandidatePresent: true,
+        deterministicCandidateHash: null,
+      });
+    }
+  }
+  // AAB-354 — accepted deterministic lineage hash must match top-level hash.
+  {
+    const lineage = Array.isArray(trace.candidateLineage)
+      ? (trace.candidateLineage as Array<Record<string, unknown>>)
+      : [];
+    const detRec = lineage.find((c) => c.candidateKind === 'client_deterministic');
+    if (
+      detRec
+      && detRec.accepted === true
+      && typeof detRec.finalizedHash === 'string'
+      && detRec.finalizedHash
+      && (trace.deterministicCandidateHash == null || trace.deterministicCandidateHash === '')
+    ) {
+      push('deterministic_lineage_hash_without_toplevel_hash', {
+        lineageFinalizedHash: String(detRec.finalizedHash),
+        deterministicCandidateHash: null,
+      });
+    }
+    if (
+      detRec
+      && detRec.accepted === true
+      && typeof detRec.finalizedHash === 'string'
+      && typeof trace.deterministicCandidateHash === 'string'
+      && detRec.finalizedHash
+      && trace.deterministicCandidateHash
+      && detRec.finalizedHash !== trace.deterministicCandidateHash
+    ) {
+      push('deterministic_toplevel_lineage_hash_mismatch', {
+        lineageFinalizedHash: String(detRec.finalizedHash),
+        deterministicCandidateHash: String(trace.deterministicCandidateHash),
+      });
+    }
+  }
+  // AAB-354 — rejected provider must carry a typed reason.
+  if (
+    trace.providerCandidatePresent === true
+    && trace.providerAccepted === false
+    && !(trace.providerRejectionReason || trace.providerTypedRejectionReason)
+  ) {
+    push('provider_rejected_without_typed_reason', {
+      providerAccepted: false,
+      providerRejectionReason: null,
+      providerTypedRejectionReason: null,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'ar'
+    && trace.countedAsSuccess === true
+    && trace.finalPerspectiveMode === 'neutral_cv'
+  ) {
+    push('arabic_first_person_contract_neutral_cv', {
+      finalPerspectiveMode: 'neutral_cv',
+    });
   }
   if (trace.visibleApplySucceeded && trace.visibleSummaryMatchesFinalHash === false) {
     push('visible_apply_hash_mismatch', {

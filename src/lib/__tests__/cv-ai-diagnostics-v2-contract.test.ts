@@ -440,6 +440,7 @@ describe('cv-ai-diagnostics-v2 contract', () => {
       usageCountAfter: 1,
       finalCandidateSource: 'deterministic_fallback',
       deterministicCandidatePresent: true,
+      deterministicCandidateHash: 'fnv1a_test_hash',
       grammarValidationPassed: true,
       groundingValidationPassed: true,
       durationValidationPassed: true,

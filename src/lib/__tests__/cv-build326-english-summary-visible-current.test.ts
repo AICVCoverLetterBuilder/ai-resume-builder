@@ -366,6 +366,7 @@ describe('AAB-326 English visible current duty validation', () => {
       finalCandidateSource: 'deterministic_fallback',
       providerCandidatePresent: false,
       deterministicCandidatePresent: true,
+      deterministicCandidateHash: 'visible-hash',
       visibleCandidateHashAfterApply: 'visible-hash',
       finalValidatedCandidateHash: 'visible-hash',
       visibleSummaryMatchesFinalHash: true,

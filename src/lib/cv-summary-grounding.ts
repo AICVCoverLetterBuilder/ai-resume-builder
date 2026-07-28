@@ -23,10 +23,26 @@ import {
   analyzeArabicSummaryEmploymentQuality,
   buildArabicEntryOwnedSummary,
   arabicWarehouseSummaryFragment,
+  detectArabicSummaryPerspective,
+  isArabicThirdPersonBiographySummary,
+  analyzeArabicSummaryFactCoverage,
+  analyzeArabicSummaryDurationScope,
+  injectArabicTotalDurationSentence,
+  formatArabicTotalProfessionalDurationSentence,
+  isArabicEntryOwnedSummaryComplete,
+  ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
   SUMMARY_BUILDER_REVISION_AR,
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,
 } from './cv-arabic-summary-grounding';
+void ARABIC_SUMMARY_FIRST_PERSON_354_REVISION;
+void detectArabicSummaryPerspective;
+void isArabicThirdPersonBiographySummary;
+void analyzeArabicSummaryFactCoverage;
+void analyzeArabicSummaryDurationScope;
+void injectArabicTotalDurationSentence;
+void formatArabicTotalProfessionalDurationSentence;
+void isArabicEntryOwnedSummaryComplete;
 import {
   analyzeRussianSummaryEmploymentQuality,
   buildRussianEntryOwnedSummary,
@@ -238,6 +254,14 @@ export {
   buildArabicEntryOwnedSummary,
   arabicWarehouseSummaryFragment,
   splitArabicSummaryUnits,
+  detectArabicSummaryPerspective,
+  isArabicThirdPersonBiographySummary,
+  analyzeArabicSummaryFactCoverage,
+  analyzeArabicSummaryDurationScope,
+  injectArabicTotalDurationSentence,
+  formatArabicTotalProfessionalDurationSentence,
+  isArabicEntryOwnedSummaryComplete,
+  ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
   SUMMARY_BUILDER_REVISION_AR,
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,
@@ -2146,14 +2170,16 @@ export function buildConciseGroundedSummary(
     void analyzeArabicSummaryEmploymentQuality;
     const arRole = /(?:warehouse|مستودع|skladist|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
       ? localizeWarehouseEmployee('ar', genderNorm || '')
-      : (role || localizeWarehouseEmployee('ar', genderNorm || ''));
+      : (role || experienceTitle || profileTitle || '');
     text = buildArabicEntryOwnedSummary({
       role: arRole,
       employer,
       datesValue,
       gender: genderNorm || '',
       durationPhrase: durationPhrase || undefined,
+      duration,
       dutyFacts,
+      currentEntryDuties: sourceDuties,
       priorRole: typeof priorIndex === 'number'
         ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
         : '',
@@ -2161,9 +2187,11 @@ export function buildConciseGroundedSummary(
         ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
         : '',
       priorSourceDuties,
+      priorEntryDuties: priorSourceDuties,
+      hasCurrentRole: isPresent || Boolean(employer || experienceTitle || sourceDuties),
       locale: 'ar',
     });
-    // Strict three-slot Arabic package: never append a fourth skills sentence.
+    // Strict Arabic package: never append a skills sentence for structured/generic rebuild.
     skillSentence = '';
     void skillSentence;
   } else if (locale === 'ru') {
