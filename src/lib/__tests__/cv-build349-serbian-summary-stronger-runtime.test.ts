@@ -17,8 +17,14 @@ import {
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
   buildSerbianEntryOwnedSummary,
+  buildSerbianEntryOwnedSummaryFromPayload,
   isSerbianStructuredSummaryDomain,
+  isSerbianEntryOwnedSummaryComplete,
+  SERBIAN_ENTRY_OWNED_OUTPUT_INCOMPLETE,
 } from '@/lib/cv-serbian-summary-grounding';
+import { fingerprintText } from '@/lib/cv-export-diagnostics';
+import { deterministicLocalizedSummaryFromCanonical } from '@/lib/cv-localized-fallback';
+import { buildCvCanonicalFactSet } from '@/lib/cv-canonical-facts';
 import {
   buildExperienceDurationSnapshot,
 } from '@/lib/cv-experience-duration';
@@ -381,5 +387,183 @@ describe('AAB-349 Serbian Stronger runtime', () => {
       duration: buildExperienceDurationSnapshot(deviceCv().experience || [], REF).total,
     });
     expect(built.split(/(?<=[.!?])\s+/).length).toBe(3);
+  });
+
+  it('AAB-350 device shell: empty live + canonical facts still builds 3 sentences', () => {
+    // Legacy live fragments empty; canonical 3+3 remain — gate payload must drive builder.
+    const cv = deviceCv();
+    cv.experience![0]!.description = '';
+    cv.experience![1]!.description = '';
+    expect(cv.summary.length).toBe(446);
+    seedUsage(23);
+    const provider = `${BAD_SOURCE_SR} Dodatno pomažem.`;
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: provider,
+      cv,
+      requestedLocale: 'sr',
+      gender: 'female',
+      referenceDateIso: REF,
+      durationSnapshot: buildExperienceDurationSnapshot(cv.experience || [], REF),
+      rewriteStyle: 'stronger',
+      originHint: 'ai_generated',
+    });
+    expect(fin.diagnostics?.serbianStructuredDomainGatePassed).toBe(true);
+    expect(fin.diagnostics?.serbianEntryOwnedBuilderAttempted).toBe(true);
+    expect(fin.diagnostics?.serbianEntryOwnedBuilderSucceeded).toBe(true);
+    expect(fin.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
+    expect((fin.diagnostics?.serbianEntryOwnedBuilderOutputLength || 0)).toBeGreaterThan(52);
+    expect(fin.text.length).toBeGreaterThan(52);
+    expect(fin.text).toMatch(/Trenutno radim u kompaniji Atlas/);
+    expect(fin.text).toMatch(/Prethodno sam radila/);
+    expect(fin.diagnostics?.deterministicCandidateEqualsGroundingInput).toBe(true);
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.origin).toBe('deterministic_fallback');
+    expect(fin.diagnostics?.rejectionStage).not.toBe('independent_final_duration_verification');
+  });
+
+  it('A. empty legacy fragments + canonical 3+3 → full candidate', () => {
+    const cv = deviceCv();
+    cv.experience![0]!.description = '';
+    cv.experience![1]!.description = '';
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentEntryDuties: WH_EN,
+      priorEntryDuties: GD_EN,
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+      gender: 'female',
+      duration: buildExperienceDurationSnapshot(cv.experience || [], REF).total,
+    });
+    expect(gate.passed).toBe(true);
+    expect(gate.payload).toBeTruthy();
+    const built = buildSerbianEntryOwnedSummaryFromPayload(gate.payload!);
+    expect(isSerbianEntryOwnedSummaryComplete(built)).toBe(true);
+    expect(built.split(/(?<=[.!?])\s+/).length).toBe(3);
+  });
+
+  it('B. structured roles without canonical duties → gate fails', () => {
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentEntryDuties: '',
+      priorEntryDuties: '',
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+    });
+    expect(gate.passed).toBe(false);
+    expect(gate.payload).toBeNull();
+  });
+
+  it('C. duration-only / role+duration 52-char shell is not builder success', () => {
+    const shell = 'Radnica u magacinu sa oko šest i po godina iskustva.';
+    expect(fingerprintText(shell)).toBe('fnv1a_d5b60c8d_l52_b82_e46');
+    expect(isSerbianEntryOwnedSummaryComplete(shell)).toBe(false);
+    expect(SERBIAN_ENTRY_OWNED_OUTPUT_INCOMPLETE).toBe('serbian_entry_owned_output_incomplete');
+  });
+
+  it('D. enrichSerbian must not diverge structured hashes (95-char mismatch)', () => {
+    const shell = 'Radnica u magacinu sa oko šest i po godina iskustva.';
+    const enriched =
+      'Radnica u magacinu u kompaniji Atlas od januara 2023. godine, sa oko šest i po godina iskustva.';
+    expect(fingerprintText(enriched)).toBe('fnv1a_184d29e5_l95_b82_e46');
+    expect(fingerprintText(shell)).not.toBe(fingerprintText(enriched));
+    // Production structured path must not select the shell (or its enriched form).
+    const cv = deviceCv();
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: BAD_SOURCE_SR,
+      cv,
+      requestedLocale: 'sr',
+      gender: 'female',
+      durationSnapshot: buildExperienceDurationSnapshot(cv.experience || [], REF),
+      rewriteStyle: 'stronger',
+    });
+    expect(fin.diagnostics?.deterministicCandidateHash).not.toBe(fingerprintText(shell));
+    expect(fin.diagnostics?.groundingInputCandidateHash).not.toBe(fingerprintText(enriched));
+    expect(fin.diagnostics?.deterministicCandidateEqualsGroundingInput).toBe(true);
+  });
+
+  it('E. generic warehouse CV without design does not use canned builder', () => {
+    const factSet = buildCvCanonicalFactSet({
+      personal: { fullName: 'T', email: 't@e.com', phone: '', jobTitle: 'Warehouse Employee', gender: 'female' },
+      summary: '',
+      experience: [{
+        id: 'w',
+        position: 'Warehouse Employee',
+        company: 'Logi',
+        startDate: '2023-01',
+        endDate: '',
+        isPresent: true,
+        description: 'loads packages and transports goods between docks',
+        canonicalDescription: 'loads packages and transports goods between docks',
+      }],
+      education: [],
+      skills: [],
+      languages: [],
+    } as never);
+    const text = deterministicLocalizedSummaryFromCanonical(
+      factSet,
+      'sr',
+      'female',
+      buildExperienceDurationSnapshot([{
+        id: 'w',
+        position: 'Warehouse Employee',
+        company: 'Logi',
+        startDate: '2023-01',
+        endDate: '',
+        isPresent: true,
+        description: 'loads packages',
+      }], REF).total,
+    );
+    expect(text).not.toMatch(/Rewitu/);
+    expect(text).not.toMatch(/dizajnerka/);
+  });
+
+  it('F/I. complete structured candidate is first_person with 3 Serbian units', () => {
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: BAD_SOURCE_SR,
+      cv: deviceCv(),
+      requestedLocale: 'sr',
+      gender: 'female',
+      durationSnapshot: buildExperienceDurationSnapshot(deviceCv().experience || [], REF),
+      rewriteStyle: 'stronger',
+    });
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.diagnostics?.finalPerspectiveMode || fin.diagnostics?.perspectiveMode)
+      .toBe('first_person');
+    expect(fin.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
+  });
+
+  it('H. material failure stage is not duration when duration passes', () => {
+    // Incomplete non-structured CV: duration may still finalize once, but rejection
+    // must not blame the successful duration stage when material facts fail.
+    const cv = deviceCv();
+    cv.experience = [{
+      id: 'only',
+      position: 'Clerk',
+      company: 'Acme',
+      startDate: '2023-01',
+      endDate: '',
+      isPresent: true,
+      description: 'answers phones',
+      canonicalDescription: 'answers phones',
+    }];
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: 'English only garbage summary without Serbian duties.',
+      cv,
+      requestedLocale: 'sr',
+      gender: 'female',
+      durationSnapshot: buildExperienceDurationSnapshot(cv.experience, REF),
+      rewriteStyle: 'stronger',
+    });
+    if (!fin.countedAsSuccess) {
+      expect(fin.diagnostics?.rejectionStage).not.toBe('independent_final_duration_verification');
+    }
   });
 });

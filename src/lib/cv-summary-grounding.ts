@@ -66,6 +66,9 @@ import {
   evaluateSerbianStructuredDomainGate,
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
+  buildSerbianEntryOwnedSummaryFromPayload,
+  isSerbianEntryOwnedSummaryComplete,
+  SERBIAN_ENTRY_OWNED_OUTPUT_INCOMPLETE,
   injectSerbianTotalDurationSentence,
   SUMMARY_BUILDER_REVISION_SR,
   SUMMARY_GROUNDING_REVISION_SR,
@@ -83,6 +86,9 @@ export {
   evaluateSerbianStructuredDomainGate,
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
+  buildSerbianEntryOwnedSummaryFromPayload,
+  isSerbianEntryOwnedSummaryComplete,
+  SERBIAN_ENTRY_OWNED_OUTPUT_INCOMPLETE,
   injectSerbianTotalDurationSentence,
   analyzeSerbianCroatianLocaleEvidence,
   analyzeSerbianSummaryDurationScope,
@@ -2074,7 +2080,16 @@ export function buildConciseGroundedSummary(
     void analyzeSerbianSummaryEmploymentQuality;
     void injectSerbianTotalDurationSentence;
     const domainCorpus = `${experienceTitle} ${profileTitle} ${sourceDuties} ${priorSourceDuties}`;
-    if (isSerbianStructuredSummaryDomain(domainCorpus)) {
+    const srGate = evaluateSerbianStructuredDomainGate({
+      currentEntryDuties: sourceDuties,
+      priorEntryDuties: priorSourceDuties,
+      currentRole: experienceTitle || role,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      jobTitle: profileTitle,
+    });
+    if (srGate.passed) {
       const srRole = /(?:warehouse|skladišt|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
         ? role || 'Warehouse Employee'
         : (role || 'Warehouse Employee');
@@ -2097,7 +2112,9 @@ export function buildConciseGroundedSummary(
       });
       skillSentence = '';
       void skillSentence;
+      void domainCorpus;
     } else {
+      // Never emit a role+duration-only shell for near-miss structured domains.
       const dutyJoin = joinDutyFragments(uniqueFragments, locale);
       const open = dutyJoin
         ? (durationPhrase

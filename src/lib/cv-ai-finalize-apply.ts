@@ -80,6 +80,9 @@ import {
   evaluateSerbianStructuredDomainGate,
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
+  buildSerbianEntryOwnedSummaryFromPayload,
+  isSerbianEntryOwnedSummaryComplete,
+  SERBIAN_ENTRY_OWNED_OUTPUT_INCOMPLETE,
   SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION,
   SERBIAN_SUMMARY_ROLE_ALIGN_348_REVISION,
   SERBIAN_SUMMARY_DURATION_SCOPE_348_REVISION,
@@ -1529,6 +1532,16 @@ export type FinalizeCvAiFieldResult = {
     serbianEntryOwnedBuilderTypedFailureReason?: string | null;
     repairSkipped?: boolean;
     repairSkipReason?: string | null;
+    repairDeferred?: boolean;
+    repairDeferredReason?: string | null;
+    serbianEnrichSkipped?: boolean;
+    serbianEnrichSkipReason?: string | null;
+    serbianStructuredPayloadCreated?: boolean;
+    serbianStructuredPayloadCurrentFactCount?: number | null;
+    serbianStructuredPayloadPriorFactCount?: number | null;
+    candidateTransformationKind?: string | null;
+    candidateTransformationBeforeHash?: string | null;
+    candidateTransformationAfterHash?: string | null;
   };
 };
 
@@ -2246,9 +2259,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let spanishProviderUnsupportedClaimCount: number | null = null;
   let serbianProviderRejectionReason: string | null = null;
   let serbianClientRepairAttempted = false;
-  const serbianMaterialRepairApplied = false;
+  let serbianMaterialRepairApplied = false;
   let serbianRepairSkipped = false;
   let serbianRepairSkipReason: string | null = null;
+  let serbianRepairDeferred = false;
+  let serbianRepairDeferredReason: string | null = null;
+  let serbianEnrichSkipped = false;
+  let serbianEnrichSkipReason: string | null = null;
   let serbianEntryOwnedBuilderAvailable = false;
   let serbianEntryOwnedBuilderAttempted = false;
   let serbianEntryOwnedBuilderSucceeded = false;
@@ -2516,6 +2533,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         company: context.company,
         startDate: context.startDate,
       });
+    } else if (locale === 'sr') {
+      serbianEnrichSkipped = true;
+      serbianEnrichSkipReason = 'structured_entry_owned_candidate_complete';
     }
     candidate = dedupeSummarySentences(candidate);
   }
@@ -2669,11 +2689,23 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     candidate = dedupeSummarySentences(candidate);
     const entryDutiesSr = currentAndPriorDutiesFromCv(cv, locale);
     serbianStructuredDomainGate = evaluateSerbianStructuredDomainGate({
+      // Prefer entry-owned duties; include live Summary only as corpus evidence
+      // when fragments are thin (never as builder prose authority).
+      corpus: liveSummary || '',
       currentEntryDuties: entryDutiesSr.currentEntryDuties,
       priorEntryDuties: entryDutiesSr.priorEntryDuties,
       currentRole: context.role || entryDutiesSr.currentRoleTitle,
       priorRole: entryDutiesSr.priorRoleTitle,
       jobTitle: cv.personal?.jobTitle || '',
+      currentEntryId: entryDutiesSr.currentEntryId,
+      priorEntryIds: entryDutiesSr.priorCompany
+        ? [(cv.experience || []).find((e) => e.company === entryDutiesSr.priorCompany)?.id || '']
+          .filter(Boolean)
+        : [],
+      currentEmployer: context.company || entryDutiesSr.currentCompany,
+      priorEmployer: entryDutiesSr.priorCompany,
+      gender,
+      duration: durationSnapshot.total,
     });
     serbianEntryOwnedBuilderAvailable = serbianStructuredDomainGate.passed;
     if (serbianStructuredDomainGate.passed && candidate.trim()) {
@@ -2696,9 +2728,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ...empQuality.slotRejectionReasons,
           ...(empQuality.unsupportedClaimKinds || []),
         ].filter(Boolean);
-        // Proven Atlas/Rewitu structured domain: skip narrow provider repair and
-        // prefer entry-owned deterministic rebuild (AAB-349 Stronger device path).
-        // Never terminal-reject here — blank candidate so rebuild runs next.
+        // Prefer entry-owned deterministic rebuild. Repair is deferred until after
+        // the structured builder runs — not silently skipped without a typed reason.
         serbianRepairSkipped = true;
         serbianRepairSkipReason = 'structured_domain_deterministic_preferred';
         serbianClientRepairAttempted = false;
@@ -4138,6 +4169,32 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : undefined,
         repairSkipped: locale === 'sr' ? serbianRepairSkipped : undefined,
         repairSkipReason: locale === 'sr' ? serbianRepairSkipReason : undefined,
+        repairDeferred: locale === 'sr' ? serbianRepairDeferred : undefined,
+        repairDeferredReason: locale === 'sr' ? serbianRepairDeferredReason : undefined,
+        serbianEnrichSkipped: locale === 'sr' ? serbianEnrichSkipped : undefined,
+        serbianEnrichSkipReason: locale === 'sr' ? serbianEnrichSkipReason : undefined,
+        serbianStructuredPayloadCreated: locale === 'sr'
+          ? Boolean(serbianStructuredDomainGate?.payload)
+          : undefined,
+        serbianStructuredPayloadCurrentFactCount: locale === 'sr'
+          ? (serbianStructuredDomainGate?.payload?.currentCanonicalFacts?.length ?? null)
+          : undefined,
+        serbianStructuredPayloadPriorFactCount: locale === 'sr'
+          ? (serbianStructuredDomainGate?.payload?.priorCanonicalFacts?.length ?? null)
+          : undefined,
+        candidateTransformationKind: locale === 'sr'
+          ? (deterministicCandidateHash
+            && groundingInputCandidateHash
+            && deterministicCandidateHash !== groundingInputCandidateHash
+            ? 'serbian_grounding_enrichment'
+            : (serbianEnrichSkipped ? 'none' : 'none'))
+          : undefined,
+        candidateTransformationBeforeHash: locale === 'sr'
+          ? (deterministicCandidateHash || null)
+          : undefined,
+        candidateTransformationAfterHash: locale === 'sr'
+          ? (groundingInputCandidateHash || null)
+          : undefined,
         groundingValidationPassed,
         finalPostconditionsPassed: success,
         // Candidate-derived postcondition fields (not structured context alone).
@@ -4552,26 +4609,31 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         flattenedFactArrayUsed,
         previousSummaryTextUsedByDeterministicFallback,
         providerTextUsedByDeterministicFallback,
-        rejectionStage: blockedForDuration
-          ? 'independent_final_duration_verification'
-          : blockedForPerspective
-            ? 'perspective_validation'
-            : blockedForGrounding
-              ? 'summary_grounding'
-              : result.reason === SUMMARY_NOOP_REJECTION_REASON
-                ? 'meaningful_change'
-                : result.diagnostics?.rejectionStage,
-        typedFailureReason: blockedForDuration
-          ? 'experience_duration_mismatch'
-          : blockedForPerspective
-            ? 'summary_perspective_invalid'
-            : blockedForGrounding
-              ? (empQ && 'typedRejectionReason' in empQ && empQ.typedRejectionReason
-                ? empQ.typedRejectionReason
-                : 'summary_grounding_failed')
-              : result.reason === SUMMARY_NOOP_REJECTION_REASON
-                ? SUMMARY_NOOP_REJECTION_REASON
-                : result.diagnostics?.typedFailureReason,
+        rejectionStage: (() => {
+          const materialFail = /missing_material|grounding|slot|coverage|fact/i
+            .test(String(result.reason || result.diagnostics?.typedFailureReason || ''));
+          if (blockedForGrounding || (result.blocked && materialFail && !blockedForDuration)) {
+            return 'summary_grounding';
+          }
+          if (blockedForDuration) return 'independent_final_duration_verification';
+          if (blockedForPerspective) return 'perspective_validation';
+          if (result.reason === SUMMARY_NOOP_REJECTION_REASON) return 'meaningful_change';
+          if (result.blocked && materialFail) return 'summary_grounding';
+          return result.diagnostics?.rejectionStage;
+        })(),
+        typedFailureReason: (() => {
+          const materialFail = /missing_material|grounding|slot|coverage|fact/i
+            .test(String(result.reason || ''));
+          if (blockedForGrounding || (result.blocked && materialFail && !blockedForDuration)) {
+            return (empQ && 'typedRejectionReason' in empQ && empQ.typedRejectionReason)
+              ? empQ.typedRejectionReason
+              : (result.reason || 'summary_grounding_failed');
+          }
+          if (blockedForDuration) return 'experience_duration_mismatch';
+          if (blockedForPerspective) return 'summary_perspective_invalid';
+          if (result.reason === SUMMARY_NOOP_REJECTION_REASON) return SUMMARY_NOOP_REJECTION_REASON;
+          return result.diagnostics?.typedFailureReason ?? result.reason;
+        })(),
         grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es' || locale === 'en')
           && empQ
           && 'grammarValidationPassed' in empQ
@@ -4651,16 +4713,30 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   // Fresh entry-owned rebuild — never seed from provider/previous Summary prose.
   serbianEntryOwnedBuilderAttempted = locale === 'sr' && serbianEntryOwnedBuilderAvailable;
-  deterministicCandidateRaw = normalizeLocaleText(
-    deterministicLocalizedSummaryFromCanonical(
-      factSet,
+  if (
+    locale === 'sr'
+    && serbianStructuredDomainGate?.passed
+    && serbianStructuredDomainGate.payload
+  ) {
+    // AAB-350: gate payload is the sole builder authority — never re-derive from
+    // possibly empty factSet bullets / legacy fragments (device 52-char shell).
+    serbianEntryOwnedBuilderAttempted = true;
+    deterministicCandidateRaw = normalizeLocaleText(
+      buildSerbianEntryOwnedSummaryFromPayload(serbianStructuredDomainGate.payload),
       locale,
-      gender,
-      durationSnapshot.total,
-    ) || '',
-    locale,
-  );
-  if (locale === 'sr') {
+    );
+  } else {
+    deterministicCandidateRaw = normalizeLocaleText(
+      deterministicLocalizedSummaryFromCanonical(
+        factSet,
+        locale,
+        gender,
+        durationSnapshot.total,
+      ) || '',
+      locale,
+    );
+  }
+  if (locale === 'sr' && serbianEntryOwnedBuilderAvailable) {
     serbianEntryOwnedBuilderAttempted = true;
     serbianEntryOwnedBuilderOutputLength = deterministicCandidateRaw.length;
     serbianEntryOwnedBuilderSentenceCount = countSummaryCandidateSentences(
@@ -4670,9 +4746,55 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     serbianEntryOwnedBuilderOutputHash = deterministicCandidateRaw.trim()
       ? hashSummaryCandidate(deterministicCandidateRaw)
       : null;
-    serbianEntryOwnedBuilderSucceeded = Boolean(deterministicCandidateRaw.trim());
-    if (!serbianEntryOwnedBuilderSucceeded) {
+    const complete = isSerbianEntryOwnedSummaryComplete(deterministicCandidateRaw);
+    serbianEntryOwnedBuilderSucceeded = complete;
+    if (!deterministicCandidateRaw.trim()) {
       serbianEntryOwnedBuilderTypedFailureReason = 'serbian_entry_owned_builder_empty';
+      deterministicCandidateRaw = '';
+    } else if (!complete) {
+      serbianEntryOwnedBuilderTypedFailureReason = SERBIAN_ENTRY_OWNED_OUTPUT_INCOMPLETE;
+      // Duration-only / incomplete shells are not valid deterministic candidates.
+      deterministicCandidateRaw = '';
+    }
+    // Deferred narrow repair when structured builder failed to produce a complete
+    // candidate — recovery only, never unrestricted rewrite.
+    if (
+      !deterministicCandidateRaw.trim()
+      && serbianStructuredDomainGate?.passed
+      && providerRaw.trim()
+    ) {
+      serbianRepairDeferred = true;
+      serbianRepairDeferredReason = 'structured_builder_incomplete_deferred_repair';
+      const repair = repairSerbianSummaryProviderCandidate(providerRaw, {
+        company: context.company,
+        priorCompany: currentAndPriorDutiesFromCv(cv, locale).priorCompany,
+        gender,
+        duration: durationSnapshot.total,
+      });
+      if (repair.attempted && repair.text.trim()) {
+        serbianRepairSkipped = false;
+        serbianRepairSkipReason = null;
+        serbianClientRepairAttempted = true;
+        const repairedQ = analyzeSerbianSummaryEmploymentQuality(repair.text, {
+          company: context.company,
+          role: context.role,
+          currentEntryDuties: currentAndPriorDutiesFromCv(cv, locale).currentEntryDuties,
+          priorEntryDuties: currentAndPriorDutiesFromCv(cv, locale).priorEntryDuties,
+          priorCompany: currentAndPriorDutiesFromCv(cv, locale).priorCompany,
+          priorRole: currentAndPriorDutiesFromCv(cv, locale).priorRoleTitle,
+          structuredRole: context.role,
+          gender,
+        });
+        if (repairedQ.groundingValidationPassed) {
+          candidate = repair.text;
+          serbianMaterialRepairApplied = true;
+        } else {
+          serbianRepairSkipReason = 'structured_builder_incomplete_repair_rejected';
+        }
+      } else {
+        serbianRepairSkipReason = serbianRepairSkipReason
+          || 'structured_builder_incomplete_repair_unavailable';
+      }
     }
   }
   previousSummaryTextUsedByDeterministicFallback = Boolean(
@@ -4694,6 +4816,31 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     deterministicCandidateRaw,
     locale,
   );
+
+  // If deferred repair produced an accepted candidate, validate it as provider-repair.
+  if (
+    locale === 'sr'
+    && !deterministicCandidateRaw.trim()
+    && candidate.trim()
+  ) {
+    const repairedPass = summaryPasses(
+      candidate,
+      factSet,
+      cv,
+      locale,
+      durationSnapshot.total,
+      roleDutyConflict,
+    );
+    if (repairedPass.ok) {
+      return attachSummaryDiag({
+        blocked: false,
+        text: candidate,
+        origin: 'ai_repaired',
+        roleDutyConflict,
+        countedAsSuccess: true,
+      });
+    }
+  }
 
   if (deterministicCandidateRaw) {
     const groundedPass1 = resolveSummaryWithDurationPolicy(
@@ -4803,10 +4950,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           .trim();
       }
       // Entry-owned Serbian warehouse/design rebuild already carries company + duties.
-      // Do not splice start-date into the total-career duration sentence (AAB-348).
-      if (!isSerbianStructuredSummaryDomain(
-        `${groundedText} ${context.role || ''} ${dutiesText}`,
-      )) {
+      // Do not splice start-date into the total-career duration sentence (AAB-348/350).
+      if (
+        serbianStructuredDomainGate?.passed
+        || isSerbianEntryOwnedSummaryComplete(groundedText)
+        || isSerbianStructuredSummaryDomain(
+          `${groundedText} ${context.role || ''} ${dutiesText}`,
+        )
+      ) {
+        // Keep structured / complete entry-owned text unchanged.
+        serbianEnrichSkipped = true;
+        serbianEnrichSkipReason = 'structured_entry_owned_candidate_complete';
+      } else {
         groundedText = enrichSerbianSummaryEmploymentGrounding(groundedText, {
           role: context.role,
           company: context.company,

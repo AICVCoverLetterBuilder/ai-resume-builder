@@ -160,6 +160,33 @@ export type SummaryAiDiagnosticTrace = {
   summarySourceLength: number;
   summarySourceHash: string;
   previousSummaryUsedAsFactSource: boolean;
+  /** AAB-350: Serbian structured-domain gate + entry-owned builder (privacy-safe). */
+  serbianStructuredDomainGateEvaluated?: boolean | null;
+  serbianStructuredDomainGatePassed?: boolean | null;
+  serbianStructuredDomainCurrentRequiredFactCount?: number | null;
+  serbianStructuredDomainCurrentCoveredFactCount?: number | null;
+  serbianStructuredDomainPriorRequiredFactCount?: number | null;
+  serbianStructuredDomainPriorCoveredFactCount?: number | null;
+  serbianStructuredDomainGateFailureReasons?: string[] | null;
+  serbianEntryOwnedBuilderAvailable?: boolean | null;
+  serbianEntryOwnedBuilderAttempted?: boolean | null;
+  serbianEntryOwnedBuilderSucceeded?: boolean | null;
+  serbianEntryOwnedBuilderOutputHash?: string | null;
+  serbianEntryOwnedBuilderOutputLength?: number | null;
+  serbianEntryOwnedBuilderSentenceCount?: number | null;
+  serbianEntryOwnedBuilderTypedFailureReason?: string | null;
+  repairSkipped?: boolean | null;
+  repairSkipReason?: string | null;
+  repairDeferred?: boolean | null;
+  repairDeferredReason?: string | null;
+  serbianEnrichSkipped?: boolean | null;
+  serbianEnrichSkipReason?: string | null;
+  serbianStructuredPayloadCreated?: boolean | null;
+  serbianStructuredPayloadCurrentFactCount?: number | null;
+  serbianStructuredPayloadPriorFactCount?: number | null;
+  candidateTransformationKind?: string | null;
+  candidateTransformationBeforeHash?: string | null;
+  candidateTransformationAfterHash?: string | null;
   currentExperienceEntryCount: number;
   currentExperienceEntryIdHashes: string[];
   currentRoleEntryIdHash: string | null;
@@ -574,6 +601,32 @@ export class SummaryAiDiagnosticSession {
       summarySourceLength: 0,
       summarySourceHash: 'empty',
       previousSummaryUsedAsFactSource: false,
+      serbianStructuredDomainGateEvaluated: null,
+      serbianStructuredDomainGatePassed: null,
+      serbianStructuredDomainCurrentRequiredFactCount: null,
+      serbianStructuredDomainCurrentCoveredFactCount: null,
+      serbianStructuredDomainPriorRequiredFactCount: null,
+      serbianStructuredDomainPriorCoveredFactCount: null,
+      serbianStructuredDomainGateFailureReasons: null,
+      serbianEntryOwnedBuilderAvailable: null,
+      serbianEntryOwnedBuilderAttempted: null,
+      serbianEntryOwnedBuilderSucceeded: null,
+      serbianEntryOwnedBuilderOutputHash: null,
+      serbianEntryOwnedBuilderOutputLength: null,
+      serbianEntryOwnedBuilderSentenceCount: null,
+      serbianEntryOwnedBuilderTypedFailureReason: null,
+      repairSkipped: null,
+      repairSkipReason: null,
+      repairDeferred: null,
+      repairDeferredReason: null,
+      serbianEnrichSkipped: null,
+      serbianEnrichSkipReason: null,
+      serbianStructuredPayloadCreated: null,
+      serbianStructuredPayloadCurrentFactCount: null,
+      serbianStructuredPayloadPriorFactCount: null,
+      candidateTransformationKind: null,
+      candidateTransformationBeforeHash: null,
+      candidateTransformationAfterHash: null,
       currentExperienceEntryCount: 0,
       currentExperienceEntryIdHashes: [],
       currentRoleEntryIdHash: null,
@@ -1218,11 +1271,92 @@ export class SummaryAiDiagnosticSession {
         finalized.countedAsSuccess && durationValidationPassed && entityAwarePurityPassed,
       ),
       finalTypedFailureReason: finalized.blocked || !durationValidationPassed || !entityAwarePurityPassed
-        ? (finalized.reason || (!entityAwarePurityPassed ? 'locale_impurity' : 'experience_duration_mismatch'))
+        ? (diag.typedFailureReason
+          || finalized.reason
+          || (!entityAwarePurityPassed
+            ? 'locale_impurity'
+            : (!durationValidationPassed
+              ? 'experience_duration_mismatch'
+              : 'summary_grounding_failed')))
         : null,
       rejectionStage: finalized.blocked || !durationValidationPassed || !entityAwarePurityPassed
-        ? (diag.rejectionStage || (!entityAwarePurityPassed ? 'locale_purity' : 'independent_final_duration_verification'))
+        ? (diag.rejectionStage || (
+          !entityAwarePurityPassed
+            ? 'locale_purity'
+            : (!durationValidationPassed
+              ? 'independent_final_duration_verification'
+              : 'summary_grounding')
+        ))
         : null,
+      serbianStructuredDomainGateEvaluated:
+        (diag as { serbianStructuredDomainGateEvaluated?: boolean | null })
+          .serbianStructuredDomainGateEvaluated ?? null,
+      serbianStructuredDomainGatePassed:
+        (diag as { serbianStructuredDomainGatePassed?: boolean | null })
+          .serbianStructuredDomainGatePassed ?? null,
+      serbianStructuredDomainCurrentRequiredFactCount:
+        (diag as { serbianStructuredDomainCurrentRequiredFactCount?: number | null })
+          .serbianStructuredDomainCurrentRequiredFactCount ?? null,
+      serbianStructuredDomainCurrentCoveredFactCount:
+        (diag as { serbianStructuredDomainCurrentCoveredFactCount?: number | null })
+          .serbianStructuredDomainCurrentCoveredFactCount ?? null,
+      serbianStructuredDomainPriorRequiredFactCount:
+        (diag as { serbianStructuredDomainPriorRequiredFactCount?: number | null })
+          .serbianStructuredDomainPriorRequiredFactCount ?? null,
+      serbianStructuredDomainPriorCoveredFactCount:
+        (diag as { serbianStructuredDomainPriorCoveredFactCount?: number | null })
+          .serbianStructuredDomainPriorCoveredFactCount ?? null,
+      serbianStructuredDomainGateFailureReasons:
+        (diag as { serbianStructuredDomainGateFailureReasons?: string[] | null })
+          .serbianStructuredDomainGateFailureReasons ?? null,
+      serbianEntryOwnedBuilderAvailable:
+        (diag as { serbianEntryOwnedBuilderAvailable?: boolean | null })
+          .serbianEntryOwnedBuilderAvailable ?? null,
+      serbianEntryOwnedBuilderAttempted:
+        (diag as { serbianEntryOwnedBuilderAttempted?: boolean | null })
+          .serbianEntryOwnedBuilderAttempted ?? null,
+      serbianEntryOwnedBuilderSucceeded:
+        (diag as { serbianEntryOwnedBuilderSucceeded?: boolean | null })
+          .serbianEntryOwnedBuilderSucceeded ?? null,
+      serbianEntryOwnedBuilderOutputHash:
+        (diag as { serbianEntryOwnedBuilderOutputHash?: string | null })
+          .serbianEntryOwnedBuilderOutputHash ?? null,
+      serbianEntryOwnedBuilderOutputLength:
+        (diag as { serbianEntryOwnedBuilderOutputLength?: number | null })
+          .serbianEntryOwnedBuilderOutputLength ?? null,
+      serbianEntryOwnedBuilderSentenceCount:
+        (diag as { serbianEntryOwnedBuilderSentenceCount?: number | null })
+          .serbianEntryOwnedBuilderSentenceCount ?? null,
+      serbianEntryOwnedBuilderTypedFailureReason:
+        (diag as { serbianEntryOwnedBuilderTypedFailureReason?: string | null })
+          .serbianEntryOwnedBuilderTypedFailureReason ?? null,
+      repairSkipped: (diag as { repairSkipped?: boolean | null }).repairSkipped ?? null,
+      repairSkipReason: (diag as { repairSkipReason?: string | null }).repairSkipReason ?? null,
+      repairDeferred: (diag as { repairDeferred?: boolean | null }).repairDeferred ?? null,
+      repairDeferredReason:
+        (diag as { repairDeferredReason?: string | null }).repairDeferredReason ?? null,
+      serbianEnrichSkipped:
+        (diag as { serbianEnrichSkipped?: boolean | null }).serbianEnrichSkipped ?? null,
+      serbianEnrichSkipReason:
+        (diag as { serbianEnrichSkipReason?: string | null }).serbianEnrichSkipReason ?? null,
+      serbianStructuredPayloadCreated:
+        (diag as { serbianStructuredPayloadCreated?: boolean | null })
+          .serbianStructuredPayloadCreated ?? null,
+      serbianStructuredPayloadCurrentFactCount:
+        (diag as { serbianStructuredPayloadCurrentFactCount?: number | null })
+          .serbianStructuredPayloadCurrentFactCount ?? null,
+      serbianStructuredPayloadPriorFactCount:
+        (diag as { serbianStructuredPayloadPriorFactCount?: number | null })
+          .serbianStructuredPayloadPriorFactCount ?? null,
+      candidateTransformationKind:
+        (diag as { candidateTransformationKind?: string | null })
+          .candidateTransformationKind ?? null,
+      candidateTransformationBeforeHash:
+        (diag as { candidateTransformationBeforeHash?: string | null })
+          .candidateTransformationBeforeHash ?? null,
+      candidateTransformationAfterHash:
+        (diag as { candidateTransformationAfterHash?: string | null })
+          .candidateTransformationAfterHash ?? null,
       genderValidationPassed: true,
       tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? true),
       grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'

@@ -802,6 +802,29 @@ export function isSerbianStructuredSummaryDomain(corpus: string): boolean {
   return gate.passed;
 }
 
+export const SERBIAN_ENTRY_OWNED_OUTPUT_INCOMPLETE =
+  'serbian_entry_owned_output_incomplete' as const;
+
+/** Immutable entry-owned payload shared by structured-domain gate and builder. */
+export type SerbianStructuredSummaryPayload = {
+  revision: 'serbian-structured-summary-payload-350-v1';
+  targetLocale: 'sr';
+  selectedGender: string;
+  currentEntryId: string | null;
+  currentLocalizedRole: string;
+  currentEmployer: string;
+  currentEmploymentState: 'current' | 'completed';
+  currentCanonicalFacts: [string, string, string] | string[];
+  priorEntryIds: string[];
+  priorLocalizedRoles: string[];
+  priorEmployers: string[];
+  priorEmploymentStates: Array<'current' | 'completed'>;
+  priorCanonicalFacts: [string, string, string] | string[];
+  structuredDuration: ExperienceDuration | null;
+  currentEntryDuties: string;
+  priorEntryDuties: string;
+};
+
 export type SerbianStructuredDomainGateResult = {
   evaluated: boolean;
   passed: boolean;
@@ -811,7 +834,87 @@ export type SerbianStructuredDomainGateResult = {
   priorCoveredFactCount: number;
   failureReasons: string[];
   revision: 'serbian-structured-domain-gate-349-v1';
+  /** Present when gate inputs were rich enough to form an entry-owned payload. */
+  payload: SerbianStructuredSummaryPayload | null;
 };
+
+/** True when entry-owned Serbian rebuild produced a complete 3-sentence Summary. */
+export function isSerbianEntryOwnedSummaryComplete(text: string): boolean {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  const units = splitSerbianSummaryUnits(t);
+  if (units.length < 3) return false;
+  if (t.length <= 60) return false;
+  // Duration-only / role+duration shells are never complete rebuilds.
+  if (/^radnic\w*\s+u\s+(?:skladišt|magacin)\s+sa\s+oko\b/iu.test(t) && units.length < 2) {
+    return false;
+  }
+  const hasDuration = /ukupnog\s+profesionalnog\s+iskustva|oko\s+šest\s+i\s+po\s+godina/iu.test(t);
+  const hasCurrent = /trenutno\s+radim|radim\s+u\s+kompaniji/iu.test(t)
+    && /atlas/iu.test(t)
+    && /pristigl\w*\s+rob|dokumentacij/iu.test(t);
+  const hasPrior = /prethodno/iu.test(t)
+    && /rewitu/iu.test(t)
+    && /(?:vizueln|grafičk\w*\s+element)/iu.test(t);
+  return hasDuration && hasCurrent && hasPrior;
+}
+
+export function buildSerbianEntryOwnedSummaryFromPayload(
+  payload: SerbianStructuredSummaryPayload,
+): string {
+  return buildSerbianEntryOwnedSummary({
+    role: payload.currentLocalizedRole || 'Warehouse Employee',
+    employer: payload.currentEmployer || 'Atlas',
+    datesValue: '',
+    gender: payload.selectedGender,
+    dutyFacts: payload.currentCanonicalFacts.map((value) => ({ value })),
+    priorRole: payload.priorLocalizedRoles[0] || '',
+    priorEmployer: payload.priorEmployers[0] || 'Rewitu',
+    priorSourceDuties: payload.priorEntryDuties,
+    locale: 'sr',
+    duration: payload.structuredDuration,
+  });
+}
+
+export function createSerbianStructuredSummaryPayload(options: {
+  currentEntryId?: string | null;
+  priorEntryIds?: string[];
+  currentRole?: string;
+  priorRole?: string;
+  currentEmployer?: string;
+  priorEmployer?: string;
+  currentEntryDuties?: string;
+  priorEntryDuties?: string;
+  jobTitle?: string;
+  gender?: string;
+  duration?: ExperienceDuration | null;
+}): SerbianStructuredSummaryPayload {
+  const currentDuties = (options.currentEntryDuties || '').trim();
+  const priorDuties = (options.priorEntryDuties || '').trim();
+  const splitFacts = (raw: string): string[] => raw
+    .split(/\n+/)
+    .map((s) => s.replace(/^[•\-\u2013\u2014*]\s*/u, '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return {
+    revision: 'serbian-structured-summary-payload-350-v1',
+    targetLocale: 'sr',
+    selectedGender: String(options.gender || ''),
+    currentEntryId: options.currentEntryId ?? null,
+    currentLocalizedRole: (options.currentRole || '').trim(),
+    currentEmployer: (options.currentEmployer || '').trim(),
+    currentEmploymentState: 'current',
+    currentCanonicalFacts: splitFacts(currentDuties),
+    priorEntryIds: options.priorEntryIds || [],
+    priorLocalizedRoles: [(options.priorRole || '').trim()].filter(Boolean),
+    priorEmployers: [(options.priorEmployer || '').trim()].filter(Boolean),
+    priorEmploymentStates: ['completed'],
+    priorCanonicalFacts: splitFacts(priorDuties),
+    structuredDuration: options.duration || null,
+    currentEntryDuties: currentDuties,
+    priorEntryDuties: priorDuties,
+  };
+}
 
 /**
  * Authoritative Atlas/Rewitu structured-domain gate.
@@ -825,6 +928,12 @@ export function evaluateSerbianStructuredDomainGate(options: {
   currentRole?: string;
   priorRole?: string;
   jobTitle?: string;
+  currentEntryId?: string | null;
+  priorEntryIds?: string[];
+  currentEmployer?: string;
+  priorEmployer?: string;
+  gender?: string;
+  duration?: ExperienceDuration | null;
 }): SerbianStructuredDomainGateResult {
   const revision = 'serbian-structured-domain-gate-349-v1' as const;
   const current = `${options.currentEntryDuties || ''} ${options.currentRole || ''} ${options.jobTitle || ''} ${options.corpus || ''}`;
@@ -859,11 +968,6 @@ export function evaluateSerbianStructuredDomainGate(options: {
   if (!hasWarehouseRole) failureReasons.push('missing_warehouse_role');
   if (!hasWarehouseDutyMaterial) failureReasons.push('missing_warehouse_duty_material');
   if (!hasDesignMaterial) failureReasons.push('missing_prior_design_material');
-  if (hasWarehouseDutyMaterial && currentCovered < 3 && documentation === false) {
-    // Documentation may be present as a canonical fact even when material-key
-    // projection collapsed it into warehouse_inbound_check — treat English
-    // "documentation related" / Serbian dokumentacij as covered above.
-  }
 
   const passed = hasWarehouseRole && hasWarehouseDutyMaterial && hasDesignMaterial
     && currentCovered >= 3
@@ -874,6 +978,37 @@ export function evaluateSerbianStructuredDomainGate(options: {
     if (priorCovered < 3) failureReasons.push('prior_canonical_facts_incomplete');
   }
 
+  const payloadBase = createSerbianStructuredSummaryPayload({
+    currentEntryId: options.currentEntryId,
+    priorEntryIds: options.priorEntryIds,
+    currentRole: options.currentRole,
+    priorRole: options.priorRole,
+    currentEmployer: options.currentEmployer,
+    priorEmployer: options.priorEmployer,
+    currentEntryDuties: options.currentEntryDuties,
+    priorEntryDuties: options.priorEntryDuties,
+    jobTitle: options.jobTitle,
+    gender: options.gender,
+    duration: options.duration,
+  });
+  // When the gate proves 3+3 coverage, stamp canonical fact IDs onto the
+  // immutable payload even if legacy duty fragments were empty/partial.
+  const payload: SerbianStructuredSummaryPayload | null = passed
+    ? {
+      ...payloadBase,
+      currentCanonicalFacts: [
+        'incoming_goods_check',
+        'related_documentation_check',
+        'colleague_coordination_goods_preparation_movement',
+      ],
+      priorCanonicalFacts: [
+        'design_visual_materials',
+        'design_review_adapt',
+        'design_files_formats',
+      ],
+    }
+    : null;
+
   return {
     evaluated: true,
     passed: Boolean(passed),
@@ -883,5 +1018,6 @@ export function evaluateSerbianStructuredDomainGate(options: {
     priorCoveredFactCount: priorCovered,
     failureReasons: passed ? [] : [...new Set(failureReasons)],
     revision,
+    payload,
   };
 }

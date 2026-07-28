@@ -1683,6 +1683,52 @@ export function checkSummaryDiagnosticCompleteness(
     require('requiredFactSetMatchesAuthoritativeFactSet');
     require('currentDutyRequiredFactParityPassed');
   }
+  if (locale === 'sr') {
+    require('serbianStructuredDomainGateEvaluated');
+    require('serbianStructuredDomainGatePassed');
+    require('serbianStructuredDomainCurrentRequiredFactCount');
+    require('serbianStructuredDomainCurrentCoveredFactCount');
+    require('serbianStructuredDomainPriorRequiredFactCount');
+    require('serbianStructuredDomainPriorCoveredFactCount');
+    require('serbianEntryOwnedBuilderAvailable');
+    require('serbianEntryOwnedBuilderAttempted');
+    require('serbianEntryOwnedBuilderSucceeded');
+    if (trace.repairSkipped === true) {
+      require('repairSkipReason');
+    }
+    if (trace.serbianEntryOwnedBuilderAttempted === true) {
+      require('serbianEntryOwnedBuilderOutputLength');
+      require('serbianEntryOwnedBuilderSentenceCount');
+    }
+    if (
+      trace.serbianEntryOwnedBuilderSucceeded === false
+      && trace.serbianEntryOwnedBuilderAttempted === true
+    ) {
+      require('serbianEntryOwnedBuilderTypedFailureReason');
+    }
+    if (trace.countedAsSuccess === true) {
+      require('deterministicCandidateEqualsGroundingInput');
+      require('requiredCurrentDutyFactCount');
+      require('coveredCurrentDutyFactCount');
+      require('requiredPriorDutyFactCount');
+      require('coveredPriorDutyFactCount');
+      require('finalCurrentDutyCoveragePassed');
+      require('finalPriorDutyCoveragePassed');
+    }
+    if (trace.countedAsSuccess !== true && trace.rejectionStage != null) {
+      // Duration-ok + material-fail must not claim the duration stage.
+      if (
+        trace.durationValidationPassed === true
+        && /missing_material|grounding|slot|coverage|fact/i.test(
+          String(trace.finalTypedFailureReason || ''),
+        )
+      ) {
+        if (trace.rejectionStage === 'independent_final_duration_verification') {
+          nullish.push('rejectionStage');
+        }
+      }
+    }
+  }
   if (locale === 'en' && trace.countedAsSuccess === true) {
     require('finalUnitRoleSlots');
     require('finalUnitSemanticRolesByUnit');
