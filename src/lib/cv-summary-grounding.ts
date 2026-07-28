@@ -2258,44 +2258,30 @@ export function buildConciseGroundedSummary(
     void analyzeGermanSummaryEmploymentQuality;
     void germanWarehouseSummaryFragment;
     void GERMAN_CV_AI_302_REVISION;
-    const isGermanWarehouseDomain = /(?:warehouse|lager|skladist|magacin|radnic|кладов|مستودع)/i
-      .test(`${role} ${experienceTitle} ${sourceDuties}`)
-      || dutyFacts.some((f) => classifyMaterialDutyKeys(f.sourceText || f.value)
-        .some((k) => k.startsWith('warehouse_')));
-    if (isGermanWarehouseDomain) {
-      const deRole = /(?:warehouse|lager|skladist|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
-        ? localizeWarehouseEmployee('de', genderNorm || '')
-        : (role || localizeWarehouseEmployee('de', genderNorm || ''));
-      text = buildGermanEntryOwnedSummary({
-        role: deRole,
-        employer,
-        datesValue,
-        gender: genderNorm || '',
-        durationPhrase: durationPhrase || undefined,
-        dutyFacts,
-        priorRole: typeof priorIndex === 'number'
-          ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
-          : '',
-        priorEmployer: typeof priorIndex === 'number'
-          ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
-          : '',
-        priorSourceDuties,
-        locale: 'de',
-      });
-      skillSentence = '';
-      void skillSentence;
-    } else {
-      // Non-warehouse German (baker, engineer, …): keep generic Latin-duty path.
-      const dutyJoin = joinDutyFragments(uniqueFragments, locale);
-      const open = dutyJoin
-        ? (durationPhrase
-          ? `${role || 'Fachkraft'} ${durationPhrase} in ${dutyJoin}`
-          : `${role || 'Fachkraft'} in ${dutyJoin}`)
-        : (durationPhrase
-          ? `${role || 'Fachkraft'} ${durationPhrase}`
-          : `${role || 'Fachkraft'}`);
-      text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-    }
+    const deRole = /(?:warehouse|lager|skladist|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+      ? localizeWarehouseEmployee('de', genderNorm || '')
+      : (role || 'Fachkraft');
+    // Universal occupation path — always entry-owned first-person German from
+    // structured Experience facts (never translate the previous Summary).
+    text = buildGermanEntryOwnedSummary({
+      role: deRole,
+      employer,
+      datesValue,
+      gender: genderNorm || '',
+      durationPhrase: durationPhrase || undefined,
+      dutyFacts,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      priorEmployer: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+        : '',
+      priorSourceDuties,
+      locale: 'de',
+      duration: duration || undefined,
+    });
+    skillSentence = '';
+    void skillSentence;
   } else if (locale === 'es') {
     void SPANISH_CV_AI_305_REVISION;
     void analyzeSpanishSummaryEmploymentQuality;

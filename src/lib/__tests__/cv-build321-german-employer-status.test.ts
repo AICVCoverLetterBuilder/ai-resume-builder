@@ -346,7 +346,9 @@ describe('AAB-321 German Summary employer and status coverage', () => {
     expect(q1.finalCurrentEmploymentStateExpressed).toBe(true);
     expect(q1.finalPriorEmploymentStateExpressed).toBe(true);
     expect(q1.slotValidationPassed).toBe(true);
-    expect(q1.groundingValidationPassed).toBe(true);
+    // AAB-355: third-person repaired shells are not first-person contract-complete.
+    expect(q1.perspectiveMode).toBe('neutral_cv');
+    expect(q1.groundingValidationPassed).toBe(false);
   });
 
   it('29. repair failure dispatches deterministic fallback', () => {
@@ -382,15 +384,18 @@ describe('AAB-321 German Summary employer and status coverage', () => {
     expect(reject.countedAsSuccess).toBe(true);
     expect(reject.text).toMatch(/\bAtlas\b/);
     expect(reject.text).toMatch(/\bRewitu\b/);
-    expect(reject.text).toMatch(/seit\s+Januar\s+2023|derzeit|aktuell/i);
+    expect(reject.text).toMatch(/seit\s+Januar\s+2023|derzeit|aktuell|Derzeit\s+arbeite\s+ich/i);
     expect(reject.diagnostics?.finalCurrentEmployerPresent).toBe(true);
     expect(reject.diagnostics?.finalPriorEmployerPresent).toBe(true);
     expect(reject.diagnostics?.finalCurrentEmploymentStateExpressed).toBe(true);
     expect(reject.diagnostics?.finalSlotValidationPassed).toBe(true);
-    expect(reject.diagnostics?.finalCandidateSource).toBe('repaired_provider');
+    // AAB-355: first-person deterministic recovery after third-person repair fails perspective.
+    expect(
+      reject.diagnostics?.finalCandidateSource === 'repaired_provider'
+      || reject.diagnostics?.finalCandidateSource === 'deterministic_fallback',
+    ).toBe(true);
     expect(reject.diagnostics?.providerAccepted).toBe(false);
-    expect(reject.diagnostics?.repairAccepted).toBe(true);
-    expect(reject.diagnostics?.germanEmployerStatusRepairApplied).toBe(true);
+    expect(reject.text).toMatch(/Ich\s+verfüge|Derzeit\s+arbeite\s+ich/i);
   });
 
   it('48. failed recovery keeps usage unchanged (blocked when no safe candidate)', () => {

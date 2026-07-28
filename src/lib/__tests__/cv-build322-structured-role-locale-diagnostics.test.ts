@@ -113,7 +113,7 @@ describe('AAB-322 structured entity locale diagnostics', () => {
     );
   });
 
-  it('28-30. finalize repair lineage includes prior_role_title_localized; hashes diverge', () => {
+  it('28-30. finalize recovers German first-person with localized prior role; hashes diverge', () => {
     const fin = finalizeCvAiFieldForApply({
       action: 'summary_generate',
       field: 'summary',
@@ -125,13 +125,22 @@ describe('AAB-322 structured entity locale diagnostics', () => {
       referenceDateIso: REF,
     });
     expect(fin.blocked).toBe(false);
-    expect(fin.diagnostics?.finalCandidateSource).toBe('repaired_provider');
-    expect(fin.diagnostics?.repairTransformationKinds).toEqual(
-      expect.arrayContaining(['prior_role_title_localized']),
-    );
-    expect(fin.diagnostics?.repairRoleLocalizationTransformationKinds).toEqual(
-      expect.arrayContaining(['prior_role_title_localized']),
-    );
+    // AAB-355: third-person repaired shells fail first-person contract → deterministic recovery.
+    expect(
+      fin.diagnostics?.finalCandidateSource === 'repaired_provider'
+      || fin.diagnostics?.finalCandidateSource === 'deterministic_fallback',
+    ).toBe(true);
+    expect(fin.text).toMatch(/Grafikdesignerin/);
+    expect(fin.text).not.toMatch(/Diseñadora\s+gráfica/i);
+    expect(fin.text).toMatch(/Ich\s+verfüge|Derzeit\s+arbeite\s+ich/i);
+    if (fin.diagnostics?.finalCandidateSource === 'repaired_provider') {
+      expect(fin.diagnostics?.repairTransformationKinds).toEqual(
+        expect.arrayContaining(['prior_role_title_localized']),
+      );
+      expect(fin.diagnostics?.repairRoleLocalizationTransformationKinds).toEqual(
+        expect.arrayContaining(['prior_role_title_localized']),
+      );
+    }
     expect(fin.diagnostics?.structuredRoleLocaleValidationPassed).toBe(true);
     expect(fin.diagnostics?.finalStructuredRoleLocaleValidationPassed).toBe(true);
     expect(fin.diagnostics?.finalForeignRoleTitleCount).toBe(0);
@@ -139,10 +148,15 @@ describe('AAB-322 structured entity locale diagnostics', () => {
     expect(fin.diagnostics?.targetLocalePurityPassed).toBe(true);
     expect(fin.diagnostics?.sourceLanguageLeakageDetected).toBe(false);
     const providerHash = String(fin.diagnostics?.providerCandidateHash || '');
-    const repairHash = String(fin.diagnostics?.repairCandidateHash || '');
-    expect(repairHash.length).toBeGreaterThan(0);
+    const finalHash = String(
+      fin.diagnostics?.finalValidatedCandidateHash
+      || fin.diagnostics?.deterministicCandidateHash
+      || fin.diagnostics?.repairCandidateHash
+      || '',
+    );
+    expect(finalHash.length).toBeGreaterThan(0);
     if (providerHash) {
-      expect(repairHash).not.toBe(providerHash);
+      expect(finalHash).not.toBe(providerHash);
     }
   });
 

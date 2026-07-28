@@ -153,7 +153,7 @@ describe('AAB-319 German Summary duration scope and acceptance', () => {
       'mit etwa sechseinhalb Jahren Erfahrung',
       'female',
     );
-    expect(sentence).toMatch(/^Insgesamt verfügt sie über etwa sechseinhalb Jahre Berufserfahrung\.$/);
+    expect(sentence).toMatch(/^Ich verfüge über insgesamt etwa sechseinhalb Jahre Berufserfahrung\.$/);
   });
 
   it('empty German Summary finalize: duration scope + slots + acceptance diagnostics', () => {

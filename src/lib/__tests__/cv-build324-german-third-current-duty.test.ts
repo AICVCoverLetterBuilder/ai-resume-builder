@@ -165,10 +165,11 @@ describe('AAB-324 German Summary third current duty and parity', () => {
     expect(ok.requiredCurrentDutyFactCount).toBe(3);
     expect(ok.coveredCurrentDutyFactCount).toBe(3);
     expect(ok.finalCurrentDutyCoveragePassed).toBe(true);
-    expect(full).toMatch(/Prüfung\s+eingehender\s+Waren/iu);
-    expect(full).toMatch(/zugehörigen\s+Dokumentation/iu);
-    expect(full).toMatch(/Abstimmung\s+mit\s+Kolleg/iu);
+    expect(full).toMatch(/eingehende\s+Waren\s+prüfe/iu);
+    expect(full).toMatch(/Dokumentation\s+kontrolliere|gehörende\s+Dokumentation/iu);
+    expect(full).toMatch(/Kolleg|abstimme/iu);
     expect(full).not.toMatch(/Erfahrung\s+in\s+die\s+Abstimmung/iu);
+    expect(full).toMatch(/grafische\s+Elemente/iu);
     expect(validateGermanGeneratedCaseGrammar(full).germanControlledCaseGrammarPassed).toBe(true);
 
     const regress = validateSummaryEntryDutyCoverage({
@@ -214,11 +215,13 @@ describe('AAB-324 German Summary third current duty and parity', () => {
     expect(phrase).toMatch(/sowie in der Abstimmung/iu);
     expect(text).toMatch(/\bLagermitarbeiterin\b/);
     expect(text).toMatch(/\bAtlas\b/);
-    expect(text).toMatch(/seit Januar 2023/iu);
+    expect(text).toMatch(/Derzeit\s+arbeite\s+ich/iu);
     expect(text).toMatch(/\bGrafikdesignerin\b/);
     expect(text).toMatch(/\bRewitu\b/);
-    expect(text).toMatch(/Insgesamt/iu);
-    expect((text.match(/Abstimmung/giu) || []).length).toBe(1);
+    expect(text).toMatch(/Ich\s+verfüge|insgesamt/iu);
+    expect(text).toMatch(/grafische\s+Elemente/iu);
+    expect(text).toMatch(/Bildschirme/iu);
+    expect((text.match(/abstimme|Abstimmung/giu) || []).length).toBeGreaterThanOrEqual(1);
   });
 
   it('26-30. finalize recovers Spanish Atlas with 3/3 parity and apply', () => {
@@ -240,8 +243,9 @@ describe('AAB-324 German Summary third current duty and parity', () => {
     expect(fin.diagnostics?.currentDutyRequiredFactParityPassed).toBe(true);
     expect(fin.diagnostics?.requiredFactSetMatchesAuthoritativeFactSet).toBe(true);
     expect(fin.diagnostics?.unclassifiedAuthoritativeCurrentDutyFactCount).toBe(0);
-    expect(fin.text).toMatch(/Abstimmung\s+mit\s+Kolleg/iu);
+    expect(fin.text).toMatch(/Kolleg|abstimme/iu);
     expect(fin.text).not.toMatch(/Erfahrung\s+in\s+die\s+Abstimmung/iu);
+    expect(fin.text).toMatch(/Derzeit\s+arbeite\s+ich|Ich\s+verfüge/iu);
   });
 
   it('German WH_DE still yields 3/3', () => {

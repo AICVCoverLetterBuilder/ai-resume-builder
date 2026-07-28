@@ -7,6 +7,7 @@
 import type { Locale } from './i18n/translations';
 import {
   foldLatinDiacritics,
+  localizeBaker,
   localizeGraphicDesigner,
   localizeOccupationalTitleForProjection,
   localizeWarehouseEmployee,
@@ -89,6 +90,10 @@ function looksLikeTargetLocaleRole(role: string, targetLocale: Locale): boolean 
 function resolveCanonicalOccupationId(role: string): string | null {
   if (matchesGraphicDesignerOccupationalTitle(role)) return 'graphic_designer';
   if (matchesWarehouseOccupationalTitle(role)) return 'warehouse_employee';
+  if (/\b(?:baker|bäcker(?:in)?|pekar(?:ka)?|boulanger|panader[oa]|panettier)\b/iu.test(role)
+    || /बेकर|خباز|ベイカー/u.test(role)) {
+    return 'baker';
+  }
   return null;
 }
 
@@ -170,6 +175,20 @@ export function resolveLocalizedSummaryRole(options: {
   }
   if (canonicalId === 'warehouse_employee') {
     const localized = localizeWarehouseEmployee(targetLocale, options.gender);
+    return {
+      ...emptyBase,
+      canonicalRoleIdentity: canonicalId,
+      canonicalRoleIdentityHash: canonicalHash,
+      localizedTargetRoleLabel: localized,
+      localizedTargetRoleLabelHash: hashOpaque(localized),
+      localizationSource: 'canonical_occupation_dictionary',
+      localizationConfidence: 'high',
+      localizationValidationPassed: true,
+      rejectionReasons: [],
+    };
+  }
+  if (canonicalId === 'baker') {
+    const localized = localizeBaker(targetLocale, options.gender);
     return {
       ...emptyBase,
       canonicalRoleIdentity: canonicalId,

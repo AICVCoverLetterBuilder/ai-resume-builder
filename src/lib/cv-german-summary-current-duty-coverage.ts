@@ -80,7 +80,7 @@ const DOCUMENT_RE = /(?:zugehörig\w*\s+(?:Dokumentation|Unterlagen|Dokumente|Be
  * AAB-324: Spanish past-tense Coordinó (ó) must match — bare `coordina` does not.
  * Also accept compañeros / colleagues as coordination participants.
  */
-const COORD_RE = /(?:Abstimmung|Koordination).{0,80}(?:Kolleg|Vorbereitung|Bewegung|Transport)|(?:Kolleg\w*).{0,80}(?:Vorbereitung|Bewegung|Transport|Abstimmung|vorbereiten|bewegen)|(?:coordin[aoó]|koordin)\w*.{0,100}(?:prepar|movim|mercanc|coleg|compa[nñ]er|colleague|Kolleg|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:compa[nñ]er\w*|colleague\w*|Kolleg\w*).{0,100}(?:prepar|movim|mercanc|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+von\s+Waren)|(?:Waren).{0,40}(?:Kolleg\w*).{0,40}(?:vorbereit|beweg|Transport)|(?:Kolleg\w*).{0,40}(?:Waren).{0,40}(?:vorbereit|beweg|Transport)|(?:vorbereiten\s+und\s+bewegen)/iu;
+const COORD_RE = /(?:Abstimmung|Koordination|abstimme|abstimm\w*).{0,80}(?:Kolleg|Vorbereitung|Bewegung|Transport)|(?:Kolleg\w*).{0,80}(?:Vorbereitung|Bewegung|Transport|Abstimmung|vorbereiten|bewegen|abstimme)|(?:coordin[aoó]|koordin)\w*.{0,100}(?:prepar|movim|mercanc|coleg|compa[nñ]er|colleague|Kolleg|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:compa[nñ]er\w*|colleague\w*|Kolleg\w*).{0,100}(?:prepar|movim|mercanc|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+(?:von\s+)?Waren)|(?:Bewegung\s+der\s+Waren)|(?:Waren).{0,40}(?:Kolleg\w*).{0,40}(?:vorbereit|beweg|Transport|abstimm)|(?:Kolleg\w*).{0,40}(?:Waren).{0,40}(?:vorbereit|beweg|Transport|abstimm)|(?:vorbereiten\s+und\s+bewegen)/iu;
 
 function splitDutyBullets(text: string): string[] {
   return (text || '')
@@ -123,6 +123,8 @@ export function extractGermanCurrentWarehouseDutyFacts(options: {
       matchRes: [
         /Prüfung\s+eingehender\s+Waren/iu,
         /Kontrolle\s+eingehender\s+Waren/iu,
+        /eingehende\s+Waren\s+prüfe/iu,
+        /prüfe.{0,24}eingehende\s+Waren/iu,
         /Warenannahme(?:\s+und\s+-?prüfung)?/iu,
         /Wareneingang/iu,
         INCOMING_RE,
@@ -138,6 +140,8 @@ export function extractGermanCurrentWarehouseDutyFacts(options: {
         /Prüfung\s+(?:der\s+)?zugehörigen\s+(?:Unterlagen|Dokumente|Belege)/iu,
         /Dokumentenprüfung/iu,
         /Kontrolle\s+der\s+zugehörigen\s+(?:Dokumentation|Unterlagen)/iu,
+        /(?:gehörende|zugehörig\w*)\s+Dokumentation/iu,
+        /Dokumentation\s+kontrolliere/iu,
         DOCUMENT_RE,
       ],
     },
@@ -150,7 +154,9 @@ export function extractGermanCurrentWarehouseDutyFacts(options: {
       matchRes: [
         /Abstimmung\s+mit\s+Kolleg/iu,
         /Koordination\s+mit\s+Kolleg/iu,
-        /(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+von\s+Waren)/iu,
+        /abstimme.{0,60}Kolleg/iu,
+        /Kolleg\w*.{0,60}abstimme/iu,
+        /(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+(?:von\s+|der\s+)?Waren)/iu,
         COORD_RE,
       ],
     },

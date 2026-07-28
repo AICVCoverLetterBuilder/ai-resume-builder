@@ -24,9 +24,9 @@ function formatGermanEmployerPrepositional(employer: string): string {
 const CURRENT_STATUS_MARKERS_DE =
   /\b(?:derzeit|aktuell|gegenwärtig|seit)\b/iu;
 const CURRENT_EMPLOYMENT_CONSTRUCTION_DE =
-  /\b(?:arbeitet|ist)\s+bei\b|\bbei\s+\S+\s+tätig\b/iu;
+  /\b(?:arbeitet|ist|arbeite)\s+bei\b|\barbeite\s+ich\s+bei\b|\bich\s+arbeite\s+bei\b|\bbei\s+\S+\s+tätig\b/iu;
 const PRIOR_TRANSITION_MARKERS_DE =
-  /\b(?:zuvor|früher|vorher|davor|arbeitete|war\s+(?:sie|er|die\s+Fachkraft)|war\s+tätig)\b/iu;
+  /\b(?:zuvor|früher|vorher|davor|arbeitete|arbeitete\s+ich|war\s+(?:sie|er|die\s+Fachkraft|ich)|war\s+tätig)\b/iu;
 const GENERIC_MIT_ERFAHRUNG_DE =
   /\bmit\s+Erfahrung\b/iu;
 const TOTAL_DURATION_UNIT_DE =

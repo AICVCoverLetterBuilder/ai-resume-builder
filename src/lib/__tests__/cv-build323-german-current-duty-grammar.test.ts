@@ -174,15 +174,17 @@ describe('AAB-323 German Summary current duty coverage and grammar', () => {
       priorEmployer: 'Rewitu',
       priorSourceDuties: GD_ES,
     });
-    expect(text).toMatch(/Prüfung\s+eingehender\s+Waren/i);
-    expect(text).toMatch(/zugehörigen\s+Dokumentation/i);
-    expect(text).toMatch(/Abstimmung\s+mit\s+Kolleg/i);
+    expect(text).toMatch(/eingehende\s+Waren\s+prüfe/i);
+    expect(text).toMatch(/Dokumentation\s+kontrolliere|gehörende\s+Dokumentation/i);
+    expect(text).toMatch(/Kolleg|abstimme/i);
     expect(text).not.toMatch(/in\s+die\s+Abstimmung/i);
-    expect(text).toMatch(/mit\s+Erfahrung\s+in\s+der\s+Prüfung/i);
+    expect(text).toMatch(/Derzeit\s+arbeite\s+ich|Ich\s+verfüge/i);
     expect(text).toMatch(/\bAtlas\b/);
     expect(text).toMatch(/\bRewitu\b/);
     expect(text).toMatch(/Grafikdesignerin/);
     expect(text).toMatch(/insgesamt/i);
+    expect(text).toMatch(/grafische\s+Elemente/i);
+    expect(text).toMatch(/Bildschirme/i);
     expect(validateGermanGeneratedCaseGrammar(text).germanControlledCaseGrammarPassed).toBe(true);
 
     const facts = extractGermanCurrentWarehouseDutyFacts({ currentEntryDuties: WH_DE });
@@ -229,10 +231,11 @@ describe('AAB-323 German Summary current duty coverage and grammar', () => {
     });
     expect(fin.blocked).toBe(false);
     expect(fin.countedAsSuccess).toBe(true);
-    expect(fin.text).toMatch(/Prüfung\s+eingehender\s+Waren/i);
-    expect(fin.text).toMatch(/zugehörigen\s+Dokumentation/i);
-    expect(fin.text).toMatch(/Abstimmung\s+mit\s+Kolleg/i);
+    expect(fin.text).toMatch(/eingehende\s+Waren\s+prüfe/i);
+    expect(fin.text).toMatch(/Dokumentation\s+kontrolliere|gehörende\s+Dokumentation/i);
+    expect(fin.text).toMatch(/Kolleg|abstimme/i);
     expect(fin.text).not.toMatch(/in\s+die\s+Abstimmung/i);
+    expect(fin.text).toMatch(/Derzeit\s+arbeite\s+ich|Ich\s+verfüge/i);
     expect(fin.diagnostics?.finalCurrentDutyCoveragePassed).toBe(true);
     expect(fin.diagnostics?.coveredCurrentDutyFactCount).toBe(3);
     expect(fin.diagnostics?.requiredCurrentDutyFactCount).toBe(3);

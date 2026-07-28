@@ -8,6 +8,7 @@ import { classifyMaterialDutyKeys } from './cv-material-duty-coverage';
 import {
   localizeGraphicDesigner,
   localizeWarehouseEmployee,
+  localizeBaker,
   matchesWarehouseOccupationalTitle,
 } from './cv-role-title';
 import {
@@ -146,7 +147,13 @@ export {
 export const GERMAN_CV_AI_302_REVISION = 'german-cv-ai-302-v1' as const;
 export const SUMMARY_UNIT_SPLITTER_REVISION_DE = 'german-three-sentence-slots-v1' as const;
 export const SUMMARY_GROUNDING_REVISION_DE = 'entry-owned-german-grounding-v1' as const;
-export const SUMMARY_BUILDER_REVISION_DE = 'entry-owned-german-rebuild-v1' as const;
+export const SUMMARY_BUILDER_REVISION_DE = 'entry-owned-german-rebuild-355-v1' as const;
+export const GERMAN_SUMMARY_FIRST_PERSON_355_REVISION =
+  'german-summary-first-person-355-v1' as const;
+export const GERMAN_SUMMARY_PRIOR_COVERAGE_355_REVISION =
+  'german-summary-prior-coverage-355-v1' as const;
+void GERMAN_SUMMARY_FIRST_PERSON_355_REVISION;
+void GERMAN_SUMMARY_PRIOR_COVERAGE_355_REVISION;
 export const SUMMARY_DURATION_FINALIZER_REVISION_DE = 'german-duration-idempotent-v1' as const;
 export const GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER =
   'german-summary-strict-postconditions-v1' as const;
@@ -200,9 +207,110 @@ export type GermanSummaryRoleSlot =
   | 'current_intro'
   | 'current_duty'
   | 'prior_role'
+  | 'duration'
   | 'total_duration'
   | 'skills'
   | 'other';
+
+export type GermanSummaryFactCoverage = {
+  requiredCurrentDutyFactCount: number;
+  coveredCurrentDutyFactCount: number;
+  missingCurrentDutyFactCount: number;
+  finalCurrentDutyCoveragePassed: boolean;
+  requiredPriorDutyFactCount: number;
+  coveredPriorDutyFactCount: number;
+  missingPriorDutyFactCount: number;
+  finalPriorDutyCoveragePassed: boolean;
+};
+
+export function analyzeGermanSummaryFactCoverage(
+  summary: string,
+  options: {
+    currentEntryDuties?: string;
+    priorEntryDuties?: string;
+    role?: string;
+    priorRole?: string;
+  } = {},
+): GermanSummaryFactCoverage {
+  void GERMAN_SUMMARY_PRIOR_COVERAGE_355_REVISION;
+  const text = (summary || '').replace(/\s+/g, ' ').trim();
+  const units = splitGermanSummaryUnits(text);
+  const priorUnits = units.filter((u) => /\b(?:zuvor|früher|vorher|arbeitete)\b/iu.test(u)).join(' ');
+  const currentUnits = units.filter((u) => !/\b(?:zuvor|früher|vorher)\b/iu.test(u)).join(' ');
+
+  const warehouseDomain = WAREHOUSE_FACT_CUE_DE.test(
+    `${options.role || ''} ${options.currentEntryDuties || ''}`,
+  ) || matchesWarehouseOccupationalTitle(options.role || '');
+  const designDomain = DESIGN_FACT_CUE_DE.test(
+    `${options.priorRole || ''} ${options.priorEntryDuties || ''}`,
+  ) || /grafik|design|diseñ|dizajn/i.test(
+    `${options.priorRole || ''} ${options.priorEntryDuties || ''}`,
+  );
+
+  const requiredCurrentFacts = extractGermanCurrentWarehouseDutyFacts({
+    currentEntryDuties: options.currentEntryDuties,
+  });
+  const currentCov = validateSummaryEntryDutyCoverage({
+    requiredFacts: requiredCurrentFacts,
+    candidateText: currentUnits || text,
+  });
+  const requiredCurrent = warehouseDomain && requiredCurrentFacts.length >= 2
+    ? requiredCurrentFacts.length
+    : 0;
+  const currentCovered = requiredCurrent
+    ? currentCov.coveredCurrentDutyFactCount
+    : 0;
+
+  const creationOk = /visuelle\s+Materialien/iu.test(priorUnits)
+    && /grafische\s+Elemente/iu.test(priorUnits);
+  const reviewOk = /(?:überprüfte|überarbeitete|anpasste|überprüfen|überarbeiten|anpassen)/iu
+    .test(priorUnits)
+    && /(?:Designmaterialien|Designunterlagen)/iu.test(priorUnits);
+  const finalOk = /(?:finale\s+Designdateien|finale\s+Dateien)/iu.test(priorUnits)
+    && /Formate/iu.test(priorUnits)
+    && /Bildschirme/iu.test(priorUnits);
+  const priorCovered = [creationOk, reviewOk, finalOk].filter(Boolean).length;
+  const requiredPrior = designDomain ? 3 : 0;
+
+  return {
+    requiredCurrentDutyFactCount: requiredCurrent,
+    coveredCurrentDutyFactCount: requiredCurrent ? currentCovered : 0,
+    missingCurrentDutyFactCount: requiredCurrent
+      ? Math.max(0, requiredCurrent - currentCovered)
+      : 0,
+    finalCurrentDutyCoveragePassed: !requiredCurrent || currentCovered >= requiredCurrent,
+    requiredPriorDutyFactCount: requiredPrior,
+    coveredPriorDutyFactCount: requiredPrior ? priorCovered : 0,
+    missingPriorDutyFactCount: requiredPrior
+      ? Math.max(0, requiredPrior - priorCovered)
+      : 0,
+    finalPriorDutyCoveragePassed: !requiredPrior || priorCovered >= 3,
+  };
+}
+
+export function detectGermanSummaryPerspective(
+  text: string,
+): 'first_person' | 'neutral_cv' {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return 'neutral_cv';
+  if (
+    /\bIch\b/.test(t)
+    || /\bich\s+(?:arbeite|arbeitete|verfüge|prüfe|kontrolliere|abstimme|erstellte|überprüfte|anpasste|vorbereitete)\b/iu
+      .test(t)
+    || /\b(?:arbeite|arbeitete|verfüge)\s+ich\b/iu.test(t)
+  ) {
+    return 'first_person';
+  }
+  return 'neutral_cv';
+}
+
+export function isGermanThirdPersonBiographySummary(text: string): boolean {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return false;
+  if (detectGermanSummaryPerspective(t) === 'first_person') return false;
+  return /\b(?:verfügt\s+sie|verfügt\s+er|war\s+sie|war\s+er|Lagermitarbeiterin\s+bei)\b/iu
+    .test(t);
+}
 
 /** Natural German employer preposition — `bei Atlas`, never `in Atlas` for employers. */
 export function formatGermanEmployerPrepositional(employer: string): string | null {
@@ -331,6 +439,11 @@ export type GermanSummaryEmploymentQuality = {
   finalPriorEmploymentStateExpressed?: boolean;
   finalPriorRoleIntroValidationPassed?: boolean;
   finalPriorDutyCoveragePassed?: boolean;
+  requiredPriorDutyFactCount?: number;
+  coveredPriorDutyFactCount?: number;
+  missingPriorDutyFactCount?: number;
+  perspectiveMode?: 'first_person' | 'neutral_cv';
+  perspectiveValidationPassed?: boolean;
   finalTotalDurationSlotPresent?: boolean;
   finalSlotValidationPassed?: boolean;
   finalSlotRejectionReasons?: string[];
@@ -476,6 +589,25 @@ export function analyzeGermanSummaryEmploymentQuality(
   });
   const caseGrammar = validateGermanGeneratedCaseGrammar(text);
 
+  const dutiesCorpus = `${options.currentEntryDuties || ''} ${options.priorEntryDuties || ''} ${options.role || ''}`;
+  const warehouseDomain = WAREHOUSE_FACT_CUE_DE.test(dutiesCorpus)
+    || matchesWarehouseOccupationalTitle(options.role || '')
+    || /lager|warehouse/i.test(options.role || '');
+  const designDomain = DESIGN_FACT_CUE_DE.test(dutiesCorpus)
+    || /grafik|design|diseñ|dizajn/i.test(
+      `${options.role || ''} ${options.priorRole || ''} ${options.priorEntryDuties || ''}`,
+    );
+
+  const factCoverage = analyzeGermanSummaryFactCoverage(text, {
+    currentEntryDuties: options.currentEntryDuties,
+    priorEntryDuties: options.priorEntryDuties,
+    role: options.role,
+    priorRole: options.priorRole,
+  });
+  const perspectiveMode = detectGermanSummaryPerspective(text);
+  const perspectiveValidationPassed = perspectiveMode === 'first_person'
+    || !(warehouseDomain || designDomain);
+
   const currentRoleCoverage = analyzeGermanCurrentRoleCoverage(text, {
     company: options.company,
     role: localizedCurrentRole || options.role,
@@ -505,14 +637,6 @@ export function analyzeGermanSummaryEmploymentQuality(
   );
 
   let reason: string | null = null;
-  const dutiesCorpus = `${options.currentEntryDuties || ''} ${options.priorEntryDuties || ''} ${options.role || ''}`;
-  const warehouseDomain = WAREHOUSE_FACT_CUE_DE.test(dutiesCorpus)
-    || matchesWarehouseOccupationalTitle(options.role || '')
-    || /lager|warehouse/i.test(options.role || '');
-  const designDomain = DESIGN_FACT_CUE_DE.test(dutiesCorpus)
-    || /grafik|design|diseñ|dizajn/i.test(
-      `${options.role || ''} ${options.priorRole || ''} ${options.priorEntryDuties || ''}`,
-    );
   const requireSlots = warehouseDomain || designDomain;
 
   const semanticCurrentIntro = unitSemanticAnalyses.some((a) => (
@@ -526,14 +650,14 @@ export function analyzeGermanSummaryEmploymentQuality(
     a.detectedSemanticRoles.includes('prior_role_intro')
     || a.detectedSemanticRoles.includes('prior_role_duties')
   ));
-  // AAB-321: slot presence derives from serialized semantic roles (not a hidden
-  // classifier). Employer/status remain separate gate fields for slotValidationPassed.
+  // AAB-321: slot presence derives from validated semantic + employer/status coverage.
+  // A mere sentence position is insufficient — role title, employer, state, duties required.
   const currentIntroSlotPresent = finalUnitSemanticRolesByUnit.some((roles) => (
     roles.includes('current_role_intro')
-  ));
+  )) && currentRoleCoverage.currentRoleIntroValidationPassed;
   const priorRoleSlotPresent = finalUnitSemanticRolesByUnit.some((roles) => (
     roles.includes('prior_role_intro') || roles.includes('prior_role_duties')
-  ));
+  )) && priorRoleCoverage.priorRoleIntroValidationPassed;
   // When structured prior employer exists, priorRoleSlotPresent alone is insufficient
   // for grounding — priorRoleIntroValidationPassed / slotValidationPassed enforce it.
   const totalDurationSlotPresent = finalUnitSemanticRolesByUnit.some((roles) => (
@@ -601,6 +725,13 @@ export function analyzeGermanSummaryEmploymentQuality(
     && !currentDutyCoverage.finalCurrentDutyCoveragePassed
   ) {
     reason = 'current_duty_fact_coverage_incomplete';
+  } else if (
+    factCoverage.requiredPriorDutyFactCount > 0
+    && !factCoverage.finalPriorDutyCoveragePassed
+  ) {
+    reason = 'prior_duty_fact_coverage_incomplete';
+  } else if (!perspectiveValidationPassed) {
+    reason = 'german_summary_perspective_not_first_person';
   } else if (!caseGrammar.germanControlledCaseGrammarPassed) {
     reason = caseGrammar.failureKinds[0] || 'german_controlled_case_grammar_failed';
   } else if (!slotValidationPassed) {
@@ -621,6 +752,8 @@ export function analyzeGermanSummaryEmploymentQuality(
     && currentDutyParity.currentDutyRequiredFactParityPassed
     && (requiredCurrentDutyFacts.length === 0
       || currentDutyCoverage.finalCurrentDutyCoveragePassed)
+    && factCoverage.finalPriorDutyCoveragePassed
+    && perspectiveValidationPassed
     && caseGrammar.germanControlledCaseGrammarPassed
     && (durationScope.finalDurationScopeValidationPassed || !DURATION_CUE_PRESENT(text));
 
@@ -691,7 +824,12 @@ export function analyzeGermanSummaryEmploymentQuality(
     finalPriorEmployerPresent: priorRoleCoverage.priorEmployerPresent,
     finalPriorEmploymentStateExpressed: priorRoleCoverage.priorEmploymentStateExpressed,
     finalPriorRoleIntroValidationPassed: priorRoleCoverage.priorRoleIntroValidationPassed,
-    finalPriorDutyCoveragePassed: semanticPriorRole,
+    finalPriorDutyCoveragePassed: factCoverage.finalPriorDutyCoveragePassed,
+    requiredPriorDutyFactCount: factCoverage.requiredPriorDutyFactCount,
+    coveredPriorDutyFactCount: factCoverage.coveredPriorDutyFactCount,
+    missingPriorDutyFactCount: factCoverage.missingPriorDutyFactCount,
+    perspectiveMode,
+    perspectiveValidationPassed,
     finalTotalDurationSlotPresent: totalDurationSlotPresent,
     finalSlotValidationPassed,
     finalSlotRejectionReasons,
@@ -761,12 +899,22 @@ export function buildGermanEntryOwnedSummary(options: {
   priorSourceDuties?: string;
   locale?: Locale;
   duration?: ExperienceDuration | null;
+  /** Optional extra completed entries for large-CV prior selection. */
+  additionalPriorEntries?: Array<{
+    role?: string;
+    employer?: string;
+    duties?: string;
+    entryId?: string;
+  }>;
+  hasCurrentRole?: boolean;
 }): string {
   void SUMMARY_BUILDER_REVISION_DE;
   void SUMMARY_GROUNDING_REVISION_DE;
   void SUMMARY_UNIT_SPLITTER_REVISION_DE;
   void GERMAN_CV_AI_302_REVISION;
+  void GERMAN_SUMMARY_FIRST_PERSON_355_REVISION;
   void options.locale;
+  void options.datesValue;
 
   const g = String(options.gender || '').toLowerCase();
   const female = g === 'female' || g === 'f' || g === 'weiblich';
@@ -774,22 +922,69 @@ export function buildGermanEntryOwnedSummary(options: {
   const unspecified = !female && !male;
 
   let role = (options.role || '').trim();
+  const currentDutiesCorpus = options.dutyFacts
+    .map((f) => f.sourceText || f.value)
+    .filter(Boolean)
+    .join('\n');
   const warehouseRole = !role
     || /^(?:fachkraft|professional|professionalin)$/iu.test(role)
     || matchesWarehouseOccupationalTitle(role)
-    || /lager|warehouse|skladist|magazin/i.test(role);
-  if (!unspecified) {
+    || /lager|warehouse|skladist|magazin/i.test(role)
+    || /(?:warehouse|lager|skladist|magacin)/i.test(currentDutiesCorpus);
+  const cookingRole = /baker|bäcker|pekar|cook|chef|kuvar|küche|kitchen|bäck/i
+    .test(`${role} ${currentDutiesCorpus}`);
+  if (cookingRole && !warehouseRole) {
+    if (/baker|bäcker|pekar|bäck/i.test(role) || !role) {
+      role = localizeBaker('de', options.gender);
+    } else {
+      const resolved = resolveLocalizedSummaryRole({
+        role,
+        targetLocale: 'de',
+        gender: options.gender,
+      });
+      if (resolved.localizationValidationPassed) {
+        role = resolved.localizedTargetRoleLabel;
+      }
+    }
+  } else if (!unspecified) {
     if (!role || /^(?:fachkraft|professional|professionalin)$/iu.test(role) || warehouseRole) {
       role = localizeWarehouseEmployee('de', options.gender);
+    } else {
+      const resolved = resolveLocalizedSummaryRole({
+        role,
+        targetLocale: 'de',
+        gender: options.gender,
+      });
+      if (resolved.localizationValidationPassed) {
+        role = resolved.localizedTargetRoleLabel;
+      }
     }
   } else if (warehouseRole) {
-    role = 'Fachkraft mit Lagererfahrung';
+    // Preserve structured warehouse title when present; avoid replacing a concrete
+    // Lagermitarbeiter(in) with a generic Fachkraft label that fails title match.
+    if (!role || /^(?:fachkraft|professional|professionalin)$/iu.test(role)) {
+      role = 'Fachkraft mit Lagererfahrung';
+    } else {
+      const resolved = resolveLocalizedSummaryRole({
+        role,
+        targetLocale: 'de',
+        gender: options.gender,
+      });
+      if (resolved.localizationValidationPassed) {
+        role = resolved.localizedTargetRoleLabel;
+      }
+    }
+  } else if (role) {
+    const resolved = resolveLocalizedSummaryRole({
+      role,
+      targetLocale: 'de',
+      gender: options.gender,
+    });
+    if (resolved.localizationValidationPassed) {
+      role = resolved.localizedTargetRoleLabel;
+    }
   }
 
-  const startMatch = /^(\d{4})-(\d{2})/.exec(options.datesValue || '');
-  const monthYear = startMatch && GERMAN_MONTHS[startMatch[2]]
-    ? `${GERMAN_MONTHS[startMatch[2]]} ${startMatch[1]}`
-    : '';
   const company = (options.employer || '').trim();
   const beiCompany = formatGermanEmployerPrepositional(company);
 
@@ -802,96 +997,126 @@ export function buildGermanEntryOwnedSummary(options: {
       .replace(/\.$/u, '')
       .trim();
   }
-  // Prefer written half-years; never leave hybrid numeric forms.
   durRaw = durRaw
     .replace(/\b6[,.]5\b/gu, 'sechseinhalb')
     .replace(/\b3[,.]5\b/gu, 'dreieinhalb')
     .replace(/\bdreiereinhalb\b/giu, 'dreieinhalb');
 
-  // UNIT 1 — current role + duties (no total-duration attachment).
-  let intro = '';
-  if (beiCompany && monthYear) {
-    intro = `${role} ${beiCompany} seit ${monthYear}`;
-  } else if (beiCompany) {
-    intro = `${role} ${beiCompany}`;
-  } else if (monthYear) {
-    intro = `${role} seit ${monthYear}`;
-  } else {
-    intro = role;
-  }
-
-  const whFrags = [...new Set(
-    options.dutyFacts.flatMap((f) => {
-      const src = f.sourceText || f.value;
-      const keys = classifyMaterialDutyKeys(src).filter((k) => k.startsWith('warehouse_'));
-      return keys.map((k) => germanWarehouseSummaryFragment(k)).filter(Boolean);
-    }),
-  )];
-  // AAB-323: prefer ordered per-fact canonical duties over collapsed material keys.
-  const canonicalCurrentFacts = extractGermanCurrentWarehouseDutyFacts({
-    currentEntryDuties: options.dutyFacts
-      .map((f) => f.sourceText || f.value)
-      .filter(Boolean)
-      .join('\n'),
-  });
-  const experiencePhrase = canonicalCurrentFacts.length > 0
-    ? buildGermanCurrentDutyExperiencePhrase(canonicalCurrentFacts)
-    : '';
-  if (experiencePhrase) {
-    intro = `${intro} ${experiencePhrase}`;
-  } else {
-    const preferred = [
-      germanWarehouseSummaryFragment('warehouse_inbound_check'),
-      germanWarehouseSummaryFragment('warehouse_records'),
-      germanWarehouseSummaryFragment('warehouse_movement'),
-    ].filter((frag) => whFrags.includes(frag));
-    const dutyFrags = preferred.length >= 2 ? preferred : whFrags.slice(0, 3);
-    if (dutyFrags.length >= 2) {
-      intro = `${intro} mit Erfahrung in ${dutyFrags[0]}${
-        dutyFrags[1] ? ` und ${dutyFrags[1]}` : ''
-      }${dutyFrags[2] ? ` sowie in ${dutyFrags[2]}` : ''}`;
-    } else if (dutyFrags.length === 1) {
-      intro = `${intro} mit Erfahrung in ${dutyFrags[0]}`;
-    } else if (warehouseRole) {
-      intro = `${intro} mit Erfahrung in der Prüfung eingehender Waren und der Prüfung der zugehörigen Dokumentation sowie in der Abstimmung mit Kolleginnen und Kollegen bei der Vorbereitung und Bewegung von Waren`;
-    }
-  }
-  if (!/[.]$/u.test(intro)) intro = `${intro}.`;
-
-  const priorRole = (options.priorRole || '').trim();
-  const priorEmployer = (options.priorEmployer || '').trim();
-  const priorBei = formatGermanEmployerPrepositional(priorEmployer);
-  const priorDuties = options.priorSourceDuties || '';
-  const priorLooksDesign = /(?:dizajn|design|grafik|visual|vizuel|visuell|デザイン|diseñ)/i
-    .test(`${priorRole} ${priorDuties}`);
-  let priorSentence = '';
-  if (priorRole && priorLooksDesign) {
-    const priorResolved = resolveLocalizedSummaryRole({
-      role: priorRole,
-      targetLocale: 'de',
-      gender: options.gender,
-    });
-    const priorLabel = priorResolved.localizationValidationPassed
-      ? priorResolved.localizedTargetRoleLabel
-      : (unspecified
-        ? 'Grafikdesign'
-        : localizeGraphicDesigner('de', options.gender));
-    const designFacts = female
-      ? 'und erstellte visuelle Materialien, überarbeitete Designunterlagen und bereitete finale Dateien für verschiedene Formate und Bildschirme vor'
-      : male
-        ? 'und erstellte visuelle Materialien, überarbeitete Designunterlagen und bereitete finale Dateien für verschiedene Formate und Bildschirme vor'
-        : 'und erstellte visuelle Materialien, überarbeitete Designunterlagen und bereitete finale Dateien für verschiedene Formate und Bildschirme vor';
-    priorSentence = priorBei
-      ? `Zuvor war ${female ? 'sie' : male ? 'er' : 'die Fachkraft'} als ${priorLabel} ${priorBei} tätig ${designFacts}.`
-      : `Zuvor war ${female ? 'sie' : male ? 'er' : 'die Fachkraft'} als ${priorLabel} tätig ${designFacts}.`;
-  }
-
-  // UNIT 3 — clearly scoped total professional experience (never inside role clause).
   const durationSentence = durRaw
     ? formatGermanTotalProfessionalDurationSentence(durRaw, options.gender)
     : '';
 
-  return [intro, priorSentence, durationSentence]
+  const hasCurrent = options.hasCurrentRole !== false
+    && Boolean(company || role || currentDutiesCorpus || options.dutyFacts.length);
+
+  // UNIT — current role (first person, present tense).
+  let currentSentence = '';
+  if (hasCurrent) {
+    const canonicalCurrentFacts = extractGermanCurrentWarehouseDutyFacts({
+      currentEntryDuties: currentDutiesCorpus,
+    });
+    if (warehouseRole && canonicalCurrentFacts.length > 0) {
+      const dutyClause = [
+        'eingehende Waren prüfe',
+        'die zu den erhaltenen Waren gehörende Dokumentation kontrolliere',
+        'mich mit Kolleginnen und Kollegen bei der Vorbereitung und Bewegung der Waren abstimme',
+      ].join(', ').replace(/, ([^,]*)$/u, ' und $1');
+      currentSentence = beiCompany
+        ? `Derzeit arbeite ich ${beiCompany} als ${role}, wo ich ${dutyClause}.`
+        : `Derzeit arbeite ich als ${role}, wo ich ${dutyClause}.`;
+    } else if (cookingRole) {
+      const cookingClause = [
+        'Gerichte gemäß Restaurantstandards zubereite',
+        'die Hygiene am Arbeitsplatz einhalte',
+        'mit dem Küchenteam zusammenarbeite',
+      ].join(', ').replace(/, ([^,]*)$/u, ' und $1');
+      currentSentence = beiCompany
+        ? `Derzeit arbeite ich ${beiCompany} als ${role}, wo ich ${cookingClause}.`
+        : `Derzeit arbeite ich als ${role}, wo ich ${cookingClause}.`;
+    } else {
+      // Arbitrary occupation — never paste foreign-language source duties into German.
+      const dutyBits = options.dutyFacts
+        .map((f) => (f.sourceText || f.value || '').replace(/[.;]+$/u, '').trim())
+        .filter(Boolean)
+        .filter((s) => (
+          /[äöüÄÖÜß]/.test(s)
+          || /\b(?:und|der|die|das|mit|für|bei|ich|prüfe|arbeite)\b/iu.test(s)
+        )
+          && !/[\u0900-\u097F\u0600-\u06FF\u0400-\u04FF\u3040-\u30FF\u3400-\u9FFF]/.test(s))
+        .slice(0, 3);
+      const dutyTail = dutyBits.length
+        ? `, wo ich ${dutyBits.join(', ').replace(/, ([^,]*)$/u, ' und $1')}`
+        : '';
+      currentSentence = beiCompany
+        ? `Derzeit arbeite ich ${beiCompany} als ${role}${dutyTail}.`
+        : `Derzeit arbeite ich als ${role}${dutyTail}.`;
+    }
+  }
+
+  const priorRoleRaw = (options.priorRole || '').trim();
+  const priorEmployer = (options.priorEmployer || '').trim();
+  const priorDuties = options.priorSourceDuties || '';
+  const extraPriors = options.additionalPriorEntries || [];
+  const selectedPrior = (priorRoleRaw || priorEmployer || priorDuties)
+    ? { role: priorRoleRaw, employer: priorEmployer, duties: priorDuties }
+    : {
+      role: extraPriors[0]?.role || '',
+      employer: extraPriors[0]?.employer || '',
+      duties: extraPriors[0]?.duties || '',
+    };
+  const priorLooksDesign = /(?:dizajn|design|grafik|visual|vizuel|visuell|デザイン|diseñ)/i
+    .test(`${selectedPrior.role} ${selectedPrior.duties}`);
+  let priorSentence = '';
+  if (selectedPrior.role || selectedPrior.employer || selectedPrior.duties) {
+    const priorBei = formatGermanEmployerPrepositional(selectedPrior.employer || '');
+    if (priorLooksDesign) {
+      const priorResolved = resolveLocalizedSummaryRole({
+        role: selectedPrior.role || 'Graphic Designer',
+        targetLocale: 'de',
+        gender: options.gender,
+      });
+      const priorLabel = priorResolved.localizationValidationPassed
+        ? priorResolved.localizedTargetRoleLabel
+        : (unspecified
+          ? 'Grafikdesign'
+          : localizeGraphicDesigner('de', options.gender));
+      const designFacts = [
+        'visuelle Materialien und grafische Elemente erstellte',
+        'Designmaterialien überprüfte und anpasste',
+        'finale Designdateien für verschiedene Formate und Bildschirme vorbereitete',
+      ].join(', ').replace(/, ([^,]*)$/u, ' sowie $1');
+      priorSentence = priorBei
+        ? `Zuvor arbeitete ich ${priorBei} als ${priorLabel}, wo ich ${designFacts}.`
+        : `Zuvor arbeitete ich als ${priorLabel}, wo ich ${designFacts}.`;
+    } else {
+      const priorResolved = resolveLocalizedSummaryRole({
+        role: selectedPrior.role || '',
+        targetLocale: 'de',
+        gender: options.gender,
+      });
+      const priorLabel = priorResolved.localizationValidationPassed
+        ? priorResolved.localizedTargetRoleLabel
+        : (selectedPrior.role || 'Fachkraft');
+      const priorDutyBits = String(selectedPrior.duties || '')
+        .split(/\n+|;\s+/)
+        .map((s) => s.replace(/[.;]+$/u, '').trim())
+        .filter(Boolean)
+        .filter((s) => (
+          /[äöüÄÖÜß]/.test(s)
+          || /\b(?:und|der|die|das|mit|für|bei|ich|prüfe|arbeite)\b/iu.test(s)
+        )
+          && !/[\u0900-\u097F\u0600-\u06FF\u0400-\u04FF\u3040-\u30FF\u3400-\u9FFF]/.test(s))
+        .slice(0, 3);
+      const priorDutyTail = priorDutyBits.length
+        ? `, wo ich ${priorDutyBits.join(', ').replace(/, ([^,]*)$/u, ' und $1')}`
+        : '';
+      priorSentence = priorBei
+        ? `Zuvor arbeitete ich ${priorBei} als ${priorLabel}${priorDutyTail}.`
+        : `Zuvor arbeitete ich als ${priorLabel}${priorDutyTail}.`;
+    }
+  }
+
+  return [durationSentence, currentSentence, priorSentence]
     .filter(Boolean)
     .join(' ')
     .replace(/\s+/g, ' ')

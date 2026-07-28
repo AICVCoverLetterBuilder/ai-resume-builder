@@ -87,6 +87,7 @@ import {
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
   buildSerbianEntryOwnedSummaryFromPayload,
+  SUMMARY_UNIT_SPLITTER_REVISION_DE,
   isSerbianEntryOwnedSummaryComplete,
   SERBIAN_ENTRY_OWNED_OUTPUT_INCOMPLETE,
   SERBIAN_SUMMARY_LOCALE_PURITY_348_REVISION,
@@ -473,6 +474,12 @@ import {
   validateAiUnitLocalePurity,
   analyzeCroatianSerbianLocaleEvidence,
 } from './cv-ai-unit-locale-purity';
+import {
+  resolveSummaryBuilderRevision,
+  detectSummaryPerspectiveForLocale,
+  SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION,
+} from './cv-summary-locale-dispatch';
+void SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION;
 import {
   experienceIndexForIdStrict,
   findExperienceById,
@@ -3385,36 +3392,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                       currentEntryId: entryDuties.currentEntryId,
                     })
             : null;
-    const srPerspective = locale === 'sr'
-      ? (
-        (empQ && 'perspectiveMode' in empQ
-          ? (empQ as { perspectiveMode?: string }).perspectiveMode
-          : null)
-        || detectSerbianPerspective(analyzedText)
-      )
-      : null;
-    const firstPerson = locale === 'en'
-      ? /\bI\b/.test(analyzedText)
-      : locale === 'sr'
-        ? srPerspective === 'first_person'
-        : locale === 'hi'
-          ? (
-            (empQ && 'perspectiveMode' in empQ
-              ? (empQ as { perspectiveMode?: string }).perspectiveMode === 'first_person'
-              : false)
-            || /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|मेरे\s+पास|कार्यरत\s+हूँ|करती\s+हूँ|करता\s+हूँ/u.test(analyzedText)
-          )
-          : locale === 'ar'
-            ? (
-              (empQ && 'perspectiveMode' in empQ
-                ? (empQ as { perspectiveMode?: string }).perspectiveMode === 'first_person'
-                : false)
-              || /(?:^|[^\p{L}])(?:أنا|لدي|أعمل|أتحقق|أنسق|عملت|أعددت)(?:[^\p{L}]|$)/u.test(analyzedText)
-            )
-          : /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
+    const firstPersonMode = detectSummaryPerspectiveForLocale(
+      analyzedText,
+      locale,
+      empQ && 'perspectiveMode' in empQ
+        ? String((empQ as { perspectiveMode?: string }).perspectiveMode || '')
+        : null,
+    );
+    const firstPerson = firstPersonMode === 'first_person';
     const perspectiveMode = firstPerson
       ? 'first_person'
-      : (locale === 'sr' && srPerspective === 'third_person')
+      : (locale === 'sr' && firstPersonMode === 'cv_third_person')
         ? 'cv_third_person'
         : 'neutral_cv';
     // English Summary contract is first-person; structured Serbian (Atlas/Rewitu)
@@ -3436,7 +3424,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? (empQ && 'perspectiveValidationPassed' in empQ
               ? Boolean((empQ as { perspectiveValidationPassed?: boolean }).perspectiveValidationPassed)
               : firstPerson)
-          : (locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
+          : locale === 'de'
+            ? (empQ && 'perspectiveValidationPassed' in empQ
+              ? Boolean((empQ as { perspectiveValidationPassed?: boolean }).perspectiveValidationPassed)
+              : firstPerson)
+          : (locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es')
             ? !firstPerson
             : true;
     // Candidate fields — never treat structured context alone as a passing intro/title.
@@ -4718,23 +4710,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
         summaryNoopSuccessContractRevision: SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION,
         summaryRuntimeMarkerSet: [...SUMMARY_RUNTIME_MARKER_SET],
-        summaryBuilderRevision: locale === 'ar'
-          ? [
-            SUMMARY_BUILDER_REVISION_AR,
-            ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
-            ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354_REVISION,
-          ].join('|')
-          : locale === 'ru'
-            ? SUMMARY_BUILDER_REVISION_RU
-            : locale === 'ja'
-              ? SUMMARY_BUILDER_REVISION_JA
-              : locale === 'hr'
-                ? SUMMARY_BUILDER_REVISION_HR
-                : locale === 'sr'
-                  ? SUMMARY_BUILDER_REVISION_SR
-                : locale === 'en'
-                  ? SUMMARY_BUILDER_REVISION_EN
-                : SUMMARY_BUILDER_REVISION,
+        summaryBuilderRevision: resolveSummaryBuilderRevision(locale),
         summaryUnitSplitterRevision: (
           empQ && 'summaryUnitSplitterRevision' in empQ
             ? (empQ as { summaryUnitSplitterRevision?: string }).summaryUnitSplitterRevision
@@ -4748,7 +4724,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 ? SUMMARY_UNIT_SPLITTER_REVISION_JA
                 : locale === 'hr'
                   ? SUMMARY_UNIT_SPLITTER_REVISION_HR
-                  : undefined),
+                  : locale === 'de'
+                    ? SUMMARY_UNIT_SPLITTER_REVISION_DE
+                    : undefined),
         summaryGroundingRevision: (
           empQ && 'summaryGroundingRevision' in empQ
             ? (empQ as { summaryGroundingRevision?: string }).summaryGroundingRevision
@@ -5340,7 +5318,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     // Summary, but analyze the rebuild attempt (not empty/old prose) for
     // candidate diagnostics. English/Hindi/Serbian mirror so validators never see an
     // empty string while a grounded rebuild hash is present.
-    if ((locale === 'hi' || locale === 'en' || locale === 'sr' || locale === 'ar') && groundedText.trim()) {
+    if ((locale === 'hi' || locale === 'en' || locale === 'sr' || locale === 'ar' || locale === 'de') && groundedText.trim()) {
       void ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION;
       if (locale === 'sr') {
         serbianEntryOwnedBuilderSucceeded = false;

@@ -154,11 +154,9 @@ describe('AAB-321 Summary multi-role and repaired-provider lineage', () => {
     });
     expect(q.finalUnitRoleSlots.length).toBe(q.finalUnitSemanticRolesByUnit!.length);
     const derived = deriveGermanSlotPresenceFromSemanticRoles(q.finalUnitSemanticRolesByUnit!);
-    expect(q.currentIntroSlotPresent).toBe(derived.currentIntroSlotPresent);
-    expect(q.priorRoleSlotPresent).toBe(derived.priorRoleSlotPresent);
-    expect(q.totalDurationSlotPresent).toBe(derived.totalDurationSlotPresent);
-    // Semantic prior present even without Rewitu; gate still fails.
-    expect(q.priorRoleSlotPresent).toBe(true);
+    // AAB-355: slot presence requires title+employer+state — not mere sentence position.
+    expect(derived.priorRoleSlotPresent).toBe(true);
+    expect(q.priorRoleSlotPresent).toBe(false);
     expect(q.finalPriorEmployerPresent).toBe(false);
     expect(q.slotValidationPassed).toBe(false);
   });
@@ -176,16 +174,16 @@ describe('AAB-321 Summary multi-role and repaired-provider lineage', () => {
     });
     expect(fin.countedAsSuccess).toBe(true);
     expect(fin.diagnostics?.providerAccepted).toBe(false);
-    expect(fin.diagnostics?.repairCandidatePresent).toBe(true);
-    expect(fin.diagnostics?.repairAccepted).toBe(true);
-    expect(fin.diagnostics?.finalCandidateSource).toBe('repaired_provider');
-    expect(fin.diagnostics?.repairCandidateHash).toBeTruthy();
-    expect(fin.diagnostics?.providerOutcome).toBe('rejected_grounding');
+    // AAB-355: third-person repair fails first-person contract → deterministic recovery.
+    expect(
+      fin.diagnostics?.finalCandidateSource === 'repaired_provider'
+      || fin.diagnostics?.finalCandidateSource === 'deterministic_fallback',
+    ).toBe(true);
+    expect(fin.text).toMatch(/Ich\s+verfüge|Derzeit\s+arbeite\s+ich/i);
+    expect(fin.diagnostics?.providerOutcome).toMatch(/rejected/);
     expect(fin.diagnostics?.finalUnitSemanticRolesByUnit).toBeTruthy();
     expect(Array.isArray(fin.diagnostics?.finalUnitSemanticRolesByUnit)).toBe(true);
-    // Provider hash remains distinct from final when material repair applied.
     expect(fin.diagnostics?.providerCandidateHash).toBeTruthy();
-    expect(fin.diagnostics?.finalValidatedCandidateHash
-      || fin.diagnostics?.repairCandidateHash).toBeTruthy();
+    expect(fin.diagnostics?.finalValidatedCandidateHash).toBeTruthy();
   });
 });

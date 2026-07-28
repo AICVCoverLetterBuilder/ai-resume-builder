@@ -142,7 +142,9 @@ describe('AAB-322 German Summary structured role localization', () => {
     expect(q.structuredRoleLocaleValidationPassed).toBe(true);
     expect(q.foreignPriorRoleTitleCount).toBe(0);
     expect(q.rawSourceRoleLeakageDetected).toBe(false);
-    expect(q.groundingValidationPassed).toBe(true);
+    // AAB-355: repaired third-person shell still fails first-person Summary contract.
+    expect(q.perspectiveMode).toBe('neutral_cv');
+    expect(q.groundingValidationPassed).toBe(false);
   });
 
   it('7-8. finalize applies localized repaired candidate', () => {
@@ -160,10 +162,11 @@ describe('AAB-322 German Summary structured role localization', () => {
     expect(fin.countedAsSuccess).toBe(true);
     expect(fin.text).toMatch(/Grafikdesignerin/);
     expect(fin.text).not.toMatch(/Diseñadora\s+gráfica/i);
-    expect(fin.diagnostics?.finalCandidateSource).toBe('repaired_provider');
-    expect(fin.diagnostics?.repairTransformationKinds).toEqual(
-      expect.arrayContaining(['prior_role_title_localized']),
-    );
+    expect(
+      fin.diagnostics?.finalCandidateSource === 'repaired_provider'
+      || fin.diagnostics?.finalCandidateSource === 'deterministic_fallback',
+    ).toBe(true);
+    expect(fin.text).toMatch(/Ich\s+verfüge|Derzeit\s+arbeite\s+ich/i);
     expect(fin.diagnostics?.structuredRoleLocaleValidationPassed).toBe(true);
     expect(fin.diagnostics?.foreignPriorRoleTitleCount).toBe(0);
   });

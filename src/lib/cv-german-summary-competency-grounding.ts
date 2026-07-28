@@ -558,13 +558,14 @@ export function formatGermanTotalProfessionalDurationSentence(
   if (!/\bBerufserfahrung\b/iu.test(core)) {
     core = `${core} Berufserfahrung`.replace(/\s+/g, ' ').trim();
   }
+  // AAB-355: Professional Summary duration is first-person (never sie/er biography).
+  void gender;
+  core = core.replace(/^insgesamt\s+/iu, '').trim();
   if (!/\binsgesamt\b/iu.test(core)) {
-    const g = String(gender || '').toLowerCase();
-    const female = g === 'female' || g === 'f' || g === 'weiblich';
-    const male = g === 'male' || g === 'm' || g === 'männlich';
-    if (female) return `Insgesamt verfügt sie über ${core}.`;
-    if (male) return `Insgesamt verfügt er über ${core}.`;
-    return `Insgesamt besteht ${core}.`;
+    return `Ich verfüge über insgesamt ${core}.`;
+  }
+  if (!/^Ich\s+verfüge/iu.test(core)) {
+    return `Ich verfüge über ${core}${/[.]$/u.test(core) ? '' : '.'}`;
   }
   if (!/[.]$/u.test(core)) return `${core}.`;
   return core;

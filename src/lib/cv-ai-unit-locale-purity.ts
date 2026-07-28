@@ -111,7 +111,9 @@ const EN_CLAUSE_RE =
 const SR_CLAUSE_RE =
   /\b(?:(?:je|su|sam|si|smo|ste|sa|za|od|do|na|u|koji|koja|koje|te|ili|da|kako|oko)\b|(?:radi|prilikom|tokom|približno|godin|iskustv|proverav|ažurir|azurir|koordin|kreiral|sarađiv|saradiv|pripremal|isporučiv|isporuciv|robu|skladišt)\w*)/iu;
 
-const DE_CLAUSE_RE = /\b(?:und|der|die|das|mit|für|von|bei|wurde|wurden|eine|einen|einem|einer|während|sowie)\b/iu;
+// First-person Professional Summary cues (Ich/verfüge/Derzeit/…) — avoid bare
+// `als`/`wo`, which false-hit other Latin locales under JS `\b` edge cases.
+const DE_CLAUSE_RE = /\b(?:und|der|die|das|mit|für|von|bei|wurde|wurden|eine|einen|einem|einer|während|sowie|ich|über|insgesamt|Jahre|Berufserfahrung|verfüge|arbeite|arbeitete|Derzeit|Zuvor)\b/iu;
 /**
  * Spanish clause cues. Prefer exclusive forms over shared articles (`la`/`una`)
  * that also appear in French — shared articles alone + Latin accents must not

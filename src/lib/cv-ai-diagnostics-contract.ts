@@ -640,6 +640,7 @@ type SummaryLike = {
   serbianEntryOwnedBuilderAttempted?: boolean | null;
   serbianEntryOwnedBuilderRevision?: string | null;
   summaryBuilderRevision?: string | null;
+  targetScript?: string | null;
 };
 
 export function checkSummaryDiagnosticInvariants(
@@ -752,6 +753,35 @@ export function checkSummaryDiagnosticInvariants(
     push('hindi_first_person_contract_neutral_cv_forbidden', {
       finalPerspectiveMode: 'neutral_cv',
       requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount ?? 0,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && trace.countedAsSuccess === true
+    && Number(trace.requiredCurrentDutyFactCount ?? 0) >= 3
+    && trace.finalPerspectiveMode === 'neutral_cv'
+  ) {
+    push('german_first_person_contract_neutral_cv_forbidden', {
+      finalPerspectiveMode: 'neutral_cv',
+      requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount ?? 0,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && /live-hindi-material-rebuild/i.test(String(trace.summaryBuilderRevision || ''))
+  ) {
+    push('german_request_routed_to_hindi_builder', {
+      summaryBuilderRevision: String(trace.summaryBuilderRevision || ''),
+      requestedLocale: 'de',
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'de'
+    && String(trace.targetScript || '') === 'arabic'
+  ) {
+    push('german_request_target_script_arabic', {
+      targetScript: 'arabic',
+      requestedLocale: 'de',
     });
   }
   // AAB-321: material repair forbids finalCandidateSource ai_generated.

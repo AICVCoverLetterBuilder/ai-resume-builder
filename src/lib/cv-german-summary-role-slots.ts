@@ -48,11 +48,11 @@ export type GermanSummaryUnitSemanticAnalysis = {
 };
 
 const CURRENT_EMPLOYMENT_MARKERS_DE =
-  /\b(?:seit|derzeit|aktuell|gegenwärtig|zuständig\s+für|verantwortlich\s+für)\b/iu;
+  /\b(?:seit|derzeit|aktuell|gegenwärtig|zuständig\s+für|verantwortlich\s+für|arbeite\s+ich|ich\s+arbeite)\b/iu;
 const PRIOR_EMPLOYMENT_MARKERS_DE =
-  /\b(?:zuvor|früher|vorher|davor|arbeitete|war\s+sie|war\s+er|war\s+tätig)\b/iu;
+  /\b(?:zuvor|früher|vorher|davor|arbeitete|arbeitete\s+ich|war\s+sie|war\s+er|war\s+ich|war\s+tätig)\b/iu;
 const WAREHOUSE_DUTY_DE =
-  /(?:eingehend\w*\s+Waren|Wareneingang|Unterlagen|Dokument(?:e|ation)|vorbereit|beweg|Kolleg|prüfen|Kontrolle|Koordination|Transport)/iu;
+  /(?:eingehend\w*\s+Waren|Wareneingang|Unterlagen|Dokument(?:e|ation)|vorbereit|beweg|Kolleg|prüfen|prüfe|kontrolliere|abstimme|Kontrolle|Koordination|Transport)/iu;
 const DESIGN_DUTY_DE =
   /(?:visuell|grafisch|Design(?:unterlagen|dateien|material)|Bildschirm|Format|Element|Grafik)/iu;
 const DURATION_CUE_DE =
@@ -196,14 +196,15 @@ export function analyzeGermanSummaryUnitSemantics(
 /** Map multi-signal analysis to legacy exclusive slot labels for diagnostics. */
 export function primaryRolesToLegacySlots(
   analyses: GermanSummaryUnitSemanticAnalysis[],
-): Array<'current_intro' | 'current_duty' | 'prior_role' | 'total_duration' | 'skills' | 'other'> {
+): Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'total_duration' | 'skills' | 'other'> {
   return analyses.map((a) => {
     if (a.primaryRole === 'current_role_intro') return 'current_intro';
     if (a.primaryRole === 'current_role_duties') return 'current_duty';
     if (a.primaryRole === 'prior_role_intro' || a.primaryRole === 'prior_role_duties') {
       return 'prior_role';
     }
-    if (a.primaryRole === 'total_duration') return 'total_duration';
+    // AAB-355: surface `duration` (Arabic/EN shared vocabulary); keep total_duration alias.
+    if (a.primaryRole === 'total_duration') return 'duration';
     if (a.primaryRole === 'explicit_skills') return 'skills';
     return 'other';
   });

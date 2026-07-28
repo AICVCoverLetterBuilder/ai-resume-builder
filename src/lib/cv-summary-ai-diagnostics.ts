@@ -87,10 +87,10 @@ function rebuildGermanDutyFactsFromIds(ids: string[] | null | undefined): German
       matchRes: [
         new RegExp(clause.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'),
         id === 'incoming_goods_check'
-          ? /Prüfung\s+eingehender\s+Waren|Warenannahme|Wareneingang/iu
+          ? /Prüfung\s+eingehender\s+Waren|eingehende\s+Waren\s+prüfe|Warenannahme|Wareneingang/iu
           : id === 'related_documentation_check'
-            ? /zugehörigen\s+Dokumentation|Dokumentenprüfung/iu
-            : /Abstimmung\s+mit\s+Kolleg|Koordination\s+mit\s+Kolleg/iu,
+            ? /zugehörigen\s+Dokumentation|gehörende\s+Dokumentation|Dokumentation\s+kontrolliere|Dokumentenprüfung/iu
+            : /Abstimmung\s+mit\s+Kolleg|Koordination\s+mit\s+Kolleg|abstimme.{0,60}Kolleg|Kolleg\w*.{0,60}abstimme/iu,
       ],
     };
   });
@@ -103,7 +103,7 @@ import {
   summarizeDurationClaimBreakdown,
   verifyIndependentFinalDurationCount,
 } from './cv-summary-duration-ownership';
-import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
+import { validateAiUnitLocalePurity, resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
 import {
   appendCvAiDiagnosticHistory,
   assertCvAiDiagnosticPrivacy,
@@ -1255,7 +1255,9 @@ export class SummaryAiDiagnosticSession {
       sourceLanguageLeakageDetected: entityAwareLeakage,
       unexpectedLocaleCodes: purity.unexpectedLocaleCodes,
       targetLocalePurityPassed: entityAwarePurityPassed,
-      targetScript: purity.detectedScriptByUnit[0] || null,
+      targetScript: resolveTargetScriptForLocale(
+        (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
+      ),
       structuredRoleLocaleValidationPassed: diag.structuredRoleLocaleValidationPassed ?? null,
       currentRoleLocalizationValidationPassed:
         diag.currentRoleLocalizationValidationPassed ?? null,
@@ -2147,6 +2149,26 @@ export class SummaryAiDiagnosticSession {
       }
       const grammar = validateGermanGeneratedCaseGrammar(visibleText);
       visibleGrammarOk = grammar.germanControlledCaseGrammarPassed;
+      const requiredPriorDe = Number(this.draft.requiredPriorDutyFactCount ?? 0);
+      visiblePriorDutyRequired = requiredPriorDe;
+      visiblePriorDutyCovered = Number(this.draft.coveredPriorDutyFactCount ?? 0);
+      if (requiredPriorDe >= 3) {
+        const creationOk = /visuelle\s+Materialien/iu.test(visibleText)
+          && /grafische\s+Elemente/iu.test(visibleText);
+        const reviewOk = /(?:überprüfte|überarbeitete|anpasste)/iu.test(visibleText)
+          && /(?:Designmaterialien|Designunterlagen)/iu.test(visibleText);
+        const finalOk = /(?:finale\s+Designdateien|finale\s+Dateien)/iu.test(visibleText)
+          && /Formate/iu.test(visibleText)
+          && /Bildschirme/iu.test(visibleText);
+        visiblePriorDutyCovered = [creationOk, reviewOk, finalOk].filter(Boolean).length;
+        visiblePriorDutyOk = visiblePriorDutyCovered === 3;
+      }
+      visibleDurationScopeOk = /Ich\s+verfüge\s+über\s+insgesamt|insgesamt.{0,40}Berufserfahrung/iu
+        .test(visibleText)
+        && this.draft.finalDurationScopeValidationPassed !== false;
+      if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrentDe >= 3) {
+        visibleDutyOk = false;
+      }
     }
     if (ok && durationStillOk && locale === 'en' && typeof visibleText === 'string') {
       void ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION;
@@ -2390,16 +2412,16 @@ export class SummaryAiDiagnosticSession {
       visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
         ? (typeof visibleText === 'string' ? visibleDutyOk : null)
         : null,
-      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar')
+      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de')
         ? visiblePriorDutyRequired
         : null,
-      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar')
+      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de')
         ? visiblePriorDutyCovered
         : null,
-      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar')
+      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de')
         ? Math.max(0, visiblePriorDutyRequired - visiblePriorDutyCovered)
         : null,
-      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'hi' || locale === 'ar')
+      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de')
         ? (typeof visibleText === 'string' ? visiblePriorDutyOk : null)
         : null,
       visibleDurationScopeValidationPassed: locale === 'en'
