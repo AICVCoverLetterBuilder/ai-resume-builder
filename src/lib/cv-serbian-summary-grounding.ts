@@ -887,6 +887,8 @@ function mapMaterialKeyToStructuredFactId(key: string): string | null {
     case 'warehouse_records':
       return 'related_documentation_check';
     case 'warehouse_movement':
+    case 'warehouse_preparation':
+    case 'warehouse_colleague_coordination':
       return 'colleague_coordination_goods_preparation_movement';
     case 'design_visual_materials':
     case 'design_graphic_elements':
@@ -902,10 +904,156 @@ function mapMaterialKeyToStructuredFactId(key: string): string | null {
   }
 }
 
+export const SERBIAN_WAREHOUSE_DOCUMENTATION_CLASSIFIER_352_REVISION =
+  'serbian-warehouse-documentation-classifier-352-v1' as const;
+void SERBIAN_WAREHOUSE_DOCUMENTATION_CLASSIFIER_352_REVISION;
+
+/**
+ * Dedicated documentation-duty detector (AAB-352).
+ * Distinct from incoming-goods inspection. Handles EN related-before-document
+ * order and HR/SR prateća / povezana / vezana dokumentacija forms.
+ */
+export function textHasSerbianWarehouseDocumentationDuty(text: string): boolean {
+  void SERBIAN_WAREHOUSE_DOCUMENTATION_CLASSIFIER_352_REVISION;
+  const t = (text || '').normalize('NFKC');
+  if (!t.trim()) return false;
+  return (
+    /(?:related|accompanying|associated)\s+(?:documentation|documents?)\b/iu.test(t)
+    || /(?:documentation|documents?)\s+(?:related|associated|connected|for|to)\b/iu.test(t)
+    || /(?:checking|verifying|reviewing)\s+(?:the\s+)?(?:related\s+)?(?:documentation|documents?)\b/iu.test(t)
+    || /(?:prateć|pratec|popratn)\w*.{0,32}dokument/iu.test(t)
+    || /dokument\w*.{0,32}(?:prateć|pratec|popratn)/iu.test(t)
+    || /dokument\w*.{0,48}(?:povezan|vezan|related|primljen|pristigl|zaprimljen|received|incoming)/iu.test(t)
+    || /(?:povezan|vezan|related|prateć|pratec|popratn)\w*.{0,32}dokument/iu.test(t)
+    || /(?:prover|provjer|pregled|check|verif|kontrol)\w*.{0,40}dokument/iu.test(t)
+  );
+}
+
+/**
+ * True incoming-goods inspection (not documentation-only collapse).
+ */
+export function textHasSerbianWarehouseIncomingGoodsDuty(text: string): boolean {
+  const t = (text || '').normalize('NFKC');
+  if (!t.trim()) return false;
+  // Explicit goods-receipt / incoming inspection predicates.
+  if (/(?:incoming|inbound)\s+goods\b/iu.test(t)) return true;
+  if (/(?:pristigl|ulazn)\w*\s+rob/iu.test(t)) return true;
+  if (/\bprijem\s+rob/iu.test(t)) return true;
+  if (/(?:točnost|tocnost|accuracy).{0,32}(?:zaprimljen|primljen|ulazn|pristigl)\w*.{0,16}rob/iu.test(t)) {
+    return true;
+  }
+  if (
+    /(?:check|prover|provjer|kontrol|verif)\w*.{0,40}(?:incoming\s+goods|pristigl\w*\s+rob|ulazn\w*\s+rob|prijem\s+rob|zaprimljen\w*\s+rob)\b/iu
+      .test(t)
+  ) {
+    return true;
+  }
+  // zaprimljena/primljena roba inspection without a documentation-only frame.
+  if (
+    /(?:zaprimljen|primljen)\w*\s+rob/iu.test(t)
+    && !textHasSerbianWarehouseDocumentationDuty(t)
+  ) {
+    return true;
+  }
+  // Shared classifier inbound hit is authoritative only when not docs-only.
+  const keys = classifyMaterialDutyKeys(t);
+  if (keys.includes('warehouse_inbound_check')) {
+    if (textHasSerbianWarehouseDocumentationDuty(t)) {
+      // Docs phrases are embedded in warehouse_inbound_check — require a goods cue.
+      return /(?:incoming|inbound|pristigl|ulazn|prijem)\w*.{0,24}(?:goods?|rob)/iu.test(t)
+        || /(?:check|prover|provjer|kontrol)\w*.{0,32}(?:incoming\s+goods|pristigl\w*\s+rob|prijem\s+rob)/iu.test(t);
+    }
+    return true;
+  }
+  return false;
+}
+
+function splitSerbianDutyUnits(entryDuties: string): string[] {
+  const raw = (entryDuties || '').trim();
+  if (!raw) return [];
+  const byLine = raw
+    .split(/\n+/)
+    .map((s) => s.replace(/^[•\-\u2013\u2014*]\s*/u, '').trim())
+    .filter(Boolean);
+  if (byLine.length > 1) return byLine;
+  // Single line / semicolon-separated Experience bullets.
+  const bySemi = raw
+    .split(/;+/)
+    .map((s) => s.replace(/^[•\-\u2013\u2014*]\s*/u, '').trim())
+    .filter(Boolean);
+  return bySemi.length > 1 ? bySemi : [raw];
+}
+
+export type SerbianCanonicalFactRecord = {
+  factIndex: number;
+  textHash: string;
+  canonicalFactIds: string[];
+  materialKeys: string[];
+  unclassified: boolean;
+};
+
+/**
+ * Per-unit current-entry canonical fact records (AAB-352).
+ * Multi-label: one unit may yield both incoming + documentation IDs.
+ * Canonical count = number of records with at least one non-null ID assignment
+ * is not used for gate coverage — gate uses the unique ID set. Count metadata
+ * must equal unique non-null ID list length.
+ */
+export function classifySerbianCurrentCanonicalFactRecords(
+  entryDuties: string,
+): SerbianCanonicalFactRecord[] {
+  const units = splitSerbianDutyUnits(entryDuties);
+  return units.map((unit, factIndex) => {
+    const materialKeys: string[] = [
+      ...new Set([
+        ...materialDutyKeysFromDescription(unit),
+        ...classifyMaterialDutyKeys(unit),
+      ]),
+    ].filter((k) => k !== 'generic_duty');
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    const add = (id: string | null) => {
+      if (!id || seen.has(id)) return;
+      if (!(SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS as readonly string[]).includes(id)) {
+        return;
+      }
+      seen.add(id);
+      ids.push(id);
+    };
+    if (textHasSerbianWarehouseDocumentationDuty(unit)) {
+      add('related_documentation_check');
+      if (!materialKeys.includes('warehouse_document_check')) {
+        materialKeys.push('warehouse_document_check');
+      }
+    }
+    if (textHasSerbianWarehouseIncomingGoodsDuty(unit)) {
+      add('incoming_goods_check');
+    }
+    for (const key of materialKeys) {
+      // Never map collapsed inbound → incoming when unit is documentation-only.
+      if (
+        key === 'warehouse_inbound_check'
+        && textHasSerbianWarehouseDocumentationDuty(unit)
+        && !textHasSerbianWarehouseIncomingGoodsDuty(unit)
+      ) {
+        continue;
+      }
+      add(mapMaterialKeyToStructuredFactId(key));
+    }
+    return {
+      factIndex,
+      textHash: fingerprintText(unit),
+      canonicalFactIds: ids,
+      materialKeys,
+      unclassified: ids.length === 0,
+    };
+  });
+}
+
 /**
  * Derive structured canonical fact IDs from an entry's authoritative duty text.
- * Prefers material-key classification (locale-stable) over gate-local phrase regexes.
- * Never invents IDs from role titles alone.
+ * Prefers dedicated documentation / incoming detectors over shared classifier
+ * collapse. Never invents IDs from role titles alone.
  */
 export function deriveSerbianStructuredCanonicalFactIds(
   entryDuties: string,
@@ -913,28 +1061,56 @@ export function deriveSerbianStructuredCanonicalFactIds(
 ): string[] {
   const text = (entryDuties || '').trim();
   if (!text) return [];
+  if (kind === 'current') {
+    const records = classifySerbianCurrentCanonicalFactRecords(text);
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const rec of records) {
+      for (const id of rec.canonicalFactIds) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+      }
+    }
+    // Full-text movement / coordination may span units.
+    const keys = new Set<string>([
+      ...materialDutyKeysFromDescription(text),
+      ...classifyMaterialDutyKeys(text),
+    ]);
+    if (textHasSerbianWarehouseDocumentationDuty(text)) {
+      keys.add('warehouse_document_check');
+    }
+    for (const key of keys) {
+      if (
+        key === 'warehouse_inbound_check'
+        && textHasSerbianWarehouseDocumentationDuty(text)
+        && !textHasSerbianWarehouseIncomingGoodsDuty(text)
+      ) {
+        continue;
+      }
+      const id = mapMaterialKeyToStructuredFactId(key);
+      if (!id || seen.has(id)) continue;
+      if (!(SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS as readonly string[]).includes(id)) {
+        continue;
+      }
+      seen.add(id);
+      out.push(id);
+    }
+    return out;
+  }
   const keys = new Set<string>([
     ...materialDutyKeysFromDescription(text),
     ...classifyMaterialDutyKeys(text),
-    ...(kind === 'prior' ? collectDesignMaterialKeysFromDescription(text) : []),
+    ...collectDesignMaterialKeysFromDescription(text),
   ]);
-  // Documentation often collapses into inbound_check in the shared classifier.
-  if (
-    kind === 'current'
-    && /(?:dokument|document).{0,48}(?:received|primljen|pristigl|related|povezan|prateć)/iu
-      .test(text)
-  ) {
-    keys.add('warehouse_document_check');
-  }
   const out: string[] = [];
   const seen = new Set<string>();
   for (const key of keys) {
     const id = mapMaterialKeyToStructuredFactId(key);
     if (!id || seen.has(id)) continue;
-    const allowed = kind === 'current'
-      ? (SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS as readonly string[]).includes(id)
-      : (SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS as readonly string[]).includes(id);
-    if (!allowed) continue;
+    if (!(SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS as readonly string[]).includes(id)) {
+      continue;
+    }
     seen.add(id);
     out.push(id);
   }

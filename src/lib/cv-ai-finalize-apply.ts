@@ -79,8 +79,10 @@ import {
   isSerbianStructuredSummaryDomain,
   evaluateSerbianStructuredDomainGate,
   deriveSerbianStructuredCanonicalFactIds,
+  textHasSerbianWarehouseDocumentationDuty,
   SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS,
   SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS,
+  SERBIAN_WAREHOUSE_DOCUMENTATION_CLASSIFIER_352_REVISION,
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
   buildSerbianEntryOwnedSummaryFromPayload,
@@ -1529,6 +1531,7 @@ export type FinalizeCvAiFieldResult = {
     serbianStructuredDomainCurrentRequiredFactIds?: string[];
     serbianStructuredDomainCurrentCoveredFactIds?: string[];
     serbianStructuredDomainCurrentMissingFactIds?: string[];
+    serbianStructuredDomainCurrentMissingFactCount?: number | null;
     serbianStructuredDomainPriorRequiredFactIds?: string[];
     serbianStructuredDomainPriorCoveredFactIds?: string[];
     serbianStructuredDomainPriorMissingFactIds?: string[];
@@ -2286,6 +2289,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let serbianEntryOwnedBuilderTypedFailureReason: string | null = null;
   let serbianStructuredDomainGate: ReturnType<typeof evaluateSerbianStructuredDomainGate> | null = null;
   let serbianStructuredDomainGateInvariantFailure: string | null = null;
+  let serbianCurrentCanonicalFactIdCount: number | null = null;
   let serbianProviderRejectionReasons: string[] = [];
   const rewriteStyleDiag: string | null = input.rewriteStyle
     ? String(input.rewriteStyle)
@@ -2358,13 +2362,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : []),
     ];
     const merged = [...new Set([...fromUnits, ...spanishOwned, ...cues])];
-    // AAB-349: documentation evidence often collapses into warehouse_inbound_check
+    // AAB-349/352: documentation evidence often collapses into warehouse_inbound_check
     // in the shared classifier — surface warehouse_document_check for Summary diag.
     if (
       locale === 'sr'
-      && /(?:dokument|document).{0,48}(?:received|primljen|pristigl|related|povezan|prateć)/i
-        .test(entryDutiesForRole.currentEntryDuties || '')
+      && textHasSerbianWarehouseDocumentationDuty(entryDutiesForRole.currentEntryDuties || '')
     ) {
+      void SERBIAN_WAREHOUSE_DOCUMENTATION_CLASSIFIER_352_REVISION;
       if (!merged.includes('warehouse_document_check')) {
         merged.push('warehouse_document_check');
       }
@@ -2545,9 +2549,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         company: context.company,
         startDate: context.startDate,
       });
+      if (locale === 'sr') {
+        serbianEnrichSkipped = false;
+        serbianEnrichSkipReason = null;
+      }
     } else if (locale === 'sr') {
+      // Provisional only — grounding pass below is authoritative for enrich truth.
       serbianEnrichSkipped = true;
-      serbianEnrichSkipReason = 'structured_entry_owned_candidate_complete';
+      serbianEnrichSkipReason = 'structured_domain_context';
     }
     candidate = dedupeSummarySentences(candidate);
   }
@@ -2708,6 +2717,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       entryDutiesSr.priorEntryDuties,
       'prior',
     );
+    serbianCurrentCanonicalFactIdCount = srCurrentCanonicalFactIds.length;
     serbianStructuredDomainGate = evaluateSerbianStructuredDomainGate({
       // Entry-owned duties + canonical IDs are authoritative. Corpus is role
       // evidence only — never the coverage authority when IDs/duties exist.
@@ -3800,14 +3810,22 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             .finalCurrentDutyRequiredFactSetHash
             ?? undefined)
           : undefined,
-        authoritativeCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
-          ? ((empQ as { authoritativeCurrentDutyFactCount?: number })
-            .authoritativeCurrentDutyFactCount ?? undefined)
-          : undefined,
-        authoritativeCanonicalCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
-          ? ((empQ as { authoritativeCanonicalCurrentDutyFactCount?: number })
-            .authoritativeCanonicalCurrentDutyFactCount ?? undefined)
-          : undefined,
+        authoritativeCurrentDutyFactCount: locale === 'sr'
+          ? (serbianCurrentCanonicalFactIdCount
+            ?? serbianStructuredDomainGate?.currentCoveredFactIds?.length
+            ?? undefined)
+          : ((locale === 'de' || locale === 'en') && empQ)
+            ? ((empQ as { authoritativeCurrentDutyFactCount?: number })
+              .authoritativeCurrentDutyFactCount ?? undefined)
+            : undefined,
+        authoritativeCanonicalCurrentDutyFactCount: locale === 'sr'
+          ? (serbianCurrentCanonicalFactIdCount
+            ?? serbianStructuredDomainGate?.currentCoveredFactIds?.length
+            ?? undefined)
+          : ((locale === 'de' || locale === 'en') && empQ)
+            ? ((empQ as { authoritativeCanonicalCurrentDutyFactCount?: number })
+              .authoritativeCanonicalCurrentDutyFactCount ?? undefined)
+            : undefined,
         classifiedRequiredCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
           ? ((empQ as { classifiedRequiredCurrentDutyFactCount?: number })
             .classifiedRequiredCurrentDutyFactCount ?? undefined)
@@ -4213,6 +4231,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         serbianStructuredDomainCurrentMissingFactIds: locale === 'sr'
           ? (serbianStructuredDomainGate?.currentMissingFactIds ?? [])
           : undefined,
+        serbianStructuredDomainCurrentMissingFactCount: locale === 'sr'
+          ? (serbianStructuredDomainGate?.currentMissingFactIds?.length ?? null)
+          : undefined,
         serbianStructuredDomainPriorRequiredFactIds: locale === 'sr'
           ? (serbianStructuredDomainGate?.priorRequiredFactIds ?? [])
           : undefined,
@@ -4265,17 +4286,23 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? (serbianStructuredDomainGate?.payload?.priorCanonicalFacts?.length ?? null)
           : undefined,
         candidateTransformationKind: locale === 'sr'
-          ? (deterministicCandidateHash
-            && groundingInputCandidateHash
-            && deterministicCandidateHash !== groundingInputCandidateHash
-            ? 'serbian_grounding_enrichment'
-            : (serbianEnrichSkipped ? 'none' : 'none'))
+          ? (serbianEnrichSkipped
+            ? null
+            : (deterministicCandidateHash
+              && groundingInputCandidateHash
+              && deterministicCandidateHash !== groundingInputCandidateHash
+              ? 'serbian_grounding_enrichment'
+              : null))
           : undefined,
         candidateTransformationBeforeHash: locale === 'sr'
-          ? (deterministicCandidateHash || null)
+          ? (serbianEnrichSkipped
+            ? null
+            : (deterministicCandidateHash || null))
           : undefined,
         candidateTransformationAfterHash: locale === 'sr'
-          ? (groundingInputCandidateHash || null)
+          ? (serbianEnrichSkipped
+            ? null
+            : (groundingInputCandidateHash || null))
           : undefined,
         groundingValidationPassed,
         finalPostconditionsPassed: success,
@@ -5042,22 +5069,35 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       // Entry-owned Serbian warehouse/design rebuild already carries company + duties.
       // Do not splice start-date into the total-career duration sentence (AAB-348/350).
-      if (
+      // AAB-352: enrich skip reason structured_entry_owned_candidate_complete is only
+      // valid when a structured payload/builder path actually produced complete text.
+      const structuredComplete = Boolean(
         serbianStructuredDomainGate?.passed
-        || isSerbianEntryOwnedSummaryComplete(groundedText)
-        || isSerbianStructuredSummaryDomain(
-          `${groundedText} ${context.role || ''} ${dutiesText}`,
-        )
-      ) {
-        // Keep structured / complete entry-owned text unchanged.
+        && serbianStructuredDomainGate?.payload
+        && (
+          serbianEntryOwnedBuilderSucceeded
+          || isSerbianEntryOwnedSummaryComplete(groundedText)
+        ),
+      );
+      if (structuredComplete || isSerbianEntryOwnedSummaryComplete(groundedText)) {
         serbianEnrichSkipped = true;
-        serbianEnrichSkipReason = 'structured_entry_owned_candidate_complete';
+        serbianEnrichSkipReason = structuredComplete
+          || (
+            serbianStructuredDomainGate?.passed
+            && Boolean(serbianStructuredDomainGate?.payload)
+          )
+          ? 'structured_entry_owned_candidate_complete'
+          : 'entry_owned_summary_complete';
       } else {
+        const beforeEnrich = groundedText;
         groundedText = enrichSerbianSummaryEmploymentGrounding(groundedText, {
           role: context.role,
           company: context.company,
           startDate: context.startDate,
         });
+        serbianEnrichSkipped = false;
+        serbianEnrichSkipReason = null;
+        void beforeEnrich;
       }
       groundedText = dedupeSummarySentences(groundedText);
     }

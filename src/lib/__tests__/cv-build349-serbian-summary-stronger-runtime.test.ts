@@ -39,6 +39,7 @@ import {
   PRO_AI_SAFETY_CAP,
 } from '@/lib/ai-usage-policy';
 import { SummaryAiDiagnosticSession } from '@/lib/cv-summary-ai-diagnostics';
+import { checkSummaryDiagnosticInvariants } from '@/lib/cv-ai-diagnostics-contract';
 import type { CVData } from '@/lib/types';
 
 const REF = '2026-07-20';
@@ -734,5 +735,293 @@ describe('AAB-349 Serbian Stronger runtime', () => {
       .toBe('structured_entry_owned_candidate_complete');
     expect(fin.diagnostics?.groundingInputCandidateHash)
       .not.toBe('fnv1a_184d29e5_l95_b82_e46');
+  });
+
+  // ——— AAB-352: current Atlas documentation → related_documentation_check ———
+
+  /** Device-realistic current duties: middle bullet uses related-before-document order. */
+  const WH_AAB352 = [
+    'checks incoming goods;',
+    'checks related documentation;',
+    'coordinates with colleagues on preparation and movement of goods.',
+  ].join('\n');
+
+  function deviceCvAab352(options?: { summary?: string }): CVData {
+    const cv = deviceCv({ summary: options?.summary ?? BAD_SOURCE_SR });
+    cv.experience![0]!.description = WH_AAB352;
+    cv.experience![0]!.canonicalDescription = WH_AAB352;
+    cv.experience![0]!.generatedLocale = 'hr';
+    cv.experience![1]!.description = '';
+    cv.experience![1]!.canonicalDescription = GD_EN;
+    cv.experience![1]!.generatedLocale = 'hr';
+    cv.personal!.jobTitle = "Ouvrière d'entrepôt";
+    return cv;
+  }
+
+  it('AAB-352 device: related documentation recovers related_documentation_check + full apply', () => {
+    seedUsage(23);
+    const cv = deviceCvAab352();
+    expect(cv.summary.length).toBe(446);
+    expect(getProAiUsageCount()).toBe(23);
+
+    // Pre-fix failure mode: related-before-document middle bullet lost the ID.
+    const derived = deriveSerbianStructuredCanonicalFactIds(WH_AAB352, 'current');
+    expect(derived).toEqual(expect.arrayContaining([
+      ...SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS,
+    ]));
+    expect(derived).toHaveLength(3);
+    expect(derived.filter((id) => id === 'related_documentation_check')).toHaveLength(1);
+
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentEntryDuties: WH_AAB352,
+      priorEntryDuties: GD_EN,
+      currentCanonicalFactIds: derived,
+      priorCanonicalFactIds: deriveSerbianStructuredCanonicalFactIds(GD_EN, 'prior'),
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+      currentEntryId: 'atlas',
+      priorEntryIds: ['rewitu'],
+      gender: 'female',
+    });
+    expect(gate.currentCoveredFactCount).toBe(3);
+    expect(gate.currentMissingFactIds).toEqual([]);
+    expect(gate.priorCoveredFactCount).toBe(3);
+    expect(gate.priorMissingFactIds).toEqual([]);
+    expect(gate.passed).toBe(true);
+    expect(gate.payload).toBeTruthy();
+    expect(gate.canonicalFactIdsByEntryHash[fingerprintText('atlas')]).toHaveLength(3);
+
+    const provider = `${BAD_SOURCE_SR} Dodatno pomažem u organizaciji skladišta.`;
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: provider,
+      cv,
+      requestedLocale: 'sr',
+      gender: 'female',
+      referenceDateIso: REF,
+      durationSnapshot: buildExperienceDurationSnapshot(cv.experience || [], REF),
+      rewriteStyle: 'stronger',
+      originHint: 'ai_generated',
+    });
+
+    expect(fin.diagnostics?.serbianStructuredDomainGatePassed).toBe(true);
+    expect(fin.diagnostics?.serbianStructuredDomainCurrentCoveredFactCount).toBe(3);
+    expect(fin.diagnostics?.serbianStructuredDomainCurrentMissingFactIds || []).toEqual([]);
+    expect(fin.diagnostics?.serbianStructuredDomainPriorCoveredFactCount).toBe(3);
+    expect(fin.diagnostics?.authoritativeCanonicalCurrentDutyFactCount).toBe(3);
+    expect(fin.diagnostics?.currentEntryMaterialKeys).toEqual(
+      expect.arrayContaining([
+        'warehouse_inbound_check',
+        'warehouse_document_check',
+        'warehouse_movement',
+      ]),
+    );
+    expect(fin.diagnostics?.serbianStructuredPayloadCreated).toBe(true);
+    expect(fin.diagnostics?.serbianStructuredPayloadCurrentFactCount).toBe(3);
+    expect(fin.diagnostics?.serbianStructuredPayloadPriorFactCount).toBe(3);
+    expect(fin.diagnostics?.serbianEntryOwnedBuilderAvailable).toBe(true);
+    expect(fin.diagnostics?.serbianEntryOwnedBuilderAttempted).toBe(true);
+    expect(fin.diagnostics?.serbianEntryOwnedBuilderSucceeded).toBe(true);
+    expect(fin.diagnostics?.serbianEntryOwnedBuilderSentenceCount).toBe(3);
+    expect((fin.diagnostics?.serbianEntryOwnedBuilderOutputLength || 0)).toBeGreaterThan(52);
+    expect(fin.diagnostics?.deterministicCandidateHash)
+      .not.toBe('fnv1a_d5b60c8d_l52_b82_e46');
+    expect(fin.diagnostics?.serbianEnrichSkipped).toBe(true);
+    expect(fin.diagnostics?.serbianEnrichSkipReason)
+      .toBe('structured_entry_owned_candidate_complete');
+    expect(fin.diagnostics?.candidateTransformationKind).toBeNull();
+    expect(fin.diagnostics?.deterministicCandidateEqualsGroundingInput).toBe(true);
+    expect(fin.diagnostics?.durationSecondPassChanged).toBe(false);
+    expect(fin.diagnostics?.repairSkipped).toBe(true);
+    expect(fin.diagnostics?.repairSkipReason)
+      .toBe('structured_domain_deterministic_preferred');
+    expect(
+      fin.diagnostics?.providerRejectionReason
+      || fin.diagnostics?.providerTypedRejectionReason,
+    ).toMatch(/serbian_summary_croatian_role_form|croatian|dizajnerica|grounding/i);
+    expect(fin.text).toMatch(/Imam oko šest i po godina ukupnog profesionalnog iskustva/);
+    expect(fin.text).toMatch(/Trenutno radim u kompaniji Atlas/);
+    expect(fin.text).toMatch(/dokumentaciju povezanu sa primljenom robom/);
+    expect(fin.text).toMatch(/Prethodno sam radila kao grafička dizajnerka/);
+    expect(fin.text).toMatch(/završne dizajnerske datoteke/);
+    expect(fin.origin).toBe('deterministic_fallback');
+    expect(fin.countedAsSuccess).toBe(true);
+
+    const session = new SummaryAiDiagnosticSession({
+      uiLocale: 'sr',
+      requestedLocale: 'sr',
+      contentLocale: 'sr',
+      gender: 'female',
+      usageCountBefore: 23,
+      operationMode: 'enhance_existing_content',
+      rewriteStyle: 'stronger',
+    });
+    session.recordCvSnapshot(cv, BAD_SOURCE_SR);
+    session.recordFinalizeResult(fin);
+    const pre = session.evaluatePreApplyDecisionGates();
+    expect(pre.diagnosticInvariantCheckPassed).toBe(true);
+    expect(pre.passed).toBe(true);
+    session.recordVisibleApply(true, 23, fin.text);
+    const applied = applyFinalizedSummaryToCv(cv, 'sr', fin);
+    expect(applied.summary).toMatch(/Trenutno radim u kompaniji Atlas/);
+    expect(applied.summary).toMatch(/dokumentaciju povezanu sa primljenom robom/);
+    recordProAiUserActionSuccess();
+    expect(getProAiUsageCount()).toBe(24);
+  });
+
+  it('AAB-352 A. docs mentioning received goods → related_documentation_check', () => {
+    const ids = deriveSerbianStructuredCanonicalFactIds(
+      'checks documentation related to received goods',
+      'current',
+    );
+    expect(ids).toContain('related_documentation_check');
+    expect(ids).not.toEqual(['incoming_goods_check']);
+  });
+
+  it('AAB-352 B. incoming goods without docs → only incoming_goods_check', () => {
+    const ids = deriveSerbianStructuredCanonicalFactIds('checks incoming goods', 'current');
+    expect(ids).toEqual(['incoming_goods_check']);
+  });
+
+  it('AAB-352 C. documentation without incoming inspection does not fabricate incoming', () => {
+    const ids = deriveSerbianStructuredCanonicalFactIds(
+      'checks related documentation',
+      'current',
+    );
+    expect(ids).toEqual(['related_documentation_check']);
+    expect(ids).not.toContain('incoming_goods_check');
+  });
+
+  it('AAB-352 D. Croatian documentation wording maps to related_documentation_check', () => {
+    const ids = deriveSerbianStructuredCanonicalFactIds(
+      'provjeravam dokumentaciju vezanu uz zaprimljenu robu',
+      'current',
+    );
+    expect(ids).toContain('related_documentation_check');
+  });
+
+  it('AAB-352 E. English documentation wording maps to related_documentation_check', () => {
+    const ids = deriveSerbianStructuredCanonicalFactIds(
+      'verifying documentation for received goods',
+      'current',
+    );
+    expect(ids).toContain('related_documentation_check');
+  });
+
+  it('AAB-352 F. canonical count 3 with only two IDs triggers invariant failure', () => {
+    const result = checkSummaryDiagnosticInvariants({
+      requestedLocale: 'sr',
+      authoritativeCanonicalCurrentDutyFactCount: 3,
+      serbianStructuredDomainCanonicalFactIdsByEntryHash: {
+        atlas: ['incoming_goods_check', 'colleague_coordination_goods_preparation_movement'],
+      },
+    });
+    expect(result.passed).toBe(false);
+    expect(result.failures.some(
+      (f) => f.invariantCode === 'serbian_canonical_fact_count_id_list_mismatch',
+    )).toBe(true);
+  });
+
+  it('AAB-352 G. enrich skipped plus changed hashes triggers invariant failure', () => {
+    const result = checkSummaryDiagnosticInvariants({
+      requestedLocale: 'sr',
+      serbianEnrichSkipped: true,
+      candidateTransformationKind: 'serbian_grounding_enrichment',
+      candidateTransformationBeforeHash: 'fnv1a_d5b60c8d_l52_b82_e46',
+      candidateTransformationAfterHash: 'fnv1a_184d29e5_l95_b82_e46',
+    });
+    expect(result.passed).toBe(false);
+    expect(result.failures.some(
+      (f) => f.invariantCode === 'serbian_enrich_skipped_with_transformation_hashes',
+    )).toBe(true);
+  });
+
+  it('AAB-352 H. complete current/prior IDs produce full builder output', () => {
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentCanonicalFactIds: [...SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS],
+      priorCanonicalFactIds: [...SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS],
+      currentEntryDuties: WH_AAB352,
+      priorEntryDuties: GD_EN,
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+      gender: 'female',
+      duration: buildExperienceDurationSnapshot(deviceCvAab352().experience || [], REF).total,
+    });
+    expect(gate.passed).toBe(true);
+    expect(gate.payload).toBeTruthy();
+    const built = buildSerbianEntryOwnedSummaryFromPayload(gate.payload!);
+    expect(isSerbianEntryOwnedSummaryComplete(built)).toBe(true);
+    expect(built.split(/(?<=[.!?])\s+/).length).toBeGreaterThanOrEqual(3);
+    expect(built).not.toMatch(/^Radnica u magacinu sa oko/);
+  });
+
+  it('AAB-352 I. missing documentation ID fails with that exact missing ID', () => {
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentCanonicalFactIds: [
+        'incoming_goods_check',
+        'colleague_coordination_goods_preparation_movement',
+      ],
+      priorCanonicalFactIds: [...SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS],
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+    });
+    expect(gate.passed).toBe(false);
+    expect(gate.currentMissingFactIds).toEqual(['related_documentation_check']);
+  });
+
+  it('AAB-352 J. successful apply increments usage once', () => {
+    seedUsage(23);
+    const cv = deviceCvAab352();
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: BAD_SOURCE_SR,
+      cv,
+      requestedLocale: 'sr',
+      gender: 'female',
+      durationSnapshot: buildExperienceDurationSnapshot(cv.experience || [], REF),
+      rewriteStyle: 'stronger',
+    });
+    expect(fin.countedAsSuccess).toBe(true);
+    applyFinalizedSummaryToCv(cv, 'sr', fin);
+    recordProAiUserActionSuccess();
+    expect(getProAiUsageCount()).toBe(24);
+  });
+
+  it('AAB-352 K. rejection preserves Summary and usage', () => {
+    seedUsage(23);
+    const cv = deviceCvAab352();
+    const before = cv.summary;
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: 'Totally unrelated English marketing fluff about leadership synergy.',
+      cv: {
+        ...cv,
+        experience: [
+          {
+            ...cv.experience![0]!,
+            description: 'shelves boxes',
+            canonicalDescription: 'shelves boxes',
+          },
+          cv.experience![1]!,
+        ],
+      },
+      requestedLocale: 'sr',
+      gender: 'female',
+      durationSnapshot: buildExperienceDurationSnapshot(cv.experience || [], REF),
+      rewriteStyle: 'stronger',
+    });
+    if (!fin.countedAsSuccess) {
+      expect(getProAiUsageCount()).toBe(23);
+      expect(cv.summary).toBe(before);
+    }
   });
 });

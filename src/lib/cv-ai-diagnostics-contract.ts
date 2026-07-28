@@ -615,6 +615,25 @@ type SummaryLike = {
   capacitorServerUrlConfigured?: boolean | null;
   apiBaseUrlConfigured?: boolean | null;
   diagnosticPayloadTruncated?: boolean | null;
+  /** AAB-352 Serbian structured-domain / enrich lifecycle */
+  serbianStructuredDomainGatePassed?: boolean | null;
+  serbianStructuredDomainCurrentCoveredFactCount?: number | null;
+  serbianStructuredDomainCurrentCoveredFactIds?: string[] | null;
+  serbianStructuredDomainCurrentMissingFactCount?: number | null;
+  serbianStructuredDomainCurrentMissingFactIds?: string[] | null;
+  serbianStructuredDomainCurrentRequiredFactIds?: string[] | null;
+  serbianStructuredDomainCanonicalFactIdsByEntryHash?: Record<string, string[]> | null;
+  currentEntryMaterialKeys?: string[] | null;
+  serbianEnrichSkipped?: boolean | null;
+  serbianEnrichSkipReason?: string | null;
+  candidateTransformationKind?: string | null;
+  candidateTransformationBeforeHash?: string | null;
+  candidateTransformationAfterHash?: string | null;
+  serbianStructuredPayloadCreated?: boolean | null;
+  serbianEntryOwnedBuilderSucceeded?: boolean | null;
+  serbianEntryOwnedBuilderAttempted?: boolean | null;
+  serbianEntryOwnedBuilderRevision?: string | null;
+  summaryBuilderRevision?: string | null;
 };
 
 export function checkSummaryDiagnosticInvariants(
@@ -1580,6 +1599,115 @@ export function checkSummaryDiagnosticInvariants(
       visibleApplySucceeded: Boolean(trace.visibleApplySucceeded),
       finalCandidateSource: trace.finalCandidateSource || null,
     });
+  }
+
+  // AAB-352 — Serbian canonical ID / enrich lifecycle invariants.
+  if (String(trace.requestedLocale || '') === 'sr') {
+    const canonCount = Number(trace.authoritativeCanonicalCurrentDutyFactCount ?? NaN);
+    const idMap = trace.serbianStructuredDomainCanonicalFactIdsByEntryHash || null;
+    if (Number.isFinite(canonCount) && idMap && Object.keys(idMap).length > 0) {
+      const currentList = Object.values(idMap).find((ids) => (
+        Array.isArray(ids) && ids.includes('incoming_goods_check')
+      )) || Object.values(idMap).find((ids) => Array.isArray(ids) && ids.length > 0);
+      if (Array.isArray(currentList) && currentList.length !== canonCount) {
+        push('serbian_canonical_fact_count_id_list_mismatch', {
+          authoritativeCanonicalCurrentDutyFactCount: canonCount,
+          canonicalIdListLength: currentList.length,
+          canonicalFactIdsJoined: currentList.join(','),
+        });
+      }
+    }
+    const missingIds = trace.serbianStructuredDomainCurrentMissingFactIds || [];
+    const materialKeys = trace.currentEntryMaterialKeys || [];
+    if (
+      missingIds.includes('related_documentation_check')
+      && materialKeys.includes('warehouse_document_check')
+    ) {
+      push('serbian_docs_material_present_but_canonical_id_missing', {
+        missingIdsJoined: missingIds.join(','),
+        currentEntryMaterialKeysJoined: materialKeys.join(','),
+      });
+    }
+    const coveredCount = Number(trace.serbianStructuredDomainCurrentCoveredFactCount ?? NaN);
+    const coveredIds = trace.serbianStructuredDomainCurrentCoveredFactIds || [];
+    if (Number.isFinite(coveredCount) && coveredCount !== coveredIds.length) {
+      push('serbian_gate_covered_count_id_array_mismatch', {
+        coveredCount,
+        coveredIdsLength: coveredIds.length,
+      });
+    }
+    const missingCountField = (
+      trace as { serbianStructuredDomainCurrentMissingFactCount?: number | null }
+    ).serbianStructuredDomainCurrentMissingFactCount;
+    if (
+      missingCountField != null
+      && Number(missingCountField) !== missingIds.length
+    ) {
+      push('serbian_gate_missing_count_id_array_mismatch', {
+        missingCount: Number(missingCountField),
+        missingIdsLength: missingIds.length,
+      });
+    }
+    const requiredIds = trace.serbianStructuredDomainCurrentRequiredFactIds || [];
+    if (
+      trace.serbianStructuredDomainGatePassed === false
+      && requiredIds.length > 0
+      && requiredIds.every((id) => coveredIds.includes(id))
+      && missingIds.length === 0
+    ) {
+      push('serbian_gate_fail_with_complete_required_id_inclusion', {
+        serbianStructuredDomainGatePassed: false,
+        coveredIdsJoined: coveredIds.join(','),
+        requiredIdsJoined: requiredIds.join(','),
+      });
+    }
+    if (
+      trace.serbianEnrichSkipped === true
+      && typeof trace.candidateTransformationKind === 'string'
+      && trace.candidateTransformationKind !== ''
+      && trace.candidateTransformationKind !== 'none'
+      && trace.candidateTransformationBeforeHash
+      && trace.candidateTransformationAfterHash
+      && trace.candidateTransformationBeforeHash !== trace.candidateTransformationAfterHash
+    ) {
+      push('serbian_enrich_skipped_with_transformation_hashes', {
+        serbianEnrichSkipped: true,
+        candidateTransformationKind: trace.candidateTransformationKind,
+        candidateTransformationBeforeHash: trace.candidateTransformationBeforeHash,
+        candidateTransformationAfterHash: trace.candidateTransformationAfterHash,
+      });
+    }
+    if (
+      trace.serbianEnrichSkipReason === 'structured_entry_owned_candidate_complete'
+      && !(
+        trace.serbianStructuredPayloadCreated === true
+        && (
+          trace.serbianEntryOwnedBuilderSucceeded === true
+          || Number(trace.deterministicCandidateSentenceCount || 0) >= 3
+        )
+      )
+    ) {
+      push('serbian_enrich_complete_skip_without_payload_or_builder', {
+        serbianEnrichSkipReason: trace.serbianEnrichSkipReason,
+        serbianStructuredPayloadCreated: trace.serbianStructuredPayloadCreated ?? null,
+        serbianEntryOwnedBuilderSucceeded: trace.serbianEntryOwnedBuilderSucceeded ?? null,
+      });
+    }
+    if (
+      trace.serbianEntryOwnedBuilderSucceeded === true
+      && (
+        trace.serbianEntryOwnedBuilderAttempted !== true
+        || trace.serbianStructuredPayloadCreated !== true
+        || trace.serbianStructuredDomainGatePassed !== true
+      )
+    ) {
+      push('serbian_builder_success_without_consistent_lifecycle', {
+        serbianEntryOwnedBuilderSucceeded: true,
+        serbianEntryOwnedBuilderAttempted: trace.serbianEntryOwnedBuilderAttempted ?? null,
+        serbianStructuredPayloadCreated: trace.serbianStructuredPayloadCreated ?? null,
+        serbianStructuredDomainGatePassed: trace.serbianStructuredDomainGatePassed ?? null,
+      });
+    }
   }
 
   return { passed: failures.length === 0, failures };
