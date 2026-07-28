@@ -31,11 +31,13 @@ import {
   formatArabicTotalProfessionalDurationSentence,
   isArabicEntryOwnedSummaryComplete,
   ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
+  ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354_REVISION,
   SUMMARY_BUILDER_REVISION_AR,
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,
 } from './cv-arabic-summary-grounding';
 void ARABIC_SUMMARY_FIRST_PERSON_354_REVISION;
+void ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354_REVISION;
 void detectArabicSummaryPerspective;
 void isArabicThirdPersonBiographySummary;
 void analyzeArabicSummaryFactCoverage;
@@ -262,6 +264,7 @@ export {
   formatArabicTotalProfessionalDurationSentence,
   isArabicEntryOwnedSummaryComplete,
   ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
+  ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354_REVISION,
   SUMMARY_BUILDER_REVISION_AR,
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_UNIT_SPLITTER_REVISION_AR,

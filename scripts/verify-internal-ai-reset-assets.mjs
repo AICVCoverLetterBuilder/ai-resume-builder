@@ -88,9 +88,11 @@ const SUMMARY_GROUNDING_REVISION = 'entry-owned-grounding-v3';
 const SUMMARY_DURATION_REVISION = 'duration-idempotent-v3';
 const SUMMARY_BUILDER_REVISION = 'live-hindi-material-rebuild-v3';
 const SUMMARY_SPLITTER_REVISION_AR = 'arabic-three-sentence-slots-v1';
-const SUMMARY_GROUNDING_REVISION_AR = 'entry-owned-arabic-grounding-v1';
+const SUMMARY_GROUNDING_REVISION_AR = 'entry-owned-arabic-grounding-354-v2';
 const SUMMARY_DURATION_REVISION_AR = 'arabic-duration-idempotent-v1';
-const SUMMARY_BUILDER_REVISION_AR = 'entry-owned-arabic-rebuild-v1';
+const SUMMARY_BUILDER_REVISION_AR = 'entry-owned-arabic-rebuild-354-v2';
+const ARABIC_SUMMARY_FIRST_PERSON_354 = 'arabic-summary-first-person-354-v1';
+const ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354 = 'arabic-summary-topology-universal-354-v1';
 const ARABIC_MODERN_MINIMAL_PDF_RTL = 'arabic-modern-minimal-pdf-rtl-283-v1';
 const RUSSIAN_EXPERIENCE_MATERIAL = 'russian-experience-material-v1';
 const SUMMARY_SPLITTER_REVISION_RU = 'russian-three-sentence-slots-v1';
@@ -228,6 +230,8 @@ for (const marker of [
   SUMMARY_GROUNDING_REVISION_AR,
   SUMMARY_DURATION_REVISION_AR,
   SUMMARY_BUILDER_REVISION_AR,
+  ARABIC_SUMMARY_FIRST_PERSON_354,
+  ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354,
   ARABIC_MODERN_MINIMAL_PDF_RTL,
   RUSSIAN_EXPERIENCE_MATERIAL,
   SUMMARY_SPLITTER_REVISION_RU,

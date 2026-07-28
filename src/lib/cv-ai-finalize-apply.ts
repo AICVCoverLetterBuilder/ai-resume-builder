@@ -47,6 +47,8 @@ import {
   analyzeCroatianSummaryEmploymentQuality,
   SUMMARY_BUILDER_REVISION,
   SUMMARY_BUILDER_REVISION_AR,
+  ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
+  ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354_REVISION,
   SUMMARY_BUILDER_REVISION_RU,
   SUMMARY_BUILDER_REVISION_JA,
   SUMMARY_BUILDER_REVISION_HR,
@@ -4717,7 +4719,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         summaryNoopSuccessContractRevision: SUMMARY_NOOP_SUCCESS_CONTRACT_REVISION,
         summaryRuntimeMarkerSet: [...SUMMARY_RUNTIME_MARKER_SET],
         summaryBuilderRevision: locale === 'ar'
-          ? SUMMARY_BUILDER_REVISION_AR
+          ? [
+            SUMMARY_BUILDER_REVISION_AR,
+            ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
+            ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354_REVISION,
+          ].join('|')
           : locale === 'ru'
             ? SUMMARY_BUILDER_REVISION_RU
             : locale === 'ja'

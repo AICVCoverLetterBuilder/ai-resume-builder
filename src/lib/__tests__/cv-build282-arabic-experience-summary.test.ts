@@ -322,7 +322,7 @@ describe('cv-build282 Arabic Experience/Summary package', () => {
     expect(summaryPipe.finalized.diagnostics?.summaryPipelineRevision)
       .toBe('summary-runtime-282-v1');
     expect(summaryPipe.finalized.diagnostics?.summaryBuilderRevision)
-      .toBe('entry-owned-arabic-rebuild-354-v2');
+      .toBe('entry-owned-arabic-rebuild-354-v2|arabic-summary-first-person-354-v1|arabic-summary-topology-universal-354-v1');
     expect(summaryPipe.finalized.diagnostics?.summaryDurationFinalizerRevision)
       .toBe('arabic-duration-idempotent-v1');
     expect(summaryPipe.finalized.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
