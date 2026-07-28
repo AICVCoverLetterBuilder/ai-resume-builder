@@ -478,7 +478,10 @@ type SummaryLike = {
   finalUnsupportedDesignMediumCount?: number | null;
   finalUnsupportedDesignMediumKinds?: string[] | null;
   durationValidationPassed?: boolean;
+  slotValidationPassed?: boolean | null;
+  totalDurationSlotPresent?: boolean | null;
   independentFinalDurationClaimCount?: number | null;
+  summaryDurationExpressionCount?: number | null;
   structuredDurationMonths?: number | null;
   raceGuardResult?: string | null;
   finalValidatedCandidateHash?: string | null;
@@ -550,9 +553,12 @@ type SummaryLike = {
   deterministicAccepted?: boolean | null;
   requiredCurrentDutyFactCount?: number | null;
   coveredCurrentDutyFactCount?: number | null;
+  missingCurrentDutyFactCount?: number | null;
   requiredPriorDutyFactCount?: number | null;
   coveredPriorDutyFactCount?: number | null;
+  missingPriorDutyFactCount?: number | null;
   finalPriorDutyCoveragePassed?: boolean | null;
+  finalPerspectiveMode?: string | null;
   priorRoleGroundingPassed?: boolean | null;
   currentRoleTitlePresent?: boolean | null;
   currentRoleConcreteFactCoverage?: number | null;
@@ -657,6 +663,96 @@ export function checkSummaryDiagnosticInvariants(
     if (trace.repairApplied === false && trace.fallbackApplied !== true) {
       // duration-only ai_repaired is allowed without summary repairApplied
     }
+  }
+  // AAB-353: never label finalCandidateSource ai_repaired without a repaired candidate.
+  if (
+    src === 'ai_repaired'
+    && trace.repairCandidatePresent !== true
+    && trace.repairApplied !== true
+    && trace.repairAccepted !== true
+  ) {
+    push('ai_repaired_without_repaired_candidate', {
+      finalCandidateSource: src,
+      repairCandidatePresent: trace.repairCandidatePresent ?? false,
+      repairApplied: trace.repairApplied ?? false,
+    });
+  }
+  if (
+    trace.providerAccepted === true
+    && Array.isArray(trace.candidateLineage)
+    && (trace.candidateLineage as Array<{ candidateKind?: string; accepted?: boolean }>).some(
+      (c) => c?.candidateKind === 'provider' && c.accepted === false,
+    )
+    && src !== 'deterministic_fallback'
+    && src !== 'repaired_provider'
+    && !String(src).includes('repair')
+  ) {
+    // providerAccepted true while provider lineage rejected is only valid when
+    // another candidate was selected (deterministic/repair). Otherwise contradict.
+    if (src === 'ai_repaired' || src === 'provider' || src === 'ai_generated') {
+      push('provider_accepted_but_provider_lineage_rejected', {
+        providerAccepted: true,
+        finalCandidateSource: src,
+      });
+    }
+  }
+  if (
+    String(trace.providerOutcome || '') === 'accepted'
+    && Array.isArray(trace.candidateLineage)
+    && !(trace.candidateLineage as Array<{ candidateKind?: string; accepted?: boolean }>).some(
+      (c) => c?.candidateKind === 'provider' && c.accepted === true,
+    )
+    && trace.countedAsSuccess === true
+    && src !== 'deterministic_fallback'
+    && src !== 'repaired_provider'
+  ) {
+    push('provider_outcome_accepted_without_provider_lineage_selected', {
+      providerOutcome: trace.providerOutcome ?? null,
+      finalCandidateSource: src,
+    });
+  }
+  if (
+    trace.totalDurationSlotPresent === false
+    && trace.durationValidationPassed === true
+    && trace.slotValidationPassed === true
+    && Number(trace.independentFinalDurationClaimCount ?? trace.summaryDurationExpressionCount ?? 0) === 1
+    && (String(trace.requestedLocale || '') === 'hi'
+      || String(trace.requestedLocale || '') === 'sr')
+  ) {
+    push('total_duration_slot_false_with_validated_duration', {
+      totalDurationSlotPresent: false,
+      durationValidationPassed: true,
+      slotValidationPassed: true,
+    });
+  }
+  if (
+    trace.visibleApplySucceeded === true
+    && String(trace.requestedLocale || '') === 'hi'
+    && (
+      trace.requiredCurrentDutyFactCount == null
+      || trace.coveredCurrentDutyFactCount == null
+      || trace.missingCurrentDutyFactCount == null
+      || trace.requiredPriorDutyFactCount == null
+      || trace.coveredPriorDutyFactCount == null
+      || trace.missingPriorDutyFactCount == null
+    )
+  ) {
+    push('hindi_success_missing_fact_coverage_fields', {
+      visibleApplySucceeded: true,
+      requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount ?? null,
+      coveredCurrentDutyFactCount: trace.coveredCurrentDutyFactCount ?? null,
+    });
+  }
+  if (
+    String(trace.requestedLocale || '') === 'hi'
+    && trace.countedAsSuccess === true
+    && Number(trace.requiredCurrentDutyFactCount ?? 0) >= 3
+    && trace.finalPerspectiveMode === 'neutral_cv'
+  ) {
+    push('hindi_first_person_contract_neutral_cv_forbidden', {
+      finalPerspectiveMode: 'neutral_cv',
+      requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount ?? 0,
+    });
   }
   // AAB-321: material repair forbids finalCandidateSource ai_generated.
   if (

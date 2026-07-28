@@ -277,8 +277,8 @@ describe('HINDI normalization + quality', () => {
       fallbackSummary: '',
     });
     expect(activated.blocked).toBeFalsy();
-    // Neutral CV perspective uses हैं/है (not cover-letter first-person हूँ).
-    expect(activated.content).toMatch(/हैं|है|करती|पेशेवर/);
+    // Hindi Summary may be first-person (AAB-353 हूँ) or legacy neutral CV (हैं/है).
+    expect(activated.content).toMatch(/हैं|है|करती|पेशेवर|हूँ|मैं/);
     expect(activated.content).not.toMatch(/कर रहा हूँ/);
   });
 

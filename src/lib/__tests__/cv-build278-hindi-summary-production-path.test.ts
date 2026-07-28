@@ -112,12 +112,13 @@ function assertValidRepaired(text: string) {
   expect(text).toMatch(/वेयरहाउस\s*कर्मचारी/);
   expect(text).toMatch(/Atlas/);
   expect(text).toMatch(/साढ़े\s*छह/);
-  expect(text).toMatch(/माल|गोदाम|आवाजाही|सामान/);
-  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|प्रिंट/);
+  expect(text).toMatch(/माल|गोदाम|आवाजाही|सामान|स्थानांतरण/);
+  expect(text).toMatch(/Rewitu|ग्राफिक|ग्राफ़िक|डिज़ाइन|प्रिंट|दृश्य/);
   expect(text).not.toMatch(/पेशेवर\s+के\s+रूप\s+में/);
+  expect(text).toMatch(/कार्यरत\s+हूँ|मेरे\s+पास/);
   const beforePrior = text.split(/इससे\s+पहले/)[0] || text;
   const dutyPart = beforePrior.replace(/^[^।]*।\s*/, '');
-  expect(dutyPart).not.toMatch(/ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|ब्रांड/);
+  expect(dutyPart).not.toMatch(/ग्राफिक|ग्राफ़िक|डिज़ाइन|प्रिंट|डिजिटल|ब्रांड/);
 }
 
 /** Mirrors handleGenSummary → finalize → apply → diagnostic session. */
@@ -225,8 +226,10 @@ describe('build 278 Hindi Summary production-path wiring', () => {
     expect(pipe.finalized.diagnostics?.durationFinalizerIdempotent).toBe(true);
     expect(pipe.finalized.diagnostics?.currentRoleTitleSource).toBe('structured_current_role');
     expect(pipe.finalized.diagnostics?.finalUnitRoleSlots).toEqual(
-      expect.arrayContaining(['current_intro', 'current_duty', 'prior_role']),
+      expect.arrayContaining(['duration', 'current_intro', 'prior_role']),
     );
+    expect(pipe.finalized.diagnostics?.currentDutySlotPresent
+      ?? pipe.finalized.diagnostics?.currentIntroSlotPresent).toBeTruthy();
 
     expect(pipe.finalized.diagnostics?.summaryPipelineRevision).toBe(SUMMARY_PIPELINE_REVISION);
     expect(pipe.finalized.diagnostics?.summaryBuilderRevision).toBe(SUMMARY_BUILDER_REVISION);

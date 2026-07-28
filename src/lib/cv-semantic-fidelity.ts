@@ -351,6 +351,7 @@ export function hasMisplacedHindiDuration(summary: string): boolean {
     // Valid: duration integrated at the beginning of the sentence.
     if (/^(?:लगभग|करीब)\s+\S+\s+वर्ष/u.test(sent)) continue;
     if (/^मैं\s+(?:लगभग|करीब)/u.test(sent)) continue;
+    if (/^मेरे\s+पास/u.test(sent)) continue;
     if (/^.{0,80}?(?:लगभग|करीब)\s+\S+\s+वर्षों?\s+(?:के\s+अनुभव\s+)?(?:वाला|वाली|का)\b/u.test(sent)) {
       continue;
     }

@@ -177,8 +177,8 @@ describe('AAB 297 Hindi Summary nominal fragment grammar', () => {
     expect(fin.blocked).toBe(false);
     expect(fin.countedAsSuccess).toBe(true);
     expect(fin.text).not.toMatch(/का\s+अनुभव।/);
-    expect(fin.text).toMatch(/का\s+अनुभव\s+(?:है|रखती\s+हैं)।|करती\s+हैं।/);
-    expect(fin.text).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
+    expect(fin.text).toMatch(/का\s+अनुभव\s+(?:है|रखती\s+हैं)।|करती\s+हूँ।|कार्यरत\s+हूँ/);
+    expect(fin.text).toMatch(/कार्यरत\s+हूँ|मेरे\s+पास/);
     const rebuiltUnits = splitHindiSummaryUnits(fin.text);
     expect(rebuiltUnits.length).toBeGreaterThanOrEqual(3);
     const q2 = analyzeHindiSummaryEmploymentQuality(fin.text, {
@@ -193,11 +193,10 @@ describe('AAB 297 Hindi Summary nominal fragment grammar', () => {
     expect(q2.grammarValidationPassed).toBe(true);
     expect(q2.hindiNominalExperienceFragmentDetected).toBe(false);
     expect(q2.hindiSentenceHasFiniteCopulaOrVerb.every(Boolean)).toBe(true);
-    expect(q2.finalUnitRoleSlots.slice(0, 3)).toEqual([
-      'current_intro',
-      'current_duty',
-      'prior_role',
-    ]);
+    expect(q2.currentIntroSlotPresent).toBe(true);
+    expect(q2.currentDutySlotPresent).toBe(true);
+    expect(q2.priorRoleSlotPresent).toBe(true);
+    expect(q2.totalDurationSlotPresent).toBe(true);
   });
 
   it('7: print remains absent when unsupported', () => {

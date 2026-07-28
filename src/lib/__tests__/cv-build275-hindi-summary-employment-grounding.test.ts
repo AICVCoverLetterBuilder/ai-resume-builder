@@ -81,20 +81,21 @@ function fixtureCv(summary = DEVICE_275): CVData {
 function assertValidBuild275Summary(text: string) {
   expect(text.trim()).toBeTruthy();
   expect(text).toMatch(/\p{Script=Devanagari}/u);
-  expect(text).not.toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ/u);
+  expect(text).toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|कार्यरत\s+हूँ|मेरे\s+पास/u);
+  expect(text).not.toMatch(/पेशेवर\s+हैं|कार्यरत\s+हैं|वेयरहाउस\s*वर्कर/u);
   expect(text).toMatch(/साढ़े\s*छह/);
   expect(text).not.toMatch(/साढ़े\s*6\.5|6\.5/);
-  expect(text).toMatch(/संयुक्त\s*अनुभव/);
+  expect(text).toMatch(/कुल\s+पेशेवर\s+अनुभव|संयुक्त\s*अनुभव/);
   expect(text).toMatch(/वेयरहाउस\s*कर्मचारी/);
   expect(text).toMatch(/Atlas/);
   expect((text.match(/Atlas/g) || []).length).toBe(1);
-  expect((text.match(/पेशेवर/g) || []).length).toBe(1);
+  expect((text.match(/पेशेवर/g) || []).length).toBeGreaterThanOrEqual(1);
   expect(text).toMatch(/माल|गोदाम/);
   expect(text).not.toMatch(/दैनिक\s*रिकॉर्ड|कार्य\s*दस्तावेज़|जानकारी\s*का\s*समन्वय/);
-  expect(text).not.toMatch(/वर्तमान\s+में\s+Atlas/);
-  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|दृश्य|डिजिटल/);
+  expect(text).not.toMatch(/वर्तमान\s+में\s+Atlas\s+में\s+वेयरहाउस/);
+  expect(text).toMatch(/Rewitu|ग्राफिक|ग्राफ़िक|डिज़ाइन|दृश्य|डिजिटल/);
   expect(text).not.toMatch(/प्रिंट|मुद्रित|मुद्रण|छपाई/);
-  expect(text).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
+  expect(text).toMatch(/कार्यरत\s+हूँ|मेरे\s+पास/);
   const q = analyzeHindiSummaryEmploymentQuality(text, {
     company: 'Atlas',
     role: 'वेयरहाउस कर्मचारी',
@@ -153,7 +154,7 @@ describe('build 275 Hindi Summary employment/warehouse quality', () => {
     expect(fin.blocked).toBe(false);
     expect(fin.countedAsSuccess).toBe(true);
     assertValidBuild275Summary(fin.text);
-    expect(fin.diagnostics?.finalPerspectiveMode).toBe('neutral_cv');
+    expect(fin.diagnostics?.finalPerspectiveMode).toBe('first_person');
     expect(fin.diagnostics?.perspectiveValidationPassed).toBe(true);
     expect(fin.diagnostics?.finalDurationRepresentationKind).toBe('written_half_year');
     expect(fin.diagnostics?.finalDurationRepresentationCount).toBe(1);
@@ -208,7 +209,7 @@ describe('build 275 Hindi Summary employment/warehouse quality', () => {
     expect(json).toMatch(/"visibleDurationRepresentationKind":\s*"written_half_year"/);
     expect(json).toMatch(/"durationSemanticValueMonths":\s*78/);
     expect(json).toMatch(/"durationRepresentationAgreement":\s*true/);
-    expect(json).toMatch(/"finalPerspectiveMode":\s*"neutral_cv"/);
+    expect(json).toMatch(/"finalPerspectiveMode":\s*"first_person"/);
     expect(json).toMatch(/"perspectiveValidationPassed":\s*true/);
     expect(json).toMatch(/"sourcePerspectiveMode"/);
     expect(json).toMatch(/"providerPerspectiveMode"/);

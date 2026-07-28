@@ -146,7 +146,7 @@ describe('AAB 296 Hindi Summary print medium + finite grammar', () => {
     // Provider candidate alone must not apply; deterministic rebuild may still succeed.
     if (fin.countedAsSuccess) {
       expect(fin.text).not.toMatch(HINDI_PRINT_CLAIM_RE);
-      expect(fin.text).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
+      expect(fin.text).toMatch(/कार्यरत\s+हूँ|मेरे\s+पास/);
       expect(fin.text).not.toMatch(/^जहाँ\s/m);
       expect(fin.diagnostics?.finalUnsupportedDesignMediumCount ?? 0).toBe(0);
       expect(fin.diagnostics?.grammarValidationPassed).toBe(true);
@@ -193,7 +193,7 @@ describe('AAB 296 Hindi Summary print medium + finite grammar', () => {
     expect(fin.text).not.toMatch(/प्रिंट|मुद्रित|मुद्रण|छपाई/);
     expect(fin.text).toMatch(/माल|गोदाम|वेयरहाउस/);
     expect(fin.text).toMatch(/दृश्य|ग्राफिक|डिज़ाइन|डिजिटल|फ़ाइल|स्क्रीन|प्रारूप/);
-    expect(fin.text).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
+    expect(fin.text).toMatch(/कार्यरत\s+हूँ|मेरे\s+पास/);
     expect(fin.text).toMatch(/साढ़े\s*छह/);
     expect(fin.text).not.toMatch(/साढ़े\s*6\.5|6\.5/);
     expect((fin.text.match(/साढ़े\s*छह/g) || []).length).toBe(1);
@@ -209,11 +209,9 @@ describe('AAB 296 Hindi Summary print medium + finite grammar', () => {
     });
     expect(q.groundingValidationPassed).toBe(true);
     expect(q.grammarValidationPassed).toBe(true);
-    expect(q.finalUnitRoleSlots.slice(0, 3)).toEqual([
-      'current_intro',
-      'current_duty',
-      'prior_role',
-    ]);
+    expect(q.currentIntroSlotPresent).toBe(true);
+    expect(q.currentDutySlotPresent).toBe(true);
+    expect(q.priorRoleSlotPresent).toBe(true);
     expect(fin.diagnostics?.summaryDurationRepairApplied === true
       || fin.diagnostics?.finalCandidateSource === 'deterministic_fallback'
       || fin.diagnostics?.finalCandidateSource === 'ai_repaired'
@@ -372,7 +370,7 @@ describe('AAB 296 Hindi Summary print medium + finite grammar', () => {
       priorCompany: 'Rewitu',
     });
     expect(q.finalUnitRoleSlots.filter((s) => s === 'current_intro').length).toBe(1);
-    expect(q.finalUnitRoleSlots).toContain('current_duty');
+    expect(q.currentDutySlotPresent).toBe(true);
     expect(q.finalUnitRoleSlots).toContain('prior_role');
     expect(q.semanticCrossEntryLeakageDetected).toBe(false);
     expect(fin.text).toMatch(/साढ़े\s*छह\s*वर्षों/);
@@ -391,6 +389,6 @@ describe('AAB 296 Hindi Summary print medium + finite grammar', () => {
     expect(pipe.blocked).toBe(false);
     expect(pipe.finalized.countedAsSuccess).toBe(true);
     expect(pipe.stateCv.summary).not.toMatch(/प्रिंट/);
-    expect(pipe.stateCv.summary).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
+    expect(pipe.stateCv.summary).toMatch(/कार्यरत\s+हूँ|मेरे\s+पास/);
   });
 });

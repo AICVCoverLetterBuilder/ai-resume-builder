@@ -100,9 +100,10 @@ function assertValidHiSummary(text: string) {
   expect(text).not.toMatch(/साढ़े\s*6\.5/);
   expect(hasHybridDurationRepresentation(text, 'hi')).toBe(false);
   expect(verifyIndependentFinalDurationCount(text, 'hi').ok).toBe(true);
-  expect(text).toMatch(/माल|गोदाम/);
+  expect(text).toMatch(/माल|गोदाम|वेयरहाउस/);
   expect(text).not.toMatch(/दैनिक रिकॉर्ड.*कार्य दस्तावेज़.*जानकारी का समन्वय/);
-  expect(text).not.toMatch(/\bमैं\b|हूँ|करती हूँ|करता हूँ/);
+  expect(text).toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|कार्यरत\s+हूँ|मेरे\s+पास/u);
+  expect(text).not.toMatch(/पेशेवर\s+हैं|कार्यरत\s+हैं|वेयरहाउस\s*वर्कर/u);
   // Current employment introduced once — not both "जनवरी 2023 से Atlas" and bare "2023 से Atlas"
   const atlasHits = (text.match(/Atlas/g) || []).length;
   expect(atlasHits).toBeGreaterThanOrEqual(1);
@@ -151,7 +152,7 @@ describe('build 274 Hindi Summary quality + duration representation', () => {
     );
     expect(owned.diagnostics.finalDurationHybridDetected).toBe(false);
     expect(owned.summary).not.toMatch(/साढ़े\s*6\.5/);
-    expect(owned.summary).toMatch(/साढ़े छह|संयुक्त अनुभव/);
+    expect(owned.summary).toMatch(/साढ़े छह|कुल\s+पेशेवर\s+अनुभव|संयुक्त अनुभव/);
   });
 
   it('50× exact fixture: hybrid device Summary → valid Hindi apply', () => {
@@ -170,7 +171,7 @@ describe('build 274 Hindi Summary quality + duration representation', () => {
       expect(pipe.finalized.diagnostics?.finalDurationHybridDetected).toBe(false);
       expect(pipe.finalized.diagnostics?.durationSemanticValueMonths).toBe(78);
       expect(pipe.finalized.diagnostics?.perspectiveValidationPassed).toBe(true);
-      expect(pipe.finalized.diagnostics?.finalPerspectiveMode).not.toBe('first_person');
+      expect(pipe.finalized.diagnostics?.finalPerspectiveMode).toBe('first_person');
 
       const reloaded = structuredClone(pipe.stateCv);
       expect(reloaded.summary).toBe(pipe.finalized.text);

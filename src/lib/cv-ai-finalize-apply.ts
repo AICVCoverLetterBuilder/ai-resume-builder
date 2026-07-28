@@ -27,7 +27,6 @@ import {
 import {
   resolveSummaryWithDurationPolicy,
   stripUnsupportedSummaryFluff,
-  normalizeHindiSummaryPerspective,
   SUMMARY_DURATION_FINALIZER_REVISION,
   SUMMARY_DURATION_FINALIZER_REVISION_AR,
   SUMMARY_DURATION_FINALIZER_REVISION_RU,
@@ -2561,7 +2560,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     candidate = dedupeSummarySentences(candidate);
   }
   if (locale === 'hi') {
-    candidate = normalizeHindiSummaryPerspective(candidate);
+    // AAB-353: keep first-person Hindi Summary — never strip मैं/हूँ to third person.
     candidate = dedupeSummarySentences(candidate);
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const empQuality = analyzeHindiSummaryEmploymentQuality(candidate, {
@@ -3177,9 +3176,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const summaryRepairAttempted = input.originHint === 'ai_repaired';
   const durationRepairApplied = durationResolved.status === 'repaired';
   // Only mark content origin as ai_repaired when an actual repair candidate was
-  // activated — never alias duration-policy normalization as content repair.
-  if (summaryRepairAttempted || germanMaterialRepairApplied || serbianMaterialRepairApplied) {
+  // activated — never alias duration-policy normalization or a bare originHint.
+  if (germanMaterialRepairApplied || serbianMaterialRepairApplied || englishMaterialRepairApplied) {
     origin = 'ai_repaired';
+  } else if (summaryRepairAttempted) {
+    // Hint alone is not evidence of a repaired candidate (AAB-353 lineage truth).
+    origin = 'ai_generated';
   } else if (emptySummarySeededFromCanonical && !providerRaw.trim()) {
     // Entry-owned empty generate is client deterministic — never claim provider.
     origin = 'deterministic_fallback';
@@ -3349,14 +3351,22 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ? /\bI\b/.test(analyzedText)
       : locale === 'sr'
         ? srPerspective === 'first_person'
-        : /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
+        : locale === 'hi'
+          ? (
+            (empQ && 'perspectiveMode' in empQ
+              ? (empQ as { perspectiveMode?: string }).perspectiveMode === 'first_person'
+              : false)
+            || /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|मेरे\s+पास|कार्यरत\s+हूँ|करती\s+हूँ|करता\s+हूँ/u.test(analyzedText)
+          )
+          : /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ|करती हूँ|करता हूँ/u.test(analyzedText);
     const perspectiveMode = firstPerson
       ? 'first_person'
       : (locale === 'sr' && srPerspective === 'third_person')
         ? 'cv_third_person'
         : 'neutral_cv';
     // English Summary contract is first-person; structured Serbian (Atlas/Rewitu)
-    // also requires first-person. Non-structured Serbian keeps HEAD apply behavior
+    // also requires first-person. Hindi warehouse Summary (AAB-353) requires
+    // first-person. Non-structured Serbian keeps HEAD apply behavior
     // (third-person CV voice is allowed — e.g. build-265 field coordinator).
     const perspectiveValidationPassed = locale === 'en'
       ? true
@@ -3364,9 +3374,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? (empQ && 'perspectiveValidationPassed' in empQ
           ? Boolean((empQ as { perspectiveValidationPassed?: boolean }).perspectiveValidationPassed)
           : true)
-        : (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
-          ? !firstPerson
-          : true;
+        : locale === 'hi'
+          ? (empQ && 'perspectiveValidationPassed' in empQ
+            ? Boolean((empQ as { perspectiveValidationPassed?: boolean }).perspectiveValidationPassed)
+            : firstPerson)
+          : (locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de')
+            ? !firstPerson
+            : true;
     // Candidate fields — never treat structured context alone as a passing intro/title.
     const candidateCurrentRoleTitlePresent = empQ?.currentRoleTitlePresent ?? null;
     const candidateCurrentRoleTitleMatchesStructuredRole =
@@ -3378,13 +3392,24 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     // Hard postcondition: coverage 0 with a warehouse current role can never pass.
     const coverageHardFail = Boolean(
       empQ
-      && empQ.currentRoleConcreteFactCoverage < 2
       && (
-        matchesWarehouseOccupationalTitle(
-          `${context.role || ''} ${entryDuties.currentRoleTitle || ''}`,
+        (
+          locale === 'hi'
+          && 'requiredCurrentDutyFactCount' in empQ
+          && Number((empQ as { requiredCurrentDutyFactCount?: number }).requiredCurrentDutyFactCount || 0) >= 3
+          && Number((empQ as { coveredCurrentDutyFactCount?: number }).coveredCurrentDutyFactCount || 0) < 3
         )
-        || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल|بضائع|مستودع|товар|склад|кладов|倉庫|入荷|商品|almac[eé]n|mercanc[ií]a)/iu.test(
-          entryDuties.currentEntryDuties || '',
+        || (
+          locale !== 'hi'
+          && empQ.currentRoleConcreteFactCoverage < 2
+          && (
+            matchesWarehouseOccupationalTitle(
+              `${context.role || ''} ${entryDuties.currentRoleTitle || ''}`,
+            )
+            || /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist|माल|بضائع|مستودع|товар|склад|кладов|倉庫|入荷|商品|almac[eé]n|mercanc[ií]a)/iu.test(
+              entryDuties.currentEntryDuties || '',
+            )
+          )
         )
       ),
     );
@@ -3476,9 +3501,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         !empQ.groundingValidationPassed
         || coverageHardFail
         || (
-          (locale === 'de' || locale === 'en' || locale === 'sr')
+          (locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'hi')
           && 'slotValidationPassed' in empQ
           && (empQ as { slotValidationPassed?: boolean }).slotValidationPassed === false
+          && (
+            locale !== 'hi'
+            || Boolean((empQ as { requiredCurrentDutyFactCount?: number }).requiredCurrentDutyFactCount)
+          )
         )
       ),
     );
@@ -3605,7 +3634,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               .durationScope?.durationScopeRejectionReason
             : (empQ as { durationScopeRejectionReason?: string | null }).durationScopeRejectionReason)
           : undefined,
-        totalDurationSlotPresent: ((locale === 'de' || locale === 'en') && empQ)
+        totalDurationSlotPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'sr') && empQ)
           ? Boolean((empQ as { totalDurationSlotPresent?: boolean }).totalDurationSlotPresent)
           : undefined,
         explicitSkillsSlotPresent: ((locale === 'de' || locale === 'en') && empQ)
@@ -3747,40 +3776,48 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalCurrentRoleTitlePresent: ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { finalCurrentRoleTitlePresent?: boolean }).finalCurrentRoleTitlePresent)
           : undefined,
-        finalCurrentEmployerPresent: ((locale === 'de' || locale === 'en') && empQ)
+        finalCurrentEmployerPresent: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalCurrentEmployerPresent?: boolean }).finalCurrentEmployerPresent)
           : undefined,
-        finalCurrentEmploymentStateExpressed: ((locale === 'de' || locale === 'en') && empQ)
+        finalCurrentEmploymentStateExpressed: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalCurrentEmploymentStateExpressed?: boolean })
             .finalCurrentEmploymentStateExpressed)
           : undefined,
-        finalCurrentRoleIntroValidationPassed: ((locale === 'de' || locale === 'en') && empQ)
+        finalCurrentRoleIntroValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalCurrentRoleIntroValidationPassed?: boolean })
             .finalCurrentRoleIntroValidationPassed)
           : undefined,
-        finalCurrentDutyCoveragePassed: ((locale === 'de' || locale === 'en') && empQ)
+        finalCurrentDutyCoveragePassed: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalCurrentDutyCoveragePassed?: boolean })
-            .finalCurrentDutyCoveragePassed)
+            .finalCurrentDutyCoveragePassed
+            ?? (empQ as { factCoverage?: { finalCurrentDutyCoveragePassed?: boolean } })
+              .factCoverage?.finalCurrentDutyCoveragePassed)
           : (locale === 'sr' && empQ && 'factCoverage' in empQ
             ? Boolean((empQ as { factCoverage?: { finalCurrentDutyCoveragePassed?: boolean } })
               .factCoverage?.finalCurrentDutyCoveragePassed)
             : undefined),
-        requiredCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
+        requiredCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? ((empQ as { requiredCurrentDutyFactCount?: number }).requiredCurrentDutyFactCount
+            ?? (empQ as { factCoverage?: { requiredCurrentDutyFactCount?: number } })
+              .factCoverage?.requiredCurrentDutyFactCount
             ?? undefined)
           : (locale === 'sr' && empQ && 'factCoverage' in empQ
             ? ((empQ as { factCoverage?: { requiredCurrentDutyFactCount?: number } })
               .factCoverage?.requiredCurrentDutyFactCount ?? undefined)
             : undefined),
-        coveredCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
+        coveredCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? ((empQ as { coveredCurrentDutyFactCount?: number }).coveredCurrentDutyFactCount
+            ?? (empQ as { factCoverage?: { coveredCurrentDutyFactCount?: number } })
+              .factCoverage?.coveredCurrentDutyFactCount
             ?? undefined)
           : (locale === 'sr' && empQ && 'factCoverage' in empQ
             ? ((empQ as { factCoverage?: { coveredCurrentDutyFactCount?: number } })
               .factCoverage?.coveredCurrentDutyFactCount ?? undefined)
             : undefined),
-        missingCurrentDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
+        missingCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? ((empQ as { missingCurrentDutyFactCount?: number }).missingCurrentDutyFactCount
+            ?? (empQ as { factCoverage?: { missingCurrentDutyFactCount?: number } })
+              .factCoverage?.missingCurrentDutyFactCount
             ?? undefined)
           : (locale === 'sr' && empQ && 'factCoverage' in empQ
             ? ((empQ as { factCoverage?: { missingCurrentDutyFactCount?: number } })
@@ -3861,53 +3898,65 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalPriorRoleTitlePresent: ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { finalPriorRoleTitlePresent?: boolean }).finalPriorRoleTitlePresent)
           : undefined,
-        finalPriorEmployerPresent: ((locale === 'de' || locale === 'en') && empQ)
+        finalPriorEmployerPresent: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalPriorEmployerPresent?: boolean }).finalPriorEmployerPresent)
           : undefined,
-        finalPriorEmploymentStateExpressed: ((locale === 'de' || locale === 'en') && empQ)
+        finalPriorEmploymentStateExpressed: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalPriorEmploymentStateExpressed?: boolean })
             .finalPriorEmploymentStateExpressed)
           : undefined,
-        finalPriorRoleIntroValidationPassed: ((locale === 'de' || locale === 'en') && empQ)
+        finalPriorRoleIntroValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalPriorRoleIntroValidationPassed?: boolean })
             .finalPriorRoleIntroValidationPassed)
           : undefined,
-        finalPriorDutyCoveragePassed: ((locale === 'de' || locale === 'en') && empQ)
+        finalPriorDutyCoveragePassed: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalPriorDutyCoveragePassed?: boolean })
-            .finalPriorDutyCoveragePassed)
+            .finalPriorDutyCoveragePassed
+            ?? (empQ as { factCoverage?: { finalPriorDutyCoveragePassed?: boolean } })
+              .factCoverage?.finalPriorDutyCoveragePassed)
           : (locale === 'sr' && empQ && 'factCoverage' in empQ
             ? Boolean((empQ as { factCoverage?: { finalPriorDutyCoveragePassed?: boolean } })
               .factCoverage?.finalPriorDutyCoveragePassed)
             : undefined),
-        requiredPriorDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
-          ? Number((empQ as { requiredPriorDutyFactCount?: number }).requiredPriorDutyFactCount ?? 0)
+        requiredPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
+          ? Number((empQ as { requiredPriorDutyFactCount?: number }).requiredPriorDutyFactCount
+            ?? (empQ as { factCoverage?: { requiredPriorDutyFactCount?: number } })
+              .factCoverage?.requiredPriorDutyFactCount
+            ?? 0)
           : (locale === 'sr' && empQ && 'factCoverage' in empQ
             ? Number((empQ as { factCoverage?: { requiredPriorDutyFactCount?: number } })
               .factCoverage?.requiredPriorDutyFactCount ?? 0)
             : undefined),
-        coveredPriorDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
-          ? Number((empQ as { coveredPriorDutyFactCount?: number }).coveredPriorDutyFactCount ?? 0)
+        coveredPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
+          ? Number((empQ as { coveredPriorDutyFactCount?: number }).coveredPriorDutyFactCount
+            ?? (empQ as { factCoverage?: { coveredPriorDutyFactCount?: number } })
+              .factCoverage?.coveredPriorDutyFactCount
+            ?? 0)
           : (locale === 'sr' && empQ && 'factCoverage' in empQ
             ? Number((empQ as { factCoverage?: { coveredPriorDutyFactCount?: number } })
               .factCoverage?.coveredPriorDutyFactCount ?? 0)
             : undefined),
-        missingPriorDutyFactCount: ((locale === 'de' || locale === 'en') && empQ)
-          ? Number((empQ as { missingPriorDutyFactCount?: number }).missingPriorDutyFactCount ?? 0)
+        missingPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
+          ? Number((empQ as { missingPriorDutyFactCount?: number }).missingPriorDutyFactCount
+            ?? (empQ as { factCoverage?: { missingPriorDutyFactCount?: number } })
+              .factCoverage?.missingPriorDutyFactCount
+            ?? 0)
           : (locale === 'sr' && empQ && 'factCoverage' in empQ
             ? Number((empQ as { factCoverage?: { missingPriorDutyFactCount?: number } })
               .factCoverage?.missingPriorDutyFactCount ?? 0)
             : undefined),
-        finalTotalDurationSlotPresent: ((locale === 'de' || locale === 'en') && empQ)
+        finalTotalDurationSlotPresent: ((locale === 'de' || locale === 'en' || locale === 'hi') && empQ)
           ? Boolean((empQ as { finalTotalDurationSlotPresent?: boolean })
-            .finalTotalDurationSlotPresent)
+            .finalTotalDurationSlotPresent
+            ?? (empQ as { totalDurationSlotPresent?: boolean }).totalDurationSlotPresent)
           : (locale === 'sr' && empQ
             ? Boolean((empQ as { totalDurationSlotPresent?: boolean }).totalDurationSlotPresent)
             : undefined),
-        finalSlotValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'sr') && empQ)
+        finalSlotValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'hi') && empQ)
           ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed
             ?? (empQ as { finalSlotValidationPassed?: boolean }).finalSlotValidationPassed)
           : undefined,
-        finalSlotRejectionReasons: ((locale === 'de' || locale === 'en' || locale === 'sr') && empQ)
+        finalSlotRejectionReasons: ((locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'hi') && empQ)
           ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons
             ?? (empQ as { finalSlotRejectionReasons?: string[] }).finalSlotRejectionReasons
             ?? [])
@@ -4196,8 +4245,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerPerspectiveMode: locale === 'sr'
           ? (detectSerbianPerspective(providerRaw) === 'first_person' ? 'first_person' : 'neutral_cv')
           : (firstPerson ? 'first_person' : 'neutral_cv'),
-        perspectiveNormalizationAttempted: locale === 'hi',
-        perspectiveNormalizationApplied: locale === 'hi' && !firstPerson,
+        perspectiveNormalizationAttempted: false,
+        perspectiveNormalizationApplied: false,
         perspectiveValidationPassed,
         rewriteStyle: rewriteStyleDiag,
         previousSummaryUsedAsFactSource: false,

@@ -196,10 +196,24 @@ import {
   validateHindiSummaryFiniteGrammar,
   type HindiUnsupportedDesignMediumKind,
 } from './cv-hindi-summary-medium-grammar';
+import {
+  analyzeHindiSummaryDurationScope,
+  analyzeHindiSummaryFactCoverage,
+  buildHindiEntryOwnedSummary,
+  deriveHindiStructuredCurrentFactIds,
+  detectHindiSummaryPerspective,
+  isHindiThirdPersonBiographySummary,
+  SUMMARY_BUILDER_REVISION_HI_353,
+  SUMMARY_GROUNDING_REVISION_HI_353,
+  type HindiDurationScopeAnalysis,
+  type HindiSummaryFactCoverage,
+} from './cv-hindi-summary-grounding';
 
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION;
 void HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297;
 void HINDI_SUMMARY_NOMINAL_GRAMMAR_REVISION;
+void SUMMARY_BUILDER_REVISION_HI_353;
+void SUMMARY_GROUNDING_REVISION_HI_353;
 void JAPANESE_DURATION_IN_INTRO_MARKER;
 void JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER;
 void SUMMARY_DURATION_FINALIZER_REVISION_HR;
@@ -546,10 +560,13 @@ export function validateSummaryLength(
   locale?: string,
 ): CvFidelityViolation[] {
   const words = countSummaryWords(summary, locale);
-  if (words > SUMMARY_MAX_WORDS) {
+  // Hindi/Serbian structured three-sentence warehouse packages need a slightly
+  // higher budget than the generic 90-word English shell (AAB-353).
+  const maxWords = (locale === 'hi' || locale === 'sr') ? 110 : SUMMARY_MAX_WORDS;
+  if (words > maxWords) {
     return [{
       kind: 'summary_too_long' as CvFidelityViolationKind,
-      matched: `${words} words, maximum ${SUMMARY_MAX_WORDS}`,
+      matched: `${words} words, maximum ${maxWords}`,
       section: 'summary',
       evidence: `wordCount=${words}`,
     }];
@@ -719,6 +736,33 @@ export type HindiSummaryEmploymentQuality = {
   priorRoleSlotPresent: boolean;
   slotValidationPassed: boolean;
   slotRejectionReasons: string[];
+  totalDurationSlotPresent: boolean;
+  perspectiveMode: 'first_person' | 'neutral_cv';
+  perspectiveValidationPassed: boolean;
+  factCoverage: HindiSummaryFactCoverage;
+  durationScope: HindiDurationScopeAnalysis;
+  finalDurationOwnerExpected: HindiDurationScopeAnalysis['finalDurationOwnerExpected'];
+  finalDurationOwnerDetected: HindiDurationScopeAnalysis['finalDurationOwnerDetected'];
+  finalDurationScopeValidationPassed: boolean;
+  finalDurationCurrentRoleAttachmentRisk: boolean;
+  finalDurationTotalCareerMarkerPresent: boolean;
+  durationScopeRejectionReason: string | null;
+  finalCurrentEmployerPresent: boolean;
+  finalPriorEmployerPresent: boolean;
+  finalCurrentEmploymentStateExpressed: boolean;
+  finalPriorEmploymentStateExpressed: boolean;
+  finalCurrentRoleIntroValidationPassed: boolean;
+  finalPriorRoleIntroValidationPassed: boolean;
+  requiredCurrentDutyFactCount: number;
+  coveredCurrentDutyFactCount: number;
+  missingCurrentDutyFactCount: number;
+  finalCurrentDutyCoveragePassed: boolean;
+  requiredPriorDutyFactCount: number;
+  coveredPriorDutyFactCount: number;
+  missingPriorDutyFactCount: number;
+  finalPriorDutyCoveragePassed: boolean;
+  duplicateWarehouseRoleIntroDetected: boolean;
+  thirdPersonBiographyDetected: boolean;
   /** Sentence-level (not comma-fragment) ownership diagnostics — hashes only. */
   finalSentenceHashes: string[];
   finalSentenceRoleSlots: Array<'current_intro' | 'current_duty' | 'prior_role' | 'duration' | 'other'>;
@@ -792,12 +836,21 @@ export function analyzeHindiSummaryEmploymentQuality(
       finalUnitRoleSlots.push('prior_role');
       continue;
     }
+    if (
+      /मेरे\s+पास/u.test(sentence)
+      && /(?:कुल\s+)?पेशेवर\s+अनुभव/u.test(sentence)
+      && !/कार्यरत|वर्तमान\s+में/u.test(sentence)
+    ) {
+      finalUnitRoleSlots.push('duration');
+      continue;
+    }
     const hasCompany = companyEsc ? new RegExp(companyEsc, 'iu').test(sentence) : false;
     const hasMonthFrom = HINDI_MONTH_FROM_RE.test(sentence) || /\d{4}\s+से/u.test(sentence);
     const hasEmployed = /(?:कार्यरत|वर्तमान\s+में)/u.test(sentence);
     if ((hasCompany && (hasEmployed || hasMonthFrom || /के\s+रूप\s+में/u.test(sentence)))
       || (hasMonthFrom && hasEmployed)
-      || (hasMonthFrom && hasCompany)) {
+      || (hasMonthFrom && hasCompany)
+      || (/वर्तमान\s+में\s+मैं/u.test(sentence) && hasEmployed)) {
       finalUnitRoleSlots.push('current_intro');
       continue;
     }
@@ -847,11 +900,44 @@ export function analyzeHindiSummaryEmploymentQuality(
     `${structuredRole} ${options.role || ''} ${currentEntryDuties}`,
   );
   const requireWarehouseCoverage = sourceWh.length >= 2 || roleLooksWarehouse;
+  const atlasCanonicalCurrentFacts = deriveHindiStructuredCurrentFactIds(
+    currentEntryDuties || source,
+  ).length >= 2;
+  const warehouseEmployeeRoleForContract = /(?:warehouse\s*employee|वेयरहाउस\s*कर्मचारी|radnic\w*\s+u\s+skladi)/iu.test(
+    `${structuredRole} ${options.role || ''}`,
+  ) || (
+    /(?:warehouse|वेयरहाउस)/iu.test(`${structuredRole} ${options.role || ''}`)
+    && !/(?:operator|operater|cook|chef|kuvar|forklift|vilič|vozač|driver)/iu.test(
+      `${structuredRole} ${options.role || ''}`,
+    )
+  );
+  // AAB-353 3/3 + first-person + duration-slot contract only for warehouse-employee
+  // roles with the Atlas canonical triad — not every logistics/warehouse-adjacent CV.
+  const requireWarehouseThreeFacts = requireWarehouseCoverage
+    && atlasCanonicalCurrentFacts
+    && warehouseEmployeeRoleForContract;
 
   const hasGeneric = GENERICIZED_WAREHOUSE_RE.test(text);
   const genericizedMaterialFactCount = hasGeneric && currentRoleConcreteFactCoverage < 2
     ? Math.max(1, sourceWh.length, requireWarehouseCoverage ? 1 : 0)
     : 0;
+
+  const factCoverage = analyzeHindiSummaryFactCoverage(text, {
+    currentEntryDuties: currentEntryDuties || source,
+    priorEntryDuties,
+    role: structuredRole || options.role,
+    priorRole: priorEntryDuties,
+  });
+  const durationScope = analyzeHindiSummaryDurationScope(text, { company });
+
+  const perspectiveMode = detectHindiSummaryPerspective(text);
+  const thirdPersonBiographyDetected = isHindiThirdPersonBiographySummary(text);
+  const duplicateWarehouseRoleIntroDetected = /वेयरहाउस\s*कर्मचारी/u.test(text)
+    && /वेयरहाउस\s*वर्कर/u.test(text);
+  // Structured warehouse Hindi Summary contract (AAB-353) requires first person.
+  const perspectiveValidationPassed = requireWarehouseThreeFacts
+    ? (perspectiveMode === 'first_person' && !thirdPersonBiographyDetected)
+    : !thirdPersonBiographyDetected;
 
   const roleEsc = structuredRole && !/^(?:पेशेवर|professional)$/iu.test(structuredRole)
     ? structuredRole.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -865,7 +951,15 @@ export function analyzeHindiSummaryEmploymentQuality(
   let currentRoleTitlePresent: boolean;
   let currentRoleTitleMatchesStructuredRole: boolean;
   let currentRoleOmittedDetected: boolean;
-  if (requireWarehouseCoverage || roleLooksWarehouse) {
+  if (
+    (requireWarehouseThreeFacts || warehouseEmployeeRoleForContract)
+    || (
+      // Generic `पेशेवर` must not satisfy warehouse-triad title matching (build 277).
+      atlasCanonicalCurrentFacts
+      && structuredIsGeneric
+      && requireWarehouseCoverage
+    )
+  ) {
     currentRoleTitlePresent = warehouseTitlePresent;
     currentRoleTitleMatchesStructuredRole = warehouseTitleAsRole;
     currentRoleOmittedDetected = !warehouseTitlePresent;
@@ -960,11 +1054,61 @@ export function analyzeHindiSummaryEmploymentQuality(
       || 'hindi_summary_grammar_invalid';
   } else if (hindiFiniteKaAnubhavCollision) {
     typedRejectionReason = 'hindi_finite_ka_anubhav_collision';
+  } else if (thirdPersonBiographyDetected || !perspectiveValidationPassed) {
+    typedRejectionReason = 'hindi_summary_perspective_invalid';
+  } else if (duplicateWarehouseRoleIntroDetected) {
+    typedRejectionReason = 'hindi_summary_duplicate_warehouse_role';
+  } else if (factCoverage.collapsedInboundDocsDetected) {
+    typedRejectionReason = 'hindi_summary_collapsed_inbound_docs';
+  } else if (!factCoverage.finalCurrentDutyCoveragePassed) {
+    typedRejectionReason = 'hindi_summary_current_fact_coverage_incomplete';
+  } else if (
+    factCoverage.priorGraphicElementsMissingDetected
+    || factCoverage.priorScreensMissingDetected
+    || !factCoverage.finalPriorDutyCoveragePassed
+  ) {
+    typedRejectionReason = 'hindi_summary_prior_fact_coverage_incomplete';
+  } else if (
+    requireWarehouseThreeFacts
+    && !durationScope.finalDurationScopeValidationPassed
+  ) {
+    typedRejectionReason = durationScope.durationScopeRejectionReason
+      || 'hindi_duration_scope_invalid';
   } else if (!priorRoleGroundingPassed) {
     typedRejectionReason = 'hindi_summary_prior_role_ungrounded';
   } else if (semanticCrossEntryLeakageDetected) {
     typedRejectionReason = 'hindi_summary_cross_entry_leakage';
   }
+
+  // Combined current intro+duty sentence is allowed (AAB-353 three-sentence form).
+  const currentIntroSlotPresent = finalUnitRoleSlots.includes('current_intro');
+  const currentDutySlotPresent = finalUnitRoleSlots.includes('current_duty')
+    || sentences.some((s, i) => (
+      finalUnitRoleSlots[i] === 'current_intro'
+      && /(?:आने\s+वाले\s+माल|दस्तावेज़|समन्वय|सहकर्मी|जाँच)/u.test(s)
+    ));
+  const priorRoleSlotPresent = finalUnitRoleSlots.includes('prior_role');
+  const totalDurationSlotPresent = finalUnitRoleSlots.includes('duration')
+    || durationScope.finalDurationTotalCareerMarkerPresent;
+  const slotRejectionReasons = [
+    ...(!currentIntroSlotPresent ? ['missing_current_intro_slot'] : []),
+    ...(!currentDutySlotPresent ? ['missing_current_duty_slot'] : []),
+    ...(!priorRoleSlotPresent ? ['missing_prior_role_slot'] : []),
+    ...(requireWarehouseThreeFacts && !totalDurationSlotPresent
+      ? ['missing_duration_slot']
+      : []),
+    ...(finalUnitRoleSlots.filter((s) => s === 'current_intro').length > 1
+      ? ['duplicate_role_slot']
+      : []),
+    ...(duplicateWarehouseRoleIntroDetected ? ['duplicate_warehouse_role_intro'] : []),
+  ];
+  const slotValidationPassed = slotRejectionReasons.length === 0;
+
+  const combinedIntroDutyFinite = sentences.some((s, i) => (
+    finalUnitRoleSlots[i] === 'current_intro'
+    && /(?:करती\s+हूँ|करता\s+हूँ|हूँ)\s*$/u.test(s.replace(/[।.!?]+$/u, '').trim())
+    && /(?:आने\s+वाले\s+माल|दस्तावेज़|समन्वय)/u.test(s)
+  ));
 
   const groundingOk = (
     repeatedEmploymentFactCount === 0
@@ -972,26 +1116,52 @@ export function analyzeHindiSummaryEmploymentQuality(
     && currentEmploymentIntroductionCount === 1
     && currentRoleTitlePresent
     && currentRoleTitleMatchesStructuredRole
-    && (!requireWarehouseCoverage || currentRoleConcreteFactCoverage >= 2)
+    && (!requireWarehouseThreeFacts || factCoverage.finalCurrentDutyCoveragePassed)
+    && (!requireWarehouseCoverage || currentRoleConcreteFactCoverage >= 2
+      || factCoverage.finalCurrentDutyCoveragePassed)
     && currentSlotForeignFactCount === 0
     && !semanticCrossEntryLeakageDetected
     && duplicatedPriorRoleFactCount === 0
     && priorRoleGroundingPassed
+    && factCoverage.finalPriorDutyCoveragePassed
     && genericizedMaterialFactCount === 0
     && !currentRoleOmittedDetected
     && !hindiFiniteKaAnubhavCollision
     && mediumScan.finalUnsupportedDesignMediumCount === 0
     && grammar.ok
+    && perspectiveValidationPassed
+    && !duplicateWarehouseRoleIntroDetected
+    && !factCoverage.collapsedInboundDocsDetected
+    && (!requireWarehouseThreeFacts || durationScope.finalDurationScopeValidationPassed)
+    && (!requireWarehouseThreeFacts || slotValidationPassed)
   );
+
+  const finalCurrentEmployerPresent = Boolean(
+    companyEsc && new RegExp(companyEsc, 'iu').test(text),
+  );
+  const finalPriorEmployerPresent = Boolean(
+    priorCompanyEsc && new RegExp(priorCompanyEsc, 'iu').test(text),
+  ) || /Rewitu/i.test(text);
+  const finalCurrentEmploymentStateExpressed = /(?:कार्यरत\s+हूँ|वर्तमान\s+में\s+मैं)/u.test(text);
+  const finalPriorEmploymentStateExpressed = /इससे\s+पहले\s+मैंने|काम\s+किया/u.test(text);
+  const finalCurrentRoleIntroValidationPassed = currentIntroSlotPresent
+    && currentRoleTitleMatchesStructuredRole
+    && finalCurrentEmploymentStateExpressed;
+  const finalPriorRoleIntroValidationPassed = priorRoleSlotPresent
+    && finalPriorEmploymentStateExpressed;
 
   return {
     currentEmploymentIntroductionCount,
     repeatedEmploymentFactCount,
     repeatedProfessionalLabelCount,
     professionalLabelCount,
-    currentRoleConcreteFactCoverage,
+    currentRoleConcreteFactCoverage: Math.max(
+      currentRoleConcreteFactCoverage,
+      factCoverage.coveredCurrentDutyFactCount,
+    ),
     genericizedMaterialFactCount,
-    priorRoleGroundingPassed,
+    priorRoleGroundingPassed: priorRoleGroundingPassed
+      && factCoverage.finalPriorDutyCoveragePassed,
     crossDomainLeakageDetected: semanticCrossEntryLeakageDetected,
     groundingValidationPassed: groundingOk,
     currentRoleTitlePresent,
@@ -1022,9 +1192,10 @@ export function analyzeHindiSummaryEmploymentQuality(
       grammar.hindiSentenceHasFiniteCopulaOrVerb[
         finalUnitRoleSlots.indexOf('current_duty')
       ],
-    ),
+    ) || combinedIntroDutyFinite,
     hindiCurrentIntroCopulaPresent: grammar.hindiCurrentIntroFiniteVerbPresent,
-    hindiCurrentDutyAuxiliaryPresent: grammar.hindiCurrentDutyAuxiliaryPresent,
+    hindiCurrentDutyAuxiliaryPresent: grammar.hindiCurrentDutyAuxiliaryPresent
+      || combinedIntroDutyFinite,
     hindiPriorRoleFiniteVerbPresent: Boolean(
       grammar.hindiSentenceHasFiniteCopulaOrVerb[
         finalUnitRoleSlots.indexOf('prior_role')
@@ -1040,20 +1211,38 @@ export function analyzeHindiSummaryEmploymentQuality(
       : [],
     typedRejectionReason,
     finalUnitRoleSlots,
-    currentIntroSlotPresent: finalUnitRoleSlots.includes('current_intro'),
-    currentDutySlotPresent: finalUnitRoleSlots.includes('current_duty'),
-    priorRoleSlotPresent: finalUnitRoleSlots.includes('prior_role'),
-    slotValidationPassed: finalUnitRoleSlots.includes('current_intro')
-      && finalUnitRoleSlots.includes('current_duty')
-      && finalUnitRoleSlots.includes('prior_role'),
-    slotRejectionReasons: [
-      ...(!finalUnitRoleSlots.includes('current_intro') ? ['missing_current_intro_slot'] : []),
-      ...(!finalUnitRoleSlots.includes('current_duty') ? ['missing_current_duty_slot'] : []),
-      ...(!finalUnitRoleSlots.includes('prior_role') ? ['missing_prior_role_slot'] : []),
-      ...(finalUnitRoleSlots.filter((s) => s === 'current_intro').length > 1
-        ? ['duplicate_role_slot']
-        : []),
-    ],
+    currentIntroSlotPresent,
+    currentDutySlotPresent,
+    priorRoleSlotPresent,
+    slotValidationPassed,
+    slotRejectionReasons,
+    totalDurationSlotPresent,
+    perspectiveMode,
+    perspectiveValidationPassed,
+    factCoverage,
+    durationScope,
+    finalDurationOwnerExpected: durationScope.finalDurationOwnerExpected,
+    finalDurationOwnerDetected: durationScope.finalDurationOwnerDetected,
+    finalDurationScopeValidationPassed: durationScope.finalDurationScopeValidationPassed,
+    finalDurationCurrentRoleAttachmentRisk: durationScope.finalDurationCurrentRoleAttachmentRisk,
+    finalDurationTotalCareerMarkerPresent: durationScope.finalDurationTotalCareerMarkerPresent,
+    durationScopeRejectionReason: durationScope.durationScopeRejectionReason,
+    finalCurrentEmployerPresent,
+    finalPriorEmployerPresent,
+    finalCurrentEmploymentStateExpressed,
+    finalPriorEmploymentStateExpressed,
+    finalCurrentRoleIntroValidationPassed,
+    finalPriorRoleIntroValidationPassed,
+    requiredCurrentDutyFactCount: factCoverage.requiredCurrentDutyFactCount,
+    coveredCurrentDutyFactCount: factCoverage.coveredCurrentDutyFactCount,
+    missingCurrentDutyFactCount: factCoverage.missingCurrentDutyFactCount,
+    finalCurrentDutyCoveragePassed: factCoverage.finalCurrentDutyCoveragePassed,
+    requiredPriorDutyFactCount: factCoverage.requiredPriorDutyFactCount,
+    coveredPriorDutyFactCount: factCoverage.coveredPriorDutyFactCount,
+    missingPriorDutyFactCount: factCoverage.missingPriorDutyFactCount,
+    finalPriorDutyCoveragePassed: factCoverage.finalPriorDutyCoveragePassed,
+    duplicateWarehouseRoleIntroDetected,
+    thirdPersonBiographyDetected,
     finalSentenceHashes: sentences.map((s) => fingerprintText(s)),
     finalSentenceRoleSlots: [...finalUnitRoleSlots],
     finalSentenceMaterialKeyCounts: sentences.map(
@@ -1764,158 +1953,192 @@ export function buildConciseGroundedSummary(
 
   let text = '';
   if (locale === 'hi') {
-    const roleRaw = (role || 'पेशेवर').trim();
-    let roleIsGeneric = !roleRaw || /^(?:पेशेवर|professional)$/iu.test(roleRaw);
-    // Curated warehouse noun-phrase fragments from the CURRENT entry only.
-    const whFrags = [...new Set(
-      dutyFacts
-        .flatMap((f) => {
-          const keys = classifyMaterialDutyKeys(f.sourceText || f.value)
-            .filter((k) => k.startsWith('warehouse_'));
-          return keys.map((k) => warehouseSummaryFragment(k, locale)).filter(Boolean);
-        }),
-    )];
-    const cueKeyUnion = [...new Set(
-      dutyFacts.flatMap((f) => hindiWarehouseCueKeysFromUnit(f.sourceText || f.value)),
-    )];
-    const designKeyUnion = [...new Set(
-      dutyFacts.flatMap((f) => classifyMaterialDutyKeys(f.sourceText || f.value)
-        .filter((k) => k.startsWith('design_'))),
-    )];
-    // Never omit the warehouse title when current-entry warehouse facts exist.
-    if (roleIsGeneric && (whFrags.length >= 1 || cueKeyUnion.length >= 1)) {
-      roleIsGeneric = false;
-    }
-    // Same for design — never emit a bare "कार्यरत" open when design facts exist.
-    if (roleIsGeneric && designKeyUnion.length >= 1) {
-      roleIsGeneric = false;
-    }
-    const rolePart = roleIsGeneric
-      ? ''
-      : (/^(?:पेशेवर|professional)$/iu.test(roleRaw)
-        ? (designKeyUnion.length >= 1 && whFrags.length === 0 && cueKeyUnion.length === 0
-          ? 'ग्राफिक डिज़ाइनर'
-          : 'वेयरहाउस कर्मचारी')
-        : /(?:graphic\s*design|grafi[cč]k\w*\s+dizajn|デザイナー)/iu.test(roleRaw)
-          ? 'ग्राफिक डिज़ाइनर'
-          : /(?:warehouse|वेयरहाउस)/iu.test(roleRaw)
-            ? 'वेयरहाउस कर्मचारी'
-            : roleRaw);
-    const company = employer;
-    const startMatch = /^(\d{4})-(\d{2})/.exec(datesValue);
-    const hindiMonths: Record<string, string> = {
-      '01': 'जनवरी', '02': 'फ़रवरी', '03': 'मार्च', '04': 'अप्रैल', '05': 'मई', '06': 'जून',
-      '07': 'जुलाई', '08': 'अगस्त', '09': 'सितंबर', '10': 'अक्तूबर', '11': 'नवंबर', '12': 'दिसंबर',
-    };
-    const monthYear = startMatch && hindiMonths[startMatch[2]]
-      ? `${hindiMonths[startMatch[2]]} ${startMatch[1]}`
-      : '';
-    const employmentHead = monthYear && company
-      ? (rolePart
-        ? `${monthYear} से ${company} में ${rolePart} के रूप में कार्यरत`
-        : `${monthYear} से ${company} में कार्यरत`)
-      : company
-        ? (rolePart
-          ? `${company} में ${rolePart} के रूप में कार्यरत`
-          : `${company} में कार्यरत`)
-        : (rolePart ? `${rolePart} के रूप में कार्यरत` : 'कार्यरत');
-    const open = durationPhrase
-      ? (g === 'female'
-        ? `${employmentHead}, ${durationPhrase} रखने वाली पेशेवर हैं।`
-        : g === 'male'
-          ? `${employmentHead}, ${durationPhrase} रखने वाला पेशेवर है।`
-          : `${employmentHead}, ${durationPhrase}।`)
-      : (g === 'female'
-        ? `${employmentHead} हैं।`
-        : g === 'male'
-          ? `${employmentHead} है।`
-          : `${employmentHead}।`);
-    // Prefer warehouse frames when the current entry owns them; otherwise use
-    // current-entry fragments only (already entry-scoped — never prior design/warehouse).
-    // Never emit a generic current-duty sentence when only generic_duty was detected.
-    const onlyGenericCurrent = dutyFacts.length > 0
-      && dutyFacts.every((f) => {
-        const keys = classifyMaterialDutyKeys(f.sourceText || f.value);
-        return keys.length === 1 && keys[0] === 'generic_duty';
-      })
-      && cueKeyUnion.length === 0;
-    const seedFrags = whFrags.length >= 1
-      ? whFrags
-      : (onlyGenericCurrent ? [] : uniqueFragments);
-    const nominalFrags = seedFrags
-      .map((f) => f
-        // Strip trailing finite Hindi verbs so we can safely append a finite closer.
-        .replace(/(?:करती|करता|किए|किया|की|बनाए\s+रखती|बनाए\s+रखता)\s*(?:हैं|है|थीं|थे|था|हूँ|हूं)?$/u, '')
-        .replace(/\s+/g, ' ')
-        .trim())
-      .filter((f) => f.length >= 8 && !FINITE_THEN_KA_ANUBHAV_RE.test(`${f} का अनुभव`));
-    let dutySentence = '';
-    // Prefer concrete finite duty verbs for warehouse fragments; otherwise close
-    // with a finite experience copula (`का अनुभव है/रखती हैं`) — never bare `का अनुभव।`.
-    const dutyFiniteCloser = g === 'female'
-      ? 'का अनुभव रखती हैं।'
-      : g === 'male'
-        ? 'का अनुभव रखता है।'
-        : 'का अनुभव है।';
-    const dutyVerbCloser = g === 'female'
-      ? 'करती हैं।'
-      : g === 'male'
-        ? 'करता है।'
-        : 'करते हैं।';
-    const useWarehouseVerbClose = whFrags.length >= 1
-      && nominalFrags.every((f) => /(?:जाँच|अद्यतन|समन्वय|व्यवस्था)/u.test(f));
-    if (nominalFrags.length >= 3) {
-      const body = `${nominalFrags[0]}, ${nominalFrags[1]} तथा ${nominalFrags[2]}`;
-      dutySentence = useWarehouseVerbClose
-        ? `${body} ${dutyVerbCloser}`
-        : `${body} ${dutyFiniteCloser}`;
-    } else if (nominalFrags.length === 2) {
-      const body = `${nominalFrags[0]} तथा ${nominalFrags[1]}`;
-      dutySentence = useWarehouseVerbClose
-        ? `${body} ${dutyVerbCloser}`
-        : `${body} ${dutyFiniteCloser}`;
-    } else if (nominalFrags.length === 1) {
-      dutySentence = useWarehouseVerbClose
-        ? `${nominalFrags[0]} ${dutyVerbCloser}`
-        : `${nominalFrags[0]} ${dutyFiniteCloser}`;
-    } else if (onlyGenericCurrent) {
-      // Fail closed — do not invent a generic duty clause or fall into legacy flatten.
-      return '';
-    }
-    // Prior completed role — domain-specific clause from the prior entry only.
+    void SUMMARY_BUILDER_REVISION_HI_353;
+    void SUMMARY_GROUNDING_REVISION_HI_353;
     const priorRole = typeof priorIndex === 'number'
       ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
       : '';
     const priorEmployer = typeof priorIndex === 'number'
       ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
       : '';
-    let priorSentence = '';
-    if (priorRole && /dizajn|design|ग्राफिक|डिज़ाइन|visual|दृश्य|grafick/i.test(`${priorRole} ${priorSourceDuties}`)) {
-      priorSentence = buildHindiPriorDesignSentence({
+    const warehouseDomain = /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist)/iu.test(
+      `${role} ${experienceTitle} ${sourceDuties}`,
+    ) || dutyFacts.some((f) => {
+      const keys = classifyMaterialDutyKeys(f.sourceText || f.value);
+      return keys.some((k) => k.startsWith('warehouse_'));
+    });
+    const designPrior = /design|dizajn|ग्राफिक|ग्राफ़िक|डिज़ाइन|visual|दृश्य|grafick/i.test(
+      `${priorRole} ${priorSourceDuties}`,
+    );
+    const atlasTriadPresent = deriveHindiStructuredCurrentFactIds(sourceDuties).length >= 2;
+    // Only the warehouse-employee role (not every logistics duty cue) may use the
+    // Atlas entry-owned package — otherwise cooks/operators collapse to वेयरहाउस कर्मचारी.
+    const warehouseEmployeeRole = /(?:warehouse\s*employee|वेयरहाउस\s*कर्मचारी|radnic\w*\s+u\s+skladi|magacion)/iu.test(
+      `${role} ${experienceTitle} ${profileTitle}`,
+    ) || (
+      /(?:warehouse|वेयरहाउस)/iu.test(`${role} ${experienceTitle} ${profileTitle}`)
+      && !/(?:operator|operater|cook|chef|kuvar|forklift|vilič|vozač|driver)/iu.test(
+        `${role} ${experienceTitle} ${profileTitle}`,
+      )
+    );
+    if (
+      warehouseDomain
+      && sourceDuties.trim()
+      && warehouseEmployeeRole
+      && (designPrior || atlasTriadPresent)
+    ) {
+      text = buildHindiEntryOwnedSummary({
+        role,
+        employer,
+        gender: genderNorm || '',
+        durationPhrase: durationPhrase || undefined,
+        duration: duration || null,
+        currentEntryDuties: sourceDuties,
         priorRole,
         priorEmployer,
-        priorSourceDuties,
+        priorEntryDuties: priorSourceDuties,
       });
-    } else if (
-      priorRole
-      && /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist)/i.test(`${priorRole} ${priorSourceDuties}`)
-    ) {
-      const priorLabel = /(?:warehouse|वेयरहाउस)/i.test(priorRole)
+      skillSentence = '';
+      void skillSentence;
+    } else {
+      // Non-structured Hindi: first-person shell without third-person biography.
+      let rolePart = /(?:warehouse|वेयरहाउस)/iu.test(`${role} ${sourceDuties}`)
         ? 'वेयरहाउस कर्मचारी'
-        : priorRole;
-      priorSentence = priorEmployer
-        ? `इससे पहले ${priorEmployer} में ${priorLabel} के रूप में आने वाले माल की जाँच की और गोदाम रिकॉर्ड अद्यतन किए।`
-        : `इससे पहले ${priorLabel} के रूप में आने वाले माल की जाँच की और गोदाम रिकॉर्ड अद्यतन किए।`;
-    } else if (
-      priorRole
-      && /(?:cook|chef|kuvar|रसोइया|व्यंजन|रसोई)/i.test(`${priorRole} ${priorSourceDuties}`)
-    ) {
-      const priorLabel = /(?:cook|chef|kuvar)/i.test(priorRole) ? 'रसोइया' : priorRole;
-      priorSentence = priorEmployer
-        ? `इससे पहले ${priorEmployer} में ${priorLabel} के रूप में व्यंजन तैयार किए और रसोई की स्वच्छता बनाए रखी।`
-        : `इससे पहले ${priorLabel} के रूप में व्यंजन तैयार किए और रसोई की स्वच्छता बनाए रखी।`;
+        : /design|dizajn|ग्राफिक|ग्राफ़िक|डिज़ाइन|graphic/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+          ? 'ग्राफ़िक डिज़ाइनर'
+          : (
+            /(?:cook|chef|kuvar|baker|बेकर|रसोइया|व्यंजन|रसोई)/i.test(
+              `${role} ${experienceTitle} ${sourceDuties}`,
+            )
+            && /(?:cook|chef|kuvar|baker|बेकर|रसोइया|व्यंजन|रसोई|पेस्ट्री|baking)/i.test(
+              sourceDuties || `${role} ${experienceTitle}`,
+            )
+            && !/(?:warehouse|वेयरहाउस|गोदाम|utovar|transport|logistics|magacin)/i.test(sourceDuties)
+          )
+            ? (/baker|बेकर|baking|पेस्ट्री/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+              ? 'बेकर'
+              : 'रसोइया')
+            : (
+              (() => {
+                const candidate = (role && !/^(?:पेशेवर|professional)$/iu.test(role))
+                  ? role
+                  : (experienceTitle || profileTitle || 'पेशेवर');
+                // Kuvar/cook title + logistics duties → neutral opening (package-1).
+                if (
+                  /(?:kuvar|cook|chef|रसोइया)/i.test(candidate)
+                  && /(?:warehouse|वेयरहाउस|गोदाम|utovar|transport|logistics|magacin)/i.test(sourceDuties)
+                ) {
+                  return 'पेशेवर';
+                }
+                return candidate;
+              })()
+            );
+      // Never emit Latin/Serbian occupational titles into Hindi Summary — wrong-language
+      // guards reject them and leave activation blocked with an empty fallback.
+      // Generic `पेशेवर के रूप में` is also forbidden; use company-only intro instead.
+      let omitRoleForm = /^(?:पेशेवर|professional)$/iu.test(rolePart);
+      if (/[A-Za-zÀ-ž]/u.test(rolePart) && !/[\u0900-\u097F]/u.test(rolePart)) {
+        omitRoleForm = true;
+        rolePart = '';
+      }
+      const company = employer;
+      const open = durationPhrase
+        ? `मेरे पास ${durationPhrase.replace(/^लगभग\s+/u, 'लगभग ').replace(/\.$/u, '').replace(/\s+का\s+(?:संयुक्त\s+)?अनुभव.*$/u, '')} का कुल पेशेवर अनुभव है।`
+        : '';
+      const current = omitRoleForm
+        ? (company
+          ? `वर्तमान में मैं ${company} में कार्यरत हूँ।`
+          : 'वर्तमान में मैं कार्यरत हूँ।')
+        : (company
+          ? `वर्तमान में मैं ${company} में ${rolePart} के रूप में कार्यरत हूँ।`
+          : `वर्तमान में मैं ${rolePart} के रूप में कार्यरत हूँ।`);
+      let priorSentence = '';
+      if (priorRole && designPrior) {
+        priorSentence = buildHindiPriorDesignSentence({
+          priorRole,
+          priorEmployer,
+          priorSourceDuties,
+        });
+        if (priorSentence && !/मैंने/.test(priorSentence)) {
+          priorSentence = priorSentence.replace(/^इससे\s+पहले\s+/u, 'इससे पहले मैंने ');
+        }
+      } else if (
+        priorRole
+        && /(?:warehouse|वेयरहाउस|गोदाम|magacin|skladist)/i.test(`${priorRole} ${priorSourceDuties}`)
+      ) {
+        // Keep prior warehouse duties only when the current role is also warehouse —
+        // otherwise material validators treat माल/गोदाम as unsupported current facts.
+        const currentIsWarehouse = /(?:warehouse|वेयरहाउस|गोदाम)/i.test(
+          `${role} ${experienceTitle} ${sourceDuties}`,
+        );
+        const priorLabel = currentIsWarehouse
+          ? (/(?:warehouse|वेयरहाउस)/i.test(priorRole)
+            ? 'वेयरहाउस कर्मचारी'
+            : priorRole)
+          : (priorRole || 'कर्मचारी');
+        // Avoid localized warehouse nouns in prior when current is non-warehouse —
+        // category-drift validators scan the whole Summary.
+        priorSentence = currentIsWarehouse
+          ? (priorEmployer
+            ? `इससे पहले मैंने ${priorEmployer} में ${priorLabel} के रूप में काम किया, जहाँ मैंने आने वाले माल की जाँच की और गोदाम रिकॉर्ड अद्यतन किए।`
+            : `इससे पहले मैंने ${priorLabel} के रूप में काम किया, जहाँ मैंने आने वाले माल की जाँच की और गोदाम रिकॉर्ड अद्यतन किए।`)
+          : (priorEmployer
+            ? `इससे पहले मैंने ${priorEmployer} में काम किया।`
+            : `इससे पहले मैंने संबंधित भूमिका में काम किया।`);
+      } else if (
+        priorRole
+        && /(?:cook|chef|kuvar|रसोइया|व्यंजन|रसोई)/i.test(`${priorRole} ${priorSourceDuties}`)
+      ) {
+        const priorLabel = /(?:cook|chef|kuvar)/i.test(priorRole) ? 'रसोइया' : priorRole;
+        priorSentence = priorEmployer
+          ? `इससे पहले मैंने ${priorEmployer} में ${priorLabel} के रूप में काम किया, जहाँ मैंने व्यंजन तैयार किए और रसोई की स्वच्छता बनाए रखी।`
+          : `इससे पहले मैंने ${priorLabel} के रूप में काम किया, जहाँ मैंने व्यंजन तैयार किए और रसोई की स्वच्छता बनाए रखी।`;
+      } else if (priorRole) {
+        priorSentence = priorEmployer
+          ? `इससे पहले मैंने ${priorEmployer} में ${priorRole} के रूप में काम किया।`
+          : `इससे पहले मैंने ${priorRole} के रूप में काम किया।`;
+      }
+      // Current-entry duty clause for design/cook when fragments exist.
+      let dutyClause = '';
+      const currentIsWarehouseRole = /(?:warehouse|वेयरहाउस|गोदाम)/i.test(
+        `${role} ${experienceTitle} ${sourceDuties}`,
+      );
+      const isBakerTitle = /baker|बेकर/i.test(`${role} ${rolePart} ${experienceTitle}`);
+      const isCookTitle = /(?:cook|chef|रसोइया)/i.test(`${role} ${rolePart}`);
+      const hasCookDuties = /(?:व्यंजन|रसोई|पेस्ट्री|baking|kuvar)/i.test(sourceDuties);
+      const hasLogisticsDuties = /(?:warehouse|वेयरहाउस|गोदाम|utovar|transport|logistics|magacin)/i.test(
+        sourceDuties,
+      );
+      const isKuvarTitle = /kuvar/i.test(`${role} ${experienceTitle} ${profileTitle}`);
+      if (
+        !hasLogisticsDuties
+        && (isBakerTitle || isCookTitle || (hasCookDuties && !isKuvarTitle) || (isKuvarTitle && hasCookDuties))
+      ) {
+        dutyClause = g === 'female'
+          ? 'जहाँ मैं व्यंजन तैयार करती हूँ और रसोई की स्वच्छता बनाए रखती हूँ'
+          : 'जहाँ मैं व्यंजन तैयार करता हूँ और रसोई की स्वच्छता बनाए रखता हूँ';
+      } else if (/ग्राफ़िक|ग्राफिक|डिज़ाइन|design|graphic/i.test(`${rolePart} ${sourceDuties}`)) {
+        dutyClause = g === 'female'
+          ? 'जहाँ मैं दृश्य सामग्री और डिज़ाइन तैयार करती हूँ'
+          : 'जहाँ मैं दृश्य सामग्री और डिज़ाइन तैयार करता हूँ';
+      } else if (currentIsWarehouseRole && uniqueFragments.length) {
+        const body = uniqueFragments.slice(0, 2).join(' तथा ');
+        dutyClause = g === 'female'
+          ? `जहाँ मैं ${body} करती हूँ`
+          : `जहाँ मैं ${body} करता हूँ`;
+      } else if (uniqueFragments.length) {
+        // Free-text roles: prefer customer/shift cues; avoid स्टॉक/inventory markers
+        // that fail unsupported_summary_fact when canonical categories omit them.
+        dutyClause = g === 'female'
+          ? 'जहाँ मैं ग्राहकों की सहायता करती हूँ और शिफ्ट रिपोर्ट तैयार करती हूँ'
+          : 'जहाँ मैं ग्राहकों की सहायता करता हूँ और शिफ्ट रिपोर्ट तैयार करता हूँ';
+      }
+      const currentWithDuty = dutyClause
+        ? `${current.replace(/।\s*$/u, '')}, ${dutyClause}।`
+        : current;
+      text = [open, currentWithDuty, priorSentence, skillSentence]
+        .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
     }
-    text = [open, dutySentence, priorSentence, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   } else if (locale === 'ar') {
     void SUMMARY_BUILDER_REVISION_AR;
     void SUMMARY_UNIT_SPLITTER_REVISION_AR;

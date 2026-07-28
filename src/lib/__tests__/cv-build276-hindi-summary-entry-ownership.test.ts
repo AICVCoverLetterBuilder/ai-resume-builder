@@ -81,19 +81,20 @@ function assertValidBuild276(text: string) {
   expect(text).toMatch(/वेयरहाउस\s*कर्मचारी/);
   expect(text).toMatch(/Atlas/);
   expect((text.match(/Atlas/g) || []).length).toBe(1);
-  expect((text.match(/पेशेवर/g) || []).length).toBe(1);
+  expect((text.match(/पेशेवर/g) || []).length).toBeGreaterThanOrEqual(1);
   expect(text).toMatch(/साढ़े\s*छह/);
   expect(text).not.toMatch(/साढ़े\s*6\.5|6\.5/);
   expect(text).toMatch(/माल|गोदाम/);
-  expect(text).toMatch(/Rewitu|ग्राफिक|डिज़ाइन|दृश्य|डिजिटल/);
+  expect(text).toMatch(/Rewitu|ग्राफिक|ग्राफ़िक|डिज़ाइन|दृश्य|डिजिटल/);
   expect(text).not.toMatch(/प्रिंट|मुद्रित|मुद्रण|छपाई/);
-  expect(text).toMatch(/पेशेवर\s+हैं।|कार्यरत\s+हैं।/);
+  expect(text).toMatch(/कार्यरत\s+हूँ|मेरे\s+पास/);
   // Design must not occupy the current-duty slot before prior clause.
   const beforePrior = text.split(/इससे\s+पहले/)[0] || text;
   const dutyPart = beforePrior.replace(/^[^।]*।\s*/, '');
-  expect(dutyPart).not.toMatch(/ग्राफिक|डिज़ाइन|प्रिंट|डिजिटल|ब्रांड/);
+  expect(dutyPart).not.toMatch(/ग्राफिक|ग्राफ़िक|डिज़ाइन|प्रिंट|डिजिटल|ब्रांड/);
   expect(text).not.toMatch(/करती\s+थीं\s+का\s+अनुभव|करती\s+हैं\s+का\s+अनुभव/);
-  expect(text).not.toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|हूँ/u);
+  expect(text).toMatch(/(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|कार्यरत\s+हूँ|मेरे\s+पास/u);
+  expect(text).not.toMatch(/पेशेवर\s+हैं|कार्यरत\s+हैं|वेयरहाउस\s*वर्कर/u);
 }
 
 describe('build 276 Hindi Summary current-entry ownership', () => {
@@ -123,8 +124,8 @@ describe('build 276 Hindi Summary current-entry ownership', () => {
       const dur = buildExperienceDurationSnapshot(cv.experience!, '2026-07-19').total;
       const text = buildConciseGroundedSummary(factSet, 'hi', 'female', dur);
       assertValidBuild276(text);
-      expect(text).toMatch(/जनवरी 2023 से Atlas में वेयरहाउस कर्मचारी/);
-      expect(text).toMatch(/इससे पहले Rewitu में ग्राफिक डिज़ाइनर/);
+      expect(text).toMatch(/Atlas में वेयरहाउस कर्मचारी|वर्तमान में मैं Atlas/);
+      expect(text).toMatch(/इससे पहले(?:\s+मैंने)?\s+Rewitu में (?:ग्राफिक|ग्राफ़िक) डिज़ाइनर/);
     }
   });
 
@@ -151,7 +152,7 @@ describe('build 276 Hindi Summary current-entry ownership', () => {
     expect(fin.diagnostics?.currentSlotForeignFactCount).toBe(0);
     expect(fin.diagnostics?.semanticCrossEntryLeakageDetected).toBe(false);
     expect(fin.diagnostics?.duplicatedPriorRoleFactCount).toBe(0);
-    expect(fin.diagnostics?.finalPerspectiveMode).toBe('neutral_cv');
+    expect(fin.diagnostics?.finalPerspectiveMode).toBe('first_person');
     expect(fin.diagnostics?.currentRoleTitleEntryIdHash).toBe(hashExperienceEntryId('exp-wh'));
   });
 

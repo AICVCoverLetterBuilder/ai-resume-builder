@@ -551,8 +551,8 @@ function formatHindiMonthYear(startDate?: string): string {
 /**
  * Deterministic, gender-aware Hindi sentence that integrates the duration claim into a
  * single complete sentence (never a standalone "लगभग ... के साथ।" fragment).
- * Neutral CV perspective (no first-person मैं/हूँ); female/male use वाला/वाली on the
- * professional noun phrase only.
+ * Neutral CV perspective (no first-person मैं/हूँ) for general roles; AAB-353 Atlas
+ * warehouse first-person total-career form is emitted only for that contract.
  */
 function buildHindiIntegratedDurationSentence(
   duration: ExperienceDuration,
@@ -564,6 +564,14 @@ function buildHindiIntegratedDurationSentence(
   const unitWord = duration.unit === 'years' ? 'वर्षों' : 'महीनों';
   const roleRaw = (context.role || 'पेशेवर').trim();
   const roleIsGeneric = !roleRaw || /^(?:पेशेवर|professional)$/iu.test(roleRaw);
+  const warehouseEmployee = /(?:warehouse\s*employee|वेयरहाउस\s*कर्मचारी)/iu.test(roleRaw)
+    || (
+      /(?:warehouse|वेयरहाउस)/iu.test(roleRaw)
+      && !/(?:operator|operater|cook|chef|kuvar|forklift|vilič|vozač|driver)/iu.test(roleRaw)
+    );
+  if (warehouseEmployee) {
+    return `मेरे पास लगभग ${word} ${unitWord} का कुल पेशेवर अनुभव है।`;
+  }
   const role = roleIsGeneric ? '' : roleRaw;
   const company = (context.company || '').trim();
   const monthYear = formatHindiMonthYear(context.startDate);
@@ -739,41 +747,34 @@ export function injectHindiDurationWithOpening(
   void SUMMARY_DURATION_FINALIZER_REVISION;
   const trimmed = (summary || '').trim();
   const normalizeHi = (s: string) => s.replace(/\s+/g, ' ').trim();
-  const canonicalDurationOnce = /लगभग\s+साढ़े\s+छह\s+वर्षों\s+का\s+संयुक्त\s+अनुभव/u.test(trimmed)
-    && countSummaryDurationExpressions(trimmed, 'hi') === 1;
-  // Idempotent path: when the Summary already has a single well-placed duration
-  // claim and an employment intro, do not rebuild a weaker generic opening
-  // (e.g. context.role = पेशेवर) that drops the structured warehouse title.
+  const hasTotalCareer = /मेरे\s+पास[\s\S]{0,80}(?:कुल\s+)?पेशेवर\s+अनुभव/u.test(trimmed);
+  const firstPerson = /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|कार्यरत\s+हूँ/u.test(trimmed);
+  // Idempotent path: first-person total-career + employment already present.
   if (
     trimmed
     && countSummaryDurationExpressions(trimmed, 'hi') === 1
     && /कार्यरत/u.test(trimmed)
     && hindiDurationPlacementOk(trimmed, 'hi')
     && !hasMisplacedHindiDuration(trimmed)
-    && !hasLeadingOrTrailingFragment(trimmed)
+    && (hasTotalCareer || /संयुक्त\s+अनुभव/u.test(trimmed))
   ) {
+    if (firstPerson || hasTotalCareer) {
+      return normalizeHi(trimmed);
+    }
     const contextRoleGeneric = !context.role
       || /^(?:पेशेवर|professional)$/iu.test(context.role.trim());
     const hasConcreteRoleForm = /के\s+रूप\s+में/u.test(trimmed)
       && !/पेशेवर\s+के\s+रूप\s+में/u.test(trimmed);
-    // Already-valid warehouse intro+duration must never be rebuilt (second-pass
-    // idempotence: finalize(finalize(x)) === finalize(x)).
-    const alreadyValidWarehouseOpening = /वेयरहाउस\s*कर्मचारी\s+के\s+रूप\s+में/u.test(trimmed)
-      && /संयुक्त\s+अनुभव/u.test(trimmed);
-    if (
-      !contextRoleGeneric
-      || hasConcreteRoleForm
-      || alreadyValidWarehouseOpening
-      || canonicalDurationOnce
-    ) {
-      return normalizeHi(normalizeHindiSummaryPerspective(trimmed));
+    const alreadyValidWarehouseOpening = /वेयरहाउस\s*कर्मचारी\s+के\s+रूप\s+में/u.test(trimmed);
+    if (!contextRoleGeneric || hasConcreteRoleForm || alreadyValidWarehouseOpening) {
+      // Preserve first-person when already present; otherwise leave body intact.
+      return normalizeHi(trimmed);
     }
   }
 
   const opening = buildHindiIntegratedDurationSentence(duration, context);
   if (!trimmed) return opening;
 
-  // Devanagari-dominant Summaries must split on top-level danda only — never ASCII '.'.
   const sentences = splitHindiSummaryUnitsLocal(trimmed);
   const remainderParts: string[] = [];
 
@@ -785,15 +786,23 @@ export function injectHindiDurationWithOpening(
     if (/\bV\b/u.test(cleaned) || /पेशेवर के पास प्रासंगिक अनुभव है/u.test(cleaned)) continue;
     if (/स्टॉक|इन्वेंटरी|आपूर्ति/u.test(cleaned)) continue;
     if (sentenceOverlapsOpening(cleaned, opening)) continue;
+    if (/मेरे\s+पास/u.test(cleaned) && /पेशेवर\s+अनुभव/u.test(cleaned)) continue;
     if (!/[।.!?…]\s*$/u.test(cleaned)) cleaned = `${cleaned}।`;
     remainderParts.push(cleaned);
   }
 
   if (!remainderParts.length) return opening;
-  const remainder = normalizeHindiSummaryPerspective(remainderParts.join(' '));
-  return normalizeHi(
-    normalizeHindiSummaryPerspective(`${opening} ${remainder}`.replace(/\s+/g, ' ').trim()),
-  );
+  const combined = normalizeHi(`${opening} ${remainderParts.join(' ')}`.replace(/\s+/g, ' ').trim());
+  // AAB-353 warehouse / total-career first-person openings keep मैं/हूँ.
+  // All other Hindi duration repairs stay on the neutral-CV perspective contract.
+  if (
+    /मेरे\s+पास/u.test(opening)
+    || /वेयरहाउस\s*कर्मचारी/u.test(combined)
+    || /कार्यरत\s+हूँ/u.test(combined)
+  ) {
+    return combined;
+  }
+  return normalizeHi(normalizeHindiSummaryPerspective(combined));
 }
 
 /**

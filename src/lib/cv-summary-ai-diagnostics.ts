@@ -2263,6 +2263,43 @@ export class SummaryAiDiagnosticSession {
       visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false
         && !/at\s+Atlas.{0,40}since.{0,40},\s+with\s+approximately/iu.test(visibleText);
     }
+    if (ok && durationStillOk && locale === 'hi' && typeof visibleText === 'string') {
+      const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
+      const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
+      visibleDutyRequired = requiredCurrent;
+      visibleDutyCovered = Number(this.draft.coveredCurrentDutyFactCount ?? 0);
+      visiblePriorDutyRequired = requiredPrior;
+      visiblePriorDutyCovered = Number(this.draft.coveredPriorDutyFactCount ?? 0);
+      if (requiredCurrent >= 3) {
+        const incomingOk = /आने\s+वाले\s+माल/u.test(visibleText);
+        const docsOk = /(?:दस्तावेज़|दस्तावेज)/u.test(visibleText)
+          && /(?:संबंधित|प्राप्त\s+माल|सत्यापन)/u.test(visibleText)
+          && !(/आने\s+वाले\s+माल\s+और\s+संबंधित\s+दस्तावे/u.test(visibleText)
+            && !/प्राप्त\s+माल\s+से\s+संबंधित\s+दस्तावे/u.test(visibleText));
+        const coordOk = /(?:सहकर्मी|समन्वय)/u.test(visibleText)
+          && /(?:तैयारी|स्थानांतरण|आवाजाही)/u.test(visibleText);
+        visibleDutyCovered = [incomingOk, docsOk, coordOk].filter(Boolean).length;
+        visibleDutyOk = visibleDutyCovered === 3
+          && !/वेयरहाउस\s*वर्कर/u.test(visibleText)
+          && /वेयरहाउस\s*कर्मचारी/u.test(visibleText)
+          && /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|कार्यरत\s+हूँ/u.test(visibleText);
+      }
+      if (requiredPrior >= 3) {
+        const creationOk = /दृश्य\s*सामग्री/u.test(visibleText)
+          && /(?:ग्राफ़िक\s*तत्व|ग्राफिक\s*तत्व)/u.test(visibleText);
+        const reviewOk = /समीक्षा/u.test(visibleText) && /अनुकूलन/u.test(visibleText);
+        const filesOk = /(?:फ़ाइल|फाइल)/u.test(visibleText)
+          && /(?:प्रारूप|फ़ॉर्मेट|फॉर्मेट)/u.test(visibleText)
+          && /स्क्रीन/u.test(visibleText);
+        visiblePriorDutyCovered = [creationOk, reviewOk, filesOk].filter(Boolean).length;
+        visiblePriorDutyOk = visiblePriorDutyCovered === 3;
+      }
+      visibleDurationScopeOk = /मेरे\s+पास[\s\S]{0,80}(?:कुल\s+)?पेशेवर\s+अनुभव/u.test(visibleText)
+        && this.draft.finalDurationScopeValidationPassed !== false;
+      if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrent >= 3) {
+        visibleDutyOk = false;
+      }
+    }
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
       && visiblePriorDutyOk && visibleGrammarOk && visibleLocaleOk && visibleDurationScopeOk;
     this.patch({
@@ -2288,29 +2325,35 @@ export class SummaryAiDiagnosticSession {
       visibleWrongLocaleStructuredRoleCount: (locale === 'de' || locale === 'en')
         ? visibleWrongRoleCount
         : null,
-      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en')
+      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi')
         ? visibleDutyRequired
         : null,
-      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en')
+      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi')
         ? visibleDutyCovered
         : null,
-      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en')
+      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi')
         ? Math.max(0, visibleDutyRequired - visibleDutyCovered)
         : null,
-      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en')
+      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'hi')
         ? (typeof visibleText === 'string' ? visibleDutyOk : null)
         : null,
-      visibleRequiredPriorDutyFactCount: locale === 'en' ? visiblePriorDutyRequired : null,
-      visibleCoveredPriorDutyFactCount: locale === 'en' ? visiblePriorDutyCovered : null,
-      visibleMissingPriorDutyFactCount: locale === 'en'
+      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'hi')
+        ? visiblePriorDutyRequired
+        : null,
+      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'hi')
+        ? visiblePriorDutyCovered
+        : null,
+      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'hi')
         ? Math.max(0, visiblePriorDutyRequired - visiblePriorDutyCovered)
         : null,
-      visiblePriorDutyCoveragePassed: locale === 'en'
+      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'hi')
         ? (typeof visibleText === 'string' ? visiblePriorDutyOk : null)
         : null,
       visibleDurationScopeValidationPassed: locale === 'en'
         ? (typeof visibleText === 'string' ? visibleDurationScopeOk : null)
-        : (locale === 'de' ? this.draft.visibleDurationScopeValidationPassed : null),
+        : (locale === 'de' || locale === 'hi'
+          ? (typeof visibleText === 'string' ? visibleDurationScopeOk : this.draft.visibleDurationScopeValidationPassed)
+          : null),
       visibleGermanGrammarValidationPassed: locale === 'de'
         ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
         : null,
