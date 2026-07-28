@@ -1690,6 +1690,12 @@ export function checkSummaryDiagnosticCompleteness(
     require('serbianStructuredDomainCurrentCoveredFactCount');
     require('serbianStructuredDomainPriorRequiredFactCount');
     require('serbianStructuredDomainPriorCoveredFactCount');
+    require('serbianStructuredDomainCurrentRequiredFactIds');
+    require('serbianStructuredDomainCurrentCoveredFactIds');
+    require('serbianStructuredDomainCurrentMissingFactIds');
+    require('serbianStructuredDomainPriorRequiredFactIds');
+    require('serbianStructuredDomainPriorCoveredFactIds');
+    require('serbianStructuredDomainPriorMissingFactIds');
     require('serbianEntryOwnedBuilderAvailable');
     require('serbianEntryOwnedBuilderAttempted');
     require('serbianEntryOwnedBuilderSucceeded');

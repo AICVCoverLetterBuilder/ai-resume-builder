@@ -14,6 +14,9 @@ import {
   SUMMARY_BUILDER_REVISION_SR,
   analyzeSerbianSummaryEmploymentQuality,
   evaluateSerbianStructuredDomainGate,
+  deriveSerbianStructuredCanonicalFactIds,
+  SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS,
+  SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS,
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
   buildSerbianEntryOwnedSummary,
@@ -565,5 +568,171 @@ describe('AAB-349 Serbian Stronger runtime', () => {
     if (!fin.countedAsSuccess) {
       expect(fin.diagnostics?.rejectionStage).not.toBe('independent_final_duration_verification');
     }
+  });
+
+  // ——— AAB-351: prior gate 2/3 false negative (finalne fajlove / design_files_formats) ———
+
+  const HR_PRIOR_FAJLOVE = [
+    'kreirala vizuelne materijale i grafičke elemente;',
+    'pregledala i prilagođavala dizajnerske materijale;',
+    'pripremala finalne fajlove za različite formate i ekrane.',
+  ].join('\n');
+
+  it('AAB-351 device: Croatian prior finalne fajlove → gate 3/3 + full apply', () => {
+    // Reproduces AAB 351: material keys saw design_files_formats, old phrase gate
+    // dropped it (prior 2/3). Canonical ID set inclusion must pass.
+    const cv = deviceCv();
+    cv.experience![0]!.description = '';
+    cv.experience![1]!.description = '';
+    cv.experience![1]!.canonicalDescription = HR_PRIOR_FAJLOVE;
+    cv.experience![1]!.generatedLocale = 'hr';
+    expect(cv.summary.length).toBe(446);
+    seedUsage(23);
+
+    const derivedPrior = deriveSerbianStructuredCanonicalFactIds(HR_PRIOR_FAJLOVE, 'prior');
+    expect(derivedPrior).toEqual(expect.arrayContaining([
+      ...SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS,
+    ]));
+    expect(derivedPrior).toHaveLength(3);
+
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentEntryDuties: WH_EN,
+      priorEntryDuties: HR_PRIOR_FAJLOVE,
+      currentCanonicalFactIds: deriveSerbianStructuredCanonicalFactIds(WH_EN, 'current'),
+      priorCanonicalFactIds: derivedPrior,
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+      gender: 'female',
+    });
+    expect(gate.priorCoveredFactCount).toBe(3);
+    expect(gate.priorMissingFactIds).toEqual([]);
+    expect(gate.passed).toBe(true);
+    expect(gate.payload).toBeTruthy();
+
+    const provider = `${BAD_SOURCE_SR} Dodatno pomažem.`;
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: provider,
+      cv,
+      requestedLocale: 'sr',
+      gender: 'female',
+      referenceDateIso: REF,
+      durationSnapshot: buildExperienceDurationSnapshot(cv.experience || [], REF),
+      rewriteStyle: 'stronger',
+      originHint: 'ai_generated',
+    });
+    expect(fin.diagnostics?.serbianStructuredDomainGatePassed).toBe(true);
+    expect(fin.diagnostics?.serbianStructuredDomainPriorCoveredFactCount).toBe(3);
+    expect(fin.diagnostics?.serbianStructuredDomainPriorMissingFactIds || []).toEqual([]);
+    expect(fin.diagnostics?.serbianStructuredPayloadCreated).toBe(true);
+    expect(fin.diagnostics?.serbianEntryOwnedBuilderSucceeded).toBe(true);
+    expect(fin.diagnostics?.deterministicCandidateHash)
+      .not.toBe('fnv1a_d5b60c8d_l52_b82_e46');
+    expect((fin.diagnostics?.serbianEntryOwnedBuilderOutputLength || 0)).toBeGreaterThan(52);
+    expect(fin.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
+    expect(fin.diagnostics?.deterministicCandidateEqualsGroundingInput).toBe(true);
+    expect(fin.diagnostics?.serbianEnrichSkipped).toBe(true);
+    expect(fin.origin).toBe('deterministic_fallback');
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.text).toMatch(/Trenutno radim u kompaniji Atlas/);
+    expect(fin.text).toMatch(/Prethodno sam radila/);
+    expect(fin.text).toMatch(/šest\s+i\s+po\s+godina/);
+
+    const applied = applyFinalizedSummaryToCv(cv, 'sr', fin);
+    expect(applied.summary).toMatch(/Trenutno radim u kompaniji Atlas/);
+    recordProAiUserActionSuccess();
+    expect(getProAiUsageCount()).toBe(24);
+  });
+
+  it('AAB-351 A. all three prior canonical IDs → gate 3/3', () => {
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentCanonicalFactIds: [...SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS],
+      priorCanonicalFactIds: [...SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS],
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+    });
+    expect(gate.passed).toBe(true);
+    expect(gate.priorCoveredFactCount).toBe(3);
+    expect(gate.priorMissingFactIds).toEqual([]);
+  });
+
+  it.each([
+    ['design_review_adapt'],
+    ['design_files_formats'],
+    ['design_visual_materials'],
+  ] as const)('AAB-351 B/C/D. missing %s → gate 2/3 + missing ID', (missingId) => {
+    const prior = SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS.filter((id) => id !== missingId);
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentCanonicalFactIds: [...SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS],
+      priorCanonicalFactIds: prior,
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+    });
+    expect(gate.passed).toBe(false);
+    expect(gate.priorCoveredFactCount).toBe(2);
+    expect(gate.priorMissingFactIds).toEqual([missingId]);
+    expect(gate.failureReasons.some((r) => r.includes(missingId))).toBe(true);
+  });
+
+  it('AAB-351 E. material key present but canonical ID absent → gate fails', () => {
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentCanonicalFactIds: [...SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS],
+      // Explicit incomplete IDs win over duty text that would derive 3/3.
+      priorCanonicalFactIds: ['design_visual_materials', 'design_review_adapt'],
+      priorEntryDuties: HR_PRIOR_FAJLOVE,
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+    });
+    expect(gate.passed).toBe(false);
+    expect(gate.priorMissingFactIds).toContain('design_files_formats');
+  });
+
+  it('AAB-351 F. canonical IDs present without material-key text → gate passes', () => {
+    const gate = evaluateSerbianStructuredDomainGate({
+      currentCanonicalFactIds: [...SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS],
+      priorCanonicalFactIds: [...SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS],
+      currentEntryDuties: '',
+      priorEntryDuties: '',
+      currentRole: 'Radnica u magacinu',
+      priorRole: 'Grafička dizajnerka',
+      currentEmployer: 'Atlas',
+      priorEmployer: 'Rewitu',
+    });
+    expect(gate.passed).toBe(true);
+    expect(gate.payload?.priorCanonicalFacts).toHaveLength(3);
+  });
+
+  it('AAB-351 G. Croatian wording still yields design_files_formats ID', () => {
+    const ids = deriveSerbianStructuredCanonicalFactIds(HR_PRIOR_FAJLOVE, 'prior');
+    expect(ids).toContain('design_files_formats');
+    expect(ids).toContain('design_visual_materials');
+    expect(ids).toContain('design_review_adapt');
+  });
+
+  it('AAB-351 J. successful structured path skips generic enrich', () => {
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: BAD_SOURCE_SR,
+      cv: deviceCv(),
+      requestedLocale: 'sr',
+      gender: 'female',
+      durationSnapshot: buildExperienceDurationSnapshot(deviceCv().experience || [], REF),
+      rewriteStyle: 'stronger',
+    });
+    expect(fin.diagnostics?.serbianEnrichSkipped).toBe(true);
+    expect(fin.diagnostics?.serbianEnrichSkipReason)
+      .toBe('structured_entry_owned_candidate_complete');
+    expect(fin.diagnostics?.groundingInputCandidateHash)
+      .not.toBe('fnv1a_184d29e5_l95_b82_e46');
   });
 });

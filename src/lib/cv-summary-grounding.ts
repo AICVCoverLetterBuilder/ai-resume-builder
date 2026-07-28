@@ -64,6 +64,10 @@ import {
   buildSerbianEntryOwnedSummary,
   isSerbianStructuredSummaryDomain,
   evaluateSerbianStructuredDomainGate,
+  deriveSerbianStructuredCanonicalFactIds,
+  SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS,
+  SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS,
+  SERBIAN_STRUCTURED_DOMAIN_GATE_351_REVISION,
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
   buildSerbianEntryOwnedSummaryFromPayload,
@@ -84,6 +88,10 @@ export {
   buildSerbianEntryOwnedSummary,
   isSerbianStructuredSummaryDomain,
   evaluateSerbianStructuredDomainGate,
+  deriveSerbianStructuredCanonicalFactIds,
+  SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS,
+  SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS,
+  SERBIAN_STRUCTURED_DOMAIN_GATE_351_REVISION,
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
   buildSerbianEntryOwnedSummaryFromPayload,
@@ -2083,6 +2091,8 @@ export function buildConciseGroundedSummary(
     const srGate = evaluateSerbianStructuredDomainGate({
       currentEntryDuties: sourceDuties,
       priorEntryDuties: priorSourceDuties,
+      currentCanonicalFactIds: deriveSerbianStructuredCanonicalFactIds(sourceDuties, 'current'),
+      priorCanonicalFactIds: deriveSerbianStructuredCanonicalFactIds(priorSourceDuties, 'prior'),
       currentRole: experienceTitle || role,
       priorRole: typeof priorIndex === 'number'
         ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')

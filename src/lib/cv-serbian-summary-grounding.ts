@@ -21,6 +21,11 @@ import {
   normalizeSerbianDurationGrammar,
   SERBIAN_DURATION_NOUN_FORM_349_REVISION,
 } from './cv-serbian-grammar';
+import {
+  classifyMaterialDutyKeys,
+  collectDesignMaterialKeysFromDescription,
+  materialDutyKeysFromDescription,
+} from './cv-material-duty-coverage';
 
 export const SUMMARY_UNIT_SPLITTER_REVISION_SR = 'serbian-three-sentence-slots-v1' as const;
 export const SUMMARY_GROUNDING_REVISION_SR = 'entry-owned-serbian-grounding-v1' as const;
@@ -825,6 +830,29 @@ export type SerbianStructuredSummaryPayload = {
   priorEntryDuties: string;
 };
 
+/** Immutable Atlas warehouse required fact IDs (AAB-351). */
+export const SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS = [
+  'incoming_goods_check',
+  'related_documentation_check',
+  'colleague_coordination_goods_preparation_movement',
+] as const;
+
+/** Immutable Rewitu design required fact IDs (AAB-351). */
+export const SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS = [
+  'design_visual_materials',
+  'design_review_adapt',
+  'design_files_formats',
+] as const;
+
+export type SerbianStructuredCurrentFactId =
+  (typeof SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS)[number];
+export type SerbianStructuredPriorFactId =
+  (typeof SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS)[number];
+
+export const SERBIAN_STRUCTURED_DOMAIN_GATE_351_REVISION =
+  'serbian-structured-domain-gate-351-v1' as const;
+void SERBIAN_STRUCTURED_DOMAIN_GATE_351_REVISION;
+
 export type SerbianStructuredDomainGateResult = {
   evaluated: boolean;
   passed: boolean;
@@ -832,11 +860,97 @@ export type SerbianStructuredDomainGateResult = {
   currentCoveredFactCount: number;
   priorRequiredFactCount: number;
   priorCoveredFactCount: number;
+  currentRequiredFactIds: string[];
+  currentCoveredFactIds: string[];
+  currentMissingFactIds: string[];
+  priorRequiredFactIds: string[];
+  priorCoveredFactIds: string[];
+  priorMissingFactIds: string[];
+  /** Privacy-safe: entry-id-hash → available canonical fact IDs. */
+  canonicalFactIdsByEntryHash: Record<string, string[]>;
   failureReasons: string[];
-  revision: 'serbian-structured-domain-gate-349-v1';
+  revision: typeof SERBIAN_STRUCTURED_DOMAIN_GATE_351_REVISION
+    | 'serbian-structured-domain-gate-349-v1';
   /** Present when gate inputs were rich enough to form an entry-owned payload. */
   payload: SerbianStructuredSummaryPayload | null;
 };
+
+/**
+ * Map material-key / cue evidence onto the immutable structured fact IDs.
+ * Used only when explicit canonical IDs are not supplied to the gate.
+ */
+function mapMaterialKeyToStructuredFactId(key: string): string | null {
+  switch (key) {
+    case 'warehouse_inbound_check':
+      return 'incoming_goods_check';
+    case 'warehouse_document_check':
+    case 'warehouse_records':
+      return 'related_documentation_check';
+    case 'warehouse_movement':
+      return 'colleague_coordination_goods_preparation_movement';
+    case 'design_visual_materials':
+    case 'design_graphic_elements':
+      return 'design_visual_materials';
+    case 'design_review_adapt':
+    case 'design_project_requirements':
+      return 'design_review_adapt';
+    case 'design_files_formats':
+    case 'design_different_screens':
+      return 'design_files_formats';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Derive structured canonical fact IDs from an entry's authoritative duty text.
+ * Prefers material-key classification (locale-stable) over gate-local phrase regexes.
+ * Never invents IDs from role titles alone.
+ */
+export function deriveSerbianStructuredCanonicalFactIds(
+  entryDuties: string,
+  kind: 'current' | 'prior',
+): string[] {
+  const text = (entryDuties || '').trim();
+  if (!text) return [];
+  const keys = new Set<string>([
+    ...materialDutyKeysFromDescription(text),
+    ...classifyMaterialDutyKeys(text),
+    ...(kind === 'prior' ? collectDesignMaterialKeysFromDescription(text) : []),
+  ]);
+  // Documentation often collapses into inbound_check in the shared classifier.
+  if (
+    kind === 'current'
+    && /(?:dokument|document).{0,48}(?:received|primljen|pristigl|related|povezan|prateć)/iu
+      .test(text)
+  ) {
+    keys.add('warehouse_document_check');
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const key of keys) {
+    const id = mapMaterialKeyToStructuredFactId(key);
+    if (!id || seen.has(id)) continue;
+    const allowed = kind === 'current'
+      ? (SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS as readonly string[]).includes(id)
+      : (SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS as readonly string[]).includes(id);
+    if (!allowed) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function coverRequiredFactIds(
+  required: readonly string[],
+  available: readonly string[],
+): { covered: string[]; missing: string[] } {
+  const avail = new Set(available);
+  const covered = required.filter((id) => avail.has(id));
+  const missing = required.filter((id) => !avail.has(id));
+  return { covered, missing };
+}
+
 
 /** True when entry-owned Serbian rebuild produced a complete 3-sentence Summary. */
 export function isSerbianEntryOwnedSummaryComplete(text: string): boolean {
@@ -917,9 +1031,9 @@ export function createSerbianStructuredSummaryPayload(options: {
 }
 
 /**
- * Authoritative Atlas/Rewitu structured-domain gate.
- * Uses canonical fact phrases (EN/SR/HR) — never depends solely on optional
- * material-key projection (documentation often collapses into inbound_check).
+ * Authoritative Atlas/Rewitu structured-domain gate (AAB-351).
+ * Primary authority: explicit or derived canonical fact-ID sets with ordinary
+ * set inclusion. Phrase matching is never the coverage authority.
  */
 export function evaluateSerbianStructuredDomainGate(options: {
   corpus?: string;
@@ -934,49 +1048,78 @@ export function evaluateSerbianStructuredDomainGate(options: {
   priorEmployer?: string;
   gender?: string;
   duration?: ExperienceDuration | null;
+  /** Authoritative current-entry canonical fact IDs (preferred). */
+  currentCanonicalFactIds?: string[] | null;
+  /** Authoritative prior-entry canonical fact IDs (preferred). */
+  priorCanonicalFactIds?: string[] | null;
 }): SerbianStructuredDomainGateResult {
-  const revision = 'serbian-structured-domain-gate-349-v1' as const;
-  const current = `${options.currentEntryDuties || ''} ${options.currentRole || ''} ${options.jobTitle || ''} ${options.corpus || ''}`;
-  const prior = `${options.priorEntryDuties || ''} ${options.priorRole || ''} ${options.corpus || ''}`;
-  const all = `${current} ${prior}`;
-
-  const hasWarehouseRole = matchesWarehouseOccupationalTitle(all)
+  const revision = SERBIAN_STRUCTURED_DOMAIN_GATE_351_REVISION;
+  const roleCorpus = `${options.currentRole || ''} ${options.priorRole || ''} ${options.jobTitle || ''} ${options.corpus || ''}`;
+  const hasWarehouseRole = matchesWarehouseOccupationalTitle(roleCorpus)
     || /(?:warehouse|skladišt|magacin|radnic\w*\s+u\s+(?:skladišt|magacin)|ouvri[eè]re?\s+d['']?entrep[oô]t)/i
-      .test(all);
+      .test(roleCorpus)
+    || /(?:warehouse|skladišt|magacin|ouvri[eè]re?\s+d['']?entrep[oô]t)/i
+      .test(`${options.currentEntryDuties || ''} ${options.corpus || ''}`);
 
-  const incoming = /(?:incoming\s+goods|checks?\s+incoming|pristigl\w*\s+rob|ulazn\w*\s+rob|proverav\w*.{0,40}(?:pristigl|ulazn)|kontroli\w*\s+prijem\s+rob)/i
-    .test(current);
-  const documentation = /(?:dokumentacij\w*.{0,48}(?:received\s+goods|primljen\w*\s+rob|pristigl|prateć|povezan)|checks?\s+documentation\s+related|documentation\s+related\s+to\s+received|prateć\w*\s+dokumentacij)/i
-    .test(current);
-  const coordination = /(?:coordinates?\s+with\s+colleagues.{0,48}(?:preparation|movement)\s+of\s+goods|sarađuj\w*.{0,48}(?:priprem|premeštanj).{0,24}rob|colleagues.{0,40}(?:preparation|movement)\s+of\s+goods)/i
-    .test(current);
+  const requiredCurrent = [...SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS];
+  const requiredPrior = [...SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS];
 
-  const visual = /(?:visual\s+materials?\s+and\s+graphic|vizueln\w*\s+materijal|vizualn\w*\s+materijal|grafičk\w*\s+element|graphic\s+elements?)/i
-    .test(prior);
-  const reviewAdapt = /(?:reviewed?\s+and\s+adapted|pregled\w*.{0,24}prilagođ|review\w*.{0,24}adapt|prilagođav\w*.{0,40}dizajnersk|adapted?\s+design\s+materials)/i
-    .test(prior);
-  const finalFiles = /(?:final\s+design\s+files|završn\w*\s+dizajnersk|prepared?\s+final\s+design|datotek\w*.{0,40}(?:format|ekran)|formats?\s+and\s+screens?)/i
-    .test(prior);
-  const designRole = /(?:graphic\s+designer|grafičk\w*\s+dizajn)/i.test(prior);
+  const explicitCurrent = (options.currentCanonicalFactIds || [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  const explicitPrior = (options.priorCanonicalFactIds || [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
 
-  const currentCovered = [incoming, documentation, coordination].filter(Boolean).length;
-  const priorCovered = [visual, reviewAdapt, finalFiles].filter(Boolean).length;
-  const hasWarehouseDutyMaterial = currentCovered >= 2 || (incoming && coordination);
-  const hasDesignMaterial = designRole || priorCovered >= 2;
+  // Canonical IDs are authoritative when supplied. Derive from entry duties only
+  // when IDs are absent — never from Summary/provider phrase re-matching.
+  const availableCurrent = explicitCurrent.length > 0
+    ? [...new Set(explicitCurrent)]
+    : deriveSerbianStructuredCanonicalFactIds(
+      (options.currentEntryDuties || '').trim() || (options.corpus || ''),
+      'current',
+    );
+  const availablePrior = explicitPrior.length > 0
+    ? [...new Set(explicitPrior)]
+    : deriveSerbianStructuredCanonicalFactIds(
+      (options.priorEntryDuties || '').trim() || (options.corpus || ''),
+      'prior',
+    );
+
+  const currentCov = coverRequiredFactIds(requiredCurrent, availableCurrent);
+  const priorCov = coverRequiredFactIds(requiredPrior, availablePrior);
+
+  const hasWarehouseDutyMaterial = currentCov.covered.length >= 2
+    || (
+      currentCov.covered.includes('incoming_goods_check')
+      && currentCov.covered.includes('colleague_coordination_goods_preparation_movement')
+    );
+  const hasDesignMaterial = priorCov.covered.length >= 2
+    || /(?:graphic\s+designer|grafičk\w*\s+dizajn)/i
+      .test(`${options.priorRole || ''} ${options.priorEntryDuties || ''}`);
 
   const failureReasons: string[] = [];
   if (!hasWarehouseRole) failureReasons.push('missing_warehouse_role');
   if (!hasWarehouseDutyMaterial) failureReasons.push('missing_warehouse_duty_material');
   if (!hasDesignMaterial) failureReasons.push('missing_prior_design_material');
-
-  const passed = hasWarehouseRole && hasWarehouseDutyMaterial && hasDesignMaterial
-    && currentCovered >= 3
-    && priorCovered >= 3;
-
-  if (hasWarehouseRole && hasWarehouseDutyMaterial && hasDesignMaterial) {
-    if (currentCovered < 3) failureReasons.push('current_canonical_facts_incomplete');
-    if (priorCovered < 3) failureReasons.push('prior_canonical_facts_incomplete');
+  if (currentCov.missing.length) {
+    failureReasons.push('current_canonical_facts_incomplete');
+    for (const id of currentCov.missing) {
+      failureReasons.push(`missing_current_fact:${id}`);
+    }
   }
+  if (priorCov.missing.length) {
+    failureReasons.push('prior_canonical_facts_incomplete');
+    for (const id of priorCov.missing) {
+      failureReasons.push(`missing_prior_fact:${id}`);
+    }
+  }
+
+  const passed = hasWarehouseRole
+    && hasWarehouseDutyMaterial
+    && hasDesignMaterial
+    && currentCov.missing.length === 0
+    && priorCov.missing.length === 0;
 
   const payloadBase = createSerbianStructuredSummaryPayload({
     currentEntryId: options.currentEntryId,
@@ -991,33 +1134,40 @@ export function evaluateSerbianStructuredDomainGate(options: {
     gender: options.gender,
     duration: options.duration,
   });
-  // When the gate proves 3+3 coverage, stamp canonical fact IDs onto the
-  // immutable payload even if legacy duty fragments were empty/partial.
   const payload: SerbianStructuredSummaryPayload | null = passed
     ? {
       ...payloadBase,
-      currentCanonicalFacts: [
-        'incoming_goods_check',
-        'related_documentation_check',
-        'colleague_coordination_goods_preparation_movement',
-      ],
-      priorCanonicalFacts: [
-        'design_visual_materials',
-        'design_review_adapt',
-        'design_files_formats',
-      ],
+      currentCanonicalFacts: [...requiredCurrent],
+      priorCanonicalFacts: [...requiredPrior],
     }
     : null;
+
+  const canonicalFactIdsByEntryHash: Record<string, string[]> = {};
+  if (options.currentEntryId) {
+    canonicalFactIdsByEntryHash[fingerprintText(String(options.currentEntryId))] = availableCurrent;
+  }
+  for (const priorId of options.priorEntryIds || []) {
+    if (!priorId) continue;
+    canonicalFactIdsByEntryHash[fingerprintText(String(priorId))] = availablePrior;
+  }
 
   return {
     evaluated: true,
     passed: Boolean(passed),
-    currentRequiredFactCount: 3,
-    currentCoveredFactCount: currentCovered,
-    priorRequiredFactCount: 3,
-    priorCoveredFactCount: priorCovered,
+    currentRequiredFactCount: requiredCurrent.length,
+    currentCoveredFactCount: currentCov.covered.length,
+    priorRequiredFactCount: requiredPrior.length,
+    priorCoveredFactCount: priorCov.covered.length,
+    currentRequiredFactIds: requiredCurrent,
+    currentCoveredFactIds: currentCov.covered,
+    currentMissingFactIds: currentCov.missing,
+    priorRequiredFactIds: requiredPrior,
+    priorCoveredFactIds: priorCov.covered,
+    priorMissingFactIds: priorCov.missing,
+    canonicalFactIdsByEntryHash,
     failureReasons: passed ? [] : [...new Set(failureReasons)],
     revision,
     payload,
   };
 }
+

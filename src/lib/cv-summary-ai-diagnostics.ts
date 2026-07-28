@@ -168,6 +168,14 @@ export type SummaryAiDiagnosticTrace = {
   serbianStructuredDomainPriorRequiredFactCount?: number | null;
   serbianStructuredDomainPriorCoveredFactCount?: number | null;
   serbianStructuredDomainGateFailureReasons?: string[] | null;
+  serbianStructuredDomainCurrentRequiredFactIds?: string[] | null;
+  serbianStructuredDomainCurrentCoveredFactIds?: string[] | null;
+  serbianStructuredDomainCurrentMissingFactIds?: string[] | null;
+  serbianStructuredDomainPriorRequiredFactIds?: string[] | null;
+  serbianStructuredDomainPriorCoveredFactIds?: string[] | null;
+  serbianStructuredDomainPriorMissingFactIds?: string[] | null;
+  serbianStructuredDomainCanonicalFactIdsByEntryHash?: Record<string, string[]> | null;
+  serbianStructuredDomainGateInvariantFailure?: string | null;
   serbianEntryOwnedBuilderAvailable?: boolean | null;
   serbianEntryOwnedBuilderAttempted?: boolean | null;
   serbianEntryOwnedBuilderSucceeded?: boolean | null;
@@ -608,6 +616,14 @@ export class SummaryAiDiagnosticSession {
       serbianStructuredDomainPriorRequiredFactCount: null,
       serbianStructuredDomainPriorCoveredFactCount: null,
       serbianStructuredDomainGateFailureReasons: null,
+      serbianStructuredDomainCurrentRequiredFactIds: null,
+      serbianStructuredDomainCurrentCoveredFactIds: null,
+      serbianStructuredDomainCurrentMissingFactIds: null,
+      serbianStructuredDomainPriorRequiredFactIds: null,
+      serbianStructuredDomainPriorCoveredFactIds: null,
+      serbianStructuredDomainPriorMissingFactIds: null,
+      serbianStructuredDomainCanonicalFactIdsByEntryHash: null,
+      serbianStructuredDomainGateInvariantFailure: null,
       serbianEntryOwnedBuilderAvailable: null,
       serbianEntryOwnedBuilderAttempted: null,
       serbianEntryOwnedBuilderSucceeded: null,
@@ -1309,6 +1325,30 @@ export class SummaryAiDiagnosticSession {
       serbianStructuredDomainGateFailureReasons:
         (diag as { serbianStructuredDomainGateFailureReasons?: string[] | null })
           .serbianStructuredDomainGateFailureReasons ?? null,
+      serbianStructuredDomainCurrentRequiredFactIds:
+        (diag as { serbianStructuredDomainCurrentRequiredFactIds?: string[] | null })
+          .serbianStructuredDomainCurrentRequiredFactIds ?? null,
+      serbianStructuredDomainCurrentCoveredFactIds:
+        (diag as { serbianStructuredDomainCurrentCoveredFactIds?: string[] | null })
+          .serbianStructuredDomainCurrentCoveredFactIds ?? null,
+      serbianStructuredDomainCurrentMissingFactIds:
+        (diag as { serbianStructuredDomainCurrentMissingFactIds?: string[] | null })
+          .serbianStructuredDomainCurrentMissingFactIds ?? null,
+      serbianStructuredDomainPriorRequiredFactIds:
+        (diag as { serbianStructuredDomainPriorRequiredFactIds?: string[] | null })
+          .serbianStructuredDomainPriorRequiredFactIds ?? null,
+      serbianStructuredDomainPriorCoveredFactIds:
+        (diag as { serbianStructuredDomainPriorCoveredFactIds?: string[] | null })
+          .serbianStructuredDomainPriorCoveredFactIds ?? null,
+      serbianStructuredDomainPriorMissingFactIds:
+        (diag as { serbianStructuredDomainPriorMissingFactIds?: string[] | null })
+          .serbianStructuredDomainPriorMissingFactIds ?? null,
+      serbianStructuredDomainCanonicalFactIdsByEntryHash:
+        (diag as { serbianStructuredDomainCanonicalFactIdsByEntryHash?: Record<string, string[]> | null })
+          .serbianStructuredDomainCanonicalFactIdsByEntryHash ?? null,
+      serbianStructuredDomainGateInvariantFailure:
+        (diag as { serbianStructuredDomainGateInvariantFailure?: string | null })
+          .serbianStructuredDomainGateInvariantFailure ?? null,
       serbianEntryOwnedBuilderAvailable:
         (diag as { serbianEntryOwnedBuilderAvailable?: boolean | null })
           .serbianEntryOwnedBuilderAvailable ?? null,

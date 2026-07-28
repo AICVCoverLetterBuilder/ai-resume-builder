@@ -78,6 +78,9 @@ import {
   injectSerbianTotalDurationSentence,
   isSerbianStructuredSummaryDomain,
   evaluateSerbianStructuredDomainGate,
+  deriveSerbianStructuredCanonicalFactIds,
+  SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS,
+  SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS,
   detectSerbianPerspective,
   scanSerbianSummaryUnsupportedClaims,
   buildSerbianEntryOwnedSummaryFromPayload,
@@ -1523,6 +1526,14 @@ export type FinalizeCvAiFieldResult = {
     serbianStructuredDomainPriorRequiredFactCount?: number | null;
     serbianStructuredDomainPriorCoveredFactCount?: number | null;
     serbianStructuredDomainGateFailureReasons?: string[];
+    serbianStructuredDomainCurrentRequiredFactIds?: string[];
+    serbianStructuredDomainCurrentCoveredFactIds?: string[];
+    serbianStructuredDomainCurrentMissingFactIds?: string[];
+    serbianStructuredDomainPriorRequiredFactIds?: string[];
+    serbianStructuredDomainPriorCoveredFactIds?: string[];
+    serbianStructuredDomainPriorMissingFactIds?: string[];
+    serbianStructuredDomainCanonicalFactIdsByEntryHash?: Record<string, string[]>;
+    serbianStructuredDomainGateInvariantFailure?: string | null;
     serbianEntryOwnedBuilderAvailable?: boolean;
     serbianEntryOwnedBuilderAttempted?: boolean;
     serbianEntryOwnedBuilderSucceeded?: boolean;
@@ -2274,6 +2285,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let serbianEntryOwnedBuilderSentenceCount = 0;
   let serbianEntryOwnedBuilderTypedFailureReason: string | null = null;
   let serbianStructuredDomainGate: ReturnType<typeof evaluateSerbianStructuredDomainGate> | null = null;
+  let serbianStructuredDomainGateInvariantFailure: string | null = null;
   let serbianProviderRejectionReasons: string[] = [];
   const rewriteStyleDiag: string | null = input.rewriteStyle
     ? String(input.rewriteStyle)
@@ -2688,12 +2700,22 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     void scanSerbianSummaryUnsupportedClaims;
     candidate = dedupeSummarySentences(candidate);
     const entryDutiesSr = currentAndPriorDutiesFromCv(cv, locale);
+    const srCurrentCanonicalFactIds = deriveSerbianStructuredCanonicalFactIds(
+      entryDutiesSr.currentEntryDuties,
+      'current',
+    );
+    const srPriorCanonicalFactIds = deriveSerbianStructuredCanonicalFactIds(
+      entryDutiesSr.priorEntryDuties,
+      'prior',
+    );
     serbianStructuredDomainGate = evaluateSerbianStructuredDomainGate({
-      // Prefer entry-owned duties; include live Summary only as corpus evidence
-      // when fragments are thin (never as builder prose authority).
+      // Entry-owned duties + canonical IDs are authoritative. Corpus is role
+      // evidence only — never the coverage authority when IDs/duties exist.
       corpus: liveSummary || '',
       currentEntryDuties: entryDutiesSr.currentEntryDuties,
       priorEntryDuties: entryDutiesSr.priorEntryDuties,
+      currentCanonicalFactIds: srCurrentCanonicalFactIds,
+      priorCanonicalFactIds: srPriorCanonicalFactIds,
       currentRole: context.role || entryDutiesSr.currentRoleTitle,
       priorRole: entryDutiesSr.priorRoleTitle,
       jobTitle: cv.personal?.jobTitle || '',
@@ -2708,6 +2730,42 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       duration: durationSnapshot.total,
     });
     serbianEntryOwnedBuilderAvailable = serbianStructuredDomainGate.passed;
+    // AAB-351: gate consistency — never silently fall through to the generic
+    // duration shell when authoritative prior/current IDs are already complete.
+    if (!serbianStructuredDomainGate.passed) {
+      const priorKeysComplete = [
+        'design_visual_materials',
+        'design_review_adapt',
+        'design_files_formats',
+      ].every((k) => priorEntryMaterialKeys.includes(k));
+      const currentIdsComplete = srCurrentCanonicalFactIds.length >= 3
+        && SERBIAN_STRUCTURED_CURRENT_REQUIRED_FACT_IDS.every(
+          (id) => srCurrentCanonicalFactIds.includes(id),
+        );
+      const priorIdsComplete = srPriorCanonicalFactIds.length >= 3
+        && SERBIAN_STRUCTURED_PRIOR_REQUIRED_FACT_IDS.every(
+          (id) => srPriorCanonicalFactIds.includes(id),
+        );
+      if (
+        (priorIdsComplete || priorKeysComplete)
+        && currentIdsComplete
+        && serbianStructuredDomainGate.priorCoveredFactCount < 3
+      ) {
+        serbianStructuredDomainGateInvariantFailure =
+          'serbian_structured_gate_prior_coverage_contradiction';
+      } else if (
+        !serbianStructuredDomainGate.passed
+        && serbianStructuredDomainGate.priorMissingFactIds.length === 0
+        && serbianStructuredDomainGate.currentMissingFactIds.length === 0
+        && serbianStructuredDomainGate.failureReasons.includes('prior_canonical_facts_incomplete')
+      ) {
+        serbianStructuredDomainGateInvariantFailure =
+          'serbian_structured_gate_failure_without_missing_ids';
+      }
+    } else if (!serbianStructuredDomainGate.payload) {
+      serbianStructuredDomainGateInvariantFailure =
+        'serbian_structured_gate_pass_without_payload';
+    }
     if (serbianStructuredDomainGate.passed && candidate.trim()) {
       const analyzeSr = (text: string) => analyzeSerbianSummaryEmploymentQuality(text, {
         company: context.company,
@@ -4143,8 +4201,32 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         serbianStructuredDomainPriorCoveredFactCount: locale === 'sr'
           ? (serbianStructuredDomainGate?.priorCoveredFactCount ?? null)
           : undefined,
-        serbianStructuredDomainGateFailureReasons: locale === 'sr'
-          ? (serbianStructuredDomainGate?.failureReasons ?? [])
+    serbianStructuredDomainGateFailureReasons: locale === 'sr'
+      ? (serbianStructuredDomainGate?.failureReasons ?? [])
+      : undefined,
+        serbianStructuredDomainCurrentRequiredFactIds: locale === 'sr'
+          ? (serbianStructuredDomainGate?.currentRequiredFactIds ?? [])
+          : undefined,
+        serbianStructuredDomainCurrentCoveredFactIds: locale === 'sr'
+          ? (serbianStructuredDomainGate?.currentCoveredFactIds ?? [])
+          : undefined,
+        serbianStructuredDomainCurrentMissingFactIds: locale === 'sr'
+          ? (serbianStructuredDomainGate?.currentMissingFactIds ?? [])
+          : undefined,
+        serbianStructuredDomainPriorRequiredFactIds: locale === 'sr'
+          ? (serbianStructuredDomainGate?.priorRequiredFactIds ?? [])
+          : undefined,
+        serbianStructuredDomainPriorCoveredFactIds: locale === 'sr'
+          ? (serbianStructuredDomainGate?.priorCoveredFactIds ?? [])
+          : undefined,
+        serbianStructuredDomainPriorMissingFactIds: locale === 'sr'
+          ? (serbianStructuredDomainGate?.priorMissingFactIds ?? [])
+          : undefined,
+        serbianStructuredDomainCanonicalFactIdsByEntryHash: locale === 'sr'
+          ? (serbianStructuredDomainGate?.canonicalFactIdsByEntryHash ?? {})
+          : undefined,
+        serbianStructuredDomainGateInvariantFailure: locale === 'sr'
+          ? serbianStructuredDomainGateInvariantFailure
           : undefined,
         serbianEntryOwnedBuilderAvailable: locale === 'sr'
           ? serbianEntryOwnedBuilderAvailable
@@ -4714,6 +4796,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   // Fresh entry-owned rebuild — never seed from provider/previous Summary prose.
   serbianEntryOwnedBuilderAttempted = locale === 'sr' && serbianEntryOwnedBuilderAvailable;
   if (
+    locale === 'sr'
+    && serbianStructuredDomainGateInvariantFailure
+  ) {
+    // Typed gate invariant — do not emit the generic 52-char duration shell.
+    deterministicCandidateRaw = '';
+    serbianEntryOwnedBuilderAttempted = false;
+    serbianEntryOwnedBuilderSucceeded = false;
+    serbianEntryOwnedBuilderTypedFailureReason = serbianStructuredDomainGateInvariantFailure;
+  } else if (
     locale === 'sr'
     && serbianStructuredDomainGate?.passed
     && serbianStructuredDomainGate.payload
