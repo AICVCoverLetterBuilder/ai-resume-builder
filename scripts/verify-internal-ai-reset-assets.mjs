@@ -107,13 +107,18 @@ const PTBR_RUSSIAN_CROSS_LOCALE_STRONGER_362 =
 const RUSSIAN_DESIGN_FAMILIES = 'russian-design-families-286-v1';
 const RUSSIAN_DESIGN_FALLBACK_ROUTING = 'russian-design-fallback-routing-287-v1';
 const JAPANESE_EXPERIENCE_MATERIAL = 'japanese-experience-material-v1';
-const SUMMARY_SPLITTER_REVISION_JA = 'japanese-three-sentence-slots-v1';
-const SUMMARY_GROUNDING_REVISION_JA = 'entry-owned-japanese-grounding-v1';
+const SUMMARY_SPLITTER_REVISION_JA = 'japanese-three-unit-slots-363-v1';
+const SUMMARY_GROUNDING_REVISION_JA = 'entry-owned-japanese-grounding-363-v1';
 const SUMMARY_DURATION_REVISION_JA = 'japanese-duration-idempotent-v2';
 const SUMMARY_DURATION_REVISION_JA_LEGACY = 'japanese-duration-idempotent-v1';
-const SUMMARY_BUILDER_REVISION_JA = 'entry-owned-japanese-rebuild-v1';
+const SUMMARY_BUILDER_REVISION_JA = 'entry-owned-japanese-rebuild-363-v1';
 const JAPANESE_DURATION_IN_INTRO = 'japanese-duration-in-intro-289-v1';
-const JAPANESE_SUMMARY_STRICT_POSTCONDITIONS = 'japanese-summary-strict-postconditions-289-v1';
+const JAPANESE_SUMMARY_STRICT_POSTCONDITIONS = 'japanese-summary-strict-postconditions-363-v1';
+const JAPANESE_SUMMARY_FIRST_PERSON_363 = 'japanese-summary-first-person-363-v1';
+const JAPANESE_SUMMARY_CROSS_LOCALE_363 = 'japanese-summary-cross-locale-363-v1';
+const JAPANESE_SUMMARY_DURATION_GRAMMAR_363 = 'japanese-summary-duration-grammar-363-v1';
+const RU_JA_CROSS_LOCALE_STRONGER_363 =
+  'ru-japanese-cross-locale-stronger-regression-363-v1';
 const CROATIAN_EXPERIENCE_MATERIAL = 'croatian-experience-material-v1';
 const CROATIAN_SERBIAN_LOCALE = 'croatian-serbian-locale-discrimination-v1';
 const SUMMARY_SPLITTER_REVISION_HR = 'croatian-three-sentence-slots-v1';
@@ -257,6 +262,10 @@ for (const marker of [
   SUMMARY_BUILDER_REVISION_JA,
   JAPANESE_DURATION_IN_INTRO,
   JAPANESE_SUMMARY_STRICT_POSTCONDITIONS,
+  JAPANESE_SUMMARY_FIRST_PERSON_363,
+  JAPANESE_SUMMARY_CROSS_LOCALE_363,
+  JAPANESE_SUMMARY_DURATION_GRAMMAR_363,
+  RU_JA_CROSS_LOCALE_STRONGER_363,
   CROATIAN_EXPERIENCE_MATERIAL,
   CROATIAN_SERBIAN_LOCALE,
   SUMMARY_SPLITTER_REVISION_HR,
