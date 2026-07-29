@@ -27,7 +27,10 @@ import {
 } from './cv-portuguese-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_EN } from './cv-english-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_HR } from './cv-croatian-summary-grounding';
-import { SUMMARY_BUILDER_REVISION_JA } from './cv-japanese-summary-grounding';
+import {
+  SUMMARY_BUILDER_REVISION_JA,
+  detectJapaneseSummaryPerspective,
+} from './cv-japanese-summary-grounding';
 import {
   SUMMARY_BUILDER_REVISION_RU,
   detectRussianSummaryPerspective,
@@ -160,7 +163,7 @@ export function detectSummaryPerspectiveForLocale(
     case 'ru':
       return detectRussianSummaryPerspective(analyzed);
     case 'ja':
-      return /(?:私は|です。|ます。)/u.test(analyzed) ? 'first_person' : 'neutral_cv';
+      return detectJapaneseSummaryPerspective(analyzed);
     default:
       return 'neutral_cv';
   }
@@ -255,6 +258,29 @@ export function assertSummaryBuilderMatchesRequestedLocale(
     }
     if (rev && rev !== SUMMARY_BUILDER_REVISION_RU && !/russian|ru-/i.test(rev)) {
       return 'russian_request_builder_revision_mismatch';
+    }
+  }
+  if (locale === 'ja') {
+    if (/entry-owned-english-rebuild/i.test(rev)) {
+      return 'japanese_request_routed_to_english_builder';
+    }
+    if (/entry-owned-russian/i.test(rev)) {
+      return 'japanese_request_routed_to_russian_builder';
+    }
+    if (/entry-owned-ptbr|portuguese/i.test(rev)) {
+      return 'japanese_request_routed_to_ptbr_builder';
+    }
+    if (/entry-owned-italian/i.test(rev)) {
+      return 'japanese_request_routed_to_italian_builder';
+    }
+    if (/entry-owned-french/i.test(rev)) {
+      return 'japanese_request_routed_to_french_builder';
+    }
+    if (/entry-owned-german/i.test(rev)) {
+      return 'japanese_request_routed_to_german_builder';
+    }
+    if (rev && rev !== SUMMARY_BUILDER_REVISION_JA && !/japanese|ja-/i.test(rev)) {
+      return 'japanese_request_builder_revision_mismatch';
     }
   }
   return null;

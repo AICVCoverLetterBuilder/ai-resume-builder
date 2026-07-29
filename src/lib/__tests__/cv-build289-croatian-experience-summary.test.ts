@@ -387,7 +387,7 @@ describe('cv-build289 Croatian Experience + Summary', () => {
 
   it('preserves Japanese markers in runtime set', () => {
     expect(SUMMARY_RUNTIME_MARKER_SET).toContain('japanese-experience-material-v1');
-    expect(SUMMARY_RUNTIME_MARKER_SET).toContain('entry-owned-japanese-rebuild-v1');
+    expect(SUMMARY_RUNTIME_MARKER_SET).toContain('entry-owned-japanese-rebuild-363-v1');
     expect(SUMMARY_RUNTIME_MARKER_SET).toContain('russian-design-fallback-routing-287-v1');
   });
 });

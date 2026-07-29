@@ -520,6 +520,7 @@ export function summaryHasDurationClaim(text: string): boolean {
     || /लगभग\s+\S+\s+वर्ष/u.test(normalized)
     || /約\s*\d+\s*年/u.test(normalized)
     || /\d+\s*年の経験/u.test(normalized)
+    || /通算で約.+年/u.test(normalized)
     || /通算約.+年/u.test(normalized)
     || /六年半|五年半|四年半|三年半|二年半|一年半/u.test(normalized)
     || /سنوات|سنة|خبرة/u.test(normalized)
@@ -803,11 +804,22 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
         return `نحو ${word} من الخبرة المشتركة`;
       }
       return `نحو ${word} سنوات من الخبرة المشتركة`;
-    case 'ja':
-      // Single written duration — never numeric hybrids like 約6.5年.
-      // word already includes 年 / 年半 (e.g. 六年半).
-      if (/年/.test(word)) return `通算約${word}`;
-      return `通算約${word}年`;
+    case 'ja': {
+      // Prefer natural Arabic-numeral form: 通算で約6年半 (matches Stronger builder).
+      // Never emit decimals like 約6.5年.
+      const months = Math.max(0, Math.round(Number(duration.totalMonths) || 0));
+      if (months > 0 && months < 12) return `通算で約${months}か月`;
+      const whole = Math.floor(months / 12);
+      const rem = months - whole * 12;
+      if (months > 0) {
+        if (rem >= 5 && rem <= 7) return `通算で約${whole}年半`;
+        if (rem === 0) return `通算で約${whole}年`;
+        if (rem < 5) return `通算で約${whole}年`;
+        return `通算で約${whole + 1}年`;
+      }
+      if (/年/.test(word)) return `通算で約${word.replace(/^約/, '')}`;
+      return `通算で約${word}年`;
+    }
     default:
       return `with approximately ${word} years of experience`;
   }

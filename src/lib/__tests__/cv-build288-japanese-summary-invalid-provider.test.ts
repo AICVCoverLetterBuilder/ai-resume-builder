@@ -144,7 +144,7 @@ describe('cv-build288 Japanese Summary exact-device invalid provider', () => {
     expect(SUMMARY_DURATION_FINALIZER_REVISION_JA).toBe('japanese-duration-idempotent-v2');
     expect(JAPANESE_DURATION_IN_INTRO_MARKER).toBe('japanese-duration-in-intro-289-v1');
     expect(JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER)
-      .toBe('japanese-summary-strict-postconditions-289-v1');
+      .toBe('japanese-summary-strict-postconditions-363-v1');
     expect(SUMMARY_RUNTIME_MARKER_SET).toEqual(expect.arrayContaining([
       JAPANESE_DURATION_IN_INTRO_MARKER,
       JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
@@ -156,7 +156,7 @@ describe('cv-build288 Japanese Summary exact-device invalid provider', () => {
     const skills = '主なスキルはリーダーシップ、組織力、批判的思考、適応力、問題解決、タイムマネジメント、コミュニケーションです。';
     expect(isJapaneseGenericSkillsUnit(skills)).toBe(true);
     const q = analyzeJapaneseSummaryEmploymentQuality(
-      `${BUILD288_INVALID_PROVIDER}, 通算約六年半.`,
+      `${BUILD288_INVALID_PROVIDER}, 通算で約6年半.`,
       {
         company: 'Atlas',
         role: '倉庫作業員',
@@ -192,14 +192,14 @@ describe('cv-build288 Japanese Summary exact-device invalid provider', () => {
     const cv = baseCv();
     const duration = buildExperienceDurationSnapshot(cv.experience || [], '2026-07-20').total;
     expect(duration.totalMonths).toBe(78);
-    expect(formatApproximateDurationPhrase(duration, 'ja')).toMatch(/通算約六年半/);
+    expect(formatApproximateDurationPhrase(duration, 'ja')).toMatch(/通算で約6年半/);
 
     const { pipe, trace, usageAfter, applied } = runWithUsage(cv, BUILD288_INVALID_PROVIDER);
     const finalized = pipe.finalized;
 
     expect(finalized.diagnostics?.providerCandidatePresent).toBe(true);
     expect(finalized.diagnostics?.providerRejectionReason).toMatch(
-      /japanese_summary_generic_skills_unit|japanese_summary_unsupported_claim|japanese_summary_role_slot_mismatch|japanese_summary_unit_count_mismatch|japanese_summary_malformed_punctuation|japanese_summary_duration_outside_intro|japanese_summary_current_duty_missing/,
+      /japanese_summary_generic_skills_unit|japanese_summary_unsupported_claim|japanese_summary_role_slot_mismatch|japanese_summary_unit_count_mismatch|japanese_summary_malformed_punctuation|japanese_summary_duration_not_standalone|japanese_summary_duration_outside_intro|japanese_summary_current_duty_missing|japanese_summary_locale_impurity/,
     );
     expect(finalized.diagnostics?.deterministicCandidatePresent).toBe(true);
     expect(finalized.origin).toBe('deterministic_fallback');
@@ -221,13 +221,13 @@ describe('cv-build288 Japanese Summary exact-device invalid provider', () => {
     const units = splitJapaneseSummaryUnits(finalized.text);
     expect(units).toHaveLength(3);
     expect(finalized.diagnostics?.finalUnitRoleSlots).toEqual([
+      'duration',
       'current_intro',
-      'current_duty',
       'prior_role',
     ]);
     expect(finalized.diagnostics?.finalSentenceRoleSlots).toEqual([
+      'duration',
       'current_intro',
-      'current_duty',
       'prior_role',
     ]);
     expect(finalized.diagnostics?.currentEmploymentIntroductionCount).toBe(1);
@@ -243,11 +243,10 @@ describe('cv-build288 Japanese Summary exact-device invalid provider', () => {
     expect(finalized.diagnostics?.durationFinalizerIdempotent).toBe(true);
     expect(countSummaryDurationExpressions(finalized.text, 'ja')).toBe(1);
 
-    expect(finalized.text).toMatch(/倉庫作業員/);
+    expect(finalized.text).toMatch(/倉庫担当/);
     expect(finalized.text).toMatch(/Atlas/);
-    expect(finalized.text).toMatch(/2023年1月/);
-    expect(finalized.text).toMatch(/通算約六年半/);
-    expect(finalized.text).toMatch(/入荷|倉庫記録|同僚/);
+    expect(finalized.text).toMatch(/通算で約6年半/);
+    expect(finalized.text).toMatch(/入荷|倉庫|同僚/);
     expect(finalized.text).toMatch(/以前は/);
     expect(finalized.text).toMatch(/Rewitu/);
     expect(finalized.text).toMatch(/グラフィックデザイナー/);
@@ -263,14 +262,14 @@ describe('cv-build288 Japanese Summary exact-device invalid provider', () => {
     expect(finalized.text).not.toMatch(/。\s*,/);
     expect(finalized.text.endsWith('。')).toBe(true);
 
-    const intro = units[0] || '';
-    const duty = units[1] || '';
+    const durationUnit = units[0] || '';
+    const intro = units[1] || '';
     const prior = units[2] || '';
-    expect(intro).toMatch(/通算約六年半/);
-    expect(duty).not.toMatch(/通算約六年半/);
-    expect(prior).not.toMatch(/通算約六年半/);
-    expect(duty).toMatch(/入荷|倉庫|同僚|商品の準備|移動/);
-    expect(duty).not.toMatch(/ビジュアル|デザインファイル|Rewitu/);
+    expect(durationUnit).toMatch(/通算で約6年半/);
+    expect(intro).not.toMatch(/通算で約6年半/);
+    expect(prior).not.toMatch(/通算で約6年半/);
+    expect(intro).toMatch(/入荷|倉庫|同僚|商品の準備|移動/);
+    expect(intro).not.toMatch(/ビジュアル|デザインファイル|Rewitu/);
     expect(prior).toMatch(/ビジュアル|グラフィック|デザイン/);
     expect(prior).not.toMatch(/入荷した商品|倉庫記録/);
 
@@ -329,7 +328,7 @@ describe('cv-build288 Japanese Summary exact-device invalid provider', () => {
     expect(finalized.text).toMatch(/。$/);
     expect(countSummaryDurationExpressions(finalized.text, 'ja')).toBe(1);
     const intro = splitJapaneseSummaryUnits(finalized.text)[0] || '';
-    expect(intro).toMatch(/通算約六年半/);
+    expect(intro).toMatch(/通算で約6年半/);
     expect(finalized.diagnostics?.visibleDurationClaimCountAfterApply ?? 1).toBe(1);
   });
 });

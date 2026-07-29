@@ -117,9 +117,9 @@ function baseCv(options?: {
 describe('cv-build287 Japanese Experience/Summary package', () => {
   it('exposes Japanese runtime markers', () => {
     expect(SUMMARY_PIPELINE_REVISION).toBe('summary-runtime-282-v1');
-    expect(SUMMARY_BUILDER_REVISION_JA).toBe('entry-owned-japanese-rebuild-v1');
-    expect(SUMMARY_UNIT_SPLITTER_REVISION_JA).toBe('japanese-three-sentence-slots-v1');
-    expect(SUMMARY_GROUNDING_REVISION_JA).toBe('entry-owned-japanese-grounding-v1');
+    expect(SUMMARY_BUILDER_REVISION_JA).toBe('entry-owned-japanese-rebuild-363-v1');
+    expect(SUMMARY_UNIT_SPLITTER_REVISION_JA).toBe('japanese-three-unit-slots-363-v1');
+    expect(SUMMARY_GROUNDING_REVISION_JA).toBe('entry-owned-japanese-grounding-363-v1');
     expect(SUMMARY_DURATION_FINALIZER_REVISION_JA).toBe('japanese-duration-idempotent-v2');
     expect(SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY).toBe('japanese-duration-idempotent-v1');
     expect(JAPANESE_EXPERIENCE_MATERIAL_REVISION).toBe('japanese-experience-material-v1');
@@ -131,7 +131,7 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
       SUMMARY_DURATION_FINALIZER_REVISION_JA_LEGACY,
       JAPANESE_EXPERIENCE_MATERIAL_REVISION,
       'japanese-duration-in-intro-289-v1',
-      'japanese-summary-strict-postconditions-289-v1',
+      'japanese-summary-strict-postconditions-363-v1',
     ]));
   });
 
@@ -203,17 +203,16 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
     const duration = buildExperienceDurationSnapshot(cv.experience || [], '2026-07-20').total;
     expect(duration.totalMonths).toBe(78);
     expect(yearWordForLocale('ja', 6.5)).toBe('六年半');
-    expect(formatApproximateDurationPhrase(duration, 'ja')).toMatch(/通算約六年半/);
+    expect(formatApproximateDurationPhrase(duration, 'ja')).toMatch(/通算で約6年半/);
     expect(formatApproximateDurationPhrase(duration, 'ja')).not.toMatch(/6\.5/);
 
     const summary = buildConciseGroundedSummary(facts, 'ja', 'female', duration, {
       includeSkills: true,
     });
     expect(splitJapaneseSummaryUnits(summary)).toHaveLength(3);
-    expect(summary).toMatch(/倉庫作業員/);
+    expect(summary).toMatch(/倉庫担当/);
     expect(summary).toMatch(/Atlas/);
-    expect(summary).toMatch(/2023年1月/);
-    expect(summary).toMatch(/通算約六年半/);
+    expect(summary).toMatch(/通算で約6年半/);
     expect(summary).not.toMatch(/6\.5/);
     expect(summary).toMatch(/以前は/);
     expect(summary).toMatch(/Rewitu/);
@@ -232,9 +231,10 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
       priorCompany: 'Rewitu',
       structuredRole: '倉庫作業員',
       gender: 'female',
+      expectedDuration: duration,
     });
-    expect(q.finalUnitRoleSlots).toEqual(['current_intro', 'current_duty', 'prior_role']);
-    expect(q.finalSentenceRoleSlots).toEqual(['current_intro', 'current_duty', 'prior_role']);
+    expect(q.finalUnitRoleSlots).toEqual(['duration', 'current_intro', 'prior_role']);
+    expect(q.finalSentenceRoleSlots).toEqual(['duration', 'current_intro', 'prior_role']);
     expect(q.currentEmploymentIntroductionCount).toBe(1);
     expect(q.currentRoleConcreteFactCoverage).toBeGreaterThanOrEqual(2);
     expect(q.priorRoleGroundingPassed).toBe(true);
@@ -257,18 +257,18 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
     expect(finalized.text).not.toMatch(/Графический/);
     expect(finalized.text).not.toMatch(/Carries out assigned/i);
     expect(finalized.text).not.toMatch(/6\.5/);
-    expect(finalized.text).toMatch(/倉庫作業員/);
+    expect(finalized.text).toMatch(/倉庫担当/);
     expect(finalized.text).toMatch(/グラフィックデザイナー/);
-    expect(finalized.text).toMatch(/通算約六年半/);
+    expect(finalized.text).toMatch(/通算で約6年半/);
     expect(finalized.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
     expect(finalized.diagnostics?.finalUnitRoleSlots).toEqual([
+      'duration',
       'current_intro',
-      'current_duty',
       'prior_role',
     ]);
     expect(finalized.diagnostics?.finalSentenceRoleSlots).toEqual([
+      'duration',
       'current_intro',
-      'current_duty',
       'prior_role',
     ]);
     expect(finalized.diagnostics?.currentEmploymentIntroductionCount).toBe(1);
@@ -289,12 +289,14 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
     expect(finalized.diagnostics?.durationFinalizerIdempotent).toBe(true);
     expect(countSummaryDurationExpressions(finalized.text, 'ja')).toBe(1);
     const rep = analyzeDurationRepresentations(finalized.text, 'ja');
-    expect(rep.numericRepresentationCount).toBe(0);
-    expect(rep.writtenRepresentationCount).toBeGreaterThanOrEqual(1);
+    // AAB-363: Arabic numerals (約6年半), not Kanji years — never decimals like 6.5.
+    expect(rep.numericRepresentationCount).toBeGreaterThanOrEqual(1);
     expect(rep.hybridDetected).toBe(false);
+    expect(finalized.text).toMatch(/約6年半/);
+    expect(finalized.text).not.toMatch(/6\.5/);
 
     const after = applyFinalizedSummaryToCv(cv, 'ja', finalized);
-    expect(after.summary).toMatch(/倉庫作業員/);
+    expect(after.summary).toMatch(/倉庫担当/);
     expect(after.summary).not.toContain('Графический');
     expect(after.summary).not.toMatch(/6\.5/);
   });
@@ -319,7 +321,7 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
       });
       expect(finalized.blocked).toBe(false);
       expect(finalized.countedAsSuccess).toBe(true);
-      expect(finalized.text).toMatch(/倉庫作業員/);
+      expect(finalized.text).toMatch(/倉庫担当/);
       expect(finalized.text).toMatch(/グラフィックデザイナー/);
       expect(finalized.text).not.toMatch(/[а-яёА-ЯЁ]{4,}/u);
       expect(finalized.text).not.toMatch(/Carries out assigned/i);
@@ -367,17 +369,18 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
     });
     expect(finalized.countedAsSuccess).toBe(true);
     expect(finalized.diagnostics?.finalUnitRoleSlots).toEqual([
+      'duration',
       'current_intro',
-      'current_duty',
       'prior_role',
     ]);
     expect(finalized.text).toMatch(/Atlas/);
     expect(finalized.text).toMatch(/Rewitu/);
-    const intro = splitJapaneseSummaryUnits(finalized.text)[0] || '';
-    const duty = splitJapaneseSummaryUnits(finalized.text)[1] || '';
+    const durationUnit = splitJapaneseSummaryUnits(finalized.text)[0] || '';
+    const intro = splitJapaneseSummaryUnits(finalized.text)[1] || '';
     const prior = splitJapaneseSummaryUnits(finalized.text)[2] || '';
-    expect(duty).toMatch(/入荷|倉庫|同僚/);
-    expect(duty).not.toMatch(/ビジュアル|デザインファイル/);
+    expect(durationUnit).toMatch(/通算で約/);
+    expect(intro).toMatch(/入荷|倉庫|同僚/);
+    expect(intro).not.toMatch(/ビジュアル|デザインファイル/);
     expect(prior).toMatch(/ビジュアル|グラフィック|デザイン/);
     expect(prior).not.toMatch(/入荷した商品/);
 
@@ -408,8 +411,8 @@ describe('cv-build287 Japanese Experience/Summary package', () => {
       });
       expect(finalized.countedAsSuccess).toBe(true);
       expect(finalized.diagnostics?.finalUnitRoleSlots).toEqual([
+        'duration',
         'current_intro',
-        'current_duty',
         'prior_role',
       ]);
       expect(finalized.text).not.toMatch(/Carries out assigned/i);

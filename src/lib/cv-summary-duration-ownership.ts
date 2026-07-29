@@ -176,12 +176,16 @@ const DURATION_EXPRESSION_RES: RegExp[] = [
   // Hindi months-based: छह वर्ष छह महीने
   /(?:लगभग|करीब)?\s*(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*वर्ष(?:ों)?\s*(?:और\s*)?(?:एक|दो|तीन|चार|पाँच|पांच|छह|सात|आठ|नौ|दस|\d+)\s*महीन[ेों]/gu,
 
-  // Japanese — written (通算約六年半) and numeric (約6.5年); never treat decimals as preferred.
+  // Japanese — standalone total-career claim first; half-year before bare year;
+  // written kanji (通算約六年半) and Arabic-numeral (約6年半); never prefer decimals.
+  /通算で約\s*\d+(?:[.,]\d+)?\s*年半?(?:か月)?の実務経験があります/gu,
+  /通算で約(?:一年半|二年半|三年半|四年半|五年半|六年半|七年半|八年半|九年半|十年半|一年|二年|三年|四年|五年|六年|七年|八年|九年|十年)の実務経験があります/gu,
   /通算約?(?:一年半|二年半|三年半|四年半|五年半|六年半|七年半|八年半|九年半|十年半|一年|二年|三年|四年|五年|六年|七年|八年|九年|十年)(?:の実務経験|の(?:勤務)?経験|を有する)?/gu,
   /約(?:一年半|二年半|三年半|四年半|五年半|六年半|七年半|八年半|九年半|十年半|一年|二年|三年|四年|五年|六年|七年|八年|九年|十年)(?:の実務経験|の(?:勤務)?経験)?/gu,
+  new RegExp(String.raw`約\s*${NUM}\s*年半(?:の実務経験|の(?:勤務)?経験)?`, 'gu'),
   new RegExp(String.raw`約\s*${NUM}\s*年の(?:勤務)?経験`, 'gu'),
   new RegExp(String.raw`${NUM}\s*年の(?:勤務)?経験`, 'gu'),
-  new RegExp(String.raw`約\s*${NUM}\s*年`, 'gu'),
+  new RegExp(String.raw`約\s*${NUM}\s*年(?!半)`, 'gu'),
 
   // Russian — JS `\b`/`\w` are ASCII-only; use Unicode letter lookarounds.
   new RegExp(

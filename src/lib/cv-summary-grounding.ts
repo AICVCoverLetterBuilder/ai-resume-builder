@@ -330,9 +330,18 @@ export {
   SUMMARY_UNIT_SPLITTER_REVISION_JA,
   JAPANESE_DURATION_IN_INTRO_MARKER,
   JAPANESE_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
+  JAPANESE_SUMMARY_FIRST_PERSON_363_REVISION,
+  JAPANESE_SUMMARY_CROSS_LOCALE_363_REVISION,
+  JAPANESE_SUMMARY_DURATION_GRAMMAR_REVISION,
+  JAPANESE_SUMMARY_DURATION_GRAMMAR_INVALID,
+  RU_JA_CROSS_LOCALE_STRONGER_363_REVISION,
   isJapaneseGenericSkillsUnit,
+  isJapaneseStructuredSummaryDomain,
   countJapaneseUnsupportedSummaryClaims,
   injectJapaneseDurationIntoCurrentIntro,
+  detectJapaneseSummaryPerspective,
+  formatJapaneseDurationCore,
+  formatJapaneseDurationSentence,
 } from './cv-japanese-summary-grounding';
 export {
   analyzeCroatianSummaryEmploymentQuality,
@@ -2650,7 +2659,7 @@ export function buildConciseGroundedSummary(
     void SUMMARY_GROUNDING_REVISION_JA;
     void analyzeJapaneseSummaryEmploymentQuality;
     void japaneseWarehouseSummaryFragment;
-    const jaRole = /(?:warehouse|倉庫|skladist|magacin|radnic|кладов|مستودع)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+    const jaRole = /(?:warehouse|倉庫|skladist|magacin|radnic|кладов|مستودع|сотрудник)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
       ? localizeWarehouseEmployee('ja', genderNorm || '')
       : (role || localizeWarehouseEmployee('ja', genderNorm || ''));
     text = buildJapaneseEntryOwnedSummary({
@@ -2668,6 +2677,8 @@ export function buildConciseGroundedSummary(
         : '',
       priorSourceDuties,
       locale: 'ja',
+      duration: duration || null,
+      hasCurrentRole: isPresent || Boolean(employer || experienceTitle || sourceDuties),
     });
     skillSentence = '';
     void skillSentence;
