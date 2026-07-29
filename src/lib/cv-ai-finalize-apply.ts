@@ -324,7 +324,9 @@ import {
 } from './cv-experience-locale-rejection-truth-328';
 import {
   EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
+  EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION,
   EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION,
+  ENGLISH_EMPTY_SOURCE_GENERATION_365_REVISION,
   buildExperienceSelectedFinalCandidateSnapshot,
   selectedFinalSnapshotToDiagnostics,
 } from './cv-experience-phased-apply-329';
@@ -1558,6 +1560,7 @@ export type FinalizeCvAiFieldResult = {
     finalFactCoveragePassed?: boolean | null;
     experienceSelectedFinalCoverageRevision?: string | null;
     experienceFinalVisiblePredicateTruthRevision?: string | null;
+    englishEmptySourceGenerationRevision?: string | null;
     sourceFactsEntryIdHash?: string | null;
     canonicalFactsEntryIdHash?: string | null;
     fallbackFactsEntryIdHash?: string | null;
@@ -7845,6 +7848,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       generationProviderRejectionReason = null;
     }
     generationFinalPostconditionPassed = true;
+    // Empty-source generation: source-predicate coverage is enhancement-only.
+    // Mark predicate source-coverage explicitly not applicable — never invent a
+    // vacuous true or leave applicable=true with a null pass flag.
+    const genScripts = detectBulletScripts(candidate);
+    const genNormalizedHash = fingerprintText(candidate.replace(/\s+/g, ' ').trim());
+    if (!isClientFallback) {
+      providerAccepted = true;
+      finalCandidateSource = 'provider';
+    } else {
+      finalCandidateSource = 'deterministic_fallback';
+    }
     return {
       blocked: false,
       text: candidate,
@@ -7855,8 +7869,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ...baseDiag(),
         coveredFactCount: 0,
         requiredFactCount: 0,
+        finalRequiredFactCount: 0,
+        finalCoveredFactCount: 0,
+        finalUncoveredFactIdentityHashes: [],
+        // Vacuous truth: nothing required ⇒ fact coverage passes (not fake predicate pass).
+        finalFactCoveragePassed: true,
+        finalCandidatePresent: true,
+        finalCandidateSource: isClientFallback ? 'deterministic_fallback' : 'provider',
+        finalCandidateValidationApplicable: true,
+        finalCandidatePredicateValidationApplicable: false,
+        finalCandidatePredicateIdentityCount: 0,
+        finalAddedPredicateCount: 0,
+        finalAddedPredicateIdentityHashes: [],
+        finalSourceUnitPredicateCoveragePassed: null,
+        sourcePredicateIdentityCount: 0,
+        candidatePredicateIdentityCount: 0,
+        sourceUnitPredicateCoveragePassed: null,
+        finalNormalizedHash: genNormalizedHash,
+        finalCandidateBulletCount: bulletCount,
+        finalCandidateBulletScripts: genScripts,
         finalBulletCount: bulletCount,
-        finalBulletScripts: detectBulletScripts(candidate),
+        finalBulletScripts: genScripts,
+        appliedFinalBulletCount: bulletCount,
+        appliedFinalBulletScripts: genScripts,
+        providerAccepted: !isClientFallback,
+        finalDecisionKind: 'material_improvement',
+        meaningfulChangeDetected: true,
         detectedLocaleByBullet: purity.detectedLocaleByUnit,
         detectedScriptByBullet: canonicalizeDetectedScriptByBullet(purity.detectedScriptByUnit),
         wrongLocaleBulletCount: purity.wrongLocaleUnitCount,
@@ -7875,6 +7913,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         generationFallbackApplied: isClientFallback,
         contentLocaleUpdatedAfterApply: true,
         contentLocaleAfterApply: locale,
+        experienceSelectedFinalCoverageRevision:
+          EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
+        experienceFinalVisiblePredicateTruthRevision:
+          EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION,
+        englishEmptySourceGenerationRevision:
+          ENGLISH_EMPTY_SOURCE_GENERATION_365_REVISION,
       },
     };
   };
@@ -10350,11 +10394,23 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
         experienceNonvacuousPredicateGateRevision:
           EXPERIENCE_NONVACUOUS_PREDICATE_GATE_314_REVISION,
-        finalDecisionKind: (lastCanonicalDecision?.finalDecisionKind
-          ?? (typeof successVisFields.finalDecisionKind === 'string'
-            ? successVisFields.finalDecisionKind
-            : null)
-          ?? (result.countedAsSuccess ? 'material_improvement' : 'none')) as string,
+        finalDecisionKind: (sourceWasEmpty && result.countedAsSuccess
+          ? (
+            (typeof result.diagnostics?.finalDecisionKind === 'string'
+              && result.diagnostics.finalDecisionKind
+              && result.diagnostics.finalDecisionKind !== 'none')
+              ? result.diagnostics.finalDecisionKind
+              : 'material_improvement'
+          )
+          : (lastCanonicalDecision?.finalDecisionKind
+            ?? (
+              typeof successVisFields.finalDecisionKind === 'string'
+              && successVisFields.finalDecisionKind
+              && successVisFields.finalDecisionKind !== 'none'
+                ? successVisFields.finalDecisionKind
+                : null
+            )
+            ?? (result.countedAsSuccess ? 'material_improvement' : 'none'))) as string,
         experienceCanonicalFinalizationRevision:
           EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
         spanishExperienceSurfaceFormGateRevision:

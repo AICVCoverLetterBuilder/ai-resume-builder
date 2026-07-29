@@ -111,11 +111,15 @@ export const EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION =
   'experience-transactional-apply-truth-329-v1' as const;
 export const EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION =
   'experience-final-visible-predicate-truth-329-v1' as const;
+/** Empty-source generate_from_job_context: predicate coverage N/A (AAB-365/366). */
+export const ENGLISH_EMPTY_SOURCE_GENERATION_365_REVISION =
+  'english-empty-source-generation-365-v1' as const;
 
 void EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION;
 void EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION;
 void EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION;
 void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
+void ENGLISH_EMPTY_SOURCE_GENERATION_365_REVISION;
 void ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
 void SPANISH_CV_AI_305_REVISION;
@@ -203,7 +207,9 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
   let requiredFactCount = Number(options.requiredFactCountFallback ?? 0);
   let coveredFactCount = Number(options.coveredFactCountFallback ?? 0);
   let uncovered: string[] = [...(options.uncoveredFactIdentityHashesFallback || [])];
-  let factCoveragePassed = requiredFactCount > 0 && coveredFactCount === requiredFactCount
+  // Vacuous truth: requiredFactCount=0 (empty-source generation) passes coverage
+  // when uncovered is empty — never invent source-predicate coverage as true.
+  let factCoveragePassed = coveredFactCount === requiredFactCount
     && uncovered.length === 0;
   let sourcePredicateIdentityCount = Number(options.sourcePredicateIdentityCountFallback ?? 0);
   let candidatePredicateIdentityCount = Number(
@@ -523,6 +529,9 @@ export function selectedFinalSnapshotToDiagnostics(
   snap: ExperienceSelectedFinalCandidateSnapshot,
 ): Record<string, unknown> {
   void EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION;
+  // Source-predicate coverage is enhancement-only. Empty-source / zero source
+  // predicates → explicitly not applicable (null pass), never a fake true.
+  const predicateValidationApplicable = snap.sourcePredicateIdentityCount > 0;
   return {
     experienceSelectedFinalCoverageRevision: EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
     experienceFinalVisiblePredicateTruthRevision:
@@ -539,11 +548,13 @@ export function selectedFinalSnapshotToDiagnostics(
     finalUncoveredFactIdentityHashes: [...snap.uncoveredFactIdentityHashes],
     finalRequiredFactSetHash: snap.requiredFactSetHash,
     finalFactCoveragePassed: snap.factCoveragePassed,
-    finalCandidatePredicateValidationApplicable: true,
+    finalCandidatePredicateValidationApplicable: predicateValidationApplicable,
     finalCandidatePredicateIdentityCount: snap.candidatePredicateIdentityCount,
     finalAddedPredicateCount: snap.addedPredicateCount,
     finalAddedPredicateIdentityHashes: [...snap.addedPredicateIdentityHashes],
-    finalSourceUnitPredicateCoveragePassed: snap.predicateCoveragePassed,
+    finalSourceUnitPredicateCoveragePassed: predicateValidationApplicable
+      ? snap.predicateCoveragePassed
+      : null,
     sourcePredicateIdentityCount: snap.sourcePredicateIdentityCount,
     // Keep required/covered aliases aligned for legacy readers.
     requiredFactCount: snap.requiredFactCount,
@@ -604,7 +615,8 @@ export function checkExperiencePreapplyDiagnosticInvariants(
     const uncovered = Array.isArray(trace.finalUncoveredFactIdentityHashes)
       ? (trace.finalUncoveredFactIdentityHashes as unknown[])
       : null;
-    if (!(req > 0 && cov === req && uncovered && uncovered.length === 0)) {
+    // Allow vacuous pass when requiredFactCount=0 (empty-source generation).
+    if (!(cov === req && uncovered && uncovered.length === 0)) {
       push('final_fact_coverage_pass_inconsistent', {
         finalRequiredFactCount: req,
         finalCoveredFactCount: cov,
@@ -825,6 +837,16 @@ export function checkExperiencePreapplyDiagnosticCompleteness(
   if (trace.finalCandidatePresent === true || trace.finalCandidateSource === 'provider'
     || trace.finalCandidateSource === 'deterministic_fallback'
     || (typeof trace.finalNormalizedHash === 'string' && trace.finalNormalizedHash)) {
+    const predicateApplicable = trace.finalCandidatePredicateValidationApplicable !== false
+      && !(
+        trace.sourceWasEmpty === true
+        || trace.operationMode === 'generate_from_job_context'
+        || (
+          Number(trace.sourceFactCount ?? -1) === 0
+          && Number(trace.sourcePredicateIdentityCount ?? 0) === 0
+          && Number(trace.requiredFactCount ?? -1) === 0
+        )
+      );
     for (const key of [
       'finalCandidatePresent',
       'finalCandidateSource',
@@ -837,10 +859,13 @@ export function checkExperiencePreapplyDiagnosticCompleteness(
       'finalFactCoveragePassed',
       'finalCandidatePredicateIdentityCount',
       'finalAddedPredicateCount',
-      'finalSourceUnitPredicateCoveragePassed',
       'finalUnsupportedClaimCount',
     ] as const) {
       require(key);
+    }
+    // Enhancement-only: require non-null predicate coverage pass only when applicable.
+    if (predicateApplicable) {
+      require('finalSourceUnitPredicateCoveragePassed');
     }
     requireNonEmptyString('finalNormalizedHash');
     if (Number(trace.finalCandidatePredicateIdentityCount ?? 0) <= 0

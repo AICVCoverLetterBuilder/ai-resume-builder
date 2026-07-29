@@ -2037,12 +2037,6 @@ export class ExperienceAiDiagnosticSession {
         ? diagRec.finalFactCoveragePassed
         : (
           Number(
-            (diagRec.finalRequiredFactCount as number | undefined)
-            ?? diag.requiredFactCount
-            ?? finalRequired
-            ?? 0,
-          ) > 0
-          && Number(
             (diagRec.finalCoveredFactCount as number | undefined)
             ?? diag.coveredFactCount
             ?? finalCovered
@@ -2265,7 +2259,23 @@ export class ExperienceAiDiagnosticSession {
                   ? 'unsupported_claim_repair'
                   : (diag.noOpRepairApplied ? 'noop_repair' : 'provider'))),
             finalCandidateValidationApplicable: true,
-            finalCandidatePredicateValidationApplicable: true,
+            finalCandidatePredicateValidationApplicable:
+              typeof (diag as Record<string, unknown>).finalCandidatePredicateValidationApplicable
+                === 'boolean'
+                ? (diag as Record<string, unknown>)
+                  .finalCandidatePredicateValidationApplicable as boolean
+                : !(
+                  diag.sourceWasEmpty === true
+                  || diag.operationMode === 'generate_from_job_context'
+                  || (
+                    Number(diag.sourceFactCount ?? this.draft.sourceFactCount ?? -1) === 0
+                    && Number(
+                      diag.sourcePredicateIdentityCount
+                      ?? this.draft.sourcePredicateIdentityCount
+                      ?? 0,
+                    ) === 0
+                  )
+                ),
             finalCandidateBulletCount: Number(
               (diag as Record<string, unknown>).finalCandidateBulletCount
               ?? appliedCount
