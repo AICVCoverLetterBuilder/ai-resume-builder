@@ -1288,7 +1288,7 @@ export function materialDutyKeysFromDescription(description: string): MaterialDu
   return ordered;
 }
 
-function localizedHasDuty(key: MaterialDutyKey, localized: string): boolean {
+export function localizedHasDuty(key: MaterialDutyKey, localized: string): boolean {
   if (key === 'generic_duty') return true;
   const rule = DUTY_RULES.find((r) => r.key === key);
   if (rule?.localized.test(localized)) return true;
@@ -1299,6 +1299,19 @@ function localizedHasDuty(key: MaterialDutyKey, localized: string): boolean {
   if (japaneseWarehouseCueKeysFromUnit(localized).includes(key as WarehouseMaterialCueKey)) return true;
   if (!rule) return true;
   return false;
+}
+
+/**
+ * AAB-356 — Coverage of source material keys in target Summary text must use
+ * localized duty patterns (not English-only source classifiers).
+ */
+export function materialDutyKeysCoveredInLocalizedText(
+  required: MaterialDutyKey[],
+  localized: string,
+): { covered: MaterialDutyKey[]; missing: MaterialDutyKey[] } {
+  const covered = required.filter((k) => localizedHasDuty(k, localized));
+  const missing = required.filter((k) => !localizedHasDuty(k, localized));
+  return { covered, missing };
 }
 
 export type MaterialDutyCoverageResult = {

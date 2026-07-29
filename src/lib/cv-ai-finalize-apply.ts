@@ -154,6 +154,13 @@ import {
   scanGermanWarehousePredicates,
 } from './cv-german-experience-grounding';
 import {
+  GERMAN_SUMMARY_AUTHORITATIVE_ACCEPT_356_REVISION,
+  SUMMARY_AUTHORITATIVE_GROUNDING_356_REVISION,
+  SUMMARY_MATERIAL_FACT_UNIVERSAL_356_REVISION,
+  buildGermanAuthoritativeGroundingRecord,
+  isGermanStructuredSummaryDomain,
+} from './cv-summary-authoritative-grounding';
+import {
   SPANISH_CV_AI_305_REVISION,
   detectSpanishExperienceUnsupportedExpansion,
   buildSpanishWarehouseExperienceFallback,
@@ -570,6 +577,17 @@ import {
   localizeOccupationalTitleForProjection,
 } from './cv-role-title';
 
+void SUMMARY_AUTHORITATIVE_GROUNDING_356_REVISION;
+void SUMMARY_MATERIAL_FACT_UNIVERSAL_356_REVISION;
+void GERMAN_SUMMARY_AUTHORITATIVE_ACCEPT_356_REVISION;
+
+function splitGenericDutyEvidence(description: string): string[] {
+  return (description || '')
+    .split(/\n+|;\s+|(?<=[.!?])\s+(?=\S)/u)
+    .map((s) => s.replace(/\s+/g, ' ').trim())
+    .filter((s) => s.length >= 8);
+}
+
 /** Runtime revision for the production Summary finalize → apply orchestration. */
 export const SUMMARY_PIPELINE_REVISION = 'summary-runtime-282-v1' as const;
 /** Retained Hindi package marker — must remain present in packaged assets. */
@@ -713,6 +731,9 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_BUILDER_REVISION_DE,
   ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
   ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354_REVISION,
+  SUMMARY_AUTHORITATIVE_GROUNDING_356_REVISION,
+  SUMMARY_MATERIAL_FACT_UNIVERSAL_356_REVISION,
+  GERMAN_SUMMARY_AUTHORITATIVE_ACCEPT_356_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_EN;
 void SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION;
@@ -1767,6 +1788,16 @@ function currentAndPriorDutiesFromCv(cv: CVData, locale?: Locale): {
       // canonical was never seeded (AAB-349 device path).
       return grounded || live;
     }
+    // AAB-356: German (and other non-HR/HI paths) must prefer entry-owned
+    // canonical/original duties over AI-frozen display — otherwise Arabic
+    // Experience display drops structured warehouse/design out of the domain
+    // gate while empQ diagnostics still score the German candidate.
+    if (locale === 'de' || locale === 'en' || locale === 'es') {
+      const grounded = resolveExperienceGroundingDescription(exp).trim();
+      const live = (exp.description || '').trim()
+        || freezeExperienceAiDescription(exp).trim();
+      return grounded || live;
+    }
     return freezeExperienceAiDescription(exp);
   };
   return {
@@ -1922,37 +1953,75 @@ function summaryPasses(
   } else if (locale === 'de') {
     void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
     void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
+    void GERMAN_SUMMARY_AUTHORITATIVE_ACCEPT_356_REVISION;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
-    const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''}`;
-    const germanWarehouseOrDesignDomain = /(?:lager|warehouse|waren|grafik|design|visuell)/iu
-      .test(dutiesCorpus)
-      || /lager|warehouse|grafik|design/iu
-        .test(`${primary?.position || ''} ${cv.personal?.jobTitle || ''}`);
-    if (germanWarehouseOrDesignDomain) {
-      const structuredSkills = (cv.skills || [])
-        .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
-        .filter(Boolean);
-      const empQ = analyzeGermanSummaryEmploymentQuality(summary, {
-        company: primary?.company || '',
-        role: primary?.position || cv.personal?.jobTitle || '',
-        currentEntryDuties: entryDuties.currentEntryDuties,
-        priorEntryDuties: entryDuties.priorEntryDuties,
-        priorCompany: entryDuties.priorCompany,
-        priorRole: entryDuties.priorRoleTitle,
-        gender: cv.personal?.gender || '',
-        structuredSkills,
-        expectedDurationOwner: 'total_professional_experience',
-      });
-      if (!empQ.groundingValidationPassed || !empQ.slotValidationPassed) {
+    const prior = (cv.experience || []).find((e) => primary && e.id !== primary.id) || null;
+    const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''} ${summary || ''}`;
+    const structuredSkills = (cv.skills || [])
+      .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
+      .filter(Boolean);
+    const empQ = analyzeGermanSummaryEmploymentQuality(summary, {
+      company: primary?.company || '',
+      role: primary?.position || cv.personal?.jobTitle || '',
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      priorCompany: entryDuties.priorCompany,
+      priorRole: entryDuties.priorRoleTitle,
+      gender: cv.personal?.gender || '',
+      structuredSkills,
+      expectedDurationOwner: 'total_professional_experience',
+      currentEntryId: entryDuties.currentEntryId,
+      priorEntryId: prior?.id || null,
+    });
+    const authoritative = buildGermanAuthoritativeGroundingRecord({
+      groundingValidationPassed: empQ.groundingValidationPassed,
+      slotValidationPassed: empQ.slotValidationPassed,
+      requiredCurrentDutyFactIds: empQ.requiredCurrentDutyFactIds,
+      coveredCurrentDutyFactCount: empQ.coveredCurrentDutyFactCount,
+      requiredCurrentDutyFactCount: empQ.requiredCurrentDutyFactCount,
+      missingCurrentDutyFactCount: empQ.missingCurrentDutyFactCount,
+      missingCurrentDutyFactIdHashes: empQ.missingCurrentDutyFactIdHashes,
+      requiredPriorDutyFactCount: empQ.requiredPriorDutyFactCount,
+      coveredPriorDutyFactCount: empQ.coveredPriorDutyFactCount,
+      missingPriorDutyFactCount: empQ.missingPriorDutyFactCount,
+      unsupportedClaimCount: empQ.unsupportedClaimCount,
+      unsupportedClaimKinds: empQ.unsupportedClaimKinds,
+      employerCrossEntryLeakageDetected: empQ.employerCrossEntryLeakageDetected,
+      typedRejectionReason: empQ.typedRejectionReason,
+      currentEntryId: entryDuties.currentEntryId,
+      priorEntryId: prior?.id || null,
+      currentEmployer: entryDuties.currentCompany,
+      priorEmployer: entryDuties.priorCompany,
+      currentRole: entryDuties.currentRoleTitle,
+      priorRole: entryDuties.priorRoleTitle,
+      currentIsPresent: Boolean(primary?.isPresent),
+      currentStartDate: primary?.startDate || '',
+      currentEndDate: primary?.endDate || '',
+      priorStartDate: prior?.startDate || '',
+      priorEndDate: prior?.endDate || '',
+      genericCurrentDutyEvidence: splitGenericDutyEvidence(entryDuties.currentEntryDuties),
+      genericPriorDutyEvidence: splitGenericDutyEvidence(entryDuties.priorEntryDuties),
+    });
+    const germanStructuredDomain = isGermanStructuredSummaryDomain(dutiesCorpus)
+      || Number(empQ.requiredCurrentDutyFactCount || 0) > 0
+      || Number(empQ.requiredPriorDutyFactCount || 0) > 0;
+    if (germanStructuredDomain || authoritative.factsByEntry.some((e) => e.requiredFactIds.length > 0)) {
+      // One authoritative entry-owned gate — never fall through to occupation-key fidelity.
+      if (!authoritative.accepted) {
+        const exactMissing = Object.values(authoritative.missingFactsByEntry).flat();
         return {
           ok: false,
           reason: empQ.typedRejectionReason
             || empQ.slotRejectionReasons[0]
-            || 'german_summary_grounding_failed',
+            || (exactMissing.length
+              ? `summary_missing_material_fact:${exactMissing.join(',')}`
+              : 'german_summary_grounding_failed'),
         };
       }
     } else {
+      // Arbitrary occupation without classified warehouse/design facts: generic
+      // fidelity (localized material coverage) — occupation keys are not mandatory.
       const fidelity = validateLocalizedSummary(summary, factSet, {
         locale,
         gender: cv.personal?.gender || '',
@@ -2427,6 +2496,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ) {
       void SERBIAN_WAREHOUSE_DOCUMENTATION_CLASSIFIER_352_REVISION;
       if (!merged.includes('warehouse_document_check')) {
+        merged.push('warehouse_document_check');
+      }
+    }
+    // AAB-356: when authoritative German canonical IDs include documentation,
+    // keep material-key enrichment aligned — never as override authority.
+    if (
+      locale === 'de'
+      && /(?:related\s+document|documentation\s+related|Dokumentation|Unterlagen|الوثائق|وثائق)/iu
+        .test(entryDutiesForRole.currentEntryDuties || '')
+    ) {
+      if (!merged.includes('warehouse_document_check') && !merged.includes('warehouse_records')) {
         merged.push('warehouse_document_check');
       }
     }

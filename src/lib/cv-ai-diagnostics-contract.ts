@@ -479,6 +479,14 @@ type SummaryLike = {
   finalUnsupportedDesignMediumKinds?: string[] | null;
   durationValidationPassed?: boolean;
   slotValidationPassed?: boolean | null;
+  localeValidationPassed?: boolean | null;
+  finalTypedFailureReason?: string | null;
+  rejectionStage?: string | null;
+  typedFailureReason?: string | null;
+  requiredCurrentDutyFactIds?: string[] | null;
+  occupationMaterialKeysUsedAsMandatoryAuthority?: boolean | null;
+  deterministicCurrentEntryIdHash?: string | null;
+  currentSourceUnitFactOwnerEntryIdHash?: string | null;
   totalDurationSlotPresent?: boolean | null;
   independentFinalDurationClaimCount?: number | null;
   summaryDurationExpressionCount?: number | null;
@@ -1177,6 +1185,158 @@ export function checkSummaryDiagnosticInvariants(
       finalUnsupportedDesignMediumCount: trace.finalUnsupportedDesignMediumCount ?? 0,
     });
   }
+
+  // AAB-356 — contradictory shared material-fact / authoritative coverage invariants.
+  {
+    const locale = String(trace.requestedLocale || '');
+    const reqCur = Number(trace.requiredCurrentDutyFactCount ?? 0);
+    const covCur = Number(trace.coveredCurrentDutyFactCount ?? 0);
+    const reqPri = Number(trace.requiredPriorDutyFactCount ?? 0);
+    const covPri = Number(trace.coveredPriorDutyFactCount ?? 0);
+    const missCur = Number(trace.missingCurrentDutyFactCount ?? 0);
+    const typed = String(trace.finalTypedFailureReason || trace.typedFailureReason || '');
+    const stage = String(trace.rejectionStage || '');
+    const materialKeys = Array.isArray(trace.currentEntryMaterialKeys)
+      ? (trace.currentEntryMaterialKeys as string[])
+      : [];
+    const requiredIds = Array.isArray(trace.requiredCurrentDutyFactIds)
+      ? (trace.requiredCurrentDutyFactIds as string[])
+      : [];
+    const sourceEntryHash = String(
+      (trace as { currentSourceUnitFactOwnerEntryIdHash?: string | null })
+        .currentSourceUnitFactOwnerEntryIdHash
+      || (trace as { deterministicCurrentEntryIdHash?: string | null })
+        .deterministicCurrentEntryIdHash
+      || '',
+    );
+
+    // A: final coverage 3/3 + 3/3 but generic summary_missing_material_fact with no exact missing fact
+    if (
+      reqCur >= 3 && covCur >= reqCur
+      && reqPri >= 3 && covPri >= reqPri
+      && typed === 'summary_missing_material_fact'
+      && !/:/.test(typed)
+    ) {
+      push('authoritative_coverage_pass_but_generic_material_reject', {
+        coveredCurrentDutyFactCount: covCur,
+        requiredCurrentDutyFactCount: reqCur,
+        coveredPriorDutyFactCount: covPri,
+        requiredPriorDutyFactCount: reqPri,
+        finalTypedFailureReason: typed,
+        conflictingFactIds: requiredIds.join(','),
+        conflictingSourceEntryHash: sourceEntryHash || null,
+      });
+    }
+
+    // B: groundingValidationPassed=true while rejected at summary_grounding
+    if (
+      trace.groundingValidationPassed === true
+      && stage === 'summary_grounding'
+      && trace.countedAsSuccess !== true
+      && trace.noOpDetected !== true
+    ) {
+      push('grounding_passed_but_rejected_at_summary_grounding', {
+        groundingValidationPassed: true,
+        rejectionStage: stage,
+        finalTypedFailureReason: typed || null,
+        conflictingFactIds: requiredIds.join(','),
+        conflictingSourceEntryHash: sourceEntryHash || null,
+      });
+    }
+
+    // C: missing-material rejection with missing fact count = 0
+    if (
+      /summary_missing_material_fact|missing_material/i.test(typed)
+      && missCur === 0
+      && reqCur > 0
+      && covCur >= reqCur
+    ) {
+      push('material_reject_with_zero_missing_facts', {
+        missingCurrentDutyFactCount: missCur,
+        coveredCurrentDutyFactCount: covCur,
+        requiredCurrentDutyFactCount: reqCur,
+        finalTypedFailureReason: typed,
+        conflictingFactIds: requiredIds.join(','),
+        conflictingSourceEntryHash: sourceEntryHash || null,
+      });
+    }
+
+    // D: secondary material fact set differs from authoritative required fact set
+    // (only when the secondary set drove a rejection / contradiction).
+    if (
+      locale === 'de'
+      && requiredIds.length >= 3
+      && materialKeys.length > 0
+      && materialKeys.length < requiredIds.length
+      && requiredIds.includes('related_documentation_check')
+      && !materialKeys.includes('warehouse_document_check')
+      && !materialKeys.includes('warehouse_records')
+      && /summary_missing_material_fact|missing_material/i.test(typed)
+      && trace.countedAsSuccess !== true
+    ) {
+      push('secondary_material_keys_diverge_from_authoritative_required_ids', {
+        requiredCurrentDutyFactIdsJoined: requiredIds.join(','),
+        currentEntryMaterialKeysJoined: materialKeys.join(','),
+        conflictingFactIds: 'related_documentation_check',
+        conflictingSourceEntryHash: sourceEntryHash || null,
+      });
+    }
+
+    // E: occupation-specific material keys used as mandatory authority for arbitrary occupation
+    if (
+      (trace as { occupationMaterialKeysUsedAsMandatoryAuthority?: boolean })
+        .occupationMaterialKeysUsedAsMandatoryAuthority === true
+      && requiredIds.length === 0
+      && materialKeys.length > 0
+      && /summary_missing_material_fact/i.test(typed)
+    ) {
+      push('occupation_material_keys_mandatory_for_arbitrary_occupation', {
+        currentEntryMaterialKeysJoined: materialKeys.join(','),
+        requiredCurrentDutyFactIdsJoined: '',
+        conflictingFactIds: materialKeys.join(','),
+        conflictingSourceEntryHash: sourceEntryHash || null,
+      });
+    }
+
+    // F: all final validators pass but finalCandidateSource=none
+    // (exclude intentional no-op / meaningful-change rejects)
+    if (
+      trace.groundingValidationPassed === true
+      && trace.durationValidationPassed === true
+      && trace.slotValidationPassed === true
+      && (trace.localeValidationPassed === true || trace.targetLocalePurityPassed === true)
+      && String(trace.finalCandidateSource || 'none') === 'none'
+      && Boolean(trace.deterministicCandidatePresent)
+      && Boolean(trace.deterministicCandidateHash)
+      && trace.noOpDetected !== true
+      && !/noop|meaningful_change/i.test(String(trace.rejectionStage || ''))
+      && !/noop|meaningful/i.test(typed)
+    ) {
+      push('validators_passed_but_final_candidate_source_none', {
+        groundingValidationPassed: true,
+        durationValidationPassed: true,
+        slotValidationPassed: true,
+        finalCandidateSource: 'none',
+        deterministicCandidateHash: String(trace.deterministicCandidateHash || ''),
+        conflictingSourceEntryHash: sourceEntryHash || null,
+      });
+    }
+
+    // G: successful apply with final/visible hash mismatch
+    if (
+      trace.visibleApplySucceeded === true
+      && trace.finalValidatedCandidateHash
+      && trace.visibleCandidateHashAfterApply
+      && trace.finalValidatedCandidateHash !== trace.visibleCandidateHashAfterApply
+    ) {
+      push('apply_success_with_final_visible_hash_mismatch', {
+        finalValidatedCandidateHash: String(trace.finalValidatedCandidateHash),
+        visibleCandidateHashAfterApply: String(trace.visibleCandidateHashAfterApply),
+        conflictingSourceEntryHash: sourceEntryHash || null,
+      });
+    }
+  }
+
   if (trace.durationValidationPassed
     && (trace.structuredDurationMonths ?? 0) > 0
     && (trace.independentFinalDurationClaimCount ?? 0) !== 1

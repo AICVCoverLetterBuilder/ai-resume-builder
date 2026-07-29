@@ -13,7 +13,19 @@ import {
   yearWordForLocale,
   type ExperienceDuration,
 } from './cv-experience-duration';
-import { classifyMaterialDutyKeys, validateMaterialDutyCoverage, hindiWarehouseCueKeysFromUnit } from './cv-material-duty-coverage';
+import {
+  classifyMaterialDutyKeys,
+  validateMaterialDutyCoverage,
+  hindiWarehouseCueKeysFromUnit,
+  materialDutyKeysCoveredInLocalizedText,
+  type MaterialDutyKey,
+} from './cv-material-duty-coverage';
+import {
+  SUMMARY_MATERIAL_FACT_UNIVERSAL_356_REVISION,
+  secondaryMaterialRejectionAllowed,
+  type AuthoritativeSummaryGroundingRecord,
+} from './cv-summary-authoritative-grounding';
+void SUMMARY_MATERIAL_FACT_UNIVERSAL_356_REVISION;
 import {
   localizeBaker,
   localizeWarehouseEmployee,
@@ -1297,7 +1309,11 @@ export function summaryHasMalformedSkillsFragment(summary: string): boolean {
 export function validateSummaryMaterialFacts(
   summary: string,
   factSet: CvCanonicalFactSet,
-  options?: { locale?: Locale | string },
+  options?: {
+    locale?: Locale | string;
+    /** AAB-356: when authoritative entry-owned coverage already accepted, occupation keys cannot override. */
+    authoritativeGrounding?: AuthoritativeSummaryGroundingRecord | null;
+  },
 ): CvFidelityViolation[] {
   // Hard material coverage is scoped to the Present/current Experience entry.
   // Prior-role cooking/warehouse/design facts must not force Summary coverage —
@@ -1310,6 +1326,13 @@ export function validateSummaryMaterialFacts(
   if (!source.trim()) return [];
   const violations: CvFidelityViolation[] = [];
   const locale = (options?.locale || 'en') as Locale;
+  const authoritative = options?.authoritativeGrounding || null;
+
+  // AAB-356: complete authoritative entry-owned coverage is sole material acceptance
+  // authority — occupation-specific material-key checkers are enrichment only.
+  if (authoritative?.accepted) {
+    return [];
+  }
 
   if (summaryContainsListMarkerLeakage(summary)) {
     violations.push({
@@ -1351,37 +1374,43 @@ export function validateSummaryMaterialFacts(
   const sourceWarehouse = [...new Set(
     bulletTexts.flatMap((b) => classifyMaterialDutyKeys(b))
       .filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k)),
-  )];
+  )] as MaterialDutyKey[];
 
   // Concrete warehouse Experience must not be genericized into records/docs/info prose,
   // and must retain at least two concrete warehouse action-object frames.
+  // AAB-356: score coverage with localized duty patterns — never English-only
+  // classifyMaterialDutyKeys(summary), which falsely zeros German/Arabic/etc.
   if (sourceWarehouse.length >= 1) {
-    const summaryWhKeys = [...new Set(
-      classifyMaterialDutyKeys(summary).filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k)),
-    )];
-    const hasConcreteCue = /(?:माल|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар|入荷|商品|倉庫|品物|zaprimljen|primljen|ulazn\w*\s+rob|skladišt|prateć|robe)/iu.test(summary);
+    const coveredWh = materialDutyKeysCoveredInLocalizedText(sourceWarehouse, summary).covered;
+    const summaryWhKeys = coveredWh.filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k));
+    const hasConcreteCue = /(?:مال|गोदाम|goods|warehouse|incoming|आने\s*वाल|بضائع|товар|入荷|商品|倉庫|品物|zaprimljen|primljen|ulazn\w*\s+rob|skladišt|prateć|robe|Waren|Wareneingang|Lager|Dokumentation|Unterlagen|Kolleg)/iu.test(summary);
     const hasGeneric = GENERICIZED_WAREHOUSE_RE.test(summary);
+    const secondaryMissing = sourceWarehouse.filter((k) => !summaryWhKeys.includes(k));
+    const secondaryGate = secondaryMaterialRejectionAllowed({
+      authoritative,
+      secondaryMissingFactIds: secondaryMissing,
+    });
     // Generic records/docs/info alone (or with <2 concrete frames) must fail.
-    if (hasGeneric && summaryWhKeys.length < 2) {
+    if (hasGeneric && summaryWhKeys.length < 2 && secondaryGate.allowed) {
       violations.push({
         kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
         matched: 'warehouse_genericized',
         section: 'summary',
-        evidence: `genericizedMaterialFactCount=${sourceWarehouse.length};concrete=${summaryWhKeys.length}`,
+        evidence: `genericizedMaterialFactCount=${sourceWarehouse.length};concrete=${summaryWhKeys.length};missing=${secondaryGate.exactMissingFactIds.join(',')}`,
       });
-    } else if (summaryWhKeys.length < 2 && sourceWarehouse.length >= 2) {
+    } else if (summaryWhKeys.length < 2 && sourceWarehouse.length >= 2 && secondaryGate.allowed) {
       violations.push({
         kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
-        matched: 'warehouse_facts_absent',
+        matched: secondaryGate.exactMissingFactIds.join(',') || 'warehouse_facts_absent',
         section: 'summary',
-        evidence: `requiredSummaryFactCount=2;covered=${summaryWhKeys.length};cue=${hasConcreteCue}`,
+        evidence: `requiredSummaryFactCount=2;covered=${summaryWhKeys.length};cue=${hasConcreteCue};missing=${secondaryGate.exactMissingFactIds.join(',')};entry=${secondaryGate.conflictingSourceEntryHash || ''}`,
       });
-    } else if (!hasConcreteCue && sourceWarehouse.length >= 2) {
+    } else if (!hasConcreteCue && sourceWarehouse.length >= 2 && secondaryGate.allowed) {
       violations.push({
         kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
-        matched: 'warehouse_facts_absent',
+        matched: secondaryGate.exactMissingFactIds.join(',') || 'warehouse_facts_absent',
         section: 'summary',
-        evidence: `requiredSummaryFactCount=${sourceWarehouse.length}`,
+        evidence: `requiredSummaryFactCount=${sourceWarehouse.length};missing=${secondaryGate.exactMissingFactIds.join(',')}`,
       });
     }
   }
@@ -1401,13 +1430,25 @@ export function validateSummaryMaterialFacts(
     const requiredWarehouse = coverage.required.filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k));
     if (requiredWarehouse.length >= 2) {
       const missingWarehouse = coverage.missing.filter((k) => WAREHOUSE_SUMMARY_KEYS.has(k));
+      const secondaryGate = secondaryMaterialRejectionAllowed({
+        authoritative,
+        secondaryMissingFactIds: missingWarehouse,
+      });
       // Require at least 2 warehouse material frames for the headline current role.
-      if (missingWarehouse.length > requiredWarehouse.length - 2) {
-        for (const key of missingWarehouse) {
+      if (
+        secondaryGate.allowed
+        && missingWarehouse.length > requiredWarehouse.length - 2
+      ) {
+        for (const key of (secondaryGate.exactMissingFactIds.length
+          ? secondaryGate.exactMissingFactIds
+          : missingWarehouse)) {
           violations.push({
             kind: 'summary_missing_material_fact' as CvFidelityViolationKind,
             matched: key,
             section: 'summary',
+            evidence: secondaryGate.conflictingSourceEntryHash
+              ? `entry=${secondaryGate.conflictingSourceEntryHash}`
+              : undefined,
           });
         }
       }

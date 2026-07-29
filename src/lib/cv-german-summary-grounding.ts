@@ -199,9 +199,9 @@ const DESIGN_UNSUPPORTED_DE =
   /\b(?:Druck(?:medien)?|Printmedien|Branding|Markenidentität|Marketingmaterial(?:ien)?|Logos?|Werbekampagn(?:e|en)|Social\s*Media|Verpackungsdesign)\b/iu;
 
 const WAREHOUSE_FACT_CUE_DE =
-  /(?:eingehend\w*\s+Waren|Wareneingang|Unterlagen|Dokument(?:e|ation)|vorbereit|beweg|Kolleg|prüfen|Kontrolle)/iu;
+  /(?:eingehend\w*\s+Waren|Wareneingang|Unterlagen|Dokument(?:e|ation)|vorbereit|beweg|Kolleg|prüfen|Kontrolle|warehouse|goods|Lager|مستودع|بضائع|وثائق|गोदाम|माल|almac[eé]n|mercanc)/iu;
 const DESIGN_FACT_CUE_DE =
-  /(?:visuell|grafisch|Design|Designdatei|Bildschirm|Format|Element)/iu;
+  /(?:visuell|grafisch|Design|Designdatei|Bildschirm|Format|Element|graphic|مواد\s*بصرية|عناصر\s*رسومية|جرافيك|تصميم|هوية\s*بصرية)/iu;
 
 export type GermanSummaryRoleSlot =
   | 'current_intro'
@@ -1064,7 +1064,7 @@ export function buildGermanEntryOwnedSummary(options: {
       employer: extraPriors[0]?.employer || '',
       duties: extraPriors[0]?.duties || '',
     };
-  const priorLooksDesign = /(?:dizajn|design|grafik|visual|vizuel|visuell|デザイン|diseñ)/i
+  const priorLooksDesign = /(?:dizajn|design|grafik|visual|vizuel|visuell|デザイン|diseñ|مواد\s*بصرية|عناصر\s*رسومية|جرافيك|تصميم|هوية\s*بصرية)/i
     .test(`${selectedPrior.role} ${selectedPrior.duties}`);
   let priorSentence = '';
   if (selectedPrior.role || selectedPrior.employer || selectedPrior.duties) {

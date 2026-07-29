@@ -64,6 +64,7 @@ function hashOpaque(text: string): string {
 
 function detectDutySourceLocale(text: string): string | null {
   const t = text || '';
+  if (/[\u0600-\u06FF]/.test(t)) return 'ar';
   if (/[ñáéíóúü¿¡]/iu.test(t) || /\b(?:mercanc|documentaci|coordina|comprueba|verifica)\w*/iu.test(t)) {
     return 'es';
   }
@@ -74,13 +75,14 @@ function detectDutySourceLocale(text: string): string | null {
   return null;
 }
 
-const INCOMING_RE = /(?:eingehend\w*\s+Waren|Wareneingang|Warenannahme|(?:Prüfung|Kontrolle|prüfen|kontroll)\w*.{0,40}(?:eingehend|Wareneingang)|(?:incoming|inbound)\s+goods|mercanc[ií]as?\s+entrant(?:es)?|(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó])\w*.{0,40}mercanc|(?:prüf|kontroll)\w*.{0,24}Waren)/iu;
-const DOCUMENT_RE = /(?:zugehörig\w*\s+(?:Dokumentation|Unterlagen|Dokumente|Belege)|Dokumentenprüfung|(?:Prüfung|Kontrolle)\w*.{0,40}(?:Dokumentation|Unterlagen|Dokumente|Belege)|(?:Dokumentation|Unterlagen|Dokumente|Belege).{0,40}(?:Prüfung|Kontrolle|prüfen|kontroll)|(?:documentaci[oó]n|documentos|registros).{0,40}(?:relacionad|asociad|acompañ)|(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó]|prüf|kontroll)\w*.{0,40}(?:documentaci|documentos|Dokumentation|Unterlagen)|(?:documentaci|documentos|Unterlagen|Dokumentation).{0,40}(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó]|prüf|kontroll)|related\s+document|documentation\s+related|(?:checking|verifying|reviewing)\s+(?:the\s+)?(?:related\s+)?documentation)/iu;
+const INCOMING_RE = /(?:eingehend\w*\s+Waren|Wareneingang|Warenannahme|(?:Prüfung|Kontrolle|prüfen|kontroll)\w*.{0,40}(?:eingehend|Wareneingang)|(?:incoming|inbound)\s+goods|mercanc[ií]as?\s+entrant(?:es)?|(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó])\w*.{0,40}mercanc|(?:prüf|kontroll)\w*.{0,24}Waren|البضائع\s*الواردة|(?:تتحقق|تحقّقت|يتحقق|فحص).{0,40}(?:البضائع|بضائع)|(?:البضائع|بضائع).{0,40}(?:الواردة|تتحقق|فحص))/iu;
+const DOCUMENT_RE = /(?:zugehörig\w*\s+(?:Dokumentation|Unterlagen|Dokumente|Belege)|Dokumentenprüfung|(?:Prüfung|Kontrolle)\w*.{0,40}(?:Dokumentation|Unterlagen|Dokumente|Belege)|(?:Dokumentation|Unterlagen|Dokumente|Belege).{0,40}(?:Prüfung|Kontrolle|prüfen|kontroll)|(?:documentaci[oó]n|documentos|registros).{0,40}(?:relacionad|asociad|acompañ)|(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó]|prüf|kontroll)\w*.{0,40}(?:documentaci|documentos|Dokumentation|Unterlagen)|(?:documentaci|documentos|Unterlagen|Dokumentation).{0,40}(?:verifica|comprueba|revisa|controla|comprob[oó]|revis[oó]|prüf|kontroll)|related\s+document|documentation\s+related|(?:checking|verifying|reviewing)\s+(?:the\s+)?(?:related\s+)?documentation|الوثائق\s*(?:المتعلقة|المرفقة)|(?:تتحقق|تحقّقت|فحص).{0,40}وثائق|وثائق.{0,40}(?:المتعلقة|المرفقة|المستلمة|تتحقق|فحص))/iu;
 /**
  * AAB-324: Spanish past-tense Coordinó (ó) must match — bare `coordina` does not.
  * Also accept compañeros / colleagues as coordination participants.
+ * AAB-356: Arabic coordination + goods preparation/movement remains authoritative.
  */
-const COORD_RE = /(?:Abstimmung|Koordination|abstimme|abstimm\w*).{0,80}(?:Kolleg|Vorbereitung|Bewegung|Transport)|(?:Kolleg\w*).{0,80}(?:Vorbereitung|Bewegung|Transport|Abstimmung|vorbereiten|bewegen|abstimme)|(?:coordin[aoó]|koordin)\w*.{0,100}(?:prepar|movim|mercanc|coleg|compa[nñ]er|colleague|Kolleg|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:compa[nñ]er\w*|colleague\w*|Kolleg\w*).{0,100}(?:prepar|movim|mercanc|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+(?:von\s+)?Waren)|(?:Bewegung\s+der\s+Waren)|(?:Waren).{0,40}(?:Kolleg\w*).{0,40}(?:vorbereit|beweg|Transport|abstimm)|(?:Kolleg\w*).{0,40}(?:Waren).{0,40}(?:vorbereit|beweg|Transport|abstimm)|(?:vorbereiten\s+und\s+bewegen)/iu;
+const COORD_RE = /(?:Abstimmung|Koordination|abstimme|abstimm\w*).{0,80}(?:Kolleg|Vorbereitung|Bewegung|Transport)|(?:Kolleg\w*).{0,80}(?:Vorbereitung|Bewegung|Transport|Abstimmung|vorbereiten|bewegen|abstimme)|(?:coordin[aoó]|koordin)\w*.{0,100}(?:prepar|movim|mercanc|coleg|compa[nñ]er|colleague|Kolleg|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:compa[nñ]er\w*|colleague\w*|Kolleg\w*).{0,100}(?:prepar|movim|mercanc|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+(?:von\s+)?Waren)|(?:Bewegung\s+der\s+Waren)|(?:Waren).{0,40}(?:Kolleg\w*).{0,40}(?:vorbereit|beweg|Transport|abstimm)|(?:Kolleg\w*).{0,40}(?:Waren).{0,40}(?:vorbereit|beweg|Transport|abstimm)|(?:vorbereiten\s+und\s+bewegen)|(?:تنسّق|نسّقت|ينسّق|تنسيق).{0,56}(?:إعداد|تجهيز|حركة|بضائع|زملاء)|(?:زملاء).{0,48}(?:إعداد|تجهيز|حركة|بضائع)|(?:إعداد|تجهيز).{0,40}(?:حركة|بضائع)|حركة\s*البضائع/iu;
 
 function splitDutyBullets(text: string): string[] {
   return (text || '')
@@ -215,7 +217,7 @@ export function listAuthoritativeCurrentWarehouseDutyBullets(
     INCOMING_RE.test(b)
     || DOCUMENT_RE.test(b)
     || COORD_RE.test(b)
-    || /(?:mercanc|Waren|Wareneingang|goods|almac[eé]n|Lager|warehouse|documentaci|Dokumentation|Unterlagen|coordin|Kolleg|colleague|compa[nñ]er|preparaci|Vorbereitung|movim|Bewegung|Transport|Abstimmung)/iu
+    || /(?:mercanc|Waren|Wareneingang|goods|almac[eé]n|Lager|warehouse|documentaci|Dokumentation|Unterlagen|coordin|Kolleg|colleague|compa[nñ]er|preparaci|Vorbereitung|movim|Bewegung|Transport|Abstimmung|بضائع|وثائق|مستودع|زملاء|إعداد|تجهيز|حركة)/iu
       .test(b)
   );
   if (!bullets.some(warehouseish)) return [];
