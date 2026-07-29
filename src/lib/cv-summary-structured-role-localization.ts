@@ -63,6 +63,10 @@ export function detectRoleLabelSourceLocale(role: string): string | null {
     || /ñ/.test(t)) {
     return 'es';
   }
+  if (/\b(?:employ[eé]e?\s+d['’`]?entrep[oô]t|entrep[oô]t|graphiste|boulanger)\b/iu.test(t)
+    || /\b(?:employe(?:e)?\s+d['’`]?entrepot|entrepot)\b/iu.test(folded)) {
+    return 'fr';
+  }
   if (/\b(?:grafikdesigner(?:in)?|lagermitarbeiter(?:in)?|fachkraft)\b/iu.test(folded)) {
     return 'de';
   }
@@ -330,9 +334,6 @@ export function validateSummaryStructuredRoleLocale(options: {
   const priorSource = (options.priorRole || '').trim();
 
   if (currentSource) {
-    if (!currentResolved.localizationValidationPassed) {
-      failureKinds.push('current_role_locale_mismatch');
-    }
     const expected = currentResolved.localizedTargetRoleLabel;
     const hasExpected = expected ? roleSpanPresent(text, expected) : false;
     const hasRawForeign = currentSource
@@ -340,24 +341,29 @@ export function validateSummaryStructuredRoleLocale(options: {
       && roleSpanPresent(text, currentSource)
       && detectRoleLabelSourceLocale(currentSource) !== null
       && detectRoleLabelSourceLocale(currentSource) !== targetLocale;
+    // Raw source is provenance, not required surface text. Accepted localized
+    // target role in the candidate satisfies role identity for cross-locale.
+    if (!currentResolved.localizationValidationPassed && !hasExpected) {
+      failureKinds.push('current_role_locale_mismatch');
+    }
     if (hasRawForeign) {
       foreignCurrent = true;
       aliasLeakCount += 1;
       failureKinds.push('foreign_current_role_title');
       failureKinds.push('raw_source_role_leakage');
-    } else if (expected && !hasExpected && roleSpanPresent(text, currentSource)) {
-      // Source equals something in text but not localized form.
-      if (detectRoleLabelSourceLocale(currentSource) !== targetLocale) {
-        foreignCurrent = true;
-        failureKinds.push('current_role_locale_mismatch');
-      }
+    } else if (
+      expected
+      && !hasExpected
+      && roleSpanPresent(text, currentSource)
+      && detectRoleLabelSourceLocale(currentSource) !== targetLocale
+    ) {
+      // Foreign raw form present while localized form is absent.
+      foreignCurrent = true;
+      failureKinds.push('current_role_locale_mismatch');
     }
   }
 
   if (priorSource) {
-    if (!priorResolved.localizationValidationPassed) {
-      failureKinds.push('prior_role_locale_mismatch');
-    }
     const expected = priorResolved.localizedTargetRoleLabel;
     const hasExpected = expected ? roleSpanPresent(text, expected) : false;
     const hasRawForeign = priorSource
@@ -365,6 +371,9 @@ export function validateSummaryStructuredRoleLocale(options: {
       && roleSpanPresent(text, priorSource)
       && detectRoleLabelSourceLocale(priorSource) !== null
       && detectRoleLabelSourceLocale(priorSource) !== targetLocale;
+    if (!priorResolved.localizationValidationPassed && !hasExpected) {
+      failureKinds.push('prior_role_locale_mismatch');
+    }
     if (hasRawForeign) {
       foreignPriorCount += 1;
       aliasLeakCount += 1;
@@ -373,13 +382,15 @@ export function validateSummaryStructuredRoleLocale(options: {
       }
       failureKinds.push('foreign_prior_role_title');
       failureKinds.push('raw_source_role_leakage');
-    } else if (expected && !hasExpected) {
-      // Prior role missing or still foreign.
-      if (roleSpanPresent(text, priorSource)
-        && detectRoleLabelSourceLocale(priorSource) !== targetLocale) {
-        foreignPriorCount += 1;
-        failureKinds.push('prior_role_locale_mismatch');
-      }
+    } else if (
+      expected
+      && !hasExpected
+      && roleSpanPresent(text, priorSource)
+      && detectRoleLabelSourceLocale(priorSource) !== targetLocale
+    ) {
+      // Prior role still foreign in the candidate surface.
+      foreignPriorCount += 1;
+      failureKinds.push('prior_role_locale_mismatch');
     }
     // Also catch Spanish graphic-designer forms even if structured priorRole was already German.
     if (
@@ -393,18 +404,28 @@ export function validateSummaryStructuredRoleLocale(options: {
     }
   }
 
+  const currentLocalizedOk = !currentSource
+    || currentResolved.localizationValidationPassed
+    || Boolean(
+      currentResolved.localizedTargetRoleLabel
+      && roleSpanPresent(text, currentResolved.localizedTargetRoleLabel),
+    );
+  const priorLocalizedOk = !priorSource
+    || priorResolved.localizationValidationPassed
+    || Boolean(
+      priorResolved.localizedTargetRoleLabel
+      && roleSpanPresent(text, priorResolved.localizedTargetRoleLabel),
+    );
   const foreignCount = (foreignCurrent ? 1 : 0) + foreignPriorCount;
   const passed = foreignCount === 0
-    && (!currentSource || currentResolved.localizationValidationPassed)
-    && (!priorSource || priorResolved.localizationValidationPassed)
+    && currentLocalizedOk
+    && priorLocalizedOk
     && failureKinds.length === 0;
 
   return {
     structuredRoleLocaleValidationPassed: passed,
-    currentRoleLocalizationValidationPassed: !currentSource
-      || (currentResolved.localizationValidationPassed && !foreignCurrent),
-    priorRoleLocalizationValidationPassed: !priorSource
-      || (priorResolved.localizationValidationPassed && foreignPriorCount === 0),
+    currentRoleLocalizationValidationPassed: currentLocalizedOk && !foreignCurrent,
+    priorRoleLocalizationValidationPassed: priorLocalizedOk && foreignPriorCount === 0,
     foreignStructuredRoleTitleCount: foreignCount,
     foreignCurrentRoleTitleDetected: foreignCurrent,
     foreignPriorRoleTitleCount: foreignPriorCount,

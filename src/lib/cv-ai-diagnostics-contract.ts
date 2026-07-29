@@ -1337,6 +1337,129 @@ export function checkSummaryDiagnosticInvariants(
     }
   }
 
+  // AAB-357 — contradictory current-role locale authority invariants.
+  {
+    const typed = String(trace.finalTypedFailureReason || trace.typedFailureReason || '');
+    const detHash = String(trace.deterministicCandidateHash || '');
+    const entryHash = String(
+      (trace as { deterministicCurrentEntryIdHash?: string | null })
+        .deterministicCurrentEntryIdHash
+      || (trace as { currentRoleTitleEntryIdHash?: string | null }).currentRoleTitleEntryIdHash
+      || '',
+    );
+    const rolePayload = {
+      deterministicCandidateHash: detHash || null,
+      currentEntryHash: entryHash || null,
+      requestedLocale: String(trace.requestedLocale || ''),
+      contextCurrentRoleLocalized: String(
+        (trace as { contextCurrentRoleLocalized?: string | null }).contextCurrentRoleLocalized || '',
+      ),
+      contextCurrentRoleResolved: String(
+        (trace as { contextCurrentRoleResolved?: string | null }).contextCurrentRoleResolved || '',
+      ),
+      conflictingValidator: 'current_role_locale_mismatch',
+    };
+
+    // A: finalStructuredRoleLocaleValidationPassed=true + current_role_locale_mismatch
+    if (
+      trace.finalStructuredRoleLocaleValidationPassed === true
+      && typed === 'current_role_locale_mismatch'
+      && trace.countedAsSuccess !== true
+      && trace.noOpDetected !== true
+    ) {
+      push('role_locale_pass_but_current_role_locale_mismatch', {
+        ...rolePayload,
+        finalStructuredRoleLocaleValidationPassed: true,
+      });
+    }
+
+    // B: candidateCurrentRoleTitleMatchesStructuredRole=true + mismatch reject
+    if (
+      (trace as { candidateCurrentRoleTitleMatchesStructuredRole?: boolean })
+        .candidateCurrentRoleTitleMatchesStructuredRole === true
+      && typed === 'current_role_locale_mismatch'
+      && trace.countedAsSuccess !== true
+      && trace.noOpDetected !== true
+    ) {
+      push('candidate_role_matches_but_current_role_locale_mismatch', {
+        ...rolePayload,
+        candidateCurrentRoleTitleMatchesStructuredRole: true,
+      });
+    }
+
+    // C: localization passed + wrong-locale count 0, but deterministic rejected for role locale
+    if (
+      (trace as { currentRoleLocalizationValidationPassed?: boolean })
+        .currentRoleLocalizationValidationPassed === true
+      && Number(
+        (trace as { finalWrongLocaleStructuredRoleCount?: number | null })
+          .finalWrongLocaleStructuredRoleCount ?? 0,
+      ) === 0
+      && typed === 'current_role_locale_mismatch'
+      && Boolean(trace.deterministicCandidateHash)
+      && trace.deterministicAccepted === false
+      && trace.countedAsSuccess !== true
+    ) {
+      push('role_localization_pass_but_deterministic_role_locale_reject', {
+        ...rolePayload,
+        currentRoleLocalizationValidationPassed: true,
+        finalWrongLocaleStructuredRoleCount: 0,
+      });
+    }
+
+    // D: deterministic reject reason only from provider/repair lineage leakage
+    if (
+      typed === 'current_role_locale_mismatch'
+      && Boolean(trace.deterministicCandidateHash)
+      && (
+        String((trace as { providerTypedRejectionReason?: string | null })
+          .providerTypedRejectionReason || '') === 'current_role_locale_mismatch'
+        || (
+          Array.isArray((trace as { providerSlotRejectionReasons?: string[] })
+            .providerSlotRejectionReasons)
+          && ((trace as { providerSlotRejectionReasons?: string[] })
+            .providerSlotRejectionReasons || [])
+            .includes('current_role_locale_mismatch')
+        )
+      )
+      && (trace as { structuredRoleLocaleValidationPassed?: boolean })
+        .structuredRoleLocaleValidationPassed === true
+      && trace.deterministicAccepted === false
+    ) {
+      push('provider_repair_role_reject_contaminates_deterministic', {
+        ...rolePayload,
+        providerTypedRejectionReason: String(
+          (trace as { providerTypedRejectionReason?: string | null })
+            .providerTypedRejectionReason || '',
+        ),
+      });
+    }
+
+    // E: target-locale localized role present but raw lexical equality required
+    if (
+      typed === 'current_role_locale_mismatch'
+      && Boolean(
+        (trace as { contextCurrentRoleLocalized?: string | null }).contextCurrentRoleLocalized,
+      )
+      && Boolean(
+        (trace as { contextCurrentRoleResolved?: string | null }).contextCurrentRoleResolved,
+      )
+      && String((trace as { contextCurrentRoleLocalized?: string | null })
+        .contextCurrentRoleLocalized || '')
+        !== String((trace as { contextCurrentRoleResolved?: string | null })
+          .contextCurrentRoleResolved || '')
+      && (trace as { candidateCurrentRoleTitlePresent?: boolean })
+        .candidateCurrentRoleTitlePresent === true
+      && (trace as { candidateCurrentRoleTitleMatchesStructuredRole?: boolean })
+        .candidateCurrentRoleTitleMatchesStructuredRole === true
+      && trace.countedAsSuccess !== true
+    ) {
+      push('raw_source_role_lexical_equality_required', {
+        ...rolePayload,
+      });
+    }
+  }
+
   if (trace.durationValidationPassed
     && (trace.structuredDurationMonths ?? 0) > 0
     && (trace.independentFinalDurationClaimCount ?? 0) !== 1

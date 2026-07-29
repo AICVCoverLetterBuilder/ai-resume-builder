@@ -161,6 +161,15 @@ import {
   isGermanStructuredSummaryDomain,
 } from './cv-summary-authoritative-grounding';
 import {
+  SUMMARY_TARGET_ROLE_AUTHORITY_357_REVISION,
+  SUMMARY_ROLE_LOCALE_ACCEPTANCE_357_REVISION,
+  GERMAN_SUMMARY_ROLE_LOCALE_AUTHORITY_357_REVISION,
+  buildSummaryTargetRoleAuthority,
+} from './cv-summary-target-role-authority';
+void SUMMARY_TARGET_ROLE_AUTHORITY_357_REVISION;
+void SUMMARY_ROLE_LOCALE_ACCEPTANCE_357_REVISION;
+void GERMAN_SUMMARY_ROLE_LOCALE_AUTHORITY_357_REVISION;
+import {
   SPANISH_CV_AI_305_REVISION,
   detectSpanishExperienceUnsupportedExpansion,
   buildSpanishWarehouseExperienceFallback,
@@ -734,6 +743,9 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_AUTHORITATIVE_GROUNDING_356_REVISION,
   SUMMARY_MATERIAL_FACT_UNIVERSAL_356_REVISION,
   GERMAN_SUMMARY_AUTHORITATIVE_ACCEPT_356_REVISION,
+  SUMMARY_TARGET_ROLE_AUTHORITY_357_REVISION,
+  SUMMARY_ROLE_LOCALE_ACCEPTANCE_357_REVISION,
+  GERMAN_SUMMARY_ROLE_LOCALE_AUTHORITY_357_REVISION,
 ] as const;
 void SUMMARY_BUILDER_REVISION_EN;
 void SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION;
@@ -1954,6 +1966,7 @@ function summaryPasses(
     void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
     void GERMAN_SUMMARY_ROLE_SLOT_CLASSIFIER_320_REVISION;
     void GERMAN_SUMMARY_AUTHORITATIVE_ACCEPT_356_REVISION;
+    void GERMAN_SUMMARY_ROLE_LOCALE_AUTHORITY_357_REVISION;
     const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
     const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
     const prior = (cv.experience || []).find((e) => primary && e.id !== primary.id) || null;
@@ -1961,13 +1974,40 @@ function summaryPasses(
     const structuredSkills = (cv.skills || [])
       .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
       .filter(Boolean);
+    // Must match buildDurationContext / attachSummaryDiag — never validate German
+    // visible prose against raw foreign structured titles (e.g. FR Employée
+    // d'entrepôt) while the builder emits localized Lagermitarbeiterin.
+    const currentRoleAuthority = buildSummaryTargetRoleAuthority({
+      entryId: entryDuties.currentEntryId,
+      rawRoleTitle: primary?.position || cv.personal?.jobTitle || '',
+      requestedTargetLocale: 'de',
+      gender: cv.personal?.gender || '',
+      employmentState: primary?.isPresent ? 'present' : 'completed',
+      employer: primary?.company || '',
+      profileJobTitle: cv.personal?.jobTitle,
+      dutiesText: entryDuties.currentEntryDuties,
+    });
+    const priorRoleAuthority = buildSummaryTargetRoleAuthority({
+      entryId: prior?.id || null,
+      rawRoleTitle: entryDuties.priorRoleTitle || '',
+      requestedTargetLocale: 'de',
+      gender: cv.personal?.gender || '',
+      employmentState: 'completed',
+      employer: entryDuties.priorCompany || '',
+      dutiesText: entryDuties.priorEntryDuties,
+    });
     const empQ = analyzeGermanSummaryEmploymentQuality(summary, {
       company: primary?.company || '',
-      role: primary?.position || cv.personal?.jobTitle || '',
+      role: currentRoleAuthority.localizedTargetRoleTitle
+        || primary?.position
+        || cv.personal?.jobTitle
+        || '',
+      rawCurrentRole: currentRoleAuthority.rawRoleTitle,
       currentEntryDuties: entryDuties.currentEntryDuties,
       priorEntryDuties: entryDuties.priorEntryDuties,
       priorCompany: entryDuties.priorCompany,
-      priorRole: entryDuties.priorRoleTitle,
+      priorRole: priorRoleAuthority.localizedTargetRoleTitle || entryDuties.priorRoleTitle,
+      rawPriorRole: priorRoleAuthority.rawRoleTitle,
       gender: cv.personal?.gender || '',
       structuredSkills,
       expectedDurationOwner: 'total_professional_experience',
@@ -1993,8 +2033,8 @@ function summaryPasses(
       priorEntryId: prior?.id || null,
       currentEmployer: entryDuties.currentCompany,
       priorEmployer: entryDuties.priorCompany,
-      currentRole: entryDuties.currentRoleTitle,
-      priorRole: entryDuties.priorRoleTitle,
+      currentRole: currentRoleAuthority.localizedTargetRoleTitle || entryDuties.currentRoleTitle,
+      priorRole: priorRoleAuthority.localizedTargetRoleTitle || entryDuties.priorRoleTitle,
       currentIsPresent: Boolean(primary?.isPresent),
       currentStartDate: primary?.startDate || '',
       currentEndDate: primary?.endDate || '',
@@ -2996,14 +3036,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const analyzeDe = (text: string) => analyzeGermanSummaryEmploymentQuality(text, {
         company: context.company,
         role: context.role,
+        rawCurrentRole: entryDuties.currentRoleTitle || context.role,
         startDate: context.startDate,
         currentEntryDuties: entryDuties.currentEntryDuties,
         priorEntryDuties: entryDuties.priorEntryDuties,
         priorCompany: entryDuties.priorCompany,
         priorRole: entryDuties.priorRoleTitle,
+        rawPriorRole: entryDuties.priorRoleTitle,
         gender,
         structuredSkills,
         expectedDurationOwner: 'total_professional_experience',
+        currentEntryId: entryDuties.currentEntryId,
+        priorEntryId: (cv.experience || []).find((e) => e.id !== entryDuties.currentEntryId)?.id
+          || null,
       });
       let empQuality = analyzeDe(candidate);
       // Recoverable provider rejection: attempt safe unit repair before blanking.

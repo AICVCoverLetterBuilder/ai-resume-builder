@@ -486,9 +486,12 @@ export function analyzeGermanSummaryEmploymentQuality(
   options: {
     company?: string;
     role?: string;
+    /** Raw source-language role provenance for leak detection (not required surface). */
+    rawCurrentRole?: string;
     startDate?: string;
     priorCompany?: string;
     priorRole?: string;
+    rawPriorRole?: string;
     currentEntryDuties?: string;
     priorEntryDuties?: string;
     gender?: string;
@@ -518,24 +521,32 @@ export function analyzeGermanSummaryEmploymentQuality(
     structuredSkills: options.structuredSkills,
   });
 
+  const rawCurrentForLocale = (options.rawCurrentRole || options.role || '').trim();
+  const rawPriorForLocale = (options.rawPriorRole || options.priorRole || '').trim();
   const currentLocalized = resolveLocalizedSummaryRole({
-    role: options.role || '',
+    role: rawCurrentForLocale,
     targetLocale: 'de',
     gender: options.gender,
     entryId: options.currentEntryId,
   });
   const priorLocalized = resolveLocalizedSummaryRole({
-    role: options.priorRole || '',
+    role: rawPriorForLocale,
     targetLocale: 'de',
     gender: options.gender,
     entryId: options.priorEntryId,
   });
-  const localizedCurrentRole = currentLocalized.localizationValidationPassed
-    ? currentLocalized.localizedTargetRoleLabel
-    : (options.role || '');
-  const localizedPriorRole = priorLocalized.localizationValidationPassed
-    ? priorLocalized.localizedTargetRoleLabel
-    : (options.priorRole || '');
+  const localizedCurrentRole = (
+    (currentLocalized.localizationValidationPassed
+      ? currentLocalized.localizedTargetRoleLabel
+      : '')
+    || (options.role || '').trim()
+  );
+  const localizedPriorRole = (
+    (priorLocalized.localizationValidationPassed
+      ? priorLocalized.localizedTargetRoleLabel
+      : '')
+    || (options.priorRole || '').trim()
+  );
 
   const durationScope = analyzeGermanSummaryDurationScope(text, {
     company: options.company,
@@ -565,8 +576,9 @@ export function analyzeGermanSummaryEmploymentQuality(
     summary: text,
     targetLocale: 'de',
     gender: options.gender,
-    currentRole: options.role,
-    priorRole: options.priorRole,
+    // Provenance raw (may be FR/AR/ES) — used for leakage detection only.
+    currentRole: rawCurrentForLocale,
+    priorRole: rawPriorForLocale,
     currentEntryId: options.currentEntryId,
     priorEntryId: options.priorEntryId,
     currentLocalized,
