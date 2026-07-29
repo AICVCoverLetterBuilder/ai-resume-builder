@@ -523,29 +523,59 @@ export function analyzeGermanSummaryEmploymentQuality(
 
   const rawCurrentForLocale = (options.rawCurrentRole || options.role || '').trim();
   const rawPriorForLocale = (options.rawPriorRole || options.priorRole || '').trim();
-  const currentLocalized = resolveLocalizedSummaryRole({
-    role: rawCurrentForLocale,
+  const surfaceCurrentRole = (options.role || '').trim();
+  const surfacePriorRole = (options.priorRole || '').trim();
+  // Resolve expected target-locale surface first (authority / builder label).
+  // Raw source titles are provenance for leakage only — never required surface text.
+  let currentLocalized = resolveLocalizedSummaryRole({
+    role: surfaceCurrentRole || rawCurrentForLocale,
     targetLocale: 'de',
     gender: options.gender,
     entryId: options.currentEntryId,
   });
-  const priorLocalized = resolveLocalizedSummaryRole({
-    role: rawPriorForLocale,
+  if (
+    !currentLocalized.localizationValidationPassed
+    && rawCurrentForLocale
+    && rawCurrentForLocale !== surfaceCurrentRole
+  ) {
+    currentLocalized = resolveLocalizedSummaryRole({
+      role: rawCurrentForLocale,
+      targetLocale: 'de',
+      gender: options.gender,
+      entryId: options.currentEntryId,
+    });
+  }
+  let priorLocalized = resolveLocalizedSummaryRole({
+    role: surfacePriorRole || rawPriorForLocale,
     targetLocale: 'de',
     gender: options.gender,
     entryId: options.priorEntryId,
   });
+  if (
+    !priorLocalized.localizationValidationPassed
+    && rawPriorForLocale
+    && rawPriorForLocale !== surfacePriorRole
+  ) {
+    priorLocalized = resolveLocalizedSummaryRole({
+      role: rawPriorForLocale,
+      targetLocale: 'de',
+      gender: options.gender,
+      entryId: options.priorEntryId,
+    });
+  }
   const localizedCurrentRole = (
     (currentLocalized.localizationValidationPassed
       ? currentLocalized.localizedTargetRoleLabel
       : '')
-    || (options.role || '').trim()
+    || surfaceCurrentRole
+    || rawCurrentForLocale
   );
   const localizedPriorRole = (
     (priorLocalized.localizationValidationPassed
       ? priorLocalized.localizedTargetRoleLabel
       : '')
-    || (options.priorRole || '').trim()
+    || surfacePriorRole
+    || rawPriorForLocale
   );
 
   const durationScope = analyzeGermanSummaryDurationScope(text, {

@@ -334,9 +334,9 @@ describe('AAB-355 shared cross-locale Summary routing matrix', () => {
     { name: 'ar→de', sourceLocale: 'ar', target: 'de', expectedScript: 'latin', builderIncludes: /german/i },
     { name: 'hi→de', sourceLocale: 'hi', target: 'de', expectedScript: 'latin', builderIncludes: /german/i },
     { name: 'sr→de', sourceLocale: 'sr', target: 'de', expectedScript: 'latin', builderIncludes: /german/i },
-    { name: 'de→fr', sourceLocale: 'de', target: 'fr', expectedScript: 'latin', builderIncludes: /english|en/i },
-    { name: 'ar→it', sourceLocale: 'ar', target: 'it', expectedScript: 'latin', builderIncludes: /english|en/i },
-    { name: 'hi→pt-BR', sourceLocale: 'hi', target: 'pt-BR' as Locale, expectedScript: 'latin', builderIncludes: /english|en/i },
+    { name: 'de→fr', sourceLocale: 'de', target: 'fr', expectedScript: 'latin', builderIncludes: /french/i },
+    { name: 'ar→it', sourceLocale: 'ar', target: 'it', expectedScript: 'latin', builderIncludes: /unsupported-failclosed|failclosed/i },
+    { name: 'hi→pt-BR', sourceLocale: 'hi', target: 'pt-BR' as Locale, expectedScript: 'latin', builderIncludes: /unsupported-failclosed|failclosed/i },
     { name: 'ar→ru', sourceLocale: 'ar', target: 'ru', expectedScript: 'cyrillic', builderIncludes: /russian/i },
     { name: 'en→ja', sourceLocale: 'en', target: 'ja', expectedScript: 'cjk', builderIncludes: /japanese/i },
   ];

@@ -615,10 +615,39 @@ function unitWrongLocale(text: string, target: Locale): boolean {
     if (!targetCue) return true;
     return false;
   }
-  // Sibling Latin-locale mis-guesses (fr↔es↔de) are not reliable enough to reject.
+  // Sibling Latin locales: reject foreign-language units.
+  // Script agreement (latin) is not locale agreement (de ≠ fr ≠ es ≠ it ≠ pt-BR).
   if (
     target === 'de' || target === 'es' || target === 'fr' || target === 'it' || target === 'pt-BR'
   ) {
+    if (!guessed || guessed === target) return false;
+    // Confident German under any Romance target (and vice versa) is always wrong.
+    if (guessed === 'de' && (DE_CLAUSE_RE.test(text) || /\b(?:ich|derzeit|arbeite|prüfe|waren)\b/iu.test(text))) {
+      return true;
+    }
+    if (target === 'de' && guessed === 'fr' && looksConfidentFrench(text)) return true;
+    if (target === 'de' && guessed === 'es' && looksConfidentSpanish(text)) return true;
+    if (target === 'fr' && guessed === 'es' && looksConfidentSpanish(text) && !looksConfidentFrench(text)) {
+      return true;
+    }
+    if (target === 'fr' && guessed === 'en' && EN_CLAUSE_RE.test(stripped) && !looksConfidentFrench(text)) {
+      return true;
+    }
+    if (target === 'es' && guessed === 'fr' && looksConfidentFrench(text) && !looksConfidentSpanish(text)) {
+      return true;
+    }
+    if ((target === 'it' || target === 'pt-BR') && guessed === 'de' && DE_CLAUSE_RE.test(text)) {
+      return true;
+    }
+    if ((target === 'it' || target === 'pt-BR') && guessed === 'fr' && looksConfidentFrench(text)) {
+      return true;
+    }
+    if (target === 'it' && guessed === 'pt-BR' && looksConfidentPortuguese(text) && !looksConfidentItalian(text)) {
+      return true;
+    }
+    if (target === 'pt-BR' && guessed === 'it' && looksConfidentItalian(text) && !looksConfidentPortuguese(text)) {
+      return true;
+    }
     return false;
   }
   return false;
@@ -731,18 +760,27 @@ export function validateAiUnitLocalePurity(
     || mixedLanguageUnitCount > 0
     || Boolean(hrEvidence?.serbianLeakageDetected)
     // AAB-325: unexpected Spanish under English is leakage even if a soft guess.
-    || (targetLocale === 'en' && unexpected.has('es'));
+    || (targetLocale === 'en' && unexpected.has('es'))
+    // AAB-358: unexpected German under French/Italian/pt-BR is leakage.
+    || ((targetLocale === 'fr' || targetLocale === 'it' || targetLocale === 'pt-BR')
+      && unexpected.has('de'));
   const targetLocalePurityPassed = units.length === 0
     ? options?.requireUnits === false
     : wrongLocaleUnitCount === 0
       && wrongScriptUnitCount === 0
       && mixedLanguageUnitCount === 0
       && !hrEvidence?.serbianLeakageDetected
-      && !(targetLocale === 'en' && unexpected.has('es'));
+      && !(targetLocale === 'en' && unexpected.has('es'))
+      && !((targetLocale === 'fr' || targetLocale === 'it' || targetLocale === 'pt-BR')
+        && unexpected.has('de'));
 
   // Ensure wrongLocaleUnitCount reflects unexpected Spanish under English.
   if (targetLocale === 'en' && unexpected.has('es')) {
     wrongLocaleUnitCount = Math.max(wrongLocaleUnitCount, 1);
+  }
+  if ((targetLocale === 'fr' || targetLocale === 'it' || targetLocale === 'pt-BR') && unexpected.has('de')) {
+    const deUnits = hits.filter((h) => h.detectedLocale === 'de').length;
+    wrongLocaleUnitCount = Math.max(wrongLocaleUnitCount, deUnits || 1);
   }
 
   return {

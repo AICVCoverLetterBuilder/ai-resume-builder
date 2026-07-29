@@ -161,6 +161,15 @@ import {
   GERMAN_SUMMARY_STRICT_POSTCONDITIONS_MARKER,
 } from './cv-german-summary-grounding';
 import {
+  analyzeFrenchSummaryEmploymentQuality,
+  buildFrenchEntryOwnedSummary,
+  isFrenchStructuredSummaryDomain,
+  SUMMARY_BUILDER_REVISION_FR,
+  FRENCH_SUMMARY_FIRST_PERSON_358_REVISION,
+  FRENCH_SUMMARY_CROSS_LOCALE_358_REVISION,
+  PROVIDER_CROSS_LOCALE_NOOP_REASON,
+} from './cv-french-summary-grounding';
+import {
   analyzeEnglishSummaryEmploymentQuality,
   buildEnglishEntryOwnedSummary,
   isEnglishStructuredSummaryDomain,
@@ -388,6 +397,16 @@ export {
   verifyVisibleSummaryCurrentDutyCoverage,
   analyzeCurrentDutyRequiredFactParity,
 } from './cv-german-summary-grounding';
+export {
+  analyzeFrenchSummaryEmploymentQuality,
+  buildFrenchEntryOwnedSummary,
+  isFrenchStructuredSummaryDomain,
+  detectFrenchSummaryPerspective,
+  SUMMARY_BUILDER_REVISION_FR,
+  FRENCH_SUMMARY_FIRST_PERSON_358_REVISION,
+  FRENCH_SUMMARY_CROSS_LOCALE_358_REVISION,
+  PROVIDER_CROSS_LOCALE_NOOP_REASON,
+} from './cv-french-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,
   buildSpanishEntryOwnedSummary,
@@ -2007,6 +2026,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'es'
     && locale !== 'en'
     && locale !== 'sr'
+    && locale !== 'fr'
   ) {
     return '';
   }
@@ -2319,6 +2339,36 @@ export function buildConciseGroundedSummary(
         : '',
       priorSourceDuties,
       locale: 'de',
+      duration: duration || undefined,
+    });
+    skillSentence = '';
+    void skillSentence;
+  } else if (locale === 'fr') {
+    void SUMMARY_BUILDER_REVISION_FR;
+    void FRENCH_SUMMARY_FIRST_PERSON_358_REVISION;
+    void FRENCH_SUMMARY_CROSS_LOCALE_358_REVISION;
+    void PROVIDER_CROSS_LOCALE_NOOP_REASON;
+    void analyzeFrenchSummaryEmploymentQuality;
+    void isFrenchStructuredSummaryDomain;
+    const frRole = /(?:warehouse|lager|entrep[oô]t|skladist|magacin|radnic|emplead)/i
+      .test(`${role} ${experienceTitle} ${sourceDuties}`)
+      ? localizeWarehouseEmployee('fr', genderNorm || '')
+      : (role || localizeWarehouseEmployee('fr', genderNorm || ''));
+    text = buildFrenchEntryOwnedSummary({
+      role: frRole,
+      employer,
+      datesValue,
+      gender: genderNorm || '',
+      durationPhrase: durationPhrase || undefined,
+      dutyFacts,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      priorEmployer: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+        : '',
+      priorSourceDuties,
+      locale: 'fr',
       duration: duration || undefined,
     });
     skillSentence = '';

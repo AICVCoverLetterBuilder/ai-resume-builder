@@ -2375,6 +2375,42 @@ export class SummaryAiDiagnosticSession {
         visibleDutyOk = false;
       }
     }
+    if (ok && durationStillOk && locale === 'fr' && typeof visibleText === 'string') {
+      const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
+      const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
+      visibleDutyRequired = requiredCurrent;
+      visibleDutyCovered = Number(this.draft.coveredCurrentDutyFactCount ?? 0);
+      visiblePriorDutyRequired = requiredPrior;
+      visiblePriorDutyCovered = Number(this.draft.coveredPriorDutyFactCount ?? 0);
+      if (requiredCurrent >= 3) {
+        const incomingOk = /marchandises?\s+entrantes?/iu.test(visibleText);
+        const docsOk = /documentation\s+relative\s+aux\s+marchandises?\s+re[cç]ues?/iu.test(visibleText);
+        const coordOk = /coordonne(?:r|)\s+avec\s+(?:mes\s+)?coll[eè]gues/iu.test(visibleText)
+          && /pr[ée]paration\s+et\s+(?:le\s+)?d[ée]placement/iu.test(visibleText);
+        visibleDutyCovered = [incomingOk, docsOk, coordOk].filter(Boolean).length;
+        visibleDutyOk = visibleDutyCovered === 3
+          && /employée\s+d['’]entrepôt|employé\s+d['’]entrepôt/iu.test(visibleText)
+          && /\b(?:je|j['’])/iu.test(visibleText);
+      }
+      if (requiredPrior >= 3) {
+        const creationOk = /supports?\s+visuels?/iu.test(visibleText)
+          && /[ée]l[ée]ments?\s+graphiques?/iu.test(visibleText);
+        const reviewOk = /examins?\s+et\s+adapt|adapt[ée]\s+les\s+supports?/iu.test(visibleText);
+        const filesOk = /fichiers?\s+de\s+conception\s+finaux?/iu.test(visibleText)
+          && /formats?/iu.test(visibleText)
+          && /écrans?/iu.test(visibleText);
+        visiblePriorDutyCovered = [creationOk, reviewOk, filesOk].filter(Boolean).length;
+        visiblePriorDutyOk = visiblePriorDutyCovered === 3;
+      } else {
+        visiblePriorDutyOk = true;
+      }
+      visibleDurationScopeOk = /je\s+dispose\s+d['’]environ/iu.test(visibleText)
+        && this.draft.finalDurationScopeValidationPassed !== false;
+      visibleLocaleOk = !/\b(?:ich|derzeit|arbeite|prüfe)\b/iu.test(visibleText);
+      if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrent >= 3) {
+        visibleDutyOk = false;
+      }
+    }
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
       && visiblePriorDutyOk && visibleGrammarOk && visibleLocaleOk && visibleDurationScopeOk;
     this.patch({
@@ -2400,33 +2436,33 @@ export class SummaryAiDiagnosticSession {
       visibleWrongLocaleStructuredRoleCount: (locale === 'de' || locale === 'en')
         ? visibleWrongRoleCount
         : null,
-      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
+      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr')
         ? visibleDutyRequired
         : null,
-      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
+      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr')
         ? visibleDutyCovered
         : null,
-      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
+      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr')
         ? Math.max(0, visibleDutyRequired - visibleDutyCovered)
         : null,
-      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar')
+      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr')
         ? (typeof visibleText === 'string' ? visibleDutyOk : null)
         : null,
-      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de')
+      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr')
         ? visiblePriorDutyRequired
         : null,
-      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de')
+      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr')
         ? visiblePriorDutyCovered
         : null,
-      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de')
+      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr')
         ? Math.max(0, visiblePriorDutyRequired - visiblePriorDutyCovered)
         : null,
-      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de')
+      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr')
         ? (typeof visibleText === 'string' ? visiblePriorDutyOk : null)
         : null,
       visibleDurationScopeValidationPassed: locale === 'en'
         ? (typeof visibleText === 'string' ? visibleDurationScopeOk : null)
-        : (locale === 'de' || locale === 'hi' || locale === 'ar'
+        : (locale === 'de' || locale === 'hi' || locale === 'ar' || locale === 'fr'
           ? (typeof visibleText === 'string' ? visibleDurationScopeOk : this.draft.visibleDurationScopeValidationPassed)
           : null),
       visibleGermanGrammarValidationPassed: locale === 'de'

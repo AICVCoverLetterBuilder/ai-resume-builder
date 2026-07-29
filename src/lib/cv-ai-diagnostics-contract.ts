@@ -498,6 +498,7 @@ type SummaryLike = {
   deterministicCandidateSentenceCount?: number | null;
   groundingInputEqualsFinalValidatedCandidate?: boolean | null;
   visibleCandidateHashAfterApply?: string | null;
+  visibleDurationClaimCountAfterApply?: number | null;
   finalUnitRoleSlots?: string[] | null;
   currentIntroSlotPresent?: boolean | null;
   currentDutySlotPresent?: boolean | null;
@@ -510,6 +511,7 @@ type SummaryLike = {
   meaningfulChangeDetected?: boolean | null;
   finalMatchesSourceAfterNormalization?: boolean | null;
   noOpDetected?: boolean | null;
+  providerNoOpDetected?: boolean | null;
   serverFallbackUsed?: boolean | null;
   providerOutcome?: string | null;
   providerUnsupportedClaimCount?: number | null;
@@ -1536,6 +1538,100 @@ export function checkSummaryDiagnosticInvariants(
     if (Array.isArray(trace.finalUnitRoleSlots) && trace.finalUnitRoleSlots.length === 0) {
       push('german_final_role_slots_empty', {
         finalUnitRoleSlots: '',
+      });
+    }
+  }
+
+  // AAB-358 — French Summary cross-locale / purity / perspective invariants.
+  if (String(trace.requestedLocale || '') === 'fr') {
+    const detected = Array.isArray(trace.detectedLocaleByUnit)
+      ? (trace.detectedLocaleByUnit as unknown[]).map((v) => (v == null ? null : String(v)))
+      : [];
+    const unexpected = Array.isArray(trace.unexpectedLocaleCodes)
+      ? (trace.unexpectedLocaleCodes as unknown[]).map(String)
+      : [];
+    if (detected.length > 0 && detected.every((c) => c === 'de')) {
+      if (trace.deterministicAccepted === true || trace.countedAsSuccess === true) {
+        push('french_accepted_with_all_german_units', {
+          detectedLocaleByUnit: detected.join(','),
+        });
+      }
+      if ((trace.wrongLocaleUnitCount ?? 0) < 1) {
+        push('french_german_units_wrong_locale_count_zero', {
+          wrongLocaleUnitCount: trace.wrongLocaleUnitCount ?? 0,
+        });
+      }
+    }
+    if (unexpected.includes('de') && trace.targetLocalePurityPassed === true) {
+      push('french_unexpected_de_but_locale_purity_passed', {
+        targetLocalePurityPassed: true,
+        unexpectedLocaleCodes: unexpected.join(','),
+      });
+    }
+    if (
+      /entry-owned-english-rebuild|entry-owned-german-rebuild/i.test(
+        String(trace.summaryBuilderRevision || ''),
+      )
+    ) {
+      push('french_request_english_or_german_builder_revision', {
+        summaryBuilderRevision: String(trace.summaryBuilderRevision || ''),
+      });
+    }
+    if (trace.countedAsSuccess === true && trace.finalPerspectiveMode === 'neutral_cv') {
+      push('french_first_person_contract_neutral_cv', {
+        finalPerspectiveMode: 'neutral_cv',
+      });
+    }
+    if (
+      trace.countedAsSuccess === true
+      && (
+        trace.requiredCurrentDutyFactCount == null
+        || trace.coveredCurrentDutyFactCount == null
+        || trace.finalUnitRoleSlots == null
+      )
+    ) {
+      push('french_success_with_null_slot_or_coverage', {
+        requiredCurrentDutyFactCount: trace.requiredCurrentDutyFactCount ?? null,
+        coveredCurrentDutyFactCount: trace.coveredCurrentDutyFactCount ?? null,
+        finalUnitRoleSlots: Array.isArray(trace.finalUnitRoleSlots)
+          ? (trace.finalUnitRoleSlots as string[]).join(',')
+          : null,
+      });
+    }
+    if (
+      trace.countedAsSuccess === true
+      && trace.visibleApplySucceeded === true
+      && typeof trace.visibleCandidateHashAfterApply === 'string'
+      && (
+        trace.visibleRequiredCurrentDutyFactCount == null
+        || trace.visibleCoveredCurrentDutyFactCount == null
+      )
+    ) {
+      push('french_success_with_null_visible_coverage', {
+        visibleRequiredCurrentDutyFactCount: trace.visibleRequiredCurrentDutyFactCount ?? null,
+      });
+    }
+    if (
+      String(trace.finalCandidateSource || '') === 'deterministic_fallback'
+      && trace.countedAsSuccess === true
+      && trace.visibleApplySucceeded === true
+      && typeof trace.visibleDurationClaimCountAfterApply === 'number'
+      && !trace.visibleCandidateHashAfterApply
+    ) {
+      push('french_final_source_without_visible_hash', {
+        finalCandidateSource: 'deterministic_fallback',
+      });
+    }
+    if (
+      trace.providerAccepted === true
+      && (
+        String(trace.providerRejectionReason || '').includes('cross_locale')
+        || String(trace.providerTypedRejectionReason || '').includes('cross_locale')
+        || trace.providerNoOpDetected === true
+      )
+    ) {
+      push('french_cross_locale_noop_accepted', {
+        providerAccepted: true,
       });
     }
   }

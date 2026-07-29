@@ -13,6 +13,10 @@ import {
   SUMMARY_BUILDER_REVISION_AR,
 } from './cv-arabic-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_DE, detectGermanSummaryPerspective } from './cv-german-summary-grounding';
+import {
+  SUMMARY_BUILDER_REVISION_FR,
+  detectFrenchSummaryPerspective,
+} from './cv-french-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_EN } from './cv-english-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_HR } from './cv-croatian-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_JA } from './cv-japanese-summary-grounding';
@@ -23,8 +27,15 @@ import { SUMMARY_BUILDER_REVISION } from './cv-summary-grounding';
 
 export const SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION =
   'summary-requested-locale-dispatch-355-v1' as const;
+export const SUMMARY_REQUESTED_LOCALE_DISPATCH_358_REVISION =
+  'summary-requested-locale-dispatch-358-v1' as const;
+/** Fail-closed marker when a locale has no dedicated Summary builder. */
+export const SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION =
+  'summary-locale-unsupported-failclosed-358-v1' as const;
 
 void SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION;
+void SUMMARY_REQUESTED_LOCALE_DISPATCH_358_REVISION;
+void SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION;
 
 export { detectGermanSummaryPerspective };
 
@@ -43,6 +54,7 @@ export function resolveSummaryBuilderRevision(
   requestedLocale: Locale | string,
 ): string {
   void SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION;
+  void SUMMARY_REQUESTED_LOCALE_DISPATCH_358_REVISION;
   const locale = String(requestedLocale || '').toLowerCase();
   switch (locale) {
     case 'ar':
@@ -55,6 +67,8 @@ export function resolveSummaryBuilderRevision(
       return SUMMARY_BUILDER_REVISION_DE;
     case 'en':
       return SUMMARY_BUILDER_REVISION_EN;
+    case 'fr':
+      return SUMMARY_BUILDER_REVISION_FR;
     case 'hi':
       // Preserve AAB-278/280/281 packaging (`live-hindi-material-rebuild-v3`).
       void SUMMARY_BUILDER_REVISION_HI_353;
@@ -68,15 +82,16 @@ export function resolveSummaryBuilderRevision(
     case 'sr':
       return SUMMARY_BUILDER_REVISION_SR;
     case 'es':
-    case 'fr':
+      // Spanish has dedicated entry-owned packaging via Spanish grounding module.
+      return 'entry-owned-spanish-rebuild-v1';
     case 'it':
     case 'pt':
     case 'pt-br':
     case 'pt_br':
-      // Shared Latin-script locales: never Hindi fallthrough.
-      return SUMMARY_BUILDER_REVISION_EN;
+      // No dedicated Romance builder yet — never silently reuse English/German.
+      return SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION;
     default:
-      return SUMMARY_BUILDER_REVISION_EN;
+      return SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION;
   }
 }
 
@@ -102,6 +117,8 @@ export function detectSummaryPerspectiveForLocale(
       return /\bI\b/.test(analyzed) ? 'first_person' : 'neutral_cv';
     case 'de':
       return detectGermanSummaryPerspective(analyzed);
+    case 'fr':
+      return detectFrenchSummaryPerspective(analyzed);
     case 'hi':
       return /(?:^|[^\p{L}])मैं(?:ने)?(?:[^\p{L}]|$)|मेरे\s+पास|कार्यरत\s+हूँ|करती\s+हूँ|करता\s+हूँ/u
         .test(analyzed)
@@ -117,8 +134,6 @@ export function detectSummaryPerspectiveForLocale(
         || /\b(?:imam|radim|radio|radila)\b/iu.test(analyzed)
         ? 'first_person'
         : 'neutral_cv';
-    case 'fr':
-      return /\b(?:je|j['’])/iu.test(analyzed) ? 'first_person' : 'neutral_cv';
     case 'it':
       return /\b(?:io|lavoro|ho\s+esperienza)\b/iu.test(analyzed) ? 'first_person' : 'neutral_cv';
     case 'pt':
@@ -140,17 +155,37 @@ export function assertSummaryBuilderMatchesRequestedLocale(
   summaryBuilderRevision: string | null | undefined,
 ): string | null {
   void SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION;
+  void SUMMARY_REQUESTED_LOCALE_DISPATCH_358_REVISION;
   const locale = String(requestedLocale || '').toLowerCase();
   const rev = String(summaryBuilderRevision || '');
-  if (locale !== 'de') return null;
-  if (/live-hindi-material-rebuild/i.test(rev)) {
-    return 'german_request_routed_to_hindi_builder';
+  if (locale === 'de') {
+    if (/live-hindi-material-rebuild/i.test(rev)) {
+      return 'german_request_routed_to_hindi_builder';
+    }
+    if (/entry-owned-arabic/i.test(rev) && !/german/i.test(rev)) {
+      return 'german_request_routed_to_arabic_builder';
+    }
+    if (rev && rev !== SUMMARY_BUILDER_REVISION_DE && !/german/i.test(rev)) {
+      return 'german_request_builder_revision_mismatch';
+    }
+    return null;
   }
-  if (/entry-owned-arabic/i.test(rev) && !/german/i.test(rev)) {
-    return 'german_request_routed_to_arabic_builder';
+  if (locale === 'fr') {
+    if (/entry-owned-english-rebuild/i.test(rev)) {
+      return 'french_request_routed_to_english_builder';
+    }
+    if (/entry-owned-german-rebuild/i.test(rev)) {
+      return 'french_request_routed_to_german_builder';
+    }
+    if (rev && rev !== SUMMARY_BUILDER_REVISION_FR && !/french/i.test(rev)) {
+      return 'french_request_builder_revision_mismatch';
+    }
+    return null;
   }
-  if (rev && rev !== SUMMARY_BUILDER_REVISION_DE && !/german/i.test(rev)) {
-    return 'german_request_builder_revision_mismatch';
+  if (locale === 'it' || locale === 'pt' || locale === 'pt-br' || locale === 'pt_br') {
+    if (/entry-owned-english-rebuild|entry-owned-german-rebuild|live-hindi/i.test(rev)) {
+      return 'unsupported_locale_reused_foreign_builder';
+    }
   }
   return null;
 }
