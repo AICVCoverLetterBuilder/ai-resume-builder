@@ -95,10 +95,15 @@ const ARABIC_SUMMARY_FIRST_PERSON_354 = 'arabic-summary-first-person-354-v1';
 const ARABIC_SUMMARY_TOPOLOGY_UNIVERSAL_354 = 'arabic-summary-topology-universal-354-v1';
 const ARABIC_MODERN_MINIMAL_PDF_RTL = 'arabic-modern-minimal-pdf-rtl-283-v1';
 const RUSSIAN_EXPERIENCE_MATERIAL = 'russian-experience-material-v1';
-const SUMMARY_SPLITTER_REVISION_RU = 'russian-three-sentence-slots-v1';
-const SUMMARY_GROUNDING_REVISION_RU = 'entry-owned-russian-grounding-v1';
+const SUMMARY_SPLITTER_REVISION_RU = 'russian-three-unit-slots-362-v1';
+const SUMMARY_GROUNDING_REVISION_RU = 'entry-owned-russian-grounding-362-v1';
 const SUMMARY_DURATION_REVISION_RU = 'russian-duration-idempotent-v1';
-const SUMMARY_BUILDER_REVISION_RU = 'entry-owned-russian-rebuild-v1';
+const SUMMARY_BUILDER_REVISION_RU = 'entry-owned-russian-rebuild-362-v1';
+const RUSSIAN_SUMMARY_FIRST_PERSON_362 = 'russian-summary-first-person-362-v1';
+const RUSSIAN_SUMMARY_CROSS_LOCALE_362 = 'russian-summary-cross-locale-362-v1';
+const RUSSIAN_SUMMARY_DURATION_GRAMMAR_362 = 'russian-summary-duration-grammar-362-v1';
+const PTBR_RUSSIAN_CROSS_LOCALE_STRONGER_362 =
+  'ptbr-russian-cross-locale-stronger-regression-362-v1';
 const RUSSIAN_DESIGN_FAMILIES = 'russian-design-families-286-v1';
 const RUSSIAN_DESIGN_FALLBACK_ROUTING = 'russian-design-fallback-routing-287-v1';
 const JAPANESE_EXPERIENCE_MATERIAL = 'japanese-experience-material-v1';
@@ -238,6 +243,10 @@ for (const marker of [
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_DURATION_REVISION_RU,
   SUMMARY_BUILDER_REVISION_RU,
+  RUSSIAN_SUMMARY_FIRST_PERSON_362,
+  RUSSIAN_SUMMARY_CROSS_LOCALE_362,
+  RUSSIAN_SUMMARY_DURATION_GRAMMAR_362,
+  PTBR_RUSSIAN_CROSS_LOCALE_STRONGER_362,
   RUSSIAN_DESIGN_FAMILIES,
   RUSSIAN_DESIGN_FALLBACK_ROUTING,
   JAPANESE_EXPERIENCE_MATERIAL,
