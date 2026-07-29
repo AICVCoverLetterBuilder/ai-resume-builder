@@ -445,9 +445,13 @@ const YEAR_WORD_BY_LOCALE: Record<Locale, Record<number, string>> = {
     7: 'семи', 8: 'восьми', 9: 'девяти', 10: 'десяти',
   },
   'pt-BR': {
+    // Half-year entries keep the bare "N e meio" stem for matching; phrase assembly
+    // reorders to natural "N anos e meio" / "um ano e meio" (never "N e meio anos").
     1: 'um', 1.5: 'um e meio', 2: 'dois', 2.5: 'dois e meio', 3: 'três', 3.5: 'três e meio',
     4: 'quatro', 4.5: 'quatro e meio', 5: 'cinco', 5.5: 'cinco e meio', 6: 'seis',
-    7: 'sete', 8: 'oito', 9: 'nove', 10: 'dez',
+    6.5: 'seis e meio',
+    7: 'sete', 7.5: 'sete e meio', 8: 'oito', 8.5: 'oito e meio', 9: 'nove', 9.5: 'nove e meio',
+    10: 'dez', 10.5: 'dez e meio',
   },
   hi: {
     1: 'एक', 1.5: 'डेढ़', 2: 'दो', 2.5: 'ढाई', 3: 'तीन', 3.5: 'साढ़े तीन',
@@ -480,7 +484,11 @@ export function yearWordForLocale(locale: Locale, n: number): string {
   if (locale === 'es') return `${wholeWord} y medio`;
   if (locale === 'fr') return `${wholeWord} ans et demi`;
   if (locale === 'it') return `${wholeWord} anni e mezzo`;
-  if (locale === 'pt-BR') return `${wholeWord} e meio`;
+  // Noun must follow the whole-year count: "seis anos e meio", never "seis e meio anos".
+  if (locale === 'pt-BR') {
+    if (whole === 1) return 'um ano e meio';
+    return `${wholeWord} anos e meio`;
+  }
   if (locale === 'ru') return `${wholeWord} с половиной`;
   if (locale === 'ar') {
     // Prefer written half-years — never emit bidi-fragile decimals like 6.5.
@@ -567,10 +575,34 @@ export function summaryIncludesDurationPhrase(
     ).test(summary)) {
       return true;
     }
+    if (locale === 'pt-BR') {
+      // Never treat Romance-misordered "N e meio anos" as authoritative.
+      if (/\be\s+meio\s+anos?\b/iu.test(summary)) return false;
+      const core = formatPortugueseBrazilDurationCore(duration);
+      if (
+        core
+        && new RegExp(escapeRegExpToken(core), 'iu').test(summary)
+        && /\bexperi[eê]ncia\b/iu.test(summary)
+      ) {
+        return true;
+      }
+      // Do not fall through to bare "N e meio" stem matching.
+      return false;
+    }
     // Generic cross-locale fallback: the expected number is claimed in this locale's
     // own word/digit form AND the text carries a recognizable duration/experience claim.
     // (Guards against accepting a bare number that has nothing to do with tenure.)
     if (localeWordAppearsIn(summary, word) && summaryHasDurationClaim(summary)) return true;
+  }
+  if (duration.unit === 'months' && locale === 'pt-BR') {
+    const core = formatPortugueseBrazilDurationCore(duration);
+    if (
+      core
+      && new RegExp(escapeRegExpToken(core), 'iu').test(summary)
+      && /\bexperi[eê]ncia\b/iu.test(summary)
+    ) {
+      return true;
+    }
   }
   return false;
 }
@@ -617,6 +649,38 @@ export function validateSummaryDuration(
     : { valid: false, claims, violation: 'experience_duration_mismatch' };
 }
 
+const PT_BR_CARDINAL: Record<number, string> = {
+  1: 'um', 2: 'dois', 3: 'três', 4: 'quatro', 5: 'cinco',
+  6: 'seis', 7: 'sete', 8: 'oito', 9: 'nove', 10: 'dez',
+  11: 'onze', 12: 'doze',
+};
+
+/**
+ * Brazilian Portuguese year/month span core (noun after whole count for half-years).
+ * Examples: um ano | um ano e meio | dois anos | seis anos e meio | seis meses.
+ */
+export function formatPortugueseBrazilDurationCore(duration: ExperienceDuration): string {
+  if (!duration.hasValidDates) return '';
+  if (duration.unit === 'months') {
+    const m = duration.totalMonths;
+    if (m <= 0) return '';
+    if (m === 1) return 'um mês';
+    const word = PT_BR_CARDINAL[m] || String(m);
+    return `${word} meses`;
+  }
+  const n = duration.approxYears;
+  if (!(n > 0)) return '';
+  const whole = Math.floor(n);
+  const isHalf = Math.abs(n - whole - 0.5) < 0.01;
+  if (whole === 1 && !isHalf && Number.isInteger(n)) return 'um ano';
+  if (whole === 1 && isHalf) return 'um ano e meio';
+  const word = PT_BR_CARDINAL[whole]
+    || YEAR_WORD_BY_LOCALE['pt-BR']?.[whole]
+    || String(whole);
+  if (isHalf) return `${word} anos e meio`;
+  return `${word} anos`;
+}
+
 /** Localized approximate-duration phrase for summary shells (identical underlying length). */
 export function formatApproximateDurationPhrase(duration: ExperienceDuration, locale: Locale): string {
   if (!duration.hasValidDates) return '';
@@ -624,6 +688,10 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     if (duration.totalMonths < 6) return '';
     if (locale === 'hi') return `लगभग ${duration.totalMonths} महीनों`;
     if (locale === 'sr' || locale === 'hr') return `oko ${duration.totalMonths} meseci`;
+    if (locale === 'pt-BR') {
+      const core = formatPortugueseBrazilDurationCore(duration);
+      return core ? `com cerca de ${core} de experiência` : '';
+    }
     return `around ${duration.totalMonths} months`;
   }
   const n = duration.approxYears;
@@ -661,8 +729,11 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     case 'ru':
       // Single written duration — never numeric hybrids like 6.5.
       return `с общим опытом около ${word} лет`;
-    case 'pt-BR':
-      return `com cerca de ${word} anos de experiência`;
+    case 'pt-BR': {
+      // Prefer natural "seis anos e meio" — never "seis e meio anos".
+      const core = formatPortugueseBrazilDurationCore(duration);
+      return core ? `com cerca de ${core} de experiência` : '';
+    }
     case 'ar':
       // Single written RTL-safe duration — never numeric hybrids like 6.5.
       if (/سنوات|سنة|سنتين/.test(word)) {

@@ -149,14 +149,12 @@ describe('AAB-358 German→French Summary Stronger', () => {
     )).toBe('french_request_routed_to_german_builder');
   });
 
-  it('remaining-locale routing fail-closed matrix', () => {
-    expect(resolveSummaryBuilderRevision('pt-BR')).toBe(
-      SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
-    );
+  it('remaining-locale routing matrix (pt-BR dedicated; foreign reuse blocked)', () => {
+    expect(resolveSummaryBuilderRevision('pt-BR')).toBe('entry-owned-ptbr-rebuild-361-v1');
     expect(assertSummaryBuilderMatchesRequestedLocale(
       'pt-BR',
       'entry-owned-english-rebuild-v1',
-    )).toBe('unsupported_locale_reused_foreign_builder');
+    )).toBe('ptbr_request_routed_to_english_builder');
     expect(assertSummaryBuilderMatchesRequestedLocale(
       'it',
       'entry-owned-english-rebuild-v1',
@@ -391,10 +389,8 @@ describe('AAB-358 German→French Summary Stronger', () => {
     const sourceDe = buildConciseGroundedSummary(factSet, 'de', 'female', durationSnapshot.total);
     const cv = atlasRewituCv(sourceDe, 'de');
     seedUsage(28);
-    // Unsupported locales remain fail-closed without mutating usage.
-    expect(resolveSummaryBuilderRevision('pt-BR')).toBe(
-      SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
-    );
+    // pt-BR now has a dedicated builder; usage/Summary still preserved on this path.
+    expect(resolveSummaryBuilderRevision('pt-BR')).toBe('entry-owned-ptbr-rebuild-361-v1');
     expect(getProAiUsageCount()).toBe(28);
     expect(cv.summary).toBe(sourceDe);
   });

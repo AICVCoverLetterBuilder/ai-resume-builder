@@ -149,8 +149,8 @@ const IT_ACCENT_RE = /[àèéìòù]/iu;
  * - German article `das` colliding with Portuguese contraction `das`
  */
 const PT_EXCLUSIVE_CLAUSE_RE =
-  /(?<![\p{L}\p{N}_])(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|recebidas|colegas|prepara[cç][aã]o|movimenta[cç][aã]o|confere|conferiu|chegam|atualiza|às|aos)(?![\p{L}\p{N}_])/iu;
-const PT_CLAUSE_RE = /\b(?:o|os|as|uma|com|para|durante|também|através|às|aos)\b/iu;
+  /(?<![\p{L}\p{N}_])(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|recebidas|colegas|prepara[cç][aã]o|movimenta[cç][aã]o|confere|conferiu|chegam|atualiza|às|aos|atualmente|trabalho|trabalhei|tenho|anteriormente|cozinheir[ao]|funcion[aá]ri[ao]|experi[eê]ncia\s+profissional|no\s+total)(?![\p{L}\p{N}_])/iu;
+const PT_CLAUSE_RE = /\b(?:o|os|as|uma|com|para|durante|também|através|às|aos|como|onde)\b/iu;
 const PT_ACCENT_RE = /[áàâãéêíóôõúç]/iu;
 
 /** Unicode-aware whole-token match — short cues must not hit inside longer words. */
@@ -487,7 +487,20 @@ export function guessUnitLocale(text: string, targetLocale?: Locale): string | n
   if (PT_CLAUSE_RE.test(t) && PT_ACCENT_RE.test(t)) return 'pt-BR';
   if (EN_CLAUSE_RE.test(t)) return 'en';
   // Soft SR: several exact function words without English clause cues.
-  if (SR_CLAUSE_RE.test(t) && !EN_CLAUSE_RE.test(t) && !DE_CLAUSE_RE.test(t)) return 'sr';
+  // Never classify Brazilian Portuguese first-person CV prose as Serbian merely
+  // because shared short prepositions (`na`/`u`) appear.
+  if (
+    SR_CLAUSE_RE.test(t)
+    && !EN_CLAUSE_RE.test(t)
+    && !DE_CLAUSE_RE.test(t)
+    && !(targetLocale === 'pt-BR' && (
+      PT_EXCLUSIVE_CLAUSE_RE.test(t)
+      || looksConfidentPortuguese(t)
+      || /\b(?:atualmente|trabalho|tenho|cozinheir)/iu.test(t)
+    ))
+  ) {
+    return 'sr';
+  }
   return null;
 }
 

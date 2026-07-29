@@ -148,8 +148,9 @@ const DURATION_EXPRESSION_RES: RegExp[] = [
   ),
 
   // Portuguese — include all common "N e meio" half-year forms (not only 1.5/2.5/3.5/6.5).
+  // Also accept Brazilian "N anos e meio" order (not only "N e meio anos").
   new RegExp(
-    String.raw`\b(?:com\s+)?(?:cerca\s+de|aproximadamente)\s+(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|${NUM})(?:\s+e\s+meio)?\s+anos?(?:\s+de\s+experiência)?\b`,
+    String.raw`\b(?:com\s+)?(?:cerca\s+de|aproximadamente)\s+(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|${NUM})(?:\s+e\s+meio)?\s+anos?(?:\s+e\s+meio)?(?:\s+de\s+experiência)?\b`,
     'giu',
   ),
   new RegExp(
@@ -157,9 +158,15 @@ const DURATION_EXPRESSION_RES: RegExp[] = [
     'giu',
   ),
   new RegExp(
+    String.raw`\b(?:um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez)\s+anos?(?:\s+e\s+meio)(?:\s+de\s+experiência)?\b`,
+    'giu',
+  ),
+  new RegExp(
     String.raw`\b${NUM}\s+anos?(?:\s+de\s+experiência)\b`,
     'giu',
   ),
+  // Total-career Brazilian opener: "Tenho, ao todo, …" (legacy "no total" still counted)
+  /\btenho,?\s+(?:ao\s+todo|no\s+total),?\s+(?:cerca\s+de|aproximadamente)?\s*[^.?!]{0,80}?experiência\s+profissional\b/giu,
 
   // Hindi — written (साढ़े छह), numeric (6.5), and hybrid (साढ़े 6.5) forms
   new RegExp(

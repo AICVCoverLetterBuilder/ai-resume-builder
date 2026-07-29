@@ -178,6 +178,14 @@ import {
   ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION,
 } from './cv-italian-summary-grounding';
 import {
+  analyzePortugueseBrazilSummaryEmploymentQuality,
+  buildPortugueseBrazilEntryOwnedSummary,
+  isPortugueseBrazilStructuredSummaryDomain,
+  SUMMARY_BUILDER_REVISION_PT_BR,
+  PTBR_SUMMARY_FIRST_PERSON_361_REVISION,
+  PTBR_SUMMARY_CROSS_LOCALE_361_REVISION,
+} from './cv-portuguese-summary-grounding';
+import {
   analyzeEnglishSummaryEmploymentQuality,
   buildEnglishEntryOwnedSummary,
   isEnglishStructuredSummaryDomain,
@@ -424,6 +432,17 @@ export {
   ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION,
   ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION,
 } from './cv-italian-summary-grounding';
+export {
+  analyzePortugueseBrazilSummaryEmploymentQuality,
+  buildPortugueseBrazilEntryOwnedSummary,
+  isPortugueseBrazilStructuredSummaryDomain,
+  detectPortugueseBrazilSummaryPerspective,
+  SUMMARY_BUILDER_REVISION_PT_BR,
+  PTBR_SUMMARY_FIRST_PERSON_361_REVISION,
+  PTBR_SUMMARY_CROSS_LOCALE_361_REVISION,
+  PTBR_SUMMARY_UNIT_SPLITTER_361_REVISION,
+  splitPortugueseBrazilSummaryUnits,
+} from './cv-portuguese-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,
   buildSpanishEntryOwnedSummary,
@@ -2045,6 +2064,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'sr'
     && locale !== 'fr'
     && locale !== 'it'
+    && locale !== 'pt-BR'
   ) {
     return '';
   }
@@ -2418,6 +2438,37 @@ export function buildConciseGroundedSummary(
         : '',
       priorSourceDuties,
       locale: 'it',
+      duration: duration || undefined,
+    });
+    skillSentence = '';
+    void skillSentence;
+  } else if (locale === 'pt-BR') {
+    void SUMMARY_BUILDER_REVISION_PT_BR;
+    void PTBR_SUMMARY_FIRST_PERSON_361_REVISION;
+    void PTBR_SUMMARY_CROSS_LOCALE_361_REVISION;
+    void PROVIDER_CROSS_LOCALE_NOOP_REASON;
+    void analyzePortugueseBrazilSummaryEmploymentQuality;
+    void isPortugueseBrazilStructuredSummaryDomain;
+    const ptRole = /(?:warehouse|lager|entrep[oô]t|skladist|magacin|radnic|emplead|addett|armaz|employée\s+d['’]entrepôt|funcion)/i
+      .test(`${role} ${experienceTitle}`)
+      || /(?:warehouse|incoming\s+goods|checks\s+incoming)/i.test(sourceDuties)
+      ? localizeWarehouseEmployee('pt-BR', genderNorm || '')
+      : (role || localizeWarehouseEmployee('pt-BR', genderNorm || ''));
+    text = buildPortugueseBrazilEntryOwnedSummary({
+      role: ptRole,
+      employer,
+      datesValue,
+      gender: genderNorm || '',
+      durationPhrase: durationPhrase || undefined,
+      dutyFacts,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      priorEmployer: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+        : '',
+      priorSourceDuties,
+      locale: 'pt-BR',
       duration: duration || undefined,
     });
     skillSentence = '';

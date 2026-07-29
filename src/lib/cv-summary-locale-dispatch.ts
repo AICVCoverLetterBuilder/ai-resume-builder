@@ -21,6 +21,10 @@ import {
   SUMMARY_BUILDER_REVISION_IT,
   detectItalianSummaryPerspective,
 } from './cv-italian-summary-grounding';
+import {
+  SUMMARY_BUILDER_REVISION_PT_BR,
+  detectPortugueseBrazilSummaryPerspective,
+} from './cv-portuguese-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_EN } from './cv-english-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_HR } from './cv-croatian-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_JA } from './cv-japanese-summary-grounding';
@@ -97,9 +101,10 @@ export function resolveSummaryBuilderRevision(
     case 'pt':
     case 'pt-br':
     case 'pt_br':
-      // No dedicated builder yet — never silently reuse English/German/French/Italian.
-      return SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION;
+      return SUMMARY_BUILDER_REVISION_PT_BR;
     default:
+      // Remaining locales (and unknown aliases) stay fail-closed.
+      void SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION;
       return SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION;
   }
 }
@@ -148,7 +153,7 @@ export function detectSummaryPerspectiveForLocale(
     case 'pt':
     case 'pt-br':
     case 'pt_br':
-      return /\b(?:eu|trabalho|possuo|tenho)\b/iu.test(analyzed) ? 'first_person' : 'neutral_cv';
+      return detectPortugueseBrazilSummaryPerspective(analyzed);
     case 'ru':
       return /\b(?:я|работаю|имею)\b/iu.test(analyzed) ? 'first_person' : 'neutral_cv';
     case 'ja':
@@ -207,8 +212,23 @@ export function assertSummaryBuilderMatchesRequestedLocale(
     return null;
   }
   if (locale === 'pt' || locale === 'pt-br' || locale === 'pt_br') {
-    if (/entry-owned-english-rebuild|entry-owned-german-rebuild|entry-owned-french-rebuild|entry-owned-italian-rebuild|live-hindi/i.test(rev)) {
-      return 'unsupported_locale_reused_foreign_builder';
+    if (/entry-owned-english-rebuild/i.test(rev)) {
+      return 'ptbr_request_routed_to_english_builder';
+    }
+    if (/entry-owned-german-rebuild/i.test(rev)) {
+      return 'ptbr_request_routed_to_german_builder';
+    }
+    if (/entry-owned-french-rebuild/i.test(rev)) {
+      return 'ptbr_request_routed_to_french_builder';
+    }
+    if (/entry-owned-italian-rebuild/i.test(rev)) {
+      return 'ptbr_request_routed_to_italian_builder';
+    }
+    if (/entry-owned-spanish-rebuild/i.test(rev)) {
+      return 'ptbr_request_routed_to_spanish_builder';
+    }
+    if (rev && rev !== SUMMARY_BUILDER_REVISION_PT_BR && !/ptbr|portuguese|pt-br/i.test(rev)) {
+      return 'ptbr_request_builder_revision_mismatch';
     }
   }
   return null;

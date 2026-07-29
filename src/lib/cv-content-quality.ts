@@ -8,6 +8,7 @@ import { formatExperienceBullets, splitExperienceBullets, buildCvCanonicalFactSe
 import {
   buildExperienceDurationSnapshot,
   formatApproximateDurationPhrase,
+  formatPortugueseBrazilDurationCore,
   repairSummaryDuration,
   summaryHasDurationClaim,
   summaryIncludesDurationPhrase,
@@ -16,6 +17,10 @@ import {
   type ExperienceDurationSnapshot,
   validateSummaryDuration,
 } from './cv-experience-duration';
+import {
+  hasIncorrectPortugueseBrazilDurationGrammar,
+  PTBR_SUMMARY_DURATION_GRAMMAR_REVISION,
+} from './cv-portuguese-summary-grounding';
 import { normalizeCoverLetterGender } from './cover-letter-gender';
 import {
   hasMisplacedHindiDuration,
@@ -1196,6 +1201,36 @@ export function injectDurationPhrase(
     void SUMMARY_DURATION_FINALIZER_REVISION_EN;
     const phrase = formatApproximateDurationPhrase(duration, 'en');
     return injectEnglishTotalDurationSentence(text, phrase);
+  }
+  if (locale === 'pt-BR' && duration.hasValidDates) {
+    void PTBR_SUMMARY_DURATION_GRAMMAR_REVISION;
+    // Idempotent: keep entry-owned total-career opener when a single grammatical claim is present.
+    if (
+      /\btenho,?\s+(?:ao\s+todo|no\s+total)\b/iu.test(text)
+      && countSummaryDurationExpressions(text, 'pt-BR') === 1
+      && /\bexperiência\s+profissional\b/iu.test(text)
+      && !hasIncorrectPortugueseBrazilDurationGrammar(text)
+    ) {
+      // Normalize legacy "no total" → preferred "ao todo" without duplicating the claim.
+      if (/\btenho,?\s+no\s+total\b/iu.test(text) && !/\btenho,?\s+ao\s+todo\b/iu.test(text)) {
+        return text.replace(/\btenho,?\s+no\s+total\b/iu, 'Tenho, ao todo');
+      }
+      return text;
+    }
+    const core = formatPortugueseBrazilDurationCore(duration);
+    if (!core) return text;
+    const units = text
+      .split(/(?<=[.!?])\s+(?=\S)/u)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const rest = units
+      .filter((u) => (
+        !/\btenho,?\s+(?:ao\s+todo|no\s+total)\b/iu.test(u)
+        && !/\bexperiência\s+profissional\b/iu.test(u)
+      ))
+      .join(' ');
+    const opening = `Tenho, ao todo, cerca de ${core} de experiência profissional.`;
+    return [opening, rest].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
   }
   if (locale === 'sr' && duration.hasValidDates) {
     void SUMMARY_DURATION_FINALIZER_REVISION_SR;

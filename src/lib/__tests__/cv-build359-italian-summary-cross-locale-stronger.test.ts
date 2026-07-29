@@ -26,7 +26,6 @@ import {
   resolveSummaryBuilderRevision,
   resolveSummaryTargetScript,
   assertSummaryBuilderMatchesRequestedLocale,
-  SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
 } from '@/lib/cv-summary-locale-dispatch';
 import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
 import { detectTextLocale } from '@/lib/cv-content-locale';
@@ -141,10 +140,8 @@ describe('AAB-359 French→Italian Summary Stronger', () => {
     )).toBe('italian_request_routed_to_french_builder');
   });
 
-  it('remaining-locale fail-closed matrix for pt-BR/ru/ja', () => {
-    expect(resolveSummaryBuilderRevision('pt-BR')).toBe(
-      SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
-    );
+  it('remaining-locale fail-closed matrix for ru/ja (pt-BR has dedicated builder)', () => {
+    expect(resolveSummaryBuilderRevision('pt-BR')).toBe('entry-owned-ptbr-rebuild-361-v1');
     const frText = [
       'Je dispose d’environ six ans et demi d’expérience professionnelle au total.',
       'Je travaille actuellement chez Atlas en tant qu’employée d’entrepôt.',
@@ -635,9 +632,7 @@ describe('AAB-359 French→Italian Summary Stronger', () => {
     const sourceFr = buildConciseGroundedSummary(factSet, 'fr', 'female', durationSnapshot.total);
     const cv = atlasRewituCv(sourceFr, 'fr');
     seedUsage(29);
-    expect(resolveSummaryBuilderRevision('pt-BR')).toBe(
-      SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
-    );
+    expect(resolveSummaryBuilderRevision('pt-BR')).toBe('entry-owned-ptbr-rebuild-361-v1');
     expect(getProAiUsageCount()).toBe(29);
     expect(cv.summary).toBe(sourceFr);
   });
