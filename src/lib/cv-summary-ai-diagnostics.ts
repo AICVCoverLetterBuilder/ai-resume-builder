@@ -3,6 +3,14 @@
  * Mirrors Experience AI diagnostics pattern — observation only.
  */
 import { fingerprintText, resolveAppVersionInfo, resolveNextBuildId } from './cv-export-diagnostics';
+import { detectTextLocale } from './cv-content-locale';
+
+export const SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION =
+  'summary-content-locale-rollback-361-v1' as const;
+export const SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION =
+  'summary-visible-source-locale-detection-361-v1' as const;
+void SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION;
+void SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION;
 import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
 import { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION } from './cv-summary-final-candidate-diagnostics-306';
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
@@ -240,6 +248,7 @@ export type SummaryAiDiagnosticTrace = {
   contentLocaleAfterApply: string | null;
   storedContentLocaleBeforeRequest: string | null;
   detectedVisibleContentLocaleBeforeRequest: string | null;
+  candidateTargetLocale: string | null;
   finalContentLocaleAfterApply: string | null;
   finalCandidateSource: string | null;
   summaryFinalCandidateDiagnosticsRevision?: string | null;
@@ -687,6 +696,7 @@ export class SummaryAiDiagnosticSession {
       contentLocaleAfterApply: null,
       storedContentLocaleBeforeRequest: input.contentLocale ?? null,
       detectedVisibleContentLocaleBeforeRequest: null,
+      candidateTargetLocale: null,
       finalContentLocaleAfterApply: null,
       finalCandidateSource: null,
       providerCandidatePresent: false,
@@ -838,11 +848,18 @@ export class SummaryAiDiagnosticSession {
       if (e.isPresent && !currentRoleHash) currentRoleHash = h;
     }
     const summary = (liveSummary || '').trim();
+    void SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION;
+    const detectedVisible = detectTextLocale(summary || '', {
+      storedLocale: cv.contentLocale || null,
+    });
     this.patch({
       summarySourcePresent: Boolean(summary),
       summarySourceLength: summary.length,
       summarySourceHash: fingerprintText(summary || 'empty'),
       sourceDurationClaimCount: countSummaryDurationExpressions(summary),
+      detectedVisibleContentLocaleBeforeRequest: detectedVisible,
+      storedContentLocaleBeforeRequest: cv.contentLocale ?? null,
+      contentLocaleBeforeRequest: cv.contentLocale ?? null,
       currentExperienceEntryCount: exps.length,
       currentExperienceEntryIdHashes: hashes,
       currentRoleEntryIdHash: currentRoleHash,
@@ -1070,9 +1087,12 @@ export class SummaryAiDiagnosticSession {
         ?? null,
       detectedVisibleContentLocaleBeforeRequest:
         diag.detectedVisibleContentLocaleBeforeRequest
+        ?? this.draft.detectedVisibleContentLocaleBeforeRequest
+        ?? null,
+      candidateTargetLocale: (diag as { candidateTargetLocale?: string | null }).candidateTargetLocale
         ?? this.draft.requestedLocale
         ?? null,
-      finalContentLocaleAfterApply: diag.finalContentLocaleAfterApply ?? null,
+      finalContentLocaleAfterApply: null,
       finalCandidateSource: (() => {
         void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
         if (finalized.countedAsSuccess && !finalized.blocked) {
@@ -1413,7 +1433,10 @@ export class SummaryAiDiagnosticSession {
         ?? this.draft.contentLocaleBeforeRequest
         ?? this.draft.storedContentLocale
         ?? null,
-      contentLocaleAfterApply: diag.contentLocaleAfterApply ?? null,
+      contentLocaleAfterApply: diag.contentLocaleAfterApply
+        ?? this.draft.contentLocaleBeforeRequest
+        ?? this.draft.storedContentLocaleBeforeRequest
+        ?? null,
       detectedSourceLocale: this.draft.detectedSourceLocale,
       // cv-ai-diagnostics-v2 — propagate finalize Hindi/medium/slot lineage
       operationKind: 'summary',
@@ -2452,12 +2475,20 @@ export class SummaryAiDiagnosticSession {
     }
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
       && visiblePriorDutyOk && visibleGrammarOk && visibleLocaleOk && visibleDurationScopeOk;
+    void SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION;
     this.patch({
       visibleApplySucceeded: applyOk,
       contentLocaleUpdatedAfterApply: applyOk,
       contentLocaleAfterApply: applyOk
-        ? (this.draft.requestedLocale || this.draft.contentLocaleAfterApply || null)
-        : this.draft.contentLocaleAfterApply,
+        ? (this.draft.requestedLocale || null)
+        : (
+          this.draft.contentLocaleBeforeRequest
+          || this.draft.storedContentLocaleBeforeRequest
+          || this.draft.contentLocaleAfterApply
+        ),
+      finalContentLocaleAfterApply: applyOk
+        ? (this.draft.requestedLocale || null)
+        : null,
       usageCountAfter: usageAfter,
       visibleCandidateHashAfterApply: visibleHash,
       visibleSummaryMatchesFinalHash: applyOk

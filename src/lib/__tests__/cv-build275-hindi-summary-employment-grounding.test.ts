@@ -171,7 +171,10 @@ describe('build 275 Hindi Summary employment/warehouse quality', () => {
     expect(fin.diagnostics?.groundingValidationPassed).toBe(true);
     expect(fin.diagnostics?.storedContentLocaleBeforeRequest).toBe('en');
     expect(fin.diagnostics?.detectedVisibleContentLocaleBeforeRequest).toBe('hi');
-    expect(fin.diagnostics?.finalContentLocaleAfterApply).toBe('hi');
+    expect(fin.diagnostics?.candidateTargetLocale).toBe('hi');
+    // Committed after-apply locale is stamped only after visible apply — not at finalize.
+    expect(fin.diagnostics?.finalContentLocaleAfterApply).toBeNull();
+    expect(fin.diagnostics?.contentLocaleAfterApply).toBe('en');
 
     const applied = applyFinalizedSummaryToCv(cv, 'hi', fin);
     expect(applied.contentLocale).toBe('hi');

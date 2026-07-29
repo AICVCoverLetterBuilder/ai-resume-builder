@@ -10,6 +10,7 @@ import type { Locale } from './i18n/translations';
 import { splitExperienceBullets } from './cv-canonical-facts';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 import { splitJapaneseSummaryUnits } from './cv-japanese-summary-grounding';
+import { splitItalianSummaryUnits } from './cv-italian-summary-grounding';
 import { CROATIAN_SERBIAN_LOCALE_DISCRIMINATION_REVISION } from './cv-material-duty-coverage';
 import { analyzeSerbianCroatianLocaleEvidence } from './cv-serbian-summary-grounding';
 
@@ -686,6 +687,13 @@ export function splitAiSemanticUnits(
   // Japanese Summary does not use spaces — split on 。！？.
   if (/[。！？]/.test(raw) && /[\u3040-\u30FF\u3400-\u9FFF]/.test(raw)) {
     return splitJapaneseSummaryUnits(raw);
+  }
+  if (
+    kind === 'summary_sentence'
+    && /\b(?:dispongo|attualmente|in\s+precedenza)\b/iu.test(raw)
+    && !/[\u0900-\u097F\u0600-\u06FF\u0400-\u04FF]/.test(raw)
+  ) {
+    return splitItalianSummaryUnits(raw);
   }
   if (/[।]/.test(raw) && /\p{Script=Devanagari}/u.test(raw)) {
     return raw

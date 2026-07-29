@@ -15,6 +15,7 @@ import { resolveLocalizedSummaryRole } from './cv-summary-structured-role-locali
 import { extractGermanCurrentWarehouseDutyFacts } from './cv-german-summary-current-duty-coverage';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 import { PROVIDER_CROSS_LOCALE_NOOP_REASON } from './cv-french-summary-grounding';
+import { fingerprintText } from './cv-export-diagnostics';
 
 export const SUMMARY_BUILDER_REVISION_IT =
   'entry-owned-italian-rebuild-359-v1' as const;
@@ -27,6 +28,47 @@ void SUMMARY_BUILDER_REVISION_IT;
 void ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION;
 void ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION;
 void PROVIDER_CROSS_LOCALE_NOOP_REASON;
+
+export const ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION =
+  'italian-summary-unit-splitter-360-v1' as const;
+export const SUMMARY_PROVIDER_REJECTION_TOTALITY_361_REVISION =
+  'summary-provider-rejection-totality-361-v1' as const;
+void ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION;
+void SUMMARY_PROVIDER_REJECTION_TOTALITY_361_REVISION;
+
+/** Split Italian Summary into semantic sentence units (duration / current / prior). */
+export function splitItalianSummaryUnits(text: string): string[] {
+  void ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION;
+  const raw = (text || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return [];
+  const bySentence = raw
+    .split(/(?<=[.!?])\s+(?=\S)/u)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (bySentence.length >= 3) return bySentence;
+  if (bySentence.length === 2) return bySentence;
+  const forced = raw
+    .split(/\s+(?=\b(?:Attualmente|In\s+precedenza)\b)/iu)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return forced.length >= 2 ? forced : (raw ? [raw] : []);
+}
+
+function assignItalianUnitRoleSlot(unit: string): string {
+  const s = (unit || '').trim();
+  if (!s) return 'other';
+  if (/\b(?:dispongo|complessivamente|esperienza\s+professionale|anni\s+e\s+mezzo)\b/iu.test(s)
+    && !/\b(?:attualmente|in\s+precedenza)\b/iu.test(s)) {
+    return 'duration';
+  }
+  if (/\b(?:in\s+precedenza|ho\s+lavorato)\b/iu.test(s)) {
+    return 'prior_role';
+  }
+  if (/\b(?:attualmente|lavoro\s+presso|lavoro\s+come)\b/iu.test(s)) {
+    return 'current_intro';
+  }
+  return 'other';
+}
 
 export function detectItalianSummaryPerspective(
   text: string,
@@ -143,7 +185,12 @@ export function analyzeItalianSummaryEmploymentQuality(
 ): ItalianSummaryEmploymentQuality {
   void ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION;
   void ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION;
+  void ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
+  const units = splitItalianSummaryUnits(text);
+  const unitCount = units.length;
+  const finalSentenceHashes = units.map((u) => fingerprintText(u));
+  const perUnitRoleSlots = units.map((u) => assignItalianUnitRoleSlot(u));
   const purity = validateAiUnitLocalePurity(text, 'it', {
     kind: 'summary_sentence',
     requireUnits: true,
@@ -187,11 +234,16 @@ export function analyzeItalianSummaryEmploymentQuality(
   const totalDurationSlotPresent = /\b(?:dispongo|esperienza\s+professionale|sei\s+anni\s+e\s+mezzo|complessivamente)\b/iu
     .test(text);
 
-  const finalUnitRoleSlots = [
+  const corpusRoleSlots = [
     ...(totalDurationSlotPresent ? ['duration'] : []),
     ...(currentIntroSlotPresent ? ['current_intro'] : []),
     ...(priorRoleSlotPresent && (priorCompany || designDomain) ? ['prior_role'] : []),
   ];
+  const expectedThreeSlotTopology = (requireWarehouseTriad || designDomain)
+    && Boolean(company || options.role)
+    && (priorCompany || designDomain);
+  const finalUnitRoleSlots = unitCount >= 2 ? perUnitRoleSlots : corpusRoleSlots;
+  const finalSentenceRoleSlots = [...finalUnitRoleSlots];
 
   const slotRejectionReasons: string[] = [];
   if (!purity.targetLocalePurityPassed) {
@@ -214,6 +266,21 @@ export function analyzeItalianSummaryEmploymentQuality(
   }
   if ((requireWarehouseTriad || designDomain) && !totalDurationSlotPresent) {
     slotRejectionReasons.push('missing_duration_slot');
+  }
+  if (expectedThreeSlotTopology && unitCount > 0 && unitCount < 3) {
+    slotRejectionReasons.push('italian_summary_unit_count_mismatch');
+  }
+  if (
+    expectedThreeSlotTopology
+    && unitCount >= 3
+    && !finalSentenceRoleSlots.every((s, i) => (
+      i === 0 ? s === 'duration'
+        : i === 1 ? s === 'current_intro'
+          : i === 2 ? s === 'prior_role'
+            : s === 'prior_role' || s === 'other'
+    ))
+  ) {
+    slotRejectionReasons.push('italian_summary_unit_slot_mismatch');
   }
 
   const frenchLeak = /\b(?:je|dispose|travaille\s+actuellement|auparavant|employée|graphiste|marchandises\s+entrantes)\b/iu
@@ -285,7 +352,9 @@ export function analyzeItalianSummaryEmploymentQuality(
     priorRoleSlotPresent,
     totalDurationSlotPresent,
     finalUnitRoleSlots,
-    finalSentenceRoleSlots: [...finalUnitRoleSlots],
+    finalSentenceRoleSlots,
+    finalSentenceHashes,
+    unitCount,
     targetLocalePurityPassed: purity.targetLocalePurityPassed && !frenchLeak && !germanLeak,
     wrongLocaleUnitCount: Math.max(
       purity.wrongLocaleUnitCount,
@@ -475,6 +544,9 @@ export function buildItalianEntryOwnedSummary(options: {
   }
 
   return [durationSentence, currentSentence, priorSentence]
+    .filter(Boolean)
+    .map((s) => s.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/u, '').trim())
+    .map((s) => (s ? `${s}.` : ''))
     .filter(Boolean)
     .join(' ')
     .replace(/\s+/g, ' ')

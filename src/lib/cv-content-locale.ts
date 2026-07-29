@@ -135,6 +135,7 @@ export function analyzeContentLocale(
   text: string,
   hints?: { storedLocale?: string | null; generatedLocale?: string | null },
 ): ContentLocaleSignals {
+  void 'summary-visible-source-locale-detection-361-v1';
   const raw = (text || '').trim();
   if (!raw) {
     return {
@@ -178,7 +179,43 @@ export function analyzeContentLocale(
       confidence: 'high',
     };
   }
-  if (script === 'cyrillic') {
+  // Latin brand names (Atlas/Rewitu) must not erase dominant non-Latin Summary script.
+  if (script === 'mixed') {
+    if (/\p{Script=Devanagari}/u.test(raw)) {
+      return {
+        detectedLocale: 'hi',
+        script: 'devanagari',
+        hasSerbianDiacritics,
+        hasSerbianLexicon,
+        confidence: 'high',
+      };
+    }
+    if (/\p{Script=Arabic}/u.test(raw)) {
+      return {
+        detectedLocale: 'ar',
+        script: 'arabic',
+        hasSerbianDiacritics,
+        hasSerbianLexicon,
+        confidence: 'high',
+      };
+    }
+    if (/[\u3040-\u30ff\u3400-\u9fff]/.test(raw)) {
+      return {
+        detectedLocale: 'ja',
+        script: 'cjk',
+        hasSerbianDiacritics,
+        hasSerbianLexicon,
+        confidence: 'high',
+      };
+    }
+    if (/\p{Script=Cyrillic}/u.test(raw)) {
+      // Fall through to Cyrillic discrimination below by reclassifying.
+      // Keep mixed handling local so Cyrillic+Latin brands still classify.
+    } else {
+      // Mixed Latin-only family ambiguity is handled by lexicon branches below.
+    }
+  }
+  if (script === 'cyrillic' || (script === 'mixed' && /\p{Script=Cyrillic}/u.test(raw))) {
     // Serbian-specific Cyrillic letters are decisive. Shared CV stems alone must
     // not classify complete Russian warehouse/design bullets as Serbian.
     const hasSrCyrLetters = /[јљњћђџЈЉЊЋЂЏ]/u.test(raw);

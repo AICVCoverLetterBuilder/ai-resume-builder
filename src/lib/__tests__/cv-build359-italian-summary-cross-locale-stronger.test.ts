@@ -17,7 +17,9 @@ import {
   analyzeItalianSummaryEmploymentQuality,
   buildItalianEntryOwnedSummary,
   detectItalianSummaryPerspective,
+  splitItalianSummaryUnits,
   SUMMARY_BUILDER_REVISION_IT,
+  ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION,
 } from '@/lib/cv-italian-summary-grounding';
 import { PROVIDER_CROSS_LOCALE_NOOP_REASON } from '@/lib/cv-french-summary-grounding';
 import {
@@ -27,6 +29,7 @@ import {
   SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
 } from '@/lib/cv-summary-locale-dispatch';
 import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
+import { detectTextLocale } from '@/lib/cv-content-locale';
 import { buildCvCanonicalFactSet } from '@/lib/cv-canonical-facts';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
 import {
@@ -191,6 +194,96 @@ describe('AAB-359 French→Italian Summary Stronger', () => {
     assertFirstPersonItalian(text);
   });
 
+  it('exact AAB 360 path: changed invalid provider → typed rejection → Italian apply + usage 29→30', () => {
+    void ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION;
+    const factSet = buildCvCanonicalFactSet(atlasRewituCv(''), { referenceDate: REF });
+    const durationSnapshot = buildExperienceDurationSnapshot(
+      atlasRewituCv('').experience || [],
+      REF,
+    );
+    const sourceFr = buildConciseGroundedSummary(factSet, 'fr', 'female', durationSnapshot.total);
+    expect(sourceFr.length).toBe(585);
+    expect(fingerprintText(sourceFr)).toBe('fnv1a_925ad56f_l585_b74_e46');
+    const changedProvider = [
+      'Dispongo di esperienza professionale rilevante nel settore logistico.',
+      'Attualmente lavoro presso Atlas come addetta al magazzino con responsabilità operative.',
+    ].join(' ');
+    expect(fingerprintText(changedProvider)).not.toBe(fingerprintText(sourceFr));
+    const cv = atlasRewituCv(sourceFr, 'fr');
+    expect(detectTextLocale(sourceFr, { storedLocale: 'fr' })).toBe('fr');
+    expect(getProAiUsageCount()).toBe(29);
+
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: changedProvider,
+      cv,
+      requestedLocale: 'it',
+      gender: 'female',
+      referenceDateIso: REF,
+      durationSnapshot,
+      rewriteStyle: 'stronger',
+      originHint: 'ai_repaired',
+    });
+
+    expect(fin.blocked).toBe(false);
+    expect(fin.countedAsSuccess).toBe(true);
+    assertFirstPersonItalian(fin.text);
+    expect(fin.diagnostics?.providerAccepted).toBe(false);
+    expect(fin.diagnostics?.providerOutcome).toBe('rejected_grounding');
+    expect(fin.diagnostics?.providerTypedRejectionReason).toBeTruthy();
+    expect(fin.diagnostics?.providerTypedRejectionReason).not.toBe(PROVIDER_CROSS_LOCALE_NOOP_REASON);
+    expect(fin.diagnostics?.providerRejectionReason).toBe(fin.diagnostics?.providerTypedRejectionReason);
+    expect((fin.diagnostics?.providerSlotRejectionReasons || []).length).toBeGreaterThan(0);
+    expect(fin.diagnostics?.clientFallbackReason).toBeTruthy();
+    expect(fin.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
+    expect(fin.diagnostics?.finalUnitRoleSlots).toEqual([
+      'duration',
+      'current_intro',
+      'prior_role',
+    ]);
+    expect(fin.diagnostics?.finalSentenceRoleSlots).toEqual([
+      'duration',
+      'current_intro',
+      'prior_role',
+    ]);
+    expect(fin.diagnostics?.detectedLocaleByUnit).toEqual(['it', 'it', 'it']);
+    expect(fin.diagnostics?.contentLocaleAfterApply).toBe('fr');
+    expect(fin.diagnostics?.finalContentLocaleAfterApply).toBeNull();
+    expect(fin.diagnostics?.detectedVisibleContentLocaleBeforeRequest).toBe('fr');
+
+    const session = new SummaryAiDiagnosticSession({
+      uiLocale: 'it',
+      requestedLocale: 'it',
+      contentLocale: 'fr',
+      gender: 'female',
+      usageCountBefore: 29,
+      operationMode: 'enhance_existing_content',
+      rewriteStyle: 'stronger',
+    });
+    session.recordCvSnapshot(cv, sourceFr);
+    session.recordFinalizeResult(fin);
+    expect(session.draft.detectedVisibleContentLocaleBeforeRequest).toBe('fr');
+    expect(session.draft.contentLocaleAfterApply).toBe('fr');
+    const pre = session.evaluatePreApplyDecisionGates();
+    expect(pre.passed, JSON.stringify(session.draft.diagnosticInvariantFailures, null, 2)).toBe(true);
+    const next = applyFinalizedSummaryToCv(cv, 'it', fin);
+    expect(next.summary).toBe(fin.text);
+    expect(next.contentLocale).toBe('it');
+    session.recordVisibleApply(true, 30, fin.text);
+    recordProAiUserActionSuccess();
+    expect(getProAiUsageCount()).toBe(30);
+    const trace = session.commit();
+    expect(trace.visibleApplySucceeded).toBe(true);
+    expect(trace.contentLocaleAfterApply).toBe('it');
+    expect(trace.finalContentLocaleAfterApply).toBe('it');
+    expect(trace.contentLocaleUpdatedAfterApply).toBe(true);
+    const inv = checkSummaryDiagnosticInvariants(
+      trace as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
+    );
+    expect(inv.passed, JSON.stringify(inv.failures, null, 2)).toBe(true);
+  });
+
   it('exact Stronger path: French provider echo → Italian deterministic apply + usage 29→30', () => {
     const factSet = buildCvCanonicalFactSet(atlasRewituCv(''), { referenceDate: REF });
     const durationSnapshot = buildExperienceDurationSnapshot(
@@ -238,6 +331,12 @@ describe('AAB-359 French→Italian Summary Stronger', () => {
       'current_intro',
       'prior_role',
     ]);
+    expect(fin.diagnostics?.finalSentenceRoleSlots).toEqual([
+      'duration',
+      'current_intro',
+      'prior_role',
+    ]);
+    expect(fin.diagnostics?.deterministicCandidateSentenceCount).toBe(3);
     expect(fin.diagnostics?.totalDurationSlotPresent).toBe(true);
     expect(fin.diagnostics?.finalTotalDurationSlotPresent).toBe(true);
     expect(fin.diagnostics?.finalDurationOwnerDetected).toBe('total_professional_experience');
@@ -246,7 +345,8 @@ describe('AAB-359 French→Italian Summary Stronger', () => {
     expect(fin.diagnostics?.wrongLocaleUnitCount).toBe(0);
     expect(fin.diagnostics?.unexpectedLocaleCodes || []).toEqual([]);
     expect(fin.diagnostics?.targetLocalePurityPassed).toBe(true);
-    expect(fin.diagnostics?.localeValidationPassed).toBe(true);
+    expect(fin.diagnostics?.detectedVisibleContentLocaleBeforeRequest).toBe('fr');
+    expect(fin.diagnostics?.contentLocaleAfterApply).toBe('fr');
     expect(fin.diagnostics?.providerAccepted).toBe(false);
     expect(fin.diagnostics?.providerTypedRejectionReason
       || fin.diagnostics?.providerRejectionReason).toBe(PROVIDER_CROSS_LOCALE_NOOP_REASON);
@@ -286,8 +386,10 @@ describe('AAB-359 French→Italian Summary Stronger', () => {
     session.recordCvSnapshot(cv, sourceFr);
     session.recordFinalizeResult(fin);
     expect(session.draft.targetScript).toBe('latin');
+    expect(fin.diagnostics?.totalDurationSlotPresent).toBe(true);
+    expect(session.draft.detectedVisibleContentLocaleBeforeRequest).toBe('fr');
     expect(session.draft.summaryBuilderRevision).toBe(SUMMARY_BUILDER_REVISION_IT);
-    expect(session.draft.totalDurationSlotPresent).toBe(true);
+    expect(session.draft.contentLocaleAfterApply).toBe('fr');
     const pre = session.evaluatePreApplyDecisionGates();
     expect(
       pre.passed,
@@ -421,6 +523,93 @@ describe('AAB-359 French→Italian Summary Stronger', () => {
     expect(text.length).toBeLessThan(1200);
     expect(text).toMatch(/Atlas/i);
     expect(detectItalianSummaryPerspective(text)).toBe('first_person');
+  });
+
+  it('Italian three-unit splitter assigns semantic role slots', () => {
+    void ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION;
+    const text = buildItalianEntryOwnedSummary({
+      role: "Employée d'entrepôt",
+      employer: 'Atlas',
+      gender: 'female',
+      durationPhrase: 'sei anni e mezzo',
+      dutyFacts: WH_EN.split('\n').map((v) => ({ value: v, sourceText: v })),
+      priorRole: 'Graphic Designer',
+      priorEmployer: 'Rewitu',
+      priorSourceDuties: GD_EN,
+      locale: 'it',
+    });
+    expect(splitItalianSummaryUnits(text)).toHaveLength(3);
+    const q = analyzeItalianSummaryEmploymentQuality(text, {
+      company: 'Atlas',
+      role: 'addetta al magazzino',
+      priorCompany: 'Rewitu',
+      priorRole: 'designer grafica',
+      currentEntryDuties: WH_EN,
+      priorEntryDuties: GD_EN,
+      gender: 'female',
+    });
+    expect(q.unitCount).toBe(3);
+    expect(q.finalSentenceRoleSlots).toEqual(['duration', 'current_intro', 'prior_role']);
+    expect(q.finalUnitRoleSlots).toEqual(['duration', 'current_intro', 'prior_role']);
+  });
+
+  it('rejects two-unit topology when three semantic slots are required', () => {
+    const twoUnit = [
+      'Dispongo di esperienza professionale rilevante nel settore logistico.',
+      'Attualmente lavoro presso Atlas come addetta al magazzino.',
+    ].join(' ');
+    const q = analyzeItalianSummaryEmploymentQuality(twoUnit, {
+      company: 'Atlas',
+      role: 'addetta al magazzino',
+      priorCompany: 'Rewitu',
+      priorRole: 'designer grafica',
+      currentEntryDuties: WH_EN,
+      priorEntryDuties: GD_EN,
+      gender: 'female',
+    });
+    expect(q.groundingValidationPassed).toBe(false);
+    expect(q.slotRejectionReasons).toContain('italian_summary_unit_count_mismatch');
+  });
+
+  it('failed preapply preserves French content locale and usage', () => {
+    const factSet = buildCvCanonicalFactSet(atlasRewituCv(''), { referenceDate: REF });
+    const durationSnapshot = buildExperienceDurationSnapshot(
+      atlasRewituCv('').experience || [],
+      REF,
+    );
+    const sourceFr = buildConciseGroundedSummary(factSet, 'fr', 'female', durationSnapshot.total);
+    const cv = atlasRewituCv(sourceFr, 'fr');
+    seedUsage(29);
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_stronger',
+      field: 'summary',
+      candidate: sourceFr,
+      cv,
+      requestedLocale: 'it',
+      gender: 'female',
+      referenceDateIso: REF,
+      durationSnapshot,
+      rewriteStyle: 'stronger',
+      originHint: 'ai_repaired',
+    });
+    const session = new SummaryAiDiagnosticSession({
+      uiLocale: 'it',
+      requestedLocale: 'it',
+      contentLocale: 'fr',
+      gender: 'female',
+      usageCountBefore: 29,
+      operationMode: 'enhance_existing_content',
+      rewriteStyle: 'stronger',
+    });
+    session.recordCvSnapshot(cv, sourceFr);
+    session.recordFinalizeResult(fin);
+    session.recordVisibleApply(false, 29, sourceFr);
+    const trace = session.commit();
+    expect(trace.contentLocaleAfterApply).toBe('fr');
+    expect(trace.finalContentLocaleAfterApply).toBeNull();
+    expect(trace.contentLocaleUpdatedAfterApply).toBe(false);
+    expect(trace.usageCountAfter).toBe(29);
+    expect(trace.visibleApplySucceeded).toBe(false);
   });
 
   it('duration slot packaging invariant: duration unit implies totalDurationSlotPresent', () => {

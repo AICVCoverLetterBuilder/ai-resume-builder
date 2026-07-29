@@ -540,6 +540,10 @@ type SummaryLike = {
   finalCurrentRoleIntroValidationPassed?: boolean | null;
   finalPriorRoleIntroValidationPassed?: boolean | null;
   finalSlotValidationPassed?: boolean | null;
+  finalSentenceRoleSlots?: string[] | null;
+  contentLocaleBeforeRequest?: string | null;
+  contentLocaleAfterApply?: string | null;
+  contentLocaleUpdatedAfterApply?: boolean | null;
   repairAccepted?: boolean | null;
   repairCandidatePresent?: boolean | null;
   repairRawCandidatePresent?: boolean | null;
@@ -1141,6 +1145,60 @@ export function checkSummaryDiagnosticInvariants(
       providerAccepted: false,
       providerRejectionReason: null,
       providerTypedRejectionReason: null,
+    });
+  }
+  if (
+    trace.providerCandidatePresent === true
+    && trace.providerAccepted === false
+    && String(trace.providerOutcome || '').startsWith('rejected')
+    && !(trace.providerRejectionReason || trace.providerTypedRejectionReason)
+    && !(Array.isArray(trace.providerSlotRejectionReasons) && trace.providerSlotRejectionReasons.length > 0)
+  ) {
+    push('provider_validator_rejected_without_forwarded_reason', {
+      providerOutcome: String(trace.providerOutcome || ''),
+      providerRejectionReason: null,
+    });
+  }
+  if (
+    !trace.visibleApplySucceeded
+    && trace.contentLocaleUpdatedAfterApply === false
+    && trace.contentLocaleBeforeRequest
+    && trace.contentLocaleAfterApply
+    && String(trace.contentLocaleAfterApply).toLowerCase()
+      !== String(trace.contentLocaleBeforeRequest).toLowerCase()
+  ) {
+    push('rejected_apply_committed_content_locale_drift', {
+      contentLocaleBeforeRequest: String(trace.contentLocaleBeforeRequest),
+      contentLocaleAfterApply: String(trace.contentLocaleAfterApply),
+    });
+  }
+  if (
+    trace.finalSlotValidationPassed === true
+    && Array.isArray(trace.finalUnitRoleSlots)
+    && Array.isArray(trace.finalSentenceRoleSlots)
+    && trace.finalUnitRoleSlots.length > 0
+    && trace.finalSentenceRoleSlots.length > 0
+    && trace.finalUnitRoleSlots.join(',') !== trace.finalSentenceRoleSlots.join(',')
+  ) {
+    push('summary_unit_sentence_slot_disagreement', {
+      finalUnitRoleSlots: (trace.finalUnitRoleSlots as string[]).join(','),
+      finalSentenceRoleSlots: (trace.finalSentenceRoleSlots as string[]).join(','),
+    });
+  }
+  if (
+    trace.countedAsSuccess
+    && trace.finalSlotValidationPassed === true
+    && Array.isArray(trace.finalSentenceRoleSlots)
+    && (trace.finalSentenceRoleSlots as string[]).length > 0
+    && (trace.finalSentenceRoleSlots as string[]).every((s) => s === 'summary_unit')
+    && Array.isArray(trace.finalUnitRoleSlots)
+    && (trace.finalUnitRoleSlots as string[]).some((s) => (
+      s === 'duration' || s === 'current_intro' || s === 'prior_role' || s === 'total_duration'
+    ))
+  ) {
+    push('generic_summary_unit_with_validated_semantic_slots', {
+      finalUnitRoleSlots: (trace.finalUnitRoleSlots as string[]).join(','),
+      finalSentenceRoleSlots: (trace.finalSentenceRoleSlots as string[]).join(','),
     });
   }
   if (

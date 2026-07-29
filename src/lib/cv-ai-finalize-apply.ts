@@ -156,9 +156,12 @@ import {
 import {
   analyzeItalianSummaryEmploymentQuality,
   isItalianStructuredSummaryDomain,
+  splitItalianSummaryUnits,
   SUMMARY_BUILDER_REVISION_IT,
   ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION,
   ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION,
+  ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION,
+  SUMMARY_PROVIDER_REJECTION_TOTALITY_361_REVISION,
 } from './cv-italian-summary-grounding';
 import {
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
@@ -1292,6 +1295,7 @@ export type FinalizeCvAiFieldResult = {
     serbianDurationGrammarRejectionReason?: string | null;
     contentLocaleBeforeRequest?: string | null;
     contentLocaleAfterApply?: string | null;
+    candidateTargetLocale?: string | null;
     operationMode?: ExperienceAiOperationMode | 'enhance_existing_content' | 'generate_from_context';
     sourceWasEmpty?: boolean;
     generationFallbackAttempted?: boolean;
@@ -1713,6 +1717,8 @@ function hashSummaryUnits(text: string, locale: Locale): string[] {
           ? splitJapaneseSummaryUnits(t)
           : locale === 'hr'
             ? splitCroatianSummaryUnits(t)
+            : locale === 'it'
+              ? splitItalianSummaryUnits(t)
             : t.split(/[.!?।]/u).map((s) => s.trim()).filter(Boolean);
   return units.map((u) => fingerprintText(normalizeSummaryCandidateText(u) || 'empty'));
 }
@@ -1725,6 +1731,7 @@ function countSummaryCandidateSentences(text: string, locale: Locale): number {
   if (locale === 'ru') return splitRussianSummaryUnits(t).length;
   if (locale === 'ja') return splitJapaneseSummaryUnits(t).length;
   if (locale === 'hr') return splitCroatianSummaryUnits(t).length;
+  if (locale === 'it') return splitItalianSummaryUnits(t).length;
   return t.split(/[.!?।]/u).filter((s) => s.trim()).length;
 }
 
@@ -2604,6 +2611,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let spanishProviderRejectionReason: string | null = null;
   let frenchProviderRejectionReason: string | null = null;
   let italianProviderRejectionReason: string | null = null;
+  let italianProviderSlotRejectionReasons: string[] = [];
+  let italianProviderQuality: ReturnType<typeof analyzeItalianSummaryEmploymentQuality> | null = null;
+  let frenchProviderQuality: ReturnType<typeof analyzeFrenchSummaryEmploymentQuality> | null = null;
+  let frenchProviderSlotRejectionReasons: string[] = [];
   let spanishProviderUnsupportedClaimCount: number | null = null;
   let serbianProviderRejectionReason: string | null = null;
   let serbianClientRepairAttempted = false;
@@ -2812,6 +2823,95 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     emptySummarySeededFromCanonical = Boolean(candidate.trim());
   }
+
+  // Provider raw analysis before duration mutation — preserve typed rejection on providerRaw.
+  if (providerRaw.trim() && (locale === 'it' || locale === 'fr')) {
+    void ITALIAN_SUMMARY_UNIT_SPLITTER_360_REVISION;
+    void SUMMARY_PROVIDER_REJECTION_TOTALITY_361_REVISION;
+    const entryDutiesRaw = currentAndPriorDutiesFromCv(cv, locale);
+    const primaryRaw = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+    const priorRaw = (cv.experience || []).find((e) => primaryRaw && e.id !== primaryRaw.id) || null;
+    const currentRoleAuthorityRaw = buildSummaryTargetRoleAuthority({
+      entryId: entryDutiesRaw.currentEntryId,
+      rawRoleTitle: primaryRaw?.position || cv.personal?.jobTitle || '',
+      requestedTargetLocale: locale,
+      gender,
+      employmentState: primaryRaw?.isPresent ? 'present' : 'completed',
+      employer: entryDutiesRaw.currentCompany || context.company || '',
+      profileJobTitle: cv.personal?.jobTitle,
+      dutiesText: entryDutiesRaw.currentEntryDuties,
+    });
+    const priorRoleAuthorityRaw = buildSummaryTargetRoleAuthority({
+      entryId: priorRaw?.id || null,
+      rawRoleTitle: entryDutiesRaw.priorRoleTitle || '',
+      requestedTargetLocale: locale,
+      gender,
+      employmentState: 'completed',
+      employer: entryDutiesRaw.priorCompany || '',
+      dutiesText: entryDutiesRaw.priorEntryDuties,
+    });
+    if (locale === 'it') {
+      italianProviderQuality = analyzeItalianSummaryEmploymentQuality(providerRaw, {
+        company: context.company || entryDutiesRaw.currentCompany,
+        role: currentRoleAuthorityRaw.localizedTargetRoleTitle || context.role,
+        rawCurrentRole: currentRoleAuthorityRaw.rawRoleTitle,
+        currentEntryDuties: entryDutiesRaw.currentEntryDuties,
+        priorEntryDuties: entryDutiesRaw.priorEntryDuties,
+        priorCompany: entryDutiesRaw.priorCompany,
+        priorRole: priorRoleAuthorityRaw.localizedTargetRoleTitle || entryDutiesRaw.priorRoleTitle,
+        rawPriorRole: priorRoleAuthorityRaw.rawRoleTitle,
+        gender,
+        currentEntryId: entryDutiesRaw.currentEntryId,
+      });
+      const providerMc = evaluateSummaryMeaningfulChange(liveSummary, providerRaw);
+      const providerPurity = validateAiUnitLocalePurity(providerRaw, 'it', {
+        kind: 'summary_sentence',
+        requireUnits: true,
+      });
+      const crossLocaleNoOp = Boolean(
+        providerMc.noOpDetected
+        || providerPurity.unexpectedLocaleCodes.includes('fr')
+        || providerPurity.wrongLocaleUnitCount > 0
+        || /\b(?:je|dispose|travaille|auparavant|ich|derzeit|arbeite)\b/iu.test(providerRaw),
+      );
+      if (crossLocaleNoOp) {
+        italianProviderRejectionReason = PROVIDER_CROSS_LOCALE_NOOP_REASON;
+        italianProviderSlotRejectionReasons = [PROVIDER_CROSS_LOCALE_NOOP_REASON];
+        providerOutcomeHint = 'rejected_locale';
+      } else if (!italianProviderQuality.groundingValidationPassed) {
+        italianProviderRejectionReason = italianProviderQuality.typedRejectionReason
+          || italianProviderQuality.slotRejectionReasons[0]
+          || 'italian_summary_grounding_failed';
+        italianProviderSlotRejectionReasons = [...italianProviderQuality.slotRejectionReasons];
+        providerOutcomeHint = 'rejected_grounding';
+      }
+    } else {
+      frenchProviderQuality = analyzeFrenchSummaryEmploymentQuality(providerRaw, {
+        company: context.company || entryDutiesRaw.currentCompany,
+        role: currentRoleAuthorityRaw.localizedTargetRoleTitle || context.role,
+        rawCurrentRole: currentRoleAuthorityRaw.rawRoleTitle,
+        currentEntryDuties: entryDutiesRaw.currentEntryDuties,
+        priorEntryDuties: entryDutiesRaw.priorEntryDuties,
+        priorCompany: entryDutiesRaw.priorCompany,
+        priorRole: priorRoleAuthorityRaw.localizedTargetRoleTitle || entryDutiesRaw.priorRoleTitle,
+        rawPriorRole: priorRoleAuthorityRaw.rawRoleTitle,
+        gender,
+        currentEntryId: entryDutiesRaw.currentEntryId,
+      });
+      if (!frenchProviderQuality.groundingValidationPassed) {
+        frenchProviderRejectionReason = frenchProviderQuality.typedRejectionReason
+          || frenchProviderQuality.slotRejectionReasons[0]
+          || 'french_summary_grounding_failed';
+        frenchProviderSlotRejectionReasons = [...frenchProviderQuality.slotRejectionReasons];
+        providerOutcomeHint = 'rejected_grounding';
+      } else if (evaluateSummaryMeaningfulChange(liveSummary, providerRaw).noOpDetected) {
+        frenchProviderRejectionReason = PROVIDER_CROSS_LOCALE_NOOP_REASON;
+        frenchProviderSlotRejectionReasons = [PROVIDER_CROSS_LOCALE_NOOP_REASON];
+        providerOutcomeHint = 'rejected_locale';
+      }
+    }
+  }
+
   const durationResolved = resolveSummaryWithDurationPolicy(
     candidate,
     durationSnapshot.total,
@@ -3563,9 +3663,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           currentEntryId: entryDuties.currentEntryId,
         });
         if (!empQuality.groundingValidationPassed) {
-          frenchProviderRejectionReason = empQuality.typedRejectionReason
+          frenchProviderRejectionReason = frenchProviderRejectionReason
+            || empQuality.typedRejectionReason
             || empQuality.slotRejectionReasons[0]
             || 'french_summary_grounding_failed';
+          frenchProviderSlotRejectionReasons = frenchProviderSlotRejectionReasons.length
+            ? frenchProviderSlotRejectionReasons
+            : [...empQuality.slotRejectionReasons];
+          if (!frenchProviderQuality) {
+            frenchProviderQuality = empQuality;
+          }
           candidate = '';
         }
       }
@@ -3635,9 +3742,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           currentEntryId: entryDuties.currentEntryId,
         });
         if (!empQuality.groundingValidationPassed) {
-          italianProviderRejectionReason = empQuality.typedRejectionReason
+          italianProviderRejectionReason = italianProviderRejectionReason
+            || empQuality.typedRejectionReason
             || empQuality.slotRejectionReasons[0]
             || 'italian_summary_grounding_failed';
+          italianProviderSlotRejectionReasons = italianProviderSlotRejectionReasons.length
+            ? italianProviderSlotRejectionReasons
+            : [...empQuality.slotRejectionReasons];
+          if (!italianProviderQuality) {
+            italianProviderQuality = empQuality;
+          }
           candidate = '';
         }
       }
@@ -3666,6 +3780,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     || (locale === 'sr' && hasMixedSerbianSummaryPerspective(candidate))
   ) {
     // Force deterministic grounded rebuild when postcondition still fails.
+    if (providerRaw.trim()) {
+      if (locale === 'it' && !italianProviderRejectionReason) {
+        italianProviderRejectionReason = 'missing_duration_slot';
+        italianProviderSlotRejectionReasons = ['missing_duration_slot'];
+        providerOutcomeHint = 'rejected_grounding';
+      }
+      if (locale === 'fr' && !frenchProviderRejectionReason) {
+        frenchProviderRejectionReason = 'missing_duration_slot';
+        frenchProviderSlotRejectionReasons = ['missing_duration_slot'];
+        providerOutcomeHint = 'rejected_grounding';
+      }
+    }
     candidate = '';
   }
 
@@ -4183,10 +4309,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : [],
         competencyInferenceFromRoleForbidden: (locale === 'de' || locale === 'en') ? true : undefined,
         storedContentLocaleBeforeRequest: cv.contentLocale || null,
-        detectedVisibleContentLocaleBeforeRequest: locale,
+        detectedVisibleContentLocaleBeforeRequest: detectTextLocale(liveSummary || '', {
+          storedLocale: cv.contentLocale || null,
+        }),
         contentLocaleBeforeRequest: cv.contentLocale || null,
-        contentLocaleAfterApply: success ? locale : (cv.contentLocale || null),
-        finalContentLocaleAfterApply: success ? locale : null,
+        candidateTargetLocale: locale,
+        contentLocaleAfterApply: cv.contentLocale || null,
+        finalContentLocaleAfterApply: null,
+        contentLocaleUpdatedAfterApply: false,
         finalCandidateSource: success
           ? (
             (germanMaterialRepairApplied || englishMaterialRepairApplied)
@@ -5148,6 +5278,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? germanProviderSlotRejectionReasons
             : locale === 'en'
               ? englishProviderSlotRejectionReasons
+              : locale === 'fr'
+                ? (frenchProviderSlotRejectionReasons.length
+                  ? frenchProviderSlotRejectionReasons
+                  : (frenchProviderQuality?.slotRejectionReasons ?? []))
+              : locale === 'it'
+                ? (italianProviderSlotRejectionReasons.length
+                  ? italianProviderSlotRejectionReasons
+                  : (italianProviderQuality?.slotRejectionReasons ?? []))
               : undefined,
         providerRejectionReason: hindiProviderRejectionReason
           || arabicProviderRejectionReason
