@@ -41,6 +41,9 @@ export const JAPANESE_SUMMARY_DURATION_GRAMMAR_INVALID =
 /** Runtime marker for the exact RU→JA Stronger regression. */
 export const RU_JA_CROSS_LOCALE_STRONGER_363_REVISION =
   'ru-japanese-cross-locale-stronger-regression-363-v1' as const;
+/** AAB-364 — employer / employment-state / role-intro packaging on Japanese Summary. */
+export const JAPANESE_SUMMARY_EMPLOYER_STATE_364_REVISION =
+  'japanese-summary-employer-state-364-v1' as const;
 
 void SUMMARY_BUILDER_REVISION_JA;
 void SUMMARY_UNIT_SPLITTER_REVISION_JA;
@@ -52,6 +55,7 @@ void JAPANESE_SUMMARY_CROSS_LOCALE_363_REVISION;
 void JAPANESE_SUMMARY_DURATION_GRAMMAR_REVISION;
 void JAPANESE_SUMMARY_DURATION_GRAMMAR_INVALID;
 void RU_JA_CROSS_LOCALE_STRONGER_363_REVISION;
+void JAPANESE_SUMMARY_EMPLOYER_STATE_364_REVISION;
 void PROVIDER_CROSS_LOCALE_NOOP_REASON;
 
 const DESIGN_FACT_CUE_JA =
@@ -160,6 +164,12 @@ export type JapaneseSummaryEmploymentQuality = {
   currentDutySlotPresent: boolean;
   priorRoleSlotPresent: boolean;
   totalDurationSlotPresent: boolean;
+  finalCurrentEmployerPresent: boolean;
+  finalPriorEmployerPresent: boolean;
+  finalCurrentEmploymentStateExpressed: boolean;
+  finalPriorEmploymentStateExpressed: boolean;
+  finalCurrentRoleIntroValidationPassed: boolean;
+  finalPriorRoleIntroValidationPassed: boolean;
   targetLocalePurityPassed: boolean;
   wrongLocaleUnitCount: number;
   unexpectedLocaleCodes: string[];
@@ -608,9 +618,18 @@ export function analyzeJapaneseSummaryEmploymentQuality(
     const roleEsc = structuredRole && !/^(?:プロフェッショナル|professional)$/iu.test(structuredRole)
       ? structuredRole.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       : '';
-    currentRoleTitlePresent = Boolean(roleEsc && new RegExp(roleEsc, 'iu').test(text));
+    const roleLiteralPresent = Boolean(roleEsc && new RegExp(roleEsc, 'iu').test(text));
+    // Arbitrary free-text occupations may remain Latin; accept 「会社で…として」 surface.
+    const roleIntroSurfacePresent = Boolean(
+      companyEsc
+      && new RegExp(`${companyEsc}で.{0,40}として`, 'iu').test(text)
+      && /現在は/.test(text),
+    );
+    currentRoleTitlePresent = roleLiteralPresent || roleIntroSurfacePresent;
     currentRoleTitleMatchesStructuredRole = currentRoleTitlePresent;
-    currentRoleOmittedDetected = Boolean(roleEsc && !currentRoleTitlePresent);
+    currentRoleOmittedDetected = Boolean(
+      (roleEsc || companyEsc) && !currentRoleTitlePresent,
+    );
   }
 
   const currentLooksDesign = DESIGN_FACT_CUE_JA.test(currentEntryDuties)
@@ -740,6 +759,36 @@ export function analyzeJapaneseSummaryEmploymentQuality(
     && /実務経験/.test(text)
     && durationGrammar.grammarValidationPassed;
 
+  void JAPANESE_SUMMARY_EMPLOYER_STATE_364_REVISION;
+  const inferredHasCurrent = Boolean(company)
+    || requireWarehouseCoverage
+    || currentIntroSlotPresent
+    || /現在は/.test(text)
+    || Boolean(currentEntryDuties.trim());
+  const inferredHasPrior = Boolean(priorCompany)
+    || sourceHasDesign
+    || (finalUnitRoleSlots.includes('prior_role') && Boolean(priorCompany || priorEntryDuties))
+    || /以前は/.test(text);
+
+  const finalCurrentEmployerPresent = !company
+    || Boolean(companyEsc && new RegExp(companyEsc, 'iu').test(text));
+  const finalPriorEmployerPresent = !priorCompany
+    || Boolean(priorCompanyEsc && new RegExp(priorCompanyEsc, 'iu').test(text));
+  // Japanese employment-state markers — 現在は / 以前は (first-person CV surface).
+  const finalCurrentEmploymentStateExpressed = !inferredHasCurrent
+    || /現在は/.test(text);
+  const finalPriorEmploymentStateExpressed = !inferredHasPrior
+    || /以前は|以前に|かつて/.test(text);
+  const finalCurrentRoleIntroValidationPassed = !inferredHasCurrent
+    || (currentIntroSlotPresent
+      && currentRoleTitlePresent
+      && finalCurrentEmployerPresent
+      && finalCurrentEmploymentStateExpressed);
+  const finalPriorRoleIntroValidationPassed = !inferredHasPrior
+    || (priorRoleSlotPresent
+      && finalPriorEmployerPresent
+      && finalPriorEmploymentStateExpressed);
+
   const slotRejectionReasons: string[] = [];
   if (!text.trim()) slotRejectionReasons.push('empty_summary');
   if (malformedPunctuation) slotRejectionReasons.push('japanese_summary_malformed_punctuation');
@@ -775,6 +824,24 @@ export function analyzeJapaneseSummaryEmploymentQuality(
   if (sourceHasDesign && missingDesignFamilyCount > 0) {
     slotRejectionReasons.push('japanese_summary_unsupported_claim');
   }
+  if (inferredHasCurrent && company && !finalCurrentEmployerPresent) {
+    slotRejectionReasons.push('japanese_summary_current_employer_missing');
+  }
+  if (inferredHasPrior && priorCompany && !finalPriorEmployerPresent) {
+    slotRejectionReasons.push('japanese_summary_prior_employer_missing');
+  }
+  if (inferredHasCurrent && !finalCurrentEmploymentStateExpressed) {
+    slotRejectionReasons.push('japanese_summary_current_employment_state_missing');
+  }
+  if (inferredHasPrior && !finalPriorEmploymentStateExpressed) {
+    slotRejectionReasons.push('japanese_summary_prior_employment_state_missing');
+  }
+  if (inferredHasCurrent && !finalCurrentRoleIntroValidationPassed) {
+    slotRejectionReasons.push('japanese_summary_current_role_intro_invalid');
+  }
+  if (inferredHasPrior && !finalPriorRoleIntroValidationPassed) {
+    slotRejectionReasons.push('japanese_summary_prior_role_intro_invalid');
+  }
 
   const typedRejectionReason = slotRejectionReasons[0] || null;
 
@@ -802,6 +869,12 @@ export function analyzeJapaneseSummaryEmploymentQuality(
     && priorRoleGroundingPassed
     && genericizedMaterialFactCount === 0
     && !currentRoleOmittedDetected
+    && finalCurrentEmployerPresent
+    && finalPriorEmployerPresent
+    && finalCurrentEmploymentStateExpressed
+    && finalPriorEmploymentStateExpressed
+    && finalCurrentRoleIntroValidationPassed
+    && finalPriorRoleIntroValidationPassed
   );
 
   return {
@@ -861,6 +934,12 @@ export function analyzeJapaneseSummaryEmploymentQuality(
     currentDutySlotPresent,
     priorRoleSlotPresent,
     totalDurationSlotPresent,
+    finalCurrentEmployerPresent,
+    finalPriorEmployerPresent,
+    finalCurrentEmploymentStateExpressed,
+    finalPriorEmploymentStateExpressed,
+    finalCurrentRoleIntroValidationPassed,
+    finalPriorRoleIntroValidationPassed,
     targetLocalePurityPassed: purityOk && !mixedLeak,
     wrongLocaleUnitCount: mixedLeak || !purityOk ? Math.max(1, sentences.filter((s) => !/[\u3040-\u30FF\u3400-\u9FFF]/.test(s)).length) : 0,
     unexpectedLocaleCodes: [
