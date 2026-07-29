@@ -139,7 +139,7 @@ const FR_ACCENT_RE = /[àâçéèêëïîôùûüÿœ]/iu;
  * (`la`/`una`) that also appear in French and Spanish.
  */
 const IT_EXCLUSIVE_CLAUSE_RE =
-  /(?<![\p{L}\p{N}_])(?:il|lo|gli|nel|delle|dei|controlla|controllato|verifica|verificato|documentazione|magazzino|colleghi|movimentazione|merci)(?![\p{L}\p{N}_])/iu;
+  /(?<![\p{L}\p{N}_])(?:il|lo|gli|nel|delle|dei|controlla|controllato|controllo|verifica|verificato|verifico|documentazione|magazzino|colleghi|movimentazione|merci|dispongo|complessivamente|esperienza\s+professionale|attualmente|lavoro|precedenza|presso)(?![\p{L}\p{N}_])/iu;
 const IT_CLAUSE_RE = /\b(?:il|lo|la|gli|con|per|durante|anche|nonché|nel|delle)\b/iu;
 const IT_ACCENT_RE = /[àèéìòù]/iu;
 /**

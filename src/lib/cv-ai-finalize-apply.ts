@@ -154,6 +154,13 @@ import {
   PROVIDER_CROSS_LOCALE_NOOP_REASON,
 } from './cv-french-summary-grounding';
 import {
+  analyzeItalianSummaryEmploymentQuality,
+  isItalianStructuredSummaryDomain,
+  SUMMARY_BUILDER_REVISION_IT,
+  ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION,
+  ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION,
+} from './cv-italian-summary-grounding';
+import {
   GERMAN_EXPERIENCE_GROUNDING_303_REVISION,
   sourceRequiresGermanWarehouseFactCoverage,
   validateGermanWarehouseExperienceCoverage,
@@ -2162,6 +2169,75 @@ function summaryPasses(
         return { ok: false, reason: 'french_summary_perspective_not_first_person' };
       }
     }
+  } else if (locale === 'it') {
+    void SUMMARY_BUILDER_REVISION_IT;
+    void ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION;
+    void PROVIDER_CROSS_LOCALE_NOOP_REASON;
+    const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+    const primary = (cv.experience || []).find((e) => e.isPresent) || (cv.experience || [])[0];
+    const prior = (cv.experience || []).find((e) => primary && e.id !== primary.id) || null;
+    const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''} ${summary || ''}`;
+    const currentRoleAuthority = buildSummaryTargetRoleAuthority({
+      entryId: entryDuties.currentEntryId,
+      rawRoleTitle: primary?.position || cv.personal?.jobTitle || '',
+      requestedTargetLocale: 'it',
+      gender: cv.personal?.gender || '',
+      employmentState: primary?.isPresent ? 'present' : 'completed',
+      employer: primary?.company || '',
+      profileJobTitle: cv.personal?.jobTitle,
+      dutiesText: entryDuties.currentEntryDuties,
+    });
+    const priorRoleAuthority = buildSummaryTargetRoleAuthority({
+      entryId: prior?.id || null,
+      rawRoleTitle: entryDuties.priorRoleTitle || '',
+      requestedTargetLocale: 'it',
+      gender: cv.personal?.gender || '',
+      employmentState: 'completed',
+      employer: entryDuties.priorCompany || '',
+      dutiesText: entryDuties.priorEntryDuties,
+    });
+    const empQ = analyzeItalianSummaryEmploymentQuality(summary, {
+      company: primary?.company || '',
+      role: currentRoleAuthority.localizedTargetRoleTitle
+        || primary?.position
+        || cv.personal?.jobTitle
+        || '',
+      rawCurrentRole: currentRoleAuthority.rawRoleTitle,
+      currentEntryDuties: entryDuties.currentEntryDuties,
+      priorEntryDuties: entryDuties.priorEntryDuties,
+      priorCompany: entryDuties.priorCompany,
+      priorRole: priorRoleAuthority.localizedTargetRoleTitle || entryDuties.priorRoleTitle,
+      rawPriorRole: priorRoleAuthority.rawRoleTitle,
+      gender: cv.personal?.gender || '',
+      currentEntryId: entryDuties.currentEntryId,
+      priorEntryId: prior?.id || null,
+    });
+    const italianStructuredDomain = isItalianStructuredSummaryDomain(dutiesCorpus)
+      || Number(empQ.requiredCurrentDutyFactCount || 0) > 0
+      || Number(empQ.requiredPriorDutyFactCount || 0) > 0;
+    if (italianStructuredDomain) {
+      if (!empQ.groundingValidationPassed) {
+        return {
+          ok: false,
+          reason: empQ.typedRejectionReason
+            || empQ.slotRejectionReasons[0]
+            || 'italian_summary_grounding_failed',
+        };
+      }
+    } else {
+      const fidelity = validateLocalizedSummary(summary, factSet, {
+        locale,
+        gender: cv.personal?.gender || '',
+        expectedDuration: duration,
+        stage: 'client-final-apply',
+      });
+      if (!fidelity.valid) {
+        return { ok: false, reason: fidelity.violations[0]?.kind || 'fidelity_failed' };
+      }
+      if (!empQ.perspectiveValidationPassed) {
+        return { ok: false, reason: 'italian_summary_perspective_not_first_person' };
+      }
+    }
   } else if (locale === 'en') {
     void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
     void ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION;
@@ -2527,6 +2603,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let croatianProviderRejectionReason: string | null = null;
   let spanishProviderRejectionReason: string | null = null;
   let frenchProviderRejectionReason: string | null = null;
+  let italianProviderRejectionReason: string | null = null;
   let spanishProviderUnsupportedClaimCount: number | null = null;
   let serbianProviderRejectionReason: string | null = null;
   let serbianClientRepairAttempted = false;
@@ -3494,6 +3571,78 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
     }
   }
+  if (locale === 'it') {
+    void SUMMARY_BUILDER_REVISION_IT;
+    void ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION;
+    void ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION;
+    void PROVIDER_CROSS_LOCALE_NOOP_REASON;
+    candidate = dedupeSummarySentences(candidate);
+    if (candidate.trim()) {
+      const purity = validateAiUnitLocalePurity(candidate, 'it', {
+        kind: 'summary_sentence',
+        requireUnits: true,
+      });
+      const frenchNoOp = Boolean(
+        providerRaw.trim()
+        && (
+          evaluateSummaryMeaningfulChange(
+            typeof cv.summary === 'string' ? cv.summary : '',
+            candidate,
+          ).noOpDetected
+          || purity.unexpectedLocaleCodes.includes('fr')
+          || purity.unexpectedLocaleCodes.includes('de')
+          || purity.wrongLocaleUnitCount > 0
+          || /\b(?:je|dispose|travaille|auparavant|ich|derzeit|arbeite)\b/iu.test(candidate)
+        ),
+      );
+      if (!purity.targetLocalePurityPassed || frenchNoOp) {
+        italianProviderRejectionReason = frenchNoOp
+          ? PROVIDER_CROSS_LOCALE_NOOP_REASON
+          : (purity.reason || 'italian_summary_wrong_locale');
+        candidate = '';
+      } else {
+        const entryDuties = currentAndPriorDutiesFromCv(cv, locale);
+        const currentRoleAuthority = buildSummaryTargetRoleAuthority({
+          entryId: entryDuties.currentEntryId,
+          rawRoleTitle: entryDuties.currentRoleTitle || context.role || '',
+          requestedTargetLocale: 'it',
+          gender,
+          employmentState: 'present',
+          employer: entryDuties.currentCompany || context.company || '',
+          profileJobTitle: cv.personal?.jobTitle,
+          dutiesText: entryDuties.currentEntryDuties,
+        });
+        const priorRoleAuthority = buildSummaryTargetRoleAuthority({
+          entryId: (cv.experience || []).find((e) => e.id !== entryDuties.currentEntryId)?.id
+            || null,
+          rawRoleTitle: entryDuties.priorRoleTitle || '',
+          requestedTargetLocale: 'it',
+          gender,
+          employmentState: 'completed',
+          employer: entryDuties.priorCompany || '',
+          dutiesText: entryDuties.priorEntryDuties,
+        });
+        const empQuality = analyzeItalianSummaryEmploymentQuality(candidate, {
+          company: context.company || entryDuties.currentCompany,
+          role: currentRoleAuthority.localizedTargetRoleTitle || context.role,
+          rawCurrentRole: currentRoleAuthority.rawRoleTitle,
+          currentEntryDuties: entryDuties.currentEntryDuties,
+          priorEntryDuties: entryDuties.priorEntryDuties,
+          priorCompany: entryDuties.priorCompany,
+          priorRole: priorRoleAuthority.localizedTargetRoleTitle || entryDuties.priorRoleTitle,
+          rawPriorRole: priorRoleAuthority.rawRoleTitle,
+          gender,
+          currentEntryId: entryDuties.currentEntryId,
+        });
+        if (!empQuality.groundingValidationPassed) {
+          italianProviderRejectionReason = empQuality.typedRejectionReason
+            || empQuality.slotRejectionReasons[0]
+            || 'italian_summary_grounding_failed';
+          candidate = '';
+        }
+      }
+    }
+  }
 
   // After duration ownership, if warehouse duties were dropped, force grounded rebuild.
   // Do not blank the candidate when dutiesText is English "goods" only — require Devanagari cues
@@ -3680,6 +3829,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                       gender,
                       currentEntryId: entryDuties.currentEntryId,
                     })
+                  : locale === 'it'
+                    ? analyzeItalianSummaryEmploymentQuality(analyzedText, {
+                      company: context.company || entryDuties.currentCompany,
+                      role: context.role,
+                      currentEntryDuties: entryDuties.currentEntryDuties,
+                      priorEntryDuties: entryDuties.priorEntryDuties,
+                      priorCompany: entryDuties.priorCompany,
+                      priorRole: entryDuties.priorRoleTitle,
+                      gender,
+                      currentEntryId: entryDuties.currentEntryId,
+                    })
                   : locale === 'en'
                     && isEnglishStructuredSummaryDomain(
                       `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''} ${analyzedText}`,
@@ -3778,7 +3938,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     let durationFinalizerIdempotent = durationValidationPassed;
     let localPass2Hash = durationPass2CandidateHash;
       if (
-        (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de' || locale === 'sr' || locale === 'fr')
+        (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de' || locale === 'sr' || locale === 'fr' || locale === 'it')
         && analyzedText.trim()
         && durationSnapshot.total.hasValidDates
       ) {
@@ -3851,7 +4011,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
     const blockedForPerspective = Boolean(
       result.countedAsSuccess
-      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de' || locale === 'fr')
+      && (locale === 'hi' || locale === 'ar' || locale === 'ru' || locale === 'ja' || locale === 'hr' || locale === 'es' || locale === 'de' || locale === 'fr' || locale === 'it')
       && !perspectiveValidationPassed,
     );
     const blockedForGrounding = Boolean(
@@ -3995,7 +4155,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               .durationScope?.durationScopeRejectionReason
             : (empQ as { durationScopeRejectionReason?: string | null }).durationScopeRejectionReason)
           : undefined,
-        totalDurationSlotPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'sr' || locale === 'ar') && empQ)
+        totalDurationSlotPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'sr' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { totalDurationSlotPresent?: boolean }).totalDurationSlotPresent)
           : undefined,
         explicitSkillsSlotPresent: ((locale === 'de' || locale === 'en') && empQ)
@@ -4044,7 +4204,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || Boolean(germanProviderRejectionReason)
             || Boolean(englishProviderRejectionReason)
             || Boolean(spanishProviderRejectionReason)
-            || Boolean(frenchProviderRejectionReason)
+            || Boolean(frenchProviderRejectionReason || italianProviderRejectionReason)
             || Boolean(serbianProviderRejectionReason)
             || Boolean(hindiProviderRejectionReason)
           )
@@ -4138,18 +4298,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalCurrentRoleTitlePresent: ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { finalCurrentRoleTitlePresent?: boolean }).finalCurrentRoleTitlePresent)
           : undefined,
-        finalCurrentEmployerPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalCurrentEmployerPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalCurrentEmployerPresent?: boolean }).finalCurrentEmployerPresent)
           : undefined,
-        finalCurrentEmploymentStateExpressed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalCurrentEmploymentStateExpressed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalCurrentEmploymentStateExpressed?: boolean })
             .finalCurrentEmploymentStateExpressed)
           : undefined,
-        finalCurrentRoleIntroValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalCurrentRoleIntroValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalCurrentRoleIntroValidationPassed?: boolean })
             .finalCurrentRoleIntroValidationPassed)
           : undefined,
-        finalCurrentDutyCoveragePassed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalCurrentDutyCoveragePassed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalCurrentDutyCoveragePassed?: boolean })
             .finalCurrentDutyCoveragePassed
             ?? (empQ as { factCoverage?: { finalCurrentDutyCoveragePassed?: boolean } })
@@ -4158,7 +4318,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? Boolean((empQ as { factCoverage?: { finalCurrentDutyCoveragePassed?: boolean } })
               .factCoverage?.finalCurrentDutyCoveragePassed)
             : undefined),
-        requiredCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        requiredCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? ((empQ as { requiredCurrentDutyFactCount?: number }).requiredCurrentDutyFactCount
             ?? (empQ as { factCoverage?: { requiredCurrentDutyFactCount?: number } })
               .factCoverage?.requiredCurrentDutyFactCount
@@ -4167,7 +4327,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? ((empQ as { factCoverage?: { requiredCurrentDutyFactCount?: number } })
               .factCoverage?.requiredCurrentDutyFactCount ?? undefined)
             : undefined),
-        coveredCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        coveredCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? ((empQ as { coveredCurrentDutyFactCount?: number }).coveredCurrentDutyFactCount
             ?? (empQ as { factCoverage?: { coveredCurrentDutyFactCount?: number } })
               .factCoverage?.coveredCurrentDutyFactCount
@@ -4176,7 +4336,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? ((empQ as { factCoverage?: { coveredCurrentDutyFactCount?: number } })
               .factCoverage?.coveredCurrentDutyFactCount ?? undefined)
             : undefined),
-        missingCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        missingCurrentDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? ((empQ as { missingCurrentDutyFactCount?: number }).missingCurrentDutyFactCount
             ?? (empQ as { factCoverage?: { missingCurrentDutyFactCount?: number } })
               .factCoverage?.missingCurrentDutyFactCount
@@ -4260,18 +4420,18 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalPriorRoleTitlePresent: ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { finalPriorRoleTitlePresent?: boolean }).finalPriorRoleTitlePresent)
           : undefined,
-        finalPriorEmployerPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalPriorEmployerPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalPriorEmployerPresent?: boolean }).finalPriorEmployerPresent)
           : undefined,
-        finalPriorEmploymentStateExpressed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalPriorEmploymentStateExpressed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalPriorEmploymentStateExpressed?: boolean })
             .finalPriorEmploymentStateExpressed)
           : undefined,
-        finalPriorRoleIntroValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalPriorRoleIntroValidationPassed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalPriorRoleIntroValidationPassed?: boolean })
             .finalPriorRoleIntroValidationPassed)
           : undefined,
-        finalPriorDutyCoveragePassed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalPriorDutyCoveragePassed: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalPriorDutyCoveragePassed?: boolean })
             .finalPriorDutyCoveragePassed
             ?? (empQ as { factCoverage?: { finalPriorDutyCoveragePassed?: boolean } })
@@ -4280,7 +4440,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? Boolean((empQ as { factCoverage?: { finalPriorDutyCoveragePassed?: boolean } })
               .factCoverage?.finalPriorDutyCoveragePassed)
             : undefined),
-        requiredPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        requiredPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Number((empQ as { requiredPriorDutyFactCount?: number }).requiredPriorDutyFactCount
             ?? (empQ as { factCoverage?: { requiredPriorDutyFactCount?: number } })
               .factCoverage?.requiredPriorDutyFactCount
@@ -4289,7 +4449,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? Number((empQ as { factCoverage?: { requiredPriorDutyFactCount?: number } })
               .factCoverage?.requiredPriorDutyFactCount ?? 0)
             : undefined),
-        coveredPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        coveredPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Number((empQ as { coveredPriorDutyFactCount?: number }).coveredPriorDutyFactCount
             ?? (empQ as { factCoverage?: { coveredPriorDutyFactCount?: number } })
               .factCoverage?.coveredPriorDutyFactCount
@@ -4298,7 +4458,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? Number((empQ as { factCoverage?: { coveredPriorDutyFactCount?: number } })
               .factCoverage?.coveredPriorDutyFactCount ?? 0)
             : undefined),
-        missingPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        missingPriorDutyFactCount: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Number((empQ as { missingPriorDutyFactCount?: number }).missingPriorDutyFactCount
             ?? (empQ as { factCoverage?: { missingPriorDutyFactCount?: number } })
               .factCoverage?.missingPriorDutyFactCount
@@ -4307,7 +4467,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? Number((empQ as { factCoverage?: { missingPriorDutyFactCount?: number } })
               .factCoverage?.missingPriorDutyFactCount ?? 0)
             : undefined),
-        finalTotalDurationSlotPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr') && empQ)
+        finalTotalDurationSlotPresent: ((locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it') && empQ)
           ? Boolean((empQ as { finalTotalDurationSlotPresent?: boolean })
             .finalTotalDurationSlotPresent
             ?? (empQ as { totalDurationSlotPresent?: boolean }).totalDurationSlotPresent)
@@ -4411,14 +4571,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ? germanEmployerStatusRepairTransformations.filter((k) =>
             /role_title_localized|foreign_role_title_replaced/.test(String(k)))
           : undefined,
-        sourceLanguageLeakageDetected: locale === 'fr' && empQ
+        sourceLanguageLeakageDetected: (locale === 'fr' || locale === 'it') && empQ
           ? Boolean((empQ as { unexpectedLocaleCodes?: string[] }).unexpectedLocaleCodes?.length)
             || Number((empQ as { wrongLocaleUnitCount?: number }).wrongLocaleUnitCount || 0) > 0
           : ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { rawSourceRoleLeakageDetected?: boolean })
             .rawSourceRoleLeakageDetected)
           : undefined,
-        targetLocalePurityPassed: locale === 'fr' && empQ
+        targetLocalePurityPassed: (locale === 'fr' || locale === 'it') && empQ
           ? Boolean((empQ as { targetLocalePurityPassed?: boolean }).targetLocalePurityPassed)
           : ((locale === 'de' || locale === 'en') && empQ)
           ? Boolean((empQ as { structuredRoleLocaleValidationPassed?: boolean })
@@ -4426,23 +4586,23 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && !Boolean((empQ as { rawSourceRoleLeakageDetected?: boolean })
               .rawSourceRoleLeakageDetected)
           : undefined,
-        localeValidationPassed: locale === 'fr' && empQ
+        localeValidationPassed: (locale === 'fr' || locale === 'it') && empQ
           ? Boolean((empQ as { targetLocalePurityPassed?: boolean }).targetLocalePurityPassed)
             && Boolean((empQ as { perspectiveValidationPassed?: boolean }).perspectiveValidationPassed)
           : undefined,
-        detectedLocaleByUnit: locale === 'fr' && empQ
+        detectedLocaleByUnit: (locale === 'fr' || locale === 'it') && empQ
           ? ((empQ as { detectedLocaleByUnit?: Array<string | null> }).detectedLocaleByUnit ?? undefined)
           : undefined,
-        detectedScriptByUnit: locale === 'fr' && empQ
+        detectedScriptByUnit: (locale === 'fr' || locale === 'it') && empQ
           ? ((empQ as { detectedLocaleByUnit?: Array<string | null> }).detectedLocaleByUnit
             ? ((empQ as { detectedLocaleByUnit?: Array<string | null> }).detectedLocaleByUnit || [])
               .map(() => 'latin')
             : undefined)
           : undefined,
-        wrongLocaleUnitCount: locale === 'fr' && empQ
+        wrongLocaleUnitCount: (locale === 'fr' || locale === 'it') && empQ
           ? Number((empQ as { wrongLocaleUnitCount?: number }).wrongLocaleUnitCount || 0)
           : undefined,
-        unexpectedLocaleCodes: locale === 'fr' && empQ
+        unexpectedLocaleCodes: (locale === 'fr' || locale === 'it') && empQ
           ? ((empQ as { unexpectedLocaleCodes?: string[] }).unexpectedLocaleCodes ?? [])
           : undefined,
         finalCandidateUnitCount: success
@@ -4483,7 +4643,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             return summaryRepairAttempted && !providerRaw.trim()
               ? 'not_attempted'
               : (spanishProviderRejectionReason
-                || frenchProviderRejectionReason
+                || frenchProviderRejectionReason || italianProviderRejectionReason
                 || germanProviderRejectionReason
                 || englishProviderRejectionReason
                 || hindiProviderRejectionReason
@@ -4493,6 +4653,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 : 'accepted');
           }
           if (success && result.origin === 'deterministic_fallback') {
+            const typedReject = String(
+              frenchProviderRejectionReason
+              || italianProviderRejectionReason
+              || hindiProviderRejectionReason
+              || spanishProviderRejectionReason
+              || germanProviderRejectionReason
+              || englishProviderRejectionReason
+              || clientFallbackReason
+              || '',
+            );
+            if (/provider_cross_locale_noop|locale|script|leak/i.test(typedReject)) {
+              return 'rejected_locale';
+            }
             return providerNoOpDetected ? 'rejected_noop' : 'rejected_grounding';
           }
           if (result.reason === SUMMARY_NOOP_REJECTION_REASON || deterministicNoOpDetected) {
@@ -4503,7 +4676,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || japaneseProviderRejectionReason
             || croatianProviderRejectionReason
             || spanishProviderRejectionReason
-                || frenchProviderRejectionReason
+                || frenchProviderRejectionReason || italianProviderRejectionReason
             || serbianProviderRejectionReason
             || germanProviderRejectionReason
             || englishProviderRejectionReason
@@ -4513,7 +4686,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               || japaneseProviderRejectionReason
               || croatianProviderRejectionReason
               || spanishProviderRejectionReason
-                || frenchProviderRejectionReason
+                || frenchProviderRejectionReason || italianProviderRejectionReason
               || serbianProviderRejectionReason
               || germanProviderRejectionReason
               || englishProviderRejectionReason,
@@ -4557,7 +4730,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 || japaneseProviderRejectionReason
                 || croatianProviderRejectionReason
                 || spanishProviderRejectionReason
-                || frenchProviderRejectionReason
+                || frenchProviderRejectionReason || italianProviderRejectionReason
                 || germanProviderRejectionReason
                 || englishProviderRejectionReason
                 || (providerNoOpDetected ? SUMMARY_NOOP_REJECTION_REASON : 'provider_rejected'))
@@ -4576,7 +4749,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 || japaneseProviderRejectionReason
                 || croatianProviderRejectionReason
                 || spanishProviderRejectionReason
-                || frenchProviderRejectionReason
+                || frenchProviderRejectionReason || italianProviderRejectionReason
                 || 'provider_rejected')
               : undefined
           ),
@@ -4981,8 +5154,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
           || spanishProviderRejectionReason
-                || frenchProviderRejectionReason
-          || frenchProviderRejectionReason
+          || frenchProviderRejectionReason || italianProviderRejectionReason
+          || italianProviderRejectionReason
           || serbianProviderRejectionReason
           || germanProviderRejectionReason
           || englishProviderRejectionReason
@@ -4997,27 +5170,30 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? (serbianProviderRejectionReason || null)
           : locale === 'fr'
             ? (frenchProviderRejectionReason || null)
+          : locale === 'it'
+            ? (italianProviderRejectionReason || null)
           : (croatianProviderRejectionReason
             || japaneseProviderRejectionReason
             || spanishProviderRejectionReason
-                || frenchProviderRejectionReason
+            || frenchProviderRejectionReason || italianProviderRejectionReason
+            || italianProviderRejectionReason
             || germanProviderRejectionReason
             || englishProviderRejectionReason
             || result.diagnostics?.providerRejectionReason
             || null),
-        currentIntroSlotPresent: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr') && empQ
+        currentIntroSlotPresent: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr' || locale === 'it') && empQ
           ? Boolean((empQ as { currentIntroSlotPresent?: boolean }).currentIntroSlotPresent)
           : undefined,
-        currentDutySlotPresent: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr') && empQ
+        currentDutySlotPresent: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr' || locale === 'it') && empQ
           ? Boolean((empQ as { currentDutySlotPresent?: boolean }).currentDutySlotPresent)
           : undefined,
-        priorRoleSlotPresent: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr') && empQ
+        priorRoleSlotPresent: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr' || locale === 'it') && empQ
           ? Boolean((empQ as { priorRoleSlotPresent?: boolean }).priorRoleSlotPresent)
           : undefined,
-        slotValidationPassed: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr') && empQ
+        slotValidationPassed: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr' || locale === 'it') && empQ
           ? Boolean((empQ as { slotValidationPassed?: boolean }).slotValidationPassed)
           : undefined,
-        slotRejectionReasons: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr') && empQ
+        slotRejectionReasons: (locale === 'hi' || locale === 'ar' || locale === 'es' || locale === 'de' || locale === 'en' || locale === 'sr' || locale === 'fr' || locale === 'it') && empQ
           ? ((empQ as { slotRejectionReasons?: string[] }).slotRejectionReasons ?? [])
           : undefined,
         summaryRepairAttempted: Boolean(
@@ -5247,6 +5423,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ? PROVIDER_CROSS_LOCALE_NOOP_REASON
       : (first.reason || 'french_summary_grounding_failed');
   }
+  if (!first.ok && providerRaw.trim() && locale === 'it' && !italianProviderRejectionReason) {
+    const crossLocale = Boolean(
+      evaluateSummaryMeaningfulChange(liveSummary, providerRaw).noOpDetected
+      || /wrong_language|locale_mismatch|italian_summary_wrong_locale|source_language/i
+        .test(String(first.reason || '')),
+    );
+    italianProviderRejectionReason = crossLocale
+      ? PROVIDER_CROSS_LOCALE_NOOP_REASON
+      : (first.reason || 'italian_summary_grounding_failed');
+  }
   if (first.ok && candidate.trim()) {
     const providerMc = evaluateSummaryMeaningfulChange(liveSummary, candidate);
     summaryMeaningfulChange = providerMc;
@@ -5271,6 +5457,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       }
       if (locale === 'fr' && !frenchProviderRejectionReason) {
         frenchProviderRejectionReason = PROVIDER_CROSS_LOCALE_NOOP_REASON;
+      }
+      if (locale === 'it' && !italianProviderRejectionReason) {
+        italianProviderRejectionReason = PROVIDER_CROSS_LOCALE_NOOP_REASON;
+      }
+      if (crossLocaleNoOp) {
+        providerOutcomeHint = 'rejected_locale';
       }
       candidate = '';
     } else {
@@ -5620,14 +5812,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             || croatianProviderRejectionReason
             || japaneseProviderRejectionReason
             || spanishProviderRejectionReason
-                || frenchProviderRejectionReason
+                || frenchProviderRejectionReason || italianProviderRejectionReason
             ? (
               /locale|script|leak/i.test(String(
                 hindiProviderRejectionReason
                 || croatianProviderRejectionReason
                 || japaneseProviderRejectionReason
                 || spanishProviderRejectionReason
-                || frenchProviderRejectionReason,
+                || frenchProviderRejectionReason || italianProviderRejectionReason,
               ))
                 ? 'rejected_locale'
                 : /grammar|nominal|finite|copula|fragment/i.test(String(
@@ -5635,7 +5827,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                   || croatianProviderRejectionReason
                   || japaneseProviderRejectionReason
                   || spanishProviderRejectionReason
-                || frenchProviderRejectionReason,
+                || frenchProviderRejectionReason || italianProviderRejectionReason,
                 ))
                   ? 'rejected_grammar'
                   : /noop|meaningful/i.test(String(
@@ -5643,7 +5835,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                     || croatianProviderRejectionReason
                     || japaneseProviderRejectionReason
                     || spanishProviderRejectionReason
-                || frenchProviderRejectionReason,
+                || frenchProviderRejectionReason || italianProviderRejectionReason,
                   ))
                     ? 'rejected_noop'
                     : 'rejected_grounding'
@@ -5666,8 +5858,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || croatianProviderRejectionReason
           || japaneseProviderRejectionReason
           || spanishProviderRejectionReason
-                || frenchProviderRejectionReason
-          || frenchProviderRejectionReason
+                || frenchProviderRejectionReason || italianProviderRejectionReason
+          || frenchProviderRejectionReason || italianProviderRejectionReason
           || germanProviderRejectionReason
           || englishProviderRejectionReason
           || (providerNoOpDetected ? SUMMARY_NOOP_REJECTION_REASON : 'provider_rejected'))
@@ -5695,7 +5887,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     // Summary, but analyze the rebuild attempt (not empty/old prose) for
     // candidate diagnostics. English/Hindi/Serbian mirror so validators never see an
     // empty string while a grounded rebuild hash is present.
-    if ((locale === 'hi' || locale === 'en' || locale === 'sr' || locale === 'ar' || locale === 'de' || locale === 'fr') && groundedText.trim()) {
+    if ((locale === 'hi' || locale === 'en' || locale === 'sr' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it') && groundedText.trim()) {
       void ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION;
       if (locale === 'sr') {
         serbianEntryOwnedBuilderSucceeded = false;

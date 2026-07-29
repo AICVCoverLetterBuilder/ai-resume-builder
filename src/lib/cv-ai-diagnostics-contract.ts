@@ -724,6 +724,29 @@ export function checkSummaryDiagnosticInvariants(
   }
   if (
     trace.totalDurationSlotPresent === false
+    && (
+      (
+        Array.isArray(trace.finalUnitRoleSlots)
+        && (
+          (trace.finalUnitRoleSlots as string[]).includes('duration')
+          || (trace.finalUnitRoleSlots as string[]).includes('total_duration')
+        )
+      )
+      || String(trace.finalDurationOwnerDetected || '') === 'total_professional_experience'
+      || String(trace.finalDurationOwnerExpected || '') === 'total_professional_experience'
+    )
+    && (trace.countedAsSuccess === true || trace.slotValidationPassed === true)
+  ) {
+    push('total_duration_slot_false_with_duration_unit', {
+      totalDurationSlotPresent: false,
+      finalUnitRoleSlots: Array.isArray(trace.finalUnitRoleSlots)
+        ? (trace.finalUnitRoleSlots as string[]).join(',')
+        : null,
+      finalDurationOwnerDetected: trace.finalDurationOwnerDetected ?? null,
+    });
+  }
+  if (
+    trace.totalDurationSlotPresent === false
     && trace.durationValidationPassed === true
     && trace.slotValidationPassed === true
     && Number(trace.independentFinalDurationClaimCount ?? trace.summaryDurationExpressionCount ?? 0) === 1

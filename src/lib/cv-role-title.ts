@@ -146,7 +146,7 @@ export function localizeGraphicDesigner(locale: Locale, gender?: string): string
   if (locale === 'de') return g === 'female' ? 'Grafikdesignerin' : 'Grafikdesigner';
   if (locale === 'fr') return g === 'female' ? 'Graphiste' : 'Graphiste';
   if (locale === 'es') return g === 'female' ? 'Diseñadora gráfica' : 'Diseñador gráfico';
-  if (locale === 'it') return g === 'female' ? 'Graphic designer' : 'Graphic designer';
+  if (locale === 'it') return g === 'female' ? 'Designer grafica' : 'Designer grafico';
   if (locale === 'pt-BR') return g === 'female' ? 'Designer gráfica' : 'Designer gráfico';
   if (locale === 'ru') return g === 'female' ? 'Графический дизайнер' : 'Графический дизайнер';
   if (locale === 'ar') return g === 'female' ? 'مصممة جرافيك' : 'مصمم جرافيك';

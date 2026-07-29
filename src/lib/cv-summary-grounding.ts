@@ -170,6 +170,14 @@ import {
   PROVIDER_CROSS_LOCALE_NOOP_REASON,
 } from './cv-french-summary-grounding';
 import {
+  analyzeItalianSummaryEmploymentQuality,
+  buildItalianEntryOwnedSummary,
+  isItalianStructuredSummaryDomain,
+  SUMMARY_BUILDER_REVISION_IT,
+  ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION,
+  ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION,
+} from './cv-italian-summary-grounding';
+import {
   analyzeEnglishSummaryEmploymentQuality,
   buildEnglishEntryOwnedSummary,
   isEnglishStructuredSummaryDomain,
@@ -407,6 +415,15 @@ export {
   FRENCH_SUMMARY_CROSS_LOCALE_358_REVISION,
   PROVIDER_CROSS_LOCALE_NOOP_REASON,
 } from './cv-french-summary-grounding';
+export {
+  analyzeItalianSummaryEmploymentQuality,
+  buildItalianEntryOwnedSummary,
+  isItalianStructuredSummaryDomain,
+  detectItalianSummaryPerspective,
+  SUMMARY_BUILDER_REVISION_IT,
+  ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION,
+  ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION,
+} from './cv-italian-summary-grounding';
 export {
   analyzeSpanishSummaryEmploymentQuality,
   buildSpanishEntryOwnedSummary,
@@ -2027,6 +2044,7 @@ export function buildConciseGroundedSummary(
     && locale !== 'en'
     && locale !== 'sr'
     && locale !== 'fr'
+    && locale !== 'it'
   ) {
     return '';
   }
@@ -2373,6 +2391,37 @@ export function buildConciseGroundedSummary(
     });
     skillSentence = '';
     void skillSentence;
+  } else if (locale === 'it') {
+    void SUMMARY_BUILDER_REVISION_IT;
+    void ITALIAN_SUMMARY_FIRST_PERSON_359_REVISION;
+    void ITALIAN_SUMMARY_CROSS_LOCALE_359_REVISION;
+    void PROVIDER_CROSS_LOCALE_NOOP_REASON;
+    void analyzeItalianSummaryEmploymentQuality;
+    void isItalianStructuredSummaryDomain;
+    const itRole = /(?:warehouse|lager|entrep[oô]t|skladist|magacin|radnic|emplead|addett|employée\s+d['’]entrepôt)/i
+      .test(`${role} ${experienceTitle}`)
+      || /(?:warehouse|incoming\s+goods|checks\s+incoming)/i.test(sourceDuties)
+      ? localizeWarehouseEmployee('it', genderNorm || '')
+      : (role || localizeWarehouseEmployee('it', genderNorm || ''));
+    text = buildItalianEntryOwnedSummary({
+      role: itRole,
+      employer,
+      datesValue,
+      gender: genderNorm || '',
+      durationPhrase: durationPhrase || undefined,
+      dutyFacts,
+      priorRole: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
+        : '',
+      priorEmployer: typeof priorIndex === 'number'
+        ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
+        : '',
+      priorSourceDuties,
+      locale: 'it',
+      duration: duration || undefined,
+    });
+    skillSentence = '';
+    void skillSentence;
   } else if (locale === 'es') {
     void SPANISH_CV_AI_305_REVISION;
     void analyzeSpanishSummaryEmploymentQuality;
@@ -2569,11 +2618,10 @@ export function buildConciseGroundedSummary(
     // Duty fragments are often prepositional/noun phrases (e.g. RU "приготовлении…").
     // Keep them in the same sentence — never start a new sentence after a period.
     const dutyConnector =
-      locale === 'it' ? 'in'
-        : locale === 'pt-BR' ? 'en'
-          : locale === 'fr' ? 'dans'
-            : locale === 'ar' ? 'في'
-              : '';
+      locale === 'pt-BR' ? 'en'
+        : locale === 'fr' ? 'dans'
+          : locale === 'ar' ? 'في'
+            : '';
     const open = dutyJoin
       ? (durationPhrase
         ? (dutyConnector

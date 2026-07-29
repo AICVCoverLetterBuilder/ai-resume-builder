@@ -150,16 +150,17 @@ describe('AAB-358 German→French Summary Stronger', () => {
   });
 
   it('remaining-locale routing fail-closed matrix', () => {
-    expect(resolveSummaryBuilderRevision('it')).toBe(
-      SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
-    );
     expect(resolveSummaryBuilderRevision('pt-BR')).toBe(
       SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
     );
     expect(assertSummaryBuilderMatchesRequestedLocale(
-      'it',
+      'pt-BR',
       'entry-owned-english-rebuild-v1',
     )).toBe('unsupported_locale_reused_foreign_builder');
+    expect(assertSummaryBuilderMatchesRequestedLocale(
+      'it',
+      'entry-owned-english-rebuild-v1',
+    )).toBe('italian_request_routed_to_english_builder');
 
     const deText = [
       'Ich verfüge über insgesamt rund sechseinhalb Jahre Berufserfahrung.',
@@ -259,6 +260,8 @@ describe('AAB-358 German→French Summary Stronger', () => {
       'current_intro',
       'prior_role',
     ]);
+    expect(fin.diagnostics?.totalDurationSlotPresent).toBe(true);
+    expect(fin.diagnostics?.finalTotalDurationSlotPresent).toBe(true);
     expect(fin.diagnostics?.detectedLocaleByUnit).toEqual(['fr', 'fr', 'fr']);
     expect(fin.diagnostics?.detectedScriptByUnit).toEqual(['latin', 'latin', 'latin']);
     expect(fin.diagnostics?.wrongLocaleUnitCount).toBe(0);
@@ -388,8 +391,8 @@ describe('AAB-358 German→French Summary Stronger', () => {
     const sourceDe = buildConciseGroundedSummary(factSet, 'de', 'female', durationSnapshot.total);
     const cv = atlasRewituCv(sourceDe, 'de');
     seedUsage(28);
-    // Unsupported locale builder revision must fail closed without mutating usage.
-    expect(resolveSummaryBuilderRevision('it')).toBe(
+    // Unsupported locales remain fail-closed without mutating usage.
+    expect(resolveSummaryBuilderRevision('pt-BR')).toBe(
       SUMMARY_LOCALE_UNSUPPORTED_FAILCLOSED_358_REVISION,
     );
     expect(getProAiUsageCount()).toBe(28);
