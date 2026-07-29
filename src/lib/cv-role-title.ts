@@ -167,7 +167,7 @@ export function foldLatinDiacritics(value: string): string {
  * Prefer matchesWarehouseOccupationalTitle so diacritic folding is always applied.
  */
 const WAREHOUSE_TITLE_CORE_RE =
-  /(?:warehouse\s*(?:employee|worker|operator|associate)?|\bwarehouse\b|倉庫作業員|倉庫|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर))?|موظف(?:ة)?\s*مستودع|кладовщ(?:иц[аыуе]|ик(?:а|ом|у)?)?|skladistar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|lagermitarbeiter(?:in)?|radni(?:k|ca)\s+u\s+(?:magacinu|skladistu)|u\s+skladistu|emplead[oa]\s+de\s+almac[eé]n|trabajador(?:a)?\s+de\s+almac[eé]n|moz[oa]\s+de\s+almac[eé]n|\balmac[eé]n\b|employ[eé]e?\s+d['’`]?entrep[oô]t|employe(?:e)?\s+d['’`]?entrepot|\bentrep[oô]t\b)/iu;
+  /(?:warehouse\s*(?:employee|worker|operator|associate)?|\bwarehouse\b|倉庫作業員|倉庫|वेयरहाउस(?:\s*(?:कर्मचारी|वर्कर))?|موظف(?:ة)?\s*مستودع|кладовщ(?:иц[аыуе]|ик(?:а|ом|у)?)?|сотрудниц(?:а|ы|е|ей|у)?\s+склад(?:а|е|у)?|сотрудник(?:а|у|ом)?\s+склад(?:а|е|у)?|skladistar(?:ka)?|magacioner(?:ka)?|lagerist(?:kinja)?|lagermitarbeiter(?:in)?|radni(?:k|ca)\s+u\s+(?:magacinu|skladistu)|u\s+skladistu|emplead[oa]\s+de\s+almac[eé]n|trabajador(?:a)?\s+de\s+almac[eé]n|moz[oa]\s+de\s+almac[eé]n|\balmac[eé]n\b|employ[eé]e?\s+d['’`]?entrep[oô]t|employe(?:e)?\s+d['’`]?entrepot|\bentrep[oô]t\b)/iu;
 
 /** True when title/blob denotes warehouse/logistics work (diacritic-aware). */
 export function matchesWarehouseOccupationalTitle(text: string): boolean {

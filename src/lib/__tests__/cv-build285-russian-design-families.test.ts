@@ -284,7 +284,7 @@ it('good three-family output and device warehouse still pass', () => {
     const summary = buildConciseGroundedSummary(facts, 'ru', 'female', duration, {
       includeSkills: true,
     });
-    expect(summary).toMatch(/Кладовщица/);
+    expect(summary).toMatch(/сотрудниц(?:ей|а)\s+склад|кладовщиц/iu);
     expect(summary).toMatch(/создавала|адаптировала|подготавливала/i);
     expect(summary).not.toMatch(/Carries out assigned/i);
 

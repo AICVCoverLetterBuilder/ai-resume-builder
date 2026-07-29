@@ -311,9 +311,14 @@ export {
   buildRussianEntryOwnedSummary,
   russianWarehouseSummaryFragment,
   splitRussianSummaryUnits,
+  isRussianStructuredSummaryDomain,
   SUMMARY_BUILDER_REVISION_RU,
   SUMMARY_GROUNDING_REVISION_RU,
   SUMMARY_UNIT_SPLITTER_REVISION_RU,
+  RUSSIAN_SUMMARY_FIRST_PERSON_362_REVISION,
+  RUSSIAN_SUMMARY_CROSS_LOCALE_362_REVISION,
+  RUSSIAN_SUMMARY_DURATION_GRAMMAR_REVISION,
+  RUSSIAN_SUMMARY_DURATION_GRAMMAR_INVALID,
 } from './cv-russian-summary-grounding';
 export {
   analyzeJapaneseSummaryEmploymentQuality,
@@ -2302,15 +2307,16 @@ export function buildConciseGroundedSummary(
     void SUMMARY_GROUNDING_REVISION_RU;
     void analyzeRussianSummaryEmploymentQuality;
     void russianWarehouseSummaryFragment;
-    const ruRole = /(?:warehouse|склад|кладов|skladist|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
+    const ruRole = /(?:warehouse|склад|кладов|skladist|magacin|radnic|сотрудник\w*\s+склад)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
       ? localizeWarehouseEmployee('ru', genderNorm || '')
-      : (role || localizeWarehouseEmployee('ru', genderNorm || ''));
+      : (role || experienceTitle || profileTitle || '');
     text = buildRussianEntryOwnedSummary({
       role: ruRole,
       employer,
       datesValue,
       gender: genderNorm || '',
       durationPhrase: durationPhrase || undefined,
+      duration,
       dutyFacts,
       priorRole: typeof priorIndex === 'number'
         ? (factsForExperienceIndex(factSet, priorIndex, 'role')[0]?.value || '')
@@ -2319,6 +2325,7 @@ export function buildConciseGroundedSummary(
         ? (factsForExperienceIndex(factSet, priorIndex, 'employer')[0]?.value || '')
         : '',
       priorSourceDuties,
+      hasCurrentRole: isPresent || Boolean(employer || experienceTitle || sourceDuties),
       locale: 'ru',
     });
     skillSentence = '';

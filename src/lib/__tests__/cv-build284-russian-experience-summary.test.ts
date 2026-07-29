@@ -39,6 +39,12 @@ const WH_AR = [
   'تنسّق إعداد البضائع وحركتها مع الزملاء.',
 ].join('\n');
 
+const WH_EN = [
+  'checks incoming goods;',
+  'checks documentation related to received goods;',
+  'coordinates with colleagues on preparation and movement of goods.',
+].join('\n');
+
 const DESIGN_AR_PAST = [
   'أعدّت مواد بصرية وعناصر رسومية للمنتجات والمنصات الرقمية.',
   'راجعت وكيّفت مواد التصميم وفق متطلبات المشروع.',
@@ -104,9 +110,9 @@ function baseCv(options?: {
 describe('cv-build284 Russian Experience/Summary package', () => {
   it('exposes Russian runtime markers', () => {
     expect(SUMMARY_PIPELINE_REVISION).toBe('summary-runtime-282-v1');
-    expect(SUMMARY_BUILDER_REVISION_RU).toBe('entry-owned-russian-rebuild-v1');
-    expect(SUMMARY_UNIT_SPLITTER_REVISION_RU).toBe('russian-three-sentence-slots-v1');
-    expect(SUMMARY_GROUNDING_REVISION_RU).toBe('entry-owned-russian-grounding-v1');
+    expect(SUMMARY_BUILDER_REVISION_RU).toBe('entry-owned-russian-rebuild-362-v1');
+    expect(SUMMARY_UNIT_SPLITTER_REVISION_RU).toBe('russian-three-unit-slots-362-v1');
+    expect(SUMMARY_GROUNDING_REVISION_RU).toBe('entry-owned-russian-grounding-362-v1');
     expect(SUMMARY_DURATION_FINALIZER_REVISION_RU).toBe('russian-duration-idempotent-v1');
     expect(RUSSIAN_EXPERIENCE_MATERIAL_REVISION).toBe('russian-experience-material-v1');
   });
@@ -230,27 +236,29 @@ describe('cv-build284 Russian Experience/Summary package', () => {
       includeSkills: true,
     });
     expect(summary).not.toMatch(/Carries out assigned professional duties/i);
-    expect(summary).toMatch(/Кладовщица/);
+    expect(summary).toMatch(/сотрудниц(?:ей|а)\s+склад|кладовщиц/iu);
     expect(summary).toMatch(/Atlas/);
-    expect(summary).toMatch(/января 2023/);
+    expect(summary).toMatch(/У меня около/);
     expect(summary).toMatch(/Rewitu/);
-    expect(summary).toMatch(/Ранее работала/);
+    expect(summary).toMatch(/Ранее я работала/);
     expect(summary).toMatch(/создавала|проверяла|адаптировала|подготавливала/i);
-    expect(summary).toMatch(/общим опытом около шести с половиной лет/);
+    expect(summary).toMatch(/шести с половиной лет/);
     expect(summary).not.toMatch(/6\.5/);
 
     const q = analyzeRussianSummaryEmploymentQuality(summary, {
       company: 'Atlas',
-      role: 'Кладовщица',
+      role: 'сотрудницей склада',
       startDate: '2023-01',
-      currentEntryDuties: WH_AR,
+      currentEntryDuties: WH_EN,
       priorEntryDuties: DESIGN_RU_PAST,
       priorCompany: 'Rewitu',
-      structuredRole: 'Кладовщица',
+      priorRole: 'Graphic Designer',
+      structuredRole: 'сотрудницей склада',
       gender: 'female',
+      expectedDuration: duration,
     });
-    expect(q.finalUnitRoleSlots).toEqual(['current_intro', 'current_duty', 'prior_role']);
-    expect(q.finalSentenceRoleSlots).toEqual(['current_intro', 'current_duty', 'prior_role']);
+    expect(q.finalUnitRoleSlots).toEqual(['duration', 'current_intro', 'prior_role']);
+    expect(q.finalSentenceRoleSlots).toEqual(['duration', 'current_intro', 'prior_role']);
     expect(q.currentEmploymentIntroductionCount).toBe(1);
     expect(q.currentRoleConcreteFactCoverage).toBeGreaterThanOrEqual(2);
     expect(q.priorRoleGroundingPassed).toBe(true);
@@ -278,8 +286,8 @@ describe('cv-build284 Russian Experience/Summary package', () => {
       SUMMARY_DURATION_FINALIZER_REVISION_RU,
     );
     expect(finalized.diagnostics?.finalUnitRoleSlots).toEqual([
+      'duration',
       'current_intro',
-      'current_duty',
       'prior_role',
     ]);
     expect(finalized.diagnostics?.durationPass1Hash).toBe(finalized.diagnostics?.durationPass2Hash);
@@ -287,7 +295,7 @@ describe('cv-build284 Russian Experience/Summary package', () => {
     expect(finalized.diagnostics?.finalPostconditionsPassed).toBe(true);
 
     const after = applyFinalizedSummaryToCv(cv, 'ru', finalized);
-    expect(after.summary).toMatch(/Кладовщица/);
+    expect(after.summary).toMatch(/сотрудниц(?:ей|а)\s+склад|кладовщиц/iu);
     expect(after.summary).not.toContain(leak);
   });
 
@@ -315,7 +323,7 @@ describe('cv-build284 Russian Experience/Summary package', () => {
       candidate: '',
     });
     expect(pipe.finalized.blocked).toBe(false);
-    expect(pipe.finalized.text).toMatch(/Кладовщица/);
+    expect(pipe.finalized.text).toMatch(/сотрудниц(?:ей|а)\s+склад|кладовщиц/iu);
     expect(pipe.finalized.text).toMatch(/Rewitu/);
     expect(pipe.finalized.diagnostics?.semanticCrossEntryLeakageDetected).toBe(false);
   });
@@ -336,8 +344,8 @@ describe('cv-build284 Russian Experience/Summary package', () => {
       });
       expect(pipe.finalized.blocked, `run ${i}`).toBe(false);
       expect(pipe.finalized.diagnostics?.finalUnitRoleSlots, `run ${i}`).toEqual([
+        'duration',
         'current_intro',
-        'current_duty',
         'prior_role',
       ]);
       expect(pipe.finalized.text, `run ${i}`).not.toMatch(/Carries out assigned/i);

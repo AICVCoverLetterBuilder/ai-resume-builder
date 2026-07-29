@@ -28,7 +28,10 @@ import {
 import { SUMMARY_BUILDER_REVISION_EN } from './cv-english-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_HR } from './cv-croatian-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_JA } from './cv-japanese-summary-grounding';
-import { SUMMARY_BUILDER_REVISION_RU } from './cv-russian-summary-grounding';
+import {
+  SUMMARY_BUILDER_REVISION_RU,
+  detectRussianSummaryPerspective,
+} from './cv-russian-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_SR } from './cv-serbian-summary-grounding';
 import { SUMMARY_BUILDER_REVISION_HI_353 } from './cv-hindi-summary-grounding';
 import { SUMMARY_BUILDER_REVISION } from './cv-summary-grounding';
@@ -155,7 +158,7 @@ export function detectSummaryPerspectiveForLocale(
     case 'pt_br':
       return detectPortugueseBrazilSummaryPerspective(analyzed);
     case 'ru':
-      return /\b(?:я|работаю|имею)\b/iu.test(analyzed) ? 'first_person' : 'neutral_cv';
+      return detectRussianSummaryPerspective(analyzed);
     case 'ja':
       return /(?:私は|です。|ます。)/u.test(analyzed) ? 'first_person' : 'neutral_cv';
     default:
@@ -229,6 +232,29 @@ export function assertSummaryBuilderMatchesRequestedLocale(
     }
     if (rev && rev !== SUMMARY_BUILDER_REVISION_PT_BR && !/ptbr|portuguese|pt-br/i.test(rev)) {
       return 'ptbr_request_builder_revision_mismatch';
+    }
+  }
+  if (locale === 'ru') {
+    if (/entry-owned-english-rebuild/i.test(rev)) {
+      return 'russian_request_routed_to_english_builder';
+    }
+    if (/entry-owned-ptbr|portuguese/i.test(rev)) {
+      return 'russian_request_routed_to_ptbr_builder';
+    }
+    if (/entry-owned-italian/i.test(rev)) {
+      return 'russian_request_routed_to_italian_builder';
+    }
+    if (/entry-owned-french/i.test(rev)) {
+      return 'russian_request_routed_to_french_builder';
+    }
+    if (/entry-owned-german/i.test(rev)) {
+      return 'russian_request_routed_to_german_builder';
+    }
+    if (/entry-owned-serbian|croatian/i.test(rev)) {
+      return 'russian_request_routed_to_south_slavic_builder';
+    }
+    if (rev && rev !== SUMMARY_BUILDER_REVISION_RU && !/russian|ru-/i.test(rev)) {
+      return 'russian_request_builder_revision_mismatch';
     }
   }
   return null;

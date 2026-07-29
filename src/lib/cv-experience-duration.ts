@@ -589,6 +589,18 @@ export function summaryIncludesDurationPhrase(
       // Do not fall through to bare "N e meio" stem matching.
       return false;
     }
+    if (locale === 'ru') {
+      if (/\b\d+[.,]\d+\s+лет\b/iu.test(summary)) return false;
+      const core = formatRussianDurationCore(duration);
+      if (
+        core
+        && new RegExp(escapeRegExpToken(core), 'iu').test(summary)
+        && /(?:опыт|лет|года|месяц)/iu.test(summary)
+      ) {
+        return true;
+      }
+      return false;
+    }
     // Generic cross-locale fallback: the expected number is claimed in this locale's
     // own word/digit form AND the text carries a recognizable duration/experience claim.
     // (Guards against accepting a bare number that has nothing to do with tenure.)
@@ -600,6 +612,16 @@ export function summaryIncludesDurationPhrase(
       core
       && new RegExp(escapeRegExpToken(core), 'iu').test(summary)
       && /\bexperi[eê]ncia\b/iu.test(summary)
+    ) {
+      return true;
+    }
+  }
+  if (duration.unit === 'months' && locale === 'ru') {
+    const core = formatRussianDurationCore(duration);
+    if (
+      core
+      && new RegExp(escapeRegExpToken(core), 'iu').test(summary)
+      && /(?:опыт|месяц)/iu.test(summary)
     ) {
       return true;
     }
@@ -681,6 +703,41 @@ export function formatPortugueseBrazilDurationCore(duration: ExperienceDuration)
   return `${word} anos`;
 }
 
+const RU_MONTH_GEN: Record<number, string> = {
+  1: 'одного месяца',
+  2: 'двух месяцев',
+  3: 'трёх месяцев',
+  4: 'четырёх месяцев',
+  5: 'пяти месяцев',
+  6: 'шести месяцев',
+  7: 'семи месяцев',
+  8: 'восьми месяцев',
+  9: 'девяти месяцев',
+  10: 'десяти месяцев',
+  11: 'одиннадцати месяцев',
+};
+
+/**
+ * Russian year/month span core in genitive after около/примерно.
+ * Examples: одного года | полутора лет | двух лет | шести с половиной лет | шести месяцев.
+ */
+export function formatRussianDurationCore(duration: ExperienceDuration): string {
+  if (!duration.hasValidDates) return '';
+  if (duration.unit === 'months') {
+    const m = duration.totalMonths;
+    if (m <= 0) return '';
+    return RU_MONTH_GEN[m] || `${m} месяцев`;
+  }
+  const n = duration.approxYears;
+  if (!(n > 0)) return '';
+  const word = yearWordForLocale('ru', n);
+  if (Math.abs(n - 1) < 0.01) return 'одного года';
+  if (Math.abs(n - 1.5) < 0.01) return 'полутора лет';
+  // word already includes genitive cardinal (+ optional "с половиной").
+  if (/лет|года|год/.test(word)) return word;
+  return `${word} лет`;
+}
+
 /** Localized approximate-duration phrase for summary shells (identical underlying length). */
 export function formatApproximateDurationPhrase(duration: ExperienceDuration, locale: Locale): string {
   if (!duration.hasValidDates) return '';
@@ -691,6 +748,10 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     if (locale === 'pt-BR') {
       const core = formatPortugueseBrazilDurationCore(duration);
       return core ? `com cerca de ${core} de experiência` : '';
+    }
+    if (locale === 'ru') {
+      const core = formatRussianDurationCore(duration);
+      return core ? `около ${core}` : '';
     }
     return `around ${duration.totalMonths} months`;
   }
@@ -726,9 +787,11 @@ export function formatApproximateDurationPhrase(duration: ExperienceDuration, lo
     case 'it':
       if (isHalf && /anni|anno/.test(word)) return `con circa ${word} di esperienza`;
       return `con circa ${word} anni di esperienza`;
-    case 'ru':
-      // Single written duration — never numeric hybrids like 6.5.
-      return `с общим опытом около ${word} лет`;
+    case 'ru': {
+      // Prefer natural genitive core: "около шести с половиной лет".
+      const core = formatRussianDurationCore(duration);
+      return core ? `около ${core}` : `около ${word} лет`;
+    }
     case 'pt-BR': {
       // Prefer natural "seis anos e meio" — never "seis e meio anos".
       const core = formatPortugueseBrazilDurationCore(duration);
