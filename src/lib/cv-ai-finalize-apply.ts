@@ -2959,6 +2959,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       deterministicCandidateUnitHashes: v2.origin === 'deterministic_fallback' ? v2UnitHashes : [],
       summaryBuilderRevision: SUMMARY_V2_REVISION,
       summaryGroundingRevision: SUMMARY_V2_REVISION,
+      summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
+      // Keep legacy package markers reachable under V2-ON DCE (NEXT_PUBLIC_* inlined true).
+      summaryRuntimeMarkerSet: [...SUMMARY_RUNTIME_MARKER_SET, SUMMARY_V2_REVISION],
       summaryFinalCandidateDiagnosticsRevision: SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
       perspectiveMode: 'first_person' as const,
       finalPerspectiveMode: 'first_person' as const,
