@@ -23,12 +23,15 @@ import {
   EXPERIENCE_GENERATION_RELEVANCE_367_REVISION,
   EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION,
   EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION,
+  EXPERIENCE_GENERATION_FALLBACK_QUALITY_378_REVISION,
   jobTitleScriptConflictsWithLocale,
+  peelGermanAgentiveCompound,
   resolveAiOperationMode,
   textLooksRelevantToFreeTextTitle,
   toExperienceAiOperationModeCompat,
   type ExperienceAiOperationModeCompat,
   type FreeTextJobDomain,
+  foldAiTextToken,
 } from './cv-ai-operation-contract';
 import { validateArabicExperienceEmploymentTense } from './cv-arabic-experience-tense';
 import {
@@ -142,6 +145,7 @@ export function validateExperienceGenerationOutput(
   void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
   void EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION;
   void EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION;
+  void EXPERIENCE_GENERATION_FALLBACK_QUALITY_378_REVISION;
   if (
     generationLooksGenericAdministrativeOnly(text)
     && titleDomainEarly !== 'documentation'
@@ -568,6 +572,171 @@ function buildEnglishActionDutyTriple(
       `Produced concrete outputs for ${title} work.`,
       'Reviewed assigned inputs and completed required follow-ups.',
       'Coordinated with colleagues to finish role outputs on schedule.',
+    ];
+}
+
+/**
+ * German object plural for mid-sentence duties — light morphology, not a catalogue.
+ */
+function germanPluralizeObjectStem(stem: string): string {
+  const s = (stem || '').trim();
+  if (!s) return 'Geräten';
+  // Preserve original casing for display from folded stem: capitalize first letter.
+  const display = s.charAt(0).toUpperCase() + s.slice(1);
+  if (/rad$/i.test(s)) return display.replace(/rad$/i, 'räder');
+  if (/anlage$/i.test(s)) return display.replace(/anlage$/i, 'anlagen');
+  if (/anlagen$/i.test(s)) return display;
+  if (/bibliothek$/i.test(s)) return 'Bibliotheken';
+  if (/biene$/i.test(s)) return 'Bienen';
+  if (/en$/i.test(s) || /er$/i.test(s) && s.length > 6) return display;
+  if (/e$/i.test(s)) return `${display}n`;
+  return `${display}en`;
+}
+
+function capitalizeDe(stem: string): string {
+  const s = (stem || '').trim();
+  if (!s) return '';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * DE empty-source duties from free-text title morphology (compounds + agentives).
+ * Concrete core actions; no title-echo / zugewiesene Aufgaben / Rollenanforderungen.
+ */
+function buildGermanActionDutyTriple(
+  position: string,
+  present: boolean,
+): DutyTriple {
+  void EXPERIENCE_GENERATION_FALLBACK_QUALITY_378_REVISION;
+  const raw = (position || '').trim();
+  if (!raw || jobTitleScriptConflictsWithLocale(raw, 'de')) {
+    return present
+      ? [
+        'Erstellt konkrete Arbeitsergebnisse für den Aufgabenbereich.',
+        'Prüft vorliegende Unterlagen und schließt erforderliche Nacharbeiten ab.',
+        'Stimmt Arbeitsschritte mit Kolleginnen und Kollegen ab.',
+      ]
+      : [
+        'Erstellte konkrete Arbeitsergebnisse für den Aufgabenbereich.',
+        'Prüfte vorliegende Unterlagen und schloss erforderliche Nacharbeiten ab.',
+        'Stimmte Arbeitsschritte mit Kolleginnen und Kollegen ab.',
+      ];
+  }
+
+  const folded = foldAiTextToken(raw);
+  const peeled = peelGermanAgentiveCompound(folded);
+  const tokens = raw.split(/\s+/u).filter(Boolean);
+  let agentive = peeled?.agentive || '';
+  let objectStem = peeled?.objectStem || '';
+
+  // Space-separated titles: last token may be Latin/German agentive.
+  if (!agentive && tokens.length >= 2) {
+    const lastFolded = foldAiTextToken(tokens[tokens.length - 1]);
+    const peeledLast = peelGermanAgentiveCompound(lastFolded)
+      || (/^(mechanikerin|mechaniker|monteurin|monteur|technikerin|techniker|assistentin|assistent|fachkraft)$/i
+        .test(lastFolded)
+        ? { objectStem: '', agentive: lastFolded }
+        : null);
+    if (peeledLast?.agentive) {
+      agentive = peeledLast.agentive;
+      objectStem = foldAiTextToken(tokens.slice(0, -1).join(' ')) || peeledLast.objectStem;
+    }
+  }
+
+  const objPl = objectStem ? germanPluralizeObjectStem(objectStem) : '';
+  const obj = objectStem ? capitalizeDe(objectStem) : '';
+  const ag = agentive;
+
+  if (/^mechaniker/.test(ag) && objPl) {
+    return present
+      ? [
+        `Führt Wartungsarbeiten an ${objPl} durch.`,
+        `Prüft ${objPl} auf technische Mängel.`,
+        `Tauscht defekte Bauteile an ${objPl} aus.`,
+      ]
+      : [
+        `Führte Wartungsarbeiten an ${objPl} durch.`,
+        `Prüfte ${objPl} auf technische Mängel.`,
+        `Tauschte defekte Bauteile an ${objPl} aus.`,
+      ];
+  }
+  if (/^(monteur|installateur)/.test(ag) && objPl) {
+    return present
+      ? [
+        `Montiert ${objPl} im Rahmen der Montagearbeiten.`,
+        `Richtet ${objPl} aus und prüft die Funktion.`,
+        'Stimmt Montageabläufe mit Kolleginnen und Kollegen ab.',
+      ]
+      : [
+        `Montierte ${objPl} im Rahmen der Montagearbeiten.`,
+        `Richtete ${objPl} aus und prüfte die Funktion.`,
+        'Stimmte Montageabläufe mit Kolleginnen und Kollegen ab.',
+      ];
+  }
+  if (/^techniker/.test(ag) && objPl) {
+    return present
+      ? [
+        `Führt technische Prüfungen an ${objPl} durch.`,
+        `Diagnostiziert Störungen an ${objPl}.`,
+        `Tauscht defekte Bauteile an ${objPl} aus.`,
+      ]
+      : [
+        `Führte technische Prüfungen an ${objPl} durch.`,
+        `Diagnostizierte Störungen an ${objPl}.`,
+        `Tauschte defekte Bauteile an ${objPl} aus.`,
+      ];
+  }
+  if (/^assistent/.test(ag) && obj) {
+    return present
+      ? [
+        `Unterstützt bei der Bearbeitung von ${obj}-Vorgängen.`,
+        `Prüft Eingänge und bereitet ${obj}-Unterlagen vor.`,
+        `Ordnet und pflegt ${obj}-Bestände.`,
+      ]
+      : [
+        `Unterstützte bei der Bearbeitung von ${obj}-Vorgängen.`,
+        `Prüfte Eingänge und bereitete ${obj}-Unterlagen vor.`,
+        `Ordnete und pflegte ${obj}-Bestände.`,
+      ];
+  }
+  if (/^halter/.test(ag) && objPl) {
+    return present
+      ? [
+        `Versorgt und betreut ${objPl} im Tagesbetrieb.`,
+        `Prüft den Zustand von ${objPl} und meldet Auffälligkeiten.`,
+        'Stimmt Betreuungsschritte mit Kolleginnen und Kollegen ab.',
+      ]
+      : [
+        `Versorgte und betreute ${objPl} im Tagesbetrieb.`,
+        `Prüfte den Zustand von ${objPl} und meldete Auffälligkeiten.`,
+        'Stimmte Betreuungsschritte mit Kolleginnen und Kollegen ab.',
+      ];
+  }
+  if (/^(berater|koordinator|manager|fachkraft|mitarbeiter|arbeiter|helfer|pfleger|lehrer|fahrer|pruefer)/.test(ag) && objPl) {
+    return present
+      ? [
+        `Bearbeitet konkrete Vorgänge zu ${objPl}.`,
+        `Prüft Unterlagen und schließt Nacharbeiten zu ${objPl} ab.`,
+        'Stimmt Arbeitsschritte mit Kolleginnen und Kollegen ab.',
+      ]
+      : [
+        `Bearbeitete konkrete Vorgänge zu ${objPl}.`,
+        `Prüfte Unterlagen und schloss Nacharbeiten zu ${objPl} ab.`,
+        'Stimmte Arbeitsschritte mit Kolleginnen und Kollegen ab.',
+      ];
+  }
+
+  // Unknown / opaque titles: safe generic without title echo or role-requirement filler.
+  return present
+    ? [
+      'Erstellt konkrete Arbeitsergebnisse für den Aufgabenbereich.',
+      'Prüft vorliegende Unterlagen und schließt erforderliche Nacharbeiten ab.',
+      'Stimmt Arbeitsschritte mit Kolleginnen und Kollegen ab.',
+    ]
+    : [
+      'Erstellte konkrete Arbeitsergebnisse für den Aufgabenbereich.',
+      'Prüfte vorliegende Unterlagen und schloss erforderliche Nacharbeiten ab.',
+      'Stimmte Arbeitsschritte mit Kolleginnen und Kollegen ab.',
     ];
 }
 
@@ -1113,19 +1282,10 @@ export function buildJobContextGenerationFallback(options: {
   }
 
   if (locale === 'de') {
-    // Neutral role-relevant shells — no autonomy / universal-scope / quality modifiers
-    // and no unsupported frequency quantifiers (täglich) on empty-source repair.
-    return formatExperienceBullets(present
-      ? [
-        `Führt zugewiesene Aufgaben im Bereich ${groundedWork} aus.`,
-        'Erledigt Arbeitsaufgaben entsprechend den Rollenanforderungen.',
-        'Stimmt Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
-      ]
-      : [
-        `Führte zugewiesene Aufgaben im Bereich ${groundedWork} aus.`,
-        'Erledigte Arbeitsaufgaben entsprechend den Rollenanforderungen.',
-        'Stimmte Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
-      ]);
+    void EXPERIENCE_GENERATION_FALLBACK_QUALITY_378_REVISION;
+    return formatExperienceBullets([
+      ...buildGermanActionDutyTriple(options.position || '', present),
+    ]);
   }
 
   if (locale === 'es') {

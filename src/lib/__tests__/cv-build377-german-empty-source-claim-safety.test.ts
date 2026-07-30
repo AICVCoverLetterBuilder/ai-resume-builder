@@ -54,21 +54,21 @@ const BIKE_UNSAFE_DEVICE = formatExperienceBullets([
 ]);
 
 const UNSAFE_AUTONOMY_ONLY = formatExperienceBullets([
-  'Führt zugewiesene Aufgaben eigenständig im Rollenbereich aus.',
-  'Erledigt Arbeitsaufgaben entsprechend den Rollenanforderungen.',
-  'Stimmt Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
+  'Führt Wartungsarbeiten eigenständig durch.',
+  'Prüft Geräte auf technische Mängel.',
+  'Tauscht defekte Bauteile aus.',
 ]);
 
 const UNSAFE_UNIVERSAL_SCOPE_ONLY = formatExperienceBullets([
-  'Bearbeitet Aufträge aller Bauarten im zugewiesenen Arbeitsbereich.',
-  'Erledigt Arbeitsaufgaben entsprechend den Rollenanforderungen.',
-  'Stimmt Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
+  'Bearbeitet Aufträge aller Bauarten im Arbeitsbereich.',
+  'Prüft Geräte auf technische Mängel.',
+  'Tauscht defekte Bauteile aus.',
 ]);
 
 const UNSAFE_QUALITY_ONLY = formatExperienceBullets([
-  'Führt zugewiesene Aufgaben fachgerecht im Rollenbereich aus.',
-  'Erledigt Arbeitsaufgaben entsprechend den Rollenanforderungen.',
-  'Stimmt Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
+  'Führt Wartungsarbeiten fachgerecht durch.',
+  'Prüft Geräte auf technische Mängel.',
+  'Tauscht defekte Bauteile aus.',
 ]);
 
 /** Legitimate role-relevant duties without unsupported modifiers. */
@@ -79,7 +79,13 @@ const LEGITIMATE_MAINTENANCE_DIAGNOSIS = formatExperienceBullets([
 ]);
 
 const SAFE_NEUTRAL_GENERIC = formatExperienceBullets([
-  'Führt zugewiesene Aufgaben im Bereich Fachkraft aus.',
+  'Führt Wartungsarbeiten an Geräten durch.',
+  'Prüft Geräte auf technische Mängel.',
+  'Tauscht defekte Bauteile aus.',
+]);
+
+const TITLE_ECHO_SHELL = formatExperienceBullets([
+  'Führt zugewiesene Aufgaben im Bereich Fahrradmechaniker aus.',
   'Erledigt Arbeitsaufgaben entsprechend den Rollenanforderungen.',
   'Stimmt Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
 ]);
@@ -307,7 +313,7 @@ describe('AAB-377 German empty-source Experience claim safety', () => {
     expect(v.unsupportedClaimCount).toBeGreaterThan(0);
   });
 
-  it('exact unsafe provider → neutral fallback applies once; modifiers gone; usage 0→1', () => {
+  it('exact unsafe provider → concrete fallback applies once; modifiers gone; usage 0→1', () => {
     expect(resolveExperienceAiOperationMode('')).toBe('generate_from_job_context');
     const r = runGen({ usageBefore: 0, candidate: BIKE_UNSAFE_DEVICE, isPresent: true });
     expect(r.snapshot.sourceUnitCount).toBe(0);
@@ -318,8 +324,8 @@ describe('AAB-377 German empty-source Experience claim safety', () => {
     const text = r.finalized.text;
     expect(splitExperienceBullets(text)).toHaveLength(3);
     expect(text).not.toMatch(/eigenständig|aller\s+Bauarten|fachgerecht/iu);
-    expect(text).not.toMatch(/\btäglich/iu);
-    expect(text).toMatch(/Aufgaben|Arbeitsaufgaben|Kolleg/i);
+    expect(text).not.toMatch(/\btäglich|zugewiesene\s+Aufgaben|Arbeitsaufgaben|Rollenanforderungen|im\s+Bereich\s+Fahrrad/iu);
+    expect(text).toMatch(/Wartung|Prüft|Bauteile|Fahrrad/i);
     expect(r.nextCv.experience.find((e) => e.id === r.exp.id)?.description).toBe(text);
     expect(r.usageBefore).toBe(0);
     expect(r.usageAfter).toBe(1);
@@ -333,7 +339,7 @@ describe('AAB-377 German empty-source Experience claim safety', () => {
     ]) {
       const v = validateExperienceGenerationOutput(candidate, {
         locale: 'de',
-        position: 'Lagerfachkraft',
+        position: 'Servicetechniker',
         isPresent: true,
       });
       expect(v.ok, candidate.slice(0, 48)).toBe(false);
@@ -343,11 +349,11 @@ describe('AAB-377 German empty-source Experience claim safety', () => {
   });
 
   it('arbitrary occupations: same unsupported modifiers rejected universally', () => {
-    // Occupation-neutral unsafe prose — no Fahrradmechaniker hard-coding; modifiers alone fail.
+    // Occupation-neutral unsafe prose — modifiers alone fail (no title-echo shells).
     const arbitraryUnsafe = formatExperienceBullets([
-      'Führt zugewiesene Aufgaben eigenständig an Geräten aller Bauarten fachgerecht aus.',
-      'Erledigt Arbeitsaufgaben entsprechend den Rollenanforderungen.',
-      'Stimmt Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
+      'Führt Wartungsarbeiten eigenständig an Geräten aller Bauarten fachgerecht durch.',
+      'Prüft Geräte auf technische Mängel.',
+      'Tauscht defekte Bauteile aus.',
     ]);
     for (const position of [
       'Solaranlagenmonteur',
@@ -434,12 +440,22 @@ describe('AAB-377 German empty-source Experience claim safety', () => {
     expect(fin.text).toMatch(/eigenständig|aller\s+Bauarten|fachgerecht/iu);
   });
 
-  it('safe neutral generation and deterministic fallback validate with claim count 0', () => {
+  it('safe concrete generation and deterministic fallback validate with claim count 0', () => {
     expect(validateExperienceGenerationOutput(SAFE_NEUTRAL_GENERIC, {
       locale: 'de',
-      position: 'Fachkraft',
+      position: 'Servicetechniker',
       isPresent: true,
     }).ok).toBe(true);
+    expect(validateExperienceGenerationOutput(TITLE_ECHO_SHELL, {
+      locale: 'de',
+      position: 'Fahrradmechaniker',
+      isPresent: true,
+    }).ok).toBe(false);
+    expect(validateExperienceGenerationOutput(TITLE_ECHO_SHELL, {
+      locale: 'de',
+      position: 'Fahrradmechaniker',
+      isPresent: true,
+    }).relevanceValidationPassed).toBe(false);
     const fb = buildJobContextGenerationFallback({
       locale: 'de',
       gender: 'male',
@@ -454,7 +470,9 @@ describe('AAB-377 German empty-source Experience claim safety', () => {
     });
     expect(v.ok).toBe(true);
     expect(v.unsupportedClaimCount).toBe(0);
-    expect(fb).not.toMatch(/eigenständig|aller\s+Bauarten|fachgerecht|\btäglich/iu);
+    expect(v.relevanceValidationPassed).toBe(true);
+    expect(fb).not.toMatch(/eigenständig|aller\s+Bauarten|fachgerecht|\btäglich|zugewiesene\s+Aufgaben|Arbeitsaufgaben|Rollenanforderungen/iu);
+    expect(fb).toMatch(/Fahrrad|Wartung|Prüft|Bauteile/i);
     expect(detectGermanAutonomyScopeQualityClaims('', fb).count).toBe(0);
   });
 });

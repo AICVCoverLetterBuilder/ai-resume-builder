@@ -173,6 +173,52 @@ export function foldAiTextToken(token: string): string {
 }
 
 /**
+ * Peel a German compound occupation into object stem + agentive head.
+ * Morphology only — not an occupation catalogue.
+ */
+export function peelGermanAgentiveCompound(foldedTitle: string): {
+  objectStem: string;
+  agentive: string;
+} | null {
+  const t = (foldedTitle || '').toLowerCase();
+  if (t.length < 8) return null;
+  const suffixes = [
+    'mechanikerin', 'mechaniker',
+    'monteurin', 'monteur',
+    'technikerin', 'techniker',
+    'installateurin', 'installateur',
+    'assistentin', 'assistent',
+    'managerin', 'manager',
+    'koordinatorin', 'koordinator',
+    'beraterin', 'berater',
+    'helferin', 'helfer',
+    'arbeiterin', 'arbeiter',
+    'prueferin', 'pruefer', 'prüferin', 'prüfer',
+    'mitarbeiterin', 'mitarbeiter',
+    'pflegerin', 'pfleger',
+    'lehrerin', 'lehrer',
+    'fahrerin', 'fahrer',
+    'halterin', 'halter',
+    'fachkraft',
+  ];
+  for (const suf of suffixes) {
+    const foldedSuf = foldAiTextToken(suf);
+    if (t.length <= foldedSuf.length + 3) continue;
+    if (t.endsWith(foldedSuf)) {
+      let objectStem = t.slice(0, t.length - foldedSuf.length);
+      // Drop compound-link -s- (Bibliotheksassistent → bibliothek).
+      if (objectStem.endsWith('s') && objectStem.length > 4) {
+        objectStem = objectStem.slice(0, -1);
+      }
+      if (objectStem.length >= 3) {
+        return { objectStem, agentive: foldedSuf };
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Title stems from the user's free-text occupation — not a catalogue.
  * Tokens length ≥ 3 (or ≥ 2 for CJK) become soft relevance anchors.
  */
@@ -187,6 +233,13 @@ export function freeTextTitleStems(position: string): string[] {
       if (/[\u3040-\u30ff\u3400-\u9fff]/.test(t)) return t.length >= 1;
       return t.length >= 3;
     });
+  // German single-token compounds: also keep the peeled object stem (Fahrrad…).
+  for (const p of [...parts]) {
+    const peeled = peelGermanAgentiveCompound(p);
+    if (peeled?.objectStem && peeled.objectStem.length >= 3) {
+      parts.push(peeled.objectStem);
+    }
+  }
   return [...new Set(parts)].slice(0, 16);
 }
 
@@ -243,7 +296,7 @@ const DOMAIN_CUE_RE: Record<FreeTextJobDomain, RegExp> = {
   healthcare: /(?:patient|pacijen|care|nurs|record|chart|пациент)/iu,
   documentation: /(?:dokument|document|evidenc|record|status|информац|दस्तावे|रिकॉर्ड|توثيق|وثائق|سجلات|書類|文書|記録|документ|запис)/iu,
   // Role-work cues only — documentation/admin language is not material for general titles.
-  general: /(?:dut(?:y|ies)|tasks?|work\s+activit|role\s+work|as\s+assigned|role\s+needs?|zadat|poslov|aktivnost|koleg|obavlja|dodeljen|dodijeljen|業務|役割|कार्य|सौंपे|دور|задач|Arbeit(?:en|s)?|Tätig|colleagues|коллег|زملاء|同僚|सहकर्मी|compiti|tareas|tâches|tarefas|Aufgaben|mansioni)/iu,
+  general: /(?:dut(?:y|ies)|tasks?|work\s+activit|role\s+work|as\s+assigned|role\s+needs?|zadat|poslov|aktivnost|koleg|obavlja|dodeljen|dodijeljen|業務|役割|कार्य|सौंपे|دور|задач|Arbeit(?:en|s)?|Tätig|colleagues|коллег|زملاء|同僚|सहकर्मी|compiti|tareas|tâches|tarefas|Aufgaben|mansioni|Wartung|wartungs|Prüft|pruft|Reparier|Montier|Bauteile|Diagnostiz|Tauscht|Montiert)/iu,
 };
 
 /**
@@ -262,9 +315,14 @@ export const EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION =
 export const EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION =
   'experience-generation-fallback-surface-369-v1' as const;
 
+/** German empty-source fallback quality — reject title-echo / generic task shells. */
+export const EXPERIENCE_GENERATION_FALLBACK_QUALITY_378_REVISION =
+  'experience-generation-fallback-quality-378-v1' as const;
+
 void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
 void EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION;
 void EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION;
+void EXPERIENCE_GENERATION_FALLBACK_QUALITY_378_REVISION;
 
 export function generationLooksGenericAdministrativeOnly(text: string): boolean {
   void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
@@ -292,6 +350,7 @@ export function generationLooksGenericAdministrativeOnly(text: string): boolean 
  */
 export function generationLooksTautologicalRoleShellOnly(text: string): boolean {
   void EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION;
+  void EXPERIENCE_GENERATION_FALLBACK_QUALITY_378_REVISION;
   // Administrative shells are classified separately — do not conflate with tautology.
   if (generationLooksGenericAdministrativeOnly(text)) return false;
   const lines = (text || '')
@@ -300,14 +359,14 @@ export function generationLooksTautologicalRoleShellOnly(text: string): boolean 
     .filter(Boolean);
   if (lines.length < 2) return false;
   const tautRe =
-    /(?:\bday-to-day\b.{0,48}\bduties\b(?:\s+as\s+assigned)?|\bassigned role tasks\b|\bshared role work activities\b|\bcompletes? assigned role\b|\brole work activities\b|\bperforms? day-to-day\b.{0,40}\bduties\b)/iu;
+    /(?:\bday-to-day\b.{0,48}\bduties\b(?:\s+as\s+assigned)?|\bassigned role tasks\b|\bshared role work activities\b|\bcompletes? assigned role\b|\brole work activities\b|\bperforms? day-to-day\b.{0,40}\bduties\b|zugewiesene\s+Aufgaben|Arbeitsaufgaben|Rollenanforderungen|Arbeitstätigkeiten\s+mit\s+Kolleg)/iu;
   const hits = lines.filter((l) => tautRe.test(l)).length;
   if (hits >= 2) return true;
   // Whole field is only generic duty/task/activity restatement.
   const joined = lines.join('\n');
   const genericOnly =
-    /(?:duties|tasks|activities|role needs|as assigned)/iu.test(joined)
-    && !/(?:\binstalls?\b|\bpositions?\b|\bsecures?\b|\boperates?\b|\bmonitors?\b|\banalyz(?:e|es|ed)\b|\bcreates?\b|\bprepares?\b|\breviews?\b(?!\s+day-to-day\s+records)|\bproduces?\b|\bdelivers?\b|\btracks?\b(?!\s+open\s+items))/iu
+    /(?:duties|tasks|activities|role needs|as assigned|zugewiesene\s+Aufgaben|Arbeitsaufgaben|Rollenanforderungen)/iu.test(joined)
+    && !/(?:\binstalls?\b|\bpositions?\b|\bsecures?\b|\boperates?\b|\bmonitors?\b|\banalyz(?:e|es|ed)\b|\bcreates?\b|\bprepares?\b|\breviews?\b(?!\s+day-to-day\s+records)|\bproduces?\b|\bdelivers?\b|\btracks?\b(?!\s+open\s+items)|Wartungsarbeiten|Prüft\b|Reparier|Montier|Tauscht\b|Diagnostiz)/iu
       .test(joined);
   return genericOnly && hits >= 1;
 }
@@ -315,16 +374,19 @@ export function generationLooksTautologicalRoleShellOnly(text: string): boolean 
 /**
  * Weak title-echo / filler shells: "for the X role", bare "as assigned",
  * "according to role requirements" — not CV-ready even when action verbs exist.
+ * German: "im Bereich {title}", zugewiesene Aufgaben, Arbeitsaufgaben,
+ * Rollenanforderungen.
  */
 export function generationLooksRoleTitleEchoFillerOnly(text: string): boolean {
   void EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION;
+  void EXPERIENCE_GENERATION_FALLBACK_QUALITY_378_REVISION;
   const lines = (text || '')
     .split(/\r?\n|•/)
     .map((l) => l.replace(/^[•\-\*]\s*/, '').trim())
     .filter(Boolean);
   if (lines.length < 2) return false;
   const fillerRe =
-    /(?:\bfor the\b.+\brole\b|\bas assigned(?:\s+for\b)?|\baccording to role requirements\b)/iu;
+    /(?:\bfor the\b.+\brole\b|\bas assigned(?:\s+for\b)?|\baccording to role requirements\b|im\s+Bereich\s+\S+|zugewiesene\s+Aufgaben|Arbeitsaufgaben|Rollenanforderungen)/iu;
   return lines.filter((l) => fillerRe.test(l)).length >= 2;
 }
 
@@ -354,7 +416,7 @@ function looksLikeLocalePureRoleWorkShell(text: string): boolean {
   if (generationLooksGenericAdministrativeOnly(text)) return false;
   if (generationLooksTautologicalRoleShellOnly(text)) return false;
   if (generationLooksRoleTitleEchoFillerOnly(text)) return false;
-  return /(?:\binstalls?\b|\bpositions?\s+and\s+secures?\b|\boperates?\b|\bmonitors?\b|\banalyz(?:es|ed)\b|\bcreates?\b|\bprepares?\b|\bproduces?\s+concrete\b|\breviews?\b.+\bfollow-ups\b|\btracks?\b.+\bfollow-ups\b|\bcoordinates?\s+(?:installation|operational|technical|analysis)?\s*activit|\bcoordinates?\s+with\s+colleagues\b|\baligns?\s+with\s+colleagues\b|\bcoordinates?\s+\S.{0,40}\bworkstreams\b)/iu
+  return /(?:\binstalls?\b|\bpositions?\s+and\s+secures?\b|\boperates?\b|\bmonitors?\b|\banalyz(?:es|ed)\b|\bcreates?\b|\bprepares?\b|\bproduces?\s+concrete\b|\breviews?\b.+\bfollow-ups\b|\btracks?\b.+\bfollow-ups\b|\bcoordinates?\s+(?:installation|operational|technical|analysis)?\s*activit|\bcoordinates?\s+with\s+colleagues\b|\baligns?\s+with\s+colleagues\b|\bcoordinates?\s+\S.{0,40}\bworkstreams\b|Wartungsarbeiten|Prüft\b|Reparier|Montier|Tauscht\b|Diagnostiz|Stimmt\s+(?:Montage|Reparatur|Arbeits)|Unterstützt\b)/iu
     .test(text || '');
 }
 
