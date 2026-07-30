@@ -17,6 +17,8 @@ import {
   classifyFreeTextJobDomain,
   countAiUnsafeInventionClaims,
   freeTextTitleStems,
+  generationLooksGenericAdministrativeOnly,
+  EXPERIENCE_GENERATION_RELEVANCE_367_REVISION,
   jobTitleScriptConflictsWithLocale,
   resolveAiOperationMode,
   textLooksRelevantToFreeTextTitle,
@@ -128,6 +130,22 @@ export function validateExperienceGenerationOutput(
       unsupportedClaimCount: 0,
     };
   }
+  const titleDomainEarly = classifyFreeTextJobDomain(options.position || '');
+  void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
+  if (
+    generationLooksGenericAdministrativeOnly(text)
+    && titleDomainEarly !== 'documentation'
+  ) {
+    return {
+      ok: false,
+      reason: 'experience_generation_not_relevant',
+      generatedBulletCount,
+      relevanceValidationPassed: false,
+      perspectiveValidationPassed: true,
+      tenseValidationPassed: true,
+      unsupportedClaimCount: 0,
+    };
+  }
   if (aiOutputRepeatsFullTitleUnnaturally(text, options.position || '')) {
     return {
       ok: false,
@@ -139,7 +157,7 @@ export function validateExperienceGenerationOutput(
       unsupportedClaimCount: 0,
     };
   }
-  const titleDomain = classifyFreeTextJobDomain(options.position || '');
+  const titleDomain = titleDomainEarly;
   // Cross-domain leakage: design titles must not absorb warehouse/goods duties.
   if (
     titleDomain === 'design'
@@ -298,6 +316,31 @@ function softDomainFromTitle(position: string, locale: Locale): string {
   return stripped || raw;
 }
 
+/**
+ * Subject-matter work phrase for general-domain generation shells.
+ * Drops a trailing agentive role head so bullets ground on free-text context
+ * without repeating the full title on every line (or inventing tools/venues).
+ * Never appends English "work" outside the English locale (locale purity).
+ */
+function softWorkPhraseFromTitle(position: string, locale: Locale): string {
+  const soft = softDomainFromTitle(position, locale);
+  if (!soft) return '';
+  const tokens = soft.split(/\s+/u).filter(Boolean);
+  if (!tokens.length) return '';
+  const last = tokens[tokens.length - 1];
+  let phrase = soft;
+  if (
+    tokens.length >= 2
+    && /^(installers?|operators?|technicians?|specialists?|managers?|coordinators?|assistants?|analysts?|engineers?|workers?|associates?|officers?|consultants?|developers?|designers?|supervisors?|clerks?|representatives?|liaisons?)$/iu
+      .test(last)
+  ) {
+    phrase = tokens.slice(0, -1).join(' ');
+  }
+  if (locale !== 'en') return phrase;
+  if (tokens.length === 1) return `${tokens[0]} work`;
+  return /work$/iu.test(phrase) ? phrase : `${phrase} work`;
+}
+
 type DutyTriple = [string, string, string];
 
 /** Locale-pure shells keyed by soft semantic domain — no raw foreign titles. */
@@ -348,23 +391,43 @@ function domainShells(
         'सहकर्मियों के साथ माल की तैयारी और आवाजाही का समन्वय किया।',
       ];
     }
+    if (domain === 'documentation') {
+      if (present) {
+        return female
+          ? [
+            'दैनिक कार्य रिकॉर्ड की समीक्षा करती है और डेटा की पूर्णता सुनिश्चित करती है।',
+            'कार्य दस्तावेज़ अद्यतन करती है और खुली मदों की स्थिति पर नज़र रखती है।',
+            'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करती है।',
+          ]
+          : [
+            'दैनिक कार्य रिकॉर्ड की समीक्षा करता है और डेटा की पूर्णता सुनिश्चित करता है।',
+            'कार्य दस्तावेज़ अद्यतन करता है और खुली मदों की स्थिति पर नज़र रखता है।',
+            'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करता है।',
+          ];
+      }
+      return [
+        'दैनिक कार्य रिकॉर्ड की समीक्षा की और डेटा की पूर्णता सुनिश्चित की।',
+        'कार्य दस्तावेज़ अद्यतन किए और खुली मदों की स्थिति पर नज़र रखी।',
+        'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा किया।',
+      ];
+    }
     if (present) {
       return female
         ? [
-          'दैनिक कार्य रिकॉर्ड की समीक्षा करती है और डेटा की पूर्णता सुनिश्चित करती है।',
-          'कार्य दस्तावेज़ अद्यतन करती है और खुली मदों की स्थिति पर नज़र रखती है।',
-          'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करती है।',
+          'सौंपे गए दैनिक भूमिका संबंधी कार्य पूरे करती है।',
+          'भूमिका की आवश्यकताओं के अनुसार कार्य पूरे करती है।',
+          'सहकर्मियों के साथ कार्य गतिविधियों का समन्वय करती है।',
         ]
         : [
-          'दैनिक कार्य रिकॉर्ड की समीक्षा करता है और डेटा की पूर्णता सुनिश्चित करता है।',
-          'कार्य दस्तावेज़ अद्यतन करता है और खुली मदों की स्थिति पर नज़र रखता है।',
-          'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करता है।',
+          'सौंपे गए दैनिक भूमिका संबंधी कार्य पूरे करता है।',
+          'भूमिका की आवश्यकताओं के अनुसार कार्य पूरे करता है।',
+          'सहकर्मियों के साथ कार्य गतिविधियों का समन्वय करता है।',
         ];
     }
     return [
-      'दैनिक कार्य रिकॉर्ड की समीक्षा की और डेटा की पूर्णता सुनिश्चित की।',
-      'कार्य दस्तावेज़ अद्यतन किए और खुली मदों की स्थिति पर नज़र रखी।',
-      'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा किया।',
+      'सौंपे गए दैनिक भूमिका संबंधी कार्य पूरे किए।',
+      'भूमिका की आवश्यकताओं के अनुसार कार्य पूरे किए।',
+      'सहकर्मियों के साथ कार्य गतिविधियों का समन्वय किया।',
     ];
   }
 
@@ -645,33 +708,52 @@ export function buildJobContextGenerationFallback(options: {
   const domain = classifyFreeTextJobDomain(options.position || '');
   void options.industry;
 
-  const specialized = domainShells(domain, locale, present, female);
+﻿  const specialized = domainShells(domain, locale, present, female);
   if (specialized) {
     return formatExperienceBullets([...specialized]);
   }
 
-  // Safe domain phrase only when script-compatible with the target locale.
+  // Safe work phrase only when script-compatible with the target locale.
+  const workPhrase = softWorkPhraseFromTitle(options.position || '', locale);
   const domainPhrase = softDomainFromTitle(options.position || '', locale);
   const role = roleLabel(options.position || '', female, locale);
   const domainOrRole = domainPhrase || role;
+  const groundedWork = workPhrase || (locale === 'en' ? 'role work' : role);
+
+  // Documentation occupations keep the administrative shell (materially related).
+  if (domain === 'documentation') {
+    if (locale === 'en') {
+      return formatExperienceBullets(present
+        ? [
+          `Reviews day-to-day records related to ${domainOrRole} and verifies data completeness.`,
+          'Updates work documentation and tracks open items according to role needs.',
+          'Coordinates information sharing with colleagues to complete documentation on time.',
+        ]
+        : [
+          `Reviewed day-to-day records related to ${domainOrRole} and verified data completeness.`,
+          'Updated work documentation and tracked open items according to role needs.',
+          'Coordinated information sharing with colleagues to complete documentation on time.',
+        ]);
+    }
+  }
 
   if (locale === 'hr') {
     const lines = present
       ? [
-        `Pregledava dokumentaciju povezanu sa svakodnevnim zadacima u području ${domainOrRole} i provjerava potpunost podataka.`,
-        'Ažurira evidenciju i prati status dokumentacije u skladu s potrebama radnog mjesta.',
-        'Koordinira razmjenu informacija s kolegama radi pravovremenog dovršavanja dokumentacije.',
+        `Obavlja svakodnevne poslove povezane s područjem ${groundedWork} prema dodijeljenim zadacima.`,
+        'Dovršava dodijeljene radne zadatke u skladu s potrebama radnog mjesta.',
+        'Koordinira radne aktivnosti s kolegama.',
       ]
       : [
         female
-          ? `Pregledavala je dokumentaciju povezanu sa svakodnevnim zadacima u području ${domainOrRole} i provjeravala potpunost podataka.`
-          : `Pregledavao je dokumentaciju povezanu sa svakodnevnim zadacima u području ${domainOrRole} i provjeravao potpunost podataka.`,
+          ? `Obavljala je svakodnevne poslove povezane s područjem ${groundedWork} prema dodijeljenim zadacima.`
+          : `Obavljao je svakodnevne poslove povezane s područjem ${groundedWork} prema dodijeljenim zadacima.`,
         female
-          ? 'Ažurirala je evidenciju i pratila status dokumentacije u skladu s potrebama radnog mjesta.'
-          : 'Ažurirao je evidenciju i pratio status dokumentacije u skladu s potrebama radnog mjesta.',
+          ? 'Dovršavala je dodijeljene radne zadatke u skladu s potrebama radnog mjesta.'
+          : 'Dovršavao je dodijeljene radne zadatke u skladu s potrebama radnog mjesta.',
         female
-          ? 'Koordinirala je razmjenu informacija s kolegama radi pravovremenog dovršavanja dokumentacije.'
-          : 'Koordinirao je razmjenu informacija s kolegama radi pravovremenog dovršavanja dokumentacije.',
+          ? 'Koordinirala je radne aktivnosti s kolegama.'
+          : 'Koordinirao je radne aktivnosti s kolegama.',
       ];
     return formatExperienceBullets(lines);
   }
@@ -679,20 +761,20 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'sr') {
     const lines = present
       ? [
-        `Pregleda dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domainOrRole} i proverava potpunost podataka.`,
-        'Ažurira evidenciju i prati status dokumentacije u skladu sa potrebama radnog mesta.',
-        'Koordiniše razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.',
+        `Obavlja svakodnevne poslove povezane sa oblastima ${groundedWork} prema dodeljenim zadacima.`,
+        'Završava dodeljene radne zadatke u skladu sa potrebama radnog mesta.',
+        'Koordiniše radne aktivnosti sa kolegama.',
       ]
       : [
         female
-          ? `Pregledala je dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domainOrRole} i proveravala potpunost podataka.`
-          : `Pregledao je dokumentaciju povezanu sa svakodnevnim zadacima u oblasti ${domainOrRole} i proveravao potpunost podataka.`,
+          ? `Obavljala je svakodnevne poslove povezane sa oblastima ${groundedWork} prema dodeljenim zadacima.`
+          : `Obavljao je svakodnevne poslove povezane sa oblastima ${groundedWork} prema dodeljenim zadacima.`,
         female
-          ? 'Ažurirala je evidenciju i pratila status dokumentacije u skladu sa potrebama radnog mesta.'
-          : 'Ažurirao je evidenciju i pratio status dokumentacije u skladu sa potrebama radnog mesta.',
+          ? 'Završavala je dodeljene radne zadatke u skladu sa potrebama radnog mesta.'
+          : 'Završavao je dodeljene radne zadatke u skladu sa potrebama radnog mesta.',
         female
-          ? 'Koordinisala je razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.'
-          : 'Koordinisao je razmenu informacija sa kolegama radi pravovremenog kompletiranja dokumentacije.',
+          ? 'Koordinisala je radne aktivnosti sa kolegama.'
+          : 'Koordinisao je radne aktivnosti sa kolegama.',
       ];
     return formatExperienceBullets(lines);
   }
@@ -700,29 +782,28 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'en') {
     return formatExperienceBullets(present
       ? [
-        `Reviews day-to-day records related to ${domainOrRole} and verifies data completeness.`,
-        'Updates work documentation and tracks open items according to role needs.',
-        'Coordinates information sharing with colleagues to complete documentation on time.',
+        `Performs day-to-day ${groundedWork} duties as assigned.`,
+        'Completes assigned role tasks according to role needs.',
+        'Coordinates with colleagues on shared role work activities.',
       ]
       : [
-        `Reviewed day-to-day records related to ${domainOrRole} and verified data completeness.`,
-        'Updated work documentation and tracked open items according to role needs.',
-        'Coordinated information sharing with colleagues to complete documentation on time.',
+        `Performed day-to-day ${groundedWork} duties as assigned.`,
+        'Completed assigned role tasks according to role needs.',
+        'Coordinated with colleagues on shared role work activities.',
       ]);
   }
 
   if (locale === 'hi') {
-    // Domain shells above cover design/warehouse; generic Hindi never embeds Latin titles.
     return formatExperienceBullets(present
       ? [
-        'दैनिक कार्य रिकॉर्ड की समीक्षा करती है और डेटा की पूर्णता सुनिश्चित करती है।',
-        'कार्य दस्तावेज़ अद्यतन करती है और खुली मदों की स्थिति पर नज़र रखती है।',
-        'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा करती है।',
+        'सौंपे गए दैनिक भूमिका संबंधी कार्य पूरे करती है।',
+        'भूमिका की आवश्यकताओं के अनुसार कार्य पूरे करती है।',
+        'सहकर्मियों के साथ कार्य गतिविधियों का समन्वय करती है।',
       ]
       : [
-        'दैनिक कार्य रिकॉर्ड की समीक्षा की और डेटा की पूर्णता सुनिश्चित की।',
-        'कार्य दस्तावेज़ अद्यतन किए और खुली मदों की स्थिति पर नज़र रखी।',
-        'सहकर्मियों के साथ जानकारी का समन्वय करके दस्तावेज़ समय पर पूरा किया।',
+        'सौंपे गए दैनिक भूमिका संबंधी कार्य पूरे किए।',
+        'भूमिका की आवश्यकताओं के अनुसार कार्य पूरे किए।',
+        'सहकर्मियों के साथ कार्य गतिविधियों का समन्वय किया।',
       ]);
   }
 
@@ -730,137 +811,137 @@ export function buildJobContextGenerationFallback(options: {
     if (present) {
       return formatExperienceBullets(female
         ? [
-          'تراجع السجلات اليومية المرتبطة بالدور وتتحقق من اكتمال البيانات.',
-          'تحدّث وثائق العمل وتتابع البنود المفتوحة وفق احتياجات الدور.',
-          'تنسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
+          'تنفّذ مهام الدور اليومية وفق ما يُسند إليها.',
+          'تكمل مهام العمل وفق احتياجات الدور.',
+          'تنسّق أنشطة العمل مع الزملاء حسب متطلبات الدور.',
         ]
         : [
-          'يراجع السجلات اليومية المرتبطة بالدور ويتحقق من اكتمال البيانات.',
-          'يحدّث وثائق العمل ويتابع البنود المفتوحة وفق احتياجات الدور.',
-          'ينسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
+          'ينفّذ مهام الدور اليومية وفق ما يُسند إليه.',
+          'يكمل مهام العمل وفق احتياجات الدور.',
+          'ينسّق أنشطة العمل مع الزملاء حسب متطلبات الدور.',
         ]);
     }
     return formatExperienceBullets(female
       ? [
-        'راجعت السجلات اليومية المرتبطة بالدور وتحقّقت من اكتمال البيانات.',
-        'حدّثت وثائق العمل وتابعت البنود المفتوحة وفق احتياجات الدور.',
-        'نسّقت تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
+        'نفّذت مهام الدور اليومية وفق ما أُسند إليها.',
+        'أكملت مهام العمل وفق احتياجات الدور.',
+        'نسّقت أنشطة العمل مع الزملاء حسب متطلبات الدور.',
       ]
       : [
-        'راجع السجلات اليومية المرتبطة بالدور وتحقّق من اكتمال البيانات.',
-        'حدّث وثائق العمل وتابع البنود المفتوحة وفق احتياجات الدور.',
-        'نسّق تبادل المعلومات مع الزملاء لإكمال التوثيق في الوقت المناسب.',
+        'نفّذ مهام الدور اليومية وفق ما أُسند إليه.',
+        'أكمل مهام العمل وفق احتياجات الدور.',
+        'نسّق أنشطة العمل مع الزملاء حسب متطلبات الدور.',
       ]);
   }
 
   if (locale === 'ja') {
     return formatExperienceBullets([
-      '日常業務に関する記録を確認し、データの完全性を検証する。',
-      '業務文書を更新し、未完了項目の状況を確認する。',
-      '関係者と情報を調整し、文書を期限内に完了させる。',
+      '割り当てに応じて日常の役割業務を遂行する。',
+      '役割の要件に応じて業務タスクを完了する。',
+      '同僚と連携して業務活動を調整する。',
     ]);
   }
 
   if (locale === 'de') {
     return formatExperienceBullets(present
       ? [
-        `Prüft tägliche Unterlagen im Bereich ${domainOrRole} und kontrolliert die Vollständigkeit der Daten.`,
-        'Aktualisiert Arbeitsdokumentation und verfolgt offene Vorgänge.',
-        'Koordiniert den Informationsaustausch mit Kolleginnen und Kollegen zur fristgerechten Fertigstellung.',
+        `Führt tägliche Aufgaben im Bereich ${groundedWork} nach Zuweisung aus.`,
+        'Erledigt zugewiesene Arbeitsaufgaben entsprechend den Rollenanforderungen.',
+        'Stimmt Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
       ]
       : [
-        `Prüfte tägliche Unterlagen im Bereich ${domainOrRole} und kontrollierte die Vollständigkeit der Daten.`,
-        'Aktualisierte Arbeitsdokumentation und verfolgte offene Vorgänge.',
-        'Koordinierte den Informationsaustausch mit Kolleginnen und Kollegen zur fristgerechten Fertigstellung.',
+        `Führte tägliche Aufgaben im Bereich ${groundedWork} nach Zuweisung aus.`,
+        'Erledigte zugewiesene Arbeitsaufgaben entsprechend den Rollenanforderungen.',
+        'Stimmte Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
       ]);
   }
 
   if (locale === 'es') {
     return formatExperienceBullets(present
       ? [
-        `Revisa registros diarios relacionados con ${domainOrRole} y verifica la integridad de los datos.`,
-        'Actualiza la documentación de trabajo y sigue asuntos abiertos.',
-        'Coordina el intercambio de información con colegas para completar la documentación a tiempo.',
+        `Realiza tareas diarias relacionadas con ${groundedWork} según lo asignado.`,
+        'Completa tareas asignadas del rol según las necesidades del puesto.',
+        'Coordina actividades de trabajo con colegas.',
       ]
       : [
-        `Revisó registros diarios relacionados con ${domainOrRole} y verificó la integridad de los datos.`,
-        'Actualizó la documentación de trabajo y siguió asuntos abiertos.',
-        'Coordinó el intercambio de información con colegas para completar la documentación a tiempo.',
+        `Realizó tareas diarias relacionadas con ${groundedWork} según lo asignado.`,
+        'Completó tareas asignadas del rol según las necesidades del puesto.',
+        'Coordinó actividades de trabajo con colegas.',
       ]);
   }
 
   if (locale === 'fr') {
     return formatExperienceBullets(present
       ? [
-        `Examine les dossiers quotidiens liés à ${domainOrRole} et vérifie l’exhaustivité des données.`,
-        'Met à jour la documentation de travail et suit les dossiers ouverts.',
-        'Coordonne l’échange d’informations avec les collègues pour finaliser la documentation.',
+        `Exécute les tâches quotidiennes liées à ${groundedWork} selon les missions assignées.`,
+        'Mène à bien les tâches assignées selon les besoins du rôle.',
+        'Coordonne les activités de travail avec les collègues.',
       ]
       : [
-        `Examinait les dossiers quotidiens liés à ${domainOrRole} et vérifiait l’exhaustivité des données.`,
-        'Mettait à jour la documentation de travail et suivait les dossiers ouverts.',
-        'Coordonnait l’échange d’informations avec les collègues pour finaliser la documentation.',
+        `Exécutait les tâches quotidiennes liées à ${groundedWork} selon les missions assignées.`,
+        'Menait à bien les tâches assignées selon les besoins du rôle.',
+        'Coordonnait les activités de travail avec les collègues.',
       ]);
   }
 
   if (locale === 'it') {
     return formatExperienceBullets(present
       ? [
-        `Esamina i registri quotidiani relativi a ${domainOrRole} e verifica la completezza dei dati.`,
-        'Aggiorna la documentazione di lavoro e segue le pratiche aperte.',
-        'Coordina lo scambio di informazioni con i colleghi per completare la documentazione.',
+        `Svolge compiti quotidiani legati a ${groundedWork} secondo quanto assegnato.`,
+        'Completa i compiti assegnati secondo le esigenze del ruolo.',
+        'Coordina le attività di lavoro con i colleghi.',
       ]
       : [
-        `Esaminava i registri quotidiani relativi a ${domainOrRole} e verificava la completezza dei dati.`,
-        'Aggiornava la documentazione di lavoro e seguiva le pratiche aperte.',
-        'Coordinava lo scambio di informazioni con i colleghi per completare la documentazione.',
+        `Svolgeva compiti quotidiani legati a ${groundedWork} secondo quanto assegnato.`,
+        'Completava i compiti assegnati secondo le esigenze del ruolo.',
+        'Coordinava le attività di lavoro con i colleghi.',
       ]);
   }
 
   if (locale === 'ru') {
     return formatExperienceBullets(present
       ? [
-        'Проверяет повседневные рабочие записи и полноту данных.',
-        'Обновляет рабочую документацию и отслеживает открытые пункты.',
-        'Согласовывает обмен информацией с коллегами для своевременного завершения документации.',
+        'Выполняет повседневные рабочие задачи роли по назначению.',
+        'Завершает рабочие задачи согласно требованиям роли.',
+        'Согласовывает рабочие активности с коллегами по требованиям роли.',
       ]
       : female
         ? [
-          'Проверяла повседневные рабочие записи и полноту данных.',
-          'Обновляла рабочую документацию и отслеживала открытые пункты.',
-          'Согласовывала обмен информацией с коллегами для своевременного завершения документации.',
+          'Выполняла повседневные рабочие задачи роли по назначению.',
+          'Завершала рабочие задачи согласно требованиям роли.',
+          'Согласовывала рабочие активности с коллегами по требованиям роли.',
         ]
         : [
-          'Проверял повседневные рабочие записи и полноту данных.',
-          'Обновлял рабочую документацию и отслеживал открытые пункты.',
-          'Согласовывал обмен информацией с коллегами для своевременного завершения документации.',
+          'Выполнял повседневные рабочие задачи роли по назначению.',
+          'Завершал рабочие задачи согласно требованиям роли.',
+          'Согласовывал рабочие активности с коллегами по требованиям роли.',
         ]);
   }
 
   if (locale === 'pt-BR') {
     return formatExperienceBullets(present
       ? [
-        `Revisa registros diários relacionados a ${domainOrRole} e verifica a completude dos dados.`,
-        'Atualiza a documentação de trabalho e acompanha itens em aberto.',
-        'Coordena a troca de informações com colegas para concluir a documentação no prazo.',
+        `Executa tarefas diárias relacionadas a ${groundedWork} conforme atribuído.`,
+        'Conclui tarefas atribuídas de acordo com as necessidades da função.',
+        'Coordena atividades de trabalho com colegas.',
       ]
       : [
-        `Revisava registros diários relacionados a ${domainOrRole} e verificava a completude dos dados.`,
-        'Atualizava a documentação de trabalho e acompanhava itens em aberto.',
-        'Coordenava a troca de informações com colegas para concluir a documentação no prazo.',
+        `Executava tarefas diárias relacionadas a ${groundedWork} conforme atribuído.`,
+        'Concluía tarefas atribuídas de acordo com as necessidades da função.',
+        'Coordenava atividades de trabalho com colegas.',
       ]);
   }
 
   // Final layer: always three useful English CV bullets (never empty).
   return formatExperienceBullets(present
     ? [
-      'Reviews day-to-day work records and verifies data completeness.',
-      'Updates work documentation and tracks open items according to role needs.',
-      'Coordinates information sharing with colleagues to complete documentation on time.',
+      `Performs day-to-day ${groundedWork} duties as assigned.`,
+      `Completes ${groundedWork} tasks according to role needs.`,
+      `Coordinates with colleagues on ${groundedWork} activities.`,
     ]
     : [
-      'Reviewed day-to-day work records and verified data completeness.',
-      'Updated work documentation and tracked open items according to role needs.',
-      'Coordinated information sharing with colleagues to complete documentation on time.',
+      `Performed day-to-day ${groundedWork} duties as assigned.`,
+      `Completed ${groundedWork} tasks according to role needs.`,
+      `Coordinated with colleagues on ${groundedWork} activities.`,
     ]);
 }

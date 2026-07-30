@@ -242,19 +242,85 @@ const DOMAIN_CUE_RE: Record<FreeTextJobDomain, RegExp> = {
   hospitality: /(?:jel\w*|dish|cuisine|kitchen|kuhinj|bar|guest|hygiene|व्यंजन|रसोई)/iu,
   healthcare: /(?:patient|pacijen|care|nurs|record|chart|пациент)/iu,
   documentation: /(?:dokument|document|evidenc|record|status|информац|दस्तावे|रिकॉर्ड|توثيق|وثائق|سجلات|書類|文書|記録|документ|запис)/iu,
-  general: /(?:dokument|document|record|информац|coord|koordin|update|ažur|समन्वय|अद्यतन|تحدّث|وثائق|سجلات|日常|記録|文書|документ|запис)/iu,
+  // Role-work cues only — documentation/admin language is not material for general titles.
+  general: /(?:dut(?:y|ies)|tasks?|work\s+activit|role\s+work|as\s+assigned|role\s+needs?|zadat|poslov|aktivnost|koleg|obavlja|dodeljen|dodijeljen|業務|役割|कार्य|सौंपे|دور|задач|Arbeit(?:en|s)?|Tätig|colleagues|коллег|زملاء|同僚|सहकर्मी|compiti|tareas|tâches|tarefas|Aufgaben|mansioni)/iu,
 };
+
+/**
+ * Classic empty-source administrative/documentation shell.
+ * Not materially related to non-documentation occupations even when a title
+ * stem is pasted into one bullet ("related to …").
+ */
+export const EXPERIENCE_GENERATION_RELEVANCE_367_REVISION =
+  'experience-generation-relevance-367-v1' as const;
+
+void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
+
+export function generationLooksGenericAdministrativeOnly(text: string): boolean {
+  void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
+  const joined = text || '';
+  if (!joined.trim()) return false;
+  const signals = [
+    /day-to-day\s+records/iu,
+    /work\s+documentation/iu,
+    /information\s+sharing/iu,
+    /(?:verif(?:y|ies|ied)|kontroll\w*|provjer\w*|prover\w*).{0,24}(?:data\s+)?completeness|potpunost\s+podataka|Vollständigkeit|intégrité|exhaustivité|completezza|completude|اكتمال\s+البيانات|データの完全性|полноту?\s+данных/iu,
+    /(?:tracks?|tracked|prati|pratila|pratilo|verfolgt|sigue|suit|segue|acompanha|يتابع|تابعت|未完了|открыт).{0,40}(?:open\s+items|offene|dossiers?\s+ouvert|pratiche\s+aperte|بنود\s+مفتوحة|खुली\s+मद)/iu,
+    /complete\s+documentation|dovršavanja?\s+dokumentacije|kompletiranja?\s+dokumentacije|Fertigstellung|finaliser\s+la\s+documentation|completare\s+la\s+documentazione|concluir\s+a\s+documentação|إكمال\s+التوثيق|文書を期限内|завершения?\s+документации|दस्तावेज़\s+समय\s+पर/iu,
+    /(?:Pregledava|Pregleda|Ažurira|Koordinira|Koordiniše).{0,80}dokument/iu,
+    /سجل(?:ات)?\s+اليومية|وثائق\s+العمل|تبادل\s+المعلومات/iu,
+    /日常業務に関する記録|業務文書を更新|関係者と情報を調整/iu,
+    /повседневные\s+рабочие\s+записи|рабочую\s+документацию|обмен\s+информацией/iu,
+    /दैनिक\s+कार्य\s+रिकॉर्ड|कार्य\s+दस्तावेज़|जानकारी\s+का\s+समन्वय/iu,
+  ];
+  return signals.filter((re) => re.test(joined)).length >= 2;
+}
+
+function titleAndTextLookCrossScript(position: string, text: string): boolean {
+  const p = position || '';
+  const t = text || '';
+  if (!p.trim() || !t.trim()) return false;
+  const titleLat = /[A-Za-zÀ-ÖØ-öø-ÿ]{3,}/u.test(p);
+  const titleCjk = /[\u3040-\u30FF\u3400-\u9FFF]/u.test(p);
+  const titleAr = /[\u0600-\u06FF]/u.test(p);
+  const titleDev = /[\u0900-\u097F]/u.test(p);
+  const titleCyr = /[\u0400-\u04FF]/u.test(p);
+  const textLat = /[A-Za-zÀ-ÖØ-öø-ÿ]{3,}/u.test(t);
+  const textCjk = /[\u3040-\u30FF\u3400-\u9FFF]/u.test(t);
+  const textAr = /[\u0600-\u06FF]/u.test(t);
+  const textDev = /[\u0900-\u097F]/u.test(t);
+  const textCyr = /[\u0400-\u04FF]/u.test(t);
+  if (titleLat && !textLat && (textCjk || textAr || textDev || textCyr)) return true;
+  if (titleCjk && textLat && !textCjk) return true;
+  if (titleAr && textLat && !textAr) return true;
+  if (titleDev && textLat && !textDev) return true;
+  if (titleCyr && textLat && !textCyr) return true;
+  return false;
+}
+
+function looksLikeLocalePureRoleWorkShell(text: string): boolean {
+  if (generationLooksGenericAdministrativeOnly(text)) return false;
+  return /(?:day-to-day\s+\S[\s\S]{0,40}duties\s+as\s+assigned|assigned\s+role\s+tasks|shared\s+role\s+work\s+activities|svakodnevne\s+poslove|dodijeljene\s+radne\s+zadatke|dodeljene\s+radne\s+zadatke|tägliche\s+Aufgaben|zugewiesene\s+Arbeitsaufgaben|tareas\s+diarias|tâches\s+quotidiennes|compiti\s+quotidiani|tarefas\s+diárias|mansioni\s+quotidiane|役割業務|業務タスク|مهام\s+الدور|рабочие\s+задачи\s+роли|भूमिका\s+संबंधी)/iu
+    .test(text || '');
+}
 
 /**
  * Soft relevance: generated text should share ≥1 stem with the free-text title
  * when stems exist. Empty title → pass (context may be industry/level only).
- * Cross-script titles (e.g. Serbian Latin title → Hindi Devanagari bullets)
- * use semantic domain cues instead of literal stem overlap.
+ * Cross-script titles use semantic domain cues instead of literal stem overlap.
+ * Generic admin/docs shells are never relevant unless the title is documentation.
  */
 export function textLooksRelevantToFreeTextTitle(
   text: string,
   position: string,
 ): boolean {
+  const domain = classifyFreeTextJobDomain(position);
+  if (
+    generationLooksGenericAdministrativeOnly(text)
+    && domain !== 'documentation'
+  ) {
+    return false;
+  }
   const stems = freeTextTitleStems(position);
   if (!stems.length) return true;
   const folded = foldAiTextToken(text);
@@ -265,8 +331,13 @@ export function textLooksRelevantToFreeTextTitle(
   })) {
     return true;
   }
-  const domain = classifyFreeTextJobDomain(position);
-  return DOMAIN_CUE_RE[domain].test(text) || DOMAIN_CUE_RE[domain].test(folded);
+  if (DOMAIN_CUE_RE[domain].test(text) || DOMAIN_CUE_RE[domain].test(folded)) {
+    return true;
+  }
+  if (titleAndTextLookCrossScript(position, text)) {
+    return DOMAIN_CUE_RE.general.test(text) || DOMAIN_CUE_RE.general.test(folded);
+  }
+  return looksLikeLocalePureRoleWorkShell(text);
 }
 
 /** True when `position` uses a script family incompatible with embedding in `locale` prose. */

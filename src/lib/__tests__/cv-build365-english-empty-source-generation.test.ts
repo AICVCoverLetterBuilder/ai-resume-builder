@@ -49,15 +49,21 @@ const SOLAR_UNSAFE_PRESENT = formatExperienceBullets([
 ]);
 
 const SOLAR_SAFE_PRESENT = formatExperienceBullets([
-  'Reviews day-to-day records related to solar panel installation and verifies data completeness.',
-  'Updates work documentation and tracks open items according to role needs.',
-  'Coordinates information sharing with colleagues to complete documentation on time.',
+  'Performs day-to-day solar panel work duties as assigned.',
+  'Completes assigned role tasks according to role needs.',
+  'Coordinates with colleagues on shared role work activities.',
 ]);
 
 const SOLAR_SAFE_PAST = formatExperienceBullets([
-  'Reviewed day-to-day records related to solar panel installation and verified data completeness.',
-  'Updated work documentation and tracked open items according to role needs.',
-  'Coordinated information sharing with colleagues to complete documentation on time.',
+  'Performed day-to-day solar panel work duties as assigned.',
+  'Completed assigned role tasks according to role needs.',
+  'Coordinated with colleagues on shared role work activities.',
+]);
+
+const SOLAR_ADMIN_IRRELEVANT = formatExperienceBullets([
+  'Reviews day-to-day records related to solar panel installation and verifies data completeness.',
+  'Updates work documentation and tracks open items according to role needs.',
+  'Coordinates information sharing with colleagues to complete documentation on time.',
 ]);
 
 const UNSUPPORTED_CLAIMS = formatExperienceBullets([
@@ -359,9 +365,9 @@ describe('AAB-365 English empty-source Experience generation', () => {
     const r = runEmptyEnGeneration({
       position: 'Beekeeper',
       candidate: formatExperienceBullets([
-        'Reviews day-to-day records related to beekeeping work and verifies data completeness.',
-        'Updates work documentation and tracks open items according to role needs.',
-        'Coordinates information sharing with colleagues to complete documentation on time.',
+        'Performs day-to-day beekeeper work duties as assigned.',
+        'Completes assigned role tasks according to role needs.',
+        'Coordinates with colleagues on shared role work activities.',
       ]),
     });
     expect(r.finalized.blocked).toBe(false);
@@ -370,6 +376,18 @@ describe('AAB-365 English empty-source Experience generation', () => {
     expect(r.finalized.diagnostics?.finalSourceUnitPredicateCoveragePassed).toBeNull();
     expect(r.preApplyGate?.passed).toBe(true);
     expect(r.usageAfter).toBe(1);
+  });
+
+  it('admin/documentation shell is not accepted as Solar Panel Installer provider', () => {
+    const r = runEmptyEnGeneration({
+      usageBefore: 2,
+      candidate: SOLAR_ADMIN_IRRELEVANT,
+    });
+    expect(r.finalized.countedAsSuccess).toBe(true);
+    expect(r.finalized.origin).toBe('deterministic_fallback');
+    expect(r.finalized.text).not.toMatch(/work documentation|information sharing|data completeness/i);
+    expect(r.finalized.text).toMatch(/solar panel work/i);
+    expect(r.usageAfter).toBe(3);
   });
 
   it('current vs past tense empty-source generation both apply', () => {
