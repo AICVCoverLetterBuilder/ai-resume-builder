@@ -1,7 +1,7 @@
 import type { Locale } from '@/lib/i18n/translations';
 import { SUMMARY_V2_REVISION } from './flag';
 import { factCoveredInText } from './facts';
-import { bulletToWhereClauseEn, dutyTenseFromEmploymentState } from './tense';
+import { bulletToWhereClauseEn, dutyTenseFromEmploymentState, summaryHasMalformedDoublePast } from './tense';
 import type {
   SummaryV2EmploymentState,
   SummaryV2EntryFact,
@@ -196,6 +196,8 @@ export function validateSummaryV2AgainstManifest(
     reason = 'missing_current_role_intro';
   } else if (prior && (!priorRolePresent || !priorEmployerPresent || !priorStateExpressed)) {
     reason = 'missing_prior_role_intro';
+  } else if (manifest.locale === 'en' && summaryHasMalformedDoublePast(text)) {
+    reason = 'malformed_double_past_inflection';
   } else if (!currentDutyTenseOk || !priorDutyTenseOk) {
     reason = 'duty_tense_mismatch';
   }

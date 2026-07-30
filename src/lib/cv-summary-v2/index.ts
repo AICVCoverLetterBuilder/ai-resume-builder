@@ -37,6 +37,10 @@ export {
   dutyTenseFromEmploymentState,
   toEnglishPastVerb,
   dutyBulletForLocaleShell,
+  peelEnglishVerbToLemma,
+  isEnglishPastVerbForm,
+  isMalformedDoublePastToken,
+  summaryHasMalformedDoublePast,
 } from './tense';
 export type { SummaryV2DutyTense } from './tense';
 export {
