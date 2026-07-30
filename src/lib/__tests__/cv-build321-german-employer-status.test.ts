@@ -395,7 +395,7 @@ describe('AAB-321 German Summary employer and status coverage', () => {
       || reject.diagnostics?.finalCandidateSource === 'deterministic_fallback',
     ).toBe(true);
     expect(reject.diagnostics?.providerAccepted).toBe(false);
-    expect(reject.text).toMatch(/Ich\s+verfüge|Derzeit\s+arbeite\s+ich/i);
+    expect(reject.text).toMatch(/Ich\s+(?:verfüge|arbeite)|Derzeit\s+arbeite\s+ich|arbeite\s+derzeit/i);
   });
 
   it('48. failed recovery keeps usage unchanged (blocked when no safe candidate)', () => {

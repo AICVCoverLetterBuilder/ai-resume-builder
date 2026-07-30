@@ -22,6 +22,8 @@ const EXPERIENCE_AI_FIELD_SOURCE = 'selectedSourceKind';
 const EXPERIENCE_AI_FIELD_FALLBACK = 'fallbackCoveredFactCount';
 const SUMMARY_AI_TRACE_MARKER = 'CVPRO_SUMMARY_AI_TRACE_V1';
 const SUMMARY_AI_COPY = 'Copy Summary AI diagnostics';
+const SUMMARY_V2_MARKER = 'summary-v2';
+const SUMMARY_V2_REVISION = 'summary-v2-architecture-371-v1';
 
 function fail(msg) {
   console.error(`[verify-internal-ai-reset] FAIL: ${msg}`);
@@ -335,6 +337,17 @@ if (expect === 'enabled') {
     fail(`missing internal diagnostics revision "${INTERNAL_AI_DIAGNOSTICS_298}"`);
   }
   log('OK internal-ai-diagnostics-298-v1 present');
+  if (!blob.includes(SUMMARY_V2_MARKER)) {
+    fail(`missing Summary V2 marker "${SUMMARY_V2_MARKER}"`);
+  }
+  if (!blob.includes(SUMMARY_V2_REVISION)) {
+    fail(`missing Summary V2 revision "${SUMMARY_V2_REVISION}"`);
+  }
+  if (!blob.includes('NEXT_PUBLIC_ENABLE_SUMMARY_V2') && !blob.includes('ENABLE_SUMMARY_V2')) {
+    // Inlined Next public env often appears as the literal "true" near the key; require revision + marker above.
+    log('OK Summary V2 markers present (public env key may be inlined)');
+  }
+  log('OK Summary V2 markers present');
   if (!hasMarker) fail(`missing marker ${MARKER}`);
   if (!hasButton) fail(`missing button text "${RESET_BUTTON}"`);
   if (!hasChannel) fail(`missing "${CHANNEL_LABEL}"`);

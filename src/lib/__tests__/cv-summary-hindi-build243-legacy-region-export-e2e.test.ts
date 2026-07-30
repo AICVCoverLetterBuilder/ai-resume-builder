@@ -12,6 +12,12 @@
  *   collapsed both formats into the generic localized export failure.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
 import type { CVData } from '@/lib/types';
 import {
   CV_DRAFT_STORAGE_KEY,

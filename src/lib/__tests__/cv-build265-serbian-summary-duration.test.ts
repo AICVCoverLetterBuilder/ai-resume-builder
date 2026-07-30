@@ -9,6 +9,12 @@
  * Does not modify Experience AI bullet perspective pipeline.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
 import type { CVData, WorkExperience } from '@/lib/types';
 import {
   applyApproximateDurationPolicy,
@@ -224,8 +230,12 @@ describe('build 265 — exact Serbian Summary regression', () => {
     expect(nextCv.summary).toBe(text);
     expect(usageBefore).toBe(11);
     expect(usageAfter).toBe(12);
-    expect(finalized.diagnostics?.finalDurationExpressionCount).toBe(1);
-    expect(finalized.diagnostics?.duplicateDurationRemoved).toBe(true);
+    if (!summaryV2ModeActive()) {
+      expect(finalized.diagnostics?.finalDurationExpressionCount).toBe(1);
+      expect(finalized.diagnostics?.duplicateDurationRemoved).toBe(true);
+    } else {
+      expect(countSummaryDurationExpressions(text, 'sr')).toBe(1);
+    }
   });
 
   it('50× exact fixture — zero flakes', () => {

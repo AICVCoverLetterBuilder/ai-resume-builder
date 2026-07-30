@@ -6,6 +6,12 @@
  * leakage, no first-duty-only collapse, no bare skills fragments.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
 import type { CVData } from '@/lib/types';
 import {
   buildCvCanonicalFactSet,

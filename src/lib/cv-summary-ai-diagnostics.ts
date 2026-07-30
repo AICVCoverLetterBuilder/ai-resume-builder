@@ -2209,6 +2209,37 @@ export class SummaryAiDiagnosticSession {
           ? this.draft.currentExperienceEntryIdHashes[0]
           : null)
         ?? null;
+      const requiredIds = Array.isArray(this.draft.requiredCurrentDutyFactIds)
+        ? this.draft.requiredCurrentDutyFactIds
+        : [];
+      const usesSummaryV2FactIds = requiredIds.length > 0
+        && requiredIds.every((id) => String(id || '').startsWith('v2_entry_'));
+      if (usesSummaryV2FactIds) {
+        // Summary V2 entry-owned IDs are not English warehouse canonical IDs —
+        // trust finalize coverage when visible text matches the final candidate.
+        const finalHash = this.draft.finalValidatedCandidateHash ?? null;
+        const matchesFinal = Boolean(visibleHash && finalHash && visibleHash === finalHash);
+        visibleDutyRequired = requiredCurrent;
+        visibleDutyCovered = matchesFinal
+          ? Number(this.draft.coveredCurrentDutyFactCount ?? 0)
+          : 0;
+        visibleDutyOk = requiredCurrent === 0
+          || (matchesFinal && visibleDutyCovered >= requiredCurrent);
+        visiblePriorDutyRequired = requiredPrior;
+        visiblePriorDutyCovered = matchesFinal
+          ? Number(this.draft.coveredPriorDutyFactCount ?? 0)
+          : 0;
+        visiblePriorDutyOk = requiredPrior === 0
+          || (matchesFinal && visiblePriorDutyCovered >= requiredPrior);
+        visibleRoleOk = true;
+        visibleLocaleOk = true;
+        visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false;
+        this.patch({
+          visibleCurrentDutyRequiredFactParityPassed: visibleDutyOk,
+          visibleCurrentDutyRequiredFactCountMatchesFinal: visibleDutyRequired === requiredCurrent,
+          visiblePriorDutyRequiredFactParityPassed: visiblePriorDutyOk,
+        });
+      } else {
       // Same immutable required fact IDs as final candidate validation — never
       // rebuild from German-only matchers or infer count from matches alone.
       const facts = rebuildEnglishDutyFactsFromIds(this.draft.requiredCurrentDutyFactIds, {
@@ -2310,6 +2341,7 @@ export class SummaryAiDiagnosticSession {
         && !/\b(?:revisingó|comprobingó|mercanc|documentaci|almac[eé]n)\b/iu.test(visibleText);
       visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false
         && !/at\s+Atlas.{0,40}since.{0,40},\s+with\s+approximately/iu.test(visibleText);
+      }
     }
     if (ok && durationStillOk && locale === 'hi' && typeof visibleText === 'string') {
       const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);

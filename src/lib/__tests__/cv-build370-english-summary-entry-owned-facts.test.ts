@@ -6,6 +6,12 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
+import {
   finalizeCvAiFieldForApply,
   SUMMARY_RUNTIME_MARKER_SET,
 } from '@/lib/cv-ai-finalize-apply';

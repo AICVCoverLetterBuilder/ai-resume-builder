@@ -3,6 +3,12 @@
  * False mixed-language / title-conflict from Latin proper nouns + Hindi duties.
  */
 import { describe, it, expect } from 'vitest';
+import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
 import { buildCvCanonicalFactSet } from '@/lib/cv-canonical-facts';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
 import { validateLocalizedSummary } from '@/lib/cv-semantic-fidelity';

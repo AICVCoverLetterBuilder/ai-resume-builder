@@ -3,6 +3,12 @@
  * warehouse grounding, neutral perspective.
  */
 import { describe, expect, it } from 'vitest';
+import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
 import type { CVData } from '../types';
 import { formatExperienceBullets } from '../cv-canonical-facts';
 import {
@@ -94,7 +100,17 @@ function fixtureCv(summary = ''): CVData {
   };
 }
 
-function assertValidHiSummary(text: string) {
+function assertValidHiSummary(text: string, cv?: CVData): void {
+  if (summaryV2ModeActive()) {
+    expectSummaryContractInvariants({
+      text,
+      locale: 'hi',
+      cv: cv || fixtureCv(),
+      requirePrior: true,
+    });
+    return;
+  }
+
   expect(text.trim()).toBeTruthy();
   expect(text).toMatch(/साढ़े छह|6\.5 वर्ष/);
   expect(text).not.toMatch(/साढ़े\s*6\.5/);
@@ -109,6 +125,7 @@ function assertValidHiSummary(text: string) {
   expect(atlasHits).toBeGreaterThanOrEqual(1);
   expect(text).not.toMatch(/जनवरी 2023 से Atlas[\s\S]*2023 से Atlas/);
   expect(text).not.toMatch(/2023 से Atlas[\s\S]*जनवरी 2023 से Atlas/);
+
 }
 
 describe('build 274 Hindi Summary quality + duration representation', () => {

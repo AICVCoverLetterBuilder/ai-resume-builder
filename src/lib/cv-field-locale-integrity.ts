@@ -133,7 +133,6 @@ export function textMatchesRequestedFieldLocale(
   if (field === 'proficiency') {
     return localizeCvLanguageLevel(value, 'hi') === value && !hasForeignProseForHindi(value);
   }
-  if (hasForeignProseForHindi(value)) return false;
 
   const proseField = field === 'summary'
     || field === 'experience_bullet'
@@ -142,6 +141,9 @@ export function textMatchesRequestedFieldLocale(
   const scriptProbe = proseField
     ? stripStructuredCvProperNouns(value, structuredExemptions)
     : value;
+  // Foreign-prose markers inside stripped structured titles (e.g. "dizajner" in a
+  // live Experience job title) must not reject an otherwise Devanagari summary.
+  if (hasForeignProseForHindi(scriptProbe || value)) return false;
   // If neutralizing structured tokens leaves almost nothing, the field was only
   // proper nouns/contacts — accept for compact fields; prose still needs Hindi.
   const { devanagari, latin } = scriptCounts(scriptProbe || value);

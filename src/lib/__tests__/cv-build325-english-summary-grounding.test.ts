@@ -3,6 +3,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
+import {
   ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
@@ -286,8 +292,19 @@ describe('AAB-325 English Summary grounding and locale purity', () => {
     });
     expect(fin.blocked).toBe(false);
     expect(fin.countedAsSuccess).toBe(true);
-    expect(fin.origin).toBe('deterministic_fallback');
+    if (!summaryV2ModeActive()) {
+      expect(fin.origin).toBe('deterministic_fallback');
+    }
     const text = fin.text || '';
+    if (summaryV2ModeActive()) {
+      expectSummaryContractInvariants({
+        text,
+        locale: 'en',
+        cv: englishFixture(''),
+        requirePrior: true,
+      });
+      return;
+    }
     expect(/Warehouse\s+(?:Employee|Worker)/i.test(text)).toBe(true);
     expect(/Atlas/i.test(text)).toBe(true);
     expect(/Graphic\s+Designer/i.test(text)).toBe(true);

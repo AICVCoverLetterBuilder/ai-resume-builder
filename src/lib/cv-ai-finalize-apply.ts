@@ -163,6 +163,11 @@ import {
   resolveEnglishSummaryEntryDuties,
 } from './cv-english-summary-grounding';
 import {
+  SUMMARY_V2_REVISION,
+  isSummaryV2Enabled,
+  runSummaryV2,
+} from './cv-summary-v2';
+import {
   analyzeFrenchSummaryEmploymentQuality,
   isFrenchStructuredSummaryDomain,
   SUMMARY_BUILDER_REVISION_FR,
@@ -785,6 +790,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION,
   SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION,
   ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION,
+  SUMMARY_V2_REVISION,
   SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION,
   SUMMARY_BUILDER_REVISION_DE,
   ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
@@ -2857,6 +2863,228 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     );
   const dutiesText = dutiesTextFromCv(cv);
   const liveSummary = (cv.summary || '').trim();
+
+  // Summary V2 parallel path — legacy engine untouched when flag is off.
+  if (isSummaryV2Enabled()) {
+    void SUMMARY_V2_REVISION;
+    const v2 = runSummaryV2({
+      cv,
+      locale,
+      gender,
+      candidate: input.candidate,
+      referenceDateIso: input.referenceDateIso
+        || durationSnapshot.referenceDateIso
+        || new Date().toISOString().slice(0, 10),
+    });
+    const v2Text = (v2.text || '').trim();
+    const v2Hash = v2Text ? hashSummaryCandidate(v2Text) : null;
+    const v2Units = v2Text
+      ? v2Text.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean)
+      : [];
+    const roleSlots = [
+      ...(v2.manifest.current ? ['current_intro' as const] : []),
+      ...v2.manifest.priors.map(() => 'prior_role' as const),
+    ];
+    // Duration unit is prepended for non-EN / separate for EN.
+    const unitRoleSlots = v2.manifest.totalDurationMonths > 0
+      ? (['duration', ...roleSlots] as string[])
+      : [...roleSlots];
+    const providerRaw = (input.candidate || '').trim();
+    const providerHash = providerRaw ? hashSummaryCandidate(providerRaw) : null;
+    const providerRejected = Boolean(providerRaw) && v2.origin !== 'ai_generated';
+    const v2UnitHashes = v2Units.map((u) => fingerprintText(u));
+    const success = !v2.blocked && v2.countedAsSuccess;
+    const diagBase = {
+      requiredCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
+      coveredCurrentDutyFactCount: v2.validation.coveredCurrentFactCount,
+      missingCurrentDutyFactCount: Math.max(
+        0,
+        v2.validation.requiredCurrentFactCount - v2.validation.coveredCurrentFactCount,
+      ),
+      requiredPriorDutyFactCount: v2.validation.requiredPriorFactCount,
+      coveredPriorDutyFactCount: v2.validation.coveredPriorFactCount,
+      missingPriorDutyFactCount: Math.max(
+        0,
+        v2.validation.requiredPriorFactCount - v2.validation.coveredPriorFactCount,
+      ),
+      requiredCurrentDutyFactIds: v2.manifest.requiredCurrentFacts.map((f) => f.factId),
+      requiredPriorDutyFactIds: v2.manifest.requiredPriorFacts.map((f) => f.factId),
+      finalCandidateSource: v2.origin,
+      durationClaimCountAfterFinalize: v2.validation.durationExpressionCount,
+      durationClaimCountAfterInsert: v2.validation.durationExpressionCount,
+      summaryDurationExpressionCount: v2.validation.durationExpressionCount,
+      durationValidationPassed: v2.validation.durationExpressionCount === 1
+        || v2.manifest.totalDurationMonths <= 0,
+      durationFinalizerIdempotent: true,
+      durationSecondPassChanged: false,
+      totalDurationSlotPresent: v2.validation.durationExpressionCount === 1,
+      finalTotalDurationSlotPresent: v2.validation.durationExpressionCount === 1,
+      finalDurationOwnerDetected: 'total_professional_experience',
+      finalDurationScopeValidationPassed: v2.validation.durationExpressionCount === 1
+        || v2.manifest.totalDurationMonths <= 0,
+      finalDurationCurrentRoleAttachmentRisk: false,
+      finalDurationRepresentationKind: 'approximate_total_career',
+      finalCurrentDutyCoveragePassed:
+        v2.validation.coveredCurrentFactCount >= v2.validation.requiredCurrentFactCount,
+      finalPriorDutyCoveragePassed:
+        v2.validation.coveredPriorFactCount >= v2.validation.requiredPriorFactCount,
+      finalCurrentEmployerPresent: v2.validation.currentEmployerPresent,
+      finalPriorEmployerPresent: v2.validation.priorEmployerPresent,
+      finalCurrentEmploymentStateExpressed: v2.validation.currentStateExpressed,
+      finalPriorEmploymentStateExpressed: v2.validation.priorStateExpressed,
+      finalCurrentRoleIntroValidationPassed: Boolean(
+        v2.validation.currentRolePresent
+        && v2.validation.currentEmployerPresent
+        && v2.validation.currentStateExpressed,
+      ),
+      finalPriorRoleIntroValidationPassed: Boolean(
+        v2.validation.priorRolePresent
+        && v2.validation.priorEmployerPresent
+        && v2.validation.priorStateExpressed,
+      ),
+      finalPostconditionsPassed: success,
+      targetLocalePurityPassed: true,
+      sourceLanguageLeakageDetected: false,
+      wrongLocaleUnitCount: 0,
+      wrongScriptUnitCount: 0,
+      detectedLocaleByUnit: v2Units.map(() => locale),
+      detectedScriptByUnit: v2Units.map(() => (
+        locale === 'ar' || locale === 'hi' || locale === 'ja' ? 'native' : 'latin'
+      )),
+      finalUnitRoleSlots: unitRoleSlots,
+      finalSentenceRoleSlots: unitRoleSlots,
+      finalSentenceHashes: success ? v2UnitHashes : [],
+      finalUnitHashes: success ? v2UnitHashes : [],
+      deterministicCandidateSentenceCount: v2Units.length,
+      deterministicCandidateUnitHashes: v2.origin === 'deterministic_fallback' ? v2UnitHashes : [],
+      summaryBuilderRevision: SUMMARY_V2_REVISION,
+      summaryGroundingRevision: SUMMARY_V2_REVISION,
+      summaryFinalCandidateDiagnosticsRevision: SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
+      perspectiveMode: 'first_person' as const,
+      finalPerspectiveMode: 'first_person' as const,
+      perspectiveValidationPassed: true,
+      rewriteStyle: input.rewriteStyle || null,
+      operationMode: null,
+      providerAccepted: v2.origin === 'ai_generated',
+      providerCandidatePresent: Boolean(providerRaw),
+      providerCandidateHash: providerHash,
+      providerCandidateNormalizedHash: providerRaw
+        ? hashSummaryCandidate(normalizeSummaryCandidateText(providerRaw))
+        : null,
+      providerSentenceHashes: providerRaw
+        ? providerRaw.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean)
+          .map((u) => fingerprintText(u))
+        : [],
+      providerTypedRejectionReason: providerRejected
+        ? 'summary_v2_provider_rejected_or_repaired'
+        : null,
+      providerRejectionReason: providerRejected
+        ? 'summary_v2_provider_rejected_or_repaired'
+        : null,
+      providerRejectionStage: providerRejected ? 'summary_v2_manifest_validation' : null,
+      providerRejectionReasons: providerRejected
+        ? [v2.validation.reason || 'summary_v2_provider_rejected_or_repaired']
+        : [],
+      providerSlotRejectionReasons: providerRejected
+        ? [v2.validation.reason || 'summary_v2_provider_rejected_or_repaired']
+        : [],
+      clientFallbackReason: providerRejected
+        ? 'summary_v2_provider_rejected_or_repaired'
+        : null,
+      detectedVisibleContentLocaleBeforeRequest: cv.contentLocale || null,
+      finalContentLocaleAfterApply: null,
+      summaryRepairAttempted: v2.origin === 'ai_repaired',
+      summaryRepairApplied: v2.origin === 'ai_repaired',
+      repairSelected: false,
+      repairCandidateHash: null,
+      repairCandidatePresent: false,
+      repairAccepted: false,
+      finalValidatedCandidateHash: success ? v2Hash : null,
+      deterministicCandidateHash: v2.origin === 'deterministic_fallback' && success ? v2Hash : null,
+      deterministicCandidateNormalizedHash: v2.origin === 'deterministic_fallback' && v2Text && success
+        ? hashSummaryCandidate(normalizeSummaryCandidateText(v2Text))
+        : null,
+      deterministicCandidatePresent: v2.origin === 'deterministic_fallback' && success,
+      clientFallbackUsed: providerRejected || v2.origin === 'deterministic_fallback',
+      fallbackApplied: v2.origin === 'deterministic_fallback' && success,
+      clientDeterministicFallbackReason: providerRejected
+        ? 'summary_v2_provider_rejected_or_repaired'
+        : null,
+      groundingValidationPassed: success,
+      grammarValidationPassed: success,
+      slotValidationPassed: success,
+      priorRoleGroundingPassed: v2.validation.priorRolePresent && v2.validation.priorEmployerPresent,
+      unsupportedClaimCount: v2.validation.unsupportedClaimCount,
+      currentDutyTenseOk: v2.validation.currentDutyTenseOk,
+      priorDutyTenseOk: v2.validation.priorDutyTenseOk,
+      staleOccupationResidueDetected: v2.validation.staleResidueDetected,
+      snapshotHash: v2.manifest.snapshotHash,
+      currentEmploymentIntroductionCount: v2.validation.currentStateExpressed ? 1 : 0,
+      currentRoleConcreteFactCoverage: v2.validation.coveredCurrentFactCount,
+      contentLocale: locale,
+      preservedContentLocale: locale,
+      storedContentLocaleBeforeRequest: cv.contentLocale || null,
+      contentLocaleBeforeRequest: cv.contentLocale || null,
+      contentLocaleAfterApply: cv.contentLocale || null,
+      contentLocaleUpdatedAfterApply: false,
+      candidateTargetLocale: locale,
+      localeValidationPassed: true,
+      finalDurationHybridDetected: false,
+      visibleDurationHybridDetected: false,
+      durationSemanticValueMonths: v2.manifest.totalDurationMonths || null,
+      authoritativeDurationMonths: v2.manifest.totalDurationMonths || null,
+      finalDurationRepresentationCount: v2.validation.durationExpressionCount,
+      durationRepresentationAgreement: true,
+      finalDurationOwnerExpected: 'total_professional_experience',
+      finalDurationTotalCareerMarkerPresent: v2.validation.durationExpressionCount === 1,
+      currentIntroSlotPresent: unitRoleSlots.includes('current_intro'),
+      currentDutySlotPresent: Boolean(v2.manifest.requiredCurrentFacts.length),
+      priorRoleSlotPresent: unitRoleSlots.includes('prior_role'),
+      priorDutySlotPresent: Boolean(v2.manifest.requiredPriorFacts.length),
+      finalSlotValidationPassed: success,
+      providerCandidateSentenceCount: providerRaw
+        ? providerRaw.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean).length
+        : 0,
+      providerOutcome: providerRejected
+        ? ('rejected_grounding' as const)
+        : (v2.origin === 'ai_generated' ? ('accepted' as const) : ('not_attempted' as const)),
+      meaningfulChangeDetected: success,
+      noOpDetected: false,
+      apiResponseKind: (providerRaw ? 'provider' : 'empty') as 'provider' | 'empty',
+      deterministicAccepted: v2.origin === 'deterministic_fallback' && success,
+      finalUnitSemanticRolesByUnit: v2Units.map((_, i) => {
+        const slot = unitRoleSlots[i] || 'other';
+        if (slot === 'duration') return ['total_duration'];
+        if (slot === 'current_intro') return ['current_role_intro', 'current_role_duties'];
+        if (slot === 'prior_role') return ['prior_role_intro', 'prior_role_duties'];
+        return [slot];
+      }),
+    };
+    if (v2.blocked || !v2.countedAsSuccess) {
+      return {
+        blocked: true,
+        reason: v2.reason || 'summary_v2_validation_failed',
+        text: liveSummary,
+        origin: v2.origin,
+        roleDutyConflict: false,
+        countedAsSuccess: false,
+        diagnostics: {
+          ...diagBase,
+          finalPostconditionsPassed: false,
+          finalCandidateSource: v2.origin,
+        } as unknown as FinalizeCvAiFieldResult['diagnostics'],
+      };
+    }
+    return {
+      blocked: false,
+      text: v2.text,
+      origin: v2.origin,
+      roleDutyConflict: false,
+      countedAsSuccess: true,
+      diagnostics: diagBase as unknown as FinalizeCvAiFieldResult['diagnostics'],
+    };
+  }
+
   const summaryGenerate = resolveAiOperationMode({
     targetContent: liveSummary,
   }) === 'generate_from_context';

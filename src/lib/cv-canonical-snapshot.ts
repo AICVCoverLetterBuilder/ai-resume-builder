@@ -709,10 +709,35 @@ type AcceptValidatedAiContentOptions = {
  * silence must never be mistaken by a caller for a successful, visible user
  * action.
  */
-export function willAcceptValidatedAiContent(options: AcceptValidatedAiContentOptions): boolean {
+function structuredLocaleExemptionsFromCv(cv: CVData): {
+  fullName?: string;
+  email?: string;
+  phone?: string;
+  companies?: string[];
+  jobTitles?: string[];
+} {
+  return {
+    fullName: cv.personal?.fullName || '',
+    email: cv.personal?.email || '',
+    phone: cv.personal?.phone || '',
+    companies: (cv.experience || []).map((e) => e.company || '').filter(Boolean),
+    jobTitles: [
+      cv.personal?.jobTitle || '',
+      ...(cv.experience || []).map((e) => e.position || ''),
+    ].filter(Boolean),
+  };
+}
+
+export function willAcceptValidatedAiContent(
+  options: AcceptValidatedAiContentOptions,
+  cvForExemptions?: CVData,
+): boolean {
+  const exemptions = cvForExemptions
+    ? structuredLocaleExemptionsFromCv(cvForExemptions)
+    : undefined;
   if (options.summary !== undefined) {
     if (
-      !textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary')
+      !textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary', exemptions)
       || isWrongLanguageAiOutput(options.summary, options.locale)
     ) {
       return false;
@@ -722,7 +747,12 @@ export function willAcceptValidatedAiContent(options: AcceptValidatedAiContentOp
     options.experienceId
     && options.description !== undefined
     && (
-      !textMatchesRequestedFieldLocale(options.description, options.locale, 'experience_bullet')
+      !textMatchesRequestedFieldLocale(
+        options.description,
+        options.locale,
+        'experience_bullet',
+        exemptions,
+      )
       || isWrongLanguageAiOutput(options.description, options.locale)
     )
   ) {
@@ -738,9 +768,10 @@ export function acceptValidatedAiContent(
   let next = { ...cv };
   const persistedLocale = (canonicalizeContentLocale(options.locale) as Locale)
     || options.locale;
+  const exemptions = structuredLocaleExemptionsFromCv(cv);
   if (options.summary !== undefined) {
     if (
-      !textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary')
+      !textMatchesRequestedFieldLocale(options.summary, options.locale, 'summary', exemptions)
       || isWrongLanguageAiOutput(options.summary, options.locale)
     ) {
       return cv;
@@ -767,7 +798,12 @@ export function acceptValidatedAiContent(
     options.experienceId
     && options.description !== undefined
     && (
-      !textMatchesRequestedFieldLocale(options.description, options.locale, 'experience_bullet')
+      !textMatchesRequestedFieldLocale(
+        options.description,
+        options.locale,
+        'experience_bullet',
+        exemptions,
+      )
       || isWrongLanguageAiOutput(options.description, options.locale)
     )
   ) {

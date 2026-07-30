@@ -6,6 +6,7 @@
  *   NEXT_PUBLIC_BUILD_CHANNEL=internal
  *   NEXT_PUBLIC_ENABLE_AI_TEST_RESET=true
  *   NEXT_PUBLIC_STATIC_EXPORT=true
+ *   NEXT_PUBLIC_ENABLE_SUMMARY_V2=true  (internal Android only; production/web stay OFF)
  *
  * Then verifies Reset + Experience/Summary AI diagnostics markers are present.
  * Production `build` / `build:static` remain disabled by default.
@@ -21,13 +22,17 @@ const env = {
   NEXT_PUBLIC_STATIC_EXPORT: 'true',
   NEXT_PUBLIC_BUILD_CHANNEL: 'internal',
   NEXT_PUBLIC_ENABLE_AI_TEST_RESET: 'true',
+  // Internal device validation only — do not set this in production/web builds.
+  NEXT_PUBLIC_ENABLE_SUMMARY_V2: 'true',
 };
 
 const nextBin = path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next');
 const verify = path.join(__dirname, 'verify-internal-ai-reset-assets.mjs');
 const command = `"${process.execPath}" "${nextBin}" build`;
 
-console.log('[build:static:internal] channel=internal enableAiTestReset=true staticExport=true');
+console.log(
+  '[build:static:internal] channel=internal enableAiTestReset=true staticExport=true enableSummaryV2=true',
+);
 execSync(command, { cwd: repoRoot, stdio: 'inherit', env, shell: isWindows });
 execSync(`"${process.execPath}" "${verify}" --dir out --expect enabled`, {
   cwd: repoRoot,

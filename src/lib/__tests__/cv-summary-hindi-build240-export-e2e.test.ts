@@ -3,6 +3,12 @@
  * Apply and export share one acceptance contract; proper nouns / Baker↔बेकर allowed.
  */
 import { describe, it, expect } from 'vitest';
+import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
 import { buildCvCanonicalFactSet, classifyDutyCategory } from '@/lib/cv-canonical-facts';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
 import { validateLocalizedSummary } from '@/lib/cv-semantic-fidelity';

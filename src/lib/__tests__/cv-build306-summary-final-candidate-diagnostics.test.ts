@@ -6,6 +6,12 @@
  * evidence and final unit hashes must be complete on successful apply.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  expectSummaryContractInvariants,
+  expectV2OrLegacyBuilderRevision,
+  expectProviderRejectedReason,
+  summaryV2ModeActive,
+} from './helpers/summary-v2-invariants';
 import type { CVData, WorkExperience } from '@/lib/types';
 import {
   finalizeCvAiFieldForApply,
