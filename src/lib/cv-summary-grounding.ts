@@ -30,6 +30,7 @@ import {
   localizeBaker,
   localizeWarehouseEmployee,
   resolveOccupationalTitleForSummary,
+  evaluateRoleDutyConsistency,
 } from './cv-role-title';
 import {
   analyzeArabicSummaryEmploymentQuality,
@@ -189,6 +190,7 @@ import {
   analyzeEnglishSummaryEmploymentQuality,
   buildEnglishEntryOwnedSummary,
   isEnglishStructuredSummaryDomain,
+  isEnglishEntryOwnedSummaryPath,
   ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
@@ -209,11 +211,13 @@ import {
   ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION,
   ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION,
   SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION,
+  ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION,
 } from './cv-english-summary-grounding';
 export {
   analyzeEnglishSummaryEmploymentQuality,
   buildEnglishEntryOwnedSummary,
   isEnglishStructuredSummaryDomain,
+  isEnglishEntryOwnedSummaryPath,
   ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
@@ -234,6 +238,7 @@ export {
   ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION,
   ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION,
   SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION,
+  ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION,
 } from './cv-english-summary-grounding';
 import {
   analyzeSpanishSummaryEmploymentQuality,
@@ -2596,16 +2601,38 @@ export function buildConciseGroundedSummary(
     void analyzeEnglishSummaryEmploymentQuality;
     void buildEnglishEntryOwnedSummary;
     void SUMMARY_BUILDER_REVISION_EN;
+    void ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION;
+    void isEnglishEntryOwnedSummaryPath;
     const domainCorpus = `${experienceTitle} ${profileTitle} ${sourceDuties} ${priorSourceDuties}`;
-    const isEnglishWarehouseOrDesignDomain = isEnglishStructuredSummaryDomain(domainCorpus);
-    // Always use the entry-owned English builder for structured warehouse/design
-    // domains — including native English duties. The legacy gerund path omitted
+    // Gate entry-owned EN builder on whole-CV duty conflict (not current-only):
+    // Teaching title + later Operations Lead logistics bullets must keep the
+    // legacy shell — entry-owned prior "Geography Teacher" fails export
+    // forced-conflicting-title checks. Current-only remains correct for role
+    // localization above.
+    const allExperienceDuties = factSet.facts
+      .filter((f) => f.type === 'experience_bullet')
+      .map((f) => f.sourceText || f.value)
+      .join('\n');
+    const roleDutyConflict = evaluateRoleDutyConsistency({
+      profileJobTitle: profileTitle,
+      experienceTitle: experienceTitle || role,
+      dutiesText: allExperienceDuties || sourceDuties,
+    }).conflict;
+    const isEnglishEntryOwned = isEnglishEntryOwnedSummaryPath({
+      corpus: domainCorpus,
+      currentDuties: sourceDuties,
+      priorDuties: priorSourceDuties,
+      currentRole: role || experienceTitle,
+      roleDutyConflict,
+    });
+    // Always use the entry-owned English builder for warehouse/design and for
+    // arbitrary multi-duty Experience snapshots — the legacy gerund path omitted
     // prior-role intro and failed generate_from_context after provider rejection.
-    if (isEnglishWarehouseOrDesignDomain) {
+    if (isEnglishEntryOwned) {
       const enRole = /(?:warehouse|almac[eé]n|Lager(?:mitarbeiter|arbeiter)|emplead|incoming\s+goods)/i
         .test(`${role} ${experienceTitle} ${sourceDuties}`)
         ? localizeWarehouseEmployee('en', genderNorm || '')
-        : (role || localizeWarehouseEmployee('en', genderNorm || ''));
+        : (role || experienceTitle || localizeWarehouseEmployee('en', genderNorm || ''));
       text = buildEnglishEntryOwnedSummary({
         role: enRole,
         employer,

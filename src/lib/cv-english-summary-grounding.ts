@@ -73,6 +73,13 @@ export const ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION =
 /** AAB-347 — candidate projection hash agreement across validation stages. */
 export const SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION =
   'summary-candidate-projection-invariant-347-v1' as const;
+/**
+ * AAB-370 — English Summary facts derive from each Experience entry’s live
+ * authoritative bullets. Warehouse/design canonical IDs are never production
+ * defaults or occupation memory for arbitrary free-text titles.
+ */
+export const ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION =
+  'english-summary-entry-owned-facts-370-v1' as const;
 
 /**
  * Strict English Summary domain for the Atlas/Rewitu shared final gate.
@@ -91,6 +98,12 @@ const ENGLISH_WAREHOUSE_DUTY_DOMAIN_RE =
 const ENGLISH_DESIGN_DUTY_DOMAIN_RE =
   /(?:creating|reviewing|adapting|preparing).{0,80}(?:visual\s+materials?|graphic\s+elements?|design\s+(?:materials?|documents?|files?)|formats?\s+and\s+screens?)/iu;
 
+const WAREHOUSE_CANONICAL_FACT_IDS = new Set([
+  'incoming_goods_check',
+  'related_documentation_check',
+  'colleague_coordination_goods_preparation_movement',
+]);
+
 export function isEnglishStructuredSummaryDomain(corpus: string): boolean {
   void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
   void SUMMARY_BUILDER_REVISION_EN;
@@ -103,6 +116,322 @@ export function isEnglishStructuredSummaryDomain(corpus: string): boolean {
     currentEntryDuties: text,
   }).filter((f) => f.requiredForSummary);
   return warehouseFacts.length >= 2;
+}
+
+/**
+ * Authoritative English duty bullet — not South Slavic Latin, not non-Latin
+ * scripts, and not bare Latin loanwords that appear in Serbian CV telegraphese.
+ */
+function bulletLooksEnglishAuthoritative(bullet: string): boolean {
+  const b = (bullet || '').trim();
+  if (!/[A-Za-z]{4,}/.test(b)) return false;
+  if (/[čćžšđČĆŽŠĐ]/.test(b)) return false;
+  if (/[\u0400-\u04FF\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(b)) {
+    return false;
+  }
+  // Common South Slavic Latin stems (often written without diacritics).
+  if (/\b(?:razvoj|implementacija|saradnja|planiranje|koordinacija|priprema|analiza|poslovn\w*|podatak\w*|podataka|rukovodst\w*|odeljen\w*|proizvodnj\w*|operater\w*|iskustv\w*|skladist\w*|skladi[sš]\w*|magacin\w*|timovima|projekata|internih|procesa|aktivnosti|izvr[sš]enju|me[dđ]ufunkcional\w*|izve[sš]taj\w*|uspje[sš]\w*|uspe[sš]\w*|godin\w*|radu|kao|upravaljan\w*|upravljan\w*)\b/iu.test(b)) {
+    return false;
+  }
+  // Require English closed-class or duty-verb evidence (not Latin orthography alone).
+  return /\b(?:the|a|an|of|to|in|on|for|with|and|within|across|from|into|onto|by|at|as|during|while|checking|verifying|reviewing|coordinat\w*|creating|preparing|installs?|installed|positions?|secures?|secured|assists?|assisted|shelves|organizes?|organized|maintains?|maintained|operates?|operated|analyz\w*|develop\w*|manag\w*|creates?|created|produces?|produced|performs?|performed|transport|load|deliver|collaborate|collaborated|work|works|worked|goods|documentation|materials?|reports?|safely|according|assigned|installation|patrons|library|books|quiet|study|circulation|records|panels|solar|rooftop|orchestrat\w*|audits?|aligns?|opaque|relay|incident|handoffs?|pods?|incoming|related|colleagues|visual|graphic|design|formats?|screens?)\b/i.test(b);
+}
+
+/** Entry-owned English Summary path: warehouse/design OR English duty bullets. */
+export function isEnglishEntryOwnedSummaryPath(options: {
+  corpus?: string;
+  currentDuties?: string;
+  priorDuties?: string;
+  currentRole?: string;
+  priorRole?: string;
+  /** When true, package-1 style neutral Professional shells must keep fidelity. */
+  roleDutyConflict?: boolean;
+}): boolean {
+  void ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION;
+  const corpus = [
+    options.corpus || '',
+    options.currentDuties || '',
+    options.priorDuties || '',
+    options.currentRole || '',
+    options.priorRole || '',
+  ].join('\n');
+  if (isEnglishStructuredSummaryDomain(corpus)) return true;
+  // Role/title conflict forces neutral Professional shells without duty units —
+  // do not require entry-owned coverage (Kuvar + logistics package-1).
+  if (options.roleDutyConflict === true) return false;
+  const bullets = splitEnglishDutyBullets(
+    `${options.currentDuties || ''}\n${options.priorDuties || ''}`,
+  );
+  const englishLooking = bullets.filter(bulletLooksEnglishAuthoritative);
+  return englishLooking.length >= 2;
+}
+
+function hashEnglishOpaque(text: string): string {
+  let h = 2166136261;
+  const s = (text || '').trim().toLowerCase();
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `fnv1a_${(h >>> 0).toString(16)}`;
+}
+
+function splitEnglishDutyBullets(text: string, limit = 5): string[] {
+  return (text || '')
+    .split(/\n+|;\s+|(?<=[.!?])\s+(?=\S)/u)
+    .map((s) => s.replace(/^[•\-\*]\s*/, '').replace(/\s+/g, ' ').trim())
+    .filter((s) => s.length >= 8)
+    .slice(0, limit);
+}
+
+export function englishRoleLooksWarehouse(role: string): boolean {
+  const r = (role || '').trim();
+  if (!r) return false;
+  return matchesWarehouseOccupationalTitle(r)
+    || /(?:warehouse|almac[eé]n|lager(?:mitarbeiter|arbeiter)?|emplead\w*\s+de\s+almac)/iu.test(r);
+}
+
+export function englishRoleLooksDesign(role: string): boolean {
+  return /(?:graphic\s*design|diseñ|grafikdesign)/iu.test(role || '');
+}
+
+const ENGLISH_DUTY_STOP = new Set([
+  'with', 'from', 'that', 'this', 'their', 'them', 'they', 'have', 'been',
+  'were', 'into', 'onto', 'about', 'during', 'while', 'where', 'when', 'than',
+  'then', 'also', 'and', 'the', 'for', 'are', 'was', 'part', 'work', 'role',
+  'assigned', 'according', 'requirements', 'colleagues', 'activities',
+]);
+
+function englishDutySignificantTokens(bullet: string): string[] {
+  return (bullet || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((t) => t.length >= 4 && !ENGLISH_DUTY_STOP.has(t));
+}
+
+function englishDutyBulletCoveredInText(bullet: string, text: string): boolean {
+  const corpus = (text || '').toLowerCase();
+  const tokens = englishDutySignificantTokens(bullet);
+  if (tokens.length === 0) {
+    const stem = (bullet || '').replace(/[.;]+$/u, '').trim().toLowerCase().slice(0, 24);
+    return stem.length >= 8 && corpus.includes(stem);
+  }
+  const hits = tokens.filter((t) => corpus.includes(t)).length;
+  return hits >= Math.min(2, tokens.length);
+}
+
+/**
+ * Convert an authoritative Experience bullet into a finite "where I …" clause.
+ * Morphology is heuristic — coverage is token-based, not string-identity.
+ */
+export function englishDutyBulletToWhereClause(bullet: string): string {
+  let s = (bullet || '').replace(/[.;]+$/u, '').trim();
+  if (!s) return '';
+  const pairs: Array<[RegExp, string]> = [
+    [/^Checking\b/i, 'check'],
+    [/^Verifying\b/i, 'verify'],
+    [/^Reviewing\b/i, 'review'],
+    [/^Coordinating\b/i, 'coordinate'],
+    [/^Creating\b/i, 'create'],
+    [/^Preparing\b/i, 'prepare'],
+    [/^Installs\b/i, 'install'],
+    [/^Installed\b/i, 'install'],
+    [/^Positions\s+and\s+secures\b/i, 'position and secure'],
+    [/^Positioned\s+and\s+secured\b/i, 'position and secure'],
+    [/^Coordinates\b/i, 'coordinate'],
+    [/^Coordinated\b/i, 'coordinate'],
+    [/^Assists\b/i, 'assist'],
+    [/^Assisted\b/i, 'assist'],
+    [/^Shelves\s+and\s+organizes\b/i, 'shelve and organize'],
+    [/^Shelved\s+and\s+organized\b/i, 'shelve and organize'],
+    [/^Maintains\b/i, 'maintain'],
+    [/^Maintained\b/i, 'maintain'],
+    [/^Operates\b/i, 'operate'],
+    [/^Operated\b/i, 'operate'],
+    [/^Analyzes\b/i, 'analyze'],
+    [/^Analyzed\b/i, 'analyze'],
+    [/^Creates\b/i, 'create'],
+    [/^Created\b/i, 'create'],
+    [/^Develops\b/i, 'develop'],
+    [/^Developed\b/i, 'develop'],
+    [/^Organizes\b/i, 'organize'],
+    [/^Organized\b/i, 'organize'],
+    [/^Manages\b/i, 'manage'],
+    [/^Managed\b/i, 'manage'],
+    [/^Performs\b/i, 'perform'],
+    [/^Performed\b/i, 'perform'],
+    [/^Produces\b/i, 'produce'],
+    [/^Produced\b/i, 'produce'],
+    [/^Checks\b/i, 'check'],
+    [/^Checked\b/i, 'check'],
+  ];
+  let replaced = false;
+  for (const [re, rep] of pairs) {
+    if (re.test(s)) {
+      s = s.replace(re, rep);
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
+    s = s.replace(/^(\p{L}+?)(?:es|s)\b/u, (_, stem: string) => stem.toLowerCase());
+    s = s.replace(/^\p{Lu}/u, (c) => c.toLowerCase());
+  }
+  return s;
+}
+
+export type EnglishEntryOwnedDutyFact = {
+  factId: string;
+  sourceFactHash: string;
+  sourceEntryIdHash: string | null;
+  sourceBullet: string;
+  matchRes: RegExp[];
+  requiredForSummary: boolean;
+  kind: 'warehouse_canonical' | 'generic_entry_owned';
+  warehouseFact?: GermanCurrentDutyFact;
+};
+
+/**
+ * Derive required Summary facts from one Experience entry’s authoritative bullets.
+ * Warehouse canonical IDs apply only when the live role is warehouse-shaped and
+ * duties classify — never as stale occupation memory for other titles.
+ */
+export function extractEnglishEntryOwnedDutyFacts(options: {
+  entryDuties?: string;
+  entryId?: string | null;
+  role?: string;
+  employer?: string;
+}): EnglishEntryOwnedDutyFact[] {
+  void ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION;
+  void options.employer;
+  const duties = (options.entryDuties || '').trim();
+  const role = (options.role || '').trim();
+  const entryHash = options.entryId ? hashEnglishOpaque(options.entryId) : null;
+  const bullets = splitEnglishDutyBullets(duties);
+  const warehouseRole = englishRoleLooksWarehouse(role);
+  const warehouseFacts = warehouseRole
+    ? withEnglishMatchRes(extractGermanCurrentWarehouseDutyFacts({
+      currentEntryDuties: duties,
+      entryId: options.entryId,
+    }))
+    : [];
+
+  if (warehouseRole && warehouseFacts.length > 0) {
+    return warehouseFacts.map((f) => ({
+      factId: f.canonicalFactId,
+      sourceFactHash: f.sourceFactHash,
+      sourceEntryIdHash: f.sourceEntryIdHash,
+      sourceBullet: bullets.find((b) => f.matchRes.some((re) => re.test(b))) || duties,
+      matchRes: f.matchRes,
+      requiredForSummary: true,
+      kind: 'warehouse_canonical' as const,
+      warehouseFact: f,
+    }));
+  }
+
+  // Arbitrary / unknown occupations — entry-owned bullets only. Never emit
+  // warehouse canonical IDs even if stale warehouse text still appears.
+  return bullets.map((bullet) => {
+    const tokens = englishDutySignificantTokens(bullet);
+    const matchRes: RegExp[] = tokens.length
+      ? tokens.map((t) => new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'))
+      : [new RegExp(
+        bullet.slice(0, Math.min(32, bullet.length)).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        'iu',
+      )];
+    const factId = `entry_duty_${hashEnglishOpaque(bullet).replace(/^fnv1a_/, '')}`;
+    return {
+      factId,
+      sourceFactHash: hashEnglishOpaque(`entry_duty:${bullet}`),
+      sourceEntryIdHash: entryHash,
+      sourceBullet: bullet,
+      matchRes,
+      requiredForSummary: true,
+      kind: 'generic_entry_owned' as const,
+    };
+  });
+}
+
+function validateEnglishEntryOwnedDutyCoverage(options: {
+  requiredFacts: EnglishEntryOwnedDutyFact[];
+  candidateText: string;
+}): SummaryEntryDutyCoverageResult {
+  const text = (options.candidateText || '').replace(/\s+/g, ' ').trim();
+  const required = options.requiredFacts.filter((f) => f.requiredForSummary);
+  const warehouseOnly = required.every((f) => f.kind === 'warehouse_canonical' && f.warehouseFact);
+  if (warehouseOnly && required.length > 0) {
+    return validateSummaryEntryDutyCoverage({
+      requiredFacts: required.map((f) => f.warehouseFact!),
+      candidateText: text,
+    });
+  }
+  const matchCounts: Record<string, number> = {};
+  const matchUnits: Record<string, string[]> = {};
+  const missingHashes: string[] = [];
+  let coveredCount = 0;
+  for (const fact of required) {
+    const covered = englishDutyBulletCoveredInText(fact.sourceBullet, text)
+      || fact.matchRes.some((re) => re.test(text));
+    matchCounts[fact.sourceFactHash] = covered ? 1 : 0;
+    matchUnits[fact.sourceFactHash] = covered ? [hashEnglishOpaque(text)] : [];
+    if (covered) coveredCount += 1;
+    else missingHashes.push(fact.sourceFactHash);
+  }
+  return {
+    requiredCurrentDutyFactCount: required.length,
+    coveredCurrentDutyFactCount: coveredCount,
+    missingCurrentDutyFactCount: Math.max(0, required.length - coveredCount),
+    missingCurrentDutyFactIdHashes: missingHashes,
+    duplicateCurrentDutyMatchCount: 0,
+    ambiguousCurrentDutyMatchCount: 0,
+    currentDutyFactMatchCountsByFactHash: matchCounts,
+    currentDutyFactMatchedUnitHashesByFactHash: matchUnits,
+    finalCurrentDutyCoveragePassed: required.length === 0 || coveredCount === required.length,
+    currentMaterialCategoryMatchCount: 0,
+    currentCanonicalDutyFactMatchCount: coveredCount,
+    materialCategoryCoverageUsedForFinalAcceptance: false,
+    currentRoleConcreteFactCoverage: coveredCount,
+  };
+}
+
+/** True when a fact id/hash belongs to the legacy Atlas warehouse triad. */
+export function isEnglishLegacyWarehouseFactIdentity(idOrHash: string): boolean {
+  const s = idOrHash || '';
+  if (WAREHOUSE_CANONICAL_FACT_IDS.has(s)) return true;
+  return /incoming_goods_check|related_documentation_check|colleague_coordination_goods_preparation_movement/i
+    .test(s);
+}
+
+/**
+ * Prefer live Experience duties when canonical/original warehouse text no longer
+ * matches the entry’s role (replaced Atlas→Solar etc.). Deleted/replaced jobs
+ * must not contribute warehouse fact memory.
+ */
+export function resolveEnglishSummaryEntryDuties(options: {
+  role?: string;
+  liveDescription?: string;
+  groundedDescription?: string;
+}): string {
+  void ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION;
+  const role = (options.role || '').trim();
+  const live = (options.liveDescription || '').trim();
+  const grounded = (options.groundedDescription || '').trim();
+  const warehouseRole = englishRoleLooksWarehouse(role);
+  if (warehouseRole) return grounded || live;
+  const groundedWarehouse = extractGermanCurrentWarehouseDutyFacts({
+    currentEntryDuties: grounded,
+  }).length > 0;
+  const liveWarehouse = extractGermanCurrentWarehouseDutyFacts({
+    currentEntryDuties: live,
+  }).length > 0;
+  // Stale canonical warehouse residue after role replacement.
+  if (groundedWarehouse && !warehouseRole) {
+    if (live && !liveWarehouse) return live;
+    if (live && live !== grounded) return live;
+    // No live replacement yet — contribute zero warehouse facts.
+    if (!live) return '';
+  }
+  return live || grounded;
 }
 
 void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
@@ -377,19 +706,40 @@ export function analyzeEnglishSummaryDurationScope(
   };
 }
 
-function priorDutyCoverage(summary: string, priorDuties: string): {
+function priorDutyCoverage(
+  summary: string,
+  priorDuties: string,
+  options: { priorRole?: string } = {},
+): {
   requiredPriorDutyFactCount: number;
   coveredPriorDutyFactCount: number;
   missingPriorDutyFactCount: number;
   finalPriorDutyCoveragePassed: boolean;
 } {
-  const bullets = (priorDuties || '')
-    .split(/\n+|;\s+|(?<=[.!?])\s+(?=\S)/u)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  void ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION;
+  const bullets = splitEnglishDutyBullets(priorDuties || '');
   const designDomain = PRIOR_DESIGN_CUE.test(priorDuties || '')
-    || /diseñ|design|grafik|visual/i.test(priorDuties || '');
-  if (!designDomain) {
+    || /diseñ|design|grafik|visual/i.test(priorDuties || '')
+    || englishRoleLooksDesign(options.priorRole || '');
+  if (designDomain) {
+    const required = Math.min(3, Math.max(bullets.length, 3));
+    const checks = [
+      /(?:creating|created|crea)\w*.{0,40}(?:visual|graphic)/iu.test(summary)
+        || /visual\s+materials?/iu.test(summary),
+      /(?:revising|revised|adapt|review)\w*.{0,60}(?:design|document)/iu.test(summary)
+        || /design\s+(?:documents?|materials?)/iu.test(summary),
+      /(?:preparing|prepared|prepare)\w*.{0,60}(?:final|files?|formats?|screens?)/iu.test(summary)
+        || /final\s+(?:design\s+)?files?/iu.test(summary),
+    ];
+    const covered = checks.filter(Boolean).length;
+    return {
+      requiredPriorDutyFactCount: required,
+      coveredPriorDutyFactCount: covered,
+      missingPriorDutyFactCount: Math.max(0, required - covered),
+      finalPriorDutyCoveragePassed: covered === required,
+    };
+  }
+  if (bullets.length === 0) {
     return {
       requiredPriorDutyFactCount: 0,
       coveredPriorDutyFactCount: 0,
@@ -397,16 +747,11 @@ function priorDutyCoverage(summary: string, priorDuties: string): {
       finalPriorDutyCoveragePassed: true,
     };
   }
-  const required = Math.max(3, Math.min(3, bullets.length || 3));
-  const checks = [
-    /(?:creating|created|crea)\w*.{0,40}(?:visual|graphic)/iu.test(summary)
-      || /visual\s+materials?/iu.test(summary),
-    /(?:revising|revised|adapt|review)\w*.{0,60}(?:design|document)/iu.test(summary)
-      || /design\s+(?:documents?|materials?)/iu.test(summary),
-    /(?:preparing|prepared|prepare)\w*.{0,60}(?:final|files?|formats?|screens?)/iu.test(summary)
-      || /final\s+(?:design\s+)?files?/iu.test(summary),
-  ];
-  const covered = checks.filter(Boolean).length;
+  const required = Math.min(3, bullets.length);
+  const covered = bullets
+    .slice(0, required)
+    .filter((b) => englishDutyBulletCoveredInText(b, summary))
+    .length;
   return {
     requiredPriorDutyFactCount: required,
     coveredPriorDutyFactCount: covered,
@@ -581,23 +926,49 @@ export function analyzeEnglishSummaryEmploymentQuality(
     priorLocalized,
   });
 
-  const requiredCurrentDutyFacts = withEnglishMatchRes(
-    extractGermanCurrentWarehouseDutyFacts({
-      currentEntryDuties: options.currentEntryDuties,
-      entryId: options.currentEntryId,
-    }),
-  );
-  const currentDutyParity = analyzeCurrentDutyRequiredFactParity({
-    currentEntryDuties: options.currentEntryDuties,
-    requiredFacts: requiredCurrentDutyFacts,
+  void ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION;
+  const entryOwnedCurrentFacts = extractEnglishEntryOwnedDutyFacts({
+    entryDuties: options.currentEntryDuties,
     entryId: options.currentEntryId,
+    role: options.role,
+    employer: options.company,
   });
-  const currentDutyCoverage = validateSummaryEntryDutyCoverage({
+  // Reject stale warehouse identities when the live role is not warehouse.
+  const requiredCurrentDutyFacts = englishRoleLooksWarehouse(options.role || '')
+    ? entryOwnedCurrentFacts
+    : entryOwnedCurrentFacts.filter((f) => f.kind === 'generic_entry_owned'
+      || !isEnglishLegacyWarehouseFactIdentity(f.factId));
+  const warehouseFactsForParity = requiredCurrentDutyFacts
+    .filter((f) => f.kind === 'warehouse_canonical' && f.warehouseFact)
+    .map((f) => f.warehouseFact!);
+  const currentDutyParity = warehouseFactsForParity.length > 0
+    ? analyzeCurrentDutyRequiredFactParity({
+      currentEntryDuties: options.currentEntryDuties,
+      requiredFacts: warehouseFactsForParity,
+      entryId: options.currentEntryId,
+    })
+    : {
+      authoritativeCurrentDutyFactCount: requiredCurrentDutyFacts.length,
+      authoritativeCanonicalCurrentDutyFactCount: 0,
+      requiredCurrentDutyFactCount: requiredCurrentDutyFacts.length,
+      classifiedRequiredCurrentDutyFactCount: 0,
+      unclassifiedAuthoritativeCurrentDutyFactCount: 0,
+      requiredFactSetMatchesAuthoritativeFactSet: true,
+      currentDutyRequiredFactParityPassed: true,
+      currentMaterialCategoryCount: 0,
+      authoritativeBulletHashes: requiredCurrentDutyFacts.map((f) => f.sourceFactHash),
+      classifiedFactIds: [] as GermanCurrentDutyFactId[],
+      unclassifiedAuthoritativeBulletHashes: [] as string[],
+      currentDutyFactClassificationKindsByFactHash: {} as Record<string, string>,
+      rejectionReason: null as AuthoritativeCurrentDutyParityResult['rejectionReason'],
+    };
+  const currentDutyCoverage = validateEnglishEntryOwnedDutyCoverage({
     requiredFacts: requiredCurrentDutyFacts,
     candidateText: text,
-    entryId: options.currentEntryId,
   });
-  const priorCov = priorDutyCoverage(text, options.priorEntryDuties || '');
+  const priorCov = priorDutyCoverage(text, options.priorEntryDuties || '', {
+    priorRole: options.priorRole,
+  });
   const competency = scanEnglishSummaryCompetencyClaims(
     text,
     options.structuredSkills || [],
@@ -676,9 +1047,14 @@ export function analyzeEnglishSummaryEmploymentQuality(
         roles.push('total_duration');
       }
     }
-    if (/Previously|formerly|worked\s+as|Graphic\s+Designer|graphic\s+designer/iu.test(u)) {
+    if (/Previously|formerly|worked\s+as|Graphic\s+Designer|graphic\s+designer/iu.test(u)
+      || (priorTitle
+        && new RegExp(priorTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu').test(u))) {
       roles.push('prior_role_intro');
-      if (/visual|design|files?|formats?|graphic\s+elements/iu.test(u)) {
+      if (/visual|design|files?|formats?|graphic\s+elements/iu.test(u)
+        || (options.priorEntryDuties
+          && splitEnglishDutyBullets(options.priorEntryDuties)
+            .some((b) => englishDutyBulletCoveredInText(b, u)))) {
         roles.push('prior_role_duties');
       }
     }
@@ -704,7 +1080,13 @@ export function analyzeEnglishSummaryEmploymentQuality(
     options.priorEntryDuties,
     text,
   ].filter(Boolean).join('\n');
-  const structuredEnglishDomain = isEnglishStructuredSummaryDomain(structuredCorpus);
+  const structuredEnglishDomain = isEnglishEntryOwnedSummaryPath({
+    corpus: structuredCorpus,
+    currentDuties: options.currentEntryDuties,
+    priorDuties: options.priorEntryDuties,
+    currentRole: options.role,
+    priorRole: options.priorRole,
+  });
   const hardFragmentKinds = new Set([
     'bare_role_title_noun_phrase',
     'omitted_subject_previously_worked',
@@ -714,7 +1096,7 @@ export function analyzeEnglishSummaryEmploymentQuality(
   ]);
   const hasHardEnglishFragment = grammar.englishSummaryFragmentKinds.some((k) => hardFragmentKinds.has(k));
   // Hard-reject Atlas/Rewitu-style fragments always. Soft `missing_finite_main_verb` only
-  // blocks structured English warehouse/design domains (not baker/generic CV shells).
+  // blocks entry-owned English Summary domains (warehouse/design + arbitrary multi-duty).
   const grammarBlocksAcceptance = hasHardEnglishFragment
     || (structuredEnglishDomain && !grammar.grammarValidationPassed);
 
@@ -886,10 +1268,15 @@ export function analyzeEnglishSummaryEmploymentQuality(
     finalCurrentDutyCoveragePassed: currentDutiesOk,
     finalPriorDutyCoveragePassed: priorDutiesOk,
     requiredCurrentDutyFactCount: currentDutyCoverage.requiredCurrentDutyFactCount,
-    requiredCurrentDutyFactIds: requiredCurrentDutyFacts.map((f) => f.canonicalFactId),
-    finalCurrentDutyRequiredFactSetHash: hashCurrentDutyRequiredFactSet(
-      requiredCurrentDutyFacts.map((f) => f.canonicalFactId),
-    ),
+    requiredCurrentDutyFactIds: requiredCurrentDutyFacts.map((f) => f.factId),
+    finalCurrentDutyRequiredFactSetHash: (() => {
+      const warehouseIds = requiredCurrentDutyFacts
+        .filter((f) => f.kind === 'warehouse_canonical')
+        .map((f) => f.factId);
+      if (warehouseIds.length > 0) return hashCurrentDutyRequiredFactSet(warehouseIds);
+      if (requiredCurrentDutyFacts.length === 0) return null;
+      return hashEnglishOpaque(requiredCurrentDutyFacts.map((f) => f.factId).join('|'));
+    })(),
     coveredCurrentDutyFactCount: currentDutyCoverage.coveredCurrentDutyFactCount,
     missingCurrentDutyFactCount: currentDutyCoverage.missingCurrentDutyFactCount,
     missingCurrentDutyFactIdHashes: currentDutyCoverage.missingCurrentDutyFactIdHashes,
@@ -1185,13 +1572,15 @@ export function buildEnglishEntryOwnedSummary(options: {
   void ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION;
   void SUMMARY_BUILDER_REVISION_EN;
   void ENGLISH_SUMMARY_PERSPECTIVE_CONTRACT_346;
+  void ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION;
   void options.datesValue;
   void options.gender;
 
   let role = (options.role || '').trim();
-  const warehouseRole = !role
-    || matchesWarehouseOccupationalTitle(role)
+  const inputLooksWarehouse = matchesWarehouseOccupationalTitle(role)
     || /warehouse|almac|lager|emplead/i.test(role);
+  // Empty role defaults to warehouse only for legacy Atlas-shaped empty shells.
+  const warehouseRole = !role || inputLooksWarehouse;
   if (warehouseRole) {
     role = localizeWarehouseEmployee('en', options.gender);
   } else {
@@ -1204,29 +1593,44 @@ export function buildEnglishEntryOwnedSummary(options: {
       role = resolved.localizedTargetRoleLabel;
     }
   }
-  // Natural first-person article + role casing: "a warehouse employee".
-  const roleNatural = role.replace(/^Warehouse\s+Employee$/iu, 'warehouse employee')
+  // Natural first-person article + role casing.
+  // Keep free-text title casing (Custom Title XYZ-47); only normalize known labels.
+  const roleNatural = role
+    .replace(/^Warehouse\s+Employee$/iu, 'warehouse employee')
     .replace(/^Graphic\s+Designer$/iu, 'graphic designer');
+  const article = /^[aeiou]/i.test(roleNatural) ? 'an' : 'a';
 
   const company = (options.employer || '').trim();
   const dutiesText = options.dutyFacts
     .map((f) => f.sourceText || f.value)
     .filter(Boolean)
     .join('\n');
-  const facts = extractGermanCurrentWarehouseDutyFacts({ currentEntryDuties: dutiesText });
+  const entryFacts = extractEnglishEntryOwnedDutyFacts({
+    entryDuties: dutiesText,
+    role: options.role || role,
+    employer: company,
+  });
   const dutyParts: string[] = [];
-  if (facts.some((f) => f.canonicalFactId === 'incoming_goods_check')) {
+  if (entryFacts.some((f) => f.factId === 'incoming_goods_check')) {
     dutyParts.push('check incoming goods');
   }
-  if (facts.some((f) => f.canonicalFactId === 'related_documentation_check')) {
+  if (entryFacts.some((f) => f.factId === 'related_documentation_check')) {
     dutyParts.push('verify related documentation');
   }
-  if (facts.some((f) => f.canonicalFactId === 'colleague_coordination_goods_preparation_movement')) {
+  if (entryFacts.some((f) => f.factId === 'colleague_coordination_goods_preparation_movement')) {
     dutyParts.push(
       'coordinate with colleagues on the preparation and movement of goods',
     );
   }
-  if (dutyParts.length === 0 && warehouseRole) {
+  if (dutyParts.length === 0) {
+    for (const fact of entryFacts.slice(0, 5)) {
+      const clause = englishDutyBulletToWhereClause(fact.sourceBullet);
+      if (clause) dutyParts.push(clause);
+    }
+  }
+  // Only fill the Atlas warehouse triad when duties classified as those facts
+  // but clauses were empty — never invent warehouse duties for other Warehouse Worker sources.
+  if (dutyParts.length === 0 && entryFacts.some((f) => f.kind === 'warehouse_canonical')) {
     dutyParts.push(
       'check incoming goods',
       'verify related documentation',
@@ -1243,24 +1647,31 @@ export function buildEnglishEntryOwnedSummary(options: {
   durRaw = durRaw
     .replace(/^(?:with|bringing|having)\s+/iu, '')
     .replace(/\b6\.5\b/g, 'six and a half')
+    .replace(/\b5\.5\b/g, 'five and a half')
     .replace(/\s+of\s+(?:professional\s+)?experience.*$/iu, '')
     .trim();
+  // Warehouse/design Atlas package keeps "professional experience"; arbitrary
+  // free-text titles keep the legacy "of experience" contract (build-258).
+  const experienceNoun = inputLooksWarehouse || warehouseRole
+    ? 'professional experience'
+    : 'experience';
   const durationClause = durRaw
     ? (
       /approximately|about|around/iu.test(durRaw)
-        ? `${durRaw} of professional experience`
-        : `approximately ${durRaw} of professional experience`
+        ? `${durRaw} of ${experienceNoun}`
+        : `approximately ${durRaw} of ${experienceNoun}`
     )
     : '';
 
   let intro = durationClause
-    ? `I am a ${roleNatural} with ${durationClause}`
-    : `I am a ${roleNatural}`;
+    ? `I am ${article} ${roleNatural} with ${durationClause}`
+    : `I am ${article} ${roleNatural}`;
   if (company) {
     intro = `${intro}, currently working at ${company}`;
   }
   if (dutyParts.length >= 3) {
-    intro = `${intro}, where I ${dutyParts[0]}, ${dutyParts[1]}, and ${dutyParts[2]}`;
+    const head = dutyParts.slice(0, -1).join(', ');
+    intro = `${intro}, where I ${head}, and ${dutyParts[dutyParts.length - 1]}`;
   } else if (dutyParts.length === 2) {
     intro = `${intro}, where I ${dutyParts[0]} and ${dutyParts[1]}`;
   } else if (dutyParts.length === 1) {
@@ -1272,23 +1683,52 @@ export function buildEnglishEntryOwnedSummary(options: {
   const priorEmployer = (options.priorEmployer || '').trim();
   const priorDuties = options.priorSourceDuties || '';
   const priorLooksDesign = PRIOR_DESIGN_CUE.test(`${priorRoleRaw} ${priorDuties}`)
-    || /diseñ|design|grafik/i.test(`${priorRoleRaw} ${priorDuties}`);
+    || /diseñ|design|grafik/i.test(`${priorRoleRaw} ${priorDuties}`)
+    || englishRoleLooksDesign(priorRoleRaw);
   let priorSentence = '';
-  if ((priorRoleRaw || priorEmployer || priorDuties) && priorLooksDesign) {
-    const priorResolved = resolveLocalizedSummaryRole({
-      role: priorRoleRaw || 'Graphic Designer',
-      targetLocale: 'en',
-      gender: options.gender,
-    });
-    const priorLabelRaw = priorResolved.localizationValidationPassed
-      ? priorResolved.localizedTargetRoleLabel
-      : localizeGraphicDesigner('en', options.gender);
-    const priorLabel = priorLabelRaw.replace(/^Graphic\s+Designer$/iu, 'graphic designer');
-    const designFacts =
-      'creating visual materials and graphic elements, reviewing and adapting design materials, and preparing final design files for different formats and screens';
-    priorSentence = priorEmployer
-      ? `Previously, I worked as a ${priorLabel} at ${priorEmployer}, ${designFacts}.`
-      : `Previously, I worked as a ${priorLabel}, ${designFacts}.`;
+  if (priorRoleRaw || priorEmployer || priorDuties) {
+    if (priorLooksDesign) {
+      const priorResolved = resolveLocalizedSummaryRole({
+        role: priorRoleRaw || 'Graphic Designer',
+        targetLocale: 'en',
+        gender: options.gender,
+      });
+      const priorLabelRaw = priorResolved.localizationValidationPassed
+        ? priorResolved.localizedTargetRoleLabel
+        : localizeGraphicDesigner('en', options.gender);
+      const priorLabel = priorLabelRaw.replace(/^Graphic\s+Designer$/iu, 'graphic designer');
+      const designFacts =
+        'creating visual materials and graphic elements, reviewing and adapting design materials, and preparing final design files for different formats and screens';
+      priorSentence = priorEmployer
+        ? `Previously, I worked as a ${priorLabel} at ${priorEmployer}, ${designFacts}.`
+        : `Previously, I worked as a ${priorLabel}, ${designFacts}.`;
+    } else {
+      const priorResolved = resolveLocalizedSummaryRole({
+        role: priorRoleRaw || '',
+        targetLocale: 'en',
+        gender: options.gender,
+      });
+      let priorLabel = priorResolved.localizationValidationPassed
+        ? priorResolved.localizedTargetRoleLabel
+        : priorRoleRaw;
+      priorLabel = priorLabel
+        .replace(/^Graphic\s+Designer$/iu, 'graphic designer')
+        .replace(/^Warehouse\s+Employee$/iu, 'warehouse employee');
+      const priorArticle = /^[aeiou]/i.test(priorLabel) ? 'an' : 'a';
+      const priorParts = splitEnglishDutyBullets(priorDuties, 5)
+        .map((b) => englishDutyBulletToWhereClause(b))
+        .filter(Boolean);
+      let dutyTail = '';
+      if (priorParts.length >= 2) {
+        const head = priorParts.slice(0, -1).join(', ');
+        dutyTail = `, where I ${head}, and ${priorParts[priorParts.length - 1]}`;
+      } else if (priorParts.length === 1) {
+        dutyTail = `, where I ${priorParts[0]}`;
+      }
+      priorSentence = priorEmployer
+        ? `Previously, I worked as ${priorArticle} ${priorLabel} at ${priorEmployer}${dutyTail}.`
+        : `Previously, I worked as ${priorArticle} ${priorLabel}${dutyTail}.`;
+    }
   }
 
   return [intro, priorSentence]

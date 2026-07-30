@@ -142,6 +142,7 @@ import {
   analyzeEnglishSummaryEmploymentQuality,
   buildEnglishEntryOwnedSummary,
   isEnglishStructuredSummaryDomain,
+  isEnglishEntryOwnedSummaryPath,
   ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
@@ -155,8 +156,12 @@ import {
   ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION,
   ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION,
   SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION,
+  ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION,
   stripEnglishUnsupportedCompetencyUnits,
 } from './cv-summary-grounding';
+import {
+  resolveEnglishSummaryEntryDuties,
+} from './cv-english-summary-grounding';
 import {
   analyzeFrenchSummaryEmploymentQuality,
   isFrenchStructuredSummaryDomain,
@@ -779,6 +784,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   ENGLISH_SUMMARY_VALIDATION_ROLE_ALIGN_347_REVISION,
   ENGLISH_SUMMARY_GROUNDED_FAILCLOSED_347_REVISION,
   SUMMARY_CANDIDATE_PROJECTION_INVARIANT_347_REVISION,
+  ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION,
   SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION,
   SUMMARY_BUILDER_REVISION_DE,
   ARABIC_SUMMARY_FIRST_PERSON_354_REVISION,
@@ -1894,11 +1900,22 @@ function currentAndPriorDutiesFromCv(cv: CVData, locale?: Locale): {
     // canonical/original duties over AI-frozen display — otherwise Arabic
     // Experience display drops structured warehouse/design out of the domain
     // gate while empQ diagnostics still score the German candidate.
-    if (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'fr') {
+    if (locale === 'de' || locale === 'es' || locale === 'fr') {
       const grounded = resolveExperienceGroundingDescription(exp).trim();
       const live = (exp.description || '').trim()
         || freezeExperienceAiDescription(exp).trim();
       return grounded || live;
+    }
+    if (locale === 'en') {
+      void ENGLISH_SUMMARY_ENTRY_OWNED_FACTS_370_REVISION;
+      const grounded = resolveExperienceGroundingDescription(exp).trim();
+      const live = (exp.description || '').trim()
+        || freezeExperienceAiDescription(exp).trim();
+      return resolveEnglishSummaryEntryDuties({
+        role: exp.position || '',
+        liveDescription: live,
+        groundedDescription: grounded,
+      });
     }
     return freezeExperienceAiDescription(exp);
   };
@@ -2464,7 +2481,15 @@ function summaryPasses(
     // Include the candidate itself so foreign live Experience display cannot
     // drop a correct English warehouse/design Summary out of the structured gate.
     const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${primary?.position || ''} ${cv.personal?.jobTitle || ''} ${summary || ''}`;
-    const englishStructuredDomain = isEnglishStructuredSummaryDomain(dutiesCorpus);
+    const englishStructuredDomain = isEnglishEntryOwnedSummaryPath({
+      corpus: dutiesCorpus,
+      currentDuties: entryDuties.currentEntryDuties,
+      priorDuties: entryDuties.priorEntryDuties,
+      currentRole: primary?.position || entryDuties.currentRoleTitle,
+      priorRole: entryDuties.priorRoleTitle,
+      roleDutyConflict,
+    });
+    void isEnglishStructuredSummaryDomain;
     if (englishStructuredDomain) {
       const structuredSkills = (cv.skills || [])
         .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
@@ -3973,8 +3998,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // Use raw CV role titles — never localized context.role (Warehouse Employee),
       // which falsely activates the Spanish/German Atlas gate on Serbian cycles.
       const dutiesCorpus = `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''} ${candidate || ''}`;
-      const englishStructuredDomain = isEnglishStructuredSummaryDomain(dutiesCorpus);
-      // Only apply the strict Atlas/Rewitu-class gate for structured warehouse/design domains.
+      const englishStructuredDomain = isEnglishEntryOwnedSummaryPath({
+        corpus: dutiesCorpus,
+        currentDuties: entryDuties.currentEntryDuties,
+        priorDuties: entryDuties.priorEntryDuties,
+        currentRole: entryDuties.currentRoleTitle,
+        priorRole: entryDuties.priorRoleTitle,
+        roleDutyConflict,
+      });
+      // Entry-owned gate for warehouse/design and arbitrary multi-duty Experience.
       if (englishStructuredDomain) {
         const structuredSkills = (cv.skills || [])
           .map((s) => (typeof s === 'string' ? s : (s as { name?: string })?.name || ''))
@@ -4566,9 +4598,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                       expectedDuration: durationSnapshot?.total || null,
                     })
                   : locale === 'en'
-                    && isEnglishStructuredSummaryDomain(
-                      `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''} ${analyzedText}`,
-                    )
+                    && isEnglishEntryOwnedSummaryPath({
+                      corpus: `${entryDuties.currentEntryDuties || ''} ${entryDuties.priorEntryDuties || ''} ${entryDuties.currentRoleTitle || ''} ${entryDuties.priorRoleTitle || ''} ${cv.personal?.jobTitle || ''} ${analyzedText}`,
+                      currentDuties: entryDuties.currentEntryDuties,
+                      priorDuties: entryDuties.priorEntryDuties,
+                      currentRole: entryDuties.currentRoleTitle,
+                      priorRole: entryDuties.priorRoleTitle,
+                      roleDutyConflict,
+                    })
                     ? analyzeEnglishSummaryEmploymentQuality(analyzedText, {
                       company: context.company || entryDuties.currentCompany,
                       role: context.role,

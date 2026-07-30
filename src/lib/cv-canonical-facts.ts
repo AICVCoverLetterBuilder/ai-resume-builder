@@ -10,6 +10,10 @@ import {
   freezeExperienceAiAuthoritativeDescription,
   resolveExperienceGroundingDescription,
 } from './cv-experience-provenance';
+import {
+  matchesGraphicDesignerOccupationalTitle,
+  matchesWarehouseOccupationalTitle,
+} from './cv-role-title';
 
 export type CvFactType =
   | 'summary'
@@ -223,7 +227,50 @@ function push(
 }
 
 function experienceSourceDescription(exp: WorkExperience): string {
-  return resolveExperienceGroundingDescription(exp);
+  const grounded = resolveExperienceGroundingDescription(exp).trim();
+  const live = (exp.description || '').trim();
+  const role = (exp.position || '').trim();
+  if (!live || !grounded || live === grounded) return grounded || live;
+
+  // EN-only stale Atlas/Rewitu discard: when the same entry id was reused for a
+  // new free-text role, never keep English warehouse/design triad canonical as
+  // Summary source-of-truth. Do not touch non-English grounded corpora.
+  // Use full occupational title matchers (FR Employée d'entrepôt, ES almacén, …)
+  // — a narrow English-only role regex falsely discarded EN warehouse canonical
+  // under localized warehouse titles when live Experience was HR/foreign.
+  const roleLooksWarehouse = matchesWarehouseOccupationalTitle(role);
+  const roleLooksDesign = matchesGraphicDesignerOccupationalTitle(role);
+  const groundedEnWarehouseTriad = /incoming\s+goods/iu.test(grounded)
+    && /(?:related\s+documentation|documentation\s+related)/iu.test(grounded)
+    && /(?:colleague|preparation\s+and\s+movement)/iu.test(grounded);
+  const liveEnWarehouseTriad = /incoming\s+goods/iu.test(live)
+    && /(?:related\s+documentation|documentation\s+related)/iu.test(live)
+    && /(?:colleague|preparation\s+and\s+movement)/iu.test(live);
+  const liveLooksEnglishReplacement = /[A-Za-z]{4,}/.test(live)
+    && !/[čćžšđČĆŽŠĐ]/.test(live)
+    && !/[\u0400-\u04FF\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]/.test(live);
+  if (
+    !roleLooksWarehouse
+    && groundedEnWarehouseTriad
+    && !liveEnWarehouseTriad
+    && liveLooksEnglishReplacement
+  ) {
+    return live;
+  }
+  const groundedEnDesignTriad = /visual\s+materials/iu.test(grounded)
+    && /design\s+(?:materials?|files?)/iu.test(grounded);
+  const liveEnDesignTriad = /visual\s+materials/iu.test(live)
+    && /design\s+(?:materials?|files?)/iu.test(live);
+  if (
+    !roleLooksDesign
+    && !roleLooksWarehouse
+    && groundedEnDesignTriad
+    && !liveEnDesignTriad
+    && liveLooksEnglishReplacement
+  ) {
+    return live;
+  }
+  return grounded || live;
 }
 
 export function buildCvCanonicalFactSet(
