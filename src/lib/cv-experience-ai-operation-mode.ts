@@ -18,7 +18,9 @@ import {
   countAiUnsafeInventionClaims,
   freeTextTitleStems,
   generationLooksGenericAdministrativeOnly,
+  generationLooksTautologicalRoleShellOnly,
   EXPERIENCE_GENERATION_RELEVANCE_367_REVISION,
+  EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION,
   jobTitleScriptConflictsWithLocale,
   resolveAiOperationMode,
   textLooksRelevantToFreeTextTitle,
@@ -132,10 +134,22 @@ export function validateExperienceGenerationOutput(
   }
   const titleDomainEarly = classifyFreeTextJobDomain(options.position || '');
   void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
+  void EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION;
   if (
     generationLooksGenericAdministrativeOnly(text)
     && titleDomainEarly !== 'documentation'
   ) {
+    return {
+      ok: false,
+      reason: 'experience_generation_not_relevant',
+      generatedBulletCount,
+      relevanceValidationPassed: false,
+      perspectiveValidationPassed: true,
+      tenseValidationPassed: true,
+      unsupportedClaimCount: 0,
+    };
+  }
+  if (generationLooksTautologicalRoleShellOnly(text)) {
     return {
       ok: false,
       reason: 'experience_generation_not_relevant',
@@ -298,6 +312,190 @@ function roleLabel(position: string, female: boolean, locale: Locale): string {
 }
 
 /**
+ * Subject-matter + agentive head from free-text title (morphology, not a catalogue).
+ * Preserves the complete title for grounding while deriving an object phrase for
+ * action-based duties.
+ */
+function parseFreeTextTitleActionGrounding(
+  position: string,
+  locale: Locale,
+): { fullTitle: string; objectPhrase: string; agentive: string | null } {
+  const fullTitle = (position || '').trim();
+  if (!fullTitle || jobTitleScriptConflictsWithLocale(fullTitle, locale)) {
+    return { fullTitle: '', objectPhrase: '', agentive: null };
+  }
+  const tokens = fullTitle.split(/\s+/u).filter(Boolean);
+  if (!tokens.length) return { fullTitle: '', objectPhrase: '', agentive: null };
+  const last = tokens[tokens.length - 1];
+  const agentiveRe =
+    /^(installers?|operators?|technicians?|specialists?|managers?|coordinators?|assistants?|analysts?|engineers?|workers?|associates?|officers?|consultants?|developers?|designers?|supervisors?|clerks?|representatives?|liaisons?)$/iu;
+  if (tokens.length >= 2 && agentiveRe.test(last)) {
+    const objectTokens = tokens.slice(0, -1);
+    const objectPhrase = pluralizeObjectPhrase(objectTokens);
+    return { fullTitle, objectPhrase, agentive: last };
+  }
+  return { fullTitle, objectPhrase: fullTitle, agentive: null };
+}
+
+function pluralizeObjectPhrase(tokens: string[]): string {
+  if (!tokens.length) return '';
+  const last = tokens[tokens.length - 1];
+  const pluralLast = /s$/i.test(last) ? last : `${last}s`;
+  const rest = tokens.slice(0, -1);
+  const joined = [...rest, pluralLast].join(' ');
+  // Mid-sentence object reading: keep original casing of leading tokens.
+  return joined;
+}
+
+/**
+ * EN empty-source duties grounded in free-text title morphology.
+ * Distinct core actions — never tautological role/duties/tasks/activities shells.
+ */
+function buildEnglishActionDutyTriple(
+  position: string,
+  present: boolean,
+): DutyTriple {
+  const { fullTitle, objectPhrase, agentive } = parseFreeTextTitleActionGrounding(
+    position,
+    'en',
+  );
+  const title = fullTitle || 'the role';
+  const obj = objectPhrase || title;
+  const ag = (agentive || '').toLowerCase();
+
+  if (/^installers?$/.test(ag)) {
+    return present
+      ? [
+        `Installs ${obj} as assigned for the ${title} role.`,
+        `Positions and secures ${obj} according to role requirements.`,
+        `Coordinates with colleagues on ${obj} installation work.`,
+      ]
+      : [
+        `Installed ${obj} as assigned for the ${title} role.`,
+        `Positioned and secured ${obj} according to role requirements.`,
+        `Coordinated with colleagues on ${obj} installation work.`,
+      ];
+  }
+  if (/^operators?$/.test(ag)) {
+    return present
+      ? [
+        `Operates ${obj} as assigned for the ${title} role.`,
+        `Monitors ${obj} during assigned work periods.`,
+        `Coordinates with colleagues on ${obj} operations.`,
+      ]
+      : [
+        `Operated ${obj} as assigned for the ${title} role.`,
+        `Monitored ${obj} during assigned work periods.`,
+        `Coordinated with colleagues on ${obj} operations.`,
+      ];
+  }
+  if (/^technicians?$/.test(ag)) {
+    return present
+      ? [
+        `Performs technical checks on ${obj} for the ${title} role.`,
+        `Adjusts ${obj} according to role requirements.`,
+        `Coordinates with colleagues on ${obj} technical work.`,
+      ]
+      : [
+        `Performed technical checks on ${obj} for the ${title} role.`,
+        `Adjusted ${obj} according to role requirements.`,
+        `Coordinated with colleagues on ${obj} technical work.`,
+      ];
+  }
+  if (/^analysts?$/.test(ag)) {
+    return present
+      ? [
+        `Analyzes ${obj} information as assigned for the ${title} role.`,
+        `Reviews ${obj} findings and completes required follow-ups.`,
+        `Coordinates with colleagues on ${obj} analysis work.`,
+      ]
+      : [
+        `Analyzed ${obj} information as assigned for the ${title} role.`,
+        `Reviewed ${obj} findings and completed required follow-ups.`,
+        `Coordinated with colleagues on ${obj} analysis work.`,
+      ];
+  }
+  if (/^coordinators?$|^liaisons?$/.test(ag)) {
+    return present
+      ? [
+        `Coordinates ${obj} workstreams as assigned for the ${title} role.`,
+        `Tracks ${obj} status and completes required follow-ups.`,
+        `Aligns with colleagues on ${obj} coordination needs.`,
+      ]
+      : [
+        `Coordinated ${obj} workstreams as assigned for the ${title} role.`,
+        `Tracked ${obj} status and completed required follow-ups.`,
+        `Aligned with colleagues on ${obj} coordination needs.`,
+      ];
+  }
+  if (/^managers?$|^supervisors?$/.test(ag)) {
+    return present
+      ? [
+        `Organizes ${obj} work as assigned for the ${title} role.`,
+        `Reviews ${obj} progress and completes required follow-ups.`,
+        `Coordinates with colleagues on ${obj} completion.`,
+      ]
+      : [
+        `Organized ${obj} work as assigned for the ${title} role.`,
+        `Reviewed ${obj} progress and completed required follow-ups.`,
+        `Coordinated with colleagues on ${obj} completion.`,
+      ];
+  }
+  if (/^designers?$/.test(ag)) {
+    return present
+      ? [
+        `Creates ${obj} materials as assigned for the ${title} role.`,
+        `Reviews and adapts ${obj} materials according to requirements.`,
+        `Prepares final ${obj} files with colleagues as needed.`,
+      ]
+      : [
+        `Created ${obj} materials as assigned for the ${title} role.`,
+        `Reviewed and adapted ${obj} materials according to requirements.`,
+        `Prepared final ${obj} files with colleagues as needed.`,
+      ];
+  }
+  if (/^developers?$|^engineers?$/.test(ag)) {
+    return present
+      ? [
+        `Develops ${obj} solutions as assigned for the ${title} role.`,
+        `Reviews ${obj} outputs and completes required follow-ups.`,
+        `Coordinates with colleagues on ${obj} completion.`,
+      ]
+      : [
+        `Developed ${obj} solutions as assigned for the ${title} role.`,
+        `Reviewed ${obj} outputs and completed required follow-ups.`,
+        `Coordinated with colleagues on ${obj} completion.`,
+      ];
+  }
+  if (/^specialists?$|^consultants?$|^assistants?$|^associates?$|^officers?$|^clerks?$|^workers?$|^representatives?$/.test(ag)) {
+    return present
+      ? [
+        `Produces concrete outputs for ${title} assignments.`,
+        `Reviews ${obj} inputs and completes required follow-ups.`,
+        `Coordinates with colleagues on ${obj} completion.`,
+      ]
+      : [
+        `Produced concrete outputs for ${title} assignments.`,
+        `Reviewed ${obj} inputs and completed required follow-ups.`,
+        `Coordinated with colleagues on ${obj} completion.`,
+      ];
+  }
+
+  // Opaque / unknown free-text titles: preserve full title once; distinct useful actions.
+  return present
+    ? [
+      `Produces concrete outputs for ${title} assignments.`,
+      'Reviews assigned inputs and completes required follow-ups.',
+      'Coordinates with colleagues to finish role outputs on schedule.',
+    ]
+    : [
+      `Produced concrete outputs for ${title} assignments.`,
+      'Reviewed assigned inputs and completed required follow-ups.',
+      'Coordinated with colleagues to finish role outputs on schedule.',
+    ];
+}
+
+/**
  * Soft domain phrasing from free-text title — never returns a foreign-script
  * title for injection into a different target locale's prose.
  */
@@ -317,10 +515,7 @@ function softDomainFromTitle(position: string, locale: Locale): string {
 }
 
 /**
- * Subject-matter work phrase for general-domain generation shells.
- * Drops a trailing agentive role head so bullets ground on free-text context
- * without repeating the full title on every line (or inventing tools/venues).
- * Never appends English "work" outside the English locale (locale purity).
+ * Subject-matter work phrase for non-English general-domain generation shells.
  */
 function softWorkPhraseFromTitle(position: string, locale: Locale): string {
   const soft = softDomainFromTitle(position, locale);
@@ -708,9 +903,16 @@ export function buildJobContextGenerationFallback(options: {
   const domain = classifyFreeTextJobDomain(options.position || '');
   void options.industry;
 
-﻿  const specialized = domainShells(domain, locale, present, female);
+  const specialized = domainShells(domain, locale, present, female);
   if (specialized) {
     return formatExperienceBullets([...specialized]);
+  }
+
+  // English general domain: morphology-grounded duties (never tautological role shells).
+  if (locale === 'en' && domain !== 'documentation') {
+    return formatExperienceBullets([
+      ...buildEnglishActionDutyTriple(options.position || '', present),
+    ]);
   }
 
   // Safe work phrase only when script-compatible with the target locale.
@@ -780,17 +982,9 @@ export function buildJobContextGenerationFallback(options: {
   }
 
   if (locale === 'en') {
-    return formatExperienceBullets(present
-      ? [
-        `Performs day-to-day ${groundedWork} duties as assigned.`,
-        'Completes assigned role tasks according to role needs.',
-        'Coordinates with colleagues on shared role work activities.',
-      ]
-      : [
-        `Performed day-to-day ${groundedWork} duties as assigned.`,
-        'Completed assigned role tasks according to role needs.',
-        'Coordinated with colleagues on shared role work activities.',
-      ]);
+    return formatExperienceBullets([
+      ...buildEnglishActionDutyTriple(options.position || '', present),
+    ]);
   }
 
   if (locale === 'hi') {
@@ -932,16 +1126,8 @@ export function buildJobContextGenerationFallback(options: {
       ]);
   }
 
-  // Final layer: always three useful English CV bullets (never empty).
-  return formatExperienceBullets(present
-    ? [
-      `Performs day-to-day ${groundedWork} duties as assigned.`,
-      `Completes ${groundedWork} tasks according to role needs.`,
-      `Coordinates with colleagues on ${groundedWork} activities.`,
-    ]
-    : [
-      `Performed day-to-day ${groundedWork} duties as assigned.`,
-      `Completed ${groundedWork} tasks according to role needs.`,
-      `Coordinated with colleagues on ${groundedWork} activities.`,
-    ]);
+  // Final layer: always three useful English CV bullets (never empty / never tautological).
+  return formatExperienceBullets([
+    ...buildEnglishActionDutyTriple(options.position || '', present),
+  ]);
 }

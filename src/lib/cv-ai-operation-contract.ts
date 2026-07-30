@@ -254,7 +254,12 @@ const DOMAIN_CUE_RE: Record<FreeTextJobDomain, RegExp> = {
 export const EXPERIENCE_GENERATION_RELEVANCE_367_REVISION =
   'experience-generation-relevance-367-v1' as const;
 
+/** Packaged asset marker — empty-source generation fallback quality (AAB-368). */
+export const EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION =
+  'experience-generation-fallback-quality-368-v1' as const;
+
 void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
+void EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION;
 
 export function generationLooksGenericAdministrativeOnly(text: string): boolean {
   void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
@@ -274,6 +279,32 @@ export function generationLooksGenericAdministrativeOnly(text: string): boolean 
     /दैनिक\s+कार्य\s+रिकॉर्ड|कार्य\s+दस्तावेज़|जानकारी\s+का\s+समन्वय/iu,
   ];
   return signals.filter((re) => re.test(joined)).length >= 2;
+}
+
+/**
+ * Tautological empty-source shells that only restate role/duties/tasks/activities
+ * without distinct action-grounded duties.
+ */
+export function generationLooksTautologicalRoleShellOnly(text: string): boolean {
+  void EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION;
+  // Administrative shells are classified separately — do not conflate with tautology.
+  if (generationLooksGenericAdministrativeOnly(text)) return false;
+  const lines = (text || '')
+    .split(/\r?\n|•/)
+    .map((l) => l.replace(/^[•\-\*]\s*/, '').trim())
+    .filter(Boolean);
+  if (lines.length < 2) return false;
+  const tautRe =
+    /(?:\bday-to-day\b.{0,48}\bduties\b(?:\s+as\s+assigned)?|\bassigned role tasks\b|\bshared role work activities\b|\bcompletes? assigned role\b|\brole work activities\b|\bperforms? day-to-day\b.{0,40}\bduties\b)/iu;
+  const hits = lines.filter((l) => tautRe.test(l)).length;
+  if (hits >= 2) return true;
+  // Whole field is only generic duty/task/activity restatement.
+  const joined = lines.join('\n');
+  const genericOnly =
+    /(?:duties|tasks|activities|role needs|as assigned)/iu.test(joined)
+    && !/(?:\binstalls?\b|\bpositions?\b|\bsecures?\b|\boperates?\b|\bmonitors?\b|\banalyz(?:e|es|ed)\b|\bcreates?\b|\bprepares?\b|\breviews?\b(?!\s+day-to-day\s+records)|\bproduces?\b|\bdelivers?\b|\btracks?\b(?!\s+open\s+items))/iu
+      .test(joined);
+  return genericOnly && hits >= 1;
 }
 
 function titleAndTextLookCrossScript(position: string, text: string): boolean {
@@ -300,7 +331,8 @@ function titleAndTextLookCrossScript(position: string, text: string): boolean {
 
 function looksLikeLocalePureRoleWorkShell(text: string): boolean {
   if (generationLooksGenericAdministrativeOnly(text)) return false;
-  return /(?:day-to-day\s+\S[\s\S]{0,40}duties\s+as\s+assigned|assigned\s+role\s+tasks|shared\s+role\s+work\s+activities|svakodnevne\s+poslove|dodijeljene\s+radne\s+zadatke|dodeljene\s+radne\s+zadatke|tägliche\s+Aufgaben|zugewiesene\s+Arbeitsaufgaben|tareas\s+diarias|tâches\s+quotidiennes|compiti\s+quotidiani|tarefas\s+diárias|mansioni\s+quotidiane|役割業務|業務タスク|مهام\s+الدور|рабочие\s+задачи\s+роли|भूमिका\s+संबंधी)/iu
+  if (generationLooksTautologicalRoleShellOnly(text)) return false;
+  return /(?:\binstalls?\b|\bpositions?\s+and\s+secures?\b|\boperates?\b|\bmonitors?\b|\banalyz(?:es|ed)\b|\bcreates?\b|\bprepares?\b|\bproduces?\s+concrete\b|\breviews?\b.+\bfollow-ups\b|\btracks?\b.+\bfollow-ups\b|\bcoordinates?\s+with\s+colleagues\s+on\b|\baligns?\s+with\s+colleagues\s+on\b|\bcoordinates?\s+\S.{0,40}\bworkstreams\b)/iu
     .test(text || '');
 }
 
@@ -308,7 +340,8 @@ function looksLikeLocalePureRoleWorkShell(text: string): boolean {
  * Soft relevance: generated text should share ≥1 stem with the free-text title
  * when stems exist. Empty title → pass (context may be industry/level only).
  * Cross-script titles use semantic domain cues instead of literal stem overlap.
- * Generic admin/docs shells are never relevant unless the title is documentation.
+ * Generic admin/docs shells and tautological role/duty shells are never relevant
+ * unless the title is documentation (admin only).
  */
 export function textLooksRelevantToFreeTextTitle(
   text: string,
@@ -319,6 +352,9 @@ export function textLooksRelevantToFreeTextTitle(
     generationLooksGenericAdministrativeOnly(text)
     && domain !== 'documentation'
   ) {
+    return false;
+  }
+  if (generationLooksTautologicalRoleShellOnly(text)) {
     return false;
   }
   const stems = freeTextTitleStems(position);

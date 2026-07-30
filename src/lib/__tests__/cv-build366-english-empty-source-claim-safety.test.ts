@@ -59,15 +59,15 @@ const SOLAR_UNSAFE_SCOPE_TOOLS = formatExperienceBullets([
 ]);
 
 const SAFE_GENERIC_SOLAR = formatExperienceBullets([
-  'Performs day-to-day solar panel work duties as assigned.',
-  'Completes assigned role tasks according to role needs.',
-  'Coordinates with colleagues on shared role work activities.',
+  'Installs solar panels as assigned for the Solar Panel Installer role.',
+  'Positions and secures solar panels according to role requirements.',
+  'Coordinates with colleagues on solar panels installation work.',
 ]);
 
 const SAFE_BEEKEEPER = formatExperienceBullets([
-  'Performs day-to-day beekeeper work duties as assigned.',
-  'Completes assigned role tasks according to role needs.',
-  'Coordinates with colleagues on shared role work activities.',
+  'Produces concrete outputs for Beekeeper assignments.',
+  'Reviews assigned inputs and completes required follow-ups.',
+  'Coordinates with colleagues to finish role outputs on schedule.',
 ]);
 
 const ADMIN_IRRELEVANT_SOLAR = formatExperienceBullets([
@@ -340,8 +340,8 @@ describe('AAB-366 English empty-source generation claim safety', () => {
     const text = r.finalized.text;
     expect(splitExperienceBullets(text)).toHaveLength(3);
     expect(text).not.toMatch(/residential|commercial|rooftop|wiring|inverter|electrical safety|optimal performance/i);
-    expect(text).toMatch(/Performs|Completes|Coordinates|solar panel work/i);
-    expect(text).not.toMatch(/work documentation|information sharing|data completeness/i);
+    expect(text).toMatch(/Installs solar panels|Positions and secures|Solar Panel Installer/i);
+    expect(text).not.toMatch(/work documentation|information sharing|data completeness|day-to-day|assigned role tasks|shared role work activities/i);
     expect(r.nextCv.experience.find((e) => e.id === r.exp.id)?.description).toBe(text);
     expect(r.usageBefore).toBe(0);
     expect(r.usageAfter).toBe(1);
@@ -400,8 +400,8 @@ describe('AAB-366 English empty-source generation claim safety', () => {
     }).reason).toBe('experience_generation_not_relevant');
     const r = runGen({ candidate: ADMIN_IRRELEVANT_SOLAR, usageBefore: 2 });
     expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).toMatch(/solar panel work/i);
-    expect(r.finalized.text).not.toMatch(/work documentation|information sharing/i);
+    expect(r.finalized.text).toMatch(/Installs solar panels|Solar Panel Installer/i);
+    expect(r.finalized.text).not.toMatch(/work documentation|information sharing|day-to-day|assigned role tasks/i);
     expect(r.usageAfter).toBe(3);
   });
 
@@ -410,15 +410,15 @@ describe('AAB-366 English empty-source generation claim safety', () => {
       candidate: SOLAR_UNSAFE_DEVICE,
       isPresent: true,
     });
-    expect(present.finalized.text).toMatch(/^•?\s*Performs/m);
-    expect(present.finalized.text).not.toMatch(/\bPerformed\b/);
+    expect(present.finalized.text).toMatch(/^•?\s*Installs\b/m);
+    expect(present.finalized.text).not.toMatch(/\bInstalled\b/);
 
     const past = runGen({
       candidate: SOLAR_UNSAFE_DEVICE,
       isPresent: false,
     });
-    expect(past.finalized.text).toMatch(/^•?\s*Performed/m);
-    expect(past.finalized.text).not.toMatch(/\bPerforms\b/);
+    expect(past.finalized.text).toMatch(/^•?\s*Installed\b/m);
+    expect(past.finalized.text).not.toMatch(/\bInstalls\b/);
     expect(past.usageAfter).toBe(1);
   });
 

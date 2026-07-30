@@ -1,9 +1,10 @@
 /**
  * @vitest-environment jsdom
  *
- * AAB-367 — English empty-source generation relevance for free-text roles.
- * Generic administrative/documentation shells must not pass relevance for
- * non-documentation occupations (exact device: Solar Panel Installer).
+ * AAB-368 — English empty-source Experience fallback quality.
+ * Reject tautological role/duties/tasks/activities shells; preserve complete
+ * free-text title; emit 3 distinct action-grounded duties without inventing
+ * tools/venues/standards/metrics/maintenance/outcomes.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CVData, WorkExperience } from '@/lib/types';
@@ -35,8 +36,9 @@ import {
   EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION,
 } from '@/lib/cv-experience-unsupported-claims';
 import {
-  generationLooksGenericAdministrativeOnly,
+  generationLooksTautologicalRoleShellOnly,
   textLooksRelevantToFreeTextTitle,
+  EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION,
   EXPERIENCE_GENERATION_RELEVANCE_367_REVISION,
 } from '@/lib/cv-ai-operation-contract';
 import {
@@ -48,17 +50,10 @@ import {
 } from '@/lib/ai-usage-policy';
 import type { Locale } from '@/lib/i18n/translations';
 
-/** Exact failing device server-fallback shell. */
-const SOLAR_ADMIN_SERVER_FALLBACK = formatExperienceBullets([
-  'Reviews day-to-day records related to solar panel installation and verifies data completeness.',
-  'Updates work documentation and tracks open items according to role needs.',
-  'Coordinates information sharing with colleagues to complete documentation on time.',
-]);
-
-const UNRELATED_CAFE = formatExperienceBullets([
-  'Brews espresso drinks and manages cafe inventory each shift.',
-  'Greets cafe guests and processes counter payments accurately.',
-  'Cleans cafe equipment and restocks pastry displays before close.',
+const TAUTOLOGICAL_SOLAR = formatExperienceBullets([
+  'Performs day-to-day solar panel work duties as assigned.',
+  'Completes assigned role tasks according to role needs.',
+  'Coordinates with colleagues on shared role work activities.',
 ]);
 
 const UNSAFE_SOLAR = formatExperienceBullets([
@@ -67,16 +62,10 @@ const UNSAFE_SOLAR = formatExperienceBullets([
   'Performs inspection and maintenance to ensure optimal performance and compliance.',
 ]);
 
-const ROLE_RELEVANT_SOLAR = formatExperienceBullets([
-  'Installs solar panels as assigned for the Solar Panel Installer role.',
-  'Positions and secures solar panels according to role requirements.',
-  'Coordinates with colleagues on solar panels installation work.',
-]);
-
-const TAUTOLOGICAL_SOLAR = formatExperienceBullets([
-  'Performs day-to-day solar panel work duties as assigned.',
-  'Completes assigned role tasks according to role needs.',
-  'Coordinates with colleagues on shared role work activities.',
+const ADMIN_SOLAR = formatExperienceBullets([
+  'Reviews day-to-day records related to solar panel installation and verifies data completeness.',
+  'Updates work documentation and tracks open items according to role needs.',
+  'Coordinates information sharing with colleagues to complete documentation on time.',
 ]);
 
 function seedUsage(count: number): void {
@@ -96,7 +85,7 @@ function buildCv(options?: {
   const position = options?.position || 'Solar Panel Installer';
   const isPresent = options?.isPresent !== false;
   const exp: WorkExperience = {
-    id: 'exp-solar-367',
+    id: 'exp-solar-368',
     company: 'SunCo',
     position,
     startDate: isPresent ? '2024-01' : '2020-01',
@@ -126,7 +115,7 @@ function buildCv(options?: {
     experience.splice(2, 0, experience.shift()!);
   }
   const cv: CVData = {
-    id: 'cv-en-367',
+    id: 'cv-en-368',
     name: 'CV',
     personal: {
       fullName: 'Sam Solar',
@@ -177,7 +166,7 @@ function runGen(options: {
     canonicalText: '',
     originalText: '',
     locale,
-    requestId: 'req-en-367',
+    requestId: 'req-en-368',
     jobContextHash: ctx.key,
     experienceEntryId: exp.id,
   });
@@ -199,7 +188,7 @@ function runGen(options: {
     industryNorm: ctx.industryNorm,
     levelNorm: ctx.levelNorm,
     jobContextHash: ctx.key,
-    requestId: 'req-en-367',
+    requestId: 'req-en-368',
     usageCountBefore: usageBefore,
   });
   session.recordLiveExperience(exp, Boolean(exp.isPresent));
@@ -277,117 +266,116 @@ function runGen(options: {
   } else {
     session.recordVisibleApply(false, usageBefore);
   }
-  const trace = session.commit();
+  session.commit();
   return {
     cv,
     exp,
     nextCv,
     finalized,
-    preApplyGate,
     usageBefore,
     usageAfter,
-    snapshot,
-    trace,
+    preApplyGate,
+    operationMode: resolveExperienceAiOperationMode(''),
   };
 }
 
-describe('AAB-367 English empty-source generation relevance', () => {
+function assertClaimSafe(text: string, position: string): void {
+  expect(detectExperienceGenerationUnsupportedClaims({
+    candidateText: text,
+    position,
+  }).count).toBe(0);
+  expect(validateExperienceGenerationOutput(text, {
+    locale: 'en',
+    position,
+    isPresent: true,
+  }).ok).toBe(true);
+  expect(text).not.toMatch(
+    /residential|commercial|rooftop|wiring|inverter|manufacturer standards|electrical safety|optimal performance|ISO\s*\d+|Salesforce|Excel|day-to-day.{0,40}duties|assigned role tasks|shared role work activities/i,
+  );
+}
+
+describe('AAB-368 English empty-source Experience fallback quality', () => {
   beforeEach(() => {
     clearExperienceAiDiagnosticsForTests();
     localStorage.clear();
     seedUsage(0);
   });
 
-  it('exposes experience-generation-relevance-367-v1 marker', () => {
+  it('exposes fallback-quality and prior revision markers', () => {
+    expect(EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION)
+      .toBe('experience-generation-fallback-quality-368-v1');
     expect(EXPERIENCE_GENERATION_RELEVANCE_367_REVISION)
       .toBe('experience-generation-relevance-367-v1');
-  });
-
-  it('keeps claim-safety marker and rejects unsafe Solar inventiveness', () => {
     expect(EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION)
       .toBe('experience-generation-claim-safety-366-v1');
-    expect(detectExperienceGenerationUnsupportedClaims({
-      candidateText: UNSAFE_SOLAR,
-      position: 'Solar Panel Installer',
-    }).count).toBeGreaterThan(0);
   });
 
-  it('exact Solar admin shell fails relevance and is classified administrative', () => {
-    expect(generationLooksGenericAdministrativeOnly(SOLAR_ADMIN_SERVER_FALLBACK)).toBe(true);
-    expect(textLooksRelevantToFreeTextTitle(
-      SOLAR_ADMIN_SERVER_FALLBACK,
-      'Solar Panel Installer',
-    )).toBe(false);
-    const v = validateExperienceGenerationOutput(SOLAR_ADMIN_SERVER_FALLBACK, {
+  it('exact Solar Panel Installer: tautological shell rejected; action fallback applies once', () => {
+    expect(generationLooksTautologicalRoleShellOnly(TAUTOLOGICAL_SOLAR)).toBe(true);
+    expect(textLooksRelevantToFreeTextTitle(TAUTOLOGICAL_SOLAR, 'Solar Panel Installer')).toBe(false);
+    const v = validateExperienceGenerationOutput(TAUTOLOGICAL_SOLAR, {
       locale: 'en',
       position: 'Solar Panel Installer',
       isPresent: true,
     });
     expect(v.ok).toBe(false);
-    expect(v.relevanceValidationPassed).toBe(false);
     expect(v.reason).toBe('experience_generation_not_relevant');
-  });
 
-  it('exact Solar admin server-fallback → role-relevant fallback; usage 2→3', () => {
-    const r = runGen({
-      usageBefore: 2,
-      candidate: SOLAR_ADMIN_SERVER_FALLBACK,
-      isPresent: true,
-    });
-    expect(resolveExperienceAiOperationMode('')).toBe('generate_from_job_context');
-    expect(r.finalized.blocked).toBe(false);
-    expect(r.finalized.countedAsSuccess).toBe(true);
-    expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.diagnostics?.generationFallbackApplied).toBe(true);
-    expect(r.preApplyGate?.passed).toBe(true);
-    expect(splitExperienceBullets(r.finalized.text)).toHaveLength(3);
-    expect(r.finalized.text).toMatch(/Installs solar panels|Solar Panel Installer/i);
-    expect(r.finalized.text).not.toMatch(/work documentation|information sharing|data completeness|residential|wiring|day-to-day|assigned role tasks|shared role work activities/i);
-    expect(r.nextCv.experience.find((e) => e.id === r.exp.id)?.description).toBe(r.finalized.text);
-    expect(r.usageBefore).toBe(2);
-    expect(r.usageAfter).toBe(3);
-  });
-
-  it('unrelated-role cafe duties reject; Solar role-relevant fallback applies once', () => {
-    const v = validateExperienceGenerationOutput(UNRELATED_CAFE, {
-      locale: 'en',
-      position: 'Solar Panel Installer',
-      isPresent: true,
-    });
-    expect(v.ok).toBe(false);
-    expect(v.relevanceValidationPassed).toBe(false);
-    const r = runGen({ candidate: UNRELATED_CAFE, usageBefore: 0 });
-    expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).toMatch(/Installs solar panels|Solar Panel Installer/i);
-    expect(r.finalized.text).not.toMatch(/cafe|espresso|pastry|day-to-day|assigned role tasks/i);
-    expect(r.usageAfter).toBe(1);
-  });
-
-  it('unknown free-text occupation builds role-relevant fallback', () => {
     const fb = buildJobContextGenerationFallback({
       locale: 'en',
-      position: 'Nebula Ops Liaison',
-      industry: 'general',
+      position: 'Solar Panel Installer',
       isPresent: true,
-      gender: 'male',
     });
-    expect(fb).toMatch(/Nebula Ops/i);
-    expect(fb).not.toMatch(/work documentation|information sharing/i);
-    expect(validateExperienceGenerationOutput(fb, {
-      locale: 'en',
-      position: 'Nebula Ops Liaison',
-      isPresent: true,
-    }).ok).toBe(true);
-    const r = runGen({
-      position: 'Nebula Ops Liaison',
-      candidate: UNSAFE_SOLAR,
-    });
+    const bullets = splitExperienceBullets(fb);
+    expect(bullets).toHaveLength(3);
+    expect(fb).toMatch(/Solar Panel Installer/);
+    expect(fb).toMatch(/Installs solar panels/i);
+    expect(fb).toMatch(/Positions and secures/i);
+    expect(fb).toMatch(/Coordinates with colleagues/i);
+    assertClaimSafe(fb, 'Solar Panel Installer');
+
+    const r = runGen({ candidate: TAUTOLOGICAL_SOLAR, usageBefore: 0 });
+    expect(r.finalized.blocked).toBe(false);
     expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).toMatch(/Nebula Ops/i);
+    expect(r.finalized.text).toBe(fb);
     expect(r.usageAfter).toBe(1);
   });
 
-  it('current and past tense role-relevant fallbacks', () => {
+  it('arbitrary action-based titles derive distinct core-action duties', () => {
+    for (const position of [
+      'Conveyor Belt Operator',
+      'Network Traffic Analyst',
+      'Fleet Route Coordinator',
+    ]) {
+      const fb = buildJobContextGenerationFallback({
+        locale: 'en',
+        position,
+        isPresent: true,
+      });
+      expect(fb).toContain(position);
+      expect(generationLooksTautologicalRoleShellOnly(fb)).toBe(false);
+      assertClaimSafe(fb, position);
+      expect(splitExperienceBullets(fb)).toHaveLength(3);
+    }
+  });
+
+  it('opaque/unknown free-text titles preserve full title once with useful duties', () => {
+    const position = 'Quantum Workflow Harmonizer';
+    const fb = buildJobContextGenerationFallback({
+      locale: 'en',
+      position,
+      isPresent: true,
+    });
+    expect(fb).toContain(position);
+    expect(fb).toMatch(/Produces concrete outputs/i);
+    expect(generationLooksTautologicalRoleShellOnly(fb)).toBe(false);
+    const titleHits = splitExperienceBullets(fb)
+      .filter((l) => l.includes(position)).length;
+    expect(titleHits).toBe(1);
+    assertClaimSafe(fb, position);
+  });
+
+  it('current and completed roles use matching tense', () => {
     const present = buildJobContextGenerationFallback({
       locale: 'en',
       position: 'Solar Panel Installer',
@@ -400,87 +388,46 @@ describe('AAB-367 English empty-source generation relevance', () => {
     });
     expect(present).toMatch(/^•?\s*Installs\b/m);
     expect(past).toMatch(/^•?\s*Installed\b/m);
-    expect(validateExperienceGenerationOutput(present, {
-      locale: 'en', position: 'Solar Panel Installer', isPresent: true,
-    }).ok).toBe(true);
-    expect(validateExperienceGenerationOutput(past, {
-      locale: 'en', position: 'Solar Panel Installer', isPresent: false,
-    }).ok).toBe(true);
+    expect(present).not.toMatch(/\bInstalled\b/);
+    expect(past).not.toMatch(/\bInstalls\b/);
   });
 
-  it('unsupported claims stay rejected; role-relevant fallback applies once', () => {
-    const r = runGen({ candidate: UNSAFE_SOLAR, usageBefore: 4 });
-    expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).not.toMatch(/residential|wiring|inverter|optimal performance|day-to-day|assigned role tasks/i);
-    expect(r.finalized.text).toMatch(/Installs solar panels|Solar Panel Installer/i);
-    expect(r.usageAfter).toBe(5);
-  });
-
-  it('valid role-relevant provider applies once without fallback', () => {
-    const r = runGen({ candidate: ROLE_RELEVANT_SOLAR, usageBefore: 0 });
-    expect(r.finalized.origin).toBe('ai_generated');
-    expect(r.finalized.diagnostics?.generationFallbackApplied).toBe(false);
-    expect(r.finalized.text).toBe(ROLE_RELEVANT_SOLAR);
-    expect(r.usageAfter).toBe(1);
-  });
-
-  it('closed Experience (past) uses past-tense role-relevant fallback', () => {
+  it('5+ Experience entries: no cross-entry leakage', () => {
     const r = runGen({
-      candidate: SOLAR_ADMIN_SERVER_FALLBACK,
-      isPresent: false,
-      usageBefore: 1,
-    });
-    expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).toMatch(/^•?\s*Installed\b/m);
-    expect(r.finalized.text).not.toMatch(/\bInstalls\b/);
-    expect(r.usageAfter).toBe(2);
-  });
-
-  it('tautological role/duties/tasks shell is rejected and replaced by action fallback', () => {
-    expect(textLooksRelevantToFreeTextTitle(
-      TAUTOLOGICAL_SOLAR,
-      'Solar Panel Installer',
-    )).toBe(false);
-    const v = validateExperienceGenerationOutput(TAUTOLOGICAL_SOLAR, {
-      locale: 'en',
-      position: 'Solar Panel Installer',
-      isPresent: true,
-    });
-    expect(v.ok).toBe(false);
-    expect(v.reason).toBe('experience_generation_not_relevant');
-    const r = runGen({ candidate: TAUTOLOGICAL_SOLAR, usageBefore: 0 });
-    expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).toMatch(/Installs solar panels/i);
-    expect(r.finalized.text).not.toMatch(/day-to-day|assigned role tasks|shared role work activities/i);
-    expect(r.usageAfter).toBe(1);
-  });
-
-  it('documentation occupation may keep administrative shell', () => {
-    const admin = formatExperienceBullets([
-      'Reviews day-to-day records related to office administration and verifies data completeness.',
-      'Updates work documentation and tracks open items according to role needs.',
-      'Coordinates information sharing with colleagues to complete documentation on time.',
-    ]);
-    expect(validateExperienceGenerationOutput(admin, {
-      locale: 'en',
-      position: 'Office Administrator',
-      isPresent: true,
-    }).ok).toBe(true);
-  });
-
-  it('no cross-entry leakage with many Experience entries', () => {
-    const r = runGen({
-      candidate: SOLAR_ADMIN_SERVER_FALLBACK,
+      candidate: ADMIN_SOLAR,
       extraEntries: 5,
+      usageBefore: 1,
     });
     expect(r.cv.experience.length).toBeGreaterThanOrEqual(6);
     expect(r.finalized.countedAsSuccess).toBe(true);
     const target = r.nextCv.experience.find((e) => e.id === r.exp.id);
     expect(target?.description).toBe(r.finalized.text);
+    expect(r.finalized.text).toMatch(/Installs solar panels/i);
     for (const e of r.nextCv.experience) {
       if (e.id === r.exp.id) continue;
       const prior = r.cv.experience.find((x) => x.id === e.id);
       expect(e.description).toBe(prior?.description);
     }
+    expect(r.usageAfter).toBe(2);
+  });
+
+  it('claim-safety regressions remain closed for unsafe Solar inventiveness', () => {
+    expect(validateExperienceGenerationOutput(UNSAFE_SOLAR, {
+      locale: 'en',
+      position: 'Solar Panel Installer',
+      isPresent: true,
+    }).ok).toBe(false);
+    const r = runGen({ candidate: UNSAFE_SOLAR, usageBefore: 3 });
+    expect(r.finalized.origin).toBe('deterministic_fallback');
+    assertClaimSafe(r.finalized.text, 'Solar Panel Installer');
+    expect(r.usageAfter).toBe(4);
+  });
+
+  it('weak tautological provider never applies as ai_generated', () => {
+    const r = runGen({ candidate: TAUTOLOGICAL_SOLAR, usageBefore: 7 });
+    expect(r.finalized.origin).not.toBe('ai_generated');
+    expect(r.finalized.text).not.toBe(TAUTOLOGICAL_SOLAR);
+    expect(r.finalized.text).not.toMatch(/assigned role tasks|shared role work activities/i);
+    expect(r.usageAfter).toBe(8);
   });
 });

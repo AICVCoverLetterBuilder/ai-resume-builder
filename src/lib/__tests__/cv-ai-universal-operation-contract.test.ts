@@ -141,9 +141,13 @@ describe('universal AI operation mode contract', () => {
     const stems = freeTextTitleStems('Quantum Workflow Harmonizer');
     expect(stems.some((s) => s.includes('quantum') || s.includes('workflow') || s.includes('harmon'))).toBe(true);
     expect(textLooksRelevantToFreeTextTitle(
-      'Performs day-to-day quantum workflow work duties as assigned.',
+      'Installs quantum workflow components as assigned for the Quantum Workflow Harmonizer role.\nReviews quantum workflow findings and completes required follow-ups.\nCoordinates with colleagues on quantum workflow completion.',
       'Quantum Workflow Harmonizer',
     )).toBe(true);
+    expect(textLooksRelevantToFreeTextTitle(
+      'Performs day-to-day quantum workflow work duties as assigned.\nCompletes assigned role tasks according to role needs.\nCoordinates with colleagues on shared role work activities.',
+      'Quantum Workflow Harmonizer',
+    )).toBe(false);
     expect(textLooksRelevantToFreeTextTitle(
       'Reviews day-to-day records related to Quantum Workflow Harmonizer and verifies data completeness.\nUpdates work documentation and tracks open items according to role needs.\nCoordinates information sharing with colleagues to complete documentation on time.',
       'Quantum Workflow Harmonizer',
@@ -192,8 +196,8 @@ describe('universal Experience generation fallback (no occupation catalogue)', (
     const past = buildJobContextGenerationFallback({
       locale: 'en', position: 'Ops Analyst', isPresent: false,
     });
-    expect(present).toMatch(/^• Performs\b/m);
-    expect(past).toMatch(/^• Performed\b/m);
+    expect(present).toMatch(/^• Analyzes\b/m);
+    expect(past).toMatch(/^• Analyzed\b/m);
   });
 });
 

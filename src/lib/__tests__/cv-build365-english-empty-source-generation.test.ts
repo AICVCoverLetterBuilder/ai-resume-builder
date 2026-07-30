@@ -49,15 +49,15 @@ const SOLAR_UNSAFE_PRESENT = formatExperienceBullets([
 ]);
 
 const SOLAR_SAFE_PRESENT = formatExperienceBullets([
-  'Performs day-to-day solar panel work duties as assigned.',
-  'Completes assigned role tasks according to role needs.',
-  'Coordinates with colleagues on shared role work activities.',
+  'Installs solar panels as assigned for the Solar Panel Installer role.',
+  'Positions and secures solar panels according to role requirements.',
+  'Coordinates with colleagues on solar panels installation work.',
 ]);
 
 const SOLAR_SAFE_PAST = formatExperienceBullets([
-  'Performed day-to-day solar panel work duties as assigned.',
-  'Completed assigned role tasks according to role needs.',
-  'Coordinated with colleagues on shared role work activities.',
+  'Installed solar panels as assigned for the Solar Panel Installer role.',
+  'Positioned and secured solar panels according to role requirements.',
+  'Coordinated with colleagues on solar panels installation work.',
 ]);
 
 const SOLAR_ADMIN_IRRELEVANT = formatExperienceBullets([
@@ -365,9 +365,9 @@ describe('AAB-365 English empty-source Experience generation', () => {
     const r = runEmptyEnGeneration({
       position: 'Beekeeper',
       candidate: formatExperienceBullets([
-        'Performs day-to-day beekeeper work duties as assigned.',
-        'Completes assigned role tasks according to role needs.',
-        'Coordinates with colleagues on shared role work activities.',
+        'Produces concrete outputs for Beekeeper assignments.',
+        'Reviews assigned inputs and completes required follow-ups.',
+        'Coordinates with colleagues to finish role outputs on schedule.',
       ]),
     });
     expect(r.finalized.blocked).toBe(false);
@@ -385,8 +385,8 @@ describe('AAB-365 English empty-source Experience generation', () => {
     });
     expect(r.finalized.countedAsSuccess).toBe(true);
     expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).not.toMatch(/work documentation|information sharing|data completeness/i);
-    expect(r.finalized.text).toMatch(/solar panel work/i);
+    expect(r.finalized.text).not.toMatch(/work documentation|information sharing|data completeness|day-to-day|assigned role tasks/i);
+    expect(r.finalized.text).toMatch(/Installs solar panels|Solar Panel Installer/i);
     expect(r.usageAfter).toBe(3);
   });
 
