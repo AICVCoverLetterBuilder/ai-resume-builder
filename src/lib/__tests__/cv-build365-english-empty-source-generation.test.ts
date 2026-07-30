@@ -49,15 +49,15 @@ const SOLAR_UNSAFE_PRESENT = formatExperienceBullets([
 ]);
 
 const SOLAR_SAFE_PRESENT = formatExperienceBullets([
-  'Installs solar panels as assigned for the Solar Panel Installer role.',
-  'Positions and secures solar panels according to role requirements.',
-  'Coordinates with colleagues on solar panels installation work.',
+  'Installs solar panels as part of assigned installation work.',
+  'Positions and secures panels during installation.',
+  'Coordinates installation activities with colleagues.',
 ]);
 
 const SOLAR_SAFE_PAST = formatExperienceBullets([
-  'Installed solar panels as assigned for the Solar Panel Installer role.',
-  'Positioned and secured solar panels according to role requirements.',
-  'Coordinated with colleagues on solar panels installation work.',
+  'Installed solar panels as part of assigned installation work.',
+  'Positioned and secured panels during installation.',
+  'Coordinated installation activities with colleagues.',
 ]);
 
 const SOLAR_ADMIN_IRRELEVANT = formatExperienceBullets([

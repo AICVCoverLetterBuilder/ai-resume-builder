@@ -141,9 +141,13 @@ describe('universal AI operation mode contract', () => {
     const stems = freeTextTitleStems('Quantum Workflow Harmonizer');
     expect(stems.some((s) => s.includes('quantum') || s.includes('workflow') || s.includes('harmon'))).toBe(true);
     expect(textLooksRelevantToFreeTextTitle(
-      'Installs quantum workflow components as assigned for the Quantum Workflow Harmonizer role.\nReviews quantum workflow findings and completes required follow-ups.\nCoordinates with colleagues on quantum workflow completion.',
+      'Installs quantum workflow components as part of assigned installation work.\nPositions and secures components during installation.\nCoordinates installation activities with colleagues.',
       'Quantum Workflow Harmonizer',
     )).toBe(true);
+    expect(textLooksRelevantToFreeTextTitle(
+      'Installs quantum workflow components as assigned for the Quantum Workflow Harmonizer role.\nReviews quantum workflow findings according to role requirements.\nCoordinates with colleagues on quantum workflow completion.',
+      'Quantum Workflow Harmonizer',
+    )).toBe(false);
     expect(textLooksRelevantToFreeTextTitle(
       'Performs day-to-day quantum workflow work duties as assigned.\nCompletes assigned role tasks according to role needs.\nCoordinates with colleagues on shared role work activities.',
       'Quantum Workflow Harmonizer',

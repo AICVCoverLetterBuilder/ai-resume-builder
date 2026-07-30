@@ -258,8 +258,13 @@ export const EXPERIENCE_GENERATION_RELEVANCE_367_REVISION =
 export const EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION =
   'experience-generation-fallback-quality-368-v1' as const;
 
+/** Packaged asset marker — empty-source fallback surface prose quality (AAB-369). */
+export const EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION =
+  'experience-generation-fallback-surface-369-v1' as const;
+
 void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
 void EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION;
+void EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION;
 
 export function generationLooksGenericAdministrativeOnly(text: string): boolean {
   void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
@@ -307,6 +312,22 @@ export function generationLooksTautologicalRoleShellOnly(text: string): boolean 
   return genericOnly && hits >= 1;
 }
 
+/**
+ * Weak title-echo / filler shells: "for the X role", bare "as assigned",
+ * "according to role requirements" — not CV-ready even when action verbs exist.
+ */
+export function generationLooksRoleTitleEchoFillerOnly(text: string): boolean {
+  void EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION;
+  const lines = (text || '')
+    .split(/\r?\n|•/)
+    .map((l) => l.replace(/^[•\-\*]\s*/, '').trim())
+    .filter(Boolean);
+  if (lines.length < 2) return false;
+  const fillerRe =
+    /(?:\bfor the\b.+\brole\b|\bas assigned(?:\s+for\b)?|\baccording to role requirements\b)/iu;
+  return lines.filter((l) => fillerRe.test(l)).length >= 2;
+}
+
 function titleAndTextLookCrossScript(position: string, text: string): boolean {
   const p = position || '';
   const t = text || '';
@@ -332,7 +353,8 @@ function titleAndTextLookCrossScript(position: string, text: string): boolean {
 function looksLikeLocalePureRoleWorkShell(text: string): boolean {
   if (generationLooksGenericAdministrativeOnly(text)) return false;
   if (generationLooksTautologicalRoleShellOnly(text)) return false;
-  return /(?:\binstalls?\b|\bpositions?\s+and\s+secures?\b|\boperates?\b|\bmonitors?\b|\banalyz(?:es|ed)\b|\bcreates?\b|\bprepares?\b|\bproduces?\s+concrete\b|\breviews?\b.+\bfollow-ups\b|\btracks?\b.+\bfollow-ups\b|\bcoordinates?\s+with\s+colleagues\s+on\b|\baligns?\s+with\s+colleagues\s+on\b|\bcoordinates?\s+\S.{0,40}\bworkstreams\b)/iu
+  if (generationLooksRoleTitleEchoFillerOnly(text)) return false;
+  return /(?:\binstalls?\b|\bpositions?\s+and\s+secures?\b|\boperates?\b|\bmonitors?\b|\banalyz(?:es|ed)\b|\bcreates?\b|\bprepares?\b|\bproduces?\s+concrete\b|\breviews?\b.+\bfollow-ups\b|\btracks?\b.+\bfollow-ups\b|\bcoordinates?\s+(?:installation|operational|technical|analysis)?\s*activit|\bcoordinates?\s+with\s+colleagues\b|\baligns?\s+with\s+colleagues\b|\bcoordinates?\s+\S.{0,40}\bworkstreams\b)/iu
     .test(text || '');
 }
 
@@ -355,6 +377,9 @@ export function textLooksRelevantToFreeTextTitle(
     return false;
   }
   if (generationLooksTautologicalRoleShellOnly(text)) {
+    return false;
+  }
+  if (generationLooksRoleTitleEchoFillerOnly(text)) {
     return false;
   }
   const stems = freeTextTitleStems(position);

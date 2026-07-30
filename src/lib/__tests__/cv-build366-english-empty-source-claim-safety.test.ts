@@ -59,9 +59,9 @@ const SOLAR_UNSAFE_SCOPE_TOOLS = formatExperienceBullets([
 ]);
 
 const SAFE_GENERIC_SOLAR = formatExperienceBullets([
-  'Installs solar panels as assigned for the Solar Panel Installer role.',
-  'Positions and secures solar panels according to role requirements.',
-  'Coordinates with colleagues on solar panels installation work.',
+  'Installs solar panels as part of assigned installation work.',
+  'Positions and secures panels during installation.',
+  'Coordinates installation activities with colleagues.',
 ]);
 
 const SAFE_BEEKEEPER = formatExperienceBullets([

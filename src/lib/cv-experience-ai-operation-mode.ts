@@ -19,8 +19,10 @@ import {
   freeTextTitleStems,
   generationLooksGenericAdministrativeOnly,
   generationLooksTautologicalRoleShellOnly,
+  generationLooksRoleTitleEchoFillerOnly,
   EXPERIENCE_GENERATION_RELEVANCE_367_REVISION,
   EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION,
+  EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION,
   jobTitleScriptConflictsWithLocale,
   resolveAiOperationMode,
   textLooksRelevantToFreeTextTitle,
@@ -135,6 +137,7 @@ export function validateExperienceGenerationOutput(
   const titleDomainEarly = classifyFreeTextJobDomain(options.position || '');
   void EXPERIENCE_GENERATION_RELEVANCE_367_REVISION;
   void EXPERIENCE_GENERATION_FALLBACK_QUALITY_368_REVISION;
+  void EXPERIENCE_GENERATION_FALLBACK_SURFACE_369_REVISION;
   if (
     generationLooksGenericAdministrativeOnly(text)
     && titleDomainEarly !== 'documentation'
@@ -150,6 +153,17 @@ export function validateExperienceGenerationOutput(
     };
   }
   if (generationLooksTautologicalRoleShellOnly(text)) {
+    return {
+      ok: false,
+      reason: 'experience_generation_not_relevant',
+      generatedBulletCount,
+      relevanceValidationPassed: false,
+      perspectiveValidationPassed: true,
+      tenseValidationPassed: true,
+      unsupportedClaimCount: 0,
+    };
+  }
+  if (generationLooksRoleTitleEchoFillerOnly(text)) {
     return {
       ok: false,
       reason: 'experience_generation_not_relevant',
@@ -313,183 +327,234 @@ function roleLabel(position: string, female: boolean, locale: Locale): string {
 
 /**
  * Subject-matter + agentive head from free-text title (morphology, not a catalogue).
- * Preserves the complete title for grounding while deriving an object phrase for
- * action-based duties.
+ * Derives mid-sentence object readings: plural direct object, short head, and
+ * singular compound modifier (e.g. solar panel → solar panel installation work).
  */
 function parseFreeTextTitleActionGrounding(
   position: string,
   locale: Locale,
-): { fullTitle: string; objectPhrase: string; agentive: string | null } {
+): {
+  fullTitle: string;
+  objectPlural: string;
+  objectShort: string;
+  objectModifier: string;
+  agentive: string | null;
+} {
   const fullTitle = (position || '').trim();
   if (!fullTitle || jobTitleScriptConflictsWithLocale(fullTitle, locale)) {
-    return { fullTitle: '', objectPhrase: '', agentive: null };
+    return {
+      fullTitle: '',
+      objectPlural: '',
+      objectShort: '',
+      objectModifier: '',
+      agentive: null,
+    };
   }
   const tokens = fullTitle.split(/\s+/u).filter(Boolean);
-  if (!tokens.length) return { fullTitle: '', objectPhrase: '', agentive: null };
+  if (!tokens.length) {
+    return {
+      fullTitle: '',
+      objectPlural: '',
+      objectShort: '',
+      objectModifier: '',
+      agentive: null,
+    };
+  }
   const last = tokens[tokens.length - 1];
   const agentiveRe =
     /^(installers?|operators?|technicians?|specialists?|managers?|coordinators?|assistants?|analysts?|engineers?|workers?|associates?|officers?|consultants?|developers?|designers?|supervisors?|clerks?|representatives?|liaisons?)$/iu;
   if (tokens.length >= 2 && agentiveRe.test(last)) {
-    const objectTokens = tokens.slice(0, -1);
-    const objectPhrase = pluralizeObjectPhrase(objectTokens);
-    return { fullTitle, objectPhrase, agentive: last };
+    const objectTokens = tokens.slice(0, -1).map(toOrdinaryJobNounToken);
+    return {
+      fullTitle,
+      objectPlural: pluralizeObjectPhrase(objectTokens),
+      objectShort: pluralizeHeadToken(objectTokens[objectTokens.length - 1] || ''),
+      objectModifier: objectTokens.join(' '),
+      agentive: last,
+    };
   }
-  return { fullTitle, objectPhrase: fullTitle, agentive: null };
+  const lowered = tokens.map(toOrdinaryJobNounToken);
+  return {
+    fullTitle,
+    objectPlural: lowered.join(' '),
+    objectShort: lowered[lowered.length - 1] || '',
+    objectModifier: lowered.join(' '),
+    agentive: null,
+  };
+}
+
+/** Lowercase ordinary job nouns; keep short ALL-CAPS tokens (acronyms). */
+function toOrdinaryJobNounToken(token: string): string {
+  if (/^[A-Z0-9]{2,}$/u.test(token)) return token;
+  return token.toLowerCase();
+}
+
+function pluralizeHeadToken(token: string): string {
+  if (!token) return '';
+  if (/s$/i.test(token)) return token;
+  // Uncountable / already mass-like heads stay singular.
+  if (/^(traffic|data|equipment|software|hardware|information|research)$/i.test(token)) {
+    return token;
+  }
+  return `${token}s`;
 }
 
 function pluralizeObjectPhrase(tokens: string[]): string {
   if (!tokens.length) return '';
   const last = tokens[tokens.length - 1];
-  const pluralLast = /s$/i.test(last) ? last : `${last}s`;
-  const rest = tokens.slice(0, -1);
-  const joined = [...rest, pluralLast].join(' ');
-  // Mid-sentence object reading: keep original casing of leading tokens.
-  return joined;
+  const pluralLast = pluralizeHeadToken(last);
+  return [...tokens.slice(0, -1), pluralLast].join(' ');
 }
 
 /**
  * EN empty-source duties grounded in free-text title morphology.
- * Distinct core actions — never tautological role/duties/tasks/activities shells.
+ * Natural CV prose: no title echo, no role-requirement filler, varied object
+ * phrasing, correct compound modifiers (solar panel installation work).
  */
 function buildEnglishActionDutyTriple(
   position: string,
   present: boolean,
 ): DutyTriple {
-  const { fullTitle, objectPhrase, agentive } = parseFreeTextTitleActionGrounding(
-    position,
-    'en',
-  );
+  const {
+    fullTitle,
+    objectPlural,
+    objectShort,
+    objectModifier,
+    agentive,
+  } = parseFreeTextTitleActionGrounding(position, 'en');
   const title = fullTitle || 'the role';
-  const obj = objectPhrase || title;
+  const obj = objectPlural || objectModifier || title.toLowerCase();
+  const short = objectShort || obj;
+  const mod = objectModifier || short;
   const ag = (agentive || '').toLowerCase();
 
   if (/^installers?$/.test(ag)) {
     return present
       ? [
-        `Installs ${obj} as assigned for the ${title} role.`,
-        `Positions and secures ${obj} according to role requirements.`,
-        `Coordinates with colleagues on ${obj} installation work.`,
+        `Installs ${obj} as part of assigned installation work.`,
+        `Positions and secures ${short} during installation.`,
+        'Coordinates installation activities with colleagues.',
       ]
       : [
-        `Installed ${obj} as assigned for the ${title} role.`,
-        `Positioned and secured ${obj} according to role requirements.`,
-        `Coordinated with colleagues on ${obj} installation work.`,
+        `Installed ${obj} as part of assigned installation work.`,
+        `Positioned and secured ${short} during installation.`,
+        'Coordinated installation activities with colleagues.',
       ];
   }
   if (/^operators?$/.test(ag)) {
     return present
       ? [
-        `Operates ${obj} as assigned for the ${title} role.`,
-        `Monitors ${obj} during assigned work periods.`,
-        `Coordinates with colleagues on ${obj} operations.`,
+        `Operates ${obj} as part of assigned operations work.`,
+        `Monitors ${short} during operations.`,
+        'Coordinates operational activities with colleagues.',
       ]
       : [
-        `Operated ${obj} as assigned for the ${title} role.`,
-        `Monitored ${obj} during assigned work periods.`,
-        `Coordinated with colleagues on ${obj} operations.`,
+        `Operated ${obj} as part of assigned operations work.`,
+        `Monitored ${short} during operations.`,
+        'Coordinated operational activities with colleagues.',
       ];
   }
   if (/^technicians?$/.test(ag)) {
     return present
       ? [
-        `Performs technical checks on ${obj} for the ${title} role.`,
-        `Adjusts ${obj} according to role requirements.`,
-        `Coordinates with colleagues on ${obj} technical work.`,
+        `Performs technical checks on ${obj} as part of assigned technical work.`,
+        `Adjusts ${short} during technical work.`,
+        'Coordinates technical activities with colleagues.',
       ]
       : [
-        `Performed technical checks on ${obj} for the ${title} role.`,
-        `Adjusted ${obj} according to role requirements.`,
-        `Coordinated with colleagues on ${obj} technical work.`,
+        `Performed technical checks on ${obj} as part of assigned technical work.`,
+        `Adjusted ${short} during technical work.`,
+        'Coordinated technical activities with colleagues.',
       ];
   }
   if (/^analysts?$/.test(ag)) {
     return present
       ? [
-        `Analyzes ${obj} information as assigned for the ${title} role.`,
-        `Reviews ${obj} findings and completes required follow-ups.`,
-        `Coordinates with colleagues on ${obj} analysis work.`,
+        `Analyzes ${mod} information as part of assigned analysis work.`,
+        `Reviews ${short} findings and completes required follow-ups.`,
+        'Coordinates analysis activities with colleagues.',
       ]
       : [
-        `Analyzed ${obj} information as assigned for the ${title} role.`,
-        `Reviewed ${obj} findings and completed required follow-ups.`,
-        `Coordinated with colleagues on ${obj} analysis work.`,
+        `Analyzed ${mod} information as part of assigned analysis work.`,
+        `Reviewed ${short} findings and completed required follow-ups.`,
+        'Coordinated analysis activities with colleagues.',
       ];
   }
   if (/^coordinators?$|^liaisons?$/.test(ag)) {
     return present
       ? [
-        `Coordinates ${obj} workstreams as assigned for the ${title} role.`,
-        `Tracks ${obj} status and completes required follow-ups.`,
-        `Aligns with colleagues on ${obj} coordination needs.`,
+        `Coordinates ${mod} workstreams as part of assigned coordination work.`,
+        `Tracks ${short} status and completes required follow-ups.`,
+        'Aligns coordination needs with colleagues.',
       ]
       : [
-        `Coordinated ${obj} workstreams as assigned for the ${title} role.`,
-        `Tracked ${obj} status and completed required follow-ups.`,
-        `Aligned with colleagues on ${obj} coordination needs.`,
+        `Coordinated ${mod} workstreams as part of assigned coordination work.`,
+        `Tracked ${short} status and completed required follow-ups.`,
+        'Aligned coordination needs with colleagues.',
       ];
   }
   if (/^managers?$|^supervisors?$/.test(ag)) {
     return present
       ? [
-        `Organizes ${obj} work as assigned for the ${title} role.`,
-        `Reviews ${obj} progress and completes required follow-ups.`,
-        `Coordinates with colleagues on ${obj} completion.`,
+        `Organizes ${mod} work as part of assigned management duties.`,
+        `Reviews ${short} progress and completes required follow-ups.`,
+        'Coordinates delivery activities with colleagues.',
       ]
       : [
-        `Organized ${obj} work as assigned for the ${title} role.`,
-        `Reviewed ${obj} progress and completed required follow-ups.`,
-        `Coordinated with colleagues on ${obj} completion.`,
+        `Organized ${mod} work as part of assigned management duties.`,
+        `Reviewed ${short} progress and completed required follow-ups.`,
+        'Coordinated delivery activities with colleagues.',
       ];
   }
   if (/^designers?$/.test(ag)) {
     return present
       ? [
-        `Creates ${obj} materials as assigned for the ${title} role.`,
-        `Reviews and adapts ${obj} materials according to requirements.`,
-        `Prepares final ${obj} files with colleagues as needed.`,
+        `Creates ${mod} materials as part of assigned design work.`,
+        `Reviews and adapts ${short} materials for project needs.`,
+        'Prepares final files with colleagues as needed.',
       ]
       : [
-        `Created ${obj} materials as assigned for the ${title} role.`,
-        `Reviewed and adapted ${obj} materials according to requirements.`,
-        `Prepared final ${obj} files with colleagues as needed.`,
+        `Created ${mod} materials as part of assigned design work.`,
+        `Reviewed and adapted ${short} materials for project needs.`,
+        'Prepared final files with colleagues as needed.',
       ];
   }
   if (/^developers?$|^engineers?$/.test(ag)) {
     return present
       ? [
-        `Develops ${obj} solutions as assigned for the ${title} role.`,
-        `Reviews ${obj} outputs and completes required follow-ups.`,
-        `Coordinates with colleagues on ${obj} completion.`,
+        `Develops ${mod} solutions as part of assigned delivery work.`,
+        `Reviews ${short} outputs and completes required follow-ups.`,
+        'Coordinates delivery activities with colleagues.',
       ]
       : [
-        `Developed ${obj} solutions as assigned for the ${title} role.`,
-        `Reviewed ${obj} outputs and completed required follow-ups.`,
-        `Coordinated with colleagues on ${obj} completion.`,
+        `Developed ${mod} solutions as part of assigned delivery work.`,
+        `Reviewed ${short} outputs and completed required follow-ups.`,
+        'Coordinated delivery activities with colleagues.',
       ];
   }
   if (/^specialists?$|^consultants?$|^assistants?$|^associates?$|^officers?$|^clerks?$|^workers?$|^representatives?$/.test(ag)) {
     return present
       ? [
-        `Produces concrete outputs for ${title} assignments.`,
-        `Reviews ${obj} inputs and completes required follow-ups.`,
-        `Coordinates with colleagues on ${obj} completion.`,
+        `Produces concrete outputs as part of assigned ${mod} work.`,
+        `Reviews ${short} inputs and completes required follow-ups.`,
+        'Coordinates delivery activities with colleagues.',
       ]
       : [
-        `Produced concrete outputs for ${title} assignments.`,
-        `Reviewed ${obj} inputs and completed required follow-ups.`,
-        `Coordinated with colleagues on ${obj} completion.`,
+        `Produced concrete outputs as part of assigned ${mod} work.`,
+        `Reviewed ${short} inputs and completed required follow-ups.`,
+        'Coordinated delivery activities with colleagues.',
       ];
   }
 
   // Opaque / unknown free-text titles: preserve full title once; distinct useful actions.
   return present
     ? [
-      `Produces concrete outputs for ${title} assignments.`,
+      `Produces concrete outputs for ${title} work.`,
       'Reviews assigned inputs and completes required follow-ups.',
       'Coordinates with colleagues to finish role outputs on schedule.',
     ]
     : [
-      `Produced concrete outputs for ${title} assignments.`,
+      `Produced concrete outputs for ${title} work.`,
       'Reviewed assigned inputs and completed required follow-ups.',
       'Coordinated with colleagues to finish role outputs on schedule.',
     ];

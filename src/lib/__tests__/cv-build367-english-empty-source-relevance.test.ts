@@ -68,9 +68,9 @@ const UNSAFE_SOLAR = formatExperienceBullets([
 ]);
 
 const ROLE_RELEVANT_SOLAR = formatExperienceBullets([
-  'Installs solar panels as assigned for the Solar Panel Installer role.',
-  'Positions and secures solar panels according to role requirements.',
-  'Coordinates with colleagues on solar panels installation work.',
+  'Installs solar panels as part of assigned installation work.',
+  'Positions and secures panels during installation.',
+  'Coordinates installation activities with colleagues.',
 ]);
 
 const TAUTOLOGICAL_SOLAR = formatExperienceBullets([
@@ -371,8 +371,8 @@ describe('AAB-367 English empty-source generation relevance', () => {
       isPresent: true,
       gender: 'male',
     });
-    expect(fb).toMatch(/Nebula Ops/i);
-    expect(fb).not.toMatch(/work documentation|information sharing/i);
+    expect(fb).toMatch(/nebula ops/i);
+    expect(fb).not.toMatch(/for the .+ role|according to role requirements/i);
     expect(validateExperienceGenerationOutput(fb, {
       locale: 'en',
       position: 'Nebula Ops Liaison',
@@ -383,7 +383,7 @@ describe('AAB-367 English empty-source generation relevance', () => {
       candidate: UNSAFE_SOLAR,
     });
     expect(r.finalized.origin).toBe('deterministic_fallback');
-    expect(r.finalized.text).toMatch(/Nebula Ops/i);
+    expect(r.finalized.text).toMatch(/nebula ops/i);
     expect(r.usageAfter).toBe(1);
   });
 
