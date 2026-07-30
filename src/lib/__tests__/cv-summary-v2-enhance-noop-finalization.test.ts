@@ -173,7 +173,7 @@ function runEnhance(opts: {
     session.recordVisibleApply(false, usageBefore);
     return { fin, session, trace: session.commit(), cv, usageBefore };
   }
-  session.recordVisibleApply(false, usageBefore);
+  session.recordVisibleApplyNotApplicable(usageBefore);
   return { fin, session, trace: session.commit(), cv, usageBefore };
 }
 
@@ -202,6 +202,16 @@ function expectCleanNoOpTruth(trace: ReturnType<SummaryAiDiagnosticSession['comm
   expect(trace.usageCountAfter).toBe(10);
   expect(trace.diagnosticInvariantCheckPassed).toBe(true);
   expect(trace.noOpCandidateKind).toBe(fin.diagnostics?.noOpCandidateKind);
+
+  const post = (trace.stages || []).find((s) => s.name === 'final_postconditions');
+  expect(post?.status).toBe('ok');
+  expect(post?.reason).toBe('summary_noop_after_normalization');
+  const vis = (trace.stages || []).find((s) => s.name === 'visible_apply');
+  expect(vis?.status).toBe('skipped');
+  expect(vis?.reason).toBe('not_applicable');
+  expect(
+    (trace.stages || []).some((s) => s.status === 'fail'),
+  ).toBe(false);
 
   const provider = (trace.candidateLineage || []).find((c) => c.candidateKind === 'provider');
   const finalSel = (trace.candidateLineage || []).find((c) => c.candidateKind === 'final_selected');
@@ -358,11 +368,17 @@ describe('Summary V2 enhance no-op finalization', () => {
     });
     session.recordFinalizeResult(fin);
     // Production rewrite path returns before evaluatePreApplyDecisionGates on blocked.
-    session.recordVisibleApply(false, 10);
+    session.recordVisibleApplyNotApplicable(10);
     const trace = session.commit();
     expect(trace.diagnosticInvariantCheckPassed).toBe(true);
     expect(trace.rejectionStage == null).toBe(true);
     expect(trace.finalTypedFailureReason == null).toBe(true);
+    expect(
+      (trace.stages || []).find((s) => s.name === 'final_postconditions')?.status,
+    ).toBe('ok');
+    expect(
+      (trace.stages || []).find((s) => s.name === 'visible_apply')?.status,
+    ).toBe('skipped');
     expect(
       (trace.diagnosticInvariantFailures || [])
         .some((f) => String(f).includes('enhance_success_without_meaningful_change')),

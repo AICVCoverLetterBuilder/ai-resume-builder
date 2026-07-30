@@ -48,6 +48,7 @@ import {
   ExperienceAiDiagnosticSession,
 } from '@/lib/cv-experience-ai-diagnostics';
 import { SummaryAiDiagnosticSession } from '@/lib/cv-summary-ai-diagnostics';
+import { resolveSummaryFinalizeClientOutcome } from '@/lib/cv-summary-noop-ui';
 import { INTERNAL_AI_RESET_ENABLED } from '@/lib/build-channel';
 import {
   ExperienceAiCopyDiagnosticsButton,
@@ -1121,9 +1122,37 @@ export default function CVBuilderPage() {
         durationSnapshot,
       });
       if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
-        const failCode = mapExperienceAiFailureToErrorCode(
-          finalizedGate.reason || finalizedGate.diagnostics?.typedFailureReason || 'summary_generation_failed',
+        const outcome = resolveSummaryFinalizeClientOutcome(
+          finalizedGate,
+          'summary_generation_failed',
         );
+        if (outcome.kind === 'clean_noop') {
+          finishAiClientRequest({
+            ctx: reqCtx,
+            isProVerified: true,
+            countBefore,
+            countAfter: countBefore,
+            httpStatus: res.status,
+            error: null,
+            responseSource: 'blocked',
+          });
+          logAiLocaleTransitionDiagnostics({
+            requestId: reqCtx.requestId,
+            action: 'summary_generate',
+            uiLocale: locale,
+            requestedLocale,
+            previousContentLocale,
+            apiLocale: requestedLocale,
+            finalValidationLocale: requestedLocale,
+            applied: false,
+            reason: 'summary_noop_after_normalization',
+          });
+          summaryDiag.recordFinalizeResult(finalizedGate);
+          summaryDiag.recordVisibleApplyNotApplicable(countBefore);
+          toast.error(aiErrorMessage('ai_noop', locale));
+          return;
+        }
+        const failCode = outcome.toastCode || 'generation_validation_failed';
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
@@ -1183,16 +1212,13 @@ export default function CVBuilderPage() {
         ),
       );
       if (identicalNoop || finalizedGate.reason === 'summary_noop_after_normalization') {
-        const failCode = mapExperienceAiFailureToErrorCode(
-          finalizedGate.reason || 'summary_noop_after_normalization',
-        );
-        const msg = finishAiClientRequest({
+        finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
           countBefore,
           countAfter: countBefore,
           httpStatus: res.status,
-          error: { code: failCode, httpStatus: 422 },
+          error: null,
           responseSource: 'blocked',
         });
         summaryDiag.recordFinalizeResult({
@@ -1211,7 +1237,7 @@ export default function CVBuilderPage() {
             rejectionStage: undefined,
           },
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.recordVisibleApplyNotApplicable(countBefore);
         logAiLocaleTransitionDiagnostics({
           requestId: reqCtx.requestId,
           action: 'summary_generate',
@@ -1224,7 +1250,7 @@ export default function CVBuilderPage() {
           reason: 'summary_ai_noop_identical',
           newContentLocale: requestedLocale,
         });
-        toast.error(msg ?? aiErrorMessage(failCode, locale));
+        toast.error(aiErrorMessage('ai_noop', locale));
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
@@ -2536,12 +2562,42 @@ export default function CVBuilderPage() {
             : 'ai_generated',
       });
       summaryDiag.recordFinalizeResult(finalizedGate);
+      const rewriteOutcome = resolveSummaryFinalizeClientOutcome(
+        finalizedGate,
+        style === 'stronger' ? 'stronger_content_generation_failed' : 'summary_rewrite_failed',
+      );
+      if (rewriteOutcome.kind === 'clean_noop') {
+        finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: null,
+          responseSource: 'blocked',
+        });
+        logAiLocaleTransitionDiagnostics({
+          requestId: reqCtx.requestId,
+          action: `rewrite_${style}`,
+          uiLocale: locale,
+          requestedLocale,
+          previousContentLocale,
+          apiLocale: requestedLocale,
+          finalValidationLocale: requestedLocale,
+          applied: false,
+          reason: 'summary_noop_after_normalization',
+        });
+        summaryDiag.recordVisibleApplyNotApplicable(countBefore);
+        try {
+          await summaryDiag.resolveVersions();
+          summaryDiag.commit();
+        } catch { /* ignore diag commit failures */ }
+        toast.error(aiErrorMessage('ai_noop', locale));
+        return;
+      }
       if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
-        const failCode = mapExperienceAiFailureToErrorCode(
-          finalizedGate.reason
-            || finalizedGate.diagnostics?.typedFailureReason
-            || (style === 'stronger' ? 'stronger_content_generation_failed' : 'summary_rewrite_failed'),
-        );
+        const failCode = rewriteOutcome.toastCode
+          || (style === 'stronger' ? 'stronger_content_generation_failed' : 'summary_rewrite_failed');
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,

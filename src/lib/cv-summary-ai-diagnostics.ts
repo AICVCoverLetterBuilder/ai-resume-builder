@@ -2123,11 +2123,46 @@ export class SummaryAiDiagnosticSession {
       independent.ok && after === 1 ? 'ok' : 'fail',
       `count=${after}`,
     );
+    const cleanSummaryNoOp = Boolean(
+      !finalized.countedAsSuccess
+      && (
+        diag.noOpDetected
+        || diag.noOpRejected
+        || finalized.reason === 'summary_noop_after_normalization'
+      ),
+    );
+    // Clean no-op is a successful terminal outcome — never stage final_postconditions as fail.
     this.stage(
       'final_postconditions',
-      finalPostconditionsPassed ? 'ok' : 'fail',
-      finalized.reason || undefined,
+      cleanSummaryNoOp || finalPostconditionsPassed ? 'ok' : 'fail',
+      cleanSummaryNoOp
+        ? 'summary_noop_after_normalization'
+        : (finalized.reason || undefined),
     );
+    if (cleanSummaryNoOp) {
+      this.patch({
+        finalPostconditionsPassed: true,
+        rejectionStage: null,
+        finalTypedFailureReason: null,
+      });
+    }
+  }
+
+  /**
+   * Visible apply was intentionally not attempted (clean enhance no-op).
+   * Must not mark visible_apply as fail or wipe clean no-op postcondition truth.
+   */
+  recordVisibleApplyNotApplicable(usageAfter: number): void {
+    this.patch({
+      visibleApplySucceeded: false,
+      usageCountAfter: usageAfter,
+      raceGuardResult: 'skipped',
+      countedAsSuccess: false,
+      rejectionStage: null,
+      finalTypedFailureReason: null,
+    });
+    this.stage('visible_apply', 'skipped', 'not_applicable');
+    this.stage('race_guard', 'skipped');
   }
 
   recordVisibleApply(ok: boolean, usageAfter: number, visibleText?: string): void {
