@@ -25,6 +25,10 @@ import {
   type FreeTextJobDomain,
 } from './cv-ai-operation-contract';
 import { validateArabicExperienceEmploymentTense } from './cv-arabic-experience-tense';
+import {
+  detectExperienceGenerationUnsupportedClaims,
+  EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION,
+} from './cv-experience-unsupported-claims';
 
 export type ExperienceAiOperationMode = ExperienceAiOperationModeCompat;
 
@@ -218,6 +222,12 @@ export function validateExperienceGenerationOutput(
   }
   let unsupportedClaimCount = countAiUnsafeInventionClaims(text);
   if (hasUnsupportedRegulatedPharmacyClaims(text)) unsupportedClaimCount += 1;
+  void EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION;
+  const generationClaims = detectExperienceGenerationUnsupportedClaims({
+    candidateText: text,
+    position: options.position || '',
+  });
+  unsupportedClaimCount += generationClaims.count;
   if (unsupportedClaimCount > 0) {
     return {
       ok: false,
@@ -690,9 +700,9 @@ export function buildJobContextGenerationFallback(options: {
   if (locale === 'en') {
     return formatExperienceBullets(present
       ? [
-        `Review day-to-day records related to ${domainOrRole} and verify data completeness.`,
-        'Update work documentation and track open items according to role needs.',
-        'Coordinate information sharing with colleagues to complete documentation on time.',
+        `Reviews day-to-day records related to ${domainOrRole} and verifies data completeness.`,
+        'Updates work documentation and tracks open items according to role needs.',
+        'Coordinates information sharing with colleagues to complete documentation on time.',
       ]
       : [
         `Reviewed day-to-day records related to ${domainOrRole} and verified data completeness.`,
@@ -844,9 +854,9 @@ export function buildJobContextGenerationFallback(options: {
   // Final layer: always three useful English CV bullets (never empty).
   return formatExperienceBullets(present
     ? [
-      'Review day-to-day work records and verify data completeness.',
-      'Update work documentation and track open items according to role needs.',
-      'Coordinate information sharing with colleagues to complete documentation on time.',
+      'Reviews day-to-day work records and verifies data completeness.',
+      'Updates work documentation and tracks open items according to role needs.',
+      'Coordinates information sharing with colleagues to complete documentation on time.',
     ]
     : [
       'Reviewed day-to-day work records and verified data completeness.',

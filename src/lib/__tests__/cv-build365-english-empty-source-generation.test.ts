@@ -42,16 +42,22 @@ import {
 import { ENGLISH_EMPTY_SOURCE_GENERATION_365_REVISION } from '@/lib/cv-experience-phased-apply-329';
 import type { Locale } from '@/lib/i18n/translations';
 
-const SOLAR_PRESENT = formatExperienceBullets([
+const SOLAR_UNSAFE_PRESENT = formatExperienceBullets([
   'Installs solar panel arrays on residential and commercial roofs according to site plans.',
   'Checks mounting hardware, wiring connections, and system readiness before commissioning.',
   'Coordinates with site supervisors to complete safe installation stages on schedule.',
 ]);
 
-const SOLAR_PAST = formatExperienceBullets([
-  'Installed solar panel arrays on residential and commercial roofs according to site plans.',
-  'Checked mounting hardware, wiring connections, and system readiness before commissioning.',
-  'Coordinated with site supervisors to complete safe installation stages on schedule.',
+const SOLAR_SAFE_PRESENT = formatExperienceBullets([
+  'Reviews day-to-day records related to solar panel installation and verifies data completeness.',
+  'Updates work documentation and tracks open items according to role needs.',
+  'Coordinates information sharing with colleagues to complete documentation on time.',
+]);
+
+const SOLAR_SAFE_PAST = formatExperienceBullets([
+  'Reviewed day-to-day records related to solar panel installation and verified data completeness.',
+  'Updated work documentation and tracked open items according to role needs.',
+  'Coordinated information sharing with colleagues to complete documentation on time.',
 ]);
 
 const UNSUPPORTED_CLAIMS = formatExperienceBullets([
@@ -229,7 +235,7 @@ function runEmptyEnGeneration(options: {
     isPresent: Boolean(exp.isPresent),
   });
 
-  const candidate = options.candidate ?? SOLAR_PRESENT;
+  const candidate = options.candidate ?? SOLAR_SAFE_PRESENT;
   session.recordApiResponse({
     httpStatus: 200,
     fallbackUsed: options.originHint === 'deterministic_fallback',
@@ -310,7 +316,7 @@ describe('AAB-365 English empty-source Experience generation', () => {
   it('Solar Panel Installer: valid present-tense provider applies once; usage 0→1', () => {
     const r = runEmptyEnGeneration({
       usageBefore: 0,
-      candidate: SOLAR_PRESENT,
+      candidate: SOLAR_SAFE_PRESENT,
       isPresent: true,
     });
     expect(r.operationMode).toBe('generate_from_job_context');
@@ -353,9 +359,9 @@ describe('AAB-365 English empty-source Experience generation', () => {
     const r = runEmptyEnGeneration({
       position: 'Beekeeper',
       candidate: formatExperienceBullets([
-        'Inspects hive health and monitors bee colony conditions across apiary sites.',
-        'Harvests honey and prepares bee products according to seasonal schedules.',
-        'Maintains protective equipment and apiary tools ready for daily field work.',
+        'Reviews day-to-day records related to beekeeping work and verifies data completeness.',
+        'Updates work documentation and tracks open items according to role needs.',
+        'Coordinates information sharing with colleagues to complete documentation on time.',
       ]),
     });
     expect(r.finalized.blocked).toBe(false);
@@ -369,7 +375,7 @@ describe('AAB-365 English empty-source Experience generation', () => {
   it('current vs past tense empty-source generation both apply', () => {
     const present = runEmptyEnGeneration({
       usageBefore: 0,
-      candidate: SOLAR_PRESENT,
+      candidate: SOLAR_SAFE_PRESENT,
       isPresent: true,
     });
     expect(present.finalized.countedAsSuccess).toBe(true);
@@ -377,7 +383,7 @@ describe('AAB-365 English empty-source Experience generation', () => {
 
     const past = runEmptyEnGeneration({
       usageBefore: 0,
-      candidate: SOLAR_PAST,
+      candidate: SOLAR_SAFE_PAST,
       isPresent: false,
     });
     expect(past.finalized.countedAsSuccess).toBe(true);
@@ -385,31 +391,34 @@ describe('AAB-365 English empty-source Experience generation', () => {
     expect(past.usageAfter).toBe(1);
   });
 
-  it('unsupported claims do not apply; text and usage preserved', () => {
-    const { cv, exp } = buildEmptyEnCv();
-    seedUsage(4);
-    const beforeText = exp.description || '';
+  it('unsupported claims fall back to safe generation; usage increments once', () => {
     const r = runEmptyEnGeneration({
       usageBefore: 4,
       candidate: UNSUPPORTED_CLAIMS,
-      expectApply: false,
     });
-    // May be blocked by generation validation or fail preapply — must not mutate.
-    if (r.finalized.blocked || !r.finalized.countedAsSuccess || !r.preApplyGate?.passed) {
-      expect(r.usageAfter).toBe(4);
-      const preserved = r.nextCv.experience.find((e) => e.id === exp.id);
-      expect(preserved?.description ?? '').toBe(beforeText);
-      expect(cv.experience.find((e) => e.id === exp.id)?.description ?? '').toBe(beforeText);
-    } else {
-      // If somehow accepted, still must not fake predicate coverage true.
-      expect(r.finalized.diagnostics?.finalSourceUnitPredicateCoveragePassed).not.toBe(true);
-    }
+    expect(r.finalized.blocked).toBe(false);
+    expect(r.finalized.countedAsSuccess).toBe(true);
+    expect(r.finalized.origin).toBe('deterministic_fallback');
+    expect(r.finalized.text).not.toMatch(/Salesforce|Excel|ISO 9001|increased revenue/i);
+    expect(r.preApplyGate?.passed).toBe(true);
+    expect(r.usageAfter).toBe(5);
+  });
+
+  it('unsafe solar inventiveness rejects provider and applies safe fallback once', () => {
+    const r = runEmptyEnGeneration({
+      usageBefore: 0,
+      candidate: SOLAR_UNSAFE_PRESENT,
+    });
+    expect(r.finalized.countedAsSuccess).toBe(true);
+    expect(r.finalized.origin).toBe('deterministic_fallback');
+    expect(r.finalized.text).not.toMatch(/residential|commercial|wiring|mounting hardware/i);
+    expect(r.usageAfter).toBe(1);
   });
 
   it('stable entry targeting with 5+ Experience entries', () => {
     const r = runEmptyEnGeneration({
       extraEntries: 5,
-      candidate: SOLAR_PRESENT,
+      candidate: SOLAR_SAFE_PRESENT,
     });
     expect(r.cv.experience.length).toBeGreaterThanOrEqual(6);
     expect(r.finalized.countedAsSuccess).toBe(true);

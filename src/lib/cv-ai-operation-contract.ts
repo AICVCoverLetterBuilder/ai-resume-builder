@@ -282,8 +282,10 @@ export function jobTitleScriptConflictsWithLocale(position: string, locale: Loca
   if (locale === 'ar') return hasLat || hasDev || hasCjk || hasCyr;
   if (locale === 'ja') return hasLat || hasDev || hasAr || hasCyr;
   if (locale === 'ru') return hasDev || hasAr || hasCjk || (hasLat && /[čćžšđ]/iu.test(p));
-  // Latin targets: non-Latin titles should not be pasted into prose.
-  if (hasDev || hasAr || hasCjk) return true;
+  // Serbian/Croatian accept Latin or Cyrillic titles in local prose.
+  if (locale === 'sr' || locale === 'hr') return hasDev || hasAr || hasCjk;
+  // Other Latin targets: never paste Devanagari/Arabic/CJK/Cyrillic titles into prose.
+  if (hasDev || hasAr || hasCjk || hasCyr) return true;
   return false;
 }
 

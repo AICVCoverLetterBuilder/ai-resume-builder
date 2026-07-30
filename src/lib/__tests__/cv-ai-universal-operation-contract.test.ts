@@ -141,7 +141,7 @@ describe('universal AI operation mode contract', () => {
     const stems = freeTextTitleStems('Quantum Workflow Harmonizer');
     expect(stems.some((s) => s.includes('quantum') || s.includes('workflow') || s.includes('harmon'))).toBe(true);
     expect(textLooksRelevantToFreeTextTitle(
-      'Review day-to-day records related to Quantum Workflow Harmonizer and verify data completeness.',
+      'Reviews day-to-day records related to Quantum Workflow Harmonizer and verifies data completeness.',
       'Quantum Workflow Harmonizer',
     )).toBe(true);
   });
@@ -188,7 +188,7 @@ describe('universal Experience generation fallback (no occupation catalogue)', (
     const past = buildJobContextGenerationFallback({
       locale: 'en', position: 'Ops Analyst', isPresent: false,
     });
-    expect(present).toMatch(/^• Review\b/m);
+    expect(present).toMatch(/^• Reviews\b/m);
     expect(past).toMatch(/^• Reviewed\b/m);
   });
 });

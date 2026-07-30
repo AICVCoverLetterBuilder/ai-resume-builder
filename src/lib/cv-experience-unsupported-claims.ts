@@ -214,3 +214,138 @@ export function experienceUnsupportedClaimRejectionReason(
   if (scan.kinds.includes('leadership_claim')) return 'unsupported_leadership_claim';
   return 'unsupported_generated_duty';
 }
+
+/** Packaged asset marker — empty-source generation claim safety (AAB-366). */
+export const EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION =
+  'experience-generation-claim-safety-366-v1' as const;
+
+void EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION;
+
+function foldGenerationToken(value: string): string {
+  return (value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u0400-\u04ff\u0600-\u06ff\u0900-\u097f\u3040-\u30ff\u3400-\u9fff]+/g, '');
+}
+
+function titleGroundsGenerationToken(position: string, token: string): boolean {
+  const title = foldGenerationToken(position);
+  const tok = foldGenerationToken(token);
+  if (!title || tok.length < 4) return false;
+  const needle = tok.slice(0, Math.min(tok.length, Math.max(4, Math.floor(tok.length * 0.8))));
+  return needle.length >= 4 && title.includes(needle);
+}
+
+/**
+ * Empty-source / generate_from_job_context inventiveness gate.
+ * Allows only safe generic duties; rejects concrete environments, tools/components,
+ * regulated standards/compliance, maintenance responsibility escalations, metrics
+ * and outcomes unless the same token is grounded in the entered role title.
+ * Universal — no per-occupation production branches.
+ */
+export function detectExperienceGenerationUnsupportedClaims(options: {
+  candidateText: string;
+  position?: string;
+}): ExperienceUnsupportedClaimScan {
+  void EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION;
+  const joined = norm(options.candidateText);
+  const position = options.position || '';
+  const base = detectExperienceUnsupportedClaimExpansion('', joined);
+  const kinds: ExperienceUnsupportedClaimKind[] = [...base.kinds];
+  const labels: string[] = [...base.labels];
+
+  const push = (kind: ExperienceUnsupportedClaimKind) => {
+    if (!kinds.includes(kind)) {
+      kinds.push(kind);
+      labels.push(kind);
+    }
+  };
+
+  // Named tools / KPI / awards already covered for enhancement; keep for generation.
+  if (
+    /(?:\bKPI\b|\bOKR\b|\bExcel\b|\bSalesforce\b|\bSAP\b|\bCRM\b|\bJira\b|\bSlack\b|%\s*(?:increase|growth)|team\s+of\s+\d+|managed\s+\d+|increased\s+revenue|\bISO\s*\d+|\bawards?\b|\bcertificat)/iu
+      .test(joined)
+  ) {
+    if (/\b(?:Excel|Salesforce|SAP|CRM|Jira|Slack)\b/iu.test(joined)) {
+      push('unsupported_tool_claim');
+    }
+    if (/(?:\bKPI\b|\bOKR\b|%\s*(?:increase|growth)|increased\s+revenue|\bISO\s*\d+)/iu.test(joined)) {
+      push('unsupported_metric_claim');
+    }
+    if (/(?:\bawards?\b|\bcertificat)/iu.test(joined)) {
+      push('unsupported_generated_duty');
+    }
+  }
+
+  // Concrete environments / customer venue scope (unless title names them).
+  const environmentChecks: Array<{ token: string; re: RegExp }> = [
+    { token: 'residential', re: /\bresidential\b/iu },
+    { token: 'commercial', re: /\bcommercial\b/iu },
+    { token: 'rooftop', re: /\brooftops?\b/iu },
+    { token: 'roof', re: /\broofs?\b/iu },
+    { token: 'customer', re: /\bcustomer\s+sites?\b/iu },
+    { token: 'client', re: /\bclient\s+sites?\b/iu },
+  ];
+  for (const { token, re } of environmentChecks) {
+    if (re.test(joined) && !titleGroundsGenerationToken(position, token)) {
+      push('object_scope_expansion');
+      break;
+    }
+  }
+
+  // Tools / components not named in the role title.
+  const componentChecks: Array<{ token: string; re: RegExp }> = [
+    { token: 'wiring', re: /\bwiring\b/iu },
+    { token: 'inverter', re: /\binverters?\b/iu },
+    { token: 'mounting', re: /\bmounting\s+hardware\b/iu },
+    { token: 'transformer', re: /\btransformers?\b/iu },
+    { token: 'scaffolding', re: /\bscaffolding\b/iu },
+    { token: 'multimeter', re: /\bmultimeters?\b/iu },
+  ];
+  for (const { token, re } of componentChecks) {
+    if (re.test(joined) && !titleGroundsGenerationToken(position, token)) {
+      push('unsupported_tool_claim');
+      break;
+    }
+  }
+
+  // Regulated standards / compliance phrasing (title must name standard/compliance).
+  if (
+    /(?:\belectrical\s+safety\s+standards?\b|\bsafety\s+standards?\b|\bmanufacturer\s+standards?\b|\band\s+compliance\b|\bensures?\s+compliance\b|\bregulatory\s+compliance\b)/iu
+      .test(joined)
+    && !titleGroundsGenerationToken(position, 'standard')
+    && !titleGroundsGenerationToken(position, 'compliance')
+    && !titleGroundsGenerationToken(position, 'safety')
+  ) {
+    push('standards_compliance_claim');
+  }
+
+  // Extra inspection/maintenance responsibility and outcome ownership.
+  if (
+    /(?:\binspection\s+and\s+maintenance\b|\bmaintenance\s+responsibility\b|\bperforms?\s+(?:regular\s+)?(?:inspection|maintenance)\b|\bensures?\s+optimal\b|\boptimal\s+performance\b)/iu
+      .test(joined)
+    && !titleGroundsGenerationToken(position, 'maintenance')
+    && !titleGroundsGenerationToken(position, 'inspection')
+  ) {
+    push('organization_responsibility_claim');
+    if (/\boptimal\s+performance\b|\bensures?\s+optimal\b/iu.test(joined)) {
+      push('performance_claim');
+    }
+  }
+
+  const uniqueKinds = [...new Set(kinds)];
+  const uniqueLabels = [...new Set(labels)];
+  return {
+    kinds: uniqueKinds,
+    count: uniqueKinds.length,
+    labels: uniqueLabels,
+    scopeExpansionDetected: uniqueKinds.includes('standards_compliance_claim')
+      || uniqueKinds.includes('quality_claim')
+      || uniqueKinds.includes('universal_scope_claim')
+      || uniqueKinds.includes('object_scope_expansion'),
+    universalQuantifierDetected: uniqueKinds.includes('universal_scope_claim'),
+    responsibilityEscalationDetected: uniqueKinds.includes('organization_responsibility_claim')
+      || uniqueKinds.includes('leadership_claim'),
+  };
+}
