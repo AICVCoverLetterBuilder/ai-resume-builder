@@ -21,7 +21,95 @@ import type { ExperienceUnsupportedClaimKind } from './cv-experience-unsupported
 export const GERMAN_EXPERIENCE_GROUNDING_303_REVISION =
   'german-experience-grounding-303-v1' as const;
 
+/** Empty-source / enhancement claim safety for German autonomy, universal scope, quality. */
+export const GERMAN_EXPERIENCE_GENERATION_CLAIM_SAFETY_377_REVISION =
+  'german-experience-generation-claim-safety-377-v1' as const;
+
 void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
+void GERMAN_EXPERIENCE_GENERATION_CLAIM_SAFETY_377_REVISION;
+
+/** Unsupported autonomy modifiers (not source-grounded). */
+const DE_AUTONOMY_MODIFIER =
+  /\beigenständig\w*\b|\beigenverantwortlich\w*\b|\bin\s+Eigenregie\b/iu;
+/** Universal type/scope quantifiers (e.g. aller Bauarten). */
+const DE_UNIVERSAL_TYPE_SCOPE =
+  /\baller\s+Bauarten\b|\balle(?:r|n)?\s+Bauarten\b|\bjeder\s+Bauart\b|\bsämtlicher?\s+Bauarten\b|\baller\s+Art(?:en)?\b|\bjeder\s+Art\b|\bsämtlicher?\s+Art(?:en)?\b/iu;
+/** Quality / compliance craftsmanship modifiers (e.g. fachgerecht). */
+const DE_QUALITY_COMPLIANCE_MODIFIER =
+  /\bfachgerecht\w*\b|\bvorschriftsgemäß\w*\b|\bnormgerecht\w*\b|\bregelkonform\w*\b|\bfachmännisch\w*\b/iu;
+
+function sourceSupportsGermanAutonomy(source: string): boolean {
+  return DE_AUTONOMY_MODIFIER.test(source)
+    || /\bselbstständig\w*\s+(?:Arbeit|Tätigkeit|Reparatur)|autonom\w*/iu.test(source);
+}
+
+function sourceSupportsGermanUniversalTypeScope(source: string): boolean {
+  return DE_UNIVERSAL_TYPE_SCOPE.test(source)
+    || /\bsämtlich\w*\b|\balle\s+(?:Typen|Arten|Modelle|Varianten)\b|\buniversell\w*/iu.test(source);
+}
+
+function sourceSupportsGermanQualityCompliance(source: string): boolean {
+  return DE_QUALITY_COMPLIANCE_MODIFIER.test(source)
+    || /\bQualität\b|\bStandards?\b|\bVorschrift(?:en)?\b|\bRichtlinie(?:n)?\b/iu.test(source);
+}
+
+/**
+ * German autonomy / universal-type-scope / quality-compliance modifiers.
+ * Empty-source generation always rejects; enhancement allows source-supported uses.
+ * Does not hard-code occupations — legitimate maintenance/diagnosis/replacement/
+ * customer-guidance duties without these modifiers remain accepted.
+ */
+export function detectGermanAutonomyScopeQualityClaims(
+  sourceDescription: string,
+  candidateDescription: string,
+): {
+  kinds: ExperienceUnsupportedClaimKind[];
+  labels: string[];
+  count: number;
+  scopeExpansionDetected: boolean;
+} {
+  void GERMAN_EXPERIENCE_GENERATION_CLAIM_SAFETY_377_REVISION;
+  const source = sourceDescription || '';
+  const joined = candidateDescription || '';
+  const kinds: ExperienceUnsupportedClaimKind[] = [];
+  const labels: string[] = [];
+
+  if (!joined.trim()) {
+    return {
+      kinds: [],
+      labels: [],
+      count: 0,
+      scopeExpansionDetected: false,
+    };
+  }
+
+  if (DE_AUTONOMY_MODIFIER.test(joined) && !sourceSupportsGermanAutonomy(source)) {
+    kinds.push('unsupported_modifier_expansion');
+    labels.push('unsupported_autonomy_modifier');
+  }
+  if (DE_UNIVERSAL_TYPE_SCOPE.test(joined) && !sourceSupportsGermanUniversalTypeScope(source)) {
+    kinds.push('universal_scope_claim');
+    labels.push('unsupported_universal_type_scope');
+  }
+  if (DE_QUALITY_COMPLIANCE_MODIFIER.test(joined) && !sourceSupportsGermanQualityCompliance(source)) {
+    kinds.push('quality_claim');
+    labels.push('unsupported_quality_compliance_modifier');
+    kinds.push('standards_compliance_claim');
+    labels.push('unsupported_quality_compliance_modifier');
+  }
+
+  const uniqueKinds = [...new Set(kinds)];
+  const uniqueLabels = [...new Set(labels)];
+  return {
+    kinds: uniqueKinds,
+    labels: uniqueLabels,
+    count: uniqueKinds.length,
+    scopeExpansionDetected: uniqueKinds.includes('universal_scope_claim')
+      || uniqueKinds.includes('quality_claim')
+      || uniqueKinds.includes('standards_compliance_claim')
+      || uniqueKinds.includes('unsupported_modifier_expansion'),
+  };
+}
 
 const WAREHOUSE_KEYS: MaterialDutyKey[] = [
   'warehouse_inbound_check',
@@ -196,6 +284,7 @@ export function detectGermanExperienceUnsupportedExpansion(
   candidateDescription: string,
 ): GermanExperienceExpansionScan {
   void GERMAN_EXPERIENCE_GROUNDING_303_REVISION;
+  void GERMAN_EXPERIENCE_GENERATION_CLAIM_SAFETY_377_REVISION;
   const source = sourceDescription || '';
   const joined = candidateDescription || '';
   const kinds: ExperienceUnsupportedClaimKind[] = [];
@@ -204,6 +293,14 @@ export function detectGermanExperienceUnsupportedExpansion(
   let documentationExpansionDetected = false;
   let malformedRolePhraseDetected = false;
   let informationExchangeSubstitutionDetected = false;
+
+  const autonomyScopeQuality = detectGermanAutonomyScopeQualityClaims(source, joined);
+  for (const kind of autonomyScopeQuality.kinds) {
+    if (!kinds.includes(kind)) kinds.push(kind);
+  }
+  for (const label of autonomyScopeQuality.labels) {
+    if (!labels.includes(label)) labels.push(label);
+  }
 
   if (/\bim\s+Bereich\s+Fachkraft\b|\bals\s+Bereich\s+Fachkraft\b|\bFachkraft-Bereich\b/iu.test(joined)) {
     malformedRolePhraseDetected = true;
@@ -265,7 +362,10 @@ export function detectGermanExperienceUnsupportedExpansion(
     count: uniqueKinds.length,
     labels: uniqueLabels,
     scopeExpansionDetected: uniqueKinds.includes('universal_scope_claim')
-      || uniqueKinds.includes('quality_claim'),
+      || uniqueKinds.includes('quality_claim')
+      || uniqueKinds.includes('standards_compliance_claim')
+      || uniqueKinds.includes('unsupported_modifier_expansion')
+      || autonomyScopeQuality.scopeExpansionDetected,
     deadlineClaimDetected,
     documentationExpansionDetected,
     malformedRolePhraseDetected,

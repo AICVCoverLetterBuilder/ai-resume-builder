@@ -35,6 +35,10 @@ import {
   detectExperienceGenerationUnsupportedClaims,
   EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION,
 } from './cv-experience-unsupported-claims';
+import {
+  detectGermanAutonomyScopeQualityClaims,
+  GERMAN_EXPERIENCE_GENERATION_CLAIM_SAFETY_377_REVISION,
+} from './cv-german-experience-grounding';
 
 export type ExperienceAiOperationMode = ExperienceAiOperationModeCompat;
 
@@ -269,11 +273,18 @@ export function validateExperienceGenerationOutput(
   let unsupportedClaimCount = countAiUnsafeInventionClaims(text);
   if (hasUnsupportedRegulatedPharmacyClaims(text)) unsupportedClaimCount += 1;
   void EXPERIENCE_GENERATION_CLAIM_SAFETY_366_REVISION;
+  void GERMAN_EXPERIENCE_GENERATION_CLAIM_SAFETY_377_REVISION;
   const generationClaims = detectExperienceGenerationUnsupportedClaims({
     candidateText: text,
     position: options.position || '',
   });
   unsupportedClaimCount += generationClaims.count;
+  // German empty-source generation: reject autonomy / universal-type-scope /
+  // quality-compliance modifiers (no source to ground them).
+  if (options.locale === 'de') {
+    const deClaims = detectGermanAutonomyScopeQualityClaims('', text);
+    unsupportedClaimCount += deClaims.count;
+  }
   if (unsupportedClaimCount > 0) {
     return {
       ok: false,
@@ -1102,15 +1113,17 @@ export function buildJobContextGenerationFallback(options: {
   }
 
   if (locale === 'de') {
+    // Neutral role-relevant shells — no autonomy / universal-scope / quality modifiers
+    // and no unsupported frequency quantifiers (täglich) on empty-source repair.
     return formatExperienceBullets(present
       ? [
-        `Führt tägliche Aufgaben im Bereich ${groundedWork} nach Zuweisung aus.`,
-        'Erledigt zugewiesene Arbeitsaufgaben entsprechend den Rollenanforderungen.',
+        `Führt zugewiesene Aufgaben im Bereich ${groundedWork} aus.`,
+        'Erledigt Arbeitsaufgaben entsprechend den Rollenanforderungen.',
         'Stimmt Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
       ]
       : [
-        `Führte tägliche Aufgaben im Bereich ${groundedWork} nach Zuweisung aus.`,
-        'Erledigte zugewiesene Arbeitsaufgaben entsprechend den Rollenanforderungen.',
+        `Führte zugewiesene Aufgaben im Bereich ${groundedWork} aus.`,
+        'Erledigte Arbeitsaufgaben entsprechend den Rollenanforderungen.',
         'Stimmte Arbeitstätigkeiten mit Kolleginnen und Kollegen ab.',
       ]);
   }
