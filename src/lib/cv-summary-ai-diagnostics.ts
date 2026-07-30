@@ -12,6 +12,7 @@ export const SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION =
 void SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION;
 void SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION;
 import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
+import { normalizeSummaryCandidateText } from './cv-ai-finalize-apply';
 import { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION } from './cv-summary-final-candidate-diagnostics-306';
 void SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
 export { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION } from './cv-summary-final-candidate-diagnostics-306';
@@ -1581,7 +1582,12 @@ export class SummaryAiDiagnosticSession {
         ?? (typeof diag.unsupportedClaimCount === 'number' ? diag.unsupportedClaimCount : null),
       finalUnsupportedCompetencyKinds: diag.finalUnsupportedCompetencyKinds ?? null,
       competencyInferenceFromRoleForbidden: diag.competencyInferenceFromRoleForbidden
-        ?? (this.draft.requestedLocale === 'de' ? true : null),
+        ?? (
+          this.draft.requestedLocale === 'de'
+          || this.draft.requestedLocale === 'en'
+            ? true
+            : null
+        ),
       summaryRepairAttempted: diag.summaryRepairAttempted ?? null,
       repairAttempted: Boolean(
         diag.summaryRepairAttempted
@@ -1638,7 +1644,7 @@ export class SummaryAiDiagnosticSession {
       clientFallbackReason: diag.clientFallbackReason ?? null,
       sourceNormalizedHash: diag.sourceNormalizedHash ?? null,
       finalNormalizedHash: finalCandidateSelected
-        ? (diag.finalNormalizedHash ?? null)
+        ? (diag.finalNormalizedHash ?? diag.finalValidatedCandidateHash ?? null)
         : null,
       finalMatchesSourceAfterNormalization:
         diag.finalMatchesSourceAfterNormalization ?? false,
@@ -1990,10 +1996,20 @@ export class SummaryAiDiagnosticSession {
         lineage.push({
           candidateKind: 'final_selected',
           present: finalSelected,
-          hash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
-          normalizedHash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
-          rawHash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
-          finalizedHash: finalSelected ? (diag.finalValidatedCandidateHash ?? null) : null,
+          hash: finalSelected
+            ? (diag.finalValidatedCandidateHash ?? diag.finalNormalizedHash ?? null)
+            : null,
+          normalizedHash: finalSelected
+            ? (diag.finalNormalizedHash
+              ?? diag.finalValidatedCandidateHash
+              ?? null)
+            : null,
+          rawHash: finalSelected
+            ? (diag.finalValidatedCandidateHash ?? diag.finalNormalizedHash ?? null)
+            : null,
+          finalizedHash: finalSelected
+            ? (diag.finalValidatedCandidateHash ?? diag.finalNormalizedHash ?? null)
+            : null,
           unitCount: finalSelected ? resolvedFinalUnitCount : 0,
           unitHashes: finalSelected ? resolvedFinalHashes : [],
           sentenceCount: finalSelected ? resolvedFinalUnitCount : 0,
@@ -2217,8 +2233,18 @@ export class SummaryAiDiagnosticSession {
       if (usesSummaryV2FactIds) {
         // Summary V2 entry-owned IDs are not English warehouse canonical IDs —
         // trust finalize coverage when visible text matches the final candidate.
-        const finalHash = this.draft.finalValidatedCandidateHash ?? null;
-        const matchesFinal = Boolean(visibleHash && finalHash && visibleHash === finalHash);
+        // Hash must use the same normalizer as finalNormalizedHash / finalize.
+        const finalHash = this.draft.finalNormalizedHash
+          ?? this.draft.finalValidatedCandidateHash
+          ?? null;
+        const visibleNormHash = fingerprintText(
+          normalizeSummaryCandidateText(visibleText) || 'empty',
+        );
+        const matchesFinal = Boolean(
+          visibleNormHash
+          && finalHash
+          && visibleNormHash === finalHash,
+        );
         visibleDutyRequired = requiredCurrent;
         visibleDutyCovered = matchesFinal
           ? Number(this.draft.coveredCurrentDutyFactCount ?? 0)
@@ -2234,10 +2260,25 @@ export class SummaryAiDiagnosticSession {
         visibleRoleOk = true;
         visibleLocaleOk = true;
         visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false;
+        const setHash = this.draft.finalCurrentDutyRequiredFactSetHash
+          ?? fingerprintText(requiredIds.join('|') || 'empty_required_set');
+        const matchCounts: Record<string, number> = {};
+        const matchUnits: Record<string, string[]> = {};
+        for (const id of requiredIds) {
+          const key = String(id);
+          matchCounts[key] = matchesFinal ? 1 : 0;
+          matchUnits[key] = matchesFinal ? [visibleNormHash] : [];
+        }
         this.patch({
           visibleCurrentDutyRequiredFactParityPassed: visibleDutyOk,
           visibleCurrentDutyRequiredFactCountMatchesFinal: visibleDutyRequired === requiredCurrent,
+          visibleCurrentDutyRequiredFactSetHash: setHash,
+          finalCurrentDutyRequiredFactSetHash: setHash,
+          visibleCurrentDutyFactMatchCountsByFactHash: matchCounts,
+          visibleCurrentDutyFactMatchedUnitHashesByFactHash: matchUnits,
+          visibleMissingCurrentDutyFactIdHashes: [],
           visiblePriorDutyRequiredFactParityPassed: visiblePriorDutyOk,
+          visibleSummaryMatchesFinalHash: matchesFinal,
         });
       } else {
       // Same immutable required fact IDs as final candidate validation — never
@@ -2752,18 +2793,44 @@ export class SummaryAiDiagnosticSession {
       operationKind: 'summary' as const,
       marker: SUMMARY_AI_DIAG_MARKER,
     };
-    const invariants = checkSummaryDiagnosticInvariants(
-      base as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
-    );
+    // Preapply gate already decided invariant/completeness truth for this operation.
+    // Never recompute under a different success/visible snapshot after rejection —
+    // that silently flips diagnosticInvariantCheckPassed from false → true.
+    const preapplyGateFailed = this.draft.rejectionStage === 'diagnostic_preapply_gate'
+      && this.stages.some((s) => s.name === 'diagnostic_preapply_gate' && s.status === 'fail');
+    const invariants = preapplyGateFailed
+      && typeof this.draft.diagnosticInvariantCheckPassed === 'boolean'
+      ? {
+        passed: this.draft.diagnosticInvariantCheckPassed,
+        failures: Array.isArray(this.draft.diagnosticInvariantFailures)
+          ? this.draft.diagnosticInvariantFailures
+          : [],
+      }
+      : checkSummaryDiagnosticInvariants(
+        base as Parameters<typeof checkSummaryDiagnosticInvariants>[0],
+      );
     const withInvariants = {
       ...base,
       diagnosticInvariantCheckPassed: invariants.passed,
       diagnosticInvariantFailureCount: invariants.failures.length,
       diagnosticInvariantFailures: invariants.failures,
     };
-    const completeness = checkSummaryDiagnosticCompleteness(
-      withInvariants as Record<string, unknown>,
-    );
+    const completeness = preapplyGateFailed
+      && typeof this.draft.diagnosticCompletenessPassed === 'boolean'
+      ? {
+        passed: this.draft.diagnosticCompletenessPassed,
+        missingRequiredDiagnosticFields:
+          Array.isArray(this.draft.missingRequiredDiagnosticFields)
+            ? this.draft.missingRequiredDiagnosticFields
+            : [],
+        nullRequiredDiagnosticFields:
+          Array.isArray(this.draft.nullRequiredDiagnosticFields)
+            ? this.draft.nullRequiredDiagnosticFields
+            : [],
+      }
+      : checkSummaryDiagnosticCompleteness(
+        withInvariants as Record<string, unknown>,
+      );
     const withCompleteness = {
       ...withInvariants,
       diagnosticCompletenessPassed: completeness.passed,

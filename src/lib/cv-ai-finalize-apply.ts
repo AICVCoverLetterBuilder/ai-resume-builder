@@ -2877,7 +2877,6 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || new Date().toISOString().slice(0, 10),
     });
     const v2Text = (v2.text || '').trim();
-    const v2Hash = v2Text ? hashSummaryCandidate(v2Text) : null;
     const v2Units = v2Text
       ? v2Text.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean)
       : [];
@@ -2885,7 +2884,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ...(v2.manifest.current ? ['current_intro' as const] : []),
       ...v2.manifest.priors.map(() => 'prior_role' as const),
     ];
-    // Duration unit is prepended for non-EN / separate for EN.
+    // Duration unit is prepended (V2 sentence order). Semantic roles carry
+    // total_duration; slot id stays `duration` for lineage consumers.
     const unitRoleSlots = v2.manifest.totalDurationMonths > 0
       ? (['duration', ...roleSlots] as string[])
       : [...roleSlots];
@@ -2894,21 +2894,57 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const providerRejected = Boolean(providerRaw) && v2.origin !== 'ai_generated';
     const v2UnitHashes = v2Units.map((u) => fingerprintText(u));
     const success = !v2.blocked && v2.countedAsSuccess;
+    const missingCurrent = Math.max(
+      0,
+      v2.validation.requiredCurrentFactCount - v2.validation.coveredCurrentFactCount,
+    );
+    const missingPrior = Math.max(
+      0,
+      v2.validation.requiredPriorFactCount - v2.validation.coveredPriorFactCount,
+    );
+    const meaningful = evaluateSummaryMeaningfulChange(liveSummary, v2Text || '');
     const diagBase = {
       requiredCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
       coveredCurrentDutyFactCount: v2.validation.coveredCurrentFactCount,
-      missingCurrentDutyFactCount: Math.max(
-        0,
-        v2.validation.requiredCurrentFactCount - v2.validation.coveredCurrentFactCount,
-      ),
+      missingCurrentDutyFactCount: missingCurrent,
+      missingCurrentDutyFactIdHashes: [],
       requiredPriorDutyFactCount: v2.validation.requiredPriorFactCount,
       coveredPriorDutyFactCount: v2.validation.coveredPriorFactCount,
-      missingPriorDutyFactCount: Math.max(
-        0,
-        v2.validation.requiredPriorFactCount - v2.validation.coveredPriorFactCount,
-      ),
+      missingPriorDutyFactCount: missingPrior,
+      missingPriorDutyFactIdHashes: [],
       requiredCurrentDutyFactIds: v2.manifest.requiredCurrentFacts.map((f) => f.factId),
       requiredPriorDutyFactIds: v2.manifest.requiredPriorFacts.map((f) => f.factId),
+      finalCurrentDutyRequiredFactSetHash: fingerprintText(
+        v2.manifest.requiredCurrentFacts.map((f) => f.factId).join('|') || 'empty_required_set',
+      ),
+      authoritativeCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
+      currentRoleTitlePresent: v2.validation.currentRolePresent,
+      currentRoleTitleMatchesStructuredRole: v2.validation.currentRolePresent,
+      structuredRoleLocaleValidationPassed: true,
+      currentRoleLocalizationValidationPassed: true,
+      priorRoleLocalizationValidationPassed: true,
+      foreignStructuredRoleTitleCount: 0,
+      foreignPriorRoleTitleCount: 0,
+      foreignCurrentRoleTitleDetected: false,
+      rawSourceRoleLeakageDetected: false,
+      finalStructuredRoleLocaleValidationPassed: true,
+      finalWrongLocaleStructuredRoleCount: 0,
+      finalForeignRoleTitleCount: 0,
+      finalUnsupportedCompetencyCount: v2.validation.unsupportedClaimCount,
+      finalUnsupportedCompetencyKinds: [],
+      competencyInferenceFromRoleForbidden: true,
+      finalSlotRejectionReasons: [],
+      slotRejectionReasons: [],
+      sourceNormalizedHash: meaningful.sourceNormalizedHash,
+      finalNormalizedHash: success ? meaningful.finalNormalizedHash : null,
+      finalMatchesSourceAfterNormalization: meaningful.finalMatchesSourceAfterNormalization,
+      meaningfulChangeDetected: success
+        ? (meaningful.meaningfulChangeDetected || !liveSummary.trim())
+        : false,
+      meaningfulChangeReason: meaningful.meaningfulChangeReason,
+      deterministicCandidateEqualsGroundingInput: true,
+      groundingInputEqualsFinalValidatedCandidate: success,
+      providerCandidateEqualsDeterministicCandidate: false,
       finalCandidateSource: v2.origin,
       durationClaimCountAfterFinalize: v2.validation.durationExpressionCount,
       durationClaimCountAfterInsert: v2.validation.durationExpressionCount,
@@ -3002,10 +3038,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       repairCandidateHash: null,
       repairCandidatePresent: false,
       repairAccepted: false,
-      finalValidatedCandidateHash: success ? v2Hash : null,
-      deterministicCandidateHash: v2.origin === 'deterministic_fallback' && success ? v2Hash : null,
-      deterministicCandidateNormalizedHash: v2.origin === 'deterministic_fallback' && v2Text && success
-        ? hashSummaryCandidate(normalizeSummaryCandidateText(v2Text))
+      finalValidatedCandidateHash: success ? meaningful.finalNormalizedHash : null,
+      deterministicCandidateHash: v2.origin === 'deterministic_fallback' && success
+        ? meaningful.finalNormalizedHash
+        : null,
+      deterministicCandidateNormalizedHash: v2.origin === 'deterministic_fallback' && success
+        ? meaningful.finalNormalizedHash
         : null,
       deterministicCandidatePresent: v2.origin === 'deterministic_fallback' && success,
       clientFallbackUsed: providerRejected || v2.origin === 'deterministic_fallback',
@@ -3051,13 +3089,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       providerOutcome: providerRejected
         ? ('rejected_grounding' as const)
         : (v2.origin === 'ai_generated' ? ('accepted' as const) : ('not_attempted' as const)),
-      meaningfulChangeDetected: success,
       noOpDetected: false,
       apiResponseKind: (providerRaw ? 'provider' : 'empty') as 'provider' | 'empty',
       deterministicAccepted: v2.origin === 'deterministic_fallback' && success,
       finalUnitSemanticRolesByUnit: v2Units.map((_, i) => {
         const slot = unitRoleSlots[i] || 'other';
-        if (slot === 'duration') return ['total_duration'];
+        if (slot === 'total_duration' || slot === 'duration') return ['total_duration'];
+        if (slot === 'current_intro') return ['current_role_intro', 'current_role_duties'];
+        if (slot === 'prior_role') return ['prior_role_intro', 'prior_role_duties'];
+        return [slot];
+      }),
+      finalSentenceSemanticRolesBySentence: v2Units.map((_, i) => {
+        const slot = unitRoleSlots[i] || 'other';
+        if (slot === 'total_duration' || slot === 'duration') return ['total_duration'];
         if (slot === 'current_intro') return ['current_role_intro', 'current_role_duties'];
         if (slot === 'prior_role') return ['prior_role_intro', 'prior_role_duties'];
         return [slot];

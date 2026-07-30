@@ -2059,9 +2059,17 @@ export function checkSummaryDiagnosticInvariants(
       if (
         semantic.length >= 3
         && !(
-          semantic[0]?.includes('current_role_intro')
-          && semantic[1]?.includes('prior_role_intro')
-          && semantic[2]?.includes('total_duration')
+          (
+            semantic[0]?.includes('current_role_intro')
+            && semantic[1]?.includes('prior_role_intro')
+            && semantic[2]?.includes('total_duration')
+          )
+          || (
+            // Summary V2 natural sentence order: duration → current → prior.
+            semantic[0]?.includes('total_duration')
+            && semantic[1]?.includes('current_role_intro')
+            && semantic[2]?.includes('prior_role_intro')
+          )
         )
       ) {
         // Soft: only when English structured fixture shape is expected.
