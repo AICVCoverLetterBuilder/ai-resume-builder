@@ -1207,8 +1207,8 @@ export default function CVBuilderPage() {
             noOpRejectionReason: 'summary_noop_after_normalization',
             meaningfulChangeDetected: false,
             finalMatchesSourceAfterNormalization: true,
-            typedFailureReason: 'summary_noop_after_normalization',
-            rejectionStage: 'meaningful_change',
+            typedFailureReason: undefined,
+            rejectionStage: undefined,
           },
         });
         summaryDiag.recordVisibleApply(false, countBefore);

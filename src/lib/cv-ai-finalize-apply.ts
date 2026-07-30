@@ -1719,6 +1719,28 @@ export function normalizeSummaryCandidateText(text: string): string {
     .trim();
 }
 
+/** Lowercase + strip punctuation for Summary enhance semantic equivalence. */
+export function semanticNormalizeSummaryText(text: string): string {
+  return normalizeSummaryCandidateText(text)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function summarySemanticTokenJaccard(a: string, b: string): number {
+  const ta = new Set(semanticNormalizeSummaryText(a).split(/\s+/u).filter(Boolean));
+  const tb = new Set(semanticNormalizeSummaryText(b).split(/\s+/u).filter(Boolean));
+  if (ta.size === 0 && tb.size === 0) return 1;
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const t of ta) {
+    if (tb.has(t)) inter += 1;
+  }
+  const union = ta.size + tb.size - inter;
+  return union === 0 ? 1 : inter / union;
+}
+
 function hashSummaryCandidate(text: string): string {
   return fingerprintText(normalizeSummaryCandidateText(text) || 'empty');
 }
@@ -1736,6 +1758,8 @@ export type SummaryMeaningfulChangeResult = {
 /**
  * Authoritative Summary meaningful-change comparator for enhance_existing_content.
  * Empty source is never a no-op (generate_empty may accept deterministic content).
+ * Detects exact normalized equality, formatting-only equivalence, and near-paraphrase
+ * semantic no-ops with no material improvement.
  */
 export function evaluateSummaryMeaningfulChange(
   sourceSummary: string,
@@ -1757,14 +1781,44 @@ export function evaluateSummaryMeaningfulChange(
     };
   }
   const matches = sourceNormalizedHash === finalNormalizedHash;
+  if (matches) {
+    return {
+      sourceNormalizedHash,
+      finalNormalizedHash,
+      finalMatchesSourceAfterNormalization: true,
+      meaningfulChangeDetected: false,
+      meaningfulChangeReason: null,
+      noOpDetected: true,
+      noOpRejectionReason: SUMMARY_NOOP_REJECTION_REASON,
+    };
+  }
+  const sourceSemantic = semanticNormalizeSummaryText(sourceNorm);
+  const candSemantic = semanticNormalizeSummaryText(candNorm);
+  const formattingOnly = Boolean(sourceSemantic) && sourceSemantic === candSemantic;
+  const lenMax = Math.max(sourceNorm.length, candNorm.length, 1);
+  const lengthClose = Math.abs(sourceNorm.length - candNorm.length) / lenMax <= 0.15;
+  const paraphraseNoOp = !formattingOnly
+    && lengthClose
+    && summarySemanticTokenJaccard(sourceNorm, candNorm) >= 0.9;
+  if (formattingOnly || paraphraseNoOp) {
+    return {
+      sourceNormalizedHash,
+      finalNormalizedHash,
+      finalMatchesSourceAfterNormalization: true,
+      meaningfulChangeDetected: false,
+      meaningfulChangeReason: null,
+      noOpDetected: true,
+      noOpRejectionReason: SUMMARY_NOOP_REJECTION_REASON,
+    };
+  }
   return {
     sourceNormalizedHash,
     finalNormalizedHash,
-    finalMatchesSourceAfterNormalization: matches,
-    meaningfulChangeDetected: !matches,
-    meaningfulChangeReason: matches ? null : 'normalized_text_differs',
-    noOpDetected: matches,
-    noOpRejectionReason: matches ? SUMMARY_NOOP_REJECTION_REASON : null,
+    finalMatchesSourceAfterNormalization: false,
+    meaningfulChangeDetected: true,
+    meaningfulChangeReason: 'normalized_text_differs',
+    noOpDetected: false,
+    noOpRejectionReason: null,
   };
 }
 
@@ -2903,6 +2957,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       v2.validation.requiredPriorFactCount - v2.validation.coveredPriorFactCount,
     );
     const meaningful = evaluateSummaryMeaningfulChange(liveSummary, v2Text || '');
+    const providerMeaningful = providerRaw
+      ? evaluateSummaryMeaningfulChange(liveSummary, providerRaw)
+      : null;
+    const v2OperationMode = resolveAiOperationMode({ targetContent: liveSummary });
+    const v2EnhanceExisting = v2OperationMode === 'enhance_existing_content';
+    const v2CleanNoOp = Boolean(
+      success && v2EnhanceExisting && meaningful.noOpDetected,
+    );
+    const v2NoOpCandidateKind: string | null = v2CleanNoOp
+      ? (
+        (v2.origin === 'ai_generated' || v2.origin === 'ai_repaired')
+          ? (v2.origin === 'ai_repaired' ? 'repaired_provider' : 'provider')
+          : 'client_deterministic'
+      )
+      : null;
     const diagBase = {
       requiredCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
       coveredCurrentDutyFactCount: v2.validation.coveredCurrentFactCount,
@@ -2936,14 +3005,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       finalSlotRejectionReasons: [],
       slotRejectionReasons: [],
       sourceNormalizedHash: meaningful.sourceNormalizedHash,
-      finalNormalizedHash: success ? meaningful.finalNormalizedHash : null,
+      finalNormalizedHash: (success && !v2CleanNoOp) ? meaningful.finalNormalizedHash : null,
       finalMatchesSourceAfterNormalization: meaningful.finalMatchesSourceAfterNormalization,
-      meaningfulChangeDetected: success
+      meaningfulChangeDetected: (success && !v2CleanNoOp)
         ? (meaningful.meaningfulChangeDetected || !liveSummary.trim())
         : false,
-      meaningfulChangeReason: meaningful.meaningfulChangeReason,
+      meaningfulChangeReason: v2CleanNoOp ? null : meaningful.meaningfulChangeReason,
       deterministicCandidateEqualsGroundingInput: true,
-      groundingInputEqualsFinalValidatedCandidate: success,
+      groundingInputEqualsFinalValidatedCandidate: success && !v2CleanNoOp,
       providerCandidateEqualsDeterministicCandidate: false,
       finalCandidateSource: v2.origin,
       durationClaimCountAfterFinalize: v2.validation.durationExpressionCount,
@@ -2978,7 +3047,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         && v2.validation.priorEmployerPresent
         && v2.validation.priorStateExpressed,
       ),
-      finalPostconditionsPassed: success,
+      finalPostconditionsPassed: success && !v2CleanNoOp,
       targetLocalePurityPassed: true,
       sourceLanguageLeakageDetected: false,
       wrongLocaleUnitCount: 0,
@@ -2989,8 +3058,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       )),
       finalUnitRoleSlots: unitRoleSlots,
       finalSentenceRoleSlots: unitRoleSlots,
-      finalSentenceHashes: success ? v2UnitHashes : [],
-      finalUnitHashes: success ? v2UnitHashes : [],
+      finalSentenceHashes: (success && !v2CleanNoOp) ? v2UnitHashes : [],
+      finalUnitHashes: (success && !v2CleanNoOp) ? v2UnitHashes : [],
       deterministicCandidateSentenceCount: v2Units.length,
       deterministicCandidateUnitHashes: v2.origin === 'deterministic_fallback' ? v2UnitHashes : [],
       summaryBuilderRevision: SUMMARY_V2_REVISION,
@@ -3003,8 +3072,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       finalPerspectiveMode: 'first_person' as const,
       perspectiveValidationPassed: true,
       rewriteStyle: input.rewriteStyle || null,
-      operationMode: null,
-      providerAccepted: v2.origin === 'ai_generated',
+      operationMode: v2OperationMode,
+      providerAccepted: v2.origin === 'ai_generated' && !v2CleanNoOp,
       providerCandidatePresent: Boolean(providerRaw),
       providerCandidateHash: providerHash,
       providerCandidateNormalizedHash: providerRaw
@@ -3016,44 +3085,52 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : [],
       providerTypedRejectionReason: providerRejected
         ? 'summary_v2_provider_rejected_or_repaired'
-        : null,
+        : (v2CleanNoOp && providerMeaningful?.noOpDetected
+          ? SUMMARY_NOOP_REJECTION_REASON
+          : null),
       providerRejectionReason: providerRejected
         ? 'summary_v2_provider_rejected_or_repaired'
-        : null,
-      providerRejectionStage: providerRejected ? 'summary_v2_manifest_validation' : null,
+        : (v2CleanNoOp && providerMeaningful?.noOpDetected
+          ? SUMMARY_NOOP_REJECTION_REASON
+          : null),
+      providerRejectionStage: providerRejected
+        ? 'summary_v2_manifest_validation'
+        : (v2CleanNoOp && providerMeaningful?.noOpDetected ? null : null),
       providerRejectionReasons: providerRejected
         ? [v2.validation.reason || 'summary_v2_provider_rejected_or_repaired']
-        : [],
+        : (v2CleanNoOp && providerMeaningful?.noOpDetected
+          ? [SUMMARY_NOOP_REJECTION_REASON]
+          : []),
       providerSlotRejectionReasons: providerRejected
         ? [v2.validation.reason || 'summary_v2_provider_rejected_or_repaired']
         : [],
       clientFallbackReason: providerRejected
         ? 'summary_v2_provider_rejected_or_repaired'
-        : null,
+        : (v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null),
       detectedVisibleContentLocaleBeforeRequest: cv.contentLocale || null,
       finalContentLocaleAfterApply: null,
       summaryRepairAttempted: v2.origin === 'ai_repaired',
-      summaryRepairApplied: v2.origin === 'ai_repaired',
+      summaryRepairApplied: v2.origin === 'ai_repaired' && !v2CleanNoOp,
       repairSelected: false,
       repairCandidateHash: null,
       repairCandidatePresent: false,
       repairAccepted: false,
-      finalValidatedCandidateHash: success ? meaningful.finalNormalizedHash : null,
-      deterministicCandidateHash: v2.origin === 'deterministic_fallback' && success
+      finalValidatedCandidateHash: (success && !v2CleanNoOp) ? meaningful.finalNormalizedHash : null,
+      deterministicCandidateHash: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp
         ? meaningful.finalNormalizedHash
         : null,
-      deterministicCandidateNormalizedHash: v2.origin === 'deterministic_fallback' && success
+      deterministicCandidateNormalizedHash: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp
         ? meaningful.finalNormalizedHash
         : null,
-      deterministicCandidatePresent: v2.origin === 'deterministic_fallback' && success,
-      clientFallbackUsed: providerRejected || v2.origin === 'deterministic_fallback',
-      fallbackApplied: v2.origin === 'deterministic_fallback' && success,
+      deterministicCandidatePresent: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp,
+      clientFallbackUsed: providerRejected || v2.origin === 'deterministic_fallback' || v2CleanNoOp,
+      fallbackApplied: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp,
       clientDeterministicFallbackReason: providerRejected
         ? 'summary_v2_provider_rejected_or_repaired'
-        : null,
-      groundingValidationPassed: success,
-      grammarValidationPassed: success,
-      slotValidationPassed: success,
+        : (v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null),
+      groundingValidationPassed: success && !v2CleanNoOp,
+      grammarValidationPassed: success && !v2CleanNoOp,
+      slotValidationPassed: success && !v2CleanNoOp,
       priorRoleGroundingPassed: v2.validation.priorRolePresent && v2.validation.priorEmployerPresent,
       unsupportedClaimCount: v2.validation.unsupportedClaimCount,
       currentDutyTenseOk: v2.validation.currentDutyTenseOk,
@@ -3082,16 +3159,24 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       currentDutySlotPresent: Boolean(v2.manifest.requiredCurrentFacts.length),
       priorRoleSlotPresent: unitRoleSlots.includes('prior_role'),
       priorDutySlotPresent: Boolean(v2.manifest.requiredPriorFacts.length),
-      finalSlotValidationPassed: success,
+      finalSlotValidationPassed: success && !v2CleanNoOp,
       providerCandidateSentenceCount: providerRaw
         ? providerRaw.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean).length
         : 0,
-      providerOutcome: providerRejected
-        ? ('rejected_grounding' as const)
-        : (v2.origin === 'ai_generated' ? ('accepted' as const) : ('not_attempted' as const)),
-      noOpDetected: false,
+      providerOutcome: v2CleanNoOp && (providerMeaningful?.noOpDetected || v2.origin === 'ai_generated' || v2.origin === 'ai_repaired')
+        ? ('rejected_noop' as const)
+        : (providerRejected
+          ? ('rejected_grounding' as const)
+          : (v2.origin === 'ai_generated' ? ('accepted' as const) : ('not_attempted' as const))),
+      noOpDetected: v2CleanNoOp,
+      noOpCandidateKind: v2NoOpCandidateKind,
+      noOpRejectionReason: v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null,
+      providerNoOpDetected: Boolean(providerMeaningful?.noOpDetected),
+      noOpRejected: v2CleanNoOp,
+      rejectionStage: undefined,
+      typedFailureReason: undefined,
       apiResponseKind: (providerRaw ? 'provider' : 'empty') as 'provider' | 'empty',
-      deterministicAccepted: v2.origin === 'deterministic_fallback' && success,
+      deterministicAccepted: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp,
       finalUnitSemanticRolesByUnit: v2Units.map((_, i) => {
         const slot = unitRoleSlots[i] || 'other';
         if (slot === 'total_duration' || slot === 'duration') return ['total_duration'];
@@ -3119,7 +3204,24 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           ...diagBase,
           finalPostconditionsPassed: false,
           finalCandidateSource: v2.origin,
+          noOpDetected: false,
+          noOpCandidateKind: null,
+          noOpRejectionReason: null,
+          rejectionStage: 'summary_v2_manifest_validation',
+          typedFailureReason: v2.reason || 'summary_v2_validation_failed',
         } as unknown as FinalizeCvAiFieldResult['diagnostics'],
+      };
+    }
+    // Clean enhance no-op terminal — before apply authorization / preapply gate.
+    if (v2CleanNoOp) {
+      return {
+        blocked: true,
+        reason: SUMMARY_NOOP_REJECTION_REASON,
+        text: typeof cv.summary === 'string' ? cv.summary : liveSummary,
+        origin: cv.summaryOrigin || 'user',
+        roleDutyConflict: false,
+        countedAsSuccess: false,
+        diagnostics: diagBase as unknown as FinalizeCvAiFieldResult['diagnostics'],
       };
     }
     return {
@@ -6426,7 +6528,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }
           if (blockedForDuration) return 'independent_final_duration_verification';
           if (blockedForPerspective) return 'perspective_validation';
-          if (result.reason === SUMMARY_NOOP_REJECTION_REASON) return 'meaningful_change';
+          if (result.reason === SUMMARY_NOOP_REJECTION_REASON) return undefined;
           if (result.blocked && materialFail) return 'summary_grounding';
           return result.diagnostics?.rejectionStage;
         })(),
@@ -6440,7 +6542,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }
           if (blockedForDuration) return 'experience_duration_mismatch';
           if (blockedForPerspective) return 'summary_perspective_invalid';
-          if (result.reason === SUMMARY_NOOP_REJECTION_REASON) return SUMMARY_NOOP_REJECTION_REASON;
+          if (result.reason === SUMMARY_NOOP_REJECTION_REASON) return undefined;
           return result.diagnostics?.typedFailureReason ?? result.reason;
         })(),
         grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es' || locale === 'en' || locale === 'pt-BR' || locale === 'ru' || locale === 'ja')

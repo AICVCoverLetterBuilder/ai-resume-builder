@@ -1309,24 +1309,48 @@ export class SummaryAiDiagnosticSession {
       countedAsSuccess: Boolean(
         finalized.countedAsSuccess && durationValidationPassed && entityAwarePurityPassed,
       ),
-      finalTypedFailureReason: finalized.blocked || !durationValidationPassed || !entityAwarePurityPassed
-        ? (diag.typedFailureReason
-          || finalized.reason
-          || (!entityAwarePurityPassed
-            ? 'locale_impurity'
-            : (!durationValidationPassed
-              ? 'experience_duration_mismatch'
-              : 'summary_grounding_failed')))
-        : null,
-      rejectionStage: finalized.blocked || !durationValidationPassed || !entityAwarePurityPassed
-        ? (diag.rejectionStage || (
-          !entityAwarePurityPassed
-            ? 'locale_purity'
-            : (!durationValidationPassed
-              ? 'independent_final_duration_verification'
-              : 'summary_grounding')
-        ))
-        : null,
+      finalTypedFailureReason: (() => {
+        const cleanSummaryNoOp = Boolean(
+          !finalized.countedAsSuccess
+          && (
+            diag.noOpDetected
+            || diag.noOpRejected
+            || finalized.reason === 'summary_noop_after_normalization'
+          ),
+        );
+        if (cleanSummaryNoOp) return null;
+        if (finalized.blocked || !durationValidationPassed || !entityAwarePurityPassed) {
+          return diag.typedFailureReason
+            || finalized.reason
+            || (!entityAwarePurityPassed
+              ? 'locale_impurity'
+              : (!durationValidationPassed
+                ? 'experience_duration_mismatch'
+                : 'summary_grounding_failed'));
+        }
+        return null;
+      })(),
+      rejectionStage: (() => {
+        const cleanSummaryNoOp = Boolean(
+          !finalized.countedAsSuccess
+          && (
+            diag.noOpDetected
+            || diag.noOpRejected
+            || finalized.reason === 'summary_noop_after_normalization'
+          ),
+        );
+        if (cleanSummaryNoOp) return null;
+        if (finalized.blocked || !durationValidationPassed || !entityAwarePurityPassed) {
+          return diag.rejectionStage || (
+            !entityAwarePurityPassed
+              ? 'locale_purity'
+              : (!durationValidationPassed
+                ? 'independent_final_duration_verification'
+                : 'summary_grounding')
+          );
+        }
+        return null;
+      })(),
       serbianStructuredDomainGateEvaluated:
         (diag as { serbianStructuredDomainGateEvaluated?: boolean | null })
           .serbianStructuredDomainGateEvaluated ?? null,
@@ -2026,7 +2050,7 @@ export class SummaryAiDiagnosticSession {
             : null,
           rejectionStage: finalSelected ? null : (
             diag.noOpDetected || finalized.reason === 'summary_noop_after_normalization'
-              ? 'meaningful_change'
+              ? null
               : (finalized.reason || null)
           ),
           rejectionReasons: dedupeStableStrings(
@@ -2077,7 +2101,11 @@ export class SummaryAiDiagnosticSession {
             : false,
           finalMatchesSourceAfterNormalization: finalSelected
             ? Boolean(diag.finalMatchesSourceAfterNormalization)
-            : false,
+            : Boolean(
+              diag.noOpDetected
+              || finalized.reason === 'summary_noop_after_normalization'
+              || diag.finalMatchesSourceAfterNormalization,
+            ),
           noOpDetected: !finalSelected && Boolean(diag.noOpDetected),
           noOpRejectionReason: !finalSelected && diag.noOpDetected
             ? 'summary_noop_after_normalization'
