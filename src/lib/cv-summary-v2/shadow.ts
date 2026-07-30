@@ -21,7 +21,7 @@ export type SummaryV2ShadowComparison = {
 
 /**
  * Shadow comparison only — does not mutate production flag state permanently.
- * Temporarily enables V2, builds both candidates, restores prior flag override.
+ * Temporarily enables V2 via test override (never assign NEXT_PUBLIC_* — Next inlines those).
  */
 export function compareSummaryV2AgainstLegacy(options: {
   cv: CVData;
@@ -30,7 +30,6 @@ export function compareSummaryV2AgainstLegacy(options: {
   referenceDateIso: string;
   candidate?: string;
 }): SummaryV2ShadowComparison {
-  const prev = process.env.NEXT_PUBLIC_ENABLE_SUMMARY_V2;
   setSummaryV2EnabledForTests(true);
   let v2;
   try {
@@ -43,8 +42,6 @@ export function compareSummaryV2AgainstLegacy(options: {
     });
   } finally {
     setSummaryV2EnabledForTests(null);
-    if (prev === undefined) delete process.env.NEXT_PUBLIC_ENABLE_SUMMARY_V2;
-    else process.env.NEXT_PUBLIC_ENABLE_SUMMARY_V2 = prev;
   }
 
   const durationSnapshot = buildExperienceDurationSnapshot(
