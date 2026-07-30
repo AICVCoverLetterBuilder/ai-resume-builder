@@ -300,6 +300,21 @@ export function validateExperienceGenerationOutput(
       unsupportedClaimCount,
     };
   }
+  // German governed-preposition case: reject "an Fahrräder" etc.
+  if (
+    options.locale === 'de'
+    && germanExperienceDativePrepositionCaseLooksWrong(text)
+  ) {
+    return {
+      ok: false,
+      reason: 'experience_generation_failed',
+      generatedBulletCount,
+      relevanceValidationPassed: true,
+      perspectiveValidationPassed: true,
+      tenseValidationPassed: true,
+      unsupportedClaimCount: 0,
+    };
+  }
   const arOk = options.locale === 'ar'
     ? validateArabicExperienceEmploymentTense(text, {
       isPresent: options.isPresent !== false,
@@ -577,10 +592,11 @@ function buildEnglishActionDutyTriple(
 
 /**
  * German object plural for mid-sentence duties — light morphology, not a catalogue.
+ * Returns nominative/accusative plural (not dative).
  */
 function germanPluralizeObjectStem(stem: string): string {
   const s = (stem || '').trim();
-  if (!s) return 'Geräten';
+  if (!s) return 'Geräte';
   // Preserve original casing for display from folded stem: capitalize first letter.
   const display = s.charAt(0).toUpperCase() + s.slice(1);
   if (/rad$/i.test(s)) return display.replace(/rad$/i, 'räder');
@@ -591,6 +607,35 @@ function germanPluralizeObjectStem(stem: string): string {
   if (/en$/i.test(s) || /er$/i.test(s) && s.length > 6) return display;
   if (/e$/i.test(s)) return `${display}n`;
   return `${display}en`;
+}
+
+/**
+ * Nominative/accusative plural → dative plural.
+ * Universal rule: add -n unless the plural already ends in -n or -s.
+ * Morphology only — not a noun catalogue (no Fahrrad/Fahrräder hard-coding).
+ */
+export function germanInflectDativePlural(nominativePlural: string): string {
+  const s = (nominativePlural || '').trim();
+  if (!s) return s;
+  if (/(?:n|s)$/iu.test(s)) return s;
+  return `${s}n`;
+}
+
+/**
+ * True when a dative-governing preposition is followed by a bare plural NP that
+ * still has nominative/accusative shape (missing required dative -n), e.g.
+ * "an Fahrräder" instead of "an Fahrrädern".
+ */
+export function germanExperienceDativePrepositionCaseLooksWrong(text: string): boolean {
+  const re =
+    /\b(?:an|von|zu|bei)\s+(?:[\p{Ll}äöüß][\p{L}äöüß\-]*\s+)*([A-ZÄÖÜ][\p{L}äöüß\-]+)\b/gu;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text || ''))) {
+    const noun = m[1];
+    if (/(?:n|s)$/iu.test(noun)) continue;
+    if (/(?:räder|äder|er|e|el)$/iu.test(noun)) return true;
+  }
+  return false;
 }
 
 function capitalizeDe(stem: string): string {
@@ -644,20 +689,22 @@ function buildGermanActionDutyTriple(
   }
 
   const objPl = objectStem ? germanPluralizeObjectStem(objectStem) : '';
+  // Dative plural for prepositions that govern dative (an / von / zu / bei).
+  const objDatPl = objPl ? germanInflectDativePlural(objPl) : '';
   const obj = objectStem ? capitalizeDe(objectStem) : '';
   const ag = agentive;
 
   if (/^mechaniker/.test(ag) && objPl) {
     return present
       ? [
-        `Führt Wartungsarbeiten an ${objPl} durch.`,
+        `Führt Wartungsarbeiten an ${objDatPl} durch.`,
         `Prüft ${objPl} auf technische Mängel.`,
-        `Tauscht defekte Bauteile an ${objPl} aus.`,
+        `Tauscht defekte Bauteile an ${objDatPl} aus.`,
       ]
       : [
-        `Führte Wartungsarbeiten an ${objPl} durch.`,
+        `Führte Wartungsarbeiten an ${objDatPl} durch.`,
         `Prüfte ${objPl} auf technische Mängel.`,
-        `Tauschte defekte Bauteile an ${objPl} aus.`,
+        `Tauschte defekte Bauteile an ${objDatPl} aus.`,
       ];
   }
   if (/^(monteur|installateur)/.test(ag) && objPl) {
@@ -676,14 +723,14 @@ function buildGermanActionDutyTriple(
   if (/^techniker/.test(ag) && objPl) {
     return present
       ? [
-        `Führt technische Prüfungen an ${objPl} durch.`,
-        `Diagnostiziert Störungen an ${objPl}.`,
-        `Tauscht defekte Bauteile an ${objPl} aus.`,
+        `Führt technische Prüfungen an ${objDatPl} durch.`,
+        `Diagnostiziert Störungen an ${objDatPl}.`,
+        `Tauscht defekte Bauteile an ${objDatPl} aus.`,
       ]
       : [
-        `Führte technische Prüfungen an ${objPl} durch.`,
-        `Diagnostizierte Störungen an ${objPl}.`,
-        `Tauschte defekte Bauteile an ${objPl} aus.`,
+        `Führte technische Prüfungen an ${objDatPl} durch.`,
+        `Diagnostizierte Störungen an ${objDatPl}.`,
+        `Tauschte defekte Bauteile an ${objDatPl} aus.`,
       ];
   }
   if (/^assistent/.test(ag) && obj) {
@@ -703,25 +750,25 @@ function buildGermanActionDutyTriple(
     return present
       ? [
         `Versorgt und betreut ${objPl} im Tagesbetrieb.`,
-        `Prüft den Zustand von ${objPl} und meldet Auffälligkeiten.`,
+        `Prüft den Zustand von ${objDatPl} und meldet Auffälligkeiten.`,
         'Stimmt Betreuungsschritte mit Kolleginnen und Kollegen ab.',
       ]
       : [
         `Versorgte und betreute ${objPl} im Tagesbetrieb.`,
-        `Prüfte den Zustand von ${objPl} und meldete Auffälligkeiten.`,
+        `Prüfte den Zustand von ${objDatPl} und meldete Auffälligkeiten.`,
         'Stimmte Betreuungsschritte mit Kolleginnen und Kollegen ab.',
       ];
   }
   if (/^(berater|koordinator|manager|fachkraft|mitarbeiter|arbeiter|helfer|pfleger|lehrer|fahrer|pruefer)/.test(ag) && objPl) {
     return present
       ? [
-        `Bearbeitet konkrete Vorgänge zu ${objPl}.`,
-        `Prüft Unterlagen und schließt Nacharbeiten zu ${objPl} ab.`,
+        `Bearbeitet konkrete Vorgänge zu ${objDatPl}.`,
+        `Prüft Unterlagen und schließt Nacharbeiten zu ${objDatPl} ab.`,
         'Stimmt Arbeitsschritte mit Kolleginnen und Kollegen ab.',
       ]
       : [
-        `Bearbeitete konkrete Vorgänge zu ${objPl}.`,
-        `Prüfte Unterlagen und schloss Nacharbeiten zu ${objPl} ab.`,
+        `Bearbeitete konkrete Vorgänge zu ${objDatPl}.`,
+        `Prüfte Unterlagen und schloss Nacharbeiten zu ${objDatPl} ab.`,
         'Stimmte Arbeitsschritte mit Kolleginnen und Kollegen ab.',
       ];
   }

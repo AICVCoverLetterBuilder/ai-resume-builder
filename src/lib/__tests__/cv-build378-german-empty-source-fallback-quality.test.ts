@@ -74,6 +74,8 @@ function assertConcreteDeSurface(text: string, position: string): void {
   expect(text).not.toMatch(/Rollenanforderungen/iu);
   expect(text).not.toMatch(/im\s+Bereich\s+\S+/iu);
   expect(text).not.toMatch(/\btäglich|eigenständig|aller\s+Bauarten|fachgerecht/iu);
+  // Accusative plural after dative-governing "an" is invalid.
+  expect(text).not.toMatch(/\ban\s+Fahrräder\b/);
   expect(generationLooksRoleTitleEchoFillerOnly(text)).toBe(false);
   expect(generationLooksTautologicalRoleShellOnly(text)).toBe(false);
   expect(textLooksRelevantToFreeTextTitle(text, position)).toBe(true);
@@ -297,7 +299,9 @@ describe('AAB-378 German empty-source fallback quality', () => {
       isPresent: true,
     });
     assertConcreteDeSurface(fb, 'Fahrradmechaniker');
-    expect(fb).toMatch(/Fahrräder|Fahrrad/i);
+    expect(fb).toMatch(/Fahrrädern/);
+    expect(fb).toMatch(/an\s+Fahrrädern/);
+    expect(fb).not.toMatch(/\ban\s+Fahrräder\b/);
     expect(fb).toMatch(/Wartung/i);
     expect(fb).toMatch(/Prüft/i);
     expect(fb).toMatch(/Bauteile|Repar/i);
