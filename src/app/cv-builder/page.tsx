@@ -47,7 +47,7 @@ import {
   copyExperienceAiDiagnosticsToClipboard,
   ExperienceAiDiagnosticSession,
 } from '@/lib/cv-experience-ai-diagnostics';
-import { SummaryAiDiagnosticSession } from '@/lib/cv-summary-ai-diagnostics';
+import { SummaryAiDiagnosticSession, resolveAuthoritativeVisibleSummaryText } from '@/lib/cv-summary-ai-diagnostics';
 import { resolveSummaryFinalizeClientOutcome } from '@/lib/cv-summary-noop-ui';
 import { INTERNAL_AI_RESET_ENABLED } from '@/lib/build-channel';
 import {
@@ -1254,8 +1254,13 @@ export default function CVBuilderPage() {
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
+      // Visible validation must read the operation-owned CV/ref after temporary write
+      // — never a stale React/render Summary snapshot (AAB-381).
+      const visibleSummaryText = resolveAuthoritativeVisibleSummaryText({
+        operationOwnedSummary: cvRef.current.summary,
+      });
       // Visible validation must pass before usage increment (AAB-326).
-      summaryDiag.recordVisibleApply(true, countBefore, finalizedGate.text);
+      summaryDiag.recordVisibleApply(true, countBefore, visibleSummaryText);
       const visibleOk = summaryDiag.visibleApplySucceeded;
       if (!visibleOk) {
         const failReason = summaryDiag.finalTypedFailureReason
@@ -2649,8 +2654,42 @@ export default function CVBuilderPage() {
         return;
       }
       commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
+      const visibleSummaryText = resolveAuthoritativeVisibleSummaryText({
+        operationOwnedSummary: cvRef.current.summary,
+      });
+      // Visible validation before usage increment (same Generate contract).
+      summaryDiag.recordVisibleApply(true, countBefore, visibleSummaryText);
+      const visibleOk = summaryDiag.visibleApplySucceeded;
+      if (!visibleOk) {
+        const failReason = summaryDiag.finalTypedFailureReason
+          || 'visible_current_duty_coverage_failed';
+        const failCode = mapExperienceAiFailureToErrorCode(failReason);
+        commitCvUpdate((prev) => ({
+          ...prev,
+          summary: liveSummaryAtPress,
+        }));
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: failCode, httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        summaryDiag.patch({
+          countedAsSuccess: false,
+          usageCountAfter: countBefore,
+          visibleApplySucceeded: false,
+        });
+        try {
+          await summaryDiag.resolveVersions();
+          summaryDiag.commit();
+        } catch { /* ignore */ }
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
+        return;
+      }
       recordProAiSuccess();
-      summaryDiag.recordVisibleApply(true, countBefore, finalizedGate.text);
       summaryDiag.patch({ usageCountAfter: countBefore + 1 });
       finishAiClientRequest({
         ctx: reqCtx,

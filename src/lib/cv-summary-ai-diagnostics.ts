@@ -9,8 +9,12 @@ export const SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION =
   'summary-content-locale-rollback-361-v1' as const;
 export const SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION =
   'summary-visible-source-locale-detection-361-v1' as const;
+/** AAB-381 — German Summary V2 post-write visible validation against operation-owned text. */
+export const GERMAN_SUMMARY_V2_VISIBLE_POSTWRITE_381_REVISION =
+  'german-summary-v2-visible-postwrite-381-v1' as const;
 void SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION;
 void SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION;
+void GERMAN_SUMMARY_V2_VISIBLE_POSTWRITE_381_REVISION;
 import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
 import { normalizeSummaryCandidateText } from './cv-ai-finalize-apply';
 import { SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION } from './cv-summary-final-candidate-diagnostics-306';
@@ -103,6 +107,22 @@ function rebuildGermanDutyFactsFromIds(ids: string[] | null | undefined): German
       ],
     };
   });
+}
+
+/**
+ * Authoritative Summary text after temporary write.
+ * Always prefer the operation-owned CV/ref value — never a stale React/render snapshot.
+ */
+export function resolveAuthoritativeVisibleSummaryText(options: {
+  operationOwnedSummary: string | null | undefined;
+  /** Stale React/render snapshot — ignored for post-write truth. */
+  staleReactSummary?: string | null | undefined;
+}): string {
+  void GERMAN_SUMMARY_V2_VISIBLE_POSTWRITE_381_REVISION;
+  void options.staleReactSummary;
+  return typeof options.operationOwnedSummary === 'string'
+    ? options.operationOwnedSummary
+    : '';
 }
 
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
@@ -2176,8 +2196,9 @@ export class SummaryAiDiagnosticSession {
       : null;
     const durationStillOk = !ok
       || (visibleCount === 1 && matches === true);
+    // Same normalizer as finalValidatedCandidateHash / finalNormalizedHash.
     const visibleHash = typeof visibleText === 'string' && visibleText.trim()
-      ? fingerprintText(visibleText.replace(/\s+/g, ' ').trim())
+      ? fingerprintText(normalizeSummaryCandidateText(visibleText) || 'empty')
       : null;
     void SUMMARY_VISIBLE_ROLE_LOCALE_VERIFICATION_322_REVISION;
     let visibleRoleOk = true;
@@ -2212,6 +2233,77 @@ export class SummaryAiDiagnosticSession {
         visibleRoleOk = false;
       }
       void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
+      void GERMAN_SUMMARY_V2_VISIBLE_POSTWRITE_381_REVISION;
+      const requiredIdsDe = Array.isArray(this.draft.requiredCurrentDutyFactIds)
+        ? this.draft.requiredCurrentDutyFactIds
+        : [];
+      const usesSummaryV2FactIdsDe = requiredIdsDe.length > 0
+        && requiredIdsDe.every((id) => String(id || '').startsWith('v2_entry_'));
+      if (usesSummaryV2FactIdsDe) {
+        // V2 entry-owned IDs are not German warehouse canonical IDs.
+        // Cover against the immutable V2 required set by requiring the visible
+        // text to match the final candidate hash, then reuse finalize coverage.
+        const requiredCurrentDe = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
+        const requiredPriorDe = Number(this.draft.requiredPriorDutyFactCount ?? 0);
+        const finalHash = this.draft.finalNormalizedHash
+          ?? this.draft.finalValidatedCandidateHash
+          ?? null;
+        const matchesFinal = Boolean(
+          visibleHash
+          && finalHash
+          && visibleHash === finalHash,
+        );
+        visibleDutyRequired = requiredCurrentDe;
+        visibleDutyCovered = matchesFinal
+          ? Number(this.draft.coveredCurrentDutyFactCount ?? 0)
+          : 0;
+        visibleDutyOk = requiredCurrentDe === 0
+          || (matchesFinal && visibleDutyCovered >= requiredCurrentDe);
+        visiblePriorDutyRequired = requiredPriorDe;
+        visiblePriorDutyCovered = matchesFinal
+          ? Number(this.draft.coveredPriorDutyFactCount ?? 0)
+          : 0;
+        visiblePriorDutyOk = requiredPriorDe === 0
+          || (matchesFinal && visiblePriorDutyCovered >= requiredPriorDe);
+        const grammar = validateGermanGeneratedCaseGrammar(visibleText);
+        visibleGrammarOk = grammar.germanControlledCaseGrammarPassed;
+        // Duration scope against the same authoritative visible text.
+        visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false
+          && countSummaryDurationExpressions(visibleText, 'de') === 1;
+        if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrentDe >= 3) {
+          visibleDutyOk = false;
+        }
+        const setHash = this.draft.finalCurrentDutyRequiredFactSetHash
+          ?? fingerprintText(requiredIdsDe.join('|') || 'empty_required_set');
+        const matchCounts: Record<string, number> = {};
+        const matchUnits: Record<string, string[]> = {};
+        for (const id of requiredIdsDe) {
+          const key = String(id);
+          matchCounts[key] = matchesFinal ? 1 : 0;
+          matchUnits[key] = matchesFinal && visibleHash ? [visibleHash] : [];
+        }
+        this.patch({
+          visibleCurrentDutyRequiredFactParityPassed: visibleDutyOk && matchesFinal,
+          visibleCurrentDutyRequiredFactCountMatchesFinal:
+            visibleDutyRequired === requiredCurrentDe,
+          visibleCurrentDutyRequiredFactSetHash: setHash,
+          finalCurrentDutyRequiredFactSetHash: setHash,
+          visibleCurrentDutyFactMatchCountsByFactHash: matchCounts,
+          visibleCurrentDutyFactMatchedUnitHashesByFactHash: matchUnits,
+          visibleMissingCurrentDutyFactIdHashes: [],
+          visiblePriorDutyRequiredFactParityPassed: visiblePriorDutyOk,
+          visibleSummaryMatchesFinalHash: matchesFinal,
+          finalTypedFailureReason: !matchesFinal
+            ? 'visible_summary_hash_mismatch'
+            : (!visibleDutyOk
+              ? (
+                requiredCurrentDe > 0 && visibleDutyCovered === 0
+                  ? 'visible_current_duty_required_set_missing'
+                  : 'visible_current_duty_coverage_failed'
+              )
+              : null),
+        });
+      } else {
       const facts = rebuildGermanDutyFactsFromIds(this.draft.requiredCurrentDutyFactIds);
       if (facts.length > 0) {
         const duty = validateSummaryEntryDutyCoverage({
@@ -2274,6 +2366,7 @@ export class SummaryAiDiagnosticSession {
       if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrentDe >= 3) {
         visibleDutyOk = false;
       }
+      } // end legacy German warehouse visible path
     }
     if (ok && durationStillOk && locale === 'en' && typeof visibleText === 'string') {
       void ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION;
@@ -2689,7 +2782,10 @@ export class SummaryAiDiagnosticSession {
         if (
           !visibleDutyOk
           && typeof existing === 'string'
-          && existing.startsWith('visible_current_duty_')
+          && (
+            existing.startsWith('visible_current_duty_')
+            || existing === 'visible_summary_hash_mismatch'
+          )
         ) {
           return existing;
         }
