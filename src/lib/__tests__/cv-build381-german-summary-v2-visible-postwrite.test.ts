@@ -283,8 +283,21 @@ describe('AAB-381 German Summary V2 post-write visible validation', () => {
     expect(session.evaluatePreApplyDecisionGates().passed).toBe(true);
     session.recordVisibleApply(true, 11, mutated);
     expect(session.visibleApplySucceeded).toBe(false);
-    expect(session.draft.visibleSummaryMatchesFinalHash).toBe(false);
-    expect(session.draft.raceGuardResult).toBe('fail');
+    const draft = (session as unknown as {
+      draft: {
+        visibleSummaryMatchesFinalHash?: boolean | null;
+        raceGuardResult?: string | null;
+        actualRaceDetected?: boolean | null;
+        finalTypedFailureReason?: string | null;
+        visibleApplyFailureStage?: string | null;
+      };
+    }).draft;
+    expect(draft.visibleSummaryMatchesFinalHash).toBe(false);
+    // AAB-387: visible/persisted mismatch is a state-commit failure, not a source race.
+    expect(draft.raceGuardResult).toBe('ok');
+    expect(draft.actualRaceDetected).toBe(false);
+    expect(draft.finalTypedFailureReason).toBe('summary_state_write_failed');
+    expect(draft.visibleApplyFailureStage).toBe('post_write_visible_hash_mismatch');
     expect(getProAiUsageCount()).toBe(11);
   });
 });

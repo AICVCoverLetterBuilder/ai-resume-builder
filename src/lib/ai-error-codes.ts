@@ -31,6 +31,8 @@ export const AI_ERROR_CODES = [
   'stronger_content_generation_failed',
   'ai_noop',
   'ai_request_stale',
+  /** Selected candidate passed validation but visible/persisted commit failed. */
+  'summary_state_write_failed',
 ] as const;
 
 export type AiErrorCode = (typeof AI_ERROR_CODES)[number];
@@ -387,9 +389,32 @@ const AI_NOOP: MsgMap = {
 const AI_REQUEST_STALE: MsgMap = {
   en: 'Your CV changed while AI was running. Please try again.',
   sr: 'CV se promenio dok je AI radio. Pokušajte ponovo.',
+  hr: 'CV se promijenio dok je AI radio. Pokušajte ponovno.',
   hi: 'AI चलते समय आपका CV बदल गया। कृपया पुनः प्रयास करें।',
   de: 'Ihr CV hat sich während der KI-Anfrage geändert. Bitte erneut versuchen.',
+  es: 'Tu CV cambió mientras la IA estaba en curso. Inténtalo de nuevo.',
+  fr: 'Votre CV a changé pendant l’exécution de l’IA. Réessayez.',
+  it: 'Il CV è cambiato mentre l’IA era in esecuzione. Riprova.',
+  ar: 'تغيّر سيرتك الذاتية أثناء تشغيل الذكاء الاصطناعي. يُرجى المحاولة مجددًا.',
+  ru: 'Ваше CV изменилось, пока работал ИИ. Повторите попытку.',
+  'pt-BR': 'Seu CV mudou enquanto a IA estava em execução. Tente novamente.',
   ja: 'AIの処理中にCVが変更されました。もう一度お試しください。',
+};
+
+/** Candidate was valid; React/cvRef/textarea/persistence commit did not stick. */
+const SUMMARY_STATE_WRITE_FAILED: MsgMap = {
+  en: 'The updated summary could not be saved to the editor. Please try again.',
+  de: 'Die aktualisierte Zusammenfassung konnte nicht im Editor gespeichert werden. Bitte erneut versuchen.',
+  fr: 'Le résumé mis à jour n’a pas pu être enregistré dans l’éditeur. Réessayez.',
+  es: 'No se pudo guardar el resumen actualizado en el editor. Inténtalo de nuevo.',
+  it: 'Il riepilogo aggiornato non è stato salvato nell’editor. Riprova.',
+  'pt-BR': 'Não foi possível salvar o resumo atualizado no editor. Tente novamente.',
+  ru: 'Обновлённое резюме не удалось сохранить в редакторе. Повторите попытку.',
+  sr: 'Ažurirani rezime nije mogao da se sačuva u uređivaču. Pokušajte ponovo.',
+  hr: 'Ažurirani sažetak nije bilo moguće spremiti u uređivač. Pokušajte ponovno.',
+  hi: 'अपडेट किया गया सारांश संपादक में सहेजा नहीं जा सका। कृपया पुनः प्रयास करें।',
+  ar: 'تعذّر حفظ الملخص المحدَّث في المحرر. يُرجى المحاولة مجددًا.',
+  ja: '更新された要約を編集画面に保存できませんでした。もう一度お試しください。',
 };
 
 function pick(map: MsgMap, locale: Locale | string): string {
@@ -460,6 +485,8 @@ export function aiErrorMessage(
       return pick(AI_NOOP, locale);
     case 'ai_request_stale':
       return pick(AI_REQUEST_STALE, locale);
+    case 'summary_state_write_failed':
+      return pick(SUMMARY_STATE_WRITE_FAILED, locale);
     default:
       return pick(PROVIDER_UNAVAILABLE, locale);
   }
@@ -502,7 +529,15 @@ export function mapExperienceAiFailureToErrorCode(
     case 'summary_noop_after_normalization':
       return 'ai_noop';
     case 'ai_request_stale':
+    case 'stale_summary_edited_in_flight':
+    case 'source_hash_changed_before_write':
       return 'ai_request_stale';
+    case 'summary_state_write_failed':
+    case 'visible_summary_hash_mismatch':
+    case 'post_write_visible_hash_mismatch':
+    case 'write_did_not_materialize_selected_hash':
+      // Candidate already passed validation — do not claim content validation failed.
+      return 'summary_state_write_failed';
     default:
       return 'generation_validation_failed';
   }

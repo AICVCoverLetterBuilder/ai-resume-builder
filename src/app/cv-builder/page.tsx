@@ -93,9 +93,18 @@ import { buildExperienceDurationSnapshot, durationToPromptToken } from '@/lib/cv
 import { applyCvContentQuality } from '@/lib/cv-content-quality';
 import {
   applyFinalizedBulletsToCv,
-  applyFinalizedSummaryToCv,
   finalizeCvAiFieldForApply,
 } from '@/lib/cv-ai-finalize-apply';
+import {
+  SUMMARY_TRANSACTIONAL_APPLY_387_REVISION,
+  createSummaryApplyOwnershipState,
+  commitSummaryApplyTransactionally,
+  rollbackSummaryApplyTransactionally,
+  shouldAcceptIncomingSummaryCv,
+  shouldFlushSummaryAutosave,
+  hashSummaryTextForApply,
+  classifySummaryVisibleApplyFailure,
+} from '@/lib/cv-summary-transactional-apply';
 import {
   EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION,
   EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION,
@@ -236,6 +245,8 @@ export default function CVBuilderPage() {
   /** Race guard: latest job-context key per experience for bullets AI. */
   const latestBulletsContextKeyRef = useRef<Record<string, string>>({});
   const latestRewriteRequestIdRef = useRef<string | null>(null);
+  const summaryApplyOwnershipRef = useRef(createSummaryApplyOwnershipState());
+  void SUMMARY_TRANSACTIONAL_APPLY_387_REVISION;
   const commitCvUpdate = useCallback((updater: (prev: CVData) => CVData) => {
     setCv((prev) => {
       const next = updater(prev);
@@ -245,6 +256,15 @@ export default function CVBuilderPage() {
       }
       return next;
     });
+  }, [setCurrentCv]);
+  /** Synchronous Summary AI apply: cvRef first, then React + persist ownership. */
+  const scheduleSummaryCvCommit = useCallback((next: CVData) => {
+    // Keep cvRef authoritative even if React batches the setState updater.
+    cvRef.current = next;
+    setCv(next);
+  }, []);
+  const persistSummaryCvNow = useCallback((next: CVData) => {
+    setCurrentCv(next);
   }, [setCurrentCv]);
   const [step, setStep] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
@@ -287,12 +307,30 @@ export default function CVBuilderPage() {
 
   useEffect(() => {
     if (currentCv) {
+      if (!shouldAcceptIncomingSummaryCv({
+        ownership: summaryApplyOwnershipRef.current,
+        incomingCv: currentCv,
+        localCvRef: cvRef.current,
+      })) {
+        return;
+      }
       setCv(currentCv);
       cvRef.current = currentCv;
     }
   }, [currentCv]);
 
   useEffect(() => {
+    // Do not clobber a newer transactional Summary write with a stale React
+    // render snapshot that has not yet absorbed scheduleSummaryCvCommit.
+    const ownership = summaryApplyOwnershipRef.current;
+    const nextHash = hashSummaryTextForApply(cv.summary);
+    if (
+      ownership.authoritativeSummaryHash
+      && hashSummaryTextForApply(cvRef.current.summary) === ownership.authoritativeSummaryHash
+      && nextHash !== ownership.authoritativeSummaryHash
+    ) {
+      return;
+    }
     cvRef.current = cv;
   }, [cv]);
 
@@ -322,8 +360,20 @@ export default function CVBuilderPage() {
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    const scheduledGeneration = summaryApplyOwnershipRef.current.generation;
+    const scheduledSummaryHash = hashSummaryTextForApply(cv.summary);
+    summaryApplyOwnershipRef.current.pendingAutosaveSourceHash = scheduledSummaryHash;
     autosaveTimerRef.current = setTimeout(() => {
-      setCurrentCv(cv);
+      const gate = shouldFlushSummaryAutosave({
+        ownership: summaryApplyOwnershipRef.current,
+        scheduledGeneration,
+        scheduledSummaryHash,
+        liveCvRef: cvRef.current,
+      });
+      if (!gate.flush || !gate.cvToPersist) {
+        return;
+      }
+      setCurrentCv(gate.cvToPersist);
     }, 800);
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
@@ -1253,24 +1303,88 @@ export default function CVBuilderPage() {
         toast.error(aiErrorMessage('ai_noop', locale));
         return;
       }
-      commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
-      // Visible validation must read the operation-owned CV/ref after temporary write
-      // — never a stale React/render Summary snapshot (AAB-381).
+      const applyCommit = commitSummaryApplyTransactionally({
+        cvRef,
+        ownership: summaryApplyOwnershipRef.current,
+        locale: requestedLocale,
+        finalized: finalizedGate,
+        operationSourceText: liveSummaryAtPress,
+        operationId: reqCtx.requestId,
+        scheduleReactCv: scheduleSummaryCvCommit,
+        persistCv: persistSummaryCvNow,
+      });
+      summaryDiag.patch({
+        ...applyCommit.lifecycle,
+        staleAutosaveWriteSuppressed: Boolean(
+          summaryApplyOwnershipRef.current.lastStaleAutosaveSuppressedHash,
+        ),
+      });
+      if (!applyCommit.ok) {
+        const classified = classifySummaryVisibleApplyFailure({
+          lifecycle: applyCommit.lifecycle,
+          visibleHash: applyCommit.lifecycle.cvRefHashImmediatelyAfterWrite,
+          selectedFinalHash: applyCommit.lifecycle.selectedFinalHash,
+        });
+        summaryDiag.patch({
+          actualRaceDetected: classified.actualRaceDetected,
+          actualRaceReason: classified.actualRaceReason,
+          visibleApplyFailureStage: classified.visibleApplyFailureStage,
+          raceGuardResult: classified.raceGuardResult,
+          finalTypedFailureReason: classified.finalTypedFailureReason,
+        });
+        const failCode = mapExperienceAiFailureToErrorCode(
+          classified.finalTypedFailureReason || 'summary_state_write_failed',
+        );
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: failCode, httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
+        return;
+      }
+      // Visible validation must read the operation-owned written Summary
+      // — never a stale React/render Summary snapshot (AAB-381 / AAB-387).
       const visibleSummaryText = resolveAuthoritativeVisibleSummaryText({
-        operationOwnedSummary: cvRef.current.summary,
+        operationOwnedSummary: applyCommit.writtenSummary,
+        staleReactSummary: '',
       });
       // Visible validation must pass before usage increment (AAB-326).
       summaryDiag.recordVisibleApply(true, countBefore, visibleSummaryText);
       const visibleOk = summaryDiag.visibleApplySucceeded;
       if (!visibleOk) {
-        const failReason = summaryDiag.finalTypedFailureReason
-          || 'visible_current_duty_coverage_failed';
+        const classified = classifySummaryVisibleApplyFailure({
+          lifecycle: {
+            ...applyCommit.lifecycle,
+            visibleApplyFailureStage: 'post_write_visible_hash_mismatch',
+          },
+          visibleHash: hashSummaryTextForApply(visibleSummaryText),
+          selectedFinalHash: applyCommit.lifecycle.selectedFinalHash,
+        });
+        summaryDiag.patch({
+          actualRaceDetected: classified.actualRaceDetected,
+          actualRaceReason: classified.actualRaceReason,
+          visibleApplyFailureStage: classified.visibleApplyFailureStage,
+          raceGuardResult: classified.raceGuardResult,
+          finalTypedFailureReason: classified.finalTypedFailureReason
+            || summaryDiag.finalTypedFailureReason,
+        });
+        const failReason = classified.finalTypedFailureReason
+          || summaryDiag.finalTypedFailureReason
+          || 'summary_state_write_failed';
         const failCode = mapExperienceAiFailureToErrorCode(failReason);
-        // Roll back Summary text when visible gates fail after write.
-        commitCvUpdate((prev) => ({
-          ...prev,
-          summary: liveSummaryAtPress,
-        }));
+        rollbackSummaryApplyTransactionally({
+          cvRef,
+          ownership: summaryApplyOwnershipRef.current,
+          operationSourceText: liveSummaryAtPress,
+          scheduleReactCv: scheduleSummaryCvCommit,
+          persistCv: persistSummaryCvNow,
+        });
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
@@ -2542,6 +2656,19 @@ export default function CVBuilderPage() {
           applied: false,
           reason: 'stale_summary_edited_in_flight',
         });
+        summaryDiag.patch({
+          actualRaceDetected: true,
+          actualRaceReason: 'stale_summary_edited_in_flight',
+          raceGuardResult: 'fail',
+          finalTypedFailureReason: 'stale_summary_edited_in_flight',
+          visibleApplyFailureStage: 'in_flight_source_changed',
+        });
+        summaryDiag.stage('race_guard', 'fail', 'stale_summary_edited_in_flight');
+        try {
+          await summaryDiag.resolveVersions();
+          summaryDiag.commit();
+        } catch { /* ignore */ }
+        toast.error(aiErrorMessage('ai_request_stale', locale));
         return;
       }
       const referenceDateIso = new Date().toISOString().slice(0, 10);
@@ -2653,21 +2780,90 @@ export default function CVBuilderPage() {
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
-      commitCvUpdate((prev) => applyFinalizedSummaryToCv(prev, requestedLocale, finalizedGate));
+      const applyCommit = commitSummaryApplyTransactionally({
+        cvRef,
+        ownership: summaryApplyOwnershipRef.current,
+        locale: requestedLocale,
+        finalized: finalizedGate,
+        operationSourceText: liveSummaryAtPress,
+        operationId: reqCtx.requestId,
+        scheduleReactCv: scheduleSummaryCvCommit,
+        persistCv: persistSummaryCvNow,
+      });
+      summaryDiag.patch({
+        ...applyCommit.lifecycle,
+        staleAutosaveWriteSuppressed: Boolean(
+          summaryApplyOwnershipRef.current.lastStaleAutosaveSuppressedHash,
+        ),
+      });
+      if (!applyCommit.ok) {
+        const classified = classifySummaryVisibleApplyFailure({
+          lifecycle: applyCommit.lifecycle,
+          visibleHash: applyCommit.lifecycle.cvRefHashImmediatelyAfterWrite,
+          selectedFinalHash: applyCommit.lifecycle.selectedFinalHash,
+        });
+        summaryDiag.patch({
+          actualRaceDetected: classified.actualRaceDetected,
+          actualRaceReason: classified.actualRaceReason,
+          visibleApplyFailureStage: classified.visibleApplyFailureStage,
+          raceGuardResult: classified.raceGuardResult,
+          finalTypedFailureReason: classified.finalTypedFailureReason,
+        });
+        const failCode = mapExperienceAiFailureToErrorCode(
+          classified.finalTypedFailureReason || 'summary_state_write_failed',
+        );
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: failCode, httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
+        try {
+          await summaryDiag.resolveVersions();
+          summaryDiag.commit();
+        } catch { /* ignore */ }
+        toast.error(msg ?? aiErrorMessage(failCode, locale));
+        return;
+      }
       const visibleSummaryText = resolveAuthoritativeVisibleSummaryText({
-        operationOwnedSummary: cvRef.current.summary,
+        operationOwnedSummary: applyCommit.writtenSummary,
+        staleReactSummary: '',
       });
       // Visible validation before usage increment (same Generate contract).
       summaryDiag.recordVisibleApply(true, countBefore, visibleSummaryText);
       const visibleOk = summaryDiag.visibleApplySucceeded;
       if (!visibleOk) {
-        const failReason = summaryDiag.finalTypedFailureReason
-          || 'visible_current_duty_coverage_failed';
+        const classified = classifySummaryVisibleApplyFailure({
+          lifecycle: {
+            ...applyCommit.lifecycle,
+            visibleApplyFailureStage: 'post_write_visible_hash_mismatch',
+          },
+          visibleHash: hashSummaryTextForApply(visibleSummaryText),
+          selectedFinalHash: applyCommit.lifecycle.selectedFinalHash,
+        });
+        summaryDiag.patch({
+          actualRaceDetected: classified.actualRaceDetected,
+          actualRaceReason: classified.actualRaceReason,
+          visibleApplyFailureStage: classified.visibleApplyFailureStage,
+          raceGuardResult: classified.raceGuardResult,
+          finalTypedFailureReason: classified.finalTypedFailureReason
+            || summaryDiag.finalTypedFailureReason,
+        });
+        const failReason = classified.finalTypedFailureReason
+          || summaryDiag.finalTypedFailureReason
+          || 'summary_state_write_failed';
         const failCode = mapExperienceAiFailureToErrorCode(failReason);
-        commitCvUpdate((prev) => ({
-          ...prev,
-          summary: liveSummaryAtPress,
-        }));
+        rollbackSummaryApplyTransactionally({
+          cvRef,
+          ownership: summaryApplyOwnershipRef.current,
+          operationSourceText: liveSummaryAtPress,
+          scheduleReactCv: scheduleSummaryCvCommit,
+          persistCv: persistSummaryCvNow,
+        });
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,

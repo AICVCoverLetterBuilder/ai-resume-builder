@@ -476,6 +476,23 @@ export type SummaryAiDiagnosticTrace = {
   usageCountAfter: number;
   finalTypedFailureReason: string | null;
   rejectionStage: string | null;
+  /** AAB-387 transactional apply lifecycle (privacy-safe hashes only). */
+  operationSourceHash?: string | null;
+  selectedFinalHash?: string | null;
+  cvRefHashBeforeWrite?: string | null;
+  cvRefHashImmediatelyAfterWrite?: string | null;
+  reactStateHashAfterCommit?: string | null;
+  textareaValueHashAfterCommit?: string | null;
+  persistedSummaryHashAfterCommit?: string | null;
+  pendingAutosaveSourceHash?: string | null;
+  staleAutosaveWriteSuppressed?: boolean | null;
+  activeOperationIdHashBeforeWrite?: string | null;
+  activeOperationIdHashAfterWrite?: string | null;
+  applyOwnershipPassed?: boolean | null;
+  actualRaceDetected?: boolean | null;
+  actualRaceReason?: string | null;
+  postWriteReadSource?: string | null;
+  visibleApplyFailureStage?: string | null;
   stages: SummaryAiDiagStage[];
   /** cv-ai-diagnostics-v2 additive contract fields */
   diagnosticContractRevision?: string;
@@ -2815,6 +2832,56 @@ export class SummaryAiDiagnosticSession {
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
       && visiblePriorDutyOk && visibleGrammarOk && visibleLocaleOk && visibleDurationScopeOk;
     void SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION;
+    const finalHashForRace = this.draft.finalNormalizedHash
+      ?? this.draft.finalValidatedCandidateHash
+      ?? null;
+    const visibleHashMismatch = Boolean(
+      visibleHash
+      && finalHashForRace
+      && visibleHash !== finalHashForRace,
+    );
+    const actualRaceDetected = this.draft.actualRaceDetected === true;
+    // AAB-387: visible/persisted hash mismatch after a valid candidate is a
+    // state-commit failure, not a source race.
+    const raceGuardResult: 'ok' | 'fail' | 'skipped' = applyOk
+      ? 'ok'
+      : actualRaceDetected
+        ? 'fail'
+        : (ok ? 'ok' : (this.draft.raceGuardResult || 'skipped'));
+    const typedFromLifecycle = (() => {
+      if (!ok || !durationStillOk) return this.draft.finalTypedFailureReason;
+      if (actualRaceDetected) {
+        return this.draft.actualRaceReason
+          || this.draft.finalTypedFailureReason
+          || 'stale_summary_edited_in_flight';
+      }
+      // Prefer more specific typed reason already patched during EN visible duty validation.
+      const existing = this.draft.finalTypedFailureReason;
+      if (
+        !visibleDutyOk
+        && typeof existing === 'string'
+        && (
+          existing.startsWith('visible_current_duty_')
+          || existing === 'visible_summary_hash_mismatch'
+          || existing === 'summary_state_write_failed'
+        )
+      ) {
+        return existing === 'visible_summary_hash_mismatch'
+          ? 'summary_state_write_failed'
+          : existing;
+      }
+      if (visibleHashMismatch && applyOk === false) {
+        return existing === 'visible_summary_hash_mismatch' || !existing
+          ? 'summary_state_write_failed'
+          : existing;
+      }
+      if (!visibleDutyOk) return 'visible_current_duty_coverage_failed';
+      if (!visiblePriorDutyOk) return 'visible_prior_duty_coverage_failed';
+      if (!visibleLocaleOk) return 'visible_locale_purity_failed';
+      if (!visibleGrammarOk) return 'visible_german_grammar_failed';
+      if (!visibleRoleOk) return 'visible_role_localization_mismatch';
+      return existing;
+    })();
     this.patch({
       visibleApplySucceeded: applyOk,
       contentLocaleUpdatedAfterApply: applyOk,
@@ -2877,35 +2944,25 @@ export class SummaryAiDiagnosticSession {
       visibleGermanGrammarValidationPassed: locale === 'de'
         ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
         : null,
-      // Applied summaries use an explicit race/context result of ok (sync finalize path).
-      raceGuardResult: applyOk ? 'ok' : (ok ? 'fail' : this.draft.raceGuardResult || 'skipped'),
+      // Applied summaries: only fail race_guard on a real source ownership conflict.
+      raceGuardResult,
+      actualRaceDetected,
+      actualRaceReason: actualRaceDetected
+        ? (this.draft.actualRaceReason || 'stale_summary_edited_in_flight')
+        : null,
+      visibleApplyFailureStage: applyOk
+        ? null
+        : (
+          this.draft.visibleApplyFailureStage
+          || (visibleHashMismatch ? 'post_write_visible_hash_mismatch' : null)
+        ),
       durationValidationPassed: durationStillOk
         ? this.draft.durationValidationPassed
         : false,
       finalPostconditionsPassed: applyOk
         ? this.draft.finalPostconditionsPassed
         : false,
-      finalTypedFailureReason: (() => {
-        if (!ok || !durationStillOk) return this.draft.finalTypedFailureReason;
-        // Prefer more specific typed reason already patched during EN visible duty validation.
-        const existing = this.draft.finalTypedFailureReason;
-        if (
-          !visibleDutyOk
-          && typeof existing === 'string'
-          && (
-            existing.startsWith('visible_current_duty_')
-            || existing === 'visible_summary_hash_mismatch'
-          )
-        ) {
-          return existing;
-        }
-        if (!visibleDutyOk) return 'visible_current_duty_coverage_failed';
-        if (!visiblePriorDutyOk) return 'visible_prior_duty_coverage_failed';
-        if (!visibleLocaleOk) return 'visible_locale_purity_failed';
-        if (!visibleGrammarOk) return 'visible_german_grammar_failed';
-        if (!visibleRoleOk) return 'visible_role_localization_mismatch';
-        return existing;
-      })(),
+      finalTypedFailureReason: typedFromLifecycle,
       // Duration idempotence is independent of visible apply success.
       durationFinalizerIdempotent: (() => {
         void SUMMARY_LOCALIZED_FAILURE_DIAGNOSTICS_307_REVISION;
@@ -2923,7 +2980,13 @@ export class SummaryAiDiagnosticSession {
       countedAsSuccess: applyOk,
     });
     this.stage('visible_apply', applyOk ? 'ok' : 'fail');
-    this.stage('race_guard', applyOk ? 'ok' : (ok ? 'fail' : 'skipped'));
+    this.stage(
+      'race_guard',
+      raceGuardResult,
+      actualRaceDetected
+        ? (this.draft.actualRaceReason || 'stale_summary_edited_in_flight')
+        : (visibleHashMismatch && !applyOk ? 'state_commit_not_race' : undefined),
+    );
   }
 
   /**
