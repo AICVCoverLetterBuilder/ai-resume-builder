@@ -1,4 +1,6 @@
 import type { SummaryV2EntryFact } from './types';
+import { bulletToGermanWoIchClause } from './german-surface';
+import type { SummaryV2DutyTense } from './tense';
 
 const STOP = new Set([
   'with', 'from', 'that', 'this', 'their', 'them', 'they', 'have', 'has', 'had',
@@ -28,7 +30,7 @@ export function splitLiveDutyBullets(text: string, limit = 12): string[] {
 export function dutyTokenStems(bullet: string): string[] {
   return (bullet || '')
     .toLowerCase()
-    .split(/[^a-z0-9\u0400-\u04FF\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]+/u)
+    .split(/[^a-zäöüßàáâãåæçèéêëìíîïñòóôõøùúûüýÿ0-9\u0400-\u04FF\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\u3400-\u9FFF]+/iu)
     .filter((t) => t.length >= 3 && !STOP.has(t));
 }
 
@@ -40,6 +42,10 @@ function morphVariants(token: string): string[] {
   if (t.endsWith('ed') && t.length > 4) out.add(t.slice(0, -2));
   if (t.endsWith('es') && t.length > 4) out.add(t.slice(0, -2));
   if (t.endsWith('s') && t.length > 3) out.add(t.slice(0, -1));
+  // German 3sg / 1sg: führt↔führe, prüft↔prüfe, nimmt↔nehme
+  if (t.endsWith('t') && t.length > 3) out.add(`${t.slice(0, -1)}e`);
+  if (t.endsWith('e') && t.length > 3) out.add(`${t.slice(0, -1)}t`);
+  if (t.endsWith('te') && t.length > 4) out.add(t.slice(0, -2));
   return [...out];
 }
 
@@ -67,7 +73,11 @@ export function buildEntryOwnedFactsFromLiveDescription(options: {
   });
 }
 
-export function factCoveredInText(fact: SummaryV2EntryFact, text: string): boolean {
+export function factCoveredInText(
+  fact: SummaryV2EntryFact,
+  text: string,
+  tense: SummaryV2DutyTense = 'present',
+): boolean {
   const corpus = (text || '').toLowerCase();
   if (!corpus) return false;
   const raw = fact.bulletText.replace(/[.;]+$/u, '').trim().toLowerCase();
@@ -76,6 +86,8 @@ export function factCoveredInText(fact: SummaryV2EntryFact, text: string): boole
     stem.length >= 3 ? stem : full
   ));
   if (deinflected.length >= 8 && corpus.includes(deinflected)) return true;
+  const deClause = bulletToGermanWoIchClause(fact.bulletText, tense).toLowerCase();
+  if (deClause.length >= 8 && corpus.includes(deClause)) return true;
   const tokens = fact.tokenStems;
   if (tokens.length === 0) return false;
   const hits = tokens.filter((t) => morphVariants(t).some((v) => corpus.includes(v))).length;

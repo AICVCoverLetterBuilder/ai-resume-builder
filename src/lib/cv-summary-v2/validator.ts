@@ -2,6 +2,7 @@ import type { Locale } from '@/lib/i18n/translations';
 import { SUMMARY_V2_REVISION } from './flag';
 import { factCoveredInText } from './facts';
 import { bulletToWhereClauseEn, dutyTenseFromEmploymentState, summaryHasMalformedDoublePast } from './tense';
+import { bulletToGermanWoIchClause } from './german-surface';
 import type {
   SummaryV2EmploymentState,
   SummaryV2EntryFact,
@@ -111,6 +112,26 @@ export function entryDutiesMatchEmploymentTense(
     const heads = expected.split(/\s+and\s+/u).map((p) => p.trim().split(/\s+/u)[0]).filter(Boolean);
     if (heads.length >= 2 && heads.every((h) => corpus.includes(h))) return true;
 
+    if (locale === 'de') {
+      // German V2 uses first-person "wo ich …" clauses, not raw live bullets.
+      const deClause = bulletToGermanWoIchClause(f.bulletText, tense).toLowerCase();
+      if (deClause && corpus.includes(deClause)) return true;
+      // Also accept significant stems from the live bullet once the 1sg finite is present.
+      const live = (f.bulletText || '').replace(/[.;]+$/u, '').trim().toLowerCase();
+      const stems = live
+        .split(/[^a-zäöüß0-9]+/iu)
+        .filter((t) => t.length >= 5)
+        .slice(0, 4);
+      if (
+        stems.length > 0
+        && stems.every((s) => corpus.includes(s))
+        && /\b(?:prüfe|prüfte|koordiniere|koordinierte|erstellte|anpasste|vorbereitete|überprüfte|spreche|nehme|nahm|führe|führte|durchführe|entgegennehme|entgegennahm|begrüßte|verwaltete)\b/iu
+          .test(corpus)
+      ) {
+        return true;
+      }
+    }
+
     if (locale !== 'en') {
       // Non-EN shells embed live bullets unchanged (present or already-past native).
       const live = (f.bulletText || '').replace(/[.;]+$/u, '').trim().toLowerCase();
@@ -132,11 +153,22 @@ export function validateSummaryV2AgainstManifest(
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const requiredCurrent = manifest.requiredCurrentFacts;
   const requiredPrior = manifest.requiredPriorFacts;
-  const coveredCurrent = requiredCurrent.filter((f) => factCoveredInText(f, text)).length;
-  const coveredPrior = requiredPrior.filter((f) => factCoveredInText(f, text)).length;
 
   const current = manifest.current;
   const prior = manifest.priors[0] || null;
+  const coveredCurrent = requiredCurrent.filter((f) => factCoveredInText(
+    f,
+    text,
+    dutyTenseFromEmploymentState(current?.employmentState),
+  )).length;
+  const coveredPrior = requiredPrior.filter((f) => {
+    const owner = manifest.priors.find((p) => p.entryId === f.entryId);
+    return factCoveredInText(
+      f,
+      text,
+      dutyTenseFromEmploymentState(owner?.employmentState),
+    );
+  }).length;
   const currentRolePresent = Boolean(
     current?.role
     && new RegExp(escapeRegExp(current.role), 'iu').test(text),

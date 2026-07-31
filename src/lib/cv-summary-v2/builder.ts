@@ -10,8 +10,14 @@ import {
   dutyBulletForLocaleShell,
   dutyTenseFromEmploymentState,
 } from './tense';
+import { buildGermanSummaryV2FromManifest } from './german-surface';
 
 export { bulletToWhereClauseEn } from './tense';
+export {
+  buildGermanSummaryV2FromManifest,
+  bulletToGermanWoIchClause,
+  GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION,
+} from './german-surface';
 
 function joinDutyClauses(
   facts: SummaryV2EntryFact[],
@@ -260,6 +266,9 @@ export function buildSummaryV2DeterministicText(
   void SUMMARY_V2_REVISION;
   if (manifest.locale === 'en') {
     return buildEnglishFromManifest(manifest);
+  }
+  if (manifest.locale === 'de') {
+    return buildGermanSummaryV2FromManifest(manifest);
   }
   return buildLocaleShellFromManifest(manifest);
 }

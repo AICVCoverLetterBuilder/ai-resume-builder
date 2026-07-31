@@ -24,6 +24,9 @@ export const SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION =
 /** AAB-380 — German Summary V2 preapply diagnostic completeness (non-null fields). */
 export const GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION =
   'german-summary-v2-preapply-completeness-380-v1' as const;
+/** AAB-382 — German first-person surface grammar (finite sentences + agreement). */
+export const GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION =
+  'german-summary-v2-first-person-surface-382-v1' as const;
 
 void GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION;
 void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
@@ -34,6 +37,7 @@ void SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION;
 void SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION;
 void SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION;
 void GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION;
+void GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION;
 
 export type GermanCurrentDutyFactId =
   | 'incoming_goods_check'
@@ -369,6 +373,7 @@ export function validateGermanGeneratedCaseGrammar(
   summary: string,
 ): GermanControlledCaseGrammarResult {
   void GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION;
+  void GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const failureKinds: string[] = [];
   let invalidErfahrungInAccusativeDetected = false;
@@ -390,6 +395,60 @@ export function validateGermanGeneratedCaseGrammar(
   if (/Erfahrung\s+in\s+die\s+(?:Koordination|Vorbereitung|Bewegung)\b/iu.test(text)) {
     invalidErfahrungInAccusativeDetected = true;
     failureKinds.push('erfahrung_in_accusative_duty_np');
+  }
+
+  const units = text
+    ? text.split(/(?<=[.!?])\s+(?=\S)/u).map((u) => u.trim()).filter(Boolean)
+    : [];
+
+  // Duration must be a complete finite sentence — not a bare "mit etwa … Erfahrung." fragment.
+  for (const u of units) {
+    if (
+      /^(?:mit\s+)?(?:etwa|rund|ca\.?|ungefähr)\s+\S[\s\S]*\bJahre?n?\s+(?:Berufs)?Erfahrung\.?$/iu
+        .test(u)
+      && !/\b(?:Ich|verfüge|habe|bringe)\b/u.test(u)
+    ) {
+      failureKinds.push('duration_sentence_fragment');
+      break;
+    }
+  }
+
+  // Standalone capitalized third-person finite verbs after dashes / semicolons / sentence breaks.
+  // Device shape: "Ich arbeite … — Führt / Prüft / Tauscht".
+  if (
+    /(?:^|[\u2014\u2013;]|[\u2014\u2013]\s*|\s[\u2014\u2013]\s*)\s*(?:Führt|Prüft|Tauscht|Koordiniert|Erstellt|Kontrolliert|Passt|Nimmt|Gibt|Spricht|Schreibt)\b/u
+      .test(text)
+    || /(?:^|[.!?]\s+)(?:Führt|Prüft|Tauscht|Koordiniert|Erstellt|Kontrolliert)\b/u.test(text)
+  ) {
+    failureKinds.push('standalone_capitalized_third_person_verb');
+  }
+
+  // First-person introduction mixed with third-person duty clauses (lowercase 3sg after dash/semicolon).
+  if (
+    /\bIch\b/u.test(text)
+    && /[\u2014\u2013;]\s*(?:führt|prüft|tauscht|koordiniert|erstellt|kontrolliert|passt)\b/iu.test(text)
+  ) {
+    failureKinds.push('first_person_third_person_mismatch');
+  }
+
+  // Malformed coordination / dangling participle NP: "sowie vorgenommene Änderungen".
+  if (
+    /\bsowie\s+(?:vorgenommene|durchgeführte|erfolgte|stattgefundene|gemachte)\s+\p{L}+/iu.test(text)
+    && !/\bsowie\s+(?:vorgenommene|durchgeführte|erfolgte|stattgefundene|gemachte)\s+\p{L}+\s+\p{L}*?(?:habe|hatte|wurde|waren|bin|war|prüfe|erstellte|anpasste)\b/iu
+      .test(text)
+  ) {
+    failureKinds.push('malformed_sowie_participial_coordination');
+  }
+
+  // Dangling bare participle / fragment units without a finite verb cue.
+  for (const u of units) {
+    if (
+      /^(?:sowie\s+)?(?:vorgenommene|durchgeführte|erfolgte)\s+\p{L}+/iu.test(u)
+      && !/\b(?:Ich|ich|verfüge|arbeite|arbeitete|prüfe|erstellte|habe|hatte)\b/u.test(u)
+    ) {
+      failureKinds.push('dangling_participial_fragment');
+      break;
+    }
   }
 
   return {

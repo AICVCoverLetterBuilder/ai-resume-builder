@@ -31,6 +31,9 @@ export {
 export {
   buildSummaryV2DeterministicText,
   bulletToWhereClauseEn,
+  buildGermanSummaryV2FromManifest,
+  bulletToGermanWoIchClause,
+  GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION,
   isSupportedSummaryV2Locale,
 } from './builder';
 export {

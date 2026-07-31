@@ -779,6 +779,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
   SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
   GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION,
+  'german-summary-v2-first-person-surface-382-v1',
   ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
@@ -3142,7 +3143,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? 'summary_v2_provider_rejected_or_repaired'
         : (v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null),
       groundingValidationPassed: success && !v2CleanNoOp,
-      grammarValidationPassed: success && !v2CleanNoOp,
+      grammarValidationPassed: locale === 'de' && deV2Completeness
+        ? deV2Completeness.germanControlledCaseGrammarPassed
+        : (success && !v2CleanNoOp),
       slotValidationPassed: success && !v2CleanNoOp,
       priorRoleGroundingPassed: v2.validation.priorRolePresent && v2.validation.priorEmployerPresent,
       unsupportedClaimCount: v2.validation.unsupportedClaimCount,
