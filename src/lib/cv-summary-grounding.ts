@@ -406,6 +406,7 @@ export {
   SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
   SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
   SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
+  GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION,
   stripGermanUnsupportedCompetencyUnits,
   scanGermanSummaryCompetencyClaims,
   analyzeGermanSummaryDurationScope,
@@ -432,6 +433,7 @@ export {
   validateSummaryEntryDutyCoverage,
   verifyVisibleSummaryCurrentDutyCoverage,
   analyzeCurrentDutyRequiredFactParity,
+  buildGermanSummaryV2PreapplyCompletenessFields,
 } from './cv-german-summary-grounding';
 export {
   analyzeFrenchSummaryEmploymentQuality,

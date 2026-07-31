@@ -21,6 +21,9 @@ export const SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION =
   'summary-visible-duty-parity-324-v1' as const;
 export const SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION =
   'summary-duty-parity-apply-gate-324-v1' as const;
+/** AAB-380 — German Summary V2 preapply diagnostic completeness (non-null fields). */
+export const GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION =
+  'german-summary-v2-preapply-completeness-380-v1' as const;
 
 void GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION;
 void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
@@ -30,6 +33,7 @@ void GERMAN_SUMMARY_THIRD_CURRENT_DUTY_324_REVISION;
 void SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION;
 void SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION;
 void SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION;
+void GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION;
 
 export type GermanCurrentDutyFactId =
   | 'incoming_goods_check'
@@ -529,4 +533,92 @@ export function germanCurrentDutyDativeClause(
     default:
       return '';
   }
+}
+
+export type GermanSummaryV2PreapplyCompletenessFields = {
+  germanControlledCaseGrammarPassed: boolean;
+  finalGermanGrammarValidationPassed: boolean;
+  /** Always false — material categories are diagnostic-only for German Summary. */
+  materialCategoryCoverageUsedForFinalAcceptance: false;
+  authoritativeCanonicalCurrentDutyFactCount: number;
+  classifiedRequiredCurrentDutyFactCount: number;
+  unclassifiedAuthoritativeCurrentDutyFactCount: number;
+  requiredFactSetMatchesAuthoritativeFactSet: boolean;
+  currentDutyRequiredFactParityPassed: boolean;
+  blocksAcceptance: boolean;
+  blockReason: string | null;
+};
+
+/**
+ * AAB-380 — Truthful German Summary V2 preapply completeness fields.
+ * Grammar comes from the final-candidate controlled-case validator.
+ * Duty counts/parity come from the immutable V2 selection manifest
+ * (required current facts are the acceptance authority set).
+ */
+export function buildGermanSummaryV2PreapplyCompletenessFields(options: {
+  finalCandidateText: string;
+  requiredCurrentFacts: Array<{ factId: string }>;
+  /**
+   * Optional authoritative entry facts from the immutable manifest.
+   * Defaults to the required selection (V2 acceptance authority).
+   */
+  authoritativeCurrentFacts?: Array<{ factId: string }>;
+}): GermanSummaryV2PreapplyCompletenessFields {
+  void GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION;
+  const grammar = validateGermanGeneratedCaseGrammar(options.finalCandidateText || '');
+  const required = Array.isArray(options.requiredCurrentFacts)
+    ? options.requiredCurrentFacts
+    : [];
+  const authoritative = Array.isArray(options.authoritativeCurrentFacts)
+    ? options.authoritativeCurrentFacts
+    : required;
+
+  const requiredIds = required
+    .map((f) => String(f?.factId || '').trim())
+    .filter(Boolean);
+  const authoritativeIds = authoritative
+    .map((f) => String(f?.factId || '').trim())
+    .filter(Boolean);
+  const unclassifiedAuthoritativeCurrentDutyFactCount = Math.max(
+    0,
+    authoritative.length - authoritativeIds.length,
+  );
+  const classifiedRequiredCurrentDutyFactCount = requiredIds.length;
+  const authoritativeCanonicalCurrentDutyFactCount = authoritativeIds.length;
+
+  const requiredSet = new Set(requiredIds);
+  const authoritativeSet = new Set(authoritativeIds);
+  const requiredFactSetMatchesAuthoritativeFactSet = (
+    requiredSet.size === classifiedRequiredCurrentDutyFactCount
+    && authoritativeSet.size === authoritativeCanonicalCurrentDutyFactCount
+    && classifiedRequiredCurrentDutyFactCount === authoritativeCanonicalCurrentDutyFactCount
+    && unclassifiedAuthoritativeCurrentDutyFactCount === 0
+    && [...requiredSet].every((id) => authoritativeSet.has(id))
+    && [...authoritativeSet].every((id) => requiredSet.has(id))
+  );
+  const currentDutyRequiredFactParityPassed = (
+    requiredFactSetMatchesAuthoritativeFactSet
+    && classifiedRequiredCurrentDutyFactCount === required.length
+    && unclassifiedAuthoritativeCurrentDutyFactCount === 0
+  );
+
+  let blockReason: string | null = null;
+  if (!grammar.germanControlledCaseGrammarPassed) {
+    blockReason = 'german_controlled_case_grammar_failed';
+  } else if (!currentDutyRequiredFactParityPassed) {
+    blockReason = 'current_duty_required_fact_parity_failed';
+  }
+
+  return {
+    germanControlledCaseGrammarPassed: grammar.germanControlledCaseGrammarPassed,
+    finalGermanGrammarValidationPassed: grammar.germanControlledCaseGrammarPassed,
+    materialCategoryCoverageUsedForFinalAcceptance: false,
+    authoritativeCanonicalCurrentDutyFactCount,
+    classifiedRequiredCurrentDutyFactCount,
+    unclassifiedAuthoritativeCurrentDutyFactCount,
+    requiredFactSetMatchesAuthoritativeFactSet,
+    currentDutyRequiredFactParityPassed,
+    blocksAcceptance: blockReason != null,
+    blockReason,
+  };
 }

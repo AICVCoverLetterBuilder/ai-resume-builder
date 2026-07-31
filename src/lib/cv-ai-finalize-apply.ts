@@ -133,6 +133,8 @@ import {
   SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
   SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
   SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
+  GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION,
+  buildGermanSummaryV2PreapplyCompletenessFields,
   stripGermanUnsupportedCompetencyUnits,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION,
   HINDI_SUMMARY_MEDIUM_GRAMMAR_REVISION_297,
@@ -776,6 +778,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
   SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
   SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
+  GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION,
   ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
@@ -2947,7 +2950,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const providerHash = providerRaw ? hashSummaryCandidate(providerRaw) : null;
     const providerRejected = Boolean(providerRaw) && v2.origin !== 'ai_generated';
     const v2UnitHashes = v2Units.map((u) => fingerprintText(u));
-    const success = !v2.blocked && v2.countedAsSuccess;
+    void GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION;
+    const deV2Completeness = locale === 'de'
+      ? buildGermanSummaryV2PreapplyCompletenessFields({
+        finalCandidateText: v2Text,
+        requiredCurrentFacts: v2.manifest.requiredCurrentFacts,
+      })
+      : null;
+    const deV2BlockReason = deV2Completeness?.blocksAcceptance
+      ? (deV2Completeness.blockReason || 'german_summary_v2_preapply_completeness_failed')
+      : null;
+    const success = !v2.blocked && v2.countedAsSuccess && !deV2BlockReason;
     const missingCurrent = Math.max(
       0,
       v2.validation.requiredCurrentFactCount - v2.validation.coveredCurrentFactCount,
@@ -3191,11 +3204,33 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (slot === 'prior_role') return ['prior_role_intro', 'prior_role_duties'];
         return [slot];
       }),
+      ...(deV2Completeness
+        ? {
+          germanControlledCaseGrammarPassed:
+            deV2Completeness.germanControlledCaseGrammarPassed,
+          finalGermanGrammarValidationPassed:
+            deV2Completeness.finalGermanGrammarValidationPassed,
+          materialCategoryCoverageUsedForFinalAcceptance:
+            deV2Completeness.materialCategoryCoverageUsedForFinalAcceptance,
+          authoritativeCanonicalCurrentDutyFactCount:
+            deV2Completeness.authoritativeCanonicalCurrentDutyFactCount,
+          classifiedRequiredCurrentDutyFactCount:
+            deV2Completeness.classifiedRequiredCurrentDutyFactCount,
+          unclassifiedAuthoritativeCurrentDutyFactCount:
+            deV2Completeness.unclassifiedAuthoritativeCurrentDutyFactCount,
+          requiredFactSetMatchesAuthoritativeFactSet:
+            deV2Completeness.requiredFactSetMatchesAuthoritativeFactSet,
+          currentDutyRequiredFactParityPassed:
+            deV2Completeness.currentDutyRequiredFactParityPassed,
+        }
+        : {}),
     };
-    if (v2.blocked || !v2.countedAsSuccess) {
+    if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason) {
       return {
         blocked: true,
-        reason: v2.reason || 'summary_v2_validation_failed',
+        reason: deV2BlockReason
+          || v2.reason
+          || 'summary_v2_validation_failed',
         text: liveSummary,
         origin: v2.origin,
         roleDutyConflict: false,
@@ -3203,12 +3238,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         diagnostics: {
           ...diagBase,
           finalPostconditionsPassed: false,
+          groundingValidationPassed: false,
+          grammarValidationPassed: deV2Completeness
+            ? deV2Completeness.germanControlledCaseGrammarPassed
+            : false,
+          slotValidationPassed: false,
           finalCandidateSource: v2.origin,
           noOpDetected: false,
           noOpCandidateKind: null,
           noOpRejectionReason: null,
-          rejectionStage: 'summary_v2_manifest_validation',
-          typedFailureReason: v2.reason || 'summary_v2_validation_failed',
+          rejectionStage: deV2BlockReason
+            ? 'summary_v2_german_preapply_completeness'
+            : 'summary_v2_manifest_validation',
+          typedFailureReason: deV2BlockReason
+            || v2.reason
+            || 'summary_v2_validation_failed',
         } as unknown as FinalizeCvAiFieldResult['diagnostics'],
       };
     }

@@ -68,14 +68,17 @@ import {
   SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
   SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
   SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
+  GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION,
   extractGermanCurrentWarehouseDutyFacts,
   buildGermanCurrentDutyExperiencePhrase,
   validateGermanGeneratedCaseGrammar,
   validateSummaryEntryDutyCoverage,
   verifyVisibleSummaryCurrentDutyCoverage,
   analyzeCurrentDutyRequiredFactParity,
+  buildGermanSummaryV2PreapplyCompletenessFields,
   type SummaryEntryDutyCoverageResult,
   type AuthoritativeCurrentDutyParityResult,
+  type GermanSummaryV2PreapplyCompletenessFields,
 } from './cv-german-summary-current-duty-coverage';
 export {
   GERMAN_SUMMARY_EMPLOYER_COVERAGE_321_REVISION,
@@ -103,16 +106,19 @@ export {
   SUMMARY_AUTHORITATIVE_DUTY_PARITY_324_REVISION,
   SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION,
   SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION,
+  GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION,
   extractGermanCurrentWarehouseDutyFacts,
   buildGermanCurrentDutyExperiencePhrase,
   validateGermanGeneratedCaseGrammar,
   validateSummaryEntryDutyCoverage,
   verifyVisibleSummaryCurrentDutyCoverage,
   analyzeCurrentDutyRequiredFactParity,
+  buildGermanSummaryV2PreapplyCompletenessFields,
 } from './cv-german-summary-current-duty-coverage';
 export type {
   SummaryEntryDutyCoverageResult,
   AuthoritativeCurrentDutyParityResult,
+  GermanSummaryV2PreapplyCompletenessFields,
 } from './cv-german-summary-current-duty-coverage';
 export {
   GERMAN_SUMMARY_COMPETENCY_GROUNDING_319_REVISION,
