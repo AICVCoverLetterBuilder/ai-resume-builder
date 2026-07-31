@@ -529,10 +529,10 @@ export type GermanDurationScopeAnalysis = {
 };
 
 const TOTAL_CAREER_MARKER_DE =
-  /\b(?:insgesamt|gesamte\s+Berufserfahrung|Berufserfahrung\s+von\s+insgesamt|insgesamt\s+verfügt|insgesamt\s+bringt|mit\s+insgesamt)\b/iu;
+  /\b(?:insgesamt|gesamte\s+Berufserfahrung|Berufserfahrung\s+von\s+insgesamt|insgesamt\s+verfügt|insgesamt\s+bringt|mit\s+insgesamt|Ich\s+verfüge\s+über)\b/iu;
 
 const DURATION_CUE_DE =
-  /(?:etwa|rund|ca\.?|ungefähr|sechseinhalb|anderthalb|zweieinhalb|dreieinhalb).{0,40}Jahre|Jahre(?:n)?\s+(?:Berufs)?[Ee]rfahrung|(?:sechseinhalb|anderthalb|zweieinhalb|dreieinhalb)\s+Jahre/iu;
+  /(?:etwa|rund|ca\.?|ungefähr|fünfeinhalb|sechseinhalb|anderthalb|zweieinhalb|dreieinhalb|viereinhalb).{0,40}Jahre|Jahre(?:n)?\s+(?:Berufs)?[Ee]rfahrung|(?:fünfeinhalb|sechseinhalb|anderthalb|zweieinhalb|dreieinhalb|viereinhalb)\s+Jahre/iu;
 
 /**
  * Standalone German total-professional-experience duration sentence.

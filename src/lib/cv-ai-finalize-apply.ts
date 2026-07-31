@@ -2962,6 +2962,23 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ? (deV2Completeness.blockReason || 'german_summary_v2_preapply_completeness_failed')
       : null;
     const success = !v2.blocked && v2.countedAsSuccess && !deV2BlockReason;
+    // AAB-383 — evaluated candidate lineage must stay truthful even when blocked.
+    // Never report present=true with null hashes; never wipe a valid duration 1→0
+    // by rescanning empty live Summary after a grammar/completeness reject.
+    const v2DetOrigin = v2.origin === 'deterministic_fallback';
+    const v2DetPresent = v2DetOrigin && Boolean(v2Text);
+    const v2DetHash = v2DetPresent ? hashSummaryCandidate(v2Text) : null;
+    const v2DetNormHash = v2DetPresent
+      ? hashSummaryCandidate(normalizeSummaryCandidateText(v2Text))
+      : null;
+    const v2DurationCount = v2.validation.durationExpressionCount;
+    const v2DurationPhrase = (v2.manifest.durationPhrase || '').trim();
+    const v2LocalizedDurationPhraseHash = v2DurationPhrase
+      ? fingerprintText(`dur_phrase:${v2DurationPhrase}`)
+      : (v2DurationCount === 1 && v2Text
+        ? fingerprintText(`dur_unit:${v2Units[0] || v2Text}`)
+        : null);
+    const v2DurationPassHash = v2Text ? hashSummaryCandidate(v2Text) : null;
     const missingCurrent = Math.max(
       0,
       v2.validation.requiredCurrentFactCount - v2.validation.coveredCurrentFactCount,
@@ -3028,18 +3045,25 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       deterministicCandidateEqualsGroundingInput: true,
       groundingInputEqualsFinalValidatedCandidate: success && !v2CleanNoOp,
       providerCandidateEqualsDeterministicCandidate: false,
-      finalCandidateSource: v2.origin,
-      durationClaimCountAfterFinalize: v2.validation.durationExpressionCount,
-      durationClaimCountAfterInsert: v2.validation.durationExpressionCount,
-      summaryDurationExpressionCount: v2.validation.durationExpressionCount,
-      durationValidationPassed: v2.validation.durationExpressionCount === 1
+      finalCandidateSource: (success && !v2CleanNoOp) ? v2.origin : 'none',
+      // Evaluated candidate duration truth (never rescanned from empty live text).
+      durationClaimCountBeforeStrip: v2DurationCount,
+      durationClaimCountAfterInsert: v2DurationCount,
+      durationClaimCountAfterFinalize: v2DurationCount,
+      summaryDurationExpressionCount: v2DurationCount,
+      durationValidationPassed: v2DurationCount === 1
         || v2.manifest.totalDurationMonths <= 0,
+      durationInsertedExactlyOnce: v2DurationCount === 1,
       durationFinalizerIdempotent: true,
       durationSecondPassChanged: false,
-      totalDurationSlotPresent: v2.validation.durationExpressionCount === 1,
-      finalTotalDurationSlotPresent: v2.validation.durationExpressionCount === 1,
+      durationPass1CandidateHash: v2DurationPassHash,
+      durationPass2CandidateHash: v2DurationPassHash,
+      localizedDurationPhraseHash: v2LocalizedDurationPhraseHash,
+      evaluatedCandidateText: v2Text || null,
+      totalDurationSlotPresent: v2DurationCount === 1,
+      finalTotalDurationSlotPresent: v2DurationCount === 1,
       finalDurationOwnerDetected: 'total_professional_experience',
-      finalDurationScopeValidationPassed: v2.validation.durationExpressionCount === 1
+      finalDurationScopeValidationPassed: v2DurationCount === 1
         || v2.manifest.totalDurationMonths <= 0,
       finalDurationCurrentRoleAttachmentRisk: false,
       finalDurationRepresentationKind: 'approximate_total_career',
@@ -3074,8 +3098,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       finalSentenceRoleSlots: unitRoleSlots,
       finalSentenceHashes: (success && !v2CleanNoOp) ? v2UnitHashes : [],
       finalUnitHashes: (success && !v2CleanNoOp) ? v2UnitHashes : [],
-      deterministicCandidateSentenceCount: v2Units.length,
-      deterministicCandidateUnitHashes: v2.origin === 'deterministic_fallback' ? v2UnitHashes : [],
+      deterministicCandidateSentenceCount: v2DetPresent ? v2Units.length : 0,
+      deterministicCandidateUnitHashes: v2DetPresent ? v2UnitHashes : [],
+      deterministicCandidateRawText: v2DetPresent ? v2Text : null,
+      deterministicCandidateNormalizedText: v2DetPresent
+        ? normalizeSummaryCandidateText(v2Text)
+        : null,
       summaryBuilderRevision: SUMMARY_V2_REVISION,
       summaryGroundingRevision: SUMMARY_V2_REVISION,
       summaryPipelineRevision: SUMMARY_PIPELINE_REVISION,
@@ -3130,15 +3158,12 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       repairCandidatePresent: false,
       repairAccepted: false,
       finalValidatedCandidateHash: (success && !v2CleanNoOp) ? meaningful.finalNormalizedHash : null,
-      deterministicCandidateHash: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp
-        ? meaningful.finalNormalizedHash
-        : null,
-      deterministicCandidateNormalizedHash: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp
-        ? meaningful.finalNormalizedHash
-        : null,
-      deterministicCandidatePresent: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp,
-      clientFallbackUsed: providerRejected || v2.origin === 'deterministic_fallback' || v2CleanNoOp,
-      fallbackApplied: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp,
+      // Present + hashes whenever a deterministic surface was serialized (even if later rejected).
+      deterministicCandidateHash: v2DetHash,
+      deterministicCandidateNormalizedHash: v2DetNormHash,
+      deterministicCandidatePresent: v2DetPresent,
+      clientFallbackUsed: providerRejected || v2DetOrigin || v2CleanNoOp,
+      fallbackApplied: v2DetOrigin && success && !v2CleanNoOp,
       clientDeterministicFallbackReason: providerRejected
         ? 'summary_v2_provider_rejected_or_repaired'
         : (v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null),
@@ -3167,10 +3192,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       visibleDurationHybridDetected: false,
       durationSemanticValueMonths: v2.manifest.totalDurationMonths || null,
       authoritativeDurationMonths: v2.manifest.totalDurationMonths || null,
-      finalDurationRepresentationCount: v2.validation.durationExpressionCount,
+      finalDurationRepresentationCount: v2DurationCount,
       durationRepresentationAgreement: true,
       finalDurationOwnerExpected: 'total_professional_experience',
-      finalDurationTotalCareerMarkerPresent: v2.validation.durationExpressionCount === 1,
+      finalDurationTotalCareerMarkerPresent: v2DurationCount === 1,
       currentIntroSlotPresent: unitRoleSlots.includes('current_intro'),
       currentDutySlotPresent: Boolean(v2.manifest.requiredCurrentFacts.length),
       priorRoleSlotPresent: unitRoleSlots.includes('prior_role'),
@@ -3192,7 +3217,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       rejectionStage: undefined,
       typedFailureReason: undefined,
       apiResponseKind: (providerRaw ? 'provider' : 'empty') as 'provider' | 'empty',
-      deterministicAccepted: v2.origin === 'deterministic_fallback' && success && !v2CleanNoOp,
+      deterministicAccepted: v2DetOrigin && success && !v2CleanNoOp,
       finalUnitSemanticRolesByUnit: v2Units.map((_, i) => {
         const slot = unitRoleSlots[i] || 'other';
         if (slot === 'total_duration' || slot === 'duration') return ['total_duration'];
@@ -3229,11 +3254,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : {}),
     };
     if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason) {
+      const typedFail = deV2BlockReason
+        || v2.reason
+        || 'summary_v2_validation_failed';
+      const rejectionStage = deV2BlockReason
+        ? 'summary_v2_german_preapply_completeness'
+        : 'summary_v2_manifest_validation';
       return {
         blocked: true,
-        reason: deV2BlockReason
-          || v2.reason
-          || 'summary_v2_validation_failed',
+        reason: typedFail,
+        // Apply-safe empty/live text — evaluated candidate stays on diagnostics.
         text: liveSummary,
         origin: v2.origin,
         roleDutyConflict: false,
@@ -3246,16 +3276,29 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             ? deV2Completeness.germanControlledCaseGrammarPassed
             : false,
           slotValidationPassed: false,
-          finalCandidateSource: v2.origin,
+          finalCandidateSource: 'none',
+          deterministicAccepted: false,
+          fallbackApplied: false,
           noOpDetected: false,
           noOpCandidateKind: null,
           noOpRejectionReason: null,
-          rejectionStage: deV2BlockReason
-            ? 'summary_v2_german_preapply_completeness'
-            : 'summary_v2_manifest_validation',
-          typedFailureReason: deV2BlockReason
-            || v2.reason
-            || 'summary_v2_validation_failed',
+          rejectionStage,
+          typedFailureReason: typedFail,
+          finalTypedFailureReason: typedFail,
+          // Preserve evaluated duration/lineage — do not zero after reject.
+          durationClaimCountBeforeStrip: v2DurationCount,
+          durationClaimCountAfterInsert: v2DurationCount,
+          durationClaimCountAfterFinalize: v2DurationCount,
+          durationInsertedExactlyOnce: v2DurationCount === 1,
+          durationFinalizerIdempotent: true,
+          durationSecondPassChanged: false,
+          localizedDurationPhraseHash: v2LocalizedDurationPhraseHash,
+          durationPass1CandidateHash: v2DurationPassHash,
+          durationPass2CandidateHash: v2DurationPassHash,
+          evaluatedCandidateText: v2Text || null,
+          deterministicCandidatePresent: v2DetPresent,
+          deterministicCandidateHash: v2DetHash,
+          deterministicCandidateNormalizedHash: v2DetNormHash,
         } as unknown as FinalizeCvAiFieldResult['diagnostics'],
       };
     }

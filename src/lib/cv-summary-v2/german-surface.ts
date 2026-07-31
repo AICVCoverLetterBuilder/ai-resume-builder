@@ -10,7 +10,11 @@ import { dutyTenseFromEmploymentState, type SummaryV2DutyTense } from './tense';
 
 export const GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION =
   'german-summary-v2-first-person-surface-382-v1' as const;
+/** AAB-383 — German surface → finalizer integration (grammar/duration/lineage). */
+export const GERMAN_SUMMARY_V2_SURFACE_FINALIZER_383_REVISION =
+  'german-summary-v2-surface-finalizer-383-v1' as const;
 void GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION;
+void GERMAN_SUMMARY_V2_SURFACE_FINALIZER_383_REVISION;
 
 const SEPARABLE_PREFIXES = [
   'zurück', 'weiter', 'heran', 'herum', 'entgegen', 'durch', 'mit', 'nach',
@@ -64,9 +68,9 @@ const IRREGULAR_PAST_1SG: Record<string, string> = {
   nimmte: 'nahm',
 };
 
-function lowerFirst(s: string): string {
-  if (!s) return s;
-  return s.replace(/^\p{Lu}/u, (c) => c.toLowerCase());
+/** Keep German noun capitalization from live Experience object phrases. */
+function preserveObjectCasing(rest: string): string {
+  return (rest || '').replace(/\s+/g, ' ').trim();
 }
 
 function present1sgFromFiniteOrInfinitive(verb: string): string {
@@ -82,6 +86,8 @@ function present1sgFromFiniteOrInfinitive(verb: string): string {
   if (v.endsWith('iert') && v.length > 5) return `${v.slice(0, -1)}e`;
   // 3sg -tet / -det keep stem + e: arbeitet → arbeite; redet → rede
   if (/(?:tet|det)$/u.test(v) && v.length > 4) return `${v.slice(0, -1)}`;
+  // 3sg "passt" / "fasst" — ends with -sst/-ßt, not 2sg -st
+  if (/(?:sst|ßt)$/u.test(v) && v.length > 3) return `${v.slice(0, -1)}e`;
   // 3sg -t: prüft → prüfe; führt → führe; tauscht → tausche
   if (v.endsWith('t') && v.length > 2 && !v.endsWith('st')) return `${v.slice(0, -1)}e`;
   if (v.endsWith('e')) return v;
@@ -135,14 +141,16 @@ export function bulletToGermanWoIchClause(
   tense: SummaryV2DutyTense = 'present',
 ): string {
   void GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION;
+  void GERMAN_SUMMARY_V2_SURFACE_FINALIZER_383_REVISION;
   const s = (bullet || '').replace(/[.;]+$/u, '').trim();
   if (!s) return '';
   // Non-German script → do not invent morphology.
   if (/[\u0900-\u097F\u0600-\u06FF\u0400-\u04FF\u3040-\u30FF\u3400-\u9FFF]/u.test(s)) {
-    return lowerFirst(s);
+    return preserveObjectCasing(s);
   }
 
   // Coordinated leading verbs: "überprüfte und passte Designmaterialien an"
+  // also "Erfasste und bearbeitete Reservierungen sowie vorgenommene Änderungen"
   const coordSep = /^(\p{L}+)\s+und\s+(\p{L}+)\s+(.+)$/u.exec(s);
   if (coordSep) {
     const leftRaw = coordSep[1];
@@ -157,7 +165,7 @@ export function bulletToGermanWoIchClause(
         ? past1sgFromFinite(rightRaw)
         : present1sgFromFiniteOrInfinitive(rightRaw);
       const right = `${sep.prefix}${rightStem}`;
-      return `${lowerFirst(sep.remainder)} ${left} und ${right}`.replace(/\s+/g, ' ').trim();
+      return `${preserveObjectCasing(sep.remainder)} ${left} und ${right}`.replace(/\s+/g, ' ').trim();
     }
     const left = tense === 'past'
       ? past1sgFromFinite(leftRaw)
@@ -165,10 +173,10 @@ export function bulletToGermanWoIchClause(
     const right = tense === 'past'
       ? past1sgFromFinite(rightRaw)
       : present1sgFromFiniteOrInfinitive(rightRaw);
-    return `${lowerFirst(rest)} ${left} und ${right}`.replace(/\s+/g, ' ').trim();
+    return `${preserveObjectCasing(rest)} ${left} und ${right}`.replace(/\s+/g, ' ').trim();
   }
 
-  // Separable: "bereitete finale Designdateien … vor" / "passt X an"
+  // Separable: "bereitete finale Designdateien … vor" / "passt X an" / "Tauscht X aus"
   const lead = /^(\p{L}+)\s+(.+)$/u.exec(s);
   if (lead) {
     const verbRaw = lead[1];
@@ -179,7 +187,7 @@ export function bulletToGermanWoIchClause(
         ? past1sgFromFinite(verbRaw)
         : present1sgFromFiniteOrInfinitive(verbRaw);
       const joined = `${sep.prefix}${finite}`;
-      return `${lowerFirst(sep.remainder)} ${joined}`.replace(/\s+/g, ' ').trim();
+      return `${preserveObjectCasing(sep.remainder)} ${joined}`.replace(/\s+/g, ' ').trim();
     }
     // Leading finite/infinitive + object: "prüft eingehende Waren"
     if (
@@ -190,19 +198,19 @@ export function bulletToGermanWoIchClause(
       const finite = tense === 'past'
         ? past1sgFromFinite(verbRaw)
         : present1sgFromFiniteOrInfinitive(verbRaw);
-      return `${lowerFirst(rest)} ${finite}`.replace(/\s+/g, ' ').trim();
+      return `${preserveObjectCasing(rest)} ${finite}`.replace(/\s+/g, ' ').trim();
     }
   }
 
   // Object-first infinitive: "Eingehende Waren prüfen"
   const trailInf = /^(.+)\s+(\p{L}+en)$/u.exec(s);
   if (trailInf && tense === 'present') {
-    return `${lowerFirst(trailInf[1])} ${present1sgFromFiniteOrInfinitive(trailInf[2])}`
+    return `${preserveObjectCasing(trailInf[1])} ${present1sgFromFiniteOrInfinitive(trailInf[2])}`
       .replace(/\s+/g, ' ')
       .trim();
   }
 
-  return lowerFirst(s);
+  return preserveObjectCasing(s);
 }
 
 function joinGermanWoIchClauses(
@@ -224,6 +232,7 @@ export function buildGermanSummaryV2FromManifest(
   manifest: SummaryV2SelectionManifest,
 ): string {
   void GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION;
+  void GERMAN_SUMMARY_V2_SURFACE_FINALIZER_383_REVISION;
   const units: string[] = [];
   const dur = (manifest.durationPhrase || '').replace(/[.,]$/u, '').trim();
   if (dur) {
@@ -239,10 +248,11 @@ export function buildGermanSummaryV2FromManifest(
       current.employmentState,
     );
     const dutyTail = clauses ? `, wo ich ${clauses}` : '';
+    // Canonical present intro: "Derzeit arbeite ich als … bei …, wo ich …"
     units.push(
       bei
-        ? `Ich arbeite derzeit als ${role} ${bei}${dutyTail}.`
-        : `Ich arbeite derzeit als ${role}${dutyTail}.`,
+        ? `Derzeit arbeite ich als ${role} ${bei}${dutyTail}.`
+        : `Derzeit arbeite ich als ${role}${dutyTail}.`,
     );
   }
 

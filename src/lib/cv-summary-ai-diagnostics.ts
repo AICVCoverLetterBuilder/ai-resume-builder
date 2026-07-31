@@ -897,12 +897,34 @@ export class SummaryAiDiagnosticSession {
   recordFinalizeResult(finalized: FinalizeCvAiFieldResult): void {
     const diag = finalized.diagnostics || {};
     const text = (finalized.text || '').trim();
-    const independent = verifyIndependentFinalDurationCount(text, (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale, {
-      requireExactlyOne: Boolean(finalized.countedAsSuccess),
-    });
-    const after = independent.count;
+    const evaluatedText = String(
+      (diag as { evaluatedCandidateText?: string | null }).evaluatedCandidateText
+      || (diag as { deterministicCandidateRawText?: string | null }).deterministicCandidateRawText
+      || '',
+    ).trim();
+    // When apply-safe text is empty/live but an evaluated candidate exists (reject path),
+    // duration/lineage must still describe the evaluated candidate — never 1→0 wipe.
+    const durationScanText = text || evaluatedText;
+    const independent = verifyIndependentFinalDurationCount(
+      durationScanText,
+      (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
+      {
+        requireExactlyOne: Boolean(finalized.countedAsSuccess),
+      },
+    );
+    const afterFromScan = independent.count;
+    const ownedAfter = typeof diag.durationClaimCountAfterFinalize === 'number'
+      ? diag.durationClaimCountAfterFinalize
+      : null;
+    const after = (
+      finalized.blocked
+      && ownedAfter != null
+      && ownedAfter >= afterFromScan
+    )
+      ? ownedAfter
+      : afterFromScan;
     const breakdown = summarizeDurationClaimBreakdown(
-      text,
+      durationScanText,
       (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
     );
     const beforeStrip = diag.durationClaimCountBeforeStrip
@@ -1081,9 +1103,10 @@ export class SummaryAiDiagnosticSession {
       durationInsertedExactlyOnce: after === 1 && durationValidationPassed,
       durationFinalizerIdempotent,
       structuredDurationMonths: diag.authoritativeDurationMonths ?? null,
-      localizedDurationPhraseHash: text
-        ? fingerprintText(`dur:${diag.finalDurationExpressionCount ?? after}`)
-        : null,
+      localizedDurationPhraseHash: diag.localizedDurationPhraseHash
+        ?? (durationScanText
+          ? fingerprintText(`dur:${diag.finalDurationRepresentationCount ?? after}`)
+          : null),
       finalDurationRepresentationKind: diag.finalDurationRepresentationKind ?? null,
       finalDurationRepresentationCount: diag.finalDurationRepresentationCount ?? null,
       finalDurationHybridDetected: diag.finalDurationHybridDetected ?? null,
@@ -1124,9 +1147,13 @@ export class SummaryAiDiagnosticSession {
         return 'none';
       })(),
       providerCandidatePresent: Boolean(diag.providerCandidatePresent),
+      // Never force present=true from origin alone when hashes are null (AAB-383 / AAB-354 lineage).
       deterministicCandidatePresent: Boolean(
         diag.deterministicCandidatePresent
-        || finalized.origin === 'deterministic_fallback',
+        && (diag.deterministicCandidateHash || diag.deterministicCandidateNormalizedHash),
+      ) || Boolean(
+        finalized.origin === 'deterministic_fallback'
+        && (diag.deterministicCandidateHash || diag.deterministicCandidateNormalizedHash),
       ),
       fallbackCandidatePresent: Boolean(
         diag.fallbackCandidatePresent || fallbackApplied,

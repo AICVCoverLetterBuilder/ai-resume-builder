@@ -27,6 +27,9 @@ export const GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION =
 /** AAB-382 — German first-person surface grammar (finite sentences + agreement). */
 export const GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION =
   'german-summary-v2-first-person-surface-382-v1' as const;
+/** AAB-383 — sowie segment finite-verb gate + surface→finalizer lineage. */
+export const GERMAN_SUMMARY_V2_SURFACE_FINALIZER_383_REVISION =
+  'german-summary-v2-surface-finalizer-383-v1' as const;
 
 void GERMAN_SUMMARY_CURRENT_DUTY_SERIALIZATION_323_REVISION;
 void SUMMARY_ENTRY_DUTY_COVERAGE_323_REVISION;
@@ -38,6 +41,7 @@ void SUMMARY_VISIBLE_DUTY_PARITY_324_REVISION;
 void SUMMARY_DUTY_PARITY_APPLY_GATE_324_REVISION;
 void GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION;
 void GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION;
+void GERMAN_SUMMARY_V2_SURFACE_FINALIZER_383_REVISION;
 
 export type GermanCurrentDutyFactId =
   | 'incoming_goods_check'
@@ -374,6 +378,7 @@ export function validateGermanGeneratedCaseGrammar(
 ): GermanControlledCaseGrammarResult {
   void GERMAN_SUMMARY_CONTROLLED_CASE_GRAMMAR_323_REVISION;
   void GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION;
+  void GERMAN_SUMMARY_V2_SURFACE_FINALIZER_383_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
   const failureKinds: string[] = [];
   let invalidErfahrungInAccusativeDetected = false;
@@ -414,11 +419,11 @@ export function validateGermanGeneratedCaseGrammar(
   }
 
   // Standalone capitalized third-person finite verbs after dashes / semicolons / sentence breaks.
-  // Device shape: "Ich arbeite … — Führt / Prüft / Tauscht".
+  // Device shape: "Ich arbeite … — Führt / Prüft / Tauscht" and past "— Begrüßte / Erfasste".
   if (
-    /(?:^|[\u2014\u2013;]|[\u2014\u2013]\s*|\s[\u2014\u2013]\s*)\s*(?:Führt|Prüft|Tauscht|Koordiniert|Erstellt|Kontrolliert|Passt|Nimmt|Gibt|Spricht|Schreibt)\b/u
+    /(?:^|[\u2014\u2013;]|[\u2014\u2013]\s*|\s[\u2014\u2013]\s*)\s*(?:Führt|Prüft|Tauscht|Koordiniert|Erstellt|Kontrolliert|Passt|Nimmt|Gibt|Spricht|Schreibt|Begrüßt|Begrüßte|Erfasst|Erfasste|Beantwortet|Beantwortete)\b/u
       .test(text)
-    || /(?:^|[.!?]\s+)(?:Führt|Prüft|Tauscht|Koordiniert|Erstellt|Kontrolliert)\b/u.test(text)
+    || /(?:^|[.!?]\s+)(?:Führt|Prüft|Tauscht|Koordiniert|Erstellt|Kontrolliert|Begrüßte|Erfasste|Beantwortete)\b/u.test(text)
   ) {
     failureKinds.push('standalone_capitalized_third_person_verb');
   }
@@ -431,20 +436,37 @@ export function validateGermanGeneratedCaseGrammar(
     failureKinds.push('first_person_third_person_mismatch');
   }
 
-  // Malformed coordination / dangling participle NP: "sowie vorgenommene Änderungen".
-  if (
-    /\bsowie\s+(?:vorgenommene|durchgeführte|erfolgte|stattgefundene|gemachte)\s+\p{L}+/iu.test(text)
-    && !/\bsowie\s+(?:vorgenommene|durchgeführte|erfolgte|stattgefundene|gemachte)\s+\p{L}+\s+\p{L}*?(?:habe|hatte|wurde|waren|bin|war|prüfe|erstellte|anpasste)\b/iu
-      .test(text)
-  ) {
-    failureKinds.push('malformed_sowie_participial_coordination');
+  /**
+   * "sowie vorgenommene Änderungen" is valid as an object NP when a finite verb
+   * governs it in the SAME dash/semicolon segment (e.g. wo-ich clause).
+   * Reject only dangling segments that lack a finite verb cue.
+   */
+  const sowieSegs = text.split(/[\u2014\u2013;]+/u).map((s) => s.trim()).filter(Boolean);
+  for (const seg of sowieSegs) {
+    if (
+      !/\bsowie\s+(?:vorgenommene|durchgeführte|erfolgte|stattgefundene|gemachte)\s+\p{L}+/iu
+        .test(seg)
+    ) {
+      continue;
+    }
+    const hasFinite = (
+      /\b(?:ich|verfüge|arbeite|arbeitete)\b/iu.test(seg)
+      || /\b\p{L}{4,}(?:te|ete|tte)\b/u.test(seg)
+      || /\b(?:prüfe|führe|tausche|nehme|spreche|durchführe|austausche|koordiniere|vorbereite|anpasse|kontrolliere|erfasste|bearbeitete|begrüßte|beantwortete)\b/iu
+        .test(seg)
+    );
+    if (!hasFinite) {
+      failureKinds.push('malformed_sowie_participial_coordination');
+      break;
+    }
   }
 
   // Dangling bare participle / fragment units without a finite verb cue.
   for (const u of units) {
     if (
-      /^(?:sowie\s+)?(?:vorgenommene|durchgeführte|erfolgte)\s+\p{L}+/iu.test(u)
-      && !/\b(?:Ich|ich|verfüge|arbeite|arbeitete|prüfe|erstellte|habe|hatte)\b/u.test(u)
+      /^(?:sowie\s+)?(?:vorgenommene|durchgeführte|erfolgte)\s+\p{L}+\.?$/iu.test(u)
+      && !/\b(?:Ich|ich|verfüge|arbeite|arbeitete|prüfe|erstellte|habe|hatte|erfasste|bearbeitete)\b/u
+        .test(u)
     ) {
       failureKinds.push('dangling_participial_fragment');
       break;

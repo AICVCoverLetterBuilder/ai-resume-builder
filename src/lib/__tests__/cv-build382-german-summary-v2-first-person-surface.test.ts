@@ -229,7 +229,7 @@ describe('AAB-382 German Summary V2 first-person surface grammar', () => {
     expect(fin.countedAsSuccess).toBe(true);
     expect(fin.diagnostics?.summaryBuilderRevision).toBe(SUMMARY_V2_REVISION);
     expect(fin.text).toMatch(/^Ich verfüge über (?:insgesamt )?etwa .+ Jahre Berufserfahrung\./u);
-    expect(fin.text).toMatch(/\bIch arbeite derzeit\b/u);
+    expect(fin.text).toMatch(/\b(?:Derzeit arbeite ich|Ich arbeite derzeit)\b/u);
     expect(fin.text).toMatch(/\bwo ich\b/u);
     expect(fin.text).toMatch(/\bZuvor arbeitete ich\b/u);
     expect(fin.text).not.toMatch(/[\u2014\u2013]\s*\p{Lu}/u);
@@ -316,7 +316,7 @@ describe('AAB-382 German Summary V2 first-person surface grammar', () => {
     expect(fin.blocked).toBe(false);
     expect(fin.text).toMatch(/Zahnarzthelferin/i);
     expect(fin.text).toMatch(/Rezeptionistin/i);
-    expect(fin.text).toMatch(/\bIch arbeite derzeit\b/u);
+    expect(fin.text).toMatch(/\b(?:Derzeit arbeite ich|Ich arbeite derzeit)\b/u);
     expect(fin.text).toMatch(/\bwo ich\b/u);
     expect(fin.text).not.toMatch(/[\u2014\u2013]/u);
     expect(fin.diagnostics?.grammarValidationPassed).toBe(true);

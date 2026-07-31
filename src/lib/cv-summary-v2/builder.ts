@@ -17,6 +17,7 @@ export {
   buildGermanSummaryV2FromManifest,
   bulletToGermanWoIchClause,
   GERMAN_SUMMARY_V2_FIRST_PERSON_SURFACE_382_REVISION,
+  GERMAN_SUMMARY_V2_SURFACE_FINALIZER_383_REVISION,
 } from './german-surface';
 
 function joinDutyClauses(
