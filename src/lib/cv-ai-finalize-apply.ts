@@ -166,8 +166,14 @@ import {
 } from './cv-english-summary-grounding';
 import {
   SUMMARY_V2_REVISION,
+  SUMMARY_V2_REWRITE_STYLE_384_REVISION,
+  SUMMARY_V2_UNIVERSAL_STYLE_385_REVISION,
+  SUMMARY_V2_NATIVE_SURFACE_386_REVISION,
+  SOUTH_SLAVIC_PREDICATE_CHAIN_386_REVISION,
   isSummaryV2Enabled,
   runSummaryV2,
+  buildSummaryV2StyledDeterministicText,
+  normalizeSummaryV2RewriteStyle,
 } from './cv-summary-v2';
 import {
   analyzeFrenchSummaryEmploymentQuality,
@@ -628,6 +634,12 @@ import {
   polishCroatianExperienceAiText,
 } from './cv-experience-ai-noop-recovery';
 import {
+  EXPERIENCE_STRONGER_386_REVISION,
+  EXPERIENCE_STYLE_NO_SAFE_MATERIAL_CHANGE,
+  buildExperienceStrongerDeterministic,
+  isExperienceStyleSaturated,
+} from './cv-experience-stronger';
+import {
   detectExperienceUnsupportedClaimExpansion,
   experienceUnsupportedClaimRejectionReason,
   EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
@@ -781,6 +793,11 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION,
   'german-summary-v2-first-person-surface-382-v1',
   'german-summary-v2-surface-finalizer-383-v1',
+  SUMMARY_V2_REWRITE_STYLE_384_REVISION,
+  SUMMARY_V2_UNIVERSAL_STYLE_385_REVISION,
+  SUMMARY_V2_NATIVE_SURFACE_386_REVISION,
+  SOUTH_SLAVIC_PREDICATE_CHAIN_386_REVISION,
+  EXPERIENCE_STRONGER_386_REVISION,
   ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
@@ -1671,7 +1688,55 @@ export type FinalizeCvAiFieldResult = {
     finalSentenceRoleSlots?: string[];
     /** Stronger / shorter / professional rewrite style (Summary enhance). */
     rewriteStyle?: string | null;
+    requestedRewriteStyle?: string | null;
+    rewriteStylePropagatedToProvider?: boolean;
+    rewriteStylePropagatedToRepair?: boolean;
+    rewriteStylePropagatedToDeterministic?: boolean;
     previousSummaryUsedAsFactSource?: boolean;
+    /** Universal applicability: V2 fact-id path vs warehouse-era locale scopes. */
+    summaryV2FactIdPathActive?: boolean;
+    serbianStructuredDomainGateApplicable?: boolean;
+    hindiWarehouseGrammarFieldsApplicable?: boolean;
+    sourceNormalizedLength?: number | null;
+    candidateNormalizedLength?: number | null;
+    lengthDelta?: number | null;
+    lengthDeltaPercent?: number | null;
+    shorterStyleFulfilled?: boolean;
+    strongerStyleFulfilled?: boolean;
+    professionalStyleFulfilled?: boolean;
+    styleValidationPassed?: boolean;
+    styleRejectionReasons?: string[];
+    selectedCandidateStyle?: string | null;
+    selectedCandidateMateriallyDiffersFromSource?: boolean;
+    selectedCandidateDiffersFromOtherStyleFixtures?: boolean | null;
+    semanticStyleOperationsApplied?: string[];
+    markerOnlyStyleChange?: boolean;
+    sourceUnitCount?: number | null;
+    candidateUnitCount?: number | null;
+    sourceClauseCount?: number | null;
+    candidateClauseCount?: number | null;
+    unitDelta?: number | null;
+    clauseDelta?: number | null;
+    localeAwareShorterThresholdPercent?: number | null;
+    styleMaterialityPassed?: boolean;
+    nativeSurfaceValidationPassed?: boolean;
+    nativeSurfaceRejectionReasons?: string[];
+    capitalizationValidationPassed?: boolean;
+    grammaticalPersonValidationPassed?: boolean;
+    finiteClauseValidationPassed?: boolean;
+    nativePunctuationValidationPassed?: boolean;
+    internalMarkerLeakageDetected?: boolean;
+    englishMorphologyLeakageDetected?: boolean;
+    coordinatedPredicateCount?: number | null;
+    transformedCoordinatedPredicateCount?: number | null;
+    untransformedFinitePredicateCount?: number | null;
+    mixedPersonPredicateDetected?: boolean;
+    mixedTensePredicateDetected?: boolean;
+    predicateChainValidationPassed?: boolean;
+    predicateChainRejectionReasons?: string[];
+    sourcePredicateChainHash?: string | null;
+    finalPredicateChainHash?: string | null;
+    structuralCompressionCount?: number;
     serbianStructuredDomainGateEvaluated?: boolean;
     serbianStructuredDomainGatePassed?: boolean;
     serbianStructuredDomainCurrentRequiredFactCount?: number | null;
@@ -2934,10 +2999,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       referenceDateIso: input.referenceDateIso
         || durationSnapshot.referenceDateIso
         || new Date().toISOString().slice(0, 10),
+      rewriteStyle: input.rewriteStyle || null,
     });
+    const v2Pd = v2.pipelineDiagnostics || null;
+    const requestedRewriteStyle = v2Pd?.rewriteStyle
+      || (input.rewriteStyle
+        ? String(input.rewriteStyle).trim().toLowerCase()
+        : null);
     const v2Text = (v2.text || '').trim();
     const v2Units = v2Text
-      ? v2Text.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean)
+      ? v2Text.split(/(?<=[.!?。؟।])\s+/u).map((u) => u.trim()).filter(Boolean)
       : [];
     const roleSlots = [
       ...(v2.manifest.current ? ['current_intro' as const] : []),
@@ -2962,6 +3033,15 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const deV2BlockReason = deV2Completeness?.blocksAcceptance
       ? (deV2Completeness.blockReason || 'german_summary_v2_preapply_completeness_failed')
       : null;
+    const styleNoSafe = Boolean(
+      v2.blocked && v2.reason === 'style_no_safe_material_change',
+    );
+    const styleBlockReason = (
+      v2.blocked
+      && requestedRewriteStyle
+      && v2.reason
+      && /^(?:style_|shorter_|stronger_|professional_)/u.test(v2.reason)
+    ) ? v2.reason : null;
     const success = !v2.blocked && v2.countedAsSuccess && !deV2BlockReason;
     // AAB-383 — evaluated candidate lineage must stay truthful even when blocked.
     // Never report present=true with null hashes; never wipe a valid duration 1→0
@@ -2994,17 +3074,87 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : null;
     const v2OperationMode = resolveAiOperationMode({ targetContent: liveSummary });
     const v2EnhanceExisting = v2OperationMode === 'enhance_existing_content';
+    // Style-fulfilled rewrites are material even when the legacy semantic Jaccard
+    // gate would classify them as paraphrase no-ops (soft wording / framing).
+    const styleMaterialSuccess = Boolean(
+      requestedRewriteStyle
+      && !v2.blocked
+      && v2.countedAsSuccess
+      && v2Pd?.styleFulfillment?.styleValidationPassed
+      && v2Pd?.styleFulfillment?.selectedCandidateMateriallyDiffersFromSource,
+    );
+    const balancedEnhanceMaterialSuccess = Boolean(
+      !requestedRewriteStyle
+      && v2EnhanceExisting
+      && !v2.blocked
+      && v2.countedAsSuccess
+      && v2Pd?.candidateTransformationKind === 'v2_balanced_enhance'
+      && Boolean(v2Text)
+      && hashSummaryCandidate(normalizeSummaryCandidateText(v2Text))
+        !== hashSummaryCandidate(normalizeSummaryCandidateText(liveSummary)),
+    );
+    const meaningfulEffective = (styleMaterialSuccess || balancedEnhanceMaterialSuccess)
+      ? {
+        ...meaningful,
+        finalMatchesSourceAfterNormalization: false,
+        meaningfulChangeDetected: true,
+        meaningfulChangeReason: styleMaterialSuccess
+          ? `rewrite_style_${requestedRewriteStyle}`
+          : 'v2_balanced_enhance',
+        noOpDetected: false,
+        noOpRejectionReason: null as string | null,
+      }
+      : meaningful;
     const v2CleanNoOp = Boolean(
-      success && v2EnhanceExisting && meaningful.noOpDetected,
+      (success && v2EnhanceExisting && meaningfulEffective.noOpDetected)
+      || styleNoSafe,
     );
     const v2NoOpCandidateKind: string | null = v2CleanNoOp
       ? (
-        (v2.origin === 'ai_generated' || v2.origin === 'ai_repaired')
-          ? (v2.origin === 'ai_repaired' ? 'repaired_provider' : 'provider')
-          : 'client_deterministic'
+        styleNoSafe
+          ? 'client_deterministic'
+          : (
+            (v2.origin === 'ai_generated' || v2.origin === 'ai_repaired')
+              ? (v2.origin === 'ai_repaired' ? 'repaired_provider' : 'provider')
+              : 'client_deterministic'
+          )
       )
       : null;
     const diagBase = {
+      summaryV2FactIdPathActive: true,
+      serbianStructuredDomainGateApplicable: false,
+      hindiWarehouseGrammarFieldsApplicable: false,
+      // Typed inapplicable warehouse representation (not ambiguous null).
+      serbianStructuredDomainGateEvaluated: false,
+      serbianStructuredDomainGatePassed: false,
+      serbianStructuredDomainCurrentRequiredFactCount: 0,
+      serbianStructuredDomainCurrentCoveredFactCount: 0,
+      serbianStructuredDomainPriorRequiredFactCount: 0,
+      serbianStructuredDomainPriorCoveredFactCount: 0,
+      serbianStructuredDomainGateFailureReasons: ['not_applicable_summary_v2_fact_id_path'] as string[],
+      serbianStructuredDomainCurrentRequiredFactIds: [] as string[],
+      serbianStructuredDomainCurrentCoveredFactIds: [] as string[],
+      serbianStructuredDomainCurrentMissingFactIds: [] as string[],
+      serbianStructuredDomainPriorRequiredFactIds: [] as string[],
+      serbianStructuredDomainPriorCoveredFactIds: [] as string[],
+      serbianStructuredDomainPriorMissingFactIds: [] as string[],
+      serbianStructuredDomainCanonicalFactIdsByEntryHash: {} as Record<string, string[]>,
+      serbianStructuredDomainGateInvariantFailure: 'not_applicable_summary_v2_fact_id_path',
+      serbianEntryOwnedBuilderAvailable: false,
+      serbianEntryOwnedBuilderAttempted: false,
+      serbianEntryOwnedBuilderSucceeded: false,
+      serbianEntryOwnedBuilderOutputHash: null as string | null,
+      serbianEntryOwnedBuilderOutputLength: 0,
+      serbianEntryOwnedBuilderSentenceCount: 0,
+      serbianEntryOwnedBuilderTypedFailureReason: 'not_applicable_summary_v2_fact_id_path' as string | null,
+      hindiNominalExperienceFragmentDetected: false,
+      hindiSentenceHasFiniteCopulaOrVerb: true,
+      hindiIncompleteSentenceCount: 0,
+      finalUnsupportedDesignMediumCount: 0,
+      providerUnsupportedDesignMediumCount: 0,
+      providerPrintClaimDetected: false,
+      hindiSentenceGrammarRecords: [] as unknown[],
+      sourcePrintFactPresent: false,
       requiredCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
       coveredCurrentDutyFactCount: v2.validation.coveredCurrentFactCount,
       missingCurrentDutyFactCount: missingCurrent,
@@ -3036,13 +3186,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       competencyInferenceFromRoleForbidden: true,
       finalSlotRejectionReasons: [],
       slotRejectionReasons: [],
-      sourceNormalizedHash: meaningful.sourceNormalizedHash,
-      finalNormalizedHash: (success && !v2CleanNoOp) ? meaningful.finalNormalizedHash : null,
-      finalMatchesSourceAfterNormalization: meaningful.finalMatchesSourceAfterNormalization,
+      sourceNormalizedHash: meaningfulEffective.sourceNormalizedHash,
+      finalNormalizedHash: (success && !v2CleanNoOp) ? meaningfulEffective.finalNormalizedHash : null,
+      finalMatchesSourceAfterNormalization: meaningfulEffective.finalMatchesSourceAfterNormalization,
       meaningfulChangeDetected: (success && !v2CleanNoOp)
-        ? (meaningful.meaningfulChangeDetected || !liveSummary.trim())
+        ? (meaningfulEffective.meaningfulChangeDetected || !liveSummary.trim())
         : false,
-      meaningfulChangeReason: v2CleanNoOp ? null : meaningful.meaningfulChangeReason,
+      meaningfulChangeReason: v2CleanNoOp ? null : meaningfulEffective.meaningfulChangeReason,
       deterministicCandidateEqualsGroundingInput: true,
       groundingInputEqualsFinalValidatedCandidate: success && !v2CleanNoOp,
       providerCandidateEqualsDeterministicCandidate: false,
@@ -3052,6 +3202,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       durationClaimCountAfterInsert: v2DurationCount,
       durationClaimCountAfterFinalize: v2DurationCount,
       summaryDurationExpressionCount: v2DurationCount,
+      independentFinalDurationClaimCount: v2DurationCount,
       durationValidationPassed: v2DurationCount === 1
         || v2.manifest.totalDurationMonths <= 0,
       durationInsertedExactlyOnce: v2DurationCount === 1,
@@ -3115,6 +3266,106 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       finalPerspectiveMode: 'first_person' as const,
       perspectiveValidationPassed: true,
       rewriteStyle: input.rewriteStyle || null,
+      requestedRewriteStyle: requestedRewriteStyle || null,
+      rewriteStylePropagatedToProvider: Boolean(v2Pd?.rewriteStylePropagatedToProvider),
+      rewriteStylePropagatedToRepair: Boolean(v2Pd?.rewriteStylePropagatedToRepair),
+      rewriteStylePropagatedToDeterministic: Boolean(
+        v2Pd?.rewriteStylePropagatedToDeterministic,
+      ),
+      candidateTransformationKind: v2Pd?.candidateTransformationKind ?? null,
+      candidateTransformationBeforeHash: v2Pd?.candidateTransformationBeforeHash ?? null,
+      candidateTransformationAfterHash: v2Pd?.candidateTransformationAfterHash ?? null,
+      sourceNormalizedLength: v2Pd?.styleFulfillment?.sourceNormalizedLength
+        ?? normalizeSummaryCandidateText(liveSummary).length,
+      candidateNormalizedLength: v2Pd?.styleFulfillment?.candidateNormalizedLength
+        ?? normalizeSummaryCandidateText(v2Text).length,
+      lengthDelta: v2Pd?.styleFulfillment?.lengthDelta
+        ?? (
+          normalizeSummaryCandidateText(v2Text).length
+          - normalizeSummaryCandidateText(liveSummary).length
+        ),
+      lengthDeltaPercent: v2Pd?.styleFulfillment?.lengthDeltaPercent ?? null,
+      shorterStyleFulfilled: Boolean(v2Pd?.styleFulfillment?.shorterStyleFulfilled),
+      strongerStyleFulfilled: Boolean(v2Pd?.styleFulfillment?.strongerStyleFulfilled),
+      professionalStyleFulfilled: Boolean(v2Pd?.styleFulfillment?.professionalStyleFulfilled),
+      styleValidationPassed: requestedRewriteStyle
+        ? Boolean(
+          (!v2EnhanceExisting || v2Pd?.styleFulfillment?.styleValidationPassed)
+          && success
+          && !v2CleanNoOp,
+        )
+        : true,
+      styleRejectionReasons: v2Pd?.styleFulfillment?.styleRejectionReasons || [],
+      selectedCandidateStyle: (success && !v2CleanNoOp && requestedRewriteStyle)
+        ? requestedRewriteStyle
+        : null,
+      selectedCandidateMateriallyDiffersFromSource: Boolean(
+        v2Pd?.styleFulfillment?.selectedCandidateMateriallyDiffersFromSource,
+      ),
+      semanticStyleOperationsApplied:
+        v2Pd?.styleFulfillment?.semanticStyleOperationsApplied || [],
+      markerOnlyStyleChange: Boolean(v2Pd?.styleFulfillment?.markerOnlyStyleChange),
+      sourceUnitCount: v2Pd?.styleFulfillment?.sourceUnitCount ?? null,
+      candidateUnitCount: v2Pd?.styleFulfillment?.candidateUnitCount ?? null,
+      sourceClauseCount: v2Pd?.styleFulfillment?.sourceClauseCount ?? null,
+      candidateClauseCount: v2Pd?.styleFulfillment?.candidateClauseCount ?? null,
+      unitDelta: v2Pd?.styleFulfillment?.unitDelta ?? null,
+      clauseDelta: v2Pd?.styleFulfillment?.clauseDelta ?? null,
+      localeAwareShorterThresholdPercent:
+        v2Pd?.styleFulfillment?.localeAwareShorterThresholdPercent ?? null,
+      selectedCandidateDiffersFromOtherStyleFixtures: (() => {
+        const styleNorm = normalizeSummaryV2RewriteStyle(requestedRewriteStyle);
+        if (!success || v2CleanNoOp || !styleNorm) return null;
+        const hashes = (['shorter', 'stronger', 'professional'] as const).map((s) => (
+          fingerprintText(
+            normalizeSummaryCandidateText(
+              buildSummaryV2StyledDeterministicText(v2.manifest, s),
+            ) || 'empty',
+          )
+        ));
+        return new Set(hashes).size === 3;
+      })(),
+      styleMaterialityPassed: Boolean(v2Pd?.styleFulfillment?.styleMaterialityPassed),
+      nativeSurfaceValidationPassed: Boolean(
+        v2Pd?.styleFulfillment?.nativeSurfaceValidationPassed ?? true,
+      ),
+      nativeSurfaceRejectionReasons:
+        v2Pd?.styleFulfillment?.nativeSurfaceRejectionReasons || [],
+      capitalizationValidationPassed:
+        v2Pd?.styleFulfillment?.capitalizationValidationPassed,
+      grammaticalPersonValidationPassed:
+        v2Pd?.styleFulfillment?.grammaticalPersonValidationPassed,
+      finiteClauseValidationPassed:
+        v2Pd?.styleFulfillment?.finiteClauseValidationPassed,
+      nativePunctuationValidationPassed:
+        v2Pd?.styleFulfillment?.nativePunctuationValidationPassed,
+      internalMarkerLeakageDetected: Boolean(
+        v2Pd?.styleFulfillment?.internalMarkerLeakageDetected,
+      ),
+      englishMorphologyLeakageDetected: Boolean(
+        v2Pd?.styleFulfillment?.englishMorphologyLeakageDetected,
+      ),
+      coordinatedPredicateCount:
+        v2Pd?.styleFulfillment?.coordinatedPredicateCount ?? null,
+      transformedCoordinatedPredicateCount:
+        v2Pd?.styleFulfillment?.transformedCoordinatedPredicateCount ?? null,
+      untransformedFinitePredicateCount:
+        v2Pd?.styleFulfillment?.untransformedFinitePredicateCount ?? null,
+      mixedPersonPredicateDetected: Boolean(
+        v2Pd?.styleFulfillment?.mixedPersonPredicateDetected,
+      ),
+      mixedTensePredicateDetected: Boolean(
+        v2Pd?.styleFulfillment?.mixedTensePredicateDetected,
+      ),
+      predicateChainValidationPassed: Boolean(
+        v2Pd?.styleFulfillment?.predicateChainValidationPassed ?? true,
+      ),
+      predicateChainRejectionReasons:
+        v2Pd?.styleFulfillment?.predicateChainRejectionReasons || [],
+      sourcePredicateChainHash:
+        v2Pd?.styleFulfillment?.sourcePredicateChainHash ?? null,
+      finalPredicateChainHash:
+        v2Pd?.styleFulfillment?.finalPredicateChainHash ?? null,
       operationMode: v2OperationMode,
       providerAccepted: v2.origin === 'ai_generated' && !v2CleanNoOp,
       providerCandidatePresent: Boolean(providerRaw),
@@ -3123,16 +3374,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? hashSummaryCandidate(normalizeSummaryCandidateText(providerRaw))
         : null,
       providerSentenceHashes: providerRaw
-        ? providerRaw.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean)
+        ? providerRaw.split(/(?<=[.!?。؟।])\s+/u).map((u) => u.trim()).filter(Boolean)
           .map((u) => fingerprintText(u))
         : [],
       providerTypedRejectionReason: providerRejected
-        ? 'summary_v2_provider_rejected_or_repaired'
+        ? (v2Pd?.providerRejectionReason || 'summary_v2_provider_rejected')
         : (v2CleanNoOp && providerMeaningful?.noOpDetected
           ? SUMMARY_NOOP_REJECTION_REASON
           : null),
       providerRejectionReason: providerRejected
-        ? 'summary_v2_provider_rejected_or_repaired'
+        ? (v2Pd?.providerRejectionReason || 'summary_v2_provider_rejected')
         : (v2CleanNoOp && providerMeaningful?.noOpDetected
           ? SUMMARY_NOOP_REJECTION_REASON
           : null),
@@ -3140,25 +3391,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? 'summary_v2_manifest_validation'
         : (v2CleanNoOp && providerMeaningful?.noOpDetected ? null : null),
       providerRejectionReasons: providerRejected
-        ? [v2.validation.reason || 'summary_v2_provider_rejected_or_repaired']
+        ? (
+          (v2Pd?.providerRejectionReasons?.length
+            ? v2Pd.providerRejectionReasons
+            : [v2.validation.reason || 'summary_v2_provider_rejected'])
+        )
         : (v2CleanNoOp && providerMeaningful?.noOpDetected
           ? [SUMMARY_NOOP_REJECTION_REASON]
           : []),
       providerSlotRejectionReasons: providerRejected
-        ? [v2.validation.reason || 'summary_v2_provider_rejected_or_repaired']
+        ? (
+          (v2Pd?.providerRejectionReasons?.length
+            ? v2Pd.providerRejectionReasons
+            : [v2.validation.reason || 'summary_v2_provider_rejected'])
+        )
         : [],
       clientFallbackReason: providerRejected
-        ? 'summary_v2_provider_rejected_or_repaired'
+        ? (v2Pd?.providerRejectionReason || 'summary_v2_provider_rejected')
         : (v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null),
       detectedVisibleContentLocaleBeforeRequest: cv.contentLocale || null,
       finalContentLocaleAfterApply: null,
-      summaryRepairAttempted: v2.origin === 'ai_repaired',
-      summaryRepairApplied: v2.origin === 'ai_repaired' && !v2CleanNoOp,
-      repairSelected: false,
-      repairCandidateHash: null,
-      repairCandidatePresent: false,
-      repairAccepted: false,
-      finalValidatedCandidateHash: (success && !v2CleanNoOp) ? meaningful.finalNormalizedHash : null,
+      finalValidatedCandidateHash: (success && !v2CleanNoOp) ? meaningfulEffective.finalNormalizedHash : null,
       // Present + hashes whenever a deterministic surface was serialized (even if later rejected).
       deterministicCandidateHash: v2DetHash,
       deterministicCandidateNormalizedHash: v2DetNormHash,
@@ -3166,8 +3419,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       clientFallbackUsed: providerRejected || v2DetOrigin || v2CleanNoOp,
       fallbackApplied: v2DetOrigin && success && !v2CleanNoOp,
       clientDeterministicFallbackReason: providerRejected
-        ? 'summary_v2_provider_rejected_or_repaired'
-        : (v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null),
+        ? (v2Pd?.providerRejectionReason || 'summary_v2_provider_rejected')
+        : (v2CleanNoOp
+          ? (styleNoSafe ? 'style_no_safe_material_change' : SUMMARY_NOOP_REJECTION_REASON)
+          : null),
+      summaryRepairAttempted: Boolean(v2Pd?.repairAttempted) || v2.origin === 'ai_repaired',
+      summaryRepairApplied: (Boolean(v2Pd?.repairApplied) || v2.origin === 'ai_repaired')
+        && !v2CleanNoOp,
+      repairSelected: Boolean(v2Pd?.repairApplied) && success && !v2CleanNoOp,
+      repairCandidateHash: v2Pd?.repairApplied
+        ? (v2Pd.candidateTransformationAfterHash || null)
+        : null,
+      repairCandidatePresent: Boolean(v2Pd?.repairAttempted),
+      repairRawCandidatePresent: Boolean(v2Pd?.repairAttempted && providerRaw),
+      repairUsableCandidatePresent: Boolean(v2Pd?.repairApplied),
+      repairAccepted: Boolean(v2Pd?.repairApplied) && success && !v2CleanNoOp,
       groundingValidationPassed: success && !v2CleanNoOp,
       grammarValidationPassed: locale === 'de' && deV2Completeness
         ? deV2Completeness.germanControlledCaseGrammarPassed
@@ -3203,7 +3469,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       priorDutySlotPresent: Boolean(v2.manifest.requiredPriorFacts.length),
       finalSlotValidationPassed: success && !v2CleanNoOp,
       providerCandidateSentenceCount: providerRaw
-        ? providerRaw.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean).length
+        ? providerRaw.split(/(?<=[.!?。؟।])\s+/u).map((u) => u.trim()).filter(Boolean).length
         : 0,
       providerOutcome: v2CleanNoOp && (providerMeaningful?.noOpDetected || v2.origin === 'ai_generated' || v2.origin === 'ai_repaired')
         ? ('rejected_noop' as const)
@@ -3212,7 +3478,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           : (v2.origin === 'ai_generated' ? ('accepted' as const) : ('not_attempted' as const))),
       noOpDetected: v2CleanNoOp,
       noOpCandidateKind: v2NoOpCandidateKind,
-      noOpRejectionReason: v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null,
+      noOpRejectionReason: v2CleanNoOp
+        ? (styleNoSafe ? 'style_no_safe_material_change' : SUMMARY_NOOP_REJECTION_REASON)
+        : null,
       providerNoOpDetected: Boolean(providerMeaningful?.noOpDetected),
       noOpRejected: v2CleanNoOp,
       rejectionStage: undefined,
@@ -3256,16 +3524,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     };
     if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason) {
       const typedFail = deV2BlockReason
+        || styleBlockReason
         || v2.reason
         || 'summary_v2_validation_failed';
       const rejectionStage = deV2BlockReason
         ? 'summary_v2_german_preapply_completeness'
-        : 'summary_v2_manifest_validation';
+        : (styleNoSafe || styleBlockReason
+          ? 'summary_v2_rewrite_style'
+          : 'summary_v2_manifest_validation');
       return {
         blocked: true,
         reason: typedFail,
         // Apply-safe empty/live text — evaluated candidate stays on diagnostics.
-        text: liveSummary,
+        text: (styleNoSafe && liveSummary) ? liveSummary : liveSummary,
         origin: v2.origin,
         roleDutyConflict: false,
         countedAsSuccess: false,
@@ -3280,9 +3551,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           finalCandidateSource: 'none',
           deterministicAccepted: false,
           fallbackApplied: false,
-          noOpDetected: false,
-          noOpCandidateKind: null,
-          noOpRejectionReason: null,
+          noOpDetected: Boolean(styleNoSafe),
+          noOpCandidateKind: styleNoSafe ? 'client_deterministic' : null,
+          noOpRejectionReason: styleNoSafe ? 'style_no_safe_material_change' : null,
           rejectionStage,
           typedFailureReason: typedFail,
           finalTypedFailureReason: typedFail,
@@ -3307,7 +3578,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     if (v2CleanNoOp) {
       return {
         blocked: true,
-        reason: SUMMARY_NOOP_REJECTION_REASON,
+        reason: styleNoSafe
+          ? 'style_no_safe_material_change'
+          : SUMMARY_NOOP_REJECTION_REASON,
         text: typeof cv.summary === 'string' ? cv.summary : liveSummary,
         origin: cv.summaryOrigin || 'user',
         roleDutyConflict: false,
@@ -3315,13 +3588,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         diagnostics: diagBase as unknown as FinalizeCvAiFieldResult['diagnostics'],
       };
     }
+    const styleOkForSuccess = !requestedRewriteStyle
+      || !v2EnhanceExisting
+      || Boolean(v2Pd?.styleFulfillment?.styleValidationPassed);
     return {
       blocked: false,
       text: v2.text,
       origin: v2.origin,
       roleDutyConflict: false,
-      countedAsSuccess: true,
-      diagnostics: diagBase as unknown as FinalizeCvAiFieldResult['diagnostics'],
+      countedAsSuccess: styleOkForSuccess,
+      diagnostics: {
+        ...diagBase,
+        styleValidationPassed: !requestedRewriteStyle
+          || !v2EnhanceExisting
+          || Boolean(v2Pd?.styleFulfillment?.styleValidationPassed && !v2CleanNoOp),
+      } as unknown as FinalizeCvAiFieldResult['diagnostics'],
     };
   }
 
@@ -6061,6 +6342,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         perspectiveValidationPassed,
         rewriteStyle: rewriteStyleDiag,
         previousSummaryUsedAsFactSource: false,
+        summaryV2FactIdPathActive: false,
+        serbianStructuredDomainGateApplicable: locale === 'sr',
+        hindiWarehouseGrammarFieldsApplicable: locale === 'hi',
         serbianStructuredDomainGateEvaluated: locale === 'sr'
           ? Boolean(serbianStructuredDomainGate?.evaluated)
           : undefined,
@@ -7364,6 +7648,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     snapshot,
     groundingSourceDescription: grounding?.sourceDescription,
   });
+  // Prefer explicit fact-authority, else live textarea. Never FACT-LOCK from a
+  // grounding-stripped empty shell when the live description still has duties
+  // (description-only user entries without originalUserDescription stamp).
+  const factAuthorityForShadow = (
+    authoritativeFactSource
+    || (!grounding?.staleGeneratedContentExcluded ? liveOperationSource : '')
+    || ''
+  ).trim();
   const shadowedExpForFacts: WorkExperience | null = exp
     ? (sourceWasEmpty
       ? {
@@ -7375,14 +7667,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         recoveredSemanticDuties: undefined,
         groundingRecoverySource: undefined,
       }
-      : (authoritativeFactSource
+      : (factAuthorityForShadow
         ? {
           ...(grounding?.experienceForAi || exp),
-          description: authoritativeFactSource,
+          description: factAuthorityForShadow,
           originalUserDescription:
-            (exp.originalUserDescription || '').trim() || authoritativeFactSource,
+            (exp.originalUserDescription || '').trim() || factAuthorityForShadow,
           canonicalDescription:
-            (exp.canonicalDescription || '').trim() || authoritativeFactSource,
+            (exp.canonicalDescription || '').trim() || factAuthorityForShadow,
           descriptionOrigin: 'user' as const,
         }
         : (grounding?.experienceForAi || exp)))
@@ -7415,6 +7707,38 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     : (authoritativeFactSource
       || liveOperationSource
       || canonical.map((f) => f.sourceText || f.value).join('\n'));
+  const requestedExperienceRewriteStyle = String(input.rewriteStyle || '')
+    .trim()
+    .toLowerCase();
+  void EXPERIENCE_STRONGER_386_REVISION;
+  // Style-saturated completed Experience → precise true no-op (not generic noop).
+  if (
+    requestedExperienceRewriteStyle === 'stronger'
+    && !sourceWasEmpty
+    && sourceForCoverage
+    && isExperienceStyleSaturated(sourceForCoverage, locale)
+  ) {
+    return {
+      text: sourceForCoverage,
+      origin: 'user',
+      blocked: true,
+      countedAsSuccess: false,
+      reason: EXPERIENCE_STYLE_NO_SAFE_MATERIAL_CHANGE,
+      roleDutyConflict: false,
+      diagnostics: {
+        rejectionStage: 'experience_style:saturated',
+        typedFailureReason: EXPERIENCE_STYLE_NO_SAFE_MATERIAL_CHANGE,
+        noOpDetected: true,
+        noOpRejectionReason: EXPERIENCE_STYLE_NO_SAFE_MATERIAL_CHANGE,
+        rewriteStyle: 'stronger',
+        requestedRewriteStyle: 'stronger',
+        rewriteStylePropagatedToDeterministic: true,
+        meaningfulChangeDetected: false,
+        selectedExperienceEntryIdHash,
+        arrayIndexAtRequest,
+      },
+    };
+  }
   // Cross-locale flag for visible comparison / attachPerspectiveDiag / preapply.
   // tryAccept shadows a stage-aware variant; this outer flag is source↔target based.
   const crossLocaleOp = Boolean(
@@ -7855,21 +8179,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       semanticNoOpReason: safeEval.semanticNoOpReason,
       materialImprovementDetected: (() => {
         const isEs = (locale || '').toLowerCase().startsWith('es');
-        const kinds = isEs
+        const styleBillable = ['stronger', 'shorter', 'professional'].includes(
+          requestedExperienceRewriteStyle,
+        );
+        const kinds = isEs && !styleBillable
           ? safeEval.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
           : safeEval.materialImprovementKinds;
         return safeEval.materialImprovementDetected && kinds.length > 0;
       })(),
       materialImprovementKinds: (() => {
         const isEs = (locale || '').toLowerCase().startsWith('es');
-        const kinds = isEs
+        const styleBillable = ['stronger', 'shorter', 'professional'].includes(
+          requestedExperienceRewriteStyle,
+        );
+        const kinds = isEs && !styleBillable
           ? safeEval.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
           : safeEval.materialImprovementKinds;
         return safeEval.materialImprovementDetected ? [...kinds] : [];
       })(),
       materialImprovementEvidenceCount: (() => {
         const isEs = (locale || '').toLowerCase().startsWith('es');
-        const kinds = isEs
+        const styleBillable = ['stronger', 'shorter', 'professional'].includes(
+          requestedExperienceRewriteStyle,
+        );
+        const kinds = isEs && !styleBillable
           ? safeEval.materialImprovementKinds.filter((k) => k !== 'grounded_phrasing_enhancement')
           : safeEval.materialImprovementKinds;
         return safeEval.materialImprovementDetected ? kinds.length : 0;
@@ -10261,6 +10594,28 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   if (hasAiProtocolMarker(candidate)) {
     candidate = '';
   }
+  // Experience Stronger: prefer deterministic native strengthen when provider is
+  // empty/echo and the live source is weak but transformable.
+  if (
+    requestedExperienceRewriteStyle === 'stronger'
+    && !sourceWasEmpty
+    && sourceForCoverage
+    && !isExperienceStyleSaturated(sourceForCoverage, locale)
+  ) {
+    const strongerPref = buildExperienceStrongerDeterministic({
+      sourceDescription: sourceForCoverage,
+      locale,
+      isPresent,
+      gender,
+    });
+    const candidateEcho = !candidate.trim()
+      || !experienceAiHasMeaningfulChange(sourceForCoverage, candidate);
+    if (!strongerPref.noSafeMaterialChange && candidateEcho) {
+      candidate = prepareCandidate(strongerPref.text, locale, 'experience_description');
+      clientDeterministicFallbackAttempted = true;
+      clientDeterministicFallbackReason = 'experience_stronger_deterministic';
+    }
+  }
   // Never accept prior-occupation duties after stale grounding was excluded.
   if (
     grounding?.staleGeneratedContentExcluded
@@ -10269,9 +10624,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     candidate = '';
   }
   // Occupation / industry labels alone must never justify regulated pharmacy claims.
+  // Prefer live fact-authority text so entry-owned wording is not wiped when
+  // grounding.sourceDescription is empty.
   const userAllowsRegulated = Boolean(
-    grounding?.sourceDescription
-    && hasUnsupportedRegulatedPharmacyClaims(grounding.sourceDescription),
+    (grounding?.sourceDescription
+      && hasUnsupportedRegulatedPharmacyClaims(grounding.sourceDescription))
+    || (sourceForCoverage
+      && hasUnsupportedRegulatedPharmacyClaims(sourceForCoverage)),
   );
   if (
     candidate.trim()
@@ -10414,13 +10773,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           capturedAtRequest: true,
           isPresent,
           crossLocaleOperation: crossLocaleOp,
+          requestedRewriteStyle: requestedExperienceRewriteStyle || null,
         });
         lastVisibleComparisonEval = postVis;
-        // AAB-313: never bill Spanish on generic grounded_phrasing alone.
-        // Cross-locale DE→ES (and any A→ES): wrong_locale_fixed / missing_fact_restored
-        // are billable material improvements even when same-locale phrasing is absent.
+        // AAB-313: never bill Spanish on generic grounded_phrasing alone —
+        // except when an explicit rewrite style (Stronger/Shorter/Professional)
+        // requested that phrasing improvement.
+        const styleBillablePhrasing = ['stronger', 'shorter', 'professional'].includes(
+          requestedExperienceRewriteStyle,
+        );
         const esKinds = (postVis.materialImprovementKinds || []).filter(
-          (k) => k !== 'grounded_phrasing_enhancement',
+          (k) => styleBillablePhrasing || k !== 'grounded_phrasing_enhancement',
         );
         const kindsOk = postVis.materialImprovementDetected && esKinds.length > 0;
         const crossLocaleVisibleFix = esKinds.includes('wrong_locale_fixed')
@@ -10444,6 +10807,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
           sourceCorrectableDefectCount: visibleSourceAnalysis.correctableDefectCount,
           crossLocaleOperation: crossLocaleOp,
+          requestedRewriteStyle: requestedExperienceRewriteStyle || null,
         });
         // Keep a previously proven tense-normalizer decision if the re-decide
         // loses tenseOnlyMeta context but still has wrong_tense evidence.
@@ -11386,6 +11750,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             useVisibleForNoOp: true,
             capturedAtRequest: true,
             isPresent,
+            requestedRewriteStyle: requestedExperienceRewriteStyle || null,
           });
           lastVisibleComparisonEval = postVis;
           if (
@@ -11459,6 +11824,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             isPresent,
             sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
             sourceCorrectableDefectCount: visibleSourceAnalysis.correctableDefectCount,
+            requestedRewriteStyle: requestedExperienceRewriteStyle || null,
           });
           lastCanonicalDecision = cons.decision;
           if (!cons.decision.shouldApply) {
@@ -13325,15 +13691,23 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       clientDeterministicFallbackAttempted = true;
       clientDeterministicFallbackReason = clientDeterministicFallbackReason
         || 'experience_ai_noop_recovery';
-      const stylistic = normalizeLocaleText(
-        buildExperienceAiNoOpStylisticFallback({
+      const strongerDet = requestedExperienceRewriteStyle === 'stronger'
+        ? buildExperienceStrongerDeterministic({
           sourceDescription: sourceForCoverage,
           locale,
           isPresent,
           gender,
-        }),
-        locale,
-      );
+        })
+        : null;
+      const stylisticRaw = (strongerDet && !strongerDet.noSafeMaterialChange)
+        ? strongerDet.text
+        : buildExperienceAiNoOpStylisticFallback({
+          sourceDescription: sourceForCoverage,
+          locale,
+          isPresent,
+          gender,
+        });
+      const stylistic = normalizeLocaleText(stylisticRaw, locale);
       const stylisticGate = validateExperienceCvPerspective(stylistic, locale);
       clientDeterministicFallbackBulletCount = splitExperienceBullets(stylistic).filter(Boolean).length;
       clientDeterministicFallbackScripts = detectBulletScripts(stylistic);
@@ -13555,9 +13929,23 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
  */
 export function finalizeCvAiFieldForApply(
   input: FinalizeCvAiFieldInput,
-): FinalizeCvAiFieldResult {
-  if (input.field === 'experience_description' || input.action === 'experience_bullets') {
-    return finalizeBullets(input);
+  ): FinalizeCvAiFieldResult {
+  const action = String(input.action || '');
+  const field = String(input.field || '');
+  const isExperience = (
+    field === 'experience_description'
+    || field === 'experience'
+    || action === 'experience_bullets'
+    || action === 'experience_generate'
+    || action.startsWith('experience_')
+  );
+  if (isExperience) {
+    return finalizeBullets({
+      ...input,
+      // Normalize legacy field aliases onto the bullets path.
+      field: 'experience_description',
+      action: action === 'experience_generate' ? 'experience_bullets' : input.action,
+    });
   }
   return finalizeSummary(input);
 }

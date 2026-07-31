@@ -88,6 +88,13 @@ export function factCoveredInText(
   if (deinflected.length >= 8 && corpus.includes(deinflected)) return true;
   const deClause = bulletToGermanWoIchClause(fact.bulletText, tense).toLowerCase();
   if (deClause.length >= 8 && corpus.includes(deClause)) return true;
+  const deSoft = deClause
+    .replace(/\b(?:herzlich|kompetent|serviceorientiert|freundlich|zuverlässig|sorgfältig|fundiert|zielgerichtet|insgesamt)\b/giu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  if (deSoft.length >= 8 && corpus.replace(/\b(?:herzlich|kompetent|serviceorientiert|freundlich|zuverlässig|sorgfältig|fundiert|zielgerichtet|insgesamt)\b/giu, '').replace(/\s{2,}/g, ' ').includes(deSoft)) {
+    return true;
+  }
   const tokens = fact.tokenStems;
   if (tokens.length === 0) return false;
   const hits = tokens.filter((t) => morphVariants(t).some((v) => corpus.includes(v))).length;

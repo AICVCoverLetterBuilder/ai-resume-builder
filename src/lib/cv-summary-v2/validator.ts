@@ -3,6 +3,7 @@ import { SUMMARY_V2_REVISION } from './flag';
 import { factCoveredInText } from './facts';
 import { bulletToWhereClauseEn, dutyTenseFromEmploymentState, summaryHasMalformedDoublePast } from './tense';
 import { bulletToGermanWoIchClause } from './german-surface';
+import { realizeFirstPersonDutyClause } from './native-surface';
 import type {
   SummaryV2EmploymentState,
   SummaryV2EntryFact,
@@ -65,19 +66,34 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Invented metrics / leadership / quantified impact not owned by the manifest. */
+function detectUnsupportedMaterialClaims(text: string): boolean {
+  const t = text || '';
+  if (!t.trim()) return false;
+  return (
+    /\b\d+\s*%/u.test(t)
+    || /\$\s*\d|\b\d+\s*(?:USD|EUR|€)/iu.test(t)
+    || /\b(?:team\s+of\s+\d+|Team\s+von\s+\d+|führte\s+ein\s+Team|led\s+a\s+team|staff\s+of\s+\d+)\b/iu
+      .test(t)
+    || /\b(?:steigerte\s+ich\s+den\s+Umsatz|increased\s+(?:revenue|sales)|boosted\s+revenue)\b/iu
+      .test(t)
+    || /\b(?:Leadership|critical\s+thinking\s+skills)\b/iu.test(t)
+  );
+}
+
 function countDurationExpressions(text: string, locale: Locale): number {
   const t = text || '';
   if (locale === 'en') {
     const matches = t.match(
       /\b(?:approximately|about|around|with)?\s*(?:one|two|three|four|five|six|seven|eight|nine|ten|[\d.]+)\s+(?:and\s+a\s+half\s+)?years?\s+of\s+experience\b/giu,
     );
-    const alt = t.match(/\bI\s+have\s+[^.]{0,80}\bexperience\b/giu);
+    const alt = t.match(/\bI\s+(?:have|bring)\s+[^.]{0,80}\bexperience\b/giu);
     return Math.max(matches?.length || 0, alt?.length || 0);
   }
   // Count sentence-level duration claims (not every keyword hit inside one phrase).
-  const units = t.split(/(?<=[.!?。؟])\s+/u).map((u) => u.trim()).filter(Boolean);
+  const units = t.split(/(?<=[.!?。؟।])\s+/u).map((u) => u.trim()).filter(Boolean);
   return units.filter((u) => (
-    /Erfahrung|experiencia|expérience|esperienza|опыт|лет|года|год\b|iskustva|godina|godine|経験|通算|約\d|年半|年|अनुभव|वर्ष|خبرة|سنة|سنوات|anos\b|anni\b|Jahren|Jahre|years?\s+of\s+experience|mjesec|meseci|mohi|か月|meses|mois/iu
+    /Erfahrung|experiencia|expérience|esperienza|опыт|лет|года|год\b|iskustva|godina|godine|経験|通算|約\d|年半|年|अनुभव|वर्ष|خبرة|سنة|سنوات|años?\b|anos\b|anni\b|Jahren|Jahre|years?\s+of\s+experience|mjesec|meseci|mohi|か月|meses|mois/iu
       .test(u)
   )).length;
 }
@@ -86,6 +102,22 @@ function countDurationExpressions(text: string, locale: Locale): number {
 function hasAnyMarker(text: string, markers: string[]): boolean {
   const t = (text || '').toLocaleLowerCase();
   return markers.some((m) => m && t.includes(m.toLocaleLowerCase()));
+}
+
+function stripOptionalGermanSoftModifiers(text: string): string {
+  return (text || '')
+    .replace(/\b(?:kompetent|serviceorientiert)\s+und\s+(?:kompetent|serviceorientiert)\b/giu, '')
+    .replace(
+      /\b(?:herzlich|kompetent|serviceorientiert|freundlich|zuverlässig|sorgfältig|fundiert|zielgerichtet|insgesamt)\b/giu,
+      '',
+    )
+    // Drop redundant hotel NP when employer already states the hotel context.
+    .replace(/\s+des Hotels\b/giu, '')
+    .replace(/\bsowie\b/giu, 'und')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+und\s+und\b/giu, ' und ')
+    .replace(/\s+und\s+(?=[,.]|$)/giu, ' ')
+    .trim();
 }
 
 /**
@@ -98,11 +130,13 @@ export function entryDutiesMatchEmploymentTense(
   facts: SummaryV2EntryFact[],
   employmentState: SummaryV2EmploymentState,
   locale: Locale,
+  gender?: string | null,
 ): boolean {
   if (facts.length === 0) return true;
   const corpus = (text || '').toLowerCase();
   if (!corpus) return false;
   const tense = dutyTenseFromEmploymentState(employmentState);
+  const corpusSoft = stripOptionalGermanSoftModifiers(corpus);
 
   return facts.every((f) => {
     const expected = bulletToWhereClauseEn(f.bulletText, tense).toLowerCase();
@@ -116,6 +150,9 @@ export function entryDutiesMatchEmploymentTense(
       // German V2 uses first-person "wo ich …" clauses, not raw live bullets.
       const deClause = bulletToGermanWoIchClause(f.bulletText, tense).toLowerCase();
       if (deClause && corpus.includes(deClause)) return true;
+      // Shorter / polish may drop soft adjectives — still require the duty core.
+      const deSoft = stripOptionalGermanSoftModifiers(deClause);
+      if (deSoft.length >= 8 && corpusSoft.includes(deSoft)) return true;
       // Also accept significant stems from the live bullet once the 1sg finite is present.
       const live = (f.bulletText || '').replace(/[.;]+$/u, '').trim().toLowerCase();
       const stems = live
@@ -125,7 +162,7 @@ export function entryDutiesMatchEmploymentTense(
       if (
         stems.length > 0
         && stems.every((s) => corpus.includes(s))
-        && /\b(?:prüfe|prüfte|koordiniere|koordinierte|erstellte|anpasste|vorbereitete|überprüfte|spreche|nehme|nahm|führe|führte|durchführe|entgegennehme|entgegennahm|begrüßte|verwaltete)\b/iu
+        && /\b(?:prüfe|prüfte|koordiniere|koordinierte|erstellte|anpasste|vorbereitete|überprüfte|spreche|nehme|nahm|führe|führte|durchführe|entgegennehme|entgegennahm|begrüßte|verwaltete|beantwortete|erfasste|bearbeitete|austausche|austauschte)\b/iu
           .test(corpus)
       ) {
         return true;
@@ -133,9 +170,22 @@ export function entryDutiesMatchEmploymentTense(
     }
 
     if (locale !== 'en') {
-      // Non-EN shells embed live bullets unchanged (present or already-past native).
+      // Non-EN shells: accept live bullets OR first-person native realizations.
       const live = (f.bulletText || '').replace(/[.;]+$/u, '').trim().toLowerCase();
       if (live && corpus.includes(live)) return true;
+      const realized = realizeFirstPersonDutyClause(
+        f.bulletText,
+        locale,
+        employmentState,
+        gender,
+      ).toLowerCase();
+      if (realized && corpus.includes(realized)) return true;
+      // Stem fallback: significant content tokens still present after 1sg rewrite.
+      const stems = live
+        .split(/[^\p{L}0-9]+/u)
+        .filter((t) => t.length >= 5)
+        .slice(0, 3);
+      if (stems.length > 0 && stems.every((s) => corpus.includes(s))) return true;
     }
     return false;
   });
@@ -180,15 +230,28 @@ export function validateSummaryV2AgainstManifest(
   const currentStateExpressed = /\b(?:currently|derzeit|actuellement|attualmente|actualmente|atualmente|trenutno)\b/iu
     .test(text)
     || /\bsince\b/iu.test(text)
-    || hasAnyMarker(text, ['сейчас', 'حاليا', 'حالیا', 'أعمل', 'वर्तमान', '現在']);
+    || hasAnyMarker(text, [
+      'сейчас', 'حاليا', 'حالیا', 'أعمل', 'वर्तमान', '現在', '現職',
+      'in my current role', 'en mi rol actual', 'dans mon rôle', 'nel mio ruolo',
+      'na minha função atual', 'в текущей роли', 'u trenutnoj ulozi',
+      'في دوري الحالي', 'वर्तमान भूमिका',
+      'in meiner aktuellen rolle', 'in einer früheren rolle',
+    ]);
   const priorRolePresent = !prior?.role
     || new RegExp(escapeRegExp(prior.role), 'iu').test(text);
   const priorEmployerPresent = !prior?.employer
     || new RegExp(escapeRegExp(prior.employer), 'iu').test(text);
   const priorStateExpressed = !prior
-    || /\b(?:previously|formerly|zuvor|anteriormente|auparavant|in\s+precedenza|prethodno)\b/iu
+    || /\b(?:previously|formerly|zuvor|anteriormente|auparavant|in\s+precedenza|prethodno|ranije)\b/iu
       .test(text)
-    || hasAnyMarker(text, ['ранее', 'سابقا', 'इससे पहले', '以前']);
+    || hasAnyMarker(text, [
+      'ранее', 'سابقا', 'इससे पहले', 'पहले', '以前', '前は', '前職',
+      'antes', 'prije', 'già', 'déjà', "j'ai déjà",
+      'in a previous role', 'en un rol anterior', 'dans un rôle précédent',
+      'in un ruolo precedente', 'em uma função anterior', 'в предыдущей роли',
+      'u prethodnoj ulozi', 'في دور سابق', 'पिछली भूमिका',
+      'in einer früheren rolle',
+    ]);
 
   const currentDutyTenseOk = !current
     || entryDutiesMatchEmploymentTense(
@@ -196,6 +259,7 @@ export function validateSummaryV2AgainstManifest(
       requiredCurrent,
       current.employmentState,
       manifest.locale,
+      manifest.gender,
     );
   const priorDutyTenseOk = manifest.priors.every((p) => {
     const facts = requiredPrior.filter((f) => f.entryId === p.entryId);
@@ -204,18 +268,22 @@ export function validateSummaryV2AgainstManifest(
       facts,
       p.employmentState,
       manifest.locale,
+      manifest.gender,
     );
   });
 
   const durationExpressionCount = countDurationExpressions(text, manifest.locale);
   const staleResidueDetected = detectStaleOccupationResidue(text, manifest);
-  const unsupportedClaimCount = staleResidueDetected ? 1 : 0;
+  const unsupportedMaterialClaim = detectUnsupportedMaterialClaims(text);
+  const unsupportedClaimCount = (staleResidueDetected ? 1 : 0)
+    + (unsupportedMaterialClaim ? 1 : 0);
   const hasLiveAuthority = Boolean(manifest.current || manifest.priors.length > 0);
 
   let reason: string | null = null;
   if (!text) reason = 'empty_summary';
   else if (!hasLiveAuthority) reason = 'no_live_experience_authority';
   else if (staleResidueDetected) reason = 'stale_occupation_residue';
+  else if (unsupportedMaterialClaim) reason = 'unsupported_material_claim';
   else if (manifest.totalDurationMonths <= 0 && durationExpressionCount > 0) {
     reason = 'unsupported_duration_without_dates';
   } else if (manifest.totalDurationMonths > 0 && durationExpressionCount !== 1) {

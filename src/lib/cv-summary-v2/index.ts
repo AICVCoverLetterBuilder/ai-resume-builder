@@ -57,6 +57,44 @@ export {
   summaryV2Active,
   repairSummaryV2DutyTense,
 } from './pipeline';
-export type { RunSummaryV2Options } from './pipeline';
+export type { RunSummaryV2Options, SummaryV2PipelineDiagnostics } from './pipeline';
+export {
+  SUMMARY_V2_REWRITE_STYLE_384_REVISION,
+  SUMMARY_V2_UNIVERSAL_STYLE_385_REVISION,
+  normalizeSummaryV2RewriteStyle,
+  buildSummaryV2StyledDeterministicText,
+  buildSummaryV2BalancedEnhanceText,
+  transformSummaryV2ForRewriteStyle,
+  evaluateSummaryV2StyleFulfillment,
+  repairSummaryV2RewriteStyle,
+  summaryV2StylePairDistinct,
+  summaryV2ShorterMinLengthDeltaPercent,
+  listSemanticStyleOperations,
+  isSummaryV2MarkerOnlyStyleChange,
+  summaryV2CountUnits,
+  summaryV2ClauseCount,
+} from './rewrite-style';
+export type {
+  SummaryV2RewriteStyle,
+  SummaryV2StyleFulfillment,
+  SummaryV2StyleTransformResult,
+  SummaryV2SemanticOperation,
+} from './rewrite-style';
+export {
+  SUMMARY_V2_NATIVE_SURFACE_386_REVISION,
+  formatNativeDurationSentence,
+  buildNativeFirstPersonDutyTail,
+  realizeFirstPersonDutyClause,
+  evaluateSummaryV2NativeSurface,
+} from './native-surface';
+export type { SummaryV2NativeSurfaceResult } from './native-surface';
+export {
+  SOUTH_SLAVIC_PREDICATE_CHAIN_386_REVISION,
+  realizeSouthSlavicPredicateChain,
+  analyzeSouthSlavicPredicateChainText,
+  evaluateSouthSlavicSummaryPredicateChains,
+  isSouthSlavicFiniteVerbToken,
+} from './south-slavic-predicates';
+export type { SouthSlavicPredicateChainDiagnostics } from './south-slavic-predicates';
 export { compareSummaryV2AgainstLegacy } from './shadow';
 export type { SummaryV2ShadowComparison } from './shadow';

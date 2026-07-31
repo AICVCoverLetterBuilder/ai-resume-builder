@@ -7,10 +7,13 @@ import type {
 } from './types';
 import {
   bulletToWhereClauseEn,
-  dutyBulletForLocaleShell,
   dutyTenseFromEmploymentState,
 } from './tense';
 import { buildGermanSummaryV2FromManifest } from './german-surface';
+import {
+  buildNativeFirstPersonDutyTail,
+  formatNativeDurationSentence,
+} from './native-surface';
 
 export { bulletToWhereClauseEn } from './tense';
 export {
@@ -88,11 +91,11 @@ function buildEnglishFromManifest(manifest: SummaryV2SelectionManifest): string 
 function localeDutyTail(
   facts: SummaryV2EntryFact[],
   employmentState: SummaryV2EmploymentState,
+  locale: Locale,
+  gender?: string | null,
 ): string {
-  const duties = facts
-    .map((f) => dutyBulletForLocaleShell(f.bulletText, employmentState))
-    .filter(Boolean);
-  return duties.length ? ` — ${duties.join('; ')}` : '';
+  const bullets = facts.map((f) => f.bulletText).filter(Boolean);
+  return buildNativeFirstPersonDutyTail(bullets, locale, employmentState, gender);
 }
 
 /**
@@ -109,7 +112,12 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
   if (current) {
     const role = current.role || 'Professional';
     const employer = current.employer;
-    const dutyTail = localeDutyTail(manifest.requiredCurrentFacts, current.employmentState);
+    const dutyTail = localeDutyTail(
+      manifest.requiredCurrentFacts,
+      current.employmentState,
+      locale,
+      manifest.gender,
+    );
     if (locale === 'de') {
       units.push(
         employer
@@ -161,8 +169,8 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
     } else if (locale === 'hi') {
       units.push(
         employer
-          ? `मैं वर्तमान में ${employer} में ${role} के रूप में काम करता/करती हूँ${dutyTail}.`
-          : `मैं वर्तमान में ${role} के रूप में काम करता/करती हूँ${dutyTail}.`,
+          ? `मैं वर्तमान में ${employer} में ${role} के रूप में काम करता/करती हूँ${dutyTail}।`
+          : `मैं वर्तमान में ${role} के रूप में काम करता/करती हूँ${dutyTail}।`,
       );
     } else if (locale === 'ja') {
       units.push(
@@ -183,7 +191,7 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
     const priorFacts = manifest.requiredPriorFacts.filter((f) => f.entryId === prior.entryId);
     const role = prior.role || 'Professional';
     const employer = prior.employer;
-    const dutyTail = localeDutyTail(priorFacts, prior.employmentState);
+    const dutyTail = localeDutyTail(priorFacts, prior.employmentState, locale, manifest.gender);
     if (locale === 'de') {
       units.push(
         employer
@@ -235,8 +243,8 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
     } else if (locale === 'hi') {
       units.push(
         employer
-          ? `इससे पहले मैं ${employer} में ${role} के रूप में काम करता/करती था/थी${dutyTail}.`
-          : `इससे पहले मैं ${role} के रूप में काम करता/करती था/थी${dutyTail}.`,
+          ? `इससे पहले मैं ${employer} में ${role} के रूप में काम करता/करती था/थी${dutyTail}।`
+          : `इससे पहले मैं ${role} के रूप में काम करता/करती था/थी${dutyTail}।`,
       );
     } else if (locale === 'ja') {
       units.push(
@@ -254,8 +262,10 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
   }
 
   if (dur) {
-    // Duration exactly once — prepend as its own unit for non-EN shells.
-    units.unshift(`${dur.replace(/\.$/u, '')}.`);
+    // Duration exactly once — complete capitalized sentence (never a lowercase fragment).
+    const durationSentence = formatNativeDurationSentence(dur, locale)
+      || `${dur.replace(/\.$/u, '')}.`;
+    units.unshift(durationSentence);
   }
 
   return units.join(' ').replace(/\s+/g, ' ').trim();

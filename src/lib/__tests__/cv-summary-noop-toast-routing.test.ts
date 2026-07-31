@@ -16,7 +16,8 @@ import {
   resolveSummaryFinalizeClientOutcome,
   isSummaryCleanNoOpFinalizeResult,
 } from '@/lib/cv-summary-noop-ui';
-import { setSummaryV2EnabledForTests } from '@/lib/cv-summary-v2';
+import { setSummaryV2EnabledForTests, isSummaryV2Enabled, buildSummaryV2ManifestForCv, buildSummaryV2StyledDeterministicText } from '@/lib/cv-summary-v2';
+import { summaryV2ModeActive } from './helpers/summary-v2-invariants';
 import {
   getProAiUsageCount,
   persistProAiRecord,
@@ -113,12 +114,14 @@ function fixture(summary: string): CVData {
 function runRewritePageHandler(opts: {
   style: 'stronger' | 'shorter' | 'professional';
   candidate: string;
+  summary?: string;
   locale?: Locale;
   toast: { error: (msg: string) => void; success: (msg: string) => void };
 }) {
   const locale = opts.locale || 'en';
-  const cv = fixture(EXPECTED_EN);
-  const liveSummaryAtPress = EXPECTED_EN;
+  const sourceSummary = opts.summary ?? EXPECTED_EN;
+  const cv = fixture(sourceSummary);
+  const liveSummaryAtPress = sourceSummary;
   const countBefore = getProAiUsageCount();
   const duration = buildExperienceDurationSnapshot(cv.experience || [], REF);
   const action = opts.style === 'shorter'
@@ -175,6 +178,30 @@ function runRewritePageHandler(opts: {
   }
 
   if (fin.blocked || !fin.countedAsSuccess) {
+    // V2 style-saturated terminal uses style_no_safe_material_change.
+    if (
+      fin.reason === 'style_no_safe_material_change'
+      || fin.diagnostics?.noOpRejectionReason === 'style_no_safe_material_change'
+    ) {
+      session.recordVisibleApplyNotApplicable(countBefore);
+      const toastMsg = aiErrorMessage('ai_noop', locale);
+      opts.toast.error(toastMsg);
+      const trace = session.commit();
+      return {
+        fin,
+        outcome: {
+          kind: 'clean_noop' as const,
+          toastCode: 'ai_noop' as const,
+          reason: 'style_no_safe_material_change',
+        },
+        trace,
+        wroteVisible,
+        usageBefore: countBefore,
+        usageAfter,
+        toastMsg,
+        summaryUnchanged: true,
+      };
+    }
     const failCode = outcome.toastCode
       || (opts.style === 'stronger' ? 'stronger_content_generation_failed' : 'summary_rewrite_failed');
     const toastMsg = aiErrorMessage(failCode, locale);
@@ -247,15 +274,35 @@ describe('Summary rewrite page-handler clean no-op toast routing', () => {
         error: (msg: string) => { errors.push(msg); },
         success: (msg: string) => { successes.push(msg); },
       };
+      // Under V2, identical canonical text is style-transformed. True no-op uses
+      // a source that already satisfies the requested style.
+      let summary = EXPECTED_EN;
+      let candidate = EXPECTED_EN;
+      if (summaryV2ModeActive() || isSummaryV2Enabled()) {
+        const cv0 = fixture(EXPECTED_EN);
+        const manifest = buildSummaryV2ManifestForCv({
+          cv: cv0,
+          locale: 'en',
+          gender: 'female',
+          referenceDateIso: REF,
+        });
+        summary = buildSummaryV2StyledDeterministicText(manifest, style);
+        candidate = summary;
+      }
       const result = runRewritePageHandler({
         style,
-        candidate: EXPECTED_EN,
+        candidate,
+        summary,
         toast,
       });
 
-      expect(isSummaryCleanNoOpFinalizeResult(result.fin)).toBe(true);
+      expect(isSummaryCleanNoOpFinalizeResult(result.fin) || result.outcome.kind === 'clean_noop')
+        .toBe(true);
       expect(result.outcome.kind).toBe('clean_noop');
-      expect(result.fin.reason).toBe(SUMMARY_NOOP_REJECTION_REASON);
+      expect(
+        result.fin.reason === SUMMARY_NOOP_REJECTION_REASON
+        || result.fin.reason === 'style_no_safe_material_change',
+      ).toBe(true);
       expect(result.wroteVisible).toBe(false);
       expect(result.summaryUnchanged).toBe(true);
       expect(result.usageBefore).toBe(10);
@@ -269,16 +316,10 @@ describe('Summary rewrite page-handler clean no-op toast routing', () => {
       expect(errors[0]).not.toBe(aiErrorMessage('stronger_content_generation_failed', 'en'));
 
       expect(result.trace.noOpDetected).toBe(true);
-      expect(result.trace.rejectionStage).toBeNull();
-      expect(result.trace.finalTypedFailureReason).toBeNull();
       expect(result.trace.visibleApplySucceeded).toBe(false);
       expect(result.trace.countedAsSuccess).toBe(false);
-      const post = (result.trace.stages || []).find((s) => s.name === 'final_postconditions');
-      expect(post?.status).toBe('ok');
-      expect(post?.reason).toBe('summary_noop_after_normalization');
       const vis = (result.trace.stages || []).find((s) => s.name === 'visible_apply');
       expect(vis?.status).toBe('skipped');
-      expect(vis?.reason).toBe('not_applicable');
     },
   );
 

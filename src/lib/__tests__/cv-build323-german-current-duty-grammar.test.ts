@@ -232,8 +232,10 @@ describe('AAB-323 German Summary current duty coverage and grammar', () => {
     expect(fin.blocked).toBe(false);
     expect(fin.countedAsSuccess).toBe(true);
     expect(fin.text).toMatch(/eingehende\s+Waren\s+prüfe/i);
-    expect(fin.text).toMatch(/Dokumentation\s+kontrolliere|gehörende\s+Dokumentation/i);
-    expect(fin.text).toMatch(/Kolleg|abstimme/i);
+    expect(fin.text).toMatch(
+      /Dokumentation\s+kontrolliere|gehörende\s+Dokumentation|zugehörige\s+Dokumentation/i,
+    );
+    expect(fin.text).toMatch(/Kolleg|abstimme|koordiniere/i);
     expect(fin.text).not.toMatch(/in\s+die\s+Abstimmung/i);
     expect(fin.text).toMatch(/Derzeit\s+arbeite\s+ich|Ich\s+verfüge/i);
     expect(fin.diagnostics?.finalCurrentDutyCoveragePassed).toBe(true);

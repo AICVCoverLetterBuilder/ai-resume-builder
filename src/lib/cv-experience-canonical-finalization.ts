@@ -518,6 +518,8 @@ export function decideSpanishExperienceFinalCandidate(options: {
   sourceCorrectableDefectCount?: number;
   /** EN/DE visible → ES candidate (or other cross-locale) operations. */
   crossLocaleOperation?: boolean;
+  /** Explicit Stronger/Shorter/Professional — phrasing enhancement is billable. */
+  requestedRewriteStyle?: string | null;
 }): ExperienceCanonicalFinalDecision {
   void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
   void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
@@ -547,6 +549,9 @@ export function decideSpanishExperienceFinalCandidate(options: {
     candidateText: candidate,
     isPresent,
   });
+  const styleBillable = ['stronger', 'shorter', 'professional'].includes(
+    String(options.requestedRewriteStyle || '').trim().toLowerCase(),
+  );
   const visEval = evaluateExperienceVisibleComparison({
     factAuthorityText: fact,
     visibleComparisonText: visible,
@@ -556,11 +561,13 @@ export function decideSpanishExperienceFinalCandidate(options: {
     capturedAtRequest: true,
     isPresent,
     crossLocaleOperation: Boolean(options.crossLocaleOperation),
+    requestedRewriteStyle: options.requestedRewriteStyle || null,
   });
 
-  // Spanish: never accept generic grounded_phrasing as sole billable reason.
+  // Spanish: never accept generic grounded_phrasing as sole billable reason —
+  // unless an explicit rewrite style requested that phrasing improvement.
   const rawKinds = (visEval.materialImprovementKinds || []).filter(
-    (k) => k !== 'grounded_phrasing_enhancement',
+    (k) => styleBillable || k !== 'grounded_phrasing_enhancement',
   ) as ExperienceMaterialImprovementKind[];
 
   const improvementKinds: ExperienceMaterialImprovementKind[] = [...rawKinds];
@@ -638,11 +645,13 @@ export function decideSpanishExperienceFinalCandidate(options: {
       && visSurface.passed
     );
   const uniqueImpFinal: ExperienceMaterialImprovementKind[] = sourceAlreadyValid
-    ? uniqueImp.filter((k) => DEFECT_FIX_KINDS.has(k)
-      && (k !== 'incomplete_bullet_completed'
-        || countIncompleteSpanishUnits(visible) > 0)
-      && (k !== 'wrong_tense_fixed'
-        || tenseAnalysis.sourceTenseMismatchCount > 0))
+    ? uniqueImp.filter((k) =>
+      (DEFECT_FIX_KINDS.has(k)
+        && (k !== 'incomplete_bullet_completed'
+          || countIncompleteSpanishUnits(visible) > 0)
+        && (k !== 'wrong_tense_fixed'
+          || tenseAnalysis.sourceTenseMismatchCount > 0))
+      || (styleBillable && k === 'grounded_phrasing_enhancement'))
     : uniqueImp;
   const evidence = evidenceForKinds(uniqueImpFinal, visible, candidate, {
     isPresent,
@@ -849,6 +858,7 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
   locale?: string;
   sourceAlreadyValidForTarget?: boolean;
   sourceCorrectableDefectCount?: number;
+  requestedRewriteStyle?: string | null;
 }): {
   decision: ExperienceCanonicalFinalDecision;
   providerValidation: ExperienceCanonicalCandidateValidation;
@@ -865,6 +875,7 @@ export function finalizeSpanishExperienceCandidateConservatively(options: {
   const decideOpts = {
     sourceAlreadyValidForTarget: options.sourceAlreadyValidForTarget,
     sourceCorrectableDefectCount: options.sourceCorrectableDefectCount,
+    requestedRewriteStyle: options.requestedRewriteStyle || null,
   };
   const sourceTense = analyzeSpanishExperienceTenseAlignment({
     sourceText: baseline,

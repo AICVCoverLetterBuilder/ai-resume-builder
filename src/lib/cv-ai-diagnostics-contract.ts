@@ -655,6 +655,34 @@ type SummaryLike = {
   serbianEntryOwnedBuilderRevision?: string | null;
   summaryBuilderRevision?: string | null;
   targetScript?: string | null;
+  summaryV2FactIdPathActive?: boolean | null;
+  serbianStructuredDomainGateApplicable?: boolean | null;
+  hindiWarehouseGrammarFieldsApplicable?: boolean | null;
+  requestedRewriteStyle?: string | null;
+  rewriteStylePropagatedToProvider?: boolean | null;
+  rewriteStylePropagatedToRepair?: boolean | null;
+  rewriteStylePropagatedToDeterministic?: boolean | null;
+  shorterStyleFulfilled?: boolean | null;
+  strongerStyleFulfilled?: boolean | null;
+  professionalStyleFulfilled?: boolean | null;
+  styleValidationPassed?: boolean | null;
+  styleRejectionReasons?: string[] | null;
+  selectedCandidateStyle?: string | null;
+  selectedCandidateMateriallyDiffersFromSource?: boolean | null;
+  selectedCandidateDiffersFromOtherStyleFixtures?: boolean | null;
+  semanticStyleOperationsApplied?: string[] | null;
+  markerOnlyStyleChange?: boolean | null;
+  sourceNormalizedLength?: number | null;
+  candidateNormalizedLength?: number | null;
+  lengthDelta?: number | null;
+  lengthDeltaPercent?: number | null;
+  sourceUnitCount?: number | null;
+  candidateUnitCount?: number | null;
+  sourceClauseCount?: number | null;
+  candidateClauseCount?: number | null;
+  unitDelta?: number | null;
+  clauseDelta?: number | null;
+  localeAwareShorterThresholdPercent?: number | null;
 };
 
 export function checkSummaryDiagnosticInvariants(
@@ -2412,15 +2440,22 @@ export function checkSummaryDiagnosticCompleteness(
   missing.push(...markerCheck.missingRequiredDiagnosticFields);
   nullish.push(...markerCheck.nullRequiredDiagnosticFields);
   const locale = String(trace.requestedLocale || '');
+  const summaryV2FactIdPathActive = trace.summaryV2FactIdPathActive === true;
   if (locale === 'hi') {
-    require('hindiNominalExperienceFragmentDetected');
-    require('hindiSentenceHasFiniteCopulaOrVerb');
-    require('hindiIncompleteSentenceCount');
-    require('finalUnsupportedDesignMediumCount');
-    require('providerUnsupportedDesignMediumCount');
-    require('providerPrintClaimDetected');
-    require('hindiSentenceGrammarRecords');
-    require('sourcePrintFactPresent');
+    const hindiWarehouseApplicable = !summaryV2FactIdPathActive
+      && trace.hindiWarehouseGrammarFieldsApplicable !== false;
+    require('hindiWarehouseGrammarFieldsApplicable');
+    require('summaryV2FactIdPathActive');
+    if (hindiWarehouseApplicable) {
+      require('hindiNominalExperienceFragmentDetected');
+      require('hindiSentenceHasFiniteCopulaOrVerb');
+      require('hindiIncompleteSentenceCount');
+      require('finalUnsupportedDesignMediumCount');
+      require('providerUnsupportedDesignMediumCount');
+      require('providerPrintClaimDetected');
+      require('hindiSentenceGrammarRecords');
+      require('sourcePrintFactPresent');
+    }
   }
   if (locale === 'de' && trace.countedAsSuccess === true) {
     require('finalUnitRoleSlots');
@@ -2470,42 +2505,57 @@ export function checkSummaryDiagnosticCompleteness(
     require('currentDutyRequiredFactParityPassed');
   }
   if (locale === 'sr') {
-    require('serbianStructuredDomainGateEvaluated');
-    require('serbianStructuredDomainGatePassed');
-    require('serbianStructuredDomainCurrentRequiredFactCount');
-    require('serbianStructuredDomainCurrentCoveredFactCount');
-    require('serbianStructuredDomainPriorRequiredFactCount');
-    require('serbianStructuredDomainPriorCoveredFactCount');
-    require('serbianStructuredDomainCurrentRequiredFactIds');
-    require('serbianStructuredDomainCurrentCoveredFactIds');
-    require('serbianStructuredDomainCurrentMissingFactIds');
-    require('serbianStructuredDomainPriorRequiredFactIds');
-    require('serbianStructuredDomainPriorCoveredFactIds');
-    require('serbianStructuredDomainPriorMissingFactIds');
-    require('serbianEntryOwnedBuilderAvailable');
-    require('serbianEntryOwnedBuilderAttempted');
-    require('serbianEntryOwnedBuilderSucceeded');
-    if (trace.repairSkipped === true) {
-      require('repairSkipReason');
-    }
-    if (trace.serbianEntryOwnedBuilderAttempted === true) {
-      require('serbianEntryOwnedBuilderOutputLength');
-      require('serbianEntryOwnedBuilderSentenceCount');
-    }
-    if (
-      trace.serbianEntryOwnedBuilderSucceeded === false
-      && trace.serbianEntryOwnedBuilderAttempted === true
-    ) {
-      require('serbianEntryOwnedBuilderTypedFailureReason');
-    }
-    if (trace.countedAsSuccess === true) {
-      require('deterministicCandidateEqualsGroundingInput');
+    const serbianWarehouseApplicable = !summaryV2FactIdPathActive
+      && trace.serbianStructuredDomainGateApplicable !== false;
+    require('serbianStructuredDomainGateApplicable');
+    require('summaryV2FactIdPathActive');
+    if (serbianWarehouseApplicable) {
+      require('serbianStructuredDomainGateEvaluated');
+      require('serbianStructuredDomainGatePassed');
+      require('serbianStructuredDomainCurrentRequiredFactCount');
+      require('serbianStructuredDomainCurrentCoveredFactCount');
+      require('serbianStructuredDomainPriorRequiredFactCount');
+      require('serbianStructuredDomainPriorCoveredFactCount');
+      require('serbianStructuredDomainCurrentRequiredFactIds');
+      require('serbianStructuredDomainCurrentCoveredFactIds');
+      require('serbianStructuredDomainCurrentMissingFactIds');
+      require('serbianStructuredDomainPriorRequiredFactIds');
+      require('serbianStructuredDomainPriorCoveredFactIds');
+      require('serbianStructuredDomainPriorMissingFactIds');
+      require('serbianEntryOwnedBuilderAvailable');
+      require('serbianEntryOwnedBuilderAttempted');
+      require('serbianEntryOwnedBuilderSucceeded');
+      if (trace.repairSkipped === true) {
+        require('repairSkipReason');
+      }
+      if (trace.serbianEntryOwnedBuilderAttempted === true) {
+        require('serbianEntryOwnedBuilderOutputLength');
+        require('serbianEntryOwnedBuilderSentenceCount');
+      }
+      if (
+        trace.serbianEntryOwnedBuilderSucceeded === false
+        && trace.serbianEntryOwnedBuilderAttempted === true
+      ) {
+        require('serbianEntryOwnedBuilderTypedFailureReason');
+      }
+      if (trace.countedAsSuccess === true) {
+        require('deterministicCandidateEqualsGroundingInput');
+        require('requiredCurrentDutyFactCount');
+        require('coveredCurrentDutyFactCount');
+        require('requiredPriorDutyFactCount');
+        require('coveredPriorDutyFactCount');
+        require('finalCurrentDutyCoveragePassed');
+        require('finalPriorDutyCoveragePassed');
+      }
+    } else if (trace.countedAsSuccess === true) {
+      // V2 fact-id path: warehouse SR gate is inapplicable; V2 coverage is required.
       require('requiredCurrentDutyFactCount');
       require('coveredCurrentDutyFactCount');
       require('requiredPriorDutyFactCount');
       require('coveredPriorDutyFactCount');
       require('finalCurrentDutyCoveragePassed');
       require('finalPriorDutyCoveragePassed');
+      require('deterministicCandidateEqualsGroundingInput');
     }
     if (trace.countedAsSuccess !== true && trace.rejectionStage != null) {
       // Duration-ok + material-fail must not claim the duration stage.

@@ -312,26 +312,17 @@ export function bulletToWhereClauseEn(
 }
 
 /**
- * Duty text embedded in non-EN shells: present keeps live wording;
- * completed English bullets use past-inflected clauses. Non-English live
- * bullets keep their wording (never apply English past morphology).
+ * Duty text embedded in non-EN shells: keep live locale wording.
+ * Never apply English past morphology (`*ed`) — that produced
+ * `accoglievaed` / `dočekivaoed` on Latin-script IT/SR/HR/ES duties.
+ * First-person realization happens in native-surface duty tails.
  */
 export function dutyBulletForLocaleShell(
   bullet: string,
-  employmentState: SummaryV2EmploymentState,
+  _employmentState: SummaryV2EmploymentState,
 ): string {
-  const tense = dutyTenseFromEmploymentState(employmentState);
   const raw = (bullet || '').replace(/[.;]+$/u, '').trim();
-  if (!raw) return '';
-  if (tense === 'present') return raw;
-  // Only English-script live duties get English past inflection.
-  if (
-    !/^[A-Za-z0-9]/.test(raw)
-    || /[àáâãäåæçèéêëìíîïñòóôõöùúûüýÿąćęłńśźżа-яё\u0600-\u06FF\u0900-\u097F\u3040-\u30FF\u3400-\u9FFF]/i.test(raw)
-  ) {
-    return raw;
-  }
-  return bulletToWhereClauseEn(bullet, 'past');
+  return raw;
 }
 
 /** Scan summary text for malformed double-past duty heads (grammar reject). */

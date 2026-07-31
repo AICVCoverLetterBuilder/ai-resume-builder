@@ -220,11 +220,13 @@ const DUTY_RULES: DutyRule[] = [
   },
   {
     key: 'design_review_adapt',
+    // Arabic: never treat bare راجع/مراجعة (e.g. bicycle inspection) as design —
+    // require design/adapt/project-requirements co-evidence (same as EN/RU).
     source:
-      /(?:review\w*.{0,40}(?:design|dizajn|dise[nñ]o)|adapt\w*.{0,40}(?:design|dizajn|dise[nñ]o)|revis\w*.{0,40}(?:dise[nñ]o|design)|adapt\w*.{0,40}materiales?\s+de\s+dise[nñ]o|materiales?\s+de\s+dise[nñ]o|आवश्यकताओं.{0,40}डिज़ाइन|مراجعة|تكيّف|راجع(?:ت)?|كيّفت?|requirements?.{0,40}design|проверя\w*.{0,40}адаптир|адаптир\w*.{0,40}(?:дизайн|требовани)|требовани\w*\s+проекта)/iu,
+      /(?:review\w*.{0,40}(?:design|dizajn|dise[nñ]o)|adapt\w*.{0,40}(?:design|dizajn|dise[nñ]o)|revis\w*.{0,40}(?:dise[nñ]o|design)|adapt\w*.{0,40}materiales?\s+de\s+dise[nñ]o|materiales?\s+de\s+dise[nñ]o|आवश्यकताओं.{0,40}डिज़ाइन|(?:مراجعة|راجع(?:ت)?).{0,48}(?:تصميم|تكيّف|كيّف|مواد\s*التصميم|متطلبات\s*المشروع)|تكيّف|كيّفت?|requirements?.{0,40}design|проверя\w*.{0,40}адаптир|адаптир\w*.{0,40}(?:дизайн|требовани)|требовани\w*\s+проекта)/iu,
     // Never treat bare "проверя/review" as adaptation — require adapt / project-requirements evidence.
     localized:
-      /(?:adapt\w*.{0,40}(?:design|dizajn|dise[nñ]o|материал|Design)|prilago[dđ]|passte?\s+.{0,40}an|anpasst|revis\w*.{0,40}(?:dise[nñ]o|design)|materiales?\s+de\s+dise[nñ]o|matériaux?\s+de\s+design|materiali\s+di\s+design|अनुकूलन|تكيّف|كيّفت?|адаптир\w*.{0,40}(?:дизайн|требовани|материал)|(?:проверя\w*|review\w*|pregled\w*|समीक्षा|مراجعة|راجع(?:ت)?).{0,48}адаптир|(?:требовани\w*\s+проекта|project\s+requirements?|متطلبات\s*المشروع|आवश्यकताओं|Projektanforderungen)|(?:確認|レビュー).{0,24}(?:調整|適合)|要件に合わせて)/iu,
+      /(?:adapt\w*.{0,40}(?:design|dizajn|dise[nñ]o|материал|Design)|prilago[dđ]|passte?\s+.{0,40}an|anpasst|revis\w*.{0,40}(?:dise[nñ]o|design)|materiales?\s+de\s+dise[nñ]o|matériaux?\s+de\s+design|materiali\s+di\s+design|अनुकूलन|تكيّف|كيّفت?|адаптир\w*.{0,40}(?:дизайн|требовани|материал)|(?:مراجعة|راجع(?:ت)?).{0,48}(?:تصميم|تكيّف|كيّف|مواد\s*التصميم|متطلبات\s*المشروع)|(?:проверя\w*|review\w*|pregled\w*|समीक्षा).{0,48}адаптир|(?:требовани\w*\s+проекта|project\s+requirements?|متطلبات\s*المشروع|आवश्यकताओं|Projektanforderungen)|(?:確認|レビュー).{0,24}(?:調整|適合)|要件に合わせて)/iu,
   },
   {
     key: 'design_brand_identity',
@@ -446,7 +448,7 @@ export type DesignMaterialCueKey =
 const ARABIC_DESIGN_CUE_RULES: Array<{ key: DesignMaterialCueKey; re: RegExp }> = [
   { key: 'design_visual_materials', re: /مواد\s*بصرية|عناصر\s*رسومية|مواد\s*مطبوعة|رقمية/u },
   { key: 'design_graphic_elements', re: /عناصر\s*رسومية/u },
-  { key: 'design_review_adapt', re: /مراجعة|تكيّف|راجعت|كيّفت|متطلبات\s*المشروع/u },
+  { key: 'design_review_adapt', re: /(?:مراجعة|راجعت?).{0,48}(?:تصميم|تكيّف|كيّف|مواد\s*التصميم|متطلبات\s*المشروع)|تكيّف|كيّفت|متطلبات\s*المشروع/u },
   { key: 'design_project_requirements', re: /متطلبات\s*المشروع/u },
   { key: 'design_brand_identity', re: /الهوية\s*البصرية|إرشادات\s*العلامة/u },
   { key: 'design_files_formats', re: /ملفات\s*التصميم|صيغ\s*التصميم/u },
@@ -1297,6 +1299,8 @@ export function localizedHasDuty(key: MaterialDutyKey, localized: string): boole
   if (croatianWarehouseCueKeysFromUnit(localized).includes(key as WarehouseMaterialCueKey)) return true;
   if (japaneseDesignCueKeysFromUnit(localized).includes(key as DesignMaterialCueKey)) return true;
   if (japaneseWarehouseCueKeysFromUnit(localized).includes(key as WarehouseMaterialCueKey)) return true;
+  if (arabicDesignCueKeysFromUnit(localized).includes(key as DesignMaterialCueKey)) return true;
+  if (russianDesignCueKeysFromUnit(localized).includes(key as DesignMaterialCueKey)) return true;
   if (!rule) return true;
   return false;
 }
@@ -1370,8 +1374,9 @@ const EXTRA_DUTY_CLAIMS: Array<{ label: string; claim: RegExp; support: RegExp }
   },
   {
     label: 'prescription_dispensing',
-    claim: /(dispens(?:e|ed|ing)|prescription|recept|izdavanj\w*\s+lek)/iu,
-    support: /(dispens|prescription|recept|izdavanj)/iu,
+    // Exclude English reception/receptionist (recept≠Rezept prescription).
+    claim: /(dispens(?:e|ed|ing)|prescription|(?<![a-z])recept(?!ion)|izdavanj\w*\s+lek)/iu,
+    support: /(dispens|prescription|(?<![a-z])recept(?!ion)|izdavanj)/iu,
   },
   {
     label: 'dosage_interaction_check',

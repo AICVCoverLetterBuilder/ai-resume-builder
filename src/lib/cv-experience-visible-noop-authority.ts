@@ -334,6 +334,8 @@ export function evaluateExperienceVisibleComparison(options: {
   isPresent?: boolean;
   /** When true, visible and candidate may be different languages. */
   crossLocaleOperation?: boolean;
+  /** When Stronger/Shorter/Professional, allow style phrasing as billable ES evidence. */
+  requestedRewriteStyle?: string | null;
 }): ExperienceVisibleComparisonEvaluation {
   void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
   void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
@@ -839,11 +841,16 @@ export function evaluateExperienceVisibleComparison(options: {
     // Non-Spanish: evidence kind for any non-exact grounded rewrite so usage
     // invariants never see materialImprovement true with empty kinds, and so
     // contaminated-AI recovery remains billable once.
+    // Spanish + explicit Stronger/Shorter/Professional: verb/flow phrasing is
+    // the requested style operation — bill grounded_phrasing_enhancement.
+    const styleRequested = ['stronger', 'shorter', 'professional'].includes(
+      String(options.requestedRewriteStyle || '').trim().toLowerCase(),
+    );
     if (
-      !isEs
-      && textualDiffVsVisible
+      textualDiffVsVisible
       && !exactNormMatch
       && improvementKinds.length === 0
+      && (!isEs || styleRequested)
     ) {
       improvementKinds.push('grounded_phrasing_enhancement');
     }

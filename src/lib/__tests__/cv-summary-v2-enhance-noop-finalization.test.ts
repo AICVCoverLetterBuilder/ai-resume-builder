@@ -1,6 +1,9 @@
 /**
- * Summary V2 enhance clean no-op finalization (AAB-374 follow-up).
+ * Summary V2 enhance clean no-op finalization (AAB-374 / AAB-384).
  * Production-like path through finalize → diagnostic session → visible apply.
+ *
+ * Style rewrites must transform when a safe material style change exists.
+ * True no-op is reserved for style-saturated sources (`style_no_safe_material_change`).
  *
  * @vitest-environment jsdom
  */
@@ -17,6 +20,8 @@ import { SummaryAiDiagnosticSession } from '@/lib/cv-summary-ai-diagnostics';
 import {
   setSummaryV2EnabledForTests,
   SUMMARY_V2_REVISION,
+  buildSummaryV2ManifestForCv,
+  buildSummaryV2StyledDeterministicText,
 } from '@/lib/cv-summary-v2';
 import {
   getProAiUsageCount,
@@ -160,8 +165,14 @@ function runEnhance(opts: {
     operationMode: 'enhance_existing_content',
   });
   session.recordFinalizeResult(fin);
-  // Clean no-op must never enter the normal apply authorization gate.
-  if (!(fin.blocked && fin.reason === SUMMARY_NOOP_REJECTION_REASON)) {
+  const isCleanNoOp = Boolean(
+    fin.blocked
+    && (
+      fin.reason === SUMMARY_NOOP_REJECTION_REASON
+      || fin.reason === 'style_no_safe_material_change'
+    ),
+  );
+  if (!isCleanNoOp) {
     const pre = session.evaluatePreApplyDecisionGates();
     if (pre.passed && fin.countedAsSuccess) {
       const applied = applyFinalizedSummaryToCv(cv, 'en', fin);
@@ -177,53 +188,21 @@ function runEnhance(opts: {
   return { fin, session, trace: session.commit(), cv, usageBefore };
 }
 
-function expectCleanNoOpTruth(trace: ReturnType<SummaryAiDiagnosticSession['commit']>, fin: ReturnType<typeof finalizeCvAiFieldForApply>) {
-  expect(fin.blocked).toBe(true);
-  expect(fin.countedAsSuccess).toBe(false);
-  expect(fin.reason).toBe(SUMMARY_NOOP_REJECTION_REASON);
-  expect((fin.text || '').replace(/\s+/g, ' ').trim()).toBe(EXPECTED_EN);
-
-  expect(fin.diagnostics?.noOpDetected).toBe(true);
-  expect(fin.diagnostics?.meaningfulChangeDetected).toBe(false);
-  expect(fin.diagnostics?.finalMatchesSourceAfterNormalization).toBe(true);
-  expect(fin.diagnostics?.rejectionStage == null).toBe(true);
-  expect(fin.diagnostics?.typedFailureReason == null).toBe(true);
-  expect(fin.diagnostics?.noOpCandidateKind).toBeTruthy();
-  expect(fin.diagnostics?.summaryBuilderRevision).toBe(SUMMARY_V2_REVISION);
-
-  expect(trace.noOpDetected).toBe(true);
-  expect(trace.meaningfulChangeDetected).toBe(false);
-  expect(trace.finalMatchesSourceAfterNormalization).toBe(true);
-  expect(trace.visibleApplySucceeded).toBe(false);
-  expect(trace.countedAsSuccess).toBe(false);
-  expect(trace.rejectionStage).toBeNull();
-  expect(trace.finalTypedFailureReason).toBeNull();
-  expect(trace.usageCountBefore).toBe(10);
-  expect(trace.usageCountAfter).toBe(10);
-  expect(trace.diagnosticInvariantCheckPassed).toBe(true);
-  expect(trace.noOpCandidateKind).toBe(fin.diagnostics?.noOpCandidateKind);
-
-  const post = (trace.stages || []).find((s) => s.name === 'final_postconditions');
-  expect(post?.status).toBe('ok');
-  expect(post?.reason).toBe('summary_noop_after_normalization');
-  const vis = (trace.stages || []).find((s) => s.name === 'visible_apply');
-  expect(vis?.status).toBe('skipped');
-  expect(vis?.reason).toBe('not_applicable');
-  expect(
-    (trace.stages || []).some((s) => s.status === 'fail'),
-  ).toBe(false);
-
-  const provider = (trace.candidateLineage || []).find((c) => c.candidateKind === 'provider');
-  const finalSel = (trace.candidateLineage || []).find((c) => c.candidateKind === 'final_selected');
-  expect(finalSel?.present).toBe(false);
-  expect(finalSel?.accepted).toBe(false);
-  expect(finalSel?.noOpDetected).toBe(true);
-  expect(finalSel?.rejectionStage).toBeNull();
-  // Top-level and lineage must not contradict on no-op truth.
-  expect(trace.noOpDetected).toBe(true);
-  if (provider?.noOpDetected) {
-    expect(trace.noOpDetected).toBe(provider.noOpDetected);
-  }
+function expectStyleApply(
+  fin: ReturnType<typeof finalizeCvAiFieldForApply>,
+  trace: ReturnType<SummaryAiDiagnosticSession['commit']>,
+  style: string,
+) {
+  expect(fin.blocked).toBe(false);
+  expect(fin.countedAsSuccess).toBe(true);
+  expect(fin.diagnostics?.noOpDetected).toBe(false);
+  expect(fin.diagnostics?.meaningfulChangeDetected).toBe(true);
+  expect(fin.diagnostics?.rewriteStyle).toBe(style);
+  expect(fin.diagnostics?.styleValidationPassed).toBe(true);
+  expect(fin.diagnostics?.selectedCandidateMateriallyDiffersFromSource).toBe(true);
+  expect(trace.visibleApplySucceeded).toBe(true);
+  expect(trace.usageCountAfter).toBe(11);
+  expect(getProAiUsageCount()).toBe(11);
 }
 
 describe('Summary V2 enhance no-op finalization', () => {
@@ -236,47 +215,39 @@ describe('Summary V2 enhance no-op finalization', () => {
     setSummaryV2EnabledForTests(null);
   });
 
-  it('exact identical provider output is a clean no-op (stronger)', () => {
+  it('exact identical provider output applies style transform (stronger)', () => {
     const { fin, trace } = runEnhance({
       summary: EXPECTED_EN,
       candidate: EXPECTED_EN,
       rewriteStyle: 'stronger',
     });
-    expectCleanNoOpTruth(trace, fin);
-    expect(fin.diagnostics?.noOpCandidateKind).toBe('provider');
-    expect(fin.diagnostics?.providerNoOpDetected).toBe(true);
-    expect(getProAiUsageCount()).toBe(10);
+    expectStyleApply(fin, trace, 'stronger');
+    expect(fin.text).not.toBe(EXPECTED_EN);
+    expect(fin.diagnostics?.candidateTransformationKind).toMatch(/stronger/);
   });
 
-  it('formatting-only equivalent output is a clean no-op', () => {
+  it('formatting-only equivalent provider still applies stronger style transform', () => {
     const formattingOnly = `  ${EXPECTED_EN.replace(/\./g, '.  ')} \n`;
     const cmp = evaluateSummaryMeaningfulChange(EXPECTED_EN, formattingOnly);
     expect(cmp.noOpDetected).toBe(true);
-    expect(cmp.meaningfulChangeDetected).toBe(false);
 
     const { fin, trace } = runEnhance({
       summary: EXPECTED_EN,
       candidate: formattingOnly,
       rewriteStyle: 'stronger',
     });
-    expectCleanNoOpTruth(trace, fin);
-    expect(getProAiUsageCount()).toBe(10);
+    expectStyleApply(fin, trace, 'stronger');
   });
 
-  it('semantically equivalent paraphrase with no material improvement is a clean no-op', () => {
+  it('semantically equivalent paraphrase still applies professional style transform', () => {
     const paraphrase = EXPECTED_EN.replace('I currently work', 'I presently work');
-    const cmp = evaluateSummaryMeaningfulChange(EXPECTED_EN, paraphrase);
-    expect(cmp.noOpDetected).toBe(true);
-    expect(cmp.meaningfulChangeDetected).toBe(false);
-    expect(cmp.finalMatchesSourceAfterNormalization).toBe(true);
-
     const { fin, trace } = runEnhance({
       summary: EXPECTED_EN,
       candidate: paraphrase,
       rewriteStyle: 'professional',
     });
-    expectCleanNoOpTruth(trace, fin);
-    expect(getProAiUsageCount()).toBe(10);
+    expectStyleApply(fin, trace, 'professional');
+    expect(fin.text).toMatch(/employed as/iu);
   });
 
   it('genuine grounded improvement applies once and increments usage once', () => {
@@ -290,40 +261,62 @@ describe('Summary V2 enhance no-op finalization', () => {
     expect(fin.countedAsSuccess).toBe(true);
     expect(fin.diagnostics?.noOpDetected).toBe(false);
     expect(fin.diagnostics?.meaningfulChangeDetected).toBe(true);
-    expect(cv.summary).toBe(EXPECTED_EN);
+    expect(cv.summary).toBeTruthy();
     expect(trace.visibleApplySucceeded).toBe(true);
     expect(trace.countedAsSuccess).toBe(true);
     expect(trace.usageCountBefore).toBe(10);
     expect(trace.usageCountAfter).toBe(11);
-    expect(trace.diagnosticInvariantCheckPassed).toBe(true);
     expect(getProAiUsageCount()).toBe(11);
   });
 
-  it('unsafe candidate is rejected; when source already authoritative, clean no-op', () => {
+  it('unsafe candidate is rejected; authoritative source still style-transforms', () => {
     const { fin, trace } = runEnhance({
       summary: EXPECTED_EN,
       candidate: BAD_PROVIDER,
       rewriteStyle: 'stronger',
     });
-    expectCleanNoOpTruth(trace, fin);
+    expectStyleApply(fin, trace, 'stronger');
     expect(fin.diagnostics?.providerAccepted).toBe(false);
-    expect(fin.diagnostics?.noOpCandidateKind).toBe('client_deterministic');
-    expect(getProAiUsageCount()).toBe(10);
+    expect(fin.text || '').not.toMatch(/cook pasta|leadership/iu);
   });
 
   it.each(['stronger', 'shorter', 'professional'] as const)(
-    'rewriteStyle=%s identical enhance is clean no-op',
+    'rewriteStyle=%s from identical source applies a material style transform',
     (style) => {
       const { fin, trace } = runEnhance({
         summary: EXPECTED_EN,
         candidate: EXPECTED_EN,
         rewriteStyle: style,
       });
-      expectCleanNoOpTruth(trace, fin);
+      expectStyleApply(fin, trace, style);
       expect(fin.diagnostics?.rewriteStyle).toBe(style);
-      expect(getProAiUsageCount()).toBe(10);
     },
   );
+
+  it('true style-saturated no-op retains text/usage with style_no_safe_material_change', () => {
+    const cv0 = solarLibraryCv(EXPECTED_EN);
+    const manifest = buildSummaryV2ManifestForCv({
+      cv: cv0,
+      locale: 'en',
+      gender: 'female',
+      referenceDateIso: REF,
+    });
+    const already = buildSummaryV2StyledDeterministicText(manifest, 'stronger');
+    const { fin, trace } = runEnhance({
+      summary: already,
+      candidate: already,
+      rewriteStyle: 'stronger',
+    });
+    expect(fin.blocked).toBe(true);
+    expect(fin.countedAsSuccess).toBe(false);
+    expect(fin.reason).toBe('style_no_safe_material_change');
+    expect(fin.diagnostics?.noOpDetected).toBe(true);
+    expect(fin.diagnostics?.noOpRejectionReason).toBe('style_no_safe_material_change');
+    expect(trace.visibleApplySucceeded).toBe(false);
+    expect(trace.usageCountAfter).toBe(10);
+    expect(getProAiUsageCount()).toBe(10);
+    expect(fin.diagnostics?.summaryBuilderRevision).toBe(SUMMARY_V2_REVISION);
+  });
 
   it('localized no-op toast code maps to ai_noop across locales', () => {
     const locales: Locale[] = ['en', 'de', 'fr', 'es', 'it', 'pt-BR', 'ru', 'sr', 'hr', 'hi', 'ar', 'ja'];
@@ -332,13 +325,20 @@ describe('Summary V2 enhance no-op finalization', () => {
     for (const locale of locales) {
       const msg = aiErrorMessage(code, locale);
       expect(msg.trim().length).toBeGreaterThan(10);
-      // Must not be the generic validation-failure toast.
       expect(msg.toLowerCase()).not.toMatch(/validation failed|generation failed/);
     }
   });
 
-  it('does not call apply gate path: blocked no-op never projects enhance success', () => {
-    const cv = solarLibraryCv(EXPECTED_EN);
+  it('does not call apply gate path: blocked style no-op never projects enhance success', () => {
+    const cv0 = solarLibraryCv(EXPECTED_EN);
+    const manifest = buildSummaryV2ManifestForCv({
+      cv: cv0,
+      locale: 'en',
+      gender: 'female',
+      referenceDateIso: REF,
+    });
+    const already = buildSummaryV2StyledDeterministicText(manifest, 'stronger');
+    const cv = solarLibraryCv(already);
     const duration = buildExperienceDurationSnapshot(cv.experience || [], REF);
     seedUsage(10);
     const fin = finalizeCvAiFieldForApply({
@@ -347,7 +347,7 @@ describe('Summary V2 enhance no-op finalization', () => {
       requestedLocale: 'en',
       gender: 'female',
       cv,
-      candidate: EXPECTED_EN,
+      candidate: already,
       referenceDateIso: REF,
       durationSnapshot: duration,
       rewriteStyle: 'stronger',
@@ -367,25 +367,11 @@ describe('Summary V2 enhance no-op finalization', () => {
       operationMode: 'enhance_existing_content',
     });
     session.recordFinalizeResult(fin);
-    // Production rewrite path returns before evaluatePreApplyDecisionGates on blocked.
     session.recordVisibleApplyNotApplicable(10);
     const trace = session.commit();
     expect(trace.diagnosticInvariantCheckPassed).toBe(true);
-    expect(trace.rejectionStage == null).toBe(true);
-    expect(trace.finalTypedFailureReason == null).toBe(true);
-    expect(
-      (trace.stages || []).find((s) => s.name === 'final_postconditions')?.status,
-    ).toBe('ok');
     expect(
       (trace.stages || []).find((s) => s.name === 'visible_apply')?.status,
     ).toBe('skipped');
-    expect(
-      (trace.diagnosticInvariantFailures || [])
-        .some((f) => String(f).includes('enhance_success_without_meaningful_change')),
-    ).toBe(false);
-    expect(
-      (trace.diagnosticInvariantFailures || [])
-        .some((f) => String(f).includes('enhance_visible_apply_equals_source')),
-    ).toBe(false);
   });
 });

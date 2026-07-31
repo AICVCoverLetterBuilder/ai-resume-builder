@@ -34,7 +34,9 @@ export function isSummaryCleanNoOpFinalizeResult(fin: FinalizeLike): boolean {
   if (fin.countedAsSuccess) return false;
   if (
     fin.reason === SUMMARY_NOOP_REJECTION_REASON
+    || fin.reason === 'style_no_safe_material_change'
     || fin.diagnostics?.noOpRejectionReason === SUMMARY_NOOP_REJECTION_REASON
+    || fin.diagnostics?.noOpRejectionReason === 'style_no_safe_material_change'
     || fin.diagnostics?.noOpDetected === true
   ) {
     return true;

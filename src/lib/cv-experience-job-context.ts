@@ -507,7 +507,9 @@ export function textLooksLikePharmacyDuties(text: string): boolean {
  * or title alone — only permitted when present in genuine user-authored duties.
  */
 export function hasUnsupportedRegulatedPharmacyClaims(text: string): boolean {
-  return /recept|prescription|dozir|dosage|interakcij|interaction|neželjen|adverse|savetovan\w*\s+(?:pacijen|pacijent|pacijenata)|patient\s+counsel|terapij|therapy|zalih|stock|nabavk|procurement|lekar|doctor|pharmacotherapy|farmakoterap|izdavanj\w*\s+lek|dispens/i.test(
+  // Do not match English "reception" / "receptionist" via the "recept" stem
+  // (German/SC Rezept·recept = prescription).
+  return /(?<![a-z])recept(?!ion)|prescription|dozir|dosage|interakcij|interaction|neželjen|adverse|savetovan\w*\s+(?:pacijen|pacijent|pacijenata)|patient\s+counsel|terapij|therapy|zalih|stock|nabavk|procurement|lekar|doctor|pharmacotherapy|farmakoterap|izdavanj\w*\s+lek|dispens/i.test(
     text || '',
   );
 }

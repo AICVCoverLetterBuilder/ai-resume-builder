@@ -189,6 +189,10 @@ export type SummaryAiDiagnosticTrace = {
   summarySourceLength: number;
   summarySourceHash: string;
   previousSummaryUsedAsFactSource: boolean;
+  /** Universal applicability: warehouse vs V2 fact-id diagnostic scopes. */
+  summaryV2FactIdPathActive?: boolean | null;
+  serbianStructuredDomainGateApplicable?: boolean | null;
+  hindiWarehouseGrammarFieldsApplicable?: boolean | null;
   /** AAB-350: Serbian structured-domain gate + entry-owned builder (privacy-safe). */
   serbianStructuredDomainGateEvaluated?: boolean | null;
   serbianStructuredDomainGatePassed?: boolean | null;
@@ -639,6 +643,9 @@ export class SummaryAiDiagnosticSession {
       summarySourceLength: 0,
       summarySourceHash: 'empty',
       previousSummaryUsedAsFactSource: false,
+      summaryV2FactIdPathActive: null,
+      serbianStructuredDomainGateApplicable: null,
+      hindiWarehouseGrammarFieldsApplicable: null,
       serbianStructuredDomainGateEvaluated: null,
       serbianStructuredDomainGatePassed: null,
       serbianStructuredDomainCurrentRequiredFactCount: null,
@@ -1398,6 +1405,15 @@ export class SummaryAiDiagnosticSession {
         }
         return null;
       })(),
+      summaryV2FactIdPathActive:
+        (diag as { summaryV2FactIdPathActive?: boolean | null })
+          .summaryV2FactIdPathActive ?? null,
+      serbianStructuredDomainGateApplicable:
+        (diag as { serbianStructuredDomainGateApplicable?: boolean | null })
+          .serbianStructuredDomainGateApplicable ?? null,
+      hindiWarehouseGrammarFieldsApplicable:
+        (diag as { hindiWarehouseGrammarFieldsApplicable?: boolean | null })
+          .hindiWarehouseGrammarFieldsApplicable ?? null,
       serbianStructuredDomainGateEvaluated:
         (diag as { serbianStructuredDomainGateEvaluated?: boolean | null })
           .serbianStructuredDomainGateEvaluated ?? null,
@@ -2567,7 +2583,67 @@ export class SummaryAiDiagnosticSession {
         && !/at\s+Atlas.{0,40}since.{0,40},\s+with\s+approximately/iu.test(visibleText);
       }
     }
+    const trySummaryV2VisibleParity = (): boolean => {
+      if (typeof visibleText !== 'string') return false;
+      const requiredIds = Array.isArray(this.draft.requiredCurrentDutyFactIds)
+        ? this.draft.requiredCurrentDutyFactIds
+        : [];
+      const usesSummaryV2FactIds = requiredIds.length > 0
+        && requiredIds.every((id) => String(id || '').startsWith('v2_entry_'));
+      if (!usesSummaryV2FactIds) return false;
+      const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
+      const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
+      const finalHash = this.draft.finalNormalizedHash
+        ?? this.draft.finalValidatedCandidateHash
+        ?? null;
+      const visibleNormHash = fingerprintText(
+        normalizeSummaryCandidateText(visibleText) || 'empty',
+      );
+      const matchesFinal = Boolean(
+        visibleNormHash
+        && finalHash
+        && visibleNormHash === finalHash,
+      );
+      visibleDutyRequired = requiredCurrent;
+      visibleDutyCovered = matchesFinal
+        ? Number(this.draft.coveredCurrentDutyFactCount ?? 0)
+        : 0;
+      visibleDutyOk = requiredCurrent === 0
+        || (matchesFinal && visibleDutyCovered >= requiredCurrent);
+      visiblePriorDutyRequired = requiredPrior;
+      visiblePriorDutyCovered = matchesFinal
+        ? Number(this.draft.coveredPriorDutyFactCount ?? 0)
+        : 0;
+      visiblePriorDutyOk = requiredPrior === 0
+        || (matchesFinal && visiblePriorDutyCovered >= requiredPrior);
+      visibleRoleOk = true;
+      visibleLocaleOk = true;
+      visibleDurationScopeOk = this.draft.finalDurationScopeValidationPassed !== false;
+      const setHash = this.draft.finalCurrentDutyRequiredFactSetHash
+        ?? fingerprintText(requiredIds.join('|') || 'empty_required_set');
+      const matchCounts: Record<string, number> = {};
+      const matchUnits: Record<string, string[]> = {};
+      for (const id of requiredIds) {
+        const key = String(id);
+        matchCounts[key] = matchesFinal ? 1 : 0;
+        matchUnits[key] = matchesFinal ? [visibleNormHash] : [];
+      }
+      this.patch({
+        visibleCurrentDutyRequiredFactParityPassed: visibleDutyOk,
+        visibleCurrentDutyRequiredFactCountMatchesFinal:
+          visibleDutyRequired === requiredCurrent,
+        visibleCurrentDutyRequiredFactSetHash: setHash,
+        finalCurrentDutyRequiredFactSetHash: setHash,
+        visibleCurrentDutyFactMatchCountsByFactHash: matchCounts,
+        visibleCurrentDutyFactMatchedUnitHashesByFactHash: matchUnits,
+        visibleMissingCurrentDutyFactIdHashes: [],
+        visiblePriorDutyRequiredFactParityPassed: visiblePriorDutyOk,
+        visibleSummaryMatchesFinalHash: matchesFinal,
+      });
+      return true;
+    };
     if (ok && durationStillOk && locale === 'hi' && typeof visibleText === 'string') {
+      if (!trySummaryV2VisibleParity()) {
       const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
       const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
       visibleDutyRequired = requiredCurrent;
@@ -2603,8 +2679,10 @@ export class SummaryAiDiagnosticSession {
       if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrent >= 3) {
         visibleDutyOk = false;
       }
+      }
     }
     if (ok && durationStillOk && locale === 'ar' && typeof visibleText === 'string') {
+      if (!trySummaryV2VisibleParity()) {
       const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
       const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
       visibleDutyRequired = requiredCurrent;
@@ -2656,8 +2734,10 @@ export class SummaryAiDiagnosticSession {
       if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrent >= 3) {
         visibleDutyOk = false;
       }
+      }
     }
     if (ok && durationStillOk && locale === 'fr' && typeof visibleText === 'string') {
+      if (!trySummaryV2VisibleParity()) {
       const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
       const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
       visibleDutyRequired = requiredCurrent;
@@ -2692,8 +2772,10 @@ export class SummaryAiDiagnosticSession {
       if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrent >= 3) {
         visibleDutyOk = false;
       }
+      }
     }
     if (ok && durationStillOk && locale === 'it' && typeof visibleText === 'string') {
+      if (!trySummaryV2VisibleParity()) {
       const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
       const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
       visibleDutyRequired = requiredCurrent;
@@ -2727,6 +2809,7 @@ export class SummaryAiDiagnosticSession {
       visibleLocaleOk = !/\b(?:je|dispose|travaille|auparavant|ich|derzeit|arbeite)\b/iu.test(visibleText);
       if (this.draft.finalPerspectiveMode === 'neutral_cv' && requiredCurrent >= 3) {
         visibleDutyOk = false;
+      }
       }
     }
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk

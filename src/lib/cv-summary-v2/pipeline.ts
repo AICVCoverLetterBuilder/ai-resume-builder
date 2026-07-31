@@ -1,6 +1,7 @@
 import type { CVData } from '@/lib/types';
 import type { Locale } from '@/lib/i18n/translations';
 import { hasAiProtocolMarker } from '@/lib/cv-ai-protocol-strip';
+import { fingerprintText } from '@/lib/cv-export-diagnostics';
 import { SUMMARY_V2_REVISION, isSummaryV2Enabled } from './flag';
 import { captureSummaryV2Snapshot } from './snapshot';
 import { buildSummaryV2SelectionManifest } from './manifest';
@@ -8,6 +9,17 @@ import { buildSummaryV2DeterministicText } from './builder';
 import { validateSummaryV2AgainstManifest } from './validator';
 import { bulletToWhereClauseEn, dutyTenseFromEmploymentState } from './tense';
 import type { SummaryV2PipelineResult, SummaryV2SelectionManifest } from './types';
+import {
+  normalizeSummaryV2RewriteStyle,
+  repairSummaryV2RewriteStyle,
+  evaluateSummaryV2StyleFulfillment,
+  transformSummaryV2ForRewriteStyle,
+  buildSummaryV2StyledDeterministicText,
+  buildSummaryV2BalancedEnhanceText,
+  SUMMARY_V2_REWRITE_STYLE_384_REVISION,
+  type SummaryV2RewriteStyle,
+  type SummaryV2StyleFulfillment,
+} from './rewrite-style';
 
 export type RunSummaryV2Options = {
   cv: CVData;
@@ -17,6 +29,24 @@ export type RunSummaryV2Options = {
   referenceDateIso: string;
   /** Existing Summary may guide style only; never factual authority. */
   styleHintFromExistingSummary?: boolean;
+  /** Enhance rewrite style — shorter / stronger / professional. */
+  rewriteStyle?: string | null;
+};
+
+export type SummaryV2PipelineDiagnostics = {
+  rewriteStyle: SummaryV2RewriteStyle | null;
+  rewriteStylePropagatedToProvider: boolean;
+  rewriteStylePropagatedToRepair: boolean;
+  rewriteStylePropagatedToDeterministic: boolean;
+  providerRejectionReason: string | null;
+  providerRejectionReasons: string[];
+  repairAttempted: boolean;
+  repairApplied: boolean;
+  candidateTransformationKind: string | null;
+  candidateTransformationBeforeHash: string | null;
+  candidateTransformationAfterHash: string | null;
+  styleFulfillment: SummaryV2StyleFulfillment | null;
+  styleNoSafeMaterialChange: boolean;
 };
 
 function prepareCandidate(raw: string): string {
@@ -27,6 +57,12 @@ function prepareCandidate(raw: string): string {
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hashNorm(text: string): string {
+  return fingerprintText(
+    (text || '').replace(/\s+/g, ' ').trim().toLowerCase() || 'empty',
+  );
 }
 
 /**
@@ -65,12 +101,33 @@ export function repairSummaryV2DutyTense(
   return t.replace(/\s+/g, ' ').trim();
 }
 
+function emptyPipelineDiag(
+  style: SummaryV2RewriteStyle | null,
+): SummaryV2PipelineDiagnostics {
+  return {
+    rewriteStyle: style,
+    rewriteStylePropagatedToProvider: false,
+    rewriteStylePropagatedToRepair: false,
+    rewriteStylePropagatedToDeterministic: false,
+    providerRejectionReason: null,
+    providerRejectionReasons: [],
+    repairAttempted: false,
+    repairApplied: false,
+    candidateTransformationKind: null,
+    candidateTransformationBeforeHash: null,
+    candidateTransformationAfterHash: null,
+    styleFulfillment: null,
+    styleNoSafeMaterialChange: false,
+  };
+}
+
 /**
  * Full V2 Summary pipeline: snapshot → manifest → provider/repair/deterministic
- * against the same manifest → shared validator.
+ * against the same manifest → shared validator (+ optional rewrite style).
  */
 export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineResult {
   void SUMMARY_V2_REVISION;
+  void SUMMARY_V2_REWRITE_STYLE_384_REVISION;
   const snapshot = captureSummaryV2Snapshot({
     cv: options.cv,
     locale: options.locale,
@@ -78,29 +135,250 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
     referenceDateIso: options.referenceDateIso,
   });
   const manifest = buildSummaryV2SelectionManifest(snapshot);
+  const style = normalizeSummaryV2RewriteStyle(options.rewriteStyle);
+  const sourceSummary = (options.cv.summary || '').replace(/\s+/g, ' ').trim();
+  const diag = emptyPipelineDiag(style);
 
   const provider = prepareCandidate(options.candidate || '');
   let text = '';
   let origin: SummaryV2PipelineResult['origin'] = 'deterministic_fallback';
 
+  const styleOk = (candidate: string): boolean => {
+    if (!style) return true;
+    return evaluateSummaryV2StyleFulfillment({
+      style,
+      sourceText: sourceSummary,
+      candidateText: candidate,
+      locale: options.locale,
+    }).styleValidationPassed;
+  };
+
   if (provider) {
+    diag.rewriteStylePropagatedToProvider = Boolean(style);
     const providerQ = validateSummaryV2AgainstManifest(provider, manifest);
-    if (providerQ.ok) {
+    if (providerQ.ok && styleOk(provider)) {
       text = provider;
       origin = 'ai_generated';
+      diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
+        style,
+        sourceText: sourceSummary,
+        candidateText: provider,
+        locale: options.locale,
+      });
     } else {
-      const repaired = repairSummaryV2DutyTense(provider, manifest);
+      const reasons: string[] = [];
+      if (!providerQ.ok && providerQ.reason) reasons.push(providerQ.reason);
+      if (providerQ.ok && style && !styleOk(provider)) {
+        const sf = evaluateSummaryV2StyleFulfillment({
+          style,
+          sourceText: sourceSummary,
+          candidateText: provider,
+          locale: options.locale,
+        });
+        reasons.push(...sf.styleRejectionReasons);
+        if (reasons.length === 0) reasons.push('style_not_fulfilled');
+      }
+      diag.providerRejectionReasons = [...new Set(reasons)];
+      diag.providerRejectionReason = diag.providerRejectionReasons[0] || null;
+
+      // If the live source is already the styled deterministic surface, no safe
+      // material style change exists — do not accept duty-tense-only repairs as
+      // a false style success.
+      if (style && sourceSummary) {
+        const saturated = transformSummaryV2ForRewriteStyle({
+          manifest,
+          style,
+          sourceSummary,
+        });
+        if (saturated.noSafeMaterialChange) {
+          const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest);
+          return {
+            blocked: true,
+            reason: 'style_no_safe_material_change',
+            text: sourceSummary,
+            origin: 'deterministic_fallback',
+            countedAsSuccess: false,
+            manifest,
+            validation,
+            snapshot,
+            pipelineDiagnostics: {
+              ...diag,
+              rewriteStylePropagatedToDeterministic: true,
+              styleNoSafeMaterialChange: true,
+              candidateTransformationKind: null,
+              candidateTransformationBeforeHash: saturated.beforeHash,
+              candidateTransformationAfterHash: saturated.afterHash,
+              styleFulfillment: evaluateSummaryV2StyleFulfillment({
+                style,
+                sourceText: sourceSummary,
+                candidateText: sourceSummary,
+                locale: options.locale,
+              }),
+            },
+          };
+        }
+      }
+
+      diag.repairAttempted = false;
+      diag.rewriteStylePropagatedToRepair = Boolean(style);
+      let repaired = repairSummaryV2DutyTense(provider, manifest);
+      if (style) {
+        repaired = repairSummaryV2RewriteStyle(repaired, style, options.locale);
+      }
+      // Only count as a repair attempt when the surface actually changed.
+      diag.repairAttempted = hashNorm(repaired) !== hashNorm(provider);
       const repairQ = validateSummaryV2AgainstManifest(repaired, manifest);
-      if (repairQ.ok) {
+      if (diag.repairAttempted && repairQ.ok && styleOk(repaired)) {
         text = repaired;
         origin = 'ai_repaired';
+        diag.repairApplied = true;
+        diag.candidateTransformationKind = style
+          ? `v2_repair_${style}`
+          : 'v2_repair_duty_tense';
+        diag.candidateTransformationBeforeHash = hashNorm(provider);
+        diag.candidateTransformationAfterHash = hashNorm(repaired);
+        diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
+          style,
+          sourceText: sourceSummary,
+          candidateText: repaired,
+          locale: options.locale,
+        });
+      } else if (!diag.providerRejectionReason && repairQ.reason) {
+        diag.providerRejectionReason = repairQ.reason;
+        diag.providerRejectionReasons = [repairQ.reason];
       }
     }
   }
 
   if (!text) {
-    text = buildSummaryV2DeterministicText(manifest);
-    origin = 'deterministic_fallback';
+    if (style && sourceSummary) {
+      diag.rewriteStylePropagatedToDeterministic = true;
+      const transformed = transformSummaryV2ForRewriteStyle({
+        manifest,
+        style,
+        sourceSummary,
+      });
+      diag.candidateTransformationKind = transformed.transformationKind;
+      diag.candidateTransformationBeforeHash = transformed.beforeHash;
+      diag.candidateTransformationAfterHash = transformed.afterHash;
+      diag.styleNoSafeMaterialChange = transformed.noSafeMaterialChange;
+      if (transformed.noSafeMaterialChange) {
+        const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest);
+        return {
+          blocked: true,
+          reason: 'style_no_safe_material_change',
+          text: sourceSummary,
+          origin: 'deterministic_fallback',
+          countedAsSuccess: false,
+          manifest,
+          validation,
+          snapshot,
+          pipelineDiagnostics: {
+            ...diag,
+            styleFulfillment: evaluateSummaryV2StyleFulfillment({
+              style,
+              sourceText: sourceSummary,
+              candidateText: sourceSummary,
+              locale: options.locale,
+            }),
+          },
+        };
+      }
+      const styledQ = validateSummaryV2AgainstManifest(transformed.text, manifest);
+      const styleFulfilled = transformed.styleFulfilled || styleOk(transformed.text);
+      if (styledQ.ok && styleFulfilled) {
+        text = transformed.text;
+        origin = 'deterministic_fallback';
+        diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
+          style,
+          sourceText: sourceSummary,
+          candidateText: text,
+          locale: options.locale,
+        });
+      } else {
+        // Never fall back to unstyled Generate-from-context (identical source).
+        // Prefer a fresh styled deterministic build; if that also fails, block
+        // with the precise validation / style reason.
+        const styledFresh = buildSummaryV2StyledDeterministicText(manifest, style);
+        const freshQ = validateSummaryV2AgainstManifest(styledFresh, manifest);
+        if (freshQ.ok && styleOk(styledFresh)) {
+          text = styledFresh;
+          origin = 'deterministic_fallback';
+          diag.candidateTransformationKind = `v2_rewrite_${style}`;
+          diag.candidateTransformationBeforeHash = transformed.beforeHash;
+          diag.candidateTransformationAfterHash = hashNorm(styledFresh);
+          diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
+            style,
+            sourceText: sourceSummary,
+            candidateText: text,
+            locale: options.locale,
+          });
+        } else {
+          const reasons = [
+            ...(styledQ.reason ? [styledQ.reason] : []),
+            ...(freshQ.reason ? [freshQ.reason] : []),
+            ...evaluateSummaryV2StyleFulfillment({
+              style,
+              sourceText: sourceSummary,
+              candidateText: transformed.text || styledFresh,
+              locale: options.locale,
+            }).styleRejectionReasons,
+          ];
+          const validation = styledQ.ok ? freshQ : styledQ;
+          return {
+            blocked: true,
+            reason: reasons[0] || 'style_not_fulfilled',
+            text: transformed.text || styledFresh || '',
+            origin: 'deterministic_fallback',
+            countedAsSuccess: false,
+            manifest,
+            validation: validateSummaryV2AgainstManifest(
+              transformed.text || styledFresh || sourceSummary,
+              manifest,
+            ),
+            snapshot,
+            pipelineDiagnostics: {
+              ...diag,
+              providerRejectionReasons: [
+                ...diag.providerRejectionReasons,
+                ...reasons,
+              ],
+              styleFulfillment: evaluateSummaryV2StyleFulfillment({
+                style,
+                sourceText: sourceSummary,
+                candidateText: transformed.text || styledFresh,
+                locale: options.locale,
+              }),
+            },
+          };
+        }
+      }
+    } else {
+      // Generate empty → canonical. Generate-with-existing → balanced enhance.
+      // Never silently reuse a dedicated rewrite style for enhance-without-style.
+      if (style) {
+        text = buildSummaryV2StyledDeterministicText(manifest, style);
+      } else if (sourceSummary) {
+        text = buildSummaryV2BalancedEnhanceText(manifest);
+        diag.candidateTransformationKind = 'v2_balanced_enhance';
+        diag.candidateTransformationBeforeHash = hashNorm(sourceSummary);
+        diag.candidateTransformationAfterHash = hashNorm(text);
+      } else {
+        text = buildSummaryV2DeterministicText(manifest);
+      }
+      origin = 'deterministic_fallback';
+      if (style) {
+        diag.rewriteStylePropagatedToDeterministic = true;
+        diag.candidateTransformationKind = `v2_rewrite_${style}`;
+        diag.candidateTransformationAfterHash = hashNorm(text);
+        diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
+          style,
+          sourceText: sourceSummary,
+          candidateText: text,
+          locale: options.locale,
+        });
+      }
+    }
   }
 
   const validation = validateSummaryV2AgainstManifest(text, manifest);
@@ -114,7 +392,50 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       manifest,
       validation,
       snapshot,
+      pipelineDiagnostics: diag,
     };
+  }
+
+  // Always attach native-surface / predicate-chain diagnostics (including generate).
+  if (!diag.styleFulfillment) {
+    diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
+      style,
+      sourceText: sourceSummary,
+      candidateText: text,
+      locale: options.locale,
+    });
+  }
+  if (!diag.styleFulfillment.nativeSurfaceValidationPassed) {
+    return {
+      blocked: true,
+      reason: diag.styleFulfillment.nativeSurfaceRejectionReasons[0]
+        || diag.styleFulfillment.styleRejectionReasons[0]
+        || 'native_surface_validation_failed',
+      text,
+      origin,
+      countedAsSuccess: false,
+      manifest,
+      validation,
+      snapshot,
+      pipelineDiagnostics: diag,
+    };
+  }
+
+  if (style) {
+    const sf = diag.styleFulfillment;
+    if (!sf.styleValidationPassed && sourceSummary) {
+      return {
+        blocked: true,
+        reason: sf.styleRejectionReasons[0] || 'style_not_fulfilled',
+        text,
+        origin,
+        countedAsSuccess: false,
+        manifest,
+        validation,
+        snapshot,
+        pipelineDiagnostics: diag,
+      };
+    }
   }
 
   return {
@@ -125,6 +446,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
     manifest,
     validation,
     snapshot,
+    pipelineDiagnostics: diag,
   };
 }
 
