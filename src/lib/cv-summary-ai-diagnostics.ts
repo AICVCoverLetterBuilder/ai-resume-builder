@@ -258,6 +258,8 @@ export type SummaryAiDiagnosticTrace = {
   localizationRequiredByEntryHash: Record<string, boolean>;
   sameLocaleBypassUsedByEntryHash: Record<string, boolean>;
   localizedManifestCacheHitByEntryHash: Record<string, boolean>;
+  /** Packaged revision for the distinct Experience locale-attribution contract. */
+  summaryExperienceLocaleDiagnosticsRevision: typeof SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION;
   employmentStatesByEntryHash: Record<string, 'current' | 'completed'>;
   crossEntryFactCollisionCount: number;
   crossEntryLeakageDetected: boolean;
@@ -747,6 +749,7 @@ export class SummaryAiDiagnosticSession {
       localizationRequiredByEntryHash: {},
       sameLocaleBypassUsedByEntryHash: {},
       localizedManifestCacheHitByEntryHash: {},
+      summaryExperienceLocaleDiagnosticsRevision: SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION,
       employmentStatesByEntryHash: {},
       crossEntryFactCollisionCount: 0,
       crossEntryLeakageDetected: false,

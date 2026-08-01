@@ -24,6 +24,18 @@ const SUMMARY_AI_TRACE_MARKER = 'CVPRO_SUMMARY_AI_TRACE_V1';
 const SUMMARY_AI_COPY = 'Copy Summary AI diagnostics';
 const SUMMARY_V2_MARKER = 'summary-v2';
 const SUMMARY_V2_REVISION = 'summary-v2-architecture-371-v1';
+const SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394 = 'summary-experience-locale-diagnostics-394-v1';
+const EXPERIENCE_LOCALE_DIAGNOSTICS_394_FIELDS = [
+  'declaredExperienceLocaleByEntryHash',
+  'detectedExperienceTextLocaleByEntryHash',
+  'detectedExperienceLocaleConfidenceByEntryHash',
+  'effectiveSourceLocaleByEntryHash',
+  'effectiveSourceLocaleAuthorityByEntryHash',
+  'localizedManifestLocaleByEntryHash',
+  'localizationRequiredByEntryHash',
+  'sameLocaleBypassUsedByEntryHash',
+  'localizedManifestCacheHitByEntryHash',
+];
 
 function fail(msg) {
   console.error(`[verify-internal-ai-reset] FAIL: ${msg}`);
@@ -342,6 +354,14 @@ if (expect === 'enabled') {
   }
   if (!blob.includes(SUMMARY_V2_REVISION)) {
     fail(`missing Summary V2 revision "${SUMMARY_V2_REVISION}"`);
+  }
+  if (!blob.includes(SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394)) {
+    fail(`missing AAB-394 Experience locale diagnostics revision "${SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394}"`);
+  }
+  for (const field of EXPERIENCE_LOCALE_DIAGNOSTICS_394_FIELDS) {
+    if (!blob.includes(field)) {
+      fail(`missing AAB-394 Experience locale diagnostics field "${field}"`);
+    }
   }
   if (!blob.includes('NEXT_PUBLIC_ENABLE_SUMMARY_V2') && !blob.includes('ENABLE_SUMMARY_V2')) {
     // Inlined Next public env often appears as the literal "true" near the key; require revision + marker above.
