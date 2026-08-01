@@ -796,7 +796,13 @@ function strengthenDutyClauseBody(
 
   // "así como" before a finite verb is stilted; "a la vez que" coordinates
   // finite predicates naturally in professional Spanish.
-  if (locale === 'es') return sparseJoin(/\s+y\s+/iu, ', a la vez que ', 'con rigor', false);
+  if (locale === 'es') {
+    const transformed = sparseJoin(/\s+y\s+/iu, ', a la vez que ', 'con rigor', false);
+    return {
+      ...transformed,
+      text: transformed.text.replace(/\ba la vez que\s+y\s+/iu, 'a la vez que '),
+    };
+  }
   if (locale === 'fr') {
     // "ainsi que" coordinating finite predicates requires an explicit subject —
     // "ainsi que remplace" is ungrammatical; "ainsi que je remplace" is natural.

@@ -29,6 +29,10 @@ export const SUMMARY_V2_NATIVE_SURFACE_389_REVISION =
 export const SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION =
   'summary-v2-spanish-perspective-native-surface-391-v1' as const;
 
+/** Spanish slot-wide first/third-person predicate guard. */
+export const SUMMARY_V2_SPANISH_SLOT_WIDE_PERSON_393_REVISION =
+  'summary-v2-spanish-slot-wide-person-393-v1' as const;
+
 export type SummaryV2NativeSurfaceResult = {
   nativeSurfaceValidationPassed: boolean;
   capitalizationValidationPassed: boolean;
@@ -183,6 +187,15 @@ function romanceFirstPersonPast(lower: string, locale: 'es' | 'pt-BR'): string {
     // -ava / -ia imperfect: 1sg == 3sg.
     return lower;
   }
+  // Spanish spelling changes in the preterite are not suffix-only.
+  // Keep this small and morphology-owned; regular verbs continue below.
+  const irregular: Record<string, string> = {
+    realiz\u00f3: 'realic\u00e9',
+    atendi\u00f3: 'atend\u00ed',
+    respondi\u00f3: 'respond\u00ed',
+    recibi\u00f3: 'recib\u00ed',
+  };
+  if (irregular[lower]) return irregular[lower];
   if (/\u00f3$/u.test(lower)) return `${lower.slice(0, -1)}\u00e9`;
   if (/ó$/u.test(lower)) return `${lower.slice(0, -1)}é`;
   // -ía / -aba imperfect: 1sg == 3sg.
@@ -197,7 +210,7 @@ function romanceFirstPersonPast(lower: string, locale: 'es' | 'pt-BR'): string {
  */
 function realizeSpanishCoordinatedPredicates(rest: string, tense: 'present' | 'past'): string {
   return (rest || '').replace(
-    /((?:,|\b(?:y|e))\s+)([\p{L}]+)/giu,
+    /((?:,\s*(?:y|e)\s+|,\s+|\b(?:y|e)\s+))([\p{L}]+)/giu,
     (_whole, connector: string, rawVerb: string) => {
       const verb = rawVerb.toLocaleLowerCase();
       // Restrict conversion to productive Spanish finite endings. Function
@@ -259,10 +272,18 @@ export function analyzeSpanishCoordinatedPredicateMorphology(
     `${clauseStart}\\p{L}+(?:\\u00f3|i\\u00f3|\\u00e9|\\u00ed)(?!\\p{L})\\s*(?:,\\s*)?(?:y|e)\\s+\\p{L}+(?:a|e|o)(?!\\p{L})`,
     'iu',
   );
+  // A semantic duty can contain objects, adverbs and several coordinated
+  // facts between predicates. Once a clause establishes a person, inspect all
+  // later finite Spanish preterites in that same sentence, not only adjacent
+  // `verb y verb` pairs.
+  const firstPersonPastAnywhereThenThird = /(?:^|[^\p{L}])\p{L}+(?:\u00e9|\u00ed)(?!\p{L})[^.?!]*(?:^|[^\p{L}])\p{L}+(?:\u00f3|i\u00f3)(?!\p{L})/iu;
+  const thirdPersonPastAnywhereThenFirst = /(?:^|[^\p{L}])\p{L}+(?:\u00f3|i\u00f3)(?!\p{L})[^.?!]*(?:^|[^\p{L}])\p{L}+(?:\u00e9|\u00ed)(?!\p{L})/iu;
   const firstPersonMismatch = firstPersonPastThenThird.test(t)
-    || firstPersonPresentThenThird.test(t);
+    || firstPersonPresentThenThird.test(t)
+    || firstPersonPastAnywhereThenThird.test(t);
   const thirdPersonMismatch = thirdPersonPastThenFirst.test(t)
-    || thirdPersonPresentThenFirst.test(t);
+    || thirdPersonPresentThenFirst.test(t)
+    || thirdPersonPastAnywhereThenFirst.test(t);
   return {
     mixedPersonPredicateChain: perspective === 'first_person'
       ? firstPersonMismatch
@@ -710,6 +731,7 @@ export function evaluateNativeRealizationContract(options: {
 }): SummaryV2NativeRealizationContract {
   void SUMMARY_V2_NATIVE_SURFACE_389_REVISION;
   void SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION;
+  void SUMMARY_V2_SPANISH_SLOT_WIDE_PERSON_393_REVISION;
   const text = (options.text || '').replace(/\s+/g, ' ').trim();
   const locale = options.locale;
   const perspective = options.perspectiveMode ?? 'first_person';

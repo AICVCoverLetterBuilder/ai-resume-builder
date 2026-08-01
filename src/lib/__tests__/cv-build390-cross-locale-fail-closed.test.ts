@@ -19,7 +19,7 @@ import {
 } from '@/lib/cv-summary-v2';
 import type { SummaryV2LocalizedManifest } from '@/lib/cv-summary-v2';
 
-const REFERENCE_DATE = '2026-07-01';
+const REFERENCE_DATE = '2026-08-01';
 
 const MIXED_GENERATE = 'Cuento con alrededor de cinco años y medio de experiencia. Actualmente trabajo como Fahrradmechaniker en RadWerk, donde führt Wartungsarbeiten an Fahrrädern durch, prüft Fahrräder auf technische Mängel y tauscht defekte Bauteile an Fahrrädern aus. Anteriormente trabajé como Rezeptionist en StadtHotel, donde begrüßte Gäste herzlich an der Rezeption des Hotels, erfasste und bearbeitete Reservierungen sowie vorgenommene Änderungen y beantwortete Fragen der Gäste kompetent und serviceorientiert.';
 
@@ -47,7 +47,7 @@ function germanExperienceCv(summary = ''): CVData {
         id: 'prior-de', company: 'StadtHotel', position: 'Rezeptionist',
         startDate: '2021-01', endDate: '2023-12', isPresent: false,
         generatedLocale: 'de',
-        description: 'Begrüßte Gäste herzlich an der Rezeption des Hotels.\nErfasste und bearbeitete Reservierungen sowie vorgenommene Änderungen.\nBeantwortete Fragen der Gäste kompetent und serviceorientiert.',
+        description: 'Begrüßte Gäste professionell an der Rezeption des Hotels.\nErfasste und verwaltete Reservierungen sowie nahm notwendige Änderungen vor.\nBeantwortete Anfragen und Fragen der Gäste kompetent und serviceorientiert.',
       },
     ],
     education: [], skills: [], languages: [], certifications: [], projects: [],
@@ -95,9 +95,9 @@ function spanishLocalization(summary = ''): SummaryV2LocalizedManifest {
           entryId: 'prior-de',
           localizedRoleTitle: 'Recepcionista',
           facts: [
-            { factId: prior[0].factId, localizedText: 'Recibió cordialmente a los huéspedes en la recepción del hotel.' },
-            { factId: prior[1].factId, localizedText: 'Registró y gestionó reservas y sus modificaciones.' },
-            { factId: prior[2].factId, localizedText: 'Respondió con competencia y orientación al servicio a las preguntas de los huéspedes.' },
+            { factId: prior[0].factId, localizedText: 'Recibió a los huéspedes de manera profesional en la recepción del hotel.' },
+            { factId: prior[1].factId, localizedText: 'Registró y gestionó las reservas, y realizó los cambios necesarios.' },
+            { factId: prior[2].factId, localizedText: 'Atendió las consultas y preguntas de los huéspedes de forma competente y orientada al servicio.' },
           ],
         },
       ],
@@ -125,6 +125,10 @@ describe('AAB-390 cross-locale purity is fail-closed before selection/apply', ()
     expect(manifest.requiredPriorFacts).toHaveLength(3);
     expect(manifest.requiredCurrentFacts.every((fact) => fact.entryId === 'current-de' && fact.sourceLocale === 'de')).toBe(true);
     expect(manifest.requiredPriorFacts.every((fact) => fact.entryId === 'prior-de' && fact.sourceLocale === 'de')).toBe(true);
+    const duration = buildExperienceDurationSnapshot(germanExperienceCv().experience, REFERENCE_DATE);
+    expect(duration.byExperienceId['current-de'].totalMonths).toBe(31);
+    expect(duration.byExperienceId['prior-de'].totalMonths).toBe(35);
+    expect(duration.total.totalMonths).toBe(67);
   });
 
   it('rejects malformed JSON and every structural localization parity violation', () => {
@@ -203,6 +207,9 @@ describe('AAB-390 cross-locale purity is fail-closed before selection/apply', ()
     expect(result.diagnostics?.targetLocalePurityPassed).toBe(true);
     expect(result.diagnostics?.finalPostconditionsPassed).toBe(true);
     expect(result.text).toContain('registr\u00e9 y gestion\u00e9');
+    expect(result.text).toContain('realic\u00e9');
+    expect(result.text).toContain('atend\u00ed');
+    expect(result.text).not.toMatch(/\b(?:realiz\u00f3|atendi\u00f3|respondi\u00f3|gestion\u00f3)\b/iu);
   });
 
   it.each([
@@ -210,11 +217,14 @@ describe('AAB-390 cross-locale purity is fail-closed before selection/apply', ()
     ['present triple', 'Realiza, revisa y comprueba la documentaci\u00f3n.', 'present', 'realizo, reviso y compruebo la documentaci\u00f3n'],
     ['completed pair', 'Registr\u00f3 y gestion\u00f3 reservas.', 'completed', 'registr\u00e9 y gestion\u00e9 reservas'],
     ['completed triple', 'Recibi\u00f3, registr\u00f3 y respondi\u00f3 consultas.', 'completed', 'recib\u00ed, registr\u00e9 y respond\u00ed consultas'],
+    ['completed compound object', 'Registr\u00f3 y gestion\u00f3 las reservas, y realiz\u00f3 los cambios necesarios.', 'completed', 'registr\u00e9 y gestion\u00e9 las reservas, y realic\u00e9 los cambios necesarios'],
   ] as const)('realizes Spanish %s coordinated predicates consistently', (_label, source, state, expected) => {
     expect(realizeFirstPersonDutyClause(source, 'es', state)).toBe(expected);
   });
 
   it('rejects a mixed-person Spanish chain before selection or apply', () => {
+    const fullMalformed = 'Anteriormente trabaj\u00e9 como recepcionista, donde recib\u00ed a los hu\u00e9spedes, registr\u00e9 y gestion\u00e9 reservas, y realiz\u00f3 los cambios necesarios y atend\u00ed consultas.';
+    expect(evaluateSummaryV2NativeSurface({ text: fullMalformed, locale: 'es', perspectiveMode: 'first_person', hasPrior: true }).nativeSurfaceValidationPassed).toBe(false);
     const malformed = 'Anteriormente trabaj\u00e9 como recepcionista, donde registr\u00e9 y gestion\u00f3 reservas.';
     const native = evaluateSummaryV2NativeSurface({ text: malformed, locale: 'es', hasPrior: true });
     expect(native.nativeSurfaceValidationPassed).toBe(false);
