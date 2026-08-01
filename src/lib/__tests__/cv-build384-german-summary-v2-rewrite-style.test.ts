@@ -187,7 +187,11 @@ function runStyleClick(style: 'shorter' | 'stronger' | 'professional', usageBefo
   }
   if (style === 'stronger') {
     expect(fin.diagnostics?.strongerStyleFulfilled).toBe(true);
-    expect(fin.text).toMatch(/zielgerichtet|übernahm|zuverlässig/iu);
+    expect(fin.text).toMatch(/sorgfältig|zuverlässig|sowie/iu);
+    expect(fin.text).not.toMatch(/zielgerichtet\s+als/iu);
+    expect(fin.text).not.toMatch(/\bübernahm(?:\s+\p{L}+){0,4}\s+als\b/iu);
+    expect(fin.text).toMatch(/Derzeit arbeite ich als/iu);
+    expect(fin.text).toMatch(/Zuvor arbeitete ich als/iu);
   }
   if (style === 'professional') {
     expect(fin.diagnostics?.professionalStyleFulfilled).toBe(true);
@@ -270,7 +274,7 @@ describe('AAB-384 German Summary V2 rewrite-style contract', () => {
 
     // Stronger must not collapse into professional.
     expect(stronger.text).not.toMatch(/\btätig\b/iu);
-    expect(professional.text).not.toMatch(/zielgerichtet|übernahm ich zuverlässig/iu);
+    expect(professional.text).not.toMatch(/zielgerichtet\s+als|übernahm ich zuverlässig/iu);
   });
 
   it('provider acceptance + precise rejection + style repair lineage', () => {

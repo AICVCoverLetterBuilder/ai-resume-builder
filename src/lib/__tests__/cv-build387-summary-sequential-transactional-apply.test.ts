@@ -415,7 +415,11 @@ describe('AAB-387 sequential Summary transactional apply', () => {
     ui.flushReact();
     expect(hashNorm(ui.reactCv.summary || '')).toBe(stronger.hash);
     expect(hashNorm(ui.persistedCv.summary || '')).toBe(stronger.hash);
-    expect(stronger.text).toMatch(/zielgerichtet|übernahm|zuverlässig/iu);
+    expect(stronger.text).toMatch(/sorgfältig|zuverlässig|sowie/iu);
+    expect(stronger.text).not.toMatch(/zielgerichtet\s+als/iu);
+    expect(stronger.text).not.toMatch(/\bübernahm(?:\s+\p{L}+){0,4}\s+als\b/iu);
+    expect(stronger.text).toMatch(/Derzeit arbeite ich als/iu);
+    expect(stronger.text).toMatch(/Zuvor arbeitete ich als/iu);
 
     const professional = runStyleOnUi(ui, 'professional', 20, { deferReactCommit: true });
     expect(professional.ok).toBe(true);

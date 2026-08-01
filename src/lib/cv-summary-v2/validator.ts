@@ -3,7 +3,10 @@ import { SUMMARY_V2_REVISION } from './flag';
 import { factCoveredInText } from './facts';
 import { bulletToWhereClauseEn, dutyTenseFromEmploymentState, summaryHasMalformedDoublePast } from './tense';
 import { bulletToGermanWoIchClause } from './german-surface';
-import { realizeFirstPersonDutyClause } from './native-surface';
+import {
+  realizeFirstPersonDutyClause,
+  japaneseDutyRealizationVariants,
+} from './native-surface';
 import type {
   SummaryV2EmploymentState,
   SummaryV2EntryFact,
@@ -120,6 +123,33 @@ function stripOptionalGermanSoftModifiers(text: string): string {
     .trim();
 }
 
+/** Strip claim-safe Stronger duty intensifiers / join ornaments for tense match. */
+function stripDutyStyleIntensifiers(text: string): string {
+  return (text || '')
+    .replace(/\b(?:con rigor|avec rigueur|con rigore|com rigor|carefully|thoroughly|pouzdano|pažljivo|uredno)\b/giu, '')
+    .replace(/тщательно\s*/gu, '')
+    .replace(/بعناية\s*/gu, '')
+    .replace(/بكفاءة\s*/gu, '')
+    .replace(/सावधानीपूर्वक\s*/gu, '')
+    .replace(/निरंतर\s*/gu, '')
+    .replace(/着実に/gu, '')
+    .replace(/丁寧に/gu, '')
+    .replace(/\ba la vez que\b/giu, 'y')
+    .replace(/\basí como\b/giu, 'y')
+    .replace(/ साथ ही /gu, ' और ')
+    .replace(/ كما /gu, ' و')
+    .replace(/\bainsi que\b/giu, 'et')
+    .replace(/\bnonché\b/giu, 'e')
+    .replace(/\bbem como\b/giu, 'e')
+    .replace(/а также\s*/gu, 'и ')
+    .replace(/\s+te\s+/giu, ' i ')
+    .replace(/ ثم /gu, ' و')
+    .replace(/、また/gu, '、')
+    .replace(/\bas well as\b/giu, 'and')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 /**
  * Enforce per-entry duty tense from employmentState.
  * EN natural prose must use the tensed "where I …" clause.
@@ -171,21 +201,34 @@ export function entryDutiesMatchEmploymentTense(
 
     if (locale !== 'en') {
       // Non-EN shells: accept live bullets OR first-person native realizations.
+      // Stronger may insert claim-safe duty intensifiers — strip before match.
+      const corpusBare = stripDutyStyleIntensifiers(corpus);
       const live = (f.bulletText || '').replace(/[.;]+$/u, '').trim().toLowerCase();
-      if (live && corpus.includes(live)) return true;
+      if (live && (corpus.includes(live) || corpusBare.includes(live))) return true;
       const realized = realizeFirstPersonDutyClause(
         f.bulletText,
         locale,
         employmentState,
         gender,
       ).toLowerCase();
-      if (realized && corpus.includes(realized)) return true;
+      if (realized && (corpus.includes(realized) || corpusBare.includes(realized))) return true;
+      const realizedBare = stripDutyStyleIntensifiers(realized);
+      if (realizedBare.length >= 8 && corpusBare.includes(realizedBare)) return true;
+      if (locale === 'ja') {
+        // Chained Japanese clauses inflect the bullet's finite verb (行う→行い).
+        const variants = japaneseDutyRealizationVariants(f.bulletText, employmentState)
+          .map((v) => v.toLowerCase())
+          .filter((v) => v.length >= 4);
+        if (variants.some((v) => corpus.includes(v) || corpusBare.includes(v))) return true;
+      }
       // Stem fallback: significant content tokens still present after 1sg rewrite.
       const stems = live
         .split(/[^\p{L}0-9]+/u)
         .filter((t) => t.length >= 5)
         .slice(0, 3);
-      if (stems.length > 0 && stems.every((s) => corpus.includes(s))) return true;
+      if (stems.length > 0 && stems.every((s) => corpusBare.includes(s) || corpus.includes(s))) {
+        return true;
+      }
     }
     return false;
   });

@@ -206,7 +206,8 @@ describe('build 265 — exact Serbian Summary regression', () => {
     expect(text).toMatch(/Koordinator terenske dokumentacije/i);
     expect(text).toMatch(/Atlas|mart|2025/i);
     expect(countSummaryDurationExpressions(text, 'sr')).toBe(1);
-    expect(text).toMatch(/sa oko jedne i po godine iskustva/i);
+    // V2 finite form is "Imam oko …"; legacy phrase remains "sa oko …".
+    expect(text).toMatch(/(?:Imam|sa) oko jedne i po godine iskustva/i);
     expect(text).not.toMatch(/godinu dana/i);
     // Cannot coexist
     expect(

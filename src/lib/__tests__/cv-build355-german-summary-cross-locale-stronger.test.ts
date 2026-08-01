@@ -126,7 +126,7 @@ function assertFirstPersonGerman(text: string, cv?: CVData): void {
       requirePrior: true,
     });
     expect(text).toMatch(/Ich\s+arbeite\s+derzeit|Derzeit\s+arbeite\s+ich/i);
-    expect(text).toMatch(/Zuvor\s+(?:arbeitete|übernahm)/i);
+    expect(text).toMatch(/Zuvor\s+(?:arbeitete|war)/i);
     expect(text).toMatch(/Atlas/i);
     expect(text).toMatch(/Rewitu/i);
     expect(text).toMatch(/incoming goods|eingehende/i);

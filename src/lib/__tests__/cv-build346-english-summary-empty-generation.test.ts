@@ -216,6 +216,8 @@ describe('AAB-346 English Summary empty-generation', () => {
       gender: 'female',
       cv,
       candidate: PROVIDER_MISSING_PRIOR,
+      // Pin calendar so duration months stay 78 across month boundaries (same as AAB-347 below).
+      referenceDateIso: '2026-07-20',
     });
 
     expect(fin.countedAsSuccess).toBe(true);

@@ -86,11 +86,14 @@ function strengthenUnit(unit: string, locale: Locale, isPresent: boolean): strin
     t = strengthenLead(t, 'Controlla', 'Controlla attentamente');
     t = strengthenLead(t, 'Controllava', 'Controllava attentamente');
     t = strengthenLead(t, 'Ha controllato', 'Ha controllato attentamente');
+    t = strengthenLead(t, 'Ho controllato', 'Ho controllato attentamente');
     t = strengthenLead(t, 'Sostituisce', 'Sostituisce con cura');
     t = strengthenLead(t, 'Sostituiva', 'Sostituiva con cura');
     t = strengthenLead(t, 'Ha sostituito', 'Ha sostituito con cura');
+    t = strengthenLead(t, 'Ho sostituito', 'Ho sostituito con cura');
     t = strengthenLead(t, 'Registrava', 'Registrava con attenzione');
     t = strengthenLead(t, 'Ha registrato', 'Ha registrato con attenzione');
+    t = strengthenLead(t, 'Ho registrato', 'Ho registrato con attenzione');
   } else if (locale === 'pt-BR') {
     t = strengthenLead(t, 'Realiza', 'Realiza com atenção');
     t = strengthenLead(t, 'Inspeciona', 'Inspeciona com cuidado');
@@ -247,7 +250,7 @@ export function isExperienceStyleSaturated(
     return /(?:Effectue avec soin|Inspecte attentivement|Inspectait attentivement|Remplaçait avec soin|Enregistrait soigneusement)/u.test(t);
   }
   if (locale === 'it') {
-    return /(?:Esegue con cura|Controlla attentamente|Ha controllato attentamente|Ha sostituito con cura|Ha registrato con attenzione)/u.test(t);
+    return /(?:Esegue con cura|Controlla attentamente|Ha controllato attentamente|Ho controllato attentamente|Ha sostituito con cura|Ho sostituito con cura|Ha registrato con attenzione|Ho registrato con attenzione)/u.test(t);
   }
   if (locale === 'pt-BR') {
     return /(?:Realiza com atenção|Inspeciona com cuidado|Inspecionava com cuidado|Substituía com cuidado|Registrava com atenção)/u.test(t);

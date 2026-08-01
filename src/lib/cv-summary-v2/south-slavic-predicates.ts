@@ -128,11 +128,32 @@ function toPresent1sg(verb: string): string | null {
   return null;
 }
 
+/** Re-gender an existing -ao/-eo/-io ↔ -ala/-ela/-ila participle. */
+function regenderPastParticiple(lower: string, gender: GenderMode): string {
+  if (gender === 'female') {
+    if (/ао$/u.test(lower)) return `${lower.slice(0, -2)}ала`;
+    if (/ео$/u.test(lower)) return `${lower.slice(0, -2)}ела`;
+    if (/ио$/u.test(lower)) return `${lower.slice(0, -2)}ила`;
+    if (/ao$/u.test(lower)) return `${lower.slice(0, -2)}ala`;
+    if (/eo$/u.test(lower)) return `${lower.slice(0, -2)}ela`;
+    if (/io$/u.test(lower)) return `${lower.slice(0, -2)}ila`;
+    return lower;
+  }
+  // male / unmarked
+  if (/ала$/u.test(lower)) return `${lower.slice(0, -3)}ао`;
+  if (/ела$/u.test(lower)) return `${lower.slice(0, -3)}ео`;
+  if (/ила$/u.test(lower)) return `${lower.slice(0, -3)}ио`;
+  if (/ala$/u.test(lower)) return `${lower.slice(0, -3)}ao`;
+  if (/ela$/u.test(lower)) return `${lower.slice(0, -3)}eo`;
+  if (/ila$/u.test(lower)) return `${lower.slice(0, -3)}io`;
+  return lower;
+}
+
 function toPastParticipleForm(verb: string, gender: GenderMode): string | null {
   const lower = verb.toLocaleLowerCase();
   if (isPastParticiple(lower)) {
-    // Already past — keep; optional gender rewrite is unsafe without full paradigm.
-    return lower;
+    // Already past — align the participle with the selected gender.
+    return regenderPastParticiple(lower, gender);
   }
   const cyr = /\p{Script=Cyrillic}/u.test(lower);
   // Normalize 1sg → 3sg-like stem first.
@@ -187,8 +208,8 @@ function toPastParticipleForm(verb: string, gender: GenderMode): string | null {
     return null;
   }
   if (gender === 'female') return `${stem}${femaleEnd}`;
-  if (gender === 'male') return `${stem}${maleEnd}`;
-  return `${stem}${maleEnd}/${femaleEnd}`;
+  // Unspecified resolves to the unmarked (masculine) form — never `radio/la`.
+  return `${stem}${maleEnd}`;
 }
 
 function parseSegments(text: string): PredSegment[] {

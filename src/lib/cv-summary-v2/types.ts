@@ -131,6 +131,13 @@ export type SummaryV2PipelineResult = {
       nativePunctuationValidationPassed?: boolean;
       internalMarkerLeakageDetected?: boolean;
       englishMorphologyLeakageDetected?: boolean;
+      unresolvedGenderPlaceholderDetected?: boolean;
+      finiteDurationSentencePassed?: boolean;
+      firstPersonPredicateChainPassed?: boolean;
+      localeVerbMorphologyPassed?: boolean;
+      roleCaseValidationPassed?: boolean;
+      nativeCoordinationValidationPassed?: boolean;
+      sentenceCompletenessPassed?: boolean;
       structuralCompressionCount?: number;
       coordinatedPredicateCount?: number;
       transformedCoordinatedPredicateCount?: number;
@@ -141,6 +148,14 @@ export type SummaryV2PipelineResult = {
       predicateChainRejectionReasons?: string[];
       sourcePredicateChainHash?: string;
       finalPredicateChainHash?: string;
+      repeatedStyleModifierCount?: number;
+      repeatedStyleModifierLemmas?: string[];
+      stackedModifierDetected?: boolean;
+      modifierOnlyTransformationDetected?: boolean;
+      strongerVerbTransformationCount?: number;
+      structuralStrengtheningCount?: number;
+      nativeStrongSurfacePassed?: boolean;
+      nativeStrongSurfaceRejectionReasons?: string[];
     } | null;
     styleNoSafeMaterialChange: boolean;
   };

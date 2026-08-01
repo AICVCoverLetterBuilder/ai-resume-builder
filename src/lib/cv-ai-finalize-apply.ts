@@ -170,6 +170,10 @@ import {
   SUMMARY_V2_UNIVERSAL_STYLE_385_REVISION,
   SUMMARY_V2_NATIVE_SURFACE_386_REVISION,
   SOUTH_SLAVIC_PREDICATE_CHAIN_386_REVISION,
+  SUMMARY_V2_STRONGER_DUTY_SURFACE_388_REVISION,
+  SUMMARY_V2_STRONGER_SPARSE_MODIFIER_388_REVISION,
+  SUMMARY_V2_NATIVE_SURFACE_389_REVISION,
+  SUMMARY_V2_GENDER_SURFACE_389_REVISION,
   isSummaryV2Enabled,
   runSummaryV2,
   buildSummaryV2StyledDeterministicText,
@@ -643,6 +647,9 @@ import {
   SUMMARY_TRANSACTIONAL_APPLY_387_REVISION,
 } from './cv-summary-transactional-apply';
 import {
+  CV_AI_PERMANENT_AAB389_REGRESSION_REVISION,
+} from './cv-ai-permanent-aab389-regression';
+import {
   detectExperienceUnsupportedClaimExpansion,
   experienceUnsupportedClaimRejectionReason,
   EXPERIENCE_AI_UNSUPPORTED_EXPANSION_REVISION,
@@ -660,6 +667,7 @@ void SUMMARY_AUTHORITATIVE_GROUNDING_356_REVISION;
 void SUMMARY_MATERIAL_FACT_UNIVERSAL_356_REVISION;
 void GERMAN_SUMMARY_AUTHORITATIVE_ACCEPT_356_REVISION;
 void SUMMARY_TRANSACTIONAL_APPLY_387_REVISION;
+void CV_AI_PERMANENT_AAB389_REGRESSION_REVISION;
 
 function splitGenericDutyEvidence(description: string): string[] {
   return (description || '')
@@ -803,6 +811,11 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SOUTH_SLAVIC_PREDICATE_CHAIN_386_REVISION,
   EXPERIENCE_STRONGER_386_REVISION,
   SUMMARY_TRANSACTIONAL_APPLY_387_REVISION,
+  SUMMARY_V2_STRONGER_DUTY_SURFACE_388_REVISION,
+  SUMMARY_V2_STRONGER_SPARSE_MODIFIER_388_REVISION,
+  SUMMARY_V2_NATIVE_SURFACE_389_REVISION,
+  SUMMARY_V2_GENDER_SURFACE_389_REVISION,
+  CV_AI_PERMANENT_AAB389_REGRESSION_REVISION,
   ENGLISH_SUMMARY_SHARED_FINAL_GATE_325_REVISION,
   ENGLISH_SUMMARY_ENTITY_LOCALE_PURITY_325_REVISION,
   ENGLISH_SUMMARY_CURRENT_PRIOR_COVERAGE_325_REVISION,
@@ -1732,6 +1745,13 @@ export type FinalizeCvAiFieldResult = {
     nativePunctuationValidationPassed?: boolean;
     internalMarkerLeakageDetected?: boolean;
     englishMorphologyLeakageDetected?: boolean;
+    unresolvedGenderPlaceholderDetected?: boolean;
+    finiteDurationSentencePassed?: boolean;
+    firstPersonPredicateChainPassed?: boolean;
+    localeVerbMorphologyPassed?: boolean;
+    roleCaseValidationPassed?: boolean;
+    nativeCoordinationValidationPassed?: boolean;
+    sentenceCompletenessPassed?: boolean;
     coordinatedPredicateCount?: number | null;
     transformedCoordinatedPredicateCount?: number | null;
     untransformedFinitePredicateCount?: number | null;
@@ -1741,6 +1761,14 @@ export type FinalizeCvAiFieldResult = {
     predicateChainRejectionReasons?: string[];
     sourcePredicateChainHash?: string | null;
     finalPredicateChainHash?: string | null;
+    repeatedStyleModifierCount?: number | null;
+    repeatedStyleModifierLemmas?: string[];
+    stackedModifierDetected?: boolean;
+    modifierOnlyTransformationDetected?: boolean;
+    strongerVerbTransformationCount?: number | null;
+    structuralStrengtheningCount?: number | null;
+    nativeStrongSurfacePassed?: boolean;
+    nativeStrongSurfaceRejectionReasons?: string[];
     structuralCompressionCount?: number;
     serbianStructuredDomainGateEvaluated?: boolean;
     serbianStructuredDomainGatePassed?: boolean;
@@ -3350,6 +3378,27 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       englishMorphologyLeakageDetected: Boolean(
         v2Pd?.styleFulfillment?.englishMorphologyLeakageDetected,
       ),
+      unresolvedGenderPlaceholderDetected: Boolean(
+        v2Pd?.styleFulfillment?.unresolvedGenderPlaceholderDetected,
+      ),
+      finiteDurationSentencePassed: Boolean(
+        v2Pd?.styleFulfillment?.finiteDurationSentencePassed ?? true,
+      ),
+      firstPersonPredicateChainPassed: Boolean(
+        v2Pd?.styleFulfillment?.firstPersonPredicateChainPassed ?? true,
+      ),
+      localeVerbMorphologyPassed: Boolean(
+        v2Pd?.styleFulfillment?.localeVerbMorphologyPassed ?? true,
+      ),
+      roleCaseValidationPassed: Boolean(
+        v2Pd?.styleFulfillment?.roleCaseValidationPassed ?? true,
+      ),
+      nativeCoordinationValidationPassed: Boolean(
+        v2Pd?.styleFulfillment?.nativeCoordinationValidationPassed ?? true,
+      ),
+      sentenceCompletenessPassed: Boolean(
+        v2Pd?.styleFulfillment?.sentenceCompletenessPassed ?? true,
+      ),
       coordinatedPredicateCount:
         v2Pd?.styleFulfillment?.coordinatedPredicateCount ?? null,
       transformedCoordinatedPredicateCount:
@@ -3371,6 +3420,25 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         v2Pd?.styleFulfillment?.sourcePredicateChainHash ?? null,
       finalPredicateChainHash:
         v2Pd?.styleFulfillment?.finalPredicateChainHash ?? null,
+      repeatedStyleModifierCount:
+        v2Pd?.styleFulfillment?.repeatedStyleModifierCount ?? null,
+      repeatedStyleModifierLemmas:
+        v2Pd?.styleFulfillment?.repeatedStyleModifierLemmas || [],
+      stackedModifierDetected: Boolean(
+        v2Pd?.styleFulfillment?.stackedModifierDetected,
+      ),
+      modifierOnlyTransformationDetected: Boolean(
+        v2Pd?.styleFulfillment?.modifierOnlyTransformationDetected,
+      ),
+      strongerVerbTransformationCount:
+        v2Pd?.styleFulfillment?.strongerVerbTransformationCount ?? null,
+      structuralStrengtheningCount:
+        v2Pd?.styleFulfillment?.structuralStrengtheningCount ?? null,
+      nativeStrongSurfacePassed: Boolean(
+        v2Pd?.styleFulfillment?.nativeStrongSurfacePassed ?? true,
+      ),
+      nativeStrongSurfaceRejectionReasons:
+        v2Pd?.styleFulfillment?.nativeStrongSurfaceRejectionReasons || [],
       operationMode: v2OperationMode,
       providerAccepted: v2.origin === 'ai_generated' && !v2CleanNoOp,
       providerCandidatePresent: Boolean(providerRaw),

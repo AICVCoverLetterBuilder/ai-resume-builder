@@ -180,6 +180,7 @@ describe('build 274 Hindi Summary quality + duration representation', () => {
         locale: 'hi',
         action: 'summary_generate',
         candidate: HYBRID_DEVICE,
+        referenceDateIso: '2026-07-19',
       });
       expect(pipe.blocked, `iter ${i}: ${pipe.reason}`).toBe(false);
       expect(pipe.finalized.countedAsSuccess).toBe(true);

@@ -61,11 +61,14 @@ export type { RunSummaryV2Options, SummaryV2PipelineDiagnostics } from './pipeli
 export {
   SUMMARY_V2_REWRITE_STYLE_384_REVISION,
   SUMMARY_V2_UNIVERSAL_STYLE_385_REVISION,
+  SUMMARY_V2_STRONGER_DUTY_SURFACE_388_REVISION,
+  SUMMARY_V2_STRONGER_SPARSE_MODIFIER_388_REVISION,
   normalizeSummaryV2RewriteStyle,
   buildSummaryV2StyledDeterministicText,
   buildSummaryV2BalancedEnhanceText,
   transformSummaryV2ForRewriteStyle,
   evaluateSummaryV2StyleFulfillment,
+  analyzeStrongerNativeSurface,
   repairSummaryV2RewriteStyle,
   summaryV2StylePairDistinct,
   summaryV2ShorterMinLengthDeltaPercent,
@@ -82,12 +85,24 @@ export type {
 } from './rewrite-style';
 export {
   SUMMARY_V2_NATIVE_SURFACE_386_REVISION,
+  SUMMARY_V2_NATIVE_SURFACE_389_REVISION,
   formatNativeDurationSentence,
   buildNativeFirstPersonDutyTail,
   realizeFirstPersonDutyClause,
   evaluateSummaryV2NativeSurface,
+  evaluateNativeRealizationContract,
 } from './native-surface';
-export type { SummaryV2NativeSurfaceResult } from './native-surface';
+export type {
+  SummaryV2NativeSurfaceResult,
+  SummaryV2NativeRealizationContract,
+} from './native-surface';
+export {
+  SUMMARY_V2_GENDER_SURFACE_389_REVISION,
+  resolveSummaryV2GenderMode,
+  pickGenderedForm,
+  detectUnresolvedGenderPlaceholder,
+} from './gender';
+export type { SummaryV2GenderMode } from './gender';
 export {
   SOUTH_SLAVIC_PREDICATE_CHAIN_386_REVISION,
   realizeSouthSlavicPredicateChain,

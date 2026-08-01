@@ -14,6 +14,29 @@ import {
   buildNativeFirstPersonDutyTail,
   formatNativeDurationSentence,
 } from './native-surface';
+import { resolveSummaryV2GenderMode, pickGenderedForm } from './gender';
+
+/**
+ * Russian / South-Slavic role titles are arbitrary free text and cannot be
+ * declined safely, so the shell quotes the citation form after a case-stable
+ * head noun (`на должности «…»` / `na poziciji «…»`).
+ */
+export function quoteRoleCitation(role: string): string {
+  const r = (role || '').trim();
+  if (!r) return r;
+  if (/^[«"'„].*[»"'“]$/u.test(r)) return r;
+  return `«${r}»`;
+}
+
+/**
+ * Arabic "as <role>": the kaf prefix attaches directly to an Arabic word and
+ * keeps the tatweel + space only before a non-Arabic (Latin) role title.
+ */
+export function arabicAsRole(role: string): string {
+  const r = (role || '').trim();
+  if (!r) return 'كـ';
+  return /^[\u0600-\u06FF]/u.test(r) ? `كـ${r}` : `كـ ${r}`;
+}
 
 export { bulletToWhereClauseEn } from './tense';
 export {
@@ -107,6 +130,11 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
   const locale = manifest.locale;
   const units: string[] = [];
   const dur = (manifest.durationPhrase || '').replace(/[.,]$/u, '').trim();
+  const genderMode = resolveSummaryV2GenderMode(manifest.gender);
+  const scWorked = pickGenderedForm(genderMode, { male: 'radio', female: 'radila' });
+  const ruWorked = pickGenderedForm(genderMode, { male: 'работал', female: 'работала' });
+  const hiDoes = pickGenderedForm(genderMode, { male: 'करता', female: 'करती' });
+  const hiWas = pickGenderedForm(genderMode, { male: 'था', female: 'थी' });
 
   const current = manifest.current;
   if (current) {
@@ -149,10 +177,11 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
           : `Atualmente trabalho como ${role}${dutyTail}.`,
       );
     } else if (locale === 'ru') {
+      const title = quoteRoleCitation(role);
       units.push(
         employer
-          ? `Сейчас я работаю как ${role} в ${employer}${dutyTail}.`
-          : `Сейчас я работаю как ${role}${dutyTail}.`,
+          ? `Сейчас я работаю на должности ${title} в ${employer}${dutyTail}.`
+          : `Сейчас я работаю на должности ${title}${dutyTail}.`,
       );
     } else if (locale === 'sr' || locale === 'hr') {
       units.push(
@@ -163,14 +192,14 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
     } else if (locale === 'ar') {
       units.push(
         employer
-          ? `أعمل حالياً كـ ${role} في ${employer}${dutyTail}.`
-          : `أعمل حالياً كـ ${role}${dutyTail}.`,
+          ? `أعمل حالياً ${arabicAsRole(role)} في ${employer}${dutyTail}.`
+          : `أعمل حالياً ${arabicAsRole(role)}${dutyTail}.`,
       );
     } else if (locale === 'hi') {
       units.push(
         employer
-          ? `मैं वर्तमान में ${employer} में ${role} के रूप में काम करता/करती हूँ${dutyTail}।`
-          : `मैं वर्तमान में ${role} के रूप में काम करता/करती हूँ${dutyTail}।`,
+          ? `मैं वर्तमान में ${employer} में ${role} के रूप में काम ${hiDoes} हूँ${dutyTail}।`
+          : `मैं वर्तमान में ${role} के रूप में काम ${hiDoes} हूँ${dutyTail}।`,
       );
     } else if (locale === 'ja') {
       units.push(
@@ -223,28 +252,29 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
           : `Anteriormente trabalhei como ${role}${dutyTail}.`,
       );
     } else if (locale === 'ru') {
+      const title = quoteRoleCitation(role);
       units.push(
         employer
-          ? `Ранее я работал(а) как ${role} в ${employer}${dutyTail}.`
-          : `Ранее я работал(а) как ${role}${dutyTail}.`,
+          ? `Ранее я ${ruWorked} на должности ${title} в ${employer}${dutyTail}.`
+          : `Ранее я ${ruWorked} на должности ${title}${dutyTail}.`,
       );
     } else if (locale === 'sr' || locale === 'hr') {
       units.push(
         employer
-          ? `Prethodno sam radio/la kao ${role} u ${employer}${dutyTail}.`
-          : `Prethodno sam radio/la kao ${role}${dutyTail}.`,
+          ? `Prethodno sam ${scWorked} kao ${role} u ${employer}${dutyTail}.`
+          : `Prethodno sam ${scWorked} kao ${role}${dutyTail}.`,
       );
     } else if (locale === 'ar') {
       units.push(
         employer
-          ? `سابقاً عملت كـ ${role} في ${employer}${dutyTail}.`
-          : `سابقاً عملت كـ ${role}${dutyTail}.`,
+          ? `سابقاً عملت ${arabicAsRole(role)} في ${employer}${dutyTail}.`
+          : `سابقاً عملت ${arabicAsRole(role)}${dutyTail}.`,
       );
     } else if (locale === 'hi') {
       units.push(
         employer
-          ? `इससे पहले मैं ${employer} में ${role} के रूप में काम करता/करती था/थी${dutyTail}।`
-          : `इससे पहले मैं ${role} के रूप में काम करता/करती था/थी${dutyTail}।`,
+          ? `इससे पहले मैं ${employer} में ${role} के रूप में काम ${hiDoes} ${hiWas}${dutyTail}।`
+          : `इससे पहले मैं ${role} के रूप में काम ${hiDoes} ${hiWas}${dutyTail}।`,
       );
     } else if (locale === 'ja') {
       units.push(

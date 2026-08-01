@@ -46,6 +46,12 @@ function morphVariants(token: string): string[] {
   if (t.endsWith('t') && t.length > 3) out.add(`${t.slice(0, -1)}e`);
   if (t.endsWith('e') && t.length > 3) out.add(`${t.slice(0, -1)}t`);
   if (t.endsWith('te') && t.length > 4) out.add(t.slice(0, -2));
+  // CJK bullets carry the finite verb inside the token (自転車の整備を行う).
+  // Summary realization inflects it (行い / 点検し / 交換しています) — match the stem.
+  if (/[\u3040-\u30FF\u3400-\u9FFF]/u.test(t) && t.length > 4) {
+    out.add(t.slice(0, -1));
+    out.add(t.slice(0, -2));
+  }
   return [...out];
 }
 

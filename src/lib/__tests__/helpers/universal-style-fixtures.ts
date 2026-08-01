@@ -40,7 +40,7 @@ export const UNIVERSAL_STYLE_FIXTURES: Record<Locale, LocaleFixture> = {
     roleC: 'Meccanico di biciclette',
     roleP: 'Assistente officina biciclette',
     current: 'Esegue la manutenzione delle biciclette.\nControlla le biciclette per difetti.\nSostituisce i pezzi difettosi delle biciclette.',
-    prior: 'Ha controllato le biciclette per difetti.\nHa registrato note di riparazione.\nHa sostituito i pezzi difettosi delle biciclette.',
+    prior: 'Ho controllato le biciclette per difetti.\nHo registrato note di riparazione.\nHo sostituito i pezzi difettosi delle biciclette.',
   },
   ar: {
     roleC: 'ميكانيكي دراجات',
