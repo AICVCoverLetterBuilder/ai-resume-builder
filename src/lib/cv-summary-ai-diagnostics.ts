@@ -4,16 +4,26 @@
  */
 import { fingerprintText, resolveAppVersionInfo, resolveNextBuildId } from './cv-export-diagnostics';
 import { detectTextLocale } from './cv-content-locale';
+import {
+  detectDominantLocale,
+  resolveSourceLocaleForText,
+  SUMMARY_V2_SUPPORTED_LOCALES,
+} from './cv-summary-v2/locale-authority';
+import type { Locale } from './i18n/translations';
 
 export const SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION =
   'summary-content-locale-rollback-361-v1' as const;
 export const SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION =
   'summary-visible-source-locale-detection-361-v1' as const;
+/** AAB-394 — explicit Experience declared/detected/effective locale attribution. */
+export const SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION =
+  'summary-experience-locale-diagnostics-394-v1' as const;
 /** AAB-381 — German Summary V2 post-write visible validation against operation-owned text. */
 export const GERMAN_SUMMARY_V2_VISIBLE_POSTWRITE_381_REVISION =
   'german-summary-v2-visible-postwrite-381-v1' as const;
 void SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION;
 void SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION;
+void SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION;
 void GERMAN_SUMMARY_V2_VISIBLE_POSTWRITE_381_REVISION;
 import type { FinalizeCvAiFieldResult } from './cv-ai-finalize-apply';
 import { normalizeSummaryCandidateText } from './cv-ai-finalize-apply';
@@ -237,7 +247,17 @@ export type SummaryAiDiagnosticTrace = {
   snapshotMatchesApplyContext: boolean;
   experienceFactCountsByEntryHash: Record<string, number>;
   experienceCanonicalFactCountsByEntryHash: Record<string, number>;
+  /** Declared/generated entry metadata only; never effective fact authority. */
   experienceLocalesByEntryHash: Record<string, string | null>;
+  declaredExperienceLocaleByEntryHash: Record<string, string | null>;
+  detectedExperienceTextLocaleByEntryHash: Record<string, string | null>;
+  detectedExperienceLocaleConfidenceByEntryHash: Record<string, string>;
+  effectiveSourceLocaleByEntryHash: Record<string, string | null>;
+  effectiveSourceLocaleAuthorityByEntryHash: Record<string, string | null>;
+  localizedManifestLocaleByEntryHash: Record<string, string | null>;
+  localizationRequiredByEntryHash: Record<string, boolean>;
+  sameLocaleBypassUsedByEntryHash: Record<string, boolean>;
+  localizedManifestCacheHitByEntryHash: Record<string, boolean>;
   employmentStatesByEntryHash: Record<string, 'current' | 'completed'>;
   crossEntryFactCollisionCount: number;
   crossEntryLeakageDetected: boolean;
@@ -718,6 +738,15 @@ export class SummaryAiDiagnosticSession {
       experienceFactCountsByEntryHash: {},
       experienceCanonicalFactCountsByEntryHash: {},
       experienceLocalesByEntryHash: {},
+      declaredExperienceLocaleByEntryHash: {},
+      detectedExperienceTextLocaleByEntryHash: {},
+      detectedExperienceLocaleConfidenceByEntryHash: {},
+      effectiveSourceLocaleByEntryHash: {},
+      effectiveSourceLocaleAuthorityByEntryHash: {},
+      localizedManifestLocaleByEntryHash: {},
+      localizationRequiredByEntryHash: {},
+      sameLocaleBypassUsedByEntryHash: {},
+      localizedManifestCacheHitByEntryHash: {},
       employmentStatesByEntryHash: {},
       crossEntryFactCollisionCount: 0,
       crossEntryLeakageDetected: false,
@@ -890,6 +919,11 @@ export class SummaryAiDiagnosticSession {
     const factCounts: Record<string, number> = {};
     const canonCounts: Record<string, number> = {};
     const locales: Record<string, string | null> = {};
+    const detectedLocales: Record<string, string | null> = {};
+    const detectedConfidence: Record<string, string> = {};
+    const effectiveLocales: Record<string, string | null> = {};
+    const effectiveAuthorities: Record<string, string | null> = {};
+    const localizationRequired: Record<string, boolean> = {};
     const states: Record<string, 'current' | 'completed'> = {};
     const hashes: string[] = [];
     let currentRoleHash: string | null = null;
@@ -900,7 +934,28 @@ export class SummaryAiDiagnosticSession {
       const canon = (e.canonicalDescription || '').trim();
       factCounts[h] = desc ? desc.split(/\n/).filter(Boolean).length : 0;
       canonCounts[h] = canon ? canon.split(/\n/).filter(Boolean).length : 0;
-      locales[h] = (e as { generatedLocale?: string }).generatedLocale || cv.contentLocale || null;
+      const declaredRaw = (e as { generatedLocale?: string; positionSourceLocale?: string }).generatedLocale
+        || (e as { positionSourceLocale?: string }).positionSourceLocale
+        || cv.contentLocale
+        || null;
+      const declared = SUMMARY_V2_SUPPORTED_LOCALES.includes(declaredRaw as Locale)
+        ? declaredRaw as Locale
+        : null;
+      const observableText = [desc, e.position || ''].filter(Boolean).join('\n');
+      const detected = detectDominantLocale(observableText);
+      const resolved = resolveSourceLocaleForText({
+        text: observableText,
+        declaredLocale: declared,
+        fallbackLocale: this.draft.requestedLocale as Locale,
+      });
+      // Back-compat field has declared-metadata semantics. The explicit effective
+      // fields below are the only authority diagnostics consumers should use.
+      locales[h] = declared;
+      detectedLocales[h] = detected.locale;
+      detectedConfidence[h] = detected.confidence;
+      effectiveLocales[h] = resolved.sourceLocale;
+      effectiveAuthorities[h] = resolved.resolvedFrom;
+      localizationRequired[h] = resolved.sourceLocale !== this.draft.requestedLocale;
       states[h] = e.isPresent ? 'current' : 'completed';
       if (e.isPresent && !currentRoleHash) currentRoleHash = h;
     }
@@ -923,6 +978,12 @@ export class SummaryAiDiagnosticSession {
       experienceFactCountsByEntryHash: factCounts,
       experienceCanonicalFactCountsByEntryHash: canonCounts,
       experienceLocalesByEntryHash: locales,
+      declaredExperienceLocaleByEntryHash: locales,
+      detectedExperienceTextLocaleByEntryHash: detectedLocales,
+      detectedExperienceLocaleConfidenceByEntryHash: detectedConfidence,
+      effectiveSourceLocaleByEntryHash: effectiveLocales,
+      effectiveSourceLocaleAuthorityByEntryHash: effectiveAuthorities,
+      localizationRequiredByEntryHash: localizationRequired,
       employmentStatesByEntryHash: states,
       authoritativeEntryCount: exps.length,
       previousSummaryUsedAsFactSource: false,
@@ -932,6 +993,18 @@ export class SummaryAiDiagnosticSession {
 
   recordFinalizeResult(finalized: FinalizeCvAiFieldResult): void {
     const diag = finalized.diagnostics || {};
+    const sourceLocales = (diag as { sourceLocalesByEntryHash?: Record<string, string> }).sourceLocalesByEntryHash || {};
+    const localizationSource = (diag as { localizationSource?: string | null }).localizationSource || null;
+    const localizedTarget = (diag as { targetLocale?: string | null }).targetLocale || this.draft.requestedLocale || null;
+    const localizedManifestLocales = Object.fromEntries(Object.keys(sourceLocales).map((key) => [key, localizedTarget]));
+    const sameLocaleBypass = Object.fromEntries(Object.keys(sourceLocales).map((key) => [key, localizationSource === 'same_locale_authoritative']));
+    const cacheHit = Object.fromEntries(Object.keys(sourceLocales).map((key) => [key, localizationSource === 'validated_cache']));
+    this.patch({
+      effectiveSourceLocaleByEntryHash: sourceLocales,
+      localizedManifestLocaleByEntryHash: localizedManifestLocales,
+      sameLocaleBypassUsedByEntryHash: sameLocaleBypass,
+      localizedManifestCacheHitByEntryHash: cacheHit,
+    });
     const text = (finalized.text || '').trim();
     const evaluatedText = String(
       (diag as { evaluatedCandidateText?: string | null }).evaluatedCandidateText

@@ -16,6 +16,8 @@ import {
   validateSummaryV2AgainstManifest,
   realizeFirstPersonDutyClause,
   evaluateSummaryV2NativeSurface,
+  clearSummaryV2LocalizationCacheForTests,
+  localizeSummaryV2Manifest,
 } from '@/lib/cv-summary-v2';
 import type { SummaryV2LocalizedManifest } from '@/lib/cv-summary-v2';
 
@@ -349,6 +351,67 @@ describe('AAB-390 cross-locale purity is fail-closed before selection/apply', ()
     expect(failedTrace.visibleFinalPostconditionsPassed).toBe(false);
     expect(failedTrace.countedAsSuccess).toBe(false);
     expect(failedTrace.usageCountAfter).toBe(0);
+  });
+
+  it('attributes stale declared Experience locale separately from effective text authority', () => {
+    clearSummaryAiDiagnosticsForTests();
+    const cv = germanExperienceCv();
+    cv.contentLocale = 'es';
+    for (const entry of cv.experience) entry.generatedLocale = 'es';
+    const session = new SummaryAiDiagnosticSession({
+      uiLocale: 'es', requestedLocale: 'es', contentLocale: 'es', templateId: 'modern-minimal',
+      requestId: 'aab394-stale-entry-locale', usageCountBefore: 0, gender: 'male',
+      operationMode: 'generate_from_context',
+    });
+    session.recordCvSnapshot(cv, '');
+    const trace = session.commit();
+    expect(Object.values(trace.declaredExperienceLocaleByEntryHash)).toEqual(['es', 'es']);
+    expect(Object.values(trace.detectedExperienceTextLocaleByEntryHash)).toEqual(['de', 'de']);
+    expect(Object.values(trace.effectiveSourceLocaleByEntryHash)).toEqual(['de', 'de']);
+    expect(Object.values(trace.effectiveSourceLocaleAuthorityByEntryHash)).toEqual(['detected', 'detected']);
+    expect(Object.values(trace.localizationRequiredByEntryHash)).toEqual([true, true]);
+  });
+
+  it('does not let a validated localization cache mask stale declared locale or changed German source text', async () => {
+    clearSummaryV2LocalizationCacheForTests();
+    const cv = germanExperienceCv();
+    cv.contentLocale = 'es';
+    for (const entry of cv.experience) entry.generatedLocale = 'es';
+    let calls = 0;
+    const transport = async (request: { entries: Array<{ entryId: string; facts: Array<{ factId: string }> }> }) => {
+      calls += 1;
+      const localized = new Map(spanishLocalization().entries.map((entry) => [
+        entry.entryId,
+        new Map(entry.facts.map((fact) => [fact.factId, fact.localizedText])),
+      ]));
+      return {
+        targetLocale: 'es' as const,
+        entries: request.entries.map((entry) => ({
+          entryId: entry.entryId,
+          localizedRoleTitle: entry.entryId === 'current-de' ? 'Mecánico de bicicletas' : 'Recepcionista',
+          facts: entry.facts.map((fact) => ({
+            factId: fact.factId,
+            localizedText: localized.get(entry.entryId)?.get(fact.factId) || 'Atendió las consultas de los huéspedes.',
+          })),
+        })),
+      };
+    };
+    const first = buildSummaryV2ManifestForCv({ cv, locale: 'es', gender: 'male', referenceDateIso: REFERENCE_DATE });
+    expect(first.current?.sourceLocale).toBe('de');
+    expect(first.priors[0]?.sourceLocale).toBe('de');
+    const cold = await localizeSummaryV2Manifest({ manifest: first, transport });
+    expect(cold.localizationSource).toBe('provider');
+    expect(calls).toBe(1);
+    const cached = await localizeSummaryV2Manifest({ manifest: first, transport });
+    expect(cached.localizationSource).toBe('validated_cache');
+    expect(calls).toBe(1);
+    cv.experience[1].description += '\\nBearbeitete zusätzliche deutsche Anfragen.';
+    cv.experience[1].description = cv.experience[1].description.replace('professionell', 'zuvorkommend');
+    const changed = buildSummaryV2ManifestForCv({ cv, locale: 'es', gender: 'male', referenceDateIso: REFERENCE_DATE });
+    const changedOutcome = await localizeSummaryV2Manifest({ manifest: changed, transport });
+    expect(changed.priors[0]?.sourceLocale).toBe('de');
+    expect(changedOutcome.localizationSource).toBe('provider');
+    expect(calls).toBe(2);
   });
 
   it.each([
