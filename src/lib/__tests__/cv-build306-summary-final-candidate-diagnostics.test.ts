@@ -19,6 +19,7 @@ import {
   SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
   SUMMARY_RUNTIME_MARKER_SET,
 } from '@/lib/cv-ai-finalize-apply';
+import { SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION } from '@/lib/cv-summary-v2';
 import { SPANISH_SUMMARY_GROUNDING_306_REVISION } from '@/lib/cv-spanish-summary-grounding';
 import { localizeWarehouseEmployee, localizeGraphicDesigner } from '@/lib/cv-role-title';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
@@ -36,6 +37,7 @@ import {
   SUMMARY_AI_DIAG_MARKER,
 } from '@/lib/cv-ai-diagnostics-contract';
 import { clearExperienceAiDiagnosticsForTests } from '@/lib/cv-experience-ai-diagnostics';
+import { evaluateSummaryV2NativeSurface } from '@/lib/cv-summary-v2/native-surface';
 
 const REF = '2026-07-19';
 
@@ -151,6 +153,9 @@ describe('Summary final-candidate diagnostics (AAB-306 Phase 2)', () => {
       .toBe('summary-final-candidate-diagnostics-306-v1');
     expect(SUMMARY_RUNTIME_MARKER_SET).toContain(SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION);
     expect(SUMMARY_RUNTIME_MARKER_SET).toContain(SPANISH_SUMMARY_GROUNDING_306_REVISION);
+    expect(SUMMARY_RUNTIME_MARKER_SET).toContain(
+      SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION,
+    );
   });
 
   it('54. duration-only path is not labeled ai_repaired without content repair', () => {
@@ -216,6 +221,15 @@ describe('Summary final-candidate diagnostics (AAB-306 Phase 2)', () => {
     expect(trace.grammarValidationPassed).toBe(true);
     expect(trace.slotValidationPassed).toBe(true);
     expect(trace.priorRoleGroundingPassed).toBe(true);
+    expect(trace.visibleCandidateHashAfterApply).toBe(trace.finalNormalizedHash);
+    expect(trace.finalPerspectiveMode).toBe('neutral_cv');
+    expect(evaluateSummaryV2NativeSurface({
+      text: pipe.finalized.text,
+      locale: 'es',
+      hasCurrent: true,
+      hasPrior: true,
+      perspectiveMode: 'cv_third_person',
+    }).nativeSurfaceRejectionReasons).toEqual([]);
     expect(trace.visibleSummaryMatchesFinalHash).toBe(true);
     expect(pipe.finalized.text).toMatch(/Atlas/i);
     expect(pipe.finalized.text).toMatch(/Rewitu/i);

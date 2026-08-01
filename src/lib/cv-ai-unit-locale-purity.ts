@@ -45,7 +45,10 @@ export type UnitLocalePurityResult = {
   wrongScriptUnitCount: number;
   mixedLanguageUnitCount: number;
   sourceLanguageLeakageDetected: boolean;
+  /** Confirmed foreign/source locale evidence that participates in purity. */
   unexpectedLocaleCodes: string[];
+  /** Same-script detector guesses without enough evidence to fail purity. */
+  ambiguousLocaleCodes?: string[];
   targetLocalePurityPassed: boolean;
   units: UnitLocalePurityHit[];
   reason?: string;
@@ -739,6 +742,7 @@ export function validateAiUnitLocalePurity(
   let wrongScriptUnitCount = 0;
   let mixedLanguageUnitCount = 0;
   const unexpected = new Set<string>();
+  const ambiguous = new Set<string>();
 
   for (let i = 0; i < units.length; i += 1) {
     const unit = units[i];
@@ -757,7 +761,8 @@ export function validateAiUnitLocalePurity(
       && detectedLocale !== targetLocale
       && !(targetLocale === 'sr' && detectedLocale === 'hr')
     ) {
-      unexpected.add(detectedLocale);
+      if (wrongLocale || mixedLanguage) unexpected.add(detectedLocale);
+      else ambiguous.add(detectedLocale);
     }
     hits.push({
       index: i,
@@ -814,6 +819,7 @@ export function validateAiUnitLocalePurity(
     mixedLanguageUnitCount,
     sourceLanguageLeakageDetected,
     unexpectedLocaleCodes: [...unexpected],
+    ambiguousLocaleCodes: [...ambiguous],
     targetLocalePurityPassed,
     units: hits,
     croatianExclusiveCueCount: hrEvidence?.croatianExclusiveCueCount,

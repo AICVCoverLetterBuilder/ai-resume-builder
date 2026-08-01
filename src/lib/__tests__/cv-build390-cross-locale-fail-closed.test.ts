@@ -2,6 +2,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { CVData } from '@/lib/types';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
 import { finalizeCvAiFieldForApply } from '@/lib/cv-ai-finalize-apply';
+import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
+import {
+  clearSummaryAiDiagnosticsForTests,
+  SummaryAiDiagnosticSession,
+} from '@/lib/cv-summary-ai-diagnostics';
 import {
   buildSummaryV2ManifestForCv,
   acceptSummaryV2LocalizationResponse,
@@ -9,6 +14,8 @@ import {
   validateSummaryV2LocalizationResponse,
   setSummaryV2EnabledForTests,
   validateSummaryV2AgainstManifest,
+  realizeFirstPersonDutyClause,
+  evaluateSummaryV2NativeSurface,
 } from '@/lib/cv-summary-v2';
 import type { SummaryV2LocalizedManifest } from '@/lib/cv-summary-v2';
 
@@ -195,6 +202,60 @@ describe('AAB-390 cross-locale purity is fail-closed before selection/apply', ()
     expect(result.diagnostics?.coveredPriorDutyFactCount).toBe(3);
     expect(result.diagnostics?.targetLocalePurityPassed).toBe(true);
     expect(result.diagnostics?.finalPostconditionsPassed).toBe(true);
+    expect(result.text).toContain('registr\u00e9 y gestion\u00e9');
+  });
+
+  it.each([
+    ['present pair', 'Registra y gestiona reservas.', 'present', 'registro y gestiono reservas'],
+    ['present triple', 'Realiza, revisa y comprueba la documentaci\u00f3n.', 'present', 'realizo, reviso y compruebo la documentaci\u00f3n'],
+    ['completed pair', 'Registr\u00f3 y gestion\u00f3 reservas.', 'completed', 'registr\u00e9 y gestion\u00e9 reservas'],
+    ['completed triple', 'Recibi\u00f3, registr\u00f3 y respondi\u00f3 consultas.', 'completed', 'recib\u00ed, registr\u00e9 y respond\u00ed consultas'],
+  ] as const)('realizes Spanish %s coordinated predicates consistently', (_label, source, state, expected) => {
+    expect(realizeFirstPersonDutyClause(source, 'es', state)).toBe(expected);
+  });
+
+  it('rejects a mixed-person Spanish chain before selection or apply', () => {
+    const malformed = 'Anteriormente trabaj\u00e9 como recepcionista, donde registr\u00e9 y gestion\u00f3 reservas.';
+    const native = evaluateSummaryV2NativeSurface({ text: malformed, locale: 'es', hasPrior: true });
+    expect(native.nativeSurfaceValidationPassed).toBe(false);
+    expect(native.grammaticalPersonValidationPassed).toBe(false);
+    expect(native.nativeSurfaceRejectionReasons).toContain('mixed_person_predicate_chain');
+    const manifest = buildSummaryV2ManifestForCv({
+      cv: germanExperienceCv(), locale: 'es', gender: 'male', referenceDateIso: REFERENCE_DATE,
+    });
+    const invalid = structuredClone({
+      targetLocale: 'es',
+      entries: spanishLocalization().entries.map((entry) => ({
+        entryId: entry.entryId,
+        localizedRoleTitle: entry.localizedRoleTitle,
+        facts: entry.facts.map((fact) => ({ factId: fact.factId, localizedText: fact.localizedText })),
+      })),
+    });
+    invalid.entries[1].facts[1].localizedText = 'Registr\u00e9 y gestion\u00f3 reservas.';
+    expect(validateSummaryV2LocalizationResponse(manifest, invalid).reason).toBe('mixed_person_predicate_chain');
+  });
+
+  it('keeps Spanish first- and third-person coordination contracts separate', () => {
+    const firstValid = evaluateSummaryV2NativeSurface({
+      text: 'Actualmente trabajo como recepcionista, donde registr\u00e9 y gestion\u00e9 reservas.',
+      locale: 'es', perspectiveMode: 'first_person', hasCurrent: true,
+    });
+    const firstInvalid = evaluateSummaryV2NativeSurface({
+      text: 'Actualmente trabajo como recepcionista, donde registr\u00e9 y gestion\u00f3 reservas.',
+      locale: 'es', perspectiveMode: 'first_person', hasCurrent: true,
+    });
+    const thirdValid = evaluateSummaryV2NativeSurface({
+      text: 'Profesional que actualmente trabaja como recepcionista. Registra y gestiona reservas. Anteriormente trabaj\u00f3 como asistente, donde registr\u00f3 y gestion\u00f3 solicitudes.',
+      locale: 'es', perspectiveMode: 'cv_third_person', hasCurrent: true, hasPrior: true,
+    });
+    const thirdInvalid = evaluateSummaryV2NativeSurface({
+      text: 'Anteriormente trabaj\u00f3 como asistente, donde registr\u00f3 y gestion\u00e9 solicitudes.',
+      locale: 'es', perspectiveMode: 'cv_third_person', hasPrior: true,
+    });
+    expect(firstValid.nativeSurfaceValidationPassed).toBe(true);
+    expect(firstInvalid.nativeSurfaceRejectionReasons).toContain('mixed_person_predicate_chain');
+    expect(thirdValid.nativeSurfaceValidationPassed).toBe(true);
+    expect(thirdInvalid.nativeSurfaceRejectionReasons).toContain('mixed_person_predicate_chain');
   });
 
   it('immediately strengthens the committed Spanish Summary without re-reading German facts', () => {
@@ -215,6 +276,69 @@ describe('AAB-390 cross-locale purity is fail-closed before selection/apply', ()
     expect(stronger.text).not.toMatch(/Fahrrad|Rezeption|Wartungsarbeiten|Gäste|Reservierungen/u);
     expect(stronger.diagnostics?.targetLocalePurityPassed).toBe(true);
     expect(stronger.diagnostics?.finalPostconditionsPassed).toBe(true);
+  });
+
+  it('distinguishes ambiguous Romance detection from confirmed foreign leakage', () => {
+    const acceptedSpanish = validateAiUnitLocalePurity(
+      'Actualmente trabajo como instalador, donde coloco y aseguro los paneles solares.',
+      'es',
+      { kind: 'summary_sentence' },
+    );
+    expect(acceptedSpanish.targetLocalePurityPassed).toBe(true);
+    expect(acceptedSpanish.unexpectedLocaleCodes).toEqual([]);
+
+    const leakedGerman = validateAiUnitLocalePurity(
+      'Actualmente trabajo como instalador. Ich pr\u00fcfe Fahrr\u00e4der und tausche defekte Bauteile aus.',
+      'es',
+      { kind: 'summary_sentence' },
+    );
+    expect(leakedGerman.targetLocalePurityPassed).toBe(false);
+    expect(leakedGerman.unexpectedLocaleCodes).toContain('de');
+    expect(leakedGerman.sourceLanguageLeakageDetected).toBe(true);
+  });
+
+  it('uses operation locale authority and makes Spanish visible validation transactional', () => {
+    clearSummaryAiDiagnosticsForTests();
+    const cv = germanExperienceCv();
+    const session = new SummaryAiDiagnosticSession({
+      uiLocale: 'en', requestedLocale: 'es', contentLocale: 'de', templateId: 'modern-minimal',
+      requestId: 'aab391-visible-pass', usageCountBefore: 0, gender: 'male',
+      operationMode: 'generate_empty_content',
+    });
+    session.recordCvSnapshot(cv, '');
+    const generated = finalizeCvAiFieldForApply({
+      field: 'summary', action: 'summary_generate', requestedLocale: 'es', gender: 'male',
+      cv, candidate: '', referenceDateIso: REFERENCE_DATE,
+      localizedSummaryManifest: spanishLocalization(),
+    });
+    session.recordFinalizeResult(generated);
+    session.recordVisibleApply(true, 1, generated.text);
+    const trace = session.commit();
+    expect(trace.storedContentLocaleBeforeRequest).toBe('de');
+    expect(trace.storedContentLocale).toBe('es');
+    expect(trace.visibleTargetLocalePurityPassed).toBe(true);
+    expect(trace.visibleSourceLanguageLeakageDetected).toBe(false);
+    expect(trace.visibleGrammarValidationPassed).toBe(true);
+    expect(trace.visibleNativeSurfaceValidationPassed).toBe(true);
+    expect(trace.visibleCurrentDutyCoveragePassed).toBe(true);
+    expect(trace.visiblePriorDutyCoveragePassed).toBe(true);
+    expect(trace.visibleFinalPostconditionsPassed).toBe(true);
+    expect(trace.countedAsSuccess).toBe(true);
+    expect(trace.usageCountAfter).toBe(1);
+
+    const failed = new SummaryAiDiagnosticSession({
+      uiLocale: 'en', requestedLocale: 'es', contentLocale: 'de', templateId: 'modern-minimal',
+      requestId: 'aab391-visible-fail', usageCountBefore: 0, gender: 'male',
+      operationMode: 'generate_empty_content',
+    });
+    failed.recordCvSnapshot(cv, '');
+    failed.recordFinalizeResult(generated);
+    failed.recordVisibleApply(true, 1, generated.text.replace('registr\u00e9 y gestion\u00e9', 'registr\u00e9 y gestion\u00f3'));
+    const failedTrace = failed.commit();
+    expect(failedTrace.visibleNativeSurfaceValidationPassed).toBe(false);
+    expect(failedTrace.visibleFinalPostconditionsPassed).toBe(false);
+    expect(failedTrace.countedAsSuccess).toBe(false);
+    expect(failedTrace.usageCountAfter).toBe(0);
   });
 
   it.each([

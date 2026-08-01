@@ -133,6 +133,7 @@ import {
   verifyIndependentFinalDurationCount,
 } from './cv-summary-duration-ownership';
 import { validateAiUnitLocalePurity, resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
+import { evaluateSummaryV2NativeSurface } from './cv-summary-v2/native-surface';
 import {
   appendCvAiDiagnosticHistory,
   assertCvAiDiagnosticPrivacy,
@@ -337,6 +338,11 @@ export type SummaryAiDiagnosticTrace = {
   visiblePriorDutyCoveragePassed?: boolean | null;
   visiblePriorDutyRequiredFactParityPassed?: boolean | null;
   visibleGermanGrammarValidationPassed?: boolean | null;
+  visibleTargetLocalePurityPassed?: boolean | null;
+  visibleSourceLanguageLeakageDetected?: boolean | null;
+  visibleGrammarValidationPassed?: boolean | null;
+  visibleNativeSurfaceValidationPassed?: boolean | null;
+  visibleFinalPostconditionsPassed?: boolean | null;
   requiredCurrentDutyFactIds?: string[] | null;
   authoritativeCurrentDutyFactCount?: number | null;
   authoritativeCanonicalCurrentDutyFactCount?: number | null;
@@ -429,6 +435,9 @@ export type SummaryAiDiagnosticTrace = {
   sourcePerspectiveMode: string | null;
   providerPerspectiveMode: string | null;
   finalPerspectiveMode: string | null;
+  visibleValidationPerspectiveMode?: 'first_person' | 'cv_third_person' | null;
+  perspectiveAuthoritySource?: 'final_perspective_mode' | null;
+  perspectiveContractMatched?: boolean | null;
   perspectiveNormalizationAttempted: boolean | null;
   perspectiveNormalizationApplied: boolean | null;
   perspectiveValidationPassed: boolean;
@@ -649,7 +658,10 @@ export class SummaryAiDiagnosticSession {
       buildChannel: process.env.NEXT_PUBLIC_BUILD_CHANNEL || null,
       requestedLocale: input.requestedLocale,
       uiLocale: input.uiLocale,
-      storedContentLocale: input.contentLocale ?? null,
+      // Operation-facing legacy field: report the authoritative requested
+      // locale. The pre-request stored value remains separately available in
+      // storedContentLocaleBeforeRequest and never controls acceptance.
+      storedContentLocale: input.requestedLocale || input.contentLocale || null,
       detectedSourceLocale: null,
       selectedGender: String(input.gender || ''),
       templateId: input.templateId || '',
@@ -2267,6 +2279,9 @@ export class SummaryAiDiagnosticSession {
     let visiblePriorDutyOk = true;
     let visibleGrammarOk = true;
     let visibleLocaleOk = true;
+    let visibleNativeOk = true;
+    let visibleSourceLanguageLeakageDetected = false;
+    let visibleValidationPerspectiveMode: 'first_person' | 'cv_third_person' | null = null;
     let visibleDurationScopeOk = true;
     let visibleDutyCovered = 0;
     let visibleDutyRequired = 0;
@@ -2659,6 +2674,32 @@ export class SummaryAiDiagnosticSession {
       });
       return true;
     };
+    if (ok && durationStillOk && locale === 'es' && typeof visibleText === 'string') {
+      trySummaryV2VisibleParity();
+      const purity = validateAiUnitLocalePurity(visibleText, 'es', {
+        kind: 'summary_sentence',
+        requireUnits: true,
+      });
+      visibleSourceLanguageLeakageDetected = purity.sourceLanguageLeakageDetected;
+      visibleLocaleOk = purity.targetLocalePurityPassed
+        && !visibleSourceLanguageLeakageDetected;
+      visibleValidationPerspectiveMode = this.draft.finalPerspectiveMode === 'neutral_cv'
+        || this.draft.finalPerspectiveMode === 'cv_third_person'
+        ? 'cv_third_person'
+        : 'first_person';
+      const native = evaluateSummaryV2NativeSurface({
+        text: visibleText,
+        locale: 'es',
+        hasCurrent: Number(this.draft.requiredCurrentDutyFactCount ?? 0) > 0,
+        hasPrior: Number(this.draft.requiredPriorDutyFactCount ?? 0) > 0,
+        perspectiveMode: visibleValidationPerspectiveMode,
+      });
+      visibleNativeOk = native.nativeSurfaceValidationPassed;
+      visibleGrammarOk = native.grammaticalPersonValidationPassed
+        && native.currentTenseValidationPassed
+        && native.priorTenseValidationPassed
+        && native.finiteClauseValidationPassed;
+    }
     if (ok && durationStillOk && locale === 'hi' && typeof visibleText === 'string') {
       if (!trySummaryV2VisibleParity()) {
       const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
@@ -2830,7 +2871,8 @@ export class SummaryAiDiagnosticSession {
       }
     }
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
-      && visiblePriorDutyOk && visibleGrammarOk && visibleLocaleOk && visibleDurationScopeOk;
+      && visiblePriorDutyOk && visibleGrammarOk && visibleNativeOk
+      && visibleLocaleOk && visibleDurationScopeOk;
     void SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION;
     const finalHashForRace = this.draft.finalNormalizedHash
       ?? this.draft.finalValidatedCandidateHash
@@ -2895,13 +2937,15 @@ export class SummaryAiDiagnosticSession {
       finalContentLocaleAfterApply: applyOk
         ? (this.draft.requestedLocale || null)
         : null,
-      usageCountAfter: usageAfter,
+      usageCountAfter: applyOk
+        ? usageAfter
+        : (this.draft.usageCountBefore ?? usageAfter),
       visibleCandidateHashAfterApply: visibleHash,
       visibleSummaryMatchesFinalHash: applyOk
         ? (
           visibleHash != null
-          && this.draft.finalValidatedCandidateHash != null
-          && visibleHash === this.draft.finalValidatedCandidateHash
+          && finalHashForRace != null
+          && visibleHash === finalHashForRace
         )
         : applyOk,
       visibleDurationClaimCountAfterApply: visibleCount,
@@ -2912,28 +2956,28 @@ export class SummaryAiDiagnosticSession {
       visibleWrongLocaleStructuredRoleCount: (locale === 'de' || locale === 'en')
         ? visibleWrongRoleCount
         : null,
-      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
+      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
         ? visibleDutyRequired
         : null,
-      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
+      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
         ? visibleDutyCovered
         : null,
-      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
+      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
         ? Math.max(0, visibleDutyRequired - visibleDutyCovered)
         : null,
-      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
+      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
         ? (typeof visibleText === 'string' ? visibleDutyOk : null)
         : null,
-      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
+      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
         ? visiblePriorDutyRequired
         : null,
-      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
+      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
         ? visiblePriorDutyCovered
         : null,
-      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
+      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
         ? Math.max(0, visiblePriorDutyRequired - visiblePriorDutyCovered)
         : null,
-      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
+      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
         ? (typeof visibleText === 'string' ? visiblePriorDutyOk : null)
         : null,
       visibleDurationScopeValidationPassed: locale === 'en'
@@ -2943,6 +2987,30 @@ export class SummaryAiDiagnosticSession {
           : null),
       visibleGermanGrammarValidationPassed: locale === 'de'
         ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
+        : null,
+      visibleTargetLocalePurityPassed: locale === 'es'
+        ? (typeof visibleText === 'string' ? visibleLocaleOk : null)
+        : null,
+      visibleSourceLanguageLeakageDetected: locale === 'es'
+        ? (typeof visibleText === 'string' ? visibleSourceLanguageLeakageDetected : null)
+        : null,
+      visibleGrammarValidationPassed: locale === 'es'
+        ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
+        : null,
+      visibleNativeSurfaceValidationPassed: locale === 'es'
+        ? (typeof visibleText === 'string' ? visibleNativeOk : null)
+        : null,
+      visibleFinalPostconditionsPassed: locale === 'es'
+        ? (typeof visibleText === 'string' ? applyOk : null)
+        : null,
+      visibleValidationPerspectiveMode: locale === 'es'
+        ? visibleValidationPerspectiveMode
+        : null,
+      perspectiveAuthoritySource: locale === 'es'
+        ? 'final_perspective_mode'
+        : null,
+      perspectiveContractMatched: locale === 'es'
+        ? (typeof visibleText === 'string' ? visibleNativeOk : null)
         : null,
       // Applied summaries: only fail race_guard on a real source ownership conflict.
       raceGuardResult,

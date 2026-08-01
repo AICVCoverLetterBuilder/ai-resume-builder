@@ -25,6 +25,10 @@ export const SUMMARY_V2_NATIVE_SURFACE_386_REVISION =
 export const SUMMARY_V2_NATIVE_SURFACE_389_REVISION =
   'summary-v2-native-surface-389-v1' as const;
 
+/** Spanish perspective-aware native-surface contract. */
+export const SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION =
+  'summary-v2-spanish-perspective-native-surface-391-v1' as const;
+
 export type SummaryV2NativeSurfaceResult = {
   nativeSurfaceValidationPassed: boolean;
   capitalizationValidationPassed: boolean;
@@ -166,6 +170,10 @@ function romanceFirstPersonPresent(lower: string, locale: 'es' | 'pt-BR'): strin
 
 /** Spanish/Portuguese 3sg → 1sg completed morphology. */
 function romanceFirstPersonPast(lower: string, locale: 'es' | 'pt-BR'): string {
+  // Unicode escapes keep the morphology contract independent of source-file
+  // encoding on Windows toolchains.
+  if (/y\u00f3$/u.test(lower)) return `${lower.slice(0, -2)}\u00ed`;
+  if (/i\u00f3$/u.test(lower)) return `${lower.slice(0, -2)}\u00ed`;
   // -uir/-eer preterite: sustituyó→sustituí, leyó→leí, construyó→construí.
   if (/yó$/u.test(lower)) return `${lower.slice(0, -2)}í`;
   if (/ió$/u.test(lower)) return `${lower.slice(0, -2)}í`;
@@ -175,9 +183,94 @@ function romanceFirstPersonPast(lower: string, locale: 'es' | 'pt-BR'): string {
     // -ava / -ia imperfect: 1sg == 3sg.
     return lower;
   }
+  if (/\u00f3$/u.test(lower)) return `${lower.slice(0, -1)}\u00e9`;
   if (/ó$/u.test(lower)) return `${lower.slice(0, -1)}é`;
   // -ía / -aba imperfect: 1sg == 3sg.
   return lower;
+}
+
+/**
+ * Spanish Summary facts are commonly supplied as third-person duty clauses.
+ * A coordinated predicate must be inflected with the same first-person
+ * morphology as the leading predicate; converting just the first verb creates
+ * a visible but invalid `registré y gestionó` false-green.
+ */
+function realizeSpanishCoordinatedPredicates(rest: string, tense: 'present' | 'past'): string {
+  return (rest || '').replace(
+    /((?:,|\b(?:y|e))\s+)([\p{L}]+)/giu,
+    (_whole, connector: string, rawVerb: string) => {
+      const verb = rawVerb.toLocaleLowerCase();
+      // Restrict conversion to productive Spanish finite endings. Function
+      // words never satisfy these forms, while arbitrary regular duty verbs do.
+      if (tense === 'present' && verb.length >= 4 && /(?:a|e)$/u.test(verb)) {
+        return `${connector}${romanceFirstPersonPresent(verb, 'es')}`;
+      }
+      if (tense === 'past' && verb.length >= 4 && /(?:\u00f3|i\u00f3)$/u.test(verb)) {
+        return `${connector}${romanceFirstPersonPast(verb, 'es')}`;
+      }
+      return `${connector}${rawVerb}`;
+    },
+  );
+}
+
+export type SpanishCoordinatedPredicateMorphology = {
+  mixedPersonPredicateChain: boolean;
+  mixedTensePredicateChain: boolean;
+};
+
+export type SummaryV2PerspectiveContract = 'first_person' | 'cv_third_person' | 'neutral_or_unspecified';
+
+/**
+ * Structural Spanish coordination guard shared by localization and final
+ * native-surface validation. It deliberately keys on finite morphology and
+ * conjunctions, rather than occupation or fixture-specific vocabulary.
+ */
+export function analyzeSpanishCoordinatedPredicateMorphology(
+  text: string,
+  perspective: SummaryV2PerspectiveContract = 'first_person',
+): SpanishCoordinatedPredicateMorphology {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  // Keep suffix-based evidence clause-local. Long-distance matching confuses
+  // ordinary noun phrases such as `catálogo y estantería` with predicates.
+  // Production acceptance additionally checks manifest-owned expected
+  // realizations in validator.ts.
+  const clauseStart = '(?:^|\\bdonde\\s+|,\\s+)';
+  const firstPersonPastThenThird = new RegExp(
+    `${clauseStart}\\p{L}+(?:\\u00e9|\\u00ed)(?!\\p{L})\\s*(?:,\\s*)?(?:y|e)\\s+\\p{L}+(?:\\u00f3|i\\u00f3)(?!\\p{L})`,
+    'iu',
+  );
+  const firstPersonPresentThenThird = new RegExp(
+    `${clauseStart}\\p{L}+o(?!\\p{L})\\s*(?:,\\s*)?(?:y|e)\\s+\\p{L}+(?:a|e)(?!\\p{L})`,
+    'iu',
+  );
+  const thirdPersonPastThenFirst = new RegExp(
+    `${clauseStart}\\p{L}+(?:\\u00f3|i\\u00f3)(?!\\p{L})\\s*(?:,\\s*)?(?:y|e)\\s+\\p{L}+(?:\\u00e9|\\u00ed)(?!\\p{L})`,
+    'iu',
+  );
+  const thirdPersonPresentThenFirst = new RegExp(
+    `${clauseStart}\\p{L}+(?:a|e)(?!\\p{L})\\s*(?:,\\s*)?(?:y|e)\\s+\\p{L}+o(?!\\p{L})`,
+    'iu',
+  );
+  const presentThenPast = new RegExp(
+    `${clauseStart}\\p{L}+(?:a|e|o)(?!\\p{L})\\s*(?:,\\s*)?(?:y|e)\\s+\\p{L}+(?:\\u00f3|i\\u00f3|\\u00e9|\\u00ed)(?!\\p{L})`,
+    'iu',
+  );
+  const pastThenPresent = new RegExp(
+    `${clauseStart}\\p{L}+(?:\\u00f3|i\\u00f3|\\u00e9|\\u00ed)(?!\\p{L})\\s*(?:,\\s*)?(?:y|e)\\s+\\p{L}+(?:a|e|o)(?!\\p{L})`,
+    'iu',
+  );
+  const firstPersonMismatch = firstPersonPastThenThird.test(t)
+    || firstPersonPresentThenThird.test(t);
+  const thirdPersonMismatch = thirdPersonPastThenFirst.test(t)
+    || thirdPersonPresentThenFirst.test(t);
+  return {
+    mixedPersonPredicateChain: perspective === 'first_person'
+      ? firstPersonMismatch
+      : perspective === 'cv_third_person'
+        ? thirdPersonMismatch
+        : firstPersonMismatch || thirdPersonMismatch,
+    mixedTensePredicateChain: presentThenPast.test(t) || pastThenPresent.test(t),
+  };
 }
 
 const ARABIC_PAST_1SG_SUFFIX = 'ت';
@@ -359,7 +452,10 @@ export function realizeFirstPersonDutyClause(
     verb = lower;
   }
 
-  return `${verb}${rest}`.replace(/\s+/g, ' ').trim();
+  const realizedRest = locale === 'es'
+    ? realizeSpanishCoordinatedPredicates(rest, tense)
+    : rest;
+  return `${verb}${realizedRest}`.replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -610,13 +706,18 @@ export type SummaryV2NativeRealizationContract = {
 export function evaluateNativeRealizationContract(options: {
   text: string;
   locale: Locale;
+  perspectiveMode?: SummaryV2PerspectiveContract;
 }): SummaryV2NativeRealizationContract {
   void SUMMARY_V2_NATIVE_SURFACE_389_REVISION;
+  void SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION;
   const text = (options.text || '').replace(/\s+/g, ' ').trim();
   const locale = options.locale;
+  const perspective = options.perspectiveMode ?? 'first_person';
   const reasons: string[] = [];
   const sentences = splitNativeSentences(text);
-  const finiteCue = LOCALE_FINITE_CUE_RE[locale] || LOCALE_FINITE_CUE_RE.en;
+  const finiteCue = locale === 'es' && perspective === 'cv_third_person'
+    ? /(?:^|[^\p{L}])(?:trabaja|trabaj\u00f3|revisa|revis\u00f3|realiza|realiz\u00f3|gestiona|gestion\u00f3|registra|registr\u00f3|coordina|coordin\u00f3|cre\u00f3|adapt\u00f3|prepar\u00f3)(?=[^\p{L}]|$)/iu
+    : (LOCALE_FINITE_CUE_RE[locale] || LOCALE_FINITE_CUE_RE.en);
 
   const unresolvedGenderPlaceholderDetected = detectUnresolvedGenderPlaceholder(text);
   if (unresolvedGenderPlaceholderDetected) reasons.push('unresolved_gender_placeholder');
@@ -626,8 +727,15 @@ export function evaluateNativeRealizationContract(options: {
     || durationSentences.every((s) => finiteCue.test(s));
   if (!finiteDurationSentencePassed) reasons.push('nominal_duration_fragment');
 
-  const firstPersonPredicateChainPassed = !detectThirdPersonDutyClause(text, locale);
+  const firstPersonPredicateChainPassed = perspective === 'cv_third_person'
+    || !detectThirdPersonDutyClause(text, locale);
   if (!firstPersonPredicateChainPassed) reasons.push('third_person_duty_in_first_person_frame');
+
+  const spanishCoordination = locale === 'es'
+    ? analyzeSpanishCoordinatedPredicateMorphology(text, perspective)
+    : { mixedPersonPredicateChain: false, mixedTensePredicateChain: false };
+  if (spanishCoordination.mixedPersonPredicateChain) reasons.push('mixed_person_predicate_chain');
+  if (spanishCoordination.mixedTensePredicateChain) reasons.push('mixed_tense_predicate_chain');
 
   const morphologyDefect = detectLocaleVerbMorphologyDefect(text, locale);
   const localeVerbMorphologyPassed = morphologyDefect === null;
@@ -666,6 +774,7 @@ export function evaluateSummaryV2NativeSurface(options: {
   locale: Locale;
   hasCurrent?: boolean;
   hasPrior?: boolean;
+  perspectiveMode?: SummaryV2PerspectiveContract;
 }): SummaryV2NativeSurfaceResult {
   void SUMMARY_V2_NATIVE_SURFACE_386_REVISION;
   const text = (options.text || '').replace(/\s+/g, ' ').trim();
@@ -772,14 +881,17 @@ export function evaluateSummaryV2NativeSurface(options: {
     }
   }
 
-  const contract = evaluateNativeRealizationContract({ text, locale: options.locale });
+  const perspective = options.perspectiveMode ?? 'first_person';
+  const contract = evaluateNativeRealizationContract({ text, locale: options.locale, perspectiveMode: perspective });
   for (const r of contract.nativeRealizationRejectionReasons) {
     if (!reasons.includes(r)) reasons.push(r);
   }
 
   const personOk = grammaticalPersonValidationPassed
     && !predicateChain.mixedPersonPredicateDetected
-    && contract.firstPersonPredicateChainPassed;
+    && contract.firstPersonPredicateChainPassed
+    && !(options.locale === 'es'
+      && analyzeSpanishCoordinatedPredicateMorphology(text, perspective).mixedPersonPredicateChain);
 
   const nativeSurfaceValidationPassed = capitalizationValidationPassed
     && personOk

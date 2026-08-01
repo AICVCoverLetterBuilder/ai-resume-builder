@@ -1,6 +1,7 @@
 import type { Locale } from '@/lib/i18n/translations';
 import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
 import { detectUnresolvedGenderPlaceholder } from './gender';
+import { analyzeSpanishCoordinatedPredicateMorphology } from './native-surface';
 import { dutyTokenStems, hashSummaryV2Text } from './facts';
 import { localesAreDetectionCompatible } from './locale-authority';
 import type { SummaryV2EntryOwned, SummaryV2SelectionManifest } from './types';
@@ -144,6 +145,7 @@ export function validateSummaryV2LocalizationResponse(
   let sourceLanguageLeakageDetected = false;
   let surfaceComplete = true;
   let unsupportedMaterial = false;
+  let mixedPredicateMorphology = false;
   const sourceEntriesById = new Map(expectedEntries.map((entry) => [entry.entryId, entry]));
 
   for (const entry of actualEntries) {
@@ -174,6 +176,12 @@ export function validateSummaryV2LocalizationResponse(
       targetScriptPurityPassed = targetScriptPurityPassed && purity.wrongScriptUnitCount === 0;
       sourceLanguageLeakageDetected = sourceLanguageLeakageDetected
         || purity.sourceLanguageLeakageDetected;
+      if (manifest.locale === 'es') {
+        const morphology = analyzeSpanishCoordinatedPredicateMorphology(text);
+        mixedPredicateMorphology = mixedPredicateMorphology
+          || morphology.mixedPersonPredicateChain
+          || morphology.mixedTensePredicateChain;
+      }
     }
   }
 
@@ -184,6 +192,7 @@ export function validateSummaryV2LocalizationResponse(
   else if (!factOwnershipParityPassed) reason = 'localization_fact_ownership_failed';
   else if (!surfaceComplete) reason = 'localization_incomplete_surface';
   else if (unsupportedMaterial) reason = 'localization_unsupported_material_claim';
+  else if (mixedPredicateMorphology) reason = 'mixed_person_predicate_chain';
   else if (!targetScriptPurityPassed) reason = 'localization_wrong_script';
   else if (!targetLocalePurityPassed || sourceLanguageLeakageDetected) reason = 'locale_impurity';
 

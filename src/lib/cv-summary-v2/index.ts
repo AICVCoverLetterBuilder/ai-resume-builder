@@ -86,9 +86,11 @@ export type {
 export {
   SUMMARY_V2_NATIVE_SURFACE_386_REVISION,
   SUMMARY_V2_NATIVE_SURFACE_389_REVISION,
+  SUMMARY_V2_SPANISH_PERSPECTIVE_NATIVE_SURFACE_391_REVISION,
   formatNativeDurationSentence,
   buildNativeFirstPersonDutyTail,
   realizeFirstPersonDutyClause,
+  analyzeSpanishCoordinatedPredicateMorphology,
   evaluateSummaryV2NativeSurface,
   evaluateNativeRealizationContract,
 } from './native-surface';
@@ -127,6 +129,7 @@ export type {
 export type {
   SummaryV2NativeSurfaceResult,
   SummaryV2NativeRealizationContract,
+  SpanishCoordinatedPredicateMorphology,
 } from './native-surface';
 export {
   SUMMARY_V2_GENDER_SURFACE_389_REVISION,

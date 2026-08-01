@@ -604,6 +604,14 @@ type SummaryLike = {
   visibleCoveredCurrentDutyFactCount?: number | null;
   visibleMissingCurrentDutyFactCount?: number | null;
   visibleCurrentDutyCoveragePassed?: boolean | null;
+  visibleTargetLocalePurityPassed?: boolean | null;
+  visibleSourceLanguageLeakageDetected?: boolean | null;
+  visibleGrammarValidationPassed?: boolean | null;
+  visibleNativeSurfaceValidationPassed?: boolean | null;
+  visibleFinalPostconditionsPassed?: boolean | null;
+  visibleValidationPerspectiveMode?: 'first_person' | 'cv_third_person' | null;
+  perspectiveAuthoritySource?: 'final_perspective_mode' | null;
+  perspectiveContractMatched?: boolean | null;
   visibleCurrentDutyRequiredFactParityPassed?: boolean | null;
   visibleCurrentDutyRequiredFactCountMatchesFinal?: boolean | null;
   visibleCurrentDutyRequiredFactSetHash?: string | null;
@@ -612,6 +620,7 @@ type SummaryLike = {
   targetLocalePurityPassed?: boolean | null;
   detectedLocaleByUnit?: string[] | null;
   unexpectedLocaleCodes?: string[] | null;
+  ambiguousLocaleCodes?: string[] | null;
   finalUnsupportedCompetencyCount?: number | null;
   finalCurrentIntroSlotPresent?: boolean | null;
   finalCurrentDutySlotPresent?: boolean | null;

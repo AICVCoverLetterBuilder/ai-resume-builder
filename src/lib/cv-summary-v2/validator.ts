@@ -215,6 +215,16 @@ export function entryDutiesMatchEmploymentTense(
       if (realized && (corpus.includes(realized) || corpusBare.includes(realized))) return true;
       const realizedBare = stripDutyStyleIntensifiers(realized);
       if (realizedBare.length >= 8 && corpusBare.includes(realizedBare)) return true;
+      if (
+        locale === 'es'
+        && /(?:,|(?<!\p{L})(?:y|e)(?!\p{L}))\s+\p{L}+/iu.test(live)
+      ) {
+        // Coordinated Spanish facts are validated against the exact
+        // manifest-owned first-person realization. Falling through to loose
+        // stems would let `registré y gestionó` cover the same nouns while
+        // violating the expected person/tense transformation.
+        return false;
+      }
       if (locale === 'ja') {
         // Chained Japanese clauses inflect the bullet's finite verb (行う→行い).
         const variants = japaneseDutyRealizationVariants(f.bulletText, employmentState)
