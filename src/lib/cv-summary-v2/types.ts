@@ -9,6 +9,8 @@ export type SummaryV2EntryFact = {
   /** Lowercase significant tokens for coverage matching. */
   tokenStems: string[];
   sourceFactHash: string;
+  /** Locale of the immutable visible source fact; never the requested target locale. */
+  sourceLocale: Locale;
 };
 
 export type SummaryV2EntryOwned = {
@@ -19,6 +21,8 @@ export type SummaryV2EntryOwned = {
   endDate: string;
   isPresent: boolean;
   employmentState: SummaryV2EmploymentState;
+  /** Authoritative locale of this entry's visible source material. */
+  sourceLocale: Locale;
   /** Hash of live description used at snapshot time. */
   descriptionHash: string;
   /** All live bullets (pre-selection). */
@@ -75,6 +79,12 @@ export type SummaryV2ValidationResult = {
   priorDutyTenseOk: boolean;
   staleResidueDetected: boolean;
   unsupportedClaimCount: number;
+  targetLocalePurityPassed: boolean;
+  sourceLanguageLeakageDetected: boolean;
+  unexpectedLocaleCodes: Locale[];
+  sourceLanguageLeakageTokens: string[];
+  wrongLocaleUnitCount: number;
+  wrongScriptUnitCount: number;
 };
 
 export type SummaryV2PipelineResult = {
@@ -99,6 +109,30 @@ export type SummaryV2PipelineResult = {
     candidateTransformationKind: string | null;
     candidateTransformationBeforeHash: string | null;
     candidateTransformationAfterHash: string | null;
+    crossLocaleLocalizationRequired: boolean;
+    localizationAttempted: boolean;
+    localizationRepairAttempted: boolean;
+    localizationRepairAccepted: boolean;
+    localizationSource: string | null;
+    sourceLocalesByEntryHash: Record<string, Locale>;
+    sourceLocaleByFactIdHash: Record<string, Locale>;
+    targetLocale: Locale | null;
+    expectedEntryCount: number;
+    localizedEntryCount: number;
+    expectedFactCount: number;
+    localizedFactCount: number;
+    entryIdParityPassed: boolean;
+    factIdParityPassed: boolean;
+    factOwnershipParityPassed: boolean;
+    localizedRoleTitleHashesByEntry: Record<string, string>;
+    localizedFactHashesByFactId: Record<string, string>;
+    sourceLanguageLeakageDetected: boolean;
+    targetLocalePurityPassed: boolean;
+    targetScriptPurityPassed: boolean;
+    localizationGroundingPassed: boolean;
+    localizationTypedFailureReason: string | null;
+    localizedManifestHash: string | null;
+    localizedManifestRevision: string | null;
     styleFulfillment: {
       shorterStyleFulfilled: boolean;
       strongerStyleFulfilled: boolean;

@@ -92,6 +92,38 @@ export {
   evaluateSummaryV2NativeSurface,
   evaluateNativeRealizationContract,
 } from './native-surface';
+export {
+  SUMMARY_V2_CROSS_LOCALE_AUTHORITY_390_REVISION,
+  SUMMARY_V2_SUPPORTED_LOCALES,
+  detectDominantLocale,
+  resolveSourceLocaleForText,
+  evaluateTargetLocalePurity,
+} from './locale-authority';
+export {
+  SUMMARY_V2_LOCALIZED_MANIFEST_REVISION,
+  validateSummaryV2LocalizationResponse,
+  parseSummaryV2LocalizationProviderJson,
+  acceptSummaryV2LocalizationResponse,
+  buildSameLocaleLocalizedManifest,
+  projectLocalizedSummaryV2Manifest,
+} from './localization';
+export {
+  localizeSummaryV2Manifest,
+  clearSummaryV2LocalizationCacheForTests,
+} from './localization-client';
+export type {
+  SummaryV2LocalizationTransport,
+  SummaryV2LocalizationTransportInput,
+  SummaryV2LocalizationOutcome,
+} from './localization-client';
+export type {
+  SummaryV2LocalizedManifest,
+  SummaryV2LocalizedEntry,
+  SummaryV2LocalizedFact,
+  SummaryV2LocalizationProviderResponse,
+  SummaryV2LocalizationValidation,
+  SummaryV2LocalizationSource,
+} from './localization';
 export type {
   SummaryV2NativeSurfaceResult,
   SummaryV2NativeRealizationContract,

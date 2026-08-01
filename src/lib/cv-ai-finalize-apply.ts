@@ -871,6 +871,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   // Keep string literals — avoid circular import with cv-summary-ai-diagnostics.
   'summary-content-locale-rollback-361-v1',
   'summary-visible-source-locale-detection-361-v1',
+  'summary-v2-cross-locale-localization-390-v1',
 ] as const;
 void SUMMARY_BUILDER_REVISION_EN;
 void SUMMARY_REQUESTED_LOCALE_DISPATCH_355_REVISION;
@@ -1080,6 +1081,8 @@ export type FinalizeCvAiFieldInput = {
   staleGeneratedDescriptionIgnored?: boolean | null;
   /** Summary rewrite style when action is shorter/stronger/professional. */
   rewriteStyle?: 'shorter' | 'stronger' | 'professional' | string | null;
+  /** Validated Summary V2 entry/fact localization from the structured provider boundary. */
+  localizedSummaryManifest?: import('./cv-summary-v2').SummaryV2LocalizedManifest | null;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -3033,6 +3036,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         || durationSnapshot.referenceDateIso
         || new Date().toISOString().slice(0, 10),
       rewriteStyle: input.rewriteStyle || null,
+      localizedManifest: input.localizedSummaryManifest || null,
     });
     const v2Pd = v2.pipelineDiagnostics || null;
     const requestedRewriteStyle = v2Pd?.rewriteStyle
@@ -3155,6 +3159,28 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       : null;
     const diagBase = {
       summaryV2FactIdPathActive: true,
+      crossLocaleLocalizationRequired: Boolean(v2Pd?.crossLocaleLocalizationRequired),
+      localizationAttempted: Boolean(v2Pd?.localizationAttempted),
+      localizationRepairAttempted: Boolean(v2Pd?.localizationRepairAttempted),
+      localizationRepairAccepted: Boolean(v2Pd?.localizationRepairAccepted),
+      localizationSource: v2Pd?.localizationSource || null,
+      sourceLocalesByEntryHash: v2Pd?.sourceLocalesByEntryHash || {},
+      sourceLocaleByFactIdHash: v2Pd?.sourceLocaleByFactIdHash || {},
+      targetLocale: v2Pd?.targetLocale || locale,
+      expectedEntryCount: v2Pd?.expectedEntryCount || 0,
+      localizedEntryCount: v2Pd?.localizedEntryCount || 0,
+      expectedFactCount: v2Pd?.expectedFactCount || 0,
+      localizedFactCount: v2Pd?.localizedFactCount || 0,
+      entryIdParityPassed: Boolean(v2Pd?.entryIdParityPassed),
+      factIdParityPassed: Boolean(v2Pd?.factIdParityPassed),
+      factOwnershipParityPassed: Boolean(v2Pd?.factOwnershipParityPassed),
+      localizedRoleTitleHashesByEntry: v2Pd?.localizedRoleTitleHashesByEntry || {},
+      localizedFactHashesByFactId: v2Pd?.localizedFactHashesByFactId || {},
+      targetScriptPurityPassed: Boolean(v2Pd?.targetScriptPurityPassed),
+      localizationGroundingPassed: Boolean(v2Pd?.localizationGroundingPassed),
+      localizationTypedFailureReason: v2Pd?.localizationTypedFailureReason || null,
+      localizedManifestHash: v2Pd?.localizedManifestHash || null,
+      localizedManifestRevision: v2Pd?.localizedManifestRevision || null,
       serbianStructuredDomainGateApplicable: false,
       hindiWarehouseGrammarFieldsApplicable: false,
       // Typed inapplicable warehouse representation (not ambiguous null).
@@ -3271,8 +3297,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         && v2.validation.priorStateExpressed,
       ),
       finalPostconditionsPassed: success && !v2CleanNoOp,
-      targetLocalePurityPassed: true,
-      sourceLanguageLeakageDetected: false,
+      targetLocalePurityPassed: Boolean(v2Pd?.targetLocalePurityPassed),
+      sourceLanguageLeakageDetected: Boolean(v2Pd?.sourceLanguageLeakageDetected),
       wrongLocaleUnitCount: 0,
       wrongScriptUnitCount: 0,
       detectedLocaleByUnit: v2Units.map(() => locale),

@@ -13,6 +13,7 @@ import type {
   SummaryV2SelectionManifest,
   SummaryV2ValidationResult,
 } from './types';
+import { validateAiUnitLocalePurity } from '../cv-ai-unit-locale-purity';
 
 const RESIDUE_MARKERS: Array<{ re: RegExp; needle: string }> = [
   { re: /\bAtlas\b/iu, needle: 'atlas' },
@@ -320,11 +321,16 @@ export function validateSummaryV2AgainstManifest(
   const unsupportedMaterialClaim = detectUnsupportedMaterialClaims(text);
   const unsupportedClaimCount = (staleResidueDetected ? 1 : 0)
     + (unsupportedMaterialClaim ? 1 : 0);
+  const localePurity = validateAiUnitLocalePurity(text, manifest.locale, {
+    kind: 'summary_sentence',
+    requireUnits: true,
+  });
   const hasLiveAuthority = Boolean(manifest.current || manifest.priors.length > 0);
 
   let reason: string | null = null;
   if (!text) reason = 'empty_summary';
   else if (!hasLiveAuthority) reason = 'no_live_experience_authority';
+  else if (!localePurity.targetLocalePurityPassed) reason = 'locale_impurity';
   else if (staleResidueDetected) reason = 'stale_occupation_residue';
   else if (unsupportedMaterialClaim) reason = 'unsupported_material_claim';
   else if (manifest.totalDurationMonths <= 0 && durationExpressionCount > 0) {
@@ -363,5 +369,11 @@ export function validateSummaryV2AgainstManifest(
     priorDutyTenseOk,
     staleResidueDetected,
     unsupportedClaimCount,
+    targetLocalePurityPassed: localePurity.targetLocalePurityPassed,
+    sourceLanguageLeakageDetected: localePurity.sourceLanguageLeakageDetected,
+    unexpectedLocaleCodes: localePurity.unexpectedLocaleCodes as Locale[],
+    sourceLanguageLeakageTokens: [],
+    wrongLocaleUnitCount: localePurity.wrongLocaleUnitCount,
+    wrongScriptUnitCount: localePurity.wrongScriptUnitCount,
   };
 }

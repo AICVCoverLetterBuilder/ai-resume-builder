@@ -35,6 +35,8 @@ import {
   compareSummaryV2AgainstLegacy,
   liveExperienceDescription,
   captureSummaryV2Snapshot,
+  localizeSummaryV2Manifest,
+  type SummaryV2LocalizationTransport,
 } from '@/lib/cv-summary-v2';
 
 const REF = '2026-07-01';
@@ -66,6 +68,39 @@ const GD_EN = [
   'reviewing and adapting design materials;',
   'preparing final design files for different formats and screens.',
 ].join('\n');
+
+const SOLAR_LIBRARY_LOCALIZATION: Record<Locale, {
+  currentRole: string; priorRole: string; current: string[]; prior: string[];
+}> = {
+  en: { currentRole: 'Solar Panel Installer', priorRole: 'Library Assistant', current: ['Installs solar panels.', 'Positions and secures panels.', 'Coordinates installation activities.'], prior: ['Recorded borrowed and returned books.', 'Arranged books by catalogue and shelf location.', 'Helped visitors locate requested titles.'] },
+  de: { currentRole: 'Fachkraft für Solaranlagen', priorRole: 'Bibliotheksmitarbeiterin', current: ['Montiert Sonnenkollektoren auf Dächern.', 'Richtet die Kollektoren aus und befestigt sie sicher.', 'Stimmt die Montagearbeiten mit dem Team ab.'], prior: ['Erfasste ausgeliehene und zurückgegebene Bücher.', 'Ordnete Bücher anhand des Katalogs in die Regale ein.', 'Unterstützte Besucher bei der Suche nach gewünschten Büchern.'] },
+  es: { currentRole: 'Instaladora de paneles solares', priorRole: 'Asistente de biblioteca', current: ['Instala paneles solares.', 'Coloca y asegura los paneles.', 'Coordina las actividades de instalación.'], prior: ['Registraba los libros prestados y devueltos.', 'Ordenaba los libros por catálogo y estantería.', 'Ayudaba a los visitantes a encontrar los títulos solicitados.'] },
+  fr: { currentRole: 'Installatrice de panneaux solaires', priorRole: 'Assistante de bibliothèque', current: ['Installe des panneaux solaires.', 'Positionne et fixe les panneaux.', "Coordonne les activités d'installation."], prior: ['Enregistrait les livres empruntés et rendus.', 'Classait les livres par catalogue et rayon.', 'Aidait les visiteurs à trouver les titres demandés.'] },
+  it: { currentRole: 'Tecnica addetta agli impianti solari', priorRole: 'Addetta alla biblioteca', current: ['Monta i pannelli solari sui tetti degli edifici.', 'Colloca i pannelli nella posizione corretta e li fissa in sicurezza.', 'Organizza con la squadra il lavoro di montaggio.'], prior: ['Registrava i libri presi in prestito e poi restituiti.', 'Ordinava i libri secondo il catalogo e la posizione sugli scaffali.', 'Aiutava i visitatori a trovare i libri richiesti.'] },
+  ar: { currentRole: 'فنية تركيب ألواح شمسية', priorRole: 'مساعدة مكتبة', current: ['تركب الألواح الشمسية.', 'تضع الألواح وتثبتها.', 'تنسق أنشطة التركيب.'], prior: ['سجلت الكتب المستعارة والمعادة.', 'رتبت الكتب حسب الفهرس وموقع الرف.', 'ساعدت الزوار في العثور على العناوين المطلوبة.'] },
+  sr: { currentRole: 'Monterka solarnih panela', priorRole: 'Bibliotečka pomoćnica', current: ['Postavlja solarne panele.', 'Pozicionira i pričvršćuje panele.', 'Koordinira aktivnosti postavljanja.'], prior: ['Evidentirala je pozajmljene i vraćene knjige.', 'Raspoređivala je knjige prema katalogu i polici.', 'Pomagala je posetiocima da pronađu tražene naslove.'] },
+  hr: { currentRole: 'Tehničarka za solarne panele', priorRole: 'Knjižnična pomoćnica', current: ['Postavlja sunčane panele na krovove.', 'Provjerava položaj panela i sigurno ih pričvršćuje.', 'Usklađuje poslove postavljanja s kolegama.'], prior: ['Evidentirala je posuđene i vraćene knjige.', 'Provjeravala je katalog i raspoređivala knjige na police.', 'Pomagala je posjetiteljima pronaći tražene naslove.'] },
+  ru: { currentRole: 'Монтажница солнечных панелей', priorRole: 'Помощница библиотекаря', current: ['Устанавливает солнечные панели.', 'Размещает и закрепляет панели.', 'Координирует монтажные работы.'], prior: ['Регистрировала выданные и возвращённые книги.', 'Расставляла книги по каталогу и полкам.', 'Помогала посетителям находить нужные издания.'] },
+  'pt-BR': { currentRole: 'Instaladora de painéis solares', priorRole: 'Assistente de biblioteca', current: ['Instala painéis solares.', 'Posiciona e fixa os painéis.', 'Coordena as atividades de instalação.'], prior: ['Registrava livros emprestados e devolvidos.', 'Organizava livros por catálogo e estante.', 'Ajudava visitantes a localizar os títulos solicitados.'] },
+  hi: { currentRole: 'सौर पैनल इंस्टॉलर', priorRole: 'पुस्तकालय सहायक', current: ['सौर पैनल स्थापित करती हैं।', 'पैनलों को सही स्थान पर लगाकर सुरक्षित करती हैं।', 'स्थापना गतिविधियों का समन्वय करती हैं।'], prior: ['उधार ली और लौटाई गई पुस्तकों का रिकॉर्ड रखती थीं।', 'पुस्तकों को सूची और शेल्फ के अनुसार व्यवस्थित करती थीं।', 'आगंतुकों को मांगी गई पुस्तकें खोजने में सहायता करती थीं।'] },
+  ja: { currentRole: '太陽光パネル設置担当者', priorRole: '図書館補助員', current: ['太陽光パネルを設置します。', 'パネルを配置して固定します。', '設置作業を調整します。'], prior: ['貸出・返却された本を記録しました。', '目録と棚の位置に従って本を整理しました。', '利用者が希望する本を探すのを支援しました。'] },
+};
+
+function solarLibraryTransport(locale: Locale): SummaryV2LocalizationTransport {
+  const fixture = SOLAR_LIBRARY_LOCALIZATION[locale];
+  return async ({ entries }) => ({
+    targetLocale: locale,
+    entries: entries.map((entry) => {
+      const current = entry.employmentState === 'present';
+      const facts = current ? fixture.current : fixture.prior;
+      return {
+        entryId: entry.entryId,
+        localizedRoleTitle: current ? fixture.currentRole : fixture.priorRole,
+        facts: entry.facts.map((fact, index) => ({ factId: fact.factId, localizedText: facts[index] })),
+      };
+    }),
+  });
+}
 
 function seedUsage(count: number): void {
   persistProAiRecord({
@@ -442,15 +477,24 @@ describe('Summary V2 architecture', () => {
     expect(getProAiUsageCount()).toBe(before);
   });
 
-  it('all 12 locales: Generate succeeds with duration once and no Atlas residue', () => {
+  it('all 12 locales: Generate succeeds with duration once and no Atlas residue', async () => {
     const cv = solarLibraryCv();
     for (const locale of ALL_LOCALES) {
+      const sourceManifest = buildSummaryV2ManifestForCv({ cv, locale, gender: 'female', referenceDateIso: REF });
+      expect(sourceManifest, locale).not.toBeNull();
+      const localization = await localizeSummaryV2Manifest({
+        manifest: sourceManifest!,
+        transport: solarLibraryTransport(locale),
+      });
+      expect(localization.reason, `${locale}: ${JSON.stringify(localization.validation)}`).toBeNull();
+      expect(localization.manifest, locale).not.toBeNull();
       const r = runSummaryV2({
         cv,
         locale,
         gender: 'female',
         referenceDateIso: REF,
         candidate: '',
+        localizedManifest: localization.manifest,
       });
       expect(r.blocked, locale).toBe(false);
       expect(r.countedAsSuccess, locale).toBe(true);

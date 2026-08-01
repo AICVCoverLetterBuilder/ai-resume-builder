@@ -49,6 +49,7 @@ import {
   remainingBudgetMs,
   shouldForceRespond,
 } from '@/lib/ai-request-timing';
+import { parseSummaryV2LocalizationProviderJson } from '@/lib/cv-summary-v2';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -633,6 +634,90 @@ Rules:
         requestFactCount: factSet.facts.length,
         isSparse: factSet.isSparse,
       });
+    }
+
+    if (action === 'summary-localize') {
+      const resolvedLocale = normalizeLocale(params.targetLocale || params.locale);
+      const targetInfo = localeInstructions[resolvedLocale];
+      const entries = Array.isArray(params.entries) ? params.entries : [];
+      if (!entries.length) {
+        return jsonResponse({
+          error: 'Structured localization requires at least one Experience entry.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+        }, { status: 422 });
+      }
+      type SafeLocalizationEntry = {
+        entryId: string;
+        sourceLocale: string;
+        roleTitle: string;
+        employer: string;
+        employmentState: 'present' | 'completed';
+        facts: Array<{ factId: string; sourceText: string }>;
+      };
+      const safeEntries: SafeLocalizationEntry[] = entries.slice(0, 8).map((entry: Record<string, unknown>) => ({
+        entryId: sanitizeField(entry.entryId, 200),
+        sourceLocale: sanitizeField(entry.sourceLocale, 20),
+        roleTitle: sanitizeField(entry.roleTitle, 500),
+        employer: sanitizeField(entry.employer, 500),
+        employmentState: entry.employmentState === 'present' ? 'present' : 'completed',
+        facts: (Array.isArray(entry.facts) ? entry.facts : []).slice(0, 12).map(
+          (fact: Record<string, unknown>) => ({
+            factId: sanitizeField(fact.factId, 240),
+            sourceText: sanitizeText(fact.sourceText, 1200),
+          }),
+        ),
+      }));
+      const expectedEntryIds = safeEntries.map((entry) => entry.entryId);
+      const expectedFactIds = safeEntries.flatMap((entry) => entry.facts.map((fact) => fact.factId));
+      const response = await callWithRetry({
+        model: MODEL,
+        max_tokens: 1800,
+        temperature: 0,
+        stream: false,
+        system: `You are a strict structured CV localization engine. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return one JSON object and no commentary or markdown. Preserve every entryId and factId exactly. Preserve employers exactly. Translate each role title and each duty separately. Preserve meaning, employment state, and factual scope. Add no tools, systems, qualifications, certifications, metrics, achievements, leadership, frequency, responsibility, scope, impact, or enrichment. Use natural target-language role titles and complete duty clauses. Use the selected gender only where grammatically required.`,
+        messages: [{
+          role: 'user',
+          content: JSON.stringify({
+            task: 'localize_cv_experience_manifest',
+            targetLocale: resolvedLocale,
+            gender: sanitizeField(params.gender, 30),
+            entries: safeEntries,
+            responseSchema: {
+              targetLocale: resolvedLocale,
+              entries: [{
+                entryId: 'exact input entryId',
+                localizedRoleTitle: 'target-language role title',
+                facts: [{ factId: 'exact input factId', localizedText: 'target-language duty' }],
+              }],
+            },
+          }),
+        }],
+      }, deadlineAt);
+      const parsed = parseSummaryV2LocalizationProviderJson(getText(response));
+      if (!parsed) {
+        return jsonResponse({
+          error: 'Localization provider returned malformed structured JSON.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'localization_provider_malformed_json',
+        }, { status: 422 });
+      }
+      const actualEntryIds = parsed.entries.map((entry) => entry.entryId);
+      const actualFactIds = parsed.entries.flatMap((entry) => entry.facts.map((fact) => fact.factId));
+      const idsMatch = parsed.targetLocale === resolvedLocale
+        && expectedEntryIds.length === actualEntryIds.length
+        && expectedFactIds.length === actualFactIds.length
+        && new Set(actualEntryIds).size === actualEntryIds.length
+        && new Set(actualFactIds).size === actualFactIds.length
+        && expectedEntryIds.every((id) => actualEntryIds.includes(id))
+        && expectedFactIds.every((id) => actualFactIds.includes(id));
+      if (!idsMatch) {
+        return jsonResponse({
+          error: 'Localization provider changed the structured fact manifest.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'localization_id_parity_failed',
+        }, { status: 422 });
+      }
+      return jsonResponse({ localizedManifest: parsed, localizationSource: 'provider' });
     }
 
     if (action === 'summary') {

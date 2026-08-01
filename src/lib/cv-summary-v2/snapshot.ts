@@ -7,6 +7,10 @@ import {
 import { SUMMARY_V2_REVISION } from './flag';
 import type { SummaryV2EntryOwned, SummaryV2Snapshot } from './types';
 import { buildEntryOwnedFactsFromLiveDescription, hashSummaryV2Text } from './facts';
+import {
+  resolveSourceLocaleForText,
+  SUMMARY_V2_SUPPORTED_LOCALES,
+} from './locale-authority';
 
 /**
  * Live description only — never canonicalDescription / generatedDescription /
@@ -34,6 +38,18 @@ export function captureSummaryV2Snapshot(options: {
   const entries: SummaryV2EntryOwned[] = experiences.map((exp) => {
     const live = liveExperienceDescription(exp);
     const isPresent = Boolean(exp.isPresent);
+    const declaredRaw = exp.generatedLocale
+      || exp.positionSourceLocale
+      || cv.contentLocale
+      || null;
+    const declaredLocale = SUMMARY_V2_SUPPORTED_LOCALES.includes(declaredRaw as Locale)
+      ? declaredRaw as Locale
+      : null;
+    const entryLocale = resolveSourceLocaleForText({
+      text: [live, exp.position || ''].join('\n'),
+      declaredLocale,
+      fallbackLocale: locale,
+    }).sourceLocale;
     return {
       entryId: String(exp.id || ''),
       role: (exp.position || '').trim(),
@@ -42,10 +58,12 @@ export function captureSummaryV2Snapshot(options: {
       endDate: (exp.endDate || '').trim(),
       isPresent,
       employmentState: isPresent ? 'present' : 'completed',
+      sourceLocale: entryLocale,
       descriptionHash: hashSummaryV2Text(live),
       facts: buildEntryOwnedFactsFromLiveDescription({
         entryId: String(exp.id || ''),
         liveDescription: live,
+        sourceLocale: entryLocale,
       }),
     };
   });

@@ -9,6 +9,12 @@ import { buildSummaryV2DeterministicText } from './builder';
 import { validateSummaryV2AgainstManifest } from './validator';
 import { bulletToWhereClauseEn, dutyTenseFromEmploymentState } from './tense';
 import type { SummaryV2PipelineResult, SummaryV2SelectionManifest } from './types';
+import type { SummaryV2LocalizedManifest } from './localization';
+import {
+  buildSameLocaleLocalizedManifest,
+  projectLocalizedSummaryV2Manifest,
+  SUMMARY_V2_LOCALIZED_MANIFEST_REVISION,
+} from './localization';
 import {
   normalizeSummaryV2RewriteStyle,
   repairSummaryV2RewriteStyle,
@@ -31,6 +37,8 @@ export type RunSummaryV2Options = {
   styleHintFromExistingSummary?: boolean;
   /** Enhance rewrite style — shorter / stronger / professional. */
   rewriteStyle?: string | null;
+  /** Validated structured localization produced at the provider boundary. */
+  localizedManifest?: SummaryV2LocalizedManifest | null;
 };
 
 export type SummaryV2PipelineDiagnostics = {
@@ -47,6 +55,30 @@ export type SummaryV2PipelineDiagnostics = {
   candidateTransformationAfterHash: string | null;
   styleFulfillment: SummaryV2StyleFulfillment | null;
   styleNoSafeMaterialChange: boolean;
+  crossLocaleLocalizationRequired: boolean;
+  localizationAttempted: boolean;
+  localizationRepairAttempted: boolean;
+  localizationRepairAccepted: boolean;
+  localizationSource: string | null;
+  sourceLocalesByEntryHash: Record<string, Locale>;
+  sourceLocaleByFactIdHash: Record<string, Locale>;
+  targetLocale: Locale | null;
+  expectedEntryCount: number;
+  localizedEntryCount: number;
+  expectedFactCount: number;
+  localizedFactCount: number;
+  entryIdParityPassed: boolean;
+  factIdParityPassed: boolean;
+  factOwnershipParityPassed: boolean;
+  localizedRoleTitleHashesByEntry: Record<string, string>;
+  localizedFactHashesByFactId: Record<string, string>;
+  sourceLanguageLeakageDetected: boolean;
+  targetLocalePurityPassed: boolean;
+  targetScriptPurityPassed: boolean;
+  localizationGroundingPassed: boolean;
+  localizationTypedFailureReason: string | null;
+  localizedManifestHash: string | null;
+  localizedManifestRevision: string | null;
 };
 
 function prepareCandidate(raw: string): string {
@@ -118,6 +150,30 @@ function emptyPipelineDiag(
     candidateTransformationAfterHash: null,
     styleFulfillment: null,
     styleNoSafeMaterialChange: false,
+    crossLocaleLocalizationRequired: false,
+    localizationAttempted: false,
+    localizationRepairAttempted: false,
+    localizationRepairAccepted: false,
+    localizationSource: null,
+    sourceLocalesByEntryHash: {},
+    sourceLocaleByFactIdHash: {},
+    targetLocale: null,
+    expectedEntryCount: 0,
+    localizedEntryCount: 0,
+    expectedFactCount: 0,
+    localizedFactCount: 0,
+    entryIdParityPassed: false,
+    factIdParityPassed: false,
+    factOwnershipParityPassed: false,
+    localizedRoleTitleHashesByEntry: {},
+    localizedFactHashesByFactId: {},
+    sourceLanguageLeakageDetected: false,
+    targetLocalePurityPassed: false,
+    targetScriptPurityPassed: false,
+    localizationGroundingPassed: false,
+    localizationTypedFailureReason: null,
+    localizedManifestHash: null,
+    localizedManifestRevision: null,
   };
 }
 
@@ -134,10 +190,62 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
     gender: options.gender,
     referenceDateIso: options.referenceDateIso,
   });
-  const manifest = buildSummaryV2SelectionManifest(snapshot);
+  const sourceManifest = buildSummaryV2SelectionManifest(snapshot);
   const style = normalizeSummaryV2RewriteStyle(options.rewriteStyle);
   const sourceSummary = (options.cv.summary || '').replace(/\s+/g, ' ').trim();
   const diag = emptyPipelineDiag(style);
+  const sameLocale = buildSameLocaleLocalizedManifest(sourceManifest);
+  const suppliedLocalization = options.localizedManifest || null;
+  const localized = sameLocale || suppliedLocalization;
+  const sourceEntries = [...(sourceManifest.current ? [sourceManifest.current] : []), ...sourceManifest.priors];
+  const sourceFacts = [...sourceManifest.requiredCurrentFacts, ...sourceManifest.requiredPriorFacts];
+  diag.crossLocaleLocalizationRequired = !sameLocale;
+  diag.localizationAttempted = Boolean(suppliedLocalization);
+  diag.localizationRepairAttempted = Boolean(localized?.localizationRepairAttempted);
+  diag.localizationRepairAccepted = Boolean(localized?.localizationRepairAccepted);
+  diag.localizationSource = localized?.localizationSource || null;
+  diag.targetLocale = options.locale;
+  diag.expectedEntryCount = sourceEntries.length;
+  diag.localizedEntryCount = localized?.entries.length || 0;
+  diag.expectedFactCount = sourceFacts.length;
+  diag.localizedFactCount = localized?.entries.reduce((count, entry) => count + entry.facts.length, 0) || 0;
+  diag.sourceLocalesByEntryHash = Object.fromEntries(sourceEntries.map((entry) => [hashNorm(entry.entryId), entry.sourceLocale]));
+  diag.sourceLocaleByFactIdHash = Object.fromEntries(sourceFacts.map((fact) => [hashNorm(fact.factId), fact.sourceLocale]));
+  diag.entryIdParityPassed = Boolean(localized && diag.localizedEntryCount === diag.expectedEntryCount);
+  diag.factIdParityPassed = Boolean(localized && diag.localizedFactCount === diag.expectedFactCount);
+  diag.factOwnershipParityPassed = Boolean(localized && localized.entries.every((entry) => entry.facts.every((fact) => fact.entryId === entry.entryId)));
+  diag.localizedRoleTitleHashesByEntry = Object.fromEntries((localized?.entries || []).map((entry) => [hashNorm(entry.entryId), entry.localizedRoleTitleHash]));
+  diag.localizedFactHashesByFactId = Object.fromEntries((localized?.entries || []).flatMap((entry) => entry.facts.map((fact) => [hashNorm(fact.factId), fact.localizedTextHash])));
+  diag.sourceLanguageLeakageDetected = false;
+  diag.targetLocalePurityPassed = Boolean(localized);
+  diag.targetScriptPurityPassed = Boolean(localized);
+  diag.localizationGroundingPassed = Boolean(localized && diag.entryIdParityPassed && diag.factIdParityPassed && diag.factOwnershipParityPassed);
+  diag.localizedManifestHash = localized?.localizedManifestHash || null;
+  diag.localizedManifestRevision = localized?.revision || null;
+  const manifest = localized
+    ? projectLocalizedSummaryV2Manifest({ manifest: sourceManifest, localized })
+    : null;
+  if (!manifest) {
+    const rawProvider = prepareCandidate(options.candidate || '');
+    const validation = validateSummaryV2AgainstManifest(rawProvider, sourceManifest);
+    diag.localizationTypedFailureReason = validation.reason === 'locale_impurity'
+      ? 'locale_impurity'
+      : (suppliedLocalization
+        ? 'localized_manifest_projection_failed'
+        : 'cross_locale_localization_required');
+    return {
+      blocked: true,
+      reason: diag.localizationTypedFailureReason,
+      text: sourceSummary,
+      origin: 'deterministic_fallback',
+      countedAsSuccess: false,
+      manifest: sourceManifest,
+      validation,
+      snapshot,
+      pipelineDiagnostics: diag,
+    };
+  }
+  void SUMMARY_V2_LOCALIZED_MANIFEST_REVISION;
 
   const provider = prepareCandidate(options.candidate || '');
   let text = '';

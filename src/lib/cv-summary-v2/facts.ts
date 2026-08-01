@@ -1,3 +1,4 @@
+import type { Locale } from '@/lib/i18n/translations';
 import type { SummaryV2EntryFact } from './types';
 import { bulletToGermanWoIchClause } from './german-surface';
 import type { SummaryV2DutyTense } from './tense';
@@ -62,6 +63,7 @@ function morphVariants(token: string): string[] {
 export function buildEntryOwnedFactsFromLiveDescription(options: {
   entryId: string;
   liveDescription: string;
+  sourceLocale: Locale;
 }): SummaryV2EntryFact[] {
   const entryId = options.entryId || '';
   const bullets = splitLiveDutyBullets(options.liveDescription);
@@ -75,6 +77,7 @@ export function buildEntryOwnedFactsFromLiveDescription(options: {
       bulletText: bullet,
       tokenStems: stems,
       sourceFactHash,
+      sourceLocale: options.sourceLocale,
     };
   });
 }

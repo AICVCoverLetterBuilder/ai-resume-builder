@@ -53,8 +53,9 @@ export function buildSummaryV2SelectionManifest(
         e.startDate,
         e.endDate,
         e.employmentState,
+        e.sourceLocale,
         e.descriptionHash,
-        ...e.facts.map((f) => f.sourceFactHash),
+        ...e.facts.map((f) => `${f.sourceLocale}:${f.sourceFactHash}`),
       ].join('|')),
     ].join('||'),
   );

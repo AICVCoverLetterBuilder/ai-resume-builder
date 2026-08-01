@@ -96,6 +96,12 @@ import {
   finalizeCvAiFieldForApply,
 } from '@/lib/cv-ai-finalize-apply';
 import {
+  buildSummaryV2ManifestForCv,
+  localizeSummaryV2Manifest,
+  type SummaryV2LocalizedManifest,
+  type SummaryV2LocalizationProviderResponse,
+} from '@/lib/cv-summary-v2';
+import {
   SUMMARY_TRANSACTIONAL_APPLY_387_REVISION,
   createSummaryApplyOwnershipState,
   commitSummaryApplyTransactionally,
@@ -225,6 +231,46 @@ function describeElegantFormalPhotoField(fieldName: string, value?: string): str
 
 function stripPhotoCacheFragment(value?: string): string | undefined {
   return value?.split('#')[0];
+}
+
+async function resolveSummaryLocalizedManifest(options: {
+  cv: CVData;
+  locale: Locale;
+  gender: string;
+  referenceDateIso: string;
+  proToken: string;
+  requestId: string;
+  signal: AbortSignal;
+}): Promise<{ manifest: SummaryV2LocalizedManifest | null; reason: string | null }> {
+  const sourceManifest = buildSummaryV2ManifestForCv({
+    cv: options.cv,
+    locale: options.locale,
+    gender: options.gender,
+    referenceDateIso: options.referenceDateIso,
+  });
+  const outcome = await localizeSummaryV2Manifest({
+    manifest: sourceManifest,
+    transport: async (request) => {
+      const { data, response } = await apiFetch<{
+        localizedManifest?: SummaryV2LocalizationProviderResponse;
+        error?: string;
+        localizationTypedFailureReason?: string;
+      }>('/api/generate', {
+        body: {
+          action: 'summary-localize',
+          proToken: options.proToken,
+          requestId: options.requestId,
+          ...request,
+        },
+        signal: options.signal,
+      });
+      if (!response.ok || !data?.localizedManifest) {
+        throw new Error(data?.localizationTypedFailureReason || data?.error || 'localization_provider_failed');
+      }
+      return data.localizedManifest;
+    },
+  });
+  return { manifest: outcome.manifest, reason: outcome.reason };
 }
 
 export default function CVBuilderPage() {
@@ -1032,7 +1078,28 @@ export default function CVBuilderPage() {
       const referenceDateIso = new Date().toISOString().slice(0, 10);
       const durationSnapshot = buildExperienceDurationSnapshot(liveCvAtPress.experience, referenceDateIso);
       const experienceDuration = durationToPromptToken(durationSnapshot.total);
+      const localization = await resolveSummaryLocalizedManifest({
+        cv: liveCvAtPress,
+        locale: requestedLocale,
+        gender: liveCvAtPress.personal.gender || '',
+        referenceDateIso,
+        proToken,
+        requestId: reqCtx.requestId,
+        signal: controller.signal,
+      });
+      if (!localization.manifest) {
+        summaryDiag.stage('localization', 'fail', localization.reason || 'localization_provider_failed');
+        summaryDiag.patch({
+          finalTypedFailureReason: localization.reason || 'localization_provider_failed',
+          rejectionStage: 'localization',
+          countedAsSuccess: false,
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
+        toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
+        return;
+      }
       const experienceEntries = liveCvAtPress.experience.slice(0, 4).map(exp => ({
+        id: exp.id,
         position: exp.position,
         company: exp.company,
         startDate: exp.startDate,
@@ -1040,6 +1107,7 @@ export default function CVBuilderPage() {
         // Always ground summaries on frozen canonical duties, not a prior locale rewrite.
         description: freezeCanonicalExperienceDescription(exp).slice(0, 300),
         isPresent: exp.isPresent,
+        sourceLocale: exp.generatedLocale || exp.positionSourceLocale || liveCvAtPress.contentLocale || null,
         duration: durationSnapshot.byExperienceId[exp.id],
       }));
 
@@ -1170,6 +1238,7 @@ export default function CVBuilderPage() {
         cv: liveNow,
         candidate: nextSummary,
         durationSnapshot,
+        localizedSummaryManifest: localization.manifest,
       });
       if (finalizedGate.blocked || !finalizedGate.countedAsSuccess) {
         const outcome = resolveSummaryFinalizeClientOutcome(
@@ -2673,6 +2742,26 @@ export default function CVBuilderPage() {
       }
       const referenceDateIso = new Date().toISOString().slice(0, 10);
       const durationSnapshot = buildExperienceDurationSnapshot(liveNow.experience, referenceDateIso);
+      const localization = await resolveSummaryLocalizedManifest({
+        cv: liveNow,
+        locale: requestedLocale,
+        gender: liveNow.personal.gender || '',
+        referenceDateIso,
+        proToken,
+        requestId: reqCtx.requestId,
+        signal: controller.signal,
+      });
+      if (!localization.manifest) {
+        summaryDiag.stage('localization', 'fail', localization.reason || 'localization_provider_failed');
+        summaryDiag.patch({
+          finalTypedFailureReason: localization.reason || 'localization_provider_failed',
+          rejectionStage: 'localization',
+          countedAsSuccess: false,
+        });
+        summaryDiag.recordVisibleApply(false, countBefore);
+        toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
+        return;
+      }
       const rewriteAction = style === 'shorter'
         ? 'summary_shorter'
         : style === 'stronger'
@@ -2692,6 +2781,7 @@ export default function CVBuilderPage() {
           : rewriteData.repairAttempted
             ? 'ai_repaired'
             : 'ai_generated',
+        localizedSummaryManifest: localization.manifest,
       });
       summaryDiag.recordFinalizeResult(finalizedGate);
       const rewriteOutcome = resolveSummaryFinalizeClientOutcome(
