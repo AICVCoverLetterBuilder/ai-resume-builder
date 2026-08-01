@@ -10,6 +10,7 @@
  */
 import type { Locale } from './i18n/translations';
 import {
+  extractSummaryYearClaims,
   formatApproximateDurationPhrase,
   summaryIncludesDurationPhrase,
   type ExperienceDuration,
@@ -55,9 +56,59 @@ export type SummaryDurationOwnershipDiagnostics = {
   finalDurationHybridDetected?: boolean;
   durationSemanticValueMonths?: number | null;
   durationRepresentationAgreement?: boolean;
+  finalRenderedDurationSemanticMonths?: number | null;
+  visibleRenderedDurationSemanticMonths?: number | null;
+  finalDurationSemanticDeltaMonths?: number | null;
+  visibleDurationSemanticDeltaMonths?: number | null;
+  finalDurationSemanticAgreementPassed?: boolean;
+  visibleDurationSemanticAgreementPassed?: boolean;
   /** Non-PII revision from the duration finalizer implementation that ran. */
   summaryDurationFinalizerRevision?: string;
 };
+
+export type SummaryDurationSemanticAnalysis = {
+  authoritativeDurationMonths: number | null;
+  canonicalRenderedDurationSemanticMonths: number | null;
+  renderedDurationSemanticMonths: number | null;
+  durationSemanticDeltaMonths: number | null;
+  agreementPassed: boolean;
+};
+
+/** Compare visible duration meaning with the locale-owned structured-duration bucket. */
+export function analyzeSummaryDurationSemantics(
+  text: string,
+  duration: ExperienceDuration,
+  locale: Locale,
+): SummaryDurationSemanticAnalysis {
+  if (!duration.hasValidDates) {
+    return {
+      authoritativeDurationMonths: null,
+      canonicalRenderedDurationSemanticMonths: null,
+      renderedDurationSemanticMonths: null,
+      durationSemanticDeltaMonths: null,
+      agreementPassed: true,
+    };
+  }
+  const canonicalMonths = duration.unit === 'years'
+    ? Math.round(duration.approxYears * 12)
+    : duration.totalMonths;
+  const claims = extractSummaryYearClaims(text);
+  let renderedMonths: number | null = null;
+  if (summaryIncludesDurationPhrase(text, duration, locale)) {
+    renderedMonths = duration.unit === 'months' ? duration.totalMonths : canonicalMonths;
+  } else if (claims.length === 1) {
+    renderedMonths = Math.round(claims[0] * 12);
+  }
+  return {
+    authoritativeDurationMonths: duration.totalMonths,
+    canonicalRenderedDurationSemanticMonths: canonicalMonths,
+    renderedDurationSemanticMonths: renderedMonths,
+    durationSemanticDeltaMonths: renderedMonths == null
+      ? null
+      : renderedMonths - duration.totalMonths,
+    agreementPassed: renderedMonths === canonicalMonths,
+  };
+}
 
 /**
  * Normalize text for duration scanning:
@@ -687,6 +738,7 @@ export function enforceAuthoritativeSummaryDuration(
   const independentFinal = verifyIndependentFinalDurationCount(working, locale, {
     requireExactlyOne: requireClaim && duration.hasValidDates,
   });
+  const semantic = analyzeSummaryDurationSemantics(working, duration, locale);
 
   const diagnostics: SummaryDurationOwnershipDiagnostics = {
     summaryDurationExpressionCount: beforeCount,
@@ -711,6 +763,7 @@ export function enforceAuthoritativeSummaryDuration(
       independentFinal.ok
       && !finalRep2.hybridDetected
       && finalRep2.agreement
+      && semantic.agreementPassed
       && (!requireClaim || !duration.hasValidDates || independentFinal.count === 1),
     ),
     finalDurationRepresentationKind: finalRep2.representationKind,
@@ -718,6 +771,12 @@ export function enforceAuthoritativeSummaryDuration(
     finalDurationHybridDetected: finalRep2.hybridDetected,
     durationSemanticValueMonths: duration.hasValidDates ? duration.totalMonths : null,
     durationRepresentationAgreement: finalRep2.agreement,
+    finalRenderedDurationSemanticMonths: semantic.renderedDurationSemanticMonths,
+    visibleRenderedDurationSemanticMonths: semantic.renderedDurationSemanticMonths,
+    finalDurationSemanticDeltaMonths: semantic.durationSemanticDeltaMonths,
+    visibleDurationSemanticDeltaMonths: semantic.durationSemanticDeltaMonths,
+    finalDurationSemanticAgreementPassed: semantic.agreementPassed,
+    visibleDurationSemanticAgreementPassed: semantic.agreementPassed,
   };
 
   return {
@@ -738,6 +797,7 @@ export function summaryDurationPostconditionFailed(
     requireExactlyOne: Boolean(options?.requireDurationClaim && duration.hasValidDates),
   });
   if (!independent.ok) return true;
+  if (!analyzeSummaryDurationSemantics(text, duration, locale).agreementPassed) return true;
   if (options?.requireDurationClaim && duration.hasValidDates && independent.count === 0) {
     return true;
   }

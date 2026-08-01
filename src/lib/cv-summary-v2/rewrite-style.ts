@@ -198,12 +198,13 @@ const LOCALE_PROFESSIONAL_MARKERS: Partial<Record<Locale, RegExp>> = {
 export function summaryV2ShorterMinLengthDeltaPercent(locale: Locale): number {
   if (locale === 'de') return -10;
   if (locale === 'en') return -8;
-  // Dense scripts: character/clause reduction; still require ≥5% when possible.
+  // Dense scripts: character/clause reduction. Semantic duration tokens are
+  // non-compressible, so require a still-visible 3% reduction in the remaining prose.
   if (locale === 'ar' || locale === 'hi' || locale === 'ja') {
-    return -5;
+    return -3;
   }
-  // Whitespace-tokenized languages: require ≥5% token/length reduction.
-  return -5;
+  // Whitespace-tokenized languages: preserve duration/connectors and require ≥3%.
+  return -3;
 }
 
 /** Token-ish count for whitespace languages; character count for ja/ar/hi. */
@@ -1220,44 +1221,37 @@ function compressDutyEmDashList(text: string, locale: Locale): string {
 
 function compressLocaleDurationToCompact(text: string, locale: Locale): string {
   let t = text;
-  // Keep duration approximators + year nouns so warehouse duration scanners still
-  // count exactly one claim. Compress half-year wording and experience tails.
+  // Keep the locale-owned semantic duration bucket intact. Shorter may compress
+  // framing and experience tails, never a half-year into a whole year.
   if (locale === 'fr') {
     t = t
       .replace(/Je dispose d['\u2019]environ/giu, "J'ai environ")
       .replace(/Je dispose d['\u2019]/giu, "J'ai ")
-      .replace(/\s+et demi\b/giu, '')
       .replace(/,\s+où je\s+/giu, ', ')
       .replace(/\bdans (?:ce|un) rôle(?:\s+précédent)?\s*/giu, '');
   } else if (locale === 'es') {
     t = t
-      .replace(/Cuento con alrededor de/giu, 'Cuento con unos')
+      .replace(/Cuento con alrededor de/giu, 'Tengo unos')
       .replace(/con alrededor de/giu, 'con unos')
-      .replace(/\s+y medio\b/giu, '')
-      .replace(/,\s+donde\s+/giu, ', ')
       .replace(/\ben (?:este|un) rol(?:\s+previo)?\s*/giu, '');
   } else if (locale === 'it') {
     t = t
       .replace(/Dispongo di circa/giu, 'Ho circa')
-      .replace(/\s+e mezzo\b/giu, '')
       .replace(/,\s+dove\s+/giu, ', ')
       .replace(/\bin questo ruolo\s*/giu, '')
       .replace(/\bin un ruolo precedente,\s*/giu, '');
   } else if (locale === 'pt-BR') {
     t = t
-      .replace(/\s+e meio\b/giu, '')
       .replace(/,\s+onde\s+/giu, ', ')
       .replace(/\bnesta função\s*/giu, '');
   } else if (locale === 'ru') {
     // Keep the finite `У меня … опыта.` predicate — never a bare `Около пяти лет.`
     t = t
-      .replace(/с половиной\s+/gu, '')
       .replace(/,\s+где я\s+/gu, ', ')
       .replace(/в этой роли\s*/gu, '');
   } else if (locale === 'sr') {
     t = t
       .replace(/Imam sa oko/giu, 'Imam oko')
-      .replace(/\s+i po\b/giu, '')
       .replace(/,\s+gde(?:\s+sam)?\s+/giu, ', ')
       .replace(/,\s+gdje(?:\s+sam)?\s+/giu, ', ')
       .replace(/\bu ovoj ulozi\s*/giu, '');
@@ -1265,12 +1259,10 @@ function compressLocaleDurationToCompact(text: string, locale: Locale): string {
     t = t
       .replace(/Imam ukupno oko/giu, 'Imam oko')
       .replace(/Imam s ukupno oko/giu, 'Imam oko')
-      .replace(/\s+i pol\b/giu, '')
       .replace(/,\s+gdje(?:\s+sam)?\s+/giu, ', ')
       .replace(/\bu ovoj ulozi\s*/giu, '');
   } else if (locale === 'ar') {
     t = t
-      .replace(/ونصف/gu, '')
       // Keep the genitive "من الخبرة" — "خمس سنوات خبرة" is not idiomatic MSA.
       .replace(/من الخبرة المشتركة/gu, 'من الخبرة')
       // Same relative-connector drop the other locales use for shorter.
@@ -1278,12 +1270,10 @@ function compressLocaleDurationToCompact(text: string, locale: Locale): string {
   } else if (locale === 'hi') {
     t = t
       .replace(/लगभग\s+/gu, '')
-      .replace(/का संयुक्त अनुभव/gu, 'का अनुभव')
-      .replace(/साढ़े पाँच वर्षों/gu, 'साढ़े 5 वर्षों');
+      .replace(/का संयुक्त अनुभव/gu, 'का अनुभव');
   } else if (locale === 'ja') {
     t = t
       .replace(/通算で/gu, '')
-      .replace(/年半/gu, '年')
       .replace(/の実務経験があります/gu, 'の経験があります');
   }
   return t.replace(/\s+/g, ' ').trim();
@@ -1294,7 +1284,9 @@ function shortenLocaleRoleOpeners(text: string, locale: Locale): string {
   // Keep current-state markers (actuellement/trenutno/…) — validator requires them.
   // Compress prior openers and soft current phrasing only.
   if (locale === 'es') {
-    t = t.replace(/Anteriormente trabajé como/iu, 'Antes trabajé como');
+    t = t
+      .replace(/Actualmente trabajo como/iu, 'Actualmente soy')
+      .replace(/Anteriormente trabajé como/iu, 'Antes fui');
   } else if (locale === 'fr') {
     t = t.replace(/Auparavant, j'ai travaillé comme/iu, "J'ai déjà travaillé comme");
   } else if (locale === 'it') {

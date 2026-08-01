@@ -18,6 +18,9 @@ export const SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION =
 /** AAB-394 — explicit Experience declared/detected/effective locale attribution. */
 export const SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION =
   'summary-experience-locale-diagnostics-394-v1' as const;
+/** AAB-395 â€” emitted proof that rendered Summary durations have semantic/native-surface guards. */
+export const SUMMARY_DURATION_SEMANTIC_NATIVE_SURFACE_395_REVISION =
+  'summary-duration-semantic-native-surface-395-v1' as const;
 /** AAB-381 — German Summary V2 post-write visible validation against operation-owned text. */
 export const GERMAN_SUMMARY_V2_VISIBLE_POSTWRITE_381_REVISION =
   'german-summary-v2-visible-postwrite-381-v1' as const;
@@ -260,6 +263,8 @@ export type SummaryAiDiagnosticTrace = {
   localizedManifestCacheHitByEntryHash: Record<string, boolean>;
   /** Packaged revision for the distinct Experience locale-attribution contract. */
   summaryExperienceLocaleDiagnosticsRevision: typeof SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION;
+  /** Live, non-PII diagnostic contract revision for the AAB-395 duration/native-surface gate. */
+  summaryDurationSemanticNativeSurfaceRevision: typeof SUMMARY_DURATION_SEMANTIC_NATIVE_SURFACE_395_REVISION;
   employmentStatesByEntryHash: Record<string, 'current' | 'completed'>;
   crossEntryFactCollisionCount: number;
   crossEntryLeakageDetected: boolean;
@@ -292,6 +297,12 @@ export type SummaryAiDiagnosticTrace = {
   visibleDurationHybridDetected: boolean | null;
   durationSemanticValueMonths: number | null;
   durationRepresentationAgreement: boolean | null;
+  finalRenderedDurationSemanticMonths: number | null;
+  visibleRenderedDurationSemanticMonths: number | null;
+  finalDurationSemanticDeltaMonths: number | null;
+  visibleDurationSemanticDeltaMonths: number | null;
+  finalDurationSemanticAgreementPassed: boolean | null;
+  visibleDurationSemanticAgreementPassed: boolean | null;
   contentLocaleBeforeRequest: string | null;
   contentLocaleAfterApply: string | null;
   storedContentLocaleBeforeRequest: string | null;
@@ -750,6 +761,8 @@ export class SummaryAiDiagnosticSession {
       sameLocaleBypassUsedByEntryHash: {},
       localizedManifestCacheHitByEntryHash: {},
       summaryExperienceLocaleDiagnosticsRevision: SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION,
+      summaryDurationSemanticNativeSurfaceRevision:
+        SUMMARY_DURATION_SEMANTIC_NATIVE_SURFACE_395_REVISION,
       employmentStatesByEntryHash: {},
       crossEntryFactCollisionCount: 0,
       crossEntryLeakageDetected: false,
@@ -781,6 +794,12 @@ export class SummaryAiDiagnosticSession {
       visibleDurationHybridDetected: null,
       durationSemanticValueMonths: null,
       durationRepresentationAgreement: null,
+      finalRenderedDurationSemanticMonths: null,
+      visibleRenderedDurationSemanticMonths: null,
+      finalDurationSemanticDeltaMonths: null,
+      visibleDurationSemanticDeltaMonths: null,
+      finalDurationSemanticAgreementPassed: null,
+      visibleDurationSemanticAgreementPassed: null,
       contentLocaleBeforeRequest: input.contentLocale ?? null,
       contentLocaleAfterApply: null,
       storedContentLocaleBeforeRequest: input.contentLocale ?? null,
@@ -1227,6 +1246,16 @@ export class SummaryAiDiagnosticSession {
       visibleDurationHybridDetected: diag.visibleDurationHybridDetected ?? null,
       durationSemanticValueMonths: diag.durationSemanticValueMonths ?? null,
       durationRepresentationAgreement: diag.durationRepresentationAgreement ?? null,
+      finalRenderedDurationSemanticMonths:
+        diag.finalRenderedDurationSemanticMonths ?? null,
+      visibleRenderedDurationSemanticMonths:
+        diag.visibleRenderedDurationSemanticMonths ?? null,
+      finalDurationSemanticDeltaMonths: diag.finalDurationSemanticDeltaMonths ?? null,
+      visibleDurationSemanticDeltaMonths: diag.visibleDurationSemanticDeltaMonths ?? null,
+      finalDurationSemanticAgreementPassed:
+        diag.finalDurationSemanticAgreementPassed ?? null,
+      visibleDurationSemanticAgreementPassed:
+        diag.visibleDurationSemanticAgreementPassed ?? null,
       fallbackAttempted,
       fallbackApplied,
       fallbackKind: finalized.origin === 'deterministic_fallback' ? 'deterministic' : null,

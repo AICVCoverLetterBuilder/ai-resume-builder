@@ -25,6 +25,17 @@ const SUMMARY_AI_COPY = 'Copy Summary AI diagnostics';
 const SUMMARY_V2_MARKER = 'summary-v2';
 const SUMMARY_V2_REVISION = 'summary-v2-architecture-371-v1';
 const SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394 = 'summary-experience-locale-diagnostics-394-v1';
+const SUMMARY_DURATION_SEMANTIC_NATIVE_SURFACE_395 = 'summary-duration-semantic-native-surface-395-v1';
+const SUMMARY_DURATION_SEMANTIC_395_FIELDS = [
+  'summaryDurationSemanticNativeSurfaceRevision',
+  'finalRenderedDurationSemanticMonths',
+  'visibleRenderedDurationSemanticMonths',
+  'finalDurationSemanticDeltaMonths',
+  'visibleDurationSemanticDeltaMonths',
+  'finalDurationSemanticAgreementPassed',
+  'visibleDurationSemanticAgreementPassed',
+  'summary_duration_semantic_mismatch',
+];
 const EXPERIENCE_LOCALE_DIAGNOSTICS_394_FIELDS = [
   'declaredExperienceLocaleByEntryHash',
   'detectedExperienceTextLocaleByEntryHash',
@@ -357,6 +368,14 @@ if (expect === 'enabled') {
   }
   if (!blob.includes(SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394)) {
     fail(`missing AAB-394 Experience locale diagnostics revision "${SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394}"`);
+  }
+  if (!blob.includes(SUMMARY_DURATION_SEMANTIC_NATIVE_SURFACE_395)) {
+    fail(`missing AAB-395 Summary duration/native-surface revision "${SUMMARY_DURATION_SEMANTIC_NATIVE_SURFACE_395}"`);
+  }
+  for (const field of SUMMARY_DURATION_SEMANTIC_395_FIELDS) {
+    if (!blob.includes(field)) {
+      fail(`missing AAB-395 Summary semantic-duration field "${field}"`);
+    }
   }
   for (const field of EXPERIENCE_LOCALE_DIAGNOSTICS_394_FIELDS) {
     if (!blob.includes(field)) {

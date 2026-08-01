@@ -997,6 +997,7 @@ import {
   verifyIndependentFinalDurationCount,
   summarizeDurationClaimBreakdown,
   analyzeDurationRepresentations,
+  analyzeSummaryDurationSemantics,
   type SummaryDurationOwnershipDiagnostics,
 } from './cv-summary-duration-ownership';
 import { acceptValidatedAiContent } from './cv-canonical-snapshot';
@@ -1152,6 +1153,12 @@ export type FinalizeCvAiFieldResult = {
     visibleDurationHybridDetected?: boolean;
     durationSemanticValueMonths?: number | null;
     durationRepresentationAgreement?: boolean;
+    finalRenderedDurationSemanticMonths?: number | null;
+    visibleRenderedDurationSemanticMonths?: number | null;
+    finalDurationSemanticDeltaMonths?: number | null;
+    visibleDurationSemanticDeltaMonths?: number | null;
+    finalDurationSemanticAgreementPassed?: boolean;
+    visibleDurationSemanticAgreementPassed?: boolean;
     storedContentLocaleBeforeRequest?: string | null;
     detectedVisibleContentLocaleBeforeRequest?: string | null;
     finalContentLocaleAfterApply?: string | null;
@@ -3084,7 +3091,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && v2.reason
       && /^(?:style_|shorter_|stronger_|professional_)/u.test(v2.reason)
     ) ? v2.reason : null;
-    const success = !v2.blocked && v2.countedAsSuccess && !deV2BlockReason;
+    const v2DurationSemantic = analyzeSummaryDurationSemantics(
+      v2Text,
+      durationSnapshot.total,
+      locale,
+    );
+    const v2DurationSemanticFailure = !v2.blocked
+      && v2.countedAsSuccess
+      && durationSnapshot.total.hasValidDates
+      && !v2DurationSemantic.agreementPassed
+      ? 'summary_duration_semantic_mismatch'
+      : null;
+    const success = !v2.blocked
+      && v2.countedAsSuccess
+      && !deV2BlockReason
+      && !v2DurationSemanticFailure;
     // AAB-383 — evaluated candidate lineage must stay truthful even when blocked.
     // Never report present=true with null hashes; never wipe a valid duration 1→0
     // by rescanning empty live Summary after a grammar/completeness reject.
@@ -3267,8 +3288,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       durationClaimCountAfterFinalize: v2DurationCount,
       summaryDurationExpressionCount: v2DurationCount,
       independentFinalDurationClaimCount: v2DurationCount,
-      durationValidationPassed: v2DurationCount === 1
-        || v2.manifest.totalDurationMonths <= 0,
+      durationValidationPassed: (
+        v2DurationCount === 1 && v2DurationSemantic.agreementPassed
+      ) || v2.manifest.totalDurationMonths <= 0,
       durationInsertedExactlyOnce: v2DurationCount === 1,
       durationFinalizerIdempotent: true,
       durationSecondPassChanged: false,
@@ -3563,6 +3585,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       visibleDurationHybridDetected: false,
       durationSemanticValueMonths: v2.manifest.totalDurationMonths || null,
       authoritativeDurationMonths: v2.manifest.totalDurationMonths || null,
+      finalRenderedDurationSemanticMonths:
+        v2DurationSemantic.renderedDurationSemanticMonths,
+      visibleRenderedDurationSemanticMonths:
+        v2DurationSemantic.renderedDurationSemanticMonths,
+      finalDurationSemanticDeltaMonths:
+        v2DurationSemantic.durationSemanticDeltaMonths,
+      visibleDurationSemanticDeltaMonths:
+        v2DurationSemantic.durationSemanticDeltaMonths,
+      finalDurationSemanticAgreementPassed: v2DurationSemantic.agreementPassed,
+      visibleDurationSemanticAgreementPassed: v2DurationSemantic.agreementPassed,
       finalDurationRepresentationCount: v2DurationCount,
       durationRepresentationAgreement: true,
       finalDurationOwnerExpected: 'total_professional_experience',
@@ -3626,16 +3658,19 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         : {}),
     };
-    if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason) {
+    if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason || v2DurationSemanticFailure) {
       const typedFail = deV2BlockReason
+        || v2DurationSemanticFailure
         || styleBlockReason
         || v2.reason
         || 'summary_v2_validation_failed';
       const rejectionStage = deV2BlockReason
         ? 'summary_v2_german_preapply_completeness'
-        : (styleNoSafe || styleBlockReason
-          ? 'summary_v2_rewrite_style'
-          : 'summary_v2_manifest_validation');
+        : (v2DurationSemanticFailure
+          ? 'summary_v2_duration_semantic_validation'
+          : (styleNoSafe || styleBlockReason
+            ? 'summary_v2_rewrite_style'
+            : 'summary_v2_manifest_validation'));
       return {
         blocked: true,
         reason: typedFail,
@@ -5291,6 +5326,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const owned = durationDiagFinal as SummaryDurationOwnershipDiagnostics | undefined;
     const rep = independent.representation
       || analyzeDurationRepresentations(analyzedText, locale);
+    const durationSemantic = analyzeSummaryDurationSemantics(
+      analyzedText,
+      durationSnapshot.total,
+      locale,
+    );
     const durationOk = independent.ok && independent.count === 1 && !rep.hybridDetected;
     const detectorAgreement = independent.count
       === (owned?.durationClaimCountAfterInsert ?? independent.count)
@@ -5298,6 +5338,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const durationValidationPassedBase = Boolean(
       durationOk
       && detectorAgreement
+      && durationSemantic.agreementPassed
       && (owned?.durationValidationPassed !== false)
       && (owned?.finalDurationHybridDetected !== true),
     );
@@ -5735,6 +5776,24 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         durationSemanticValueMonths: owned?.durationSemanticValueMonths
           ?? durationSnapshot.total.totalMonths,
         durationRepresentationAgreement: rep.agreement,
+        finalRenderedDurationSemanticMonths:
+          owned?.finalRenderedDurationSemanticMonths
+          ?? durationSemantic.renderedDurationSemanticMonths,
+        visibleRenderedDurationSemanticMonths:
+          owned?.visibleRenderedDurationSemanticMonths
+          ?? durationSemantic.renderedDurationSemanticMonths,
+        finalDurationSemanticDeltaMonths:
+          owned?.finalDurationSemanticDeltaMonths
+          ?? durationSemantic.durationSemanticDeltaMonths,
+        visibleDurationSemanticDeltaMonths:
+          owned?.visibleDurationSemanticDeltaMonths
+          ?? durationSemantic.durationSemanticDeltaMonths,
+        finalDurationSemanticAgreementPassed:
+          owned?.finalDurationSemanticAgreementPassed
+          ?? durationSemantic.agreementPassed,
+        visibleDurationSemanticAgreementPassed:
+          owned?.visibleDurationSemanticAgreementPassed
+          ?? durationSemantic.agreementPassed,
         finalDurationOwnerExpected: success && empQ
           ? ('durationScope' in empQ
             ? (empQ as { durationScope?: { finalDurationOwnerExpected?: string } }).durationScope

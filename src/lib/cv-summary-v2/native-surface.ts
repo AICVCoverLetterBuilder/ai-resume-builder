@@ -841,6 +841,13 @@ export function evaluateSummaryV2NativeSurface(options: {
       reasons.push('bad_transition_semicolon');
       return false;
     }
+    if (
+      options.locale === 'es'
+      && /\b(?:Actualmente|Antes|Anteriormente)\b[^,.?!]{1,180},\s+(?!donde\b)/iu.test(text)
+    ) {
+      reasons.push('spanish_role_intro_comma_splice');
+      return false;
+    }
     if (/,\s*;/u.test(text) || /;\s*,/u.test(text)) {
       reasons.push('malformed_punctuation');
       return false;

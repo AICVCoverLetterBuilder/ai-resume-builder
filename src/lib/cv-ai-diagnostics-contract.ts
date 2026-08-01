@@ -478,6 +478,13 @@ type SummaryLike = {
   finalUnsupportedDesignMediumCount?: number | null;
   finalUnsupportedDesignMediumKinds?: string[] | null;
   durationValidationPassed?: boolean;
+  authoritativeDurationMonths?: number | null;
+  finalRenderedDurationSemanticMonths?: number | null;
+  visibleRenderedDurationSemanticMonths?: number | null;
+  finalDurationSemanticDeltaMonths?: number | null;
+  visibleDurationSemanticDeltaMonths?: number | null;
+  finalDurationSemanticAgreementPassed?: boolean | null;
+  visibleDurationSemanticAgreementPassed?: boolean | null;
   slotValidationPassed?: boolean | null;
   localeValidationPassed?: boolean | null;
   finalTypedFailureReason?: string | null;
@@ -1587,6 +1594,23 @@ export function checkSummaryDiagnosticInvariants(
     push('duration_passed_but_final_count_not_one', {
       independentFinalDurationClaimCount: trace.independentFinalDurationClaimCount ?? 0,
       structuredDurationMonths: trace.structuredDurationMonths ?? 0,
+    });
+  }
+  if (
+    trace.countedAsSuccess === true
+    && (
+      trace.finalDurationSemanticAgreementPassed === false
+      || trace.visibleDurationSemanticAgreementPassed === false
+    )
+  ) {
+    push('duration_semantic_mismatch_counted_as_success', {
+      authoritativeDurationMonths: trace.authoritativeDurationMonths ?? null,
+      finalRenderedDurationSemanticMonths:
+        trace.finalRenderedDurationSemanticMonths ?? null,
+      visibleRenderedDurationSemanticMonths:
+        trace.visibleRenderedDurationSemanticMonths ?? null,
+      finalDurationSemanticDeltaMonths: trace.finalDurationSemanticDeltaMonths ?? null,
+      visibleDurationSemanticDeltaMonths: trace.visibleDurationSemanticDeltaMonths ?? null,
     });
   }
   if (trace.raceGuardResult === 'fail' && trace.visibleApplySucceeded) {

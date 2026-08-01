@@ -302,6 +302,22 @@ export function extractSummaryYearClaims(text: string): number[] {
     .replace(/\s+/g, ' ');
   const claims: number[] = [];
 
+  // Spanish half-year wording places the year noun between the cardinal and
+  // `y medio` ("tres años y medio"). Parse it as one semantic claim before
+  // scanning bare whole-year forms.
+  const spanishHalfRe = /\b(un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\d+(?:\.\d+)?)\s+años?\s+y\s+medio\b/giu;
+  let spanishHalfMatch: RegExpExecArray | null;
+  while ((spanishHalfMatch = spanishHalfRe.exec(raw)) !== null) {
+    const whole = tokenToYears(spanishHalfMatch[1]);
+    if (whole != null) claims.push(whole + 0.5);
+  }
+  const japaneseHalfRe = /約?\s*(\d+)\s*年半/gu;
+  let japaneseHalfMatch: RegExpExecArray | null;
+  while ((japaneseHalfMatch = japaneseHalfRe.exec(raw)) !== null) {
+    const whole = Number(japaneseHalfMatch[1]);
+    if (Number.isFinite(whole) && whole > 0) claims.push(whole + 0.5);
+  }
+
   // Half-year phrases (checked before bare "two years" / "दो वर्षों").
   const halfRes: Array<[RegExp, number]> = [
     [/\btwo\s+and\s+a\s+half\s+years?\b/giu, 2.5],
@@ -362,13 +378,14 @@ export function extractSummaryYearClaims(text: string): number[] {
     /\b(?:etwa|rund|ca\.?|ungefähr)?\s*(ein|eine|einem|einen|einer|zwei|drei|vier|fünf|funf|sechs|sieben|acht|neun|zehn|\d+(?:\.\d+)?)\s*\+?\s*Jahre?n?\b/giu,
     // Spanish: "con alrededor de cuatro años de experiencia" /
     // "con alrededor de seis años y medio de experiencia".
-    /\b(?:alrededor de|cerca de|aproximadamente|unos?|unas?)?\s*(un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\d+(?:[.,]\d+)?)\s*(?:años?\s+y\s+medio|y\s+medio\s+años?|años?)\b/giu,
+    /\b(?:alrededor de|cerca de|aproximadamente|unos?|unas?)?\s*(un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\d+(?:[.,]\d+)?)\s*años?\b(?!\s+y\s+medio)/giu,
     // French: "avec environ quatre ans d'expérience".
     /\b(?:environ|à peu près)?\s*(un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|\d+(?:\.\d+)?)\s*\+?\s*ans?\b/giu,
     // Italian: "con circa quattro anni di esperienza".
     /\b(?:circa)?\s*(un|una|uno|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|\d+(?:\.\d+)?)\s*\+?\s*anni?\b/giu,
     // Portuguese (BR): "com cerca de quatro anos de experiência".
     /\b(?:cerca de|aproximadamente)?\s*(um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|\d+(?:\.\d+)?)\s*\+?\s*anos?\b/giu,
+    /約?\s*(\d+)\s*年(?!半)/gu,
     // Russian: "с опытом около четырёх лет" / "четыре года опыта".
     // JS `\b` is ASCII-only — use Unicode letter lookarounds for Cyrillic.
     /(?<!\p{L})(?:около|примерно)?\s*(один|одного|одна|два|двух|три|трёх|трех|четыре|четырёх|четырех|пять|пяти|шесть|шести|семь|семи|восемь|восьми|девять|девяти|десять|десяти|\d+(?:\.\d+)?)(?:\s+с\s+половиной)?\s*(?:лет|года|год)(?!\p{L})/giu,
