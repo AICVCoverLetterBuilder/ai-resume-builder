@@ -81,6 +81,21 @@ const SUMMARY_FACTS_REVIEW: Record<Locale, string> = {
   ja: '職務要約を保存済みの職歴と照合できませんでした。CVを確認して再度エクスポートしてください。',
 };
 
+const EXPERIENCE_FACTS_REVIEW: Record<Locale, string> = {
+  en: 'The saved experience duties could not be verified for export. Review the experience entries and export again.',
+  de: 'Die gespeicherten Aufgaben konnten für den Export nicht überprüft werden. Prüfen Sie die Berufserfahrung und exportieren Sie erneut.',
+  es: 'No se pudieron verificar las funciones de la experiencia para la exportación. Revise las experiencias y vuelva a exportar.',
+  fr: 'Les missions enregistrées n’ont pas pu être vérifiées pour l’export. Vérifiez les expériences, puis réexportez.',
+  it: 'Non è stato possibile verificare le mansioni salvate per l’esportazione. Controlla le esperienze ed esporta di nuovo.',
+  ar: 'تعذر التحقق من مهام الخبرة المحفوظة للتصدير. راجع إدخالات الخبرة ثم أعد التصدير.',
+  sr: 'Sačuvane dužnosti iz radnog iskustva nije moguće proveriti za izvoz. Pregledajte iskustva i pokušajte ponovo.',
+  hr: 'Spremljene radne obveze nije moguće provjeriti za izvoz. Pregledajte iskustva i pokušajte ponovno.',
+  ru: 'Не удалось проверить сохранённые обязанности для экспорта. Проверьте записи об опыте и повторите экспорт.',
+  'pt-BR': 'Não foi possível verificar as atividades salvas para exportação. Revise as experiências e exporte novamente.',
+  hi: 'निर्यात के लिए सहेजे गए अनुभव के कार्यों को सत्यापित नहीं किया जा सका। अनुभव प्रविष्टियाँ जाँचें और फिर निर्यात करें।',
+  ja: '保存された職務内容をエクスポート用に確認できませんでした。職歴を確認して、もう一度エクスポートしてください。',
+};
+
 const LEGACY_SNAPSHOT_REVIEW: Record<Locale, string> = {
   en: 'The saved CV needs a quick refresh after the app update. Open the CV once, then export again.',
   de: 'Der gespeicherte Lebenslauf muss nach dem Update kurz aktualisiert werden. Öffnen Sie den Lebenslauf einmal und exportieren Sie erneut.',
@@ -137,6 +152,10 @@ function isSummaryFactsReason(reason: string): boolean {
   // Content-grounding only. Wiring/packaging/stale-snapshot bugs must not use this toast.
   return /summary_grounding_projection_failed|summary_proper_noun_rejected|summary_locale_state_mismatch|missing_provenance|migration_failure|recovery_failure|mixed_locale_projection|mixed_locale_field|summary_export_contract_mismatch|summary_recovery_projection_failed|summary_validation_failed_after_recovery|summary_authoritative_fact_set_empty|summary_fact_set_missing_recovered_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|legacy_export_recovery_no_safe_duties|legacy_grounding_recovery_not_invoked|legacy_grounding_recovery_overwritten/i.test(reason)
     && !isExportWiringReason(reason);
+}
+
+function isExperienceFactsReason(reason: string): boolean {
+  return /legacy_export_recovery_no_safe_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|semantic_duty_fact_set_empty|legacy_user_origin_recovery_/i.test(reason);
 }
 
 function isLegacySnapshotReason(reason: string): boolean {
@@ -213,6 +232,9 @@ export function formatCvExportIntegrityToast(
   // Wiring/stale-snapshot failures must not look like Summary content errors.
   if (reason && isExportWiringReason(reason)) {
     return LEGACY_SNAPSHOT_REVIEW[locale] || LEGACY_SNAPSHOT_REVIEW.en;
+  }
+  if (reason && isExperienceFactsReason(reason)) {
+    return EXPERIENCE_FACTS_REVIEW[locale] || EXPERIENCE_FACTS_REVIEW.en;
   }
   if (reason && isSummaryFactsReason(reason)) {
     return SUMMARY_FACTS_REVIEW[locale] || SUMMARY_FACTS_REVIEW.en;

@@ -81,7 +81,7 @@ export interface WorkExperience {
    * Marks originalUserDescription/canonicalDescription that were recovered from
    * classified legacy display text (not ordinary user-confirmed typing).
    */
-  groundingRecoverySource?: 'legacy_recovered_display_duties';
+  groundingRecoverySource?: 'legacy_recovered_display_duties' | 'legacy_user_origin_duties';
   /**
    * Semantic duty keys recovered for export grounding alongside
    * canonicalDescription when present. Identity is key-based — not tied to
@@ -89,8 +89,11 @@ export interface WorkExperience {
    */
   recoveredSemanticDuties?: Array<{
     key: string;
-    confidence: 'narrow_supported';
+    confidence: 'narrow_supported' | 'exact_user_origin';
     sourceClauseIndex: number;
+    sourceClause?: string;
+    sourceClauseHash?: string;
+    sourceFactId?: string;
   }>;
   /**
    * Job-context identity for the last AI/fallback Experience generation

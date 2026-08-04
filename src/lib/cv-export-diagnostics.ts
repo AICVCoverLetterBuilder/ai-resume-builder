@@ -42,6 +42,7 @@ export type CvExportToastMappingKey =
   | 'SUMMARY_REGENERATE'
   | 'TITLE_CONFLICT'
   | 'SUMMARY_FACTS_REVIEW'
+  | 'EXPERIENCE_FACTS_REVIEW'
   | 'LEGACY_SNAPSHOT_REVIEW'
   | 'FILE_SAVE_FAILED'
   | 'GENERIC_PDF'
@@ -172,6 +173,9 @@ export function resolveCvExportToastMappingKey(
   }
   if (/legacy_export_recovery_not_invoked|legacy_export_recovery_snapshot_overwritten|legacy_recovered_snapshot_overwritten|modern_minimal_stale_snapshot|modern_minimal_used_stale_snapshot|localized_display_projection_incomplete/i.test(reason)) {
     return 'LEGACY_SNAPSHOT_REVIEW';
+  }
+  if (/legacy_export_recovery_no_safe_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|semantic_duty_fact_set_empty|legacy_user_origin_recovery_/i.test(reason)) {
+    return 'EXPERIENCE_FACTS_REVIEW';
   }
   if (/summary_grounding_projection_failed|unsupported_summary_fact|summary_proper_noun_rejected|summary_locale_state_mismatch|missing_provenance|migration_failure|recovery_failure|mixed_locale_projection|mixed_locale_field|summary_export_contract_mismatch|summary_recovery_projection_failed|summary_validation_failed_after_recovery|summary_authoritative_fact_set_empty|summary_fact_set_missing_recovered_duties|semantic_duty_fact_set_empty|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|legacy_export_recovery_no_safe_duties|legacy_grounding_recovery_not_invoked|legacy_grounding_recovery_overwritten/i.test(reason)) {
     return 'SUMMARY_FACTS_REVIEW';

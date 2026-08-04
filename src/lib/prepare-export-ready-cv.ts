@@ -34,6 +34,7 @@ import { LEGACY_RECOVERED_DISPLAY_DUTIES } from './cv-legacy-grounding-recovery'
 import {
   displayTextForSemanticRecovery,
   internalShellsFromSemanticDuties,
+  LEGACY_USER_ORIGIN_DUTIES,
   resolveExperienceSemanticGrounding,
   semanticDutyKeys,
   type ExperienceSemanticGrounding,
@@ -499,7 +500,9 @@ export function prepareExportReadyCv(
 
   const nextExperience: WorkExperience[] = (cv.experience || []).map((exp) => {
     const jobCtx = jobContextForExport(exp.position || cv.personal?.jobTitle);
-    let grounding = resolveExperienceSemanticGrounding(exp);
+    let grounding = resolveExperienceSemanticGrounding(exp, {
+      canonicalSnapshot: cv.canonicalSnapshot,
+    });
     summaryFactKeysBefore.push(...semanticDutyKeys(grounding));
     const filteredDuties = filterSemanticDutiesForJobContext(grounding.duties, jobCtx);
     if (filteredDuties.length !== grounding.duties.length) {
@@ -564,6 +567,15 @@ export function prepareExportReadyCv(
       } as WorkExperience;
     }
 
+    if (grounding.source === 'user_origin_recovered' && grounding.duties.length > 0) {
+      return {
+        ...exp,
+        description,
+        groundingRecoverySource: LEGACY_USER_ORIGIN_DUTIES,
+        recoveredSemanticDuties: grounding.duties,
+      } as WorkExperience;
+    }
+
     return {
       ...exp,
       description,
@@ -575,6 +587,16 @@ export function prepareExportReadyCv(
   void changed;
 
   stage = 'produce_semantic_duties';
+  const failedUserOriginRecovery = [...groundingById.values()]
+    .find((grounding) => Boolean(grounding.recoveryFailureReason));
+  if (failedUserOriginRecovery?.recoveryFailureReason) {
+    const diagnostics = baseDiagnostics();
+    diagnostics.recoveryInvoked = recoveryInvoked;
+    diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
+    return fail(failedUserOriginRecovery.recoveryFailureReason, stage, diagnostics);
+  }
   const hadDisplay = (rawCv.experience || []).some((exp) => Boolean(
     (exp.description || '').trim() || (exp.generatedDescription || '').trim(),
   ));
