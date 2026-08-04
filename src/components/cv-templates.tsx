@@ -605,6 +605,14 @@ export function CleanSimpleTemplate({ data, locale }: TemplateProps) {
           </div>
         </section>
       )}
+      {data.certifications.length > 0 && (
+        <section data-clean-simple-section="certifications" className="mb-6">
+          <h2 className="font-bold text-emerald-600 mb-2" style={{ color: '#059669', fontWeight: 700 }}>{L.certifications.toUpperCase()}</h2>
+          {data.certifications.map((certification, index) => (
+            <p key={`${certification}-${index}`} className="text-gray-700" style={{ color: '#374151', whiteSpace: 'break-spaces' }}>{certification}</p>
+          ))}
+        </section>
+      )}
     </div>
   );
 }
@@ -682,6 +690,12 @@ export function ProfessionalClassicTemplate({ data, locale }: TemplateProps) {
           {data.skills.length > 0 && <section data-professional-classic-section="skills"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2" style={{ color: '#1e293b', borderColor: '#e2e8f0' }}>{L.skills.toUpperCase()}</h2><div className="flex flex-wrap gap-1" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>{data.skills.map((s, i) => <span data-professional-classic-skill="item" key={i} className="rounded bg-slate-100 px-2 py-0.5 text-xs" style={{ backgroundColor: '#f1f5f9', color: '#374151', fontSize: '0.75rem', lineHeight: '1rem', padding: '0.125rem 0.5rem', borderRadius: '0.25rem', whiteSpace: 'break-spaces' }}>{s}</span>)}</div></section>}
           {data.languages.length > 0 && <section data-professional-classic-section="languages"><h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2" style={{ color: '#1e293b', borderColor: '#e2e8f0' }}>{L.languages.toUpperCase()}</h2>{data.languages.map((l, i) => <p key={i} className="text-xs" style={{ fontSize: '0.75rem', color: '#374151' }}>{l.name} - {l.level}</p>)}</section>}
         </div>
+        {data.certifications.length > 0 && (
+          <section data-professional-classic-section="certifications" className="mt-6">
+            <h2 className="font-bold text-slate-800 border-b border-slate-200 pb-1 mb-2" style={{ color: '#1e293b', borderColor: '#e2e8f0' }}>{L.certifications.toUpperCase()}</h2>
+            {data.certifications.map((certification, index) => <p key={`${certification}-${index}`} className="text-xs" style={{ fontSize: '0.75rem', color: '#374151' }}>{certification}</p>)}
+          </section>
+        )}
       </div>
     </div>
   );
@@ -990,6 +1004,14 @@ export function NordicCleanTemplate({ data, locale }: TemplateProps) {
           </section>
         )}
       </div>
+      {data.certifications.length > 0 && (
+        <section data-nordic-clean-section="certifications" className="mt-7">
+          <h2 className="text-[10px] font-bold uppercase tracking-[0.18em] text-teal-500 mb-3">{L.certifications}</h2>
+          {data.certifications.map((certification, index) => (
+            <p key={`${certification}-${index}`} className="text-xs text-gray-600">{certification}</p>
+          ))}
+        </section>
+      )}
     </div>
   );
 }
@@ -1169,6 +1191,14 @@ export function CorporateNavyTemplate({ data, locale }: TemplateProps) {
             </section>
           )}
         </div>
+        {data.certifications.length > 0 && (
+          <section data-corporate-navy-section="certifications" className="mt-7">
+            <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#0F172A] border-b border-gray-200 pb-1 mb-3">{L.certifications}</h2>
+            {data.certifications.map((certification, index) => (
+              <p key={`${certification}-${index}`} className="text-xs text-gray-600">{certification}</p>
+            ))}
+          </section>
+        )}
       </div>
     </div>
     );

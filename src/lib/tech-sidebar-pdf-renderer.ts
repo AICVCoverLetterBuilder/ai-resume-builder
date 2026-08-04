@@ -133,7 +133,7 @@ function tsDrawText(
     color: style.color,
     bold: style.fontStyle === 'bold',
     rtl: isRtlLocale(ctx.locale),
-    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+    align: extra.align ?? 'left',
   });
 }
 
@@ -426,7 +426,7 @@ export function tsDrawPageOneSidebar(ctx: TechSidebarDirectPdfContext, photoData
 
   if (ctx.cv.languages.length > 0) {
     sy = tsSidebarSectionHeadingY(ctx, ctx.labels.languages, sy);
-    tsDrawSidebarLanguages(ctx, sy);
+    sy = tsDrawSidebarLanguages(ctx, sy);
   }
 
   if (ctx.cv.certifications.length > 0) {
@@ -552,8 +552,7 @@ function tsDrawExperienceEntryHeader(ctx: TechSidebarDirectPdfContext, entry: CV
 
   if (dateText) {
     const dateStyle: TechSidebarTextStyle = { size: 7.4, color: TS_MUTED, lineHeight: 3.2 };
-    const dateW = pdfI18nCtxTextWidth(ctx, dateText, { size: dateStyle.size, bold: false });
-    const dateX = ctx.pageWidth - ctx.mainPad - dateW;
+    const dateX = ctx.pageWidth - ctx.mainPad;
     tsDrawText(ctx, dateText, dateX, startY + 0.5, dateStyle, { align: 'right' });
   }
 
@@ -701,8 +700,7 @@ function tsDrawEducationSection(ctx: TechSidebarDirectPdfContext): void {
 
     if (dateText) {
       const dateStyle: TechSidebarTextStyle = { size: 7.4, color: TS_MUTED, lineHeight: 3.2 };
-      const dateW = pdfI18nCtxTextWidth(ctx, dateText, { size: dateStyle.size, bold: false });
-      const dateX = ctx.pageWidth - ctx.mainPad - dateW;
+      const dateX = ctx.pageWidth - ctx.mainPad;
       tsDrawText(ctx, dateText, dateX, startY + 0.5, dateStyle, { align: 'right' });
     }
 

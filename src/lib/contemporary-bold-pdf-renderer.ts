@@ -399,7 +399,7 @@ function drawText(
     color: spec.color,
     bold: spec.bold,
     rtl: isRtlLocale(ctx.locale),
-    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+    align: extra.align ?? 'left',
   });
 }
 
@@ -617,14 +617,24 @@ export function cbDrawHeader(
 // ── Section heading ───────────────────────────────────────────────────────────
 export function cbDrawSectionHeading(ctx: ContemporaryBoldPdfContext, label: string): void {
   cbEnsureSpace(ctx, ctx.lp.sectionH + 2);
+  ctx.y = cbDrawSectionHeadingAt(ctx, label, ctx.contentX, ctx.contentW, ctx.y);
+}
+
+function cbDrawSectionHeadingAt(
+  ctx: ContemporaryBoldPdfContext,
+  label: string,
+  x: number,
+  width: number,
+  y: number,
+): number {
   const spec: StyleSpec = { size: ctx.lp.headingSize, color: NAVY, bold: true, lh: 3.5 };
   applyStyle(ctx, spec, label);
-  drawText(ctx, label.toUpperCase(), ctx.contentX, ctx.y + 3, spec);
-  ctx.y += 4.2;
+  drawText(ctx, label.toUpperCase(), x, y + 3, spec);
+  y += 4.2;
   ctx.pdf.setDrawColor(RULE_CLR[0], RULE_CLR[1], RULE_CLR[2]);
   ctx.pdf.setLineWidth(0.25);
-  ctx.pdf.line(ctx.contentX, ctx.y, ctx.contentX + ctx.contentW, ctx.y);
-  ctx.y += 3.0;
+  ctx.pdf.line(x, y, x + width, y);
+  return y + 3.0;
 }
 
 // ── Wrapped paragraph ─────────────────────────────────────────────────────────
@@ -701,8 +711,7 @@ function drawExperienceLead(
   if (date) {
     const dateSpec: StyleSpec = { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.bodyLH * 0.9 };
     applyStyle(ctx, dateSpec, date);
-    const dw = pdfI18nCtxTextWidth(ctx, date, { size: dateSpec.size, bold: false });
-    const dateX = ctx.contentX + ctx.contentW - dw;
+    const dateX = ctx.contentX + ctx.contentW;
     drawText(ctx, date, dateX, startY + ctx.lp.titleSize * 0.32, dateSpec, { align: 'right' });
   }
 
@@ -840,8 +849,7 @@ function drawEducationEntry(ctx: ContemporaryBoldPdfContext, edu: CVData['educat
   if (dateText) {
     const dateSpec: StyleSpec = { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.bodyLH };
     applyStyle(ctx, dateSpec, dateText);
-    const dw = pdfI18nCtxTextWidth(ctx, dateText, { size: dateSpec.size, bold: false });
-    drawText(ctx, dateText, ctx.contentX + ctx.contentW - dw, startY + ctx.lp.titleSize * 0.32, dateSpec, { align: 'right' });
+    drawText(ctx, dateText, ctx.contentX + ctx.contentW, startY + ctx.lp.titleSize * 0.32, dateSpec, { align: 'right' });
   }
   ctx.y = lineY + 0.3;
 
@@ -897,8 +905,7 @@ function measureChipRowsH(chips: Chip[], maxW: number, chipRowH: number): number
 function drawSkillChips(ctx: ContemporaryBoldPdfContext, colX: number, colW: number, startY: number): number {
   if (!ctx.cv.skills.length) return startY;
   const savedY = ctx.y;
-  ctx.y = startY;
-  cbDrawSectionHeading(ctx, ctx.labels.skills);
+  ctx.y = cbDrawSectionHeadingAt(ctx, ctx.labels.skills, colX, colW, startY);
   const chips = layoutChips(ctx, colW);
   const rowH = ctx.lp.chipRowH;
   let x = colX;
@@ -922,8 +929,7 @@ function drawSkillChips(ctx: ContemporaryBoldPdfContext, colX: number, colW: num
 function drawLanguagesCol(ctx: ContemporaryBoldPdfContext, colX: number, colW: number, startY: number): number {
   if (!ctx.cv.languages.length) return startY;
   const savedY = ctx.y;
-  ctx.y = startY;
-  cbDrawSectionHeading(ctx, ctx.labels.languages);
+  ctx.y = cbDrawSectionHeadingAt(ctx, ctx.labels.languages, colX, colW, startY);
   let rowY = ctx.y;
   for (const lang of ctx.cv.languages) {
     const name = getLocalizedCvLanguageName(lang.name, ctx.locale) || lang.name;
@@ -934,8 +940,7 @@ function drawLanguagesCol(ctx: ContemporaryBoldPdfContext, colX: number, colW: n
       const levelText = `/ ${lang.level}`;
       const levelSpec: StyleSpec = { size: ctx.lp.dateSize, color: MUTED, lh: ctx.lp.langLH };
       applyStyle(ctx, levelSpec, levelText);
-      const lw = pdfI18nCtxTextWidth(ctx, levelText, { size: levelSpec.size, bold: false });
-      drawText(ctx, levelText, colX + colW - lw, rowY + ctx.lp.langSize * 0.32, levelSpec, { align: 'right' });
+      drawText(ctx, levelText, colX + colW, rowY + ctx.lp.langSize * 0.32, levelSpec, { align: 'right' });
     }
     rowY += ctx.lp.langLH;
   }
@@ -969,6 +974,39 @@ export function cbDrawSkillsLanguagesGroup(ctx: ContemporaryBoldPdfContext): voi
   ctx.y = Math.max(skillsEnd, langsEnd);
 }
 
+function measureCertificationsH(ctx: ContemporaryBoldPdfContext): number {
+  if (!ctx.cv.certifications.length) return 0;
+  const layout = buildBulletLayout(ctx);
+  const spec: StyleSpec = { size: ctx.lp.bulletSize, color: BODY_CLR, lh: ctx.lp.bulletLH };
+  return ctx.lp.sectionH + ctx.cv.certifications.reduce((height, certification) => {
+    const lines = wrapLines(ctx, cbNormalizePdfText(certification, ctx.locale), layout.wrapW, spec);
+    return height + cbMeasureBulletHeight(lines.length, ctx.lp.bulletLH) + 0.6;
+  }, 0) + 2;
+}
+
+export function cbDrawCertificationsSection(ctx: ContemporaryBoldPdfContext): void {
+  if (!ctx.cv.certifications.length) return;
+  const layout = buildBulletLayout(ctx);
+  const spec: StyleSpec = { size: ctx.lp.bulletSize, color: BODY_CLR, lh: ctx.lp.bulletLH };
+  const firstLines = wrapLines(
+    ctx,
+    cbNormalizePdfText(ctx.cv.certifications[0]!, ctx.locale),
+    layout.wrapW,
+    spec,
+  );
+  cbFreshPageIfNeeded(
+    ctx,
+    ctx.lp.sectionH + Math.min(cbMeasureBulletHeight(firstLines.length, ctx.lp.bulletLH), ctx.lp.bulletLH * 2),
+  );
+  cbDrawSectionHeading(ctx, ctx.labels.certifications);
+  for (const certification of ctx.cv.certifications) {
+    const lines = wrapLines(ctx, cbNormalizePdfText(certification, ctx.locale), layout.wrapW, spec);
+    cbDrawWrappedBullet(ctx, lines, layout);
+    ctx.y += 0.6;
+  }
+  ctx.y += 1.4;
+}
+
 // ── Lower section measurement + grouping ──────────────────────────────────────
 export function cbMeasureLowerSectionsHeight(ctx: ContemporaryBoldPdfContext): number {
   const hasSkills = ctx.cv.skills.length > 0;
@@ -979,7 +1017,7 @@ export function cbMeasureLowerSectionsHeight(ctx: ContemporaryBoldPdfContext): n
     hasSkills ? measureSkillsH(ctx, skillsW) : 0,
     hasLangs ? measureLangsH(ctx) : 0,
   ) : 0;
-  return eduH + slH;
+  return eduH + slH + measureCertificationsH(ctx);
 }
 
 /**
@@ -994,6 +1032,7 @@ export function cbDrawLowerSections(ctx: ContemporaryBoldPdfContext): void {
   }
   if (ctx.cv.education.length) cbDrawEducationSection(ctx);
   if (ctx.cv.skills.length || ctx.cv.languages.length) cbDrawSkillsLanguagesGroup(ctx);
+  if (ctx.cv.certifications.length) cbDrawCertificationsSection(ctx);
 }
 
 // ── Blob builder ──────────────────────────────────────────────────────────────

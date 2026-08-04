@@ -156,7 +156,7 @@ function drawText(
     color: style.color,
     bold: style.bold,
     rtl: isRtlLocale(ctx.locale),
-    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+    align: extra.align ?? 'left',
   });
 }
 
@@ -929,11 +929,15 @@ function rkDrawCertifications(ctx: RirekishoDirectPdfContext): void {
   rkDrawSectionBar(ctx, '資格・免許');
   const style: Style = { size: 8.5, color: C_TEXT, lineH: LINE };
   for (const cert of ctx.cv.certifications) {
-    const lines = wrap(ctx, `\u30fb${rkNormalizePdfText(cert, ctx.locale)}`, ctx.contentW, style);
-    for (const ln of lines) {
+    // Keep the Japanese list marker separate from the localized run. A mixed
+    // marker+Hindi/Arabic string makes jsPDF choose the marker's font while
+    // splitting, which can collapse the certification text to just "・".
+    const lines = wrap(ctx, cert, ctx.contentW - 5, style);
+    for (const [index, ln] of lines.entries()) {
       rkEnsureSpace(ctx, style.lineH);
+      if (index === 0) drawText(ctx, '\u30fb', ctx.contentX, ctx.y + style.size * 0.32, style);
       applyStyle(ctx, style, ln);
-      drawText(ctx, ln, ctx.contentX, ctx.y + style.size * 0.32, style);
+      drawText(ctx, ln, ctx.contentX + 4, ctx.y + style.size * 0.32, style);
       ctx.y += style.lineH;
     }
   }

@@ -14386,7 +14386,10 @@ function efSetTextStyle(ctx: ElegantFormalDirectPdfContext, style: ElegantFormal
 function efSplitText(ctx: ElegantFormalDirectPdfContext, text: string, maxWidth = ctx.contentWidth, size = 8, bold = false): string[] {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
-  return pdfI18nCtxSplit(ctx, normalized, maxWidth, { size, bold });
+  // jsPDF's split metric can be fractionally narrower than the embedded Noto
+  // glyph run used by pdfI18nCtxDraw. Keep a small deterministic safety gutter
+  // so a line measured at the nominal width cannot bleed over either margin.
+  return pdfI18nCtxSplit(ctx, normalized, Math.max(4, maxWidth - 2), { size, bold });
 }
 function efDrawText(
   ctx: ElegantFormalDirectPdfContext,
@@ -14428,12 +14431,15 @@ function efMoveToFreshPageIfNeeded(ctx: ElegantFormalDirectPdfContext, blockHeig
   }
 }
 
-function efCenteredX(ctx: ElegantFormalDirectPdfContext, text: string, size = 9, bold = false): number {
-  return (ctx.pageWidth - pdfI18nCtxTextWidth(ctx, text, { size, bold })) / 2;
+function efCenteredX(ctx: ElegantFormalDirectPdfContext, _text: string, _size = 9, _bold = false): number {
+  // pdfI18nCtxDraw(..., { align: 'center' }) expects the geometric centre,
+  // not the precomputed left edge. Passing the left edge double-shifts long
+  // lines off-page.
+  return ctx.pageWidth / 2;
 }
 
-function efCenteredXInColumn(ctx: ElegantFormalDirectPdfContext, text: string, colX: number, colW: number, size = 9, bold = false): number {
-  return colX + (colW - pdfI18nCtxTextWidth(ctx, text, { size, bold })) / 2;
+function efCenteredXInColumn(_ctx: ElegantFormalDirectPdfContext, _text: string, colX: number, colW: number, _size = 9, _bold = false): number {
+  return colX + colW / 2;
 }
 
 function efSectionHeadingHeight(withRule = false): number {
@@ -14537,8 +14543,7 @@ function efDrawHeader(ctx: ElegantFormalDirectPdfContext, cv: CVData, photoDataU
   const centerColW = showPhoto
     ? ctx.contentWidth - EF_PHOTO_W_MM - EF_HEADER_GAP_MM - EF_PHOTO_W_MM
     : ctx.contentWidth;
-  const centerOfCol = (text: string, size: number, bold = false) =>
-    centerColX + (centerColW - pdfI18nCtxTextWidth(ctx, text, { size, bold })) / 2;
+  const centerOfCol = (_text: string, _size: number, _bold = false) => centerColX + centerColW / 2;
 
   let textY = headerTop + 4;
   const nameStyle: ElegantFormalTextStyle = { size: 22, color: EF_NAME, fontStyle: 'normal', lineHeight: 5.5 };
@@ -14581,7 +14586,7 @@ function efDrawSummary(ctx: ElegantFormalDirectPdfContext, summary: string): voi
   efDrawSectionHeading(ctx, ctx.labels.summary);
   const style: ElegantFormalTextStyle = { size: 9.5, color: EF_SUMMARY, fontStyle: 'italic', lineHeight: 4.2 };
   blocks.forEach((block, i) => {
-    efDrawCenteredLines(ctx, efSplitText(ctx, block, ctx.contentWidth), style);
+    efDrawCenteredLines(ctx, efSplitText(ctx, block, ctx.contentWidth, style.size), style);
     if (i < blocks.length - 1) ctx.y += 2;
   });
   ctx.y += 3.5;
@@ -14598,13 +14603,16 @@ function efExperienceDescriptionParts(
     .map((part) => {
       const cleaned = part.replace(/^(?:[-•*]|\d+\.)\s+/, '');
       const isBullet = cleaned !== part;
-      const bulletIndent = isBullet ? 5 : 0;
-      return { isBullet, lines: efSplitText(ctx, cleaned, ctx.contentWidth - bulletIndent) };
+      // Reserve both the 4 mm hanging indent and the rendered bullet marker.
+      // Measuring with only the indent lets the first line extend slightly past
+      // the right margin even though the cleaned text itself fits.
+      const bulletIndent = isBullet ? 8 : 0;
+      return { isBullet, lines: efSplitText(ctx, cleaned, ctx.contentWidth - bulletIndent, 9.5) };
     });
 }
 
 function efExperienceLeadBlockHeight(ctx: ElegantFormalDirectPdfContext, entry: CVData['experience'][number]): number {
-  const titleLines = efSplitText(ctx, entry.position);
+  const titleLines = efSplitText(ctx, entry.position, ctx.contentWidth, 10, true);
   const headerH = Math.max(4.0, titleLines.length * 4.0) + 3.5 + 1.5;
   const parts = efExperienceDescriptionParts(ctx, entry);
   const bulletParts = parts.filter(p => p.isBullet);
@@ -14642,7 +14650,7 @@ function efDrawExperienceEntryPaginated(ctx: ElegantFormalDirectPdfContext, entr
   const freshCap = efFreshPageCapacity(ctx);
 
   const drawHeader = () => {
-    const titleLines = efSplitText(ctx, entry.position);
+    const titleLines = efSplitText(ctx, entry.position, ctx.contentWidth, 10, true);
     const titleLineH = 4.0;
     const headerBlockH = Math.max(titleLineH, titleLines.length * titleLineH);
     efEnsureSpace(ctx, headerBlockH);
@@ -14656,7 +14664,7 @@ function efDrawExperienceEntryPaginated(ctx: ElegantFormalDirectPdfContext, entr
       efDrawText(ctx, dateText, ctx.pageWidth - ctx.marginRight, ctx.y - titleLineH + 0.5, dateStyle, { align: 'right' });
     }
     if (entry.company) {
-      efDrawLinesBlock(ctx, efSplitText(ctx, entry.company), { size: 9, color: EF_AMBER, lineHeight: 3.5 });
+      efDrawLinesBlock(ctx, efSplitText(ctx, entry.company, ctx.contentWidth, 9), { size: 9, color: EF_AMBER, lineHeight: 3.5 });
     } else {
       ctx.y += 1;
     }
@@ -14715,7 +14723,7 @@ function efDrawExperience(ctx: ElegantFormalDirectPdfContext, cv: CVData): void 
 }
 
 function efEducationEntryHeight(ctx: ElegantFormalDirectPdfContext, edu: CVData['education'][number]): number {
-  const degreeLines = efSplitText(ctx, edu.degree);
+  const degreeLines = efSplitText(ctx, edu.degree, ctx.contentWidth, 10, true);
   const degreeH = Math.max(4.0, degreeLines.length * 4.0);
   const metaH = (edu.school || edu.startDate || edu.endDate) ? 3.5 : 0;
   return degreeH + metaH + 2;
@@ -14733,7 +14741,7 @@ function efDrawEducationEntry(ctx: ElegantFormalDirectPdfContext, edu: CVData['e
   efMoveToFreshPageIfNeeded(ctx, entryH);
   efDrawCenteredLines(
     ctx,
-    efSplitText(ctx, edu.degree),
+    efSplitText(ctx, edu.degree, ctx.contentWidth, 10, true),
     { size: 10, color: EF_TEXT, fontStyle: 'bold', lineHeight: 4.0 },
   );
   const dateParts = [edu.startDate, edu.endDate].filter(Boolean).join(' - ');
@@ -14741,7 +14749,7 @@ function efDrawEducationEntry(ctx: ElegantFormalDirectPdfContext, edu: CVData['e
   if (metaText) {
     efDrawCenteredLines(
       ctx,
-      efSplitText(ctx, metaText),
+      efSplitText(ctx, metaText, ctx.contentWidth, 9),
       { size: 9, color: EF_EDU_META, lineHeight: 3.5 },
     );
   }
@@ -14786,6 +14794,14 @@ function efLayoutInlineItems(ctx: ElegantFormalDirectPdfContext, items: string[]
 
   for (const item of items) {
     const itemW = pdfI18nCtxTextWidth(ctx, item, { size: 9 });
+    if (itemW > colW) {
+      flush();
+      for (const line of efSplitText(ctx, item, colW, 9)) {
+        rows.push({ items: [line], y: rowY, height: lineH });
+        rowY += lineH + gapY;
+      }
+      continue;
+    }
     const nextW = rowWidth > 0 ? rowWidth + gapX + itemW : itemW;
     if (rowItems.length > 0 && nextW > colW) flush();
     rowWidth = rowItems.length > 0 ? rowWidth + gapX + itemW : itemW;
@@ -15072,8 +15088,8 @@ function atsMoveToFreshPageIfNeeded(ctx: AtsStandardDirectPdfContext, blockHeigh
   }
 }
 
-function atsCenteredX(ctx: AtsStandardDirectPdfContext, text: string, size = 8, bold = false): number {
-  return (ctx.pageWidth - pdfI18nCtxTextWidth(ctx, text, { size, bold })) / 2;
+function atsCenteredX(ctx: AtsStandardDirectPdfContext, _text: string, _size = 8, _bold = false): number {
+  return ctx.pageWidth / 2;
 }
 
 function atsSectionHeadingHeight(): number {

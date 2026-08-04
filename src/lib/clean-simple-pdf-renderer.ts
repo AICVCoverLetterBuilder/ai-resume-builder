@@ -172,7 +172,7 @@ function drawText(
     color: style.color,
     bold: style.bold,
     rtl: isRtlLocale(ctx.locale),
-    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+    align: extra.align ?? 'left',
   });
 }
 
@@ -451,8 +451,7 @@ function drawExperienceLead(ctx: CleanSimplePdfContext, entry: CVData['experienc
   if (date) {
     const dateStyle: TextStyle = { size: 7.1, color: LIGHT, lineH: 3.5 };
     applyStyle(ctx, dateStyle, date);
-    const dateW = pdfI18nCtxTextWidth(ctx, date, { size: dateStyle.size, bold: false });
-    drawText(ctx, date, ctx.contentX + ctx.contentW - dateW, startY + 3.2, dateStyle, { align: 'right' });
+    drawText(ctx, date, ctx.contentX + ctx.contentW, startY + 3.2, dateStyle, { align: 'right' });
   }
 
   ctx.y = lineY + 1.6;
@@ -577,8 +576,7 @@ function drawEducationEntry(ctx: CleanSimplePdfContext, edu: CVData['education']
   if (dateText) {
     const dateStyle: TextStyle = { size: 7.1, color: LIGHT, lineH: 3.5 };
     applyStyle(ctx, dateStyle, dateText);
-    const dateW = pdfI18nCtxTextWidth(ctx, dateText, { size: dateStyle.size, bold: false });
-    drawText(ctx, dateText, ctx.contentX + ctx.contentW - dateW, startY + 3.2, dateStyle, { align: 'right' });
+    drawText(ctx, dateText, ctx.contentX + ctx.contentW, startY + 3.2, dateStyle, { align: 'right' });
   }
   ctx.y = lineY + 0.3;
 

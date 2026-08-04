@@ -151,7 +151,7 @@ function drawText(
     color: style.color,
     bold: style.bold,
     rtl: isRtlLocale(ctx.locale),
-    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+    align: extra.align ?? 'left',
   });
 }
 
@@ -450,8 +450,7 @@ function drawExperienceLead(
   if (date) {
     const dateStyle: Style = { size: 8.2, color: MUTED, lineH: 3.2 };
     applyStyle(ctx, dateStyle, date);
-    const dw = pdfI18nCtxTextWidth(ctx, date, { size: dateStyle.size, bold: false });
-    drawText(ctx, date, ctx.contentX + ctx.contentW - dw, startY + 3, dateStyle, { align: 'right' });
+    drawText(ctx, date, ctx.contentX + ctx.contentW, startY + 3, dateStyle, { align: 'right' });
   }
 
   if (entry.company) {
@@ -582,8 +581,7 @@ export function cnDrawEducationSection(ctx: CorporateNavyDirectPdfContext): void
     if (date) {
       const dateStyle: Style = { size: 8.2, color: MUTED, lineH: 3.2 };
       applyStyle(ctx, dateStyle, date);
-      const dw = pdfI18nCtxTextWidth(ctx, date, { size: dateStyle.size, bold: false });
-      drawText(ctx, date, ctx.contentX + ctx.contentW - dw, ctx.y + 3, dateStyle, { align: 'right' });
+      drawText(ctx, date, ctx.contentX + ctx.contentW, ctx.y + 3, dateStyle, { align: 'right' });
     }
     ctx.y += 4.2;
 
@@ -705,8 +703,7 @@ function drawLanguagesInColumn(
       const levelStyle: Style = { size: 8.5, color: MUTED, lineH: 3.6 };
       const levelText = `/ ${localizeCvLanguageLevel(lang.level, ctx.locale)}`;
       applyStyle(ctx, levelStyle, levelText);
-      const lw = pdfI18nCtxTextWidth(ctx, levelText, { size: levelStyle.size, bold: false });
-      drawText(ctx, levelText, colX + colW - lw, rowY + 2.8, levelStyle, { align: 'right' });
+      drawText(ctx, levelText, colX + colW, rowY + 2.8, levelStyle, { align: 'right' });
     }
     rowY += 4.2;
   }

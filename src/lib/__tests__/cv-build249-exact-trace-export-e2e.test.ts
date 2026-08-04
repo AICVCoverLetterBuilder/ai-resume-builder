@@ -18,13 +18,10 @@ import {
   buildAndStoreCvExportDiagnostic,
   classifyBulletScript,
   clearCvExportDiagnosticsForTests,
-  buildExportReadySnapshotId,
-  fingerprintText,
 } from '@/lib/cv-export-diagnostics';
-import { exportModernMinimalPdf, exportToDOCX } from '@/lib/export';
 import { validateMaterialDutyCoverage } from '@/lib/cv-material-duty-coverage';
 import { buildConciseGroundedSummary } from '@/lib/cv-summary-grounding';
-import { prepareExportReadyCv } from '@/lib/prepare-export-ready-cv';
+import { prepareExportReadyCv, unwrapExportReadyCv } from '@/lib/prepare-export-ready-cv';
 
 const REF = '2026-07-17';
 const EN_SHELLS = [
@@ -181,153 +178,111 @@ describe('Build 249 exact diagnostic-trace export fix', () => {
     expect(coverage.missing).not.toContain('kitchen_collaboration');
   });
 
-  it('prepareExportReadyCv projects Hindi Experience + Summary with all three facts', () => {
+  it('prepareExportReadyCv fails closed on the unsupported generated Summary without mutating source state', () => {
     const raw = exactTraceFixture();
-    const canonicalBefore = raw.experience[0].canonicalDescription;
-    const originalBefore = raw.experience[0].originalUserDescription;
-    const snapshotBefore = JSON.stringify(raw.canonicalSnapshot);
+    const sourceBefore = JSON.stringify(raw);
+    const usageBefore = localStorage.getItem('cvpro-ai-usage');
+    localStorage.setItem('cvpro-cvs', 'persisted-cv-sentinel');
+    const persistedBefore = localStorage.getItem('cvpro-cvs');
 
     const prepared = prepareExportReadyCv(raw, 'hi', 'modern-minimal', {
       gender: 'female',
       referenceDate: REF,
     });
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) return;
-
-    const scripts = splitExperienceBullets(prepared.cv.experience[0].description)
-      .map(classifyBulletScript);
-    expect(scripts.every((s) => s === 'hi')).toBe(true);
-    expect(scripts.some((s) => s === 'en')).toBe(false);
-    expect(scripts.length).toBeGreaterThanOrEqual(2);
-    expect(scripts.length).toBeLessThanOrEqual(3);
-
-    const desc = prepared.cv.experience[0].description;
-    expect(desc).toMatch(/व्यंजन|तैयार/);
-    expect(desc).toMatch(/स्वच्छ/);
-    expect(desc).toMatch(/रसोई|सहयोग/);
-
-    expect(prepared.diagnostics.summarySemanticDutyKeys).toEqual([...SEMANTIC_KEYS]);
-    expect(prepared.diagnostics.summaryFactSetSource).toBe('semantic_duties');
-    expect(prepared.cv.contentLocale).toBe('hi');
-    expect(prepared.cv.summaryGeneratedLocale).toBe('hi');
-    // Historical provenance locale may remain sr on the stored experience.
-    expect(prepared.cv.experience[0].generatedLocale).toBe('sr');
-    expect(prepared.cv.summary).toMatch(/रसोई टीम के साथ सहयोग|सहयोग करती हूँ/);
-    expect(prepared.cv.summary).not.toMatch(/\bI am a Baker\b/);
-
-    // Canonical user facts unchanged.
-    expect(prepared.cv.experience[0].canonicalDescription).toBe(canonicalBefore);
-    expect(prepared.cv.experience[0].originalUserDescription).toBe(originalBefore);
-    expect(JSON.stringify(prepared.cv.canonicalSnapshot)).toBe(snapshotBefore);
-
-    expect(prepared.diagnostics.summaryInitialValid).toBe(false);
-    expect(prepared.diagnostics.summaryInitialReason).toBe('mixed_locale_summary');
-    expect(prepared.diagnostics.summaryRecoverySource).toBe('deterministic_semantic_facts');
+    expect(prepared).toMatchObject({
+      ok: false,
+      reason: 'summary_unsupported_domain_claims',
+      stage: 'validate_summary',
+      diagnostics: {
+        selectedTemplateId: 'modern-minimal',
+        requestedLocale: 'hi',
+        experienceCount: 1,
+        stage: 'validate_summary',
+      },
+    });
+    expect('cv' in prepared).toBe(false);
+    expect(JSON.stringify(raw)).toBe(sourceBefore);
+    expect(raw.summary).toBe(SUMMARY_EN);
+    expect(raw.experience[0].description).toBe(EN_DISPLAY);
+    expect(localStorage.getItem('cvpro-ai-usage')).toBe(usageBefore);
+    expect(localStorage.getItem('cvpro-cvs')).toBe(persistedBefore);
   });
 
-  it('PDF and DOCX share one exportReadySnapshotId and produce non-empty blobs', async () => {
+  it('typed rejection prevents both PDF and DOCX rendering and preserves usage/persistence', () => {
     const raw = exactTraceFixture();
+    const sourceBefore = JSON.stringify(raw);
     const aiBefore = localStorage.getItem('cvpro-ai-usage');
+    localStorage.setItem('cvpro-cvs', 'persisted-cv-sentinel');
+    const persistedBefore = localStorage.getItem('cvpro-cvs');
+    const blobs = mockDownload();
     const prepared = prepareExportReadyCv(raw, 'hi', 'modern-minimal', {
       gender: 'female',
       referenceDate: REF,
     });
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) return;
-
-    const blobs = mockDownload();
-    const pdfSave = await exportModernMinimalPdf(prepared.cv, 'trace-249', 'hi');
-    expect(pdfSave.result === 'saved' || pdfSave.result === 'shared' || pdfSave.result === 'downloaded').toBe(true);
-    const pdfBlob = blobs[blobs.length - 1];
-    expect(pdfBlob).toBeInstanceOf(Blob);
-    expect(pdfBlob.size).toBeGreaterThan(0);
-
-    const docxBefore = blobs.length;
-    const docxSave = await exportToDOCX(prepared.cv, 'trace-249', 'hi');
-    expect(docxSave.result === 'saved' || docxSave.result === 'shared' || docxSave.result === 'downloaded').toBe(true);
-    expect(blobs.length).toBeGreaterThan(docxBefore);
-    const docxBlob = blobs[blobs.length - 1];
-    expect(docxBlob).toBeInstanceOf(Blob);
-    expect(docxBlob.size).toBeGreaterThan(0);
+    expect(prepared).toMatchObject({
+      ok: false,
+      reason: 'summary_unsupported_domain_claims',
+      stage: 'validate_summary',
+    });
+    expect(() => unwrapExportReadyCv(prepared)).toThrow(
+      'summary_unsupported_domain_claims @ validate_summary',
+    );
 
     const pdfTrace = buildAndStoreCvExportDiagnostic({
       format: 'pdf',
       locale: 'hi',
       rawCv: raw,
       prepared,
-      rendererReached: true,
-      blobProduced: true,
-      blobSize: pdfBlob.size,
-      androidSaveReached: true,
-      saveResult: pdfSave,
+      rendererReached: false,
+      blobProduced: false,
+      androidSaveReached: false,
     });
     const docxTrace = buildAndStoreCvExportDiagnostic({
       format: 'docx',
       locale: 'hi',
       rawCv: raw,
       prepared,
-      rendererReached: true,
-      blobProduced: true,
-      blobSize: docxBlob.size,
-      androidSaveReached: true,
-      saveResult: docxSave,
+      rendererReached: false,
+      blobProduced: false,
+      androidSaveReached: false,
     });
 
-    expect(pdfTrace.exportReadySnapshotId).toBe(docxTrace.exportReadySnapshotId);
-    expect(pdfTrace.exportReadySnapshotId).toBeTruthy();
-    expect(pdfTrace.experiences[0].finalBulletScripts.every((s) => s === 'hi')).toBe(true);
-    expect(pdfTrace.summaryGeneratedLocale).toBe('hi');
-    expect(pdfTrace.contentLocale).toBe('hi');
-    expect(pdfTrace.summarySemanticFactKeys).toEqual([...SEMANTIC_KEYS]);
-    expect(pdfTrace.ok).toBe(true);
-    expect(pdfTrace.rendererReached).toBe(true);
-    expect(pdfTrace.blobProduced).toBe(true);
-
-    // validate_summary must not be ok when initial reason was mixed_locale_summary
+    expect(pdfTrace.ok).toBe(false);
+    expect(pdfTrace.rendererReached).toBe(false);
+    expect(pdfTrace.blobProduced).toBe(false);
+    expect(docxTrace.ok).toBe(false);
+    expect(docxTrace.rendererReached).toBe(false);
+    expect(docxTrace.blobProduced).toBe(false);
     const validateStage = pdfTrace.stages.find((s) => s.stage === 'validate_summary');
     expect(validateStage?.result).toBe('fail');
-    expect(validateStage?.reason).toBe('mixed_locale_summary');
-    const recoverStage = pdfTrace.stages.find((s) => s.stage === 'recover_summary');
-    expect(recoverStage?.result).toBe('ok');
-
+    expect(validateStage?.reason).toBe('summary_unsupported_domain_claims');
+    expect(blobs).toEqual([]);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(JSON.stringify(raw)).toBe(sourceBefore);
     expect(localStorage.getItem('cvpro-ai-usage')).toBe(aiBefore);
-
-    // Snapshot id formula sanity
-    const expectedId = buildExportReadySnapshotId({
-      templateId: 'modern-minimal',
-      locale: 'hi',
-      runtimeMigrationVersion: 3,
-      experienceCount: 1,
-      summaryHash: fingerprintText(prepared.cv.summary || ''),
-      dutyKeys: [...SEMANTIC_KEYS],
-    });
-    expect(pdfTrace.exportReadySnapshotId).toBe(expectedId);
+    expect(localStorage.getItem('cvpro-cvs')).toBe(persistedBefore);
   });
 
-  it('50× cold exact-trace prepare+PDF+DOCX with zero flakes', async () => {
+  it('50× cold exact-trace preparation deterministically fails closed with zero exports', () => {
+    const blobs = mockDownload();
+    const usageBefore = localStorage.getItem('cvpro-ai-usage');
     for (let i = 0; i < 50; i += 1) {
       clearCvExportDiagnosticsForTests();
       const raw = exactTraceFixture();
+      const sourceBefore = JSON.stringify(raw);
       const prepared = prepareExportReadyCv(raw, 'hi', 'modern-minimal', {
         gender: 'female',
         referenceDate: REF,
       });
-      expect(prepared.ok, `run ${i} prepare`).toBe(true);
-      if (!prepared.ok) return;
-
-      const scripts = splitExperienceBullets(prepared.cv.experience[0].description)
-        .map(classifyBulletScript);
-      expect(scripts.every((s) => s === 'hi'), `run ${i} scripts`).toBe(true);
-      expect(prepared.cv.contentLocale).toBe('hi');
-      expect(prepared.cv.summaryGeneratedLocale).toBe('hi');
-      expect(prepared.cv.summary).toMatch(/सहयोग/);
-      expect(prepared.diagnostics.summarySemanticDutyKeys).toEqual([...SEMANTIC_KEYS]);
-
-      const blobs = mockDownload();
-      await exportModernMinimalPdf(prepared.cv, `trace-249-${i}`, 'hi');
-      expect(blobs[blobs.length - 1]?.size, `run ${i} pdf`).toBeGreaterThan(0);
-      await exportToDOCX(prepared.cv, `trace-249-${i}`, 'hi');
-      expect(blobs[blobs.length - 1]?.size, `run ${i} docx`).toBeGreaterThan(0);
+      expect(prepared, `run ${i} prepare`).toMatchObject({
+        ok: false,
+        reason: 'summary_unsupported_domain_claims',
+        stage: 'validate_summary',
+      });
+      expect(JSON.stringify(raw), `run ${i} source`).toBe(sourceBefore);
     }
+    expect(blobs).toEqual([]);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(localStorage.getItem('cvpro-ai-usage')).toBe(usageBefore);
   }, 180_000);
 });

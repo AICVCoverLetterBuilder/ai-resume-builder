@@ -169,7 +169,7 @@ function drawText(
     color: style.color,
     bold: style.bold,
     rtl: isRtlLocale(ctx.locale),
-    align: extra.align ?? (isRtlLocale(ctx.locale) ? 'right' : 'left'),
+    align: extra.align ?? 'left',
   });
 }
 

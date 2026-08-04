@@ -251,22 +251,32 @@ describe('Build 252 Baker→Pharmacist Summary + export', () => {
     );
 
     // Export-only path (no prior Experience apply) must also drop Baker Summary.
-    const exportOnly = prepareExportReadyCv(device252Cv(), 'sr', 'modern-minimal', {
+    const exportOnlySource = device252Cv();
+    const exportOnlySourceBefore = JSON.stringify(exportOnlySource);
+    const exportOnlyUsageBefore = getProAiUsageCount();
+    localStorage.setItem('cvpro-cvs', 'persisted-cv-sentinel');
+    const persistedBefore = localStorage.getItem('cvpro-cvs');
+    const exportOnly = prepareExportReadyCv(exportOnlySource, 'sr', 'modern-minimal', {
       gender: 'female',
       referenceDate: '2026-07-18',
     });
-    if (!summaryV2ModeActive()) {
-      expect(exportOnly.ok).toBe(true);
-    } else {
-      expect(typeof exportOnly.ok).toBe('boolean');
-    }
-    if (exportOnly.ok) {
-      assertNoCooking(exportOnly.cv.summary, 'export-only-sum');
-      expect(exportOnly.diagnostics.staleSummaryExcluded).toBe(true);
-      expect(exportOnly.diagnostics.summaryFactKeysUsed || []).not.toContain(
-        'food_preparation_restaurant_standards',
-      );
-    }
+    expect(exportOnly).toMatchObject({
+      ok: false,
+      reason: 'summary_unsupported_domain_claims',
+      stage: 'validate_summary',
+      diagnostics: {
+        selectedTemplateId: 'modern-minimal',
+        requestedLocale: 'sr',
+        experienceCount: 1,
+        stage: 'validate_summary',
+      },
+    });
+    expect('cv' in exportOnly).toBe(false);
+    expect(JSON.stringify(exportOnlySource)).toBe(exportOnlySourceBefore);
+    expect(exportOnlySource.summary).toBe(SR_COOKING_SUMMARY);
+    expect(textLooksLikeCookingDuties(exportOnlySource.summary)).toBe(true);
+    expect(getProAiUsageCount()).toBe(exportOnlyUsageBefore);
+    expect(localStorage.getItem('cvpro-cvs')).toBe(persistedBefore);
 
     const pdf = await buildModernMinimalPdfBlob(prepared.cv, 'sr');
     const docx = await exportToDOCX(prepared.cv, 'apotekar-252', 'sr', 'modern-minimal');
