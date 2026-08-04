@@ -218,7 +218,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener(AI_USAGE_RESET_EVENT, onReset);
   }, []);
   // Timestamps for "Draft saved" indicator
-  const [lastCvSavedAt, setLastCvSavedAt] = useState<number>(() => (currentCv ? Date.now() : 0));
+  // The server cannot see a persisted browser draft. Keep the first client
+  // render identical to SSR; real saves update this timestamp below.
+  const [lastCvSavedAt, setLastCvSavedAt] = useState<number>(0);
   const [lastClSavedAt, setLastClSavedAt] = useState<number>(() => (currentCoverLetter ? Date.now() : 0));
   const [tokenSyncLastResult, setTokenSyncLastResult] = useState<TokenSyncResult | 'not-run'>('not-run');
   const isProRef = useRef(isPro);
