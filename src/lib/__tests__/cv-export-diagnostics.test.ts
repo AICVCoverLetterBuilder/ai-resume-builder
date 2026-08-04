@@ -232,6 +232,68 @@ describe('CV export diagnostics (non-PII)', () => {
     expect(key3).toBe('SUMMARY_FACTS_REVIEW');
   });
 
+  it('records source-bound Experience localization without prose and maps every typed failure to Experience review', () => {
+    const raw = legacyMm();
+    const prepared = prepareExportReadyCv(raw, 'hi', 'modern-minimal', {
+      gender: 'female',
+      referenceDate: REF,
+    });
+    const trace = buildAndStoreCvExportDiagnostic({
+      format: 'pdf',
+      locale: 'hi',
+      rawCv: raw,
+      prepared,
+      experienceLocalization: {
+        exportSnapshotId: 'fnv1a_snapshot_l42',
+        experienceEntryCount: 2,
+        sourceClauseCount: 6,
+        sourceLocaleByEntry: { fnv1a_entry_a_l12: 'de', fnv1a_entry_b_l13: 'de' },
+        sourceLocaleResolutionByEntry: {
+          fnv1a_entry_a_l12: 'deterministic_detector',
+          fnv1a_entry_b_l13: 'matching_canonical_snapshot',
+        },
+        targetLocale: 'es',
+        surfaceHitCount: 0,
+        missingSurfaceCount: 6,
+        providerRequestCount: 2,
+        providerRepairCount: 1,
+        independentVerifierRequestCount: 1,
+        returnedRecordCount: 6,
+        validatedRecordCount: 0,
+        independentlyValidatedRecordCount: 0,
+        independentlyRejectedRecordCount: 6,
+        independentValidatorVersion: 'experience-localization-independent-validator-399-v2',
+        semanticMismatchCategory: 'work_domain_mismatch',
+        identityMismatch: false,
+        candidateHashMismatch: false,
+        persistedSurfaceCount: 0,
+        cacheReuseCount: 0,
+        staleResponseRejected: false,
+        failureStage: 'validate_localized_surfaces',
+        failureReason: 'experience_localization_independent_semantic_validation_failed',
+      },
+      finalError: { reason: 'experience_localization_independent_semantic_validation_failed' },
+    });
+
+    expect(trace.experienceLocalization).toMatchObject({
+      exportSnapshotId: 'fnv1a_snapshot_l42',
+      providerRequestCount: 2,
+      providerRepairCount: 1,
+      usageDelta: 0,
+    });
+    expect(trace.stages).toContainEqual({
+      stage: 'validate_localized_experience_surfaces',
+      result: 'fail',
+      reason: 'experience_localization_independent_semantic_validation_failed',
+    });
+    expect(trace.rendererReached).toBe(false);
+    expect(trace.blobProduced).toBe(false);
+    expect(trace.toastMappingKey).toBe('EXPERIENCE_FACTS_REVIEW');
+    expect(resolveCvExportToastMappingKey('experience_localization_provider_failed', 'docx'))
+      .toBe('EXPERIENCE_FACTS_REVIEW');
+    expect(assertDiagnosticHasNoCvText(trace)).toEqual([]);
+  });
+
   it('7–8. copying diagnostics does not consume AI usage and does not mutate CV', async () => {
     const raw = legacyMm({
       experience: [{

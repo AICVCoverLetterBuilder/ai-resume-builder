@@ -155,7 +155,7 @@ function isSummaryFactsReason(reason: string): boolean {
 }
 
 function isExperienceFactsReason(reason: string): boolean {
-  return /legacy_export_recovery_no_safe_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|semantic_duty_fact_set_empty|legacy_user_origin_recovery_/i.test(reason);
+  return /legacy_export_recovery_no_safe_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|semantic_duty_fact_set_empty|legacy_user_origin_recovery_|experience_localization_/i.test(reason);
 }
 
 function isLegacySnapshotReason(reason: string): boolean {

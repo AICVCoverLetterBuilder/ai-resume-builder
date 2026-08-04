@@ -591,6 +591,7 @@ export function applyCanonicalExperienceEdit(
         ...e,
         description: value,
         descriptionOrigin: nextOrigin,
+        descriptionSourceLocale: uiLocale,
         // New user-authored duties become genuine grounding (keep generatedDescription
         // as historical AI display only — do not delete it merely for selection).
         originalUserDescription: materialEdit || !prevOriginal ? value : e.originalUserDescription,

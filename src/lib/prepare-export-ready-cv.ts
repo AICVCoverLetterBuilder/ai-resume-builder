@@ -36,6 +36,7 @@ import {
   internalShellsFromSemanticDuties,
   LEGACY_USER_ORIGIN_DUTIES,
   resolveExperienceSemanticGrounding,
+  recoveredUserOriginNeedsSourceBoundLocalization,
   semanticDutyKeys,
   type ExperienceSemanticGrounding,
   type SemanticDutyKey,
@@ -58,6 +59,7 @@ import {
   validateMaterialDutyCoverage,
 } from './cv-material-duty-coverage';
 import { validateSourceFactIdentityCoverage } from './cv-source-fact-identity';
+import { projectExperienceFromLocalizedSurfaces } from './cv-experience-localized-surfaces';
 
 function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | 'empty' {
   const t = (bullet || '').trim();
@@ -259,6 +261,15 @@ function projectExperienceDisplayFromSemanticDuties(
   exportContext?: { industry?: string; level?: string },
 ): string {
   const current = (exp.description || '').trim();
+  if (grounding.source === 'user_origin_recovered') {
+    const sourceBoundProjection = projectExperienceFromLocalizedSurfaces({
+      cv,
+      exp,
+      grounding,
+      targetLocale: requestedLocale,
+    });
+    if (sourceBoundProjection !== null) return sourceBoundProjection;
+  }
   const jobCtx = buildExperienceJobContext({
     position: exp.position || cv.personal?.jobTitle,
     locale: requestedLocale,
@@ -658,6 +669,33 @@ export function prepareExportReadyCv(
   }
 
   stage = 'produce_localized_display';
+  // Exact recovered manual clauses may be projected cross-locale only from a
+  // validated persisted surface whose immutable binding still matches.
+  const unboundCrossLocaleUserOrigin = (cv.experience || []).find((exp) => {
+    const grounding = groundingById.get(exp.id);
+    if (!grounding || !recoveredUserOriginNeedsSourceBoundLocalization(
+      grounding,
+      requestedLocale,
+    )) return false;
+    return projectExperienceFromLocalizedSurfaces({
+      cv,
+      exp,
+      grounding,
+      targetLocale: requestedLocale,
+    }) === null;
+  });
+  if (unboundCrossLocaleUserOrigin) {
+    const diagnostics = baseDiagnostics();
+    diagnostics.recoveryInvoked = recoveryInvoked;
+    diagnostics.runtimeMigrationVersion = cv.runtimeMigrationVersion;
+    diagnostics.experienceProvenance = buildProvenanceRows(cv, groundingById);
+    diagnostics.summarySemanticDutyKeys = [...new Set(allKeys)];
+    return fail(
+      'experience_localization_source_binding_missing',
+      stage,
+      diagnostics,
+    );
+  }
   // Fail closed on impure AI-managed units before any export rewrite/projection.
   {
     const preIntegrity = auditCvExportIntegrity(cv, requestedLocale, {

@@ -6,6 +6,12 @@ import { splitExperienceBullets } from './cv-canonical-facts';
 import { classifyMaterialDutyKeys, type MaterialDutyKey } from './cv-material-duty-coverage';
 import type { CanonicalCvSnapshot } from './cv-canonical-snapshot';
 import type { WorkExperience } from './types';
+import { isCrossLocaleOperation } from './cv-content-locale';
+import type { Locale } from './i18n/translations';
+import {
+  resolveExperienceSourceLocale,
+  type ExperienceSourceLocaleResolution,
+} from './cv-experience-source-locale';
 
 export type SemanticDutyKey =
   | 'food_preparation_restaurant_standards'
@@ -30,6 +36,12 @@ export type RecoveredSemanticDuty = {
   sourceClauseHash?: string;
   /** Canonical snapshot fact ID aligned to this clause, when a snapshot exists. */
   sourceFactId?: string;
+  /** Stable Experience owner; required to prevent cross-entry clause reuse. */
+  experienceId?: string;
+  /** Locale resolved from this entry's current authoritative source. */
+  sourceLocale?: string;
+  /** Evidence path used to resolve the source locale. */
+  sourceLocaleResolution?: ExperienceSourceLocaleResolution;
 };
 
 export type ExperienceSemanticGrounding = {
@@ -108,8 +120,8 @@ function explicitUserOrigin(origin: WorkExperience['descriptionOrigin'] | string
 
 /**
  * Recover arbitrary user-entered duties without interpreting or inventing them.
- * Every recovered duty is the exact original clause, aligned by index to a
- * canonical description and (when present) a valid canonical snapshot entry.
+ * Every recovered duty is the current visible manual clause. Legacy original
+ * and canonical data is evidence only; it cannot replace a differing clause.
  */
 export function recoverSemanticDutiesFromUserOrigin(
   exp: WorkExperience,
@@ -137,6 +149,11 @@ export function recoverSemanticDutiesFromUserOrigin(
       recoveryFailureReason: 'legacy_user_origin_recovery_bullet_mapping_failed',
     };
   }
+
+  // AAB-399: current explicit user/manual content is authoritative. A legacy
+  // original/canonical surface may have the same bullet count while belonging
+  // to a previous occupation. Such equal-length stale content must never
+  // replace the current visible clauses.
 
   let snapshotFactIds: string[] = [];
   let snapshotClauses: string[] = [];
@@ -167,23 +184,11 @@ export function recoverSemanticDutiesFromUserOrigin(
       };
     }
     snapshotClauses = orderedBullets.map((bullet) => bullet.sourceText);
-    snapshotFactIds = orderedBullets.map((bullet) => bullet.factId);
-    if (!clausesMatchExactly(original, snapshotClauses)) {
-      return {
-        source: 'none',
-        duties: [],
-        recoveryFailureReason: 'legacy_user_origin_recovery_snapshot_mismatch',
-      };
+    if (clausesMatchExactly(visible, snapshotClauses)) {
+      snapshotFactIds = orderedBullets.map((bullet) => bullet.factId);
     }
   }
 
-  if (canonical.length > 0 && !clausesMatchExactly(original, canonical)) {
-    return {
-      source: 'none',
-      duties: [],
-      recoveryFailureReason: 'legacy_user_origin_recovery_canonical_mismatch',
-    };
-  }
   if (canonical.length === 0 && snapshotClauses.length === 0) {
     return {
       source: 'none',
@@ -192,18 +197,37 @@ export function recoverSemanticDutiesFromUserOrigin(
     };
   }
 
-  const duties: RecoveredSemanticDuty[] = original.map((sourceClause, sourceClauseIndex) => {
+  const sourceLocaleResult = resolveExperienceSourceLocale(exp, canonicalSnapshot);
+  const sourceLocale = sourceLocaleResult.locale || 'unknown';
+  const entryIdentityHash = hashUserOriginSourceClause(exp.id);
+  const duties: RecoveredSemanticDuty[] = visible.map((sourceClause, sourceClauseIndex) => {
     const sourceClauseHash = hashUserOriginSourceClause(sourceClause);
+    const canonicalFactId = snapshotFactIds[sourceClauseIndex];
     return {
-      key: `user_origin_clause_${sourceClauseHash}`,
+      key: `user_origin_clause_${entryIdentityHash}_${sourceClauseHash}`,
       confidence: 'exact_user_origin',
       sourceClauseIndex,
       sourceClause,
       sourceClauseHash,
-      sourceFactId: snapshotFactIds[sourceClauseIndex],
+      sourceFactId: canonicalFactId
+        || `experience-${entryIdentityHash}-clause-${sourceClauseIndex}-${sourceClauseHash}`,
+      experienceId: exp.id,
+      sourceLocale,
+      sourceLocaleResolution: sourceLocaleResult.resolution,
     };
   });
   return { source: 'user_origin_recovered', duties };
+}
+
+export function recoveredUserOriginNeedsSourceBoundLocalization(
+  grounding: ExperienceSemanticGrounding,
+  targetLocale: Locale,
+): boolean {
+  if (grounding.source !== 'user_origin_recovered' || grounding.duties.length === 0) return false;
+  const sourceLocales = [...new Set(grounding.duties.map((duty) => duty.sourceLocale || 'unknown'))];
+  return sourceLocales.length !== 1
+    || sourceLocales[0] === 'unknown'
+    || isCrossLocaleOperation(sourceLocales[0], targetLocale);
 }
 
 const RECOVERABLE_MATERIAL = new Set<MaterialDutyKey>(Object.keys(MATERIAL_TO_SEMANTIC) as MaterialDutyKey[]);
@@ -292,13 +316,27 @@ export function displayTextForSemanticRecovery(exp: WorkExperience): string {
 
 /**
  * Resolve semantic grounding for an experience.
- * Modern provenance (user original) wins; otherwise recover from display.
+ * Exact current visible user/manual provenance wins; legacy original and
+ * display classification remain fallback evidence for non-user-origin data.
  */
 export function resolveExperienceSemanticGrounding(
   exp: WorkExperience,
   options?: { canonicalSnapshot?: CanonicalCvSnapshot },
 ): ExperienceSemanticGrounding {
+  const fromUserOrigin = recoverSemanticDutiesFromUserOrigin(exp, options?.canonicalSnapshot);
+  if (fromUserOrigin.recoveryFailureReason) {
+    return fromUserOrigin;
+  }
+
   const original = (exp.originalUserDescription || '').trim();
+  const currentMatchesOriginal = clausesMatchExactly(
+    splitExperienceBullets(exp.description || ''),
+    splitExperienceBullets(original),
+  );
+  if (fromUserOrigin.duties.length > 0 && !currentMatchesOriginal) {
+    return fromUserOrigin;
+  }
+
   const isLegacyRecovered = exp.groundingRecoverySource === 'legacy_recovered_display_duties';
   const display = displayTextForSemanticRecovery(exp);
   const fromDisplay = recoverSemanticDutiesFromDisplayText(display);
@@ -317,8 +355,7 @@ export function resolveExperienceSemanticGrounding(
     }
   }
 
-  const fromUserOrigin = recoverSemanticDutiesFromUserOrigin(exp, options?.canonicalSnapshot);
-  if (fromUserOrigin.duties.length > 0 || fromUserOrigin.recoveryFailureReason) {
+  if (fromUserOrigin.duties.length > 0) {
     return fromUserOrigin;
   }
 

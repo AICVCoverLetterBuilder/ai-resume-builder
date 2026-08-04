@@ -61,8 +61,8 @@ function isBrowser(): boolean {
   return typeof window !== 'undefined';
 }
 
-export function saveCvDraft(data: CvDraftData): void {
-  if (!isBrowser()) return;
+export function saveCvDraft(data: CvDraftData): boolean {
+  if (!isBrowser()) return false;
   try {
     const normalized = withPersonalPhotoFields({
       ...data,
@@ -70,9 +70,11 @@ export function saveCvDraft(data: CvDraftData): void {
       schemaVersion: CV_RUNTIME_MIGRATION_VERSION,
     });
     localStorage.setItem(CV_DRAFT_KEY, JSON.stringify(normalized));
+    return true;
   } catch (err) {
     // localStorage quota exceeded — silently ignore; data survives in RAM
     console.warn('[draft] Failed to save CV draft:', err);
+    return false;
   }
 }
 

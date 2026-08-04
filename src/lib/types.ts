@@ -72,6 +72,8 @@ export interface WorkExperience {
   generatedDescription?: string;
   /** Locale of `generatedDescription` / last AI apply for this experience. */
   generatedLocale?: string;
+  /** Locale of the current explicit user/manual description, when known. */
+  descriptionSourceLocale?: string;
   /**
    * Per-entry AI output provenance (stable Experience.id ownership).
    * Unedited AI output hashes + pre-AI fact snapshot for later operations.
@@ -163,6 +165,8 @@ export interface CVData {
   canonicalSnapshot?: import('./cv-canonical-snapshot').CanonicalCvSnapshot;
   /** Localized projections keyed by requested locale; must match snapshot revision/hash to export. */
   localizedProjections?: Record<string, import('./cv-canonical-snapshot').ValidatedLocalizedCvProjection>;
+  /** Source-bound, lazily-created Experience duty surfaces persisted with the draft. */
+  experienceLocalizedSurfaces?: import('./cv-experience-localized-surfaces').ExperienceLocalizedSurfaceStore;
 }
 
 export interface CoverLetterData {

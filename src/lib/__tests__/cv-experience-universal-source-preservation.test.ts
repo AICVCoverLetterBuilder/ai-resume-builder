@@ -383,9 +383,13 @@ describe('Universal source-unit Experience preservation', () => {
       }
     }
 
-    // Explicit empty candidate → source-preserving apply
+    // An empty/untrusted provider candidate already fails closed on committed
+    // HEAD. It must not be reclassified as a successful AI apply or export path.
+    const emptyCv = fixtureCv(f);
+    const emptyBefore = structuredClone(emptyCv);
+    const usageBeforeEmpty = getProAiUsageCount();
     const empty = runCvAiApplyPipeline({
-      cv: fixtureCv(f),
+      cv: emptyCv,
       locale: 'en',
       action: 'experience_bullets',
       candidate: '',
@@ -394,8 +398,22 @@ describe('Universal source-unit Experience preservation', () => {
       level: 'mid',
       referenceDateIso: '2026-07-18',
     });
-    expect(empty.blocked).toBe(false);
-    assertDutiesPreserved(empty.stateCv.experience[0].description, f.duties, 'empty-rebuild');
+    expect(empty.blocked).toBe(true);
+    expect(empty.reason).toBe('experience_ai_noop');
+    expect(empty.finalized.countedAsSuccess).toBe(false);
+    expect(empty.finalized.diagnostics.providerAccepted).toBe(false);
+    expect(empty.finalized.diagnostics.translationProviderAttempted).not.toBe(true);
+    expect(empty.stateCv).toBe(emptyCv);
+    expect(empty.previewCv).toBe(emptyCv);
+    expect(empty.pdfCv).toBe(emptyCv);
+    expect(empty.docxCv).toBe(emptyCv);
+    expect(empty.stateCv).toEqual(emptyBefore);
+    expect(empty.stateCv.experienceLocalizedSurfaces).toBeUndefined();
+    expect(empty.stateCv.experience[0].description).toBe(emptyBefore.experience[0].description);
+    expect(empty.stateCv.experience[0].canonicalDescription)
+      .toBe(emptyBefore.experience[0].canonicalDescription);
+    expect(getProAiUsageCount()).toBe(usageBeforeEmpty);
+    assertDutiesPreserved(empty.stateCv.experience[0].description, f.duties, 'empty-blocked');
   });
 
   it('no-fact path stays role-neutral and does not invent concrete duties', () => {

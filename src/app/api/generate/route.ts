@@ -50,6 +50,16 @@ import {
   shouldForceRespond,
 } from '@/lib/ai-request-timing';
 import { parseSummaryV2LocalizationProviderJson } from '@/lib/cv-summary-v2';
+import {
+  EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
+  hashExperienceLocalizedSurfaceValue,
+  parseExperienceLocalizationProviderJson,
+  parseExperienceLocalizationVerifierJson,
+  validateExperienceLocalizationIndependentVerification,
+  type ExperienceLocalizationProviderRecord,
+  type ExperienceLocalizationRequest,
+  type ExperienceLocalizationRequestRecord,
+} from '@/lib/cv-experience-localized-surfaces';
 
 /**
  * Explicit Vercel serverless function execution budget (seconds).
@@ -335,16 +345,20 @@ function normalizeLocale(value: unknown): Locale {
 async function callWithRetry(
   params: Parameters<Anthropic['messages']['create']>[0],
   deadlineAt?: number | null,
+  onAttempt?: () => void,
 ): Promise<Anthropic.Messages.Message> {
   const client = getClient();
-  const runOnce = () => callProviderWithDeadline(
-    (options) => client.messages.create(params, {
-      signal: options.signal ?? undefined,
-      timeout: options.timeout,
-      maxRetries: 0,
-    }) as Promise<Anthropic.Messages.Message>,
-    deadlineAt,
-  );
+  const runOnce = () => {
+    onAttempt?.();
+    return callProviderWithDeadline(
+      (options) => client.messages.create(params, {
+        signal: options.signal ?? undefined,
+        timeout: options.timeout,
+        maxRetries: 0,
+      }) as Promise<Anthropic.Messages.Message>,
+      deadlineAt,
+    );
+  };
 
   try {
     return await runOnce();
@@ -633,6 +647,287 @@ Rules:
         contentLocale: resolvedLocale,
         requestFactCount: factSet.facts.length,
         isSparse: factSet.isSparse,
+      });
+    }
+
+    if (action === 'experience-localize') {
+      const requestedTargetLocale = typeof (params.targetLocale || params.locale) === 'string'
+        ? String(params.targetLocale || params.locale)
+        : '';
+      const supportedTargetLocale = resolveLocaleCandidate(requestedTargetLocale);
+      if (!supportedTargetLocale || supportedTargetLocale !== requestedTargetLocale) {
+        return jsonResponse({
+          error: 'Experience localization target locale is unsupported.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_unsupported_target_locale',
+        }, { status: 422 });
+      }
+      const resolvedLocale = supportedTargetLocale;
+      const targetInfo = localeInstructions[resolvedLocale];
+      const snapshotId = sanitizeField(params.snapshotId, 240);
+      const records = Array.isArray(params.records) ? params.records : [];
+      if (!snapshotId || !records.length || records.length > 96) {
+        return jsonResponse({
+          error: 'Experience localization requires one bounded structured manifest.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_request_invalid',
+        }, { status: 422 });
+      }
+      const safeRecords: Array<Omit<ExperienceLocalizationRequestRecord, 'sourceLocale' | 'targetLocale'> & {
+        sourceLocale: string;
+        targetLocale: string;
+      }> = records.map((record: Record<string, unknown>) => ({
+        requestIdentity: sanitizeField(record.requestIdentity, 300),
+        cvId: sanitizeField(record.cvId, 200),
+        experienceId: sanitizeField(record.experienceId, 200),
+        experienceLineageHash: sanitizeField(record.experienceLineageHash, 240),
+        sourceClauseIndex: Number(record.sourceClauseIndex),
+        sourceClauseHash: sanitizeField(record.sourceClauseHash, 240),
+        semanticFactId: sanitizeField(record.semanticFactId, 300),
+        sourceLocale: sanitizeField(record.sourceLocale, 20),
+        targetLocale: sanitizeField(record.targetLocale, 20),
+        canonicalLineageHash: sanitizeField(record.canonicalLineageHash, 240),
+        sourceText: sanitizeText(record.sourceText, 1600),
+      }));
+      if (safeRecords.some((record) => (
+        !record.requestIdentity
+        || !record.cvId
+        || !record.experienceId
+        || !record.experienceLineageHash
+        || !Number.isInteger(record.sourceClauseIndex)
+        || record.sourceClauseIndex < 0
+        || !record.sourceClauseHash
+        || !record.semanticFactId
+        || resolveLocaleCandidate(record.sourceLocale) !== record.sourceLocale
+        || record.targetLocale !== resolvedLocale
+        || !record.canonicalLineageHash
+        || !record.sourceText
+      ))) {
+        return jsonResponse({
+          error: 'Experience localization manifest identity is incomplete.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_request_identity_invalid',
+        }, { status: 422 });
+      }
+      const expectedById = new Map(safeRecords.map((record) => [record.requestIdentity, record]));
+      if (expectedById.size !== safeRecords.length) {
+        return jsonResponse({
+          error: 'Experience localization manifest contains duplicate identities.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_duplicate_request_identity',
+        }, { status: 422 });
+      }
+      let providerAttemptCount = 0;
+      const response = await callWithRetry({
+        model: MODEL,
+        max_tokens: 3000,
+        temperature: 0,
+        stream: false,
+        system: `You are a strict structured CV Experience localization engine. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return exactly one JSON object with no markdown, code fences, or commentary. Preserve snapshotId and every identity field exactly. Return exactly one record for every input record and no additional records. Translate only sourceText. Preserve its predicate, object, professional work domain, scope, negation, and employment tense. Add no tools, systems, qualifications, certifications, metrics, achievements, leadership, compliance, quality, frequency, responsibility, impact, or enrichment. semanticValidation is a non-authoritative compatibility diagnostic: mark each preservation boolean truthfully and set unsupportedFactsIntroduced truthfully. Never mark a changed occupation, work object, or professional action as preserved. validatorVersion must be exactly ${EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION}.`,
+        messages: [{
+          role: 'user',
+          content: JSON.stringify({
+            task: 'localize_cv_experience_surfaces',
+            snapshotId,
+            targetLocale: resolvedLocale,
+            records: safeRecords,
+            responseSchema: {
+              snapshotId: 'exact input snapshotId',
+              targetLocale: resolvedLocale,
+              records: [{
+                requestIdentity: 'exact input requestIdentity',
+                cvId: 'exact input cvId',
+                experienceId: 'exact input experienceId',
+                experienceLineageHash: 'exact input experienceLineageHash',
+                sourceClauseIndex: 'exact input sourceClauseIndex',
+                sourceClauseHash: 'exact input sourceClauseHash',
+                semanticFactId: 'exact input semanticFactId',
+                sourceLocale: 'exact input sourceLocale',
+                targetLocale: 'exact input targetLocale',
+                canonicalLineageHash: 'exact input canonicalLineageHash',
+                localizedText: 'one target-language duty clause',
+                semanticValidation: {
+                  validatorVersion: EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
+                  predicatePreserved: true,
+                  objectPreserved: true,
+                  workDomainPreserved: true,
+                  scopePreserved: true,
+                  negationPreserved: true,
+                  tensePreserved: true,
+                  unsupportedFactsIntroduced: false,
+                },
+              }],
+            },
+          }),
+        }],
+      }, deadlineAt, () => {
+        providerAttemptCount += 1;
+      });
+      const parsed = parseExperienceLocalizationProviderJson(getText(response));
+      if (!parsed) {
+        return jsonResponse({
+          error: 'Experience localization provider returned malformed structured JSON.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_provider_malformed_json',
+          translationProviderAttemptCount: providerAttemptCount,
+          independentVerifierAttemptCount: 0,
+          translatedRecordCount: 0,
+        }, { status: 422 });
+      }
+      const returnedIds = parsed.records.map((record) => record.requestIdentity);
+      const identityMatch = parsed.snapshotId === snapshotId
+        && parsed.targetLocale === resolvedLocale
+        && parsed.records.length === safeRecords.length
+        && new Set(returnedIds).size === returnedIds.length
+        && returnedIds.every((id) => expectedById.has(id))
+        && parsed.records.every((record: ExperienceLocalizationProviderRecord) => {
+          const expected = expectedById.get(record.requestIdentity);
+          return Boolean(expected)
+            && record.cvId === expected!.cvId
+            && record.experienceId === expected!.experienceId
+            && record.experienceLineageHash === expected!.experienceLineageHash
+            && record.sourceClauseIndex === expected!.sourceClauseIndex
+            && record.sourceClauseHash === expected!.sourceClauseHash
+            && record.semanticFactId === expected!.semanticFactId
+            && record.sourceLocale === expected!.sourceLocale
+            && record.targetLocale === expected!.targetLocale
+            && record.canonicalLineageHash === expected!.canonicalLineageHash;
+        });
+      if (!identityMatch) {
+        return jsonResponse({
+          error: 'Experience localization provider changed the immutable manifest.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_provider_identity_mismatch',
+          translationProviderAttemptCount: providerAttemptCount,
+          independentVerifierAttemptCount: 0,
+          translatedRecordCount: parsed.records.length,
+        }, { status: 422 });
+      }
+      const verificationPairs = parsed.records.map((candidate) => {
+        const source = expectedById.get(candidate.requestIdentity)!;
+        return {
+          requestIdentity: source.requestIdentity,
+          cvId: source.cvId,
+          experienceId: source.experienceId,
+          experienceLineageHash: source.experienceLineageHash,
+          sourceClauseIndex: source.sourceClauseIndex,
+          sourceClauseHash: source.sourceClauseHash,
+          semanticFactId: source.semanticFactId,
+          sourceLocale: source.sourceLocale,
+          targetLocale: source.targetLocale,
+          canonicalLineageHash: source.canonicalLineageHash,
+          sourceText: source.sourceText,
+          candidateLocalizedText: candidate.localizedText,
+          candidateSurfaceHash: hashExperienceLocalizedSurfaceValue(candidate.localizedText),
+        };
+      });
+      let verifierAttemptCount = 0;
+      let verificationResponse;
+      try {
+        verificationResponse = await callWithRetry({
+          model: MODEL,
+          max_tokens: 3000,
+          temperature: 0,
+          stream: false,
+          system: `You are an independent semantic verifier for CV Experience localization. You did not produce the candidate translations. Compare each authoritative sourceText directly with candidateLocalizedText. Do not infer correctness from fluency, target language, opaque identities, or any prior translator claim. Return exactly one JSON object with no markdown, prose, code fences, or omitted records. Preserve snapshotId and every identity/hash field exactly. For each pair independently verify the same professional predicate/action, work object, work domain, source responsibility, scope, negation, and employment tense; reject removed responsibilities, added responsibilities/facts, cross-entry facts, cross-occupation substitutions, and invented tools, systems, metrics, achievements, leadership, compliance, quality, frequency, or impact. decision may be passed only when every preservation boolean is true, every introduction/substitution boolean is false, and mismatchCategory is none. validatorVersion must be exactly ${EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION}.`,
+          messages: [{
+            role: 'user',
+            content: JSON.stringify({
+              task: 'independently_verify_cv_experience_localized_surfaces',
+              snapshotId,
+              targetLocale: resolvedLocale,
+              validatorVersion: EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
+              records: verificationPairs,
+              responseSchema: {
+                snapshotId: 'exact input snapshotId',
+                targetLocale: resolvedLocale,
+                validatorVersion: EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
+                records: [{
+                  requestIdentity: 'exact input requestIdentity',
+                  cvId: 'exact input cvId',
+                  experienceId: 'exact input experienceId',
+                  experienceLineageHash: 'exact input experienceLineageHash',
+                  sourceClauseIndex: 'exact input sourceClauseIndex',
+                  sourceClauseHash: 'exact input sourceClauseHash',
+                  semanticFactId: 'exact input semanticFactId',
+                  sourceLocale: 'exact input sourceLocale',
+                  targetLocale: 'exact input targetLocale',
+                  canonicalLineageHash: 'exact input canonicalLineageHash',
+                  candidateSurfaceHash: 'exact input candidateSurfaceHash',
+                  decision: 'passed | rejected',
+                  mismatchCategory: 'none | predicate_mismatch | object_mismatch | work_domain_mismatch | source_responsibility_removed | scope_mismatch | negation_mismatch | tense_mismatch | unsupported_responsibility_added | cross_entry_fact | cross_occupation_substitution | ambiguous',
+                  predicatePreserved: 'boolean',
+                  objectPreserved: 'boolean',
+                  workDomainPreserved: 'boolean',
+                  sourceResponsibilityPreserved: 'boolean',
+                  scopePreserved: 'boolean',
+                  negationPreserved: 'boolean',
+                  tensePreserved: 'boolean',
+                  unsupportedFactsIntroduced: 'boolean',
+                  crossEntryFactIntroduced: 'boolean',
+                  crossOccupationSubstitution: 'boolean',
+                }],
+              },
+            }),
+          }],
+        }, deadlineAt, () => {
+          verifierAttemptCount += 1;
+        });
+      } catch {
+        return jsonResponse({
+          error: 'Independent Experience localization verification failed.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_verifier_failed',
+          translationProviderAttemptCount: providerAttemptCount,
+          independentVerifierAttemptCount: verifierAttemptCount,
+          translatedRecordCount: parsed.records.length,
+        }, { status: 422 });
+      }
+      const independentVerification = parseExperienceLocalizationVerifierJson(
+        getText(verificationResponse),
+      );
+      if (!independentVerification) {
+        return jsonResponse({
+          error: 'Independent Experience localization verifier returned malformed structured JSON.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_verifier_malformed_json',
+          translationProviderAttemptCount: providerAttemptCount,
+          independentVerifierAttemptCount: verifierAttemptCount,
+          translatedRecordCount: parsed.records.length,
+        }, { status: 422 });
+      }
+      const localizationRequest: ExperienceLocalizationRequest = {
+        task: 'localize_cv_experience_surfaces',
+        snapshotId,
+        targetLocale: resolvedLocale,
+        records: safeRecords as ExperienceLocalizationRequestRecord[],
+      };
+      const independentlyValidated = validateExperienceLocalizationIndependentVerification({
+        request: localizationRequest,
+        candidates: parsed.records,
+        verification: independentVerification,
+      });
+      if (!independentlyValidated.ok) {
+        return jsonResponse({
+          error: 'Independent Experience localization verification rejected the batch.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: independentlyValidated.reason,
+          translationProviderAttemptCount: providerAttemptCount,
+          independentVerifierAttemptCount: verifierAttemptCount,
+          translatedRecordCount: parsed.records.length,
+        }, { status: 422 });
+      }
+      return jsonResponse({
+        localizedExperienceSurfaces: {
+          ...parsed,
+          provenance: 'provider',
+          providerAttemptCount,
+          independentVerification: {
+            ...independentVerification,
+            verifierAttemptCount,
+          },
+        },
+        localizationSource: 'provider',
       });
     }
 

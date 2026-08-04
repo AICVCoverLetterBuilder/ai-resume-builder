@@ -166,6 +166,13 @@ import {
   type PrepareExportReadyResult,
 } from '@/lib/prepare-export-ready-cv';
 import { loadCvDraft } from '@/lib/draft-storage';
+import {
+  buildExperienceLocalizationSnapshot,
+  prepareExperienceLocalizedSurfaces,
+  type ExperienceLocalizationProviderResponse,
+  type ExperienceLocalizationRequest,
+  type ExperienceLocalizationDiagnostics,
+} from '@/lib/cv-experience-localized-surfaces';
 import { apiFetch } from '@/lib/api';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -275,12 +282,25 @@ async function resolveSummaryLocalizedManifest(options: {
 
 export default function CVBuilderPage() {
   const { t, locale } = useI18n();
-  const { currentCv, setCurrentCv, isPro, canDownload, incrementDownloads, markAiRecommendUsed, recordProAiSuccess, getProAiUsageCount, lastCvSavedAt, getAiGate } = useApp();
+  const {
+    currentCv,
+    setCurrentCv,
+    persistCurrentCvTransactionally,
+    isPro,
+    canDownload,
+    incrementDownloads,
+    markAiRecommendUsed,
+    recordProAiSuccess,
+    getProAiUsageCount,
+    lastCvSavedAt,
+    getAiGate,
+  } = useApp();
   const [cv, setCv] = useState<CVData>(currentCv || emptyCV());
   const cvRef = useRef<CVData>(cv);
   /** Last prepareExportReadyCv result for release diagnostics (non-PII). */
   const lastExportPrepareRef = useRef<PrepareExportReadyResult | null>(null);
   const lastExportRawCvRef = useRef<CVData | null>(null);
+  const lastExperienceLocalizationRef = useRef<ExperienceLocalizationDiagnostics | null>(null);
   const [exportDiagTick, setExportDiagTick] = useState(0);
   // Stale-response correlation: each AI action tracks the requestId of its
   // most-recently-started request. An in-flight request whose id no longer
@@ -3133,14 +3153,95 @@ export default function CVBuilderPage() {
         appVersionCode: app.versionCode,
         appVersionName: app.versionName,
         nextBuildId: resolveNextBuildId(),
+        experienceLocalization: lastExperienceLocalizationRef.current,
         extraStages: args.extraStages,
       });
       setExportDiagTick((n) => n + 1);
     };
 
-    const prepareFinalLocaleSafeCv = (sourceCv: CVData): CVData => {
+    const prepareFinalLocaleSafeCv = async (sourceCv: CVData): Promise<CVData> => {
       lastExportRawCvRef.current = sourceCv;
+      lastExportPrepareRef.current = null;
+      lastExperienceLocalizationRef.current = null;
       try {
+        // The export source becomes the race-guard authority before provider work.
+        cvRef.current = sourceCv;
+        const localization = await prepareExperienceLocalizedSurfaces({
+          cv: sourceCv,
+          targetLocale: locale,
+          adapter: async (request: ExperienceLocalizationRequest) => {
+            // Export localization is provider work but is not a visible AI-button
+            // action, so authenticate it without consuming or enforcing the
+            // user-facing AI-button usage counter.
+            const aiGate = getAiGate();
+            if (aiGate.status !== 'ready') {
+              throw new Error('experience_localization_authorization_unavailable');
+            }
+            const circuitError = precheckAiCircuit(locale);
+            if (circuitError) {
+              throw new Error('experience_localization_provider_unavailable');
+            }
+            const proToken = aiGate.token;
+            const controller = new AbortController();
+            const timeout = window.setTimeout(
+              () => controller.abort(),
+              resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS),
+            );
+            try {
+              const { data, response } = await apiFetch<{
+                localizedExperienceSurfaces?: ExperienceLocalizationProviderResponse;
+                error?: string;
+                localizationTypedFailureReason?: string;
+                translationProviderAttemptCount?: number;
+                independentVerifierAttemptCount?: number;
+                translatedRecordCount?: number;
+              }>('/api/generate', {
+                body: {
+                  action: 'experience-localize',
+                  proToken,
+                  requestId: crypto.randomUUID(),
+                  ...request,
+                },
+                signal: controller.signal,
+              });
+              if (!response.ok || !data?.localizedExperienceSurfaces) {
+                const failure = new Error(
+                  data?.localizationTypedFailureReason
+                  || data?.error
+                  || 'experience_localization_provider_failed',
+                ) as Error & {
+                  translationProviderAttemptCount?: number;
+                  independentVerifierAttemptCount?: number;
+                  translatedRecordCount?: number;
+                };
+                failure.translationProviderAttemptCount = data?.translationProviderAttemptCount;
+                failure.independentVerifierAttemptCount = data?.independentVerifierAttemptCount;
+                failure.translatedRecordCount = data?.translatedRecordCount;
+                throw failure;
+              }
+              return data.localizedExperienceSurfaces;
+            } finally {
+              window.clearTimeout(timeout);
+            }
+          },
+          getCurrentCv: () => cvRef.current,
+          persist: (nextCv, expectedSnapshotId) => {
+            const currentSnapshot = buildExperienceLocalizationSnapshot(cvRef.current, locale);
+            if (!currentSnapshot.ok || currentSnapshot.snapshotId !== expectedSnapshotId) {
+              return false;
+            }
+            const persisted = persistCurrentCvTransactionally(nextCv);
+            if (!persisted) return false;
+            cvRef.current = nextCv;
+            setCv(nextCv);
+            return true;
+          },
+        });
+        lastExperienceLocalizationRef.current = localization.diagnostics;
+        if (!localization.ok) {
+          throw new CvExportFailure(localization.reason, `${localization.reason} @ ${localization.stage}`);
+        }
+        sourceCv = localization.cv;
         // Single export-ready snapshot for all templates/formats before branching.
         const primaryExpId = (sourceCv.experience || []).find((e) => e.isPresent)?.id
           || (sourceCv.experience || [])[0]?.id;
@@ -3233,8 +3334,10 @@ export default function CVBuilderPage() {
         let saveResult: SaveFileResult;
         let fallbackFileName: string;
         if (liveCv.templateId === 'rirekisho') {
-          const exportBaseName = liveCv.personal.fullName || '履歴書';
-          saveResult = await exportRirekishoToDOCX(liveCv, exportBaseName);
+          const cvForExport = await prepareFinalLocaleSafeCv(liveCv);
+          cvRef.current = cvForExport;
+          const exportBaseName = cvForExport.personal.fullName || '履歴書';
+          saveResult = await exportRirekishoToDOCX(cvForExport, exportBaseName);
           fallbackFileName = `${exportBaseName}.docx`;
         } else {
           // For rect-photo templates, use rectangularPhotoDataUrl (derived from original upload).
@@ -3259,7 +3362,7 @@ export default function CVBuilderPage() {
             ...cv,
             templateId: selectedTemplateId,
           };
-          const cvForExport = prepareFinalLocaleSafeCv({
+          const cvForExport = await prepareFinalLocaleSafeCv({
             ...latestCv,
             personal: { ...latestCv.personal, photo: photoForExport },
           });
@@ -3332,7 +3435,7 @@ export default function CVBuilderPage() {
         }
         // Force templateId from the live UI selection; cvRef.current can only supply
         // the rest of the data, never the template choice.
-        const cvForExport = prepareFinalLocaleSafeCv({
+        const cvForExport = await prepareFinalLocaleSafeCv({
           ...cvRef.current,
           ...cv,
           templateId: selectedTemplateId,

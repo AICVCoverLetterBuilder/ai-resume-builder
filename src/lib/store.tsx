@@ -73,6 +73,8 @@ interface AppContextType {
   deleteCoverLetter: (id: string) => void;
   currentCv: CVData | null;
   setCurrentCv: (cv: CVData | null) => void;
+  /** Persist one complete CV snapshot before publishing it to React state. */
+  persistCurrentCvTransactionally: (cv: CVData) => boolean;
   currentCoverLetter: CoverLetterData | null;
   setCurrentCoverLetter: (cl: CoverLetterData | null) => void;
   canDownload: (type: 'cv' | 'cl') => boolean;
@@ -496,6 +498,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setLastCvSavedAt(Date.now());
   }, []);
 
+  const persistCurrentCvTransactionally = useCallback((cv: CVData): boolean => {
+    const existingDraft = loadCvDraft();
+    const photoFields = cvPhotoDraftFields(cv, existingDraft ?? undefined);
+    const persisted = saveCvDraft({
+      cv,
+      ...photoFields,
+      savedAt: new Date().toISOString(),
+    });
+    if (!persisted) return false;
+    internalSetCurrentCv(cv);
+    setLastCvSavedAt(Date.now());
+    return true;
+  }, []);
+
   const setCurrentCoverLetter = useCallback((cl: CoverLetterData | null) => {
     internalSetCurrentCoverLetter(cl);
     if (cl) {
@@ -557,7 +573,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider value={{
       isPro, setIsPro, getProToken, getAiGate,
       saveCv, deleteCv, saveCoverLetter, deleteCoverLetter,
-      currentCv, setCurrentCv, currentCoverLetter, setCurrentCoverLetter,
+      currentCv, setCurrentCv, persistCurrentCvTransactionally,
+      currentCoverLetter, setCurrentCoverLetter,
       canDownload, incrementDownloads,
       clGenerationCount, canGenerateCoverLetter, incrementClGeneration,
       aiRecommendUsed, canUseAiRecommend, markAiRecommendUsed,

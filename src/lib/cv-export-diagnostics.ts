@@ -16,6 +16,7 @@ import {
   buildExperienceDurationSnapshot,
   durationDisplayBucket,
 } from './cv-experience-duration';
+import type { ExperienceLocalizationDiagnostics } from './cv-experience-localized-surfaces';
 
 export type CvExportFormat = 'pdf' | 'docx';
 
@@ -23,6 +24,12 @@ export type CvExportDiagnosticStageName =
   | 'load_draft'
   | 'migrate_runtime'
   | 'construct_raw_export_snapshot'
+  | 'resolve_experience_source_locale'
+  | 'lookup_localized_experience_surfaces'
+  | 'acquire_localized_experience_surfaces'
+  | 'validate_localized_experience_surfaces'
+  | 'revalidate_experience_export_snapshot'
+  | 'persist_localized_experience_surfaces'
   | 'recover_legacy_grounding'
   | 'construct_semantic_duties'
   | 'project_localized_experience'
@@ -119,6 +126,8 @@ export type CvExportDiagnosticTrace = {
   androidSaveReached: boolean;
   saveResult: SaveFileResult['result'] | null;
   exportReadySnapshotId: string;
+  /** Source-bound Experience localization metadata only; contains no CV prose or raw entry IDs. */
+  experienceLocalization?: ExperienceLocalizationDiagnostics & { usageDelta: 0 };
   ok: boolean;
   /** Non-PII success metadata when available. */
   pdfTextLayerType?: 'direct_unicode' | 'shaped_png_hybrid' | 'shaped_png_only' | 'unknown';
@@ -174,7 +183,7 @@ export function resolveCvExportToastMappingKey(
   if (/legacy_export_recovery_not_invoked|legacy_export_recovery_snapshot_overwritten|legacy_recovered_snapshot_overwritten|modern_minimal_stale_snapshot|modern_minimal_used_stale_snapshot|localized_display_projection_incomplete/i.test(reason)) {
     return 'LEGACY_SNAPSHOT_REVIEW';
   }
-  if (/legacy_export_recovery_no_safe_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|semantic_duty_fact_set_empty|legacy_user_origin_recovery_/i.test(reason)) {
+  if (/legacy_export_recovery_no_safe_duties|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|semantic_duty_fact_set_empty|legacy_user_origin_recovery_|experience_localization_/i.test(reason)) {
     return 'EXPERIENCE_FACTS_REVIEW';
   }
   if (/summary_grounding_projection_failed|unsupported_summary_fact|summary_proper_noun_rejected|summary_locale_state_mismatch|missing_provenance|migration_failure|recovery_failure|mixed_locale_projection|mixed_locale_field|summary_export_contract_mismatch|summary_recovery_projection_failed|summary_validation_failed_after_recovery|summary_authoritative_fact_set_empty|summary_fact_set_missing_recovered_duties|semantic_duty_fact_set_empty|legacy_grounding_source_missing|legacy_grounding_recovery_failed|legacy_grounding_recovery_empty|legacy_export_recovery_no_safe_duties|legacy_grounding_recovery_not_invoked|legacy_grounding_recovery_overwritten/i.test(reason)) {
@@ -414,6 +423,7 @@ export type BuildCvExportTraceInput = {
   appVersionCode?: string | null;
   appVersionName?: string | null;
   nextBuildId?: string | null;
+  experienceLocalization?: ExperienceLocalizationDiagnostics | null;
   extraStages?: CvExportStageDiag[];
   /** Optional non-PII PDF text-layer metrics from the export caller. */
   pdfTextLayerType?: CvExportDiagnosticTrace['pdfTextLayerType'];
@@ -457,6 +467,65 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     { stage: 'migrate_runtime', result: 'ok' },
     { stage: 'construct_raw_export_snapshot', result: 'ok' },
   ];
+
+  const localization = input.experienceLocalization || null;
+  if (localization) {
+    const failStage = localization.failureStage;
+    const localizationStages: Array<{
+      diagnosticStage: CvExportDiagnosticStageName;
+      operationStage: string;
+      skipped?: boolean;
+    }> = [
+      {
+        diagnosticStage: 'resolve_experience_source_locale',
+        operationStage: 'resolve_source_locale',
+      },
+      {
+        diagnosticStage: 'lookup_localized_experience_surfaces',
+        operationStage: 'lookup_localized_surfaces',
+      },
+      {
+        diagnosticStage: 'acquire_localized_experience_surfaces',
+        operationStage: 'acquire_localized_surfaces',
+        skipped: localization.providerRequestCount === 0,
+      },
+      {
+        diagnosticStage: 'validate_localized_experience_surfaces',
+        operationStage: 'validate_localized_surfaces',
+        skipped: localization.providerRequestCount === 0,
+      },
+      {
+        diagnosticStage: 'revalidate_experience_export_snapshot',
+        operationStage: 'revalidate_export_snapshot',
+        skipped: localization.providerRequestCount === 0,
+      },
+      {
+        diagnosticStage: 'persist_localized_experience_surfaces',
+        operationStage: 'persist_localized_surfaces',
+        skipped: localization.providerRequestCount === 0,
+      },
+    ];
+    let localizationFailed = false;
+    for (const item of localizationStages) {
+      if (localizationFailed) {
+        stages.push({ stage: item.diagnosticStage, result: 'skipped' });
+        continue;
+      }
+      if (failStage === item.operationStage) {
+        stages.push({
+          stage: item.diagnosticStage,
+          result: 'fail',
+          reason: localization.failureReason,
+        });
+        localizationFailed = true;
+        continue;
+      }
+      stages.push({
+        stage: item.diagnosticStage,
+        result: item.skipped ? 'skipped' : 'ok',
+      });
+    }
+  }
 
   if (diag) {
     const failStage = prepared && !prepared.ok ? mapPrepareStage(prepared.stage) : null;
@@ -518,6 +587,8 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
         stages.push({ stage: 'prepare_template', result: 'ok' });
       }
     }
+  } else if (localization?.failureReason) {
+    stages.push({ stage: 'recover_legacy_grounding', result: 'skipped' });
   } else {
     stages.push({ stage: 'recover_legacy_grounding', result: 'fail', reason: 'prepare_not_invoked' });
   }
@@ -584,6 +655,9 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     androidSaveReached: Boolean(input.androidSaveReached),
     saveResult: input.saveResult?.result ?? null,
     exportReadySnapshotId: snapshotId,
+    experienceLocalization: localization
+      ? { ...localization, usageDelta: 0 }
+      : undefined,
     ok: Boolean(ok && !finalReason),
     pdfTextLayerType: input.pdfTextLayerType,
     extractedTextLength: input.extractedTextLength,
