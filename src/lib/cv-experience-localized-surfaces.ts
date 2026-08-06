@@ -16,6 +16,8 @@ export const EXPERIENCE_LOCALIZED_SURFACE_SCHEMA =
 export const EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION =
   'experience-localization-independent-validator-399-v2' as const;
 export const EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE = 6;
+export const EXPERIENCE_LOCALIZATION_INVARIANT_PASSTHROUGH_REVISION =
+  'experience-localization-invariant-passthrough-402-v1' as const;
 export const EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_CHARS = 5_000;
 export const EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_UTF8_BYTES = 15_000;
 export const EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS =
@@ -173,6 +175,9 @@ export type ExperienceLocalizationDiagnostics = {
   verifierParserReached?: boolean;
   verifiedRecordCount?: number;
   routeRemainingAtVerifierDispatchMs?: number;
+  invariantPassthroughCount?: number;
+  providerTranslatableRecordCount?: number;
+  invariantPassthroughRevision?: typeof EXPERIENCE_LOCALIZATION_INVARIANT_PASSTHROUGH_REVISION;
   failureStage?: string;
   failureReason?: string;
 };
@@ -206,6 +211,35 @@ export type PrepareExperienceLocalizedSurfacesResult =
 
 export function canonicalizeExperienceLocalizationText(text: string): string {
   return String(text || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+const INVARIANT_EMAIL_RE = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/iu;
+const INVARIANT_URL_RE = /^(?:https?:\/\/|www\.)\S+$/iu;
+const INVARIANT_PHONE_RE = /^\+?\d[\d\s().-]{6,}\d$/u;
+const INVARIANT_MACHINE_TOKEN_RE = /^[\p{Lu}\p{N}._:/+#-]+$/u;
+
+/**
+ * Machine-readable / non-linguistic units must remain exact across locales.
+ * Real prose still requires provider translation and normal locale validation.
+ */
+export function isExperienceLocalizationInvariantUnit(text: string): boolean {
+  const canonical = canonicalizeExperienceLocalizationText(text);
+  if (!canonical) return false;
+  if (
+    INVARIANT_EMAIL_RE.test(canonical)
+    || INVARIANT_URL_RE.test(canonical)
+    || INVARIANT_PHONE_RE.test(canonical)
+  ) {
+    return true;
+  }
+  const tokens = canonical
+    .split(/\s+/u)
+    .map((token) => token.replace(/^[([{"'“”]+|[)\]}"'“”,.;!?…]+$/gu, ''))
+    .filter(Boolean);
+  if (tokens.length === 0) return false;
+  const allMachineTokens = tokens.every((token) => INVARIANT_MACHINE_TOKEN_RE.test(token));
+  const hasIdentifierEvidence = tokens.some((token) => /[\p{N}_:/+#-]/u.test(token));
+  return allMachineTokens && hasIdentifierEvidence;
 }
 
 export function measureExperienceLocalizationText(text: string) {
@@ -444,8 +478,15 @@ export function buildExperienceLocalizationSnapshot(
   const store = usableStore(cv);
   const cachedSurfaces: PersistedExperienceLocalizedSurface[] = [];
   const missingRecords: ExperienceLocalizationRequestRecord[] = [];
+  let invariantPassthroughCount = 0;
+  let providerTranslatableRecordCount = 0;
   for (const record of records) {
     if (record.sourceLocale === targetLocale) continue;
+    if (isExperienceLocalizationInvariantUnit(record.sourceText)) {
+      invariantPassthroughCount += 1;
+      continue;
+    }
+    providerTranslatableRecordCount += 1;
     const candidate = store.surfaces[record.requestIdentity];
     if (storedSurfaceMatches(cv, record, candidate)) cachedSurfaces.push(candidate);
     else missingRecords.push(record);
@@ -472,6 +513,9 @@ export function buildExperienceLocalizationSnapshot(
     persistedSurfaceCount: 0,
     cacheReuseCount: cachedSurfaces.length,
     staleResponseRejected: false,
+    invariantPassthroughCount,
+    providerTranslatableRecordCount,
+    invariantPassthroughRevision: EXPERIENCE_LOCALIZATION_INVARIANT_PASSTHROUGH_REVISION,
     ...(reason ? { failureStage: 'resolve_source_locale', failureReason: reason } : {}),
   };
   return {
@@ -898,6 +942,10 @@ export function projectExperienceFromLocalizedSurfaces(options: {
       sourceLocale: source.locale,
       targetLocale: options.targetLocale,
     });
+    if (isExperienceLocalizationInvariantUnit(record.sourceText)) {
+      localized.push(record.sourceText);
+      continue;
+    }
     const surface = store.surfaces[record.requestIdentity];
     if (!storedSurfaceMatches(options.cv, record, surface)) return null;
     localized.push(surface.localizedText);
