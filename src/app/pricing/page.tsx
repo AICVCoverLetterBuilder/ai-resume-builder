@@ -17,6 +17,17 @@ const fadeUp = {
 };
 const stagger = { visible: { transition: { staggerChildren: 0.09 } } };
 
+
+function localizedIapFailure(
+  t: ReturnType<typeof useI18n>['t'],
+  result: { errorCode?: string; message?: string },
+): string {
+  if (result.errorCode === 'purchase_system_unavailable') {
+    return t.common.purchaseSystemUnavailable;
+  }
+  return result.message || t.common.error;
+}
+
 export default function PricingPage() {
   const { t } = useI18n();
   const { isPro, setIsPro } = useApp();
@@ -60,7 +71,7 @@ export default function PricingPage() {
           });
         }
         if (!result.cancelled) {
-          toast.error(result.message);
+          toast.error(localizedIapFailure(t, result));
         }
       }
     } finally {
@@ -96,9 +107,7 @@ export default function PricingPage() {
           entitlementResult: 'inactive',
           tokenSyncLastResult: 'not-run',
         });
-        toast.error(
-          'No previous purchase found. If you believe this is an error, contact help.cvappai@gmail.com',
-        );
+        toast.error(t.common.noPreviousPurchase);
       } else if (!result.success) {
         setIsPro(false, null, {
           source: 'restore',
@@ -106,7 +115,7 @@ export default function PricingPage() {
           tokenSyncLastResult: result.entitlementActive ? 'failed' : 'not-run',
           tokenSyncLastError: result.message,
         });
-        toast.error(result.message);
+        toast.error(localizedIapFailure(t, result));
       }
     } finally {
       setRestoring(false);

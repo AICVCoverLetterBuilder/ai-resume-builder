@@ -26,6 +26,17 @@ const COMPARISON_ROWS = (t: TranslationKeys) => [
   { name: t.pricing.tableRowSupport,         free: false,        pro: true },
 ];
 
+
+function localizedIapFailure(
+  t: TranslationKeys,
+  result: { errorCode?: string; message?: string },
+): string {
+  if (result.errorCode === 'purchase_system_unavailable') {
+    return t.common.purchaseSystemUnavailable;
+  }
+  return result.message || t.common.error;
+}
+
 // --- Shared upgrade button ---------------------------------------------------------
 
 interface UpgradeButtonProps {
@@ -55,7 +66,7 @@ function UpgradeButton({ label, className, onClose }: UpgradeButtonProps) {
         if (result.cancelled) {
           // Cancellation: silent, modal stays open
         } else {
-          toast.error(result.message || 'Purchase failed. Please try again.');
+          toast.error(localizedIapFailure(t, result));
         }
       }
     } finally {
@@ -291,7 +302,7 @@ export function FreeLimitModal({ open, onClose, type: _type }: FreeLimitModalPro
         toast.error('Server verification failed. If charged, contact support to restore your purchase.');
       } else if (!result.success) {
         if (!result.cancelled) {
-          toast.error(result.message || 'Purchase failed.');
+          toast.error(localizedIapFailure(t, result));
         }
       }
       // Cancellation: silent, modal stays open
@@ -333,7 +344,7 @@ export function FreeLimitModal({ open, onClose, type: _type }: FreeLimitModalPro
                   <div>
                     <h2 className="text-base font-bold leading-tight">{t.dashboard.upgrade}</h2>
                     <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
-                      {'Upgrade to Pro for unlimited access.'}
+                      {t.common.proUpgradeUnlimited}
                     </p>
                   </div>
                 </div>
@@ -397,7 +408,7 @@ export function CoverLetterProModal({ open, onClose, reason }: CoverLetterProMod
         toast.error('Server verification failed. If charged, contact support to restore your purchase.');
       } else if (!result.success) {
         if (!result.cancelled) {
-          toast.error(result.message || 'Purchase failed.');
+          toast.error(localizedIapFailure(t, result));
         }
       }
       // Cancellation: silent, modal stays open
@@ -496,7 +507,7 @@ export function UpgradeBuilderBanner() {
         toast.error('Server verification failed. If charged, contact support to restore your purchase.');
       } else if (!result.success) {
         if (!result.cancelled) {
-          toast.error(result.message || 'Purchase failed.');
+          toast.error(localizedIapFailure(t, result));
         }
       }
     } finally {

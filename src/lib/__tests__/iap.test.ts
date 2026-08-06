@@ -285,6 +285,52 @@ describe('in-app purchase flow', () => {
   });
 
   describe('Pro token synchronization', () => {
+    test('direct restore initializes RevenueCat before restorePurchases', async () => {
+      const { restorePro } = await import('../iap');
+
+      const result = await restorePro();
+
+      expect(result.success).toBe(true);
+      expect(mockPurchases.configure).toHaveBeenCalledTimes(1);
+      expect(mockPurchases.configure.mock.invocationCallOrder[0]).toBeLessThan(
+        mockPurchases.restorePurchases.mock.invocationCallOrder[0],
+      );
+    });
+
+    test('restore waits for an in-flight shared initialization promise', async () => {
+      let releaseConfigure: (() => void) | null = null;
+      mockPurchases.configure.mockImplementation(() => new Promise<void>((resolve) => {
+        releaseConfigure = resolve;
+      }));
+      const { initIAP, restorePro } = await import('../iap');
+
+      const initPromise = initIAP();
+      const restorePromise = restorePro();
+      await vi.waitFor(() => expect(mockPurchases.configure).toHaveBeenCalledTimes(1));
+      expect(mockPurchases.restorePurchases).not.toHaveBeenCalled();
+
+      releaseConfigure?.();
+      await initPromise;
+      const result = await restorePromise;
+
+      expect(result.success).toBe(true);
+      expect(mockPurchases.configure).toHaveBeenCalledTimes(1);
+      expect(mockPurchases.restorePurchases).toHaveBeenCalledTimes(1);
+    });
+
+    test('missing native build configuration fails restore without calling the SDK', async () => {
+      vi.stubEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY', '');
+      const { restorePro } = await import('../iap');
+
+      const result = await restorePro();
+
+      expect(result.success).toBe(false);
+      expect(result.success === false && result.errorCode).toBe('purchase_system_unavailable');
+      expect(result.success === false && result.message).not.toContain('must be configured');
+      expect(mockPurchases.restorePurchases).not.toHaveBeenCalled();
+      vi.stubEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY', 'test_mock_android_key_none_real');
+    });
+
     test('successful restore obtains and persists a Pro token', async () => {
       const { initIAP, restorePro } = await import('../iap');
       await initIAP();
@@ -343,7 +389,7 @@ describe('in-app purchase flow', () => {
     test('initIAP throws with clear message when key is empty', async () => {
       vi.stubEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY', '');
       const { initIAP } = await import('../iap');
-      await expect(initIAP()).rejects.toThrow('RevenueCat API key not configured');
+      await expect(initIAP()).rejects.toThrow('RevenueCat public SDK key is not configured');
       vi.stubEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY', 'test_mock_android_key_none_real');
     });
 
@@ -353,7 +399,7 @@ describe('in-app purchase flow', () => {
       const result = await purchasePro();
       expect(result.success).toBe(false);
       expect(result.cancelled).toBe(false);
-      expect(result.message).toContain('API key');
+      expect(result.success === false && result.errorCode).toBe('purchase_system_unavailable');
       vi.stubEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY', 'test_mock_android_key_none_real');
     });
   });
@@ -534,7 +580,7 @@ describe('in-app purchase flow', () => {
       const result = await purchasePro();
       expect(result.success).toBe(false);
       expect(result.cancelled).toBe(false);
-      expect(result.message).toContain('API key');
+      expect(result.success === false && result.errorCode).toBe('purchase_system_unavailable');
       vi.stubEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY', 'test_mock_android_key_none_real');
     });
 
@@ -741,7 +787,7 @@ describe('purchasing state reset', () => {
     });
 
     expect(purchaseResult?.success).toBe(false);
-    expect(purchaseResult?.success === false && purchaseResult.message).toContain('RevenueCat Purchases plugin unavailable');
+    expect(purchaseResult?.success === false && purchaseResult.errorCode).toBe('purchase_system_unavailable');
     await waitFor(() => expect(result.current.purchasing).toBe(false));
     expect(mockPurchases.configure).not.toHaveBeenCalled();
     expect(mockPurchases.canMakePayments).not.toHaveBeenCalled();
@@ -762,7 +808,7 @@ describe('purchasing state reset', () => {
     });
 
     expect(purchaseResult?.success).toBe(false);
-    expect(purchaseResult?.success === false && purchaseResult.message).toContain('RevenueCat Purchases plugin unavailable');
+    expect(purchaseResult?.success === false && purchaseResult.errorCode).toBe('purchase_system_unavailable');
     await waitFor(() => expect(result.current.purchasing).toBe(false));
     expect(mockPurchases.canMakePayments).not.toHaveBeenCalled();
     expect(mockPurchases.getOfferings).not.toHaveBeenCalled();
@@ -785,7 +831,7 @@ describe('purchasing state reset', () => {
     const result = await purchasePro();
     expect(result.success).toBe(false);
     expect(result.cancelled).toBe(false);
-    expect(result.message).toContain('API key');
+    expect(result.success === false && result.errorCode).toBe('purchase_system_unavailable');
   });
 
   test('purchasePro resolves on offerings timeout (never hangs)', async () => {

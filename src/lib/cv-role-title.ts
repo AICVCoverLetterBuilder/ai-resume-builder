@@ -449,6 +449,19 @@ export function conflictingTitleFormsInSummary(
   return [];
 }
 
+/**
+ * Conservative target-language cue for arbitrary German occupation labels.
+ * This is intentionally based on German occupational morphology/lexemes rather
+ * than generic Latin text, so foreign free-text titles still fail closed.
+ */
+export function looksLikeGermanOccupationalTitle(title: string): boolean {
+  const value = (title || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+  if (!value || !/^[\p{L}\p{M}\s/&'’.-]+$/u.test(value)) return false;
+  if (/[ñáíóúàâçèêëîïôùûÿãõ]/iu.test(value)) return false;
+  const last = value.split(/\s+/u).at(-1) || '';
+  return /(?:fachkraft|mitarbeiter(?:in)?|angestellte?r?|sachbearbeiter(?:in)?|mechaniker(?:in)?|techniker(?:in)?|elektriker(?:in)?|mechatroniker(?:in)?|ingenieur(?:in)?|entwickler(?:in)?|programmierer(?:in)?|designer(?:in)?|rezeptionist(?:in)?|assistent(?:in)?|berater(?:in)?|verkäufer(?:in)?|fahrer(?:in)?|pfleger(?:in)?|buchhalter(?:in)?|kaufmann|kauffrau|koch|köchin|bäcker(?:in)?|arzt|ärztin|lehrer(?:in)?|manager(?:in)?|logistiker(?:in)?|operator(?:in)?|monteur(?:in)?|meister(?:in)?)$/iu.test(last);
+}
+
 function localizeKnownTitle(title: string, locale: Locale, gender?: string): string | null {
   const normalized = title.normalize('NFKC');
   if (/operater.*proizvod|production\s+operator|operatore.*produz/i.test(normalized)) {
@@ -472,6 +485,7 @@ function localizeKnownTitle(title: string, locale: Locale, gender?: string): str
     return localizeGraphicDesigner(locale, gender);
   }
   if (locale === 'sr' || locale === 'hr') return normalized;
+  if (locale === 'de' && looksLikeGermanOccupationalTitle(normalized)) return normalized;
   const isAsciiTitle = /^[A-Za-z0-9\s/&'’.-]+$/u.test(normalized) && normalized.length > 2;
   if (locale === 'en') {
     return isAsciiTitle ? normalized : null;

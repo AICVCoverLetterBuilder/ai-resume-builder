@@ -4,7 +4,7 @@
  * complete first-person German Summary sentences (duration + current + prior).
  */
 import { formatGermanTotalProfessionalDurationSentence } from '@/lib/cv-german-summary-competency-grounding';
-import { formatGermanEmployerPrepositional } from '@/lib/cv-german-summary-grounding';
+import { formatGermanEmployerPrepositional } from '@/lib/cv-german-employer-format';
 import type { SummaryV2EmploymentState, SummaryV2EntryFact, SummaryV2SelectionManifest } from './types';
 import { dutyTenseFromEmploymentState, type SummaryV2DutyTense } from './tense';
 
@@ -117,6 +117,13 @@ function past1sgFromFinite(verb: string): string {
   return v;
 }
 
+function isLikelyGermanFinitePredicateToken(token: string): boolean {
+  const value = (token || '').toLowerCase().trim();
+  if (!value) return false;
+  if (IRREGULAR_PRESENT_1SG[value] || IRREGULAR_PAST_1SG[value]) return true;
+  return /(?:t|te|tet|det|iert|en)$/u.test(value);
+}
+
 function splitLeadingSeparable(
   rest: string,
 ): { prefix: string; remainder: string } | null {
@@ -147,6 +154,31 @@ export function bulletToGermanWoIchClause(
   // Non-German script → do not invent morphology.
   if (/[\u0900-\u097F\u0600-\u06FF\u0400-\u04FF\u3040-\u30FF\u3400-\u9FFF]/u.test(s)) {
     return preserveObjectCasing(s);
+  }
+
+  // Two coordinated actions plus a second finite clause:
+  // `Erfasste und verwaltete Reservierungen sowie nahm Änderungen vor`
+  // -> `Reservierungen erfasste und verwaltete sowie Änderungen vornahm`.
+  const twoClause = /^(\p{L}+)\s+und\s+(\p{L}+)\s+(.+?)\s+sowie\s+(\p{L}+)\s+(.+)$/u.exec(s);
+  if (twoClause && isLikelyGermanFinitePredicateToken(twoClause[4])) {
+    const left = tense === 'past'
+      ? past1sgFromFinite(twoClause[1])
+      : present1sgFromFiniteOrInfinitive(twoClause[1]);
+    const right = tense === 'past'
+      ? past1sgFromFinite(twoClause[2])
+      : present1sgFromFiniteOrInfinitive(twoClause[2]);
+    const thirdRaw = twoClause[4];
+    const thirdRest = twoClause[5].trim();
+    const thirdSeparable = splitLeadingSeparable(thirdRest);
+    const thirdFinite = tense === 'past'
+      ? past1sgFromFinite(thirdRaw)
+      : present1sgFromFiniteOrInfinitive(thirdRaw);
+    const thirdClause = thirdSeparable
+      ? `${preserveObjectCasing(thirdSeparable.remainder)} ${thirdSeparable.prefix}${thirdFinite}`
+      : `${preserveObjectCasing(thirdRest)} ${thirdFinite}`;
+    return `${preserveObjectCasing(twoClause[3])} ${left} und ${right} sowie ${thirdClause}`
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   // Coordinated leading verbs: "überprüfte und passte Designmaterialien an"

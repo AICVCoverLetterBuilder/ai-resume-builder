@@ -13,6 +13,7 @@ import {
   localizeWarehouseEmployee,
   matchesGraphicDesignerOccupationalTitle,
   matchesWarehouseOccupationalTitle,
+  looksLikeGermanOccupationalTitle,
 } from './cv-role-title';
 
 export const GERMAN_SUMMARY_STRUCTURED_ROLE_LOCALIZATION_322_REVISION =
@@ -67,7 +68,8 @@ export function detectRoleLabelSourceLocale(role: string): string | null {
     || /\b(?:employe(?:e)?\s+d['’`]?entrepot|entrepot)\b/iu.test(folded)) {
     return 'fr';
   }
-  if (/\b(?:grafikdesigner(?:in)?|lagermitarbeiter(?:in)?|fachkraft)\b/iu.test(folded)) {
+  if (/\b(?:grafikdesigner(?:in)?|lagermitarbeiter(?:in)?|fachkraft)\b/iu.test(folded)
+    || looksLikeGermanOccupationalTitle(t)) {
     return 'de';
   }
   if (/\b(?:graphic\s*designer|warehouse\s*employee|baker|cook)\b/iu.test(folded)) {
@@ -82,9 +84,8 @@ function looksLikeTargetLocaleRole(role: string, targetLocale: Locale): boolean 
   if (!detected) {
     // ASCII free-text may be English; treat as target-compatible only for `en`.
     if (targetLocale === 'en' && /^[A-Za-z0-9\s/&'’.-]+$/u.test(role)) return true;
-    if (targetLocale === 'de' && /\b(?:in|er|erin|kraft)\b/iu.test(role)
-      && !/[ñáéíóúü]/iu.test(role)) {
-      return /^[\p{L}\p{M}\s/&'’.-]+$/u.test(role);
+    if (targetLocale === 'de' && looksLikeGermanOccupationalTitle(role)) {
+      return true;
     }
     return false;
   }

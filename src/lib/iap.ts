@@ -158,6 +158,8 @@ export async function refreshStorePrice(): Promise<string | null> {
   if (platform === 'web') return null;
 
   try {
+    await withTimeout(initIAP(), INIT_TIMEOUT_MS, 'initIAP (from refreshStorePrice)');
+    if (!_initialized) return null;
     const Purchases = getPurchases();
     diagLog('refreshStorePrice: fetching offerings...');
     const offerings = await withTimeout(
@@ -231,7 +233,7 @@ async function _initIAPImpl(platform: 'ios' | 'android' | 'web'): Promise<void> 
 
   if (!apiKey) {
     diagError('initIAP: RevenueCat API key not configured.');
-    throw new Error('RevenueCat API key not configured. Check NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY.');
+    throw new IAPConfigurationError('RevenueCat public SDK key is not configured for this native build.');
   }
 
   const Purchases = getPurchases();
@@ -450,11 +452,42 @@ async function purchaseWithStoreOpeningWatchdog<T>(startPurchase: () => Promise<
 
 // --- Core operations ----------------------------------------------------------------
 
+export type IAPFailureCode =
+  | 'purchase_system_unavailable'
+  | 'restore_failed';
+
 export type IAPResult =
   | { success: true; isPro: boolean; token?: string }
-  | { success: false; cancelled: boolean; message: string; entitlementActive?: boolean };
+  | {
+    success: false;
+    cancelled: boolean;
+    message: string;
+    errorCode?: IAPFailureCode;
+    entitlementActive?: boolean;
+  };
 
 const PRO_TOKEN_KEY = 'cvpro-pro-token';
+const PURCHASE_SYSTEM_UNAVAILABLE_MESSAGE =
+  'Purchases are temporarily unavailable. Please update the app or contact support.';
+
+class IAPConfigurationError extends Error {
+  readonly code = 'purchase_system_unavailable' as const;
+}
+
+function isPurchaseSystemConfigurationError(error: unknown): boolean {
+  if (error instanceof IAPConfigurationError) return true;
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /(?:must be configured|not configured|configure\(\)|purchases? plugin unavailable)/iu.test(message);
+}
+
+function purchaseSystemUnavailableResult(): IAPResult {
+  return {
+    success: false,
+    cancelled: false,
+    errorCode: 'purchase_system_unavailable',
+    message: PURCHASE_SYSTEM_UNAVAILABLE_MESSAGE,
+  };
+}
 const PRO_AUTHORIZATION_SYNC_ERROR =
   'Pro entitlement is active, but AI authorization is temporarily unavailable. Please try again in a moment.';
 
@@ -578,13 +611,20 @@ export async function syncProEntitlement(): Promise<ProEntitlementSyncResult> {
   }
 
   try {
+    await withTimeout(initIAP(), INIT_TIMEOUT_MS, 'initIAP (from syncProEntitlement)');
+    if (!_initialized) {
+      throw new IAPConfigurationError('RevenueCat did not become ready for entitlement sync.');
+    }
     const Purchases = getPurchases();
     const { customerInfo } = await Purchases.getCustomerInfo();
     const hasEntitlement = customerInfo.entitlements.active[PRO_ENTITLEMENT] !== undefined;
     return await syncTokenForEntitlement(hasEntitlement);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Entitlement check failed.';
-    diagError('syncProEntitlement: failed:', message);
+    const rawMessage = err instanceof Error ? err.message : 'Entitlement check failed.';
+    const message = isPurchaseSystemConfigurationError(err)
+      ? PURCHASE_SYSTEM_UNAVAILABLE_MESSAGE
+      : rawMessage;
+    diagError('syncProEntitlement: failed:', rawMessage);
     return {
       entitlementResult: 'failed',
       tokenSyncLastResult: 'not-run',
@@ -611,11 +651,12 @@ export async function purchasePro(): Promise<IAPResult> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Purchase system init failed.';
       diagError('purchasePro: init failed:', msg);
+      if (isPurchaseSystemConfigurationError(err)) return purchaseSystemUnavailableResult();
       return { success: false, cancelled: false, message: msg };
     }
     if (!_initialized) {
       diagError('purchasePro: SDK still not initialised after initIAP call');
-      return { success: false, cancelled: false, message: 'Purchase system is not ready. Please try again later.' };
+      return purchaseSystemUnavailableResult();
     }
   }
 
@@ -633,6 +674,7 @@ export async function purchasePro(): Promise<IAPResult> {
     const baseMessage = rcErr && typeof rcErr['message'] === 'string' ? rcErr['message'] : 'Purchase failed. Please try again.';
     const msg = baseMessage.includes('[phase=') ? baseMessage : baseMessage + diagnosticSuffix();
     diagError('purchasePro: error:', msg);
+    if (isPurchaseSystemConfigurationError(err)) return purchaseSystemUnavailableResult();
     return { success: false, cancelled: false, message: msg };
   }
 }
@@ -782,6 +824,14 @@ export async function restorePro(): Promise<IAPResult> {
     return { success: true, isPro: decodeTokenIsPro(token), token: decodeTokenIsPro(token) ? token ?? undefined : undefined };
   }
   try {
+    // Restore is a public entry point and may be called before the React hook's
+    // mount effect finishes. Always share/await the same initialization promise
+    // instead of calling the native SDK in an unconfigured state.
+    await withTimeout(initIAP(), INIT_TIMEOUT_MS, 'initIAP (from restorePro)');
+    if (!_initialized) {
+      throw new IAPConfigurationError('RevenueCat did not become ready for restore.');
+    }
+
     const Purchases = getPurchases();
     diagLog('restorePro: calling restorePurchases...');
     const { customerInfo } = await Purchases.restorePurchases();
@@ -801,7 +851,13 @@ export async function restorePro(): Promise<IAPResult> {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Restore failed. Please try again.';
     diagError('restorePro: failed:', msg);
-    return { success: false, cancelled: false, message: msg };
+    if (isPurchaseSystemConfigurationError(err)) return purchaseSystemUnavailableResult();
+    return {
+      success: false,
+      cancelled: false,
+      errorCode: 'restore_failed',
+      message: 'Restore failed. Please try again or contact support.',
+    };
   }
 }
 

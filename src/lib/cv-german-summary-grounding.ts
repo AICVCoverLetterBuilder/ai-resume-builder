@@ -4,6 +4,8 @@
  * for company names.
  */
 import type { Locale } from './i18n/translations';
+import { formatGermanEmployerPrepositional } from './cv-german-employer-format';
+import { bulletToGermanWoIchClause } from './cv-summary-v2/german-surface';
 import { classifyMaterialDutyKeys } from './cv-material-duty-coverage';
 import {
   localizeGraphicDesigner,
@@ -318,13 +320,7 @@ export function isGermanThirdPersonBiographySummary(text: string): boolean {
     .test(t);
 }
 
-/** Natural German employer preposition — `bei Atlas`, never `in Atlas` for employers. */
-export function formatGermanEmployerPrepositional(employer: string): string | null {
-  const company = (employer || '').replace(/\s+/g, ' ').trim();
-  if (!company) return null;
-  if (/^(?:bei|in|im|am)\s+/iu.test(company)) return company;
-  return `bei ${company}`;
-}
+export { formatGermanEmployerPrepositional } from './cv-german-employer-format';
 
 export function germanWarehouseSummaryFragment(key: string): string {
   // AAB-323: each warehouse fact family has a distinct dative-ready clause.
@@ -974,9 +970,8 @@ export function buildGermanEntryOwnedSummary(options: {
     .map((f) => f.sourceText || f.value)
     .filter(Boolean)
     .join('\n');
-  const warehouseRole = !role
-    || /^(?:fachkraft|professional|professionalin)$/iu.test(role)
-    || matchesWarehouseOccupationalTitle(role)
+  const genericRole = !role || /^(?:fachkraft|professional|professionalin)$/iu.test(role);
+  const warehouseRole = matchesWarehouseOccupationalTitle(role)
     || /lager|warehouse|skladist|magazin/i.test(role)
     || /(?:warehouse|lager|skladist|magacin)/i.test(currentDutiesCorpus);
   const cookingRole = /baker|bäcker|pekar|cook|chef|kuvar|küche|kitchen|bäck/i
@@ -995,8 +990,13 @@ export function buildGermanEntryOwnedSummary(options: {
       }
     }
   } else if (!unspecified) {
-    if (!role || /^(?:fachkraft|professional|professionalin)$/iu.test(role) || warehouseRole) {
+    if (warehouseRole) {
       role = localizeWarehouseEmployee('de', options.gender);
+    } else if (genericRole) {
+      // A generic role without warehouse evidence must stay generic. Never turn
+      // an arbitrary occupation into Lagermitarbeiter solely because role
+      // localization could not resolve a free-text title.
+      role = 'Fachkraft';
     } else {
       const resolved = resolveLocalizedSummaryRole({
         role,
@@ -1092,8 +1092,11 @@ export function buildGermanEntryOwnedSummary(options: {
         )
           && !/[\u0900-\u097F\u0600-\u06FF\u0400-\u04FF\u3040-\u30FF\u3400-\u9FFF]/.test(s))
         .slice(0, 3);
-      const dutyTail = dutyBits.length
-        ? `, wo ich ${dutyBits.join(', ').replace(/, ([^,]*)$/u, ' und $1')}`
+      const dutyClauses = dutyBits
+        .map((duty) => bulletToGermanWoIchClause(duty, 'present'))
+        .filter(Boolean);
+      const dutyTail = dutyClauses.length
+        ? `, wo ich ${dutyClauses.join(', ').replace(/, ([^,]*)$/u, ' und $1')}`
         : '';
       currentSentence = beiCompany
         ? `Derzeit arbeite ich ${beiCompany} als ${role}${dutyTail}.`
@@ -1155,8 +1158,11 @@ export function buildGermanEntryOwnedSummary(options: {
         )
           && !/[\u0900-\u097F\u0600-\u06FF\u0400-\u04FF\u3040-\u30FF\u3400-\u9FFF]/.test(s))
         .slice(0, 3);
-      const priorDutyTail = priorDutyBits.length
-        ? `, wo ich ${priorDutyBits.join(', ').replace(/, ([^,]*)$/u, ' und $1')}`
+      const priorDutyClauses = priorDutyBits
+        .map((duty) => bulletToGermanWoIchClause(duty, 'past'))
+        .filter(Boolean);
+      const priorDutyTail = priorDutyClauses.length
+        ? `, wo ich ${priorDutyClauses.join(', ').replace(/, ([^,]*)$/u, ' und $1')}`
         : '';
       priorSentence = priorBei
         ? `Zuvor arbeitete ich ${priorBei} als ${priorLabel}${priorDutyTail}.`

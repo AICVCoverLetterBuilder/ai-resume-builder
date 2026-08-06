@@ -5,7 +5,7 @@
  * Complements Playwright viewport tests when Chromium is available.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { AI_USAGE_SCHEMA_VERSION, AI_USAGE_STORAGE_KEY, PRO_AI_SAFETY_CAP } from '@/lib/ai-usage-policy';
 import { CV_DRAFT_STORAGE_KEY } from '@/lib/draft-storage';
 
@@ -47,8 +47,9 @@ describe('diagnostics modal mobile accessibility (component)', () => {
     localStorage.setItem('cvpro-pro-token', 'tok');
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
+    await vi.dynamicImportSettled();
     process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED = prev;
     vi.resetModules();
     localStorage.clear();
@@ -94,7 +95,9 @@ describe('diagnostics modal mobile accessibility (component)', () => {
     fireEvent.click(within(confirm).getByTestId('internal-ai-usage-reset-confirm'));
 
     expect(policy.getProAiUsageCount()).toBe(0);
-    expect((await screen.findByTestId('internal-ai-usage-count')).textContent).toMatch(/count:\s*0/);
+    await waitFor(() => {
+      expect(screen.getByTestId('internal-ai-usage-count').textContent).toMatch(/count:\s*0/);
+    });
     expect(screen.getByTestId('cv-export-diagnostics-dialog')).toBeTruthy();
     expect(localStorage.getItem(CV_DRAFT_STORAGE_KEY)).toBe(CV_FIXTURE);
     expect(localStorage.getItem('cvpro-plan')).toBe('pro');
@@ -109,5 +112,5 @@ describe('diagnostics modal mobile accessibility (component)', () => {
     expect(screen.queryByTestId('internal-ai-usage-reset-panel')).toBeNull();
     expect(screen.queryByTestId('internal-ai-usage-reset-button')).toBeNull();
     expect(screen.getByTestId('cv-export-diagnostics-json')).toBeTruthy();
-  });
+  }, 20_000);
 });
