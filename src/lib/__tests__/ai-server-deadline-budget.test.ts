@@ -12,6 +12,12 @@ import { buildCvCanonicalFactSet } from '@/lib/cv-canonical-facts';
 import { activateCvSummary } from '@/lib/cv-content-activation';
 import {
   AI_CLIENT_TIMEOUT_MS,
+  EXPERIENCE_EXPORT_PREPARATION_TIMEOUT_MS,
+  EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS,
+  EXPERIENCE_LOCALIZATION_OPERATION_DEADLINE_MS,
+  EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS,
+  EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS,
+  EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
   AI_MIN_REPAIR_BUDGET_MS,
   AI_PLATFORM_MAX_DURATION_S,
   AI_PLATFORM_SAFETY_MARGIN_MS,
@@ -19,6 +25,8 @@ import {
   AI_RESPONSE_GUARD_MS,
   AI_SERVER_BUDGET_MS,
   callProviderWithDeadline,
+  computeExperienceLocalizationDeadline,
+  computeExperienceLocalizationOperationDeadline,
   computeServerDeadline,
   hasRepairBudget,
   isProviderAbortOrTimeoutError,
@@ -75,6 +83,32 @@ const SERBIAN_ECHO = 'Vozač viličara sa iskustvom u skladišnom poslovanju.';
 const VALID_HINDI =
   'मैं लगभग छह वर्षों के अनुभव वाला वेयरहाउस चालक हूँ और गोदाम में माल का सुरक्षित परिवहन करता हूँ।';
 describe('budget constants vs Vercel platform limit (build 231)', () => {
+  it('orders the dedicated Experience localization transport, route, client and platform deadlines', () => {
+    expect(
+      EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS
+      + EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS
+      + 3_000,
+    ).toBeLessThanOrEqual(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS);
+    expect(EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS)
+      .toBeLessThan(EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS);
+    expect(EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS)
+      .toBeLessThan(AI_PLATFORM_MAX_DURATION_S * 1000);
+    expect(EXPERIENCE_EXPORT_PREPARATION_TIMEOUT_MS)
+      .toBe(EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS);
+    expect(EXPERIENCE_LOCALIZATION_OPERATION_DEADLINE_MS).toBe(120_000);
+    expect(computeExperienceLocalizationOperationDeadline(1_000)).toBe(121_000);
+  });
+
+  it('keeps one shared UI export lock and aborts localization on unmount', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const page = fs.readFileSync(path.resolve('src/app/cv-builder/page.tsx'), 'utf8');
+    expect(page).toContain('exportInFlightRef.current = true');
+    expect(page).toContain('isWordExporting || exportInFlightRef.current');
+    expect(page).toContain('isPdfExporting || exportInFlightRef.current');
+    expect(page).toContain('experienceLocalizationAbortRef.current?.abort()');
+    expect(page).toContain('EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS');
+  });
   it('application budget is 22s with ≥6s margin under a 30s platform maxDuration', () => {
     expect(AI_SERVER_BUDGET_MS).toBe(22_000);
     expect(AI_PLATFORM_MAX_DURATION_S).toBe(30);
@@ -90,7 +124,7 @@ describe('budget constants vs Vercel platform limit (build 231)', () => {
     const fs = await import('node:fs');
     const path = await import('node:path');
     const src = fs.readFileSync(path.resolve('src/app/api/generate/route.ts'), 'utf8');
-    const deadlineIdx = src.indexOf('const deadlineAt = computeServerDeadline(serverReceivedAt)');
+    const deadlineIdx = src.indexOf('let deadlineAt = computeServerDeadline(serverReceivedAt)');
     const jsonIdx = src.indexOf('await req.json()');
     const verifyIdx = src.indexOf('await verifyProToken');
     expect(deadlineIdx).toBeGreaterThan(0);
@@ -160,6 +194,55 @@ describe('callProviderWithDeadline hard-cancel', () => {
       return 'done';
     });
     await expect(callProviderWithDeadline(create, deadlineAt)).resolves.toBe('done');
+  });
+
+  it('clears a near-boundary translation timer and gives verifier a fresh signal and full slice', async () => {
+    const deadlineAt = computeExperienceLocalizationDeadline(start);
+    const signals: AbortSignal[] = [];
+    const translation = callProviderWithDeadline(async (options) => {
+      signals.push(options.signal!);
+      await new Promise((resolve) => setTimeout(resolve, 11_400));
+      return 'translated';
+    }, deadlineAt, EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS, 'translation');
+    await vi.advanceTimersByTimeAsync(11_400);
+    await expect(translation).resolves.toBe('translated');
+
+    const verifier = callProviderWithDeadline(async (options) => {
+      signals.push(options.signal!);
+      expect(options.timeout).toBe(EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS);
+      await new Promise((resolve) => setTimeout(resolve, 11_400));
+      return 'verified';
+    }, deadlineAt, EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS, 'verifier');
+    await vi.advanceTimersByTimeAsync(11_400);
+    await expect(verifier).resolves.toBe('verified');
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(signals[0].aborted).toBe(false);
+    expect(signals[1].aborted).toBe(false);
+  });
+
+  it('classifies a client cancellation independently and returns without waiting for transport', async () => {
+    const client = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    const pending = callProviderWithDeadline(async (options) => {
+      providerSignal = options.signal;
+      await new Promise((resolve) => setTimeout(resolve, 60_000));
+      return 'late';
+    }, computeExperienceLocalizationDeadline(start), 11_500, 'verifier', client.signal);
+    client.abort();
+    await expect(pending).rejects.toMatchObject({ deadlineOwner: 'client_abort' });
+    expect(providerSignal?.aborted).toBe(true);
+  });
+
+  it('classifies a route-clamped expiry as route-owned rather than verifier timeout', async () => {
+    const deadlineAt = start + 4_000;
+    const pending = callProviderWithDeadline(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60_000));
+      return 'late';
+    }, deadlineAt, 11_500, 'verifier');
+    const rejection = expect(pending).rejects.toMatchObject({ deadlineOwner: 'route_deadline' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await rejection;
   });
 });
 

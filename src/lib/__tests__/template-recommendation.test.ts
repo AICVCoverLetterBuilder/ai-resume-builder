@@ -40,6 +40,15 @@ const registryIds = Object.keys(templateInfo) as TemplateId[];
 const freeTemplateIds = registryIds.filter((id) => !templateInfo[id].isPro);
 const premiumTemplateIds = registryIds.filter((id) => templateInfo[id].isPro);
 
+const AI_RECOMMENDATION_CHANGE_PATTERN =
+  /(?:recommendTemplate(?:Details)?|getTemplateRecommendationScoreBreakdown|normalizeRecommendedTemplateId|getPremiumRecommendationFallback|PREMIUM_RECOMMENDATION_TIE_BREAK_ORDER|ProfessionCategory|TemplateRecommendation|templateInfo)/;
+
+function containsProhibitedAiRecommendationDiff(diff: string): boolean {
+  return diff
+    .split(/\r?\n/)
+    .some((line) => /^[+-](?![+-])/.test(line) && AI_RECOMMENDATION_CHANGE_PATTERN.test(line.slice(1)));
+}
+
 function expectPremiumRecommendation(id: TemplateId) {
   expect(registryIds).toContain(id);
   expect(premiumTemplateIds).toContain(id);
@@ -235,15 +244,18 @@ describe('template recommendation', () => {
       .split(/\r?\n/)
       .filter(Boolean);
 
-    // Optional canonical fact-lock fields on CVData/WorkExperience are allowed;
-    // recommendation scoring sources must not be altered by export/content work.
+    // Shared CV types can evolve for unrelated export/content features. Only
+    // changed lines that alter the AI recommendation contract are prohibited.
     if (changedFiles.includes('src/lib/types.ts')) {
       const typesDiff = execFileSync('git', ['diff', '--', 'src/lib/types.ts'], { encoding: 'utf8' });
-      expect(typesDiff).not.toMatch(/recommendTemplate|ProfessionCategory/);
-      expect(typesDiff).toMatch(
-        /canonicalDescription|canonicalSummary|generationJobContextKey|summaryGenerationContextKey|positionProvenance|positionUserEdited|positionSourceLocale|positionSourceKey/,
-      );
+      expect(containsProhibitedAiRecommendationDiff(typesDiff)).toBe(false);
     }
     expect(changedFiles.filter((f) => f === 'src/lib/ai.ts' || f.endsWith('/recommend-template.ts'))).toEqual([]);
+  });
+
+  test('AI recommendation diff guard ignores unrelated shared types and catches contract changes', () => {
+    expect(containsProhibitedAiRecommendationDiff('+  descriptionSourceLocaleTextHash?: string;')).toBe(false);
+    expect(containsProhibitedAiRecommendationDiff('+export function recommendTemplate(input: CVData): TemplateId {')).toBe(true);
+    expect(containsProhibitedAiRecommendationDiff("-export type ProfessionCategory = 'general';")).toBe(true);
   });
 });

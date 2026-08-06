@@ -53,6 +53,32 @@ export const AI_SERVER_BUDGET_MS = 22_000;
 export const AI_PROVIDER_CALL_TIMEOUT_MS = 8_000;
 
 /**
+ * Experience export localization is one request containing two sequential,
+ * independently validated provider calls. These dedicated bounds leave the
+ * existing Summary/Bullets recovery contract unchanged.
+ */
+export const EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS = 11_500;
+export const EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS = 11_500;
+export const EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS = 27_000;
+export const EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS = 29_000;
+/**
+ * One export-localization operation may span several bounded server requests,
+ * but it must never scale its wall-clock deadline without limit. Four complete
+ * 29-second client windows plus a 4-second orchestration guard yield a fixed,
+ * retryable two-minute operation budget independent of record count.
+ */
+export const EXPERIENCE_LOCALIZATION_OPERATION_DEADLINE_MS = 120_000;
+export const EXPERIENCE_EXPORT_PREPARATION_TIMEOUT_MS = 29_000;
+
+export function computeExperienceLocalizationDeadline(requestStartedAt: number): number {
+  return requestStartedAt + EXPERIENCE_LOCALIZATION_SERVER_BUDGET_MS;
+}
+
+export function computeExperienceLocalizationOperationDeadline(startedAt: number): number {
+  return startedAt + EXPERIENCE_LOCALIZATION_OPERATION_DEADLINE_MS;
+}
+
+/**
  * Minimum remaining application budget required to START a repair call.
  * Below this, skip repair and return the local deterministic fallback.
  */
@@ -153,6 +179,33 @@ export interface ProviderCallOptions {
   maxRetries?: number;
 }
 
+export type ProviderDeadlineOwner =
+  | 'provider_transport'
+  | 'translation_transport'
+  | 'verifier_transport'
+  | 'route_deadline'
+  | 'client_abort';
+
+export type ProviderDeadlineError = Error & {
+  deadlineOwner: ProviderDeadlineOwner;
+  configuredTimeoutMs: number;
+  effectiveTimeoutMs: number;
+};
+
+function deadlineError(
+  message: string,
+  owner: ProviderDeadlineOwner,
+  configuredTimeoutMs: number,
+  effectiveTimeoutMs: number,
+): ProviderDeadlineError {
+  return Object.assign(new Error(message), {
+    name: 'AbortError',
+    deadlineOwner: owner,
+    configuredTimeoutMs,
+    effectiveTimeoutMs,
+  }) as ProviderDeadlineError;
+}
+
 /**
  * Runs one provider call under a hard AbortSignal + timeout, with SDK retries
  * disabled. The underlying request is cancelled when the slice expires so the
@@ -161,20 +214,47 @@ export interface ProviderCallOptions {
 export async function callProviderWithDeadline<T>(
   create: (options: ProviderCallOptions) => Promise<T>,
   deadlineAt?: number | null,
+  configuredTimeoutMs: number = AI_PROVIDER_CALL_TIMEOUT_MS,
+  timeoutStage: 'provider' | 'translation' | 'verifier' = 'provider',
+  cancellationSignal?: AbortSignal | null,
 ): Promise<T> {
+  if (cancellationSignal?.aborted) {
+    throw deadlineError('client_abort before provider dispatch', 'client_abort', configuredTimeoutMs, 0);
+  }
   if (!hasProviderBudget(deadlineAt)) {
-    const err = new Error('Request timeout: insufficient provider budget');
-    err.name = 'AbortError';
-    throw err;
+    throw deadlineError(
+      'route_deadline_insufficient before provider dispatch',
+      'route_deadline',
+      configuredTimeoutMs,
+      Math.max(0, deadlineAt == null ? 0 : remainingBudgetMs(deadlineAt)),
+    );
   }
 
-  const timeoutMs = providerCallTimeoutMs(deadlineAt);
+  const timeoutMs = deadlineAt == null
+    ? configuredTimeoutMs
+    : Math.max(1_000, Math.min(configuredTimeoutMs, remainingBudgetMs(deadlineAt) - 500));
   // Clamp further when the shared application deadline is closer than the slice.
   const effectiveMs = deadlineAt == null
     ? timeoutMs
     : Math.max(1_000, Math.min(timeoutMs, remainingBudgetMs(deadlineAt) - AI_RESPONSE_GUARD_MS));
   const controller = new AbortController();
   let sliceTimer: ReturnType<typeof setTimeout> | undefined;
+  let clientAborted = false;
+  let rejectClientAbort: ((reason: ProviderDeadlineError) => void) | undefined;
+  const clientAbortPromise = new Promise<never>((_, reject) => {
+    rejectClientAbort = reject;
+  });
+  const abortFromClient = () => {
+    clientAborted = true;
+    controller.abort();
+    rejectClientAbort?.(deadlineError(
+      'client_abort during provider transport',
+      'client_abort',
+      configuredTimeoutMs,
+      effectiveMs,
+    ));
+  };
+  cancellationSignal?.addEventListener('abort', abortFromClient, { once: true });
   const abort = () => {
     try {
       controller.abort();
@@ -184,9 +264,20 @@ export async function callProviderWithDeadline<T>(
   };
 
   const timeoutError = () => {
-    const err = new Error(`Request timeout after ${effectiveMs}ms`);
-    err.name = 'AbortError';
-    return err;
+    const routeOwned = deadlineAt != null && effectiveMs < configuredTimeoutMs;
+    const owner: ProviderDeadlineOwner = routeOwned
+      ? 'route_deadline'
+      : timeoutStage === 'verifier'
+        ? 'verifier_transport'
+        : timeoutStage === 'translation' ? 'translation_transport' : 'provider_transport';
+    return deadlineError(
+      routeOwned
+        ? `route_deadline_exceeded after ${effectiveMs}ms`
+        : `${timeoutStage}_transport_timeout after ${effectiveMs}ms`,
+      owner,
+      configuredTimeoutMs,
+      effectiveMs,
+    );
   };
 
   // Race the provider call against an explicit timer. AbortSignal cancels the
@@ -207,14 +298,18 @@ export async function callProviderWithDeadline<T>(
   });
 
   try {
-    return await Promise.race([createPromise, slicePromise]);
+    return await Promise.race([createPromise, slicePromise, clientAbortPromise]);
   } catch (err) {
     // Swallow late provider completion so it cannot apply content, increment
     // usage, or keep the route awaiting an unresolved promise.
     void createPromise.then(() => undefined, () => undefined);
+    if (clientAborted) {
+      throw deadlineError('client_abort during provider transport', 'client_abort', configuredTimeoutMs, effectiveMs);
+    }
     throw err;
   } finally {
     if (sliceTimer) clearTimeout(sliceTimer);
+    cancellationSignal?.removeEventListener('abort', abortFromClient);
   }
 }
 

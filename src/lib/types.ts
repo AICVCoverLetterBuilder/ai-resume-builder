@@ -74,6 +74,8 @@ export interface WorkExperience {
   generatedLocale?: string;
   /** Locale of the current explicit user/manual description, when known. */
   descriptionSourceLocale?: string;
+  /** Hash of the canonical normalized visible description to which descriptionSourceLocale is bound. */
+  descriptionSourceLocaleTextHash?: string;
   /**
    * Per-entry AI output provenance (stable Experience.id ownership).
    * Unedited AI output hashes + pre-AI fact snapshot for later operations.

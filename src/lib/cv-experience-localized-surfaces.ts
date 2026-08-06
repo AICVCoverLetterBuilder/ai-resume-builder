@@ -15,6 +15,11 @@ export const EXPERIENCE_LOCALIZED_SURFACE_SCHEMA =
   'experience-localized-surface-399-v1' as const;
 export const EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION =
   'experience-localization-independent-validator-399-v2' as const;
+export const EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE = 6;
+export const EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_CHARS = 5_000;
+export const EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_UTF8_BYTES = 15_000;
+export const EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS =
+  EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_CHARS;
 
 export type ExperienceLocalizationProvenance = 'provider' | 'provider_repair';
 
@@ -132,6 +137,7 @@ export type ExperienceLocalizationRequest = {
 
 export type ExperienceLocalizationAdapter = (
   request: ExperienceLocalizationRequest,
+  context?: { batchIndex: number; batchCount: number },
 ) => Promise<ExperienceLocalizationProviderResponse>;
 
 export type ExperienceLocalizationDiagnostics = {
@@ -157,6 +163,16 @@ export type ExperienceLocalizationDiagnostics = {
   persistedSurfaceCount: number;
   cacheReuseCount: number;
   staleResponseRejected: boolean;
+  translationResponded?: boolean;
+  translationParserPassed?: boolean;
+  compactTranslatorIdsValidated?: boolean;
+  fullIdentitiesReconstructed?: boolean;
+  candidateHashesComputed?: boolean;
+  verifierDispatched?: boolean;
+  verifierResponded?: boolean;
+  verifierParserReached?: boolean;
+  verifiedRecordCount?: number;
+  routeRemainingAtVerifierDispatchMs?: number;
   failureStage?: string;
   failureReason?: string;
 };
@@ -188,12 +204,28 @@ export type PrepareExperienceLocalizedSurfacesResult =
     diagnostics: ExperienceLocalizationDiagnostics;
   };
 
-function normalizeText(text: string): string {
+export function canonicalizeExperienceLocalizationText(text: string): string {
   return String(text || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
 }
 
+export function measureExperienceLocalizationText(text: string) {
+  const canonicalText = canonicalizeExperienceLocalizationText(text);
+  return { canonicalText, canonicalChars: canonicalText.length, utf8Bytes: new TextEncoder().encode(canonicalText).length };
+}
+
+export function experienceDescriptionLocalizationLimitViolation(text: string) {
+  const clauses = splitExperienceBullets(text || '');
+  for (let sourceClauseIndex = 0; sourceClauseIndex < clauses.length; sourceClauseIndex += 1) {
+    const canonicalChars = measureExperienceLocalizationText(clauses[sourceClauseIndex] || '').canonicalChars;
+    if (canonicalChars > EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS) {
+      return { sourceClauseIndex, canonicalChars, maxCanonicalChars: EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS };
+    }
+  }
+  return null;
+}
+
 export function hashExperienceLocalizedSurfaceValue(text: string): string {
-  const normalized = normalizeText(text);
+  const normalized = canonicalizeExperienceLocalizationText(text);
   let hash = 2166136261;
   for (let i = 0; i < normalized.length; i += 1) {
     hash ^= normalized.charCodeAt(i);
@@ -209,8 +241,8 @@ function stableMaterial(parts: Array<string | number | boolean>): string {
 function experienceLineageHash(exp: WorkExperience): string {
   return hashExperienceLocalizedSurfaceValue(stableMaterial([
     exp.id,
-    normalizeText(exp.position || ''),
-    normalizeText(exp.company || ''),
+    canonicalizeExperienceLocalizationText(exp.position || ''),
+    canonicalizeExperienceLocalizationText(exp.company || ''),
     exp.startDate || '',
     exp.endDate || '',
     Boolean(exp.isPresent),
@@ -283,14 +315,13 @@ function recordForDuty(options: {
   sourceLocale: Locale;
   targetLocale: Locale;
 }): ExperienceLocalizationRequestRecord {
+  const sourceText = canonicalizeExperienceLocalizationText(options.duty.sourceClause || '');
   const binding: ExperienceLocalizedSurfaceBinding = {
     cvId: options.cv.id || 'missing-cv-id',
     experienceId: options.exp.id,
     experienceLineageHash: experienceLineageHash(options.exp),
     sourceClauseIndex: options.duty.sourceClauseIndex ?? 0,
-    sourceClauseHash: options.duty.sourceClauseHash || hashExperienceLocalizedSurfaceValue(
-      options.duty.sourceClause || '',
-    ),
+    sourceClauseHash: options.duty.sourceClauseHash || hashExperienceLocalizedSurfaceValue(sourceText),
     semanticFactId: options.duty.sourceFactId || options.duty.key,
     sourceLocale: options.sourceLocale,
     targetLocale: options.targetLocale,
@@ -299,7 +330,7 @@ function recordForDuty(options: {
   return {
     ...binding,
     requestIdentity: buildExperienceLocalizedSurfaceBindingKey(binding),
-    sourceText: options.duty.sourceClause || '',
+    sourceText,
   };
 }
 
@@ -385,9 +416,18 @@ export function buildExperienceLocalizationSnapshot(
       reason = 'experience_localization_source_locale_ambiguous';
       continue;
     }
+    const resolvedSourceLocale = source.locale;
+    const resolvedSourceResolution = source.resolution;
+    sourceLocaleByEntry[entryDiagKey] = resolvedSourceLocale;
+    sourceLocaleResolutionByEntry[entryDiagKey] = resolvedSourceResolution;
     for (const duty of grounding.duties) {
+      const metrics = measureExperienceLocalizationText(duty.sourceClause || '');
+      if (source.locale !== targetLocale && metrics.canonicalChars > EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS) {
+        reason ||= 'experience_localization_source_text_too_long';
+        continue;
+      }
       records.push(recordForDuty({
-        cv, exp, grounding, duty, sourceLocale: source.locale, targetLocale,
+        cv, exp, grounding, duty, sourceLocale: resolvedSourceLocale, targetLocale,
       }));
     }
   }
@@ -444,6 +484,58 @@ export function buildExperienceLocalizationSnapshot(
     cachedSurfaces,
     diagnostics,
   };
+}
+
+export type ExperienceLocalizationResourceFailureReason =
+  | 'experience_localization_source_text_too_long'
+  | 'experience_localization_batch_payload_too_large';
+
+export function validateExperienceLocalizationPhysicalBatch(records: ExperienceLocalizationRequestRecord[]) {
+  if (records.length > EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE) {
+    return { ok: false as const, reason: 'experience_localization_batch_payload_too_large' as const };
+  }
+  let canonicalChars = 0;
+  let utf8Bytes = 0;
+  for (const record of records) {
+    const metrics = measureExperienceLocalizationText(record.sourceText);
+    if (metrics.canonicalChars > EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS) {
+      return { ok: false as const, reason: 'experience_localization_source_text_too_long' as const };
+    }
+    canonicalChars += metrics.canonicalChars;
+    utf8Bytes += metrics.utf8Bytes;
+  }
+  if (canonicalChars > EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_CHARS
+    || utf8Bytes > EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_UTF8_BYTES) {
+    return { ok: false as const, reason: 'experience_localization_batch_payload_too_large' as const };
+  }
+  return { ok: true as const, canonicalChars, utf8Bytes };
+}
+
+export function partitionExperienceLocalizationRecords(records: ExperienceLocalizationRequestRecord[]) {
+  const batches: ExperienceLocalizationRequestRecord[][] = [];
+  let current: ExperienceLocalizationRequestRecord[] = [];
+  let currentChars = 0;
+  let currentBytes = 0;
+  for (const record of records) {
+    const metrics = measureExperienceLocalizationText(record.sourceText);
+    if (metrics.canonicalChars > EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS) {
+      return { ok: false as const, reason: 'experience_localization_source_text_too_long' as const };
+    }
+    if (metrics.utf8Bytes > EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_UTF8_BYTES) {
+      return { ok: false as const, reason: 'experience_localization_batch_payload_too_large' as const };
+    }
+    const wouldExceed = current.length >= EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE
+      || currentChars + metrics.canonicalChars > EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_CHARS
+      || currentBytes + metrics.utf8Bytes > EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_UTF8_BYTES;
+    if (wouldExceed && current.length) {
+      batches.push(current); current = []; currentChars = 0; currentBytes = 0;
+    }
+    current.push({ ...record, sourceText: metrics.canonicalText });
+    currentChars += metrics.canonicalChars;
+    currentBytes += metrics.utf8Bytes;
+  }
+  if (current.length) batches.push(current);
+  return { ok: true as const, batches };
 }
 
 function independentDecisionPassed(
@@ -563,7 +655,7 @@ function validateProviderBatch(options: {
     if (!bindingFieldsMatch(source, record)) {
       return { ok: false, reason: 'experience_localization_binding_identity_mismatch' };
     }
-    const localizedText = normalizeText(record.localizedText);
+    const localizedText = canonicalizeExperienceLocalizationText(record.localizedText);
     if (!localizedText) return { ok: false, reason: 'experience_localization_empty_surface' };
     const purity = validateAiUnitLocalePurity(localizedText, source.targetLocale, {
       kind: 'experience_bullet', requireUnits: true,
@@ -625,6 +717,8 @@ export async function prepareExperienceLocalizedSurfaces(options: {
   adapter: ExperienceLocalizationAdapter;
   getCurrentCv: () => CVData;
   persist: (nextCv: CVData, expectedSnapshotId: string) => boolean | Promise<boolean>;
+  operationDeadlineAt?: number;
+  now?: () => number;
 }): Promise<PrepareExperienceLocalizedSurfacesResult> {
   const initialCv = options.cv;
   const snapshot = buildExperienceLocalizationSnapshot(initialCv, options.targetLocale);
@@ -635,87 +729,123 @@ export async function prepareExperienceLocalizedSurfaces(options: {
   if (snapshot.missingRecords.length === 0) {
     return { ok: true, cv: initialCv, snapshot, diagnostics };
   }
-
-  const request: ExperienceLocalizationRequest = {
-    task: 'localize_cv_experience_surfaces',
-    snapshotId: snapshot.snapshotId,
-    targetLocale: options.targetLocale,
-    records: snapshot.missingRecords,
-  };
-  diagnostics = { ...diagnostics, providerRequestCount: 1 };
-  let response: ExperienceLocalizationProviderResponse;
-  try {
-    response = await options.adapter(request);
-  } catch (error) {
-    const adapterFailure = error as Error & {
-      translationProviderAttemptCount?: number;
-      independentVerifierAttemptCount?: number;
-      translatedRecordCount?: number;
+  const batchPlan = partitionExperienceLocalizationRecords(snapshot.missingRecords);
+  if (!batchPlan.ok) return failed(initialCv, snapshot, 'plan_localization_batches', batchPlan.reason, diagnostics);
+  const batches = batchPlan.batches;
+  const now = options.now || Date.now;
+  const operationExpired = () => Number.isFinite(options.operationDeadlineAt)
+    && now() >= Number(options.operationDeadlineAt);
+  if (operationExpired()) return failed(initialCv, snapshot, 'operation_deadline', 'experience_localization_operation_deadline_exceeded', diagnostics);
+  const allValidatedSurfaces: PersistedExperienceLocalizedSurface[] = [];
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+    if (operationExpired()) return failed(initialCv, snapshot, 'operation_deadline', 'experience_localization_operation_deadline_exceeded', diagnostics);
+    const batchRecords = batches[batchIndex]!;
+    const request: ExperienceLocalizationRequest = {
+      task: 'localize_cv_experience_surfaces',
+      snapshotId: snapshot.snapshotId,
+      targetLocale: options.targetLocale,
+      records: batchRecords,
     };
-    const typedReason = error instanceof Error
-      && /^experience_localization_[a-z0-9_]+$/i.test(error.message)
-      ? error.message
-      : 'experience_localization_provider_failed';
-    diagnostics = {
-      ...diagnostics,
-      providerRequestCount: Number.isInteger(adapterFailure.translationProviderAttemptCount)
-        ? Math.min(2, Math.max(0, Number(adapterFailure.translationProviderAttemptCount)))
-        : diagnostics.providerRequestCount,
-      independentVerifierRequestCount: Number.isInteger(
-        adapterFailure.independentVerifierAttemptCount,
-      )
-        ? Math.min(2, Math.max(0, Number(adapterFailure.independentVerifierAttemptCount)))
-        : diagnostics.independentVerifierRequestCount,
-      returnedRecordCount: Number.isInteger(adapterFailure.translatedRecordCount)
-        ? Math.max(0, Number(adapterFailure.translatedRecordCount))
-        : diagnostics.returnedRecordCount,
-      independentlyRejectedRecordCount: /^experience_localization_(?:verifier|independent)/.test(
+    let response: ExperienceLocalizationProviderResponse;
+    try {
+      response = await options.adapter(request, { batchIndex, batchCount: batches.length });
+    } catch (error) {
+      const adapterFailure = error as Error & {
+        translationProviderAttemptCount?: number;
+        independentVerifierAttemptCount?: number;
+        translatedRecordCount?: number;
+        verifiedRecordCount?: number;
+        translationResponded?: boolean;
+        translationParserPassed?: boolean;
+        compactTranslatorIdsValidated?: boolean;
+        fullIdentitiesReconstructed?: boolean;
+        candidateHashesComputed?: boolean;
+        verifierDispatched?: boolean;
+        verifierResponded?: boolean;
+        verifierParserReached?: boolean;
+        routeRemainingAtVerifierDispatchMs?: number;
+      };
+      const adapterReason = error instanceof Error ? error.message : '';
+      const typedReason = /^experience_localization_[a-z0-9_]+$/i.test(adapterReason)
+        || new Set([
+          'translation_transport_timeout', 'verifier_transport_timeout',
+          'route_deadline_exceeded', 'route_deadline_insufficient', 'client_abort',
+          'provider_http_failure', 'provider_invalid_response',
+        ]).has(adapterReason)
+        ? adapterReason
+        : 'experience_localization_provider_failed';
+      const translationAttempts = Number.isInteger(adapterFailure.translationProviderAttemptCount)
+        ? Math.max(0, Number(adapterFailure.translationProviderAttemptCount)) : 1;
+      const verifierAttempts = Number.isInteger(adapterFailure.independentVerifierAttemptCount)
+        ? Math.max(0, Number(adapterFailure.independentVerifierAttemptCount)) : 0;
+      const returned = Number.isInteger(adapterFailure.translatedRecordCount)
+        ? Math.max(0, Number(adapterFailure.translatedRecordCount)) : 0;
+      diagnostics = {
+        ...diagnostics,
+        providerRequestCount: diagnostics.providerRequestCount + translationAttempts,
+        independentVerifierRequestCount: diagnostics.independentVerifierRequestCount + verifierAttempts,
+        returnedRecordCount: diagnostics.returnedRecordCount + returned,
+        independentlyRejectedRecordCount: verifierAttempts > 0 ? request.records.length : 0,
+        translationResponded: adapterFailure.translationResponded === true,
+        translationParserPassed: adapterFailure.translationParserPassed === true,
+        compactTranslatorIdsValidated: adapterFailure.compactTranslatorIdsValidated === true,
+        fullIdentitiesReconstructed: adapterFailure.fullIdentitiesReconstructed === true,
+        candidateHashesComputed: adapterFailure.candidateHashesComputed === true,
+        verifierDispatched: adapterFailure.verifierDispatched === true,
+        verifierResponded: adapterFailure.verifierResponded === true,
+        verifierParserReached: adapterFailure.verifierParserReached === true,
+        verifiedRecordCount: Number.isInteger(adapterFailure.verifiedRecordCount)
+          ? Math.max(0, Number(adapterFailure.verifiedRecordCount)) : 0,
+        routeRemainingAtVerifierDispatchMs: Number.isFinite(adapterFailure.routeRemainingAtVerifierDispatchMs)
+          ? Number(adapterFailure.routeRemainingAtVerifierDispatchMs) : undefined,
+      };
+      return failed(
+        initialCv,
+        snapshot,
+        verifierAttempts > 0 ? 'independent_verification' : 'acquire_localized_surfaces',
         typedReason,
-      ) ? snapshot.missingRecords.length : 0,
-    };
-    const failureStage = /^experience_localization_(?:verifier|independent)/.test(typedReason)
-      ? 'independent_verification'
-      : 'acquire_localized_surfaces';
-    return failed(initialCv, snapshot, failureStage, typedReason, diagnostics);
-  }
-  const providerAttemptCount = Number.isInteger(response?.providerAttemptCount)
-    ? Math.min(2, Math.max(1, Number(response.providerAttemptCount)))
-    : 1;
-  const verifierAttemptCount = Number.isInteger(response?.independentVerification?.verifierAttemptCount)
-    ? Math.min(2, Math.max(1, Number(response.independentVerification.verifierAttemptCount)))
-    : 1;
-  diagnostics = {
-    ...diagnostics,
-    providerRequestCount: providerAttemptCount,
-    independentVerifierRequestCount: verifierAttemptCount,
-    returnedRecordCount: Array.isArray(response?.records) ? response.records.length : 0,
-    providerRepairCount: Math.max(
-      providerAttemptCount - 1,
-      response?.provenance === 'provider_repair' ? 1 : 0,
-    ),
-  };
-  const validated = validateProviderBatch({ cv: initialCv, request, response });
-  if (!validated.ok) {
+        diagnostics,
+      );
+    }
+    if (operationExpired()) return failed(initialCv, snapshot, 'operation_deadline', 'experience_localization_operation_deadline_exceeded', diagnostics);
+    const providerAttemptCount = Number.isInteger(response?.providerAttemptCount)
+      ? Math.max(1, Number(response.providerAttemptCount)) : 1;
+    const verifierAttemptCount = Number.isInteger(response?.independentVerification?.verifierAttemptCount)
+      ? Math.max(1, Number(response.independentVerification.verifierAttemptCount)) : 1;
     diagnostics = {
       ...diagnostics,
-      independentlyRejectedRecordCount: snapshot.missingRecords.length,
-      identityMismatch: /identity_mismatch|unknown_record|duplicate_record|record_count_mismatch/.test(
-        validated.reason,
+      providerRequestCount: diagnostics.providerRequestCount + providerAttemptCount,
+      independentVerifierRequestCount: diagnostics.independentVerifierRequestCount + verifierAttemptCount,
+      returnedRecordCount: diagnostics.returnedRecordCount
+        + (Array.isArray(response?.records) ? response.records.length : 0),
+      providerRepairCount: diagnostics.providerRepairCount + Math.max(
+        providerAttemptCount - 1,
+        response?.provenance === 'provider_repair' ? 1 : 0,
       ),
-      candidateHashMismatch: validated.reason
-        === 'experience_localization_verifier_candidate_hash_mismatch',
-      ...(validated.mismatchCategory
-        ? { semanticMismatchCategory: validated.mismatchCategory }
-        : {}),
     };
-    return failed(initialCv, snapshot, 'validate_localized_surfaces', validated.reason, diagnostics);
+    const validated = validateProviderBatch({ cv: initialCv, request, response });
+    if (!validated.ok) {
+      diagnostics = {
+        ...diagnostics,
+        independentlyRejectedRecordCount: request.records.length,
+        identityMismatch: /identity_mismatch|unknown_record|duplicate_record|record_count_mismatch/.test(
+          validated.reason,
+        ),
+        candidateHashMismatch: validated.reason
+          === 'experience_localization_verifier_candidate_hash_mismatch',
+        ...(validated.mismatchCategory ? { semanticMismatchCategory: validated.mismatchCategory } : {}),
+      };
+      return failed(initialCv, snapshot, 'validate_localized_surfaces', validated.reason, diagnostics);
+    }
+    allValidatedSurfaces.push(...validated.surfaces);
+    diagnostics = {
+      ...diagnostics,
+      validatedRecordCount: allValidatedSurfaces.length,
+      independentlyValidatedRecordCount: allValidatedSurfaces.length,
+    };
   }
-  diagnostics = {
-    ...diagnostics,
-    validatedRecordCount: validated.surfaces.length,
-    independentlyValidatedRecordCount: validated.surfaces.length,
-  };
 
+  if (operationExpired()) return failed(initialCv, snapshot, 'operation_deadline', 'experience_localization_operation_deadline_exceeded', diagnostics);
   const currentCv = options.getCurrentCv();
   const currentSnapshot = buildExperienceLocalizationSnapshot(currentCv, options.targetLocale);
   if (!currentSnapshot.ok || currentSnapshot.snapshotId !== snapshot.snapshotId) {
@@ -725,7 +855,7 @@ export async function prepareExperienceLocalizedSurfaces(options: {
 
   const currentStore = usableStore(currentCv);
   const surfaces = { ...currentStore.surfaces };
-  for (const surface of validated.surfaces) surfaces[surface.bindingKey] = surface;
+  for (const surface of allValidatedSurfaces) surfaces[surface.bindingKey] = surface;
   const nextCv: CVData = {
     ...currentCv,
     experienceLocalizedSurfaces: {
@@ -733,6 +863,7 @@ export async function prepareExperienceLocalizedSurfaces(options: {
       surfaces,
     },
   };
+  if (operationExpired()) return failed(initialCv, snapshot, 'operation_deadline', 'experience_localization_operation_deadline_exceeded', diagnostics);
   let persisted = false;
   try {
     persisted = await options.persist(nextCv, snapshot.snapshotId);
@@ -742,7 +873,7 @@ export async function prepareExperienceLocalizedSurfaces(options: {
   if (!persisted) {
     return failed(initialCv, snapshot, 'persist_localized_surfaces', 'experience_localization_persistence_failed', diagnostics);
   }
-  diagnostics = { ...diagnostics, persistedSurfaceCount: validated.surfaces.length };
+  diagnostics = { ...diagnostics, persistedSurfaceCount: allValidatedSurfaces.length };
   return { ok: true, cv: nextCv, snapshot, diagnostics };
 }
 

@@ -3,7 +3,7 @@
  * Creative Artistic fact-ID lock remains grounded on this snapshot — never assumes English.
  */
 import type { CVData, WorkExperience } from './types';
-import type { Locale } from './i18n/translations';
+import { resolveLocaleCandidate, type Locale } from './i18n/translations';
 import {
   classifyDutyCategory,
   formatExperienceBullets,
@@ -18,7 +18,7 @@ import {
   type LocalizedSummaryProvenance,
 } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
-import { canonicalizeContentLocale } from './cv-content-locale';
+import { canonicalizeContentLocale, detectTextLocale } from './cv-content-locale';
 import {
   applyGeneratedExperienceDescription,
   experienceProvenanceNeedsRepair,
@@ -30,6 +30,7 @@ import {
 import { refreshProvenanceAfterMaterialUserEdit } from './cv-experience-ai-output-provenance';
 import type { CvExperienceDescriptionOrigin } from './types';
 import { buildExperienceJobContext } from './cv-experience-job-context';
+import { hashExperienceSourceLocaleText } from './cv-experience-source-locale';
 
 export type CanonicalCreatedFrom =
   | 'user_structured_input'
@@ -52,6 +53,10 @@ export type CanonicalExperienceSnapshot = {
   startDate?: string;
   endDate?: string;
   current?: boolean;
+  /** Entry-owned locale evidence for the exact canonical duty snapshot. */
+  sourceLocale?: Locale;
+  /** Hash of the canonical duty text to which sourceLocale is bound. */
+  sourceLocaleTextHash?: string;
   bullets: CanonicalExperienceBullet[];
 };
 
@@ -134,6 +139,8 @@ export function computeCanonicalSourceHash(parts: {
       startDate: exp.startDate || '',
       endDate: exp.endDate || '',
       current: Boolean(exp.current),
+      sourceLocale: exp.sourceLocale || '',
+      sourceLocaleTextHash: exp.sourceLocaleTextHash || '',
       bullets: exp.bullets.map((b) => ({
         factId: b.factId,
         sourceText: b.sourceText,
@@ -256,7 +263,21 @@ export function buildExperienceSnapshotFromText(
   exp: WorkExperience,
   experienceIndex: number,
 ): CanonicalExperienceSnapshot {
-  const bullets = splitExperienceBullets(experienceDescriptionForCanonical(exp)).map((sourceText, order) => ({
+  const canonicalText = experienceDescriptionForCanonical(exp);
+  const canonicalTextHash = hashExperienceSourceLocaleText(canonicalText);
+  const boundDescriptionLocale = exp.descriptionSourceLocaleTextHash === canonicalTextHash
+    ? resolveLocaleCandidate(exp.descriptionSourceLocale)
+    : null;
+  const detectedLocale = detectTextLocale(canonicalText);
+  const matchingGeneratedLocale = canonicalText.trim()
+    && canonicalText.normalize('NFKC').replace(/\s+/g, ' ').trim()
+      === String(exp.generatedDescription || '').normalize('NFKC').replace(/\s+/g, ' ').trim()
+    ? resolveLocaleCandidate(exp.generatedLocale)
+    : null;
+  const sourceLocale = boundDescriptionLocale
+    || (detectedLocale === 'unknown' ? null : detectedLocale)
+    || matchingGeneratedLocale;
+  const bullets = splitExperienceBullets(canonicalText).map((sourceText, order) => ({
     factId: `experience-${experienceIndex}-bullet-${order}`,
     sourceText,
     semanticCategory: classifyDutyCategory(sourceText),
@@ -269,6 +290,9 @@ export function buildExperienceSnapshotFromText(
     startDate: exp.startDate || undefined,
     endDate: exp.endDate || undefined,
     current: exp.isPresent,
+    ...(sourceLocale
+      ? { sourceLocale, sourceLocaleTextHash: canonicalTextHash }
+      : {}),
     bullets,
   };
 }
@@ -591,7 +615,11 @@ export function applyCanonicalExperienceEdit(
         ...e,
         description: value,
         descriptionOrigin: nextOrigin,
-        descriptionSourceLocale: uiLocale,
+        descriptionSourceLocale: (() => {
+          const detected = detectTextLocale(value);
+          return detected === 'unknown' ? undefined : detected;
+        })(),
+        descriptionSourceLocaleTextHash: hashExperienceSourceLocaleText(value),
         // New user-authored duties become genuine grounding (keep generatedDescription
         // as historical AI display only — do not delete it merely for selection).
         originalUserDescription: materialEdit || !prevOriginal ? value : e.originalUserDescription,

@@ -17,6 +17,7 @@ import { formatCvExportIntegrityToast } from '@/lib/cv-export-error-message';
 import type { Locale } from '@/lib/i18n/translations';
 import {
   buildExperienceLocalizationSnapshot,
+  EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE,
   EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
   hashExperienceLocalizedSurfaceValue,
   prepareExperienceLocalizedSurfaces,
@@ -25,6 +26,7 @@ import {
   type ExperienceLocalizationRequest,
 } from '@/lib/cv-experience-localized-surfaces';
 import { buildModernMinimalPdfBlob, exportToDOCX } from '@/lib/export';
+import { hashExperienceSourceLocaleText } from '@/lib/cv-experience-source-locale';
 
 const BICYCLE_DE = [
   'Prüft Fahrräder auf technische Mängel und Verschleiß.',
@@ -258,6 +260,33 @@ describe('AAB-399 device-shaped Experience semantic provenance', () => {
     expect(bicycle.duties.every((duty) => duty.experienceId === 'exp-bicycle')).toBe(true);
     expect(reception.duties.every((duty) => duty.experienceId === 'exp-reception')).toBe(true);
     expect([...bicycle.duties, ...reception.duties].every((duty) => duty.sourceLocale === 'de')).toBe(true);
+  });
+
+  it('AAB-400 resolves current German duties before matching stale canonical locale metadata', () => {
+    const raw = deviceCv();
+    raw.canonicalSnapshot = {
+      ...raw.canonicalSnapshot!,
+      canonicalLocale: 'en',
+      canonicalExperiences: raw.experience.map((exp) => ({
+        experienceId: exp.id,
+        role: exp.position,
+        company: exp.company,
+        bullets: splitExperienceBullets(exp.description).map((sourceText, order) => ({
+          factId: `stale-en-${exp.id}-${order}`,
+          semanticCategory: 'generic',
+          sourceText,
+          order,
+        })),
+      })),
+    };
+
+    const snapshot = buildExperienceLocalizationSnapshot(raw, 'es');
+    expect(snapshot.ok).toBe(true);
+    expect(snapshot.records).toHaveLength(6);
+    expect(snapshot.records.every((record) => record.sourceLocale === 'de')).toBe(true);
+    expect(Object.values(snapshot.diagnostics.sourceLocaleByEntry)).toEqual(['de', 'de']);
+    expect(Object.values(snapshot.diagnostics.sourceLocaleResolutionByEntry))
+      .toEqual(['current_authoritative_text', 'current_authoritative_text']);
   });
 
   it('BLOCKER-01 keeps classifier-recognized stale original/canonical duties out of PDF and DOCX', async () => {
@@ -506,6 +535,7 @@ describe('AAB-399 device-shaped Experience semantic provenance', () => {
         startDate: '2020-01', endDate: '', isPresent: true,
         description, originalUserDescription: description, canonicalDescription: description,
         descriptionOrigin: 'user', descriptionSourceLocale: sourceLocale,
+        descriptionSourceLocaleTextHash: hashExperienceSourceLocaleText(description),
       };
       const grounding = recoverSemanticDutiesFromUserOrigin(exp);
       expect(grounding.duties).toHaveLength(3);
@@ -535,6 +565,24 @@ describe('AAB-399 device-shaped Experience semantic provenance', () => {
 
   it('acquires one de→es batch for PDF, persists six surfaces, and reuses them for DOCX and repeated PDF', async () => {
     const raw = deviceCv();
+    // Exact AAB-399 device failure shape: the matching canonical snapshot
+    // carries stale English locale metadata while its bound visible clauses
+    // are the current German Fahrradmechaniker/Rezeptionist duties.
+    raw.canonicalSnapshot = {
+      ...raw.canonicalSnapshot!,
+      canonicalLocale: 'en',
+      canonicalExperiences: raw.experience.map((exp) => ({
+        experienceId: exp.id,
+        role: exp.position,
+        company: exp.company,
+        bullets: splitExperienceBullets(exp.description).map((sourceText, order) => ({
+          factId: `device-current-${exp.id}-${order}`,
+          semanticCategory: 'generic',
+          sourceText,
+          order,
+        })),
+      })),
+    };
     const visibleBefore = raw.experience.map((exp) => exp.description);
     const canonicalBefore = structuredClone(raw.canonicalSnapshot);
     let currentCv = raw;
@@ -574,6 +622,9 @@ describe('AAB-399 device-shaped Experience semantic provenance', () => {
     expect(first.diagnostics.providerRequestCount).toBe(1);
     expect(first.diagnostics.independentVerifierRequestCount).toBe(1);
     expect(first.diagnostics.persistedSurfaceCount).toBe(6);
+    expect(Object.values(first.diagnostics.sourceLocaleByEntry)).toEqual(['de', 'de']);
+    expect(Object.values(first.diagnostics.sourceLocaleResolutionByEntry))
+      .toEqual(['current_authoritative_text', 'current_authoritative_text']);
     expect(Object.keys(currentCv.experienceLocalizedSurfaces?.surfaces || {})).toHaveLength(6);
     expect(currentCv.experience.map((exp) => exp.description)).toEqual(visibleBefore);
     expect(currentCv.canonicalSnapshot).toEqual(canonicalBefore);
@@ -691,4 +742,196 @@ describe('AAB-399 device-shaped Experience semantic provenance', () => {
     expect(raw).toEqual(before);
     expect(localStorage.getItem('cvpro-ai-usage')).toBeNull();
   });
+
+  function largeBatchCv(recordCount: number): CVData {
+    const raw = deviceCv();
+    const description = bullets(Array.from(
+      { length: recordCount },
+      () => BICYCLE_DE[0],
+    ));
+    return {
+      ...raw,
+      canonicalSnapshot: undefined,
+      experience: [{
+        ...raw.experience[0],
+        description,
+        originalUserDescription: description,
+        canonicalDescription: description,
+        descriptionOrigin: 'user',
+        descriptionSourceLocale: 'de',
+      }],
+    };
+  }
+
+  function batchResponse(request: ExperienceLocalizationRequest) {
+    const records: ExperienceLocalizationProviderRecord[] = request.records.map((record) => ({
+      ...record,
+      localizedText: BICYCLE_ES[0],
+      semanticValidation: passedSemanticValidation(),
+    }));
+    return {
+      snapshotId: request.snapshotId,
+      targetLocale: request.targetLocale,
+      records,
+      providerAttemptCount: 1,
+      independentVerification: passedIndependentVerification(request, records),
+    };
+  }
+
+  it.each([1, 6, 12, 13, 24])(
+    'batches %s missing records deterministically and persists once',
+    async (recordCount) => {
+      let currentCv = largeBatchCv(recordCount);
+      let adapterCalls = 0;
+      let persistCalls = 0;
+      const result = await prepareExperienceLocalizedSurfaces({
+        cv: currentCv,
+        targetLocale: 'es',
+        adapter: async (request, context) => {
+          adapterCalls += 1;
+          expect(context?.batchIndex).toBe(adapterCalls - 1);
+          expect(request.records.length).toBeLessThanOrEqual(EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE);
+          return batchResponse(request);
+        },
+        getCurrentCv: () => currentCv,
+        persist: (nextCv) => {
+          persistCalls += 1;
+          currentCv = nextCv;
+          return true;
+        },
+      });
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      expect(adapterCalls).toBe(Math.ceil(recordCount / EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE));
+      expect(persistCalls).toBe(1);
+      expect(result.diagnostics.persistedSurfaceCount).toBe(recordCount);
+      expect(result.diagnostics.providerRequestCount).toBe(adapterCalls);
+      expect(result.diagnostics.independentVerifierRequestCount).toBe(adapterCalls);
+    },
+  );
+
+  it('discards batch 1 when batch 2 fails and never persists', async () => {
+    const currentCv = largeBatchCv(13);
+    let calls = 0;
+    let persistCalls = 0;
+    const result = await prepareExperienceLocalizedSurfaces({
+      cv: currentCv,
+      targetLocale: 'es',
+      adapter: async (request) => {
+        calls += 1;
+        if (calls === 2) throw new Error('verifier_transport_timeout');
+        return batchResponse(request);
+      },
+      getCurrentCv: () => currentCv,
+      persist: () => { persistCalls += 1; return true; },
+    });
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(2);
+    expect(persistCalls).toBe(0);
+    expect(result.diagnostics.persistedSurfaceCount).toBe(0);
+  });
+
+  it('discards every batch when the full source snapshot changes between batches', async () => {
+    let currentCv = largeBatchCv(13);
+    let calls = 0;
+    let persistCalls = 0;
+    const result = await prepareExperienceLocalizedSurfaces({
+      cv: currentCv,
+      targetLocale: 'es',
+      adapter: async (request) => {
+        calls += 1;
+        const response = batchResponse(request);
+        if (calls === 2) {
+          currentCv = {
+            ...currentCv,
+            experience: currentCv.experience.map((exp) => ({
+              ...exp,
+              description: `${exp.description}\n- PrÃ¼ft zusÃ¤tzliche FahrrÃ¤der.`,
+            })),
+          };
+        }
+        return response;
+      },
+      getCurrentCv: () => currentCv,
+      persist: () => { persistCalls += 1; return true; },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('experience_localization_stale_snapshot');
+    expect(persistCalls).toBe(0);
+  });
+
+  it('processes more than the former aggregate cap through bounded batches and one atomic persist', async () => {
+    const count = 301;
+    let currentCv = largeBatchCv(count);
+    let calls = 0;
+    let persistCalls = 0;
+    const result = await prepareExperienceLocalizedSurfaces({
+      cv: currentCv,
+      targetLocale: 'es',
+      adapter: async (request) => { calls += 1; return batchResponse(request); },
+      getCurrentCv: () => currentCv,
+      persist: (nextCv) => { persistCalls += 1; currentCv = nextCv; return true; },
+    });
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(Math.ceil(count / EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE));
+    expect(persistCalls).toBe(1);
+  });
+
+  it('rolls back atomically when batch 50 of a 301-record operation fails', async () => {
+    const count = 301;
+    const currentCv = largeBatchCv(count);
+    const before = structuredClone(currentCv);
+    let calls = 0;
+    let persistCalls = 0;
+    const result = await prepareExperienceLocalizedSurfaces({
+      cv: currentCv,
+      targetLocale: 'es',
+      adapter: async (request) => {
+        calls += 1;
+        if (calls === 50) throw new Error('verifier_transport_timeout');
+        return batchResponse(request);
+      },
+      getCurrentCv: () => currentCv,
+      persist: () => { persistCalls += 1; return true; },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('verifier_transport_timeout');
+      expect(result.stage).toBe('acquire_localized_surfaces');
+    }
+    expect(calls).toBe(50);
+    expect(persistCalls).toBe(0);
+    expect(result.diagnostics.persistedSurfaceCount).toBe(0);
+    expect(currentCv).toEqual(before);
+    expect(localStorage.getItem('cvpro-ai-usage')).toBeNull();
+  });
+
+  it('fails a bounded operation deadline without persistence or usage', async () => {
+    const currentCv = largeBatchCv(13);
+    let clock = 0;
+    let calls = 0;
+    let persistCalls = 0;
+    const result = await prepareExperienceLocalizedSurfaces({
+      cv: currentCv,
+      targetLocale: 'es',
+      operationDeadlineAt: 100,
+      now: () => clock,
+      adapter: async (request) => {
+        calls += 1;
+        clock = 101;
+        return batchResponse(request);
+      },
+      getCurrentCv: () => currentCv,
+      persist: () => { persistCalls += 1; return true; },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('experience_localization_operation_deadline_exceeded');
+      expect(result.stage).toBe('operation_deadline');
+    }
+    expect(calls).toBe(1);
+    expect(persistCalls).toBe(0);
+    expect(result.diagnostics.persistedSurfaceCount).toBe(0);
+    expect(localStorage.getItem('cvpro-ai-usage')).toBeNull();
+  });
+
 });

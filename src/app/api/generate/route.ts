@@ -36,11 +36,15 @@ import {
   type ExperienceDuration,
   type ExperienceDurationSnapshot,
 } from '@/lib/cv-experience-duration';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { AiErrorCode } from '@/lib/ai-error-codes';
+import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
 import {
   AI_PROVIDER_CALL_TIMEOUT_MS,
+  EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS,
+  EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
   callProviderWithDeadline,
+  computeExperienceLocalizationDeadline,
   computeServerDeadline,
   hasProviderBudget,
   isProviderAbortOrTimeoutError,
@@ -53,12 +57,18 @@ import { parseSummaryV2LocalizationProviderJson } from '@/lib/cv-summary-v2';
 import {
   EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
   hashExperienceLocalizedSurfaceValue,
-  parseExperienceLocalizationProviderJson,
-  parseExperienceLocalizationVerifierJson,
   validateExperienceLocalizationIndependentVerification,
   type ExperienceLocalizationProviderRecord,
+  type ExperienceLocalizationIndependentVerificationResponse,
   type ExperienceLocalizationRequest,
   type ExperienceLocalizationRequestRecord,
+  EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS,
+  EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_CHARS,
+  EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_UTF8_BYTES,
+  EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE,
+  canonicalizeExperienceLocalizationText,
+  measureExperienceLocalizationText,
+  validateExperienceLocalizationPhysicalBatch,
 } from '@/lib/cv-experience-localized-surfaces';
 
 /**
@@ -346,6 +356,10 @@ async function callWithRetry(
   params: Parameters<Anthropic['messages']['create']>[0],
   deadlineAt?: number | null,
   onAttempt?: () => void,
+  configuredTimeoutMs: number = AI_PROVIDER_CALL_TIMEOUT_MS,
+  timeoutStage: 'provider' | 'translation' | 'verifier' = 'provider',
+  cancellationSignal?: AbortSignal | null,
+  allowRetry = true,
 ): Promise<Anthropic.Messages.Message> {
   const client = getClient();
   const runOnce = () => {
@@ -357,6 +371,9 @@ async function callWithRetry(
         maxRetries: 0,
       }) as Promise<Anthropic.Messages.Message>,
       deadlineAt,
+      configuredTimeoutMs,
+      timeoutStage,
+      cancellationSignal,
     );
   };
 
@@ -365,7 +382,8 @@ async function callWithRetry(
   } catch (err) {
     if (isProviderAbortOrTimeoutError(err)) throw err;
     const canRetry =
-      isRetryableProviderError(err)
+      allowRetry
+      && isRetryableProviderError(err)
       && hasProviderBudget(deadlineAt)
       && (deadlineAt == null || remainingBudgetMs(deadlineAt) >= AI_PROVIDER_CALL_TIMEOUT_MS);
     if (canRetry) return await runOnce();
@@ -378,6 +396,133 @@ function getText(response: Anthropic.Messages.Message): string {
   if (block?.type !== 'text') return '';
   // Strip leading/trailing quotation marks (straight and curly)
   return block.text.trim().replace(/^[""\u201C\u201E]+|[""\u201D\u201F]+$/g, '').trim();
+}
+
+const EXPERIENCE_COMPACT_TRANSLATOR_MAX_RECORDS = EXPERIENCE_LOCALIZATION_PROVIDER_BATCH_SIZE;
+const EXPERIENCE_COMPACT_LOCALIZED_SURFACE_MAX_CHARS = EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS;
+const EXPERIENCE_ROUTE_FINALIZATION_MARGIN_MS = 2_000;
+
+type CompactTranslatorRecord = {
+  recordId: string;
+  sourceText: string;
+  sourceLocale: string;
+  targetLocale: string;
+};
+
+type CompactTranslatorResponseRecord = {
+  recordId: string;
+  localizedSurface: string;
+};
+
+function parseCompactTranslatorResponse(raw: string): CompactTranslatorResponseRecord[] | null {
+  const text = String(raw || '').trim();
+  if (!text.startsWith('{') || !text.endsWith('}')) return null;
+  try {
+    const value = JSON.parse(text) as { records?: unknown };
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (Object.keys(value).length !== 1 || !Object.prototype.hasOwnProperty.call(value, 'records')) return null;
+    if (!Array.isArray(value.records)) return null;
+    const records: CompactTranslatorResponseRecord[] = [];
+    let totalCanonicalChars = 0;
+    let totalUtf8Bytes = 0;
+    for (const record of value.records) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+      if (Object.keys(record).length !== 2) return null;
+      const candidate = record as Record<string, unknown>;
+      if (
+        typeof candidate.recordId !== 'string'
+        || typeof candidate.localizedSurface !== 'string'
+        || !candidate.recordId
+        || !candidate.localizedSurface.trim()
+        || candidate.localizedSurface.length > EXPERIENCE_COMPACT_LOCALIZED_SURFACE_MAX_CHARS
+      ) return null;
+      const localizedSurface = candidate.localizedSurface.trim();
+      const metrics = measureExperienceLocalizationText(localizedSurface);
+      totalCanonicalChars += metrics.canonicalChars;
+      totalUtf8Bytes += metrics.utf8Bytes;
+      if (totalCanonicalChars > EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_CHARS
+        || totalUtf8Bytes > EXPERIENCE_LOCALIZATION_MAX_BATCH_SOURCE_UTF8_BYTES) return null;
+      records.push({
+        recordId: candidate.recordId,
+        localizedSurface,
+      });
+    }
+    return records;
+  } catch {
+    return null;
+  }
+}
+
+type CompactVerifierRecord = {
+  recordId: string;
+  sourceText: string;
+  candidateLocalizedText: string;
+  sourceLocale: string;
+  targetLocale: string;
+};
+
+type CompactVerifierDecision = {
+  recordId: string;
+  decision: 'passed' | 'rejected';
+  mismatchCategory: 'none' | 'predicate_mismatch' | 'object_mismatch'
+    | 'work_domain_mismatch' | 'source_responsibility_removed' | 'scope_mismatch'
+    | 'negation_mismatch' | 'tense_mismatch' | 'unsupported_responsibility_added'
+    | 'cross_entry_fact' | 'cross_occupation_substitution' | 'ambiguous';
+  predicatePreserved: boolean;
+  objectPreserved: boolean;
+  workDomainPreserved: boolean;
+  sourceResponsibilityPreserved: boolean;
+  scopePreserved: boolean;
+  negationPreserved: boolean;
+  tensePreserved: boolean;
+  unsupportedFactsIntroduced: boolean;
+  crossEntryFactIntroduced: boolean;
+  crossOccupationSubstitution: boolean;
+};
+
+const COMPACT_VERIFIER_KEYS = [
+  'recordId', 'decision', 'mismatchCategory', 'predicatePreserved', 'objectPreserved',
+  'workDomainPreserved', 'sourceResponsibilityPreserved', 'scopePreserved',
+  'negationPreserved', 'tensePreserved', 'unsupportedFactsIntroduced',
+  'crossEntryFactIntroduced', 'crossOccupationSubstitution',
+].sort();
+const COMPACT_VERIFIER_MISMATCHES = new Set([
+  'none', 'predicate_mismatch', 'object_mismatch', 'work_domain_mismatch',
+  'source_responsibility_removed', 'scope_mismatch', 'negation_mismatch',
+  'tense_mismatch', 'unsupported_responsibility_added', 'cross_entry_fact',
+  'cross_occupation_substitution', 'ambiguous',
+]);
+
+function parseCompactVerifierResponse(raw: string): CompactVerifierDecision[] | null {
+  const text = String(raw || '').trim();
+  if (!text.startsWith('{') || !text.endsWith('}')) return null;
+  try {
+    const value = JSON.parse(text) as { records?: unknown };
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (Object.keys(value).length !== 1 || !Array.isArray(value.records)) return null;
+    const records = value.records as Array<Record<string, unknown>>;
+    const booleanKeys = COMPACT_VERIFIER_KEYS.filter((key) => (
+      !['recordId', 'decision', 'mismatchCategory'].includes(key)
+    ));
+    if (!records.every((record) => (
+      record && typeof record === 'object' && !Array.isArray(record)
+      && JSON.stringify(Object.keys(record).sort()) === JSON.stringify(COMPACT_VERIFIER_KEYS)
+      && typeof record.recordId === 'string' && Boolean(record.recordId)
+      && (record.decision === 'passed' || record.decision === 'rejected')
+      && typeof record.mismatchCategory === 'string'
+      && COMPACT_VERIFIER_MISMATCHES.has(record.mismatchCategory)
+      && booleanKeys.every((key) => typeof record[key] === 'boolean')
+    ))) return null;
+    return records as CompactVerifierDecision[];
+  } catch {
+    return null;
+  }
+}
+
+function deadlineOwnerOf(error: unknown): string | null {
+  return error && typeof error === 'object' && 'deadlineOwner' in error
+    ? String((error as { deadlineOwner?: unknown }).deadlineOwner || '') || null
+    : null;
 }
 
 /**
@@ -401,7 +546,7 @@ export async function POST(req: NextRequest) {
   // resolution, body parsing, auth, or any provider work — so cold-start and
   // validation cannot silently eat the budget that must stay under Vercel.
   const serverReceivedAt = Date.now();
-  const deadlineAt = computeServerDeadline(serverReceivedAt);
+  let deadlineAt = computeServerDeadline(serverReceivedAt);
 
   // Resolve CORS origin from the request once, used in all jsonResponse calls
   const _corsOrigin = resolveCorsOrigin(req.headers.get('origin'));
@@ -432,6 +577,9 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, proToken, freeUserId, requestId, ...params } = body;
+    if (action === 'experience-localize') {
+      deadlineAt = computeExperienceLocalizationDeadline(serverReceivedAt);
+    }
 
     // ── Pro token verification (before limiter identity) ────────────────────
     const verifiedPro = await verifyProToken(proToken);
@@ -666,17 +814,32 @@ Rules:
       const targetInfo = localeInstructions[resolvedLocale];
       const snapshotId = sanitizeField(params.snapshotId, 240);
       const records = Array.isArray(params.records) ? params.records : [];
-      if (!snapshotId || !records.length || records.length > 96) {
+      if (records.length > EXPERIENCE_COMPACT_TRANSLATOR_MAX_RECORDS) {
+        return jsonResponse({
+          error: 'Experience localization batch exceeds the bounded provider manifest.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_batch_too_large',
+        }, { status: 422 });
+      }
+      if (!snapshotId || !records.length) {
         return jsonResponse({
           error: 'Experience localization requires one bounded structured manifest.',
           code: 'generation_validation_failed' satisfies AiErrorCode,
           localizationTypedFailureReason: 'experience_localization_request_invalid',
         }, { status: 422 });
       }
-      const safeRecords: Array<Omit<ExperienceLocalizationRequestRecord, 'sourceLocale' | 'targetLocale'> & {
-        sourceLocale: string;
-        targetLocale: string;
-      }> = records.map((record: Record<string, unknown>) => ({
+      const rawSourceMetrics = records.map((record: Record<string, unknown>) =>
+        measureExperienceLocalizationText(typeof record.sourceText === 'string' ? record.sourceText : ''));
+      if (rawSourceMetrics.some((metrics: { canonicalChars: number }) => (
+        metrics.canonicalChars > EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS
+      ))) {
+        return jsonResponse({
+          error: 'Experience localization source text exceeds the canonical limit.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_source_text_too_long',
+        }, { status: 422 });
+      }
+      const safeRecords: ExperienceLocalizationRequestRecord[] = records.map((record: Record<string, unknown>) => ({
         requestIdentity: sanitizeField(record.requestIdentity, 300),
         cvId: sanitizeField(record.cvId, 200),
         experienceId: sanitizeField(record.experienceId, 200),
@@ -684,10 +847,13 @@ Rules:
         sourceClauseIndex: Number(record.sourceClauseIndex),
         sourceClauseHash: sanitizeField(record.sourceClauseHash, 240),
         semanticFactId: sanitizeField(record.semanticFactId, 300),
-        sourceLocale: sanitizeField(record.sourceLocale, 20),
-        targetLocale: sanitizeField(record.targetLocale, 20),
+        sourceLocale: sanitizeField(record.sourceLocale, 20) as Locale,
+        targetLocale: sanitizeField(record.targetLocale, 20) as Locale,
         canonicalLineageHash: sanitizeField(record.canonicalLineageHash, 240),
-        sourceText: sanitizeText(record.sourceText, 1600),
+        sourceText: canonicalizeExperienceLocalizationText(sanitizeText(
+          record.sourceText,
+          typeof record.sourceText === 'string' ? Math.max(1, record.sourceText.length) : 1,
+        )),
       }));
       if (safeRecords.some((record) => (
         !record.requestIdentity
@@ -702,6 +868,7 @@ Rules:
         || record.targetLocale !== resolvedLocale
         || !record.canonicalLineageHash
         || !record.sourceText
+        || hashExperienceLocalizedSurfaceValue(record.sourceText) !== record.sourceClauseHash
       ))) {
         return jsonResponse({
           error: 'Experience localization manifest identity is incomplete.',
@@ -717,54 +884,114 @@ Rules:
           localizationTypedFailureReason: 'experience_localization_duplicate_request_identity',
         }, { status: 422 });
       }
-      let providerAttemptCount = 0;
-      const response = await callWithRetry({
+      const physicalBatchValidation = validateExperienceLocalizationPhysicalBatch(safeRecords);
+      if (!physicalBatchValidation.ok) {
+        return jsonResponse({
+          error: 'Experience localization batch exceeds the bounded translator contract.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: physicalBatchValidation.reason,
+          translationProviderAttemptCount: 0,
+          independentVerifierAttemptCount: 0,
+          translatedRecordCount: 0,
+        }, { status: 422 });
+      }
+      const requestNonce = randomUUID().replace(/-/g, '').slice(0, 12);
+      const compactRecords: CompactTranslatorRecord[] = safeRecords.map((record, index) => ({
+        recordId: `tr_${requestNonce}_${index.toString(36)}`,
+        sourceText: record.sourceText,
+        sourceLocale: record.sourceLocale,
+        targetLocale: record.targetLocale,
+      }));
+      const immutableByCompactId = new Map(
+        compactRecords.map((record, index) => [record.recordId, safeRecords[index]] as const),
+      );
+      if (immutableByCompactId.size !== compactRecords.length) {
+        return jsonResponse({
+          error: 'Experience localization compact identities collided.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_compact_identity_collision',
+          translationProviderAttemptCount: 0,
+          independentVerifierAttemptCount: 0,
+          translatedRecordCount: 0,
+        }, { status: 422 });
+      }
+      const totalSourceCanonicalChars = safeRecords.reduce(
+        (sum, record) => sum + measureExperienceLocalizationText(record.sourceText).canonicalChars, 0,
+      );
+      const translatorMaxTokens = Math.min(6200, Math.max(1200, 1200 + totalSourceCanonicalChars));
+      // Compact verifier output contains only an opaque ID and fixed semantic
+      // decisions. 125 tokens/record plus 900 tokens of schema/safety margin
+      // covers the serialized maximum (1,650 tokens for six records).
+      const verifierMaxTokens = Math.min(1650, Math.max(1200, 900 + safeRecords.length * 125));
+      const compactTranslatorSystem = `You are a strict CV Experience translator. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return exactly one JSON object with no markdown, code fences, prose, or extra fields. Return exactly one localized surface for every supplied recordId and no additional records. Preserve each recordId exactly. Translate only sourceText. Preserve the same professional predicate, work object, and professional domain. Add no facts, tools, systems, qualifications, metrics, achievements, leadership, compliance, quality, frequency, responsibility, impact, or enrichment.`;
+      const compactTranslatorUser = JSON.stringify({
+        task: 'localize_cv_experience_surfaces',
+        records: compactRecords,
+        responseSchema: {
+          records: [{
+            recordId: 'exact input recordId',
+            localizedSurface: 'one target-language duty clause',
+          }],
+        },
+      });
+      const compactTranslatorRequestBytes = Buffer.byteLength(JSON.stringify({
         model: MODEL,
-        max_tokens: 3000,
+        max_tokens: translatorMaxTokens,
         temperature: 0,
         stream: false,
-        system: `You are a strict structured CV Experience localization engine. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return exactly one JSON object with no markdown, code fences, or commentary. Preserve snapshotId and every identity field exactly. Return exactly one record for every input record and no additional records. Translate only sourceText. Preserve its predicate, object, professional work domain, scope, negation, and employment tense. Add no tools, systems, qualifications, certifications, metrics, achievements, leadership, compliance, quality, frequency, responsibility, impact, or enrichment. semanticValidation is a non-authoritative compatibility diagnostic: mark each preservation boolean truthfully and set unsupportedFactsIntroduced truthfully. Never mark a changed occupation, work object, or professional action as preserved. validatorVersion must be exactly ${EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION}.`,
+        system: compactTranslatorSystem,
+        messages: [{ role: 'user', content: compactTranslatorUser }],
+      }), 'utf8');
+      let providerAttemptCount = 0;
+      const translationStartedAt = Date.now();
+      let response;
+      try {
+        response = await callWithRetry({
+        model: MODEL,
+        max_tokens: translatorMaxTokens,
+        temperature: 0,
+        stream: false,
+        system: compactTranslatorSystem,
         messages: [{
           role: 'user',
-          content: JSON.stringify({
-            task: 'localize_cv_experience_surfaces',
-            snapshotId,
-            targetLocale: resolvedLocale,
-            records: safeRecords,
-            responseSchema: {
-              snapshotId: 'exact input snapshotId',
-              targetLocale: resolvedLocale,
-              records: [{
-                requestIdentity: 'exact input requestIdentity',
-                cvId: 'exact input cvId',
-                experienceId: 'exact input experienceId',
-                experienceLineageHash: 'exact input experienceLineageHash',
-                sourceClauseIndex: 'exact input sourceClauseIndex',
-                sourceClauseHash: 'exact input sourceClauseHash',
-                semanticFactId: 'exact input semanticFactId',
-                sourceLocale: 'exact input sourceLocale',
-                targetLocale: 'exact input targetLocale',
-                canonicalLineageHash: 'exact input canonicalLineageHash',
-                localizedText: 'one target-language duty clause',
-                semanticValidation: {
-                  validatorVersion: EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
-                  predicatePreserved: true,
-                  objectPreserved: true,
-                  workDomainPreserved: true,
-                  scopePreserved: true,
-                  negationPreserved: true,
-                  tensePreserved: true,
-                  unsupportedFactsIntroduced: false,
-                },
-              }],
-            },
-          }),
+          content: compactTranslatorUser,
         }],
-      }, deadlineAt, () => {
-        providerAttemptCount += 1;
-      });
-      const parsed = parseExperienceLocalizationProviderJson(getText(response));
-      if (!parsed) {
+        }, deadlineAt, () => {
+          providerAttemptCount += 1;
+        }, EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS, 'translation', req.signal, false);
+      } catch (err) {
+        const owner = deadlineOwnerOf(err);
+        const typedReason = owner === 'client_abort'
+          ? 'client_abort'
+          : owner === 'route_deadline'
+            ? (/insufficient/i.test(err instanceof Error ? err.message : '')
+              ? 'route_deadline_insufficient'
+              : 'route_deadline_exceeded')
+            : isProviderAbortOrTimeoutError(err)
+              ? 'translation_transport_timeout'
+              : 'provider_http_failure';
+        return jsonResponse({
+          error: typedReason === 'translation_transport_timeout'
+            ? 'Experience localization translation timed out.'
+            : 'Experience localization translation provider failed.',
+          code: typedReason === 'provider_http_failure' ? 'generation_validation_failed' : 'request_timeout',
+          localizationTypedFailureReason: typedReason,
+          localizationFailureStage: 'translation_transport',
+          deadlineOwner: owner,
+          configuredTimeoutMs: EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS,
+          elapsedMs: Date.now() - translationStartedAt,
+          providerResponded: false,
+          parserReached: false,
+          translationProviderAttemptCount: providerAttemptCount,
+          independentVerifierAttemptCount: 0,
+          translatedRecordCount: 0,
+          retryCount: Math.max(0, providerAttemptCount - 1),
+        }, { status: typedReason === 'provider_http_failure' ? 422 : 504 });
+      }
+      const compactResponseRecords = parseCompactTranslatorResponse(getText(response));
+      const compactTranslatorResponseBytes = Buffer.byteLength(getText(response), 'utf8');
+      const translationElapsedMs = Date.now() - translationStartedAt;
+      if (!compactResponseRecords) {
         return jsonResponse({
           error: 'Experience localization provider returned malformed structured JSON.',
           code: 'generation_validation_failed' satisfies AiErrorCode,
@@ -774,25 +1001,11 @@ Rules:
           translatedRecordCount: 0,
         }, { status: 422 });
       }
-      const returnedIds = parsed.records.map((record) => record.requestIdentity);
-      const identityMatch = parsed.snapshotId === snapshotId
-        && parsed.targetLocale === resolvedLocale
-        && parsed.records.length === safeRecords.length
+      const returnedIds = compactResponseRecords.map((record) => record.recordId);
+      const identityMatch = compactResponseRecords.length === compactRecords.length
         && new Set(returnedIds).size === returnedIds.length
-        && returnedIds.every((id) => expectedById.has(id))
-        && parsed.records.every((record: ExperienceLocalizationProviderRecord) => {
-          const expected = expectedById.get(record.requestIdentity);
-          return Boolean(expected)
-            && record.cvId === expected!.cvId
-            && record.experienceId === expected!.experienceId
-            && record.experienceLineageHash === expected!.experienceLineageHash
-            && record.sourceClauseIndex === expected!.sourceClauseIndex
-            && record.sourceClauseHash === expected!.sourceClauseHash
-            && record.semanticFactId === expected!.semanticFactId
-            && record.sourceLocale === expected!.sourceLocale
-            && record.targetLocale === expected!.targetLocale
-            && record.canonicalLineageHash === expected!.canonicalLineageHash;
-        });
+        && returnedIds.every((id) => immutableByCompactId.has(id))
+        && compactRecords.every((record) => returnedIds.includes(record.recordId));
       if (!identityMatch) {
         return jsonResponse({
           error: 'Experience localization provider changed the immutable manifest.',
@@ -800,10 +1013,58 @@ Rules:
           localizationTypedFailureReason: 'experience_localization_provider_identity_mismatch',
           translationProviderAttemptCount: providerAttemptCount,
           independentVerifierAttemptCount: 0,
-          translatedRecordCount: parsed.records.length,
+          translatedRecordCount: compactResponseRecords.length,
         }, { status: 422 });
       }
-      const verificationPairs = parsed.records.map((candidate) => {
+      const reconstructedCandidates: ExperienceLocalizationProviderRecord[] = compactResponseRecords.map((candidate) => {
+        const source = immutableByCompactId.get(candidate.recordId)!;
+        return {
+          ...source,
+          localizedText: candidate.localizedSurface,
+          // Wire compatibility only. The independent verifier below is the
+          // sole semantic acceptance authority; no provider self-attestation
+          // is accepted or transported by the compact translator contract.
+          semanticValidation: {
+            validatorVersion: EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
+            predicatePreserved: true,
+            objectPreserved: true,
+            workDomainPreserved: true,
+            scopePreserved: true,
+            negationPreserved: true,
+            tensePreserved: true,
+            unsupportedFactsIntroduced: false,
+          },
+        };
+      });
+      const completedTranslationDiagnostics = {
+        translationProviderAttemptCount: providerAttemptCount,
+        translatedRecordCount: reconstructedCandidates.length,
+        translationResponded: true,
+        translationParserPassed: true,
+        compactTranslatorIdsValidated: true,
+        fullIdentitiesReconstructed: true,
+        candidateHashesComputed: false,
+        translationElapsedMs,
+        compactTranslatorRequestBytes,
+        compactTranslatorResponseBytes,
+      };
+      const compactSurfaceInvalid = reconstructedCandidates.some((candidate) => (
+        candidate.localizedText === expectedById.get(candidate.requestIdentity)?.sourceText
+        || !validateAiUnitLocalePurity(candidate.localizedText, resolvedLocale, {
+          kind: 'experience_bullet',
+          requireUnits: true,
+        }).ok
+      ));
+      if (compactSurfaceInvalid) {
+        return jsonResponse({
+          error: 'Experience localization translator returned an invalid target-locale surface.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_provider_wrong_locale',
+          ...completedTranslationDiagnostics,
+          independentVerifierAttemptCount: 0,
+        }, { status: 422 });
+      }
+      const verificationPairs = reconstructedCandidates.map((candidate) => {
         const source = expectedById.get(candidate.requestIdentity)!;
         return {
           requestIdentity: source.requestIdentity,
@@ -821,81 +1082,174 @@ Rules:
           candidateSurfaceHash: hashExperienceLocalizedSurfaceValue(candidate.localizedText),
         };
       });
+      const completedVerificationInputDiagnostics = {
+        ...completedTranslationDiagnostics,
+        candidateHashesComputed: true,
+      };
+      const verifierNonce = randomUUID().replace(/-/g, '').slice(0, 12);
+      const compactVerifierRecords: CompactVerifierRecord[] = verificationPairs.map((pair, index) => ({
+        recordId: `vr_${verifierNonce}_${index.toString(36)}`,
+        sourceText: pair.sourceText,
+        candidateLocalizedText: pair.candidateLocalizedText,
+        sourceLocale: pair.sourceLocale,
+        targetLocale: pair.targetLocale,
+      }));
+      const immutableByVerifierId = new Map(compactVerifierRecords.map((record, index) => (
+        [record.recordId, verificationPairs[index]] as const
+      )));
+      const compactVerifierSystem = `You are an independent semantic verifier for CV Experience localization. You did not produce the candidate translations. Compare each sourceText directly with candidateLocalizedText. Return exactly one JSON object with no markdown, prose, code fences, or extra fields, and exactly one decision for every recordId. Preserve recordId exactly. For every pair independently verify the same professional predicate/action, work object, work domain, source responsibility, scope, negation, and employment tense. Reject removed or added responsibilities/facts, cross-entry facts, cross-occupation substitutions, and invented tools, systems, metrics, achievements, leadership, compliance, quality, frequency, or impact. decision may be passed only when every preservation boolean is true, every introduction/substitution boolean is false, and mismatchCategory is none.`;
+      const compactVerifierUser = JSON.stringify({
+        task: 'independently_verify_cv_experience_localized_surfaces',
+        records: compactVerifierRecords,
+        responseSchema: {
+          records: [{
+            recordId: 'exact input recordId',
+            decision: 'passed | rejected',
+            mismatchCategory: 'none | predicate_mismatch | object_mismatch | work_domain_mismatch | source_responsibility_removed | scope_mismatch | negation_mismatch | tense_mismatch | unsupported_responsibility_added | cross_entry_fact | cross_occupation_substitution | ambiguous',
+            predicatePreserved: 'boolean', objectPreserved: 'boolean',
+            workDomainPreserved: 'boolean', sourceResponsibilityPreserved: 'boolean',
+            scopePreserved: 'boolean', negationPreserved: 'boolean', tensePreserved: 'boolean',
+            unsupportedFactsIntroduced: 'boolean', crossEntryFactIntroduced: 'boolean',
+            crossOccupationSubstitution: 'boolean',
+          }],
+        },
+      });
+      const compactVerifierRequestBytes = Buffer.byteLength(JSON.stringify({
+        model: MODEL, max_tokens: verifierMaxTokens, temperature: 0, stream: false,
+        system: compactVerifierSystem,
+        messages: [{ role: 'user', content: compactVerifierUser }],
+      }), 'utf8');
+      const routeRemainingAtVerifierDispatchMs = remainingBudgetMs(deadlineAt);
+      const verifierAllowanceMs = Math.min(
+        EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+        routeRemainingAtVerifierDispatchMs - EXPERIENCE_ROUTE_FINALIZATION_MARGIN_MS,
+      );
+      if (verifierAllowanceMs < 1_000 || req.signal.aborted) {
+        return jsonResponse({
+          error: req.signal.aborted
+            ? 'Experience localization was cancelled.'
+            : 'Insufficient route budget to dispatch independent verification.',
+          code: 'request_timeout',
+          localizationTypedFailureReason: req.signal.aborted
+            ? 'client_abort'
+            : 'route_deadline_insufficient',
+          localizationFailureStage: 'verifier_pre_dispatch',
+          deadlineOwner: req.signal.aborted ? 'client_abort' : 'route_deadline',
+          translationProviderAttemptCount: providerAttemptCount,
+          independentVerifierAttemptCount: 0,
+          translatedRecordCount: reconstructedCandidates.length,
+          translationResponded: true,
+          translationParserPassed: true,
+          compactTranslatorIdsValidated: true,
+          fullIdentitiesReconstructed: true,
+          candidateHashesComputed: true,
+          verifierDispatched: false,
+          routeRemainingAtVerifierDispatchMs,
+          translationElapsedMs,
+        }, { status: 504 });
+      }
       let verifierAttemptCount = 0;
+      const verifierStartedAt = Date.now();
       let verificationResponse;
       try {
         verificationResponse = await callWithRetry({
           model: MODEL,
-          max_tokens: 3000,
+          max_tokens: verifierMaxTokens,
           temperature: 0,
           stream: false,
-          system: `You are an independent semantic verifier for CV Experience localization. You did not produce the candidate translations. Compare each authoritative sourceText directly with candidateLocalizedText. Do not infer correctness from fluency, target language, opaque identities, or any prior translator claim. Return exactly one JSON object with no markdown, prose, code fences, or omitted records. Preserve snapshotId and every identity/hash field exactly. For each pair independently verify the same professional predicate/action, work object, work domain, source responsibility, scope, negation, and employment tense; reject removed responsibilities, added responsibilities/facts, cross-entry facts, cross-occupation substitutions, and invented tools, systems, metrics, achievements, leadership, compliance, quality, frequency, or impact. decision may be passed only when every preservation boolean is true, every introduction/substitution boolean is false, and mismatchCategory is none. validatorVersion must be exactly ${EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION}.`,
+          system: compactVerifierSystem,
           messages: [{
             role: 'user',
-            content: JSON.stringify({
-              task: 'independently_verify_cv_experience_localized_surfaces',
-              snapshotId,
-              targetLocale: resolvedLocale,
-              validatorVersion: EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
-              records: verificationPairs,
-              responseSchema: {
-                snapshotId: 'exact input snapshotId',
-                targetLocale: resolvedLocale,
-                validatorVersion: EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
-                records: [{
-                  requestIdentity: 'exact input requestIdentity',
-                  cvId: 'exact input cvId',
-                  experienceId: 'exact input experienceId',
-                  experienceLineageHash: 'exact input experienceLineageHash',
-                  sourceClauseIndex: 'exact input sourceClauseIndex',
-                  sourceClauseHash: 'exact input sourceClauseHash',
-                  semanticFactId: 'exact input semanticFactId',
-                  sourceLocale: 'exact input sourceLocale',
-                  targetLocale: 'exact input targetLocale',
-                  canonicalLineageHash: 'exact input canonicalLineageHash',
-                  candidateSurfaceHash: 'exact input candidateSurfaceHash',
-                  decision: 'passed | rejected',
-                  mismatchCategory: 'none | predicate_mismatch | object_mismatch | work_domain_mismatch | source_responsibility_removed | scope_mismatch | negation_mismatch | tense_mismatch | unsupported_responsibility_added | cross_entry_fact | cross_occupation_substitution | ambiguous',
-                  predicatePreserved: 'boolean',
-                  objectPreserved: 'boolean',
-                  workDomainPreserved: 'boolean',
-                  sourceResponsibilityPreserved: 'boolean',
-                  scopePreserved: 'boolean',
-                  negationPreserved: 'boolean',
-                  tensePreserved: 'boolean',
-                  unsupportedFactsIntroduced: 'boolean',
-                  crossEntryFactIntroduced: 'boolean',
-                  crossOccupationSubstitution: 'boolean',
-                }],
-              },
-            }),
+            content: compactVerifierUser,
           }],
         }, deadlineAt, () => {
           verifierAttemptCount += 1;
-        });
-      } catch {
+        }, EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS, 'verifier', req.signal, false);
+      } catch (err) {
+        const owner = deadlineOwnerOf(err);
+        const typedReason = owner === 'client_abort'
+          ? 'client_abort'
+          : owner === 'route_deadline'
+            ? 'route_deadline_exceeded'
+            : isProviderAbortOrTimeoutError(err)
+              ? 'verifier_transport_timeout'
+              : 'provider_http_failure';
         return jsonResponse({
-          error: 'Independent Experience localization verification failed.',
-          code: 'generation_validation_failed' satisfies AiErrorCode,
-          localizationTypedFailureReason: 'experience_localization_verifier_failed',
+          error: typedReason === 'verifier_transport_timeout'
+            ? 'Independent Experience localization verification timed out.'
+            : 'Independent Experience localization verification failed.',
+          code: typedReason === 'provider_http_failure' ? 'generation_validation_failed' : 'request_timeout',
+          localizationTypedFailureReason: typedReason,
+          localizationFailureStage: 'verifier_transport',
+          deadlineOwner: owner,
+          configuredTimeoutMs: EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+          elapsedMs: Date.now() - verifierStartedAt,
+          translationElapsedMs,
+          providerResponded: false,
+          parserReached: false,
           translationProviderAttemptCount: providerAttemptCount,
           independentVerifierAttemptCount: verifierAttemptCount,
-          translatedRecordCount: parsed.records.length,
-        }, { status: 422 });
+          translatedRecordCount: reconstructedCandidates.length,
+          translationResponded: true,
+          translationParserPassed: true,
+          compactTranslatorIdsValidated: true,
+          fullIdentitiesReconstructed: true,
+          candidateHashesComputed: true,
+          verifierDispatched: true,
+          verifierResponded: false,
+          verifierParserReached: false,
+          verifiedRecordCount: 0,
+          routeRemainingAtVerifierDispatchMs,
+          compactTranslatorRequestBytes,
+          compactTranslatorResponseBytes,
+          compactVerifierRequestBytes,
+          retryCount: Math.max(0, verifierAttemptCount - 1),
+        }, { status: typedReason === 'provider_http_failure' ? 422 : 504 });
       }
-      const independentVerification = parseExperienceLocalizationVerifierJson(
-        getText(verificationResponse),
-      );
-      if (!independentVerification) {
+      const compactVerifierResponseBytes = Buffer.byteLength(getText(verificationResponse), 'utf8');
+      const compactVerifierDecisions = parseCompactVerifierResponse(getText(verificationResponse));
+      if (!compactVerifierDecisions) {
         return jsonResponse({
           error: 'Independent Experience localization verifier returned malformed structured JSON.',
           code: 'generation_validation_failed' satisfies AiErrorCode,
           localizationTypedFailureReason: 'experience_localization_verifier_malformed_json',
-          translationProviderAttemptCount: providerAttemptCount,
+          ...completedVerificationInputDiagnostics,
           independentVerifierAttemptCount: verifierAttemptCount,
-          translatedRecordCount: parsed.records.length,
+          verifierDispatched: true,
+          verifierResponded: true,
+          verifierParserReached: true,
+          verifiedRecordCount: 0,
         }, { status: 422 });
       }
+      const verifierIds = compactVerifierDecisions.map((decision) => decision.recordId);
+      const verifierIdentityMatch = compactVerifierDecisions.length === compactVerifierRecords.length
+        && new Set(verifierIds).size === verifierIds.length
+        && verifierIds.every((id) => immutableByVerifierId.has(id))
+        && compactVerifierRecords.every((record) => verifierIds.includes(record.recordId));
+      if (!verifierIdentityMatch) {
+        return jsonResponse({
+          error: 'Independent verifier changed the compact manifest.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'experience_localization_verifier_identity_mismatch',
+          ...completedVerificationInputDiagnostics,
+          independentVerifierAttemptCount: verifierAttemptCount,
+          verifierDispatched: true,
+          verifierResponded: true,
+          verifierParserReached: true,
+          verifiedRecordCount: compactVerifierDecisions.length,
+        }, { status: 422 });
+      }
+      const independentVerification: ExperienceLocalizationIndependentVerificationResponse = {
+        snapshotId,
+        targetLocale: resolvedLocale,
+        validatorVersion: EXPERIENCE_LOCALIZATION_VALIDATOR_VERSION,
+        records: compactVerifierDecisions.map((decision) => {
+          const pair = immutableByVerifierId.get(decision.recordId)!;
+          const { sourceText: _sourceText, candidateLocalizedText: _candidateText, ...identity } = pair;
+          const { recordId: _recordId, ...semanticDecision } = decision;
+          return { ...identity, ...semanticDecision };
+        }),
+      };
       const localizationRequest: ExperienceLocalizationRequest = {
         task: 'localize_cv_experience_surfaces',
         snapshotId,
@@ -904,7 +1258,7 @@ Rules:
       };
       const independentlyValidated = validateExperienceLocalizationIndependentVerification({
         request: localizationRequest,
-        candidates: parsed.records,
+        candidates: reconstructedCandidates,
         verification: independentVerification,
       });
       if (!independentlyValidated.ok) {
@@ -912,14 +1266,19 @@ Rules:
           error: 'Independent Experience localization verification rejected the batch.',
           code: 'generation_validation_failed' satisfies AiErrorCode,
           localizationTypedFailureReason: independentlyValidated.reason,
-          translationProviderAttemptCount: providerAttemptCount,
+          ...completedVerificationInputDiagnostics,
           independentVerifierAttemptCount: verifierAttemptCount,
-          translatedRecordCount: parsed.records.length,
+          verifierDispatched: true,
+          verifierResponded: true,
+          verifierParserReached: true,
+          verifiedRecordCount: independentVerification.records.length,
         }, { status: 422 });
       }
       return jsonResponse({
         localizedExperienceSurfaces: {
-          ...parsed,
+          snapshotId,
+          targetLocale: resolvedLocale,
+          records: reconstructedCandidates,
           provenance: 'provider',
           providerAttemptCount,
           independentVerification: {
@@ -928,6 +1287,28 @@ Rules:
           },
         },
         localizationSource: 'provider',
+        localizationTiming: {
+          translationElapsedMs,
+          verifierElapsedMs: Date.now() - verifierStartedAt,
+          translationTimeoutMs: EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS,
+          verifierTimeoutMs: EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS,
+          compactTranslatorRequestBytes,
+          compactTranslatorResponseBytes,
+          compactTranslatorMaxTokens: translatorMaxTokens,
+          compactVerifierRequestBytes,
+          compactVerifierResponseBytes,
+          compactVerifierMaxTokens: verifierMaxTokens,
+          routeRemainingAtVerifierDispatchMs,
+          translationResponded: true,
+          translationParserPassed: true,
+          compactTranslatorIdsValidated: true,
+          fullIdentitiesReconstructed: true,
+          candidateHashesComputed: true,
+          verifierDispatched: true,
+          verifierResponded: true,
+          verifierParserReached: true,
+          verifiedRecordCount: independentVerification.records.length,
+        },
       });
     }
 

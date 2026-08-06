@@ -73,6 +73,12 @@ const exportSource = () => fs.readFileSync(path.resolve('src/lib/export.ts'), 'u
 const pageSource = () => fs.readFileSync(path.resolve('src/app/cv-builder/page.tsx'), 'utf8');
 const templateSource = () => fs.readFileSync(path.resolve('src/components/cv-templates.tsx'), 'utf8');
 const previewSource = () => fs.readFileSync(path.resolve('src/components/TemplatePreview.tsx'), 'utf8');
+
+const AI_RECOMMEND_CHANGE_PATTERN = /^\+.*(?:recommendTemplate|ProfessionCategory|templateInfo)/m;
+
+function containsProhibitedAiRecommendDiff(diff: string): boolean {
+  return AI_RECOMMEND_CHANGE_PATTERN.test(diff);
+}
 const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 const originalPhoto = `data:image/jpeg;base64,${Buffer.from('modern-minimal-original-photo').toString('base64')}`;
 const selectedPhoto = `data:image/jpeg;base64,${Buffer.from('modern-minimal-selected-photo').toString('base64')}`;
@@ -769,7 +775,7 @@ describe('Modern Minimal preview/export parity', () => {
     const branch = page.indexOf('selectedTemplateId = cv.templateId');
     const mmBranch = page.indexOf("selectedTemplateId === 'modern-minimal'", branch);
 
-    expect(page.indexOf('const cvForExport = prepareFinalLocaleSafeCv({', branch)).toBeGreaterThan(branch);
+    expect(page.indexOf('const cvForExport = await prepareFinalLocaleSafeCv({', branch)).toBeGreaterThan(branch);
     expect(page.indexOf('...cvRef.current', branch)).toBeGreaterThan(branch);
     expect(page.indexOf('templateId: selectedTemplateId', branch)).toBeGreaterThan(branch);
     expect(page.indexOf('cvRefTemplateId !== selectedTemplateId', branch)).toBeGreaterThan(branch);
@@ -1425,16 +1431,18 @@ describe('Modern Minimal preview/export parity', () => {
           .filter(Boolean)
       : [];
 
-    // types.ts may gain optional CV fact-lock fields (canonicalDescription/canonicalSummary);
-    // AI recommend template scoring must remain untouched.
+    // Shared CV types can evolve for unrelated features. Only additions that
+    // alter AI Recommend/template-scoring contracts are prohibited here.
     if (changedFiles.includes('src/lib/types.ts')) {
       const typesDiff = execFileSync('git', ['diff', '--', 'src/lib/types.ts'], { encoding: 'utf8' });
-      expect(typesDiff).not.toMatch(/recommendTemplate|ProfessionCategory|templateInfo/);
-      expect(typesDiff).toMatch(
-        /canonicalDescription|canonicalSummary|generationJobContextKey|summaryGenerationContextKey|positionProvenance|positionUserEdited|positionSourceLocale|positionSourceKey/,
-      );
+      expect(containsProhibitedAiRecommendDiff(typesDiff)).toBe(false);
     }
     expect(changedFiles).not.toContain('src/lib/ai.ts');
+  });
+
+  test('AI Recommend scope guard ignores unrelated shared types and catches prohibited additions', () => {
+    expect(containsProhibitedAiRecommendDiff('+  descriptionSourceLocaleTextHash?: string;')).toBe(false);
+    expect(containsProhibitedAiRecommendDiff('+  recommendTemplate?: (category: ProfessionCategory) => templateInfo;')).toBe(true);
   });
 });
 

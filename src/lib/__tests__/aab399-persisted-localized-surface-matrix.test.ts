@@ -21,6 +21,7 @@ import {
   type ExperienceLocalizationRequest,
 } from '@/lib/cv-experience-localized-surfaces';
 import { buildModernMinimalPdfBlob, exportToDOCX } from '@/lib/export';
+import { hashExperienceSourceLocaleText } from '@/lib/cv-experience-source-locale';
 
 const LOCALES: Locale[] = ['en', 'de', 'es', 'fr', 'it', 'ar', 'sr', 'hr', 'ru', 'pt-BR', 'hi', 'ja'];
 
@@ -143,6 +144,7 @@ function exp(id: string, position: string, sourceLocale: Locale, duties: string[
     canonicalDescription: description,
     descriptionOrigin: 'user',
     descriptionSourceLocale: sourceLocale,
+    descriptionSourceLocaleTextHash: hashExperienceSourceLocaleText(description),
   };
 }
 
@@ -618,10 +620,11 @@ describe('AAB-399 persisted Experience localized-surface matrix', () => {
 
     const unsupportedPt = cvFor('pt-BR');
     unsupportedPt.experience[0].descriptionSourceLocale = 'pt';
-    expect(buildExperienceLocalizationSnapshot(unsupportedPt, 'ru')).toMatchObject({
-      ok: false,
-      reason: 'experience_localization_source_locale_ambiguous',
-    });
+    const detectedPt = buildExperienceLocalizationSnapshot(unsupportedPt, 'ru');
+    expect(detectedPt.ok).toBe(true);
+    expect(detectedPt.records.slice(0, 3).every((record) => record.sourceLocale === 'pt-BR')).toBe(true);
+    expect(Object.values(detectedPt.diagnostics.sourceLocaleResolutionByEntry))
+      .toContain('current_authoritative_text');
 
     for (const origin of ['ai_generated', 'unknown'] as const) {
       const notManual = cvFor('de');

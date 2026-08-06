@@ -21,6 +21,8 @@ import {
 import { logAiLocaleTransitionDiagnostics } from '@/lib/ai-usage-policy';
 import {
   AI_CLIENT_TIMEOUT_MS,
+  EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS,
+  computeExperienceLocalizationOperationDeadline,
   logAiClientRequestTiming,
   resolveClientAbortTimeoutMs,
 } from '@/lib/ai-request-timing';
@@ -167,7 +169,9 @@ import {
 } from '@/lib/prepare-export-ready-cv';
 import { loadCvDraft } from '@/lib/draft-storage';
 import {
+  EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS,
   buildExperienceLocalizationSnapshot,
+  experienceDescriptionLocalizationLimitViolation,
   prepareExperienceLocalizedSurfaces,
   type ExperienceLocalizationProviderResponse,
   type ExperienceLocalizationRequest,
@@ -214,6 +218,21 @@ const emptyEdu = (): Education => ({
 });
 
 const RECT_PHOTO_TEMPLATES: TemplateId[] = ['elegant-formal', 'executive-premium'];
+
+const EXPERIENCE_LOCALIZATION_LIMIT_MESSAGE: Record<Locale, string> = {
+  en: 'A duty exceeds the AI localization limit. Your full text remains saved and can still be exported in its current language.',
+  de: 'Eine Aufgabe überschreitet das Limit für die KI-Lokalisierung. Der vollständige Text bleibt gespeichert und kann weiterhin in der aktuellen Sprache exportiert werden.',
+  es: 'Una función supera el límite de localización con IA. El texto completo seguirá guardado y podrá exportarse en su idioma actual.',
+  fr: 'Une mission dépasse la limite de localisation par IA. Le texte complet reste enregistré et peut toujours être exporté dans sa langue actuelle.',
+  it: 'Una mansione supera il limite di localizzazione IA. Il testo completo resta salvato e può comunque essere esportato nella lingua attuale.',
+  ar: 'تتجاوز إحدى المهام حد الترجمة بالذكاء الاصطناعي. سيظل النص الكامل محفوظًا ويمكن تصديره بلغته الحالية.',
+  sr: 'Jedna dužnost prelazi limit za AI lokalizaciju. Ceo tekst ostaje sačuvan i može se izvesti na trenutnom jeziku.',
+  hr: 'Jedna dužnost prelazi ograničenje za AI lokalizaciju. Cijeli tekst ostaje spremljen i može se izvesti na trenutačnom jeziku.',
+  ru: 'Одна из обязанностей превышает лимит ИИ-локализации. Полный текст останется сохранённым и может быть экспортирован на текущем языке.',
+  'pt-BR': 'Uma atividade excede o limite de localização por IA. O texto completo continuará salvo e poderá ser exportado no idioma atual.',
+  hi: 'एक कार्य AI स्थानीयकरण सीमा से अधिक है। पूरा पाठ सुरक्षित रहेगा और वर्तमान भाषा में निर्यात किया जा सकेगा।',
+  ja: '職務内容の1項目がAIローカライズ上限を超えています。全文は保存されたままで、現在の言語で引き続き書き出せます。',
+};
 
 type PersonalPhotoVariants = {
   originalPhoto?: string;
@@ -301,6 +320,8 @@ export default function CVBuilderPage() {
   const lastExportPrepareRef = useRef<PrepareExportReadyResult | null>(null);
   const lastExportRawCvRef = useRef<CVData | null>(null);
   const lastExperienceLocalizationRef = useRef<ExperienceLocalizationDiagnostics | null>(null);
+  const experienceLocalizationAbortRef = useRef<AbortController | null>(null);
+  const exportInFlightRef = useRef(false);
   const [exportDiagTick, setExportDiagTick] = useState(0);
   // Stale-response correlation: each AI action tracks the requestId of its
   // most-recently-started request. An in-flight request whose id no longer
@@ -369,6 +390,12 @@ export default function CVBuilderPage() {
   const langAutocompleteRef = useRef<HTMLDivElement | null>(null);
   const langSuggestionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => () => {
+    experienceLocalizationAbortRef.current?.abort();
+    experienceLocalizationAbortRef.current = null;
+    exportInFlightRef.current = false;
+  }, []);
 
 
   useEffect(() => {
@@ -3164,6 +3191,9 @@ export default function CVBuilderPage() {
       lastExportPrepareRef.current = null;
       lastExperienceLocalizationRef.current = null;
       try {
+        const experienceLocalizationOperationStartedAt = Date.now();
+        const experienceLocalizationOperationDeadlineAt =
+          computeExperienceLocalizationOperationDeadline(experienceLocalizationOperationStartedAt);
         // The export source becomes the race-guard authority before provider work.
         cvRef.current = sourceCv;
         const localization = await prepareExperienceLocalizedSurfaces({
@@ -3182,10 +3212,18 @@ export default function CVBuilderPage() {
               throw new Error('experience_localization_provider_unavailable');
             }
             const proToken = aiGate.token;
+            const operationRemainingMs = experienceLocalizationOperationDeadlineAt - Date.now();
+            if (operationRemainingMs < 1_000) {
+              throw new Error('experience_localization_operation_deadline_exceeded');
+            }
             const controller = new AbortController();
+            experienceLocalizationAbortRef.current = controller;
             const timeout = window.setTimeout(
               () => controller.abort(),
-              resolveClientAbortTimeoutMs(AI_CLIENT_TIMEOUT_MS),
+              resolveClientAbortTimeoutMs(Math.min(
+                EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS,
+                operationRemainingMs,
+              )),
             );
             try {
               const { data, response } = await apiFetch<{
@@ -3195,6 +3233,16 @@ export default function CVBuilderPage() {
                 translationProviderAttemptCount?: number;
                 independentVerifierAttemptCount?: number;
                 translatedRecordCount?: number;
+                verifiedRecordCount?: number;
+                translationResponded?: boolean;
+                translationParserPassed?: boolean;
+                compactTranslatorIdsValidated?: boolean;
+                fullIdentitiesReconstructed?: boolean;
+                candidateHashesComputed?: boolean;
+                verifierDispatched?: boolean;
+                verifierResponded?: boolean;
+                verifierParserReached?: boolean;
+                routeRemainingAtVerifierDispatchMs?: number;
               }>('/api/generate', {
                 body: {
                   action: 'experience-localize',
@@ -3213,18 +3261,42 @@ export default function CVBuilderPage() {
                   translationProviderAttemptCount?: number;
                   independentVerifierAttemptCount?: number;
                   translatedRecordCount?: number;
+                  verifiedRecordCount?: number;
+                  translationResponded?: boolean;
+                  translationParserPassed?: boolean;
+                  compactTranslatorIdsValidated?: boolean;
+                  fullIdentitiesReconstructed?: boolean;
+                  candidateHashesComputed?: boolean;
+                  verifierDispatched?: boolean;
+                  verifierResponded?: boolean;
+                  verifierParserReached?: boolean;
+                  routeRemainingAtVerifierDispatchMs?: number;
                 };
                 failure.translationProviderAttemptCount = data?.translationProviderAttemptCount;
                 failure.independentVerifierAttemptCount = data?.independentVerifierAttemptCount;
                 failure.translatedRecordCount = data?.translatedRecordCount;
+                failure.verifiedRecordCount = data?.verifiedRecordCount;
+                failure.translationResponded = data?.translationResponded;
+                failure.translationParserPassed = data?.translationParserPassed;
+                failure.compactTranslatorIdsValidated = data?.compactTranslatorIdsValidated;
+                failure.fullIdentitiesReconstructed = data?.fullIdentitiesReconstructed;
+                failure.candidateHashesComputed = data?.candidateHashesComputed;
+                failure.verifierDispatched = data?.verifierDispatched;
+                failure.verifierResponded = data?.verifierResponded;
+                failure.verifierParserReached = data?.verifierParserReached;
+                failure.routeRemainingAtVerifierDispatchMs = data?.routeRemainingAtVerifierDispatchMs;
                 throw failure;
               }
               return data.localizedExperienceSurfaces;
             } finally {
               window.clearTimeout(timeout);
+              if (experienceLocalizationAbortRef.current === controller) {
+                experienceLocalizationAbortRef.current = null;
+              }
             }
           },
           getCurrentCv: () => cvRef.current,
+          operationDeadlineAt: experienceLocalizationOperationDeadlineAt,
           persist: (nextCv, expectedSnapshotId) => {
             const currentSnapshot = buildExperienceLocalizationSnapshot(cvRef.current, locale);
             if (!currentSnapshot.ok || currentSnapshot.snapshotId !== expectedSnapshotId) {
@@ -3326,7 +3398,8 @@ export default function CVBuilderPage() {
         setLimitModal({ open: true, type: 'cv' });
         return;
       }
-      if (isWordExporting) return;
+      if (isWordExporting || exportInFlightRef.current) return;
+      exportInFlightRef.current = true;
       setShowDownloadMenu(false);
       setIsWordExporting(true);
       try {
@@ -3409,6 +3482,7 @@ export default function CVBuilderPage() {
         });
         showExportFailureToast(err, 'docx');
       } finally {
+        exportInFlightRef.current = false;
         setIsWordExporting(false);
       }
     };
@@ -3418,7 +3492,8 @@ export default function CVBuilderPage() {
         setLimitModal({ open: true, type: 'cv' });
         return;
       }
-      if (isPdfExporting) return;
+      if (isPdfExporting || exportInFlightRef.current) return;
+      exportInFlightRef.current = true;
       setShowDownloadMenu(false);
       setIsPdfExporting(true);
       try {
@@ -3657,6 +3732,7 @@ export default function CVBuilderPage() {
           showExportFailureToast(fallbackErr, 'pdf');
         }
       } finally {
+        exportInFlightRef.current = false;
         setIsPdfExporting(false);
       }
     };
@@ -3962,7 +4038,26 @@ export default function CVBuilderPage() {
                               </div>
                             </div>
                         </div>
-                        <div><label className="mb-1 block text-xs font-medium">{t.cv.description}</label><textarea data-experience-description-id={exp.id} value={exp.description} onChange={e => updateExperience(exp.id, 'description', e.target.value)} className={textareaClass} /></div>
+                        <div>
+                          <label className="mb-1 block text-xs font-medium">{t.cv.description}</label>
+                          <textarea
+                            data-experience-description-id={exp.id}
+                            value={exp.description}
+                            onChange={e => updateExperience(exp.id, 'description', e.target.value)}
+                            aria-invalid={Boolean(experienceDescriptionLocalizationLimitViolation(exp.description))}
+                            aria-describedby={`experience-description-limit-${exp.id}`}
+                            className={textareaClass}
+                          />
+                          {experienceDescriptionLocalizationLimitViolation(exp.description) && (
+                            <p
+                              id={`experience-description-limit-${exp.id}`}
+                              role="alert"
+                              className="mt-1 text-xs text-amber-500"
+                            >
+                              {EXPERIENCE_LOCALIZATION_LIMIT_MESSAGE[locale]} ({EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS})
+                            </p>
+                          )}
+                        </div>
                         {/* AI Improvements panel */}
                         <div className="rounded-xl border border-[rgba(212,178,84,0.20)] bg-[#080b12] p-4 space-y-3 shadow-[0_4px_20px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.03)]" style={{backgroundImage:'linear-gradient(180deg,rgba(255,255,255,0.025) 0%,transparent 50%)'}}>
                           <p className="text-xs font-bold tracking-[0.08em] text-[#d4aa50] flex items-center gap-1.5 uppercase">
