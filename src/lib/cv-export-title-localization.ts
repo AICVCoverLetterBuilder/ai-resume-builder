@@ -15,6 +15,8 @@ export const CV_EXPORT_TITLE_LOCALIZATION_REVISION =
   'cv-export-title-localization-405-v1' as const;
 export const CV_EXPORT_TITLE_SURFACE_SCHEMA = 1 as const;
 export const CV_EXPORT_TITLE_PROVIDER_BATCH_SIZE = 8 as const;
+export const CV_EXPORT_TITLE_BATCH_RECOVERY_REVISION =
+  'cv-export-title-batch-recovery-406-v1' as const;
 
 export type { ExportLocalizedTitleSurface, ExportLocalizedTitleSurfaceStore } from './types';
 
@@ -46,6 +48,10 @@ export type ExportTitleLocalizationDiagnostics = {
   titleCacheReuseCount: number;
   titleProviderRequestCount: number;
   titleProviderRepairCount: number;
+  titleBatchRecoveryRevision: typeof CV_EXPORT_TITLE_BATCH_RECOVERY_REVISION;
+  titleBatchSplitCount: number;
+  titleSingletonFailureCount: number;
+  titleLastProviderFailureReason?: string;
   titleLocalizedFieldCount: number;
   titleSummaryMentionReplacementCount: number;
   titleSourceLocaleByField: Record<string, Locale>;
@@ -243,6 +249,23 @@ function bindingKey(unit: TitleUnit, targetLocale: Locale, gender: string): stri
   return [unit.unitKey, targetLocale, gender].join('|');
 }
 
+function titleAdapterFailureReason(error: unknown): string {
+  const raw = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : '';
+  const reason = canonical(raw);
+  return /^[a-z0-9_:-]+$/iu.test(reason)
+    ? reason
+    : 'export_title_localization_provider_failed';
+}
+
+function batchFailureCanBeIsolated(reason: string): boolean {
+  return reason === 'export_title_localization_provider_malformed'
+    || reason === 'export_title_localization_independent_verification_failed';
+}
+
 function cachedMatches(
   surface: ExportLocalizedTitleSurface | undefined,
   unit: TitleUnit,
@@ -413,6 +436,9 @@ export async function prepareExportLocalizedTitles(options: {
   let cacheReuseCount = 0;
   let providerRequestCount = 0;
   let providerRepairCount = 0;
+  let titleBatchSplitCount = 0;
+  let titleSingletonFailureCount = 0;
+  let titleLastProviderFailureReason: string | undefined;
   const missing: TitleUnit[] = [];
   const initialSnapshotHash = sourceSnapshotHash(options.sourceCv);
 
@@ -456,10 +482,15 @@ export async function prepareExportLocalizedTitles(options: {
     missing.push(unit);
   }
 
-  for (let offset = 0; offset < missing.length; offset += CV_EXPORT_TITLE_PROVIDER_BATCH_SIZE) {
-    const batch = missing.slice(offset, offset + CV_EXPORT_TITLE_PROVIDER_BATCH_SIZE);
-    let accepted: SummaryV2LocalizationProviderResponse | null = null;
-    for (let pass = 0; pass < 2 && !accepted; pass += 1) {
+  const resolveProviderBatch = async (batch: TitleUnit[]): Promise<{
+    ok: true;
+    accepted: SummaryV2LocalizationProviderResponse;
+  } | {
+    ok: false;
+    reason: string;
+  }> => {
+    let lastReason = 'export_title_localization_provider_failed';
+    for (let pass = 0; pass < 2; pass += 1) {
       providerRequestCount += 1;
       if (pass === 1) providerRepairCount += 1;
       let response: SummaryV2LocalizationProviderResponse;
@@ -477,7 +508,9 @@ export async function prepareExportLocalizedTitles(options: {
             facts: [],
           })),
         });
-      } catch {
+      } catch (error) {
+        lastReason = titleAdapterFailureReason(error);
+        titleLastProviderFailureReason = lastReason;
         continue;
       }
       const actualById = new Map((response.entries || []).map((entry) => [entry.entryId, entry]));
@@ -497,35 +530,39 @@ export async function prepareExportLocalizedTitles(options: {
             }),
           );
         });
-      if (valid) accepted = response;
+      if (valid) return { ok: true, accepted: response };
+      lastReason = 'export_title_localization_provider_malformed';
+      titleLastProviderFailureReason = lastReason;
     }
-    if (!accepted) {
-      const diagnostics: ExportTitleLocalizationDiagnostics = {
-        titleLocalizationRevision: CV_EXPORT_TITLE_LOCALIZATION_REVISION,
-        titleTargetLocale: options.targetLocale,
-        titleFieldCount: refs.length,
-        titleUniqueSourceCount: units.length,
-        titleSameLocaleCount: sameLocaleCount,
-        titleDeterministicCount: deterministicCount,
-        titleCacheReuseCount: cacheReuseCount,
-        titleProviderRequestCount: providerRequestCount,
-        titleProviderRepairCount: providerRepairCount,
-        titleLocalizedFieldCount: 0,
-        titleSummaryMentionReplacementCount: 0,
-        titleSourceLocaleByField: sourceLocaleByField,
-        titleProjectionPassed: false,
-        employerIdentityPassed: false,
-        titleFailureReason: 'export_title_localization_provider_failed',
-      };
-      return {
-        ok: false,
-        exportCv: options.exportCv,
-        persistableCv: options.sourceCv,
-        reason: 'export_title_localization_provider_failed',
-        diagnostics,
-      };
+    return { ok: false, reason: lastReason };
+  };
+
+  const resolveAndStageBatch = async (batch: TitleUnit[]): Promise<{
+    ok: true;
+  } | {
+    ok: false;
+    reason: string;
+  }> => {
+    const resolved = await resolveProviderBatch(batch);
+    if (!resolved.ok) {
+      if (batch.length > 1 && batchFailureCanBeIsolated(resolved.reason)) {
+        titleBatchSplitCount += 1;
+        const midpoint = Math.ceil(batch.length / 2);
+        const left = await resolveAndStageBatch(batch.slice(0, midpoint));
+        if (!left.ok) return left;
+        const right = await resolveAndStageBatch(batch.slice(midpoint));
+        if (!right.ok) return right;
+        return { ok: true };
+      }
+      if (batch.length === 1 && batchFailureCanBeIsolated(resolved.reason)) {
+        titleSingletonFailureCount += 1;
+      }
+      return resolved;
     }
-    const acceptedById = new Map(accepted.entries.map((entry) => [entry.entryId, entry]));
+
+    const acceptedById = new Map(
+      resolved.accepted.entries.map((entry) => [entry.entryId, entry]),
+    );
     for (const unit of batch) {
       const localizedTitle = canonical(acceptedById.get(unit.entryId)!.localizedRoleTitle);
       localizedByUnit.set(unit.unitKey, localizedTitle);
@@ -542,6 +579,42 @@ export async function prepareExportLocalizedTitles(options: {
         revision: CV_EXPORT_TITLE_LOCALIZATION_REVISION,
       };
     }
+    return { ok: true };
+  };
+
+  for (let offset = 0; offset < missing.length; offset += CV_EXPORT_TITLE_PROVIDER_BATCH_SIZE) {
+    const batch = missing.slice(offset, offset + CV_EXPORT_TITLE_PROVIDER_BATCH_SIZE);
+    const resolved = await resolveAndStageBatch(batch);
+    if (!resolved.ok) {
+      const diagnostics: ExportTitleLocalizationDiagnostics = {
+        titleLocalizationRevision: CV_EXPORT_TITLE_LOCALIZATION_REVISION,
+        titleTargetLocale: options.targetLocale,
+        titleFieldCount: refs.length,
+        titleUniqueSourceCount: units.length,
+        titleSameLocaleCount: sameLocaleCount,
+        titleDeterministicCount: deterministicCount,
+        titleCacheReuseCount: cacheReuseCount,
+        titleProviderRequestCount: providerRequestCount,
+        titleProviderRepairCount: providerRepairCount,
+        titleBatchRecoveryRevision: CV_EXPORT_TITLE_BATCH_RECOVERY_REVISION,
+        titleBatchSplitCount,
+        titleSingletonFailureCount,
+        titleLastProviderFailureReason,
+        titleLocalizedFieldCount: 0,
+        titleSummaryMentionReplacementCount: 0,
+        titleSourceLocaleByField: sourceLocaleByField,
+        titleProjectionPassed: false,
+        employerIdentityPassed: false,
+        titleFailureReason: resolved.reason,
+      };
+      return {
+        ok: false,
+        exportCv: options.exportCv,
+        persistableCv: options.sourceCv,
+        reason: resolved.reason,
+        diagnostics,
+      };
+    }
   }
 
   if (options.getCurrentCv && sourceSnapshotHash(options.getCurrentCv()) !== initialSnapshotHash) {
@@ -555,6 +628,10 @@ export async function prepareExportLocalizedTitles(options: {
       titleCacheReuseCount: cacheReuseCount,
       titleProviderRequestCount: providerRequestCount,
       titleProviderRepairCount: providerRepairCount,
+      titleBatchRecoveryRevision: CV_EXPORT_TITLE_BATCH_RECOVERY_REVISION,
+      titleBatchSplitCount,
+      titleSingletonFailureCount,
+      titleLastProviderFailureReason,
       titleLocalizedFieldCount: 0,
       titleSummaryMentionReplacementCount: 0,
       titleSourceLocaleByField: sourceLocaleByField,
@@ -616,6 +693,10 @@ export async function prepareExportLocalizedTitles(options: {
     titleCacheReuseCount: cacheReuseCount,
     titleProviderRequestCount: providerRequestCount,
     titleProviderRepairCount: providerRepairCount,
+    titleBatchRecoveryRevision: CV_EXPORT_TITLE_BATCH_RECOVERY_REVISION,
+    titleBatchSplitCount,
+    titleSingletonFailureCount,
+    titleLastProviderFailureReason,
     titleLocalizedFieldCount: localizedByField.size,
     titleSummaryMentionReplacementCount,
     titleSourceLocaleByField: sourceLocaleByField,
