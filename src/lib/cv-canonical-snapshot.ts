@@ -555,7 +555,10 @@ export function applyCanonicalSummaryEdit(cv: CVData, summary: string, uiLocale:
   const next = {
     ...cv,
     summary,
+    contentLocale: uiLocale,
     summaryOrigin: 'user' as const,
+    summaryGeneratedLocale: undefined,
+    summaryGenerationContextKey: undefined,
     updatedAt: new Date().toISOString(),
   };
   const snap = cv.canonicalSnapshot;

@@ -48,6 +48,7 @@ import {
 import { splitExperienceBullets } from './cv-canonical-facts';
 import {
   buildExperienceJobContext,
+  experienceJobContextsMatch,
   buildOccupationAwareExperienceFallback,
   buildOccupationAwareSummaryFallback,
   filterSemanticDutiesForJobContext,
@@ -64,6 +65,10 @@ import {
 } from './cv-material-duty-coverage';
 import { validateSourceFactIdentityCoverage } from './cv-source-fact-identity';
 import { projectExperienceFromLocalizedSurfaces } from './cv-experience-localized-surfaces';
+import {
+  resolveSummaryCurrentTextAuthority,
+  SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION,
+} from './cv-summary-current-text-authority';
 
 function classifyMaterialBulletScript(bullet: string): 'hi' | 'en' | 'mixed' | 'empty' {
   const t = (bullet || '').trim();
@@ -120,6 +125,11 @@ export type ExportReadyDiagnostics = {
   summaryWordCountAfter?: number;
   summaryWordBudgetMax?: number;
   summaryWordBudgetCompactionRevision?: typeof SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION;
+  summaryCurrentTextAuthorityRevision?: typeof SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION;
+  summaryStaleMetadataDetected?: boolean;
+  summaryVisibleTextAuthorityRebound?: boolean;
+  summaryVisibleTextAuthorityReason?: string;
+  summaryVisibleTextValidationReason?: string;
   /** Non-PII job-context / Summary invalidation diagnostics. */
   experienceGenerationContextKey?: string;
   summaryGenerationContextKey?: string;
@@ -500,6 +510,7 @@ export function prepareExportReadyCv(
     summaryFactSetSource: 'none',
     summarySemanticDutyKeys: [],
     summaryWordBudgetCompactionRevision: SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION,
+    summaryCurrentTextAuthorityRevision: SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION,
     stage,
   });
 
@@ -800,12 +811,22 @@ export function prepareExportReadyCv(
   const primaryJobCtx = jobContextForExport(primaryExp?.position || cv.personal?.jobTitle);
   const summaryContextMatch = Boolean(
     cv.summaryGenerationContextKey
-    && cv.summaryGenerationContextKey === primaryJobCtx.key,
+    && experienceJobContextsMatch(cv.summaryGenerationContextKey, primaryJobCtx.key),
   );
   const summaryStale = isSummaryStaleForJobContext(cv.summary || '', primaryJobCtx, {
     summaryOrigin: cv.summaryOrigin,
     summaryGenerationContextKey: cv.summaryGenerationContextKey,
   }) || (
+    textLooksLikeCookingDuties(cv.summary || '')
+    && primaryJobCtx.positionClass !== 'baker_food'
+    && primaryJobCtx.positionClass !== 'hospitality_service'
+  );
+  const summaryStaleMetadataDetected = Boolean(
+    cv.summaryGenerationContextKey
+    && !summaryContextMatch
+    && cv.summaryOrigin !== 'user'
+  );
+  const summaryOccupationalContentConflict = Boolean(
     textLooksLikeCookingDuties(cv.summary || '')
     && primaryJobCtx.positionClass !== 'baker_food'
     && primaryJobCtx.positionClass !== 'hospitality_service'
@@ -825,7 +846,7 @@ export function prepareExportReadyCv(
       },
     );
   }
-  let initialSummaryValidation = validateSummaryExportCandidate(
+  const visibleSummaryValidation = validateSummaryExportCandidate(
     cv.summary || '',
     factSet,
     requestedLocale,
@@ -835,7 +856,14 @@ export function prepareExportReadyCv(
     cv,
     durationSnapshot.total,
   );
-  if (summaryStale) {
+  const summaryCurrentTextAuthority = resolveSummaryCurrentTextAuthority({
+    staleMetadataDetected: summaryStaleMetadataDetected,
+    occupationalContentConflict: summaryOccupationalContentConflict,
+    validation: visibleSummaryValidation,
+  });
+  const effectiveSummaryStale = summaryStale && !summaryCurrentTextAuthority.rebound;
+  let initialSummaryValidation = visibleSummaryValidation;
+  if (effectiveSummaryStale) {
     staleSummaryExcluded = true;
     initialSummaryValidation = {
       valid: false,
@@ -874,7 +902,7 @@ export function prepareExportReadyCv(
     const bulletCount = factSet.facts.filter((f) => f.type === 'experience_bullet').length;
     const onlyWordBudgetViolation = initialSummaryValidation.violations.length > 0
       && initialSummaryValidation.violations.every((violation) => violation.startsWith('summary_too_long'));
-    if (!summaryStale && onlyWordBudgetViolation) {
+    if (!effectiveSummaryStale && onlyWordBudgetViolation) {
       const compacted = compactSavedSummaryNearWordBudget({
         summary: cv.summary || '',
         locale: requestedLocale,
@@ -905,7 +933,7 @@ export function prepareExportReadyCv(
     }
     // Universal: recover from authoritative Experience bullets even when no
     // catalogue SemanticDutyKey matched (unknown free-text titles).
-    if (!recovered && !summaryStale && (summaryKeys.length > 0 || bulletCount > 0)) {
+    if (!recovered && !effectiveSummaryStale && (summaryKeys.length > 0 || bulletCount > 0)) {
       recovered = deterministicLocalizedSummaryFromCanonical(
         factSet,
         requestedLocale,
@@ -923,7 +951,7 @@ export function prepareExportReadyCv(
     // Occupation-generic only when there are no source duty bullets to preserve,
     // or when cooking shells leaked into a non-food role / stale context.
     if (
-      summaryStale
+      effectiveSummaryStale
       || cookingOccupationMismatch
       || (!recovered.trim() && bulletCount === 0)
       || (!recovered.trim() && summaryKeys.length === 0 && bulletCount === 0)
@@ -1019,6 +1047,10 @@ export function prepareExportReadyCv(
       diagnostics.summaryWordCountBefore = summaryWordCountBefore;
       diagnostics.summaryWordCountAfter = summaryWordCountAfter;
       diagnostics.summaryWordBudgetMax = summaryWordBudgetMax;
+      diagnostics.summaryStaleMetadataDetected = summaryCurrentTextAuthority.staleMetadataDetected;
+      diagnostics.summaryVisibleTextAuthorityRebound = summaryCurrentTextAuthority.rebound;
+      diagnostics.summaryVisibleTextAuthorityReason = summaryCurrentTextAuthority.reason;
+      diagnostics.summaryVisibleTextValidationReason = visibleSummaryValidation.reason;
       diagnostics.staleSummaryExcluded = staleSummaryExcluded;
       diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
       diagnostics.summaryFactKeysUsed = summaryKeys;
@@ -1029,7 +1061,9 @@ export function prepareExportReadyCv(
       ...cv,
       contentLocale: requestedLocale,
       summaryGeneratedLocale: requestedLocale,
-      summaryGenerationContextKey: cv.summaryGenerationContextKey || primaryJobCtx.key,
+      summaryGenerationContextKey: summaryCurrentTextAuthority.rebound
+        ? primaryJobCtx.key
+        : (cv.summaryGenerationContextKey || primaryJobCtx.key),
     };
   }
 
@@ -1229,10 +1263,18 @@ export function prepareExportReadyCv(
     summaryWordCountAfter,
     summaryWordBudgetMax,
     summaryWordBudgetCompactionRevision: SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION,
+    summaryCurrentTextAuthorityRevision: SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION,
+    summaryStaleMetadataDetected: summaryCurrentTextAuthority.staleMetadataDetected,
+    summaryVisibleTextAuthorityRebound: summaryCurrentTextAuthority.rebound,
+    summaryVisibleTextAuthorityReason: summaryCurrentTextAuthority.reason,
+    summaryVisibleTextValidationReason: visibleSummaryValidation.reason,
     experienceGenerationContextKey: primaryExp?.generationJobContextKey,
     summaryGenerationContextKey: cv.summaryGenerationContextKey || primaryJobCtx.key,
     summaryContextMatch: Boolean(
-      (cv.summaryGenerationContextKey || primaryJobCtx.key) === primaryJobCtx.key,
+      experienceJobContextsMatch(
+        cv.summaryGenerationContextKey || primaryJobCtx.key,
+        primaryJobCtx.key,
+      ),
     ) && !staleSummaryExcluded,
     staleSummaryExcluded,
     summaryFactKeysBefore: [...new Set(summaryFactKeysBefore)],
