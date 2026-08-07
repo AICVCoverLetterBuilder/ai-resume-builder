@@ -111,6 +111,11 @@ export type CvExportDiagnosticTrace = {
   contentLocale?: string;
   summaryFactSetSource?: string;
   summarySemanticFactKeys: string[];
+  summaryRecoverySource?: string;
+  summaryWordCountBefore?: number;
+  summaryWordCountAfter?: number;
+  summaryWordBudgetMax?: number;
+  summaryWordBudgetCompactionRevision?: string;
   stages: CvExportStageDiag[];
   initialValidationReason?: string;
   deterministicRecoveryReason?: string;
@@ -641,6 +646,11 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     contentLocale: exportCv.contentLocale,
     summaryFactSetSource: diag?.summaryFactSetSource,
     summarySemanticFactKeys: dutyKeys,
+    summaryRecoverySource: diag?.summaryRecoverySource,
+    summaryWordCountBefore: diag?.summaryWordCountBefore,
+    summaryWordCountAfter: diag?.summaryWordCountAfter,
+    summaryWordBudgetMax: diag?.summaryWordBudgetMax,
+    summaryWordBudgetCompactionRevision: diag?.summaryWordBudgetCompactionRevision,
     stages,
     initialValidationReason: diag?.summaryInitialReason,
     deterministicRecoveryReason: diag?.summaryRecoveryReason,

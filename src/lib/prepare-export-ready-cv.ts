@@ -20,6 +20,10 @@ import {
 } from './cv-localized-fallback';
 import { buildCrossLocaleExperienceFallback } from './cv-cross-locale-experience';
 import { buildSummaryCompositionDiagnostics } from './cv-summary-grounding';
+import {
+  compactSavedSummaryNearWordBudget,
+  SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION,
+} from './cv-summary-word-budget';
 import { buildExperienceDurationSnapshot, formatApproximateDurationPhrase } from './cv-experience-duration';
 import { applyCvContentQuality } from './cv-content-quality';
 import {
@@ -110,8 +114,12 @@ export type ExportReadyDiagnostics = {
   summarySemanticDutyKeys: SemanticDutyKey[];
   summaryInitialValid?: boolean;
   summaryInitialReason?: string;
-  summaryRecoverySource?: 'saved_summary' | 'deterministic_semantic_facts' | 'occupation_generic_fallback';
+  summaryRecoverySource?: 'saved_summary' | 'bounded_saved_summary' | 'deterministic_semantic_facts' | 'occupation_generic_fallback';
   summaryRecoveryReason?: string;
+  summaryWordCountBefore?: number;
+  summaryWordCountAfter?: number;
+  summaryWordBudgetMax?: number;
+  summaryWordBudgetCompactionRevision?: typeof SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION;
   /** Non-PII job-context / Summary invalidation diagnostics. */
   experienceGenerationContextKey?: string;
   summaryGenerationContextKey?: string;
@@ -491,6 +499,7 @@ export function prepareExportReadyCv(
     experienceProvenance: [],
     summaryFactSetSource: 'none',
     summarySemanticDutyKeys: [],
+    summaryWordBudgetCompactionRevision: SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION,
     stage,
   });
 
@@ -837,6 +846,9 @@ export function prepareExportReadyCv(
 
   let summaryRecoverySource: ExportReadyDiagnostics['summaryRecoverySource'] = 'saved_summary';
   let summaryRecoveryReason: string | undefined;
+  let summaryWordCountBefore: number | undefined;
+  let summaryWordCountAfter: number | undefined;
+  let summaryWordBudgetMax: number | undefined;
   let durationCompositionSource = 'saved_summary';
 
   const rebuildOccupationSummary = (): string => {
@@ -860,9 +872,40 @@ export function prepareExportReadyCv(
     stage = 'recover_summary';
     let recovered = '';
     const bulletCount = factSet.facts.filter((f) => f.type === 'experience_bullet').length;
+    const onlyWordBudgetViolation = initialSummaryValidation.violations.length > 0
+      && initialSummaryValidation.violations.every((violation) => violation.startsWith('summary_too_long'));
+    if (!summaryStale && onlyWordBudgetViolation) {
+      const compacted = compactSavedSummaryNearWordBudget({
+        summary: cv.summary || '',
+        locale: requestedLocale,
+        protectedPhrases: [
+          cv.personal?.jobTitle || '',
+          ...(cv.experience || []).flatMap((entry) => [entry.position || '', entry.company || '']),
+        ],
+        validate: (candidate) => validateSummaryExportCandidate(
+          candidate,
+          factSet,
+          requestedLocale,
+          gender,
+          (cv.canonicalSummary || '').trim(),
+          cv.canonicalSnapshot?.canonicalLocale,
+          cv,
+          durationSnapshot.total,
+        ).valid,
+      });
+      if (compacted) {
+        recovered = compacted.text;
+        summaryRecoverySource = 'bounded_saved_summary';
+        summaryRecoveryReason = 'valid';
+        summaryWordCountBefore = compacted.wordCountBefore;
+        summaryWordCountAfter = compacted.wordCountAfter;
+        summaryWordBudgetMax = compacted.maxWords;
+        durationCompositionSource = 'saved_summary_word_budget_compaction';
+      }
+    }
     // Universal: recover from authoritative Experience bullets even when no
     // catalogue SemanticDutyKey matched (unknown free-text titles).
-    if (!summaryStale && (summaryKeys.length > 0 || bulletCount > 0)) {
+    if (!recovered && !summaryStale && (summaryKeys.length > 0 || bulletCount > 0)) {
       recovered = deterministicLocalizedSummaryFromCanonical(
         factSet,
         requestedLocale,
@@ -951,7 +994,9 @@ export function prepareExportReadyCv(
       cv = {
         ...cv,
         summary: recovered,
-        summaryOrigin: 'deterministic_fallback',
+        summaryOrigin: summaryRecoverySource === 'bounded_saved_summary'
+          ? (cv.summaryOrigin || 'user')
+          : 'deterministic_fallback',
         contentLocale: requestedLocale,
         summaryGeneratedLocale: requestedLocale,
         summaryGenerationContextKey: primaryJobCtx.key,
@@ -971,6 +1016,9 @@ export function prepareExportReadyCv(
       diagnostics.summaryInitialReason = initialSummaryValidation.reason;
       diagnostics.summaryRecoverySource = summaryRecoverySource;
       diagnostics.summaryRecoveryReason = summaryRecoveryReason;
+      diagnostics.summaryWordCountBefore = summaryWordCountBefore;
+      diagnostics.summaryWordCountAfter = summaryWordCountAfter;
+      diagnostics.summaryWordBudgetMax = summaryWordBudgetMax;
       diagnostics.staleSummaryExcluded = staleSummaryExcluded;
       diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
       diagnostics.summaryFactKeysUsed = summaryKeys;
@@ -1177,6 +1225,10 @@ export function prepareExportReadyCv(
     summaryInitialReason: initialSummaryValidation.reason,
     summaryRecoverySource,
     summaryRecoveryReason,
+    summaryWordCountBefore,
+    summaryWordCountAfter,
+    summaryWordBudgetMax,
+    summaryWordBudgetCompactionRevision: SUMMARY_EXPORT_WORD_BUDGET_COMPACTION_REVISION,
     experienceGenerationContextKey: primaryExp?.generationJobContextKey,
     summaryGenerationContextKey: cv.summaryGenerationContextKey || primaryJobCtx.key,
     summaryContextMatch: Boolean(
@@ -1297,6 +1349,7 @@ export function prepareLegacyRecoveredFinalLocaleSafeCv(
         || result.diagnostics.summaryRecoverySource === 'occupation_generic_fallback'
         ? 'deterministic_authoritative_facts'
         : result.diagnostics.summaryRecoverySource === 'saved_summary'
+          || result.diagnostics.summaryRecoverySource === 'bounded_saved_summary'
           ? 'saved_summary'
           : undefined,
       summaryRecoveryReason: result.diagnostics.summaryRecoveryReason,
