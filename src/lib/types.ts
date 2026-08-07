@@ -35,9 +35,10 @@ export interface WorkExperience {
   company: string;
   position: string;
   /**
-   * How `position` was authored. Display/export may re-project app-localized
-   * occupation titles into the active content locale, but must preserve exact
-   * manual free-text (including intentional foreign-script titles).
+   * How `position` was authored. The editor always preserves the exact source
+   * title. Cross-locale PDF/DOCX export may create a validated target-language
+   * projection, including for arbitrary manual free-text titles, without writing
+   * that projection back into this field.
    */
   positionProvenance?:
     | 'manual'
@@ -98,6 +99,8 @@ export interface WorkExperience {
     sourceClause?: string;
     sourceClauseHash?: string;
     sourceFactId?: string;
+    sourceLocale?: string;
+    sourceLocaleResolution?: import('./cv-experience-source-locale').ExperienceSourceLocaleResolution;
   }>;
   /**
    * Job-context identity for the last AI/fallback Experience generation
@@ -126,6 +129,23 @@ export type CvSummaryOrigin =
   | 'ai_generated'
   | 'ai_repaired'
   | 'deterministic_fallback';
+
+export interface ExportLocalizedTitleSurface {
+  bindingKey: string;
+  sourceTitle: string;
+  sourceTitleHash: string;
+  sourceLocale: string;
+  targetLocale: string;
+  gender: string;
+  localizedTitle: string;
+  localizedTitleHash: string;
+  revision: string;
+}
+
+export interface ExportLocalizedTitleSurfaceStore {
+  schemaVersion: 1;
+  surfaces: Record<string, ExportLocalizedTitleSurface>;
+}
 
 export interface CVData {
   id: string;
@@ -169,6 +189,8 @@ export interface CVData {
   localizedProjections?: Record<string, import('./cv-canonical-snapshot').ValidatedLocalizedCvProjection>;
   /** Source-bound, lazily-created Experience duty surfaces persisted with the draft. */
   experienceLocalizedSurfaces?: import('./cv-experience-localized-surfaces').ExperienceLocalizedSurfaceStore;
+  /** Source-bound export-only role-title translations; never replace editor titles. */
+  exportLocalizedTitleSurfaces?: ExportLocalizedTitleSurfaceStore;
 }
 
 export interface CoverLetterData {

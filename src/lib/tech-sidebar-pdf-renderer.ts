@@ -18,6 +18,12 @@ import {
 } from './pdf-i18n-text';
 import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-photo';
 import { regionSettings, type CVData } from './types';
+import {
+  buildCvExportRenderProjection,
+  collectCvStructuredTextTokens,
+  normalizeNarrativeWithProtectedStructuredTokens,
+  normalizeStructuredExportText,
+} from './cv-export-structured-text';
 const CV_PDF_A4_WIDTH_MM = 210;
 const CV_PDF_A4_HEIGHT_MM = 297;
 
@@ -143,7 +149,11 @@ function tsSplitText(
   maxWidth = ctx.contentW,
   style?: Pick<TechSidebarTextStyle, 'size' | 'fontStyle'>,
 ): string[] {
-  const normalized = tsNormalizePdfText(text, ctx.locale);
+  const normalized = normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    collectCvStructuredTextTokens(ctx.cv),
+    (protectedText) => tsNormalizePdfText(protectedText, ctx.locale),
+  );
   if (!normalized) return [];
   const wrapStyle = style ?? { size: 8.5, fontStyle: 'normal' as const };
   return pdfI18nCtxSplit(ctx, normalized, maxWidth, {
@@ -472,7 +482,10 @@ function tsDirectDateRange(start: string, end: string, present: boolean, present
   return [start, present ? presentLabel : end].filter(Boolean).join(' - ');
 }
 
-function tsExpandExperienceDescriptionLines(description: string): string[] {
+function tsExpandExperienceDescriptionLines(
+  description: string,
+  protectedTokens: readonly string[] = [],
+): string[] {
   const rawLines = description.split(/\n+/).map(part => part.trim()).filter(Boolean);
   const expanded: string[] = [];
   for (const line of rawLines) {
@@ -488,7 +501,11 @@ function tsExpandExperienceDescriptionLines(description: string): string[] {
       const bulletMatch = segment.match(/^(?:[-•*]|\d+\.)\s+(.*)$/);
       const text = (bulletMatch?.[1] ?? segment).replace(/\s+/g, ' ').trim();
       if (!text) continue;
-      const normalized = splitCleanSimpleSummarySentenceRuns(text).join(' ').trim();
+      const normalized = normalizeNarrativeWithProtectedStructuredTokens(
+        text,
+        protectedTokens,
+        (protectedText) => splitCleanSimpleSummarySentenceRuns(protectedText).join(' ').trim(),
+      );
       if (!normalized) continue;
       expanded.push(bulletMatch ? `- ${normalized}` : normalized);
     }
@@ -499,7 +516,10 @@ function tsExpandExperienceDescriptionLines(description: string): string[] {
 function tsExperienceDescriptionParts(ctx: TechSidebarDirectPdfContext, entry: CVData['experience'][number]): TsBulletPart[] {
   const bulletIndent = 4;
   const textW = ctx.contentW - bulletIndent;
-  return tsExpandExperienceDescriptionLines(entry.description).map((part) => {
+  return tsExpandExperienceDescriptionLines(
+    entry.description,
+    collectCvStructuredTextTokens(ctx.cv),
+  ).map((part) => {
     const cleaned = part.replace(/^(?:[-•*]|\d+\.)\s+/, '');
     const isBullet = cleaned !== part;
     return {
@@ -558,8 +578,9 @@ function tsDrawExperienceEntryHeader(ctx: TechSidebarDirectPdfContext, entry: CV
 
   if (entry.company) {
     const companyStyle: TechSidebarTextStyle = { size: 8.0, color: TS_BLUE, fontStyle: 'bold', lineHeight: 3.4 };
-    tsApplyStyle(ctx, companyStyle, entry.company);
-    tsDrawText(ctx, entry.company, ctx.contentX, ctx.y, companyStyle);
+    const company = normalizeStructuredExportText(entry.company);
+    tsApplyStyle(ctx, companyStyle, company);
+    tsDrawText(ctx, company, ctx.contentX, ctx.y, companyStyle);
     ctx.y += 3.4;
   }
   ctx.y += 1.0;
@@ -568,7 +589,7 @@ function tsDrawExperienceEntryHeader(ctx: TechSidebarDirectPdfContext, entry: CV
 function tsDrawContinuationHeader(ctx: TechSidebarDirectPdfContext, entry: CVData['experience'][number]): void {
   tsEnsureSpace(ctx, 4.5);
   const contStyle: TechSidebarTextStyle = { size: 7.8, color: TS_TEXT, fontStyle: 'italic', lineHeight: 3.8 };
-  const contText = `${entry.position} (continued)`;
+  const contText = `${normalizeStructuredExportText(entry.position)} (continued)`;
   tsApplyStyle(ctx, contStyle, contText);
   tsDrawText(ctx, contText, ctx.contentX, ctx.y, contStyle);
   ctx.y += 4.5;
@@ -727,7 +748,8 @@ export async function buildTechSidebarPagedPdfBlob(
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
-  const ctx = tsCreateContext(pdf, cv, locale, i18n);
+  const renderCv = buildCvExportRenderProjection(cv, locale);
+  const ctx = tsCreateContext(pdf, renderCv, locale, i18n);
 
   const maskedPhoto = options.photoDataUrl
     ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)

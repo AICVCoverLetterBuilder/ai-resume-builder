@@ -167,6 +167,18 @@ import {
   prepareExportReadyCv,
   type PrepareExportReadyResult,
 } from '@/lib/prepare-export-ready-cv';
+import {
+  buildPersistableCvAfterExportPreparation,
+  exportDraftVisibleContentPreserved,
+  CV_EXPORT_DRAFT_ISOLATION_REVISION,
+} from '@/lib/cv-export-draft-isolation';
+import {
+  prepareExportLocalizedTitles,
+  CV_EXPORT_TITLE_LOCALIZATION_REVISION,
+  type ExportTitleLocalizationTransportInput,
+} from '@/lib/cv-export-title-localization';
+void CV_EXPORT_DRAFT_ISOLATION_REVISION;
+void CV_EXPORT_TITLE_LOCALIZATION_REVISION;
 import { loadCvDraft } from '@/lib/draft-storage';
 import {
   EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS,
@@ -3187,6 +3199,7 @@ export default function CVBuilderPage() {
     };
 
     const prepareFinalLocaleSafeCv = async (sourceCv: CVData): Promise<CVData> => {
+      const editorSourceCv = sourceCv;
       lastExportRawCvRef.current = sourceCv;
       lastExportPrepareRef.current = null;
       lastExperienceLocalizationRef.current = null;
@@ -3302,10 +3315,12 @@ export default function CVBuilderPage() {
             if (!currentSnapshot.ok || currentSnapshot.snapshotId !== expectedSnapshotId) {
               return false;
             }
-            const persisted = persistCurrentCvTransactionally(nextCv);
+            const safeNext = buildPersistableCvAfterExportPreparation(cvRef.current, nextCv);
+            if (!exportDraftVisibleContentPreserved(cvRef.current, safeNext)) return false;
+            const persisted = persistCurrentCvTransactionally(safeNext);
             if (!persisted) return false;
-            cvRef.current = nextCv;
-            setCv(nextCv);
+            cvRef.current = safeNext;
+            setCv(safeNext);
             return true;
           },
         });
@@ -3317,11 +3332,17 @@ export default function CVBuilderPage() {
         // Single export-ready snapshot for all templates/formats before branching.
         const primaryExpId = (sourceCv.experience || []).find((e) => e.isPresent)?.id
           || (sourceCv.experience || [])[0]?.id;
-        const prepared = prepareExportReadyCv(sourceCv, locale, sourceCv.templateId, {
+        const prepareOptions = {
           gender: sourceCv.personal?.gender,
           industry: primaryExpId ? (expIndustry[primaryExpId] ?? 'general') : 'general',
           level: primaryExpId ? (expLevel[primaryExpId] ?? 'mid') : 'mid',
-        });
+        };
+        const prepared = prepareExportReadyCv(
+          sourceCv,
+          locale,
+          sourceCv.templateId,
+          prepareOptions,
+        );
         lastExportPrepareRef.current = prepared;
         if (!prepared.ok) {
           // Preserve the exact typed reason for diagnostics before any remapping.
@@ -3350,44 +3371,133 @@ export default function CVBuilderPage() {
             stage: diagnostics.stage,
           });
         }
-        // Persist repaired metadata; export uses recoveredCv (not a later cvRef re-read).
-        const groundingPersisted: CVData = {
-          ...sourceCv,
-          region: recoveredCv.region,
-          runtimeMigrationVersion: recoveredCv.runtimeMigrationVersion,
-          contentLocale: recoveredCv.contentLocale ?? sourceCv.contentLocale,
-          summaryOrigin: recoveredCv.summaryOrigin ?? sourceCv.summaryOrigin,
-          experience: (sourceCv.experience || []).map((exp) => {
-            const matched = (recoveredCv.experience || []).find((item) => item.id === exp.id);
-            if (!matched) return exp;
-            return {
-              ...exp,
-              originalUserDescription:
-                matched.originalUserDescription ?? exp.originalUserDescription,
-              canonicalDescription:
-                matched.canonicalDescription ?? exp.canonicalDescription,
-              groundingRecoverySource:
-                matched.groundingRecoverySource ?? exp.groundingRecoverySource,
-              descriptionOrigin: matched.descriptionOrigin ?? exp.descriptionOrigin,
-              recoveredSemanticDuties:
-                matched.recoveredSemanticDuties ?? exp.recoveredSemanticDuties,
-            };
-          }),
+        const titleLocalization = await prepareExportLocalizedTitles({
+          sourceCv,
+          exportCv: recoveredCv,
+          targetLocale: locale,
+          gender: sourceCv.personal?.gender,
+          getCurrentCv: () => cvRef.current,
+          adapter: async (request: ExportTitleLocalizationTransportInput) => {
+            const aiGate = getAiGate();
+            if (aiGate.status !== 'ready') {
+              throw new Error('export_title_localization_authorization_unavailable');
+            }
+            const operationRemainingMs = experienceLocalizationOperationDeadlineAt - Date.now();
+            if (operationRemainingMs < 1_000) {
+              throw new Error('experience_localization_operation_deadline_exceeded');
+            }
+            const controller = new AbortController();
+            experienceLocalizationAbortRef.current = controller;
+            const timeout = window.setTimeout(
+              () => controller.abort(),
+              resolveClientAbortTimeoutMs(Math.min(
+                EXPERIENCE_LOCALIZATION_CLIENT_TIMEOUT_MS,
+                operationRemainingMs,
+              )),
+            );
+            try {
+              const { data, response } = await apiFetch<{
+                localizedManifest?: SummaryV2LocalizationProviderResponse;
+                error?: string;
+                localizationTypedFailureReason?: string;
+              }>('/api/generate', {
+                body: {
+                  action: 'export-title-localize',
+                  proToken: aiGate.token,
+                  requestId: crypto.randomUUID(),
+                  ...request,
+                },
+                signal: controller.signal,
+              });
+              if (!response.ok || !data?.localizedManifest) {
+                throw new Error(
+                  data?.localizationTypedFailureReason
+                  || data?.error
+                  || 'export_title_localization_provider_failed',
+                );
+              }
+              return data.localizedManifest;
+            } finally {
+              window.clearTimeout(timeout);
+              if (experienceLocalizationAbortRef.current === controller) {
+                experienceLocalizationAbortRef.current = null;
+              }
+            }
+          },
+        });
+        lastExperienceLocalizationRef.current = {
+          ...(lastExperienceLocalizationRef.current || localization.diagnostics),
+          ...titleLocalization.diagnostics,
+          exportDraftIsolationRevision: CV_EXPORT_DRAFT_ISOLATION_REVISION,
         };
+        if (!titleLocalization.ok) {
+          throw new CvExportFailure(titleLocalization.reason, titleLocalization.reason);
+        }
+        // Title projection can increase Summary length or change role-context
+        // metadata. Re-run the same canonical export validator on the complete
+        // localized projection before any renderer or DOCX branch receives it.
+        const postTitlePrepared = prepareExportReadyCv(
+          titleLocalization.exportCv,
+          locale,
+          titleLocalization.exportCv.templateId,
+          prepareOptions,
+        );
+        lastExportPrepareRef.current = postTitlePrepared;
+        lastExperienceLocalizationRef.current = {
+          ...(lastExperienceLocalizationRef.current || localization.diagnostics),
+          titlePostProjectionValidationPassed: postTitlePrepared.ok,
+          ...(!postTitlePrepared.ok
+            ? { titlePostProjectionFailureReason: postTitlePrepared.reason }
+            : {}),
+        };
+        if (!postTitlePrepared.ok) {
+          throw new CvExportFailure(
+            postTitlePrepared.reason,
+            `${postTitlePrepared.reason} @ title_post_projection_validation`,
+          );
+        }
+        const exportCv = postTitlePrepared.cv;
+        const metadataSource: CVData = {
+          ...exportCv,
+          experienceLocalizedSurfaces:
+            titleLocalization.persistableCv.experienceLocalizedSurfaces,
+          exportLocalizedTitleSurfaces:
+            titleLocalization.persistableCv.exportLocalizedTitleSurfaces,
+        };
+        const groundingPersisted = buildPersistableCvAfterExportPreparation(
+          editorSourceCv,
+          metadataSource,
+        );
+        const visibleContentPreserved = exportDraftVisibleContentPreserved(
+          editorSourceCv,
+          groundingPersisted,
+        );
+        lastExperienceLocalizationRef.current = {
+          ...(lastExperienceLocalizationRef.current || localization.diagnostics),
+          exportDraftIsolationRevision: CV_EXPORT_DRAFT_ISOLATION_REVISION,
+          exportDraftVisibleContentPreserved: visibleContentPreserved,
+        };
+        if (!visibleContentPreserved) {
+          throw new CvExportFailure(
+            'export_draft_isolation_failed',
+            'export-only content attempted to mutate the editor draft',
+          );
+        }
+        cvRef.current = groundingPersisted;
         setCv(groundingPersisted);
         setCurrentCv(groundingPersisted);
 
-        if (recoveredCv.templateId === 'creative-artistic') {
-          return prepareCreativeArtisticExport(recoveredCv, locale, {
-            gender: recoveredCv.personal?.gender,
+        if (exportCv.templateId === 'creative-artistic') {
+          return prepareCreativeArtisticExport(exportCv, locale, {
+            gender: exportCv.personal?.gender,
           }).cv;
         }
-        if (recoveredCv.templateId === 'corporate-navy') {
-          return prepareCorporateNavyExport(recoveredCv, locale, {
-            gender: recoveredCv.personal?.gender,
+        if (exportCv.templateId === 'corporate-navy') {
+          return prepareCorporateNavyExport(exportCv, locale, {
+            gender: exportCv.personal?.gender,
           }).cv;
         }
-        return recoveredCv;
+        return exportCv;
       } catch (err) {
         throw wrapCvExportFailure(err, 'legacy_export_recovery_not_invoked');
       }
@@ -3408,7 +3518,6 @@ export default function CVBuilderPage() {
         let fallbackFileName: string;
         if (liveCv.templateId === 'rirekisho') {
           const cvForExport = await prepareFinalLocaleSafeCv(liveCv);
-          cvRef.current = cvForExport;
           const exportBaseName = cvForExport.personal.fullName || '履歴書';
           saveResult = await exportRirekishoToDOCX(cvForExport, exportBaseName);
           fallbackFileName = `${exportBaseName}.docx`;
@@ -3439,9 +3548,6 @@ export default function CVBuilderPage() {
             ...latestCv,
             personal: { ...latestCv.personal, photo: photoForExport },
           });
-          // Synchronize cvRef with the export snapshot (same object PDF uses).
-          // Do not write localized export text back into editor React state.
-          cvRef.current = cvForExport;
           const exportBaseName = makeCvExportBaseName(cvForExport.personal.fullName);
           saveResult = await exportToDOCX(cvForExport, exportBaseName, locale, cvForExport.templateId, { elegantFormalPhoto });
           fallbackFileName = `${exportBaseName}.docx`;
@@ -3515,7 +3621,6 @@ export default function CVBuilderPage() {
           ...cv,
           templateId: selectedTemplateId,
         });
-        cvRef.current = cvForExport;
         const route = resolveCvPdfExportRoute(selectedTemplateId);
 
         if (process.env.NODE_ENV !== 'production') {
@@ -3585,7 +3690,6 @@ export default function CVBuilderPage() {
           uiTemplateId: selectedTemplateId,
         });
         const liveCv = pdfResolution.exportCv;
-        cvRef.current = liveCv;
         if (pdfResolution.route.kind === 'dedicated-clean-simple') {
           const saveResult = await exportCleanSimplePdf(liveCv, exportFilename, locale);
           showCvExportSuccessToast(saveResult, 'pdf', `${exportFilename}.pdf`);

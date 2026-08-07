@@ -8,6 +8,12 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
 import {
+  buildCvExportRenderProjection,
+  collectCvStructuredTextTokens,
+  normalizeNarrativeWithProtectedStructuredTokens,
+  normalizeStructuredExportText,
+} from './cv-export-structured-text';
+import {
   isRtlLocale,
   pdfI18nCtxApplyStyle,
   pdfI18nCtxDraw,
@@ -179,7 +185,11 @@ export function epMeasureWrappedLines(
   maxW: number,
   style?: Pick<Style, 'size' | 'bold'>,
 ): string[] {
-  const t = epNormalizePdfText(text, ctx.locale);
+  const t = normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    collectCvStructuredTextTokens(ctx.cv),
+    (protectedText) => epNormalizePdfText(protectedText, ctx.locale),
+  );
   if (!t) return [];
   const wrapStyle = style ?? ctx.lastTextStyle ?? { size: 9, bold: false };
   return pdfI18nCtxSplit(ctx, t, maxW, { size: wrapStyle.size, bold: wrapStyle.bold });
@@ -404,11 +414,16 @@ export function epDrawSummary(ctx: ExecutivePremiumDirectPdfContext): void {
 }
 
 function splitBullets(ctx: ExecutivePremiumDirectPdfContext, raw: string): string[] {
+  const protectedTokens = collectCvStructuredTextTokens(ctx.cv);
   return raw
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => epNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''), ctx.locale))
+    .map((l) => normalizeNarrativeWithProtectedStructuredTokens(
+      l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''),
+      protectedTokens,
+      (protectedText) => epNormalizePdfText(protectedText, ctx.locale),
+    ))
     .filter(Boolean);
 }
 
@@ -466,7 +481,7 @@ export function epDrawExperienceEntryContinuation(
   entry: CVData['experience'][number],
 ): void {
   epEnsureSpace(ctx, 5);
-  const role = epNormalizePdfText(entry.position || entry.company || 'Experience', ctx.locale);
+  const role = normalizeStructuredExportText(entry.position || entry.company || 'Experience');
   const contStyle: Style = { size: 8.2, color: MUTED, bold: true, lineH: 3.4 };
   const contText = `${role} (continued)`;
   applyStyle(ctx, contStyle, contText);
@@ -494,7 +509,7 @@ function epDrawExperienceLead(ctx: ExecutivePremiumDirectPdfContext, entry: CVDa
 
   if (entry.company) {
     const companyStyle: Style = { size: 9.5, color: GOLD, bold: true, lineH: 3.6 };
-    const company = epNormalizePdfText(entry.company, ctx.locale);
+    const company = normalizeStructuredExportText(entry.company);
     applyStyle(ctx, companyStyle, company);
     drawText(ctx, company, ctx.contentX, ty + 2.8, companyStyle);
     ty += 3.8;
@@ -704,7 +719,8 @@ export async function buildExecutivePremiumPagedPdfBlob(
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
-  const ctx = epCreateContext(pdf, cv, locale, i18n);
+  const renderCv = buildCvExportRenderProjection(cv, locale);
+  const ctx = epCreateContext(pdf, renderCv, locale, i18n);
 
   const preparedPhoto = options.photoDataUrl
     ? await preparePdfRectPhotoDataUrl(options.photoDataUrl, {

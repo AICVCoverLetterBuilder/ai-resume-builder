@@ -19,6 +19,11 @@ import {
   type PdfI18nRegistry,
 } from './pdf-i18n-text';
 import { type CVData } from './types';
+import {
+  buildCvExportRenderProjection,
+  collectCvStructuredTextTokens,
+  normalizeNarrativeWithProtectedStructuredTokens,
+} from './cv-export-structured-text';
 
 const A4_W = 210;
 const A4_H = 297;
@@ -166,7 +171,11 @@ function wrap(
   maxW: number,
   style?: Pick<Style, 'size' | 'bold'>,
 ): string[] {
-  const t = rkNormalizePdfText(text, ctx.locale);
+  const t = normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    collectCvStructuredTextTokens(ctx.cv),
+    (protectedText) => rkNormalizePdfText(protectedText, ctx.locale),
+  );
   if (!t) return [];
   const wrapStyle = style ?? { size: 8.6, bold: false };
   return pdfI18nCtxSplit(ctx, t, maxW, { size: wrapStyle.size, bold: wrapStyle.bold });
@@ -181,12 +190,20 @@ function dateRange(start?: string, end?: string, present?: boolean): string {
   return `${start ?? ''}${start ? '〜' : ''}${present ? L.present : end ?? ''}`;
 }
 
-export function rkSplitIntoCleanBullets(raw: string, locale: Locale = 'ja'): string[] {
+export function rkSplitIntoCleanBullets(
+  raw: string,
+  locale: Locale = 'ja',
+  protectedTokens: readonly string[] = [],
+): string[] {
   return raw
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => rkNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\u30fb|\d+\.)\s*/, ''), locale))
+    .map((l) => normalizeNarrativeWithProtectedStructuredTokens(
+      l.replace(/^(?:[-*]|\u2022|\u30fb|\d+\.)\s*/, ''),
+      protectedTokens,
+      (protectedText) => rkNormalizePdfText(protectedText, locale),
+    ))
     .filter(Boolean);
 }
 
@@ -510,7 +527,11 @@ function rkDrawCompactEducationSection(ctx: RirekishoDirectPdfContext): void {
 }
 
 function buildBulletUnits(ctx: RirekishoDirectPdfContext, raw: string, maxW: number): BulletUnit[] {
-  return rkSplitIntoCleanBullets(raw, ctx.locale).map((b) => ({
+  return rkSplitIntoCleanBullets(
+    raw,
+    ctx.locale,
+    collectCvStructuredTextTokens(ctx.cv),
+  ).map((b) => ({
     lines: wrap(ctx, `\u30fb${b}`, maxW),
   }));
 }
@@ -952,7 +973,8 @@ export async function buildRirekishoPagedPdfBlob(
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
-  const ctx = rkCreateContext(pdf, cv, locale, i18n);
+  const renderCv = buildCvExportRenderProjection(cv, locale);
+  const ctx = rkCreateContext(pdf, renderCv, locale, i18n);
 
   rkDrawTitle(ctx);
   rkDrawPersonalInfoTable(ctx, options.photoDataUrl ?? null);

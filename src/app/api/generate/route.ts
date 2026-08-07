@@ -577,7 +577,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, proToken, freeUserId, requestId, ...params } = body;
-    if (action === 'experience-localize') {
+    if (action === 'experience-localize' || action === 'export-title-localize') {
       deadlineAt = computeExperienceLocalizationDeadline(serverReceivedAt);
     }
 
@@ -1309,6 +1309,205 @@ Rules:
           verifierParserReached: true,
           verifiedRecordCount: independentVerification.records.length,
         },
+      });
+    }
+
+    if (action === 'export-title-localize') {
+      const resolvedLocale = normalizeLocale(params.targetLocale || params.locale);
+      const targetInfo = localeInstructions[resolvedLocale];
+      const rawEntries = Array.isArray(params.entries) ? params.entries : [];
+      if (!rawEntries.length || rawEntries.length > 8) {
+        return jsonResponse({
+          error: 'Export title localization requires between one and eight entries.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'export_title_localization_invalid_batch',
+        }, { status: 422 });
+      }
+
+      type SafeTitleEntry = {
+        entryId: string;
+        sourceLocale: string;
+        roleTitle: string;
+        employer: string;
+        employmentState: 'present' | 'completed';
+      };
+      type TitleTranslatorPayload = {
+        targetLocale: string;
+        entries: Array<{ entryId: string; localizedRoleTitle: string }>;
+      };
+      type TitleVerifierPayload = {
+        targetLocale: string;
+        entries: Array<{
+          entryId: string;
+          decision: 'passed' | 'rejected';
+          semanticEquivalent: boolean;
+          targetLocalePassed: boolean;
+          unsupportedScopeIntroduced: boolean;
+        }>;
+      };
+
+      const safeEntries: SafeTitleEntry[] = rawEntries.map((entry: Record<string, unknown>) => ({
+        entryId: sanitizeField(entry.entryId, 200),
+        sourceLocale: sanitizeField(entry.sourceLocale, 20),
+        roleTitle: sanitizeField(entry.roleTitle, 500),
+        employer: sanitizeField(entry.employer, 500),
+        employmentState: entry.employmentState === 'present' ? 'present' : 'completed',
+      }));
+      const expectedIds = safeEntries.map((entry) => entry.entryId);
+      const validInput = safeEntries.every((entry) => (
+        entry.entryId.length > 0
+        && entry.roleTitle.length > 0
+        && entry.sourceLocale.length > 0
+      ))
+        && new Set(expectedIds).size === expectedIds.length;
+      if (!validInput) {
+        return jsonResponse({
+          error: 'Export title localization received invalid entry identities.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'export_title_localization_identity_invalid',
+        }, { status: 422 });
+      }
+
+      const parseStrictObject = <T,>(raw: string): T | null => {
+        const cleaned = String(raw || '')
+          .trim()
+          .replace(/^```(?:json)?\s*/iu, '')
+          .replace(/\s*```$/u, '');
+        if (!cleaned.startsWith('{') || !cleaned.endsWith('}')) return null;
+        try {
+          return JSON.parse(cleaned) as T;
+        } catch {
+          return null;
+        }
+      };
+
+      let translatorAttemptCount = 0;
+      let verifierAttemptCount = 0;
+      const repair = params.repair === true;
+      const translatorResponse = await callWithRetry({
+        model: MODEL,
+        max_tokens: 1200,
+        temperature: 0,
+        stream: false,
+        system: `You are a strict CV job-title localization engine. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return one JSON object and no commentary or markdown. Preserve every entryId exactly. Translate only the roleTitle. Preserve the role's occupation, specialization, seniority, coordination/management scope, technical domain, customer-facing scope, and employment meaning. Preserve product names, standards, acronyms, and proper nouns exactly when they are not normally translated. Do not add qualifications, tools, leadership, regulated responsibility, seniority, achievements, or scope not present in the source. Employers are context only and must never appear inside localizedRoleTitle.${repair ? ' This is a repair attempt: correct any wrong-language, untranslated, or meaning-changed title from the prior attempt.' : ''}`,
+        messages: [{
+          role: 'user',
+          content: JSON.stringify({
+            task: 'localize_export_job_titles',
+            targetLocale: resolvedLocale,
+            gender: sanitizeField(params.gender, 30),
+            entries: safeEntries,
+            responseSchema: {
+              targetLocale: resolvedLocale,
+              entries: [{
+                entryId: 'exact input entryId',
+                localizedRoleTitle: 'target-language role title only',
+              }],
+            },
+          }),
+        }],
+      }, deadlineAt, () => { translatorAttemptCount += 1; }, EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS, 'translation', null, false);
+
+      const translated = parseStrictObject<TitleTranslatorPayload>(getText(translatorResponse));
+      const translatedById = new Map(
+        Array.isArray(translated?.entries)
+          ? translated!.entries.map((entry) => [String(entry.entryId || ''), entry])
+          : [],
+      );
+      const translationParityPassed = translated?.targetLocale === resolvedLocale
+        && translatedById.size === safeEntries.length
+        && safeEntries.every((entry) => {
+          const candidate = translatedById.get(entry.entryId);
+          return Boolean(
+            candidate
+            && typeof candidate.localizedRoleTitle === 'string'
+            && candidate.localizedRoleTitle.trim().length > 0
+            && candidate.localizedRoleTitle.trim().length <= 500,
+          );
+        });
+      if (!translationParityPassed) {
+        return jsonResponse({
+          error: 'Title localization provider returned malformed structured JSON.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'export_title_localization_provider_malformed',
+          titleTranslatorAttemptCount: translatorAttemptCount,
+          titleVerifierAttemptCount: verifierAttemptCount,
+        }, { status: 422 });
+      }
+
+      const candidates = safeEntries.map((entry) => ({
+        entryId: entry.entryId,
+        sourceLocale: entry.sourceLocale,
+        sourceRoleTitle: entry.roleTitle,
+        targetLocale: resolvedLocale,
+        candidateRoleTitle: translatedById.get(entry.entryId)!.localizedRoleTitle.trim(),
+      }));
+      const verifierResponse = await callWithRetry({
+        model: MODEL,
+        max_tokens: 1200,
+        temperature: 0,
+        stream: false,
+        system: `You are an independent CV title verifier. Do not translate or rewrite. Compare each sourceRoleTitle with candidateRoleTitle. Return one JSON object only. Pass only when the candidate is in ${targetInfo.languageName} (${resolvedLocale}), preserves the same occupation, specialization, seniority, technical/customer domain and responsibility scope, and introduces no qualification, tool, leadership, regulated duty, achievement, or extra scope. Preserve every entryId exactly. Reject untranslated source-language titles unless the title is a genuine invariant product code or acronym.`,
+        messages: [{
+          role: 'user',
+          content: JSON.stringify({
+            task: 'verify_export_job_title_localization',
+            targetLocale: resolvedLocale,
+            entries: candidates,
+            responseSchema: {
+              targetLocale: resolvedLocale,
+              entries: [{
+                entryId: 'exact input entryId',
+                decision: 'passed or rejected',
+                semanticEquivalent: true,
+                targetLocalePassed: true,
+                unsupportedScopeIntroduced: false,
+              }],
+            },
+          }),
+        }],
+      }, deadlineAt, () => { verifierAttemptCount += 1; }, EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS, 'verifier', null, false);
+
+      const verified = parseStrictObject<TitleVerifierPayload>(getText(verifierResponse));
+      const verifiedById = new Map(
+        Array.isArray(verified?.entries)
+          ? verified!.entries.map((entry) => [String(entry.entryId || ''), entry])
+          : [],
+      );
+      const verifierPassed = verified?.targetLocale === resolvedLocale
+        && verifiedById.size === safeEntries.length
+        && safeEntries.every((entry) => {
+          const record = verifiedById.get(entry.entryId);
+          return Boolean(
+            record
+            && record.decision === 'passed'
+            && record.semanticEquivalent === true
+            && record.targetLocalePassed === true
+            && record.unsupportedScopeIntroduced === false,
+          );
+        });
+      if (!verifierPassed) {
+        return jsonResponse({
+          error: 'Independent title localization verification rejected the candidate.',
+          code: 'generation_validation_failed' satisfies AiErrorCode,
+          localizationTypedFailureReason: 'export_title_localization_independent_verification_failed',
+          titleTranslatorAttemptCount: translatorAttemptCount,
+          titleVerifierAttemptCount: verifierAttemptCount,
+        }, { status: 422 });
+      }
+
+      return jsonResponse({
+        localizedManifest: {
+          targetLocale: resolvedLocale,
+          entries: safeEntries.map((entry) => ({
+            entryId: entry.entryId,
+            localizedRoleTitle: translatedById.get(entry.entryId)!.localizedRoleTitle.trim(),
+            facts: [],
+          })),
+        },
+        localizationSource: 'provider_independent_verified',
+        titleTranslatorAttemptCount: translatorAttemptCount,
+        titleVerifierAttemptCount: verifierAttemptCount,
       });
     }
 

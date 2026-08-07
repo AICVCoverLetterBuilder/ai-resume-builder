@@ -10,6 +10,12 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
 import {
+  buildCvExportRenderProjection,
+  collectCvStructuredTextTokens,
+  normalizeNarrativeWithProtectedStructuredTokens,
+  normalizeStructuredExportText,
+} from './cv-export-structured-text';
+import {
   beginPdfI18nPlacementTracking,
   endPdfI18nPlacementTracking,
   isRtlLocale,
@@ -241,7 +247,11 @@ function wrapLines(
   maxW: number,
   style?: Pick<TextStyle, 'size' | 'bold'>,
 ): string[] {
-  const normalized = mmNormalizePdfText(text, ctx.locale);
+  const normalized = normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    collectCvStructuredTextTokens(ctx.cv),
+    (protectedText) => mmNormalizePdfText(protectedText, ctx.locale),
+  );
   if (!normalized) return [];
   const wrapStyle = style ?? ctx.lastTextStyle ?? { size: 9, bold: false };
   return pdfI18nCtxSplit(ctx, normalized, maxW, { size: wrapStyle.size, bold: wrapStyle.bold });
@@ -272,18 +282,26 @@ function bulletLayout(ctx: ModernMinimalPdfContext, contentW: number): MmBulletL
   return { markerX, textX, wrapW: Math.max(8, contentW - (textX - markerX)) };
 }
 
-function parseBulletLines(raw: string, locale: Locale): string[] {
+function parseBulletLines(
+  raw: string,
+  locale: Locale,
+  protectedTokens: readonly string[],
+): string[] {
   return raw
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => mmNormalizePdfText(line.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''), locale))
+    .map((line) => normalizeNarrativeWithProtectedStructuredTokens(
+      line.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''),
+      protectedTokens,
+      (protectedText) => mmNormalizePdfText(protectedText, locale),
+    ))
     .filter(Boolean);
 }
 
 function buildBulletBlocks(ctx: ModernMinimalPdfContext, raw: string, contentW: number): BulletBlock[] {
   const layout = bulletLayout(ctx, contentW);
-  return parseBulletLines(raw, ctx.locale).map((text) => ({
+  return parseBulletLines(raw, ctx.locale, collectCvStructuredTextTokens(ctx.cv)).map((text) => ({
     lines: wrapLines(ctx, text, layout.wrapW),
   }));
 }
@@ -454,7 +472,7 @@ export function mmDrawExperienceEntryContinuation(
   mmEnsureSpace(ctx, 5);
   const role = entry.position || entry.company || 'Experience';
   const contStyle: TextStyle = { size: 8, color: MUTED, bold: true, lineH: 3.2 };
-  const contText = `${mmNormalizePdfText(role, ctx.locale)} (continued)`;
+  const contText = `${normalizeStructuredExportText(role)} (continued)`;
   applyStyle(ctx, contStyle, contText);
   drawText(ctx, contText, ctx.contentX, ctx.y + 2.5, contStyle);
   ctx.y += 4.5;
@@ -493,7 +511,7 @@ function drawExperienceLead(ctx: ModernMinimalPdfContext, entry: CVData['experie
 
   if (entry.company) {
     const companyStyle: TextStyle = { size: 9, color: MUTED, lineH: 3.4 };
-    const company = mmNormalizePdfText(entry.company, ctx.locale);
+    const company = normalizeStructuredExportText(entry.company);
     applyStyle(ctx, companyStyle, company);
     drawText(ctx, company, ctx.contentX, lineY + 2.6, companyStyle);
     lineY += 3.4;
@@ -935,7 +953,8 @@ export async function buildModernMinimalPagedPdfBlob(
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
-  const ctx = mmCreateContext(pdf, cv, locale, i18n);
+  const renderCv = buildCvExportRenderProjection(cv, locale);
+  const ctx = mmCreateContext(pdf, renderCv, locale, i18n);
   const trackArabicGeometry = locale === 'ar';
   if (trackArabicGeometry) {
     void ARABIC_MODERN_MINIMAL_PDF_RTL_MARKER;

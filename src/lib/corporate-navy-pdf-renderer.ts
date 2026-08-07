@@ -25,6 +25,12 @@ import { drawCircularPdfPhoto, preparePdfCircularPhotoDataUrl } from './pdf-phot
 import { type CVData } from './types';
 import { getRegionSettings } from './cv-region';
 import { wrapCvExportFailure } from './cv-export-error-message';
+import {
+  buildCvExportRenderProjection,
+  collectCvStructuredTextTokens,
+  normalizeNarrativeWithProtectedStructuredTokens,
+  normalizeStructuredExportText,
+} from './cv-export-structured-text';
 
 const A4_W = 210;
 const A4_H = 297;
@@ -161,7 +167,11 @@ export function cnMeasureWrappedLines(
   maxW: number,
   style?: Pick<Style, 'size' | 'bold'>,
 ): string[] {
-  const t = cnNormalizePdfText(text, ctx.locale);
+  const t = normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    collectCvStructuredTextTokens(ctx.cv),
+    (protectedText) => cnNormalizePdfText(protectedText, ctx.locale),
+  );
   if (!t) return [];
   const wrapStyle = style ?? { size: 9, bold: false };
   return pdfI18nCtxSplit(ctx, t, maxW, { size: wrapStyle.size, bold: wrapStyle.bold });
@@ -215,18 +225,26 @@ export function cnMoveToFreshPageIfNeeded(ctx: CorporateNavyDirectPdfContext, h:
   if (ctx.y + h > ctx.bottomSafeY) cnAddPage(ctx);
 }
 
-function splitBullets(raw: string, locale: Locale): string[] {
+function splitBullets(
+  raw: string,
+  locale: Locale,
+  protectedTokens: readonly string[],
+): string[] {
   return raw
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => cnNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''), locale))
+    .map((l) => normalizeNarrativeWithProtectedStructuredTokens(
+      l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''),
+      protectedTokens,
+      (protectedText) => cnNormalizePdfText(protectedText, locale),
+    ))
     .filter(Boolean);
 }
 
 function buildBullets(ctx: CorporateNavyDirectPdfContext, raw: string, contentW: number): BulletUnit[] {
   const { wrapW } = cnBulletTextLayout(ctx, contentW);
-  return splitBullets(raw, ctx.locale).map((b) => ({
+  return splitBullets(raw, ctx.locale, collectCvStructuredTextTokens(ctx.cv)).map((b) => ({
     lines: cnMeasureWrappedLines(ctx, b, wrapW),
   }));
 }
@@ -424,7 +442,7 @@ export function cnDrawContinuationHeader(
   cnEnsureSpace(ctx, 5);
   const role = entry.position || entry.company || 'Experience';
   const contStyle: Style = { size: 8.2, color: MUTED, bold: true, lineH: 3.4 };
-  const label = `${cnNormalizePdfText(role, ctx.locale)} (continued)`;
+  const label = `${normalizeStructuredExportText(role)} (continued)`;
   applyStyle(ctx, contStyle, label);
   drawText(ctx, label, ctx.contentX, ctx.y + 2.5, contStyle);
   ctx.y += 5;
@@ -455,7 +473,7 @@ function drawExperienceLead(
 
   if (entry.company) {
     const companyStyle: Style = { size: 9.5, color: BLUE, bold: true, lineH: 3.6 };
-    const company = cnNormalizePdfText(entry.company, ctx.locale);
+    const company = normalizeStructuredExportText(entry.company);
     applyStyle(ctx, companyStyle, company);
     drawText(ctx, company, ctx.contentX, ty + 2.8, companyStyle);
     ty += 3.8;
@@ -796,7 +814,8 @@ export async function buildCorporateNavyPagedPdfBlob(
     const { jsPDF } = await import('jspdf');
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const i18n = await registerPdfI18nFonts(pdf);
-    const ctx = cnCreateContext(pdf, safeCv, locale, i18n);
+    const renderCv = buildCvExportRenderProjection(safeCv, locale);
+    const ctx = cnCreateContext(pdf, renderCv, locale, i18n);
 
     const maskedPhoto = options.photoDataUrl
       ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)

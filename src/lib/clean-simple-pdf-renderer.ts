@@ -13,6 +13,12 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
 import {
+  buildCvExportRenderProjection,
+  collectCvStructuredTextTokens,
+  normalizeNarrativeWithProtectedStructuredTokens,
+  normalizeStructuredExportText,
+} from './cv-export-structured-text';
+import {
   isRtlLocale,
   pdfI18nCtxApplyStyle,
   pdfI18nCtxDraw,
@@ -223,7 +229,11 @@ export function csEnsureSpace(ctx: CleanSimplePdfContext, neededMm: number): voi
 }
 
 function wrapLines(ctx: CleanSimplePdfContext, text: string, maxW: number, style?: Pick<TextStyle, 'size' | 'bold'>): string[] {
-  const normalized = csNormalizePdfText(text, ctx.locale);
+  const normalized = normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    collectCvStructuredTextTokens(ctx.cv),
+    (protectedText) => csNormalizePdfText(protectedText, ctx.locale),
+  );
   if (!normalized) return [];
   const wrapStyle = style ?? ctx.lastTextStyle ?? { size: 8.1, bold: false };
   return pdfI18nCtxSplit(ctx, normalized, maxW, { size: wrapStyle.size, bold: wrapStyle.bold });
@@ -254,18 +264,26 @@ function bulletLayout(ctx: CleanSimplePdfContext, contentW: number): CsBulletLay
   return { markerX, textX, wrapW: Math.max(8, contentW - (textX - markerX)) };
 }
 
-function parseBulletLines(raw: string, locale: Locale): string[] {
+function parseBulletLines(
+  raw: string,
+  locale: Locale,
+  protectedTokens: readonly string[],
+): string[] {
   return raw
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => csNormalizePdfText(line.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''), locale))
+    .map((line) => normalizeNarrativeWithProtectedStructuredTokens(
+      line.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''),
+      protectedTokens,
+      (protectedText) => csNormalizePdfText(protectedText, locale),
+    ))
     .filter(Boolean);
 }
 
 function buildBulletBlocks(ctx: CleanSimplePdfContext, raw: string, contentW: number): BulletBlock[] {
   const layout = bulletLayout(ctx, contentW);
-  return parseBulletLines(raw, ctx.locale).map((text) => ({
+  return parseBulletLines(raw, ctx.locale, collectCvStructuredTextTokens(ctx.cv)).map((text) => ({
     lines: wrapLines(ctx, text, layout.wrapW),
   }));
 }
@@ -413,15 +431,15 @@ function drawExperienceEntryContinuation(
   csEnsureSpace(ctx, 5);
   const role = entry.position || entry.company || 'Experience';
   const contStyle: TextStyle = { size: 7.3, color: LIGHT, bold: true, lineH: 3.2 };
-  const contText = `${csNormalizePdfText(role, ctx.locale)} (continued)`;
+  const contText = `${normalizeStructuredExportText(role)} (continued)`;
   applyStyle(ctx, contStyle, contText);
   drawText(ctx, contText, ctx.contentX, ctx.y + 2.5, contStyle);
   ctx.y += 4.5;
 }
 
 function experienceTitle(ctx: CleanSimplePdfContext, entry: CVData['experience'][number]): string {
-  const position = csNormalizePdfText(entry.position || '', ctx.locale);
-  const company = csNormalizePdfText(entry.company || '', ctx.locale);
+  const position = normalizeStructuredExportText(entry.position || '');
+  const company = normalizeStructuredExportText(entry.company || '');
   return company ? `${position} \u2014 ${company}` : position;
 }
 
@@ -714,7 +732,8 @@ export async function buildCleanSimplePagedPdfBlob(
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   (pdf as InstanceType<typeof jsPDF> & { allowFsRead?: string[] }).allowFsRead = ['*'];
   const i18n = await registerPdfI18nFonts(pdf);
-  const ctx = csCreateContext(pdf, cv, locale, i18n);
+  const renderCv = buildCvExportRenderProjection(cv, locale);
+  const ctx = csCreateContext(pdf, renderCv, locale, i18n);
 
   csDrawHeader(ctx, options.photoDataUrl ?? null);
   csDrawSummary(ctx);

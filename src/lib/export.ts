@@ -2,7 +2,12 @@ import type { CVData } from './types';
 import { regionSettings, templateInfo } from './types';
 import { getRegionSettings } from './cv-region';
 import { wrapCvExportFailure } from './cv-export-error-message';
-import { translations, type Locale } from './i18n/translations';
+import { resolveLocaleCandidate, translations, type Locale } from './i18n/translations';
+import {
+  buildCvExportRenderProjection,
+  collectCvStructuredTextTokens,
+  normalizeNarrativeWithProtectedStructuredTokens,
+} from './cv-export-structured-text';
 import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { localizeCvLanguageLevel } from './cv-language-levels';
@@ -5789,12 +5794,13 @@ export function epNormalizeDocxText(text: string): string {
 }
 
 export async function exportToDOCX(
-  cvData: CVData,
+  sourceCvData: CVData,
   fileName: string,
   locale: Locale = 'en',
   templateId?: string,
   options?: { elegantFormalPhoto?: ElegantFormalCanonicalPhotoResult | null },
 ): Promise<SaveFileResult> {
+  let cvData = buildCvExportRenderProjection(sourceCvData, locale);
   const {
     Document,
     Packer,
@@ -5815,6 +5821,17 @@ export async function exportToDOCX(
   // Legacy Android drafts may omit/pollute region; never crash on showAddress.
   const rs = getRegionSettings(cvData.region);
   const t = translations[locale];
+  const structuredTokens = collectCvStructuredTextTokens(cvData);
+  const normalizeNcNarrative = (text: string) => normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    structuredTokens,
+    ncNormalizeDocxText,
+  );
+  const normalizeEpNarrative = (text: string) => normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    structuredTokens,
+    epNormalizeDocxText,
+  );
   const showPhoto =
     cvData.personal.photoEnabled !== undefined
       ? cvData.personal.photoEnabled
@@ -6865,7 +6882,7 @@ export async function exportToDOCX(
     const ncHasLangs = cvData.languages.length > 0;
 
     function ncExperienceDescriptionLines(description: string): string[] {
-      return ncNormalizeDocxText(description).split('\n').filter((line) => line.trim());
+      return normalizeNcNarrative(description).split('\n').filter((line) => line.trim());
     }
 
     function ncExperiencePositionTable(
@@ -7053,7 +7070,7 @@ export async function exportToDOCX(
         }));
         if (edu.description) {
           blocks.push(new Paragraph({
-            children: [new TextRun({ text: ncNormalizeDocxText(edu.description), size: 20, color: '4B5563' })],
+            children: [new TextRun({ text: normalizeNcNarrative(edu.description), size: 20, color: '4B5563' })],
             spacing: { after: 100 },
             keepNext: isLastEdu && (options.keepWithNext ?? false),
           }));
@@ -7064,7 +7081,7 @@ export async function exportToDOCX(
 
     // ── Summary: teal heading + body (keepNext prevents orphaned heading) ─
     if (cvData.summary) {
-      const summaryText = ncNormalizeDocxText(cvData.summary);
+      const summaryText = normalizeNcNarrative(cvData.summary);
       children.push(ncHeading(t.cv.summary, { keepNext: true }));
       children.push(new Paragraph({ children: [new TextRun({ text: summaryText, size: 20, color: '4B5563' })], spacing: { after: 160 } }));
     }
@@ -7279,7 +7296,7 @@ export async function exportToDOCX(
 
     // ── Summary: PROFESSIONAL SUMMARY heading + centered italic body ───────
     if (cvData.summary) {
-      const summaryText = epNormalizeDocxText(cvData.summary);
+      const summaryText = normalizeEpNarrative(cvData.summary);
       children.push(epHeading(t.cv.summary, { keepNext: true }));
       children.push(new Paragraph({
         alignment: AlignmentType.CENTER,
@@ -7308,7 +7325,7 @@ export async function exportToDOCX(
           for (const line of exp.description.split('\n')) {
             const trimmed = line.trim();
             if (trimmed) {
-              const bulletText = epNormalizeDocxText(trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, ''));
+              const bulletText = normalizeEpNarrative(trimmed.replace(/^[-•*]\s*/, '').replace(/^\d+\.\s*/, ''));
               children.push(new Paragraph({
                 children: [
                   new TextRun({ text: '-  ', size: 17, color: '6B7280', font: 'Calibri' }),
@@ -9179,7 +9196,9 @@ export async function exportToDOCX(
 
 // ─── Rirekisho (Japanese CV) DOCX Export ─────────────────────────────────────
 
-export async function exportRirekishoToDOCX(cvData: CVData, fileName: string): Promise<SaveFileResult> {
+export async function exportRirekishoToDOCX(sourceCvData: CVData, fileName: string): Promise<SaveFileResult> {
+  const renderLocale = resolveLocaleCandidate(sourceCvData.contentLocale) || 'ja';
+  const cvData = buildCvExportRenderProjection(sourceCvData, renderLocale);
   const {
     Document,
     Packer,
@@ -12541,6 +12560,7 @@ export async function buildProfessionalClassicPagedPdfBlob(
   locale: Locale,
   options: { photoDataUrl?: string | null } = {},
 ): Promise<Blob> {
+  const renderCv = buildCvExportRenderProjection(cv, locale);
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
@@ -12564,13 +12584,13 @@ export async function buildProfessionalClassicPagedPdfBlob(
     y: 0,
   };
 
-  proClassicDrawHeader(ctx, cv, options.photoDataUrl ?? null);
-  proClassicDrawSummary(ctx, cv.summary);
-  proClassicDrawExperience(ctx, cv);
+  proClassicDrawHeader(ctx, renderCv, options.photoDataUrl ?? null);
+  proClassicDrawSummary(ctx, renderCv.summary);
+  proClassicDrawExperience(ctx, renderCv);
 
-  const educationHeight = proClassicEducationHeight(ctx, cv);
-  const skillsLanguagesHeight = proClassicSkillsLanguagesHeight(ctx, cv);
-  const certificationsHeight = proClassicCertificationsHeight(ctx, cv);
+  const educationHeight = proClassicEducationHeight(ctx, renderCv);
+  const skillsLanguagesHeight = proClassicSkillsLanguagesHeight(ctx, renderCv);
+  const certificationsHeight = proClassicCertificationsHeight(ctx, renderCv);
   const lowerSectionsHeight = educationHeight + skillsLanguagesHeight + certificationsHeight;
   const freshPageCapacity = proClassicFreshPageCapacity(ctx);
   if (lowerSectionsHeight > 0 && lowerSectionsHeight <= freshPageCapacity && ctx.y + lowerSectionsHeight > ctx.bottomSafeY) {
@@ -12578,13 +12598,13 @@ export async function buildProfessionalClassicPagedPdfBlob(
   }
 
   if (educationHeight > 0) {
-    proClassicDrawEducation(ctx, cv);
+    proClassicDrawEducation(ctx, renderCv);
   }
   if (skillsLanguagesHeight > 0) {
-    proClassicDrawSkillsLanguages(ctx, cv);
+    proClassicDrawSkillsLanguages(ctx, renderCv);
   }
   if (certificationsHeight > 0) {
-    proClassicDrawCertifications(ctx, cv);
+    proClassicDrawCertifications(ctx, renderCv);
   }
 
   const output = pdf.output('blob');
@@ -13175,6 +13195,7 @@ export async function buildCreativeBoldPagedPdfBlob(
   locale: Locale,
   options: { photoDataUrl?: string | null } = {},
 ): Promise<Blob> {
+  const renderCv = buildCvExportRenderProjection(cv, locale);
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
@@ -13208,21 +13229,21 @@ export async function buildCreativeBoldPagedPdfBlob(
     pageIndex: 0,
   };
 
-  cbDrawPage1Sidebar(ctx, cv, options.photoDataUrl ?? null);
+  cbDrawPage1Sidebar(ctx, renderCv, options.photoDataUrl ?? null);
 
-  cbDrawSummary(ctx, cv.summary);
-  cbDrawExperience(ctx, cv);
+  cbDrawSummary(ctx, renderCv.summary);
+  cbDrawExperience(ctx, renderCv);
 
-  const eduH = cbEducationHeight(ctx, cv);
-  const certH = cbCertificationsHeight(ctx, cv);
+  const eduH = cbEducationHeight(ctx, renderCv);
+  const certH = cbCertificationsHeight(ctx, renderCv);
   const lowerH = eduH + certH;
   const freshCap = cbFreshPageCapacity(ctx);
   if (lowerH > 0 && lowerH <= freshCap && ctx.y + lowerH > ctx.bottomSafeY) {
     cbAddPage(ctx);
   }
 
-  cbDrawEducation(ctx, cv);
-  cbDrawCertifications(ctx, cv);
+  cbDrawEducation(ctx, renderCv);
+  cbDrawCertifications(ctx, renderCv);
 
   const output = pdf.output('blob');
   return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
@@ -13979,6 +14000,7 @@ export async function buildCreativeArtisticPagedPdfBlob(
       gender: cv.personal?.gender,
     }).cv;
   void options.projectionId;
+  const renderCv = buildCvExportRenderProjection(safeCv, locale);
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
@@ -14003,34 +14025,34 @@ export async function buildCreativeArtisticPagedPdfBlob(
     pageIndex: 0,
   };
 
-  caDrawHeader(ctx, safeCv, options.photoDataUrl ?? null);
-  caDrawSummary(ctx, safeCv.summary);
-  caDrawExperience(ctx, safeCv);
+  caDrawHeader(ctx, renderCv, options.photoDataUrl ?? null);
+  caDrawSummary(ctx, renderCv.summary);
+  caDrawExperience(ctx, renderCv);
 
-  const educationH = caEducationHeight(ctx, safeCv);
-  const skillsLangH = caSkillsLanguagesHeight(ctx, safeCv);
-  const certsH = caCertificationsHeight(ctx, safeCv);
+  const educationH = caEducationHeight(ctx, renderCv);
+  const skillsLangH = caSkillsLanguagesHeight(ctx, renderCv);
+  const certsH = caCertificationsHeight(ctx, renderCv);
   caMoveLowerSectionsIfNeeded(ctx, educationH, skillsLangH, certsH);
 
-  if (educationH > 0) caDrawEducation(ctx, safeCv);
+  if (educationH > 0) caDrawEducation(ctx, renderCv);
 
   if (skillsLangH > 0) {
-    const blockH = caSkillsLanguagesHeight(ctx, safeCv);
+    const blockH = caSkillsLanguagesHeight(ctx, renderCv);
     const freshCap = caFreshPageCapacity(ctx);
     if (blockH <= freshCap) {
       caMoveToFreshPageIfNeeded(ctx, blockH);
     } else {
       const skillsOnlyH = caSectionHeadingHeight() + caMeasureSkillChipsHeight(
         ctx,
-        safeCv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale)),
+        renderCv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale)),
         (ctx.contentWidth - CA_SKILLS_LANG_GAP_MM) / 2,
       );
       caMoveToFreshPageIfNeeded(ctx, skillsOnlyH);
     }
-    caDrawSkillsLanguagesBlock(ctx, safeCv);
+    caDrawSkillsLanguagesBlock(ctx, renderCv);
   }
 
-  if (certsH > 0) caDrawCertifications(ctx, safeCv);
+  if (certsH > 0) caDrawCertifications(ctx, renderCv);
 
   const output = pdf.output('blob');
   return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });
@@ -14916,6 +14938,7 @@ export async function buildElegantFormalPagedPdfBlob(
   locale: Locale,
   options: { photoDataUrl?: string | null } = {},
 ): Promise<Blob> {
+  const renderCv = buildCvExportRenderProjection(cv, locale);
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
@@ -14941,27 +14964,27 @@ export async function buildElegantFormalPagedPdfBlob(
   };
 
   ctx.y = ctx.marginTop;
-  efDrawHeader(ctx, cv, options.photoDataUrl ?? null);
-  efDrawSummary(ctx, cv.summary);
-  efDrawExperience(ctx, cv);
+  efDrawHeader(ctx, renderCv, options.photoDataUrl ?? null);
+  efDrawSummary(ctx, renderCv.summary);
+  efDrawExperience(ctx, renderCv);
 
-  const educationH = efEducationHeight(ctx, cv);
-  const lowerH = efLowerBlockHeight(ctx, cv);
+  const educationH = efEducationHeight(ctx, renderCv);
+  const lowerH = efLowerBlockHeight(ctx, renderCv);
   efMoveLowerSectionsIfNeeded(ctx, educationH, lowerH);
 
-  if (educationH > 0) efDrawEducation(ctx, cv);
+  if (educationH > 0) efDrawEducation(ctx, renderCv);
   if (lowerH > 0) {
     if (lowerH <= efFreshPageCapacity(ctx)) {
       efMoveToFreshPageIfNeeded(ctx, lowerH);
     } else {
-      const columns = efLowerColumns(ctx, cv);
+      const columns = efLowerColumns(ctx, renderCv);
       const colW = (ctx.contentWidth - EF_LOWER_COL_GAP_MM * Math.max(columns.length - 1, 0)) / Math.max(columns.length, 1);
       const skillsCol = columns.find(c => c.key === 'skills');
       if (skillsCol) {
         efMoveToFreshPageIfNeeded(ctx, 5.2 + efMeasureInlineItemsHeight(ctx, skillsCol.items, colW));
       }
     }
-    efDrawSkillsLanguagesBlock(ctx, cv);
+    efDrawSkillsLanguagesBlock(ctx, renderCv);
   }
 
   const output = pdf.output('blob');
@@ -15518,6 +15541,7 @@ export async function buildAtsStandardPagedPdfBlob(
   cv: CVData,
   locale: Locale,
 ): Promise<Blob> {
+  const renderCv = buildCvExportRenderProjection(cv, locale);
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
@@ -15542,25 +15566,25 @@ export async function buildAtsStandardPagedPdfBlob(
     pageIndex: 0,
   };
 
-  atsDrawHeader(ctx, cv);
-  atsDrawSummary(ctx, cv.summary);
-  atsDrawExperience(ctx, cv);
+  atsDrawHeader(ctx, renderCv);
+  atsDrawSummary(ctx, renderCv.summary);
+  atsDrawExperience(ctx, renderCv);
 
-  const educationH = atsEducationHeight(ctx, cv);
-  const lowerH = atsLowerSectionsHeight(ctx, cv);
+  const educationH = atsEducationHeight(ctx, renderCv);
+  const lowerH = atsLowerSectionsHeight(ctx, renderCv);
   atsMoveLowerSectionsIfNeeded(ctx, educationH, lowerH);
 
-  if (educationH > 0) atsDrawEducation(ctx, cv);
+  if (educationH > 0) atsDrawEducation(ctx, renderCv);
 
   if (lowerH > 0) {
     if (lowerH <= atsFreshPageCapacity(ctx)) {
       atsMoveToFreshPageIfNeeded(ctx, lowerH);
-    } else if (cv.skills.length) {
-      atsMoveToFreshPageIfNeeded(ctx, atsSkillsHeight(ctx, cv));
+    } else if (renderCv.skills.length) {
+      atsMoveToFreshPageIfNeeded(ctx, atsSkillsHeight(ctx, renderCv));
     }
-    if (cv.skills.length) atsDrawSkills(ctx, cv);
-    if (cv.languages.length) atsDrawLanguages(ctx, cv);
-    if (cv.certifications.length) atsDrawCertifications(ctx, cv);
+    if (renderCv.skills.length) atsDrawSkills(ctx, renderCv);
+    if (renderCv.languages.length) atsDrawLanguages(ctx, renderCv);
+    if (renderCv.certifications.length) atsDrawCertifications(ctx, renderCv);
   }
 
   const output = pdf.output('blob');
@@ -16291,6 +16315,7 @@ export async function buildNordicCleanPagedPdfBlob(
   locale: Locale,
   options: { photoDataUrl?: string | null } = {},
 ): Promise<Blob> {
+  const renderCv = buildCvExportRenderProjection(cv, locale);
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
@@ -16315,34 +16340,34 @@ export async function buildNordicCleanPagedPdfBlob(
     pageIndex: 0,
   };
 
-  ncDrawHeader(ctx, cv, options.photoDataUrl ?? null);
-  ncDrawSummary(ctx, cv.summary);
-  ncDrawExperience(ctx, cv);
+  ncDrawHeader(ctx, renderCv, options.photoDataUrl ?? null);
+  ncDrawSummary(ctx, renderCv.summary);
+  ncDrawExperience(ctx, renderCv);
 
-  const educationH = ncEducationHeight(ctx, cv);
-  const skillsLangH = ncSkillsLanguagesHeight(ctx, cv);
-  const certsH = ncCertificationsHeight(ctx, cv);
+  const educationH = ncEducationHeight(ctx, renderCv);
+  const skillsLangH = ncSkillsLanguagesHeight(ctx, renderCv);
+  const certsH = ncCertificationsHeight(ctx, renderCv);
   ncMoveLowerSectionsIfNeeded(ctx, educationH, skillsLangH, certsH);
 
-  if (educationH > 0) ncDrawEducation(ctx, cv);
+  if (educationH > 0) ncDrawEducation(ctx, renderCv);
 
   if (skillsLangH > 0) {
     if (skillsLangH <= ncFreshPageCapacity(ctx)) {
       ncMoveToFreshPageIfNeeded(ctx, skillsLangH);
-    } else if (cv.skills.length) {
-      const colW = cv.languages.length
+    } else if (renderCv.skills.length) {
+      const colW = renderCv.languages.length
         ? (ctx.contentWidth - NC_LOWER_COL_GAP_MM) / 2
         : ctx.contentWidth;
       ncMoveToFreshPageIfNeeded(ctx, ncSectionHeadingHeight() + ncMeasureSkillChipsHeight(
         ctx,
-        cv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale)),
+        renderCv.skills.map(s => getLocalizedCvSkillName(s, ctx.locale)),
         colW,
       ));
     }
-    ncDrawSkillsLanguagesBlock(ctx, cv);
+    ncDrawSkillsLanguagesBlock(ctx, renderCv);
   }
 
-  if (certsH > 0) ncDrawCertifications(ctx, cv);
+  if (certsH > 0) ncDrawCertifications(ctx, renderCv);
 
   const output = pdf.output('blob');
   return output instanceof Blob ? output : new Blob([output], { type: 'application/pdf' });

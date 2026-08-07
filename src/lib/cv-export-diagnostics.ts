@@ -17,6 +17,10 @@ import {
   durationDisplayBucket,
 } from './cv-experience-duration';
 import type { ExperienceLocalizationDiagnostics } from './cv-experience-localized-surfaces';
+import {
+  CV_EXPORT_RENDER_DUTY_PROJECTION_REVISION,
+  getExperienceExportRenderDescription,
+} from './cv-export-structured-text';
 
 export type CvExportFormat = 'pdf' | 'docx';
 
@@ -83,6 +87,8 @@ export type CvExportExperienceDiag = {
   canonicalShellCount: number;
   finalProjectedBulletCount: number;
   finalBulletScripts: BulletScriptClass[];
+  renderDutyProjectionUsed: boolean;
+  renderDutyProjectionRevision?: string;
 };
 
 export type CvExportStageDiag = {
@@ -248,13 +254,16 @@ function experienceDiag(
   hasCanonicalSnapshot: boolean,
   groundingSource: string,
   recoveredKeys: string[],
+  locale: Locale,
 ): CvExportExperienceDiag {
   const visible = (exp.description || '').trim();
   const generated = (exp.generatedDescription || '').trim();
   const original = (exp.originalUserDescription || '').trim();
   const canonical = (exp.canonicalDescription || '').trim();
   const displayForCount = visible || generated;
-  const finalBullets = splitExperienceBullets(visible);
+  const renderDescription = getExperienceExportRenderDescription(exp, locale);
+  const finalBullets = splitExperienceBullets(renderDescription);
+  const renderDutyProjectionUsed = renderDescription !== String(exp.description || '');
   return {
     index,
     hasOriginalUserDescription: Boolean(original),
@@ -282,6 +291,10 @@ function experienceDiag(
     canonicalShellCount: shellCount(original || canonical),
     finalProjectedBulletCount: finalBullets.length,
     finalBulletScripts: finalBullets.map(classifyBulletScript),
+    renderDutyProjectionUsed,
+    renderDutyProjectionRevision: renderDutyProjectionUsed
+      ? CV_EXPORT_RENDER_DUTY_PROJECTION_REVISION
+      : undefined,
   };
 }
 
@@ -469,6 +482,7 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
       Boolean(exportCv.canonicalSnapshot) || Boolean(row?.hasCanonicalSnapshot),
       row?.source || (exp.groundingRecoverySource || 'unknown'),
       keys,
+      input.locale,
     );
   });
 

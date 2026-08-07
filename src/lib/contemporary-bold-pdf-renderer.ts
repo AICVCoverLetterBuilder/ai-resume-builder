@@ -17,6 +17,12 @@ import { getLocalizedCvLanguageName } from './cv-language-options';
 import { getLocalizedCvSkillName } from './cv-skill-options';
 import { translations, type Locale } from './i18n/translations';
 import {
+  buildCvExportRenderProjection,
+  collectCvStructuredTextTokens,
+  normalizeNarrativeWithProtectedStructuredTokens,
+  normalizeStructuredExportText,
+} from './cv-export-structured-text';
+import {
   isRtlLocale,
   pdfI18nCtxApplyStyle,
   pdfI18nCtxDraw,
@@ -475,7 +481,11 @@ function wrapLines(
   maxW: number,
   spec?: Pick<StyleSpec, 'size' | 'bold'>,
 ): string[] {
-  const t = cbNormalizePdfText(text, ctx.locale);
+  const t = normalizeNarrativeWithProtectedStructuredTokens(
+    text,
+    collectCvStructuredTextTokens(ctx.cv),
+    (protectedText) => cbNormalizePdfText(protectedText, ctx.locale),
+  );
   if (!t) return [];
   const safeW = Math.min(maxW, cbSafeMaxWidth(ctx, ctx.contentX));
   const style = spec ?? ctx.lastTextStyle ?? { size: 9, bold: false };
@@ -508,19 +518,27 @@ function buildBulletLayout(ctx: ContemporaryBoldPdfContext): CbBulletLayout {
   return { markerX, textX, wrapW: Math.max(4, wrapW) };
 }
 
-function splitBullets(raw: string, locale: Locale): string[] {
+function splitBullets(
+  raw: string,
+  locale: Locale,
+  protectedTokens: readonly string[],
+): string[] {
   return raw
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => cbNormalizePdfText(l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''), locale))
+    .map((l) => normalizeNarrativeWithProtectedStructuredTokens(
+      l.replace(/^(?:[-*]|\u2022|\d+\.)\s*/, ''),
+      protectedTokens,
+      (protectedText) => cbNormalizePdfText(protectedText, locale),
+    ))
     .filter(Boolean);
 }
 
 function buildBulletUnits(ctx: ContemporaryBoldPdfContext, raw: string): BulletUnit[] {
   const layout = buildBulletLayout(ctx);
   const bulletSpec: StyleSpec = { size: ctx.lp.bulletSize, color: BODY_CLR, lh: ctx.lp.bulletLH };
-  return splitBullets(raw, ctx.locale).map((b) => ({
+  return splitBullets(raw, ctx.locale, collectCvStructuredTextTokens(ctx.cv)).map((b) => ({
     lines: wrapLines(ctx, b, layout.wrapW, bulletSpec),
   }));
 }
@@ -718,7 +736,7 @@ function drawExperienceLead(
   // Company — blue accent below title
   if (entry.company) {
     const companySpec: StyleSpec = { size: ctx.lp.companySize, color: BLUE, bold: true, lh: ctx.lp.bodyLH };
-    const company = cbNormalizePdfText(entry.company, ctx.locale);
+    const company = normalizeStructuredExportText(entry.company);
     applyStyle(ctx, companySpec, company);
     drawText(ctx, company, ctx.contentX, ty + ctx.lp.companySize * 0.32, companySpec);
     ty += ctx.lp.bodyLH * 1.1;
@@ -1044,7 +1062,8 @@ export async function buildContemporaryBoldPagedPdfBlob(
   const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const i18n = await registerPdfI18nFonts(pdf);
-  const ctx = cbCreateContext(pdf, cv, locale, i18n);
+  const renderCv = buildCvExportRenderProjection(cv, locale);
+  const ctx = cbCreateContext(pdf, renderCv, locale, i18n);
 
   const maskedPhoto = options.photoDataUrl
     ? await preparePdfCircularPhotoDataUrl(options.photoDataUrl)

@@ -563,7 +563,7 @@ describe('Nordic Clean PDF export', () => {
     const branch = exportSource.slice(branchStart, branchEnd);
 
     expect(branch).toContain('ncHeading(t.cv.summary, { keepNext: true })');
-    expect(branch).toContain('ncNormalizeDocxText(cvData.summary)');
+    expect(branch).toContain('normalizeNcNarrative(cvData.summary)');
     expect(branch).toContain('keepNext: options.keepNext ?? false');
 
     expect(ncNormalizeDocxText('leads.Software engineer focused on quality.')).toBe(
