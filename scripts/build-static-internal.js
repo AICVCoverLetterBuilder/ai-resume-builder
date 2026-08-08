@@ -30,7 +30,7 @@ function requiredEnv(name) {
 const revenueCatAndroidKey = requiredEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY');
 const apiBaseUrl = requiredEnv('NEXT_PUBLIC_API_BASE_URL');
 if (apiBaseUrl !== ANDROID_PRODUCTION_API_BASE_URL) {
-  console.error('[build:static:internal] FAIL: Android static build must use the canonical Production API base URL');
+  console.error('[build:static:internal] FAIL: Android static build must use the public Production API base URL');
   process.exit(1);
 }
 

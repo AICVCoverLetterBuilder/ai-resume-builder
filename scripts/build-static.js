@@ -5,9 +5,12 @@
  */
 const { execSync } = require('node:child_process');
 const path = require('node:path');
+const { enforceAndroidProductionApiBaseUrl } = require('./android-production-api-contract');
 
 const repoRoot = path.resolve(__dirname, '..');
 const isWindows = process.platform === 'win32';
+
+enforceAndroidProductionApiBaseUrl(process.env);
 
 const env = {
   ...process.env,

@@ -6,31 +6,31 @@ import { describe, expect, it } from 'vitest';
 const require = createRequire(import.meta.url);
 const contract = require('../../../scripts/android-production-api-contract.js') as {
   ANDROID_PRODUCTION_API_BASE_URL: string;
-  LEGACY_ANDROID_API_BASE_URL: string;
+  PROTECTED_ANDROID_API_BASE_URL: string;
   ANDROID_PRODUCTION_API_HOST_CONTRACT_REVISION: string;
   enforceAndroidProductionApiBaseUrl: (env: Record<string, string | undefined>) => string;
 };
 
-const CANONICAL = 'https://ai-resume-builder-aicvcoverletterbuilders-projects.vercel.app';
-const LEGACY = 'https://ai-resume-builder-six-gamma.vercel.app';
-const REVISION = 'android-production-api-host-contract-408-v1';
+const PUBLIC = 'https://ai-resume-builder-six-gamma.vercel.app';
+const PROTECTED = 'https://ai-resume-builder-aicvcoverletterbuilders-projects.vercel.app';
+const REVISION = 'android-production-api-public-host-contract-408-v2';
 
 describe('AAB-408 Android Production API host contract', () => {
-  it('pins future Android packaging directly to the canonical Production alias', () => {
-    expect(contract.ANDROID_PRODUCTION_API_BASE_URL).toBe(CANONICAL);
-    expect(contract.LEGACY_ANDROID_API_BASE_URL).toBe(LEGACY);
+  it('pins future Android packaging directly to the public Production API alias', () => {
+    expect(contract.ANDROID_PRODUCTION_API_BASE_URL).toBe(PUBLIC);
+    expect(contract.PROTECTED_ANDROID_API_BASE_URL).toBe(PROTECTED);
     expect(contract.ANDROID_PRODUCTION_API_HOST_CONTRACT_REVISION).toBe(REVISION);
 
     const env: Record<string, string | undefined> = {
-      NEXT_PUBLIC_API_BASE_URL: LEGACY,
+      NEXT_PUBLIC_API_BASE_URL: PROTECTED,
     };
 
-    expect(contract.enforceAndroidProductionApiBaseUrl(env)).toBe(CANONICAL);
-    expect(env.NEXT_PUBLIC_API_BASE_URL).toBe(CANONICAL);
+    expect(contract.enforceAndroidProductionApiBaseUrl(env)).toBe(PUBLIC);
+    expect(env.NEXT_PUBLIC_API_BASE_URL).toBe(PUBLIC);
 
   });
 
-  it('forces both internal Android build paths through the shared canonical contract', () => {
+  it('forces both internal Android build paths through the shared public-host contract', () => {
     const androidBuild = fs.readFileSync(
       path.resolve('scripts/build-android-internal.js'),
       'utf8',
@@ -46,21 +46,31 @@ describe('AAB-408 Android Production API host contract', () => {
       expect(source).toContain('ANDROID_PRODUCTION_API_BASE_URL');
     }
 
-    expect(androidBuild).toContain('LEGACY_ANDROID_API_BASE_URL');
+    expect(androidBuild).toContain('PROTECTED_ANDROID_API_BASE_URL');
     expect(androidBuild).toContain(
-      'deprecated Android API alias is present in copied Android assets',
+      'Vercel-protected API host is present in copied Android assets',
     );
   });
 
-  it('rejects the deprecated Android alias from final copied assets', () => {
+  it('rejects the Vercel-protected project domain from final copied assets', () => {
     const androidBuild = fs.readFileSync(
       path.resolve('scripts/build-android-internal.js'),
       'utf8',
     );
 
     expect(androidBuild).toContain(
-      'treeContainsExactValue(copied, LEGACY_ANDROID_API_BASE_URL)',
+      'treeContainsExactValue(copied, PROTECTED_ANDROID_API_BASE_URL)',
     );
-    expect(CANONICAL).not.toBe(LEGACY);
+    expect(PUBLIC).not.toBe(PROTECTED);
+  });
+
+  it('forces production static export through the same public API-host contract', () => {
+    const productionStaticBuild = fs.readFileSync(
+      path.resolve('scripts/build-static.js'),
+      'utf8',
+    );
+
+    expect(productionStaticBuild).toContain("require('./android-production-api-contract')");
+    expect(productionStaticBuild).toContain('enforceAndroidProductionApiBaseUrl(process.env)');
   });
 });
