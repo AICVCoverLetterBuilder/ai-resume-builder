@@ -16,7 +16,7 @@ export const CV_EXPORT_TITLE_LOCALIZATION_REVISION =
 export const CV_EXPORT_TITLE_SURFACE_SCHEMA = 1 as const;
 export const CV_EXPORT_TITLE_PROVIDER_BATCH_SIZE = 8 as const;
 export const CV_EXPORT_TITLE_BATCH_RECOVERY_REVISION =
-  'cv-export-title-batch-recovery-406-v1' as const;
+  'cv-export-title-batch-recovery-407-v3' as const;
 
 export type { ExportLocalizedTitleSurface, ExportLocalizedTitleSurfaceStore } from './types';
 

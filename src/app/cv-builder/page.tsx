@@ -3371,6 +3371,10 @@ export default function CVBuilderPage() {
             stage: diagnostics.stage,
           });
         }
+        const titleLocalizationOperationDeadlineAt =
+          computeExperienceLocalizationOperationDeadline(Date.now());
+        const titleRepairContextByBatchKey = new Map<string, unknown>();
+        const titleTransportDiagnostics: Partial<ExperienceLocalizationDiagnostics> = {};
         const titleLocalization = await prepareExportLocalizedTitles({
           sourceCv,
           exportCv: recoveredCv,
@@ -3380,12 +3384,42 @@ export default function CVBuilderPage() {
           adapter: async (request: ExportTitleLocalizationTransportInput) => {
             const aiGate = getAiGate();
             if (aiGate.status !== 'ready') {
+              Object.assign(titleTransportDiagnostics, {
+                titleTransportFailureReason:
+                  'export_title_localization_authorization_unavailable',
+                titleTransportFailureStage: 'title_client_authorization',
+                titleTransportHttpStatus: null,
+                titleTransportApplicationCode: null,
+                titleTransportProviderStatus: null,
+                titleTransportDeadlineOwner: null,
+                titleTransportRepairContextPresent: false,
+              });
               throw new Error('export_title_localization_authorization_unavailable');
             }
-            const operationRemainingMs = experienceLocalizationOperationDeadlineAt - Date.now();
+
+            const operationRemainingMs =
+              titleLocalizationOperationDeadlineAt - Date.now();
             if (operationRemainingMs < 1_000) {
-              throw new Error('experience_localization_operation_deadline_exceeded');
+              Object.assign(titleTransportDiagnostics, {
+                titleTransportFailureReason:
+                  'export_title_localization_operation_deadline_exceeded',
+                titleTransportFailureStage: 'title_client_operation_deadline',
+                titleTransportHttpStatus: null,
+                titleTransportApplicationCode: null,
+                titleTransportProviderStatus: null,
+                titleTransportDeadlineOwner: 'client_operation_deadline',
+                titleTransportRepairContextPresent: false,
+              });
+              throw new Error('export_title_localization_operation_deadline_exceeded');
             }
+
+            const batchKey = request.entries
+              .map((entry) => entry.entryId)
+              .join('\u001f');
+            const repairContext = request.repair
+              ? titleRepairContextByBatchKey.get(batchKey)
+              : undefined;
+
             const controller = new AbortController();
             experienceLocalizationAbortRef.current = controller;
             const timeout = window.setTimeout(
@@ -3395,28 +3429,114 @@ export default function CVBuilderPage() {
                 operationRemainingMs,
               )),
             );
+
             try {
               const { data, response } = await apiFetch<{
                 localizedManifest?: SummaryV2LocalizationProviderResponse;
-                error?: string;
+                code?: string;
+                retryAfter?: number;
+                providerStatus?: number | string | null;
                 localizationTypedFailureReason?: string;
+                localizationFailureStage?: string;
+                deadlineOwner?: string | null;
+                titleTranslatorAttemptCount?: number;
+                titleVerifierAttemptCount?: number;
+                titleRepairContext?: unknown;
               }>('/api/generate', {
                 body: {
                   action: 'export-title-localize',
                   proToken: aiGate.token,
                   requestId: crypto.randomUUID(),
                   ...request,
+                  ...(repairContext ? { repairContext } : {}),
                 },
                 signal: controller.signal,
               });
+
               if (!response.ok || !data?.localizedManifest) {
-                throw new Error(
-                  data?.localizationTypedFailureReason
-                  || data?.error
-                  || 'export_title_localization_provider_failed',
-                );
+                const reasonByCode: Record<string, string> = {
+                  invalid_pro_token: 'export_title_localization_authorization_failed',
+                  free_ai_limit_reached: 'export_title_localization_authorization_failed',
+                  server_rate_limited: 'export_title_localization_server_rate_limited',
+                  provider_rate_limited:
+                    'export_title_localization_provider_rate_limited',
+                  provider_auth_error:
+                    'export_title_localization_provider_auth_error',
+                  provider_credit_exhausted:
+                    'export_title_localization_provider_credit_exhausted',
+                  provider_temporarily_unavailable:
+                    'export_title_localization_provider_temporarily_unavailable',
+                  request_timeout:
+                    'export_title_localization_transport_timeout',
+                };
+                const fallbackReason = response.status === 403
+                  ? 'export_title_localization_authorization_failed'
+                  : response.status === 429
+                    ? 'export_title_localization_server_rate_limited'
+                    : response.status >= 500
+                      ? 'export_title_localization_service_unavailable'
+                      : response.status === 422
+                        ? 'export_title_localization_server_validation_failed'
+                        : 'export_title_localization_http_failure';
+                const failureReason = data?.localizationTypedFailureReason
+                  || reasonByCode[String(data?.code || '')]
+                  || fallbackReason;
+
+                if (data?.titleRepairContext) {
+                  titleRepairContextByBatchKey.set(
+                    batchKey,
+                    data.titleRepairContext,
+                  );
+                }
+
+                Object.assign(titleTransportDiagnostics, {
+                  titleTransportFailureReason: failureReason,
+                  titleTransportFailureStage:
+                    data?.localizationFailureStage || 'title_http_response',
+                  titleTransportHttpStatus: response.status,
+                  titleTransportApplicationCode: data?.code || null,
+                  titleTransportProviderStatus: data?.providerStatus ?? null,
+                  titleTransportDeadlineOwner: data?.deadlineOwner ?? null,
+                  titleTransportTranslatorAttemptCount:
+                    data?.titleTranslatorAttemptCount ?? null,
+                  titleTransportVerifierAttemptCount:
+                    data?.titleVerifierAttemptCount ?? null,
+                  titleTransportRetryAfterSec: data?.retryAfter ?? null,
+                  titleTransportRepairContextPresent:
+                    Boolean(data?.titleRepairContext),
+                });
+
+                throw new Error(failureReason);
               }
+
+              titleRepairContextByBatchKey.delete(batchKey);
               return data.localizedManifest;
+            } catch (error) {
+              if (
+                error instanceof Error
+                && /^export_title_localization_[a-z0-9_]+$/u.test(error.message)
+              ) {
+                throw error;
+              }
+
+              const failureReason =
+                error instanceof Error && error.name === 'AbortError'
+                  ? 'export_title_localization_client_abort'
+                  : 'export_title_localization_network_failure';
+              Object.assign(titleTransportDiagnostics, {
+                titleTransportFailureReason: failureReason,
+                titleTransportFailureStage: 'title_client_transport',
+                titleTransportHttpStatus: null,
+                titleTransportApplicationCode: null,
+                titleTransportProviderStatus: null,
+                titleTransportDeadlineOwner:
+                  failureReason === 'export_title_localization_client_abort'
+                    ? 'client_abort'
+                    : null,
+                titleTransportRepairContextPresent:
+                  Boolean(titleRepairContextByBatchKey.get(batchKey)),
+              });
+              throw new Error(failureReason);
             } finally {
               window.clearTimeout(timeout);
               if (experienceLocalizationAbortRef.current === controller) {
@@ -3428,6 +3548,10 @@ export default function CVBuilderPage() {
         lastExperienceLocalizationRef.current = {
           ...(lastExperienceLocalizationRef.current || localization.diagnostics),
           ...titleLocalization.diagnostics,
+          ...titleTransportDiagnostics,
+          titleTransportRecovered:
+            titleLocalization.ok
+            && Object.keys(titleTransportDiagnostics).length > 0,
           exportDraftIsolationRevision: CV_EXPORT_DRAFT_ISOLATION_REVISION,
         };
         if (!titleLocalization.ok) {

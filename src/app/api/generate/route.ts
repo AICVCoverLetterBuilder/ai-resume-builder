@@ -1345,6 +1345,21 @@ Rules:
           unsupportedScopeIntroduced: boolean;
         }>;
       };
+      type TitleRepairContext = {
+        failedStage: string;
+        previousCandidates: Array<{
+          entryId: string;
+          localizedRoleTitle: string;
+        }>;
+        verifierDecisions: Array<{
+          entryId: string;
+          decision: string;
+          semanticEquivalent: boolean;
+          targetLocalePassed: boolean;
+          unsupportedScopeIntroduced: boolean;
+        }>;
+      };
+      type TitleTransportStage = 'translation' | 'verifier';
 
       const safeEntries: SafeTitleEntry[] = rawEntries.map((entry: Record<string, unknown>) => ({
         entryId: sanitizeField(entry.entryId, 200),
@@ -1381,32 +1396,177 @@ Rules:
         }
       };
 
+      const asRecord = (value: unknown): Record<string, unknown> => (
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? value as Record<string, unknown>
+          : {}
+      );
+
+      const repair = params.repair === true;
+      const rawRepairContext = (
+        repair
+        && params.repairContext
+        && typeof params.repairContext === 'object'
+        && !Array.isArray(params.repairContext)
+      )
+        ? params.repairContext as Record<string, unknown>
+        : null;
+      const repairContext: TitleRepairContext | null = rawRepairContext
+        ? {
+          failedStage: sanitizeField(rawRepairContext.failedStage, 80),
+          previousCandidates: (Array.isArray(rawRepairContext.previousCandidates)
+            ? rawRepairContext.previousCandidates
+            : [])
+            .slice(0, 8)
+            .map((value: unknown) => {
+              const entry = asRecord(value);
+              return {
+                entryId: sanitizeField(entry.entryId, 200),
+                localizedRoleTitle: sanitizeField(entry.localizedRoleTitle, 500),
+              };
+            })
+            .filter((entry) => (
+              expectedIds.includes(entry.entryId)
+              && entry.localizedRoleTitle.length > 0
+            )),
+          verifierDecisions: (Array.isArray(rawRepairContext.verifierDecisions)
+            ? rawRepairContext.verifierDecisions
+            : [])
+            .slice(0, 8)
+            .map((value: unknown) => {
+              const entry = asRecord(value);
+              return {
+                entryId: sanitizeField(entry.entryId, 200),
+                decision: sanitizeField(entry.decision, 40),
+                semanticEquivalent: entry.semanticEquivalent === true,
+                targetLocalePassed: entry.targetLocalePassed === true,
+                unsupportedScopeIntroduced: entry.unsupportedScopeIntroduced === true,
+              };
+            })
+            .filter((entry) => expectedIds.includes(entry.entryId)),
+        }
+        : null;
+
+      const classifyTitleTransportFailure = (
+        error: unknown,
+        stage: TitleTransportStage,
+      ): {
+        reason: string;
+        code: AiErrorCode;
+        status: number;
+        retryAfter: number | null;
+        providerStatus: number | string | null;
+        deadlineOwner: string | null;
+      } => {
+        const owner = deadlineOwnerOf(error);
+        if (owner === 'client_abort') {
+          return {
+            reason: 'export_title_localization_client_abort',
+            code: 'request_timeout',
+            status: 504,
+            retryAfter: null,
+            providerStatus: null,
+            deadlineOwner: owner,
+          };
+        }
+        if (owner === 'route_deadline') {
+          return {
+            reason: 'export_title_localization_route_deadline_exceeded',
+            code: 'request_timeout',
+            status: 504,
+            retryAfter: null,
+            providerStatus: null,
+            deadlineOwner: owner,
+          };
+        }
+        if (
+          owner === 'translation_transport'
+          || owner === 'verifier_transport'
+          || isProviderAbortOrTimeoutError(error)
+        ) {
+          return {
+            reason: stage === 'translation'
+              ? 'export_title_localization_translation_transport_timeout'
+              : 'export_title_localization_verifier_transport_timeout',
+            code: 'request_timeout',
+            status: 504,
+            retryAfter: null,
+            providerStatus: null,
+            deadlineOwner: owner,
+          };
+        }
+
+        const classified = classifyProviderError(error);
+        const reasonByCode: Partial<Record<AiErrorCode, string>> = {
+          provider_rate_limited: 'export_title_localization_provider_rate_limited',
+          provider_auth_error: 'export_title_localization_provider_auth_error',
+          provider_credit_exhausted: 'export_title_localization_provider_credit_exhausted',
+          provider_temporarily_unavailable:
+            'export_title_localization_provider_temporarily_unavailable',
+          request_timeout: stage === 'translation'
+            ? 'export_title_localization_translation_transport_timeout'
+            : 'export_title_localization_verifier_transport_timeout',
+        };
+        return {
+          reason: reasonByCode[classified.code]
+            || 'export_title_localization_provider_transport_failed',
+          code: classified.code,
+          status: classified.status,
+          retryAfter: classified.retryAfter,
+          providerStatus: classified.providerStatus,
+          deadlineOwner: owner,
+        };
+      };
+
       let translatorAttemptCount = 0;
       let verifierAttemptCount = 0;
-      const repair = params.repair === true;
-      const translatorResponse = await callWithRetry({
-        model: MODEL,
-        max_tokens: 1200,
-        temperature: 0,
-        stream: false,
-        system: `You are a strict CV job-title localization engine. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return one JSON object and no commentary or markdown. Preserve every entryId exactly. Translate only the roleTitle. Preserve the role's occupation, specialization, seniority, coordination/management scope, technical domain, customer-facing scope, and employment meaning. Preserve product names, standards, acronyms, and proper nouns exactly when they are not normally translated. Do not add qualifications, tools, leadership, regulated responsibility, seniority, achievements, or scope not present in the source. Employers are context only and must never appear inside localizedRoleTitle.${repair ? ' This is a repair attempt: correct any wrong-language, untranslated, or meaning-changed title from the prior attempt.' : ''}`,
-        messages: [{
-          role: 'user',
-          content: JSON.stringify({
-            task: 'localize_export_job_titles',
-            targetLocale: resolvedLocale,
-            gender: sanitizeField(params.gender, 30),
-            entries: safeEntries,
-            responseSchema: {
+      let translatorResponse: Anthropic.Messages.Message;
+      try {
+        translatorResponse = await callWithRetry({
+          model: MODEL,
+          max_tokens: 1200,
+          temperature: 0,
+          stream: false,
+          system: `You are a strict CV job-title localization engine. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return one JSON object and no commentary or markdown. Preserve every entryId exactly. Translate only the roleTitle. Preserve the role's occupation, specialization, seniority, coordination/management scope, technical domain, customer-facing scope, and employment meaning. Preserve product names, standards, acronyms, and proper nouns exactly when they are not normally translated. Do not add qualifications, tools, leadership, regulated responsibility, seniority, achievements, or scope not present in the source. Employers are context only and must never appear inside localizedRoleTitle.${repair ? ' This is a repair attempt. Use the supplied repairContext from the rejected prior attempt and correct only the rejected title localization while preserving the exact source meaning.' : ''}`,
+          messages: [{
+            role: 'user',
+            content: JSON.stringify({
+              task: 'localize_export_job_titles',
               targetLocale: resolvedLocale,
-              entries: [{
-                entryId: 'exact input entryId',
-                localizedRoleTitle: 'target-language role title only',
-              }],
-            },
-          }),
-        }],
-      }, deadlineAt, () => { translatorAttemptCount += 1; }, EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS, 'translation', null, false);
+              gender: sanitizeField(params.gender, 30),
+              entries: safeEntries,
+              ...(repairContext ? { repairContext } : {}),
+              responseSchema: {
+                targetLocale: resolvedLocale,
+                entries: [{
+                  entryId: 'exact input entryId',
+                  localizedRoleTitle: 'target-language role title only',
+                }],
+              },
+            }),
+          }],
+        }, deadlineAt, () => {
+          translatorAttemptCount += 1;
+        }, EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS, 'translation', req.signal, false);
+      } catch (error) {
+        const failure = classifyTitleTransportFailure(error, 'translation');
+        return jsonResponse({
+          error: 'Export title localization translation transport failed.',
+          code: failure.code,
+          localizationTypedFailureReason: failure.reason,
+          localizationFailureStage: 'title_translation_transport',
+          deadlineOwner: failure.deadlineOwner,
+          providerStatus: failure.providerStatus,
+          retryAfter: failure.retryAfter,
+          titleTranslatorAttemptCount: translatorAttemptCount,
+          titleVerifierAttemptCount: verifierAttemptCount,
+        }, {
+          status: failure.status,
+          ...(failure.retryAfter
+            ? { headers: { 'Retry-After': String(failure.retryAfter) } }
+            : {}),
+        });
+      }
 
       const translated = parseStrictObject<TitleTranslatorPayload>(getText(translatorResponse));
       const translatedById = new Map(
@@ -1426,10 +1586,27 @@ Rules:
           );
         });
       if (!translationParityPassed) {
+        const partialCandidates = Array.isArray(translated?.entries)
+          ? translated!.entries
+            .map((entry) => ({
+              entryId: sanitizeField(entry.entryId, 200),
+              localizedRoleTitle: sanitizeField(entry.localizedRoleTitle, 500),
+            }))
+            .filter((entry) => (
+              expectedIds.includes(entry.entryId)
+              && entry.localizedRoleTitle.length > 0
+            ))
+          : [];
         return jsonResponse({
           error: 'Title localization provider returned malformed structured JSON.',
           code: 'generation_validation_failed' satisfies AiErrorCode,
           localizationTypedFailureReason: 'export_title_localization_provider_malformed',
+          localizationFailureStage: 'title_translation_parse',
+          titleRepairContext: {
+            failedStage: 'translator_parse',
+            previousCandidates: partialCandidates,
+            verifierDecisions: [],
+          } satisfies TitleRepairContext,
           titleTranslatorAttemptCount: translatorAttemptCount,
           titleVerifierAttemptCount: verifierAttemptCount,
         }, { status: 422 });
@@ -1442,31 +1619,55 @@ Rules:
         targetLocale: resolvedLocale,
         candidateRoleTitle: translatedById.get(entry.entryId)!.localizedRoleTitle.trim(),
       }));
-      const verifierResponse = await callWithRetry({
-        model: MODEL,
-        max_tokens: 1200,
-        temperature: 0,
-        stream: false,
-        system: `You are an independent CV title verifier. Do not translate or rewrite. Compare each sourceRoleTitle with candidateRoleTitle. Return one JSON object only. Pass only when the candidate is in ${targetInfo.languageName} (${resolvedLocale}), preserves the same occupation, specialization, seniority, technical/customer domain and responsibility scope, and introduces no qualification, tool, leadership, regulated duty, achievement, or extra scope. Preserve every entryId exactly. Reject untranslated source-language titles unless the title is a genuine invariant product code or acronym.`,
-        messages: [{
-          role: 'user',
-          content: JSON.stringify({
-            task: 'verify_export_job_title_localization',
-            targetLocale: resolvedLocale,
-            entries: candidates,
-            responseSchema: {
+
+      let verifierResponse: Anthropic.Messages.Message;
+      try {
+        verifierResponse = await callWithRetry({
+          model: MODEL,
+          max_tokens: 1200,
+          temperature: 0,
+          stream: false,
+          system: `You are an independent CV title verifier. Do not translate or rewrite. Compare each sourceRoleTitle with candidateRoleTitle. Return one JSON object only. Pass only when the candidate is in ${targetInfo.languageName} (${resolvedLocale}), preserves the same occupation, specialization, seniority, technical/customer domain and responsibility scope, and introduces no qualification, tool, leadership, regulated duty, achievement, or extra scope. Preserve every entryId exactly. Reject untranslated source-language titles unless the title is a genuine invariant product code or acronym.`,
+          messages: [{
+            role: 'user',
+            content: JSON.stringify({
+              task: 'verify_export_job_title_localization',
               targetLocale: resolvedLocale,
-              entries: [{
-                entryId: 'exact input entryId',
-                decision: 'passed or rejected',
-                semanticEquivalent: true,
-                targetLocalePassed: true,
-                unsupportedScopeIntroduced: false,
-              }],
-            },
-          }),
-        }],
-      }, deadlineAt, () => { verifierAttemptCount += 1; }, EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS, 'verifier', null, false);
+              entries: candidates,
+              responseSchema: {
+                targetLocale: resolvedLocale,
+                entries: [{
+                  entryId: 'exact input entryId',
+                  decision: 'passed or rejected',
+                  semanticEquivalent: true,
+                  targetLocalePassed: true,
+                  unsupportedScopeIntroduced: false,
+                }],
+              },
+            }),
+          }],
+        }, deadlineAt, () => {
+          verifierAttemptCount += 1;
+        }, EXPERIENCE_LOCALIZATION_VERIFIER_TIMEOUT_MS, 'verifier', req.signal, false);
+      } catch (error) {
+        const failure = classifyTitleTransportFailure(error, 'verifier');
+        return jsonResponse({
+          error: 'Export title localization independent verifier transport failed.',
+          code: failure.code,
+          localizationTypedFailureReason: failure.reason,
+          localizationFailureStage: 'title_verifier_transport',
+          deadlineOwner: failure.deadlineOwner,
+          providerStatus: failure.providerStatus,
+          retryAfter: failure.retryAfter,
+          titleTranslatorAttemptCount: translatorAttemptCount,
+          titleVerifierAttemptCount: verifierAttemptCount,
+        }, {
+          status: failure.status,
+          ...(failure.retryAfter
+            ? { headers: { 'Retry-After': String(failure.retryAfter) } }
+            : {}),
+        });
+      }
 
       const verified = parseStrictObject<TitleVerifierPayload>(getText(verifierResponse));
       const verifiedById = new Map(
@@ -1487,10 +1688,31 @@ Rules:
           );
         });
       if (!verifierPassed) {
+        const verifierDecisions = Array.isArray(verified?.entries)
+          ? verified!.entries
+            .map((entry) => ({
+              entryId: sanitizeField(entry.entryId, 200),
+              decision: sanitizeField(entry.decision, 40),
+              semanticEquivalent: entry.semanticEquivalent === true,
+              targetLocalePassed: entry.targetLocalePassed === true,
+              unsupportedScopeIntroduced: entry.unsupportedScopeIntroduced === true,
+            }))
+            .filter((entry) => expectedIds.includes(entry.entryId))
+          : [];
         return jsonResponse({
           error: 'Independent title localization verification rejected the candidate.',
           code: 'generation_validation_failed' satisfies AiErrorCode,
-          localizationTypedFailureReason: 'export_title_localization_independent_verification_failed',
+          localizationTypedFailureReason:
+            'export_title_localization_independent_verification_failed',
+          localizationFailureStage: 'title_independent_verification',
+          titleRepairContext: {
+            failedStage: 'independent_verifier',
+            previousCandidates: candidates.map((entry) => ({
+              entryId: entry.entryId,
+              localizedRoleTitle: entry.candidateRoleTitle,
+            })),
+            verifierDecisions,
+          } satisfies TitleRepairContext,
           titleTranslatorAttemptCount: translatorAttemptCount,
           titleVerifierAttemptCount: verifierAttemptCount,
         }, { status: 422 });

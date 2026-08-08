@@ -197,6 +197,17 @@ export type ExperienceLocalizationDiagnostics = {
   titleFailureReason?: string;
   exportDraftIsolationRevision?: string;
   exportDraftVisibleContentPreserved?: boolean;
+  titleTransportFailureReason?: string;
+  titleTransportFailureStage?: string;
+  titleTransportHttpStatus?: number | null;
+  titleTransportApplicationCode?: string | null;
+  titleTransportProviderStatus?: number | string | null;
+  titleTransportDeadlineOwner?: string | null;
+  titleTransportTranslatorAttemptCount?: number | null;
+  titleTransportVerifierAttemptCount?: number | null;
+  titleTransportRetryAfterSec?: number | null;
+  titleTransportRepairContextPresent?: boolean;
+  titleTransportRecovered?: boolean;
   failureStage?: string;
   failureReason?: string;
 };
