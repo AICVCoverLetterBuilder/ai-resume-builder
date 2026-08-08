@@ -9,9 +9,14 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadEnvConfig } = require('@next/env');
+const {
+  ANDROID_PRODUCTION_API_BASE_URL,
+  enforceAndroidProductionApiBaseUrl,
+} = require('./android-production-api-contract');
 
 const repoRoot = path.resolve(__dirname, '..');
 loadEnvConfig(repoRoot);
+enforceAndroidProductionApiBaseUrl(process.env);
 
 function requiredEnv(name) {
   const value = String(process.env[name] || '').trim();
@@ -23,7 +28,11 @@ function requiredEnv(name) {
 }
 
 const revenueCatAndroidKey = requiredEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY');
-requiredEnv('NEXT_PUBLIC_API_BASE_URL');
+const apiBaseUrl = requiredEnv('NEXT_PUBLIC_API_BASE_URL');
+if (apiBaseUrl !== ANDROID_PRODUCTION_API_BASE_URL) {
+  console.error('[build:static:internal] FAIL: Android static build must use the canonical Production API base URL');
+  process.exit(1);
+}
 
 const env = {
   ...process.env,

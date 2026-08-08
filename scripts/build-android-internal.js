@@ -8,9 +8,15 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadEnvConfig } = require('@next/env');
+const {
+  ANDROID_PRODUCTION_API_BASE_URL,
+  LEGACY_ANDROID_API_BASE_URL,
+  enforceAndroidProductionApiBaseUrl,
+} = require('./android-production-api-contract');
 
 const root = path.resolve(__dirname, '..');
 loadEnvConfig(root);
+enforceAndroidProductionApiBaseUrl(process.env);
 
 const win = process.platform === 'win32';
 const copied = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'public');
@@ -32,6 +38,9 @@ function requiredEnv(name) {
 }
 
 const apiBaseUrl = requiredEnv('NEXT_PUBLIC_API_BASE_URL');
+if (apiBaseUrl !== ANDROID_PRODUCTION_API_BASE_URL) {
+  fail('Android packaging must use the canonical Production API base URL');
+}
 const revenueCatAndroidKey = requiredEnv('NEXT_PUBLIC_REVENUECAT_ANDROID_API_KEY');
 
 function runFile(command, args, options = {}) {
@@ -71,6 +80,9 @@ if (JSON.parse(fs.readFileSync(capacitorConfig, 'utf8')).server?.url) {
 }
 if (!treeContainsExactValue(copied, apiBaseUrl)) {
   fail('configured production API base URL is absent from copied Android assets');
+}
+if (treeContainsExactValue(copied, LEGACY_ANDROID_API_BASE_URL)) {
+  fail('deprecated Android API alias is present in copied Android assets');
 }
 if (!treeContainsExactValue(copied, revenueCatAndroidKey)) {
   fail('RevenueCat Android public key is absent from copied Android assets');
