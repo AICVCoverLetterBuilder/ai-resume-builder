@@ -28,13 +28,6 @@ describe('AAB-408 Android Production API host contract', () => {
     expect(contract.enforceAndroidProductionApiBaseUrl(env)).toBe(CANONICAL);
     expect(env.NEXT_PUBLIC_API_BASE_URL).toBe(CANONICAL);
 
-    const vercelConfig = JSON.parse(
-      fs.readFileSync(path.resolve('vercel.json'), 'utf8'),
-    ) as { alias?: string[] };
-
-    expect(vercelConfig.alias).toContain(
-      LEGACY.replace(/^https:\/\//u, ''),
-    );
   });
 
   it('forces both internal Android build paths through the shared canonical contract', () => {

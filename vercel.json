@@ -1,7 +1,4 @@
 {
-    "$schema":  "https://openapi.vercel.sh/vercel.json",
-    "framework":  "nextjs",
-    "alias":  [
-                  "ai-resume-builder-six-gamma.vercel.app"
-              ]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs"
 }
