@@ -184,6 +184,7 @@ import {
 void CV_EXPORT_DRAFT_ISOLATION_REVISION;
 void CV_EXPORT_TITLE_LOCALIZATION_REVISION;
 import { loadCvDraft } from '@/lib/draft-storage';
+import { terminalizeAiDiagnosticSession } from '@/lib/cv-ai-diagnostics-terminalize';
 import {
   EXPERIENCE_LOCALIZATION_MAX_SOURCE_TEXT_CHARS,
   buildExperienceLocalizationSnapshot,
@@ -1600,12 +1601,7 @@ export default function CVBuilderPage() {
       summaryDiag.recordVisibleApply(false, countBefore);
       toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {
-      try {
-        await summaryDiag.resolveVersions();
-        summaryDiag.commit();
-      } catch {
-        /* never break the user-facing Summary operation */
-      }
+      await terminalizeAiDiagnosticSession(summaryDiag);
       clearTimeout(timer);
       setIsSummaryGenerating(false);
     }
@@ -2651,12 +2647,7 @@ export default function CVBuilderPage() {
         msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale),
       );
     } finally {
-      try {
-        await diagSession.resolveVersions();
-        diagSession.commit();
-      } catch {
-        /* never break Experience UX */
-      }
+      await terminalizeAiDiagnosticSession(diagSession);
       clearTimeout(timer);
       setGeneratingBulletsId(null);
     }
@@ -3111,6 +3102,7 @@ export default function CVBuilderPage() {
       });
       toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {
+      await terminalizeAiDiagnosticSession(summaryDiag);
       clearTimeout(timer);
       setRewritingStyle(null);
     }
