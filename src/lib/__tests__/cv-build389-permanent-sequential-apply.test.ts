@@ -5,6 +5,8 @@
  *
  * @vitest-environment jsdom
  */
+import { resolveCvExportSourceAuthority } from '@/lib/cv-export-source-authority';
+import { syncCvRefFromReactState } from '@/lib/cv-summary-cvref-react-sync';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CVData } from '@/lib/types';
 import type { Locale } from '@/lib/i18n/translations';
@@ -258,5 +260,364 @@ describe('AAB-389 permanent sequential apply', () => {
       selectedFinalHash: raced.lifecycle.selectedFinalHash,
     });
     expect(classified.actualRaceDetected).toBe(true);
+  });
+});
+
+
+describe('AAB-411 executable pre-phone export authority regression', () => {
+  const staleAab410Summary =
+    'professional con alrededor de tres a?os y medio de experiencia.';
+
+  const authoritativeShorterSummary =
+    'Tengo unos tres a?os y medio de experiencia. Actualmente soy Coordinador de servicio de bicicletas el?ctricas y recepci?n de clientes en RadWerk, donde coordino las citas de mantenimiento de bicicletas el?ctricas y reviso las bicicletas entrantes y documento los problemas t?cnicos y explico a los clientes los pasos de reparaci?n necesarios. Antes fui Empleado de recepci?n de hu?spedes y gesti?n de reservas en StadtHotel, donde recib? a los hu?spedes en la recepci?n y gestion? las reservas y los cambios necesarios y atend? consultas por tel?fono y correo electr?nico.';
+
+  it('reproduces exact AAB-410 stale 63 -> authoritative 572 boundary', () => {
+    expect(
+      staleAab410Summary,
+    ).toHaveLength(63);
+
+    expect(
+      authoritativeShorterSummary,
+    ).toHaveLength(572);
+
+    const initial = aab389Cv({
+      locale: 'de',
+      gender: 'male',
+      summary:
+        authoritativeShorterSummary,
+    });
+
+    const ui = createFakeUi(initial);
+
+    const authoritativeHash =
+      aab389Hash(
+        authoritativeShorterSummary,
+      );
+
+    ui.ownership.authoritativeSummaryHash =
+      authoritativeHash;
+
+    ui.ownership.generation = 1;
+
+    const staleReactCv: CVData = {
+      ...ui.reactCv,
+      summary: staleAab410Summary,
+    };
+
+    const sync =
+      syncCvRefFromReactState({
+        cvRef: ui.cvRef,
+        ownership: ui.ownership,
+        nextCv: staleReactCv,
+        currentSummaryHash:
+          aab389Hash(
+            String(
+              ui.cvRef.current.summary || '',
+            ),
+          ),
+        nextSummaryHash:
+          aab389Hash(
+            String(
+              staleReactCv.summary || '',
+            ),
+          ),
+      });
+
+    expect(sync.accepted).toBe(false);
+
+    expect(sync.reason).toBe(
+      'authoritative_summary_hash_mismatch',
+    );
+
+    expect(
+      ui.cvRef.current.summary,
+    ).toBe(
+      authoritativeShorterSummary,
+    );
+
+    expect(
+      aab389Hash(
+        String(
+          ui.cvRef.current.summary || '',
+        ),
+      ),
+    ).toBe(authoritativeHash);
+
+    const pdf =
+      resolveCvExportSourceAuthority(
+        ui.cvRef.current,
+        'modern-minimal',
+      );
+
+    const docx =
+      resolveCvExportSourceAuthority(
+        ui.cvRef.current,
+        'modern-minimal',
+      );
+
+    expect(pdf.summary).toBe(
+      authoritativeShorterSummary,
+    );
+
+    expect(docx.summary).toBe(
+      authoritativeShorterSummary,
+    );
+
+    expect(pdf.summary).not.toBe(
+      staleAab410Summary,
+    );
+
+    expect(docx.summary).not.toBe(
+      staleAab410Summary,
+    );
+  });
+
+  it('executes real Generate -> Shorter commit and rejects stale React before export', async () => {
+    const locale: Locale = 'de';
+
+    const source =
+      aab389DeterministicSource(
+        locale,
+        'male',
+      );
+
+    const initial = aab389Cv({
+      locale,
+      gender: 'male',
+      summary: source,
+    });
+
+    const ui = createFakeUi(initial);
+
+    aab389SeedUsage(0);
+
+    /*
+     * First establish a normal successful
+     * generated Summary through the existing
+     * permanent runtime harness.
+     */
+    const generated = await runStep(
+      ui,
+      locale,
+      'generate_existing',
+      0,
+      0,
+    );
+
+    expect(generated.ok).toBe(true);
+
+    const beforeShorter =
+      String(
+        ui.cvRef.current.summary || '',
+      );
+
+    const beforeShorterHash =
+      aab389Hash(beforeShorter);
+
+    /*
+     * Execute the SAME finalizer used by runStep,
+     * but stop before React flush.
+     */
+    const duration =
+      buildExperienceDurationSnapshot(
+        ui.cvRef.current.experience,
+        AAB389_REF,
+      );
+
+    const fin =
+      finalizeCvAiFieldForApply({
+        action: 'summary_shorter',
+        field: 'summary',
+        requestedLocale: locale,
+        gender: 'male',
+        cv: ui.cvRef.current,
+        candidate: AAB389_BAD_PROVIDER,
+        referenceDateIso: AAB389_REF,
+        durationSnapshot: duration,
+        rewriteStyle: 'shorter',
+      });
+
+    expect(fin.blocked).toBe(false);
+
+    expect(
+      fin.countedAsSuccess,
+    ).toBe(true);
+
+    const commit =
+      commitSummaryApplyTransactionally({
+        cvRef: ui.cvRef,
+        ownership: ui.ownership,
+        locale,
+        finalized: fin,
+        operationSourceText:
+          beforeShorter,
+        operationId:
+          'aab411-real-shorter',
+        scheduleReactCv: (next) => {
+          ui.pendingReact = next;
+        },
+      });
+
+    expect(commit.ok).toBe(true);
+
+    const committed =
+      String(
+        ui.cvRef.current.summary || '',
+      );
+
+    const committedHash =
+      aab389Hash(committed);
+
+    expect(
+      committedHash,
+    ).not.toBe(
+      beforeShorterHash,
+    );
+
+    expect(
+      ui.ownership.authoritativeSummaryHash,
+    ).toBe(committedHash);
+
+    /*
+     * We deliberately have NOT called flushReact().
+     *
+     * cvRef = Shorter result
+     * reactCv = previous Summary
+     */
+    expect(
+      aab389Hash(
+        String(
+          ui.reactCv.summary || '',
+        ),
+      ),
+    ).toBe(beforeShorterHash);
+
+    const staleSync =
+      syncCvRefFromReactState({
+        cvRef: ui.cvRef,
+        ownership: ui.ownership,
+        nextCv: ui.reactCv,
+        currentSummaryHash:
+          aab389Hash(
+            String(
+              ui.cvRef.current.summary || '',
+            ),
+          ),
+        nextSummaryHash:
+          aab389Hash(
+            String(
+              ui.reactCv.summary || '',
+            ),
+          ),
+      });
+
+    expect(
+      staleSync.accepted,
+    ).toBe(false);
+
+    expect(
+      staleSync.reason,
+    ).toBe(
+      'authoritative_summary_hash_mismatch',
+    );
+
+    /*
+     * This is the AAB-410 failure point.
+     */
+    expect(
+      aab389Hash(
+        String(
+          ui.cvRef.current.summary || '',
+        ),
+      ),
+    ).toBe(committedHash);
+
+    /*
+     * Export BEFORE queued React commit.
+     */
+    const pdfBeforeFlush =
+      resolveCvExportSourceAuthority(
+        ui.cvRef.current,
+        'modern-minimal',
+      );
+
+    const docxBeforeFlush =
+      resolveCvExportSourceAuthority(
+        ui.cvRef.current,
+        'modern-minimal',
+      );
+
+    expect(
+      aab389Hash(
+        String(
+          pdfBeforeFlush.summary || '',
+        ),
+      ),
+    ).toBe(committedHash);
+
+    expect(
+      aab389Hash(
+        String(
+          docxBeforeFlush.summary || '',
+        ),
+      ),
+    ).toBe(committedHash);
+
+    /*
+     * Now allow the correct queued React
+     * commit to arrive.
+     */
+    ui.flushReact();
+
+    expect(
+      aab389Hash(
+        String(
+          ui.reactCv.summary || '',
+        ),
+      ),
+    ).toBe(committedHash);
+
+    const finalSync =
+      syncCvRefFromReactState({
+        cvRef: ui.cvRef,
+        ownership: ui.ownership,
+        nextCv: ui.reactCv,
+        currentSummaryHash:
+          aab389Hash(
+            String(
+              ui.cvRef.current.summary || '',
+            ),
+          ),
+        nextSummaryHash:
+          aab389Hash(
+            String(
+              ui.reactCv.summary || '',
+            ),
+          ),
+      });
+
+    expect(
+      finalSync.accepted,
+    ).toBe(true);
+
+    const pdfAfterFlush =
+      resolveCvExportSourceAuthority(
+        ui.cvRef.current,
+        'modern-minimal',
+      );
+
+    const docxAfterFlush =
+      resolveCvExportSourceAuthority(
+        ui.cvRef.current,
+        'modern-minimal',
+      );
+
+    expect(
+      pdfAfterFlush.summary,
+    ).toBe(committed);
+
+    expect(
+      docxAfterFlush.summary,
+    ).toBe(committed);
   });
 });

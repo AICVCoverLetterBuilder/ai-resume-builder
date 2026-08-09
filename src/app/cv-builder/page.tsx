@@ -1,5 +1,6 @@
 'use client';
 
+import { syncCvRefFromReactState } from '@/lib/cv-summary-cvref-react-sync';
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Header from '@/components/Header';
 import Footer from '@/components/Footer';
@@ -349,6 +350,9 @@ export default function CVBuilderPage() {
   const latestRewriteRequestIdRef = useRef<string | null>(null);
   const summaryApplyOwnershipRef = useRef(createSummaryApplyOwnershipState());
   void SUMMARY_TRANSACTIONAL_APPLY_387_REVISION;
+  const SUMMARY_CVREF_SINGLE_WRITER_REVISION =
+    'summary-cvref-single-writer-411-v1' as const;
+  void SUMMARY_CVREF_SINGLE_WRITER_REVISION;
   const commitCvUpdate = useCallback((updater: (prev: CVData) => CVData) => {
     setCv((prev) => {
       const next = updater(prev);
@@ -432,14 +436,17 @@ export default function CVBuilderPage() {
     // render snapshot that has not yet absorbed scheduleSummaryCvCommit.
     const ownership = summaryApplyOwnershipRef.current;
     const nextHash = hashSummaryTextForApply(cv.summary);
-    if (
-      ownership.authoritativeSummaryHash
-      && hashSummaryTextForApply(cvRef.current.summary) === ownership.authoritativeSummaryHash
-      && nextHash !== ownership.authoritativeSummaryHash
-    ) {
-      return;
-    }
-    cvRef.current = cv;
+
+    syncCvRefFromReactState({
+      cvRef,
+      ownership,
+      nextCv: cv,
+      currentSummaryHash:
+        hashSummaryTextForApply(
+          cvRef.current.summary,
+        ),
+      nextSummaryHash: nextHash,
+    });
   }, [cv]);
 
   // Commit legacy runtime migration atomically to React state, cvRef, and draft storage
@@ -686,9 +693,6 @@ export default function CVBuilderPage() {
   );
   const [validatedElegantFormalFallbackPhoto, setValidatedElegantFormalFallbackPhoto] = useState<string | undefined>(undefined);
 
-  useEffect(() => {
-    cvRef.current = cv;
-  }, [cv]);
 
   // Migrate polluted translated proficiency strings → canonical enum keys once on hydrate / locale churn.
   useEffect(() => {

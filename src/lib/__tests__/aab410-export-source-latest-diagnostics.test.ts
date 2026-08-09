@@ -186,3 +186,86 @@ describe(
     );
   },
 );
+
+
+describe('AAB-411 device-equivalent Summary ownership regression', () => {
+  it('keeps the transactional Summary authoritative through the shared cvRef sync boundary', () => {
+    const page = readFileSync(
+      'src/app/cv-builder/page.tsx',
+      'utf8',
+    );
+
+    const helper = readFileSync(
+      'src/lib/cv-summary-cvref-react-sync.ts',
+      'utf8',
+    );
+
+    expect(page).toContain(
+      'summary-cvref-single-writer-411-v1',
+    );
+
+    expect(page).toContain(
+      'syncCvRefFromReactState({',
+    );
+
+    expect(page).not.toMatch(
+      /useEffect\(\(\) => \{\s*cvRef\.current = cv;\s*\}, \[cv\]\);/u,
+    );
+
+    expect(page).not.toContain(
+      'hashSummaryTextForApply(cvRef.current.summary) === ownership.authoritativeSummaryHash',
+    );
+
+    expect(helper).toContain(
+      'summary-cvref-react-sync-411-v1',
+    );
+
+    expect(helper).toContain(
+      'authoritativeSummaryHash',
+    );
+
+    expect(helper).toContain(
+      'options.currentSummaryHash === authoritativeHash',
+    );
+
+    expect(helper).toContain(
+      'options.nextSummaryHash !== authoritativeHash',
+    );
+
+    expect(helper).toContain(
+      "reason:\n        'authoritative_summary_hash_mismatch'",
+    );
+
+    expect(helper).toContain(
+      'options.cvRef.current = options.nextCv',
+    );
+  });
+
+  it('blocks the exact stale 63-char AAB-410 Summary from Spanish stale-metadata rebound', () => {
+    const authority = readFileSync(
+      'src/lib/cv-summary-current-text-authority.ts',
+      'utf8',
+    );
+
+    const prepare = readFileSync(
+      'src/lib/prepare-export-ready-cv.ts',
+      'utf8',
+    );
+
+    expect(authority).toContain(
+      'summary-stale-rebound-locale-guard-411-v1',
+    );
+
+    expect(authority).toContain(
+      'foreign_professional_prefix_non_english_target',
+    );
+
+    expect(prepare).toContain(
+      "visibleText: cv.summary || ''",
+    );
+
+    expect(prepare).toContain(
+      'requestedLocale',
+    );
+  });
+});

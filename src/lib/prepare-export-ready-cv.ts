@@ -129,7 +129,10 @@ export type ExportReadyDiagnostics = {
   summaryStaleMetadataDetected?: boolean;
   summaryVisibleTextAuthorityRebound?: boolean;
   summaryVisibleTextAuthorityReason?: string;
+  summaryVisibleTextAuthorityBlockedReason?: string;
   summaryVisibleTextValidationReason?: string;
+  summaryForeignProfessionalPrefixRejected?: boolean;
+  summaryStaleReboundLocaleGuardRevision?: string;
   /** Non-PII job-context / Summary invalidation diagnostics. */
   experienceGenerationContextKey?: string;
   summaryGenerationContextKey?: string;
@@ -860,6 +863,8 @@ export function prepareExportReadyCv(
     staleMetadataDetected: summaryStaleMetadataDetected,
     occupationalContentConflict: summaryOccupationalContentConflict,
     validation: visibleSummaryValidation,
+    visibleText: cv.summary || '',
+    requestedLocale,
   });
   const effectiveSummaryStale = summaryStale && !summaryCurrentTextAuthority.rebound;
   let initialSummaryValidation = visibleSummaryValidation;
@@ -1049,8 +1054,16 @@ export function prepareExportReadyCv(
       diagnostics.summaryWordBudgetMax = summaryWordBudgetMax;
       diagnostics.summaryStaleMetadataDetected = summaryCurrentTextAuthority.staleMetadataDetected;
       diagnostics.summaryVisibleTextAuthorityRebound = summaryCurrentTextAuthority.rebound;
-      diagnostics.summaryVisibleTextAuthorityReason = summaryCurrentTextAuthority.reason;
-      diagnostics.summaryVisibleTextValidationReason = visibleSummaryValidation.reason;
+      diagnostics.summaryVisibleTextAuthorityReason =
+        summaryCurrentTextAuthority.reason;
+      diagnostics.summaryVisibleTextAuthorityBlockedReason =
+        summaryCurrentTextAuthority.blockedReason;
+      diagnostics.summaryVisibleTextValidationReason =
+        visibleSummaryValidation.reason;
+      diagnostics.summaryForeignProfessionalPrefixRejected =
+        summaryCurrentTextAuthority.foreignProfessionalPrefixRejected;
+      diagnostics.summaryStaleReboundLocaleGuardRevision =
+        summaryCurrentTextAuthority.localeGuardRevision;
       diagnostics.staleSummaryExcluded = staleSummaryExcluded;
       diagnostics.summaryFactKeysBefore = [...new Set(summaryFactKeysBefore)];
       diagnostics.summaryFactKeysUsed = summaryKeys;
@@ -1266,9 +1279,18 @@ export function prepareExportReadyCv(
     summaryCurrentTextAuthorityRevision: SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION,
     summaryStaleMetadataDetected: summaryCurrentTextAuthority.staleMetadataDetected,
     summaryVisibleTextAuthorityRebound: summaryCurrentTextAuthority.rebound,
-    summaryVisibleTextAuthorityReason: summaryCurrentTextAuthority.reason,
-    summaryVisibleTextValidationReason: visibleSummaryValidation.reason,
-    experienceGenerationContextKey: primaryExp?.generationJobContextKey,
+    summaryVisibleTextAuthorityReason:
+      summaryCurrentTextAuthority.reason,
+    summaryVisibleTextAuthorityBlockedReason:
+      summaryCurrentTextAuthority.blockedReason,
+    summaryVisibleTextValidationReason:
+      visibleSummaryValidation.reason,
+    summaryForeignProfessionalPrefixRejected:
+      summaryCurrentTextAuthority.foreignProfessionalPrefixRejected,
+    summaryStaleReboundLocaleGuardRevision:
+      summaryCurrentTextAuthority.localeGuardRevision,
+    experienceGenerationContextKey:
+      primaryExp?.generationJobContextKey,
     summaryGenerationContextKey: cv.summaryGenerationContextKey || primaryJobCtx.key,
     summaryContextMatch: Boolean(
       experienceJobContextsMatch(

@@ -10,6 +10,7 @@ import { countSummaryWords } from '@/lib/cv-summary-grounding';
 import {
   resolveSummaryCurrentTextAuthority,
   SUMMARY_CURRENT_TEXT_AUTHORITY_REVISION,
+  SUMMARY_STALE_REBOUND_LOCALE_GUARD_REVISION,
 } from '@/lib/cv-summary-current-text-authority';
 import { prepareExportReadyCv } from '@/lib/prepare-export-ready-cv';
 
@@ -212,6 +213,30 @@ describe('AAB-404 Summary current-text authority', () => {
     });
 
     expect(decision.rebound).toBe(false);
+  });
+
+  it('rejects the exact AAB-410 stale English-prefix Spanish Summary', () => {
+    const decision = resolveSummaryCurrentTextAuthority({
+      staleMetadataDetected: true,
+      occupationalContentConflict: false,
+      validation: {
+        valid: true,
+        reason: 'valid',
+        violations: [],
+      },
+      visibleText:
+        'professional con alrededor de tres a?os y medio de experiencia.',
+      requestedLocale: 'es',
+    });
+
+    expect(decision.rebound).toBe(false);
+    expect(decision.foreignProfessionalPrefixRejected).toBe(true);
+    expect(decision.blockedReason).toBe(
+      'foreign_professional_prefix_non_english_target',
+    );
+    expect(decision.localeGuardRevision).toBe(
+      SUMMARY_STALE_REBOUND_LOCALE_GUARD_REVISION,
+    );
   });
 
   it('clears AI generation metadata when the user edits the visible Summary', () => {

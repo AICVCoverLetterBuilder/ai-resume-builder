@@ -126,7 +126,10 @@ export type CvExportDiagnosticTrace = {
   summaryStaleMetadataDetected?: boolean;
   summaryVisibleTextAuthorityRebound?: boolean;
   summaryVisibleTextAuthorityReason?: string;
+  summaryVisibleTextAuthorityBlockedReason?: string;
   summaryVisibleTextValidationReason?: string;
+  summaryForeignProfessionalPrefixRejected?: boolean;
+  summaryStaleReboundLocaleGuardRevision?: string;
   stages: CvExportStageDiag[];
   initialValidationReason?: string;
   deterministicRecoveryReason?: string;
@@ -728,8 +731,16 @@ export function buildAndStoreCvExportDiagnostic(input: BuildCvExportTraceInput):
     summaryCurrentTextAuthorityRevision: diag?.summaryCurrentTextAuthorityRevision,
     summaryStaleMetadataDetected: diag?.summaryStaleMetadataDetected,
     summaryVisibleTextAuthorityRebound: diag?.summaryVisibleTextAuthorityRebound,
-    summaryVisibleTextAuthorityReason: diag?.summaryVisibleTextAuthorityReason,
-    summaryVisibleTextValidationReason: diag?.summaryVisibleTextValidationReason,
+    summaryVisibleTextAuthorityReason:
+      diag?.summaryVisibleTextAuthorityReason,
+    summaryVisibleTextAuthorityBlockedReason:
+      diag?.summaryVisibleTextAuthorityBlockedReason,
+    summaryVisibleTextValidationReason:
+      diag?.summaryVisibleTextValidationReason,
+    summaryForeignProfessionalPrefixRejected:
+      diag?.summaryForeignProfessionalPrefixRejected,
+    summaryStaleReboundLocaleGuardRevision:
+      diag?.summaryStaleReboundLocaleGuardRevision,
     stages,
     initialValidationReason: diag?.summaryInitialReason,
     deterministicRecoveryReason: diag?.summaryRecoveryReason,
