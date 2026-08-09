@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  copyLatestCvExportDiagnosticsToClipboard,
   copyCvExportDiagnosticsToClipboard,
   getLatestCvExportDiagnostic,
   type CvExportFormat,
@@ -41,7 +42,7 @@ export function CvExportCopyDiagnosticsButton({
       type="button"
       className="mt-2 block text-xs font-medium text-amber-800 underline underline-offset-2 dark:text-amber-300"
       onClick={async () => {
-        const ok = await copyCvExportDiagnosticsToClipboard(format);
+        const ok = await copyLatestCvExportDiagnosticsToClipboard();
         toast[ok ? 'success' : 'error'](
           ok ? 'Export diagnostics copied' : 'Could not copy diagnostics',
         );

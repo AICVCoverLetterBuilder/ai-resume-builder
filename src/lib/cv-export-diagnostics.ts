@@ -157,6 +157,61 @@ export type CvExportDiagnosticTrace = {
 const STORAGE_KEY_PDF = 'cvpro-export-diag-pdf';
 const STORAGE_KEY_DOCX = 'cvpro-export-diag-docx';
 
+export const CV_EXPORT_LATEST_DIAGNOSTIC_REVISION =
+  'cv-export-latest-diagnostic-410-v1' as const;
+
+function storedCvExportDiagnosticCapturedAt(
+  format: CvExportFormat,
+): number {
+  if (typeof window === 'undefined') {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const key = format === 'pdf'
+    ? STORAGE_KEY_PDF
+    : STORAGE_KEY_DOCX;
+
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return Number.NEGATIVE_INFINITY;
+
+    const parsed = JSON.parse(raw) as { capturedAt?: unknown };
+    if (typeof parsed.capturedAt !== 'string') {
+      return Number.NEGATIVE_INFINITY;
+    }
+
+    const timestamp = Date.parse(parsed.capturedAt);
+    return Number.isFinite(timestamp)
+      ? timestamp
+      : Number.NEGATIVE_INFINITY;
+  } catch {
+    return Number.NEGATIVE_INFINITY;
+  }
+}
+
+export function resolveLatestCvExportDiagnosticFormat():
+  CvExportFormat | null {
+  const pdfAt = storedCvExportDiagnosticCapturedAt('pdf');
+  const docxAt = storedCvExportDiagnosticCapturedAt('docx');
+
+  if (
+    pdfAt === Number.NEGATIVE_INFINITY
+    && docxAt === Number.NEGATIVE_INFINITY
+  ) {
+    return null;
+  }
+
+  return docxAt >= pdfAt ? 'docx' : 'pdf';
+}
+
+export async function copyLatestCvExportDiagnosticsToClipboard():
+  Promise<boolean> {
+  const format = resolveLatestCvExportDiagnosticFormat();
+  if (!format) return false;
+
+  return copyCvExportDiagnosticsToClipboard(format);
+}
+
 let latestPdf: CvExportDiagnosticTrace | null = null;
 let latestDocx: CvExportDiagnosticTrace | null = null;
 

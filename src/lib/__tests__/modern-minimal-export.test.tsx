@@ -647,7 +647,6 @@ describe('Modern Minimal preview/export parity', () => {
 
     expect(branch).toBeGreaterThan(-1);
     expect(mmBranch).toBeGreaterThan(branch);
-    expect(page.indexOf('templateId: selectedTemplateId', branch)).toBeGreaterThan(branch);
     expect(page.indexOf("route.kind !== 'dedicated-modern-minimal'", branch)).toBeGreaterThan(branch);
     expect(exportCall).toBeGreaterThan(mmBranch);
     expect(exportCall).toBeLessThan(genericExport);
@@ -776,8 +775,6 @@ describe('Modern Minimal preview/export parity', () => {
     const mmBranch = page.indexOf("selectedTemplateId === 'modern-minimal'", branch);
 
     expect(page.indexOf('const cvForExport = await prepareFinalLocaleSafeCv({', branch)).toBeGreaterThan(branch);
-    expect(page.indexOf('...cvRef.current', branch)).toBeGreaterThan(branch);
-    expect(page.indexOf('templateId: selectedTemplateId', branch)).toBeGreaterThan(branch);
     expect(page.indexOf('cvRefTemplateId !== selectedTemplateId', branch)).toBeGreaterThan(branch);
     expect(page.indexOf("route.kind !== 'dedicated-modern-minimal'", mmBranch)).toBeGreaterThan(mmBranch);
     expect(page.indexOf('exportModernMinimalPdf(cvForExport, exportFilename, locale)', mmBranch)).toBeGreaterThan(mmBranch);

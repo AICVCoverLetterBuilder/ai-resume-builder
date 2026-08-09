@@ -168,6 +168,9 @@ import {
   type PrepareExportReadyResult,
 } from '@/lib/prepare-export-ready-cv';
 import {
+  resolveCvExportSourceAuthority,
+} from '@/lib/cv-export-source-authority';
+import {
   buildPersistableCvAfterExportPreparation,
   exportDraftVisibleContentPreserved,
   CV_EXPORT_DRAFT_ISOLATION_REVISION,
@@ -3663,11 +3666,10 @@ export default function CVBuilderPage() {
             photoForExport = circularPhotoDataUrl ?? liveCv.personal.photo;
           }
           const selectedTemplateId = cv.templateId;
-          const latestCv = {
-            ...cvRef.current,
-            ...cv,
-            templateId: selectedTemplateId,
-          };
+          const latestCv = resolveCvExportSourceAuthority(
+            cvRef.current,
+            selectedTemplateId,
+          );
           const cvForExport = await prepareFinalLocaleSafeCv({
             ...latestCv,
             personal: { ...latestCv.personal, photo: photoForExport },
@@ -3740,11 +3742,12 @@ export default function CVBuilderPage() {
         }
         // Force templateId from the live UI selection; cvRef.current can only supply
         // the rest of the data, never the template choice.
-        const cvForExport = await prepareFinalLocaleSafeCv({
-          ...cvRef.current,
-          ...cv,
-          templateId: selectedTemplateId,
-        });
+        const cvForExport = await prepareFinalLocaleSafeCv(
+          resolveCvExportSourceAuthority(
+            cvRef.current,
+            selectedTemplateId,
+          ),
+        );
         const route = resolveCvPdfExportRoute(selectedTemplateId);
 
         if (process.env.NODE_ENV !== 'production') {
