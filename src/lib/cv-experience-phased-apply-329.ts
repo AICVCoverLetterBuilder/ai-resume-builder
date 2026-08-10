@@ -438,6 +438,22 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     }
   }
 
+  // Dedicated locale scanners remain the semantic authority for their facts,
+  // while the shared scanner is an additive no-new-predicate gate for every
+  // non-empty Experience source. This keeps diagnostics truthful when a
+  // locale-specific scanner covers all source facts but misses an inserted
+  // material action in the selected candidate.
+  if (sourceRequiresGenericExperiencePredicates(source)) {
+    const sharedPred = scanGenericExperiencePredicates(source, text);
+    addedPredicateIdentityHashes = Array.from(new Set([
+      ...addedPredicateIdentityHashes,
+      ...sharedPred.candidateAddedPredicateIdentityHashes,
+    ]));
+    addedPredicateCount = addedPredicateIdentityHashes.length;
+    predicateCoveragePassed = predicateCoveragePassed
+      && sharedPred.candidateAddedPredicateCount === 0;
+  }
+
   return {
     revision: EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
     candidateKind: options.candidateKind || options.source || 'provider',
@@ -516,7 +532,10 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
     addedPredicateCount,
     addedPredicateIdentityHashes,
     predicateCoveragePassed,
-    unsupportedClaimCount: Number(options.unsupportedClaimCount ?? 0),
+    unsupportedClaimCount: Math.max(
+      Number(options.unsupportedClaimCount ?? 0),
+      addedPredicateCount,
+    ),
     localeValidationPassed: options.localeValidationPassed !== false,
     tenseValidationPassed: options.tenseValidationPassed !== false,
     perspectiveValidationPassed: options.perspectiveValidationPassed !== false,
@@ -1242,6 +1261,16 @@ export function validateVisibleExperienceCoverage(options: {
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
       && visibleCoveredPredicateCount >= visibleRequiredPredicateCount
       && visibleCoveredPredicateCount > 0;
+  }
+
+  // Re-run the shared additive predicate gate even when a dedicated locale
+  // validator was applicable. Visible truth must match selected-final truth
+  // for material additions, not just for source fact coverage.
+  if (sourceRequiresGenericExperiencePredicates(options.sourceDescription)) {
+    const sharedPred = scanGenericExperiencePredicates(options.sourceDescription, visible);
+    applicable = true;
+    visiblePredicateCoveragePassed = visiblePredicateCoveragePassed
+      && sharedPred.candidateAddedPredicateCount === 0;
   }
 
   return {

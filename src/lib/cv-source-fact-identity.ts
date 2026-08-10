@@ -7,6 +7,8 @@ import {
   applyEnglishEmploymentTense,
   validateDistinctExperienceBullets,
   validateNoExtraGeneratedDuties,
+  classifyMaterialDutyKeys,
+  localizedHasDuty,
   materialDutyKeysFromDescription,
   validateMaterialDutyCoverage,
 } from './cv-material-duty-coverage';
@@ -671,6 +673,8 @@ export function validateProvenancedDeterministicFallbackCoverage(
       || bullet.operationSnapshotId === expectedSnap;
     let rejectionReason: string | undefined;
     let covered = false;
+    const localizedProjectionUnsupportedAddition = bullet.transformationKind === 'localize_projection'
+      && deterministicLocalizedProjectionHasUnsupportedAddition(sourceIdentity?.unit || '', bullet.text);
 
     if (!mapped.length) {
       rejectionReason = 'source_fact_id_not_in_required_set';
@@ -682,6 +686,8 @@ export function validateProvenancedDeterministicFallbackCoverage(
       rejectionReason = 'duplicate_source_fact_id_mapping';
     } else if (!sourceIdentity) {
       rejectionReason = 'source_identity_missing';
+    } else if (localizedProjectionUnsupportedAddition) {
+      rejectionReason = 'unsupported_material_predicate_added';
     } else if (!(
       bullet.transformationKind === 'localize_projection'
         ? deterministicLocalizedProjectionPreservesSourceUnit(sourceIdentity.unit, bullet.text)
@@ -712,7 +718,7 @@ export function validateProvenancedDeterministicFallbackCoverage(
           ? deterministicLocalizedProjectionPreservesSourceUnit(sourceIdentity.unit, bullet.text)
           : deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text))
         : false,
-      unsupportedAdditionResult: false,
+      unsupportedAdditionResult: localizedProjectionUnsupportedAddition,
       duplicateResult: Boolean(mapped[0] && usedFactIds.has(mapped[0]) && !covered),
       finalCovered: covered,
       rejectionReason,
@@ -755,11 +761,32 @@ function deterministicLocalizedProjectionPreservesSourceUnit(
   projectedText: string,
 ): boolean {
   if (!(projectedText || '').trim()) return false;
-  if (!validateNoExtraGeneratedDuties(sourceUnit, projectedText).valid) return false;
-  const materialKeys = materialDutyKeysFromDescription(sourceUnit)
+  if (deterministicLocalizedProjectionHasUnsupportedAddition(sourceUnit, projectedText)) {
+    return false;
+  }
+  const materialKeys = classifyMaterialDutyKeys(sourceUnit)
     .filter((key) => key !== 'generic_duty');
-  return materialKeys.length === 0
-    || validateMaterialDutyCoverage(sourceUnit, projectedText).valid;
+  // Cross-locale deterministic text with no recognized source action/object
+  // identity cannot be proven by builder provenance alone. Provider text may
+  // still pass the independent generic predicate scanner; deterministic
+  // projection fails closed until its material identity is verifiable.
+  // Builder provenance alone cannot prove an unregistered cross-locale action
+  // or object. Fail closed until the source has a verifiable material identity.
+  if (materialKeys.length === 0) return false;
+  return materialKeys.every((key) => localizedHasDuty(key, projectedText))
+    && validateMaterialDutyCoverage(sourceUnit, projectedText).valid;
+}
+
+function deterministicLocalizedProjectionHasUnsupportedAddition(
+  sourceUnit: string,
+  projectedText: string,
+): boolean {
+  if (!validateNoExtraGeneratedDuties(sourceUnit, projectedText).valid) return true;
+  const sourceKeys = classifyMaterialDutyKeys(sourceUnit)
+    .filter((key) => key !== 'generic_duty');
+  const candidateKeys = classifyMaterialDutyKeys(projectedText)
+    .filter((key) => key !== 'generic_duty');
+  return candidateKeys.some((key) => !sourceKeys.includes(key));
 }
 
 export type ProvenancedFactCoverageDiag = {

@@ -55,17 +55,17 @@ const DUTY_RULES: DutyRule[] = [
     // Avoid bare "prepare/prepar*" — that matches "prepare reports" and similar.
     // Hindi तैयारी (warehouse goods prep) must NOT match — require food anchors or
     // तैयार not followed by ी (तैयारी).
-    source: /priprem\w*.{0,40}(jel|hran|obrok)|jel\w*|dish(?:es)?|cuisine|restaurant\s+standard|prema\s+standardima\s+restorana|व्यंजन|तैयार(?!ी)|(?:zubereit|prépar)\w*.{0,40}(gericht|plat|dish)|(?:prepare|prepared|preparing)\s+(?:dishes|food|meals?|cuisine)/iu,
+    source: /priprem\w*.{0,40}(jel|hran|obrok)|jel\w*|dish(?:es)?|cuisine|restaurant\s+standard|prema\s+standardima\s+restorana|व्यंजन|(?:भोजन|खाना|रसोई).{0,40}तैयार(?!ी)|तैयार(?!ी).{0,40}(?:भोजन|व्यंजन|खाना)|(?:zubereit|prépar)\w*.{0,40}(gericht|plat|dish)|(?:prepare|prepared|preparing)\s+(?:dishes|food|meals?|cuisine)/iu,
     localized: /(dish|cuisine|restaurant|jel|kuhinj|व्यंजन|तैयार|रसोई|zubereit|gerichte|plat|piatto|piatti|preparazione|طبق|أطباق|إعداد|блюд|prato|料理|prépar|cook|Gerichten|jela)/iu,
   },
   {
     key: 'hygiene_workplace',
-    source: /higijen\w*|hygiene|radn\w*\s+prostor|workstation|workplace|čist|clean|स्वच्छ|कार्यस्थल/iu,
-    localized: /(hygiene|higijen|स्वच्छ|कार्यस्थल|workstation|workplace|clean|sauber|limpieza|hygiène|igiene|نظاف|гигиен|чистот|рабоч\w*\s+мест|limpeza|衛生|bar area|radni prostor|Arbeitsplatz|puesto de trabajo|poste de travail|postazione|مكان العمل|local de trabalho)/iu,
+    source: /higijen\w*|hygiene|radn\w*\s+prostor|workstation|workplace|čist|clean|स्वच्छ|कार्यस्थल|कार्यक्षेत्र/iu,
+    localized: /(hygiene|higijen|स्वच्छ|कार्यस्थल|कार्यक्षेत्र|workstation|workplace|clean|sauber|limpieza|hygiène|igiene|نظاف|гигиен|чистот|рабоч\w*\s+мест|limpeza|衛生|bar area|radni prostor|Arbeitsplatz|puesto de trabajo|poste de travail|postazione|مكان العمل|local de trabalho)/iu,
   },
   {
     key: 'kitchen_collaboration',
-    source: /sara[dđ]\w*.{0,48}(kuhinj|kitchen)|kuhinjsk\w*\s+tim|kitchen\s+team|kolegama?\s+iz\s+kuhinj|रसोई\s*टीम|kitchen\s+colleagues/iu,
+    source: /sara[dđ]\w*.{0,48}(kuhinj|kitchen)|kuhinjsk\w*\s+tim|kitchen\s+team|kolegama?\s+iz\s+kuhinj|रसोई.{0,48}(?:टीम|सहकर्म|समन्वय)|(?:सहकर्म|समन्वय).{0,48}रसोई|kitchen\s+colleagues/iu,
     localized: /(kitchen\s+(?:team|colleagues)|kuhinj|रसोई|सहयोग|समन्वय|küchenkolleg|Küchenteam|compañeros de cocina|equipo de cocina|collègues de cuisine|équipe de cuisine|colleghi di cucina|team di cucina|زملاء المطبخ|فريق المطبخ|кухонн|команд[\p{L}-]*\s+кухн|colegas de cozinha|equipe da cozinha|厨房|キッチン(?:チーム)?|collaborat|coordinat|Zusammenarbeit|colaboraci[oó]n|sara[dđ]|surađ)/iu,
   },
   {
@@ -1217,6 +1217,12 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
     );
   }
   if (keys.includes('healthcare_team')) {
+    if (/部門横断|プロジェクト遂行/u.test(t)) {
+      return [
+        ...keys.filter((k) => k !== 'healthcare_team' && k !== 'generic_duty'),
+        'team_collaboration',
+      ].filter((key, index, all) => all.indexOf(key) === index) as MaterialDutyKey[];
+    }
     return keys.filter((k) => k !== 'team_collaboration' && k !== 'generic_duty' && !k.startsWith('cs_'));
   }
   // Design material keys — prefer over CS / food false-hits.
@@ -1229,6 +1235,13 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
           && k !== 'hygiene_workplace'
           && k !== 'kitchen_collaboration'
           && k !== 'team_collaboration'),
+    );
+  }
+  if (keys.includes('food_prep') || keys.includes('hygiene_workplace')) {
+    return keys.filter(
+      (k) => k === 'food_prep'
+        || k === 'hygiene_workplace'
+        || k === 'kitchen_collaboration',
     );
   }
   // Warehouse inbound/records/movement — prefer over CS false-hits (koleg+coord).
@@ -1261,6 +1274,11 @@ export function classifyMaterialDutyKeys(text: string): MaterialDutyKey[] {
   // Prefer CS contact-center keys over bare team_collaboration when both match.
   if (keys.some((k) => k.startsWith('cs_'))) {
     return keys.filter((k) => k !== 'team_collaboration' && k !== 'generic_duty');
+  }
+  // Generic internal-process development is not software development. This is
+  // especially important for Japanese, where 開発 appears in both surfaces.
+  if (keys.includes('process_internal') && keys.includes('software_development')) {
+    return keys.filter((k) => k !== 'software_development');
   }
   // Prefer documentation/testing over development when those verbs dominate.
   if (keys.includes('software_documentation') && keys.includes('software_development')) {

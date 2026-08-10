@@ -24,6 +24,10 @@ import {
   deterministicLocalizedBulletsFromCanonical,
   deterministicLocalizedSummaryFromCanonical,
 } from '@/lib/cv-localized-fallback';
+import {
+  scanGenericExperiencePredicates,
+  sourceRequiresGenericExperiencePredicates,
+} from '@/lib/cv-generic-experience-predicate-grounding';
 import { activateCvExperienceBullets, activateCvSummary } from '@/lib/cv-content-activation';
 import { buildJobContextGenerationFallback, validateExperienceGenerationOutput } from '@/lib/cv-experience-ai-operation-mode';
 import {
@@ -2632,7 +2636,6 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         deadlineAt,
       });
 
-      if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
       if (process.env.NODE_ENV !== 'production') {
         console.log('[AI Improvements API]', {
           industry,
@@ -2655,21 +2658,21 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
             violationCount: activated.violations.length,
           }, { status: 504 });
         }
-        const emergencyLocalized = (
-          deterministicLocalizedBulletsFromCanonical(
-            canonicalBullets,
-            resolvedLocale,
-            gender || '',
-            { isPresent: isPresentRole },
-          ) || buildJobContextGenerationFallback({
-            locale: resolvedLocale,
-            gender: gender || '',
-            position,
-            industry: industry || 'general',
-            isPresent: isPresentRole,
-          })
+        const emergencyLocalized = deterministicLocalizedBulletsFromCanonical(
+          canonicalBullets,
+          resolvedLocale,
+          gender || '',
+          { isPresent: isPresentRole },
         ).trim();
-        if (emergencyLocalized) {
+        const emergencyPredicateTruth = sourceRequiresGenericExperiencePredicates(sourceDescription)
+          ? scanGenericExperiencePredicates(sourceDescription, emergencyLocalized)
+          : null;
+        const emergencySourcePreserving = Boolean(emergencyLocalized)
+          && (!emergencyPredicateTruth
+            || (emergencyPredicateTruth.sourceUnitPredicateCoveragePassed
+              && emergencyPredicateTruth.candidateAddedPredicateCount === 0));
+        if (emergencySourcePreserving) {
+          if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
           return jsonResponse({
             result: emergencyLocalized,
             cvFidelityStatus: 'fallback',
@@ -2690,6 +2693,7 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
           violationCount: activated.violations.length,
         }, { status: 422 });
       }
+      if (_freeUserId) recordFreeAction(_freeUserId, 'bullets');
       return jsonResponse({
         result: activated.content,
         cvFidelityStatus: activated.status,

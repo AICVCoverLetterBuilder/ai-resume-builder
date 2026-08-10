@@ -8,6 +8,7 @@ import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-
 import { detectTextLocale, isCrossLocaleOperation } from './cv-content-locale';
 import {
   applyEnglishEmploymentTense,
+  classifyMaterialDutyKeys,
   materialDutyKeysFromDescription,
 } from './cv-material-duty-coverage';
 import {
@@ -16,50 +17,62 @@ import {
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
 import {
+  buildGermanWarehouseExperienceFallback,
   sourceRequiresGermanWarehouseFactCoverage,
   validateGermanWarehouseExperienceCoverage,
 } from './cv-german-experience-grounding';
 import {
+  buildSpanishWarehouseExperienceFallback,
   sourceRequiresSpanishWarehouseFactCoverage,
   validateSpanishWarehouseExperienceCoverage,
 } from './cv-spanish-experience-grounding';
 import {
+  buildFrenchWarehouseExperienceFallback,
   sourceRequiresFrenchWarehouseFactCoverage,
   validateFrenchWarehouseExperienceCoverage,
 } from './cv-french-experience-grounding';
 import {
+  buildItalianWarehouseExperienceFallback,
   sourceRequiresItalianWarehouseFactCoverage,
   validateItalianWarehouseExperienceCoverage,
 } from './cv-italian-experience-grounding';
 import {
+  buildPortugueseWarehouseExperienceFallback,
   sourceRequiresPortugueseWarehouseFactCoverage,
   validatePortugueseWarehouseExperienceCoverage,
 } from './cv-portuguese-experience-grounding';
 import {
+  buildRussianWarehouseExperienceFallback,
   sourceRequiresRussianWarehouseFactCoverage,
   validateRussianWarehouseExperienceCoverage,
 } from './cv-russian-experience-grounding';
 import {
+  buildHindiWarehouseExperienceFallback,
   sourceRequiresHindiWarehouseFactCoverage,
   validateHindiWarehouseExperienceCoverage,
 } from './cv-hindi-experience-grounding';
 import {
+  buildJapaneseWarehouseExperienceFallback,
   sourceRequiresJapaneseWarehouseFactCoverage,
   validateJapaneseWarehouseExperienceCoverage,
 } from './cv-japanese-experience-grounding';
 import {
+  buildArabicWarehouseExperienceFallback,
   sourceRequiresArabicWarehouseFactCoverage,
   validateArabicWarehouseExperienceCoverage,
 } from './cv-arabic-experience-grounding';
 import {
+  buildSerbianWarehouseExperienceFallback,
   sourceRequiresSerbianWarehouseFactCoverage,
   validateSerbianWarehouseExperienceCoverage,
 } from './cv-serbian-experience-grounding';
 import {
+  buildCroatianWarehouseExperienceFallback,
   sourceRequiresCroatianWarehouseFactCoverage,
   validateCroatianWarehouseExperienceCoverage,
 } from './cv-croatian-experience-grounding';
 import {
+  buildEnglishWarehouseExperienceFallback,
   sourceRequiresEnglishWarehouseFactCoverage,
   sourceRequiresStrictEnglishWarehouseFactCoverage,
   countEnglishWarehouseTranslatedFacts,
@@ -112,7 +125,7 @@ function classifyActionFrame(unit: string): ActionFrame {
   if (/(koordin|coord|razmen|exchange|koleg|colleague|inform|координ|تنسّق|समन्वय|調整)/.test(t)) {
     return 'coordinate_info';
   }
-  if (/(prover|pregled|check|verif|tačnost|tacnost|potpunost|dokument|провера|проверя|تتحقق|जाँच|確認)/.test(t)) {
+  if (/(prover|pregled|check|verif|control|confer|comprueb|revis|tačnost|tacnost|potpunost|dokument|провера|проверя|تتحقق|जाँच|確認)/.test(t)) {
     return 'check_records';
   }
   if (/(priprem|prepar|kreir|creat|finaln|format|ekran|screen|готови|أعد|तैयार|準備)/.test(t)) {
@@ -1039,6 +1052,80 @@ export function buildCrossLocaleExperienceFallback(options: {
   // source-preserving locale projector so food preparation, hygiene, and
   // kitchen collaboration remain separate and no design vocabulary is added.
   const sourceMaterialKeys = materialDutyKeysFromDescription(options.sourceDescription || '');
+
+  // A non-empty warehouse source must use the locale's source-fact projector,
+  // never the coarse domain shell table. Return only an exact source-unit-count
+  // projection that the dedicated semantic validator accepts.
+  if (sourceHasWarehouseDomainApplicability(options.sourceDescription || '')) {
+    let grounded = '';
+    let groundedValid = false;
+    if (target === 'en' && sourceRequiresStrictEnglishWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildEnglishWarehouseExperienceFallback({
+        sourceDescription: options.sourceDescription,
+        isPresent,
+      });
+      groundedValid = validateEnglishWarehouseExperienceCoverage(
+        options.sourceDescription,
+        grounded,
+      ).ok;
+    } else if (target === 'de' && sourceRequiresGermanWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildGermanWarehouseExperienceFallback({ sourceDescription: options.sourceDescription, isPresent });
+      groundedValid = validateGermanWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'es' && sourceRequiresSpanishWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildSpanishWarehouseExperienceFallback({ sourceDescription: options.sourceDescription, isPresent });
+      groundedValid = validateSpanishWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'fr' && sourceRequiresFrenchWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildFrenchWarehouseExperienceFallback({ sourceDescription: options.sourceDescription, isPresent });
+      groundedValid = validateFrenchWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'it' && sourceRequiresItalianWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildItalianWarehouseExperienceFallback({ sourceDescription: options.sourceDescription, isPresent });
+      groundedValid = validateItalianWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'pt-BR' && sourceRequiresPortugueseWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildPortugueseWarehouseExperienceFallback({ sourceDescription: options.sourceDescription, isPresent });
+      groundedValid = validatePortugueseWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'ru' && sourceRequiresRussianWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildRussianWarehouseExperienceFallback({ sourceDescription: options.sourceDescription, isPresent });
+      groundedValid = validateRussianWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'hi' && sourceRequiresHindiWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildHindiWarehouseExperienceFallback({
+        sourceDescription: options.sourceDescription,
+        isPresent,
+        gender: options.gender,
+      });
+      groundedValid = validateHindiWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'ja' && sourceRequiresJapaneseWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildJapaneseWarehouseExperienceFallback({
+        sourceDescription: options.sourceDescription,
+        isPresent,
+        gender: options.gender,
+      });
+      groundedValid = validateJapaneseWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'ar' && sourceRequiresArabicWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildArabicWarehouseExperienceFallback({
+        sourceDescription: options.sourceDescription,
+        isPresent,
+        gender: options.gender,
+      });
+      groundedValid = validateArabicWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'sr' && sourceRequiresSerbianWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildSerbianWarehouseExperienceFallback({
+        sourceDescription: options.sourceDescription,
+        isPresent,
+        gender: options.gender,
+      });
+      groundedValid = validateSerbianWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    } else if (target === 'hr' && sourceRequiresCroatianWarehouseFactCoverage(options.sourceDescription)) {
+      grounded = buildCroatianWarehouseExperienceFallback({
+        sourceDescription: options.sourceDescription,
+        isPresent,
+        gender: options.gender,
+      });
+      groundedValid = validateCroatianWarehouseExperienceCoverage(options.sourceDescription, grounded).ok;
+    }
+    if (groundedValid && splitExperienceBullets(grounded).length === units.length) {
+      return grounded;
+    }
+  }
   if (sourceMaterialKeys.some((key) => (
     key === 'food_prep'
     || key === 'hygiene_workplace'
@@ -1058,6 +1145,10 @@ export function buildCrossLocaleExperienceFallback(options: {
   // through the general source-preserving localizer, retaining one target
   // bullet per source identity and disambiguating only repeated safe shells.
   if (domain === 'work' || domain === 'documentation') {
+    const everyUnitHasMaterialIdentity = units.every((unit) => (
+      classifyMaterialDutyKeys(unit).some((key) => key !== 'generic_duty')
+    ));
+    if (!everyUnitHasMaterialIdentity) return '';
     const projected = buildSourcePreservingExperienceBullets(
       options.sourceDescription,
       target,
@@ -1103,58 +1194,14 @@ export function buildCrossLocaleExperienceFallback(options: {
   }
 
   const frames = units.map((u) => classifyActionFrame(u));
-  // Ensure three distinct bullets when source has three units.
-  const used = new Set<string>();
   const lines: string[] = [];
   for (let i = 0; i < frames.length; i += 1) {
-    let frame = frames[i];
-    let line = bulletForLocale(target, frame, domain, isPresent, options.gender);
-    // Prefer disambiguation over frame substitution so source fact frames stay aligned.
-    if (used.has(fold(line)) || nearDupOfAny(line, lines)) {
-      const hinted = uniquifyLineWithSourceHint(line, units[i] || '', i, target);
-      if (!used.has(fold(hinted)) && !nearDupOfAny(hinted, lines)) {
-        line = hinted;
-      } else {
-        const alts: ActionFrame[] = [
-          'check_records',
-          'update_records',
-          'coordinate_info',
-          'prepare_materials',
-          'collaborate_visual',
-          'generic_duty',
-        ];
-        for (const alt of alts) {
-          if (alt === frame) continue;
-          const candidate = bulletForLocale(target, alt, domain, isPresent, options.gender);
-          if (!used.has(fold(candidate)) && !nearDupOfAny(candidate, lines)) {
-            frame = alt;
-            line = candidate;
-            break;
-          }
-        }
-        if (used.has(fold(line)) || nearDupOfAny(line, lines)) {
-          line = uniquifyLineWithSourceHint(line, units[i] || '', i, target);
-        }
-      }
-    }
-    used.add(fold(line));
+    const frame = frames[i]!;
+    const line = bulletForLocale(target, frame, domain, isPresent, options.gender);
+    if (!line.trim()) return '';
     lines.push(line);
   }
-
-  // Pad to 3 if needed using remaining frames for the domain.
-  const padFrames: ActionFrame[] = domain === 'design'
-    ? ['prepare_materials', 'collaborate_visual', 'update_records']
-    : ['check_records', 'update_records', 'coordinate_info'];
-  for (const frame of padFrames) {
-    if (lines.length >= 3) break;
-    const line = bulletForLocale(target, frame, domain, isPresent, options.gender);
-    if (!used.has(fold(line))) {
-      used.add(fold(line));
-      lines.push(line);
-    }
-  }
-
-  return formatExperienceBullets(lines.slice(0, Math.max(3, units.length)).slice(0, 3));
+  return formatExperienceBullets(lines);
 }
 
 /** True when candidate still looks like the source language under a different target. */

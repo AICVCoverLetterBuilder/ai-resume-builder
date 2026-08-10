@@ -543,6 +543,14 @@ describe('build 269 — cross-locale matrix smoke', () => {
         gender: 'female',
         isPresent: true,
       });
+      // This German source mixes inbound checking, open-item tracking, and
+      // information exchange. No registered one-to-one Serbian projector owns
+      // all three identities, so the AAB413 contract requires a fail-closed
+      // result instead of padding it with a generic warehouse duty.
+      if (src === 'de' && tgt === 'sr') {
+        expect(out).toBe('');
+        return;
+      }
       expect(splitExperienceBullets(out).length).toBeGreaterThanOrEqual(3);
       if (tgt === 'en') {
         expect(out).toMatch(/[A-Za-z]{4}/);

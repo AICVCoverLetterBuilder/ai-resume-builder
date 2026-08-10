@@ -64,6 +64,14 @@ const ANCHOR_GOODS_DOCUMENTATION =
 const ANCHOR_GOODS_PREP_MOVEMENT =
   /(?:(?:preparation|preparing|prepared).{0,40}(?:movement|moving|transfer|handling).{0,40}(?:merchandise|goods|rob)|(?:movement|moving|transfer).{0,40}(?:merchandise|goods|rob)|(?:merchandise|goods|rob).{0,40}(?:preparation|movement|transfer)|prepare\s+and\s+move\s+(?:merchandise|goods)|माल\s+(?:की\s+)?तैयारी.{0,40}(?:आवाजाही|स्थानांतरण)|(?:आवाजाही|स्थानांतरण).{0,40}माल|подготов\p{L}*.{0,48}(?:товар\p{L}*.{0,48})?перемещен\p{L}*|Vorbereitung.{0,40}(?:Bewegung|Transport).{0,40}Waren|preparaci[oó]n.{0,40}movimiento.{0,40}mercanc|pr[eé]paration.{0,40}(?:d[eé]placement|mouvement).{0,40}marchand|preparazione.{0,40}movimentazione.{0,40}merci|prepara[cç][aã]o.{0,40}movimenta[cç][aã]o.{0,40}mercador|商品の準備と移動)/iu;
 
+// Serbian source forms used by receiving/logistics roles. They are semantic
+// warehouse anchors, not occupation/title fixtures.
+const ANCHOR_SERBIAN_INCOMING_GOODS =
+  /dolazn\p{L}*\s+rob\p{L}*/iu;
+
+const ANCHOR_SERBIAN_GOODS_PREP_MOVEMENT =
+  /(?:priprem\p{L}*.{0,48}kretanj\p{L}*.{0,48}rob\p{L}*|priprem\p{L}*.{0,48}rob\p{L}*.{0,48}kretanj\p{L}*|rob\p{L}*.{0,48}(?:priprem\p{L}*|kretanj\p{L}*))/iu;
+
 function corpusFrom(
   sourceDescription: string,
   options?: WarehouseDomainApplicabilityOptions,
@@ -87,10 +95,11 @@ export function countWarehouseDomainAnchorGroups(
   const text = corpusFrom(sourceDescription, options);
   if (!text.trim()) return 0;
   let n = 0;
-  if (ANCHOR_INCOMING_GOODS.test(text)) n += 1;
+  if (ANCHOR_INCOMING_GOODS.test(text) || ANCHOR_SERBIAN_INCOMING_GOODS.test(text)) n += 1;
   if (ANCHOR_WAREHOUSE_STORAGE.test(text)) n += 1;
   if (ANCHOR_GOODS_DOCUMENTATION.test(text)) n += 1;
-  if (ANCHOR_GOODS_PREP_MOVEMENT.test(text)) n += 1;
+  if (ANCHOR_GOODS_PREP_MOVEMENT.test(text)
+    || ANCHOR_SERBIAN_GOODS_PREP_MOVEMENT.test(text)) n += 1;
   return n;
 }
 

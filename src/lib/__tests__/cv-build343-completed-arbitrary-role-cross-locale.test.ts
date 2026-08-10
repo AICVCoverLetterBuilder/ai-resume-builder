@@ -442,7 +442,7 @@ describe('AAB-343 completed arbitrary-role ES→HR Experience', () => {
     expect(String(fin.diagnostics?.authoritativeFactSourceLocale || '')).toBe('es');
   });
 
-  it('K. cook (current) and free-text title use generic path', () => {
+  it('K. cook uses a grounded path; unrecognized free-text fallback fails closed', () => {
     const cookDe = buildCrossLocaleExperienceFallback({
       sourceDescription: COOK_CURRENT_EN,
       sourceLocale: 'en',
@@ -465,10 +465,8 @@ describe('AAB-343 completed arbitrary-role ES→HR Experience', () => {
     });
     const freePred = scanGenericExperiencePredicates(FREE_TEXT_COMPLETED_EN, freeFr);
     expect(freePred.sourcePredicateIdentityCount).toBe(3);
-    expect(
-      freePred.sourceUnitPredicateCoveragePassed,
-      JSON.stringify({ freeFr, freePred }),
-    ).toBe(true);
+    expect(freeFr).toBe('');
+    expect(freePred.sourceUnitPredicateCoveragePassed).toBe(false);
   });
 });
 

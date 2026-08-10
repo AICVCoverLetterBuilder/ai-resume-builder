@@ -35,6 +35,12 @@ import {
 } from './cv-source-fact-identity';
 import { summaryHasMalformedSkillsFragment } from './cv-summary-grounding';
 import { normalizeHindiExperiencePerspective } from './cv-experience-perspective';
+import { buildCrossLocaleExperienceFallback } from './cv-cross-locale-experience';
+import {
+  scanGenericExperiencePredicates,
+  sourceRequiresGenericExperiencePredicates,
+} from './cv-generic-experience-predicate-grounding';
+import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
 
 export type CvContentActivation = {
   content: string;
@@ -153,6 +159,12 @@ function experiencePasses(
   });
   if (!check.valid) return false;
   if (isEnglishCanonicalDump(content, options.canonicalJoined, options.locale)) return false;
+  if (sourceRequiresGenericExperiencePredicates(options.canonicalJoined)) {
+    const predicates = scanGenericExperiencePredicates(options.canonicalJoined, content);
+    if (predicates.candidateAddedPredicateCount > 0) return false;
+    if (!sourceHasWarehouseDomainApplicability(options.canonicalJoined)
+      && !predicates.sourceUnitPredicateCoveragePassed) return false;
+  }
   return true;
 }
 
@@ -258,6 +270,32 @@ export async function activateCvExperienceBullets(options: {
   ) {
     return {
       content: localizedFallback,
+      status: 'fallback',
+      repairAttempted,
+      fallbackUsed: true,
+      violations: first.violations,
+    };
+  }
+
+  const sourceBoundFallbackRaw = buildCrossLocaleExperienceFallback({
+    sourceDescription: canonicalJoined,
+    targetLocale: options.locale,
+    gender: options.gender,
+    isPresent: options.isPresent,
+  });
+  const sourceBoundFallback = options.locale === 'hi'
+    ? normalizeHindiExperiencePerspective(sourceBoundFallbackRaw)
+    : sourceBoundFallbackRaw;
+  if (
+    sourceBoundFallback
+    && experiencePasses(sourceBoundFallback, {
+      ...options,
+      stage: 'source_bound_fallback',
+      canonicalJoined,
+    })
+  ) {
+    return {
+      content: sourceBoundFallback,
       status: 'fallback',
       repairAttempted,
       fallbackUsed: true,

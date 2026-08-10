@@ -18,11 +18,14 @@ import {
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
 import {
+  classifyMaterialDutyKeys,
+  localizedHasDuty,
   materialDutyKeysFromDescription,
   validateMaterialDutyCoverage,
   validateDistinctExperienceBullets,
   validateNoExtraGeneratedDuties,
 } from './cv-material-duty-coverage';
+import type { MaterialDutyKey } from './cv-material-duty-coverage';
 import {
   sourceHasWarehouseDomainApplicability,
   sourceIsCookingHospitalityWithoutWarehouseEvidence,
@@ -68,6 +71,50 @@ function addedPredicateIdentity(candidateUnit: string): string {
   return `gen_pred_added_${sf.replace(/^sf_/, '')}`;
 }
 
+function canonicalMaterialDutyKey(key: string): string {
+  const aliases: Record<string, string> = {
+    warehouse_document_check: 'warehouse_inbound_check',
+    warehouse_orderly_goods: 'warehouse_records',
+    warehouse_preparation: 'warehouse_movement',
+    warehouse_colleague_coordination: 'warehouse_movement',
+    design_graphic_elements: 'design_visual_materials',
+    design_project_requirements: 'design_review_adapt',
+    design_different_screens: 'design_files_formats',
+    design_team_collaboration: 'team_collaboration',
+  };
+  return aliases[key] || key;
+}
+
+function specificMaterialDutyKeys(unit: string): string[] {
+  return Array.from(new Set(
+    classifyMaterialDutyKeys(unit || '')
+      .filter((key) => key !== 'generic_duty')
+      .map((key) => canonicalMaterialDutyKey(key)),
+  ));
+}
+
+/** A paraphrase may not change its source unit's material action/object family. */
+function materialUnitsCompatible(
+  sourceUnit: string,
+  candidateUnit: string,
+  sourceMaterialKeys: Set<string>,
+  allowUnclassifiedLocalizedMaterial = false,
+): boolean {
+  const sourceKeys = specificMaterialDutyKeys(sourceUnit);
+  const candidateKeys = specificMaterialDutyKeys(candidateUnit);
+  if (sourceKeys.length === 0 && candidateKeys.length === 0) return true;
+  const supportedCandidateKeys = candidateKeys.every((key) => sourceMaterialKeys.has(key));
+  if (sourceKeys.length === 0) return supportedCandidateKeys && candidateKeys.length > 0;
+  if (allowUnclassifiedLocalizedMaterial && candidateKeys.length === 0) return true;
+  const localizedSourceKeysCovered = sourceKeys.every(
+    (key) => localizedHasDuty(key as MaterialDutyKey, candidateUnit),
+  );
+  return supportedCandidateKeys
+    && localizedSourceKeysCovered
+    && (candidateKeys.length === 0
+      || candidateKeys.some((key) => sourceKeys.includes(key)));
+}
+
 function framesCompatible(
   want: ReturnType<typeof classifyExperienceActionFrame>,
   got: ReturnType<typeof classifyExperienceActionFrame>,
@@ -98,11 +145,15 @@ function framesCompatible(
 function matchSourceToCandidateUnits(
   sourceUnits: string[],
   candUnits: string[],
+  allowUnclassifiedLocalizedMaterial = false,
 ): { coveredSi: number[]; usedCi: Set<number> } {
   const coveredSi: number[] = [];
   const usedCi = new Set<number>();
   const srcFrames = sourceUnits.map((u) => classifyExperienceActionFrame(u));
   const candFrames = candUnits.map((u) => classifyExperienceActionFrame(u));
+  const sourceMaterialKeys = new Set(
+    sourceUnits.flatMap((unit) => specificMaterialDutyKeys(unit)),
+  );
 
   // Prefer exact frame matches first, then soft.
   for (const exactOnly of [true, false]) {
@@ -112,6 +163,22 @@ function matchSourceToCandidateUnits(
       let matched = -1;
       for (let ci = 0; ci < candUnits.length; ci += 1) {
         if (usedCi.has(ci)) continue;
+        if (!materialUnitsCompatible(
+          sourceUnits[si]!,
+          candUnits[ci]!,
+          sourceMaterialKeys,
+          allowUnclassifiedLocalizedMaterial,
+        )) continue;
+        const sourceMaterial = specificMaterialDutyKeys(sourceUnits[si]!);
+        const candidateMaterial = specificMaterialDutyKeys(candUnits[ci]!);
+        const materialIdentityMatch = sourceMaterial.length > 0
+          && sourceMaterial.every((key) => localizedHasDuty(key as MaterialDutyKey, candUnits[ci]!))
+          && (candidateMaterial.length === 0
+            || candidateMaterial.some((key) => sourceMaterial.includes(key)));
+        if (exactOnly && materialIdentityMatch) {
+          matched = ci;
+          break;
+        }
         const got = candFrames[ci]!;
         if (exactOnly) {
           if (want === got) {
@@ -194,12 +261,33 @@ export function scanGenericExperiencePredicates(
       .test(candidateDescription || '');
   const crossDomainLeakage = sourceCooking && (candidateDesign || candidateWarehouseLeak);
 
-  const { coveredSi, usedCi } = matchSourceToCandidateUnits(sourceUnits, candUnits);
+  const warehouseApplicable = sourceHasWarehouseDomainApplicability(sourceDescription || '');
+  // Dedicated locale scanners recognize broader warehouse vocabulary. The
+  // generic layer may accept an unclassified localized object only when its
+  // action frame still maps one-to-one; registered added duties remain fatal.
+  const { coveredSi, usedCi } = matchSourceToCandidateUnits(
+    sourceUnits,
+    candUnits,
+    warehouseApplicable,
+  );
   const missing = sourceIds.filter((_, i) => !coveredSi.includes(i));
   const addedHashes: string[] = [];
   for (let ci = 0; ci < candUnits.length; ci += 1) {
     if (!usedCi.has(ci)) {
       addedHashes.push(addedPredicateIdentity(candUnits[ci]!));
+    }
+  }
+  // Include inserted material predicates even when the surrounding candidate
+  // unit was consumed. This closes the merge-two-source-units + invented-shell
+  // aggregate-coverage hole.
+  const sourceMaterialKeys = new Set(
+    sourceUnits.flatMap((unit) => specificMaterialDutyKeys(unit)),
+  );
+  for (let ci = 0; ci < candUnits.length; ci += 1) {
+    for (const key of specificMaterialDutyKeys(candUnits[ci]!)) {
+      if (sourceMaterialKeys.has(key)) continue;
+      const id = addedPredicateIdentity(`extra:material_key:${key}:${ci}`);
+      if (!addedHashes.includes(id)) addedHashes.push(id);
     }
   }
   if (extras.valid === false) {
@@ -217,7 +305,17 @@ export function scanGenericExperiencePredicates(
 
   const merged = candUnits.length > 0
     && candUnits.length < sourceUnits.length;
-  const splitOrDup = !distinct.ok && sourceUnits.length >= 2;
+  const normalizedCandidateUnits = candUnits.map((unit) => unit
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim());
+  const literalDuplicate = new Set(normalizedCandidateUnits).size
+    < normalizedCandidateUnits.length;
+  const splitOrDup = literalDuplicate
+    || (!distinct.ok
+      && sourceUnits.length >= 2
+      && !warehouseApplicable);
   const countMismatch = candUnits.length !== sourceUnits.length;
   const coveredCount = coveredSi.length;
 
@@ -231,7 +329,7 @@ export function scanGenericExperiencePredicates(
     && !splitOrDup
     && !countMismatch
     && !crossDomainLeakage
-    && materialCoverage.valid
+    && (warehouseApplicable || materialCoverage.valid)
     && coveredCount === sourceUnits.length
     && candUnits.length === sourceUnits.length;
 
@@ -239,14 +337,14 @@ export function scanGenericExperiencePredicates(
   if (!ok) {
     if (crossDomainLeakage) {
       reason = 'generic_experience_predicate_cross_domain_leakage';
-    } else if (!materialCoverage.valid) {
+    } else if (addedHashes.length > 0 || candUnits.length > sourceUnits.length) {
+      reason = 'generic_experience_predicate_added_action';
+    } else if (!warehouseApplicable && !materialCoverage.valid) {
       reason = 'source_unit_predicate_coverage_failed';
     } else if (merged || (countMismatch && candUnits.length < sourceUnits.length)) {
       reason = 'generic_experience_predicate_merged_duties';
     } else if (splitOrDup) {
       reason = 'generic_experience_predicate_split_or_duplicate';
-    } else if (addedHashes.length > 0 || candUnits.length > sourceUnits.length) {
-      reason = 'generic_experience_predicate_added_action';
     } else if (missing.length > 0) {
       reason = 'source_unit_predicate_coverage_failed';
     } else {
