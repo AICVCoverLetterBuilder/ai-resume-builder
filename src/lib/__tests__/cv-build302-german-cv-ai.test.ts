@@ -165,7 +165,7 @@ describe('German CV AI (AAB-302)', () => {
         candidate: '',
         referenceDateIso: REF,
       });
-      expect(fin.blocked).toBe(false);
+      expect(fin.blocked, `${fin.reason}: ${JSON.stringify(fin.diagnostics)}`).toBe(false);
       expect(fin.countedAsSuccess).toBe(true);
       expect(fin.text).toMatch(/bei Atlas/i);
       expect(fin.text).toMatch(/sechseinhalb/i);
@@ -195,7 +195,7 @@ describe('German CV AI (AAB-302)', () => {
       candidate: weak,
       referenceDateIso: REF,
     });
-    expect(fin.blocked).toBe(false);
+    expect(fin.blocked, `${fin.reason}: ${JSON.stringify(fin.diagnostics)}`).toBe(false);
     expect(fin.text).toMatch(/bei Atlas/i);
     expect(fin.text).toMatch(/sechseinhalb|Jahre/i);
     expect(fin.text).not.toMatch(/6[,.]5\s+sechseinhalb|sechseinhalb\s+6[,.]5/);
@@ -323,7 +323,7 @@ describe('German CV AI (AAB-302)', () => {
       candidate: '',
       referenceDateIso: REF,
     });
-    expect(generated.blocked).toBe(false);
+    expect(generated.blocked, `${generated.reason}: ${JSON.stringify(generated.diagnostics)}`).toBe(false);
     const cvGood = germanFixture({ summary: generated.text });
     const fin = finalizeCvAiFieldForApply({
       action: 'summary_enhance',

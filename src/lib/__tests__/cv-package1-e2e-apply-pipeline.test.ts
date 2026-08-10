@@ -19,6 +19,8 @@ import {
 } from '@/lib/cv-ai-finalize-apply';
 import { localizeCvLanguageLevel } from '@/lib/cv-language-levels';
 import { applyCvContentQuality } from '@/lib/cv-content-quality';
+import { validateMaterialDutyCoverage } from '@/lib/cv-material-duty-coverage';
+import { verifyIndependentFinalDurationCount } from '@/lib/cv-summary-duration-ownership';
 import { stripAiProtocolMarkers, hasAiProtocolMarker } from '@/lib/cv-ai-protocol-strip';
 import { acceptValidatedAiContent } from '@/lib/cv-canonical-snapshot';
 import type { Locale } from '@/lib/i18n/translations';
@@ -198,7 +200,16 @@ describe('Package-1 E2E apply pipeline (page orchestration)', () => {
     for (const re of UNSUPPORTED_EN) {
       expect(summaryPipe.stateCv.summary).not.toMatch(re);
     }
-    expect(summaryPipe.stateCv.summary).toMatch(/professional/i);
+    expect(summaryPipe.finalized.roleDutyConflict).toBe(true);
+    expect(validateMaterialDutyCoverage(
+      CANONICAL_DUTIES,
+      summaryPipe.stateCv.summary,
+    ).valid).toBe(true);
+    expect(verifyIndependentFinalDurationCount(
+      summaryPipe.stateCv.summary,
+      'en',
+      { requireExactlyOne: true },
+    ).ok).toBe(true);
     expect(summaryPipe.stateCv.summary).not.toMatch(/cook/i);
 
     const bulletsPipe = runCvAiApplyPipeline({

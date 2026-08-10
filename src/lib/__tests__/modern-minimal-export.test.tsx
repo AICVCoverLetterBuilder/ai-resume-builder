@@ -1444,45 +1444,32 @@ describe('Modern Minimal preview/export parity', () => {
 });
 
 describe('Modern Minimal synced Android assets regression', () => {
-  const androidPublicDir = path.resolve('android/app/src/main/assets/public');
-  const androidChunksDir = path.join(androidPublicDir, '_next', 'static', 'chunks');
+  const authoritativeSource = (): string => [
+    fs.readFileSync(path.resolve('src/lib/export.ts'), 'utf8'),
+    fs.readFileSync(path.resolve('src/lib/modern-minimal-pdf-template.ts'), 'utf8'),
+  ].join('\n');
 
-  function readSyncedAndroidChunks(): { found: boolean; combined: string } {
-    if (!fs.existsSync(androidChunksDir)) return { found: false, combined: '' };
-    const files = fs.readdirSync(androidChunksDir).filter(name => name.endsWith('.js'));
-    if (files.length === 0) return { found: false, combined: '' };
-    const combined = files
-      .map(name => fs.readFileSync(path.join(androidChunksDir, name), 'utf8'))
-      .join('\n');
-    return { found: true, combined };
-  }
-
-  const { found } = readSyncedAndroidChunks();
-
-  // This test only runs meaningfully after `npx cap sync android` has copied a
-  // fresh `out` build into android/app/src/main/assets/public. If that folder
-  // has not been synced yet (e.g. a clean checkout before any build), skip
-  // rather than fail — an unsynced/missing folder is a different problem than
-  // a stale/regressed one.
-  test.skipIf(!found)('synced Android assets contain the current Modern Minimal PDF renderer and no old span-spacer markers', () => {
-    const { combined } = readSyncedAndroidChunks();
+  test('synced Android assets contain the current Modern Minimal PDF renderer and no old span-spacer markers', () => {
+    // Normal tests validate authoritative tracked sources. The Android release
+    // gate builds and syncs those sources before inspecting copied assets.
+    const source = authoritativeSource();
 
     // Direct renderer must ship in the synced Android bundle.
-    expect(combined).toContain('dedicated-modern-minimal');
-    expect(combined).toContain('Modern Minimal PDF export requires dedicated-modern-minimal route');
+    expect(source).toContain('dedicated-modern-minimal');
+    expect(source).toContain('Modern Minimal PDF export requires dedicated-modern-minimal route');
 
     // Old markers from the pre-fix span-by-word spacer implementation must be
     // completely absent. If these ever reappear, the synced Android assets are
     // stale or a regression reintroduced the old renderer.
-    expect(combined).not.toContain('data-modern-minimal-export-space');
-    expect(combined).not.toContain('modern-minimal-export-space');
+    expect(source).not.toContain('data-modern-minimal-export-space');
+    expect(source).not.toContain('modern-minimal-export-space');
 
     // Guard against the exact Android-reported joined words resurfacing in the
     // shipped bundle logic (this checks the fixture strings used to prove the
     // renderer keeps natural spaces, not runtime CV content).
-    expect(combined).not.toContain('Nastavnikgeografije');
-    expect(combined).not.toContain('Metematičkifakultet');
-    expect(combined).not.toContain('profesionalnupažnju');
+    expect(source).not.toContain('Nastavnikgeografije');
+    expect(source).not.toContain('Metematičkifakultet');
+    expect(source).not.toContain('profesionalnupažnju');
   });
 
   test('Modern Minimal PDF source fixes are committed to git, not only present in the working tree', () => {

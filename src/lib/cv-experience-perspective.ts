@@ -7,6 +7,7 @@
 import type { Locale } from './i18n/translations';
 import { formatExperienceBullets, splitExperienceBullets } from './cv-canonical-facts';
 import { applyEnglishEmploymentTense } from './cv-material-duty-coverage';
+import { normalizeArabicExperienceEmploymentGrammar } from './cv-arabic-experience-tense';
 import {
   applySerbianCvEmploymentTense,
   stripDutyListPrefix,
@@ -51,6 +52,55 @@ const SR_1SG_PAST_AUX_RE =
 
 // Require capital "I" / contractions — never match Serbian conjunction "i".
 const EN_1SG_RE = /(?:^|[^\p{L}])(I(?:'m|'ve|’m|’ve)?|my)\b/u;
+
+/** Spanish finite first-person forms that are unambiguous in a duty predicate. */
+const ES_1SG_DUTY_RE = /(?:^|\n|[•\-*]\s*|[.!?]\s*)(?:reviso|marco|actualizo|coordino|compruebo|verifico|colaboro|gestiono|preparo|creo|adapto|recibo|muevo)(?=[^\p{L}]|$)/iu;
+
+const ES_1SG_TO_CV_PRESENT: Array<[RegExp, string]> = [
+  [/(?<!\p{L})reviso(?!\p{L})/giu, 'revisa'],
+  [/(?<!\p{L})marco(?!\p{L})/giu, 'marca'],
+  [/(?<!\p{L})actualizo(?!\p{L})/giu, 'actualiza'],
+  [/(?<!\p{L})coordino(?!\p{L})/giu, 'coordina'],
+  [/(?<!\p{L})compruebo(?!\p{L})/giu, 'comprueba'],
+  [/(?<!\p{L})verifico(?!\p{L})/giu, 'verifica'],
+  [/(?<!\p{L})colaboro(?!\p{L})/giu, 'colabora'],
+  [/(?<!\p{L})gestiono(?!\p{L})/giu, 'gestiona'],
+  [/(?<!\p{L})preparo(?!\p{L})/giu, 'prepara'],
+  [/(?<!\p{L})creo(?!\p{L})/giu, 'crea'],
+  [/(?<!\p{L})adapto(?!\p{L})/giu, 'adapta'],
+  [/(?<!\p{L})recibo(?!\p{L})/giu, 'recibe'],
+  [/(?<!\p{L})muevo(?!\p{L})/giu, 'mueve'],
+];
+
+const ES_1SG_TO_CV_PAST: Array<[RegExp, string]> = [
+  [/(?<!\p{L})reviso(?!\p{L})/giu, 'revisó'],
+  [/(?<!\p{L})marco(?!\p{L})/giu, 'marcó'],
+  [/(?<!\p{L})actualizo(?!\p{L})/giu, 'actualizó'],
+  [/(?<!\p{L})coordino(?!\p{L})/giu, 'coordinó'],
+  [/(?<!\p{L})compruebo(?!\p{L})/giu, 'comprobó'],
+  [/(?<!\p{L})verifico(?!\p{L})/giu, 'verificó'],
+  [/(?<!\p{L})colaboro(?!\p{L})/giu, 'colaboró'],
+  [/(?<!\p{L})gestiono(?!\p{L})/giu, 'gestionó'],
+  [/(?<!\p{L})preparo(?!\p{L})/giu, 'preparó'],
+  [/(?<!\p{L})creo(?!\p{L})/giu, 'creó'],
+  [/(?<!\p{L})adapto(?!\p{L})/giu, 'adaptó'],
+  [/(?<!\p{L})recibo(?!\p{L})/giu, 'recibió'],
+  [/(?<!\p{L})muevo(?!\p{L})/giu, 'movió'],
+];
+
+function normalizeSpanishCvPerspective(line: string, isPresent: boolean): string {
+  let out = line.replace(/^yo\s+/iu, '');
+  for (const [pattern, replacement] of isPresent
+    ? ES_1SG_TO_CV_PRESENT
+    : ES_1SG_TO_CV_PAST) {
+    out = out.replace(pattern, (match) => (
+      /^\p{Lu}/u.test(match)
+        ? replacement.charAt(0).toUpperCase() + replacement.slice(1)
+        : replacement
+    ));
+  }
+  return out;
+}
 
 function leadingTokenLooks1sg(token: string): boolean {
   const t = (token || '').trim();
@@ -113,6 +163,7 @@ export function detectExperiencePersonMode(text: string, locale?: Locale): Exper
   if (/\b(ich|yo)\b/i.test(raw) && (loc === 'de' || loc === 'es')) {
     return 'first_singular';
   }
+  if (loc === 'es' && ES_1SG_DUTY_RE.test(raw)) return 'first_singular';
 
   if (loc === 'hi') {
     return detectHindiExperiencePersonMode(raw);
@@ -142,7 +193,10 @@ export function detectHindiExperiencePersonMode(text: string): ExperiencePersonM
  * Normalize Hindi Experience bullets to CV third-person / honorific surface.
  * Preserves facts and predicate identities — only grammatical person changes.
  */
-export function normalizeHindiExperiencePerspective(text: string): string {
+export function normalizeHindiExperiencePerspective(
+  text: string,
+  options?: { isPresent?: boolean; gender?: string },
+): string {
   let out = (text || '').trim();
   if (!out) return out;
   out = out
@@ -166,6 +220,16 @@ export function normalizeHindiExperiencePerspective(text: string): string {
     .replace(/\s+(?:हूँ|हूं)$/gu, ' हैं')
     .replace(/\s{2,}/g, ' ')
     .trim();
+  if (options?.isPresent === false) {
+    const female = String(options.gender || '').toLowerCase() === 'female';
+    out = female
+      ? out
+        .replace(/करती हैं/gu, 'करती थीं')
+        .replace(/रखती हैं/gu, 'रखती थीं')
+      : out
+        .replace(/करते हैं/gu, 'करते थे')
+        .replace(/रखते हैं/gu, 'रखते थे');
+  }
   return out;
 }
 
@@ -229,16 +293,25 @@ export function normalizeExperienceBulletPerspective(
     return capitalizeLeading(raw.replace(/^ich\s+/i, ''), raw);
   }
   if (locale === 'es') {
-    return capitalizeLeading(raw.replace(/^yo\s+/i, ''), raw);
+    return capitalizeLeading(normalizeSpanishCvPerspective(raw, isPresent), raw);
   }
   if (locale === 'hi') {
-    return capitalizeLeading(normalizeHindiExperiencePerspective(raw), raw);
+    return capitalizeLeading(normalizeHindiExperiencePerspective(raw, {
+      isPresent,
+      gender,
+    }), raw);
+  }
+  if (locale === 'ar') {
+    return normalizeArabicExperienceEmploymentGrammar(raw, {
+      isPresent,
+      gender,
+    });
   }
   return raw;
 }
 
 export function experienceRequiresCvThirdPerson(locale: Locale): boolean {
-  return locale === 'sr' || locale === 'hr' || locale === 'en' || locale === 'hi';
+  return locale === 'sr' || locale === 'hr' || locale === 'en' || locale === 'es' || locale === 'hi';
 }
 
 /**

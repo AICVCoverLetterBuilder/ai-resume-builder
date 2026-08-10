@@ -453,7 +453,7 @@ describe('AAB-343 completed arbitrary-role ES→HR Experience', () => {
     });
     const cookPred = scanGenericExperiencePredicates(COOK_CURRENT_EN, cookDe);
     expect(cookPred.sourcePredicateIdentityCount).toBe(3);
-    expect(cookPred.sourceUnitPredicateCoveragePassed).toBe(true);
+    expect(cookPred.sourceUnitPredicateCoveragePassed, JSON.stringify({ cookDe, cookPred })).toBe(true);
 
     const freeFr = buildCrossLocaleExperienceFallback({
       sourceDescription: FREE_TEXT_COMPLETED_EN,
@@ -465,7 +465,10 @@ describe('AAB-343 completed arbitrary-role ES→HR Experience', () => {
     });
     const freePred = scanGenericExperiencePredicates(FREE_TEXT_COMPLETED_EN, freeFr);
     expect(freePred.sourcePredicateIdentityCount).toBe(3);
-    expect(freePred.sourceUnitPredicateCoveragePassed).toBe(true);
+    expect(
+      freePred.sourceUnitPredicateCoveragePassed,
+      JSON.stringify({ freeFr, freePred }),
+    ).toBe(true);
   });
 });
 
@@ -503,7 +506,10 @@ describe('AAB-343 all-locale arbitrary-role matrix (completed graphic design)', 
       const pred = scanGenericExperiencePredicates(DEVICE_ES_DESIGN, candidate);
       expect(pred.sourcePredicateIdentityCount).toBe(3);
       expect(pred.candidateAddedPredicateCount).toBe(0);
-      expect(pred.sourceUnitPredicateCoveragePassed).toBe(true);
+      expect(
+        pred.sourceUnitPredicateCoveragePassed,
+        JSON.stringify({ target, candidate, pred }),
+      ).toBe(true);
     }
 
     const fin = finalizeCvAiFieldForApply({

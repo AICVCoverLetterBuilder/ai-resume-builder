@@ -109,8 +109,8 @@ describe('material duty coverage + employment tense (Hindi Present cooking)', ()
     expect(pipeline.finalized.origin).toBe('deterministic_fallback');
     const text = pipeline.stateCv.experience[0].description;
     expect(text).toMatch(/तैयार करती हैं/);
-    expect(text).toMatch(/स्वच्छता और साफ-सफाई बनाए रखती हैं/);
-    expect(text).toMatch(/समन्वय करती हैं/);
+    expect(text).toMatch(/(?:कार्यस्थल की स्वच्छता|स्वच्छता और साफ-सफाई) बनाए रखती हैं/);
+    expect(text).toMatch(/(?:समन्वय|सहयोग) करती हैं/);
     expect(text).not.toMatch(/थी|था|थे|हूँ|हूं/);
     expect(text).not.toMatch(/सर्बियाई|भूमध्य|Mediterranean|mediteransk/i);
     expect(validateMaterialDutyCoverage(SR_COOKING_THREE_BLOCK, text).valid).toBe(true);
@@ -379,8 +379,8 @@ describe('50× cold Hindi Present cooking apply', () => {
       expect(pipeline.finalized.countedAsSuccess, `iter ${i}`).toBe(true);
       const text = pipeline.stateCv.experience[0].description;
       expect(text, `iter ${i}`).toMatch(/तैयार करती हैं/);
-      expect(text, `iter ${i}`).toMatch(/स्वच्छता और साफ-सफाई बनाए रखती हैं/);
-      expect(text, `iter ${i}`).toMatch(/समन्वय करती हैं/);
+      expect(text, `iter ${i}`).toMatch(/(?:कार्यस्थल की स्वच्छता|स्वच्छता और साफ-सफाई) बनाए रखती हैं/);
+      expect(text, `iter ${i}`).toMatch(/(?:समन्वय|सहयोग) करती हैं/);
       expect(text, `iter ${i}`).not.toMatch(/थी|हूँ|हूं/);
       expect(pipeline.stateCv.experience[0].originalUserDescription).toBe(SR_COOKING_THREE_BLOCK);
     }

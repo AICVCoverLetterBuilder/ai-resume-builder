@@ -29,6 +29,7 @@ import type { Locale } from '@/lib/i18n/translations';
 import { sealCanonicalFromValidatedSource, acceptValidatedAiContent } from '@/lib/cv-canonical-snapshot';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
 import { finalizeClientAiSummary } from '@/lib/cv-summary-integrity';
+import { finalizeCvAiFieldForApply } from '@/lib/cv-ai-finalize-apply';
 import { buildCvCanonicalFactSet } from '@/lib/cv-canonical-facts';
 import { deterministicLocalizedSummaryFromCanonical } from '@/lib/cv-localized-fallback';
 import { isWrongLanguageAiOutput } from '@/lib/cv-ai-locale-guard';
@@ -113,7 +114,21 @@ describe('Cross-locale AI generation regression (Android build 224)', () => {
         // Feed the grounded candidate through the exact same client finalize path
         // Generate Summary uses in production.
         const finalized = finalizeClientAiSummary(grounded, cv, locale, durationSnapshot);
-        expect(finalized.blocked).toBe(false);
+        const diagnosticGate = finalized.blocked
+          ? finalizeCvAiFieldForApply({
+            action: 'summary_generate',
+            field: 'summary',
+            requestedLocale: locale,
+            gender: cv.personal?.gender || '',
+            cv,
+            candidate: grounded,
+            durationSnapshot,
+          })
+          : null;
+        expect(
+          finalized.blocked,
+          JSON.stringify({ grounded, reason: diagnosticGate?.reason, diagnostics: diagnosticGate?.diagnostics }),
+        ).toBe(false);
         expect(finalized.summary.trim().length).toBeGreaterThan(0);
 
         // Serbian text must never satisfy a non-Serbian/Croatian request.

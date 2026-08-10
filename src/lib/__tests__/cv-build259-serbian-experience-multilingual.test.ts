@@ -507,8 +507,9 @@ describe('Build 259 Serbian Experience multilingual fact preservation', () => {
                   if (row.locale === 'en') {
                     return applyEnglishEmploymentTense(d, !isPresent);
                   }
-                  // Other locales: force wrong tense by leaving raw 1sg while role expects past/present mismatch via isPresent flip in CV only — use empty to exercise fallback.
-                  return d;
+                  // Other locales have no safe synthetic tense inversion here; use
+                  // empty provider output to exercise deterministic recovery.
+                  return '';
                 }),
               ),
             },
@@ -526,7 +527,16 @@ describe('Build 259 Serbian Experience multilingual fact preservation', () => {
               referenceDateIso: '2026-07-18',
             });
             const label = `${row.locale}/${title.slice(0, 12)}/${isPresent ? 'cur' : 'done'}/${c.name}`;
-            expect(pipeline.blocked, label).toBe(false);
+            expect(
+              pipeline.blocked,
+              `${label}: ${pipeline.finalized.reason || 'no reason'} ${JSON.stringify({
+                text: pipeline.finalized.text,
+                rejectionStage: pipeline.finalized.diagnostics?.rejectionStage,
+                degradationKinds: pipeline.finalized.diagnostics?.degradationKinds,
+                materialImprovementKinds: pipeline.finalized.diagnostics?.materialImprovementKinds,
+                sourceAlreadyValidForTarget: pipeline.finalized.diagnostics?.sourceAlreadyValidForTarget,
+              })}`,
+            ).toBe(false);
             expect(pipeline.finalized.countedAsSuccess, label).toBe(true);
             assertAllSourceFactsSurvive(source, pipeline.stateCv.experience[0].description, label);
             if (row.locale === 'sr') {

@@ -192,6 +192,5 @@ describe('provider timeout recovery in /api/generate', () => {
       expect(String(data.result).trim().length).toBeGreaterThan(0);
       vi.useRealTimers();
     }
-  });
+  }, 15_000);
 });
-

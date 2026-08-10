@@ -53,6 +53,12 @@ if (sourceCommitShort) {
 }
 
 const nextConfig: NextConfig = {
+  // Production builds type-check application/runtime sources. Test fixtures
+  // retain their independent Vitest contract and are intentionally excluded
+  // through tsconfig.build.json rather than suppressing application errors.
+  typescript: {
+    tsconfigPath: 'tsconfig.build.json',
+  },
   env: {
     NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED: compiled,
     NEXT_PUBLIC_SOURCE_COMMIT_SHORT: sourceCommitShort,

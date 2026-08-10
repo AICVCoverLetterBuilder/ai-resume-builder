@@ -417,6 +417,14 @@ export function resolveEnglishSummaryEntryDuties(options: {
   const live = (options.liveDescription || '').trim();
   const grounded = (options.groundedDescription || '').trim();
   const warehouseRole = englishRoleLooksWarehouse(role);
+  const liveEnglishDutyCount = splitEnglishDutyBullets(live)
+    .filter(bulletLooksEnglishAuthoritative).length;
+  const groundedEnglishDutyCount = splitEnglishDutyBullets(grounded)
+    .filter(bulletLooksEnglishAuthoritative).length;
+  // A validated cross-locale Experience apply makes the visible English bullets
+  // the target-locale Summary authority. A foreign canonical block remains the
+  // source ledger, but cannot be the surface contract for an English Summary.
+  if (liveEnglishDutyCount >= 2 && groundedEnglishDutyCount < 2) return live;
   if (warehouseRole) return grounded || live;
   const groundedWarehouse = extractGermanCurrentWarehouseDutyFacts({
     currentEntryDuties: grounded,
@@ -1607,7 +1615,10 @@ export function buildEnglishEntryOwnedSummary(options: {
     .join('\n');
   const entryFacts = extractEnglishEntryOwnedDutyFacts({
     entryDuties: dutiesText,
-    role: options.role || role,
+    // Use the resolved English warehouse label when a foreign-language role
+    // was recognized as warehouse-shaped. The extractor's role gate is
+    // intentionally English-only, while its fact extractor is multilingual.
+    role: warehouseRole ? role : (options.role || role),
     employer: company,
   });
   const dutyParts: string[] = [];
@@ -1615,7 +1626,13 @@ export function buildEnglishEntryOwnedSummary(options: {
     dutyParts.push('check incoming goods');
   }
   if (entryFacts.some((f) => f.factId === 'related_documentation_check')) {
-    dutyParts.push('verify related documentation');
+    const documentationFact = entryFacts.find((f) => f.factId === 'related_documentation_check');
+    dutyParts.push(
+      /(?:update[sd]?|maintain(?:s|ed)?).{0,48}(?:warehouse\s+records?|orderly)|warehouse\s+records?.{0,48}(?:orderly|maintain)/iu
+        .test(documentationFact?.sourceBullet || '')
+        ? 'verify related documentation, update warehouse records, and keep goods orderly'
+        : 'verify related documentation',
+    );
   }
   if (entryFacts.some((f) => f.factId === 'colleague_coordination_goods_preparation_movement')) {
     dutyParts.push(

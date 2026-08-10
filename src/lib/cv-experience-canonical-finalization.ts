@@ -631,6 +631,7 @@ export function decideSpanishExperienceFinalCandidate(options: {
   const DEFECT_FIX_KINDS = new Set<ExperienceMaterialImprovementKind>([
     'wrong_tense_fixed',
     'wrong_locale_fixed',
+    'perspective_error_fixed',
     'malformed_sentence_fixed',
     'missing_fact_restored',
     'missing_source_unit_restored',

@@ -59,7 +59,7 @@ export const ES_EXPERIENCE_LEXICON_RE = esWordRe(
     'comprueb(?:a|o|as|an)',
     'comprob(?:ó|aba|aron|ar|ando|ado)?',
     'verific(?:a|ó|aba|aron|ar|ando|ado)?',
-    'coordin(?:a|ó|aba|aron|ar|ando|ado)?',
+    'coordin(?:a|o|ó|aba|aron|ar|ando|ado)?',
     'colabor(?:a|ó|aba|aron|ar|ando|ado)?',
     'gestion(?:a|ó|aba|aron|ar|ando|ado)?',
     'prepar(?:a|ó|aba|aron|ar|ando|ado)?',
@@ -69,7 +69,7 @@ export const ES_EXPERIENCE_LEXICON_RE = esWordRe(
     'muev(?:e|o|en)',
     'mov(?:ió|ía|ieron|er|iendo)',
     'trabaj(?:a|ó|aba|aron|ar|ando|ado)?',
-    'actualiz(?:a|ó|aba|aron|ar|ando|ado)?',
+    'actualiz(?:a|o|ó|aba|aron|ar|ando|ado)?',
     'experiencia',
     'clientes?',
     'mercanc[ií]a(?:s)?',
@@ -180,7 +180,7 @@ export const SPANISH_PREDICATE_FAMILY_RES: Array<{
   {
     family: 'coordinate',
     groundingFamily: 'coordinate',
-    re: esWordRe('coordin(?:a|ó|aba|aron|ar|ando|ado)?|colabor(?:a|ó|aba|aron|ar|ando|ado)?'),
+    re: esWordRe('coordin(?:a|o|ó|aba|aron|ar|ando|ado)?|colabor(?:a|o|ó|aba|aron|ar|ando|ado)?'),
   },
   {
     family: 'check',

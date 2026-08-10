@@ -96,6 +96,16 @@ const DOCUMENT_RE = /(?:zugehörig\w*\s+(?:Dokumentation|Unterlagen|Dokumente|Be
  */
 const COORD_RE = /(?:Abstimmung|Koordination|abstimme|abstimm\w*).{0,80}(?:Kolleg|Vorbereitung|Bewegung|Transport)|(?:Kolleg\w*).{0,80}(?:Vorbereitung|Bewegung|Transport|Abstimmung|vorbereiten|bewegen|abstimme)|(?:coordin[aoó]|koordin)\w*.{0,100}(?:prepar|movim|mercanc|coleg|compa[nñ]er|colleague|Kolleg|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:compa[nñ]er\w*|colleague\w*|Kolleg\w*).{0,100}(?:prepar|movim|mercanc|Vorbereitung|Bewegung|Transport|goods|Waren)|(?:Vorbereitung\s+und\s+(?:Bewegung|Transport)\s+(?:von\s+)?Waren)|(?:Bewegung\s+der\s+Waren)|(?:Waren).{0,40}(?:Kolleg\w*).{0,40}(?:vorbereit|beweg|Transport|abstimm)|(?:Kolleg\w*).{0,40}(?:Waren).{0,40}(?:vorbereit|beweg|Transport|abstimm)|(?:vorbereiten\s+und\s+bewegen)|(?:تنسّق|نسّقت|ينسّق|تنسيق).{0,56}(?:إعداد|تجهيز|حركة|بضائع|زملاء)|(?:زملاء).{0,48}(?:إعداد|تجهيز|حركة|بضائع)|(?:إعداد|تجهيز).{0,40}(?:حركة|بضائع)|حركة\s*البضائع/iu;
 
+// Serbian/Croatian warehouse surfaces share the same canonical fact identities.
+// Keep these aliases separate from the large legacy regexes above so the
+// English cross-locale Summary path can classify its live entry-owned source.
+const SOUTH_SLAVIC_INCOMING_RE =
+  /(?:prover|provjer)\w*.{0,40}(?:pristigl|zaprimljen|primljen)\w*.{0,24}rob\w*/iu;
+const SOUTH_SLAVIC_DOCUMENT_RE =
+  /(?:prate[cć]\w*\s+dokument|skladi[sš]n\w*\s+evidenc)/iu;
+const SOUTH_SLAVIC_COORD_RE =
+  /(?:koordin)\w*.{0,100}(?:priprem|kret|premje[sš]t|rob|koleg)/iu;
+
 function splitDutyBullets(text: string): string[] {
   return (text || '')
     .split(/\n+|;\s+|(?<=[.!?])\s+(?=\S)/u)
@@ -178,8 +188,13 @@ export function extractGermanCurrentWarehouseDutyFacts(options: {
 
   const out: GermanCurrentDutyFact[] = [];
   for (const def of defs) {
-    const matchedBullet = bullets.find((b) => def.detect.test(b))
-      || (def.detect.test(corpus) ? corpus : '');
+    const localeAlias = def.id === 'incoming_goods_check'
+      ? SOUTH_SLAVIC_INCOMING_RE
+      : def.id === 'related_documentation_check'
+        ? SOUTH_SLAVIC_DOCUMENT_RE
+        : SOUTH_SLAVIC_COORD_RE;
+    const matchedBullet = bullets.find((b) => def.detect.test(b) || localeAlias.test(b))
+      || ((def.detect.test(corpus) || localeAlias.test(corpus)) ? corpus : '');
     if (!matchedBullet) continue;
     out.push({
       canonicalFactId: def.id,
@@ -192,7 +207,7 @@ export function extractGermanCurrentWarehouseDutyFacts(options: {
       localizedClauseHash: hashOpaque(def.dativeClause),
       requiredForSummary: true,
       dativeClause: def.dativeClause,
-      matchRes: def.matchRes,
+      matchRes: [...def.matchRes, localeAlias],
     });
   }
   return out;
@@ -224,11 +239,20 @@ export type AuthoritativeCurrentDutyParityResult = {
 export function listAuthoritativeCurrentWarehouseDutyBullets(
   currentEntryDuties?: string,
 ): string[] {
+  // A warehouse word in an otherwise occupation-agnostic entry (for example
+  // "internal processes in the warehouse") must not turn generic planning or
+  // collaboration bullets into authoritative Atlas-style warehouse facts.
+  // Preserve fail-closed parity once at least one concrete warehouse fact is
+  // classified; otherwise this dedicated validator is not applicable.
+  if (extractGermanCurrentWarehouseDutyFacts({ currentEntryDuties }).length === 0) return [];
   const bullets = splitDutyBullets(currentEntryDuties || '');
   const warehouseish = (b: string) => (
     INCOMING_RE.test(b)
     || DOCUMENT_RE.test(b)
     || COORD_RE.test(b)
+    || SOUTH_SLAVIC_INCOMING_RE.test(b)
+    || SOUTH_SLAVIC_DOCUMENT_RE.test(b)
+    || SOUTH_SLAVIC_COORD_RE.test(b)
     || /(?:mercanc|Waren|Wareneingang|goods|almac[eé]n|Lager|warehouse|documentaci|Dokumentation|Unterlagen|coordin|Kolleg|colleague|compa[nñ]er|preparaci|Vorbereitung|movim|Bewegung|Transport|Abstimmung|بضائع|وثائق|مستودع|زملاء|إعداد|تجهيز|حركة)/iu
       .test(b)
   );
@@ -267,22 +291,25 @@ export function analyzeCurrentDutyRequiredFactParity(options: {
   const unclassifiedHashes: string[] = [];
   for (const bullet of authoritativeBullets) {
     let kind: GermanCurrentDutyFactId | null = null;
-    if (COORD_RE.test(bullet) && !claimed.has('colleague_coordination_goods_preparation_movement')) {
+    const hasCoord = COORD_RE.test(bullet) || SOUTH_SLAVIC_COORD_RE.test(bullet);
+    const hasDocument = DOCUMENT_RE.test(bullet) || SOUTH_SLAVIC_DOCUMENT_RE.test(bullet);
+    const hasIncoming = INCOMING_RE.test(bullet) || SOUTH_SLAVIC_INCOMING_RE.test(bullet);
+    if (hasCoord && !claimed.has('colleague_coordination_goods_preparation_movement')) {
       // Check coordination before inbound: Spanish coordination bullets mention mercancías.
       kind = 'colleague_coordination_goods_preparation_movement';
     } else if (
-      DOCUMENT_RE.test(bullet)
-      && !INCOMING_RE.test(bullet)
+      hasDocument
+      && !hasIncoming
       && !claimed.has('related_documentation_check')
     ) {
       kind = 'related_documentation_check';
     } else if (
-      INCOMING_RE.test(bullet)
+      hasIncoming
       && !claimed.has('incoming_goods_check')
     ) {
       kind = 'incoming_goods_check';
     } else if (
-      DOCUMENT_RE.test(bullet)
+      hasDocument
       && !claimed.has('related_documentation_check')
     ) {
       kind = 'related_documentation_check';

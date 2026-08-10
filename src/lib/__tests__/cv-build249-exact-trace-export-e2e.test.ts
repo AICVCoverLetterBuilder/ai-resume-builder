@@ -178,7 +178,7 @@ describe('Build 249 exact diagnostic-trace export fix', () => {
     expect(coverage.missing).not.toContain('kitchen_collaboration');
   });
 
-  it('prepareExportReadyCv fails closed on the unsupported generated Summary without mutating source state', () => {
+  it('prepareExportReadyCv replaces the mixed-locale Summary with a grounded Hindi snapshot without mutating source state', () => {
     const raw = exactTraceFixture();
     const sourceBefore = JSON.stringify(raw);
     const usageBefore = localStorage.getItem('cvpro-ai-usage');
@@ -189,18 +189,26 @@ describe('Build 249 exact diagnostic-trace export fix', () => {
       gender: 'female',
       referenceDate: REF,
     });
-    expect(prepared).toMatchObject({
-      ok: false,
-      reason: 'summary_unsupported_domain_claims',
-      stage: 'validate_summary',
+    expect(prepared, JSON.stringify(prepared, null, 2)).toMatchObject({
+      ok: true,
       diagnostics: {
         selectedTemplateId: 'modern-minimal',
         requestedLocale: 'hi',
         experienceCount: 1,
-        stage: 'validate_summary',
+        summaryInitialValid: false,
+        summaryInitialReason: 'mixed_locale_summary',
+        summaryRecoverySource: 'deterministic_semantic_facts',
+        summaryRecoveryReason: 'valid',
+        summaryMaterialCoverageResult: 'complete',
+        stage: 'complete',
       },
     });
-    expect('cv' in prepared).toBe(false);
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) throw new Error(`${prepared.reason} @ ${prepared.stage}`);
+    expect(prepared.cv.contentLocale).toBe('hi');
+    expect(prepared.cv.summaryGeneratedLocale).toBe('hi');
+    expect(prepared.cv.summary).toMatch(/[\u0900-\u097F]/u);
+    expect(validateMaterialDutyCoverage(EN_SHELLS, prepared.cv.summary).missing).toEqual([]);
     expect(JSON.stringify(raw)).toBe(sourceBefore);
     expect(raw.summary).toBe(SUMMARY_EN);
     expect(raw.experience[0].description).toBe(EN_DISPLAY);
@@ -208,7 +216,7 @@ describe('Build 249 exact diagnostic-trace export fix', () => {
     expect(localStorage.getItem('cvpro-cvs')).toBe(persistedBefore);
   });
 
-  it('typed rejection prevents both PDF and DOCX rendering and preserves usage/persistence', () => {
+  it('the recovered snapshot is eligible for both PDF and DOCX without usage/persistence side effects', () => {
     const raw = exactTraceFixture();
     const sourceBefore = JSON.stringify(raw);
     const aiBefore = localStorage.getItem('cvpro-ai-usage');
@@ -219,22 +227,18 @@ describe('Build 249 exact diagnostic-trace export fix', () => {
       gender: 'female',
       referenceDate: REF,
     });
-    expect(prepared).toMatchObject({
-      ok: false,
-      reason: 'summary_unsupported_domain_claims',
-      stage: 'validate_summary',
-    });
-    expect(() => unwrapExportReadyCv(prepared)).toThrow(
-      'summary_unsupported_domain_claims @ validate_summary',
-    );
+    expect(prepared.ok, JSON.stringify(prepared, null, 2)).toBe(true);
+    const exportReadyCv = unwrapExportReadyCv(prepared);
+    expect(exportReadyCv.summary).toMatch(/[\u0900-\u097F]/u);
+    expect(validateMaterialDutyCoverage(EN_SHELLS, exportReadyCv.summary).missing).toEqual([]);
 
     const pdfTrace = buildAndStoreCvExportDiagnostic({
       format: 'pdf',
       locale: 'hi',
       rawCv: raw,
       prepared,
-      rendererReached: false,
-      blobProduced: false,
+      rendererReached: true,
+      blobProduced: true,
       androidSaveReached: false,
     });
     const docxTrace = buildAndStoreCvExportDiagnostic({
@@ -242,20 +246,22 @@ describe('Build 249 exact diagnostic-trace export fix', () => {
       locale: 'hi',
       rawCv: raw,
       prepared,
-      rendererReached: false,
-      blobProduced: false,
+      rendererReached: true,
+      blobProduced: true,
       androidSaveReached: false,
     });
 
-    expect(pdfTrace.ok).toBe(false);
-    expect(pdfTrace.rendererReached).toBe(false);
-    expect(pdfTrace.blobProduced).toBe(false);
-    expect(docxTrace.ok).toBe(false);
-    expect(docxTrace.rendererReached).toBe(false);
-    expect(docxTrace.blobProduced).toBe(false);
+    expect(pdfTrace.ok).toBe(true);
+    expect(pdfTrace.rendererReached).toBe(true);
+    expect(pdfTrace.blobProduced).toBe(true);
+    expect(docxTrace.ok).toBe(true);
+    expect(docxTrace.rendererReached).toBe(true);
+    expect(docxTrace.blobProduced).toBe(true);
     const validateStage = pdfTrace.stages.find((s) => s.stage === 'validate_summary');
+    const recoveryStage = pdfTrace.stages.find((s) => s.stage === 'recover_summary');
     expect(validateStage?.result).toBe('fail');
-    expect(validateStage?.reason).toBe('summary_unsupported_domain_claims');
+    expect(validateStage?.reason).toBe('mixed_locale_summary');
+    expect(recoveryStage?.result).toBe('ok');
     expect(blobs).toEqual([]);
     expect(URL.createObjectURL).not.toHaveBeenCalled();
     expect(JSON.stringify(raw)).toBe(sourceBefore);
@@ -263,7 +269,7 @@ describe('Build 249 exact diagnostic-trace export fix', () => {
     expect(localStorage.getItem('cvpro-cvs')).toBe(persistedBefore);
   });
 
-  it('50× cold exact-trace preparation deterministically fails closed with zero exports', () => {
+  it('50× cold exact-trace preparation deterministically produces the same safe Hindi recovery', () => {
     const blobs = mockDownload();
     const usageBefore = localStorage.getItem('cvpro-ai-usage');
     for (let i = 0; i < 50; i += 1) {
@@ -274,11 +280,14 @@ describe('Build 249 exact diagnostic-trace export fix', () => {
         gender: 'female',
         referenceDate: REF,
       });
-      expect(prepared, `run ${i} prepare`).toMatchObject({
-        ok: false,
-        reason: 'summary_unsupported_domain_claims',
-        stage: 'validate_summary',
-      });
+      expect(prepared.ok, `run ${i} prepare: ${JSON.stringify(prepared)}`).toBe(true);
+      if (!prepared.ok) throw new Error(`run ${i}: ${prepared.reason} @ ${prepared.stage}`);
+      expect(prepared.cv.contentLocale, `run ${i} locale`).toBe('hi');
+      expect(prepared.cv.summary, `run ${i} script`).toMatch(/[\u0900-\u097F]/u);
+      expect(
+        validateMaterialDutyCoverage(EN_SHELLS, prepared.cv.summary).missing,
+        `run ${i} duty coverage`,
+      ).toEqual([]);
       expect(JSON.stringify(raw), `run ${i} source`).toBe(sourceBefore);
     }
     expect(blobs).toEqual([]);

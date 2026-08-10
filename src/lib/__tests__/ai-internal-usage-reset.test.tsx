@@ -21,18 +21,24 @@ import {
 } from '@/lib/ai-usage-policy';
 import { computeInternalAiResetEnabledFromSourceFlags } from '@/lib/build-channel';
 import { CV_DRAFT_STORAGE_KEY, CL_DRAFT_STORAGE_KEY } from '@/lib/draft-storage';
+import { CvExportDiagnosticsModal as DefaultGateDiagnosticsModal } from '@/components/CvExportDiagnosticsControls';
 
 function setCompiledGate(value: 'true' | 'false' | undefined) {
   if (value === undefined) delete process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED;
   else process.env.NEXT_PUBLIC_INTERNAL_AI_RESET_ENABLED = value;
 }
 
-async function loadGateModules() {
+async function loadGatePolicyModules() {
   vi.resetModules();
   const buildChannel = await import('@/lib/build-channel');
   const policy = await import('@/lib/ai-usage-policy');
+  return { ...buildChannel, ...policy };
+}
+
+async function loadGateUiModules() {
+  const policyModules = await loadGatePolicyModules();
   const ui = await import('@/components/CvExportDiagnosticsControls');
-  return { ...buildChannel, ...policy, ...ui };
+  return { ...policyModules, ...ui };
 }
 
 function seedCapReached(now = Date.now()) {
@@ -82,19 +88,19 @@ describe('compile-time INTERNAL_AI_RESET_ENABLED (client-like reload)', () => {
 
   it('literal true → helper true', async () => {
     setCompiledGate('true');
-    const mod = await loadGateModules();
+    const mod = await loadGatePolicyModules();
     expect(mod.INTERNAL_AI_RESET_ENABLED).toBe(true);
     expect(mod.isInternalAiResetEnabled()).toBe(true);
   });
 
   it('literal false / absent → helper false', async () => {
     setCompiledGate('false');
-    let mod = await loadGateModules();
+    let mod = await loadGatePolicyModules();
     expect(mod.INTERNAL_AI_RESET_ENABLED).toBe(false);
     expect(mod.isInternalAiResetEnabled()).toBe(false);
 
     setCompiledGate(undefined);
-    mod = await loadGateModules();
+    mod = await loadGatePolicyModules();
     expect(mod.INTERNAL_AI_RESET_ENABLED).toBe(false);
   });
 });
@@ -124,7 +130,7 @@ describe('internal AI reset when compiled enabled', () => {
 
   it('reset UI exists with labels; confirmation; ledger cleared; CV/Pro survive', async () => {
     seedCapReached();
-    const mod = await loadGateModules();
+    const mod = await loadGateUiModules();
     expect(mod.getProAiUsageCount()).toBe(50);
     expect(mod.canUseProAiSafety(true)).toBe(false);
 
@@ -169,12 +175,15 @@ describe('internal AI reset when compiled enabled', () => {
 
   it('50 → reset 0 → next success 1; reset itself +0', async () => {
     seedCapReached();
-    const mod = await loadGateModules();
+    // This is a pure ledger contract. Importing the diagnostics React tree here
+    // made an otherwise synchronous assertion wait on a large cold module graph
+    // under full-suite worker contention and hit the 20 s timeout.
+    const mod = await loadGatePolicyModules();
     expect(mod.resetProAiTestUsageLedger().ok).toBe(true);
     expect(mod.getProAiUsageCount()).toBe(0);
     mod.recordProAiUserActionSuccess();
     expect(mod.getProAiUsageCount()).toBe(1);
-  }, 20_000);
+  });
 });
 
 describe('internal AI reset when compiled disabled', () => {
@@ -195,8 +204,12 @@ describe('internal AI reset when compiled disabled', () => {
   });
 
   it('reset UI absent; reset refused; ledger untouched', async () => {
-    const mod = await loadGateModules();
-    render(<mod.CvExportDiagnosticsModal open onClose={() => {}} />);
+    // The normal profile compiles this static module with the gate disabled.
+    // Re-import only the lightweight policy module for the refusal contract;
+    // a second reset/import of the full diagnostics graph is unnecessary and
+    // was timing-sensitive when this file ran inside a long serial worker.
+    const mod = await loadGatePolicyModules();
+    render(<DefaultGateDiagnosticsModal open onClose={() => {}} />);
     expect(screen.queryByTestId('internal-ai-usage-reset-panel')).toBeNull();
     expect(screen.queryByText('Build channel: internal')).toBeNull();
     expect(screen.queryByText(/Reset AI test usage/i)).toBeNull();

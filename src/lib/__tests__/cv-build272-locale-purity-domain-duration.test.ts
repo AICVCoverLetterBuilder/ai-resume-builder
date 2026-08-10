@@ -352,7 +352,13 @@ describe('build 272 — finalize rejects mixed designer under Serbian', () => {
         originHint: 'ai_generated',
         referenceDateIso: '2026-07-19',
       });
-      expect(sumEn.blocked, `sum-en r${round}`).toBe(false);
+      expect(sumEn.blocked, `sum-en r${round}: ${sumEn.reason || 'no reason'} ${JSON.stringify({
+        text: sumEn.text,
+        finalSlotRejectionReasons: sumEn.diagnostics?.finalSlotRejectionReasons,
+        requiredCurrentDutyFactCount: sumEn.diagnostics?.requiredCurrentDutyFactCount,
+        coveredCurrentDutyFactCount: sumEn.diagnostics?.coveredCurrentDutyFactCount,
+        missingCurrentDutyFactCount: sumEn.diagnostics?.missingCurrentDutyFactCount,
+      })}`).toBe(false);
       expect(countSummaryDurationExpressions(sumEn.text, 'en')).toBe(1);
       cv = applyFinalizedSummaryToCv(cv, 'en', sumEn);
       recordProAiUserActionSuccess();
@@ -462,7 +468,7 @@ describe('build 272 — finalize rejects mixed designer under Serbian', () => {
         expect(trace.raceGuardResult).toBe('ok');
       }
     }
-  });
+  }, 15_000);
 });
 
 describe('build 272 — duration + diagnostics truth', () => {

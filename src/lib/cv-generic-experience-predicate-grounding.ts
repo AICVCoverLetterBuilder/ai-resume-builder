@@ -11,7 +11,6 @@
 import { splitExperienceBullets } from './cv-canonical-facts';
 import {
   classifyExperienceActionFrame,
-  validateCrossLocaleSemanticCoverage,
 } from './cv-cross-locale-experience';
 import {
   extractSourceDutyUnits,
@@ -20,6 +19,7 @@ import {
 } from './cv-source-fact-identity';
 import {
   materialDutyKeysFromDescription,
+  validateMaterialDutyCoverage,
   validateDistinctExperienceBullets,
   validateNoExtraGeneratedDuties,
 } from './cv-material-duty-coverage';
@@ -164,10 +164,6 @@ export function scanGenericExperiencePredicates(
     };
   }
 
-  const semantic = validateCrossLocaleSemanticCoverage(
-    sourceDescription,
-    candidateDescription,
-  );
   const distinct = validateDistinctExperienceBullets(candidateDescription);
   const extras = validateNoExtraGeneratedDuties(
     sourceDescription,
@@ -179,6 +175,10 @@ export function scanGenericExperiencePredicates(
   // Cross-domain leakage: cooking sources must not accept design/warehouse shells.
   const srcKeys = materialDutyKeysFromDescription(sourceDescription || '');
   const candKeys = materialDutyKeysFromDescription(candidateDescription || '');
+  const materialCoverage = validateMaterialDutyCoverage(
+    sourceDescription || '',
+    candidateDescription || '',
+  );
   const sourceCooking = sourceIsCookingHospitalityWithoutWarehouseEvidence(
     sourceDescription || '',
   )
@@ -221,14 +221,17 @@ export function scanGenericExperiencePredicates(
   const countMismatch = candUnits.length !== sourceUnits.length;
   const coveredCount = coveredSi.length;
 
-  const ok = semantic.ok
-    && semantic.coveredCount === sourceUnits.length
-    && missing.length === 0
+  // This scanner already performs a stricter one-to-one action-frame match.
+  // Do not also require the older aggregate semantic matcher: it can collapse
+  // two warehouse duties into one family even when every source unit has a
+  // distinct, material-preserving target bullet.
+  const ok = missing.length === 0
     && addedHashes.length === 0
     && !merged
     && !splitOrDup
     && !countMismatch
     && !crossDomainLeakage
+    && materialCoverage.valid
     && coveredCount === sourceUnits.length
     && candUnits.length === sourceUnits.length;
 
@@ -236,13 +239,15 @@ export function scanGenericExperiencePredicates(
   if (!ok) {
     if (crossDomainLeakage) {
       reason = 'generic_experience_predicate_cross_domain_leakage';
+    } else if (!materialCoverage.valid) {
+      reason = 'source_unit_predicate_coverage_failed';
     } else if (merged || (countMismatch && candUnits.length < sourceUnits.length)) {
       reason = 'generic_experience_predicate_merged_duties';
     } else if (splitOrDup) {
       reason = 'generic_experience_predicate_split_or_duplicate';
     } else if (addedHashes.length > 0 || candUnits.length > sourceUnits.length) {
       reason = 'generic_experience_predicate_added_action';
-    } else if (missing.length > 0 || !semantic.ok) {
+    } else if (missing.length > 0) {
       reason = 'source_unit_predicate_coverage_failed';
     } else {
       reason = 'source_unit_predicate_coverage_failed';

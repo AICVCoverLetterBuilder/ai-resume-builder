@@ -256,10 +256,8 @@ describe('build 273 empty Hindi graphic-designer generation', () => {
           });
           expect(out.trim(), `${locale}/${position}`).toBeTruthy();
           expect(splitExperienceBullets(out).length, `${locale}/${position}`).toBe(3);
-          expect(
-            validateExperienceGenerationOutput(out, { locale, position, isPresent }).ok,
-            `${locale}/${position} gen`,
-          ).toBe(true);
+          const validation = validateExperienceGenerationOutput(out, { locale, position, isPresent });
+          expect(validation.ok, `${locale}/${position} gen: ${validation.reason || 'no reason'} ${out}`).toBe(true);
           if (locale === 'hi') {
             expect(out).not.toMatch(/[A-Za-zÀ-ÖØ-öø-ÿŠšŽžĆćČčĐđ]{4,}/);
             expect(validateAiUnitLocalePurity(out, 'hi', {

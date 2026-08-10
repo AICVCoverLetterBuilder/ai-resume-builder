@@ -309,7 +309,7 @@ type SpanishPredicateLemma = {
 
 /** Unicode-safe bounds — ASCII `\b` fails after accented preterite (Revisó). */
 const VERIFY_LEMMA_RE = esWordRe(
-  'revis(?:a|ó|aba|aron|ar|ando|ado)?|comprueb(?:a|o|an|as)|comprob(?:ó|aba|aron|ar|ando|ado)?|verific(?:a|ó|aba|aron|ar|ando|ado)?|inspeccion(?:a|ó|aba|aron|ar|ando|ado)?|examin(?:a|ó|aba|aron|ar|ando|ado)?|control(?:a|ó|aba|aron|ar|ando|ado)?',
+  'revis(?:a|o|ó|aba|aron|ar|ando|ado)?|comprueb(?:a|o|an|as)|comprob(?:ó|aba|aron|ar|ando|ado)?|verific(?:a|o|ó|aba|aron|ar|ando|ado)?|inspeccion(?:a|o|ó|aba|aron|ar|ando|ado)?|examin(?:a|o|ó|aba|aron|ar|ando|ado)?|control(?:a|o|ó|aba|aron|ar|ando|ado)?',
 );
 const PREPARE_LEMMA_RE = esWordRe(
   'prepar(?:a|ó|aba|aron|ar|ando|ado)?|dispon(?:e|ía|er|iendo)',
@@ -318,7 +318,7 @@ const MOVE_LEMMA_RE = esWordRe(
   'muev(?:e|o|en)|mov(?:ió|ía|ieron|er|iendo|ido)?|traslad(?:a|ó|aba|aron|ar|ando|ado)?|desplaz(?:a|ó|aba|aron|ar|ando|ado)?',
 );
 const COORDINATE_LEMMA_RE = esWordRe(
-  'coordin(?:a|ó|aba|aron|ar|ando|ado)?|colabor(?:a|ó|aba|aron|ar|ando|ado)?',
+  'coordin(?:a|o|ó|aba|aron|ar|ando|ado)?|colabor(?:a|o|ó|aba|aron|ar|ando|ado)?',
 );
 const CREATE_LEMMA_RE = esWordRe('cre(?:a|ó|aba|aron|ar|ando|ado)?');
 const ADAPT_LEMMA_RE = esWordRe('adapt(?:a|ó|aba|aron|ar|ando|ado)?');
@@ -327,7 +327,7 @@ const MANAGE_DOCS_LEMMA_RE = esWordRe(
 );
 const ARCHIVE_LEMMA_RE = esWordRe('archiv(?:a|ó|aba|aron|ar|ando|ado)?');
 const REGISTER_LEMMA_RE = esWordRe(
-  'registr(?:a|ó|aba|aron|ar|ando|ado)?|actualiz(?:a|ó|aba|aron|ar|ando|ado)?\\s+(?:los\\s+|las\\s+|el\\s+|la\\s+)?registros?',
+  'registr(?:a|o|ó|aba|aron|ar|ando|ado)?|actualiz(?:a|o|ó|aba|aron|ar|ando|ado)?\\s+(?:los\\s+|las\\s+|el\\s+|la\\s+)?registros?',
 );
 const REPORT_LEMMA_RE = esWordRe(
   '(?:prepar|elabor)(?:a|ó|aba|aron|ar|ando|ado)?\\s+(?:informes?|reportes?)',

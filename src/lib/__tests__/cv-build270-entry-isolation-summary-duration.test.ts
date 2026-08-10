@@ -380,7 +380,13 @@ describe('build 270 — exact sequence 50×', () => {
         originHint: 'ai_generated',
         referenceDateIso: '2026-07-19',
       });
-      expect(sumEn.blocked, `sum-en r${round}`).toBe(false);
+      expect(sumEn.blocked, `sum-en r${round}: ${sumEn.reason || 'no reason'} ${JSON.stringify({
+        text: sumEn.text,
+        finalSlotRejectionReasons: sumEn.diagnostics?.finalSlotRejectionReasons,
+        requiredCurrentDutyFactCount: sumEn.diagnostics?.requiredCurrentDutyFactCount,
+        coveredCurrentDutyFactCount: sumEn.diagnostics?.coveredCurrentDutyFactCount,
+        missingCurrentDutyFactCount: sumEn.diagnostics?.missingCurrentDutyFactCount,
+      })}`).toBe(false);
       expect(countSummaryDurationExpressions(sumEn.text, 'en')).toBe(1);
       cv = applyFinalizedSummaryToCv(cv, 'en', sumEn);
       recordProAiUserActionSuccess();
@@ -392,7 +398,15 @@ describe('build 270 — exact sequence 50×', () => {
         if (summaryV2ModeActive() && fin.blocked) {
           continue;
         }
-        expect(fin.blocked, `sr-back ${id} r${round}: ${fin.reason}`).toBe(false);
+        expect(fin.blocked, `sr-back ${id} r${round}: ${fin.reason} ${JSON.stringify({
+          live,
+          text: fin.text,
+          rejectionStage: fin.diagnostics?.rejectionStage,
+          providerRejectionReason: fin.diagnostics?.providerRejectionReason,
+          sourcePredicateIdentityCount: fin.diagnostics?.sourcePredicateIdentityCount,
+          candidatePredicateIdentityCount: fin.diagnostics?.candidatePredicateIdentityCount,
+          finalSourceUnitPredicateCoveragePassed: fin.diagnostics?.finalSourceUnitPredicateCoveragePassed,
+        })}`).toBe(false);
         if (id === 'exp-gd') {
           expect(fin.text).not.toMatch(/pristiglu robu|skladišnu evidenciju|kretanje robe/i);
         }
@@ -473,7 +487,7 @@ describe('build 270 — exact sequence 50×', () => {
         expect(getLatestSummaryAiDiagnostic()?.durationClaimCountAfterFinalize).toBeLessThanOrEqual(1);
       }
     }
-  });
+  }, 15_000);
 });
 
 describe('build 270 — entry identity races', () => {

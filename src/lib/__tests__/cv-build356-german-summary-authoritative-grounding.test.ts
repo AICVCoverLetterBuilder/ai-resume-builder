@@ -202,7 +202,7 @@ describe('AAB-356 German authoritative grounding', () => {
       originHint: 'ai_repaired',
     });
     const d = fin.diagnostics || {};
-    expect(fin.blocked).toBe(false);
+    expect(fin.blocked, `${fin.reason}: ${JSON.stringify(fin.diagnostics)}`).toBe(false);
     expect(fin.countedAsSuccess).toBe(true);
     expect(d.deterministicCandidatePresent).toBe(true);
     if (!summaryV2ModeActive()) {

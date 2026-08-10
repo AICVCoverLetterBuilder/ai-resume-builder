@@ -65,8 +65,8 @@ const DUTY_RULES: DutyRule[] = [
   },
   {
     key: 'kitchen_collaboration',
-    source: /sara[dđ]\w*.{0,40}(kuhinj|kitchen|tim)|kuhinjsk\w*\s+tim|kitchen\s+team|kolegama?\s+iz\s+kuhinj|रसोई\s*टीम|kitchen\s+colleagues/iu,
-    localized: /(kitchen\s+(?:team|colleagues)|kuhinj|रसोई|सहयोग|समन्वय|küchenkolleg|Küchenteam|compañeros de cocina|equipo de cocina|collègues de cuisine|équipe de cuisine|colleghi di cucina|team di cucina|زملاء المطبخ|فريق المطبخ|кухонн|colegas de cozinha|equipe da cozinha|厨房|キッチン(?:チーム)?|collaborat|coordinat|Zusammenarbeit|colaboraci[oó]n|sara[dđ]|surađ)/iu,
+    source: /sara[dđ]\w*.{0,48}(kuhinj|kitchen)|kuhinjsk\w*\s+tim|kitchen\s+team|kolegama?\s+iz\s+kuhinj|रसोई\s*टीम|kitchen\s+colleagues/iu,
+    localized: /(kitchen\s+(?:team|colleagues)|kuhinj|रसोई|सहयोग|समन्वय|küchenkolleg|Küchenteam|compañeros de cocina|equipo de cocina|collègues de cuisine|équipe de cuisine|colleghi di cucina|team di cucina|زملاء المطبخ|فريق المطبخ|кухонн|команд[\p{L}-]*\s+кухн|colegas de cozinha|equipe da cozinha|厨房|キッチン(?:チーム)?|collaborat|coordinat|Zusammenarbeit|colaboraci[oó]n|sara[dđ]|surađ)/iu,
   },
   {
     key: 'logistics_transport',

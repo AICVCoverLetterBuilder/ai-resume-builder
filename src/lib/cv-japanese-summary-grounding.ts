@@ -598,8 +598,7 @@ export function analyzeJapaneseSummaryEmploymentQuality(
     currentEntryDuties: source,
   });
   const requireWarehouseCoverage = canonicalWarehouseFacts.length >= 3
-    || sourceWh.length >= 2
-    || roleLooksWarehouse;
+    || sourceWh.length >= 2;
 
   const hasGeneric = GENERICIZED_JA.test(text);
   const genericizedMaterialFactCount = hasGeneric && currentRoleConcreteFactCoverage < 2
@@ -1068,12 +1067,21 @@ export function buildJapaneseEntryOwnedSummary(options: {
           'キッチンチームとの協力',
         ];
       } else {
-        dutyBits = options.dutyFacts
-          .map((f) => (f.sourceText || f.value || '').replace(/[。.;]+$/u, '').trim())
-          .filter(Boolean)
-          .filter((s) => /[\u3040-\u30FF\u3400-\u9FFF]/.test(s))
-          .filter((s) => !/\b(?:tenho|atualmente|dispongo|ich|у\s+меня|работаю)\b/iu.test(s))
-          .slice(0, 3);
+        const currentMaterialKeys = new Set(classifyMaterialDutyKeys(currentDutiesCorpus));
+        const generalBits = [
+          currentMaterialKeys.has('process_internal') ? '社内プロセスの開発と実施' : '',
+          currentMaterialKeys.has('team_collaboration') ? '部門横断チームとの連携' : '',
+          currentMaterialKeys.has('data_analysis') ? '業務データの分析' : '',
+          currentMaterialKeys.has('reporting') ? '経営陣向け報告書の作成' : '',
+        ].filter(Boolean);
+        dutyBits = generalBits.length
+          ? generalBits
+          : options.dutyFacts
+            .map((f) => (f.sourceText || f.value || '').replace(/[。.;]+$/u, '').trim())
+            .filter(Boolean)
+            .filter((s) => /[\u3040-\u30FF\u3400-\u9FFF]/.test(s))
+            .filter((s) => !/\b(?:tenho|atualmente|dispongo|ich|у\s+меня|работаю)\b/iu.test(s))
+            .slice(0, 3);
       }
       const dutyTail = dutyBits.length ? `、${dutyBits.join('、')}を行っています` : 'として勤務しています';
       currentSentence = company
@@ -1115,13 +1123,20 @@ export function buildJapaneseEntryOwnedSummary(options: {
     }
   }
 
-  return [durationSentence, currentSentence, priorSentence]
+  let combined = [durationSentence, currentSentence, priorSentence]
     .filter(Boolean)
     .map((s) => s.replace(/\s+/g, ' ').trim())
     .map((s) => (s.endsWith('。') ? s : `${s}。`))
     .filter(Boolean)
-    .join('')
+    .join('');
+  // Japanese prose is compacted, but spaces inside exact Latin employer names
+  // are authoritative entity content and must survive the compaction pass.
+  for (const entity of [company, priorEmployer].filter((value) => /\s/u.test(value))) {
+    combined = combined.split(entity).join(entity.replace(/\s/gu, '\uE000'));
+  }
+  return combined
     .replace(/\s+/g, '')
+    .replace(/\uE000/gu, ' ')
     .replace(/。+/gu, '。')
     .trim();
 }

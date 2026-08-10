@@ -12,6 +12,63 @@ import {
   resolveLatestCvExportDiagnosticFormat,
 } from '@/lib/cv-export-diagnostics';
 
+function normalizeSourceLineEndings(source: string): string {
+  return source.replace(/\r\n/gu, '\n');
+}
+
+function lineEndingFixtures(source: string): [string, string] {
+  const lf = normalizeSourceLineEndings(source);
+  return [lf, lf.replace(/\n/gu, '\r\n')];
+}
+
+function expectTransactionalSummaryAuthority(
+  pageSource: string,
+  helperSource: string,
+): void {
+  const page = normalizeSourceLineEndings(pageSource);
+  const helper = normalizeSourceLineEndings(helperSource);
+
+  expect(page).toContain(
+    'summary-cvref-single-writer-411-v1',
+  );
+
+  expect(page).toContain(
+    'syncCvRefFromReactState({',
+  );
+
+  expect(page).not.toMatch(
+    /useEffect\(\(\) => \{\s*cvRef\.current = cv;\s*\}, \[cv\]\);/u,
+  );
+
+  expect(page).not.toContain(
+    'hashSummaryTextForApply(cvRef.current.summary) === ownership.authoritativeSummaryHash',
+  );
+
+  expect(helper).toContain(
+    'summary-cvref-react-sync-411-v1',
+  );
+
+  expect(helper).toContain(
+    'authoritativeSummaryHash',
+  );
+
+  expect(helper).toContain(
+    'options.currentSummaryHash === authoritativeHash',
+  );
+
+  expect(helper).toContain(
+    'options.nextSummaryHash !== authoritativeHash',
+  );
+
+  expect(helper).toContain(
+    "reason:\n        'authoritative_summary_hash_mismatch'",
+  );
+
+  expect(helper).toContain(
+    'options.cvRef.current = options.nextCv',
+  );
+}
+
 const SHORTER_SUMMARY =
   'Tengo unos tres años y medio de experiencia. Actualmente soy Coordinador de servicio de bicicletas eléctricas y recepción de clientes en RadWerk, donde coordino las citas de mantenimiento de bicicletas eléctricas y reviso las bicicletas entrantes y documento los problemas técnicos y explico a los clientes los pasos de reparación necesarios. Antes fui Empleado de recepción de huéspedes y gestión de reservas en StadtHotel, donde recibí a los huéspedes en la recepción y gestioné las reservas y los cambios necesarios y atendí consultas por teléfono y correo electrónico.';
 
@@ -190,55 +247,25 @@ describe(
 
 describe('AAB-411 device-equivalent Summary ownership regression', () => {
   it('keeps the transactional Summary authoritative through the shared cvRef sync boundary', () => {
-    const page = readFileSync(
+    const pageSource = readFileSync(
       'src/app/cv-builder/page.tsx',
       'utf8',
     );
 
-    const helper = readFileSync(
+    const helperSource = readFileSync(
       'src/lib/cv-summary-cvref-react-sync.ts',
       'utf8',
     );
 
-    expect(page).toContain(
-      'summary-cvref-single-writer-411-v1',
-    );
+    const pageFixtures = lineEndingFixtures(pageSource);
+    const helperFixtures = lineEndingFixtures(helperSource);
 
-    expect(page).toContain(
-      'syncCvRefFromReactState({',
-    );
-
-    expect(page).not.toMatch(
-      /useEffect\(\(\) => \{\s*cvRef\.current = cv;\s*\}, \[cv\]\);/u,
-    );
-
-    expect(page).not.toContain(
-      'hashSummaryTextForApply(cvRef.current.summary) === ownership.authoritativeSummaryHash',
-    );
-
-    expect(helper).toContain(
-      'summary-cvref-react-sync-411-v1',
-    );
-
-    expect(helper).toContain(
-      'authoritativeSummaryHash',
-    );
-
-    expect(helper).toContain(
-      'options.currentSummaryHash === authoritativeHash',
-    );
-
-    expect(helper).toContain(
-      'options.nextSummaryHash !== authoritativeHash',
-    );
-
-    expect(helper).toContain(
-      "reason:\n        'authoritative_summary_hash_mismatch'",
-    );
-
-    expect(helper).toContain(
-      'options.cvRef.current = options.nextCv',
-    );
+    for (const index of [0, 1] as const) {
+      expectTransactionalSummaryAuthority(
+        pageFixtures[index],
+        helperFixtures[index],
+      );
+    }
   });
 
   it('blocks the exact stale 63-char AAB-410 Summary from Spanish stale-metadata rebound', () => {

@@ -58,7 +58,7 @@ const WAREHOUSE_SUMMARY_KEYS = new Set([
 const APPROVED_LATIN_ISLANDS =
   /\b(?:Atlas|Rewitu|REST|SQL|API|Python|Agile|Scrum|January|February|March|April|May|June|July|August|September|October|November|December)\b/gi;
 
-const REQUIRED_HR_SLOTS = ['current_intro', 'current_duty', 'prior_role'] as const;
+const REQUIRED_HR_CURRENT_SLOTS = ['current_intro', 'current_duty'] as const;
 
 const CROATIAN_MONTHS: Record<string, string> = {
   '01': 'siječnja',
@@ -472,7 +472,12 @@ export function analyzeCroatianSummaryEmploymentQuality(
     designInCurrentDuty && designInPrior && requireWarehouseCoverage && !currentLooksDesign
   ) ? 1 : 0;
 
-  const sourceHasDesign = DESIGN_FACT_CUE_HR.test(priorEntryDuties || options.sourceDuties || '');
+  // The optional aggregate source corpus also contains the current entry. It
+  // cannot establish ownership of a prior design role: doing so raises the
+  // expected topology from two current-entry units to three and rejects a
+  // valid one-entry Summary. Prior-role requirements must come exclusively
+  // from the selected prior Experience entry.
+  const sourceHasDesign = DESIGN_FACT_CUE_HR.test(priorEntryDuties);
   const priorSentence = sentences.find((_, i) => finalUnitRoleSlots[i] === 'prior_role') || '';
   const designFamilies = scoreCroatianPriorDesignFamilies(priorSentence || text);
   const unsupportedClaimCount = (hasCjk ? 1 : 0) + (hasCyr ? 1 : 0)
@@ -506,9 +511,13 @@ export function analyzeCroatianSummaryEmploymentQuality(
     || (durationClaimAnywhere && !durationInIntro);
 
   const hasGenericSkillsUnit = finalUnitRoleSlots.includes('skills');
-  const structureOk = unitCount === 3
-    && finalUnitRoleSlots.length === 3
-    && REQUIRED_HR_SLOTS.every((slot, i) => finalUnitRoleSlots[i] === slot);
+  const requiredSlots = sourceHasDesign
+    ? [...REQUIRED_HR_CURRENT_SLOTS, 'prior_role'] as const
+    : REQUIRED_HR_CURRENT_SLOTS;
+  const expectedUnitCount = requiredSlots.length;
+  const structureOk = unitCount === expectedUnitCount
+    && finalUnitRoleSlots.length === expectedUnitCount
+    && requiredSlots.every((slot, i) => finalUnitRoleSlots[i] === slot);
 
   const currentDutyMissing = !finalUnitRoleSlots.includes('current_duty');
   const priorMissing = sourceHasDesign && !finalUnitRoleSlots.includes('prior_role');
@@ -520,7 +529,7 @@ export function analyzeCroatianSummaryEmploymentQuality(
     typedRejectionReason = 'croatian_summary_foreign_script';
   } else if (localeEvidence.serbianLeakageDetected) {
     typedRejectionReason = 'croatian_summary_serbian_leakage';
-  } else if (unitCount !== 3) {
+  } else if (unitCount !== expectedUnitCount) {
     typedRejectionReason = 'croatian_summary_unit_count_mismatch';
   } else if (!structureOk) {
     typedRejectionReason = 'croatian_summary_role_slot_mismatch';
@@ -793,6 +802,9 @@ export function buildCroatianEntryOwnedSummary(options: {
     croatianWarehouseSummaryFragment('warehouse_movement'),
   ].filter((frag) => whFrags.includes(frag));
   const dutyFrags = preferred.length >= 2 ? preferred : whFrags.slice(0, 3);
+  const currentMaterialKeys = new Set(
+    options.dutyFacts.flatMap((fact) => classifyMaterialDutyKeys(fact.sourceText || fact.value)),
+  );
   let dutySentence = '';
   if (dutyFrags.length >= 2) {
     dutySentence = `Ima iskustvo u ${dutyFrags[0]}, ${dutyFrags[1]}${dutyFrags[2] ? ` te ${dutyFrags[2]}` : ''}.`;
@@ -803,6 +815,24 @@ export function buildCroatianEntryOwnedSummary(options: {
     || /skladišt|warehouse|osoba\s+s\s+iskustvom\s+u\s+skladišn/i.test(role)
   ) {
     dutySentence = 'Ima iskustvo u provjeri zaprimljene robe i prateće dokumentacije, ažuriranju skladišne evidencije, održavanju urednog skladišta te koordinaciji pripreme i premještanja robe s kolegama.';
+  } else if ([...currentMaterialKeys].some((key) =>
+    key === 'food_prep' || key === 'hygiene_workplace' || key === 'kitchen_collaboration')) {
+    const cookingFragments = [
+      currentMaterialKeys.has('food_prep') ? 'pripremi jela prema standardima restorana' : '',
+      currentMaterialKeys.has('hygiene_workplace') ? 'održavanju higijene radnog prostora' : '',
+      currentMaterialKeys.has('kitchen_collaboration') ? 'suradnji s kuhinjskim timom' : '',
+    ].filter(Boolean);
+    dutySentence = `Ima iskustvo u ${cookingFragments.join(', ').replace(/, ([^,]*)$/u, ' i $1')}.`;
+  } else {
+    const generalFragments = [
+      currentMaterialKeys.has('process_internal') ? 'razvoju i provedbi internih procesa' : '',
+      currentMaterialKeys.has('team_collaboration') ? 'suradnji s međufunkcionalnim timovima' : '',
+      currentMaterialKeys.has('data_analysis') ? 'analizi poslovnih podataka' : '',
+      currentMaterialKeys.has('reporting') ? 'pripremi izvješća za rukovodstvo' : '',
+    ].filter(Boolean);
+    if (generalFragments.length) {
+      dutySentence = `Ima iskustvo u ${generalFragments.join(', ').replace(/, ([^,]*)$/u, ' i $1')}.`;
+    }
   }
 
   const priorRole = (options.priorRole || '').trim();

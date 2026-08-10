@@ -717,6 +717,16 @@ function dutySupportedByCanonical(matched: string, corpus: string): boolean {
   ) {
     return true;
   }
+  // Cross-locale document vocabulary is the same grounded duty, not an
+  // invented claim (for example SR `dokumentaciju` -> EN `documentation`).
+  // Keep this concept-bound: a bare documentation claim still fails when the
+  // authoritative duty corpus has no document/record evidence.
+  if (
+    /document|documentation|records?/iu.test(token)
+    && /document|dokument|evidenc|records?|registros?|unterlagen|aufzeichnungen|belege|документ|запис|दस्तावे|وثائق|سجلات|書類|記録/iu.test(corpus)
+  ) {
+    return true;
+  }
   // Allow short stem overlap when the source already mentions the concept.
   const stem = token.slice(0, Math.min(6, token.length));
   return stem.length >= 4 && corpus.includes(stem);

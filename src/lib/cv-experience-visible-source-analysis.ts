@@ -19,6 +19,7 @@ import {
   SPANISH_EXPERIENCE_TENSE_EVIDENCE_314_REVISION,
 } from './cv-spanish-experience-morphology';
 import { validateSpanishExperienceSurfaceForm } from './cv-experience-canonical-finalization';
+import { detectExperiencePersonMode } from './cv-experience-perspective';
 
 export const EXPERIENCE_SOURCE_DEFECT_FIRST_DECISION_315_REVISION =
   'experience-source-defect-first-decision-315-v1' as const;
@@ -189,6 +190,9 @@ export function analyzeExperienceVisibleSource(options: {
   const hashes = units.map((u) => fingerprintText(u.trim()));
   const uniqueHashes = new Set(hashes);
   const duplicateUnitCount = Math.max(0, hashes.length - uniqueHashes.size);
+  const perspectiveMismatchCount = detectExperiencePersonMode(visible, 'es') === 'first_singular'
+    ? 1
+    : 0;
 
   const kinds: ExperienceCorrectableDefectKind[] = [];
   if (localeMismatchCount > 0) kinds.push('wrong_locale');
@@ -200,11 +204,14 @@ export function analyzeExperienceVisibleSource(options: {
   if (incompleteUnitCount > 0) kinds.push('incomplete_unit');
   if (visScan.count > 0) kinds.push('unsupported_visible_claim');
   if (duplicateUnitCount > 0) kinds.push('duplicate_unit');
+  if (perspectiveMismatchCount > 0) kinds.push('perspective_mismatch');
 
   const uniqueKinds = [...new Set(kinds)];
   const primary = uniqueKinds.includes('wrong_tense')
     ? 'wrong_tense'
-    : (uniqueKinds[0] || null);
+    : (uniqueKinds.includes('perspective_mismatch')
+      ? 'perspective_mismatch'
+      : (uniqueKinds[0] || null));
 
   return {
     revision: EXPERIENCE_SOURCE_DEFECT_FIRST_DECISION_315_REVISION,
@@ -231,7 +238,7 @@ export function analyzeExperienceVisibleSource(options: {
     unsupportedVisibleClaimKinds: [...visScan.kinds],
     unsupportedVisibleClaimCount: visScan.count,
     missingRequiredSourceUnitCount: 0,
-    perspectiveMismatchCount: 0,
+    perspectiveMismatchCount,
     correctableDefectKinds: uniqueKinds,
     correctableDefectCount: uniqueKinds.length,
     sourceAlreadyValidForTarget: uniqueKinds.length === 0,

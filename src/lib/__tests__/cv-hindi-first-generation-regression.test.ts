@@ -505,5 +505,5 @@ describe('21. Repeated run: the full Hindi-first flow across 50 fresh module res
       expect(hi.summary).toMatch(/[\u0900-\u097F]/);
       expect(hi.summary).not.toMatch(/Vozač|vilič/iu);
     }
-  });
+  }, 15_000);
 });

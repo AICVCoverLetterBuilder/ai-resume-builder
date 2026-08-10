@@ -16,6 +16,55 @@ import {
   terminalizeAiDiagnosticSession,
 } from '@/lib/cv-ai-diagnostics-terminalize';
 
+function normalizeSourceLineEndings(source: string): string {
+  return source.replace(/\r\n/gu, '\n');
+}
+
+function expectProductionTerminalization(source: string): void {
+  const page = normalizeSourceLineEndings(source);
+
+  const generateStart =
+    page.indexOf('const handleGenSummary = async');
+  const experienceStart =
+    page.indexOf('const handleGenBullets = async');
+  const rewriteStart =
+    page.indexOf('const handleRewrite = async');
+  const rewriteEnd =
+    page.indexOf('const handleAnalyzeJob', rewriteStart);
+
+  expect(generateStart).toBeGreaterThan(-1);
+  expect(experienceStart).toBeGreaterThan(generateStart);
+  expect(rewriteStart).toBeGreaterThan(experienceStart);
+  expect(rewriteEnd).toBeGreaterThan(rewriteStart);
+
+  const generate =
+    page.slice(generateStart, experienceStart);
+  const experience =
+    page.slice(experienceStart, rewriteStart);
+  const rewrite =
+    page.slice(rewriteStart, rewriteEnd);
+
+  expect(generate).toContain(
+    '} finally {\n      await terminalizeAiDiagnosticSession(summaryDiag);',
+  );
+
+  expect(experience).toContain(
+    '} finally {\n      await terminalizeAiDiagnosticSession(diagSession);',
+  );
+
+  expect(rewrite).toContain(
+    '} finally {\n      await terminalizeAiDiagnosticSession(summaryDiag);',
+  );
+
+  expect(
+    rewrite.indexOf(
+      'await terminalizeAiDiagnosticSession(summaryDiag);',
+    ),
+  ).toBeLessThan(
+    rewrite.indexOf('setRewritingStyle(null);'),
+  );
+}
+
 type RewriteStyle = 'shorter' | 'stronger' | 'professional';
 
 function session(style: RewriteStyle, requestId: string) {
@@ -121,51 +170,15 @@ describe('AAB-412 terminal AI diagnostics lifecycle', () => {
   );
 
   it('production page terminalizes Generate, Experience and Rewrite from finally', () => {
-    const page = readFileSync(
+    const source = readFileSync(
       'src/app/cv-builder/page.tsx',
       'utf8',
     );
 
-    const generateStart =
-      page.indexOf('const handleGenSummary = async');
-    const experienceStart =
-      page.indexOf('const handleGenBullets = async');
-    const rewriteStart =
-      page.indexOf('const handleRewrite = async');
-    const rewriteEnd =
-      page.indexOf('const handleAnalyzeJob', rewriteStart);
+    const lf = normalizeSourceLineEndings(source);
 
-    expect(generateStart).toBeGreaterThan(-1);
-    expect(experienceStart).toBeGreaterThan(generateStart);
-    expect(rewriteStart).toBeGreaterThan(experienceStart);
-    expect(rewriteEnd).toBeGreaterThan(rewriteStart);
-
-    const generate =
-      page.slice(generateStart, experienceStart);
-    const experience =
-      page.slice(experienceStart, rewriteStart);
-    const rewrite =
-      page.slice(rewriteStart, rewriteEnd);
-
-    expect(generate).toContain(
-      '} finally {\n      await terminalizeAiDiagnosticSession(summaryDiag);',
-    );
-
-    expect(experience).toContain(
-      '} finally {\n      await terminalizeAiDiagnosticSession(diagSession);',
-    );
-
-    expect(rewrite).toContain(
-      '} finally {\n      await terminalizeAiDiagnosticSession(summaryDiag);',
-    );
-
-    expect(
-      rewrite.indexOf(
-        'await terminalizeAiDiagnosticSession(summaryDiag);',
-      ),
-    ).toBeLessThan(
-      rewrite.indexOf('setRewritingStyle(null);'),
-    );
+    expectProductionTerminalization(lf);
+    expectProductionTerminalization(lf.replace(/\n/gu, '\r\n'));
   });
 
   it('publishes the permanent lifecycle revision marker', () => {

@@ -467,7 +467,11 @@ describe('build 269 — Serbian → English cross-locale', () => {
           industry: 'general',
           level: 'mid',
         });
-        expect(prepared.ok).toBe(true);
+        expect(
+          prepared.ok,
+          prepared.ok ? undefined : `${prepared.reason} @ ${prepared.stage}: ${JSON.stringify(prepared.diagnostics)}`,
+        )
+          .toBe(true);
         if (prepared.ok) {
           const before = getProAiUsageCount();
           const pdf = await buildModernMinimalPdfBlob(prepared.cv, 'en');

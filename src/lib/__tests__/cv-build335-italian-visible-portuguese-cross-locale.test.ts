@@ -431,9 +431,9 @@ describe('AAB-335 Italian-visible → Brazilian Portuguese Experience cross-loca
       clientDeterministicFallbackApplied: false,
     });
     const gate = session.evaluatePreApplyDecisionGates();
-    expect(gate.passed).toBe(true);
-    expect(gate.diagnosticCompletenessPassed).toBe(true);
     const draft = (session as unknown as { draft: Record<string, unknown> }).draft;
+    expect(gate.passed, JSON.stringify({ gate, failures: draft.diagnosticInvariantFailures })).toBe(true);
+    expect(gate.diagnosticCompletenessPassed).toBe(true);
     expect(draft.preapplyDiagnosticCompletenessPassed).toBe(true);
     expect(draft.applyAuthorized).toBe(true);
     expect(draft.diagnosticInvariantCheckPassed !== false).toBe(true);

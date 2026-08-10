@@ -14,6 +14,7 @@ import {
 import { resolveLocalizedSummaryRole } from './cv-summary-structured-role-localization';
 import { extractGermanCurrentWarehouseDutyFacts } from './cv-german-summary-current-duty-coverage';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
+import { classifyMaterialDutyKeys } from './cv-material-duty-coverage';
 
 export const SUMMARY_BUILDER_REVISION_FR =
   'entry-owned-french-rebuild-358-v1' as const;
@@ -414,6 +415,18 @@ export function buildFrenchEntryOwnedSummary(options: {
       if (!/^employ/iu.test(role)) {
         currentSentence = currentSentence.replace(/en tant qu’/iu, 'en tant que ');
       }
+    } else if (classifyMaterialDutyKeys(currentDutiesCorpus).some((key) =>
+      key === 'food_prep' || key === 'hygiene_workplace' || key === 'kitchen_collaboration')) {
+      const cookingKeys = new Set(classifyMaterialDutyKeys(currentDutiesCorpus));
+      const dutyBits = [
+        cookingKeys.has('food_prep') ? 'prépare des plats selon les normes du restaurant' : '',
+        cookingKeys.has('hygiene_workplace') ? 'maintiens l’hygiène du poste de travail' : '',
+        cookingKeys.has('kitchen_collaboration') ? 'collabore avec l’équipe de cuisine' : '',
+      ].filter(Boolean);
+      const dutyClause = dutyBits.join(', ').replace(/, ([^,]*)$/u, ' et $1');
+      currentSentence = company
+        ? `Je travaille actuellement chez ${company} en tant que ${role}, où je ${dutyClause}.`
+        : `Je travaille actuellement en tant que ${role}, où je ${dutyClause}.`;
     } else {
       const dutyBits = options.dutyFacts
         .map((f) => (f.sourceText || f.value || '').replace(/[.;]+$/u, '').trim())

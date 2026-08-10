@@ -243,7 +243,8 @@ describe('AAB-336 Portuguese appliedVisibleContentLocale canonicalization', () =
         visibleComparisonMatchedLastAiOutput: true,
       });
       const gate = session.evaluatePreApplyDecisionGates();
-      expect(gate.passed, alias).toBe(true);
+      const preApplyDraft = (session as unknown as { draft: Record<string, unknown> }).draft;
+      expect(gate.passed, `${alias}: ${JSON.stringify({ gate, failures: preApplyDraft.diagnosticInvariantFailures })}`).toBe(true);
       session.patch({
         applyAuthorized: true,
         applyAttempted: true,

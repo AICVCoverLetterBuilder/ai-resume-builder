@@ -173,7 +173,7 @@ describe('AAB-319 German Summary duration scope and acceptance', () => {
       candidate: '',
       referenceDateIso: REF,
     });
-    expect(fin.blocked).toBe(false);
+    expect(fin.blocked, `${fin.reason}: ${JSON.stringify(fin.diagnostics)}`).toBe(false);
     expect(fin.countedAsSuccess).toBe(true);
     if (!summaryV2ModeActive()) {
       expect(fin.text).toMatch(/insgesamt/i);
@@ -247,7 +247,7 @@ describe('AAB-319 German Summary duration scope and acceptance', () => {
       candidate: ambiguous,
       referenceDateIso: REF,
     });
-    expect(fin.blocked).toBe(false);
+    expect(fin.blocked, `${fin.reason}: ${JSON.stringify(fin.diagnostics)}`).toBe(false);
     expect(fin.countedAsSuccess).toBe(true);
     if (!summaryV2ModeActive()) {
       expect(fin.text).toMatch(/insgesamt/i);

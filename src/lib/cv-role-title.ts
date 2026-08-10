@@ -56,6 +56,13 @@ function localizeProductionOperator(locale: Locale, gender?: string): string {
   }
   if (locale === 'en') return 'Production Operator';
   if (locale === 'de') return g === 'female' ? 'Produktionsmitarbeiterin' : 'Produktionsmitarbeiter';
+  if (locale === 'es') return g === 'female' ? 'Operadora de producción' : 'Operador de producción';
+  if (locale === 'fr') return g === 'female' ? 'Opératrice de production' : 'Opérateur de production';
+  if (locale === 'it') return g === 'female' ? 'Operatrice di produzione' : 'Operatore di produzione';
+  if (locale === 'pt-BR') return g === 'female' ? 'Operadora de produção' : 'Operador de produção';
+  if (locale === 'ru') return 'Оператор производства';
+  if (locale === 'ar') return g === 'female' ? 'مشغّلة إنتاج' : 'مشغّل إنتاج';
+  if (locale === 'ja') return '生産オペレーター';
   return 'Production Operator';
 }
 

@@ -159,7 +159,7 @@ export function spanishPriorEntryRequiresRoleSlot(options: {
 
 /** Finite main-clause verbs for prose Summary units. */
 const FINITE_VERB_ES =
-  /(?<!\p{L})(?:trabaja|trabajó|desempeña|desempeñó|ejerce|ejerció|ocupa|ocupó|realiza|realizó|colabora|colaboró|desarrolla|desarrolló|coordina|coordinó|revisa|revisó|comprueba|comprobó|crea|creó|prepara|preparó|adapta|adaptó|cuenta|es|fue|est[aá]|estuvo|incluye)(?!\p{L})/iu;
+  /(?<!\p{L})(?:trabajo|trabajé|trabaja|trabajó|desempeño|desempeña|desempeñó|ejerzo|ejerce|ejerció|ocupo|ocupa|ocupó|realizo|realiza|realizó|colaboro|colabora|colaboró|desarrollo|desarrolla|desarrolló|coordino|coordina|coordinó|reviso|revisa|revisó|compruebo|comprueba|comprobó|creo|crea|creó|preparo|prepara|preparó|adapto|adapta|adaptó|cuento|cuenta|es|fue|est[aá]|estuvo|incluye)(?!\p{L})/iu;
 
 const GERUND_ONLY_INTRO_ES =
   /^(?:profesional|professional)\s*,\s*actualmente\s+\S+ándose\b|^actualmente\s+\S+ándose\b/iu;
@@ -553,10 +553,9 @@ export type SpanishSummaryEmploymentQuality = {
 };
 
 function sourceRequiresCurrentWarehouseFacts(duties: string, role: string): boolean {
-  return WAREHOUSE_FACT_CUE_ES.test(duties)
-    || matchesWarehouseOccupationalTitle(role)
-    || /almac[eé]n|warehouse|moz[oa]|trabajador(?:a)?\s+de\s+almac/i.test(role)
-    || classifyMaterialDutyKeys(duties).some((k) => k.startsWith('warehouse_'));
+  void role;
+  return extractSpanishEntryOwnedFactIds(duties)
+    .some((id) => CURRENT_OWNED_FACT_IDS.includes(id));
 }
 
 function sourceRequiresPriorDesignFacts(duties: string, role: string): boolean {
@@ -716,7 +715,14 @@ export function analyzeSpanishSummaryEmploymentQuality(
     reason = 'spanish_summary_unsupported_design_medium';
   } else if (!introGrammar.ok) {
     reason = introGrammar.reason;
-  } else if ((warehouseDomain || priorSlotRequired) && units.length < 3) {
+  // The required topology is derived from authoritative slots, not a global
+  // three-sentence minimum. A current-only warehouse Summary legitimately has
+  // two units (current_intro + current_duty); a third unit is required only
+  // when the source snapshot owns a prior-role slot.
+  } else if (
+    (warehouseDomain || priorSlotRequired)
+    && units.length < ((warehouseDomain ? 2 : 0) + (priorSlotRequired ? 1 : 0))
+  ) {
     reason = 'spanish_summary_incomplete_slots';
   } else if (warehouseDomain && (!currentIntroSlotPresent || !currentDutySlotPresent)) {
     reason = !currentIntroSlotPresent

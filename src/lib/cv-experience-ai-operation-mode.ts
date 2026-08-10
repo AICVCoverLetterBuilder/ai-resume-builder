@@ -339,9 +339,29 @@ export function validateExperienceGenerationOutput(
   };
 }
 
+function freeTextTitleConflictsWithLocale(position: string, locale: Locale): boolean {
+  const p = (position || '').trim();
+  if (!p) return false;
+  if (jobTitleScriptConflictsWithLocale(p, locale)) return true;
+  // Croatian output is Latin in this product; a Cyrillic title remains context
+  // and must not be injected into a Croatian duty sentence.
+  if (locale === 'hr' && /[\u0400-\u04FF]/u.test(p)) return true;
+  // Latin script compatibility is not language compatibility. Serbian/Croatian
+  // diacritics embedded in Romance/English shells are visible source leakage.
+  if (locale !== 'sr' && locale !== 'hr' && /[čćšđž]/iu.test(p)) return true;
+  // A clearly English free-text title is context, not target-locale prose.
+  // Keep its coarse semantic domain, but do not paste it into another Latin
+  // language's generated sentence.
+  if (
+    locale !== 'en'
+    && /\b(?:customer|support|field|documentation|coordinator|workflow|pipeline|steward|liaison|pharmacist|specialist|analyst|manager|engineer|designer)\b/iu.test(p)
+  ) return true;
+  return false;
+}
+
 function roleLabel(position: string, female: boolean, locale: Locale): string {
   const p = (position || '').trim();
-  if (p && !jobTitleScriptConflictsWithLocale(p, locale)) return p;
+  if (p && !freeTextTitleConflictsWithLocale(p, locale)) return p;
   if (locale === 'sr' || locale === 'hr') return female ? 'profesionalka' : 'profesionalac';
   if (locale === 'hi') return 'पेशेवर';
   if (locale === 'ar') return 'المهني';
@@ -371,7 +391,7 @@ function parseFreeTextTitleActionGrounding(
   agentive: string | null;
 } {
   const fullTitle = (position || '').trim();
-  if (!fullTitle || jobTitleScriptConflictsWithLocale(fullTitle, locale)) {
+  if (!fullTitle || freeTextTitleConflictsWithLocale(fullTitle, locale)) {
     return {
       fullTitle: '',
       objectPlural: '',
@@ -794,7 +814,7 @@ function buildGermanActionDutyTriple(
 function softDomainFromTitle(position: string, locale: Locale): string {
   const raw = (position || '').trim();
   if (!raw) return '';
-  if (jobTitleScriptConflictsWithLocale(raw, locale)) return '';
+  if (freeTextTitleConflictsWithLocale(raw, locale)) return '';
   const stripped = raw.replace(
     /^(koordinator(?:ka)?|coordinator|specijalista|specialist|analitičar(?:ka)?|analyst|menadžer(?:ka)?|manager|saradnik(?:ca)?|assistant|responsável|coordenador(?:a)?|responsable|radnik(?:ca)?|radnica|worker|associate)\s+/iu,
     '',
@@ -836,7 +856,321 @@ function domainShells(
   locale: Locale,
   present: boolean,
   female: boolean,
+  position = '',
 ): DutyTriple | null {
+  if (locale === 'fr' && domain === 'design') {
+    return present
+      ? [
+        'Crée des supports visuels et des éléments graphiques pour des projets numériques.',
+        'Examine et adapte les supports de design selon les exigences du projet.',
+        'Prépare les fichiers de design finaux et ajuste les formats pour différents écrans.',
+      ]
+      : [
+        'Créait des supports visuels et des éléments graphiques pour des projets numériques.',
+        'Examinait et adaptait les supports de design selon les exigences du projet.',
+        'Préparait les fichiers de design finaux et ajustait les formats pour différents écrans.',
+      ];
+  }
+  if (locale === 'fr' && domain === 'warehouse') {
+    return present
+      ? [
+        'Contrôle les marchandises entrantes et les documents associés.',
+        'Met à jour les registres de l’entrepôt et maintient les marchandises en ordre.',
+        'Coordonne avec les collègues la préparation et le déplacement des marchandises.',
+      ]
+      : [
+        'Contrôlait les marchandises entrantes et les documents associés.',
+        'Mettait à jour les registres de l’entrepôt et maintenait les marchandises en ordre.',
+        'Coordonnait avec les collègues la préparation et le déplacement des marchandises.',
+      ];
+  }
+  if (locale === 'it' && domain === 'design') {
+    return present
+      ? [
+        'Crea materiali visivi ed elementi grafici per progetti digitali.',
+        'Esamina e adatta i materiali di design in base ai requisiti del progetto.',
+        'Prepara i file di design finali e adegua i formati per schermi diversi.',
+      ]
+      : [
+        'Creava materiali visivi ed elementi grafici per progetti digitali.',
+        'Esaminava e adattava i materiali di design in base ai requisiti del progetto.',
+        'Preparava i file di design finali e adeguava i formati per schermi diversi.',
+      ];
+  }
+  if (locale === 'it' && domain === 'warehouse') {
+    return present
+      ? [
+        'Controlla le merci in entrata e i documenti collegati.',
+        'Aggiorna i registri di magazzino e mantiene le merci in ordine.',
+        'Coordina con i colleghi la preparazione e lo spostamento delle merci.',
+      ]
+      : [
+        'Controllava le merci in entrata e i documenti collegati.',
+        'Aggiornava i registri di magazzino e manteneva le merci in ordine.',
+        'Coordinava con i colleghi la preparazione e lo spostamento delle merci.',
+      ];
+  }
+  if (locale === 'pt-BR' && domain === 'design') {
+    return present
+      ? [
+        'Cria materiais visuais e elementos gráficos para projetos digitais.',
+        'Revisa e adapta materiais de design conforme os requisitos do projeto.',
+        'Prepara arquivos finais de design e ajusta os formatos para diferentes telas.',
+      ]
+      : [
+        'Criava materiais visuais e elementos gráficos para projetos digitais.',
+        'Revisava e adaptava materiais de design conforme os requisitos do projeto.',
+        'Preparava arquivos finais de design e ajustava os formatos para diferentes telas.',
+      ];
+  }
+  if (locale === 'sr' && domain === 'warehouse') {
+    return present
+      ? [
+        'Proverava pristiglu robu i prateću dokumentaciju.',
+        'Ažurira skladišnu evidenciju i održava robu uredno raspoređenom.',
+        'Koordiniše pripremu i kretanje robe sa kolegama.',
+      ]
+      : female
+        ? [
+          'Proveravala je pristiglu robu i prateću dokumentaciju.',
+          'Ažurirala je skladišnu evidenciju i održavala robu uredno raspoređenom.',
+          'Koordinisala je pripremu i kretanje robe sa kolegama.',
+        ]
+        : [
+          'Proveravao je pristiglu robu i prateću dokumentaciju.',
+          'Ažurirao je skladišnu evidenciju i održavao robu uredno raspoređenom.',
+          'Koordinisao je pripremu i kretanje robe sa kolegama.',
+        ];
+  }
+  if (locale === 'pt-BR' && domain === 'warehouse') {
+    return present
+      ? [
+        'Confere mercadorias recebidas e a documentação relacionada para manter registros corretos.',
+        'Atualiza os registros do armazém e mantém as mercadorias organizadas.',
+        'Coordena a preparação e a movimentação de mercadorias com colegas.',
+      ]
+      : [
+        'Conferia mercadorias recebidas e a documentação relacionada para manter registros corretos.',
+        'Atualizava os registros do armazém e mantinha as mercadorias organizadas.',
+        'Coordenava a preparação e a movimentação de mercadorias com colegas.',
+      ];
+  }
+  if (locale === 'pt-BR' && domain === 'documentation') {
+    return present
+      ? [
+        'Revisa registros de trabalho e verifica a integridade das informações.',
+        'Atualiza a documentação e acompanha itens pendentes.',
+        'Obtém com colegas as informações necessárias para concluir os registros.',
+      ]
+      : [
+        'Revisava registros de trabalho e verificava a integridade das informações.',
+        'Atualizava a documentação e acompanhava itens pendentes.',
+        'Obtinha com colegas as informações necessárias para concluir os registros.',
+      ];
+  }
+  if (locale === 'pt-BR' && domain === 'healthcare') {
+    return present
+      ? [
+        'Atende solicitações de pacientes e verifica a integridade das informações disponíveis.',
+        'Atualiza a documentação relacionada às atividades farmacêuticas.',
+        'Alinha as atividades de atendimento com colegas.',
+      ]
+      : [
+        'Atendia solicitações de pacientes e verificava a integridade das informações disponíveis.',
+        'Atualizava a documentação relacionada às atividades farmacêuticas.',
+        'Alinhava as atividades de atendimento com colegas.',
+      ];
+  }
+  if (locale === 'ru' && domain === 'documentation') {
+    return present
+      ? [
+        'Проверяет рабочие документы и полноту записей.',
+        'Обновляет документацию и отслеживает открытые вопросы.',
+        'Согласовывает недостающую информацию с коллегами.',
+      ]
+      : female
+        ? [
+          'Проверяла рабочие документы и полноту записей.',
+          'Обновляла документацию и отслеживала открытые вопросы.',
+          'Согласовывала недостающую информацию с коллегами.',
+        ]
+        : [
+          'Проверял рабочие документы и полноту записей.',
+          'Обновлял документацию и отслеживал открытые вопросы.',
+          'Согласовывал недостающую информацию с коллегами.',
+        ];
+  }
+  if (locale === 'it' && domain === 'healthcare') {
+    return present
+      ? [
+        'Gestisce le richieste dei pazienti e verifica la completezza delle informazioni disponibili.',
+        'Prepara e aggiorna la documentazione relativa alle attività farmaceutiche.',
+        'Coordina le attività di servizio con i colleghi.',
+      ]
+      : [
+        'Gestiva le richieste dei pazienti e verificava la completezza delle informazioni disponibili.',
+        'Preparava e aggiornava la documentazione relativa alle attività farmaceutiche.',
+        'Coordinava le attività di servizio con i colleghi.',
+      ];
+  }
+  if (locale === 'fr' && domain === 'documentation') {
+    return present
+      ? [
+        'Examine les dossiers de travail et vérifie la complétude des informations.',
+        'Met à jour la documentation et suit les éléments en attente.',
+        'Recueille auprès des collègues les informations manquantes.',
+      ]
+      : [
+        'Examinait les dossiers de travail et vérifiait la complétude des informations.',
+        'Mettait à jour la documentation et suivait les éléments en attente.',
+        'Recueillait auprès des collègues les informations manquantes.',
+      ];
+  }
+  if (locale === 'fr' && domain === 'healthcare') {
+    return present
+      ? [
+        'Répond aux demandes des patients et vérifie la complétude des informations disponibles.',
+        'Met à jour la documentation liée aux activités pharmaceutiques.',
+        'Coordonne les activités de service avec les collègues.',
+      ]
+      : [
+        'Répondait aux demandes des patients et vérifiait la complétude des informations disponibles.',
+        'Mettait à jour la documentation liée aux activités pharmaceutiques.',
+        'Coordonnait les activités de service avec les collègues.',
+      ];
+  }
+  if ((locale === 'sr' || locale === 'hr') && domain === 'healthcare') {
+    if (locale === 'hr') {
+      return present
+        ? [
+          'Podržava svakodnevne aktivnosti ljekarne i provjerava potpunost dostupnih podataka.',
+          'Ažurira farmaceutsku dokumentaciju i priprema potrebne zapise.',
+          'Koordinira uslužne aktivnosti s kolegama.',
+        ]
+        : female
+          ? [
+            'Podržavala je svakodnevne aktivnosti ljekarne i provjeravala potpunost dostupnih podataka.',
+            'Ažurirala je farmaceutsku dokumentaciju i pripremala potrebne zapise.',
+            'Koordinirala je uslužne aktivnosti s kolegama.',
+          ]
+          : [
+            'Podržavao je svakodnevne aktivnosti ljekarne i provjeravao potpunost dostupnih podataka.',
+            'Ažurirao je farmaceutsku dokumentaciju i pripremao potrebne zapise.',
+            'Koordinirao je uslužne aktivnosti s kolegama.',
+          ];
+    }
+    return present
+      ? [
+        'Podržava svakodnevne aktivnosti apoteke i proverava potpunost dostupnih podataka.',
+        'Ažurira farmaceutsku dokumentaciju i priprema potrebne zapise.',
+        'Koordiniše uslužne aktivnosti sa kolegama.',
+      ]
+      : female
+        ? [
+          'Podržavala je svakodnevne aktivnosti apoteke i proveravala potpunost dostupnih podataka.',
+          'Ažurirala je farmaceutsku dokumentaciju i pripremala potrebne zapise.',
+          'Koordinisala je uslužne aktivnosti sa kolegama.',
+        ]
+        : [
+          'Podržavao je svakodnevne aktivnosti apoteke i proveravao potpunost dostupnih podataka.',
+          'Ažurirao je farmaceutsku dokumentaciju i pripremao potrebne zapise.',
+          'Koordinisao je uslužne aktivnosti sa kolegama.',
+        ];
+  }
+  if ((locale === 'sr' || locale === 'hr') && domain === 'documentation') {
+    const fieldDocumentation = /terensk\w*\s+dokument/iu.test(position);
+    if (locale === 'hr') {
+      return present
+        ? [
+          fieldDocumentation
+            ? 'Pregledava terensku dokumentaciju i provjerava potpunost informacija.'
+            : 'Pregledava radne zapise i provjerava potpunost informacija.',
+          fieldDocumentation
+            ? 'Ažurira terensku dokumentaciju i prati otvorene stavke.'
+            : 'Ažurira dokumentaciju i prati otvorene stavke.',
+          'Usklađuje nedostajuće informacije s kolegama.',
+        ]
+        : female
+          ? [
+            fieldDocumentation
+              ? 'Pregledala je terensku dokumentaciju i provjerila potpunost informacija.'
+              : 'Pregledala je radne zapise i provjerila potpunost informacija.',
+            'Ažurirala je dokumentaciju i pratila otvorene stavke.',
+            'Usklađivala je nedostajuće informacije s kolegama.',
+          ]
+          : [
+            fieldDocumentation
+              ? 'Pregledao je terensku dokumentaciju i provjerio potpunost informacija.'
+              : 'Pregledao je radne zapise i provjerio potpunost informacija.',
+            'Ažurirao je dokumentaciju i pratio otvorene stavke.',
+            'Usklađivao je nedostajuće informacije s kolegama.',
+          ];
+    }
+    return present
+      ? [
+        fieldDocumentation
+          ? 'Pregleda zapise terenske dokumentacije i proverava potpunost informacija.'
+          : 'Pregleda radne zapise i proverava potpunost informacija.',
+        fieldDocumentation
+          ? 'Ažurira zapise terenske dokumentacije i prati otvorene stavke.'
+          : 'Ažurira dokumentaciju i prati otvorene stavke.',
+        'Usklađuje nedostajuće informacije sa kolegama.',
+      ]
+      : female
+        ? [
+          fieldDocumentation
+            ? 'Pregledala je zapise terenske dokumentacije i proverila potpunost informacija.'
+            : 'Pregledala je radne zapise i proverila potpunost informacija.',
+          'Ažurirala je dokumentaciju i pratila otvorene stavke.',
+          'Usklađivala je nedostajuće informacije sa kolegama.',
+        ]
+        : [
+          fieldDocumentation
+            ? 'Pregledao je zapise terenske dokumentacije i proverio potpunost informacija.'
+            : 'Pregledao je radne zapise i proverio potpunost informacija.',
+          'Ažurirao je dokumentaciju i pratio otvorene stavke.',
+          'Usklađivao je nedostajuće informacije sa kolegama.',
+        ];
+  }
+  if (locale === 'de' && domain === 'design') {
+    return present
+      ? [
+        'Erstellt visuelle Materialien und grafische Elemente für digitale Projekte.',
+        'Prüft und überarbeitet Gestaltungsmaterialien nach den Projektanforderungen.',
+        'Bereitet finale Designdateien vor und passt Formate für verschiedene Medien an.',
+      ]
+      : [
+        'Erstellte visuelle Materialien und grafische Elemente für digitale Projekte.',
+        'Prüfte und überarbeitete Gestaltungsmaterialien nach den Projektanforderungen.',
+        'Bereitete finale Designdateien vor und passte Formate für verschiedene Medien an.',
+      ];
+  }
+  if (locale === 'de' && domain === 'documentation') {
+    return present
+      ? [
+        'Prüft Arbeitsunterlagen und dokumentiert den aktuellen Bearbeitungsstand.',
+        'Aktualisiert Aufzeichnungen und verfolgt offene Nacharbeiten.',
+        'Stimmt fehlende Informationen mit den zuständigen Kolleginnen und Kollegen ab.',
+      ]
+      : [
+        'Prüfte Arbeitsunterlagen und dokumentierte den Bearbeitungsstand.',
+        'Aktualisierte Aufzeichnungen und verfolgte offene Nacharbeiten.',
+        'Stimmte fehlende Informationen mit den zuständigen Kolleginnen und Kollegen ab.',
+      ];
+  }
+  if (locale === 'de' && domain === 'hospitality') {
+    return present
+      ? [
+        'Bereitet Speisen nach den vorgegebenen Rezepturen und Qualitätsanforderungen zu.',
+        'Organisiert die Vorbereitung der Zutaten und hält den Arbeitsbereich sauber.',
+        'Stimmt die Abläufe im Küchenteam während des Services ab.',
+      ]
+      : [
+        'Bereitete Speisen nach den vorgegebenen Rezepturen und Qualitätsanforderungen zu.',
+        'Organisierte die Vorbereitung der Zutaten und hielt den Arbeitsbereich sauber.',
+        'Stimmte die Abläufe im Küchenteam während des Services ab.',
+      ];
+  }
   if (locale === 'hi') {
     if (domain === 'design') {
       if (present) {
@@ -935,13 +1269,13 @@ function domainShells(
     if (domain === 'warehouse') {
       return present
         ? [
-          'Check incoming goods and related documentation for accurate recording.',
-          'Update warehouse records and keep goods orderly.',
+          'Check incoming goods for accurate recording.',
+          'Verify the related documentation.',
           'Coordinate preparation and movement of goods with colleagues.',
         ]
         : [
-          'Checked incoming goods and related documentation for accurate recording.',
-          'Updated warehouse records and kept goods orderly.',
+          'Checked incoming goods for accurate recording.',
+          'Verified the related documentation.',
           'Coordinated preparation and movement of goods with colleagues.',
         ];
     }
@@ -1195,7 +1529,7 @@ export function buildJobContextGenerationFallback(options: {
   const domain = classifyFreeTextJobDomain(options.position || '');
   void options.industry;
 
-  const specialized = domainShells(domain, locale, present, female);
+  const specialized = domainShells(domain, locale, present, female, options.position || '');
   if (specialized) {
     return formatExperienceBullets([...specialized]);
   }
@@ -1297,24 +1631,24 @@ export function buildJobContextGenerationFallback(options: {
     if (present) {
       return formatExperienceBullets(female
         ? [
-          'تنفّذ مهام الدور اليومية وفق ما يُسند إليها.',
+          `تنفّذ المهام اليومية المرتبطة بدور ${groundedWork} وفق ما يُسند إليها.`,
           'تكمل مهام العمل وفق احتياجات الدور.',
           'تنسّق أنشطة العمل مع الزملاء حسب متطلبات الدور.',
         ]
         : [
-          'ينفّذ مهام الدور اليومية وفق ما يُسند إليه.',
+          `ينفّذ المهام اليومية المرتبطة بدور ${groundedWork} وفق ما يُسند إليه.`,
           'يكمل مهام العمل وفق احتياجات الدور.',
           'ينسّق أنشطة العمل مع الزملاء حسب متطلبات الدور.',
         ]);
     }
     return formatExperienceBullets(female
       ? [
-        'نفّذت مهام الدور اليومية وفق ما أُسند إليها.',
+        `نفّذت المهام اليومية المرتبطة بدور ${groundedWork} وفق ما أُسند إليها.`,
         'أكملت مهام العمل وفق احتياجات الدور.',
         'نسّقت أنشطة العمل مع الزملاء حسب متطلبات الدور.',
       ]
       : [
-        'نفّذ مهام الدور اليومية وفق ما أُسند إليه.',
+        `نفّذ المهام اليومية المرتبطة بدور ${groundedWork} وفق ما أُسند إليه.`,
         'أكمل مهام العمل وفق احتياجات الدور.',
         'نسّق أنشطة العمل مع الزملاء حسب متطلبات الدور.',
       ]);

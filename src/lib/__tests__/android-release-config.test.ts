@@ -12,11 +12,14 @@ function readConfig(relPath: string): Record<string, unknown> {
 
 describe('Android release Capacitor config', () => {
   it('does not point production builds at a dev server', () => {
-    for (const relPath of ['capacitor.config.json', 'android/app/src/main/assets/capacitor.config.json']) {
-      const config = readConfig(relPath);
-      const server = config.server as { url?: string; androidScheme?: string } | undefined;
-      expect(server?.url, `${relPath} must not set server.url`).toBeUndefined();
-    }
+    const relPath = 'capacitor.config.json';
+    const config = readConfig(relPath);
+    const server = config.server as { url?: string; androidScheme?: string } | undefined;
+
+    expect(config.appId).toBe('com.cvproai.app');
+    expect(config.appName).toBe('CV Pro AI');
+    expect(server?.url, `${relPath} must not set server.url`).toBeUndefined();
+    expect(server?.androidScheme).toBe('https');
   });
 
   it('uses bundled out/ as webDir', () => {

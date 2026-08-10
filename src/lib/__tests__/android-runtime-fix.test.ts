@@ -171,10 +171,31 @@ describe('Android runtime fixes', () => {
   });
 
   test('generated Capacitor plugin registration still uses RevenueCat PurchasesPlugin', () => {
-    const plugins = fs.readFileSync('android/app/src/main/assets/capacitor.plugins.json', 'utf8');
-    expect(plugins).toContain('com.revenuecat.purchases.capacitor.PurchasesPlugin');
-    expect(plugins).not.toContain('TracedPurchasesPlugin');
-    expect(plugins).not.toContain('Purchase' + 'TracePlugin');
+    const packageJson = JSON.parse(
+      fs.readFileSync('package.json', 'utf8'),
+    ) as { dependencies?: Record<string, string> };
+    const settings = fs.readFileSync('android/capacitor.settings.gradle', 'utf8');
+    const buildGradle = fs.readFileSync('android/app/capacitor.build.gradle', 'utf8');
+    const pluginSource = fs.readFileSync(
+      'node_modules/@revenuecat/purchases-capacitor/android/src/main/java/com/revenuecat/purchases/capacitor/PurchasesPlugin.kt',
+      'utf8',
+    );
+
+    expect(packageJson.dependencies?.['@revenuecat/purchases-capacitor']).toBeTruthy();
+    expect(settings).toContain("include ':revenuecat-purchases-capacitor'");
+    expect(settings).toContain(
+      "project(':revenuecat-purchases-capacitor').projectDir = new File('../node_modules/@revenuecat/purchases-capacitor/android')",
+    );
+    expect(buildGradle).toContain(
+      "implementation project(':revenuecat-purchases-capacitor')",
+    );
+    expect(pluginSource).toContain('package com.revenuecat.purchases.capacitor');
+    expect(pluginSource).toContain('@CapacitorPlugin(name = "Purchases")');
+    expect(pluginSource).toContain('class PurchasesPlugin : Plugin()');
+
+    const registrationSources = [settings, buildGradle, pluginSource].join('\n');
+    expect(registrationSources).not.toContain('TracedPurchasesPlugin');
+    expect(registrationSources).not.toContain('Purchase' + 'TracePlugin');
   });
 
   test('temporary purchase trace plugin and direct BillingClient dependency are absent', () => {

@@ -14,6 +14,7 @@ import {
 import { resolveLocalizedSummaryRole } from './cv-summary-structured-role-localization';
 import { extractGermanCurrentWarehouseDutyFacts } from './cv-german-summary-current-duty-coverage';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
+import { classifyMaterialDutyKeys } from './cv-material-duty-coverage';
 import { PROVIDER_CROSS_LOCALE_NOOP_REASON } from './cv-french-summary-grounding';
 import { fingerprintText } from './cv-export-diagnostics';
 
@@ -480,6 +481,18 @@ export function buildItalianEntryOwnedSummary(options: {
         'verifico la documentazione relativa alle merci ricevute',
         'mi coordino con i colleghi per la preparazione e la movimentazione delle merci',
       ].join(', ').replace(/, ([^,]*)$/u, ' e $1');
+      currentSentence = company
+        ? `Attualmente lavoro presso ${company} come ${role}, dove ${dutyClause}.`
+        : `Attualmente lavoro come ${role}, dove ${dutyClause}.`;
+    } else if (classifyMaterialDutyKeys(currentDutiesCorpus).some((key) =>
+      key === 'food_prep' || key === 'hygiene_workplace' || key === 'kitchen_collaboration')) {
+      const cookingKeys = new Set(classifyMaterialDutyKeys(currentDutiesCorpus));
+      const dutyBits = [
+        cookingKeys.has('food_prep') ? 'preparo piatti secondo gli standard del ristorante' : '',
+        cookingKeys.has('hygiene_workplace') ? 'mantengo l’igiene della postazione di lavoro' : '',
+        cookingKeys.has('kitchen_collaboration') ? 'collaboro con il team di cucina' : '',
+      ].filter(Boolean);
+      const dutyClause = dutyBits.join(', ').replace(/, ([^,]*)$/u, ' e $1');
       currentSentence = company
         ? `Attualmente lavoro presso ${company} come ${role}, dove ${dutyClause}.`
         : `Attualmente lavoro come ${role}, dove ${dutyClause}.`;

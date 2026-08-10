@@ -48,6 +48,7 @@ import type { Locale } from '@/lib/i18n/translations';
 import { sealCanonicalFromValidatedSource, acceptValidatedAiContent } from '@/lib/cv-canonical-snapshot';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
 import { finalizeClientAiSummary } from '@/lib/cv-summary-integrity';
+import { finalizeCvAiFieldForApply } from '@/lib/cv-ai-finalize-apply';
 import { buildCvCanonicalFactSet } from '@/lib/cv-canonical-facts';
 import { deterministicLocalizedSummaryFromCanonical } from '@/lib/cv-localized-fallback';
 import { isWrongLanguageAiOutput } from '@/lib/cv-ai-locale-guard';
@@ -145,7 +146,21 @@ describe('1. Root cause: unmapped diacritic job title must never leak into the d
       expect(grounded).not.toMatch(/Vozač/u);
 
       const finalized = finalizeClientAiSummary(grounded, cv, locale, durationSnapshot);
-      expect(finalized.blocked).toBe(false);
+      const diagnosticGate = finalized.blocked
+        ? finalizeCvAiFieldForApply({
+          action: 'summary_generate',
+          field: 'summary',
+          requestedLocale: locale,
+          gender: cv.personal?.gender || '',
+          cv,
+          candidate: grounded,
+          durationSnapshot,
+        })
+        : null;
+      expect(
+        finalized.blocked,
+        JSON.stringify({ grounded, reason: diagnosticGate?.reason, diagnostics: diagnosticGate?.diagnostics }),
+      ).toBe(false);
       expect(isWrongLanguageAiOutput(finalized.summary, locale)).toBe(false);
     });
   }
@@ -327,8 +342,11 @@ describe('8. Atomic locale request context is wired into cv-builder/page.tsx', (
     expect(fn).toMatch(/const requestedLocale = reqCtx\.locale as Locale/);
     expect(fn).toMatch(/finalizeCvAiFieldForApply\(\{/);
     expect(fn).toMatch(/action: 'summary_generate'/);
-    expect(fn).toMatch(/applyFinalizedSummaryToCv\(prev, requestedLocale/);
-    expect(fn).toMatch(/commitCvUpdate\(/);
+    expect(fn).toMatch(/commitSummaryApplyTransactionally\(\{/);
+    expect(fn).toMatch(/locale: requestedLocale/);
+    expect(fn).toMatch(/finalized: finalizedGate/);
+    expect(fn).toMatch(/operationId: reqCtx\.requestId/);
+    expect(fn).toMatch(/scheduleReactCv: scheduleSummaryCvCommit/);
     expect(fn).toMatch(/latestSummaryRequestIdRef\.current !== reqCtx\.requestId/);
   });
 

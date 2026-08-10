@@ -66,6 +66,7 @@ import {
   validateEnglishWarehouseExperienceCoverage,
 } from './cv-english-experience-warehouse-grounding';
 import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
+import { buildSourcePreservingExperienceBullets } from './cv-localized-fallback';
 
 type ActionFrame =
   | 'check_records'
@@ -93,6 +94,9 @@ function classifyActionFrame(unit: string): ActionFrame {
       return 'collaborate_visual';
     }
     if (/(ažur|azur|update|status|reviz|revision|track|ажурир|تحدّث|अद्यतन|更新)/.test(t)) {
+      return 'update_records';
+    }
+    if (/(?:final|archiv|files?|format|pantall|screens?)/.test(t)) {
       return 'update_records';
     }
     if (/(prover|pregled|review|revis|adapt|prilagod|verif|samic|समीक्षा|راجع|確認)/.test(t)) {
@@ -151,8 +155,8 @@ function englishBullet(
         // Soft cross-locale shells (Serbian/Hindi/…). Strict Spanish→English
         // Atlas uses buildEnglishWarehouseExperienceFallback instead.
         return past
-          ? 'Checked incoming goods and related documentation for accurate recording.'
-          : 'Checks incoming goods and related documentation for accurate recording.';
+          ? 'Checked incoming goods for accurate recording.'
+          : 'Checks incoming goods for accurate recording.';
       }
       if (domain === 'design') {
         return past
@@ -165,8 +169,8 @@ function englishBullet(
     case 'update_records':
       if (domain === 'warehouse') {
         return past
-          ? 'Updated warehouse records and maintained orderly arrangement of goods.'
-          : 'Updates warehouse records and maintains orderly arrangement of goods.';
+          ? 'Verified related documentation, updated warehouse records, and maintained orderly arrangement of goods.'
+          : 'Verifies related documentation, updates warehouse records, and maintains orderly arrangement of goods.';
       }
       if (domain === 'design') {
         return past
@@ -238,10 +242,10 @@ function serbianBullet(
       }
       if (domain === 'design') {
         return isPresent
-          ? 'Pregleda vizuelne materijale i dizajn specifikacije radi usklađenosti.'
+          ? 'Pregleda i prilagođava vizuelne i dizajn materijale prema projektnim zahtevima.'
           : (pastF
-            ? 'Pregledala je vizuelne materijale i dizajn specifikacije radi usklađenosti.'
-            : 'Pregledao je vizuelne materijale i dizajn specifikacije radi usklađenosti.');
+            ? 'Pregledala je i prilagođavala vizuelne i dizajn materijale prema projektnim zahtevima.'
+            : 'Pregledao je i prilagođavao vizuelne i dizajn materijale prema projektnim zahtevima.');
       }
       return isPresent
         ? 'Pregleda dokumentaciju i proverava potpunost podataka.'
@@ -1030,6 +1034,49 @@ export function buildCrossLocaleExperienceFallback(options: {
   const domain = domainHintFromUnits(units, options.position);
   const isPresent = options.isPresent !== false;
   const female = /^(female|f|ženski|zenski)$/i.test(String(options.gender || ''));
+
+  // Cooking is a material-fact domain, not generic/design work. Reuse the
+  // source-preserving locale projector so food preparation, hygiene, and
+  // kitchen collaboration remain separate and no design vocabulary is added.
+  const sourceMaterialKeys = materialDutyKeysFromDescription(options.sourceDescription || '');
+  if (sourceMaterialKeys.some((key) => (
+    key === 'food_prep'
+    || key === 'hygiene_workplace'
+    || key === 'kitchen_collaboration'
+  ))) {
+    const cooking = buildSourcePreservingExperienceBullets(
+      options.sourceDescription,
+      target,
+      options.gender,
+      { isPresent },
+    );
+    if (cooking.trim()) return cooking;
+  }
+
+  // Unknown/documentation roles must not inherit the design table merely
+  // because they are not warehouse roles. Project each authoritative unit
+  // through the general source-preserving localizer, retaining one target
+  // bullet per source identity and disambiguating only repeated safe shells.
+  if (domain === 'work' || domain === 'documentation') {
+    const projected = buildSourcePreservingExperienceBullets(
+      options.sourceDescription,
+      target,
+      options.gender,
+      { isPresent },
+    );
+    const projectedUnits = splitExperienceBullets(projected);
+    if (projectedUnits.length === units.length) {
+      const generalLines: string[] = [];
+      for (let i = 0; i < projectedUnits.length; i += 1) {
+        let line = projectedUnits[i]!;
+        if (nearDupOfAny(line, generalLines)) {
+          line = uniquifyLineWithSourceHint(line, units[i] || '', i, target);
+        }
+        generalLines.push(line);
+      }
+      return formatExperienceBullets(generalLines);
+    }
+  }
 
   // Russian design: emit the three concrete fact families directly. Coarse
   // action-frame shells (generic daily duty / visual-only review) caused false

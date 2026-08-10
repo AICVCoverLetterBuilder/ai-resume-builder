@@ -14,6 +14,52 @@ export type ArabicEmploymentTenseResult = {
   reason?: string;
 };
 
+type ArabicVerbForms = {
+  firstPerson: RegExp;
+  presentFemale: string;
+  presentMale: string;
+  pastFemale: string;
+  pastMale: string;
+};
+
+/**
+ * Locale grammar projection for user-authored Arabic Experience duties.
+ *
+ * Arabic first-person imperfect verbs use a stable أ-prefix while CV bullets
+ * require gendered third-person present or completed-role past forms. Keeping
+ * this morphology beside the validator prevents a source-preserving fallback
+ * from being rejected merely because it faithfully retained "أراجع/أحدّث".
+ * The table is grammatical verb morphology, not an occupation catalogue.
+ */
+const ARABIC_CV_VERB_FORMS: ArabicVerbForms[] = [
+  { firstPerson: /أراجع/gu, presentFemale: 'تراجع', presentMale: 'يراجع', pastFemale: 'راجعت', pastMale: 'راجع' },
+  { firstPerson: /أحدّث/gu, presentFemale: 'تحدّث', presentMale: 'يحدّث', pastFemale: 'حدّثت', pastMale: 'حدّث' },
+  { firstPerson: /أنسّ?ق/gu, presentFemale: 'تنسّق', presentMale: 'ينسّق', pastFemale: 'نسّقت', pastMale: 'نسّق' },
+  { firstPerson: /أتحقّ?ق/gu, presentFemale: 'تتحقّق', presentMale: 'يتحقّق', pastFemale: 'تحقّقت', pastMale: 'تحقّق' },
+  { firstPerson: /أعدّ/gu, presentFemale: 'تعدّ', presentMale: 'يعدّ', pastFemale: 'أعدّت', pastMale: 'أعدّ' },
+  { firstPerson: /أحافظ/gu, presentFemale: 'تحافظ', presentMale: 'يحافظ', pastFemale: 'حافظت', pastMale: 'حافظ' },
+  { firstPerson: /أنشئ/gu, presentFemale: 'تنشئ', presentMale: 'ينشئ', pastFemale: 'أنشأت', pastMale: 'أنشأ' },
+  { firstPerson: /أؤدّي/gu, presentFemale: 'تؤدّي', presentMale: 'يؤدّي', pastFemale: 'أدّت', pastMale: 'أدّى' },
+  { firstPerson: /أتعاون/gu, presentFemale: 'تتعاون', presentMale: 'يتعاون', pastFemale: 'تعاونت', pastMale: 'تعاون' },
+  { firstPerson: /أعلّ?م/gu, presentFemale: 'تعلّم', presentMale: 'يعلّم', pastFemale: 'علّمت', pastMale: 'علّم' },
+];
+
+export function normalizeArabicExperienceEmploymentGrammar(
+  text: string,
+  options: { isPresent?: boolean; gender?: string },
+): string {
+  const isPresent = options.isPresent !== false;
+  const female = normalizeGender(options.gender) === 'female';
+  let normalized = (text || '').normalize('NFKC');
+  for (const forms of ARABIC_CV_VERB_FORMS) {
+    const replacement = isPresent
+      ? (female ? forms.presentFemale : forms.presentMale)
+      : (female ? forms.pastFemale : forms.pastMale);
+    normalized = normalized.replace(forms.firstPerson, replacement);
+  }
+  return normalized.trim();
+}
+
 /** Feminine / masculine present stems common in warehouse + design shells. */
 const AR_PRESENT_FEMALE =
   /(?:تعدّ|تراجع|تتحقق|تحدّث|تنسّق|تحافظ|تنشئ|تؤدي|تتعاون)/u;

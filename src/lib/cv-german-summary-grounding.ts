@@ -7,6 +7,7 @@ import type { Locale } from './i18n/translations';
 import { formatGermanEmployerPrepositional } from './cv-german-employer-format';
 import { bulletToGermanWoIchClause } from './cv-summary-v2/german-surface';
 import { classifyMaterialDutyKeys } from './cv-material-duty-coverage';
+import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
 import {
   localizeGraphicDesigner,
   localizeWarehouseEmployee,
@@ -210,6 +211,16 @@ const WAREHOUSE_FACT_CUE_DE =
   /(?:eingehend\w*\s+Waren|Wareneingang|Unterlagen|Dokument(?:e|ation)|vorbereit|beweg|Kolleg|prüfen|Kontrolle|warehouse|goods|Lager|مستودع|بضائع|وثائق|गोदाम|माल|almac[eé]n|mercanc)/iu;
 const DESIGN_FACT_CUE_DE =
   /(?:visuell|grafisch|Design|Designdatei|Bildschirm|Format|Element|graphic|مواد\s*بصرية|عناصر\s*رسومية|جرافيك|تصميم|هوية\s*بصرية)/iu;
+
+function germanGeneralCurrentDutyClauses(source: string): string[] {
+  const keys = new Set(classifyMaterialDutyKeys(source || ''));
+  const clauses: string[] = [];
+  if (keys.has('process_internal')) clauses.push('an der Entwicklung interner Prozesse mitwirke');
+  if (keys.has('team_collaboration')) clauses.push('mit funktionsübergreifenden Teams zusammenarbeite');
+  if (keys.has('data_analysis')) clauses.push('Geschäftsdaten analysiere');
+  if (keys.has('reporting')) clauses.push('Berichte für die Führungsebene erstelle');
+  return clauses;
+}
 
 export type GermanSummaryRoleSlot =
   | 'current_intro'
@@ -634,9 +645,10 @@ export function analyzeGermanSummaryEmploymentQuality(
   const caseGrammar = validateGermanGeneratedCaseGrammar(text);
 
   const dutiesCorpus = `${options.currentEntryDuties || ''} ${options.priorEntryDuties || ''} ${options.role || ''}`;
-  const warehouseDomain = WAREHOUSE_FACT_CUE_DE.test(dutiesCorpus)
-    || matchesWarehouseOccupationalTitle(options.role || '')
-    || /lager|warehouse/i.test(options.role || '');
+  // The strict warehouse slot topology is applicable only when entry-owned
+  // warehouse facts were actually classified. A warehouse-looking title or a
+  // facility word inside generic process work must not manufacture a duty set.
+  const warehouseDomain = requiredCurrentDutyFacts.length > 0;
   const designDomain = DESIGN_FACT_CUE_DE.test(dutiesCorpus)
     || /grafik|design|diseñ|dizajn/i.test(
       `${options.role || ''} ${options.priorRole || ''} ${options.priorEntryDuties || ''}`,
@@ -1092,9 +1104,12 @@ export function buildGermanEntryOwnedSummary(options: {
         )
           && !/[\u0900-\u097F\u0600-\u06FF\u0400-\u04FF\u3040-\u30FF\u3400-\u9FFF]/.test(s))
         .slice(0, 3);
-      const dutyClauses = dutyBits
+      const sourceDutyClauses = dutyBits
         .map((duty) => bulletToGermanWoIchClause(duty, 'present'))
         .filter(Boolean);
+      const dutyClauses = sourceDutyClauses.length
+        ? sourceDutyClauses
+        : germanGeneralCurrentDutyClauses(currentDutiesCorpus);
       const dutyTail = dutyClauses.length
         ? `, wo ich ${dutyClauses.join(', ').replace(/, ([^,]*)$/u, ' und $1')}`
         : '';

@@ -143,7 +143,7 @@ const FR_ACCENT_RE = /[àâçéèêëïîôùûüÿœ]/iu;
  * (`la`/`una`) that also appear in French and Spanish.
  */
 const IT_EXCLUSIVE_CLAUSE_RE =
-  /(?<![\p{L}\p{N}_])(?:il|lo|gli|nel|delle|dei|controlla|controllato|controllo|verifica|verificato|verifico|documentazione|magazzino|colleghi|movimentazione|merci|dispongo|complessivamente|esperienza\s+professionale|attualmente|lavoro|precedenza|presso)(?![\p{L}\p{N}_])/iu;
+  /(?<![\p{L}\p{N}_])(?:il|lo|gli|nel|delle|dei|controlla|controllato|controllo|verifica|verificato|verifico|documentazione|magazzino|colleghi|movimentazione|merci|compiti|assegnati|esigenze|ruolo|pazienti|informazioni|farmaceutiche|richieste|aggiorna|schermi|gestisce|dispongo|complessivamente|esperienza\s+professionale|attualmente|lavoro|precedenza|presso)(?![\p{L}\p{N}_])/iu;
 const IT_CLAUSE_RE = /\b(?:il|lo|la|gli|con|per|durante|anche|nonché|nel|delle)\b/iu;
 const IT_ACCENT_RE = /[àèéìòù]/iu;
 /**
@@ -152,7 +152,7 @@ const IT_ACCENT_RE = /[àèéìòù]/iu;
  * - German article `das` colliding with Portuguese contraction `das`
  */
 const PT_EXCLUSIVE_CLAUSE_RE =
-  /(?<![\p{L}\p{N}_])(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|recebidas|colegas|prepara[cç][aã]o|movimenta[cç][aã]o|confere|conferiu|chegam|atualiza|às|aos|atualmente|trabalho|trabalhei|tenho|anteriormente|cozinheir[ao]|funcion[aá]ri[ao]|experi[eê]ncia\s+profissional|no\s+total)(?![\p{L}\p{N}_])/iu;
+  /(?<![\p{L}\p{N}_])(?:mercadorias?|armaz[eé]m|documenta[cç][aã]o|recebidas|colegas|prepara[cç][aã]o|movimenta[cç][aã]o|confere|conferiu|chegam|atualiza|solicita[cç][oõ]es|farmacêutic\w*|atendimento|disponíveis|alinha|às|aos|atualmente|trabalho|trabalhei|tenho|anteriormente|cozinheir[ao]|funcion[aá]ri[ao]|experi[eê]ncia\s+profissional|no\s+total)(?![\p{L}\p{N}_])/iu;
 const PT_CLAUSE_RE = /\b(?:o|os|as|uma|com|para|durante|também|através|às|aos|como|onde)\b/iu;
 const PT_ACCENT_RE = /[áàâãéêíóôõúç]/iu;
 
@@ -502,6 +502,15 @@ export function guessUnitLocale(text: string, targetLocale?: Locale): string | n
       || /\b(?:atualmente|trabalho|tenho|cozinheir)/iu.test(t)
     ))
   ) {
+    const hrEvidence = analyzeCroatianSerbianLocaleEvidence(t);
+    if (targetLocale === 'hr' && !hrEvidence.serbianLeakageDetected) return 'hr';
+    if (targetLocale === 'sr') {
+      if (
+        hrEvidence.croatianExclusiveCueCount > 0
+        && hrEvidence.serbianExclusiveCueCount === 0
+      ) return 'hr';
+      return 'sr';
+    }
     return 'sr';
   }
   return null;

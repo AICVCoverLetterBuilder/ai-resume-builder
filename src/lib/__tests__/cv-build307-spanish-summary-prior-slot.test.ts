@@ -293,8 +293,8 @@ describe('Spanish Summary prior-role slot (AAB-307 Phase 1)', () => {
       candidate: BAD_AAB305_ES,
       referenceDateIso: REF,
     });
-    expect(fin.blocked).toBe(false);
-    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.blocked, `${fin.reason}: ${JSON.stringify(fin.diagnostics)}`).toBe(false);
+    expect(fin.countedAsSuccess, `${fin.reason}: ${JSON.stringify(fin.diagnostics)}`).toBe(true);
     expect(fin.origin).toMatch(/deterministic|fallback|ai_generated|ai_repaired/i);
     expect(fin.text).toMatch(/Atlas/i);
     expect(fin.text).toMatch(/Rewitu/i);

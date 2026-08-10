@@ -11,6 +11,7 @@ import {
   validateMaterialDutyCoverage,
 } from './cv-material-duty-coverage';
 import type { Locale } from './i18n/translations';
+import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'and', 'or', 'to', 'of', 'in', 'on', 'for', 'with', 'by',
@@ -253,12 +254,17 @@ export function sourceUsableInLocale(text: string, locale: Locale): boolean {
     }
     return /[A-Za-z]/.test(t);
   }
-  // Other Latin locales (de/es/fr/it/pt-BR): accept Latin text but NEVER treat
-  // Serbian/Croatian (diacritic or lexicon) or Cyrillic as already-localized.
+  // Other Latin locales (de/es/fr/it/pt-BR): script equality is not language
+  // equality. Run the same per-unit locale discriminator used by the final
+  // apply gate so English cannot be preserved as "already German/Portuguese".
   if (/[čćžšđČĆŽŠĐ]/u.test(t) || /\p{Script=Cyrillic}/u.test(t) || looksSerbianLatin) {
     return false;
   }
-  return !/\p{Script=Devanagari}|\p{Script=Arabic}/u.test(t);
+  if (/\p{Script=Devanagari}|\p{Script=Arabic}/u.test(t)) return false;
+  return validateAiUnitLocalePurity(t, locale, {
+    kind: 'experience_bullet',
+    requireUnits: true,
+  }).targetLocalePurityPassed;
 }
 /** Strip leading list syntax only (bullets / numbered prefixes). */
 export function stripDutyListPrefix(text: string): string {
@@ -676,7 +682,11 @@ export function validateProvenancedDeterministicFallbackCoverage(
       rejectionReason = 'duplicate_source_fact_id_mapping';
     } else if (!sourceIdentity) {
       rejectionReason = 'source_identity_missing';
-    } else if (!deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)) {
+    } else if (!(
+      bullet.transformationKind === 'localize_projection'
+        ? deterministicLocalizedProjectionPreservesSourceUnit(sourceIdentity.unit, bullet.text)
+        : deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)
+    )) {
       rejectionReason = 'material_or_clause_preservation_failed';
     } else {
       usedFactIds.add(mapped[0]);
@@ -693,10 +703,14 @@ export function validateProvenancedDeterministicFallbackCoverage(
       operationSnapshotIdMatch: snapshotMatch,
       transformationKind: bullet.transformationKind,
       materialPreservationResult: sourceIdentity
-        ? deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)
+        ? (bullet.transformationKind === 'localize_projection'
+          ? deterministicLocalizedProjectionPreservesSourceUnit(sourceIdentity.unit, bullet.text)
+          : deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text))
         : false,
       clausePreservationResult: sourceIdentity
-        ? deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text)
+        ? (bullet.transformationKind === 'localize_projection'
+          ? deterministicLocalizedProjectionPreservesSourceUnit(sourceIdentity.unit, bullet.text)
+          : deterministicBulletPreservesSourceUnit(sourceIdentity.unit, bullet.text))
         : false,
       unsupportedAdditionResult: false,
       duplicateResult: Boolean(mapped[0] && usedFactIds.has(mapped[0]) && !covered),
@@ -727,6 +741,25 @@ export function validateProvenancedDeterministicFallbackCoverage(
     duplicatedIds: [],
     reason: ok ? undefined : 'experience_material_fact_coverage_incomplete',
   };
+}
+
+/**
+ * A localized projection cannot be verified with same-language token overlap.
+ * Its one-to-one provenance is authoritative, while registered material duties
+ * and unsupported-addition checks remain hard safety gates. Generic units are
+ * accepted only on the deterministic builder path that supplied the immutable
+ * source identity and a non-empty projected line.
+ */
+function deterministicLocalizedProjectionPreservesSourceUnit(
+  sourceUnit: string,
+  projectedText: string,
+): boolean {
+  if (!(projectedText || '').trim()) return false;
+  if (!validateNoExtraGeneratedDuties(sourceUnit, projectedText).valid) return false;
+  const materialKeys = materialDutyKeysFromDescription(sourceUnit)
+    .filter((key) => key !== 'generic_duty');
+  return materialKeys.length === 0
+    || validateMaterialDutyCoverage(sourceUnit, projectedText).valid;
 }
 
 export type ProvenancedFactCoverageDiag = {

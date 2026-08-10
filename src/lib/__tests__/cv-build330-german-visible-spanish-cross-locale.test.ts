@@ -329,9 +329,9 @@ describe('AAB-330 German-visible → Spanish Experience cross-locale', () => {
       crossLocaleOperation: true,
     });
     const gate = session.evaluatePreApplyDecisionGates();
-    expect(gate.passed).toBe(true);
-    expect(gate.diagnosticCompletenessPassed).toBe(true);
     const draft = (session as unknown as { draft: Record<string, unknown> }).draft;
+    expect(gate.passed, JSON.stringify({ gate, failures: draft.diagnosticInvariantFailures })).toBe(true);
+    expect(gate.diagnosticCompletenessPassed).toBe(true);
     expect(draft.preapplyDiagnosticCompletenessPassed).toBe(true);
     expect(draft.preapplyNullRequiredDiagnosticFields || []).toEqual([]);
     expect(draft.applyAuthorized).toBe(true);

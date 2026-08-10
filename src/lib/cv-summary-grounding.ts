@@ -32,6 +32,7 @@ import {
   resolveOccupationalTitleForSummary,
   evaluateRoleDutyConsistency,
 } from './cv-role-title';
+import { resolveLocalizedSummaryRole as resolveSharedLocalizedSummaryRole } from './cv-summary-structured-role-localization';
 import {
   analyzeArabicSummaryEmploymentQuality,
   buildArabicEntryOwnedSummary,
@@ -243,6 +244,7 @@ export {
 import {
   analyzeSpanishSummaryEmploymentQuality,
   buildSpanishEntryOwnedSummary,
+  extractSpanishEntryOwnedFactIds,
   spanishWarehouseSummaryFragment,
   SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION,
 } from './cv-spanish-summary-grounding';
@@ -1772,6 +1774,96 @@ function universalSummaryDutyFragment(
   return '';
 }
 
+const GENERAL_SUMMARY_MATERIAL_KEYS = new Set<MaterialDutyKey>([
+  'process_internal',
+  'team_collaboration',
+  'data_analysis',
+  'reporting',
+]);
+
+/**
+ * Locale-native projections for occupation-agnostic, entry-owned material facts.
+ * These are noun/gerund fragments for the concise Summary shell; they never add
+ * tools, metrics, employers, or achievements beyond the classified source fact.
+ */
+function generalMaterialSummaryFragment(key: MaterialDutyKey, locale: Locale): string {
+  const table: Partial<Record<Locale, Partial<Record<MaterialDutyKey, string>>>> = {
+    en: {
+      process_internal: 'developing internal processes',
+      team_collaboration: 'collaborating with cross-functional teams',
+      data_analysis: 'analyzing business data',
+      reporting: 'preparing reports for management',
+    },
+    sr: {
+      process_internal: 'razvoju internih procesa',
+      team_collaboration: 'saradnji sa međufunkcionalnim timovima',
+      data_analysis: 'analizi poslovnih podataka',
+      reporting: 'pripremi izveštaja za rukovodstvo',
+    },
+    hr: {
+      process_internal: 'razvoju internih procesa',
+      team_collaboration: 'suradnji s međufunkcionalnim timovima',
+      data_analysis: 'analizi poslovnih podataka',
+      reporting: 'pripremi izvješća za rukovodstvo',
+    },
+    de: {
+      process_internal: 'der Entwicklung interner Prozesse',
+      team_collaboration: 'der Zusammenarbeit mit funktionsübergreifenden Teams',
+      data_analysis: 'der Analyse von Geschäftsdaten',
+      reporting: 'der Erstellung von Berichten für die Führungsebene',
+    },
+    es: {
+      process_internal: 'el desarrollo de procesos internos',
+      team_collaboration: 'la colaboración con equipos multifuncionales',
+      data_analysis: 'el análisis de datos empresariales',
+      reporting: 'la preparación de informes para la dirección',
+    },
+    fr: {
+      process_internal: 'le développement de processus internes',
+      team_collaboration: 'la collaboration avec des équipes transversales',
+      data_analysis: 'l’analyse de données métier',
+      reporting: 'la préparation de rapports pour la direction',
+    },
+    it: {
+      process_internal: 'lo sviluppo di processi interni',
+      team_collaboration: 'la collaborazione con team interfunzionali',
+      data_analysis: 'l’analisi dei dati aziendali',
+      reporting: 'la preparazione di relazioni per la direzione',
+    },
+    'pt-BR': {
+      process_internal: 'o desenvolvimento de processos internos',
+      team_collaboration: 'a colaboração com equipes multifuncionais',
+      data_analysis: 'a análise de dados de negócios',
+      reporting: 'a preparação de relatórios para a gestão',
+    },
+    ru: {
+      process_internal: 'разработке внутренних процессов',
+      team_collaboration: 'взаимодействии с межфункциональными командами',
+      data_analysis: 'анализе бизнес-данных',
+      reporting: 'подготовке отчетов для руководства',
+    },
+    hi: {
+      process_internal: 'आंतरिक प्रक्रियाओं के विकास',
+      team_collaboration: 'बहु-कार्यात्मक टीमों के साथ सहयोग',
+      data_analysis: 'व्यावसायिक डेटा के विश्लेषण',
+      reporting: 'प्रबंधन के लिए रिपोर्ट तैयार करने',
+    },
+    ar: {
+      process_internal: 'تطوير العمليات الداخلية',
+      team_collaboration: 'التعاون مع الفرق متعددة التخصصات',
+      data_analysis: 'تحليل بيانات الأعمال',
+      reporting: 'إعداد التقارير للإدارة',
+    },
+    ja: {
+      process_internal: '社内プロセスの整備',
+      team_collaboration: '部門横断チームとの連携',
+      data_analysis: '業務データの分析',
+      reporting: '経営層向け報告書の作成',
+    },
+  };
+  return table[locale]?.[key] || '';
+}
+
 /** Short duty fragments for embedding in a 2-sentence summary. */
 function summaryDutyFragment(
   source: string,
@@ -1802,6 +1894,11 @@ function summaryDutyFragmentsFromSource(
   }
   const intents = cookingIntentsInSource(source);
   if (intents.length === 0) {
+    const generalFragments = classifyMaterialDutyKeys(source)
+      .filter((key) => GENERAL_SUMMARY_MATERIAL_KEYS.has(key))
+      .map((key) => generalMaterialSummaryFragment(key, locale))
+      .filter(Boolean);
+    if (generalFragments.length) return generalFragments;
     const single = summaryDutyFragment(source, locale, g, isPresent);
     return single ? [single] : [];
   }
@@ -2262,9 +2359,23 @@ export function buildConciseGroundedSummary(
         !hasLogisticsDuties
         && (isBakerTitle || isCookTitle || (hasCookDuties && !isKuvarTitle) || (isKuvarTitle && hasCookDuties))
       ) {
-        dutyClause = g === 'female'
-          ? 'जहाँ मैं व्यंजन तैयार करती हूँ और रसोई की स्वच्छता बनाए रखती हूँ'
-          : 'जहाँ मैं व्यंजन तैयार करता हूँ और रसोई की स्वच्छता बनाए रखता हूँ';
+        const cookingKeys = new Set(classifyMaterialDutyKeys(sourceDuties));
+        const cookingClauses = g === 'female'
+          ? [
+            cookingKeys.has('food_prep') ? 'व्यंजन तैयार करती हूँ' : '',
+            cookingKeys.has('hygiene_workplace') ? 'रसोई की स्वच्छता बनाए रखती हूँ' : '',
+            cookingKeys.has('kitchen_collaboration') ? 'रसोई टीम के साथ सहयोग करती हूँ' : '',
+          ]
+          : [
+            cookingKeys.has('food_prep') ? 'व्यंजन तैयार करता हूँ' : '',
+            cookingKeys.has('hygiene_workplace') ? 'रसोई की स्वच्छता बनाए रखता हूँ' : '',
+            cookingKeys.has('kitchen_collaboration') ? 'रसोई टीम के साथ सहयोग करता हूँ' : '',
+          ];
+        const supportedClauses = cookingClauses.filter(Boolean);
+        const joinedClauses = supportedClauses.length > 1
+          ? `${supportedClauses.slice(0, -1).join(', ')} और ${supportedClauses.at(-1)}`
+          : supportedClauses[0] || '';
+        dutyClause = joinedClauses ? `जहाँ मैं ${joinedClauses}` : '';
       } else if (/ग्राफ़िक|ग्राफिक|डिज़ाइन|design|graphic/i.test(`${rolePart} ${sourceDuties}`)) {
         dutyClause = g === 'female'
           ? 'जहाँ मैं दृश्य सामग्री और डिज़ाइन तैयार करती हूँ'
@@ -2381,9 +2492,11 @@ export function buildConciseGroundedSummary(
     void analyzeGermanSummaryEmploymentQuality;
     void germanWarehouseSummaryFragment;
     void GERMAN_CV_AI_302_REVISION;
-    const deRole = /(?:warehouse|lager|skladist|magacin|radnic)/i.test(`${role} ${experienceTitle} ${sourceDuties}`)
-      ? localizeWarehouseEmployee('de', genderNorm || '')
-      : (role || 'Fachkraft');
+    // `role` is already the duty-consistency-aware target-locale resolution.
+    // Re-deriving it from the raw title here resurrects a conflicted title
+    // (for example forklift driver over office/process duties) and makes the
+    // deterministic candidate disagree with the finalizer's role authority.
+    const deRole = role || 'Fachkraft';
     // Universal occupation path — always entry-owned first-person German from
     // structured Experience facts (never translate the previous Summary).
     text = buildGermanEntryOwnedSummary({
@@ -2501,10 +2614,19 @@ export function buildConciseGroundedSummary(
     void SPANISH_CV_AI_305_REVISION;
     void analyzeSpanishSummaryEmploymentQuality;
     void spanishWarehouseSummaryFragment;
-    const isSpanishWarehouseDomain = /(?:warehouse|almac[eé]n|mercanc[ií]a|skladist|magacin|lager|radnic|кладов|مستودع|emplead[oa]\s+de\s+almac|trabajador(?:a)?\s+de\s+almac|moz[oa]\s+de\s+almac)/i
-      .test(`${role} ${experienceTitle} ${sourceDuties}`)
-      || dutyFacts.some((f) => classifyMaterialDutyKeys(f.sourceText || f.value)
-        .some((k) => k.startsWith('warehouse_')));
+    // A warehouse-looking title alone does not authorize invented inbound/docs/
+    // movement duties. Enter the strict warehouse package only when the current
+    // entry itself owns at least one classified warehouse material fact.
+    const spanishCurrentFactIds = extractSpanishEntryOwnedFactIds(
+      dutyFacts.map((f) => f.sourceText || f.value).join('\n'),
+    );
+    const isSpanishWarehouseDomain = spanishCurrentFactIds.some((id) => [
+      'incoming_goods_check',
+      'related_documents_check',
+      'colleague_coordination',
+      'goods_preparation',
+      'goods_movement',
+    ].includes(id));
     if (isSpanishWarehouseDomain) {
       const esRole = /(?:warehouse|almac[eé]n|mercanc[ií]a|skladist|magacin|lager|emplead[oa]|trabajador|moz[oa])/i
         .test(`${role} ${experienceTitle} ${sourceDuties}`)
@@ -2530,14 +2652,34 @@ export function buildConciseGroundedSummary(
       void skillSentence;
     } else {
       const dutyJoin = joinDutyFragments(uniqueFragments, locale);
+      const roleResolution = resolveSharedLocalizedSummaryRole({
+        role: experienceTitle || role || profileTitle,
+        targetLocale: 'es',
+        gender: genderNorm || '',
+      });
+      const esRole = /(?:warehouse|skladišt|skladist|magacin|forklift|viličar|vilicar)/iu
+        .test(`${experienceTitle} ${profileTitle}`)
+        ? localizeWarehouseEmployee('es', genderNorm || '')
+        : roleResolution.localizationValidationPassed
+          ? roleResolution.localizedTargetRoleLabel
+          : 'Profesional';
+      const employerClause = employer ? ` en ${employer}` : '';
+      const employmentOpen = isPresent
+        ? `Actualmente trabajo${employerClause} como ${esRole}`
+        : `He trabajado${employerClause} como ${esRole}`;
+      const durationBody = durationPhrase.replace(/^con\s+/iu, '');
       const open = dutyJoin
         ? (durationPhrase
-          ? `${role || 'Profesional'} ${durationPhrase} en ${dutyJoin}`
-          : `${role || 'Profesional'} en ${dutyJoin}`)
+          ? `${employmentOpen}, con ${durationBody} en ${dutyJoin}`
+          : `${employmentOpen}, con experiencia en ${dutyJoin}`)
         : (durationPhrase
-          ? `${role || 'Profesional'} ${durationPhrase}`
-          : `${role || 'Profesional'}`);
-      text = [open.endsWith('.') ? open : `${open}.`, skillSentence].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+          ? `${employmentOpen}, con ${durationBody}`
+          : employmentOpen);
+      // Entry-owned duties are the grounding substrate. Do not append a generic
+      // skills unit beside them: the Spanish finalizer correctly treats that as
+      // an unowned Summary claim rather than evidence of duty preservation.
+      const trailingSkills = dutyJoin ? '' : skillSentence;
+      text = [open.endsWith('.') ? open : `${open}.`, trailingSkills].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
     }
   } else if (locale === 'sr') {
     void SUMMARY_BUILDER_REVISION_SR;

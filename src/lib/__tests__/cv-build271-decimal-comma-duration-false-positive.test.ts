@@ -405,7 +405,10 @@ describe('build 271 — rewrite styles + locale cycles + fallback', () => {
         `${sr1.text} Also around 6.5 years of experience and six and a half years of experience.`,
         'en',
       );
-      expect(en.blocked, `en r${i}: ${en.reason}`).toBe(false);
+      expect(
+        en.blocked,
+        `en r${i}: ${en.reason}; ${JSON.stringify(en.diagnostics)}`,
+      ).toBe(false);
       expect(countSummaryDurationExpressions(en.text, 'en')).toBe(1);
       cv = applyFinalizedSummaryToCv(cv, 'en', en);
 

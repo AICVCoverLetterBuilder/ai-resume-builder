@@ -823,7 +823,7 @@ function classifyGenericDutyIntent(text: string): GenericDutyIntent | null {
 }
 
 const GENERIC_INTENT_BULLET: Partial<
-  Record<Locale, Record<GenericDutyIntent, (g: GenderTone) => string>>
+  Record<Locale, Record<GenericDutyIntent, (g: GenderTone, isPresent?: boolean) => string>>
 > = {
   en: {
     process: () => 'Develop and implement internal processes.',
@@ -861,18 +861,48 @@ const GENERIC_INTENT_BULLET: Partial<
     logistics: () => 'Trasporto, carico e consegna sicura delle merci nelle operazioni di magazzino.',
   },
   ar: {
-    process: () => 'تطوير وتنفيذ العمليات الداخلية.',
-    collaboration: () => 'التعاون مع فرق متعددة الوظائف لتنفيذ المشاريع.',
-    analysis: () => 'تحليل بيانات الأعمال وإعداد التقارير للإدارة العليا.',
-    planning: () => 'التخطيط والتنسيق لأنشطة القسم.',
-    logistics: () => 'نقل وتحميل وتسليم البضائع بأمان ضمن عمليات المستودع.',
+    process: (_g, present) => present === false
+      ? 'طورت ونفذت العمليات الداخلية.'
+      : 'أطور وأنفذ العمليات الداخلية.',
+    collaboration: (_g, present) => present === false
+      ? 'تعاونت مع فرق متعددة الوظائف لتنفيذ المشاريع.'
+      : 'أتعاون مع فرق متعددة الوظائف لتنفيذ المشاريع.',
+    analysis: (_g, present) => present === false
+      ? 'حللت بيانات الأعمال وأعددت التقارير للإدارة العليا.'
+      : 'أحلل بيانات الأعمال وأعد التقارير للإدارة العليا.',
+    planning: (_g, present) => present === false
+      ? 'خططت لأنشطة القسم ونسقتها.'
+      : 'أخطط لأنشطة القسم وأنسقها.',
+    logistics: (_g, present) => present === false
+      ? 'قمت بنقل البضائع وتحميلها وتسليمها بأمان ضمن عمليات المستودع.'
+      : 'أقوم بنقل البضائع وتحميلها وتسليمها بأمان ضمن عمليات المستودع.',
   },
   ru: {
-    process: () => 'Разработка и внедрение внутренних процессов.',
-    collaboration: () => 'Сотрудничество с межфункциональными командами при реализации проектов.',
-    analysis: () => 'Анализ бизнес-данных и подготовка отчётов для руководства.',
-    planning: () => 'Планирование и координация деятельности отдела.',
-    logistics: () => 'Транспортировка, погрузка и безопасная доставка товаров в рамках складских операций.',
+    process: (g, present) => present === false
+      ? (g === 'female'
+        ? 'Разрабатывала и внедряла внутренние процессы.'
+        : 'Разрабатывал и внедрял внутренние процессы.')
+      : 'Разрабатывает и внедряет внутренние процессы.',
+    collaboration: (g, present) => present === false
+      ? (g === 'female'
+        ? 'Сотрудничала с межфункциональными командами при реализации проектов.'
+        : 'Сотрудничал с межфункциональными командами при реализации проектов.')
+      : 'Сотрудничает с межфункциональными командами при реализации проектов.',
+    analysis: (g, present) => present === false
+      ? (g === 'female'
+        ? 'Анализировала бизнес-данные и готовила отчёты для руководства.'
+        : 'Анализировал бизнес-данные и готовил отчёты для руководства.')
+      : 'Анализирует бизнес-данные и готовит отчёты для руководства.',
+    planning: (g, present) => present === false
+      ? (g === 'female'
+        ? 'Планировала и координировала деятельность отдела.'
+        : 'Планировал и координировал деятельность отдела.')
+      : 'Планирует и координирует деятельность отдела.',
+    logistics: (g, present) => present === false
+      ? (g === 'female'
+        ? 'Обеспечивала транспортировку, погрузку и безопасную доставку товаров в рамках складских операций.'
+        : 'Обеспечивал транспортировку, погрузку и безопасную доставку товаров в рамках складских операций.')
+      : 'Обеспечивает транспортировку, погрузку и безопасную доставку товаров в рамках складских операций.',
   },
   'pt-BR': {
     process: () => 'Desenvolvimento e implementação de processos internos.',
@@ -1183,7 +1213,7 @@ function localizedBulletForFact(
       const intent = classifyGenericDutyIntent(source);
       const intentTable = GENERIC_INTENT_BULLET.en;
       if (intent && intentTable?.[intent]) {
-        const line = intentTable[intent](g).trim();
+        const line = intentTable[intent](g, isPresent).trim();
         if (optionalTemplatePreservesSourceUnit(source, line) || sourceIsNonEnglish) {
           return line;
         }
@@ -1215,7 +1245,7 @@ function localizedBulletForFact(
     const intent = classifyGenericDutyIntent(source);
     const intentTable = GENERIC_INTENT_BULLET[locale];
     if (intent && intentTable?.[intent]) {
-      const line = intentTable[intent](g).trim();
+      const line = intentTable[intent](g, isPresent).trim();
       if (optionalTemplatePreservesSourceUnit(source, line)) {
         return line;
       }
