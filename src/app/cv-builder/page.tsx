@@ -95,7 +95,6 @@ import {
 import { buildExperienceDurationSnapshot, durationToPromptToken } from '@/lib/cv-experience-duration';
 import { applyCvContentQuality } from '@/lib/cv-content-quality';
 import {
-  applyFinalizedBulletsToCv,
   finalizeCvAiFieldForApply,
 } from '@/lib/cv-ai-finalize-apply';
 import {
@@ -119,6 +118,14 @@ import {
   EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION,
   validateVisibleExperienceCoverage,
 } from '@/lib/cv-experience-phased-apply-329';
+import {
+  EXPERIENCE_TRANSACTION_OWNERSHIP_414_REVISION,
+  createExperienceApplyOwnershipState,
+  commitExperienceApplyTransactionally,
+  rollbackExperienceApplyTransactionally,
+  releaseExperienceApplyOwnership,
+  shouldAcceptIncomingExperienceCv,
+} from '@/lib/cv-experience-transactional-apply';
 import {
   canonicalizeContentLocale,
   resolveCommittedAppliedVisibleContentLocale,
@@ -350,7 +357,9 @@ export default function CVBuilderPage() {
   const latestBulletsContextKeyRef = useRef<Record<string, string>>({});
   const latestRewriteRequestIdRef = useRef<string | null>(null);
   const summaryApplyOwnershipRef = useRef(createSummaryApplyOwnershipState());
+  const experienceApplyOwnershipRef = useRef(createExperienceApplyOwnershipState());
   void SUMMARY_TRANSACTIONAL_APPLY_387_REVISION;
+  void EXPERIENCE_TRANSACTION_OWNERSHIP_414_REVISION;
   const SUMMARY_CVREF_SINGLE_WRITER_REVISION =
     'summary-cvref-single-writer-411-v1' as const;
   void SUMMARY_CVREF_SINGLE_WRITER_REVISION;
@@ -427,6 +436,13 @@ export default function CVBuilderPage() {
       })) {
         return;
       }
+      if (!shouldAcceptIncomingExperienceCv({
+        ownership: experienceApplyOwnershipRef.current,
+        incomingCv: currentCv,
+        localCvRef: cvRef.current,
+      })) {
+        return;
+      }
       setCv(currentCv);
       cvRef.current = currentCv;
     }
@@ -438,6 +454,13 @@ export default function CVBuilderPage() {
     const ownership = summaryApplyOwnershipRef.current;
     const nextHash = hashSummaryTextForApply(cv.summary);
 
+    if (!shouldAcceptIncomingExperienceCv({
+      ownership: experienceApplyOwnershipRef.current,
+      incomingCv: cv,
+      localCvRef: cvRef.current,
+    })) {
+      return;
+    }
     syncCvRefFromReactState({
       cvRef,
       ownership,
@@ -489,7 +512,14 @@ export default function CVBuilderPage() {
       if (!gate.flush || !gate.cvToPersist) {
         return;
       }
-      setCurrentCv(gate.cvToPersist);
+      const cvToPersist = shouldAcceptIncomingExperienceCv({
+        ownership: experienceApplyOwnershipRef.current,
+        incomingCv: gate.cvToPersist,
+        localCvRef: cvRef.current,
+      })
+        ? gate.cvToPersist
+        : cvRef.current;
+      setCurrentCv(cvToPersist);
     }, 800);
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
@@ -596,10 +626,16 @@ export default function CVBuilderPage() {
   };
 
   const addExperience = () => setCv(prev => ({ ...prev, experience: [...prev.experience, emptyExp()] }));
-  const removeExperience = (id: string) => setCv(prev => ({ ...prev, experience: prev.experience.filter(e => e.id !== id) }));
+  const removeExperience = (id: string) => {
+    releaseExperienceApplyOwnership(experienceApplyOwnershipRef.current, id);
+    setCv(prev => ({ ...prev, experience: prev.experience.filter(e => e.id !== id) }));
+  };
   const updateExperience = (id: string, field: string, value: string | boolean) => {
     // Sync cvRef immediately so AI Improvement can read the latest textarea
     // without waiting for React's post-paint useEffect.
+    if (field === 'description') {
+      releaseExperienceApplyOwnership(experienceApplyOwnershipRef.current, id);
+    }
     commitCvUpdate((prev) => applyCanonicalExperienceEdit(prev, id, field, value, locale));
   };
 
@@ -2311,15 +2347,6 @@ export default function CVBuilderPage() {
         || exp.description
         || '',
       );
-      const previousGeneratedLocale = (
-        previousTargetEntry as { generatedLocale?: string } | undefined
-      )?.generatedLocale || null;
-      const previousGeneratedDescription = String(
-        (previousTargetEntry as { generatedDescription?: string } | undefined)
-          ?.generatedDescription
-        || previousTargetText,
-      );
-      const previousTargetHash = fingerprintText(previousTargetText.replace(/\s+/g, ' ').trim());
       const finalNormalizedHash = String(
         finalizedBullets.diagnostics?.finalNormalizedHash
         || fingerprintText((finalizedBullets.text || '').replace(/\s+/g, ' ').trim()),
@@ -2327,6 +2354,18 @@ export default function CVBuilderPage() {
       const authoritativeSourceForVisible = String(
         aiGrounding.sourceDescription || previousTargetText,
       );
+      let currentVisibleTextAtWrite = String(previousTargetEntry?.description || '');
+      if (typeof document !== 'undefined') {
+        const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+          ? CSS.escape(clickedExperienceEntryId)
+          : clickedExperienceEntryId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const domField = document.querySelector(
+          `[data-experience-description-id="${escapedId}"]`,
+        ) as HTMLTextAreaElement | null;
+        if (domField && typeof domField.value === 'string') {
+          currentVisibleTextAtWrite = domField.value;
+        }
+      }
       diagSession.patch({
         applyAuthorized: true,
         applyAttempted: true,
@@ -2338,35 +2377,94 @@ export default function CVBuilderPage() {
         attemptedApplyCandidateHash: finalNormalizedHash,
         entryGeneratedLocaleBeforeApply:
           (finalizedBullets.diagnostics?.entryGeneratedLocaleBeforeApply as string | undefined)
-          || previousGeneratedLocale,
+          || (previousTargetEntry as { generatedLocale?: string } | undefined)?.generatedLocale
+          || null,
         visibleTextareaLocaleBeforeApply:
           (finalizedBullets.diagnostics?.visibleTextareaLocaleBeforeApply as string | undefined)
           || (finalizedBullets.diagnostics?.visibleTextareaLocale as string | undefined)
           || null,
       });
-      diagSession.stage('temporary_visible_write', 'ok');
-      let writtenVisibleText = '';
-      commitCvUpdate((prev) => {
-        if (!prev.experience.some((e) => e.id === clickedExperienceEntryId)) {
-          return prev;
-        }
-        const next = applyFinalizedBulletsToCv(
-          prev,
-          requestedLocale,
-          clickedExperienceEntryId,
-          finalizedBullets,
-          requestContext,
-        );
-        writtenVisibleText = String(
-          (next.experience || []).find((e) => e.id === clickedExperienceEntryId)?.description || '',
-        );
-        return next;
+      const applyTransaction = commitExperienceApplyTransactionally({
+        cvRef,
+        ownership: experienceApplyOwnershipRef.current,
+        locale: requestedLocale,
+        experienceId: clickedExperienceEntryId,
+        finalized: finalizedBullets,
+        operationSourceText: operationSnapshot.visibleComparisonRawText,
+        currentVisibleText: currentVisibleTextAtWrite,
+        operationId: reqCtx.requestId,
+        jobContext: requestContext,
+        scheduleReactCv: (next) => setCv(next),
       });
-      const visibleEntry = (cvRef.current.experience || []).find(
+      diagSession.patch({
+        experienceApplyOperationSourceHash: applyTransaction.lifecycle.operationSourceHash,
+        experienceApplySelectedFinalHash: applyTransaction.lifecycle.selectedFinalHash,
+        experienceApplyCvRefHashBeforeWrite: applyTransaction.lifecycle.cvRefHashBeforeWrite,
+        experienceApplyFormHashBeforeWrite: applyTransaction.lifecycle.formHashBeforeWrite,
+        experienceApplyTransactionWrittenHash: applyTransaction.lifecycle.transactionWrittenHash,
+        experienceApplyCvRefHashImmediatelyAfterWrite:
+          applyTransaction.lifecycle.cvRefHashImmediatelyAfterWrite,
+        experienceApplyTransactionEntryIdHash:
+          applyTransaction.lifecycle.transactionEntryIdHash,
+        experienceApplyOperationIdHash: applyTransaction.lifecycle.operationIdHash,
+        experienceApplyOwnershipPassed: applyTransaction.lifecycle.applyOwnershipPassed,
+        experienceApplyActualRaceDetected: applyTransaction.lifecycle.actualRaceDetected,
+        experienceApplyActualRaceReason: applyTransaction.lifecycle.actualRaceReason,
+        experienceApplyPostWriteReadSource: applyTransaction.lifecycle.postWriteReadSource,
+        experienceApplyFailureKind: applyTransaction.lifecycle.failureKind,
+      });
+      diagSession.stage(
+        'temporary_visible_write',
+        applyTransaction.ok ? 'ok' : 'fail',
+        applyTransaction.lifecycle.failureKind === 'none'
+          ? undefined
+          : applyTransaction.lifecycle.failureKind,
+      );
+
+      if (applyTransaction.lifecycle.actualRaceDetected) {
+        diagSession.patch({
+          applyWriteSucceeded: false,
+          visibleValidationAttempted: false,
+          visibleValidationPassed: false,
+          rollbackAttempted: false,
+          rollbackSucceeded: null,
+          applyCommitted: false,
+          targetContentApplied: false,
+          contentLocaleUpdatedAfterApply: false,
+          translationFallbackApplied: false,
+          appliedVisibleContentLocale: null,
+          appliedExperienceEntryIdHash: null,
+          countedAsSuccess: false,
+          finalTypedFailureReason: 'stale_experience_edited_in_flight',
+          rejectionStage: 'compare_and_swap_source',
+        });
+        const msg = finishAiClientRequest({
+          ctx: reqCtx,
+          isProVerified: true,
+          countBefore,
+          countAfter: countBefore,
+          httpStatus: res.status,
+          error: { code: 'generation_validation_failed', httpStatus: 422 },
+          responseSource: 'blocked',
+        });
+        logExperienceAiTrace({
+          resultApplied: false,
+          rejectedReason: 'stale_experience_edited_in_flight',
+          aiUsageIncremented: false,
+        });
+        diagSession.recordVisibleApply(false, countBefore);
+        diagSession.commit();
+        showExperienceAiRejectToast(msg ?? aiErrorMessage('generation_validation_failed', locale));
+        return;
+      }
+
+      const transactionWrittenCv = applyTransaction.writtenCv;
+      const visibleEntry = (transactionWrittenCv?.experience || []).find(
         (e) => e.id === clickedExperienceEntryId,
       );
-      const visibleText = String(visibleEntry?.description || writtenVisibleText || '');
-      const writeSucceeded = Boolean(visibleText.trim())
+      const visibleText = String(applyTransaction.writtenDescription || '');
+      const writeSucceeded = applyTransaction.ok
+        && Boolean(visibleText.trim())
         && visibleText.trim() === (finalizedBullets.text || '').trim();
       diagSession.patch({
         applyWriteSucceeded: writeSucceeded,
@@ -2382,14 +2480,14 @@ export default function CVBuilderPage() {
       const visibleAppliedEntryIdHash = visibleEntryStillExists
         ? String(
           finalizedBullets.diagnostics?.selectedExperienceEntryIdHash
-          || '',
+          || applyTransaction.lifecycle.transactionEntryIdHash,
         )
         : null;
       const visibleOk = writeSucceeded
         && visibleCov.visibleDescriptionMatchesFinalHash
+        && visibleCov.visibleLocaleValidationPassed
         && (
-          requestedLocale !== 'en'
-          || !visibleCov.visiblePredicateValidationApplicable
+          !visibleCov.visiblePredicateValidationApplicable
           || (
             visibleCov.visibleFactCoveragePassed
             && visibleCov.visiblePredicateCoveragePassed
@@ -2434,6 +2532,7 @@ export default function CVBuilderPage() {
       );
 
       if (!visibleOk) {
+        const actualWriteFailure = !applyTransaction.ok;
         diagSession.patch({
           rollbackAttempted: true,
           applyCommitted: false,
@@ -2443,39 +2542,19 @@ export default function CVBuilderPage() {
           appliedVisibleContentLocale: null,
           appliedExperienceEntryIdHash: null,
           countedAsSuccess: false,
-          finalTypedFailureReason: writeSucceeded
-            ? 'visible_apply_validation_failed'
-            : 'visible_apply_write_failed',
+          finalTypedFailureReason: actualWriteFailure
+            ? 'visible_apply_write_failed'
+            : 'visible_apply_validation_failed',
           rejectionStage: 'visible_apply',
         });
         diagSession.stage('rollback_started', 'ok');
-        commitCvUpdate((prev) => ({
-          ...prev,
-          experience: (prev.experience || []).map((e) =>
-            e.id === clickedExperienceEntryId
-              ? {
-                ...e,
-                description: previousTargetText,
-                generatedDescription: previousGeneratedDescription,
-                ...(previousGeneratedLocale
-                  ? { generatedLocale: previousGeneratedLocale }
-                  : { generatedLocale: undefined }),
-              }
-              : e,
-          ),
-        }));
-        const rolledEntry = (cvRef.current.experience || []).find(
-          (e) => e.id === clickedExperienceEntryId,
-        );
-        const rolled = String(rolledEntry?.description || '');
-        const rolledLocale = (
-          rolledEntry as { generatedLocale?: string } | undefined
-        )?.generatedLocale || null;
-        const rollbackOk = fingerprintText(rolled.replace(/\s+/g, ' ').trim()) === previousTargetHash
-          && (
-            !previousGeneratedLocale
-            || rolledLocale === previousGeneratedLocale
-          );
+        const rollbackOk = rollbackExperienceApplyTransactionally({
+          cvRef,
+          ownership: experienceApplyOwnershipRef.current,
+          experienceId: clickedExperienceEntryId,
+          previousCv: applyTransaction.previousCv,
+          scheduleReactCv: (next) => setCv(next),
+        });
         diagSession.patch({
           rollbackSucceeded: rollbackOk,
           applyCommitted: false,
@@ -2483,8 +2562,6 @@ export default function CVBuilderPage() {
           translationFallbackApplied: false,
           appliedVisibleContentLocale: null,
           appliedExperienceEntryIdHash: null,
-          postapplyDiagnosticCompletenessPassed: false,
-          diagnosticCompletenessPassed: false,
         });
         diagSession.stage('rollback_completed', rollbackOk ? 'ok' : 'fail');
         if (!rollbackOk) {
@@ -2503,7 +2580,9 @@ export default function CVBuilderPage() {
         });
         logExperienceAiTrace({
           resultApplied: false,
-          rejectedReason: 'visible_apply_validation_failed',
+          rejectedReason: actualWriteFailure
+            ? 'visible_apply_write_failed'
+            : 'visible_apply_validation_failed',
           aiUsageIncremented: false,
         });
         diagSession.recordVisibleApply(false, countBefore);
@@ -2526,7 +2605,9 @@ export default function CVBuilderPage() {
       });
       const persistedAppliedLocale = appliedLocaleResolved.appliedVisibleContentLocale;
       const contentLocaleCanonical = String(
-        canonicalizeContentLocale(cvRef.current.contentLocale || requestedLocale),
+        canonicalizeContentLocale(
+          transactionWrittenCv?.contentLocale || cvRef.current.contentLocale || requestedLocale,
+        ),
       );
       diagSession.patch({
         applyCommitted: true,

@@ -360,7 +360,8 @@ describe('8. Atomic locale request context is wired into cv-builder/page.tsx', (
     expect(fn).toMatch(/stale_request_or_context_mismatch|stale_request_superseded/);
     expect(fn).toMatch(/finalizeCvAiFieldForApply\(\{/);
     expect(fn).toMatch(/action: 'experience_bullets'/);
-    expect(fn).toMatch(/applyFinalizedBulletsToCv\(/);
+    expect(fn).toMatch(/commitExperienceApplyTransactionally\(\{/);
+    expect(fn).toMatch(/operationSourceText: operationSnapshot\.visibleComparisonRawText/);
     expect(fn).toMatch(/commitCvUpdate\(/);
     expect(fn).toMatch(/experienceEntryId: clickedExperienceEntryId/);
   });

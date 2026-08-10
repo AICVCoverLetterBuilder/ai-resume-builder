@@ -468,6 +468,20 @@ export type ExperienceAiDiagnosticTrace = {
   rollbackAttempted?: boolean | null;
   rollbackSucceeded?: boolean | null;
   applyCommitted?: boolean | null;
+  /** AAB-414 transaction-owned Experience write/readback lifecycle. */
+  experienceApplyOperationSourceHash?: string | null;
+  experienceApplySelectedFinalHash?: string | null;
+  experienceApplyCvRefHashBeforeWrite?: string | null;
+  experienceApplyFormHashBeforeWrite?: string | null;
+  experienceApplyTransactionWrittenHash?: string | null;
+  experienceApplyCvRefHashImmediatelyAfterWrite?: string | null;
+  experienceApplyTransactionEntryIdHash?: string | null;
+  experienceApplyOperationIdHash?: string | null;
+  experienceApplyOwnershipPassed?: boolean | null;
+  experienceApplyActualRaceDetected?: boolean | null;
+  experienceApplyActualRaceReason?: string | null;
+  experienceApplyPostWriteReadSource?: string | null;
+  experienceApplyFailureKind?: string | null;
   attemptedApplyExperienceEntryIdHash?: string | null;
   attemptedApplyEmploymentState?: string | null;
   attemptedApplyCandidateHash?: string | null;
@@ -3464,7 +3478,9 @@ export class ExperienceAiDiagnosticSession {
 
     const aab329PreapplyEvaluated = typeof preapplyCompletenessLocked === 'boolean';
 
-    if (this.draft.applyCommitted === true && preapplyCompletenessLocked === true) {
+    const postapplyAttempted = this.draft.applyAttempted === true
+      && this.draft.visibleValidationAttempted === true;
+    if (postapplyAttempted && preapplyCompletenessLocked === true) {
       const post = checkExperiencePostapplyDiagnosticCompleteness(
         base as Record<string, unknown>,
       );
@@ -3512,7 +3528,7 @@ export class ExperienceAiDiagnosticSession {
       nullFields = (this.draft.preapplyNullRequiredDiagnosticFields as string[] | undefined)
         || (this.draft.nullRequiredDiagnosticFields as string[] | undefined)
         || [];
-    } else if (aab329PreapplyEvaluated && this.draft.applyCommitted === true) {
+    } else if (aab329PreapplyEvaluated && postapplyAttempted) {
       completenessPassed = combineExperienceDiagnosticCompleteness({
         preapplyPassed: true,
         postapplyPassed: postapplyCompletenessPassed,

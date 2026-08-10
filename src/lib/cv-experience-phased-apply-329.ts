@@ -102,6 +102,8 @@ import {
   localesEquivalent,
 } from './cv-content-locale';
 import { resolveLocaleCandidate } from './i18n/translations';
+import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
+import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 
 export const EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION =
   'experience-selected-final-coverage-329-v1' as const;
@@ -1039,6 +1041,7 @@ export function validateVisibleExperienceCoverage(options: {
   const normalized = visible.replace(/\s+/g, ' ').trim();
   const visibleNormalizedHash = fingerprintText(normalized);
   const locale = (options.targetLocale || 'en').toLowerCase();
+  const resolvedLocale = resolveLocaleCandidate(options.targetLocale || 'en') || 'en';
   let visibleRequiredFactCount = 0;
   let visibleCoveredFactCount = 0;
   let uncovered: string[] = [];
@@ -1353,6 +1356,8 @@ export function validateVisibleExperienceCoverage(options: {
     visiblePredicateValidationApplicable: applicable,
     visibleNormalizedHash,
     visibleDescriptionMatchesFinalHash: visibleNormalizedHash === options.finalNormalizedHash,
-    visibleLocaleValidationPassed: true,
+    visibleLocaleValidationPassed: Boolean(visible)
+      && textMatchesRequestedFieldLocale(visible, resolvedLocale, 'experience_bullet')
+      && !isWrongLanguageAiOutput(visible, resolvedLocale),
   };
 }
