@@ -104,6 +104,7 @@ import {
 import { resolveLocaleCandidate } from './i18n/translations';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
+import { validateExperienceCvPerspective } from './cv-experience-perspective';
 
 export const EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION =
   'experience-selected-final-coverage-329-v1' as const;
@@ -1021,6 +1022,7 @@ export function validateVisibleExperienceCoverage(options: {
   visibleText: string;
   targetLocale: string;
   finalNormalizedHash: string;
+  isPresent?: boolean;
 }): {
   visibleRequiredFactCount: number;
   visibleCoveredFactCount: number;
@@ -1035,6 +1037,8 @@ export function validateVisibleExperienceCoverage(options: {
   visibleNormalizedHash: string;
   visibleDescriptionMatchesFinalHash: boolean;
   visibleLocaleValidationPassed: boolean;
+  visiblePersonMode: string;
+  visiblePerspectiveValidationPassed: boolean;
 } {
   void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
   const visible = (options.visibleText || '').trim();
@@ -1042,6 +1046,9 @@ export function validateVisibleExperienceCoverage(options: {
   const visibleNormalizedHash = fingerprintText(normalized);
   const locale = (options.targetLocale || 'en').toLowerCase();
   const resolvedLocale = resolveLocaleCandidate(options.targetLocale || 'en') || 'en';
+  const visiblePerspective = validateExperienceCvPerspective(visible, resolvedLocale, {
+    isPresent: options.isPresent,
+  });
   let visibleRequiredFactCount = 0;
   let visibleCoveredFactCount = 0;
   let uncovered: string[] = [];
@@ -1359,5 +1366,7 @@ export function validateVisibleExperienceCoverage(options: {
     visibleLocaleValidationPassed: Boolean(visible)
       && textMatchesRequestedFieldLocale(visible, resolvedLocale, 'experience_bullet')
       && !isWrongLanguageAiOutput(visible, resolvedLocale),
+    visiblePersonMode: visiblePerspective.finalPersonMode,
+    visiblePerspectiveValidationPassed: visiblePerspective.ok,
   };
 }

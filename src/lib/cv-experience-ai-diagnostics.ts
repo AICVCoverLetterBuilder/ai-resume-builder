@@ -149,6 +149,7 @@ export type ExperienceAiDiagStageName =
   | 'visible_predicate_validation'
   | 'visible_locale_validation'
   | 'visible_tense_validation'
+  | 'visible_perspective_validation'
   | 'visible_hash_validation'
   | 'postapply_invariant_gate'
   | 'postapply_completeness_gate'
@@ -524,6 +525,7 @@ export type ExperienceAiDiagnosticTrace = {
   visibleNormalizedHash?: string | null;
   visibleLocaleValidationPassed?: boolean | null;
   visibleTenseValidationPassed?: boolean | null;
+  visiblePersonMode?: string | null;
   visiblePerspectiveValidationPassed?: boolean | null;
   visibleAppliedEntryIdHash?: string | null;
   experienceSelectedFinalCoverageRevision?: string | null;

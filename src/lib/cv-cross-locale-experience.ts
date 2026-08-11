@@ -80,6 +80,7 @@ import {
 } from './cv-english-experience-warehouse-grounding';
 import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
 import { buildSourcePreservingExperienceBullets } from './cv-localized-fallback';
+import { realizeArabicBuiltExperiencePersonEvidence } from './cv-arabic-experience-tense';
 
 type ActionFrame =
   | 'check_records'
@@ -979,7 +980,11 @@ function bulletForLocale(
     if (warehouse) return warehouse;
   }
   const shell = localizedShellBullet(locale, frame, isPresent, domain);
-  if (shell) return shell;
+  if (shell) {
+    return locale === 'ar'
+      ? realizeArabicBuiltExperiencePersonEvidence(shell, { isPresent, gender })
+      : shell;
+  }
   // Unknown target: English CV form (never return the source language).
   return applyEnglishEmploymentTense(englishBullet(frame, domain, isPresent), isPresent);
 }

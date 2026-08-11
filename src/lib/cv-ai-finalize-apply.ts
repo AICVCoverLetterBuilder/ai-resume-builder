@@ -7,7 +7,7 @@
  * never be applied after this function.
  */
 import type { CVData, CvSummaryOrigin, WorkExperience } from './types';
-import type { Locale } from './i18n/translations';
+import { resolveLocaleCandidate, type Locale } from './i18n/translations';
 import type { CoverLetterGender } from './cover-letter-gender';
 import {
   buildCvCanonicalFactSet,
@@ -7918,6 +7918,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     : (authoritativeFactSource
       || liveOperationSource
       || canonical.map((f) => f.sourceText || f.value).join('\n'));
+  // Person truth belongs to the authoritative source locale, never the target
+  // locale. Explicit operation metadata wins; otherwise classify the actual
+  // source text without a target-locale hint. Ambiguous evidence stays unknown.
+  const authoritativeSourceLocale = sourceWasEmpty
+    ? null
+    : (
+      resolveLocaleCandidate(input.sourceLocale)
+      || resolveLocaleCandidate(detectTextLocale(sourceForCoverage || ''))
+    );
   const requestedExperienceRewriteStyle = String(input.rewriteStyle || '')
     .trim()
     .toLowerCase();
@@ -8185,7 +8194,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   function baseDiagStubForEarlyNoOp(): Record<string, unknown> {
     void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
     return {
-      sourceLocale: locale,
+      sourceLocale: authoritativeSourceLocale || 'unknown',
       targetLocale: locale,
       targetScript: resolveTargetScriptForLocale(locale),
       sourceFactCount: experienceAiSourceUnits(authoritativeFactSource || '').length,
@@ -8580,7 +8589,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : 'provider';
 
   const baseDiag = (): NonNullable<FinalizeCvAiFieldResult['diagnostics']> => ({
-    sourceLocale: locale,
+    sourceLocale: authoritativeSourceLocale || 'unknown',
     targetLocale: locale,
     targetScript: resolveTargetScriptForLocale(locale),
     sourceFactCount,
@@ -8634,9 +8643,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     sourceTenseValidationPassed: visibleSourceAnalysis.sourceTenseValidationPassed,
     sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
     authoritativeSourceAlreadyTargetLocale: computeAuthoritativeSourceAlreadyTargetLocale({
-      authoritativeSourceLocale: detectTextLocale(sourceForCoverage || '', {
-        storedLocale: locale,
-      }),
+      authoritativeSourceLocale: authoritativeSourceLocale || 'unknown',
       requestedTargetLocale: locale,
     }),
     visibleTextareaAlreadyTargetLocale: computeVisibleTextareaAlreadyTargetLocale({
@@ -8733,9 +8740,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     //   persisted entry generated/applied locale after successful write
     // - contentLocaleDocument: CVData.contentLocale at request/finalize time
     //   (document-level field; may differ from UI/session operational locale)
-    authoritativeFactSourceLocale: detectTextLocale(sourceForCoverage || '', {
-      storedLocale: locale,
-    }),
+    authoritativeFactSourceLocale: authoritativeSourceLocale || 'unknown',
     ...(() => {
       const entryGen =
         (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null;
@@ -8987,10 +8992,39 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       provenancedIdentity?: ReturnType<typeof validateProvenancedDeterministicFallbackCoverage>;
     },
   ): FinalizeCvAiFieldResult | null => {
-    const candidate = (text || '').trim();
-    if (!candidate) {
+    const rawCandidate = (text || '').trim();
+    if (!rawCandidate) {
       lastRejectStage = stage;
       lastRejectReason = 'empty_bullets';
+      return null;
+    }
+    // Arabic deterministic, repair, server-fallback, and provider candidates
+    // share the same locale morphology boundary. Some older fallback builders
+    // intentionally emit fact-preserving 1sg/present lemmas; project those
+    // safely before validating the exact candidate that can be selected.
+    const candidate = locale === 'ar'
+      ? normalizeExperienceBulletsPerspective(rawCandidate, {
+        locale,
+        isPresent,
+        gender,
+        sourceDescription: sourceForCoverage,
+        sourceLocale: authoritativeSourceLocale,
+      }).text.trim()
+      : rawCandidate;
+    // Every candidate kind reaches this shared final-selection boundary.
+    // Perspective is reclassified from this exact text; no provider/fallback
+    // phase may carry a prior optimistic boolean into final acceptance.
+    const candidatePerspective = validateExperienceCvPerspective(candidate, locale, {
+      isPresent,
+    });
+    if (!candidatePerspective.ok) {
+      lastRejectStage = `${stage}:perspective`;
+      lastRejectReason = candidatePerspective.reason
+        || 'experience_cv_perspective_first_person';
+      if (stage === 'provider') {
+        providerRejectionStage = lastRejectStage;
+        providerRejectionReason = lastRejectReason;
+      }
       return null;
     }
     let englishWarehouseCoverageLocked = false;
@@ -10886,8 +10920,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const providerOrigin = input.originHint === 'ai_repaired' ? 'ai_repaired' : 'ai_generated';
   const providerRawForCompare = candidate;
   let perspectiveMeta = {
-    sourcePersonMode: detectExperiencePersonMode(sourceForCoverage, locale) as ExperiencePersonMode,
-    providerPersonMode: detectExperiencePersonMode(candidate, locale) as ExperiencePersonMode,
+    sourcePersonMode: (authoritativeSourceLocale
+      ? detectExperiencePersonMode(sourceForCoverage, authoritativeSourceLocale, { isPresent })
+      : 'unknown') as ExperiencePersonMode,
+    providerPersonMode: detectExperiencePersonMode(candidate, locale, { isPresent }) as ExperiencePersonMode,
     normalizedPersonMode: 'unknown' as ExperiencePersonMode,
     finalPersonMode: 'unknown' as ExperiencePersonMode,
     perspectiveMode: 'cv_third_person' as const,
@@ -10904,6 +10940,36 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const attachPerspectiveDiag = (
     result: FinalizeCvAiFieldResult,
   ): FinalizeCvAiFieldResult => {
+    if (result.countedAsSuccess && (result.text || '').trim()) {
+      const finalPerspective = validateExperienceCvPerspective(result.text, locale, {
+        isPresent,
+      });
+      perspectiveMeta.finalPersonMode = finalPerspective.finalPersonMode;
+      perspectiveMeta.perspectiveValidationPassed = finalPerspective.ok;
+      if (!finalPerspective.ok) {
+        providerAccepted = false;
+        clientDeterministicFallbackApplied = false;
+        finalCandidateSource = 'none';
+        return {
+          ...result,
+          blocked: true,
+          countedAsSuccess: false,
+          reason: finalPerspective.reason || 'experience_cv_perspective_first_person',
+          diagnostics: {
+            ...baseDiag(),
+            ...result.diagnostics,
+            ...perspectiveMeta,
+            providerAccepted: false,
+            finalCandidateSource: 'none',
+            perspectiveValidationPassed: false,
+            typedFailureReason:
+              finalPerspective.reason || 'experience_cv_perspective_first_person',
+            rejectionStage: 'final_selected:perspective',
+            countedAsSuccess: false,
+          },
+        };
+      }
+    }
     // Final visible no-op / degradation gate — every non-empty Experience path.
     if (result.countedAsSuccess && useVisibleForNoOp && (result.text || '').trim()) {
       void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
@@ -11571,6 +11637,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       isPresent,
       gender,
       sourceDescription: sourceForCoverage || candidate,
+      ...(authoritativeSourceLocale ? { sourceLocale: authoritativeSourceLocale } : {}),
     });
     perspectiveMeta = {
       ...perspectiveMeta,
@@ -11591,7 +11658,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const finalNormalizedBullets = locale === 'hr' && persp.perspectiveNormalizationApplied
       ? polishCroatianExperienceAiText(persp.text)
       : persp.text;
-    const perspectiveGate = validateExperienceCvPerspective(finalNormalizedBullets, locale);
+    const perspectiveGate = validateExperienceCvPerspective(finalNormalizedBullets, locale, {
+      isPresent,
+    });
     perspectiveMeta.perspectiveValidationPassed = perspectiveGate.ok;
     perspectiveMeta.finalPersonMode = perspectiveGate.finalPersonMode;
 
@@ -11605,7 +11674,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (accepted) {
           perspectiveMeta.normalizedBulletsUsedForApply = true;
           perspectiveMeta.meaningfulChangeDetected = true;
-          perspectiveMeta.finalPersonMode = detectExperiencePersonMode(accepted.text, locale);
+          perspectiveMeta.finalPersonMode = detectExperiencePersonMode(accepted.text, locale, {
+            isPresent,
+          });
           return attachPerspectiveDiag(accepted);
         }
       }
@@ -11664,8 +11735,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // Cross-locale "same text" must fall through to localized deterministic fallback.
       const sourceOkForLocale = sourceUsableInLocale(sourceForCoverage, locale)
         || (locale === 'en' && sourceUsableInLocale(sourceForCoverage, 'en'));
-      const sourceNeedsPerspective = experienceRequiresCvThirdPerson(locale)
-        && detectExperiencePersonMode(sourceForCoverage, locale) === 'first_singular';
+      const sourceNeedsPerspective = Boolean(
+        authoritativeSourceLocale
+        && experienceRequiresCvThirdPerson(authoritativeSourceLocale)
+        && detectExperiencePersonMode(sourceForCoverage, authoritativeSourceLocale, {
+          isPresent,
+        }) === 'first_singular',
+      );
       const needsDesignFamilyRebuild = experienceNeedsRussianDesignFamilyRebuild({
         locale,
         sourceDescription: sourceForCoverage,
@@ -12148,6 +12224,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
                 finalAccepted.text,
                 locale,
+                { isPresent },
               );
               providerAccepted = cons.decision.candidateOrigin === 'provider'
                 || cons.decision.candidateOrigin === 'ai_repaired';
@@ -12190,7 +12267,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           }
         } else {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
-        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale);
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale, {
+          isPresent,
+        });
         providerAccepted = true;
         providerUncoveredFactIdentityHashes = [];
         if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {
@@ -12486,6 +12565,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             perspectiveMeta.finalPersonMode = detectExperiencePersonMode(
               repairAccepted.text,
               locale,
+              { isPresent },
             );
             perspectiveMeta.meaningfulChangeDetected = true;
             perspectiveMeta.noOpRejected = false;
@@ -12770,7 +12850,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       perspectiveMeta.normalizedBulletsUsedForApply = true;
       perspectiveMeta.meaningfulChangeDetected = true;
       perspectiveMeta.perspectiveValidationPassed = true;
-      perspectiveMeta.finalPersonMode = detectExperiencePersonMode(genAccepted.text, locale);
+      perspectiveMeta.finalPersonMode = detectExperiencePersonMode(genAccepted.text, locale, {
+        isPresent,
+      });
       return attachPerspectiveDiag(genAccepted);
     }
     // Prefer a generation-specific typed reason — never leave enhancement-only codes.
@@ -12831,7 +12913,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           meaningfulChangeDetected: true,
           noOpRejected: false,
           normalizedBulletsUsedForApply: true,
-          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
+          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale, { isPresent }),
         };
         finalSelectedCoveredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
         fallbackCoveredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
@@ -12927,7 +13009,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           meaningfulChangeDetected: true,
           noOpRejected: false,
           normalizedBulletsUsedForApply: true,
-          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
+          finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale, { isPresent }),
         };
         finalSelectedCoveredFamilyCount = 3;
         fallbackCoveredFamilyCount = 3;
@@ -12991,6 +13073,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       isPresent,
       gender,
       sourceDescription: sourceForCoverage,
+      ...(authoritativeSourceLocale ? { sourceLocale: authoritativeSourceLocale } : {}),
     })
     : null;
   const grounded = groundedPersp?.text || groundedRaw;
@@ -12998,7 +13081,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     grounded.trim()
     && !(grounding?.staleGeneratedContentExcluded && candidateConflictsWithJobContext(grounded, jobContext))
   ) {
-    const groundedGate = validateExperienceCvPerspective(grounded, locale);
+    const groundedGate = validateExperienceCvPerspective(grounded, locale, { isPresent });
     const groundedCrossLocale = Boolean(
       sourceForCoverage
       && (
@@ -13050,7 +13133,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
           if (secondAccepted) {
             perspectiveMeta.normalizedBulletsUsedForApply = true;
-            perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale);
+            perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale, {
+              isPresent,
+            });
             if (providerNoOpDetected) {
               perspectiveMeta.meaningfulChangeDetected = true;
               perspectiveMeta.noOpRejected = false;
@@ -13062,7 +13147,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const secondAccepted = tryAccept(grounded, 'deterministic_fallback', 'canonical_fallback');
       if (secondAccepted) {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
-        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale);
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(secondAccepted.text, locale, {
+          isPresent,
+        });
         if (providerNoOpDetected) {
           perspectiveMeta.meaningfulChangeDetected = true;
           perspectiveMeta.noOpRejected = false;
@@ -13345,7 +13432,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           locale,
         );
       }
-      const translatedGate = validateExperienceCvPerspective(translated, locale);
+      const translatedGate = validateExperienceCvPerspective(translated, locale, { isPresent });
       let translatedOk = Boolean(translated.trim())
         && translatedGate.ok
         && !candidateLeaksSourceLocale(
@@ -13553,17 +13640,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (accepted) {
           perspectiveMeta = {
             ...perspectiveMeta,
-            sourcePersonMode: detectExperiencePersonMode(
-              sourceForCoverage,
-              (detectedSourceLocale === 'sr' || detectedSourceLocale === 'hr')
-                ? detectedSourceLocale
-                : locale,
-            ),
+            sourcePersonMode: authoritativeSourceLocale
+              ? detectExperiencePersonMode(sourceForCoverage, authoritativeSourceLocale, { isPresent })
+              : 'unknown',
             perspectiveNormalizationAttempted: true,
             perspectiveNormalizationApplied: true,
             perspectiveValidationPassed: true,
-            normalizedPersonMode: detectExperiencePersonMode(translated, locale),
-            finalPersonMode: detectExperiencePersonMode(translated, locale),
+            normalizedPersonMode: detectExperiencePersonMode(translated, locale, { isPresent }),
+            finalPersonMode: detectExperiencePersonMode(translated, locale, { isPresent }),
             meaningfulChangeDetected: true,
             noOpRejected: false,
           };
@@ -13583,7 +13667,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               translatedFactCount: countTranslatedFactUnits(sourceForCoverage, translated),
               targetLocaleValidationPassed: true,
               sourcePerspectiveMode: perspectiveMeta.sourcePersonMode,
-              targetPerspectiveMode: detectExperiencePersonMode(translated, locale),
+              targetPerspectiveMode: detectExperiencePersonMode(translated, locale, { isPresent }),
               // AAB-329: never mark applied before commit.
               targetContentApplied: false,
               contentLocaleUpdatedAfterApply: false,
@@ -13625,7 +13709,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               perspectiveValidationPassed: true,
               meaningfulChangeDetected: true,
               noOpRejected: false,
-              finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale),
+              finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale, { isPresent }),
             };
             return attachPerspectiveDiag({
               ...acceptedDesign,
@@ -13868,7 +13952,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             perspectiveValidationPassed: true,
             meaningfulChangeDetected: true,
             noOpRejected: false,
-            finalPersonMode: detectExperiencePersonMode(esFbAccepted.text, locale),
+            finalPersonMode: detectExperiencePersonMode(esFbAccepted.text, locale, { isPresent }),
             normalizedBulletsUsedForApply: true,
           };
           return attachPerspectiveDiag({
@@ -13936,7 +14020,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     clientDeterministicFallbackCoveredFactCount = provenanceCoverage.coveredIds.length;
     clientDeterministicFallbackUncoveredFactIds = provenanceCoverage.missingIds;
     fallbackBulletCount = clientDeterministicFallbackBulletCount;
-    const preservedGate = validateExperienceCvPerspective(preserved, locale);
+    const preservedGate = validateExperienceCvPerspective(preserved, locale, { isPresent });
     // Fallback after provider failure is always an allowed repair path — even when
     // the rebuilt CV text matches the source after perspective (provider was empty
     // or incomplete). No-op rejection applies only to unchanged provider output.
@@ -13947,7 +14031,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       perspectiveNormalizationAttempted: true,
       perspectiveNormalizationApplied: true,
       perspectiveValidationPassed: preservedGate.ok,
-      normalizedPersonMode: detectExperiencePersonMode(preserved, locale),
+      normalizedPersonMode: detectExperiencePersonMode(preserved, locale, { isPresent }),
       meaningfulChangeDetected:
         perspectiveMeta.meaningfulChangeDetected
         || experienceAiHasMeaningfulChange(sourceForCoverage, preserved),
@@ -13977,7 +14061,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       );
       if (preservedAccepted) {
         perspectiveMeta.normalizedBulletsUsedForApply = true;
-        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(preservedAccepted.text, locale);
+        perspectiveMeta.finalPersonMode = detectExperiencePersonMode(preservedAccepted.text, locale, {
+          isPresent,
+        });
         if (providerNoOpDetected) {
           deterministicFallbackAttemptedAfterNoOp = true;
           deterministicFallbackAppliedAfterNoOp = true;
@@ -14032,7 +14118,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           gender,
         });
       const stylistic = normalizeLocaleText(stylisticRaw, locale);
-      const stylisticGate = validateExperienceCvPerspective(stylistic, locale);
+      const stylisticGate = validateExperienceCvPerspective(stylistic, locale, { isPresent });
       clientDeterministicFallbackBulletCount = splitExperienceBullets(stylistic).filter(Boolean).length;
       clientDeterministicFallbackScripts = detectBulletScripts(stylistic);
       if (
@@ -14054,7 +14140,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             noOpRejected: false,
             perspectiveValidationPassed: true,
             normalizedBulletsUsedForApply: true,
-            finalPersonMode: detectExperiencePersonMode(stylisticAccepted.text, locale),
+            finalPersonMode: detectExperiencePersonMode(stylisticAccepted.text, locale, { isPresent }),
           };
           deterministicFallbackAppliedAfterNoOp = true;
           finalCandidateSource = 'deterministic_fallback';

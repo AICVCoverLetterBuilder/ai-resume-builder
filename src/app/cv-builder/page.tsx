@@ -2475,8 +2475,12 @@ export default function CVBuilderPage() {
         visibleText,
         targetLocale: requestedLocale,
         finalNormalizedHash,
+        isPresent: Boolean(exp.isPresent),
       });
       const visibleEntryStillExists = Boolean(visibleEntry);
+      const visiblePerspectiveReason = visibleCov.visiblePersonMode === 'first_singular'
+        ? 'experience_cv_perspective_first_person'
+        : 'experience_cv_perspective_unproven';
       const visibleAppliedEntryIdHash = visibleEntryStillExists
         ? String(
           finalizedBullets.diagnostics?.selectedExperienceEntryIdHash
@@ -2486,6 +2490,7 @@ export default function CVBuilderPage() {
       const visibleOk = writeSucceeded
         && visibleCov.visibleDescriptionMatchesFinalHash
         && visibleCov.visibleLocaleValidationPassed
+        && visibleCov.visiblePerspectiveValidationPassed
         && (
           !visibleCov.visiblePredicateValidationApplicable
           || (
@@ -2499,8 +2504,6 @@ export default function CVBuilderPage() {
         visibleAppliedEntryIdHash,
         visibleTenseValidationPassed:
           finalizedBullets.diagnostics?.tenseValidationPassed !== false,
-        visiblePerspectiveValidationPassed:
-          finalizedBullets.diagnostics?.perspectiveValidationPassed !== false,
         visibleValidationPassed: visibleOk,
         visibleTextareaMatchesFinalNormalizedHash:
           visibleCov.visibleDescriptionMatchesFinalHash,
@@ -2527,6 +2530,13 @@ export default function CVBuilderPage() {
         finalizedBullets.diagnostics?.tenseValidationPassed !== false ? 'ok' : 'fail',
       );
       diagSession.stage(
+        'visible_perspective_validation',
+        visibleCov.visiblePerspectiveValidationPassed ? 'ok' : 'fail',
+        visibleCov.visiblePerspectiveValidationPassed
+          ? undefined
+          : visiblePerspectiveReason,
+      );
+      diagSession.stage(
         'visible_hash_validation',
         visibleCov.visibleDescriptionMatchesFinalHash ? 'ok' : 'fail',
       );
@@ -2544,8 +2554,12 @@ export default function CVBuilderPage() {
           countedAsSuccess: false,
           finalTypedFailureReason: actualWriteFailure
             ? 'visible_apply_write_failed'
-            : 'visible_apply_validation_failed',
-          rejectionStage: 'visible_apply',
+            : (!visibleCov.visiblePerspectiveValidationPassed
+              ? visiblePerspectiveReason
+              : 'visible_apply_validation_failed'),
+          rejectionStage: !visibleCov.visiblePerspectiveValidationPassed
+            ? 'visible_apply:perspective'
+            : 'visible_apply',
         });
         diagSession.stage('rollback_started', 'ok');
         const rollbackOk = rollbackExperienceApplyTransactionally({

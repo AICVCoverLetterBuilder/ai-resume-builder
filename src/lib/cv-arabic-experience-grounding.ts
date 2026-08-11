@@ -22,6 +22,7 @@ import {
   stripDutyListPrefix,
 } from './cv-source-fact-identity';
 import { splitExperienceBullets, formatExperienceBullets } from './cv-canonical-facts';
+import { realizeArabicBuiltExperiencePersonEvidence } from './cv-arabic-experience-tense';
 
 /** Packaging proof — must survive minification in web / Android / AAB assets. */
 export const ARABIC_EXPERIENCE_GROUNDING_340_REVISION =
@@ -226,6 +227,10 @@ export function buildArabicWarehouseExperienceFallback(options: {
   void ARABIC_EXPERIENCE_GROUNDING_340_REVISION;
   const present = options.isPresent !== false;
   const verbs = arabicWarehouseVerbForms(options);
+  const finalizeBuiltSurface = (text: string) => realizeArabicBuiltExperiencePersonEvidence(
+    text,
+    { isPresent: options.isPresent, gender: options.gender },
+  );
   const facts = sourceWarehouseFacts(options.sourceDescription);
   const lines: string[] = [];
   for (const fact of facts) {
@@ -244,7 +249,7 @@ export function buildArabicWarehouseExperienceFallback(options: {
     }
   }
   if (!lines.length) {
-    return formatExperienceBullets(present
+    return finalizeBuiltSurface(formatExperienceBullets(present
       ? [
         `${verbs.inspect} البضائع الواردة إلى المستودع.`,
         `${verbs.verify} المستندات المتعلقة بالبضائع المستلمة.`,
@@ -254,9 +259,9 @@ export function buildArabicWarehouseExperienceFallback(options: {
         `${verbs.inspect} البضائع الواردة إلى المستودع.`,
         `${verbs.verify} المستندات المتعلقة بالبضائع المستلمة.`,
         `${verbs.coordinate} الزملاء لإعداد البضائع ونقلها.`,
-      ]);
+      ]));
   }
-  return formatExperienceBullets(lines);
+  return finalizeBuiltSurface(formatExperienceBullets(lines));
 }
 
 export type ArabicWarehousePredicateFamily =

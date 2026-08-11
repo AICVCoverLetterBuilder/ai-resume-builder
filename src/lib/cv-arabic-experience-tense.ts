@@ -14,6 +14,12 @@ export type ArabicEmploymentTenseResult = {
   reason?: string;
 };
 
+export type ArabicExperiencePersonMode =
+  | 'first_singular'
+  | 'third_singular'
+  | 'neutral'
+  | 'unknown';
+
 type ArabicVerbForms = {
   firstPerson: RegExp;
   presentFemale: string;
@@ -32,17 +38,170 @@ type ArabicVerbForms = {
  * The table is grammatical verb morphology, not an occupation catalogue.
  */
 const ARABIC_CV_VERB_FORMS: ArabicVerbForms[] = [
-  { firstPerson: /أراجع/gu, presentFemale: 'تراجع', presentMale: 'يراجع', pastFemale: 'راجعت', pastMale: 'راجع' },
-  { firstPerson: /أحدّث/gu, presentFemale: 'تحدّث', presentMale: 'يحدّث', pastFemale: 'حدّثت', pastMale: 'حدّث' },
-  { firstPerson: /أنسّ?ق/gu, presentFemale: 'تنسّق', presentMale: 'ينسّق', pastFemale: 'نسّقت', pastMale: 'نسّق' },
-  { firstPerson: /أتحقّ?ق/gu, presentFemale: 'تتحقّق', presentMale: 'يتحقّق', pastFemale: 'تحقّقت', pastMale: 'تحقّق' },
-  { firstPerson: /أعدّ/gu, presentFemale: 'تعدّ', presentMale: 'يعدّ', pastFemale: 'أعدّت', pastMale: 'أعدّ' },
-  { firstPerson: /أحافظ/gu, presentFemale: 'تحافظ', presentMale: 'يحافظ', pastFemale: 'حافظت', pastMale: 'حافظ' },
-  { firstPerson: /أنشئ/gu, presentFemale: 'تنشئ', presentMale: 'ينشئ', pastFemale: 'أنشأت', pastMale: 'أنشأ' },
-  { firstPerson: /أؤدّي/gu, presentFemale: 'تؤدّي', presentMale: 'يؤدّي', pastFemale: 'أدّت', pastMale: 'أدّى' },
-  { firstPerson: /أتعاون/gu, presentFemale: 'تتعاون', presentMale: 'يتعاون', pastFemale: 'تعاونت', pastMale: 'تعاون' },
-  { firstPerson: /أعلّ?م/gu, presentFemale: 'تعلّم', presentMale: 'يعلّم', pastFemale: 'علّمت', pastMale: 'علّم' },
+  { firstPerson: /أراجع/gu, presentFemale: 'تراجع', presentMale: 'يراجع', pastFemale: 'راجعتْ', pastMale: 'راجع' },
+  { firstPerson: /أحدّث/gu, presentFemale: 'تحدّث', presentMale: 'يحدّث', pastFemale: 'حدّثتْ', pastMale: 'حدّث' },
+  { firstPerson: /أنسّ?ق/gu, presentFemale: 'تنسّق', presentMale: 'ينسّق', pastFemale: 'نسّقتْ', pastMale: 'نسّق' },
+  { firstPerson: /أتحقّ?ق/gu, presentFemale: 'تتحقّق', presentMale: 'يتحقّق', pastFemale: 'تحقّقتْ', pastMale: 'تحقّق' },
+  { firstPerson: /أعدّ(?!ت)/gu, presentFemale: 'تعدّ', presentMale: 'يعدّ', pastFemale: 'أعدّتْ', pastMale: 'أعدّ' },
+  { firstPerson: /أحافظ/gu, presentFemale: 'تحافظ', presentMale: 'يحافظ', pastFemale: 'حافظتْ', pastMale: 'حافظ' },
+  { firstPerson: /أنشئ/gu, presentFemale: 'تنشئ', presentMale: 'ينشئ', pastFemale: 'أنشأتْ', pastMale: 'أنشأ' },
+  { firstPerson: /أؤدّي/gu, presentFemale: 'تؤدّي', presentMale: 'يؤدّي', pastFemale: 'أدّتْ', pastMale: 'أدّى' },
+  { firstPerson: /أتعاون/gu, presentFemale: 'تتعاون', presentMale: 'يتعاون', pastFemale: 'تعاونتْ', pastMale: 'تعاون' },
+  { firstPerson: /أعلّ?م/gu, presentFemale: 'تعلّم', presentMale: 'يعلّم', pastFemale: 'علّمتْ', pastMale: 'علّم' },
 ];
+
+const ARABIC_TOKEN_RE = /[\p{Script=Arabic}\p{M}]+/gu;
+const ARABIC_LETTER_RE = /\p{Script=Arabic}/u;
+const ARABIC_EXPLICIT_FIRST_PAST_RE = /تُ$/u;
+const ARABIC_EXPLICIT_THIRD_FEMALE_PAST_RE = /تْ$/u;
+
+function arabicTokens(text: string): string[] {
+  return (String(text || '').normalize('NFKC').match(ARABIC_TOKEN_RE) || [])
+    .filter((token) => ARABIC_LETTER_RE.test(token));
+}
+
+function leadingArabicPredicateTokens(text: string): string[] {
+  return String(text || '')
+    .normalize('NFKC')
+    .split(/\r?\n/u)
+    .map((line) => line
+      .trim()
+      .replace(/^(?:[•●◦*\-–—]|\d+[.)])\s*/u, '')
+      .match(/^[\p{Script=Arabic}\p{M}]+/u)?.[0] || '')
+    .filter(Boolean);
+}
+
+function regexpMatchesToken(pattern: RegExp, token: string): boolean {
+  pattern.lastIndex = 0;
+  const matched = pattern.test(token);
+  pattern.lastIndex = 0;
+  return matched;
+}
+
+function isKnownFirstPersonPresentToken(token: string): boolean {
+  return ARABIC_CV_VERB_FORMS.some((forms) => regexpMatchesToken(forms.firstPerson, token));
+}
+
+function isKnownThirdPersonPresentToken(token: string): boolean {
+  return ARABIC_CV_VERB_FORMS.some((forms) => (
+    token.startsWith(forms.presentFemale) || token.startsWith(forms.presentMale)
+  ));
+}
+
+function isKnownThirdPersonMalePastToken(token: string): boolean {
+  return ARABIC_CV_VERB_FORMS.some((forms) => token === forms.pastMale);
+}
+
+function isUnambiguousThirdPersonFemalePastToken(token: string): boolean {
+  if (ARABIC_EXPLICIT_THIRD_FEMALE_PAST_RE.test(token)) return true;
+  // Geminate third-person feminine forms contract the doubled radical before
+  // ت (أعددتُ -> أعدّتْ). That contracted spelling is not a 1sg surface even
+  // when the final sukūn is omitted.
+  return /ّت$/u.test(token) && !ARABIC_EXPLICIT_FIRST_PAST_RE.test(token);
+}
+
+/**
+ * Classify Arabic Experience person without stripping the final case/mood mark
+ * that distinguishes 1sg past تُ from 3sg feminine past تْ. Undiacritized past
+ * forms such as راجعت remain neutral unless another unambiguous cue exists.
+ */
+export function detectArabicExperiencePersonMode(
+  text: string,
+  options?: { isPresent?: boolean },
+): ArabicExperiencePersonMode {
+  const raw = String(text || '').normalize('NFKC').trim();
+  if (!raw) return 'unknown';
+  const tokens = arabicTokens(raw);
+  if (!tokens.length) return 'unknown';
+
+  if (tokens.includes('أنا')) return 'first_singular';
+  if (tokens.some((token) => ARABIC_EXPLICIT_FIRST_PAST_RE.test(token))) {
+    return 'first_singular';
+  }
+
+  const leading = leadingArabicPredicateTokens(raw)
+    .map((token) => token.startsWith('و') ? token.slice(1) : token)
+    .filter(Boolean);
+  const knownFirstPresent = tokens.filter(isKnownFirstPersonPresentToken).length;
+  const genericFirstPresent = leading.filter((token) => (
+    /^أ(?!ل)[\p{Script=Arabic}\p{M}]{2,}$/u.test(token)
+  )).length;
+
+  if (options?.isPresent !== false && (knownFirstPresent > 0 || genericFirstPresent >= 2)) {
+    return 'first_singular';
+  }
+
+  if (tokens.includes('هي') || tokens.includes('هو')) return 'third_singular';
+  if (tokens.some(isUnambiguousThirdPersonFemalePastToken)) return 'third_singular';
+  if (options?.isPresent === false && tokens.some(isKnownThirdPersonMalePastToken)) {
+    return 'third_singular';
+  }
+
+  if (options?.isPresent !== false) {
+    const knownThirdPresent = tokens.filter(isKnownThirdPersonPresentToken).length;
+    const genericThirdPresent = leading.filter((token) => (
+      /^[تي](?!ل)[\p{Script=Arabic}\p{M}]{2,}$/u.test(token)
+    )).length;
+    if (knownThirdPresent > 0 || genericThirdPresent >= 2) return 'third_singular';
+  }
+
+  return 'neutral';
+}
+
+function collapseFinalDoubledRadical(base: string): string {
+  return base.replace(/([\p{Script=Arabic}])\1$/u, '$1ّ');
+}
+
+function normalizeExplicitArabicFirstPersonPastToken(
+  token: string,
+  female: boolean,
+): string {
+  if (!ARABIC_EXPLICIT_FIRST_PAST_RE.test(token)) return token;
+  const base = collapseFinalDoubledRadical(token.replace(/تُ$/u, ''));
+  return female ? `${base}تْ` : base;
+}
+
+function normalizeLeadingArabicFirstPersonPresent(
+  text: string,
+  female: boolean,
+): string {
+  return text
+    .split(/(\r?\n)/u)
+    .map((part) => {
+      if (/^\r?\n$/u.test(part)) return part;
+      return part.replace(
+        /^(\s*(?:[•●◦*\-–—]|\d+[.)])?\s*)أ(?!ل)(?=[\p{Script=Arabic}\p{M}]{2,})/u,
+        `$1${female ? 'ت' : 'ي'}`,
+      );
+    })
+    .join('');
+}
+
+/**
+ * Emit explicit selected-person evidence for Arabic text produced by a trusted
+ * locale realization builder. An unvocalized past form ending in ت is ambiguous
+ * in isolation; the builder knows it selected 3sg feminine, so serialize sukūn
+ * rather than relying on hidden construction history at final/visible checks.
+ */
+export function realizeArabicBuiltExperiencePersonEvidence(
+  text: string,
+  options: { isPresent?: boolean; gender?: string },
+): string {
+  if (options.isPresent !== false || normalizeGender(options.gender) !== 'female') {
+    return text;
+  }
+  return String(text || '')
+    .normalize('NFKC')
+    .split(/(\r?\n)/u)
+    .map((part) => {
+      if (/^\r?\n$/u.test(part)) return part;
+      return part.replace(
+        /^(\s*(?:[•●◦*\-–—]|\d+[.)])?\s*)([\p{Script=Arabic}\p{M}]*ت)(?![\p{L}\p{M}])/u,
+        '$1$2ْ',
+      );
+    })
+    .join('');
+}
 
 export function normalizeArabicExperienceEmploymentGrammar(
   text: string,
@@ -57,19 +216,26 @@ export function normalizeArabicExperienceEmploymentGrammar(
       : (female ? forms.pastFemale : forms.pastMale);
     normalized = normalized.replace(forms.firstPerson, replacement);
   }
+  if (isPresent) {
+    normalized = normalizeLeadingArabicFirstPersonPresent(normalized, female);
+  } else {
+    normalized = normalized.replace(ARABIC_TOKEN_RE, (token) => (
+      normalizeExplicitArabicFirstPersonPastToken(token, female)
+    ));
+  }
   return normalized.trim();
 }
 
 /** Feminine / masculine present stems common in warehouse + design shells. */
 const AR_PRESENT_FEMALE =
-  /(?:تعدّ|تراجع|تتحقق|تحدّث|تنسّق|تحافظ|تنشئ|تؤدي|تتعاون)/u;
+  /(?<![\p{L}\p{M}])(?:تعدّ|تراجع|تتحقّ?ق|تحدّث|تنسّق|تحافظ|تنشئ|تؤدي|تتعاون)(?![\p{L}\p{M}])/u;
 const AR_PRESENT_MALE =
-  /(?:يعدّ|يراجع|يتحقق|يحدّث|ينسّق|يحافظ|ينشئ|يؤدي|يتعاون)/u;
+  /(?<![\p{L}\p{M}])(?:يعدّ|يراجع|يتحقّ?ق|يحدّث|ينسّق|يحافظ|ينشئ|يؤدي|يتعاون)(?![\p{L}\p{M}])/u;
 /** Natural past forms (female + male) for completed roles. */
 const AR_PAST_FEMALE =
-  /(?:أعدّت|راجعت|كيّفت|نسّقت|حافظت|تحقّقت|حدّثت|أنشأت|أدّت|تعاونت|ضبطت)/u;
+  /(?<![\p{L}\p{M}])(?:أعدّت|راجعت|كيّفت|نسّقت|حافظت|تحقّقت|حدّثت|أنشأت|أدّت|تعاونت|ضبطت)(?:ْ)?(?![\p{L}\p{M}])/u;
 const AR_PAST_MALE =
-  /(?:أعدّ(?!ت)|راجع(?!ت)|كيّف(?!ت)|نسّق(?!ت)|حافظ(?!ت)|تحقّق(?!ت)|حدّث(?!ت)|أنشأ(?!ت)|أدّى|تعاون(?!ت)|ضبط(?!ت))/u;
+  /(?<![\p{L}\p{M}])(?:أعدّ(?!ت)|راجع(?!ت)|كيّف(?!ت)|نسّق(?!ت)|حافظ(?!ت)|تحقّق(?!ت)|حدّث(?!ت)|أنشأ(?!ت)|أدّى|تعاون(?!ت)|ضبط(?!ت))(?![\p{L}\p{M}])/u;
 
 function collectForms(text: string): string[] {
   const forms: string[] = [];
@@ -102,10 +268,36 @@ export function validateArabicExperienceEmploymentTense(
   const isPresent = options.isPresent !== false;
   const gender = normalizeGender(options.gender);
   const finalEmploymentState = isPresent ? 'current' : 'completed';
-  const forms = collectForms(raw);
+  const knownForms = collectForms(raw);
+  const leading = leadingArabicPredicateTokens(raw)
+    .map((token) => token.startsWith('و') ? token.slice(1) : token)
+    .filter(Boolean);
+  // Arbitrary current-role duties use the same imperfect-person prefixes as
+  // the curated realization table. Require repeated leading-predicate
+  // evidence before treating an unknown stem as tense/gender proof, avoiding
+  // a single Arabic noun beginning with ت/ي from becoming a verb claim.
+  const genericPresentFemale = isPresent
+    ? leading.filter((token) => /^ت(?!ل)[\p{Script=Arabic}\p{M}]{2,}$/u.test(token))
+    : [];
+  const genericPresentMale = isPresent
+    ? leading.filter((token) => /^ي(?!ل)[\p{Script=Arabic}\p{M}]{2,}$/u.test(token))
+    : [];
+  const provenGenericPresentFemale = genericPresentFemale.length >= 2
+    ? genericPresentFemale
+    : [];
+  const provenGenericPresentMale = genericPresentMale.length >= 2
+    ? genericPresentMale
+    : [];
+  const forms = [...new Set([
+    ...knownForms,
+    ...provenGenericPresentFemale,
+    ...provenGenericPresentMale,
+  ])];
 
-  const hasPresentFemale = AR_PRESENT_FEMALE.test(raw);
-  const hasPresentMale = AR_PRESENT_MALE.test(raw);
+  const hasPresentFemale = AR_PRESENT_FEMALE.test(raw)
+    || provenGenericPresentFemale.length > 0;
+  const hasPresentMale = AR_PRESENT_MALE.test(raw)
+    || provenGenericPresentMale.length > 0;
   const hasPastFemale = AR_PAST_FEMALE.test(raw);
   const hasPastMale = AR_PAST_MALE.test(raw);
   const hasPresent = hasPresentFemale || hasPresentMale;
