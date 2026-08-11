@@ -34,7 +34,13 @@ export {
 } from './manifest';
 export {
   resolveSummaryCurrentRole,
+  resolveSummaryCurrentRoleWithEvidence,
   SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
+} from '@/lib/cv-summary-current-role';
+export type {
+  SummaryCurrentRoleDateAuthority,
+  SummaryCurrentRoleRankingEvidence,
+  SummaryCurrentRoleResolution,
 } from '@/lib/cv-summary-current-role';
 export {
   buildSummaryV2DeterministicText,
@@ -128,6 +134,7 @@ export type {
   SummaryV2LocalizationTransport,
   SummaryV2LocalizationTransportInput,
   SummaryV2LocalizationOutcome,
+  SummaryV2LocalizationLineage,
 } from './localization-client';
 export type {
   SummaryV2LocalizedManifest,
@@ -136,6 +143,8 @@ export type {
   SummaryV2LocalizationProviderResponse,
   SummaryV2LocalizationValidation,
   SummaryV2LocalizationSource,
+  SummaryV2LocalizationFailureEvidence,
+  SummaryV2ProtectedEntityTokenClass,
   SummaryV2ProviderExperienceEntry,
 } from './localization';
 export type {

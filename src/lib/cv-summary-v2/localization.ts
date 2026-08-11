@@ -1,5 +1,8 @@
 import type { Locale } from '@/lib/i18n/translations';
-import { validateAiUnitLocalePurity } from '@/lib/cv-ai-unit-locale-purity';
+import {
+  validateAiUnitLocalePurity,
+  type AiContentScript,
+} from '@/lib/cv-ai-unit-locale-purity';
 import { detectUnresolvedGenderPlaceholder } from './gender';
 import { analyzeSpanishCoordinatedPredicateMorphology } from './native-surface';
 import { dutyTokenStems, hashSummaryV2Text } from './facts';
@@ -7,7 +10,7 @@ import { localesAreDetectionCompatible } from './locale-authority';
 import type { SummaryV2EntryOwned, SummaryV2SelectionManifest } from './types';
 
 export const SUMMARY_V2_LOCALIZED_MANIFEST_REVISION =
-  'summary-v2-localized-manifest-417-v1' as const;
+  'summary-v2-localized-manifest-419-v1' as const;
 
 export type SummaryV2LocalizationSource =
   | 'same_locale_authoritative'
@@ -98,9 +101,41 @@ export type SummaryV2LocalizationValidation = {
   targetLocalePurityPassed: boolean;
   targetScriptPurityPassed: boolean;
   sourceLanguageLeakageDetected: boolean;
+  /** Privacy-safe first failing surface. Raw role/fact text is never retained. */
+  failureEvidence: SummaryV2LocalizationFailureEvidence | null;
+  protectedEntityTokenClasses: SummaryV2ProtectedEntityTokenClass[];
+};
+
+export type SummaryV2ProtectedEntityTokenClass =
+  | 'employer_entity'
+  | 'technical_acronym'
+  | 'structured_identifier'
+  | 'structured_date';
+
+export type SummaryV2LocalizationFailureEvidence = {
+  entryId: string;
+  factId: string | null;
+  surfaceKind: 'localized_role_title' | 'localized_fact';
+  textPreviewHash: string;
+  detectedLocale: string | null;
+  detectedScript: AiContentScript;
+  tokenClass:
+    | 'translatable_surface_wrong_script'
+    | 'translatable_surface_wrong_locale'
+    | 'translatable_surface_incomplete';
+  protectedEntityTokenClasses: SummaryV2ProtectedEntityTokenClass[];
+};
+
+type LocalizationValidationOptions = {
+  /** Per-entry accepted authority must survive mixed-manifest assembly. */
+  sourceByEntryId?: Partial<Record<string, SummaryV2LocalizationSource>>;
 };
 
 const UNSUPPORTED_MATERIAL_RE = /\b(?:increased|improved|boosted|achieved|led|managed a team|certified|awarded)\b|\d+\s*%/iu;
+const STRUCTURED_DATE_TOKEN_RE = /^(?:19|20|21|22)\d{2}(?:[-/.](?:0?[1-9]|1[0-2]))?(?:[-/.](?:0?[1-9]|[12]\d|3[01]))?$/u;
+const TECHNICAL_ACRONYM_TOKEN_RE = /^(?=.*[\p{Lu}])[\p{Lu}\d][\p{Lu}\d.+#&/_-]{1,}$/u;
+const STRUCTURED_IDENTIFIER_TOKEN_RE = /^(?=.*(?:\d|[.@+/#_-]))[\p{L}\p{N}][\p{L}\p{N}.@+/#_-]{1,}$/u;
+const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}.@+/#&'â€™_-]*/gu;
 
 function selectedEntries(manifest: SummaryV2SelectionManifest): SummaryV2EntryOwned[] {
   return [...(manifest.current ? [manifest.current] : []), ...manifest.priors];
@@ -114,9 +149,81 @@ function duplicate(values: string[]): boolean {
   return new Set(values).size !== values.length;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function protectedEntityTokens(options: {
+  employer: string;
+  sourceSurface: string;
+}): Array<{ token: string; tokenClass: SummaryV2ProtectedEntityTokenClass }> {
+  const values = new Map<string, SummaryV2ProtectedEntityTokenClass>();
+  const add = (token: string, tokenClass: SummaryV2ProtectedEntityTokenClass) => {
+    const normalized = token.trim();
+    if (normalized.length >= 2) values.set(normalized.toLocaleLowerCase(), tokenClass);
+  };
+  for (const token of options.employer.match(TOKEN_RE) || []) add(token, 'employer_entity');
+  for (const token of options.sourceSurface.match(TOKEN_RE) || []) {
+    if (STRUCTURED_DATE_TOKEN_RE.test(token)) add(token, 'structured_date');
+    else if (TECHNICAL_ACRONYM_TOKEN_RE.test(token)) add(token, 'technical_acronym');
+    else if (STRUCTURED_IDENTIFIER_TOKEN_RE.test(token)) add(token, 'structured_identifier');
+  }
+  return [...values].map(([token, tokenClass]) => ({ token, tokenClass }));
+}
+
+function translatableSurface(options: {
+  localizedText: string;
+  sourceText: string;
+  employer: string;
+}): {
+  localized: string;
+  source: string;
+  protectedClasses: SummaryV2ProtectedEntityTokenClass[];
+} {
+  const protectedTokens = protectedEntityTokens({
+    employer: options.employer,
+    sourceSurface: options.sourceText,
+  });
+  const strip = (text: string) => protectedTokens.reduce((value, protectedToken) => (
+    value.replace(
+      new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(protectedToken.token)}(?![\\p{L}\\p{N}_])`, 'giu'),
+      ' ',
+    )
+  ), text).replace(/\s+/g, ' ').trim();
+  return {
+    localized: strip(options.localizedText),
+    source: strip(options.sourceText),
+    protectedClasses: [...new Set(protectedTokens
+      .filter(({ token }) => new RegExp(
+        `(?<![\\p{L}\\p{N}_])${escapeRegExp(token)}(?![\\p{L}\\p{N}_])`,
+        'iu',
+      ).test(options.localizedText))
+      .map(({ tokenClass }) => tokenClass))],
+  };
+}
+
+function sameLocaleEntryIsAuthoritative(options: {
+  manifest: SummaryV2SelectionManifest;
+  responseEntry: SummaryV2LocalizationProviderResponse['entries'][number];
+  sourceEntry: SummaryV2EntryOwned | undefined;
+  source?: SummaryV2LocalizationSource;
+}): boolean {
+  if (
+    options.source !== 'same_locale_authoritative'
+    || !options.sourceEntry
+    || options.sourceEntry.sourceLocale !== options.manifest.locale
+    || options.responseEntry.localizedRoleTitle.trim() !== options.sourceEntry.role.trim()
+  ) return false;
+  const sourceFacts = new Map(options.sourceEntry.facts.map((fact) => [fact.factId, fact.bulletText.trim()]));
+  return options.responseEntry.facts.every((fact) => (
+    fact.localizedText.trim() === sourceFacts.get(fact.factId)
+  ));
+}
+
 export function validateSummaryV2LocalizationResponse(
   manifest: SummaryV2SelectionManifest,
   response: SummaryV2LocalizationProviderResponse,
+  options: LocalizationValidationOptions = {},
 ): SummaryV2LocalizationValidation {
   const expectedEntries = selectedEntries(manifest);
   const expectedEntryIds = expectedEntries.map((entry) => entry.entryId);
@@ -148,36 +255,110 @@ export function validateSummaryV2LocalizationResponse(
   let surfaceComplete = true;
   let unsupportedMaterial = false;
   let mixedPredicateMorphology = false;
+  let incompleteEvidence: SummaryV2LocalizationFailureEvidence | null = null;
+  let wrongScriptEvidence: SummaryV2LocalizationFailureEvidence | null = null;
+  let wrongLocaleEvidence: SummaryV2LocalizationFailureEvidence | null = null;
+  const protectedEntityTokenClasses = new Set<SummaryV2ProtectedEntityTokenClass>();
   const sourceEntriesById = new Map(expectedEntries.map((entry) => [entry.entryId, entry]));
 
   for (const entry of actualEntries) {
     const sourceEntry = sourceEntriesById.get(entry.entryId);
-    if (
-      sourceEntry
-      && !localesAreDetectionCompatible(sourceEntry.sourceLocale, manifest.locale)
-      && entry.localizedRoleTitle.trim().toLocaleLowerCase() === sourceEntry.role.trim().toLocaleLowerCase()
-    ) sourceLanguageLeakageDetected = true;
-    const surfaces = [entry.localizedRoleTitle, ...(entry.facts || []).map((f) => f.localizedText)];
+    const sameLocaleAuthoritative = sameLocaleEntryIsAuthoritative({
+      manifest,
+      responseEntry: entry,
+      sourceEntry,
+      source: options.sourceByEntryId?.[entry.entryId],
+    });
     const sourceFactsById = new Map((sourceEntry?.facts || []).map((fact) => [fact.factId, fact]));
-    for (const fact of entry.facts || []) {
-      const sourceFact = sourceFactsById.get(fact.factId);
-      if (
-        sourceFact
-        && !localesAreDetectionCompatible(sourceFact.sourceLocale, manifest.locale)
-        && fact.localizedText.trim().toLocaleLowerCase() === sourceFact.bulletText.trim().toLocaleLowerCase()
-      ) sourceLanguageLeakageDetected = true;
-    }
+    const surfaces = [
+      {
+        text: entry.localizedRoleTitle,
+        sourceText: sourceEntry?.role || '',
+        factId: null,
+        surfaceKind: 'localized_role_title' as const,
+      },
+      ...(entry.facts || []).map((fact) => ({
+        text: fact.localizedText,
+        sourceText: sourceFactsById.get(fact.factId)?.bulletText || '',
+        factId: fact.factId,
+        surfaceKind: 'localized_fact' as const,
+      })),
+    ];
     for (const surface of surfaces) {
-      const text = String(surface || '').trim();
-      if (!text || detectUnresolvedGenderPlaceholder(text)) surfaceComplete = false;
+      const text = String(surface.text || '').trim();
+      if (!text || detectUnresolvedGenderPlaceholder(text)) {
+        surfaceComplete = false;
+        incompleteEvidence ||= {
+          entryId: entry.entryId,
+          factId: surface.factId,
+          surfaceKind: surface.surfaceKind,
+          textPreviewHash: normalizedHash(text || 'empty'),
+          detectedLocale: null,
+          detectedScript: 'unknown',
+          tokenClass: 'translatable_surface_incomplete',
+          protectedEntityTokenClasses: [],
+        };
+      }
       if (UNSUPPORTED_MATERIAL_RE.test(text)) unsupportedMaterial = true;
-      const purity = validateAiUnitLocalePurity(text, manifest.locale, {
-        kind: 'summary_sentence', requireUnits: true,
+      if (sameLocaleAuthoritative) continue;
+      const translatable = translatableSurface({
+        localizedText: text,
+        sourceText: surface.sourceText,
+        employer: sourceEntry?.employer || '',
+      });
+      translatable.protectedClasses.forEach((tokenClass) => protectedEntityTokenClasses.add(tokenClass));
+      if (
+        sourceEntry
+        && !localesAreDetectionCompatible(sourceEntry.sourceLocale, manifest.locale)
+        && text.toLocaleLowerCase() === surface.sourceText.trim().toLocaleLowerCase()
+        && translatable.source.length > 0
+      ) sourceLanguageLeakageDetected = true;
+      if (!translatable.localized && translatable.source) {
+        surfaceComplete = false;
+        incompleteEvidence ||= {
+          entryId: entry.entryId,
+          factId: surface.factId,
+          surfaceKind: surface.surfaceKind,
+          textPreviewHash: normalizedHash(text || 'empty'),
+          detectedLocale: null,
+          detectedScript: 'unknown',
+          tokenClass: 'translatable_surface_incomplete',
+          protectedEntityTokenClasses: translatable.protectedClasses,
+        };
+      }
+      const purity = validateAiUnitLocalePurity(translatable.localized, manifest.locale, {
+        kind: 'summary_sentence', requireUnits: translatable.source.length > 0,
       });
       targetLocalePurityPassed = targetLocalePurityPassed && purity.targetLocalePurityPassed;
       targetScriptPurityPassed = targetScriptPurityPassed && purity.wrongScriptUnitCount === 0;
       sourceLanguageLeakageDetected = sourceLanguageLeakageDetected
         || purity.sourceLanguageLeakageDetected;
+      const scriptHit = purity.units.find((hit) => hit.wrongScript);
+      if (scriptHit) {
+        wrongScriptEvidence ||= {
+          entryId: entry.entryId,
+          factId: surface.factId,
+          surfaceKind: surface.surfaceKind,
+          textPreviewHash: scriptHit.textPreviewHash,
+          detectedLocale: scriptHit.detectedLocale,
+          detectedScript: scriptHit.detectedScript,
+          tokenClass: 'translatable_surface_wrong_script',
+          protectedEntityTokenClasses: translatable.protectedClasses,
+        };
+      }
+      const localeHit = purity.units.find((hit) => hit.wrongLocale || hit.mixedLanguage);
+      if (localeHit) {
+        wrongLocaleEvidence ||= {
+          entryId: entry.entryId,
+          factId: surface.factId,
+          surfaceKind: surface.surfaceKind,
+          textPreviewHash: localeHit.textPreviewHash,
+          detectedLocale: localeHit.detectedLocale,
+          detectedScript: localeHit.detectedScript,
+          tokenClass: 'translatable_surface_wrong_locale',
+          protectedEntityTokenClasses: translatable.protectedClasses,
+        };
+      }
       if (manifest.locale === 'es') {
         const morphology = analyzeSpanishCoordinatedPredicateMorphology(text);
         mixedPredicateMorphology = mixedPredicateMorphology
@@ -198,6 +379,14 @@ export function validateSummaryV2LocalizationResponse(
   else if (!targetScriptPurityPassed) reason = 'localization_wrong_script';
   else if (!targetLocalePurityPassed || sourceLanguageLeakageDetected) reason = 'locale_impurity';
 
+  const failureEvidence = reason === 'localization_incomplete_surface'
+    ? incompleteEvidence
+    : reason === 'localization_wrong_script'
+      ? wrongScriptEvidence
+      : reason === 'locale_impurity'
+        ? wrongLocaleEvidence
+        : null;
+
   return {
     ok: reason === null,
     reason,
@@ -211,6 +400,8 @@ export function validateSummaryV2LocalizationResponse(
     targetLocalePurityPassed,
     targetScriptPurityPassed,
     sourceLanguageLeakageDetected,
+    failureEvidence,
+    protectedEntityTokenClasses: [...protectedEntityTokenClasses],
   };
 }
 
@@ -218,24 +409,15 @@ export function acceptSummaryV2LocalizationResponse(options: {
   manifest: SummaryV2SelectionManifest;
   response: SummaryV2LocalizationProviderResponse;
   source: SummaryV2LocalizationSource;
+  sourceByEntryId?: Partial<Record<string, SummaryV2LocalizationSource>>;
 }): { manifest: SummaryV2LocalizedManifest | null; validation: SummaryV2LocalizationValidation } {
-  const validation = validateSummaryV2LocalizationResponse(options.manifest, options.response);
-  const sameLocaleAuthoritative = options.source === 'same_locale_authoritative'
-    && selectedEntries(options.manifest).every((entry) => entry.sourceLocale === options.manifest.locale);
-  const effectiveValidation = sameLocaleAuthoritative
-    && validation.entryIdParityPassed
-    && validation.factIdParityPassed
-    && validation.factOwnershipParityPassed
-    ? {
-      ...validation,
-      ok: true,
-      reason: null,
-      targetLocalePurityPassed: true,
-      targetScriptPurityPassed: true,
-      sourceLanguageLeakageDetected: false,
-    }
-    : validation;
-  if (!effectiveValidation.ok) return { manifest: null, validation: effectiveValidation };
+  const sourceByEntryId = options.sourceByEntryId || Object.fromEntries(
+    selectedEntries(options.manifest).map((entry) => [entry.entryId, options.source]),
+  );
+  const validation = validateSummaryV2LocalizationResponse(options.manifest, options.response, {
+    sourceByEntryId,
+  });
+  if (!validation.ok) return { manifest: null, validation };
   const sourceEntries = new Map(selectedEntries(options.manifest).map((entry) => [entry.entryId, entry]));
   const entries: SummaryV2LocalizedEntry[] = options.response.entries.map((entry) => {
     const sourceEntry = sourceEntries.get(entry.entryId)!;
@@ -256,7 +438,7 @@ export function acceptSummaryV2LocalizationResponse(options: {
           sourceTextHash: sourceFact.sourceFactHash,
           localizedText: fact.localizedText.trim(),
           localizedTextHash: normalizedHash(fact.localizedText),
-          localizationSource: options.source,
+          localizationSource: sourceByEntryId[sourceEntry.entryId] || options.source,
           localizationValidationResult: 'passed' as const,
         };
       }),
@@ -267,7 +449,7 @@ export function acceptSummaryV2LocalizationResponse(options: {
     ...entry.facts.flatMap((fact) => [fact.factId, fact.sourceTextHash, fact.localizedTextHash]),
   ]).join('|');
   return {
-    validation: effectiveValidation,
+    validation,
     manifest: {
       revision: SUMMARY_V2_LOCALIZED_MANIFEST_REVISION,
       sourceManifestHash: options.manifest.snapshotHash,

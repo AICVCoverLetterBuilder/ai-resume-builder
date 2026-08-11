@@ -462,22 +462,26 @@ type SummaryLike = {
   finalCandidateSource?: string | null;
   providerCandidatePresent?: boolean;
   deterministicCandidatePresent?: boolean;
+  fallbackCandidatePresent?: boolean;
   fallbackApplied?: boolean;
   visibleApplySucceeded?: boolean;
   visibleSummaryMatchesFinalHash?: boolean | null;
   countedAsSuccess?: boolean;
   usageCountBefore?: number;
   usageCountAfter?: number;
-  grammarValidationPassed?: boolean;
+  perspectiveValidationPassed?: boolean | null;
+  genderValidationPassed?: boolean | null;
+  tenseValidationPassed?: boolean | null;
+  grammarValidationPassed?: boolean | null;
   hindiIncompleteSentenceCount?: number | null;
   hindiNominalExperienceFragmentDetected?: boolean | null;
   hindiGrammarRejectionReason?: string | null;
   hindiGrammarRejectionReasons?: string[] | null;
-  groundingValidationPassed?: boolean;
+  groundingValidationPassed?: boolean | null;
   unsupportedClaimCount?: number;
   finalUnsupportedDesignMediumCount?: number | null;
   finalUnsupportedDesignMediumKinds?: string[] | null;
-  durationValidationPassed?: boolean;
+  durationValidationPassed?: boolean | null;
   authoritativeDurationMonths?: number | null;
   finalRenderedDurationSemanticMonths?: number | null;
   visibleRenderedDurationSemanticMonths?: number | null;
@@ -2429,6 +2433,31 @@ export function checkSummaryDiagnosticInvariants(
     }
   }
 
+  const noCandidateExisted = trace.finalCandidateSource === 'none'
+    && trace.providerCandidatePresent === false
+    && trace.deterministicCandidatePresent === false
+    && trace.fallbackCandidatePresent !== true;
+  if (noCandidateExisted) {
+    for (const key of [
+      'perspectiveValidationPassed',
+      'genderValidationPassed',
+      'tenseValidationPassed',
+      'localeValidationPassed',
+      'targetLocalePurityPassed',
+      'grammarValidationPassed',
+      'groundingValidationPassed',
+      'durationValidationPassed',
+      'finalPostconditionsPassed',
+    ] as const) {
+      if (key in trace && trace[key] !== null) {
+        push('no_candidate_validator_must_be_not_evaluated', {
+          field: key,
+          value: trace[key] ?? null,
+        });
+      }
+    }
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -2455,14 +2484,26 @@ export function checkSummaryDiagnosticCompleteness(
   // when the operation terminates before any final candidate exists. Their
   // fields must still be present; successful/candidate-bearing paths must
   // continue to provide concrete boolean results.
-  const noCandidate = trace.finalCandidateSource === 'none';
+  const noCandidate = trace.finalCandidateSource === 'none'
+    && trace.providerCandidatePresent === false
+    && trace.deterministicCandidatePresent === false
+    && trace.fallbackCandidatePresent !== true;
   for (const key of [
+    'perspectiveValidationPassed',
+    'genderValidationPassed',
+    'tenseValidationPassed',
+    'localeValidationPassed',
+    'targetLocalePurityPassed',
     'grammarValidationPassed',
     'groundingValidationPassed',
     'durationValidationPassed',
+    'finalPostconditionsPassed',
   ] as const) {
     if (!(key in trace)) missing.push(key);
-    else if (!noCandidate && (trace[key] === null || trace[key] === undefined)) {
+    else if (
+      (noCandidate && trace[key] !== null)
+      || (!noCandidate && (trace[key] === null || trace[key] === undefined))
+    ) {
       nullish.push(key);
     }
   }

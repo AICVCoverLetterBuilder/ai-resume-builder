@@ -363,7 +363,7 @@ function recordSummaryLocalizationDiagnostics(
     ...localization.sourceManifest.priors.map((entry) => entry.entryId),
   ]);
   const localizedManifestLocaleByEntryHash = Object.fromEntries(
-    [...selectedIds].map((id) => [fingerprintText(id), localization.manifest?.targetLocale || null]),
+    [...selectedIds].map((id) => [fingerprintText(id), localization.targetLocaleByEntryId[id] || null]),
   );
   const sameLocaleBypassUsedByEntryHash = Object.fromEntries(
     Object.entries(localization.sourceByEntryId).map(([id, source]) => [
@@ -377,6 +377,13 @@ function recordSummaryLocalizationDiagnostics(
       source === 'validated_cache',
     ]),
   );
+  const localizationLineageByEntryHash = Object.fromEntries(
+    Object.entries(localization.lineageByEntryId).map(([id, lineage]) => [
+      fingerprintText(id),
+      lineage,
+    ]),
+  );
+  const failureEvidence = localization.validationFailureEvidence;
   session.patch({
     summarySelectedEntryIdHashes: [...selectedIds].map((id) => fingerprintText(id)),
     summaryOmittedEntryIdHashes: (cv.experience || [])
@@ -394,6 +401,20 @@ function recordSummaryLocalizationDiagnostics(
     localizedManifestLocaleByEntryHash,
     sameLocaleBypassUsedByEntryHash,
     localizedManifestCacheHitByEntryHash,
+    localizationLineageByEntryHash,
+    localizationFailureEntryIdHash: failureEvidence
+      ? fingerprintText(failureEvidence.entryId)
+      : null,
+    localizationFailureFactIdHash: failureEvidence?.factId
+      ? fingerprintText(failureEvidence.factId)
+      : null,
+    localizationFailureSurfaceKind: failureEvidence?.surfaceKind || null,
+    localizationFailureTextPreviewHash: failureEvidence?.textPreviewHash || null,
+    localizationFailureDetectedLocale: failureEvidence?.detectedLocale || null,
+    localizationFailureDetectedScript: failureEvidence?.detectedScript || null,
+    localizationFailureTokenClass: failureEvidence?.tokenClass || null,
+    localizationFailureProtectedEntityTokenClasses:
+      failureEvidence?.protectedEntityTokenClasses || [],
   });
 }
 

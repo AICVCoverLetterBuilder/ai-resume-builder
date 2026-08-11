@@ -11,7 +11,7 @@ import {
 } from './cv-summary-v2/locale-authority';
 import type { Locale } from './i18n/translations';
 import {
-  resolveSummaryCurrentRole,
+  resolveSummaryCurrentRoleWithEvidence,
   SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
 } from './cv-summary-current-role';
 
@@ -251,6 +251,17 @@ export type SummaryAiDiagnosticTrace = {
   currentRoleEntryIdHash: string | null;
   currentRoleCandidateCount?: number;
   currentRoleResolutionRule?: typeof SUMMARY_CURRENT_ROLE_RESOLVER_REVISION;
+  currentRoleCandidateRankingByEntryHash?: Record<string, {
+    dateAuthority: string;
+    normalizedStartYear: number | null;
+    normalizedStartMonth: number | null;
+    comparisonKey: number | null;
+    valid: boolean;
+    rank: number;
+    tieFallbackUsed: boolean;
+    isWinner: boolean;
+  }>;
+  currentRoleTieFallbackUsed?: boolean;
   summarySelectedEntryIdHashes?: string[];
   summaryOmittedEntryIdHashes?: string[];
   currentJobContextHash: string | null;
@@ -269,6 +280,15 @@ export type SummaryAiDiagnosticTrace = {
   localizationRequiredByEntryHash: Record<string, boolean>;
   sameLocaleBypassUsedByEntryHash: Record<string, boolean>;
   localizedManifestCacheHitByEntryHash: Record<string, boolean>;
+  localizationLineageByEntryHash?: Record<string, string>;
+  localizationFailureEntryIdHash?: string | null;
+  localizationFailureFactIdHash?: string | null;
+  localizationFailureSurfaceKind?: string | null;
+  localizationFailureTextPreviewHash?: string | null;
+  localizationFailureDetectedLocale?: string | null;
+  localizationFailureDetectedScript?: string | null;
+  localizationFailureTokenClass?: string | null;
+  localizationFailureProtectedEntityTokenClasses?: string[];
   localizationPrimaryFailureReason?: string | null;
   localizationRecoveryAttempted?: boolean;
   localizationRecoveryAccepted?: boolean;
@@ -489,10 +509,10 @@ export type SummaryAiDiagnosticTrace = {
   perspectiveContractMatched?: boolean | null;
   perspectiveNormalizationAttempted: boolean | null;
   perspectiveNormalizationApplied: boolean | null;
-  perspectiveValidationPassed: boolean;
-  genderValidationPassed: boolean;
-  tenseValidationPassed: boolean;
-  localeValidationPassed: boolean;
+  perspectiveValidationPassed: boolean | null;
+  genderValidationPassed: boolean | null;
+  tenseValidationPassed: boolean | null;
+  localeValidationPassed: boolean | null;
   /** Null means no candidate existed, so this candidate-only gate was not evaluated. */
   grammarValidationPassed: boolean | null;
   /** Null means no candidate existed, so this candidate-only gate was not evaluated. */
@@ -508,7 +528,7 @@ export type SummaryAiDiagnosticTrace = {
   mixedLanguageUnitCount: number;
   sourceLanguageLeakageDetected: boolean;
   unexpectedLocaleCodes: string[];
-  targetLocalePurityPassed: boolean;
+  targetLocalePurityPassed: boolean | null;
   targetScript: string | null;
   structuredRoleLocaleValidationPassed?: boolean | null;
   currentRoleLocalizationValidationPassed?: boolean | null;
@@ -527,7 +547,7 @@ export type SummaryAiDiagnosticTrace = {
   repairRoleLocalizationTransformationKinds?: string[] | null;
   visibleStructuredRoleLocaleValidationPassed?: boolean | null;
   visibleWrongLocaleStructuredRoleCount?: number | null;
-  finalPostconditionsPassed: boolean;
+  finalPostconditionsPassed: boolean | null;
   raceGuardResult: 'ok' | 'fail' | 'skipped';
   visibleApplySucceeded: boolean;
   visibleSummaryMatchesFinalHash: boolean | null;
@@ -766,6 +786,8 @@ export class SummaryAiDiagnosticSession {
       currentRoleEntryIdHash: null,
       currentRoleCandidateCount: 0,
       currentRoleResolutionRule: SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
+      currentRoleCandidateRankingByEntryHash: {},
+      currentRoleTieFallbackUsed: false,
       summarySelectedEntryIdHashes: [],
       summaryOmittedEntryIdHashes: [],
       currentJobContextHash: input.jobContextHash || null,
@@ -783,6 +805,15 @@ export class SummaryAiDiagnosticSession {
       localizationRequiredByEntryHash: {},
       sameLocaleBypassUsedByEntryHash: {},
       localizedManifestCacheHitByEntryHash: {},
+      localizationLineageByEntryHash: {},
+      localizationFailureEntryIdHash: null,
+      localizationFailureFactIdHash: null,
+      localizationFailureSurfaceKind: null,
+      localizationFailureTextPreviewHash: null,
+      localizationFailureDetectedLocale: null,
+      localizationFailureDetectedScript: null,
+      localizationFailureTokenClass: null,
+      localizationFailureProtectedEntityTokenClasses: [],
       localizationPrimaryFailureReason: null,
       localizationRecoveryAttempted: false,
       localizationRecoveryAccepted: false,
@@ -979,10 +1010,26 @@ export class SummaryAiDiagnosticSession {
     const localizationRequired: Record<string, boolean> = {};
     const states: Record<string, 'current' | 'completed'> = {};
     const hashes: string[] = [];
-    const currentRole = resolveSummaryCurrentRole(exps);
+    const currentRoleResolution = resolveSummaryCurrentRoleWithEvidence(exps);
+    const currentRole = currentRoleResolution.selected;
     const currentRoleHash: string | null = currentRole
       ? hashExperienceEntryId(currentRole.id)
       : null;
+    const currentRoleCandidateRankingByEntryHash = Object.fromEntries(
+      currentRoleResolution.candidates.map((candidate) => [
+        hashExperienceEntryId(candidate.entry.id),
+        {
+          dateAuthority: candidate.dateAuthority,
+          normalizedStartYear: candidate.normalizedStartYear,
+          normalizedStartMonth: candidate.normalizedStartMonth,
+          comparisonKey: candidate.comparisonKey,
+          valid: candidate.valid,
+          rank: candidate.rank,
+          tieFallbackUsed: candidate.tieFallbackUsed,
+          isWinner: candidate.isWinner,
+        },
+      ]),
+    );
     for (const e of exps) {
       const h = hashExperienceEntryId(e.id);
       hashes.push(h);
@@ -1032,6 +1079,8 @@ export class SummaryAiDiagnosticSession {
       currentRoleEntryIdHash: currentRoleHash,
       currentRoleCandidateCount: exps.filter((entry) => entry.isPresent).length,
       currentRoleResolutionRule: SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
+      currentRoleCandidateRankingByEntryHash,
+      currentRoleTieFallbackUsed: currentRoleResolution.tieFallbackUsed,
       experienceFactCountsByEntryHash: factCounts,
       experienceCanonicalFactCountsByEntryHash: canonCounts,
       experienceLocalesByEntryHash: locales,
@@ -2424,6 +2473,11 @@ export class SummaryAiDiagnosticSession {
       grammarValidationPassed: null,
       groundingValidationPassed: null,
       durationValidationPassed: null,
+      perspectiveValidationPassed: null,
+      genderValidationPassed: null,
+      tenseValidationPassed: null,
+      localeValidationPassed: null,
+      targetLocalePurityPassed: null,
       providerHttpStatus: input.httpStatus ?? null,
       providerResponseKind: input.apiResponseKind || 'not_attempted',
       meaningfulChangeDetected: false,
@@ -2442,7 +2496,7 @@ export class SummaryAiDiagnosticSession {
       visibleApplySucceeded: false,
       usageCountAfter: input.usageAfter,
       raceGuardResult: 'skipped',
-      finalPostconditionsPassed: false,
+      finalPostconditionsPassed: null,
       finalTypedFailureReason: input.reason,
       rejectionStage: input.stage,
       candidateLineage: [],

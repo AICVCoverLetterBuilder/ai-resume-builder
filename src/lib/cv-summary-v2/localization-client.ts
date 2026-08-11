@@ -6,6 +6,7 @@ import {
   type SummaryV2LocalizedEntry,
   type SummaryV2LocalizedManifest,
   type SummaryV2LocalizationProviderResponse,
+  type SummaryV2LocalizationFailureEvidence,
   type SummaryV2LocalizationSource,
   type SummaryV2LocalizationValidation,
 } from './localization';
@@ -16,7 +17,15 @@ import type {
 } from './types';
 
 export const SUMMARY_V2_LOCALIZATION_RECOVERY_REVISION =
-  'summary-v2-localization-recovery-417-v1' as const;
+  'summary-v2-localization-recovery-419-v1' as const;
+
+export type SummaryV2LocalizationLineage =
+  | 'same_locale_authoritative'
+  | 'validated_cache'
+  | 'provider_primary'
+  | 'provider_repair'
+  | 'summary_context_recovery'
+  | 'failed';
 
 export type SummaryV2LocalizationTransportInput = {
   targetLocale: Locale;
@@ -57,6 +66,10 @@ export type SummaryV2LocalizationOutcome = {
   providerLocalizedEntryCount: number;
   recoveryLocalizedEntryCount: number;
   sourceByEntryId: Record<string, string>;
+  lineageByEntryId: Record<string, SummaryV2LocalizationLineage>;
+  /** Accepted target locale per entry, even when later manifest assembly fails. */
+  targetLocaleByEntryId: Record<string, Locale | null>;
+  validationFailureEvidence: SummaryV2LocalizationFailureEvidence | null;
 };
 
 type TransportFailureEvidence = {
@@ -353,6 +366,15 @@ function aggregateSource(results: EntryLocalizationResult[]): SummaryV2Localizat
   return 'mixed_authoritative';
 }
 
+function diagnosticLineage(source: SummaryV2LocalizationSource | null): SummaryV2LocalizationLineage {
+  if (source === 'provider') return 'provider_primary';
+  if (source === 'summary_provider_recovery') return 'summary_context_recovery';
+  if (source === 'same_locale_authoritative'
+    || source === 'validated_cache'
+    || source === 'provider_repair') return source;
+  return 'failed';
+}
+
 export async function localizeSummaryV2Manifest(options: {
   manifest: SummaryV2SelectionManifest;
   transport: SummaryV2LocalizationTransport;
@@ -381,6 +403,14 @@ export async function localizeSummaryV2Manifest(options: {
   const sourceByEntryId = Object.fromEntries(results.map((result, index) => [
     entries[index]!.entryId,
     result.source || 'none',
+  ]));
+  const lineageByEntryId = Object.fromEntries(results.map((result, index) => [
+    entries[index]!.entryId,
+    diagnosticLineage(result.source),
+  ]));
+  const targetLocaleByEntryId = Object.fromEntries(results.map((result, index) => [
+    entries[index]!.entryId,
+    result.entry ? options.manifest.locale : null,
   ]));
 
   if (failed) {
@@ -412,6 +442,9 @@ export async function localizeSummaryV2Manifest(options: {
       providerLocalizedEntryCount,
       recoveryLocalizedEntryCount,
       sourceByEntryId,
+      lineageByEntryId,
+      targetLocaleByEntryId,
+      validationFailureEvidence: failed.validation?.failureEvidence || null,
     };
   }
 
@@ -431,6 +464,10 @@ export async function localizeSummaryV2Manifest(options: {
     manifest: options.manifest,
     response: combinedResponse,
     source: combinedSource,
+    sourceByEntryId: Object.fromEntries(results.map((result, index) => [
+      entries[index]!.entryId,
+      result.source!,
+    ])),
   });
   if (!accepted.manifest) {
     return {
@@ -454,6 +491,9 @@ export async function localizeSummaryV2Manifest(options: {
       providerLocalizedEntryCount,
       recoveryLocalizedEntryCount,
       sourceByEntryId,
+      lineageByEntryId,
+      targetLocaleByEntryId,
+      validationFailureEvidence: accepted.validation.failureEvidence,
     };
   }
   const manifest: SummaryV2LocalizedManifest = {
@@ -482,6 +522,9 @@ export async function localizeSummaryV2Manifest(options: {
     providerLocalizedEntryCount,
     recoveryLocalizedEntryCount,
     sourceByEntryId,
+    lineageByEntryId,
+    targetLocaleByEntryId,
+    validationFailureEvidence: null,
   };
 }
 
