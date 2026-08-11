@@ -19,6 +19,15 @@ import {
   validateArabicExperienceEmploymentTense,
 } from '@/lib/cv-arabic-experience-tense';
 import { createExperienceAiOperationSnapshot } from '@/lib/cv-experience-ai-operation-snapshot';
+import {
+  buildExperienceAiOutputProvenance,
+  resolveExperienceTextareaProvenance,
+} from '@/lib/cv-experience-ai-output-provenance';
+import {
+  buildExperienceJobContext,
+  resolveExperienceAiGrounding,
+} from '@/lib/cv-experience-job-context';
+import { freezeExperienceAiDescription } from '@/lib/cv-canonical-facts';
 import { scanGenericExperiencePredicates } from '@/lib/cv-generic-experience-predicate-grounding';
 import { validateVisibleExperienceCoverage } from '@/lib/cv-experience-phased-apply-329';
 import {
@@ -30,6 +39,10 @@ import {
   clearExperienceAiDiagnosticsForTests,
   ExperienceAiDiagnosticSession,
 } from '@/lib/cv-experience-ai-diagnostics';
+import {
+  checkExperienceDiagnosticCompleteness,
+  checkExperienceDiagnosticInvariants,
+} from '@/lib/cv-ai-diagnostics-contract';
 
 const DEVICE_ID = 'exp-aab415-design';
 const DEVICE_SOURCE = [
@@ -145,6 +158,19 @@ function finalizeDevice() {
     operationSnapshot,
   });
   return { cv, operationSnapshot, result };
+}
+
+function resolveDeviceGrounding(exp: WorkExperience) {
+  return resolveExperienceAiGrounding(
+    exp,
+    buildExperienceJobContext({
+      position: exp.position,
+      industry: 'general',
+      locale: 'ar',
+      level: 'mid',
+    }),
+    freezeExperienceAiDescription,
+  );
 }
 
 describe('AAB415 shared Experience Arabic person/perspective contract', () => {
@@ -268,6 +294,327 @@ describe('AAB415 shared Experience Arabic person/perspective contract', () => {
       visiblePersonMode: 'third_singular',
       visiblePerspectiveValidationPassed: true,
     });
+  });
+
+  it('keeps the exact immediate unedited Arabic rerun rejected while terminal diagnostics stay phase-owned', () => {
+    const { cv, operationSnapshot, result: first } = finalizeDevice();
+    expect(first).toMatchObject({ blocked: false, countedAsSuccess: true });
+
+    const cvRef = { current: cv };
+    let usage = 4;
+    const firstApply = commitExperienceApplyTransactionally({
+      cvRef,
+      ownership: createExperienceApplyOwnershipState(),
+      locale: 'ar',
+      experienceId: DEVICE_ID,
+      finalized: first,
+      operationSourceText: operationSnapshot.visibleComparisonRawText,
+      currentVisibleText: DEVICE_SOURCE,
+      operationId: operationSnapshot.requestId,
+      scheduleReactCv: () => undefined,
+    });
+    if (firstApply.ok) usage += 1;
+    expect(firstApply.ok).toBe(true);
+    expect(usage).toBe(5);
+
+    const appliedEntry = cvRef.current.experience[0]!;
+    appliedEntry.description = first.text;
+    appliedEntry.generatedDescription = first.text;
+    appliedEntry.descriptionOrigin = 'ai_generated';
+    (appliedEntry as WorkExperience & { generatedLocale?: string }).generatedLocale = 'ar';
+    appliedEntry.aiOutputProvenance = buildExperienceAiOutputProvenance({
+      experienceEntryId: DEVICE_ID,
+      appliedOutput: first.text,
+      preAiFactText: DEVICE_SOURCE,
+      sourceLocale: 'sr',
+      targetLocale: 'ar',
+      operationMode: 'enhance_existing',
+      sourceAuthorityKind: 'pre_ai_snapshot',
+    });
+    const provenance = resolveExperienceTextareaProvenance(appliedEntry);
+    expect(provenance).toMatchObject({
+      currentTextareaProvenance: 'ai_generated_unedited',
+      lastAiOutputHashMatched: true,
+      materialUserEditDetected: false,
+    });
+
+    const visibleBeforeSecond = appliedEntry.description;
+    const secondSnapshot = createExperienceAiOperationSnapshot({
+      liveText: visibleBeforeSecond,
+      authoritativeTextOverride: DEVICE_SOURCE,
+      provenanceOriginOverride: 'originalUserDescription',
+      locale: 'ar',
+      requestId: 'req-aab416-ar-rerun',
+      jobContextHash: 'job-aab416-ar-rerun',
+      experienceEntryId: DEVICE_ID,
+    });
+    const second = finalizeCvAiFieldForApply({
+      action: 'experience_bullets',
+      field: 'experience_description',
+      requestedLocale: 'ar',
+      sourceLocale: 'sr',
+      gender: 'female',
+      cv: cvRef.current,
+      candidate: visibleBeforeSecond,
+      originHint: 'ai_generated',
+      experienceId: DEVICE_ID,
+      industry: 'general',
+      level: 'mid',
+      operationSnapshot: secondSnapshot,
+      jobContextHash: 'job-aab416-ar-rerun',
+      currentTextareaProvenance: provenance.currentTextareaProvenance,
+      currentTextareaUsedForFactExtraction: provenance.currentTextareaUsedForFactExtraction,
+      authoritativeFactSourceKind: provenance.authoritativeFactSourceKind,
+      lastAiOutputHashMatched: provenance.lastAiOutputHashMatched,
+      materialUserEditDetected: provenance.materialUserEditDetected,
+      staleGeneratedDescriptionIgnored: provenance.staleGeneratedDescriptionIgnored,
+    });
+
+    expect(second).toMatchObject({
+      blocked: true,
+      countedAsSuccess: false,
+      diagnostics: { finalDecisionKind: 'invalid_candidate_rejected' },
+    });
+    expect(second.diagnostics).toMatchObject({
+      uneditedRerunDetected: true,
+      earlyNoOpPreflightPassed: false,
+      finalCandidatePresent: false,
+      finalCandidateSource: 'none',
+      finalNormalizedHash: null,
+      finalBulletCount: 0,
+      finalPersonMode: null,
+      finalRequiredFactCount: null,
+      finalCoveredFactCount: null,
+      finalAddedPredicateCount: 0,
+      finalSourceUnitPredicateCoveragePassed: null,
+    });
+
+    const session = new ExperienceAiDiagnosticSession({
+      requestId: 'req-aab416-ar-rerun',
+      requestedLocale: 'ar',
+      uiLocale: 'ar',
+      contentLocale: 'ar',
+      templateId: 'modern',
+      gender: 'female',
+      industryNorm: 'general',
+      levelNorm: 'mid',
+      jobContextHash: 'job-aab416-ar-rerun',
+      usageCountBefore: usage,
+    });
+    session.recordLiveExperience(appliedEntry, false);
+    session.recordSourceSelection(appliedEntry, resolveDeviceGrounding(appliedEntry), {
+      requestedLocale: 'ar',
+      operationalContentLocale: 'ar',
+      currentTextareaProvenance: provenance.currentTextareaProvenance,
+      authoritativeFactSourceKind: provenance.authoritativeFactSourceKind,
+      currentTextareaUsedForFactExtraction: provenance.currentTextareaUsedForFactExtraction,
+      lastAiOutputHashMatched: provenance.lastAiOutputHashMatched,
+      materialUserEditDetected: provenance.materialUserEditDetected,
+      staleGeneratedDescriptionIgnored: provenance.staleGeneratedDescriptionIgnored,
+    });
+    session.recordApiResponse({ httpStatus: 200, resultText: visibleBeforeSecond });
+    session.recordFinalizeResult(second);
+    session.recordVisibleApply(false, usage);
+    const trace = session.commit();
+
+    expect(appliedEntry.description).toBe(visibleBeforeSecond);
+    expect(usage).toBe(5);
+    expect(trace).toMatchObject({
+      currentTextareaProvenance: 'ai_generated_unedited',
+      lastAiOutputHashMatched: true,
+      materialUserEditDetected: false,
+      uneditedRerunDetected: true,
+      earlyNoOpPreflightPassed: false,
+      finalCandidatePresent: false,
+      finalCandidateSource: 'none',
+      finalNormalizedHash: null,
+      finalBulletCount: 0,
+      finalPersonMode: null,
+      finalRequiredFactCount: null,
+      finalCoveredFactCount: null,
+      finalAddedPredicateCount: 0,
+      finalSourceUnitPredicateCoveragePassed: null,
+      requiredFactCount: 0,
+      coveredFactCount: 0,
+      uncoveredFactIdentityHashes: [],
+      diagnosticInvariantCheckPassed: true,
+      diagnosticInvariantFailures: [],
+      diagnosticCompletenessPassed: true,
+      privacyCheckPassed: true,
+      countedAsSuccess: false,
+      visibleApplySucceeded: false,
+      usageCountBefore: 5,
+      usageCountAfter: 5,
+    });
+    expect(checkExperienceDiagnosticInvariants(trace).failures).toEqual([]);
+    expect(checkExperienceDiagnosticCompleteness(trace).passed).toBe(true);
+  });
+
+  it.each([
+    {
+      label: 'provider rejected without fallback selection',
+      fallback: false,
+    },
+    {
+      label: 'provider and fallback both rejected',
+      fallback: true,
+    },
+  ])('serializes no selected-final truth when $label', ({ fallback }) => {
+    const session = new ExperienceAiDiagnosticSession({
+      requestId: `req-aab416-matrix-${fallback ? 'fallback' : 'provider'}`,
+      requestedLocale: 'ar',
+      uiLocale: 'ar',
+      contentLocale: 'ar',
+      templateId: 'modern',
+      jobContextHash: 'job-aab416-matrix',
+      usageCountBefore: 5,
+    });
+    session.patch({
+      currentTextareaProvenance: 'ai_generated_unedited',
+      visibleComparisonProvenance: 'ai_generated_unedited',
+      lastAiOutputHashMatched: true,
+      visibleComparisonMatchedLastAiOutput: true,
+      materialUserEditDetected: false,
+      sourceFactCount: 3,
+      sourceFactIdentityCount: 3,
+    });
+    session.recordApiResponse({
+      httpStatus: 200,
+      resultText: asFormattedBullets(DEVICE_EXPECTED_3SG_F),
+    });
+    session.recordFinalizeResult({
+      blocked: true,
+      reason: fallback
+        ? 'experience_material_fact_coverage_incomplete'
+        : 'experience_cv_perspective_unproven',
+      text: asFormattedBullets(DEVICE_EXPECTED_3SG_F),
+      origin: 'user',
+      roleDutyConflict: false,
+      countedAsSuccess: false,
+      diagnostics: {
+        earlyNoOpPreflightEvaluated: true,
+        earlyNoOpPreflightPassed: false,
+        providerAttempted: true,
+        providerAccepted: false,
+        providerRequiredFactCount: 3,
+        providerCoveredFactCount: 2,
+        providerUncoveredFactIdentityHashes: ['provider-fact-3'],
+        providerRejectionStage: 'provider:arabic_employment_tense',
+        providerRejectionReason: 'arabic_employment_tense_mismatch',
+        requiredFactCount: 3,
+        coveredFactCount: 2,
+        uncoveredFactIdentityHashes: [],
+        candidatePredicateIdentityCount: 3,
+        candidateAddedPredicateCount: 2,
+        sourceUnitPredicateCoveragePassed: false,
+        finalCandidatePresent: false,
+        finalCandidateSource: 'none',
+        finalNormalizedHash: null,
+        finalPersonMode: 'third_singular',
+        finalRequiredFactCount: 3,
+        finalCoveredFactCount: 2,
+        finalAddedPredicateCount: 2,
+        finalSourceUnitPredicateCoveragePassed: false,
+        finalBulletCount: 0,
+        finalBulletScripts: [],
+        finalDecisionKind: 'invalid_candidate_rejected',
+        rejectionStage: fallback ? 'fallback:material_coverage' : 'final_selected:perspective',
+        typedFailureReason: fallback
+          ? 'experience_material_fact_coverage_incomplete'
+          : 'experience_cv_perspective_unproven',
+        clientDeterministicFallbackAttempted: fallback,
+        clientDeterministicFallbackReason: fallback
+          ? 'fallback_material_coverage_incomplete'
+          : undefined,
+        clientDeterministicFallbackBulletCount: fallback ? 3 : 0,
+        clientDeterministicFallbackRequiredFactCount: fallback ? 3 : 0,
+        clientDeterministicFallbackCoveredFactCount: fallback ? 2 : 0,
+        clientDeterministicFallbackUncoveredFactIds: fallback ? ['fallback-fact-3'] : [],
+        clientDeterministicFallbackApplied: false,
+        countedAsSuccess: false,
+      },
+    });
+    session.recordVisibleApply(false, 5);
+    const trace = session.commit();
+    const providerLineage = trace.candidateLineage?.find(
+      (candidate) => candidate.candidateKind === 'provider',
+    );
+
+    expect(trace).toMatchObject({
+      uneditedRerunDetected: true,
+      earlyNoOpPreflightPassed: false,
+      requiredFactCount: 0,
+      coveredFactCount: 0,
+      uncoveredFactIdentityHashes: [],
+      providerRequiredFactCount: 3,
+      providerCoveredFactCount: 2,
+      providerUncoveredFactIdentityHashes: ['provider-fact-3'],
+      providerRejectionStage: 'provider:arabic_employment_tense',
+      providerRejectionReasons: ['arabic_employment_tense_mismatch'],
+      finalCandidatePresent: false,
+      finalCandidateSource: 'none',
+      finalNormalizedHash: null,
+      finalPersonMode: null,
+      finalCandidatePredicateIdentityCount: 0,
+      finalAddedPredicateCount: 0,
+      finalSourceUnitPredicateCoveragePassed: null,
+      finalRequiredFactCount: null,
+      finalCoveredFactCount: null,
+      finalUncoveredFactIdentityHashes: [],
+      finalFactCoveragePassed: null,
+      finalBulletCount: 0,
+      diagnosticInvariantCheckPassed: true,
+      diagnosticInvariantFailures: [],
+    });
+    expect(providerLineage).toMatchObject({
+      rejectionStage: 'provider:arabic_employment_tense',
+      rejectionReasons: ['arabic_employment_tense_mismatch'],
+      coverageRequiredCount: 3,
+      coverageCoveredCount: 2,
+      uncoveredFactIdentityHashes: ['provider-fact-3'],
+    });
+  });
+
+  it('does not classify a materially user-edited prior AI output as an unedited rerun', () => {
+    const session = new ExperienceAiDiagnosticSession({
+      requestId: 'req-aab416-user-edited',
+      requestedLocale: 'ar',
+      uiLocale: 'ar',
+      contentLocale: 'ar',
+      templateId: 'modern',
+      jobContextHash: 'job-aab416-user-edited',
+      usageCountBefore: 5,
+    });
+    session.patch({
+      currentTextareaProvenance: 'ai_generated_user_edited',
+      visibleComparisonProvenance: 'ai_generated_user_edited',
+      lastAiOutputHashMatched: false,
+      visibleComparisonMatchedLastAiOutput: false,
+      materialUserEditDetected: true,
+    });
+    session.recordFinalizeResult({
+      blocked: true,
+      reason: 'experience_material_fact_coverage_incomplete',
+      text: '',
+      origin: 'user',
+      roleDutyConflict: false,
+      countedAsSuccess: false,
+      diagnostics: {
+        earlyNoOpPreflightEvaluated: true,
+        earlyNoOpPreflightPassed: false,
+        uneditedRerunDetected: true,
+        finalCandidatePresent: false,
+        finalCandidateSource: 'none',
+        finalBulletCount: 0,
+        finalBulletScripts: [],
+        countedAsSuccess: false,
+      },
+    });
+    session.recordVisibleApply(false, 5);
+    const trace = session.commit();
+    expect(trace.currentTextareaProvenance).toBe('ai_generated_user_edited');
+    expect(trace.materialUserEditDetected).toBe(true);
+    expect(trace.uneditedRerunDetected).toBe(false);
   });
 
   it('accepts valid completed third-person feminine without rewriting it', () => {

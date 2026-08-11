@@ -10937,6 +10937,40 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     noOpRejected: false,
   };
 
+  // Selected-final diagnostics are a distinct phase. Rejected provider,
+  // repair, and fallback candidates retain their evidence in phase-owned
+  // fields/lineage, but none of that evidence is a selected final candidate.
+  const noSelectedFinalDiagnosticFields = (): Record<string, unknown> => ({
+    finalCandidatePresent: false,
+    finalCandidateSource: 'none',
+    finalCandidateValidationApplicable: false,
+    finalCandidatePredicateValidationApplicable: false,
+    finalCandidatePredicateIdentityCount: 0,
+    finalAddedPredicateCount: 0,
+    finalAddedPredicateIdentityHashes: [],
+    finalCoordinatedPredicateExpansionDetected: false,
+    finalSourceUnitPredicateCoveragePassed: null,
+    finalComplianceScopeExpansionDetected: false,
+    finalRequiredFactCount: null,
+    finalCoveredFactCount: null,
+    finalUncoveredFactIdentityHashes: [],
+    finalRequiredFactSetHash: null,
+    finalFactCoveragePassed: null,
+    finalUnsupportedClaimCount: 0,
+    finalUnsupportedClaimKinds: [],
+    finalPersonMode: null,
+    finalMatchesProviderOutput: false,
+    finalMatchesSourceAfterNormalization: false,
+    finalNormalizedHash: null,
+    finalBulletCount: 0,
+    finalBulletScripts: [],
+    finalCandidateBulletCount: 0,
+    finalCandidateBulletScripts: [],
+    appliedFinalBulletCount: 0,
+    appliedFinalBulletScripts: [],
+    visibleTextareaMatchesFinalNormalizedHash: null,
+  });
+
   const attachPerspectiveDiag = (
     result: FinalizeCvAiFieldResult,
   ): FinalizeCvAiFieldResult => {
@@ -10966,6 +11000,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               finalPerspective.reason || 'experience_cv_perspective_first_person',
             rejectionStage: 'final_selected:perspective',
             countedAsSuccess: false,
+            ...noSelectedFinalDiagnosticFields(),
           },
         };
       }
@@ -11020,6 +11055,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               rejectionStage: 'visible_comparison_noop',
               finalCandidateSource: 'none',
               countedAsSuccess: false,
+              ...noSelectedFinalDiagnosticFields(),
             },
           };
         }
@@ -11065,6 +11101,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
               spanishExperienceSurfaceFormGateRevision:
                 SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION,
+              ...noSelectedFinalDiagnosticFields(),
             },
           };
         }
@@ -11216,6 +11253,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
               experienceEvidenceBasedImprovementRevision:
                 EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
+              ...noSelectedFinalDiagnosticFields(),
             },
           };
         }
@@ -11355,6 +11393,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           rejectionStage: 'visible_comparison_noop',
           finalCandidateSource: 'none',
           countedAsSuccess: false,
+          ...noSelectedFinalDiagnosticFields(),
         },
       };
     }
@@ -11627,6 +11666,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         visibleTextareaMatchesFinalNormalizedHash: result.countedAsSuccess ? true : null,
         experienceDiagnosticsFinalCandidateRevision:
           EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
+        ...(result.countedAsSuccess
+          ? { finalCandidatePresent: true }
+          : noSelectedFinalDiagnosticFields()),
       },
     };
   };

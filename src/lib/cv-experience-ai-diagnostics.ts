@@ -1702,6 +1702,12 @@ export class ExperienceAiDiagnosticSession {
     );
     // Clean no-op already returned — do not treat !countedAsSuccess as blocked failure.
     const blocked = Boolean(finalized.blocked || !finalized.countedAsSuccess);
+    const selectedFinalPresent = Boolean(
+      finalized.countedAsSuccess
+      && !finalized.blocked
+      && text
+      && diagRec.finalCandidatePresent !== false,
+    );
     const reason = finalized.reason || diag.typedFailureReason || null;
     const apiResponseKind = diag.apiResponseKind || this.draft.providerResponseKind || 'unknown';
     const serverFallbackUsed = Boolean(
@@ -1733,21 +1739,27 @@ export class ExperienceAiDiagnosticSession {
     const providerUncovered = Array.isArray(diag.providerUncoveredFactIdentityHashes)
       ? diag.providerUncoveredFactIdentityHashes.map(String)
       : (this.draft.providerUncoveredFactIdentityHashes || []);
-    const finalRequired = clientFallbackApplied
-      ? (clientRequired || diag.requiredFactCount || this.draft.requiredFactCount || 0)
-      : (diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0);
-    const finalCovered = clientFallbackApplied
-      ? (clientCovered || diag.coveredFactCount || 0)
-      : (diag.coveredFactCount ?? 0);
-    const finalUncovered = clientFallbackApplied
-      ? (clientUncovered.length ? clientUncovered : [])
-      : (
-        Array.isArray(diag.uncoveredFactIdentityHashes)
-          ? diag.uncoveredFactIdentityHashes.map(String)
-          : (providerUncovered.length && finalCovered < finalRequired
-            ? [...providerUncovered]
-            : (this.draft.uncoveredFactIdentityHashes || []))
-      );
+    const finalRequired = selectedFinalPresent
+      ? (clientFallbackApplied
+        ? (clientRequired || diag.requiredFactCount || this.draft.requiredFactCount || 0)
+        : (diag.requiredFactCount ?? this.draft.requiredFactCount ?? 0))
+      : 0;
+    const finalCovered = selectedFinalPresent
+      ? (clientFallbackApplied
+        ? (clientCovered || diag.coveredFactCount || 0)
+        : (diag.coveredFactCount ?? 0))
+      : 0;
+    const finalUncovered = selectedFinalPresent
+      ? (clientFallbackApplied
+        ? (clientUncovered.length ? clientUncovered : [])
+        : (
+          Array.isArray(diag.uncoveredFactIdentityHashes)
+            ? diag.uncoveredFactIdentityHashes.map(String)
+            : (providerUncovered.length && finalCovered < finalRequired
+              ? [...providerUncovered]
+              : (this.draft.uncoveredFactIdentityHashes || []))
+        ))
+      : [];
     const appliedSuccess = Boolean(finalized.countedAsSuccess && !finalized.blocked);
     const appliedScripts = appliedSuccess ? scriptsFromBullets(text) : [];
     const appliedCount = appliedSuccess ? bullets.length : 0;
@@ -1767,6 +1779,59 @@ export class ExperienceAiDiagnosticSession {
           ? (diag.finalBulletScripts as ExperienceScriptClass[])
           : []
       );
+    const provenanceKind = this.draft.currentTextareaProvenance
+      ?? (typeof diagRec.currentTextareaProvenance === 'string'
+        ? String(diagRec.currentTextareaProvenance)
+        : null);
+    const provenanceMatched = this.draft.lastAiOutputHashMatched
+      ?? (typeof diagRec.lastAiOutputHashMatched === 'boolean'
+        ? diagRec.lastAiOutputHashMatched as boolean
+        : null);
+    const provenanceEdited = this.draft.materialUserEditDetected
+      ?? (typeof diagRec.materialUserEditDetected === 'boolean'
+        ? diagRec.materialUserEditDetected as boolean
+        : null);
+    const provenanceTruthComplete = provenanceKind != null
+      && provenanceMatched != null
+      && provenanceEdited != null;
+    const uneditedRerunDetected = provenanceTruthComplete
+      ? (
+        provenanceKind === 'ai_generated_unedited'
+        && provenanceMatched === true
+        && provenanceEdited === false
+      )
+      : diagRec.uneditedRerunDetected === true;
+    const providerPhaseRejectionStage = (
+      typeof diag.providerRejectionStage === 'string'
+      && diag.providerRejectionStage
+    )
+      ? diag.providerRejectionStage
+      : (
+        this.draft.providerRejectionStage
+        ?? (
+          diag.providerAccepted === false && !clientFallbackAttempted
+            ? (diag.rejectionStage || null)
+            : null
+        )
+      );
+    const providerPhaseRejectionReasons = (() => {
+      if (
+        typeof diag.providerRejectionReason === 'string'
+        && diag.providerRejectionReason
+      ) {
+        return [diag.providerRejectionReason];
+      }
+      if (
+        Array.isArray(this.draft.providerRejectionReasons)
+        && this.draft.providerRejectionReasons.length > 0
+      ) {
+        return [...this.draft.providerRejectionReasons];
+      }
+      if (diag.providerAccepted === false && !clientFallbackAttempted && reason) {
+        return [reason];
+      }
+      return [];
+    })();
     // Top-level coverage always describes the FINAL selected candidate.
     // Provider evidence stays in provider* fields (never overwrite with final).
     this.patch({
@@ -1782,33 +1847,17 @@ export class ExperienceAiDiagnosticSession {
       providerUncoveredFactIdentityHashes: providerUncovered,
       providerAccepted: diag.providerAccepted
         ?? (finalized.countedAsSuccess && !clientFallbackApplied && !diag.noOpRepairApplied),
-      providerRejectionStage: (typeof diag.providerRejectionStage === 'string'
-        && diag.providerRejectionStage)
-        || (!diag.providerAccepted && (diag.rejectionStage || providerUncovered.length)
-          ? (diag.rejectionStage || this.draft.providerRejectionStage || null)
-          : (this.draft.providerRejectionStage ?? null)),
-      providerRejectionReasons: !diag.providerAccepted && (
-        reason
-        || providerUncovered.length
-        || (typeof diag.providerRejectionReason === 'string' && diag.providerRejectionReason)
-        || (Array.isArray(diag.providerUnsupportedClaimKinds)
-          && diag.providerUnsupportedClaimKinds.length > 0)
-      )
-        ? ([
-          reason
-          || diag.providerRejectionReason
-          || diag.clientDeterministicFallbackReason
-          || 'provider_rejected',
-        ].filter(Boolean) as string[])
-        : (this.draft.providerRejectionReasons || []),
+      providerRejectionStage: providerPhaseRejectionStage,
+      providerRejectionReasons: providerPhaseRejectionReasons,
       providerUnsupportedClaimCount: typeof diag.providerUnsupportedClaimCount === 'number'
         ? diag.providerUnsupportedClaimCount
         : (this.draft.providerUnsupportedClaimCount ?? null),
       providerUnsupportedClaimKinds: Array.isArray(diag.providerUnsupportedClaimKinds)
         ? diag.providerUnsupportedClaimKinds.map(String)
         : (this.draft.providerUnsupportedClaimKinds || []),
-      finalNormalizedHash: (diag.finalNormalizedHash as string | undefined)
-        ?? (finalized.countedAsSuccess ? fingerprintText(text) : null),
+      finalNormalizedHash: selectedFinalPresent
+        ? ((diag.finalNormalizedHash as string | undefined) ?? fingerprintText(text))
+        : null,
       visibleTextareaMatchesFinalNormalizedHash:
         typeof diag.visibleTextareaMatchesFinalNormalizedHash === 'boolean'
           ? diag.visibleTextareaMatchesFinalNormalizedHash
@@ -1874,15 +1923,19 @@ export class ExperienceAiDiagnosticSession {
       sourcePersonMode: (diag.sourcePersonMode as string | undefined) || null,
       providerPersonMode: (diag.providerPersonMode as string | undefined) || null,
       normalizedPersonMode: (diag.normalizedPersonMode as string | undefined) || null,
-      finalPersonMode: (diag.finalPersonMode as string | undefined) || null,
+      finalPersonMode: selectedFinalPresent
+        ? ((diag.finalPersonMode as string | undefined) || null)
+        : null,
       perspectiveNormalizationAttempted: Boolean(diag.perspectiveNormalizationAttempted),
       perspectiveNormalizationApplied: Boolean(diag.perspectiveNormalizationApplied),
       perspectiveValidationPassed: typeof diag.perspectiveValidationPassed === 'boolean'
         ? diag.perspectiveValidationPassed
         : (appliedSuccess ? true : Boolean(diag.perspectiveValidationPassed)),
       normalizedBulletsUsedForApply: Boolean(diag.normalizedBulletsUsedForApply),
-      finalMatchesProviderOutput: Boolean(diag.finalMatchesProviderOutput),
-      finalMatchesSourceAfterNormalization: Boolean(diag.finalMatchesSourceAfterNormalization),
+      finalMatchesProviderOutput: selectedFinalPresent
+        && Boolean(diag.finalMatchesProviderOutput),
+      finalMatchesSourceAfterNormalization: selectedFinalPresent
+        && Boolean(diag.finalMatchesSourceAfterNormalization),
       meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
       noOpRejected: Boolean(diag.noOpRejected),
       providerNoOpDetected: Boolean(
@@ -2012,58 +2065,73 @@ export class ExperienceAiDiagnosticSession {
       ),
       repairSourceUnitPredicateCoveragePassed:
         diag.repairSourceUnitPredicateCoveragePassed ?? null,
-      finalCandidatePredicateIdentityCount: Number(
-        diag.finalCandidatePredicateIdentityCount
-        ?? diag.candidatePredicateIdentityCount
-        ?? 0,
-      ),
-      finalAddedPredicateCount: Number(
-        diag.finalAddedPredicateCount ?? diag.candidateAddedPredicateCount ?? 0,
-      ),
-      finalAddedPredicateIdentityHashes: Array.isArray(diag.finalAddedPredicateIdentityHashes)
-        ? diag.finalAddedPredicateIdentityHashes.map(String)
-        : (Array.isArray(diag.candidateAddedPredicateIdentityHashes)
-          ? diag.candidateAddedPredicateIdentityHashes.map(String)
-          : []),
-      finalCoordinatedPredicateExpansionDetected: Boolean(
-        diag.finalCoordinatedPredicateExpansionDetected,
-      ),
-      finalSourceUnitPredicateCoveragePassed:
-        diag.finalSourceUnitPredicateCoveragePassed
-        ?? diag.sourceUnitPredicateCoveragePassed
-        ?? null,
-      finalRequiredFactCount: Number(
-        (diagRec.finalRequiredFactCount as number | undefined)
-        ?? diag.requiredFactCount
-        ?? finalRequired
-        ?? 0,
-      ),
-      finalCoveredFactCount: Number(
-        (diagRec.finalCoveredFactCount as number | undefined)
-        ?? diag.coveredFactCount
-        ?? finalCovered
-        ?? 0,
-      ),
-      finalUncoveredFactIdentityHashes: Array.isArray(diagRec.finalUncoveredFactIdentityHashes)
-        ? (diagRec.finalUncoveredFactIdentityHashes as unknown[]).map(String)
-        : (Array.isArray(finalUncovered) ? finalUncovered.map(String) : []),
-      finalRequiredFactSetHash:
-        (diagRec.finalRequiredFactSetHash as string | undefined) ?? null,
-      finalFactCoveragePassed: typeof diagRec.finalFactCoveragePassed === 'boolean'
-        ? diagRec.finalFactCoveragePassed
-        : (
-          Number(
-            (diagRec.finalCoveredFactCount as number | undefined)
-            ?? diag.coveredFactCount
-            ?? finalCovered
-            ?? 0,
-          ) === Number(
-            (diagRec.finalRequiredFactCount as number | undefined)
-            ?? diag.requiredFactCount
-            ?? finalRequired
-            ?? 0,
-          )
-        ),
+      finalCandidatePredicateIdentityCount: selectedFinalPresent
+        ? Number(
+          diag.finalCandidatePredicateIdentityCount
+          ?? diag.candidatePredicateIdentityCount
+          ?? 0,
+        )
+        : 0,
+      finalAddedPredicateCount: selectedFinalPresent
+        ? Number(diag.finalAddedPredicateCount ?? diag.candidateAddedPredicateCount ?? 0)
+        : 0,
+      finalAddedPredicateIdentityHashes: selectedFinalPresent
+        ? (Array.isArray(diag.finalAddedPredicateIdentityHashes)
+          ? diag.finalAddedPredicateIdentityHashes.map(String)
+          : (Array.isArray(diag.candidateAddedPredicateIdentityHashes)
+            ? diag.candidateAddedPredicateIdentityHashes.map(String)
+            : []))
+        : [],
+      finalCoordinatedPredicateExpansionDetected: selectedFinalPresent
+        && Boolean(diag.finalCoordinatedPredicateExpansionDetected),
+      finalSourceUnitPredicateCoveragePassed: selectedFinalPresent
+        ? (
+          diag.finalSourceUnitPredicateCoveragePassed
+          ?? diag.sourceUnitPredicateCoveragePassed
+          ?? null
+        )
+        : null,
+      finalRequiredFactCount: selectedFinalPresent
+        ? Number(
+          (diagRec.finalRequiredFactCount as number | undefined)
+          ?? diag.requiredFactCount
+          ?? finalRequired
+          ?? 0,
+        )
+        : null,
+      finalCoveredFactCount: selectedFinalPresent
+        ? Number(
+          (diagRec.finalCoveredFactCount as number | undefined)
+          ?? diag.coveredFactCount
+          ?? finalCovered
+          ?? 0,
+        )
+        : null,
+      finalUncoveredFactIdentityHashes: selectedFinalPresent
+        ? (Array.isArray(diagRec.finalUncoveredFactIdentityHashes)
+          ? (diagRec.finalUncoveredFactIdentityHashes as unknown[]).map(String)
+          : (Array.isArray(finalUncovered) ? finalUncovered.map(String) : []))
+        : [],
+      finalRequiredFactSetHash: selectedFinalPresent
+        ? ((diagRec.finalRequiredFactSetHash as string | undefined) ?? null)
+        : null,
+      finalFactCoveragePassed: selectedFinalPresent
+        ? (typeof diagRec.finalFactCoveragePassed === 'boolean'
+          ? diagRec.finalFactCoveragePassed
+          : (
+            Number(
+              (diagRec.finalCoveredFactCount as number | undefined)
+              ?? diag.coveredFactCount
+              ?? finalCovered
+              ?? 0,
+            ) === Number(
+              (diagRec.finalRequiredFactCount as number | undefined)
+              ?? diag.requiredFactCount
+              ?? finalRequired
+              ?? 0,
+            )
+          ))
+        : null,
       experienceSelectedFinalCoverageRevision:
         (diagRec.experienceSelectedFinalCoverageRevision as string | undefined)
         ?? EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION,
@@ -2078,9 +2146,8 @@ export class ExperienceAiDiagnosticSession {
       repairResidualComplianceScopeExpansionDetected: Boolean(
         diag.repairResidualComplianceScopeExpansionDetected,
       ),
-      finalComplianceScopeExpansionDetected: Boolean(
-        diag.finalComplianceScopeExpansionDetected,
-      ),
+      finalComplianceScopeExpansionDetected: selectedFinalPresent
+        && Boolean(diag.finalComplianceScopeExpansionDetected),
       factAuthorityKind: (() => {
         void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
         const fromDiag = (diag.factAuthorityKind as string | null | undefined) ?? null;
@@ -2194,9 +2261,7 @@ export class ExperienceAiDiagnosticSession {
           earlyNoOpPreflightEvaluated: Boolean(
             (diag as Record<string, unknown>).earlyNoOpPreflightEvaluated,
           ),
-          uneditedRerunDetected: Boolean(
-            (diag as Record<string, unknown>).uneditedRerunDetected,
-          ),
+          uneditedRerunDetected,
           providerAttempted: false,
           finalOutcomeReason:
             ((diag as Record<string, unknown>).finalOutcomeReason as string | null | undefined)
@@ -2346,9 +2411,7 @@ export class ExperienceAiDiagnosticSession {
             earlyNoOpPreflightEvaluated: Boolean(
               (diag as Record<string, unknown>).earlyNoOpPreflightEvaluated,
             ),
-            uneditedRerunDetected: Boolean(
-              (diag as Record<string, unknown>).uneditedRerunDetected,
-            ),
+            uneditedRerunDetected,
             // Do not force providerAttempted false — provider evidence may exist
             // without an explicit client httpStatus stamp in unit tests.
             ...(
@@ -2468,22 +2531,25 @@ export class ExperienceAiDiagnosticSession {
           && clientFallbackApplied
         ),
       ),
-      finalCandidateSource: (diag.finalCandidateSource as string | undefined)
-        ?? (finalized.countedAsSuccess
-          ? (clientFallbackApplied
+      finalCandidateSource: selectedFinalPresent
+        ? ((diag.finalCandidateSource as string | undefined)
+          ?? (clientFallbackApplied
             ? 'deterministic_fallback'
             : (diag.unsupportedClaimRepairApplied
               ? 'unsupported_claim_repair'
-              : (diag.noOpRepairApplied ? 'noop_repair' : 'provider')))
-          : 'none'),
-      finalUnsupportedClaimCount: Math.max(
-        Number(diag.finalUnsupportedClaimCount ?? 0),
-        Array.isArray(diag.finalUnsupportedClaimKinds)
-          ? diag.finalUnsupportedClaimKinds.length
-          : 0,
-        reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
-      ),
-      finalUnsupportedClaimKinds: Array.isArray(diag.finalUnsupportedClaimKinds)
+              : (diag.noOpRepairApplied ? 'noop_repair' : 'provider'))))
+        : 'none',
+      finalUnsupportedClaimCount: selectedFinalPresent
+        ? Math.max(
+          Number(diag.finalUnsupportedClaimCount ?? 0),
+          Array.isArray(diag.finalUnsupportedClaimKinds)
+            ? diag.finalUnsupportedClaimKinds.length
+            : 0,
+          reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
+        )
+        : 0,
+      finalUnsupportedClaimKinds: selectedFinalPresent
+        && Array.isArray(diag.finalUnsupportedClaimKinds)
         ? diag.finalUnsupportedClaimKinds.map(String)
         : [],
       countedAsSuccess: Boolean(finalized.countedAsSuccess),
@@ -2887,7 +2953,7 @@ export class ExperienceAiDiagnosticSession {
           ? null
           : (diag.providerRejectionStage
             || diag.rejectionStage
-            || this.draft.providerRejectionStage
+            || providerPhaseRejectionStage
             || reason
             || null),
         rejectionReasons: diag.providerAccepted
@@ -2895,10 +2961,7 @@ export class ExperienceAiDiagnosticSession {
           : ([
             // Prefer phase-local provider rejection over terminal reason so a
             // later fallback locale field cannot rewrite coverage lineage.
-            diag.providerRejectionReason
-            || (Array.isArray(this.draft.providerRejectionReasons)
-              ? this.draft.providerRejectionReasons[0]
-              : null)
+            providerPhaseRejectionReasons[0]
             || reason
             || diag.clientDeterministicFallbackReason,
           ].filter(Boolean) as string[]),
