@@ -7,13 +7,15 @@ import { localesAreDetectionCompatible } from './locale-authority';
 import type { SummaryV2EntryOwned, SummaryV2SelectionManifest } from './types';
 
 export const SUMMARY_V2_LOCALIZED_MANIFEST_REVISION =
-  'summary-v2-localized-manifest-390-v1' as const;
+  'summary-v2-localized-manifest-417-v1' as const;
 
 export type SummaryV2LocalizationSource =
   | 'same_locale_authoritative'
   | 'provider'
   | 'provider_repair'
-  | 'validated_cache';
+  | 'validated_cache'
+  | 'summary_provider_recovery'
+  | 'mixed_authoritative';
 
 export type SummaryV2LocalizedFact = {
   factId: string;
@@ -346,4 +348,43 @@ export function projectLocalizedSummaryV2Manifest(options: {
     || requiredPriorFacts.length !== options.manifest.requiredPriorFacts.length
   ) return null;
   return { ...options.manifest, current, priors: priors as SummaryV2EntryOwned[], requiredCurrentFacts, requiredPriorFacts };
+}
+
+export type SummaryV2ProviderExperienceEntry = {
+  id: string;
+  position: string;
+  company: string;
+  startDate: string;
+  endDate: string;
+  description: string;
+  isPresent: boolean;
+  sourceLocale: Locale;
+};
+
+/**
+ * Provider input must be the same localized, entry-owned manifest later used by
+ * finalization. This prevents the Summary provider from receiving Hindi/Serbian/
+ * English text after a target-locale manifest has already been accepted.
+ */
+export function buildSummaryV2ProviderExperienceEntries(options: {
+  manifest: SummaryV2SelectionManifest;
+  localized: SummaryV2LocalizedManifest;
+}): SummaryV2ProviderExperienceEntry[] | null {
+  const projected = projectLocalizedSummaryV2Manifest(options);
+  if (!projected) return null;
+  const required = [...projected.requiredCurrentFacts, ...projected.requiredPriorFacts];
+  const selected = [...(projected.current ? [projected.current] : []), ...projected.priors];
+  return selected.map((entry) => ({
+    id: entry.entryId,
+    position: entry.role,
+    company: entry.employer,
+    startDate: entry.startDate,
+    endDate: entry.isPresent ? 'present' : entry.endDate,
+    description: required
+      .filter((fact) => fact.entryId === entry.entryId)
+      .map((fact) => `• ${fact.bulletText.replace(/^[•\-*]\s*/u, '').trim()}`)
+      .join('\n'),
+    isPresent: entry.isPresent,
+    sourceLocale: projected.locale,
+  }));
 }

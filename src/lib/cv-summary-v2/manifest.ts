@@ -6,6 +6,7 @@ import type {
   SummaryV2SelectionManifest,
   SummaryV2Snapshot,
 } from './types';
+import { resolveSummaryCurrentRole } from '@/lib/cv-summary-current-role';
 
 /** Max duties required per selected entry (3/3 for the acceptance fixture). */
 export const SUMMARY_V2_MAX_DUTIES_PER_ENTRY = 3;
@@ -27,15 +28,16 @@ export function buildSummaryV2SelectionManifest(
   snapshot: SummaryV2Snapshot,
 ): SummaryV2SelectionManifest {
   const entries = snapshot.entries.filter((e) => e.entryId || e.role || e.employer || e.facts.length);
-  const current = entries.find((e) => e.isPresent) || entries[0] || null;
-  const priors = entries
-    .filter((e) => current && e.entryId !== current.entryId)
-    .filter((e) => !e.isPresent || entries.filter((x) => x.isPresent).length > 1)
-    .slice(0, SUMMARY_V2_MAX_PRIOR_ENTRIES);
+  const current = resolveSummaryCurrentRole(entries);
+  const priorCandidates = entries
+    .filter((e) => current && e.entryId !== current.entryId);
 
-  // Prefer completed priors; if only present leftovers remain, skip them.
-  const completedPriors = priors.filter((e) => !e.isPresent);
-  const selectedPriors = (completedPriors.length ? completedPriors : priors)
+  // Prefer completed priors across the whole immutable snapshot. Slicing before
+  // this partition could let earlier extra-current entries crowd completed
+  // history out of the bounded two-prior contract.
+  const completedPriors = priorCandidates.filter((e) => !e.isPresent);
+  const extraCurrentRoles = priorCandidates.filter((e) => e.isPresent);
+  const selectedPriors = (completedPriors.length ? completedPriors : extraCurrentRoles)
     .slice(0, SUMMARY_V2_MAX_PRIOR_ENTRIES);
 
   const requiredCurrentFacts = current ? selectRequiredFacts(current) : [];

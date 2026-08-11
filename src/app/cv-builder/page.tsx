@@ -84,7 +84,6 @@ import { templateInfo, recommendTemplate } from '@/lib/types';
 import {
   ensureCanonicalExperienceFrozen,
   ensureExperienceAiSourceFrozen,
-  freezeCanonicalExperienceDescription,
   freezeExperienceAiDescription,
 } from '@/lib/cv-canonical-facts';
 import {
@@ -99,9 +98,14 @@ import {
 } from '@/lib/cv-ai-finalize-apply';
 import {
   buildSummaryV2ManifestForCv,
+  buildSummaryV2ProviderExperienceEntries,
+  summaryV2SnapshotMatchesCv,
   localizeSummaryV2Manifest,
-  type SummaryV2LocalizedManifest,
+  resolveSummaryCurrentRole,
+  type SummaryV2LocalizationOutcome,
   type SummaryV2LocalizationProviderResponse,
+  type SummaryV2LocalizationTransportInput,
+  type SummaryV2SelectionManifest,
 } from '@/lib/cv-summary-v2';
 import {
   SUMMARY_TRANSACTIONAL_APPLY_387_REVISION,
@@ -291,36 +295,106 @@ async function resolveSummaryLocalizedManifest(options: {
   proToken: string;
   requestId: string;
   signal: AbortSignal;
-}): Promise<{ manifest: SummaryV2LocalizedManifest | null; reason: string | null }> {
+}): Promise<SummaryV2LocalizationOutcome & {
+  sourceManifest: SummaryV2SelectionManifest;
+}> {
   const sourceManifest = buildSummaryV2ManifestForCv({
     cv: options.cv,
     locale: options.locale,
     gender: options.gender,
     referenceDateIso: options.referenceDateIso,
   });
+  const requestLocalization = async (
+    action: 'summary-localize' | 'summary-context-localize',
+    request: SummaryV2LocalizationTransportInput,
+  ): Promise<SummaryV2LocalizationProviderResponse> => {
+    const { data, response, jsonParseFailed } = await apiFetch<{
+      localizedManifest?: SummaryV2LocalizationProviderResponse;
+      error?: string;
+      code?: string;
+      localizationTypedFailureReason?: string;
+      apiResponseKind?: string;
+      serverFallbackUsed?: boolean;
+      clientFallbackUsed?: boolean;
+    }>('/api/generate', {
+      body: {
+        action,
+        proToken: options.proToken,
+        requestId: options.requestId,
+        ...request,
+      },
+      signal: options.signal,
+    });
+    if (!response.ok || !data?.localizedManifest) {
+      throw Object.assign(new Error(
+        data?.localizationTypedFailureReason
+        || data?.code
+        || (jsonParseFailed ? 'provider_invalid_response' : '')
+        || data?.error
+        || 'localization_provider_failed',
+      ), {
+        reason: data?.localizationTypedFailureReason || data?.code || 'localization_provider_failed',
+        httpStatus: response.status,
+        apiResponseKind: data?.apiResponseKind
+          || (jsonParseFailed ? 'invalid_json' : 'http_error'),
+        serverFallbackUsed: data?.serverFallbackUsed === true,
+        clientFallbackUsed: data?.clientFallbackUsed === true,
+      });
+    }
+    return data.localizedManifest;
+  };
   const outcome = await localizeSummaryV2Manifest({
     manifest: sourceManifest,
-    transport: async (request) => {
-      const { data, response } = await apiFetch<{
-        localizedManifest?: SummaryV2LocalizationProviderResponse;
-        error?: string;
-        localizationTypedFailureReason?: string;
-      }>('/api/generate', {
-        body: {
-          action: 'summary-localize',
-          proToken: options.proToken,
-          requestId: options.requestId,
-          ...request,
-        },
-        signal: options.signal,
-      });
-      if (!response.ok || !data?.localizedManifest) {
-        throw new Error(data?.localizationTypedFailureReason || data?.error || 'localization_provider_failed');
-      }
-      return data.localizedManifest;
-    },
+    transport: (request) => requestLocalization('summary-localize', request),
+    recoveryTransport: (request) => requestLocalization('summary-context-localize', request),
   });
-  return { manifest: outcome.manifest, reason: outcome.reason };
+  return { ...outcome, sourceManifest };
+}
+
+type ResolvedSummaryLocalization = Awaited<ReturnType<typeof resolveSummaryLocalizedManifest>>;
+
+function recordSummaryLocalizationDiagnostics(
+  session: SummaryAiDiagnosticSession,
+  localization: ResolvedSummaryLocalization,
+  cv: CVData,
+): void {
+  const selectedIds = new Set([
+    ...(localization.sourceManifest.current ? [localization.sourceManifest.current.entryId] : []),
+    ...localization.sourceManifest.priors.map((entry) => entry.entryId),
+  ]);
+  const localizedManifestLocaleByEntryHash = Object.fromEntries(
+    [...selectedIds].map((id) => [fingerprintText(id), localization.manifest?.targetLocale || null]),
+  );
+  const sameLocaleBypassUsedByEntryHash = Object.fromEntries(
+    Object.entries(localization.sourceByEntryId).map(([id, source]) => [
+      fingerprintText(id),
+      source === 'same_locale_authoritative',
+    ]),
+  );
+  const localizedManifestCacheHitByEntryHash = Object.fromEntries(
+    Object.entries(localization.sourceByEntryId).map(([id, source]) => [
+      fingerprintText(id),
+      source === 'validated_cache',
+    ]),
+  );
+  session.patch({
+    summarySelectedEntryIdHashes: [...selectedIds].map((id) => fingerprintText(id)),
+    summaryOmittedEntryIdHashes: (cv.experience || [])
+      .map((entry) => entry.id)
+      .filter((id) => !selectedIds.has(id))
+      .map((id) => fingerprintText(id)),
+    localizationPrimaryFailureReason: localization.primaryFailureReason,
+    localizationRecoveryAttempted: localization.localizationRecoveryAttempted,
+    localizationRecoveryAccepted: localization.localizationRecoveryAccepted,
+    localizationSelectedEntryCount: localization.selectedEntryCount,
+    localizationSameLocaleBypassCount: localization.sameLocaleBypassCount,
+    localizationValidatedCacheHitCount: localization.validatedCacheHitCount,
+    localizationProviderEntryCount: localization.providerLocalizedEntryCount,
+    localizationRecoveryEntryCount: localization.recoveryLocalizedEntryCount,
+    localizedManifestLocaleByEntryHash,
+    sameLocaleBypassUsedByEntryHash,
+    localizedManifestCacheHitByEntryHash,
+  });
 }
 
 export default function CVBuilderPage() {
@@ -1158,8 +1232,7 @@ export default function CVBuilderPage() {
     const previousContentLocale = liveCvAtPress.canonicalSnapshot?.canonicalLocale ?? null;
     latestSummaryRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
-    const primaryExpForJobCtx = (liveCvAtPress.experience || []).find((e) => e.isPresent)
-      || (liveCvAtPress.experience || [])[0];
+    const primaryExpForJobCtx = resolveSummaryCurrentRole(liveCvAtPress.experience || []);
     const summaryJobContext = buildExperienceJobContext({
       position: primaryExpForJobCtx?.position || liveCvAtPress.personal?.jobTitle,
       locale: requestedLocale,
@@ -1190,35 +1263,44 @@ export default function CVBuilderPage() {
         requestId: reqCtx.requestId,
         signal: controller.signal,
       });
+      recordSummaryLocalizationDiagnostics(summaryDiag, localization, liveCvAtPress);
       if (!localization.manifest) {
         summaryDiag.stage('localization', 'fail', localization.reason || 'localization_provider_failed');
-        summaryDiag.patch({
-          finalTypedFailureReason: localization.reason || 'localization_provider_failed',
-          rejectionStage: 'localization',
-          countedAsSuccess: false,
+        summaryDiag.recordPreCandidateTerminalFailure({
+          stage: 'localization',
+          reason: localization.reason || 'localization_provider_failed',
+          usageAfter: countBefore,
+          httpStatus: localization.httpStatus,
+          apiResponseKind: localization.apiResponseKind,
+          serverFallbackUsed: localization.serverFallbackUsed,
+          clientFallbackUsed: localization.clientFallbackUsed,
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
         toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
         return;
       }
-      const experienceEntries = liveCvAtPress.experience.slice(0, 4).map(exp => ({
-        id: exp.id,
-        position: exp.position,
-        company: exp.company,
-        startDate: exp.startDate,
-        endDate: exp.isPresent ? 'present' : exp.endDate,
-        // Always ground summaries on frozen canonical duties, not a prior locale rewrite.
-        description: freezeCanonicalExperienceDescription(exp).slice(0, 300),
-        isPresent: exp.isPresent,
-        sourceLocale: exp.generatedLocale || exp.positionSourceLocale || liveCvAtPress.contentLocale || null,
-        duration: durationSnapshot.byExperienceId[exp.id],
-      }));
+      summaryDiag.stage('localization', 'ok', localization.localizationSource || undefined);
+      const experienceEntries = buildSummaryV2ProviderExperienceEntries({
+        manifest: localization.sourceManifest,
+        localized: localization.manifest,
+      });
+      if (!experienceEntries) {
+        summaryDiag.stage('localization', 'fail', 'localized_manifest_projection_failed');
+        summaryDiag.recordPreCandidateTerminalFailure({
+          stage: 'localization',
+          reason: 'localized_manifest_projection_failed',
+          usageAfter: countBefore,
+          httpStatus: localization.httpStatus,
+          apiResponseKind: 'validation_rejected',
+        });
+        toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
+        return;
+      }
 
       const { data: summaryData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number }>('/api/generate', {
         body: {
           action: 'summary',
           proToken,
-          jobTitle: liveCvAtPress.personal.jobTitle,
+          jobTitle: experienceEntries[0]?.position || liveCvAtPress.personal.jobTitle,
           experienceDuration,
           experienceDurationSnapshot: durationSnapshot,
           referenceDateIso,
@@ -1251,7 +1333,7 @@ export default function CVBuilderPage() {
             rejectionStage: 'api_response',
             countedAsSuccess: false,
           });
-          summaryDiag.recordVisibleApply(false, countBefore);
+          summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'api_response_not_accepted');
           if (getAiGate().status !== 'free') toast.error(msg ?? t.common.proAuthorizationUnavailable);
           else setSummaryAiModal(true);
           return;
@@ -1271,7 +1353,7 @@ export default function CVBuilderPage() {
           rejectionStage: 'api_response',
           countedAsSuccess: false,
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'api_response_not_accepted');
         toast.error(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
         return;
       }
@@ -1297,7 +1379,7 @@ export default function CVBuilderPage() {
           rejectionStage: 'race_guard',
           countedAsSuccess: false,
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'stale_request_superseded');
         return;
       }
       const liveNow = cvRef.current;
@@ -1329,7 +1411,27 @@ export default function CVBuilderPage() {
           rejectionStage: 'race_guard',
           countedAsSuccess: false,
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'stale_summary_edited_in_flight');
+        return;
+      }
+      if (!summaryV2SnapshotMatchesCv({
+        cv: liveNow,
+        locale: requestedLocale,
+        gender: liveCvAtPress.personal.gender || '',
+        referenceDateIso,
+        expectedSnapshotHash: localization.sourceManifest.snapshotHash,
+      })) {
+        summaryDiag.stage('race_guard', 'fail', 'stale_experience_edited_in_flight');
+        summaryDiag.patch({
+          actualRaceDetected: true,
+          actualRaceReason: 'stale_experience_edited_in_flight',
+          raceGuardResult: 'fail',
+          finalTypedFailureReason: 'stale_experience_edited_in_flight',
+          rejectionStage: 'race_guard',
+          countedAsSuccess: false,
+        });
+        summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'stale_experience_edited_in_flight');
+        toast.error(aiErrorMessage('ai_request_stale', locale));
         return;
       }
       const nextSummary = (summaryData?.result ?? '').trim();
@@ -1396,7 +1498,10 @@ export default function CVBuilderPage() {
           reason: finalizedGate.reason || failCode,
         });
         summaryDiag.recordFinalizeResult(finalizedGate);
-        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.recordVisibleApplySkippedFailure(
+          countBefore,
+          finalizedGate.reason || 'final_candidate_rejected',
+        );
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
@@ -1415,7 +1520,10 @@ export default function CVBuilderPage() {
           error: { code: failCode, httpStatus: 422 },
           responseSource: 'blocked',
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.recordVisibleApplySkippedFailure(
+          countBefore,
+          preApplyGate.reason || 'diagnostic_preapply_gate_failed',
+        );
         toast.error(msg ?? aiErrorMessage(failCode, locale));
         return;
       }
@@ -1634,7 +1742,7 @@ export default function CVBuilderPage() {
         rejectionStage: 'api_response',
         countedAsSuccess: false,
       });
-      summaryDiag.recordVisibleApply(false, countBefore);
+      summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'request_failed_before_apply');
       toast.error(msg ?? aiErrorMessage(payload.code === 'network_error' ? 'network_error' : 'provider_temporarily_unavailable', locale));
     } finally {
       await terminalizeAiDiagnosticSession(summaryDiag);
@@ -2773,8 +2881,7 @@ export default function CVBuilderPage() {
     const previousContentLocale = liveCvAtPress.canonicalSnapshot?.canonicalLocale ?? null;
     latestRewriteRequestIdRef.current = reqCtx.requestId;
     const countBefore = getProAiUsageCount();
-    const primaryExpForRewrite = (liveCvAtPress.experience || []).find((e) => e.isPresent)
-      || (liveCvAtPress.experience || [])[0];
+    const primaryExpForRewrite = resolveSummaryCurrentRole(liveCvAtPress.experience || []);
     const rewriteJobContext = buildExperienceJobContext({
       position: primaryExpForRewrite?.position || liveCvAtPress.personal?.jobTitle,
       locale: requestedLocale,
@@ -2797,6 +2904,52 @@ export default function CVBuilderPage() {
       rewriteStyle: style,
     });
     try {
+      const referenceDateIso = new Date().toISOString().slice(0, 10);
+      const durationSnapshot = buildExperienceDurationSnapshot(
+        liveCvAtPress.experience,
+        referenceDateIso,
+      );
+      const localization = await resolveSummaryLocalizedManifest({
+        cv: liveCvAtPress,
+        locale: requestedLocale,
+        gender: liveCvAtPress.personal.gender || '',
+        referenceDateIso,
+        proToken,
+        requestId: reqCtx.requestId,
+        signal: controller.signal,
+      });
+      recordSummaryLocalizationDiagnostics(summaryDiag, localization, liveCvAtPress);
+      if (!localization.manifest) {
+        summaryDiag.stage('localization', 'fail', localization.reason || 'localization_provider_failed');
+        summaryDiag.recordPreCandidateTerminalFailure({
+          stage: 'localization',
+          reason: localization.reason || 'localization_provider_failed',
+          usageAfter: countBefore,
+          httpStatus: localization.httpStatus,
+          apiResponseKind: localization.apiResponseKind,
+          serverFallbackUsed: localization.serverFallbackUsed,
+          clientFallbackUsed: localization.clientFallbackUsed,
+        });
+        toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
+        return;
+      }
+      summaryDiag.stage('localization', 'ok', localization.localizationSource || undefined);
+      const localizedExperienceEntries = buildSummaryV2ProviderExperienceEntries({
+        manifest: localization.sourceManifest,
+        localized: localization.manifest,
+      });
+      if (!localizedExperienceEntries) {
+        summaryDiag.stage('localization', 'fail', 'localized_manifest_projection_failed');
+        summaryDiag.recordPreCandidateTerminalFailure({
+          stage: 'localization',
+          reason: 'localized_manifest_projection_failed',
+          usageAfter: countBefore,
+          httpStatus: localization.httpStatus,
+          apiResponseKind: 'validation_rejected',
+        });
+        toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
+        return;
+      }
       const { data: rewriteData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
         body: {
           action: 'rewrite',
@@ -2808,13 +2961,24 @@ export default function CVBuilderPage() {
           requestId: reqCtx.requestId,
           operationMode,
           cvContext: {
-            personal: liveCvAtPress.personal,
+            personal: {
+              ...liveCvAtPress.personal,
+              jobTitle: localizedExperienceEntries[0]?.position
+                || liveCvAtPress.personal.jobTitle,
+            },
             summary: liveCvAtPress.canonicalSummary || liveCvAtPress.summary,
             canonicalSummary: liveCvAtPress.canonicalSummary || '',
-            experience: liveCvAtPress.experience.map((e) => ({
-              ...e,
-              description: freezeCanonicalExperienceDescription(e),
-              canonicalDescription: e.canonicalDescription || freezeCanonicalExperienceDescription(e),
+            experience: localizedExperienceEntries.map((entry) => ({
+              id: entry.id,
+              position: entry.position,
+              company: entry.company,
+              startDate: entry.startDate,
+              endDate: entry.isPresent ? '' : entry.endDate,
+              isPresent: entry.isPresent,
+              description: entry.description,
+              canonicalDescription: entry.description,
+              generatedLocale: requestedLocale,
+              positionSourceLocale: requestedLocale,
             })),
             education: liveCvAtPress.education,
             skills: liveCvAtPress.skills,
@@ -2837,6 +3001,13 @@ export default function CVBuilderPage() {
           httpStatus: res.status,
           error: { ...payload, code: typedCode },
         });
+        summaryDiag.stage('api_response', 'fail', typedCode || 'http_error');
+        summaryDiag.patch({
+          finalTypedFailureReason: typedCode || 'http_error',
+          rejectionStage: 'api_response',
+          countedAsSuccess: false,
+        });
+        summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'api_response_not_accepted');
         toast.error(msg ?? aiErrorMessage(typedCode, locale));
         return;
       }
@@ -2853,6 +3024,14 @@ export default function CVBuilderPage() {
           applied: false,
           reason: 'stale_request_superseded',
         });
+        summaryDiag.stage('race_guard', 'fail', 'stale_request_superseded');
+        summaryDiag.patch({
+          raceGuardResult: 'fail',
+          finalTypedFailureReason: 'stale_request_superseded',
+          rejectionStage: 'race_guard',
+          countedAsSuccess: false,
+        });
+        summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'stale_request_superseded');
         return;
       }
       const liveNow = cvRef.current;
@@ -2885,6 +3064,7 @@ export default function CVBuilderPage() {
           visibleApplyFailureStage: 'in_flight_source_changed',
         });
         summaryDiag.stage('race_guard', 'fail', 'stale_summary_edited_in_flight');
+        summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'stale_summary_edited_in_flight');
         try {
           await summaryDiag.resolveVersions();
           summaryDiag.commit();
@@ -2892,26 +3072,24 @@ export default function CVBuilderPage() {
         toast.error(aiErrorMessage('ai_request_stale', locale));
         return;
       }
-      const referenceDateIso = new Date().toISOString().slice(0, 10);
-      const durationSnapshot = buildExperienceDurationSnapshot(liveNow.experience, referenceDateIso);
-      const localization = await resolveSummaryLocalizedManifest({
+      if (!summaryV2SnapshotMatchesCv({
         cv: liveNow,
         locale: requestedLocale,
-        gender: liveNow.personal.gender || '',
+        gender: liveCvAtPress.personal.gender || '',
         referenceDateIso,
-        proToken,
-        requestId: reqCtx.requestId,
-        signal: controller.signal,
-      });
-      if (!localization.manifest) {
-        summaryDiag.stage('localization', 'fail', localization.reason || 'localization_provider_failed');
+        expectedSnapshotHash: localization.sourceManifest.snapshotHash,
+      })) {
+        summaryDiag.stage('race_guard', 'fail', 'stale_experience_edited_in_flight');
         summaryDiag.patch({
-          finalTypedFailureReason: localization.reason || 'localization_provider_failed',
-          rejectionStage: 'localization',
+          actualRaceDetected: true,
+          actualRaceReason: 'stale_experience_edited_in_flight',
+          raceGuardResult: 'fail',
+          finalTypedFailureReason: 'stale_experience_edited_in_flight',
+          rejectionStage: 'race_guard',
           countedAsSuccess: false,
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
-        toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
+        summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'stale_experience_edited_in_flight');
+        toast.error(aiErrorMessage('ai_request_stale', locale));
         return;
       }
       const rewriteAction = style === 'shorter'
@@ -2992,7 +3170,10 @@ export default function CVBuilderPage() {
           applied: false,
           reason: finalizedGate.reason || failCode,
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.recordVisibleApplySkippedFailure(
+          countBefore,
+          finalizedGate.reason || 'final_candidate_rejected',
+        );
         try {
           await summaryDiag.resolveVersions();
           summaryDiag.commit();
@@ -3014,7 +3195,10 @@ export default function CVBuilderPage() {
           error: { code: failCode, httpStatus: 422 },
           responseSource: 'blocked',
         });
-        summaryDiag.recordVisibleApply(false, countBefore);
+        summaryDiag.recordVisibleApplySkippedFailure(
+          countBefore,
+          preApplyGate.reason || 'diagnostic_preapply_gate_failed',
+        );
         try {
           await summaryDiag.resolveVersions();
           summaryDiag.commit();
@@ -3180,7 +3364,7 @@ export default function CVBuilderPage() {
         error: payload,
       });
       summaryDiag.stage('api_response', 'fail', payload.code || 'network_error');
-      summaryDiag.recordVisibleApply(false, countBefore);
+      summaryDiag.recordVisibleApplySkippedFailure(countBefore, 'request_failed_before_apply');
       try {
         await summaryDiag.resolveVersions();
         summaryDiag.commit();

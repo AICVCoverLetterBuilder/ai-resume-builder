@@ -401,17 +401,23 @@ describe('AAB-390 cross-locale purity is fail-closed before selection/apply', ()
     expect(first.priors[0]?.sourceLocale).toBe('de');
     const cold = await localizeSummaryV2Manifest({ manifest: first, transport });
     expect(cold.localizationSource).toBe('provider');
-    expect(calls).toBe(1);
+    // AAB-417: selected cross-locale entries are localized independently so a
+    // slow entry cannot fail the complete manifest.
+    expect(calls).toBe(2);
     const cached = await localizeSummaryV2Manifest({ manifest: first, transport });
     expect(cached.localizationSource).toBe('validated_cache');
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     cv.experience[1].description += '\\nBearbeitete zusätzliche deutsche Anfragen.';
     cv.experience[1].description = cv.experience[1].description.replace('professionell', 'zuvorkommend');
     const changed = buildSummaryV2ManifestForCv({ cv, locale: 'es', gender: 'male', referenceDateIso: REFERENCE_DATE });
     const changedOutcome = await localizeSummaryV2Manifest({ manifest: changed, transport });
     expect(changed.priors[0]?.sourceLocale).toBe('de');
-    expect(changedOutcome.localizationSource).toBe('provider');
-    expect(calls).toBe(2);
+    expect(changedOutcome.localizationSource).toBe('mixed_authoritative');
+    expect(Object.values(changedOutcome.sourceByEntryId)).toEqual(
+      expect.arrayContaining(['validated_cache', 'provider']),
+    );
+    // Only the changed entry misses its source-bound cache key.
+    expect(calls).toBe(3);
   });
 
   it.each([

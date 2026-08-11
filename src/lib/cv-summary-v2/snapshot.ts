@@ -7,6 +7,7 @@ import {
 import { SUMMARY_V2_REVISION } from './flag';
 import type { SummaryV2EntryOwned, SummaryV2Snapshot } from './types';
 import { buildEntryOwnedFactsFromLiveDescription, hashSummaryV2Text } from './facts';
+import { buildSummaryV2SelectionManifest } from './manifest';
 import {
   resolveSourceLocaleForText,
   SUMMARY_V2_SUPPORTED_LOCALES,
@@ -82,4 +83,16 @@ export function captureSummaryV2Snapshot(options: {
       : null,
     durationPhrase,
   };
+}
+
+/** Immutable Experience race guard shared by Generate and every rewrite path. */
+export function summaryV2SnapshotMatchesCv(options: {
+  cv: CVData;
+  locale: Locale;
+  gender?: string;
+  referenceDateIso: string;
+  expectedSnapshotHash: string;
+}): boolean {
+  const snapshot = captureSummaryV2Snapshot(options);
+  return buildSummaryV2SelectionManifest(snapshot).snapshotHash === options.expectedSnapshotHash;
 }

@@ -10,6 +10,10 @@ import {
   SUMMARY_V2_SUPPORTED_LOCALES,
 } from './cv-summary-v2/locale-authority';
 import type { Locale } from './i18n/translations';
+import {
+  resolveSummaryCurrentRole,
+  SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
+} from './cv-summary-current-role';
 
 export const SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION =
   'summary-content-locale-rollback-361-v1' as const;
@@ -245,6 +249,10 @@ export type SummaryAiDiagnosticTrace = {
   currentExperienceEntryCount: number;
   currentExperienceEntryIdHashes: string[];
   currentRoleEntryIdHash: string | null;
+  currentRoleCandidateCount?: number;
+  currentRoleResolutionRule?: typeof SUMMARY_CURRENT_ROLE_RESOLVER_REVISION;
+  summarySelectedEntryIdHashes?: string[];
+  summaryOmittedEntryIdHashes?: string[];
   currentJobContextHash: string | null;
   snapshotCreatedBeforeRequest: boolean;
   snapshotMatchesApplyContext: boolean;
@@ -261,6 +269,14 @@ export type SummaryAiDiagnosticTrace = {
   localizationRequiredByEntryHash: Record<string, boolean>;
   sameLocaleBypassUsedByEntryHash: Record<string, boolean>;
   localizedManifestCacheHitByEntryHash: Record<string, boolean>;
+  localizationPrimaryFailureReason?: string | null;
+  localizationRecoveryAttempted?: boolean;
+  localizationRecoveryAccepted?: boolean;
+  localizationSelectedEntryCount?: number;
+  localizationSameLocaleBypassCount?: number;
+  localizationValidatedCacheHitCount?: number;
+  localizationProviderEntryCount?: number;
+  localizationRecoveryEntryCount?: number;
   /** Packaged revision for the distinct Experience locale-attribution contract. */
   summaryExperienceLocaleDiagnosticsRevision: typeof SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION;
   /** Live, non-PII diagnostic contract revision for the AAB-395 duration/native-surface gate. */
@@ -477,9 +493,12 @@ export type SummaryAiDiagnosticTrace = {
   genderValidationPassed: boolean;
   tenseValidationPassed: boolean;
   localeValidationPassed: boolean;
-  grammarValidationPassed: boolean;
-  durationValidationPassed: boolean;
-  groundingValidationPassed: boolean;
+  /** Null means no candidate existed, so this candidate-only gate was not evaluated. */
+  grammarValidationPassed: boolean | null;
+  /** Null means no candidate existed, so this candidate-only gate was not evaluated. */
+  durationValidationPassed: boolean | null;
+  /** Null means no candidate existed, so this candidate-only gate was not evaluated. */
+  groundingValidationPassed: boolean | null;
   /** Per-sentence target-locale purity (build 271/272). */
   unitCount: number;
   detectedLocaleByUnit: Array<string | null>;
@@ -745,6 +764,10 @@ export class SummaryAiDiagnosticSession {
       currentExperienceEntryCount: 0,
       currentExperienceEntryIdHashes: [],
       currentRoleEntryIdHash: null,
+      currentRoleCandidateCount: 0,
+      currentRoleResolutionRule: SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
+      summarySelectedEntryIdHashes: [],
+      summaryOmittedEntryIdHashes: [],
       currentJobContextHash: input.jobContextHash || null,
       snapshotCreatedBeforeRequest: true,
       snapshotMatchesApplyContext: true,
@@ -760,6 +783,14 @@ export class SummaryAiDiagnosticSession {
       localizationRequiredByEntryHash: {},
       sameLocaleBypassUsedByEntryHash: {},
       localizedManifestCacheHitByEntryHash: {},
+      localizationPrimaryFailureReason: null,
+      localizationRecoveryAttempted: false,
+      localizationRecoveryAccepted: false,
+      localizationSelectedEntryCount: 0,
+      localizationSameLocaleBypassCount: 0,
+      localizationValidatedCacheHitCount: 0,
+      localizationProviderEntryCount: 0,
+      localizationRecoveryEntryCount: 0,
       summaryExperienceLocaleDiagnosticsRevision: SUMMARY_EXPERIENCE_LOCALE_DIAGNOSTICS_394_REVISION,
       summaryDurationSemanticNativeSurfaceRevision:
         SUMMARY_DURATION_SEMANTIC_NATIVE_SURFACE_395_REVISION,
@@ -948,7 +979,10 @@ export class SummaryAiDiagnosticSession {
     const localizationRequired: Record<string, boolean> = {};
     const states: Record<string, 'current' | 'completed'> = {};
     const hashes: string[] = [];
-    let currentRoleHash: string | null = null;
+    const currentRole = resolveSummaryCurrentRole(exps);
+    const currentRoleHash: string | null = currentRole
+      ? hashExperienceEntryId(currentRole.id)
+      : null;
     for (const e of exps) {
       const h = hashExperienceEntryId(e.id);
       hashes.push(h);
@@ -979,7 +1013,6 @@ export class SummaryAiDiagnosticSession {
       effectiveAuthorities[h] = resolved.resolvedFrom;
       localizationRequired[h] = resolved.sourceLocale !== this.draft.requestedLocale;
       states[h] = e.isPresent ? 'current' : 'completed';
-      if (e.isPresent && !currentRoleHash) currentRoleHash = h;
     }
     const summary = (liveSummary || '').trim();
     void SUMMARY_VISIBLE_SOURCE_LOCALE_DETECTION_361_REVISION;
@@ -997,6 +1030,8 @@ export class SummaryAiDiagnosticSession {
       currentExperienceEntryCount: exps.length,
       currentExperienceEntryIdHashes: hashes,
       currentRoleEntryIdHash: currentRoleHash,
+      currentRoleCandidateCount: exps.filter((entry) => entry.isPresent).length,
+      currentRoleResolutionRule: SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
       experienceFactCountsByEntryHash: factCounts,
       experienceCanonicalFactCountsByEntryHash: canonCounts,
       experienceLocalesByEntryHash: locales,
@@ -1019,11 +1054,17 @@ export class SummaryAiDiagnosticSession {
     const localizationSource = (diag as { localizationSource?: string | null }).localizationSource || null;
     const localizedTarget = (diag as { targetLocale?: string | null }).targetLocale || this.draft.requestedLocale || null;
     const localizedManifestLocales = Object.fromEntries(Object.keys(sourceLocales).map((key) => [key, localizedTarget]));
-    const sameLocaleBypass = Object.fromEntries(Object.keys(sourceLocales).map((key) => [key, localizationSource === 'same_locale_authoritative']));
-    const cacheHit = Object.fromEntries(Object.keys(sourceLocales).map((key) => [key, localizationSource === 'validated_cache']));
+    const sameLocaleBypass = Object.keys(this.draft.sameLocaleBypassUsedByEntryHash || {}).length
+      ? this.draft.sameLocaleBypassUsedByEntryHash!
+      : Object.fromEntries(Object.keys(sourceLocales).map((key) => [key, localizationSource === 'same_locale_authoritative']));
+    const cacheHit = Object.keys(this.draft.localizedManifestCacheHitByEntryHash || {}).length
+      ? this.draft.localizedManifestCacheHitByEntryHash!
+      : Object.fromEntries(Object.keys(sourceLocales).map((key) => [key, localizationSource === 'validated_cache']));
     this.patch({
       effectiveSourceLocaleByEntryHash: sourceLocales,
-      localizedManifestLocaleByEntryHash: localizedManifestLocales,
+      localizedManifestLocaleByEntryHash: Object.keys(this.draft.localizedManifestLocaleByEntryHash || {}).length
+        ? this.draft.localizedManifestLocaleByEntryHash!
+        : localizedManifestLocales,
       sameLocaleBypassUsedByEntryHash: sameLocaleBypass,
       localizedManifestCacheHitByEntryHash: cacheHit,
     });
@@ -2362,6 +2403,82 @@ export class SummaryAiDiagnosticSession {
     this.stage('race_guard', 'skipped');
   }
 
+  /**
+   * Truthful terminal state when localization fails before any Summary candidate
+   * exists. Candidate/apply-only stages are skipped, not failed.
+   */
+  recordPreCandidateTerminalFailure(input: {
+    stage: string;
+    reason: string;
+    usageAfter: number;
+    httpStatus?: number | null;
+    apiResponseKind?: string | null;
+    serverFallbackUsed?: boolean;
+    clientFallbackUsed?: boolean;
+  }): void {
+    this.patch({
+      finalCandidateSource: 'none',
+      providerCandidatePresent: false,
+      deterministicCandidatePresent: false,
+      fallbackCandidatePresent: false,
+      grammarValidationPassed: null,
+      groundingValidationPassed: null,
+      durationValidationPassed: null,
+      providerHttpStatus: input.httpStatus ?? null,
+      providerResponseKind: input.apiResponseKind || 'not_attempted',
+      meaningfulChangeDetected: false,
+      noOpDetected: false,
+      apiResponseKind: input.apiResponseKind || 'not_attempted',
+      serverFallbackUsed: input.serverFallbackUsed === true,
+      clientFallbackUsed: input.clientFallbackUsed === true,
+      repairAttempted: false,
+      repairApplied: false,
+      repairSelected: false,
+      repairCandidatePresent: false,
+      repairAccepted: false,
+      fallbackAttempted: false,
+      fallbackApplied: false,
+      countedAsSuccess: false,
+      visibleApplySucceeded: false,
+      usageCountAfter: input.usageAfter,
+      raceGuardResult: 'skipped',
+      finalPostconditionsPassed: false,
+      finalTypedFailureReason: input.reason,
+      rejectionStage: input.stage,
+      candidateLineage: [],
+    });
+    for (const name of [
+      'provider_candidate',
+      'repair',
+      'deterministic_fallback',
+      'grounding_validation',
+      'locale_script_grammar_validation',
+      'duration_validation',
+      'final_candidate_selection',
+      'race_guard',
+      'visible_apply',
+      'post_write_validation',
+      'usage_accounting',
+    ]) {
+      this.stage(name, 'skipped', 'not_reached');
+    }
+  }
+
+  /**
+   * A terminal failure occurred before the visible-write transaction began.
+   * Preserve the failure at its real stage and serialize visible/post-write
+   * work as skipped rather than falsely claiming an apply attempt failed.
+   */
+  recordVisibleApplySkippedFailure(usageAfter: number, reason = 'not_reached'): void {
+    this.patch({
+      visibleApplySucceeded: false,
+      usageCountAfter: usageAfter,
+      countedAsSuccess: false,
+    });
+    this.stage('visible_apply', 'skipped', reason);
+    this.stage('post_write_validation', 'skipped', reason);
+  }
+
   recordVisibleApply(ok: boolean, usageAfter: number, visibleText?: string): void {
     const locale = (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale;
     const visibleCount = typeof visibleText === 'string'
@@ -3461,7 +3578,7 @@ export function summarizeSummaryAiDiagnostic(trace: SummaryAiDiagnosticTrace | n
   durationCount: number;
   independentFinalDurationClaimCount: number;
   visibleDurationClaimCountAfterApply: number | null;
-  durationValidationPassed: boolean;
+  durationValidationPassed: boolean | null;
   raceGuardResult: string;
   applied: boolean;
   finalCandidateSource: string | null;

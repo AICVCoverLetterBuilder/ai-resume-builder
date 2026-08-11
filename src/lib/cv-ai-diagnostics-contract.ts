@@ -2451,9 +2451,21 @@ export function checkSummaryDiagnosticCompleteness(
   require('finalCandidateSource');
   require('providerCandidatePresent');
   require('deterministicCandidatePresent');
-  require('grammarValidationPassed');
-  require('groundingValidationPassed');
-  require('durationValidationPassed');
+  // Candidate-only validators use null as the existing not-evaluated sentinel
+  // when the operation terminates before any final candidate exists. Their
+  // fields must still be present; successful/candidate-bearing paths must
+  // continue to provide concrete boolean results.
+  const noCandidate = trace.finalCandidateSource === 'none';
+  for (const key of [
+    'grammarValidationPassed',
+    'groundingValidationPassed',
+    'durationValidationPassed',
+  ] as const) {
+    if (!(key in trace)) missing.push(key);
+    else if (!noCandidate && (trace[key] === null || trace[key] === undefined)) {
+      nullish.push(key);
+    }
+  }
   require('countedAsSuccess');
   require('visibleApplySucceeded');
   require('usageCountBefore');

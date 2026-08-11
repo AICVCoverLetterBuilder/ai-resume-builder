@@ -581,7 +581,11 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { action, proToken, freeUserId, requestId, ...params } = body;
-    if (action === 'experience-localize' || action === 'export-title-localize') {
+    if (
+      action === 'experience-localize'
+      || action === 'export-title-localize'
+      || action === 'summary-context-localize'
+    ) {
       deadlineAt = computeExperienceLocalizationDeadline(serverReceivedAt);
     }
 
@@ -1737,7 +1741,8 @@ Rules:
       });
     }
 
-    if (action === 'summary-localize') {
+    if (action === 'summary-localize' || action === 'summary-context-localize') {
+      const summaryContextRecovery = action === 'summary-context-localize';
       const resolvedLocale = normalizeLocale(params.targetLocale || params.locale);
       const targetInfo = localeInstructions[resolvedLocale];
       const entries = Array.isArray(params.entries) ? params.entries : [];
@@ -1770,30 +1775,58 @@ Rules:
       }));
       const expectedEntryIds = safeEntries.map((entry) => entry.entryId);
       const expectedFactIds = safeEntries.flatMap((entry) => entry.facts.map((fact) => fact.factId));
-      const response = await callWithRetry({
-        model: MODEL,
-        max_tokens: 1800,
-        temperature: 0,
-        stream: false,
-        system: `You are a strict structured CV localization engine. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return one JSON object and no commentary or markdown. Preserve every entryId and factId exactly. Preserve employers exactly. Translate each role title and each duty separately. Preserve meaning, employment state, and factual scope. Add no tools, systems, qualifications, certifications, metrics, achievements, leadership, frequency, responsibility, scope, impact, or enrichment. Use natural target-language role titles and complete duty clauses. Use the selected gender only where grammatically required.`,
-        messages: [{
-          role: 'user',
-          content: JSON.stringify({
-            task: 'localize_cv_experience_manifest',
-            targetLocale: resolvedLocale,
-            gender: sanitizeField(params.gender, 30),
-            entries: safeEntries,
-            responseSchema: {
+      let response: Anthropic.Messages.Message;
+      try {
+        response = await callWithRetry({
+          model: MODEL,
+          max_tokens: Math.min(1800, 420 + safeEntries.length * 520),
+          temperature: 0,
+          stream: false,
+          system: summaryContextRecovery
+            ? `You prepare immutable, target-language Experience context for a professional Summary in ${targetInfo.languageName} (${resolvedLocale}). Return one JSON object and no commentary or markdown. Transform every source-language role and duty into natural target-language wording while preserving every entryId and factId exactly. This is context transformation, not enrichment: preserve employer, ownership, employment state, predicate, object, negation, scope, and tense; add no tools, systems, qualifications, certifications, metrics, achievements, leadership, frequency, responsibility, impact, or facts. Use the selected gender only where grammatically required.`
+            : `You are a strict structured CV localization engine. Translate only into ${targetInfo.languageName} (${resolvedLocale}). Return one JSON object and no commentary or markdown. Preserve every entryId and factId exactly. Preserve employers exactly. Translate each role title and each duty separately. Preserve meaning, employment state, and factual scope. Add no tools, systems, qualifications, certifications, metrics, achievements, leadership, frequency, responsibility, scope, impact, or enrichment. Use natural target-language role titles and complete duty clauses. Use the selected gender only where grammatically required.${params.repair === true ? ' Previous structured localization was rejected. Recheck exact ID parity, target script, completeness, and source scope before responding.' : ''}`,
+          messages: [{
+            role: 'user',
+            content: JSON.stringify({
+              task: summaryContextRecovery
+                ? 'prepare_target_summary_experience_context'
+                : 'localize_cv_experience_manifest',
               targetLocale: resolvedLocale,
-              entries: [{
-                entryId: 'exact input entryId',
-                localizedRoleTitle: 'target-language role title',
-                facts: [{ factId: 'exact input factId', localizedText: 'target-language duty' }],
-              }],
-            },
-          }),
-        }],
-      }, deadlineAt);
+              gender: sanitizeField(params.gender, 30),
+              entries: safeEntries,
+              responseSchema: {
+                targetLocale: resolvedLocale,
+                entries: [{
+                  entryId: 'exact input entryId',
+                  localizedRoleTitle: 'target-language role title',
+                  facts: [{ factId: 'exact input factId', localizedText: 'target-language duty' }],
+                }],
+              },
+            }),
+          }],
+        }, deadlineAt, undefined,
+        summaryContextRecovery
+          ? EXPERIENCE_LOCALIZATION_TRANSLATION_TIMEOUT_MS
+          : AI_PROVIDER_CALL_TIMEOUT_MS,
+        summaryContextRecovery ? 'translation' : 'provider',
+        req.signal,
+        false);
+      } catch (error) {
+        const timeout = isProviderAbortOrTimeoutError(error);
+        const classified = classifyProviderError(error);
+        const typedReason = timeout ? 'request_timeout' : classified.code;
+        return jsonResponse({
+          error: timeout
+            ? 'AI localization request timed out.'
+            : 'AI localization provider is temporarily unavailable.',
+          code: classified.code,
+          localizationTypedFailureReason: typedReason,
+          apiResponseKind: timeout ? 'timeout' : 'http_error',
+          serverFallbackUsed: false,
+          clientFallbackUsed: false,
+          providerStatus: classified.providerStatus,
+        }, { status: timeout ? 504 : classified.status });
+      }
       const parsed = parseSummaryV2LocalizationProviderJson(getText(response));
       if (!parsed) {
         return jsonResponse({
@@ -1818,7 +1851,13 @@ Rules:
           localizationTypedFailureReason: 'localization_id_parity_failed',
         }, { status: 422 });
       }
-      return jsonResponse({ localizedManifest: parsed, localizationSource: 'provider' });
+      return jsonResponse({
+        localizedManifest: parsed,
+        localizationSource: summaryContextRecovery ? 'summary_provider_recovery' : 'provider',
+        apiResponseKind: 'localized_manifest',
+        serverFallbackUsed: false,
+        clientFallbackUsed: false,
+      });
     }
 
     if (action === 'summary') {

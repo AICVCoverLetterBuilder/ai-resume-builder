@@ -16,7 +16,11 @@ export type {
   SummaryV2ValidationResult,
   SummaryV2PipelineResult,
 } from './types';
-export { captureSummaryV2Snapshot, liveExperienceDescription } from './snapshot';
+export {
+  captureSummaryV2Snapshot,
+  liveExperienceDescription,
+  summaryV2SnapshotMatchesCv,
+} from './snapshot';
 export {
   buildEntryOwnedFactsFromLiveDescription,
   hashSummaryV2Text,
@@ -28,6 +32,10 @@ export {
   SUMMARY_V2_MAX_DUTIES_PER_ENTRY,
   SUMMARY_V2_MAX_PRIOR_ENTRIES,
 } from './manifest';
+export {
+  resolveSummaryCurrentRole,
+  SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
+} from '@/lib/cv-summary-current-role';
 export {
   buildSummaryV2DeterministicText,
   bulletToWhereClauseEn,
@@ -109,10 +117,12 @@ export {
   acceptSummaryV2LocalizationResponse,
   buildSameLocaleLocalizedManifest,
   projectLocalizedSummaryV2Manifest,
+  buildSummaryV2ProviderExperienceEntries,
 } from './localization';
 export {
   localizeSummaryV2Manifest,
   clearSummaryV2LocalizationCacheForTests,
+  SUMMARY_V2_LOCALIZATION_RECOVERY_REVISION,
 } from './localization-client';
 export type {
   SummaryV2LocalizationTransport,
@@ -126,6 +136,7 @@ export type {
   SummaryV2LocalizationProviderResponse,
   SummaryV2LocalizationValidation,
   SummaryV2LocalizationSource,
+  SummaryV2ProviderExperienceEntry,
 } from './localization';
 export type {
   SummaryV2NativeSurfaceResult,
