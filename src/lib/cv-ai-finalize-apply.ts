@@ -1488,6 +1488,23 @@ export type FinalizeCvAiFieldResult = {
     hindiIncompleteSentenceCount?: number;
     hindiGrammarRejectionReason?: string | null;
     hindiGrammarRejectionReasons?: string[];
+    hindiSentenceGrammarRecords?: Array<{
+      sentenceHash: string;
+      clauseIndex?: number;
+      roleSlot: string;
+      hasFiniteVerb: boolean;
+      hasFiniteCopula: boolean;
+      hasRequiredAuxiliary: boolean;
+      nominalFragmentDetected: boolean;
+      standaloneRelativeFragmentDetected: boolean;
+      grammarPassed: boolean;
+      grammarReasons: string[];
+      employmentState?: 'present' | 'completed' | 'unknown';
+      perspectiveMode?: 'first_person' | 'neutral_or_unspecified';
+      genderMode?: 'female' | 'male' | 'neutral' | 'unspecified';
+      agreementMode?: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
+      aspect?: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
+    }>;
     providerHindiNominalExperienceFragmentDetected?: boolean;
     providerHindiSentenceHasFiniteCopulaOrVerb?: boolean[] | null;
     providerHindiIncompleteSentenceCount?: number | null;
@@ -3371,8 +3388,26 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       serbianEntryOwnedBuilderSentenceCount: 0,
       serbianEntryOwnedBuilderTypedFailureReason: 'not_applicable_summary_v2_fact_id_path' as string | null,
       hindiNominalExperienceFragmentDetected: false,
-      hindiSentenceHasFiniteCopulaOrVerb: true,
-      hindiIncompleteSentenceCount: 0,
+      hindiSentenceHasFiniteCopulaOrVerb: locale === 'hi'
+        ? v2.validation.hindiSentenceAgreementRecords.map(
+          (record) => record.finiteVerbOrAuxiliaryDetected,
+        )
+        : true,
+      hindiIncompleteSentenceCount: locale === 'hi'
+        ? v2.validation.hindiSentenceAgreementRecords.filter(
+          (record) => !record.grammarPassed,
+        ).length
+        : 0,
+      hindiGrammarRejectionReason: locale === 'hi'
+        ? (v2.validation.hindiSentenceAgreementRecords.find(
+          (record) => record.grammarReasons.length > 0,
+        )?.grammarReasons[0] || null)
+        : null,
+      hindiGrammarRejectionReasons: locale === 'hi'
+        ? [...new Set(v2.validation.hindiSentenceAgreementRecords.flatMap(
+          (record) => record.grammarReasons,
+        ))]
+        : [],
       finalUnsupportedDesignMediumCount: v2.validation.unsupportedPrintClaimCount,
       finalUnsupportedDesignMediumKinds: v2.validation.unsupportedPrintClaimCount > 0
         ? ['unsupported_print_medium']
@@ -3393,7 +3428,25 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : [],
       providerPrintClaimDetected: providerPrintAudit.printClaimDetected,
       finalPrintClaimDetected: v2.validation.printClaimDetected,
-      hindiSentenceGrammarRecords: [] as unknown[],
+      hindiSentenceGrammarRecords: locale === 'hi'
+        ? v2.validation.hindiSentenceAgreementRecords.map((record) => ({
+          sentenceHash: fingerprintText(`hindi-summary-sentence:${record.sentenceIndex}`),
+          clauseIndex: record.clauseIndex,
+          roleSlot: record.employmentState === 'completed' ? 'prior_role' : 'current_intro',
+          hasFiniteVerb: record.finiteVerbOrAuxiliaryDetected,
+          hasFiniteCopula: record.finiteVerbOrAuxiliaryDetected,
+          hasRequiredAuxiliary: record.grammarPassed,
+          nominalFragmentDetected: false,
+          standaloneRelativeFragmentDetected: false,
+          grammarPassed: record.grammarPassed,
+          grammarReasons: record.grammarReasons,
+          employmentState: record.employmentState,
+          perspectiveMode: record.perspectiveMode,
+          genderMode: record.genderMode,
+          agreementMode: record.agreementMode,
+          aspect: record.aspect,
+        }))
+        : [] as unknown[],
       sourcePrintFactPresent: v2.validation.sourcePrintFactPresent,
       sourcePrintFactPresentScope:
         v2.validation.materialAuthority.sourcePrintFactPresentScope,

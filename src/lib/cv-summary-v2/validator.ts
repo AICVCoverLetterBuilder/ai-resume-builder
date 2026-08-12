@@ -386,10 +386,13 @@ export function validateSummaryV2AgainstManifest(
     text,
     locale: manifest.locale,
     perspectiveMode: 'first_person',
+    gender: manifest.gender,
   });
   const perspectiveValidationPassed = nativeContract.firstPersonPredicateChainPassed;
   const arabicMorphologyValidationPassed = manifest.locale !== 'ar'
     || nativeContract.localeVerbMorphologyPassed;
+  const hindiFirstPersonAgreementPassed = manifest.locale !== 'hi'
+    || nativeContract.hindiFirstPersonAgreementPassed;
 
   let reason: string | null = null;
   if (!text) reason = 'empty_summary';
@@ -403,6 +406,7 @@ export function validateSummaryV2AgainstManifest(
   } else if (materialAuthority.unsupportedPrintClaimCount > 0) {
     reason = 'unsupported_print_medium_claim';
   }
+  else if (!hindiFirstPersonAgreementPassed) reason = 'hindi_first_person_agreement_invalid';
   else if (!perspectiveValidationPassed) reason = 'mixed_perspective';
   else if (!arabicMorphologyValidationPassed) reason = 'malformed_arabic_finite_verb';
   else if (current && (!currentRolePresent || !currentEmployerPresent || !currentStateExpressed)) {
@@ -453,6 +457,8 @@ export function validateSummaryV2AgainstManifest(
     roleTitleSurfaceEvidence,
     perspectiveValidationPassed,
     arabicMorphologyValidationPassed,
+    hindiFirstPersonAgreementPassed,
+    hindiSentenceAgreementRecords: nativeContract.hindiSentenceAgreementRecords,
     printClaimDetected: materialAuthority.printClaimDetected,
     sourcePrintFactPresent: materialAuthority.sourcePrintFactPresent,
     unsupportedPrintClaimCount: materialAuthority.unsupportedPrintClaimCount,

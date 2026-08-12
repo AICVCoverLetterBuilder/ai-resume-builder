@@ -689,6 +689,7 @@ export type SummaryAiDiagnosticTrace = {
   hindiGrammarRejectionReasons?: string[] | null;
   hindiSentenceGrammarRecords?: Array<{
     sentenceHash: string;
+    clauseIndex?: number;
     roleSlot: string;
     hasFiniteVerb: boolean;
     hasFiniteCopula: boolean;
@@ -697,6 +698,11 @@ export type SummaryAiDiagnosticTrace = {
     standaloneRelativeFragmentDetected: boolean;
     grammarPassed: boolean;
     grammarReasons: string[];
+    employmentState?: 'present' | 'completed' | 'unknown';
+    perspectiveMode?: 'first_person' | 'neutral_or_unspecified';
+    genderMode?: 'female' | 'male' | 'neutral' | 'unspecified';
+    agreementMode?: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
+    aspect?: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
   }> | null;
   providerHindiNominalExperienceFragmentDetected?: boolean | null;
   providerHindiSentenceHasFiniteCopulaOrVerb?: boolean[] | null;
@@ -1927,7 +1933,7 @@ export class SummaryAiDiagnosticSession {
         )
         : [],
       hindiSentenceGrammarRecords: (this.draft.requestedLocale === 'hi')
-        ? buildHindiSentenceGrammarRecords({
+        ? (diag.hindiSentenceGrammarRecords ?? buildHindiSentenceGrammarRecords({
           sentenceHashes: finalCandidateSelected
             ? (diag.finalSentenceHashes ?? resolvedFinalHashes)
             : (diag.evaluatedSentenceHashes ?? diag.finalSentenceHashes),
@@ -1943,7 +1949,7 @@ export class SummaryAiDiagnosticSession {
           ) ? diag.hindiGrammarRejectionReason : null,
           hindiCurrentIntroFiniteVerbPresent: diag.hindiCurrentIntroFiniteVerbPresent,
           hindiCurrentDutyAuxiliaryPresent: diag.hindiCurrentDutyAuxiliaryPresent,
-        })
+        }))
         : [],
       providerHindiNominalExperienceFragmentDetected:
         diag.providerHindiNominalExperienceFragmentDetected ?? null,

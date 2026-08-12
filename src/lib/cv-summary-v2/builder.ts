@@ -221,6 +221,11 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
     const role = prior.role || 'Professional';
     const employer = prior.employer;
     const dutyTail = localeDutyTail(priorFacts, prior.employmentState, locale, manifest.gender);
+    // Hindi perfectives require an ergative first-person frame (मैंने). Keep
+    // habitual completed clauses in the ordinary मैं ... करती/करता थी/था frame.
+    // This is morphology-only and intentionally has no role/duty vocabulary.
+    const hindiPriorUsesPerfective = locale === 'hi'
+      && /(?:[\p{Script=Devanagari}\p{M}]+(?:या|यी|ाई|ए|ीं)|की)(?=\s*(?:[,।.!?]|और|तथा|$))/u.test(dutyTail);
     if (locale === 'de') {
       units.push(
         employer
@@ -273,8 +278,12 @@ function buildLocaleShellFromManifest(manifest: SummaryV2SelectionManifest): str
     } else if (locale === 'hi') {
       units.push(
         employer
-          ? `इससे पहले मैं ${employer} में ${role} के रूप में काम ${hiDoes} ${hiWas}${dutyTail}।`
-          : `इससे पहले मैं ${role} के रूप में काम ${hiDoes} ${hiWas}${dutyTail}।`,
+          ? (hindiPriorUsesPerfective
+            ? `इससे पहले मैंने ${employer} में ${role} के रूप में काम किया${dutyTail}।`
+            : `इससे पहले मैं ${employer} में ${role} के रूप में काम ${hiDoes} ${hiWas}${dutyTail}।`)
+          : (hindiPriorUsesPerfective
+            ? `इससे पहले मैंने ${role} के रूप में काम किया${dutyTail}।`
+            : `इससे पहले मैं ${role} के रूप में काम ${hiDoes} ${hiWas}${dutyTail}।`),
       );
     } else if (locale === 'ja') {
       units.push(

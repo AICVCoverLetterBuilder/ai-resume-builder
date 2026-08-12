@@ -210,6 +210,19 @@ export type SummaryV2ValidationResult = {
   }>;
   perspectiveValidationPassed: boolean;
   arabicMorphologyValidationPassed: boolean;
+  hindiFirstPersonAgreementPassed: boolean;
+  hindiSentenceAgreementRecords: Array<{
+    sentenceIndex: number;
+    clauseIndex: number;
+    employmentState: 'present' | 'completed' | 'unknown';
+    perspectiveMode: 'first_person' | 'neutral_or_unspecified';
+    genderMode: 'female' | 'male' | 'neutral' | 'unspecified';
+    finiteVerbOrAuxiliaryDetected: boolean;
+    agreementMode: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
+    aspect: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
+    grammarPassed: boolean;
+    grammarReasons: string[];
+  }>;
   printClaimDetected: boolean;
   sourcePrintFactPresent: boolean;
   unsupportedPrintClaimCount: number;

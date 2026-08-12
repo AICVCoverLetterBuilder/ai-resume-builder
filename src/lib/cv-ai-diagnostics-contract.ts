@@ -213,6 +213,7 @@ export type CvAiCandidateKind =
 
 export type CvAiDiagnosticSentenceGrammarRecord = {
   sentenceHash: string;
+  clauseIndex?: number;
   roleSlot: string;
   hasFiniteVerb: boolean;
   hasFiniteCopula: boolean;
@@ -221,6 +222,12 @@ export type CvAiDiagnosticSentenceGrammarRecord = {
   standaloneRelativeFragmentDetected: boolean;
   grammarPassed: boolean;
   grammarReasons: string[];
+  /** Hindi Summary V2 only; morphology categories, never visible text. */
+  employmentState?: 'present' | 'completed' | 'unknown';
+  perspectiveMode?: 'first_person' | 'neutral_or_unspecified';
+  genderMode?: 'female' | 'male' | 'neutral' | 'unspecified';
+  agreementMode?: 'first_person_habitual' | 'first_person_perfective' | 'neutral' | 'unknown';
+  aspect?: 'present_habitual' | 'past_habitual' | 'perfective' | 'mixed' | 'unknown';
 };
 
 export type CvAiCandidateLineageRecord = {
@@ -305,7 +312,7 @@ export const CV_AI_DIAG_HISTORY_STORAGE_KEY = 'cvpro-cv-ai-diag-history-v1';
 const HISTORY_MAX_PER_KIND = 5;
 
 const GRAMMAR_REJECTION_CATEGORY_RE =
-  /^(nominal_experience_fragment|standalone_relative_fragment|missing_finite_copula|missing_finite_auxiliary|incomplete_sentence|current_intro_copula_missing|current_duty_auxiliary_missing|invalid_tense|invalid_gender_form|invalid_perspective)$/;
+  /^(nominal_experience_fragment|standalone_relative_fragment|missing_finite_copula|missing_finite_auxiliary|incomplete_sentence|current_intro_copula_missing|current_duty_auxiliary_missing|invalid_tense|invalid_gender_form|invalid_perspective|hindi_first_person_(?:present_auxiliary_invalid|completed_auxiliary_invalid|gender_agreement_invalid|perfective_ergative_missing|mixed_aspect_coordination))$/;
 const MEDIUM_OR_GROUNDING_REJECTION_RE =
   /unsupported_(?:print|branding|marketing|design)_|unsupported_claim|cross_entry|cross_domain|stale_fact|hindi_summary_grounding|summary_grounding/;
 
