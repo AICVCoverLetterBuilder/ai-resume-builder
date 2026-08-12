@@ -227,7 +227,9 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
     : null;
   if (!manifest) {
     const rawProvider = prepareCandidate(options.candidate || '');
-    const validation = validateSummaryV2AgainstManifest(rawProvider, sourceManifest);
+    const validation = validateSummaryV2AgainstManifest(rawProvider, sourceManifest, {
+      candidateSource: 'provider',
+    });
     diag.localizationTypedFailureReason = validation.reason === 'locale_impurity'
       ? 'locale_impurity'
       : (suppliedLocalization
@@ -250,6 +252,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
   const provider = prepareCandidate(options.candidate || '');
   let text = '';
   let origin: SummaryV2PipelineResult['origin'] = 'deterministic_fallback';
+  let deterministicConstructionOrder = false;
 
   const styleOk = (candidate: string): boolean => {
     if (!style) return true;
@@ -263,7 +266,9 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
 
   if (provider) {
     diag.rewriteStylePropagatedToProvider = Boolean(style);
-    const providerQ = validateSummaryV2AgainstManifest(provider, manifest);
+    const providerQ = validateSummaryV2AgainstManifest(provider, manifest, {
+      candidateSource: 'provider',
+    });
     if (providerQ.ok && styleOk(provider)) {
       text = provider;
       origin = 'ai_generated';
@@ -299,7 +304,9 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
           sourceSummary,
         });
         if (saturated.noSafeMaterialChange) {
-          const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest);
+          const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest, {
+            candidateSource: 'final_selected',
+          });
           return {
             blocked: true,
             reason: 'style_no_safe_material_change',
@@ -335,7 +342,9 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       }
       // Only count as a repair attempt when the surface actually changed.
       diag.repairAttempted = hashNorm(repaired) !== hashNorm(provider);
-      const repairQ = validateSummaryV2AgainstManifest(repaired, manifest);
+      const repairQ = validateSummaryV2AgainstManifest(repaired, manifest, {
+        candidateSource: 'repaired_provider',
+      });
       if (diag.repairAttempted && repairQ.ok && styleOk(repaired)) {
         text = repaired;
         origin = 'ai_repaired';
@@ -371,7 +380,9 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       diag.candidateTransformationAfterHash = transformed.afterHash;
       diag.styleNoSafeMaterialChange = transformed.noSafeMaterialChange;
       if (transformed.noSafeMaterialChange) {
-        const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest);
+        const validation = validateSummaryV2AgainstManifest(sourceSummary, manifest, {
+          candidateSource: 'final_selected',
+        });
         return {
           blocked: true,
           reason: 'style_no_safe_material_change',
@@ -392,7 +403,9 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
           },
         };
       }
-      const styledQ = validateSummaryV2AgainstManifest(transformed.text, manifest);
+      const styledQ = validateSummaryV2AgainstManifest(transformed.text, manifest, {
+        candidateSource: 'deterministic',
+      });
       const styleFulfilled = transformed.styleFulfilled || styleOk(transformed.text);
       if (styledQ.ok && styleFulfilled) {
         text = transformed.text;
@@ -408,10 +421,14 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
         // Prefer a fresh styled deterministic build; if that also fails, block
         // with the precise validation / style reason.
         const styledFresh = buildSummaryV2StyledDeterministicText(manifest, style);
-        const freshQ = validateSummaryV2AgainstManifest(styledFresh, manifest);
+        const freshQ = validateSummaryV2AgainstManifest(styledFresh, manifest, {
+          candidateSource: 'deterministic',
+          preserveConstructionOrder: true,
+        });
         if (freshQ.ok && styleOk(styledFresh)) {
           text = styledFresh;
           origin = 'deterministic_fallback';
+          deterministicConstructionOrder = true;
           diag.candidateTransformationKind = `v2_rewrite_${style}`;
           diag.candidateTransformationBeforeHash = transformed.beforeHash;
           diag.candidateTransformationAfterHash = hashNorm(styledFresh);
@@ -443,6 +460,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
             validation: validateSummaryV2AgainstManifest(
               transformed.text || styledFresh || sourceSummary,
               manifest,
+              { candidateSource: 'final_selected' },
             ),
             snapshot,
             pipelineDiagnostics: {
@@ -466,13 +484,16 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       // Never silently reuse a dedicated rewrite style for enhance-without-style.
       if (style) {
         text = buildSummaryV2StyledDeterministicText(manifest, style);
+        deterministicConstructionOrder = true;
       } else if (sourceSummary) {
         text = buildSummaryV2BalancedEnhanceText(manifest);
+        deterministicConstructionOrder = true;
         diag.candidateTransformationKind = 'v2_balanced_enhance';
         diag.candidateTransformationBeforeHash = hashNorm(sourceSummary);
         diag.candidateTransformationAfterHash = hashNorm(text);
       } else {
         text = buildSummaryV2DeterministicText(manifest);
+        deterministicConstructionOrder = true;
       }
       origin = 'deterministic_fallback';
       if (style) {
@@ -489,7 +510,10 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
     }
   }
 
-  const validation = validateSummaryV2AgainstManifest(text, manifest);
+  const validation = validateSummaryV2AgainstManifest(text, manifest, {
+    candidateSource: 'final_selected',
+    preserveConstructionOrder: deterministicConstructionOrder,
+  });
   if (!validation.ok) {
     return {
       blocked: true,

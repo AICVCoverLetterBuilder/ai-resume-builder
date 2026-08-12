@@ -508,6 +508,31 @@ type SummaryLike = {
   deterministicCandidateHash?: string | null;
   deterministicCandidateSentenceCount?: number | null;
   groundingInputEqualsFinalValidatedCandidate?: boolean | null;
+  deterministicCandidateEqualsGroundingInput?: boolean | null;
+  currentRoleTitleMatchesStructuredRole?: boolean | null;
+  currentRoleTitleSource?: string | null;
+  currentRoleTitleEntryIdHash?: string | null;
+  visibleCurrentDutyFactMatchedUnitHashesByFactHash?: Record<string, string[]> | null;
+  finalUnitHashes?: string[] | null;
+  unitOwnershipValidationPassed?: boolean | null;
+  unitOwnershipFailureReason?: string | null;
+  factUnitOwnershipValidationPassed?: boolean | null;
+  finalUnitOwnershipEvidence?: Array<{
+    unitHash?: string | null;
+    roleSlot?: string | null;
+    owningEntryHash?: string | null;
+    priorOrdinal?: number | null;
+  }> | null;
+  factUnitOwnershipEvidence?: Array<{
+    factHash?: string | null;
+    owningEntryHash?: string | null;
+    semanticRole?: string | null;
+    matchedUnitHashes?: string[] | null;
+    matchedUnitOwnerHashes?: string[] | null;
+    matchedUnitRoleSlots?: string[] | null;
+    ownershipPassed?: boolean | null;
+    covered?: boolean | null;
+  }> | null;
   visibleCandidateHashAfterApply?: string | null;
   visibleDurationClaimCountAfterApply?: number | null;
   finalUnitRoleSlots?: string[] | null;
@@ -1783,6 +1808,123 @@ export function checkSummaryDiagnosticInvariants(
   }
 
   // AAB-325 — English Summary shared final-gate invariants.
+  const equalityPairs: Array<[string, unknown, unknown, unknown]> = [
+    ['deterministic_grounding', trace.deterministicCandidateEqualsGroundingInput, trace.deterministicCandidateHash, trace.groundingInputCandidateHash],
+    ['grounding_final', trace.groundingInputEqualsFinalValidatedCandidate, trace.groundingInputCandidateHash, trace.finalValidatedCandidateHash],
+  ];
+  for (const [comparison, equals, left, right] of equalityPairs) {
+    if (equals === true && (!left || !right)) push('candidate_equality_true_without_both_hashes', { comparison });
+  }
+  if (
+    trace.currentRoleTitlePresent === true
+    && trace.currentRoleTitleMatchesStructuredRole === true
+    && (!trace.currentRoleTitleSource || !trace.currentRoleTitleEntryIdHash)
+  ) {
+    push('current_role_true_without_source_bound_provenance', {
+      currentRoleTitleSource: trace.currentRoleTitleSource ?? null,
+      currentRoleTitleEntryIdHash: trace.currentRoleTitleEntryIdHash ?? null,
+    });
+  }
+  const matchedFactUnits = trace.visibleCurrentDutyFactMatchedUnitHashesByFactHash;
+  const matchedFactUnitKeys = matchedFactUnits && typeof matchedFactUnits === 'object'
+    && !Array.isArray(matchedFactUnits)
+    ? Object.keys(matchedFactUnits as Record<string, unknown>)
+    : [];
+  // Summary V2 entry-owned facts explicitly promise owning unit hashes. The
+  // older warehouse-diagnostic map predates that contract and uses canonical
+  // fact IDs with candidate-level evidence hashes.
+  const entryOwnedMatchedUnitContract = matchedFactUnitKeys.some(
+    (factHash) => factHash.startsWith('v2_entry_'),
+  );
+  if (entryOwnedMatchedUnitContract && matchedFactUnits && typeof matchedFactUnits === 'object'
+    && !Array.isArray(matchedFactUnits)) {
+    const allowedUnitHashes = new Set(Array.isArray(trace.finalUnitHashes) ? trace.finalUnitHashes.map(String) : []);
+    for (const [factHash, hashes] of Object.entries(matchedFactUnits as Record<string, unknown>)) {
+      if (!Array.isArray(hashes) || hashes.some((hash) => !allowedUnitHashes.has(String(hash)))) {
+        push('matched_fact_hash_not_final_owning_unit_hash', { factHash });
+      }
+    }
+  }
+
+  const finalUnitOwnership = Array.isArray(trace.finalUnitOwnershipEvidence)
+    ? trace.finalUnitOwnershipEvidence
+    : [];
+  const factUnitOwnership = Array.isArray(trace.factUnitOwnershipEvidence)
+    ? trace.factUnitOwnershipEvidence
+    : [];
+  if (trace.countedAsSuccess && finalUnitOwnership.length > 0) {
+    if (trace.unitOwnershipValidationPassed !== true) {
+      push('summary_v2_success_without_unit_ownership_validation', {
+        unitOwnershipFailureReason: trace.unitOwnershipFailureReason ?? null,
+      });
+    }
+    if (trace.factUnitOwnershipValidationPassed !== true) {
+      push('summary_v2_success_without_fact_unit_ownership_validation', {});
+    }
+    const finalHashes = new Set(
+      Array.isArray(trace.finalUnitHashes) ? trace.finalUnitHashes.map(String) : [],
+    );
+    const unitsByHash = new Map<string, typeof finalUnitOwnership[number]>();
+    for (const unit of finalUnitOwnership) {
+      const unitHash = String(unit.unitHash || '');
+      if (!unitHash || unitsByHash.has(unitHash)) {
+        push('summary_v2_final_unit_hash_missing_or_duplicate', { unitHash });
+        continue;
+      }
+      unitsByHash.set(unitHash, unit);
+      if (!finalHashes.has(unitHash)) {
+        push('summary_v2_ownership_unit_not_in_final_candidate', { unitHash });
+      }
+      const roleSlot = String(unit.roleSlot || '');
+      if (roleSlot === 'duration') {
+        if (unit.owningEntryHash) {
+          push('summary_v2_duration_unit_has_entry_owner', { unitHash });
+        }
+      } else if (!unit.owningEntryHash) {
+        push('summary_v2_role_unit_missing_entry_owner', { unitHash, roleSlot });
+      }
+    }
+    for (const fact of factUnitOwnership) {
+      const factHash = String(fact.factHash || '');
+      const owningEntryHash = String(fact.owningEntryHash || '');
+      const matchedHashes = Array.isArray(fact.matchedUnitHashes)
+        ? fact.matchedUnitHashes.map(String)
+        : [];
+      const matchedOwnerHashes = Array.isArray(fact.matchedUnitOwnerHashes)
+        ? fact.matchedUnitOwnerHashes.map(String)
+        : [];
+      const matchedRoleSlots = Array.isArray(fact.matchedUnitRoleSlots)
+        ? fact.matchedUnitRoleSlots.map(String)
+        : [];
+      if (!factHash || !owningEntryHash || fact.covered !== true
+        || fact.ownershipPassed !== true || matchedHashes.length === 0) {
+        push('summary_v2_fact_missing_owned_final_unit', { factHash });
+        continue;
+      }
+      if (matchedHashes.length !== matchedOwnerHashes.length
+        || matchedHashes.length !== matchedRoleSlots.length) {
+        push('summary_v2_fact_ownership_evidence_length_mismatch', { factHash });
+        continue;
+      }
+      matchedHashes.forEach((unitHash, index) => {
+        const unit = unitsByHash.get(unitHash);
+        const expectedRoleSlot = fact.semanticRole === 'current_fact'
+          ? 'current_role'
+          : 'prior_role';
+        if (!unit || unit.owningEntryHash !== owningEntryHash
+          || matchedOwnerHashes[index] !== owningEntryHash
+          || unit.roleSlot !== expectedRoleSlot
+          || matchedRoleSlots[index] !== expectedRoleSlot) {
+          push('summary_v2_fact_cross_entry_unit_ownership_violation', {
+            factHash,
+            unitHash,
+            semanticRole: fact.semanticRole ?? null,
+          });
+        }
+      });
+    }
+  }
+
   if (String(trace.requestedLocale || '') === 'en') {
     const detected = Array.isArray(trace.detectedLocaleByUnit)
       ? (trace.detectedLocaleByUnit as unknown[])
@@ -2527,6 +2669,26 @@ export function checkSummaryDiagnosticCompleteness(
   nullish.push(...markerCheck.nullRequiredDiagnosticFields);
   const locale = String(trace.requestedLocale || '');
   const summaryV2FactIdPathActive = trace.summaryV2FactIdPathActive === true;
+  if (summaryV2FactIdPathActive && trace.countedAsSuccess === true) {
+    for (const key of [
+      'roleTitleSurfaceEvidence',
+      'structuredRoleLocaleValidationPassed',
+      'finalStructuredRoleLocaleValidationPassed',
+      'perspectiveValidationPassed',
+      'localeVerbMorphologyPassed',
+      'sourcePrintFactPresent',
+      'finalPrintClaimDetected',
+      'finalUnsupportedDesignMediumCount',
+      'groundingInputCandidateHash',
+      'finalValidatedCandidateHash',
+      'currentRoleTitleSource',
+      'currentRoleTitleEntryIdHash',
+      'unitOwnershipValidationPassed',
+      'factUnitOwnershipValidationPassed',
+      'finalUnitOwnershipEvidence',
+      'factUnitOwnershipEvidence',
+    ]) require(key);
+  }
   if (locale === 'hi') {
     const hindiWarehouseApplicable = !summaryV2FactIdPathActive
       && trace.hindiWarehouseGrammarFieldsApplicable !== false;

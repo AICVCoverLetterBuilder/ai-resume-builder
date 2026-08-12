@@ -142,7 +142,8 @@ describe('AAB-390 cross-locale ship matrices', () => {
           const label = `${source}->${target}/${gender.key}/${action}`;
           const text = aab389AssertSummarySuccess(fin, target, label);
           expect(fin.diagnostics?.crossLocaleLocalizationRequired, label).toBe(true);
-          expect(fin.diagnostics?.localizationSource, label).toMatch(/provider|validated_cache/);
+          expect(fin.diagnostics?.localizationSource, label)
+            .toMatch(/provider|validated_cache|mixed_authoritative/);
           expect(fin.diagnostics?.entryIdParityPassed, label).toBe(true);
           expect(fin.diagnostics?.factIdParityPassed, label).toBe(true);
           expect(fin.diagnostics?.factOwnershipParityPassed, label).toBe(true);

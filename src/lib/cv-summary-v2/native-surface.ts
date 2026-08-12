@@ -295,28 +295,59 @@ export function analyzeSpanishCoordinatedPredicateMorphology(
 }
 
 const ARABIC_PAST_1SG_SUFFIX = 'ت';
+const ARABIC_DIACRITICS_RE = /[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]/gu;
+
+function stripArabicDiacritics(value: string): string {
+  return (value || '').replace(ARABIC_DIACRITICS_RE, '');
+}
 
 /** Arabic 3sg → 1sg realization for both present (يـ→أـ) and completed (+ـت). */
 function arabicFirstPersonVerb(verb: string, tense: 'present' | 'past'): string {
   const v = (verb || '').trim();
   if (!v) return v;
-  if (/^ي/u.test(v)) {
+  const plain = stripArabicDiacritics(v);
+  if (tense === 'past' && /ت$/u.test(plain)) {
+    const terminalGeminate = /([\p{Script=Arabic}])\u0651[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*ت[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*$/u.exec(v);
+    if (terminalGeminate) {
+      const base = plain.slice(0, -1);
+      return `${base}${base.slice(-1)}${ARABIC_PAST_1SG_SUFFIX}`;
+    }
+    return plain;
+  }
+  if (/^[يتن]/u.test(v)) {
     const present1sg = `أ${v.slice(1)}`;
     if (tense === 'present') return present1sg;
-    // Completed entry with a present-form bullet: keep the 1sg present stem.
+    // A bare imperfective source has no safe perfect stem; use a first-person
+    // present predicate only when no past auxiliary supplied that authority.
     return present1sg;
   }
   if (tense !== 'past') return v;
-  if (/[تُتِ]$/u.test(v) || /ت$/u.test(v)) return v;
+  // A source feminine 3sg and 1sg perfect both end in ت orthographically.
+  // Remove vocalization, and expand only a terminal geminated radical: أعدّت → أعددت.
   // Geminated final radical (أعدّ) expands before the 1sg suffix: أعددت.
-  if (/ّ$/u.test(v)) {
-    const base = v.replace(/ّ$/u, '');
+  if (/ّ[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*$/u.test(v)) {
+    const base = stripArabicDiacritics(v);
     const last = base.slice(-1);
     return `${base}${last}${ARABIC_PAST_1SG_SUFFIX}`;
   }
-  if (/ى$/u.test(v)) return `${v.slice(0, -1)}يت`;
-  if (/[اوي]$/u.test(v)) return `${v}ت`;
-  return `${v}${ARABIC_PAST_1SG_SUFFIX}`;
+  if (/ى$/u.test(plain)) return `${plain.slice(0, -1)}يت`;
+  if (/[اوي]$/u.test(plain)) return `${plain}ت`;
+  return `${plain}${ARABIC_PAST_1SG_SUFFIX}`;
+}
+
+function arabicFirstPersonPredicateChain(raw: string, tense: 'present' | 'past'): string {
+  return raw.replace(
+    /(^|،\s*|\s+و)([\p{Script=Arabic}\p{M}]+)/gu,
+    (full, connector: string, token: string) => {
+      const plain = stripArabicDiacritics(token);
+      const shouldTransform = tense === 'present'
+        ? /^[يتن]/u.test(plain)
+        : connector === '' || /ت$/u.test(plain) || /^كانت$/u.test(plain);
+      if (!shouldTransform) return full;
+      if (tense === 'past' && /^كانت$/u.test(plain)) return `${connector}كنت`;
+      return `${connector}${arabicFirstPersonVerb(token, tense)}`;
+    },
+  );
 }
 
 /** Hindi masculine → selected-gender habitual/past participle agreement. */
@@ -393,6 +424,21 @@ export function realizeFirstPersonDutyClause(
   const raw = (bullet || '').replace(/[.;。؟।]+$/u, '').trim();
   if (!raw) return '';
 
+  if (locale === 'ar' && employmentState === 'completed') {
+    // Third-person imperfective with a feminine past auxiliary is realized as
+    // first-person past auxiliary + first-person imperfective, independent of duty lexicon.
+    const auxiliary = /^كانت\s+([\p{Script=Arabic}\p{M}]+)([\s\S]*)$/u.exec(raw);
+    if (auxiliary) {
+      return `كنت ${arabicFirstPersonVerb(auxiliary[1], 'present')}${auxiliary[2] || ''}`
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+  }
+
+  if (locale === 'ar') {
+    return arabicFirstPersonPredicateChain(raw, tense);
+  }
+
   if (locale === 'sr' || locale === 'hr') {
     const realized = realizeSouthSlavicPredicateChain({
       bullet: raw,
@@ -454,8 +500,6 @@ export function realizeFirstPersonDutyClause(
       else if (mode !== 'female' && /ла$/u.test(lower)) verb = lower.slice(0, -1);
       else verb = lower;
     }
-  } else if (locale === 'ar') {
-    verb = arabicFirstPersonVerb(verb, tense);
   } else if (locale === 'hi') {
     // Present warehouse bullets use 3sg copula है — realize 1sg हूँ after first-person framing.
     // Completed entries keep past था/थी (never leave present है after prior framing).
@@ -613,15 +657,47 @@ const SUBORDINATE_OPENER_RE =
  */
 function detectThirdPersonDutyClause(text: string, locale: Locale): boolean {
   if (locale === 'ar') {
-    const re = /(?:حيث|كما|و)\s+([\u0600-\u06FF\u0651]+)/gu;
+    const dutyClauses = [...text.matchAll(/(?:حيث|كما)\s+([^.!؟]+)/gu)];
+    for (const match of dutyClauses) {
+      const clause = match[1];
+      const beforeClause = text.slice(0, match.index ?? 0).split(/[.!؟]/u).pop() || '';
+      const completedClause = /(?:سابق(?:اً|ا)|عملت|كنت)/u.test(beforeClause);
+      // Arabic waw is attached both as a conjunction and as the first letter
+      // of ordinary words (وثائق, وموقع). Commas delimit the independent duty
+      // heads here; coordinated present/feminine/geminated heads are already
+      // normalized by arabicFirstPersonPredicateChain.
+      const predicates = clause.split(/،/u);
+      for (const predicate of predicates) {
+        const predicateBody = predicate.replace(/^\s*كما\s+/u, '');
+        const verb = /^\s*([\p{Script=Arabic}\p{M}]+)/u.exec(predicateBody)?.[1] || '';
+        if (!verb) continue;
+        const plain = stripArabicDiacritics(verb);
+        // Attached waw in ordinary prepositional phrases (for example وفق
+        // "according to") is not a coordinated finite predicate.
+        if (completedClause && /^(?:فق|مع|بين|ضمن|حول|عبر|داخل|خارج|دون|لدى)$/u.test(plain)) {
+          continue;
+        }
+        if (/^كانت$/u.test(plain)) return true;
+        const firstPerson = completedClause
+          ? /ت$/u.test(plain)
+          : /^[أإآا]/u.test(plain) || /^كنت$/u.test(plain);
+        const thirdPersonFinite = completedClause
+          ? !/^ال/u.test(plain) && !firstPerson
+          : /^[يتن]/u.test(plain);
+        if (thirdPersonFinite && !firstPerson) return true;
+      }
+    }
+    // Provider prose may use a role-intro comma without حيث; validate the
+    // immediately following finite predicate without scanning unrelated duration coordination.
+    const re = /،\s*([\p{Script=Arabic}\p{M}]+)/gu;
     let m: RegExpExecArray | null = re.exec(text);
     while (m) {
       const verb = m[1];
-      const firstPerson = /^[أانن]/u.test(verb) || /ت$/u.test(verb) || /تُ$/u.test(verb);
-      const looksVerbal = verb.length >= 3 && !/^(?:ال|في|من|على|عن|إلى)/u.test(verb);
-      if (looksVerbal && !firstPerson && /^(?:راجع|أعد|ضبط|فحص|سجل|نفذ|قام|كتب|حدث|نسق)/u.test(verb)) {
-        return true;
-      }
+      const plain = stripArabicDiacritics(verb);
+      if (/^كانت$/u.test(plain)) return true;
+      const firstPerson = /^[أإآا]/u.test(plain) || /^كنت$/u.test(plain) || /ت$/u.test(plain);
+      const thirdPersonFinite = /^[يتن]/u.test(plain);
+      if (thirdPersonFinite && !firstPerson) return true;
       m = re.exec(text);
     }
     return false;
@@ -659,8 +735,12 @@ function detectLocaleVerbMorphologyDefect(text: string, locale: Locale): string 
     }
   }
   if (locale === 'ar') {
-    // A shadda can never follow the 1sg past suffix ـت.
+    // A shadda can never follow the 1sg past suffix ـت; duplicated suffixes
+    // remain invalid even when separated by sukun/fatha/other vocalization.
     if (/ت\u0651/u.test(text)) return 'ar_malformed_gemination';
+    if (/ت[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]*ت(?=[^\p{Script=Arabic}]|$)/u.test(text)) {
+      return 'ar_duplicated_past_suffix';
+    }
   }
   if (locale === 'ru') {
     // Parenthetical gender is caught separately; bare 3sg duty forms here.

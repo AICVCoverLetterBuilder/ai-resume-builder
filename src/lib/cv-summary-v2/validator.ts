@@ -1,70 +1,40 @@
 import type { Locale } from '@/lib/i18n/translations';
 import { SUMMARY_V2_REVISION } from './flag';
-import { factCoveredInText } from './facts';
+import { factCoveredInText, hashSummaryV2Text } from './facts';
 import { bulletToWhereClauseEn, dutyTenseFromEmploymentState, summaryHasMalformedDoublePast } from './tense';
 import { bulletToGermanWoIchClause } from './german-surface';
 import {
   realizeFirstPersonDutyClause,
   japaneseDutyRealizationVariants,
+  evaluateNativeRealizationContract,
 } from './native-surface';
 import type {
+  SummaryV2CandidateSourceKind,
   SummaryV2EmploymentState,
   SummaryV2EntryFact,
   SummaryV2SelectionManifest,
   SummaryV2ValidationResult,
 } from './types';
 import { validateAiUnitLocalePurity } from '../cv-ai-unit-locale-purity';
+import { inspectSummaryV2TranslatableSurface } from './localization';
+import { auditSummaryV2PrintClaims } from './material-claims';
+import { analyzeSummaryV2FinalUnitOwnership } from './unit-ownership';
+import { fingerprintText } from '../cv-export-diagnostics';
 
-const RESIDUE_MARKERS: Array<{ re: RegExp; needle: string }> = [
-  { re: /\bAtlas\b/iu, needle: 'atlas' },
-  { re: /\bRewitu\b/iu, needle: 'rewitu' },
-  { re: /\bincoming\s+goods\b/iu, needle: 'incoming goods' },
-  { re: /\bwarehouse\s+employee\b/iu, needle: 'warehouse employee' },
-  { re: /\bgraphic\s+designer\b/iu, needle: 'graphic designer' },
-  {
-    re: /\bvisual\s+materials\s+and\s+graphic\s+elements\b/iu,
-    needle: 'visual materials and graphic elements',
-  },
-];
-
-/**
- * Stale residue = Summary mentions occupation memory that the live selection
- * manifest does not own. Live Atlas/Rewitu/warehouse/design content is NOT residue.
- */
+/** Compatibility diagnostic; V2 deliberately has no fixture occupation lexicon. */
 export function detectStaleOccupationResidue(
-  summary: string,
-  manifest: SummaryV2SelectionManifest,
+  _summary: string,
+  _manifest: SummaryV2SelectionManifest,
 ): boolean {
-  const text = summary || '';
-  if (!text.trim()) return false;
-  const owned = [
-    manifest.current,
-    ...manifest.priors,
-  ]
-    .filter(Boolean)
-    .map((e) => {
-      const entry = e!;
-      return [
-        entry.role,
-        entry.employer,
-        ...entry.facts.map((f) => f.bulletText),
-        ...manifest.requiredCurrentFacts
-          .filter((f) => f.entryId === entry.entryId)
-          .map((f) => f.bulletText),
-        ...manifest.requiredPriorFacts
-          .filter((f) => f.entryId === entry.entryId)
-          .map((f) => f.bulletText),
-      ].join(' ');
-    })
-    .join(' ')
-    .toLowerCase();
-
-  for (const { re, needle } of RESIDUE_MARKERS) {
-    if (!re.test(text)) continue;
-    if (!owned.includes(needle)) return true;
-  }
+  // V2 has no occupation-name memory. Generic selected-entry unit ownership,
+  // required-fact coverage and source-claim authority reject stale material.
   return false;
 }
+
+export type SummaryV2ValidationOptions = {
+  candidateSource?: SummaryV2CandidateSourceKind;
+  preserveConstructionOrder?: boolean;
+};
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -252,6 +222,7 @@ export function entryDutiesMatchEmploymentTense(
 export function validateSummaryV2AgainstManifest(
   summary: string,
   manifest: SummaryV2SelectionManifest,
+  options: SummaryV2ValidationOptions = {},
 ): SummaryV2ValidationResult {
   void SUMMARY_V2_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
@@ -260,45 +231,96 @@ export function validateSummaryV2AgainstManifest(
 
   const current = manifest.current;
   const prior = manifest.priors[0] || null;
-  const coveredCurrent = requiredCurrent.filter((f) => factCoveredInText(
-    f,
-    text,
-    dutyTenseFromEmploymentState(current?.employmentState),
-  )).length;
-  const coveredPrior = requiredPrior.filter((f) => {
-    const owner = manifest.priors.find((p) => p.entryId === f.entryId);
-    return factCoveredInText(
-      f,
-      text,
-      dutyTenseFromEmploymentState(owner?.employmentState),
+  const selectedEntries = [...(current ? [current] : []), ...manifest.priors];
+  const ownership = analyzeSummaryV2FinalUnitOwnership(text, manifest, options);
+  const evidenceForEntry = (entryId: string) => ownership.evidence.filter(
+    (evidence) => evidence.owningEntryId === entryId,
+  );
+  const unitForEvidence = (unitIndex: number) => ownership.units[unitIndex] || '';
+  const unitTextForEntry = (entryId: string) => evidenceForEntry(entryId)
+    .map((evidence) => unitForEvidence(evidence.unitIndex))
+    .join(' ');
+  const factUnitCoverageEvidence = [
+    ...requiredCurrent.map((fact) => ({ fact, semanticRole: 'current_fact' as const })),
+    ...requiredPrior.map((fact) => ({ fact, semanticRole: 'prior_fact' as const })),
+  ].map(({ fact, semanticRole }) => {
+    const owner = selectedEntries.find((entry) => entry.entryId === fact.entryId);
+    const matches = owner ? evidenceForEntry(owner.entryId).filter((unitEvidence) => {
+      const unit = unitForEvidence(unitEvidence.unitIndex);
+      return factCoveredInText(
+        fact,
+        unit,
+        dutyTenseFromEmploymentState(owner.employmentState),
+      ) || entryDutiesMatchEmploymentTense(
+        unit,
+        [fact],
+        owner.employmentState,
+        manifest.locale,
+        manifest.gender,
+      );
+    }) : [];
+    const covered = matches.length > 0;
+    const ownershipPassed = Boolean(
+      ownership.passed
+      && owner
+      && matches.every((unitEvidence) => unitEvidence.owningEntryId === owner.entryId)
+      && matches.every((unitEvidence) => (
+        semanticRole === 'current_fact'
+          ? unitEvidence.roleSlot === 'current_role'
+          : unitEvidence.roleSlot === 'prior_role'
+      )),
     );
-  }).length;
+    return {
+      factId: fact.factId,
+      factHash: fingerprintText(fact.factId),
+      owningEntryId: fact.entryId,
+      owningEntryHash: fingerprintText(fact.entryId),
+      semanticRole,
+      matchedUnitHashes: matches.map((unitEvidence) => unitEvidence.unitHash),
+      matchedUnitOwnerHashes: matches.map((unitEvidence) => unitEvidence.owningEntryHash || ''),
+      matchedUnitRoleSlots: matches.map((unitEvidence) => unitEvidence.roleSlot),
+      ownershipPassed,
+      covered,
+    };
+  });
+  const coveredCurrent = factUnitCoverageEvidence.filter(
+    (evidence) => evidence.semanticRole === 'current_fact' && evidence.covered,
+  ).length;
+  const coveredPrior = factUnitCoverageEvidence.filter(
+    (evidence) => evidence.semanticRole === 'prior_fact' && evidence.covered,
+  ).length;
+  const factUnitOwnershipValidationPassed = ownership.passed
+    && factUnitCoverageEvidence.every((evidence) => evidence.ownershipPassed);
+  const currentUnitText = current ? unitTextForEntry(current.entryId) : '';
   const currentRolePresent = Boolean(
     current?.role
-    && new RegExp(escapeRegExp(current.role), 'iu').test(text),
+    && new RegExp(escapeRegExp(current.role), 'iu').test(currentUnitText),
   );
   const currentEmployerPresent = Boolean(
     current?.employer
-    && new RegExp(escapeRegExp(current.employer), 'iu').test(text),
+    && new RegExp(escapeRegExp(current.employer), 'iu').test(currentUnitText),
   );
   const currentStateExpressed = /\b(?:currently|derzeit|actuellement|attualmente|actualmente|atualmente|trenutno)\b/iu
-    .test(text)
-    || /\bsince\b/iu.test(text)
-    || hasAnyMarker(text, [
+    .test(currentUnitText)
+    || /\bsince\b/iu.test(currentUnitText)
+    || hasAnyMarker(currentUnitText, [
       'сейчас', 'حاليا', 'حالیا', 'أعمل', 'वर्तमान', '現在', '現職',
       'in my current role', 'en mi rol actual', 'dans mon rôle', 'nel mio ruolo',
       'na minha função atual', 'в текущей роли', 'u trenutnoj ulozi',
       'في دوري الحالي', 'वर्तमान भूमिका',
       'in meiner aktuellen rolle', 'in einer früheren rolle',
     ]);
-  const priorRolePresent = !prior?.role
-    || new RegExp(escapeRegExp(prior.role), 'iu').test(text);
-  const priorEmployerPresent = !prior?.employer
-    || new RegExp(escapeRegExp(prior.employer), 'iu').test(text);
-  const priorStateExpressed = !prior
-    || /\b(?:previously|formerly|zuvor|anteriormente|auparavant|in\s+precedenza|prethodno|ranije)\b/iu
-      .test(text)
-    || hasAnyMarker(text, [
+  const priorRolePresent = manifest.priors.every((entry) => (
+    !entry.role || new RegExp(escapeRegExp(entry.role), 'iu').test(unitTextForEntry(entry.entryId))
+  ));
+  const priorEmployerPresent = manifest.priors.every((entry) => (
+    !entry.employer || new RegExp(escapeRegExp(entry.employer), 'iu').test(unitTextForEntry(entry.entryId))
+  ));
+  const priorStateExpressed = !prior || manifest.priors.every((entry) => {
+    const priorUnitText = unitTextForEntry(entry.entryId);
+    return /\b(?:previously|formerly|before\s+that|zuvor|anteriormente|auparavant|in\s+precedenza|prethodno|ranije)\b/iu
+      .test(priorUnitText)
+    || hasAnyMarker(priorUnitText, [
       'ранее', 'سابقا', 'इससे पहले', 'पहले', '以前', '前は', '前職',
       'antes', 'prije', 'già', 'déjà', "j'ai déjà",
       'in a previous role', 'en un rol anterior', 'dans un rôle précédent',
@@ -306,10 +328,11 @@ export function validateSummaryV2AgainstManifest(
       'u prethodnoj ulozi', 'في دور سابق', 'पिछली भूमिका',
       'in einer früheren rolle',
     ]);
+  });
 
   const currentDutyTenseOk = !current
     || entryDutiesMatchEmploymentTense(
-      text,
+      currentUnitText,
       requiredCurrent,
       current.employmentState,
       manifest.locale,
@@ -318,7 +341,7 @@ export function validateSummaryV2AgainstManifest(
   const priorDutyTenseOk = manifest.priors.every((p) => {
     const facts = requiredPrior.filter((f) => f.entryId === p.entryId);
     return entryDutiesMatchEmploymentTense(
-      text,
+      unitTextForEntry(p.entryId),
       facts,
       p.employmentState,
       manifest.locale,
@@ -329,21 +352,62 @@ export function validateSummaryV2AgainstManifest(
   const durationExpressionCount = countDurationExpressions(text, manifest.locale);
   const staleResidueDetected = detectStaleOccupationResidue(text, manifest);
   const unsupportedMaterialClaim = detectUnsupportedMaterialClaims(text);
+  const printAudit = auditSummaryV2PrintClaims(text, manifest, ownership.evidence);
   const unsupportedClaimCount = (staleResidueDetected ? 1 : 0)
-    + (unsupportedMaterialClaim ? 1 : 0);
+    + (unsupportedMaterialClaim ? 1 : 0)
+    + printAudit.unsupportedPrintClaimCount;
   const localePurity = validateAiUnitLocalePurity(text, manifest.locale, {
     kind: 'summary_sentence',
     requireUnits: true,
   });
   const hasLiveAuthority = Boolean(manifest.current || manifest.priors.length > 0);
+  const roleTitleSurfaceEvidence = selectedEntries.map((entry) => {
+    const surface = inspectSummaryV2TranslatableSurface({
+      localizedText: entry.role,
+      sourceText: entry.role,
+      employer: entry.employer,
+      targetLocale: manifest.locale,
+    });
+    return {
+      owningEntryHash: hashSummaryV2Text(entry.entryId),
+      detectedLocale: surface.detectedLocale,
+      detectedScript: surface.detectedScript,
+      classification: 'translatable' as const,
+      targetLocaleNativeSurfacePassed: surface.targetLocaleNativeSurfacePassed,
+      localizedTitleHash: hashSummaryV2Text(entry.role),
+      sourceRoleTitleHash: entry.sourceRoleTitleHash || hashSummaryV2Text(entry.role),
+      provenance: entry.roleTitleLocalizationSource || 'source_manifest_role_title',
+    };
+  });
+  const roleTitleSurfaceValidationPassed = roleTitleSurfaceEvidence.every(
+    (entry) => entry.targetLocaleNativeSurfacePassed,
+  );
+  const nativeContract = evaluateNativeRealizationContract({
+    text,
+    locale: manifest.locale,
+    perspectiveMode: 'first_person',
+  });
+  const perspectiveValidationPassed = nativeContract.firstPersonPredicateChainPassed;
+  const arabicMorphologyValidationPassed = manifest.locale !== 'ar'
+    || nativeContract.localeVerbMorphologyPassed;
 
   let reason: string | null = null;
   if (!text) reason = 'empty_summary';
   else if (!hasLiveAuthority) reason = 'no_live_experience_authority';
+  else if (!roleTitleSurfaceValidationPassed) reason = 'foreign_role_title_surface';
   else if (!localePurity.targetLocalePurityPassed) reason = 'locale_impurity';
   else if (staleResidueDetected) reason = 'stale_occupation_residue';
   else if (unsupportedMaterialClaim) reason = 'unsupported_material_claim';
-  else if (manifest.totalDurationMonths <= 0 && durationExpressionCount > 0) {
+  else if (printAudit.unsupportedPrintClaimCount > 0) reason = 'unsupported_print_medium_claim';
+  else if (!perspectiveValidationPassed) reason = 'mixed_perspective';
+  else if (!arabicMorphologyValidationPassed) reason = 'malformed_arabic_finite_verb';
+  else if (current && (!currentRolePresent || !currentEmployerPresent || !currentStateExpressed)) {
+    reason = 'missing_current_role_intro';
+  } else if (prior && (!priorRolePresent || !priorEmployerPresent || !priorStateExpressed)) {
+    reason = 'missing_prior_role_intro';
+  } else if (!ownership.passed) {
+    reason = ownership.reason || 'final_unit_ownership_failed';
+  } else if (manifest.totalDurationMonths <= 0 && durationExpressionCount > 0) {
     reason = 'unsupported_duration_without_dates';
   } else if (manifest.totalDurationMonths > 0 && durationExpressionCount !== 1) {
     reason = 'duration_not_exactly_once';
@@ -351,10 +415,6 @@ export function validateSummaryV2AgainstManifest(
     reason = 'current_duty_coverage_incomplete';
   } else if (requiredPrior.length > 0 && coveredPrior < requiredPrior.length) {
     reason = 'prior_duty_coverage_incomplete';
-  } else if (current && (!currentRolePresent || !currentEmployerPresent || !currentStateExpressed)) {
-    reason = 'missing_current_role_intro';
-  } else if (prior && (!priorRolePresent || !priorEmployerPresent || !priorStateExpressed)) {
-    reason = 'missing_prior_role_intro';
   } else if (manifest.locale === 'en' && summaryHasMalformedDoublePast(text)) {
     reason = 'malformed_double_past_inflection';
   } else if (!currentDutyTenseOk || !priorDutyTenseOk) {
@@ -385,5 +445,17 @@ export function validateSummaryV2AgainstManifest(
     sourceLanguageLeakageTokens: [],
     wrongLocaleUnitCount: localePurity.wrongLocaleUnitCount,
     wrongScriptUnitCount: localePurity.wrongScriptUnitCount,
+    roleTitleSurfaceValidationPassed,
+    roleTitleSurfaceEvidence,
+    perspectiveValidationPassed,
+    arabicMorphologyValidationPassed,
+    printClaimDetected: printAudit.printClaimDetected,
+    sourcePrintFactPresent: printAudit.sourcePrintFactPresent,
+    unsupportedPrintClaimCount: printAudit.unsupportedPrintClaimCount,
+    unitOwnershipValidationPassed: ownership.passed,
+    unitOwnershipFailureReason: ownership.reason,
+    finalUnitOwnership: ownership.evidence,
+    factUnitCoverageEvidence,
+    factUnitOwnershipValidationPassed,
   };
 }

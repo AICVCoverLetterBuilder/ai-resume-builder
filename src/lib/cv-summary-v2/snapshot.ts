@@ -51,6 +51,44 @@ export function captureSummaryV2Snapshot(options: {
       declaredLocale,
       fallbackLocale: locale,
     }).sourceLocale;
+    const roleDeclaredRaw = exp.positionSourceLocale || exp.generatedLocale || cv.contentLocale || null;
+    const roleDeclaredLocale = SUMMARY_V2_SUPPORTED_LOCALES.includes(roleDeclaredRaw as Locale)
+      ? roleDeclaredRaw as Locale
+      : null;
+    const resolvedRoleLocale = resolveSourceLocaleForText({
+      text: exp.position || '',
+      declaredLocale: roleDeclaredLocale,
+      fallbackLocale: locale,
+    });
+    const factDeclaredRaw = exp.descriptionSourceLocale || exp.generatedLocale || cv.contentLocale || null;
+    const factDeclaredLocale = SUMMARY_V2_SUPPORTED_LOCALES.includes(factDeclaredRaw as Locale)
+      ? factDeclaredRaw as Locale
+      : null;
+    const facts = buildEntryOwnedFactsFromLiveDescription({
+      entryId: String(exp.id || ''),
+      liveDescription: live,
+      sourceLocale: entryLocale,
+    }).map((fact) => {
+      const resolved = resolveSourceLocaleForText({
+        text: fact.bulletText,
+        declaredLocale: factDeclaredLocale,
+        fallbackLocale: locale,
+      });
+      return {
+        ...fact,
+        sourceLocale: resolved.sourceLocale,
+        sourceLocaleResolvedFrom: resolved.resolvedFrom,
+      };
+    });
+    // Short free-text titles can be linguistically ambiguous. Only use the
+    // independently resolved entry context when every fact surface agrees on
+    // one foreign locale; a mixed fact set can never overwrite title authority.
+    const roleLocale = resolvedRoleLocale.resolvedFrom !== 'detected'
+      && entryLocale !== locale
+      && facts.length > 0
+      && facts.every((fact) => fact.sourceLocale === entryLocale)
+      ? { sourceLocale: entryLocale, resolvedFrom: 'fallback' as const }
+      : resolvedRoleLocale;
     return {
       entryId: String(exp.id || ''),
       role: (exp.position || '').trim(),
@@ -59,13 +97,11 @@ export function captureSummaryV2Snapshot(options: {
       endDate: (exp.endDate || '').trim(),
       isPresent,
       employmentState: isPresent ? 'present' : 'completed',
+      roleSourceLocale: roleLocale.sourceLocale,
+      roleSourceLocaleResolvedFrom: roleLocale.resolvedFrom,
       sourceLocale: entryLocale,
       descriptionHash: hashSummaryV2Text(live),
-      facts: buildEntryOwnedFactsFromLiveDescription({
-        entryId: String(exp.id || ''),
-        liveDescription: live,
-        sourceLocale: entryLocale,
-      }),
+      facts,
     };
   });
 

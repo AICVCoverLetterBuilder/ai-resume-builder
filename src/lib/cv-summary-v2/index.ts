@@ -15,7 +15,13 @@ export type {
   SummaryV2SelectionManifest,
   SummaryV2ValidationResult,
   SummaryV2PipelineResult,
+  SummaryV2CandidateSourceKind,
+  SummaryV2FinalUnitRoleSlot,
+  SummaryV2FinalUnitOwnershipEvidence,
+  SummaryV2FactUnitCoverageEvidence,
+  SummaryV2MaterialClaimCategory,
 } from './types';
+export { SUMMARY_V2_PRINT_MATERIAL_CATEGORY } from './types';
 export {
   captureSummaryV2Snapshot,
   liveExperienceDescription,
@@ -65,6 +71,7 @@ export {
   validateSummaryV2AgainstManifest,
   entryDutiesMatchEmploymentTense,
 } from './validator';
+export type { SummaryV2ValidationOptions } from './validator';
 export {
   runSummaryV2,
   buildSummaryV2ManifestForCv,
@@ -124,7 +131,25 @@ export {
   buildSameLocaleLocalizedManifest,
   projectLocalizedSummaryV2Manifest,
   buildSummaryV2ProviderExperienceEntries,
+  classifySummaryV2EntrySurfaceAuthority,
+  buildSummaryV2EntrySurfaceTransportPlan,
+  inspectSummaryV2TranslatableSurface,
 } from './localization';
+export {
+  SUMMARY_V2_MATERIAL_CLAIM_CONTRACT_REVISION,
+  detectSummaryV2MaterialClaimCategories,
+  detectPrintMediumClaim,
+  auditSummaryV2PrintClaims,
+} from './material-claims';
+export {
+  SUMMARY_V2_ENTRY_OWNED_FINAL_UNITS_REVISION,
+  splitSummaryV2FinalUnits,
+  analyzeSummaryV2FinalUnitOwnership,
+} from './unit-ownership';
+export type {
+  SummaryV2UnitOwnershipOptions,
+  SummaryV2UnitOwnershipResult,
+} from './unit-ownership';
 export {
   localizeSummaryV2Manifest,
   clearSummaryV2LocalizationCacheForTests,
@@ -146,6 +171,9 @@ export type {
   SummaryV2LocalizationFailureEvidence,
   SummaryV2ProtectedEntityTokenClass,
   SummaryV2ProviderExperienceEntry,
+  SummaryV2EntrySurfaceAuthority,
+  SummaryV2EntrySurfaceTransportPlan,
+  SummaryV2SurfaceAuthorityState,
 } from './localization';
 export type {
   SummaryV2NativeSurfaceResult,

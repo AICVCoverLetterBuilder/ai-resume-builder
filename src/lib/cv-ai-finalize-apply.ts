@@ -178,6 +178,8 @@ import {
   SUMMARY_V2_GENDER_SURFACE_389_REVISION,
   isSummaryV2Enabled,
   runSummaryV2,
+  auditSummaryV2PrintClaims,
+  analyzeSummaryV2FinalUnitOwnership,
   buildSummaryV2StyledDeterministicText,
   normalizeSummaryV2RewriteStyle,
 } from './cv-summary-v2';
@@ -1443,6 +1445,7 @@ export type FinalizeCvAiFieldResult = {
     providerUnsupportedDesignMediumCount?: number;
     providerUnsupportedDesignMediumKinds?: string[];
     providerPrintClaimDetected?: boolean;
+    finalPrintClaimDetected?: boolean;
     providerBrandingClaimDetected?: boolean;
     providerMarketingClaimDetected?: boolean;
     finalUnsupportedDesignMediumCount?: number;
@@ -1664,6 +1667,16 @@ export type FinalizeCvAiFieldResult = {
     currentRoleTitleSource?: string | null;
     currentRoleTitleEntryIdHash?: string | null;
     currentRoleTitleMatchesStructuredRole?: boolean;
+    roleTitleSurfaceEvidence?: Array<{
+      owningEntryHash: string;
+      detectedLocale: string | null;
+      detectedScript: string;
+      classification: 'translatable';
+      targetLocaleNativeSurfacePassed: boolean;
+      localizedTitleHash: string;
+      sourceRoleTitleHash: string;
+      provenance: string;
+    }>;
     currentRoleOmittedDetected?: boolean;
     currentSlotForeignFactCount?: number;
     priorSlotForeignFactCount?: number;
@@ -1672,6 +1685,28 @@ export type FinalizeCvAiFieldResult = {
     priorRoleSemanticFactMentionCount?: number;
     priorRoleSemanticDuplicationDetected?: boolean;
     finalUnitRoleSlots?: string[];
+    finalUnitHashes?: string[];
+    unitOwnershipValidationPassed?: boolean;
+    unitOwnershipFailureReason?: string | null;
+    factUnitOwnershipValidationPassed?: boolean;
+    finalUnitOwnershipEvidence?: Array<{
+      unitHash: string;
+      roleSlot: 'duration' | 'current_role' | 'prior_role';
+      owningEntryHash: string | null;
+      priorOrdinal: number | null;
+    }>;
+    factUnitOwnershipEvidence?: Array<{
+      factHash: string;
+      owningEntryHash: string;
+      semanticRole: 'current_fact' | 'prior_fact';
+      matchedUnitHashes: string[];
+      matchedUnitOwnerHashes: string[];
+      matchedUnitRoleSlots: Array<'duration' | 'current_role' | 'prior_role'>;
+      ownershipPassed: boolean;
+      covered: boolean;
+    }>;
+    visibleCurrentDutyFactMatchCountsByFactHash?: Record<string, number>;
+    visibleCurrentDutyFactMatchedUnitHashesByFactHash?: Record<string, string[]>;
     hindiFiniteKaAnubhavCollision?: boolean;
     durationFinalizerIdempotent?: boolean;
     summaryPipelineRevision?: string;
@@ -3107,19 +3142,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const v2Units = v2Text
       ? v2Text.split(/(?<=[.!?。؟।])\s+/u).map((u) => u.trim()).filter(Boolean)
       : [];
-    const roleSlots = [
-      ...(v2.manifest.current ? ['current_intro' as const] : []),
-      ...v2.manifest.priors.map(() => 'prior_role' as const),
-    ];
-    // Duration unit is prepended (V2 sentence order). Semantic roles carry
-    // total_duration; slot id stays `duration` for lineage consumers.
-    const unitRoleSlots = v2.manifest.totalDurationMonths > 0
-      ? (['duration', ...roleSlots] as string[])
-      : [...roleSlots];
+    const unitRoleSlots: string[] = v2.validation.finalUnitOwnership.map((evidence) => (
+      evidence.roleSlot === 'current_role' ? 'current_intro' : evidence.roleSlot
+    ));
     const providerRaw = (input.candidate || '').trim();
     const providerHash = providerRaw ? hashSummaryCandidate(providerRaw) : null;
     const providerRejected = Boolean(providerRaw) && v2.origin !== 'ai_generated';
-    const v2UnitHashes = v2Units.map((u) => fingerprintText(u));
+    const v2UnitHashes = v2.validation.finalUnitOwnership.map((evidence) => evidence.unitHash);
     void GERMAN_SUMMARY_V2_PREAPPLY_COMPLETENESS_380_REVISION;
     const deV2Completeness = locale === 'de'
       ? buildGermanSummaryV2PreapplyCompletenessFields({
@@ -3171,6 +3200,39 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? fingerprintText(`dur_unit:${v2Units[0] || v2Text}`)
         : null);
     const v2DurationPassHash = v2Text ? hashSummaryCandidate(v2Text) : null;
+    const v2GroundingInputHash = v2Text ? hashSummaryCandidate(v2Text) : null;
+    const providerOwnership = analyzeSummaryV2FinalUnitOwnership(providerRaw, v2.manifest, {
+      candidateSource: 'provider',
+    });
+    const providerPrintAudit = auditSummaryV2PrintClaims(
+      providerRaw,
+      v2.manifest,
+      providerOwnership.evidence,
+    );
+    const v2MatchedCurrentUnitHashes = Object.fromEntries(
+      v2.manifest.requiredCurrentFacts.map((fact) => [
+        fact.factId,
+        v2.validation.factUnitCoverageEvidence
+          .find((evidence) => evidence.factId === fact.factId)
+          ?.matchedUnitHashes || [],
+      ]),
+    );
+    const v2FactUnitOwnershipEvidence = v2.validation.factUnitCoverageEvidence.map((evidence) => ({
+      factHash: evidence.factHash,
+      owningEntryHash: evidence.owningEntryHash,
+      semanticRole: evidence.semanticRole,
+      matchedUnitHashes: evidence.matchedUnitHashes,
+      matchedUnitOwnerHashes: evidence.matchedUnitOwnerHashes,
+      matchedUnitRoleSlots: evidence.matchedUnitRoleSlots,
+      ownershipPassed: evidence.ownershipPassed,
+      covered: evidence.covered,
+    }));
+    const v2FinalUnitOwnershipEvidence = v2.validation.finalUnitOwnership.map((evidence) => ({
+      unitHash: evidence.unitHash,
+      roleSlot: evidence.roleSlot,
+      owningEntryHash: evidence.owningEntryHash,
+      priorOrdinal: evidence.priorOrdinal,
+    }));
     const missingCurrent = Math.max(
       0,
       v2.validation.requiredCurrentFactCount - v2.validation.coveredCurrentFactCount,
@@ -3220,6 +3282,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       (success && v2EnhanceExisting && meaningfulEffective.noOpDetected)
       || styleNoSafe,
     );
+    const v2FinalValidatedHash = (success && !v2CleanNoOp)
+      ? meaningfulEffective.finalNormalizedHash
+      : null;
     const v2NoOpCandidateKind: string | null = v2CleanNoOp
       ? (
         styleNoSafe
@@ -3283,11 +3348,25 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       hindiNominalExperienceFragmentDetected: false,
       hindiSentenceHasFiniteCopulaOrVerb: true,
       hindiIncompleteSentenceCount: 0,
-      finalUnsupportedDesignMediumCount: 0,
-      providerUnsupportedDesignMediumCount: 0,
-      providerPrintClaimDetected: false,
+      finalUnsupportedDesignMediumCount: v2.validation.unsupportedPrintClaimCount,
+      finalUnsupportedDesignMediumKinds: v2.validation.unsupportedPrintClaimCount > 0
+        ? ['unsupported_print_medium']
+        : [],
+      deterministicUnsupportedDesignMediumCount: v2DetOrigin
+        ? v2.validation.unsupportedPrintClaimCount
+        : 0,
+      deterministicUnsupportedDesignMediumKinds: v2DetOrigin
+        && v2.validation.unsupportedPrintClaimCount > 0
+        ? ['unsupported_print_medium']
+        : [],
+      providerUnsupportedDesignMediumCount: providerPrintAudit.unsupportedPrintClaimCount,
+      providerUnsupportedDesignMediumKinds: providerPrintAudit.unsupportedPrintClaimCount > 0
+        ? ['unsupported_print_medium']
+        : [],
+      providerPrintClaimDetected: providerPrintAudit.printClaimDetected,
+      finalPrintClaimDetected: v2.validation.printClaimDetected,
       hindiSentenceGrammarRecords: [] as unknown[],
-      sourcePrintFactPresent: false,
+      sourcePrintFactPresent: v2.validation.sourcePrintFactPresent,
       requiredCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
       coveredCurrentDutyFactCount: v2.validation.coveredCurrentFactCount,
       missingCurrentDutyFactCount: missingCurrent,
@@ -3302,18 +3381,35 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         v2.manifest.requiredCurrentFacts.map((f) => f.factId).join('|') || 'empty_required_set',
       ),
       authoritativeCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
+      visibleCurrentDutyFactMatchedUnitHashesByFactHash: v2MatchedCurrentUnitHashes,
       currentRoleTitlePresent: v2.validation.currentRolePresent,
+      currentRoleTitleSource: v2.manifest.current
+        ? (v2.manifest.current.roleTitleLocalizationSource || 'source_manifest_role_title')
+        : null,
+      currentRoleTitleEntryIdHash: v2.manifest.current
+        ? fingerprintText(v2.manifest.current.entryId)
+        : null,
       currentRoleTitleMatchesStructuredRole: v2.validation.currentRolePresent,
-      structuredRoleLocaleValidationPassed: true,
-      currentRoleLocalizationValidationPassed: true,
-      priorRoleLocalizationValidationPassed: true,
-      foreignStructuredRoleTitleCount: 0,
-      foreignPriorRoleTitleCount: 0,
-      foreignCurrentRoleTitleDetected: false,
-      rawSourceRoleLeakageDetected: false,
-      finalStructuredRoleLocaleValidationPassed: true,
-      finalWrongLocaleStructuredRoleCount: 0,
-      finalForeignRoleTitleCount: 0,
+      roleTitleSurfaceEvidence: v2.validation.roleTitleSurfaceEvidence,
+      structuredRoleLocaleValidationPassed: v2.validation.roleTitleSurfaceValidationPassed,
+      currentRoleLocalizationValidationPassed: v2.validation.roleTitleSurfaceEvidence[0]
+        ?.targetLocaleNativeSurfacePassed ?? !v2.manifest.current,
+      priorRoleLocalizationValidationPassed: v2.validation.roleTitleSurfaceEvidence
+        .slice(v2.manifest.current ? 1 : 0)
+        .every((entry) => entry.targetLocaleNativeSurfacePassed),
+      foreignStructuredRoleTitleCount: v2.validation.roleTitleSurfaceEvidence
+        .filter((entry) => !entry.targetLocaleNativeSurfacePassed).length,
+      foreignPriorRoleTitleCount: v2.validation.roleTitleSurfaceEvidence
+        .slice(v2.manifest.current ? 1 : 0)
+        .filter((entry) => !entry.targetLocaleNativeSurfacePassed).length,
+      foreignCurrentRoleTitleDetected: Boolean(v2.manifest.current)
+        && v2.validation.roleTitleSurfaceEvidence[0]?.targetLocaleNativeSurfacePassed === false,
+      rawSourceRoleLeakageDetected: !v2.validation.roleTitleSurfaceValidationPassed,
+      finalStructuredRoleLocaleValidationPassed: v2.validation.roleTitleSurfaceValidationPassed,
+      finalWrongLocaleStructuredRoleCount: v2.validation.roleTitleSurfaceEvidence
+        .filter((entry) => !entry.targetLocaleNativeSurfacePassed).length,
+      finalForeignRoleTitleCount: v2.validation.roleTitleSurfaceEvidence
+        .filter((entry) => !entry.targetLocaleNativeSurfacePassed).length,
       finalUnsupportedCompetencyCount: v2.validation.unsupportedClaimCount,
       finalUnsupportedCompetencyKinds: [],
       competencyInferenceFromRoleForbidden: true,
@@ -3326,8 +3422,13 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? (meaningfulEffective.meaningfulChangeDetected || !liveSummary.trim())
         : false,
       meaningfulChangeReason: v2CleanNoOp ? null : meaningfulEffective.meaningfulChangeReason,
-      deterministicCandidateEqualsGroundingInput: true,
-      groundingInputEqualsFinalValidatedCandidate: success && !v2CleanNoOp,
+      groundingInputCandidateHash: v2GroundingInputHash,
+      deterministicCandidateEqualsGroundingInput: v2DetHash && v2GroundingInputHash
+        ? v2DetHash === v2GroundingInputHash
+        : null,
+      groundingInputEqualsFinalValidatedCandidate: v2GroundingInputHash && v2FinalValidatedHash
+        ? v2GroundingInputHash === v2FinalValidatedHash
+        : null,
       providerCandidateEqualsDeterministicCandidate: false,
       finalCandidateSource: (success && !v2CleanNoOp) ? v2.origin : 'none',
       // Evaluated candidate duration truth (never rescanned from empty live text).
@@ -3372,15 +3473,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         && v2.validation.priorStateExpressed,
       ),
       finalPostconditionsPassed: success && !v2CleanNoOp,
-      targetLocalePurityPassed: Boolean(v2Pd?.targetLocalePurityPassed),
-      sourceLanguageLeakageDetected: Boolean(v2Pd?.sourceLanguageLeakageDetected),
-      wrongLocaleUnitCount: 0,
-      wrongScriptUnitCount: 0,
+      targetLocalePurityPassed: v2.validation.targetLocalePurityPassed,
+      sourceLanguageLeakageDetected: v2.validation.sourceLanguageLeakageDetected,
+      wrongLocaleUnitCount: v2.validation.wrongLocaleUnitCount,
+      wrongScriptUnitCount: v2.validation.wrongScriptUnitCount,
       detectedLocaleByUnit: v2Units.map(() => locale),
       detectedScriptByUnit: v2Units.map(() => (
         locale === 'ar' || locale === 'hi' || locale === 'ja' ? 'native' : 'latin'
       )),
       finalUnitRoleSlots: unitRoleSlots,
+      unitOwnershipValidationPassed: v2.validation.unitOwnershipValidationPassed,
+      unitOwnershipFailureReason: v2.validation.unitOwnershipFailureReason,
+      factUnitOwnershipValidationPassed:
+        v2.validation.factUnitOwnershipValidationPassed,
+      finalUnitOwnershipEvidence: v2FinalUnitOwnershipEvidence,
+      factUnitOwnershipEvidence: v2FactUnitOwnershipEvidence,
       finalSentenceRoleSlots: unitRoleSlots,
       finalSentenceHashes: (success && !v2CleanNoOp) ? v2UnitHashes : [],
       finalUnitHashes: (success && !v2CleanNoOp) ? v2UnitHashes : [],
@@ -3398,7 +3505,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       summaryFinalCandidateDiagnosticsRevision: SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION,
       perspectiveMode: 'first_person' as const,
       finalPerspectiveMode: 'first_person' as const,
-      perspectiveValidationPassed: true,
+      perspectiveValidationPassed: v2.validation.perspectiveValidationPassed,
       rewriteStyle: input.rewriteStyle || null,
       requestedRewriteStyle: requestedRewriteStyle || null,
       rewriteStylePropagatedToProvider: Boolean(v2Pd?.rewriteStylePropagatedToProvider),
@@ -3585,7 +3692,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : (v2CleanNoOp ? SUMMARY_NOOP_REJECTION_REASON : null),
       detectedVisibleContentLocaleBeforeRequest: cv.contentLocale || null,
       finalContentLocaleAfterApply: null,
-      finalValidatedCandidateHash: (success && !v2CleanNoOp) ? meaningfulEffective.finalNormalizedHash : null,
+      finalValidatedCandidateHash: v2FinalValidatedHash,
       // Present + hashes whenever a deterministic surface was serialized (even if later rejected).
       deterministicCandidateHash: v2DetHash,
       deterministicCandidateNormalizedHash: v2DetNormHash,
@@ -3611,7 +3718,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       groundingValidationPassed: success && !v2CleanNoOp,
       grammarValidationPassed: locale === 'de' && deV2Completeness
         ? deV2Completeness.germanControlledCaseGrammarPassed
-        : (success && !v2CleanNoOp),
+        : (success && !v2CleanNoOp
+          && v2.validation.perspectiveValidationPassed
+          && v2.validation.arabicMorphologyValidationPassed),
       slotValidationPassed: success && !v2CleanNoOp,
       priorRoleGroundingPassed: v2.validation.priorRolePresent && v2.validation.priorEmployerPresent,
       unsupportedClaimCount: v2.validation.unsupportedClaimCount,
@@ -3628,7 +3737,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       contentLocaleAfterApply: cv.contentLocale || null,
       contentLocaleUpdatedAfterApply: false,
       candidateTargetLocale: locale,
-      localeValidationPassed: true,
+      localeValidationPassed: v2.validation.targetLocalePurityPassed
+        && v2.validation.roleTitleSurfaceValidationPassed,
       finalDurationHybridDetected: false,
       visibleDurationHybridDetected: false,
       durationSemanticValueMonths: v2.manifest.totalDurationMonths || null,

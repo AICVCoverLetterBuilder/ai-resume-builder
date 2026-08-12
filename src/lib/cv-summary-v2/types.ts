@@ -2,6 +2,42 @@ import type { Locale } from '@/lib/i18n/translations';
 
 export type SummaryV2EmploymentState = 'present' | 'completed';
 
+export const SUMMARY_V2_PRINT_MATERIAL_CATEGORY = 'design_medium_print' as const;
+export type SummaryV2MaterialClaimCategory = typeof SUMMARY_V2_PRINT_MATERIAL_CATEGORY;
+
+export type SummaryV2CandidateSourceKind =
+  | 'provider'
+  | 'repaired_provider'
+  | 'deterministic'
+  | 'final_selected';
+
+export type SummaryV2FinalUnitRoleSlot = 'duration' | 'current_role' | 'prior_role';
+
+export type SummaryV2FinalUnitOwnershipEvidence = {
+  unitIndex: number;
+  unitHash: string;
+  roleSlot: SummaryV2FinalUnitRoleSlot;
+  /** Internal source-bound identity; never serialize outside the validator/finalizer. */
+  owningEntryId: string | null;
+  owningEntryHash: string | null;
+  priorOrdinal: number | null;
+};
+
+export type SummaryV2FactUnitCoverageEvidence = {
+  /** Internal source-bound identity; diagnostics serialize factHash instead. */
+  factId: string;
+  factHash: string;
+  /** Internal source-bound identity; diagnostics serialize owningEntryHash instead. */
+  owningEntryId: string;
+  owningEntryHash: string;
+  semanticRole: 'current_fact' | 'prior_fact';
+  matchedUnitHashes: string[];
+  matchedUnitOwnerHashes: string[];
+  matchedUnitRoleSlots: SummaryV2FinalUnitRoleSlot[];
+  ownershipPassed: boolean;
+  covered: boolean;
+};
+
 export type SummaryV2EntryFact = {
   factId: string;
   entryId: string;
@@ -11,6 +47,11 @@ export type SummaryV2EntryFact = {
   sourceFactHash: string;
   /** Locale of the immutable visible source fact; never the requested target locale. */
   sourceLocale: Locale;
+  sourceLocaleResolvedFrom?: 'detected' | 'declared' | 'fallback';
+  /** Immutable material authority captured before localization/projection. */
+  sourcePrintFactPresent?: boolean;
+  /** Canonical entry-owned material authority captured before localization. */
+  sourceMaterialClaimCategories?: SummaryV2MaterialClaimCategory[];
 };
 
 export type SummaryV2EntryOwned = {
@@ -21,6 +62,12 @@ export type SummaryV2EntryOwned = {
   endDate: string;
   isPresent: boolean;
   employmentState: SummaryV2EmploymentState;
+  /** Source-bound role-title lineage after localized-manifest projection. */
+  roleTitleLocalizationSource?: string;
+  sourceRoleTitleHash?: string;
+  /** Independent role-title locale provenance; aggregate sourceLocale is diagnostic only. */
+  roleSourceLocale?: Locale;
+  roleSourceLocaleResolvedFrom?: 'detected' | 'declared' | 'fallback';
   /** Authoritative locale of this entry's visible source material. */
   sourceLocale: Locale;
   /** Hash of live description used at snapshot time. */
@@ -85,6 +132,27 @@ export type SummaryV2ValidationResult = {
   sourceLanguageLeakageTokens: string[];
   wrongLocaleUnitCount: number;
   wrongScriptUnitCount: number;
+  roleTitleSurfaceValidationPassed: boolean;
+  roleTitleSurfaceEvidence: Array<{
+    owningEntryHash: string;
+    detectedLocale: string | null;
+    detectedScript: string;
+    classification: 'translatable';
+    targetLocaleNativeSurfacePassed: boolean;
+    localizedTitleHash: string;
+    sourceRoleTitleHash: string;
+    provenance: string;
+  }>;
+  perspectiveValidationPassed: boolean;
+  arabicMorphologyValidationPassed: boolean;
+  printClaimDetected: boolean;
+  sourcePrintFactPresent: boolean;
+  unsupportedPrintClaimCount: number;
+  unitOwnershipValidationPassed: boolean;
+  unitOwnershipFailureReason: string | null;
+  finalUnitOwnership: SummaryV2FinalUnitOwnershipEvidence[];
+  factUnitCoverageEvidence: SummaryV2FactUnitCoverageEvidence[];
+  factUnitOwnershipValidationPassed: boolean;
 };
 
 export type SummaryV2PipelineResult = {

@@ -2,6 +2,10 @@ import type { Locale } from '@/lib/i18n/translations';
 import type { SummaryV2EntryFact } from './types';
 import { bulletToGermanWoIchClause } from './german-surface';
 import type { SummaryV2DutyTense } from './tense';
+import {
+  detectPrintMediumClaim,
+  detectSummaryV2MaterialClaimCategories,
+} from './material-claims';
 
 const STOP = new Set([
   'with', 'from', 'that', 'this', 'their', 'them', 'they', 'have', 'has', 'had',
@@ -78,6 +82,11 @@ export function buildEntryOwnedFactsFromLiveDescription(options: {
       tokenStems: stems,
       sourceFactHash,
       sourceLocale: options.sourceLocale,
+      sourcePrintFactPresent: detectPrintMediumClaim(bullet, options.sourceLocale),
+      sourceMaterialClaimCategories: detectSummaryV2MaterialClaimCategories(
+        bullet,
+        options.sourceLocale,
+      ),
     };
   });
 }

@@ -1,13 +1,19 @@
 import type { Locale } from '@/lib/i18n/translations';
 import {
+  detectAiContentScript,
+  guessUnitLocale,
   validateAiUnitLocalePurity,
   type AiContentScript,
 } from '@/lib/cv-ai-unit-locale-purity';
 import { detectUnresolvedGenderPlaceholder } from './gender';
 import { analyzeSpanishCoordinatedPredicateMorphology } from './native-surface';
 import { dutyTokenStems, hashSummaryV2Text } from './facts';
-import { localesAreDetectionCompatible } from './locale-authority';
+import { detectDominantLocale, localesAreDetectionCompatible } from './locale-authority';
 import type { SummaryV2EntryOwned, SummaryV2SelectionManifest } from './types';
+import {
+  detectPrintMediumClaim,
+  detectSummaryV2MaterialClaimCategories,
+} from './material-claims';
 
 export const SUMMARY_V2_LOCALIZED_MANIFEST_REVISION =
   'summary-v2-localized-manifest-419-v1' as const;
@@ -36,6 +42,9 @@ export type SummaryV2LocalizedEntry = {
   sourceLocale: Locale;
   localizedRoleTitle: string;
   localizedRoleTitleHash: string;
+  sourceRoleTitleHash: string;
+  localizedRoleTitleLocalizationSource: SummaryV2LocalizationSource;
+  localizedRoleTitleValidationResult: 'passed';
   employer: string;
   employmentState: 'present' | 'completed';
   facts: SummaryV2LocalizedFact[];
@@ -110,7 +119,8 @@ export type SummaryV2ProtectedEntityTokenClass =
   | 'employer_entity'
   | 'technical_acronym'
   | 'structured_identifier'
-  | 'structured_date';
+  | 'structured_date'
+  | 'proper_noun_entity';
 
 export type SummaryV2LocalizationFailureEvidence = {
   entryId: string;
@@ -129,12 +139,14 @@ export type SummaryV2LocalizationFailureEvidence = {
 type LocalizationValidationOptions = {
   /** Per-entry accepted authority must survive mixed-manifest assembly. */
   sourceByEntryId?: Partial<Record<string, SummaryV2LocalizationSource>>;
+  roleSourceByEntryId?: Partial<Record<string, SummaryV2LocalizationSource>>;
+  factSourceByFactId?: Partial<Record<string, SummaryV2LocalizationSource>>;
 };
 
 const UNSUPPORTED_MATERIAL_RE = /\b(?:increased|improved|boosted|achieved|led|managed a team|certified|awarded)\b|\d+\s*%/iu;
 const STRUCTURED_DATE_TOKEN_RE = /^(?:19|20|21|22)\d{2}(?:[-/.](?:0?[1-9]|1[0-2]))?(?:[-/.](?:0?[1-9]|[12]\d|3[01]))?$/u;
 const TECHNICAL_ACRONYM_TOKEN_RE = /^(?=.*[\p{Lu}])[\p{Lu}\d][\p{Lu}\d.+#&/_-]{1,}$/u;
-const STRUCTURED_IDENTIFIER_TOKEN_RE = /^(?=.*(?:\d|[.@+/#_-]))[\p{L}\p{N}][\p{L}\p{N}.@+/#_-]{1,}$/u;
+const STRUCTURED_IDENTIFIER_TOKEN_RE = /^(?=.*(?:\d|[@+/#_]))[\p{L}\p{N}][\p{L}\p{N}.@+/#_-]{1,}$/u;
 const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}.@+/#&'â€™_-]*/gu;
 
 function selectedEntries(manifest: SummaryV2SelectionManifest): SummaryV2EntryOwned[] {
@@ -156,6 +168,7 @@ function escapeRegExp(value: string): string {
 function protectedEntityTokens(options: {
   employer: string;
   sourceSurface: string;
+  protectSourceProperNouns?: boolean;
 }): Array<{ token: string; tokenClass: SummaryV2ProtectedEntityTokenClass }> {
   const values = new Map<string, SummaryV2ProtectedEntityTokenClass>();
   const add = (token: string, tokenClass: SummaryV2ProtectedEntityTokenClass) => {
@@ -167,22 +180,35 @@ function protectedEntityTokens(options: {
     if (STRUCTURED_DATE_TOKEN_RE.test(token)) add(token, 'structured_date');
     else if (TECHNICAL_ACRONYM_TOKEN_RE.test(token)) add(token, 'technical_acronym');
     else if (STRUCTURED_IDENTIFIER_TOKEN_RE.test(token)) add(token, 'structured_identifier');
+    else if (
+      options.protectSourceProperNouns
+      && options.sourceSurface.trim() === token
+      && /^\p{Lu}[\p{L}\p{M}'’.-]+$/u.test(token)
+    ) {
+      add(token, 'proper_noun_entity');
+    }
   }
   return [...values].map(([token, tokenClass]) => ({ token, tokenClass }));
 }
 
-function translatableSurface(options: {
+export function inspectSummaryV2TranslatableSurface(options: {
   localizedText: string;
   sourceText: string;
   employer: string;
+  targetLocale: Locale;
+  protectSourceProperNouns?: boolean;
 }): {
   localized: string;
   source: string;
   protectedClasses: SummaryV2ProtectedEntityTokenClass[];
+  detectedLocale: string | null;
+  detectedScript: AiContentScript;
+  targetLocaleNativeSurfacePassed: boolean;
 } {
   const protectedTokens = protectedEntityTokens({
     employer: options.employer,
     sourceSurface: options.sourceText,
+    protectSourceProperNouns: options.protectSourceProperNouns,
   });
   const strip = (text: string) => protectedTokens.reduce((value, protectedToken) => (
     value.replace(
@@ -190,34 +216,197 @@ function translatableSurface(options: {
       ' ',
     )
   ), text).replace(/\s+/g, ' ').trim();
+  const localized = strip(options.localizedText);
+  const source = strip(options.sourceText);
+  const purity = validateAiUnitLocalePurity(localized, options.targetLocale, {
+    kind: 'summary_sentence', requireUnits: source.length > 0,
+  });
   return {
-    localized: strip(options.localizedText),
-    source: strip(options.sourceText),
+    localized,
+    source,
     protectedClasses: [...new Set(protectedTokens
       .filter(({ token }) => new RegExp(
         `(?<![\\p{L}\\p{N}_])${escapeRegExp(token)}(?![\\p{L}\\p{N}_])`,
         'iu',
       ).test(options.localizedText))
       .map(({ tokenClass }) => tokenClass))],
+    detectedLocale: guessUnitLocale(localized, options.targetLocale),
+    detectedScript: detectAiContentScript(localized),
+    targetLocaleNativeSurfacePassed: (!source && !localized)
+      || (Boolean(localized)
+        && purity.targetLocalePurityPassed
+        && purity.wrongScriptUnitCount === 0),
   };
 }
 
-function sameLocaleEntryIsAuthoritative(options: {
-  manifest: SummaryV2SelectionManifest;
-  responseEntry: SummaryV2LocalizationProviderResponse['entries'][number];
-  sourceEntry: SummaryV2EntryOwned | undefined;
-  source?: SummaryV2LocalizationSource;
-}): boolean {
+function scriptIsNativeForLocale(script: AiContentScript, locale: Locale): boolean {
+  if (script === 'unknown') return false;
+  if (locale === 'ar') return script === 'arabic';
+  if (locale === 'hi') return script === 'devanagari';
+  if (locale === 'ja') return script === 'cjk';
+  if (locale === 'ru') return script === 'cyrillic';
+  if (locale === 'sr') return script === 'latin' || script === 'latin_diacritic_sc' || script === 'cyrillic';
+  if (locale === 'hr') return script === 'latin' || script === 'latin_diacritic_sc';
+  return script === 'latin' || script === 'latin_diacritic_sc';
+}
+
+export type SummaryV2EntrySurfaceAuthority = {
+  entryId: string;
+  roleTitleTargetNative: boolean;
+  roleTitleAuthority: SummaryV2SurfaceAuthorityState;
+  targetNativeFactIds: string[];
+  localizationRequiredFactIds: string[];
+  uncertainFactIds: string[];
+  allTranslatableSurfacesTargetNative: boolean;
+};
+
+export type SummaryV2SurfaceAuthorityState =
+  | 'target_native_authoritative'
+  | 'foreign_localization_required'
+  | 'uncertain_rejected';
+
+export type SummaryV2EntrySurfaceTransportPlan = {
+  revision: 'summary-v2-surface-transport-plan-420-v1';
+  entryId: string;
+  entryHash: string;
+  aggregateSourceLocale: Locale;
+  targetLocale: Locale;
+  role: {
+    sourceHash: string;
+    authority: SummaryV2SurfaceAuthorityState;
+  };
+  facts: Array<{
+    factId: string;
+    sourceHash: string;
+    authority: SummaryV2SurfaceAuthorityState;
+  }>;
+  roleSurfaceCount: number;
+  factSurfaceCount: number;
+  bypassedSurfaceCount: number;
+  protectedSurfaceCount: number;
+};
+
+function decideSurfaceAuthority(options: {
+  surface: ReturnType<typeof inspectSummaryV2TranslatableSurface>;
+  sourceLocale: Locale;
+  targetLocale: Locale;
+}): SummaryV2SurfaceAuthorityState {
+  if (!options.surface.source.trim() && !options.surface.localized.trim()) {
+    return 'target_native_authoritative';
+  }
+  if (!/[\p{L}\p{M}]/u.test(options.surface.source)) return 'uncertain_rejected';
+  const detected = detectDominantLocale(options.surface.source);
+  const sourceCompatible = options.sourceLocale === options.targetLocale;
+  const detectedForeign = detected.confidence === 'high'
+    && Boolean(detected.locale)
+    && !localesAreDetectionCompatible(detected.locale, options.targetLocale);
+  if (detectedForeign) return 'foreign_localization_required';
+  const detectedTarget = detected.confidence === 'high'
+    && Boolean(detected.locale)
+    && detected.locale === options.targetLocale;
+  if (detectedTarget && options.surface.targetLocaleNativeSurfacePassed) {
+    return 'target_native_authoritative';
+  }
   if (
-    options.source !== 'same_locale_authoritative'
-    || !options.sourceEntry
-    || options.sourceEntry.sourceLocale !== options.manifest.locale
-    || options.responseEntry.localizedRoleTitle.trim() !== options.sourceEntry.role.trim()
-  ) return false;
-  const sourceFacts = new Map(options.sourceEntry.facts.map((fact) => [fact.factId, fact.bulletText.trim()]));
-  return options.responseEntry.facts.every((fact) => (
-    fact.localizedText.trim() === sourceFacts.get(fact.factId)
-  ));
+    options.surface.detectedScript !== 'unknown'
+    && !scriptIsNativeForLocale(options.surface.detectedScript, options.targetLocale)
+  ) return 'foreign_localization_required';
+  if (options.surface.targetLocaleNativeSurfacePassed && sourceCompatible) {
+    return 'target_native_authoritative';
+  }
+  if (sourceCompatible && scriptIsNativeForLocale(
+    options.surface.detectedScript,
+    options.targetLocale,
+  )) return 'target_native_authoritative';
+  if (!sourceCompatible) return 'foreign_localization_required';
+  if (options.surface.targetLocaleNativeSurfacePassed) return 'target_native_authoritative';
+  return 'uncertain_rejected';
+}
+
+/** Surface-level authority: employers/IDs are protected; roles and duties are linguistic. */
+export function classifySummaryV2EntrySurfaceAuthority(options: {
+  manifest: SummaryV2SelectionManifest;
+  entry: SummaryV2EntryOwned;
+}): SummaryV2EntrySurfaceAuthority {
+  const required = [...options.manifest.requiredCurrentFacts, ...options.manifest.requiredPriorFacts]
+    .filter((fact) => fact.entryId === options.entry.entryId);
+  const role = inspectSummaryV2TranslatableSurface({
+    localizedText: options.entry.role,
+    sourceText: options.entry.role,
+    employer: options.entry.employer,
+    targetLocale: options.manifest.locale,
+  });
+  const roleAuthority = decideSurfaceAuthority({
+    surface: role,
+    sourceLocale: options.entry.roleSourceLocale || options.entry.sourceLocale,
+    targetLocale: options.manifest.locale,
+  });
+  const facts = required.map((fact) => {
+    const surface = inspectSummaryV2TranslatableSurface({
+      localizedText: fact.bulletText,
+      sourceText: fact.bulletText,
+      employer: options.entry.employer,
+      targetLocale: options.manifest.locale,
+      protectSourceProperNouns: true,
+    });
+    return {
+      factId: fact.factId,
+      authority: decideSurfaceAuthority({
+        surface,
+        sourceLocale: fact.sourceLocale,
+        targetLocale: options.manifest.locale,
+      }),
+    };
+  });
+  return {
+    entryId: options.entry.entryId,
+    roleTitleTargetNative: roleAuthority === 'target_native_authoritative',
+    roleTitleAuthority: roleAuthority,
+    targetNativeFactIds: facts.filter((fact) => fact.authority === 'target_native_authoritative').map((fact) => fact.factId),
+    localizationRequiredFactIds: facts.filter((fact) => fact.authority === 'foreign_localization_required').map((fact) => fact.factId),
+    uncertainFactIds: facts.filter((fact) => fact.authority === 'uncertain_rejected').map((fact) => fact.factId),
+    allTranslatableSurfacesTargetNative: roleAuthority === 'target_native_authoritative'
+      && facts.every((fact) => fact.authority === 'target_native_authoritative'),
+  };
+}
+
+/**
+ * Immutable, source-ID-bound transport authority. Aggregate entry locale is
+ * deliberately recorded for diagnostics only; it never decides a sibling
+ * role/fact surface.
+ */
+export function buildSummaryV2EntrySurfaceTransportPlan(options: {
+  manifest: SummaryV2SelectionManifest;
+  entry: SummaryV2EntryOwned;
+}): SummaryV2EntrySurfaceTransportPlan {
+  const authority = classifySummaryV2EntrySurfaceAuthority(options);
+  const required = [...options.manifest.requiredCurrentFacts, ...options.manifest.requiredPriorFacts]
+    .filter((fact) => fact.entryId === options.entry.entryId);
+  const roleAuthority = authority.roleTitleAuthority;
+  const facts = required.map((fact) => ({
+    factId: fact.factId,
+    sourceHash: fact.sourceFactHash,
+    authority: (authority.targetNativeFactIds.includes(fact.factId)
+      ? 'target_native_authoritative'
+      : authority.localizationRequiredFactIds.includes(fact.factId)
+        ? 'foreign_localization_required'
+        : 'uncertain_rejected') as SummaryV2SurfaceAuthorityState,
+  }));
+  const roleSurfaceCount = roleAuthority === 'foreign_localization_required' ? 1 : 0;
+  const factSurfaceCount = facts.filter((fact) => fact.authority === 'foreign_localization_required').length;
+  return {
+    revision: 'summary-v2-surface-transport-plan-420-v1',
+    entryId: options.entry.entryId,
+    entryHash: normalizedHash(options.entry.entryId),
+    aggregateSourceLocale: options.entry.sourceLocale,
+    targetLocale: options.manifest.locale,
+    role: { sourceHash: normalizedHash(options.entry.role), authority: roleAuthority },
+    facts,
+    roleSurfaceCount,
+    factSurfaceCount,
+    bypassedSurfaceCount: 1 + facts.length - roleSurfaceCount - factSurfaceCount,
+    protectedSurfaceCount: options.entry.employer.trim() ? 1 : 0,
+  };
 }
 
 export function validateSummaryV2LocalizationResponse(
@@ -260,26 +449,26 @@ export function validateSummaryV2LocalizationResponse(
   let wrongLocaleEvidence: SummaryV2LocalizationFailureEvidence | null = null;
   const protectedEntityTokenClasses = new Set<SummaryV2ProtectedEntityTokenClass>();
   const sourceEntriesById = new Map(expectedEntries.map((entry) => [entry.entryId, entry]));
+  const authorityByEntryId = new Map(expectedEntries.map((entry) => [
+    entry.entryId,
+    buildSummaryV2EntrySurfaceTransportPlan({ manifest, entry }),
+  ]));
 
   for (const entry of actualEntries) {
     const sourceEntry = sourceEntriesById.get(entry.entryId);
-    const sameLocaleAuthoritative = sameLocaleEntryIsAuthoritative({
-      manifest,
-      responseEntry: entry,
-      sourceEntry,
-      source: options.sourceByEntryId?.[entry.entryId],
-    });
     const sourceFactsById = new Map((sourceEntry?.facts || []).map((fact) => [fact.factId, fact]));
     const surfaces = [
       {
         text: entry.localizedRoleTitle,
         sourceText: sourceEntry?.role || '',
+        sourceLocale: sourceEntry?.roleSourceLocale || sourceEntry?.sourceLocale || null,
         factId: null,
         surfaceKind: 'localized_role_title' as const,
       },
       ...(entry.facts || []).map((fact) => ({
         text: fact.localizedText,
         sourceText: sourceFactsById.get(fact.factId)?.bulletText || '',
+        sourceLocale: sourceFactsById.get(fact.factId)?.sourceLocale || null,
         factId: fact.factId,
         surfaceKind: 'localized_fact' as const,
       })),
@@ -300,19 +489,14 @@ export function validateSummaryV2LocalizationResponse(
         };
       }
       if (UNSUPPORTED_MATERIAL_RE.test(text)) unsupportedMaterial = true;
-      if (sameLocaleAuthoritative) continue;
-      const translatable = translatableSurface({
+      const translatable = inspectSummaryV2TranslatableSurface({
         localizedText: text,
         sourceText: surface.sourceText,
         employer: sourceEntry?.employer || '',
+        targetLocale: manifest.locale,
+        protectSourceProperNouns: surface.surfaceKind === 'localized_fact',
       });
       translatable.protectedClasses.forEach((tokenClass) => protectedEntityTokenClasses.add(tokenClass));
-      if (
-        sourceEntry
-        && !localesAreDetectionCompatible(sourceEntry.sourceLocale, manifest.locale)
-        && text.toLocaleLowerCase() === surface.sourceText.trim().toLocaleLowerCase()
-        && translatable.source.length > 0
-      ) sourceLanguageLeakageDetected = true;
       if (!translatable.localized && translatable.source) {
         surfaceComplete = false;
         incompleteEvidence ||= {
@@ -329,10 +513,28 @@ export function validateSummaryV2LocalizationResponse(
       const purity = validateAiUnitLocalePurity(translatable.localized, manifest.locale, {
         kind: 'summary_sentence', requireUnits: translatable.source.length > 0,
       });
-      targetLocalePurityPassed = targetLocalePurityPassed && purity.targetLocalePurityPassed;
+      const planned = authorityByEntryId.get(entry.entryId);
+      const sourceLineage = surface.surfaceKind === 'localized_role_title'
+        ? options.roleSourceByEntryId?.[entry.entryId]
+        : options.factSourceByFactId?.[surface.factId || ''];
+      const plannedAuthority = surface.surfaceKind === 'localized_role_title'
+        ? planned?.role.authority
+        : planned?.facts.find((fact) => fact.factId === surface.factId)?.authority;
+      if (
+        text.toLocaleLowerCase() === surface.sourceText.trim().toLocaleLowerCase()
+        && translatable.source.length > 0
+        && plannedAuthority === 'foreign_localization_required'
+        && !localesAreDetectionCompatible(surface.sourceLocale, manifest.locale)
+      ) sourceLanguageLeakageDetected = true;
+      const exactTargetNativeAuthority = text === surface.sourceText.trim()
+        && (sourceLineage === 'same_locale_authoritative'
+          || (!sourceLineage && plannedAuthority === 'target_native_authoritative'))
+        && scriptIsNativeForLocale(translatable.detectedScript, manifest.locale);
+      targetLocalePurityPassed = targetLocalePurityPassed
+        && (exactTargetNativeAuthority || purity.targetLocalePurityPassed);
       targetScriptPurityPassed = targetScriptPurityPassed && purity.wrongScriptUnitCount === 0;
       sourceLanguageLeakageDetected = sourceLanguageLeakageDetected
-        || purity.sourceLanguageLeakageDetected;
+        || (!exactTargetNativeAuthority && purity.sourceLanguageLeakageDetected);
       const scriptHit = purity.units.find((hit) => hit.wrongScript);
       if (scriptHit) {
         wrongScriptEvidence ||= {
@@ -346,7 +548,9 @@ export function validateSummaryV2LocalizationResponse(
           protectedEntityTokenClasses: translatable.protectedClasses,
         };
       }
-      const localeHit = purity.units.find((hit) => hit.wrongLocale || hit.mixedLanguage);
+      const localeHit = exactTargetNativeAuthority
+        ? undefined
+        : purity.units.find((hit) => hit.wrongLocale || hit.mixedLanguage);
       if (localeHit) {
         wrongLocaleEvidence ||= {
           entryId: entry.entryId,
@@ -410,12 +614,16 @@ export function acceptSummaryV2LocalizationResponse(options: {
   response: SummaryV2LocalizationProviderResponse;
   source: SummaryV2LocalizationSource;
   sourceByEntryId?: Partial<Record<string, SummaryV2LocalizationSource>>;
+  roleSourceByEntryId?: Partial<Record<string, SummaryV2LocalizationSource>>;
+  factSourceByFactId?: Partial<Record<string, SummaryV2LocalizationSource>>;
 }): { manifest: SummaryV2LocalizedManifest | null; validation: SummaryV2LocalizationValidation } {
   const sourceByEntryId = options.sourceByEntryId || Object.fromEntries(
     selectedEntries(options.manifest).map((entry) => [entry.entryId, options.source]),
   );
   const validation = validateSummaryV2LocalizationResponse(options.manifest, options.response, {
     sourceByEntryId,
+    roleSourceByEntryId: options.roleSourceByEntryId,
+    factSourceByFactId: options.factSourceByFactId,
   });
   if (!validation.ok) return { manifest: null, validation };
   const sourceEntries = new Map(selectedEntries(options.manifest).map((entry) => [entry.entryId, entry]));
@@ -427,6 +635,11 @@ export function acceptSummaryV2LocalizationResponse(options: {
       sourceLocale: sourceEntry.sourceLocale,
       localizedRoleTitle: entry.localizedRoleTitle.trim(),
       localizedRoleTitleHash: normalizedHash(entry.localizedRoleTitle),
+      sourceRoleTitleHash: normalizedHash(sourceEntry.role),
+      localizedRoleTitleLocalizationSource: options.roleSourceByEntryId?.[sourceEntry.entryId]
+        || sourceByEntryId[sourceEntry.entryId]
+        || options.source,
+      localizedRoleTitleValidationResult: 'passed' as const,
       employer: sourceEntry.employer,
       employmentState: sourceEntry.employmentState,
       facts: entry.facts.map((fact) => {
@@ -438,7 +651,9 @@ export function acceptSummaryV2LocalizationResponse(options: {
           sourceTextHash: sourceFact.sourceFactHash,
           localizedText: fact.localizedText.trim(),
           localizedTextHash: normalizedHash(fact.localizedText),
-          localizationSource: sourceByEntryId[sourceEntry.entryId] || options.source,
+          localizationSource: options.factSourceByFactId?.[sourceFact.factId]
+            || sourceByEntryId[sourceEntry.entryId]
+            || options.source,
           localizationValidationResult: 'passed' as const,
         };
       }),
@@ -468,9 +683,10 @@ export function buildSameLocaleLocalizedManifest(
   manifest: SummaryV2SelectionManifest,
 ): SummaryV2LocalizedManifest | null {
   const entries = selectedEntries(manifest);
-  // Detection compatibility (for example sr/hr) is not localization authority:
-  // only an exact source/target locale match may bypass structured localization.
-  if (entries.some((entry) => entry.sourceLocale !== manifest.locale)) {
+  // Whole-entry bypass is an optimization only after every translatable
+  // surface has independently established target-native authority.
+  if (entries.some((entry) => !classifySummaryV2EntrySurfaceAuthority({ manifest, entry })
+    .allTranslatableSurfacesTargetNative)) {
     return null;
   }
   const response: SummaryV2LocalizationProviderResponse = {
@@ -484,9 +700,19 @@ export function buildSameLocaleLocalizedManifest(
       })),
     })),
   };
-  return acceptSummaryV2LocalizationResponse({
-    manifest, response, source: 'same_locale_authoritative',
-  }).manifest;
+  const accepted = acceptSummaryV2LocalizationResponse({
+    manifest,
+    response,
+    source: 'same_locale_authoritative',
+    roleSourceByEntryId: Object.fromEntries(entries.map((entry) => [
+      entry.entryId, 'same_locale_authoritative' as const,
+    ])),
+    factSourceByFactId: Object.fromEntries([
+      ...manifest.requiredCurrentFacts,
+      ...manifest.requiredPriorFacts,
+    ].map((fact) => [fact.factId, 'same_locale_authoritative' as const])),
+  });
+  return accepted.manifest;
 }
 
 export function projectLocalizedSummaryV2Manifest(options: {
@@ -509,10 +735,20 @@ export function projectLocalizedSummaryV2Manifest(options: {
         ...fact,
         bulletText: localizedFact.localizedText,
         tokenStems: dutyTokenStems(localizedFact.localizedText),
+        sourcePrintFactPresent: fact.sourcePrintFactPresent
+          ?? detectPrintMediumClaim(fact.bulletText, fact.sourceLocale),
+        sourceMaterialClaimCategories: fact.sourceMaterialClaimCategories
+          ?? detectSummaryV2MaterialClaimCategories(fact.bulletText, fact.sourceLocale),
       };
     });
     if (facts.some((fact) => fact === null)) return null;
-    return { ...entry, role: localized.localizedRoleTitle, facts: facts as SummaryV2EntryOwned['facts'] };
+    return {
+      ...entry,
+      role: localized.localizedRoleTitle,
+      roleTitleLocalizationSource: localized.localizedRoleTitleLocalizationSource,
+      sourceRoleTitleHash: localized.sourceRoleTitleHash,
+      facts: facts as SummaryV2EntryOwned['facts'],
+    };
   };
   const current = options.manifest.current ? projectEntry(options.manifest.current) : null;
   const priors = options.manifest.priors.map(projectEntry);

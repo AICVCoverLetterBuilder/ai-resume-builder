@@ -281,6 +281,24 @@ export type SummaryAiDiagnosticTrace = {
   sameLocaleBypassUsedByEntryHash: Record<string, boolean>;
   localizedManifestCacheHitByEntryHash: Record<string, boolean>;
   localizationLineageByEntryHash?: Record<string, string>;
+  localizationSurfaceTransportPlans?: Array<{
+    entryHash: string;
+    aggregateSourceLocale: string;
+    targetLocale: string;
+    roleAuthority: string;
+    factAuthorityByFactHash: Record<string, string>;
+    plannedRoleSurfaceCount: number;
+    plannedFactSurfaceCount: number;
+    actualRoleSurfaceCount: number;
+    actualFactSurfaceCount: number;
+    bypassedSurfaceCount: number;
+    protectedSurfaceCount: number;
+    roleLineage: string | null;
+    factLineageByFactHash: Record<string, string>;
+    entryIdParityPassed: boolean;
+    factIdParityPassed: boolean;
+    acceptedLocale: string | null;
+  }>;
   localizationFailureEntryIdHash?: string | null;
   localizationFailureFactIdHash?: string | null;
   localizationFailureSurfaceKind?: string | null;
@@ -428,6 +446,16 @@ export type SummaryAiDiagnosticTrace = {
   currentRoleTitleSource: string | null;
   currentRoleTitleEntryIdHash: string | null;
   currentRoleTitleMatchesStructuredRole: boolean | null;
+  roleTitleSurfaceEvidence?: Array<{
+    owningEntryHash: string;
+    detectedLocale: string | null;
+    detectedScript: string;
+    classification: 'translatable';
+    targetLocaleNativeSurfacePassed: boolean;
+    localizedTitleHash: string;
+    sourceRoleTitleHash: string;
+    provenance: string;
+  }> | null;
   currentRoleOmittedDetected: boolean | null;
   currentSlotForeignFactCount: number | null;
   priorSlotForeignFactCount: number | null;
@@ -496,11 +524,32 @@ export type SummaryAiDiagnosticTrace = {
   currentEntryMaterialKeys: string[] | null;
   priorEntryMaterialKeys: string[] | null;
   finalSentenceHashes: string[] | null;
+  finalUnitHashes: string[] | null;
   finalSentenceRoleSlots: string[] | null;
+  unitOwnershipValidationPassed: boolean | null;
+  unitOwnershipFailureReason: string | null;
+  factUnitOwnershipValidationPassed: boolean | null;
+  finalUnitOwnershipEvidence: Array<{
+    unitHash: string;
+    roleSlot: 'duration' | 'current_role' | 'prior_role';
+    owningEntryHash: string | null;
+    priorOrdinal: number | null;
+  }> | null;
+  factUnitOwnershipEvidence: Array<{
+    factHash: string;
+    owningEntryHash: string;
+    semanticRole: 'current_fact' | 'prior_fact';
+    matchedUnitHashes: string[];
+    matchedUnitOwnerHashes: string[];
+    matchedUnitRoleSlots: Array<'duration' | 'current_role' | 'prior_role'>;
+    ownershipPassed: boolean;
+    covered: boolean;
+  }> | null;
   flattenedFactArrayUsed: boolean | null;
   previousSummaryTextUsedByDeterministicFallback: boolean | null;
   providerTextUsedByDeterministicFallback: boolean | null;
   perspectiveMode: string | null;
+  localeVerbMorphologyPassed?: boolean | null;
   sourcePerspectiveMode: string | null;
   providerPerspectiveMode: string | null;
   finalPerspectiveMode: string | null;
@@ -614,6 +663,7 @@ export type SummaryAiDiagnosticTrace = {
   providerUnsupportedDesignMediumCount?: number | null;
   providerUnsupportedDesignMediumKinds?: string[] | null;
   providerPrintClaimDetected?: boolean | null;
+  finalPrintClaimDetected?: boolean | null;
   providerBrandingClaimDetected?: boolean | null;
   providerMarketingClaimDetected?: boolean | null;
   deterministicUnsupportedDesignMediumCount?: number | null;
@@ -806,6 +856,7 @@ export class SummaryAiDiagnosticSession {
       sameLocaleBypassUsedByEntryHash: {},
       localizedManifestCacheHitByEntryHash: {},
       localizationLineageByEntryHash: {},
+      localizationSurfaceTransportPlans: [],
       localizationFailureEntryIdHash: null,
       localizationFailureFactIdHash: null,
       localizationFailureSurfaceKind: null,
@@ -943,7 +994,13 @@ export class SummaryAiDiagnosticSession {
       currentEntryMaterialKeys: null,
       priorEntryMaterialKeys: null,
       finalSentenceHashes: null,
+      finalUnitHashes: null,
       finalSentenceRoleSlots: null,
+      unitOwnershipValidationPassed: null,
+      unitOwnershipFailureReason: null,
+      factUnitOwnershipValidationPassed: null,
+      finalUnitOwnershipEvidence: null,
+      factUnitOwnershipEvidence: null,
       flattenedFactArrayUsed: null,
       previousSummaryTextUsedByDeterministicFallback: null,
       providerTextUsedByDeterministicFallback: null,
@@ -1058,7 +1115,22 @@ export class SummaryAiDiagnosticSession {
       detectedConfidence[h] = detected.confidence;
       effectiveLocales[h] = resolved.sourceLocale;
       effectiveAuthorities[h] = resolved.resolvedFrom;
-      localizationRequired[h] = resolved.sourceLocale !== this.draft.requestedLocale;
+      const targetLocale = this.draft.requestedLocale as Locale;
+      const declaredRoleRaw = e.positionSourceLocale || e.generatedLocale || cv.contentLocale || null;
+      const declaredRole = SUMMARY_V2_SUPPORTED_LOCALES.includes(declaredRoleRaw as Locale)
+        ? declaredRoleRaw as Locale : null;
+      const declaredFactRaw = e.descriptionSourceLocale || e.generatedLocale || cv.contentLocale || null;
+      const declaredFact = SUMMARY_V2_SUPPORTED_LOCALES.includes(declaredFactRaw as Locale)
+        ? declaredFactRaw as Locale : null;
+      const surfaceLocales = [
+        resolveSourceLocaleForText({
+          text: e.position || '', declaredLocale: declaredRole, fallbackLocale: targetLocale,
+        }).sourceLocale,
+        ...desc.split(/\n+/u).filter(Boolean).map((surface) => resolveSourceLocaleForText({
+          text: surface, declaredLocale: declaredFact, fallbackLocale: targetLocale,
+        }).sourceLocale),
+      ];
+      localizationRequired[h] = surfaceLocales.some((surfaceLocale) => surfaceLocale !== targetLocale);
       states[h] = e.isPresent ? 'current' : 'completed';
     }
     const summary = (liveSummary || '').trim();
@@ -1407,6 +1479,14 @@ export class SummaryAiDiagnosticSession {
       coveredCurrentDutyFactCount: diag.coveredCurrentDutyFactCount ?? null,
       missingCurrentDutyFactCount: diag.missingCurrentDutyFactCount ?? null,
       missingCurrentDutyFactIdHashes: diag.missingCurrentDutyFactIdHashes ?? null,
+      visibleCurrentDutyFactMatchCountsByFactHash:
+        finalCandidateSelected
+          ? (diag.visibleCurrentDutyFactMatchCountsByFactHash ?? null)
+          : null,
+      visibleCurrentDutyFactMatchedUnitHashesByFactHash:
+        finalCandidateSelected
+          ? (diag.visibleCurrentDutyFactMatchedUnitHashesByFactHash ?? null)
+          : null,
       materialCategoryCoverageUsedForFinalAcceptance:
         diag.materialCategoryCoverageUsedForFinalAcceptance ?? null,
       germanControlledCaseGrammarPassed: diag.germanControlledCaseGrammarPassed ?? null,
@@ -1438,6 +1518,8 @@ export class SummaryAiDiagnosticSession {
       currentRoleTitleSource: diag.currentRoleTitleSource ?? null,
       currentRoleTitleEntryIdHash: diag.currentRoleTitleEntryIdHash ?? null,
       currentRoleTitleMatchesStructuredRole: diag.currentRoleTitleMatchesStructuredRole ?? null,
+      roleTitleSurfaceEvidence: diag.roleTitleSurfaceEvidence ?? null,
+      localeVerbMorphologyPassed: diag.localeVerbMorphologyPassed ?? null,
       currentRoleOmittedDetected: diag.currentRoleOmittedDetected ?? null,
       currentSlotForeignFactCount: diag.currentSlotForeignFactCount ?? null,
       priorSlotForeignFactCount: diag.priorSlotForeignFactCount ?? null,
@@ -1526,6 +1608,21 @@ export class SummaryAiDiagnosticSession {
         ? (resolvedFinalHashes.length > 0
           ? resolvedFinalHashes
           : (diag.finalSentenceHashes ?? []))
+        : [],
+      finalUnitHashes: finalCandidateSelected
+        ? (resolvedFinalHashes.length > 0
+          ? resolvedFinalHashes
+          : (diag.finalUnitHashes ?? []))
+        : [],
+      unitOwnershipValidationPassed: diag.unitOwnershipValidationPassed ?? null,
+      unitOwnershipFailureReason: diag.unitOwnershipFailureReason ?? null,
+      factUnitOwnershipValidationPassed:
+        diag.factUnitOwnershipValidationPassed ?? null,
+      finalUnitOwnershipEvidence: finalCandidateSelected
+        ? (diag.finalUnitOwnershipEvidence ?? null)
+        : [],
+      factUnitOwnershipEvidence: finalCandidateSelected
+        ? (diag.factUnitOwnershipEvidence ?? null)
         : [],
       finalSentenceRoleSlots: finalCandidateSelected
         ? (resolvedFinalRoleSlots.length > 0
@@ -1763,6 +1860,7 @@ export class SummaryAiDiagnosticSession {
       providerUnsupportedDesignMediumCount: diag.providerUnsupportedDesignMediumCount ?? null,
       providerUnsupportedDesignMediumKinds: diag.providerUnsupportedDesignMediumKinds ?? null,
       providerPrintClaimDetected: diag.providerPrintClaimDetected ?? null,
+      finalPrintClaimDetected: diag.finalPrintClaimDetected ?? null,
       providerBrandingClaimDetected: diag.providerBrandingClaimDetected ?? null,
       providerMarketingClaimDetected: diag.providerMarketingClaimDetected ?? null,
       // When final is deterministic, final medium fields ARE the deterministic record.
@@ -2285,7 +2383,7 @@ export class SummaryAiDiagnosticSession {
           unsupportedDesignMediumKinds: dedupeStableStrings(
             diag.finalUnsupportedDesignMediumKinds ?? [],
           ),
-          printClaimDetected: false,
+          printClaimDetected: diag.finalPrintClaimDetected ?? false,
           hindiNominalExperienceFragmentDetected:
             diag.hindiNominalExperienceFragmentDetected ?? null,
           hindiSentenceHasFiniteCopulaOrVerb: diag.hindiSentenceHasFiniteCopulaOrVerb ?? null,
@@ -2366,7 +2464,7 @@ export class SummaryAiDiagnosticSession {
           unsupportedDesignMediumKinds: finalSelected
             ? dedupeStableStrings(diag.finalUnsupportedDesignMediumKinds ?? [])
             : [],
-          printClaimDetected: false,
+          printClaimDetected: finalSelected ? (diag.finalPrintClaimDetected ?? false) : false,
           hindiNominalExperienceFragmentDetected: finalSelected
             ? (diag.hindiNominalExperienceFragmentDetected ?? null)
             : null,
@@ -2630,8 +2728,10 @@ export class SummaryAiDiagnosticSession {
         const matchUnits: Record<string, string[]> = {};
         for (const id of requiredIdsDe) {
           const key = String(id);
-          matchCounts[key] = matchesFinal ? 1 : 0;
-          matchUnits[key] = matchesFinal && visibleHash ? [visibleHash] : [];
+          const finalMatchedUnits =
+            this.draft.visibleCurrentDutyFactMatchedUnitHashesByFactHash?.[key] || [];
+          matchCounts[key] = matchesFinal ? finalMatchedUnits.length : 0;
+          matchUnits[key] = matchesFinal ? [...finalMatchedUnits] : [];
         }
         this.patch({
           visibleCurrentDutyRequiredFactParityPassed: visibleDutyOk && matchesFinal,
@@ -2773,8 +2873,10 @@ export class SummaryAiDiagnosticSession {
         const matchUnits: Record<string, string[]> = {};
         for (const id of requiredIds) {
           const key = String(id);
-          matchCounts[key] = matchesFinal ? 1 : 0;
-          matchUnits[key] = matchesFinal ? [visibleNormHash] : [];
+          const finalMatchedUnits =
+            this.draft.visibleCurrentDutyFactMatchedUnitHashesByFactHash?.[key] || [];
+          matchCounts[key] = matchesFinal ? finalMatchedUnits.length : 0;
+          matchUnits[key] = matchesFinal ? [...finalMatchedUnits] : [];
         }
         this.patch({
           visibleCurrentDutyRequiredFactParityPassed: visibleDutyOk,
@@ -2934,7 +3036,9 @@ export class SummaryAiDiagnosticSession {
       for (const id of requiredIds) {
         const key = String(id);
         matchCounts[key] = matchesFinal ? 1 : 0;
-        matchUnits[key] = matchesFinal ? [visibleNormHash] : [];
+        const finalMatchedUnits = this.draft.visibleCurrentDutyFactMatchedUnitHashesByFactHash?.[key]
+          || [];
+        matchUnits[key] = matchesFinal ? [...finalMatchedUnits] : [];
       }
       this.patch({
         visibleCurrentDutyRequiredFactParityPassed: visibleDutyOk,
@@ -3342,6 +3446,7 @@ export class SummaryAiDiagnosticSession {
     reason: string | null;
     diagnosticInvariantCheckPassed: boolean;
     diagnosticCompletenessPassed: boolean;
+    privacyCheckPassed: boolean;
   } {
     void SUMMARY_INVARIANT_PREAPPLY_GATE_325_REVISION;
     // Provisional success for decision-field completeness. Usage is projected
@@ -3404,14 +3509,18 @@ export class SummaryAiDiagnosticSession {
       completenessPassed = completeness.passed;
       nullDecision.push(...completeness.nullRequiredDiagnosticFields);
     }
+    const privacyViolations = assertCvAiDiagnosticPrivacy(withInvariants);
+    const privacyCheckPassed = privacyViolations.length === 0;
     this.patch({
       diagnosticInvariantCheckPassed: invariants.passed,
       diagnosticInvariantFailureCount: invariants.failures.length,
       diagnosticInvariantFailures: invariants.failures,
       diagnosticCompletenessPassed: completenessPassed,
       nullRequiredDiagnosticFields: nullDecision,
+      privacyCheckPassed,
+      diagnosticPrivacyViolations: privacyViolations,
     });
-    const passed = invariants.passed && completenessPassed;
+    const passed = invariants.passed && completenessPassed && privacyCheckPassed;
     this.stage('diagnostic_preapply_gate', passed ? 'ok' : 'fail');
     if (!passed) {
       this.patch({
@@ -3420,7 +3529,9 @@ export class SummaryAiDiagnosticSession {
         visibleApplySucceeded: false,
         finalTypedFailureReason: !invariants.passed
           ? 'diagnostic_invariant_failed'
-          : 'diagnostic_completeness_failed',
+          : !completenessPassed
+            ? 'diagnostic_completeness_failed'
+            : 'diagnostic_privacy_failed',
         rejectionStage: 'diagnostic_preapply_gate',
       });
     }
@@ -3431,6 +3542,7 @@ export class SummaryAiDiagnosticSession {
         : (!invariants.passed ? 'diagnostic_invariant_failed' : 'diagnostic_completeness_failed'),
       diagnosticInvariantCheckPassed: invariants.passed,
       diagnosticCompletenessPassed: completenessPassed,
+      privacyCheckPassed,
     };
   }
 

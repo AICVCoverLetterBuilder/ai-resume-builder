@@ -402,6 +402,7 @@ function recordSummaryLocalizationDiagnostics(
     sameLocaleBypassUsedByEntryHash,
     localizedManifestCacheHitByEntryHash,
     localizationLineageByEntryHash,
+    localizationSurfaceTransportPlans: localization.surfaceTransportPlans,
     localizationFailureEntryIdHash: failureEvidence
       ? fingerprintText(failureEvidence.entryId)
       : null,
