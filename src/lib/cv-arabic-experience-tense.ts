@@ -71,6 +71,49 @@ function leadingArabicPredicateTokens(text: string): string[] {
     .filter(Boolean);
 }
 
+function stripArabicMarks(token: string): string {
+  return String(token || '').normalize('NFKC').replace(/\p{M}/gu, '');
+}
+
+type GenericArabicPredicateMorphology = {
+  presentFemale: string[];
+  presentMale: string[];
+  pastFemale: string[];
+  pastMale: string[];
+};
+
+/**
+ * Infer tense/person only from repeated sentence-initial predicate morphology.
+ * This deliberately avoids an occupation verb catalogue: optional Arabic
+ * marks do not change the classification, while explicit تُ remains a 1sg
+ * signal before this helper is consulted.
+ */
+function classifyGenericArabicPredicateMorphology(
+  leadingTokens: string[],
+): GenericArabicPredicateMorphology {
+  const normalized = leadingTokens.map((token) => ({
+    raw: token,
+    bare: stripArabicMarks(token),
+  }));
+  const repeated = (items: string[]) => items.length >= 2 ? items : [];
+  const presentFemale = repeated(normalized
+    .filter(({ bare }) => /^ت(?!ل).{2,}$/u.test(bare) && !bare.endsWith('ت'))
+    .map(({ raw }) => raw));
+  const presentMale = repeated(normalized
+    .filter(({ bare }) => /^ي(?!ل).{2,}$/u.test(bare))
+    .map(({ raw }) => raw));
+  const pastFemale = repeated(normalized
+    .filter(({ bare }) => bare.length >= 3 && bare.endsWith('ت'))
+    .map(({ raw }) => raw));
+  // A bare 3sg masculine perfect has no universal suffix. Repeated predicate
+  // position plus the absence of imperfect prefixes is the portable evidence.
+  // Known irregular ت-/أ-initial perfect forms remain covered by the table.
+  const pastMale = repeated(normalized
+    .filter(({ bare }) => bare.length >= 3 && !/^[يتأ]/u.test(bare) && !bare.endsWith('ت'))
+    .map(({ raw }) => raw));
+  return { presentFemale, presentMale, pastFemale, pastMale };
+}
+
 function regexpMatchesToken(pattern: RegExp, token: string): boolean {
   pattern.lastIndex = 0;
   const matched = pattern.test(token);
@@ -122,6 +165,7 @@ export function detectArabicExperiencePersonMode(
   const leading = leadingArabicPredicateTokens(raw)
     .map((token) => token.startsWith('و') ? token.slice(1) : token)
     .filter(Boolean);
+  const morphology = classifyGenericArabicPredicateMorphology(leading);
   const knownFirstPresent = tokens.filter(isKnownFirstPersonPresentToken).length;
   const genericFirstPresent = leading.filter((token) => (
     /^أ(?!ل)[\p{Script=Arabic}\p{M}]{2,}$/u.test(token)
@@ -133,7 +177,11 @@ export function detectArabicExperiencePersonMode(
 
   if (tokens.includes('هي') || tokens.includes('هو')) return 'third_singular';
   if (tokens.some(isUnambiguousThirdPersonFemalePastToken)) return 'third_singular';
-  if (options?.isPresent === false && tokens.some(isKnownThirdPersonMalePastToken)) {
+  if (options?.isPresent === false && (
+    tokens.some(isKnownThirdPersonMalePastToken)
+    || morphology.pastFemale.length > 0
+    || morphology.pastMale.length > 0
+  )) {
     return 'third_singular';
   }
 
@@ -272,41 +320,43 @@ export function validateArabicExperienceEmploymentTense(
   const leading = leadingArabicPredicateTokens(raw)
     .map((token) => token.startsWith('و') ? token.slice(1) : token)
     .filter(Boolean);
+  const morphology = classifyGenericArabicPredicateMorphology(leading);
   // Arbitrary current-role duties use the same imperfect-person prefixes as
   // the curated realization table. Require repeated leading-predicate
   // evidence before treating an unknown stem as tense/gender proof, avoiding
   // a single Arabic noun beginning with ت/ي from becoming a verb claim.
-  const genericPresentFemale = isPresent
-    ? leading.filter((token) => /^ت(?!ل)[\p{Script=Arabic}\p{M}]{2,}$/u.test(token))
-    : [];
-  const genericPresentMale = isPresent
-    ? leading.filter((token) => /^ي(?!ل)[\p{Script=Arabic}\p{M}]{2,}$/u.test(token))
-    : [];
-  const provenGenericPresentFemale = genericPresentFemale.length >= 2
-    ? genericPresentFemale
-    : [];
-  const provenGenericPresentMale = genericPresentMale.length >= 2
-    ? genericPresentMale
-    : [];
+  const provenGenericPresentFemale = morphology.presentFemale;
+  const provenGenericPresentMale = morphology.presentMale;
+  const provenGenericPastFemale = morphology.pastFemale;
+  const provenGenericPastMale = morphology.pastMale;
   const forms = [...new Set([
     ...knownForms,
     ...provenGenericPresentFemale,
     ...provenGenericPresentMale,
+    ...provenGenericPastFemale,
+    ...provenGenericPastMale,
   ])];
 
   const hasPresentFemale = AR_PRESENT_FEMALE.test(raw)
     || provenGenericPresentFemale.length > 0;
   const hasPresentMale = AR_PRESENT_MALE.test(raw)
     || provenGenericPresentMale.length > 0;
-  const hasPastFemale = AR_PAST_FEMALE.test(raw);
-  const hasPastMale = AR_PAST_MALE.test(raw);
+  const hasPastFemale = AR_PAST_FEMALE.test(raw)
+    || provenGenericPastFemale.length > 0;
+  const hasPastMale = AR_PAST_MALE.test(raw)
+    || provenGenericPastMale.length > 0;
   const hasPresent = hasPresentFemale || hasPresentMale;
   const hasPast = hasPastFemale || hasPastMale;
+  const hasExplicitFirstPersonPast = arabicTokens(raw)
+    .some((token) => ARABIC_EXPLICIT_FIRST_PAST_RE.test(token));
 
   let providerTensePassed = true;
   let reason: string | undefined;
 
-  if (isPresent) {
+  if (hasExplicitFirstPersonPast) {
+    providerTensePassed = false;
+    reason = 'arabic_experience_first_person';
+  } else if (isPresent) {
     // Current role: require present forms; reject completed-only past shells.
     if (hasPast && !hasPresent) {
       providerTensePassed = false;

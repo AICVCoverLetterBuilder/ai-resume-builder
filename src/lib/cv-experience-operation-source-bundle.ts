@@ -263,6 +263,8 @@ export function evaluateUneditedRerunEarlyNoOpPreflight(options: {
   visibleSourceAnalysis: ExperienceVisibleSourceAnalysis;
   sourceWasEmpty: boolean;
   raceOrStaleDetected?: boolean;
+  /** True only after the caller ran the target locale's complete safety gates. */
+  independentVisibleValidationPassed?: boolean;
 }): UneditedRerunEarlyNoOpPreflight {
   void EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION;
   void EXPERIENCE_NOOP_DEGRADATION_ORDER_317_REVISION;
@@ -275,10 +277,11 @@ export function evaluateUneditedRerunEarlyNoOpPreflight(options: {
   const isSpanishTarget = String(options.bundle.targetLocale || '')
     .toLowerCase()
     .startsWith('es');
-  // Morphological "already valid" is authoritative for Spanish only.
-  // Other locales only check locale match — never short-circuit them here.
-  if (!isSpanishTarget) {
-    failures.push('early_noop_preflight_spanish_only');
+  // Spanish owns its full morphological proof in visibleSourceAnalysis. Other
+  // locales may enter only after the caller independently proves fact,
+  // predicate, locale/script, tense, perspective, claim, and entry safety.
+  if (!isSpanishTarget && options.independentVisibleValidationPassed !== true) {
+    failures.push('early_noop_preflight_independent_validation_required');
   }
   if (bundle.visibleSourceProvenance !== 'ai_generated_unedited') {
     failures.push('provenance_not_ai_generated_unedited');
@@ -331,6 +334,7 @@ export function evaluateUneditedRerunEarlyNoOpPreflight(options: {
   const passed = unedited
     && !options.sourceWasEmpty
     && failures.length === 0
+    && (isSpanishTarget || options.independentVisibleValidationPassed === true)
     && visibleSourceAnalysis.sourceAlreadyValidForTarget === true;
 
   return Object.freeze({

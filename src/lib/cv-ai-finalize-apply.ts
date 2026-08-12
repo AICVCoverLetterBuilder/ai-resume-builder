@@ -8139,12 +8139,66 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       || cv.contentLocale
       || locale,
   });
+  const independentlyValidatedArabicVisible = (() => {
+    if (locale !== 'ar' || isPresent || !visibleComparisonText || !sourceForCoverage) return null;
+    const factCoverage = validateCrossLocaleSemanticCoverage(
+      sourceForCoverage,
+      visibleComparisonText,
+    );
+    const predicates = scanGenericExperiencePredicates(
+      sourceForCoverage,
+      visibleComparisonText,
+    );
+    const tense = validateArabicExperienceEmploymentTense(visibleComparisonText, {
+      isPresent,
+      gender,
+    });
+    const perspective = validateExperienceCvPerspective(visibleComparisonText, 'ar', {
+      isPresent,
+    });
+    const purity = validateAiUnitLocalePurity(visibleComparisonText, 'ar', {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    });
+    const unsupported = detectExperienceUnsupportedClaimExpansion(
+      sourceForCoverage,
+      visibleComparisonText,
+    );
+    const leakage = validateCrossEntryExperienceLeakage({
+      cv,
+      targetExperienceId: exp?.id || input.experienceId || '',
+      candidate: visibleComparisonText,
+      targetPosition: exp?.position || '',
+    });
+    const ok = factCoverage.ok
+      && predicates.sourceUnitPredicateCoveragePassed
+      && predicates.candidateAddedPredicateCount === 0
+      && tense.finalTensePassed
+      && tense.finalGenderAgreementPassed
+      && perspective.ok
+      && purity.ok
+      && textMatchesRequestedFieldLocale(visibleComparisonText, 'ar', 'experience_bullet')
+      && unsupported.count === 0
+      && leakage.ok;
+    return {
+      ok,
+      factCoverage,
+      predicates,
+      tense,
+      perspective,
+      purity,
+      unsupported,
+      leakage,
+    };
+  })();
   const earlyNoOpPreflight: UneditedRerunEarlyNoOpPreflight =
     evaluateUneditedRerunEarlyNoOpPreflight({
       bundle: sourceBundle,
       visibleSourceAnalysis,
       sourceWasEmpty,
       raceOrStaleDetected: false,
+      independentVisibleValidationPassed:
+        independentlyValidatedArabicVisible?.ok === true,
     });
   let providerNoOpBlockedBySourceDefect = false;
   let providerNoOpEligibleAsFinalFlag = providerNoOpEligibleAsFinal(visibleSourceAnalysis);
@@ -8229,6 +8283,34 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       sourceTenseValidationPassed: visibleSourceAnalysis.sourceTenseValidationPassed,
       expectedEmploymentTense: visibleSourceAnalysis.expectedEmploymentTense,
       sourceDetectedTense: visibleSourceAnalysis.sourceDetectedTense,
+      visibleRequiredFactCount:
+        independentlyValidatedArabicVisible?.factCoverage.requiredCount ?? null,
+      visibleCoveredFactCount:
+        independentlyValidatedArabicVisible?.factCoverage.coveredCount ?? null,
+      sourcePredicateIdentityCount:
+        independentlyValidatedArabicVisible?.predicates.sourcePredicateIdentityCount ?? null,
+      candidatePredicateIdentityCount:
+        independentlyValidatedArabicVisible?.predicates.candidatePredicateIdentityCount ?? null,
+      candidateAddedPredicateCount:
+        independentlyValidatedArabicVisible?.predicates.candidateAddedPredicateCount ?? null,
+      sourceUnitPredicateCoveragePassed:
+        independentlyValidatedArabicVisible?.predicates.sourceUnitPredicateCoveragePassed ?? null,
+      tenseValidationPassed:
+        independentlyValidatedArabicVisible?.tense.finalTensePassed ?? null,
+      finalEmploymentState:
+        independentlyValidatedArabicVisible?.tense.finalEmploymentState ?? null,
+      finalPersonMode:
+        independentlyValidatedArabicVisible?.perspective.finalPersonMode ?? null,
+      perspectiveValidationPassed:
+        independentlyValidatedArabicVisible?.perspective.ok ?? null,
+      targetLocalePurityPassed:
+        independentlyValidatedArabicVisible?.purity.ok ?? null,
+      unsupportedClaimCount:
+        independentlyValidatedArabicVisible?.unsupported.count ?? null,
+      crossEntryLeakageDetected:
+        independentlyValidatedArabicVisible
+          ? !independentlyValidatedArabicVisible.leakage.ok
+          : null,
       semanticNoOpDetected: true,
       semanticNoOpReason: earlyNoOpPreflight.semanticNoOpReason
         || 'unedited_ai_output_already_valid',
@@ -8239,6 +8321,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       degradationKinds: [],
       neutralRestyleDetected: false,
       finalDecisionKind: 'semantic_noop',
+      canonicalExperienceDecisionAllowsApply: false,
+      canonicalExperienceDecisionAllowsUsage: false,
       finalOutcomeReason: 'experience_ai_noop',
       finalTypedFailureReason: null,
       typedFailureReason: null,
@@ -8345,6 +8429,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       serverFallbackUsed: false,
       operationMode,
       sourceWasEmpty,
+      selectedExperienceEntryIdHash,
+      operationSnapshotExperienceEntryIdHash:
+        snapshot?.experienceEntryId
+          ? hashExperienceEntryId(snapshot.experienceEntryId)
+          : null,
+      providerTargetEntryIdHash: selectedExperienceEntryIdHash,
+      appliedExperienceEntryIdHash: null,
+      arrayIndexAtRequest,
     };
   }
   const buildVisibleComparisonDiagFields = (
@@ -9716,7 +9808,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           || sourceFactCount > 3
         );
       const genericPredicates = needsGenericPredicates
-        ? scanGenericExperiencePredicates(sourceForCoverage, candidate)
+        ? scanGenericExperiencePredicates(sourceForCoverage, candidate, {
+          // Only the deterministic cross-locale fallback may use the bridge.
+          // Provider and visible-source validation retain strict rediscovery.
+          allowValidatedCrossScriptBridge: crossLocaleAccept,
+        })
         : null;
       if (genericPredicates && !dedicatedWarehousePredicatesApplied) {
         sourcePredicateIdentityCount = genericPredicates.sourcePredicateIdentityCount;

@@ -371,17 +371,16 @@ describe('AAB415 shared Experience Arabic person/perspective contract', () => {
     });
 
     expect(second).toMatchObject({
-      blocked: true,
+      blocked: false,
       countedAsSuccess: false,
       diagnostics: { finalDecisionKind: 'semantic_noop' },
     });
     expect(second.diagnostics).toMatchObject({
       uneditedRerunDetected: true,
-      earlyNoOpPreflightPassed: false,
+      earlyNoOpPreflightPassed: true,
       semanticNoOpDetected: true,
       materialImprovementDetected: false,
-      providerCandidateValidationAccepted: false,
-      finalVisibleDecisionAcceptedForApply: false,
+      providerAttempted: false,
       canonicalExperienceDecisionAllowsApply: false,
       canonicalExperienceDecisionAllowsUsage: false,
     });
@@ -421,18 +420,16 @@ describe('AAB415 shared Experience Arabic person/perspective contract', () => {
       lastAiOutputHashMatched: true,
       materialUserEditDetected: false,
       uneditedRerunDetected: true,
-      earlyNoOpPreflightPassed: false,
+      earlyNoOpPreflightPassed: true,
       finalCandidatePresent: false,
       finalCandidateSource: 'none',
       finalNormalizedHash: null,
       finalBulletCount: 0,
-      finalPersonMode: null,
-      finalRequiredFactCount: null,
-      finalCoveredFactCount: null,
+      finalPersonMode: 'third_singular',
       finalAddedPredicateCount: 0,
       finalSourceUnitPredicateCoveragePassed: null,
-      requiredFactCount: 0,
-      coveredFactCount: 0,
+      requiredFactCount: 3,
+      coveredFactCount: 3,
       uncoveredFactIdentityHashes: [],
       diagnosticInvariantCheckPassed: true,
       diagnosticInvariantFailures: [],
