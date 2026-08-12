@@ -16,7 +16,12 @@ const COMMERCIAL_STATE = Object.freeze({
   offeringId: 'default',
   packageId: '$rc_lifetime',
   revenueCatPlugin: '@revenuecat/purchases-capacitor',
-  revenueCatPluginVersion: '13.1.1',
+  // This is the exact wrapper version resolved by the committed lockfile used
+  // throughout the verified AAB-427 release lineage. package.json intentionally
+  // retains its compatible declaration range below.
+  revenueCatPluginDeclaration: '^13.1.1',
+  revenueCatPluginVersion: '13.1.7',
+  revenueCatNativeDependency: 'com.revenuecat.purchases:purchases-hybrid-common:18.14.1',
   releaseSigningCertificateFingerprint: 'D9B3428B6A5EA8244BEC6EB53109140B57920247F64F8C033A28261504DEF023',
   apiHost: 'https://ai-resume-builder-six-gamma.vercel.app',
 });
@@ -77,15 +82,28 @@ function validateCheckedInCommercialState(root) {
   const gradle = readText(root, 'android/app/build.gradle');
   const runtime = readText(root, 'src/lib/iap.ts');
   const capacitor = JSON.parse(readText(root, 'capacitor.config.json'));
+  const packageJson = JSON.parse(readText(root, 'package.json'));
   const lock = JSON.parse(readText(root, 'package-lock.json'));
-  const pluginVersion = lock.packages?.['node_modules/@revenuecat/purchases-capacitor']?.version;
+  const lockPlugin = lock.packages?.['node_modules/@revenuecat/purchases-capacitor'];
+  const pluginVersion = lockPlugin?.version;
+  const installedPackagePath = path.join(root, 'node_modules', '@revenuecat', 'purchases-capacitor', 'package.json');
+  const installedPluginVersion = fs.existsSync(installedPackagePath)
+    ? JSON.parse(fs.readFileSync(installedPackagePath, 'utf8')).version
+    : 'missing';
+  const generatedPluginGradle = readText(root, 'node_modules/@revenuecat/purchases-capacitor/android/build.gradle');
 
   requireExact((gradle.match(/applicationId\s+"([^"]+)"/) || [])[1], COMMERCIAL_STATE.applicationId, 'applicationId');
   requireExact((runtime.match(/PRO_ENTITLEMENT\s*=\s*'([^']+)'/) || [])[1], COMMERCIAL_STATE.entitlementId, 'entitlementId');
   requireExact((runtime.match(/PRO_PRODUCT_ID\s*=\s*'([^']+)'/) || [])[1], COMMERCIAL_STATE.productId, 'productId');
   requireExact((runtime.match(/PACKAGE_IDENTIFIER\s*=\s*'([^']+)'/) || [])[1], COMMERCIAL_STATE.packageId, 'packageId');
   requireExact((runtime.match(/OFFERING_IDENTIFIER\s*=\s*'([^']+)'/) || [])[1], COMMERCIAL_STATE.offeringId, 'offeringId');
-  requireExact(pluginVersion, COMMERCIAL_STATE.revenueCatPluginVersion, 'revenueCatPluginVersion');
+  requireExact(packageJson.dependencies?.[COMMERCIAL_STATE.revenueCatPlugin], COMMERCIAL_STATE.revenueCatPluginDeclaration, 'revenueCatPluginDeclaration');
+  requireExact(pluginVersion, COMMERCIAL_STATE.revenueCatPluginVersion, 'revenueCatPluginLockVersion');
+  requireExact(installedPluginVersion, COMMERCIAL_STATE.revenueCatPluginVersion, 'revenueCatPluginInstalledVersion');
+  requireExact(lockPlugin?.dependencies?.['@revenuecat/purchases-typescript-internal-esm'], '18.14.1', 'revenueCatPluginLockNativeVersion');
+  if (!generatedPluginGradle.includes(COMMERCIAL_STATE.revenueCatNativeDependency)) {
+    throw new Error(`COMMERCIAL_STATE_MISMATCH revenueCatGeneratedAndroidDependency expected=${COMMERCIAL_STATE.revenueCatNativeDependency} actual=missing`);
+  }
   if (capacitor.server?.url) {
     throw new Error('COMMERCIAL_STATE_MISMATCH capacitor.server.url expected=absent actual=set');
   }
@@ -104,6 +122,7 @@ function buildManifest({ apiHost, signingCertificateFingerprint = COMMERCIAL_STA
     offeringId: COMMERCIAL_STATE.offeringId,
     packageId: COMMERCIAL_STATE.packageId,
     revenueCatPlugin: `${COMMERCIAL_STATE.revenueCatPlugin}@${COMMERCIAL_STATE.revenueCatPluginVersion}`,
+    revenueCatNativeDependency: COMMERCIAL_STATE.revenueCatNativeDependency,
     releaseSigningCertificateFingerprint: signingCertificateFingerprint,
     apiHost,
     capacitorServerUrl: null,
@@ -123,6 +142,7 @@ function assertManifest(manifest) {
   requireExact(manifest?.offeringId, COMMERCIAL_STATE.offeringId, 'manifest.offeringId');
   requireExact(manifest?.packageId, COMMERCIAL_STATE.packageId, 'manifest.packageId');
   requireExact(manifest?.revenueCatPlugin, `${COMMERCIAL_STATE.revenueCatPlugin}@${COMMERCIAL_STATE.revenueCatPluginVersion}`, 'manifest.revenueCatPlugin');
+  requireExact(manifest?.revenueCatNativeDependency, COMMERCIAL_STATE.revenueCatNativeDependency, 'manifest.revenueCatNativeDependency');
   requireExact(manifest?.releaseSigningCertificateFingerprint, COMMERCIAL_STATE.releaseSigningCertificateFingerprint, 'manifest.releaseSigningCertificateFingerprint');
   requireExact(manifest?.apiHost, COMMERCIAL_STATE.apiHost, 'manifest.apiHost');
   if (manifest?.capacitorServerUrl !== null) {
