@@ -10,6 +10,9 @@ import { applyEnglishEmploymentTense } from './cv-material-duty-coverage';
 import {
   detectArabicExperiencePersonMode,
   normalizeArabicExperienceEmploymentGrammar,
+  normalizeArabicExperienceEmploymentGrammarWithEvidence,
+  validateArabicExperienceNativeMorphology,
+  type ArabicPastMorphologyTransformationClass,
 } from './cv-arabic-experience-tense';
 import {
   applySerbianCvEmploymentTense,
@@ -38,6 +41,11 @@ export type ExperiencePerspectiveNormalizeResult = {
   perspectiveNormalizationAttempted: boolean;
   perspectiveNormalizationApplied: boolean;
   perspectiveValidationPassed: boolean;
+  arabicMorphologyTransformationAttempted: boolean;
+  arabicMorphologyTransformationApplied: boolean;
+  arabicMorphologyTransformationClasses: ArabicPastMorphologyTransformationClass[];
+  arabicNativeMorphologyValidationPassed: boolean;
+  arabicNativeMorphologyRejectionReason: string | null;
   changed: boolean;
 };
 
@@ -401,12 +409,24 @@ export function normalizeExperienceBulletsPerspective(
     && Boolean((text || '').trim());
 
   const lines = splitExperienceBullets(text || '');
-  const normalizedLines = lines.map((line) =>
-    normalizeExperienceBulletPerspective(line, {
+  const arabicNormalizations = [] as ReturnType<
+    typeof normalizeArabicExperienceEmploymentGrammarWithEvidence
+  >[];
+  const normalizedLines = lines.map((line) => {
+    if (locale === 'ar') {
+      const normalized = normalizeArabicExperienceEmploymentGrammarWithEvidence(
+        stripDutyListPrefix(line || '').trim(),
+        { isPresent: options.isPresent, gender: options.gender },
+      );
+      arabicNormalizations.push(normalized);
+      return normalized.text;
+    }
+    return normalizeExperienceBulletPerspective(line, {
       locale,
       isPresent: options.isPresent,
       gender: options.gender,
-    }));
+    });
+  });
   const changed = normalizedLines.some((line, i) =>
     normalizeExperienceAiSourceText(line) !== normalizeExperienceAiSourceText(lines[i] || ''));
   const outText = normalizedLines.length
@@ -418,6 +438,37 @@ export function normalizeExperienceBulletsPerspective(
   const perspectiveValidationPassed = validateExperienceCvPerspective(outText, locale, {
     isPresent: options.isPresent,
   }).ok;
+  const arabicMorphologyTransformationClasses = [...new Set(
+    arabicNormalizations.flatMap((result) => result.transformationClasses),
+  )];
+  const arabicNativeMorphology = locale === 'ar'
+    ? validateArabicExperienceNativeMorphology(outText, {
+      isPresent: options.isPresent,
+      gender: options.gender,
+      sourceText: text,
+      normalization: {
+        text: outText,
+        ok: arabicNormalizations.every((result) => result.ok),
+        morphologyValidationPassed: arabicNormalizations.every(
+          (result) => result.morphologyValidationPassed,
+        ),
+        transformationAttempted: arabicNormalizations.some(
+          (result) => result.transformationAttempted,
+        ),
+        transformationApplied: arabicNormalizations.some(
+          (result) => result.transformationApplied,
+        ),
+        transformationClasses: arabicMorphologyTransformationClasses.length
+          ? arabicMorphologyTransformationClasses
+          : ['none'],
+        unsafeTokenCount: arabicNormalizations.reduce(
+          (sum, result) => sum + result.unsafeTokenCount,
+          0,
+        ),
+        reason: arabicNormalizations.find((result) => result.reason)?.reason,
+      },
+    })
+    : null;
 
   return {
     text: outText,
@@ -428,7 +479,16 @@ export function normalizeExperienceBulletsPerspective(
     perspectiveMode: 'cv_third_person',
     perspectiveNormalizationAttempted,
     perspectiveNormalizationApplied: perspectiveNormalizationAttempted && changed,
-    perspectiveValidationPassed,
+    perspectiveValidationPassed:
+      perspectiveValidationPassed && (arabicNativeMorphology?.ok ?? true),
+    arabicMorphologyTransformationAttempted:
+      arabicNativeMorphology?.transformationAttempted ?? false,
+    arabicMorphologyTransformationApplied:
+      arabicNativeMorphology?.transformationApplied ?? false,
+    arabicMorphologyTransformationClasses:
+      arabicNativeMorphology?.transformationClasses ?? ['none'],
+    arabicNativeMorphologyValidationPassed: arabicNativeMorphology?.ok ?? true,
+    arabicNativeMorphologyRejectionReason: arabicNativeMorphology?.reason ?? null,
     changed,
   };
 }

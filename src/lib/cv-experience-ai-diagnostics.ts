@@ -374,6 +374,13 @@ export type ExperienceAiDiagnosticTrace = {
   perspectiveNormalizationAttempted: boolean;
   perspectiveNormalizationApplied: boolean;
   perspectiveValidationPassed: boolean | null;
+  targetPersonMode: string | null;
+  targetGender: string | null;
+  arabicMorphologyTransformationAttempted: boolean;
+  arabicMorphologyTransformationApplied: boolean;
+  arabicMorphologyTransformationClasses: string[];
+  arabicNativeMorphologyValidationPassed: boolean | null;
+  arabicNativeMorphologyRejectionReason: string | null;
   normalizedBulletsUsedForApply: boolean;
   finalMatchesProviderOutput: boolean;
   finalMatchesSourceAfterNormalization: boolean;
@@ -1145,6 +1152,13 @@ export class ExperienceAiDiagnosticSession {
       perspectiveNormalizationAttempted: false,
       perspectiveNormalizationApplied: false,
       perspectiveValidationPassed: false,
+      targetPersonMode: null,
+      targetGender: null,
+      arabicMorphologyTransformationAttempted: false,
+      arabicMorphologyTransformationApplied: false,
+      arabicMorphologyTransformationClasses: [],
+      arabicNativeMorphologyValidationPassed: null,
+      arabicNativeMorphologyRejectionReason: null,
       normalizedBulletsUsedForApply: false,
       finalMatchesProviderOutput: false,
       finalMatchesSourceAfterNormalization: false,
@@ -1947,6 +1961,21 @@ export class ExperienceAiDiagnosticSession {
       perspectiveValidationPassed: typeof diag.perspectiveValidationPassed === 'boolean'
         ? diag.perspectiveValidationPassed
         : (appliedSuccess ? true : Boolean(diag.perspectiveValidationPassed)),
+      targetPersonMode: (diag.targetPersonMode as string | undefined) || null,
+      targetGender: (diag.targetGender as string | undefined) || null,
+      arabicMorphologyTransformationAttempted:
+        Boolean(diag.arabicMorphologyTransformationAttempted),
+      arabicMorphologyTransformationApplied:
+        Boolean(diag.arabicMorphologyTransformationApplied),
+      arabicMorphologyTransformationClasses: Array.isArray(
+        diag.arabicMorphologyTransformationClasses,
+      ) ? diag.arabicMorphologyTransformationClasses.map(String) : [],
+      arabicNativeMorphologyValidationPassed:
+        typeof diag.arabicNativeMorphologyValidationPassed === 'boolean'
+          ? diag.arabicNativeMorphologyValidationPassed
+          : null,
+      arabicNativeMorphologyRejectionReason:
+        (diag.arabicNativeMorphologyRejectionReason as string | undefined) || null,
       normalizedBulletsUsedForApply: Boolean(diag.normalizedBulletsUsedForApply),
       finalMatchesProviderOutput: selectedFinalPresent
         && Boolean(diag.finalMatchesProviderOutput),

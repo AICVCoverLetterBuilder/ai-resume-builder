@@ -20,6 +20,27 @@ export type ArabicExperiencePersonMode =
   | 'neutral'
   | 'unknown';
 
+export type ArabicPastMorphologyTransformationClass =
+  | 'none'
+  | 'known_lexical'
+  | 'sound'
+  | 'doubled'
+  | 'weak_final_unproven'
+  | 'hollow_or_irregular_unproven';
+
+export type ArabicNativeMorphologyResult = {
+  ok: boolean;
+  morphologyValidationPassed: boolean;
+  transformationAttempted: boolean;
+  transformationApplied: boolean;
+  transformationClasses: ArabicPastMorphologyTransformationClass[];
+  unsafeTokenCount: number;
+  reason?: string;
+};
+
+export type ArabicEmploymentGrammarNormalizationResult =
+  ArabicNativeMorphologyResult & { text: string };
+
 type ArabicVerbForms = {
   firstPerson: RegExp;
   presentFemale: string;
@@ -200,13 +221,70 @@ function collapseFinalDoubledRadical(base: string): string {
   return base.replace(/([\p{Script=Arabic}])\1$/u, '$1ّ');
 }
 
+function arabicLetterCount(token: string): number {
+  return (stripArabicMarks(token).match(/\p{Script=Arabic}/gu) || []).length;
+}
+
+function classifyExplicitArabicFirstPersonPastStem(
+  token: string,
+): ArabicPastMorphologyTransformationClass {
+  const base = token.replace(/تُ$/u, '');
+  const bare = stripArabicMarks(base);
+  if (/[يوى]$/u.test(bare)) return 'weak_final_unproven';
+  if (arabicLetterCount(base) <= 2) return 'hollow_or_irregular_unproven';
+  if (/ّ/u.test(base)) return 'sound';
+  if (/^أ/u.test(bare) && /([\p{Script=Arabic}])\1$/u.test(bare)) return 'doubled';
+  if (/([\p{Script=Arabic}])\1$/u.test(bare)) return 'hollow_or_irregular_unproven';
+  return 'sound';
+}
+
 function normalizeExplicitArabicFirstPersonPastToken(
   token: string,
   female: boolean,
-): string {
-  if (!ARABIC_EXPLICIT_FIRST_PAST_RE.test(token)) return token;
-  const base = collapseFinalDoubledRadical(token.replace(/تُ$/u, ''));
-  return female ? `${base}تْ` : base;
+): {
+  text: string;
+  transformationClass: ArabicPastMorphologyTransformationClass;
+  attempted: boolean;
+  applied: boolean;
+  safe: boolean;
+} {
+  if (!ARABIC_EXPLICIT_FIRST_PAST_RE.test(token)) {
+    return {
+      text: token,
+      transformationClass: 'none',
+      attempted: false,
+      applied: false,
+      safe: true,
+    };
+  }
+  const transformationClass = classifyExplicitArabicFirstPersonPastStem(token);
+  if (
+    transformationClass === 'weak_final_unproven'
+    || transformationClass === 'hollow_or_irregular_unproven'
+  ) {
+    // The 1sg suffix exposes a stem that is not a reliable 3sg perfect stem.
+    // Examples include defective and hollow verbs, but this is deliberately a
+    // structural class gate rather than a verb/occupation lookup. Preserve the
+    // original 1sg token so the final perspective gate also fails closed.
+    return {
+      text: token,
+      transformationClass,
+      attempted: true,
+      applied: false,
+      safe: false,
+    };
+  }
+  const rawBase = token.replace(/تُ$/u, '');
+  const base = transformationClass === 'doubled'
+    ? collapseFinalDoubledRadical(rawBase)
+    : rawBase;
+  return {
+    text: female ? `${base}تْ` : base,
+    transformationClass,
+    attempted: true,
+    applied: true,
+    safe: true,
+  };
 }
 
 function normalizeLeadingArabicFirstPersonPresent(
@@ -255,23 +333,152 @@ export function normalizeArabicExperienceEmploymentGrammar(
   text: string,
   options: { isPresent?: boolean; gender?: string },
 ): string {
+  return normalizeArabicExperienceEmploymentGrammarWithEvidence(text, options).text;
+}
+
+export function normalizeArabicExperienceEmploymentGrammarWithEvidence(
+  text: string,
+  options: { isPresent?: boolean; gender?: string },
+): ArabicEmploymentGrammarNormalizationResult {
   const isPresent = options.isPresent !== false;
   const female = normalizeGender(options.gender) === 'female';
   let normalized = (text || '').normalize('NFKC');
+  const transformationClasses: ArabicPastMorphologyTransformationClass[] = [];
+  let transformationAttempted = false;
+  let transformationApplied = false;
+  let unsafeTokenCount = 0;
   for (const forms of ARABIC_CV_VERB_FORMS) {
     const replacement = isPresent
       ? (female ? forms.presentFemale : forms.presentMale)
       : (female ? forms.pastFemale : forms.pastMale);
+    const before = normalized;
     normalized = normalized.replace(forms.firstPerson, replacement);
+    if (normalized !== before) {
+      transformationAttempted = true;
+      transformationApplied = true;
+      transformationClasses.push('known_lexical');
+    }
   }
   if (isPresent) {
+    const before = normalized;
     normalized = normalizeLeadingArabicFirstPersonPresent(normalized, female);
+    if (normalized !== before) {
+      transformationAttempted = true;
+      transformationApplied = true;
+      transformationClasses.push('sound');
+    }
   } else {
-    normalized = normalized.replace(ARABIC_TOKEN_RE, (token) => (
-      normalizeExplicitArabicFirstPersonPastToken(token, female)
-    ));
+    normalized = normalized.replace(ARABIC_TOKEN_RE, (token) => {
+      const result = normalizeExplicitArabicFirstPersonPastToken(token, female);
+      if (result.attempted) transformationAttempted = true;
+      if (result.applied) transformationApplied = true;
+      if (!result.safe) unsafeTokenCount += 1;
+      if (result.transformationClass !== 'none') {
+        transformationClasses.push(result.transformationClass);
+      }
+      return result.text;
+    });
   }
-  return normalized.trim();
+  const uniqueClasses = [...new Set(transformationClasses)];
+  const ok = unsafeTokenCount === 0;
+  return {
+    text: normalized.trim(),
+    ok,
+    morphologyValidationPassed: ok,
+    transformationAttempted,
+    transformationApplied,
+    transformationClasses: uniqueClasses.length ? uniqueClasses : ['none'],
+    unsafeTokenCount,
+    reason: ok ? undefined : 'arabic_past_morphology_transformation_unproven',
+  };
+}
+
+/**
+ * Native-surface gate kept separate from employment-tense classification.
+ * A feminine-looking final تْ is not proof that a mechanically retained 1sg
+ * weak/hollow stem is a grammatical 3sg perfect. Ambiguous classes fail closed.
+ */
+export function validateArabicExperienceNativeMorphology(
+  text: string,
+  options: {
+    isPresent?: boolean;
+    gender?: string;
+    sourceText?: string;
+    normalization?: ArabicEmploymentGrammarNormalizationResult | null;
+  },
+): ArabicNativeMorphologyResult {
+  const raw = String(text || '').normalize('NFKC').trim();
+  if (!raw) {
+    return {
+      ok: false,
+      morphologyValidationPassed: false,
+      transformationAttempted: false,
+      transformationApplied: false,
+      transformationClasses: ['none'],
+      unsafeTokenCount: 0,
+      reason: 'arabic_native_morphology_empty',
+    };
+  }
+  if (options.normalization && !options.normalization.morphologyValidationPassed) {
+    return {
+      ...options.normalization,
+      ok: false,
+      morphologyValidationPassed: false,
+    };
+  }
+  if (options.isPresent !== false) {
+    return {
+      ok: true,
+      morphologyValidationPassed: true,
+      transformationAttempted: Boolean(options.normalization?.transformationAttempted),
+      transformationApplied: Boolean(options.normalization?.transformationApplied),
+      transformationClasses: options.normalization?.transformationClasses || ['none'],
+      unsafeTokenCount: 0,
+    };
+  }
+  if (arabicTokens(raw).some((token) => ARABIC_EXPLICIT_FIRST_PAST_RE.test(token))) {
+    return {
+      ok: false,
+      morphologyValidationPassed: false,
+      transformationAttempted: Boolean(options.normalization?.transformationAttempted),
+      transformationApplied: Boolean(options.normalization?.transformationApplied),
+      transformationClasses: options.normalization?.transformationClasses || ['none'],
+      unsafeTokenCount: Math.max(1, options.normalization?.unsafeTokenCount || 0),
+      reason: options.normalization?.reason || 'arabic_past_morphology_first_person_residual',
+    };
+  }
+
+  const unsafeSurfaceClasses: ArabicPastMorphologyTransformationClass[] = [];
+  for (const token of leadingArabicPredicateTokens(raw)) {
+    const predicate = token.startsWith('و') ? token.slice(1) : token;
+    if (!stripArabicMarks(predicate).endsWith('ت')) continue;
+    const stem = predicate.replace(/تْ?$/u, '');
+    const bareStem = stripArabicMarks(stem);
+    if (/[يوى]$/u.test(bareStem)) unsafeSurfaceClasses.push('weak_final_unproven');
+    else if (arabicLetterCount(stem) <= 2 && !/ّ$/u.test(stem)) {
+      unsafeSurfaceClasses.push('hollow_or_irregular_unproven');
+    }
+  }
+  if (unsafeSurfaceClasses.length > 0) {
+    return {
+      ok: false,
+      morphologyValidationPassed: false,
+      transformationAttempted: Boolean(options.normalization?.transformationAttempted),
+      transformationApplied: Boolean(options.normalization?.transformationApplied),
+      transformationClasses: [...new Set(unsafeSurfaceClasses)],
+      unsafeTokenCount: unsafeSurfaceClasses.length,
+      reason: 'arabic_native_past_surface_unproven',
+    };
+  }
+
+  return {
+    ok: true,
+    morphologyValidationPassed: true,
+    transformationAttempted: Boolean(options.normalization?.transformationAttempted),
+    transformationApplied: Boolean(options.normalization?.transformationApplied),
+    transformationClasses: options.normalization?.transformationClasses || ['none'],
+    unsafeTokenCount: 0,
+  };
 }
 
 /** Feminine / masculine present stems common in warehouse + design shells. */

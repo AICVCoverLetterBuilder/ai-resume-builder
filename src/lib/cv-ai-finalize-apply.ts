@@ -558,7 +558,10 @@ import {
   countTranslatedFactUnits,
   validateCrossLocaleSemanticCoverage,
 } from './cv-cross-locale-experience';
-import { validateArabicExperienceEmploymentTense } from './cv-arabic-experience-tense';
+import {
+  validateArabicExperienceEmploymentTense,
+  validateArabicExperienceNativeMorphology,
+} from './cv-arabic-experience-tense';
 import { validateRussianExperienceEmploymentTense } from './cv-russian-experience-tense';
 import {
   resolveTargetScriptForLocale,
@@ -1154,6 +1157,13 @@ export type FinalizeCvAiFieldResult = {
     perspectiveNormalizationAttempted?: boolean;
     perspectiveNormalizationApplied?: boolean;
     perspectiveValidationPassed?: boolean;
+    targetPersonMode?: 'third_singular';
+    targetGender?: string | null;
+    arabicMorphologyTransformationAttempted?: boolean;
+    arabicMorphologyTransformationApplied?: boolean;
+    arabicMorphologyTransformationClasses?: string[];
+    arabicNativeMorphologyValidationPassed?: boolean;
+    arabicNativeMorphologyRejectionReason?: string | null;
     finalDurationRepresentationKind?: string;
     finalDurationRepresentationCount?: number;
     finalDurationHybridDetected?: boolean;
@@ -8153,6 +8163,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       isPresent,
       gender,
     });
+    const nativeMorphology = validateArabicExperienceNativeMorphology(
+      visibleComparisonText,
+      { isPresent, gender },
+    );
     const perspective = validateExperienceCvPerspective(visibleComparisonText, 'ar', {
       isPresent,
     });
@@ -8175,6 +8189,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && predicates.candidateAddedPredicateCount === 0
       && tense.finalTensePassed
       && tense.finalGenderAgreementPassed
+      && nativeMorphology.ok
       && perspective.ok
       && purity.ok
       && textMatchesRequestedFieldLocale(visibleComparisonText, 'ar', 'experience_bullet')
@@ -8185,6 +8200,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       factCoverage,
       predicates,
       tense,
+      nativeMorphology,
       perspective,
       purity,
       unsupported,
@@ -8297,6 +8313,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         independentlyValidatedArabicVisible?.predicates.sourceUnitPredicateCoveragePassed ?? null,
       tenseValidationPassed:
         independentlyValidatedArabicVisible?.tense.finalTensePassed ?? null,
+      arabicNativeMorphologyValidationPassed:
+        independentlyValidatedArabicVisible?.nativeMorphology.ok ?? null,
+      arabicNativeMorphologyRejectionReason:
+        independentlyValidatedArabicVisible?.nativeMorphology.reason ?? null,
       finalEmploymentState:
         independentlyValidatedArabicVisible?.tense.finalEmploymentState ?? null,
       finalPersonMode:
@@ -9223,15 +9243,41 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     // share the same locale morphology boundary. Some older fallback builders
     // intentionally emit fact-preserving 1sg/present lemmas; project those
     // safely before validating the exact candidate that can be selected.
-    const candidate = locale === 'ar'
+    const arabicPerspective = locale === 'ar'
       ? normalizeExperienceBulletsPerspective(rawCandidate, {
         locale,
         isPresent,
         gender,
         sourceDescription: sourceForCoverage,
         sourceLocale: authoritativeSourceLocale,
-      }).text.trim()
-      : rawCandidate;
+      })
+      : null;
+    const candidate = arabicPerspective?.text.trim() || rawCandidate;
+    if (arabicPerspective) {
+      perspectiveMeta = {
+        ...perspectiveMeta,
+        arabicMorphologyTransformationAttempted:
+          arabicPerspective.arabicMorphologyTransformationAttempted,
+        arabicMorphologyTransformationApplied:
+          arabicPerspective.arabicMorphologyTransformationApplied,
+        arabicMorphologyTransformationClasses:
+          arabicPerspective.arabicMorphologyTransformationClasses,
+        arabicNativeMorphologyValidationPassed:
+          arabicPerspective.arabicNativeMorphologyValidationPassed,
+        arabicNativeMorphologyRejectionReason:
+          arabicPerspective.arabicNativeMorphologyRejectionReason,
+      };
+      if (!arabicPerspective.arabicNativeMorphologyValidationPassed) {
+        lastRejectStage = `${stage}:arabic_native_morphology`;
+        lastRejectReason = arabicPerspective.arabicNativeMorphologyRejectionReason
+          || 'arabic_native_morphology_failed';
+        if (stage === 'provider') {
+          providerRejectionStage = lastRejectStage;
+          providerRejectionReason = lastRejectReason;
+        }
+        return null;
+      }
+    }
     // Every candidate kind reaches this shared final-selection boundary.
     // Perspective is reclassified from this exact text; no provider/fallback
     // phase may carry a prior optimistic boolean into final acceptance.
@@ -11155,6 +11201,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     perspectiveNormalizationAttempted: false,
     perspectiveNormalizationApplied: false,
     perspectiveValidationPassed: false,
+    targetPersonMode: 'third_singular' as const,
+    targetGender: gender || null,
+    arabicMorphologyTransformationAttempted: false,
+    arabicMorphologyTransformationApplied: false,
+    arabicMorphologyTransformationClasses: ['none'] as string[],
+    arabicNativeMorphologyValidationPassed: locale !== 'ar',
+    arabicNativeMorphologyRejectionReason: null as string | null,
     normalizedBulletsUsedForApply: false,
     finalMatchesProviderOutput: false,
     finalMatchesSourceAfterNormalization: false,
@@ -11200,6 +11253,42 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     result: FinalizeCvAiFieldResult,
   ): FinalizeCvAiFieldResult => {
     if (result.countedAsSuccess && (result.text || '').trim()) {
+      const finalArabicMorphology = locale === 'ar'
+        ? validateArabicExperienceNativeMorphology(result.text, {
+          isPresent,
+          gender,
+          sourceText: providerRawForCompare,
+        })
+        : null;
+      if (finalArabicMorphology) {
+        perspectiveMeta.arabicNativeMorphologyValidationPassed =
+          finalArabicMorphology.ok;
+        perspectiveMeta.arabicNativeMorphologyRejectionReason =
+          finalArabicMorphology.reason ?? null;
+        if (!finalArabicMorphology.ok) {
+          providerAccepted = false;
+          clientDeterministicFallbackApplied = false;
+          finalCandidateSource = 'none';
+          return {
+            ...result,
+            blocked: true,
+            countedAsSuccess: false,
+            reason: finalArabicMorphology.reason || 'arabic_native_morphology_failed',
+            diagnostics: {
+              ...baseDiag(),
+              ...result.diagnostics,
+              ...perspectiveMeta,
+              providerAccepted: false,
+              finalCandidateSource: 'none',
+              typedFailureReason:
+                finalArabicMorphology.reason || 'arabic_native_morphology_failed',
+              rejectionStage: 'final_selected:arabic_native_morphology',
+              countedAsSuccess: false,
+              ...noSelectedFinalDiagnosticFields(),
+            },
+          };
+        }
+      }
       const finalPerspective = validateExperienceCvPerspective(result.text, locale, {
         isPresent,
       });
@@ -12013,6 +12102,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       perspectiveNormalizationAttempted: persp.perspectiveNormalizationAttempted,
       perspectiveNormalizationApplied: persp.perspectiveNormalizationApplied,
       perspectiveValidationPassed: persp.perspectiveValidationPassed,
+      arabicMorphologyTransformationAttempted:
+        persp.arabicMorphologyTransformationAttempted,
+      arabicMorphologyTransformationApplied:
+        persp.arabicMorphologyTransformationApplied,
+      arabicMorphologyTransformationClasses:
+        persp.arabicMorphologyTransformationClasses,
+      arabicNativeMorphologyValidationPassed:
+        persp.arabicNativeMorphologyValidationPassed,
+      arabicNativeMorphologyRejectionReason:
+        persp.arabicNativeMorphologyRejectionReason,
       finalPersonMode: persp.normalizedPersonMode,
     };
     // Authoritative finalNormalizedBullets — validate and apply this array only.

@@ -105,6 +105,7 @@ import { resolveLocaleCandidate } from './i18n/translations';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
 import { isWrongLanguageAiOutput } from './cv-ai-locale-guard';
 import { validateExperienceCvPerspective } from './cv-experience-perspective';
+import { validateArabicExperienceNativeMorphology } from './cv-arabic-experience-tense';
 
 export const EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION =
   'experience-selected-final-coverage-329-v1' as const;
@@ -1098,6 +1099,7 @@ export function validateVisibleExperienceCoverage(options: {
   visibleLocaleValidationPassed: boolean;
   visiblePersonMode: string;
   visiblePerspectiveValidationPassed: boolean;
+  visibleNativeMorphologyValidationPassed: boolean;
 } {
   void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
   const visible = (options.visibleText || '').trim();
@@ -1108,6 +1110,11 @@ export function validateVisibleExperienceCoverage(options: {
   const visiblePerspective = validateExperienceCvPerspective(visible, resolvedLocale, {
     isPresent: options.isPresent,
   });
+  const visibleNativeMorphology = resolvedLocale === 'ar'
+    ? validateArabicExperienceNativeMorphology(visible, {
+      isPresent: options.isPresent,
+    })
+    : null;
   let visibleRequiredFactCount = 0;
   let visibleCoveredFactCount = 0;
   let uncovered: string[] = [];
@@ -1426,6 +1433,8 @@ export function validateVisibleExperienceCoverage(options: {
       && textMatchesRequestedFieldLocale(visible, resolvedLocale, 'experience_bullet')
       && !isWrongLanguageAiOutput(visible, resolvedLocale),
     visiblePersonMode: visiblePerspective.finalPersonMode,
-    visiblePerspectiveValidationPassed: visiblePerspective.ok,
+    visiblePerspectiveValidationPassed:
+      visiblePerspective.ok && (visibleNativeMorphology?.ok ?? true),
+    visibleNativeMorphologyValidationPassed: visibleNativeMorphology?.ok ?? true,
   };
 }
