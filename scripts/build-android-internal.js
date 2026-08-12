@@ -13,10 +13,17 @@ const {
   PROTECTED_ANDROID_API_BASE_URL,
   enforceAndroidProductionApiBaseUrl,
 } = require('./android-production-api-contract');
+const {
+  establishAndroidPackagingEnvironment,
+  validateCheckedInCommercialState,
+  assertManifest,
+} = require('./android-commercial-state-contract');
 
 const root = path.resolve(__dirname, '..');
 loadEnvConfig(root);
 enforceAndroidProductionApiBaseUrl(process.env);
+establishAndroidPackagingEnvironment(process.env);
+validateCheckedInCommercialState(root);
 
 const win = process.platform === 'win32';
 const copied = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'public');
@@ -77,6 +84,13 @@ runFile(process.execPath, [verifyScript, '--dir', copied, '--expect', 'enabled']
 if (!fs.existsSync(capacitorConfig)) fail('missing copied Capacitor config');
 if (JSON.parse(fs.readFileSync(capacitorConfig, 'utf8')).server?.url) {
   fail('Capacitor server.url must be absent from packaged internal assets');
+}
+const commercialManifestPath = path.join(copied, 'android-commercial-state.json');
+if (!fs.existsSync(commercialManifestPath)) fail('missing copied Android commercial state manifest');
+try {
+  assertManifest(JSON.parse(fs.readFileSync(commercialManifestPath, 'utf8')));
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
 }
 if (!treeContainsExactValue(copied, apiBaseUrl)) {
   fail('configured production API base URL is absent from copied Android assets');

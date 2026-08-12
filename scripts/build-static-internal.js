@@ -13,10 +13,18 @@ const {
   ANDROID_PRODUCTION_API_BASE_URL,
   enforceAndroidProductionApiBaseUrl,
 } = require('./android-production-api-contract');
+const {
+  establishAndroidPackagingEnvironment,
+  validateCheckedInCommercialState,
+  buildManifest,
+  writeManifest,
+} = require('./android-commercial-state-contract');
 
 const repoRoot = path.resolve(__dirname, '..');
 loadEnvConfig(repoRoot);
 enforceAndroidProductionApiBaseUrl(process.env);
+const commercialKey = establishAndroidPackagingEnvironment(process.env);
+validateCheckedInCommercialState(repoRoot);
 
 function requiredEnv(name) {
   const value = String(process.env[name] || '').trim();
@@ -69,6 +77,10 @@ execFileSync(process.execPath, [nextBin, 'build'], {
   stdio: 'inherit',
   env,
 });
+writeManifest(outDir, buildManifest({
+  apiHost: apiBaseUrl,
+  keyFingerprint: commercialKey.fingerprint,
+}));
 execFileSync(process.execPath, [verify, '--dir', 'out', '--expect', 'enabled'], {
   cwd: repoRoot,
   stdio: 'inherit',

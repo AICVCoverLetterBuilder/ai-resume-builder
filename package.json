@@ -11,6 +11,7 @@
     "build:android:internal": "node scripts/build-android-internal.js",
     "build:android:clean": "node scripts/build-android-clean.js",
     "verify:android:release": "node scripts/verify-android-release-assets.js",
+    "test:android:commercial-lock": "node --test scripts/__tests__/android-commercial-state-contract.test.js",
     "verify:production-source-identity": "node scripts/verify-production-source-identity.mjs",
     "start": "node node_modules/next/dist/bin/next start",
     "lint": "eslint",

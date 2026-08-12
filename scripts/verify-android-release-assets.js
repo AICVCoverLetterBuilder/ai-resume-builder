@@ -8,6 +8,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { REQUIRED_PDF_FONT_FILES, MIN_FONT_BYTES } = require('./pdf-font-manifest');
+const {
+  COMMERCIAL_STATE,
+  safeFingerprint,
+  validateCheckedInCommercialState,
+  assertManifest,
+} = require('./android-commercial-state-contract');
 
 const repoRoot = path.resolve(__dirname, '..');
 
@@ -81,7 +87,44 @@ function collectJsFiles(dir, out = []) {
   return out;
 }
 
+function collectRevenueCatKeys(dir, keys = new Set()) {
+  if (!fs.existsSync(dir)) return keys;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) collectRevenueCatKeys(full, keys);
+    else if (/\.(?:js|html)$/i.test(entry.name)) {
+      const matches = fs.readFileSync(full, 'utf8').match(/goog_[A-Za-z0-9_]+/g) || [];
+      for (const match of matches) keys.add(match);
+    }
+  }
+  return keys;
+}
+
+function assertRevenueCatKey(dir, label) {
+  const keys = [...collectRevenueCatKeys(dir)];
+  if (keys.length !== 1) fail(`${label} must contain exactly one RevenueCat Android public key`);
+  const fingerprint = safeFingerprint(keys[0]);
+  if (fingerprint !== COMMERCIAL_STATE.revenueCatAndroidKeyFingerprint) {
+    fail(`REVENUECAT_ANDROID_KEY_MISMATCH expected=${COMMERCIAL_STATE.revenueCatAndroidKeyFingerprint} actual=${fingerprint}`);
+  }
+  console.log(`[verify:android:release] ${label} RevenueCat Android key fingerprint OK (${fingerprint})`);
+}
+
+function assertCommercialManifest(fullPath, label) {
+  if (!fs.existsSync(fullPath)) fail(`${label} commercial state manifest is missing`);
+  try {
+    assertManifest(JSON.parse(fs.readFileSync(fullPath, 'utf8')));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
 function verifySyncedAssets() {
+  try {
+    validateCheckedInCommercialState(repoRoot);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
   const rootConfig = readJson('capacitor.config.json');
   const androidConfig = readJson('android/app/src/main/assets/capacitor.config.json');
 
@@ -99,6 +142,9 @@ function verifySyncedAssets() {
   assertSensitiveDataBackupDisabled();
 
   const publicDir = path.join(repoRoot, 'android', 'app', 'src', 'main', 'assets', 'public');
+  assertCommercialManifest(path.join(repoRoot, 'out', 'android-commercial-state.json'), 'static export');
+  assertCommercialManifest(path.join(publicDir, 'android-commercial-state.json'), 'synced Android assets');
+  assertRevenueCatKey(publicDir, 'synced Android assets');
   const jsFiles = collectJsFiles(publicDir);
   if (jsFiles.length === 0) {
     fail('no .js files under android/app/src/main/assets/public — cap sync did not copy app chunks');
@@ -156,7 +202,7 @@ function verifyAab(aabPath) {
   if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });
   fs.mkdirSync(extractDir, { recursive: true });
   try {
-    execSync(`jar xf "${full}" base/assets/capacitor.config.json`, {
+    execSync(`jar xf "${full}"`, {
       cwd: extractDir,
       stdio: 'pipe',
       shell: isWindows,
@@ -165,6 +211,23 @@ function verifyAab(aabPath) {
       fs.readFileSync(path.join(extractDir, 'base', 'assets', 'capacitor.config.json'), 'utf8'),
     );
     assertNoDevServerUrl(bundledConfig, 'AAB bundled capacitor.config.json');
+    const aabPublicDir = path.join(extractDir, 'base', 'assets', 'public');
+    assertCommercialManifest(path.join(aabPublicDir, 'android-commercial-state.json'), 'AAB bundled');
+    assertRevenueCatKey(aabPublicDir, 'AAB bundled');
+    let certificate;
+    try {
+      const keytool = process.env.JAVA_HOME
+        ? path.join(process.env.JAVA_HOME, 'bin', process.platform === 'win32' ? 'keytool.exe' : 'keytool')
+        : 'keytool';
+      certificate = execSync(`"${keytool}" -printcert -jarfile "${full}"`, { encoding: 'utf8', shell: isWindows });
+    } catch (error) {
+      fail(`unable to read AAB signing certificate: ${error.message}`);
+    }
+    const fingerprint = (certificate.match(/SHA256:\s*([A-F0-9:]+)/i) || [])[1]?.replace(/:/g, '');
+    if (fingerprint !== COMMERCIAL_STATE.releaseSigningCertificateFingerprint) {
+      fail(`COMMERCIAL_STATE_MISMATCH releaseSigningCertificateFingerprint expected=${COMMERCIAL_STATE.releaseSigningCertificateFingerprint} actual=${fingerprint || 'missing'}`);
+    }
+    console.log('[verify:android:release] AAB release signing certificate fingerprint OK');
   } finally {
     fs.rmSync(extractDir, { recursive: true, force: true });
   }
