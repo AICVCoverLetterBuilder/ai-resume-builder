@@ -337,6 +337,8 @@ export type ExperienceAiDiagnosticTrace = {
   providerAccepted?: boolean | null;
   providerRejectionStage?: string | null;
   providerRejectionReasons?: string[];
+  /** False when no provider candidate existed; provider coverage is N/A. */
+  providerValidationApplicable?: boolean | null;
   providerUnsupportedClaimCount?: number | null;
   providerUnsupportedClaimKinds?: string[];
   /** Final-selected candidate hash after successful apply. */
@@ -1666,6 +1668,17 @@ export class ExperienceAiDiagnosticSession {
       appliedFinalBulletScripts: [],
       countedAsSuccess: false,
       visibleApplySucceeded: false,
+      applyAuthorized: false,
+      applyWriteSucceeded: false,
+      applyCommitted: false,
+      targetContentApplied: false,
+      visibleValidationAttempted: false,
+      visibleValidationPassed: false,
+      finalCandidatePredicateValidationApplicable: false,
+      finalCandidatePredicateIdentityCount: null,
+      finalSourceUnitPredicateCoveragePassed: null,
+      finalRequiredFactCount: 0,
+      finalCoveredFactCount: 0,
       shouldIncrementUsage: false,
       usageIncrementAttempted: false,
       applyAttempted: false,
@@ -1695,6 +1708,49 @@ export class ExperienceAiDiagnosticSession {
         step.typedReason,
       );
     }
+  }
+
+  /**
+   * API/provider failure recovered by independently validating the unchanged
+   * visible textarea. Provider failure remains truthful; the terminal decision
+   * is still a local semantic no-op with no apply or usage increment.
+   */
+  recordProviderFailureRecoveredNoOp(
+    finalized: FinalizeCvAiFieldResult,
+    opts: { httpStatus: number | null; attempted?: boolean; errorCode?: string | null },
+  ): void {
+    this.recordFinalizeResult(finalized);
+    this.recordApiResponse({
+      httpStatus: opts.httpStatus,
+      errorCode: opts.errorCode || 'provider_http_failure',
+    });
+    this.patch({
+      providerAttempted: opts.attempted ?? opts.httpStatus != null,
+      providerHttpStatus: opts.httpStatus,
+      providerResponseKind: 'error',
+      apiResponseKind: 'error',
+      providerAccepted: false,
+      providerValidationApplicable: false,
+      providerRequiredFactCount: null,
+      providerCoveredFactCount: null,
+      providerUncoveredFactIdentityHashes: [],
+      providerRejectionStage: 'api_response_received',
+      providerRejectionReasons: [opts.errorCode || 'provider_http_failure'],
+      finalTypedFailureReason: null,
+      rejectionStage: null,
+      semanticNoOpDetected: true,
+      materialImprovementDetected: false,
+      finalDecisionKind: 'semantic_noop',
+      canonicalExperienceDecisionAllowsApply: false,
+      canonicalExperienceDecisionAllowsUsage: false,
+      shouldIncrementUsage: false,
+      countedAsSuccess: false,
+      applyAuthorized: false,
+      applyAttempted: false,
+      applyWriteSucceeded: false,
+      applyCommitted: false,
+      usageCountAfter: this.draft.usageCountBefore,
+    });
   }
 
   /**
@@ -1946,6 +2002,7 @@ export class ExperienceAiDiagnosticSession {
         reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
       ),
       visibleApplySucceeded: false,
+      shouldIncrementUsage: false,
       finalBulletCount: legacyFinalCount,
       finalBulletScripts: legacyFinalScripts,
       tenseMode: diag.tenseMode || this.draft.tenseMode || 'unknown',

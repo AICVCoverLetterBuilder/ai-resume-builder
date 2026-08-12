@@ -356,6 +356,7 @@ import {
   ENGLISH_EMPTY_SOURCE_GENERATION_365_REVISION,
   buildExperienceSelectedFinalCandidateSnapshot,
   selectedFinalSnapshotToDiagnostics,
+  validateVisibleExperienceCoverage,
 } from './cv-experience-phased-apply-329';
 import {
   EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
@@ -8149,8 +8150,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       || cv.contentLocale
       || locale,
   });
-  const independentlyValidatedArabicVisible = (() => {
-    if (locale !== 'ar' || isPresent || !visibleComparisonText || !sourceForCoverage) return null;
+  const independentlyValidatedVisible = (() => {
+    if (!visibleComparisonText || !sourceForCoverage) return null;
     const factCoverage = validateCrossLocaleSemanticCoverage(
       sourceForCoverage,
       visibleComparisonText,
@@ -8167,12 +8168,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       visibleComparisonText,
       { isPresent, gender },
     );
-    const perspective = validateExperienceCvPerspective(visibleComparisonText, 'ar', {
+    const perspective = validateExperienceCvPerspective(visibleComparisonText, locale, {
       isPresent,
     });
-    const purity = validateAiUnitLocalePurity(visibleComparisonText, 'ar', {
+    const purity = validateAiUnitLocalePurity(visibleComparisonText, locale, {
       kind: 'experience_bullet',
       requireUnits: true,
+    });
+    const visibleCoverage = validateVisibleExperienceCoverage({
+      sourceDescription: sourceForCoverage,
+      visibleText: visibleComparisonText,
+      targetLocale: locale,
+      finalNormalizedHash: fingerprintText(
+        visibleComparisonText.replace(/\s+/g, ' ').trim(),
+      ),
+      isPresent,
     });
     const unsupported = detectExperienceUnsupportedClaimExpansion(
       sourceForCoverage,
@@ -8187,12 +8197,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const ok = factCoverage.ok
       && predicates.sourceUnitPredicateCoveragePassed
       && predicates.candidateAddedPredicateCount === 0
-      && tense.finalTensePassed
-      && tense.finalGenderAgreementPassed
-      && nativeMorphology.ok
+      && (locale !== 'ar' || (
+        tense.finalTensePassed && tense.finalGenderAgreementPassed
+      ))
+      && (locale !== 'ar' || nativeMorphology.ok)
+      && visibleCoverage.visibleFactCoveragePassed
+      && (!visibleCoverage.visiblePredicateValidationApplicable
+        || visibleCoverage.visiblePredicateCoveragePassed)
+      && visibleCoverage.visibleLocaleValidationPassed
+      && visibleCoverage.visiblePerspectiveValidationPassed
       && perspective.ok
       && purity.ok
-      && textMatchesRequestedFieldLocale(visibleComparisonText, 'ar', 'experience_bullet')
+      && textMatchesRequestedFieldLocale(visibleComparisonText, locale, 'experience_bullet')
       && unsupported.count === 0
       && leakage.ok;
     return {
@@ -8201,6 +8217,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       predicates,
       tense,
       nativeMorphology,
+      visibleCoverage,
       perspective,
       purity,
       unsupported,
@@ -8214,7 +8231,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       sourceWasEmpty,
       raceOrStaleDetected: false,
       independentVisibleValidationPassed:
-        independentlyValidatedArabicVisible?.ok === true,
+        independentlyValidatedVisible?.ok === true,
     });
   let providerNoOpBlockedBySourceDefect = false;
   let providerNoOpEligibleAsFinalFlag = providerNoOpEligibleAsFinal(visibleSourceAnalysis);
@@ -8300,36 +8317,36 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       expectedEmploymentTense: visibleSourceAnalysis.expectedEmploymentTense,
       sourceDetectedTense: visibleSourceAnalysis.sourceDetectedTense,
       visibleRequiredFactCount:
-        independentlyValidatedArabicVisible?.factCoverage.requiredCount ?? null,
+        independentlyValidatedVisible?.factCoverage.requiredCount ?? null,
       visibleCoveredFactCount:
-        independentlyValidatedArabicVisible?.factCoverage.coveredCount ?? null,
+        independentlyValidatedVisible?.factCoverage.coveredCount ?? null,
       sourcePredicateIdentityCount:
-        independentlyValidatedArabicVisible?.predicates.sourcePredicateIdentityCount ?? null,
+        independentlyValidatedVisible?.predicates.sourcePredicateIdentityCount ?? null,
       candidatePredicateIdentityCount:
-        independentlyValidatedArabicVisible?.predicates.candidatePredicateIdentityCount ?? null,
+        independentlyValidatedVisible?.predicates.candidatePredicateIdentityCount ?? null,
       candidateAddedPredicateCount:
-        independentlyValidatedArabicVisible?.predicates.candidateAddedPredicateCount ?? null,
+        independentlyValidatedVisible?.predicates.candidateAddedPredicateCount ?? null,
       sourceUnitPredicateCoveragePassed:
-        independentlyValidatedArabicVisible?.predicates.sourceUnitPredicateCoveragePassed ?? null,
+        independentlyValidatedVisible?.predicates.sourceUnitPredicateCoveragePassed ?? null,
       tenseValidationPassed:
-        independentlyValidatedArabicVisible?.tense.finalTensePassed ?? null,
+        independentlyValidatedVisible?.tense.finalTensePassed ?? null,
       arabicNativeMorphologyValidationPassed:
-        independentlyValidatedArabicVisible?.nativeMorphology.ok ?? null,
+        independentlyValidatedVisible?.nativeMorphology.ok ?? null,
       arabicNativeMorphologyRejectionReason:
-        independentlyValidatedArabicVisible?.nativeMorphology.reason ?? null,
+        independentlyValidatedVisible?.nativeMorphology.reason ?? null,
       finalEmploymentState:
-        independentlyValidatedArabicVisible?.tense.finalEmploymentState ?? null,
+        independentlyValidatedVisible?.tense.finalEmploymentState ?? null,
       finalPersonMode:
-        independentlyValidatedArabicVisible?.perspective.finalPersonMode ?? null,
+        independentlyValidatedVisible?.perspective.finalPersonMode ?? null,
       perspectiveValidationPassed:
-        independentlyValidatedArabicVisible?.perspective.ok ?? null,
+        independentlyValidatedVisible?.perspective.ok ?? null,
       targetLocalePurityPassed:
-        independentlyValidatedArabicVisible?.purity.ok ?? null,
+        independentlyValidatedVisible?.purity.ok ?? null,
       unsupportedClaimCount:
-        independentlyValidatedArabicVisible?.unsupported.count ?? null,
+        independentlyValidatedVisible?.unsupported.count ?? null,
       crossEntryLeakageDetected:
-        independentlyValidatedArabicVisible
-          ? !independentlyValidatedArabicVisible.leakage.ok
+        independentlyValidatedVisible
+          ? !independentlyValidatedVisible.leakage.ok
           : null,
       semanticNoOpDetected: true,
       semanticNoOpReason: earlyNoOpPreflight.semanticNoOpReason
@@ -8407,9 +8424,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         EXPERIENCE_FINAL_DECISION_TRUTH_316_REVISION,
     };
   };
+  const candidateMatchesVisibleComparison = Boolean(
+    visibleComparisonText
+    && fingerprintText(input.candidate || '') === fingerprintText(visibleComparisonText),
+  );
+  const spanishVisibleNoOpContract = locale.toLowerCase().startsWith('es');
   if (
     earlyNoOpPreflight.earlyNoOpPreflightPassed
-    || input.earlyUneditedRerunNoOp === true
+    && (
+      !input.candidate.trim()
+      || candidateMatchesVisibleComparison
+      || spanishVisibleNoOpContract
+      || input.earlyUneditedRerunNoOp === true
+    )
   ) {
     return {
       text: exp?.description || visibleComparisonText || '',

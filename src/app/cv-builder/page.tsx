@@ -2009,6 +2009,81 @@ export default function CVBuilderPage() {
       }
     };
 
+    /**
+     * Provider/API failure is not itself evidence that the visible textarea is
+     * invalid. Re-run the complete local no-op gate against the immutable
+     * request snapshot before surfacing the provider failure to the user.
+     */
+    const recoverProviderFailureAsLocalNoOp = (options: {
+      httpStatus: number | null;
+      attempted: boolean;
+      errorCode?: string | null;
+    }): boolean => {
+      const currentCv = cvRef.current;
+      const currentEntry = currentCv.experience.find(
+        (entry) => entry.id === clickedExperienceEntryId,
+      );
+      const currentContext = buildExperienceJobContext({
+        position: currentEntry?.position,
+        industry,
+        locale: requestedLocale,
+        level,
+      });
+      const latestId = latestBulletsRequestIdRef.current[clickedExperienceEntryId];
+      const latestContext = latestBulletsContextKeyRef.current[clickedExperienceEntryId];
+      const currentText = String(currentEntry?.description || '').trim();
+      const requestText = operationSnapshot.visibleComparisonRawText.trim();
+      const requestStillCurrent = Boolean(currentEntry)
+        && latestId === reqCtx.requestId
+        && latestContext === requestContext.key
+        && experienceJobContextsMatch(currentContext.key, requestContext.key)
+        && fingerprintText(currentText.replace(/\s+/g, ' ').trim())
+          === fingerprintText(requestText.replace(/\s+/g, ' ').trim());
+      if (!requestStillCurrent || !currentText) return false;
+
+      const finalized = finalizeCvAiFieldForApply({
+        action: 'experience_bullets',
+        field: 'experience_description',
+        requestedLocale,
+        gender: currentCv.personal.gender || '',
+        cv: currentCv,
+        candidate: currentText,
+        experienceId: clickedExperienceEntryId,
+        industry,
+        level,
+        jobContext: requestContext,
+        operationSnapshot,
+        earlyUneditedRerunNoOp: true,
+      });
+      if (
+        finalized.diagnostics?.earlyNoOpPreflightPassed !== true
+        || finalized.diagnostics?.semanticNoOpDetected !== true
+        || finalized.diagnostics?.finalDecisionKind !== 'semantic_noop'
+      ) {
+        return false;
+      }
+
+      diagSession.recordProviderFailureRecoveredNoOp(finalized, options);
+      finishAiClientRequest({
+        ctx: reqCtx,
+        isProVerified: true,
+        countBefore,
+        countAfter: countBefore,
+        httpStatus: options.httpStatus,
+        error: null,
+        responseSource: 'blocked',
+      });
+      diagSession.recordVisibleApply(false, countBefore);
+      diagSession.commit();
+      logExperienceAiTrace({
+        resultApplied: false,
+        rejectedReason: 'experience_ai_noop_after_provider_failure',
+        aiUsageIncremented: false,
+      });
+      toast.error(aiErrorMessage('ai_noop', requestedLocale));
+      return true;
+    };
+
     const logExperienceAiTrace = (partial: Partial<ExperienceAiJobContextTrace>) => {
       if (process.env.NODE_ENV === 'production') return;
       const payload: ExperienceAiJobContextTrace = {
@@ -2068,11 +2143,30 @@ export default function CVBuilderPage() {
         isPresent: Boolean(exp.isPresent),
         storedLocale: operationalContentLocale || requestedLocale,
       });
+      const visibleCoverageForPreflight = validateVisibleExperienceCoverage({
+        sourceDescription: factAuthorityForPreflight,
+        visibleText: liveDescription,
+        targetLocale: requestedLocale,
+        finalNormalizedHash: fingerprintText(
+          liveDescription.replace(/\s+/g, ' ').trim(),
+        ),
+        isPresent: Boolean(exp.isPresent),
+      });
+      const independentVisibleValidationPassed =
+        visibleCoverageForPreflight.visibleFactCoveragePassed
+        && (!visibleCoverageForPreflight.visiblePredicateValidationApplicable
+          || visibleCoverageForPreflight.visiblePredicateCoveragePassed)
+        && visibleCoverageForPreflight.visibleLocaleValidationPassed
+        && visibleCoverageForPreflight.visiblePerspectiveValidationPassed
+        && visibleCoverageForPreflight.visibleNativeMorphologyValidationPassed
+        && (requestedLocale !== 'es'
+          || visibleAnalysisForPreflight.sourceTenseValidationPassed === true);
       const earlyNoOp = evaluateUneditedRerunEarlyNoOpPreflight({
         bundle: sourceBundleForPreflight,
         visibleSourceAnalysis: visibleAnalysisForPreflight,
         sourceWasEmpty: liveSourceEmpty,
         raceOrStaleDetected: false,
+        independentVisibleValidationPassed,
       });
       if (earlyNoOp.earlyNoOpPreflightPassed) {
         clearTimeout(timer);
@@ -2187,6 +2281,13 @@ export default function CVBuilderPage() {
           return;
         }
         const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
+        if (recoverProviderFailureAsLocalNoOp({
+          httpStatus: res.status,
+          attempted: true,
+          errorCode: payload.code || 'provider_http_failure',
+        })) {
+          return;
+        }
         const msg = finishAiClientRequest({
           ctx: reqCtx,
           isProVerified: true,
@@ -2839,6 +2940,13 @@ export default function CVBuilderPage() {
     } catch (err) {
       if (process.env.NODE_ENV !== 'production') console.error('[AI Improvements Error]', err);
       const payload = resolveAiHttpFailure({ response: null, error: err });
+      if (recoverProviderFailureAsLocalNoOp({
+        httpStatus: null,
+        attempted: true,
+        errorCode: payload.code || 'provider_request_failed',
+      })) {
+        return;
+      }
       const msg = finishAiClientRequest({
         ctx: reqCtx,
         isProVerified: true,
