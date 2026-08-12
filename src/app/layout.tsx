@@ -4,6 +4,10 @@ import React from "react";
 import "./globals.css";
 import { Providers } from "./providers";
 import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, languages } from "@/lib/i18n/translations";
+import { PublicSourceCommitMeta } from "@/components/PublicSourceCommitMeta";
+import {
+  requireProductionSourceCommitIdentity,
+} from "@/lib/production-source-identity";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -79,6 +83,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Public HTML proof is server-rendered and cannot be removed with a client chunk.
+  const sourceCommit = requireProductionSourceCommitIdentity();
   const localeCodes = JSON.stringify(languages.map((language) => language.code));
   const localeDirections = JSON.stringify(Object.fromEntries(languages.map((language) => [language.code, language.dir])));
   const localeBootstrapScript = `
@@ -109,6 +115,7 @@ export default function RootLayout({
   return (
     <html lang="und" suppressHydrationWarning>
       <head>
+        {sourceCommit && <PublicSourceCommitMeta identity={sourceCommit} />}
         {/* Noto Sans JP loaded via <link> to avoid Turbopack @font-face resolution bug */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
