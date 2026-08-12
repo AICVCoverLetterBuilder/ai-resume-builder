@@ -167,7 +167,7 @@ const LOCALE_STRONGER_MARKERS: Partial<Record<Locale, RegExp>> = {
   sr: /\b(?:\ste\s|pouzdano|uredno)\b/iu,
   hr: /\b(?:\ste\s|pouzdano|uredno)\b/iu,
   ar: /(?: كما | ثم |بعناية|بكفاءة)/u,
-  hi: /(?: तथा | साथ ही |सावधानीपूर्वक|निरंतर)/u,
+  hi: /(?: तथा )/u,
   ja: /(?:においては|着実に|丁寧に)/u,
 };
 
@@ -616,6 +616,12 @@ export function analyzeStrongerNativeSurface(options: {
   if (/\bI bring\b/iu.test(candidate) && /\bI have\b/iu.test(source)) {
     strongerVerbTransformationCount = Math.max(strongerVerbTransformationCount, 1);
   }
+  if (options.locale === 'hi') {
+    if (/साथ ही/u.test(candidate)) reasons.push('hindi_generic_connector_injection');
+    if (/तैयार\s+सावधानीपूर्वक\s+करती हूँ/u.test(candidate)) {
+      reasons.push('hindi_compound_predicate_split');
+    }
+  }
 
   let sourceIntensifiers = 0;
   let candIntensifiers = 0;
@@ -930,36 +936,18 @@ function strengthenDutyClauseBody(
     };
   }
   if (locale === 'hi') {
-    let t = b;
-    let structural = 0;
-    let intens: string | null = null;
-    // The duty tail already opens with "तथा" — use "साथ ही" so Stronger never
-    // repeats the same connector twice in one sentence.
-    if (/ और /u.test(t)) {
-      t = t.replace(/ और /u, ', साथ ही ');
-      structural += 1;
-    } else if (/,\s+/u.test(t)) {
-      t = t.replace(/,\s+([^,]+)$/u, ', साथ ही $1');
-      structural += 1;
-    }
-    if (structural > 0 && allowIntensifier('सावधानीपूर्वक')) {
-      const bumped = t.replace(
-        /(करता\/करती हूँ|करता\/करती था\/थी|करता हूँ|करती हूँ|जाँच करता हूँ|बदलता हूँ)/u,
-        (m) => (/सावधानीपूर्वक/.test(m) ? m : `सावधानीपूर्वक ${m}`),
-      );
-      if (bumped !== t) {
-        t = bumped;
-        intens = 'सावधानीपूर्वक';
-      } else if (!/सावधानीपूर्वक/u.test(t)) {
-        t = `सावधानीपूर्वक ${t}`;
-        intens = 'सावधानीपूर्वक';
-      }
-    }
+    // Strengthen exactly one complete coordinated duty boundary. The predicate
+    // phrases, their objects, and any attached media/purpose authority remain
+    // verbatim; never inject material inside a compound predicate. Restrict
+    // this to a completed perfective list so present-tense and habitual source
+    // facts (including media/purpose-bearing clauses) remain literal.
+    const completePerfective = /(?:\p{Script=Devanagari}+(?:या|यी|ाई|ए|ीं)|की)(?=\s*(?:[,।]|और|तथा|$))/u.test(b);
+    const t = completePerfective ? b.replace(/ और /u, ' तथा ') : b;
     return {
-      text: t.replace(/\s+/g, ' ').trim(),
-      structuralCount: structural,
+      text: t,
+      structuralCount: t === b ? 0 : 1,
       verbCount: 0,
-      intensifierLemma: intens,
+      intensifierLemma: null,
     };
   }
   if (locale === 'ja') {
@@ -1007,8 +995,11 @@ function applyStrongerDutyPredicateSurface(text: string, locale: Locale): string
   if (!t) return t;
 
   const usedLemmas = new Set<string>();
+  let hindiDutyStrengthened = false;
   const rewrite = (lead: string, body: string): string => {
+    if (locale === 'hi' && hindiDutyStrengthened) return `${lead}${body}`;
     const result = strengthenDutyClauseBody(body, locale, usedLemmas);
+    if (locale === 'hi' && result.structuralCount > 0) hindiDutyStrengthened = true;
     if (result.intensifierLemma) usedLemmas.add(result.intensifierLemma);
     return `${lead}${result.text}`;
   };

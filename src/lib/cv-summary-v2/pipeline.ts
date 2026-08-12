@@ -405,11 +405,17 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
       }
       const styledQ = validateSummaryV2AgainstManifest(transformed.text, manifest, {
         candidateSource: 'deterministic',
+        // Rewrite styles are built from this immutable manifest.  Preserve its
+        // duration/current/prior construction order instead of attempting to
+        // infer structured ownership again from rewritten prose.
+        preserveConstructionOrder: true,
+        trustedConstructionAuthority: true,
       });
       const styleFulfilled = transformed.styleFulfilled || styleOk(transformed.text);
       if (styledQ.ok && styleFulfilled) {
         text = transformed.text;
         origin = 'deterministic_fallback';
+        deterministicConstructionOrder = true;
         diag.styleFulfillment = evaluateSummaryV2StyleFulfillment({
           style,
           sourceText: sourceSummary,
@@ -424,6 +430,7 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
         const freshQ = validateSummaryV2AgainstManifest(styledFresh, manifest, {
           candidateSource: 'deterministic',
           preserveConstructionOrder: true,
+          trustedConstructionAuthority: true,
         });
         if (freshQ.ok && styleOk(styledFresh)) {
           text = styledFresh;
@@ -512,7 +519,9 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
 
   const validation = validateSummaryV2AgainstManifest(text, manifest, {
     candidateSource: 'final_selected',
+    // Any deterministic rewrite remains manifest-owned through final selection.
     preserveConstructionOrder: deterministicConstructionOrder,
+    trustedConstructionAuthority: deterministicConstructionOrder,
   });
   if (!validation.ok) {
     return {

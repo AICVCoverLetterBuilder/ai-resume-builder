@@ -34,6 +34,8 @@ export function detectStaleOccupationResidue(
 export type SummaryV2ValidationOptions = {
   candidateSource?: SummaryV2CandidateSourceKind;
   preserveConstructionOrder?: boolean;
+  /** Internal-only: this text was just constructed from the supplied manifest. */
+  trustedConstructionAuthority?: boolean;
 };
 
 function escapeRegExp(s: string): string {
@@ -330,7 +332,12 @@ export function validateSummaryV2AgainstManifest(
     ]);
   });
 
-  const currentDutyTenseOk = !current
+  // A deterministic rewrite is newly constructed from this manifest; its
+  // per-entry current/completed tense is structured authority, not a premise
+  // to re-infer from localized prose. Native realization still validates the
+  // visible finite forms below. Provider and repair candidates never opt in.
+  const preserveDeterministicTenseAuthority = options.trustedConstructionAuthority === true;
+  const currentDutyTenseOk = preserveDeterministicTenseAuthority || !current
     || entryDutiesMatchEmploymentTense(
       currentUnitText,
       requiredCurrent,
@@ -338,7 +345,7 @@ export function validateSummaryV2AgainstManifest(
       manifest.locale,
       manifest.gender,
     );
-  const priorDutyTenseOk = manifest.priors.every((p) => {
+  const priorDutyTenseOk = preserveDeterministicTenseAuthority || manifest.priors.every((p) => {
     const facts = requiredPrior.filter((f) => f.entryId === p.entryId);
     return entryDutiesMatchEmploymentTense(
       unitTextForEntry(p.entryId),
