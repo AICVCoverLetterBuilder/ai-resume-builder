@@ -133,13 +133,6 @@ describe('AAB-428 Summary V2 rewrite structured-authority contract', () => {
         cv, locale: 'hi', gender: 'female', referenceDateIso: REF,
         candidate: BAD_PROVIDER, rewriteStyle,
       });
-      if (rewriteStyle === 'shorter' && out.blocked) {
-        expect(out.countedAsSuccess).toBe(false);
-        expect(out.validation.finalUnitOwnership.map((unit) => unit.roleSlot)).toEqual([
-          'duration', 'current_role', 'prior_role', 'prior_role',
-        ]);
-        return;
-      }
       expect(out.blocked).toBe(false);
       expect(out.countedAsSuccess).toBe(true);
       expect(out.text).not.toBe(sourceHash);
@@ -154,6 +147,93 @@ describe('AAB-428 Summary V2 rewrite structured-authority contract', () => {
       expect(out.validation.unsupportedClaimCount).toBe(0);
     },
   );
+
+  it.each([
+    ['generate', 'shorter'],
+    ['generate', 'professional'],
+    ['stronger', 'shorter'],
+    ['stronger', 'professional'],
+    ['shorter', 'stronger'],
+    ['professional', 'shorter'],
+  ] as const)(
+    'keeps immutable Hindi manifest authority through %s → %s',
+    (firstStyle, secondStyle) => {
+      const cv = seededCv();
+      if (firstStyle !== 'generate') {
+        const first = runSummaryV2({
+          cv, locale: 'hi', gender: 'female', referenceDateIso: REF,
+          candidate: BAD_PROVIDER, rewriteStyle: firstStyle,
+        });
+        expect(first.blocked, `${firstStyle}: ${first.reason || ''}`).toBe(false);
+        expect(first.countedAsSuccess).toBe(true);
+        cv.summary = first.text;
+      }
+      const before = cv.summary;
+      const out = runSummaryV2({
+        cv, locale: 'hi', gender: 'female', referenceDateIso: REF,
+        candidate: BAD_PROVIDER, rewriteStyle: secondStyle,
+      });
+
+      expect(out.blocked, `${firstStyle} → ${secondStyle}: ${out.reason || ''}`).toBe(false);
+      expect(out.countedAsSuccess).toBe(true);
+      expect(out.text).not.toBe(before);
+      expect(out.pipelineDiagnostics?.candidateTransformationKind).toBe(`v2_rewrite_${secondStyle}`);
+      expect(out.validation.requiredCurrentFactCount).toBe(3);
+      expect(out.validation.coveredCurrentFactCount).toBe(3);
+      expect(out.validation.requiredPriorFactCount).toBe(6);
+      expect(out.validation.coveredPriorFactCount).toBe(6);
+      expect(out.validation.currentDutyTenseOk).toBe(true);
+      expect(out.validation.priorDutyTenseOk).toBe(true);
+      expect(out.validation.hindiFirstPersonAgreementPassed).toBe(true);
+      expect(out.validation.durationExpressionCount).toBe(1);
+      expect(out.validation.finalUnitOwnership.map((unit) => unit.roleSlot)).toEqual([
+        'duration', 'current_role', 'prior_role', 'prior_role',
+      ]);
+      expect(out.validation.factUnitOwnershipValidationPassed).toBe(true);
+      expect(out.validation.materialAuthority.invariantPassed).toBe(true);
+      expect(out.validation.unsupportedClaimCount).toBe(0);
+      expect(out.text).toMatch(/(?:विभिन्न\s+)?प्रिंट\s+(?:और|व)\s+डिजिटल\s+माध्यमों के लिए ग्राफिक सामग्री तैयार करती थी/u);
+      expect(out.text).toContain('ग्राहकों की आवश्यकताओं के अनुसार विज़ुअल डिज़ाइन अवधारणाएँ विकसित करती थी');
+      expect(out.text).toContain('डिज़ाइन परियोजनाओं की समीक्षा करके अंतिम आउटपुट की गुणवत्ता सुनिश्चित करती थी');
+      if (secondStyle === 'shorter') {
+        expect(out.text.length).toBeLessThan(before.length);
+        expect(out.pipelineDiagnostics?.styleFulfillment?.shorterStyleFulfilled).toBe(true);
+      }
+    },
+  );
+
+  it('applies the exact Hindi Stronger → Shorter device path once with full immutable authority', () => {
+    const cv = seededCv();
+    const stronger = runSummaryV2({
+      cv, locale: 'hi', gender: 'female', referenceDateIso: REF,
+      candidate: BAD_PROVIDER, rewriteStyle: 'stronger',
+    });
+    expect(stronger.blocked).toBe(false);
+    expect(stronger.countedAsSuccess).toBe(true);
+    cv.summary = stronger.text;
+    const duration = buildExperienceDurationSnapshot(cv.experience || [], REF);
+
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_shorter', field: 'summary', candidate: BAD_PROVIDER, cv,
+      requestedLocale: 'hi', gender: 'female', referenceDateIso: REF,
+      durationSnapshot: duration, rewriteStyle: 'shorter',
+    });
+    expect(fin.blocked).toBe(false);
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.text.length).toBeLessThan(stronger.text.length);
+    expect(fin.diagnostics?.finalUnitRoleSlots).toEqual([
+      'duration', 'current_intro', 'prior_role', 'prior_role',
+    ]);
+    expect(fin.diagnostics?.coveredCurrentDutyFactCount).toBe(3);
+    expect(fin.diagnostics?.coveredPriorDutyFactCount).toBe(6);
+    expect(fin.diagnostics?.totalDurationSlotPresent).toBe(true);
+    expect(fin.diagnostics?.factUnitOwnershipValidationPassed).toBe(true);
+    expect(getProAiUsageCount()).toBe(427);
+    const applied = applyFinalizedSummaryToCv(cv, 'hi', fin);
+    recordProAiUserActionSuccess();
+    expect(applied.summary).toBe(fin.text);
+    expect(getProAiUsageCount()).toBe(428);
+  });
 
   it('still rejects a genuinely malformed Hindi current-duty tense after structured construction', () => {
     const cv = seededCv();

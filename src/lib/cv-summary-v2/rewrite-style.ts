@@ -1261,7 +1261,15 @@ function compressLocaleDurationToCompact(text: string, locale: Locale): string {
   } else if (locale === 'hi') {
     t = t
       .replace(/लगभग\s+/gu, '')
-      .replace(/का संयुक्त अनुभव/gu, 'का अनुभव');
+      .replace(/का संयुक्त अनुभव/gu, 'का अनुभव')
+      // Preserve the print/digital media relation exactly while removing only
+      // distributive presentation filler.  This is a manifest-derived surface
+      // reduction: it neither changes the fact's predicate/object nor moves
+      // the media modifier onto a different noun.
+      .replace(/विभिन्न\s+प्रिंट\s+और\s+डिजिटल\s+माध्यमों/gu, 'प्रिंट व डिजिटल माध्यमों')
+      // "project team" retains the owning collaboration object; "members" is
+      // redundant collective wording and may be safely omitted for Shorter.
+      .replace(/परियोजना\s+टीम\s+के\s+सदस्यों/gu, 'परियोजना टीम');
   } else if (locale === 'ja') {
     t = t
       .replace(/通算で/gu, '')
