@@ -2222,6 +2222,7 @@ export default function CVBuilderPage() {
           aiUsageIncremented: false,
         });
         setGeneratingBulletsId(null);
+        toast.error(aiErrorMessage('ai_noop', requestedLocale));
         return;
       }
 
