@@ -139,6 +139,40 @@ function commitFinalize(
   if (opts.apply === false || fin.blocked || !fin.countedAsSuccess) {
     session.recordVisibleApply(false, usageBefore);
   } else {
+    const preapply = session.evaluatePreApplyDecisionGates();
+    expect(preapply.passed).toBe(true);
+    const requiredFacts = Number(
+      fin.diagnostics?.finalRequiredFactCount
+      ?? fin.diagnostics?.requiredFactCount
+      ?? 0,
+    );
+    const coveredFacts = Number(
+      fin.diagnostics?.finalCoveredFactCount
+      ?? fin.diagnostics?.coveredFactCount
+      ?? requiredFacts,
+    );
+    const requiredPredicates = Number(
+      fin.diagnostics?.sourcePredicateIdentityCount
+      ?? fin.diagnostics?.finalCandidatePredicateIdentityCount
+      ?? 0,
+    );
+    const coveredPredicates = Number(
+      fin.diagnostics?.finalCandidatePredicateIdentityCount
+      ?? fin.diagnostics?.candidatePredicateIdentityCount
+      ?? requiredPredicates,
+    );
+    session.patch({
+      visibleRequiredFactCount: requiredFacts,
+      visibleCoveredFactCount: coveredFacts,
+      visibleUncoveredFactIdentityHashes: [],
+      visibleFactCoveragePassed: coveredFacts >= requiredFacts,
+      visibleRequiredPredicateCount: requiredPredicates,
+      visibleCoveredPredicateCount: coveredPredicates,
+      visiblePredicateCoveragePassed: coveredPredicates >= requiredPredicates,
+      visibleNormalizedHash: fin.diagnostics?.finalNormalizedHash,
+      visibleLocaleValidationPassed: true,
+      visibleTenseValidationPassed: fin.diagnostics?.tenseValidationPassed !== false,
+    });
     session.recordVisibleApply(true, usageBefore + 1, {
       visibleDescription: fin.text,
       finalNormalizedText: fin.text,
@@ -501,7 +535,7 @@ describe('AAB-305 Experience final-candidate diagnostics', () => {
         currentTextareaProvenance: 'ai_generated_unedited',
         authoritativeFactSourceKind: 'original_user',
         currentTextareaUsedForFactExtraction: false,
-        lastAiOutputHashMatched: true,
+        lastAiOutputHashMatched: false,
         materialUserEditDetected: false,
         staleGeneratedDescriptionIgnored: true,
         generatedDescriptionPreexisted: true,

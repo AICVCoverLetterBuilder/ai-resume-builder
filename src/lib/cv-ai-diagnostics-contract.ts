@@ -3052,6 +3052,7 @@ type ExperienceLike = {
   visibleComparisonNormalizedHash?: string | null;
   visibleComparisonUnitCount?: number | null;
   semanticNoOpDetected?: boolean | null;
+  semanticNoOpReason?: string | null;
   degradationDetected?: boolean | null;
   degradationKinds?: string[] | null;
   materialImprovementDetected?: boolean | null;
@@ -3080,6 +3081,12 @@ type ExperienceLike = {
   candidateSurfaceFormPassed?: boolean | null;
   candidateSurfaceFailureKinds?: string[] | null;
   finalDecisionKind?: string | null;
+  experienceCanonicalPreapplyDecisionRevision?: string | null;
+  canonicalExperienceDecisionCreated?: boolean | null;
+  providerCandidateValidationAccepted?: boolean | null;
+  finalVisibleDecisionAcceptedForApply?: boolean | null;
+  canonicalExperienceDecisionAllowsApply?: boolean | null;
+  canonicalExperienceDecisionAllowsUsage?: boolean | null;
   finalText?: string | null;
   requestedLocale?: string | null;
   sourceAlreadyValidForTarget?: boolean | null;
@@ -3519,6 +3526,64 @@ export function checkExperienceDiagnosticInvariants(
       countedAsSuccess: trace.countedAsSuccess ?? false,
       visibleApplySucceeded: trace.visibleApplySucceeded ?? false,
     });
+  }
+  if (typeof trace.experienceCanonicalPreapplyDecisionRevision === 'string') {
+    const semanticNoOp = trace.semanticNoOpDetected === true
+      && trace.materialImprovementDetected === false;
+    if (semanticNoOp && (
+      trace.finalDecisionKind !== 'semantic_noop'
+      || trace.finalVisibleDecisionAcceptedForApply !== false
+      || trace.canonicalExperienceDecisionAllowsApply !== false
+      || trace.canonicalExperienceDecisionAllowsUsage !== false
+    )) {
+      push('semantic_noop_canonical_decision_inconsistent', {
+        semanticNoOpDetected: true,
+        materialImprovementDetected: false,
+        finalDecisionKind: trace.finalDecisionKind ?? null,
+        finalVisibleDecisionAcceptedForApply:
+          trace.finalVisibleDecisionAcceptedForApply ?? null,
+        canonicalExperienceDecisionAllowsApply:
+          trace.canonicalExperienceDecisionAllowsApply ?? null,
+        canonicalExperienceDecisionAllowsUsage:
+          trace.canonicalExperienceDecisionAllowsUsage ?? null,
+      });
+    }
+    if (
+      (trace.applyAuthorized === true
+        || trace.applyCommitted === true
+        || trace.visibleApplySucceeded === true
+        || trace.countedAsSuccess === true)
+      && (
+        trace.canonicalExperienceDecisionAllowsApply !== true
+        || trace.finalVisibleDecisionAcceptedForApply !== true
+        || trace.finalDecisionKind !== 'material_improvement'
+        || trace.materialImprovementDetected !== true
+        || trace.semanticNoOpDetected === true
+      )
+    ) {
+      push('apply_without_canonical_material_decision', {
+        applyAuthorized: trace.applyAuthorized ?? false,
+        applyCommitted: trace.applyCommitted ?? false,
+        visibleApplySucceeded: trace.visibleApplySucceeded ?? false,
+        countedAsSuccess: trace.countedAsSuccess ?? false,
+        canonicalExperienceDecisionAllowsApply:
+          trace.canonicalExperienceDecisionAllowsApply ?? null,
+        finalVisibleDecisionAcceptedForApply:
+          trace.finalVisibleDecisionAcceptedForApply ?? null,
+        finalDecisionKind: trace.finalDecisionKind ?? null,
+      });
+    }
+    if (
+      Number(trace.usageCountAfter ?? 0) > Number(trace.usageCountBefore ?? 0)
+      && trace.canonicalExperienceDecisionAllowsUsage !== true
+    ) {
+      push('usage_without_canonical_material_decision', {
+        usageCountBefore: Number(trace.usageCountBefore ?? 0),
+        usageCountAfter: Number(trace.usageCountAfter ?? 0),
+        canonicalExperienceDecisionAllowsUsage:
+          trace.canonicalExperienceDecisionAllowsUsage ?? null,
+      });
+    }
   }
   if (
     trace.degradationDetected === true

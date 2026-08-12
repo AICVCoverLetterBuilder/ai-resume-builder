@@ -373,20 +373,17 @@ describe('AAB415 shared Experience Arabic person/perspective contract', () => {
     expect(second).toMatchObject({
       blocked: true,
       countedAsSuccess: false,
-      diagnostics: { finalDecisionKind: 'invalid_candidate_rejected' },
+      diagnostics: { finalDecisionKind: 'semantic_noop' },
     });
     expect(second.diagnostics).toMatchObject({
       uneditedRerunDetected: true,
       earlyNoOpPreflightPassed: false,
-      finalCandidatePresent: false,
-      finalCandidateSource: 'none',
-      finalNormalizedHash: null,
-      finalBulletCount: 0,
-      finalPersonMode: null,
-      finalRequiredFactCount: null,
-      finalCoveredFactCount: null,
-      finalAddedPredicateCount: 0,
-      finalSourceUnitPredicateCoveragePassed: null,
+      semanticNoOpDetected: true,
+      materialImprovementDetected: false,
+      providerCandidateValidationAccepted: false,
+      finalVisibleDecisionAcceptedForApply: false,
+      canonicalExperienceDecisionAllowsApply: false,
+      canonicalExperienceDecisionAllowsUsage: false,
     });
 
     const session = new ExperienceAiDiagnosticSession({

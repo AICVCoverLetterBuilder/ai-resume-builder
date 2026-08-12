@@ -299,6 +299,8 @@ describe('Build 260 Experience AI non-PII diagnostics', () => {
     });
     sessionOk.recordFinalizeResult(applied);
     if (applied.countedAsSuccess) {
+      const preapply = sessionOk.evaluatePreApplyDecisionGates();
+      expect(preapply.passed).toBe(true);
       sessionOk.recordVisibleApply(true, 2);
       const t = sessionOk.commit();
       expect(t.countedAsSuccess).toBe(true);

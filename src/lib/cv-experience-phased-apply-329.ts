@@ -769,6 +769,38 @@ export function checkExperiencePreapplyDiagnosticInvariants(
     }
   }
 
+  if (typeof trace.experienceCanonicalPreapplyDecisionRevision === 'string') {
+    const semanticNoOp = trace.semanticNoOpDetected === true
+      && trace.materialImprovementDetected === false;
+    if (semanticNoOp && (
+      trace.finalDecisionKind !== 'semantic_noop'
+      || trace.finalVisibleDecisionAcceptedForApply !== false
+      || trace.canonicalExperienceDecisionAllowsApply !== false
+      || trace.canonicalExperienceDecisionAllowsUsage !== false
+    )) {
+      push('semantic_noop_canonical_decision_inconsistent', {
+        semanticNoOpDetected: true,
+        materialImprovementDetected: false,
+        finalDecisionKind: trace.finalDecisionKind ?? null,
+        finalVisibleDecisionAcceptedForApply:
+          trace.finalVisibleDecisionAcceptedForApply ?? null,
+      });
+    }
+    if (trace.canonicalExperienceDecisionAllowsApply === true && (
+      trace.finalDecisionKind !== 'material_improvement'
+      || trace.materialImprovementDetected !== true
+      || trace.semanticNoOpDetected === true
+      || trace.finalVisibleDecisionAcceptedForApply !== true
+      || trace.canonicalExperienceDecisionAllowsUsage !== true
+    )) {
+      push('canonical_apply_without_material_improvement', {
+        finalDecisionKind: trace.finalDecisionKind ?? null,
+        materialImprovementDetected: trace.materialImprovementDetected ?? null,
+        semanticNoOpDetected: trace.semanticNoOpDetected ?? null,
+      });
+    }
+  }
+
   return { passed: failures.length === 0, failures };
 }
 
@@ -797,6 +829,14 @@ export function buildExperiencePreapplyDecisionSnapshot(trace: Record<string, un
     String(trace.finalCandidatePredicateIdentityCount ?? ''),
     String(trace.finalFactCoveragePassed ?? ''),
     String(trace.finalSourceUnitPredicateCoveragePassed ?? ''),
+    String(trace.semanticNoOpDetected ?? ''),
+    String(trace.semanticNoOpReason ?? ''),
+    String(trace.materialImprovementDetected ?? ''),
+    JSON.stringify(trace.materialImprovementKinds ?? []),
+    String(trace.neutralRestyleDetected ?? ''),
+    String(trace.finalDecisionKind ?? ''),
+    String(trace.canonicalExperienceDecisionAllowsApply ?? ''),
+    String(trace.canonicalExperienceDecisionAllowsUsage ?? ''),
   ].join('|'));
   return {
     preapplyDecisionSnapshotHash: snapshotHash,
@@ -854,6 +894,25 @@ export function checkExperiencePreapplyDiagnosticCompleteness(
     || typeof trace.requiredFactCount === 'number'
   )) {
     missing.push('sourceFactCount');
+  }
+
+  if (typeof trace.experienceCanonicalPreapplyDecisionRevision === 'string') {
+    for (const key of [
+      'canonicalExperienceDecisionCreated',
+      'providerCandidateValidationAccepted',
+      'finalVisibleDecisionAcceptedForApply',
+      'canonicalExperienceDecisionAllowsApply',
+      'canonicalExperienceDecisionAllowsUsage',
+      'semanticNoOpDetected',
+      'materialImprovementDetected',
+      'neutralRestyleDetected',
+      'finalDecisionKind',
+      'meaningfulChangeDetected',
+    ] as const) {
+      require(key);
+    }
+    if (!('semanticNoOpReason' in trace)) missing.push('semanticNoOpReason');
+    if (!('materialImprovementKinds' in trace)) missing.push('materialImprovementKinds');
   }
 
   if (trace.finalCandidatePresent === true || trace.finalCandidateSource === 'provider'

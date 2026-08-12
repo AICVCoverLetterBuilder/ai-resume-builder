@@ -278,6 +278,8 @@ describe('AAB-318 first-click success diagnostic truth', () => {
       resultText: ATLAS_PAST,
     });
     session.recordFinalizeResult(fin);
+    const preapply = session.evaluatePreApplyDecisionGates();
+    expect(preapply.passed).toBe(true);
     session.recordVisibleApply(true, 30, {
       visibleDescription: fin.text,
       finalNormalizedText: fin.text,

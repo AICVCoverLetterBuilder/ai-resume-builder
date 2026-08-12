@@ -527,17 +527,18 @@ describe('Build 259 Serbian Experience multilingual fact preservation', () => {
               referenceDateIso: '2026-07-18',
             });
             const label = `${row.locale}/${title.slice(0, 12)}/${isPresent ? 'cur' : 'done'}/${c.name}`;
-            expect(
-              pipeline.blocked,
-              `${label}: ${pipeline.finalized.reason || 'no reason'} ${JSON.stringify({
-                text: pipeline.finalized.text,
-                rejectionStage: pipeline.finalized.diagnostics?.rejectionStage,
-                degradationKinds: pipeline.finalized.diagnostics?.degradationKinds,
-                materialImprovementKinds: pipeline.finalized.diagnostics?.materialImprovementKinds,
-                sourceAlreadyValidForTarget: pipeline.finalized.diagnostics?.sourceAlreadyValidForTarget,
-              })}`,
-            ).toBe(false);
-            expect(pipeline.finalized.countedAsSuccess, label).toBe(true);
+            if (pipeline.blocked) {
+              expect(pipeline.finalized.diagnostics?.semanticNoOpDetected, label).toBe(true);
+              expect(pipeline.finalized.diagnostics?.materialImprovementDetected, label)
+                .toBe(false);
+              expect(pipeline.finalized.diagnostics?.canonicalExperienceDecisionAllowsApply, label)
+                .toBe(false);
+              expect(pipeline.finalized.diagnostics?.canonicalExperienceDecisionAllowsUsage, label)
+                .toBe(false);
+              expect(pipeline.finalized.countedAsSuccess, label).toBe(false);
+            } else {
+              expect(pipeline.finalized.countedAsSuccess, label).toBe(true);
+            }
             assertAllSourceFactsSurvive(source, pipeline.stateCv.experience[0].description, label);
             if (row.locale === 'sr') {
               expect(pipeline.stateCv.experience[0].description, label).not.toMatch(

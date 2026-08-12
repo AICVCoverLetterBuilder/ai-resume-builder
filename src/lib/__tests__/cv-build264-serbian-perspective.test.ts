@@ -219,7 +219,21 @@ function runExactBuild264(opts?: {
   let nextCv = cv;
   let usageAfter = usageBefore;
   if (finalized.countedAsSuccess && !finalized.blocked) {
+    expect(session.evaluatePreApplyDecisionGates().passed).toBe(true);
     nextCv = applyFinalizedBulletsToCv(cv, 'sr', exp.id, finalized, ctx);
+    session.patch({
+      visibleRequiredFactCount: finalized.diagnostics?.finalRequiredFactCount ?? 3,
+      visibleCoveredFactCount: finalized.diagnostics?.finalCoveredFactCount ?? 3,
+      visibleUncoveredFactIdentityHashes: [],
+      visibleFactCoveragePassed: true,
+      visibleRequiredPredicateCount: finalized.diagnostics?.sourcePredicateIdentityCount ?? 0,
+      visibleCoveredPredicateCount:
+        finalized.diagnostics?.finalCandidatePredicateIdentityCount ?? 0,
+      visiblePredicateCoveragePassed: true,
+      visibleNormalizedHash: finalized.diagnostics?.finalNormalizedHash,
+      visibleLocaleValidationPassed: true,
+      visibleTenseValidationPassed: finalized.diagnostics?.tenseValidationPassed !== false,
+    });
     recordProAiUserActionSuccess();
     usageAfter = getProAiUsageCount();
     session.recordVisibleApply(true, usageAfter, {

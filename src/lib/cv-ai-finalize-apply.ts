@@ -478,6 +478,8 @@ import {
   EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
   EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
   EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
+  EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
+  decideExperienceCanonicalPreapply,
   evaluateExperienceVisibleComparison,
   shouldUseVisibleComparisonForNoOp,
   mapFactAuthorityKindForDiagnostics,
@@ -495,6 +497,7 @@ export {
   EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
   EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
   EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
+  EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
   EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION,
   EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION,
   EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION,
@@ -503,6 +506,7 @@ void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
 void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
 void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
+void EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
 void EXPERIENCE_VISIBLE_SNAPSHOT_TRUTH_327_REVISION;
 void EXPERIENCE_INVARIANT_PREAPPLY_GATE_327_REVISION;
@@ -753,6 +757,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION,
   EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION,
   EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION,
+  EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
   SPANISH_EXPERIENCE_COMPLIANCE_GROUNDING_311_REVISION,
   EXPERIENCE_PREDICATE_PHASE_DIAGNOSTICS_311_REVISION,
   EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION,
@@ -1334,6 +1339,12 @@ export type FinalizeCvAiFieldResult = {
     degradationKinds?: string[];
     neutralRestyleDetected?: boolean;
     finalDecisionKind?: string | null;
+    experienceCanonicalPreapplyDecisionRevision?: typeof EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
+    canonicalExperienceDecisionCreated?: boolean;
+    providerCandidateValidationAccepted?: boolean;
+    finalVisibleDecisionAcceptedForApply?: boolean;
+    canonicalExperienceDecisionAllowsApply?: boolean;
+    canonicalExperienceDecisionAllowsUsage?: boolean;
     experienceCanonicalFinalizationRevision?: typeof EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
     spanishExperienceSurfaceFormGateRevision?: typeof SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
     experienceEvidenceBasedImprovementRevision?: typeof EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION;
@@ -11128,56 +11139,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
       void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
       const isEs = (locale || '').toLowerCase().startsWith('es');
-      if (!isEs) {
-        // Non-Spanish: only exact/normalized visible equivalence is a no-op.
-        // Do not apply Spanish compliance/semantic degradation heuristics.
-        // Hindi हूँ→हैं collapses under Mn-stripped identity hashes — require
-        // whitespace-normalized surface equality before treating as no-op.
-        const visSurf = (visibleComparisonText || '').replace(/\s+/g, ' ').trim();
-        const resSurf = (result.text || '').replace(/\s+/g, ' ').trim();
-        if (
-          experienceAiSourcesEquivalent(visibleComparisonText, result.text)
-          && visSurf === resSurf
-        ) {
-          providerAccepted = false;
-          unsupportedClaimRepairApplied = false;
-          clientDeterministicFallbackApplied = false;
-          finalCandidateSource = 'none';
-          const noopVis = evaluateExperienceVisibleComparison({
-            factAuthorityText: sourceForCoverage,
-            visibleComparisonText,
-            candidateText: result.text,
-            locale,
-            visibleComparisonProvenance:
-              (sourceBundle.visibleSourceProvenance || textareaProvenance?.currentTextareaProvenance || null),
-            matchedLastAiOutput: Boolean(sourceBundle.visibleSourceMatchedLastAiOutput || textareaProvenance?.lastAiOutputHashMatched),
-            useVisibleForNoOp: true,
-            capturedAtRequest: true,
-          });
-          lastVisibleComparisonEval = noopVis;
-          return {
-            blocked: true,
-            reason: 'experience_ai_noop',
-            text: exp?.description || visibleComparisonText || '',
-            origin: 'user',
-            roleDutyConflict,
-            countedAsSuccess: false,
-            diagnostics: {
-              ...baseDiag(),
-              ...perspectiveMeta,
-              ...buildVisibleComparisonDiagFields(noopVis, result.text),
-              meaningfulChangeDetected: false,
-              noOpRejected: true,
-              noOpDetected: true,
-              typedFailureReason: 'ai_noop',
-              rejectionStage: 'visible_comparison_noop',
-              finalCandidateSource: 'none',
-              countedAsSuccess: false,
-              ...noSelectedFinalDiagnosticFields(),
-            },
-          };
-        }
-      } else {
+      if (isEs) {
         void EXPERIENCE_CANONICAL_FINALIZATION_313_REVISION;
         void SPANISH_EXPERIENCE_SURFACE_FORM_GATE_313_REVISION;
         void EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION;
@@ -11461,6 +11423,56 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
       }
     }
+    // Locale-specific fallback validators are stricter than the generic
+    // visible comparator. Preserve semantic no-op authority, while accepting
+    // a proven 1:1 cross-locale fallback that the generic catalogue labels as
+    // fact loss solely because predicate identities differ by locale.
+    const fallbackCoverageProven = Boolean(
+      result.countedAsSuccess
+      && result.origin === 'deterministic_fallback'
+      && (
+        result.diagnostics?.clientDeterministicFallbackSelected === true
+        || result.diagnostics?.clientDeterministicFallbackUsedForFinalCandidate === true
+        || result.diagnostics?.fallbackApplied === true
+      )
+      && Number(result.diagnostics?.clientDeterministicFallbackCoveredFactCount ?? 0)
+        >= Number(result.diagnostics?.clientDeterministicFallbackRequiredFactCount ?? 1)
+      && Array.isArray(result.diagnostics?.clientDeterministicFallbackUncoveredFactIds)
+      && result.diagnostics.clientDeterministicFallbackUncoveredFactIds.length === 0
+      && Number(result.diagnostics?.finalUnsupportedClaimCount ?? 0) === 0
+      && result.diagnostics?.targetLocalePurityPassed !== false
+    );
+    const specialDesignFallbackProven = Boolean(
+      fallbackCoverageProven
+      && (
+        result.diagnostics?.clientDeterministicFallbackReason
+          === 'croatian_design_family_rebuild'
+        || result.diagnostics?.clientDeterministicFallbackReason
+          === 'russian_design_family_rebuild'
+      )
+      && Number(result.diagnostics?.fallbackCoveredFamilyCount ?? 0)
+        >= Number(result.diagnostics?.authoritativeRequiredFamilyCount ?? 1)
+    );
+    const visibleDegradationKinds = Array.isArray(successVisFields.degradationKinds)
+      ? successVisFields.degradationKinds as string[]
+      : [];
+    if (
+      crossLocaleOp
+      && fallbackCoverageProven
+      && successVisFields.degradationDetected === true
+      && (
+        visibleDegradationKinds.every((kind) => kind === 'fact_lost')
+        || specialDesignFallbackProven
+      )
+    ) {
+      successVisFields.degradationDetected = false;
+      successVisFields.degradationKinds = [];
+      successVisFields.semanticNoOpDetected = false;
+      successVisFields.semanticNoOpReason = null;
+      successVisFields.materialImprovementDetected = true;
+      successVisFields.materialImprovementKinds = ['wrong_locale_fixed'];
+      successVisFields.finalDecisionKind = 'material_improvement';
+    }
     // Prefer the canonical decision already proven for this candidate (tense
     // normalizer / repair) when the re-eval kinds are empty due to phase drift.
     const canonicalKinds = (lastCanonicalDecision?.shouldApply
@@ -11480,6 +11492,92 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       && Array.isArray(evidenceKinds)
       && evidenceKinds.length > 0,
     );
+    const visibleComparisonAvailable = Boolean((visibleComparisonText || '').trim());
+    const canonicalPreapplyDecision = decideExperienceCanonicalPreapply({
+      candidateValidationAccepted: Boolean(result.countedAsSuccess && !result.blocked),
+      visibleComparisonAvailable,
+      semanticNoOpDetected: successVisFields.semanticNoOpDetected === true,
+      semanticNoOpReason: typeof successVisFields.semanticNoOpReason === 'string'
+        ? successVisFields.semanticNoOpReason
+        : null,
+      materialImprovementDetected: evidenceOk,
+      materialImprovementKinds: evidenceKinds || [],
+      neutralRestyleDetected: successVisFields.neutralRestyleDetected === true,
+      degradationDetected: successVisFields.degradationDetected === true,
+      degradationKinds: Array.isArray(successVisFields.degradationKinds)
+        ? successVisFields.degradationKinds as string[]
+        : [],
+      allowMaterialApplyWithoutVisibleComparison: Boolean(
+        result.countedAsSuccess && !visibleComparisonAvailable,
+      ),
+    });
+    successVisFields.semanticNoOpDetected = canonicalPreapplyDecision.semanticNoOpDetected;
+    successVisFields.semanticNoOpReason = canonicalPreapplyDecision.semanticNoOpReason;
+    successVisFields.materialImprovementDetected =
+      canonicalPreapplyDecision.materialImprovementDetected;
+    successVisFields.materialImprovementKinds = [
+      ...canonicalPreapplyDecision.materialImprovementKinds,
+    ];
+    successVisFields.neutralRestyleDetected = canonicalPreapplyDecision.neutralRestyleDetected;
+    successVisFields.degradationDetected = canonicalPreapplyDecision.degradationDetected;
+    successVisFields.degradationKinds = [...canonicalPreapplyDecision.degradationKinds];
+    successVisFields.finalDecisionKind = canonicalPreapplyDecision.finalDecisionKind;
+
+    // Grounding acceptance alone never authorizes apply. The same immutable
+    // decision controls the visible write, commit, and usage paths.
+    if (result.countedAsSuccess && !canonicalPreapplyDecision.shouldApply) {
+      unsupportedClaimRepairApplied = false;
+      clientDeterministicFallbackApplied = false;
+      const semanticNoOp = canonicalPreapplyDecision.finalDecisionKind === 'semantic_noop';
+      const degradation = canonicalPreapplyDecision.finalDecisionKind === 'degradation_rejected';
+      const candidateEvidenceSource = finalCandidateSource
+        || result.diagnostics?.finalCandidateSource
+        || (result.origin === 'deterministic_fallback' ? 'deterministic_fallback' : 'provider');
+      return {
+        blocked: true,
+        reason: degradation ? 'experience_ai_degradation' : 'experience_ai_noop',
+        text: exp?.description || visibleComparisonText || '',
+        origin: 'user',
+        roleDutyConflict,
+        countedAsSuccess: false,
+        diagnostics: {
+          ...baseDiag(),
+          ...result.diagnostics,
+          ...perspectiveMeta,
+          ...successVisFields,
+          meaningfulChangeDetected: false,
+          noOpRejected: semanticNoOp,
+          noOpDetected: semanticNoOp,
+          typedFailureReason: degradation ? 'experience_ai_degradation' : 'ai_noop',
+          rejectionStage: semanticNoOp
+            ? 'canonical_preapply_semantic_noop'
+            : 'canonical_preapply_decision',
+          finalCandidateSource: candidateEvidenceSource,
+          countedAsSuccess: false,
+          experienceCanonicalPreapplyDecisionRevision:
+            EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
+          canonicalExperienceDecisionCreated: true,
+          providerCandidateValidationAccepted:
+            canonicalPreapplyDecision.candidateValidationAccepted,
+          finalVisibleDecisionAcceptedForApply: false,
+          canonicalExperienceDecisionAllowsApply: false,
+          canonicalExperienceDecisionAllowsUsage: false,
+          crossEntryLeakageDetected: false,
+          selectedExperienceEntryIdHash,
+          operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
+            ? hashExperienceEntryId(snapshot.experienceEntryId)
+            : null,
+          sourceFactsEntryIdHash: selectedExperienceEntryIdHash,
+          canonicalFactsEntryIdHash: selectedExperienceEntryIdHash,
+          fallbackFactsEntryIdHash: selectedExperienceEntryIdHash,
+          providerTargetEntryIdHash: selectedExperienceEntryIdHash,
+          arrayIndexAtRequest,
+          arrayIndexAtApply: experienceIndexForIdStrict(cv, exp.id),
+          appliedExperienceEntryIdHash: null,
+          attemptedApplyExperienceEntryIdHash: null,
+        },
+      };
+    }
     // Evidence gate: never bill with materialImprovement true and empty kinds.
     if (
       result.countedAsSuccess
@@ -11752,6 +11850,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           EXPERIENCE_EVIDENCE_BASED_IMPROVEMENT_313_REVISION,
         experienceSingleDecisionApplyGateRevision:
           EXPERIENCE_SINGLE_DECISION_APPLY_GATE_313_REVISION,
+        experienceCanonicalPreapplyDecisionRevision:
+          EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
+        canonicalExperienceDecisionCreated: true,
+        providerCandidateValidationAccepted:
+          canonicalPreapplyDecision.candidateValidationAccepted,
+        finalVisibleDecisionAcceptedForApply:
+          canonicalPreapplyDecision.finalVisibleDecisionAcceptedForApply,
+        canonicalExperienceDecisionAllowsApply: canonicalPreapplyDecision.shouldApply,
+        canonicalExperienceDecisionAllowsUsage:
+          canonicalPreapplyDecision.shouldIncrementUsage,
         experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
         spanishExperienceRepairGroundingRevision: SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
         providerRejectionReason: result.diagnostics?.providerRejectionReason

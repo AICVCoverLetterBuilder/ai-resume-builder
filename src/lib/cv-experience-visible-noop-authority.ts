@@ -110,11 +110,15 @@ export const EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION =
 /** AAB-312 — fact-authority diagnostic consistency. */
 export const EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION =
   'experience-fact-authority-consistency-312-v1' as const;
+/** AAB-421 source gate — one locale-shared immutable decision before apply. */
+export const EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION =
+  'experience-canonical-preapply-decision-421-v1' as const;
 
 void EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION;
 void EXPERIENCE_VISIBLE_SNAPSHOT_WIRING_312_REVISION;
 void EXPERIENCE_SEMANTIC_NOOP_FINAL_GATE_312_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_CONSISTENCY_312_REVISION;
+void EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
 
 export type ExperienceVisibleComparisonKind =
   | 'currentTextarea'
@@ -154,6 +158,119 @@ export type ExperienceFinalDecisionKind =
   | 'degradation'
   | 'neutral_restyle'
   | 'none';
+
+export type ExperienceCanonicalPreapplyDecisionKind =
+  | 'material_improvement'
+  | 'semantic_noop'
+  | 'degradation_rejected'
+  | 'invalid_candidate_rejected';
+
+/**
+ * Grounding acceptance and visible apply acceptance are deliberately separate.
+ * This frozen object is the only decision allowed to authorize an Experience
+ * write or usage increment.
+ */
+export type ExperienceCanonicalPreapplyDecision = Readonly<{
+  revision: typeof EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
+  candidateValidationAccepted: boolean;
+  visibleComparisonAvailable: boolean;
+  semanticNoOpDetected: boolean;
+  semanticNoOpReason: string | null;
+  materialImprovementDetected: boolean;
+  materialImprovementKinds: readonly string[];
+  neutralRestyleDetected: boolean;
+  degradationDetected: boolean;
+  degradationKinds: readonly string[];
+  finalDecisionKind: ExperienceCanonicalPreapplyDecisionKind;
+  finalVisibleDecisionAcceptedForApply: boolean;
+  shouldApply: boolean;
+  shouldIncrementUsage: boolean;
+}>;
+
+export function decideExperienceCanonicalPreapply(options: {
+  candidateValidationAccepted: boolean;
+  visibleComparisonAvailable: boolean;
+  semanticNoOpDetected: boolean;
+  semanticNoOpReason?: string | null;
+  materialImprovementDetected: boolean;
+  materialImprovementKinds?: readonly string[];
+  neutralRestyleDetected?: boolean;
+  degradationDetected?: boolean;
+  degradationKinds?: readonly string[];
+  allowMaterialApplyWithoutVisibleComparison?: boolean;
+}): ExperienceCanonicalPreapplyDecision {
+  const reportedImprovementKinds = [
+    ...new Set((options.materialImprovementKinds || []).filter(Boolean)),
+  ];
+  const generationWithoutVisibleBaseline = Boolean(
+    options.candidateValidationAccepted
+    && !options.visibleComparisonAvailable
+    && options.allowMaterialApplyWithoutVisibleComparison === true,
+  );
+  const improvementKinds = Object.freeze(
+    generationWithoutVisibleBaseline && reportedImprovementKinds.length === 0
+      ? ['grounded_target_generation']
+      : reportedImprovementKinds,
+  );
+  const semanticNoOpDetected = Boolean(
+    options.visibleComparisonAvailable
+    && options.semanticNoOpDetected
+    && !options.materialImprovementDetected,
+  );
+  const degradationKinds = Object.freeze([
+    ...new Set((options.degradationKinds || []).filter(Boolean)),
+  ]);
+  const degradationDetected = Boolean(
+    options.candidateValidationAccepted
+    && !semanticNoOpDetected
+    && options.degradationDetected
+    && degradationKinds.length > 0,
+  );
+  const materialImprovementDetected = Boolean(
+    options.candidateValidationAccepted
+    && !semanticNoOpDetected
+    && !degradationDetected
+    && (
+      (options.materialImprovementDetected && improvementKinds.length > 0)
+      || generationWithoutVisibleBaseline
+    ),
+  );
+
+  let finalDecisionKind: ExperienceCanonicalPreapplyDecisionKind;
+  if (semanticNoOpDetected) {
+    finalDecisionKind = 'semantic_noop';
+  } else if (!options.candidateValidationAccepted) {
+    finalDecisionKind = 'invalid_candidate_rejected';
+  } else if (degradationDetected) {
+    finalDecisionKind = 'degradation_rejected';
+  } else if (materialImprovementDetected) {
+    finalDecisionKind = 'material_improvement';
+  } else {
+    finalDecisionKind = 'invalid_candidate_rejected';
+  }
+
+  const shouldApply = finalDecisionKind === 'material_improvement';
+  return Object.freeze({
+    revision: EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
+    candidateValidationAccepted: Boolean(options.candidateValidationAccepted),
+    visibleComparisonAvailable: Boolean(options.visibleComparisonAvailable),
+    semanticNoOpDetected,
+    semanticNoOpReason: semanticNoOpDetected
+      ? (options.semanticNoOpReason || 'semantic_equivalent_visible')
+      : null,
+    materialImprovementDetected,
+    materialImprovementKinds: materialImprovementDetected
+      ? improvementKinds
+      : Object.freeze([]),
+    neutralRestyleDetected: Boolean(semanticNoOpDetected && options.neutralRestyleDetected),
+    degradationDetected,
+    degradationKinds: degradationDetected ? degradationKinds : Object.freeze([]),
+    finalDecisionKind,
+    finalVisibleDecisionAcceptedForApply: shouldApply,
+    shouldApply,
+    shouldIncrementUsage: shouldApply,
+  });
+}
 
 export type ExperienceVisibleComparisonSnapshot = {
   kind: ExperienceVisibleComparisonKind;

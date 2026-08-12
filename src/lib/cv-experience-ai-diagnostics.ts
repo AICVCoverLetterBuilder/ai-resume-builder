@@ -62,6 +62,9 @@ import type {
 import {
   experienceAiSourcesEquivalent,
 } from './cv-experience-ai-operation-snapshot';
+import {
+  EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
+} from './cv-experience-visible-noop-authority';
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
 void EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION;
 void EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION;
@@ -77,6 +80,7 @@ void EXPERIENCE_SELECTED_FINAL_COVERAGE_329_REVISION;
 void EXPERIENCE_PHASED_DIAGNOSTIC_COMPLETENESS_329_REVISION;
 void EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION;
 void EXPERIENCE_FINAL_VISIBLE_PREDICATE_TRUTH_329_REVISION;
+void EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
 import { detectTextLocale } from './cv-content-locale';
 import { resolveTargetScriptForLocale } from './cv-ai-unit-locale-purity';
 import { hashExperienceEntryId } from './cv-experience-entry-isolation';
@@ -558,6 +562,12 @@ export type ExperienceAiDiagnosticTrace = {
   degradationKinds: string[];
   neutralRestyleDetected: boolean;
   finalDecisionKind: string | null;
+  experienceCanonicalPreapplyDecisionRevision: string | null;
+  canonicalExperienceDecisionCreated: boolean | null;
+  providerCandidateValidationAccepted: boolean | null;
+  finalVisibleDecisionAcceptedForApply: boolean | null;
+  canonicalExperienceDecisionAllowsApply: boolean | null;
+  canonicalExperienceDecisionAllowsUsage: boolean | null;
   experienceVisibleNoopAuthorityRevision: string | null;
   experienceVisibleSnapshotWiringRevision: string | null;
   experienceSemanticNoopFinalGateRevision: string | null;
@@ -1221,6 +1231,12 @@ export class ExperienceAiDiagnosticSession {
       degradationKinds: [],
       neutralRestyleDetected: false,
       finalDecisionKind: null,
+      experienceCanonicalPreapplyDecisionRevision: null,
+      canonicalExperienceDecisionCreated: null,
+      providerCandidateValidationAccepted: null,
+      finalVisibleDecisionAcceptedForApply: null,
+      canonicalExperienceDecisionAllowsApply: null,
+      canonicalExperienceDecisionAllowsUsage: null,
       experienceVisibleNoopAuthorityRevision: null,
       experienceVisibleSnapshotWiringRevision: null,
       experienceSemanticNoopFinalGateRevision: null,
@@ -1915,7 +1931,7 @@ export class ExperienceAiDiagnosticSession {
         diag.unsupportedClaimCount ?? 0,
         reason === 'unsupported_claim' || reason === 'unsupported_generated_duty' ? 1 : 0,
       ),
-      visibleApplySucceeded: Boolean(finalized.countedAsSuccess && !blocked),
+      visibleApplySucceeded: false,
       finalBulletCount: legacyFinalCount,
       finalBulletScripts: legacyFinalScripts,
       tenseMode: diag.tenseMode || this.draft.tenseMode || 'unknown',
@@ -2387,7 +2403,7 @@ export class ExperienceAiDiagnosticSession {
               ? ((diag as Record<string, unknown>).appliedFinalBulletScripts as unknown[])
                 .map(String)
               : appliedScripts,
-            applyAttempted: true,
+            applyAttempted: false,
             visibleApplyApplicable: true,
             sourceAlreadyValidForTarget:
               typeof (diag as Record<string, unknown>).sourceAlreadyValidForTarget === 'boolean'
@@ -2505,6 +2521,28 @@ export class ExperienceAiDiagnosticSession {
         : [],
       neutralRestyleDetected: Boolean(diag.neutralRestyleDetected),
       finalDecisionKind: (diag.finalDecisionKind as string | null | undefined) ?? null,
+      experienceCanonicalPreapplyDecisionRevision:
+        (diag.experienceCanonicalPreapplyDecisionRevision as string | null | undefined) ?? null,
+      canonicalExperienceDecisionCreated:
+        typeof diag.canonicalExperienceDecisionCreated === 'boolean'
+          ? diag.canonicalExperienceDecisionCreated
+          : null,
+      providerCandidateValidationAccepted:
+        typeof diag.providerCandidateValidationAccepted === 'boolean'
+          ? diag.providerCandidateValidationAccepted
+          : null,
+      finalVisibleDecisionAcceptedForApply:
+        typeof diag.finalVisibleDecisionAcceptedForApply === 'boolean'
+          ? diag.finalVisibleDecisionAcceptedForApply
+          : null,
+      canonicalExperienceDecisionAllowsApply:
+        typeof diag.canonicalExperienceDecisionAllowsApply === 'boolean'
+          ? diag.canonicalExperienceDecisionAllowsApply
+          : null,
+      canonicalExperienceDecisionAllowsUsage:
+        typeof diag.canonicalExperienceDecisionAllowsUsage === 'boolean'
+          ? diag.canonicalExperienceDecisionAllowsUsage
+          : null,
       experienceVisibleNoopAuthorityRevision:
         (diag.experienceVisibleNoopAuthorityRevision as string | null | undefined) ?? null,
       experienceVisibleSnapshotWiringRevision:
@@ -2553,6 +2591,12 @@ export class ExperienceAiDiagnosticSession {
         ? diag.finalUnsupportedClaimKinds.map(String)
         : [],
       countedAsSuccess: Boolean(finalized.countedAsSuccess),
+      applyAuthorized: false,
+      applyAttempted: false,
+      applyWriteSucceeded: false,
+      visibleValidationAttempted: false,
+      visibleValidationPassed: false,
+      applyCommitted: false,
       finalTypedFailureReason: blocked
         ? (reconcileExperienceTerminalRejectionReason({
           terminalReason: reason,
@@ -3274,18 +3318,56 @@ export class ExperienceAiDiagnosticSession {
       provisional as Record<string, unknown>,
     );
     const sharedInvariants = checkExperienceDiagnosticInvariants(provisional);
+    const canonicalDecisionRequired =
+      this.draft.experienceCanonicalPreapplyDecisionRevision
+        === EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
+    const canonicalDecisionPassed = !canonicalDecisionRequired || Boolean(
+      this.draft.canonicalExperienceDecisionCreated === true
+      && this.draft.providerCandidateValidationAccepted === true
+      && this.draft.finalVisibleDecisionAcceptedForApply === true
+      && this.draft.canonicalExperienceDecisionAllowsApply === true
+      && this.draft.canonicalExperienceDecisionAllowsUsage === true
+      && this.draft.finalDecisionKind === 'material_improvement'
+      && this.draft.materialImprovementDetected === true
+      && this.draft.semanticNoOpDetected !== true,
+    );
+    const canonicalDecisionFailures = canonicalDecisionPassed
+      ? []
+      : [{
+        invariantCode: 'canonical_experience_decision_does_not_authorize_apply',
+        observed: {
+          canonicalExperienceDecisionCreated:
+            this.draft.canonicalExperienceDecisionCreated === true,
+          providerCandidateValidationAccepted:
+            this.draft.providerCandidateValidationAccepted === true,
+          finalVisibleDecisionAcceptedForApply:
+            this.draft.finalVisibleDecisionAcceptedForApply === true,
+          canonicalExperienceDecisionAllowsApply:
+            this.draft.canonicalExperienceDecisionAllowsApply === true,
+          canonicalExperienceDecisionAllowsUsage:
+            this.draft.canonicalExperienceDecisionAllowsUsage === true,
+          finalDecisionKind: this.draft.finalDecisionKind ?? null,
+        },
+      }];
     const invariantFailures = [
       ...preapplyInvariants.failures,
       ...sharedInvariants.failures,
+      ...canonicalDecisionFailures,
     ];
-    const invariantsPassed = preapplyInvariants.passed && sharedInvariants.passed;
+    const invariantsPassed = preapplyInvariants.passed
+      && sharedInvariants.passed
+      && canonicalDecisionPassed;
     const withInvariants = {
       ...provisional,
       diagnosticInvariantCheckPassed: invariantsPassed,
       diagnosticInvariantFailureCount: invariantFailures.length,
       diagnosticInvariantFailures: invariantFailures,
-      preapplyDiagnosticInvariantCheckPassed: preapplyInvariants.passed,
-      preapplyDiagnosticInvariantFailures: preapplyInvariants.failures,
+      preapplyDiagnosticInvariantCheckPassed:
+        preapplyInvariants.passed && canonicalDecisionPassed,
+      preapplyDiagnosticInvariantFailures: [
+        ...preapplyInvariants.failures,
+        ...canonicalDecisionFailures,
+      ],
     };
     const completeness = checkExperiencePreapplyDiagnosticCompleteness(
       withInvariants as Record<string, unknown>,
@@ -3299,8 +3381,12 @@ export class ExperienceAiDiagnosticSession {
       diagnosticInvariantCheckPassed: invariantsPassed,
       diagnosticInvariantFailureCount: invariantFailures.length,
       diagnosticInvariantFailures: invariantFailures,
-      preapplyDiagnosticInvariantCheckPassed: preapplyInvariants.passed,
-      preapplyDiagnosticInvariantFailures: preapplyInvariants.failures,
+      preapplyDiagnosticInvariantCheckPassed:
+        preapplyInvariants.passed && canonicalDecisionPassed,
+      preapplyDiagnosticInvariantFailures: [
+        ...preapplyInvariants.failures,
+        ...canonicalDecisionFailures,
+      ],
       preapplyDiagnosticCompletenessPassed: completeness.passed,
       preapplyMissingRequiredDiagnosticFields: completeness.missingRequiredDiagnosticFields,
       preapplyNullRequiredDiagnosticFields: completeness.nullRequiredDiagnosticFields,
@@ -3319,7 +3405,10 @@ export class ExperienceAiDiagnosticSession {
       experienceTransactionalApplyTruthRevision:
         EXPERIENCE_TRANSACTIONAL_APPLY_TRUTH_329_REVISION,
     });
-    this.stage('preapply_invariant_gate', preapplyInvariants.passed ? 'ok' : 'fail');
+    this.stage(
+      'preapply_invariant_gate',
+      preapplyInvariants.passed && canonicalDecisionPassed ? 'ok' : 'fail',
+    );
     this.stage('preapply_completeness_gate', completeness.passed ? 'ok' : 'fail');
     this.stage('diagnostic_preapply_gate', passed ? 'ok' : 'fail');
     this.stage('apply_authorized', passed ? 'ok' : 'skipped', passed ? undefined : 'preapply_blocked');
@@ -3376,13 +3465,31 @@ export class ExperienceAiDiagnosticSession {
       });
       return;
     }
+    const canonicalDecisionRequired =
+      this.draft.experienceCanonicalPreapplyDecisionRevision
+        === EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
+    const canonicalDecisionAllowsCommit = !canonicalDecisionRequired || (
+      this.draft.canonicalExperienceDecisionCreated === true
+      && this.draft.providerCandidateValidationAccepted === true
+      && this.draft.finalVisibleDecisionAcceptedForApply === true
+      && this.draft.canonicalExperienceDecisionAllowsApply === true
+      && this.draft.canonicalExperienceDecisionAllowsUsage === true
+      && this.draft.finalDecisionKind === 'material_improvement'
+      && this.draft.materialImprovementDetected === true
+      && this.draft.semanticNoOpDetected !== true
+      && this.draft.applyAuthorized === true
+    );
+    const committed = applied && canonicalDecisionAllowsCommit;
+    const committedUsageAfter = committed
+      ? usageAfter
+      : (this.draft.usageCountBefore ?? usageAfter);
     let visibleMatch: boolean | null = this.draft.visibleTextareaMatchesFinalNormalizedHash ?? null;
-    if (options?.visibleDescription != null && options?.finalNormalizedText != null) {
+    if (committed && options?.visibleDescription != null && options?.finalNormalizedText != null) {
       visibleMatch = fingerprintText(options.visibleDescription)
         === fingerprintText(options.finalNormalizedText);
-    } else if (applied && this.draft.normalizedBulletsUsedForApply) {
+    } else if (committed && this.draft.normalizedBulletsUsedForApply) {
       visibleMatch = true;
-    } else if (applied && this.draft.finalNormalizedHash) {
+    } else if (committed && this.draft.finalNormalizedHash) {
       // Successful apply without explicit compare text still must not leave null
       // when finalize already stamped a final hash (verify via same hash presence).
       visibleMatch = this.draft.visibleTextareaMatchesFinalNormalizedHash === true
@@ -3390,24 +3497,24 @@ export class ExperienceAiDiagnosticSession {
         : (typeof this.draft.visibleTextareaMatchesFinalNormalizedHash === 'boolean'
           ? this.draft.visibleTextareaMatchesFinalNormalizedHash
           : true);
-    } else if (applied) {
+    } else if (committed) {
       // Success path without verification inputs is invalid → typed false for invariants.
       visibleMatch = visibleMatch === true ? true : false;
-    } else if (!applied) {
+    } else if (!committed) {
       // Terminal failure: null is allowed when no visible apply was attempted.
       visibleMatch = null;
     }
     this.patch({
-      countedAsSuccess: applied,
-      usageCountAfter: usageAfter,
-      visibleApplySucceeded: applied,
+      countedAsSuccess: committed,
+      usageCountAfter: committedUsageAfter,
+      visibleApplySucceeded: committed,
       visibleTextareaMatchesFinalNormalizedHash: visibleMatch,
       visibleDescriptionMatchesFinalHash: visibleMatch,
       // AAB-329: committed apply fields only when visible apply succeeds.
-      ...(applied
+      ...(committed
         ? {
           applyCommitted: true,
-          applyAuthorized: this.draft.applyAuthorized ?? true,
+          applyAuthorized: this.draft.applyAuthorized === true,
           applyAttempted: true,
           applyWriteSucceeded: true,
           visibleValidationAttempted: true,
@@ -3472,6 +3579,11 @@ export class ExperienceAiDiagnosticSession {
               : this.draft.postapplyDiagnosticCompletenessPassed,
         }
         : {
+          applyAuthorized: false,
+          applyAttempted: false,
+          applyWriteSucceeded: false,
+          visibleValidationAttempted: false,
+          visibleValidationPassed: false,
           applyCommitted: false,
           targetContentApplied: false,
           contentLocaleUpdatedAfterApply: false,
@@ -3484,14 +3596,14 @@ export class ExperienceAiDiagnosticSession {
           appliedFinalBulletScripts: [],
         }),
     });
-    this.stage('visible_apply', applied ? 'ok' : 'fail', applied ? undefined : 'not_applied');
-    if (applied) {
+    this.stage('visible_apply', committed ? 'ok' : 'fail', committed ? undefined : 'not_applied');
+    if (committed) {
       this.stage('apply_committed', 'ok');
     }
     this.stage(
       'usage_increment',
-      applied ? 'ok' : 'skipped',
-      applied ? undefined : 'no_increment_on_reject',
+      committed ? 'ok' : 'skipped',
+      committed ? undefined : 'no_increment_on_reject',
     );
   }
 
@@ -3556,7 +3668,23 @@ export class ExperienceAiDiagnosticSession {
       postapplyCompletenessPassed = null;
     }
 
-    const invariants = checkExperienceDiagnosticInvariants(base);
+    const invariantCompleteness = preapplyCompletenessLocked === false
+      ? false
+      : (aab329PreapplyEvaluated && postapplyAttempted
+        ? combineExperienceDiagnosticCompleteness({
+          preapplyPassed: true,
+          postapplyPassed: postapplyCompletenessPassed,
+          postapplyApplicable: true,
+        })
+        : base.diagnosticCompletenessPassed);
+    const invariantBase = {
+      ...base,
+      diagnosticCompletenessPassed: invariantCompleteness,
+      postapplyDiagnosticCompletenessPassed: postapplyCompletenessPassed,
+      postapplyMissingRequiredDiagnosticFields: postapplyMissing,
+      postapplyNullRequiredDiagnosticFields: postapplyNullish,
+    };
+    const invariants = checkExperienceDiagnosticInvariants(invariantBase);
     // Only enforce AAB-329 preapply invariants when that phase actually ran.
     const preapplyInv = typeof preapplyInvariantLocked === 'boolean'
       ? {
@@ -3570,7 +3698,7 @@ export class ExperienceAiDiagnosticSession {
     const combinedInvariantPassed = preapplyInv.passed && invariants.passed
       && (this.draft.postapplyDiagnosticInvariantCheckPassed !== false);
     const withInvariants = {
-      ...base,
+      ...invariantBase,
       diagnosticInvariantCheckPassed: combinedInvariantPassed,
       diagnosticInvariantFailureCount:
         (preapplyInv.failures?.length || 0) + invariants.failures.length,
