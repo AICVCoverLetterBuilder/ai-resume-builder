@@ -30,6 +30,7 @@ export const INTERNAL_SUMMARY_V2_TEST_FILES = Object.freeze([
   'src/lib/__tests__/cv-build390-cross-locale-ship-matrix.test.ts',
   'src/lib/__tests__/cv-build390-mixed-sequential-ship-gates.test.ts',
   'src/lib/__tests__/cv-build395-spanish-shorter-duration-native-surface.test.ts',
+  'src/lib/__tests__/aab421-material-authority-provenance.test.ts',
 ]);
 
 export function resolveTestProfile(profileName) {

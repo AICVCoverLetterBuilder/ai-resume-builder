@@ -30,7 +30,7 @@ describe('explicit Vitest runtime profiles', () => {
     expect(profile.files).not.toContain('src/lib/__tests__/cv-locale-switch-regression.test.ts');
     expect(profile.files).not.toContain('src/lib/__tests__/cv-summary-grounding-e2e.test.ts');
     expect(profile.files.every((file: string) =>
-      /(?:summary-v2|test-profile-contract|cv-build38|cv-build390|cv-build395)/u.test(file),
+      /(?:summary-v2|test-profile-contract|cv-build38|cv-build390|cv-build395|aab421-material-authority)/u.test(file),
     )).toBe(true);
   });
 

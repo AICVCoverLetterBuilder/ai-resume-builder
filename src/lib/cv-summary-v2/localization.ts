@@ -10,10 +10,6 @@ import { analyzeSpanishCoordinatedPredicateMorphology } from './native-surface';
 import { dutyTokenStems, hashSummaryV2Text } from './facts';
 import { detectDominantLocale, localesAreDetectionCompatible } from './locale-authority';
 import type { SummaryV2EntryOwned, SummaryV2SelectionManifest } from './types';
-import {
-  detectPrintMediumClaim,
-  detectSummaryV2MaterialClaimCategories,
-} from './material-claims';
 
 export const SUMMARY_V2_LOCALIZED_MANIFEST_REVISION =
   'summary-v2-localized-manifest-419-v1' as const;
@@ -735,10 +731,13 @@ export function projectLocalizedSummaryV2Manifest(options: {
         ...fact,
         bulletText: localizedFact.localizedText,
         tokenStems: dutyTokenStems(localizedFact.localizedText),
-        sourcePrintFactPresent: fact.sourcePrintFactPresent
-          ?? detectPrintMediumClaim(fact.bulletText, fact.sourceLocale),
-        sourceMaterialClaimCategories: fact.sourceMaterialClaimCategories
-          ?? detectSummaryV2MaterialClaimCategories(fact.bulletText, fact.sourceLocale),
+        // Authority is copied by immutable fact identity/category only. Never
+        // derive a new source category from translated projection output.
+        sourcePrintFactPresent: fact.sourcePrintFactPresent === true,
+        sourceMaterialClaimCategories: [...(fact.sourceMaterialClaimCategories || [])],
+        sourceMaterialAuthorityDetectorRevision:
+          fact.sourceMaterialAuthorityDetectorRevision,
+        sourceMaterialAuthorityPhase: fact.sourceMaterialAuthorityPhase,
       };
     });
     if (facts.some((fact) => fact === null)) return null;

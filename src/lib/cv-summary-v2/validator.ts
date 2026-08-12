@@ -17,7 +17,7 @@ import type {
 } from './types';
 import { validateAiUnitLocalePurity } from '../cv-ai-unit-locale-purity';
 import { inspectSummaryV2TranslatableSurface } from './localization';
-import { auditSummaryV2PrintClaims } from './material-claims';
+import { auditSummaryV2MaterialClaims } from './material-claims';
 import { analyzeSummaryV2FinalUnitOwnership } from './unit-ownership';
 import { fingerprintText } from '../cv-export-diagnostics';
 
@@ -352,10 +352,10 @@ export function validateSummaryV2AgainstManifest(
   const durationExpressionCount = countDurationExpressions(text, manifest.locale);
   const staleResidueDetected = detectStaleOccupationResidue(text, manifest);
   const unsupportedMaterialClaim = detectUnsupportedMaterialClaims(text);
-  const printAudit = auditSummaryV2PrintClaims(text, manifest, ownership.evidence);
+  const materialAuthority = auditSummaryV2MaterialClaims(text, manifest, ownership.evidence);
   const unsupportedClaimCount = (staleResidueDetected ? 1 : 0)
     + (unsupportedMaterialClaim ? 1 : 0)
-    + printAudit.unsupportedPrintClaimCount;
+    + materialAuthority.unsupportedMaterialClaimCount;
   const localePurity = validateAiUnitLocalePurity(text, manifest.locale, {
     kind: 'summary_sentence',
     requireUnits: true,
@@ -398,7 +398,11 @@ export function validateSummaryV2AgainstManifest(
   else if (!localePurity.targetLocalePurityPassed) reason = 'locale_impurity';
   else if (staleResidueDetected) reason = 'stale_occupation_residue';
   else if (unsupportedMaterialClaim) reason = 'unsupported_material_claim';
-  else if (printAudit.unsupportedPrintClaimCount > 0) reason = 'unsupported_print_medium_claim';
+  else if (!materialAuthority.invariantPassed) {
+    reason = 'material_authority_provenance_invariant_failed';
+  } else if (materialAuthority.unsupportedPrintClaimCount > 0) {
+    reason = 'unsupported_print_medium_claim';
+  }
   else if (!perspectiveValidationPassed) reason = 'mixed_perspective';
   else if (!arabicMorphologyValidationPassed) reason = 'malformed_arabic_finite_verb';
   else if (current && (!currentRolePresent || !currentEmployerPresent || !currentStateExpressed)) {
@@ -449,9 +453,10 @@ export function validateSummaryV2AgainstManifest(
     roleTitleSurfaceEvidence,
     perspectiveValidationPassed,
     arabicMorphologyValidationPassed,
-    printClaimDetected: printAudit.printClaimDetected,
-    sourcePrintFactPresent: printAudit.sourcePrintFactPresent,
-    unsupportedPrintClaimCount: printAudit.unsupportedPrintClaimCount,
+    printClaimDetected: materialAuthority.printClaimDetected,
+    sourcePrintFactPresent: materialAuthority.sourcePrintFactPresent,
+    unsupportedPrintClaimCount: materialAuthority.unsupportedPrintClaimCount,
+    materialAuthority,
     unitOwnershipValidationPassed: ownership.passed,
     unitOwnershipFailureReason: ownership.reason,
     finalUnitOwnership: ownership.evidence,

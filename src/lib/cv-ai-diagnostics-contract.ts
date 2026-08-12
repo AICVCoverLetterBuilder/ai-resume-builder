@@ -42,6 +42,10 @@ import {
 } from './cv-experience-locale-rejection-truth-328';
 import { localesEquivalent, normalizeLocaleKey, canonicalizeContentLocale } from './cv-content-locale';
 import { resolveLocaleCandidate } from './i18n/translations';
+import {
+  validateSummaryV2MaterialAuthorityProvenance,
+} from './cv-summary-v2/material-claims';
+import type { SummaryV2MaterialAuthorityResult } from './cv-summary-v2/types';
 void SUMMARY_EXPLICIT_SKILL_PROVENANCE_320_REVISION;
 void SUMMARY_CANDIDATE_PHASE_SEPARATION_320_REVISION;
 void GERMAN_SUMMARY_RECOVERY_DISPATCH_320_REVISION;
@@ -481,6 +485,10 @@ type SummaryLike = {
   unsupportedClaimCount?: number;
   finalUnsupportedDesignMediumCount?: number | null;
   finalUnsupportedDesignMediumKinds?: string[] | null;
+  sourcePrintFactPresent?: boolean | null;
+  sourcePrintFactPresentScope?: string | null;
+  finalPrintClaimDetected?: boolean | null;
+  materialAuthority?: SummaryV2MaterialAuthorityResult | null;
   durationValidationPassed?: boolean | null;
   authoritativeDurationMonths?: number | null;
   finalRenderedDurationSemanticMonths?: number | null;
@@ -1340,6 +1348,62 @@ export function checkSummaryDiagnosticInvariants(
       groundingValidationPassed: true,
       finalUnsupportedDesignMediumCount: trace.finalUnsupportedDesignMediumCount ?? 0,
     });
+  }
+
+  // Summary V2 material acceptance and diagnostics must carry the exact same
+  // privacy-safe fact→category→entry→unit result. A detected accepted
+  // claim without fact-level evidence blocks pre-apply/usage.
+  if (
+    trace.summaryV2FactIdPathActive === true
+    && trace.finalPrintClaimDetected === true
+    && !trace.materialAuthority
+  ) {
+    push('final_material_claim_missing_canonical_authority_result', {
+      finalPrintClaimDetected: true,
+      materialAuthorityPresent: false,
+    });
+  }
+  if (trace.materialAuthority) {
+    const materialInvariant = validateSummaryV2MaterialAuthorityProvenance(
+      trace.materialAuthority,
+    );
+    if (!materialInvariant.passed || !trace.materialAuthority.invariantPassed) {
+      push('material_authority_provenance_invariant_failed', {
+        canonicalInvariantPassed: materialInvariant.passed,
+        recordedInvariantPassed: trace.materialAuthority.invariantPassed,
+        failureCount: materialInvariant.failureReasons.length,
+      });
+    }
+    if (
+      trace.finalPrintClaimDetected !== trace.materialAuthority.printClaimDetected
+      || (trace.finalUnsupportedDesignMediumCount ?? 0)
+        !== trace.materialAuthority.unsupportedPrintClaimCount
+      || trace.sourcePrintFactPresent !== trace.materialAuthority.sourcePrintFactPresent
+      || trace.sourcePrintFactPresentScope
+        !== trace.materialAuthority.sourcePrintFactPresentScope
+    ) {
+      push('material_authority_legacy_field_mismatch', {
+        finalPrintClaimDetected: trace.finalPrintClaimDetected ?? null,
+        canonicalPrintClaimDetected: trace.materialAuthority.printClaimDetected,
+        finalUnsupportedDesignMediumCount: trace.finalUnsupportedDesignMediumCount ?? null,
+        canonicalUnsupportedPrintClaimCount:
+          trace.materialAuthority.unsupportedPrintClaimCount,
+        sourcePrintFactPresentScope: trace.sourcePrintFactPresentScope ?? null,
+      });
+    }
+    if (
+      trace.groundingValidationPassed === true
+      && trace.materialAuthority.finalClaimAuthorityEvidence.some(
+        (claim) => !claim.authorityMatchPassed,
+      )
+    ) {
+      push('grounding_passed_with_unmatched_material_authority', {
+        groundingValidationPassed: true,
+        unmatchedFinalClaimCount: trace.materialAuthority.finalClaimAuthorityEvidence.filter(
+          (claim) => !claim.authorityMatchPassed,
+        ).length,
+      });
+    }
   }
 
   // AAB-356 — contradictory shared material-fact / authoritative coverage invariants.
@@ -2677,6 +2741,7 @@ export function checkSummaryDiagnosticCompleteness(
       'perspectiveValidationPassed',
       'localeVerbMorphologyPassed',
       'sourcePrintFactPresent',
+      'sourcePrintFactPresentScope',
       'finalPrintClaimDetected',
       'finalUnsupportedDesignMediumCount',
       'groundingInputCandidateHash',
@@ -2688,6 +2753,7 @@ export function checkSummaryDiagnosticCompleteness(
       'finalUnitOwnershipEvidence',
       'factUnitOwnershipEvidence',
     ]) require(key);
+    if (trace.finalPrintClaimDetected === true) require('materialAuthority');
   }
   if (locale === 'hi') {
     const hindiWarehouseApplicable = !summaryV2FactIdPathActive
@@ -4688,6 +4754,8 @@ export const CV_AI_DIAGNOSTIC_REQUIRED_ASSET_STRINGS = [
   'hindiNominalExperienceFragmentDetected',
   'hindiSentenceHasFiniteCopulaOrVerb',
   'finalUnsupportedDesignMediumCount',
+  'materialAuthority',
+  'sourcePrintFactPresentScope',
   'deterministicUnsupportedDesignMediumCount',
   'diagnosticInvariantCheckPassed',
   'diagnosticCompletenessPassed',

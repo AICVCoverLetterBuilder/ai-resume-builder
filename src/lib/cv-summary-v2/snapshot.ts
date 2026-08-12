@@ -12,6 +12,11 @@ import {
   resolveSourceLocaleForText,
   SUMMARY_V2_SUPPORTED_LOCALES,
 } from './locale-authority';
+import {
+  detectPrintMediumClaim,
+  detectSummaryV2MaterialClaimCategories,
+  SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,
+} from './material-claims';
 
 /**
  * Live description only — never canonicalDescription / generatedDescription /
@@ -78,6 +83,19 @@ export function captureSummaryV2Snapshot(options: {
         ...fact,
         sourceLocale: resolved.sourceLocale,
         sourceLocaleResolvedFrom: resolved.resolvedFrom,
+        // Per-fact locale is the last immutable-source decision point. Capture
+        // semantic authority here, before localization or candidate creation.
+        sourcePrintFactPresent: detectPrintMediumClaim(
+          fact.bulletText,
+          resolved.sourceLocale,
+        ),
+        sourceMaterialClaimCategories: detectSummaryV2MaterialClaimCategories(
+          fact.bulletText,
+          resolved.sourceLocale,
+        ),
+        sourceMaterialAuthorityDetectorRevision:
+          SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,
+        sourceMaterialAuthorityPhase: 'immutable_source_fact' as const,
       };
     });
     // Short free-text titles can be linguistically ambiguous. Only use the
@@ -97,6 +115,7 @@ export function captureSummaryV2Snapshot(options: {
       endDate: (exp.endDate || '').trim(),
       isPresent,
       employmentState: isPresent ? 'present' : 'completed',
+      sourceRoleTitleHash: hashSummaryV2Text((exp.position || '').trim()),
       roleSourceLocale: roleLocale.sourceLocale,
       roleSourceLocaleResolvedFrom: roleLocale.resolvedFrom,
       sourceLocale: entryLocale,

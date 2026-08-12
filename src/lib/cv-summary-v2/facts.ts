@@ -5,6 +5,7 @@ import type { SummaryV2DutyTense } from './tense';
 import {
   detectPrintMediumClaim,
   detectSummaryV2MaterialClaimCategories,
+  SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,
 } from './material-claims';
 
 const STOP = new Set([
@@ -87,6 +88,8 @@ export function buildEntryOwnedFactsFromLiveDescription(options: {
         bullet,
         options.sourceLocale,
       ),
+      sourceMaterialAuthorityDetectorRevision: SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,
+      sourceMaterialAuthorityPhase: 'immutable_source_fact',
     };
   });
 }

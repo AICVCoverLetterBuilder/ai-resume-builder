@@ -20,6 +20,12 @@ export type {
   SummaryV2FinalUnitOwnershipEvidence,
   SummaryV2FactUnitCoverageEvidence,
   SummaryV2MaterialClaimCategory,
+  SummaryV2MaterialAuthorityPhase,
+  SummaryV2SourceMaterialAuthorityEvidence,
+  SummaryV2FinalMaterialClaimAuthorityEvidence,
+  SummaryV2SourceFactContentFingerprint,
+  SummaryV2SelectedEntrySourceContentFingerprint,
+  SummaryV2MaterialAuthorityResult,
 } from './types';
 export { SUMMARY_V2_PRINT_MATERIAL_CATEGORY } from './types';
 export {
@@ -137,9 +143,12 @@ export {
 } from './localization';
 export {
   SUMMARY_V2_MATERIAL_CLAIM_CONTRACT_REVISION,
+  SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,
   detectSummaryV2MaterialClaimCategories,
   detectPrintMediumClaim,
+  auditSummaryV2MaterialClaims,
   auditSummaryV2PrintClaims,
+  validateSummaryV2MaterialAuthorityProvenance,
 } from './material-claims';
 export {
   SUMMARY_V2_ENTRY_OWNED_FINAL_UNITS_REVISION,

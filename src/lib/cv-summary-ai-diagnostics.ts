@@ -10,6 +10,7 @@ import {
   SUMMARY_V2_SUPPORTED_LOCALES,
 } from './cv-summary-v2/locale-authority';
 import type { Locale } from './i18n/translations';
+import type { SummaryV2MaterialAuthorityResult } from './cv-summary-v2/types';
 import {
   resolveSummaryCurrentRoleWithEvidence,
   SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
@@ -658,6 +659,7 @@ export type SummaryAiDiagnosticTrace = {
   providerTypedRejectionReason?: string | null;
   providerSlotRejectionReasons?: string[] | null;
   sourcePrintFactPresent?: boolean | null;
+  sourcePrintFactPresentScope?: 'aggregate_selected_manifest_authority' | null;
   sourceBrandingFactPresent?: boolean | null;
   sourceMarketingFactPresent?: boolean | null;
   providerUnsupportedDesignMediumCount?: number | null;
@@ -670,6 +672,8 @@ export type SummaryAiDiagnosticTrace = {
   deterministicUnsupportedDesignMediumKinds?: string[] | null;
   finalUnsupportedDesignMediumCount?: number | null;
   finalUnsupportedDesignMediumKinds?: string[] | null;
+  /** Exact canonical final-validation result; hashes/categories only. */
+  materialAuthority?: SummaryV2MaterialAuthorityResult | null;
   cvAiDiagnosticsV2299Revision?: string | null;
   summaryNoopSuccessContractRevision?: string | null;
   hindiCurrentIntroFiniteVerbPresent?: boolean | null;
@@ -1855,6 +1859,7 @@ export class SummaryAiDiagnosticSession {
         ?? null,
       providerSlotRejectionReasons: diag.providerSlotRejectionReasons ?? null,
       sourcePrintFactPresent: diag.sourcePrintFactPresent ?? null,
+      sourcePrintFactPresentScope: diag.sourcePrintFactPresentScope ?? null,
       sourceBrandingFactPresent: diag.sourceBrandingFactPresent ?? null,
       sourceMarketingFactPresent: diag.sourceMarketingFactPresent ?? null,
       providerUnsupportedDesignMediumCount: diag.providerUnsupportedDesignMediumCount ?? null,
@@ -1877,6 +1882,7 @@ export class SummaryAiDiagnosticSession {
       ),
       finalUnsupportedDesignMediumCount: diag.finalUnsupportedDesignMediumCount ?? null,
       finalUnsupportedDesignMediumKinds: diag.finalUnsupportedDesignMediumKinds ?? null,
+      materialAuthority: diag.materialAuthority ?? null,
       cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
       summaryNoopSuccessContractRevision: diag.summaryNoopSuccessContractRevision ?? null,
       hindiCurrentIntroFiniteVerbPresent: this.draft.requestedLocale === 'hi'

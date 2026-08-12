@@ -5,6 +5,69 @@ export type SummaryV2EmploymentState = 'present' | 'completed';
 export const SUMMARY_V2_PRINT_MATERIAL_CATEGORY = 'design_medium_print' as const;
 export type SummaryV2MaterialClaimCategory = typeof SUMMARY_V2_PRINT_MATERIAL_CATEGORY;
 
+export type SummaryV2MaterialAuthorityPhase = 'immutable_source_fact';
+
+/** Privacy-safe immutable authority captured before any localization/candidate work. */
+export type SummaryV2SourceMaterialAuthorityEvidence = {
+  owningEntryHash: string;
+  sourceFactHash: string;
+  sourceFactIdHash: string;
+  sourceLocale: Locale;
+  canonicalMaterialCategories: SummaryV2MaterialClaimCategory[];
+  detectorRevision: string;
+  authorityPhase: SummaryV2MaterialAuthorityPhase;
+  sourceFactEntryOwnershipPassed: boolean;
+};
+
+/** Privacy-safe proof for one category detected in one final owned unit. */
+export type SummaryV2FinalMaterialClaimAuthorityEvidence = {
+  canonicalCategory: SummaryV2MaterialClaimCategory;
+  finalUnitHash: string;
+  finalUnitRoleSlot: SummaryV2FinalUnitRoleSlot | null;
+  finalUnitOwningEntryHash: string | null;
+  detectedTargetLocale: Locale;
+  detectionResult: 'detected';
+  authorizingSourceEntryHash: string | null;
+  authorizingSourceFactHashes: string[];
+  authorityMatchPassed: boolean;
+  unsupportedReason:
+    | 'final_unit_owner_missing'
+    | 'owner_matching_source_authority_missing'
+    | 'source_authority_provenance_missing_or_contradictory'
+    | null;
+};
+
+export type SummaryV2SourceFactContentFingerprint = {
+  sourceFactHash: string;
+  sourceFactIdHash: string;
+  canonicalMaterialCategories: SummaryV2MaterialClaimCategory[];
+};
+
+/** Entry IDs alone are not content identity; this fingerprints immutable source content. */
+export type SummaryV2SelectedEntrySourceContentFingerprint = {
+  entryIdHash: string;
+  roleTitleSourceHash: string;
+  orderedSourceFactHashes: string[];
+  materialCategoriesBySourceFact: SummaryV2SourceFactContentFingerprint[];
+  sourceContentFingerprint: string;
+};
+
+/** One canonical result is consumed by final acceptance, diagnostics and invariants. */
+export type SummaryV2MaterialAuthorityResult = {
+  revision: string;
+  detectorRevision: string;
+  sourcePrintFactPresent: boolean;
+  sourcePrintFactPresentScope: 'aggregate_selected_manifest_authority';
+  sourceAuthorityEvidence: SummaryV2SourceMaterialAuthorityEvidence[];
+  finalClaimAuthorityEvidence: SummaryV2FinalMaterialClaimAuthorityEvidence[];
+  selectedEntrySourceContentFingerprints: SummaryV2SelectedEntrySourceContentFingerprint[];
+  printClaimDetected: boolean;
+  unsupportedPrintClaimCount: number;
+  unsupportedMaterialClaimCount: number;
+  invariantPassed: boolean;
+  invariantFailureReasons: string[];
+};
+
 export type SummaryV2CandidateSourceKind =
   | 'provider'
   | 'repaired_provider'
@@ -52,6 +115,8 @@ export type SummaryV2EntryFact = {
   sourcePrintFactPresent?: boolean;
   /** Canonical entry-owned material authority captured before localization. */
   sourceMaterialClaimCategories?: SummaryV2MaterialClaimCategory[];
+  sourceMaterialAuthorityDetectorRevision?: string;
+  sourceMaterialAuthorityPhase?: SummaryV2MaterialAuthorityPhase;
 };
 
 export type SummaryV2EntryOwned = {
@@ -148,6 +213,8 @@ export type SummaryV2ValidationResult = {
   printClaimDetected: boolean;
   sourcePrintFactPresent: boolean;
   unsupportedPrintClaimCount: number;
+  /** Canonical shared fact→category→entry→final-unit authority result. */
+  materialAuthority: SummaryV2MaterialAuthorityResult;
   unitOwnershipValidationPassed: boolean;
   unitOwnershipFailureReason: string | null;
   finalUnitOwnership: SummaryV2FinalUnitOwnershipEvidence[];

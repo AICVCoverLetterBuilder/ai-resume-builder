@@ -182,6 +182,7 @@ import {
   analyzeSummaryV2FinalUnitOwnership,
   buildSummaryV2StyledDeterministicText,
   normalizeSummaryV2RewriteStyle,
+  type SummaryV2MaterialAuthorityResult,
 } from './cv-summary-v2';
 import {
   analyzeFrenchSummaryEmploymentQuality,
@@ -1440,6 +1441,7 @@ export type FinalizeCvAiFieldResult = {
     }>;
     unsupportedClaimCount?: number;
     sourcePrintFactPresent?: boolean;
+    sourcePrintFactPresentScope?: 'aggregate_selected_manifest_authority';
     sourceBrandingFactPresent?: boolean;
     sourceMarketingFactPresent?: boolean;
     providerUnsupportedDesignMediumCount?: number;
@@ -1450,6 +1452,7 @@ export type FinalizeCvAiFieldResult = {
     providerMarketingClaimDetected?: boolean;
     finalUnsupportedDesignMediumCount?: number;
     finalUnsupportedDesignMediumKinds?: string[];
+    materialAuthority?: SummaryV2MaterialAuthorityResult;
     deterministicUnsupportedDesignMediumCount?: number;
     deterministicUnsupportedDesignMediumKinds?: string[];
     hindiCurrentIntroFiniteVerbPresent?: boolean;
@@ -3352,6 +3355,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       finalUnsupportedDesignMediumKinds: v2.validation.unsupportedPrintClaimCount > 0
         ? ['unsupported_print_medium']
         : [],
+      // This is the exact immutable object used by final validation. Diagnostics
+      // do not rescan final/source text to reconstruct material authority.
+      materialAuthority: v2.validation.materialAuthority,
       deterministicUnsupportedDesignMediumCount: v2DetOrigin
         ? v2.validation.unsupportedPrintClaimCount
         : 0,
@@ -3367,6 +3373,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       finalPrintClaimDetected: v2.validation.printClaimDetected,
       hindiSentenceGrammarRecords: [] as unknown[],
       sourcePrintFactPresent: v2.validation.sourcePrintFactPresent,
+      sourcePrintFactPresentScope:
+        v2.validation.materialAuthority.sourcePrintFactPresentScope,
       requiredCurrentDutyFactCount: v2.validation.requiredCurrentFactCount,
       coveredCurrentDutyFactCount: v2.validation.coveredCurrentFactCount,
       missingCurrentDutyFactCount: missingCurrent,
