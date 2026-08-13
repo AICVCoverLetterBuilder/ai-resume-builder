@@ -1825,6 +1825,26 @@ export function checkSummaryDiagnosticInvariants(
       });
     }
     if (
+      String(trace.requestedLocale || '').toLowerCase() === 'fr'
+      && trace.countedAsSuccess === true
+      && trace.visibleApplySucceeded === true
+    ) {
+      const frenchValidationFields = [
+        ['grammarValidationPassed', trace.grammarValidationPassed],
+        ['visibleGrammarValidationPassed', trace.visibleGrammarValidationPassed],
+        ['visibleNativeSurfaceValidationPassed', trace.visibleNativeSurfaceValidationPassed],
+        ['visibleFinalPostconditionsPassed', trace.visibleFinalPostconditionsPassed],
+      ] as const;
+      for (const [field, value] of frenchValidationFields) {
+        if (value !== true) {
+          push('french_success_without_validated_visible_surface', {
+            field,
+            value: value ?? null,
+          });
+        }
+      }
+    }
+    if (
       trace.countedAsSuccess === true
       && (
         trace.requiredCurrentDutyFactCount == null

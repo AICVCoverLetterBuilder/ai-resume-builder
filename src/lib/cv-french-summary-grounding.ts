@@ -15,6 +15,7 @@ import { resolveLocalizedSummaryRole } from './cv-summary-structured-role-locali
 import { extractGermanCurrentWarehouseDutyFacts } from './cv-german-summary-current-duty-coverage';
 import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 import { classifyMaterialDutyKeys } from './cv-material-duty-coverage';
+import { fingerprintText } from './cv-export-diagnostics';
 
 export const SUMMARY_BUILDER_REVISION_FR =
   'entry-owned-french-rebuild-358-v1' as const;
@@ -59,6 +60,9 @@ const FR_DESIGN_FINAL =
 export type FrenchSummaryEmploymentQuality = {
   groundingValidationPassed: boolean;
   slotValidationPassed: boolean;
+  grammarValidationPassed: boolean;
+  grammarRejectionReason: string | null;
+  grammarRecords: FrenchSummaryGrammarRecord[];
   perspectiveValidationPassed: boolean;
   perspectiveMode: 'first_person' | 'neutral_cv' | 'cv_third_person';
   typedRejectionReason: string | null;
@@ -105,6 +109,88 @@ export type FrenchSummaryEmploymentQuality = {
   currentRoleOmittedDetected: boolean;
 };
 
+export type FrenchSummaryGrammarRecord = {
+  sentenceIndex: number;
+  sentenceHash: string;
+  employmentState: 'present' | 'completed' | 'unknown';
+  perspectiveMode: 'first_person' | 'neutral_or_unspecified';
+  finiteVerbOrAuxiliaryDetected: boolean;
+  coordinatedPredicateAgreementPassed: boolean;
+  grammarPassed: boolean;
+  grammarReasons: string[];
+};
+
+/**
+ * Privacy-safe French finite-verb/person contract.  It intentionally reasons
+ * from subjects, auxiliaries and inflection, never from occupation or duty
+ * vocabulary, so the same guard applies to every role and provider path.
+ */
+export function validateFrenchSummaryFiniteGrammar(text: string): {
+  grammarValidationPassed: boolean;
+  grammarRejectionReason: string | null;
+  grammarRecords: FrenchSummaryGrammarRecord[];
+} {
+  const normalized = (text || '').replace(/\s+/g, ' ').trim();
+  const sentences = normalized
+    .split(/(?<=[.!?])\s+/u)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const records: FrenchSummaryGrammarRecord[] = [];
+  const allReasons: string[] = [];
+
+  sentences.forEach((sentence, sentenceIndex) => {
+    const firstPerson = /\b(?:je|j['’])/iu.test(sentence);
+    const completed = /\b(?:auparavant|pr[ée]c[ée]demment|j['’]ai\s+travaill[ée])\b/iu.test(sentence);
+    const finite = firstPerson || /\b(?:dispose|travaille|travaill[ée]|cr[ée]ais|pr[ée]par[ée])\b/iu.test(sentence);
+    const reasons: string[] = [];
+    if (firstPerson && /\bj['’]a\b/iu.test(sentence)) {
+      reasons.push('french_invalid_j_a_auxiliary');
+    }
+    if (firstPerson && /(?:^|[,:;]|\bet\b)\s*(?:a|ont|avait|avaient|\u00e9tait|\u00e9taient)\s+\p{L}/iu.test(sentence)) {
+      reasons.push('french_third_person_auxiliary_leakage');
+    }
+    // A first-person imperfect chain must keep -ais/-ions morphology on every
+    // coordinated finite predicate; a bare -ait/-aient is third person.
+    const imparfaitLeak = firstPerson
+      && [...sentence.matchAll(/\b(\p{L}+)ait\b/giu)]
+        .some((match) => !/^(?:fait|défait|refait)$/iu.test(match[0] || ''));
+    if (imparfaitLeak) {
+      reasons.push('french_first_person_imparfait_agreement_invalid');
+    }
+    if (firstPerson && /\b(?:je|j['’])[^.!?]{0,220}(?:,|\bet\b)\s+(?:a|ont)\s+\p{L}/iu.test(sentence)) {
+      reasons.push('french_mixed_person_auxiliary_chain');
+    }
+    // Explicit subject/auxiliary switching inside one first-person role unit.
+    if (firstPerson && /\bje\b[^.!?]{0,220}\bet\s+(?:il|elle)\b/iu.test(sentence)) {
+      reasons.push('french_first_person_subject_switch');
+    }
+    const coordinatedPredicateAgreementPassed = !reasons.some((r) =>
+      r.includes('imparfait') || r.includes('auxiliary') || r.includes('subject_switch'));
+    const record: FrenchSummaryGrammarRecord = {
+      sentenceIndex,
+      sentenceHash: fingerprintText(sentence),
+      employmentState: completed ? 'completed' : (firstPerson ? 'present' : 'unknown'),
+      perspectiveMode: firstPerson ? 'first_person' : 'neutral_or_unspecified',
+      finiteVerbOrAuxiliaryDetected: finite,
+      coordinatedPredicateAgreementPassed,
+      grammarPassed: finite && reasons.length === 0,
+      grammarReasons: [...new Set(reasons)],
+    };
+    records.push(record);
+    allReasons.push(...reasons);
+  });
+  const grammarValidationPassed = Boolean(normalized)
+    && records.length > 0
+    && records.every((record) => record.grammarPassed);
+  const grammarRejectionReason = allReasons[0]
+    || (!normalized ? 'empty_summary' : (!records.length ? 'french_no_finite_clause' : null));
+  return {
+    grammarValidationPassed,
+    grammarRejectionReason,
+    grammarRecords: records,
+  };
+}
+
 function countFrenchWarehouseCoverage(text: string): {
   required: number;
   covered: number;
@@ -144,6 +230,7 @@ export function analyzeFrenchSummaryEmploymentQuality(
   void FRENCH_SUMMARY_FIRST_PERSON_358_REVISION;
   void FRENCH_SUMMARY_CROSS_LOCALE_358_REVISION;
   const text = (summary || '').replace(/\s+/g, ' ').trim();
+  const frenchGrammar = validateFrenchSummaryFiniteGrammar(text);
   const purity = validateAiUnitLocalePurity(text, 'fr', {
     kind: 'summary_sentence',
     requireUnits: true,
@@ -204,6 +291,9 @@ export function analyzeFrenchSummaryEmploymentQuality(
   if (!perspectiveValidationPassed) {
     slotRejectionReasons.push('french_summary_perspective_not_first_person');
   }
+  if (!frenchGrammar.grammarValidationPassed && frenchGrammar.grammarRejectionReason) {
+    slotRejectionReasons.push(frenchGrammar.grammarRejectionReason);
+  }
   if (requireWarehouseTriad && currentCov.missing > 0) {
     slotRejectionReasons.push('current_duty_fact_coverage_incomplete');
   }
@@ -246,7 +336,9 @@ export function analyzeFrenchSummaryEmploymentQuality(
     && (currentCov.required === 0 || currentCov.covered >= currentCov.required)
     && (priorCov.required === 0 || priorCov.covered >= priorCov.required);
 
-  const groundingValidationPassed = slotValidationPassed && Boolean(text);
+  const groundingValidationPassed = slotValidationPassed
+    && frenchGrammar.grammarValidationPassed
+    && Boolean(text);
   const typedRejectionReason = !text
     ? 'empty_summary'
     : (slotRejectionReasons[0] || null);
@@ -264,6 +356,9 @@ export function analyzeFrenchSummaryEmploymentQuality(
   return {
     groundingValidationPassed,
     slotValidationPassed,
+    grammarValidationPassed: frenchGrammar.grammarValidationPassed,
+    grammarRejectionReason: frenchGrammar.grammarRejectionReason,
+    grammarRecords: frenchGrammar.grammarRecords,
     perspectiveValidationPassed,
     perspectiveMode,
     typedRejectionReason,

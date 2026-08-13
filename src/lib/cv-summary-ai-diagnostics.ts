@@ -15,6 +15,7 @@ import {
   resolveSummaryCurrentRoleWithEvidence,
   SUMMARY_CURRENT_ROLE_RESOLVER_REVISION,
 } from './cv-summary-current-role';
+import { validateFrenchSummaryFiniteGrammar } from './cv-french-summary-grounding';
 
 export const SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION =
   'summary-content-locale-rollback-361-v1' as const;
@@ -177,6 +178,46 @@ import {
 } from './cv-ai-diagnostics-lifecycle';
 
 void SUMMARY_AI_DIAG_MARKER;
+
+type FrenchVisibleSummaryValidation = {
+  grammarValidationPassed: boolean;
+  nativeSurfaceValidationPassed: boolean;
+  targetLocalePurityPassed: boolean;
+  perspectiveMode: 'first_person' | 'neutral_or_unspecified';
+};
+
+/**
+ * AAB-436: one shared French final/visible surface validator.
+ *
+ * The pre-apply gate evaluates the selected final candidate before the
+ * transaction writes it; recordVisibleApply evaluates the operation-owned
+ * text after the write. Both phases must use these same validators so every
+ * Summary operation and candidate origin has identical French truth.
+ */
+function validateFrenchVisibleSummarySurface(
+  text: string,
+  finalPerspectiveMode?: string | null,
+): FrenchVisibleSummaryValidation {
+  const grammar = validateFrenchSummaryFiniteGrammar(text);
+  const perspectiveMode = finalPerspectiveMode === 'neutral_cv'
+    ? 'neutral_or_unspecified'
+    : 'first_person';
+  const native = evaluateSummaryV2NativeSurface({
+    text,
+    locale: 'fr',
+    perspectiveMode,
+  });
+  const purity = validateAiUnitLocalePurity(text, 'fr', {
+    kind: 'summary_sentence',
+    requireUnits: true,
+  });
+  return {
+    grammarValidationPassed: grammar.grammarValidationPassed,
+    nativeSurfaceValidationPassed: native.nativeSurfaceValidationPassed,
+    targetLocalePurityPassed: purity.targetLocalePurityPassed,
+    perspectiveMode,
+  };
+}
 
 export const SUMMARY_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const SUMMARY_AI_DIAG_STORAGE_KEY = SUMMARY_AI_DIAG_STORAGE_KEY_CANON;
@@ -1390,6 +1431,15 @@ export class SummaryAiDiagnosticSession {
       && entityAwarePurityPassed
       && groundingValidationPassed
     );
+    const frenchSurface = this.draft.requestedLocale === 'fr' && text
+      ? validateFrenchVisibleSummarySurface(text, diag.finalPerspectiveMode)
+      : null;
+    const frenchPreApplyVisiblePostconditionsPassed = frenchSurface
+      ? frenchSurface.grammarValidationPassed
+        && frenchSurface.nativeSurfaceValidationPassed
+        && frenchSurface.targetLocalePurityPassed
+        && finalPostconditionsPassed
+      : null;
     this.patch({
       providerDurationClaimCount: diag.summaryDurationExpressionCount ?? beforeStrip,
       sourceDurationClaimCount: this.draft.sourceDurationClaimCount ?? beforeStrip,
@@ -1652,6 +1702,26 @@ export class SummaryAiDiagnosticSession {
         diag.repeatedProfessionalLabelCount ?? 0,
       ),
       finalPostconditionsPassed,
+      // AAB-436: seed the pre-apply decision gate from the same shared French
+      // validator used again against the operation-owned post-write text.
+      // These are never defaulted to true and are replaced by recordVisibleApply
+      // after the transaction when an actual visible string is available.
+      visibleGrammarValidationPassed: frenchSurface
+        ? frenchSurface.grammarValidationPassed
+        : null,
+      visibleNativeSurfaceValidationPassed: frenchSurface
+        ? frenchSurface.nativeSurfaceValidationPassed
+        : null,
+      visibleFinalPostconditionsPassed: frenchPreApplyVisiblePostconditionsPassed,
+      visibleValidationPerspectiveMode: frenchSurface
+        ? (frenchSurface.perspectiveMode === 'neutral_or_unspecified'
+          ? 'cv_third_person'
+          : 'first_person')
+        : null,
+      perspectiveAuthoritySource: frenchSurface ? 'final_perspective_mode' : null,
+      perspectiveContractMatched: frenchSurface
+        ? frenchSurface.nativeSurfaceValidationPassed
+        : null,
       unitCount: purity.unitCount,
       detectedLocaleByUnit: purity.detectedLocaleByUnit,
       detectedScriptByUnit: purity.detectedScriptByUnit,
@@ -3186,7 +3256,22 @@ export class SummaryAiDiagnosticSession {
       }
       }
     }
-    if (ok && durationStillOk && locale === 'fr' && typeof visibleText === 'string') {
+    // AAB-436: every French Summary operation (Generate, Stronger, Shorter,
+    // Professional) and every candidate origin must use the same shared
+    // validators, even when duration or another visible gate is already
+    // failing. This ensures the booleans are truthful rather than null and
+    // keeps failure rollback fail-closed.
+    if (locale === 'fr' && typeof visibleText === 'string') {
+      const frenchSurface = validateFrenchVisibleSummarySurface(
+        visibleText,
+        this.draft.finalPerspectiveMode,
+      );
+      visibleGrammarOk = frenchSurface.grammarValidationPassed;
+      visibleNativeOk = frenchSurface.nativeSurfaceValidationPassed;
+      visibleLocaleOk = frenchSurface.targetLocalePurityPassed;
+      visibleValidationPerspectiveMode = frenchSurface.perspectiveMode === 'neutral_or_unspecified'
+        ? 'cv_third_person'
+        : 'first_person';
       if (!trySummaryV2VisibleParity()) {
       const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
       const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
@@ -3312,7 +3397,9 @@ export class SummaryAiDiagnosticSession {
       if (!visibleDutyOk) return 'visible_current_duty_coverage_failed';
       if (!visiblePriorDutyOk) return 'visible_prior_duty_coverage_failed';
       if (!visibleLocaleOk) return 'visible_locale_purity_failed';
-      if (!visibleGrammarOk) return 'visible_german_grammar_failed';
+      if (!visibleGrammarOk) {
+        return locale === 'fr' ? 'visible_french_grammar_failed' : 'visible_german_grammar_failed';
+      }
       if (!visibleRoleOk) return 'visible_role_localization_mismatch';
       return existing;
     })();
@@ -3380,28 +3467,28 @@ export class SummaryAiDiagnosticSession {
       visibleGermanGrammarValidationPassed: locale === 'de'
         ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
         : null,
-      visibleTargetLocalePurityPassed: locale === 'es'
+      visibleTargetLocalePurityPassed: (locale === 'es' || locale === 'fr')
         ? (typeof visibleText === 'string' ? visibleLocaleOk : null)
         : null,
       visibleSourceLanguageLeakageDetected: locale === 'es'
         ? (typeof visibleText === 'string' ? visibleSourceLanguageLeakageDetected : null)
         : null,
-      visibleGrammarValidationPassed: locale === 'es'
+      visibleGrammarValidationPassed: (locale === 'es' || locale === 'fr')
         ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
         : null,
-      visibleNativeSurfaceValidationPassed: locale === 'es'
+      visibleNativeSurfaceValidationPassed: (locale === 'es' || locale === 'fr')
         ? (typeof visibleText === 'string' ? visibleNativeOk : null)
         : null,
-      visibleFinalPostconditionsPassed: locale === 'es'
+      visibleFinalPostconditionsPassed: (locale === 'es' || locale === 'fr')
         ? (typeof visibleText === 'string' ? applyOk : null)
         : null,
-      visibleValidationPerspectiveMode: locale === 'es'
+      visibleValidationPerspectiveMode: (locale === 'es' || locale === 'fr')
         ? visibleValidationPerspectiveMode
         : null,
-      perspectiveAuthoritySource: locale === 'es'
+      perspectiveAuthoritySource: (locale === 'es' || locale === 'fr')
         ? 'final_perspective_mode'
         : null,
-      perspectiveContractMatched: locale === 'es'
+      perspectiveContractMatched: (locale === 'es' || locale === 'fr')
         ? (typeof visibleText === 'string' ? visibleNativeOk : null)
         : null,
       // Applied summaries: only fail race_guard on a real source ownership conflict.

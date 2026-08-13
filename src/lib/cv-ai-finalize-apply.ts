@@ -2532,6 +2532,14 @@ function summaryPasses(
     const frenchStructuredDomain = isFrenchStructuredSummaryDomain(dutiesCorpus)
       || Number(empQ.requiredCurrentDutyFactCount || 0) > 0
       || Number(empQ.requiredPriorDutyFactCount || 0) > 0;
+    if (!empQ.grammarValidationPassed) {
+      return {
+        ok: false,
+        reason: empQ.grammarRejectionReason
+          || empQ.slotRejectionReasons[0]
+          || 'french_summary_grammar_failed',
+      };
+    }
     if (frenchStructuredDomain) {
       if (!empQ.groundingValidationPassed) {
         return {
@@ -3810,7 +3818,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       repairUsableCandidatePresent: Boolean(v2Pd?.repairApplied),
       repairAccepted: Boolean(v2Pd?.repairApplied) && success && !v2CleanNoOp,
       groundingValidationPassed: success && !v2CleanNoOp,
-      grammarValidationPassed: locale === 'de' && deV2Completeness
+      grammarValidationPassed: locale === 'fr'
+        ? Boolean(success && !v2CleanNoOp
+          && v2Pd?.styleFulfillment?.nativeSurfaceValidationPassed
+          && v2Pd?.styleFulfillment?.grammaticalPersonValidationPassed)
+        : locale === 'de' && deV2Completeness
         ? deV2Completeness.germanControlledCaseGrammarPassed
         : (success && !v2CleanNoOp
           && v2.validation.perspectiveValidationPassed
@@ -7335,7 +7347,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           if (result.reason === SUMMARY_NOOP_REJECTION_REASON) return undefined;
           return result.diagnostics?.typedFailureReason ?? result.reason;
         })(),
-        grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es' || locale === 'en' || locale === 'pt-BR' || locale === 'ru' || locale === 'ja')
+        grammarValidationPassed: (locale === 'hr' || locale === 'hi' || locale === 'es' || locale === 'en' || locale === 'fr' || locale === 'pt-BR' || locale === 'ru' || locale === 'ja')
           && empQ
           && 'grammarValidationPassed' in empQ
           ? Boolean((empQ as { grammarValidationPassed?: boolean }).grammarValidationPassed)

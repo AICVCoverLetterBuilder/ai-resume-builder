@@ -17,6 +17,7 @@ import {
   detectUnresolvedGenderPlaceholder,
   type SummaryV2GenderMode,
 } from './gender';
+import { validateFrenchSummaryFiniteGrammar } from '../cv-french-summary-grounding';
 
 export const SUMMARY_V2_NATIVE_SURFACE_386_REVISION =
   'summary-v2-native-surface-386-v1' as const;
@@ -68,6 +69,8 @@ export type SummaryV2NativeSurfaceResult = {
   predicateChainRejectionReasons: string[];
   sourcePredicateChainHash: string;
   finalPredicateChainHash: string;
+  frenchGrammarValidationPassed?: boolean;
+  frenchGrammarRejectionReason?: string | null;
 };
 
 export type HindiSummarySentenceAgreementRecord = {
@@ -177,6 +180,55 @@ function localeAndJoin(parts: string[], locale: Locale): string {
   if (locale === 'ja') return `${head}、${last}`;
   if (locale === 'de') return `${head} und ${last}`;
   return `${head} and ${last}`;
+}
+
+const FRENCH_FIRST_PERSON_PRESENT_IRREGULAR: Record<string, string> = {
+  a: 'ai',
+  est: 'suis',
+  fait: 'fais',
+  va: 'vais',
+  peut: 'peux',
+  doit: 'dois',
+  sait: 'sais',
+  prend: 'prends',
+  met: 'mets',
+  lit: 'lis',
+  écrit: 'écris',
+  voit: 'vois',
+  suit: 'suis',
+  tient: 'tiens',
+  vient: 'viens',
+  boit: 'bois',
+  croit: 'crois',
+  reçoit: 'reçois',
+};
+
+/** Realize every finite predicate in a French first-person duty chain. */
+function realizeFrenchFirstPersonDutyChain(
+  bullet: string,
+  tense: 'present' | 'completed',
+): string {
+  let text = (bullet || '').replace(/[.;。؟।]+$/u, '').trim();
+  text = text.replace(/^(?:je|j['’])\s+/iu, '');
+  if (!text) return '';
+  if (tense === 'completed') {
+    // Provider/deterministic bullets often carry a third-person auxiliary.
+    // The relative connector supplies j' outside this function, so return ai.
+    text = text.replace(/^(?:a|ont|avait|avaient|j['’]a)\s+/iu, 'ai ');
+    text = text.replace(/((?:^|[,;]|\bet\b)\s*)(?:a|ont|avait|avaient)\s+/giu, '$1');
+    // Imparfait chains must agree with je on every coordinated finite verb.
+    text = text.replace(/\b(\p{L}+?)ait\b/giu, (match, stem: string) =>
+      /^(?:f|déf|ref)$/iu.test(stem) ? match : `${stem}ais`);
+    text = text.replace(/\b(\p{L}+?)aient\b/giu, '$1aient');
+    return text.replace(/\s+/g, ' ').trim();
+  }
+  // Present irregulars are the forms where 1sg and 3sg visibly diverge.
+  text = text.replace(/^(\p{L}+)/u, (match) => match.toLocaleLowerCase('fr-FR'));
+  text = text.replace(/(^|[,;]|\bet\b)\s*(\p{L}+)/giu, (all, prefix: string, verb: string) => {
+    const mapped = FRENCH_FIRST_PERSON_PRESENT_IRREGULAR[verb.toLocaleLowerCase('fr-FR')];
+    return `${prefix}${mapped || verb}`;
+  });
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 /** Spanish/Portuguese 3sg → 1sg present morphology (no occupation tables). */
@@ -471,6 +523,13 @@ export function realizeFirstPersonDutyClause(
     return realized.text;
   }
 
+  if (locale === 'fr') {
+    return realizeFrenchFirstPersonDutyChain(
+      raw,
+      tense === 'present' ? 'present' : 'completed',
+    );
+  }
+
   // Combining marks (Arabic shadda, Devanagari matras) belong to the verb token.
   const m = /^([\p{L}\p{M}]+)([\s\S]*)$/u.exec(raw);
   if (!m) return raw.replace(/^\p{Lu}/u, (c) => c.toLowerCase());
@@ -482,14 +541,6 @@ export function realizeFirstPersonDutyClause(
     verb = tense === 'present'
       ? romanceFirstPersonPresent(lower, locale)
       : romanceFirstPersonPast(lower, locale);
-  } else if (locale === 'fr') {
-    if (tense === 'present') {
-      verb = lower; // many -er 1sg == 3sg
-    } else if (/ait$/u.test(lower)) {
-      verb = `${lower.slice(0, -3)}ais`;
-    } else {
-      verb = lower;
-    }
   } else if (locale === 'it') {
     // Biography passato prossimo bullets (Ha/Hanno + participle) → 1sg Ho.
     if (/^(ha|hanno|ho)\s+/iu.test(raw)) {
@@ -607,7 +658,12 @@ export function buildNativeFirstPersonDutyTail(
   if (locale === 'fr') {
     // "où je" already supplies subject — keep verb forms lowercased.
     // Elide before vowel-/h-initial verbs: où j'effectue (not où je effectue).
-    const joined = localeAndJoin(clauses, locale);
+    const frenchClauses = employmentState === 'completed'
+      ? clauses.map((clause, index) => index === 0
+        ? clause
+        : clause.replace(/^ai\s+/iu, ''))
+      : clauses;
+    const joined = localeAndJoin(frenchClauses, locale);
     const needsElision = /^[aeiouhâàáâäæéèêëíìîïóòôöøúùûüœ]/iu.test(joined);
     const connector = needsElision ? ", où j'" : ', où je ';
     return `${connector}${joined}`;
@@ -1124,11 +1180,19 @@ export function evaluateSummaryV2NativeSurface(options: {
     if (!reasons.includes(r)) reasons.push(r);
   }
 
+  const frenchGrammar = options.locale === 'fr'
+    ? validateFrenchSummaryFiniteGrammar(text)
+    : null;
+  if (frenchGrammar && !frenchGrammar.grammarValidationPassed) {
+    if (frenchGrammar.grammarRejectionReason) reasons.push(frenchGrammar.grammarRejectionReason);
+  }
+
   const personOk = grammaticalPersonValidationPassed
     && !predicateChain.mixedPersonPredicateDetected
     && contract.firstPersonPredicateChainPassed
     && !(options.locale === 'es'
-      && analyzeSpanishCoordinatedPredicateMorphology(text, perspective).mixedPersonPredicateChain);
+      && analyzeSpanishCoordinatedPredicateMorphology(text, perspective).mixedPersonPredicateChain)
+    && (frenchGrammar?.grammarValidationPassed ?? true);
 
   const nativeSurfaceValidationPassed = capitalizationValidationPassed
     && personOk
@@ -1176,5 +1240,7 @@ export function evaluateSummaryV2NativeSurface(options: {
     predicateChainRejectionReasons: predicateChain.predicateChainRejectionReasons,
     sourcePredicateChainHash: predicateChain.sourcePredicateChainHash,
     finalPredicateChainHash: predicateChain.finalPredicateChainHash,
+    frenchGrammarValidationPassed: frenchGrammar?.grammarValidationPassed ?? true,
+    frenchGrammarRejectionReason: frenchGrammar?.grammarRejectionReason ?? null,
   };
 }
