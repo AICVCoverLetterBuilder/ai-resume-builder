@@ -3115,6 +3115,7 @@ type ExperienceLike = {
   requestedTargetLocale?: string | null;
   targetLocale?: string | null;
   uiLocale?: string | null;
+  applyWriteSucceeded?: boolean | null;
   applyCommitted?: boolean | null;
   targetContentApplied?: boolean | null;
   appliedVisibleContentLocale?: string | null;
@@ -3130,6 +3131,8 @@ type ExperienceLike = {
   deterministicFixesSourceDefect?: boolean | null;
   shouldApply?: boolean | null;
   shouldIncrementUsage?: boolean | null;
+  usageIncrementAttempted?: boolean | null;
+  experienceTerminalUsageTruthRevision?: string | null;
   perspectiveNormalizationApplied?: boolean | null;
   perspectiveValidationPassed?: boolean | null;
   rejectionStage?: string | null;
@@ -3225,6 +3228,45 @@ export function checkExperienceDiagnosticInvariants(
     const after = trace.usageCountAfter ?? 0;
     if (after !== before + 1) {
       push('usage_increment_mismatch_success', {
+        usageCountBefore: before,
+        usageCountAfter: after,
+      });
+    }
+  }
+  // AAB-433: terminal billing truth must describe the same committed outcome as
+  // visible apply and the persisted usage delta. Finalize-time eligibility is
+  // deliberately insufficient: no-op, invalid, rollback and race paths are +0.
+  // The finalize layer deliberately initializes provisional +0 eligibility.
+  // Only recordVisibleApply writes the revision-marked terminal outcome, so
+  // only that serialized record may be checked as committed billing truth.
+  const terminalUsageRelevant =
+    trace.experienceTerminalUsageTruthRevision !== undefined;
+  if (terminalUsageRelevant) {
+    const before = Number(trace.usageCountBefore ?? 0);
+    const after = Number(trace.usageCountAfter ?? 0);
+    const terminalSuccess = trace.applyAuthorized === true
+      && trace.applyWriteSucceeded === true
+      && trace.applyCommitted === true
+      && trace.visibleApplySucceeded === true
+      && trace.countedAsSuccess === true
+      && after === before + 1;
+    if (terminalSuccess && (
+      trace.shouldIncrementUsage !== true
+      || trace.usageIncrementAttempted !== true
+    )) {
+      push('terminal_usage_success_not_incremented', {
+        shouldIncrementUsage: trace.shouldIncrementUsage ?? null,
+        usageIncrementAttempted: trace.usageIncrementAttempted ?? null,
+      });
+    }
+    if (!terminalSuccess && (
+      trace.shouldIncrementUsage === true
+      || trace.usageIncrementAttempted === true
+      || after !== before
+    )) {
+      push('terminal_usage_non_success_incremented', {
+        shouldIncrementUsage: trace.shouldIncrementUsage ?? null,
+        usageIncrementAttempted: trace.usageIncrementAttempted ?? null,
         usageCountBefore: before,
         usageCountAfter: after,
       });

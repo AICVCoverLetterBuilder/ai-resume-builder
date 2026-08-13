@@ -1189,8 +1189,6 @@ export function detectSpanishExperienceUnsupportedExpansion(
     const hasQualityOutcome = /(?:calidad|integridad|exactitud|precis)/iu.test(joined);
     const hasCompleteness = /completitud/iu.test(joined);
     const hasCompliance = /cumplimiento/iu.test(joined);
-    const hasAssuranceVerb = /(?:asegur(?:ar|a|ó|ando)|vela\s+por|cerciorarse|se\s+asegura)/iu
-      .test(joined);
     if (hasQualityOutcome) {
       kinds.push('quality_guarantee');
       labels.push('quality_guarantee');
@@ -1203,10 +1201,9 @@ export function detectSpanishExperienceUnsupportedExpansion(
       kinds.push('compliance_guarantee');
       labels.push('compliance_guarantee');
     }
-    if (hasAssuranceVerb) {
-      kinds.push('assurance_escalation');
-      labels.push('assurance_escalation');
-    }
+    // Spanish guarantee/assurance is one material unsupported claim. Preserve
+    // the shipped Spanish guarantee surface instead of double-counting a
+    // generic assurance parent alongside it.
     kinds.push('guarantee_escalation');
     labels.push('guarantee_escalation');
     kinds.push('outcome_ownership');

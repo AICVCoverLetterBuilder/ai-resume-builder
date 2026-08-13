@@ -111,6 +111,14 @@ void EXPERIENCE_AI_DIAG_MARKER;
 
 export const EXPERIENCE_AI_TRACE_SCHEMA_VERSION = 1 as const;
 export const EXPERIENCE_AI_DIAG_STORAGE_KEY = EXPERIENCE_AI_DIAG_STORAGE_KEY_CANON;
+/**
+ * The terminal apply/usage outcome is emitted only after the visible apply path
+ * has decided whether the Pro usage ledger is incremented.  Keep this separate
+ * from finalize-time eligibility: a successful final candidate is not billable
+ * until its visible write is committed.
+ */
+export const EXPERIENCE_TERMINAL_USAGE_TRUTH_433_REVISION =
+  'experience-terminal-usage-truth-433-v1';
 
 /**
  * Marker / UI strings for Experience AI diagnostics live only in
@@ -549,6 +557,7 @@ export type ExperienceAiDiagnosticTrace = {
   raceGuardApplicable?: boolean | null;
   shouldIncrementUsage?: boolean | null;
   usageIncrementAttempted?: boolean | null;
+  experienceTerminalUsageTruthRevision?: string | null;
   sourceTenseMismatchCount?: number | null;
   sourceTenseValidationPassed?: boolean | null;
   expectedEmploymentTense?: string | null;
@@ -3590,7 +3599,18 @@ export class ExperienceAiDiagnosticSession {
       // Terminal failure: null is allowed when no visible apply was attempted.
       visibleMatch = null;
     }
+    // This is the sole terminal writer for Experience usage diagnostics.  It
+    // runs on the same success/failure branch that surrounds recordProAiSuccess
+    // in the UI, so eligibility from finalize cannot survive as a stale billing
+    // decision after a write, rollback, race rejection, or no-op terminal path.
+    const terminalUsage = {
+      shouldIncrementUsage: committed,
+      usageIncrementAttempted: committed,
+      experienceTerminalUsageTruthRevision:
+        EXPERIENCE_TERMINAL_USAGE_TRUTH_433_REVISION,
+    };
     this.patch({
+      ...terminalUsage,
       countedAsSuccess: committed,
       usageCountAfter: committedUsageAfter,
       visibleApplySucceeded: committed,

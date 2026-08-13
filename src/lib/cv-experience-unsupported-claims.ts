@@ -108,6 +108,14 @@ function hasToolSupport(source: string, tool: string): boolean {
   return new RegExp(`\\b${tool}\\b`, 'iu').test(source);
 }
 
+function hasOutcomeAssuranceClaim(text: string): boolean {
+  return /(?:\b(?:ensure[ds]?|assur(?:e[ds]?|ing)|guarantee[ds]?|responsible\s+for|accountable\s+for)\b|\b(?:garantiz\w*|asegur\w*)\b|\b(?:gewährleist\w*|garantier\w*|verantwortlich\s+f[üu]r)\b|सुनिश्चित\s*कर|गारंटी\s*दे|आश्वस्त\s*कर)/iu.test(norm(text));
+}
+
+function usesSpanishExperienceSurface(text: string): boolean {
+  return /\b(?:revisa|revis[óo]|comprueba|comprob[óo]|garantiz\w*|asegur\w*|calidad|mercanc[ií]a|documentaci[óo]n|cumplimiento)\b/iu.test(text);
+}
+
 /**
  * Semantic unsupported-claim scan for Experience enhancement / no-op repair.
  * Does not store or return source/candidate text — only categorical kinds.
@@ -208,6 +216,30 @@ export function detectExperienceUnsupportedClaimExpansion(
     labels.push('leadership_claim');
   }
 
+  // Checking/reviewing is observation authority, not ownership of a result.
+  // Source authority, not a word ban, permits outcome assurance.
+  // Immutable source facts are the authority for enhance operations. Empty
+  // generation is governed by its separate canonical-generation fact contract;
+  // this source-expansion scan must not treat the absence of user prose as a
+  // blanket prohibition on every native realization of an owned generated fact.
+  // Spanish already has the shipped AAB-308â€“311 classifier/repair pipeline.
+  // Let that specialized detector own its guarantee_escalation surface instead
+  // of short-circuiting it through generic extra-duty validation.
+  const spanishPipelineOwnsAssurance = usesSpanishExperienceSurface(source)
+    || usesSpanishExperienceSurface(joined);
+  if (
+    source.trim()
+    && !spanishPipelineOwnsAssurance
+    && hasOutcomeAssuranceClaim(joined)
+    && !hasOutcomeAssuranceClaim(source)
+  ) {
+    const kind: ExperienceUnsupportedClaimKind = /\b(?:garantiz|asegur)\w*/iu.test(joined)
+      ? 'guarantee_escalation'
+      : 'assurance_escalation';
+    kinds.push(kind);
+    labels.push(kind);
+  }
+
   for (const tool of ['Excel', 'Salesforce', 'Slack', 'Jira', 'SAP', 'Tableau', 'Photoshop', 'Illustrator', 'InDesign', 'Adobe'] as const) {
     if (new RegExp(`\\b${tool}\\b`, 'iu').test(joined) && !hasToolSupport(source, tool)) {
       kinds.push('unsupported_tool_claim');
@@ -268,6 +300,7 @@ export function experienceUnsupportedClaimRejectionReason(
   if (scan.kinds.includes('organization_responsibility_claim')) {
     return 'unsupported_organization_responsibility_claim';
   }
+  if (scan.kinds.includes('assurance_escalation')) return 'unsupported_assurance_escalation';
   if (scan.kinds.includes('leadership_claim')) return 'unsupported_leadership_claim';
   return 'unsupported_generated_duty';
 }
