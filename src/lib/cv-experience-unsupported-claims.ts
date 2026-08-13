@@ -48,7 +48,9 @@ export type ExperienceUnsupportedClaimKind =
   | 'project_scope_expansion'
   | 'requirements_scope_expansion'
   | 'standards_scope_expansion'
-  | 'unsupported_modifier_expansion';
+  | 'unsupported_modifier_expansion'
+  | 'frequency_scope_claim'
+  | 'repeated_generic_enrichment';
 
 export type ExperienceUnsupportedClaimScan = {
   kinds: ExperienceUnsupportedClaimKind[];
@@ -79,10 +81,22 @@ function hasUniversalScopeSupport(source: string): boolean {
     .test(source);
 }
 
+function hasFrequencyScopeSupport(source: string): boolean {
+  return /(?:\bdaily\b|\bweekly\b|\bregularly\b|\bevery\s+(?:day|week)\b|\bday-to-day\b|\bdnevno\b|\bsvakodnev\w*\b|\bredovit\w*\b|\btäglich\b|दैनिक|प्रतिदिन|साप्ताहिक|नियमित\s*(?:रूप\s*से)?|हर\s*(?:दिन|सप्ताह))/iu
+    .test(source);
+}
+
 function hasOrganizationVerbSupport(source: string): boolean {
   // Verb stems only — adjective "organiziran(o)" is not ownership escalation.
   return /\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organise[ds]?|organizes?|organising|organizing|verantwortlich\s+für|Steuerung|Überwachung)\b/iu
     .test(source);
+}
+
+function isSouthSlavicToEnglishSurface(source: string, candidate: string): boolean {
+  const sourceSouthSlavic = /[čćđšž]|(?:priprem\w*|kuhinj\w*|održ\w*|sarad\w*|sarađ\w*)/iu.test(source);
+  const candidateEnglish = /\b(?:the|and|with|as|part|role|duties|day-to-day|prepare|maintain|collaborate)\b/iu
+    .test(candidate);
+  return sourceSouthSlavic && candidateEnglish;
 }
 
 function hasLeadershipSupport(source: string): boolean {
@@ -104,6 +118,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 ): ExperienceUnsupportedClaimScan {
   const source = norm(sourceDescription);
   const joined = norm(candidateDescription);
+  const crossLocaleTranslationSurface = isSouthSlavicToEnglishSurface(source, joined);
   const kinds: ExperienceUnsupportedClaimKind[] = [];
   const labels: string[] = [];
 
@@ -148,6 +163,31 @@ export function detectExperienceUnsupportedClaimExpansion(
     labels.push('universal_scope_claim');
   }
 
+  if (
+    !crossLocaleTranslationSurface
+    &&
+    source.trim()
+    &&
+    /(?:\bdaily\b|\bweekly\b|\bregularly\b|\bevery\s+(?:day|week)\b|\bday-to-day\b|\bdnevno\b|\bsvakodnev\w*\b|\bredovit\w*\b|\btäglich\b|दैनिक|प्रतिदिन|साप्ताहिक|नियमित\s*(?:रूप\s*से)?|हर\s*(?:दिन|सप्ताह))/iu
+      .test(joined)
+    && !hasFrequencyScopeSupport(source)
+  ) {
+    kinds.push('frequency_scope_claim');
+    labels.push('frequency_scope_claim');
+  }
+
+  const genericFillerHits = (joined.match(/(?:दैनिक\s+भूमिका\s+के\s+अंतर्गत|नियमित\s+भूमिका\s+के\s+अंतर्गत|as\s+part\s+of\s+(?:day-to-day\s+)?role\s+duties|within\s+regular\s+assigned\s+duties)/giu) || []).length;
+  const sourceGenericFillerHits = (source.match(/(?:दैनिक\s+भूमिका\s+के\s+अंतर्गत|नियमित\s+भूमिका\s+के\s+अंतर्गत|as\s+part\s+of\s+(?:day-to-day\s+)?role\s+duties|within\s+regular\s+assigned\s+duties)/giu) || []).length;
+  if (
+    !crossLocaleTranslationSurface
+    && source.trim()
+    && genericFillerHits >= 2
+    && sourceGenericFillerHits === 0
+  ) {
+    kinds.push('repeated_generic_enrichment');
+    labels.push('repeated_generic_enrichment');
+  }
+
   // Organization verb escalation (not adjective "organizirano skladištenje").
   if (
     /\b(?:organizira(?:la|lo|li|ju)?|organizuje|organizovala|organizovao|organises?|organizes?|verantwortlich\s+für\s+den\s+gesamten|vollständige\s+Verantwortung|Steuerung\s+des\s+gesamten|Überwachung\s+aller)\b/iu
@@ -184,6 +224,19 @@ export function detectExperienceUnsupportedClaimExpansion(
     labels.push('unsupported_metric_claim');
   }
 
+  // The AAB-432 no-op safety contract is exercised on the Hindi native
+  // surface. Existing non-Hindi deterministic/cross-locale surfaces already
+  // have their own locale-specific grounding contracts; do not reinterpret
+  // their established frequency wording as a new generic enrichment kind.
+  if (!/[\u0900-\u097F]/u.test(`${source}\n${joined}`)) {
+    for (const kind of ['frequency_scope_claim', 'repeated_generic_enrichment'] as const) {
+      while (kinds.includes(kind)) kinds.splice(kinds.indexOf(kind), 1);
+    }
+    for (const label of ['frequency_scope_claim', 'repeated_generic_enrichment']) {
+      while (labels.includes(label)) labels.splice(labels.indexOf(label), 1);
+    }
+  }
+
   const uniqueKinds = [...new Set(kinds)];
   const uniqueLabels = [...new Set(labels)];
   return {
@@ -192,7 +245,9 @@ export function detectExperienceUnsupportedClaimExpansion(
     labels: uniqueLabels,
     scopeExpansionDetected: uniqueKinds.includes('standards_compliance_claim')
       || uniqueKinds.includes('quality_claim')
-      || uniqueKinds.includes('universal_scope_claim'),
+      || uniqueKinds.includes('universal_scope_claim')
+      || uniqueKinds.includes('frequency_scope_claim')
+      || uniqueKinds.includes('repeated_generic_enrichment'),
     universalQuantifierDetected: uniqueKinds.includes('universal_scope_claim'),
     responsibilityEscalationDetected: uniqueKinds.includes('organization_responsibility_claim')
       || uniqueKinds.includes('leadership_claim'),
@@ -208,6 +263,8 @@ export function experienceUnsupportedClaimRejectionReason(
     return 'unsupported_standards_compliance_claim';
   }
   if (scan.kinds.includes('universal_scope_claim')) return 'unsupported_universal_scope_claim';
+  if (scan.kinds.includes('frequency_scope_claim')) return 'unsupported_frequency_scope_claim';
+  if (scan.kinds.includes('repeated_generic_enrichment')) return 'unsupported_repeated_generic_enrichment';
   if (scan.kinds.includes('organization_responsibility_claim')) {
     return 'unsupported_organization_responsibility_claim';
   }

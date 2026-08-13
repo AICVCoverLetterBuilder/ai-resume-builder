@@ -11318,7 +11318,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     finalUnsupportedClaimKinds: [],
     finalPersonMode: null,
     finalMatchesProviderOutput: false,
-    finalMatchesSourceAfterNormalization: false,
+    // Even when no candidate is selected, the visible terminal text can be
+    // provably unchanged. Preserve that fact for the no-apply/+0 contract.
+    finalMatchesSourceAfterNormalization: Boolean(
+      visibleComparisonText.trim()
+      && normalizeExperienceAiSourceText(exp?.description || visibleComparisonText)
+        === normalizeExperienceAiSourceText(visibleComparisonText),
+    ),
     finalNormalizedHash: null,
     finalBulletCount: 0,
     finalBulletScripts: [],
@@ -11937,6 +11943,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ...perspectiveMeta,
         ...successVisFields,
         finalMatchesProviderOutput: finalMatchesProvider,
+        // Terminal truth: compare the actual selected text with the immutable
+        // authority; never retain a provider/repair phase-local no-op flag.
+        finalMatchesSourceAfterNormalization: !experienceAiHasMeaningfulChange(
+          sourceForCoverage,
+          acceptedText,
+        ),
         tenseMode,
         selectedExperienceEntryIdHash,
         operationSnapshotExperienceEntryIdHash: snapshot?.experienceEntryId
@@ -12125,6 +12137,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         canonicalExperienceDecisionAllowsApply: canonicalPreapplyDecision.shouldApply,
         canonicalExperienceDecisionAllowsUsage:
           canonicalPreapplyDecision.shouldIncrementUsage,
+        // This is terminal usage authority, not provider-phase telemetry.
+        shouldIncrementUsage: canonicalPreapplyDecision.shouldIncrementUsage,
         experienceRepairLineageRevision: EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
         spanishExperienceRepairGroundingRevision: SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
         providerRejectionReason: result.diagnostics?.providerRejectionReason
@@ -14830,6 +14844,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     countedAsSuccess: false,
     diagnostics: {
       ...baseDiag(),
+      // A rejected/no-apply terminal must report truth against the request-time
+      // visible source, not the immutable canonical fact source.  The latter
+      // may intentionally differ when the user edited the textarea.
+      finalMatchesSourceAfterNormalization: Boolean(
+        visibleComparisonText.trim()
+        && normalizeExperienceAiSourceText(exp?.description || visibleComparisonText)
+          === normalizeExperienceAiSourceText(visibleComparisonText),
+      ),
+      finalNormalizedHash: null,
       targetLocale: locale,
       targetScript: resolveTargetScriptForLocale(locale),
       detectedLocaleByBullet: rejectedPurity?.detectedLocaleByUnit || [],

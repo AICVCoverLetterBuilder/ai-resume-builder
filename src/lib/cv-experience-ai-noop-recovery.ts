@@ -12,6 +12,7 @@ import {
   experienceAiHasMeaningfulChange,
 } from './cv-experience-perspective';
 import { validateNoExtraGeneratedDuties } from './cv-material-duty-coverage';
+import { detectExperienceUnsupportedClaimExpansion } from './cv-experience-unsupported-claims';
 import {
   extractSourceDutyUnits,
   stripDutyListPrefix,
@@ -187,6 +188,10 @@ function polishEnglishUnit(unit: string): string {
 function polishUnit(unit: string, locale: Locale): string {
   if (locale === 'hr' || locale === 'sr') return polishSouthSlavicUnit(unit);
   if (locale === 'en') return polishEnglishUnit(unit);
+  if (locale === 'hi') {
+    // Hindi no-op recovery must not manufacture frequency/scope filler.
+    return stripDutyListPrefix(unit || '').replace(/\s+/g, ' ').trim();
+  }
   // Generic: insert a light professional connector without new nouns/tools.
   let t = stripDutyListPrefix(unit || '').trim();
   if (!t) return t;
@@ -196,7 +201,6 @@ function polishUnit(unit: string, locale: Locale): string {
     else if (locale === 'ja') t = `${t}（日常業務として）。`;
     else if (locale === 'ru') t = `${t} в рамках повседневных обязанностей.`;
     else if (locale === 'ar') t = `${t} في إطار المهام اليومية.`;
-    else if (locale === 'hi') t = `${t} दैनिक भूमिका के अंतर्गत।`;
     else t = `${t} as part of day-to-day role duties.`;
   }
   return t.replace(/\s+/g, ' ').trim();
@@ -270,5 +274,6 @@ export function experienceAiNoOpFallbackIsSafe(options: {
   if (srcCount > 0 && outCount > 0 && outCount < srcCount) return false;
   // Same grounding contract as provider/repair: no unsupported expansions.
   if (!validateNoExtraGeneratedDuties(options.sourceDescription, candidate).valid) return false;
+  if (detectExperienceUnsupportedClaimExpansion(options.sourceDescription, candidate).count > 0) return false;
   return true;
 }

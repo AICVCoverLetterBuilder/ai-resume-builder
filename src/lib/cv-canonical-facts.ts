@@ -152,6 +152,11 @@ export function formatExperienceBullets(bullets: string[], bulletPrefix = '• '
 
 export function classifyDutyCategory(text: string): CvDutyCategory {
   const t = text.toLowerCase().normalize('NFKC');
+  // Hindi's generic preparation verb is domain-neutral.  It may contribute to
+  // food classification only when an explicit food object/domain is present;
+  // graphic material, documents, reports, and design must remain generic.
+  const hindiFoodPreparationContext = /(?:भोजन|पकवान|खाना|व्यंजन|रसोई|रेस्तरां|रेस्तराँ)/u.test(t)
+    && /तैयार|बन(?:ा|ाना|ाए|ाया|ा कर)/u.test(t);
   if (
     /\b(guest|guests|customer|customers|rapport|gost|gosti|gostima|klijent|клиент|грах|ग्राहक|客|ضيف|clientes?)\b/iu.test(t)
     || /attentive customer|building rapport|built rapport|uslugu gost/iu.test(t)
@@ -181,7 +186,8 @@ export function classifyDutyCategory(text: string): CvDutyCategory {
     || /priprem\w*.{0,40}(jel|hran|namirnic|obrok)/iu.test(t)
     || /organiz\w*.{0,40}(priprem|radni\s+prostor|workstation)/iu.test(t)
     || /sara[dđ]\w*.{0,40}(kuhinj|kitchen|koleg)/iu.test(t)
-    || /भोजन|पकवान|खाना|व्यंजन|तैयार|रसोई|रेस्तरां|रेस्तراँ|طبخ|料理/u.test(t)
+    || /भोजन|पकवान|खाना|व्यंजन|रसोई|रेस्तरां|रेस्तراँ|طبخ|料理/u.test(t)
+    || hindiFoodPreparationContext
   ) {
     return 'food_preparation';
   }
@@ -208,7 +214,7 @@ export const DUTY_CATEGORY_PRESENCE: Record<Exclude<CvDutyCategory, 'generic'>, 
   inventory_stock:
     /(inventory|stock|zalih|inventar|inventur|supply|запас|снаб|स्टॉक|इन्वेंट|在庫|مخزون|invent|beständ|inventaire|conteggio|scorte|estoque|Bestände|niveau|skladišt|ingredient|namirnic|freshness)/iu,
   food_preparation:
-    /(dish(?:es)?|cuisine|kitchen|küche|küchen|gerichte|essens|menu|recipe|cook|food\s*prep|restaurant|jel\w*|kuhinj\w*|namirnic\w*|mediterr|mediterranean|serbian\s+and|srpsk|priprem\w*|zubereit|plat|plato|piatto|кухн|طبخ|भोजन|व्यंजन|तैयार|रसोई|रेस्तराँ|料理|prépar|kolleg|colleagues|servis|service|workstation|arbeitsplatz|posto de|poste de)/iu,
+    /(dish(?:es)?|cuisine|kitchen|küche|küchen|gerichte|essens|menu|recipe|cook|food\s*prep|restaurant|jel\w*|kuhinj\w*|namirnic\w*|mediterr|mediterranean|serbian\s+and|srpsk|priprem\w*|zubereit|plat|plato|piatto|кухн|طبخ|भोजन|व्यंजन|रसोई|रेस्तराँ|料理|prépar|kolleg|colleagues|servis|service|workstation|arbeitsplatz|posto de|poste de)/iu,
 };
 
 /** Phrases that replace guest service with teammate cooperation (not equivalent). */
