@@ -511,6 +511,12 @@ export type SummaryAiDiagnosticTrace = {
   finalUnitRoleSlots: string[] | null;
   finalUnitSemanticRolesByUnit?: string[][] | null;
   finalSentenceSemanticRolesBySentence?: string[][] | null;
+  evaluatedUnitRoleSlots?: string[] | null;
+  evaluatedSentenceSemanticRolesBySentence?: string[][] | null;
+  frenchStrongerSemanticValidationPassed?: boolean | null;
+  frenchStrongerSemanticRejectionReasons?: string[] | null;
+  frenchPredicateEvidence?: Array<Record<string, unknown>> | null;
+  frenchRoleTenseEvidence?: Array<Record<string, unknown>> | null;
   finalCurrentEmployerPresent?: boolean | null;
   finalPriorEmployerPresent?: boolean | null;
   finalCurrentEmploymentStateExpressed?: boolean | null;
@@ -1604,6 +1610,26 @@ export class SummaryAiDiagnosticSession {
           ?? null
         )
         : null,
+      // Preserve the evaluator's canonical role vocabulary in the terminal
+      // UI trace (for example current_role rather than the render-oriented
+      // current_intro slot). These fields are diagnostic lineage only; the
+      // final candidate/validation decisions remain unchanged.
+      evaluatedUnitRoleSlots: finalCandidateSelected
+        ? (diag.evaluatedUnitRoleSlots ?? null)
+        : null,
+      evaluatedSentenceSemanticRolesBySentence: finalCandidateSelected
+        ? (diag.evaluatedSentenceSemanticRolesBySentence ?? null)
+        : null,
+      frenchStrongerSemanticValidationPassed:
+        (diag as { frenchStrongerSemanticValidationPassed?: boolean | null })
+          .frenchStrongerSemanticValidationPassed ?? null,
+      frenchStrongerSemanticRejectionReasons:
+        (diag as { frenchStrongerSemanticRejectionReasons?: string[] | null })
+          .frenchStrongerSemanticRejectionReasons ?? null,
+      frenchPredicateEvidence: (diag as { frenchPredicateEvidence?: Array<Record<string, unknown>> | null })
+        .frenchPredicateEvidence ?? null,
+      frenchRoleTenseEvidence: (diag as { frenchRoleTenseEvidence?: Array<Record<string, unknown>> | null })
+        .frenchRoleTenseEvidence ?? null,
       finalCurrentEmployerPresent: diag.finalCurrentEmployerPresent ?? null,
       finalPriorEmployerPresent: diag.finalPriorEmployerPresent ?? null,
       finalCurrentEmploymentStateExpressed: diag.finalCurrentEmploymentStateExpressed ?? null,
@@ -2416,9 +2442,13 @@ export class SummaryAiDiagnosticSession {
             : (detUnitCount > 0
               ? Array.from({ length: detUnitCount }, () => 'summary_unit')
               : []));
+        const evaluatedSemanticRoles = Array.isArray(diag.evaluatedSentenceSemanticRolesBySentence)
+          && diag.evaluatedSentenceSemanticRolesBySentence.length === detUnitCount
+          ? diag.evaluatedSentenceSemanticRolesBySentence
+          : null;
         const detSemanticRoles = detAccepted && resolvedFinalSemanticRoles
           ? resolvedFinalSemanticRoles
-          : null;
+          : evaluatedSemanticRoles;
         const detRawHash = diag.deterministicCandidateHash ?? null;
         const detNormalizedHash = diag.deterministicCandidateNormalizedHash ?? detRawHash;
         const detFinalizedHash = detAccepted

@@ -1192,9 +1192,12 @@ export type FinalizeCvAiFieldResult = {
     finalCandidateUnitCount?: number;
     evaluatedCandidateUnitCount?: number | null;
     evaluatedUnitRoleSlots?: string[] | null;
+    evaluatedSentenceSemanticRolesBySentence?: string[][] | null;
     evaluatedSentenceHashes?: string[] | null;
     evaluatedSlotValidationPassed?: boolean | null;
     evaluatedSlotRejectionReasons?: string[] | null;
+    frenchStrongerSemanticValidationPassed?: boolean | null;
+    frenchStrongerSemanticRejectionReasons?: string[] | null;
     finalCandidateValidationApplicable?: boolean;
     finalCandidatePredicateValidationApplicable?: boolean;
     finalCandidateBulletCount?: number;
@@ -3757,6 +3760,9 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         v2Pd?.styleFulfillment?.frenchRoleTenseEvidence || [],
       tenseValidationPassed: locale === 'fr'
         ? Boolean(
+          (requestedRewriteStyle !== 'stronger'
+            || v2Pd?.frenchStrongerSemanticValidationPassed === true)
+          &&
           v2Pd?.styleFulfillment?.frenchRoleTenseEvidence?.length
           && v2Pd.styleFulfillment.frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
           && v2Pd.styleFulfillment.frenchPredicateEvidence?.every((evidence) => evidence.tenseMatch),
@@ -3837,12 +3843,14 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           && v2Pd?.styleFulfillment?.grammaticalPersonValidationPassed
           && (requestedRewriteStyle !== 'stronger'
             || (v2Pd?.styleFulfillment?.frenchRoleTenseEvidence?.length
+              && v2Pd?.frenchStrongerSemanticValidationPassed === true
               && v2Pd.styleFulfillment.frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
               && v2Pd.styleFulfillment.frenchPredicateEvidence?.every((evidence) => (
                 evidence.tenseMatch
                 && evidence.actionIdentityPreserved
                 && evidence.responsibilityTierPreserved
                 && evidence.objectScopePreserved
+                && evidence.accepted !== false
               )))))
         : locale === 'de' && deV2Completeness
         ? deV2Completeness.germanControlledCaseGrammarPassed
@@ -3923,6 +3931,28 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         if (slot === 'prior_role') return ['prior_role_intro', 'prior_role_duties'];
         return [slot];
       }),
+      // Preserve deterministic manifest ownership even when the candidate is
+      // rejected later. Candidate lineage must never fall back to summary_unit.
+      evaluatedUnitRoleSlots: v2DetPresent
+        ? (v2Pd?.deterministicCandidateRoleSlots ?? unitRoleSlots)
+        : null,
+      evaluatedSentenceSemanticRolesBySentence: v2DetPresent
+        ? (v2Pd?.deterministicCandidateSemanticRolesBySentence
+          ?? v2Units.map((_, i) => {
+            const slot = unitRoleSlots[i] || 'other';
+            if (slot === 'total_duration' || slot === 'duration') return ['total_duration'];
+            if (slot === 'current_intro' || slot === 'current_role') {
+              return ['current_role_intro', 'current_role_duties'];
+            }
+            if (slot === 'prior_role') return ['prior_role_intro', 'prior_role_duties'];
+            return [slot];
+          }))
+        : null,
+      evaluatedSentenceHashes: v2DetPresent ? v2UnitHashes : null,
+      frenchStrongerSemanticValidationPassed:
+        v2Pd?.frenchStrongerSemanticValidationPassed ?? null,
+      frenchStrongerSemanticRejectionReasons:
+        v2Pd?.frenchStrongerSemanticRejectionReasons || [],
       ...(deV2Completeness
         ? {
           germanControlledCaseGrammarPassed:

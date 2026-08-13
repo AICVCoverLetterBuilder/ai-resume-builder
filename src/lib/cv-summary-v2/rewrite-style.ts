@@ -132,6 +132,10 @@ export type FrenchPredicateTransformationEvidence = {
   actionIdentityPreserved: boolean;
   responsibilityTierPreserved: boolean;
   objectScopePreserved: boolean;
+  /** Final-candidate truth: this record is accepted only when the selected
+   * serialized candidate actually satisfies every semantic predicate gate. */
+  accepted?: boolean;
+  rejectionReason?: string | null;
 };
 
 export type FrenchRoleTenseEvidence = {

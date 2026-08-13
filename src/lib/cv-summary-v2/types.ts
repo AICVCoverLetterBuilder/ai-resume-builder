@@ -281,6 +281,10 @@ export type SummaryV2PipelineResult = {
     localizationTypedFailureReason: string | null;
     localizedManifestHash: string | null;
     localizedManifestRevision: string | null;
+    deterministicCandidateRoleSlots?: string[];
+    deterministicCandidateSemanticRolesBySentence?: string[][];
+    frenchStrongerSemanticValidationPassed?: boolean | null;
+    frenchStrongerSemanticRejectionReasons?: string[];
     styleFulfillment: {
       shorterStyleFulfilled: boolean;
       strongerStyleFulfilled: boolean;
@@ -352,6 +356,8 @@ export type SummaryV2PipelineResult = {
         actionIdentityPreserved: boolean;
         responsibilityTierPreserved: boolean;
         objectScopePreserved: boolean;
+        accepted?: boolean;
+        rejectionReason?: string | null;
       }>;
       frenchRoleTenseEvidence?: Array<{
         owningEntryHash: string;
@@ -359,6 +365,8 @@ export type SummaryV2PipelineResult = {
         expectedTense: 'present' | 'past';
         realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
         tenseMatch: boolean;
+        accepted?: boolean;
+        rejectionReason?: string | null;
       }>;
     } | null;
     styleNoSafeMaterialChange: boolean;

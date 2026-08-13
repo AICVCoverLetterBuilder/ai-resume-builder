@@ -584,6 +584,12 @@ type SummaryLike = {
   competencyInferenceFromRoleForbidden?: boolean | null;
   finalUnitSemanticRolesByUnit?: string[][] | null;
   finalSentenceSemanticRolesBySentence?: string[][] | null;
+  deterministicCandidateRoleSlots?: string[] | null;
+  deterministicCandidateSemanticRolesBySentence?: string[][] | null;
+  frenchStrongerSemanticValidationPassed?: boolean | null;
+  frenchStrongerSemanticRejectionReasons?: string[] | null;
+  frenchPredicateEvidence?: Array<Record<string, unknown>> | null;
+  frenchRoleTenseEvidence?: Array<Record<string, unknown>> | null;
   finalCurrentEmployerPresent?: boolean | null;
   finalPriorEmployerPresent?: boolean | null;
   finalCurrentEmploymentStateExpressed?: boolean | null;
