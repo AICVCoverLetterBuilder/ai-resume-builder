@@ -30,6 +30,7 @@ import {
 
 const REF = '2026-08-11';
 const BAD_PROVIDER = 'अनग्राउंडेड प्रदाता पाठ।';
+const AAB430_SHORTER_TEXT = 'मेरे पास सात वर्षों का अनुभव है। मैं वर्तमान में Rewitu Current Test में ग्राफ़िक डिज़ाइनर के रूप में काम करती हूँ तथा डिजिटल सामग्री के लिए दृश्य अवधारणाएँ और लेआउट तैयार करती हूँ, विभिन्न परियोजनाओं के लिए ग्राफ़िक्स और छवियों को संपादित करती हूँ और परियोजना दल के सदस्यों के साथ मसौदों और संशोधनों का समन्वय करती हूँ। पहले मैं TestWerk GmbH में ग्राफ़िक डिज़ाइनर के रूप में काम करती थी तथा प्रिंट व डिजिटल माध्यमों के लिए ग्राफिक सामग्री तैयार करती थी, ग्राहकों की आवश्यकताओं के अनुसार विज़ुअल डिज़ाइन अवधारणाएँ विकसित करती थी और डिज़ाइन परियोजनाओं की समीक्षा करके अंतिम आउटपुट की गुणवत्ता सुनिश्चित करती थी। इससे पहले मैंने Rewitu में ग्राफ़िक डिज़ाइनर के रूप में काम किया तथा डिजिटल सामग्री के लिए दृश्य अवधारणाएँ और लेआउट तैयार किए, विभिन्न परियोजनाओं के लिए ग्राफ़िक्स और छवियों का संपादन किया और परियोजना दल के सदस्यों के साथ मसौदों और संशोधनों का समन्वय किया।';
 
 function work(options: Partial<WorkExperience> & Pick<WorkExperience, 'id' | 'position' | 'company' | 'startDate' | 'description'>): WorkExperience {
   return {
@@ -39,10 +40,10 @@ function work(options: Partial<WorkExperience> & Pick<WorkExperience, 'id' | 'po
 }
 
 /** Exact AAB-427 selected-entry topology: 90ceb current; be5c + a221 priors. */
-function deviceCv(summary = ''): CVData {
+function deviceCv(summary = '', gender: 'female' | 'male' | '' = 'female'): CVData {
   return {
     id: 'aab428-hindi-rewrite-authority',
-    personal: { fullName: 'Test User', email: '', phone: '', address: '', jobTitle: '', gender: 'female' },
+    personal: { fullName: 'Test User', email: '', phone: '', address: '', jobTitle: '', gender },
     summary,
     contentLocale: 'hi',
     experience: [
@@ -56,9 +57,9 @@ function deviceCv(summary = ''): CVData {
   } as unknown as CVData;
 }
 
-function seededCv(): CVData {
-  const cv = deviceCv();
-  const manifest = buildSummaryV2ManifestForCv({ cv, locale: 'hi', gender: 'female', referenceDateIso: REF });
+function seededCv(gender: 'female' | 'male' | '' = 'female'): CVData {
+  const cv = deviceCv('', gender);
+  const manifest = buildSummaryV2ManifestForCv({ cv, locale: 'hi', gender, referenceDateIso: REF });
   cv.summary = buildSummaryV2DeterministicText(manifest);
   return cv;
 }
@@ -153,8 +154,10 @@ describe('AAB-428 Summary V2 rewrite structured-authority contract', () => {
     ['generate', 'professional'],
     ['stronger', 'shorter'],
     ['stronger', 'professional'],
+    ['shorter', 'professional'],
     ['shorter', 'stronger'],
     ['professional', 'shorter'],
+    ['professional', 'stronger'],
   ] as const)(
     'keeps immutable Hindi manifest authority through %s → %s',
     (firstStyle, secondStyle) => {
@@ -233,6 +236,93 @@ describe('AAB-428 Summary V2 rewrite structured-authority contract', () => {
     recordProAiUserActionSuccess();
     expect(applied.summary).toBe(fin.text);
     expect(getProAiUsageCount()).toBe(428);
+  });
+
+  it('turns the exact AAB-430 Hindi Shorter surface into native Professional role framing and applies +1', () => {
+    const cv = deviceCv(AAB430_SHORTER_TEXT);
+    expect(cv.summary.length).toBe(868);
+
+    const professional = runSummaryV2({
+      cv, locale: 'hi', gender: 'female', referenceDateIso: REF,
+      candidate: BAD_PROVIDER, rewriteStyle: 'professional',
+    });
+    const expected = 'मेरे पास लगभग सात वर्षों का संयुक्त अनुभव है। मैं वर्तमान में Rewitu Current Test में ग्राफिक डिज़ाइनर के रूप में कार्य करती हूँ तथा डिजिटल सामग्री के लिए दृश्य अवधारणाएँ और लेआउट तैयार करती हूँ; विभिन्न परियोजनाओं के लिए ग्राफिक्स और छवियों को संपादित करती हूँ और परियोजना टीम के सदस्यों के साथ मसौदों और संशोधनों का समन्वय करती हूँ। इससे पहले मैं TestWerk GmbH में ग्राफिक डिज़ाइनर के रूप में कार्य करती थी तथा विभिन्न प्रिंट और डिजिटल माध्यमों के लिए ग्राफिक सामग्री तैयार करती थी; ग्राहकों की आवश्यकताओं के अनुसार विज़ुअल डिज़ाइन अवधारणाएँ विकसित करती थी और डिज़ाइन परियोजनाओं की समीक्षा करके अंतिम आउटपुट की गुणवत्ता सुनिश्चित करती थी। इससे पहले मैंने Rewitu में ग्राफिक डिज़ाइनर के रूप में काम किया तथा डिजिटल सामग्री के लिए दृश्य अवधारणाएँ और लेआउट तैयार किए; विभिन्न परियोजनाओं के लिए ग्राफिक्स और छवियों का संपादन किया और परियोजना दल के सदस्यों के साथ मसौदों और संशोधनों का समन्वय किया।';
+    expect(professional.blocked).toBe(false);
+    expect(professional.countedAsSuccess).toBe(true);
+    expect(professional.text).toBe(expected);
+    expect(professional.text).toContain('के रूप में कार्य करती हूँ');
+    expect(professional.text).toContain('के रूप में कार्य करती थी');
+    expect(professional.text).toContain('के रूप में काम किया');
+    expect(professional.text).not.toMatch(/के पद पर सेवा करती (?:हूँ|थी)/u);
+    expect(professional.text).not.toContain('कार्यरत हूँ');
+    expect(professional.validation.requiredCurrentFactCount).toBe(3);
+    expect(professional.validation.coveredCurrentFactCount).toBe(3);
+    expect(professional.validation.requiredPriorFactCount).toBe(6);
+    expect(professional.validation.coveredPriorFactCount).toBe(6);
+    expect(professional.validation.finalUnitOwnership.map((unit) => unit.roleSlot)).toEqual([
+      'duration', 'current_role', 'prior_role', 'prior_role',
+    ]);
+    expect(professional.validation.factUnitOwnershipValidationPassed).toBe(true);
+    expect(professional.validation.materialAuthority.invariantPassed).toBe(true);
+    expect(professional.validation.hindiFirstPersonAgreementPassed).toBe(true);
+    expect(professional.validation.unsupportedClaimCount).toBe(0);
+
+    const fin = finalizeCvAiFieldForApply({
+      action: 'summary_professional', field: 'summary', candidate: BAD_PROVIDER, cv,
+      requestedLocale: 'hi', gender: 'female', referenceDateIso: REF,
+      durationSnapshot: buildExperienceDurationSnapshot(cv.experience || [], REF),
+      rewriteStyle: 'professional',
+    });
+    expect(fin.blocked).toBe(false);
+    expect(fin.countedAsSuccess).toBe(true);
+    expect(fin.text).toBe(expected);
+    expect(getProAiUsageCount()).toBe(427);
+    expect(applyFinalizedSummaryToCv(cv, 'hi', fin).summary).toBe(expected);
+    recordProAiUserActionSuccess();
+    expect(getProAiUsageCount()).toBe(428);
+  });
+
+  it.each([
+    ['female', 'के रूप में कार्य करती हूँ', 'के रूप में कार्य करती थी'],
+    ['male', 'के रूप में कार्य करता हूँ', 'के रूप में कार्य करता था'],
+    ['unspecified', 'के रूप में कार्य करता हूँ', 'के रूप में कार्य करता था'],
+  ] as const)(
+    'uses native, gender-resolved Hindi Professional role framing for %s input',
+    (gender, currentRoleFrame, priorRoleFrame) => {
+      const resolvedGender = gender === 'unspecified' ? '' : gender;
+      const cv = seededCv(resolvedGender);
+      const professional = runSummaryV2({
+        cv, locale: 'hi', gender: resolvedGender, referenceDateIso: REF,
+        candidate: BAD_PROVIDER, rewriteStyle: 'professional',
+      });
+      expect(professional.blocked).toBe(false);
+      expect(professional.countedAsSuccess).toBe(true);
+      expect(professional.text).toContain(currentRoleFrame);
+      expect(professional.text).toContain(priorRoleFrame);
+      expect(professional.text).not.toMatch(/के पद पर सेवा/u);
+      expect(professional.text).not.toMatch(/कार्यरत/u);
+      expect(professional.validation.hindiFirstPersonAgreementPassed).toBe(true);
+    },
+  );
+
+  it('rejects service-on-a-post, gender-neutral, punctuation-only, and unsupported Professional variants', () => {
+    const source = seededCv().summary;
+    const usageBefore = getProAiUsageCount();
+    const variants = [
+      source
+        .replace(/के रूप में काम करती हूँ/u, 'के पद पर सेवा करती हूँ')
+        .replace(/के रूप में काम करती थी/u, 'के पद पर सेवा करती थी'),
+      source.replace(/के रूप में काम करती हूँ/u, 'कार्यरत हूँ'),
+      source.replace('।', '। '),
+      `${source} नेतृत्व और परिणाम देने की जिम्मेदारी निभाती हूँ।`,
+    ];
+    for (const candidate of variants) {
+      const quality = evaluateSummaryV2StyleFulfillment({
+        style: 'professional', sourceText: source, candidateText: candidate, locale: 'hi',
+      });
+      expect(quality.styleValidationPassed).toBe(false);
+    }
+    expect(getProAiUsageCount()).toBe(usageBefore);
   });
 
   it('still rejects a genuinely malformed Hindi current-duty tense after structured construction', () => {

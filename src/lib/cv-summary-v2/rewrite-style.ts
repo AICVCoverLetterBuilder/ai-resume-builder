@@ -187,7 +187,7 @@ const LOCALE_PROFESSIONAL_MARKERS: Partial<Record<Locale, RegExp>> = {
   sr: /\b(?:obavljam|obavljao|u\s+svojstvu)\b/iu,
   hr: /\b(?:obavljam|obavljao|u\s+svojstvu)\b/iu,
   ar: /(?:أشغل|شغلت|بصفتي)/u,
-  hi: /(?:पद\s+पर|के\s+रूप\s+में\s+सेवा)/u,
+  hi: /(?:के\s+रूप\s+में\s+कार्य)/u,
   ja: /(?:従事|就任|として職務)/u,
 };
 
@@ -1371,8 +1371,10 @@ function applyProfessionalRoleFraming(text: string, locale: Locale): string {
   }
   if (locale === 'hi') {
     return t
-      .replace(/के रूप में काम (करता|करती) हूँ/u, 'के पद पर सेवा $1 हूँ')
-      .replace(/के रूप में काम (करता|करती) (था|थी)/u, 'के पद पर सेवा $1 $2');
+      // Keep the arbitrary free-text role untouched, while using a native CV
+      // employment predicate whose person, gender, and tense stay explicit.
+      .replace(/के रूप में काम (करता|करती) हूँ/u, 'के रूप में कार्य $1 हूँ')
+      .replace(/के रूप में काम (करता|करती) (था|थी)/u, 'के रूप में कार्य $1 $2');
   }
   if (locale === 'ja') {
     return t
