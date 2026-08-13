@@ -338,6 +338,28 @@ export type SummaryV2PipelineResult = {
       structuralStrengtheningCount?: number;
       nativeStrongSurfacePassed?: boolean;
       nativeStrongSurfaceRejectionReasons?: string[];
+      frenchPredicateEvidence?: Array<{
+        sourceFactHash: string;
+        owningEntryHash: string;
+        employmentState: SummaryV2EmploymentState;
+        expectedTense: 'present' | 'past';
+        realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
+        tenseMatch: boolean;
+        sourcePredicate: string;
+        transformedPredicate: string;
+        sourceActionCategory: string;
+        transformedActionCategory: string;
+        actionIdentityPreserved: boolean;
+        responsibilityTierPreserved: boolean;
+        objectScopePreserved: boolean;
+      }>;
+      frenchRoleTenseEvidence?: Array<{
+        owningEntryHash: string;
+        employmentState: SummaryV2EmploymentState;
+        expectedTense: 'present' | 'past';
+        realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
+        tenseMatch: boolean;
+      }>;
     } | null;
     styleNoSafeMaterialChange: boolean;
   };

@@ -71,6 +71,8 @@ export type SummaryV2NativeSurfaceResult = {
   finalPredicateChainHash: string;
   frenchGrammarValidationPassed?: boolean;
   frenchGrammarRejectionReason?: string | null;
+  frenchTokenBoundaryValidationPassed?: boolean;
+  frenchClauseCasingValidationPassed?: boolean;
 };
 
 export type HindiSummarySentenceAgreementRecord = {
@@ -162,8 +164,48 @@ export function formatNativeDurationSentence(
   return `${capitalizeFirstLetter(raw)}.`;
 }
 
+const FRENCH_FUNCTION_WORDS = '(?:avec|pour|dans|chez|sur|par|et|ou|de|en|à)';
+const FRENCH_ARTICLE_WORDS = '(?:les|des|la|le|un|une|aux|au|du|d\u2019?)';
+const FRENCH_FUSED_BOUNDARY_RE = new RegExp(
+  `(^|[^\\p{L}])(${FRENCH_FUNCTION_WORDS})(${FRENCH_ARTICLE_WORDS})(?=[^\\p{L}]|$)`,
+  'giu',
+);
+
+/**
+ * Repair token boundaries at the shared French duty-surface join point.
+ * Function words and their following articles are separate lexical tokens;
+ * this is intentionally structural rather than a fixture-specific replacement.
+ */
+export function normalizeFrenchTokenBoundaries(text: string): string {
+  return (text || '')
+    .replace(FRENCH_FUSED_BOUNDARY_RE, '$1$2 $3')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+export function detectFrenchTokenBoundaryDefect(text: string): boolean {
+  FRENCH_FUSED_BOUNDARY_RE.lastIndex = 0;
+  return FRENCH_FUSED_BOUNDARY_RE.test(text || '');
+}
+
+/** Lowercase a duty predicate only when it is embedded in a sentence. */
+export function normalizeFrenchDutyClause(text: string): string {
+  const normalized = normalizeFrenchTokenBoundaries(text);
+  const sentenceCased = normalized.replace(/^(\p{Lu})(?=\p{Ll})/u, (match) =>
+    match.toLocaleLowerCase('fr-FR'));
+  // A completed duty may carry its auxiliary explicitly ("ai Préparé")
+  // before the relative connector supplies "où j'ai". The participle is
+  // still sentence-internal and must not retain standalone-bullet casing.
+  return sentenceCased.replace(/^(ai|j['’]ai)(\s+)(\p{Lu})(?=\p{Ll})/iu,
+    (_match, auxiliary: string, spacing: string, initial: string) =>
+      `${auxiliary}${spacing}${initial.toLocaleLowerCase('fr-FR')}`);
+}
+
 function localeAndJoin(parts: string[], locale: Locale): string {
-  const clean = parts.map((p) => p.replace(/[.;]+$/u, '').trim()).filter(Boolean);
+  const clean = parts
+    .map((p) => (locale === 'fr' ? normalizeFrenchDutyClause(p) : p)
+      .replace(/[.;]+$/u, '').trim())
+    .filter(Boolean);
   if (clean.length === 0) return '';
   if (clean.length === 1) return clean[0];
   // Arabic uses the Arabic comma; never the Latin comma inside RTL prose.
@@ -171,7 +213,7 @@ function localeAndJoin(parts: string[], locale: Locale): string {
   const last = clean[clean.length - 1];
   if (locale === 'es') return `${head} y ${last}`;
   if (locale === 'pt-BR') return `${head} e ${last}`;
-  if (locale === 'fr') return `${head} et ${last}`;
+  if (locale === 'fr') return normalizeFrenchTokenBoundaries(`${head} et ${last}`);
   if (locale === 'it') return `${head} e ${last}`;
   if (locale === 'ru') return `${head} и ${last}`;
   if (locale === 'sr' || locale === 'hr') return `${head} i ${last}`;
@@ -220,7 +262,7 @@ function realizeFrenchFirstPersonDutyChain(
     text = text.replace(/\b(\p{L}+?)ait\b/giu, (match, stem: string) =>
       /^(?:f|déf|ref)$/iu.test(stem) ? match : `${stem}ais`);
     text = text.replace(/\b(\p{L}+?)aient\b/giu, '$1aient');
-    return text.replace(/\s+/g, ' ').trim();
+    return normalizeFrenchDutyClause(text);
   }
   // Present irregulars are the forms where 1sg and 3sg visibly diverge.
   text = text.replace(/^(\p{L}+)/u, (match) => match.toLocaleLowerCase('fr-FR'));
@@ -1114,6 +1156,27 @@ export function evaluateSummaryV2NativeSurface(options: {
     return true;
   })();
 
+  const frenchTokenBoundaryValidationPassed = options.locale !== 'fr'
+    || !detectFrenchTokenBoundaryDefect(text);
+  if (!frenchTokenBoundaryValidationPassed) {
+    reasons.push('french_token_boundary_violation');
+  }
+
+  const frenchClauseCasingValidationPassed = (() => {
+    if (options.locale !== 'fr') return true;
+    // After a French relative first-person frame, coordinated predicates are
+    // continuation clauses and must use sentence-internal lowercase.
+    const frame = /\b(?:où\s+je|où\s+j['’])\s+/iu.exec(text);
+    if (!frame) return true;
+    const tail = text.slice((frame.index ?? 0) + frame[0].length);
+    const defect = /(?:^|,\s+|\bet\s+)([\p{Lu}][\p{Ll}]+)/u.test(tail);
+    if (defect) {
+      reasons.push('french_embedded_clause_capitalization');
+      return false;
+    }
+    return true;
+  })();
+
   // Em-dash + Capitalized 3sg duty after 1sg frame = person mismatch.
   const grammaticalPersonValidationPassed = (() => {
     const mismatch = /(?:trabajo|travaille|lavoro|trabalho|radim|работаю|أعمل|काम करता|勤務)\b[^.]{0,60}\s+[—–]\s+[\p{Lu}]/iu.test(text)
@@ -1194,8 +1257,16 @@ export function evaluateSummaryV2NativeSurface(options: {
       && analyzeSpanishCoordinatedPredicateMorphology(text, perspective).mixedPersonPredicateChain)
     && (frenchGrammar?.grammarValidationPassed ?? true);
 
+  const frenchSurfaceValidationPassed = options.locale !== 'fr'
+    || (
+      (frenchGrammar?.grammarValidationPassed ?? true)
+      && frenchTokenBoundaryValidationPassed
+      && frenchClauseCasingValidationPassed
+    );
+
   const nativeSurfaceValidationPassed = capitalizationValidationPassed
     && personOk
+    && frenchSurfaceValidationPassed
     && nativePunctuationValidationPassed
     && !internalMarkerLeakageDetected
     && !englishMorphologyLeakageDetected
@@ -1240,7 +1311,9 @@ export function evaluateSummaryV2NativeSurface(options: {
     predicateChainRejectionReasons: predicateChain.predicateChainRejectionReasons,
     sourcePredicateChainHash: predicateChain.sourcePredicateChainHash,
     finalPredicateChainHash: predicateChain.finalPredicateChainHash,
-    frenchGrammarValidationPassed: frenchGrammar?.grammarValidationPassed ?? true,
+    frenchGrammarValidationPassed: frenchSurfaceValidationPassed,
     frenchGrammarRejectionReason: frenchGrammar?.grammarRejectionReason ?? null,
+    frenchTokenBoundaryValidationPassed,
+    frenchClauseCasingValidationPassed,
   };
 }

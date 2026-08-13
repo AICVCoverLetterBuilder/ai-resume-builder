@@ -212,7 +212,11 @@ function validateFrenchVisibleSummarySurface(
     requireUnits: true,
   });
   return {
-    grammarValidationPassed: grammar.grammarValidationPassed,
+    // The shared native-surface validator owns serialization truth as well as
+    // finite grammar truth, so fused tokens and embedded casing cannot remain
+    // green merely because the finite-verb scan passed.
+    grammarValidationPassed: native.frenchGrammarValidationPassed
+      ?? grammar.grammarValidationPassed,
     nativeSurfaceValidationPassed: native.nativeSurfaceValidationPassed,
     targetLocalePurityPassed: purity.targetLocalePurityPassed,
     perspectiveMode,

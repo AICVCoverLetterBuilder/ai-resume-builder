@@ -22,6 +22,7 @@ import {
   transformSummaryV2ForRewriteStyle,
   buildSummaryV2StyledDeterministicText,
   buildSummaryV2BalancedEnhanceText,
+  buildFrenchStructuredStrongerWithEvidence,
   SUMMARY_V2_REWRITE_STYLE_384_REVISION,
   type SummaryV2RewriteStyle,
   type SummaryV2StyleFulfillment,
@@ -77,8 +78,8 @@ export type SummaryV2PipelineDiagnostics = {
   targetScriptPurityPassed: boolean;
   localizationGroundingPassed: boolean;
   localizationTypedFailureReason: string | null;
-  localizedManifestHash: string | null;
-  localizedManifestRevision: string | null;
+    localizedManifestHash: string | null;
+    localizedManifestRevision: string | null;
 };
 
 function prepareCandidate(raw: string): string {
@@ -249,6 +250,14 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
   }
   void SUMMARY_V2_LOCALIZED_MANIFEST_REVISION;
 
+  // French Stronger is serialized from the owned manifest, never from a
+  // provider's prose.  Keep one canonical expected surface so unsafe tense,
+  // action, object, or responsibility rewrites cannot be accepted merely
+  // because generic lexical coverage happens to pass.
+  const frenchStructuredStronger = style === 'stronger' && options.locale === 'fr'
+    ? buildFrenchStructuredStrongerWithEvidence(manifest)
+    : null;
+
   const provider = prepareCandidate(options.candidate || '');
   let text = '';
   let origin: SummaryV2PipelineResult['origin'] = 'deterministic_fallback';
@@ -256,12 +265,14 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
 
   const styleOk = (candidate: string): boolean => {
     if (!style) return true;
-    return evaluateSummaryV2StyleFulfillment({
+    const fulfilled = evaluateSummaryV2StyleFulfillment({
       style,
       sourceText: sourceSummary,
       candidateText: candidate,
       locale: options.locale,
     }).styleValidationPassed;
+    if (!fulfilled || !frenchStructuredStronger) return fulfilled;
+    return hashNorm(candidate) === hashNorm(frenchStructuredStronger.text);
   };
 
   if (provider) {
@@ -523,6 +534,39 @@ export function runSummaryV2(options: RunSummaryV2Options): SummaryV2PipelineRes
     preserveConstructionOrder: deterministicConstructionOrder,
     trustedConstructionAuthority: deterministicConstructionOrder,
   });
+
+  if (frenchStructuredStronger) {
+    const evidenceSafe = frenchStructuredStronger.predicateEvidence.every((evidence) => (
+      evidence.tenseMatch
+      && evidence.actionIdentityPreserved
+      && evidence.responsibilityTierPreserved
+      && evidence.objectScopePreserved
+    )) && frenchStructuredStronger.roleTenseEvidence.every((evidence) => evidence.tenseMatch);
+    const currentStyle = diag.styleFulfillment || evaluateSummaryV2StyleFulfillment({
+      style,
+      sourceText: sourceSummary,
+      candidateText: text,
+      locale: options.locale,
+    });
+    diag.styleFulfillment = {
+      ...currentStyle,
+      frenchPredicateEvidence: frenchStructuredStronger.predicateEvidence,
+      frenchRoleTenseEvidence: frenchStructuredStronger.roleTenseEvidence,
+    };
+    if (!evidenceSafe || hashNorm(text) !== hashNorm(frenchStructuredStronger.text)) {
+      return {
+        blocked: true,
+        reason: 'french_stronger_semantic_validation_failed',
+        text,
+        origin,
+        countedAsSuccess: false,
+        manifest,
+        validation,
+        snapshot,
+        pipelineDiagnostics: diag,
+      };
+    }
+  }
   if (!validation.ok) {
     return {
       blocked: true,

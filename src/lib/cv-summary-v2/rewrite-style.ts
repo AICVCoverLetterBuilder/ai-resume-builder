@@ -5,7 +5,11 @@
 import type { Locale } from '@/lib/i18n/translations';
 import { fingerprintText } from '@/lib/cv-export-diagnostics';
 import { SUMMARY_V2_REVISION } from './flag';
-import type { SummaryV2SelectionManifest } from './types';
+import type {
+  SummaryV2EntryFact,
+  SummaryV2EntryOwned,
+  SummaryV2SelectionManifest,
+} from './types';
 import { buildSummaryV2DeterministicText } from './builder';
 import {
   buildGermanSummaryV2FromManifest,
@@ -15,7 +19,10 @@ import { dutyTenseFromEmploymentState } from './tense';
 import {
   evaluateSummaryV2NativeSurface,
   evaluateNativeRealizationContract,
-  type SummaryV2NativeSurfaceResult,
+  formatNativeDurationSentence,
+  realizeFirstPersonDutyClause,
+  normalizeFrenchDutyClause,
+  normalizeFrenchTokenBoundaries,
 } from './native-surface';
 
 export const SUMMARY_V2_REWRITE_STYLE_384_REVISION =
@@ -107,6 +114,32 @@ export type SummaryV2StyleFulfillment = {
   structuralStrengtheningCount?: number;
   nativeStrongSurfacePassed?: boolean;
   nativeStrongSurfaceRejectionReasons?: string[];
+  frenchPredicateEvidence?: FrenchPredicateTransformationEvidence[];
+  frenchRoleTenseEvidence?: FrenchRoleTenseEvidence[];
+};
+
+export type FrenchPredicateTransformationEvidence = {
+  sourceFactHash: string;
+  owningEntryHash: string;
+  employmentState: SummaryV2EntryOwned['employmentState'];
+  expectedTense: 'present' | 'past';
+  realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
+  tenseMatch: boolean;
+  sourcePredicate: string;
+  transformedPredicate: string;
+  sourceActionCategory: string;
+  transformedActionCategory: string;
+  actionIdentityPreserved: boolean;
+  responsibilityTierPreserved: boolean;
+  objectScopePreserved: boolean;
+};
+
+export type FrenchRoleTenseEvidence = {
+  owningEntryHash: string;
+  employmentState: SummaryV2EntryOwned['employmentState'];
+  expectedTense: 'present' | 'past';
+  realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
+  tenseMatch: boolean;
 };
 
 export type SummaryV2StyleTransformResult = {
@@ -605,6 +638,20 @@ export function analyzeStrongerNativeSurface(options: {
     [/\bperform\b/iu, /\bcarry\s+out\b/iu],
     [/\bperformed\b/iu, /\bcarried\s+out\b/iu],
     [/\bI have\b/iu, /\bI bring\b/iu],
+    [/\beffectue\b/iu, /\boptimise\b/iu],
+    [/\beffectuais\b/iu, /\boptimisais\b/iu],
+    [/\beffectue\b/iu, /\bréalise\b/iu],
+    [/\beffectuais\b/iu, /\bréalisais\b/iu],
+    [/\bprépare\b/iu, /\bélabore\b/iu],
+    [/\bpréparais\b/iu, /\bélaborais\b/iu],
+    [/\binspecte\b/iu, /\bexamine\b/iu],
+    [/\binspectais\b/iu, /\bexaminais\b/iu],
+    [/\bexamine\b/iu, /\bévalue\b/iu],
+    [/\bexaminais\b/iu, /\bévaluais\b/iu],
+    [/\bdéveloppe\b/iu, /\bconçois\b/iu],
+    [/\bdéveloppais\b/iu, /\bconcevais\b/iu],
+    [/\bcrée\b/iu, /\bconçois\b/iu],
+    [/\bcréais\b/iu, /\bconcevais\b/iu],
   ];
   let strongerVerbTransformationCount = 0;
   for (const [from, to] of verbPairs) {
@@ -811,28 +858,57 @@ function strengthenDutyClauseBody(
     };
   }
   if (locale === 'fr') {
-    // "ainsi que" coordinating finite predicates requires an explicit subject —
-    // "ainsi que remplace" is ungrammatical; "ainsi que je remplace" is natural.
-    const withSubject = (tail: string): string => {
-      const body = tail.replace(/^\s+/u, '');
-      return /^[aeiouâàáäæéèêëíìîïóòôöøúùûüœh]/iu.test(body)
-        ? `, ainsi que j'${body}`
-        : `, ainsi que je ${body}`;
-    };
+    // Preserve French predicate/object units. A greedy `.* et (.*)` split can
+    // target the `et` inside a compound object (for example `concepts et les
+    // maquettes`) and produce an ungrammatical `ainsi que je les maquettes`.
+    // Use an explicit clause boundary (comma) for the structural Stronger
+    // change; this keeps every predicate and its attached objects intact.
     let t = b;
     let structural = 0;
     let intens: string | null = null;
-    if (/\s+et\s+/iu.test(t)) {
-      t = t.replace(/^(.*)\s+et\s+(.*)$/iu, (_m, head: string, tail: string) => (
-        `${head}${withSubject(tail)}`
-      ));
-      structural += 1;
-    } else if (/,\s+/u.test(t)) {
-      const parts = t.split(/,\s*/u).map((p) => p.trim()).filter(Boolean);
-      if (parts.length >= 2) {
-        t = `${parts.slice(0, -1).join(', ')}${withSubject(parts[parts.length - 1])}`;
-        structural += 1;
+    const withSubject = (tail: string): string => {
+      const clause = tail.trim();
+      return /^[aeiouyàâäéèêëîïôöùûüœh]/iu.test(clause)
+        ? `, ainsi que j'${clause}`
+        : `, ainsi que je ${clause}`;
+    };
+    const strongerVerbPairs: Array<[RegExp, string]> = [
+      [/^effectue\b/iu, 'optimise'],
+      [/^effectuais\b/iu, 'optimisais'],
+      [/^prépare\b/iu, 'élabore'],
+      [/^préparais\b/iu, 'élaborais'],
+      // Retoucher and coordonner are intentionally not rewritten here:
+      // improving changes the source action and orchestrating can escalate
+      // an individual-contributor responsibility into leadership.
+      [/^inspecte\b/iu, 'examine'],
+      [/^inspectais\b/iu, 'examinais'],
+      [/^examine\b/iu, 'évalue'],
+      [/^examinais\b/iu, 'évaluais'],
+      [/^développe\b/iu, 'élabore'],
+      [/^développais\b/iu, 'élaborais'],
+      [/^crée\b/iu, 'élabore'],
+      [/^créais\b/iu, 'élaborais'],
+    ];
+    for (const [from, to] of strongerVerbPairs) {
+      const next = t.replace(from, to);
+      if (next !== t) {
+        t = next;
+        break;
       }
+    }
+    const parts = t.split(/,\s*/u).map((p) => p.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      t = `${parts.slice(0, -1).join(', ')}${withSubject(parts[parts.length - 1])}`;
+      structural += 1;
+    } else if (/\s+et\s+/iu.test(t)) {
+      // Only transform a conjunction when the right-hand side begins with a
+      // finite predicate; noun coordination remains untouched.
+      const finite = /\b(?:prépare|préparais|préparer|retouche|retouchais|coordonne|coordonnais|développe|développais|examine|examinais|vérifie|vérifiais|crée|créais|conçois|concevait)\b/iu;
+      t = t.replace(/\s+et\s+(\S.*)$/iu, (full, tail: string) => {
+        if (!finite.test(tail)) return full;
+        structural += 1;
+        return `; ${tail}`;
+      });
     }
     if (structural > 0 && allowIntensifier('avec rigueur')) {
       const bumped = t.replace(
@@ -1001,6 +1077,16 @@ function applyStrongerDutyPredicateSurface(text: string, locale: Locale): string
     const result = strengthenDutyClauseBody(body, locale, usedLemmas);
     if (locale === 'hi' && result.structuralCount > 0) hindiDutyStrengthened = true;
     if (result.intensifierLemma) usedLemmas.add(result.intensifierLemma);
+    if (locale === 'fr') {
+      const first = result.text.trimStart();
+      const vowelInitial = /^[aeiouyàâäéèêëîïôöùûüœh]/iu.test(first);
+      if (/je\s*$/iu.test(lead) && vowelInitial) {
+        return `${lead.replace(/je\s*$/iu, "j'")}${result.text}`;
+      }
+      if (/j'$/iu.test(lead) && !vowelInitial) {
+        return `${lead.replace(/j'$/iu, 'je ')}${result.text}`;
+      }
+    }
     return `${lead}${result.text}`;
   };
 
@@ -1050,6 +1136,210 @@ function applyStrongerDutyPredicateSurface(text: string, locale: Locale): string
     );
   }
   return t.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * French Stronger is built from owned manifest facts, never by reparsing a
+ * serialized role sentence. Each fact remains one atomic predicate/object
+ * unit; only its leading predicate is transformed.
+ */
+type FrenchVerbSpec = {
+  sourceActionCategory: string;
+  responsibilityTier: 'individual_contributor';
+  present: string;
+  imperfect: string;
+  participle: string;
+  strongerPresent: string;
+  strongerImperfect: string;
+};
+
+/** Safe equivalents only. Retoucher and coordonner stay unchanged: improving
+ * can change edit semantics, and orchestrating can imply leadership. */
+const FRENCH_SAFE_STRONGER_VERBS: FrenchVerbSpec[] = [
+  { sourceActionCategory: 'task_execution', responsibilityTier: 'individual_contributor', present: 'effectue', imperfect: 'effectuais', participle: 'effectué', strongerPresent: 'réalise', strongerImperfect: 'réalisais' },
+  { sourceActionCategory: 'inspection', responsibilityTier: 'individual_contributor', present: 'inspecte', imperfect: 'inspectais', participle: 'inspecté', strongerPresent: 'examine', strongerImperfect: 'examinais' },
+  { sourceActionCategory: 'design_preparation', responsibilityTier: 'individual_contributor', present: 'prépare', imperfect: 'préparais', participle: 'préparé', strongerPresent: 'élabore', strongerImperfect: 'élaborais' },
+  { sourceActionCategory: 'design_creation', responsibilityTier: 'individual_contributor', present: 'crée', imperfect: 'créais', participle: 'créé', strongerPresent: 'conçois', strongerImperfect: 'concevais' },
+  { sourceActionCategory: 'design_development', responsibilityTier: 'individual_contributor', present: 'développe', imperfect: 'développais', participle: 'développé', strongerPresent: 'conçois', strongerImperfect: 'concevais' },
+  { sourceActionCategory: 'quality_review', responsibilityTier: 'individual_contributor', present: 'examine', imperfect: 'examinais', participle: 'examiné', strongerPresent: 'évalue', strongerImperfect: 'évaluais' },
+  { sourceActionCategory: 'quality_check', responsibilityTier: 'individual_contributor', present: 'vérifie', imperfect: 'vérifiais', participle: 'vérifié', strongerPresent: 'contrôle', strongerImperfect: 'contrôlais' },
+];
+
+const FRENCH_TENSE_SPECS: FrenchVerbSpec[] = [
+  ...FRENCH_SAFE_STRONGER_VERBS,
+  { sourceActionCategory: 'replacement', responsibilityTier: 'individual_contributor', present: 'remplace', imperfect: 'remplaçais', participle: 'remplacé', strongerPresent: 'remplace', strongerImperfect: 'remplaçais' },
+  { sourceActionCategory: 'recording', responsibilityTier: 'individual_contributor', present: 'enregistre', imperfect: 'enregistrais', participle: 'enregistré', strongerPresent: 'enregistre', strongerImperfect: 'enregistrais' },
+  { sourceActionCategory: 'edit_retouch', responsibilityTier: 'individual_contributor', present: 'retouche', imperfect: 'retouchais', participle: 'retouché', strongerPresent: 'retouche', strongerImperfect: 'retouchais' },
+  { sourceActionCategory: 'coordination', responsibilityTier: 'individual_contributor', present: 'coordonne', imperfect: 'coordonnais', participle: 'coordonné', strongerPresent: 'coordonne', strongerImperfect: 'coordonnais' },
+];
+
+function frenchExpectedTense(state: SummaryV2EntryOwned['employmentState']): 'present' | 'past' {
+  return state === 'completed' ? 'past' : 'present';
+}
+
+function normalizeFrenchFactTense(raw: string, state: SummaryV2EntryOwned['employmentState']): string {
+  const wantPast = state === 'completed';
+  let result = raw;
+  for (const spec of FRENCH_TENSE_SPECS) {
+    const from = wantPast ? spec.present : spec.imperfect;
+    const to = wantPast ? spec.imperfect : spec.present;
+    result = result.replace(new RegExp(`\\b${from}\\b`, 'giu'), to);
+  }
+  return result;
+}
+
+function frenchLeadingPredicate(text: string): string {
+  const auxiliary = /^(?:a|ai|j'ai)\s+([\p{L}\p{M}]+)/iu.exec(text.trim());
+  return (auxiliary?.[1] || /^([\p{L}\p{M}]+)/u.exec(text.trim())?.[1] || '').toLocaleLowerCase('fr-FR');
+}
+
+function frenchActionForPredicate(predicate: string): string {
+  const normalized = predicate.toLocaleLowerCase('fr-FR');
+  return FRENCH_TENSE_SPECS.find((spec) => [spec.present, spec.imperfect, spec.participle, spec.strongerPresent, spec.strongerImperfect].includes(normalized))?.sourceActionCategory || 'unclassified';
+}
+
+function frenchRealizedTense(text: string): FrenchPredicateTransformationEvidence['realizedTense'] {
+  const t = (text || '').toLocaleLowerCase('fr-FR');
+  const whole = (forms: string[]) => new RegExp(
+    `(?<!\\p{L})(?:${forms.join('|')})(?!\\p{L})`,
+    'iu',
+  );
+  const present = FRENCH_TENSE_SPECS.some((spec) => (
+    whole([spec.present, spec.strongerPresent]).test(t)
+  ));
+  const past = FRENCH_TENSE_SPECS.some((spec) => (
+    whole([spec.imperfect, spec.strongerImperfect]).test(t)
+  )) || /\b(?:a|ai|j'ai)\s+\p{L}[\p{L}\p{M}]é\b/iu.test(t);
+  const genericPast = /(?<!\p{L})\p{L}+(?:ais|ait|aient)(?!\p{L})/iu.test(t);
+  if (present && past) return 'mixed';
+  if (past || genericPast) return 'past';
+  if (present || /^(?:\p{L}|j')/iu.test(t.trim())) return 'present';
+  return 'unknown';
+}
+
+function frenchObjectScopeAfterPredicate(text: string): string {
+  return (text || '')
+    .replace(/^\p{L}[\p{L}\p{M}]*/u, '')
+    .replace(/^\s+avec rigueur\b/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function strengthenFrenchOwnedFact(
+  fact: SummaryV2EntryFact,
+  entry: SummaryV2EntryOwned,
+  addModifier: boolean,
+): { text: string; evidence: FrenchPredicateTransformationEvidence } {
+  const source = (fact.bulletText || '').replace(/[.;]+$/u, '').trim();
+  const tenseNormalized = normalizeFrenchFactTense(source, entry.employmentState);
+  const sourcePredicate = frenchLeadingPredicate(source);
+  const expectedTense = frenchExpectedTense(entry.employmentState);
+  let transformed = tenseNormalized;
+  let matched: FrenchVerbSpec | undefined;
+  for (const spec of FRENCH_SAFE_STRONGER_VERBS) {
+    const from = entry.employmentState === 'completed' ? spec.imperfect : spec.present;
+    const to = entry.employmentState === 'completed' ? spec.strongerImperfect : spec.strongerPresent;
+    const next = transformed.replace(new RegExp(`^${from}(?=\\s|$)`, 'iu'), `${to}${addModifier ? ' avec rigueur' : ''}`);
+    if (next !== transformed) {
+      transformed = next;
+      matched = spec;
+      break;
+    }
+  }
+  const transformedPredicate = frenchLeadingPredicate(transformed);
+  const sourceActionCategory = matched?.sourceActionCategory || frenchActionForPredicate(sourcePredicate);
+  const transformedActionCategory = matched?.sourceActionCategory || frenchActionForPredicate(transformedPredicate);
+  const realizedTense = frenchRealizedTense(transformed);
+  const normalizedSourceObject = frenchObjectScopeAfterPredicate(tenseNormalized);
+  const normalizedTargetObject = frenchObjectScopeAfterPredicate(transformed);
+  return {
+    text: transformed,
+    evidence: {
+      sourceFactHash: fact.sourceFactHash,
+      owningEntryHash: fingerprintText(entry.entryId),
+      employmentState: entry.employmentState,
+      expectedTense,
+      realizedTense,
+      tenseMatch: realizedTense === expectedTense,
+      sourcePredicate,
+      transformedPredicate,
+      sourceActionCategory,
+      transformedActionCategory,
+      actionIdentityPreserved: sourceActionCategory === transformedActionCategory,
+      responsibilityTierPreserved: true,
+      objectScopePreserved: normalizedSourceObject === normalizedTargetObject,
+    },
+  };
+}
+
+function frenchOwnedDutyTail(
+  facts: SummaryV2EntryFact[],
+  entry: SummaryV2EntryOwned,
+  gender: string,
+  styleState: { modifierUsed: boolean },
+): { text: string; evidence: FrenchPredicateTransformationEvidence[] } {
+  const transformed = facts.map((fact) => {
+    const result = strengthenFrenchOwnedFact(fact, entry, !styleState.modifierUsed);
+    if (result.text !== (fact.bulletText || '').trim() && /avec rigueur/iu.test(result.text)) styleState.modifierUsed = true;
+    return result;
+  });
+  if (!transformed.length) return { text: '', evidence: [] };
+  const clauses = transformed.map(({ text }) => normalizeFrenchDutyClause(
+    realizeFirstPersonDutyClause(text, 'fr', entry.employmentState, gender),
+  ));
+  const tailClauses = entry.employmentState === 'completed'
+    ? clauses.map((clause, index) => index === 0 ? clause : clause.replace(/^ai\s+/iu, ''))
+    : clauses;
+  const requiresSimpleSameSubjectCoordination = transformed.some(({ evidence }) => (
+    evidence.sourceActionCategory === 'edit_retouch'
+    || evidence.sourceActionCategory === 'coordination'
+  ));
+  const joined = tailClauses.length === 1
+    ? tailClauses[0]
+    : requiresSimpleSameSubjectCoordination
+      ? `${tailClauses.slice(0, -1).join(', ')} et ${tailClauses[tailClauses.length - 1]}`
+      : `${tailClauses[0]}${tailClauses.slice(1).map((clause) => (
+        /^[aeiouyàâäéèêëîïôöùûüœh]/iu.test(clause)
+          ? `, ainsi que j'${clause}`
+          : `, ainsi que je ${clause}`
+      )).join('')}`;
+  const connector = /^[aeiouyàâäéèêëîïôöùûüœh]/iu.test(tailClauses[0] || '') ? ", où j'" : ', où je ';
+  return { text: `${connector}${joined}`, evidence: transformed.map(({ evidence }) => evidence) };
+}
+
+export function buildFrenchStructuredStrongerWithEvidence(
+  manifest: SummaryV2SelectionManifest,
+): { text: string; predicateEvidence: FrenchPredicateTransformationEvidence[]; roleTenseEvidence: FrenchRoleTenseEvidence[] } {
+  const units: string[] = [];
+  const predicateEvidence: FrenchPredicateTransformationEvidence[] = [];
+  const roleTenseEvidence: FrenchRoleTenseEvidence[] = [];
+  const styleState = { modifierUsed: false };
+  const duration = formatNativeDurationSentence((manifest.durationPhrase || '').replace(/[.,]$/u, '').trim(), 'fr');
+  if (duration) units.push(duration);
+  const addRole = (entry: SummaryV2EntryOwned, facts: SummaryV2EntryFact[], prior: boolean) => {
+    const shell = prior
+      ? `Auparavant, j'ai travaillé comme ${entry.role || 'Professionnel'}${entry.employer ? ` chez ${entry.employer}` : ''}`
+      : `Je travaille actuellement comme ${entry.role || 'Professionnel'}${entry.employer ? ` chez ${entry.employer}` : ''}`;
+    const tail = frenchOwnedDutyTail(facts, entry, manifest.gender, styleState);
+    predicateEvidence.push(...tail.evidence);
+    const expectedTense = frenchExpectedTense(entry.employmentState);
+    const tenseMatch = tail.evidence.length > 0 && tail.evidence.every((evidence) => evidence.tenseMatch);
+    roleTenseEvidence.push({
+      owningEntryHash: fingerprintText(entry.entryId),
+      employmentState: entry.employmentState,
+      expectedTense,
+      realizedTense: tenseMatch ? expectedTense : 'mixed',
+      tenseMatch,
+    });
+    units.push(`${shell}${tail.text}.`);
+  };
+  if (manifest.current) addRole(manifest.current, manifest.requiredCurrentFacts, false);
+  for (const prior of manifest.priors) addRole(prior, manifest.requiredPriorFacts.filter((fact) => fact.entryId === prior.entryId), true);
+  return { text: units.join(' ').replace(/\s+/g, ' ').trim(), predicateEvidence, roleTenseEvidence };
+}
+
+function buildFrenchStructuredStrongerFromManifest(manifest: SummaryV2SelectionManifest): string {
+  return buildFrenchStructuredStrongerWithEvidence(manifest).text;
 }
 
 /**
@@ -1165,14 +1455,17 @@ function buildEnglishStyledFromManifest(
 }
 
 function localeAndJoin(duties: string[], locale: Locale): string {
-  const parts = duties.map((d) => d.replace(/[.;]+$/u, '').trim()).filter(Boolean);
+  const parts = duties
+    .map((d) => (locale === 'fr' ? normalizeFrenchDutyClause(d) : d)
+      .replace(/[.;]+$/u, '').trim())
+    .filter(Boolean);
   if (parts.length === 0) return '';
   if (parts.length === 1) return parts[0];
   const head = parts.slice(0, -1).join(', ');
   const last = parts[parts.length - 1];
   if (locale === 'de') return `${head} und ${last}`;
   if (locale === 'es' || locale === 'pt-BR') return `${head} y ${last}`;
-  if (locale === 'fr') return `${head} et ${last}`;
+  if (locale === 'fr') return normalizeFrenchTokenBoundaries(`${head} et ${last}`);
   if (locale === 'it') return `${head} e ${last}`;
   if (locale === 'ru') return `${head} и ${last}`;
   if (locale === 'sr' || locale === 'hr') return `${head} i ${last}`;
@@ -1420,6 +1713,7 @@ function buildLocaleShellStyled(
 
   if (style === 'stronger') {
     // Keep natural role intros; strengthen grounded duty predicates only.
+    if (locale === 'fr') return buildFrenchStructuredStrongerFromManifest(manifest);
     let t = applyStrongerDutyPredicateSurface(base, locale);
     t = t.replace(/\s+[—–]\s+/gu, ' — ');
     t = t.replace(/;\s+/gu, '; ');
@@ -1552,6 +1846,11 @@ export function repairSummaryV2RewriteStyle(
     return t.replace(/\s+/g, ' ').trim();
   }
   if (style === 'stronger') {
+    // French Stronger must be rebuilt from owned manifest facts by the
+    // deterministic path. A prose repair cannot safely infer predicate/object
+    // boundaries, so only perform lexical boundary normalization here and let
+    // the structured fallback decide whether the candidate is billable.
+    if (locale === 'fr') return normalizeFrenchTokenBoundaries(t);
     // Strip legacy unnatural role-intro intensifiers, then strengthen duties.
     t = t
       .replace(/\bzielgerichtet\s+als\b/giu, 'als')

@@ -1876,6 +1876,8 @@ export type FinalizeCvAiFieldResult = {
     structuralStrengtheningCount?: number | null;
     nativeStrongSurfacePassed?: boolean;
     nativeStrongSurfaceRejectionReasons?: string[];
+    frenchPredicateEvidence?: Array<Record<string, unknown>>;
+    frenchRoleTenseEvidence?: Array<Record<string, unknown>>;
     structuralCompressionCount?: number;
     serbianStructuredDomainGateEvaluated?: boolean;
     serbianStructuredDomainGatePassed?: boolean;
@@ -3749,6 +3751,17 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ),
       nativeStrongSurfaceRejectionReasons:
         v2Pd?.styleFulfillment?.nativeStrongSurfaceRejectionReasons || [],
+      frenchPredicateEvidence:
+        v2Pd?.styleFulfillment?.frenchPredicateEvidence || [],
+      frenchRoleTenseEvidence:
+        v2Pd?.styleFulfillment?.frenchRoleTenseEvidence || [],
+      tenseValidationPassed: locale === 'fr'
+        ? Boolean(
+          v2Pd?.styleFulfillment?.frenchRoleTenseEvidence?.length
+          && v2Pd.styleFulfillment.frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
+          && v2Pd.styleFulfillment.frenchPredicateEvidence?.every((evidence) => evidence.tenseMatch),
+        )
+        : true,
       operationMode: v2OperationMode,
       providerAccepted: v2.origin === 'ai_generated' && !v2CleanNoOp,
       providerCandidatePresent: Boolean(providerRaw),
@@ -3821,7 +3834,16 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       grammarValidationPassed: locale === 'fr'
         ? Boolean(success && !v2CleanNoOp
           && v2Pd?.styleFulfillment?.nativeSurfaceValidationPassed
-          && v2Pd?.styleFulfillment?.grammaticalPersonValidationPassed)
+          && v2Pd?.styleFulfillment?.grammaticalPersonValidationPassed
+          && (requestedRewriteStyle !== 'stronger'
+            || (v2Pd?.styleFulfillment?.frenchRoleTenseEvidence?.length
+              && v2Pd.styleFulfillment.frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
+              && v2Pd.styleFulfillment.frenchPredicateEvidence?.every((evidence) => (
+                evidence.tenseMatch
+                && evidence.actionIdentityPreserved
+                && evidence.responsibilityTierPreserved
+                && evidence.objectScopePreserved
+              )))))
         : locale === 'de' && deV2Completeness
         ? deV2Completeness.germanControlledCaseGrammarPassed
         : (success && !v2CleanNoOp
