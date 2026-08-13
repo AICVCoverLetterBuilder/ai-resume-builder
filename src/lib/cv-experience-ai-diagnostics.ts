@@ -332,6 +332,10 @@ export type ExperienceAiDiagnosticTrace = {
   apiHostClass: ExperienceApiHostClass;
   providerHttpStatus: number | null;
   providerResponseKind: 'provider' | 'repair' | 'fallback' | 'error' | 'empty' | 'unknown' | 'not_attempted';
+  /** API returned a server-validated repair, distinct from client no-op repair. */
+  serverRepairAttempted: boolean;
+  serverRepairSelected: boolean;
+  serverRepairSource: 'api_server_repair' | null;
   providerBulletCount: number;
   providerBulletScripts: ExperienceScriptClass[];
   providerLocaleValidationReason: string | null;
@@ -441,6 +445,8 @@ export type ExperienceAiDiagnosticTrace = {
   providerCandidateAddedPredicateIdentityHashes: string[];
   providerCoordinatedPredicateExpansionDetected: boolean;
   providerSourceUnitPredicateCoveragePassed: boolean | null;
+  /** False means provider-phase predicate evidence is intentionally N/A. */
+  providerPredicateValidationApplicable: boolean | null;
   repairCandidatePredicateIdentityCount: number;
   repairCoordinatedPredicateExpansionDetected: boolean;
   repairSourceUnitPredicateCoveragePassed: boolean | null;
@@ -1146,6 +1152,9 @@ export class ExperienceAiDiagnosticSession {
       apiHostClass: classifyApiHostForDiagnostics(),
       providerHttpStatus: null,
       providerResponseKind: 'unknown',
+      serverRepairAttempted: false,
+      serverRepairSelected: false,
+      serverRepairSource: null,
       providerBulletCount: 0,
       providerBulletScripts: [],
       providerLocaleValidationReason: null,
@@ -1220,6 +1229,7 @@ export class ExperienceAiDiagnosticSession {
       providerCandidateAddedPredicateIdentityHashes: [],
       providerCoordinatedPredicateExpansionDetected: false,
       providerSourceUnitPredicateCoveragePassed: null,
+      providerPredicateValidationApplicable: null,
       repairCandidatePredicateIdentityCount: 0,
       repairCoordinatedPredicateExpansionDetected: false,
       repairSourceUnitPredicateCoveragePassed: null,
@@ -1597,6 +1607,9 @@ export class ExperienceAiDiagnosticSession {
       providerAttempted: opts.httpStatus != null,
       providerResponseKind: kind,
       apiResponseKind: kind,
+      serverRepairAttempted: kind === 'repair',
+      serverRepairSelected: false,
+      serverRepairSource: kind === 'repair' ? 'api_server_repair' : null,
       serverFallbackUsed: kind === 'fallback',
       providerBulletCount: splitExperienceBullets(text).filter(Boolean).length,
       providerBulletScripts: scriptsFromBullets(text),
@@ -1963,6 +1976,18 @@ export class ExperienceAiDiagnosticSession {
         || null,
       apiResponseKind: apiResponseKind as ExperienceAiDiagnosticTrace['apiResponseKind'],
       serverFallbackUsed,
+      serverRepairAttempted: Boolean(
+        diag.serverRepairAttempted
+        ?? (apiResponseKind === 'repair' && diag.noOpRepairAttempted !== true),
+      ),
+      serverRepairSelected: Boolean(
+        selectedFinalPresent
+        && (diag.serverRepairSelected === true || diag.finalCandidateSource === 'server_repair'),
+      ),
+      serverRepairSource: diag.serverRepairAttempted === true
+        || diag.finalCandidateSource === 'server_repair'
+        ? 'api_server_repair'
+        : null,
       // Legacy fields derived from the same client-fallback result (no contradictions).
       fallbackSelected: clientFallbackApplied,
       fallbackReason: clientFallbackAttempted
@@ -2168,6 +2193,10 @@ export class ExperienceAiDiagnosticSession {
         diag.providerSourceUnitPredicateCoveragePassed
         ?? diag.sourceUnitPredicateCoveragePassed
         ?? null,
+      providerPredicateValidationApplicable:
+        typeof diag.providerPredicateValidationApplicable === 'boolean'
+          ? diag.providerPredicateValidationApplicable
+          : null,
       repairCandidatePredicateIdentityCount: Number(
         diag.repairCandidatePredicateIdentityCount ?? 0,
       ),
@@ -3061,7 +3090,51 @@ export class ExperienceAiDiagnosticSession {
       || providerEvidencePresent
     );
     const providerPresent = providerWasAttempted && providerEvidencePresent;
-    if (providerWasAttempted && (providerPresent || providerUncovered.length > 0 || diag.providerCoveredFactCount != null)) {
+    const serverRepairAttempted = this.draft.serverRepairAttempted === true;
+    const serverRepairSelected = this.draft.serverRepairSelected === true;
+    if (serverRepairAttempted) {
+      // The raw provider text was rejected and repaired by the API. It is not
+      // serialized to the client, so retain only its non-PII phase outcome.
+      lineage.push({
+        candidateKind: 'server_provider_raw',
+        present: true,
+        accepted: false,
+        rejectionStage: 'server_validation_repair',
+        rejectionReasons: ['server_repair_selected'],
+      });
+      lineage.push({
+        candidateKind: 'server_repair',
+        present: true,
+        accepted: serverRepairSelected && Boolean(finalized.countedAsSuccess),
+        normalizedHash: serverRepairSelected && text ? fingerprintText(text) : null,
+        unitCount: serverRepairSelected ? bullets.length : 0,
+        unitHashes: serverRepairSelected
+          ? bullets.map((bullet) => fingerprintText(bullet.replace(/\s+/g, ' ').trim()))
+          : [],
+        coverageRequiredCount: finalRequired,
+        coverageCoveredCount: finalCovered,
+        uncoveredFactIdentityHashes: [...finalUncovered],
+        unsupportedClaimCount: serverRepairSelected
+          ? Number(diag.finalUnsupportedClaimCount ?? 0)
+          : Number(diag.unsupportedClaimCount ?? 0),
+        unsupportedClaimKinds: serverRepairSelected
+          ? (Array.isArray(diag.finalUnsupportedClaimKinds)
+            ? diag.finalUnsupportedClaimKinds.map(String)
+            : [])
+          : [],
+        rejectionStage: serverRepairSelected ? null : (reason || 'server_repair_rejected'),
+        rejectionReasons: serverRepairSelected
+          ? []
+          : ([reason || 'server_repair_rejected'].filter(Boolean) as string[]),
+        localeValidationPassed: !localeFail,
+        tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? diag.tenseMode),
+        perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed),
+        meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
+      });
+    }
+    if (!serverRepairAttempted
+      && providerWasAttempted
+      && (providerPresent || providerUncovered.length > 0 || diag.providerCoveredFactCount != null)) {
       if (this.draft.providerAttempted !== true) {
         this.patch({ providerAttempted: true });
       }
@@ -3338,6 +3411,11 @@ export class ExperienceAiDiagnosticSession {
       this.stage('fallback_material_coverage', 'skipped');
     } else if (diag.noOpRepairApplied || diag.finalCandidateSource === 'noop_repair') {
       this.stage('deterministic_fallback_started', 'skipped', 'noop_repair_accepted');
+      this.stage('fallback_output_built', 'skipped');
+      this.stage('fallback_locale_validation', 'skipped');
+      this.stage('fallback_material_coverage', 'skipped');
+    } else if (diag.serverRepairSelected || diag.finalCandidateSource === 'server_repair') {
+      this.stage('deterministic_fallback_started', 'skipped', 'server_repair_accepted');
       this.stage('fallback_output_built', 'skipped');
       this.stage('fallback_locale_validation', 'skipped');
       this.stage('fallback_material_coverage', 'skipped');

@@ -3004,6 +3004,9 @@ type ExperienceLike = {
   providerHttpStatus?: number | null;
   providerResponseKind?: string | null;
   apiResponseKind?: string | null;
+  serverRepairAttempted?: boolean | null;
+  serverRepairSelected?: boolean | null;
+  serverRepairSource?: string | null;
   providerAccepted?: boolean | null;
   finalBulletCount?: number | null;
   finalBulletScripts?: unknown[] | null;
@@ -3085,6 +3088,7 @@ type ExperienceLike = {
   sourceUnitPredicateCoveragePassed?: boolean | null;
   sourceIncompleteUnitCount?: number | null;
   finalCandidatePredicateIdentityCount?: number | null;
+  providerPredicateValidationApplicable?: boolean | null;
   candidateSurfaceFormPassed?: boolean | null;
   candidateSurfaceFailureKinds?: string[] | null;
   finalDecisionKind?: string | null;
@@ -3428,6 +3432,7 @@ export function checkExperienceDiagnosticInvariants(
       trace.applyAuthorized === true
       || trace.finalFactCoveragePassed === true
       || trace.finalCandidateSource === 'provider'
+      || trace.finalCandidateSource === 'server_repair'
       || trace.finalCandidateSource === 'deterministic_fallback'
     )
   ) {
@@ -3477,6 +3482,28 @@ export function checkExperienceDiagnosticInvariants(
       noOpRepairApplied: true,
       noOpRepairAttempted: trace.noOpRepairAttempted ?? false,
     });
+  }
+  if (trace.serverRepairSelected === true && trace.serverRepairAttempted !== true) {
+    push('server_repair_selected_without_attempt', {
+      serverRepairSelected: true,
+      serverRepairAttempted: trace.serverRepairAttempted ?? false,
+    });
+  }
+  if (trace.finalCandidateSource === 'server_repair') {
+    if (trace.serverRepairAttempted !== true || trace.serverRepairSelected !== true) {
+      push('server_repair_final_source_without_selected_lineage', {
+        finalCandidateSource: 'server_repair',
+        serverRepairAttempted: trace.serverRepairAttempted ?? false,
+        serverRepairSelected: trace.serverRepairSelected ?? false,
+      });
+    }
+    if (trace.noOpRepairAttempted === true || trace.noOpRepairApplied === true) {
+      push('server_repair_mislabeled_as_client_noop_repair', {
+        finalCandidateSource: 'server_repair',
+        noOpRepairAttempted: trace.noOpRepairAttempted ?? false,
+        noOpRepairApplied: trace.noOpRepairApplied ?? false,
+      });
+    }
   }
   if (trace.unsupportedClaimRepairApplied === true) {
     if (trace.unsupportedClaimRepairAttempted !== true) {

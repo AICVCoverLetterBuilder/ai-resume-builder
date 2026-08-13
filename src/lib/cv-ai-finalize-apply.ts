@@ -528,6 +528,10 @@ void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
 export const EXPERIENCE_REPAIR_LINEAGE_309_REVISION =
   'experience-repair-lineage-309-v1' as const;
 void EXPERIENCE_REPAIR_LINEAGE_309_REVISION;
+/** AAB-434 — distinguish an API/server repair response from client no-op repair. */
+export const EXPERIENCE_SERVER_REPAIR_LINEAGE_434_REVISION =
+  'experience-server-repair-lineage-434-v1' as const;
+void EXPERIENCE_SERVER_REPAIR_LINEAGE_434_REVISION;
 /** AAB-310 — predicate repair lineage evidence. */
 export const EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION =
   'experience-predicate-repair-lineage-310-v1' as const;
@@ -755,6 +759,7 @@ export const SUMMARY_RUNTIME_MARKER_SET = [
   SPANISH_EXPERIENCE_GUARANTEE_GROUNDING_308_REVISION,
   SPANISH_EXPERIENCE_REPAIR_GROUNDING_309_REVISION,
   EXPERIENCE_REPAIR_LINEAGE_309_REVISION,
+  EXPERIENCE_SERVER_REPAIR_LINEAGE_434_REVISION,
   SPANISH_EXPERIENCE_PREDICATE_GROUNDING_310_REVISION,
   EXPERIENCE_PREDICATE_REPAIR_LINEAGE_310_REVISION,
   EXPERIENCE_VISIBLE_NOOP_AUTHORITY_311_REVISION,
@@ -1199,6 +1204,12 @@ export type FinalizeCvAiFieldResult = {
     providerAttempted?: boolean;
     providerHttpStatus?: number | null;
     providerResponseKind?: string;
+    /** True only when the API response is the server's selected repair output. */
+    serverRepairAttempted?: boolean;
+    serverRepairSelected?: boolean;
+    serverRepairSource?: 'api_server_repair' | null;
+    /** False/N/A when predicate validation was not run in the provider phase. */
+    providerPredicateValidationApplicable?: boolean | null;
     earlyNoOpPreflightPassed?: boolean;
     earlyNoOpPreflightEvaluated?: boolean;
     providerCandidatePresent?: boolean;
@@ -8820,6 +8831,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let generationFallbackApplied = false;
   let providerNoOpDetected = false;
   const noOpRepairAttemptedFlag = Boolean(input.noOpRepairAttempted);
+  // `ai_repaired` is the legacy client-boundary spelling for either an API
+  // server repair or the dedicated client no-op retry. The latter is explicit.
+  const serverRepairAttemptedFlag = input.originHint === 'ai_repaired'
+    && !noOpRepairAttemptedFlag;
+  const serverRepairSource = serverRepairAttemptedFlag
+    ? 'api_server_repair' as const
+    : null;
   let noOpRepairValidationPassed: boolean | null = null;
   let noOpRepairMeaningfulChangeDetected: boolean | null = null;
   let noOpRepairApplied = false;
@@ -8932,6 +8950,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     countedAsSuccess: false,
     apiResponseKind,
     serverFallbackUsed,
+    serverRepairAttempted: serverRepairAttemptedFlag,
+    serverRepairSelected: false,
+    serverRepairSource,
+    providerPredicateValidationApplicable: null,
     clientDeterministicFallbackAttempted,
     clientDeterministicFallbackReason,
     providerRejectionReason,
@@ -11990,8 +12012,20 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               ? 'deterministic_fallback'
               : (unsupportedClaimRepairApplied
                 ? 'unsupported_claim_repair'
-                : (noOpRepairApplied ? 'noop_repair' : 'provider')))
+                : (noOpRepairApplied
+                  ? 'noop_repair'
+                  : (serverRepairAttemptedFlag ? 'server_repair' : 'provider'))))
             : 'none'),
+        serverRepairAttempted: serverRepairAttemptedFlag,
+        serverRepairSelected: Boolean(
+          result.countedAsSuccess
+          && (finalCandidateSource === 'server_repair'
+            || (!finalCandidateSource && serverRepairAttemptedFlag)),
+        ),
+        serverRepairSource,
+        providerPredicateValidationApplicable:
+          providerSourceUnitPredicateCoveragePassed != null
+          || providerCandidatePredicateIdentityCount > 0,
         providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
         providerAccepted: result.diagnostics?.providerAccepted === false
           ? false
@@ -12786,7 +12820,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               providerAccepted = cons.decision.candidateOrigin === 'provider'
                 || cons.decision.candidateOrigin === 'ai_repaired';
               finalCandidateSource = cons.decision.candidateOrigin === 'provider'
-                ? (serverFallbackUsed ? 'server_fallback' : 'provider')
+                ? (serverFallbackUsed
+                  ? 'server_fallback'
+                  : (serverRepairAttemptedFlag ? 'server_repair' : 'provider'))
                 : cons.decision.candidateOrigin;
               finalUnsupportedClaimCount = 0;
               finalUnsupportedClaimKinds = [];
@@ -12844,7 +12880,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           finalUnsupportedClaimKinds = [];
           fallbackApplied = true;
         } else {
-          finalCandidateSource = providerOrigin === 'ai_repaired' ? 'noop_repair' : 'provider';
+          finalCandidateSource = serverRepairAttemptedFlag ? 'server_repair' : 'provider';
           finalUnsupportedClaimCount = 0;
           finalUnsupportedClaimKinds = [];
         }
@@ -12872,6 +12908,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             unsupportedClaimCount: finalUnsupportedClaimCount,
             finalCandidateSource,
             serverFallbackUsed,
+            serverRepairAttempted: serverRepairAttemptedFlag,
+            serverRepairSelected: serverRepairAttemptedFlag,
+            serverRepairSource,
+            // Same-locale server repairs can reach selected-final predicate
+            // validation without a provider-phase predicate scan. Mark the
+            // provider phase N/A instead of leaving 0/null unexplained.
+            providerPredicateValidationApplicable:
+              providerSourceUnitPredicateCoveragePassed != null
+              || providerCandidatePredicateIdentityCount > 0,
             apiResponseKind,
             fallbackApplied: serverFallbackUsed ? true : firstAccepted.diagnostics?.fallbackApplied,
           },
