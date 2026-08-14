@@ -1872,9 +1872,13 @@ export class ExperienceAiDiagnosticSession {
       ? (diag.clientDeterministicFallbackUncoveredFactIds || [])
       : [];
 
-    const providerUncovered = Array.isArray(diag.providerUncoveredFactIdentityHashes)
-      ? diag.providerUncoveredFactIdentityHashes.map(String)
-      : (this.draft.providerUncoveredFactIdentityHashes || []);
+    const providerUncovered = [...new Set(
+      (Array.isArray(diag.providerUncoveredFactIdentityHashes)
+        ? diag.providerUncoveredFactIdentityHashes.map(String)
+        : (this.draft.providerUncoveredFactIdentityHashes || []))
+        .map((id) => id.trim())
+        .filter(Boolean),
+    )];
     const finalRequired = selectedFinalPresent
       ? (clientFallbackApplied
         ? (clientRequired || diag.requiredFactCount || this.draft.requiredFactCount || 0)

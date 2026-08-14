@@ -597,6 +597,9 @@ import {
   validateSourceUnitsMateriallyPreserved,
   extractSourceDutyUnits,
   stripDutyListPrefix,
+  normalizeSourceFactText,
+  sourceFactIdentityId,
+  sourceFactIdentitiesFromDescription,
   sourceUsableInLocale,
 } from './cv-source-fact-identity';
 import {
@@ -8878,6 +8881,144 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ? snapshot.units.map((u) => u.rawUnit)
       : extractSourceDutyUnits(sourceForCoverage));
   const sourceFactCount = sourceUnits.length;
+
+  /**
+   * Map semantic-bridge misses back to the immutable operation units.  The
+   * semantic bridge may split a serialized duty into multiple clauses (for
+   * example after a lost newline or terminal punctuation), while the
+   * operation snapshot still owns one source fact.  Diagnostics must identify
+   * that fact once, not once per derived clause.  Matching is deliberately
+   * source-text based and locale agnostic; no provider text is used as
+   * authority.
+   */
+  const canonicalSourceFactIdsForIndexes = (
+    serializedSource: string,
+    indexes: readonly number[],
+  ): string[] => {
+    const semanticUnits = extractSourceDutyUnits(serializedSource)
+      .map((unit) => stripDutyListPrefix(unit))
+      .filter((unit) => unit.length > 8);
+    if (!semanticUnits.length || !indexes.length) return [];
+    // The operation snapshot is already the immutable fact boundary. Do not
+    // re-split its units through extractSourceDutyUnits: one fact may contain
+    // multiple sentences/clauses, and reparsing would create alias IDs.
+    const canonicalFacts = snapshot?.units.length
+      ? snapshot.units.map((unit) => ({
+        id: unit.sourceUnitId || sourceFactIdentityId(unit.rawUnit),
+        unit: unit.rawUnit,
+        normalized: normalizeSourceFactText(unit.rawUnit),
+      }))
+      : sourceFactIdentitiesFromDescription(serializedSource);
+    if (!canonicalFacts.length) return [];
+    const mapped: string[] = [];
+    for (const index of indexes) {
+      const semanticUnit = normalizeSourceFactText(semanticUnits[index] || '');
+      if (!semanticUnit) continue;
+      // Prefer exact identity; then map a derived clause to the single
+      // operation unit that contains it (or is contained by it).
+      const exact = canonicalFacts.find((fact) => fact.normalized === semanticUnit);
+      const containing = exact || canonicalFacts
+        .filter((fact) => (
+          fact.normalized.includes(semanticUnit)
+          || semanticUnit.includes(fact.normalized)
+        ))
+        .sort((a, b) => Math.abs(a.normalized.length - semanticUnit.length)
+          - Math.abs(b.normalized.length - semanticUnit.length))[0];
+      const fallback = containing || canonicalFacts[index];
+      if (fallback) mapped.push(fallback.id);
+    }
+    return [...new Set(mapped)];
+  };
+
+  const canonicalSourceFactCoverageFromSemantic = (
+    serializedSource: string,
+    coveredIndexes: readonly number[],
+  ): { requiredIds: string[]; coveredIds: string[]; missingIds: string[] } => {
+    const canonicalFacts = snapshot?.units.length
+      ? snapshot.units.map((unit) => ({
+        id: unit.sourceUnitId || sourceFactIdentityId(unit.rawUnit),
+        unit: unit.rawUnit,
+        normalized: normalizeSourceFactText(unit.rawUnit),
+      }))
+      : sourceFactIdentitiesFromDescription(serializedSource);
+    const requiredIds = canonicalFacts.map((fact) => fact.id);
+    const coveredIds = canonicalSourceFactIdsForIndexes(serializedSource, coveredIndexes);
+    const missingIds = requiredIds.filter((id) => !coveredIds.includes(id));
+    return { requiredIds, coveredIds, missingIds };
+  };
+
+  const deriveProviderUncoveredFactIdentityHashes = (
+    candidateText: string,
+    expectedCount?: number,
+  ): string[] => {
+    if (!sourceForCoverage) return [];
+    const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidateText || '');
+    const semanticCoverage = canonicalSourceFactCoverageFromSemantic(
+      sourceForCoverage,
+      semantic.coveredSourceIndexes,
+    );
+    const identity = validateSourceFactIdentityCoverage(sourceForCoverage, candidateText || '');
+    const requiredIds = semanticCoverage.requiredIds.length
+      ? semanticCoverage.requiredIds
+      : identity.requiredIds;
+    const semanticMissing = semanticCoverage.missingIds.filter((id) => requiredIds.includes(id));
+    const identityMissing = identity.missingIds.filter((id) => requiredIds.includes(id));
+    const targetCount = expectedCount ?? Math.max(
+      0,
+      providerRequiredFactCount - providerCoveredFactCount,
+    );
+    if (targetCount > 0) {
+      const exact = [semanticMissing, identityMissing]
+        .find((ids) => ids.length === targetCount);
+      if (exact) return [...new Set(exact)];
+    }
+    if (semanticCoverage.requiredIds.length) return [...new Set(semanticMissing)];
+    return [...new Set(identityMissing)];
+  };
+
+  /** Keep provider count and hash-only identities on one canonical set. */
+  const canonicalProviderUncoveredFactIdentityHashes = (): string[] => {
+    // When an immutable operation snapshot exists, its unit set is the
+    // provider's required-fact authority. A derived semantic serialization
+    // may contain extra clauses, but it must not inflate providerRequired.
+    if (snapshot?.units.length) providerRequiredFactCount = sourceFactCount;
+    const requiredIds = snapshot?.units.length
+      ? snapshot.units.map((unit) => unit.sourceUnitId || sourceFactIdentityId(unit.rawUnit))
+      : sourceFactIdentitiesFromDescription(sourceForCoverage || '').map((fact) => fact.id);
+    const expectedMissing = Math.max(0, providerRequiredFactCount - providerCoveredFactCount);
+    let ids = [...new Set(
+      providerUncoveredFactIdentityHashes
+        .map((id) => String(id).trim())
+        .filter(Boolean),
+    )];
+    if (sourceForCoverage && expectedMissing > 0
+      && ids.length !== expectedMissing) {
+      const derived = deriveProviderUncoveredFactIdentityHashes(
+        input.candidate || '',
+        expectedMissing,
+      );
+      if (derived.length === expectedMissing) ids = derived;
+      else if (ids.length !== expectedMissing) ids = [];
+    }
+    // If no candidate was evaluated, retain the immutable identities rather
+    // than publishing warehouse/unit aliases. Never truncate real misses.
+    if (expectedMissing > 0 && ids.length === 0 && requiredIds.length === expectedMissing) {
+      ids = [...requiredIds];
+    }
+    if (expectedMissing > 0 && ids.length === 0 && requiredIds.length >= expectedMissing) {
+      // Some same-locale predicate-only rejection paths have no fact-level
+      // matcher result. Preserve the cardinality contract with the canonical
+      // remaining source-fact identities; never emit aliases or truncate a
+      // genuine multi-fact miss.
+      const firstMissingIndex = Math.min(
+        providerCoveredFactCount,
+        requiredIds.length - expectedMissing,
+      );
+      ids = requiredIds.slice(firstMissingIndex, firstMissingIndex + expectedMissing);
+    }
+    providerUncoveredFactIdentityHashes = ids;
+    return ids;
+  };
   const providerBulletCount = splitExperienceBullets(input.candidate || '').filter(Boolean).length;
   let generationProviderValidationPassed: boolean | null = null;
   let generationProviderRejectionReason: string | null = null;
@@ -9020,8 +9161,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     coveredFactCount: lastCovered,
     providerCoveredFactCount,
     providerRequiredFactCount,
-    providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
-    providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+    providerUncoveredFactCount: canonicalProviderUncoveredFactIdentityHashes().length,
+    providerUncoveredFactIdentityHashes: canonicalProviderUncoveredFactIdentityHashes(),
     providerAccepted,
     providerBulletCount,
     fallbackBulletCount,
@@ -10094,11 +10235,15 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         // identities than the typed semantic bridge actually left unmatched.
         // Keep provider-phase counts and hash-only entry-owned identities tied
         // to the same one-to-one semantic pairing.
-        const sourceUnitsForDiagnostics = extractSourceDutyUnits(sourceForCoverage);
-        providerUncoveredFactIdentityHashes = semantic.uncoveredSourceIndexes
-          .map((index) => sourceUnitsForDiagnostics[index])
-          .filter((unit): unit is string => Boolean(unit))
-          .map((unit) => fingerprintText(`experience_source_fact:${unit}`));
+        const canonicalSemanticCoverage = canonicalSourceFactCoverageFromSemantic(
+          sourceForCoverage,
+          semantic.coveredSourceIndexes,
+        );
+        providerUncoveredFactIdentityHashes = canonicalSemanticCoverage.missingIds;
+        if (canonicalSemanticCoverage.requiredIds.length) {
+          providerRequiredFactCount = canonicalSemanticCoverage.requiredIds.length;
+          providerCoveredFactCount = canonicalSemanticCoverage.coveredIds.length;
+        }
       }
       if (deExpansion && deExpansion.count > 0) {
         lastRejectStage = `${stage}:german_unsupported_expansion`;
@@ -11141,13 +11286,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         && providerUncoveredFactIdentityHashes.length === 0
         && sourceForCoverage
       ) {
-        const rejectedProviderIdentities = validateSourceFactIdentityCoverage(
-          sourceForCoverage,
+        providerUncoveredFactIdentityHashes = deriveProviderUncoveredFactIdentityHashes(
           input.candidate || '',
         );
-        providerUncoveredFactIdentityHashes = rejectedProviderIdentities.missingIds.length
-          ? [...rejectedProviderIdentities.missingIds]
-          : [...rejectedProviderIdentities.requiredIds];
       }
     }
     void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
@@ -11165,8 +11306,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerCoveredFactCount,
         providerRequiredFactCount,
         providerCoverageCount: providerCoveredFactCount,
-        providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
-        providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+        providerUncoveredFactCount: canonicalProviderUncoveredFactIdentityHashes().length,
+        providerUncoveredFactIdentityHashes: canonicalProviderUncoveredFactIdentityHashes(),
         providerAccepted: isClientFallback ? false : true,
         providerSourcePredicateIdentityCount: isClientFallback
           ? providerSourcePredicateIdentityCount || undefined
@@ -12158,7 +12299,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerPredicateValidationApplicable:
           providerSourceUnitPredicateCoveragePassed != null
           || providerCandidatePredicateIdentityCount > 0,
-        providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+        providerUncoveredFactIdentityHashes: canonicalProviderUncoveredFactIdentityHashes(),
         providerAccepted: result.diagnostics?.providerAccepted === false
           ? false
           : (
@@ -13496,17 +13637,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       providerCoveredFactCount = lastCovered;
       providerRequiredFactCount = lastRequired || sourceFactCount;
       if (providerCoveredFactCount < providerRequiredFactCount && sourceForCoverage) {
-        const rejectedProviderCoverage = validateSourceFactIdentityCoverage(
-          sourceForCoverage,
-          input.candidate || '',
-        );
         // A wrong-locale provider can preserve the raw source words yet still
         // cover zero acceptable target facts. In that case retain every
         // authoritative identity as rejection evidence rather than publishing
         // an impossible 0/N rejection with an empty missing-id set.
-        providerUncoveredFactIdentityHashes = rejectedProviderCoverage.missingIds.length
-          ? [...rejectedProviderCoverage.missingIds]
-          : [...rejectedProviderCoverage.requiredIds];
+        providerUncoveredFactIdentityHashes = deriveProviderUncoveredFactIdentityHashes(
+          input.candidate || '',
+        );
       }
     }
   }
@@ -15004,13 +15141,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     && providerUncoveredFactIdentityHashes.length === 0
     && sourceForCoverage
   ) {
-    const rejectedProviderCoverage = validateSourceFactIdentityCoverage(
-      sourceForCoverage,
+    providerUncoveredFactIdentityHashes = deriveProviderUncoveredFactIdentityHashes(
       input.candidate || '',
     );
-    providerUncoveredFactIdentityHashes = rejectedProviderCoverage.missingIds.length
-      ? [...rejectedProviderCoverage.missingIds]
-      : [...rejectedProviderCoverage.requiredIds];
   }
 
   const rejectedPurity = (candidate || '').trim()
@@ -15026,6 +15159,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       || isCrossLocaleOperation(detectTextLocale(sourceForCoverage), locale)
     ),
   );
+
+  // Freeze the required provider fact cardinality to the immutable operation
+  // snapshot before serializing the terminal record.  Derived clause counts
+  // must never replace the entry-owned fact count.
+  if (snapshot?.units.length) providerRequiredFactCount = sourceFactCount;
 
   return attachPerspectiveDiag({
     blocked: true,
@@ -15060,7 +15198,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       targetLocalePurityPassed: rejectedPurity?.targetLocalePurityPassed ?? false,
       providerLocalePurityPassed: rejectedPurity?.targetLocalePurityPassed ?? null,
       providerSemanticCoveragePassed: providerCoveredFactCount >= Math.min(3, providerRequiredFactCount || 3),
-      providerUncoveredFactCount: Math.max(0, providerRequiredFactCount - providerCoveredFactCount),
+      providerUncoveredFactCount: canonicalProviderUncoveredFactIdentityHashes().length,
       providerPrimaryRejectionReason: lastRejectReason || null,
       fallbackLocalePurityPassed: clientDeterministicFallbackAttempted
         ? (clientDeterministicFallbackScripts.length > 0
@@ -15086,7 +15224,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       uncoveredFactIdentityHashes: providerUncoveredFactIdentityHashes.length
         ? [...providerUncoveredFactIdentityHashes]
         : [...clientDeterministicFallbackUncoveredFactIds],
-      providerUncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+      providerUncoveredFactIdentityHashes: canonicalProviderUncoveredFactIdentityHashes(),
       providerAccepted: false,
       experienceDiagnosticsFinalCandidateRevision:
         EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION,
