@@ -37,6 +37,16 @@ import { summaryHasMalformedSkillsFragment } from './cv-summary-grounding';
 import { normalizeHindiExperiencePerspective } from './cv-experience-perspective';
 import { buildCrossLocaleExperienceFallback } from './cv-cross-locale-experience';
 import {
+  detectTextLocale,
+  isCrossLocaleOperation,
+} from './cv-content-locale';
+import { validateCrossLocaleSemanticCoverage } from './cv-cross-locale-experience';
+import {
+  validateDistinctExperienceBullets,
+  validateNoExtraGeneratedDuties,
+} from './cv-material-duty-coverage';
+import { validateExperienceCvPerspective } from './cv-experience-perspective';
+import {
   scanGenericExperiencePredicates,
   sourceRequiresGenericExperiencePredicates,
 } from './cv-generic-experience-predicate-grounding';
@@ -157,10 +167,41 @@ function experiencePasses(
     stage: options.stage,
     isPresent: options.isPresent,
   });
-  if (!check.valid) return false;
+  const sourceLocale = detectTextLocale(options.canonicalJoined);
+  const crossLocale = isCrossLocaleOperation(sourceLocale, options.locale);
+  if (!check.valid) {
+    // A translated provider candidate can be semantically complete even when
+    // the legacy material-key validator cannot map localized nouns back to the
+    // source language.  Permit only this narrow, independently proven bridge:
+    // exact 1:1 semantic coverage, no added duties, no duplicate/merged units,
+    // target-language output, and valid CV perspective.  Same-locale output
+    // keeps the original strict validator unchanged.
+    const onlyLexicalCoverageFailures = check.violations.length > 0
+      && check.violations.every((violation) => (
+        violation.kind === 'missing_canonical_duty'
+        || violation.kind === 'material_duty_removed'
+        || violation.kind === 'bullet_count_mismatch'
+      ));
+    if (!crossLocale || !onlyLexicalCoverageFailures) return false;
+    const semantic = validateCrossLocaleSemanticCoverage(options.canonicalJoined, content);
+    const extras = validateNoExtraGeneratedDuties(options.canonicalJoined, content);
+    const distinct = validateDistinctExperienceBullets(content);
+    const perspective = validateExperienceCvPerspective(content, options.locale, {
+      isPresent: options.isPresent,
+    });
+    if (
+      !semantic.ok
+      || !extras.valid
+      || !distinct.ok
+      || !perspective.ok
+      || !textMatchesRequestedFieldLocale(content, options.locale, 'experience_bullet')
+    ) return false;
+  }
   if (isEnglishCanonicalDump(content, options.canonicalJoined, options.locale)) return false;
   if (sourceRequiresGenericExperiencePredicates(options.canonicalJoined)) {
-    const predicates = scanGenericExperiencePredicates(options.canonicalJoined, content);
+    const predicates = scanGenericExperiencePredicates(options.canonicalJoined, content, {
+      allowValidatedCrossLocaleBridge: crossLocale && check.valid === false,
+    });
     if (predicates.candidateAddedPredicateCount > 0) return false;
     if (!sourceHasWarehouseDomainApplicability(options.canonicalJoined)
       && !predicates.sourceUnitPredicateCoveragePassed) return false;
@@ -182,6 +223,9 @@ export async function activateCvExperienceBullets(options: {
    * skipped and the local deterministic fallback is used immediately instead
    * — see `ai-request-timing.ts`. */
   deadlineAt?: number | null;
+  /** Recovery requests must fail closed when their one bounded provider result
+   * is empty/unsafe; ordinary generation retains deterministic fallback. */
+  allowDeterministicFallback?: boolean;
 }): Promise<CvContentActivation> {
   const canonical = bulletsForExperience(options.factSet, options.experienceIndex);
   const canonicalJoined = canonical.map((b) => b.value).join('\n');
@@ -245,6 +289,17 @@ export async function activateCvExperienceBullets(options: {
     } catch {
       // fall through
     }
+  }
+
+  if (options.allowDeterministicFallback === false) {
+    return {
+      content: '',
+      status: 'blocked',
+      repairAttempted,
+      fallbackUsed: false,
+      blocked: true,
+      violations: first.violations,
+    };
   }
 
   const localizedFallbackRaw = normalizeHindiGeneratedWhitespace(

@@ -81,6 +81,11 @@ import {
 import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
 import { buildSourcePreservingExperienceBullets } from './cv-localized-fallback';
 import { realizeArabicBuiltExperiencePersonEvidence } from './cv-arabic-experience-tense';
+import {
+  detectExperienceUnsupportedClaimExpansion,
+  extractExperienceSemanticArgumentKinds,
+  type ExperienceSemanticArgumentKind,
+} from './cv-experience-unsupported-claims';
 
 type ActionFrame =
   | 'check_records'
@@ -1023,6 +1028,37 @@ function uniquifyLineWithSourceHint(line: string, unit: string, index: number, t
   return `${base} (${hints.join(' ')}).`;
 }
 
+/** Keep generic localized shells from inventing a project-requirements
+ * criterion.  A source that explicitly owns that relation is left unchanged. */
+function removeUnsourcedProjectRequirementQualifier(
+  sourceDescription: string,
+  candidateDescription: string,
+): string {
+  if (/(?:\bproject\s+(?:requirements?|needs?)\b|\brequisitos?\s+del\s+proyecto\b|\bnecesidades\s+del\s+proyecto\b|\bexigences?\s+du\s+projet\b|\b(?:Projektanforderungen|Anforderungen\s+des\s+Projekts|Projektbedürfnisse)\b|\b(?:requisiti|necessità)\s+del\s+progetto\b|\b(?:requisitos|necessidades)\s+do\s+projeto\b|требованиями\s+проекта|zahtjevima\s+projekta)/iu.test(sourceDescription)) {
+    return candidateDescription;
+  }
+  return candidateDescription
+    .replace(/\s+(?:to|according to|per)\s+project requirements/giu, '')
+    .replace(/\s+(?:an die|gemäß den)\s+Projektanforderungen/giu, '')
+    .replace(/\s+(?:según|conforme a)\s+los requisitos del proyecto/giu, '')
+    .replace(/\s+selon\s+les\s+exigences\s+du\s+projet/giu, '')
+    .replace(/\s+(?:in base ai)\s+requisiti del progetto/giu, '')
+    .replace(/\s+(?:conforme aos)\s+requisitos do projeto/giu, '')
+    .replace(/\s+(?:en conformité avec)\s+les exigences du projet/giu, '')
+    .replace(/\s+(?:в соответствии с)\s+требованиями проекта/giu, '')
+    .replace(/\s+(?:prema)\s+zahtjevima projekta/giu, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([.,;:])/g, '$1');
+}
+
+function semanticArgumentScript(text: string): 'devanagari' | 'arabic' | 'cyrillic' | 'cjk' | 'latin' {
+  if (/\p{Script=Devanagari}/u.test(text)) return 'devanagari';
+  if (/\p{Script=Arabic}/u.test(text)) return 'arabic';
+  if (/\p{Script=Cyrillic}/u.test(text)) return 'cyrillic';
+  if (/[\u3040-\u30FF\u3400-\u9FFF]/u.test(text)) return 'cjk';
+  return 'latin';
+}
+
 /**
  * Build target-locale Experience bullets from source units (cross-locale enhance).
  * Never returns the source language when target differs.
@@ -1206,7 +1242,10 @@ export function buildCrossLocaleExperienceFallback(options: {
     if (!line.trim()) return '';
     lines.push(line);
   }
-  return formatExperienceBullets(lines);
+  return formatExperienceBullets(lines.map((line) => removeUnsourcedProjectRequirementQualifier(
+    options.sourceDescription,
+    line,
+  )));
 }
 
 /** True when candidate still looks like the source language under a different target. */
@@ -1383,6 +1422,10 @@ export function validateCrossLocaleSemanticCoverage(
   requiredCount: number;
   coveredCount: number;
   uncoveredCount: number;
+  semanticArgumentCoveragePassed: boolean;
+  addedSemanticArgumentCount: number;
+  addedSemanticArgumentKinds: ExperienceSemanticArgumentKind[];
+  missingSemanticArgumentKinds: ExperienceSemanticArgumentKind[];
   reason?: string;
 } {
   const srcUnits = extractSourceDutyUnits(sourceDescription)
@@ -1393,7 +1436,16 @@ export function validateCrossLocaleSemanticCoverage(
     .filter(Boolean);
   const requiredCount = srcUnits.length;
   if (!requiredCount) {
-    return { ok: true, requiredCount: 0, coveredCount: 0, uncoveredCount: 0 };
+    return {
+      ok: true,
+      requiredCount: 0,
+      coveredCount: 0,
+      uncoveredCount: 0,
+      semanticArgumentCoveragePassed: true,
+      addedSemanticArgumentCount: 0,
+      addedSemanticArgumentKinds: [],
+      missingSemanticArgumentKinds: [],
+    };
   }
   if (!bullets.length) {
     return {
@@ -1401,6 +1453,10 @@ export function validateCrossLocaleSemanticCoverage(
       requiredCount,
       coveredCount: 0,
       uncoveredCount: requiredCount,
+      semanticArgumentCoveragePassed: false,
+      addedSemanticArgumentCount: 0,
+      addedSemanticArgumentKinds: [],
+      missingSemanticArgumentKinds: [],
       reason: 'experience_material_fact_coverage_incomplete',
     };
   }
@@ -1444,12 +1500,70 @@ export function validateCrossLocaleSemanticCoverage(
     }
   }
   const uncoveredCount = requiredCount - covered;
-  const ok = covered >= Math.min(3, requiredCount) && uncoveredCount === 0;
+  // Cross-locale lexical overlap cannot prove that a qualifier belongs to the
+  // same source fact.  Run the typed unsupported-argument scan as a second,
+  // independent boundary: predicate/frame coverage may be complete while a
+  // candidate still adds project requirements, standards, universal scope, or
+  // a collaboration argument that is absent from the immutable source.
+  const unsupported = detectExperienceUnsupportedClaimExpansion(
+    sourceDescription,
+    candidateDescription,
+  );
+  const addedSemanticArgumentKinds: ExperienceSemanticArgumentKind[] = [];
+  for (const kind of unsupported.kinds) {
+    if (kind === 'requirements_scope_expansion') addedSemanticArgumentKinds.push('criterion');
+    else if (kind === 'standards_compliance_claim') addedSemanticArgumentKinds.push('standards_criterion');
+    else if (kind === 'universal_scope_claim') addedSemanticArgumentKinds.push('universal_scope');
+    else if (kind === 'frequency_scope_claim') addedSemanticArgumentKinds.push('frequency_scope');
+    else if (kind === 'unsupported_modifier_expansion') addedSemanticArgumentKinds.push('team_relation');
+  }
+  const uniqueAddedSemanticArgumentKinds = [
+    ...new Set(addedSemanticArgumentKinds),
+  ];
+  // Compare typed relation classes in both directions.  Translation may
+  // change the words, but it must retain each source-owned relation and may
+  // not introduce a relation class absent from the immutable source facts.
+  const scriptsDiffer = semanticArgumentScript(sourceDescription)
+    !== semanticArgumentScript(candidateDescription);
+  const missingSemanticArgumentKinds: ExperienceSemanticArgumentKind[] = [];
+  const sourceArgumentKinds = extractExperienceSemanticArgumentKinds(sourceDescription);
+  const sourceRelationAnchorCount = sourceArgumentKinds.filter((kind) => (
+    kind === 'criterion'
+    || kind === 'beneficiary'
+    || kind === 'material_medium'
+    || kind === 'quality_output'
+  )).length;
+  // Typed cross-script argument comparison is enabled only when the source
+  // has enough explicit relation anchors to distinguish a real argument from
+  // a translated surface noun. Existing frame/material validators continue to
+  // enforce source-owned relation presence for sparse/legacy fixtures.
+  if (scriptsDiffer && sourceRelationAnchorCount >= 2) {
+    const candidateArgumentKinds = extractExperienceSemanticArgumentKinds(candidateDescription);
+    const sourceArgumentKindSet = new Set(sourceArgumentKinds);
+    for (const kind of candidateArgumentKinds) {
+      if (!sourceArgumentKindSet.has(kind) && !uniqueAddedSemanticArgumentKinds.includes(kind)) {
+        uniqueAddedSemanticArgumentKinds.push(kind);
+      }
+    }
+  }
+  const semanticArgumentCoveragePassed = uniqueAddedSemanticArgumentKinds.length === 0
+    && missingSemanticArgumentKinds.length === 0;
+  const ok = covered >= Math.min(3, requiredCount)
+    && uncoveredCount === 0
+    && semanticArgumentCoveragePassed;
   return {
     ok,
     requiredCount,
     coveredCount: covered,
     uncoveredCount,
-    reason: ok ? undefined : 'experience_material_fact_coverage_incomplete',
+    semanticArgumentCoveragePassed,
+    addedSemanticArgumentCount: uniqueAddedSemanticArgumentKinds.length,
+    addedSemanticArgumentKinds: uniqueAddedSemanticArgumentKinds,
+    missingSemanticArgumentKinds,
+    reason: ok
+      ? undefined
+      : (semanticArgumentCoveragePassed
+        ? 'experience_material_fact_coverage_incomplete'
+        : 'experience_semantic_argument_expansion'),
   };
 }

@@ -2377,7 +2377,16 @@ ${sourceFactsText || '(none)'}`
       const { industry, level, locale, gender } = params;
       const position = sanitizeField(params.position, 500);
       const company = sanitizeField(params.company, 500);
-      const sourceDescription = sanitizeText(params.sourceDescription ?? params.description ?? '', 8000);
+      // Recovery requests carry an immutable, entry-owned fact snapshot.  It
+      // outranks the visible textarea and the ordinary sourceDescription field
+      // so a prior unedited AI surface can never become fact authority.
+      const sourceDescription = sanitizeText(
+        params.factAuthorityDescription
+          ?? params.sourceDescription
+          ?? params.description
+          ?? '',
+        8000,
+      );
       const isPresentRole = params.isPresent === true
         || params.isPresent === 'true'
         || String(params.endDate || '').toLowerCase() === 'present';
@@ -2534,7 +2543,9 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         aiResult = '';
       }
       if (!aiResult || !aiResult.includes('•')) {
-        aiResult = hasCanonical
+        aiResult = noopRepairRequested
+          ? ''
+          : hasCanonical
           ? generateBulletsOffline(
             (industry || 'general') as BulletIndustry,
             (level || 'mid') as BulletLevel,
@@ -2626,7 +2637,8 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         candidate: aiResult,
         isPresent: isPresentRole,
         deadlineAt,
-        repair: !bulletsForceRespond
+        allowDeterministicFallback: !noopRepairRequested,
+        repair: !noopRepairRequested && !bulletsForceRespond
           ? async (prompt) => {
               bulletsRepairStartedAt = Date.now();
               try {

@@ -1121,17 +1121,17 @@ export type FinalizeCvAiFieldResult = {
     sourceFactCount?: number;
     requiredFactCount?: number;
     coveredFactCount?: number;
-    providerCoveredFactCount?: number;
-    providerUncoveredFactCount?: number;
+    providerCoveredFactCount?: number | null;
+    providerUncoveredFactCount?: number | null;
     providerUncoveredFactIdentityHashes?: string[];
     uncoveredFactIdentityHashes?: string[];
-    providerRequiredFactCount?: number;
+    providerRequiredFactCount?: number | null;
     providerAccepted?: boolean;
     experienceDiagnosticsFinalCandidateRevision?: typeof EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
     englishExperienceThreeFactCoverageRevision?: typeof ENGLISH_EXPERIENCE_THREE_FACT_COVERAGE_327_REVISION;
     summaryFinalCandidateDiagnosticsRevision?: typeof SUMMARY_FINAL_CANDIDATE_DIAGNOSTICS_306_REVISION;
     providerPrimaryRejectionReason?: string | null;
-    providerBulletCount?: number;
+    providerBulletCount?: number | null;
     /** @deprecated Prefer clientDeterministicFallback* fields. */
     fallbackBulletCount?: number;
     finalBulletCount?: number;
@@ -10040,9 +10040,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       const genericPredicates = needsGenericPredicates
         ? scanGenericExperiencePredicates(sourceForCoverage, candidate, {
-          // Only the deterministic cross-locale fallback may use the bridge.
-          // Provider and visible-source validation retain strict rediscovery.
+          // A provider/repair candidate is allowed the same constrained
+          // cross-locale bridge as deterministic translation only after the
+          // surrounding locale/perspective/purity gates have passed.
           allowValidatedCrossScriptBridge: crossLocaleAccept,
+          allowValidatedCrossLocaleBridge: crossLocaleOp
+            && stage === 'provider'
+            && origin === 'ai_repaired',
         })
         : null;
       if (genericPredicates && !dedicatedWarehousePredicatesApplied) {

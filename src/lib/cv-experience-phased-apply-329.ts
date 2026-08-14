@@ -100,6 +100,8 @@ import {
   isPortugueseBrazilLocale,
   canonicalizeContentLocale,
   localesEquivalent,
+  detectTextLocale,
+  isCrossLocaleOperation,
 } from './cv-content-locale';
 import { resolveLocaleCandidate } from './i18n/translations';
 import { textMatchesRequestedFieldLocale } from './cv-field-locale-integrity';
@@ -205,6 +207,10 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
   const text = (options.candidateText || '').trim();
   const source = options.sourceDescription || '';
   const locale = (options.targetLocale || 'en').toLowerCase();
+  const allowValidatedCrossLocaleBridge = isCrossLocaleOperation(
+    detectTextLocale(source),
+    locale,
+  );
   const bullets = splitExperienceBullets(text).map((b) => b.trim()).filter(Boolean);
   const normalized = text.replace(/\s+/g, ' ').trim();
 
@@ -423,7 +429,9 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
   } else if (sourceRequiresGenericExperiencePredicates(source)) {
-    const pred = scanGenericExperiencePredicates(source, text);
+    const pred = scanGenericExperiencePredicates(source, text, {
+      allowValidatedCrossLocaleBridge,
+    });
     sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
     candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
     addedPredicateCount = pred.candidateAddedPredicateCount;
@@ -448,7 +456,9 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
   // locale-specific scanner covers all source facts but misses an inserted
   // material action in the selected candidate.
   if (sourceRequiresGenericExperiencePredicates(source)) {
-    const sharedPred = scanGenericExperiencePredicates(source, text);
+    const sharedPred = scanGenericExperiencePredicates(source, text, {
+      allowValidatedCrossLocaleBridge,
+    });
     addedPredicateIdentityHashes = Array.from(new Set([
       ...addedPredicateIdentityHashes,
       ...sharedPred.candidateAddedPredicateIdentityHashes,
@@ -1107,6 +1117,10 @@ export function validateVisibleExperienceCoverage(options: {
   const visibleNormalizedHash = fingerprintText(normalized);
   const locale = (options.targetLocale || 'en').toLowerCase();
   const resolvedLocale = resolveLocaleCandidate(options.targetLocale || 'en') || 'en';
+  const allowValidatedCrossLocaleBridge = isCrossLocaleOperation(
+    detectTextLocale(options.sourceDescription),
+    locale,
+  );
   const visiblePerspective = validateExperienceCvPerspective(visible, resolvedLocale, {
     isPresent: options.isPresent,
   });
@@ -1331,7 +1345,9 @@ export function validateVisibleExperienceCoverage(options: {
     visibleFactCoveragePassed = semantic.ok
       && semantic.coveredCount === semantic.requiredCount
       && semantic.requiredCount > 0;
-    const pred = scanGenericExperiencePredicates(options.sourceDescription, visible);
+    const pred = scanGenericExperiencePredicates(options.sourceDescription, visible, {
+      allowValidatedCrossLocaleBridge,
+    });
     visibleRequiredPredicateCount = pred.sourcePredicateIdentityCount;
     visibleCoveredPredicateCount = pred.candidatePredicateIdentityCount;
     visiblePredicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
@@ -1343,7 +1359,9 @@ export function validateVisibleExperienceCoverage(options: {
   // validator was applicable. Visible truth must match selected-final truth
   // for material additions, not just for source fact coverage.
   if (sourceRequiresGenericExperiencePredicates(options.sourceDescription)) {
-    const sharedPred = scanGenericExperiencePredicates(options.sourceDescription, visible);
+    const sharedPred = scanGenericExperiencePredicates(options.sourceDescription, visible, {
+      allowValidatedCrossLocaleBridge,
+    });
     applicable = true;
     visiblePredicateCoveragePassed = visiblePredicateCoveragePassed
       && sharedPred.candidateAddedPredicateCount === 0;

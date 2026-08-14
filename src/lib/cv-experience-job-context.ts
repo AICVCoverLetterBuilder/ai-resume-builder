@@ -70,7 +70,7 @@ export type ExperienceAiJobContextTrace = {
   sourceFactCount?: number;
   requiredFactCount?: number;
   coveredFactCount?: number;
-  providerBulletCount?: number;
+  providerBulletCount?: number | null;
   fallbackBulletCount?: number;
   finalBulletCount?: number;
   finalBulletScripts?: string[];
@@ -79,6 +79,10 @@ export type ExperienceAiJobContextTrace = {
   typedFailureReason?: string;
   fallbackApplied?: boolean;
   countedAsSuccess?: boolean;
+  providerRequiredFactCount?: number | null;
+  providerCoveredFactCount?: number | null;
+  providerUncoveredFactCount?: number | null;
+  providerUncoveredFactIdentityHashes?: string[];
 };
 
 function collapseWs(value: string): string {

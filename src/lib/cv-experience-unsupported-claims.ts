@@ -50,6 +50,7 @@ export type ExperienceUnsupportedClaimKind =
   | 'standards_scope_expansion'
   | 'unsupported_modifier_expansion'
   | 'frequency_scope_claim'
+  | 'semantic_argument_expansion'
   | 'repeated_generic_enrichment';
 
 export type ExperienceUnsupportedClaimScan = {
@@ -72,18 +73,51 @@ function hasQualitySupport(source: string): boolean {
 }
 
 function hasStandardsSupport(source: string): boolean {
-  return /(?:\bstandard|compliance|regulacij|propis|procedur|politik|važeć\w*\s+standard|Vorschrift|Richtlinie)/iu
+  return /(?:\bstandard|compliance|regulacij|propis|procedur|politik|važeć\w*\s+standard|Vorschrift|Richtlinie|norm(?:e|es)?|मानक|नियम|विनियम|معايير|标准)/iu
     .test(source);
 }
 
 function hasUniversalScopeSupport(source: string): boolean {
-  return /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala|uskladišten)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:item|good|document)\b|\bentire\s+|\bsämtlich\w*\b|\balle\s+(?:Prozesse|Waren|Bereiche|Unterlagen)\b|\bunternehmensweit\b|\bdurchgängig\b)/iu
+  return /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala|uskladišten)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:item|good|document)\b|\bentire\s+|\bsämtlich\w*\b|\balle\s+(?:Prozesse|Waren|Bereiche|Unterlagen)\b|\bunternehmensweit\b|\bdurchgängig\b|\btous?\b|\btoutes?\b|\bchaque\b|\bl['’]ensemble\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu
     .test(source);
 }
 
 function hasFrequencyScopeSupport(source: string): boolean {
-  return /(?:\bdaily\b|\bweekly\b|\bregularly\b|\bevery\s+(?:day|week)\b|\bday-to-day\b|\bdnevno\b|\bsvakodnev\w*\b|\bredovit\w*\b|\btäglich\b|दैनिक|प्रतिदिन|साप्ताहिक|नियमित\s*(?:रूप\s*से)?|हर\s*(?:दिन|सप्ताह))/iu
+  return /(?:\bdaily\b|\bweekly\b|\bregularly\b|\bevery\s+(?:day|week)\b|\bday-to-day\b|\bdnevno\b|\bsvakodnev\w*\b|\bredovit\w*\b|\btäglich\b|दैनिक|प्रतिदिन|साप्ताहिक|नियमित\s*(?:रूप\s*से)?|हर\s*(?:दिन|सप्ताह)|\bquotidien\w*\b|\bhebdomadaire\w*\b|\brégulièrement\b|\bdiari\w*\b|\bsettiman\w*\b)/iu
     .test(source);
+}
+
+/** Typed relation classes used by cross-locale fact matching. */
+export type ExperienceSemanticArgumentKind =
+  | 'criterion'
+  | 'beneficiary'
+  | 'material_medium'
+  | 'project_scope'
+  | 'quality_output'
+  | 'team_relation'
+  | 'standards_criterion'
+  | 'universal_scope'
+  | 'frequency_scope';
+
+export function extractExperienceSemanticArgumentKinds(
+  text: string,
+): ExperienceSemanticArgumentKind[] {
+  const t = norm(text);
+  if (!t.trim()) return [];
+  const out: ExperienceSemanticArgumentKind[] = [];
+  const add = (kind: ExperienceSemanticArgumentKind, re: RegExp) => {
+    if (re.test(t) && !out.includes(kind)) out.push(kind);
+  };
+  add('criterion', /(?:\bselon\b|\bconform(?:e|ément)\b|\ben fonction de\b|\baccording\s+to\b|\bconforme(?:ment)?\s+aux?\b|\bprema\b|\bu\s+skladu\s+sa\b|\bza\s+potrebe\b|के अनुसार|के अनुरूप|के आधार पर|وفق(?:ًا|اً)?|بحسب|حسب|根据|按照)/iu);
+  add('beneficiary', /(?:\bclient(?:s|èle)?\b|\bcustomer(?:s)?\b|\bclientes?\b|\bKunden?\b|\bklijent\w*\b|ग्राहक(?:ों)?|ग्राहकों|زبائن|عملاء|客户)/iu);
+  add('material_medium', /(?:\b(?:print\w*|imprim(?:é|és|ées)\w*|numérique\w*|digital\w*|médias?\w*|supports?\w*|materijal\w*|medij\w*)\b|\b(?:medium|media|medien|medios|digitale?)\b|प्रिंट|डिजिटल|माध्यम|मीडिया|وسائط|رقمية|印刷|デジタル)/iu);
+  add('project_scope', /(?:\bprojet(?:s)?\b|\bproject(?:s)?\b|\bproyectos?\b|\bProjekte?\b|परियोजन|प्रोजेक्ट|परियोजना|مشروع|مشاريع|项目)/iu);
+  add('quality_output', /(?:\bqualit(?:é|y|ät)\b|\bquality\b|\brendus?\b|\bfinal(?:e|es)?\s+(?:output|outputs|livrables?|rend(?:u|us))\b|गुणवत्ता|आउटपुट|अंतिम|مخرجات|جودة|输出)/iu);
+  add('team_relation', /(?:\b(?:team|teams|équipe|équipes|membres?\s+de\s+l['’]équipe|project\s+team|project-team|members?\s+of\s+the\s+team|Kollegen?|compañeros?|equipo|član\w*|tim\w*|projektn\w*\s+tim)\b|टीम|दल|परियोजना दल|सदस्य|فريق|أعضاء|チーム)/iu);
+  add('standards_criterion', /(?:\b(?:norme(?:s)?|standard(?:s)?|normas?|standardi?)\b|मानक|नियम|विनियम|معايير|标准)/iu);
+  add('universal_scope', /(?:\b(?:tous?|toutes?|chaque|l['’]ensemble|all|every|entire|whole|svih|cjelokupn\w*)\b|\b(?:pour\s+tous?\s+les|for\s+all|for\s+every)\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu);
+  add('frequency_scope', /(?:\b(?:daily|weekly|regularly|every\s+(?:day|week)|day-to-day|quotidien\w*|hebdomadaire\w*|régulièrement|diari\w*|settiman\w*|dnevno|svakodnev\w*|redovit\w*)\b|दैनिक|प्रतिदिन|साप्ताहिक|नियमित|हर\s*दिन)/iu);
+  return out;
 }
 
 function hasOrganizationVerbSupport(source: string): boolean {
@@ -153,7 +187,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Standards / compliance / regulations — not "usklađuje aktivnosti s timom".
   if (
-    /(?:usklađenost.{0,48}(?:standard|propis|regulacij|procedur|politik)|(?:važeć\w*|važeći|važećim)\s+standard\w*|s\s+važećim\s+standardima|poštuje.{0,24}standard|osigurava\s+usklađenost|compliance|regulacij\w*|propisima|prema\s+(?:važeć\w*\s+)?standard|Sicherstellung\s+höchster\s+Standards|nach\s+(?:geltenden\s+)?Standards?|Vorschriften)/iu
+    /(?:usklađenost.{0,48}(?:standard|propis|regulacij|procedur|politik)|(?:važeć\w*|važeći|važećim)\s+standard\w*|s\s+važećim\s+standardima|poštuje.{0,24}standard|osigurava\s+usklađenost|compliance|regulacij\w*|propisima|prema\s+(?:važeć\w*\s+)?standard|Sicherstellung\s+höchster\s+Standards|nach\s+(?:geltenden\s+)?Standards?|Vorschriften|\bnorm(?:e|es)?\b|\bstandards?\b|\bnormas?\b|मानक|नियम|विनियम|معايير|标准)/iu
       .test(joined)
     && !hasStandardsSupport(source)
   ) {
@@ -163,12 +197,39 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Universal quantifiers that expand factual scope.
   if (
-    /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:stored\s+)?(?:item|good|document)\b|\bentire\s+(?:warehouse|inventory|stock)\b|\bsämtlich\w*\b|\balle\s+Prozesse\b|\bin\s+allen\s+Bereichen\b|\bunternehmensweit\b|\bdurchgängig\b)/iu
+    /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:stored\s+)?(?:item|good|document)\b|\bentire\s+(?:warehouse|inventory|stock)\b|\bsämtlich\w*\b|\balle\s+Prozesse\b|\bin\s+allen\s+Bereichen\b|\bunternehmensweit\b|\bdurchgängig\b|\btous?\s+les\b|\btoutes?\s+les\b|\bchaque\b|\bl['’]ensemble\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu
       .test(joined)
     && !hasUniversalScopeSupport(source)
   ) {
     kinds.push('universal_scope_claim');
     labels.push('universal_scope_claim');
+  }
+
+  // A relation such as “project requirements” is not interchangeable with a
+  // sourced client-needs criterion.  Keep the relation owner/argument intact;
+  // a project-requirement phrase is supported only when the same source facts
+  // explicitly contain that relation.
+  if (
+    source.trim()
+    &&
+    /(?:\b(?:exigence|exigences|besoin|besoins)\s+(?:du|de la|des)\s+projet(?:s)?\b|\bproject\s+requirements?\b|\brequirements?\s+of\s+(?:the\s+)?project\b|परियोजना(?:ओं)?\s+की\s+आवश्यकत|प्रोजेक्ट\s+की\s+आवश्यकत|project\s+requirements)/iu
+      .test(joined)
+    && !/(?:\bproject\s+(?:requirements?|needs?)\b|\b(?:requirements?|needs?)\s+of\s+(?:the\s+)?project\b|परियोजना(?:ओं)?\s+की\s+आवश्यकत|प्रोजेक्ट\s+की\s+आवश्यकत|\b(?:requisitos?|necesidades?)\s+del\s+proyecto\b|\b(?:Projektanforderungen|Anforderungen\s+des\s+Projekts|Projektbedürfnisse)\b|\b(?:requisiti|necessità|esigenze)\s+del\s+progetto\b|\b(?:requisitos|necessidades)\s+do\s+projeto\b|\b(?:exigences?|besoins?)\s+du\s+projet\b|احتياجات\s+المشروع|potrebama\s+projekta|potrebama\s+projektn(?:og|im)\s+tima|требован\p{L}*\s+проекта|プロジェクト(?:要件|ニーズ))/iu.test(source)
+  ) {
+    kinds.push('requirements_scope_expansion');
+    labels.push('requirements_scope_expansion');
+  }
+
+  // Team/project-member relations are entry-owned arguments, not generic
+  // translation filler.  A candidate may use them only when the source facts
+  // contain the same collaboration relation.
+  if (
+    /(?:\b(?:membres?\s+de\s+l['’]équipe|équipe\s+de\s+projet|project\s+team|team\s+members?|members?\s+of\s+the\s+team|miembros?\s+del\s+equipo|equipo\s+de\s+proyecto|članov?a?\s+projektn(?:og|im)\s+tima|članov?a?\s+tima|projektni\s+tim|projektn(?:og|im)\s+tima)\b|परियोजना\s+दल|टीम\s+के\s+सदस्य|فريق\s+المشروع|أعضاء\s+الفريق)/iu
+      .test(joined)
+    && !/(?:\b(?:équipe|team|project\s+team|team\s+members?|members?\s+of\s+the\s+team|miembros?\s+del\s+equipo|equipo\s+de\s+proyecto|članov?a?\s+projektn(?:og|im)\s+tima|članov?a?\s+tima|projektni\s+tim|projektn(?:og|im)\s+tima)\b|परियोजना\s+दल|टीम\s+के\s+सदस्य|فريق\s+المشروع|أعضاء\s+الفريق)/iu.test(source)
+  ) {
+    kinds.push('unsupported_modifier_expansion');
+    labels.push('unsupported_modifier_expansion');
   }
 
   if (

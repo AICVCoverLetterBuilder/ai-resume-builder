@@ -173,18 +173,61 @@ export function buildExperienceOperationSourceBundle(options: {
     || options.visibleSourceText
     || ''
   ).trim();
-  const factKind = resolveCanonicalFactAuthorityKind({
-    textareaProvenance: prov,
-    authoritativeFactSourceKind: prov?.authoritativeFactSourceKind,
-    snapshotProvenanceOrigin: snap?.provenanceOrigin,
-  });
+  // Finalization may receive a shadow experience whose description is the
+  // immutable request-time source. In that case its live fields intentionally
+  // look user-authored; the snapshot provenance remains authoritative for
+  // diagnostics and must not be relabeled as current-textarea authority.
+  const snapshotFactKindRaw = normalizeExperienceFactAuthorityKind(
+    snap?.provenanceOrigin,
+  );
+  const snapshotFactKind = snapshotFactKindRaw === 'original_user'
+    ? 'pre_ai_snapshot'
+    : snapshotFactKindRaw;
+  // A shadow entry created by finalization can be reclassified as
+  // ai_generated_user_edited even when its authoritative text is byte-for-byte
+  // the immutable request snapshot. Preserve the snapshot authority in that
+  // case; only a genuinely different fact text indicates a material edit.
+  const textareaFactsMatchSnapshot = Boolean(
+    snap?.normalizedSourceText
+    && prov?.authoritativeFactText
+    && experienceAiSourcesEquivalent(
+      prov.authoritativeFactText,
+      snap.normalizedSourceText,
+    ),
+  );
+  const snapshotLocksFacts = Boolean(
+    snapshotFactKind
+    && snapshotFactKind !== 'current_textarea'
+    && snapshotFactKind !== 'none',
+  )
+    && (
+      prov?.currentTextareaProvenance !== 'ai_generated_user_edited'
+      || textareaFactsMatchSnapshot
+    )
+    && (
+      prov?.materialUserEditDetected !== true
+      || textareaFactsMatchSnapshot
+    );
+  const factKind = snapshotLocksFacts
+    ? snapshotFactKind
+    : resolveCanonicalFactAuthorityKind({
+      textareaProvenance: prov,
+      authoritativeFactSourceKind: prov?.authoritativeFactSourceKind,
+      snapshotProvenanceOrigin: snap?.provenanceOrigin,
+    });
   const authKindRaw = (
-    normalizeExperienceFactAuthorityKind(prov?.authoritativeFactSourceKind)
+    (snapshotLocksFacts ? snapshotFactKind : null)
+    || normalizeExperienceFactAuthorityKind(prov?.authoritativeFactSourceKind)
     || factKind
   );
   const matches = experienceFactAuthorityKindsEquivalent(factKind, authKindRaw);
   const visibleSnap = captureExperienceRequestVisibleComparisonSnapshot({
-    textareaProvenance: prov,
+    textareaProvenance: snap?.visibleComparisonProvenance
+      ? null
+      : prov,
+    currentTextareaProvenance: snap?.visibleComparisonProvenance,
+    lastAiOutputHashMatched: snap?.visibleComparisonMatchedLastAiOutput,
+    materialUserEditDetected: snap?.visibleComparisonMaterialUserEditDetected,
   });
   const preAiText = (prov?.authoritativeFactText || '').trim();
   const lastHash = options.exp?.aiOutputProvenance?.lastAiOutputNormalizedHash || null;

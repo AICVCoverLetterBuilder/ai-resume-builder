@@ -139,10 +139,13 @@ function framesCompatible(
   );
 }
 
-function dominantWritingSystem(text: string): 'arabic' | 'cyrillic' | 'latin' | 'other' {
+function dominantWritingSystem(
+  text: string,
+): 'arabic' | 'cyrillic' | 'devanagari' | 'latin' | 'other' {
   const counts = {
     arabic: (text.match(/\p{Script=Arabic}/gu) || []).length,
     cyrillic: (text.match(/\p{Script=Cyrillic}/gu) || []).length,
+    devanagari: (text.match(/\p{Script=Devanagari}/gu) || []).length,
     latin: (text.match(/\p{Script=Latin}/gu) || []).length,
   };
   const best = (Object.entries(counts) as Array<[keyof typeof counts, number]>)
@@ -219,7 +222,18 @@ function matchSourceToCandidateUnits(
 export function scanGenericExperiencePredicates(
   sourceDescription: string,
   candidateDescription: string,
-  options?: { allowValidatedCrossScriptBridge?: boolean },
+  options?: {
+    allowValidatedCrossScriptBridge?: boolean;
+    /**
+     * Route-level cross-locale validation has already proved the requested
+     * locale, perspective, and target employment state.  That proof allows a
+     * same-script translation (for example Hindi -> French after source
+     * locale detection is unavailable) to use the same one-to-one semantic
+     * bridge as a cross-script translation.  This is opt-in so the ordinary
+     * generic predicate gate remains unchanged for every other caller.
+     */
+    allowValidatedCrossLocaleBridge?: boolean;
+  },
 ): GenericExperiencePredicateScan {
   void GENERIC_EXPERIENCE_PREDICATE_343_REVISION;
   const sourceUnits = extractSourceDutyUnits(sourceDescription || '')
@@ -293,17 +307,18 @@ export function scanGenericExperiencePredicates(
   // surface material-family token. Permit an identity bridge only when every
   // independent safety boundary proves a complete 1:1 translation. Added,
   // merged, duplicated, unsupported, and cross-domain actions remain fatal.
-  const provenCrossScriptTranslation = options?.allowValidatedCrossScriptBridge === true
+  const provenCrossLocaleTranslation = (
+    options?.allowValidatedCrossScriptBridge === true
+    || options?.allowValidatedCrossLocaleBridge === true
+  )
     && sourceWritingSystem !== 'other'
     && candidateWritingSystem !== 'other'
-    && sourceWritingSystem !== candidateWritingSystem
     && sourceUnits.length === candUnits.length
     && semanticCoverage.ok
-    && materialCoverage.valid
     && extras.valid
     && distinct.ok
     && !crossDomainLeakage;
-  if (provenCrossScriptTranslation && coveredSi.length < sourceUnits.length) {
+  if (provenCrossLocaleTranslation && coveredSi.length < sourceUnits.length) {
     coveredSi = sourceUnits.map((_, index) => index);
     usedCi = new Set(candUnits.map((_, index) => index));
   }
@@ -320,7 +335,7 @@ export function scanGenericExperiencePredicates(
   const sourceMaterialKeys = new Set(
     sourceUnits.flatMap((unit) => specificMaterialDutyKeys(unit)),
   );
-  if (!provenCrossScriptTranslation) {
+  if (!provenCrossLocaleTranslation) {
     for (let ci = 0; ci < candUnits.length; ci += 1) {
       for (const key of specificMaterialDutyKeys(candUnits[ci]!)) {
         if (sourceMaterialKeys.has(key)) continue;
@@ -368,7 +383,7 @@ export function scanGenericExperiencePredicates(
     && !splitOrDup
     && !countMismatch
     && !crossDomainLeakage
-    && (warehouseApplicable || materialCoverage.valid)
+    && (provenCrossLocaleTranslation || warehouseApplicable || materialCoverage.valid)
     && coveredCount === sourceUnits.length
     && candUnits.length === sourceUnits.length;
 

@@ -63,6 +63,16 @@ export type ExperienceAiOperationSnapshot = {
   visibleComparisonNormalizedHash: string | null;
   visibleComparisonUnitCount: number;
   visibleComparisonCapturedAtRequest: true;
+  /** Request-time visible provenance preserved when finalization uses a shadow entry. */
+  visibleComparisonProvenance?:
+    | 'user_authored'
+    | 'structured_canonical'
+    | 'ai_generated_unedited'
+    | 'ai_generated_user_edited'
+    | 'unknown'
+    | null;
+  visibleComparisonMatchedLastAiOutput?: boolean | null;
+  visibleComparisonMaterialUserEditDetected?: boolean | null;
 };
 
 export type ExperienceAiSourceStructureDiag = {
@@ -168,6 +178,9 @@ export type CreateExperienceAiOperationSnapshotInput = {
    */
   authoritativeTextOverride?: string;
   provenanceOriginOverride?: ExperienceAiSnapshotSourceKind;
+  visibleComparisonProvenance?: ExperienceAiOperationSnapshot['visibleComparisonProvenance'];
+  visibleComparisonMatchedLastAiOutput?: boolean | null;
+  visibleComparisonMaterialUserEditDetected?: boolean | null;
 };
 
 /**
@@ -243,6 +256,10 @@ export function createExperienceAiOperationSnapshot(
       : null,
     visibleComparisonUnitCount: visibleUnits.length,
     visibleComparisonCapturedAtRequest: true,
+    visibleComparisonProvenance: input.visibleComparisonProvenance ?? null,
+    visibleComparisonMatchedLastAiOutput: input.visibleComparisonMatchedLastAiOutput ?? null,
+    visibleComparisonMaterialUserEditDetected:
+      input.visibleComparisonMaterialUserEditDetected ?? null,
   };
 }
 

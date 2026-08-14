@@ -230,6 +230,38 @@ import {
 
 const emptyCV = createEmptyCv;
 
+/** Keep recovery diagnostics typed and privacy-safe; never serialize server prose. */
+function normalizeRecoveryRejectionReason(
+  data: { code?: unknown; error?: unknown } | null | undefined,
+  response: { ok: boolean; status: number },
+): string {
+  const code = typeof data?.code === 'string' ? data.code.trim() : '';
+  if (/^[a-z][a-z0-9_]{2,63}$/u.test(code)) return code;
+  if (!response.ok) {
+    if (response.status === 422) return 'recovery_validation_failed';
+    if (response.status >= 400 && response.status <= 599) return `recovery_http_${response.status}`;
+  }
+  return response.ok ? 'recovery_empty_candidate' : 'recovery_request_failed';
+}
+
+function recoveryCandidateMetadata(text: string): {
+  recoveryCandidateHash: string | null;
+  recoveryCandidateUnitCount: number;
+  recoveryCandidateUnitHashes: string[];
+} {
+  const units = text
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/^\s*(?:[•*-]|\d+[.)])\s*/u, '').replace(/\s+/gu, ' ').trim())
+    .filter(Boolean);
+  return {
+    recoveryCandidateHash: text.trim()
+      ? fingerprintText(text.replace(/\s+/gu, ' ').trim())
+      : null,
+    recoveryCandidateUnitCount: units.length,
+    recoveryCandidateUnitHashes: units.map((unit) => fingerprintText(unit)),
+  };
+}
+
 const emptyExp = (): WorkExperience => ({
   id: crypto.randomUUID(),
   company: '',
@@ -1863,6 +1895,9 @@ export default function CVBuilderPage() {
           ) as 'canonicalDescription' | 'originalUserDescription',
         }
         : {}),
+      visibleComparisonProvenance: textareaProvenance.currentTextareaProvenance,
+      visibleComparisonMatchedLastAiOutput: textareaProvenance.lastAiOutputHashMatched,
+      visibleComparisonMaterialUserEditDetected: textareaProvenance.materialUserEditDetected,
     });
     const liveSourceEmpty = !operationSnapshot.liveRawText.trim();
 
@@ -2356,11 +2391,10 @@ export default function CVBuilderPage() {
               && !recoveryResult.data?.error,
             );
             if (!recoveryCandidatePresent) {
-              recoveryRejectionReasons = [
-                recoveryResult.data?.code
-                  || recoveryResult.data?.error
-                  || (recoveryResult.response.ok ? 'recovery_empty_candidate' : 'recovery_http_error'),
-              ];
+              recoveryRejectionReasons = [normalizeRecoveryRejectionReason(
+                recoveryResult.data,
+                recoveryResult.response,
+              )];
               recoveryCandidateText = '';
             }
           } catch {
@@ -2386,6 +2420,7 @@ export default function CVBuilderPage() {
           recoveryAccepted,
           recoveryRejectionReasons,
           recoverySelected,
+          ...recoveryCandidateMetadata(recoveryCandidateText),
         });
       }
 
@@ -2487,7 +2522,7 @@ export default function CVBuilderPage() {
           recoveryRejectionReasons,
           finalCandidateSource: finalizerAccepted
             ? 'server_repair'
-            : (finalizedBullets.diagnostics?.finalCandidateSource as string | undefined) || 'none',
+            : 'none',
         });
       }
       if (providerFailureRecovery) {
@@ -2497,11 +2532,16 @@ export default function CVBuilderPage() {
           providerResponseKind: 'error',
           apiResponseKind: 'error',
           providerAccepted: false,
-          providerValidationApplicable: null,
-          providerRequiredFactCount: null,
-          providerCoveredFactCount: null,
-          providerUncoveredFactIdentityHashes: [],
+           providerValidationApplicable: null,
+           providerBulletCount: null,
+           providerRequiredFactCount: null,
+           providerCoveredFactCount: null,
+           providerUncoveredFactCount: null,
+           providerUncoveredFactIdentityHashes: [],
           providerPredicateValidationApplicable: null,
+          providerSourceUnitPredicateCoveragePassed: null,
+          providerLocalePurityPassed: null,
+          providerSemanticCoveragePassed: null,
           providerCoverageCount: null,
           providerRejectionReasons: [providerFailureRecovery.code],
           providerRejectionStage: 'api_response_received',
@@ -2612,12 +2652,17 @@ export default function CVBuilderPage() {
           providerResponseKind: 'error',
           apiResponseKind: 'error',
           providerAccepted: false,
-          providerValidationApplicable: null,
-          providerRequiredFactCount: null,
-          providerCoveredFactCount: null,
-          providerUncoveredFactIdentityHashes: [],
-          providerPredicateValidationApplicable: null,
-          providerCoverageCount: null,
+           providerValidationApplicable: null,
+           providerBulletCount: null,
+           providerRequiredFactCount: null,
+           providerCoveredFactCount: null,
+           providerUncoveredFactCount: null,
+           providerUncoveredFactIdentityHashes: [],
+           providerPredicateValidationApplicable: null,
+           providerSourceUnitPredicateCoveragePassed: null,
+           providerLocalePurityPassed: null,
+           providerSemanticCoveragePassed: null,
+           providerCoverageCount: null,
           providerRejectionReasons: [providerFailureRecovery.code],
           providerRejectionStage: 'api_response_received',
           clientDeterministicFallbackReason:
@@ -2631,7 +2676,7 @@ export default function CVBuilderPage() {
           recoverySelected,
           finalCandidateSource: recoveryAccepted
             ? 'server_repair'
-            : (finalizedBullets.diagnostics?.finalCandidateSource as string | undefined) || 'none',
+            : 'none',
         });
       }
       // Re-assert stable clicked entry targeting after finalize (never inherit prior card).
@@ -3098,11 +3143,16 @@ export default function CVBuilderPage() {
           providerResponseKind: 'error' as const,
           apiResponseKind: 'error' as const,
           providerAccepted: false,
-          providerValidationApplicable: null,
-          providerRequiredFactCount: null,
-          providerCoveredFactCount: null,
-          providerUncoveredFactIdentityHashes: [],
+           providerValidationApplicable: null,
+           providerBulletCount: null,
+           providerRequiredFactCount: null,
+           providerCoveredFactCount: null,
+           providerUncoveredFactCount: null,
+           providerUncoveredFactIdentityHashes: [],
           providerPredicateValidationApplicable: null,
+          providerSourceUnitPredicateCoveragePassed: null,
+          providerLocalePurityPassed: null,
+          providerSemanticCoveragePassed: null,
           providerCoverageCount: null,
           providerRejectionStage: 'api_response_received',
           providerRejectionReasons: [providerFailureRecovery.code],
@@ -3127,10 +3177,12 @@ export default function CVBuilderPage() {
           providerResponseKind: 'error',
           apiResponseKind: 'error',
           providerAccepted: false,
-          providerValidationApplicable: null,
-          providerRequiredFactCount: null,
-          providerCoveredFactCount: null,
-          providerUncoveredFactIdentityHashes: [],
+           providerValidationApplicable: null,
+           providerBulletCount: null,
+           providerRequiredFactCount: null,
+           providerCoveredFactCount: null,
+           providerUncoveredFactCount: null,
+           providerUncoveredFactIdentityHashes: [],
           providerPredicateValidationApplicable: null,
           providerCoverageCount: null,
           providerRejectionStage: 'api_response_received',

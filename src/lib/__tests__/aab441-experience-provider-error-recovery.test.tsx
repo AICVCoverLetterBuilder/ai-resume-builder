@@ -50,7 +50,7 @@ function recoveryError(status = 422): MockApiResponse {
 
 const SAFE_FRENCH_RECOVERY = formatExperienceBullets([
   'Créait des supports graphiques pour les médias imprimés et numériques.',
-  'Développait des concepts de design visuel selon les besoins des clients et les exigences du projet.',
+  'Développait des concepts de design visuel selon les besoins des clients.',
   'Examinait les matériaux de design et les projets de design, puis vérifiait la qualité des rendus finaux.',
 ]);
 

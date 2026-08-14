@@ -336,7 +336,7 @@ export type ExperienceAiDiagnosticTrace = {
   serverRepairAttempted: boolean;
   serverRepairSelected: boolean;
   serverRepairSource: 'api_server_repair' | null;
-  providerBulletCount: number;
+  providerBulletCount: number | null;
   providerBulletScripts: ExperienceScriptClass[];
   providerLocaleValidationReason: string | null;
   requiredFactCount: number;
@@ -345,6 +345,7 @@ export type ExperienceAiDiagnosticTrace = {
   /** Provider-candidate coverage (retained after fallback; never overwritten by final). */
   providerRequiredFactCount?: number | null;
   providerCoveredFactCount?: number | null;
+  providerUncoveredFactCount?: number | null;
   providerUncoveredFactIdentityHashes?: string[];
   providerAccepted?: boolean | null;
   providerRejectionStage?: string | null;
@@ -368,7 +369,7 @@ export type ExperienceAiDiagnosticTrace = {
     coverageRequiredCount?: number | null;
     coverageCoveredCount?: number | null;
     uncoveredFactIdentityHashes?: string[];
-    unsupportedClaimCount?: number;
+    unsupportedClaimCount?: number | null;
     unsupportedClaimKinds?: string[];
     rejectionStage?: string | null;
     rejectionReasons?: string[];
@@ -447,6 +448,9 @@ export type ExperienceAiDiagnosticTrace = {
   providerSourceUnitPredicateCoveragePassed: boolean | null;
   /** False means provider-phase predicate evidence is intentionally N/A. */
   providerPredicateValidationApplicable: boolean | null;
+  /** Provider-phase locale/semantic evidence is N/A when the server rejected before validation. */
+  providerLocalePurityPassed: boolean | null;
+  providerSemanticCoveragePassed: boolean | null;
   repairCandidatePredicateIdentityCount: number;
   repairCoordinatedPredicateExpansionDetected: boolean;
   repairSourceUnitPredicateCoveragePassed: boolean | null;
@@ -476,6 +480,10 @@ export type ExperienceAiDiagnosticTrace = {
   recoveryAccepted?: boolean | null;
   recoveryRejectionReasons?: string[] | null;
   recoverySelected?: boolean | null;
+  /** Hash-only recovery candidate metadata; never raw server/provider prose. */
+  recoveryCandidateHash?: string | null;
+  recoveryCandidateUnitCount?: number | null;
+  recoveryCandidateUnitHashes?: string[];
   finalOutcomeReason?: string | null;
   finalCandidatePresent?: boolean | null;
   finalCandidatePredicateValidationApplicable?: boolean | null;
@@ -1243,6 +1251,8 @@ export class ExperienceAiDiagnosticSession {
       providerCoordinatedPredicateExpansionDetected: false,
       providerSourceUnitPredicateCoveragePassed: null,
       providerPredicateValidationApplicable: null,
+      providerLocalePurityPassed: null,
+      providerSemanticCoveragePassed: null,
       repairCandidatePredicateIdentityCount: 0,
       repairCoordinatedPredicateExpansionDetected: false,
       repairSourceUnitPredicateCoveragePassed: null,
@@ -3103,46 +3113,78 @@ export class ExperienceAiDiagnosticSession {
       || providerEvidencePresent
     );
     const providerPresent = providerWasAttempted && providerEvidencePresent;
-    const serverRepairAttempted = this.draft.serverRepairAttempted === true;
-    const serverRepairSelected = this.draft.serverRepairSelected === true;
+    const recoveryAttempted = this.draft.recoveryAttempted === true;
+    const recoveryCandidatePresent = this.draft.recoveryCandidatePresent === true;
+    const serverRepairAttempted = this.draft.serverRepairAttempted === true || recoveryAttempted;
+    const serverRepairSelected = (
+      this.draft.serverRepairSelected === true
+      && (this.draft.recoverySelected !== false || !recoveryAttempted)
+    );
+    // AAB434-era server-repair callers predate the explicit recoveryCandidatePresent
+    // field. Preserve their selected repair lineage while keeping new recovery
+    // attempts truthful when no candidate was returned.
+    const lineageRecoveryCandidatePresent = recoveryCandidatePresent
+      || (serverRepairSelected && !recoveryAttempted);
     if (serverRepairAttempted) {
-      // The raw provider text was rejected and repaired by the API. It is not
-      // serialized to the client, so retain only its non-PII phase outcome.
-      lineage.push({
-        candidateKind: 'server_provider_raw',
-        present: true,
-        accepted: false,
-        rejectionStage: 'server_validation_repair',
-        rejectionReasons: ['server_repair_selected'],
-      });
+      // The primary provider response is never serialized.  Only an actually
+      // returned recovery candidate gets a hash-only lineage record; an HTTP
+      // error/empty recovery is represented as absent rather than as a
+      // misleading "server_repair_selected" raw candidate.
+      if (lineageRecoveryCandidatePresent) {
+        lineage.push({
+          candidateKind: 'server_provider_raw',
+          present: true,
+          accepted: false,
+          rejectionStage: 'server_validation_repair',
+          rejectionReasons: ['server_repair_candidate_rejected'],
+        });
+      }
+      const recoveryHash = this.draft.recoveryCandidateHash
+        ?? (serverRepairSelected && text ? fingerprintText(text) : null);
+      const recoveryUnitCount = this.draft.recoveryCandidateUnitCount
+        ?? (serverRepairSelected ? bullets.length : 0);
+      const recoveryUnitHashes = this.draft.recoveryCandidateUnitHashes
+        ?? (serverRepairSelected
+          ? bullets.map((bullet) => fingerprintText(bullet.replace(/\s+/g, ' ').trim()))
+          : []);
       lineage.push({
         candidateKind: 'server_repair',
-        present: true,
+        present: lineageRecoveryCandidatePresent,
         accepted: serverRepairSelected && Boolean(finalized.countedAsSuccess),
-        normalizedHash: serverRepairSelected && text ? fingerprintText(text) : null,
-        unitCount: serverRepairSelected ? bullets.length : 0,
-        unitHashes: serverRepairSelected
-          ? bullets.map((bullet) => fingerprintText(bullet.replace(/\s+/g, ' ').trim()))
+        normalizedHash: recoveryHash,
+        unitCount: recoveryUnitCount,
+        unitHashes: recoveryUnitHashes,
+        coverageRequiredCount: lineageRecoveryCandidatePresent
+          ? (serverRepairSelected ? finalRequired : null)
+          : null,
+        coverageCoveredCount: lineageRecoveryCandidatePresent
+          ? (serverRepairSelected ? finalCovered : null)
+          : null,
+        uncoveredFactIdentityHashes: lineageRecoveryCandidatePresent && serverRepairSelected
+          ? [...finalUncovered]
           : [],
-        coverageRequiredCount: finalRequired,
-        coverageCoveredCount: finalCovered,
-        uncoveredFactIdentityHashes: [...finalUncovered],
-        unsupportedClaimCount: serverRepairSelected
+        unsupportedClaimCount: lineageRecoveryCandidatePresent && serverRepairSelected
           ? Number(diag.finalUnsupportedClaimCount ?? 0)
-          : Number(diag.unsupportedClaimCount ?? 0),
-        unsupportedClaimKinds: serverRepairSelected
+          : null,
+        unsupportedClaimKinds: lineageRecoveryCandidatePresent && serverRepairSelected
           ? (Array.isArray(diag.finalUnsupportedClaimKinds)
             ? diag.finalUnsupportedClaimKinds.map(String)
             : [])
           : [],
-        rejectionStage: serverRepairSelected ? null : (reason || 'server_repair_rejected'),
+        rejectionStage: serverRepairSelected ? null : (reason || 'server_repair_candidate_rejected'),
         rejectionReasons: serverRepairSelected
           ? []
-          : ([reason || 'server_repair_rejected'].filter(Boolean) as string[]),
-        localeValidationPassed: !localeFail,
-        tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? diag.tenseMode),
-        perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed),
-        meaningfulChangeDetected: Boolean(diag.meaningfulChangeDetected),
+          : ([reason || 'server_repair_candidate_rejected'].filter(Boolean) as string[]),
+        localeValidationPassed: lineageRecoveryCandidatePresent ? !localeFail : null,
+        tenseValidationPassed: lineageRecoveryCandidatePresent
+          ? Boolean(diag.tenseValidationPassed ?? diag.tenseMode)
+          : null,
+        perspectiveValidationPassed: lineageRecoveryCandidatePresent
+          ? Boolean(diag.perspectiveValidationPassed)
+          : null,
+        meaningfulChangeDetected: lineageRecoveryCandidatePresent
+          ? Boolean(diag.meaningfulChangeDetected)
+          : null,
       });
     }
     if (!serverRepairAttempted
