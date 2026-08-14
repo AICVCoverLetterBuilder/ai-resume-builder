@@ -325,4 +325,45 @@ describe('AAB442 real UI route recovery', () => {
     expect(diag?.canonicalExperienceDecisionAllowsApply).toBe(false);
     expect(diag?.canonicalExperienceDecisionAllowsUsage).toBe(false);
   }, 30000);
+
+  it('routes a parsed HTTP-200 provider candidate rejected by strict validation through one recovery', async () => {
+    const rejectedProvider = EXTRA_PROJECT_REQUIREMENTS;
+    const recovery = SAFE_FRENCH;
+    const responses = [
+      { data: { result: rejectedProvider }, response: { ok: true, status: 200, headers: { get: () => null } } },
+      { data: { result: recovery }, response: { ok: true, status: 200, headers: { get: () => null } } },
+    ];
+    // The UI handler remains real; this isolates the HTTP-200 provider
+    // rejection response at the API boundary while exercising the shared
+    // finalizer, recovery, diagnostics and transactional apply path.
+    routePost.mockReset();
+    routePost.mockImplementation(async () => {
+      const next = responses.shift();
+      if (!next) throw new Error('unexpected provider/recovery request');
+      return new Response(JSON.stringify(next.data), { status: next.response.status });
+    });
+    const Page = (await import('@/app/cv-builder/page')).default;
+    render(<Page />);
+    fireEvent.click(screen.getByRole('button', { name: translations.fr.cv.experience }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(translations.fr.cv.aiBullets, 'i') }));
+    await waitFor(() => expect(routePost).toHaveBeenCalledTimes(2), { timeout: 20000 });
+    await waitFor(() => expect(state.writes).toHaveLength(1), { timeout: 20000 });
+    const diag = getLatestExperienceAiDiagnostic();
+    expect(state.usage).toBe(35);
+    expect(diag?.providerHttpStatus).toBe(200);
+    expect(diag?.providerAccepted).toBe(false);
+    expect(diag?.providerRejectionStage).toMatch(/provider|validation/);
+    expect(diag?.recoveryAttempted).toBe(true);
+    expect(diag?.recoveryHttpStatus).toBe(200);
+    expect(diag?.recoveryAccepted).toBe(true);
+    expect(diag?.recoverySelected).toBe(true);
+    expect(diag?.finalCandidateSource).toBe('server_repair');
+    expect(diag?.finalRequiredFactCount).toBe(3);
+    expect(diag?.finalCoveredFactCount).toBe(3);
+    expect(diag?.diagnosticInvariantCheckPassed).toBe(true);
+    expect(diag?.diagnosticCompletenessPassed).toBe(true);
+    expect(diag?.privacyCheckPassed).toBe(true);
+    expect(diag?.providerCoveredFactCount).toBe(3);
+    expect(routePost).toHaveBeenCalledTimes(2);
+  }, 30000);
 });

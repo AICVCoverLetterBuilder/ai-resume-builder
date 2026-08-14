@@ -49,6 +49,7 @@ import {
 import {
   copyExperienceAiDiagnosticsToClipboard,
   ExperienceAiDiagnosticSession,
+  type ExperienceAiDiagnosticTrace,
 } from '@/lib/cv-experience-ai-diagnostics';
 import { SummaryAiDiagnosticSession, resolveAuthoritativeVisibleSummaryText } from '@/lib/cv-summary-ai-diagnostics';
 import { resolveSummaryFinalizeClientOutcome } from '@/lib/cv-summary-noop-ui';
@@ -2299,6 +2300,69 @@ export default function CVBuilderPage() {
       let recoveryAccepted: boolean | null = null;
       let recoverySelected = false;
       let recoveryRejectionReasons: string[] = [];
+      let rejectedProviderDiagnostics: Partial<ExperienceAiDiagnosticTrace> | null = null;
+      const isRecoverableExperienceValidationReason = (reason: string): boolean => (
+        Boolean(reason)
+        && !/(?:authorization|forbidden|race|entry[_-]?mismatch|stale|timeout|client_abort|cancel)/i.test(reason)
+        && /(?:validation|predicate|fact|coverage|locale|tense|perspective|unsupported|scope|duty|material)/i.test(reason)
+      );
+      const attemptProviderErrorRecovery = async (reason: string): Promise<void> => {
+        if (recoveryAttempted || !isRecoverableExperienceValidationReason(reason)) return;
+        recoveryAttempted = true;
+        const recoveryPrompt = [
+          'EXPERIENCE PROVIDER-ERROR RECOVERY REQUIRED.',
+          `Produce a fresh, safe ${requestedLocale} Experience result after the previous provider validation error.`,
+          'Use ONLY the immutable SOURCE FACTS below as authority. The previous visible textarea is not a fact source.',
+          'Preserve the exact entry identity, employment state, gender/perspective and every source duty.',
+          'Preserve material/media, purpose/condition, review/quality and project/team relations exactly where stated.',
+          'Do not add tools, systems, metrics, leadership, frequency, universal scope or responsibility escalation.',
+          'Return one bullet per source fact, in source order, in the requested locale and employment tense.',
+          `Employment state: ${exp.isPresent ? 'current/present' : 'completed/past'}.`,
+          cvRef.current.personal.gender
+            ? `Gender/perspective: ${cvRef.current.personal.gender}.`
+            : '',
+          'SOURCE FACTS (immutable):',
+          (factAuthorityForPreflight || aiGrounding.sourceDescription).slice(0, 4000),
+        ].filter(Boolean).join('\n');
+        try {
+          const recoveryResult = await apiFetch<{
+            result?: string;
+            error?: string;
+            code?: string;
+            repairAttempted?: boolean;
+            fallbackUsed?: boolean;
+          }>('/api/generate', {
+            body: {
+              ...requestBody,
+              noopRepair: true,
+              previousOutput: '',
+              repairPromptHint: recoveryPrompt,
+            },
+            signal: controller.signal,
+          });
+          recoveryHttpStatus = recoveryResult.response.status;
+          recoveryCandidateText = (recoveryResult.data?.result || '').trim();
+          recoveryCandidatePresent = Boolean(
+            recoveryResult.response.ok
+            && recoveryCandidateText
+            && !recoveryResult.data?.error,
+          );
+          if (!recoveryCandidatePresent) {
+            recoveryRejectionReasons = [normalizeRecoveryRejectionReason(
+              recoveryResult.data,
+              recoveryResult.response,
+            )];
+            recoveryCandidateText = '';
+          }
+        } catch {
+          recoveryRejectionReasons = ['recovery_request_failed'];
+          recoveryCandidateText = '';
+        }
+        if (!recoveryCandidatePresent) {
+          recoveryAccepted = false;
+          recoverySelected = false;
+        }
+      };
       if (!res.ok || bulletsData?.error) {
         if (res.status === 403) {
           const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
@@ -2342,69 +2406,12 @@ export default function CVBuilderPage() {
           code: payload.code || 'provider_http_failure',
           payload,
         };
-        // A validation rejection is recoverable once, through the same
-        // server-repair endpoint used for rejected provider candidates. The
-        // immutable source remains the only authority; the prior textarea is
-        // sent only as visible-comparison context and never as source facts.
         const recoverableValidationFailure = res.status === 422
           || /(?:generation|provider).*validation|validation_failed/i.test(
             payload.code || '',
           );
         if (recoverableValidationFailure) {
-          recoveryAttempted = true;
-          const recoveryPrompt = [
-            'EXPERIENCE PROVIDER-ERROR RECOVERY REQUIRED.',
-            `Produce a fresh, safe ${requestedLocale} Experience result after the previous provider validation error.`,
-            'Use ONLY the immutable SOURCE FACTS below as authority. The previous visible textarea is not a fact source.',
-            'Preserve the exact entry identity, employment state, gender/perspective and every source duty.',
-            'Preserve material/media, purpose/condition, review/quality and project/team relations exactly where stated.',
-            'Do not add tools, systems, metrics, leadership, frequency, universal scope or responsibility escalation.',
-            'Return one bullet per source fact, in source order, in the requested locale and employment tense.',
-            `Employment state: ${exp.isPresent ? 'current/present' : 'completed/past'}.`,
-            cvRef.current.personal.gender
-              ? `Gender/perspective: ${cvRef.current.personal.gender}.`
-              : '',
-            'SOURCE FACTS (immutable):',
-            (factAuthorityForPreflight || aiGrounding.sourceDescription).slice(0, 4000),
-          ].filter(Boolean).join('\n');
-          try {
-            const recoveryResult = await apiFetch<{
-              result?: string;
-              error?: string;
-              code?: string;
-              repairAttempted?: boolean;
-              fallbackUsed?: boolean;
-            }>('/api/generate', {
-              body: {
-                ...requestBody,
-                noopRepair: true,
-                previousOutput: '',
-                repairPromptHint: recoveryPrompt,
-              },
-              signal: controller.signal,
-            });
-            recoveryHttpStatus = recoveryResult.response.status;
-            recoveryCandidateText = (recoveryResult.data?.result || '').trim();
-            recoveryCandidatePresent = Boolean(
-              recoveryResult.response.ok
-              && recoveryCandidateText
-              && !recoveryResult.data?.error,
-            );
-            if (!recoveryCandidatePresent) {
-              recoveryRejectionReasons = [normalizeRecoveryRejectionReason(
-                recoveryResult.data,
-                recoveryResult.response,
-              )];
-              recoveryCandidateText = '';
-            }
-          } catch {
-            recoveryRejectionReasons = ['recovery_request_failed'];
-            recoveryCandidateText = '';
-          }
-          if (!recoveryCandidatePresent) {
-            recoveryAccepted = false;
-            recoverySelected = false;
-          }
+          await attemptProviderErrorRecovery(payload.code || 'provider_validation_failed');
         }
         bulletsData = {
           ...(bulletsData || {}),
@@ -2502,6 +2509,47 @@ export default function CVBuilderPage() {
             ? 'ai_repaired'
             : 'ai_generated',
       });
+      if (!providerFailureRecovery && !finalizedBullets.countedAsSuccess) {
+        const candidateDiagnostics = (finalizedBullets.diagnostics || {}) as Partial<ExperienceAiDiagnosticTrace>;
+        const candidateDiagnosticsUnknown = candidateDiagnostics as Record<string, unknown>;
+        rejectedProviderDiagnostics = candidateDiagnostics;
+        const providerReason = String(
+          candidateDiagnosticsUnknown.providerRejectionReason
+          || (Array.isArray(candidateDiagnostics.providerRejectionReasons)
+            ? candidateDiagnostics.providerRejectionReasons[0]
+            : '')
+          || finalizedBullets.reason
+          || candidateDiagnosticsUnknown.typedFailureReason
+          || '',
+        );
+        // A parsed HTTP-200 provider candidate can fail the same typed
+        // validation gates as a transport/422 response. Route only those
+        // recoverable validation failures through the bounded server repair;
+        // authorization, races, timeouts and entry mismatches remain terminal.
+        if (isRecoverableExperienceValidationReason(providerReason)) {
+          providerFailureRecovery = {
+            code: providerReason,
+            payload: resolveAiHttpFailure({
+              response: res,
+              body: { code: providerReason },
+            }),
+          };
+          await attemptProviderErrorRecovery(providerReason);
+          bulletsData = {
+            ...(bulletsData || {}),
+            result: recoveryCandidateText,
+            repairAttempted: Boolean(recoveryCandidateText),
+            fallbackUsed: false,
+          };
+          if (recoveryCandidatePresent) {
+            finalizedBullets = finalizeCvAiFieldForApply({
+              ...finalizeInputBase,
+              candidate: recoveryCandidateText,
+              originHint: 'ai_repaired',
+            });
+          }
+        }
+      }
       if (providerFailureRecovery && recoveryCandidatePresent) {
         const finalizerAccepted = Boolean(
           finalizedBullets.countedAsSuccess && !finalizedBullets.blocked,
@@ -2525,26 +2573,58 @@ export default function CVBuilderPage() {
             : 'none',
         });
       }
-      if (providerFailureRecovery) {
-        diagSession.patch({
-          providerHttpStatus: res.status,
-          providerAttempted: true,
-          providerResponseKind: 'error',
-          apiResponseKind: 'error',
+      const providerPhaseFields = rejectedProviderDiagnostics
+        ? {
+          providerResponseKind: 'provider' as const,
+          apiResponseKind: 'provider' as const,
           providerAccepted: false,
-           providerValidationApplicable: null,
-           providerBulletCount: null,
-           providerRequiredFactCount: null,
-           providerCoveredFactCount: null,
-           providerUncoveredFactCount: null,
-           providerUncoveredFactIdentityHashes: [],
+          providerValidationApplicable:
+            rejectedProviderDiagnostics.providerValidationApplicable ?? true,
+          providerBulletCount: rejectedProviderDiagnostics.providerBulletCount ?? null,
+          providerRequiredFactCount: rejectedProviderDiagnostics.providerRequiredFactCount ?? null,
+          providerCoveredFactCount: rejectedProviderDiagnostics.providerCoveredFactCount ?? null,
+          providerUncoveredFactCount: rejectedProviderDiagnostics.providerUncoveredFactCount ?? null,
+          providerUncoveredFactIdentityHashes:
+            Array.isArray(rejectedProviderDiagnostics.providerUncoveredFactIdentityHashes)
+              ? rejectedProviderDiagnostics.providerUncoveredFactIdentityHashes.map(String)
+              : [],
+          providerPredicateValidationApplicable:
+            rejectedProviderDiagnostics.providerPredicateValidationApplicable ?? null,
+          providerSourceUnitPredicateCoveragePassed:
+            rejectedProviderDiagnostics.providerSourceUnitPredicateCoveragePassed ?? null,
+          providerLocalePurityPassed: rejectedProviderDiagnostics.providerLocalePurityPassed ?? null,
+          providerSemanticCoveragePassed: rejectedProviderDiagnostics.providerSemanticCoveragePassed ?? null,
+          providerCoverageCount: rejectedProviderDiagnostics.providerCoverageCount ?? null,
+          providerRejectionReasons:
+            Array.isArray(rejectedProviderDiagnostics.providerRejectionReasons)
+              ? rejectedProviderDiagnostics.providerRejectionReasons.map(String)
+              : [providerFailureRecovery?.code || 'provider_validation_failed'],
+          providerRejectionStage:
+            String(rejectedProviderDiagnostics.providerRejectionStage || 'provider_validation'),
+        }
+        : {
+          providerResponseKind: 'error' as const,
+          apiResponseKind: 'error' as const,
+          providerAccepted: false,
+          providerValidationApplicable: null,
+          providerBulletCount: null,
+          providerRequiredFactCount: null,
+          providerCoveredFactCount: null,
+          providerUncoveredFactCount: null,
+          providerUncoveredFactIdentityHashes: [],
           providerPredicateValidationApplicable: null,
           providerSourceUnitPredicateCoveragePassed: null,
           providerLocalePurityPassed: null,
           providerSemanticCoveragePassed: null,
           providerCoverageCount: null,
-          providerRejectionReasons: [providerFailureRecovery.code],
+          providerRejectionReasons: [providerFailureRecovery?.code || 'provider_http_failure'],
           providerRejectionStage: 'api_response_received',
+        };
+      if (providerFailureRecovery) {
+        diagSession.patch({
+          providerHttpStatus: res.status,
+          providerAttempted: true,
+          ...providerPhaseFields,
           clientDeterministicFallbackReason:
             finalizedBullets.diagnostics?.clientDeterministicFallbackReason
             || 'provider_validation_error_recovery',
@@ -2645,26 +2725,12 @@ export default function CVBuilderPage() {
         // recordFinalizeResult intentionally mirrors any provider-candidate
         // fields exposed by the finalizer. For an HTTP/validation terminal,
         // however, no provider candidate was evaluated: keep those fields
-        // explicitly N/A and preserve the actual local fallback evidence.
+        // explicitly N/A and preserve the actual local fallback evidence. A
+        // parsed HTTP-200 candidate has evaluated provider fields instead.
         diagSession.patch({
           providerHttpStatus: res.status,
           providerAttempted: true,
-          providerResponseKind: 'error',
-          apiResponseKind: 'error',
-          providerAccepted: false,
-           providerValidationApplicable: null,
-           providerBulletCount: null,
-           providerRequiredFactCount: null,
-           providerCoveredFactCount: null,
-           providerUncoveredFactCount: null,
-           providerUncoveredFactIdentityHashes: [],
-           providerPredicateValidationApplicable: null,
-           providerSourceUnitPredicateCoveragePassed: null,
-           providerLocalePurityPassed: null,
-           providerSemanticCoveragePassed: null,
-           providerCoverageCount: null,
-          providerRejectionReasons: [providerFailureRecovery.code],
-          providerRejectionStage: 'api_response_received',
+          ...providerPhaseFields,
           clientDeterministicFallbackReason:
             finalizedBullets.diagnostics?.clientDeterministicFallbackReason
             || 'provider_validation_error_recovery',
@@ -3137,25 +3203,10 @@ export default function CVBuilderPage() {
       const experienceTraceDiagnostics = providerFailureRecovery
         ? {
           ...(finalizedBullets.diagnostics || {}),
-          // The primary provider response was rejected before provider
-          // candidate validation. Recovery evidence is local/server-repair
-          // provenance and must not be serialized as provider acceptance.
-          providerResponseKind: 'error' as const,
-          apiResponseKind: 'error' as const,
-          providerAccepted: false,
-           providerValidationApplicable: null,
-           providerBulletCount: null,
-           providerRequiredFactCount: null,
-           providerCoveredFactCount: null,
-           providerUncoveredFactCount: null,
-           providerUncoveredFactIdentityHashes: [],
-          providerPredicateValidationApplicable: null,
-          providerSourceUnitPredicateCoveragePassed: null,
-          providerLocalePurityPassed: null,
-          providerSemanticCoveragePassed: null,
-          providerCoverageCount: null,
-          providerRejectionStage: 'api_response_received',
-          providerRejectionReasons: [providerFailureRecovery.code],
+          // The primary provider response remains rejected; recovery evidence
+          // is local/server-repair provenance and must not be serialized as
+          // provider acceptance.
+          ...providerPhaseFields,
         }
         : finalizedBullets.diagnostics;
       logExperienceAiTrace({
@@ -3171,22 +3222,10 @@ export default function CVBuilderPage() {
       });
       if (providerFailureRecovery) {
         // recordVisibleApply derives provider-phase acceptance from the
-        // selected final candidate. Reassert that the primary 422 response
-        // itself was rejected; only the bounded recovery was selected.
+        // selected final candidate. Reassert that the primary response itself
+        // was rejected; only the bounded recovery was selected.
         diagSession.patch({
-          providerResponseKind: 'error',
-          apiResponseKind: 'error',
-          providerAccepted: false,
-           providerValidationApplicable: null,
-           providerBulletCount: null,
-           providerRequiredFactCount: null,
-           providerCoveredFactCount: null,
-           providerUncoveredFactCount: null,
-           providerUncoveredFactIdentityHashes: [],
-          providerPredicateValidationApplicable: null,
-          providerCoverageCount: null,
-          providerRejectionStage: 'api_response_received',
-          providerRejectionReasons: [providerFailureRecovery.code],
+          ...providerPhaseFields,
         });
       }
       diagSession.commit();

@@ -14980,6 +14980,23 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     lastRequired = coverageFail.required?.length ?? lastRequired;
   }
 
+  // A rejected provider candidate must carry the actual missing immutable fact
+  // identities even when every later deterministic fallback is also rejected.
+  // Never publish a partial provider count with an empty missing-id set.
+  if (
+    providerRequiredFactCount > providerCoveredFactCount
+    && providerUncoveredFactIdentityHashes.length === 0
+    && sourceForCoverage
+  ) {
+    const rejectedProviderCoverage = validateSourceFactIdentityCoverage(
+      sourceForCoverage,
+      input.candidate || '',
+    );
+    providerUncoveredFactIdentityHashes = rejectedProviderCoverage.missingIds.length
+      ? [...rejectedProviderCoverage.missingIds]
+      : [...rejectedProviderCoverage.requiredIds];
+  }
+
   const rejectedPurity = (candidate || '').trim()
     ? validateAiUnitLocalePurity(candidate, locale, {
       kind: 'experience_bullet',

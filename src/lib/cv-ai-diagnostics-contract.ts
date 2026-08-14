@@ -3034,6 +3034,7 @@ type ExperienceLike = {
   serverRepairSelected?: boolean | null;
   serverRepairSource?: string | null;
   providerAccepted?: boolean | null;
+  providerValidationApplicable?: boolean | null;
   finalBulletCount?: number | null;
   finalBulletScripts?: unknown[] | null;
   appVersionCode?: string | null;
@@ -3409,10 +3410,10 @@ export function checkExperienceDiagnosticInvariants(
     (trace.providerCoveredFactCount != null)
     && (trace.providerRequiredFactCount != null)
     && trace.providerCoveredFactCount < trace.providerRequiredFactCount
+    && trace.providerValidationApplicable !== false
+    && trace.providerValidationApplicable !== null
     && Array.isArray(trace.providerUncoveredFactIdentityHashes)
     && trace.providerUncoveredFactIdentityHashes.length === 0
-    && (trace.finalCandidateSource === 'deterministic_fallback'
-      || trace.clientDeterministicFallbackApplied)
   ) {
     push('provider_rejection_evidence_overwritten', {
       providerCoveredFactCount: trace.providerCoveredFactCount,
