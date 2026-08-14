@@ -3362,6 +3362,21 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           )
       )
       : null;
+    const frenchRoleTenseEvidence = v2Pd?.styleFulfillment?.frenchRoleTenseEvidence || [];
+    const frenchPredicateEvidence = v2Pd?.styleFulfillment?.frenchPredicateEvidence || [];
+    const frenchTenseEvidencePassed = requestedRewriteStyle === 'stronger'
+      ? Boolean(
+        frenchRoleTenseEvidence.length
+        && frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
+        && frenchPredicateEvidence.length
+        && frenchPredicateEvidence.every((evidence) => evidence.tenseMatch),
+      )
+      : Boolean(
+        v2Pd?.styleFulfillment?.currentTenseValidationPassed
+        && v2Pd?.styleFulfillment?.priorTenseValidationPassed
+        && v2Pd?.styleFulfillment?.finiteClauseValidationPassed
+        && !v2Pd?.styleFulfillment?.mixedTensePredicateDetected,
+      );
     const diagBase = {
       summaryV2FactIdPathActive: true,
       crossLocaleLocalizationRequired: Boolean(v2Pd?.crossLocaleLocalizationRequired),
@@ -3762,10 +3777,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ? Boolean(
           (requestedRewriteStyle !== 'stronger'
             || v2Pd?.frenchStrongerSemanticValidationPassed === true)
-          &&
-          v2Pd?.styleFulfillment?.frenchRoleTenseEvidence?.length
-          && v2Pd.styleFulfillment.frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
-          && v2Pd.styleFulfillment.frenchPredicateEvidence?.every((evidence) => evidence.tenseMatch),
+          && frenchTenseEvidencePassed,
         )
         : true,
       operationMode: v2OperationMode,
@@ -3842,10 +3854,10 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           && v2Pd?.styleFulfillment?.nativeSurfaceValidationPassed
           && v2Pd?.styleFulfillment?.grammaticalPersonValidationPassed
           && (requestedRewriteStyle !== 'stronger'
-            || (v2Pd?.styleFulfillment?.frenchRoleTenseEvidence?.length
+            || (frenchRoleTenseEvidence.length
               && v2Pd?.frenchStrongerSemanticValidationPassed === true
-              && v2Pd.styleFulfillment.frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
-              && v2Pd.styleFulfillment.frenchPredicateEvidence?.every((evidence) => (
+              && frenchRoleTenseEvidence.every((evidence) => evidence.tenseMatch)
+              && frenchPredicateEvidence.every((evidence) => (
                 evidence.tenseMatch
                 && evidence.actionIdentityPreserved
                 && evidence.responsibilityTierPreserved
@@ -3974,19 +3986,25 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         }
         : {}),
     };
-    if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason || v2DurationSemanticFailure) {
+    const frenchFinalValidationFailure = locale === 'fr'
+      && !(diagBase.tenseValidationPassed && diagBase.grammarValidationPassed);
+    if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason || v2DurationSemanticFailure || frenchFinalValidationFailure) {
       const typedFail = deV2BlockReason
         || v2DurationSemanticFailure
         || styleBlockReason
+        || (styleNoSafe ? 'style_no_safe_material_change' : null)
+        || (frenchFinalValidationFailure ? 'french_final_tense_validation_failed' : null)
         || v2.reason
         || 'summary_v2_validation_failed';
       const rejectionStage = deV2BlockReason
         ? 'summary_v2_german_preapply_completeness'
-        : (v2DurationSemanticFailure
-          ? 'summary_v2_duration_semantic_validation'
-          : (styleNoSafe || styleBlockReason
-            ? 'summary_v2_rewrite_style'
-            : 'summary_v2_manifest_validation'));
+        : (frenchFinalValidationFailure
+          ? 'summary_v2_french_tense_validation'
+          : (v2DurationSemanticFailure
+            ? 'summary_v2_duration_semantic_validation'
+            : (styleNoSafe || styleBlockReason
+              ? 'summary_v2_rewrite_style'
+              : 'summary_v2_manifest_validation')));
       return {
         blocked: true,
         reason: typedFail,
@@ -4002,6 +4020,7 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           grammarValidationPassed: deV2Completeness
             ? deV2Completeness.germanControlledCaseGrammarPassed
             : false,
+          tenseValidationPassed: false,
           slotValidationPassed: false,
           finalCandidateSource: 'none',
           deterministicAccepted: false,

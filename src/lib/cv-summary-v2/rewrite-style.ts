@@ -1617,6 +1617,9 @@ function compressLocaleDurationToCompact(text: string, locale: Locale): string {
       .replace(/Je dispose d['\u2019]environ/giu, "J'ai environ")
       .replace(/Je dispose d['\u2019]/giu, "J'ai ")
       .replace(/,\s+où je\s+/giu, ', ')
+      // A contracted first-person subject remains finite after the connector
+      // is removed; do not reinsert a second subject bridge for `où j'…`.
+      .replace(/,\s+où\s+(?=j['\u2019])/giu, ', ')
       .replace(/\bdans (?:ce|un) rôle(?:\s+précédent)?\s*/giu, '');
   } else if (locale === 'es') {
     t = t
@@ -1674,6 +1677,15 @@ function compressLocaleDurationToCompact(text: string, locale: Locale): string {
       .replace(/の実務経験があります/gu, 'の経験があります');
   }
   return t.replace(/\s+/g, ' ').trim();
+}
+
+/** Keep the finite duty subject attached when Shorter compacts a completed French role. */
+function restoreFrenchCompletedDutyBridge(text: string, locale: Locale): string {
+  if (locale !== 'fr') return text;
+  return text.replace(
+    /((?:Je travaille actuellement|J'ai)\b[^.!?]*?\b(?:comme|en tant que)\b[^,.!?]+\bchez\b[^,.!?]+,\s+)(?!où\s+(?:je\b|j['\u2019])|j['\u2019])/giu,
+    '$1où je ',
+  );
 }
 
 function shortenLocaleRoleOpeners(text: string, locale: Locale): string {
@@ -1797,6 +1809,7 @@ function buildLocaleShellStyled(
   if (style === 'shorter') {
     let t = stripSharedSoftFillers(base, locale);
     t = compressLocaleDurationToCompact(t, locale);
+    t = restoreFrenchCompletedDutyBridge(t, locale);
     t = shortenLocaleRoleOpeners(t, locale);
     // Real clause compression: merge em-dash duty lists into natural and-joins.
     t = compressDutyEmDashList(t, locale);
