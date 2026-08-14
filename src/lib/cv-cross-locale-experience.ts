@@ -1422,6 +1422,10 @@ export function validateCrossLocaleSemanticCoverage(
   requiredCount: number;
   coveredCount: number;
   uncoveredCount: number;
+  /** Source-unit indexes paired 1:1 with a candidate unit by the typed bridge. */
+  coveredSourceIndexes: number[];
+  /** Source-unit indexes that have no typed cross-locale candidate match. */
+  uncoveredSourceIndexes: number[];
   semanticArgumentCoveragePassed: boolean;
   addedSemanticArgumentCount: number;
   addedSemanticArgumentKinds: ExperienceSemanticArgumentKind[];
@@ -1441,6 +1445,8 @@ export function validateCrossLocaleSemanticCoverage(
       requiredCount: 0,
       coveredCount: 0,
       uncoveredCount: 0,
+      coveredSourceIndexes: [],
+      uncoveredSourceIndexes: [],
       semanticArgumentCoveragePassed: true,
       addedSemanticArgumentCount: 0,
       addedSemanticArgumentKinds: [],
@@ -1453,6 +1459,8 @@ export function validateCrossLocaleSemanticCoverage(
       requiredCount,
       coveredCount: 0,
       uncoveredCount: requiredCount,
+      coveredSourceIndexes: [],
+      uncoveredSourceIndexes: srcUnits.map((_, index) => index),
       semanticArgumentCoveragePassed: false,
       addedSemanticArgumentCount: 0,
       addedSemanticArgumentKinds: [],
@@ -1464,6 +1472,7 @@ export function validateCrossLocaleSemanticCoverage(
   const srcFrames = srcUnits.map((u) => classifyActionFrame(u));
   const candFrames = bullets.map((b) => classifyActionFrame(b));
   const usedB = new Set<number>();
+  const coveredSourceIndexes: number[] = [];
   let covered = 0;
   const warehouseSource = sourceHasWarehouseDomainApplicability(sourceDescription);
   for (let si = 0; si < srcFrames.length; si += 1) {
@@ -1497,9 +1506,13 @@ export function validateCrossLocaleSemanticCoverage(
     if (matched >= 0) {
       usedB.add(matched);
       covered += 1;
+      coveredSourceIndexes.push(si);
     }
   }
   const uncoveredCount = requiredCount - covered;
+  const uncoveredSourceIndexes = srcUnits
+    .map((_, index) => index)
+    .filter((index) => !coveredSourceIndexes.includes(index));
   // Cross-locale lexical overlap cannot prove that a qualifier belongs to the
   // same source fact.  Run the typed unsupported-argument scan as a second,
   // independent boundary: predicate/frame coverage may be complete while a
@@ -1556,6 +1569,8 @@ export function validateCrossLocaleSemanticCoverage(
     requiredCount,
     coveredCount: covered,
     uncoveredCount,
+    coveredSourceIndexes,
+    uncoveredSourceIndexes,
     semanticArgumentCoveragePassed,
     addedSemanticArgumentCount: uniqueAddedSemanticArgumentKinds.length,
     addedSemanticArgumentKinds: uniqueAddedSemanticArgumentKinds,

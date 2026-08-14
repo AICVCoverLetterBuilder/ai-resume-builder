@@ -1366,6 +1366,7 @@ export type FinalizeCvAiFieldResult = {
     finalDecisionKind?: string | null;
     experienceCanonicalPreapplyDecisionRevision?: typeof EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
     canonicalExperienceDecisionCreated?: boolean;
+    providerPrimaryCandidateValidationAccepted?: boolean | null;
     providerCandidateValidationAccepted?: boolean;
     finalVisibleDecisionAcceptedForApply?: boolean;
     canonicalExperienceDecisionAllowsApply?: boolean;
@@ -10084,6 +10085,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : genericEntryCoveragePassed
           ? sourceFactCount
           : semantic.coveredCount;
+      if (
+        stage === 'provider'
+        && lastRequired > lastCovered
+        && semantic.uncoveredSourceIndexes.length > 0
+      ) {
+        // Cross-language lexical source-fact matching can publish more missing
+        // identities than the typed semantic bridge actually left unmatched.
+        // Keep provider-phase counts and hash-only entry-owned identities tied
+        // to the same one-to-one semantic pairing.
+        const sourceUnitsForDiagnostics = extractSourceDutyUnits(sourceForCoverage);
+        providerUncoveredFactIdentityHashes = semantic.uncoveredSourceIndexes
+          .map((index) => sourceUnitsForDiagnostics[index])
+          .filter((unit): unit is string => Boolean(unit))
+          .map((unit) => fingerprintText(`experience_source_fact:${unit}`));
+      }
       if (deExpansion && deExpansion.count > 0) {
         lastRejectStage = `${stage}:german_unsupported_expansion`;
         lastRejectReason = deExpansion.labels[0] || 'unsupported_generated_duty';

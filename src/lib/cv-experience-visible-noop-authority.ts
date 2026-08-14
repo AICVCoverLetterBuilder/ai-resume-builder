@@ -809,7 +809,16 @@ export function evaluateExperienceVisibleComparison(options: {
         // Generic cross-locale: semantic frame / identity coverage + shared predicates.
         const semantic = validateCrossLocaleSemanticCoverage(auth, candidate);
         const genPred = sourceRequiresGenericExperiencePredicates(auth)
-          ? scanGenericExperiencePredicates(auth, candidate)
+          // The generic predicate scanner is intentionally strict for ordinary
+          // same-locale output.  A cross-locale final candidate has already
+          // crossed the independent, typed fact/predicate/argument bridge
+          // above, though; comparing its target-language predicates directly
+          // with the foreign-language visible snapshot falsely invents an
+          // added action.  Keep the scanner's one-to-one and no-extra-duty
+          // checks, but enable its proven translation bridge for this path.
+          ? scanGenericExperiencePredicates(auth, candidate, {
+            allowValidatedCrossLocaleBridge: true,
+          })
           : null;
         if (!semantic.ok || semantic.coveredCount < semantic.requiredCount) {
           degradationKinds.push('fact_lost');

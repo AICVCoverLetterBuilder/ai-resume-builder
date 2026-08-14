@@ -3035,6 +3035,7 @@ type ExperienceLike = {
   serverRepairSource?: string | null;
   providerAccepted?: boolean | null;
   providerValidationApplicable?: boolean | null;
+  providerSemanticCoveragePassed?: boolean | null;
   finalBulletCount?: number | null;
   finalBulletScripts?: unknown[] | null;
   appVersionCode?: string | null;
@@ -3064,6 +3065,7 @@ type ExperienceLike = {
   finalUnsupportedClaimKinds?: string[] | null;
   finalNormalizedHash?: string | null;
   providerUncoveredFactIdentityHashes?: string[] | null;
+  providerUncoveredFactCount?: number | null;
   providerCoveredFactCount?: number | null;
   providerRequiredFactCount?: number | null;
   relevanceValidationPassed?: boolean | null;
@@ -3121,6 +3123,8 @@ type ExperienceLike = {
   finalDecisionKind?: string | null;
   experienceCanonicalPreapplyDecisionRevision?: string | null;
   canonicalExperienceDecisionCreated?: boolean | null;
+  /** Primary provider phase; deliberately separate from final selected-candidate acceptance. */
+  providerPrimaryCandidateValidationAccepted?: boolean | null;
   providerCandidateValidationAccepted?: boolean | null;
   finalVisibleDecisionAcceptedForApply?: boolean | null;
   canonicalExperienceDecisionAllowsApply?: boolean | null;
@@ -3419,6 +3423,30 @@ export function checkExperienceDiagnosticInvariants(
       providerCoveredFactCount: trace.providerCoveredFactCount,
       providerRequiredFactCount: trace.providerRequiredFactCount,
       providerUncoveredFactIdentityHashCount: 0,
+    });
+  }
+  if (
+    trace.providerUncoveredFactCount != null
+    && Array.isArray(trace.providerUncoveredFactIdentityHashes)
+    && trace.providerUncoveredFactCount
+      !== trace.providerUncoveredFactIdentityHashes.length
+  ) {
+    push('provider_uncovered_count_identity_mismatch', {
+      providerUncoveredFactCount: trace.providerUncoveredFactCount,
+      providerUncoveredFactIdentityHashCount:
+        trace.providerUncoveredFactIdentityHashes.length,
+    });
+  }
+  if (
+    trace.providerPrimaryCandidateValidationAccepted === true
+    && (
+      trace.providerAccepted === false
+      || trace.providerSemanticCoveragePassed === false
+    )
+  ) {
+    push('provider_primary_acceptance_phase_contradiction', {
+      providerAccepted: trace.providerAccepted ?? null,
+      providerSemanticCoveragePassed: trace.providerSemanticCoveragePassed ?? null,
     });
   }
   if (

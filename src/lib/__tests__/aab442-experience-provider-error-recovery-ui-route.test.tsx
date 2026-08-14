@@ -11,6 +11,7 @@ import { formatExperienceBullets } from '@/lib/cv-canonical-facts';
 import { buildExperienceAiOutputProvenance } from '@/lib/cv-experience-ai-output-provenance';
 import { normalizeExperienceAiSourceText } from '@/lib/cv-experience-ai-operation-snapshot';
 import { fingerprintText } from '@/lib/cv-export-diagnostics';
+import { evaluateExperienceVisibleComparison } from '@/lib/cv-experience-visible-noop-authority';
 import {
   clearExperienceAiDiagnosticsForTests,
   getLatestExperienceAiDiagnostic,
@@ -152,6 +153,25 @@ describe('AAB442 real UI route recovery', () => {
     vi.unstubAllEnvs();
     vi.resetModules();
     vi.restoreAllMocks();
+  });
+
+  it('uses the typed cross-locale bridge for canonical preapply rather than foreign surface predicates', () => {
+    const comparison = evaluateExperienceVisibleComparison({
+      factAuthorityText: exactSource(),
+      // The request-time visible textarea is deliberately a foreign-language
+      // prior AI snapshot. It remains a no-op comparison baseline only.
+      visibleComparisonText: exactSource(),
+      candidateText: SAFE_FRENCH,
+      locale: 'fr',
+      isPresent: false,
+      useVisibleForNoOp: true,
+      crossLocaleOperation: true,
+    });
+
+    expect(comparison.degradationDetected).toBe(false);
+    expect(comparison.degradationKinds).not.toContain('unsupported_predicate_added');
+    expect(comparison.materialImprovementDetected).toBe(true);
+    expect(comparison.materialImprovementKinds).toContain('wrong_locale_fixed');
   });
 
   it('routes initial 422 and recovery through the real route and applies once', async () => {
@@ -365,5 +385,36 @@ describe('AAB442 real UI route recovery', () => {
     expect(diag?.privacyCheckPassed).toBe(true);
     expect(diag?.providerCoveredFactCount).toBe(3);
     expect(routePost).toHaveBeenCalledTimes(2);
+  }, 30000);
+
+  it('keeps a rejected HTTP-200 provider phase internally consistent before selecting recovery', async () => {
+    const partialProvider = formatExperienceBullets([
+      'CrÃ©ait des supports graphiques pour les mÃ©dias imprimÃ©s et numÃ©riques.',
+      'DÃ©veloppait des concepts de design visuel selon les besoins des clients.',
+    ]);
+    const responses = [
+      { data: { result: partialProvider }, response: { status: 200 } },
+      { data: { result: SAFE_FRENCH }, response: { status: 200 } },
+    ];
+    routePost.mockReset();
+    routePost.mockImplementation(async () => {
+      const next = responses.shift();
+      if (!next) throw new Error('unexpected provider/recovery request');
+      return new Response(JSON.stringify(next.data), { status: next.response.status });
+    });
+    const Page = (await import('@/app/cv-builder/page')).default;
+    render(<Page />);
+    fireEvent.click(screen.getByRole('button', { name: translations.fr.cv.experience }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(translations.fr.cv.aiBullets, 'i') }));
+    await waitFor(() => expect(state.writes).toHaveLength(1), { timeout: 20000 });
+    const diag = getLatestExperienceAiDiagnostic();
+    expect(diag?.providerAccepted).toBe(false);
+    expect(diag?.providerRequiredFactCount).toBe(3);
+    expect(diag?.providerCoveredFactCount).toBe(2);
+    expect(diag?.providerUncoveredFactCount).toBe(1);
+    expect(diag?.providerUncoveredFactIdentityHashes).toHaveLength(1);
+    expect(diag?.providerPrimaryCandidateValidationAccepted).toBe(false);
+    expect(diag?.recoverySelected).toBe(true);
+    expect(diag?.diagnosticInvariantCheckPassed).toBe(true);
   }, 30000);
 });

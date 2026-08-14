@@ -2578,6 +2578,7 @@ export default function CVBuilderPage() {
           providerResponseKind: 'provider' as const,
           apiResponseKind: 'provider' as const,
           providerAccepted: false,
+          providerPrimaryCandidateValidationAccepted: false,
           providerValidationApplicable:
             rejectedProviderDiagnostics.providerValidationApplicable ?? true,
           providerBulletCount: rejectedProviderDiagnostics.providerBulletCount ?? null,
@@ -2606,6 +2607,7 @@ export default function CVBuilderPage() {
           providerResponseKind: 'error' as const,
           apiResponseKind: 'error' as const,
           providerAccepted: false,
+          providerPrimaryCandidateValidationAccepted: null,
           providerValidationApplicable: null,
           providerBulletCount: null,
           providerRequiredFactCount: null,

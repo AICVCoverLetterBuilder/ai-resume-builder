@@ -603,6 +603,8 @@ export type ExperienceAiDiagnosticTrace = {
   finalDecisionKind: string | null;
   experienceCanonicalPreapplyDecisionRevision: string | null;
   canonicalExperienceDecisionCreated: boolean | null;
+  /** Primary-provider phase acceptance; distinct from final selected-candidate acceptance. */
+  providerPrimaryCandidateValidationAccepted?: boolean | null;
   providerCandidateValidationAccepted: boolean | null;
   finalVisibleDecisionAcceptedForApply: boolean | null;
   canonicalExperienceDecisionAllowsApply: boolean | null;
@@ -1291,6 +1293,7 @@ export class ExperienceAiDiagnosticSession {
       finalDecisionKind: null,
       experienceCanonicalPreapplyDecisionRevision: null,
       canonicalExperienceDecisionCreated: null,
+      providerPrimaryCandidateValidationAccepted: null,
       providerCandidateValidationAccepted: null,
       finalVisibleDecisionAcceptedForApply: null,
       canonicalExperienceDecisionAllowsApply: null,
@@ -1698,6 +1701,7 @@ export class ExperienceAiDiagnosticSession {
       apiResponseKind: 'not_attempted',
       providerCoveredFactCount: null,
       providerRequiredFactCount: null,
+      providerUncoveredFactCount: null,
       providerRejectionReasons: [],
       providerRejectionStage: null,
       providerAccepted: false,
@@ -1778,6 +1782,7 @@ export class ExperienceAiDiagnosticSession {
       providerValidationApplicable: false,
       providerRequiredFactCount: null,
       providerCoveredFactCount: null,
+      providerUncoveredFactCount: null,
       providerUncoveredFactIdentityHashes: [],
       providerRejectionStage: 'api_response_received',
       providerRejectionReasons: [opts.errorCode || 'provider_http_failure'],
@@ -1976,6 +1981,14 @@ export class ExperienceAiDiagnosticSession {
         ?? this.draft.providerCoveredFactCount
         ?? null,
       providerUncoveredFactIdentityHashes: providerUncovered,
+      // Counts and hash-only identities describe the same provider phase.
+      // In cross-locale validation, the lexical count can exceed the typed
+      // bridge's unmatched entries; the latter is the authoritative lineage.
+      providerUncoveredFactCount:
+        typeof (diag.providerRequiredFactCount ?? this.draft.providerRequiredFactCount) === 'number'
+        && typeof (diag.providerCoveredFactCount ?? this.draft.providerCoveredFactCount) === 'number'
+          ? providerUncovered.length
+          : null,
       providerAccepted: diag.providerAccepted
         ?? (finalized.countedAsSuccess && !clientFallbackApplied && !diag.noOpRepairApplied),
       providerRejectionStage: providerPhaseRejectionStage,
@@ -2673,6 +2686,10 @@ export class ExperienceAiDiagnosticSession {
       canonicalExperienceDecisionCreated:
         typeof diag.canonicalExperienceDecisionCreated === 'boolean'
           ? diag.canonicalExperienceDecisionCreated
+          : null,
+      providerPrimaryCandidateValidationAccepted:
+        typeof diag.providerPrimaryCandidateValidationAccepted === 'boolean'
+          ? diag.providerPrimaryCandidateValidationAccepted
           : null,
       providerCandidateValidationAccepted:
         typeof diag.providerCandidateValidationAccepted === 'boolean'
