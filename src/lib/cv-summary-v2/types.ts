@@ -345,7 +345,7 @@ export type SummaryV2PipelineResult = {
       frenchPredicateEvidence?: Array<{
         sourceFactHash: string;
         owningEntryHash: string;
-        employmentState: SummaryV2EmploymentState;
+        employmentState: 'current' | 'completed';
         expectedTense: 'present' | 'past';
         realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
         tenseMatch: boolean;
@@ -361,7 +361,7 @@ export type SummaryV2PipelineResult = {
       }>;
       frenchRoleTenseEvidence?: Array<{
         owningEntryHash: string;
-        employmentState: SummaryV2EmploymentState;
+        employmentState: 'current' | 'completed';
         expectedTense: 'present' | 'past';
         realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
         tenseMatch: boolean;

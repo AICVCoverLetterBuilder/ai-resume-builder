@@ -254,6 +254,10 @@ function realizeFrenchFirstPersonDutyChain(
   text = text.replace(/^(?:je|j['’])\s+/iu, '');
   if (!text) return '';
   if (tense === 'completed') {
+    // `j'ai` is one auxiliary boundary. Normalize it to `ai` before the
+    // caller supplies the relative-clause `où j'` prefix.
+    text = text.replace(/^j['\u2019]ai\s+/iu, 'ai ');
+    text = text.replace(/((?:^|[,;]|\bet\b)\s*)j['\u2019]ai\s+/giu, '$1');
     // Provider/deterministic bullets often carry a third-person auxiliary.
     // The relative connector supplies j' outside this function, so return ai.
     text = text.replace(/^(?:a|ont|avait|avaient|j['’]a)\s+/iu, 'ai ');

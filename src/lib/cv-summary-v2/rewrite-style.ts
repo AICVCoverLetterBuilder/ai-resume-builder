@@ -121,7 +121,10 @@ export type SummaryV2StyleFulfillment = {
 export type FrenchPredicateTransformationEvidence = {
   sourceFactHash: string;
   owningEntryHash: string;
-  employmentState: SummaryV2EntryOwned['employmentState'];
+  /** Diagnostic state is deliberately distinct from grammatical tense. */
+  employmentState: 'current' | 'completed';
+  realizationMode?: FrenchRealizationMode;
+  auxiliaryScope?: 'none' | 'shared' | 'repeated';
   expectedTense: 'present' | 'past';
   realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
   tenseMatch: boolean;
@@ -140,11 +143,21 @@ export type FrenchPredicateTransformationEvidence = {
 
 export type FrenchRoleTenseEvidence = {
   owningEntryHash: string;
-  employmentState: SummaryV2EntryOwned['employmentState'];
+  /** `current` is an employment state, not a tense label. */
+  employmentState: 'current' | 'completed';
   expectedTense: 'present' | 'past';
   realizedTense: 'present' | 'past' | 'mixed' | 'unknown';
   tenseMatch: boolean;
+  realizationMode?: FrenchRealizationMode;
+  auxiliaryScope?: 'none' | 'shared' | 'repeated';
 };
+
+export type FrenchRealizationMode =
+  | 'present'
+  | 'imparfait'
+  | 'passe_compose_shared_auxiliary'
+  | 'passe_compose_repeated_auxiliary'
+  | 'invalid_mixed';
 
 export type SummaryV2StyleTransformResult = {
   text: string;
@@ -1221,6 +1234,62 @@ function frenchRealizedTense(text: string): FrenchPredicateTransformationEvidenc
   return 'unknown';
 }
 
+function frenchIsImperfectPredicate(text: string): boolean {
+  const predicate = frenchLeadingPredicate(text);
+  return FRENCH_TENSE_SPECS.some((spec) => (
+    [spec.imperfect, spec.strongerImperfect].includes(predicate)
+  ));
+}
+
+function frenchPredicateFormsInText(text: string): string[] {
+  const forms = FRENCH_TENSE_SPECS.flatMap((spec) => [
+    spec.present,
+    spec.imperfect,
+    spec.participle,
+    spec.strongerPresent,
+    spec.strongerImperfect,
+  ]);
+  const pattern = new RegExp(
+    `(?<!\\p{L})(?:${forms.sort((a, b) => b.length - a.length).join('|')})(?!\\p{L})`,
+    'giu',
+  );
+  return [...(text || '').matchAll(pattern)].map((match) => match[0].toLocaleLowerCase('fr-FR'));
+}
+
+function frenchClauseIsPastParticipleGroup(text: string): boolean {
+  const predicates = frenchPredicateFormsInText(text);
+  return predicates.length > 0 && predicates.every((predicate) => (
+    FRENCH_TENSE_SPECS.some((spec) => spec.participle.toLocaleLowerCase('fr-FR') === predicate)
+  ));
+}
+
+function frenchAuxiliaryScope(
+  clauses: string[],
+  employmentState: SummaryV2EntryOwned['employmentState'],
+): { mode: FrenchRealizationMode; scope: 'none' | 'shared' | 'repeated' } {
+  if (employmentState !== 'completed' || clauses.length === 0) {
+    return { mode: 'present', scope: 'none' };
+  }
+  const repeated = clauses.length > 1
+    && clauses.every((clause) => (
+      /^ai\s+/iu.test(clause.trim())
+      && frenchClauseIsPastParticipleGroup(clause.replace(/^ai\s+/iu, ''))
+    ));
+  if (repeated) {
+    return { mode: 'passe_compose_repeated_auxiliary', scope: 'repeated' };
+  }
+  const shared = /^ai\s+/iu.test(clauses[0]?.trim() || '')
+    && frenchClauseIsPastParticipleGroup(clauses[0]?.replace(/^ai\s+/iu, '') || '')
+    && clauses.slice(1).every((clause) => (
+      !/^ai\s+/iu.test(clause.trim()) && frenchClauseIsPastParticipleGroup(clause)
+    ));
+  if (shared) {
+    return { mode: 'passe_compose_shared_auxiliary', scope: 'shared' };
+  }
+  const imperfect = clauses.every((clause) => frenchIsImperfectPredicate(clause));
+  return { mode: imperfect ? 'imparfait' : 'invalid_mixed', scope: 'none' };
+}
+
 function frenchObjectScopeAfterPredicate(text: string): string {
   return (text || '')
     .replace(/^\p{L}[\p{L}\p{M}]*/u, '')
@@ -1238,6 +1307,11 @@ function strengthenFrenchOwnedFact(
   const tenseNormalized = normalizeFrenchFactTense(source, entry.employmentState);
   const sourcePredicate = frenchLeadingPredicate(source);
   const expectedTense = frenchExpectedTense(entry.employmentState);
+  // Preserve an explicitly mixed provider chain before completed-role
+  // normalization can turn later present predicates into imparfait. A shared
+  // auxiliary is valid only when every predicate in that same source group is
+  // a past participle.
+  const sourceTense = frenchRealizedTense(source);
   let transformed = tenseNormalized;
   let matched: FrenchVerbSpec | undefined;
   for (const spec of FRENCH_SAFE_STRONGER_VERBS) {
@@ -1253,7 +1327,7 @@ function strengthenFrenchOwnedFact(
   const transformedPredicate = frenchLeadingPredicate(transformed);
   const sourceActionCategory = matched?.sourceActionCategory || frenchActionForPredicate(sourcePredicate);
   const transformedActionCategory = matched?.sourceActionCategory || frenchActionForPredicate(transformedPredicate);
-  const realizedTense = frenchRealizedTense(transformed);
+  const realizedTense = sourceTense === 'mixed' ? 'mixed' : frenchRealizedTense(transformed);
   const normalizedSourceObject = frenchObjectScopeAfterPredicate(tenseNormalized);
   const normalizedTargetObject = frenchObjectScopeAfterPredicate(transformed);
   return {
@@ -1261,7 +1335,7 @@ function strengthenFrenchOwnedFact(
     evidence: {
       sourceFactHash: fact.sourceFactHash,
       owningEntryHash: fingerprintText(entry.entryId),
-      employmentState: entry.employmentState,
+      employmentState: entry.employmentState === 'completed' ? 'completed' : 'current',
       expectedTense,
       realizedTense,
       tenseMatch: realizedTense === expectedTense,
@@ -1281,19 +1355,39 @@ function frenchOwnedDutyTail(
   entry: SummaryV2EntryOwned,
   gender: string,
   styleState: { modifierUsed: boolean },
-): { text: string; evidence: FrenchPredicateTransformationEvidence[] } {
+): {
+  text: string;
+  evidence: FrenchPredicateTransformationEvidence[];
+  realizationMode: FrenchRealizationMode;
+  auxiliaryScope: 'none' | 'shared' | 'repeated';
+} {
   const transformed = facts.map((fact) => {
     const result = strengthenFrenchOwnedFact(fact, entry, !styleState.modifierUsed);
     if (result.text !== (fact.bulletText || '').trim() && /avec rigueur/iu.test(result.text)) styleState.modifierUsed = true;
     return result;
   });
-  if (!transformed.length) return { text: '', evidence: [] };
+  if (!transformed.length) {
+    return { text: '', evidence: [], realizationMode: 'present', auxiliaryScope: 'none' };
+  }
   const clauses = transformed.map(({ text }) => normalizeFrenchDutyClause(
     realizeFirstPersonDutyClause(text, 'fr', entry.employmentState, gender),
   ));
   const tailClauses = entry.employmentState === 'completed'
     ? clauses.map((clause, index) => index === 0 ? clause : clause.replace(/^ai\s+/iu, ''))
-    : clauses;
+      : clauses;
+  const auxiliary = frenchAuxiliaryScope(clauses, entry.employmentState);
+  const diagnosticEmploymentState: 'current' | 'completed' = entry.employmentState === 'completed'
+    ? 'completed'
+    : 'current';
+  for (const result of transformed) {
+    result.evidence.employmentState = diagnosticEmploymentState;
+    result.evidence.realizationMode = auxiliary.mode;
+    result.evidence.auxiliaryScope = auxiliary.scope;
+    if (auxiliary.scope !== 'none') {
+      result.evidence.realizedTense = 'past';
+      result.evidence.tenseMatch = result.evidence.expectedTense === 'past';
+    }
+  }
   const requiresSimpleSameSubjectCoordination = transformed.some(({ evidence }) => (
     evidence.sourceActionCategory === 'edit_retouch'
     || evidence.sourceActionCategory === 'coordination'
@@ -1308,7 +1402,12 @@ function frenchOwnedDutyTail(
           : `, ainsi que je ${clause}`
       )).join('')}`;
   const connector = /^[aeiouyàâäéèêëîïôöùûüœh]/iu.test(tailClauses[0] || '') ? ", où j'" : ', où je ';
-  return { text: `${connector}${joined}`, evidence: transformed.map(({ evidence }) => evidence) };
+  return {
+    text: `${connector}${joined}`,
+    evidence: transformed.map(({ evidence }) => evidence),
+    realizationMode: auxiliary.mode,
+    auxiliaryScope: auxiliary.scope,
+  };
 }
 
 export function buildFrenchStructuredStrongerWithEvidence(
@@ -1330,10 +1429,12 @@ export function buildFrenchStructuredStrongerWithEvidence(
     const tenseMatch = tail.evidence.length > 0 && tail.evidence.every((evidence) => evidence.tenseMatch);
     roleTenseEvidence.push({
       owningEntryHash: fingerprintText(entry.entryId),
-      employmentState: entry.employmentState,
+      employmentState: entry.employmentState === 'completed' ? 'completed' : 'current',
       expectedTense,
-      realizedTense: tenseMatch ? expectedTense : 'mixed',
+      realizedTense: tail.auxiliaryScope !== 'none' ? 'past' : (tenseMatch ? expectedTense : 'mixed'),
       tenseMatch,
+      realizationMode: tail.realizationMode,
+      auxiliaryScope: tail.auxiliaryScope,
     });
     units.push(`${shell}${tail.text}.`);
   };
