@@ -469,6 +469,13 @@ export type ExperienceAiDiagnosticTrace = {
   earlyNoOpPreflightEvaluated?: boolean | null;
   uneditedRerunDetected?: boolean | null;
   providerAttempted?: boolean | null;
+  /** AAB-441 bounded recovery after a rejected provider/validation response. */
+  recoveryAttempted?: boolean | null;
+  recoveryHttpStatus?: number | null;
+  recoveryCandidatePresent?: boolean | null;
+  recoveryAccepted?: boolean | null;
+  recoveryRejectionReasons?: string[] | null;
+  recoverySelected?: boolean | null;
   finalOutcomeReason?: string | null;
   finalCandidatePresent?: boolean | null;
   finalCandidatePredicateValidationApplicable?: boolean | null;
@@ -1152,6 +1159,12 @@ export class ExperienceAiDiagnosticSession {
       apiHostClass: classifyApiHostForDiagnostics(),
       providerHttpStatus: null,
       providerResponseKind: 'unknown',
+      recoveryAttempted: false,
+      recoveryHttpStatus: null,
+      recoveryCandidatePresent: false,
+      recoveryAccepted: null,
+      recoveryRejectionReasons: [],
+      recoverySelected: false,
       serverRepairAttempted: false,
       serverRepairSelected: false,
       serverRepairSource: null,

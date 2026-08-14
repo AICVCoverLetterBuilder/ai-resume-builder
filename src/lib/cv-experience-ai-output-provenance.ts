@@ -227,7 +227,10 @@ export function resolveExperienceTextareaProvenance(
     live
     && looksLikeAiOrigin
     && (hashMatched || formattingOnly)
-    && !materialVsGenerated
+    // The persisted output hash is the durable write-time identity. A
+    // harmless generatedDescription reformat/stale shadow must not turn an
+    // otherwise exact committed output into a user-edit classification.
+    && (!materialVsGenerated || hashMatched)
     && !materialVsStoredAi
     && preAi.text
     && (materialVsPreAi || Boolean(prov?.generatedFromEmpty))

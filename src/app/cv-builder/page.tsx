@@ -2249,11 +2249,21 @@ export default function CVBuilderPage() {
         requestId: reqCtx.requestId,
       };
 
-      const { data: bulletsData, response: res } = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
+      const apiResult = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
         body: requestBody,
         signal: controller.signal,
       });
+      let bulletsData = apiResult.data;
+      const res = apiResult.response;
 
+      let providerFailureRecovery: { code: string; payload: ReturnType<typeof resolveAiHttpFailure> } | null = null;
+      let recoveryAttempted = false;
+      let recoveryHttpStatus: number | null = null;
+      let recoveryCandidatePresent = false;
+      let recoveryCandidateText = '';
+      let recoveryAccepted: boolean | null = null;
+      let recoverySelected = false;
+      let recoveryRejectionReasons: string[] = [];
       if (!res.ok || bulletsData?.error) {
         if (res.status === 403) {
           const payload = resolveAiHttpFailure({ response: res, body: bulletsData });
@@ -2289,27 +2299,94 @@ export default function CVBuilderPage() {
         })) {
           return;
         }
-        const msg = finishAiClientRequest({
-          ctx: reqCtx,
-          isProVerified: true,
-          countBefore,
-          countAfter: countBefore,
-          httpStatus: res.status,
-          error: payload,
+        // A provider/validation error is not itself a terminal product result.
+        // Continue through the exact same immutable-source finalizer used for
+        // rejected provider candidates. It will select a safe cross-locale or
+        // deterministic fallback only when every existing gate passes.
+        providerFailureRecovery = {
+          code: payload.code || 'provider_http_failure',
+          payload,
+        };
+        // A validation rejection is recoverable once, through the same
+        // server-repair endpoint used for rejected provider candidates. The
+        // immutable source remains the only authority; the prior textarea is
+        // sent only as visible-comparison context and never as source facts.
+        const recoverableValidationFailure = res.status === 422
+          || /(?:generation|provider).*validation|validation_failed/i.test(
+            payload.code || '',
+          );
+        if (recoverableValidationFailure) {
+          recoveryAttempted = true;
+          const recoveryPrompt = [
+            'EXPERIENCE PROVIDER-ERROR RECOVERY REQUIRED.',
+            `Produce a fresh, safe ${requestedLocale} Experience result after the previous provider validation error.`,
+            'Use ONLY the immutable SOURCE FACTS below as authority. The previous visible textarea is not a fact source.',
+            'Preserve the exact entry identity, employment state, gender/perspective and every source duty.',
+            'Preserve material/media, purpose/condition, review/quality and project/team relations exactly where stated.',
+            'Do not add tools, systems, metrics, leadership, frequency, universal scope or responsibility escalation.',
+            'Return one bullet per source fact, in source order, in the requested locale and employment tense.',
+            `Employment state: ${exp.isPresent ? 'current/present' : 'completed/past'}.`,
+            cvRef.current.personal.gender
+              ? `Gender/perspective: ${cvRef.current.personal.gender}.`
+              : '',
+            'SOURCE FACTS (immutable):',
+            (factAuthorityForPreflight || aiGrounding.sourceDescription).slice(0, 4000),
+          ].filter(Boolean).join('\n');
+          try {
+            const recoveryResult = await apiFetch<{
+              result?: string;
+              error?: string;
+              code?: string;
+              repairAttempted?: boolean;
+              fallbackUsed?: boolean;
+            }>('/api/generate', {
+              body: {
+                ...requestBody,
+                noopRepair: true,
+                previousOutput: '',
+                repairPromptHint: recoveryPrompt,
+              },
+              signal: controller.signal,
+            });
+            recoveryHttpStatus = recoveryResult.response.status;
+            recoveryCandidateText = (recoveryResult.data?.result || '').trim();
+            recoveryCandidatePresent = Boolean(
+              recoveryResult.response.ok
+              && recoveryCandidateText
+              && !recoveryResult.data?.error,
+            );
+            if (!recoveryCandidatePresent) {
+              recoveryRejectionReasons = [
+                recoveryResult.data?.code
+                  || recoveryResult.data?.error
+                  || (recoveryResult.response.ok ? 'recovery_empty_candidate' : 'recovery_http_error'),
+              ];
+              recoveryCandidateText = '';
+            }
+          } catch {
+            recoveryRejectionReasons = ['recovery_request_failed'];
+            recoveryCandidateText = '';
+          }
+          if (!recoveryCandidatePresent) {
+            recoveryAccepted = false;
+            recoverySelected = false;
+          }
+        }
+        bulletsData = {
+          ...(bulletsData || {}),
+          result: recoveryCandidateText,
+          error: recoveryCandidateText ? undefined : (payload.code || 'provider_http_failure'),
+          repairAttempted: Boolean(recoveryCandidateText),
+          fallbackUsed: false,
+        };
+        diagSession.patch({
+          recoveryAttempted,
+          recoveryHttpStatus,
+          recoveryCandidatePresent,
+          recoveryAccepted,
+          recoveryRejectionReasons,
+          recoverySelected,
         });
-        diagSession.recordApiResponse({
-          httpStatus: res.status,
-          errorCode: payload.code || 'http_error',
-        });
-        diagSession.recordVisibleApply(false, countBefore);
-        diagSession.commit();
-        showExperienceAiRejectToast(msg ?? aiErrorMessage('provider_temporarily_unavailable', locale));
-        logExperienceAiTrace({
-          resultApplied: false,
-          rejectedReason: payload.code || 'http_error',
-          aiUsageIncremented: false,
-        });
-        return;
       }
 
       // Stale-response guard: requestId + job-context must both still match.
@@ -2328,6 +2405,7 @@ export default function CVBuilderPage() {
         repairAttempted: Boolean(bulletsData.repairAttempted),
         fallbackUsed: Boolean(bulletsData.fallbackUsed),
         resultText: bulletsData.result || '',
+        errorCode: providerFailureRecovery?.code,
       });
       if (
         latestId !== reqCtx.requestId
@@ -2358,7 +2436,9 @@ export default function CVBuilderPage() {
         return;
       }
       diagSession.recordRaceCheck(true, undefined, liveContext.key);
-      const newDescription = bulletsData.result || '';
+      const newDescription = providerFailureRecovery
+        ? recoveryCandidateText
+        : (bulletsData.result || '');
       const finalizeInputBase = {
         action: 'experience_bullets' as const,
         field: 'experience_description' as const,
@@ -2379,17 +2459,68 @@ export default function CVBuilderPage() {
       let finalizedBullets = finalizeCvAiFieldForApply({
         ...finalizeInputBase,
         candidate: newDescription,
-        originHint: bulletsData.fallbackUsed
+        originHint: providerFailureRecovery
+          ? 'ai_repaired'
+          : bulletsData.fallbackUsed
           ? 'deterministic_fallback'
           : bulletsData.repairAttempted
             ? 'ai_repaired'
             : 'ai_generated',
       });
+      if (providerFailureRecovery && recoveryCandidatePresent) {
+        const finalizerAccepted = Boolean(
+          finalizedBullets.countedAsSuccess && !finalizedBullets.blocked,
+        );
+        recoveryAccepted = finalizerAccepted;
+        recoverySelected = finalizerAccepted;
+        if (!finalizerAccepted) {
+          recoveryRejectionReasons = [
+            ...recoveryRejectionReasons,
+            finalizedBullets.reason
+              || finalizedBullets.diagnostics?.typedFailureReason
+              || 'recovery_candidate_rejected',
+          ];
+        }
+        diagSession.patch({
+          recoveryAccepted,
+          recoverySelected,
+          recoveryRejectionReasons,
+          finalCandidateSource: finalizerAccepted
+            ? 'server_repair'
+            : (finalizedBullets.diagnostics?.finalCandidateSource as string | undefined) || 'none',
+        });
+      }
+      if (providerFailureRecovery) {
+        diagSession.patch({
+          providerHttpStatus: res.status,
+          providerAttempted: true,
+          providerResponseKind: 'error',
+          apiResponseKind: 'error',
+          providerAccepted: false,
+          providerValidationApplicable: null,
+          providerRequiredFactCount: null,
+          providerCoveredFactCount: null,
+          providerUncoveredFactIdentityHashes: [],
+          providerPredicateValidationApplicable: null,
+          providerCoverageCount: null,
+          providerRejectionReasons: [providerFailureRecovery.code],
+          providerRejectionStage: 'api_response_received',
+          clientDeterministicFallbackReason:
+            finalizedBullets.diagnostics?.clientDeterministicFallbackReason
+            || 'provider_validation_error_recovery',
+          recoveryAttempted,
+          recoveryHttpStatus,
+          recoveryCandidatePresent,
+          recoveryAccepted,
+          recoveryRejectionReasons,
+          recoverySelected,
+        });
+      }
 
       // Recoverable provider echo: one dedicated no-op repair, then deterministic fallback.
       let noOpRepairAttempted = false;
       let noOpRepairHttpStatus: number | null = null;
-      if (isRecoverableExperienceProviderNoOp(finalizedBullets)) {
+      if (!providerFailureRecovery && isRecoverableExperienceProviderNoOp(finalizedBullets)) {
         diagSession.patch({
           providerNoOpDetected: true,
           noOpRejected: true,
@@ -2470,6 +2601,39 @@ export default function CVBuilderPage() {
       }
 
       diagSession.recordFinalizeResult(finalizedBullets);
+      if (providerFailureRecovery) {
+        // recordFinalizeResult intentionally mirrors any provider-candidate
+        // fields exposed by the finalizer. For an HTTP/validation terminal,
+        // however, no provider candidate was evaluated: keep those fields
+        // explicitly N/A and preserve the actual local fallback evidence.
+        diagSession.patch({
+          providerHttpStatus: res.status,
+          providerAttempted: true,
+          providerResponseKind: 'error',
+          apiResponseKind: 'error',
+          providerAccepted: false,
+          providerValidationApplicable: null,
+          providerRequiredFactCount: null,
+          providerCoveredFactCount: null,
+          providerUncoveredFactIdentityHashes: [],
+          providerPredicateValidationApplicable: null,
+          providerCoverageCount: null,
+          providerRejectionReasons: [providerFailureRecovery.code],
+          providerRejectionStage: 'api_response_received',
+          clientDeterministicFallbackReason:
+            finalizedBullets.diagnostics?.clientDeterministicFallbackReason
+            || 'provider_validation_error_recovery',
+          recoveryAttempted,
+          recoveryHttpStatus,
+          recoveryCandidatePresent,
+          recoveryAccepted,
+          recoveryRejectionReasons,
+          recoverySelected,
+          finalCandidateSource: recoveryAccepted
+            ? 'server_repair'
+            : (finalizedBullets.diagnostics?.finalCandidateSource as string | undefined) || 'none',
+        });
+      }
       // Re-assert stable clicked entry targeting after finalize (never inherit prior card).
       diagSession.recordExperienceEntryTarget({
         experienceEntryId: clickedExperienceEntryId,
@@ -2925,17 +3089,54 @@ export default function CVBuilderPage() {
         clientAborted: false,
         applied: true,
       });
+      const experienceTraceDiagnostics = providerFailureRecovery
+        ? {
+          ...(finalizedBullets.diagnostics || {}),
+          // The primary provider response was rejected before provider
+          // candidate validation. Recovery evidence is local/server-repair
+          // provenance and must not be serialized as provider acceptance.
+          providerResponseKind: 'error' as const,
+          apiResponseKind: 'error' as const,
+          providerAccepted: false,
+          providerValidationApplicable: null,
+          providerRequiredFactCount: null,
+          providerCoveredFactCount: null,
+          providerUncoveredFactIdentityHashes: [],
+          providerPredicateValidationApplicable: null,
+          providerCoverageCount: null,
+          providerRejectionStage: 'api_response_received',
+          providerRejectionReasons: [providerFailureRecovery.code],
+        }
+        : finalizedBullets.diagnostics;
       logExperienceAiTrace({
         appliedContextKey: requestContext.key,
         resultApplied: true,
         aiUsageIncremented: true,
         semanticDutyKeysUsed: [],
-        ...(finalizedBullets.diagnostics || {}),
+        ...(experienceTraceDiagnostics || {}),
       });
       diagSession.recordVisibleApply(true, countBefore + 1, {
         visibleDescription: visibleText,
         finalNormalizedText: finalizedBullets.text,
       });
+      if (providerFailureRecovery) {
+        // recordVisibleApply derives provider-phase acceptance from the
+        // selected final candidate. Reassert that the primary 422 response
+        // itself was rejected; only the bounded recovery was selected.
+        diagSession.patch({
+          providerResponseKind: 'error',
+          apiResponseKind: 'error',
+          providerAccepted: false,
+          providerValidationApplicable: null,
+          providerRequiredFactCount: null,
+          providerCoveredFactCount: null,
+          providerUncoveredFactIdentityHashes: [],
+          providerPredicateValidationApplicable: null,
+          providerCoverageCount: null,
+          providerRejectionStage: 'api_response_received',
+          providerRejectionReasons: [providerFailureRecovery.code],
+        });
+      }
       diagSession.commit();
       toast.success(t.cv.bulletsSuccess);
     } catch (err) {

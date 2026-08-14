@@ -10064,12 +10064,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
         }
       }
+      const genericEntryCoveragePassed = Boolean(
+        genericPredicates
+        && genericPredicates.sourceUnitPredicateCoveragePassed
+        && genericPredicates.sourcePredicateIdentityCount >= sourceFactCount
+        && genericPredicates.candidatePredicateIdentityCount >= sourceFactCount,
+      );
       lastRequired = needsEnWarehouse && enWarehouse
         ? (enWarehouse.required.length || sourceFactCount)
-        : (semantic.requiredCount || sourceFactCount);
+        : genericEntryCoveragePassed
+          ? sourceFactCount
+          : (semantic.requiredCount || sourceFactCount);
       lastCovered = needsEnWarehouse && enWarehouse
         ? enWarehouse.covered.length
-        : semantic.coveredCount;
+        : genericEntryCoveragePassed
+          ? sourceFactCount
+          : semantic.coveredCount;
       if (deExpansion && deExpansion.count > 0) {
         lastRejectStage = `${stage}:german_unsupported_expansion`;
         lastRejectReason = deExpansion.labels[0] || 'unsupported_generated_duty';
@@ -10523,7 +10533,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastCovered = enWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
       } else if (semantic.ok && (!needsRuDesignFamilies || (post.ok && ruDesign?.ok))) {
-        if (post.ok && (post.covered?.length || 0) > 0) {
+        if (genericEntryCoveragePassed) {
+          // Preserve the independently validated entry-owned unit count. The
+          // semantic catalogue may intentionally collapse several duties into a
+          // single family, but it must not overwrite truthful N/N diagnostics.
+          lastRequired = sourceFactCount;
+          lastCovered = sourceFactCount;
+        } else if (post.ok && (post.covered?.length || 0) > 0) {
           lastRequired = post.required?.length ?? lastRequired;
           lastCovered = post.covered?.length ?? lastCovered;
         }
@@ -10969,8 +10985,21 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackUncoveredFactIds = [];
       } else {
         const semantic = validateCrossLocaleSemanticCoverage(sourceForCoverage, candidate);
-        lastRequired = semantic.requiredCount || sourceFactCount;
-        lastCovered = semantic.coveredCount;
+        // The soft semantic catalogue can collapse several entry-owned duties into
+        // one material family. When the generic predicate scanner has independently
+        // validated every source unit, diagnostics and postconditions must retain the
+        // entry-owned 3/3 (or N/N) truth rather than reporting the collapsed family
+        // count. The scanner is a gate, not a lexical-overlap shortcut.
+        const genericEntryCoveragePassed = sourceFactCount > 0
+          && sourceUnitPredicateCoveragePassed === true
+          && sourcePredicateIdentityCount >= sourceFactCount
+          && candidatePredicateIdentityCount >= sourceFactCount;
+        lastRequired = genericEntryCoveragePassed
+          ? sourceFactCount
+          : (semantic.requiredCount || sourceFactCount);
+        lastCovered = genericEntryCoveragePassed
+          ? sourceFactCount
+          : semantic.coveredCount;
         if (!semantic.ok) {
           lastRejectStage = `${stage}:translated_fact_count`;
           lastRejectReason = semantic.reason || 'experience_material_fact_coverage_incomplete';

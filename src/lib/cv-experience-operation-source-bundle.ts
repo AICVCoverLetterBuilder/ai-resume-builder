@@ -295,10 +295,15 @@ export function evaluateUneditedRerunEarlyNoOpPreflight(options: {
   if (!bundle.visibleSourceText.trim()) {
     failures.push('visible_source_empty');
   }
-  if (visibleSourceAnalysis.sourceAlreadyValidForTarget !== true) {
+  const independentlyValidatedVisible = !isSpanishTarget
+    && options.independentVisibleValidationPassed === true;
+  // For non-Spanish locales the caller's complete independent visible gate is
+  // authoritative. Do not let a heuristic source-language/correctable-defect
+  // classifier veto an already validated unedited AI surface.
+  if (!independentlyValidatedVisible && visibleSourceAnalysis.sourceAlreadyValidForTarget !== true) {
     failures.push('visible_source_not_already_valid');
   }
-  if ((visibleSourceAnalysis.correctableDefectCount || 0) > 0) {
+  if (!independentlyValidatedVisible && (visibleSourceAnalysis.correctableDefectCount || 0) > 0) {
     failures.push('visible_correctable_defects_present');
   }
   if (options.raceOrStaleDetected) {
@@ -335,7 +340,7 @@ export function evaluateUneditedRerunEarlyNoOpPreflight(options: {
     && !options.sourceWasEmpty
     && failures.length === 0
     && (isSpanishTarget || options.independentVisibleValidationPassed === true)
-    && visibleSourceAnalysis.sourceAlreadyValidForTarget === true;
+    && (independentlyValidatedVisible || visibleSourceAnalysis.sourceAlreadyValidForTarget === true);
 
   return Object.freeze({
     revision: EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
@@ -349,7 +354,7 @@ export function evaluateUneditedRerunEarlyNoOpPreflight(options: {
     jobContextMatchesLastAiOutput: jobContextMatches,
     visibleHashMatchesLastAiOutput: visibleHashMatches,
     visibleSourceAlreadyValidForTarget:
-      visibleSourceAnalysis.sourceAlreadyValidForTarget === true,
+      independentlyValidatedVisible || visibleSourceAnalysis.sourceAlreadyValidForTarget === true,
     semanticNoOpReason: passed ? 'unedited_ai_output_already_valid' : null,
   });
 }
