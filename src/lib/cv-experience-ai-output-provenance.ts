@@ -13,6 +13,7 @@ import {
   experienceAiSourcesEquivalent,
   normalizeExperienceAiSourceText,
 } from './cv-experience-ai-operation-snapshot';
+import { localesEquivalent } from './cv-content-locale';
 import {
   extractSourceDutyUnits,
   sourceFactIdentityId,
@@ -69,6 +70,44 @@ export type ExperienceTextareaProvenanceResolution = {
   materialUserEditDetected: boolean;
   formattingOnlyDifference: boolean;
 };
+
+/**
+ * Resolve the only locale metadata that may override a weaker document-level
+ * hint for an unedited visible AI output.  The persisted AI provenance is
+ * write-time evidence: it is scoped to the same entry, carries the exact
+ * requested target locale, and is usable only while the visible hash still
+ * matches the last applied output.  Edited text, a different entry, or a
+ * changed target locale deliberately returns null so generic detection and
+ * normal validation remain authoritative.
+ */
+export function resolveTrustedUneditedAiOutputLocale(options: {
+  exp: Pick<WorkExperience, 'id' | 'aiOutputProvenance'> | null | undefined;
+  provenance: Pick<ExperienceTextareaProvenanceResolution,
+    'currentTextareaProvenance' | 'lastAiOutputHashMatched' | 'materialUserEditDetected'>
+    | null
+    | undefined;
+  requestedLocale: string | null | undefined;
+}): string | null {
+  const exp = options.exp;
+  const provenance = options.provenance;
+  const requested = String(options.requestedLocale || '').trim();
+  const persisted = exp?.aiOutputProvenance;
+  if (
+    !exp
+    || !persisted
+    || !persisted.experienceEntryId
+    || persisted.experienceEntryId !== exp.id
+    || !persisted.targetLocale
+    || !requested
+    || provenance?.currentTextareaProvenance !== 'ai_generated_unedited'
+    || provenance.lastAiOutputHashMatched !== true
+    || provenance.materialUserEditDetected === true
+    || !localesEquivalent(persisted.targetLocale, requested)
+  ) {
+    return null;
+  }
+  return persisted.targetLocale;
+}
 
 function normalizedHash(text: string): string {
   return fingerprintText(normalizeExperienceAiSourceText(text || ''));

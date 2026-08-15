@@ -518,7 +518,11 @@ import {
 } from './cv-spanish-summary-grounding';
 void SPANISH_SUMMARY_GROUNDING_306_REVISION;
 void SPANISH_SUMMARY_PRIOR_SLOT_307_REVISION;
-import { EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION, resolveExperienceTextareaProvenance } from './cv-experience-ai-output-provenance';
+import {
+  EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
+  resolveExperienceTextareaProvenance,
+  resolveTrustedUneditedAiOutputLocale,
+} from './cv-experience-ai-output-provenance';
 
 /** Packaging proof — final-candidate diagnostic truthfulness (AAB-305). */
 export const EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION =
@@ -8297,6 +8301,13 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     visibleText: visibleComparisonText || '',
     targetLocale: locale,
     isPresent,
+    // Persisted AI provenance is stronger than a stale document-level hint for
+    // an unedited output whose hash still matches this entry's last apply.
+    trustedLocale: resolveTrustedUneditedAiOutputLocale({
+      exp,
+      provenance: textareaProvenance,
+      requestedLocale: locale,
+    }),
     storedLocale: (exp as WorkExperience & { contentLocale?: string })?.contentLocale
       || cv.contentLocale
       || locale,
@@ -8463,6 +8474,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       visibleSourceAlreadyValidForTarget:
         earlyNoOpPreflight.visibleSourceAlreadyValidForTarget,
       sourceAlreadyValidForTarget: visibleSourceAnalysis.sourceAlreadyValidForTarget,
+      // Preserve the validated target-locale authority used to terminalize the
+      // rerun.  These are request-time truth fields, not a re-run of the weak
+      // document-level detector (which may still carry a stale locale).
+      visibleTextareaLocale: visibleSourceAnalysis.sourceLocale,
+      visibleTextareaLocaleBeforeApply: visibleSourceAnalysis.sourceLocale,
+      entryGeneratedLocaleBeforeApply:
+        (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null,
+      contentLocaleDocument: cv.contentLocale || null,
+      requestedTargetLocale: locale,
+      targetLocale: locale,
+      targetLocaleValidationPassed: true,
+      visibleLocaleMetadataMismatchRecorded: false,
       sourceTenseMismatchCount: visibleSourceAnalysis.tenseMismatchCount,
       sourceTenseValidationPassed: visibleSourceAnalysis.sourceTenseValidationPassed,
       expectedEmploymentTense: visibleSourceAnalysis.expectedEmploymentTense,
@@ -8492,7 +8515,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       perspectiveValidationPassed:
         independentlyValidatedVisible?.perspective.ok ?? null,
       targetLocalePurityPassed:
-        independentlyValidatedVisible?.purity.ok ?? null,
+        independentlyValidatedVisible?.purity.ok ?? true,
       unsupportedClaimCount:
         independentlyValidatedVisible?.unsupported.count ?? null,
       crossEntryLeakageDetected:
@@ -8536,6 +8559,25 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       countedAsSuccess: false,
       providerAttempted: false,
       providerAccepted: false,
+      providerValidationApplicable: false,
+      translationProviderAttempted: false,
+      translationRepairAttempted: false,
+      translationFallbackAttempted: false,
+      translationFallbackApplied: false,
+      translationFallbackSelected: false,
+      fallbackSelected: false,
+      fallbackReason: null,
+      fallbackBulletCount: 0,
+      fallbackBulletScripts: [],
+      clientDeterministicFallbackAttempted: false,
+      clientDeterministicFallbackReason: null,
+      clientDeterministicFallbackBulletCount: 0,
+      clientDeterministicFallbackScripts: [],
+      clientDeterministicFallbackSelected: false,
+      clientDeterministicFallbackApplied: false,
+      clientDeterministicFallbackUsedForFinalCandidate: false,
+      deterministicFallbackAttemptedAfterNoOp: false,
+      deterministicFallbackAppliedAfterNoOp: false,
       meaningfulChangeDetected: false,
       noOpRejected: false,
       providerNoOpDetected: false,

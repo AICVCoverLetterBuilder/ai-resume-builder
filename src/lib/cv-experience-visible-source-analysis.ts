@@ -128,6 +128,8 @@ export function analyzeExperienceVisibleSource(options: {
   targetLocale: string;
   isPresent?: boolean;
   storedLocale?: string | null;
+  /** Write-time provenance may override a weaker generic detector. */
+  trustedLocale?: string | null;
 }): ExperienceVisibleSourceAnalysis {
   void EXPERIENCE_SOURCE_DEFECT_FIRST_DECISION_315_REVISION;
   const visible = (options.visibleText || '').trim();
@@ -141,10 +143,12 @@ export function analyzeExperienceVisibleSource(options: {
   }
 
   const units = splitExperienceBullets(visible).filter(Boolean);
-  const detectedLocale = detectTextLocale(visible, {
-    storedLocale: options.storedLocale || targetLocale,
-    generatedLocale: options.storedLocale || targetLocale,
-  });
+  const trustedLocale = String(options.trustedLocale || '').trim();
+  const detectedLocale = trustedLocale
+    || detectTextLocale(visible, {
+      storedLocale: options.storedLocale || targetLocale,
+      generatedLocale: options.storedLocale || targetLocale,
+    });
   const sourceLocale = detectedLocale === 'unknown' ? targetLocale : detectedLocale;
   const localeMismatchCount = (() => {
     const src = sourceLocale.toLowerCase();

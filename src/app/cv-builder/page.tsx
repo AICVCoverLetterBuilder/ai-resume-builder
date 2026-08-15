@@ -147,6 +147,7 @@ import {
 } from '@/lib/cv-experience-provenance';
 import {
   resolveExperienceTextareaProvenance,
+  resolveTrustedUneditedAiOutputLocale,
   EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION,
 } from '@/lib/cv-experience-ai-output-provenance';
 void EXPERIENCE_AI_OUTPUT_PROVENANCE_304_REVISION;
@@ -2177,6 +2178,14 @@ export default function CVBuilderPage() {
         visibleText: liveDescription,
         targetLocale: requestedLocale,
         isPresent: Boolean(exp.isPresent),
+        // An unedited output that still matches its write-time provenance has
+        // stronger locale authority than a stale document-level contentLocale.
+        // Edited/wrong-entry/changed-target text receives no override.
+        trustedLocale: resolveTrustedUneditedAiOutputLocale({
+          exp,
+          provenance: textareaProvenance,
+          requestedLocale,
+        }),
         storedLocale: operationalContentLocale || requestedLocale,
       });
       const visibleCoverageForPreflight = validateVisibleExperienceCoverage({
