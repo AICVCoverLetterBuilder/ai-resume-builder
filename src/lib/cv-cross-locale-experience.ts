@@ -47,6 +47,11 @@ import {
   validateRussianWarehouseExperienceCoverage,
 } from './cv-russian-experience-grounding';
 import {
+  buildRussianDesignSemanticFallback,
+  sourceRequiresRussianDesignSemanticGrounding,
+  validateRussianDesignSemanticProjection,
+} from './cv-russian-experience-semantic-grounding';
+import {
   buildHindiWarehouseExperienceFallback,
   sourceRequiresHindiWarehouseFactCoverage,
   validateHindiWarehouseExperienceCoverage,
@@ -1233,24 +1238,19 @@ export function buildCrossLocaleExperienceFallback(options: {
   // action-frame shells (generic daily duty / visual-only review) caused false
   // 3/3 semantic coverage on device while missing adaptation and final files.
   if (domain === 'design' && target === 'ru') {
-    const lines = isPresent
-      ? [
-        'Создаёт визуальные материалы и графические элементы для цифровых продуктов и платформ.',
-        'Проверяет и адаптирует дизайн-материалы в соответствии с требованиями проекта.',
-        'Подготавливает финальные дизайн-файлы и настраивает форматы для разных экранов.',
-      ]
-      : (female
-        ? [
-          'Создавала визуальные материалы и графические элементы для цифровых продуктов и платформ.',
-          'Проверяла и адаптировала дизайн-материалы в соответствии с требованиями проекта.',
-          'Подготавливала финальные дизайн-файлы и настраивала форматы для разных экранов.',
-        ]
-        : [
-          'Создавал визуальные материалы и графические элементы для цифровых продуктов и платформ.',
-          'Проверял и адаптировал дизайн-материалы в соответствии с требованиями проекта.',
-          'Подготавливал финальные дизайн-файлы и настраивал форматы для разных экранов.',
-        ]);
-    return formatExperienceBullets(lines);
+    if (sourceRequiresRussianDesignSemanticGrounding(options.sourceDescription)) {
+      const projected = buildRussianDesignSemanticFallback({
+        sourceDescription: options.sourceDescription,
+        isPresent,
+        gender: options.gender,
+      });
+      return validateRussianDesignSemanticProjection(options.sourceDescription, projected).ok
+        ? projected
+        : '';
+    }
+    // Preserve the established generic bridge for design sources that do not
+    // match the AAB451 three-fact semantic catalogue. The new strict contract
+    // is opt-in only when all source arguments are recognized.
   }
 
   const frames = units.map((u) => classifyActionFrame(u));
@@ -1458,6 +1458,32 @@ export function validateCrossLocaleSemanticCoverage(
     .map((b) => b.trim())
     .filter(Boolean);
   const requiredCount = srcUnits.length;
+  // Russian design candidates need fact-owned object/argument validation rather
+  // than the generic action-frame bridge. This is shared by provider, repair,
+  // deterministic fallback, and visible post-write validation.
+  if (/[\u0400-\u04FF]/u.test(candidateDescription || '')
+    && sourceRequiresRussianDesignSemanticGrounding(sourceDescription)) {
+    const ru = validateRussianDesignSemanticProjection(sourceDescription, candidateDescription);
+    const coveredSourceIndexes = srcUnits
+      .map((_, index) => index)
+      .filter((index) => index < ru.covered.length);
+    const uncoveredSourceIndexes = srcUnits
+      .map((_, index) => index)
+      .filter((index) => !coveredSourceIndexes.includes(index));
+    return {
+      ok: ru.ok,
+      requiredCount,
+      coveredCount: ru.covered.length,
+      uncoveredCount: ru.uncovered.length,
+      coveredSourceIndexes,
+      uncoveredSourceIndexes,
+      semanticArgumentCoveragePassed: ru.addedSemanticArgumentCount === 0,
+      addedSemanticArgumentCount: ru.addedSemanticArgumentCount,
+      addedSemanticArgumentKinds: ru.addedSemanticArgumentCount ? ['criterion'] : [],
+      missingSemanticArgumentKinds: ru.uncovered.length ? ['material_medium'] : [],
+      reason: ru.reason || undefined,
+    };
+  }
   if (!requiredCount) {
     return {
       ok: true,

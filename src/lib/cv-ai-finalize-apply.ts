@@ -294,6 +294,12 @@ import {
   russianWarehouseFactDiagId,
 } from './cv-russian-experience-grounding';
 import {
+  buildRussianDesignSemanticFallback,
+  sourceRequiresRussianDesignSemanticGrounding,
+  validateRussianDesignSemanticProjection,
+  RUSSIAN_EXPERIENCE_SEMANTIC_GROUNDING_451_REVISION,
+} from './cv-russian-experience-semantic-grounding';
+import {
   HINDI_EXPERIENCE_GROUNDING_338_REVISION,
   sourceRequiresHindiWarehouseFactCoverage,
   validateHindiWarehouseExperienceCoverage,
@@ -1378,6 +1384,7 @@ export type FinalizeCvAiFieldResult = {
     canonicalExperienceDecisionCreated?: boolean;
     providerPrimaryCandidateValidationAccepted?: boolean | null;
     providerCandidateValidationAccepted?: boolean;
+    finalCandidateValidationAccepted?: boolean;
     finalVisibleDecisionAcceptedForApply?: boolean;
     canonicalExperienceDecisionAllowsApply?: boolean;
     canonicalExperienceDecisionAllowsUsage?: boolean;
@@ -9792,37 +9799,52 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       lastRejectReason = leakage.reason || 'cross_entry_fact_leakage';
       return null;
     }
-    // Russian design family rebuild: validate against authoritative three-family
-    // shells — never against poisoned live textarea / source-preserving prose.
+    // Russian design rebuilds have two deliberately separate contracts. Legacy
+    // same-locale shells retain their historical family validator; a recognised
+    // cross-locale source uses its immutable source duties as the authority and
+    // the AAB451 semantic projection validator. Never force the latter through
+    // the old generic job-context shell (which described different duties).
     if (russianDesignRebuild && locale === 'ru') {
       void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
-      const authoritativeDesignSource = normalizeLocaleText(
-        buildJobContextGenerationFallback({
-          locale: 'ru',
-          gender,
-          position: exp?.position || cv.personal?.jobTitle || 'design',
-          industry: 'design',
-          isPresent,
-        }),
-        locale,
-      );
-      const post = validateExperienceApplyMaterialPostcondition(
-        authoritativeDesignSource || candidate,
-        candidate,
-        { targetLocale: 'ru' },
-      );
-      const fam = validateRussianDesignFactFamilies(candidate);
-      authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-      fallbackCoveredFamilyCount = fam.coveredFamilies.length;
-      finalSelectedCoveredFamilyCount = fam.ok ? fam.coveredFamilies.length : 0;
-      lastRequired = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-      lastCovered = fam.coveredFamilies.length;
-      clientDeterministicFallbackRequiredFactCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-      clientDeterministicFallbackCoveredFactCount = fam.coveredFamilies.length;
-      if (!fam.ok || !post.ok) {
+      const semanticGrounding = sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
+      const semantic = semanticGrounding
+        ? validateRussianDesignSemanticProjection(sourceForCoverage, candidate)
+        : null;
+      const authoritativeDesignSource = semanticGrounding
+        ? sourceForCoverage
+        : normalizeLocaleText(
+          buildJobContextGenerationFallback({
+            locale: 'ru',
+            gender,
+            position: exp?.position || cv.personal?.jobTitle || 'design',
+            industry: 'design',
+            isPresent,
+          }),
+          locale,
+        );
+      const post = semanticGrounding
+        ? null
+        : validateExperienceApplyMaterialPostcondition(
+          authoritativeDesignSource || candidate,
+          candidate,
+          { targetLocale: 'ru' },
+        );
+      const fam = semanticGrounding ? null : validateRussianDesignFactFamilies(candidate);
+      const requiredCount = semantic?.required.length ?? RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+      const coveredCount = semantic?.covered.length ?? fam?.coveredFamilies.length ?? 0;
+      const accepted = semantic?.ok ?? Boolean(fam?.ok && post?.ok);
+      authoritativeRequiredFamilyCount = requiredCount;
+      fallbackCoveredFamilyCount = coveredCount;
+      finalSelectedCoveredFamilyCount = accepted ? coveredCount : 0;
+      lastRequired = requiredCount;
+      lastCovered = coveredCount;
+      clientDeterministicFallbackRequiredFactCount = requiredCount;
+      clientDeterministicFallbackCoveredFactCount = coveredCount;
+      if (!accepted) {
         lastRejectStage = `${stage}:russian_design_families`;
-        lastRejectReason = fam.reason
-          || post.reason
+        lastRejectReason = semantic?.reason
+          || fam?.reason
+          || post?.reason
           || 'russian_design_family_rebuild_failed';
         return null;
       }
@@ -9901,10 +9923,28 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         targetLocale: locale,
       });
       const needsRuDesignFamilies = locale === 'ru'
-        && sourceRequiresRussianDesignFamilies(sourceForCoverage);
+        && sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
       const ruDesign = needsRuDesignFamilies
-        ? validateRussianDesignFactFamilies(candidate)
+        ? validateRussianDesignSemanticProjection(sourceForCoverage, candidate)
         : null;
+      // The recognised Russian design projection is the predicate authority for
+      // these source facts. The generic cross-script predicate scanner cannot
+      // align Hindi/Russian verb morphology reliably and must not reject a
+      // candidate that the source-owned semantic projection has proved.
+      if (ruDesign) {
+        sourcePredicateIdentityCount = ruDesign.required.length;
+        candidatePredicateIdentityCount = ruDesign.covered.length;
+        candidateAddedPredicateCount = ruDesign.addedSemanticArgumentCount;
+        candidateAddedPredicateIdentityHashes = [];
+        sourceUnitPredicateCoveragePassed = ruDesign.ok;
+        if (stage === 'provider') {
+          providerSourcePredicateIdentityCount = sourcePredicateIdentityCount;
+          providerCandidatePredicateIdentityCount = candidatePredicateIdentityCount;
+          providerCandidateAddedPredicateCount = candidateAddedPredicateCount;
+          providerCandidateAddedPredicateIdentityHashes = [];
+          providerSourceUnitPredicateCoveragePassed = sourceUnitPredicateCoveragePassed;
+        }
+      }
       const needsDeWarehouse = locale === 'de'
         && sourceRequiresGermanWarehouseFactCoverage(sourceForCoverage);
       const deWarehouse = needsDeWarehouse
@@ -10243,7 +10283,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       void GENERIC_EXPERIENCE_PREDICATE_343_REVISION;
       // Specialized warehouse scanners are additive. They validate their hard
       // domain facts but must not erase additional entry-owned source units.
-      const needsGenericPredicates = sourceRequiresGenericExperiencePredicates(sourceForCoverage)
+      const needsGenericPredicates = !needsRuDesignFamilies
+        && sourceRequiresGenericExperiencePredicates(sourceForCoverage)
         && (
           !dedicatedWarehousePredicatesApplied
           || sourceFactCount > 3
@@ -10722,14 +10763,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastRejectStage = `${stage}:russian_design_families`;
         lastRejectReason = ruDesign.reason || 'russian_design_family_coverage_incomplete';
         lastRequired = Math.max(3, post.required?.length || sourceFactCount);
-        lastCovered = ruDesign.coveredFamilies.length;
+        lastCovered = ruDesign.covered.length;
         return null;
       }
-      if (needsRuDesignFamilies && !post.ok) {
+      if (needsRuDesignFamilies && !ruDesign?.ok) {
         lastRejectStage = `${stage}:material_postcondition`;
-        lastRejectReason = post.reason || 'experience_material_fact_coverage_incomplete';
-        lastRequired = post.required?.length ?? sourceFactCount;
-        lastCovered = post.covered?.length ?? 0;
+        lastRejectReason = ruDesign?.reason || 'russian_design_semantic_fact_coverage_incomplete';
+        lastRequired = ruDesign?.required.length ?? sourceFactCount;
+        lastCovered = ruDesign?.covered.length ?? 0;
         return null;
       }
       if (needsDeWarehouse && deWarehouse?.ok) {
@@ -10780,7 +10821,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         lastRequired = enWarehouse.required.length;
         lastCovered = enWarehouse.covered.length;
         clientDeterministicFallbackUncoveredFactIds = [];
-      } else if (semantic.ok && (!needsRuDesignFamilies || (post.ok && ruDesign?.ok))) {
+      } else if (semantic.ok && (!needsRuDesignFamilies || ruDesign?.ok)) {
         if (genericEntryCoveragePassed) {
           // Preserve the independently validated entry-owned unit count. The
           // semantic catalogue may intentionally collapse several duties into a
@@ -12223,6 +12264,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
           canonicalExperienceDecisionCreated: true,
           providerCandidateValidationAccepted:
+            false,
+          providerPrimaryCandidateValidationAccepted: false,
+          finalCandidateValidationAccepted:
             canonicalPreapplyDecision.candidateValidationAccepted,
           finalVisibleDecisionAcceptedForApply: false,
           canonicalExperienceDecisionAllowsApply: false,
@@ -12537,6 +12581,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION,
         canonicalExperienceDecisionCreated: true,
         providerCandidateValidationAccepted:
+          finalCandidateSource === 'provider' ? providerAccepted : false,
+        providerPrimaryCandidateValidationAccepted:
+          finalCandidateSource === 'provider' ? providerAccepted : false,
+        finalCandidateValidationAccepted:
           canonicalPreapplyDecision.candidateValidationAccepted,
         finalVisibleDecisionAcceptedForApply:
           canonicalPreapplyDecision.finalVisibleDecisionAcceptedForApply,
@@ -13718,13 +13766,24 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         clientDeterministicFallbackReason = 'experience_ai_noop_recovery';
       }
       if (locale === 'ru') {
-        const fam = validateRussianDesignFactFamilies(finalNormalizedBullets);
-        providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
-        if (isRussianDesignFamilyRejectionReason(lastRejectReason)
-          || sourceRequiresRussianDesignFamilies(sourceForCoverage)
-          || classifyFreeTextJobDomain(exp?.position || '') === 'design') {
-          authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-          lastRequired = Math.max(lastRequired, RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT);
+        const semanticGrounding = sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
+        if (semanticGrounding) {
+          const semantic = validateRussianDesignSemanticProjection(
+            sourceForCoverage,
+            finalNormalizedBullets,
+          );
+          providerDetectedMaterialFamilyCount = semantic.covered.length;
+          authoritativeRequiredFamilyCount = semantic.required.length;
+          lastRequired = Math.max(lastRequired, semantic.required.length);
+        } else {
+          const fam = validateRussianDesignFactFamilies(finalNormalizedBullets);
+          providerDetectedMaterialFamilyCount = fam.coveredFamilies.length;
+          if (isRussianDesignFamilyRejectionReason(lastRejectReason)
+            || sourceRequiresRussianDesignFamilies(sourceForCoverage)
+            || classifyFreeTextJobDomain(exp?.position || '') === 'design') {
+            authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+            lastRequired = Math.max(lastRequired, RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT);
+          }
         }
       }
     }
@@ -13845,7 +13904,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
 
   // Russian graphic-design: route family/generic-duty rejects to concrete three-family
   // rebuild. Never source-preserve poisoned live textarea; never label as locale_mismatch.
-  const needsRussianDesignRebuild = experienceNeedsRussianDesignFamilyRebuild({
+  const needsRussianDesignSemanticRebuild = locale === 'ru'
+    && sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
+  const needsRussianDesignRebuild = needsRussianDesignSemanticRebuild || experienceNeedsRussianDesignFamilyRebuild({
     locale,
     sourceDescription: sourceForCoverage,
     position: exp?.position || cv.personal?.jobTitle,
@@ -13853,22 +13914,32 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   });
   if (needsRussianDesignRebuild) {
     void RUSSIAN_DESIGN_FALLBACK_ROUTING_REVISION;
+    void RUSSIAN_EXPERIENCE_SEMANTIC_GROUNDING_451_REVISION;
     clientDeterministicFallbackReason = 'russian_design_family_rebuild';
     authoritativeRequiredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-    const designFamilyFallback = normalizeLocaleText(
-      buildJobContextGenerationFallback({
-        locale: 'ru',
+    const designFamilyFallback = needsRussianDesignSemanticRebuild
+      ? buildRussianDesignSemanticFallback({
+        sourceDescription: sourceForCoverage,
         gender,
-        position: exp?.position || cv.personal?.jobTitle || 'design',
-        industry: 'design',
         isPresent,
-      }),
-      locale,
-    );
+      })
+      : normalizeLocaleText(
+        buildJobContextGenerationFallback({
+          locale: 'ru',
+          gender,
+          position: exp?.position || cv.personal?.jobTitle || 'design',
+          industry: 'design',
+          isPresent,
+        }),
+        locale,
+      );
     clientDeterministicFallbackBulletCount = splitExperienceBullets(designFamilyFallback)
       .filter(Boolean).length;
     clientDeterministicFallbackScripts = detectBulletScripts(designFamilyFallback);
-    if (designFamilyFallback.trim()) {
+    const semanticDesign = needsRussianDesignSemanticRebuild
+      ? validateRussianDesignSemanticProjection(sourceForCoverage, designFamilyFallback)
+      : null;
+    if (designFamilyFallback.trim() && (!semanticDesign || semanticDesign.ok)) {
       const acceptedDesign = tryAccept(
         designFamilyFallback,
         'deterministic_fallback',
@@ -13885,8 +13956,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           normalizedBulletsUsedForApply: true,
           finalPersonMode: detectExperiencePersonMode(acceptedDesign.text, locale, { isPresent }),
         };
-        finalSelectedCoveredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
-        fallbackCoveredFamilyCount = RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+        finalSelectedCoveredFamilyCount = semanticDesign?.covered.length
+          || RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
+        fallbackCoveredFamilyCount = semanticDesign?.covered.length
+          || RUSSIAN_AUTHORITATIVE_DESIGN_FAMILY_COUNT;
         return attachPerspectiveDiag({
           ...acceptedDesign,
           diagnostics: {
