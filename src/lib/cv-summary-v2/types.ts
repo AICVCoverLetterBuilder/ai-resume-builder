@@ -117,6 +117,15 @@ export type SummaryV2EntryFact = {
   sourceMaterialClaimCategories?: SummaryV2MaterialClaimCategory[];
   sourceMaterialAuthorityDetectorRevision?: string;
   sourceMaterialAuthorityPhase?: SummaryV2MaterialAuthorityPhase;
+  /**
+   * A validated target-language presentation of the immutable source fact.
+   * These fields are never semantic authority and are populated only when the
+   * visible AI output is provenance/hash matched and unedited.
+   */
+  presentationText?: string;
+  presentationLocale?: Locale;
+  presentationTrusted?: boolean;
+  presentationSource?: 'validated_unedited_ai_output';
 };
 
 export type SummaryV2EntryOwned = {
@@ -133,6 +142,11 @@ export type SummaryV2EntryOwned = {
   /** Independent role-title locale provenance; aggregate sourceLocale is diagnostic only. */
   roleSourceLocale?: Locale;
   roleSourceLocaleResolvedFrom?: 'detected' | 'declared' | 'fallback';
+  /** Independent role presentation lineage; source role/fact authority stays immutable. */
+  presentationRole?: string;
+  presentationRoleLocale?: Locale;
+  presentationRoleTrusted?: boolean;
+  presentationSource?: 'validated_unedited_ai_output';
   /** Authoritative locale of this entry's visible source material. */
   sourceLocale: Locale;
   /** Hash of live description used at snapshot time. */

@@ -426,6 +426,10 @@ function recordSummaryLocalizationDiagnostics(
       .filter((id) => !selectedIds.has(id))
       .map((id) => fingerprintText(id)),
     localizationPrimaryFailureReason: localization.primaryFailureReason,
+    localizationProviderHttpStatus: localization.httpStatus,
+    localizationProviderResponseKind: localization.apiResponseKind,
+    localizationServerFallbackUsed: localization.serverFallbackUsed,
+    localizationClientFallbackUsed: localization.clientFallbackUsed,
     localizationRecoveryAttempted: localization.localizationRecoveryAttempted,
     localizationRecoveryAccepted: localization.localizationRecoveryAccepted,
     localizationSelectedEntryCount: localization.selectedEntryCount,
@@ -1327,8 +1331,10 @@ export default function CVBuilderPage() {
           stage: 'localization',
           reason: localization.reason || 'localization_provider_failed',
           usageAfter: countBefore,
-          httpStatus: localization.httpStatus,
-          apiResponseKind: localization.apiResponseKind,
+          localizationHttpStatus: localization.httpStatus,
+          localizationApiResponseKind: localization.apiResponseKind,
+          localizationServerFallbackUsed: localization.serverFallbackUsed,
+          localizationClientFallbackUsed: localization.clientFallbackUsed,
           serverFallbackUsed: localization.serverFallbackUsed,
           clientFallbackUsed: localization.clientFallbackUsed,
         });
@@ -1346,8 +1352,10 @@ export default function CVBuilderPage() {
           stage: 'localization',
           reason: 'localized_manifest_projection_failed',
           usageAfter: countBefore,
-          httpStatus: localization.httpStatus,
-          apiResponseKind: 'validation_rejected',
+          localizationHttpStatus: localization.httpStatus,
+          localizationApiResponseKind: 'validation_rejected',
+          localizationServerFallbackUsed: localization.serverFallbackUsed,
+          localizationClientFallbackUsed: localization.clientFallbackUsed,
         });
         toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
         return;
@@ -3340,8 +3348,10 @@ export default function CVBuilderPage() {
           stage: 'localization',
           reason: localization.reason || 'localization_provider_failed',
           usageAfter: countBefore,
-          httpStatus: localization.httpStatus,
-          apiResponseKind: localization.apiResponseKind,
+          localizationHttpStatus: localization.httpStatus,
+          localizationApiResponseKind: localization.apiResponseKind,
+          localizationServerFallbackUsed: localization.serverFallbackUsed,
+          localizationClientFallbackUsed: localization.clientFallbackUsed,
           serverFallbackUsed: localization.serverFallbackUsed,
           clientFallbackUsed: localization.clientFallbackUsed,
         });
@@ -3359,8 +3369,10 @@ export default function CVBuilderPage() {
           stage: 'localization',
           reason: 'localized_manifest_projection_failed',
           usageAfter: countBefore,
-          httpStatus: localization.httpStatus,
-          apiResponseKind: 'validation_rejected',
+          localizationHttpStatus: localization.httpStatus,
+          localizationApiResponseKind: 'validation_rejected',
+          localizationServerFallbackUsed: localization.serverFallbackUsed,
+          localizationClientFallbackUsed: localization.clientFallbackUsed,
         });
         toast.error(aiErrorMessage('generation_validation_failed', requestedLocale));
         return;

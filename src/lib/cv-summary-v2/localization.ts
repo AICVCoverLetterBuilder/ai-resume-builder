@@ -286,11 +286,25 @@ function decideSurfaceAuthority(options: {
   surface: ReturnType<typeof inspectSummaryV2TranslatableSurface>;
   sourceLocale: Locale;
   targetLocale: Locale;
+  presentationTrusted?: boolean;
+  presentationLocale?: Locale;
 }): SummaryV2SurfaceAuthorityState {
   if (!options.surface.source.trim() && !options.surface.localized.trim()) {
     return 'target_native_authoritative';
   }
   if (!/[\p{L}\p{M}]/u.test(options.surface.source)) return 'uncertain_rejected';
+  // A provenance/hash-matched AI surface is presentation only: its immutable
+  // source locale still owns the fact, while the visible surface may bypass
+  // translation only when the actual text is native to the requested locale.
+  // Never trust the locale label without inspecting the visible text/script.
+  if (options.presentationTrusted) {
+    const nativePresentation = options.presentationLocale === options.targetLocale
+      && options.surface.targetLocaleNativeSurfacePassed
+      && scriptIsNativeForLocale(options.surface.detectedScript, options.targetLocale);
+    return nativePresentation
+      ? 'target_native_authoritative'
+      : 'foreign_localization_required';
+  }
   const detected = detectDominantLocale(options.surface.source);
   const sourceCompatible = options.sourceLocale === options.targetLocale;
   const detectedForeign = detected.confidence === 'high'
@@ -326,8 +340,12 @@ export function classifySummaryV2EntrySurfaceAuthority(options: {
 }): SummaryV2EntrySurfaceAuthority {
   const required = [...options.manifest.requiredCurrentFacts, ...options.manifest.requiredPriorFacts]
     .filter((fact) => fact.entryId === options.entry.entryId);
+  const presentationRole = options.entry.presentationRoleTrusted
+    && options.entry.presentationRole
+    ? options.entry.presentationRole
+    : options.entry.role;
   const role = inspectSummaryV2TranslatableSurface({
-    localizedText: options.entry.role,
+    localizedText: presentationRole,
     sourceText: options.entry.role,
     employer: options.entry.employer,
     targetLocale: options.manifest.locale,
@@ -336,10 +354,15 @@ export function classifySummaryV2EntrySurfaceAuthority(options: {
     surface: role,
     sourceLocale: options.entry.roleSourceLocale || options.entry.sourceLocale,
     targetLocale: options.manifest.locale,
+    presentationTrusted: options.entry.presentationRoleTrusted === true,
+    presentationLocale: options.entry.presentationRoleLocale,
   });
   const facts = required.map((fact) => {
+    const presentationText = fact.presentationTrusted && fact.presentationText
+      ? fact.presentationText
+      : fact.bulletText;
     const surface = inspectSummaryV2TranslatableSurface({
-      localizedText: fact.bulletText,
+      localizedText: presentationText,
       sourceText: fact.bulletText,
       employer: options.entry.employer,
       targetLocale: options.manifest.locale,
@@ -351,6 +374,8 @@ export function classifySummaryV2EntrySurfaceAuthority(options: {
         surface,
         sourceLocale: fact.sourceLocale,
         targetLocale: options.manifest.locale,
+        presentationTrusted: fact.presentationTrusted === true,
+        presentationLocale: fact.presentationLocale,
       }),
     };
   });
@@ -457,6 +482,9 @@ export function validateSummaryV2LocalizationResponse(
       {
         text: entry.localizedRoleTitle,
         sourceText: sourceEntry?.role || '',
+        presentationText: sourceEntry?.presentationRole,
+        presentationTrusted: sourceEntry?.presentationRoleTrusted === true,
+        presentationLocale: sourceEntry?.presentationRoleLocale || null,
         sourceLocale: sourceEntry?.roleSourceLocale || sourceEntry?.sourceLocale || null,
         factId: null,
         surfaceKind: 'localized_role_title' as const,
@@ -464,6 +492,9 @@ export function validateSummaryV2LocalizationResponse(
       ...(entry.facts || []).map((fact) => ({
         text: fact.localizedText,
         sourceText: sourceFactsById.get(fact.factId)?.bulletText || '',
+        presentationText: sourceFactsById.get(fact.factId)?.presentationText,
+        presentationTrusted: sourceFactsById.get(fact.factId)?.presentationTrusted === true,
+        presentationLocale: sourceFactsById.get(fact.factId)?.presentationLocale || null,
         sourceLocale: sourceFactsById.get(fact.factId)?.sourceLocale || null,
         factId: fact.factId,
         surfaceKind: 'localized_fact' as const,
@@ -522,10 +553,18 @@ export function validateSummaryV2LocalizationResponse(
         && plannedAuthority === 'foreign_localization_required'
         && !localesAreDetectionCompatible(surface.sourceLocale, manifest.locale)
       ) sourceLanguageLeakageDetected = true;
-      const exactTargetNativeAuthority = text === surface.sourceText.trim()
+      const exactTargetNativeAuthority = (
+        text === surface.sourceText.trim()
         && (sourceLineage === 'same_locale_authoritative'
           || (!sourceLineage && plannedAuthority === 'target_native_authoritative'))
-        && scriptIsNativeForLocale(translatable.detectedScript, manifest.locale);
+        && scriptIsNativeForLocale(translatable.detectedScript, manifest.locale)
+      ) || (
+        surface.presentationTrusted
+        && surface.presentationLocale === manifest.locale
+        && plannedAuthority === 'target_native_authoritative'
+        && text === String(surface.presentationText || '').trim()
+        && scriptIsNativeForLocale(translatable.detectedScript, manifest.locale)
+      );
       targetLocalePurityPassed = targetLocalePurityPassed
         && (exactTargetNativeAuthority || purity.targetLocalePurityPassed);
       targetScriptPurityPassed = targetScriptPurityPassed && purity.wrongScriptUnitCount === 0;
@@ -689,10 +728,14 @@ export function buildSameLocaleLocalizedManifest(
     targetLocale: manifest.locale,
     entries: entries.map((entry) => ({
       entryId: entry.entryId,
-      localizedRoleTitle: entry.role,
+      localizedRoleTitle: entry.presentationRoleTrusted && entry.presentationRole
+        ? entry.presentationRole
+        : entry.role,
       facts: entry.facts.slice(0, 3).map((fact) => ({
         factId: fact.factId,
-        localizedText: fact.bulletText,
+        localizedText: fact.presentationTrusted && fact.presentationText
+          ? fact.presentationText
+          : fact.bulletText,
       })),
     })),
   };

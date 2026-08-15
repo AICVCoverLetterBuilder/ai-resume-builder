@@ -6,7 +6,11 @@ import {
 } from '@/lib/cv-experience-duration';
 import { SUMMARY_V2_REVISION } from './flag';
 import type { SummaryV2EntryOwned, SummaryV2Snapshot } from './types';
-import { buildEntryOwnedFactsFromLiveDescription, hashSummaryV2Text } from './facts';
+import {
+  buildEntryOwnedFactsFromLiveDescription,
+  hashSummaryV2Text,
+  splitLiveDutyBullets,
+} from './facts';
 import { buildSummaryV2SelectionManifest } from './manifest';
 import {
   resolveSourceLocaleForText,
@@ -17,6 +21,10 @@ import {
   detectSummaryV2MaterialClaimCategories,
   SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,
 } from './material-claims';
+import {
+  resolveExperienceTextareaProvenance,
+  resolveTrustedUneditedAiOutputLocale,
+} from '@/lib/cv-experience-ai-output-provenance';
 
 /**
  * Live description only — never canonicalDescription / generatedDescription /
@@ -43,8 +51,37 @@ export function captureSummaryV2Snapshot(options: {
 
   const entries: SummaryV2EntryOwned[] = experiences.map((exp) => {
     const live = liveExperienceDescription(exp);
+    const textareaProvenance = resolveExperienceTextareaProvenance(exp);
+    const trustedPresentationLocaleRaw = resolveTrustedUneditedAiOutputLocale({
+      exp,
+      provenance: textareaProvenance,
+      requestedLocale: locale,
+    });
+    const trustedPresentationLocale = SUMMARY_V2_SUPPORTED_LOCALES.includes(
+      trustedPresentationLocaleRaw as Locale,
+    ) ? trustedPresentationLocaleRaw as Locale : null;
+    const immutableSourceText = (
+      trustedPresentationLocale
+      && textareaProvenance.currentTextareaProvenance === 'ai_generated_unedited'
+      && textareaProvenance.authoritativeFactText.trim()
+    )
+      ? textareaProvenance.authoritativeFactText.trim()
+      : live;
+    const trustedPresentationBullets = trustedPresentationLocale
+      ? splitLiveDutyBullets(live)
+      : [];
+    const canTrustPresentation = Boolean(
+      trustedPresentationLocale
+      && immutableSourceText
+      && trustedPresentationBullets.length > 0
+      && trustedPresentationBullets.length === splitLiveDutyBullets(immutableSourceText).length,
+    );
     const isPresent = Boolean(exp.isPresent);
-    const declaredRaw = exp.generatedLocale
+    const declaredRaw = (
+      canTrustPresentation
+        ? (exp.aiOutputProvenance?.sourceLocale || exp.descriptionSourceLocale)
+        : null
+    ) || exp.generatedLocale
       || exp.positionSourceLocale
       || cv.contentLocale
       || null;
@@ -52,7 +89,7 @@ export function captureSummaryV2Snapshot(options: {
       ? declaredRaw as Locale
       : null;
     const entryLocale = resolveSourceLocaleForText({
-      text: [live, exp.position || ''].join('\n'),
+      text: [immutableSourceText, exp.position || ''].join('\n'),
       declaredLocale,
       fallbackLocale: locale,
     }).sourceLocale;
@@ -65,15 +102,19 @@ export function captureSummaryV2Snapshot(options: {
       declaredLocale: roleDeclaredLocale,
       fallbackLocale: locale,
     });
-    const factDeclaredRaw = exp.descriptionSourceLocale || exp.generatedLocale || cv.contentLocale || null;
+    const factDeclaredRaw = (
+      canTrustPresentation
+        ? (exp.aiOutputProvenance?.sourceLocale || exp.descriptionSourceLocale)
+        : null
+    ) || exp.descriptionSourceLocale || exp.generatedLocale || cv.contentLocale || null;
     const factDeclaredLocale = SUMMARY_V2_SUPPORTED_LOCALES.includes(factDeclaredRaw as Locale)
       ? factDeclaredRaw as Locale
       : null;
     const facts = buildEntryOwnedFactsFromLiveDescription({
       entryId: String(exp.id || ''),
-      liveDescription: live,
+      liveDescription: immutableSourceText,
       sourceLocale: entryLocale,
-    }).map((fact) => {
+    }).map((fact, factIndex) => {
       const resolved = resolveSourceLocaleForText({
         text: fact.bulletText,
         declaredLocale: factDeclaredLocale,
@@ -96,6 +137,14 @@ export function captureSummaryV2Snapshot(options: {
         sourceMaterialAuthorityDetectorRevision:
           SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,
         sourceMaterialAuthorityPhase: 'immutable_source_fact' as const,
+        ...(canTrustPresentation
+          ? {
+            presentationText: trustedPresentationBullets[factIndex] || '',
+            presentationLocale: trustedPresentationLocale || undefined,
+            presentationTrusted: true,
+            presentationSource: 'validated_unedited_ai_output' as const,
+          }
+          : {}),
       };
     });
     // Short free-text titles can be linguistically ambiguous. Only use the

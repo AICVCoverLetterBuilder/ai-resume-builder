@@ -12,6 +12,7 @@ import {
   type SummaryV2LocalizationSource,
   type SummaryV2LocalizationValidation,
   type SummaryV2EntrySurfaceTransportPlan,
+  inspectSummaryV2TranslatableSurface,
 } from './localization';
 import { hashSummaryV2Text } from './facts';
 import type {
@@ -114,10 +115,52 @@ type EntryLocalizationResult = {
   recoveryAccepted: boolean;
   primaryFailureReason: string | null;
   failure: TransportFailureEvidence | null;
+  failureEvidence?: SummaryV2LocalizationFailureEvidence | null;
 };
 
 type CachedLocalizedSurface = { localizedText: string };
 const validatedSurfaceCache = new Map<string, CachedLocalizedSurface>();
+
+function fallbackFailureEvidence(options: {
+  manifest: SummaryV2SelectionManifest;
+  entry: SummaryV2EntryOwned;
+  plan: SummaryV2EntrySurfaceTransportPlan;
+  reason: string;
+}): SummaryV2LocalizationFailureEvidence {
+  const fact = options.entry.facts.find((candidate) => (
+    options.plan.facts.some((surface) => (
+      surface.factId === candidate.factId
+      && surface.authority !== 'target_native_authoritative'
+    ))
+  ));
+  const surfaceKind = fact ? 'localized_fact' : 'localized_role_title';
+  const sourceText = fact?.bulletText || options.entry.role;
+  const localizedText = fact?.presentationTrusted && fact.presentationText
+    ? fact.presentationText
+    : sourceText;
+  const inspected = inspectSummaryV2TranslatableSurface({
+    localizedText,
+    sourceText,
+    employer: options.entry.employer,
+    targetLocale: options.manifest.locale,
+    protectSourceProperNouns: Boolean(fact),
+  });
+  const tokenClass = /incomplete|empty|uncertain/iu.test(options.reason)
+    ? 'translatable_surface_incomplete'
+    : /script/iu.test(options.reason)
+      ? 'translatable_surface_wrong_script'
+      : 'translatable_surface_wrong_locale';
+  return {
+    entryId: options.entry.entryId,
+    factId: fact?.factId || null,
+    surfaceKind,
+    textPreviewHash: hashSummaryV2Text(localizedText || 'empty'),
+    detectedLocale: inspected.detectedLocale,
+    detectedScript: inspected.detectedScript,
+    tokenClass,
+    protectedEntityTokenClasses: inspected.protectedClasses,
+  };
+}
 
 function selectedEntries(manifest: SummaryV2SelectionManifest): SummaryV2EntryOwned[] {
   return [...(manifest.current ? [manifest.current] : []), ...manifest.priors];
@@ -242,7 +285,9 @@ function mergeAuthoritativeEntrySurfaces(options: {
     return {
       factId: fact.factId,
       localizedText: authoritative
-        ? fact.bulletText
+        ? (fact.presentationTrusted && fact.presentationText
+          ? fact.presentationText
+          : fact.bulletText)
         : options.cached.facts.get(fact.factId)?.localizedText
           || String(providerFacts.get(fact.factId) || ''),
     };
@@ -255,7 +300,9 @@ function mergeAuthoritativeEntrySurfaces(options: {
       entries: [{
         entryId: options.entry.entryId,
         localizedRoleTitle: options.plan.role.authority === 'target_native_authoritative'
-          ? options.entry.role
+          ? (options.entry.presentationRoleTrusted && options.entry.presentationRole
+            ? options.entry.presentationRole
+            : options.entry.role)
           : options.cached.role?.localizedText || String(providerEntry?.localizedRoleTitle || ''),
         facts: mergedFacts,
       }],
@@ -633,6 +680,7 @@ export async function localizeSummaryV2Manifest(options: {
     entry,
   })));
   const failed = results.find((result) => !result.entry);
+  const failedIndex = results.findIndex((result) => !result.entry);
   const attempted = entries.some((entry) => {
     const plan = buildSummaryV2EntrySurfaceTransportPlan({ manifest: options.manifest, entry });
     return plan.roleSurfaceCount + plan.factSurfaceCount > 0;
@@ -702,6 +750,19 @@ export async function localizeSummaryV2Manifest(options: {
       serverFallbackUsed: false,
       clientFallbackUsed: false,
     };
+    const failureEvidence = failed.validation?.failureEvidence
+      || failed.failureEvidence
+      || (failedIndex >= 0 && entries[failedIndex]
+        ? fallbackFailureEvidence({
+          manifest: options.manifest,
+          entry: entries[failedIndex]!,
+          plan: buildSummaryV2EntrySurfaceTransportPlan({
+            manifest: options.manifest,
+            entry: entries[failedIndex]!,
+          }),
+          reason: failure.reason,
+        })
+        : null);
     return {
       manifest: null,
       validation: failed.validation,
@@ -725,7 +786,7 @@ export async function localizeSummaryV2Manifest(options: {
       sourceByEntryId,
       lineageByEntryId,
       targetLocaleByEntryId,
-      validationFailureEvidence: failed.validation?.failureEvidence || null,
+      validationFailureEvidence: failureEvidence,
       surfaceTransportPlans,
     };
   }

@@ -386,9 +386,10 @@ export type SummaryAiDiagnosticTrace = {
   independentFinalDurationClaimCount: number;
   visibleDurationClaimCountAfterApply: number | null;
   visibleDurationMatchesFinalizedCount: boolean | null;
-  durationDetectorAgreement: boolean;
-  durationInsertedExactlyOnce: boolean;
-  durationFinalizerIdempotent: boolean;
+  /** Null means the duration phase was not reached (for example localization failed first). */
+  durationDetectorAgreement: boolean | null;
+  durationInsertedExactlyOnce: boolean | null;
+  durationFinalizerIdempotent: boolean | null;
   /** Duration representation diagnostics (build 275). */
   finalDurationRepresentationKind: string | null;
   finalDurationRepresentationCount: number | null;
@@ -417,6 +418,11 @@ export type SummaryAiDiagnosticTrace = {
   fallbackCandidatePresent: boolean;
   providerHttpStatus: number | null;
   providerResponseKind: string | null;
+  /** Transport truth for Summary localization; never masquerades as Summary provider truth. */
+  localizationProviderHttpStatus?: number | null;
+  localizationProviderResponseKind?: string | null;
+  localizationServerFallbackUsed?: boolean | null;
+  localizationClientFallbackUsed?: boolean | null;
   providerLocaleValidationPassed: boolean | null;
   providerSentenceCount: number;
   providerDuplicateSentenceCount: number;
@@ -958,9 +964,9 @@ export class SummaryAiDiagnosticSession {
       independentFinalDurationClaimCount: 0,
       visibleDurationClaimCountAfterApply: null,
       visibleDurationMatchesFinalizedCount: null,
-      durationDetectorAgreement: false,
-      durationInsertedExactlyOnce: false,
-      durationFinalizerIdempotent: false,
+      durationDetectorAgreement: null,
+      durationInsertedExactlyOnce: null,
+      durationFinalizerIdempotent: null,
       finalDurationRepresentationKind: null,
       finalDurationRepresentationCount: null,
       finalDurationHybridDetected: null,
@@ -987,6 +993,10 @@ export class SummaryAiDiagnosticSession {
       fallbackCandidatePresent: false,
       providerHttpStatus: null,
       providerResponseKind: null,
+      localizationProviderHttpStatus: null,
+      localizationProviderResponseKind: null,
+      localizationServerFallbackUsed: false,
+      localizationClientFallbackUsed: false,
       providerLocaleValidationPassed: null,
       providerSentenceCount: 0,
       providerDuplicateSentenceCount: 0,
@@ -2677,6 +2687,10 @@ export class SummaryAiDiagnosticSession {
     usageAfter: number;
     httpStatus?: number | null;
     apiResponseKind?: string | null;
+    localizationHttpStatus?: number | null;
+    localizationApiResponseKind?: string | null;
+    localizationServerFallbackUsed?: boolean;
+    localizationClientFallbackUsed?: boolean;
     serverFallbackUsed?: boolean;
     clientFallbackUsed?: boolean;
   }): void {
@@ -2693,13 +2707,31 @@ export class SummaryAiDiagnosticSession {
       tenseValidationPassed: null,
       localeValidationPassed: null,
       targetLocalePurityPassed: null,
-      providerHttpStatus: input.httpStatus ?? null,
-      providerResponseKind: input.apiResponseKind || 'not_attempted',
+      // No Summary provider request has happened at this terminal stage.
+      // Localization transport metadata is recorded separately below.
+      providerHttpStatus: null,
+      providerResponseKind: 'not_attempted',
+      localizationProviderHttpStatus: input.localizationHttpStatus ?? input.httpStatus ?? null,
+      localizationProviderResponseKind:
+        input.localizationApiResponseKind || input.apiResponseKind || 'not_attempted',
+      localizationServerFallbackUsed: input.localizationServerFallbackUsed === true,
+      localizationClientFallbackUsed: input.localizationClientFallbackUsed === true,
+      // Duration was not reached; do not serialize an early localization
+      // failure as three independent duration failures.
+      durationDetectorAgreement: null,
+      durationInsertedExactlyOnce: null,
+      durationFinalizerIdempotent: null,
       meaningfulChangeDetected: false,
       noOpDetected: false,
-      apiResponseKind: input.apiResponseKind || 'not_attempted',
-      serverFallbackUsed: input.serverFallbackUsed === true,
-      clientFallbackUsed: input.clientFallbackUsed === true,
+      apiResponseKind: input.localizationApiResponseKind
+        ? 'not_attempted'
+        : (input.apiResponseKind || 'not_attempted'),
+      serverFallbackUsed: input.localizationApiResponseKind
+        ? false
+        : input.serverFallbackUsed === true,
+      clientFallbackUsed: input.localizationApiResponseKind
+        ? false
+        : input.clientFallbackUsed === true,
       repairAttempted: false,
       repairApplied: false,
       repairSelected: false,
