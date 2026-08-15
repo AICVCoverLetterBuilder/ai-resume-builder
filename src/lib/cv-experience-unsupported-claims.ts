@@ -123,6 +123,11 @@ export function extractExperienceSemanticArgumentKinds(
   add('standards_criterion', /(?:\b(?:norme(?:s)?|standard(?:s)?|normas?|standardi?)\b|मानक|नियम|विनियम|基準|規格|コンプライアンス|規則|معايير|标准)/iu);
   add('universal_scope', /(?:\b(?:tous?|toutes?|chaque|l['’]ensemble|all|every|entire|whole|svih|cjelokupn\w*)\b|\b(?:pour\s+tous?\s+les|for\s+all|for\s+every)\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu);
   add('frequency_scope', /(?:\b(?:daily|weekly|regularly|every\s+(?:day|week)|day-to-day|quotidien\w*|hebdomadaire\w*|régulièrement|diari\w*|settiman\w*|dnevno|svakodnev\w*|redovit\w*)\b|दैनिक|प्रतिदिन|साप्ताहिक|नियमित|हर\s*दिन)/iu);
+  // Explicit Brazilian-Portuguese relation surfaces. These supplement the
+  // legacy encoded lexicon and keep typed argument checks locale-complete.
+  add('criterion', /(?:\bconforme\b|\bde\s+acordo\s+com\b|\bsegundo\b|\bnecessidades?\b)/iu);
+  add('material_medium', /(?:\bm\u00eddias?\b|\bimpresso\w*\b|\bnum\u00e9ric\w*\b)/iu);
+  add('quality_output', /(?:\bqualidade\b|\bresultados?\s+finais?\b)/iu);
   return out;
 }
 
@@ -222,6 +227,20 @@ export function detectExperienceUnsupportedClaimExpansion(
       .test(joined)
     && !/(?:\bproject\s+(?:requirements?|needs?)\b|\b(?:requirements?|needs?)\s+of\s+(?:the\s+)?project\b|परियोजना(?:ओं)?\s+की\s+आवश्यकत|प्रोजेक्ट\s+की\s+आवश्यकत|\b(?:requisitos?|necesidades?)\s+del\s+proyecto\b|\b(?:Projektanforderungen|Anforderungen\s+des\s+Projekts|Projektbedürfnisse)\b|\b(?:requisiti|necessità|esigenze)\s+del\s+progetto\b|\b(?:requisitos|necessidades)\s+do\s+projeto\b|\b(?:exigences?|besoins?)\s+du\s+projet\b|احتياجات\s+المشروع|potrebama\s+projekta|potrebama\s+projektn(?:og|im)\s+tima|требован\p{L}*\s+проекта|プロジェクト(?:要件|ニーズ))/iu.test(source)
   ) {
+    kinds.push('requirements_scope_expansion');
+    labels.push('requirements_scope_expansion');
+  }
+
+  // Portuguese project-requirement phrasing is an unsourced criterion unless
+  // that same relation is present in the immutable source facts.
+  const sourceRelationKindsForRequirements = extractExperienceSemanticArgumentKinds(source);
+  const richRelationSourceForRequirements = sourceRelationKindsForRequirements.includes('criterion')
+    && sourceRelationKindsForRequirements.includes('beneficiary')
+    && (sourceRelationKindsForRequirements.includes('material_medium')
+      || sourceRelationKindsForRequirements.includes('quality_output'));
+  if (richRelationSourceForRequirements
+    && /\b(?:requisitos?|necessidades?)\s+do\s+projeto\b/iu.test(joined)
+    && !/\b(?:requisitos?|necessidades?)\s+do\s+projeto\b/iu.test(source)) {
     kinds.push('requirements_scope_expansion');
     labels.push('requirements_scope_expansion');
   }

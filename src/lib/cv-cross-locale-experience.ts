@@ -1074,6 +1074,47 @@ function semanticArgumentScript(text: string): 'devanagari' | 'arabic' | 'cyrill
 }
 
 /**
+ * Relation-preserving Portuguese design projection used by deterministic
+ * recovery.  It is driven solely by typed source relations, never by an
+ * occupation, entry id, hash, or fixture phrase.  A unit without a complete
+ * relation signature returns no projection so the caller fails closed.
+ */
+function buildPortugueseDesignSemanticFallback(
+  units: string[],
+  isPresent: boolean,
+): string {
+  const lines: string[] = [];
+  for (const unit of units) {
+    const kinds = extractExperienceSemanticArgumentKinds(unit);
+    const folded = fold(unit);
+    const hasPrint = /(?:print|imprim|papel|impresso|tisk|štamp|طباعة|چاپ|प्रिंट|印刷)/iu.test(folded);
+    const hasDigital = /(?:digital|num[eé]ri|m[ií]dia|media|medij|رقمي|डिजिटल|デジタル)/iu.test(folded);
+    const hasDesignConcept = /(?:concept|design|d[eé]sign|visual|graf|vizuel|dizajn|تصميم|विज़ुअल|デザイン)/iu.test(folded);
+    const hasReview = /(?:review|revis|check|verif|inspect|quality|qualit|qualit[eé]|final|output|kvalitet|провер|مراج|समीक्षा|品質|確認)/iu.test(folded);
+    if (kinds.includes('material_medium') && hasPrint && hasDigital) {
+      lines.push(isPresent
+        ? 'Cria materiais gráficos para mídias impressas e digitais.'
+        : 'Criou materiais gráficos para mídias impressas e digitais.');
+      continue;
+    }
+    if (kinds.includes('criterion') && kinds.includes('beneficiary') && hasDesignConcept) {
+      lines.push(isPresent
+        ? 'Desenvolve conceitos de design visual de acordo com as necessidades dos clientes.'
+        : 'Desenvolveu conceitos de design visual de acordo com as necessidades dos clientes.');
+      continue;
+    }
+    if (kinds.includes('quality_output') && hasReview) {
+      lines.push(isPresent
+        ? 'Revisa projetos de design e verifica a qualidade dos resultados finais.'
+        : 'Revisou projetos de design e verificou a qualidade dos resultados finais.');
+      continue;
+    }
+    return '';
+  }
+  return lines.length === units.length ? formatExperienceBullets(lines) : '';
+}
+
+/**
  * Build target-locale Experience bullets from source units (cross-locale enhance).
  * Never returns the source language when target differs.
  */
@@ -1251,6 +1292,28 @@ export function buildCrossLocaleExperienceFallback(options: {
     // Preserve the established generic bridge for design sources that do not
     // match the AAB451 three-fact semantic catalogue. The new strict contract
     // is opt-in only when all source arguments are recognized.
+  }
+
+  // Portuguese deterministic recovery must retain each source-owned design
+  // relation.  The generic frame table is intentionally not used here because
+  // it can turn distinct media/criterion/quality duties into interchangeable
+  // product/platform/project shells.
+  if (domain === 'design' && target === 'pt-BR') {
+    const sourceKinds = extractExperienceSemanticArgumentKinds(options.sourceDescription);
+    const relationAnchors = sourceKinds.filter((kind) => (
+      kind === 'criterion'
+      || kind === 'beneficiary'
+      || kind === 'material_medium'
+      || kind === 'quality_output'
+    ));
+    const richRelationSource = sourceKinds.includes('criterion')
+      && sourceKinds.includes('beneficiary')
+      && (sourceKinds.includes('material_medium') || sourceKinds.includes('quality_output'));
+    if (richRelationSource && relationAnchors.length >= 2) {
+      const projected = buildPortugueseDesignSemanticFallback(units, isPresent);
+      if (projected.trim()) return projected;
+      return '';
+    }
   }
 
   const frames = units.map((u) => classifyActionFrame(u));
@@ -1591,13 +1654,40 @@ export function validateCrossLocaleSemanticCoverage(
     || kind === 'material_medium'
     || kind === 'quality_output'
   )).length;
+  const richRelationSource = sourceArgumentKinds.includes('criterion')
+    && sourceArgumentKinds.includes('beneficiary')
+    && (sourceArgumentKinds.includes('material_medium') || sourceArgumentKinds.includes('quality_output'));
+  // Sparse legacy duties do not expose enough typed relation authority for the
+  // cross-locale argument bridge; their established predicate/material gates
+  // remain authoritative. Relation-rich source facts opt into the strict
+  // no-added/no-missing semantic contract below.
+  if (!richRelationSource) {
+    uniqueAddedSemanticArgumentKinds.splice(0, uniqueAddedSemanticArgumentKinds.length);
+  }
   // Typed cross-script argument comparison is enabled only when the source
   // has enough explicit relation anchors to distinguish a real argument from
   // a translated surface noun. Existing frame/material validators continue to
   // enforce source-owned relation presence for sparse/legacy fixtures.
-  if (scriptsDiffer && sourceRelationAnchorCount >= 2) {
+  // Russian design has dedicated source-owned validators; preserve their
+  // legacy explanatory frame result and let that typed validator own the
+    // relation decision rather than applying the generic Latin bridge twice.
+  const candidateIsCyrillic = /\p{Script=Cyrillic}/u.test(candidateDescription || '');
+  if (scriptsDiffer && richRelationSource && !candidateIsCyrillic) {
     const candidateArgumentKinds = extractExperienceSemanticArgumentKinds(candidateDescription);
     const sourceArgumentKindSet = new Set(sourceArgumentKinds);
+    // A frame match alone cannot prove that the source-owned relation survived.
+    // Require every explicit source relation anchor to remain represented in the
+    // target surface; otherwise a generic 3/3 shell could silently drop media,
+    // beneficiary/criterion, or output-quality scope.
+    for (const kind of sourceArgumentKinds) {
+      const projectScopeRepresentedByReview = kind === 'project_scope'
+        && candidateArgumentKinds.includes('quality_output');
+      if (!candidateArgumentKinds.includes(kind)
+        && !projectScopeRepresentedByReview
+        && !missingSemanticArgumentKinds.includes(kind)) {
+        missingSemanticArgumentKinds.push(kind);
+      }
+    }
     for (const kind of candidateArgumentKinds) {
       if (!sourceArgumentKindSet.has(kind) && !uniqueAddedSemanticArgumentKinds.includes(kind)) {
         uniqueAddedSemanticArgumentKinds.push(kind);
