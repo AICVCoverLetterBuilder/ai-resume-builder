@@ -2274,7 +2274,7 @@ export default function CVBuilderPage() {
         requestId: reqCtx.requestId,
       };
 
-      const apiResult = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean }>('/api/generate', {
+      const apiResult = await apiFetch<{ result?: string; error?: string; code?: string; retryAfter?: number; repairAttempted?: boolean; fallbackUsed?: boolean; providerPhase?: { candidatePresent?: boolean; requiredFactCount?: number; coveredFactCount?: number; uncoveredSourceIndexes?: number[]; semanticArgumentAdditionCount?: number; addedPredicateCount?: number; addedPredicateIdentityHashes?: string[]; accepted?: boolean } }>('/api/generate', {
         body: requestBody,
         signal: controller.signal,
       });
@@ -2486,6 +2486,7 @@ export default function CVBuilderPage() {
         level,
         jobContext: requestContext,
         operationSnapshot,
+        providerPhaseDiagnostics: bulletsData.providerPhase,
       };
       let finalizedBullets = finalizeCvAiFieldForApply({
         ...finalizeInputBase,

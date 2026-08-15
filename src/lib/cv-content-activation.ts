@@ -51,6 +51,13 @@ import {
   sourceRequiresGenericExperiencePredicates,
 } from './cv-generic-experience-predicate-grounding';
 import { sourceHasWarehouseDomainApplicability } from './cv-warehouse-domain-applicability';
+import {
+  buildRussianDesignSemanticFallback,
+  sourceRequiresRussianDesignSemanticGrounding,
+  validateRussianDesignSemanticProjection,
+} from './cv-russian-experience-semantic-grounding';
+import { validateRussianExperienceEmploymentTense } from './cv-russian-experience-tense';
+import { validateAiUnitLocalePurity } from './cv-ai-unit-locale-purity';
 
 export type CvContentActivation = {
   content: string;
@@ -60,6 +67,17 @@ export type CvContentActivation = {
   violations: CvFidelityViolation[];
   /** True when non-English locale could not produce valid localized content (never English dump). */
   blocked?: boolean;
+  /** Hash-/count-only truth for the primary provider candidate. */
+  providerPhase?: {
+    candidatePresent: boolean;
+    requiredFactCount: number;
+    coveredFactCount: number;
+    uncoveredSourceIndexes: number[];
+    semanticArgumentAdditionCount: number;
+    addedPredicateCount: number;
+    addedPredicateIdentityHashes: string[];
+    accepted: boolean;
+  };
 };
 
 export function buildBulletRepairPrompt(
@@ -234,6 +252,28 @@ export async function activateCvExperienceBullets(options: {
     stripAiProtocolMarkers(options.candidate || ''),
     options.locale,
   );
+  const providerSemantic = candidate.trim()
+    ? validateCrossLocaleSemanticCoverage(canonicalJoined, candidate)
+    : null;
+  const providerPredicates = candidate.trim()
+    && sourceRequiresGenericExperiencePredicates(canonicalJoined)
+    ? scanGenericExperiencePredicates(canonicalJoined, candidate, {
+      allowValidatedCrossLocaleBridge: isCrossLocaleOperation(
+        detectTextLocale(canonicalJoined),
+        options.locale,
+      ),
+    })
+    : null;
+  const providerPhase = {
+    candidatePresent: Boolean(candidate.trim()),
+    requiredFactCount: canonical.length,
+    coveredFactCount: providerSemantic?.coveredCount ?? 0,
+    uncoveredSourceIndexes: providerSemantic?.uncoveredSourceIndexes ?? canonical.map((_fact, index) => index),
+    semanticArgumentAdditionCount: providerSemantic?.addedSemanticArgumentCount ?? 0,
+    addedPredicateCount: providerPredicates?.candidateAddedPredicateCount ?? 0,
+    addedPredicateIdentityHashes: providerPredicates?.candidateAddedPredicateIdentityHashes ?? [],
+    accepted: false,
+  };
   const first = validateLocalizedExperienceBullets(candidate, options.factSet, {
     locale: options.locale,
     gender: options.gender,
@@ -248,12 +288,14 @@ export async function activateCvExperienceBullets(options: {
       canonicalJoined,
     })
   ) {
+    providerPhase.accepted = true;
     return {
       content: candidate.trim(),
       status: 'passed',
       repairAttempted: false,
       fallbackUsed: false,
       violations: [],
+      providerPhase,
     };
   }
 
@@ -284,6 +326,7 @@ export async function activateCvExperienceBullets(options: {
           repairAttempted: true,
           fallbackUsed: false,
           violations: first.violations,
+          providerPhase,
         };
       }
     } catch {
@@ -299,6 +342,55 @@ export async function activateCvExperienceBullets(options: {
       fallbackUsed: false,
       blocked: true,
       violations: first.violations,
+      providerPhase,
+    };
+  }
+
+  // A recognised Russian design source has an immutable three-fact projector.
+  // It must win over the older generic localized fallback: that fallback can
+  // sound plausible while substituting role-template duties (platforms,
+  // screens, file preparation) for source-owned media, client-needs, and
+  // review/quality relations. This remains generic because activation decides
+  // solely from the authoritative source fact families, never title or fixture.
+  const russianSemanticFallback = options.locale === 'ru'
+    && sourceRequiresRussianDesignSemanticGrounding(canonicalJoined)
+    ? buildRussianDesignSemanticFallback({
+      sourceDescription: canonicalJoined,
+      gender: options.gender,
+      isPresent: options.isPresent,
+    })
+    : '';
+  const russianSemanticTense = russianSemanticFallback
+    ? validateRussianExperienceEmploymentTense(russianSemanticFallback, {
+      isPresent: options.isPresent,
+      gender: String(options.gender || ''),
+    })
+    : null;
+  const russianSemanticPurity = russianSemanticFallback
+    ? validateAiUnitLocalePurity(russianSemanticFallback, 'ru', {
+      kind: 'experience_bullet',
+      requireUnits: true,
+    })
+    : null;
+  if (
+    russianSemanticFallback
+    && validateRussianDesignSemanticProjection(canonicalJoined, russianSemanticFallback).ok
+    && russianSemanticTense?.finalTensePassed === true
+    && russianSemanticTense.finalGenderAgreementPassed === true
+    && russianSemanticPurity?.ok === true
+    && textMatchesRequestedFieldLocale(russianSemanticFallback, 'ru', 'experience_bullet')
+    && !isWrongLanguageAiOutput(russianSemanticFallback, 'ru')
+    && validateExperienceCvPerspective(russianSemanticFallback, 'ru', {
+      isPresent: options.isPresent,
+    }).ok
+  ) {
+    return {
+      content: russianSemanticFallback,
+      status: 'fallback',
+      repairAttempted,
+      fallbackUsed: true,
+      violations: first.violations,
+      providerPhase,
     };
   }
 
@@ -329,6 +421,7 @@ export async function activateCvExperienceBullets(options: {
       repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
+      providerPhase,
     };
   }
 
@@ -355,6 +448,7 @@ export async function activateCvExperienceBullets(options: {
       repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
+      providerPhase,
     };
   }
 
@@ -365,6 +459,7 @@ export async function activateCvExperienceBullets(options: {
       repairAttempted,
       fallbackUsed: true,
       violations: first.violations,
+      providerPhase,
     };
   }
 
@@ -376,6 +471,7 @@ export async function activateCvExperienceBullets(options: {
     fallbackUsed: true,
     blocked: true,
     violations: first.violations,
+    providerPhase,
   };
 }
 

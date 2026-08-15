@@ -2750,6 +2750,7 @@ Infer ordinary day-to-day responsibilities from the job title and level. Output 
         cvFidelityStatus: activated.status,
         repairAttempted: activated.repairAttempted,
         fallbackUsed: activated.fallbackUsed,
+        providerPhase: activated.providerPhase,
         usedFactIds: canonicalBullets.map((b) => b.id),
         violationCount: activated.violations.length,
       });

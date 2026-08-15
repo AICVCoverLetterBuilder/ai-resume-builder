@@ -361,6 +361,14 @@ export type ExperienceAiDiagnosticTrace = {
   providerUnsupportedClaimKinds?: string[];
   /** Final-selected candidate hash after successful apply. */
   finalNormalizedHash?: string | null;
+  russianSourceOwnedProjectionAttempted?: boolean;
+  russianSourceOwnedSemanticFactCount?: number | null;
+  russianSourceOwnedProjectionHash?: string | null;
+  russianSourceOwnedProjectionValidationPassed?: boolean | null;
+  russianSourceOwnedProjectionSelected?: boolean | null;
+  russianFallbackHashEnteringFinalizer?: string | null;
+  russianPostNormalizationHash?: string | null;
+  russianFinalSelectedHash?: string | null;
   experienceDiagnosticsFinalCandidateRevision?: string | null;
   /** Candidate lineage: provider / fallback / final_selected (hashes only). */
   candidateLineage?: Array<{
@@ -611,6 +619,8 @@ export type ExperienceAiDiagnosticTrace = {
   /** Primary-provider phase acceptance; distinct from final selected-candidate acceptance. */
   providerPrimaryCandidateValidationAccepted?: boolean | null;
   providerCandidateValidationAccepted: boolean | null;
+  /** Selected-final validation, including deterministic or repair recovery. */
+  finalCandidateValidationAccepted?: boolean | null;
   finalVisibleDecisionAcceptedForApply: boolean | null;
   canonicalExperienceDecisionAllowsApply: boolean | null;
   canonicalExperienceDecisionAllowsUsage: boolean | null;
@@ -1303,6 +1313,15 @@ export class ExperienceAiDiagnosticSession {
       canonicalExperienceDecisionCreated: null,
       providerPrimaryCandidateValidationAccepted: null,
       providerCandidateValidationAccepted: null,
+      finalCandidateValidationAccepted: null,
+      russianSourceOwnedProjectionAttempted: false,
+      russianSourceOwnedSemanticFactCount: null,
+      russianSourceOwnedProjectionHash: null,
+      russianSourceOwnedProjectionValidationPassed: null,
+      russianSourceOwnedProjectionSelected: null,
+      russianFallbackHashEnteringFinalizer: null,
+      russianPostNormalizationHash: null,
+      russianFinalSelectedHash: null,
       finalVisibleDecisionAcceptedForApply: null,
       canonicalExperienceDecisionAllowsApply: null,
       canonicalExperienceDecisionAllowsUsage: null,
@@ -2816,6 +2835,42 @@ export class ExperienceAiDiagnosticSession {
         typeof diag.providerCandidateValidationAccepted === 'boolean'
           ? diag.providerCandidateValidationAccepted
           : null,
+      finalCandidateValidationAccepted:
+        typeof diag.finalCandidateValidationAccepted === 'boolean'
+          ? diag.finalCandidateValidationAccepted
+          : null,
+      russianSourceOwnedProjectionAttempted:
+        typeof diag.russianSourceOwnedProjectionAttempted === 'boolean'
+          ? diag.russianSourceOwnedProjectionAttempted
+          : false,
+      russianSourceOwnedSemanticFactCount:
+        typeof diag.russianSourceOwnedSemanticFactCount === 'number'
+          ? diag.russianSourceOwnedSemanticFactCount
+          : null,
+      russianSourceOwnedProjectionHash:
+        typeof diag.russianSourceOwnedProjectionHash === 'string'
+          ? diag.russianSourceOwnedProjectionHash
+          : null,
+      russianSourceOwnedProjectionValidationPassed:
+        typeof diag.russianSourceOwnedProjectionValidationPassed === 'boolean'
+          ? diag.russianSourceOwnedProjectionValidationPassed
+          : null,
+      russianSourceOwnedProjectionSelected:
+        typeof diag.russianSourceOwnedProjectionSelected === 'boolean'
+          ? diag.russianSourceOwnedProjectionSelected
+          : null,
+      russianFallbackHashEnteringFinalizer:
+        typeof diag.russianFallbackHashEnteringFinalizer === 'string'
+          ? diag.russianFallbackHashEnteringFinalizer
+          : null,
+      russianPostNormalizationHash:
+        typeof diag.russianPostNormalizationHash === 'string'
+          ? diag.russianPostNormalizationHash
+          : null,
+      russianFinalSelectedHash:
+        typeof diag.russianFinalSelectedHash === 'string'
+          ? diag.russianFinalSelectedHash
+          : null,
       finalVisibleDecisionAcceptedForApply:
         typeof diag.finalVisibleDecisionAcceptedForApply === 'boolean'
           ? diag.finalVisibleDecisionAcceptedForApply
@@ -3695,7 +3750,10 @@ export class ExperienceAiDiagnosticSession {
         === EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
     const canonicalDecisionPassed = !canonicalDecisionRequired || Boolean(
       this.draft.canonicalExperienceDecisionCreated === true
-      && this.draft.providerCandidateValidationAccepted === true
+      // Provider phase and selected-final phase are deliberately distinct.
+      // A rejected provider may safely yield an accepted deterministic/repair
+      // candidate; that final candidate is the only phase that authorizes apply.
+      && this.draft.finalCandidateValidationAccepted === true
       && this.draft.finalVisibleDecisionAcceptedForApply === true
       && this.draft.canonicalExperienceDecisionAllowsApply === true
       && this.draft.canonicalExperienceDecisionAllowsUsage === true
@@ -3712,6 +3770,8 @@ export class ExperienceAiDiagnosticSession {
             this.draft.canonicalExperienceDecisionCreated === true,
           providerCandidateValidationAccepted:
             this.draft.providerCandidateValidationAccepted === true,
+          finalCandidateValidationAccepted:
+            this.draft.finalCandidateValidationAccepted === true,
           finalVisibleDecisionAcceptedForApply:
             this.draft.finalVisibleDecisionAcceptedForApply === true,
           canonicalExperienceDecisionAllowsApply:
@@ -3842,7 +3902,7 @@ export class ExperienceAiDiagnosticSession {
         === EXPERIENCE_CANONICAL_PREAPPLY_DECISION_421_REVISION;
     const canonicalDecisionAllowsCommit = !canonicalDecisionRequired || (
       this.draft.canonicalExperienceDecisionCreated === true
-      && this.draft.providerCandidateValidationAccepted === true
+      && this.draft.finalCandidateValidationAccepted === true
       && this.draft.finalVisibleDecisionAcceptedForApply === true
       && this.draft.canonicalExperienceDecisionAllowsApply === true
       && this.draft.canonicalExperienceDecisionAllowsUsage === true

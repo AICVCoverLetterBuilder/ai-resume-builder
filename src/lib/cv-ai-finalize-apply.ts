@@ -1122,6 +1122,17 @@ export type FinalizeCvAiFieldInput = {
   rewriteStyle?: 'shorter' | 'stronger' | 'professional' | string | null;
   /** Validated Summary V2 entry/fact localization from the structured provider boundary. */
   localizedSummaryManifest?: import('./cv-summary-v2').SummaryV2LocalizedManifest | null;
+  /** Hash-/count-only primary-provider phase received from the real route. */
+  providerPhaseDiagnostics?: {
+    candidatePresent?: boolean;
+    requiredFactCount?: number;
+    coveredFactCount?: number;
+    uncoveredSourceIndexes?: number[];
+    semanticArgumentAdditionCount?: number;
+    addedPredicateCount?: number;
+    addedPredicateIdentityHashes?: string[];
+    accepted?: boolean;
+  } | null;
 };
 
 export type FinalizeCvAiFieldResult = {
@@ -1245,6 +1256,14 @@ export type FinalizeCvAiFieldResult = {
     providerNoOpDetected?: boolean;
     sourceNormalizedHash?: string | null;
     finalNormalizedHash?: string | null;
+    russianSourceOwnedProjectionAttempted?: boolean;
+    russianSourceOwnedSemanticFactCount?: number | null;
+    russianSourceOwnedProjectionHash?: string | null;
+    russianSourceOwnedProjectionValidationPassed?: boolean | null;
+    russianSourceOwnedProjectionSelected?: boolean | null;
+    russianFallbackHashEnteringFinalizer?: string | null;
+    russianPostNormalizationHash?: string | null;
+    russianFinalSelectedHash?: string | null;
     providerSentenceHashes?: string[];
     noOpRepairAttempted?: boolean;
     noOpRepairValidationPassed?: boolean;
@@ -9095,6 +9114,54 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   let providerRequiredFactCount = sourceFactCount;
   let providerUncoveredFactIdentityHashes: string[] = [];
   let providerAccepted = false;
+  let routedProviderAddedPredicateCount: number | null = null;
+  let routedProviderAddedPredicateIdentityHashes: string[] | null = null;
+  const providerPhaseDiagnostics = input.providerPhaseDiagnostics;
+  if (providerPhaseDiagnostics?.candidatePresent) {
+    providerRequiredFactCount = Math.max(
+      0,
+      Number.isFinite(providerPhaseDiagnostics.requiredFactCount)
+        ? Number(providerPhaseDiagnostics.requiredFactCount)
+        : sourceFactCount,
+    );
+    providerCoveredFactCount = Math.max(
+      0,
+      Math.min(
+        providerRequiredFactCount,
+        Number.isFinite(providerPhaseDiagnostics.coveredFactCount)
+          ? Number(providerPhaseDiagnostics.coveredFactCount)
+          : 0,
+      ),
+    );
+    providerUncoveredFactIdentityHashes = canonicalSourceFactIdsForIndexes(
+      sourceForCoverage,
+      Array.isArray(providerPhaseDiagnostics.uncoveredSourceIndexes)
+        ? providerPhaseDiagnostics.uncoveredSourceIndexes
+        : [],
+    );
+    providerAccepted = providerPhaseDiagnostics.accepted === true;
+    routedProviderAddedPredicateCount = Math.max(
+      0,
+      Number.isFinite(providerPhaseDiagnostics.addedPredicateCount)
+        ? Number(providerPhaseDiagnostics.addedPredicateCount)
+        : 0,
+    );
+    routedProviderAddedPredicateIdentityHashes = Array.isArray(
+      providerPhaseDiagnostics.addedPredicateIdentityHashes,
+    )
+      ? [...new Set(providerPhaseDiagnostics.addedPredicateIdentityHashes.filter(Boolean))]
+      : [];
+  }
+  const routedPrimaryProviderPhase = providerPhaseDiagnostics?.candidatePresent
+    ? {
+      requiredFactCount: providerRequiredFactCount,
+      coveredFactCount: providerCoveredFactCount,
+      uncoveredFactIdentityHashes: [...providerUncoveredFactIdentityHashes],
+      addedPredicateCount: routedProviderAddedPredicateCount,
+      addedPredicateIdentityHashes: routedProviderAddedPredicateIdentityHashes,
+      accepted: providerAccepted,
+    }
+    : null;
   let fallbackBulletCount = 0;
   let fallbackApplied = false;
   let clientDeterministicFallbackAttempted = false;
@@ -11399,7 +11466,7 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       kind: 'experience_bullet',
       requireUnits: true,
     });
-    const isClientFallback = origin === 'deterministic_fallback'
+    const isClientFallback = (origin === 'deterministic_fallback' || serverFallbackUsed)
       && (
         stage === 'canonical_fallback'
         || stage === 'source_preserving_fallback'
@@ -11773,6 +11840,30 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
   const attachPerspectiveDiag = (
     result: FinalizeCvAiFieldResult,
   ): FinalizeCvAiFieldResult => {
+    const russianProjectionAttempted = locale === 'ru'
+      && sourceRequiresRussianDesignSemanticGrounding(sourceForCoverage);
+    const russianProjectionText = russianProjectionAttempted
+      ? buildRussianDesignSemanticFallback({
+        sourceDescription: sourceForCoverage,
+        isPresent,
+        gender: String(gender || ''),
+      })
+      : '';
+    const russianProjectionValidation = russianProjectionText
+      ? validateRussianDesignSemanticProjection(sourceForCoverage, russianProjectionText)
+      : null;
+    const russianProjectionHash = russianProjectionText
+      ? fingerprintText(russianProjectionText)
+      : null;
+    const russianFinalHash = result.countedAsSuccess && result.text.trim()
+      ? fingerprintText(result.text)
+      : null;
+    const russianProjectionSelected = Boolean(
+      russianProjectionAttempted
+      && russianProjectionValidation?.ok
+      && russianProjectionHash
+      && russianFinalHash === russianProjectionHash,
+    );
     if (result.countedAsSuccess && (result.text || '').trim()) {
       const finalArabicMorphology = locale === 'ar'
         ? validateArabicExperienceNativeMorphology(result.text, {
@@ -12380,6 +12471,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         ...result.diagnostics,
         ...perspectiveMeta,
         ...successVisFields,
+        russianSourceOwnedProjectionAttempted: russianProjectionAttempted,
+        russianSourceOwnedSemanticFactCount: russianProjectionValidation?.required.length ?? null,
+        russianSourceOwnedProjectionHash: russianProjectionHash,
+        russianSourceOwnedProjectionValidationPassed: russianProjectionValidation?.ok ?? null,
+        russianSourceOwnedProjectionSelected: russianProjectionSelected,
+        russianFallbackHashEnteringFinalizer: russianProjectionAttempted && input.candidate.trim()
+          ? fingerprintText(input.candidate)
+          : null,
         finalMatchesProviderOutput: finalMatchesProvider,
         // Terminal truth: compare the actual selected text with the immutable
         // authority; never retain a provider/repair phase-local no-op flag.
@@ -12609,6 +12708,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         finalNormalizedHash: result.countedAsSuccess
           ? fingerprintText(acceptedText)
           : (result.diagnostics?.finalNormalizedHash ?? null),
+        // The projection hash is evidence of the server fallback; post-write
+        // truth must describe the exact selected/normalized surface instead.
+        russianPostNormalizationHash: russianProjectionAttempted && result.countedAsSuccess
+          ? fingerprintText(acceptedText)
+          : result.diagnostics?.russianPostNormalizationHash,
+        russianFinalSelectedHash: russianProjectionAttempted && result.countedAsSuccess
+          ? fingerprintText(acceptedText)
+          : result.diagnostics?.russianFinalSelectedHash,
         stableEntryIdentityMatched: true,
         targetEntryStillExists: Boolean(findExperienceById(cv, exp.id)),
         entryScopedCanonicalStorageUsed: true,
@@ -13237,8 +13344,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 locale,
                 { isPresent },
               );
-              providerAccepted = cons.decision.candidateOrigin === 'provider'
-                || cons.decision.candidateOrigin === 'ai_repaired';
+              providerAccepted = serverFallbackUsed
+                ? false
+                : (cons.decision.candidateOrigin === 'provider'
+                  || cons.decision.candidateOrigin === 'ai_repaired');
               finalCandidateSource = cons.decision.candidateOrigin === 'provider'
                 ? (serverFallbackUsed
                   ? 'server_fallback'
@@ -13257,8 +13366,24 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
                 diagnostics: {
                   ...finalAccepted.diagnostics,
                   coveredFactCount: lastCovered || sourceFactCount,
-                  providerCoveredFactCount: lastCovered || sourceFactCount,
-                  providerRequiredFactCount: lastRequired || sourceFactCount,
+                  providerCoveredFactCount: routedPrimaryProviderPhase?.coveredFactCount
+                    ?? lastCovered
+                    ?? sourceFactCount,
+                  providerRequiredFactCount: routedPrimaryProviderPhase?.requiredFactCount
+                    ?? lastRequired
+                    ?? sourceFactCount,
+                  providerUncoveredFactIdentityHashes:
+                    routedPrimaryProviderPhase?.uncoveredFactIdentityHashes
+                    ?? canonicalProviderUncoveredFactIdentityHashes(),
+                  providerCandidateAddedPredicateCount:
+                    routedPrimaryProviderPhase?.addedPredicateCount
+                    ?? finalAccepted.diagnostics?.providerCandidateAddedPredicateCount
+                    ?? undefined,
+                  providerCandidateAddedPredicateIdentityHashes:
+                    routedPrimaryProviderPhase?.addedPredicateIdentityHashes
+                    ?? finalAccepted.diagnostics?.providerCandidateAddedPredicateIdentityHashes
+                    ?? [],
+                  providerAccepted: routedPrimaryProviderPhase?.accepted ?? providerAccepted,
                   finalUnsupportedClaimCount: 0,
                   finalUnsupportedClaimKinds: [],
                   unsupportedClaimCount: 0,
@@ -13283,8 +13408,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         perspectiveMeta.finalPersonMode = detectExperiencePersonMode(firstAccepted.text, locale, {
           isPresent,
         });
-        providerAccepted = true;
-        providerUncoveredFactIdentityHashes = [];
+        providerAccepted = serverFallbackUsed
+          ? (routedPrimaryProviderPhase?.accepted ?? false)
+          : true;
+        if (!serverFallbackUsed) providerUncoveredFactIdentityHashes = [];
         if (noOpRepairAttemptedFlag && providerOrigin === 'ai_repaired') {
           noOpRepairApplied = true;
           noOpRepairValidationPassed = true;
@@ -13310,8 +13437,24 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           diagnostics: {
             ...firstAccepted.diagnostics,
             coveredFactCount: lastCovered || sourceFactCount,
-            providerCoveredFactCount: lastCovered || sourceFactCount,
-            providerRequiredFactCount: lastRequired || sourceFactCount,
+            providerCoveredFactCount: routedPrimaryProviderPhase?.coveredFactCount
+              ?? lastCovered
+              ?? sourceFactCount,
+            providerRequiredFactCount: routedPrimaryProviderPhase?.requiredFactCount
+              ?? lastRequired
+              ?? sourceFactCount,
+            providerUncoveredFactIdentityHashes:
+              routedPrimaryProviderPhase?.uncoveredFactIdentityHashes
+              ?? canonicalProviderUncoveredFactIdentityHashes(),
+            providerCandidateAddedPredicateCount:
+              routedPrimaryProviderPhase?.addedPredicateCount
+              ?? firstAccepted.diagnostics?.providerCandidateAddedPredicateCount
+              ?? undefined,
+            providerCandidateAddedPredicateIdentityHashes:
+              routedPrimaryProviderPhase?.addedPredicateIdentityHashes
+              ?? firstAccepted.diagnostics?.providerCandidateAddedPredicateIdentityHashes
+              ?? [],
+            providerAccepted: routedPrimaryProviderPhase?.accepted ?? providerAccepted,
             providerNoOpDetected,
             noOpRepairAttempted: noOpRepairAttemptedFlag,
             noOpRepairApplied,
