@@ -398,6 +398,8 @@ export function validateSummaryV2AgainstManifest(
   const perspectiveValidationPassed = nativeContract.firstPersonPredicateChainPassed;
   const arabicMorphologyValidationPassed = manifest.locale !== 'ar'
     || nativeContract.localeVerbMorphologyPassed;
+  const russianMorphologyValidationPassed = manifest.locale !== 'ru'
+    || nativeContract.localeVerbMorphologyPassed;
   const hindiFirstPersonAgreementPassed = manifest.locale !== 'hi'
     || nativeContract.hindiFirstPersonAgreementPassed;
 
@@ -416,6 +418,7 @@ export function validateSummaryV2AgainstManifest(
   else if (!hindiFirstPersonAgreementPassed) reason = 'hindi_first_person_agreement_invalid';
   else if (!perspectiveValidationPassed) reason = 'mixed_perspective';
   else if (!arabicMorphologyValidationPassed) reason = 'malformed_arabic_finite_verb';
+  else if (!russianMorphologyValidationPassed) reason = 'malformed_russian_finite_verb';
   else if (current && (!currentRolePresent || !currentEmployerPresent || !currentStateExpressed)) {
     reason = 'missing_current_role_intro';
   } else if (prior && (!priorRolePresent || !priorEmployerPresent || !priorStateExpressed)) {
@@ -464,6 +467,7 @@ export function validateSummaryV2AgainstManifest(
     roleTitleSurfaceEvidence,
     perspectiveValidationPassed,
     arabicMorphologyValidationPassed,
+    russianMorphologyValidationPassed,
     hindiFirstPersonAgreementPassed,
     hindiSentenceAgreementRecords: nativeContract.hindiSentenceAgreementRecords,
     printClaimDetected: materialAuthority.printClaimDetected,

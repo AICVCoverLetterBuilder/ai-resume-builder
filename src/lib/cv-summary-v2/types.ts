@@ -210,6 +210,7 @@ export type SummaryV2ValidationResult = {
   }>;
   perspectiveValidationPassed: boolean;
   arabicMorphologyValidationPassed: boolean;
+  russianMorphologyValidationPassed: boolean;
   hindiFirstPersonAgreementPassed: boolean;
   hindiSentenceAgreementRecords: Array<{
     sentenceIndex: number;

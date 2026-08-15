@@ -607,10 +607,15 @@ export function realizeFirstPersonDutyClause(
     }
   } else if (locale === 'ru') {
     if (tense === 'present') {
-      if (/ает$/u.test(lower)) verb = `${lower.slice(0, -3)}аю`;
-      else if (/яет$/u.test(lower)) verb = `${lower.slice(0, -3)}яю`;
-      else if (/ет$/u.test(lower)) verb = `${lower.slice(0, -2)}у`;
+      // Russian 1sg present replaces the finite ending with `-ю`; treating
+      // `-ует` as a bare `-ет` suffix retains the stem's `у` and creates
+      // malformed forms such as редактируу.
+      if (/(?:ает|яет|ует)$/u.test(lower)) verb = `${lower.slice(0, -2)}ю`;
       else if (/ит$/u.test(lower)) verb = `${lower.slice(0, -2)}ю`;
+      else if (/ировать$/u.test(lower)) verb = `${lower.slice(0, -7)}ирую`;
+      else if (/давать$/u.test(lower)) verb = `${lower.slice(0, -6)}даю`;
+      else if (/(?:ать|ять)$/u.test(lower)) verb = `${lower.slice(0, -2)}ю`;
+      else if (/ет$/u.test(lower)) verb = `${lower.slice(0, -2)}ю`;
       else verb = lower;
     } else {
       // Past tense agrees with the selected gender (проверял / проверяла).
@@ -946,7 +951,13 @@ function detectLocaleVerbMorphologyDefect(text: string, locale: Locale): string 
     }
   }
   if (locale === 'ru') {
-    // Parenthetical gender is caught separately; bare 3sg duty forms here.
+    // Parenthetical gender is caught separately; reject malformed first-person
+    // present forms independently of the builder that produced them. A
+    // duplicated `-у` is never a Russian finite 1sg ending and previously
+    // allowed `редактируу` to pass the Cyrillic-only checks.
+    if (/(?:^|[^\p{Script=Cyrillic}])\p{Script=Cyrillic}*уу(?=[^\p{Script=Cyrillic}]|$)/u.test(text)) {
+      return 'ru_malformed_first_person_present';
+    }
     if (/(?:^|\s)я\s+\p{L}+(?:ет|ит)(?=[^\p{L}]|$)/u.test(text)) {
       return 'ru_person_agreement';
     }
