@@ -23,6 +23,7 @@ import {
   EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION,
   EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
   EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
+  EXPERIENCE_TRUE_TERMINAL_CLEAN_NOOP_448_REVISION,
   EXPERIENCE_CLEAN_NOOP_STAGE_PLAN,
   buildExperienceCleanNoOpTerminalFields,
 } from './cv-experience-terminal-outcome';
@@ -71,6 +72,7 @@ void EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION;
 void EXPERIENCE_PREFLIGHT_BUILD_METADATA_318_REVISION;
 void EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
 void EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION;
+void EXPERIENCE_TRUE_TERMINAL_CLEAN_NOOP_448_REVISION;
 void EXPERIENCE_FACT_AUTHORITY_TRUTH_327_REVISION;
 void EXPERIENCE_PHASE_LOCALE_TRUTH_328_REVISION;
 void EXPERIENCE_REJECTION_LINEAGE_TRUTH_328_REVISION;
@@ -1071,6 +1073,9 @@ export type ExperienceAiDiagSessionInput = {
 export class ExperienceAiDiagnosticSession {
   private stages: ExperienceAiDiagStage[] = [];
   private committedTrace: ExperienceAiDiagnosticTrace | null = null;
+  private requestTimeCleanNoOpSnapshot: Readonly<Record<string, unknown>> | null = null;
+  private requestTimeCleanNoOpStages: ReadonlyArray<ExperienceAiDiagStage> | null = null;
+  private requestTimeCleanNoOpLocked = false;
   private draft: Partial<ExperienceAiDiagnosticTrace> & {
     schemaVersion: typeof EXPERIENCE_AI_TRACE_SCHEMA_VERSION;
     capturedAt: string;
@@ -1399,6 +1404,9 @@ export class ExperienceAiDiagnosticSession {
     typedReason?: string,
     hashes?: { requestIdHash?: string; currentJobContextHash?: string },
   ): void {
+    if (this.requestTimeCleanNoOpLocked) {
+      throw new Error(`experience_clean_noop_post_terminal_stage_write:${name}`);
+    }
     this.stages.push({
       stage: name,
       result,
@@ -1419,6 +1427,15 @@ export class ExperienceAiDiagnosticSession {
   }
 
   patch(partial: Partial<ExperienceAiDiagnosticTrace>): void {
+    if (this.requestTimeCleanNoOpLocked) {
+      const forbidden = Object.keys(partial).filter((key) =>
+        /^(?:provider|recovery|serverRepair|translation|fallback|clientDeterministic|deterministicFallback|noOpRepair|unsupportedClaimRepair|candidateLineage|finalCandidate|finalBullet|finalRequired|finalCovered|finalUncovered|apply|visibleApply|visibleValidation|targetContentApplied|countedAsSuccess|shouldIncrementUsage|usageIncrement|usageCountAfter|semanticNoOp|finalDecisionKind|finalOutcomeReason)/.test(key));
+      if (forbidden.length > 0) {
+        throw new Error(
+          `experience_clean_noop_post_terminal_field_write:${forbidden.join(',')}`,
+        );
+      }
+    }
     const { marker: _ignoredMarker, ...safe } = partial;
     Object.assign(this.draft, safe);
     const markerPatch = sanitizeCvAiDiagnosticMarkerPatch('experience', partial);
@@ -1667,6 +1684,57 @@ export class ExperienceAiDiagnosticSession {
       ok ? undefined : (reason || 'stale_request_or_context_mismatch'),
       { currentJobContextHash },
     );
+  }
+
+  /**
+   * Commit the already-proven request-time clean no-op as a locked terminal
+   * phase snapshot. This path intentionally never accepts a generic finalizer
+   * result: the exact locale authority and visible validation objects that
+   * made the preflight decision are serialized once and then frozen.
+   */
+  recordRequestTimeCleanNoOpTerminal(
+    snapshot: Readonly<Record<string, unknown>>,
+  ): void {
+    if (this.requestTimeCleanNoOpLocked || this.committedTrace) {
+      throw new Error('experience_clean_noop_terminal_already_locked');
+    }
+    if (
+      snapshot.experienceTrueTerminalCleanNoopRevision
+        !== EXPERIENCE_TRUE_TERMINAL_CLEAN_NOOP_448_REVISION
+      || snapshot.cleanNoOpTerminalSnapshotFrozen !== true
+      || snapshot.earlyNoOpPreflightPassed !== true
+      || snapshot.providerAttempted !== false
+      || snapshot.finalCandidateSource !== 'none'
+    ) {
+      throw new Error('experience_clean_noop_terminal_snapshot_invalid');
+    }
+
+    const terminalSnapshot = Object.freeze({
+      ...snapshot,
+      usageCountAfter: this.draft.usageCountBefore,
+    });
+    const preflightStageNames = new Set<ExperienceAiDiagStageName>([
+      'button_pressed',
+      'live_experience_read',
+      'source_description_selected',
+      'source_units_split',
+      'source_fact_identity_created',
+    ]);
+    this.stages = this.stages.filter((stage) => preflightStageNames.has(stage.stage));
+    this.patch(terminalSnapshot as Partial<ExperienceAiDiagnosticTrace>);
+    for (const step of EXPERIENCE_CLEAN_NOOP_STAGE_PLAN) {
+      this.stage(
+        step.stage as ExperienceAiDiagStageName,
+        step.result,
+        step.typedReason,
+      );
+    }
+
+    this.requestTimeCleanNoOpSnapshot = terminalSnapshot;
+    this.requestTimeCleanNoOpStages = Object.freeze(
+      this.stages.map((stage) => Object.freeze({ ...stage })),
+    );
+    this.requestTimeCleanNoOpLocked = true;
   }
 
   /**
@@ -3943,9 +4011,13 @@ export class ExperienceAiDiagnosticSession {
       apiHostClass: classifyApiHostClass(apiBase),
       internalBuildContractUsed: INTERNAL_AI_RESET_ENABLED ? true : false,
     });
+    const terminalDraft = this.requestTimeCleanNoOpSnapshot
+      ? { ...this.draft, ...this.requestTimeCleanNoOpSnapshot }
+      : this.draft;
+    const terminalStages = this.requestTimeCleanNoOpStages || this.stages;
     const base = {
-      ...this.draft,
-      stages: [...this.stages],
+      ...terminalDraft,
+      stages: [...terminalStages],
       ...identity,
       diagnosticContractRevision: CV_AI_DIAGNOSTIC_CONTRACT_REVISION,
       cvAiDiagnosticsV2299Revision: CV_AI_DIAGNOSTICS_V2_299_REVISION,
@@ -3953,8 +4025,8 @@ export class ExperienceAiDiagnosticSession {
       // Local-owned stable marker — never leave empty after metadata merges.
       marker: EXPERIENCE_AI_DIAG_MARKER,
       visibleDescriptionMatchesFinalHash:
-        this.draft.visibleDescriptionMatchesFinalHash
-        ?? this.draft.visibleTextareaMatchesFinalNormalizedHash
+        terminalDraft.visibleDescriptionMatchesFinalHash
+        ?? terminalDraft.visibleTextareaMatchesFinalNormalizedHash
         ?? null,
     };
 

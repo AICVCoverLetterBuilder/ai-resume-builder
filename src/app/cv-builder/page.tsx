@@ -162,6 +162,7 @@ import {
   EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION,
 } from '@/lib/cv-experience-operation-source-bundle';
 import { analyzeExperienceVisibleSource } from '@/lib/cv-experience-visible-source-analysis';
+import { buildExperienceRequestTimeCleanNoOpSnapshot } from '@/lib/cv-experience-terminal-outcome';
 void EXPERIENCE_UNEDITED_RERUN_PREFLIGHT_317_REVISION;
 import {
   buildExperienceAiNoOpRepairPrompt,
@@ -2015,12 +2016,6 @@ export default function CVBuilderPage() {
         materialUserEditDetected: textareaProvenance.materialUserEditDetected,
       },
     );
-    diagSession.recordPayloadBuilt({
-      locale: requestedLocale,
-      industryNorm: requestContext.industryNorm,
-      levelNorm: requestContext.levelNorm,
-      isPresent: Boolean(exp.isPresent),
-    });
     // Capture immutable build metadata before provenance/preflight/any early return.
     await diagSession.resolveVersions();
 
@@ -2217,20 +2212,15 @@ export default function CVBuilderPage() {
       });
       if (earlyNoOp.earlyNoOpPreflightPassed) {
         clearTimeout(timer);
-        const earlyFinalized = finalizeCvAiFieldForApply({
-          action: 'experience_bullets',
-          field: 'experience_description',
+        const terminalSnapshot = buildExperienceRequestTimeCleanNoOpSnapshot({
+          sourceBundle: sourceBundleForPreflight,
+          preflight: earlyNoOp,
+          visibleAuthority: visibleAnalysisForPreflight,
+          visibleCoverage: visibleCoverageForPreflight,
           requestedLocale,
-          gender: liveCv.personal.gender || '',
-          cv: liveCv,
-          candidate: '',
-          experienceId: clickedExperienceEntryId,
-          industry,
-          level,
-          jobContext: requestContext,
-          operationSnapshot,
-          jobContextHash: requestContext.key,
-          earlyUneditedRerunNoOp: true,
+          entryGeneratedLocaleBeforeApply:
+            (exp as WorkExperience & { generatedLocale?: string }).generatedLocale || null,
+          contentLocaleDocument: liveCv.contentLocale || null,
         });
         finishAiClientRequest({
           ctx: reqCtx,
@@ -2241,27 +2231,9 @@ export default function CVBuilderPage() {
           error: null,
           responseSource: 'blocked',
         });
-        diagSession.recordFinalizeResult(earlyFinalized);
+        diagSession.recordRequestTimeCleanNoOpTerminal(terminalSnapshot);
         // Clean no-op terminalizer already set stages — do not call recordVisibleApply(false).
         await diagSession.resolveVersions();
-        diagSession.patch({
-          providerAttempted: false,
-          earlyNoOpPreflightPassed: true,
-          uneditedRerunDetected: true,
-          semanticNoOpDetected: true,
-          semanticNoOpReason: 'unedited_ai_output_already_valid',
-          degradationDetected: false,
-          degradationKinds: [],
-          finalDecisionKind: 'semantic_noop',
-          finalOutcomeReason: 'experience_ai_noop',
-          rejectionStage: null,
-          finalTypedFailureReason: null,
-          finalBulletCount: 0,
-          finalBulletScripts: [],
-          providerNoOpDetected: false,
-          apiResponseKind: 'not_attempted',
-          providerResponseKind: 'not_attempted',
-        });
         diagSession.commit();
         logExperienceAiTrace({
           resultApplied: false,
@@ -2273,6 +2245,12 @@ export default function CVBuilderPage() {
         return;
       }
 
+      diagSession.recordPayloadBuilt({
+        locale: requestedLocale,
+        industryNorm: requestContext.industryNorm,
+        levelNorm: requestContext.levelNorm,
+        isPresent: Boolean(exp.isPresent),
+      });
       const requestBody = {
         action: 'bullets',
         proToken,

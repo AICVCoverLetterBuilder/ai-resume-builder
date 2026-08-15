@@ -23,9 +23,15 @@ describe('AAB-426 Experience semantic no-op UX routing', () => {
       handler.indexOf('if (earlyNoOp.earlyNoOpPreflightPassed)'),
       handler.indexOf('const requestBody'),
     );
+    const terminalContract = readFileSync(
+      'src/lib/cv-experience-terminal-outcome.ts',
+      'utf8',
+    );
 
-    expect(earlyTerminal).toContain('providerAttempted: false');
-    expect(earlyTerminal).toContain("finalDecisionKind: 'semantic_noop'");
+    expect(earlyTerminal).toContain('buildExperienceRequestTimeCleanNoOpSnapshot({');
+    expect(earlyTerminal).toContain('recordRequestTimeCleanNoOpTerminal(terminalSnapshot)');
+    expect(terminalContract).toContain('providerAttempted: false');
+    expect(terminalContract).toContain("finalDecisionKind: 'semantic_noop'");
     expect(earlyTerminal).toContain('setGeneratingBulletsId(null);');
     expect(earlyTerminal).not.toContain('apiFetch');
     expect(earlyTerminal.match(/toast\.error\(aiErrorMessage\('ai_noop', requestedLocale\)\);/g))

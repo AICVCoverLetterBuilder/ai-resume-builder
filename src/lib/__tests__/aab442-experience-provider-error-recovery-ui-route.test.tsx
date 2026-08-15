@@ -323,7 +323,7 @@ describe('AAB442 real UI route recovery', () => {
       .mockResolvedValueOnce({ content: [{ type: 'text', text: UNSAFE_FRENCH }] })
       .mockResolvedValueOnce({ content: [{ type: 'text', text: SAFE_FRENCH }] });
     const Page = (await import('@/app/cv-builder/page')).default;
-    const { rerender } = render(<Page />);
+    const firstMount = render(<Page />);
     fireEvent.click(screen.getByRole('button', { name: translations.fr.cv.experience }));
     fireEvent.click(screen.getByRole('button', { name: new RegExp(translations.fr.cv.aiBullets, 'i') }));
     await waitFor(() => expect(state.writes).toHaveLength(1), { timeout: 20000 });
@@ -334,7 +334,8 @@ describe('AAB442 real UI route recovery', () => {
     // contains an older Spanish value.  Provenance must win for an unedited
     // hash-matched AI output, but must not be copied to edited text.
     state.currentCv = { ...state.currentCv, contentLocale: 'es' };
-    rerender(<Page />);
+    firstMount.unmount();
+    render(<Page />);
     fireEvent.click(screen.getByRole('button', { name: translations.fr.cv.experience }));
     fireEvent.click(screen.getByRole('button', { name: new RegExp(translations.fr.cv.aiBullets, 'i') }));
     await waitFor(() => expect(getLatestExperienceAiDiagnostic()?.finalDecisionKind).toBe('semantic_noop'), {
@@ -348,7 +349,10 @@ describe('AAB442 real UI route recovery', () => {
     expect(diag?.recoveryAttempted).toBe(false);
     expect(diag?.semanticNoOpDetected).toBe(true);
     expect(diag?.sourceAlreadyValidForTarget).toBe(true);
+    expect(diag?.visibleTextareaLocale).toBe('fr');
     expect(diag?.visibleTextareaLocaleBeforeApply).toBe('fr');
+    expect(diag?.visibleLocaleAuthorityKind).not.toBeNull();
+    expect(diag?.rawDetectorDisagreesWithTrustedLocale).toBe(true);
     expect(diag?.targetLocaleValidationPassed).toBe(true);
     expect(diag?.providerValidationApplicable).toBe(false);
     expect(diag?.providerRequiredFactCount).toBeNull();
@@ -361,6 +365,7 @@ describe('AAB442 real UI route recovery', () => {
     expect(diag?.clientDeterministicFallbackAttempted).toBe(false);
     expect(diag?.fallbackSelected).toBe(false);
     expect(diag?.fallbackReason).toBeNull();
+    expect(diag?.fallbackBulletCount).toBe(0);
     expect(diag?.candidateLineage?.filter((item) => item.candidateKind !== 'visible_current_text')).toEqual([]);
     expect(diag?.stages?.some((stage) => stage.result === 'fail')).toBe(false);
     expect(diag?.diagnosticInvariantCheckPassed).toBe(true);
@@ -368,6 +373,12 @@ describe('AAB442 real UI route recovery', () => {
     expect(diag?.privacyCheckPassed).toBe(true);
     expect(diag?.canonicalExperienceDecisionAllowsApply).toBe(false);
     expect(diag?.canonicalExperienceDecisionAllowsUsage).toBe(false);
+    expect(diag?.diagnosticInvariantFailures || []).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'unedited_ai_visible_locale_mismatch' }),
+      expect.objectContaining({ code: 'clean_noop_has_failed_stages' }),
+      expect.objectContaining({ code: 'provider_not_attempted_but_provider_evidence_present' }),
+      expect.objectContaining({ code: 'clean_noop_has_fallback_evidence' }),
+    ]));
   }, 30000);
 
   it('routes a parsed HTTP-200 provider candidate rejected by strict validation through one recovery', async () => {
