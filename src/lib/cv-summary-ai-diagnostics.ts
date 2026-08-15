@@ -148,6 +148,7 @@ import { hashExperienceEntryId } from './cv-experience-entry-isolation';
 import type { CVData } from './types';
 import {
   countSummaryDurationExpressions,
+  analyzeDurationRepresentations,
   summarizeDurationClaimBreakdown,
   verifyIndependentFinalDurationCount,
 } from './cv-summary-duration-ownership';
@@ -2749,6 +2750,7 @@ export class SummaryAiDiagnosticSession {
 
   recordVisibleApply(ok: boolean, usageAfter: number, visibleText?: string): void {
     const locale = (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale;
+    const sharedVisiblePostWriteLocale = !new Set(['de', 'en', 'fr', 'it', 'es', 'ar', 'hi']).has(locale);
     const visibleCount = typeof visibleText === 'string'
       ? countSummaryDurationExpressions(visibleText, locale)
       : (ok ? (this.draft.independentFinalDurationClaimCount ?? null) : null);
@@ -3381,9 +3383,101 @@ export class SummaryAiDiagnosticSession {
       }
       }
     }
+    // Shared post-write validation for locales without a warehouse-specific
+    // visible matcher (CJK, Cyrillic, Portuguese, etc.).  The operation-owned
+    // text is the authority: locale/native/duration validators run against it
+    // directly, and role/fact counts are accepted only when its normalized
+    // hash equals the selected final hash.
+    if (ok && typeof visibleText === 'string' && sharedVisiblePostWriteLocale) {
+      const requiredCurrent = Number(this.draft.requiredCurrentDutyFactCount ?? 0);
+      const requiredPrior = Number(this.draft.requiredPriorDutyFactCount ?? 0);
+      const finalHash = this.draft.finalNormalizedHash
+        ?? this.draft.finalValidatedCandidateHash
+        ?? null;
+      const matchesFinal = Boolean(visibleHash && finalHash && visibleHash === finalHash);
+      const native = evaluateSummaryV2NativeSurface({
+        text: visibleText,
+        locale,
+        hasCurrent: requiredCurrent > 0,
+        hasPrior: requiredPrior > 0,
+        perspectiveMode: this.draft.finalPerspectiveMode === 'neutral_cv'
+          ? 'cv_third_person'
+          : 'first_person',
+        gender: this.draft.selectedGender,
+      });
+      const purity = validateAiUnitLocalePurity(visibleText, locale, {
+        kind: 'summary_sentence',
+        requireUnits: true,
+      });
+      const duration = verifyIndependentFinalDurationCount(visibleText, locale, {
+        requireExactlyOne: true,
+      });
+      const durationRep = analyzeDurationRepresentations(visibleText, locale);
+      visibleDutyRequired = requiredCurrent;
+      visibleDutyCovered = matchesFinal ? Number(this.draft.coveredCurrentDutyFactCount ?? 0) : 0;
+      visiblePriorDutyRequired = requiredPrior;
+      visiblePriorDutyCovered = matchesFinal ? Number(this.draft.coveredPriorDutyFactCount ?? 0) : 0;
+      visibleDutyOk = requiredCurrent === 0 || (matchesFinal && visibleDutyCovered === requiredCurrent);
+      visiblePriorDutyOk = requiredPrior === 0 || (matchesFinal && visiblePriorDutyCovered === requiredPrior);
+      visibleGrammarOk = native.finiteClauseValidationPassed
+        && native.grammaticalPersonValidationPassed;
+      visibleNativeOk = native.nativeSurfaceValidationPassed;
+      visibleLocaleOk = purity.targetLocalePurityPassed;
+      visibleSourceLanguageLeakageDetected = purity.sourceLanguageLeakageDetected;
+      visibleDurationScopeOk = duration.ok && this.draft.finalDurationScopeValidationPassed !== false;
+      visibleValidationPerspectiveMode = this.draft.finalPerspectiveMode === 'neutral_cv'
+        ? 'cv_third_person'
+        : 'first_person';
+      this.patch({
+        visibleSummaryMatchesFinalHash: matchesFinal,
+        visibleCurrentDutyRequiredFactParityPassed: matchesFinal,
+        visibleCurrentDutyRequiredFactCountMatchesFinal: visibleDutyRequired === requiredCurrent,
+        visiblePriorDutyRequiredFactParityPassed: matchesFinal,
+        visibleDurationRepresentationKind: duration.ok
+          ? (this.draft.finalDurationRepresentationKind ?? durationRep.representationKind)
+          : durationRep.representationKind,
+        visibleDurationRepresentationCount: durationRep.representationCount,
+        visibleDurationHybridDetected: durationRep.hybridDetected,
+        visibleDurationSemanticAgreementPassed: duration.ok,
+        visibleFinalPostconditionsPassed: false,
+      });
+    }
+    const postWriteNative = typeof visibleText === 'string'
+      ? evaluateSummaryV2NativeSurface({
+        text: visibleText,
+        locale,
+        hasCurrent: Number(this.draft.requiredCurrentDutyFactCount ?? 0) > 0,
+        hasPrior: Number(this.draft.requiredPriorDutyFactCount ?? 0) > 0,
+        perspectiveMode: this.draft.finalPerspectiveMode === 'neutral_cv'
+          ? 'cv_third_person'
+          : 'first_person',
+        gender: this.draft.selectedGender,
+      })
+      : null;
+    const postWritePurity = typeof visibleText === 'string'
+      ? validateAiUnitLocalePurity(visibleText, locale, {
+        kind: 'summary_sentence',
+        requireUnits: true,
+      })
+      : null;
+    const postWriteDuration = typeof visibleText === 'string'
+      ? verifyIndependentFinalDurationCount(visibleText, locale, { requireExactlyOne: true })
+      : null;
+    const postWriteDurationRepresentation = typeof visibleText === 'string'
+      ? analyzeDurationRepresentations(visibleText, locale)
+      : null;
+    // A successful write is only valid when the persisted text is the exact
+    // selected final candidate.  Keep the pre-existing N/A behavior when no
+    // final hash was produced (for terminal/unit-only callers), but never let
+    // a hash mismatch bill or commit merely because duty counts are zero.
+    const finalHashForApply = this.draft.finalNormalizedHash
+      ?? this.draft.finalValidatedCandidateHash
+      ?? null;
+    const visibleFinalHashMatches = !(ok && typeof visibleText === 'string' && finalHashForApply)
+      || visibleHash === finalHashForApply;
     const applyOk = ok && durationStillOk && visibleRoleOk && visibleDutyOk
       && visiblePriorDutyOk && visibleGrammarOk && visibleNativeOk
-      && visibleLocaleOk && visibleDurationScopeOk;
+      && visibleLocaleOk && visibleDurationScopeOk && visibleFinalHashMatches;
     void SUMMARY_CONTENT_LOCALE_ROLLBACK_361_REVISION;
     const finalHashForRace = this.draft.finalNormalizedHash
       ?? this.draft.finalValidatedCandidateHash
@@ -3463,68 +3557,67 @@ export class SummaryAiDiagnosticSession {
         : applyOk,
       visibleDurationClaimCountAfterApply: visibleCount,
       visibleDurationMatchesFinalizedCount: matches,
-      visibleStructuredRoleLocaleValidationPassed: (locale === 'de' || locale === 'en')
-        ? (typeof visibleText === 'string' ? visibleRoleOk && visibleLocaleOk : null)
+      visibleDurationRepresentationKind: postWriteDuration && postWriteDuration.ok
+        ? (this.draft.finalDurationRepresentationKind
+          ?? postWriteDurationRepresentation?.representationKind
+          ?? null)
+        : (postWriteDurationRepresentation?.representationKind ?? null),
+      visibleDurationRepresentationCount: postWriteDurationRepresentation?.representationCount ?? null,
+      visibleDurationHybridDetected: postWriteDurationRepresentation?.hybridDetected ?? null,
+      visibleStructuredRoleLocaleValidationPassed: typeof visibleText === 'string'
+        ? visibleRoleOk && visibleLocaleOk
         : null,
-      visibleWrongLocaleStructuredRoleCount: (locale === 'de' || locale === 'en')
+      visibleWrongLocaleStructuredRoleCount: (locale === 'de' || locale === 'en' || sharedVisiblePostWriteLocale)
         ? visibleWrongRoleCount
         : null,
-      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
+      visibleRequiredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it' || sharedVisiblePostWriteLocale)
         ? visibleDutyRequired
         : null,
-      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
+      visibleCoveredCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it' || sharedVisiblePostWriteLocale)
         ? visibleDutyCovered
         : null,
-      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
+      visibleMissingCurrentDutyFactCount: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it' || sharedVisiblePostWriteLocale)
         ? Math.max(0, visibleDutyRequired - visibleDutyCovered)
         : null,
-      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it')
+      visibleCurrentDutyCoveragePassed: (locale === 'de' || locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it' || sharedVisiblePostWriteLocale)
         ? (typeof visibleText === 'string' ? visibleDutyOk : null)
         : null,
-      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
+      visibleRequiredPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it' || sharedVisiblePostWriteLocale)
         ? visiblePriorDutyRequired
         : null,
-      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
+      visibleCoveredPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it' || sharedVisiblePostWriteLocale)
         ? visiblePriorDutyCovered
         : null,
-      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
+      visibleMissingPriorDutyFactCount: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it' || sharedVisiblePostWriteLocale)
         ? Math.max(0, visiblePriorDutyRequired - visiblePriorDutyCovered)
         : null,
-      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it')
+      visiblePriorDutyCoveragePassed: (locale === 'en' || locale === 'es' || locale === 'hi' || locale === 'ar' || locale === 'de' || locale === 'fr' || locale === 'it' || sharedVisiblePostWriteLocale)
         ? (typeof visibleText === 'string' ? visiblePriorDutyOk : null)
         : null,
-      visibleDurationScopeValidationPassed: locale === 'en'
-        ? (typeof visibleText === 'string' ? visibleDurationScopeOk : null)
-        : (locale === 'de' || locale === 'hi' || locale === 'ar' || locale === 'fr' || locale === 'it'
-          ? (typeof visibleText === 'string' ? visibleDurationScopeOk : this.draft.visibleDurationScopeValidationPassed)
-          : null),
+      visibleDurationScopeValidationPassed: typeof visibleText === 'string'
+        ? visibleDurationScopeOk
+        : null,
       visibleGermanGrammarValidationPassed: locale === 'de'
         ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
         : null,
-      visibleTargetLocalePurityPassed: (locale === 'es' || locale === 'fr')
-        ? (typeof visibleText === 'string' ? visibleLocaleOk : null)
+      visibleTargetLocalePurityPassed: postWritePurity?.targetLocalePurityPassed ?? null,
+      visibleSourceLanguageLeakageDetected: postWritePurity?.sourceLanguageLeakageDetected ?? null,
+      // French grammar includes the shared token-boundary/casing/native
+      // surface contract; preserve that result rather than replacing it with
+      // the generic finite-clause/person subset below.
+      visibleGrammarValidationPassed: postWriteNative
+        ? (locale === 'fr'
+          ? visibleGrammarOk
+          : (postWriteNative.grammaticalPersonValidationPassed
+            && postWriteNative.finiteClauseValidationPassed))
         : null,
-      visibleSourceLanguageLeakageDetected: locale === 'es'
-        ? (typeof visibleText === 'string' ? visibleSourceLanguageLeakageDetected : null)
+      visibleNativeSurfaceValidationPassed: postWriteNative?.nativeSurfaceValidationPassed ?? null,
+      visibleFinalPostconditionsPassed: typeof visibleText === 'string' ? applyOk : null,
+      visibleValidationPerspectiveMode: postWriteNative
+        ? (this.draft.finalPerspectiveMode === 'neutral_cv' ? 'cv_third_person' : 'first_person')
         : null,
-      visibleGrammarValidationPassed: (locale === 'es' || locale === 'fr')
-        ? (typeof visibleText === 'string' ? visibleGrammarOk : null)
-        : null,
-      visibleNativeSurfaceValidationPassed: (locale === 'es' || locale === 'fr')
-        ? (typeof visibleText === 'string' ? visibleNativeOk : null)
-        : null,
-      visibleFinalPostconditionsPassed: (locale === 'es' || locale === 'fr')
-        ? (typeof visibleText === 'string' ? applyOk : null)
-        : null,
-      visibleValidationPerspectiveMode: (locale === 'es' || locale === 'fr')
-        ? visibleValidationPerspectiveMode
-        : null,
-      perspectiveAuthoritySource: (locale === 'es' || locale === 'fr')
-        ? 'final_perspective_mode'
-        : null,
-      perspectiveContractMatched: (locale === 'es' || locale === 'fr')
-        ? (typeof visibleText === 'string' ? visibleNativeOk : null)
-        : null,
+      perspectiveAuthoritySource: postWriteNative ? 'final_perspective_mode' : null,
+      perspectiveContractMatched: postWriteNative?.grammaticalPersonValidationPassed ?? null,
       // Applied summaries: only fail race_guard on a real source ownership conflict.
       raceGuardResult,
       actualRaceDetected,

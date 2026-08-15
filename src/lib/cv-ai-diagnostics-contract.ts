@@ -2788,6 +2788,41 @@ export function checkSummaryDiagnosticCompleteness(
     ]) require(key);
     if (trace.finalPrintClaimDetected === true) require('materialAuthority');
   }
+  // Every successful visible Summary apply has one shared post-write
+  // validation contract, regardless of locale or candidate origin.  These
+  // fields must describe the text actually written/read back; null is only
+  // valid before a visible apply or on a genuinely non-applicable terminal.
+  if (
+    trace.countedAsSuccess === true
+    && trace.visibleApplySucceeded === true
+    && trace.visibleCandidateHashAfterApply != null
+  ) {
+    for (const key of [
+      'visibleCandidateHashAfterApply',
+      'visibleSummaryMatchesFinalHash',
+      'visibleGrammarValidationPassed',
+      'visibleNativeSurfaceValidationPassed',
+      'visibleFinalPostconditionsPassed',
+      'visibleValidationPerspectiveMode',
+      'perspectiveAuthoritySource',
+      'perspectiveContractMatched',
+      'visibleStructuredRoleLocaleValidationPassed',
+      'visibleRequiredCurrentDutyFactCount',
+      'visibleCoveredCurrentDutyFactCount',
+      'visibleMissingCurrentDutyFactCount',
+      'visibleCurrentDutyCoveragePassed',
+      'visibleRequiredPriorDutyFactCount',
+      'visibleCoveredPriorDutyFactCount',
+      'visibleMissingPriorDutyFactCount',
+      'visiblePriorDutyCoveragePassed',
+      'visibleTargetLocalePurityPassed',
+      'visibleSourceLanguageLeakageDetected',
+      'visibleDurationClaimCountAfterApply',
+      'visibleDurationRepresentationKind',
+      'visibleDurationRepresentationCount',
+      'visibleDurationScopeValidationPassed',
+    ]) require(key);
+  }
   if (locale === 'hi') {
     const hindiWarehouseApplicable = !summaryV2FactIdPathActive
       && trace.hindiWarehouseGrammarFieldsApplicable !== false;
