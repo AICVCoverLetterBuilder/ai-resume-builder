@@ -8308,6 +8308,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       provenance: textareaProvenance,
       requestedLocale: locale,
     }),
+    generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
+      || null,
     storedLocale: (exp as WorkExperience & { contentLocale?: string })?.contentLocale
       || cv.contentLocale
       || locale,
@@ -8479,13 +8481,18 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // document-level detector (which may still carry a stale locale).
       visibleTextareaLocale: visibleSourceAnalysis.sourceLocale,
       visibleTextareaLocaleBeforeApply: visibleSourceAnalysis.sourceLocale,
+      detectedVisibleTextLocale: visibleSourceAnalysis.rawDetectedLocale,
+      visibleLocaleAuthorityKind: visibleSourceAnalysis.localeAuthorityKind,
+      rawDetectorDisagreesWithTrustedLocale:
+        visibleSourceAnalysis.rawDetectorDisagreesWithTrustedLocale,
       entryGeneratedLocaleBeforeApply:
         (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null,
       contentLocaleDocument: cv.contentLocale || null,
       requestedTargetLocale: locale,
       targetLocale: locale,
       targetLocaleValidationPassed: true,
-      visibleLocaleMetadataMismatchRecorded: false,
+      visibleLocaleMetadataMismatchRecorded:
+        visibleSourceAnalysis.rawDetectorDisagreesWithTrustedLocale,
       sourceTenseMismatchCount: visibleSourceAnalysis.tenseMismatchCount,
       sourceTenseValidationPassed: visibleSourceAnalysis.sourceTenseValidationPassed,
       expectedEmploymentTense: visibleSourceAnalysis.expectedEmploymentTense,

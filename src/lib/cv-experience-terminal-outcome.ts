@@ -34,6 +34,7 @@ export type ExperienceAiCleanNoOpTerminalFields = {
     typeof EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION;
   experienceTerminalDiagnosticConsistencyRevision:
     typeof EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION;
+  cleanNoOpTerminalized: true;
   finalDecisionKind: 'semantic_noop' | 'exact_noop';
   finalOutcomeReason: 'experience_ai_noop';
   semanticNoOpDetected: true;
@@ -139,6 +140,7 @@ export function buildExperienceCleanNoOpTerminalFields(options: {
       EXPERIENCE_PROVIDER_NOT_ATTEMPTED_TRUTH_318_REVISION,
     experienceTerminalDiagnosticConsistencyRevision:
       EXPERIENCE_TERMINAL_DIAGNOSTIC_CONSISTENCY_318_REVISION,
+    cleanNoOpTerminalized: true,
     finalDecisionKind: options.decisionKind || 'semantic_noop',
     finalOutcomeReason: 'experience_ai_noop',
     semanticNoOpDetected: true,

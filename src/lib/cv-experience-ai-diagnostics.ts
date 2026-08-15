@@ -268,6 +268,9 @@ export type ExperienceAiDiagnosticTrace = {
   entryGeneratedLocaleBeforeApply?: string | null;
   visibleLocaleMetadataMismatchRecorded?: boolean | null;
   detectedVisibleTextLocale?: string | null;
+  visibleLocaleAuthorityKind?: string | null;
+  rawDetectorDisagreesWithTrustedLocale?: boolean | null;
+  cleanNoOpTerminalized?: boolean;
   persistedGeneratedLocaleForVisibleMismatch?: string | null;
   contentLocaleDocument?: string | null;
   appliedVisibleContentLocale?: string | null;
@@ -1687,6 +1690,21 @@ export class ExperienceAiDiagnosticSession {
         (diag.visibleComparisonNormalizedHash as string | null | undefined) ?? null,
       visibleComparisonUnitCount: Number(diag.visibleComparisonUnitCount ?? 0),
     });
+    // A clean no-op is an authoritative terminal outcome.  If an earlier
+    // provider/fallback branch touched the draft before the terminal decision,
+    // discard those downstream stages instead of appending a second trace that
+    // can retain failed/provider evidence.
+    const preflightStageNames = new Set<ExperienceAiDiagStageName>([
+      'button_pressed',
+      'live_experience_read',
+      'source_description_selected',
+      'source_units_split',
+      'source_fact_identity_created',
+      'job_context_built',
+      'request_payload_built',
+      'request_started',
+    ]);
+    this.stages = this.stages.filter((stage) => preflightStageNames.has(stage.stage));
     // Preserve dual-source / preflight truth from finalize, then force clean terminal fields.
     this.patch({
       ...diag,
@@ -1704,6 +1722,30 @@ export class ExperienceAiDiagnosticSession {
       providerUncoveredFactCount: null,
       providerRejectionReasons: [],
       providerRejectionStage: null,
+      recoveryAttempted: false,
+      recoveryHttpStatus: null,
+      recoveryCandidatePresent: false,
+      recoveryAccepted: false,
+      recoverySelected: false,
+      recoveryRejectionReasons: [],
+      serverRepairAttempted: false,
+      serverRepairSelected: false,
+      serverRepairSource: null,
+      translationProviderAttempted: false,
+      translationRepairAttempted: false,
+      translationFallbackAttempted: false,
+      translationFallbackApplied: false,
+      translationFallbackSelected: false,
+      fallbackSelected: false,
+      fallbackReason: null,
+      fallbackBulletCount: 0,
+      fallbackBulletScripts: [],
+      clientDeterministicFallbackAttempted: false,
+      clientDeterministicFallbackSelected: false,
+      clientDeterministicFallbackApplied: false,
+      clientDeterministicFallbackUsedForFinalCandidate: false,
+      deterministicFallbackAttemptedAfterNoOp: false,
+      deterministicFallbackAppliedAfterNoOp: false,
       providerAccepted: false,
       providerBulletCount: 0,
       providerBulletScripts: [],
@@ -1734,11 +1776,17 @@ export class ExperienceAiDiagnosticSession {
       raceGuardApplicable: false,
       raceGuardResult: 'not_required',
       usageCountAfter: this.draft.usageCountBefore,
-      relevanceValidationPassed: null,
-      perspectiveValidationPassed: null,
       // Visible-source preflight proved tense/locale validity.
       tenseValidationPassed: true,
       localeValidationPassed: true,
+      targetLocaleValidationPassed: true,
+      targetLocalePurityPassed: true,
+      relevanceValidationPassed: typeof diag.relevanceValidationPassed === 'boolean'
+        ? diag.relevanceValidationPassed
+        : true,
+      perspectiveValidationPassed: typeof diag.perspectiveValidationPassed === 'boolean'
+        ? diag.perspectiveValidationPassed
+        : true,
       candidateLineage: clean.candidateLineage as ExperienceAiDiagnosticTrace['candidateLineage'],
       experienceCleanNoopTerminalOutcomeRevision:
         EXPERIENCE_CLEAN_NOOP_TERMINAL_OUTCOME_318_REVISION,
@@ -1811,6 +1859,7 @@ export class ExperienceAiDiagnosticSession {
     const diag = finalized.diagnostics || {};
     const diagRec = diag as Record<string, unknown>;
     const earlyCleanNoOp = diagRec.earlyNoOpPreflightPassed === true
+      || diagRec.cleanNoOpTerminalized === true
       || (
         finalized.reason === 'experience_ai_noop'
         && finalized.blocked !== true
@@ -2878,6 +2927,12 @@ export class ExperienceAiDiagnosticSession {
         ((diag as Record<string, unknown>).visibleTextareaLocaleBeforeApply as string | undefined)
         ?? ((diag as Record<string, unknown>).visibleTextareaLocale as string | undefined)
         ?? null,
+      visibleLocaleAuthorityKind:
+        ((diag as Record<string, unknown>).visibleLocaleAuthorityKind as string | undefined)
+        ?? null,
+      rawDetectorDisagreesWithTrustedLocale:
+        ((diag as Record<string, unknown>).rawDetectorDisagreesWithTrustedLocale as boolean | undefined)
+        ?? false,
       entryGeneratedLocaleBeforeApply:
         ((diag as Record<string, unknown>).entryGeneratedLocaleBeforeApply as string | undefined)
         ?? null,

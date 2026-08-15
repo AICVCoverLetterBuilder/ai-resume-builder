@@ -3033,6 +3033,11 @@ type ExperienceLike = {
   serverRepairAttempted?: boolean | null;
   serverRepairSelected?: boolean | null;
   serverRepairSource?: string | null;
+  recoveryAttempted?: boolean | null;
+  recoveryCandidatePresent?: boolean | null;
+  recoverySelected?: boolean | null;
+  translationFallbackAttempted?: boolean | null;
+  translationFallbackSelected?: boolean | null;
   providerAccepted?: boolean | null;
   providerValidationApplicable?: boolean | null;
   providerSemanticCoveragePassed?: boolean | null;
@@ -3085,6 +3090,9 @@ type ExperienceLike = {
   visibleTextareaLocaleBeforeApply?: string | null;
   visibleLocaleMetadataMismatchRecorded?: boolean | null;
   detectedVisibleTextLocale?: string | null;
+  visibleLocaleAuthorityKind?: string | null;
+  rawDetectorDisagreesWithTrustedLocale?: boolean | null;
+  cleanNoOpTerminalized?: boolean;
   persistedGeneratedLocaleForVisibleMismatch?: string | null;
   visibleComparisonUsedForNoOp?: boolean | null;
   visibleComparisonHash?: string | null;
@@ -4179,6 +4187,39 @@ export function checkExperienceDiagnosticInvariants(
           (c) => c?.candidateKind === 'provider',
         ),
     });
+  }
+  if (trace.earlyNoOpPreflightPassed === true) {
+    const recoveryEvidence = trace.recoveryAttempted === true
+      || trace.recoveryCandidatePresent === true
+      || trace.recoverySelected === true
+      || trace.serverRepairAttempted === true
+      || trace.serverRepairSelected === true;
+    if (recoveryEvidence) {
+      push('clean_noop_has_recovery_evidence', {
+        recoveryAttempted: trace.recoveryAttempted ?? null,
+        recoveryCandidatePresent: trace.recoveryCandidatePresent ?? null,
+        recoverySelected: trace.recoverySelected ?? null,
+        serverRepairAttempted: trace.serverRepairAttempted ?? null,
+        serverRepairSelected: trace.serverRepairSelected ?? null,
+      });
+    }
+    if (
+      trace.translationFallbackAttempted === true
+      || trace.translationFallbackSelected === true
+      || trace.clientDeterministicFallbackAttempted === true
+      || trace.clientDeterministicFallbackSelected === true
+      || trace.fallbackSelected === true
+    ) {
+      push('clean_noop_has_fallback_evidence', {
+        translationFallbackAttempted: trace.translationFallbackAttempted ?? null,
+        translationFallbackSelected: trace.translationFallbackSelected ?? null,
+        clientDeterministicFallbackAttempted:
+          trace.clientDeterministicFallbackAttempted ?? null,
+        clientDeterministicFallbackSelected:
+          trace.clientDeterministicFallbackSelected ?? null,
+        fallbackSelected: trace.fallbackSelected ?? null,
+      });
+    }
   }
   if (
     trace.providerAttempted === false

@@ -2186,6 +2186,8 @@ export default function CVBuilderPage() {
           provenance: textareaProvenance,
           requestedLocale,
         }),
+        generatedLocale: (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale
+          || null,
         storedLocale: operationalContentLocale || requestedLocale,
       });
       const visibleCoverageForPreflight = validateVisibleExperienceCoverage({

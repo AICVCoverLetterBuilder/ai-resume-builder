@@ -81,7 +81,7 @@ export type ExperienceTextareaProvenanceResolution = {
  * normal validation remain authoritative.
  */
 export function resolveTrustedUneditedAiOutputLocale(options: {
-  exp: Pick<WorkExperience, 'id' | 'aiOutputProvenance'> | null | undefined;
+  exp: Pick<WorkExperience, 'id' | 'aiOutputProvenance' | 'generatedLocale'> | null | undefined;
   provenance: Pick<ExperienceTextareaProvenanceResolution,
     'currentTextareaProvenance' | 'lastAiOutputHashMatched' | 'materialUserEditDetected'>
     | null
@@ -94,19 +94,31 @@ export function resolveTrustedUneditedAiOutputLocale(options: {
   const persisted = exp?.aiOutputProvenance;
   if (
     !exp
-    || !persisted
-    || !persisted.experienceEntryId
-    || persisted.experienceEntryId !== exp.id
-    || !persisted.targetLocale
     || !requested
     || provenance?.currentTextareaProvenance !== 'ai_generated_unedited'
     || provenance.lastAiOutputHashMatched !== true
     || provenance.materialUserEditDetected === true
-    || !localesEquivalent(persisted.targetLocale, requested)
   ) {
     return null;
   }
-  return persisted.targetLocale;
+  // The persisted output record is strongest because it is scoped to the exact
+  // entry and write-time request.  Older entries may only retain generatedLocale;
+  // that metadata is the next-authority source when the same unedited, hash-
+  // matched AI output is still visible.  Never use it for edited/user text.
+  if (
+    persisted
+  ) {
+    if (persisted.experienceEntryId !== exp.id) return null;
+    if (persisted.targetLocale && !localesEquivalent(persisted.targetLocale, requested)) {
+      return null;
+    }
+    if (persisted.targetLocale) return persisted.targetLocale;
+  }
+  const generatedLocale = String(exp.generatedLocale || '').trim();
+  if (generatedLocale && localesEquivalent(generatedLocale, requested)) {
+    return generatedLocale;
+  }
+  return null;
 }
 
 function normalizedHash(text: string): string {

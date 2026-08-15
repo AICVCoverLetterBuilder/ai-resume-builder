@@ -5,7 +5,7 @@
  */
 import { fingerprintText } from './cv-export-diagnostics';
 import { splitExperienceBullets } from './cv-canonical-facts';
-import { detectTextLocale } from './cv-content-locale';
+import { detectTextLocale, localesEquivalent } from './cv-content-locale';
 import {
   detectSpanishExperiencePredicateExpansion,
   detectSpanishExperienceUnsupportedExpansion,
@@ -51,6 +51,16 @@ export type ExperienceCorrectableDefectKind =
 export type ExperienceVisibleSourceAnalysis = {
   revision: typeof EXPERIENCE_SOURCE_DEFECT_FIRST_DECISION_315_REVISION;
   sourceLocale: string;
+  /** Raw heuristic detector result, retained as advisory evidence only. */
+  rawDetectedLocale: string | null;
+  /** Locale authority used for validation after precedence resolution. */
+  localeAuthorityKind:
+    | 'ai_output_provenance'
+    | 'entry_generated_locale'
+    | 'structured_content_locale'
+    | 'heuristic_detector'
+    | 'target_fallback';
+  rawDetectorDisagreesWithTrustedLocale: boolean;
   sourceLocaleValid: boolean;
   sourceUnitCount: number;
   sourcePredicateIdentityCount: number;
@@ -87,6 +97,9 @@ function emptyAnalysis(
   return {
     revision: EXPERIENCE_SOURCE_DEFECT_FIRST_DECISION_315_REVISION,
     sourceLocale: 'unknown',
+    rawDetectedLocale: null,
+    localeAuthorityKind: 'target_fallback',
+    rawDetectorDisagreesWithTrustedLocale: false,
     sourceLocaleValid: true,
     sourceUnitCount: 0,
     sourcePredicateIdentityCount: 0,
@@ -128,6 +141,8 @@ export function analyzeExperienceVisibleSource(options: {
   targetLocale: string;
   isPresent?: boolean;
   storedLocale?: string | null;
+  /** Entry-scoped generated locale metadata, stronger than document metadata. */
+  generatedLocale?: string | null;
   /** Write-time provenance may override a weaker generic detector. */
   trustedLocale?: string | null;
 }): ExperienceVisibleSourceAnalysis {
@@ -144,11 +159,36 @@ export function analyzeExperienceVisibleSource(options: {
 
   const units = splitExperienceBullets(visible).filter(Boolean);
   const trustedLocale = String(options.trustedLocale || '').trim();
+  const rawDetectedLocale = detectTextLocale(visible);
+  const structuredLocale = String(options.storedLocale || '').trim();
+  const structuredLocaleValid = Boolean(
+    structuredLocale && structuredLocale !== 'unknown',
+  );
+  const generatedLocale = String(options.generatedLocale || '').trim();
+  const generatedLocaleValid = Boolean(
+    generatedLocale && generatedLocale !== 'unknown',
+  );
   const detectedLocale = trustedLocale
-    || detectTextLocale(visible, {
-      storedLocale: options.storedLocale || targetLocale,
-      generatedLocale: options.storedLocale || targetLocale,
-    });
+    || (generatedLocaleValid ? generatedLocale : '')
+    || (structuredLocaleValid ? structuredLocale : '')
+    || rawDetectedLocale;
+  const localeAuthorityKind = trustedLocale
+    ? 'ai_output_provenance'
+    : generatedLocaleValid
+      ? 'entry_generated_locale'
+      : structuredLocaleValid
+        ? 'structured_content_locale'
+        : rawDetectedLocale && rawDetectedLocale !== 'unknown'
+          ? 'heuristic_detector'
+          : 'target_fallback';
+  const resolvedStrongLocale = trustedLocale || (generatedLocaleValid ? generatedLocale : '')
+    || (structuredLocaleValid ? structuredLocale : '');
+  const rawDetectorDisagreesWithTrustedLocale = Boolean(
+    resolvedStrongLocale
+    && rawDetectedLocale
+    && rawDetectedLocale !== 'unknown'
+    && !localesEquivalent(rawDetectedLocale, resolvedStrongLocale),
+  );
   const sourceLocale = detectedLocale === 'unknown' ? targetLocale : detectedLocale;
   const localeMismatchCount = (() => {
     const src = sourceLocale.toLowerCase();
@@ -163,6 +203,9 @@ export function analyzeExperienceVisibleSource(options: {
   if (!isEs) {
     return emptyAnalysis({
       sourceLocale,
+      rawDetectedLocale,
+      localeAuthorityKind,
+      rawDetectorDisagreesWithTrustedLocale,
       sourceLocaleValid: localeMismatchCount === 0,
       sourceUnitCount: units.length,
       localeMismatchCount,
@@ -220,6 +263,9 @@ export function analyzeExperienceVisibleSource(options: {
   return {
     revision: EXPERIENCE_SOURCE_DEFECT_FIRST_DECISION_315_REVISION,
     sourceLocale,
+    rawDetectedLocale,
+    localeAuthorityKind,
+    rawDetectorDisagreesWithTrustedLocale,
     sourceLocaleValid: localeMismatchCount === 0,
     sourceUnitCount: units.length,
     sourcePredicateIdentityCount: pred.sourcePredicateIdentityCount,
