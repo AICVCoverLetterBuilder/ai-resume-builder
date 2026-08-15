@@ -53,6 +53,7 @@ import {
 } from './cv-hindi-experience-grounding';
 import {
   buildJapaneseWarehouseExperienceFallback,
+  buildJapaneseDesignExperienceFallback,
   sourceRequiresJapaneseWarehouseFactCoverage,
   validateJapaneseWarehouseExperienceCoverage,
 } from './cv-japanese-experience-grounding';
@@ -104,6 +105,14 @@ function fold(s: string): string {
 
 function classifyActionFrame(unit: string): ActionFrame {
   const t = fold(unit);
+  // CJK responsibility clauses have no whitespace-equivalent predicate
+  // boundary. Classify the owned responsibility from particles/arguments,
+  // never by counting each agglutinative surface verb as a new action.
+  if (/[\u3040-\u30ff\u3400-\u9fff]/u.test(unit || '')) {
+    if (/(?:確認|レビュー|品質|成果物|最終|プロジェクト|案件|検査)/u.test(unit || '')) return 'check_records';
+    if (/(?:コンセプト|顧客|クライアント|要望|ニーズ|開発|デザイン|ビジュアル|グラフィック)/u.test(unit || '')) return 'prepare_materials';
+    if (/(?:制作|作成|準備|調整|実施|担当)/u.test(unit || '')) return 'prepare_materials';
+  }
   // Include Spanish diseño→diseno and revis* so arbitrary-role Romance sources
   // get the same design frames as EN/HR shells (generic predicate path).
   if (/(vizuel|grafick|dizajn|diseno|visual|design|identitet|identity|platform|ビジュアル|تصميم|डिज़ाइन|materiales?\s+visual|elementos?\s+grafic)/.test(t)) {
@@ -1093,6 +1102,16 @@ export function buildCrossLocaleExperienceFallback(options: {
   // source-preserving locale projector so food preparation, hygiene, and
   // kitchen collaboration remain separate and no design vocabulary is added.
   const sourceMaterialKeys = materialDutyKeysFromDescription(options.sourceDescription || '');
+
+  // Generic design translation for Japanese/CJK. The relation-aware projector
+  // is used for any design source, not only the device fixture or a title.
+  if (target === 'ja' && domain === 'design') {
+    const japaneseDesign = buildJapaneseDesignExperienceFallback({
+      sourceDescription: options.sourceDescription,
+      isPresent,
+    });
+    if (splitExperienceBullets(japaneseDesign).length === units.length) return japaneseDesign;
+  }
 
   // A non-empty warehouse source must use the locale's source-fact projector,
   // never the coarse domain shell table. Return only an exact source-unit-count

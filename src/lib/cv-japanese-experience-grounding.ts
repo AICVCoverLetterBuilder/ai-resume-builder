@@ -12,6 +12,7 @@
  */
 import {
   materialDutyKeysFromDescription,
+  classifyMaterialDutyKeys,
   type MaterialDutyKey,
 } from './cv-material-duty-coverage';
 import {
@@ -231,7 +232,11 @@ export function buildJapaneseWarehouseExperienceFallback(options: {
 export type JapaneseWarehousePredicateFamily =
   | 'inspect_incoming'
   | 'verify_documentation'
-  | 'coordinate_colleagues';
+  | 'coordinate_colleagues'
+  | 'material_creation'
+  | 'concept_development'
+  | 'review_quality'
+  | 'generic_duty';
 
 export type JapaneseWarehousePredicateScan = {
   sourcePredicateIdentityCount: number;
@@ -392,4 +397,165 @@ export function scanJapaneseWarehousePredicates(
 /** Diagnostic fact identity prefix helper. */
 export function japaneseWarehouseFactDiagId(id: JapaneseWarehouseFactId): string {
   return `ja_wh_${id}`;
+}
+
+type JapaneseResponsibilityFamily =
+  | 'material_creation'
+  | 'concept_development'
+  | 'review_quality'
+  | 'generic_duty';
+
+function japaneseResponsibilityFamily(unit: string, japaneseSurface = false): JapaneseResponsibilityFamily {
+  const t = (unit || '').normalize('NFKC');
+  const keys = classifyMaterialDutyKeys(t);
+  const finalFiles = /(?:file|format|screen|файл|формат|экран|файлы|画面|ファイル|形式)/iu.test(t);
+  if (finalFiles) return 'review_quality';
+  const review = /(?:review|revis|examin|inspect|check|quality|livrable|провер|адаптир|требован|соблюд|сверк|сопостав|समीक्षा|जाँच|गुणवत्ता|अंतिम\s*आउटपुट|確認|レビュー|品質|成果物|検査)/iu.test(t);
+  if (review && (keys.includes('design_review_adapt') || /(?:design|visual|graphic|दृश्य|डिज़ाइन|ग्राफिक|ビジュアル|デザイン)/iu.test(t))) {
+    return 'review_quality';
+  }
+  const concept = /(?:concept|visual\s+design|client|customer|needs?|according|requirements?|विज़ुअल|डिज़ाइन\s*अवधारण|ग्राहक|आवश्यकता|के अनुसार|コンセプト|顧客|クライアント|要望|ニーズ|開発)/iu.test(t);
+  if (concept && (keys.some((key) => key.startsWith('design_'))
+    || /(?:design|visual|graphic|दृश्य|डिज़ाइन|ग्राफिक|ビジュアル|デザイン)/iu.test(t))) {
+    return 'concept_development';
+  }
+  const material = keys.some((key) => key === 'design_visual_materials')
+    || /(?:visual\s+material|graphic\s+material|graphic\s+element|print|digital|media|material|दृश्य\s*सामग्री|ग्राफिक\s*(?:सामग्री|तत्व)|प्रिंट|डिजिटल|माध्यम|मीडिया|素材|グラフィック|印刷|デジタル|媒体)/iu.test(t);
+  if (material) return 'material_creation';
+  if (japaneseSurface && /(?:確認|レビュー|品質|成果物|制作|作成|開発|準備|調整|実施|担当)/u.test(t)) return 'generic_duty';
+  return 'generic_duty';
+}
+
+function japaneseResponsibilityIdentity(family: JapaneseResponsibilityFamily, unit: string): string {
+  let h = 2166136261;
+  const value = `${family}:${(unit || '').normalize('NFKC').toLowerCase()}`;
+  for (let i = 0; i < value.length; i += 1) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `ja_resp_${family}_${(h >>> 0).toString(16)}`;
+}
+
+/** Generic Japanese design fallback preserving source-owned relations. */
+export function buildJapaneseDesignExperienceFallback(options: {
+  sourceDescription: string;
+  isPresent?: boolean;
+}): string {
+  const past = options.isPresent === false;
+  const units = extractSourceDutyUnits(options.sourceDescription || '')
+    .map((u) => stripDutyListPrefix(u)).filter(Boolean);
+  const lines = units.map((unit) => {
+    const family = japaneseResponsibilityFamily(unit);
+    const t = unit.normalize('NFKC');
+    if (family === 'material_creation') {
+      const medium = /(?:print|digital|media|medium|प्रिंट|डिजिटल|माध्यम|मीडिया|印刷|デジタル|媒体)/iu.test(t);
+      const graphic = /(?:graphic|visual|ग्राफिक|दृश्य|ビジュアル|グラフィック)/iu.test(t);
+      if (medium && graphic) return past ? '印刷・デジタル媒体向けのグラフィック素材を制作した。' : '印刷・デジタル媒体向けのグラフィック素材を制作する。';
+      if (medium) return past ? '印刷・デジタル媒体向けの素材を制作した。' : '印刷・デジタル媒体向けの素材を制作する。';
+      return past ? 'ビジュアル素材とグラフィック要素を制作した。' : 'ビジュアル素材とグラフィック要素を制作する。';
+    }
+    if (family === 'concept_development') {
+      const client = /(?:client|customer|needs?|according|requirements?|ग्राहक|आवश्यकता|के अनुसार|顧客|クライアント|要望|ニーズ|に応じて)/iu.test(t);
+      return client
+        ? (past ? '顧客の要望に応じてビジュアルデザインのコンセプトを開発した。' : '顧客の要望に応じてビジュアルデザインのコンセプトを開発する。')
+        : (past ? 'ビジュアルデザインのコンセプトを開発した。' : 'ビジュアルデザインのコンセプトを開発する。');
+    }
+    if (family === 'review_quality' && /(?:file|format|screen|файл|формат|экран|файлы|画面|ファイル|形式)/iu.test(t)) {
+      return past
+        ? '最終デザインファイルを準備し、画面ごとに形式を調整した。'
+        : '最終デザインファイルを準備し、画面ごとに形式を調整する。';
+    }
+    if (family === 'review_quality') {
+      const quality = /(?:quality|final|output|livrable|गुणवत्ता|आउटपुट|अंतिम|品質|成果物|最終)/iu.test(t);
+      return quality
+        ? (past ? 'デザインプロジェクトをレビューし、最終成果物の品質を確認した。' : 'デザインプロジェクトをレビューし、最終成果物の品質を確認する。')
+        : (past ? 'デザインプロジェクトをレビューした。' : 'デザインプロジェクトをレビューする。');
+    }
+    return past ? '担当業務を遂行した。' : '担当業務を遂行する。';
+  });
+  return formatExperienceBullets(lines);
+}
+
+/** Generic Japanese predicate bridge; warehouse keeps its stricter scanner. */
+export function scanJapaneseExperiencePredicates(
+  sourceDescription: string,
+  candidateDescription: string,
+): JapaneseWarehousePredicateScan {
+  if (sourceRequiresJapaneseWarehouseFactCoverage(sourceDescription || '')) {
+    return scanJapaneseWarehousePredicates(sourceDescription, candidateDescription);
+  }
+  const sourceUnits = extractSourceDutyUnits(sourceDescription || '')
+    .map((u) => stripDutyListPrefix(u)).filter(Boolean);
+  const candidateUnits = splitExperienceBullets(candidateDescription || '')
+    .map((u) => u.trim()).filter(Boolean);
+  const sourceFamilies = sourceUnits.map((unit) => japaneseResponsibilityFamily(unit));
+  const candidateFamilies = candidateUnits.map((unit) => japaneseResponsibilityFamily(unit, true));
+  const used = new Set<number>();
+  const covered: number[] = [];
+  for (let si = 0; si < sourceFamilies.length; si += 1) {
+    const family = sourceFamilies[si]!;
+    const hit = candidateFamilies.findIndex((candidate, index) => !used.has(index) && candidate === family);
+    if (hit >= 0) { used.add(hit); covered.push(si); }
+  }
+  const added = candidateUnits
+    .map((unit, index) => used.has(index) ? null : japaneseResponsibilityIdentity(candidateFamilies[index]!, `added:${unit}`))
+    .filter((id): id is string => Boolean(id));
+  const ok = sourceUnits.length > 0
+    && candidateUnits.length === sourceUnits.length
+    && covered.length === sourceUnits.length
+    && added.length === 0;
+  return {
+    sourcePredicateIdentityCount: sourceUnits.length,
+    candidatePredicateIdentityCount: covered.length,
+    candidateAddedPredicateCount: added.length,
+    candidateAddedPredicateIdentityHashes: added,
+    sourceUnitPredicateCoveragePassed: ok,
+    finalCandidatePredicateValidationApplicable: true,
+    predicateFamiliesSource: sourceFamilies,
+    predicateFamiliesCandidate: candidateFamilies,
+  };
+}
+
+export type JapaneseExperienceTenseResult = {
+  finalTensePassed: boolean;
+  reason: string | null;
+};
+
+/**
+ * Japanese does not inflect by whitespace-delimited verb tokens. Validate the
+ * completed/current employment contract from clause-final finite forms instead
+ * of treating every attached verb as an independent responsibility.
+ */
+export function validateJapaneseExperienceEmploymentTense(
+  candidateDescription: string,
+  isPresent: boolean,
+): JapaneseExperienceTenseResult {
+  const units = splitExperienceBullets(candidateDescription || '')
+    .map((unit) => unit.trim())
+    .filter(Boolean);
+  if (!units.length) return { finalTensePassed: false, reason: 'japanese_employment_tense_missing' };
+  const past = /(?:した|だった|でした|かった|ました)(?:[。．.!！?？]|$)/u;
+  const present = /(?:する|です|である|ます)(?:[。．.!！?？]|$)/u;
+  const pastUnits = units.filter((unit) => past.test(unit)).length;
+  const presentUnits = units.filter((unit) => present.test(unit)).length;
+  // Existing Japanese CV surfaces may use present-tense nominal duty phrases
+  // (for example, 「貨物の輸送、積み込み、および安全な配送。」) rather than
+  // an explicit する/ます finite verb. Treat an all-nominal, non-past set as
+  // current-role evidence; completed roles still require explicit past forms.
+  const nominalPresentUnits = units.filter((unit) => (
+    !past.test(unit)
+    && !present.test(unit)
+    && /[\u3040-\u30ff\u3400-\u9fff]/u.test(unit)
+    && /[。．.!！?？]$/u.test(unit)
+  )).length;
+  const finalTensePassed = isPresent
+    ? pastUnits === 0
+      && (presentUnits === units.length || nominalPresentUnits === units.length)
+    : pastUnits === units.length && presentUnits === 0;
+  return {
+    finalTensePassed,
+    reason: finalTensePassed
+      ? null
+      : (isPresent ? 'japanese_current_role_tense_mismatch' : 'japanese_completed_role_tense_mismatch'),
+  };
 }

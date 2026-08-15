@@ -63,6 +63,7 @@ import {
 import {
   validateJapaneseWarehouseExperienceCoverage,
   scanJapaneseWarehousePredicates,
+  scanJapaneseExperiencePredicates,
   sourceRequiresJapaneseWarehouseFactCoverage,
   japaneseWarehouseFactDiagId,
   JAPANESE_EXPERIENCE_GROUNDING_339_REVISION,
@@ -375,6 +376,27 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
       && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
       && candidatePredicateIdentityCount > 0;
   } else if (
+    locale === 'ja'
+    && sourceRequiresGenericExperiencePredicates(source)
+  ) {
+    const pred = scanJapaneseExperiencePredicates(source, text);
+    sourcePredicateIdentityCount = pred.sourcePredicateIdentityCount;
+    candidatePredicateIdentityCount = pred.candidatePredicateIdentityCount;
+    addedPredicateCount = pred.candidateAddedPredicateCount;
+    addedPredicateIdentityHashes = [...pred.candidateAddedPredicateIdentityHashes];
+    predicateCoveragePassed = pred.sourceUnitPredicateCoveragePassed
+      && candidatePredicateIdentityCount >= sourcePredicateIdentityCount
+      && candidatePredicateIdentityCount > 0;
+    if (!(requiredFactCount > 0 && coveredFactCount === requiredFactCount && uncovered.length === 0)) {
+      const semantic = validateCrossLocaleSemanticCoverage(source, text);
+      requiredFactCount = semantic.requiredCount;
+      coveredFactCount = semantic.coveredCount;
+      uncovered = [];
+      factCoveragePassed = semantic.ok
+        && semantic.coveredCount === semantic.requiredCount
+        && semantic.requiredCount > 0;
+    }
+  } else if (
     locale === 'ar'
     && sourceRequiresArabicWarehouseFactCoverage(source)
   ) {
@@ -455,7 +477,7 @@ export function buildExperienceSelectedFinalCandidateSnapshot(options: {
   // non-empty Experience source. This keeps diagnostics truthful when a
   // locale-specific scanner covers all source facts but misses an inserted
   // material action in the selected candidate.
-  if (sourceRequiresGenericExperiencePredicates(source)) {
+  if (sourceRequiresGenericExperiencePredicates(source) && locale !== 'ja') {
     const sharedPred = scanGenericExperiencePredicates(source, text, {
       allowValidatedCrossLocaleBridge,
     });

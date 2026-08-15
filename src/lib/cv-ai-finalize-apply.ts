@@ -310,7 +310,10 @@ import {
   sourceRequiresJapaneseWarehouseFactCoverage,
   validateJapaneseWarehouseExperienceCoverage,
   buildJapaneseWarehouseExperienceFallback,
+  buildJapaneseDesignExperienceFallback,
   scanJapaneseWarehousePredicates,
+  scanJapaneseExperiencePredicates,
+  validateJapaneseExperienceEmploymentTense,
   japaneseWarehouseFactDiagId,
 } from './cv-japanese-experience-grounding';
 import {
@@ -9361,10 +9364,6 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     ...(() => {
       const entryGen =
         (exp as WorkExperience & { generatedLocale?: string })?.generatedLocale || null;
-      const detectedVisible = detectTextLocale(visibleComparisonText || '', {
-        storedLocale: entryGen || cv.contentLocale || null,
-        generatedLocale: entryGen,
-      });
       const uneditedMatched =
         (textareaProvenance?.currentTextareaProvenance === 'ai_generated_unedited'
           || sourceBundle.visibleSourceProvenance === 'ai_generated_unedited')
@@ -9372,19 +9371,28 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           textareaProvenance?.lastAiOutputHashMatched === true
           || sourceBundle.visibleSourceMatchedLastAiOutput === true
         );
+      // Keep the raw detector advisory.  For an unedited, hash-matched AI
+      // output the entry-scoped generated locale is the trusted authority;
+      // detectTextLocale must not be allowed to replace it (especially for
+      // Romance prose whose heuristic can drift between fr/es/it).
+      const rawDetectedVisible = detectTextLocale(visibleComparisonText || '');
+      const trustedVisible = uneditedMatched && entryGen
+        ? entryGen
+        : rawDetectedVisible;
       const mismatchRecorded = Boolean(
         uneditedMatched
         && entryGen
-        && detectedVisible
-        && detectedVisible !== 'unknown'
-        && String(detectedVisible).toLowerCase() !== String(entryGen).toLowerCase(),
+        && rawDetectedVisible
+        && rawDetectedVisible !== 'unknown'
+        && String(rawDetectedVisible).toLowerCase() !== String(entryGen).toLowerCase(),
       );
       return {
-        visibleTextareaLocale: detectedVisible,
-        visibleTextareaLocaleBeforeApply: detectedVisible,
-        detectedVisibleTextLocale: detectedVisible,
+        visibleTextareaLocale: trustedVisible,
+        visibleTextareaLocaleBeforeApply: trustedVisible,
+        detectedVisibleTextLocale: rawDetectedVisible,
         persistedGeneratedLocaleForVisibleMismatch: entryGen,
         visibleLocaleMetadataMismatchRecorded: mismatchRecorded,
+        rawDetectorDisagreesWithTrustedLocale: mismatchRecorded,
         entryGeneratedLocaleBeforeApply: entryGen,
         // Foreign live AI text is never fact-authoritative when ignored for extraction.
         staleForeignLocaleSourceAuthoritative: false,
@@ -10090,8 +10098,19 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       const jaWarehouse = needsJaWarehouse
         ? validateJapaneseWarehouseExperienceCoverage(sourceForCoverage, candidate)
         : null;
-      const jaPredicates = needsJaWarehouse
-        ? scanJapaneseWarehousePredicates(sourceForCoverage, candidate)
+      // The generic CJK predicate bridge is required for a server-recovery
+      // candidate (and for later deterministic fallback stages), but a direct
+      // provider candidate must retain the pre-AAB449 rejection semantics. A
+      // primary provider response is not trusted as a cross-locale repair; it
+      // is only eligible after the bounded server-repair path has selected it.
+      const needsJaPredicates = locale === 'ja'
+        && sourceRequiresGenericExperiencePredicates(sourceForCoverage)
+        && (stage !== 'provider' || serverRepairAttemptedFlag)
+        && (serverRepairAttemptedFlag
+          || materialDutyKeysFromDescription(sourceForCoverage)
+            .some((key) => key.startsWith('design_')));
+      const jaPredicates = needsJaPredicates
+        ? scanJapaneseExperiencePredicates(sourceForCoverage, candidate)
         : null;
       if (jaPredicates) {
         sourcePredicateIdentityCount = jaPredicates.sourcePredicateIdentityCount;
@@ -10228,7 +10247,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         && (
           !dedicatedWarehousePredicatesApplied
           || sourceFactCount > 3
-        );
+        )
+        && (locale !== 'ja'
+          || serverRepairAttemptedFlag
+          || materialDutyKeysFromDescription(sourceForCoverage)
+            .some((key) => key.startsWith('design_')));
       const genericPredicates = needsGenericPredicates
         ? scanGenericExperiencePredicates(sourceForCoverage, candidate, {
           // A provider/repair candidate is allowed the same constrained
@@ -10571,6 +10594,17 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           providerCoveredFactCount = lastCovered;
           providerRequiredFactCount = lastRequired;
         }
+        return null;
+      }
+      if (needsJaPredicates && jaPredicates && (
+        jaPredicates.sourceUnitPredicateCoveragePassed === false
+        || jaPredicates.candidateAddedPredicateCount > 0
+        || jaPredicates.candidatePredicateIdentityCount <= 0
+      )) {
+        lastRejectStage = `${stage}:japanese_experience_predicates`;
+        lastRejectReason = 'source_unit_predicate_coverage_failed';
+        lastRequired = Math.max(jaPredicates.sourcePredicateIdentityCount, sourceFactCount);
+        lastCovered = jaPredicates.candidatePredicateIdentityCount;
         return null;
       }
       if (needsArWarehouse && arWarehouse && (
@@ -11291,8 +11325,22 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         return null;
       }
     }
+    if (locale === 'ja') {
+      const jaTense = validateJapaneseExperienceEmploymentTense(candidate, isPresent);
+      generationValidationMeta = {
+        ...generationValidationMeta,
+        tenseValidationPassed: jaTense.finalTensePassed,
+        relevanceValidationPassed: generationValidationMeta.relevanceValidationPassed
+          || Boolean(lastCovered),
+      };
+      if (!jaTense.finalTensePassed) {
+        lastRejectStage = `${stage}:japanese_employment_tense`;
+        lastRejectReason = jaTense.reason || 'japanese_employment_tense_mismatch';
+        return null;
+      }
+    }
     // Final-candidate validators must describe the accepted text, not a rejected provider.
-    if (locale !== 'ar' && locale !== 'ru' && locale !== 'hi') {
+    if (locale !== 'ar' && locale !== 'ru' && locale !== 'hi' && locale !== 'ja') {
       generationValidationMeta = {
         ...generationValidationMeta,
         relevanceValidationPassed: true,
@@ -11491,6 +11539,8 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && sourceRequiresHindiWarehouseFactCoverage(sourceForCoverage || '');
           const isJaWarehouse = locale === 'ja'
             && sourceRequiresJapaneseWarehouseFactCoverage(sourceForCoverage || '');
+          const isJaExperiencePredicates = locale === 'ja'
+            && sourceRequiresGenericExperiencePredicates(sourceForCoverage || '');
           const isArWarehouse = locale === 'ar'
             && sourceRequiresArabicWarehouseFactCoverage(sourceForCoverage || '');
           const isSrWarehouse = locale === 'sr'
@@ -11503,14 +11553,14 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
             && !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
             && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
             && !isHiWarehouse && !isJaWarehouse && !isArWarehouse && !isSrWarehouse
-            && !isHrWarehouse;
+            && !isHrWarehouse && !isJaExperiencePredicates;
           // Warehouse + shared generic selected-final snapshots recompute predicate truth.
           // Vacuous non-applicable paths must not invent false predicate coverage.
           if (
             !isEnWarehouse && !isDeWarehouse && !isEsWarehouse
             && !isFrWarehouse && !isItWarehouse && !isPtWarehouse && !isRuWarehouse
             && !isHiWarehouse && !isJaWarehouse && !isArWarehouse && !isSrWarehouse
-            && !isHrWarehouse
+            && !isHrWarehouse && !isJaExperiencePredicates
             && !isGenericPredicates
           ) {
             delete diag.finalSourceUnitPredicateCoveragePassed;
@@ -14104,22 +14154,40 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       // Build the entry-owned one-to-one projection first. Dedicated locale/
       // warehouse validators still run in tryAccept, but their three-family
       // shells must not collapse an additional fourth user-owned duty.
-      const projected = buildSourcePreservingExperienceBulletsWithProvenance(
-        sourceForCoverage,
-        locale,
-        gender,
-        {
+      // CJK design duties need the relation-aware Japanese projector before
+      // the generic source-preserving localizer. The latter can legitimately
+      // retain a Cyrillic surface when the locale heuristic is inconclusive,
+      // which would then be rejected as a same-language/no-op fallback. Keep
+      // this branch limited to typed design-material sources; arbitrary
+      // occupations still fall through to the generic safe projector and fail
+      // closed if it cannot prove semantic coverage.
+      const japaneseDesignSource = locale === 'ja'
+        && materialDutyKeysFromDescription(sourceForCoverage).some((key) => key.startsWith('design_'))
+        ? buildJapaneseDesignExperienceFallback({
+          sourceDescription: sourceForCoverage,
           isPresent,
-          operationSnapshotId: snapshot?.operationSnapshotId,
-          snapshotUnits: snapshot?.units.map((unit) => ({
-            rawUnit: unit.rawUnit,
-            sourceUnitId: unit.sourceUnitId,
-            sourceFactIds: unit.sourceFactIds,
-            operationSnapshotId: unit.operationSnapshotId,
-          })),
-        },
-      );
-      const projectedBullets = projected.bullets.map((bullet) => ({
+        })
+        : '';
+      const projected = japaneseDesignSource.trim()
+        ? null
+        : buildSourcePreservingExperienceBulletsWithProvenance(
+          sourceForCoverage,
+          locale,
+          gender,
+          {
+            isPresent,
+            operationSnapshotId: snapshot?.operationSnapshotId,
+            snapshotUnits: snapshot?.units.map((unit) => ({
+              rawUnit: unit.rawUnit,
+              sourceUnitId: unit.sourceUnitId,
+              sourceFactIds: unit.sourceFactIds,
+              operationSnapshotId: unit.operationSnapshotId,
+            })),
+          },
+        );
+      const projectedBullets = !projected
+        ? []
+        : projected.bullets.map((bullet) => ({
         ...bullet,
         text: normalizeExperienceBulletPerspective(
           normalizeLocaleText(bullet.text || '', locale).trim(),
@@ -14146,6 +14214,12 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       ) {
         translated = projectedText;
         translatedProvenanceCoverage = projectedCoverage;
+      }
+      if (!translated.trim() && japaneseDesignSource.trim()) {
+        const japaneseUnits = splitExperienceBullets(japaneseDesignSource);
+        if (japaneseUnits.length === sourceFactCount) {
+          translated = japaneseDesignSource;
+        }
       }
       if (!translated.trim()
         && locale === 'de'

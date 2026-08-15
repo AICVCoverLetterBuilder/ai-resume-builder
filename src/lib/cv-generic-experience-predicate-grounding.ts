@@ -27,6 +27,7 @@ import {
   validateNoExtraGeneratedDuties,
 } from './cv-material-duty-coverage';
 import type { MaterialDutyKey } from './cv-material-duty-coverage';
+import { scanJapaneseExperiencePredicates } from './cv-japanese-experience-grounding';
 import {
   sourceHasWarehouseDomainApplicability,
   sourceIsCookingHospitalityWithoutWarehouseEvidence,
@@ -255,6 +256,32 @@ export function scanGenericExperiencePredicates(
       finalCandidatePredicateValidationApplicable: true,
       missingPredicateIdentityHashes: [],
       reason: 'generic_experience_predicate_source_empty',
+    };
+  }
+
+  // CJK surfaces do not expose whitespace-delimited verbs. Use the typed
+  // Japanese responsibility bridge so one source duty maps to one candidate
+  // duty without counting agglutinative/action tokens as extra predicates.
+  if (/[\u3040-\u30ff\u3400-\u9fff]/u.test(candidateDescription || '')) {
+    const japanese = scanJapaneseExperiencePredicates(
+      sourceDescription || '',
+      candidateDescription || '',
+    );
+    const semanticCoverage = validateCrossLocaleSemanticCoverage(
+      sourceDescription || '',
+      candidateDescription || '',
+    );
+    const passed = japanese.sourceUnitPredicateCoveragePassed && semanticCoverage.ok;
+    return {
+      revision: GENERIC_EXPERIENCE_PREDICATE_343_REVISION,
+      sourcePredicateIdentityCount: japanese.sourcePredicateIdentityCount,
+      candidatePredicateIdentityCount: japanese.candidatePredicateIdentityCount,
+      candidateAddedPredicateCount: japanese.candidateAddedPredicateCount,
+      candidateAddedPredicateIdentityHashes: japanese.candidateAddedPredicateIdentityHashes,
+      sourceUnitPredicateCoveragePassed: passed,
+      finalCandidatePredicateValidationApplicable: true,
+      missingPredicateIdentityHashes: passed ? [] : sourceIds.slice(japanese.candidatePredicateIdentityCount),
+      reason: passed ? null : (semanticCoverage.ok ? 'source_unit_predicate_coverage_failed' : 'semantic_argument_coverage_failed'),
     };
   }
 

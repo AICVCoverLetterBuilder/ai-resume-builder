@@ -72,6 +72,11 @@ const EXTRA_FOREIGN_TEAM_ARGUMENT = SAFE_FRENCH.replace(
   'selon les besoins des clients.',
   'selon les besoins des clients avec les membres de l’équipe de projet.',
 );
+const SAFE_JAPANESE = formatExperienceBullets([
+  '\u5370\u5237\u30fb\u30c7\u30b8\u30bf\u30eb\u5a92\u4f53\u5411\u3051\u306e\u30b0\u30e9\u30d5\u30a3\u30c3\u30af\u7d20\u6750\u3092\u5236\u4f5c\u3057\u305f\u3002',
+  '\u9867\u5ba2\u306e\u8981\u671b\u306b\u5fdc\u3058\u3066\u30d3\u30b8\u30e5\u30a2\u30eb\u30c7\u30b6\u30a4\u30f3\u306e\u30b3\u30f3\u30bb\u30d7\u30c8\u3092\u958b\u767a\u3057\u305f\u3002',
+  '\u30c7\u30b6\u30a4\u30f3\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3092\u30ec\u30d3\u30e5\u30fc\u3057\u3001\u6700\u7d42\u6210\u679c\u7269\u306e\u54c1\u8cea\u3092\u78ba\u8a8d\u3057\u305f\u3002',
+]);
 
 const state: { currentCv: CVData; usage: number; writes: CVData[] } = {
   currentCv: undefined as unknown as CVData,
@@ -104,7 +109,13 @@ function makeCv(): CVData {
   } as unknown as CVData;
 }
 
-vi.mock('@/lib/i18n/context', () => ({ useI18n: () => ({ locale: 'fr', t: translations.fr }) }));
+vi.mock('@/lib/i18n/context', () => ({
+  useI18n: () => {
+    const locale = state.currentCv?.contentLocale === 'ja' ? 'ja' : 'fr';
+    const t = (translations as Record<string, typeof translations.fr>)[locale] || translations.fr;
+    return { locale, t };
+  },
+}));
 vi.mock('@/lib/store', () => ({
   checkProAccess: () => 'allowed',
   useApp: () => ({
@@ -252,6 +263,122 @@ describe('AAB442 real UI route recovery', () => {
     expect(diag?.visibleComparisonProvenance).toBe('ai_generated_unedited');
     expect(diag?.visibleComparisonCapturedAtRequest).toBe(true);
     expect(JSON.stringify(diag?.candidateLineage || [])).not.toMatch(/Salesforce|KPI|40%/i);
+  }, 30000);
+
+  it('routes the exact Hindi-to-Japanese completed fixture through one recovery and applies once', async () => {
+    const source = exactSource();
+    state.currentCv = {
+      ...state.currentCv,
+      contentLocale: 'ja',
+      experience: state.currentCv.experience.map((entry) => ({
+        ...entry,
+        generatedLocale: 'fr',
+      })),
+    } as CVData;
+    state.usage = 35;
+    anthropicCreateMock
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: 'invalid provider output' }] })
+      .mockResolvedValueOnce({ content: [{ type: 'text', text: SAFE_JAPANESE }] });
+    const { POST } = await import('@/app/api/generate/route');
+    let routeCallCount = 0;
+    routePost.mockReset();
+    routePost.mockImplementation((body: unknown) => {
+      const baseBody = (body && typeof body === 'object') ? body as Record<string, unknown> : {};
+      const requestBody = routeCallCount === 0
+        ? { ...baseBody, noopRepair: true }
+        : baseBody;
+      routeCallCount += 1;
+      return POST(new Request('https://cvproai.test/api/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      }) as never);
+    });
+    const Page = (await import('@/app/cv-builder/page')).default;
+    render(<Page />);
+    fireEvent.click(screen.getByRole('button', { name: translations.ja.cv.experience }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(translations.ja.cv.aiBullets, 'i') }));
+    await waitFor(() => expect(routePost).toHaveBeenCalledTimes(2), { timeout: 20000 });
+    await waitFor(() => expect(state.writes).toHaveLength(1), { timeout: 20000 });
+    const diag = getLatestExperienceAiDiagnostic();
+    expect(fingerprintText(normalizeExperienceAiSourceText(source))).toBe(SOURCE_HASH);
+    expect(ENTRY_HASH).toBe('fnv1a_be5c794b_l36_b100_e52');
+    expect(diag?.selectedExperienceEntryIdHash).toBe(diag?.sourceFactsEntryIdHash);
+    expect(diag?.factAuthorityHash).toBe(SOURCE_HASH);
+    expect(diag?.factAuthorityUnitCount).toBe(3);
+    expect(diag?.visibleTextareaLocaleBeforeApply).toBe('fr');
+    expect(diag?.entryGeneratedLocaleBeforeApply).toBe('fr');
+    expect(state.currentCv.experience[0]?.description).toBe(SAFE_JAPANESE);
+    expect(state.usage).toBe(36);
+    expect(diag?.providerHttpStatus).toBe(422);
+    expect(diag?.providerRejectionStage).toBe('api_response_received');
+    expect(diag?.recoveryAttempted).toBe(true);
+    expect(diag?.recoveryHttpStatus).toBe(200);
+    expect(diag?.recoveryCandidatePresent).toBe(true);
+    expect(diag?.recoveryCandidateHash).toBe(diag?.finalNormalizedHash);
+    expect(diag?.recoveryCandidateUnitCount).toBe(3);
+    expect(diag?.recoveryAccepted).toBe(true);
+    expect(diag?.recoverySelected).toBe(true);
+    expect(diag?.finalCandidateSource).toBe('server_repair');
+    expect(diag?.finalRequiredFactCount).toBe(3);
+    expect(diag?.finalCoveredFactCount).toBe(3);
+    expect(diag?.finalCandidatePredicateIdentityCount).toBe(3);
+    expect(diag?.finalAddedPredicateCount).toBe(0);
+    expect(diag?.finalUnsupportedClaimCount).toBe(0);
+    expect(diag?.finalUncoveredFactIdentityHashes).toEqual([]);
+    expect(diag?.crossEntryLeakageDetected).toBe(false);
+    expect(diag?.sourceLanguageLeakageDetected).toBe(false);
+    expect(diag?.targetLocalePurityPassed).toBe(true);
+    expect(diag?.expectedEmploymentTense).toBe('past');
+    expect(diag?.tenseValidationPassed).toBe(true);
+    expect(diag?.visibleTextareaMatchesFinalNormalizedHash).toBe(true);
+    expect(diag?.diagnosticInvariantCheckPassed).toBe(true);
+    expect(diag?.diagnosticCompletenessPassed).toBe(true);
+    expect(diag?.privacyCheckPassed).toBe(true);
+  }, 30000);
+
+  it('terminalizes an immediate unedited Japanese rerun before provider/recovery', async () => {
+    const source = exactSource();
+    const entry = state.currentCv.experience[0]!;
+    const provenance = buildExperienceAiOutputProvenance({
+      experienceEntryId: ENTRY_ID,
+      appliedOutput: SAFE_JAPANESE,
+      preAiFactText: source,
+      sourceLocale: 'hi',
+      targetLocale: 'ja',
+      operationMode: 'enhance_existing',
+      sourceAuthorityKind: 'original_user',
+    });
+    state.currentCv = {
+      ...state.currentCv,
+      contentLocale: 'ja',
+      experience: [{
+        ...entry,
+        description: SAFE_JAPANESE,
+        generatedDescription: SAFE_JAPANESE,
+        generatedLocale: 'ja',
+        aiOutputProvenance: provenance,
+      }],
+    } as CVData;
+    state.usage = 36;
+    const Page = (await import('@/app/cv-builder/page')).default;
+    render(<Page />);
+    fireEvent.click(screen.getByRole('button', { name: translations.ja.cv.experience }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(translations.ja.cv.aiBullets, 'i') }));
+    await waitFor(() => expect(getLatestExperienceAiDiagnostic()?.finalDecisionKind).toBe('semantic_noop'), {
+      timeout: 20000,
+    });
+    const diag = getLatestExperienceAiDiagnostic();
+    expect(routePost).not.toHaveBeenCalled();
+    expect(state.writes).toHaveLength(0);
+    expect(state.usage).toBe(36);
+    expect(diag?.earlyNoOpPreflightPassed).toBe(true);
+    expect(diag?.semanticNoOpDetected).toBe(true);
+    expect(diag?.providerAttempted).toBe(false);
+    expect(diag?.recoveryAttempted).toBe(false);
+    expect(diag?.diagnosticInvariantCheckPassed).toBe(true);
+    expect(diag?.diagnosticCompletenessPassed).toBe(true);
+    expect(diag?.privacyCheckPassed).toBe(true);
   }, 30000);
 
   it.each([
