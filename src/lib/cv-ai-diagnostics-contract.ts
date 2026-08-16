@@ -3275,6 +3275,28 @@ export function checkExperienceDiagnosticInvariants(
   const push = (code: string, observed: CvAiDiagnosticInvariantFailure['observed']) => {
     failures.push({ invariantCode: code, observed });
   };
+  // AAB-460 — a committed success cannot retain a phase-local terminal
+  // rejection. Provider/fallback rejection remains represented in lineage;
+  // these fields describe only the selected terminal outcome.
+  if (
+    trace.countedAsSuccess === true
+    && trace.visibleApplySucceeded === true
+    && trace.finalTypedFailureReason != null
+  ) {
+    push('success_with_terminal_failure_reason', {
+      countedAsSuccess: true,
+      finalTypedFailureReason: trace.finalTypedFailureReason,
+    });
+  }
+  if (
+    trace.applyCommitted === true
+    && trace.rejectionStage != null
+  ) {
+    push('committed_with_rejection_stage', {
+      applyCommitted: true,
+      rejectionStage: trace.rejectionStage,
+    });
+  }
   if (trace.countedAsSuccess && !trace.visibleApplySucceeded) {
     push('success_counted_but_apply_failed', {
       countedAsSuccess: true,
@@ -3398,6 +3420,64 @@ export function checkExperienceDiagnosticInvariants(
       clientDeterministicFallbackApplied: false,
       clientDeterministicFallbackSelected: false,
     });
+  }
+  if (
+    trace.countedAsSuccess === true
+    && trace.finalCandidateSource === 'server_fallback'
+    && (
+      trace.clientDeterministicFallbackSelected === true
+      || trace.clientDeterministicFallbackUsedForFinalCandidate === true
+      || trace.clientDeterministicFallbackApplied === true
+      || trace.fallbackSelected === true
+    )
+  ) {
+    push('server_fallback_conflicts_with_client_fallback_selection', {
+      finalCandidateSource: 'server_fallback',
+      clientDeterministicFallbackSelected:
+        trace.clientDeterministicFallbackSelected ?? null,
+      clientDeterministicFallbackUsedForFinalCandidate:
+        (trace as { clientDeterministicFallbackUsedForFinalCandidate?: boolean })
+          .clientDeterministicFallbackUsedForFinalCandidate ?? null,
+      clientDeterministicFallbackApplied: trace.clientDeterministicFallbackApplied ?? null,
+      fallbackSelected: trace.fallbackSelected ?? null,
+    });
+  }
+  if (
+    trace.countedAsSuccess === true
+    && trace.finalCandidateSource === 'deterministic_fallback'
+    && trace.fallbackSelected === true
+    && (
+      Number((trace as Record<string, unknown>).fallbackBulletCount ?? 0) <= 0
+      || Number((trace as Record<string, unknown>).fallbackCoveredFactCount ?? 0)
+        < Number((trace as Record<string, unknown>).fallbackRequiredFactCount ?? 0)
+    )
+  ) {
+    push('selected_fallback_fields_do_not_describe_final_candidate', {
+      finalCandidateSource: 'deterministic_fallback',
+      fallbackBulletCount: (trace as Record<string, unknown>).fallbackBulletCount as string | number | boolean | null ?? null,
+      fallbackRequiredFactCount: (trace as Record<string, unknown>).fallbackRequiredFactCount as string | number | boolean | null ?? null,
+      fallbackCoveredFactCount: (trace as Record<string, unknown>).fallbackCoveredFactCount as string | number | boolean | null ?? null,
+    });
+  }
+  if (
+    trace.countedAsSuccess === true
+    && trace.finalCandidateSource === 'deterministic_fallback'
+    && Array.isArray(trace.candidateLineage)
+    && trace.finalNormalizedHash
+  ) {
+    const selectedFallback = trace.candidateLineage.find((candidate) =>
+      candidate?.candidateKind === 'deterministic_fallback'
+      && candidate?.accepted === true,
+    );
+    if (
+      selectedFallback?.normalizedHash
+      && selectedFallback.normalizedHash !== trace.finalNormalizedHash
+    ) {
+      push('selected_fallback_hash_mismatch', {
+        finalNormalizedHash: trace.finalNormalizedHash,
+        fallbackNormalizedHash: selectedFallback.normalizedHash,
+      });
+    }
   }
   if (trace.finalCandidateSource === 'deterministic_fallback'
     && trace.fallbackSelected === false) {

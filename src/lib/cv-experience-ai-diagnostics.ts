@@ -1958,20 +1958,41 @@ export class ExperienceAiDiagnosticSession {
       return;
     }
     const text = (finalized.text || '').trim();
+    const canonicalFinalText = text.replace(/\s+/g, ' ').trim();
+    const canonicalFinalHash = canonicalFinalText ? fingerprintText(canonicalFinalText) : null;
     const bullets = splitExperienceBullets(text).filter(Boolean);
+    // Final provenance is the authority for terminal fallback fields.  Older
+    // callers could leave client-fallback flags populated after a server
+    // fallback had been selected, which made the terminal record describe two
+    // different candidates.  Preserve phase-attempt telemetry, but derive
+    // selected/applied state only from the actual final source.
+    const serializedFinalSource = typeof diag.finalCandidateSource === 'string'
+      ? diag.finalCandidateSource
+      : null;
+    const serverFallbackSelected = Boolean(
+      finalized.countedAsSuccess
+      && (
+        serializedFinalSource === 'server_fallback'
+        || (serializedFinalSource == null && diag.serverFallbackUsed === true)
+      ),
+    );
+    const clientFallbackAttempted = Boolean(
+      diag.clientDeterministicFallbackAttempted
+      || diag.fallbackApplied
+      || finalized.origin === 'deterministic_fallback'
+      || diag.clientDeterministicFallbackSelected
+      || (diag as Record<string, unknown>).clientDeterministicFallbackUsedForFinalCandidate,
+    );
     const clientFallbackSelected = Boolean(
-      diag.clientDeterministicFallbackSelected
-      || (diag as Record<string, unknown>).clientDeterministicFallbackUsedForFinalCandidate
-      || diag.clientDeterministicFallbackApplied
-      || (finalized.origin === 'deterministic_fallback' && Boolean(text)),
+      !serverFallbackSelected
+      && finalized.countedAsSuccess
+      && (
+        serializedFinalSource === 'deterministic_fallback'
+        || (serializedFinalSource == null && finalized.origin === 'deterministic_fallback')
+      ),
     );
     // Backward-compatible alias used for coverage lineage below.
     const clientFallbackApplied = clientFallbackSelected;
-    const clientFallbackAttempted = Boolean(
-      diag.clientDeterministicFallbackAttempted
-      || clientFallbackSelected
-      || diag.fallbackApplied,
-    );
     // Clean no-op already returned — do not treat !countedAsSuccess as blocked failure.
     const blocked = Boolean(finalized.blocked || !finalized.countedAsSuccess);
     const selectedFinalPresent = Boolean(
@@ -1992,21 +2013,34 @@ export class ExperienceAiDiagnosticSession {
         ? (diag.clientDeterministicFallbackScripts as ExperienceScriptClass[])
         : (clientFallbackApplied ? scriptsFromBullets(text) : [])
     );
-    const clientBulletCount = clientFallbackAttempted
-      ? (diag.clientDeterministicFallbackBulletCount ?? diag.fallbackBulletCount ?? 0)
-      : 0;
-    const clientCovered = clientFallbackAttempted
-      ? (diag.clientDeterministicFallbackCoveredFactCount ?? 0)
-      : 0;
-    const clientRequired = clientFallbackAttempted
-      ? (diag.clientDeterministicFallbackRequiredFactCount
-        ?? diag.requiredFactCount
+    const clientBulletCount = clientFallbackSelected
+      ? bullets.length
+      : (clientFallbackAttempted && !serverFallbackSelected
+        ? (diag.clientDeterministicFallbackBulletCount ?? diag.fallbackBulletCount ?? 0)
+        : 0);
+    const clientCovered = clientFallbackSelected
+      ? (diag.finalCoveredFactCount ?? diag.coveredFactCount ?? diag.clientDeterministicFallbackCoveredFactCount ?? 0)
+      : (clientFallbackAttempted && !serverFallbackSelected
+        ? (diag.clientDeterministicFallbackCoveredFactCount ?? 0)
+        : 0);
+    const clientRequired = clientFallbackSelected
+      ? (diag.finalRequiredFactCount ?? diag.requiredFactCount
+        ?? diag.clientDeterministicFallbackRequiredFactCount
         ?? this.draft.requiredFactCount
         ?? 0)
-      : 0;
-    const clientUncovered = clientFallbackAttempted
-      ? (diag.clientDeterministicFallbackUncoveredFactIds || [])
-      : [];
+      : (clientFallbackAttempted && !serverFallbackSelected
+        ? (diag.clientDeterministicFallbackRequiredFactCount
+          ?? diag.requiredFactCount
+          ?? this.draft.requiredFactCount
+          ?? 0)
+        : 0);
+    const clientUncovered = clientFallbackSelected
+      ? (Array.isArray(diag.finalUncoveredFactIdentityHashes)
+        ? diag.finalUncoveredFactIdentityHashes.map(String)
+        : [])
+      : (clientFallbackAttempted && !serverFallbackSelected
+        ? (diag.clientDeterministicFallbackUncoveredFactIds || [])
+        : []);
 
     const providerUncovered = [...new Set(
       (Array.isArray(diag.providerUncoveredFactIdentityHashes)
@@ -2140,7 +2174,9 @@ export class ExperienceAiDiagnosticSession {
         ? diag.providerUnsupportedClaimKinds.map(String)
         : (this.draft.providerUnsupportedClaimKinds || []),
       finalNormalizedHash: selectedFinalPresent
-        ? ((diag.finalNormalizedHash as string | undefined) ?? fingerprintText(text))
+        ? (canonicalFinalHash
+          || (diag.finalNormalizedHash as string | undefined)
+          || fingerprintText(text))
         : null,
       visibleTextareaMatchesFinalNormalizedHash:
         typeof diag.visibleTextareaMatchesFinalNormalizedHash === 'boolean'
@@ -3500,7 +3536,7 @@ export class ExperienceAiDiagnosticSession {
         candidateKind: 'deterministic_fallback',
         present: clientBulletCount > 0 || clientFallbackApplied,
         accepted: clientFallbackApplied && Boolean(finalized.countedAsSuccess),
-        normalizedHash: clientFallbackApplied && text ? fingerprintText(text) : null,
+        normalizedHash: clientFallbackApplied ? canonicalFinalHash : null,
         unitCount: clientBulletCount || (clientFallbackApplied ? bullets.length : 0),
         coverageRequiredCount: clientRequired,
         coverageCoveredCount: clientCovered,
@@ -3526,8 +3562,9 @@ export class ExperienceAiDiagnosticSession {
       });
     }
     if (finalized.countedAsSuccess && text) {
-      const finalHash = (diag.finalNormalizedHash as string | undefined)
-        || fingerprintText(text.replace(/\s+/g, ' ').trim());
+      const finalHash = canonicalFinalHash
+        || (diag.finalNormalizedHash as string | undefined)
+        || fingerprintText(text);
       lineage.push({
         candidateKind: 'final_selected',
         present: true,
@@ -3636,9 +3673,15 @@ export class ExperienceAiDiagnosticSession {
       );
       const tenseNormOk = diag.finalCandidateSource === 'deterministic_tense_normalizer'
         && Boolean(finalized.countedAsSuccess);
-      const fbCount = diag.clientDeterministicFallbackBulletCount
-        ?? diag.fallbackBulletCount
-        ?? (clientFallbackApplied || tenseNormOk ? bullets.length : 0);
+      // For a selected fallback, the serialized terminal candidate—not the
+      // phase-local attempt counters—is authoritative.  A rejected/empty
+      // attempt may have left zero in the legacy fields even though the
+      // accepted final fallback has visible bullets.
+      const fbCount = clientFallbackSelected
+        ? clientBulletCount
+        : (diag.clientDeterministicFallbackBulletCount
+          ?? diag.fallbackBulletCount
+          ?? (clientFallbackApplied || tenseNormOk ? bullets.length : 0));
       this.stage(
         'fallback_output_built',
         fbCount > 0 || tenseNormOk ? 'ok' : 'fail',
@@ -4078,13 +4121,98 @@ export class ExperienceAiDiagnosticSession {
     const terminalDraftRaw = this.requestTimeCleanNoOpSnapshot
       ? { ...this.draft, ...this.requestTimeCleanNoOpSnapshot }
       : this.draft;
-    const terminalDraft = (
-      terminalDraftRaw.clientDeterministicFallbackApplied === true
-      && (!terminalDraftRaw.finalCandidateSource || terminalDraftRaw.finalCandidateSource === 'none')
+    const terminalSuccess = terminalDraftRaw.countedAsSuccess === true
+      && terminalDraftRaw.visibleApplySucceeded === true
+      && terminalDraftRaw.applyCommitted === true;
+    const terminalSource = (
+      terminalDraftRaw.finalCandidateSource
+      && terminalDraftRaw.finalCandidateSource !== 'none'
     )
-      ? { ...terminalDraftRaw, finalCandidateSource: 'deterministic_fallback' as const }
-      : terminalDraftRaw;
-    const terminalStages = this.requestTimeCleanNoOpStages || this.stages;
+      ? terminalDraftRaw.finalCandidateSource
+      : (
+        terminalDraftRaw.clientDeterministicFallbackSelected === true
+        || terminalDraftRaw.clientDeterministicFallbackUsedForFinalCandidate === true
+        || terminalDraftRaw.clientDeterministicFallbackApplied === true
+          ? 'deterministic_fallback'
+          : null
+      );
+    const terminalDraft = terminalSuccess
+      ? (() => {
+        const finalBulletCount = Number(
+          terminalDraftRaw.finalCandidateBulletCount
+          ?? terminalDraftRaw.finalBulletCount
+          ?? terminalDraftRaw.appliedFinalBulletCount
+          ?? 0,
+        );
+        const finalRequired = Number(
+          terminalDraftRaw.finalRequiredFactCount
+          ?? terminalDraftRaw.requiredFactCount
+          ?? 0,
+        );
+        const finalCovered = Number(
+          terminalDraftRaw.finalCoveredFactCount
+          ?? terminalDraftRaw.coveredFactCount
+          ?? 0,
+        );
+        const finalUncovered = Array.isArray(terminalDraftRaw.finalUncoveredFactIdentityHashes)
+          ? [...terminalDraftRaw.finalUncoveredFactIdentityHashes]
+          : [];
+        const deterministicSelected = terminalSource === 'deterministic_fallback';
+        const serverSelected = terminalSource === 'server_fallback';
+        const selectedScripts = terminalDraftRaw.finalCandidateBulletScripts?.length
+          ? [...terminalDraftRaw.finalCandidateBulletScripts]
+          : [...(terminalDraftRaw.finalBulletScripts || [])];
+        return {
+          ...terminalDraftRaw,
+          finalCandidateSource: terminalSource,
+          // A committed success has no terminal failure. Phase-local provider
+          // or fallback rejection remains available in candidateLineage.
+          finalTypedFailureReason: null,
+          rejectionStage: null,
+          fallbackSelected: deterministicSelected,
+          fallbackBulletCount: deterministicSelected ? finalBulletCount : 0,
+          fallbackCoveredFactCount: deterministicSelected ? finalCovered : 0,
+          fallbackRequiredFactCount: deterministicSelected ? finalRequired : 0,
+          fallbackBulletScripts: deterministicSelected ? selectedScripts : [],
+          clientDeterministicFallbackSelected: deterministicSelected,
+          clientDeterministicFallbackUsedForFinalCandidate: deterministicSelected,
+          clientDeterministicFallbackApplied: deterministicSelected,
+          clientDeterministicFallbackBulletCount: deterministicSelected ? finalBulletCount : 0,
+          clientDeterministicFallbackCoveredFactCount: deterministicSelected ? finalCovered : 0,
+          clientDeterministicFallbackRequiredFactCount: deterministicSelected ? finalRequired : 0,
+          clientDeterministicFallbackScripts: deterministicSelected ? selectedScripts : [],
+          clientDeterministicFallbackUncoveredFactIds: deterministicSelected
+            ? finalUncovered
+            : [],
+          // `serverFallbackUsed` is phase telemetry (a server fallback may
+          // have fed a later client deterministic candidate).  Selection is
+          // represented exclusively by finalCandidateSource and the mutually
+          // exclusive client/server selected flags.
+          serverFallbackUsed: serverSelected || terminalDraftRaw.serverFallbackUsed === true,
+          // A selected final candidate is the only candidate allowed to carry
+          // final bullet/coverage fields into the terminal record.
+          finalBulletCount: finalBulletCount || terminalDraftRaw.finalBulletCount,
+          finalBulletScripts: selectedScripts,
+          appliedFinalBulletCount: finalBulletCount || terminalDraftRaw.appliedFinalBulletCount,
+          appliedFinalBulletScripts: selectedScripts,
+        };
+      })()
+      : (
+        terminalDraftRaw.clientDeterministicFallbackApplied === true
+        && (!terminalDraftRaw.finalCandidateSource || terminalDraftRaw.finalCandidateSource === 'none')
+          ? { ...terminalDraftRaw, finalCandidateSource: 'deterministic_fallback' as const }
+          : terminalDraftRaw
+      );
+    const terminalStagesRaw = this.requestTimeCleanNoOpStages || this.stages;
+    // A successful commit may follow a rejected provider/fallback phase.  The
+    // rejection remains available in provider fields and candidateLineage,
+    // while terminal stages describe the selected outcome only; they must not
+    // retain a stale `fail` result after the accepted candidate is committed.
+    const terminalStages = terminalSuccess
+      ? terminalStagesRaw.map((stage) => stage.result === 'fail'
+        ? { ...stage, result: 'skipped' as const }
+        : stage)
+      : terminalStagesRaw;
     const base = {
       ...terminalDraft,
       stages: [...terminalStages],
