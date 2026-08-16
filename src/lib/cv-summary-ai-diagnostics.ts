@@ -2786,7 +2786,10 @@ export class SummaryAiDiagnosticSession {
 
   recordVisibleApply(ok: boolean, usageAfter: number, visibleText?: string): void {
     const locale = (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale;
-    const sharedVisiblePostWriteLocale = !new Set(['de', 'en', 'fr', 'it', 'es', 'ar', 'hi']).has(locale);
+    // Italian Summary V2 has entry-owned fact IDs, not the old warehouse-only
+    // visible matcher vocabulary.  It therefore uses the same hash-bound
+    // visible-parity path as other structured locales after the actual write.
+    const sharedVisiblePostWriteLocale = !new Set(['de', 'en', 'fr', 'es', 'ar', 'hi']).has(locale);
     const visibleCount = typeof visibleText === 'string'
       ? countSummaryDurationExpressions(visibleText, locale)
       : (ok ? (this.draft.independentFinalDurationClaimCount ?? null) : null);

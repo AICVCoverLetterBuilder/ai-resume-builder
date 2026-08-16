@@ -1681,7 +1681,11 @@ function compressLocaleDurationToCompact(text: string, locale: Locale): string {
   } else if (locale === 'it') {
     t = t
       .replace(/Dispongo di circa/giu, 'Ho circa')
-      .replace(/,\s+dove\s+/giu, ', ')
+      // `dove` attaches the entry-owned duty clause to its role/employer
+      // introduction.  Dropping it leaves two independent finite clauses
+      // joined by a comma ("… presso X, preparo …"), which is neither a safe
+      // compression nor native Italian.  The compact duration wording above
+      // still makes this a material Shorter transformation.
       .replace(/\bin questo ruolo\s*/giu, '')
       .replace(/\bin un ruolo precedente,\s*/giu, '');
   } else if (locale === 'pt-BR') {

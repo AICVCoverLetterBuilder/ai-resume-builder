@@ -1037,6 +1037,14 @@ function detectCoordinationDefect(text: string, locale: Locale): string | null {
     // noun coordination remains accepted.
     const finiteAfterNonche = /,\s*nonché\s+(?:ho|hai|ha|abbiamo|avete|hanno|sono|sei|è|siamo|siete|[\p{L}]+(?:o|avo|avi|ava|avano|ivo|ivi|iva|ivano|isco|isci|isce|iscono|iamo|ate|ono|ano))(?=[^\p{L}]|$)/iu;
     if (finiteAfterNonche.test(text)) return 'it_nonche_finite_clause_coordination';
+
+    // A role/employer introduction needs a relative connector or a stronger
+    // clause boundary before its first-person duties.  This is deliberately
+    // limited to `lavoro/lavorato … come … presso …, <finite clause>` so it
+    // does not ban ordinary commas elsewhere in Italian prose or depend on
+    // a particular title, employer, or occupation.
+    const roleIntroCommaSplice = /(?:\b(?:attualmente\s+)?lavoro\s+come|\b(?:ho(?:\s+già)?|in\s+precedenza\s+ho)\s+lavorato\s+come)\s+[^,.]+?\s+presso\s+[^,.]+,\s*(?!(?:dove|e|ma|perché|mentre)\b)(?:ho\s+)?[\p{L}]+/iu;
+    if (roleIntroCommaSplice.test(text)) return 'it_role_intro_comma_splice';
   }
   if (locale === 'fr') {
     // "ainsi que" coordinating a finite verb requires an explicit subject.
