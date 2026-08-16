@@ -176,10 +176,10 @@ function assignPtBrUnitRoleSlot(unit: string): string {
     && !/\b(?:atualmente|anteriormente)\b/iu.test(s)) {
     return 'duration';
   }
-  if (/\b(?:anteriormente|trabalhei)\b/iu.test(s)) {
+  if (/\b(?:anteriormente|antes|trabalhei|atuei|exerci)\b/iu.test(s)) {
     return 'prior_role';
   }
-  if (/\b(?:atualmente|trabalho\s+na|trabalho\s+como)\b/iu.test(s)) {
+  if (/\b(?:atualmente|trabalho\s+na|trabalho\s+como|atuo\s+como)\b/iu.test(s)) {
     return 'current_intro';
   }
   return 'other';
@@ -190,7 +190,7 @@ export function detectPortugueseBrazilSummaryPerspective(
 ): 'first_person' | 'neutral_cv' | 'cv_third_person' {
   const t = (text || '').replace(/\s+/g, ' ').trim();
   if (!t) return 'neutral_cv';
-  if (/\b(?:eu|tenho|trabalho|trabalhei|verifico|confiro|me\s+coordeno|criei|revisei|preparei)\b/iu.test(t)) {
+  if (/\b(?:eu|tenho|trabalho|trabalhei|atuo|atuei|exerço|exerci|verifico|confiro|me\s+coordeno|criei|revisei|preparei)\b/iu.test(t)) {
     return 'first_person';
   }
   if (/\b(?:ele|ela|trabalha\s+atualmente|trabalhou)\b/iu.test(t)
@@ -320,13 +320,13 @@ export function analyzePortugueseBrazilFirstPersonFiniteVerbs(
 
   sentences.forEach((sentence, sentenceIndex) => {
     const expectedTense: 'present' | 'past' | 'unknown' =
-      /\b(?:anteriormente|antes|trabalhei|trabalhou)\b/iu.test(sentence)
+      /\b(?:anteriormente|antes|trabalhei|trabalhou|atuei|exerci)\b/iu.test(sentence)
         ? 'past'
-        : /\b(?:atualmente|trabalho|trabalha)\b/iu.test(sentence)
+        : /\b(?:atualmente|trabalho|trabalha|atuo|exerço)\b/iu.test(sentence)
           ? 'present'
           : 'unknown';
     // Role-intro predicates are finite even when there is no duty clause.
-    const intro = /\b(?:atualmente\s+)?(trabalho|trabalhei|sou|fui|tenho|tive)\b/iu.exec(sentence);
+    const intro = /\b(?:atualmente\s+)?(trabalho|trabalhei|atuo|atuei|exerço|exerci|sou|fui|tenho|tive)\b/iu.exec(sentence);
     if (intro?.[1]) addCandidate(sentenceIndex, intro[1], expectedTense);
 
     const whereIndex = sentence.search(/\bonde\b/iu);
@@ -548,13 +548,13 @@ export function analyzePortugueseBrazilSummaryEmploymentQuality(
 
   const company = (options.company || '').trim();
   const priorCompany = (options.priorCompany || '').trim();
-  const currentIntroSlotPresent = /\b(?:atualmente\s+trabalho|trabalho\s+na|trabalho\s+como|atualmente)\b/iu
+  const currentIntroSlotPresent = /\b(?:atualmente\s+(?:trabalho|atuo|exerço)|trabalho\s+(?:na|como)|atuo\s+como|atualmente)\b/iu
     .test(text)
     && (company ? new RegExp(company.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu').test(text) : true);
   const currentDutySlotPresent = currentCov.required === 0 || currentCov.covered >= currentCov.required;
   const priorRoleSlotPresent = !priorCompany && !designDomain
     ? true
-    : /\b(?:anteriormente|trabalhei)\b/iu.test(text)
+    : /\b(?:anteriormente|antes|trabalhei|atuei|exerci)\b/iu.test(text)
       && (priorCompany
         ? new RegExp(priorCompany.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu').test(text)
         : true);
@@ -748,9 +748,9 @@ export function analyzePortugueseBrazilSummaryEmploymentQuality(
     currentRoleTitleMatchesStructuredRole: rolePresent,
     finalCurrentEmployerPresent,
     finalPriorEmployerPresent,
-    finalCurrentEmploymentStateExpressed: /\b(?:atualmente|trabalho)\b/iu.test(text),
+    finalCurrentEmploymentStateExpressed: /\b(?:atualmente|trabalho|atuo)\b/iu.test(text),
     finalPriorEmploymentStateExpressed: !priorCompany
-      || /\b(?:anteriormente|trabalhei)\b/iu.test(text),
+      || /\b(?:anteriormente|antes|trabalhei|atuei)\b/iu.test(text),
     finalCurrentRoleIntroValidationPassed: currentIntroSlotPresent,
     finalPriorRoleIntroValidationPassed: priorRoleSlotPresent,
     finalSlotValidationPassed: slotValidationPassed,

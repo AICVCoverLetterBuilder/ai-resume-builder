@@ -811,7 +811,7 @@ const LOCALE_FINITE_CUE_RE: Record<string, RegExp> = {
   es: /(?:^|[^\p{L}])(?:cuento|tengo|dispongo|trabajo|trabajé|ejerzo|ejercí|soy|fui)(?=[^\p{L}]|$)/iu,
   fr: /(?:^|[^\p{L}])(?:dispose|ai|travaille|travaillé|exerce|suis|effectue|inspecte)(?=[^\p{L}]|$)/iu,
   it: /(?:^|[^\p{L}])(?:dispongo|ho|lavoro|lavorato|sono|svolgo|ricoperto)(?=[^\p{L}]|$)/iu,
-  'pt-BR': /(?:^|[^\p{L}])(?:tenho|disponho|trabalho|trabalhei|exerço|exerci|sou)(?=[^\p{L}]|$)/iu,
+  'pt-BR': /(?:^|[^\p{L}])(?:tenho|disponho|trabalho|trabalhei|atuo|atuei|exerço|exerci|sou)(?=[^\p{L}]|$)/iu,
   ru: /(?:у\s+меня|обладаю|имею|работа(?:ю|л|ла)|занима(?:ю|л|ла|лась))/iu,
   sr: /(?:^|[^\p{L}])(?:imam|raspolažem|radim|radio|radila|obavljam|obavljao|obavljala)(?=[^\p{L}]|$)/iu,
   hr: /(?:^|[^\p{L}])(?:imam|raspolažem|radim|radio|radila|obavljam|obavljao|obavljala)(?=[^\p{L}]|$)/iu,
@@ -828,6 +828,18 @@ const HINDI_FIRST_PERSON_RE = /(?:^|[^\p{L}])मैं(?:ने)?(?=[^\p{L}]|$)/
 const HINDI_PRIOR_MARKER_RE = /इससे\s+(?:पहले|पूर्व)|पहले\s+मैं/u;
 const HINDI_HABITUAL_AUX_RE = /([\p{Script=Devanagari}\p{M}]+(?:ती|ता))\s+(हूँ|हूं|हैं|है|थीं|थे|थी|था)/gu;
 const HINDI_PERFECTIVE_TAIL_RE = /(?:[\p{Script=Devanagari}\p{M}]+(?:या|यी|ाई|ए|ीं)|की)(?=\s*(?:[,।.!?]|और|तथा|$))/u;
+
+/**
+ * Brazilian Portuguese `exercer` takes a role through an explicit nominal
+ * complement (`exercer a função de ...`), not the bare `exercer como ...`
+ * shell emitted by the old Professional rewrite.  Keep this structural and
+ * title-agnostic so every occupation and free-text role is covered.
+ */
+export function detectPortugueseBrazilRoleIntroValencyDefect(text: string): boolean {
+  return /(?:^|[^\p{L}])(?:exerço|exerci|exerce|exerceu)\s+como\s+(?=\p{L})/iu.test(
+    (text || '').replace(/\s+/g, ' ').trim(),
+  );
+}
 
 /**
  * Privacy-safe Hindi clause grammar audit. It keys on subject, auxiliary and
@@ -1115,8 +1127,15 @@ export function evaluateNativeRealizationContract(options: {
   if (spanishCoordination.mixedTensePredicateChain) reasons.push('mixed_tense_predicate_chain');
 
   const morphologyDefect = detectLocaleVerbMorphologyDefect(text, locale);
-  const localeVerbMorphologyPassed = morphologyDefect === null && hindiFirstPersonAgreementPassed;
+  const ptbrRoleIntroValencyDefect = locale === 'pt-BR'
+    && detectPortugueseBrazilRoleIntroValencyDefect(text);
+  const localeVerbMorphologyPassed = morphologyDefect === null
+    && !ptbrRoleIntroValencyDefect
+    && hindiFirstPersonAgreementPassed;
   if (morphologyDefect) reasons.push(`locale_verb_morphology:${morphologyDefect}`);
+  if (ptbrRoleIntroValencyDefect) {
+    reasons.push('locale_verb_morphology:ptbr_invalid_role_intro_valency');
+  }
 
   const roleCaseValidationPassed = !detectRoleCaseDefect(text, locale);
   if (!roleCaseValidationPassed) reasons.push('invalid_role_case');

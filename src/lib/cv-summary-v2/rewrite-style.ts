@@ -238,7 +238,7 @@ const LOCALE_PROFESSIONAL_MARKERS: Partial<Record<Locale, RegExp>> = {
   es: /\b(?:ejerzo|ejercí|en\s+calidad\s+de)\b/iu,
   fr: /\b(?:j['’]exerce|exercé|en\s+qualité\s+de)\b/iu,
   it: /\b(?:svolgo|ricoperto|in\s+qualità\s+di)\b/iu,
-  'pt-BR': /\b(?:exerço|exerci|na\s+função\s+de)\b/iu,
+  'pt-BR': /\b(?:atuo|atuei|exerço|exerci|na\s+função\s+de)\b/iu,
   ru: /(?:занимаю\s+должность|занимал(?:\(а\))?\s+должность|в\s+качестве)/u,
   sr: /\b(?:obavljam|obavljao|u\s+svojstvu)\b/iu,
   hr: /\b(?:obavljam|obavljao|u\s+svojstvu)\b/iu,
@@ -1766,8 +1766,16 @@ function applyProfessionalRoleFraming(text: string, locale: Locale): string {
   }
   if (locale === 'pt-BR') {
     return t
-      .replace(/Atualmente trabalho como/iu, 'Atualmente exerço como')
-      .replace(/Anteriormente trabalhei como/iu, 'Anteriormente exerci como');
+      // `atuar como` is the native valency-safe role-intro construction.
+      // Normalize legacy bare `exercer como` shells as well, so a repair path
+      // cannot preserve the old false-green surface.
+      .replace(/Atualmente\s+trabalho\s+como/iu, 'Atualmente atuo como')
+      .replace(/Anteriormente\s+trabalhei\s+como/iu, 'Anteriormente atuei como')
+      .replace(/Antes\s+trabalhei\s+como/iu, 'Antes atuei como')
+      .replace(/Atualmente\s+exerço\s+como/iu, 'Atualmente atuo como')
+      .replace(/(?:Anteriormente|Antes)\s+exerci\s+como/iu, (m) => (
+        /^Antes/iu.test(m) ? 'Antes atuei como' : 'Anteriormente atuei como'
+      ));
   }
   if (locale === 'ru') {
     return t
@@ -2025,7 +2033,9 @@ export function repairSummaryV2RewriteStyle(
   }
   // professional
   const profMarker = professionalMarkerFor(locale);
-  if (profMarker && profMarker.test(t)) return t.replace(/\s+/g, ' ').trim();
+  if (profMarker && profMarker.test(t)) {
+    return applyProfessionalRoleFraming(t, locale).replace(/\s+/g, ' ').trim();
+  }
   return applyProfessionalRoleFraming(t, locale).replace(/\s+/g, ' ').trim();
 }
 

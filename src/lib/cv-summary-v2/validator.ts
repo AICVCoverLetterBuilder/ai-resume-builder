@@ -422,6 +422,9 @@ export function validateSummaryV2AgainstManifest(
   }
   else if (!hindiFirstPersonAgreementPassed) reason = 'hindi_first_person_agreement_invalid';
   else if (!perspectiveValidationPassed) reason = 'mixed_perspective';
+  else if (nativeContract.nativeRealizationRejectionReasons.includes(
+    'locale_verb_morphology:ptbr_invalid_role_intro_valency',
+  )) reason = 'ptbr_invalid_role_intro_valency';
   else if (!arabicMorphologyValidationPassed) reason = 'malformed_arabic_finite_verb';
   else if (!russianMorphologyValidationPassed) reason = 'malformed_russian_finite_verb';
   else if (current && (!currentRolePresent || !currentEmployerPresent || !currentStateExpressed)) {
