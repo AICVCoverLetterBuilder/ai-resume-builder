@@ -18,6 +18,7 @@ import {
   type SummaryV2GenderMode,
 } from './gender';
 import { validateFrenchSummaryFiniteGrammar } from '../cv-french-summary-grounding';
+import { analyzePortugueseBrazilFirstPersonFiniteVerbs } from '../cv-portuguese-summary-grounding';
 
 export const SUMMARY_V2_NATIVE_SURFACE_386_REVISION =
   'summary-v2-native-surface-386-v1' as const;
@@ -73,6 +74,11 @@ export type SummaryV2NativeSurfaceResult = {
   frenchGrammarRejectionReason?: string | null;
   frenchTokenBoundaryValidationPassed?: boolean;
   frenchClauseCasingValidationPassed?: boolean;
+  ptbrFiniteVerbCount: number;
+  ptbrFirstPersonCompatibleFiniteVerbCount: number;
+  ptbrWrongPersonFiniteVerbCount: number;
+  ptbrWrongPersonFiniteVerbHashes: string[];
+  ptbrUnitPersonAgreementPassed: boolean;
 };
 
 export type HindiSummarySentenceAgreementRecord = {
@@ -299,7 +305,18 @@ function romanceFirstPersonPast(lower: string, locale: 'es' | 'pt-BR'): string {
   if (/yó$/u.test(lower)) return `${lower.slice(0, -2)}í`;
   if (/ió$/u.test(lower)) return `${lower.slice(0, -2)}í`;
   if (locale === 'pt-BR') {
-    if (/ou$/u.test(lower)) return `${lower.slice(0, -2)}ei`;
+    // Brazilian Portuguese third-person simple past -eu maps to the
+    // first-person -i form (desenvolveu -> desenvolvi, conheceu -> conheci).
+    if (/eu$/u.test(lower)) return `${lower.slice(0, -2)}i`;
+    if (/ou$/u.test(lower)) {
+      // Orthographic stem changes keep regular -car/-gar/-çar verbs valid
+      // before the first-person -ei ending (verificou -> verifiquei,
+      // pagou -> paguei, começou -> comecei).
+      if (/cou$/u.test(lower)) return `${lower.slice(0, -3)}quei`;
+      if (/gou$/u.test(lower)) return `${lower.slice(0, -3)}guei`;
+      if (/\u00e7ou$/u.test(lower)) return `${lower.slice(0, -3)}cei`;
+      return `${lower.slice(0, -2)}ei`;
+    }
     if (/iu$/u.test(lower)) return `${lower.slice(0, -2)}i`;
     // -ava / -ia imperfect: 1sg == 3sg.
     return lower;
@@ -337,6 +354,29 @@ function realizeSpanishCoordinatedPredicates(rest: string, tense: 'present' | 'p
       }
       if (tense === 'past' && verb.length >= 4 && /(?:\u00f3|i\u00f3)$/u.test(verb)) {
         return `${connector}${romanceFirstPersonPast(verb, 'es')}`;
+      }
+      return `${connector}${rawVerb}`;
+    },
+  );
+}
+
+/**
+ * Brazilian Portuguese duty clauses can carry several finite predicates in a
+ * single bullet. Realizing only the leading verb leaves a mixed-person chain
+ * such as `criei ..., desenvolveu ... e verificou ...`. Convert only
+ * conjunction-following productive finite forms; objects and modifiers remain
+ * untouched and are never treated as predicates.
+ */
+function realizePortugueseCoordinatedPredicates(rest: string, tense: 'present' | 'past'): string {
+  return (rest || '').replace(
+    /((?:,\s*|\s+)(?:e|ou)\s+)([\p{L}]+)/giu,
+    (_whole, connector: string, rawVerb: string) => {
+      const verb = rawVerb.toLocaleLowerCase('pt-BR');
+      if (tense === 'present' && verb.length >= 4 && /(?:a|e)$/u.test(verb)) {
+        return `${connector}${romanceFirstPersonPresent(verb, 'pt-BR')}`;
+      }
+      if (tense === 'past' && verb.length >= 4 && /(?:ou|eu|iu)$/u.test(verb)) {
+        return `${connector}${romanceFirstPersonPast(verb, 'pt-BR')}`;
       }
       return `${connector}${rawVerb}`;
     },
@@ -645,7 +685,9 @@ export function realizeFirstPersonDutyClause(
 
   const realizedRest = locale === 'es'
     ? realizeSpanishCoordinatedPredicates(rest, tense)
-    : rest;
+    : locale === 'pt-BR'
+      ? realizePortugueseCoordinatedPredicates(rest, tense)
+      : rest;
   return `${verb}${realizedRest}`.replace(/\s+/g, ' ').trim();
 }
 
@@ -1117,6 +1159,16 @@ export function evaluateSummaryV2NativeSurface(options: {
   void SUMMARY_V2_NATIVE_SURFACE_386_REVISION;
   const text = (options.text || '').replace(/\s+/g, ' ').trim();
   const reasons: string[] = [];
+  const ptbrFinite = options.locale === 'pt-BR'
+    ? analyzePortugueseBrazilFirstPersonFiniteVerbs(text)
+    : {
+      finiteVerbCount: 0,
+      firstPersonCompatibleFiniteVerbCount: 0,
+      wrongPersonFiniteVerbCount: 0,
+      wrongPersonFiniteVerbHashes: [] as string[],
+      unitPersonAgreementPassed: true,
+      rejectionReasons: [] as string[],
+    };
   const latinScript = !['ar', 'hi', 'ja'].includes(options.locale);
 
   const capitalizationValidationPassed = (() => {
@@ -1246,6 +1298,9 @@ export function evaluateSummaryV2NativeSurface(options: {
       reasons.push('first_third_person_mismatch');
     }
   }
+  if (options.locale === 'pt-BR' && !ptbrFinite.unitPersonAgreementPassed) {
+    reasons.push(...ptbrFinite.rejectionReasons);
+  }
 
   const perspective = options.perspectiveMode ?? 'first_person';
   const contract = evaluateNativeRealizationContract({
@@ -1291,6 +1346,7 @@ export function evaluateSummaryV2NativeSurface(options: {
     && !contract.unresolvedGenderPlaceholderDetected
     && contract.finiteDurationSentencePassed
     && contract.localeVerbMorphologyPassed
+    && ptbrFinite.unitPersonAgreementPassed
     && contract.roleCaseValidationPassed
     && contract.nativeCoordinationValidationPassed
     && contract.sentenceCompletenessPassed;
@@ -1299,15 +1355,17 @@ export function evaluateSummaryV2NativeSurface(options: {
     nativeSurfaceValidationPassed,
     unresolvedGenderPlaceholderDetected: contract.unresolvedGenderPlaceholderDetected,
     finiteDurationSentencePassed: contract.finiteDurationSentencePassed,
-    firstPersonPredicateChainPassed: contract.firstPersonPredicateChainPassed,
-    localeVerbMorphologyPassed: contract.localeVerbMorphologyPassed,
+    firstPersonPredicateChainPassed: contract.firstPersonPredicateChainPassed
+      && ptbrFinite.unitPersonAgreementPassed,
+    localeVerbMorphologyPassed: contract.localeVerbMorphologyPassed
+      && ptbrFinite.unitPersonAgreementPassed,
     roleCaseValidationPassed: contract.roleCaseValidationPassed,
     nativeCoordinationValidationPassed: contract.nativeCoordinationValidationPassed,
     sentenceCompletenessPassed: contract.sentenceCompletenessPassed,
     hindiFirstPersonAgreementPassed: contract.hindiFirstPersonAgreementPassed,
     hindiSentenceAgreementRecords: contract.hindiSentenceAgreementRecords,
     capitalizationValidationPassed,
-    grammaticalPersonValidationPassed: personOk,
+    grammaticalPersonValidationPassed: personOk && ptbrFinite.unitPersonAgreementPassed,
     currentTenseValidationPassed,
     priorTenseValidationPassed,
     finiteClauseValidationPassed,
@@ -1330,5 +1388,10 @@ export function evaluateSummaryV2NativeSurface(options: {
     frenchGrammarRejectionReason: frenchGrammar?.grammarRejectionReason ?? null,
     frenchTokenBoundaryValidationPassed,
     frenchClauseCasingValidationPassed,
+    ptbrFiniteVerbCount: ptbrFinite.finiteVerbCount,
+    ptbrFirstPersonCompatibleFiniteVerbCount: ptbrFinite.firstPersonCompatibleFiniteVerbCount,
+    ptbrWrongPersonFiniteVerbCount: ptbrFinite.wrongPersonFiniteVerbCount,
+    ptbrWrongPersonFiniteVerbHashes: ptbrFinite.wrongPersonFiniteVerbHashes,
+    ptbrUnitPersonAgreementPassed: ptbrFinite.unitPersonAgreementPassed,
   };
 }

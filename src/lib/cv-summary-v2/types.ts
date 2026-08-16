@@ -349,6 +349,11 @@ export type SummaryV2PipelineResult = {
       predicateChainRejectionReasons?: string[];
       sourcePredicateChainHash?: string;
       finalPredicateChainHash?: string;
+      ptbrFiniteVerbCount?: number;
+      ptbrFirstPersonCompatibleFiniteVerbCount?: number;
+      ptbrWrongPersonFiniteVerbCount?: number;
+      ptbrWrongPersonFiniteVerbHashes?: string[];
+      ptbrUnitPersonAgreementPassed?: boolean;
       repeatedStyleModifierCount?: number;
       repeatedStyleModifierLemmas?: string[];
       stackedModifierDetected?: boolean;

@@ -116,6 +116,11 @@ export type SummaryV2StyleFulfillment = {
   nativeStrongSurfaceRejectionReasons?: string[];
   frenchPredicateEvidence?: FrenchPredicateTransformationEvidence[];
   frenchRoleTenseEvidence?: FrenchRoleTenseEvidence[];
+  ptbrFiniteVerbCount?: number;
+  ptbrFirstPersonCompatibleFiniteVerbCount?: number;
+  ptbrWrongPersonFiniteVerbCount?: number;
+  ptbrWrongPersonFiniteVerbHashes?: string[];
+  ptbrUnitPersonAgreementPassed?: boolean;
 };
 
 export type FrenchPredicateTransformationEvidence = {
@@ -2135,6 +2140,11 @@ export function evaluateSummaryV2StyleFulfillment(options: {
       predicateChainRejectionReasons: native.predicateChainRejectionReasons,
       sourcePredicateChainHash: native.sourcePredicateChainHash,
       finalPredicateChainHash: native.finalPredicateChainHash,
+      ptbrFiniteVerbCount: native.ptbrFiniteVerbCount,
+      ptbrFirstPersonCompatibleFiniteVerbCount: native.ptbrFirstPersonCompatibleFiniteVerbCount,
+      ptbrWrongPersonFiniteVerbCount: native.ptbrWrongPersonFiniteVerbCount,
+      ptbrWrongPersonFiniteVerbHashes: native.ptbrWrongPersonFiniteVerbHashes,
+      ptbrUnitPersonAgreementPassed: native.ptbrUnitPersonAgreementPassed,
     };
   }
 
@@ -2320,6 +2330,11 @@ export function evaluateSummaryV2StyleFulfillment(options: {
     predicateChainRejectionReasons: native.predicateChainRejectionReasons,
     sourcePredicateChainHash: native.sourcePredicateChainHash,
     finalPredicateChainHash: native.finalPredicateChainHash,
+    ptbrFiniteVerbCount: native.ptbrFiniteVerbCount,
+    ptbrFirstPersonCompatibleFiniteVerbCount: native.ptbrFirstPersonCompatibleFiniteVerbCount,
+    ptbrWrongPersonFiniteVerbCount: native.ptbrWrongPersonFiniteVerbCount,
+    ptbrWrongPersonFiniteVerbHashes: native.ptbrWrongPersonFiniteVerbHashes,
+    ptbrUnitPersonAgreementPassed: native.ptbrUnitPersonAgreementPassed,
     repeatedStyleModifierCount: strongSurface.repeatedStyleModifierCount,
     repeatedStyleModifierLemmas: strongSurface.repeatedStyleModifierLemmas,
     stackedModifierDetected: strongSurface.stackedModifierDetected,

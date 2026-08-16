@@ -200,6 +200,188 @@ export function detectPortugueseBrazilSummaryPerspective(
   return 'neutral_cv';
 }
 
+export type PortugueseBrazilFiniteVerbRecord = {
+  sentenceIndex: number;
+  tokenHash: string;
+  expectedTense: 'present' | 'past' | 'unknown';
+  tense: 'present' | 'past' | 'unknown';
+  person: 'first_singular' | 'third_singular' | 'unknown';
+  compatible: boolean;
+};
+
+export type PortugueseBrazilFiniteVerbDiagnostics = {
+  finiteVerbCount: number;
+  firstPersonCompatibleFiniteVerbCount: number;
+  wrongPersonFiniteVerbCount: number;
+  wrongPersonFiniteVerbHashes: string[];
+  unitPersonAgreementPassed: boolean;
+  rejectionReasons: string[];
+  records: PortugueseBrazilFiniteVerbRecord[];
+};
+
+const PTBR_FIRST_PERSON_PRESENT_IRREGULAR = new Set([
+  'sou', 'estou', 'tenho', 'faço', 'vou', 'posso', 'sei', 'vejo', 'dou', 'leio',
+]);
+const PTBR_FIRST_PERSON_PAST_IRREGULAR = new Set([
+  'fui', 'tive', 'fiz', 'vi', 'dei', 'pude', 'soube', 'estive', 'mantive', 'obtive',
+]);
+const PTBR_NON_VERB_CONNECTOR_WORDS = new Set([
+  'e', 'ou', 'para', 'por', 'de', 'da', 'do', 'das', 'dos', 'em', 'na', 'no',
+  'nas', 'nos', 'com', 'sem', 'as', 'os', 'a', 'o', 'um', 'uma', 'que', 'se',
+  'me', 'te', 'lhe', 'lhes',
+]);
+const PTBR_CLITIC_WORDS = new Set(['me', 'te', 'se', 'lhe', 'lhes', 'nos']);
+
+function normalizePtBrFiniteToken(token: string): string {
+  return token
+    .toLocaleLowerCase('pt-BR')
+    .normalize('NFC')
+    .replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
+}
+
+function classifyPtBrFiniteToken(token: string): {
+  tense: 'present' | 'past' | 'unknown';
+  person: 'first_singular' | 'third_singular' | 'unknown';
+} {
+  const word = normalizePtBrFiniteToken(token);
+  if (!word || PTBR_NON_VERB_CONNECTOR_WORDS.has(word)) {
+    return { tense: 'unknown', person: 'unknown' };
+  }
+  if (PTBR_FIRST_PERSON_PRESENT_IRREGULAR.has(word)) {
+    return { tense: 'present', person: 'first_singular' };
+  }
+  if (PTBR_FIRST_PERSON_PAST_IRREGULAR.has(word)) {
+    return { tense: 'past', person: 'first_singular' };
+  }
+  // Regular first-person singular present (-o) and simple past (-ei/-i/-ui).
+  if (/\p{L}o$/u.test(word)) {
+    return { tense: 'present', person: 'first_singular' };
+  }
+  if (/(?:ei|i|ui)$/u.test(word)) {
+    return { tense: 'past', person: 'first_singular' };
+  }
+  // First-person and third-person singular imperfect forms share the same
+  // surface in Brazilian Portuguese (`trabalhava`, `substituía`). They are
+  // therefore compatible with a first-person completed-role shell rather than
+  // evidence of a person mismatch.
+  if (/(?:ava|ia|\u00eda)$/u.test(word)) {
+    return { tense: 'past', person: 'first_singular' };
+  }
+  // Third-person singular present (-a/-e) and simple past (-ou/-eu/-iu).
+  if (/(?:ou|eu|iu)$/u.test(word)) {
+    return { tense: 'past', person: 'third_singular' };
+  }
+  if (/(?:a|e)$/u.test(word)) {
+    return { tense: 'present', person: 'third_singular' };
+  }
+  return { tense: 'unknown', person: 'unknown' };
+}
+
+/**
+ * Scan every finite predicate position in a first-person Summary clause.
+ * The scanner is deliberately bounded to role-intro/relative-clause predicate
+ * positions, so ordinary material nouns are never treated as verbs. Unknown
+ * paradigms remain unproven and therefore cannot silently turn a mixed-person
+ * surface green.
+ */
+export function analyzePortugueseBrazilFirstPersonFiniteVerbs(
+  text: string,
+): PortugueseBrazilFiniteVerbDiagnostics {
+  const normalized = (text || '').replace(/\s+/g, ' ').trim();
+  const sentences = normalized
+    .split(/(?<=[.!?])\s+(?=\S)/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const records: PortugueseBrazilFiniteVerbRecord[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (
+    sentenceIndex: number,
+    token: string,
+    expectedTense: 'present' | 'past' | 'unknown',
+  ) => {
+    const clean = normalizePtBrFiniteToken(token);
+    if (!clean) return;
+    const classified = classifyPtBrFiniteToken(clean);
+    if (classified.person === 'unknown') return;
+    const key = `${sentenceIndex}:${clean}:${expectedTense}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const compatible = classified.person === 'first_singular'
+      && (expectedTense === 'unknown' || classified.tense === expectedTense);
+    records.push({
+      sentenceIndex,
+      tokenHash: fingerprintText(`ptbr-finite:${clean}`),
+      expectedTense,
+      tense: classified.tense,
+      person: classified.person,
+      compatible,
+    });
+  };
+
+  sentences.forEach((sentence, sentenceIndex) => {
+    const expectedTense: 'present' | 'past' | 'unknown' =
+      /\b(?:anteriormente|antes|trabalhei|trabalhou)\b/iu.test(sentence)
+        ? 'past'
+        : /\b(?:atualmente|trabalho|trabalha)\b/iu.test(sentence)
+          ? 'present'
+          : 'unknown';
+    // Role-intro predicates are finite even when there is no duty clause.
+    const intro = /\b(?:atualmente\s+)?(trabalho|trabalhei|sou|fui|tenho|tive)\b/iu.exec(sentence);
+    if (intro?.[1]) addCandidate(sentenceIndex, intro[1], expectedTense);
+
+    const whereIndex = sentence.search(/\bonde\b/iu);
+    if (whereIndex < 0) return;
+    const clause = sentence.slice(whereIndex + (sentence.slice(whereIndex).match(/^\bonde\b/iu)?.[0]?.length || 0));
+    const tokens = clause.split(/\s+/u).filter(Boolean);
+    const predicatePositions = new Set<number>();
+    if (tokens.length > 0) predicatePositions.add(0);
+    tokens.forEach((token, index) => {
+      if (/^[,;:]$/u.test(token) || /[,;:]$/u.test(token)) {
+        if (tokens[index + 1]) predicatePositions.add(index + 1);
+      }
+      if (/^e$/iu.test(normalizePtBrFiniteToken(token)) && tokens[index + 1]) {
+        let next = index + 1;
+        while (
+          next < tokens.length
+          && PTBR_CLITIC_WORDS.has(normalizePtBrFiniteToken(tokens[next] || ''))
+        ) next += 1;
+        if (tokens[next]) {
+          const candidate = classifyPtBrFiniteToken(tokens[next] || '');
+          const following = normalizePtBrFiniteToken(tokens[next + 1] || '');
+          // A bare -a/-e token immediately followed by another conjunction
+          // is commonly a coordinated noun (`catálogo e estante e ...`), not
+          // a finite predicate. Unambiguous past forms and predicates followed
+          // by their objects remain fully checked.
+          if (!(
+            candidate.person === 'third_singular'
+            && candidate.tense === 'present'
+            && (following === 'e' || following === 'ou')
+          )) predicatePositions.add(next);
+        }
+      }
+    });
+    for (const position of predicatePositions) {
+      addCandidate(sentenceIndex, tokens[position] || '', expectedTense);
+    }
+  });
+
+  const wrongPersonFiniteVerbHashes = records
+    .filter((record) => !record.compatible)
+    .map((record) => record.tokenHash);
+  const rejectionReasons = wrongPersonFiniteVerbHashes.length > 0
+    ? ['ptbr_first_person_morphology_mismatch', 'ptbr_coordinated_predicate_person_mismatch']
+    : [];
+  return {
+    finiteVerbCount: records.length,
+    firstPersonCompatibleFiniteVerbCount: records.filter((record) => record.compatible).length,
+    wrongPersonFiniteVerbCount: wrongPersonFiniteVerbHashes.length,
+    wrongPersonFiniteVerbHashes,
+    unitPersonAgreementPassed: records.length > 0 && wrongPersonFiniteVerbHashes.length === 0,
+    rejectionReasons,
+    records,
+  };
+}
+
 const PT_WAREHOUSE_INBOUND =
   /mercadorias?\s+(?:recebidas|que\s+chegam)|verifico\s+as\s+mercadorias/iu;
 const PT_WAREHOUSE_DOCS =
@@ -265,6 +447,11 @@ export type PortugueseBrazilSummaryEmploymentQuality = {
   finalDurationCurrentRoleAttachmentRisk: boolean;
   finalDurationTotalCareerMarkerPresent: boolean;
   currentRoleOmittedDetected: boolean;
+  ptbrFiniteVerbCount: number;
+  ptbrFirstPersonCompatibleFiniteVerbCount: number;
+  ptbrWrongPersonFiniteVerbCount: number;
+  ptbrWrongPersonFiniteVerbHashes: string[];
+  ptbrUnitPersonAgreementPassed: boolean;
 };
 
 function countPtBrWarehouseCoverage(text: string): {
@@ -328,8 +515,10 @@ export function analyzePortugueseBrazilSummaryEmploymentQuality(
     requireUnits: true,
     requiredScript: 'latin',
   });
+  const ptbrFinite = analyzePortugueseBrazilFirstPersonFiniteVerbs(text);
   const perspectiveMode = detectPortugueseBrazilSummaryPerspective(text);
-  const perspectiveValidationPassed = perspectiveMode === 'first_person';
+  const perspectiveValidationPassed = perspectiveMode === 'first_person'
+    && ptbrFinite.unitPersonAgreementPassed;
   const durationGrammar = analyzePortugueseBrazilDurationGrammar(
     text,
     options.expectedDuration || null,
@@ -390,6 +579,9 @@ export function analyzePortugueseBrazilSummaryEmploymentQuality(
   }
   if (!perspectiveValidationPassed) {
     slotRejectionReasons.push('ptbr_summary_perspective_not_first_person');
+  }
+  if (!ptbrFinite.unitPersonAgreementPassed) {
+    slotRejectionReasons.push(...ptbrFinite.rejectionReasons);
   }
   if (!durationGrammar.grammarValidationPassed) {
     slotRejectionReasons.push(PTBR_SUMMARY_DURATION_GRAMMAR_INVALID);
@@ -465,6 +657,7 @@ export function analyzePortugueseBrazilSummaryEmploymentQuality(
   const slotValidationPassed = slotRejectionReasons.length === 0
     && purity.targetLocalePurityPassed
     && perspectiveValidationPassed
+    && ptbrFinite.unitPersonAgreementPassed
     && durationGrammar.grammarValidationPassed
     && !italianLeak
     && !frenchLeak
@@ -496,7 +689,8 @@ export function analyzePortugueseBrazilSummaryEmploymentQuality(
     groundingValidationPassed,
     slotValidationPassed,
     perspectiveValidationPassed,
-    grammarValidationPassed: durationGrammar.grammarValidationPassed,
+    grammarValidationPassed: durationGrammar.grammarValidationPassed
+      && ptbrFinite.unitPersonAgreementPassed,
     durationGrammarValidationPassed: durationGrammar.durationGrammarValidationPassed,
     perspectiveMode,
     typedRejectionReason,
@@ -568,6 +762,11 @@ export function analyzePortugueseBrazilSummaryEmploymentQuality(
     finalDurationCurrentRoleAttachmentRisk: false,
     finalDurationTotalCareerMarkerPresent: totalDurationSlotPresent,
     currentRoleOmittedDetected: Boolean(company || options.role) && !currentIntroSlotPresent,
+    ptbrFiniteVerbCount: ptbrFinite.finiteVerbCount,
+    ptbrFirstPersonCompatibleFiniteVerbCount: ptbrFinite.firstPersonCompatibleFiniteVerbCount,
+    ptbrWrongPersonFiniteVerbCount: ptbrFinite.wrongPersonFiniteVerbCount,
+    ptbrWrongPersonFiniteVerbHashes: ptbrFinite.wrongPersonFiniteVerbHashes,
+    ptbrUnitPersonAgreementPassed: ptbrFinite.unitPersonAgreementPassed,
   };
 }
 
