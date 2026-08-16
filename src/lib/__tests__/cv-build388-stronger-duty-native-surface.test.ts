@@ -299,7 +299,10 @@ describe('AAB-388 Stronger duty-predicate native surface', () => {
       expect(text, locale).not.toMatch(/\bcon\s+ricore\b/iu);
       expect(text, locale).not.toMatch(/\b(?:sorgfaltig|zuverlassig|carefuly|thorougly)\b/iu);
       if (locale === 'it') {
-        expect(text).toMatch(/\bcon\s+rigore\b/iu);
+        // Evaluative manner is semantic, not a free Stronger ornament.  The
+        // structural Italian join remains the safe material improvement.
+        expect(text).not.toMatch(/\bcon\s+rigore\b/iu);
+        expect(text).toContain('nonché');
         expect(text).not.toMatch(/\bha\s+(?:controllato|registrato|sostituito)\b/iu);
         expect(text).toMatch(/\bho\s+(?:controllato|registrato|sostituito)\b/iu);
       }
@@ -364,7 +367,8 @@ describe('AAB-388 Stronger duty-predicate native surface', () => {
     expect(fin.diagnostics?.coveredCurrentDutyFactCount).toBe(3);
     expect(fin.diagnostics?.coveredPriorDutyFactCount).toBe(3);
     const text = fin.text || '';
-    expect(text).toMatch(/\bcon\s+rigore\b/iu);
+    expect(text).not.toMatch(/\bcon\s+rigore\b/iu);
+    expect(text).toContain('nonché');
     expect(text).not.toMatch(/\bcon\s+ricore\b/iu);
     expect(text).toMatch(/Attualmente lavoro come/iu);
     expect(text).toMatch(/In precedenza ho lavorato come|Ho già lavorato come/iu);

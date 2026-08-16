@@ -447,6 +447,10 @@ export type SummaryAiDiagnosticTrace = {
   staleFactCandidateCount: number;
   staleFactsRejectedCount: number;
   unsupportedClaimCount: number;
+  unsupportedQualityMannerClaimCount?: number | null;
+  unsupportedQualityMannerClaimKinds?: string[] | null;
+  unsupportedQualityMannerClaimHashes?: string[] | null;
+  qualityMannerAuthorityPassed?: boolean | null;
   duplicateSentenceCount: number;
   nearDuplicateSentenceCount: number;
   repeatedClauseCount: number;

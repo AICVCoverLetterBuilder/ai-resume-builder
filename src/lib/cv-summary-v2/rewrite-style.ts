@@ -24,6 +24,7 @@ import {
   normalizeFrenchDutyClause,
   normalizeFrenchTokenBoundaries,
 } from './native-surface';
+import { removeUnsupportedSummaryV2QualityMannerClaims } from './semantic-claims';
 
 export const SUMMARY_V2_REWRITE_STYLE_384_REVISION =
   'summary-v2-rewrite-style-384-v1' as const;
@@ -1366,9 +1367,12 @@ function frenchOwnedDutyTail(
   realizationMode: FrenchRealizationMode;
   auxiliaryScope: 'none' | 'shared' | 'repeated';
 } {
+  void styleState;
   const transformed = facts.map((fact) => {
-    const result = strengthenFrenchOwnedFact(fact, entry, !styleState.modifierUsed);
-    if (result.text !== (fact.bulletText || '').trim() && /avec rigueur/iu.test(result.text)) styleState.modifierUsed = true;
+    // Evaluative manner is a semantic claim.  French Stronger may transform
+    // an owned predicate, but it must not inject “avec rigueur” unless that
+    // exact fact authorizes it (the shared validator audits source authority).
+    const result = strengthenFrenchOwnedFact(fact, entry, false);
     return result;
   });
   if (!transformed.length) {
@@ -1931,9 +1935,15 @@ export function buildSummaryV2StyledDeterministicText(
   style: SummaryV2RewriteStyle,
 ): string {
   void SUMMARY_V2_REWRITE_STYLE_384_REVISION;
-  if (manifest.locale === 'de') return buildGermanStyledFromManifest(manifest, style);
-  if (manifest.locale === 'en') return buildEnglishStyledFromManifest(manifest, style);
-  return buildLocaleShellStyled(manifest, style);
+  const raw = manifest.locale === 'de'
+    ? buildGermanStyledFromManifest(manifest, style)
+    : manifest.locale === 'en'
+      ? buildEnglishStyledFromManifest(manifest, style)
+      : buildLocaleShellStyled(manifest, style);
+  // Stronger/Professional/Shorter all share the same fact-owned semantic
+  // contract.  Remove only detected, unowned evaluative modifiers; the
+  // validator still rejects any residual or malformed claim fail-closed.
+  return removeUnsupportedSummaryV2QualityMannerClaims(raw, manifest).text;
 }
 
 /**

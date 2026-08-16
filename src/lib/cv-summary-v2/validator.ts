@@ -20,6 +20,7 @@ import { inspectSummaryV2TranslatableSurface } from './localization';
 import { auditSummaryV2MaterialClaims } from './material-claims';
 import { analyzeSummaryV2FinalUnitOwnership } from './unit-ownership';
 import { fingerprintText } from '../cv-export-diagnostics';
+import { unsupportedSummaryV2QualityMannerClaims } from './semantic-claims';
 
 /** Compatibility diagnostic; V2 deliberately has no fixture occupation lexicon. */
 export function detectStaleOccupationResidue(
@@ -360,9 +361,12 @@ export function validateSummaryV2AgainstManifest(
   const staleResidueDetected = detectStaleOccupationResidue(text, manifest);
   const unsupportedMaterialClaim = detectUnsupportedMaterialClaims(text);
   const materialAuthority = auditSummaryV2MaterialClaims(text, manifest, ownership.evidence);
+  const unsupportedQualityMannerClaims = unsupportedSummaryV2QualityMannerClaims(text, manifest);
+  const qualityMannerAuthorityPassed = unsupportedQualityMannerClaims.length === 0;
   const unsupportedClaimCount = (staleResidueDetected ? 1 : 0)
     + (unsupportedMaterialClaim ? 1 : 0)
-    + materialAuthority.unsupportedMaterialClaimCount;
+    + materialAuthority.unsupportedMaterialClaimCount
+    + unsupportedQualityMannerClaims.length;
   const localePurity = validateAiUnitLocalePurity(text, manifest.locale, {
     kind: 'summary_sentence',
     requireUnits: true,
@@ -410,6 +414,7 @@ export function validateSummaryV2AgainstManifest(
   else if (!localePurity.targetLocalePurityPassed) reason = 'locale_impurity';
   else if (staleResidueDetected) reason = 'stale_occupation_residue';
   else if (unsupportedMaterialClaim) reason = 'unsupported_material_claim';
+  else if (!qualityMannerAuthorityPassed) reason = 'unsupported_quality_manner_claim';
   else if (!materialAuthority.invariantPassed) {
     reason = 'material_authority_provenance_invariant_failed';
   } else if (materialAuthority.unsupportedPrintClaimCount > 0) {
@@ -457,6 +462,10 @@ export function validateSummaryV2AgainstManifest(
     priorDutyTenseOk,
     staleResidueDetected,
     unsupportedClaimCount,
+    unsupportedQualityMannerClaimCount: unsupportedQualityMannerClaims.length,
+    unsupportedQualityMannerClaimKinds: [...new Set(unsupportedQualityMannerClaims.map((claim) => claim.kind))],
+    unsupportedQualityMannerClaimHashes: [...new Set(unsupportedQualityMannerClaims.map((claim) => claim.surfaceHash))],
+    qualityMannerAuthorityPassed,
     targetLocalePurityPassed: localePurity.targetLocalePurityPassed,
     sourceLanguageLeakageDetected: localePurity.sourceLanguageLeakageDetected,
     unexpectedLocaleCodes: localePurity.unexpectedLocaleCodes as Locale[],

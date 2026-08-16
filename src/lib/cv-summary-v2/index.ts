@@ -79,6 +79,15 @@ export {
 } from './validator';
 export type { SummaryV2ValidationOptions } from './validator';
 export {
+  detectSummaryV2QualityMannerClaims,
+  unsupportedSummaryV2QualityMannerClaims,
+  removeUnsupportedSummaryV2QualityMannerClaims,
+} from './semantic-claims';
+export type {
+  SummaryV2QualityMannerClaim,
+  SummaryV2QualityMannerClaimKind,
+} from './semantic-claims';
+export {
   runSummaryV2,
   buildSummaryV2ManifestForCv,
   summaryV2Active,

@@ -313,7 +313,8 @@ describe('AAB-389 native realization contract', () => {
         expect(t).not.toMatch(/した、/u);
       },
       it: (t) => {
-        expect(t).toMatch(/con rigore/u);
+        // A generic manner claim is not source-authorized and must be absent.
+        expect(t).not.toMatch(/con rigore/u);
         expect(t).not.toMatch(/con ricore/u);
       },
     };

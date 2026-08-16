@@ -143,7 +143,9 @@ describe('AAB-395 Spanish Shorter semantic duration and native surface', () => {
       cv = applyFinalizedSummaryToCv(cv, 'es', generated);
       const stronger = finalize(cv, manifest, 'stronger');
       expect(stronger.blocked).toBe(false);
-      expect((stronger.text || '').length).toBe(606);
+      // The old 606-character expectation included an unowned generic
+      // manner modifier. The semantic Stronger contract removes it.
+      expect((stronger.text || '').length).toBe(596);
       cv = applyFinalizedSummaryToCv(cv, 'es', stronger);
       const shorter = finalize(cv, manifest, 'shorter');
       expect(shorter.blocked, `${run}:${shorter.reason}`).toBe(false);

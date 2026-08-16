@@ -205,6 +205,11 @@ export type SummaryV2ValidationResult = {
   priorDutyTenseOk: boolean;
   staleResidueDetected: boolean;
   unsupportedClaimCount: number;
+  /** Evaluative quality/manner claims are semantic unless fact-owned. */
+  unsupportedQualityMannerClaimCount: number;
+  unsupportedQualityMannerClaimKinds: string[];
+  unsupportedQualityMannerClaimHashes: string[];
+  qualityMannerAuthorityPassed: boolean;
   targetLocalePurityPassed: boolean;
   sourceLanguageLeakageDetected: boolean;
   unexpectedLocaleCodes: Locale[];

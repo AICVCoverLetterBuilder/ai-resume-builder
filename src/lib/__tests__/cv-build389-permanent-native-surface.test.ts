@@ -40,7 +40,9 @@ describe('AAB-389 permanent native-surface', () => {
         expect(t).toMatch(/ainsi que j(?:e |')/u);
       },
       it: (t) => {
-        expect(t).toMatch(/con rigore/u);
+        // Generic quality/manner wording is not source-authorized; the
+        // semantic Stronger gate must remove it rather than inventing it.
+        expect(t).not.toMatch(/con rigore/u);
         expect(t).not.toMatch(/con ricore/u);
         expect(t).toMatch(/\bho\s+(?:controllato|registrato|sostituito)/iu);
       },
