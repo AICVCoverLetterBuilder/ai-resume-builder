@@ -1449,6 +1449,20 @@ export class SummaryAiDiagnosticSession {
     const entityAwareLeakage = purity.sourceLanguageLeakageDetected || rawRoleLeak;
     const groundingValidationPassed = diag.groundingValidationPassed
       ?? (!finalized.blocked && finalized.countedAsSuccess);
+    // A canonical Summary no-op terminates at meaningful-change evaluation.
+    // Downstream candidate validators were not reached, so their terminal
+    // fields must use the existing null/not-evaluated sentinel rather than
+    // inheriting false from the diagnostic defaults (or being recomputed from
+    // the source text).  This is diagnostic truth only; the no-op decision,
+    // apply, usage, and localized UX remain unchanged.
+    const cleanSummaryNoOp = Boolean(
+      !finalized.countedAsSuccess
+      && (
+        diag.noOpDetected
+        || finalized.reason === 'summary_noop_after_normalization'
+        || finalized.reason === 'style_no_safe_material_change'
+      ),
+    );
     const finalPostconditionsPassed = Boolean(
       finalized.countedAsSuccess
       && !finalized.blocked
@@ -1552,10 +1566,20 @@ export class SummaryAiDiagnosticSession {
       finalPerspectiveMode: diag.finalPerspectiveMode ?? null,
       perspectiveNormalizationAttempted: diag.perspectiveNormalizationAttempted ?? null,
       perspectiveNormalizationApplied: diag.perspectiveNormalizationApplied ?? null,
-      perspectiveValidationPassed: Boolean(diag.perspectiveValidationPassed ?? false),
-      localeValidationPassed: purity.targetLocalePurityPassed && finalized.reason !== 'locale_mismatch',
-      durationValidationPassed,
-      groundingValidationPassed: Boolean(groundingValidationPassed),
+      perspectiveValidationPassed: cleanSummaryNoOp
+        ? null
+        : (typeof diag.perspectiveValidationPassed === 'boolean'
+          ? diag.perspectiveValidationPassed
+          : null),
+      localeValidationPassed: cleanSummaryNoOp
+        ? null
+        : purity.targetLocalePurityPassed && finalized.reason !== 'locale_mismatch',
+      durationValidationPassed: cleanSummaryNoOp ? null : durationValidationPassed,
+      groundingValidationPassed: cleanSummaryNoOp
+        ? null
+        : (typeof groundingValidationPassed === 'boolean'
+          ? groundingValidationPassed
+          : null),
       currentEmploymentIntroductionCount: diag.currentEmploymentIntroductionCount ?? null,
       repeatedEmploymentFactCount: diag.repeatedEmploymentFactCount ?? null,
       repeatedProfessionalLabelCount: diag.repeatedProfessionalLabelCount ?? null,
@@ -1655,7 +1679,9 @@ export class SummaryAiDiagnosticSession {
       requiredPriorDutyFactCount: diag.requiredPriorDutyFactCount ?? null,
       coveredPriorDutyFactCount: diag.coveredPriorDutyFactCount ?? null,
       missingPriorDutyFactCount: diag.missingPriorDutyFactCount ?? null,
-      finalSlotValidationPassed: diag.finalSlotValidationPassed ?? diag.slotValidationPassed ?? null,
+      finalSlotValidationPassed: cleanSummaryNoOp
+        ? null
+        : (diag.finalSlotValidationPassed ?? diag.slotValidationPassed ?? null),
       finalSlotRejectionReasons: diag.finalSlotRejectionReasons ?? diag.slotRejectionReasons ?? null,
       repairCandidateHash: diag.repairCandidateHash ?? null,
       repairRawCandidatePresent: diag.repairRawCandidatePresent ?? null,
@@ -1775,7 +1801,7 @@ export class SummaryAiDiagnosticSession {
       mixedLanguageUnitCount: purity.mixedLanguageUnitCount,
       sourceLanguageLeakageDetected: entityAwareLeakage,
       unexpectedLocaleCodes: purity.unexpectedLocaleCodes,
-      targetLocalePurityPassed: entityAwarePurityPassed,
+      targetLocalePurityPassed: cleanSummaryNoOp ? null : entityAwarePurityPassed,
       targetScript: resolveTargetScriptForLocale(
         (this.draft.requestedLocale || 'en') as import('./i18n/translations').Locale,
       ),
@@ -1953,11 +1979,15 @@ export class SummaryAiDiagnosticSession {
       candidateTransformationAfterHash:
         (diag as { candidateTransformationAfterHash?: string | null })
           .candidateTransformationAfterHash ?? null,
-      genderValidationPassed: true,
-      tenseValidationPassed: Boolean(diag.tenseValidationPassed ?? true),
-      grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'
-        ? diag.grammarValidationPassed
-        : finalized.reason !== 'malformed_serbian_token',
+      genderValidationPassed: cleanSummaryNoOp ? null : true,
+      tenseValidationPassed: cleanSummaryNoOp
+        ? null
+        : Boolean(diag.tenseValidationPassed ?? true),
+      grammarValidationPassed: cleanSummaryNoOp
+        ? null
+        : (typeof diag.grammarValidationPassed === 'boolean'
+          ? diag.grammarValidationPassed
+          : finalized.reason !== 'malformed_serbian_token'),
       unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
       providerUnsupportedClaimCount: typeof diag.providerUnsupportedClaimCount === 'number'
         ? diag.providerUnsupportedClaimCount
@@ -2096,7 +2126,7 @@ export class SummaryAiDiagnosticSession {
           )
           : null),
       explicitSkillsSlotPresent: diag.explicitSkillsSlotPresent ?? null,
-      slotValidationPassed: diag.slotValidationPassed ?? null,
+      slotValidationPassed: cleanSummaryNoOp ? null : (diag.slotValidationPassed ?? null),
       slotRejectionReasons: dedupeStableStrings(diag.slotRejectionReasons ?? []),
       finalDurationOwnerExpected: diag.finalDurationOwnerExpected ?? null,
       finalDurationOwnerDetected: diag.finalDurationOwnerDetected ?? null,
@@ -2501,13 +2531,17 @@ export class SummaryAiDiagnosticSession {
                 ...(finalized.reason && !finalized.countedAsSuccess ? [finalized.reason] : []),
               ].filter(Boolean),
           ),
-          grammarValidationPassed: typeof diag.grammarValidationPassed === 'boolean'
-            ? diag.grammarValidationPassed
-            : null,
-          groundingValidationPassed: Boolean(groundingValidationPassed),
-          durationValidationPassed,
-          slotValidationPassed: diag.slotValidationPassed ?? null,
-          localeValidationPassed: purity.targetLocalePurityPassed,
+          grammarValidationPassed: cleanSummaryNoOp
+            ? null
+            : (typeof diag.grammarValidationPassed === 'boolean'
+              ? diag.grammarValidationPassed
+              : null),
+          groundingValidationPassed: cleanSummaryNoOp
+            ? null
+            : groundingValidationPassed,
+          durationValidationPassed: cleanSummaryNoOp ? null : durationValidationPassed,
+          slotValidationPassed: cleanSummaryNoOp ? null : (diag.slotValidationPassed ?? null),
+          localeValidationPassed: cleanSummaryNoOp ? null : purity.targetLocalePurityPassed,
           unsupportedClaimCount: diag.unsupportedClaimCount ?? 0,
           unsupportedClaimKinds: [],
           unsupportedDesignMediumCount: diag.finalUnsupportedDesignMediumCount ?? 0,
@@ -2632,20 +2666,13 @@ export class SummaryAiDiagnosticSession {
     });
     this.stage(
       'duration_validation',
-      durationValidationPassed ? 'ok' : 'fail',
+      cleanSummaryNoOp ? 'skipped' : (durationValidationPassed ? 'ok' : 'fail'),
+      cleanSummaryNoOp ? 'not_evaluated_after_meaningful_change' : undefined,
     );
     this.stage(
       'independent_final_duration_verification',
-      independent.ok && after === 1 ? 'ok' : 'fail',
-      `count=${after}`,
-    );
-    const cleanSummaryNoOp = Boolean(
-      !finalized.countedAsSuccess
-      && (
-        diag.noOpDetected
-        || diag.noOpRejected
-        || finalized.reason === 'summary_noop_after_normalization'
-      ),
+      cleanSummaryNoOp ? 'skipped' : (independent.ok && after === 1 ? 'ok' : 'fail'),
+      cleanSummaryNoOp ? 'not_evaluated_after_meaningful_change' : `count=${after}`,
     );
     // Clean no-op is a successful terminal outcome — never stage final_postconditions as fail.
     this.stage(

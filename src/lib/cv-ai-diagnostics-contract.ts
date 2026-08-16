@@ -2727,6 +2727,16 @@ export function checkSummaryDiagnosticCompleteness(
     && trace.providerCandidatePresent === false
     && trace.deterministicCandidatePresent === false
     && trace.fallbackCandidatePresent !== true;
+  // A deterministic candidate can be present only to establish that a
+  // Shorter/Stronger operation is a clean semantic no-op. It is not a final
+  // candidate and its downstream validators were not evaluated. Treat this
+  // terminal outcome like the no-candidate sentinel for candidate validators,
+  // while retaining finalPostconditionsPassed as its concrete clean-terminal
+  // outcome rather than confusing it with an unevaluated validator.
+  const cleanNoOp = trace.finalCandidateSource === 'none'
+    && trace.noOpDetected === true
+    && trace.countedAsSuccess === false;
+  const candidateValidatorsNotEvaluated = noCandidate || cleanNoOp;
   for (const key of [
     'perspectiveValidationPassed',
     'genderValidationPassed',
@@ -2739,9 +2749,13 @@ export function checkSummaryDiagnosticCompleteness(
     'finalPostconditionsPassed',
   ] as const) {
     if (!(key in trace)) missing.push(key);
-    else if (
-      (noCandidate && trace[key] !== null)
-      || (!noCandidate && (trace[key] === null || trace[key] === undefined))
+    else if (key === 'finalPostconditionsPassed' && cleanNoOp) {
+      // This is a terminal outcome field rather than a downstream validator
+      // on a clean no-op; preserve its concrete false/true terminal value.
+      if (trace[key] === null || trace[key] === undefined) nullish.push(key);
+    } else if (
+      (candidateValidatorsNotEvaluated && trace[key] !== null)
+      || (!candidateValidatorsNotEvaluated && (trace[key] === null || trace[key] === undefined))
     ) {
       nullish.push(key);
     }
