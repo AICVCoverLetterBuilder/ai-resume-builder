@@ -11489,7 +11489,9 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       clientDeterministicFallbackCoveredFactCount = lastCovered || sourceFactCount;
       clientDeterministicFallbackRequiredFactCount = lastRequired || sourceFactCount;
       clientDeterministicFallbackUncoveredFactIds = [];
-      if (!finalCandidateSource) finalCandidateSource = 'deterministic_fallback';
+      if (!finalCandidateSource || finalCandidateSource === 'none') {
+        finalCandidateSource = 'deterministic_fallback';
+      }
       if (
         providerCoveredFactCount < providerRequiredFactCount
         && providerUncoveredFactIdentityHashes.length === 0
@@ -14893,6 +14895,10 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
               clientDeterministicFallbackApplied: false,
               clientDeterministicFallbackBulletCount:
                 splitExperienceBullets(translated).filter(Boolean).length,
+              finalCandidatePresent: true,
+              finalCandidateValidationApplicable: true,
+              finalCandidatePredicateValidationApplicable: true,
+              finalCandidateSource: 'deterministic_fallback',
             },
           });
         }

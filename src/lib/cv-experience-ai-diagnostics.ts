@@ -2910,12 +2910,16 @@ export class ExperienceAiDiagnosticSession {
         ),
       ),
       finalCandidateSource: selectedFinalPresent
-        ? ((diag.finalCandidateSource as string | undefined)
-          ?? (clientFallbackApplied
-            ? 'deterministic_fallback'
-            : (diag.unsupportedClaimRepairApplied
-              ? 'unsupported_claim_repair'
-              : (diag.noOpRepairApplied ? 'noop_repair' : 'provider'))))
+        ? (() => {
+          const serializedSource = diag.finalCandidateSource as string | undefined;
+          // `none` is the pre-selection sentinel, not a valid source for a
+          // successful client fallback.  Do not let it mask the phase truth.
+          if (serializedSource && serializedSource !== 'none') return serializedSource;
+          if (clientFallbackApplied) return 'deterministic_fallback';
+          if (diag.unsupportedClaimRepairApplied) return 'unsupported_claim_repair';
+          if (diag.noOpRepairApplied) return 'noop_repair';
+          return 'provider';
+        })()
         : 'none',
       finalUnsupportedClaimCount: selectedFinalPresent
         ? Math.max(
@@ -4071,9 +4075,15 @@ export class ExperienceAiDiagnosticSession {
       apiHostClass: classifyApiHostClass(apiBase),
       internalBuildContractUsed: INTERNAL_AI_RESET_ENABLED ? true : false,
     });
-    const terminalDraft = this.requestTimeCleanNoOpSnapshot
+    const terminalDraftRaw = this.requestTimeCleanNoOpSnapshot
       ? { ...this.draft, ...this.requestTimeCleanNoOpSnapshot }
       : this.draft;
+    const terminalDraft = (
+      terminalDraftRaw.clientDeterministicFallbackApplied === true
+      && (!terminalDraftRaw.finalCandidateSource || terminalDraftRaw.finalCandidateSource === 'none')
+    )
+      ? { ...terminalDraftRaw, finalCandidateSource: 'deterministic_fallback' as const }
+      : terminalDraftRaw;
     const terminalStages = this.requestTimeCleanNoOpStages || this.stages;
     const base = {
       ...terminalDraft,

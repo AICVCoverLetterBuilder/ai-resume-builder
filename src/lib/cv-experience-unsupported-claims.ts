@@ -78,12 +78,12 @@ function hasStandardsSupport(source: string): boolean {
 }
 
 function hasUniversalScopeSupport(source: string): boolean {
-  return /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala|uskladišten)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:item|good|document)\b|\bentire\s+|\bsämtlich\w*\b|\balle\s+(?:Prozesse|Waren|Bereiche|Unterlagen)\b|\bunternehmensweit\b|\bdurchgängig\b|\btous?\b|\btoutes?\b|\bchaque\b|\bl['’]ensemble\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu
+  return /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala|uskladišten)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:item|good|document)\b|\bentire\s+|\bsämtlich\w*\b|\balle\s+(?:Prozesse|Waren|Bereiche|Unterlagen)\b|\bunternehmensweit\b|\bdurchgängig\b|\btous?\b|\btoutes?\b|\bchaque\b|\bl['’]ensemble\b|\btutt[ei]\s+(?:i|le|gli)\b|\bogni\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu
     .test(source);
 }
 
 function hasFrequencyScopeSupport(source: string): boolean {
-  return /(?:\bdaily\b|\bweekly\b|\bregularly\b|\bevery\s+(?:day|week)\b|\bday-to-day\b|\bdnevno\b|\bsvakodnev\w*\b|\bredovit\w*\b|\btäglich\b|毎日|毎週|定期的|日々|दैनिक|प्रतिदिन|साप्ताहिक|नियमित\s*(?:रूप\s*से)?|हर\s*(?:दिन|सप्ताह)|\bquotidien\w*\b|\bhebdomadaire\w*\b|\brégulièrement\b|\bdiari\w*\b|\bsettiman\w*\b)/iu
+  return /(?:\bdaily\b|\bweekly\b|\bregularly\b|\bevery\s+(?:day|week)\b|\bday-to-day\b|\bdnevno\b|\bsvakodnev\w*\b|\bredovit\w*\b|\btäglich\b|毎日|毎週|定期的|日々|दैनिक|प्रतिदिन|साप्ताहिक|नियमित\s*(?:रूप\s*से)?|हर\s*(?:दिन|सप्ताह)|\bquotidien\w*\b|\bhebdomadaire\w*\b|\brégulièrement\b|\bdiari\w*\b|\bsettiman\w*\b|\bquotidian\w*\b|\bregolar\w*\b)/iu
     .test(source);
 }
 
@@ -97,7 +97,14 @@ export type ExperienceSemanticArgumentKind =
   | 'team_relation'
   | 'standards_criterion'
   | 'universal_scope'
-  | 'frequency_scope';
+  | 'frequency_scope'
+  /** Fact-owned semantic relations beyond the original qualifier bridge. */
+  | 'tool_system'
+  | 'quantitative_metric'
+  | 'leadership_management'
+  | 'responsibility_escalation'
+  | 'object_domain'
+  | 'unrelated_action';
 
 export function extractExperienceSemanticArgumentKinds(
   text: string,
@@ -114,15 +121,26 @@ export function extractExperienceSemanticArgumentKinds(
   add('criterion', /(?:に応じて|に合わせて|に基づき|に従って|要望に)/u);
   add('beneficiary', /(?:顧客|クライアント|お客様)/u);
   add('quality_output', /(?:品質|成果物|最終|出力)/u);
-  add('criterion', /(?:\bselon\b|\bconform(?:e|ément)\b|\ben fonction de\b|\baccording\s+to\b|\bconforme(?:ment)?\s+aux?\b|\bprema\b|\bu\s+skladu\s+sa\b|\bza\s+potrebe\b|के अनुसार|के अनुरूप|के आधार पर|وفق(?:ًا|اً)?|بحسب|حسب|根据|按照)/iu);
-  add('beneficiary', /(?:\bclient(?:s|èle)?\b|\bcustomer(?:s)?\b|\bclientes?\b|\bKunden?\b|\bklijent\w*\b|ग्राहक(?:ों)?|ग्राहकों|زبائن|عملاء|客户)/iu);
+  add('criterion', /(?:\bselon\b|\bconform(?:e|ément)\b|\ben fonction de\b|\baccording\s+to\b|\bconforme(?:ment)?\s+aux?\b|\bin\s+base\s+a(?:lle)?\b|\bsecondo\b|\bprema\b|\bu\s+skladu\s+sa\b|\bza\s+potrebe\b|के अनुसार|के अनुरूप|के आधार पर|وفق(?:ًا|اً)?|بحسب|حسب|根据|按照)/iu);
+  add('beneficiary', /(?:\bclient(?:i|s|èle)?\b|\bcustomer(?:s)?\b|\bclientes?\b|\bKunden?\b|\bklijent\w*\b|ग्राहक(?:ों)?|ग्राहकों|زبائن|عملاء|客户)/iu);
   add('material_medium', /(?:\b(?:print\w*|imprim(?:é|és|ées)\w*|numérique\w*|digital\w*|médias?\w*|supports?\w*|materijal\w*|medij\w*)\b|\b(?:medium|media|medien|medios|digitale?)\b|प्रिंट|डिजिटल|माध्यम|मीडिया|وسائط|رقمية|印刷|デジタル)/iu);
-  add('project_scope', /(?:\bprojet(?:s)?\b|\bproject(?:s)?\b|\bproyectos?\b|\bProjekte?\b|परियोजन|प्रोजेक्ट|परियोजना|プロジェクト|案件|مشروع|مشاريع|项目)/iu);
-  add('quality_output', /(?:\bqualit(?:é|y|ät)\b|\bquality\b|\brendus?\b|\bfinal(?:e|es)?\s+(?:output|outputs|livrables?|rend(?:u|us))\b|गुणवत्ता|आउटपुट|अंतिम|مخرجات|جودة|输出)/iu);
+  add('project_scope', /(?:\bprojet(?:s)?\b|\bproject(?:s)?\b|\bprogetti?\b|\bproyectos?\b|\bProjekte?\b|परियोजन|प्रोजेक्ट|परियोजना|プロジェクト|案件|مشروع|مشاريع|项目)/iu);
+  add('quality_output', /(?:\bqualit(?:à|é|y|ät)\b|\bquality\b|\brendus?\b|\b(?:risultat|resultati)\w*\s+finali?\b|\bfinal(?:e|es)?\s+(?:output|outputs|livrables?|rend(?:u|us))\b|गुणवत्ता|आउटपुट|अंतिम|मخرجات|جودة|输出)/iu);
   add('team_relation', /(?:\b(?:team|teams|équipe|équipes|membres?\s+de\s+l['’]équipe|project\s+team|project-team|members?\s+of\s+the\s+team|Kollegen?|compañeros?|equipo|član\w*|tim\w*|projektn\w*\s+tim)\b|टीम|दल|परियोजना दल|सदस्य|فريق|أعضاء|チーム)/iu);
   add('standards_criterion', /(?:\b(?:norme(?:s)?|standard(?:s)?|normas?|standardi?)\b|मानक|नियम|विनियम|基準|規格|コンプライアンス|規則|معايير|标准)/iu);
-  add('universal_scope', /(?:\b(?:tous?|toutes?|chaque|l['’]ensemble|all|every|entire|whole|svih|cjelokupn\w*)\b|\b(?:pour\s+tous?\s+les|for\s+all|for\s+every)\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu);
-  add('frequency_scope', /(?:\b(?:daily|weekly|regularly|every\s+(?:day|week)|day-to-day|quotidien\w*|hebdomadaire\w*|régulièrement|diari\w*|settiman\w*|dnevno|svakodnev\w*|redovit\w*)\b|दैनिक|प्रतिदिन|साप्ताहिक|नियमित|हर\s*दिन)/iu);
+  add('universal_scope', /(?:\b(?:tous?|toutes?|chaque|l['’]ensemble|all|every|entire|whole|svih|cjelokupn\w*|tutt[ei]|ogni)\b|\b(?:pour\s+tous?\s+les|for\s+all|for\s+every|per\s+tutti)\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu);
+  add('frequency_scope', /(?:\b(?:daily|weekly|regularly|every\s+(?:day|week)|day-to-day|quotidien\w*|hebdomadaire\w*|régulièrement|diari\w*|settiman\w*|dnevno|svakodnev\w*|redovit\w*|quotidian\w*|regolar\w*)\b|दैनिक|प्रतिदिन|साप्ताहिक|नियमित|हर\s*दिन)/iu);
+  // These are semantic relations, not language-specific forbidden phrases.
+  // Their source ownership is compared per matched duty by the cross-locale
+  // validator, so a relation in one fact cannot authorize another fact.
+  add('tool_system', /(?:\b(?:salesforce|excel|sap|jira|slack|tableau|photoshop|illustrator|indesign|adobe|crm|erp)\b|\b(?:software|sistema|system|database|logiciel|système)\b)/iu);
+  add('quantitative_metric', /(?:\b(?:kpi|okr|roi)\b|\d+\s*%|\b(?:vendite|sales|revenue|ricavi|performance|produttivit|conversioni|conversion)\w*\b.{0,32}\d)/iu);
+  add('leadership_management', /(?:\b(?:dirig\w*|gesti\w*|supervision\w*|lead\w*|managed?|supervis\w*|upravlja\w*|vodi\w*)\b.{0,24}\b(?:team|squadra|équipe|team members?|tim)\b)/iu);
+  // Verification/control of a sourced quality output is an ordinary duty;
+  // ownership, guarantee and accountability are the escalations.
+  add('responsibility_escalation', /(?:\b(?:responsabile|accountable|responsible|garant\w*|assicur\w*|ensure\w*|guarantee\w*|ownership)\b)/iu);
+  add('object_domain', /(?:\b(?:software|sistema|system|database|magazzino|warehouse|inventory|stock)\b)/iu);
+  add('unrelated_action', /(?:\b(?:organizz\w*|coordina\w*|coordinat\w*|gestisc\w*|gestito|manage\w*|organis\w*)\b.{0,32}\b(?:event\w*|magazzino|warehouse|inventory|stock)\b)/iu);
   // Explicit Brazilian-Portuguese relation surfaces. These supplement the
   // legacy encoded lexicon and keep typed argument checks locale-complete.
   add('criterion', /(?:\bconforme\b|\bde\s+acordo\s+com\b|\bsegundo\b|\bnecessidades?\b)/iu);
@@ -133,7 +151,7 @@ export function extractExperienceSemanticArgumentKinds(
 
 function hasOrganizationVerbSupport(source: string): boolean {
   // Verb stems only — adjective "organiziran(o)" is not ownership escalation.
-  return /\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organise[ds]?|organizes?|organising|organizing|verantwortlich\s+für|Steuerung|Überwachung)\b/iu
+  return /\b(?:organizira(?:la|lo|li|ju|ti)?|organizuje(?:m|š|mo|te|ju)?|organizovala|organizovao|organizz\w*|organise[ds]?|organizes?|organising|organizing|verantwortlich\s+für|Steuerung|Überwachung)\b/iu
     .test(source);
 }
 
@@ -145,7 +163,7 @@ function isSouthSlavicToEnglishSurface(source: string, candidate: string): boole
 }
 
 function hasLeadershipSupport(source: string): boolean {
-  return /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion)|Leitung|Führung|führt\s+das\s+Team|leitet\s+das\s+Team)\b/iu
+  return /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|dirig\w*\s+(?:un\s+)?(?:team|squadra)|gesti\w*\s+(?:un\s+)?(?:team|squadra)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion)|Leitung|Führung|führt\s+das\s+Team|leitet\s+das\s+Team)\b/iu
     .test(source);
 }
 
@@ -154,7 +172,16 @@ function hasToolSupport(source: string, tool: string): boolean {
 }
 
 function hasOutcomeAssuranceClaim(text: string): boolean {
-  return /(?:\b(?:ensure[ds]?|assur(?:e[ds]?|ing)|guarantee[ds]?|responsible\s+for|accountable\s+for)\b|\b(?:garantiz\w*|asegur\w*)\b|\b(?:gewährleist\w*|garantier\w*|verantwortlich\s+f[üu]r)\b|सुनिश्चित\s*कर|गारंटी\s*दे|आश्वस्त\s*कर)/iu.test(norm(text));
+  return /(?:\b(?:ensure[ds]?|assur(?:e[ds]?|ing)|guarantee[ds]?|responsible\s+for|accountable\s+for)\b|\b(?:garantiz\w*|asegur\w*|garant\w*|assicura\w*|responsabile)\b|\b(?:gewährleist\w*|garantier\w*|verantwortlich\s+f[üu]r)\b|सुनिश्चित\s*कर|गारंटी\s*दे|आश्वस्त\s*कर)/iu.test(norm(text));
+}
+
+// “Review/check quality” may be realized with a target-language verification
+// verb, but it does not authorize ownership/guarantee language. Keep that
+// distinction explicit so a broad source-language token cannot turn a
+// candidate's assurance escalation into a false-green.
+function hasOutcomeAssuranceAuthority(source: string): boolean {
+  return /(?:\b(?:guarantee[ds]?|accountable\s+for|responsible\s+for|garant\w*|asegur\w*|gewährleist\w*|garantier\w*|verantwortlich\s+f[üu]r)\b)/iu
+    .test(norm(source));
 }
 
 function usesSpanishExperienceSurface(text: string): boolean {
@@ -171,6 +198,11 @@ export function detectExperienceUnsupportedClaimExpansion(
 ): ExperienceUnsupportedClaimScan {
   const source = norm(sourceDescription);
   const joined = norm(candidateDescription);
+  const sourceRelationKinds = extractExperienceSemanticArgumentKinds(source);
+  const richRelationSource = sourceRelationKinds.includes('criterion')
+    && sourceRelationKinds.includes('beneficiary')
+    && (sourceRelationKinds.includes('material_medium')
+      || sourceRelationKinds.includes('quality_output'));
   const crossLocaleTranslationSurface = isSouthSlavicToEnglishSurface(source, joined);
   const kinds: ExperienceUnsupportedClaimKind[] = [];
   const labels: string[] = [];
@@ -208,7 +240,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Universal quantifiers that expand factual scope.
   if (
-    /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:stored\s+)?(?:item|good|document)\b|\bentire\s+(?:warehouse|inventory|stock)\b|\bsämtlich\w*\b|\balle\s+Prozesse\b|\bin\s+allen\s+Bereichen\b|\bunternehmensweit\b|\bdurchgängig\b|\btous?\s+les\b|\btoutes?\s+les\b|\bchaque\b|\bl['’]ensemble\b|すべて|全て|あらゆる|各(?:件|種|プロジェクト)?|सभी|हर|संपूर्ण|كل|جميع|每)/iu
+    /(?:\bsvih\b|\bcjelokupn\w*\b|\bsve\s+(?:dokumentacije|robe|artikle|artikala)\b|\ball\s+(?:stored|goods|items|documentation|records)\b|\bevery\s+(?:stored\s+)?(?:item|good|document)\b|\bentire\s+(?:warehouse|inventory|stock)\b|\bsämtlich\w*\b|\balle\s+Prozesse\b|\bin\s+allen\s+Bereichen\b|\bunternehmensweit\b|\bdurchgängig\b|\btutt[ei]\s+(?:i|le|gli)\b|\bogni\b|\btous?\s+les\b|\btoutes?\s+les\b|\bchaque\b|\bl['’]ensemble\b|すべて|全て|あらゆる|各(?:件|種|プロジェクト)?|सभी|हर|संपूर्ण|كل|جميع|每)/iu
       .test(joined)
     && !hasUniversalScopeSupport(source)
   ) {
@@ -223,7 +255,7 @@ export function detectExperienceUnsupportedClaimExpansion(
   if (
     source.trim()
     &&
-    /(?:\b(?:exigence|exigences|besoin|besoins)\s+(?:du|de la|des)\s+projet(?:s)?\b|\bproject\s+requirements?\b|\brequirements?\s+of\s+(?:the\s+)?project\b|परियोजना(?:ओं)?\s+की\s+आवश्यकत|प्रोजेक्ट\s+की\s+आवश्यकत|project\s+requirements|プロジェクト(?:要件|ニーズ))/iu
+    /(?:\b(?:exigence|exigences|besoin|besoins)\s+(?:du|de la|des)\s+projet(?:s)?\b|\b(?:requisit\w*|necessit\w*|esigenz\w*)\s+del\s+progetto\b|\bproject\s+requirements?\b|\brequirements?\s+of\s+(?:the\s+)?project\b|परियोजना(?:ओं)?\s+की\s+आवश्यकत|प्रोजेक्ट\s+की\s+आवश्यकत|project\s+requirements|プロジェクト(?:要件|ニーズ))/iu
       .test(joined)
     && !/(?:\bproject\s+(?:requirements?|needs?)\b|\b(?:requirements?|needs?)\s+of\s+(?:the\s+)?project\b|परियोजना(?:ओं)?\s+की\s+आवश्यकत|प्रोजेक्ट\s+की\s+आवश्यकत|\b(?:requisitos?|necesidades?)\s+del\s+proyecto\b|\b(?:Projektanforderungen|Anforderungen\s+des\s+Projekts|Projektbedürfnisse)\b|\b(?:requisiti|necessità|esigenze)\s+del\s+progetto\b|\b(?:requisitos|necessidades)\s+do\s+projeto\b|\b(?:exigences?|besoins?)\s+du\s+projet\b|احتياجات\s+المشروع|potrebama\s+projekta|potrebama\s+projektn(?:og|im)\s+tima|требован\p{L}*\s+проекта|プロジェクト(?:要件|ニーズ))/iu.test(source)
   ) {
@@ -239,8 +271,8 @@ export function detectExperienceUnsupportedClaimExpansion(
     && (sourceRelationKindsForRequirements.includes('material_medium')
       || sourceRelationKindsForRequirements.includes('quality_output'));
   if (richRelationSourceForRequirements
-    && /\b(?:requisitos?|necessidades?)\s+do\s+projeto\b/iu.test(joined)
-    && !/\b(?:requisitos?|necessidades?)\s+do\s+projeto\b/iu.test(source)) {
+    && /\b(?:(?:requisitos?|necessidades?)\s+do\s+projeto|(?:requisit\w*|necessit\w*|esigenz\w*)\s+del\s+progetto)\b/iu.test(joined)
+    && !/\b(?:(?:requisitos?|necessidades?)\s+do\s+projeto|(?:requisit\w*|necessit\w*|esigenz\w*)\s+del\s+progetto)\b/iu.test(source)) {
     kinds.push('requirements_scope_expansion');
     labels.push('requirements_scope_expansion');
   }
@@ -261,8 +293,9 @@ export function detectExperienceUnsupportedClaimExpansion(
     !crossLocaleTranslationSurface
     &&
     source.trim()
+    && (richRelationSource || /[\u0900-\u097F]/u.test(`${source}\n${joined}`))
     &&
-    /(?:\bdaily\b|\bweekly\b|\bregularly\b|\bevery\s+(?:day|week)\b|\bday-to-day\b|\bdnevno\b|\bsvakodnev\w*\b|\bredovit\w*\b|\btäglich\b|毎日|毎週|定期的|日々|दैनिक|प्रतिदिन|साप्ताहिक|नियमित\s*(?:रूप\s*से)?|हर\s*(?:दिन|सप्ताह))/iu
+    /(?:\bdaily\b|\bweekly\b|\bregularly\b|\bevery\s+(?:day|week)\b|\bday-to-day\b|\bdnevno\b|\bsvakodnev\w*\b|\bredovit\w*\b|\btäglich\b|\bquotidian\w*\b|\bregolar\w*\b|毎日|毎週|定期的|日々|दैनिक|प्रतिदिन|साप्ताहिक|नियमित\s*(?:रूप\s*से)?|हर\s*(?:दिन|सप्ताह))/iu
       .test(joined)
     && !hasFrequencyScopeSupport(source)
   ) {
@@ -275,6 +308,7 @@ export function detectExperienceUnsupportedClaimExpansion(
   if (
     !crossLocaleTranslationSurface
     && source.trim()
+    && (richRelationSource || /[\u0900-\u097F]/u.test(`${source}\n${joined}`))
     && genericFillerHits >= 2
     && sourceGenericFillerHits === 0
   ) {
@@ -284,7 +318,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Organization verb escalation (not adjective "organizirano skladištenje").
   if (
-    /\b(?:organizira(?:la|lo|li|ju)?|organizuje|organizovala|organizovao|organises?|organizes?|verantwortlich\s+für\s+den\s+gesamten|vollständige\s+Verantwortung|Steuerung\s+des\s+gesamten|Überwachung\s+aller)\b/iu
+    /\b(?:organizira(?:la|lo|li|ju)?|organizuje|organizovala|organizovao|organizz\w*\s+(?:event\w*|attivit\w*)|organises?|organizes?|verantwortlich\s+für\s+den\s+gesamten|vollständige\s+Verantwortung|Steuerung\s+des\s+gesamten|Überwachung\s+aller)\b/iu
       .test(joined)
     && !hasOrganizationVerbSupport(source)
   ) {
@@ -294,7 +328,7 @@ export function detectExperienceUnsupportedClaimExpansion(
 
   // Leadership / supervision / managing a team.
   if (
-    /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)\b|nadzire\s+(?:rad|koleg|skladišt)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion)\b|\bLeitung\b|\bFührung\b|führt\s+das\s+Team|leitet\s+das\s+Team)/iu
+    /\b(?:vodi\s+tim|vodila\s+tim|vodio\s+tim|nadzir(?:e|ala|ao)\b|nadzire\s+(?:rad|koleg|skladišt)|upravlja(?:la|o)?\s+(?:tim|aktivnost)|(?:dirig\w*|dirett\w*)\s+(?:un\s+)?(?:team|squadra)|gesti\w*\s+(?:un\s+)?(?:team|squadra)|managed?\s+a\s+team|led\s+a\s+team|leadership|supervis(?:e|ed|ing|ion)\b|\bLeitung\b|\bFührung\b|führt\s+das\s+Team|leitet\s+das\s+Team)/iu
       .test(joined)
     && !hasLeadershipSupport(source)
   ) {
@@ -316,14 +350,36 @@ export function detectExperienceUnsupportedClaimExpansion(
   if (
     source.trim()
     && !spanishPipelineOwnsAssurance
+    && source !== joined
     && hasOutcomeAssuranceClaim(joined)
-    && !hasOutcomeAssuranceClaim(source)
+    && !hasOutcomeAssuranceAuthority(source)
   ) {
     const kind: ExperienceUnsupportedClaimKind = /\b(?:garantiz|asegur)\w*/iu.test(joined)
       ? 'guarantee_escalation'
       : 'assurance_escalation';
     kinds.push(kind);
     labels.push(kind);
+  }
+
+  // Domain-specific actions/objects must be owned by the same immutable entry,
+  // not merely absent from the provider response. The lexical families are
+  // multilingual semantic evidence; no employer, role or fixture identifiers
+  // participate in this check.
+  if (
+    source.trim()
+    && /\b(?:coordina\w*|coordinat\w*|gestisc\w*|gestito|manage\w*)\s+(?:il\s+)?(?:magazzino|warehouse|inventory|stock)\b/iu.test(joined)
+    && !/\b(?:coordina\w*|coordinat\w*|gestisc\w*|gestito|manage\w*)\s+(?:il\s+)?(?:magazzino|warehouse|inventory|stock)\b/iu.test(source)
+  ) {
+    kinds.push('logistics_scope_expansion');
+    labels.push('logistics_scope_expansion');
+  }
+  if (
+    source.trim()
+    && /\b(?:software|sistema|system|platform|piattaforma|database)\b/iu.test(joined)
+    && !/\b(?:software|sistema|system|platform|piattaforma|database)\b/iu.test(source)
+  ) {
+    kinds.push('unsupported_object_expansion');
+    labels.push('unsupported_object_expansion');
   }
 
   for (const tool of ['Excel', 'Salesforce', 'Slack', 'Jira', 'SAP', 'Tableau', 'Photoshop', 'Illustrator', 'InDesign', 'Adobe'] as const) {
@@ -340,19 +396,6 @@ export function detectExperienceUnsupportedClaimExpansion(
   ) {
     kinds.push('unsupported_metric_claim');
     labels.push('unsupported_metric_claim');
-  }
-
-  // The AAB-432 no-op safety contract is exercised on the Hindi native
-  // surface. Existing non-Hindi deterministic/cross-locale surfaces already
-  // have their own locale-specific grounding contracts; do not reinterpret
-  // their established frequency wording as a new generic enrichment kind.
-  if (!/[\u0900-\u097F]/u.test(`${source}\n${joined}`)) {
-    for (const kind of ['frequency_scope_claim', 'repeated_generic_enrichment'] as const) {
-      while (kinds.includes(kind)) kinds.splice(kinds.indexOf(kind), 1);
-    }
-    for (const label of ['frequency_scope_claim', 'repeated_generic_enrichment']) {
-      while (labels.includes(label)) labels.splice(labels.indexOf(label), 1);
-    }
   }
 
   const uniqueKinds = [...new Set(kinds)];

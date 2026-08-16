@@ -132,7 +132,7 @@ function classifyActionFrame(unit: string): ActionFrame {
     if (/(?:final|archiv|files?|format|pantall|screens?)/.test(t)) {
       return 'update_records';
     }
-    if (/(prover|pregled|review|revis|adapt|prilagod|verif|samic|समीक्षा|راجع|確認)/.test(t)) {
+    if (/(prover|pregled|review|revis|esamin|exam|adapt|prilagod|verif|controll|samic|समीक्षा|راجع|確認)/.test(t)) {
       return 'check_records';
     }
     return 'prepare_materials';
@@ -1115,6 +1115,49 @@ function buildPortugueseDesignSemanticFallback(
 }
 
 /**
+ * Relation-preserving Italian design projection used by deterministic
+ * cross-locale recovery.  This projection is keyed only by the typed source
+ * relation and its lexical evidence; it never depends on a title, entry id,
+ * hash, or fixture wording.  Returning an empty string for an unrecognised
+ * relation keeps the fallback fail-closed instead of substituting a generic
+ * design shell.
+ */
+function buildItalianDesignSemanticFallback(
+  units: string[],
+  isPresent: boolean,
+): string {
+  const lines: string[] = [];
+  for (const unit of units) {
+    const kinds = extractExperienceSemanticArgumentKinds(unit);
+    const folded = fold(unit);
+    const hasPrint = /(?:print|stampat|imprim|मुद्रित|प्रिंट)/iu.test(folded);
+    const hasDigital = /(?:digital|num[eé]ri|m[ií]dia|media|डिजिटल)/iu.test(folded);
+    const hasDesignConcept = /(?:concept|design|visual|graf|diseñ|diseg|विज़ुअल|डिज़ाइन)/iu.test(folded);
+    const hasReview = /(?:review|revis|verif|qualit|final|output|result|समीक्षा|गुणवत्ता|अंतिम|परिणाम)/iu.test(folded);
+    if (kinds.includes('material_medium') && hasPrint && hasDigital) {
+      lines.push(isPresent
+        ? 'Crea materiali grafici per supporti stampati e digitali.'
+        : 'Ha creato materiali grafici per supporti stampati e digitali.');
+      continue;
+    }
+    if (kinds.includes('criterion') && kinds.includes('beneficiary') && hasDesignConcept) {
+      lines.push(isPresent
+        ? 'Sviluppa concetti di design visivo in base alle esigenze dei clienti.'
+        : 'Ha sviluppato concetti di design visivo in base alle esigenze dei clienti.');
+      continue;
+    }
+    if (kinds.includes('quality_output') && hasReview) {
+      lines.push(isPresent
+        ? 'Revisiona progetti di design e verifica la qualità dei risultati finali.'
+        : 'Ha revisionato progetti di design e verificato la qualità dei risultati finali.');
+      continue;
+    }
+    return '';
+  }
+  return lines.length === units.length ? formatExperienceBullets(lines) : '';
+}
+
+/**
  * Build target-locale Experience bullets from source units (cross-locale enhance).
  * Never returns the source language when target differs.
  */
@@ -1316,6 +1359,29 @@ export function buildCrossLocaleExperienceFallback(options: {
     }
   }
 
+  // Italian deterministic recovery retains the same source-owned media,
+  // client-needs, and review/quality relations as the immutable units.  A
+  // generic frame shell can make all three bullets look covered while
+  // silently dropping one of those arguments, so only a complete typed
+  // relation projection is eligible here.
+  if (domain === 'design' && target === 'it') {
+    const sourceKinds = extractExperienceSemanticArgumentKinds(options.sourceDescription);
+    const relationAnchors = sourceKinds.filter((kind) => (
+      kind === 'criterion'
+      || kind === 'beneficiary'
+      || kind === 'material_medium'
+      || kind === 'quality_output'
+    ));
+    const richRelationSource = sourceKinds.includes('criterion')
+      && sourceKinds.includes('beneficiary')
+      && (sourceKinds.includes('material_medium') || sourceKinds.includes('quality_output'));
+    if (richRelationSource && relationAnchors.length >= 2) {
+      const projected = buildItalianDesignSemanticFallback(units, isPresent);
+      if (projected.trim()) return projected;
+      return '';
+    }
+  }
+
   const frames = units.map((u) => classifyActionFrame(u));
   const lines: string[] = [];
   for (let i = 0; i < frames.length; i += 1) {
@@ -1512,6 +1578,11 @@ export function validateCrossLocaleSemanticCoverage(
   addedSemanticArgumentCount: number;
   addedSemanticArgumentKinds: ExperienceSemanticArgumentKind[];
   missingSemanticArgumentKinds: ExperienceSemanticArgumentKind[];
+  /** Material candidate relations that have no authority in the matched fact. */
+  unauthorizedArgumentCount?: number;
+  unauthorizedArgumentKinds?: ExperienceSemanticArgumentKind[];
+  /** Candidate-only relation evidence is privacy-safe: categories only. */
+  crossEntryRelationLeakageCount?: number;
   reason?: string;
 } {
   const srcUnits = extractSourceDutyUnits(sourceDescription)
@@ -1581,6 +1652,7 @@ export function validateCrossLocaleSemanticCoverage(
   const candFrames = bullets.map((b) => classifyActionFrame(b));
   const usedB = new Set<number>();
   const coveredSourceIndexes: number[] = [];
+  const matchedCandidateIndexes = new Map<number, number>();
   let covered = 0;
   const warehouseSource = sourceHasWarehouseDomainApplicability(sourceDescription);
   for (let si = 0; si < srcFrames.length; si += 1) {
@@ -1615,6 +1687,7 @@ export function validateCrossLocaleSemanticCoverage(
       usedB.add(matched);
       covered += 1;
       coveredSourceIndexes.push(si);
+      matchedCandidateIndexes.set(si, matched);
     }
   }
   const uncoveredCount = requiredCount - covered;
@@ -1637,6 +1710,31 @@ export function validateCrossLocaleSemanticCoverage(
     else if (kind === 'universal_scope_claim') addedSemanticArgumentKinds.push('universal_scope');
     else if (kind === 'frequency_scope_claim') addedSemanticArgumentKinds.push('frequency_scope');
     else if (kind === 'unsupported_modifier_expansion') addedSemanticArgumentKinds.push('team_relation');
+    else if (kind === 'unsupported_tool_claim') addedSemanticArgumentKinds.push('tool_system');
+    else if (kind === 'unsupported_metric_claim') addedSemanticArgumentKinds.push('quantitative_metric');
+    else if (kind === 'leadership_claim' || kind === 'supervision_expansion') {
+      addedSemanticArgumentKinds.push('leadership_management');
+    } else if (
+      kind === 'assurance_escalation'
+      || kind === 'guarantee_escalation'
+      || kind === 'responsibility_escalation'
+      || kind === 'outcome_ownership'
+      || kind === 'organization_responsibility_claim'
+    ) {
+      addedSemanticArgumentKinds.push('responsibility_escalation');
+    } else if (
+      kind === 'unsupported_object_expansion'
+      || kind === 'object_scope_expansion'
+    ) {
+      addedSemanticArgumentKinds.push('object_domain');
+    } else if (
+      kind === 'unsupported_generated_duty'
+      || kind === 'action_scope_expansion'
+      || kind === 'coordinated_predicate_expansion'
+      || kind === 'logistics_scope_expansion'
+    ) {
+      addedSemanticArgumentKinds.push('unrelated_action');
+    }
   }
   const uniqueAddedSemanticArgumentKinds = [
     ...new Set(addedSemanticArgumentKinds),
@@ -1680,6 +1778,8 @@ export function validateCrossLocaleSemanticCoverage(
     // target surface; otherwise a generic 3/3 shell could silently drop media,
     // beneficiary/criterion, or output-quality scope.
     for (const kind of sourceArgumentKinds) {
+      // Existing localized shells can express the project object through the
+      // quality-output clause.
       const projectScopeRepresentedByReview = kind === 'project_scope'
         && candidateArgumentKinds.includes('quality_output');
       if (!candidateArgumentKinds.includes(kind)
@@ -1692,6 +1792,46 @@ export function validateCrossLocaleSemanticCoverage(
       if (!sourceArgumentKindSet.has(kind) && !uniqueAddedSemanticArgumentKinds.includes(kind)) {
         uniqueAddedSemanticArgumentKinds.push(kind);
       }
+    }
+  }
+  // Relation authority is fact-owned, not aggregate-CV-owned. For each
+  // source/candidate pair, a material relation in the realized candidate must
+  // occur in that exact source fact. This preserves translated synonyms while
+  // rejecting an added tool, metric, team/leadership relation, object/domain,
+  // or action borrowed from another fact or entry.
+  const unauthorizedArgumentKinds: ExperienceSemanticArgumentKind[] = [];
+  for (const [sourceIndex, candidateIndex] of matchedCandidateIndexes) {
+    if (!scriptsDiffer || !richRelationSource) continue;
+    const sourceKinds = new Set(extractExperienceSemanticArgumentKinds(srcUnits[sourceIndex] || ''));
+    const candidateKinds = extractExperienceSemanticArgumentKinds(bullets[candidateIndex] || '');
+    for (const kind of candidateKinds) {
+      // Relation qualifiers (criterion/beneficiary/media/project/quality) are
+      // validated by the bidirectional typed bridge below. The per-fact
+      // ownership pass is reserved for material additions that cannot be
+      // authorized by aggregate lexical overlap: tools, metrics, leadership,
+      // escalated responsibility, changed domains, and added actions.
+      if (!['tool_system', 'quantitative_metric', 'leadership_management',
+        'responsibility_escalation', 'object_domain', 'unrelated_action'].includes(kind)) continue;
+      if (!sourceKinds.has(kind) && !unauthorizedArgumentKinds.includes(kind)) {
+        unauthorizedArgumentKinds.push(kind);
+      }
+    }
+  }
+  // An extra candidate bullet cannot inherit authority from any selected
+  // source fact. Keep the evidence categorical and privacy-safe.
+  if (usedB.size !== bullets.length) {
+    for (let index = 0; index < bullets.length; index += 1) {
+      if (!usedB.has(index)) {
+        const kinds = extractExperienceSemanticArgumentKinds(bullets[index]);
+        if (kinds.length && !unauthorizedArgumentKinds.includes('unrelated_action')) {
+          unauthorizedArgumentKinds.push('unrelated_action');
+        }
+      }
+    }
+  }
+  for (const kind of unauthorizedArgumentKinds) {
+    if (!uniqueAddedSemanticArgumentKinds.includes(kind)) {
+      uniqueAddedSemanticArgumentKinds.push(kind);
     }
   }
   const semanticArgumentCoveragePassed = uniqueAddedSemanticArgumentKinds.length === 0
@@ -1710,10 +1850,15 @@ export function validateCrossLocaleSemanticCoverage(
     addedSemanticArgumentCount: uniqueAddedSemanticArgumentKinds.length,
     addedSemanticArgumentKinds: uniqueAddedSemanticArgumentKinds,
     missingSemanticArgumentKinds,
+    unauthorizedArgumentCount: unauthorizedArgumentKinds.length,
+    unauthorizedArgumentKinds,
+    crossEntryRelationLeakageCount: unauthorizedArgumentKinds.includes('unrelated_action') ? 1 : 0,
     reason: ok
       ? undefined
       : (semanticArgumentCoveragePassed
         ? 'experience_material_fact_coverage_incomplete'
-        : 'experience_semantic_argument_expansion'),
+        : (unauthorizedArgumentKinds.length
+          ? 'experience_semantic_relation_ownership_failed'
+          : 'experience_semantic_argument_expansion')),
   };
 }
