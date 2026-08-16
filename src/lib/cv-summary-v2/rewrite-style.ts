@@ -216,7 +216,7 @@ const EN_PROFESSIONAL_MARKERS =
 const LOCALE_STRONGER_MARKERS: Partial<Record<Locale, RegExp>> = {
   es: /\b(?:a\s+la\s+vez\s+que|así\s+como|con\s+rigor)\b/iu,
   fr: /\b(?:ainsi\s+que|avec\s+rigueur)\b/iu,
-  it: /(?:^|[^\p{L}])(?:nonché|con\s+rigore)(?=[^\p{L}]|$)/iu,
+  it: /(?:nonché|con\s+rigore|,\s+e\s+)/iu,
   'pt-BR': /\b(?:bem\s+como|com\s+rigor)\b/iu,
   // Avoid \\b — JS word boundaries are ASCII-only even with the /u flag.
   ru: /(?:а\s+также|тщательно)/u,
@@ -352,10 +352,21 @@ export function isSummaryV2MarkerOnlyStyleChange(
   locale: Locale,
   style: SummaryV2RewriteStyle,
 ): boolean {
-  void locale;
   const b = (base || '').replace(/\s+/g, ' ').trim();
   const s = (styled || '').replace(/\s+/g, ' ').trim();
   if (!b || !s || hashNorm(b) === hashNorm(s)) return false;
+  // In Italian, explicit comma-plus-`e` parallelism is a native structural
+  // improvement over a flat conjunction even though it does not alter the
+  // letter sequence.  Keep it eligible for Stronger instead of classifying
+  // the punctuation-only surface as a removable marker.
+  if (
+    locale === 'it'
+    && style === 'stronger'
+    && /,\s+e\s+/iu.test(s)
+    && !/,\s+e\s+/iu.test(b)
+  ) {
+    return false;
+  }
   let stripped = s;
   if (style === 'stronger') {
     // Strip removable intensifiers only. Verb/particle rewrites in duty clauses
@@ -502,9 +513,21 @@ function hasStrengthenedDutyPredicates(
     const markerOk = strongerMarkerFor(locale)?.test(candidate) === true;
     const structural = /(?:\bsowie\b|\bas well as\b|\ba la vez que\b|\basí como\b|\bainsi que\b|nonché|\bbem como\b|а также|\s+te\s+| كما | ثم |においては| तथा | साथ ही )/iu
       .test(candSegs.join(' '));
-    return markerOk && (structural || candSegs.some((s) => s.length >= 12));
+    const italianNativeJoin = locale === 'it' && /,\s+e\s+/iu.test(candSegs.join(' '));
+    return (markerOk || italianNativeJoin) && (structural || italianNativeJoin || candSegs.some((s) => s.length >= 12));
   }
   const n = Math.min(srcSegs.length, candSegs.length);
+  // Italian finite predicates are naturally strengthened by an explicit
+  // comma-plus-`e` parallel join.  Compare this punctuation/coordination
+  // structure separately from letter cores so a native `e` rewrite is not
+  // mistaken for a no-op (and never require the awkward `nonché` form).
+  if (
+    locale === 'it'
+    && /,\s+e\s+/iu.test(candSegs.join(' '))
+    && !/,\s+e\s+/iu.test(srcSegs.join(' '))
+  ) {
+    return true;
+  }
   for (let i = 0; i < n; i += 1) {
     if (lettersOnly(srcSegs[i]) !== lettersOnly(candSegs[i])) return true;
   }
@@ -656,6 +679,14 @@ export function analyzeStrongerNativeSurface(options: {
     STRUCTURAL_JOIN_RE,
   );
   const structuralStrengtheningCount = Math.max(0, candStructural - srcStructural);
+  const italianNativeJoinStrengthening = options.locale === 'it'
+    ? Math.max(
+      0,
+      countRegexMatches(candDuty, /,\s+e\s+/iu)
+        - countRegexMatches(srcDuty, /,\s+e\s+/iu),
+    )
+    : 0;
+  const totalStructuralStrengtheningCount = structuralStrengtheningCount + italianNativeJoinStrengthening;
 
   const verbPairs: Array<[RegExp, RegExp]> = [
     [/\bperform\b/iu, /\bcarry\s+out\b/iu],
@@ -700,7 +731,7 @@ export function analyzeStrongerNativeSurface(options: {
     candIntensifiers += countRegexMatches(candidate, re);
   }
   const modifierOnlyTransformationDetected = candIntensifiers > sourceIntensifiers
-    && structuralStrengtheningCount === 0
+    && totalStructuralStrengtheningCount === 0
     && strongerVerbTransformationCount === 0
     && hashNorm(source) !== hashNorm(candidate);
 
@@ -719,7 +750,7 @@ export function analyzeStrongerNativeSurface(options: {
   }
 
   const nativeStrongSurfacePassed = reasons.length === 0
-    && (structuralStrengtheningCount > 0 || strongerVerbTransformationCount > 0);
+    && (totalStructuralStrengtheningCount > 0 || strongerVerbTransformationCount > 0);
 
   if (!nativeStrongSurfacePassed && reasons.length === 0) {
     reasons.push('stronger_needs_structure_or_verb');
@@ -731,7 +762,7 @@ export function analyzeStrongerNativeSurface(options: {
     stackedModifierDetected,
     modifierOnlyTransformationDetected,
     strongerVerbTransformationCount,
-    structuralStrengtheningCount,
+    structuralStrengtheningCount: totalStructuralStrengtheningCount,
     nativeStrongSurfacePassed,
     nativeStrongSurfaceRejectionReasons: reasons,
   };
@@ -958,8 +989,20 @@ function strengthenDutyClauseBody(
   }
   if (locale === 'it') {
     // Normalize residual biography auxiliaries inside relative clauses.
-    b = b.replace(/\bha\s+/giu, 'ho ');
-    return sparseJoin(/\s+e\s+/iu, ', nonché ', 'con rigore', false);
+    b = b
+      .replace(/\bha\s+/giu, 'ho ')
+      // Normalize only provider/legacy Italian `nonché` joins that introduce
+      // another finite predicate.  Nominal `nonché` ("materials as well as
+      // tools") remains a valid native construction.
+      .replace(
+        /\s+nonché\s+(?=(?:ho|hai|ha|abbiamo|avete|hanno|sono|sei|è|siamo|siete|[\p{L}]+(?:o|avo|avi|ava|avano|ivo|ivi|iva|ivano|isco|isci|isce|iscono|iamo|ate|ono|ano))\b)/giu,
+        ' e ',
+      );
+    // Italian finite clauses coordinate naturally with ordinary `e`.  Never
+    // promote an independent finite predicate to `nonché`: that connector is
+    // appropriate for nominal additions, not a mechanical Stronger bridge
+    // between first-person finite clauses.
+    return sparseJoin(/\s+e\s+/iu, ', e ', 'con rigore', false);
   }
   if (locale === 'pt-BR') {
     const result = sparseJoin(/\s+(?:e|y)\s+/iu, ', bem como ', 'com rigor', false);
@@ -2198,7 +2241,8 @@ export function evaluateSummaryV2StyleFulfillment(options: {
     }
   } else if (options.style === 'stronger') {
     const marker = strongerMarkerFor(options.locale);
-    const markerOk = marker ? marker.test(candidate) : materiallyDifferent;
+    const nativeItalianJoin = options.locale === 'it' && /,\s+e\s+/iu.test(candidate);
+    const markerOk = marker ? marker.test(candidate) || nativeItalianJoin : materiallyDifferent;
     markerOnlyStyleChange = isSummaryV2MarkerOnlyStyleChange(
       source,
       candidate,

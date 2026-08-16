@@ -1027,6 +1027,17 @@ function detectRoleCaseDefect(text: string, locale: Locale): boolean {
 
 /** Coordination that is ungrammatical or mechanical in the target language. */
 function detectCoordinationDefect(text: string, locale: Locale): string | null {
+  if (locale === 'it') {
+    // `nonché` is valid for nominal coordination (for example,
+    // "materiali nonché strumenti"), but it is a poor bridge between two
+    // independent finite first-person clauses.  Stronger/Professional used to
+    // manufacture surfaces such as "preparo ..., nonché modifico ..." and
+    // "ho creato ..., nonché ho sviluppato ...".  Scope the guard to a comma
+    // clause boundary plus an Italian finite predicate/auxiliary so legitimate
+    // noun coordination remains accepted.
+    const finiteAfterNonche = /,\s*nonché\s+(?:ho|hai|ha|abbiamo|avete|hanno|sono|sei|è|siamo|siete|[\p{L}]+(?:o|avo|avi|ava|avano|ivo|ivi|iva|ivano|isco|isci|isce|iscono|iamo|ate|ono|ano))(?=[^\p{L}]|$)/iu;
+    if (finiteAfterNonche.test(text)) return 'it_nonche_finite_clause_coordination';
+  }
   if (locale === 'fr') {
     // "ainsi que" coordinating a finite verb requires an explicit subject.
     const m = /ainsi qu[e’']\s*(\p{L}+)/iu.exec(text);
