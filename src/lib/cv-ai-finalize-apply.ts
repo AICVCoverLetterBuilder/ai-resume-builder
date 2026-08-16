@@ -4030,6 +4030,11 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
     const frenchFinalValidationFailure = locale === 'fr'
       && !(diagBase.tenseValidationPassed && diagBase.grammarValidationPassed);
     if (v2.blocked || !v2.countedAsSuccess || deV2BlockReason || v2DurationSemanticFailure || frenchFinalValidationFailure) {
+      // A style-saturated or below-threshold Shorter has no selected final
+      // candidate.  Its downstream grammar/grounding/slot validators were not
+      // run, so serializing ordinary `false` values would turn a safe no-op
+      // into a misleading validation failure.
+      const rewriteStyleNotEvaluated = Boolean(styleNoSafe || styleBlockReason);
       const typedFail = deV2BlockReason
         || v2DurationSemanticFailure
         || styleBlockReason
@@ -4056,22 +4061,26 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         countedAsSuccess: false,
         diagnostics: {
           ...diagBase,
-          finalPostconditionsPassed: false,
-          groundingValidationPassed: false,
-          grammarValidationPassed: deV2Completeness
-            ? deV2Completeness.germanControlledCaseGrammarPassed
-            : false,
-          tenseValidationPassed: false,
-          slotValidationPassed: false,
+          finalPostconditionsPassed: rewriteStyleNotEvaluated ? null : false,
+          groundingValidationPassed: rewriteStyleNotEvaluated ? null : false,
+          grammarValidationPassed: rewriteStyleNotEvaluated
+            ? null
+            : (deV2Completeness
+              ? deV2Completeness.germanControlledCaseGrammarPassed
+              : false),
+          tenseValidationPassed: rewriteStyleNotEvaluated ? null : false,
+          slotValidationPassed: rewriteStyleNotEvaluated ? null : false,
           finalCandidateSource: 'none',
           deterministicAccepted: false,
           fallbackApplied: false,
           noOpDetected: Boolean(styleNoSafe),
           noOpCandidateKind: styleNoSafe ? 'client_deterministic' : null,
           noOpRejectionReason: styleNoSafe ? 'style_no_safe_material_change' : null,
-          rejectionStage,
-          typedFailureReason: typedFail,
-          finalTypedFailureReason: typedFail,
+          rejectionStage: styleNoSafe ? null : rejectionStage,
+          // Keep the candidate style rejection in styleFulfillment/lineage,
+          // but do not mislabel a safe no-op as an AI validation error.
+          typedFailureReason: styleNoSafe ? null : typedFail,
+          finalTypedFailureReason: styleNoSafe ? null : typedFail,
           // Preserve evaluated duration/lineage — do not zero after reject.
           durationClaimCountBeforeStrip: v2DurationCount,
           durationClaimCountAfterInsert: v2DurationCount,

@@ -2415,6 +2415,37 @@ export function evaluateSummaryV2StyleFulfillment(options: {
 }
 
 /**
+ * A stored Summary is the operation source for Shorter.  Rebuilding it from
+ * whatever localization response happened to be available can make the
+ * materiality decision depend on provider/cache wording rather than on the
+ * text the user asked to shorten.  Apply only reversible, locale-native
+ * compression to that source; the ordinary manifest validator still proves
+ * all fact, ownership, duration, and locale contracts afterwards.
+ */
+function buildLineageStableShorterFromSource(source: string, locale: Locale): string {
+  let text = stripSharedSoftFillers(source, locale);
+  if (locale === 'it') {
+    // `nonché` remains legitimate for nominal coordination.  This narrow form
+    // is the invalid finite-clause bridge rejected by the Italian native
+    // surface gate; replace it with ordinary finite-clause coordination before
+    // measuring the Shorter result.
+    text = text.replace(
+      /,\s*(?:,\s*)?nonché\s+(?=(?:ho|hai|ha|abbiamo|avete|hanno|sono|sei|è|siamo|siete|[\p{L}]+(?:o|avo|avi|ava|avano|ivo|ivi|iva|ivano|isco|isci|isce|iscono|iamo|ate|ono|ano))(?=[^\p{L}]|$))/giu,
+      ' e ',
+    );
+  }
+  text = compressLocaleDurationToCompact(text, locale);
+  text = restoreFrenchCompletedDutyBridge(text, locale);
+  text = shortenLocaleRoleOpeners(text, locale);
+  text = compressDutyEmDashList(text, locale);
+  return text
+    .replace(/;\s+/gu, ', ')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([.。])/gu, '$1')
+    .trim();
+}
+
+/**
  * Produce a style-aware deterministic candidate from source + manifest.
  */
 export function transformSummaryV2ForRewriteStyle(options: {
@@ -2425,7 +2456,9 @@ export function transformSummaryV2ForRewriteStyle(options: {
   void SUMMARY_V2_REWRITE_STYLE_384_REVISION;
   const source = (options.sourceSummary || '').replace(/\s+/g, ' ').trim();
   const beforeHash = source ? hashNorm(source) : null;
-  const styled = buildSummaryV2StyledDeterministicText(options.manifest, options.style);
+  const styled = options.style === 'shorter' && source && options.manifest.locale === 'it'
+    ? buildLineageStableShorterFromSource(source, options.manifest.locale)
+    : buildSummaryV2StyledDeterministicText(options.manifest, options.style);
   const fulfillment = evaluateSummaryV2StyleFulfillment({
     style: options.style,
     sourceText: source,
@@ -2434,17 +2467,28 @@ export function transformSummaryV2ForRewriteStyle(options: {
   });
   const afterHash = styled ? hashNorm(styled) : null;
   const identicalToSource = Boolean(source && styled && beforeHash === afterHash);
+  const shorterNoMaterialImprovement = options.style === 'shorter'
+    && fulfillment.nativeSurfaceValidationPassed
+    && !fulfillment.styleValidationPassed
+    && fulfillment.styleRejectionReasons.length > 0
+    && fulfillment.styleRejectionReasons.every((reason) => (
+      reason === 'shorter_insufficient_compression'
+      || reason === 'shorter_no_semantic_compression'
+      || reason === 'shorter_whitespace_only'
+    ));
 
   // True no-op only when the surface already matches the styled result — i.e.
   // the source is already style-saturated and no safe material edit exists.
-  if (identicalToSource) {
+  if (identicalToSource || shorterNoMaterialImprovement) {
     return {
-      text: source,
+      text: shorterNoMaterialImprovement ? styled : source,
       transformationKind: null,
       beforeHash,
-      afterHash: beforeHash,
+      afterHash: shorterNoMaterialImprovement ? afterHash : beforeHash,
       styleFulfilled: false,
-      styleRejectionReasons: ['style_no_safe_material_change'],
+      styleRejectionReasons: shorterNoMaterialImprovement
+        ? fulfillment.styleRejectionReasons
+        : ['style_no_safe_material_change'],
       noSafeMaterialChange: true,
     };
   }
