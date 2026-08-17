@@ -104,4 +104,35 @@ describe('AAB467 Serbian Summary layout predicate replay', () => {
     const usage = recordProAiUserActionSuccess({ schemaVersion: AI_USAGE_SCHEMA_VERSION, count: 23, windowStart: Date.now(), policyLimit: 100 });
     expect(usage.count).toBe(24);
   });
+
+  it('keeps the generated Serbian device summary as a safe no-op when Stronger only has neutral coordination available', async () => {
+    clearSummaryV2LocalizationCacheForTests();
+    const cv = deviceCv();
+    const { localized } = await localizedManifest(cv);
+    const generated = runSummaryV2({ cv, locale: 'sr', gender: 'female', candidate: '', referenceDateIso: REF, localizedManifest: localized });
+    expect(generated.countedAsSuccess).toBe(true);
+
+    const stronger = runSummaryV2({
+      cv: deviceCv(generated.text),
+      locale: 'sr',
+      gender: 'female',
+      candidate: generated.text,
+      rewriteStyle: 'stronger',
+      referenceDateIso: REF,
+      localizedManifest: localized,
+    });
+
+    expect(stronger.countedAsSuccess).toBe(false);
+    expect(stronger.blocked).toBe(true);
+    expect(stronger.reason).toBe('style_no_safe_material_change');
+    expect(stronger.text).toBe(generated.text);
+    expect(stronger.validation.coveredCurrentFactCount).toBe(3);
+    expect(stronger.validation.coveredPriorFactCount).toBe(6);
+    const usageBefore = 24;
+    const usageAfter = stronger.countedAsSuccess
+      ? recordProAiUserActionSuccess({ schemaVersion: AI_USAGE_SCHEMA_VERSION, count: usageBefore, windowStart: Date.now(), policyLimit: 100 }).count
+      : usageBefore;
+    expect(usageAfter).toBe(24);
+    expect(stronger.countedAsSuccess).toBe(false);
+  });
 });

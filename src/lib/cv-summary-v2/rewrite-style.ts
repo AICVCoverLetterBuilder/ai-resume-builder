@@ -220,7 +220,7 @@ const LOCALE_STRONGER_MARKERS: Partial<Record<Locale, RegExp>> = {
   'pt-BR': /\b(?:bem\s+como|com\s+rigor)\b/iu,
   // Avoid \\b — JS word boundaries are ASCII-only even with the /u flag.
   ru: /(?:а\s+также|тщательно)/u,
-  sr: /\b(?:\ste\s|pouzdano|uredno)\b/iu,
+  sr: /\b(?:pouzdano|uredno)\b/iu,
   hr: /\b(?:\ste\s|pouzdano|uredno)\b/iu,
   ar: /(?: كما | ثم |بعناية|بكفاءة)/u,
   hi: /(?: तथा )/u,
@@ -355,6 +355,15 @@ export function isSummaryV2MarkerOnlyStyleChange(
   const b = (base || '').replace(/\s+/g, ' ').trim();
   const s = (styled || '').replace(/\s+/g, ' ').trim();
   if (!b || !s || hashNorm(b) === hashNorm(s)) return false;
+  // Serbian/Croatian `i` / `te` and comma placement are neutral coordination
+  // alternatives.  They cannot turn the same duty predicates into a Stronger
+  // result by themselves.
+  if (
+    locale === 'sr'
+    && normalizeSouthSlavicNeutralCoordination(b) === normalizeSouthSlavicNeutralCoordination(s)
+  ) {
+    return true;
+  }
   // In Italian, explicit comma-plus-`e` parallelism is a native structural
   // improvement over a flat conjunction even though it does not alter the
   // letter sequence.  Keep it eligible for Stronger instead of classifying
@@ -497,6 +506,17 @@ function lettersOnly(text: string): string {
   return normalizeComparable(text).replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
+function normalizeSouthSlavicNeutralCoordination(text: string): string {
+  return (text || '')
+    // A comma before another first-person finite predicate is the same neutral
+    // coordination boundary as `i`/`te`; retain ordinary object commas.
+    .replace(/,\s+(?=\p{L}+(?:am|em|im|ala|ela|ila|ao|eo|io)\b)/giu, ' i ')
+    .replace(/\s*(?:,|;)\s*(?:i|te)\s+/giu, ' i ')
+    .replace(/\s+(?:i|te)\s+/giu, ' i ')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
 /** True when duty-clause letter cores differ (role shells may match). */
 function hasStrengthenedDutyPredicates(
   source: string,
@@ -529,7 +549,13 @@ function hasStrengthenedDutyPredicates(
     return true;
   }
   for (let i = 0; i < n; i += 1) {
-    if (lettersOnly(srcSegs[i]) !== lettersOnly(candSegs[i])) return true;
+    const srcDuty = locale === 'sr'
+      ? normalizeSouthSlavicNeutralCoordination(srcSegs[i])
+      : srcSegs[i];
+    const candDuty = locale === 'sr'
+      ? normalizeSouthSlavicNeutralCoordination(candSegs[i])
+      : candSegs[i];
+    if (lettersOnly(srcDuty) !== lettersOnly(candDuty)) return true;
   }
   return candSegs.length !== srcSegs.length;
 }
@@ -678,7 +704,9 @@ export function analyzeStrongerNativeSurface(options: {
     candSegs.length > 0 ? candDuty : candidate,
     STRUCTURAL_JOIN_RE,
   );
-  const structuralStrengtheningCount = Math.max(0, candStructural - srcStructural);
+  const structuralStrengtheningCount = options.locale === 'sr'
+    ? 0
+    : Math.max(0, candStructural - srcStructural);
   const italianNativeJoinStrengthening = options.locale === 'it'
     ? Math.max(
       0,
@@ -706,6 +734,9 @@ export function analyzeStrongerNativeSurface(options: {
     [/\bdéveloppais\b/iu, /\bconcevais\b/iu],
     [/\bcrée\b/iu, /\bconçois\b/iu],
     [/\bcréais\b/iu, /\bconcevais\b/iu],
+    [/\bobavljam\b/iu, /\bsprovodim\b/iu],
+    [/\bobavljala\b/iu, /\bsprovodila\b/iu],
+    [/\bobavljao\b/iu, /\bsprovodio\b/iu],
   ];
   let strongerVerbTransformationCount = 0;
   for (const [from, to] of verbPairs) {
@@ -1014,8 +1045,35 @@ function strengthenDutyClauseBody(
   if (locale === 'ru') {
     return sparseJoin(/\s+и\s+/u, ', а также ', 'тщательно', true);
   }
-  if (locale === 'sr' || locale === 'hr') {
-    const parts = b.split(/,\s*/u).map((p) => p.trim()).filter(Boolean);
+  if (locale === 'sr') {
+    // Coordination-register swaps (`i`/`te`, comma/whitespace) are natural,
+    // but neutral.  Only a narrowly known, predicate-level lexical upgrade can
+    // establish a Serbian Stronger result; otherwise callers receive a
+    // safe semantic no-op.
+    let t = b;
+    let verbCount = 0;
+    const predicatePairs: Array<[RegExp, string]> = [
+      [/^obavljam\b/iu, 'sprovodim'],
+      [/^obavljala\b/iu, 'sprovodila'],
+      [/^obavljao\b/iu, 'sprovodio'],
+    ];
+    for (const [from, to] of predicatePairs) {
+      const next = t.replace(from, to);
+      if (next !== t) {
+        t = next;
+        verbCount = 1;
+        break;
+      }
+    }
+    return {
+      text: t.replace(/\s+/g, ' ').trim(),
+      structuralCount: 0,
+      verbCount,
+      intensifierLemma: null,
+    };
+  }
+  if (locale === 'hr') {
+    const parts = b.split(/,\s*/u).map((part) => part.trim()).filter(Boolean);
     let t = b;
     let structural = 0;
     let intens: string | null = null;
@@ -1023,14 +1081,11 @@ function strengthenDutyClauseBody(
       t = parts.join(' te ');
       structural += 1;
     } else {
-      // No commas: keep the first coordinated "i" (dual 1sg pair), promote the
-      // final duty-level "i" to "te" when multiple "i" joins exist.
       const iMatches = [...t.matchAll(/\s+i\s+/giu)];
       if (iMatches.length >= 2) {
         t = t.replace(/^(.*)(\s+i\s+)(.*)$/iu, '$1 te $3');
         structural += 1;
       } else if (iMatches.length === 1) {
-        // Two duties joined by a single "i" (not an intra-bullet dual pair only).
         t = t.replace(/\s+i\s+/iu, ' te ');
         structural += 1;
       }
@@ -2246,7 +2301,9 @@ export function evaluateSummaryV2StyleFulfillment(options: {
   } else if (options.style === 'stronger') {
     const marker = strongerMarkerFor(options.locale);
     const nativeItalianJoin = options.locale === 'it' && /,\s+e\s+/iu.test(candidate);
-    const markerOk = marker ? marker.test(candidate) || nativeItalianJoin : materiallyDifferent;
+    const southSlavicVerbUpgrade = options.locale === 'sr'
+      && strongSurface.strongerVerbTransformationCount > 0;
+    const markerOk = marker ? marker.test(candidate) || nativeItalianJoin || southSlavicVerbUpgrade : materiallyDifferent;
     markerOnlyStyleChange = isSummaryV2MarkerOnlyStyleChange(
       source,
       candidate,
@@ -2476,10 +2533,20 @@ export function transformSummaryV2ForRewriteStyle(options: {
       || reason === 'shorter_no_semantic_compression'
       || reason === 'shorter_whitespace_only'
     ));
+  const strongerNoMaterialImprovement = options.style === 'stronger'
+    && fulfillment.nativeSurfaceValidationPassed
+    && !fulfillment.styleValidationPassed
+    && fulfillment.styleRejectionReasons.length > 0
+    && fulfillment.styleRejectionReasons.every((reason) => (
+      reason === 'stronger_not_materially_different'
+      || reason === 'stronger_marker_only'
+      || reason === 'stronger_no_duty_predicate_strengthen'
+      || reason === 'stronger_needs_structure_or_verb'
+    ));
 
   // True no-op only when the surface already matches the styled result — i.e.
   // the source is already style-saturated and no safe material edit exists.
-  if (identicalToSource || shorterNoMaterialImprovement) {
+  if (identicalToSource || shorterNoMaterialImprovement || strongerNoMaterialImprovement) {
     return {
       text: shorterNoMaterialImprovement ? styled : source,
       transformationKind: null,
@@ -2488,7 +2555,9 @@ export function transformSummaryV2ForRewriteStyle(options: {
       styleFulfilled: false,
       styleRejectionReasons: shorterNoMaterialImprovement
         ? fulfillment.styleRejectionReasons
-        : ['style_no_safe_material_change'],
+        : strongerNoMaterialImprovement
+          ? fulfillment.styleRejectionReasons
+          : ['style_no_safe_material_change'],
       noSafeMaterialChange: true,
     };
   }

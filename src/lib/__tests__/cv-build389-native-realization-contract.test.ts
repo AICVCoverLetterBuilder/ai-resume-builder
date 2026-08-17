@@ -9,16 +9,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Locale } from '@/lib/i18n/translations';
 import {
   finalizeCvAiFieldForApply,
-  applyFinalizedSummaryToCv,
   normalizeSummaryCandidateText,
   SUMMARY_RUNTIME_MARKER_SET,
 } from '@/lib/cv-ai-finalize-apply';
 import { buildExperienceDurationSnapshot } from '@/lib/cv-experience-duration';
 import { fingerprintText } from '@/lib/cv-export-diagnostics';
-import {
-  SummaryAiDiagnosticSession,
-  resolveAuthoritativeVisibleSummaryText,
-} from '@/lib/cv-summary-ai-diagnostics';
 import {
   setSummaryV2EnabledForTests,
   SUMMARY_V2_NATIVE_SURFACE_389_REVISION,
@@ -35,7 +30,6 @@ import {
 import {
   getProAiUsageCount,
   persistProAiRecord,
-  recordProAiUserActionSuccess,
   AI_USAGE_SCHEMA_VERSION,
   PRO_AI_SAFETY_CAP,
 } from '@/lib/ai-usage-policy';
@@ -442,7 +436,7 @@ describe('AAB-389 native realization contract', () => {
     }
   });
 
-  it('Serbian male Stronger: apply, hashes, race ok, usage +1', () => {
+  it('Serbian male Stronger: no-op when no grounded predicate-level strengthening exists', () => {
     seedUsage(40);
     const source = buildSummaryV2StyledDeterministicText(
       buildSummaryV2ManifestForCv({
@@ -465,41 +459,10 @@ describe('AAB-389 native realization contract', () => {
       referenceDateIso: REF,
       rewriteStyle: 'stronger',
     });
-    expect(fin.blocked).toBe(false);
-    expect(fin.countedAsSuccess).toBe(true);
-    const text = fin.text || '';
-    expect(text).toMatch(/Prethodno sam radio\b/u);
-    expect(text).not.toMatch(/radio\s*\/\s*la/u);
-
-    const cvRef = { current: { ...cv } };
-    cvRef.current = applyFinalizedSummaryToCv(cvRef.current, 'sr', fin);
-    const visibleText = resolveAuthoritativeVisibleSummaryText({
-      operationOwnedSummary: cvRef.current.summary,
-      staleReactSummary: '',
-    });
-    expect(visibleText).toBe(text);
-    expect(hashNorm(visibleText)).toBe(hashNorm(text));
-    expect(hashNorm(cvRef.current.summary || '')).toBe(hashNorm(text));
-
-    const session = new SummaryAiDiagnosticSession({
-      uiLocale: 'sr',
-      requestedLocale: 'sr',
-      contentLocale: 'sr',
-      templateId: 'modern',
-      gender: 'male',
-      requestId: 'aab-389-sr-stronger',
-      usageCountBefore: 40,
-      operationMode: 'enhance_existing_content',
-    });
-    session.recordFinalizeResult(fin);
-    expect(session.evaluatePreApplyDecisionGates().passed).toBe(true);
-    session.recordVisibleApply(true, 40, visibleText);
-    expect(session.draft.raceGuardResult).toBe('ok');
-    recordProAiUserActionSuccess();
-    session.patch({ usageCountAfter: 41 });
-    const trace = session.commit();
-    expect(trace.visibleApplySucceeded).toBe(true);
-    expect(trace.usageCountAfter).toBe(41);
-    expect(getProAiUsageCount()).toBe(41);
+    expect(fin.blocked).toBe(true);
+    expect(fin.countedAsSuccess).toBe(false);
+    expect(fin.reason).toBe('style_no_safe_material_change');
+    expect(hashNorm(fin.text || '')).toBe(hashNorm(source));
+    expect(getProAiUsageCount()).toBe(40);
   });
 });

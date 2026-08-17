@@ -86,7 +86,7 @@ async function runStep(
   style: (typeof SEQ_STYLES)[number],
   usageBefore: number,
   waitMs: number,
-): Promise<{ ok: boolean; text: string; hash: string; usageAfter: number }> {
+): Promise<{ ok: boolean; safeNoop: boolean; text: string; hash: string; usageAfter: number }> {
   await delay(waitMs);
   const liveSummary = String(ui.cvRef.current.summary || '');
   const duration = buildExperienceDurationSnapshot(ui.cvRef.current.experience, AAB389_REF);
@@ -124,6 +124,7 @@ async function runStep(
     session.recordVisibleApply(false, usageBefore);
     return {
       ok: false,
+      safeNoop: fin.reason === 'style_no_safe_material_change',
       text: liveSummary,
       hash: aab389Hash(liveSummary),
       usageAfter: usageBefore,
@@ -156,6 +157,7 @@ async function runStep(
     session.recordVisibleApply(false, usageBefore);
     return {
       ok: false,
+      safeNoop: false,
       text: String(ui.cvRef.current.summary || ''),
       hash: aab389Hash(String(ui.cvRef.current.summary || '')),
       usageAfter: usageBefore,
@@ -176,6 +178,7 @@ async function runStep(
   recordProAiUserActionSuccess();
   return {
     ok: true,
+    safeNoop: false,
     text: fin.text || '',
     hash: aab389Hash(fin.text || ''),
     usageAfter: getProAiUsageCount(),
@@ -201,6 +204,11 @@ describe('AAB-389 permanent sequential apply', () => {
         let lastHash = aab389Hash(source);
         for (const style of SEQ_STYLES) {
           const step = await runStep(ui, locale, style, usage, waitMs);
+          if (locale === 'sr' && style === 'stronger' && step.safeNoop) {
+            expect(step.hash, `${locale}/${waitMs}ms/${style}`).toBe(lastHash);
+            expect(step.usageAfter, `${locale}/${waitMs}ms/${style}`).toBe(usage);
+            continue;
+          }
           expect(step.ok, `${locale}/${waitMs}ms/${style}`).toBe(true);
           expect(step.hash, `${locale}/${waitMs}ms/${style}`).not.toBe(lastHash);
           lastHash = step.hash;

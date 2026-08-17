@@ -457,6 +457,12 @@ describe('AAB-386 SR/HR coordinated predicate chains', () => {
             fin.diagnostics as Record<string, unknown>,
             `${mode}-${style}`,
           );
+          if (locale === 'sr' && style === 'stronger' && fin.blocked) {
+            expect(fin.countedAsSuccess).toBe(false);
+            expect(fin.reason).toBe('style_no_safe_material_change');
+            expect(hashNorm(fin.text || '')).toBe(hashNorm(source));
+            continue;
+          }
           expect(fin.diagnostics?.styleValidationPassed).toBe(true);
           expect(hashNorm(fin.text || '')).not.toBe(hashNorm(source));
           const applied = applyAndCommitUsage({

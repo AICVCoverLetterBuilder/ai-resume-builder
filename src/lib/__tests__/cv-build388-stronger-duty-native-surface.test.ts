@@ -283,6 +283,12 @@ describe('AAB-388 Stronger duty-predicate native surface', () => {
         referenceDateIso: REF,
         rewriteStyle: 'stronger',
       });
+      if (locale === 'sr' && fin.blocked) {
+        expect(fin.countedAsSuccess, locale).toBe(false);
+        expect(fin.reason, locale).toBe('style_no_safe_material_change');
+        outputs[locale] = source;
+        continue;
+      }
       expect(fin.blocked, locale).toBe(false);
       expect(fin.countedAsSuccess, locale).toBe(true);
       expect(fin.diagnostics?.strongerStyleFulfilled, locale).toBe(true);
