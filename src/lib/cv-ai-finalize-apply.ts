@@ -14542,7 +14542,16 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
           isPresent,
         })
         : '';
-      const projected = japaneseDesignSource.trim()
+      // Serbian-authority warehouse facts have a dedicated Croatian projection
+      // that preserves the three source-owned predicate units. Do not let the
+      // generic source-preserving projector win first and then leave its
+      // duplicate/merged Croatian shell in `translated`; that shell is exactly
+      // what the predicate/unit ownership gate must reject. Routing the typed
+      // projection first keeps the generic gate strict while selecting the
+      // fact-preserving Croatian realization for any Serbian warehouse source.
+      const croatianWarehouseSource = locale === 'hr'
+        && sourceRequiresCroatianWarehouseFactCoverage(sourceForCoverage);
+      const projected = japaneseDesignSource.trim() || croatianWarehouseSource
         ? null
         : buildSourcePreservingExperienceBulletsWithProvenance(
           sourceForCoverage,

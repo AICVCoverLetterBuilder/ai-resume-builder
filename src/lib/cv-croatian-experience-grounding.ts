@@ -56,6 +56,15 @@ const UNSUPPORTED_HR_SOFT =
   /(?:točnost\s+zaprimljen|točnost\s+pristigl|točnost\s+pripadajuć|ažurira\s+skladišn|azurira\s+skladisn|skladišnu\s+evidenciju|skladisnu\s+evidenciju|uredn[ao]\s+(?:i\s+)?organiziran|organiziran[ao]\s+skladištenje|uredan\s+raspored|rasporedu\s+robe|organizacij[aeu]\s+robe|upravljanje\s+zalihama|kvalitet|sigurnost|usaglašenost|usaglasenost|efikasnost|univerzaln|\bproverava\b|\bsarađuje\b|\bsa\s+kolegama\b|\bpremeštanj)/iu;
 
 /**
+ * Serbian source cues are valid authority for the Croatian warehouse bridge.
+ * They must not be mistaken for the unsupported Croatian soft-shell wording
+ * above: the source-language surface is Serbian, while the fallback is built
+ * from the same three entry-owned warehouse facts in Croatian.
+ */
+const SERBIAN_WAREHOUSE_SOURCE_CUE =
+  /(?:\bproverava(?:[a-zčćšđž]+)?\b|\bpristigl(?:[a-zčćšđž]+)?\b|\bprateć(?:[a-zčćšđž]+)?\b|\bsarađuje\b|\bsa\s+kolegama\b|\bpremešt(?:[a-zčćšđž]+)?\b)/iu;
+
+/**
  * True when the authoritative source encodes Atlas warehouse material duties.
  * Soft Croatian inventory/accuracy/merged shells (build-293b stylistic sources)
  * are not Atlas hard-triad authority — those keep the locative/stylistic path.
@@ -65,7 +74,9 @@ export function sourceRequiresCroatianWarehouseFactCoverage(sourceDescription: s
   if (!sourceHasWarehouseDomainApplicability(sourceDescription || '')) return false;
   const text = sourceDescription || '';
   // Soft shells often still extract warehouse_* material keys; exclude by text.
-  if (UNSUPPORTED_HR_SOFT.test(text) || MERGED_GOODS_DOCS_SOFT_HR.test(text)) {
+  const isSerbianAuthority = SERBIAN_WAREHOUSE_SOURCE_CUE.test(text);
+  if ((UNSUPPORTED_HR_SOFT.test(text) && !isSerbianAuthority)
+    || MERGED_GOODS_DOCS_SOFT_HR.test(text)) {
     return false;
   }
   const keys = materialDutyKeysFromDescription(text);
