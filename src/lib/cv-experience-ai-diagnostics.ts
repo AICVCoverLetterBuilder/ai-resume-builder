@@ -3842,7 +3842,7 @@ export class ExperienceAiDiagnosticSession {
       diagnosticInvariantFailureCount: invariantFailures.length,
       diagnosticInvariantFailures: invariantFailures,
       preapplyDiagnosticInvariantCheckPassed:
-        preapplyInvariants.passed && canonicalDecisionPassed,
+        invariantsPassed,
       preapplyDiagnosticInvariantFailures: [
         ...preapplyInvariants.failures,
         ...canonicalDecisionFailures,
@@ -3861,7 +3861,7 @@ export class ExperienceAiDiagnosticSession {
       diagnosticInvariantFailureCount: invariantFailures.length,
       diagnosticInvariantFailures: invariantFailures,
       preapplyDiagnosticInvariantCheckPassed:
-        preapplyInvariants.passed && canonicalDecisionPassed,
+        invariantsPassed,
       preapplyDiagnosticInvariantFailures: [
         ...preapplyInvariants.failures,
         ...canonicalDecisionFailures,
@@ -3886,7 +3886,7 @@ export class ExperienceAiDiagnosticSession {
     });
     this.stage(
       'preapply_invariant_gate',
-      preapplyInvariants.passed && canonicalDecisionPassed ? 'ok' : 'fail',
+      invariantsPassed ? 'ok' : 'fail',
     );
     this.stage('preapply_completeness_gate', completeness.passed ? 'ok' : 'fail');
     this.stage('diagnostic_preapply_gate', passed ? 'ok' : 'fail');

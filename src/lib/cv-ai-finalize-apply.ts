@@ -9175,6 +9175,28 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       accepted: providerAccepted,
     }
     : null;
+
+  /**
+   * A routed provider phase is authoritative for provider-phase acceptance.  A
+   * later final candidate may be complete, but it must not rewrite a rejected
+   * or incomplete provider phase as providerAccepted=true.  In particular,
+   * covered=2/required=3 with an empty index list is an incomplete phase and
+   * must flow through the existing recovery/fallback path.
+   */
+  const providerPhaseHasCompleteCoverage = (): boolean => {
+    if (!providerPhaseDiagnostics?.candidatePresent) return true;
+    const required = Number(providerPhaseDiagnostics.requiredFactCount ?? sourceFactCount);
+    const covered = Number(providerPhaseDiagnostics.coveredFactCount ?? 0);
+    const indexes = Array.isArray(providerPhaseDiagnostics.uncoveredSourceIndexes)
+      ? providerPhaseDiagnostics.uncoveredSourceIndexes
+      : [];
+    const expectedMissing = Math.max(0, required - covered);
+    const mappedMissing = canonicalSourceFactIdsForIndexes(sourceForCoverage, indexes);
+    return providerPhaseDiagnostics.accepted === true
+      && covered === required
+      && expectedMissing === 0
+      && mappedMissing.length === 0;
+  };
   let fallbackBulletCount = 0;
   let fallbackApplied = false;
   let clientDeterministicFallbackAttempted = false;
@@ -11511,7 +11533,42 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         );
       }
     }
+    if (stage === 'provider' && providerPhaseDiagnostics?.candidatePresent
+      && !providerPhaseHasCompleteCoverage()) {
+      // Complete the normal provider validation first so predicate/locale/
+      // tense evidence remains truthful, then reject the provider phase on its
+      // authoritative coverage snapshot. Recovery/fallback is the only path
+      // allowed to select a later candidate after an incomplete provider.
+      providerAccepted = false;
+      providerRequiredFactCount = Math.max(
+        0,
+        Number(providerPhaseDiagnostics.requiredFactCount ?? sourceFactCount),
+      );
+      providerCoveredFactCount = Math.max(
+        0,
+        Math.min(
+          providerRequiredFactCount,
+          Number(providerPhaseDiagnostics.coveredFactCount ?? 0),
+        ),
+      );
+      providerUncoveredFactIdentityHashes = canonicalSourceFactIdsForIndexes(
+        sourceForCoverage,
+        Array.isArray(providerPhaseDiagnostics.uncoveredSourceIndexes)
+          ? providerPhaseDiagnostics.uncoveredSourceIndexes
+          : [],
+      );
+      lastRejectStage = `${stage}:provider_phase_coverage`;
+      lastRejectReason = 'provider_phase_coverage_incomplete';
+      providerRejectionStage = lastRejectStage;
+      providerRejectionReason = lastRejectReason;
+      if (providerUncoveredFactIdentityHashes.length === 0
+        && providerCoveredFactCount < providerRequiredFactCount) {
+        providerUncoveredFactIdentityHashes = canonicalProviderUncoveredFactIdentityHashes();
+      }
+      return null;
+    }
     void EXPERIENCE_DIAGNOSTICS_FINAL_CANDIDATE_305_REVISION;
+    const providerUncoveredFactIds = canonicalProviderUncoveredFactIdentityHashes();
     return {
       blocked: false,
       text: candidate,
@@ -11526,9 +11583,11 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerCoveredFactCount,
         providerRequiredFactCount,
         providerCoverageCount: providerCoveredFactCount,
-        providerUncoveredFactCount: canonicalProviderUncoveredFactIdentityHashes().length,
-        providerUncoveredFactIdentityHashes: canonicalProviderUncoveredFactIdentityHashes(),
-        providerAccepted: isClientFallback ? false : true,
+        providerUncoveredFactCount: providerUncoveredFactIds.length,
+        providerUncoveredFactIdentityHashes: [...providerUncoveredFactIds],
+        providerAccepted: isClientFallback
+          ? false
+          : (providerPhaseDiagnostics?.candidatePresent ? providerAccepted : true),
         providerSourcePredicateIdentityCount: isClientFallback
           ? providerSourcePredicateIdentityCount || undefined
           : (providerSourcePredicateIdentityCount || sourcePredicateIdentityCount || undefined),
@@ -12480,12 +12539,58 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         successVisFields.finalDecisionKind = 'invalid_candidate_rejected';
       }
     }
+    if (routedPrimaryProviderPhase) {
+      providerRequiredFactCount = routedPrimaryProviderPhase.requiredFactCount;
+      providerCoveredFactCount = routedPrimaryProviderPhase.coveredFactCount;
+      providerUncoveredFactIdentityHashes = [
+        ...routedPrimaryProviderPhase.uncoveredFactIdentityHashes,
+      ];
+      if (
+        providerCoveredFactCount < providerRequiredFactCount
+        && providerUncoveredFactIdentityHashes.length
+          !== providerRequiredFactCount - providerCoveredFactCount
+      ) {
+        providerUncoveredFactIdentityHashes = canonicalProviderUncoveredFactIdentityHashes();
+      }
+    }
+    const finalProviderUncoveredFactIds = [...canonicalProviderUncoveredFactIdentityHashes()];
+    const routedProviderAccepted = routedPrimaryProviderPhase
+      ? (providerPhaseHasCompleteCoverage() && routedPrimaryProviderPhase.accepted === true)
+      : null;
+    const finalMeaningfulChangeDetected = Boolean(
+      result.countedAsSuccess
+      && (
+        perspectiveMeta.meaningfulChangeDetected === true
+        || (
+          Array.isArray(successVisFields.materialImprovementKinds)
+          && (successVisFields.materialImprovementKinds as string[]).includes('wrong_locale_fixed')
+        )
+      )
+    );
+    const inferredProviderAccepted = Boolean(
+      result.countedAsSuccess
+      && result.origin !== 'deterministic_fallback'
+      && result.diagnostics?.clientDeterministicFallbackApplied !== true
+      && finalCandidateSource !== 'deterministic_fallback'
+      && finalCandidateSource !== 'server_fallback'
+      && finalCandidateSource !== 'unsupported_claim_repair'
+      && !unsupportedClaimRepairApplied
+      && !(
+        (providerUnsupportedClaimCount ?? 0) > 0
+        && (
+          noOpRepairApplied
+          || finalCandidateSource === 'noop_repair'
+          || result.origin === 'ai_repaired'
+        )
+      ),
+    );
     return {
       ...result,
       diagnostics: {
         ...result.diagnostics,
         ...perspectiveMeta,
         ...successVisFields,
+        meaningfulChangeDetected: finalMeaningfulChangeDetected,
         russianSourceOwnedProjectionAttempted: russianProjectionAttempted,
         russianSourceOwnedSemanticFactCount: russianProjectionValidation?.required.length ?? null,
         russianSourceOwnedProjectionHash: russianProjectionHash,
@@ -12556,24 +12661,62 @@ function finalizeBullets(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         providerPredicateValidationApplicable:
           providerSourceUnitPredicateCoveragePassed != null
           || providerCandidatePredicateIdentityCount > 0,
-        providerUncoveredFactIdentityHashes: canonicalProviderUncoveredFactIdentityHashes(),
-        providerAccepted: result.diagnostics?.providerAccepted === false
-          ? false
-          : (
-            result.countedAsSuccess
-            && !(result.origin === 'deterministic_fallback'
-              || result.diagnostics?.clientDeterministicFallbackApplied
-              || finalCandidateSource === 'deterministic_fallback'
-              || finalCandidateSource === 'server_fallback'
-              || finalCandidateSource === 'unsupported_claim_repair'
-              || unsupportedClaimRepairApplied
-              || (
-                (providerUnsupportedClaimCount ?? 0) > 0
-                && (noOpRepairApplied
-                  || finalCandidateSource === 'noop_repair'
-                  || result.origin === 'ai_repaired')
-              ))
-          ),
+        // Preserve the immutable primary-provider phase snapshot.  The
+        // selected fallback may cover every fact, but it must never rewrite
+        // the provider phase's required/covered cardinality.
+        providerRequiredFactCount: routedPrimaryProviderPhase
+          ? routedPrimaryProviderPhase.requiredFactCount
+          : providerRequiredFactCount,
+        providerCoveredFactCount: routedPrimaryProviderPhase
+          ? routedPrimaryProviderPhase.coveredFactCount
+          : providerCoveredFactCount,
+        providerCoverageCount: routedPrimaryProviderPhase
+          ? routedPrimaryProviderPhase.coveredFactCount
+          : providerCoveredFactCount,
+        providerSourcePredicateIdentityCount: routedPrimaryProviderPhase
+          ? Math.max(
+            providerSourcePredicateIdentityCount,
+            Number(result.diagnostics?.providerSourcePredicateIdentityCount || 0),
+          )
+          : (result.diagnostics?.providerSourcePredicateIdentityCount
+            ?? providerSourcePredicateIdentityCount
+            ?? undefined),
+        providerCandidatePredicateIdentityCount: routedPrimaryProviderPhase
+          ? Math.max(
+            providerCandidatePredicateIdentityCount,
+            Number(result.diagnostics?.providerCandidatePredicateIdentityCount || 0),
+          )
+          : (result.diagnostics?.providerCandidatePredicateIdentityCount
+            ?? providerCandidatePredicateIdentityCount
+            ?? undefined),
+        providerCandidateAddedPredicateCount: routedPrimaryProviderPhase
+          ? (routedPrimaryProviderPhase.addedPredicateCount
+            ?? Math.max(
+              providerCandidateAddedPredicateCount,
+              Number(result.diagnostics?.providerCandidateAddedPredicateCount || 0),
+            ))
+          : (result.diagnostics?.providerCandidateAddedPredicateCount
+            ?? providerCandidateAddedPredicateCount
+            ?? undefined),
+        providerCandidateAddedPredicateIdentityHashes: routedPrimaryProviderPhase
+          ? [...new Set([
+            ...providerCandidateAddedPredicateIdentityHashes,
+            ...(result.diagnostics?.providerCandidateAddedPredicateIdentityHashes || []),
+          ])]
+          : (result.diagnostics?.providerCandidateAddedPredicateIdentityHashes
+            ?? [...providerCandidateAddedPredicateIdentityHashes]),
+        providerSourceUnitPredicateCoveragePassed: routedPrimaryProviderPhase
+          ? providerSourceUnitPredicateCoveragePassed
+          : (result.diagnostics?.providerSourceUnitPredicateCoveragePassed
+            ?? providerSourceUnitPredicateCoveragePassed
+            ?? undefined),
+        providerUncoveredFactCount: finalProviderUncoveredFactIds.length,
+        providerUncoveredFactIdentityHashes: [...finalProviderUncoveredFactIds],
+        providerAccepted: routedProviderAccepted != null
+          ? routedProviderAccepted
+          : (result.diagnostics?.providerAccepted === false
+            ? false
+            : inferredProviderAccepted),
         unsupportedClaimRepairAttempted,
         unsupportedClaimRepairKind,
         unsupportedClaimRepairValidationPassed,
