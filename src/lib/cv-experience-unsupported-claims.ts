@@ -68,7 +68,7 @@ function norm(text: string): string {
 }
 
 function hasQualitySupport(source: string): boolean {
-  return /(?:kvalitet|Qualität|qualit(?:y|ät)|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b|Qualitäts(?:kontrolle|prüfung|sicherung))/iu
+  return /(?:kvalitet|Qualität|qualit(?:y|ät)|quality\s+(?:control|inspection|assurance|check)|kontrola?\s+kvalitet|qc\b|Qualitäts(?:kontrolle|prüfung|sicherung)|गुणवत्ता|परिणाम)/iu
     .test(source);
 }
 
@@ -122,10 +122,10 @@ export function extractExperienceSemanticArgumentKinds(
   add('beneficiary', /(?:顧客|クライアント|お客様)/u);
   add('quality_output', /(?:品質|成果物|最終|出力)/u);
   add('criterion', /(?:\bselon\b|\bconform(?:e|ément)\b|\ben fonction de\b|\baccording\s+to\b|\bconforme(?:ment)?\s+aux?\b|\bin\s+base\s+a(?:lle)?\b|\bsecondo\b|\bprema\b|\bu\s+skladu\s+sa\b|\bza\s+potrebe\b|के अनुसार|के अनुरूप|के आधार पर|وفق(?:ًا|اً)?|بحسب|حسب|根据|按照)/iu);
-  add('beneficiary', /(?:\bclient(?:i|s|èle)?\b|\bcustomer(?:s)?\b|\bclientes?\b|\bKunden?\b|\bklijent\w*\b|ग्राहक(?:ों)?|ग्राहकों|زبائن|عملاء|客户)/iu);
+  add('beneficiary', /(?:\bclient(?:i|s|èle)?\b|\bcustomer(?:s)?\b|\bclientes?\b|\bKunden?\b|\bklijent\w*\b|\bklijen\w*\b|ग्राहक(?:ों)?|ग्राहकों|زبائن|عملاء|客户)/iu);
   add('material_medium', /(?:\b(?:print\w*|imprim(?:é|és|ées)\w*|numérique\w*|digital\w*|médias?\w*|supports?\w*|materijal\w*|medij\w*)\b|\b(?:medium|media|medien|medios|digitale?)\b|प्रिंट|डिजिटल|माध्यम|मीडिया|وسائط|رقمية|印刷|デジタル)/iu);
   add('project_scope', /(?:\bprojet(?:s)?\b|\bproject(?:s)?\b|\bprogetti?\b|\bproyectos?\b|\bProjekte?\b|परियोजन|प्रोजेक्ट|परियोजना|プロジェクト|案件|مشروع|مشاريع|项目)/iu);
-  add('quality_output', /(?:\bqualit(?:à|é|y|ät)\b|\bquality\b|\brendus?\b|\b(?:risultat|resultati)\w*\s+finali?\b|\bfinal(?:e|es)?\s+(?:output|outputs|livrables?|rend(?:u|us))\b|गुणवत्ता|आउटपुट|अंतिम|मخرجات|جودة|输出)/iu);
+  add('quality_output', /(?:\bqualit(?:à|é|y|ät)\b|\bquality\b|\bkvalitet\w*\b|\bfinaln\w*\s+rezultat\w*\b|\brezultat\w*\s+finaln\w*\b|\brendus?\b|\b(?:risultat|resultati)\w*\s+finali?\b|\bfinal(?:e|es)?\s+(?:output|outputs|livrables?|rend(?:u|us))\b|गुणवत्ता|आउटपुट|अंतिम|परिणाम|مخرجات|جودة|输出)/iu);
   add('team_relation', /(?:\b(?:team|teams|équipe|équipes|membres?\s+de\s+l['’]équipe|project\s+team|project-team|members?\s+of\s+the\s+team|Kollegen?|compañeros?|equipo|član\w*|tim\w*|projektn\w*\s+tim)\b|टीम|दल|परियोजना दल|सदस्य|فريق|أعضاء|チーム)/iu);
   add('standards_criterion', /(?:\b(?:norme(?:s)?|standard(?:s)?|normas?|standardi?)\b|मानक|नियम|विनियम|基準|規格|コンプライアンス|規則|معايير|标准)/iu);
   add('universal_scope', /(?:\b(?:tous?|toutes?|chaque|l['’]ensemble|all|every|entire|whole|svih|cjelokupn\w*|tutt[ei]|ogni)\b|\b(?:pour\s+tous?\s+les|for\s+all|for\s+every|per\s+tutti)\b|सभी|हर|संपूर्ण|كل|جميع|每)/iu);

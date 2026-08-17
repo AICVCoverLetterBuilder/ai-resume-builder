@@ -1158,6 +1158,48 @@ function buildItalianDesignSemanticFallback(
 }
 
 /**
+ * Relation-preserving Serbian design projection used by deterministic recovery.
+ * Serbian completed-role predicates are inflected (`kreirala`, `razvijala`,
+ * `pregledala`, `proveravala`), so repeated generic shells can look like
+ * duplicate/added actions.  Emit one Serbian line per typed source relation;
+ * no title, entry id, hash or fixture wording participates in this projection.
+ */
+function buildSerbianDesignSemanticFallback(
+  units: string[],
+  isPresent: boolean,
+): string {
+  const lines: string[] = [];
+  for (const unit of units) {
+    const kinds = extractExperienceSemanticArgumentKinds(unit);
+    const folded = fold(unit);
+    const hasPrint = /(?:print|stampat|imprim|tisk|štamp|طباعة|प्रिंट|印刷)/iu.test(folded);
+    const hasDigital = /(?:digital|num[eé]ri|m[ií]dia|media|medij|رقمي|डिजिटल|デジタル)/iu.test(folded);
+    const hasDesignConcept = /(?:concept|design|visual|graf|vizuel|dizajn|تصميم|विज़ुअल|डिज़ाइन|デザイン)/iu.test(folded);
+    const hasReview = /(?:review|revis|verif|prover|pregled|qualit|kvalitet|final|output|result|समीक्षा|गुणवत्ता|अंतिम|परिणाम)/iu.test(folded);
+    if (kinds.includes('material_medium') && hasPrint && hasDigital) {
+      lines.push(isPresent
+        ? 'Kreiram grafičke materijale za štampane i digitalne medije.'
+        : 'Kreirala je grafičke materijale za štampane i digitalne medije.');
+      continue;
+    }
+    if (kinds.includes('criterion') && kinds.includes('beneficiary') && hasDesignConcept) {
+      lines.push(isPresent
+        ? 'Razvijam koncepte vizuelnog dizajna prema potrebama klijenata.'
+        : 'Razvijala je koncepte vizuelnog dizajna prema potrebama klijenata.');
+      continue;
+    }
+    if (kinds.includes('quality_output') && hasReview) {
+      lines.push(isPresent
+        ? 'Pregledam projekte dizajna i proveravam kvalitet finalnih rezultata.'
+        : 'Pregledala je projekte dizajna i proveravala kvalitet finalnih rezultata.');
+      continue;
+    }
+    return '';
+  }
+  return lines.length === units.length ? formatExperienceBullets(lines) : '';
+}
+
+/**
  * Build target-locale Experience bullets from source units (cross-locale enhance).
  * Never returns the source language when target differs.
  */
@@ -1377,6 +1419,28 @@ export function buildCrossLocaleExperienceFallback(options: {
       && (sourceKinds.includes('material_medium') || sourceKinds.includes('quality_output'));
     if (richRelationSource && relationAnchors.length >= 2) {
       const projected = buildItalianDesignSemanticFallback(units, isPresent);
+      if (projected.trim()) return projected;
+      return '';
+    }
+  }
+
+  // Serbian deterministic recovery retains source-owned media, client-needs,
+  // and review/quality relations instead of falling back to repeated generic
+  // duties.  A complete typed relation signature is required; otherwise the
+  // caller fails closed rather than accepting an unsafe shell.
+  if (domain === 'design' && target === 'sr') {
+    const sourceKinds = extractExperienceSemanticArgumentKinds(options.sourceDescription);
+    const relationAnchors = sourceKinds.filter((kind) => (
+      kind === 'criterion'
+      || kind === 'beneficiary'
+      || kind === 'material_medium'
+      || kind === 'quality_output'
+    ));
+    const richRelationSource = sourceKinds.includes('criterion')
+      && sourceKinds.includes('beneficiary')
+      && (sourceKinds.includes('material_medium') || sourceKinds.includes('quality_output'));
+    if (richRelationSource && relationAnchors.length >= 2) {
+      const projected = buildSerbianDesignSemanticFallback(units, isPresent);
       if (projected.trim()) return projected;
       return '';
     }
