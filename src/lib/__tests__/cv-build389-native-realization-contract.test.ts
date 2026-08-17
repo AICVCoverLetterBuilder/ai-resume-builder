@@ -171,6 +171,11 @@ describe('AAB-389 native realization contract', () => {
             action: step.action,
             existingSummary: step.existing,
           });
+          if (locale === 'sr' && step.action === 'summary_shorter' && fin.blocked) {
+            expect(fin.reason, label).toBe('style_no_safe_material_change');
+            expect(fin.countedAsSuccess, label).toBe(false);
+            continue;
+          }
           expect(fin.blocked, label).toBe(false);
           const text = fin.text || '';
           expect(text.length, label).toBeGreaterThan(20);

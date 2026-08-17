@@ -140,7 +140,7 @@ describe('AAB-390 cross-locale ship matrices', () => {
             ? seed
             : await finalize({ source, target, gender: gender.value, action, summary: existing });
           const label = `${source}->${target}/${gender.key}/${action}`;
-          if (target === 'sr' && action === 'stronger' && fin.blocked) {
+          if (target === 'sr' && (action === 'stronger' || action === 'shorter') && fin.blocked) {
             expect(fin.countedAsSuccess, label).toBe(false);
             expect(fin.reason, label).toBe('style_no_safe_material_change');
             expect(aab389Hash(fin.text || ''), label).toBe(aab389Hash(existing || ''));
@@ -191,7 +191,7 @@ describe('AAB-390 cross-locale ship matrices', () => {
               ? seed
               : await finalize({ source, target, gender: gender.value, action, summary: existing });
             const label = `${source}->${target}/${gender.key}/${action}`;
-            if (target === 'sr' && action === 'stronger' && fin.blocked) {
+            if (target === 'sr' && (action === 'stronger' || action === 'shorter') && fin.blocked) {
               expect(fin.countedAsSuccess, label).toBe(false);
             expect(fin.reason, label).toBe('style_no_safe_material_change');
             expect(aab389Hash(fin.text || ''), label).toBe(aab389Hash(existing || ''));

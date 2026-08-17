@@ -60,6 +60,11 @@ describe('AAB-389 permanent gender/person/tense', () => {
             action,
             existingSummary: action === 'generate_empty' ? '' : source,
           });
+          if (locale === 'sr' && action === 'shorter' && fin.blocked) {
+            expect(fin.reason, label).toBe('style_no_safe_material_change');
+            expect(fin.countedAsSuccess, label).toBe(false);
+            continue;
+          }
           const text = aab389AssertSummarySuccess(fin, locale, label);
           expect(text, label).not.toMatch(exp.banned);
           if (gender.key === 'female') {

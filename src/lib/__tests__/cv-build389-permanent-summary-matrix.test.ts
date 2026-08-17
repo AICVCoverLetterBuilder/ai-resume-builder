@@ -62,6 +62,13 @@ describe('AAB-389 permanent Summary matrix (180)', () => {
             action,
             existingSummary: existing,
           });
+          if (locale === 'sr' && action === 'shorter' && fin.blocked) {
+            expect(fin.reason, label).toBe('style_no_safe_material_change');
+            expect(fin.countedAsSuccess, label).toBe(false);
+            expect(getProAiUsageCount(), label).toBe(usage);
+            executed += 1;
+            continue;
+          }
           const text = aab389AssertSummarySuccess(fin, locale, label);
 
           // Style fulfillment when a rewrite was requested.

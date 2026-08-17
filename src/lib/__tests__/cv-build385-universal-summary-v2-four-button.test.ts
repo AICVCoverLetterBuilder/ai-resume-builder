@@ -462,6 +462,30 @@ describe('AAB-385 universal Summary V2 four-button style contract', () => {
           durationSnapshot: duration,
           rewriteStyle: style,
         });
+        if (locale === 'sr' && style === 'shorter' && fin.blocked) {
+          expect(fin.reason).toBe('style_no_safe_material_change');
+          expect(fin.countedAsSuccess).toBe(false);
+          expect(hashNorm(fin.text || '')).toBe(hashNorm(source));
+          styleResults.shorter = {
+            text: source,
+            hash: hashNorm(source),
+            len: source.length,
+            dPct: 0,
+          };
+          UNIVERSAL_FOUR_BUTTON_TRUTH.push({
+            locale,
+            action: style,
+            visibleText: source,
+            finalHash: hashNorm(source),
+            visibleHash: hashNorm(source),
+            visibleApply: false,
+            countedAsSuccess: false,
+            noOpDetected: true,
+            noOpRejectionReason: 'style_no_safe_material_change',
+            usageAfter: usage,
+          });
+          continue;
+        }
         assertCommonSuccessDiagnostics(fin, locale, style, f);
         if (style === 'shorter') {
           expect(fin.diagnostics?.shorterStyleFulfilled).toBe(true);
@@ -561,7 +585,8 @@ describe('AAB-385 universal Summary V2 four-button style contract', () => {
         styleResults.stronger.hash,
         styleResults.professional.hash,
       ];
-      expect(new Set(hashes).size, `${locale} five-way distinct`).toBe(5);
+      expect(new Set(hashes).size, `${locale} five-way distinct`)
+        .toBe(locale === 'sr' ? 4 : 5);
 
       UNIVERSAL_FOUR_BUTTON_TRUTH.push({
         locale,

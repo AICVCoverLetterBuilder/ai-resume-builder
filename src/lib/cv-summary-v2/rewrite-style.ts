@@ -343,6 +343,35 @@ export function listSemanticStyleOperations(options: {
 }
 
 /**
+ * Shorter must not bill a candidate whose only delta is neutral presentation
+ * surface: relative-clause bridges, repeated first-person auxiliaries,
+ * equivalent role transitions, punctuation, or whitespace.  Compare the
+ * semantic letter/number stream after removing only those locale-owned
+ * presentation units; any remaining lexical delta is still eligible for the
+ * normal materiality gate below.
+ */
+function normalizeShorterNeutralSurface(text: string, locale: Locale): string {
+  let normalized = normalizeComparable(text);
+  const neutralPatterns: Partial<Record<Locale, RegExp[]>> = {
+    sr: [/,?\s*(?:gde|gdje)(?:\s+sam)?\s+/giu, /\b(?:prethodno|ranije)\b/giu],
+  };
+  for (const pattern of neutralPatterns[locale] || []) {
+    normalized = normalized.replace(pattern, ' ');
+  }
+  return normalized.replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function isShorterNeutralOnlyTransformation(
+  source: string,
+  candidate: string,
+  locale: Locale,
+): boolean {
+  if (!source || !candidate || hashNorm(source) === hashNorm(candidate)) return false;
+  return normalizeShorterNeutralSurface(source, locale)
+    === normalizeShorterNeutralSurface(candidate, locale);
+}
+
+/**
  * True when styled text differs only by removable style adverbs/ornaments.
  * Verb/framing changes (desempeño/ejerzo/tätig/employed) keep letter-core different.
  */
@@ -2283,18 +2312,26 @@ export function evaluateSummaryV2StyleFulfillment(options: {
       || o === 'duration_hedge_compress'
       || o === 'soft_filler_strip'
     ));
+    const neutralOnlyShorter = isShorterNeutralOnlyTransformation(
+      source,
+      candidate,
+      options.locale,
+    );
     // Length threshold is authoritative; unit/clause reduction is supporting evidence
     // (some locales replace em-dashes with and-joins without lowering token count).
     const enough = sourceLen > 0
       && lengthDeltaPercent <= minPercent
       && materiallyDifferent
       && hasCompressOp
+      && !neutralOnlyShorter
       && (unitDelta < 0 || clauseDelta < 0 || lengthDeltaPercent <= minPercent);
     shorterStyleFulfilled = enough && !whitespaceOnly;
     if (!shorterStyleFulfilled) {
       styleRejectionReasons.push(
         !hasCompressOp
           ? 'shorter_no_semantic_compression'
+          : neutralOnlyShorter
+            ? 'shorter_neutral_only_compression'
           : (enough ? 'shorter_whitespace_only' : 'shorter_insufficient_compression'),
       );
     }
@@ -2531,6 +2568,7 @@ export function transformSummaryV2ForRewriteStyle(options: {
     && fulfillment.styleRejectionReasons.every((reason) => (
       reason === 'shorter_insufficient_compression'
       || reason === 'shorter_no_semantic_compression'
+      || reason === 'shorter_neutral_only_compression'
       || reason === 'shorter_whitespace_only'
     ));
   const strongerNoMaterialImprovement = options.style === 'stronger'
