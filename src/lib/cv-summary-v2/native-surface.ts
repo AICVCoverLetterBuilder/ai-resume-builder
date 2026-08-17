@@ -1016,6 +1016,21 @@ function detectLocaleVerbMorphologyDefect(text: string, locale: Locale): string 
       return 'ru_person_agreement';
     }
   }
+  if (locale === 'sr' || locale === 'hr') {
+    // A first-person South-Slavic shell already supplies `sam`; a retained
+    // third-person auxiliary after a feminine past participle is malformed
+    // (`gde sam kreirala je`).
+    if (/(?:gd(?:e|je))\s+sam\s+\p{L}+(?:ala|ela|ila)\s+je(?=\s|[,.!?]|$)/iu.test(text)) {
+      return 'sr_duplicate_past_auxiliary';
+    }
+    // A loose `-e` present-verb heuristic can mistake noun-like surfaces such
+    // as `rasporede` for a predicate and mutate them into `rasporedem` or
+    // `rasporedela`. Reject that morphology rather than applying a visibly
+    // non-native duty; the rule is independent of role/employer vocabulary.
+    if (/(?:^|[^\p{L}])\p{L}{5,}red(?:em|ela)(?=[^\p{L}]|$)/iu.test(text)) {
+      return 'sr_malformed_noun_predicate_mutation';
+    }
+  }
   return null;
 }
 
@@ -1130,9 +1145,20 @@ export function evaluateNativeRealizationContract(options: {
   const hindiFirstPersonAgreementPassed = hindiSentenceAgreementRecords.every(
     (record) => record.grammarPassed,
   );
+  const southSlavicPredicateChain = locale === 'sr' || locale === 'hr'
+    ? evaluateSouthSlavicSummaryPredicateChains({
+      text,
+      locale,
+    })
+    : null;
   const firstPersonPredicateChainPassed = perspective === 'cv_third_person'
-    || (!detectThirdPersonDutyClause(text, locale) && hindiFirstPersonAgreementPassed);
+    || (!detectThirdPersonDutyClause(text, locale)
+      && hindiFirstPersonAgreementPassed
+      && (southSlavicPredicateChain?.predicateChainValidationPassed ?? true));
   if (!firstPersonPredicateChainPassed) reasons.push('third_person_duty_in_first_person_frame');
+  if (southSlavicPredicateChain && !southSlavicPredicateChain.predicateChainValidationPassed) {
+    reasons.push(...southSlavicPredicateChain.predicateChainRejectionReasons);
+  }
   for (const record of hindiSentenceAgreementRecords) {
     for (const reason of record.grammarReasons) {
       reasons.push(`locale_verb_morphology:${reason}`);

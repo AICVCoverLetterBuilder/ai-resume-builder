@@ -322,8 +322,16 @@ export function realizeSouthSlavicPredicateChain(options: {
 
   for (const seg of segments) {
     const lead = !seg.conj || /^;\s*$/u.test(seg.conj);
+    // Source bullets often use a third-person perfective surface such as
+    // `Kreirala je ...`.  The Summary shell supplies the first-person
+    // auxiliary (`gde sam ...`), so keeping this immediate `je` would create
+    // `sam kreirala je`.  Remove only that auxiliary; all object/modifier
+    // material after it remains untouched.
+    const normalizedRest = tense === 'past' && isPastParticiple(seg.verb)
+      ? seg.rest.replace(/^\s+je(?=\s|$)/iu, '')
+      : seg.rest;
     if (!seg.verb || !isSouthSlavicFiniteVerbToken(seg.verb, { allowLeadBareEnding: lead })) {
-      realized.push(`${seg.conj}${seg.negation}${seg.verb}${seg.rest}`);
+      realized.push(`${seg.conj}${seg.negation}${seg.verb}${normalizedRest}`);
       continue;
     }
     let nextVerb: string | null = null;
@@ -336,7 +344,7 @@ export function realizeSouthSlavicPredicateChain(options: {
       untransformed += 1;
       reasons.push('unsafe_predicate_transform');
       // Keep original — mixed-person gate below will reject if others transformed.
-      realized.push(`${seg.conj}${seg.negation}${seg.verb.toLocaleLowerCase()}${seg.rest}`);
+      realized.push(`${seg.conj}${seg.negation}${seg.verb.toLocaleLowerCase()}${normalizedRest}`);
       continue;
     }
     if (nextVerb.toLocaleLowerCase() !== seg.verb.toLocaleLowerCase()
@@ -347,7 +355,7 @@ export function realizeSouthSlavicPredicateChain(options: {
       untransformed += 1;
     }
     realized.push(
-      `${seg.conj}${seg.negation}${nextVerb}${seg.rest}`,
+      `${seg.conj}${seg.negation}${nextVerb}${normalizedRest}`,
     );
   }
 
@@ -388,6 +396,8 @@ export function analyzeSouthSlavicPredicateChainText(options: {
   untransformedFinitePredicateCount?: number;
   extraReasons?: string[];
   sourceHash?: string;
+  /** Summary `gde/gdje` bodies must realize first-person predicates. */
+  expectFirstPerson?: boolean;
 }): SouthSlavicPredicateChainDiagnostics {
   const finalText = (options.finalText || '').replace(/\s+/g, ' ').trim();
   const sourceText = (options.sourceText || '').replace(/\s+/g, ' ').trim();
@@ -413,7 +423,8 @@ export function analyzeSouthSlavicPredicateChainText(options: {
     else if (isPresent3sg(s.verb, { allowLeadBareEnding: lead })) present3 += 1;
   }
 
-  const mixedPersonPredicateDetected = present1 > 0 && present3 > 0;
+  const firstPersonShellMismatch = Boolean(options.expectFirstPerson && present3 > 0 && present1 === 0);
+  const mixedPersonPredicateDetected = (present1 > 0 && present3 > 0) || firstPersonShellMismatch;
   const mixedTensePredicateDetected = (
     (tense === 'present' && past > 0 && present1 + present3 > 0)
     || (tense === 'past' && present3 > 0)
@@ -439,6 +450,14 @@ export function analyzeSouthSlavicPredicateChainText(options: {
     }
   }
 
+  if (firstPersonShellMismatch) {
+    reasons.push('mixed_person_predicate_chain');
+  }
+  if (options.expectFirstPerson
+    && /\b\p{L}+(?:ala|ela|ila)\s+je(?=\s|[,.!?]|$)/iu.test(finalText)) {
+    reasons.push('duplicate_past_auxiliary');
+  }
+
   // English -ed glued onto SC stems (prijemed, primitaked, evidentiraoed, …).
   // Do not flag ordinary English past participles (related/created/prepared) that can
   // appear when live EN duties are temporarily embedded under an SR/HR shell.
@@ -450,6 +469,7 @@ export function analyzeSouthSlavicPredicateChainText(options: {
     && !mixedTensePredicateDetected
     && untransformedFinitePredicateCount === 0
     && !reasons.includes('english_morphology_leakage')
+    && !reasons.includes('duplicate_past_auxiliary')
     && (
       coordinatedPredicateCount <= 1
       || transformedCoordinatedPredicateCount === coordinatedPredicateCount
@@ -493,6 +513,7 @@ export function evaluateSouthSlavicSummaryPredicateChains(options: {
       sourceText: body,
       finalText: body,
       employmentState: completed ? 'completed' : 'present',
+      expectFirstPerson: true,
     }));
   }
 
@@ -518,6 +539,7 @@ export function evaluateSouthSlavicSummaryPredicateChains(options: {
         sourceText: tail,
         finalText: tail,
         employmentState: completed ? 'completed' : 'present',
+        expectFirstPerson: true,
       }));
     }
   }
