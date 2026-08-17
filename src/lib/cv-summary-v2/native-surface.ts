@@ -814,7 +814,7 @@ const LOCALE_FINITE_CUE_RE: Record<string, RegExp> = {
   'pt-BR': /(?:^|[^\p{L}])(?:tenho|disponho|trabalho|trabalhei|atuo|atuei|exerço|exerci|sou)(?=[^\p{L}]|$)/iu,
   ru: /(?:у\s+меня|обладаю|имею|работа(?:ю|л|ла)|занима(?:ю|л|ла|лась))/iu,
   sr: /(?:^|[^\p{L}])(?:imam|raspolažem|radim|radio|radila|obavljam|obavljao|obavljala)(?=[^\p{L}]|$)/iu,
-  hr: /(?:^|[^\p{L}])(?:imam|raspolažem|radim|radio|radila|obavljam|obavljao|obavljala)(?=[^\p{L}]|$)/iu,
+  hr: /(?:^|[^\p{L}])(?:imam|raspolažem|radim|radio|radila|djelovao|djelovala|obavljam|obavljao|obavljala)(?=[^\p{L}]|$)/iu,
   ar: /(?:أمتلك|لدي|لديّ|أعمل|عملت|أشغل|شغلت)/u,
   hi: /(?:मेरे\s+पास|हूँ|हूं|है|था|थी|करता|करती)/u,
   ja: /(?:あります|います|です|ます|ました|でした)/u,
@@ -1042,6 +1042,19 @@ function detectRoleCaseDefect(text: string, locale: Locale): boolean {
 
 /** Coordination that is ungrammatical or mechanical in the target language. */
 function detectCoordinationDefect(text: string, locale: Locale): string | null {
+  if (locale === 'hr') {
+    // Croatian Professional must introduce arbitrary nominative role titles
+    // with the first-person `radim/radio/radila kao` frame.  The former
+    // `obavljam ... poslove kao` shell is unidiomatic when used as a role
+    // introduction; scope this guard to the explicit current/prior opener so
+    // ordinary duty prose containing `obavljati poslove` remains valid.
+    if (
+      /\b(?:trenutno|trenutačno)\s+obavljam\s+poslove\s+kao\b/iu.test(text)
+      || /\b(?:prethodno|ranije|prije)\s+sam\s+obavlja(?:la|o)\s+poslove\s+kao\b/iu.test(text)
+    ) {
+      return 'hr_awkward_professional_role_intro';
+    }
+  }
   if (locale === 'it') {
     // `nonché` is valid for nominal coordination (for example,
     // "materiali nonché strumenti"), but it is a poor bridge between two

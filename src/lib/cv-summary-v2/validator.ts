@@ -448,6 +448,13 @@ export function validateSummaryV2AgainstManifest(
   }
   else if (!hindiFirstPersonAgreementPassed) reason = 'hindi_first_person_agreement_invalid';
   else if (!perspectiveValidationPassed) reason = 'mixed_perspective';
+  else if (
+    manifest.locale === 'hr'
+    && !nativeContract.nativeCoordinationValidationPassed
+    && nativeContract.nativeRealizationRejectionReasons.includes(
+      'unnatural_coordination:hr_awkward_professional_role_intro',
+    )
+  ) reason = 'hr_awkward_professional_role_intro';
   else if (nativeContract.nativeRealizationRejectionReasons.includes(
     'locale_verb_morphology:ptbr_invalid_role_intro_valency',
   )) reason = 'ptbr_invalid_role_intro_valency';

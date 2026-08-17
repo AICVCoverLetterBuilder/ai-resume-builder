@@ -241,7 +241,10 @@ const LOCALE_PROFESSIONAL_MARKERS: Partial<Record<Locale, RegExp>> = {
   'pt-BR': /\b(?:atuo|atuei|exerço|exerci|na\s+função\s+de)\b/iu,
   ru: /(?:занимаю\s+должность|занимал(?:\(а\))?\s+должность|в\s+качестве)/u,
   sr: /\b(?:obavljam|obavljao|u\s+svojstvu)\b/iu,
-  hr: /\b(?:obavljam|obavljao|u\s+svojstvu)\b/iu,
+  // Croatian Professional keeps the safe present `radim kao` frame and uses
+  // a formal, gender-resolved completed frame.  The title stays in its
+  // source/native nominative surface.
+  hr: /\b(?:djelujem|djelovao|djelovala|radim|radio|radila)\s+kao\b/iu,
   ar: /(?:أشغل|شغلت|بصفتي)/u,
   hi: /(?:के\s+रूप\s+में\s+कार्य)/u,
   ja: /(?:従事|就任|として職務)/u,
@@ -1914,13 +1917,21 @@ function applyProfessionalRoleFraming(text: string, locale: Locale): string {
       .replace(/Ранее я работал на должности/u, 'Ранее я занимал должность')
       .replace(/Ранее я работала на должности/u, 'Ранее я занимала должность');
   }
-  if (locale === 'sr' || locale === 'hr') {
+  if (locale === 'sr') {
     // `kao` + nominative keeps arbitrary free-text roles case-safe; only the
     // predicate moves to the formal register.
     return t
       .replace(/Trenutno radim kao/iu, 'Trenutno obavljam poslove kao')
       .replace(/Prethodno sam radio kao/iu, 'Prethodno sam obavljao poslove kao')
       .replace(/Prethodno sam radila kao/iu, 'Prethodno sam obavljala poslove kao');
+  }
+  if (locale === 'hr') {
+    // `kao` + nominative keeps arbitrary/free-text titles case-safe.  Keep
+    // `Trenutno radim kao` for the current role and strengthen only the
+    // completed-role frame; do not inflect or replace the title itself.
+    return t
+      .replace(/Prethodno sam radio kao/iu, 'Prethodno sam djelovao kao')
+      .replace(/Prethodno sam radila kao/iu, 'Prethodno sam djelovala kao');
   }
   if (locale === 'ar') {
     return t
