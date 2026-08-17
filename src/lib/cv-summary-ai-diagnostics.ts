@@ -512,7 +512,12 @@ export type SummaryAiDiagnosticTrace = {
     localizedTitleHash: string;
     sourceRoleTitleHash: string;
     provenance: string;
+    genderValidationPassed?: boolean;
+    genderValidationApplicable?: boolean;
+    genderValidationReason?: string | null;
+    expectedRoleTitleHash?: string | null;
   }> | null;
+  roleTitleGenderValidationPassed?: boolean | null;
   currentRoleOmittedDetected: boolean | null;
   currentSlotForeignFactCount: number | null;
   priorSlotForeignFactCount: number | null;
@@ -1628,6 +1633,9 @@ export class SummaryAiDiagnosticSession {
       currentRoleTitleEntryIdHash: diag.currentRoleTitleEntryIdHash ?? null,
       currentRoleTitleMatchesStructuredRole: diag.currentRoleTitleMatchesStructuredRole ?? null,
       roleTitleSurfaceEvidence: diag.roleTitleSurfaceEvidence ?? null,
+      roleTitleGenderValidationPassed:
+        (diag as { roleTitleGenderValidationPassed?: boolean | null })
+          .roleTitleGenderValidationPassed ?? null,
       localeVerbMorphologyPassed: diag.localeVerbMorphologyPassed ?? null,
       currentRoleOmittedDetected: diag.currentRoleOmittedDetected ?? null,
       currentSlotForeignFactCount: diag.currentSlotForeignFactCount ?? null,
@@ -1979,7 +1987,13 @@ export class SummaryAiDiagnosticSession {
       candidateTransformationAfterHash:
         (diag as { candidateTransformationAfterHash?: string | null })
           .candidateTransformationAfterHash ?? null,
-      genderValidationPassed: cleanSummaryNoOp ? null : true,
+      genderValidationPassed: cleanSummaryNoOp
+        ? null
+        : (typeof diag.genderValidationPassed === 'boolean'
+          ? diag.genderValidationPassed
+          : (typeof diag.roleTitleGenderValidationPassed === 'boolean'
+            ? diag.roleTitleGenderValidationPassed
+            : true)),
       tenseValidationPassed: cleanSummaryNoOp
         ? null
         : Boolean(diag.tenseValidationPassed ?? true),

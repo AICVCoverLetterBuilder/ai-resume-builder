@@ -9,6 +9,7 @@ import { detectUnresolvedGenderPlaceholder } from './gender';
 import { analyzeSpanishCoordinatedPredicateMorphology } from './native-surface';
 import { dutyTokenStems, hashSummaryV2Text } from './facts';
 import { detectDominantLocale, localesAreDetectionCompatible } from './locale-authority';
+import { validateLocalizedSummaryRoleTitleGender } from '@/lib/cv-summary-structured-role-localization';
 import type { SummaryV2EntryOwned, SummaryV2SelectionManifest } from './types';
 
 export const SUMMARY_V2_LOCALIZED_MANIFEST_REVISION =
@@ -421,7 +422,10 @@ export function buildSummaryV2EntrySurfaceTransportPlan(options: {
     entryHash: normalizedHash(options.entry.entryId),
     aggregateSourceLocale: options.entry.sourceLocale,
     targetLocale: options.manifest.locale,
-    role: { sourceHash: normalizedHash(options.entry.role), authority: roleAuthority },
+    role: {
+      sourceHash: normalizedHash(options.entry.sourceRoleTitle || options.entry.role),
+      authority: roleAuthority,
+    },
     facts,
     roleSurfaceCount,
     factSurfaceCount,
@@ -468,6 +472,8 @@ export function validateSummaryV2LocalizationResponse(
   let incompleteEvidence: SummaryV2LocalizationFailureEvidence | null = null;
   let wrongScriptEvidence: SummaryV2LocalizationFailureEvidence | null = null;
   let wrongLocaleEvidence: SummaryV2LocalizationFailureEvidence | null = null;
+  let roleTitleGenderMismatch = false;
+  let roleTitleGenderMismatchEvidence: SummaryV2LocalizationFailureEvidence | null = null;
   const protectedEntityTokenClasses = new Set<SummaryV2ProtectedEntityTokenClass>();
   const sourceEntriesById = new Map(expectedEntries.map((entry) => [entry.entryId, entry]));
   const authorityByEntryId = new Map(expectedEntries.map((entry) => [
@@ -478,10 +484,32 @@ export function validateSummaryV2LocalizationResponse(
   for (const entry of actualEntries) {
     const sourceEntry = sourceEntriesById.get(entry.entryId);
     const sourceFactsById = new Map((sourceEntry?.facts || []).map((fact) => [fact.factId, fact]));
+    const roleAuthority = authorityByEntryId.get(entry.entryId)?.role.authority;
+    const roleGender = validateLocalizedSummaryRoleTitleGender({
+      sourceRoleTitle: sourceEntry?.sourceRoleTitle || sourceEntry?.role || '',
+      localizedRoleTitle: entry.localizedRoleTitle,
+      sourceLocale: sourceEntry?.roleSourceLocale || sourceEntry?.sourceLocale || null,
+      targetLocale: manifest.locale,
+      gender: manifest.gender,
+      foreignLocalizationRequired: roleAuthority === 'foreign_localization_required',
+    });
+    if (roleGender.applicable && !roleGender.passed) {
+      roleTitleGenderMismatch = true;
+      roleTitleGenderMismatchEvidence ||= {
+        entryId: entry.entryId,
+        factId: null,
+        surfaceKind: 'localized_role_title',
+        textPreviewHash: normalizedHash(entry.localizedRoleTitle || ''),
+        detectedLocale: manifest.locale,
+        detectedScript: 'latin_diacritic_sc',
+        tokenClass: 'translatable_surface_wrong_locale',
+        protectedEntityTokenClasses: [],
+      };
+    }
     const surfaces = [
       {
         text: entry.localizedRoleTitle,
-        sourceText: sourceEntry?.role || '',
+        sourceText: sourceEntry?.sourceRoleTitle || sourceEntry?.role || '',
         presentationText: sourceEntry?.presentationRole,
         presentationTrusted: sourceEntry?.presentationRoleTrusted === true,
         presentationLocale: sourceEntry?.presentationRoleLocale || null,
@@ -615,6 +643,7 @@ export function validateSummaryV2LocalizationResponse(
   else if (!surfaceComplete) reason = 'localization_incomplete_surface';
   else if (unsupportedMaterial) reason = 'localization_unsupported_material_claim';
   else if (mixedPredicateMorphology) reason = 'mixed_person_predicate_chain';
+  else if (roleTitleGenderMismatch) reason = 'foreign_role_title_gender_mismatch';
   else if (!targetScriptPurityPassed) reason = 'localization_wrong_script';
   else if (!targetLocalePurityPassed || sourceLanguageLeakageDetected) reason = 'locale_impurity';
 
@@ -622,6 +651,8 @@ export function validateSummaryV2LocalizationResponse(
     ? incompleteEvidence
     : reason === 'localization_wrong_script'
       ? wrongScriptEvidence
+      : reason === 'foreign_role_title_gender_mismatch'
+        ? roleTitleGenderMismatchEvidence
       : reason === 'locale_impurity'
         ? wrongLocaleEvidence
         : null;
@@ -789,6 +820,7 @@ export function projectLocalizedSummaryV2Manifest(options: {
       role: localized.localizedRoleTitle,
       roleTitleLocalizationSource: localized.localizedRoleTitleLocalizationSource,
       sourceRoleTitleHash: localized.sourceRoleTitleHash,
+      sourceRoleTitle: entry.sourceRoleTitle || entry.role,
       facts: facts as SummaryV2EntryOwned['facts'],
     };
   };

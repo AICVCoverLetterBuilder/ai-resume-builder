@@ -159,6 +159,7 @@ export function captureSummaryV2Snapshot(options: {
     return {
       entryId: String(exp.id || ''),
       role: (exp.position || '').trim(),
+      sourceRoleTitle: (exp.position || '').trim(),
       employer: (exp.company || '').trim(),
       startDate: (exp.startDate || '').trim(),
       endDate: (exp.endDate || '').trim(),

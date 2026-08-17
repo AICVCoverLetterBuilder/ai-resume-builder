@@ -131,6 +131,8 @@ export type SummaryV2EntryFact = {
 export type SummaryV2EntryOwned = {
   entryId: string;
   role: string;
+  /** Immutable source role title retained across localized-manifest projection. */
+  sourceRoleTitle?: string;
   employer: string;
   startDate: string;
   endDate: string;
@@ -217,6 +219,8 @@ export type SummaryV2ValidationResult = {
   wrongLocaleUnitCount: number;
   wrongScriptUnitCount: number;
   roleTitleSurfaceValidationPassed: boolean;
+  /** Applicable gendered role-title morphology gate. */
+  roleTitleGenderValidationPassed: boolean;
   roleTitleSurfaceEvidence: Array<{
     owningEntryHash: string;
     detectedLocale: string | null;
@@ -225,6 +229,10 @@ export type SummaryV2ValidationResult = {
     targetLocaleNativeSurfacePassed: boolean;
     localizedTitleHash: string;
     sourceRoleTitleHash: string;
+    genderValidationPassed: boolean;
+    genderValidationApplicable: boolean;
+    genderValidationReason: string | null;
+    expectedRoleTitleHash: string | null;
     provenance: string;
   }>;
   perspectiveValidationPassed: boolean;

@@ -17,6 +17,10 @@ import type {
 } from './types';
 import { validateAiUnitLocalePurity } from '../cv-ai-unit-locale-purity';
 import { inspectSummaryV2TranslatableSurface } from './localization';
+import {
+  classifySummaryV2EntrySurfaceAuthority,
+} from './localization';
+import { validateLocalizedSummaryRoleTitleGender } from '@/lib/cv-summary-structured-role-localization';
 import { auditSummaryV2MaterialClaims } from './material-claims';
 import { analyzeSummaryV2FinalUnitOwnership } from './unit-ownership';
 import { fingerprintText } from '../cv-export-diagnostics';
@@ -373,9 +377,24 @@ export function validateSummaryV2AgainstManifest(
   });
   const hasLiveAuthority = Boolean(manifest.current || manifest.priors.length > 0);
   const roleTitleSurfaceEvidence = selectedEntries.map((entry) => {
+    const roleAuthority = classifySummaryV2EntrySurfaceAuthority({ manifest, entry }).roleTitleAuthority;
+    const gender = validateLocalizedSummaryRoleTitleGender({
+      sourceRoleTitle: entry.sourceRoleTitle || entry.role,
+      localizedRoleTitle: entry.role,
+      sourceLocale: entry.roleSourceLocale || entry.sourceLocale,
+      targetLocale: manifest.locale,
+      gender: manifest.gender,
+      foreignLocalizationRequired: roleAuthority === 'foreign_localization_required'
+        || Boolean(
+          entry.roleTitleLocalizationSource
+          && entry.roleTitleLocalizationSource !== 'same_locale_authoritative'
+          && entry.sourceRoleTitle
+          && entry.sourceRoleTitle !== entry.role,
+        ),
+    });
     const surface = inspectSummaryV2TranslatableSurface({
       localizedText: entry.role,
-      sourceText: entry.role,
+      sourceText: entry.sourceRoleTitle || entry.role,
       employer: entry.employer,
       targetLocale: manifest.locale,
     });
@@ -387,11 +406,18 @@ export function validateSummaryV2AgainstManifest(
       targetLocaleNativeSurfacePassed: surface.targetLocaleNativeSurfacePassed,
       localizedTitleHash: hashSummaryV2Text(entry.role),
       sourceRoleTitleHash: entry.sourceRoleTitleHash || hashSummaryV2Text(entry.role),
+      genderValidationPassed: gender.passed,
+      genderValidationApplicable: gender.applicable,
+      genderValidationReason: gender.reason,
+      expectedRoleTitleHash: gender.expectedRoleTitleHash,
       provenance: entry.roleTitleLocalizationSource || 'source_manifest_role_title',
     };
   });
   const roleTitleSurfaceValidationPassed = roleTitleSurfaceEvidence.every(
-    (entry) => entry.targetLocaleNativeSurfacePassed,
+    (entry) => entry.targetLocaleNativeSurfacePassed && entry.genderValidationPassed,
+  );
+  const roleTitleGenderValidationPassed = roleTitleSurfaceEvidence.every(
+    (entry) => entry.genderValidationPassed,
   );
   const nativeContract = evaluateNativeRealizationContract({
     text,
@@ -476,6 +502,7 @@ export function validateSummaryV2AgainstManifest(
     wrongLocaleUnitCount: localePurity.wrongLocaleUnitCount,
     wrongScriptUnitCount: localePurity.wrongScriptUnitCount,
     roleTitleSurfaceValidationPassed,
+    roleTitleGenderValidationPassed,
     roleTitleSurfaceEvidence,
     perspectiveValidationPassed,
     arabicMorphologyValidationPassed,

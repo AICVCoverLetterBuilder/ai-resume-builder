@@ -150,6 +150,7 @@ export {
   buildSummaryV2EntrySurfaceTransportPlan,
   inspectSummaryV2TranslatableSurface,
 } from './localization';
+export { validateLocalizedSummaryRoleTitleGender } from '@/lib/cv-summary-structured-role-localization';
 export {
   SUMMARY_V2_MATERIAL_CLAIM_CONTRACT_REVISION,
   SUMMARY_V2_MATERIAL_CLAIM_DETECTOR_REVISION,

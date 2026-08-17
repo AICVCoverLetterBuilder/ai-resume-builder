@@ -1770,6 +1770,8 @@ export type FinalizeCvAiFieldResult = {
       sourceRoleTitleHash: string;
       provenance: string;
     }>;
+    roleTitleGenderValidationPassed?: boolean | null;
+    genderValidationPassed?: boolean | null;
     currentRoleOmittedDetected?: boolean;
     currentSlotForeignFactCount?: number;
     priorSlotForeignFactCount?: number;
@@ -3550,6 +3552,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
         : null,
       currentRoleTitleMatchesStructuredRole: v2.validation.currentRolePresent,
       roleTitleSurfaceEvidence: v2.validation.roleTitleSurfaceEvidence,
+      roleTitleGenderValidationPassed: v2.validation.roleTitleGenderValidationPassed,
+      genderValidationPassed: v2.validation.roleTitleGenderValidationPassed,
       structuredRoleLocaleValidationPassed: v2.validation.roleTitleSurfaceValidationPassed,
       currentRoleLocalizationValidationPassed: v2.validation.roleTitleSurfaceEvidence[0]
         ?.targetLocaleNativeSurfacePassed ?? !v2.manifest.current,
@@ -3927,7 +3931,8 @@ function finalizeSummary(input: FinalizeCvAiFieldInput): FinalizeCvAiFieldResult
       contentLocaleUpdatedAfterApply: false,
       candidateTargetLocale: locale,
       localeValidationPassed: v2.validation.targetLocalePurityPassed
-        && v2.validation.roleTitleSurfaceValidationPassed,
+        && v2.validation.roleTitleSurfaceValidationPassed
+        && v2.validation.roleTitleGenderValidationPassed,
       finalDurationHybridDetected: false,
       visibleDurationHybridDetected: false,
       durationSemanticValueMonths: v2.manifest.totalDurationMonths || null,

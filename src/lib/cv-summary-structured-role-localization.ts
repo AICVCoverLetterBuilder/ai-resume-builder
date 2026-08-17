@@ -51,6 +51,72 @@ function normalizeGender(gender?: string): 'female' | 'male' | 'unspecified' {
   return 'unspecified';
 }
 
+function normalizeRoleTitleSurface(value: string): string {
+  return (value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+/**
+ * Validate a localized role title against the shared deterministic gendered
+ * resolver. Unknown free-text titles remain non-applicable so a genuinely
+ * manual target-native title is preserved rather than guessed or overwritten.
+ */
+export function validateLocalizedSummaryRoleTitleGender(options: {
+  sourceRoleTitle: string;
+  localizedRoleTitle: string;
+  sourceLocale?: string | null;
+  targetLocale: Locale;
+  gender?: string;
+  foreignLocalizationRequired: boolean;
+}): {
+  applicable: boolean;
+  passed: boolean;
+  expectedRoleTitle: string | null;
+  expectedRoleTitleHash: string | null;
+  reason: string | null;
+  localizationSource: LocalizedSummaryRoleResult['localizationSource'];
+} {
+  if (!options.foreignLocalizationRequired) {
+    return {
+      applicable: false,
+      passed: true,
+      expectedRoleTitle: null,
+      expectedRoleTitleHash: null,
+      reason: null,
+      localizationSource: 'target_locale_already',
+    };
+  }
+  const resolved = resolveLocalizedSummaryRole({
+    role: options.sourceRoleTitle,
+    sourceLocale: options.sourceLocale,
+    targetLocale: options.targetLocale,
+    gender: options.gender,
+  });
+  const deterministicGendered = resolved.localizationValidationPassed
+    && (resolved.localizationSource === 'canonical_occupation_dictionary'
+      || resolved.localizationSource === 'deterministic_locale_morphology'
+      || resolved.localizationSource === 'validated_localized_mapping');
+  if (!deterministicGendered || !resolved.localizedTargetRoleLabel.trim()) {
+    return {
+      applicable: false,
+      passed: true,
+      expectedRoleTitle: null,
+      expectedRoleTitleHash: null,
+      reason: null,
+      localizationSource: resolved.localizationSource,
+    };
+  }
+  const expected = normalizeRoleTitleSurface(resolved.localizedTargetRoleLabel);
+  const actual = normalizeRoleTitleSurface(options.localizedRoleTitle);
+  return {
+    applicable: true,
+    passed: actual === expected,
+    expectedRoleTitle: resolved.localizedTargetRoleLabel,
+    expectedRoleTitleHash: hashOpaque(resolved.localizedTargetRoleLabel),
+    reason: actual === expected ? null : 'role_title_gender_mismatch',
+    localizationSource: resolved.localizationSource,
+  };
+}
+
 /** Heuristic source-locale cue for role labels (not full MT). */
 export function detectRoleLabelSourceLocale(role: string): string | null {
   const t = (role || '').trim();

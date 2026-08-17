@@ -112,7 +112,7 @@ describe('AAB455 Summary mixed fact-authority / presentation-surface contract', 
           targetLocale: input.targetLocale,
           entries: input.entries.map((requested) => ({
             entryId: requested.entryId,
-            localizedRoleTitle: 'Designer gráfico',
+            localizedRoleTitle: 'Designer gráfica',
             facts: [],
           })),
         };
@@ -156,7 +156,7 @@ describe('AAB455 Summary mixed fact-authority / presentation-surface contract', 
           targetLocale: 'pt-BR',
           entries: [{
             entryId: requested.entryId,
-            localizedRoleTitle: 'Designer gráfico',
+            localizedRoleTitle: 'Designer gráfica',
             facts: requested.facts.map((fact, factIndex) => ({
               factId: fact.factId,
               localizedText: PRESENTATION_PT.split('\n')[factIndex + 1] || PRESENTATION_PT,
@@ -235,7 +235,7 @@ describe('AAB455 Summary mixed fact-authority / presentation-surface contract', 
         targetLocale: 'pt-BR',
         entries: input.entries.map((requested) => ({
           entryId: requested.entryId,
-          localizedRoleTitle: 'Designer gráfico',
+          localizedRoleTitle: 'Designer gráfica',
           facts: requested.facts.map((fact, index) => ({
             factId: fact.factId,
             localizedText: requested.entryId === 'be5c794b'
